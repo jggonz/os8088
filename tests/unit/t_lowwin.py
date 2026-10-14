@@ -63,7 +63,7 @@ from harness import check, done                           # noqa: E402
 # The window is `dsk_secbuf` and nothing else on BOTH arms (SPEC.md 22.6.3).
 # `dsk_ovlpad` is NOT a row here on purpose: `DSK_OVLPAD` is 0 today - six
 # boot-only bodies moved into the blob half through SPEC.md 2.5.3.2's OVBCALL
-# set and `.ovlw` fell 1,900 -> 1,342 - so the label emits nothing and never
+# set and `.ovl` fell 1,900 -> 1,342 - so the label emits nothing and never
 # reaches the listing.  Give it a row here if it is ever non-zero again.
 WANT = {
     "kern_big":   [("dsk_secbuf", 512)],
@@ -77,7 +77,7 @@ FAT_BYTES = {"kern_big": 4608, "kern_small": 1024}   # DSK_FAT_SECS * 512
 # 5,120 exactly and 1,024 + 512 is 1,536, so the readable ceiling IS the
 # region on both arms.  While the window carried a listing the region was
 # 13.125 sectors and the last fraction of a sector was unreachable, which is
-# why `kernel.asm`'s `%if` rounds `OVLW_SIZE` UP before comparing.  That
+# why `kernel.asm`'s `%if` rounds `OVL_SIZE` UP before comparing.  That
 # rounding is still what makes the guard correct and must not be taken out
 # because the numbers happen to divide today.
 REGION = {"kern_big": (5120, 5120), "kern_small": (1536, 1536)}

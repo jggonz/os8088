@@ -903,6 +903,8 @@ static int      lmc_fail;
 /* 4.2: 16 locals, parameters included. Slots are token indices of the
  * declaring name, so a comparison is a span compare and nothing is copied. */
 static int lmc_locn;
+/* lmc_loctok, lmc_locdecl and the loop stack below are in loom.h's PHASE
+ * STORE: code generation's alone, sharing storage with the other passes'. */
 static int lmc_loctok[16];
 static int lmc_locdecl[16];
 

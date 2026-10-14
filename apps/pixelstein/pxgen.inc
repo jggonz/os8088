@@ -197,6 +197,13 @@ PXG_EMITMAX equ 768                 ; the most ONE emission can be: the
                                     ; codeofs table before a scaler is a
                                     ; separate 66-byte emission under the
                                     ; same fence
+PXG_C2TMAX  equ 1 + (PXG_HMAX * 71 + 128) / 256
+                                    ; ...and the most a COL2TEX block can be,
+                                    ; 34: the blocks come last, so their
+                                    ; fence is this and not the scalers' -
+                                    ; which is what lets PX_GENKB be 50 and
+                                    ; not 51 (CGA4's last block starts at
+                                    ; 50,703 of 51,200; apps size pass 1)
 
 ; -----------------------------------------------------------------------------
 ; px_drv_tpl - THE COLUMN DRIVER, copied into part 1 at PXG_DRV and entered
@@ -492,7 +499,9 @@ px_gen_build:
     mov byte [px_gword], 1
     jmp short .set
 .c2t:
-    ; --- col2tex, a block per scaler per set (graft 2): px_c2t's directory
+    ; --- col2tex, a block per scaler per set (graft 2): px_c2t's directory,
+    ;     under the blocks' own fence, PXG_C2TMAX short of the part's end
+    add word [px_glim], PXG_EMITMAX - PXG_C2TMAX
     mov byte [px_gword], 0
     mov word [px_gdir], px_c2t
 .cset:
@@ -755,8 +764,10 @@ px_gen_c2t:
 ;               masters, two shades, column-major, one byte a texel through
 ;               the backend's ink table - a C160 column holding the nibbles
 ;               of texels u and u+1 of one row. Each master is STAGED into
-;               px_bstage first (512 bytes, rep movsb) so the loop has the
-;               master and the ink table in DS for `xlat` and the set in ES.
+;               px_bstage first (px_bstage_in), so the loop has the master
+;               and the ink table in DS for `xlat` and the set in ES - and the
+;               transpose is the SPRITE SET's own (px_tpose), a wall being a
+;               32-column frame with no run tables (apps size pass 1)
 ; clobbers everything but DS
 ; -----------------------------------------------------------------------------
 px_bt_build:
@@ -768,26 +779,54 @@ px_bt_build:
     mov es, [px_hand + PXH_BT]
     xor di, di
     cld
+    mov byte [px_bcols], PXA_TEX    ; px_tpose's frame width
     mov word [px_bmat], 0           ; the master's offset in the art claim
 .mat:
+    mov cx, PXA_WALLSZ
+    call px_bstage_in
+    mov bx, [px_bink]               ; the lit table
+    mov ch, PXA_SHADES
+.shade:
+    call px_tpose                   ; keeps BX and CH
+    add bx, 16                      ; the dark table
+    dec ch
+    jnz .shade
+    add word [px_bmat], PXA_WALLSZ
+    cmp word [px_bmat], PXA_NWALL * PXA_WALLSZ
+    jb .mat
+    ret
+
+; px_bstage_in - CX bytes of the art claim at [px_bmat] into px_bstage
+; clobbers CX, SI
+px_bstage_in:
     push es
     push di
     push ds
     pop es
     mov di, px_bstage
     mov si, [px_bmat]
-    mov cx, PXA_WALLSZ
     mov ds, [px_hand + PXH_ART]
     rep movsb                       ; the master, staged
     push es
     pop ds
     pop di
     pop es
-    mov bx, [px_bink]               ; the lit table
-    mov ch, PXA_SHADES
-.shade:
+    ret
+
+; px_tpose - the staged master's TEXELS, [px_bcols] columns of PXA_TEX rows,
+;            column-major through the ink table at BX into ES:DI: column u
+;            reads nibble u of every row (row pitch = columns / 2, kept in
+;            BP: an addend only, never an address - SS is not DS). On C160
+;            one byte a texel PAIR, both nibbles, and the unused half of the
+;            frame skipped. out: DI past the frame's texels
+; clobbers AX, CL, DX, SI, BP; keeps BX and CH
+px_tpose:
+    mov al, [px_bcols]
+    shr al, 1
+    xor ah, ah
+    mov bp, ax                      ; BP = the master's row pitch
+    mov dh, al                      ; DH = column pairs
     mov si, px_bstage
-    mov dh, PXA_TEX / 2             ; column pairs
     cmp byte [px_back], PXB_C160
     je .c160
 .pair:
@@ -807,7 +846,7 @@ px_bt_build:
     xlat
     mov [es:di + PXA_TEX], al       ; column u + 1, texel v
     inc di
-    add si, PXA_TEX / 2             ; the master's next row
+    add si, bp                      ; the master's next row
     dec cl
     jnz .tx
     pop si
@@ -815,7 +854,7 @@ px_bt_build:
     add di, PXA_TEX                 ; ...past column u + 1, already written
     dec dh
     jnz .pair
-    jmp short .nextshade
+    ret
 .c160:                              ; both nibbles into ONE byte a texel pair
     push si
     mov cl, PXA_TEX
@@ -827,32 +866,29 @@ px_bt_build:
     shr al, 1
     shr al, 1
     xlat
-    mov dl, al                      ; the left texel's attribute nibble
+    mov dl, al
     mov al, ah
     and al, 15
-    xlat                            ; ...and the right's
-    push cx
-    mov cl, 4
-    shl dl, cl
-    pop cx
+    xlat
+    shl dl, 1
+    shl dl, 1
+    shl dl, 1
+    shl dl, 1
     or al, dl
     mov [es:di], al
     inc di
-    add si, PXA_TEX / 2
+    add si, bp
     dec cl
     jnz .tx2
     pop si
     inc si
     dec dh
     jnz .c160
-    add di, PXA_TEX * PXA_TEX / 2   ; sixteen columns used of thirty-two
-.nextshade:
-    add bx, 16                      ; the dark table
-    dec ch
-    jnz .shade
-    add word [px_bmat], PXA_WALLSZ
-    cmp word [px_bmat], PXA_NWALL * PXA_WALLSZ
-    jb .mat
+    mov al, [px_bcols]              ; the unused half: (cols / 2) x 32 bytes
+    shr al, 1
+    mov ah, PXA_TEX
+    mul ah
+    add di, ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -906,92 +942,10 @@ px_spr_build:
 .out:
     ret
 .frames:
-    push es
-    push di
-    push ds
-    pop es
-    mov di, px_bstage
-    mov si, [px_bmat]
     mov cx, [px_bmsz]
-    mov ds, [px_hand + PXH_ART]
-    rep movsb                       ; the master, staged
-    push es
-    pop ds
-    pop di
-    pop es
+    call px_bstage_in
     mov bx, [px_bink]               ; the lit table
-    ; --- the texels, a column at a time: column u reads nibble u of every
-    ;     row of the staged master (row pitch = columns / 2, kept in BP:
-    ;     an addend only, never an address - SS is not DS)
-    mov al, [px_bcols]
-    shr al, 1
-    xor ah, ah
-    mov bp, ax                      ; BP = the master's row pitch
-    mov dh, [px_bcols]
-    shr dh, 1                       ; DH = column pairs
-    mov si, px_bstage
-    cmp byte [px_back], PXB_C160
-    je .c160
-.pair:
-    push si
-    mov cl, PXA_TEX                 ; CL = texel rows
-.tx:
-    mov al, [si]                    ; the pair: u in the high nibble
-    mov ah, al
-    shr al, 1
-    shr al, 1
-    shr al, 1
-    shr al, 1
-    xlat
-    mov [es:di], al                 ; column u, texel v
-    mov al, ah
-    and al, 15
-    xlat
-    mov [es:di + PXA_TEX], al       ; column u + 1, texel v
-    inc di
-    add si, bp                      ; the master's next row
-    dec cl
-    jnz .tx
-    pop si
-    inc si                          ; the next byte pair of row 0
-    add di, PXA_TEX                 ; ...past column u + 1, already written
-    dec dh
-    jnz .pair
-    jmp short .runs
-.c160:                              ; both nibbles into ONE byte a texel pair
-    push si
-    mov cl, PXA_TEX
-.tx2:
-    mov al, [si]
-    mov ah, al
-    shr al, 1
-    shr al, 1
-    shr al, 1
-    shr al, 1
-    xlat
-    mov dl, al
-    mov al, ah
-    and al, 15
-    xlat
-    shl dl, 1
-    shl dl, 1
-    shl dl, 1
-    shl dl, 1
-    or al, dl
-    mov [es:di], al
-    inc di
-    add si, bp
-    dec cl
-    jnz .tx2
-    pop si
-    inc si
-    dec dh
-    jnz .c160
-    mov al, [px_bcols]              ; the unused half: (cols / 2) x 32 bytes
-    shr al, 1
-    mov ah, PXA_TEX
-    mul ah
-    add di, ax
+    call px_tpose                   ; the texels (px_bt_build's transpose)
 .runs:
     ; --- the run tables: one per column (per PAIR on C160, the two
     ;     texels' bits OR'd), PXS_RUNSZ bytes each, from the alpha bits

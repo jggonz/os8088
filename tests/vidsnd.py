@@ -100,7 +100,7 @@ def main():
         finally:
             m.close()
         try:                        # the report the bench SAVED, off the VHD
-            txt = os88flush.vhd_volume(vhd).read("VIDSND.TXT").decode(
+            txt = os88flush.vhd_volume(vhd).read_latest("VIDSND.TXT").decode(
                 "latin-1")
             txterr = None
         except Exception as e:

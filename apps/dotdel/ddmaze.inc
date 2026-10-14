@@ -62,11 +62,120 @@ DD_FRUITC equ 13
 DD_FRUITR equ 17
 
 ; -----------------------------------------------------------------------------
+; THE LAYOUTS ARE CHARACTERS IN THE SOURCE AND TWO BITS A TILE IN THE IMAGE
+;
+; ddmzdat.inc stays the picture a person reviews - 31 rows of 28 characters a
+; layout - and DDROW packs each row as the assembler reads it: every row is
+; its own mirror (the assembly REFUSES one that is not), so only columns 0..13
+; are kept, at two bits a tile, four tiles a byte, MSB first, padded to a
+; byte boundary at the end of the row - four bytes a row. Rows 9..19 are the
+; shared block (SPEC.md 93.2), so they are packed ONCE, from layout 0, after
+; the three layouts, and every later layout's copy of them is CHECKED against
+; layout 0's rather than stored. 2,604 bytes of characters become 284.
+;
+;   code 0 '#' wall   1 ' ' floor   2 '.' dot   3 'o' pellet / '=' door
+;
+; 'o' and '=' share code 3 because a pellet is never inside the shared block
+; and the door never outside it - both of which DDROW also refuses - so the
+; ROW says which one a 3 is.
+; -----------------------------------------------------------------------------
+DD_MZSH0  equ 9                 ; the shared block's first row...
+DD_MZSH1  equ 20                ; ...and the first row after it
+DD_MZRB   equ 4                 ; packed bytes a row
+DD_MZLB   equ (DD_ROWS - (DD_MZSH1 - DD_MZSH0)) * DD_MZRB
+                                ; ...and a layout's own, the shared rows out
+
+%assign DDMZ_N 0                ; rows seen, over all three layouts
+
+; DDROWENC 'row' - emit the four packed bytes of one 28-character row
+%macro DDROWENC 1
+    %assign %%acc 0
+    %assign %%i 1
+    %rep 16
+        %if %%i <= 14
+            %substr %%c %1 %%i
+            %if %%c = '#'
+                %assign %%v 0
+            %elif %%c = ' '
+                %assign %%v 1
+            %elif %%c = '.'
+                %assign %%v 2
+            %else
+                %assign %%v 3
+            %endif
+        %else
+            %assign %%v 0
+        %endif
+        %assign %%acc (%%acc << 2) | %%v
+        %if (%%i % 4) = 0
+            db %%acc
+            %assign %%acc 0
+        %endif
+        %assign %%i %%i + 1
+    %endrep
+%endmacro
+
+; DDROW 'row' - one row of a layout: checked, and packed unless it is shared
+%macro DDROW 1
+    %assign %%r DDMZ_N % DD_ROWS
+    %assign %%l DDMZ_N / DD_ROWS
+    %strlen %%n %1
+    %if %%n != DD_COLS
+        %error "DDROW: a layout row is 28 characters"
+    %endif
+    %assign %%i 1
+    %rep DD_COLS
+        %substr %%a %1 %%i
+        %substr %%b %1 (DD_COLS + 1 - %%i)
+        %if %%a != %%b
+            %error "DDROW: a layout row must be its own mirror"
+        %endif
+        %if %%a = '='
+            %if %%r < DD_MZSH0 || %%r >= DD_MZSH1
+                %error "DDROW: the door is only in the shared block"
+            %endif
+        %elif %%a = 'o'
+            %if %%r >= DD_MZSH0 && %%r < DD_MZSH1
+                %error "DDROW: no pellet in the shared block"
+            %endif
+        %elif %%a != '#' && %%a != ' ' && %%a != '.'
+            %error "DDROW: not a maze character"
+        %endif
+        %assign %%i %%i + 1
+    %endrep
+    %if %%r >= DD_MZSH0 && %%r < DD_MZSH1
+        %if %%l = 0
+            %xdefine DDMZ_SH%[%%r] %1
+        %else
+            %ifnidn DDMZ_SH%[%%r], %1
+                %error "DDROW: rows 9..19 must be layout 0's (SPEC.md 93.2)"
+            %endif
+        %endif
+    %else
+        DDROWENC %1
+    %endif
+    %assign DDMZ_N DDMZ_N + 1
+%endmacro
+
+; DDSHARED - the shared block, once, out of layout 0's own rows
+%macro DDSHARED 0
+    %if DDMZ_N != DD_NLAYS * DD_ROWS
+        %error "DDSHARED: three layouts of 31 rows come first"
+    %endif
+    %assign %%r DD_MZSH0
+    %rep DD_MZSH1 - DD_MZSH0
+        DDROWENC DDMZ_SH%[%%r]
+        %assign %%r %%r + 1
+    %endrep
+%endmacro
+
+; -----------------------------------------------------------------------------
 ; dd_level_load - decode the layout this level uses into dd_grid
 ; in:  [dd_level], 1-based;  out: [dd_ndots] = dots + pellets left to eat
 ; Clobbers everything.
 ; -----------------------------------------------------------------------------
 dd_level_load:
+    push bp
     mov al, [dd_level]
     dec al
     xor ah, ah
@@ -75,61 +184,64 @@ dd_level_load:
     xor ah, ah
     mov bl, DD_NLAYS
     div bl                          ; AH = that, modulo the boards we have
-    mov al, ah
-    xor ah, ah
-    shl ax, 1
-    mov bx, ax
-    mov si, [dd_lays + bx]
+    mov al, DD_MZLB
+    mul ah
+    add ax, dd_lay0
+    mov si, ax                      ; SI = this layout's own packed rows
     mov di, dd_grid
-    mov cx, DD_COLS * DD_ROWS
     xor dx, dx                      ; DX = things left to eat
-    xor bx, bx                      ; BX = the tile ordinal, for the row test
-.each:
-    mov al, [si]
-    inc si
-    push ax
-    mov ax, bx
-    push dx
-    push cx
-    xor dx, dx
-    mov cx, DD_COLS
-    div cx                          ; AX = the row this tile is on
-    pop cx
-    pop dx
-    cmp al, [dd_rmin]
-    pop ax
+    xor ch, ch                      ; CH = the row
+.row:
+    cmp ch, DD_MZSH0
+    jne .r1
+    mov bp, si                      ; the shared block, from its one copy
+    mov si, dd_mzshr
+.r1:
+    cmp ch, DD_MZSH1
+    jne .r2
+    mov si, bp                      ; ...and back to this layout's own
+.r2:
+    xor bx, bx                      ; BX = the column, 0..13
+.col:
+    test bl, 3
+    jnz .have
+    lodsb                           ; four tiles a byte, MSB first
+    mov ah, al
+.have:
+    rol ah, 1
+    rol ah, 1
+    mov al, ah
+    and al, 3                       ; AL = the code, which IS the tile type
+    cmp ch, [dd_rmin]               ; for wall, floor and dot
     jae .live
-    mov al, '#'                     ; above the slice there is nothing but wall
+    xor al, al                      ; above the slice there is nothing but wall
 .live:
-    inc bx
-    cmp al, '#'
-    je .wall
-    cmp al, '.'
-    je .dot
-    cmp al, 'o'
-    je .pill
-    cmp al, '='
-    je .door
-    mov al, TT_EMPTY
-    jmp short .put
-.wall:
-    mov al, TT_WALL
-    jmp short .put
-.door:
+    cmp al, TT_DOT
+    jb .put
+    je .eat
+    cmp ch, DD_MZSH0                ; a 3: the door inside the shared block,
+    jb .eat                         ; a pellet anywhere else
+    cmp ch, DD_MZSH1
+    jae .eat
     mov al, TT_DOOR
     jmp short .put
-.dot:
-    mov al, TT_DOT
-    inc dx
-    jmp short .put
-.pill:
-    mov al, TT_PILL
+.eat:
+    inc dx                          ; ...twice: the tile and its mirror
     inc dx
 .put:
-    mov [di], al
-    inc di
-    loop .each
+    mov [di + bx], al
+    neg bx
+    mov [di + bx + DD_COLS - 1], al ; ...the mirror, column 27 - c
+    neg bx
+    inc bx
+    cmp bl, DD_COLS / 2
+    jb .col
+    add di, DD_COLS
+    inc ch
+    cmp ch, DD_ROWS
+    jb .row
     mov [dd_ndots], dx
+    pop bp
     call dd_pill_list
     call dd_rowoff_fill
     call dd_home_map                ; the route home, once (SPEC.md 93.8.5)
@@ -203,14 +315,29 @@ dd_rowoff_fill:
 ;
 ; So the route is worked out ONCE, when the board is decoded: a breadth-first
 ; walk out from the pen leaves every reachable tile holding the direction to
-; step to get one tile closer. An eaten ghost then reads one byte a tile and
-; walks it. It is 868 bytes of map and 1,736 of queue against a board that
-; changes three times in a game, and the walk itself is ~11 ms - a hundredth
-; of what a per-move search would cost on this machine.
+; step to get one tile closer. An eaten ghost then reads one NIBBLE a tile and
+; walks it. It is 434 bytes of map and 128 of queue against a board that
+; changes three times in a game, and the walk itself is a few ms - a
+; hundredth of what a per-move search would cost on this machine.
+;
+; THE QUEUE IS A RING, and the walk's FRONTIER is what sizes it, not the
+; board: a tile is queued once and popped once, and at no moment are more than
+; 22 waiting in any of the three layouts. It was 868 words, one for every tile
+; the walk might ever reach, and all but a few dozen were never live at once.
+; tests/unit/t_ddmaze.py floods every layout with this walk's own order and
+; fails a frontier that would not fit DD_HQN with room to spare; a ring that
+; filled anyway would leave the tiles past it UNMAPPED, which dd_gh_home
+; already answers by aiming - a slower way home, never a wrong one.
+;
+; An entry is the tile's (column, row) as CL/CH, so a pop is a load and not
+; the 16-bit DIV per tile the flat index cost.
 ; =============================================================================
 
-DD_HDROOT equ 0FEh              ; the pen itself: visited, and nowhere to go
-DD_HDNONE equ 0FFh              ; not reached - a wall, or a board with no pen
+DD_HDROOT equ 0Eh               ; the pen itself: visited, and nowhere to go
+DD_HDNONE equ 0Fh               ; not reached - a wall, or a board with no pen
+DD_HDB    equ (DD_COLS * DD_ROWS + 1) / 2   ; the map: two tiles a byte,
+                                ; the EVEN tile in the low nibble
+DD_HQN    equ 64                ; the ring, in entries (a power of two)
 
 ; -----------------------------------------------------------------------------
 ; dd_tindex - AX = the flat tile index of column CL, row CH (both in range)
@@ -228,44 +355,50 @@ dd_tindex:
     pop bx
     ret
 
+; dd_hd_at - DI = the dd_hdir byte holding tile CL, CH; CF = 1 when it is the
+;            tile's HIGH nibble. Clobbers AX.
+dd_hd_at:
+    call dd_tindex
+    shr ax, 1
+    mov di, ax                      ; MOV leaves the SHR's carry alone
+    ret
+
 ; -----------------------------------------------------------------------------
 ; dd_home_map - fill dd_hdir by breadth-first search out from the pen
 ; Clobbers everything.
 ; -----------------------------------------------------------------------------
 dd_home_map:
     push si
-    push di
+    push bp
     mov di, dd_hdir                 ; nothing is reachable until it is reached
-    mov cx, DD_COLS * DD_ROWS
-    mov al, DD_HDNONE
+    mov cx, DD_HDB
+    mov al, DD_HDNONE * 11h
     push es
     push ds
     pop es
     cld
     rep stosb
     pop es
-    mov word [dd_hqh], 0
-    mov word [dd_hqt], 0
+    xor si, si                      ; SI = the ring's head, BP = its tail -
+    xor bp, bp                      ; counts that only rise, read mod DD_HQN
     mov cl, DD_HOMEC
     mov ch, DD_HOUSER
     call dd_tile
     cmp al, TT_WALL
     je .out                         ; no pen on this board - the attract slice
-    mov cl, DD_HOMEC
-    mov ch, DD_HOUSER
-    call dd_tindex
-    mov di, ax
-    mov byte [dd_hdir + di], DD_HDROOT
-    call dd_hq_push
+    mov dl, DD_HDROOT
+    call .claim
 .loop:
-    call dd_hq_pop
-    jc .out
-    mov [dd_hpc], cl
-    mov [dd_hpr], ch
+    cmp si, bp
+    je .out                         ; the ring is empty: every tile is mapped
+    mov di, si
+    inc si
+    and di, DD_HQN - 1
+    shl di, 1
+    mov dx, [dd_hq + di]            ; DX = the tile being expanded
     xor bx, bx
 .nb:
-    mov cl, [dd_hpc]
-    mov ch, [dd_hpr]
+    mov cx, dx
     add cl, [dd_dx + bx]
     add ch, [dd_dy + bx]
     cmp ch, 0
@@ -283,61 +416,51 @@ dd_home_map:
     call dd_tile
     cmp al, TT_WALL
     je .next                        ; a DOOR is passable: eyes go through it
-    call dd_tindex
-    mov di, ax
-    cmp byte [dd_hdir + di], DD_HDNONE
-    jne .next
-    mov al, [dd_rev + bx]           ; from THERE, the way back here
-    mov [dd_hdir + di], al
-    call dd_hq_push
+    push dx
+    mov dl, [dd_rev + bx]           ; from THERE, the way back here
+    call .claim
+    pop dx
 .next:
     inc bx
     cmp bx, 4
     jb .nb
     jmp short .loop
 .out:
-    pop di
+    pop bp
     pop si
     ret
 
-; dd_hq_push - the tile at CL, CH onto the queue. Clobbers AX/DI.
-dd_hq_push:
-    push bx
-    call dd_tindex
-    mov di, [dd_hqt]
+; --- tile CL,CH gets DL if nothing has reached it yet, and is queued -------
+; in:  CX = the tile, DL = its direction home, SI/BP = the ring. Clobbers
+;      AX/DX/DI.
+.claim:
+    call dd_hd_at
+    mov ax, 0Fh
+    jnc .lo
+    push cx
+    mov cl, 4
+    shl dl, cl                      ; the HIGH nibble: value and mask with it
+    shl al, cl
+    pop cx
+.lo:
+    mov ah, [dd_hdir + di]
+    and ah, al
+    cmp ah, al
+    jne .seen                       ; reached already
+    not al
+    and al, [dd_hdir + di]
+    or al, dl
+    mov [dd_hdir + di], al
+    mov ax, bp                      ; ...and onto the ring, unless it is full
+    sub ax, si
+    cmp ax, DD_HQN
+    jae .seen
+    mov di, bp
+    inc bp
+    and di, DD_HQN - 1
     shl di, 1
-    mov [dd_hq + di], ax
-    inc word [dd_hqt]
-    pop bx
-    ret
-
-; dd_hq_pop - CL, CH = the next tile, or CF = 1 when the queue is empty
-dd_hq_pop:
-    push ax
-    push bx
-    push dx
-    mov ax, [dd_hqh]
-    cmp ax, [dd_hqt]
-    je .empty
-    shl ax, 1
-    mov bx, ax
-    mov ax, [dd_hq + bx]
-    inc word [dd_hqh]
-    xor dx, dx                      ; index -> column, row
-    mov bx, DD_COLS
-    div bx
-    mov ch, al
-    mov cl, dl
-    pop dx
-    pop bx
-    pop ax
-    clc
-    ret
-.empty:
-    pop dx
-    pop bx
-    pop ax
-    stc
+    mov [dd_hq + di], cx
+.seen:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1340,6 +1463,5 @@ dd_eat_tile:
     ret
 
 ; --- the layouts --------------------------------------------------------------
-dd_lays: dw dd_lay0, dd_lay1, dd_lay2
 
 %include "ddmzdat.inc"

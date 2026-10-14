@@ -272,13 +272,7 @@ px_fsgo:
 .say:
     call px_toast
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp px_ld_6
 
 ; px_vfree - the view claim given back, its tables and thumbnail with it
 ; (SPEC.md 106.23: 30 KB, and one claim of §50.2's eight while a hidden

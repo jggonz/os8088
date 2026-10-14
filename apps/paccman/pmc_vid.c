@@ -366,11 +366,22 @@ static void pmc_vid_quad(int x, int y, int color, int tile)
 static void pmc_init_playfield(void)
 {
     int x, y, i;
+    unsigned t;
     pmc_vid_color_playfield(PMC_COLOR_DOT);
     i = 0;
     for (y = 3; y <= 33; y++)
-        for (x = 0; x < PMC_TILES_X; x++)
-            pmc_vid_tile(x, y, pmc_maze[i++]);
+        for (x = 0; x < PMC_TILES_X / 2; x++) {
+            t = pmc_maze[i++];
+            pmc_vid_tile(x, y, t);
+            /* pmc_mirror_tile: the maze is mirror-symmetric and pmc_rom.c
+             * carries its left half. A wall tile at or above 0xD0 has its
+             * mirror image at t ^ 1, except 0xDB..0xDF and 0xE5, which are
+             * symmetric themselves - tools/paccman_assets.py proves this for
+             * every cell (its mirror_tile is this predicate). */
+            if (t >= 0xD0 && t != 0xE5 && (t < 0xDB || t > 0xDF))
+                t ^= 1;
+            pmc_vid_tile(PMC_TILES_X - 1 - x, y, t);
+        }
     pmc_vid_color(13, 15, 0x18);
     pmc_vid_color(14, 15, 0x18);
 }

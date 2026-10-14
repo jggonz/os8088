@@ -19,7 +19,7 @@ notch that raises `[spl_live]` would be composed, never drawn, and invisible
 to assertion 1's buffer read only if it were also overwritten - which it is.
 
   1. **The COMPOSED line, read out of the overlay.** `spl_mline` lives in
-     `.ovl`, which is part of stage 2's blob (SPEC.md 2.9.6) - so its segment
+     `.boot2`, which is stage 2's blob (SPEC.md 2.9.6, 2.9.14) - so its segment
      is `[spl_fseg]`, whatever stage 2 chose, and reading it through that word
      is what makes the assertion exact: the three lines are compared as
      STRINGS rather than inferred from lit pixels.
@@ -163,7 +163,7 @@ def run(img, machine, kind, want):
     lin_seg = os88sym.linear("spl_fseg")
     lin_entry = os88sym.linear("cold_entry")
     sect = os88sym.sections()
-    assert sect["spl_mline"] == ".ovl", sect["spl_mline"]
+    assert sect["spl_mline"] == ".boot2", sect["spl_mline"]
     off_msg = os88sym.syms()["spl_l_msg"]    # ...and the ROW it is drawn on,
                                              # which splash.inc banks for every
                                              # adapter (SPEC.md 15.3.5.1). It
@@ -172,10 +172,10 @@ def run(img, machine, kind, want):
                                              # moved - and the row it then
                                              # sampled was the PROGRESS BAR,
                                              # which changes every notch
-    off_line = os88sym.syms()["spl_mline"]   # blob-relative, `.ovl` having a
-                                                # vstart of OVL_AT (SPEC.md
-                                                # 2.9.6): the offset in the map
-                                                # IS the offset in the segment
+    off_line = os88sym.syms()["spl_mline"]   # blob-relative: `.boot2` is the
+                                                # whole blob (SPEC.md 2.9.14), so
+                                                # the offset in the map IS the
+                                                # offset in the segment
 
     cold = os88sym.equates()["COLD_SEG"]     # ...and the value that word holds
                                              # when the blob is NOT published

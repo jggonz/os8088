@@ -17,13 +17,12 @@
 %else
   %define AT_IMGX 0FFh
 %endif
-%macro AT_IROW 16
-    db (%1)^AT_IMGX,(%2)^AT_IMGX,(%3)^AT_IMGX,(%4)^AT_IMGX
-    db (%5)^AT_IMGX,(%6)^AT_IMGX,(%7)^AT_IMGX,(%8)^AT_IMGX
-    db (%9)^AT_IMGX,(%10)^AT_IMGX,(%11)^AT_IMGX,(%12)^AT_IMGX
-    db (%13)^AT_IMGX,(%14)^AT_IMGX,(%15)^AT_IMGX,(%16)^AT_IMGX
-%endmacro
-at_img:
+; ...and only the rows from the first that inks anything to the last are
+; EMITTED (SPEC.md 46.4.12): the artwork's top 6 and bottom 7 rows are blank,
+; both callers draw it on a white ground, so those 208 bytes drew white over
+; white. The dump is walked TWICE through one list - once to find the inked
+; band, once to emit it - so the rows below are still the dump as written.
+%macro AT_IMGROWS 0
     AT_IROW 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
     AT_IROW 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
     AT_IROW 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
@@ -124,6 +123,36 @@ at_img:
     AT_IROW 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
     AT_IROW 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
     AT_IROW 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+%endmacro
+
+%assign at_ir_n 0
+%assign at_ir_top -1
+%assign at_ir_bot -1
+%macro AT_IROW 16
+    %if (%1)|(%2)|(%3)|(%4)|(%5)|(%6)|(%7)|(%8)|(%9)|(%10)|(%11)|(%12)|(%13)|(%14)|(%15)|(%16)
+        %if at_ir_top < 0
+            %assign at_ir_top at_ir_n
+        %endif
+        %assign at_ir_bot at_ir_n
+    %endif
+    %assign at_ir_n at_ir_n+1
+%endmacro
+AT_IMGROWS
+%unmacro AT_IROW 16
+%assign at_ir_n 0
+%macro AT_IROW 16
+  %if at_ir_n >= at_ir_top && at_ir_n <= at_ir_bot
+    db (%1)^AT_IMGX,(%2)^AT_IMGX,(%3)^AT_IMGX,(%4)^AT_IMGX
+    db (%5)^AT_IMGX,(%6)^AT_IMGX,(%7)^AT_IMGX,(%8)^AT_IMGX
+    db (%9)^AT_IMGX,(%10)^AT_IMGX,(%11)^AT_IMGX,(%12)^AT_IMGX
+    db (%13)^AT_IMGX,(%14)^AT_IMGX,(%15)^AT_IMGX,(%16)^AT_IMGX
+  %endif
+  %assign at_ir_n at_ir_n+1
+%endmacro
+at_img:
+    AT_IMGROWS
+AT_IMG_TOP  equ at_ir_top           ; the first inked row, within AT_IMG_H
+AT_IMG_ROWS equ at_ir_bot - at_ir_top + 1   ; ...and how many are stored
 AT_IMG_W    equ 128
 AT_IMG_H    equ 100
 AT_IMG_RB   equ 16

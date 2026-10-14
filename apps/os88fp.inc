@@ -70,7 +70,43 @@
 ;   fp_sticky dw    "bits were lost below"  fp_tmp   dw     general scratch
 ;
 ; The shape is a two-register machine: unpack into A and B, operate, pack A.
+;
+; --- WHAT YOU DO NOT CALL, YOU NEED NOT CARRY (SPEC.md 84.8) -----------------
+; Define any of these BEFORE the %include and the routines they name are not
+; assembled - the include has no other way to know what a package reaches,
+; and Chart reaches none of them (943 bytes of its image, and the scratch
+; they name too: fp_dig/fp_d10/fp_nd are fp_ftoa's, fp_sq/fp_g fp_sqrt's,
+; fp_tv fp_floor's, so a package that drops one may drop its scratch):
+;
+;   FP_NO_FTOA   fp_ftoa                               454 bytes
+;   FP_NO_SQRT   fp_sqrt                               140
+;   FP_NO_FLOOR  fp_floor, fp_a_to_tv, fp_tv_to_a       57
+;   FP_NO_I2X    fp_i2a, fp_i2b                        118
+;   FP_NO_SUB    fp_sub, fps_sub, fpx_sub               56
+;
+; The last two are called by the first three, so dropping one while keeping
+; a caller is refused here by name rather than as an undefined symbol.
 ; =============================================================================
+
+%ifdef FP_NO_I2X
+  %ifndef FP_NO_FTOA
+    %error "FP_NO_I2X needs FP_NO_FTOA: fp_ftoa calls fp_i2b"
+  %endif
+  %ifndef FP_NO_FLOOR
+    %error "FP_NO_I2X needs FP_NO_FLOOR: fp_floor calls fp_i2b"
+  %endif
+  %ifndef FP_NO_SQRT
+    %error "FP_NO_I2X needs FP_NO_SQRT: fp_sqrt calls fp_i2b"
+  %endif
+%endif
+%ifdef FP_NO_SUB
+  %ifndef FP_NO_FTOA
+    %error "FP_NO_SUB needs FP_NO_FTOA: fp_ftoa calls fp_sub"
+  %endif
+  %ifndef FP_NO_FLOOR
+    %error "FP_NO_SUB needs FP_NO_FLOOR: fp_floor calls fp_sub"
+  %endif
+%endif
 
 FP_SZ      equ 8                    ; a packed double, in bytes
 FP_BIAS    equ 1023
@@ -495,6 +531,7 @@ fp_pack_a:
 ; Integer conversion
 ; =============================================================================
 
+%ifndef FP_NO_I2X
 ; fp_i2a - AX = a signed 16-bit integer -> the A accumulator
 fp_i2a:
     push ax
@@ -519,6 +556,7 @@ fp_i2a:
     pop ax
     ret
 
+%endif ; FP_NO_I2X
 ; fp_a2i - the A accumulator -> AX, a signed 16-bit integer, TRUNCATED toward
 ; zero. CF=1 if it did not fit, with AX clamped to 32767 / -32768.
 fp_a2i:
@@ -700,6 +738,7 @@ fps_add:
     pop ax
     ret
 
+%ifndef FP_NO_SUB
 ; fp_sub - A = A - B. One flip and a sum; there is no separate subtraction path
 ; to get wrong.
 fps_sub:
@@ -714,6 +753,7 @@ fps_sub:
                                       ; them, so "flip B's sign back" would
                                       ; flip whichever one ended up there.
                                       ; Every caller reloads B before using it.
+%endif ; FP_NO_SUB
 
 ; -----------------------------------------------------------------------------
 ; fp_mul - A = A * B
@@ -1374,6 +1414,7 @@ fp_pexp:
     stc
     ret
 
+%ifndef FP_NO_I2X
 ; -----------------------------------------------------------------------------
 ; fp_i2b - AX (signed int) -> the B accumulator, leaving A untouched.
 ;
@@ -1406,7 +1447,9 @@ fp_i2b:
     pop bx
     pop ax
     ret
+%endif ; FP_NO_I2X
 
+%ifndef FP_NO_FTOA
 ; -----------------------------------------------------------------------------
 ; fp_ftoa - A -> a NUL-terminated decimal string at DS:DI.
 ; in:  AX = how many significant digits to show (clamped to 1..17)
@@ -1682,90 +1725,7 @@ fp_ftoa:
     pop bx
     pop ax
     ret
-
-; fp_div32_10e5 - DX:AX / 100000, rounded toward MINUS INFINITY, into AX.
-; A plain idiv truncates toward zero, which for a negative exponent estimate
-; gives the wrong decade and puts the decimal point one place out.
-fp_div32_10e5:
-    push bx
-    push cx
-    push dx
-    mov cx, dx
-    or cx, cx
-    jns .pos
-    ; negative: negate, divide, negate, and step down unless it divided exactly
-    neg dx
-    neg ax
-    sbb dx, 0
-    mov cx, ax
-    mov bx, dx
-    call fp_udiv32_10e5
-    push ax
-    mov ax, cx
-    mov dx, bx
-    call fp_umod32_10e5
-    or ax, ax
-    pop ax
-    jz .negexact
-    neg ax
-    dec ax
-    jmp .out
-.negexact:
-    neg ax
-    jmp .out
-.pos:
-    call fp_udiv32_10e5
-.out:
-    pop dx
-    pop cx
-    pop bx
-    ret
-
-; unsigned DX:AX / 100000 -> AX. Repeated subtraction, which is fine here
-; because the dividend is at most |exp|*30103 and the quotient is therefore
-; well under 400 - a 32-by-32 divide routine would be more code for a loop
-; that runs a few hundred times at most, once per number formatted.
-fp_udiv32_10e5:
-    push bx
-    push cx
-    push dx
-    xor cx, cx                        ; quotient
-.loop:
-    cmp dx, 1                         ; is DX:AX >= 100000 (0x000186A0)?
-    jb .done
-    ja .sub
-    cmp ax, 0x86A0
-    jb .done
-.sub:
-    sub ax, 0x86A0
-    sbb dx, 1
-    inc cx
-    jmp .loop
-.done:
-    mov ax, cx
-    pop dx
-    pop cx
-    pop bx
-    ret
-
-; unsigned DX:AX mod 100000 -> AX
-fp_umod32_10e5:
-    push cx
-    push dx
-.loop:
-    cmp dx, 1
-    jb .done
-    ja .sub
-    cmp ax, 0x86A0
-    jb .done
-.sub:
-    sub ax, 0x86A0
-    sbb dx, 1
-    jmp .loop
-.done:
-    pop dx
-    pop cx
-    ret
+%endif ; FP_NO_FTOA
 
 ; =============================================================================
 ; Whole-number and root operations (stage 4.0, after the evaluator went
@@ -1832,6 +1792,7 @@ fp_trunc:
     pop ax
     ret
 
+%ifndef FP_NO_FLOOR
 ; fp_a_to_tv / fp_tv_to_a - park A in the general temporary and get it back
 fp_a_to_tv:
     push di
@@ -1843,12 +1804,6 @@ fp_tv_to_a:
     push si
     mov si, fp_tv
     call fp_unpack_a
-    pop si
-    ret
-fp_tv_to_b:
-    push si
-    mov si, fp_tv
-    call fp_unpack_b
     pop si
     ret
 
@@ -1873,7 +1828,9 @@ fp_floor:
 .out:
     pop ax
     ret
+%endif ; FP_NO_FLOOR
 
+%ifndef FP_NO_SQRT
 ; -----------------------------------------------------------------------------
 ; fp_sqrt - A = sqrt(A). CF=1 and A=0 if A was negative.
 ;
@@ -1949,6 +1906,7 @@ fp_sqrt:
     pop ax
     clc
     ret
+%endif ; FP_NO_SQRT
 
 ; -----------------------------------------------------------------------------
 ; fp_round - A = A rounded to CX decimal places, half away from zero, which is
@@ -2177,10 +2135,12 @@ fp_add:
     jne fpx_add
     jmp fps_add
 
+%ifndef FP_NO_SUB
 fp_sub:
     cmp byte [fp_hw], 0
     jne fpx_sub
     jmp fps_sub
+%endif ; FP_NO_SUB
 
 fp_mul:
     cmp byte [fp_hw], 0
@@ -2242,6 +2202,7 @@ fpx_add:
     pop ax
     ret
 
+%ifndef FP_NO_SUB
 ; A = A - B.
 ;
 ; THE ONE ENCODING WORTH BEING CAREFUL ABOUT. For the register forms the
@@ -2269,6 +2230,7 @@ fpx_sub:
     pop bx
     pop ax
     ret
+%endif ; FP_NO_SUB
 
 ; A = A * B
 fpx_mul:

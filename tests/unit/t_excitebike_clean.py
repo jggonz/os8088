@@ -51,7 +51,7 @@ ORACLE_OK = ("tests/excitebike_ref.py", "tools/exboracle/", "tests/excitebike_re
 STDLIB_ONLY = ("argparse", "hashlib", "json", "math", "os", "re", "shutil", "struct",
                "subprocess", "sys", "tempfile", "zlib", "random", "excitebike_audio",
                "excitebike_art", "excitebike_assets", "excitebike_tracks", "exbsim", "importlib",
-               "fractions")
+               "fractions", "difflib")
 TEXT_EXT = (".asm", ".inc", ".txt", ".json", ".md", ".trk", ".mml", ".py")
 
 

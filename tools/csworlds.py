@@ -25,6 +25,7 @@ list would silently change which runway a fresh instance opens on. It is the
 index of PARIS-ISSY, worked out here.
 """
 import argparse
+import tempfile
 import os
 import re
 import subprocess
@@ -41,7 +42,19 @@ from os88pkg import APP_MAX_SIZE                              # noqa: E402
 # than usual here: a world laid at one address and read at another is a world
 # of wild pointers, and nothing would fault.
 CS_VOCAB_MAX = 576              # the shared vocabulary's room in the overlay...
-CS_WLD_MAX = 2560               # ...and the picked world's
+CS_WLD_MAX = 2560               # ...and the picked world's - PROVISIONAL: main()
+                                # replaces it with the LARGEST world's own length
+                                # before anything is written (SPEC.md 88.10.5.6).
+                                # Hand-set it was 111 bytes of claim no world
+                                # used, on every instance
+CS_LZDEPTH = 4096               # the hash-chain depth every stream is packed
+                                # at. The library's default, 128, is tuned for
+                                # whole packages packed on every build; these
+                                # are ten small streams, and the bands are
+                                # KEPT in the region (SPEC.md 88.10.7.1), so a
+                                # deeper search is region and disk for nothing
+                                # at run time: the bands 4,487 -> 4,382 bytes.
+                                # Past 4096 nothing moves
 
 # WHERE THE OVERLAY BEGINS, AND IT IS DERIVED (SPEC.md 88.10.6). It sits at the
 # TOP of the segment, so this is APP_MAX_SIZE less what it holds and there is no
@@ -202,9 +215,9 @@ def world_map(world):
     adopt_built()
     if world not in _WMAP:
         tag = "%s_%d" % (world, os.getpid())
-        tmp = "/tmp/os88_csw_%s.asm" % tag
-        mpf = "/tmp/os88_csw_%s.map" % tag
-        binf = "/tmp/os88_csw_%s.bin" % tag
+        tmp = tempfile.gettempdir() + "/os88_csw_%s.asm" % tag
+        mpf = tempfile.gettempdir() + "/os88_csw_%s.map" % tag
+        binf = tempfile.gettempdir() + "/os88_csw_%s.bin" % tag
         src = os.path.join(ROOT, "apps", "skies", "cswone.asm")
         open(tmp, "w").write(open(src).read() + "\n[map all %s]\n" % mpf)
         r = subprocess.run(
@@ -327,10 +340,25 @@ def main(argv):
     ap.add_argument("--vocab-from", metavar="PROBE",
                     help="a -DCS_SIZEPROBE object; the overlay goes directly "
                          "on top of the program it measures")
+    ap.add_argument("--art", metavar="BANDS", required=True,
+                    help="tools/csart.py --raw's UNPACKED title bands: the "
+                         "last stream in csw.z (SPEC.md 88.10.7)")
     a = ap.parse_args(argv)
     os.makedirs(a.out, exist_ok=True)
 
-    global CS_VOCAB_AT, CS_WLD_AT
+    global CS_VOCAB_AT, CS_WLD_AT, CS_WLD_MAX, CS_VOCAB_CEIL
+    # --- CS_WLD_MAX IS THE LARGEST WORLD, measured (SPEC.md 88.10.5.6) -------
+    # A world's LENGTH does not depend on where it is laid - every pointer in
+    # it is a word whatever its value - so the worlds are sized at the
+    # provisional address first, and the room is cut to the biggest of them
+    # before the ceiling, the probe's arithmetic or the index is computed. A
+    # world that grows grows the room with it: there is still no number here
+    # for anybody to raise.
+    CS_WLD_MAX = max(len(assemble(w, a.out)[0]) for w in WORLDS)
+    CS_VOCAB_CEIL = (APP_MAX_SIZE - CS_VOCAB_MAX - CS_WLD_MAX) & ~15
+    CS_VOCAB_AT = CS_VOCAB_CEIL     # ...a PARAGRAPH, as every address the
+                                    # program hands cs_wldget is
+    CS_WLD_AT = CS_VOCAB_AT + CS_VOCAB_MAX
     if a.vocab_from:
         CS_VOCAB_AT, image_end, cs_bss = vocab_from_probe(a.vocab_from)
         CS_WLD_AT = CS_VOCAB_AT + CS_VOCAB_MAX
@@ -353,30 +381,80 @@ def main(argv):
             sys.exit("csworlds: %s assembled a DIFFERENT vocabulary - the "
                      "shared tables must be identical in every world's build, "
                      "or a world's pointers into them are wrong" % w)
+    art = open(a.art, "rb").read()
+    # --- THE BANDS ARE PACKED ONE BY ONE (SPEC.md 88.10.7.1) ------------------
+    # The program keeps the bands' packed stream in its own bss for the life
+    # of the instance and expands a band only when it is first DRAWN, so the
+    # way out of a flight decodes the title and the aeroplane in use and not
+    # the other four. That needs every band to be a stream of its own -
+    # OSAPI_DECOMP cannot start half way through one, and a match may not
+    # reach back past its own destination - so the art stream is the six
+    # packed bands one after another, and cs_artzoff says where each begins.
+    # The band boundaries are csart.py's, read out of the .inc it wrote rather
+    # than restated here.
+    bands = sorted((int(v), k) for k, v in re.findall(
+        r"^(cs_art_\w+?)\s+equ\s+(\d+)\s*$", open(os.path.join(
+            ROOT, "apps", "skies", "csart.inc")).read(), re.M)
+        if not k.endswith(("_w", "_h")))
+    if not bands or bands[0][0] != 0:
+        sys.exit("csworlds: apps/skies/csart.inc names no band at offset 0")
+    broff = [o for o, _ in bands] + [len(art)]
+    for o in broff:
+        if o & 15:
+            sys.exit("csworlds: a band at %d is not a paragraph - OSAPI_DECOMP "
+                     "expands only to offset 0 of a segment" % o)
+    bandz, bzoff = bytearray(), []
+    for i in range(len(bands)):
+        b = art[broff[i]:broff[i + 1]]
+        z = os88lz.lz4_compress(b, depth=CS_LZDEPTH)
+        assert os88lz.decompress(z, os88lz.LZ4, len(b)) == b, \
+            "csworlds: band %s does not expand to the bytes that made it" \
+            % bands[i][1]
+        bzoff.append(len(bandz))
+        bandz += z
+    bzoff.append(len(bandz))
 
-    # --- the packed streams -------------------------------------------------
-    # THE FILES ARE NUMBERED, not named: cswN.z is directory row N, which is
-    # what csload.asm hands the program and what the Makefile lists. A name
-    # would be a second place the order lives, and the two would drift.
+    # --- the packed streams, ONE FILE (SPEC.md 88.10.7) ----------------------
+    # Every stream the PROGRAM reads for itself - the vocabulary, the eight
+    # worlds and the title bands - packed one after another into csw.z, which
+    # is ONE lazy part of SKIES.O88. They were nine parts and the art a tenth,
+    # and os88pkg.py starts every part on a 512-byte boundary, so the file
+    # carried 2,278 bytes of padding between streams nothing reads as a part:
+    # the program finds each one by its BYTE offset (cs_wstroff, below) from
+    # the one sector the loader hands over, and reads it from the cluster at
+    # or below it exactly as it read a sector-aligned one.
+    #
+    # THE ORDER IS THE INDEX: stream N is cs_wstroff[N], and the order lives
+    # here and nowhere else. The art is LAST so the worlds keep their rows.
+    streams = ([("csvocab", vocab)] + [(w, blobs[w]) for w in WORLDS]
+               + [("csart", art)])
     tot_raw = tot_z = 0
-    lens = {}
-    for row, (name, blob) in enumerate(
-            [("csvocab", vocab)] + [(w, blobs[w]) for w in WORLDS]):
-        if len(blob) > (CS_VOCAB_MAX if name == "csvocab" else CS_WLD_MAX):
-            sys.exit("csworlds: %s is %d bytes and the overlay holds %d - "
-                     "raise CS_WLD_MAX here - it is declared in this file "
-                     "alone and skies.asm reads the generated cswidx.inc"
+    lens, offs, packed = {}, [], bytearray()
+    for row, (name, blob) in enumerate(streams):
+        if name in WORLDS and len(blob) > CS_WLD_MAX \
+                or name == "csvocab" and len(blob) > CS_VOCAB_MAX:
+            sys.exit("csworlds: %s is %d bytes and the overlay holds %d"
                      % (name, len(blob), CS_VOCAB_MAX if name == "csvocab"
                         else CS_WLD_MAX))
-        z = os88lz.compress(blob, os88lz.LZ4)
-        assert os88lz.decompress(z, os88lz.LZ4, len(blob)) == blob, \
-            "csworlds: %s does not expand to the bytes that made it" % name
-        open(os.path.join(a.out, "csw%d.z" % row), "wb").write(z)
+        if name == "csart":
+            z = bytes(bandz)        # ...already packed, band by band
+        else:
+            z = os88lz.lz4_compress(blob, depth=CS_LZDEPTH)
+            assert os88lz.decompress(z, os88lz.LZ4, len(blob)) == blob, \
+                "csworlds: %s does not expand to the bytes that made it" \
+                % name
+        offs.append(len(packed))
+        packed += z
         lens[name] = (len(blob), len(z))
         tot_raw += len(blob)
         tot_z += len(z)
-        print("csworlds: csw%d.z %-9s %5d -> %5d packed"
-              % (row, name, len(blob), len(z)))
+        print("csworlds: stream %d %-9s %5d -> %5d packed, at +%d"
+              % (row, name, len(blob), len(z), offs[-1]))
+    offs.append(len(packed))
+    if len(packed) > 0xFFFF:
+        sys.exit("csworlds: csw.z is %d bytes and cs_wstroff is a WORD a "
+                 "stream" % len(packed))
+    open(os.path.join(a.out, "csw.z"), "wb").write(packed)
 
     # --- the resident index -------------------------------------------------
     lines = [
@@ -396,19 +474,52 @@ def main(argv):
         "CS_VOCAB_AT  equ 0x%04X" % CS_VOCAB_AT,
         "CS_VOCAB_MAX equ %d" % CS_VOCAB_MAX,
         "CS_WLD_AT    equ CS_VOCAB_AT + CS_VOCAB_MAX",
-        "CS_WLD_MAX   equ %d" % CS_WLD_MAX,
+        "CS_WLD_MAX   equ %d              ; the LARGEST world, measured"
+        % CS_WLD_MAX,
         "",
     ] + ["%-12s equ CS_VOCAB_AT + %d" % (k, v - CS_VOCAB_AT)
          for k, v in sorted(vsyms.items(), key=lambda kv: kv[1])] + [
         "",
-        "; THE EXACT UNPACKED LENGTH of each stream, in directory order.",
-        "; OSAPI_DECOMP is told what a stream expands to and CHECKS it (SPEC.md",
-        "; 20.13.3), so the room the overlay has - CS_VOCAB_MAX, CS_WLD_MAX - is",
-        "; the wrong number to hand it: it writes the bytes and then reports the",
-        "; mismatch, which reads as a world that loaded and a load that failed.",
-        "cs_wstrraw:  dw " + ", ".join(
-            str(lens[n][0]) for n in ["csvocab"] + WORLDS),
+        "; THE STREAMS, in csw.z's order: the vocabulary, the eight worlds and",
+        "; the title bands (SPEC.md 88.10.7).",
+        "CS_STREAM_VOCAB equ 0",
+        "CS_STREAM_WLD0  equ 1",
+        "CS_STREAM_ART   equ %d" % (len(streams) - 1),
+        "",
+        "; THE EXACT UNPACKED LENGTH of each stream. OSAPI_DECOMP is told what",
+        "; a stream expands to and CHECKS it (SPEC.md 20.13.3), so the room the",
+        "; overlay has - CS_VOCAB_MAX, CS_WLD_MAX - is the wrong number to hand",
+        "; it: it writes the bytes and then reports the mismatch, which reads as",
+        "; a world that loaded and a load that failed.",
+        "cs_wstrraw:  dw " + ", ".join(str(lens[n][0]) for n, _ in streams),
+        "; ...and where each one BEGINS inside csw.z, plus one past the last:",
+        "; a stream's packed length is the next offset less its own.",
+        "cs_wstroff:  dw " + ", ".join(str(o) for o in offs),
+        "",
+        "; THE BANDS, KEPT PACKED (SPEC.md 88.10.7.1). The art stream is the",
+        "; six bands packed ONE BY ONE and laid end to end, and the program",
+        "; keeps the whole of it in its bss for the instance's life and",
+        "; expands a band only when it is first drawn. CS_ARTZ_SIZE sizes",
+        "; that buffer - the packing does not depend on any address, so pass",
+        "; 1 already knows it and the probe sees the number pass 2 will;",
+        "; cs_artroff is each band's offset in the UNPACKED bands (the",
+        "; cs_art_* names, plus one past the last), and cs_artzoff where its",
+        "; packed stream begins in the kept copy (plus one past the last).",
+        "CS_ARTZ_SIZE equ %d" % len(bandz),
+        "CS_NBANDS    equ %d" % len(bands),
+        "cs_artroff:  dw " + ", ".join(str(o) for o in broff),
+        "cs_artzoff:  dw " + ", ".join(str(o) for o in bzoff),
         ""]
+    # THE MOST OBJECTS ANY LOCATION'S TABLE HOLDS: cs_ctop is a word an object
+    # (SPEC.md 88.7.13) and was sized from CS_WLD_MAX / CSO_SIZE - 122 rows a
+    # world, where the most any location has is 47. CSA_NOBJ is skies.asm's,
+    # read out of it rather than restated (SPEC.md 88.10.5.6).
+    m = re.search(r"^CSA_NOBJ\s+equ\s+(\d+)", open(os.path.join(
+        ROOT, "apps", "skies", "skies.asm")).read(), re.M)
+    if not m:
+        sys.exit("csworlds: apps/skies/skies.asm declares no CSA_NOBJ")
+    nobj_at = int(m.group(1))
+    maxobj = 0
     ports, names, wof, strs = [], [], [], []
     defport = None
     for i, (loc, w) in enumerate(LOCATIONS):
@@ -417,6 +528,8 @@ def main(argv):
         if rec is None or nam is None:
             sys.exit("csworlds: %s.inc defines no cs_a_%s / cs_s_%s"
                      % (w, loc, loc))
+        maxobj = max(maxobj, blobs[w][rec + nobj_at]
+                     | blobs[w][rec + nobj_at + 1] << 8)
         ports.append("CS_WLD_AT + %d" % rec)
         names.append("cs_sn_" + loc)
         wof.append(str(WORLDS.index(w)))
@@ -432,11 +545,13 @@ def main(argv):
               "CS_DEFPORT   equ %d              ; PARIS-ISSY, where the "
               "simulator shipped" % defport,
               "CS_NWORLDS   equ %d" % len(WORLDS),
+              "CS_MAXOBJ    equ %d              ; the most objects any "
+              "location's table holds" % maxobj,
               ""] + strs + [""]
     idx = os.path.join(a.out, "cswidx.inc")
     open(idx, "w").write("\n".join(lines))
-    print("csworlds: %d worlds, %d locations, %d -> %d packed; %s"
-          % (len(WORLDS), len(LOCATIONS), tot_raw, tot_z, idx))
+    print("csworlds: %d worlds, %d locations, %d streams %d -> %d packed; %s"
+          % (len(WORLDS), len(LOCATIONS), len(streams), tot_raw, tot_z, idx))
     return 0
 
 

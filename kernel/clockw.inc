@@ -32,7 +32,7 @@
 ; .text and nothing needed rewriting. The six port helpers it shares with
 ; the boot overlay's read path are THIS IMAGE'S OWN COPIES, clkw_* at the foot
 ; of the file - the bodies are clock.inc's CLK_*_BODY macros, assembled once
-; there into `.ovlw` and once here (SPEC.md 37.94). They were resident and
+; there into `.ovl` and once here (SPEC.md 37.94). They were resident and
 ; far-called from both address spaces until kernel size pass 9.
 ;
 ; clk_dowt is the one piece of DATA that came along, and it is read through
@@ -635,7 +635,7 @@ clk_dowt:   db 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4
 ; =============================================================================
 ; The six port helpers - this image's copies (SPEC.md 37.94)
 ; =============================================================================
-; The boot overlay assembles the same bodies as clk_* in `.ovlw`; the contracts
+; The boot overlay assembles the same bodies as clk_* in `.ovl`; the contracts
 ; are written at the macros in clock.inc. Near, because every caller is in
 ; this image.
 clkw_at_get:

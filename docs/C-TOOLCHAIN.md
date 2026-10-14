@@ -516,7 +516,10 @@ What follows in practice:
   counts the NUL.
 - **The runtime you carry is small on purpose**: the header, the trampolines,
   the far-call bridges for the slots you use, and a handful of string and
-  memory helpers. **Everything else comes from the API table and costs you no
+  memory helpers. "For the slots you use" is literal: `tools/cc8086.py` writes
+  the list of what your C calls at the head of the generated assembly, and
+  only those thunks are assembled (SPEC.md §73.9.1) - an unused prototype in
+  `os88.h` costs nothing, and neither does an unused thunk. **Everything else comes from the API table and costs you no
   bytes at all** — a package that spends its code on *decisions* and reaches
   every primitive through the API is one whose bulk is exactly the part C is
   good at.
@@ -535,6 +538,17 @@ os88pkg: 'CWORD' entry=+0x0020 image=36326 bss=24533 icon=no assoc=0 -> build/cw
 bytes of its code are in `CWORD.OVL`. That is what the next section is about.
 
 **Track this from your first commit**, not at the end.
+
+**The build already takes the compiler's seams out for you.** `tools/cc8086.py`
+ends with a peephole pass (`tools/ccpeep.py`, SPEC.md §73.15) that collapses a
+comparison materialised as 0/1 and tested again into one conditional jump,
+drops reloads and dead register writes, and turns a constant shift into
+`mov cl, N` or a byte move - around **10% of a large C package's image**,
+nothing to opt into, and never slower. So do NOT hand-rewrite `a == b && c`
+into nested `if`s to save bytes: the pass does it. `make CCPEEP=0` builds
+without it, which is the A/B to reach for when a C package misbehaves and you
+want to rule the pass out in one rebuild; `tools/ccverify.py` is the pass's
+differential check, and the thing to run if you change it.
 
 ---
 
@@ -747,6 +761,10 @@ walks the four rules against the actual code that obeys them.
   `_os88_foo' not defined`` **with the name in it**. nasm does *not* tolerate a
   redundant `extern` for a symbol defined in the same assembly: it is a
   redefinition, and passes only when the symbol's value is 0 (§73.1).
+- **A thunk you call only from your own hand-written assembly is "not
+  defined".** The runtime assembles the thunks your C calls (SPEC.md
+  §73.9.1), and a call from an `.inc` your shim includes is not in the C's
+  list. Say `%define CC_U__os88_foo` in the shim, before `CC_IMAGE_END`.
 - **`os88pkg.py` reporting `image size field N != actual file size M` does
   not mean a truncated file.** On a C package it much more likely means the
   section layout was disturbed. A C package must not open a section of its own,

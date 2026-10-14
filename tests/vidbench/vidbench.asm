@@ -821,6 +821,7 @@ vb_run:
 
 %define BL_ARENA_BYTES 12000        ; ~150 lines. 8,000 TRUNCATED the field
                                     ; disk's 31 frames at five rows a frame
+%define BL_NUMBERED                 ; a field run saves NAME1, NAME2... (benchlib)
 %include "benchlib.inc"
 %include "video/vdec.inc"
 

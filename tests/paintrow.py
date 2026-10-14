@@ -49,6 +49,7 @@ OS8088.GIF is 466 wide, which is 58 whole byte columns and a remainder of 2,
 so every row tests the fast path 58 times and the partial path once.
 """
 import argparse
+import tempfile
 import os
 import sys
 
@@ -153,7 +154,7 @@ def classes(seq):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/paintrow.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/paintrow.img")
     ap.add_argument("--machine", default="os8088_xt_vga")
     ap.add_argument("--gif", default=None,
                     help="the picture to open (default: a COLOUR derivation "
@@ -170,7 +171,7 @@ def main():
     if a.gif is None:
         a.gif = dispapps.colour_gif()
 
-    if a.apps == "/tmp/paintrow.img":
+    if a.apps == tempfile.gettempdir() + "/paintrow.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:" + a.gif)
 

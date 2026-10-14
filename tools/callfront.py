@@ -38,6 +38,7 @@ the cache claim itself and look at it, which is what identified both this and
 11.96.7 - a wrong cache is invisible until it is used.
 """
 import os
+import tempfile
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -76,7 +77,7 @@ def opened(m, before, what):
 
 def main():
     machine = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_herc_gla"
-    out = sys.argv[2] if len(sys.argv) > 2 else "/tmp/callfront"
+    out = sys.argv[2] if len(sys.argv) > 2 else tempfile.gettempdir() + "/callfront"
     defines = sys.argv[3:]              # any -D the kernel was built with
     os.makedirs(out, exist_ok=True)
     log = []

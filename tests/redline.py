@@ -46,10 +46,11 @@ def host():
     counts = [int(x) for x in re.findall(r'^\s+dd (\d+)', inc, re.M)]
     assert len(counts) == R.ROWS and counts == ref['workload_counts']
     assert all(0 < c < 0xFFFFFFFF for c in counts)
-    sym = R.symbols()
-    import hashlib
-    image = Path(at(str(ROOT / 'build/redline.bin'))).read_bytes()
-    assert hashlib.sha256(image[sym['rl_alu']:sym['rl_detect']]).hexdigest() == ref['workload_code_sha256'], 'baseline does not match workload code; recalibrate'
+    R.symbols()      # asserts the source still assembles to build/redline.bin
+    # The SHAPE and not the raw bytes (tools/redline_profile.workload_shape):
+    # the raw region also records where every variable sits, so a shared
+    # include growing failed this with not one workload instruction changed.
+    assert R.workload_shape() == ref['workload_shape_sha256'], 'baseline does not match workload code; recalibrate'
     assert len(ref['trials']) == 3
     for adapter in ('cga', 'herc', 'vga'):
         suffix = '' if adapter == 'cga' else '-' + adapter
@@ -59,6 +60,7 @@ def host():
         assert [int(x) for x in re.findall(r'^\s+dd (\d+)', table, re.M)] == expected
         assert all(0 < n <= 0xFFFFFFFF for n in record['workload_counts'])
         assert record['workload_code_sha256'] == ref['workload_code_sha256']
+        assert record['workload_shape_sha256'] == ref['workload_shape_sha256']
         assert record['adapter'] == adapter and record['runs_per_trial'] == R.RUNS
         assert record['canvas_height'] == (64 if adapter == 'cga' else 128)
         assert record['rotation_frames_per_row'] == 48
@@ -100,6 +102,27 @@ def invoke(p, name, **args):
     for r in regs:
         m.setreg(r, old[r])
     return answer
+
+
+def arena_headroom(report, used):
+    """The report arena is sized from the WORST report, not this one
+    (SPEC.md 103.4.3): this report's lines, with every bar at its full 50
+    cells, every sample-3 row flagged, and the lines a CPUID/AT machine
+    writes that a 5150 does not - brand (49), five CPUID kv lines (5 x 35),
+    the AH88 pair over the RAM-unknown line (+38), the longest clock trio
+    (+3), the longest CPU name (+8), three n/a bucket means (+48) and the
+    longest reference name (+5). A report that grows a line fails here, on
+    a 4.77 MHz machine, before it truncates on a fast one."""
+    lines = report.splitlines()
+    assert sum(len(l) + 1 for l in lines) == used, (used, 'the saved report is not the arena')
+    rows = lines[lines.index(next(l for l in lines if l.startswith('measurement'))) + 1:][:R.ROWS]
+    worst = (used + sum(52 - len(l) for l in lines if l.startswith('['))
+             + sum(2 for l in rows if not re.search(r' [wt!]$', l))
+             + 49 + 5 * 35 + 38 + 3 + 8 + 48 + 5)
+    arena = int(re.search(r'^%define BL_ARENA_BYTES (\d+)',
+                          (ROOT / 'apps/redline/redline.asm').read_text(), re.M).group(1))
+    assert worst <= arena, ('worst-case report', worst, 'over the arena', arena)
+    print('REDLINE report %d bytes, worst case %d of %d' % (used, worst, arena), flush=True)
 
 
 def native(machine):
@@ -248,6 +271,7 @@ def native(machine):
         assert indices == list(struct.unpack('<%dI' % R.ROWS, p.data('ru_scores', R.ROWS*4)))
         if machine in ('os8088_redline_pc_gla','os8088_redline_herc_gla','os8088_redline_vga_gla'):
             assert all(800 < n < 1200 for n in indices), indices
+        arena_headroom(report, p.word('bl_used'))
         def screenshot(name):
             ui.m.advance(frames=60)
             if p.word('rl_video') & 255 == 0:
@@ -514,6 +538,12 @@ org 0x7C00
     xor dh, dh
     int 0x13
     jc fail
+    mov bx, 0x6A00
+    mov ax, 0x0212
+    mov cx, 0x0101
+    mov dh, 1
+    int 0x13
+    jc fail
     jmp 0x1000:ENTRY
 fail:
     mov al, 0x11
@@ -525,7 +555,7 @@ fail:
             bootbin = td / 'boot.bin'
             subprocess.run(['nasm', '-f', 'bin', '-o', str(bootbin), str(boot)], check=True)
             disk, dump = td / 'probe.img', td / 'probe.dump'
-            assert len(blob) <= 53*512
+            assert len(blob) <= 71*512, len(blob)  # the four reads above
             disk.write_bytes((bootbin.read_bytes()+blob).ljust(1440*1024, b'\0'))
             run = subprocess.run(['qemu-system-i386', '-machine', 'pc', '-cpu', cpu, '-m', str(ram),
                                   '-drive', 'file=%s,format=raw,if=floppy' % disk,
@@ -640,6 +670,117 @@ rl_nec_first: dw 0
     print('REDLINE NEC V20: real IRQ0 restart test and repeat-safe queue probe OK', flush=True)
 
 
+def crc16(data):
+    c = 0xFFFF
+    for b in data:
+        c ^= b << 8
+        for _ in range(8):
+            c = ((c << 1) ^ 0x1021) if c & 0x8000 else c << 1
+            c &= 0xFFFF
+    return c
+
+
+def chipset(machine):
+    """The Tune tab (SPEC.md 103.6) on a real machine model, driven through
+    its BUTTONS - every action on it has one, the owner's rule for a page that
+    goes to strangers' machines. The Tune tab opens in REDLINE's own window,
+    identifies and measures on entry (there is no Measure), its fingerprint
+    is the CRC of the BIOS actually in the machine, an 8088 runs no port
+    probe and greys every write and the Target, the state field says Stock,
+    the drop-down's pick is the user's, Save
+    report numbers its files and leaves the help out of them, the pane
+    scrolls where it overflows, the Benchmark tab puts the foot back, and Quit
+    on this tab closes REDLINE. The probes themselves are tests/csprobe.py's,
+    against models of every board."""
+    import os88ui
+    import os88flush as F
+    import os88marty as M
+    sym = R.symbols()
+    with os88ui.boot(str(ROOT / 'build/os8088-360.img'),
+                     apps=str(ROOT / 'build/redline360.img'), machine=machine) as ui:
+        ui.open_drive('B')
+        ui.open('REDLINE.O88')
+        p = R.Probe(ui, sym)
+        has = lambda t: any(w.title == t for w in ui.windows())
+        rect = lambda i: struct.unpack('<4h', p.data('ru_rects', 64)[i * 8:i * 8 + 8])
+        flags = lambda: struct.unpack('<8H', p.data('ru_buttonflags', 16))
+
+        def press(i):
+            x1, y1, x2, y2 = rect(i)
+            ui.m.run()
+            ui.mo.click((x1 + x2) // 2, (y1 + y2) // 2, settle=0)
+
+        M.until(ui.m, lambda _: rect(7) != (0, 0, 0, 0), 'REDLINE paints its tabs', limit=30)
+        press(7)                                    # the Tune TAB
+        crc = crc16(ui.m.read(0xF0000, 0x10000))
+        M.until(ui.m, lambda _: p.data('cs_tab') == b'\1' and p.word('cs_crc') == crc
+                and p.data('cs_measd') == b'\1' and rect(5)[0] == 0x7FFF,
+                'the Tune tab identifies (fingerprint %04X) and measures on entry' % crc,
+                limit=30)
+        assert has('REDLINE') and not has('Chipset'), 'the tab is not a second window'
+        assert p.data('cs_tier') == b'\0', 'MartyPC is an 8088'
+        pres = p.data('cs_pres', 10)
+        assert all(pres[r] == 1 for r in (3, 4, 5, 6, 7)), ('port probes on an 8088', pres)
+        lw = 74
+        line = lambda n: p.data('cs_lines', lw * (n + 1))[lw * n:lw * n + 72].decode('ascii')
+        assert ('fingerprint %04X' % crc) in line(0), line(0)
+        assert 'screen ' in line(5), line(5)
+        M.until(ui.m, lambda _: flags()[0] & 1 and flags()[1] & 1,
+                'an 8088 greys Tune and Save setting', limit=20)
+        assert not flags()[2] & 1 and not flags()[3] & 1, flags()
+        M.until(ui.m, lambda _: p.data('cs_tgt', 25)[24] != 0,
+                'an 8088 greys the Target drop-down', limit=20)
+        stat = p.data('cs_stat', 19).decode('ascii')
+        assert stat.startswith('Stock: BIOS timing'), stat
+        # the drop-down: open it, pick C&T NEAT (row 7)
+        dx1, dy1, dx2, dy2 = struct.unpack('<4H', p.data('cs_drop', 8))
+        ui.m.run()
+        ui.mo.click((dx1 + dx2) // 2, (dy1 + dy2) // 2, settle=0)
+        M.until(ui.m, lambda _: p.data('cs_drop', 17)[16] == 1, 'the list opens', limit=20)
+        top = struct.unpack('<H', p.data('cs_drop', 24)[22:24])[0]
+        ui.mo.click((dx1 + dx2) // 2, top + 1 + 7 * 12 + 6, settle=0)
+        M.until(ui.m, lambda _: p.data('cs_pick') == b'\7', 'the pick is C&T NEAT', limit=20)
+        assert 'C&T NEAT' in line(2), line(2)
+        # Save report, by its button, twice: CHIPSET1.TXT then CHIPSET2.TXT
+        for n in (1, 2):
+            press(2)
+            M.until(ui.m, lambda _: ('CHIPSET%d.TXT' % n) in line(4),
+                    'Save report says CHIPSET%d.TXT' % n, limit=60)
+            ui.settle()
+            text = F.Flush(marty=ui.m).volume(1).read('CHIPSET%d.TXT' % n).decode('ascii')
+            assert ('fingerprint %04X' % crc) in text and 'Picked:   C&T NEAT' in text, text
+            assert 'What the buttons do' not in text, 'the help went into the report'
+            assert not any(l.endswith(' ') for l in text.split('\r\n')), 'padding saved'
+        # the pane scrolls where it overflows: PgDn, then Home
+        pn = pane(p, 'cs_pane')
+        if pn['vis'] < pn['cnt']:
+            R.key(ui, 'PageDown')
+            R.wait(ui, lambda: pane(p, 'cs_pane')['top'] > 0, 'PgDn did not scroll the pane')
+            R.key(ui, 'Home')
+            R.wait(ui, lambda: pane(p, 'cs_pane')['top'] == 0, 'Home did not scroll back')
+        print('  cs_pane: %d of %d lines visible' % (pn['vis'], pn['cnt']), flush=True)
+        # the Benchmark tab puts the foot back, its labels and its greying
+        press(6)
+        # cs_tab moves at the top of the handler and the rects at its repaint:
+        # a click aimed between the two is aimed at the other tab's foot
+        M.until(ui.m, lambda _: p.data('cs_tab') == b'\0' and rect(5)[0] != 0x7FFF,
+                'the Benchmark tab', limit=20)
+        assert p.data('ru_buttonlabels', 12) == p.data('ru_benchlabels', 12)
+        M.until(ui.m, lambda _: not any(f & 1 for f in flags()[:6]),
+                'the Benchmark foot is live again', limit=20)
+        # back to Tune - the pick outlives the tab - and Quit closes REDLINE
+        press(7)
+        M.until(ui.m, lambda _: p.data('cs_tab') == b'\1' and rect(5)[0] == 0x7FFF,
+                'the Tune tab again', limit=20)
+        assert p.data('cs_pick') == b'\7', "the user's pick outlives the tab"
+        press(3)
+        M.until(ui.m, lambda _: not has('REDLINE'), 'Quit on the Tune tab closes REDLINE',
+                limit=20)
+    print('REDLINE tune tab %s: fingerprint %04X, no port probe on an 8088, writes grey, '
+          'measured on entry, pick, CHIPSET1/2.TXT without the help, tabs, Quit: OK'
+          % (machine, crc), flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--host', action='store_true')
@@ -647,13 +788,16 @@ def main():
     ap.add_argument('--nec', action='store_true')
     ap.add_argument('--scene', action='store_true')
     ap.add_argument('--machine')
+    ap.add_argument('--chipset', metavar='MACHINE')
     args = ap.parse_args()
     if args.host: host()
     if args.modern: modern()
     if args.nec: nec()
     if args.scene: scene()
     if args.machine: native(args.machine)
-    assert args.host or args.modern or args.nec or args.machine or args.scene
+    if args.chipset: chipset(args.chipset)
+    assert (args.host or args.modern or args.nec or args.machine or args.scene
+            or args.chipset)
 
 
 if __name__ == '__main__':

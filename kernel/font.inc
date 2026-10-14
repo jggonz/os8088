@@ -301,7 +301,7 @@ FONT_ICA    equ 0x00F8                      ; 0040:00F8: 'FP', best, RAM, BIOS.
 ; baked table would be dead code on every machine that ever runs it, and a
 ; baked table kept behind a probe would never be the thing being tested.
 ;
-; IN THE BLOB HALF OF THE BOOT OVERLAY (`.ovl`) ON BOTH KERNELS, reached by
+; IN THE BLOB HALF OF THE BOOT OVERLAY (`.boot2`) ON BOTH KERNELS, reached by
 ; BLOBCALL: SPEC.md 6.0.1 grew the blob to ten sectors for exactly this body,
 ; so it costs no resident byte and no window byte. One caller, kmain.
 ;
@@ -323,7 +323,7 @@ FONT_ICA    equ 0x00F8                      ; 0040:00F8: 'FP', best, RAM, BIOS.
 ; on an AT bus, crosses it by multiples. `make FONTSLOW=1` takes the copy on
 ; any machine, so the copy path has a row.
 ; -----------------------------------------------------------------------------
-section .ovl
+section .boot2
 font_init:
     push ax
     push bx
@@ -758,10 +758,9 @@ font_ch_cut:
     mov cx, bx                  ; seam, lifted to the far display's first. All
     mov ch, 8                   ; eight ROWS go: it runs its own y test, and
 .bxr:                           ; its height is its own
-    mov al, [es:si]
-    shl al, cl
+    es lodsb                    ; (DF = 0, SPEC.md 1: SI walks itself, and the
+    shl al, cl                  ; `sub si, 8` below puts it back either way)
     mov [ss:di], al
-    inc si
     inc di
     dec ch
     jnz .bxr
@@ -781,9 +780,8 @@ font_ch_cut:
     mov cx, 8                   ; COLUMNS go: it runs its own x test
     sub cx, bp
 .byr:
-    mov al, [es:si]
+    es lodsb
     mov [ss:di], al
-    inc si
     inc di
     loop .byr                   ; CX = 8 - bp, 1..7 (`jae .part` above proved
                                 ; bp < 8). A CX of 0 would run 65,536 times -
@@ -821,8 +819,7 @@ font_ch_cut:
     mov ah, al                  ; shift - which their `or al, al / jz` skips
     mov cx, 8                   ; already. k = 8 shifts the byte away and `not`
 .par:                           ; brings back FF, so no mask is no work
-    mov al, [es:si]
-    inc si
+    es lodsb
     and al, ah
     dec bp                      ; ONE loop over all eight rows: the first n
     jns .pkeep                  ; (BP = n, 1..8, counted down to -1) keep
@@ -1145,9 +1142,8 @@ font_str_x:
     push cx
     push si
 .next:
-    mov al, [es:si]
-    inc si
-    or al, al
+    es lodsb                    ; ES:SI, and SI walks itself (DF = 0, SPEC.md
+    or al, al                   ; 1): 2 bytes where the load and `inc` were 4
     jz .done
     call font_char              ; out-of-range chars draw nothing; pen still
     add cx, 8                   ; advances, so they read as spaces
@@ -1314,8 +1310,10 @@ font_run_x:
     pop bx                      ; the test below is still vid_span_one's. The
     pop ax                      ; empty-string early-out arrives here with CF
     jnc .nosplit                ; already clear from its own `or ax,ax`, which
-    mov [font_rn_fg], al        ; is the answer that arm wants; and AX is
-    mov [font_rn_bg], ah        ; restored before it is read, as it was
+    mov [font_rn_fg], ax        ; is the answer that arm wants; and AX is
+                                ; restored before it is read, as it was. ONE
+                                ; word store: fg and bg are adjacent, fg first
+                                ; (the %if at the foot of this file)
     jmp .cells_nx
 .nosplit:
 %endif
@@ -1324,8 +1322,7 @@ font_run_x:
                                 ; gfx_fill + font_str, which the nesting count
                                 ; keeps from translating a second time
 
-    mov [font_rn_fg], al
-    mov [font_rn_bg], ah
+    mov [font_rn_fg], ax        ; AL = fg, AH = bg: one word (size pass 10)
     mov byte [font_rn_dt], 0    ; SPEC.md 6.1.12: no checkerboard unless the
                                 ; mono prologue below finds one. Set HERE and
                                 ; not there, so the planar prologue and every
@@ -1460,14 +1457,13 @@ font_run_x:
     mov bx, font_rn_tab
     xor bp, bp                  ; BP = cells that will actually be drawn
 .p1:
-    mov al, [es:si]
-    or al, al
-    jz .p1end
+    es lodsb                    ; (SI past the character on EVERY exit below
+    or al, al                   ; as well, which none of them reads: .p1none
+    jz .p1end                   ; and .p1full both pop the string's start)
     cmp cx, [vid_cwm8]          ; the first cell off the right edge ends the
     ja .p1end                   ; run - x only grows, so the drawn cells are
     cmp bp, FONT_RN_MAX         ; a PREFIX, which is what lets stosb walk them
     jae .p1full
-    inc si
     add cx, 8
     cmp al, FONT_FIRST
     jb .p1blank
@@ -1776,14 +1772,13 @@ font_run_x:
 %endif
 
 .cell:                          ; the per-cell path: a clip-cut run, and the
-    mov al, [es:si]             ; overflow that cannot happen
-    or al, al
-%ifdef KERN_BIG
+    es lodsb                    ; overflow that cannot happen. (SI past the
+    or al, al                   ; NUL at the exit, which the ladder's pop
+%ifdef KERN_BIG                 ; replaces - and the same at the two below)
     jz .jout                    ; (the `jmp .out` just above: two bytes, not
 %else                           ; five, and 4 clocks a cell not-taken)
     jz .out
 %endif
-    inc si
     call font_run_cell          ; CX/DX/DI = this cell; preserves all three
     add cx, 8
     inc di                      ; an aligned cell is one byte wide, so the
@@ -1831,8 +1826,7 @@ font_run_x:
     push si                     ; .p1's frame (see .p1pre): the grouping spends
     push cx                     ; AX and BX only, but gfx_rowbase below spends
     push dx                     ; CX and DX
-    mov al, [font_rn_fg]
-    mov ah, [font_rn_bg]
+    mov ax, [font_rn_fg]        ; AL = fg, AH = bg, as one word
     and ax, 0x0F0F              ; a colour is four planes and nothing else
     mov bl, al
     xor bl, ah                  ; BL = the planes the two colours differ on
@@ -1947,10 +1941,9 @@ font_run_x:
     call font_str_x
     jmp short .out
 .cells:
-    mov al, [es:si]
+    es lodsb
     or al, al
     jz .out
-    inc si
     call font_run_scell
     add cx, 8
     jmp short .cells
@@ -1972,10 +1965,9 @@ font_run_x:
     jmp kret_bp
 %ifdef KERN_BIG
 .cells_nx:                      ; SPEC.md 39.14.6: per cell and UNTRANSLATED,
-    mov al, [es:si]             ; so each font_char resolves its own display -
+    es lodsb                    ; so each font_char resolves its own display -
     or al, al                   ; and no GFXDLEAVE, because no enter was taken
     jz .outp
-    inc si
     call font_run_scell
     add cx, 8
     jmp short .cells_nx
@@ -2011,17 +2003,15 @@ fnt_rn_edge:
 %ifdef KERN_BIG
     cmp byte [font_rn_pl], 0
     je .mono
-    push ax
-    mov dh, dl                  ; GC8 Bit Mask = the run's bits, once
-    mov al, 8
-    mov ah, dh
-    mov dx, VGA_GC
-    out dx, ax
-    pop ax
+    mov ah, dl                  ; GC8 Bit Mask = the run's bits, once. AX is
+    mov al, 8                   ; this routine's to clobber (the header), so
+    mov dx, VGA_GC              ; it is not banked - and DH is not a staging
+    out dx, ax                  ; register: DX is the port the line after
     mov cx, 8                   ; a fixed eight rows: `loop` is 2 bytes and 17
 .vrow:                          ; clocks where `inc bp / cmp bp,8 / jb` is 6
-    mov al, [si]                ; and ~22, and FONT_RN_NEXTROW touches only DI
-    inc si                      ; and the flags
+    lodsb                       ; and ~22, and FONT_RN_NEXTROW touches only DI
+                                ; and the flags. (`lodsb`: DS is the kernel's,
+                                ; the caller's push cs / pop ds, and DF = 0)
     xchg [es:di], al            ; the latches (the read), then AL (the write):
                                 ; the masked-out bits come back from them
                                 ; untouched. xchg is that read and that write
@@ -2038,8 +2028,7 @@ fnt_rn_edge:
     not bl                      ; BL = the bits that are NOT ours
     mov cx, 8                   ; ...and the same eight here
 .mrow:
-    mov al, [si]
-    inc si
+    lodsb
     and al, dl
     mov ah, [es:di]
     and ah, bl
@@ -2159,8 +2148,9 @@ font_run_cell:
     dec bl
     jnz .skip
 .row:
-    mov al, [es:si]             ; AL = the glyph row
-    inc si
+    es lodsb                    ; AL = the glyph row, and SI on to the next:
+                                ; 2 bytes and ~14 clocks where `mov al,[es:si]
+                                ; / inc si` was 4 and ~19 (size pass 10)
     and al, cl                  ; a set bit picks ink, a clear bit background
     xor al, ch                  ; - the same byte, three instructions fewer
 %ifdef KERN_BIG
@@ -2412,6 +2402,9 @@ font_dith:      resb 1          ; 1 = this glyph is disabled text on a mono
                                 ; (font_dmask, the row's half of the
                                 ; checkerboard, is DL in font_char_bb now)
 
+%if (font_rn_bg - font_rn_fg) != 1
+  %error "font_run_x stores the run's two colours as ONE word (`mov [font_rn_fg],ax` -> AL = fg, AH = bg) and the planar prologue reads them back as one: they must stay adjacent, fg first"
+%endif
 %if (font_rn_bm - font_rn_xm) != 1
   %error "font_run_x's .rm and font_run_cell both read the run's masks as ONE word (`mov dx,[font_rn_xm]`, `mov cx,[font_rn_xm]` -> low = xm, high = bm): they must stay adjacent, xm first (SPEC.md 6.1.5)"
 %endif
@@ -2420,13 +2413,13 @@ font_dith:      resb 1          ; 1 = this glyph is disabled text on a mono
 ; =============================================================================
 ; The baked typeface (SPEC.md 6.2), in the BOOT OVERLAY (SPEC.md 2.5).
 ;
-; 760 bytes that cost neither guard anything: .ovl lands in the FAT window and
+; 760 bytes that cost neither guard anything: .boot2 lands in the FAT window and
 ; is written over by drv_boot's first mount, which is the last thing kmain
-; does - and this runs well before it, beside ovl_clk_init and drv_snd_sniff.
+; does - and this runs well before it, beside ovl_clk_init and drv_sniff.
 ; So the whole price of carrying our own font is ONE floppy sector at boot.
 ;
 ; It is an overlay ENTRY rather than a table .text reaches into, and that is
-; the section's own contract rather than taste: `.ovl` has a vstart of its own
+; the section's own contract rather than taste: `.boot2` has a vstart of its own
 ; and DS is KERNEL_SEG throughout it, so overlay data is reachable only
 ; through CS - which is what this does, and what kernel.asm's section header
 ; says anything added here would have to. tools/os88ovlchk.py cannot see a
@@ -2434,11 +2427,11 @@ font_dith:      resb 1          ; 1 = this glyph is disabled text on a mono
 ; keeping to rather than working around.
 ; =============================================================================
 %ifndef KERN_SMALL
-section .ovlw
+section .ovl
 %else
-section .ovl                    ; kern_small: the BLOB half, font_init's own
+section .boot2                    ; kern_small: the BLOB half, font_init's own
                                 ; placement and for its reason - that kernel's
-                                ; `.ovlw` sits on the FAT window and the mount
+                                ; `.ovl` sits on the FAT window and the mount
                                 ; buffers, and 760 more bytes overran it, so
                                 ; FONT= did not build on kern_small at all
 %endif
@@ -2480,7 +2473,7 @@ ovl_font_init:
     pop si
     pop cx
     pop ax
-    retf                        ; FAR: kmain reaches this through OVLCALL
+    retf                        ; FAR: kmain reaches this through SPLCALL
 
 %if font_zero != font_glyphs + FONT_BYTES
   %error "ovl_font_init clears font_zero straight off the end of its copy"

@@ -1,0 +1,80 @@
+--- a/crates/marty_core/src/bus/mod.rs
++++ b/crates/marty_core/src/bus/mod.rs
+@@ -720,6 +720,15 @@
+     ///
+     /// Ranges must have a granularity no less than MMIO_MAP_SIZE (8K).
+     pub fn register_map(&mut self, device: MmioDeviceType, mem_descriptor: MemRangeDescriptor) {
++        // os8088: a range a device claims ONLY WHERE FREE (a lone Hercules's
++        // page 1, which a CGA in the same machine owns instead)
++        if mem_descriptor.priority == crate::devices::mda::HGC_PAGE1_IF_FREE {
++            let first = mem_descriptor.address >> MMIO_MAP_SHIFT;
++            let segs = mem_descriptor.size / MMIO_MAP_SIZE;
++            if (first..first + segs).any(|i| !matches!(self.mmio_map_fast[i], MmioDeviceType::Memory)) {
++                return;
++            }
++        }
+         if mem_descriptor.address < self.mmio_data.first_map {
+             self.mmio_data.first_map = mem_descriptor.address;
+         }
+--- a/crates/marty_core/src/devices/mda/mod.rs
++++ b/crates/marty_core/src/devices/mda/mod.rs
+@@ -96,6 +96,9 @@
+ pub const HGC_MEM_APERTURE_FULL: usize = 0x10000;
+ pub const HGC_MEM_MASK_HALF: usize = 0x7FFF;
+ pub const HGC_MEM_MASK_FULL: usize = 0xFFFF;
++// os8088: a MemRangeDescriptor priority meaning "map only where free" -
++// the lone Hercules's page 1, which a CGA beside it owns instead
++pub const HGC_PAGE1_IF_FREE: u32 = 0xFFFF_FFFF;
+ 
+ pub const MDA_REPEAT_COL_MASK: u8 = 0b1110_0000;
+ pub const MDA_REPEAT_COL_VAL: u8 = 0b1100_0000;
+--- a/crates/marty_core/src/devices/mda/mmio.rs
++++ b/crates/marty_core/src/devices/mda/mmio.rs
+@@ -48,6 +48,9 @@
+ 
+     fn mmio_read_u8(&mut self, address: usize, _cycles: u32, _cpumem: Option<&[u8]>) -> (u8, u32) {
+         let a_offset = address & self.mem_mask;
++        if a_offset & HGC_MEM_APERTURE_HALF != 0 && !self.hgc_config.enable_page() {
++            return (0xFF, 0); // (os8088: page 1 not decoded, 3BFh bit 1 clear)
++        }
+ 
+         trace!(self, "READ_U8: {:04X}:{:02X}", a_offset, self.mem[a_offset]);
+         (self.mem[a_offset], 0)
+@@ -85,6 +88,9 @@
+ 
+     fn mmio_write_u8(&mut self, address: usize, byte: u8, _cycles: u32, _cpumem: Option<&mut [u8]>) -> u32 {
+         let a_offset = address & self.mem_mask;
++        if a_offset & HGC_MEM_APERTURE_HALF != 0 && !self.hgc_config.enable_page() {
++            return 0; // (os8088: page 1 not decoded, 3BFh bit 1 clear)
++        }
+ 
+         self.mem[a_offset] = byte;
+         trace!(self, "WRITE_U8: {:04X}:{:02X}", a_offset, byte);
+@@ -149,7 +155,26 @@
+                 //
+                 // The cost is fidelity for a guest that DOES set the page bit and
+                 // then writes to B8000 - it would reach a CGA here, or nothing.
+-                // No such guest exists in this tree.
++                //
++                // --- os8088: ...EXCEPT ON A LONE HERCULES (SPEC.md 98.3.8.3) ---
++                //
++                // Such a guest exists now: the Video Player's page-ahead builds
++                // a future frame on page 1 of a Hercules that has no colour card
++                // beside it (the kernel's fsx_page refuses the page on a machine
++                // that has one). So page 1 IS claimed - with priority
++                // HGC_PAGE1_IF_FREE, which Bus::register_map takes to mean "only
++                // where no other device has mapped already": a CGA registered
++                // before keeps B8000, and one registered after overwrites it as
++                // before, so the two-card machine's CGA answers there whatever
++                // the order. And, as on the card, the page decodes only while
++                // 3BFh bit 1 allows it (mmio_read_u8/mmio_write_u8 below).
++                mapping.push(MemRangeDescriptor {
++                    address: 0xB8000,
++                    size: HGC_MEM_APERTURE_HALF,
++                    cycle_cost: 0,
++                    read_only: false,
++                    priority: HGC_PAGE1_IF_FREE,
++                });
+             }
+             _ => {
+                 panic!("Bad subtype for MDA!")

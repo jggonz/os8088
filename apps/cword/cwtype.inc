@@ -425,6 +425,10 @@ _cw_ty_close:
 ; it leaves the assembler in .text, which CLAUDE.md's section discipline
 ; requires of every include in this tree.
 ; =============================================================================
+%define OS88TY_NOWIDTH          ; SPEC.md 6.5.5: the four routines no shim
+%define OS88TY_NOWIDTHN         ; above reaches
+%define OS88TY_NOPUT
+%define OS88TY_NOGETASC
 %include "os88type.inc"
 
 section .bss

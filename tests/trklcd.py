@@ -123,11 +123,11 @@ def main():
         wx, wy, _, _ = dispcp.win_rect(m, S, slot)
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "BEVERLY.MOD")
         try:                           # the launch is the GUEST's work
-            os88marty.until(m, lambda mm: scan(mm)[0],
+            os88marty.until(m, lambda mm: scan(mm, DISK)[0],
                             "Tracker's instance", poll=0.5, limit=120.0)
         except os88marty.MartyError:
             pass
-        seg, _drv = scan(m)
+        seg, _drv = scan(m, DISK)
         if not seg:
             print("FAIL: Tracker never loaded")
             return 1

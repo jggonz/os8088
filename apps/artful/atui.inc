@@ -1577,20 +1577,11 @@ at_bigtext:
     mov cx, (AT_S1ST*24)/2          ; 24 rows covers scale 3
     AT_PAPERAX                      ; SPEC.md 46.4.2 - the FIFTH writer into
     rep stosw                       ; at_strip1, and the one in another file
-    mov di, at_cellbg
-    mov cx, AT_CBGCAP/2
-%ifndef NOATBLIT1
-    xor ax, ax                      ; ...and at_cellbg is a FLAG ARRAY, not
-%endif                              ; pixels, so it does NOT follow the strip's
-    rep stosw                       ; polarity. The two clears used to SHARE
-                                    ; the AX that `xor ax, ax` set for both;
-                                    ; carrying 0FFFFh into the second marks
-                                    ; every 8px column a code cell, at_expand
-                                    ; widens the lot through at_x4g, and the
-                                    ; splash title gets a grey ground. Caught
-                                    ; by tests/atblit.py's SPLASH scene at
-                                    ; 1,130 pixels - the document scene alone
-                                    ; never draws at_bigtext and stayed green.
+%ifdef NOATBLIT1
+    mov di, at_cellbg               ; at_expand reads at_cellbg; the band this
+    mov cx, AT_CBGCAP/2             ; arm's twin hands over does not, so the
+    rep stosw                       ; clear is the expander's alone (46.4.12)
+%endif
     xor di, di                      ; DI = x within the strip
 .ch:
     lodsb
@@ -1602,6 +1593,7 @@ at_bigtext:
     add di, [at_pcw]
     jmp short .ch
 .composed:
+%ifdef NOATBLIT1
     mov ax, di
     cmp ax, AT_S4ST*2               ; the 4bpp strip's 608px, not the 1bpp
     jbe .w                          ; 640: at_expand writes 4 bytes per
@@ -1620,6 +1612,23 @@ at_bigtext:
     mov cx, [at_xw]
     mov dx, [at_prh]
     call OSAPI_GFX_BLIT4
+%else
+    ; SPEC.md 46.4.12: the strip IS the band, so it goes down as it stands.
+    ; The cap is the one the 4bpp strip set (608px) - kept, so a title draws
+    ; exactly as wide as it did - and it leaves at_blit1ph its byte of room.
+    mov cx, di
+    cmp cx, AT_BIGW
+    jbe .w
+    mov cx, AT_BIGW
+.w:
+    jcxz .out
+    mov si, at_strip1
+    mov bp, AT_S1ST
+    mov ax, [at_btx]
+    mov bx, [at_bty]
+    mov dx, [at_prh]
+    call at_blit1ph
+%endif
 .out:
     pop es
     pop bp
@@ -1631,6 +1640,7 @@ at_bigtext:
     pop ax
     ret
 
+%ifdef NOATBLIT1
 ; -----------------------------------------------------------------------------
 ; at_drawimg - blit the 128x100 splash artwork at (AX, BX)
 ; Expanded 1bpp -> 4bpp through the white table, in bands of 24 rows.
@@ -1649,8 +1659,9 @@ at_drawimg:
     cld
     mov [at_btx], ax
     mov [at_bty], bx
+    add word [at_bty], AT_IMG_TOP   ; atimg.inc stores the inked rows only
     mov si, at_img
-    mov bp, AT_IMG_H                ; BP = rows left
+    mov bp, AT_IMG_ROWS             ; BP = rows left
 .band:
     mov dx, bp
     cmp dx, 24
@@ -1702,6 +1713,110 @@ at_drawimg:
     pop bx
     pop ax
     ret
+%else
+; -----------------------------------------------------------------------------
+; at_drawimg - blit the 128x100 splash artwork at (AX, BX)
+; atimg.inc stores it in screen polarity (46.4.2), so the artwork IS a band:
+; one OSAPI_GFX_BLIT1 for all its inked rows, through at_blit1ph for the x.
+; -----------------------------------------------------------------------------
+at_drawimg:
+    push bx
+    push cx
+    push dx
+    push si
+    push bp
+    add bx, AT_IMG_TOP              ; atimg.inc stores the inked rows only
+    mov si, at_img
+    mov bp, AT_IMG_RB
+    mov cx, AT_IMG_W
+    mov dx, AT_IMG_ROWS
+    call at_blit1ph
+    pop bp
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; at_blit1ph - put a screen-polarity 1bpp band down at ANY x (SPEC.md 46.4.12)
+; in:  DS:SI = the band, BP = its stride, AX = x (signed), BX = y,
+;      CX = width in px (a multiple of 8), DX = rows; gfx lock held.
+;      Off the byte grid, DX * (CX/8 + 1) <= AT_S1ST*AT_SROWS, and the band
+;      may BE at_strip1 at stride AT_S1ST with CX/8 < AT_S1ST - see below
+; out: nothing; preserves all registers
+; kern_small's gfx_blit1 refuses an x off the byte grid (SPEC.md 5.4.2), so
+; the band is re-laid into at_strip1 shifted right by x & 7 and goes down at
+; x & ~7. The bits it gains on the left are PAPER, and both callers draw on a
+; white ground - the splash's content and the About box - so those pixels
+; are written white over white. Re-laying in place is safe: row r is written
+; at r*(n+1) and read at r*AT_S1ST, and byte j is read before it is written.
+; -----------------------------------------------------------------------------
+at_blit1ph:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    push ds
+    pop es
+    cld
+    mov di, ax
+    and di, 7
+    jz .go
+    push ax
+    push bx
+    mov bx, cx
+    mov cl, 3
+    shr bx, cl                      ; BL = source bytes a row (BH is spare)
+    mov cx, di                      ; CL = the phase, CH = 0
+    mov di, at_strip1
+    push dx
+.row:
+    push si
+    mov ch, bl
+    mov ah, 0FFh                    ; paper ahead of the first byte
+.byte:
+    lodsb
+    mov bh, al
+    shr ax, cl
+    stosb
+    mov ah, bh
+    dec ch
+    jnz .byte
+    mov al, 0FFh                    ; ...and the last byte's spill
+    shr ax, cl
+    stosb
+    pop si
+    add si, bp
+    dec dx
+    jnz .row
+    pop dx
+    xor bh, bh
+    lea bp, [bx+1]                  ; BP = the re-laid stride
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    add cx, bx                      ; CX = width + phase
+    mov si, at_strip1
+    pop bx
+    pop ax
+    and ax, 0FFF8h
+.go:
+    call OSAPI_GFX_BLIT1
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 ; =============================================================================
 ; The windowed splash card (SPEC.md 46.7). The kernel has already

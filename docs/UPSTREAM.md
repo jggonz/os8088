@@ -261,6 +261,10 @@ squashed, and that shapes what to write:
   writing well, for different reasons.
 - **Never re-add `build/`.** It is gitignored outright and no artifact in it is
   tracked (SPEC.md §16).
+- **`make budget-check` must pass first.** The integration branch may carry a
+  kernel up to 2KB over its budget (`KERN_GRACE`, docs/KERNEL-MEMORY.md);
+  `main` may not. Over at this point is a size pass or a conversation with the
+  owner about the budgets, never a raise to get the PR out.
 - **The squash replaces `main`'s tree wholesale**, so the branch's SPEC
   numbering becomes `main`'s and it is the section coming *from `main`* that
   renumbers. That is expected, not a conflict to resolve; scope the rewrite to
@@ -296,6 +300,7 @@ squashed, and that shapes what to write:
 git rev-parse --is-shallow-repository && git fetch --unshallow   # ALWAYS first
 git fetch upstream main
 git log --oneline HEAD..upstream/main     # what am I behind by, and which kind?
+make budget-check                         # before the PR back: no branch grace on main
 git merge upstream/main                   # only for genuine upstream work
 grep -oE '^#+ [0-9.]+' SPEC.md | sort | uniq -d   # no duplicate § headings
 git ls-files build | wc -l                # must be 0 after any merge

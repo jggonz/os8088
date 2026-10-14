@@ -51,6 +51,7 @@ shape - three calls and a palette lookup a pixel, or a rolled byte column -
 and not to pin a figure that a picture with a different dither would move.
 """
 import argparse
+import tempfile
 import os
 import sys
 
@@ -108,7 +109,7 @@ def paint_base(m, mo, rx, ry):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/paintlzw.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/paintlzw.img")
     ap.add_argument("--machine", default="os8088_xt_vga")
     ap.add_argument("--gif", default=None)
     a = ap.parse_args()

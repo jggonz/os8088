@@ -46,6 +46,14 @@ missing from vp_boxxy): it FAILS with row 46.
 
 Broken on purpose - the canvas not read back as a bracket ends (vp_kget
 skipped) - the frame in the box after the click is not the frame played.
+
+6. PLAY FROM THAT KEY, and the menu bar's file-activity widget (SPEC.md 12.8)
+   is gone from the glass while it plays: the key's record is read before
+   the bracket, in the same lock hold, and arms the widget, and the
+   bracket's door pays it off under whatever clip region is armed - the
+   window's, which the player had just drawn through (12.8.5.2). Broken on
+   purpose - vp_srun's OSAPI_WM_CLIP_CLEAR taken out - [fpg_on] reads 0 and
+   the widget's pixels stay on the bar, frozen, for the whole play.
 """
 import argparse
 import os
@@ -128,6 +136,16 @@ def main():
                 return b"".join(seg[dg.base[ty0 + y] + tx0:
                                     dg.base[ty0 + y] + tx0 + g.wb]
                                 for y in range(g.h))
+
+            def bar():
+                """the menu bar's file-activity span (SPEC.md 12.8), as on
+                the glass: [fpg_x0]'s 80 pixels, every row of the bar"""
+                sb, lay, rows = DESK["herc"]
+                dg = vid.Geom(lay, 90, rows)
+                x0 = u16(m.read(m.sym("fpg_x0"), 2)) // 8
+                seg = bytes(m.read(sb, 65536))
+                return b"".join(seg[dg.base[y] + x0:dg.base[y] + x0 + 10]
+                                for y in range(geom.MBAR_H))
 
             def screen(n, what):
                 """the desktop at the window's origin against frame n"""
@@ -227,6 +245,7 @@ def main():
                 # the poster the box showed, never the black the first
                 # frame is drawn on - which it did for the whole fill
                 pkey = r.keys[rw("vp_dkey")][0]
+                bar0 = bar()                # (no disk is busy: the bar bare)
                 m.type_text("p")
                 fills = []
                 while rb("vp_ready") == 0:
@@ -267,6 +286,15 @@ def main():
                     txs.append(thumb("hold before frame %d" % n))
                     if n == stops[0]:
                         border("playing, after a drag of 5 rows")
+                        # THE WIDGET GOES WHEN THE BRACKET COMES (SPEC.md
+                        # 12.8.5.2): the fill that armed it before the play
+                        # must not leave it on the bar, frozen, for the play
+                        b1 = bar()
+                        print("   the bar's widget span playing: %s"
+                              % ("bare" if b1 == bar0 else "NOT BARE"))
+                        if b1 != bar0:
+                            bad.append("the file-activity widget stayed on "
+                                       "the bar into the in-window play")
                     i = stops.index(n)
                     ww("vp_stopat", stops[i + 1] if i + 1 < len(stops)
                        else 0xFFFF)
@@ -358,6 +386,23 @@ def main():
                                "session %s" % (last, rw("vp_sel"),
                                                "alive" if rb("vp_sess")
                                                else "gone"))
+                # --- 6: PLAY FROM THAT KEY, and the widget is gone with the
+                # bracket's start: the key's record is read BEFORE the
+                # bracket, in the same lock hold, and arms it (12.8.5.2)
+                ww("vp_stopat", 0xFFFF)
+                m.type_text("p")
+                wait(lambda mm: rb("vp_ready") == 1 and rb("vp_winm") == 1
+                     and rw("vp_done") > keys[want_k] + 10,
+                     "the play from key %d" % want_k)
+                m.pause()
+                b2, fon = bar(), m.read(m.sym("fpg_on"), 1)[0]
+                m.run()
+                print("   Play from key %d: the bar's widget span %s, "
+                      "[fpg_on] %d" % (want_k, "bare" if b2 == bar0
+                                        else "NOT BARE", fon))
+                if b2 != bar0:
+                    bad.append("Play from key %d left the file-activity "
+                               "widget on the bar, frozen" % want_k)
             except Stop as e:
                 bad.append(str(e))
     for b in bad:

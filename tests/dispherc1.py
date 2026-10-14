@@ -31,6 +31,7 @@ script anyway - it is the whole arrangement in one run, and it is the control
 that says the KERNEL-SIDE state is right when the glass is not.
 """
 import sys
+import tempfile
 
 import os
 # THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
@@ -134,8 +135,8 @@ def main():
 
         for c in cards:
             w, h, d = m.fbuf(card=c)
-            os88marty.write_png_rgb("/tmp/herc1-card%d.png" % c, w, h, d)
-        print("  PNGs in /tmp/herc1-card*.png")
+            os88marty.write_png_rgb(tempfile.gettempdir() + "/herc1-card%d.png" % c, w, h, d)
+        print("  PNGs in %s/herc1-card*.png" % tempfile.gettempdir())
         return 1 if n else 0
     return 0
 

@@ -118,6 +118,7 @@ hd_tool_need:
     push cx
     push dx
     push si
+    push di                     ; hd_tool_back's GOTO_Q may spend it (there)
     push bp
     push es
 
@@ -126,8 +127,10 @@ hd_tool_need:
     mov [hd_tvsav], bl
     mov dx, [hd_tcwd]
     mov bl, [hd_tvol]
-    call OSAPI_FILE_GOTO        ; ...and off to the system volume
-    jc .fail
+    call OSAPI_FILE_GOTO_Q      ; ...and off to the system volume, QUIETLY
+    jc .fail                    ; (SPEC.md 19.2.2): a file read by name, no
+                                ; folder shown. CF=1 has moved NOTHING, so the
+                                ; read below never runs in the user's folder
 
     mov ax, HDTOOL_KB
     call OSAPI_MEM_CLAIM_HI     ; owner = our segment, so drv_release sweeps
@@ -199,6 +202,7 @@ hd_tool_need:
 .out:
     pop es
     pop bp
+    pop di
     pop si
     pop dx
     pop cx
@@ -209,11 +213,18 @@ hd_tool_need:
 ; -----------------------------------------------------------------------------
 ; hd_tool_back - put the user's volume back (module internal)
 ; in:  nothing
-; out: nothing (all registers AND the flags preserved)
+; out: nothing (BX, DX AND the flags preserved; AX, CX, SI, DI are GOTO_Q's)
 ;
 ; The flags, because every caller's answer is in CF and a failed remount must
 ; not read as a failed load - drv_vol_back's own rule (SPEC.md 51.5.2), and a
 ; failed restore is swallowed for the same reason it is there.
+;
+; QUIET, as drv_vol_back's own restore is: putting the user's volume back is
+; not showing it (SPEC.md 19.2.2). GOTO_Q answers in AX, and on a REDIRECTED
+; volume - the user's may be one - it reaches that driver's FSV_CHDIR, whose
+; to spend CX, SI and DI are (os88api.inc, at GOTO_Q). Both callers are
+; inside hd_tool_need, which banks all four (DI for exactly this), so they
+; are banked once there rather than twice.
 ; -----------------------------------------------------------------------------
 hd_tool_back:
     pushf
@@ -221,7 +232,7 @@ hd_tool_back:
     push dx
     mov dx, [hd_tcsav]
     mov bl, [hd_tvsav]
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_Q
     pop dx
     pop bx
     popf
@@ -476,36 +487,31 @@ hd_svc:
     push di
     push es
     mov es, [hd_tseg]
-    cmp al, HSV_RAW
-    je hd_svc_raw
-    cmp al, HSV_SYNC
-    je hd_svc_sync
-    cmp al, HSV_MOUNT
-    je hd_svc_mount
-    cmp al, HSV_UNMOUNT
-    je hd_svc_unmount
-    cmp al, HSV_CFGMARK
-    je hd_svc_cfgmark
-    cmp al, HSV_MSG
-    je hd_svc_msg
-    cmp al, HSV_STATE
-    je hd_svc_state
-    cmp al, HSV_SEL
-    je hd_svc_sel
-    cmp al, HSV_GEOM
-    je hd_svc_geom
-    cmp al, HSV_MOUNTDEV
-    je hd_svc_mountdev
-    cmp al, HSV_UNMOUNTDEV
-    je hd_svc_unmountdev
-    cmp al, HSV_VOLOF
-    je hd_svc_volof
-%ifdef INSTBENCH
-    cmp al, HSV_CTRS
-    je hd_svc_ctrs
-%endif
+    cmp al, HSV_LAST
+    ja hd_svc_unk
+    mov bl, al                  ; A TABLE, where twelve compares were - nine
+    mov bh, 0                   ; of whose `je`s had been relaxed into 5-byte
+    shl bx, 1                   ; pairs (kernel size pass 11). No verb takes
+    jmp [hd_svc_tab + bx]       ; BX: the request block is ES:SI, AH HSV_MSG's
+hd_svc_unk:
     stc                         ; a verb we do not know: refuse rather than
     jmp hd_svc_out              ; fall into one we do
+
+hd_svc_tab:
+    dw hd_svc_raw, hd_svc_sync, hd_svc_mount, hd_svc_unmount  ; 0..3
+    dw hd_svc_cfgmark, hd_svc_msg                             ; 4, 5
+    dw hd_svc_unk               ; 6 HSV_PAGE: allocated, unimplemented
+%ifdef INSTBENCH
+    dw hd_svc_ctrs              ; 7 HSV_CTRS
+%else
+    dw hd_svc_unk               ; 7 HSV_CTRS: INSTBENCH=1's alone
+%endif
+    dw hd_svc_sel, hd_svc_geom, hd_svc_mountdev, hd_svc_unmountdev ; 8..11
+    dw hd_svc_state, hd_svc_volof                             ; 12, 13
+HSV_LAST     equ 13
+%if HSV_RAW != 0 || HSV_SYNC != 1 || HSV_MOUNT != 2 || HSV_UNMOUNT != 3 || HSV_CFGMARK != 4 || HSV_MSG != 5 || HSV_PAGE != 6 || HSV_CTRS != 7 || HSV_SEL != 8 || HSV_GEOM != 9 || HSV_MOUNTDEV != 10 || HSV_UNMOUNTDEV != 11 || HSV_STATE != 12 || HSV_VOLOF != HSV_LAST
+    %error "hd_svc_tab is indexed by the HSV_* numbers"
+%endif
 
 ; --- HSV_RAW: a transfer to a DEVICE, outside any volume ---------------------
 ; The device comes as an INDEX and is resolved against OUR table, which is

@@ -71,7 +71,7 @@ LABEL = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):(.*)$")
 # the kernel's three segment constants here.
 XFER = re.compile(r"\b(call|jmp|jz|jnz|jc|jnc|je|jne)\s+"
                   r"(?:near\s+|short\s+)?"
-                  r"(?:(KERNEL_SEG|COLD_SEG|OVL_SEG|OVLW_SEG)\s*:\s*)?"
+                  r"(?:(KERNEL_SEG|COLD_SEG|OVL_SEG|FAT_SEG)\s*:\s*)?"
                   r"([A-Za-z_][A-Za-z0-9_]*)\b")
 RET = re.compile(r"(?:^|\s)(retf|ret)(?:\s|$)")
 

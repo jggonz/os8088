@@ -1,7 +1,7 @@
 ; Optional 8kHz one-shots, played directly by the Sound Blaster's DMA engine.
 ; One page-safe 13KB claim: three immutable rings prepared once at load.
 n_pcm_open:
-    SAVE
+    call n_pushall
     cmp word [n_pcmseg],0
     jne .out
     call OSAPI_SND_CAPS
@@ -83,8 +83,7 @@ n_pcm_open:
 .bad:
     call n_pcm_close
 .out:
-    RESTORE
-    ret
+    jmp n_popall
 
 ; Cancel hardware before overwriting or releasing its ring. Pending stays.
 n_pcm_halt:
@@ -101,7 +100,7 @@ n_pcm_halt:
     ret
 
 n_pcm_close:
-    SAVE
+    call n_pushall
     call n_pcm_halt
     mov dx,[n_pcmseg]
     or dx,dx
@@ -110,8 +109,7 @@ n_pcm_close:
     mov word [n_pcmseg],0
 .out:
     mov byte [n_pcmpending],0
-    RESTORE
-    ret
+    jmp n_popall
 
 n_pcm_tick:
     cmp byte [n_pcmactive],0

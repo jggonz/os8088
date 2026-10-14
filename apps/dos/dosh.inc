@@ -1353,18 +1353,18 @@ dsh_c_type:
     mov di, dsh_a1
     call dsh_word
     cmp byte [dsh_a1], 0
-    je .syntax
+    je .syntax0
     mov si, dsh_a1
     xor al, al
     call dsh_resolve
-    jc .nopath
+    jc .nopath0
     cmp byte [dsh_leaf], 0
-    je .syntax
+    je .syntax0
     call dsh_bank
     mov dx, [dsh_rclus]
     mov bl, [dsh_rdrv]
     call dos_be_goto
-    jc .nopath
+    jc .nopath0
     mov [dos_curdir], dx
 
     call dsh_stat                   ; --- is it there, how big, and is it
@@ -1378,16 +1378,13 @@ dsh_c_type:
     mov word [dsh_off], 0
     mov word [dsh_off+2], 0
 .chunk:
-    push ds
-    pop es                          ; dos_be_rdat takes the NAME in DS:SI and
-    mov si, dsh_leaf                ; the buffer in ES:BX, so ES is the block
-    mov es, [dsh_cpseg]             ; and the name is read before it moves
-    mov bx, 0
-    mov cx, [dsh_cpkb]
-    mov ax, cx
+    mov si, dsh_leaf
+    mov es, [dsh_cpseg]             ; dos_be_rdat takes the NAME in DS:SI and
+    xor bx, bx                      ; the buffer in ES:BX, so ES is the block
+    mov ax, [dsh_cpkb]              ; and the name is read before it moves
     mov cl, 10
     shl ax, cl                      ; KB -> bytes. A cluster of 64KB would wrap
-    mov cx, ax                      ; this to zero and READ_AT refuses a zero
+    xchg cx, ax                     ; this to zero and READ_AT refuses a zero
     mov dx, [dsh_off+2]             ; capacity, so that machine gets an honest
     mov ax, [dsh_off]               ; refusal rather than a wrong read - and no
     call dos_be_rdat                ; volume this OS mounts has one
@@ -1400,6 +1397,8 @@ dsh_c_type:
     call .put
     jc .fin                         ; ^Z
     jmp short .chunk
+.syntax0: jmp .syntax               ; near doors (SPEC.md 96.7.3)
+.nopath0: jmp .nopath
 
 .czarm:
     ; --- COMPRESSED: ONE whole read, which EXPANDS (96.30.7.1) --------------

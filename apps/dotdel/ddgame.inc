@@ -1143,9 +1143,13 @@ dd_gh_home:
     cmp ch, DD_HOUSER
     je .arrived
 .route:
-    call dd_tindex
-    mov bx, ax
-    mov al, [dd_hdir + bx]
+    call dd_hd_at                   ; two tiles a byte (dd_home_map)
+    mov al, [dd_hdir + di]
+    jnc .lo
+    mov cl, 4                       ; the odd tile's is the high nibble, and
+    shr al, cl                      ; CL has done its job
+.lo:
+    and al, 0Fh
     cmp al, 4
     jae .aim                        ; unmapped: a board with no pen, or a tile
     mov [dd_want + si], al          ; the walk could not reach

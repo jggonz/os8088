@@ -592,18 +592,21 @@ static void w_find_open(void *win)
 /* w_openpend - spend the banked launch document.  Called from the FIRST
  * W_PAINT and exactly once.
  *
- * THE GOTO GOES FIRST. It is a REMOUNT - real floppy I/O - and CF=1 is the
- * folder no longer being listable, a disk swapped between the double-click and
- * this first paint. Searching the wrong directory would report the wrong
- * reason, so a refused GOTO takes the not-found exit rather than falling
- * through to a search where we stand.
+ * THE GOTO GOES FIRST, and it is os88_file_goto_q_mark(): the open finds and
+ * reads by name and never has the kernel list the folder, so the display
+ * remount os88_file_goto() would do is motor time bought for nothing
+ * (docs/plans/NAV-COST-PLAN.md, SPEC.md 19.9.1). A refusal is the folder no
+ * longer being reachable, a disk swapped between the double-click and this
+ * first paint - and a refused GOTO_QM MOVES NOTHING, so it takes the
+ * not-found exit rather than falling through to a search (and an open of a
+ * same-named bundle) where we stand.
  *
  * Only when a locator actually came with the name: 0,0 is a real locator, so
  * w_arghave is what says whether there was one. */
 static void w_openpend(void *win)
 {
     if (w_arghave) {
-        if (os88_file_goto(&w_place) != 0) {
+        if (os88_file_goto_q_mark(w_place.clus, w_place.vol) != 0) {
             w_missing();
             return;
         }
@@ -617,12 +620,17 @@ static void w_openpend(void *win)
  *
  * It goes back through w_find_open() rather than remembering a size, because
  * the whole point of a reload is that the file on the disk CHANGED - Loom just
- * packed it - and the size it had last time is exactly the wrong number. */
+ * packed it - and the size it had last time is exactly the wrong number.
+ *
+ * The stand is GOTO_QM for w_openpend's reason, and it matters MORE here: ^R
+ * is the edit-run loop's own keystroke, so a display remount was ~0.5 s of
+ * motor on every iteration. A refusal moves nothing, so it must take
+ * w_missing() and never fall through to a re-read where we happen to be. */
 static void w_reload(void *win)
 {
     if (w_name[0] == 0)
         return;
-    if (w_arghave && os88_file_goto(&w_place) != 0) {
+    if (w_arghave && os88_file_goto_q_mark(w_place.clus, w_place.vol) != 0) {
         w_missing();
         return;
     }

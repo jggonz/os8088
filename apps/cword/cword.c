@@ -2632,9 +2632,12 @@ void *os88_main(void)
 /* os88_onwake - W_ONWAKE (SPEC.md 54.10/74.1): open the launch document.
  *
  * The UI task with the gfx lock NOT held, which is exactly what this needs:
- * os88_file_goto() is a remount and the file slots are the UI task's. It takes
- * the lock for the burst 74.1 lets it state - one remount, one read, one parse
- * and one repaint - because everything below ovl_file_load() draws.
+ * the file slots are the UI task's. It takes the lock for the burst 74.1 lets
+ * it state - one quiet stand, one read, one parse and one repaint - because
+ * everything below ovl_file_load() draws. The stand is
+ * os88_file_goto_q_mark() and not os88_file_goto(): this reads by name and
+ * never has the kernel list the folder, so the display remount was motor time
+ * bought for nothing (docs/plans/NAV-COST-PLAN.md).
  *
  * Below the goto it is os88_onfile()'s OPEN arm, deliberately: a document
  * opened by double-click and the same document opened through File > Open now
@@ -2649,9 +2652,11 @@ void os88_onwake(void *win)
     cw_argp = 0;
     os88_gfx_lock();
     /* THE GOTO GETS ITS OWN ARM.  It answers -1 when the folder could not be
-     * listed, and with no arm the whole launch failed in silence: the window
-     * came up empty and a double-click looked like it had done nothing. */
-    if (os88_file_goto(&cw_argplace) != 0)
+     * reached, and with no arm the whole launch failed in silence: the window
+     * came up empty and a double-click looked like it had done nothing. A
+     * refused GOTO_QM also MOVES NOTHING, so the arm is what stops a load of a
+     * same-named document from wherever we happen to stand. */
+    if (os88_file_goto_q_mark(cw_argplace.clus, cw_argplace.vol) != 0)
         cw_toast("Could not open that folder.");
     else
         ovl_file_load(win, cw_argname, 0, 0);

@@ -135,7 +135,7 @@ is three rows:
 | Disk window view cache (owner = the window's instance slot) | `VIEW_KB` = **2 KB**, up to four | **MOVABLE** — `fm_reloc`. **The one that bites**: two of them strand 21.5 KB in 3 |
 | `MEM_K_CLIP` clipboard (SPEC.md 55) | sized to contents | **MOVABLE** — `clip_reloc`. Long-lived by design; outlives the app that filled it |
 | `MEM_K_COPY` Cut/Copy/Paste buffer | one PASTE | PINNED for ever — `mem_claim_dma` with the whole block as the page-safe head |
-| `MEM_K_CLONE` disk cloner (SPEC.md 18.99), `MEM_K_CMPR` Compress/Uncompress (22.22/22.23) | one operation | UNDECLARED, so pinned; both are `CLONE.DRV`'s |
+| `MEM_K_CLONE` disk cloner (SPEC.md 18.99), `MEM_K_CMPR` Compress/Uncompress (22.22/22.23) | one operation | UNDECLARED, so pinned; both are `DISKOPS.DRV`'s |
 
 `MEM_K_HIB` is **not a row on this kernel at all**: hibernate is `BIGMODS`, so
 kern_small has no `mod_tab` row, no module and no claim (SPEC.md 87).
@@ -152,7 +152,7 @@ row above matters:
 * **The cloner** copies LBA 0..N−1 raw between two floppies (or two disks in
   one drive) and never looks at a FAT. Its claim is the job block plus the
   sectors in flight, for one clone.
-* **Compress** is the file manager's two verbs, riding inside `CLONE.DRV`. Its
+* **Compress** is the file manager's two verbs, riding inside `DISKOPS.DRV`. Its
   claim is the source, the output and the matcher's `head[]`/`prev[]` in one
   block — the largest transient claim in the kernel, and freed with the verb.
 

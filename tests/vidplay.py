@@ -72,7 +72,7 @@ def u16(b, i=0):
     return struct.unpack_from("<H", b, i)[0]
 
 
-def clip(tmp, layout, big=False):
+def clip(tmp, layout, big=False, kpart=vid.KEY_PART):
     """150 canvases 80 x 200, and the .V88 made of them. BIG (98.1.4.1):
     super-packets packed to 127 sectors - and on lin80 the canvas is the
     screen's 480 rows and its noise frames are WHOLE, 38,400-byte records,
@@ -113,7 +113,7 @@ def clip(tmp, layout, big=False):
                                     for _ in range(int(8040 * NF / FPS))))
     out = os.path.join(tmp, "CLIP.V88")
     vid.encode_frames(paths, out, FPS, wav, layout, "vidplay clip",
-                      spcap=vid.SP_BIG if big else vid.SP_MAX)
+                      spcap=vid.SP_BIG if big else vid.SP_MAX, kpart=kpart)
     vid.verify_v88(out)
     return out
 

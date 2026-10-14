@@ -52,10 +52,15 @@ def guest(backend,off,code):
                 for r,v in regs.items():m.setreg(r,v)
                 before=m.status()['cycles'];g.call('n_'+name)
                 return (m.status()['cycles']-before)*1000/N.M.GUEST_HZ
+            # A note is one byte, a pair-table index (SPEC 101.4); 254 is a
+            # literal Hz word and tick byte, which is what these scratch
+            # streams use - so the pitches below need not be in the table,
+            # and the literal path is exercised on every build.
+            def note(hz,t):return struct.pack('<BHB',254,hz,t)
             def stream(name,hz,wait=100):
                 # Scratch game objects, while invoking only the audio routines.
                 ptr=off['n_enemies']+(0 if name=='music' else 24)
-                m.write(g.base+ptr,struct.pack('<6H',hz,wait,0,2,65535,0))
+                m.write(g.base+ptr,note(hz,wait)+note(0,2)+struct.pack('<BH',255,0))
                 g.put(name+'ptr',ptr);g.put(name+'wait',0)
                 return ptr
             def quiet():
@@ -114,7 +119,7 @@ def guest(backend,off,code):
                 assert bool(g.get('musicptr'))==(sid!=7)
             # Equal adjacent notes retrigger on FM.
             ptr=stream('music',440)
-            m.write(g.base+ptr,struct.pack('<6H',440,10,65535,ptr,0,0))
+            m.write(g.base+ptr,note(440,10)+struct.pack('<BH',255,ptr))
             call('audio');g.put('musicwait',0);call('audio')
             assert g.get('musicptr')==ptr+4 and g.get('musicfreq')==440
             if backend!='speaker':

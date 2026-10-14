@@ -40,7 +40,9 @@
 %include "rdpkg.inc"            ; the package ABI - the same file the PACKAGE
                                 ; includes, so the two ends cannot drift
 
-    OS88_DRIVER 'Ram Disk', DRVC_FILE, rd_entry
+    OS88_DRIVER 'Ram Disk', DRVC_FILE2, rd_entry  ; the SECOND file class
+                                ; (SPEC.md 62.9.19), so the cable can be
+                                ; attached beside it
 
 %include "rdabi.inc"
 

@@ -58,6 +58,12 @@ apu_repaint:
                                     ; region - clipped to our window, so the
                                     ; bar stayed on the menu bar for good
 .done:
+                                    ; (falls into the shared epilogue)
+
+; ap_ret6 - THE SHARED EPILOGUE: pop DI SI DX CX BX AX and return, for the
+; callers that pushed AX BX CX DX SI DI in that order (a `jmp`, so it costs no
+; stack and three bytes a caller against seven)
+ap_ret6:
     pop di
     pop si
     pop dx
@@ -76,13 +82,7 @@ ap_paint:
     push di
     APCNT apc_uipaint
     call apu_draw
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ap_ret6
 
 ; =============================================================================
 ; --- ap_onup / ap_ondrag - the transport FIRES here (13.7 / 13.8.2) ----------
@@ -101,13 +101,7 @@ ap_onup:
     call ap_dispatch_btn
     call apu_repaint
 .uout:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ap_ret6
 
 ap_ondrag:
     push ax
@@ -160,51 +154,21 @@ ap_onclick:                        ; CX = x, DX = y (SCREEN); SI = window
 .rep:
     call apu_repaint
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ap_ret6
 
-; ap_dispatch_btn - AL = AP_B_*
+; ap_dispatch_btn - AL = AP_B_* (the Play menu's items are the same ids);
+; anything else does nothing. Clobbers BX (and what the command does)
 ap_dispatch_btn:
-    cmp al, AP_B_PREV
-    jne .n0
-    call ap_cmd_prev
-    ret
-.n0:
-    cmp al, AP_B_PLAY
-    jne .n1
-    call ap_cmd_play
-    ret
-.n1:
-    cmp al, AP_B_PAUSE
-    jne .n2
-    call ap_cmd_pause
-    ret
-.n2:
-    cmp al, AP_B_STOP
-    jne .n3
-    call ap_cmd_stop
-    ret
-.n3:
-    cmp al, AP_B_NEXT
-    jne .n4
-    call ap_cmd_next
-    ret
-.n4:
-    cmp al, AP_B_SHUF
-    jne .n5
-    call ap_cmd_shuffle
-    ret
-.n5:
     cmp al, AP_B_REP
-    jne .done
-    call ap_cmd_repeat
+    ja .done
+    mov bl, al
+    xor bh, bh
+    shl bx, 1
+    jmp [ap_btn_tab + bx]           ; the command's ret is ours
 .done:
     ret
+ap_btn_tab: dw ap_cmd_prev, ap_cmd_play, ap_cmd_pause, ap_cmd_stop, \
+               ap_cmd_next, ap_cmd_shuffle, ap_cmd_repeat
 
 ; =============================================================================
 ap_onkey:                          ; AL = ascii, AH = scancode; SI = window
@@ -340,13 +304,7 @@ ap_about:                          ; SI = window; gfx lock held
     push di
     mov byte [ap_abon], 1          ; apu_draw draws the card last while this is set
     call apu_repaint
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ap_ret6
 
 ; =============================================================================
 ; ap_onwake - UI task, NO gfx lock (SPEC.md 74.1)
@@ -409,10 +367,15 @@ ap_onwake:                         ; SI = window
 .noarg:
 
     ; 4. a would-be second instance may have queued a document for us
-    ;    (SPEC.md 86.11.1). OFF by default: the poll has to REMOUNT the system
-    ;    root to read APQUEUE.DAT (OSAPI_FILE_GOTO), and on a 4.77 MHz XT that
-    ;    is seconds - a playing ADPCM track polls often enough that the machine
-    ;    spends half its time remounting. Build with -DAP_HANDOFF to re-enable.
+    ;    (SPEC.md 86.11.1). OFF by default: the poll has to stand at the system
+    ;    root to read APQUEUE.DAT. It was turned off when that stand was
+    ;    OSAPI_FILE_GOTO - a full REMOUNT, seconds on a 4.77 MHz XT, so a
+    ;    playing ADPCM track polled often enough that the machine spent half
+    ;    its time remounting. ap_que_root is OSAPI_FILE_GOTO_QM now (a word on
+    ;    the mounted volume, a quiet mount across volumes), which is cheaper
+    ;    but still a stand and a read per poll and is not re-measured as
+    ;    affordable, so the default stands. Build with -DAP_HANDOFF to
+    ;    re-enable.
 %ifdef AP_HANDOFF
     call ap_que_poll
     jc .noque
@@ -429,13 +392,7 @@ ap_onwake:                         ; SI = window
     call ap_diag_dump
 .nodump:
 %endif
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ap_ret6
 
 ; =============================================================================
 ap_onclose:                        ; SI = window; gfx lock held
@@ -479,10 +436,4 @@ ap_onfile:
     call ap_add_file
 .rep:
     call apu_repaint
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ap_ret6

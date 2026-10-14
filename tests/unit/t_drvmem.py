@@ -78,6 +78,8 @@ ROWS = [
     # SPEC.md 9.12's CH375 USB mouse: DRVC_POINT, last on kern_big and after
     # the absolute mouse on kern_emu
     ("USB Mouse", "DRVM_USBM", "DRVM_IMG_USBM", "usbmouse.drv"),
+    # SPEC.md 107's EMS.DRV: DRVC_EMS, after the USB mouse on both big builds
+    ("EMS", "DRVM_EMS", "DRVM_IMG_EMS", "ems.drv"),
 ]
 
 EQU = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s+equ\s+(.+?)\s*(?:;.*)?$", re.M)
@@ -252,6 +254,9 @@ def main():
         # from drv_memk and this table is written by hand, so a new driver
         # takes the file out until somebody adds its term.
         "DRVM_USBM": s["DRVM_IMG_USBM"],
+        # ...nor does EMS.DRV (SPEC.md 107): its tables are its bss, and the
+        # memory it hands out is the BOARD's, not the heap's
+        "DRVM_EMS": s["DRVM_IMG_EMS"],
     }
     for title, total, _img, _drv in ROWS:
         eq(s.get(total), want[total],

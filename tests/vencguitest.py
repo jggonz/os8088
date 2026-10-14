@@ -174,7 +174,12 @@ def groups_leg():
             ("vga4", {"flip": "1", "screen": "640x400"}, "--flip",
              True),
             ("cga4", {"spk_pulses": "2"}, "--spk-pulses", False),
-            ("herc-spk", {"spk_pulses": "2"}, "--spk-pulses", True)):
+            ("herc-spk", {"spk_pulses": "2"}, "--spk-pulses", True),
+            # NOTHING IN XMS UNDER THE SPEAKER (98.3.18.5): a bank and a
+            # layer are greyed there, and kept with a card's sound
+            ("herc-spk", {"bank": "2048"}, "--bank", False),
+            ("herc-spk", {"layer_disk": "600000"}, "--layer-disk", False),
+            ("modex", {"bank": "2048"}, "--bank", True)):
         v = G.form_start()
         v.update(G.target_fill(tgt(pre), 30.0))
         v.update(sets)
@@ -254,6 +259,73 @@ def options_leg():
                        % ({k: o.get(k) for k in ("novel", "dither")}, notes))
     finally:
         V.OPTS_VERSION, V.MIGRATIONS = keep
+    # --avg AUTO IS THE DEFAULT (98.2.1.5): the parser's, what the profile
+    # implies, and the window's list - AUTO, then the profile's own old
+    # share (a Live file's for Live), nothing for a profile with no budget
+    if V.parser().get_default("avg") != "auto":
+        bad.append("--avg's default is %r, not auto"
+                   % V.parser().get_default("avg"))
+    for prof, live, want in (("286-fast", None, ["auto", "2.25"]),
+                             ("5150-st225", None, ["auto", "0.5"]),
+                             ("5150-st225", "cga", ["auto", "0.6"]),
+                             ("lossless", None, ["auto"])):
+        got = G.avg_choices(V.profile_avg(prof, live))
+        imp = V.implied(None, None, prof, live)["avg"]
+        if got != want or imp != ("" if prof == "lossless" else "auto"):
+            bad.append("--avg on %s%s: the list %r (want %r), implied %r"
+                       % (prof, " Live" if live else "", got, want, imp))
+    # AUTO BANKS AND TWO PASSES (98.2.1.3.3): both banks offer AUTO, the
+    # passes are a choice whose default is TWO, the layer's group is not
+    # greyed by a bank (98.1.9.2), and two passes' bar only ever moves on
+    for d in ("bank", "layer_bank"):
+        if "auto" not in G.SUGGEST.get(d, []):
+            bad.append("--%s's list has no auto" % d.replace("_", "-"))
+    pa = [x for x in V.parser()._actions if x.dest == "layer_passes"]
+    if not pa or pa[0].default != "two" or \
+            tuple(pa[0].choices) != ("two", "one"):
+        bad.append("--layer-passes is not two|one with two the default")
+    c = {k: "" for k in ("resident", "live", "profile", "flip", "audio",
+                         "spk_shape")}
+    c.update(profile="286-fast", bank="2944", audio="pcm8")
+    lyg = [g for g in G.GROUPS if g[1].startswith("Layer")][0]
+    if lyg[3](c):
+        bad.append("a bank greys the layer's group: %r" % lyg[3](c))
+    seq = [("first", 0, 1000), ("first", 500, 1000), ("first", 1000, 1000),
+           ("prepare", 0, 0), ("read", 5, 10), ("encode", 10, 10),
+           ("write", 0, 0), ("disk", 0, 0)]
+    fr = [G.overall(*x, two=True) for x in seq]
+    if fr != sorted(fr) or fr[-1] != G.ENCODE_SHARE:
+        bad.append("two passes' bar goes back: %r" % fr)
+    # A LAYER PROFILE FILLS LAYER DISK (98.1.9): with the field empty the
+    # encode budgets the layer for that profile's own disk, and the window
+    # shows that number when the profile is chosen - the base's Disk for the
+    # same profile, an old name as its new, nothing for none or lossless
+    for lp in sorted(V.PROFILES) + ["286", ""]:
+        got = G.layer_disk_of(lp)
+        want = V.implied(None, None, V.profile_name(lp))["disk"] if lp \
+            else ""
+        if got != want:
+            bad.append("--layer-profile %r fills Layer disk with %r, not "
+                       "its disk %r" % (lp, got, want))
+    if not G.layer_disk_of("286-fast"):
+        bad.append("--layer-profile 286-fast fills no Layer disk")
+    # THE PROFILES' RENAME (98.2.3, options version 15): a record a version-14
+    # encoder wrote names the OLD profiles, and must read as the new ones -
+    # the field's files were made then. And the command line takes an old
+    # name as its new
+    base = {d: V.parser().get_default(d) for d in V.opts_actions()}
+    for old, new in sorted(V.PROFILE_RENAMED.items()):
+        o, notes = V.opts_migrate({"v": 14, "o": dict(
+            base, profile=old, layer_profile=old)})
+        if o.get("profile") != new or o.get("layer_profile") != new:
+            bad.append("15: a version-14 record's --profile %s read as %r "
+                       "and --layer-profile as %r, not %s (notes %s)"
+                       % (old, o.get("profile"), o.get("layer_profile"),
+                          new, notes))
+        a = V.parser().parse_args(["in.mp4", "out.v88", "--profile", old])
+        if a.profile != new:
+            bad.append("15: --profile %s on the command line is %r, not %s"
+                       % (old, a.profile, new))
     # the container: a round trip, and damage refused where it is read
     doc = {"v": 1, "src": "x.mp4", "o": {"fps": 23.0}}
     if vid.unpack_options(vid.pack_options(doc)) != doc:
@@ -313,11 +385,18 @@ def roundtrip(i, label, src, out):
     # (98.2.17), must fill the same form as the whole file's
     if G.form_from_file(vid.HeadOptions(out)) != got:
         return ["15: %s: the header-only read fills another form" % label]
-    stored = r.options()["o"]
+    doc = r.options()
+    stored = dict(doc["o"])
+    # an option given as AUTO loads as AUTO (98.2.17.1), and the form's
+    # command line resolves it to the word, which the encode then resolves
+    for k in doc.get("auto", []):
+        stored[k] = "auto"
     a2 = V.parser().parse_args(G.argv_from(src, out + ".2", vals))
     again = V.options_record(a2, 15.0)
     diff = ["%s %r -> %r" % (k, stored[k], again.get(k)) for k in stored
             if k not in ("title", "credits") and stored[k] != again.get(k)]
+    if V.options_auto(a2) != doc.get("auto", []):
+        diff.append("AUTO %r -> %r" % (doc.get("auto"), V.options_auto(a2)))
     bad = []
     if diff or ti != i or notes or name != os.path.basename(src):
         bad.append("15: %s: loaded as target %s from %r, noting %s; the "
@@ -326,6 +405,40 @@ def roundtrip(i, label, src, out):
     print("   15: %-56s %d-byte record, loads as itself"
           % (label[:56], r.optslen))
     return bad
+
+
+def legpev(tmp, bad):
+    """THE PREVIEW IN EACH SCENE'S COLOURS (98.1.3.2.3, the owner: it showed
+    the first palette the whole time): three scenes, every pixel value 5,
+    entry 5 a different colour in each - each scene's frames preview in its
+    own. Broken on purpose (render without the frame) the later scenes are
+    the first one's colour and this FAILS"""
+    g = vid.Geom(vid.LAY_LIN80, 4, 16, bitplanes=True)
+    cvs = [bytes([5]) * (32 * 16)] * 12
+    pals = []
+    for c in ((60, 0, 0), (0, 60, 0), (0, 0, 60)):
+        p = bytearray(48)
+        p[15:18] = bytes(c)
+        p[45:48] = b"\x3f\x3f\x3f"
+        pals.append(bytes(p))
+    out = os.path.join(tmp, "PEV.V88")
+    vid.encode_canvases(cvs, g, out, 15.0, vid.PF_VGA4,
+                        pals[0] + bytes(vid.PAL_BYTES - 48), keysecs=0.5,
+                        pev=[(0, pals[0]), (4, pals[1]), (8, pals[2])])
+    r, frames = G.preview_frames(out)
+    got = {}
+    for f, img in frames:
+        got[f] = img.convert("RGB").getpixel((img.size[0] // 2,
+                                              img.size[1] // 2))
+    want = {f: tuple(v * 255 // 63 for v in pals[0 if f < 4 else
+                                                  1 if f < 8 else 2][15:18])
+            for f in got}
+    wrong = sorted(f for f in got if got[f] != want[f])
+    print("   preview of a palette a scene: %d of %d frames in the wrong "
+          "scene's colours" % (len(wrong), len(got)))
+    if wrong:
+        bad.append("the preview showed frames %s in another scene's colours "
+                   "(%s, wanted %s)" % (wrong, got[wrong[0]], want[wrong[0]]))
 
 
 def main():
@@ -398,7 +511,7 @@ def main():
     eight = [G.target_fill(i, 30.0) for i, t in enumerate(G.TARGETS)
              if t[1] in ("vga8", "modex")]
     # ...the 486's whole picture (its profile's default, 98.2.3.5)
-    want8 = [("25", "1x1" if f["profile"] == "486" else "2x1") for f in eight]
+    want8 = [("25", "1x1" if f["profile"] == "486-dx2-66" else "2x1") for f in eight]
     print("   %d targets filled; the 256-colour ones at %s fps, detail %s"
           % (len(G.TARGETS), "/".join(f["fps"] for f in eight),
              "/".join(f["detail"] for f in eight)))
@@ -497,7 +610,7 @@ def main():
                         src30], check=True)
         out = os.path.join(tmp, "MX.V88")
         V.encode(V.parser().parse_args([src30, out, "--preset", "modex",
-                                        "--profile", "286-vga",
+                                        "--profile", "286-speeddemon",
                                         "--quiet"]))
         r = vid.Reader(out)
         import numpy as np
@@ -509,10 +622,28 @@ def main():
         if abs(r.fps - 25.0) > 0.01 or odd:
             bad.append("--preset modex made %.3f fps with %d split pairs, "
                        "not 25 at 2x1" % (r.fps, odd))
+        # --- 15: the banks given as AUTO load as AUTO (98.2.17.1) - no
+        # target asks for one, and a number in their place is a different
+        # file once the bank binds
+        out = os.path.join(tmp, "AU.V88")
+        V.encode(V.parser().parse_args([
+            src30, out, "--preset", "modex", "--profile", "286-fast",
+            "--bank", "auto", "--layer-profile", "286-speeddemon",
+            "--layer-disk", "616000", "--layer-bank", "auto", "--quiet"]))
+        doc = vid.Reader(out).options()
+        vals = G.form_from_file(vid.Reader(out))[0]
+        got = {d: vals.get(d) for d in V.AUTO_OPTS}
+        print("   15: --bank auto --layer-bank auto: the record lists %s, the "
+              "form loads %s" % (doc.get("auto"), got))
+        if doc.get("auto") != sorted(V.AUTO_OPTS) or \
+                set(got.values()) != {"auto"}:
+            bad.append("15: --bank auto --layer-bank auto recorded %s and "
+                       "loaded %s" % (doc.get("auto"), got))
         leg8(tmp, bad)
         leg9(tmp, bad)
         leg10(tmp, bad)
         leg12(tmp, bad)
+        legpev(tmp, bad)
         legdisk(tmp, bad)
     for b in bad:
         print("   FAIL: %s" % b)
@@ -812,7 +943,7 @@ def leg10(tmp, bad):
     out = os.path.join(tmp, "PRE.V88")
     V.encode(V.parser().parse_args([src, out,
                                     "--preset", "vga8", "--detail", "1x1",
-                                    "--profile", "286-vga",
+                                    "--profile", "286-speeddemon",
                                     "--audio", "none", "--quiet"]))
     r, frames = G.preview_frames(out)
     k0 = r.keys[0][0]
@@ -869,7 +1000,7 @@ def leg12(tmp, bad):
     with open(out, "wb") as f:
         f.write(old)
     j = G.EncodeJob([long_src, out, "--preset", "modex", "--profile",
-                     "286-vga"]).start()
+                     "286-speeddemon"]).start()
     seen = None
     for kind, val in j.events():
         if kind == "prog" and val[0] in ("read", "encode") and val[1] > 5:
@@ -880,6 +1011,9 @@ def leg12(tmp, bad):
     j.leftover(out)
     dt = time.time() - t0
     left = group(j.p.pid)
+    while left and time.time() - t0 < 2.0:  # (killed is not yet GONE: on a
+        time.sleep(0.05)                    # loaded box the group's last
+        left = group(j.p.pid)               # exits land a beat later)
     same = open(out, "rb").read() == old
     part = os.path.exists(out + ".part")
     print("  12: cancelled at %s: gone in %.2f s, %d process(es) of its group "

@@ -19,8 +19,9 @@
 ;     at all. All of dynamic memory lives there by construction (the static
 ;     base is a header WORD, Standard 1.1), so every loadb/storeb/property/
 ;     object/dictionary access takes it. That is what zm_gb16..zm_pw16 are;
-;     zm_gb/zm_gw/zm_pb/zm_pw are the general forms and they simply FALL INTO
-;     the 16-bit ones when DX is zero. One test, no duplicated body.
+;     zm_gb/zm_gw are the general forms and they simply FALL INTO the 16-bit
+;     ones when DX is zero. One test, no duplicated body. (There were write
+;     forms too, zm_pb/zm_pw; nothing called them - every write is below 64KB.)
 ;
 ;   - **The PC is a live ES:SI** (zm_seek/zm_norm/zm_pcaddr). Instruction fetch
 ;     is `lods`, the cheapest thing the 8086 has, and ES:SI is renormalised
@@ -47,7 +48,9 @@
 ; they sit.
 ; =============================================================================
 
-; --- fatal codes, cached in [zf_err] and rendered by zm_errmsg ----------------
+; --- fatal codes, cached in [zf_err] ------------------------------------------
+; zio.inc's zi_load says 'Not a Z-machine story file.' for every one of them.
+; There was a zm_errmsg with a sentence per code; nothing ever called it.
 ZERR_NONE   equ 0
 ZERR_VER    equ 1                   ; not a Version this interpreter knows
 ZERR_BIG    equ 2                   ; longer than the claim, or than the Version
@@ -98,12 +101,11 @@ ZM_INTVER   equ 'F'                 ; conventionally an upper-case letter (11.1.
 ZM_COL_BLACK equ 2
 ZM_COL_WHITE equ 9
 
-; --- our slack in zbss.inc (64 bytes at ZMEM_SLACK; 9 used) ------------------
+; --- our range in zbss.inc (6 bytes at ZMEM_SLACK, all used) ------------------
 %define zm_scw    (os88_image_end + ZMEM_SLACK + 0)   ; word: content width, px
 %define zm_sch    (os88_image_end + ZMEM_SLACK + 2)   ; word: content height, px
-%define zm_ckhdr  (os88_image_end + ZMEM_SLACK + 4)   ; word: header's checksum
-%define zm_lsc    (os88_image_end + ZMEM_SLACK + 6)   ; byte: file-length shift
-%define zm_bpp    (os88_image_end + ZMEM_SLACK + 7)   ; byte: OSAPI_VIDEO's DH
+%define zm_lsc    (os88_image_end + ZMEM_SLACK + 4)   ; byte: file-length shift
+%define zm_bpp    (os88_image_end + ZMEM_SLACK + 5)   ; byte: OSAPI_VIDEO's DH
 
 ; =============================================================================
 ; zm_map - the 20-bit address decoder (INTERNAL)
@@ -263,25 +265,6 @@ zm_pw16:
     pop ax
     ret
 
-; =============================================================================
-; zm_pb / zm_pw - write a byte or word anywhere
-; in:  DX:AX = story address, BL / BX = the value
-; out: nothing
-;
-; DX non-zero means the address is at or above 64KB, and dynamic memory ends
-; below that by construction ([zf_static] is a header WORD) - so it is static
-; or high memory and the Standard forbids the write. There is no slow path to
-; write; refusing IS the slow path.
-; =============================================================================
-zm_pb:
-    or dx, dx
-    jz zm_pb16
-    ret
-
-zm_pw:
-    or dx, dx
-    jz zm_pw16
-    ret
 
 ; =============================================================================
 ; zm_seek - point the live PC at a story address
@@ -447,13 +430,6 @@ zm_unpack:
     pop cx
     ret
 
-; =============================================================================
-; zm_dynlen - the size of dynamic memory
-; out: AX = [zf_static]
-; =============================================================================
-zm_dynlen:
-    mov ax, [zf_static]
-    ret
 
 ; -----------------------------------------------------------------------------
 ; zm_hgw - a big-endian word out of the header (INTERNAL)
@@ -532,43 +508,28 @@ zm_setup:
     mov cl, 3
 .lsc:
     mov [zm_lsc], cl
-    mov ax, 9                       ; object entry: 9 bytes v1-3, 14 from v4
-    cmp byte [zf_ver], 4
-    jb .osz
-    mov ax, 14
-.osz:
-    mov [zf_objsz], ax
 
     ; --- the table addresses (Standard 11.1) --------------------------------
+    ; Header words $04..$0E are six tables in a row - high memory, the initial
+    ; PC, the dictionary, the objects, the globals and static memory - and
+    ; zbss.inc keeps zf_himem..zf_static in that same order, so they are one
+    ; loop. The property defaults ARE the head of the object table (Standard
+    ; 12.1/12.2); the entries begin 62 bytes (v1-3) or 126 bytes (v4+) further
+    ; on - zobj.inc derives both from [zf_ver], and nothing caches either.
     mov bx, ZMH_HIMEM
+    mov di, zf_himem
+    mov cx, 6
+.tabs:
     call zm_hgw
-    mov [zf_himem], ax
-    mov bx, ZMH_INITPC
-    call zm_hgw
-    mov [zf_initpc], ax
-    mov bx, ZMH_DICT
-    call zm_hgw
-    mov [zf_dict], ax
-    mov bx, ZMH_OBJTAB
-    call zm_hgw
-    mov [zf_objtab], ax
-    mov [zf_propdef], ax            ; the property defaults ARE the head of the
-                                    ; object table (Standard 12.1/12.2), cached
-                                    ; under both names so neither reader is
-                                    ; wrong; the object entries begin 62 bytes
-                                    ; (v1-3) or 126 bytes (v4+) further on
-    mov bx, ZMH_GVAR
-    call zm_hgw
-    mov [zf_gvar], ax
-    mov bx, ZMH_STATIC
-    call zm_hgw
-    mov [zf_static], ax
+    mov [di], ax
+    inc bx
+    inc bx
+    inc di
+    inc di
+    loop .tabs
     mov bx, ZMH_ABBREV
     call zm_hgw
     mov [zf_abbrev], ax
-    mov bx, ZMH_CKSUM
-    call zm_hgw
-    mov [zm_ckhdr], ax
 
     cmp byte [zf_ver], 5            ; v5+ only; leaving these 0 in v1-4 is what
     jb .nov5                        ; tells ztext to use the built-in alphabet
@@ -659,7 +620,23 @@ zm_setup:
     cmp [zf_gvar], ax
     jae .bad
     cmp [zf_static], ax
-    ja .bad
+    jna .tabok
+    ; The refusals sit HERE, beside the eleven checks that reach them, rather
+    ; than after the last line: from there every one of those checks was the
+    ; five bytes NASM makes of an out-of-range jcc on an 8086, and from here
+    ; they are two.
+.bad:
+    mov al, ZERR_BAD
+    jmp short .fail
+.ever:
+    mov al, ZERR_VER
+    jmp short .fail
+.ebig:
+    mov al, ZERR_BIG
+.fail:
+    mov [zf_err], al
+    stc                             ; POP touches no flags, so CF is the answer
+    jmp .out
 .tabok:
 
     ; --- Flags 1 (Standard 11.1): what this interpreter can actually do -----
@@ -791,33 +768,22 @@ zm_setup:
     call zm_hgw                     ; word 0 = how many words follow
     cmp ax, 4
     jb .done
+    xchg ax, cx                     ; CX = that count
     mov bx, [zf_hdrext]
     add bx, 8                       ; word 4 = Flags 3
-    mov byte [es:bx], 0             ; 11.1.7.4.1: every unused bit cleared, and
-    mov byte [es:bx + 1], 0         ; bit 0 (transparency) is one we cannot do
-    cmp ax, 6
+    xor ax, ax
+    mov [es:bx], ax                 ; 11.1.7.4.1: every unused bit cleared, and
+                                    ; bit 0 (transparency) is one we cannot do
+    cmp cx, 6
     jb .done
-    mov byte [es:bx + 2], 0         ; word 5 = true default foreground, black
-    mov byte [es:bx + 3], 0
-    mov byte [es:bx + 4], 0x7F      ; word 6 = true default background, white
-    mov byte [es:bx + 5], 0xFF      ; ($7fff is white in sRGB, Standard 8.3.5)
+    mov [es:bx + 2], ax             ; word 5 = true default foreground, black
+    mov word [es:bx + 4], 0xFF7F    ; word 6 = true default background, white:
+                                    ; $7fff big-endian, white in sRGB (8.3.5)
 
 .done:
     mov al, ZERR_NONE
     mov [zf_err], al
     clc
-    jmp short .out
-.ever:
-    mov al, ZERR_VER
-    jmp short .fail
-.ebig:
-    mov al, ZERR_BIG
-    jmp short .fail
-.bad:
-    mov al, ZERR_BAD
-.fail:
-    mov [zf_err], al
-    stc                             ; POP touches no flags, so CF is the answer
 .out:
     pop es
     pop di
@@ -878,99 +844,5 @@ zm_hdr_screen:
     mov [es:ZMH_FONT27], ah
 .out:
     pop es
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
-; =============================================================================
-; zm_checksum - sum the story image the way @verify wants it
-; out: AX = the computed checksum, BX = the one in the header,
-;      CF = 0 iff they agree
-;
-; Standard 11.1 / the @verify opcode: the unsigned sum mod 65536 of every byte
-; from $40 to the file length. It walks the whole image, which on the target
-; machine is seconds for a big v8 story - that is inherent (the sum is defined
-; over every byte) and it is why @verify is the only caller.
-; =============================================================================
-zm_checksum:
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    xor di, di                      ; the running sum
-    mov ax, [zf_slen_l]
-    mov dx, [zf_slen_h]
-    mov cx, ax
-    or cx, dx
-    jz .done                        ; no length: nothing to verify against
-    sub ax, 0x40
-    sbb dx, 0                       ; DX:AX = bytes still to add
-    push ax
-    push dx
-    mov ax, 0x40
-    xor dx, dx
-    call zm_addr                    ; ES:SI = byte $40, and NOT the PC
-    pop dx
-    pop ax
-.loop:
-    mov cx, ax
-    or cx, dx
-    jz .done
-    mov cl, [es:si]
-    xor ch, ch
-    inc si
-    add di, cx                      ; mod 65536 is the natural width here
-    sub ax, 1
-    sbb dx, 0
-    cmp si, 0x8000
-    jb .loop
-    call zm_norm                    ; once per 32KB, exactly as the PC does
-    jmp short .loop
-.done:
-    mov ax, di
-    mov bx, [zm_ckhdr]
-    cmp ax, bx
-    je .same
-    stc
-    jmp short .out
-.same:
-    clc
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    ret
-
-; =============================================================================
-; zm_errmsg - the sentence behind a ZERR_* code
-; in:  AL = ZERR_*
-; out: SI = a NUL string in our segment, ready for zw_notice or zt_puts
-;
-; It exists so that a refusal says WHY on the screen (SPEC.md 47). A code with
-; no sentence is a code the user reads as a hang.
-; =============================================================================
-zm_errmsg:
-    push bx
-    mov bl, al
-    xor bh, bh
-    cmp bx, ZERR_MAX
-    jbe .ok
-    xor bx, bx
-.ok:
-    shl bx, 1
-    mov si, [zm_errtab + bx]
-    pop bx
-    ret
-
-zm_errtab:
-    dw zm_e0, zm_e1, zm_e2, zm_e3, zm_e4
-zm_e0: db 'Frotz: an internal error stopped the story.', 0
-zm_e1: db 'This is a Z-machine version Frotz does not play.', 0
-zm_e2: db 'This story needs more memory than this machine has.', 0
-zm_e3: db 'That file is not a Z-machine story file.', 0
-zm_e4: db 'Not enough free memory to open this story.', 0

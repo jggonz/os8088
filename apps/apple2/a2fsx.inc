@@ -79,7 +79,19 @@ section .bss
 ; the palette index MII's ten-entry integer CLUT would have answered. The
 ; alternative is MII's own five branches and three variable shifts PER PIXEL,
 ; 53,760 times a frame.
+;
+; ...AND IN THE SHIPPING BUILD IT IS NOT ITS OWN 128 BYTES (apps size pass 1).
+; It is written by a2_fsx_init at every bracket entry and read only inside the
+; bracket, where the windowed flush - the only user of a2scr.c's doubled band
+; a2_x2b - cannot run: so apple2.asm lends it the LAST 128 bytes of that
+; band, and a2scr.c's composed foreign row (a2_fsxbuf) is its first 280. The
+; harnesses that %include this file define nothing and keep a table of their
+; own.
+%ifdef A2_HITAB_AT
+a2_hitab    equ A2_HITAB_AT
+%else
 a2_hitab:   resb 128
+%endif
 
 a2_fsx_fm:  resw 1              ; the flash phase, parked across phase B
 a2_fsx_ln:  resw 1              ; ...and the pixel row inside the character row

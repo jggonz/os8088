@@ -109,7 +109,17 @@ class Game:
         self.base = struct.unpack_from("<H", raw, w.i * G.WIN_SIZE + G.W_SEG)[0] << 4
 
     # ---- guest memory ----------------------------------------------------------
+    # The harness's script and trace are not bss: the game claims them the first
+    # time a harness asks for a fresh rider in xb_tmode (game.inc xb_tclaim, SPEC.md
+    # 102.3) - the script at +0 and the trace at +XB_TSTEPS of the segment in xb_tseg.
+    HARNESS = {"xb_tscript": 0, "xb_ttrace": 256}
+
     def a(self, n):
+        if n in self.HARNESS:
+            if not getattr(self, "_tseg", 0):
+                self._tseg = struct.unpack("<H", self.m.read(self.base + self.sym["xb_tseg"], 2))[0]
+                assert self._tseg, "the harness claim was not made (xb_tmode, then xb_treset)"
+            return (self._tseg << 4) + self.HARNESS[n]
         return self.base + self.sym[n]
 
     def rd(self, n, size=1):
@@ -133,6 +143,7 @@ class Game:
         records, the scroll and the clock); the wave-3 gates pass sim=True.  Both use
         the RAW loop (`xb_noflow` = 1: no title, no countdown, no results); the wave-4
         flow gate passes flow=True and gets the game's own front end."""
+        self._tseg = 0                  # (a new bracket makes a new harness claim)
         m = self.m
         if not flow:
             self.put("xb_noflow", 1)

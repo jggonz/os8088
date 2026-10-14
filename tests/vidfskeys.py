@@ -17,6 +17,10 @@ KIND is the screen the text is drawn on, one of vosd.inc's renderers each:
     modex     Mode X, a plane at a time          the glass (planes are not
     modexflip Mode X, PAGE FLIPPING: a save a page       memory)
     vga4      mode 12h, sixteen colours, four planes saved     the glass
+    vga4m3    the same clip as SUB2 (98.1.3.2.4): list maps, and every
+              byte whose changed pixels take one colour stored as a COLOUR
+              SUB-RECORD in write mode 3 - onto the screen by vd_wmap, round
+              the box by vd_walk into the save (vc_m3b)     the glass
 
 A clip at 15 fps with a keyframe every second or two: a textured ground
 that never changes (so a text box put back wrong shows), bars that sweep
@@ -108,6 +112,8 @@ KINDS = {
                   "glass", 8, 180, 2.0, 255),
     "vga4": (vid.LAY_LIN80, 160, 20, vid.PF_VGA4, "os8088_xt_vga",
              "glass", 8, 180, 2.0, 15),
+    "vga4m3": (vid.LAY_LIN80, 160, 20, vid.PF_VGA4, "os8088_xt_vga",
+               "glass", 8, 180, 2.0, 15),
     "text": (vid.LAY_TEXT, 160, 160, vid.PF_TEXT, "os8088_5150_cga_gla",
              "mem", 2, 180, 2.0, 255),
 }
@@ -148,6 +154,38 @@ def canvases(row, px, nf, vmax):
                     cv[y * row + x] = (0x5A if not px else 99) & vmax
         out.append(bytes(cv))
     return out
+
+
+def m3_subs(cv, prev, g):
+    """vga4m3: a frame's sub-records with every byte whose CHANGED pixels
+    all take one EVEN colour c stored as c's mask in write mode 3 - every pixel
+    of the byte that is c then, so a byte wholly c is FFh - and the rest
+    under plane masks as vga4_subs makes them, those first (98.1.3.2.4)"""
+    w = g.w
+    keep = bytearray(cv)                # cv with the colour bytes as prev
+    masks = {}                          # colour -> {address: mask}
+    for y, b in enumerate(g.base):
+        for xb in range(g.wb):
+            o = y * w + xb * 8
+            ch = {cv[o + i] for i in range(8) if cv[o + i] != prev[o + i]}
+            if len(ch) != 1 or min(ch) % 2:     # (the odd colours under
+                continue                        # planes, so both kinds
+            c = ch.pop()                        # meet in a frame)
+            masks.setdefault(c, {})[b + xb] = sum(
+                0x80 >> i for i in range(8) if cv[o + i] == c)
+            keep[o:o + 8] = prev[o:o + 8]
+    ops = vga4_subs_ok(bytes(keep), prev, g)
+    for c in sorted(masks):
+        ms = bytearray(vid.PLANE)
+        for a_, m in masks[c].items():
+            ms[a_] = m
+        ops.append((vid.SUB2_WM3 + c, vid.spans(list(masks[c]), ms, g,
+                                                gaps=False)))
+    return ops
+
+
+def vga4_subs_ok(cv, prev, g):
+    return vid.vga4_subs(cv, prev, g) if cv != prev else []
 
 
 def palette():
@@ -202,6 +240,14 @@ def main():
                     "the row's own (its screen the KIND's)")
     ap.add_argument("--span", type=int, default=12, help="with --cost: the "
                     "frames timed, from 21")
+    ap.add_argument("--kpart", type=int, default=vid.KEY_PART,
+                    help="a key's read at most (98.1.3.8): a small one cuts "
+                    "every key into KEY PARTS, which every seek then reads")
+    ap.add_argument("--nowm3", action="store_true", help="vga4m3: store "
+                    "the colour sub-records a PLANE AT A TIME (vp_m3pl) - "
+                    "the path an EGA takes, having no write mode 3 - by "
+                    "telling the player the card has none (vp_m3ok, once "
+                    "vp_canplay has set it at the load)")
     ap.add_argument("--src", help="with --cost: a tree whose apps/ to build "
                     "the player from, for the build before")
     a = ap.parse_args()
@@ -210,9 +256,9 @@ def main():
         H, YOFF, ROWS, BLOCK = 25, 1, 1, (1, 2)
     (lay, row, gwb, pf, machine, how, xoff, nf, keysecs,
      vmax) = KINDS[a.kind]
-    px = a.kind in ("vga8", "modex", "modexflip", "vga4")
+    px = a.kind in ("vga8", "modex", "modexflip", "vga4", "vga4m3")
     flip = a.kind == "modexflip"
-    ink = 15 if a.kind == "vga4" else 255
+    ink = 15 if a.kind in ("vga4", "vga4m3") else 255
     os.chdir(ROOT)
     bad = []
     retries = [0]
@@ -230,19 +276,36 @@ def main():
             syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
             pkg = os88build.at("build/video.o88")
         g = vid.Geom(lay, gwb, H, bitplanes=pf == vid.PF_VGA4)
+        g.sub2 = a.kind == "vga4m3"
         clip = os.path.join(tmp, "KEYS.V88")
         vid.encode_canvases(canvases(row, px, nf, vmax), g, clip, FPS, pf,
                             palette() if pf == vid.PF_VGA8 else None, "keys",
                             keysecs=keysecs, flip=flip,
+                            subs=m3_subs if g.sub2 else None,
                             cgapal=CGAPAL if pf == vid.PF_CGA4 else
                             vid.CARD_BOTH if pf == vid.PF_C512 else
-                            vid.TEXT_COLOUR if pf == vid.PF_TEXT else None)
+                            vid.TEXT_COLOUR if pf == vid.PF_TEXT else None,
+                            kpart=a.kpart)
+        if a.kpart < vid.KEY_PART:
+            rk = vid.Reader(clip)
+            np_ = [len(vid.key_reads(rk.key(i)[1])) for i in range(rk.nkeys)]
+            print("   keys in parts: %r reads each" % np_)
+            if not rk.kparts or min(np_) < 2:
+                bad.append("--kpart made a key that is not in parts")
         if a.clip:
             clip = os.path.join(tmp, "KEYS.V88")
             with open(a.clip, "rb") as f, open(clip, "wb") as o:
                 o.write(f.read())
         vid.verify_v88(clip)
         r = vid.Reader(clip)
+        if a.kind == "vga4m3":
+            leads = [lead for rec_, at_, i_ in r.records()
+                     for lead, s0, s1 in vid.subs_of(rec_, r.g)]
+            n3 = sum(1 for x in leads if x >= vid.SUB2_WM3)
+            print("   the clip: SUB2, %d colour sub-records of %d"
+                  % (n3, len(leads)))
+            if not r.g.sub2 or n3 < 100:
+                bad.append("the vga4m3 clip has %d colour sub-records" % n3)
         keyf = [e[0] for e in r.keys]
         src = r.palette if pf == vid.PF_VGA8 else vid.STD16
         rgb = [tuple((v * 255 + 31) // 63 for v in src[3 * i:3 * i + 3])
@@ -340,7 +403,7 @@ def main():
                         else:
                             ty0, tx0 = rw("vp_ty0"), rw("vp_tx0")
                             fw, fh, img = m.fbuf(0)
-                            if a.kind == "vga4":
+                            if a.kind in ("vga4", "vga4m3"):
                                 sx, sy, x0 = fw / 640, fh / 480, tx0 * 8
                             else:
                                 sx, x0 = fw / 320, tx0 * 4
@@ -385,7 +448,7 @@ def main():
                 against the colour `want` says; the count that are not"""
                 ty0, tx0 = rw("vp_ty0"), rw("vp_tx0")
                 fw, fh, img = m.fbuf(0)
-                if a.kind == "vga4":
+                if a.kind in ("vga4", "vga4m3"):
                     sx, sy, x0 = fw / 640, fh / 480, tx0 * 8
                 else:           # (MartyPC scans Mode X's rows twice each)
                     sx, x0 = fw / 320, tx0 * 4
@@ -481,9 +544,19 @@ def main():
             try:
                 wait(lambda mm: rb("vp_loaded") == 1, "the header", 30.0)
                 m.write(base + syms["vp_nowin"], b"\1")
+                if a.nowm3:
+                    m.write(base + syms["vp_m3ok"], b"\0")
                 ww("vp_stopat", 20)
                 m.type_text("p")
                 wait(lambda mm: rb("vp_ready") == 1, "the play")
+                if a.kind == "vga4m3":
+                    print("   write mode 3: %s"
+                          % ("used" if rb("vp_m3ok") else
+                             "NOT used - a plane at a time (vp_m3pl)"))
+                    if rb("vp_m3ok") != int(not a.nowm3):
+                        bad.append("vp_m3ok is %d on a VGA%s"
+                                   % (rb("vp_m3ok"), " told it has no write "
+                                      "mode 3" if a.nowm3 else ""))
                 print("   full screen: mode %d, the text's renderer %d, %d "
                       "characters fit, shadow %d, flip %d"
                       % (rb("vp_fsmode"), rb("vo_mode"), rb("vo_cmax"),
@@ -510,7 +583,7 @@ def main():
                 d3 = rw("vp_done")
                 release(80)
                 looks, miss, clip = boxed("Repeat on", 3)
-                native = a.kind in ("herc", "cga4", "vga8", "modex", "vga4",
+                native = a.kind in ("herc", "cga4", "vga8", "modex", "vga4", "vga4m3",
                                     "text")
                 print("   3: the box, looked at %d times as frames decode "
                       "under it: %d without the text (vd_clip %s)"

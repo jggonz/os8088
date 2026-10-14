@@ -1,42 +1,50 @@
 #!/usr/bin/env python3
-"""kern_big fully RESIDES in 128KB at the desktop (kernel.asm rule 3)
+"""kern_big BOOTS on 128KB and RESIDES in 100KB at the desktop
 
-    make && python3 tests/kernresident.py [--machine os8088_xt_vga]
+    make && python3 tests/kernresident.py [--machine M] [--release]
 
-The memory rule set is three sentences and each names a different quantity:
+docs/KERNEL-MEMORY.md's rules are three sentences and each names a
+different quantity:
 
-  1. kern_small BOOTS on 128KB.        guard 5, MIN_RAM_KB
-  2. kern_big BOOTS on 196KB.          guard 5, MIN_RAM_KB
-  3. kern_big fully RESIDES in 128KB   guard 1's KERN_BUDGET - and THIS
+  1. kern_big RESIDES in 100KB          guard 1's KERN_BUDGET - and THIS
      once it is at the desktop.
+  2. kern_small RESIDES in 64KB.        guard 1; tests/small128.py
+  3. BOTH BOOT on 128KB.                guard 5, MIN_RAM_KB - and THIS for
+                                        kern_big, small128 for kern_small
 
-An assembler can only see the static half of 3: KERN_BUDGET is
+ONE BOOT ANSWERS BOTH OF kern_big's, which is why this runs on
+os8088_xt_vga_128k: a 128KB machine, so reaching a desktop at all is rule 3
+asserted by booting rather than by guard 5's arithmetic (overlays and the
+boot order are what broke 128KB boots, at resident sizes well under the
+ceiling), and VGA, the adapter that does NOT drop a .bss segment of its own,
+so rule 1 is stated against the configuration that costs the most.
+
+An assembler can only see the static half of rule 1: KERN_BUDGET is
 KERN_RESIDENT_KB*1024 - KERNEL_SEG*16, so the kernel's own span is checked at
 build time and nothing else is. What it cannot see is a claim made during
-BOOT and never given back - the rule says "including all non-purgeable buffers
-created at boot time", and that is a fact about a running machine.
-
-So this boots one, to a bare desktop, and walks `mem_tab`:
+BOOT and never given back, and that is a fact about a running machine. So
+this walks `mem_tab` on the bare desktop:
 
   DRIVERS   nothing loaded - no MEM_K_DRV claim, no XMS. The rule is about
             the kernel, and a driver is the user's choice.
-  RESIDENT  the last non-purgeable byte is under 128KB. Purgeable claims do
-            not count and that is the point of them (SPEC.md 50.6): the
-            directory read-ahead is 64KB of the heap on a bare desktop and
-            the first thing given back to anyone who asks.
+  RESIDENT  the last non-purgeable byte is under KERN_RESIDENT_KB. Purgeable
+            claims do not count and that is the point of them (SPEC.md 50.6).
 
-VGA, because that is the adapter which does NOT drop a .bss segment of its
-own - the rule is stated against the configuration that costs the most.
+THE BRANCH GRACE. Branch and integration work may run KERN_GRACE (2KB) over
+the budget, as guard 1 allows, and this prints that as a warning and passes;
+`--release` is the upstream-merge and release reading, which fails on a
+single byte over.
 """
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
 import os88marty, os88sym, os88geom
 
-MACHINE = "os8088_xt_vga"
+MACHINE = "os8088_xt_vga_128k"
 for i, a in enumerate(sys.argv):
     if a == "--machine":
         MACHINE = sys.argv[i + 1]
+RELEASE = "--release" in sys.argv
 
 S = os88sym.linear
 MC_SIZE, MC_SEG, MC_PARA, MC_OWN = (os88geom.MC_SIZE,
@@ -54,6 +62,19 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     os88marty.settle(m, limit=180)
     eq = os88sym.equates()
     limit = eq["KERN_RESIDENT_KB"] * 1024
+    grace = 0 if RELEASE else eq["KERN_GRACE"]
+
+    # RULE 3: the machine is 128KB and it reached a desktop - not a hang with
+    # the splash up, and not stage 1's `RAM` refusal.
+    ram = u16(m.read(0x413, 2)) * 1024
+    rows = u16(m.read(S("desk_rows"), 2))
+    print("BOOT    : int 12h %d KB, desk_rows %d" % (ram // 1024, rows))
+    if ram != 128 * 1024 and "--machine" not in sys.argv:
+        fails.append("BOOT: int 12h reports %d KB, not 128 - the machine is "
+                     "not the floor machine this row is about" % (ram // 1024))
+    if rows < 1:
+        fails.append("BOOT: no desktop on a %d KB machine - kern_big no "
+                     "longer boots on 128KB (rule 3)" % (ram // 1024))
     span = eq["KERN_END"] * 16                  # the kernel's own last byte
     top, drivers, purge = span, 0, 0
     tab = m.read(S("mem_tab"), eq["MEM_MAX"] * MC_SIZE)
@@ -83,15 +104,23 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
                      "driver loaded, and rule 3 is stated with none" % drivers)
     print("RESIDENT: kernel span ends %d, last non-purgeable byte %d, "
           "limit %d -> %d spare" % (span, top, limit, limit - top))
-    if top > limit:
+    if top > limit + grace:
         fails.append("RESIDENT: the last non-purgeable byte is %d, which is "
-                     "%d past KERN_RESIDENT_KB (%d) - kern_big no longer "
-                     "fully resides in it (kernel.asm rule 3)"
-                     % (top, top - limit, limit))
+                     "%d past KERN_RESIDENT_KB (%d)%s - kern_big no longer "
+                     "fully resides in it (docs/KERNEL-MEMORY.md rule 1)"
+                     % (top, top - limit, limit,
+                        "" if RELEASE else " and its %d-byte branch grace"
+                        % grace))
+    elif top > limit:
+        print("WARNING : %d bytes OVER KERN_RESIDENT_KB, inside the %d-byte "
+              "branch grace - size-pass it back before an upstream merge or "
+              "a release" % (top - limit, grace))
 
 print()
 if fails:
     for f in fails:
         print("FAIL  " + f)
     sys.exit(1)
-print("PASS  it fits 128KB at the desktop, with nothing loaded")
+print("PASS  boots on 128KB and resides in %d KB at the desktop%s, "
+      "with nothing loaded" % (limit // 1024, " + its branch grace"
+                               if top > limit else ""))

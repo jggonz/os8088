@@ -236,8 +236,20 @@ def main():
 
     seen, done, fails, learned_groups = [], False, 0, 0
     last_new = clock.secs()
+    nudged, nudge_x = last_new, 620
     while clock.secs() < args.timeout and not clock.stalled():
         time.sleep(1)                                # the fastest groups finish in well under a second
+        # THE SCREEN SAVER (SPEC.md 79) comes up after 5 guest minutes with no
+        # input, and over the terminal it is a starfield the OCR reads as no
+        # new line - so a run past ~300 guest seconds (ZEXDOC on a loaded
+        # host: 515-557 s is in SPEC.md 74's own record) failed as 'no new
+        # result line for 15 guest minutes' with every group so far OK. A
+        # one-pixel pointer move off the terminal every two guest minutes is
+        # input, and draws nothing of the window's
+        if clock.secs() - nudged > 120:
+            nudge_x = 1239 - nudge_x                 # 620 <-> 619
+            mouse_to(sock, nudge_x, 470)
+            nudged = clock.secs()
         scr = screen(sock, os.path.join(args.shots, "rczex-poll.ppm"))
         scr.x0, scr.y0 = x0, y0
         scr.glyphs = glyphs                          # what is known so far...

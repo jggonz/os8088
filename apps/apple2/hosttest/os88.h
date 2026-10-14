@@ -176,6 +176,7 @@ int  os88_ferr(void);                       /* apps/cc/os88.h:882 - the FERR_*
 int  os88_file_dlg(int mode, void *win, const char *defname);
 int  os88_arg_file(char *name13, struct os88_place *p);   /* SPEC.md 54.5 */
 int  os88_file_goto(struct os88_place *p);
+int  os88_file_goto_q_mark(unsigned clus, int vol);
 
 void os88_memset(void *p, int c, unsigned n);
 void os88_memcpy(void *dst, const void *src, unsigned n);

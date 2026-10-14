@@ -79,6 +79,11 @@ def main():
         rec = m.read(S("wm_wins") + wins[-1] * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
         pseg = rec[22] | (rec[23] << 8)
         rw = lambda n: u16(m.readseg(pseg, sy[n], 2))   # noqa: E731
+        # THE PAGE ARRIVES ON THE WAKE, after the window is up (SPEC.md 54.10):
+        # read straight after the open and this is an empty browser
+        os88marty.until(m, lambda _m: rw("br_nlines") > 0, "the page laid out",
+                        limit=120)
+        os88marty.settle(m)
 
         def rect(n):
             return [u16(m.readseg(pseg, sy[n] + i * 2, 2)) for i in range(4)]

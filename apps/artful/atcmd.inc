@@ -444,10 +444,50 @@ at_cmd_none:
     mov byte [at_typrun], 0
     mov [at_wlo], ax
     mov [at_whi], dx
+%ifdef NOATBLIT1
     ; collect hidden positions into at_strip4 (idle scratch, word list)
     push ds
     pop es
     mov di, at_strip4
+%else
+    ; collect hidden positions into a word list (SPEC.md 46.6.3). It used to
+    ; borrow the 4bpp strip, which is gone (46.4.12). A selection can hide no
+    ; more characters than it holds, so one that fits at_strip1 - which
+    ; nothing writes while None runs: at_parse fills at_lbuf/at_vis/at_sty/
+    ; at_xmap/at_cellbg only - lists there; a longer one claims the list for
+    ; the command's length, up to the same 4,556 entries, and falls back to
+    ; the strip if the heap refuses.
+    push bp
+    xor dx, dx                      ; DX = 0: nothing to hand back
+    push ds
+    pop es
+    mov di, at_strip1
+    mov bp, AT_NONESTRIP            ; BP = the list's clamp
+    mov ax, [at_whi]
+    sub ax, [at_wlo]                ; AX = the selection's length
+    cmp ax, bp
+    jbe .listed
+    cmp ax, AT_NONECAP
+    jbe .want
+    mov ax, AT_NONECAP
+.want:
+    push ax                         ; the clamp, if the claim is granted
+    shl ax, 1
+    add ax, 1023
+    mov cl, 10
+    shr ax, cl                      ; AX = KB for that many words
+    call OSAPI_MEM_CLAIM            ; AX KB -> DX segment, CF = refused
+    pop cx
+    jc .refused
+    mov es, dx
+    xor di, di
+    mov bp, cx
+    jmp short .listed
+.refused:
+    xor dx, dx
+.listed:
+    push dx
+%endif
     mov word [at_wn], 0
     mov byte [at_pforce], 1
     mov ax, [at_wlo]
@@ -471,7 +511,11 @@ at_cmd_none:
     jb .keep
     cmp ax, [at_whi]
     jae .keep
+%ifdef NOATBLIT1
     cmp word [at_wn], (AT_S4ST*AT_SROWS)/2 - 4
+%else
+    cmp [at_wn], bp
+%endif
     jae .keep                       ; the list is huge; a clamp is a clamp
     stosw
     inc word [at_wn]
@@ -488,12 +532,24 @@ at_cmd_none:
     jcxz .repaint
 .del:
     sub di, 2
+%ifdef NOATBLIT1
     mov ax, [di]
+%else
+    mov ax, [es:di]                 ; at_delrange preserves ES (at_gapto)
+%endif
     mov dx, ax
     inc dx
     call at_delrange
     loop .del
 .repaint:
+%ifndef NOATBLIT1
+    pop dx
+    or dx, dx
+    jz .nofree
+    call OSAPI_MEM_FREE
+.nofree:
+    pop bp
+%endif
     mov ax, [at_wlo]
     mov [at_caret], ax
     mov [at_sela], ax

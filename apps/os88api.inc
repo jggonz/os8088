@@ -252,8 +252,17 @@ CWHITE    equ 15
                                  ; the colour its DATA rows draw over them.
                                  ; ONE-SHOT: the draw puts CWHITE/CBLACK back
 %define OSAPI_ICON_DRAW     KERNEL_SEG:0x039D   ; CX = x, DX = y, SI -> the
-                                 ; record. out CF = 1 refused (a record wider
-                                 ; than one word a row, or taller than 16)
+                                 ; record. out CF = 1 refused (a first byte
+                                 ; that is neither 1 nor ICON_SOLID, or a
+                                 ; record taller than 16)
+ICON_SOLID  equ 0                ; the record's first byte for a picture whose
+                                 ; MASK IS ALL ONES (SPEC.md 25.6.2): `db
+                                 ; ICON_SOLID, rows` then the `rows` DATA words
+                                 ; alone - no mask rows stored. The kernel
+                                 ; fills them in as it stages the record, so it
+                                 ; draws exactly what `db 1, rows`, `rows`
+                                 ; words of 0xFFFF and the data would. What
+                                 ; OS88UI_IMG's full-mask pictures want
 %define OSAPI_GFX_BLIT1_PEN KERNEL_SEG:0x0393   ; AL = ink (what a SET bit in the
                                  ; next OSAPI_GFX_BLIT1's band becomes), AH =
                                  ; paper (a CLEAR one). SPEC.md 5.4.2.2. The
@@ -471,9 +480,12 @@ KSC_ALT     equ 0x38             ; ...and Alt, which is a MODIFIER and so is
                                  ; SND_OPENF_RING below; every linear open
                                  ; passes AH = 0); out AX = 0 ok / err /
                                  ; SND_ST_* state (verb 3). Verb 6's SI
-                                 ; source and verb 5's DI dest are in YOUR
-                                 ; segment - STAGED for you, like verb 2 of
-                                 ; OSAPI_SND_FM.
+                                 ; source and verb 5's DI dest are in the
+                                 ; segment DS NAMES AT THE CALL - yours,
+                                 ; normally, or a claim of yours if you
+                                 ; point DS at it for that one call (the X
+                                 ; stub passes your DS through) - STAGED for
+                                 ; you, like verb 2 of OSAPI_SND_FM.
 
 ; capability bits returned by OSAPI_SND_CAPS (SPEC.md 34.2). TONE and
 ; PCM_EXCL are the resident PC speaker's - TONE always, PCM_EXCL on kern_big
@@ -739,6 +751,8 @@ OSAPI_LZ_BIG equ 0x80            ; ...OR'd in: AH:CX is the length (20.13.3)
                                  ; the white-fill idiom erases the grow
                                  ; box. No-op unless BX is the frontmost
                                  ; visible resizable window - always safe.
+                                 ; Every register preserved (wm_grow_paint
+                                 ; banks AX..DX and DI; the cell, DS).
 
 ; --- files (SPEC.md 18.4/20.3) -------------------------------------------------
 ; Whole files, by name, in the volume's CURRENT DIRECTORY (SPEC.md 19.2 -
@@ -798,6 +812,19 @@ OSAPI_LZ_BIG equ 0x80            ; ...OR'd in: AH:CX is the length (20.13.3)
                                  ; needs ~80 bytes more than the file, because
                                  ; the packed bytes are read HIGH inside it and
                                  ; expanded downwards. FERR_BIG says so.
+                                 ;
+                                 ; THE SIZE PROBE: a read with NO ROOM is how
+                                 ; to size a buffer for a file. CX = DX = 0
+                                 ; (any ES:BX - nothing is written) answers
+                                 ; FERR_BIG with DX = the KB the read needs -
+                                 ; from the directory entry, no data I/O, and
+                                 ; the UNPACKED size of a compressed file -
+                                 ; or CF=0 and DX:AX = 0 for an empty one.
+                                 ; Claim DX KB, read again into the claim,
+                                 ; and a fixed worst-case staging buffer is
+                                 ; never needed. apps/chart's ct_stage is the
+                                 ; worked example (32KB fixed -> what the
+                                 ; file needs).
 %define OSAPI_FILE_DELETE   KERNEL_SEG:0x010F   ; SI = name; out CF=0 AX=0, else FERR_*
 %define OSAPI_FILE_RENAME   KERNEL_SEG:0x0115   ; SI = old name, DI = new name; out as above
 %define OSAPI_FILE_COPY     KERNEL_SEG:0x0431   ; COPY OR MOVE ONE ENTRY, source
@@ -1249,6 +1276,16 @@ OSAPI_DI_SIZE   equ 128
                                  ; bss - the bss ships inside the part, which
                                  ; is where you write down what you loaded and
                                  ; where you put it.
+                                 ; AX = 0 IS THE KEEP FORM (SPEC.md
+                                 ; 20.12.10.5): CX = the PARAGRAPHS at DX
+                                 ; your program keeps - its own image + bss
+                                 ; and every part after it that it goes on
+                                 ; reading - and the carve's tail past them
+                                 ; goes back to the heap. CX is the bound as
+                                 ; well. A parted loader does not work it
+                                 ; out: OS88_REHOME (os88parts.inc) is this
+                                 ; call with CX taken from the part table.
+                                 ; AX non-zero keeps the carve whole.
                                  ; out CF=1 refused: you are not the entry proc
                                  ; of the launch in flight, you have already
                                  ; called it once, or DX = 0
@@ -1352,6 +1389,16 @@ OSAPI_DI_SIZE   equ 128
                                  ; your claims when your instance dies, so you
                                  ; need no teardown hook; free them yourself
                                  ; only to hand memory back mid-session.
+                                 ; REGISTERS: every one preserved but DX -
+                                 ; AX still holds the KB you asked for, so a
+                                 ; caller can bank the size from it - and on
+                                 ; CF=1 DX is no segment of yours (0, or what
+                                 ; the scan left). A claim may COMPACT the
+                                 ; heap first (SPEC.md 66.4): a claim you
+                                 ; declared OSAPI_MEM_MOVABLE can come back
+                                 ; elsewhere, through its proc, before this
+                                 ; returns. Your region cannot - you are
+                                 ; inside its callback.
 %define OSAPI_MEM_CLAIM_DMA KERNEL_SEG:0x01DF   ; the same claim, for a buffer
                                  ; an ISA DMA CONTROLLER will read or write:
                                  ; AX = KB wanted, CX = KB of the block's HEAD
@@ -1389,6 +1436,11 @@ OSAPI_DI_SIZE   equ 128
 
 %define OSAPI_MEM_FREE      KERNEL_SEG:0x01AA   ; DX = the segment you were
                                  ; given; out CF=0 released, CF=1 not yours
+                                 ; (or inside a compaction's relocation proc,
+                                 ; SPEC.md 66.3 rule 3). Every register
+                                 ; preserved - DX too, so free-then-zero is
+                                 ; `call OSAPI_MEM_FREE` / `xor dx, dx` and no
+                                 ; reload is needed between the two
 ; --- "…and if I moved too", and the post that makes it true (SPEC.md 66.4.3) --
 ; A package may not compact its OWN region from inside its own callback: a
 ; frame is standing in it - the far-return CS the CPU pushed, the API cell's
@@ -1752,13 +1804,26 @@ CPU_F_X87           equ 0x08     ; an 8087/287/387 IS IN THE SOCKET, probed
 ; slot number belongs in one place (SPEC.md 20.8).
 %define OSAPI_VOL_ADD       KERNEL_SEG:0x01F8   ; AL = the driver's own volume
                                  ; handle, CX = the volume's sector count,
-                                 ; DX = a listing claim's segment (0 = the
-                                 ; kernel's 32-entry floor), SI = a NUL
+                                 ; DX = 0 (it was a listing claim's
+                                 ; segment, SPEC.md 22.6), SI = a NUL
                                  ; desktop label in the CALLER's segment (0 =
                                  ; derive 'Disk X'). out CF=0 and AL = the
                                  ; VOLUME INDEX - 2 is C:, and the desktop
                                  ; zone and the drive letter both fall out of
-                                 ; it
+                                 ; it.
+                                 ;
+                                 ; DX != 0 is a TAKE (SPEC.md 52.1.1): DL =
+                                 ; a BIOS volume's index, as OSAPI_VOL_AT
+                                 ; answered it, becomes YOURS to read, AL =
+                                 ; your handle, mounted as it is and handed to
+                                 ; your DSV_BLK; CX and SI unread. For a disk
+                                 ; you have PROVED is the one that int 13h
+                                 ; drive reaches. OSAPI_VOL_DEL gives it BACK
+                                 ; to the BIOS rather than freeing it, so the
+                                 ; system volume survives your unload, and
+                                 ; OSAPI_VOL_AT still answers for it. CF=1 =
+                                 ; that row is not a BIOS volume, or you are
+                                 ; not a driver
 %define OSAPI_VOL_DEL       KERNEL_SEG:0x01FE   ; AL = a volume index this
                                  ; driver registered. Cannot fail
 %define OSAPI_VOL_MOUNT     KERNEL_SEG:0x0204   ; AL = a volume index; mount
@@ -1785,7 +1850,9 @@ CPU_F_X87           equ 0x08     ; an 8087/287/387 IS IN THE SOCKET, probed
                                  ; second drive icon on the same sectors.
                                  ;
                                  ; It answers about BIOS-transport volumes and
-                                 ; only those. Your own rows are yours to
+                                 ; only those - and one a driver TOOK
+                                 ; (OSAPI_VOL_ADD, DX != 0), still the boot
+                                 ; partition. Your own rows are yours to
                                  ; recognise: the kernel never learns their
                                  ; partition base (it hands you a
                                  ; volume-relative LBA and you add it), and a
@@ -2022,6 +2089,7 @@ MEM_K_HIB   equ 0xFF0C          ; the resume's extent list (SPEC.md 87.5)
 MEM_K_FDLG  equ 0xFF0F          ; RESERVED: the old dialog's listing; no claim carries it since SPEC.md 38.1
 MEM_K_FONT  equ 0xFF10          ; the 8x8 glyph table copied out of an option ROM (SPEC.md 6.0.1)
 MEM_K_SC    equ 0xFF11          ; the desktop shortcuts' table (SPEC.md 26.8)
+MEM_K_IMG   equ 0xFF12          ; a mounted image's run table (SPEC.md 18.101)
 
 MEM_PG_TRIV equ 0xFB            ; the purge tiers (SPEC.md 50.6.4), low to
 MEM_PG_LOW  equ 0xFC            ; high: what LOSING the block costs, which is
@@ -2067,6 +2135,7 @@ MEM_P_VIEW_N equ 5              ; RANGE, 0x10..0x14 with the window's fm_pool
                                 ; On kern_big that claim is an ordinary,
                                 ; movable, instance-owned one and this range
                                 ; simply matches nothing
+MEM_P_FLIST equ MEM_PG_MED<<8 | 0x30    ; the Disk window's multi-file clipboard (22.27), kern_big only
 MEM_P_DIRW  equ MEM_PG_HIGH<<8 | 0x02   ; the directory read-ahead window (18.95)
 
 ; --- OSAPI_SYS_KB's buffer, all in KB ----------------------------------------
@@ -2464,6 +2533,10 @@ DQ_MAXREC  equ 8                 ; the most records one call can write, so
                                  ; back yours, so a verb cannot answer in
                                  ; those.
                                  ;
+                                 ; (DRVC_EMS's driver is handed YOUR instance
+                                 ; slot in BH instead, by the kernel, and puts
+                                 ; the class back: BX returns as it went -
+                                 ; SPEC.md 107.1)
                                  ; **DI IS AN ARGUMENT AND NOT AN ANSWER**: it
                                  ; reaches the driver as you set it - a verb
                                  ; taking ES:DI is the ordinary shape for one
@@ -2564,6 +2637,39 @@ DRVC_POINT   equ 6              ; a pointing device the kernel does not
                                 ; drive itself - the CH375 USB mouse (SPEC.md
                                 ; 9.12). Publishes no package entry point; its
                                 ; one kernel call is OSAPI_MOUSE_FEED
+DRVC_FILE2   equ 8              ; the SECOND file-redirector class (SPEC.md
+                                ; 62.9.19): RAMDISK.DRV's, so it and the
+                                ; cable (DRVC_FILE) can be attached at once
+DRVC_EMS     equ 7              ; EXPANDED MEMORY - a LIM EMS board's page
+                                ; registers, EMS.DRV (SPEC.md 107). Pages are
+                                ; MAPPED into a 64 KB frame below 1 MB, never
+                                ; copied: an 8088 can have it. Its verbs, by
+                                ; OSAPI_DRV_CALL with BH = DRVC_EMS:
+EMSV_IDENT   equ 0              ; out AX = 'EM'
+EMSV_CAPS    equ 1              ; out AX = pages free, CX = pages on the
+                                ; board, DX = the frame's segment, SI = the
+                                ; quarters nobody holds (bits 0-3)
+EMSV_ALLOC   equ 2              ; AX = 16 KB pages -> AX = a handle (1..8),
+                                ; one CONTIGUOUS run of the board's pages
+EMSV_FREE    equ 3              ; AX = a handle of yours
+EMSV_FRAME   equ 4              ; AL = quarters (bits 0-3): ALL yours or
+                                ; none. out DX = the frame's segment, and THE
+                                ; RECIPE an interrupt maps with: CX = quarter
+                                ; 0's register, SI = the step to the next
+                                ; one's, AL = bits to OR into a page's value
+                                ; (SPEC.md 107.4)
+EMSV_UNFRAME equ 5              ; AL = quarters of yours to give back
+EMSV_MAP     equ 6              ; AL = a quarter you hold, DX = a handle of
+                                ; yours, CX = a page of it: mapped
+EMSV_BASE    equ 7              ; AX = a handle of yours -> AX = its first
+                                ; page on the board, CX = its length
+EMSV_GONE    equ 8              ; the KERNEL's: an instance is torn down
+EMSE_ROOM    equ 1              ; CF=1 AX = ...no run of pages that long
+EMSE_HND     equ 2              ; ...no free handle
+EMSE_BAD     equ 3              ; ...not yours, or out of range
+EMSE_BUSY    equ 4              ; ...a quarter is another instance's
+EMS_NHND     equ 8              ; handles on the whole machine
+EMS_PAGE     equ 16384          ; bytes a page, and a quarter of the frame
 %define OSAPI_FILE_HERE     KERNEL_SEG:0x01C1   ; out DX = YOUR instance's
                                  ; current directory (0 = the root), BL = its
                                  ; drive. No disk I/O.
@@ -2615,6 +2721,15 @@ DRVC_POINT   equ 6              ; a pointing device the kernel does not
                                  ;
                                  ; Shrinking always succeeds in place, and the
                                  ; tail is free for everyone else immediately.
+                                 ; SHRINK-TO-FIT is therefore the pattern for a
+                                 ; claim sized for a worst case and filled to
+                                 ; less: claim the ceiling, build into it,
+                                 ; then regrow to what you used - DX does not
+                                 ; change, nothing is copied, and the heap gets
+                                 ; the tail back at once. Dot Delirium's
+                                 ; picture (11 -> 4 KB) and Excitebike's
+                                 ; sprites (28 -> 21 KB) are the worked
+                                 ; examples. Every register preserved but DX.
                                  ;
                                  ; ALWAYS take the answer from DX. A grow that
                                  ; moved leaves your old segment pointing at
@@ -2878,6 +2993,16 @@ FERR_DIRFULL equ 7               ; the root directory is full
 FERR_PROT    equ 8               ; read-only/hidden/system/label/directory
 FERR_WPROT   equ 9               ; the media is write-protected
 FERR_BIG     equ 10              ; larger than the buffer (or than 64KB)
+%define OSAPI_FERR_TEXT     KERNEL_SEG:0x0467   ; AX = a FERR_* above, out
+                                 ; ES:SI = the KERNEL'S own NUL text for it
+                                 ; (SPEC.md 18.4.11) - the Disk window's
+                                 ; wording, so you carry no copy of these
+                                 ; strings. ES = KERNEL_SEG on return, which
+                                 ; is what OSAPI_TOAST wants: `call
+                                 ; OSAPI_FERR_TEXT / xor cx, cx / call
+                                 ; OSAPI_TOAST` is a whole refusal. A code
+                                 ; past FERR_BIG reads 'Disk error'; FERR_OK
+                                 ; reads EMPTY (a toast of it retires one)
 
 WF_NOANIM  equ 0x4000            ; W_FLAGS bit14: this window does NOT zoom
                                  ; open (SPEC.md 11.99.2). Set it with
@@ -2980,6 +3105,10 @@ W_W       equ 6             ; word: frame width, outer
 W_H       equ 8             ; word: frame height, includes title bar
 W_TITLE   equ 10            ; word: near ptr to NUL title string
 W_PAINT   equ 12            ; word: near ptr, SI = win ptr; content only.
+                            ; GIVE BACK SI (and DF = 0) AND NOTHING ELSE:
+                            ; the kernel banks AX, BX, CX, DX, DI, BP and
+                            ; DS/ES around the call, so pushing any of them
+                            ; in a paint proc buys nothing (SPEC.md 11)
                             ; **A MOVE DOES NOT CALL IT** - the drag cache
                             ; replays your pixels instead (SPEC.md 11.96.12),
                             ; and conditionally, so the mistake it invites
@@ -3338,18 +3467,33 @@ PKG_FMT equ 8
 ;     OS88_REGION_MOVABLE my_reloc        ; ...or with a fix-up of your own
 ;     OS88_WORKER_RESTARTABLE my_worker   ; right after OSAPI_TASK_SPAWN took
 ;
+; A site that needs no register and no flag kept takes the _NOKEEP forms
+; below them, 6 and 4 bytes shorter.
+;
 ; Both are self-contained: with no argument OS88_REGION_MOVABLE carries its own
 ; relocation proc and jumps over it, so there is no second thing to place and
 ; no way to declare without one.
 ;
-; THE ARGUMENT IS FOR THE PACKAGE THAT HAS A WORD OF ITS OWN TO FIX, and it
-; exists so that such a package declares in the SAME VOCABULARY as every other
-; one rather than hand-rolling the call. Name a near proc of yours; it is
+; THE CHEAP FORM NAMES A `ret` YOU ALREADY HAVE (16 bytes; the bare form is
+; 19). Every package has a bare `ret` somewhere - an early-out, the tail of an
+; entry proc - and a label on it IS a relocation proc that does nothing:
+;
+;     OS88_REGION_MOVABLE my_ret          ; my_ret: is a lone `ret`
+;
+; The label must reach a `ret` with NOTHING in front of it (no pop, no flag
+; work): the kernel calls it with BX/DX as below and it must preserve every
+; register. FPTEST (fpt_ret), IMGTEST (it_ret), Fractal (fr_noreloc) and
+; Gorillas (gr_rectnone) are the worked examples. Reach for the bare form only
+; when the declaration is the one place you have no ret to name.
+;
+; THE SAME ARGUMENT IS FOR THE PACKAGE THAT HAS A WORD OF ITS OWN TO FIX, and
+; it exists so that such a package declares in the SAME VOCABULARY as every
+; other one rather than hand-rolling the call. Name a near proc of yours; it is
 ; entered with BX = the base the region WAS at and DX = where it is now, and it
 ; must preserve every register and `ret`. Two things make a package need one -
 ; it stamped its own segment somewhere the kernel does not know about, or it
 ; handed a far pointer into itself to something that outlives the callback -
-; and both are rare enough that the bare form is the one to reach for.
+; and both are rare enough that naming a bare `ret` is the form to reach for.
 ;
 ; WHY THE PROC IS A `ret`. Your own code needs no relocation - every near
 ; offset in it survives a move untouched - and every word that NAMES your
@@ -3407,6 +3551,207 @@ PKG_FMT equ 8
 %endmacro
 
 ; -----------------------------------------------------------------------------
+; OS88_REGION_MOVABLE_NOKEEP / OS88_WORKER_RESTARTABLE_NOKEEP - the same two
+; declarations for a site that needs NOTHING kept (SPEC.md 66.6.1.1)
+;
+;     OS88_REGION_MOVABLE_NOKEEP            ; 13 bytes (the keeping form: 19)
+;     OS88_REGION_MOVABLE_NOKEEP my_ret     ; 10 bytes (the keeping form: 16)
+;     OS88_WORKER_RESTARTABLE_NOKEEP my_wk  ;  8 bytes (the keeping form: 12)
+;
+; CLOBBERS AX AND THE FLAGS, and the region form DX as well - nothing else:
+; both slots preserve every other register. The flags come back holding the
+; SLOT'S CF, so the form is for a site whose next flag-reader sets the flags
+; itself first: an entry proc that ends in its own `clc`, a hire routine that
+; ends in `pop`s and a `clc`. Put it where AL is not an argument still owed
+; to the next call (FTPD's `mov al, 1` sits ABOVE its declaration and feeds
+; the WM_SNAP below it - that site keeps the long form) and where DX is not
+; the instance index something below still reads.
+;
+; The saving is the pushf/push/pop/popf bracket and nothing else, so it is
+; the same 6 and 4 bytes at every site. Calc, Font Viewer, Audio and Redline
+; declare their regions this way, FTPD and Audio their workers, and TameGram
+; - which wrote the two calls out by hand to the same bytes before this
+; existed - spells them with these names now and assembles byte-identical.
+; tests/unit/t_movable.py counts either spelling as a declaration.
+; -----------------------------------------------------------------------------
+%macro OS88_REGION_MOVABLE_NOKEEP 0-1
+    mov dx, cs                  ; OUR REGION is the claim
+  %if %0 == 0
+    mov ax, %%reloc             ; no proc named: ours, just below
+  %else
+    mov ax, %1                  ; a bare `ret` of yours, or your fix-up
+  %endif
+    call OSAPI_MEM_MOVABLE      ; CF = its answer, AX/DX spent
+  %if %0 == 0
+    jmp short %%over
+%%reloc:                        ; BX = the base it WAS at, DX = where it is now
+    ret
+%%over:
+  %endif
+%endmacro
+
+%macro OS88_WORKER_RESTARTABLE_NOKEEP 1
+    mov ax, %1
+    call OSAPI_TASK_RESTARTABLE ; CF = its answer, AX spent
+%endmacro
+
+; -----------------------------------------------------------------------------
+; OS88_POPLADDER / OS88_PUSHER - a shared save/restore ladder (0 resident: it
+; is your code, emitted once, where you put it)
+;
+;     OS88_POPLADDER pk_pop, ax, bx, cx, dx, si, di, bp   ; PUSH order
+;     OS88_PUSHER    pk_save, ax, bx, cx, dx, si, di, bp  ; same list
+;
+; OS88_POPLADDER emits the pops in REVERSE of the list, one label per rung:
+; `pk_pop_N` pops the last N registers of the list and returns, `pk_pop_0` is
+; the bare `ret`. A routine that pushed the FIRST N of the list (in list
+; order) ends with `jmp pk_pop_N` instead of N pops and a ret - a near jmp,
+; so it costs NO stack, and 2-3 bytes against N+1. The order is the contract:
+; a routine that pushed a different set or order cannot use the ladder.
+;
+; OS88_PUSHER is the other half, for COLD paths only: `call pk_save` pushes the
+; whole list beneath its own return, 3 bytes a site against N, ~100 cycles a
+; call against N*15. It is re-entrant (no storage - the return address is
+; moved with the LAST register of the list as its pointer, so that register
+; must be BP, BX, SI or DI, and the list must be at least two long). A
+; routine entered by `call pk_save` ends with `jmp pk_pop_N` with the whole N.
+;
+; IT TRADES DISK FOR RAM, AND THE RULE IS MEASURED. A run of pops is exactly
+; the match LZ4 packs, so a ladder that shrinks the IMAGE (RAM, for as long as
+; the program runs) grows the shipped FILE (disk) - every time it has been
+; measured. Paint is the rule (apps size pass 1, image / packed file):
+;     6+ pops on the ladder   -125 / +54   PAYS: a real RAM win
+;     4-5 pops                 -34 / +43   LOSES: more disk than RAM saved
+; and the other four agree: Cyclone -22 / +23, Note Pad -50 / +20..30,
+; Missile -42 / +34, Scribe -98 / +74. Build one for 6+ pops on cold paths,
+; and quote both numbers.
+;
+; THE STACK GATE READS IT. tools/stkbalance.py (`stkapps`) expands both macros:
+; a `jmp pk_pop_N` is followed into the rung and checked against the depth it
+; arrives with, a rung nothing jumps to is not an entry, and `call pk_save`
+; moves the caller's depth by N. It reads SOURCE, not the preprocessor, so
+; write the invocation on ONE line with the registers spelled out.
+; -----------------------------------------------------------------------------
+%macro OS88_POPLADDER 2-*
+  %xdefine %%nm %1
+  %assign %%n %0-1
+  %rep %0-1
+    %rotate -1                  ; the LAST pushed is the first popped
+%%nm %+ _ %+ %[%%n]:
+    pop %1
+    %assign %%n %%n-1
+  %endrep
+%%nm %+ _0:
+    ret
+%endmacro
+
+%macro OS88_PUSHER 3-*
+%1:                             ; stack on entry: [ret]
+  %xdefine %%r1 %2              ; the first goes where the return address was
+  %assign %%n %0-2
+  %rotate 2
+  %rep %%n
+    push %1
+    %xdefine %%sc %1            ; ...and the last pushed is the pointer
+    %rotate 1
+  %endrep
+  %ifidni %%sc, bp
+    %define %%ss
+  %elifidni %%sc, bx
+    %define %%ss ss:
+  %elifidni %%sc, si
+    %define %%ss ss:
+  %elifidni %%sc, di
+    %define %%ss ss:
+  %else
+    %error "OS88_PUSHER: the last register of the list must be bp, bx, si or di"
+  %endif
+    mov %%sc, sp
+    push word [%%ss %%sc + 2*%%n]   ; the return address, to the top
+    mov [%%ss %%sc + 2*%%n], %%r1   ; ...and the first register into its slot
+    mov %%sc, [%%ss %%sc]           ; the pointer's own value back
+    ret
+%endmacro
+
+; -----------------------------------------------------------------------------
+; OS88_ADJACENT lo, hi [, gap] - assert at assembly time that hi = lo + gap
+; (default 2): the layout rule a package relies on when it writes two
+; variables as ONE word (`mov [lo], ax` with AL -> lo and AH -> hi, gap 1), or
+; walks two words as a pair (gap 2). Emits nothing. A preprocessor test, so it
+; must come AFTER both symbols are defined - beside the bss equs, not above.
+; -----------------------------------------------------------------------------
+%macro OS88_ADJACENT 2-3 2
+  %if ((%2) - (%1)) != (%3)
+    %error OS88_ADJACENT: %2 must be exactly %3 bytes after %1
+  %endif
+%endmacro
+
+; -----------------------------------------------------------------------------
+; OS88_ABUF / OS88_AWORD / OS88_ABYTE / OS88_BSS_ALIGNED - a bss with ONE
+; 512-aligned block in it, and the gap in front of that block filled (Cyclone's
+; layout, SPEC.md 77.31)
+;
+;     OS88_AWORD my_win                   ; small things first...
+;     OS88_ABYTE my_state
+;     OS88_ABUF  my_table, 1200           ; ...big tables last
+;     ...
+;     OS88_BSS_ALIGNED my_sect, 512       ; IN PLACE OF OS88_BSS + _IMAGE_END
+;
+; A buffer that int 13h moves must not straddle a 64KB physical page, and only
+; a 512-aligned base guarantees that (SPEC.md 2.1.1) - so a package that reads
+; or writes a file straight out of its own bss (an in-place OSAPI_FILE_WRITE_AT
+; of a save table) needs that buffer 512-aligned. The naive answer reserves
+; 511 bytes of pad whatever the image size. This one puts the aligned block at
+; the FIRST 512 boundary past the image and places every listed variable by an
+; EXPRESSION: in the gap if it ends inside it, after the block otherwise. The
+; fit is a PREFIX of the list (each test is "my end <= the gap" and the ends
+; rise), so what is lost is at most the one variable that straddles the
+; boundary - list small things first so that whatever straddles is small.
+;
+; A run that one routine walks as ONE block (a rep stosw over several
+; variables) must therefore be ONE OS88_ABUF with its members equ'd inside it:
+; the cut can fall between any two entries. The aligned block's name is an equ
+; at os88_image_end + the gap; OS88_BSS_ALIGNED also closes the package (it
+; emits OS88_BSS and OS88_IMAGE_END) and asserts the alignment and the fit.
+; Nothing in the image depends on where a variable lands - every address is
+; past the image - so the arithmetic converges in NASM's ordinary passes.
+; apps/cyclone is the worked example.
+; -----------------------------------------------------------------------------
+%assign OS88__AB 0                      ; the list's offset as if unsplit
+%assign OS88__AN 0
+%macro OS88_ABUF 2
+  %if OS88__AN == 0
+OS88__AF0 equ 0                         ; (here, so no package that never
+  %endif                                ; uses the list carries the symbol)
+  %assign OS88__AN1 OS88__AN + 1        ; (%[] pastes TEXT, so the sum is
+                                        ; %assigned before it names anything)
+OS88__AF%[OS88__AN1] equ OS88__AF%[OS88__AN] + (%2) * ((OS88__AB + (%2)) <= OS88__APAD)
+%1 equ os88_image_end + OS88__AB + ((OS88__AB + (%2)) > OS88__APAD) * (OS88__APAD + OS88__ASZ - OS88__AFIT)
+  %assign OS88__AB OS88__AB + (%2)
+  %assign OS88__AN OS88__AN1
+%endmacro
+%macro OS88_AWORD 1
+    OS88_ABUF %1, 2
+%endmacro
+%macro OS88_ABYTE 1
+    OS88_ABUF %1, 1
+%endmacro
+%macro OS88_BSS_ALIGNED 2
+    OS88_BSS OS88__AB + (%2) + OS88__APAD - OS88__AFIT
+    OS88_IMAGE_END
+OS88__ASZ   equ (%2)
+OS88__APAD  equ (512 - ((os88_image_end - $$) & 511)) & 511
+OS88__AFIT  equ OS88__AF%[OS88__AN]
+%1          equ os88_image_end + OS88__APAD
+  %if ((%1 - $$) & 511) != 0
+    %error OS88_BSS_ALIGNED: %1 must be 512-aligned - int 13h moves it (SPEC.md 2.1.1)
+  %endif
+  %if OS88__AFIT > OS88__APAD
+    %error OS88_BSS_ALIGNED: the bss prefix overruns %1
+  %endif
+%endmacro
+
+; -----------------------------------------------------------------------------
 ; OS88_BSS totalbytes - declare the package's zeroed-bss size (optional).
 ; Emits nothing; must appear before OS88_IMAGE_END (which supplies the 0
 ; default when this macro is absent). The argument must be a plain constant
@@ -3450,7 +3795,13 @@ PKG_FMT equ 8
     dw %4                       ; OS88UI_BT_FLAGS (0 = none)
     dw %5                       ; OS88UI_BT_N
     dw 0                        ; OS88UI_BT_WIN, written by os88ui_btninit
-    dw 0                        ; OS88UI_BT_DOWN, THE LIBRARY'S
+    dw 0                        ; OS88UI_BT_DOWN, THE LIBRARY'S - and
+                                ; YOURS under OS88UI_NOGEST, where nothing
+                                ; in os88ui.inc writes it but os88ui_btn
+                                ; still draws the control it names pressed:
+                                ; index+1 on the press, 0 on the release,
+                                ; or no button ever looks held (SPEC.md
+                                ; 20.5.1.3.4)
     dw 0                        ; OS88UI_BT_ONCLK, your click proc - btninit
     dw 0                        ; OS88UI_BT_NEXT, THE LIBRARY'S list link
 %endmacro
@@ -4351,6 +4702,16 @@ WSEQF_HELD  equ 1               ; AL bit 0: commit once, not every call
 WSEQF_SYS   equ 2               ; AL bit 1: OSAPI_FILE_APPEND_SYS's rule - the
                                 ; file may be hidden + system. DRIVERS ONLY,
                                 ; FENCED as APPEND_SYS is: FERR_PROT otherwise
+WSEQF_KEEP  equ 4               ; AL bit 2, with HELD: on a FIXED disk the hold
+                                ; outlives your OSAPI_WM_ONWAKE callback - it
+                                ; is committed at the close, a checkpoint, any
+                                ; other write on the volume, or the first
+                                ; callback that is NOT a wake (SPEC.md 18.4.9.3).
+                                ; A floppy ignores it and commits per callback
+WSEQF_CKPT  equ 8               ; AL bit 3 on a CLOSE (CX = 0): commit what is
+                                ; held and hand back a token that is still HOT,
+                                ; so the stream goes on with no lookup and no
+                                ; walk - a checkpoint, not an end
 %define OSAPI_FILE_FIND_RAW KERNEL_SEG:0x03D9   ; OSAPI_FILE_FIND, with +18 the
                                  ; size the file OCCUPIES rather than the one
                                  ; it expands to (SPEC.md 20.14.3). THE CELL A
@@ -4780,7 +5141,10 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
                                  ; 16-record ring. CF=1 the ring was full of
                                  ; other events and nothing was posted - kick
                                  ; again from your next callback. Every
-                                 ; register preserved.
+                                 ; register preserved, the flags apart
+                                 ; (wm_wake banks SI; evq_push clobbers
+                                 ; nothing) - so it can sit between a load
+                                 ; and its use with nothing banked round it.
 ; --- CLOSING: the negotiation, and the alert that usually follows ------------
 ; SPEC.md 75. Every close in this system - the close box, the app-name menu's
 ; Close, the dock tile's context menu - used to be final the instant the user

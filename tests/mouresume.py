@@ -6,7 +6,7 @@
 `kd_mou_stop` gives the serial port back QUIET on the way into the box - IER = 0
 and the line masked - and restored nothing, on the ground that *"the live
 restore['s] os8088 runs `mouse_init` again on the way up"*.  It does not.
-`mouse_init` is in `.ovlw`, which `mem_unblob` handed back at the end of
+`mouse_init` is in `.ovl`, which `mem_unblob` handed back at the end of
 `kmain`, and SPEC.md 96.49's live resume re-enters at `hbm_wake` rather than at
 a boot - so the one site in this tree that writes IER = 1 could not run, and the
 IER = 0 stood for the rest of the session.
@@ -181,7 +181,7 @@ def main():
             fail("THE POINTER CAME HOME DEAD (SPEC.md 96.45.2): IER %02X and "
                  "mouse_x %d -> %d after a LIVE resume. kd_mou_stop set IER = "
                  "0 on the way out and hbm_wake step 3d is what puts it back - "
-                 "mouse_init cannot, being in .ovlw, which mem_unblob freed"
+                 "mouse_init cannot, being in .ovl, which mem_unblob freed"
                  % (ier1, b, a))
     finally:
         m.close()

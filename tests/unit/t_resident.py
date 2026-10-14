@@ -66,7 +66,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 
-# A listing carries every section and their offsets OVERLAP - `.cold`, `.ovl`,
+# A listing carries every section and their offsets OVERLAP - `.cold`, `.boot2`,
 # `.modc` and `.text` all start at 0 - so an address alone says nothing about
 # which section it is in. The `<N>` is nasm's include depth, and leaving it out
 # of this pattern is what made the first draft read three `.cold` sites as

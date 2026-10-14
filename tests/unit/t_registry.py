@@ -68,11 +68,19 @@ UNREGISTERED = {
     "mrprobe.py": "MIDIRack's guest reader (SPEC.md 105.11) - the running "
                   "package's variables by NAME, for tests/midirack.py; "
                   "library, not a test",
+    "hdoff.py": "a system disk with the hard disk ANSWERED OFF (SPEC.md "
+                "51.5.4), for the rows that tick HDD.DRV in themselves now "
+                "that SPEC.md 51.3.2 loads it at boot - imported by hddcp, "
+                "drvup, cpnames, hdnoclaim, heaphi and drvmove; a fixture, "
+                "not a test",
     "dispcells.py": "the CELLS-not-calls counter two gates share (SPEC.md "
                     "11.3.3), not a test",
     "pxsyms.py": "PiXEL's guest reader (SPEC.md 106.13) - the package's "
                  "symbols out of nasm's map and its instance by its image - "
                  "imported by pxdecode, pxopen and pxpaint, not a test",
+    "pxtmp.py": "a row's own scratch path, in the run's tree and keyed to "
+                "the process (WRITING-TESTS 5.4/5.5) - imported by pxdecode, "
+                "pxparts, pxdraw, pxfolder and pxsave, not a test",
     "pxpartemu.py": "PiXEL's linked parts run on the host under Unicorn "
                     "(SPEC.md 106.24) - imported by pxedit and pxsave for "
                     "their host legs, not a test",
@@ -83,6 +91,10 @@ UNREGISTERED = {
                  "tests/pixelstein.py and tests/pxssim.py, and not a test: "
                  "dispcp.py's lesson one entry up, a library registered as a "
                  "row is a row that cannot fail",
+    "imgfix.py": "the FIXTURE BUILDER for tests/imgmount.py (SPEC.md "
+                 "18.101): it writes host volumes carrying disk images, one "
+                 "of them fragmented by moving its clusters about, and "
+                 "asserts nothing - imgmount imports it and is the row",
     "dispcp.py": "the Control Panel's Display page driven from a script - "
                  "the shared one, imported by 104 files in this directory and "
                  "the most-reused thing in it. It was REGISTERED as a soak "
@@ -164,15 +176,10 @@ UNREGISTERED = {
                    "frames over guest seconds is quantised to a whole frame",
 
     # --- need a build prerequisite the default build does not make ---
-    "brclick.py": "needs `make browsertest` (build/brtest360.img)",
-    "brfetch.py": "needs `make browsertest` (build/brtest360.img)",
-    "brlink.py": "needs `make browsertest` (build/brtest360.img)",
-    "brnav.py": "needs `make browsertest` (build/brtest360.img)",
-    "brscroll.py": "needs `make browsertest` (build/brtest360.img)",
-    "brtable.py": "needs `make browsertest` (build/brtest360.img)",
-    "brreload.py": "needs `make browsertest` (build/brtest360.img)",
-    "brtest.py": "needs `make browsertest` (build/brtest360.img)",
-    "brtoolbar.py": "needs `make browsertest` (build/brtest360.img)",
+    "brnav.py": "needs QEMU and a NIC (ether360.img + brtest360.img), and "
+                "it starts its emulator through `make test` on the fixed "
+                "build/qmp.sock - a make invocation into build/ and a socket "
+                "two rows would share; the other br* rows are registered",
     "netprof.py": "needs QEMU, and it leaves ETHPROF=1 KNOB builds of "
                   "ether.drv and the ethertest disk in build/ - a suite row "
                   "running before the next `make` would test the wrong "
@@ -183,6 +190,9 @@ UNREGISTERED = {
     "ftpd.py": "needs `make ftpdtest` and QEMU with ETHFWD=1 - the FTP server "
                "LISTENS, so the client has to reach INTO the guest, and "
                "MartyPC has no NIC at all (SPEC.md 77)",
+    "ftpkeep.py": "needs `make ftpkeeptest` and QEMU with ETHFWD=1, for "
+                  "ftpd.py's reason, booting a HARD-DISK image (TESTHD=) "
+                  "because WSEQF_KEEP is a fixed disk's (SPEC.md 77.50)",
     "rczex.py": "needs the RunCPM fetch (`make runcpm-src`) and the C toolchain",
     "rczex_ocr.py": "needs the RunCPM fetch and an OCR dependency",
     "proxytest.py": "drives tools/os88proxy.py against a live network",

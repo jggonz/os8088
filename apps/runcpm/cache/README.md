@@ -31,7 +31,7 @@ have to reach the network for them.
 
 The zip is a transport, not a second source of truth. Every member is checked
 against its SHA-256 and size on the way out, exactly as a download is, and
-`tools/cpmcache.py --check` (the `cpmcache` fast row) fails the build if the
+`tools/cpmcache.py --check` (the `cpmcache` soak row) fails if the
 zip lacks a pinned file, contradicts one, or holds a file nothing pins.
 
 ## When a pin moves

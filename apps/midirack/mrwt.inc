@@ -70,27 +70,28 @@ MRS_GAIN    equ 10
     MRW mr_homedir                  ; the folder MIDIRack was launched from
     MRB mr_homevol
     MRW mr_bankkb                   ; the bank's size, read at entry
-    MRBUF mwt_sseg, MWT_MAXV * 2    ; per voice: the sample's segment
-    MRBUF mwt_end, MWT_MAXV * 2     ; ...the index it stops (or loops) at
-    MRBUF mwt_llen, MWT_MAXV * 2    ; ...its loop's length (0: one-shot)
-    MRBUF mwt_ip, MWT_MAXV * 2      ; ...the position, whole...
-    MRBUF mwt_fp, MWT_MAXV * 2      ; ...and fraction
-    MRBUF mwt_is, MWT_MAXV * 2      ; ...the step, whole and fraction
-    MRBUF mwt_fs, MWT_MAXV * 2
-    MRBUF mwt_bslo, MWT_MAXV * 2    ; ...the sample's rate over the output's,
-    MRBUF mwt_bshi, MWT_MAXV * 2    ;    16.16
-    MRBUF mwt_env, MWT_MAXV * 2     ; ...the envelope, 8.8
-    MRBUF mwt_ad, MWT_MAXV * 2      ; ...its steps a span: attack, decay,
-    MRBUF mwt_dd, MWT_MAXV * 2      ;    release
-    MRBUF mwt_rd, MWT_MAXV * 2
-    MRBUF mwt_sl, MWT_MAXV * 2      ; ...the sustain level, 8.8
-    MRBUF mwt_stage, MWT_MAXV       ; 0 silent 1 attack 2 decay 3 sustain
-    MRBUF mwt_amp, MWT_MAXV         ;   4 release; the level 0..127
-    MRBUF mwt_gain, MWT_MAXV        ; ...the sample's own
-    MRBUF mwt_pg, MWT_MAXV          ; ...the volume page, 0..31
-    MRBUF mwt_root, MWT_MAXV
-    MRBUF mwt_fine, MWT_MAXV
-    MRBUF mwt_drum, MWT_MAXV        ; ...1: a drum (no bend, no note-off)
+    MRBUF mwt_cur, FSEQ_SIZE        ; mwt_load's READ_SEQ cursor (os88_rseq)
+    MRX mwt_sseg, MWT_MAXV * 2    ; per voice: the sample's segment
+    MRX mwt_end, MWT_MAXV * 2     ; ...the index it stops (or loops) at
+    MRX mwt_llen, MWT_MAXV * 2    ; ...its loop's length (0: one-shot)
+    MRX mwt_ip, MWT_MAXV * 2      ; ...the position, whole...
+    MRX mwt_fp, MWT_MAXV * 2      ; ...and fraction
+    MRX mwt_is, MWT_MAXV * 2      ; ...the step, whole and fraction
+    MRX mwt_fs, MWT_MAXV * 2
+    MRX mwt_bslo, MWT_MAXV * 2    ; ...the sample's rate over the output's,
+    MRX mwt_bshi, MWT_MAXV * 2    ;    16.16
+    MRX mwt_env, MWT_MAXV * 2     ; ...the envelope, 8.8
+    MRX mwt_ad, MWT_MAXV * 2      ; ...its steps a span: attack, decay,
+    MRX mwt_dd, MWT_MAXV * 2      ;    release
+    MRX mwt_rd, MWT_MAXV * 2
+    MRX mwt_sl, MWT_MAXV * 2      ; ...the sustain level, 8.8
+    MRX mwt_stage, MWT_MAXV       ; 0 silent 1 attack 2 decay 3 sustain
+    MRX mwt_amp, MWT_MAXV         ;   4 release; the level 0..127
+    MRX mwt_gain, MWT_MAXV        ; ...the sample's own
+    MRX mwt_pg, MWT_MAXV          ; ...the volume page, 0..31
+    MRX mwt_root, MWT_MAXV
+    MRX mwt_fine, MWT_MAXV
+    MRX mwt_drum, MWT_MAXV        ; ...1: a drum (no bend, no note-off)
 
 mwt_vt:     dw mwt_on, mwt_off, mr_nop, mwt_ctl, mwt_bend, mwt_susup, mwt_alloff
 mwt_bname:  db 'MIDIRACK.BNK', 0
@@ -153,14 +154,13 @@ mwt_load:
     push dx
     push si
     push di
+    push bp
     push es
     mov word [mr_msg], mr_s_nobank
     cmp byte [mr_hasbank], 0
     je .no
-    mov ax, [mr_bankkb]             ; the claim: whole 32 KB chunks, so the
-    add ax, 31                      ; last read has its full room
-    and ax, 0xFFE0
-    call OSAPI_MEM_CLAIM            ; DX = the segment
+    mov ax, [mr_bankkb]             ; the claim: the bank's own KB - the
+    call OSAPI_MEM_CLAIM            ; last chunk reads into what is left
     mov word [mr_msg], mr_s_bankmem
     jc .no
     mov [mwt_bseg], dx
@@ -170,21 +170,38 @@ mwt_load:
     mov dx, [mr_homedir]
     mov bl, [mr_homevol]
     call OSAPI_FILE_GOTO_QM
-    ; IN 32 KB CHUNKS, with OSAPI_FILE_READ_AT: a chunk that size is a
-    ; multiple of every legal cluster (os88parts.inc's OP_CHUNK, for the same
-    ; reason), and a bank is far past what one OSAPI_FILE_READ is for. RAW, so
-    ; the bank ships unwrapped (SPEC.md 105.10)
-    mov di, [mwt_bseg]              ; DI = the chunk's segment
+    jc .rdfail                      ; NOTHING MOVED: a MIDIRACK.BNK read by
+                                    ; name here would be whatever folder we
+                                    ; stood in, so refuse as a read would
+    ; IN 32 KB CHUNKS: a chunk that size is a multiple of every legal cluster
+    ; (os88parts.inc's OP_CHUNK, for the same reason), and a bank is far past
+    ; what one OSAPI_FILE_READ is for. RAW, so the bank ships unwrapped
+    ; (SPEC.md 105.10). Through os88_rseq (apps/os88rseq.inc, SPEC.md
+    ; 18.4.8.1) and not OSAPI_FILE_READ_AT: READ_AT re-walks the chain from
+    ; the front on every call, so a bank of N chunks walked N(N+1)/2 chunks'
+    ; worth of links; the cursor walks each link once. On kern_small the
+    ; helper makes the same call as READ_AT, which is what this was
+    mov es, [mwt_bseg]              ; ES = the chunk's segment
+    mov si, mwt_bname
+    mov di, mwt_cur
+    call os88_rseq_new              ; the cursor names no file: start it cold
     xor ax, ax                      ; DX:AX = its offset in the file
     xor dx, dx
+    mov bp, [mr_bankkb]             ; BP = the claim's KB still unread
 .chunk:
     push ax
     push dx
-    mov es, di
     xor bx, bx
     mov cx, 32768
-    mov si, mwt_bname
-    call OSAPI_FILE_READ_AT         ; DX:AX = delivered
+    cmp bp, 32
+    jae .cap
+    mov cx, bp                      ; CX = BP x 1024 (BP < 32, BX = 0): the
+    mov ch, cl                      ; room left, whole KB and so whole sectors
+    mov cl, bl                      ; - kern_big's READ_AT rule (SPEC.md
+    shl ch, 1                       ; 18.4.4.2); kern_small carries no card
+    shl ch, 1                       ; player (105.8.6)
+.cap:
+    call os88_rseq                  ; DX:AX = delivered (BX CX SI DI ES kept)
     mov cx, ax
     pop dx
     pop ax
@@ -192,9 +209,13 @@ mwt_load:
     jcxz .done
     add ax, 32768
     adc dx, 0
-    add di, 32768 / 16
+    mov bx, es
+    add bx, 32768 / 16
+    mov es, bx
     cmp cx, 32768
-    je .chunk
+    jne .done
+    sub bp, 32
+    jnz .chunk
 .done:
     pop bx
     pop dx
@@ -232,6 +253,7 @@ mwt_load:
     stc
 .out:
     pop es
+    pop bp
     pop di
     pop si
     pop dx
@@ -239,6 +261,8 @@ mwt_load:
     pop bx
     pop ax
     ret
+
+%include "os88rseq.inc"            ; os88_rseq, for mwt_load
 
 ; mwt_free - the bank and the mix claim back (the window is closing)
 mwt_free:

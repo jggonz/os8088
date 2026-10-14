@@ -753,6 +753,8 @@ int os88_clip_get_seg(unsigned seg, unsigned off, unsigned cap)
  * THE CLAIMS - the Apple's 64KB and the ROM part
  * ========================================================================*/
 #define H_RAMSEG 0x2000u
+#define H_RAMKB  49                     /* A2_RAMKB, checked against it below
+                                         * the #include (section 3.1) */
 #define H_ROMSEG 0x1000u                /* >= A2_ROM_MINSEG (0x0D00), which
                                          * the package guards for */
 static unsigned char h_ram[65536];
@@ -807,7 +809,7 @@ unsigned os88_mem_claim(int kb)
 {
     int i;
 
-    if (kb == 64 && claims_live == 0) {
+    if (kb == H_RAMKB && claims_live == 0) {
         claims_live++;
         return H_RAMSEG;                /* the Apple's own address space */
     }
@@ -866,6 +868,24 @@ static int h_largest_kb = 200;          /* what the heap says it can spare -
                                          * of those two bound it */
 unsigned os88_mem_largest_kb(void) { return (unsigned)h_largest_kb; }
 unsigned os88_part_seg(int i) { return i == 0 ? H_ROMSEG : 0; }
+
+/* THE CARVE'S CLAIM BASE AND ITS SHRINK (APPLE2-SPEC section 1.5). The model
+ * has no head slack, so the claim and the part are one segment; what is
+ * asserted is that os88_main shrank THE CARVE, to the main ROM and no less,
+ * and did it once. */
+unsigned a2_opbase = H_ROMSEG;
+static int h_regrow_n, h_regrow_kb;
+
+unsigned os88_mem_regrow(unsigned seg, int kb)
+{
+    if (seg != H_ROMSEG) {
+        fail("os88_mem_regrow on a segment that is not the parts carve");
+        return 0;
+    }
+    h_regrow_n++;
+    h_regrow_kb = kb;
+    return seg;
+}
 int os88_peek(unsigned seg, unsigned off) { return segbase(seg)[off]; }
 void os88_poke(unsigned seg, unsigned off, int v)
 { segbase(seg)[off] = (unsigned char)v; }
@@ -961,6 +981,17 @@ int os88_file_goto(struct os88_place *p)
     return h_goto_fail ? -1 : 0;
 }
 
+/* the arg folder's stand is the QUIET move now (docs/plans/NAV-COST-PLAN.md):
+ * the same counter and the same refusal switch, and the place os88_arg_file
+ * handed out is what it must be given */
+int os88_file_goto_q_mark(unsigned clus, int vol)
+{
+    if (clus != 7 || vol != 1)
+        return -1;
+    h_goto_n++;
+    return h_goto_fail ? -1 : 0;
+}
+
 int os88_file_dlg(int mode, void *win, const char *defname)
 {
     (void)win;
@@ -997,6 +1028,9 @@ char *os88_utoa(unsigned v, char *dst6)
  * THE PROGRAM
  * ========================================================================*/
 #include "apple2.c"
+#if A2_RAMKB != H_RAMKB
+#error the harness's RAM claim is not the package's A2_RAMKB
+#endif
 
 /* ==========================================================================
  * THE ASSEMBLY, TRANSCRIBED FOR THE HOST
@@ -1011,10 +1045,26 @@ static unsigned char h_scr[256];        /* the core's scratch page, which on
                                          * the machine lives at $CF00 of the
                                          * claim itself */
 
-int a2_rd(unsigned a) { return h_ram[a & 0xFFFF]; }
+/* THE CLAIM IS A2_RAMKB AND NOT 64 (APPLE2-SPEC section 3.1): on the machine
+ * every byte the C reaches through the RAM segment is in $0000-$BFFF, and the
+ * scratch page above it is h_scr here. A C-side access at or above $C000 is
+ * an access the 49KB claim may not cover - $C200 up is somebody else's heap -
+ * so the model refuses it rather than answering out of a 64KB array. */
+static unsigned h_ra(unsigned a, unsigned n)
+{
+    a &= 0xFFFF;
+    if ((unsigned long)a + n > 0xC000UL) {
+        fail("the C reached the RAM segment at or above $C000, which the "
+             "A2_RAMKB claim does not promise");
+        exit(1);
+    }
+    return a;
+}
+
+int a2_rd(unsigned a) { return h_ram[h_ra(a, 1)]; }
 
 int a2_rd16(unsigned a)
-{ return h_ram[a & 0xFFFF] | (h_ram[(a + 1) & 0xFFFF] << 8); }
+{ return h_ram[h_ra(a, 2)] | (h_ram[a + 1] << 8); }
 
 static void h_mark(unsigned a)
 {
@@ -1100,12 +1150,13 @@ void a2_zfill(unsigned a, int v, unsigned n)
 {
     unsigned i;
 
+    h_ra(a, n);
     for (i = 0; i < n; i++)
         h_ram[(a + i) & 0xFFFF] = (unsigned char)v;
 }
 
 void a2_zcopy_in(unsigned a, const void *src, unsigned n)
-{ memcpy(h_ram + (a & 0xFFFF), src, n); }
+{ memcpy(h_ram + h_ra(a, n), src, n); }
 
 static int n_srcrd;                     /* forty-byte SOURCE reads, below */
 
@@ -1115,7 +1166,7 @@ static int n_srcrd;                     /* forty-byte SOURCE reads, below */
  * below read 0.31 ms a composed row too cheap. It replaced a2_rowsig, which
  * WAS counted, so the table's own history is the check. */
 void a2_zcopy_out(void *dst, unsigned a, unsigned n)
-{ n_srcrd++; memcpy(dst, h_ram + (a & 0xFFFF), n); }
+{ n_srcrd++; memcpy(dst, h_ram + h_ra(a, n), n); }
 
 int a2_wrote(void) { return h_scr[A2_SCR_ANY]; }
 
@@ -1131,10 +1182,10 @@ static int n_copyrow;
 static int n_srcrd_copy;                /* ...and the row reads one Copy made */
 
 void a2_zzcopy_in(unsigned a, unsigned seg, unsigned off, unsigned n)
-{ memmove(h_ram + (a & 0xFFFF), segbase(seg) + off, n); }
+{ memmove(h_ram + h_ra(a, n), segbase(seg) + off, n); }
 
 void a2_zzcopy_out(unsigned seg, unsigned off, unsigned a, unsigned n)
-{ memmove(segbase(seg) + off, h_ram + (a & 0xFFFF), n); }
+{ memmove(segbase(seg) + off, h_ram + h_ra(a, n), n); }
 
 unsigned a2_scan0(unsigned seg, unsigned off, unsigned n)
 {
@@ -1168,6 +1219,7 @@ void a2_zpower(unsigned a, unsigned n)
 {
     unsigned i;
 
+    h_ra(a, n);
     for (i = 0; i < n; i++)
         h_ram[(a + i) & 0xFFFF] = (unsigned char)(((i & 3) < 2) ? 0xFF : 0x00);
 }
@@ -2391,6 +2443,12 @@ int main(void)
             fail("the character generator was not decoded in os88_main");
             break;
         }
+    /* ...AND THE CARVE WAS SHRUNK TO THE MAIN ROM, after that decode and not
+     * before it: 12KB holds $D000-$FFFF and nothing a running machine reads
+     * is past it (APPLE2-SPEC section 1.5). */
+    if (h_regrow_n != 1 || h_regrow_kb * 1024L < A2_ROM_KEEP
+        || h_regrow_kb * 1024L >= (long)sizeof(h_rom))
+        fail("os88_main did not shrink the ROM carve to the main ROM once");
     for (i = 0; i < 128; i++) {
         int want = 0, b;
 

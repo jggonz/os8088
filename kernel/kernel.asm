@@ -130,8 +130,8 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; had no heap and could load nothing).
 ;
 ; **Everything from KERNEL_SEG to the end of task 0's stack is the kernel**,
-; and the KERN_BUDGET guard holds that whole span to 72.5KB just above the
-; BIOS data area. Code, data, scratch, the FAT snapshot, the disk buffers and
+; and the KERN_BUDGET guard holds that whole span to a budget just above the
+; BIOS data area (100KB of machine on kern_big, 64KB on kern_small). Code, data, scratch, the FAT snapshot, the disk buffers and
 ; every task stack are inside it. The one deliberate exception is the menu
 ; save-under, which is a heap claim (SPEC.md 12.4/50) because it is 20KB that
 ; only exists while a menu is down.
@@ -153,21 +153,11 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; =============================================================================
 ; --- the split (docs/history/KERN-SPLIT-PLAN.md) -------------------------------------
 ; KERN_BIG and KERN_SMALL are two builds off this one tree, and the knob is
-; `make KERN_BIG=1`. The reason is three budget moves old and is written out
-; below and in docs/KERNEL-MEMORY.md: a 128KB machine and a 640KB machine stop
-; wanting the same feature set long before they stop fitting the same image,
-; so the answer at guard 5's ceiling is a second build rather than a raise.
+; `make KERN_BIG=1`. The reason is written out in docs/KERNEL-MEMORY.md: a
+; 128KB machine and a 640KB machine stop wanting the same feature set long
+; before they stop fitting the same image, so each build has a budget of its
+; own (KERN_BUDGET below).
 ;
-; THE TWO FOOTPRINT GUARDS ARE SEPARATE CONSTANTS AS OF THIS COMMIT AND HOLD
-; THE SAME VALUE. That is deliberate and it is not an oversight: separating
-; them is the mechanism, and MOVING one is a decision to take with whoever
-; asked for the feature that needs it (the fifth move's rule, and every move
-; since). So the split costs kern_small nothing today - not a byte, not a
-; step - and kern_big's guard can move on its own the first time something
-; actually needs it to.
-;
-; When they do diverge, the one that has to be defended byte by byte is
-; KERN_SMALL_BUDGET. kern_big's is headroom for a machine that has RAM.
 ; EXACTLY ONE of KERN_BIG / KERN_SMALL is in force. The Makefile always sends
 ; one explicitly, the default being KERN_BIG; both are positive so that no site
 ; has to read `%ifndef` to mean "the other build", which on the one conditional
@@ -375,6 +365,16 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
   %define OS88_REDIR 1
 %endif
 
+; ...and SPEC.md 18.101's MOUNTED IMAGES - a volume whose sectors are a FILE's
+; sectors on another volume. kern_big alone, and that one is a decision rather
+; than an impossibility: the arm is 164-odd resident bytes and kern_small is
+; on a diet (SPEC.md 39.27.4), so the owner kept it off the 128KB machine
+; ENTIRELY - not even the dispatch test. It rides OS88_DRIVERS's `.drv` arm in
+; dsk_xfer, which kern_small does not assemble at all.
+%ifdef KERN_BIG
+  %define OS88_IMG 1
+%endif
+
 ; ...and SPEC.md 37.90's RTC LADDER, for a reason that is about the HARDWARE
 ; and not about the bytes (SPEC.md 37.0.1). All four rungs are chips a 128KB
 ; machine cannot have:
@@ -497,6 +497,18 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
   %endif
 %endif
 
+; SPEC.md 22.27's MULTI-SELECT in the Disk window is kern_big's and SHIPS -
+; `make MSELOFF=1` compiles it out, SBDRAGOFF's shape one block up and for the
+; same file-order reason: files.inc and filecp.inc both test it, and the symbol
+; is made here, above every %include. kern_small has none of it: there the
+; copy engine is FILECP.DRV, so every operation on a set would ask for the
+; system disk anyway (SPEC.md 22.26 drew the same line for the arrows).
+%ifdef KERN_BIG
+  %ifndef MSELOFF
+    %define FM_MSEL 1
+  %endif
+%endif
+
 ; GFX_VGA - does this build drive a VGA at all? (docs/plans/MONO-RECLAIM-PLAN.md 2)
 ;
 ; kern_big does. kern_small DOES NOT, and that is a product decision rather
@@ -556,1576 +568,45 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
  %endif
 %endif
 
-KERN_RESIDENT_KB equ 128        ; RULE 3: kern_big fully RESIDES in this once
-                                ; it is at the desktop - every non-purgeable
-                                ; byte, no drivers, no XMS, on VGA. See
-                                ; MIN_RAM_KB for the three rules and which
-                                ; guard each is.
+; THE BUDGETS. Three rules, each a different quantity (docs/KERNEL-MEMORY.md):
+;
+;   1. kern_big fully RESIDES in KERN_RESIDENT_KB (100KB) once it is at the
+;      desktop - every non-purgeable byte, no drivers, no XMS, on VGA. Guard 1
+;      below is the static half, this span; tests/kernresident.py is the half
+;      an assembler cannot see, a claim made at boot and never given back.
+;   2. kern_small fully RESIDES in KERN_SMALL_RESIDENT_KB (64KB). Guard 1 is
+;      all of it: tests/small128.py asserts that no pinned claim stands on its
+;      bare desktop, so its span IS what it holds.
+;   3. BOTH BOOT on 128KB - guard 5, MIN_RAM_KB below. Booting and residing
+;      are separate questions: overlays and the boot order are what a 128KB
+;      boot exercises, and they have broken it at a resident size well under
+;      the ceiling.
+;
+; A BUDGET IS MET EXACTLY AT AN UPSTREAM MERGE OR A RELEASE. Branch and
+; integration work may run up to KERN_GRACE over it, because features land
+; whole and are size-passed after; past the grace this file refuses to
+; assemble. Over a budget at a merge or a release is a conversation with the
+; owner and a rework of the budgets - never a quiet raise, and never a build
+; fix. `make budget-check` is that gate (tools/kernsize.py --release).
+;
+; Both figures are DERIVED: the span starts at KERNEL_SEG and the rule says
+; where it ends, so there is nothing to choose but the KB. How the previous
+; figures (129,536 and 107,520) moved, thirty-five times, is
+; docs/history/KERN-BUDGET-LEDGER.md.
+KERN_RESIDENT_KB       equ 100  ; rule 1
+KERN_SMALL_RESIDENT_KB equ 64   ; rule 2
+KERN_GRACE             equ 2048 ; branch and integration headroom over either
 %ifdef KERN_BIG
 KERN_BUDGET equ KERN_RESIDENT_KB*1024 - KERNEL_SEG*16
-                                ; = 129,536. DERIVED and no longer a policy
-                                ; figure: the kernel's span starts at
-                                ; KERNEL_SEG and rule 3 says where it ends, so
-                                ; there is nothing left to choose. The ledger
-                                ; below - this comment, move by move, and
-                                ; the only copy of it - stops at move 35 for
-                                ; that reason: a 36th would be a change to
-                                ; the RULE, not to a number.
-                                ;
-                                ; The static half only. What an assembler
-                                ; cannot see is a claim made during boot and
-                                ; never given back, and tests/kernresident.py
-                                ; is that half: it walks mem_tab at a bare
-                                ; desktop and adds up what is PINNED.
-                                ;
-                                ; THE THIRTY-FIFTH MOVE, 121,344 ->
-                                ; 122,368, TWO STEPS, ASKED FOR AND
-                                ; GRANTED, ATTRIBUTED TO BUGFIXES AND
-                                ; FINAL GROWTH.
-                                ;
-                                ; Move 34 below ends by saying the next
-                                ; thing to cross a rung anywhere needs a
-                                ; decision here rather than finding one
-                                ; already taken. This is that decision,
-                                ; taken by the fork owner rather than by
-                                ; the change that ran into it, which is
-                                ; what SPEC.md 1 and docs/KERNEL-MEMORY.md
-                                ; mean by a budget move being a decision
-                                ; and not a build fix.
-                                ;
-                                ; ONE STEP RESTORES WHAT MOVE 34'S MERGE
-                                ; SPENT and one is headroom for the rest
-                                ; of this cycle - the bugfixes the review
-                                ; of this branch turned up and whatever
-                                ; closing them costs. It is not funding a
-                                ; feature: no line of it is attributed,
-                                ; on purpose, because the thing being
-                                ; bought is the STEP itself.
-                                ;
-                                ; WHY IT COULD NOT WAIT FOR THE FIRST
-                                ; OVERRUN. Move 34 reasons that an
-                                ; ordinary addition still fits because
-                                ; the image rung it crossed into has 479
-                                ; bytes standing. That is true of .text
-                                ; and it is not true of the kernel: the
-                                ; binding rung is .cold, at 40,444 of
-                                ; 40,448. FOUR BYTES. Four bytes of cold
-                                ; code assemble and take the rung to
-                                ; zero; a fifth crosses it, spends 512,
-                                ; and fails this guard - measured, not
-                                ; predicted (`nop` x5 in a .cold section
-                                ; -> kernel.asm's guard 1). So the margin
-                                ; move 34 left standing was in the wrong
-                                ; rung to be spent, and the first cold-
-                                ; code bugfix of the cycle would have
-                                ; arrived as a build failure with a
-                                ; budget decision attached to it.
-                                ;
-                                ; WHAT THIS DOES NOT RELIEVE, and the
-                                ; reason it is only half an answer: A
-                                ; KNOB KERNEL DOES NOT READ THIS GUARD.
-                                ; The %ifndef KERN_KNOB below skips it
-                                ; for any build with a knob on it, so a
-                                ; knob kernel is bound by guard 2 alone -
-                                ; one 64KB segment, .text + .bss, at
-                                ; 64,622 of 65,536 with 914 LEFT. Nobody
-                                ; can raise that one and this move does
-                                ; not touch it. The knob builds stay
-                                ; exactly as tight as they were, and
-                                ; `make test-full`'s matrix is still the
-                                ; only thing that builds them.
-                                ;
-                                ; THE THIRTY-FOURTH MOVE, 119,808 -> 121,344,
-                                ; THREE STEPS, ALL THREE SPENT.
-                                ;
-                                ; AND THE STANDING STEP WENT WITH THEM AT THE
-                                ; MERGE, which is move 33's sentence again in
-                                ; the other direction. On the branch this was
-                                ; measured on, KERN_SIZE landed at 120,832 and
-                                ; the 512 the thirty-third left standing was
-                                ; still standing - which was the whole reason a
-                                ; fourth step was not asked for. Merging onto
-                                ; elendilon added SPEC.md 12.8.4's cursor fix
-                                ; and the hard-disk mount work: 38 bytes of
-                                ; .text between them, and the image rung was 51
-                                ; from crossing. So the merge crossed a rung
-                                ; NEITHER SIDE CROSSED, by 33 bytes, and
-                                ; KERN_SIZE is now 121,344 - the budget exactly,
-                                ; nothing spare.
-                                ;
-                                ; That is not a build failure and it is not a
-                                ; reason to raise this on its own: the image
-                                ; rung it crossed into has 479 bytes standing,
-                                ; so an ordinary addition still fits. What is
-                                ; gone is the STEP, so the next thing that
-                                ; crosses a rung anywhere needs a decision here
-                                ; rather than finding one already taken. Left
-                                ; deliberately: 512 bytes of every machine's RAM
-                                ; is not something a merge should spend on its
-                                ; own account.
-                                ;
-                                ; ATTRIBUTED TO ONE THING, measured against the
-                                ; build immediately before it and buildable
-                                ; either way (`make NOPLANE=1`):
-                                ;
-                                ;   +1536 SPEC.md 5.4.1.3 - gfx_blit4's PLANAR
-                                ;         ROW DECODER on VGA, which is what
-                                ;         5.4's banner has called "a worthwhile
-                                ;         future optimisation" since the
-                                ;         primitive was written. A VGA run
-                                ;         costs ~1,797 cycles WHATEVER it
-                                ;         covers, so os8088.gif - whose ground
-                                ;         is 63's 50% dither - is 18,978 of
-                                ;         them over 51,260 pixels and SEVEN
-                                ;         SECONDS of canvas on the target
-                                ;         machine. The decoder is priced per
-                                ;         PIXEL instead, at 106.6 cycles of
-                                ;         them, and draws the identical picture
-                                ;         in 1.145 s: 6.2x, and 4.9x on the odd
-                                ;         x that costs it an rcr pass
-                                ;         (PERFORMANCE.md Set 107).
-                                ;
-                                ;         553 bytes of .text and 5 of .bss, which
-                                ;         crossed the image rung by 507 - and
-                                ;         1,024 of .lowbss for the 512-byte
-                                ;         table and the four plane rows, which
-                                ;         is TWO low steps because the low rung
-                                ;         had 234 bytes standing. .lowbss and
-                                ;         not .bss for vid_rowtab's reason
-                                ;         (39.3.1): the segment guard is the one
-                                ;         nobody can raise, and 65,019 of 65,536
-                                ;         is what is left after this.
-                                ;
-                                ;         What it does NOT buy is the 1bpp
-                                ;         adapters, which have had 5.4.1.1's
-                                ;         decoder since Set 44 and are the
-                                ;         machine this project is calibrated
-                                ;         against. This is the VGA half of that
-                                ;         work, seven sets later.
-                                ;
-                                ; THE THIRTY-THIRD MOVE, 117,248 -> 119,808,
-                                ; FIVE STEPS OF WHICH FOUR ARE SPENT -
-                                ; KERN_SIZE lands at 119,296 and the fifth is
-                                ; the step moves 22/23/24 say to leave, which
-                                ; is the thirty-first's sentence again. AT THE
-                                ; MERGE -
-                                ; ATTRIBUTED TO THREE THINGS THAT WERE
-                                ; MEASURED SEPARATELY AND CROSSED TOGETHER.
-                                ; A MERGE for the SIXTH move running, which is
-                                ; move 28's sentence yet again.
-                                ;
-                                ; Each was asked for and granted on its own
-                                ; figure against the pre-merge base, and the
-                                ; three are simply additive - none of them
-                                ; shares a rung with another:
-                                ;
-                                ;   +512  SPEC.md 6.1.11 - a run that is off
-                                ;         the byte grid drawn in ONE pass
-                                ;         instead of a gfx_fill and a font_str
-                                ;         over it. +262 bytes of .text, and it
-                                ;         crossed the rung by 77 of them.
-                                ;
-                                ;   +1536 SPEC.md 5.9/5.9.6/11.101 - the
-                                ;         compose gfx library and wm_title's
-                                ;         COMPOSED BAR. 1,625 raw bytes,
-                                ;         attributed per routine in 5.9.1. It
-                                ;         buys a title bar with NO double-draw
-                                ;         anywhere in it - docs/plans/completed/TEXT-PLAN.md
-                                ;         1.1's whole point - at 36.5 ms
-                                ;         against the fifteen calls' 40.8 on
-                                ;         Hercules and 37.1 against 42.0 on
-                                ;         CGA. On VGA it is 38.3 against 30.3,
-                                ;         the one adapter where it costs time
-                                ;         rather than saving it, and it ships
-                                ;         anyway BECAUSE the flicker is worth
-                                ;         more: over ten window raises the
-                                ;         primitive bar's worst transient frame
-                                ;         is 327, 141, 83, 66 and 250 pixels
-                                ;         and the composed bar's is 26 every
-                                ;         time (PERFORMANCE.md Set 104).
-                                ;
-                                ;         The band itself is a 2KB HEAP CLAIM
-                                ;         (5.9.2) and is not in that figure -
-                                ;         but it does come off every machine's
-                                ;         arena, so a machine small enough to
-                                ;         refuse it gets the fifteen calls back
-                                ;         and nothing else changes.
-                                ;
-                                ;         THE SHIPPED KERNEL NO LONGER SPENDS
-                                ;         THIS ARM. 5.9.6 sent the composer
-                                ;         back to a knob (`make BAND=1`), so
-                                ;         the bytes above are a `BAND=1`
-                                ;         kernel's: the default build hands
-                                ;         1,634 of them back, 1,278 out of
-                                ;         .cold - the section the THIRTY-FIFTH
-                                ;         move at the head of this comment was
-                                ;         taken for - and KERN_SIZE follows,
-                                ;         121,344 -> 120,320.
-                                ;
-                                ;         THE BUDGET IS NOT LOWERED WITH THEM:
-                                ;         this ladder records moves that were
-                                ;         granted, and giving a granted move
-                                ;         back is a decision of its own
-                                ;         (docs/KERNEL-MEMORY.md), not the
-                                ;         arithmetic of the change that freed
-                                ;         the room. What it leaves is 2,048
-                                ;         bytes under the guard where there
-                                ;         were 1,024.
-                                ;
-                                ;   +512  SPEC.md 39.3.1 - gfx_rowbase's row
-                                ;         table going from 128 rows to 348,
-                                ;         which is every row of a Hercules and
-                                ;         therefore of both 1bpp adapters, so
-                                ;         on the target machine it never
-                                ;         misses. 696 bytes of .lowbss where it
-                                ;         was 256. Sized by BUILDING it at 200,
-                                ;         348 and 480 and re-profiling four
-                                ;         applications at each (Set 106): the
-                                ;         screen saver spends 4.69% of the
-                                ;         machine in gfx_rowbase and
-                                ;         gfx_rowbase_calc together on CGA and
-                                ;         now spends 2.85%, Missile Command
-                                ;         1.66% -> 0.75%. 200 would have cost
-                                ;         the SAME step - the low rung rounds
-                                ;         either to 9,728 - so the choice was
-                                ;         348 or nothing, and the second step
-                                ;         that would cover a VGA's 480 is
-                                ;         priced there and not taken.
-                                ;
-                                ;         kern_small does NOT get this one: its
-                                ;         low rung crosses at any table above
-                                ;         128 - 200 crosses it too, so a
-                                ;         smaller table would rescue nothing -
-                                ;         and KERN_SMALL_BUDGET is the figure
-                                ;         that has to be defended. It keeps the
-                                ;         128-row table behind the same
-                                ;         %ifdef KERN_BIG that WM_ANIM and
-                                ;         OS88_THEME use.
-                                ;
-                                ; THE THIRTY-FIRST MOVE, 116,224 -> 117,248,
-                                ; 1KB, one step of spare - ATTRIBUTED TO THE
-                                ; PS/2 MOUSE BACKEND SWAP at the squash with
-                                ; upstream: the twenty-ninth move funded a
-                                ; 376-byte backend, upstream wrote the same
-                                ; feature at ~690 bytes (SPEC.md 9.9, the one
-                                ; that ships), and keeping theirs over ours
-                                ; crossed the image rung the union had left
-                                ; 398 bytes from. A MERGE for the FIFTH move
-                                ; running - move 28's sentence yet again. 1KB
-                                ; and not 512 because 512 lands at ZERO spare,
-                                ; which is moves 22/23/24's rule; one step is
-                                ; left for ordinary growth, not an invitation.
-                                ;
-                                ; THE THIRTIETH MOVE, 115,200 -> 116,224,
-                                ; ASKED FOR AND GRANTED, 1KB, two steps -
-                                ; ATTRIBUTED TO THE ANIMATED SCREEN SAVER
-                                ; (SPEC.md 79) MEETING SPEC.md 18.99's DISK
-                                ; CLONE. kern_big's ALONE: kern_small filters
-                                ; SAVER.DRV out and does not get the feature.
-                                ;
-                                ; WHAT IT IS FOR is a MERGE, which makes it
-                                ; the twenty-eighth move's sentence again and
-                                ; the FOURTH time that has been the reason -
-                                ; feature branches are long, each is measured
-                                ; against the guard alone, and the guard is
-                                ; crossed by the union. Measured against the
-                                ; merge base (109,522 bytes of kernel-full):
-                                ; the integration branch's eleven commits are
-                                ; +4,279 and the screen saver is +135. The
-                                ; saver ALONE would have moved nothing; what
-                                ; it did was spend the last of two rungs that
-                                ; were both nearly full - the image rung had
-                                ; 398 bytes left and .cold had 466 - so the
-                                ; union crossed BOTH at once, which is why
-                                ; this is 1KB and not 512.
-                                ;
-                                ; THE ONE RECLAIM WAS SIZED AND REFUSED, and
-                                ; is written down so it is not re-proposed:
-                                ; gfx_line_fast (SPEC.md 5.6.6) is 647 bytes
-                                ; and every one of them is .text, so dropping
-                                ; it clears the IMAGE rung and leaves .cold's
-                                ; 466 exactly where they were. It buys one
-                                ; step of the two, costs a measured 5x on
-                                ; every line the system draws - including the
-                                ; saver's own geometry mode, which IS a
-                                ; resumable line walk - and the budget still
-                                ; has to move 512. Half the win for all of
-                                ; the cost.
-                                ;
-                                ; THIS MOVE LANDS AT ZERO SPARE, deliberately
-                                ; and against moves 22/23/24's rule, because
-                                ; the owner asked for 1KB with a separate
-                                ; hunt for savings already planned (.cold's
-                                ; disk-clone code is where it is aimed). Zero
-                                ; spare is less brittle here than the rule's
-                                ; wording implies: KERN_SIZE only moves when a
-                                ; RUNG crosses, and after this merge there are
-                                ; 398 bytes of image-rung slack and 466 of
-                                ; .cold to absorb ordinary growth first. The
-                                ; guard fires on the next CROSSING, which is
-                                ; the conversation it exists to force.
-                                ;
-                                ; THE TWENTY-NINTH MOVE, 114,176 -> 115,200,
-                                ; ASKED FOR AND GRANTED, 1KB, two steps -
-                                ; ATTRIBUTED TO THE PS/2 MOUSE. kern_big's
-                                ; ALONE: kern_small does not take a byte of
-                                ; it and does not get the feature, for the
-                                ; reason written beside its own figure.
-                                ;
-                                ; WHAT IT IS FOR is the second mouse backend -
-                                ; an 8042 auxiliary device on IRQ12. The move
-                                ; was granted against a 376-byte draft; the
-                                ; backend that ships is SPEC.md 9.9's, written
-                                ; upstream in parallel and kept when the two
-                                ; met (this ledger keeps the move because the
-                                ; feature it funds is the same one): ~690
-                                ; bytes of .text inside mouse.inc, probe and
-                                ; decode both, ending in mou_apply. It is
-                                ; the FIRST move at the 1KB unit since the
-                                ; twenty-fifth, and 1KB and not 512 is moves
-                                ; 22/23/24's rule again: 114,688 assembles and
-                                ; is ZERO spare, which hands the next byte
-                                ; added anywhere the failure the move exists
-                                ; to repair.
-                                ;
-                                ; THE FEATURE IS RESIDENT ON A MACHINE THAT
-                                ; CANNOT USE IT, and that is stated here
-                                ; rather than discovered later. The 8088 is
-                                ; this project's primary target and an IBM
-                                ; PC/XT has an 8255 PPI - no auxiliary
-                                ; device, no IRQ12 - so mou_p2_init reads
-                                ; [cpu_tier], finds CPU_8086 and returns
-                                ; having done nothing, and every resident byte
-                                ; sits in the field 5150's RAM unreachable
-                                ; (SPEC.md 9.9.2's first gate). What
-                                ; buys them is that big is ALSO the 286 and
-                                ; 386 build, and by the time those were the
-                                ; machine on the desk the PS/2 port was the
-                                ; standard one - a mouse on those machines is
-                                ; likelier to be PS/2 than serial. It is the
-                                ; twenty-seventh move's wake-mechanism shape
-                                ; (resident everywhere for a machine that is
-                                ; not everywhere) taken deliberately and with
-                                ; a user-visible feature at the end of it,
-                                ; rather than noticed afterwards. If this
-                                ; guard ever has to be DEFENDED rather than
-                                ; raised, this is the second thing to weigh -
-                                ; behind the wake mechanism, because unlike
-                                ; the wake mechanism something ships that
-                                ; uses it.
-                                ;
-                                ; THE TWENTY-EIGHTH MOVE, 112,128 -> 114,176,
-                                ; ASKED FOR AND GRANTED, 2KB, three steps
-                                ; of headroom - ATTRIBUTED TO WINDOW SIZE
-                                ; ADAPTATION STANDARDIZATION. kern_small takes
-                                ; 512 of it, for the reason written beside its
-                                ; own figure.
-                                ;
-                                ; WHAT IT IS FOR is a MERGE for the THIRD move
-                                ; running, and at that point it is a property
-                                ; of how this tree works rather than a run of
-                                ; bad luck: feature branches are long, they
-                                ; are each measured against the guard alone,
-                                ; and the guard is crossed by the union. This
-                                ; one is the extended desktop's sizing work
-                                ; (SPEC.md 11.100 - OSAPI_WM_PREFER,
-                                ; OSAPI_WM_MINSIZE and OSAPI_WM_DISPLAY, the
-                                ; per-slot preference offset, minimum and
-                                ; sized-for-adapter arrays, wm_land_fit's one
-                                ; landing sequence and wm_disp_now's one
-                                ; answer to "which display is this window's")
-                                ; meeting the themes and the zoom animation
-                                ; (SPEC.md 76, 11.99) coming the other way.
-                                ; Measured: .text +1,243, .bss +104 against
-                                ; the baseline elendilon blessed, which stood
-                                ; at 512 spare - so neither side crossed and
-                                ; the union crossed by exactly one step.
-                                ;
-                                ; 2KB AND NOT 512 IS MOVES 22/23/24'S RULE
-                                ; APPLIED: 112,640 assembles and is ZERO
-                                ; spare, which hands the next byte added
-                                ; anywhere the identical failure this move
-                                ; repairs. Three steps, one under the standard
-                                ; the fifth move set, so the next feature asks
-                                ; in the usual way rather than finding room
-                                ; here.
-                                ;
-                                ; THE TWENTY-SEVENTH MOVE, 110,592 -> 112,128,
-                                ; ASKED FOR AND GRANTED, 1.5KB, three steps,
-                                ; ATTRIBUTED TO THE MERGE FROM main - the C
-                                ; toolchain, CWORD, RunCPM and the ten review
-                                ; fixes. kern_small takes 512 of it and no
-                                ; more; the accounts have parted and the
-                                ; reason is written beside its own figure.
-                                ;
-                                ; WHAT IT IS FOR is a MERGE again, which is
-                                ; the second time running and worth naming as
-                                ; a shape rather than a coincidence: two trees
-                                ; that were never built together each fit
-                                ; their own guard, and the guard is crossed by
-                                ; the union. This one is main's mid-cycle work
-                                ; coming the other way - and most of what it
-                                ; put in the KERNEL is not the C toolchain at
-                                ; all, which is a host-side compiler and costs
-                                ; the kernel nothing. It is RunCPM's WAKE
-                                ; MECHANISM (SPEC.md 74.1): wm_wake,
-                                ; wm_onwake, wm_wake_disp and wm_wkh_slot, the
-                                ; wm_onwk side table and wm_wkq beside it,
-                                ; EVT_WAKE through the event queue and
-                                ; ui_task, and three API cells - plus
-                                ; osapi_file_goto_qm. The ten review fixes are
-                                ; the rest: mem_cp_busy's guard at four sites,
-                                ; mem_reloc_call banking every register,
-                                ; DRV_H_FSV's version test in drv_fs_call and
-                                ; drv_fs_has, dsk_xfer nesting [mem_pinseg],
-                                ; and 11.96.13.1's two-display guard.
-                                ;
-                                ; THAT WAKE MECHANISM IS RESIDENT ON EVERY
-                                ; MACHINE FOR A PACKAGE THAT SHIPS ON NO
-                                ; FLOPPY, and it is recorded here rather than
-                                ; argued about: RunCPM needs the C toolchain
-                                ; to build and rides a disk of its own, so the
-                                ; 128KB machine and the field 5150 both carry
-                                ; the kernel half of a feature they cannot
-                                ; run. It is small, it is a published ABI the
-                                ; moment a package calls it, and no shipped
-                                ; app uses it yet. If the guard ever has to be
-                                ; defended rather than raised, this is the
-                                ; first thing to weigh - ahead of anything a
-                                ; user can see.
-                                ;
-                                ; THE PREVIOUS MOVE'S GRANT WAS SPENT BY
-                                ; NETWORKING. The twenty-sixth left 1,024
-                                ; spare on each build and the browser, Telnet,
-                                ; ETHER.DRV, the socket layer and OS88NET took
-                                ; it down to SIXTY-THREE BYTES of image-rung
-                                ; slack without ever crossing a rung - so the
-                                ; footprint figure never moved and the ledger
-                                ; never said so. That is the shape to watch:
-                                ; a guard reports rungs, and work can fill one
-                                ; almost exactly while every number in the
-                                ; account stays still.
-                                ;
-                                ; THE TWENTY-SIXTH MOVE, 109,568 -> 110,592,
-                                ; ASKED FOR AND GRANTED, 1KB, two steps, AND
-                                ; THE SAME 1KB WENT TO kern_small - which is
-                                ; unusual and is the whole story of this one.
-                                ; ATTRIBUTED TO THE RAM DISK AND UI
-                                ; STANDARDIZATION.
-                                ;
-                                ; WHAT IT IS FOR is a MERGE rather than a
-                                ; feature. Two branches spent against these
-                                ; guards independently - the RAM disk, its
-                                ; Control Panel page and SPEC.md 31.9.2's
-                                ; typed field on one side, SPEC.md 13.8's
-                                ; button interactions on the other - and
-                                ; neither crossed its budget alone. Merged,
-                                ; they landed EXACTLY on both: kern_big at
-                                ; 109,568 of 109,568 and kern_small at 103,936
-                                ; of 103,936, zero spare on each. That builds
-                                ; and boots and cannot take one more byte
-                                ; anywhere, which is not a state to leave a
-                                ; tree in.
-                                ;
-                                ; kern_small gets the same 1KB because it took
-                                ; the same collision: 13.8's work is kern_big's
-                                ; alone, but 13.10's shared scroll bar and the
-                                ; RAM disk's own arrival are in both, and small
-                                ; was the build with 21 bytes of cold-rung
-                                ; slack before any of it.
-                                ;
-                                ; THE PREVIOUS MOVE'S TERMS ARE SPENT AND ITS
-                                ; RECORD STANDS BELOW. That grant said the work
-                                ; would be reconsidered rather than the figure
-                                ; raised again, and it was honoured: every
-                                ; conversion in docs/plans/completed/UIHELPERS-PLAN.md 15.4
-                                ; landed inside the 1KB. This is a different
-                                ; ask for a different reason.
-                                ;
-                                ; THE TWENTY-FIFTH MOVE, 108,544 -> 109,568,
-                                ; ASKED FOR AND GRANTED, kern_big's alone.
-                                ; 1KB, two steps, ATTRIBUTED TO BUTTON
-                                ; INTERACTIONS - SPEC.md 13.8's down state,
-                                ; 13.8.2's tracking edge and 13.9's one-shot
-                                ; timer, and the conversion of every control
-                                ; that still acts on the PRESS to act on the
-                                ; release instead (docs/plans/completed/UIHELPERS-PLAN.md
-                                ; 15.4).
-                                ;
-                                ; THE GRANT'S TERMS ARE WORTH KEEPING, because
-                                ; they are narrower than the usual four-step
-                                ; standard on purpose: 1KB, and if the
-                                ; remaining conversion work does not fit in
-                                ; it, the work is reconsidered rather than the
-                                ; figure raised again. It lands at 1,536 spare
-                                ; (three steps) over the 108,032 this arrived
-                                ; at.
-                                ;
-                                ; AND FROM THIS MOVE ON, THIS FAMILY OF
-                                ; FEATURES IS kern_big's ALONE. Everything
-                                ; above is inside %ifdef KERN_BIG - the three
-                                ; API slots are stc/ret stubs in the small
-                                ; build (gfx_blit1's precedent, SPEC.md
-                                ; 5.4.2), the three window-record words are
-                                ; not there at all, and WIN_SIZE is 34 against
-                                ; small's 28. kern_small is the guard the
-                                ; 128KB machine lives under and it cannot
-                                ; afford the niceties; it was measured AT ZERO
-                                ; SPARE when this split was made, which is
-                                ; what forced the question.
-                                ;
-                                ; THE TWENTY-FOURTH MOVE, 107,008 -> 108,544,
-                                ; ASKED FOR AND GRANTED, kern_big's alone.
-                                ; 1.5KB, three steps, ATTRIBUTED TO THE FONT
-                                ; SYSTEM - SPEC.md 5.4.2's gfx_blit1 and the
-                                ; proportional type it exists for (6.3-6.5,
-                                ; 19.8), which arrived in the merge from main.
-                                ;
-                                ; WHAT IT COST AND WHERE: the merged kernel
-                                ; measures 107,520, which is 512 OVER the old
-                                ; figure - one step, not three. The grant is
-                                ; deliberately larger than the overrun, so the
-                                ; landing is 1,024 spare (two steps) rather
-                                ; than the ZERO the smallest honest figure
-                                ; would have given; 107,520 exactly would hand
-                                ; the next byte added anywhere the same build
-                                ; failure this move repairs, which is the trap
-                                ; moves 22 and 23 were both called out for.
-                                ; It is still one step UNDER the four-step
-                                ; standard, so the next feature asks in the
-                                ; usual way rather than finding room here.
-                                ;
-                                ; kern_small is UNTOUCHED at 103,424 and needs
-                                ; nothing: it carries the slot cell and a
-                                ; stc/ret stub instead of gfx_blit1's body
-                                ; (SPEC.md 5.4.2), which is main's own +10
-                                ; bytes, and it was re-measured at this merge
-                                ; rather than assumed - the two builds have
-                                ; twice been discovered broken rather than
-                                ; reported broken, because `all` never builds
-                                ; the small one.
-                                ;
-                                ; THE TWENTY-FIRST MOVE, 104,960 -> 107,008,
-                                ; ASKED FOR AND GRANTED, kern_big's alone -
-                                ; kern_small is untouched at three steps spare
-                                ; and needs nothing. 2KB, four steps, which is
-                                ; the standard headroom the fifth move settled
-                                ; on and which the tree had run out of: merged,
-                                ; the footprint sat at 104,960 of 104,960, ZERO
-                                ; spare, so the next byte anywhere in .text
-                                ; failed the build.
-                                ;
-                                ; NAMED FOR TWO THINGS, on the grant's own
-                                ; terms: docs/plans/completed/DUAL-DISPLAY-VGA.md's VGA +
-                                ; HERCULES EXTENDED DESKTOP, and BUGFIXES.
-                                ;
-                                ; WHAT ARRIVED AT ZERO IS WORTH THE LINE,
-                                ; because neither half did it alone and the
-                                ; attribution was measured rather than
-                                ; inferred - origin/elendilon built on its own
-                                ; is 104,448 with 512 spare and 121 bytes left
-                                ; in its image rung, and this branch's +162 of
-                                ; .text landed on that 121 and crossed it. So
-                                ; steps 1-3 (62 bytes) would have fitted and
-                                ; step 4's 100 - SPEC.md 39.20, the reboot
-                                ; path naming the CARD rather than asking
-                                ; int 10h for a mode - is what spent the last
-                                ; step. It is a correctness fix for a bus
-                                ; conflict between a VGA in mode 7 and a real
-                                ; Hercules, so trimming it to stay under was
-                                ; not the trade to make.
-                                ;
-                                ; THREE MOVES MET IN ONE MERGE, and none of
-                                ; them cancels another: the eighteenth was
-                                ; granted for the network driver and the
-                                ; nineteenth and twentieth for the blit, both
-                                ; against the same 100,352 base and on
-                                ; different branches. Taking the larger of the
-                                ; two answers would have silently REVOKED one
-                                ; grant - the network driver's, whose spending
-                                ; is mostly still ahead of it - so the figure
-                                ; is the base plus all three, and the numbering
-                                ; below follows the integration branch's.
-                                ;
-                                ; THE EIGHTEENTH MOVE, 100,352 -> 102,400,
-                                ; ASKED FOR AND GRANTED, kern_big's alone and
-                                ; the third of those. 2KB on the thirteenth
-                                ; move's terms - headroom, half a step - for
-                                ; SPEC.md 62's NETWORK DRIVER
-                                ; (docs/plans/completed/NET-PLAN.md).
-                                ;
-                                ; WHAT IT HAS ALREADY SPENT is stage 1, which
-                                ; is on this branch and is 175 bytes: DV_CLASS
-                                ; and the per-class volume drop (18.7.3),
-                                ; DRVC_NET's publication slot (51.2.1), and
-                                ; the Control Panel window growing 140 -> 151
-                                ; to hold a third driver page (31.1). That
-                                ; landed INSIDE the rung the merge left, which
-                                ; is why the guard read one step against a
-                                ; standard of four before this move and not
-                                ; because of it.
-                                ;
-                                ; WHAT IT IS FOR is the rest: stage 2's file
-                                ; REDIRECTOR, estimated at ~400 bytes across
-                                ; twelve branch sites in the file layer, and
-                                ; stage 3's OSAPI_DRV_CALL - the cell that
-                                ; lets a PACKAGE reach a driver at all, which
-                                ; is what mTCP forwarding needs and which
-                                ; nothing else in the tree has ever wanted. On
-                                ; move 10's terms: granted ahead of the work,
-                                ; and whatever those two do not spend is
-                                ; handed back rather than kept. It leaves five
-                                ; steps, one above the standard four, and that
-                                ; extra step is the redirector's estimate plus
-                                ; the margin an estimate wants.
-                                ;
-                                ; kern_small is deliberately NOT moved, and it
-                                ; needs nothing: on the merged tree stage 1
-                                ; crosses no rung there - 94,208, four steps,
-                                ; the standard - because its 175 bytes SPEND
-                                ; slack the rung this merge already had open,
-                                ; rather than cost nothing.
-                                ; (Measured on the branch BEFORE the merge it
-                                ; did cross one, 113 -> 114 steps; that figure
-                                ; is a property of the tree it was taken on
-                                ; and not of the change, which is the whole
-                                ; reason a merge re-measures rather than
-                                ; carrying a number across.) The fifteenth
-                                ; move's drift says the small guard should
-                                ; stay the tighter of the two, and at 96,256
-                                ; against 102,400 it now is by 6KB. If the
-                                ; redirector turns out not to fit there, the
-                                ; question to ask is whether a 128KB machine
-                                ; wants a network drive at all - not whether
-                                ; the guard should follow.
-                                ;
-                                ; THE NINETEENTH AND TWENTIETH MOVES ARE ONE
-                                ; PIECE OF WORK: BLIT4 RENDERING SPEED.
-                                ;
-                                ; The nineteenth, 102,400 -> 102,912, was one
-                                ; step and was an ASK rather than a grant: the
-                                ; pair decoder (SPEC.md 5.4.1.1) landed exactly
-                                ; ON the guard, so without it the next byte
-                                ; anywhere failed to build. What that step buys
-                                ; is 512 bytes of PAIR TABLE - a source byte is
-                                ; two pixels and maps to a two-bit destination
-                                ; pattern, so 2 x 256 entries make the inner
-                                ; loop a read, an xlat and a shift.
-                                ;
-                                ; THE TWENTIETH, 102,912 -> 104,960, IS 2KB
-                                ; ASKED FOR AND GRANTED for the rest of that
-                                ; work. gfx_blit4 is the largest single drawing
-                                ; cost in the system and it is under Paint's
-                                ; canvas, Solitaire's card backs and
-                                ; ARTFULTYPE'S KEYSTROKE - one line of text
-                                ; through one blit, which the field reports as
-                                ; twenty characters in twenty seconds. Measured
-                                ; so far: 5,526 -> 2,431 -> 517 -> 259 ms on a
-                                ; Paint canvas, and CONSTANT in the content
-                                ; (PERFORMANCE.md Sets 41, 42 and 43). 148 of
-                                ; that 2KB went on SPEC.md 5.4.1.2's two
-                                ; aligned bodies, one per destination-x parity,
-                                ; and 417 on 11.96.11's cache band - which is
-                                ; not blit work, and is charged here because
-                                ; this is the step that was open. 1,024 left.
-                                ;
-                                ; TWO WAYS TO HAND THE FIRST STEP BACK if the
-                                ; footprint is ever wanted, both costed:
-                                ; packing SPEC.md 5.4.1.1's gfx_pairtab0 and
-                                ; gfx_pairtab1 into a single table (256 bytes,
-                                ; two loop variants, ~30 bytes of code back),
-                                ; and dropping the VGA span writer (169 bytes,
-                                ; SPEC.md 5.4.1) at the price of its 1.95x.
-                                ; Neither is a rewrite. (This cited a
-                                ; LAST-DROP.md 3 that has not existed for
-                                ; some time and never carried the claim: that
-                                ; file's 3 was the blit decoder's hybrid, and
-                                ; it split into LAST-DROP-BYTES and
-                                ; LAST-DROP-PERF, neither of which mentions a
-                                ; packed table. The costing above is this
-                                ; comment's own.)
-                                ;
-                                ; THE SEVENTEENTH MOVE, 98,304 -> 100,352,
-                                ; ASKED FOR AND GRANTED, and the first since
-                                ; the fourteenth to move BOTH guards: 2KB here
-                                ; and 2KB on kern_small, which is deliberate
-                                ; and is the whole argument for the raise. What
-                                ; it buys is WINDOW DRAWING OPTIMIZATIONS -
-                                ; SPEC.md 5.8's partial restore, 11.96.6's
-                                ; cache restoring only what the pass painted,
-                                ; 11.96.8's bounded edge merge, 11.90.1's
-                                ; opt-out fill and 11.90.2's damage rect - and
-                                ; those are not a feature a big machine enjoys
-                                ; and a small one does without. They are what
-                                ; makes the OS FEEL SNAPPY, and the machine
-                                ; that feels a 49 ms restore becoming 23 is the
-                                ; 4.77MHz one at the RAM floor. So kern_small
-                                ; cannot be the build that goes without them,
-                                ; and this is the direction the fifteenth
-                                ; move's drift does not apply in.
-                                ;
-                                ; WHAT SPENT THE PRIOR STEP is the same work,
-                                ; and it is worth naming because the guard had
-                                ; fallen to ONE step against a standard of
-                                ; four: 11.96.9's fix - a partial draw may not
-                                ; re-bank, the field bug 11.96.6 introduced -
-                                ; crossed the rung the image had 15 bytes left
-                                ; of, so the next .text byte anywhere paid 512
-                                ; whatever it was for. Granted at 2KB on the
-                                ; thirteenth move's terms (headroom, half a
-                                ; step) with the round's biggest item still to
-                                ; come: a raise restoring only what was
-                                ; COVERED (docs/plans/completed/HANDOFF-REDRAW.md item A),
-                                ; which is a wm_raise change and not a new
-                                ; mechanism, and which turns Paint's 8.7 s
-                                ; canvas into ~0.9 s on the case the reporter
-                                ; described.
-                                ;
-                                ; THE SIXTEENTH MOVE, 96,256 -> 98,304, ASKED
-                                ; FOR AND GRANTED, and the second that is
-                                ; kern_big's alone. 2KB again, for the rest of
-                                ; SPEC.md 39's dual display - 39.16's union
-                                ; and what follows it - on the fifteenth
-                                ; move's terms.
-                                ;
-                                ; WHAT SPENT THE FIFTEENTH IS WORTH RECORDING,
-                                ; because the two rounds landed in the same
-                                ; week and the arithmetic reads as one. Dual
-                                ; display took 39.12's context, 39.13's second
-                                ; card, 39.14's split, 39.15's cursor and
-                                ; 39.16's union; the spare it left went to
-                                ; SPEC.md 18.96/22.12's floppy FORMAT and
-                                ; 11.96.3's per-window raise cache, which are
-                                ; other work and are what took the guard from
-                                ; two steps to one. A raise is granted for a
-                                ; feature, so which feature spent the last one
-                                ; is the question the next request has to
-                                ; answer, and it is not always the one asking.
-                                ;
-                                ; THE FIFTEENTH MOVE, 94,208 -> 96,256, AND
-                                ; THE FIRST THAT IS kern_big's ALONE. 2KB,
-                                ; asked for and granted, for SPEC.md 39's
-                                ; dual display (docs/plans/completed/DUAL-DISPLAY-PLAN.md):
-                                ; the estimate is 1,400-1,900 bytes and the
-                                ; spare had fallen to 1,024 (two steps) after
-                                ; the disk round, so the feature no longer
-                                ; fitted. Granted at 2KB on the thirteenth
-                                ; move's terms - headroom, half a step - and
-                                ; NOT at the 4KB that would pre-authorise
-                                ; another feature's worth.
-                                ;
-                                ; What is new is which guard moved. Every one
-                                ; of the previous fourteen moved the figure
-                                ; the 128KB machine lives under, because there
-                                ; was only one. This one does not: KERN_SMALL
-                                ; stays at 94,208 and the raise buys room on
-                                ; the machine that has RAM, which is the whole
-                                ; reason the split exists. The fifth move's
-                                ; rule still stands for both - headroom for
-                                ; ordinary growth, not an invitation to spend
-                                ; it - and kern_small's is now the tighter of
-                                ; the two by 2KB, which is the direction it
-                                ; should drift from here.
+                                ; = 100,864
 %else
-KERN_BUDGET equ 107520          ; the whole kernel's FOOTPRINT. Growing past
-                                ; this is not a build detail - see
-                                ; docs/KERNEL-MEMORY.md before raising it.
-                                ;
-                                ; THE THIRTY-FOURTH MOVE'S OTHER ARM,
-                                ; 107,008 -> 107,520 - ONE move with big's
-                                ; 119,808 -> 121,344 above and not a
-                                ; second one, because the ledger runs one
-                                ; sequence across BOTH kernels (moves 26,
-                                ; 27 and 28 are each labelled `both`) and
-                                ; these two arms are one merge. Numbered
-                                ; separately once, which left two moves
-                                ; called the thirty-fourth arguing opposite
-                                ; things - big's "three steps, all spent"
-                                ; against small's "512 and not 1,024".
-                                ;
-                                ; 512 BYTES, ONE STEP, AT THE SAME MERGE -
-                                ; ATTRIBUTED TO THE CONTROL GLYPH (SPEC.md
-                                ; 25.6) MEETING THE HEAD-SWITCH BOOT FIX
-                                ; (18.93.1/18.93.2). Both arms funded a 512
-                                ; step to 107,008 against the same 106,496,
-                                ; each measured alone and each fitting; the
-                                ; union is 107,520 and neither is the one to
-                                ; give up. What the glyph buys the small
-                                ; machine is a 12x12 control at 6.7 ms where
-                                ; it was 33.6, and a Sound-page press edge at
-                                ; 6.7 where it was 82.8 (PERFORMANCE.md Set
-                                ; 84) - which is not a thing to take off the
-                                ; 128KB machine to save it half a kilobyte.
-                                ;
-                                ; IT LANDS AT ZERO SPARE, which is exactly
-                                ; what moves 22, 23 and 24 were each called
-                                ; out for: the next byte added to kern_small
-                                ; fails the build. 512 and not 1,024 because
-                                ; this is the figure that has to be DEFENDED
-                                ; and a 128KB machine's heap is 25.0 KB - the
-                                ; second step is a quarter of what a package
-                                ; has left and it has not been asked for. The
-                                ; next person to add to this arm is being told
-                                ; here that they will be having this
-                                ; conversation.
-                                ;
-                                ; THE THIRTY-SECOND MOVE, 106,496 -> 107,008,
-                                ; ASKED FOR AND GRANTED, 512 BYTES, ONE STEP,
-                                ; ATTRIBUTED TO THE HEAD-SWITCH BOOT FIX -
-                                ; SPEC.md 18.93.1's canary and 18.93.2's
-                                ; per-track read, which is the last commit of
-                                ; this round and the one that crossed the
-                                ; rung. kern_big does NOT move for it: the
-                                ; thirty-first move left that figure a step,
-                                ; and the same code sits inside it.
-                                ;
-                                ; THE NUMBERING IS THE TABLE'S, not this
-                                ; arm's own count - the paragraphs below run
-                                ; on a local sequence that has collided with
-                                ; itself twice, and the kern_big arm's
-                                ; sequence above is the one to trust.
-                                ;
-                                ; THE OVERRUN WAS SIX BYTES and the grant is
-                                ; a whole rung, which is the shape moves 22
-                                ; and 23 of the ledger both had before it:
-                                ; `.text` + `.bss` came to
-                                ; 55,814 against a rung top of 55,808, so the
-                                ; footprint stepped 106,496 -> 107,008 and
-                                ; `make small` stopped assembling. Trimming
-                                ; the six was costed and REFUSED by the owner:
-                                ; every candidate is a feature this round
-                                ; landed deliberately on the 128KB build -
-                                ; wm.inc's right-click side table says in its
-                                ; own comment that it is in kern_small on
-                                ; purpose, and vga12.inc's `gfx_lm_pre` is
-                                ; SPEC.md 5.6.4.3's correctness fix - so the
-                                ; six bytes would come out of shipped
-                                ; behaviour rather than out of slack.
-                                ;
-                                ; IT LANDS AT ZERO SPARE, and that is the
-                                ; second half of the decision rather than an
-                                ; oversight: the rung has 506 bytes of slack
-                                ; inside it, so what fails next is the next
-                                ; CROSSING, which is the conversation this
-                                ; guard exists to force. The next ask is 1KB
-                                ; again unless somebody says otherwise.
-                                ;
-                                ; THE TWENTY-SECOND MOVE, 105,984 -> 106,496,
-                                ; ASKED FOR AND GRANTED, 512 BYTES, ONE STEP,
-                                ; ATTRIBUTED TO DISK IMG WRITE - SPEC.md
-                                ; 18.99.8's `IMG` target and `Write Img...`.
-                                ; kern_big does NOT move for it: that figure
-                                ; had a step in hand and still has 512 spare
-                                ; after the same code, so this is the small
-                                ; build alone catching up to a feature both
-                                ; builds carry.
-                                ;
-                                ; WHAT IT BUYS is 110 bytes, and the shape of
-                                ; that number is the argument. The feature's
-                                ; whole TRANSFER is in CLONE.DRV, which costs
-                                ; this figure nothing (SPEC.md 2.8); what is
-                                ; resident is the menu item, `fm_c_wimg`, and
-                                ; the dialog's completion proc - 208 bytes of
-                                ; `.cold` against the 98 the rung had left.
-                                ;
-                                ; MOVING THE COMPLETION PROC INTO THE IMAGE
-                                ; WAS TRIED FIRST AND IS REFUSED BY THE
-                                ; ARCHITECTURE, which is worth writing down
-                                ; because it looks obvious and is not:
-                                ; `fm_clone_res` calls `fm_edit_end`, and
-                                ; fm_edit_end is what DROPS CLONE.DRV
-                                ; (SPEC.md 2.8.3). A body living in the image
-                                ; that called it would free the code it was
-                                ; about to return through. The split that
-                                ; avoids that - the image runs the verb, a
-                                ; resident tail runs the teardown - leaves
-                                ; most of the bytes resident anyway: measured
-                                ; at ~50 of the 110, for two new far entries
-                                ; and a second boundary on the one path in
-                                ; this feature that is already the fiddliest.
-                                ; The rung was crossed either way.
-                                ;
-                                ; What WAS taken instead is the honest 30:
-                                ; `fm_clone_bad` is now one proc rather than
-                                ; two copies, and `fm_img_done`'s two halves
-                                ; share one repaint tail. Both builds keep it.
-                                ;
-                                ; THE TWENTY-FIRST MOVE, 105,472 -> 105,984,
-                                ; ASKED FOR AND GRANTED, 512 BYTES, ONE STEP,
-                                ; ATTRIBUTED TO WINDOW SIZE ADAPTATION
-                                ; STANDARDIZATION - kern_big's twenty-eighth
-                                ; move, and a QUARTER of it, the account
-                                ; beside that figure carrying the full story.
-                                ;
-                                ; WHAT IT REPAIRS IS NOT THIS ROUND'S WORK.
-                                ; Measured at the merge, this build stood at
-                                ; KERN_SIZE 105,472 EXACTLY - zero spare, not
-                                ; one byte - and the sizing work costs it
-                                ; nothing net: the extended desktop is
-                                ; kern_big's (there is one display on a 128KB
-                                ; machine), so what small carries is the three
-                                ; API cells, the per-slot preference and
-                                ; minimum arrays and wm_apply_size's one
-                                ; sequence, against an OSAPI_WM_DISPLAY that
-                                ; is a `mov si`/`jmp osapi_video` there rather
-                                ; than a body. It came out even.
-                                ;
-                                ; The zero was SPEC.md 76.12.3's, said out
-                                ; loud when the theme landed - "0 spare, 0
-                                ; steps... the next byte added anywhere fails
-                                ; that build" - and named as a decision owed
-                                ; rather than a build fix. This is that
-                                ; decision, taken at the first merge that had
-                                ; to assemble both kernels. One step and not
-                                ; two, because move 18's judgement stands
-                                ; below and nothing here argues with it: the
-                                ; 128KB machine's kernel is already too big.
-                                ;
-                                ; THE TWENTIETH MOVE, 104,960 -> 105,472,
-                                ; ASKED FOR AND GRANTED, 512 BYTES, ONE STEP,
-                                ; ATTRIBUTED TO THE MERGE FROM main - and it
-                                ; is a THIRD of what kern_big took in the same
-                                ; round, which is the point of it. The two
-                                ; guards have moved together for four moves
-                                ; running; they part here. Small carries the
-                                ; same review fixes and the same wake
-                                ; mechanism - the API table is one table and a
-                                ; slot cannot exist in one build and not the
-                                ; other (SPEC.md 20.8 rule 4) - but it is the
-                                ; figure the 128KB machine lives under, so it
-                                ; gets what this round actually cost it and
-                                ; not a share of the headroom. It lands at
-                                ; 1,024 spare, two steps, against big's four.
-                                ;
-                                ; THE NINETEENTH MOVE, 103,936 -> 104,960,
-                                ; ASKED FOR AND GRANTED, 1KB, two steps,
-                                ; ATTRIBUTED TO THE RAM DISK AND UI
-                                ; STANDARDIZATION - kern_big's twenty-sixth
-                                ; move, the same 1KB, the same reason, and the
-                                ; full account is up there beside it.
-                                ;
-                                ; THE SHORT VERSION, because this is the guard
-                                ; that has to be defended: this is not a
-                                ; feature's raise. Two branches spent against
-                                ; these guards independently and neither
-                                ; crossed alone; merged, they landed EXACTLY
-                                ; on both, zero spare. What reached kern_small
-                                ; is not SPEC.md 13.8's button work - that is
-                                ; kern_big's alone - it is SPEC.md 13.10's
-                                ; shared scroll bar and the RAM disk's own
-                                ; arrival, and this build had 21 bytes of
-                                ; cold-rung slack before either.
-                                ;
-                                ; THE EIGHTEENTH MOVE'S JUDGEMENT STANDS AND IS
-                                ; WORTH RE-READING BELOW: *this kernel is
-                                ; already too big and wants TRIMMING work*.
-                                ; That has not happened, and a second raise in
-                                ; two rounds is the strongest argument yet that
-                                ; it should - so this one is a 1KB unit rather
-                                ; than the four-step standard, and the next
-                                ; request on this guard should be met with a
-                                ; trim rather than a figure.
-                                ;
-                                ; THE EIGHTEENTH MOVE, 103,424 -> 103,936,
-                                ; ASKED FOR AND GRANTED, AND IT IS 512 - HALF
-                                ; the 1KB unit the rule below sets, which is
-                                ; the smallest this figure has ever moved by.
-                                ; That is the grant's own judgement and it is
-                                ; worth keeping in the reader's way: *this
-                                ; kernel is already too big and wants TRIMMING
-                                ; work*, which is a future thing, and until it
-                                ; happens the guard is raised by the least
-                                ; that keeps the build alive.
-                                ;
-                                ; WHAT IT BUYS IS NOT A FEATURE. SPEC.md
-                                ; 13.8/13.8.2/13.9's whole family is kern_big's
-                                ; (18 in docs/plans/completed/UIHELPERS-PLAN.md) and none of it
-                                ; is here. What is here is 26 bytes: the three
-                                ; API CELLS plus one shared stc/ret, which is
-                                ; the floor of keeping ONE SDK - a slot number
-                                ; that exists in one build and not another is
-                                ; an ABI that depends on a knob (20.8 rule 4),
-                                ; so kern_small carries the cells and refuses.
-                                ;
-                                ; AND IT WAS ALREADY ON THE EDGE, measured at
-                                ; the branch point rather than inferred:
-                                ; 102,912 of 103,424 with THREE BYTES left in
-                                ; its image rung, so the next byte added
-                                ; anywhere would have crossed whatever it was
-                                ; for. This lands at 512 spare, one step.
-                                ;
-                                ; **AND WHEN IT DOES GROW, IT GROWS BY 1KB -
-                                ; NOT BY THE 2KB kern_big MOVES BY.** A
-                                ; standing rule rather than a property of any
-                                ; one raise, and the point of the split: this
-                                ; is the guard the 128KB machine lives under,
-                                ; so it is the one that has to be defended and
-                                ; it should be asked for in the smallest
-                                ; useful unit. Two 512-byte rungs is enough
-                                ; room for ordinary growth to continue and not
-                                ; enough to pre-authorise a feature. It is
-                                ; also the direction the fifteenth move said
-                                ; this figure should drift in.
-                                ;
-                                ; THE SEVENTEENTH MOVE, 94,208 -> 96,256, is
-                                ; the first this figure has taken since the two
-                                ; guards were split - the fifteenth and
-                                ; sixteenth were kern_big's alone - and the
-                                ; reason it moves here is stated at kern_big's
-                                ; copy above: what the 2KB buys is WINDOW
-                                ; DRAWING OPTIMIZATIONS, and the machine that
-                                ; feels those most is this one. A 128KB machine
-                                ; is a 4.77MHz machine, where a window restore
-                                ; going 49 ms to 23 and a white flash
-                                ; disappearing are the difference between an OS
-                                ; that feels snappy and one that does not. The
-                                ; fifth move's rule still binds it: headroom
-                                ; for ordinary growth, not an invitation.
-                                ;
-                                ; THE TWENTY-FIRST MOVE, 96,256 -> 97,280, ASKED
-                                ; FOR AND GRANTED, and it is this figure's
-                                ; first move at the 1KB unit the rule above
-                                ; sets. SPEC.md 11.96.11 had landed the build
-                                ; EXACTLY on the old figure - 0 spare, not one
-                                ; byte - so the next thing added to .text or
-                                ; .bss anywhere would have failed to assemble
-                                ; on kern_small and only there. That is the
-                                ; guard doing its job rather than a build
-                                ; problem to route around, and the ask was made
-                                ; with what the last of the old figure bought
-                                ; already measured (a Paint raise 680.9 ->
-                                ; 451.0 ms, PERFORMANCE.md Set 46).
-                                ;
-                                ; IT IS ALLOCATED TO WINDOW REDRAW
-                                ; IMPROVEMENTS, which is the seventeenth move's
-                                ; allocation continued rather than a new one:
-                                ; docs/plans/completed/HANDOFF-REDRAW.md's remaining items are
-                                ; 11.91's marking keyed on redrawn REGIONS
-                                ; rather than rects, and 11.96.11.1's general
-                                ; kept region. The argument is the seventeenth's
-                                ; and has not changed - a redraw optimisation is
-                                ; worth most on the SLOWEST machine, so this is
-                                ; not a figure that work may be kept out of -
-                                ; and the fifth move's rule still binds what is
-                                ; left over: headroom for ordinary growth, not
-                                ; an invitation to spend it.
-                                ;
-                                ; **THAT TIER IS CLOSED, AND ITS NAME IS
-                                ; 'WINDOW REDRAW'.** It is named rather than
-                                ; merely described so the next reader can tell
-                                ; the two tiers below apart at a glance: 96,256
-                                ; -> 97,280 was spent on window redraw and is
-                                ; done, and the tier above it is not a
-                                ; continuation of it. The seventeenth's
-                                ; allocation ran through the twenty-first and
-                                ; ends there.
-                                ;
-                                ; THE TWENTY-SECOND MOVE, 97,280 -> 99,328,
-                                ; ASKED FOR AND GRANTED, and it is **2KB rather
-                                ; than the 1KB the rule above sets**. That
-                                ; departure is the owner's and was made
-                                ; explicitly; it is recorded here rather than
-                                ; quietly taken, because a standing rule that
-                                ; can be stepped over without a note is not a
-                                ; standing rule. The rule itself is NOT
-                                ; withdrawn - the next move is 1KB again unless
-                                ; somebody says otherwise.
-                                ;
-                                ; WHAT IT REPAIRS FIRST: the small build had
-                                ; stopped assembling. Measured at the grant,
-                                ; KERN_SIZE is 98,304 - 1,024 OVER the old
-                                ; figure, so `make small` failed outright - and
-                                ; the tree had been in that state for some time
-                                ; without it being visible, because `all` never
-                                ; builds kern_small. 512 of that overshoot
-                                ; predates the drag-cache round and 512 arrived
-                                ; with it; neither was ever asked for. Against
-                                ; 99,328 the same build is 1,024 spare, two
-                                ; steps, which is the smallest honest landing
-                                ; place rather than a comfortable one.
-                                ;
-                                ; WHAT IS IN FRONT OF THE REST is the
-                                ; SIZE-CHANGED NOTIFICATION and the straddle
-                                ; rule that goes with it - a window spanning two
-                                ; displays adopting the more restrictive size -
-                                ; which is kernel-side and lands on both guards.
-                                ; It has no SPEC.md number here on purpose: it
-                                ; is not written yet, and a forward reference to
-                                ; a heading that does not exist is what
-                                ; tools/checkdocs.py is for. On move 10's terms:
-                                ; granted ahead of the work, and whatever that
-                                ; does not spend is handed back rather than
-                                ; kept. The fifth move's rule binds the
-                                ; remainder as it binds every other: headroom
-                                ; for ordinary growth, not an invitation.
-                                ;
-                                ; AND ON THE INTEGRATION BRANCH IT LANDED ON
-                                ; TOP OF A REMOVAL IT DID NOT KNOW ABOUT.
-                                ; SPEC.md 41.11 had just taken the store above
-                                ; 1MB out of this build - .text -1,035, .bss
-                                ; -124, .ovl -386, two whole rungs - so the
-                                ; raise was granted against a one-step figure
-                                ; that had already moved. Small comes out at
-                                ; SEVEN steps, three over the standard, which
-                                ; is the fifth move's "guard switched off" and
-                                ; owes a decision: hand a step or two back on
-                                ; the eleventh move's terms, or spend it on the
-                                ; round the raise was granted for.
-                                ; docs/KERNEL-MEMORY.md's "Where it goes"
-                                ; carries it, because a figure nobody re-asks
-                                ; about is exactly how the fifth move's 2,048
-                                ; became 512.
-                                ;
-                                ; THE TWENTY-THIRD MOVE, 99,328 -> 102,400,
-                                ; ASKED FOR AND GRANTED, 3KB, and it is
-                                ; ALLOCATED TO PERFORMANCE AND DISK.
-                                ;
-                                ; IT REPAIRS THE SAME BREAKAGE THE TWENTY-
-                                ; SECOND DID, WHICH IS THE POINT WORTH TAKING
-                                ; FROM IT. `make small` had stopped assembling
-                                ; again: measured by bisecting the guard,
-                                ; KERN_SIZE is 100,864 - 1,536 over the old
-                                ; figure, three rungs - and once again nobody
-                                ; saw it arrive, because `all` still never
-                                ; builds kern_small and nothing else does
-                                ; either. Twice now this figure has been
-                                ; discovered broken rather than reported
-                                ; broken. That is not the guard failing; it is
-                                ; the guard being the ONLY thing watching, and
-                                ; being asked only when somebody happens to
-                                ; run the target.
-                                ;
-                                ; WHICH IS WHY IT IS 3KB AND NOT THE 1KB FIRST
-                                ; ASKED FOR. 1KB - 100,352 - does not clear
-                                ; 100,864 at all and would have failed on the
-                                ; next assemble; the smallest figure that
-                                ; assembles is 100,864 EXACTLY, which is 0
-                                ; spare and hands the next byte added anywhere
-                                ; the same failure. 3KB lands 1,536 spare,
-                                ; three steps, and keeps the whole-KB unit this
-                                ; figure's own rule sets. The twenty-second's
-                                ; 2KB landed two steps and called that the
-                                ; smallest honest landing place; this is that
-                                ; judgement applied to an overshoot half again
-                                ; as large.
-                                ;
-                                ; The fifth move's rule binds the remainder
-                                ; exactly as before - headroom for ordinary
-                                ; growth, not an invitation to spend it - and
-                                ; the 1KB unit is NOT withdrawn by this move
-                                ; any more than it was by the twenty-second:
-                                ; the next move is 1KB again unless somebody
-                                ; says otherwise.
-                                ;
-                                ; THE TWENTY-FOURTH MOVE, 102,400 -> 103,424,
-                                ; ASKED FOR AND GRANTED, 1KB, and it is
-                                ; ALLOCATED TO HEAP COMPACTION (SPEC.md 66).
-                                ;
-                                ; It is the 1KB the rule above sets, back at
-                                ; that unit after the twenty-second's and
-                                ; twenty-third's stated departures - and this
-                                ; time the figure was neither discovered broken
-                                ; nor overshot: SPEC.md 66 landed the build on
-                                ; EXACTLY 102,400, 0 spare, which is the guard
-                                ; doing its job at the moment it is supposed
-                                ; to, reported rather than found. 1KB clears it
-                                ; and lands two steps.
-                                ;
-                                ; WHAT IT BUYS is a compactor that slides the
-                                ; movable data claims down when a claim would
-                                ; otherwise be refused, and the park handshake
-                                ; (66.5) that lets it reach the claims of a
-                                ; package with a live worker. THE ARGUMENT FOR
-                                ; SPENDING IT HERE RATHER THAN ON kern_big
-                                ; ALONE IS THE SEVENTEENTH MOVE'S: the machine
-                                ; that runs out of a contiguous run first is
-                                ; the SMALL one, so a feature about
-                                ; fragmentation is worth most exactly where
-                                ; this guard binds. A 128KB machine has one
-                                ; arena and no slack in it.
-                                ;
-                                ; The fifth move's rule binds the remainder as
-                                ; it binds every other - headroom for ordinary
-                                ; growth, not an invitation - and the next move
-                                ; is 1KB again.
-                                ;
-                                ; It had moved fourteen times before that, every raise asked
-                                ; for and granted: 65,536 -> 71,680 for the
-                                ; SPEC.md 41 store and the two API surfaces
-                                ; that came with it (wm_geom, wm_about_set);
-                                ; 71,680 -> 72,704 for the driver subsystem
-                                ; (SPEC.md 51) and the Control Panel pages
-                                ; that drive it - which BUYS more than it
-                                ; spends, the OPL2 and Sound Blaster code it
-                                ; makes loadable being thousands of lines that
-                                ; would otherwise be resident on a machine
-                                ; with neither card; 72,704 -> 76,800 for
-                                ; SPEC.md 51.5's keyed SYSTEM.CFG, granted in
-                                ; ADVANCE of further work with an optimisation
-                                ; pass to follow, so the slack under that one
-                                ; was temporary rather than an invitation; and
-                                ; 76,800 -> here for the file manager's
-                                ; Cut/Copy/Paste, its recursive paste engine
-                                ; and the drag (SPEC.md 22.3/22.4), which
-                                ; overran the previous figure by 512 bytes
-                                ; with the drag still to come. Asked for and
-                                ; granted with the 4KB it costs the claim heap
-                                ; on every machine named up front - Paint
-                                ; gives up one canvas tier for it, and the
-                                ; 128KB RAM floor is untouched.
-                                ;
-                                ; The fifth move is the first DOWNWARD one:
-                                ; 80,896 -> 74,240. Every raise above was
-                                ; spent and then some of it handed back by the
-                                ; optimisation passes that followed - the Task
-                                ; Manager leaving for the system disk, the
-                                ; Control Panel into a cold segment, the clock
-                                ; ladder and the glyph table out of the
-                                ; segment - until the kernel sat at 72,192
-                                ; with 8,704 bytes of budget above it. Slack
-                                ; that large is not headroom, it is the guard
-                                ; switched off: anything short of an 8KB
-                                ; addition passed without a conversation,
-                                ; which is exactly the conversation this
-                                ; constant exists to force. 74,240 leaves
-                                ; 2,048 bytes - enough that an ordinary bug
-                                ; fix does not trip it, small enough that a
-                                ; FEATURE does. It returns no
-                                ; RAM and is not meant to: HEAP_SEG is
-                                ; KERN_END, so the heap has always started
-                                ; where the kernel ACTUALLY ends and never
-                                ; where the budget said it might - which is
-                                ; also why the SIXTH move below costs the
-                                ; machine nothing at all. The slack
-                                ; was never costing memory - it was costing
-                                ; scrutiny, and scrutiny is the only thing
-                                ; this constant has ever bought.
-                                ;
-                                ; The sixth move, 74,240 -> 76,288, is that
-                                ; scrutiny working. Two features landed in
-                                ; parallel and met at the guard: SPEC.md
-                                ; 5.6's gfx_line, the arbitrary-angle line
-                                ; primitive (512 bytes, one KIMG_PARA step),
-                                ; and the file dialog handing an app the SIZE
-                                ; so a load can be refused for free (SPEC.md
-                                ; 38.6). Either alone fitted; together they
-                                ; overran by 512. Asked for and granted at
-                                ; 2KB rather than the 512 the merge needed,
-                                ; because the fifth move's stated intent was
-                                ; 2,048 bytes of headroom and by the time
-                                ; anyone measured it there were 512 - three
-                                ; features had spent it without the constant
-                                ; being revisited, which is the failure mode
-                                ; a stale number in docs/KERNEL-MEMORY.md let
-                                ; through. That doc now carries the bisect
-                                ; recipe instead of a figure, so the next
-                                ; author measures rather than trusts.
-                                ;
-                                ; The seventh move, 76,288 -> 78,336, was
-                                ; asked for and granted in ADVANCE, for two
-                                ; plans costed together before either was
-                                ; written: SPEC.md 54's file type
-                                ; associations (docs/plans/completed/ASSOC-PLAN.md, ~1,600)
-                                ; and the disk path (docs/plans/completed/DISK-PERF-PLAN.md,
-                                ; ~200), against the 1,536 that were spare,
-                                ; which the two do not fit. Granted in
-                                ; advance is the fifth move's warning, so the
-                                ; terms were stated with it: the raise lands
-                                ; with the commit that FIRST needs it and not
-                                ; with the documents, and it landed here -
-                                ; SPEC.md 54.4's open path had taken the
-                                ; footprint to exactly 76,288, which passes
-                                ; the guard by a byte and leaves the next
-                                ; change nowhere to go. Two phases of the
-                                ; association work and the whole of the disk
-                                ; work were already spent under the OLD
-                                ; figure before this line moved.
-                                ;
-                                ; Part of what pays for it is elsewhere:
-                                ; SPEC.md 18.91's batched transfer is 117
-                                ; bytes that took a directory change from 12
-                                ; int 13h calls to 5, and mechanism D
-                                ; (docs/plans/completed/DISK-PERF-PLAN.md 5.5) removes 8 of
-                                ; the 13 an APPS/ open still costs.
-                                ;
-                                ; The eighth move, 78,336 -> 80,384, is the
-                                ; seventh's tail: the association work's own
-                                ; bug reports. SPEC.md 54.4.1's notice - a
-                                ; document whose program is not on the disk
-                                ; now says WHICH program, instead of
-                                ; reporting a Task Manager the user never
-                                ; asked for - needs a name built at run time,
-                                ; and the branding half of that fix costs
-                                ; nothing at all: measured, it lands at
-                                ; 67,016, byte for byte the size before it.
-                                ; The naming half is ~115 bytes and crosses a
-                                ; KIMG_PARA step, which is the whole 512, and
-                                ; the seventh move's 2,048 had 16 bytes left.
-                                ; Asked for and granted with the buffer work
-                                ; that came with it and pays part of it back
-                                ; in TIME rather than bytes: SPEC.md 18.92's
-                                ; diskette parameter table (the batching was
-                                ; returning the wrong head's sectors on real
-                                ; hardware), 18.93's batched boot read (131
-                                ; int 13h calls to 16, ~31 s to 4-5 s on the
-                                ; target) and 18.4.2's read-side run
-                                ; coalescer (a 116KB load, 244 calls to 34).
-                                ; None of those three cost the footprint a
-                                ; byte - they all landed inside the image's
-                                ; existing 512-byte rounding.
-                                ;
-                                ; The ninth move, 80,384 -> 82,432, is the
-                                ; first one bought for the OTHER guard. The
-                                ; file load, file save, file manager and
-                                ; file dialog modules went into .cold
-                                ; (SPEC.md 2.6), and the two rungs that swap
-                                ; do not round the same way: the image loses
-                                ; 15.3KB and the cold segment gains it,
-                                ; which lands two 512 steps wide. What it
-                                ; buys is KERN_CODE_MAX, which had 3,519
-                                ; bytes spare and now has 18,811 - both
-                                ; measured by bisecting the guards, not
-                                ; modelled - against the work that is
-                                ; coming. The footprint ends at 80,384 with
-                                ; 2,048 spare, which is twice the 1,024 it
-                                ; started with: the five modules cost two
-                                ; steps between them and the raise gave
-                                ; four. Asked for and granted
-                                ; on those terms. Note what it does NOT buy:
-                                ; a byte of RAM back for the machine, and not
-                                ; a byte of footprint either. Cold code is
-                                ; resident and counts here exactly like
-                                ; .text's - moving a module cold to fix an
-                                ; overrun of THIS constant is a no-op that
-                                ; looks like a fix (docs/KERNEL-MEMORY.md).
-                                ;
-                                ; The ninth move landed exactly on guard 5's
-                                ; ceiling, and for a while that made this
-                                ; constant unraisable: the kernel had to end
-                                ; below a boot sector nailed to linear
-                                ; 0x15000, which capped the footprint at
-                                ; 82,432 whatever this line said. The sector
-                                ; is at the top of RAM now (SPEC.md 2.7) and
-                                ; guard 5 is a statement about the smallest
-                                ; supported machine instead, 126,976 - so a
-                                ; tenth move is possible again, and is the
-                                ; same decision the nine above were. What is
-                                ; NOT available is a tenth move that quietly
-                                ; takes the slack: this figure buys scrutiny
-                                ; and nothing else, and 44.5KB of it would be
-                                ; the fifth move's mistake at five times the
-                                ; size.
-                                ;
-                                ; The tenth move, 82,432 -> 86,528, is the
-                                ; first one taken against that room, and it
-                                ; is 4KB granted IN ADVANCE for incoming
-                                ; quality-of-life work - the same shape as
-                                ; moves 3 and 7, which is why the same terms
-                                ; come with it. The fifth move settled that
-                                ; 2,048 bytes is the right amount of slack:
-                                ; enough that an ordinary bug fix does not
-                                ; trip the guard, small enough that a FEATURE
-                                ; does. This lands at 4,608 - nine 512-byte
-                                ; steps - so until the work it was asked for
-                                ; arrives the guard is looser than the
-                                ; project's own standard, and what the fifth
-                                ; move is on record for is that slack of that
-                                ; size stops being scrutiny. So: spend it on
-                                ; what it was granted for, and if the work
-                                ; lands under it, hand the remainder back the
-                                ; way move 5 did rather than leaving it for
-                                ; the next author to find.
-                                ;
-                                ; The eleventh move, 86,528 -> 86,016, is the
-                                ; second DOWNWARD one and it is that last
-                                ; sentence being honoured rather than an
-                                ; optimisation pass: SPEC.md 53.6.1's XMS
-                                ; desktop stash was REMOVED, and the step it
-                                ; cost goes back with it. The feature saved
-                                ; the desktop's four planes at the first
-                                ; fsx_mode call and wrote them back at exit
-                                ; instead of repainting - correct for the
-                                ; PIXELS and wrong about the DESKTOP, because
-                                ; a bracket takes real time and what is on
-                                ; screen behind it is not a constant: the
-                                ; menu bar's clock (which the stash path
-                                ; already had to redraw, the one admission
-                                ; that a snapshot goes stale), the Timer's
-                                ; window, a Bounce, any background task that
-                                ; paints - and the exclusive app's OWN window,
-                                ; whose content is usually what the bracket
-                                ; just spent the whole session changing. So
-                                ; the stash restored a photograph of a desktop
-                                ; that had moved on, and wm_paint_all - which
-                                ; asks every window what it looks like NOW -
-                                ; was the correct answer all along. Measured
-                                ; on the removal alone: 84 bytes off .text +
-                                ; .bss (the image rung unmoved) and 190 off
-                                ; .cold, whose rung falls 40 -> 39, so it is
-                                ; worth 84,480 -> 83,968. SPEC.md 22.24's
-                                ; status-line work landed in the same round
-                                ; and spent a step, so the tree stands at
-                                ; 84,480 with 1,536 spare - one step UNDER
-                                ; the fifth move's standard, which is the
-                                ; guard doing its job rather than a fault in
-                                ; either change. The next feature asks.
-                                ; What it does NOT touch is SPEC.md 41: the
-                                ; xm_* slots are a published package ABI
-                                ; (20.8 rule 4) with the Task Manager and
-                                ; sysbench reading them, and this was one
-                                ; kernel-side consumer of that store, not the
-                                ; store itself.
-                                ;
-                                ; The twelfth move, 86,016 -> 90,112, is 4KB
-                                ; asked for and granted in ADVANCE, on the
-                                ; seventh move's terms and the fifth move's
-                                ; warning: the project is in a growth phase
-                                ; and the raise lands with the commit that
-                                ; first needs it. That commit is SPEC.md
-                                ; 39.11's adapter switching, which took the
-                                ; spare to EXACTLY ZERO - 6 bytes left in the
-                                ; image rung and 155 in the cold one, so the
-                                ; next byte added to .text anywhere failed the
-                                ; build. What it buys immediately is 39.11.4
-                                ; (blanking the card the machine has just
-                                ; left, so a two-monitor 5150 does not sit
-                                ; with a frozen desktop on the tube nobody is
-                                ; using) and 31.10's hiding of a Display page
-                                ; that has nothing to choose between.
-                                ;
-                                ; It is granted WITHOUT the usual "and hand
-                                ; back what the optimisation pass saves",
-                                ; because the plan for the small machine has
-                                ; changed shape: the 128KB floor is to be met
-                                ; by a SECOND BUILD of this kernel rather than
-                                ; by keeping one build inside a figure both
-                                ; machines can live with. Once that exists the
-                                ; guard here is kern_big's, and the one that
-                                ; has to be defended byte by byte is
-                                ; kern_small's. Until it exists this is still
-                                ; the only guard there is, so the fifth move's
-                                ; rule stands unchanged: this is headroom for
-                                ; ordinary growth, not an invitation to spend
-                                ; 4KB without a conversation.
-                                ;
-                                ; The thirteenth move, 90,112 -> 92,160, is
-                                ; 2KB and the twelfth's story again: the
-                                ; spare hit EXACTLY ZERO, and this time from
-                                ; two directions at once - SPEC.md 52's
-                                ; hard-disk installer arriving on the
-                                ; integration branch, and 11.95.1's
-                                ; "a window that grew reveals nothing", which
-                                ; is 193 bytes of .text and 8 of .bss. Asked
-                                ; for and granted at 2KB rather than 4: the
-                                ; project is still in active development, so
-                                ; the answer is headroom, but half a step of
-                                ; it, which puts the guard back within reach
-                                ; of ordinary growth (four steps) without
-                                ; pre-authorising another feature's worth.
-                                ; The fifth move's rule stands, and so does
-                                ; the twelfth's note about kern_small: the
-                                ; day that second build exists, this figure
-                                ; is kern_big's and stops being the one that
-                                ; has to be defended.
-                                ;
-                                ; The fourteenth move, 92,160 -> 94,208, is
-                                ; 2KB granted in ADVANCE for SPEC.md 18.94.2's
-                                ; finding: a file operation spends over half
-                                ; its disk TIME on work the progress widget
-                                ; never shows, and the reason is that the
-                                ; kernel optimised for SECTORS where the media
-                                ; charges for REVOLUTIONS. Measured over one
-                                ; install, the payload streams at 5.78 sectors
-                                ; per int 13h call and every other phase - the
-                                ; BPB, the FAT window, the root scan, the
-                                ; subdirectory walks - runs at exactly 1.00,
-                                ; because dsk_dirw_next hands out one LBA at a
-                                ; time and every caller reads it with cx = 1
-                                ; into a single 512-byte buffer. The fixes are
-                                ; a per-volume banked BPB (so a fixed disk,
-                                ; which cannot be swapped, revalidates once
-                                ; ever) and coalescing the directory walks
-                                ; into runs, which needs somewhere bigger than
-                                ; dsk_secbuf to read into. Granted at 2KB on
-                                ; the thirteenth move's terms - headroom, half
-                                ; a step - with the batch bracket and its
-                                ; sector cache still to come; that one is a
-                                ; REFUSABLE heap claim by explicit decision,
-                                ; so it costs this figure nothing and a 128KB
-                                ; machine can still install, just slowly.
-%endif                          ; KERN_BIG
-
-KERN_SMALL_BUDGET equ 107520    ; ...and kern_small's, named separately so it
-                                ; can be REPORTED on a big build rather than
-                                ; only enforced on a small one: the %else arm
-                                ; above is not taken on a kern_big assembly, so
-                                ; without a name here the figure the 128KB
-                                ; machine lives under cannot be quoted at all
-                                ; without building twice and remembering, which
-                                ; is how a number goes stale.
-                                ;
-                                ; It is the figure that has to be DEFENDED.
-                                ; kern_big has a machine with RAM behind it;
-                                ; this one is the 128KB floor the project was
-                                ; written for, and nothing may be added to
-                                ; kern_small without the conversation every
-                                ; budget move so far has had.
-                                ;
-                                ; It last moved at the THIRTY-SECOND, 106,496
-                                ; -> 107,008, 512 bytes, one step, attributed
-                                ; to THE HEAD-SWITCH BOOT FIX (SPEC.md
-                                ; 18.93.1/18.93.2) - and kern_big did not move
-                                ; with it. The overrun was SIX bytes past a
-                                ; rung top and the trim was costed and refused
-                                ; by the owner; the full account is beside the
-                                ; KERN_BUDGET figure this one mirrors.
-                                ;
-                                ; Before that, at the TWENTY-SECOND, 105,984
-                                ; -> 106,496, 512 bytes, one step, attributed
-                                ; to DISK IMG WRITE - and kern_big did not
-                                ; move with it either. The full account,
-                                ; including why the completion proc cannot go
-                                ; into CLONE.DRV to avoid it, is beside the
-                                ; KERN_BUDGET figure this one mirrors.
-                                ;
-                                ; It moved at the seventeenth, 94,208 ->
-                                ; 96,256, and at the TWENTY-FIRST, 96,256 ->
-                                ; 97,280, both for the window drawing
-                                ; optimisations - the argument is at
-                                ; KERN_BUDGET above, and the short form is that
-                                ; a redraw optimisation is worth most on the
-                                ; slowest machine, so this is not a figure that
-                                ; work may be kept out of. The twenty-first is
-                                ; also the first move this figure has taken at
-                                ; the 1KB unit its own rule sets, kern_big
-                                ; having moved by 2KB throughout. **Those two
-                                ; together are the tier named 'WINDOW REDRAW',
-                                ; and it is closed** - 94,208 -> 97,280, spent.
-                                ;
-                                ; It moved again at the TWENTY-SECOND, 97,280 ->
-                                ; 99,328, which is 2KB and so a stated
-                                ; departure from that 1KB rule rather than an
-                                ; application of it. The full terms are at
-                                ; KERN_BUDGET above; the short form is that the
-                                ; small build had stopped assembling - 1,024
-                                ; over, invisible because `all` never builds it
-                                ; - and the grant repairs that and leaves two
-                                ; steps in front of the size-changed
-                                ; notification.
-                                ;
-                                ; And again at the TWENTY-THIRD, 99,328 ->
-                                ; 102,400, 3KB, allocated to performance and
-                                ; disk; the terms are at KERN_BUDGET above. This
-                                ; copy of the figure was left behind by that
-                                ; move - a build reading 99,328 here while
-                                ; assembling against 102,400 - which is what the
-                                ; assertion below now refuses. A figure written
-                                ; twice needs something that says so.
-%ifndef KERN_BIG
- %if KERN_BUDGET != KERN_SMALL_BUDGET
-%error "KERN_SMALL_BUDGET and kern_small's KERN_BUDGET disagree - move both"
- %endif
+KERN_BUDGET equ KERN_SMALL_RESIDENT_KB*1024 - KERNEL_SEG*16
+                                ; = 64,000
 %endif
+KERN_SMALL_BUDGET equ KERN_SMALL_RESIDENT_KB*1024 - KERNEL_SEG*16
+                                ; named on BOTH builds, so a kern_big report
+                                ; can quote the figure the small one lives
+                                ; under without assembling it
 
 KERN_CODE_MAX equ 65536         ; the kernel's own SEGMENT: .text + .bss are
                                 ; both addressed through KERNEL_SEG, so they
@@ -2160,34 +641,14 @@ KERN_CODE_MAX equ 65536         ; the kernel's own SEGMENT: .text + .bss are
 ; of it rather than of the smallest one we support.
 BOOT_SECT   equ 512             ; the sector itself, sitting at the very top
 BOOT_STACK  equ 2048            ; ...and its stack, growing down from there
-; MIN_RAM_KB - THE MACHINE THIS CONFIGURATION BOOTS ON, and it is not the
-; same machine for both kernels any more (docs/KERNEL-MEMORY.md). The rule set
-; is three sentences and each names a different quantity:
-;
-;   1. kern_small BOOTS on 128KB.
-;   2. kern_big BOOTS on 196KB.
-;   3. kern_big fully RESIDES in 128KB once it is at the desktop - every
-;      non-purgeable byte it has claimed by then, with no drivers loaded and
-;      no XMS, on VGA.
-;
-; 1 and 2 are guard 5 below, which asks whether stage 1 can put its sector and
-; its stack at the top of that machine and still read the kernel AND its
-; stage-2 blob in underneath. 3 is guard 1's KERN_BUDGET, derived from 128KB
-; rather than chosen, plus tests/kernresident.py for the part an assembler
-; cannot see - a claim made at boot and never given back.
-;
-; **THE TWO WERE ONE NUMBER AND THAT IS WHAT WENT WRONG.** Boot-time reach and
-; resident footprint are different questions, and with one constant answering
-; both, the BOOT ceiling silently became the binding one: measured at the
-; commit this changed, the shipped kernel had 1,670 bytes before guard 5 and
-; 3,584 before KERN_BUDGET, so the budget everything steers by could not be
-; reached and a recovery of ~5KB showed up as slack under a guard that was not
-; the ceiling. kernsize now prints both.
-%ifdef KERN_BIG
-MIN_RAM_KB  equ 196
-%else
+; MIN_RAM_KB - THE MACHINE BOTH KERNELS BOOT ON (rule 3 at KERN_BUDGET).
+; Guard 5 below asks whether stage 1 can put its sector and its stack at the
+; top of that machine and still read the kernel AND its stage-2 blob in
+; underneath. It is a different question from residing - KERN_BUDGET's - and
+; kernsize prints both lines so that neither is steered by alone.
+; tests/small128.py and tests/big128.py boot each kernel on the 128KB machine,
+; which is the half an assembler cannot answer.
 MIN_RAM_KB  equ 128
-%endif
 
 %ifdef KERN_SMALL
 DSK_FAT_SECS equ 2              ; TWO on kern_small: 1,024 bytes of FAT_SEG
@@ -2208,12 +669,12 @@ DSK_FAT_SECS equ 2              ; TWO on kern_small: 1,024 bytes of FAT_SEG
                                 ;
                                 ; IT COULD NOT HAVE BEEN TAKEN BEFORE SPEC.md
                                 ; 37.0.1. docs/plans/KERN-SMALL-CUT-PLAN.md 7 is the
-                                ; floor: `.ovlw` is loaded ONTO this window and
+                                ; floor: `.ovl` is loaded ONTO this window and
                                 ; spills through the mount buffers, so it has
                                 ; to fit FAT_PARA*16 + DSK_WIN_BYTES. At 2
-                                ; sectors that region is 4,352, and `.ovlw`
+                                ; sectors that region is 4,352, and `.ovl`
                                 ; rounded to whole sectors was 4,608 - short by
-                                ; 256. Gating the RTC ladder took `.ovlw` from
+                                ; 256. Gating the RTC ladder took `.ovl` from
                                 ; 4,328 to 2,789, which rounds to 3,072, and
                                 ; the cap fits with 1,280 to spare. The clock
                                 ; was 40% of that overlay and this is what it
@@ -2231,8 +692,8 @@ DSK_FAT_SECS equ 2              ; TWO on kern_small: 1,024 bytes of FAT_SEG
                                 ; threshold rather than a buffer, so 1 would
                                 ; refuse every volume rather than merely list
                                 ; less of one. Region 1,024 + 512 = 1,536,
-                                ; and the `.ovlw` guard is what holds it -
-                                ; `.ovlw` being 1,412 here (pass 4), so this
+                                ; and the `.ovl` guard is what holds it -
+                                ; `.ovl` being 1,412 here (pass 4), so this
                                 ; kernel has 124 bytes of slack where kern_big
                                 ; has none.
 %else
@@ -2477,20 +938,20 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; sector has to know how many sectors to read before anything has told it, so
 ; the number is a constant both ends share and an assertion at the bottom of
 ; this file is what keeps them honest.
-; THE BLOB IS TWO SECTIONS NOW (SPEC.md 2.9.6). `.boot2` is the loader and the
-; loading screen; `.ovl` is the boot overlay, which used to ride the kernel's
-; own read into the FAT window and be copied out of it into a heap claim before
-; the first mount could eat it. It does not need to: stage 2 already lands the
-; blob at HEAP_SEG and holds it there for the whole boot, which is exactly the
-; lifetime the overlay wanted. So the overlay joins the blob, ovl_relocate and
-; its claim are gone, and there is one transient with one address and one
-; release instead of two.
+; THE BLOB IS ONE SECTION (SPEC.md 2.9.14). `.boot2` is the loader, the loading
+; screen AND the boot overlay's blob half - every boot-only body that has to
+; outlive drv_boot's first mount. The overlay used to be a section of its own
+; at a hand-set `OVL_AT` inside the blob, with the same segment, the same
+; lifetime, the same read and the same checksum as the loader: the only thing
+; the split did was hold 359 bytes idle below it while the half above it ran
+; out. One section is one pool, measured against one guard at the foot of this
+; file, and stage 2's entry stays at offset 0 because the jump to boot2_entry
+; that splash.inc already needed is emitted where the section is declared.
 ;
-; TWO RUNGS, both hand-set and both asserted at the foot of this file: OVL_AT
-; is where `.ovl` starts inside the blob, BOOT2_SECS is how long the whole blob
-; is. Stage 1 has to know the second before anything has told it - SPL_RESIDENT's
-; reason - and the Makefile reads it out of this file with one `sed` so the two
-; cannot disagree.
+; ONE RUNG, hand-set and asserted at the foot of this file: BOOT2_SECS is how
+; long the blob is. Stage 1 has to know it before anything has told it -
+; SPL_RESIDENT's reason - and the Makefile reads it out of this file with one
+; `sed` so the two cannot disagree.
 ; THERE IS ONE BLOB LENGTH NOW, AND THAT IS WHAT KSIG_OFF RESTS ON.
 ; `BOOT2_SECS_STARS equ 9` stood here, with a second `sed` in the Makefile to
 ; find it, because SPLSTARS' twinkle wanted 4,193 bytes of a 4,096-byte blob -
@@ -2511,14 +972,34 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; The whole blob is freed before the desktop; KERN_BUDGET is unchanged. It is
 ; nine on kern_small too, which has no such copy: KSIG_OFF (the Makefile) is
 ; one constant for every kernel, and it names file sector 21 only at nine.
-; TEN since SPEC.md 6.0.1: the tenth sector is `.ovl`'s, for the timed font
+; TEN since SPEC.md 6.0.1: the tenth sector is `.boot2`'s, for the timed font
 ; pick (font_init in the blob on both kernels), and KSIG_OFF moved one memory
 ; sector down with it (6144 -> 5632) so the FILE sector is still 21. It sits
 ; inside the same int 13h run on all four geometries (tests/unit/t_blobruns.py).
-BOOT2_SECS  equ 10              ; sectors stage 1 reads before it jumps - the
-                                ; loader and its screen up to OVL_AT, then the
-                                ; boot overlay from there to BOOT2_PAD. THE
-                                ; SPLIT IS OVL_AT AND THE TOTAL IS THIS, so
+; ELEVEN ON A KNOB BUILD (SPEC.md 2.5.3.3): a knob kernel ships nowhere, so its
+; blob may grow where a shipped one may not - the extra sector is overlay room
+; for diagnostics (BOOTMARK=1's MARKW sites) that SPEC.md 39.28's 'VC' key left
+; 9 bytes short. The literal stays FIRST on the line: the Makefile, os88layout,
+; t_blobruns and kzboot all read the shipped figure off it, and the Makefile
+; adds the knob's sector in the same block that defines KERN_KNOB, so the two
+; cannot disagree. KSIG_OFF is derived from the total there, so the canary
+; stays on file sector 21 at either length.
+; ...AND ELEVEN ON kern_emu (SPEC.md 9.11.2.1), for the knob's reason one step
+; along: it is a shipped kernel, but only an emulator boots it - its probe is
+; 386 code - so its stage 1 reading one sector more costs no period machine
+; anything. What it buys is vmm_boot_x in the blob instead of resident `.cold`.
+; The Makefile adds the sector for KERN_EMU in the same block as for a knob.
+%ifdef KERN_KNOB
+  %define BOOT2_KNOBSEC 1
+%elifdef KERN_EMU
+  %define BOOT2_KNOBSEC 1
+%else
+  %define BOOT2_KNOBSEC 0
+%endif
+BOOT2_SECS  equ 10 + BOOT2_KNOBSEC ; sectors stage 1 reads before it jumps - the
+                                ; loader, its screen and the blob half of
+                                ; the boot overlay, one section to BOOT2_PAD.
+                                ; THE TOTAL IS THIS, so
                                 ; read those two rather than a number written
                                 ; out in prose: this comment used to say
                                 ; "NINETEEN: five for the loader, FOURTEEN for
@@ -2534,7 +1015,7 @@ BOOT2_SECS  equ 10              ; sectors stage 1 reads before it jumps - the
                                 ; 2.9.12's, and they are not for a feature:
                                 ; they are the room to move twenty-five
                                 ; BOOT-ONLY bodies out of `.text` and `.cold`
-                                ; into `.ovl`, where mem_unblob gives them back
+                                ; into `.boot2`, where mem_unblob gives them back
                                 ; to the heap at the end of kmain.
                                 ; docs/plans/LAST-DROP-BYTES.md is the register of
                                 ; them and names the caller that makes each one
@@ -2555,112 +1036,29 @@ BOOT2_SECS  equ 10              ; sectors stage 1 reads before it jumps - the
                                 ; when something needs them. 22 buys 1.44MB a
                                 ; third call and 23 buys 720KB a fourth, and
                                 ; that is where the next conversation is
-; OVL_AT is where `.ovl` begins inside the blob, and there is ONE of it: the
-; `%ifdef SPLSTARS` that gave the knob a second value went with
-; BOOT2_SECS_STARS, for the same reason and in the same change. It was FOUR
-; sectors, which is what it took before the
-; overlay joined it: three left 46 bytes and BOOTDIAG=1's hex printer did not
-; fit. Trading bytes against a diagnostic is the exact thing the sector did and
-; 2.9 exists to stop, so the answer is the rung and not a smaller printer - and
-; SPEC.md 15.3.4's row composer is the same call one rung along: it was 63
-; bytes over four sectors, and shaving it would have bought those bytes with
-; the readability of the one routine in this tree that draws an animation.
-;
-; IT COSTS NOTHING TO MOVE: the blob is BOOT2_SECS sectors whatever this is, so
-; no image byte, no RAM and no extra int 13h changes - only the split. That is
-; what makes `.boot2`'s slack and `.ovl`'s ONE pool rather than two budgets:
-; whatever the loader is not using below OVL_AT the overlay can have for the
-; cost of moving this line, and the two assertions at the foot of the file
-; still say which half ran out if one ever does.
-;
-; WHAT BINDS IT FROM BELOW IS THE KNOB ARM, and that is the whole of what is
-; left of SPLSTARS' old claim on the blob: `SPLSTARS=1` builds a `.boot2` of
-; 2,568 against the shipped 2,254 (the twinkle's tables and its star renderer),
-; so the line may not fall below 2,568 while that knob assembles. Above, the
-; overlay binds it: 4,096 - 1,421. The window is 2,568..2,675 and 2,624 sits in
-; the middle of it - 56 bytes spare below on the knob arm, 51 above on both.
-; The shipped `.boot2` has 370.
-;
-; The sentence that used to end here - "the NEXT claim on this file is
-; BOOT2_SECS, and that one is a real ~24 ms on every boot" - was right, and
-; SPEC.md 2.9.12 is that claim being taken: 13 sectors to 19, for the boot-only
-; bodies in docs/plans/LAST-DROP-BYTES.md.
-OVL_AT      equ 2624            ; ...and it is ONE value for every build now.
-                                ; SPLSTARS=1 took 3,072 here AND a blob a
-                                ; sector longer, because its `.boot2` was
-                                ; 2,768 and the pair came to 4,193 of 4,096 -
-                                ; over by 97 wherever the split fell. SPEC.md
-                                ; 15.3.8.5's own figure, and the splash's size
-                                ; pass took that arm to 2,568 + 1,421 = 3,993.
-                                ; So the knob costs no sector, no second split
-                                ; and no second `sed`, and what it buys back
-                                ; is that the boot canary has ONE blob length
-                                ; to be legal for (SPEC.md 18.93.1, and the
-                                ; Makefile's KSIG_OFF block).
-                                ;
-                                ; tests/unit/t_buildmatrix.py's `splstars` row
-                                ; is still what runs the two assertions at the
-                                ; foot of this file for the knob arm - it is
-                                ; the only build that does
-
-; OVL_BASE - where `.ovl` REALLY starts, which is OVL_AT on every shipped build
-; and 96 bytes lower on a KNOB build (SPEC.md 2.5.3.3). The split costs nothing
-; to move - the paragraph above - and a knob kernel's `.boot2` tops out at
-; 2,507 (BOOTDIAG=1 with MOUDIAG=1, measured with pass 2's decoder arguments)
-; against a line at 2,624, so the loader's slack is the one room in the blob a
-; diagnostic can have without the blob changing length. It needs it: size pass
-; 5 put kmain's boot half in the blob (kmain_o), so every BOOTMARK=1 MARKW site
-; is blob bytes now, and kern_big's BOOTHALT arm was left 1 byte inside it.
-; `SPLSTARS=1` is the one knob whose `.boot2` is ABOVE 2,528 - it is what sets
-; OVL_AT's floor, above - so it keeps the shipped split. OVL_AT stays the one
-; literal: it is what tools/os88ladder.py reads, and it describes every
-; kernel a disk carries.
-; ...and 144 on a knob build whose `.boot2` is the shipped loader's, which is
-; every one but BOOTDIAG=1's (2,470 at the most, MOUDIAG=1's): SPEC.md 31.14's
-; ovl_fdd_apply took the shipped blob from 147 bytes spare to 20 (kernel size
-; pass 8 cut it 113 -> 94, spent it again on SPEC.md 6.0.1's FONT_PICK, and
-; then took BOOT2_SECS 9 -> 10 for the timed pick: 308 spare on kern_big and
-; 415 on kern_small at that pass's close), and
-; BOOTMARK=1's MARKW sites need 127 of a knob's give (BOOTHALT=20 131,
-; DRVDIAG=1 with it 141). BOOTDIAG=1 keeps the 96 its own loader leaves room
-; for (2,507 with MOUDIAG=1). KERNEL SIZE PASS 9 TOOK IT TO 128, measured
-; with pass 2's decoder arguments: the knob loaders had grown past 2,480
-; (DISKAL=1 is 2,491, MOUDIAG=1 2,485, BOOTSTOP=1 2,483), so five knob builds
-; did not assemble at the pass's base. drv_boot_x's one walk question took
-; kern_big's shipped `.ovl` 2,494 -> 2,470, and the 24 bytes go back here.
-; BOOTMARK=1 takes the same 128 and that is a choice: its MARKW sites are all
-; overlay, so it wants the give LARGE - 2,617 of overlay needs 121, BOOTHALT=20
-; 2,621 needs 125 - while the loader knob it is paired with wants it SMALL:
-; BOOTMARK=1 DISKAL=1 is a 2,491 loader, 133 at the most, and the 144 before
-; this assembled it. 128 holds both. What is GIVEN UP is BOOTMARK=1 with
-; DRVDIAG=1 (2,631, 135 at the least; 2,635 and 139 with BOOTHALT=20), which
-; cannot share one give with DISKAL=1's 133 and did not fit at 144 either;
-; MOUDIAG=1 and BOOTPROF=1 with it never did. tests/unit/t_buildmatrix.py's
-; `bootmark-diskal` row is the pairing kept. BOOTDIAG=1 stays at 96 (2,514;
-; 2,520 with MOUDIAG=1).
-%define OVL_KNOBGIVE 0
-%ifdef KERN_KNOB
-%ifndef SPLSTARS
-%ifdef BOOT_DIAG
-  %define OVL_KNOBGIVE 96
-%else
-  %define OVL_KNOBGIVE 128
-%endif
-%endif
-%endif
-OVL_BASE    equ OVL_AT - OVL_KNOBGIVE
 
 BOOT2_PAD   equ BOOT2_SECS * 512
 
 section .boot2   start=0 vstart=0
+; --- `.boot2` OPENS HERE, and that is not a formality (SPEC.md 2.9) ---------
+; Stage 1 jumps to STAGE2_SEG:0000, so offset 0 of this section has to be the
+; loader's entry. `-f bin` fills a section in the order the assembler MEETS its
+; blocks, and the boot overlay's blob half (the `section .boot2` blocks in the
+; modules) and splash.inc are both met long before boot2.asm, which is
+; %included at the FOOT - so without these three bytes offset 0 is whatever
+; label the first of them starts with, and stage 1 lands in the middle of it.
+; It did once, with splash.inc: the guest ran off into its own segment with SP
+; intact and CS:IP wandering, which is what executing the wrong offset looks
+; like from outside. They are at the declaration and not beside the splash's
+; %include because since SPEC.md 2.9.14 the overlay's blocks come first.
+    jmp boot2_entry
 section .vgabuf  nobits vstart=0
 section .lowbss  nobits vstart=0
 section .bss     nobits vfollows=.text valign=1
 section .text    start=BOOT2_PAD vstart=0
 section .cold    start=COLD_START vstart=0
-section .ovl     start=OVL_BASE vstart=OVL_BASE
-; --- .ovlw: THE BOOT OVERLAY'S OTHER HALF (SPEC.md 2.5.3) --------------------
-; `.ovl` is dead at spl_finish, when mem_unblob gives the blob back. `.ovlw` is
+; --- .ovl: THE BOOT OVERLAY'S OTHER HALF (SPEC.md 2.5.3) --------------------
+; `.boot2` is dead at spl_finish, when mem_unblob gives the blob back. `.ovl` is
 ; dead EARLIER - at drv_boot's first mount, which is what takes the FAT window
 ; and the mount-owned buffers above it (SPEC.md 2.1.2). So a body whose every
 ; caller runs before the mount costs no blob byte at all: it rides the kernel's
@@ -2671,8 +1069,8 @@ section .ovl     start=OVL_BASE vstart=OVL_BASE
 ; single read puts this exactly where the ladder says FAT_SEG is. That is
 ; SPEC.md 2.5's original trick, which 2.5.1 gave up for LIFETIME and not for
 ; room; the split is what buys the lifetime back for the half that needs it.
-OVLW_START equ BOOT2_PAD + (FAT_SEG - KERNEL_SEG) * 16
-section .ovlw    start=OVLW_START vstart=0
+OVL_START equ BOOT2_PAD + (FAT_SEG - KERNEL_SEG) * 16
+section .ovl    start=OVL_START vstart=0
 ; --- on-demand kernel modules (SPEC.md 2.8, docs/plans/completed/ONDEMAND-PLAN.md) -----------
 ; Code that is NOT in KERNEL.SYS at all. Each of these is assembled here, with
 ; this kernel's data addresses, and then SPLIT OUT of the binary by
@@ -2744,6 +1142,7 @@ section .modk    start=MODK_START vstart=0
 %endif
 %ifdef KERN_BIG
 section .modx    start=MODX_START vstart=0
+section .modw    start=MODW_START vstart=0
 %endif
 section .modmap  start=MODMAP_START vstart=0
 section .text
@@ -2752,14 +1151,14 @@ section .text
 ; The boot overlay (SPEC.md 2.5): code that runs ONCE, from kmain, and is
 ; never reachable again.
 ;
-; It is assembled into `.ovl`, which -f bin places at file offset OVL_AT -
-; INSIDE THE BLOB (SPEC.md 2.9.6) - with its own addresses starting there
-; rather than at zero, because the blob is one segment and `.boot2` has the
-; first OVL_AT bytes of it. Stage 1 reads the whole blob before it jumps and
-; stage 2 copies it to HEAP_SEG, so the overlay is resident from the first
-; instruction of the boot and stays until kmain gives the blob back after
-; spl_finish. It costs no RAM after that at all, and - this is the point -
-; none of it counts against KERN_CODE_MAX.
+; Its blob half is assembled into `.boot2` - INSIDE THE BLOB (SPEC.md 2.9.6,
+; 2.9.14) - in the same section as the loader and the splash, because the blob
+; is one segment and every label in it is an offset from [spl_fseg]. Stage 1
+; reads the whole blob before it jumps and stage 2 copies it to HEAP_SEG, so
+; the overlay is resident from the first instruction of the boot and stays
+; until kmain gives the blob back after spl_finish. It costs no RAM after that
+; at all, and - this is the point - none of it counts against KERN_CODE_MAX.
+; Its OTHER half, `.ovl`, is the bodies dead at the first mount (below).
 ;
 ; **It used to ride the kernel's own read into the FAT window** and be copied
 ; out of it into a high heap claim (`ovl_relocate`, `MEM_K_OVL`) before the
@@ -2769,8 +1168,8 @@ section .text
 ; mem_compact packs downward, so it rejoined nothing. Riding the blob instead
 ; costs the same disk, the same lifetime, and no claim.
 ;
-; NASM emits the gap between `.boot2` and OVL_AT as zeros, and the gap between
-; `.ovl` and BOOT2_PAD likewise, which is why stage 1 can read a flat rung.
+; NASM emits the gap between the blob's end and BOOT2_PAD as zeros, which is
+; why stage 1 can read a flat rung.
 ;
 ; The contract, and all of it matters:
 ;   CS = the blob's segment ([spl_fseg]), DS = KERNEL_SEG, SS = LOW_SEG.
@@ -2786,18 +1185,16 @@ section .text
 ; Calls the other way come through the stubs below, which is what lets every
 ; routine that moved keep its near `ret` and change in no other way.
 ; =============================================================================
-section .ovl
+section .boot2
 ; THE FIVE SHIMS THAT USED TO BE HERE ARE GONE (SPEC.md 2.6.1, 2.5.2). Each was
-; `call <body> / retf` for a body that is ALSO in `.ovl`, in cpudet.inc,
+; `call <body> / retf` for a body that is ALSO in the blob, in cpudet.inc,
 ; xmem.inc, desk.inc, snd.inc and clock.inc - four bytes apiece to own a far
 ; return the body can own itself, which is the deletion 2.6.1 made eighty-four
 ; times over on the `.cold` side and had never been made here. kmain names each
 ; body directly now and nothing near-calls any of them, which is what
 ; os88ovlchk's return-kind and blob-entry rules check.
 ;
-; `ovl_base` went with them, and the guard at the foot of this file did not
-; want it: 4b measures OVL_SIZE, which is `ovl_end - $$`, and $$ is the
-; section's own base. Nothing else in the tree ever named it.
+; `ovl_base` went with them; nothing in the tree ever named it.
 
 section .text
 
@@ -4542,7 +2939,15 @@ apic_inst_minimize:               ; DOCK.DRV's door (SPEC.md 30.4)
                                   ;          size once, at the close or when
                                   ;          the UI unlocks. kern_big; the
                                   ;          small door refuses
-osapi_table_end:                  ; 0x0467 today (0x05A8 before pass 4's
+    OSAPI_RSLOT osapi_ferr_text   ; 0x0467 - AX = a FERR_*, out ES:SI = the
+                                  ;          kernel's own NUL text for it -
+                                  ;          the Disk window's status-line
+                                  ;          table, so a package toasts a
+                                  ;          refusal without carrying the
+                                  ;          words (SPEC.md 18.4.11). 0x0467
+                                  ;          was OSAPI_VOL_TAKE for one cycle
+                                  ;          and never shipped (52.1.1)
+osapi_table_end:                  ; 0x046D today (0x05A8 before pass 4's
                                   ; renumber). TWO cells came off the tail in
                                   ; the size pass: OSAPI_MEM_COMPACT_WAKE
                                   ; (0x0598) is 0x0590's MEMC_POST verb
@@ -4560,8 +2965,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 98*6 + 6*3 + 6 + 12*5 + 3*6
-%error "os8088 API jump table must be exactly 0x0457 bytes: 43 SLOT (8), 11 XCELL (7), 98 rare (6), 6 JCELL (3), 1 FCELL (6), 15 ICELL (12 of 5, 3 of 6)"
+%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 99*6 + 6*3 + 6 + 12*5 + 3*6
+%error "os8088 API jump table must be exactly 0x045D bytes: 43 SLOT (8), 11 XCELL (7), 99 rare (6), 6 JCELL (3), 1 FCELL (6), 15 ICELL (12 of 5, 3 of 6)"
 %endif
 
 ; =============================================================================
@@ -4753,10 +3158,7 @@ api_rn:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target
     push si
     push di
     push es
-    push cs
-    pop es                      ; ES = KERNEL for the copy destination
-    mov di, api_name
-    call api_copyname           ; caller DS:SI -> ES:DI, at most 13 bytes
+    call api_cpname             ; caller DS:SI -> KERNEL:api_name, <= 13 bytes
     pop es                      ; the caller's ES back: it is the buffer
     pop di                      ; and its DI, which the callee may need
     push cs
@@ -4794,12 +3196,9 @@ api_fdlg_open:
     push si
     push di
     push es
-    push cs
-    pop es                      ; ES = KERNEL for the copy destination
-    mov di, api_name
     or si, si
     jz .nodef                   ; "no default": the ZERO is the argument, so it
-    call api_copyname           ; must reach fdlg_open unstaged and unchanged
+    call api_cpname             ; must reach fdlg_open unstaged and unchanged
     mov si, api_name            ; a kernel offset, so it survives the DS switch
     jmp short .go
 .nodef:
@@ -4911,6 +3310,9 @@ api_ff_go:
     mov [dsk_fdraw], al
     call inst_vol_enter         ; this instance's own folder; preserves
                                 ; everything including the flags
+%ifndef OS88_DRIVERS
+    xor al, al                  ; kern_small: no segment is a driver's, so no
+%else                           ; caller may see them (kernel size pass 11)
     call COLD_SEG:dvf_drv_owns_seg ; CF = 0: a loaded driver, so it may see the
     sbb al, al                  ; system files it is going to have to copy.
     inc al                      ; CF straight into AL without a branch: `sbb
@@ -4924,6 +3326,7 @@ api_ff_go:
                                 ; and `inc` does not touch it - which matters
                                 ; only in that it is dsk_find_x's OUTPUT below
                                 ; and never its input.
+%endif
     pop bx
     call COLD_SEG:dsk_find_x
     pop si
@@ -4997,16 +3400,25 @@ api_file_path:
 ; api_file_append_sys - slot 0x02C2 - is the SAME cell with a different tail,
 ; and it shares this body rather than copying it because the fence is the
 ; whole of the interesting part and two copies of a fence is one that can be
-; got wrong. [api_sysap] picks which dskw_ entry point runs; it is written
-; through CS because DS is still the CALLER's here, and it is set on both
-; paths rather than only the append one - a byte left set by an append would
-; silently turn the next driver's write into an append.
+; got wrong. [api_sysfp] IS which dskw_ entry point runs - the offset half
+; of a COLD_SEG far pointer, so the tail is one `call far` and not a
+; compare between two (size pass 10: it was a byte flag, [api_sysap]); it is
+; written through CS because DS is still the CALLER's here, and it is set on
+; both paths rather than only the append one - a word left set by an append
+; would silently turn the next driver's write into an append.
 ; -----------------------------------------------------------------------------
+%ifndef OS88_DRIVERS
+api_file_append_sys:            ; kern_small: the fence refuses EVERY caller,
+api_file_write_sys:             ; no segment being a driver's - so the two
+    mov ax, FERR_PROT           ; cells are .refuse's answer and nothing else,
+    stc                         ; every register .refuse gave back untouched
+    retf                        ; (kernel size pass 11)
+%else
 api_file_append_sys:
-    mov byte [cs:api_sysap], 1
-    jmp short api_file_sysc
+    mov word [cs:api_sysfp], dwf_dskw_append_sys    ; ...the same fence, the
+    jmp short api_file_sysc                         ; other verb (18.4.4)
 api_file_write_sys:
-    mov byte [cs:api_sysap], 0
+    mov word [cs:api_sysfp], dwf_dskw_write_sys
 api_file_sysc:
     push ds
     push si
@@ -5025,10 +3437,7 @@ api_file_sysc:
                                 ; touches DS; this one has to put it back
     pop bx
     jc .refuse
-    push cs
-    pop es                      ; ES = KERNEL for the copy destination
-    mov di, api_name
-    call api_copyname           ; caller DS:SI -> ES:DI, at most 13 bytes
+    call api_cpname             ; caller DS:SI -> KERNEL:api_name, <= 13 bytes
     pop es                      ; the caller's ES back: it is the buffer
     pop di
     push cs
@@ -5037,13 +3446,7 @@ api_file_sysc:
                                 ; the volume it is building and must not have
                                 ; its own instance's folder put underneath it
     mov si, api_name
-    cmp byte [api_sysap], 0
-    jne .append
-    call COLD_SEG:dwf_dskw_write_sys
-    jmp short .done
-.append:
-    call COLD_SEG:dwf_dskw_append_sys ; ...the same fence, the other verb (18.4.4)
-.done:
+    call far [api_sysfp]        ; COLD_SEG:the verb the entry chose
     pop si
     pop ds
     retf
@@ -5055,6 +3458,7 @@ api_file_sysc:
     mov ax, FERR_PROT           ; the same answer DSKW_PROT gives a package
     stc                         ; that names a system file: it is protected,
     retf                        ; and from out there that is the whole truth
+%endif                          ; OS88_DRIVERS
 
 ; ...and the two-name case, which needs DI as well and so is written out
 api_file_rename:
@@ -5062,11 +3466,9 @@ api_file_rename:
     push si
     push di
     push es
-    push cs
-    pop es                      ; ES = KERNEL
     push di                     ; bank the new-name pointer across the first
-    mov di, api_name            ; copy, which needs DI itself
-    call api_copyname           ; old name
+    call api_cpname             ; copy, which needs DI itself - the old name,
+                                ; and ES = KERNEL for the second from here
     pop si                      ; SI = the caller's DI = the new name
     mov di, api_name2
     call api_copyname           ; new name
@@ -5151,8 +3553,8 @@ ovw_mdb_rxb:        call mdb_rxb        ; SPEC.md 9.4.6.5's wire counter, which
 ovw_mou_lockon:     call mou_lockon     ; ...and one for SPEC.md 9.11:
                     retf                ; vmm_boot_x settles the contest on the
                                         ; backdoor and has to retire the UARTs
-                                        ; from `.ovl`, where mouse_init already
-                                        ; is. The five that stood above were
+                                        ; from `.boot2`, where it and mouse_init
+                                        ; both are. The five that stood above were
                                         ; mouse_init's; THIS ONE IS
                                         ; kern_emu's, because vmm_boot_x is its
                                         ; only caller and that routine does not
@@ -5184,6 +3586,10 @@ ovw_font_run_x:     call font_run_x     ; SPEC.md 15.6's status line composes
 ; (cw_clk_ns_put and cw_clk_tobcd went with them in kernel size pass 9: the
 ; port helpers are a copy in each image now, near-called - SPEC.md 37.94.)
 ; -----------------------------------------------------------------------------
+api_cpname:                     ; ...the same into KERNEL:api_name, which is
+    push cs                     ; what four of the five callers want, and the
+    pop es                      ; three instructions they each wrote out ahead
+    mov di, api_name            ; of it (ES = KERNEL on the way out)
 api_copyname:
     push ax                     ; AX and CX ONLY, and both are arguments the
     push cx                     ; caller is still carrying: AX is DX:AX's low
@@ -5212,7 +3618,7 @@ api_name2:  times 13 db 0       ; slots are reachable before anything clears
 ; THE BLOB'S FAR POINTER, and there is exactly one of it (SPEC.md 2.9.6). The
 ; loading screen and the boot overlay are two sections of one image at one
 ; address - stage 2 copies the whole rung to HEAP_SEG and publishes the segment
-; here - so `SPLCALL splf_step` and `OVLCALL ovl_clk_init` are the same
+; here - so `SPLCALL splf_step` and `SPLCALL ovl_clk_init` are the same
 ; instruction pair through the same dword, and the two macros differ only in
 ; which half of the blob they read well at. The overlay used to have a pair of
 ; its own seeded FAT_SEG, because it lived in the FAT window until MARK 12.
@@ -5243,11 +3649,13 @@ spl_fseg:   dw COLD_SEG
 spl_ifp:    dw mod_gone
 spl_ifseg:  dw COLD_SEG
 
-api_sysap:  db 0                ; which verb the shared fenced cell runs:
-                                ; 0 = dskw_write_sys, 1 = dskw_append_sys.
-                                ; .text for api_name's reason, and written
-                                ; through CS because the stub still has the
-                                ; caller's DS when it lands
+%ifdef OS88_DRIVERS
+api_sysfp:  dw dwf_dskw_write_sys  ; which verb the shared fenced cell runs:
+            dw COLD_SEG         ; dskw_write_sys or dskw_append_sys, as the
+                                ; far pointer it calls. .text for api_name's
+                                ; reason, and written through CS because the
+                                ; stub still has the caller's DS when it lands
+%endif
 
 ; =============================================================================
 ; Boot (SPEC.md 15)
@@ -5260,11 +3668,11 @@ api_sysap:  db 0                ; which verb the shared fenced cell runs:
 ; register, so a mark may go between any two calls here without changing what
 ; either of them did.
 
-; OVLMARK - MARK's twin for a body that lives in the BLOB (SPEC.md 9.4.7)
+; BLOBMARK - MARK's twin for a body that lives in the BLOB (SPEC.md 9.4.7)
 ;
 ; MARK puts the index BYTE IN THE INSTRUCTION STREAM and mark_here reads it
 ; `cs:` - which is KERNEL_SEG inside mark_here and the BLOB's segment at an
-; overlay call site, so the plain macro reads the wrong memory from `.ovl` and
+; overlay call site, so the plain macro reads the wrong memory from `.boot2` and
 ; then returns to the wrong place. The index goes in AL here and mark_stamp is
 ; reached through ovw_mark_stamp, which is a far shim.
 ;
@@ -5277,7 +3685,7 @@ api_sysap:  db 0                ; which verb the shared fenced cell runs:
 ; mouse_init's, and a machine that hangs in the mouse probe is exactly what
 ; BOOTHALT= is reached for.
 %ifdef BOOT_MARK
-%macro OVLMARK 1
+%macro BLOBMARK 1
     push ax
 %if ((%1) % 5) == 0
     mov al, (%1) | 0x80         ; every fifth block is the tall one
@@ -5296,7 +3704,7 @@ api_sysap:  db 0                ; which verb the shared fenced cell runs:
 %endif
 %endmacro
 %else
-%macro OVLMARK 1
+%macro BLOBMARK 1
 %endmacro
 %endif
 
@@ -5331,11 +3739,12 @@ api_sysap:  db 0                ; which verb the shared fenced cell runs:
 %endif
 %endmacro
 
-; SPLCALL / OVLCALL - one entry into the blob, wherever stage 2 put it
-; (SPEC.md 2.9.6). The two names are the same instructions and read as
-; documentation of which half is being called: SPLCALL for the loading screen in
-; `.boot2`, OVLCALL for the boot overlay in `.ovl`. There is no ordering rule
-; left to get wrong - the overlay used to be at FAT_SEG until MARK 12 and
+; SPLCALL - one entry into the blob, wherever stage 2 put it (SPEC.md 2.9.6).
+; It reaches the loading screen and the boot overlay's blob half alike: since
+; SPEC.md 2.9.14 those are one section, and the blob's old OVLCALL/OVLGATE/
+; OVLGATE1 names - the same instructions under a second name - went with the
+; split (OVLCALL is the WINDOW half's entry now, below). There is no ordering
+; rule left to get wrong - the overlay used to be at FAT_SEG until MARK 12 and
 ; reached by an immediate `call FAT_SEG:` before it, which was silent in both
 ; directions.
 ;
@@ -5358,10 +3767,10 @@ api_sysap:  db 0                ; which verb the shared fenced cell runs:
 ; busiest caller is inside dsk_xfer's run loop with its own CF in flight. That
 ; count is why SPLGATE below exists, and why this form still does too: nothing
 ; in here is a CODE reference - only DS-relative data - so it drops into
-; `.text`, `.cold`, `.ovl` and `.boot2` unchanged, and those four are four
+; `.text`, `.cold` and `.boot2` unchanged, and those three are three
 ; address spaces (SPEC.md 2.6). It is the portable form and the expensive one.
 ;
-; SPLGATE / OVLGATE - the same call through `.text`'s shared gate, 3 bytes a
+; SPLGATE - the same call through `.text`'s shared gate, 3 bytes a
 ; site. **`.text` ONLY**, and that is not a convention: a near call out of
 ; `.cold` into `.text` is a jump into another segment, which is exactly what
 ; tools/os88ovlchk.py exists to refuse - so the misuse fails the build rather
@@ -5384,27 +3793,17 @@ api_sysap:  db 0                ; which verb the shared fenced cell runs:
     popf
 %endmacro
 
-%macro OVLCALL 1
-    pushf
-    cmp word [spl_fseg], COLD_SEG
-    jbe %%dead
-    mov word [spl_fp], %1
-    call far [spl_fp]
-%%dead:
-    popf
-%endmacro
-
-; OVLCALLC - the CF-RETURNING form, and the one entry that needs it (SPEC.md
-; 2.9.5.4). The two macros above BANK THE FLAGS, so an overlay entry that
+; SPLCALLC - the CF-RETURNING form, and the one entry that needs it (SPEC.md
+; 2.9.5.4). The macro above BANKS THE FLAGS, so a blob entry that
 ; answers in CF has its answer thrown away at the `popf` and every `jc` after
 ; one reads the caller's own carry instead. `drv_boot`'s `ovl_cfg_load` is the
 ; only such entry in the tree.
 ;
-; It is a second name rather than a change to OVLCALL because the banking is
+; It is a second name rather than a change to SPLCALL because the banking is
 ; load-bearing where it is: the busiest caller is `dsk_xfer`'s per-sector
 ; `SPLCALL splf_step`, inside a run loop with its own CF in flight. **This form
 ; must never go there.**
-%macro OVLCALLC 1
+%macro SPLCALLC 1
     cmp word [spl_fseg], COLD_SEG
     jbe %%dead
     mov word [spl_fp], %1
@@ -5416,10 +3815,6 @@ api_sysap:  db 0                ; which verb the shared fenced cell runs:
 %endmacro
 
 %macro SPLGATE 1
-    call splg_%1
-%endmacro
-
-%macro OVLGATE 1
     call splg_%1
 %endmacro
 
@@ -5438,61 +3833,57 @@ api_sysap:  db 0                ; which verb the shared fenced cell runs:
     call spl_gate
 %endmacro
 
-; OVWCALL - into the WINDOW half (SPEC.md 2.5.3). A plain far call, where the
-; blob half needs a pointer pair: `.ovlw` lands on FAT_SEG, which is a CONSTANT
+; OVLCALL - into the WINDOW half, `.ovl` (SPEC.md 2.5.3; it was OVWCALL and
+; `.ovlw` until SPEC.md 2.9.14 gave the name back). A plain far call, where the
+; blob half needs a pointer pair: `.ovl` lands on FAT_SEG, which is a CONSTANT
 ; this assembly knows, so there is nothing to publish and nothing to retire.
 ; There is no liveness guard either, and that is the trade - the blob half can
 ; refuse a late call through [spl_fseg] (SPEC.md 2.9.5.1) and this half cannot,
 ; because the bytes are simply forfeit. tests/ovlrefs.txt is what stands in for
 ; it: every reference into either half is registered with the reason it runs in
 ; time, and os88ovlchk asks the two halves different questions.
-%macro OVWCALL 1
+%macro OVLCALL 1
     call FAT_SEG:%1
-%endmacro
-
-%macro OVLGATE1 1
-    mov word [spl_fp], %1
-    call spl_gate
 %endmacro
 
 ; OVBCALL - into whichever half THIS BUILD put the body in (SPEC.md 2.5.3.2).
 ; A boot-only body that finishes before the first mount may live in EITHER
 ; half, and the two kernels answer differently: kern_big puts the six OVBCALL
-; bodies in `.ovlw`, kern_small in the blob, because the region `.ovlw` lands
-; on is what stops kern_small's mount buffers shedding (the `.ovlw` guard at
+; bodies in `.ovl`, kern_small in the blob, because the region `.ovl` lands
+; on is what stops kern_small's mount buffers shedding (the `.ovl` guard at
 ; the foot of this file, and DSK_NENT in dskwin.inc).
 ;
-; **IT IS NOT A THIRD KIND OF ENTRY** - it expands to OVWCALL or to BLOBCALL
+; **IT IS NOT A THIRD KIND OF ENTRY** - it expands to OVLCALL or to BLOBCALL
 ; and nothing else, so there is nothing new at the site to get wrong. What it
 ; buys is that the arms are written ONCE, here, rather than at every call
 ; site. Every site is in kmain_o, which is in the blob, so the blob arm is
-; BLOBCALL and costs no resident byte (it was OVLGATE1 from `.text`, four
+; BLOBCALL and costs no resident byte (it was SPLGATE1 from `.text`, four
 ; resident bytes a site, until SPEC.md 2.5.3.3). mouse_init's arm reads
 ; MOU_IN_BLOB rather than KERN_SMALL, for the knob builds' reason given where
 ; that symbol is defined.
 ;
-; tools/os88ovlchk.py knows this name (MACHALF) and holds it to the `.ovl`
+; tools/os88ovlchk.py knows this name (MACHALF) and holds it to the `.boot2`
 ; arm, which is the kern_small model that every build-conditional `section`
 ; in the tree is written to - so an OVBCALL aimed at a body that did NOT move
-; fails rule 2d exactly as a mismatched OVLGATE1 would, and an OVWCALL aimed
+; fails rule 2d exactly as a mismatched SPLGATE1 would, and an OVLCALL aimed
 ; at one that DID fails it the other way.
 %macro OVBCALL 1
 %ifidn %1, mouse_init           ; ...the probe follows MOU_IN_BLOB (above
 %ifdef MOU_IN_BLOB              ; the %includes), which is KERN_SMALL minus
     BLOBCALL %1                 ; the knob builds
 %else
-    OVWCALL %1
+    OVLCALL %1
 %endif
 %elifdef KERN_SMALL
     BLOBCALL %1                 ; every OVBCALL site is in kmain_o, which is
 %else                           ; itself in the blob (SPEC.md 2.5.3.3)
-    OVWCALL %1
+    OVLCALL %1
 %endif
 %endmacro
 
 
 ; BLOBCALL / MARKW / BPMARKW - the entries, spelled for a caller that
-; is itself IN THE BLOB (kmain_o). `.boot2` and `.ovl` are one segment, so a
+; is itself IN THE BLOB (kmain_o). The blob is one segment, so a
 ; blob entry is `push cs` + a near call - the far frame its `retf` wants -
 ; with no pointer and no liveness guard: the caller is executing in the blob,
 ; so the blob is aboard by construction.
@@ -5542,16 +3933,16 @@ splg_%1:
 ; the whole body by construction - no argument about call order is needed.
 ;
 ; A caller in the blob reaches another blob entry with BLOBCALL (`push cs` /
-; near call, 4 bytes): `.boot2` and `.ovl` are one segment, and the blob is
+; near call, 4 bytes): the blob is one segment, and it is
 ; aboard because this code is running in it. Everything resident is reached
-; FAR - OVWCALL for the window half until drv_boot_x's mount (os88ovlchk rule
+; FAR - OVLCALL for the window half until drv_boot_x's mount (os88ovlchk rule
 ; 2e scans THIS body for that line now), `call KERNEL_SEG:`/`COLD_SEG:` shims
 ; for `.text` and `.cold`. MARK and BPMARK are MARKW and BPMARKW here, the
 ; same numbers spelled for a blob caller.
 ; =============================================================================
-section .ovl
+section .boot2
 kmain_o:
-    OVWCALL  dsk_boot_from_x    ; WHICH VOLUME DID WE COME OFF? (SPEC.md
+    OVLCALL  dsk_boot_from_x    ; WHICH VOLUME DID WE COME OFF? (SPEC.md
                                 ; 52.10.3) DL and BX:CX are the boot sector's
                                 ; handoff and nothing above touches them - the
                                 ; segment loads spend AX alone - so this is
@@ -5574,14 +3965,14 @@ kmain_o:
                                 ;
                                 ; ONE CROSSING, NOT TWO. xm_sniff's first
                                 ; instruction reads [cpu_tier], so it runs
-                                ; cpu_detect itself - two adjacent OVWCALLs
+                                ; cpu_detect itself - two adjacent OVLCALLs
                                 ; were 5 resident bytes each and one of them
                                 ; buys nothing that a far call from inside the
                                 ; overlay, into the segment it is already
                                 ; running in, does not. The ORDER is unchanged:
                                 ; the tier is published before the sniff reads
                                 ; it, and both still run before sched_init
-    OVWCALL  xm_sniff        ; ...and CPU_DETECT FIRST. IS there memory
+    OVLCALL  xm_sniff        ; ...and CPU_DETECT FIRST. IS there memory
                                 ; above 1MB? ONE int 15h
                                 ; AH=88h, and on tier 0 one compare (SPEC.md
                                 ; 41.12.1). The gate, the sizing, the
@@ -5600,13 +3991,13 @@ kmain_o:
                                 ; there. AH=88h reads CMOS and needs no gate
     MARKW 2
 %else
-    OVWCALL  cpu_detect         ; kern_small has no sniff to hang it off, so
+    OVLCALL  cpu_detect         ; kern_small has no sniff to hang it off, so
                                 ; the tier probe is its own crossing here
     MARKW 2
 %endif
     MARKW 3
 
-    OVWCALL  dsk_dpt_init_x     ; int 1Eh becomes ours (SPEC.md 18.92) before
+    OVLCALL  dsk_dpt_init_x     ; int 1Eh becomes ours (SPEC.md 18.92) before
                                 ; any transfer: the ROM's EOT is 8, and every
                                 ; multi-sector read past it silently returns
                                 ; the OTHER HEAD's sectors
@@ -5623,7 +4014,7 @@ kmain_o:
                                 ; here, and this also closes the ticks-only
                                 ; era - the boot sector's load and the three
                                 ; calls above it
-    OVWCALL  sch_idle_start     ; PROBE (docs/plans/completed/SCHED-IDLE-PLAN.md 6.2): the idle
+    OVLCALL  sch_idle_start     ; PROBE (docs/plans/completed/SCHED-IDLE-PLAN.md 6.2): the idle
                                 ; task. Inert while ui_task never sleeps - the
                                 ; scan skips its slot, so it is reached only
                                 ; where sch_switch used to resume the outgoing
@@ -5632,7 +4023,7 @@ kmain_o:
                                 ; table is cleared
     ; (no evq_init: the ring's three .bss indices arrive zeroed - events.inc)
     MARKW 6
-    OVWCALL  clk_init        ; system clock (SPEC.md 37): probe the RTC,
+    OVLCALL  clk_init        ; system clock (SPEC.md 37): probe the RTC,
                                 ; or fall back to the fixed date - before the
                                 ; mode set, so the very first menu bar paint
                                 ; already carries a valid clock
@@ -5644,7 +4035,7 @@ kmain_o:
                                 ; ticking until spl_finish below (15.3)
     MARKW 8
 %ifdef KERN_BIG
-    OVWCALL  vid_ctx_init       ; ...and bank that geometry as display 0's
+    OVLCALL  vid_ctx_init       ; ...and bank that geometry as display 0's
                                 ; (SPEC.md 39.12). AFTER vid_apply and never
                                 ; FROM it: vid_apply runs from the splash while
                                 ; the rest of the kernel is still coming off
@@ -5733,7 +4124,7 @@ kmain_o:
 %endif
     MARKW 14
     BPMARKW 3                    ; ...the typeface
-    OVWCALL  wm_init
+    OVLCALL  wm_init
     MARKW 15
 %ifdef BANDCOMP
     call KERNEL_SEG:ovw_band_init              ; SPEC.md 5.9.2: the composer's 2KB, before the
@@ -5741,10 +4132,10 @@ kmain_o:
                                 ; A refusal is survivable - wm_draw_title's
                                 ; fifteen-call path is what runs then
 %endif
-    OVWCALL  menu_init          ; menu bar owner (SPEC.md 12): Locator, so
+    OVLCALL  menu_init          ; menu bar owner (SPEC.md 12): Locator, so
                                 ; the first wm_paint_all already has a bar
     MARKW 16
-    OVWCALL  inst_init          ; instance table (SPEC.md 29) - clean boot:
+    OVLCALL  inst_init          ; instance table (SPEC.md 29) - clean boot:
                                 ; no app instances exist until launched
     MARKW 17
     BPMARKW 4                    ; ...the window manager, the bar, the table
@@ -5763,8 +4154,8 @@ kmain_o:
                                 ; notch, which is what raises [spl_live]:
                                 ; composed before it, the line is never drawn
     OVBCALL   mouse_init         ; IRQ4 live; cursor stays hidden until shown.
-                                ; OVBCALL, not OVWCALL: the serial probe is in
-                                ; `.ovl` on kern_small (SPEC.md 2.5.3.2)
+                                ; OVBCALL, not OVLCALL: the serial probe is in
+                                ; `.boot2` on kern_small (SPEC.md 2.5.3.2)
     MARKW 19
     BPMARKW 5                    ; ...and SPEC.md 9.4.1's two waits, which are
                                 ; the largest phase of a boot that is not
@@ -5784,11 +4175,11 @@ kmain_o:
                                 ; drive heading for the absent verdict costs
                                 ; FDD_MOTORW + FDD_SEEKW - 32 ticks, 1.76 s,
                                 ; the longest single wait in the whole boot
-    OVWCALL  desk_init  ; volume zones for the desktop (SPEC.md 26.1)
+    OVLCALL  desk_init  ; volume zones for the desktop (SPEC.md 26.1)
     MARKW 21
-    OVWCALL  dock_init          ; dock strip scratch (SPEC.md 30)
+    OVLCALL  dock_init          ; dock strip scratch (SPEC.md 30)
     MARKW 22
-    OVWCALL  files_init_x       ; Disk module state (no window at boot)
+    OVLCALL  files_init_x       ; Disk module state (no window at boot)
     MARKW 23
                                 ; NO loader_init: all four of the loader's
                                 ; resting values ARE zero (LD_OK is 0) and
@@ -5798,16 +4189,16 @@ kmain_o:
                                 ; so renumbering would move every BOOTHALT
                                 ; number after it for nothing
     MARKW 24
-    OVWCALL  drv_init_x         ; the driver table (SPEC.md 51) - BEFORE
+    OVLCALL  drv_init_x         ; the driver table (SPEC.md 51) - BEFORE
                                 ; snd_init, whose tone route reads the
                                 ; published service table on its first tick
     MARKW 25
-    OVWCALL  drv_snd_sniff  ; is there an FM chip at 388h? (SPEC.md
-                                ; 51.3.1) If so, row 0 becomes WANTED by
-                                ; DEFAULT - which a SYSTEM.CFG that says
-                                ; otherwise then overwrites, so this is only
-                                ; ever the answer on a machine that has never
-                                ; been asked. HERE and not inside drv_boot,
+    OVLCALL  drv_sniff          ; is there an FM chip at 388h, or a hard
+                                ; disk the BIOS knows? (SPEC.md 51.3.1,
+                                ; 51.3.2) If so, that row becomes WANTED by
+                                ; DEFAULT - the machine's choice, which a
+                                ; SYSTEM.CFG overrides only for a row the
+                                ; user has answered (51.5.4). HERE and not inside drv_boot,
                                 ; because the overlay this lives in is dead by
                                 ; then: drv_boot's own mount writes over it
     MARKW 26
@@ -5829,7 +4220,7 @@ kmain_o:
 
     BLOBCALL drv_boot_x         ; ...and load what SYSTEM.CFG asks for
 %ifdef KERN_EMU
-    call COLD_SEG:vmm_boot_x    ; ...one of which may be SPEC.md 9.11's
+    BLOBCALL vmm_boot_x         ; ...one of which may be SPEC.md 9.11's
                                 ; absolute pointer, which is DRVC_OVL and so
                                 ; stops at drv_check with nothing called: the
                                 ; kernel is its owner and this is where it
@@ -5864,8 +4255,8 @@ kmain_o:
 %endif
 
     ; --- the WINDOW half is dead from here (SPEC.md 2.5.3) -------------------
-    ; drv_boot's mount has taken the FAT window `.ovlw` was read onto, so
-    ; nothing below may OVWCALL (os88ovlchk rule 2e scans this body). The BLOB
+    ; drv_boot's mount has taken the FAT window `.ovl` was read onto, so
+    ; nothing below may OVLCALL (os88ovlchk rule 2e scans this body). The BLOB
     ; half - this code included - lives on until kmain's mem_unblob_x, after
     ; spl_finish below, so there is no claim to free and no pointer to retire
     ; here. What used to be here was a 4KB mem_free at the TOP of the heap and
@@ -5953,7 +4344,7 @@ kmain:
                                 ; stops with its number up instead of resetting
 %endif
     MARK 0
-    OVLGATE1 kmain_o            ; ...the whole boot, from the blob, up to and
+    SPLGATE1 kmain_o            ; ...the whole boot, from the blob, up to and
                                 ; including spl_finish (SPEC.md 2.5.3.3). MARK
                                 ; 1-31 are in there, as MARKW
 
@@ -6165,27 +4556,13 @@ osapi_vol_stat equ osapi_snd_fm     ; DOS-only, and the DOS box is not on the
 ; drv_svc_call and drv_blk_call, deliberately do not and cannot reach here.
 ; -----------------------------------------------------------------------------
 ; DX and BL are the outputs; SPEC.md 1 makes everything else this routine's
-; to preserve, BH and AX included - so the slot walks the side table through
-; SI rather than through the BX it is about to answer in.
+; to preserve, BH and AX included.
 osapi_file_here:
-    push cx
-    push si
-    call inst_caller            ; DH = the calling instance; DX is an output,
-    mov si, dx                  ; so both halves of it are ours to spend
-    mov cl, 8
-    shr si, cl                  ; SI = the slot (8086: shifts go through CL)
-    cmp si, INST_MAX
-    jae .global
-    mov bl, [inst_fdrv+si]      ; the instance's drive...
-    shl si, 1
-    mov dx, [inst_fcwd+si]      ; ...and its directory
-    jmp short .out
-.global:
-    mov dx, [dsk_cwd]           ; no instance behind this call: the machine's
-    mov bl, [disk_drive]        ; own position, exactly as before
-.out:
-    pop si
-    pop cx
+    push ax                     ; the reading is instance.inc's inst_where (DL
+    call inst_where             ; = drive, AX = directory, the machine's own for
+    mov bl, dl                  ; no instance), which banks BX - so BH is still
+    mov dx, ax                  ; the caller's here - and spends only DH, an
+    pop ax                      ; output
     ret
 
 ; OSAPI_VOL_SYS (out BL = [dsk_bootvol], nothing else touched, flags
@@ -6253,7 +4630,7 @@ osapi_file_goto_q:
     push dx
     mov al, bl                  ; fcp_goto takes AL = drive, BX = cluster
     mov bx, dx
-    call COLD_SEG:fcpf_fcp_goto ; ...already published for CLONE.DRV (18.99.8)
+    call COLD_SEG:fcpf_fcp_goto ; ...already published for DISKOPS.DRV (18.99.8)
     jc .out
     xor ax, ax                  ; the documented AX = 0, and it clears CF with
 .out:                           ; it; on the CF=1 arm AX is fcp_goto's FERR_*
@@ -6412,17 +4789,6 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "viddet.inc"           ; video adapters (SPEC.md 39): the splash
                                 ; probes and sets the mode on its first tick,
                                 ; so this must be resident with it
-; --- `.boot2` OPENS HERE, and that is not a formality (SPEC.md 2.9) ---------
-; Stage 1 jumps to STAGE2_SEG:0000, so offset 0 of this section has to be the
-; loader's entry. `-f bin` fills a section in the order the assembler MEETS its
-; blocks, and splash.inc is %included above boot2.asm - so without these three
-; bytes offset 0 is whatever label splash.inc happens to start with, and stage
-; 1 lands in the middle of the drawing code. It did: the guest ran off into its
-; own segment with SP intact and CS:IP wandering, which is what executing the
-; wrong offset looks like from outside.
-section .boot2
-    jmp boot2_entry
-section .text
 
 %include "splash.inc"           ; SPEC.md 2.9.4: the loading screen is STAGE
                                 ; 2's now - it is drawn from the loader that
@@ -6613,12 +4979,13 @@ EXT_YLOW    equ 11              ; ui_ylow's arm, behind its caller's gate
 %include "disk.inc"
 %include "diskw.inc"          ; the FAT write path (SPEC.md 18.4): after
                                 ; disk.inc, whose constants and layout it uses
-%include "clone.inc"          ; the disk cloner (SPEC.md 18.99): after
+%include "diskops.inc"        ; DISKOPS.DRV, the disk operations - the
+                                ; cloner (SPEC.md 18.99) first: after
                                 ; diskw.inc, whose FERR_* neighbours its own
                                 ; CERR_*, and before files.inc, which arms it
 %include "compress.inc"       ; ...and the one thing that COMPRESSES (SPEC.md
                                 ; 20.15), which rides in the CLONER'S image:
-                                ; this file emits `.modl` after clone.inc's
+                                ; this file emits `.modl` after diskops.inc's
                                 ; header and not one byte of `.text`, and
                                 ; modl_end below both is where the image ends
 %include "loader.inc"
@@ -6632,6 +4999,7 @@ EXT_YLOW    equ 11              ; ui_ylow's arm, behind its caller's gate
 %include "dock.inc"
 %include "dockmod.inc"            ; empty unless DOCK_OPT (kern_big)
 %include "extmod.inc"             ; EXTD.DRV, the extended desktop
+%include "winmod.inc"             ; WIN95.DRV, the Windows theme (SPEC.md 76.14)
                                   ; (SPEC.md 39.19.6) - kern_big only
 %include "ctrl.inc"
 %include "desksc.inc"           ; desktop shortcuts (SPEC.md 26.8): empty
@@ -6670,7 +5038,7 @@ section .text
 mod_fpt:
     MODFP CPFP, MOD_CTRL, CP_NENT
     MODFP FMFP, MOD_FMT, FM_NENT
-    MODFP CLFP, MOD_CLONE, CLO_NENT
+    MODFP CLFP, MOD_DISKOPS, CLO_NENT
 %ifdef KERN_BIG
     MODFP HBFP, MOD_HIBER, HB_NENT
 %endif
@@ -6683,6 +5051,7 @@ mod_fpt:
 %endif
 %ifdef KERN_BIG
     MODFP EXFP, MOD_EXT, EXT_NENT
+    MODFP WNFP, MOD_WIN, WN_NENT
 %endif
 %ifdef OS88_SHORTCUTS
     MODFP SETFP, MOD_SETS, 1    ; the settings core's ONE slot, CPE_SC (2.8.7)
@@ -6705,7 +5074,7 @@ MOD_NSLOT equ (mod_fp_end - mod_fp) / 4
                                 ; and viddet.inc (the mode leaves)
 
 ; =============================================================================
-; SPLGATE / OVLGATE's landing pads (SPEC.md 2.9.5.2)
+; SPLGATE's landing pads (SPEC.md 2.9.5.2)
 ;
 ; DOWN HERE for the same reason the BOOTMARK block below is: this is `.text`,
 ; and `.text` ABOVE the %includes pushes splash.inc out of the image's first
@@ -6726,7 +5095,7 @@ MOD_NSLOT equ (mod_fp_end - mod_fp) / 4
 ; =============================================================================
 ; ONE STUB, because one target has more than one site: splf_step, three times
 ; in kmain. Every other target is called once and writes its own immediate at
-; that one site (SPLGATE1 / OVLGATE1 above) - a stub for it would be 11 bytes
+; that one site (SPLGATE1 / SPLGATE1 above) - a stub for it would be 11 bytes
 ; where the site alone is 9, and it would carry a %ifdef the site already has.
 ; That took ovl_font_init's BAKED_FONT arm and ovl_xm_sniff's KERN_BIG arm out
 ; of this block, and with them the one snag worth remembering: a stub names a
@@ -6738,7 +5107,7 @@ MOD_NSLOT equ (mod_fp_end - mod_fp) / 4
 ;
 ; **splf_stepq's stub is gone with its sites** (SPEC.md 9.4.7). Both were in
 ; mouse_init's identify window, which is in the blob now: a SPLGATE is a NEAR
-; call to a `.text` stub and `.ovl` cannot make one, so both became the inline
+; call to a `.text` stub and `.boot2` cannot make one, so both became the inline
 ; SPLCALL form and the 8-byte landing pad had nothing left to land.
 spl_gate:
     pushf
@@ -7287,8 +5656,9 @@ cw_inst_task_die equ inst_task_die  ; NEVER RETURNS (it ends in task_exit's
                                 ; body: the frame it leaves dies with the
                                 ; task's stack either way (size pass 9)
 %endif
-cw_mem_disp:            call bp
-                    retf
+cw_mem_disp equ spw_near        ; `call bp` / `retf` - viddet.inc's splash door
+                                ; is the same three bytes, and it stays where
+                                ; SPL_RESIDENT needs it (size pass 10)
 cw_menu_activate:       call menu_activate
                     retf
 ; ...and menu_kbnav's two, which went cold with it (SPEC.md 12.10)
@@ -7297,7 +5667,7 @@ cw_menu_item_dis:       call menu_item_dis
 cw_mou_clamp:           call mou_clamp
                     retf
 ; ...and the BOOT OVERLAY's (docs/plans/LAST-DROP-BYTES.md rows 15 and 17):
-; dock_init and menu_init moved into `.ovl`; menu_init has exactly one
+; dock_init and menu_init moved into `.boot2`; menu_init has exactly one
 ; outbound call left, and dock_init now has NONE - what it asked cw_dock_force
 ; for was "the whole strip is owed", which is two words it writes itself, so
 ; the shim went with the call.
@@ -7348,7 +5718,7 @@ cw_vid_disp_init:       call vid_disp_init
 cw_vid_dual_ok:         call vid_dual_ok
                     retf
 ; ...and these two are the BOOT OVERLAY's, not cold code's: vid_ctx_init went
-; into `.ovl` (docs/plans/LAST-DROP-BYTES.md row 13) and calls both. They are `cw_`
+; into `.boot2` (docs/plans/LAST-DROP-BYTES.md row 13) and calls both. They are `cw_`
 ; rather than `ovw_` for the reason the clock's pair is - `ovw_` names the
 ; overlay, and what these actually name is "resident, reached from another
 ; address space", which is the same shim whichever side asks.
@@ -7655,7 +6025,7 @@ dsk_chdir_q:      call COLD_SEG:dkf_dsk_chdir_q
                                             ; (SPEC.md 20.3.2). Nor do
                                             ; dsk_flop_add and dsk_vol_slot
                                             ; any more: desk_init was their
-                                            ; one caller and it is `.ovlw`,
+                                            ; one caller and it is `.ovl`,
                                             ; so it far-calls the window and
                                             ; cold bodies itself (kernel size
                                             ; pass 5, 12 resident bytes)
@@ -7666,11 +6036,12 @@ dsk_chdir_q:      call COLD_SEG:dkf_dsk_chdir_q
 ; times a second (54.6 under 53.2.1 FSXF_FASTTICK) - ~6us on a tick that has
 ; a whole 55ms, and it does nothing at all when no driver publishes a stream.
 ; drv_boot's thunk is GONE (SPEC.md 2.5.2): the body is in the overlay and
-; kmain's one call site reaches it through OVLGATE1, which is the crossing the
+; kmain's one call site reaches it through SPLGATE1, which is the crossing the
 ; thunk used to be.
-drv_svc_call:  call COLD_SEG:drv_svc_call_x
+%ifdef OS88_DRIVERS                     ; (kern_small: no caller - snd.inc's
+drv_svc_call:  call COLD_SEG:drv_svc_call_x ; are all OS88_DRIVERS's now)
            ret                          ; drv_task, drv_cfg and drv_dlg are
-                                        ; their cells' own (SPEC.md 20.3.2)
+%endif                                  ; their cells' own (SPEC.md 20.3.2)
 ; ...and the other end of that round trip (SPEC.md 51.10) needs NO thunk:
 ; fdlg_commit dispatches a kernel window's completion proc through wm_pkgcall,
 ; which takes a W_SEG 0 window into `.cold` (SPEC.md 2.6.3), so the offset
@@ -7780,6 +6151,57 @@ desk_rowcalc:     call COLD_SEG:desk_rowcalc_x
 ; is the count that collapses, and making it exact costs duplicate lines
 ; wherever one shared tail is reached from several entries.
 ; =============================================================================
+; --- ...AND ITS PROLOGUE HALF, for `.text` (kernel size pass 10) ----------
+; `call kent_bp` IS `push ax / bx / cx / dx / si / di / bp`, and `call kent_di`
+; the same without BP: `.cold`'s kentc_bp / kentc_di, written again here
+; because a `.text` caller cannot reach those near. The words land exactly
+; where the pushes would put them, so the routine's own pops or a rung of the
+; ladder below end it unchanged. Stack only, so re-entrant; no flag moves. The
+; return address is moved out from under the banked registers by pushing a
+; copy and storing AX over the original: every write is at or above SP, so an
+; interrupt can land anywhere in here. It peaks one word above the pushes,
+; which is where the routine's own next `call` puts its return address anyway.
+; (kent_bp was wm.inc's wm_kent_bp, which the wm agent wrote for nine of its
+; own prologues; it moved here when it stopped being wm.inc's alone.)
+;
+; 3 bytes a site against 7 (kent_bp) or 6 (kent_di), for ~95 cycles (~20 us)
+; a call - so it is for routines entered per OPERATION, per window, per menu
+; or per icon, never per glyph, run, span or pixel, never in the mouse ISR,
+; the cursor, the scheduler or the API cell. wm_clip_rows (per glyph cell
+; under a clip) and the save-under cache (docs/plans/LAST-DROP-BYTES.md 7.10)
+; keep their pushes.
+;
+; AND NOTHING THE SPLASH CALLS MAY USE THEM: these sit at the END of `.text`,
+; and stage 2's loading screen calls vid_apply, vid_setmode and gfx_rowbase
+; (viddet.inc's spw_near) while the image is still arriving - SPL_RESIDENT's
+; first sectors are aboard and this one is not.
+kent_bp:
+    ; STKBALANCE-NET: +7 - banks AX..BP on the CALLER's stack; its epilogue pops them
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp                     ; [bp][di][si][dx][cx][bx][ret]
+    mov bp, sp
+    push word [bp+12]           ; [ret][bp]...[bx][ret]
+    mov [bp+12], ax             ; ...[bx][ax]
+    mov bp, [bp]                ; BP back
+    ret
+
+kent_di:
+    ; STKBALANCE-NET: +6 - banks AX..DI on the CALLER's stack; its epilogue pops them
+    push bx
+    push cx
+    push dx
+    push si
+    push di                     ; [di][si][dx][cx][bx][ret]
+    mov di, sp
+    push word [ss:di+10]        ; [ret][di][si][dx][cx][bx][ret]
+    mov [ss:di+10], ax          ; ...[bx][ax]
+    mov di, [ss:di]             ; DI back
+    ret
+
 kret_es:          pop es
 kret_bp:          pop bp
 kret_di:          pop di
@@ -7898,7 +6320,7 @@ kbld_dbg_blk:
 kbld_dbg_span:
 kbld_text: dw kernel_text_end       ; THREE PLAIN WORDS, not one hashed one:
 kbld_cold: dw cold_end              ; nasm refuses arithmetic between
-kbld_ovl:  dw ovl_end               ; relocatable symbols ("expression is not
+kbld_blob: dw boot2_entry           ; relocatable symbols ("expression is not
                                     ; simple or relocatable"), and the `equ`s
                                     ; that hold these lengths are defined
                                     ; BELOW - after `kernel_text_end`, which
@@ -7906,7 +6328,15 @@ kbld_ovl:  dw ovl_end               ; relocatable symbols ("expression is not
                                     ; words is the better answer anyway: a
                                     ; reader gets the sections themselves and
                                     ; can see WHICH one moved, where a hash
-                                    ; only says that something did
+                                    ; only says that something did.
+                                    ; THE THIRD IS THE BLOB UP TO THE LOADER -
+                                    ; the overlay's blob half and the splash -
+                                    ; and NOT boot2_end (SPEC.md 2.9.14): the
+                                    ; loader is the last thing in `.boot2` and
+                                    ; its size moves with the -DKZ_* numbers
+                                    ; pass 2 hands it, so a word in `.text`
+                                    ; naming the blob's END would make the two
+                                    ; packings differ (SPEC.md 2.9.13.4)
 KBLD_DBG_SPAN equ ($ - kbld_dbg_span)
 %if KBLD_DBG_SPAN != 6
   %error "kernel: SPEC.md 57.6 block - the published span is not 6 bytes"
@@ -7942,12 +6372,12 @@ KTEXT_SIZE equ kernel_text_end - $$
 ; that memory.
 ;
 ; It is also what refused the tempting shape here for a while: routing
-; spw_vid_detect into the boot overlay through spl_gate. `.ovl` is aboard
+; spw_vid_detect into the boot overlay through spl_gate. `.boot2` is aboard
 ; before stage 1 jumps and vid_detect would be too, which reads as free - but
 ; spl_gate is at the far end of `.text`, so the PATH is not aboard even though
 ; the destination is. docs/plans/LAST-DROP-BYTES.md rows 10 and 22 were refused
 ; on this. SPEC.md 2.5.3.3 took them anyway by changing the PATH: spl_chrome
-; is `.boot2`, the same segment as `.ovl`, so it reaches vid_detect with a
+; is `.boot2`, the same segment as `.boot2`, so it reaches vid_detect with a
 ; BLOBCALL (`push cs` / near call) and no `.text` byte in between.
 SPL_RES_SIZE equ spw_resident_end - $$
 %if SPL_RES_SIZE > SPL_RESIDENT * 512
@@ -7974,9 +6404,10 @@ KBSS_SIZE equ kernel_bss_end - $$
 ; the padding, and there is no fixed point - but as a SECTION start it is not
 ; circular at all.
 ;
-; `.ovl` used to follow it at the next rung, which is what put the overlay in
-; the FAT window. It is at OVL_AT now, inside the blob (SPEC.md 2.9.6), so it
-; is not on this ladder at all and the image ends where `.cold` does.
+; The boot overlay used to follow it at the next rung, which is what put it
+; in the FAT window. Its blob half is part of `.boot2` now (SPEC.md 2.9.6,
+; 2.9.14), so it is not on this ladder at all and the image ends where `.cold`
+; does.
 COLD_START equ BOOT2_PAD + ((KTEXT_SIZE + KBSS_SIZE + 511) / 512) * 512
 
 section .boot2
@@ -7986,9 +6417,15 @@ section .boot2
                                 ; settled by now. `-f bin` places the section
                                 ; at file offset 0 whatever the source order
 boot2_end:
-BOOT2_SIZE equ boot2_end - $$
-%if BOOT2_SIZE > OVL_BASE
-%error "the loader has outgrown its share of the blob - raise OVL_AT and BOOT2_SECS together (SPEC.md 2.9.6), or on a knob build give OVL_BASE back to OVL_AT for the knob (SPEC.md 2.5.3.3)"
+BOOT2_SIZE equ boot2_end - $$   ; THE WHOLE BLOB: the loader, the splash and
+                                ; the boot overlay's blob half, one section
+                                ; (SPEC.md 2.9.14) and so one ceiling. There
+                                ; was a second guard here, the loader against
+                                ; a hand-set OVL_AT, and a third for the
+                                ; overlay above it - two budgets cut out of one
+                                ; pool by a line nothing needed
+%if BOOT2_SIZE > BOOT2_PAD
+%error "the boot blob (loader, splash and the overlay's blob half) does not fit BOOT2_SECS sectors - move a body that is dead before the first mount to `.ovl`, or raise BOOT2_SECS in this file after tests/unit/t_blobruns.py says what it costs (SPEC.md 2.9.6, 2.9.14)"
 %endif
 
 section .cold
@@ -7997,28 +6434,13 @@ COLD_SIZE equ cold_end - $$
 
 section .ovl
 ovl_end:
-section .ovlw
-ovlw_end:
-OVLW_SIZE equ ovlw_end - $$     ; `$$` is 0 here: `.ovlw` has a vstart of its
+OVL_SIZE equ ovl_end - $$     ; `$$` is 0 here: `.ovl` has a vstart of its
                                 ; own and is addressed with CS = FAT_SEG
-section .ovl
-OVL_SIZE equ ovl_end - $$       ; `$$` is the SECTION's base, which is OVL_BASE
-                                ; here - the section has a vstart of its own
-                                ; (SPEC.md 2.9.6), the blob being ONE segment
-                                ; of which `.boot2` holds the first OVL_AT
-                                ; bytes, so an overlay label's offset is its
-                                ; file offset within the rung. Written against
-                                ; `$$` and not the constant because a label
-                                ; less a scalar is a label, and NASM refuses
-                                ; that in a `%if`
-%if OVL_BASE + OVL_SIZE > BOOT2_PAD
-%error "the boot overlay does not fit the blob - raise BOOT2_SECS in BOTH this file and the Makefile (SPEC.md 2.9.6)"
-%endif
 
 ; ...AND THE WINDOW HALF HAS A CEILING OF ITS OWN (SPEC.md 2.5.3), which is the
 ; whole of what is dead at the first mount: the FAT window, and the mount-owned
 ; buffers stage B put at the bottom of `.lowbss` immediately above it (SPEC.md
-; 2.1.2). One contiguous region, and `.ovlw` may fill it and no more - a byte
+; 2.1.2). One contiguous region, and `.ovl` may fill it and no more - a byte
 ; past it is `vid_rowtab`, which vid_init wrote at MARK 7 and the overlay is
 ; still using.
 ; **The overlay ARRIVES BY SECTOR**, so the ceiling is the region rounded DOWN
@@ -8031,19 +6453,19 @@ OVL_SIZE equ ovl_end - $$       ; `$$` is the SECTION's base, which is OVL_BASE
 ; Since LISTING-HOME-PLAN 13 took the listing out of the region it is the
 ; FAT window plus dsk_secbuf, and both builds are measured (kernel size pass 4):
 ;
-;   kern_big    region 5,120 (4,608 + 512), `.ovlw` 4,968 -> 5,120 rounded.
+;   kern_big    region 5,120 (4,608 + 512), `.ovl` 4,968 -> 5,120 rounded.
 ;               152 bytes of payload spare, NO whole sector (kernel size
 ;               pass 8's close, after font_init moved into the blob).
-;   kern_small  region 1,536 (1,024 + 512), `.ovlw` 1,497 -> 1,536 rounded.
+;   kern_small  region 1,536 (1,024 + 512), `.ovl` 1,497 -> 1,536 rounded.
 ;               39 bytes of payload spare.
 ;
 ; So KERN_BIG binds this guard. The blob is the other home for a boot body:
-; since SPEC.md 2.5.3.3 put kmain's boot half in it, `.ovl` leaves 308 bytes
+; since SPEC.md 2.5.3.3 put kmain's boot half in it, `.boot2` leaves 308 bytes
 ; of it on kern_big and 415 on kern_small at ten sectors (kernel size pass 8
 ; grew it from nine for SPEC.md 6.0.1's timed font pick), so the window half
 ; binds kern_big again. A KNOB
 ; build has DSK_OVLPAD's 1,024 more here, and 2.5.3.3.1 is what spends it.
-%if ((OVLW_SIZE + 511) / 512) * 512 > FAT_PARA * 16 + DSK_WIN_BYTES
+%if ((OVL_SIZE + 511) / 512) * 512 > FAT_PARA * 16 + DSK_WIN_BYTES
 %error "the boot overlay's window half has outgrown the FAT window plus dsk_secbuf - see SPEC.md 2.1.2 and 2.5.3. Move a body to the blob (`.ovl`, SPEC.md 2.5.3.2) or out of the boot path"
 %endif
 
@@ -8053,9 +6475,9 @@ OVL_SIZE equ ovl_end - $$       ; `$$` is the SECTION's base, which is OVL_BASE
 ; aligned - and MODC_START is then exactly where the kernel image ends, so
 ; `truncate to MODC_START` reproduces the pre-module kernel.bin byte for byte.
 ; tools/os88mod.py proves that rather than trusting it.
-; The image ends where `.ovlw` does, not where `.cold` does: the window half of
+; The image ends where `.ovl` does, not where `.cold` does: the window half of
 ; the boot overlay is the last thing stage 2 reads (SPEC.md 2.5.3).
-MODC_START   equ OVLW_START + OVLW_SIZE
+MODC_START   equ OVL_START + OVL_SIZE
 MODF_START   equ MODC_START + MODC_SIZE
 MODL_START   equ MODF_START + MODF_SIZE
 %ifdef KERN_BIG
@@ -8071,14 +6493,21 @@ MODMAP_START equ MODD_START + MODD_SIZE   ; no Dock module (SPEC.md 30.5)
                                           ; (SPEC.md 20.15.3)
 
 %ifdef DOCK_OPT                           ; DOCK_OPT is KERN_BIG, so
-MODX_START   equ MODK_START + MODK_SIZE   ; EXTD.DRV (SPEC.md 39.19.6) is
-MODMAP_START equ MODX_START + MODX_SIZE   ; always the last image there
+MODX_START   equ MODK_START + MODK_SIZE   ; EXTD.DRV (SPEC.md 39.19.6) and
+MODW_START   equ MODX_START + MODX_SIZE   ; WIN95.DRV (SPEC.md 76.14) are
+MODMAP_START equ MODW_START + MODW_SIZE   ; always the last two images there
 %endif
 
 %ifdef KERN_BIG
 section .modx
 modx_end:
 MODX_SIZE equ modx_end - $$
+section .modw
+modw_end:
+MODW_SIZE equ modw_end - $$
+%if MODW_SIZE > MOD_MAX_KB*1024
+  %error "WIN95.DRV exceeds its maximum claim"
+%endif
 %endif
 %ifdef DOCK_OPT
 section .modk
@@ -8093,6 +6522,18 @@ section .modc
 mods_end:
 MODS_SIZE equ mods_end - $$     ; the settings core: CTRL.DRV's first bytes
 section .modu
+%ifdef ANIMOFF
+; ANIMOFF=1 takes the zoom outline's callers out of the panel, and kernel size
+; pass 10 had already taken CTRL.DRV to 11,301 bytes: the knob's image came to
+; 11,177, so its claim rounded to 11KB and the 131 bytes of .modcb below did
+; not fit it (the MODC_BSS assertion). DOSRMARK=1's answer for HIBER.DRV (the
+; .modh block above): pad the knob's image to ONE byte past a KB boundary, so
+; the rounding leaves 1,023 bytes whatever either side grows to - a disk-only
+; cost, on a build that ships nowhere. `.modu` does not start KB-aligned, so
+; the pad is counted from the IMAGE's start (MODS_SIZE in), not `align`'s
+    times 1024 - ((MODS_SIZE + ($ - $$)) % 1024) db 0
+    db 0
+%endif
 modc_end:
 MODU_SIZE equ modc_end - $$     ; ...the panel behind it...
 MODC_SIZE equ MODS_SIZE + MODU_SIZE ; ...and the WHOLE image: align=1 on both
@@ -8108,6 +6549,17 @@ MODL_SIZE equ modl_end - $$
 
 %ifdef KERN_BIG
 section .modh
+%ifdef DOSR_MARK
+; DOSRMARK=1's trace (kernel/hbmark.inc, staged through hbstub.inc) is ~290
+; bytes of the IMAGE, and the bss below has to fit the KB rounding of the
+; claim the image sizes (MODULE-SELFCONTAIN-PLAN 3.2): the shipped image
+; leaves it 63 bytes of slack, so the knob overran it by 227 and the kernel
+; refused to assemble. The knob pads its own image to ONE byte past a KB
+; boundary instead, which leaves 1,023 bytes of rounding whatever either
+; side grows to - a disk-only cost, and only on a build that ships nowhere.
+    align 1024, db 0
+    db 0
+%endif
 modh_end:
 MODH_SIZE equ modh_end - $$
 section .modhb
@@ -8228,6 +6680,8 @@ mod_map:
 %ifdef KERN_BIG
     dd MODX_START, MODX_SIZE    ; the extended desktop (SPEC.md 39.19.6)
     dw EXT_NENT
+    dd MODW_START, MODW_SIZE    ; the Windows theme's chrome (SPEC.md 76.14)
+    dw WN_NENT
 %endif
     dd MODMAP_START             ; ...where the table began, and
     dw 0x384F                   ; the last two bytes of the file
@@ -8359,13 +6813,14 @@ SK_VGAB_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - VGABUF_PARA * 16)
   %assign KS_COLD   COLD_SIZE
   %assign KS_LOW    KLOW_SIZE
   %assign KS_VGAB   KVGABUF_SIZE
-  %assign KS_OVL    OVL_SIZE
-  %assign KS_OVLW   OVLW_SIZE    ; the window half (SPEC.md 2.5.3)
-  %assign KS_BOOT2  BOOT2_SIZE   ; NOT a rung anybody spends into - the
-                                 ; loader blob is padded to BOOT2_PAD - but
-                                 ; splash.inc lives in it, so without this
-                                 ; the per-module table reads a 967-byte
-                                 ; module as costing nothing
+  %assign KS_OVL   OVL_SIZE    ; the window half (SPEC.md 2.5.3)
+  %assign KS_BOOT2  BOOT2_SIZE   ; THE WHOLE BLOB (SPEC.md 2.9.14): the
+                                 ; loader, splash.inc and the overlay's blob
+                                 ; half. Not a rung anybody spends into - it
+                                 ; is padded to BOOT2_PAD and given back at
+                                 ; spl_finish - but it has a ceiling, and the
+                                 ; per-module table reads splash.inc's bytes
+                                 ; out of it
   %assign KS_STK0   STK0_SIZE
   %assign KS_IMGP   KIMG_PARA
   %assign KS_COLDP  COLD_PARA
@@ -8374,6 +6829,7 @@ SK_VGAB_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - VGABUF_PARA * 16)
   %assign KS_VGABP  VGABUF_PARA
   %assign KS_SIZE   KERN_SIZE
   %assign KS_BUDGET KERN_BUDGET
+  %assign KS_GRACE  KERN_GRACE
   %assign KS_CODEM  KERN_CODE_MAX
   %assign KS_END    KERN_END
   %assign KS_KSEG   KERNEL_SEG
@@ -8382,15 +6838,16 @@ SK_VGAB_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - VGABUF_PARA * 16)
                                  ; that names one guard teaches everybody to
                                  ; steer by it, and for a while the one it
                                  ; named was the looser of the two
-  %warning ks: text=KS_TEXT bss=KS_BSS cold=KS_COLD lowbss=KS_LOW vgabuf=KS_VGAB ovl=KS_OVL ovlw=KS_OVLW boot2=KS_BOOT2 stk0=KS_STK0 imgpara=KS_IMGP coldpara=KS_COLDP fatpara=KS_FATP lowpara=KS_LOWP vgabufpara=KS_VGABP ksize=KS_SIZE budget=KS_BUDGET codemax=KS_CODEM kend=KS_END kseg=KS_KSEG minramkb=KS_MINRAM bootmax=KS_BOOTMX
+  %warning ks: text=KS_TEXT bss=KS_BSS cold=KS_COLD lowbss=KS_LOW vgabuf=KS_VGAB ovl=KS_OVL boot2=KS_BOOT2 stk0=KS_STK0 imgpara=KS_IMGP coldpara=KS_COLDP fatpara=KS_FATP lowpara=KS_LOWP vgabufpara=KS_VGABP ksize=KS_SIZE budget=KS_BUDGET codemax=KS_CODEM kend=KS_END kseg=KS_KSEG minramkb=KS_MINRAM bootmax=KS_BOOTMX grace=KS_GRACE
 %endif
 
 ; 1. KERN_BUDGET - the FOOTPRINT. The whole kernel - image, scratch, FAT
 ;    snapshot, disk buffers and every task stack - is one span starting at
-;    KERNEL_SEG, and it fits KERN_BUDGET (129,536 on kern_big, derived from
-;    rule 3; 107,520 on kern_small) just above the BIOS data area. This is
-;    the guard the project is steering by; raising KERN_BUDGET is a decision,
-;    not a build fix (docs/KERNEL-MEMORY.md).
+;    KERNEL_SEG, and it fits KERN_BUDGET (100,864 on kern_big, 64,000 on
+;    kern_small) just above the BIOS data area, with KERN_GRACE over it
+;    allowed in branch and integration work. The exact figure is checked by
+;    `make budget-check` at an upstream merge or a release; raising a budget
+;    is a decision with the owner, not a build fix (docs/KERNEL-MEMORY.md).
 ;
 ;    **A KNOB KERNEL IS NOT THE SHIPPED KERNEL, AND KERN_BUDGET DOES NOT
 ;    BIND IT.** Guard 2 below does, and nothing else does: a build with any
@@ -8399,43 +6856,16 @@ SK_VGAB_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - VGABUF_PARA * 16)
 ;    than about the product. `-DKERN_KNOB` is how it knows - the Makefile
 ;    passes it whenever $(KNOBS) holds anything but KERN_SMALL, which is a
 ;    SHIPPED configuration with a budget of its own and stays bound by it.
+;    docs/history/KERN-BUDGET-LEDGER.md has the five knobs that taught this.
 ;
-;    THIS USED TO BE A LIST, and the list is the argument for the rule. Five
-;    knobs were named here one at a time, each after the same afternoon: a
-;    diagnostic that would not assemble, a paragraph explaining that it is not
-;    what the guard is steering, and one more %ifdef.
-;
-;      DISK_COUNTERS  `make field` and bench runs, 1,821 bytes of .text and
-;                     two image rungs once the baked typeface spent the
-;                     padding it used to land in
-;      KFZTRACE       765 bytes and one rung, which put `make KFZ=1` 512 over
-;                     the guard in the DEFAULT configuration - so the one
-;                     build that could answer the field freeze it was written
-;                     for was the one build that would not assemble
-;      SNAPAUDIT      the glyph-alignment histogram, stopped by SPEC.md 7.3's
-;                     lock handover - ~35 bytes every machine needs
-;      BOOT_PROFILE   SPEC.md 15.5's phase table, ~1KB, stopped by SPEC.md
-;                     18.99's disk clone growing the resident image by a rung
-;      DIRTYRAM       the sharpest of them: FIVE BYTES under, and the five
-;                     that tipped it were 18.91.1's cylinder bound and 9.4.4's
-;                     early close - 2.8 seconds of a 12-second boot
-;
-;    None of those is any other's problem and the guard cannot say so: it sees
-;    one number. The sixth was SPEC.md 12.8.4's cursor fix, where the build
-;    that broke was not the instrument at all - `BOOTMARK=1` and `BOOTHALT=20`
-;    are +519 and +523 of .text, so a 141-byte fix to the SHIPPED kernel put
-;    those two 512 over and the fix had to be cut to 38. That is the guard
-;    steering the wrong thing, and it is where the rule replaced the list.
-;
-;    The +4096 bound the list carried is gone with it. What bounds a knob
-;    kernel now is guard 2 (one 64KB segment, which nobody can raise) and
+;    What bounds a knob kernel is guard 2 (one 64KB segment, which nobody can raise) and
 ;    guard 5 (MIN_RAM_KB, which is about a machine rather than a policy) -
 ;    and, for a FIELD kernel specifically, tools/fieldsize.py, which reports
 ;    whether it shares a KIMG_PARA rung with the shipped one so that "bigger"
 ;    stays known about rather than silent.
 %ifndef KERN_KNOB
-%if KERN_SIZE > KERN_BUDGET
-%error "kernel too big: it must fit KERN_BUDGET - see docs/KERNEL-MEMORY.md"
+%if KERN_SIZE > KERN_BUDGET + KERN_GRACE
+%error "kernel too big: past KERN_BUDGET's branch grace - see docs/KERNEL-MEMORY.md"
 %endif
 %endif
 ; 2. KERN_CODE_MAX - the SEGMENT. The kernel's own segment is 64KB like any
@@ -8578,7 +7008,7 @@ SK_VGAB_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - VGABUF_PARA * 16)
 ;    `DSK_OVLPAD` is the one term here that was never about listing anything:
 ;    it is the boot overlay's landing ground, 0 on every SHIPPED kernel -
 ;    kern_big, kern_small and kern_emu alike - and non-zero only under
-;    `KERN_KNOB`, where a diagnostic has joined `.ovlw` and kern_big's
+;    `KERN_KNOB`, where a diagnostic has joined `.ovl` and kern_big's
 ;    region, which the abolished floor listing left fitting to the byte,
 ;    needs a rung to spill into (kernel/dskwin.inc). Spelling kern_big's arm
 ;    as a bare 512 made THIS guard fire on a build whose overlay guard had
@@ -8597,15 +7027,10 @@ SK_VGAB_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - VGABUF_PARA * 16)
 %if MEM_PARA_KB % 32
 %error "a heap claim is not 512-byte aligned - a package image is read into one"
 %endif
-; 4b. the boot overlay has to EXIST. An empty `.ovl` means every OVLCALL in
-;    kmain lands OVL_AT bytes into the blob, on whatever the padding between
-;    the two sections happens to be. Its CEILING is the blob's, and that is
-;    asserted where the two sections are measured (SPEC.md 2.9.6) rather than
-;    here - it used to be the FAT window, which is no longer anything the
-;    overlay touches.
-%if OVL_SIZE < 16
-%error "the boot overlay is empty - the OVLCALLs have nothing to reach"
-%endif
+; 4b. (retired, SPEC.md 2.9.14) the boot overlay had to EXIST, because an
+;    empty `.ovl` sent every blob call OVL_AT bytes into the padding between
+;    two sections. The overlay's blob half is part of `.boot2` now, so there is
+;    no second section to be empty and no split to land beside.
 ; 5. the boot sector relocates itself to the TOP OF CONVENTIONAL RAM before
 ;    it reads a sector, and its stack grows down from there (SPEC.md 2.7), so
 ;    on any given machine the kernel has to end below both. That address is
@@ -8616,22 +7041,15 @@ SK_VGAB_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - VGABUF_PARA * 16)
 ;
 ;    This is a POLICY guard, like guard 1 and unlike guard 2 - which is the
 ;    whole reason the constant it reads is named for the machine rather than
-;    for an address. MIN_RAM_KB is per configuration now (196 for kern_big,
-;    128 for kern_small), because BOOTING on a machine and RESIDING in one are
-;    different questions and one constant answering both made the boot ceiling
-;    silently the binding guard. See MIN_RAM_KB above for the measurement.
+;    for an address. Both kernels answer to 128KB here, and separately from
+;    guard 1, because BOOTING on a machine and RESIDING in one are different
+;    questions.
 ;
 ;    **A KNOB KERNEL IS EXEMPT, for guard 1's reason and not a new one.** It
 ;    is not what anybody boots; it exists to answer a question about a machine,
 ;    and every machine this project tests on has 640KB or could have. That does
 ;    not make a RAM-constrained test impossible - it makes the test state its
 ;    own constraint instead of borrowing the shipped kernel's.
-;
-;    This paragraph used to say the opposite - that guard 5 binds a knob build
-;    because it is "about a machine rather than a policy" - and the list of
-;    five knobs above is what that cost: five afternoons, each ending in a
-;    diagnostic that would not assemble. The machine it is about is the one we
-;    SHIP to.
 %ifndef KERN_KNOB
 %if KERNEL_SEG*16 + KERN_SIZE + BOOT2_PAD > MIN_RAM_KB*1024 - BOOT_SECT - BOOT_STACK
 %error "the kernel cannot BOOT on MIN_RAM_KB - see docs/KERNEL-MEMORY.md"
@@ -8741,7 +7159,7 @@ section .bss
 %endif
 section .boot2
 %if ($ - $$) != BOOT2_SIZE
-  %error "something landed in .boot2 below boot2_end - BOOT2_SIZE under-reports it and the OVL_AT guard is blind to it"
+  %error "something landed in .boot2 below boot2_end - BOOT2_SIZE under-reports it and the blob guard is blind to it"
 %endif
 section .cold
 %if ($ - $$) != COLD_SIZE
@@ -8749,11 +7167,7 @@ section .cold
 %endif
 section .ovl
 %if ($ - $$) != OVL_SIZE
-  %error "something landed in .ovl below ovl_end - OVL_SIZE under-reports it and the blob guard is blind to it"
-%endif
-section .ovlw
-%if ($ - $$) != OVLW_SIZE
-  %error "something landed in .ovlw below ovlw_end - OVLW_SIZE under-reports it and MODC_START with it"
+  %error "something landed in .ovl below ovl_end - OVL_SIZE under-reports it and MODC_START with it"
 %endif
 section .modc
 %if ($ - $$) != MODS_SIZE
@@ -8793,6 +7207,10 @@ section .modh
 section .modk
 %if $ != modk_end
   %error "something landed in .modk after modk_end"
+%endif
+section .modw
+%if $ != modw_end
+  %error "something landed in .modw after modw_end"
 %endif
 %endif
 section .modmap

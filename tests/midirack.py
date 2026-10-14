@@ -434,13 +434,26 @@ def arm_covox(ui, p):
 
 
 def arm_tone(ui, p):
+    # WAIT FOR THE PITCHES, not for a duration. This sampled `mrn_hz` sixteen
+    # times a quarter of a guest second apart from wherever Play happened to
+    # land, and BATTLE1's opening gives about three pitches in those four
+    # seconds - so a pass saw exactly 3 and one run in three saw 2, a melody
+    # note falling between samples. Every read now counts, at the finest poll
+    # the harness gives, until three distinct pitches have SOUNDED; a tone
+    # stuck on one pitch, or trilling between two, still fails - after a
+    # budget in guest seconds that a loaded box cannot shorten.
     seen = set()
-    for _ in range(16):
+
+    def three(_):
         seen.add(p.w("mrn_hz"))
-        M.guest_sleep(ui.m, .25)
-    seen.discard(0)
-    if len(seen) < 3:
-        fail("tone: the speaker sounded %d distinct pitches" % len(seen))
+        seen.discard(0)
+        return len(seen) >= 3
+    try:
+        M.until(ui.m, three, "three distinct pitches on the speaker",
+                poll=.02, guest=30.0)
+    except M.MartyError as e:
+        fail("tone: the speaker sounded %d distinct pitches %s - %s"
+             % (len(seen), sorted(seen), e))
     if p.b("mr_state") != 1:
         fail("tone: not playing on the desktop (state %d)" % p.b("mr_state"))
     print("PASS tone: %d pitches on the desktop: %s"

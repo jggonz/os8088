@@ -2,16 +2,75 @@
 %include "os88api.inc"
 RL_ROWS equ 25
 RL_RUNS equ 3
-    OS88_HEADER 'REDLINE', rl_entry
-%define BL_ARENA_BYTES 10000
+    OS88_HEADER 'REDLINE', rl_entry, OS88_F_ICON
+
+; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
+; A tachometer: the dial's rim, three ticks, the RED LINE as a filled band on
+; the upper right of the arc, and the needle in it. The mask is the dial
+; filled and grown by a pixel, so it reads on any desktop pattern.
+;
+;   ................
+;   ................
+;   .....######.....
+;   ...##..##..##...
+;   ..#.........##..
+;   .#.#.......####.
+;   .#.........####.
+;   #.........#.####
+;   #.#......#...###
+;   #........#....##
+;   #.......#......#
+;   #......##......#
+;   #.....####.....#
+;   ################
+;   ................
+;   ................
+    OS88_ICON16
+    dw 0x0000                       ; 16 mask rows (white underlay)
+    dw 0x0FF0
+    dw 0x3FFC
+    dw 0x7FFE
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0x0000
+    dw 0x0000                       ; 16 data rows (black pixels)
+    dw 0x0000
+    dw 0x07E0
+    dw 0x1998
+    dw 0x200C
+    dw 0x501E
+    dw 0x401E
+    dw 0x802F
+    dw 0xA047
+    dw 0x8043
+    dw 0x8081
+    dw 0x8181
+    dw 0x83C1
+    dw 0xFFFF
+    dw 0x0000
+    dw 0x0000
+    OS88_ICON16_END
+%define BL_ARENA_BYTES 8192             ; worst report 7,700 (SPEC.md 103.4.3)
 %define BL_BOTTOM_ROWS 3            ; leave 24 pixels for view/action buttons
+%define BL_TOP_ROWS 3               ; ...and 24 for the tabs (SPEC.md 103.6)
+%define BL_NUMNAME                  ; CHIPSET.TXT numbers itself (103.6)
 
 rl_entry:
     mov si, rl_tpl
     call OSAPI_WM_CREATE
     jc .out
     mov [rl_win], bx
-    OS88_REGION_MOVABLE
+    OS88_REGION_MOVABLE_NOKEEP      ; nothing kept: AX and DX are set below
+                                    ; before they are read, CF is the `clc`
     mov ax, ru_timer
     call OSAPI_WM_ONTIMER
     mov al, 1
@@ -41,6 +100,16 @@ rl_entry:
     ret
 rl_paint:
     jmp ru_paint
+
+; ru_clip - arm the kernel's clip on our window for a handler's drawing.
+; CF = 1: none of it is visible. Preserves every register.
+ru_clip:
+    push bx
+    mov bx, [rl_win]
+    call OSAPI_WM_CLIP_SET
+    pop bx
+.out:
+    ret
 rl_key:
     push ax
     push bx
@@ -53,32 +122,27 @@ rl_key:
     mov [rl_win], si
     cmp byte [rl_busy], 0
     jne .out
-    cmp al, 'r'
+    mov dl, al                      ; the letter, either case; AL stays the
+    and dl, 0xDF                    ; key for the navigation keys below
+    cmp dl, 'B'                     ; the TABS (SPEC.md 103.6), on either
+    je .benchtab
+    cmp dl, 'H'
+    je .tunetab
+    cmp byte [cs_tab], 0            ; the Tune tab's keys are its own
+    jne cs_tabkey
+    cmp dl, 'R'
     je .run
-    cmp al, 'R'
-    je .run
-    cmp al, 's'
+    cmp dl, 'S'
     je .save
-    cmp al, 'S'
-    je .save
-    and al, 0xDF
-    cmp al, 'U'
+    cmp dl, 'U'
     je .summary
-    cmp al, 'D'
+    cmp dl, 'D'
     je .detail
-    cmp al, 'C'
+    cmp dl, 'C'
     je .compare
-    cmp al, 'Q'
+    cmp dl, 'Q'
     je .quit
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    jmp ru_navigation
+    jmp ru_navigation.saved         ; the same eight registers, pushed alike
 .summary:
     mov byte [ru_view], 0
     jmp .draw
@@ -94,6 +158,14 @@ rl_key:
     mov bx, [rl_win]
     call OSAPI_WM_CLOSE
     jmp .out
+.benchtab:
+    mov al, 0
+    call cs_settab
+    jmp .out
+.tunetab:
+    mov al, 1
+    call cs_settab
+    jmp .out
 .run:
     call rl_run
     call rl_repaint
@@ -104,63 +176,48 @@ rl_key:
     mov si, rl_filename
     call bl_save
     mov si, [rl_win]
+    call ru_clip
+    jc .out
     call rl_paint
 .out:
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ru_pop8
 rl_click:
     ret                            ; buttons act on release, not body clicks
-rl_cmd:
-    cmp al, 0
-    je .run
-    cmp al, 1
-    je .save
-    cmp al, 2
-    je .summary
-    cmp al, 3
-    je .detail
-    mov al, 'c'
-    jmp rl_key
-.summary:
-    mov al, 'u'
-    jmp rl_key
-.detail:
-    mov al, 'd'
-    jmp rl_key
-.run:
-    mov al, 'r'
-    jmp rl_key
-.save:
-    mov al, 's'
+rl_cmd:                             ; AL = the Bench item: its key
+    push bx
+    mov bx, rl_cmdkeys
+    xlatb
+    pop bx
+    cmp al, 'h'                     ; every item but Tune is the Benchmark
+    je .key                         ; tab's, so it goes there first
+    push ax
+    mov al, 0
+    call cs_settab
+    pop ax
+.key:
     jmp rl_key
 rl_about:
     mov byte [ru_view], 1
     mov word [bl_top], 0
-    call rl_repaint
-    ret
+    push ax
+    mov al, 0
+    call cs_tabset                  ; the Benchmark tab, one repaint
+    pop ax
+    jmp rl_repaint
 
 rl_run:
     mov byte [rl_busy], 1
-    mov word [rl_pass], 0
-    mov word [rl_active_row], 0
     mov word [rl_active_label], rl_running
-    mov byte [rl_ran], 0
-    mov bx, [rl_win]
     xor ax, ax
-    call OSAPI_WM_TIMER
-
-    mov word [bl_nrow], 0
-    mov word [bl_used], 0
-    mov word [bl_top], 0
-    mov byte [bl_full], 0
-    mov byte [bl_saved], 0
+    mov [rl_pass], ax
+    mov [rl_active_row], ax
+    mov [rl_ran], al
+    mov [bl_nrow], ax
+    mov [bl_used], ax
+    mov [bl_top], ax
+    mov [bl_full], ax               ; ...and bl_saved, the byte after it
+    mov bx, [rl_win]
+    call OSAPI_WM_TIMER             ; AX = 0: disarm the animation's timer
     ; Rerunning re-queries everything. Never preserve stale CPUID/RAM evidence.
     push ds
     pop es
@@ -179,10 +236,10 @@ rl_run:
     call rl_facts
     mov bx, [rl_win]
     call OSAPI_WM_CONTENT
+    add ax, 16
     mov [rl_x], ax
+    add dx, 60
     mov [rl_y], dx
-    add word [rl_x], 16
-    add word [rl_y], 60
     ; Known source contents make both repeat runs and adapters comparable.
     push ds
     pop es
@@ -199,8 +256,7 @@ rl_run:
     jnc .labready
     mov byte [rl_busy], 0
     mov si, rl_laberror
-    call bl_sline
-    ret
+    jmp bl_sline
 .labready:
     call bl_baseline
     mov si, rl_lastpass
@@ -217,9 +273,8 @@ rl_run:
 .next:
     mov [rl_tableoff], bx
     mov ax, bx
-    mov cx, 8
-    xor dx, dx
-    div cx
+    mov cl, 3
+    shr ax, cl                      ; 8 bytes a table row
     mov [rl_active_row], ax
     mov si, [rl_table+bx]
     mov [rl_active_label], si
@@ -305,9 +360,10 @@ rl_run:
 .mean:
     xor di, di
 .average:
-    mov word [bl_m], 0
-    mov word [bl_m+2], 0
-    mov word [bl_m+4], 0
+    xor ax, ax
+    mov [bl_m], ax
+    mov [bl_m+2], ax
+    mov [bl_m+4], ax
     mov si, di
     mov cx, RL_RUNS
 .sum:
@@ -338,7 +394,6 @@ rl_run:
     mov si, rl_footer
     call bl_sline
     mov byte [rl_ran], 1
-    call ru_clock
     mov byte [rl_busy], 0
     mov bx, [rl_labwin]
     call OSAPI_WM_DESTROY          ; secondary record only; retain the package
@@ -348,7 +403,14 @@ rl_run:
     mov word [bl_top], 0
     ret
 
+; rl_repaint - the whole window again, from a HANDLER (a key, a menu, a
+; button's release, an alert's answer). The kernel arms a clip for W_PAINT
+; and for nothing else, so this arms one first: without it the repaint lands
+; on whatever lies OVER the window - the Tune tab's own alert was painted out
+; of sight this way the instant it opened (SPEC.md 103.6)
 rl_repaint:
+    call ru_clip
+    jc ru_clip.out                  ; not a pixel of us shows: nothing to do
     mov bx, [rl_win]
     call OSAPI_WM_CONTENT
     push ax
@@ -366,8 +428,7 @@ rl_repaint:
     pop ax
     call OSAPI_GFX_FILL
     mov si, [rl_win]
-    call rl_paint
-    ret
+    jmp rl_paint
 
 ; Inventory values are labelled by their sources, rather than "installed" guesses.
 rl_facts:
@@ -504,46 +565,38 @@ rl_facts:
     cmp bx, 14
     jb .ports
     pop es
-    call bl_blank
-    ret
+    jmp bl_blank
 rl_num:
     xor dx, dx
     mov cx, 10
-    call bl_kv
-    ret
+    jmp bl_kv
 
 ; Display MHz x100 with decimal point; different clock sources remain separate.
 rl_mhzline:
     call bl_lclr
     xor di, di
     call bl_lput
-    mov cx, 100
-    call bl_div32
-    push bx                         ; bl_div32 returns remainder in BX
     mov di, 24
     mov cx, 8
-    call bl_dec
-    mov byte [bl_lscr+32], '.'
-    pop ax
-    xor dx, dx
-    mov di, 33
-    mov cx, 2
-    call bl_dec
-    cmp byte [bl_lscr+33], ' '
-    jne .put
-    mov byte [bl_lscr+33], '0'
-.put:
+    call ru_cents
     mov si, rl_unitmhz
     mov di, 36
     call bl_lput
-    call bl_lcommit
-    ret
+    jmp bl_lcommit
+; Each line also sets the Snapshot pane's one clock fact (ru_fclock): the
+; nominal figure, else the TSC's, else the MUL estimate, else n/a.
 rl_clockreport:
+    xor ax, ax
+    cwd
+    mov di, ru_mhzest
+    call rl_clockset
     mov ax, [rl_nominal]
     or ax, ax
     jz .tsc
     mov cx, 100
     mul cx
+    mov di, ru_mhznom
+    call rl_clockset
     mov si, rl_l_nominal
     call rl_mhzline
 .tsc:
@@ -552,11 +605,15 @@ rl_clockreport:
     mov cx, ax
     or cx, dx
     jz .legacy
+    cmp word [rl_nominal], 0        ; the pane keeps a nominal figure
+    jne .tscline
+    mov di, ru_mhztsc
+    call rl_clockset
+.tscline:
     mov si, rl_l_tsc
     call rl_mhzline
     mov si, rl_tsclimit
-    call bl_sline
-    ret
+    jmp bl_sline
 .legacy:
     cmp word [rl_nominal], 0
     jne .out
@@ -570,13 +627,13 @@ rl_clockreport:
     cmp word [rl_cpuname], rl_cpu386
     je .estimate
     mov si, rl_clockunknown
-    call bl_sline
-    ret
+    jmp bl_sline
 .estimate:
     mov [rl_book], bx
     mov ax, [rl_mulbook+bx]
     mov di, 8                       ; MUL result (row 2)
     call rl_estimate
+    call rl_clockval                ; (the label is ru_mhzest already)
     mov si, rl_l_mulmhz
     call rl_mhzline
     mov bx, [rl_book]
@@ -588,6 +645,13 @@ rl_clockreport:
     mov si, rl_clocklimit
     call bl_sline
 .out:
+    ret
+; DI = the pane's clock label, DX:AX = its MHz x100. Preserves everything.
+rl_clockset:
+    mov [ru_clocklabel], di
+rl_clockval:
+    mov [ru_clockvalue], ax
+    mov [ru_clockvalue+2], dx
     ret
 rl_estimate:
     ; nominal clocks/body * N * PIT_Hz / counts / 10000 = MHz x100.
@@ -617,79 +681,72 @@ rl_estimate:
 ; Move clock lines beside CPU identity by rotating report INDEX entries.
 ; Text stays in its arena; no second copy and no drawing inside timing spans.
 rl_frontclock:
+    push ds
+    pop es
+    cld
     mov ax, [bl_nrow]
     sub ax, [rl_clockrow]
     mov [rl_clockrows], ax
-    mov cx, ax
+    xchg cx, ax
     mov si, [rl_clockrow]
     shl si, 1
-    xor di, di
-.save:
-    mov ax, [bl_idx+si]
-    mov [rl_clockidx+di], ax
-    add si, 2
-    add di, 2
-    loop .save
+    add si, bl_idx
+    mov di, rl_clockidx
+    rep movsw                       ; set the clock rows' entries aside
     mov si, [rl_clockrow]
     shl si, 1
-    sub si, 2
+    add si, bl_idx - 2
     mov di, [rl_clockrows]
     shl di, 1
     add di, si
     mov cx, [rl_clockrow]
     sub cx, 3                       ; keep title, canvas and CPU/vendor at
                                     ; rows 0..2 (rl_facts' order)
-.shift:
-    mov ax, [bl_idx+si]
-    mov [bl_idx+di], ax
-    sub si, 2
-    sub di, 2
-    loop .shift
+    std
+    rep movsw                       ; the rest down, last first: they overlap
+    cld
     mov cx, [rl_clockrows]
-    mov di, 6                       ; ...so the clock lines land at row 3
-    xor si, si
-.restore:
-    mov ax, [rl_clockidx+si]
-    mov [bl_idx+di], ax
-    add si, 2
-    add di, 2
-    loop .restore
+    mov si, rl_clockidx
+    mov di, bl_idx + 6              ; ...so the clock lines land at row 3
+    rep movsw
     ret
 
  ; Select by the actual OS mode; EGA or altered geometry is not VGA 12h.
 rl_select_reference:
     mov word [rl_gfxbase], 0
     mov word [rl_gfxname], rl_refunknown
-    cmp word [rl_video], 0x0102
-    jne .herc
-    cmp word [rl_vw], 640
-    jne .out
-    cmp word [rl_vh], 200
-    jne .out
-    mov word [rl_gfxbase], rl_baseline+24
-    mov word [rl_gfxname], rl_refcga
-    ret
-.herc:
-    cmp word [rl_video], 0x0101
-    jne .vga
-    cmp word [rl_vw], 720
-    jne .out
-    cmp word [rl_vh], 348
-    jne .out
-    mov word [rl_gfxbase], rl_baseline_herc
-    mov word [rl_gfxname], rl_refherc
-    ret
-.vga:
-    cmp word [rl_video], 0x0400
-    jne .out
-    cmp word [rl_vw], 640
-    jne .out
-    cmp word [rl_vh], 480
-    jne .out
-    mov word [rl_gfxbase], rl_baseline_vga
-    mov word [rl_gfxname], rl_refvga
+    mov si, rl_reftab
+    cld
+.try:
+    lodsw                           ; the mode word, or 0 past the last
+    or ax, ax
+    jz .out
+    cmp ax, [rl_video]
+    lodsw
+    jne .skip4
+    cmp ax, [rl_vw]
+    lodsw
+    jne .skip2
+    cmp ax, [rl_vh]
+    jne .skip2
+    lodsw
+    mov [rl_gfxbase], ax
+    lodsw
+    mov [rl_gfxname], ax
 .out:
     ret
+.skip4:
+    lodsw
+.skip2:
+    lodsw
+    lodsw
+    jmp .try
+; mode word, width, height, the graphics reference, its name
+rl_reftab:
+    dw 0x0102, 640, 200, rl_baseline+24, rl_refcga
+    dw 0x0101, 720, 348, rl_baseline_herc, rl_refherc
+    dw 0x0400, 640, 480, rl_baseline_vga, rl_refvga
+    dw 0
 
 ; DI = workload byte offset; DX:AX = measured reference, CF = unavailable.
 ; CPU/RAM use the common PC reference; graphics use the selected mode.
@@ -767,8 +824,7 @@ rl_comparisons:
     call rl_reference
     jnc .have
     mov si, rl_gfxskip
-    call bl_sline
-    ret
+    jmp bl_sline
 .have:
     mov ax, [rl_results+di]
     or ax, [rl_results+di+2]
@@ -778,13 +834,8 @@ rl_comparisons:
     call bl_kvs
     jmp .next
 .resolved:
-    call rl_reference
-    mov cx, 1000
-    call bl_mul48
-    mov bx, [rl_results+di]
-    mov cx, [rl_results+di+2]
-    call rl_div48by32
-.print:
+    mov ax, [ru_scores+di]          ; ru_indices' index, the one the
+    mov dx, [ru_scores+di+2]        ; dashboard draws: the same division
     mov bx, [rl_row]
     mov si, [rl_table+bx]
     push bx
@@ -807,17 +858,17 @@ rl_comparisons:
     jnz .nonzero
     inc ax
 .nonzero:
-    mov cx, ax
+    xchg cx, ax
     call bl_lclr
-    mov byte [bl_lscr], '['
-    mov di, 1
-.bar:
-    jcxz .endbar
-    mov byte [bl_lscr+di], '#'
+    mov di, bl_lscr
+    mov byte [di], '['
     inc di
-    loop .bar
-.endbar:
-    mov byte [bl_lscr+di], ']'
+    push ds
+    pop es
+    mov al, '#'
+    cld
+    rep stosb                       ; CX is 1..50
+    mov byte [di], ']'
     call bl_lcommit
     pop bx
 .next:
@@ -980,20 +1031,31 @@ rl_blit4:
 %include "redline/ui.inc"
 %define OS88UI_NOGLYPH
 %define OS88UI_SCROLL               ; the results and fact panes' bars
+%define OS88UI_DROP                 ; the Tune tab's chipset pick (103.6)
+%define OS88UI_ALERT                ; ...and its two questions
 %include "os88ui.inc"
+%define OD_BOOTVOL                  ; REDLINE.CFG is RLAPPLY's (103.6.4)
+%include "os88data.inc"
+%include "redline/csrows.inc"
+%include "redline/csfe.inc"
+%include "redline/csne.inc"
+%include "redline/csapply.inc"
+%include "redline/csweep.inc"
+%include "redline/chipset.inc"
 
 rl_tpl: dw 7, 22, 632, 448, rl_title, rl_paint, rl_key, rl_click
 rl_title: db 'REDLINE', 0
 rl_menu: db 'Bench', 0
 rl_menuitems: dw rl_runitem, rl_saveitem, ru_summary, ru_detailed, ru_compare
+             dw rl_csitem
+rl_csitem: db 'Tune', 0
 rl_runitem: db 'Run', 0
 rl_saveitem: db 'Save Report', 0
-rl_topitem: db 'Top / About', 0
 OS88_MENUSET rl_menus, rl_title, rl_cmd
-    OS88_MENU rl_menu, rl_menuitems, 5
+    OS88_MENU rl_menu, rl_menuitems, 6
 OS88_MENUSET_END rl_menus
 rl_intro: db 'REDLINE 1.0  //  CPU + GRAPHICS PERFORMANCE LAB', 0
-rl_hint: db 'U Summary  D Detailed  C Compare  R Run  S Save  Q Quit', 0
+rl_hint: db 'U Summary  D Detailed  C Compare  R Run  S Save  H Chipset  Q Quit', 0
 rl_hint2: db '3 runs averaged; 3 graphics tiers. F1: report help.', 0
 rl_running: db 'REDLINE: probing hardware and measuring fixed workloads...', 0
 rl_method: db 'PIT 1.193182 MHz; net counts, IRQs between bodies; fixed work.', 0
@@ -1030,7 +1092,6 @@ rl_com4: db 'BDA COM4 base (dec)', 0
 rl_lpt1: db 'BDA LPT1 base (dec)', 0
 rl_lpt2: db 'BDA LPT2 base (dec)', 0
 rl_lpt3: db 'BDA LPT3 base (dec)', 0
-rl_biosdate: times 9 db 0
 rl_l_nominal: db 'CPUID nominal CPU MHz', 0
 rl_l_tsc: db 'Measured TSC MHz', 0
 rl_l_mulmhz: db 'CPU MHz estimate (MUL)', 0
@@ -1108,7 +1169,6 @@ rl_label_wire: db 'L3 Projected wireframe cube', 0
 rl_label_shaded: db 'L3 Projected shaded cube', 0
 rl_label_fractal: db 'L3 Mandelbrot 64x32', 0
 rl_l_canvas: db 'Canvas height pixels', 0
-    times 26-($-rl_l_canvas) db 0   ; retain measured workload/data addresses
 rl_label_patternblit: db 'L3 Patterned packed 128xH/2', 0
 rl_label_scroll: db 'L3 Full canvas scroll', 0
 rl_label_composition: db 'L3 Nested moving windows', 0
@@ -1147,7 +1207,6 @@ rl_stepping: dw 0
 rl_nominal: dw 0
 rl_tscmhz: dd 0
 rl_tscstart: dq 0
-rl_clockstart: dd 0
 rl_clockspan: dd 0
 rl_convkb: dw 0
 rl_extkb: dw 0
@@ -1165,10 +1224,67 @@ rl_results: times RL_ROWS dd 0
 rl_samples: times RL_ROWS*RL_RUNS dd 0
 rl_sampleflags: times RL_ROWS*RL_RUNS db 0
 rl_facts_end:
-    align 512
-    OS88_BSS 8192 + BL_BSS_SIZE
-    OS88_IMAGE_END
-rl_src equ os88_image_end
+; The loader-zeroed bss. OS88_BSS_ALIGNED puts what fits in front of the
+; 512-aligned block below, so it costs no pad: the two big tables first, then
+; the byte- and word-sized state fills the rest of the gap to within a byte
+; whatever the image's length, then what did not fit follows the block.
+    OS88_ABUF ru_fbuf, RU_FACTS*10        ; ten bytes a value: 9 cells + NUL
+    OS88_ABUF ru_ftab, RU_FACTS*2*2
+    OS88_ABYTE ru_view               ; 0 Summary, 1 Detailed, 2 Compare
+    OS88_ABYTE ru_small
+    OS88_ABYTE ru_valid
+    OS88_ABYTE ru_bits
+    OS88_ABYTE ru_hdr
+    OS88_AWORD ru_cur
+    OS88_AWORD ru_kvcols
+    OS88_AWORD ru_row
+    OS88_AWORD ru_x
+    OS88_AWORD ru_y
+    OS88_AWORD ru_w
+    OS88_AWORD ru_h
+    OS88_AWORD ru_split
+    OS88_AWORD ru_lower
+    OS88_AWORD ru_foot
+    OS88_AWORD ru_pitch
+    OS88_AWORD ru_offset
+    OS88_AWORD ru_port
+    OS88_AWORD ru_resw
+    OS88_AWORD ru_restop
+    OS88_AWORD ru_resulty
+    OS88_AWORD ru_barx
+    OS88_AWORD ru_bary
+    OS88_AWORD ru_barw
+    OS88_AWORD ru_fillw
+    OS88_AWORD ru_barvalue
+    OS88_AWORD ru_bigx
+    OS88_AWORD ru_bigy
+    OS88_AWORD ru_gx
+    OS88_AWORD ru_gy
+    OS88_ABUF ru_overall, 4
+    OS88_ABUF ru_clockvalue, 4
+    OS88_ABUF ru_sum, 6
+    OS88_ABUF rl_biosdate, 9          ; 8 ROM date bytes and their NUL
+    OS88_ABUF ru_pad, 11
+    OS88_ABUF ru_gscores, 3*4
+    OS88_ABUF ru_buttonflags, 8*2
+    OS88_ABUF ru_value, 16
+    OS88_ABUF ru_rects, 32*2
+    OS88_ABUF ru_scores, RL_ROWS*4
+    OS88_ABUF cs_lines, CS_LINES*CS_LW  ; the Chipset report (chipset.inc)
+    OS88_ABUF cs_sw_ref, 1024           ; Tune's references (csweep.inc)
+    OS88_ABUF cs_bt, 2*CS_BTW           ; the BIOS's text (chipset.inc)
+; ...then benchlib's, whose first buffer is the 512-aligned one int 13h moves
+; (bl_out, the CR LF image bl_save writes). The workloads' three buffers
+; OVERLAP it: they are live only inside rl_run, which refills rl_src and
+; rl_pixels before the first body and which the save can never interrupt
+; (rl_key refuses every key while rl_busy), and bl_out is live only inside
+; bl_save. 8,192 bytes of bss that were never both in use.
+    OS88_BSS_ALIGNED rl_sect, BL_BSS_SIZE
+rl_src equ rl_sect
 rl_dst equ rl_src + 2048
 rl_pixels equ rl_dst + 2048
-    BL_BSS os88_image_end + 8192
+%if BL_OUTSZ < 8192
+    %error the workload buffers must stay inside bl_out (raise BL_ARENA_BYTES)
+%endif
+    BL_BSS rl_sect
+    OS88_ADJACENT bl_full, bl_saved, 1  ; rl_run clears the pair as one word

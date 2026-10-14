@@ -1320,8 +1320,38 @@ op_clbget:
     pop bx
     stc
     ret
-%if OP_HAS_LAZY
-; GATED (SPEC.md 20.12.9): op_lazykb, op_lazyok, op_fetch and op_drop - the whole lazy surface, and the last three are public entry points a table with no OP_LAZY row has nothing to call
+%if OP_HAS_FETCH
+; GATED (SPEC.md 20.12.9, 20.12.9.1): op_lazykb, op_lazyok, op_fetch and op_drop - the whole lazy surface, and the last three are public entry points a table with no lazy row THE STANDARD fetches has nothing to call. A row marked OP_SELF is one the package reads for itself, and a table whose every lazy row is one carries none of this
+;
+; **AND INSIDE IT, EACH KIND OF LAZY ROW PAYS FOR ITS OWN ARM.** OP_HAS_ZLAZY
+; is a compressed lazy row and OP_HAS_PLAZY a plain one; a table with only one
+; kind assembles that kind's arm and no test between them. The two macros
+; below are the two places the arms meet.
+
+; OP_RDLEN - AX = the bytes a fetch of row SI READS: the PACKED length on a
+; compressed row and `len` on a plain one (SPEC.md 20.12.7.4)
+%macro OP_RDLEN 0
+  %if OP_HAS_ZLAZY && OP_HAS_PLAZY
+    mov ax, [si+OP_R_LEN]
+    test byte [si+OP_R_FLAG], OP_COMP
+    jz %%rd
+    mov ax, [si+OP_R_ZKB]
+%%rd:
+  %elif OP_HAS_ZLAZY
+    mov ax, [si+OP_R_ZKB]
+  %else
+    mov ax, [si+OP_R_LEN]
+  %endif
+%endmacro
+
+; OP_JPLAIN label - to `label` if row SI is PLAIN, and nothing at all unless
+; the table has rows of both kinds
+%macro OP_JPLAIN 1
+  %if OP_HAS_ZLAZY && OP_HAS_PLAZY
+    test byte [si+OP_R_FLAG], OP_COMP
+    jz %1
+  %endif
+%endmacro
 
 ; -----------------------------------------------------------------------------
 ; op_lazykb - what the row at SI would cost to fetch, in KB (module-internal)
@@ -1347,13 +1377,7 @@ op_lazykb:
     dec bx
     and bx, ax                  ; BX = the head slack: a cluster size is a
                                 ; power of two
-    mov ax, [si+OP_R_LEN]
-%if OP_HAS_COMP && OP_HAS_LAZY
-    test byte [si+OP_R_FLAG], OP_COMP
-    jz .rd
-    mov ax, [si+OP_R_ZKB]       ; a COMPRESSED row reads its packed length...
-.rd:
-%endif
+    OP_RDLEN                    ; a COMPRESSED row reads its packed length...
     add ax, bx
     jc .no
     mov dx, [op_clb]
@@ -1364,9 +1388,8 @@ op_lazykb:
     and ax, dx                  ; ...rounded to whole clusters, the slot's
     mov cl, 4                   ; other precondition: the READ, in paragraphs
     shr ax, cl
-%if OP_HAS_COMP && OP_HAS_LAZY
-    test byte [si+OP_R_FLAG], OP_COMP
-    jz .kb
+%if OP_HAS_ZLAZY
+    OP_JPLAIN .kb
     mov dx, ax                  ; ...and R paragraphs UP the claim, which is
     call op_zrpara              ; where it lands (SPEC.md 20.12.7.4). R + the
     add ax, dx                  ; read covers the expanded part as well: R is
@@ -1418,7 +1441,7 @@ op_lazyok:
     call op_row
     test byte [si+OP_R_FLAG], OP_LAZY
     jz .no
-%if OP_HAS_COMP
+%if OP_HAS_ZLAZY
     cmp word [si+OP_R_ZKB], OP_SPENT    ; dropped and unfetchable - the packed
     je .no                              ; length is gone (SPEC.md 20.12.7.4)
 %endif
@@ -1481,7 +1504,7 @@ op_fetch:
     test byte [si+OP_R_FLAG], OP_LAZY
     jz .bad                     ; not a lazy part: op_seg already answers for
                                 ; it, so asking is a bug and not a refusal
-%if OP_HAS_COMP
+%if OP_HAS_ZLAZY
     cmp word [si+OP_R_ZKB], OP_SPENT    ; dropped: the word that held its
     je .spent                           ; packed length is where the segment
 %endif                                  ; went (SPEC.md 20.12.7.4)
@@ -1524,13 +1547,8 @@ op_fetch:
     sbb dx, 0
     mov [op_off], ax
     mov [op_off+2], dx
-    mov ax, [si+OP_R_LEN]
-%if OP_HAS_COMP
-    test byte [si+OP_R_FLAG], OP_COMP
-    jz .plainwant
-    mov ax, [si+OP_R_ZKB]       ; A COMPRESSED ROW READS ITS PACKED LENGTH and
-.plainwant:                     ; expands to OP_R_LEN below (SPEC.md 20.12.7.4)
-%endif
+    OP_RDLEN                    ; A COMPRESSED ROW READS ITS PACKED LENGTH and
+                                ; expands to OP_R_LEN below (SPEC.md 20.12.7.4)
     add ax, bx                  ; op_lazykb has already proved that neither of
     mov [op_want], ax           ; these carries, and refused if they did - and
     mov word [op_want+2], 0
@@ -1570,9 +1588,8 @@ op_fetch:
     push word [op_rdseg]
     mov [op_base], dx
     mov [op_rdseg], dx
-%if OP_HAS_COMP
-    test byte [si+OP_R_FLAG], OP_COMP
-    jz .plainrd
+%if OP_HAS_ZLAZY
+    OP_JPLAIN .plainrd
     call op_zrpara              ; AX = R, in paragraphs
     add [op_rdseg], ax
 .plainrd:
@@ -1583,20 +1600,17 @@ op_fetch:
     pop dx
     mov [op_base], dx
     pop dx                      ; the claim
-    pop bx                      ; the slack
+    pop bx                      ; the slack, in bytes: a multiple of 512 and
+                                ; therefore of 16
     pop si                      ; the row
     jc .ioerr
 
-    mov ax, bx                  ; ...and the part's READ sits past the slack,
-    mov cl, 4                   ; which is a multiple of 512 and therefore of
-    shr ax, cl                  ; 16 - op_seg's arithmetic, one part at a time.
-                                ; A plain row is used where it was read; a
-                                ; compressed one is expanded onto the claim's
-                                ; base below
+%if OP_HAS_ZLAZY
+    OP_JPLAIN .plain
+    mov ax, bx                  ; the part's READ sits past the slack - op_seg's
+    mov cl, 4                   ; arithmetic, one part at a time
+    shr ax, cl
     add ax, dx
-%if OP_HAS_COMP
-    test byte [si+OP_R_FLAG], OP_COMP
-    jz .plainbank
     ; --- EXPAND IT ONTO ITS OWN CLAIM'S BASE (SPEC.md 20.12.7.4) -----------
     ; op_unpack's walk with one row in it: the stream is R paragraphs up and
     ; the output starts BELOW it, so the write pointer chases the read pointer
@@ -1636,7 +1650,6 @@ op_fetch:
     pop si                      ; the row
     pop dx                      ; the claim
     jc .zbad
-%if OP_HAS_ZLAZY
     ; THE SHADOW (SPEC.md 20.12.7.4.1): the packed length, one store before
     ; the segment takes its word, into the row's own shadow - op_drop's to
     ; put back, so a dropped part is a never-fetched one and not a spent one
@@ -1646,15 +1659,49 @@ op_fetch:
     shr bx, 1                   ; the row x 2: rows are 8 bytes, shadows 2
     mov cx, [si+OP_R_ZKB]
     mov [op_zshadow + bx], cx
+  %if OP_HAS_PLAZY
+    jmp short .keep
+  %endif
 %endif
-    ; --- AND KEEP THE PART AND NOTHING ELSE (SPEC.md 88.10.4.1) ------------
-    ; The claim is op_lazykb's: R plus the packed read rounded to whole
-    ; clusters, which is room for the stream to sit above its output and, on
-    ; a 32KB-cluster volume, mostly cluster. Expanded, the part is `len` bytes
-    ; from the claim's base and nothing else, which is never more than the
-    ; claim (R >= len - packed). A shrink always succeeds IN PLACE (SPEC.md
-    ; 50.3.1), so the base banked below is the claim's and op_drop frees it as
-    ; it stands. CF is not read: a refused shrink leaves the claim as it was,
+%if OP_HAS_PLAZY
+.plain:
+    ; --- A PLAIN ROW IS MOVED DOWN ONTO ITS CLAIM'S BASE (SPEC.md 20.12.7.4.4)
+    ; The read began on the cluster at or below the part, so its bytes are
+    ; the head slack up the claim - up to 31.5KB on a 32KB-cluster hard disk -
+    ; and a shrink only takes the TAIL. It is the compressed arm's lesson
+    ; (88.10.4.1) without a decoder: one forward copy DOWN, safe over the
+    ; overlap because the writer is always below the reader, and then the
+    ; same shrink. On a floppy of 512-byte clusters the slack is zero and this
+    ; is one shift and a branch.
+    mov ax, bx
+    mov cl, 4
+    shr ax, cl                  ; AX = the slack in paragraphs
+    jz .keep                    ; ...none: the part is at the base already
+    mov cx, [si+OP_R_LEN]       ; read BEFORE DS moves
+    push ds
+    push si
+    add ax, dx
+    mov ds, ax                  ; DS:SI the part where the read left it...
+    mov es, dx                  ; ...ES:DI the claim's base
+    xor si, si
+    xor di, di
+    cld
+    shr cx, 1
+    rep movsw
+    adc cx, cx                  ; the odd byte, out of SHR's carry - which
+    rep movsb                   ; REP MOVSW does not touch
+    pop si
+    pop ds
+%endif
+.keep:
+    ; --- AND KEEP THE PART AND NOTHING ELSE (SPEC.md 88.10.4.1, 20.12.7.4.4)
+    ; The claim is op_lazykb's: the read rounded to whole clusters (and for a
+    ; compressed row R under it, room for the stream to sit above its output)
+    ; - on a 32KB-cluster volume, mostly cluster. Moved or expanded, the part
+    ; is `len` bytes from the claim's base and nothing else, which is never
+    ; more than the claim. A shrink always succeeds IN PLACE (SPEC.md 50.3.1),
+    ; so the base banked below is the claim's and op_drop frees it as it
+    ; stands. CF is not read: a refused shrink leaves the claim as it was,
     ; which is only the cost it had before.
     push dx                     ; the claim, which IS the part's base now
     mov ax, [si+OP_R_LEN]
@@ -1664,8 +1711,6 @@ op_fetch:
     shr ax, cl                  ; AX = the KB the session keeps
     call OSAPI_MEM_REGROW       ; DX = the claim, and a shrink keeps it there
     pop ax                      ; the base
-.plainbank:
-%endif
     or byte [si+OP_R_FLAG], OP_FETCHED  ; ...and the flag is what SAYS so
     mov [si+OP_R_ZKB], ax       ; THE ROW IS WHERE A FETCHED PART LIVES
     clc
@@ -1675,7 +1720,7 @@ op_fetch:
     call OSAPI_MEM_FREE         ; DX is still the claim, and a fetch that
     mov si, op_s_read           ; failed must leave nothing behind
     jmp op_say
-%if OP_HAS_COMP
+%if OP_HAS_ZLAZY
 .zbad:
     call OSAPI_MEM_FREE         ; ...and the same for a stream that would not
     mov si, op_s_zbad           ; expand, which leaves the row at 0 and so
@@ -1690,9 +1735,6 @@ op_fetch:
 .nodisk:
     mov si, op_s_disk
     jmp op_say
-.fail:                          ; op_unpack has already put its own message up
-    stc
-    ret
 .toobig:
     mov si, op_s_big
     jmp op_say
@@ -1712,11 +1754,18 @@ op_fetch:
 ;
 ; Dropping something that is not here, or is not lazy, is a no-op rather than
 ; an error: a caller unwinding does not have to know how far it got.
+;
+; THE BANKED WORD IS THE CLAIM'S BASE ON EVERY ROW, so it is freed as it
+; stands: op_fetch expands a compressed row onto its claim's base (SPEC.md
+; 88.10.4.1) and moves a plain one down onto it (20.12.7.4.4). A plain row's
+; word used to be the part's place PAST the head slack, which this ran the
+; slack arithmetic backwards to free.
 ; -----------------------------------------------------------------------------
 op_drop:
     push ax
+%if OP_HAS_ZLAZY
     push bx
-    push cx
+%endif
     push dx
     push si
     push es
@@ -1745,61 +1794,39 @@ op_drop:
                                 ; the two bytes shorter question is asked
 %endif
     and byte [si+OP_R_FLAG], ~OP_FETCHED & 0xFF  ; not here any more
-%if OP_HAS_COMP
+    xor ax, ax
+%if OP_HAS_ZLAZY
     ; **A COMPRESSED ROW IS SPENT, NOT EMPTY** (SPEC.md 20.12.7.4): the packed
     ; length it would need to be read again is the very word the segment went
     ; into, so 0 would have op_fetch read a stream of NOTHING and answer CF=0
-    ; over a claim of rubble. AX is free - the line below reloads it.
-    xor ax, ax
-    test byte [si+OP_R_FLAG], OP_COMP
-    jz .plaindrop
-  %if OP_HAS_ZLAZY
-    mov bx, si                  ; ...UNLESS IT HAS A SHADOW (SPEC.md
-    sub bx, op_table + OP_T_ROWS    ; 20.12.7.4.1): the packed length
-    shr bx, 1                   ; op_fetch kept goes back, and the row is a
-    shr bx, 1                   ; never-fetched one again. BX is free: the
-    mov ax, [op_zshadow + bx]   ; frame below restores it
+    ; over a claim of rubble - UNLESS IT HAS A SHADOW (SPEC.md 20.12.7.4.1),
+    ; which a fetched row always has: the packed length op_fetch kept goes
+    ; back, and the row is a never-fetched one again. BX is free: the frame
+    ; restores it.
+    OP_JPLAIN .clear
+    mov bx, si
+    sub bx, op_table + OP_T_ROWS
+    shr bx, 1
+    shr bx, 1
+    mov ax, [op_zshadow + bx]
     or ax, ax
-    jnz .plaindrop
-  %endif
+    jnz .clear
     mov ax, OP_SPENT
-.plaindrop:
+.clear:
+%endif
     mov [si+OP_R_ZKB], ax       ; CLEARED FIRST: op_seg must never answer a
                                 ; segment that is on its way back to the heap
-  %if OP_HAS_ZLAZY
-    or ax, ax                   ; ...and a COMPRESSED row's banked word IS its
-    jnz .free                   ; claim: op_fetch expands it onto the claim's
-                                ; base (SPEC.md 88.10.4.1), so there is no
-                                ; slack to take off. AX is non-zero exactly
-                                ; when the row is OP_COMP: the shadow's packed
-                                ; length, or OP_SPENT. Without such a row
-                                ; every lazy row here is plain and AX is 0
-  %endif
-%else
-    mov word [si+OP_R_ZKB], 0   ; CLEARED FIRST: op_seg must never answer a
-                                ; segment that is on its way back to the heap
-%endif
-    mov ax, [si+OP_R_OFF]       ; ...and the word op_fetch banked for a PLAIN
-    mov cl, 9                   ; row is the PART's base, which sits past the
-    shl ax, cl                  ; head slack (op_seg answers it as such).
-    mov bx, [op_clb]            ; OSAPI_MEM_FREE matches the CLAIM's base
-    dec bx                      ; exactly (mem_find_own, SPEC.md 50.3) and
-    and ax, bx                  ; op_drop never reads its CF, so a free of the
-    mov cl, 4                   ; biased word was a silent leak on every
-    shr ax, cl                  ; volume whose cluster is over 512 bytes. This
-    sub dx, ax                  ; is op_fetch's slack arithmetic run backwards;
-                                ; [op_clb] is live because op_fetch ran
-.free:                          ; op_clbget before it claimed
     call OSAPI_MEM_FREE
 .out:
     pop es
     pop si
     pop dx
-    pop cx
+%if OP_HAS_ZLAZY
     pop bx
+%endif
     pop ax
     ret
-%endif                              ; OP_HAS_LAZY
+%endif                              ; OP_HAS_FETCH
 
 ; -----------------------------------------------------------------------------
 ; op_row - the table row for part AL (module-internal)
@@ -1816,8 +1843,8 @@ op_row:
     pop ax
     ret
 
-%if OP_HAS_COMP && OP_HAS_LAZY
-; GATED (SPEC.md 20.12.9): only a table with an OP_COMP|OP_LAZY row reaches it
+%if OP_HAS_ZLAZY
+; GATED (SPEC.md 20.12.9): only a table with an OP_COMP|OP_LAZY row the standard fetches reaches it
 
 ; -----------------------------------------------------------------------------
 ; op_zrpara - R for a compressed lazy row, in paragraphs (SPEC.md 20.12.7.4)
@@ -1934,13 +1961,13 @@ op_s_big:   db 'Parts do not fit', 0
 op_s_mem:   db 'Not enough memory', 0
 op_s_disk:  db 'No disk to read from', 0
 op_s_read:  db 'Cannot read my parts', 0
-%if OP_HAS_LAZY
+%if OP_HAS_FETCH
 op_s_lazy:  db 'Not a fetchable part', 0
 %endif
 %if OP_HAS_COMP
 op_s_zbad:  db 'A part will not unpack', 0
 %endif
-%if OP_HAS_COMP && OP_HAS_LAZY
+%if OP_HAS_ZLAZY
 op_s_spent: db 'That part was dropped', 0   ; ...and cannot come back: a
 %endif                                      ; compressed lazy row's packed
                                             ; length is where the segment went

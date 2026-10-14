@@ -96,8 +96,10 @@ rd_page_need:
     call rd_here_into
     mov dx, [rd_pcwd]
     mov bl, [rd_pvol]
-    call OSAPI_FILE_GOTO        ; ...and off to the system volume
-    jc .fail
+    call OSAPI_FILE_GOTO_Q      ; ...and off to the system volume, QUIETLY
+    jc .fail                    ; (SPEC.md 19.2.2): a file read by name, no
+                                ; folder shown. CF=1 has moved NOTHING, so the
+                                ; read below never runs in the user's folder
 
     mov ax, RAMPAGE_KB
     call OSAPI_MEM_CLAIM_HI     ; owner = our segment, so drv_release sweeps it
@@ -159,10 +161,17 @@ rd_page_need:
 ; -----------------------------------------------------------------------------
 ; rd_page_back - put the user's volume back (module internal)
 ; in:  nothing
-; out: nothing (all registers AND the flags preserved)
+; out: nothing (BX, DX AND the flags preserved; AX, CX, SI, DI are GOTO_Q's)
 ;
 ; The flags, because every caller's answer is in CF and a failed remount must
 ; not read as a failed load - drv_vol_back's own rule (SPEC.md 51.5.2).
+;
+; QUIET, as drv_vol_back's own restore is: putting the user's volume back is
+; not showing it (SPEC.md 19.2.2). GOTO_Q answers in AX, and the user's
+; volume may well be a REDIRECTED one - this driver's own R: is - where it
+; reaches the volume driver's FSV_CHDIR and CX, SI and DI are that driver's
+; to spend (os88api.inc, at GOTO_Q). Both callers are inside rd_page_need,
+; which already banks all four, so they are banked once there and not twice.
 ; -----------------------------------------------------------------------------
 rd_page_back:
     pushf
@@ -170,7 +179,7 @@ rd_page_back:
     push dx
     mov dx, [rd_pcsav]
     mov bl, [rd_pvsav]
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_Q
     pop dx
     pop bx
     popf

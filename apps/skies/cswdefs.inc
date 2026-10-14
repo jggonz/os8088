@@ -28,6 +28,8 @@ CSI_PFG    equ 11               ; ...its ink...
 CSI_PHI    equ 12               ; ...and its warning
 CSI_PFACE  equ 13               ; the cockpit's face round the windows (88.9.2)
 CSI_RIVLINE equ 15              ; A RIVER SEEN FROM FAR ENOUGH TO BE A LINE
+CSI_HILL2  equ 16               ; a hill's +-x faces (88.4.4.1)
+CSI_HILLTOP equ 17              ; ...and its cap
 
 CSM_STACK equ 0                 ; levels of (wx, h, wz): boxes, pyramids, the
                                 ; tower (SPEC.md 88.5)

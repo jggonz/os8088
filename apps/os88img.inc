@@ -130,26 +130,26 @@ IMG_Y        equ 28                ; word: the row being decoded
 IMG_SBPR     equ 30                ; word: BMP source bytes per row, padded
 IMG_FLIP     equ 32                ; word: 1 = the source's first row is the
                                    ; picture's LAST (a bottom-up BMP)
-IMG_RUNC     equ 34                ; word: PCX run bytes still owed
-IMG_RUNV     equ 36                ; word: ...and the value being repeated
-IMG_PI       equ 38                ; word: img_palmap's source entry
-IMG_BESTI    equ 40                ; word: ...its closest os8088 colour
-IMG_BESTD    equ 42                ; word: ...and that colour's distance
-IMG_SRGB     equ 44                ; 3 bytes: the source triple being matched
-IMG_MASK     equ 48                ; byte: the bit img_row_planes gathers
-IMG_BPOS     equ 50                ; word: ...and the byte of the plane it is in
-IMG_ACC      equ 52                ; byte: its half-built output byte
-IMG_PAL      equ 54                ; 16 bytes: source index -> os8088 colour
-IMG_BPP      equ 70                ; word: bits per pixel, PER PLANE: 1 or 4.
+IMG_RUNC     equ 34                ; byte: PCX run bytes still owed (<= 62)
+IMG_RUNV     equ 35                ; byte: ...and the value being repeated
+IMG_PI       equ 36                ; word: img_palmap's source entry
+IMG_BESTI    equ 38                ; byte: ...its closest os8088 colour so far
+IMG_ACC      equ 39                ; byte: img_row_planes' half-built output
+IMG_SRGB     equ 40                ; 3 bytes: the source triple being matched
+IMG_PAL      equ 44                ; 16 bytes: source index -> os8088 colour
+IMG_BPP      equ 60                ; word: bits per pixel, PER PLANE: 1 or 4.
                                    ; the whole choice of row routine, and the
                                    ; only thing that differs between a 1bpp
                                    ; BMP and a 4bpp one once the header is read
-IMG_NPAL     equ 72                ; word: how many palette entries the file
+IMG_NPAL     equ 62                ; word: how many palette entries the file
                                    ; actually carries. 16 everywhere except a
                                    ; 1bpp BMP, which carries TWO - and reading
                                    ; sixteen out of a small one walks off the
                                    ; end of the file
-OS88IMG_SZ   equ 76
+OS88IMG_SZ   equ 64                ; 76 until the second shared apps pass: the
+                                   ; best distance, a plane's byte and its
+                                   ; mask live in registers now, and the run
+                                   ; count and value were only ever bytes
 
 ; IMG_ERR values. Numbers, not strings - see the header note. A caller maps
 ; them to its own wording; 0 is always "loaded".
@@ -168,6 +168,16 @@ IMG_E_VER    equ 9                 ; a format version this does not know
 %ifndef OS88IMG_CONSTS_ONLY
 
 ; -----------------------------------------------------------------------------
+; THE HELPERS BELOW img_load ARE CALLER-SAVES. img_load is the only entry and
+; it banks AX-DI, BP and ES once; everything under it clobbers what its own
+; header says and keeps SI (the block) and ES (the file) - which is all any of
+; their callers carries across a call, because every decoder loop reloads its
+; registers out of the block at the top of each row. It used to be 126 single
+; pushes and pops, every helper saving everything for callers that saved it
+; again, and a per-row helper paying for it on every row of the picture.
+; -----------------------------------------------------------------------------
+
+; -----------------------------------------------------------------------------
 ; img_load - decode the file in [SI+IMG_SRCSEG] into [SI+IMG_DSTSEG].
 ; in:  SI = the block, its six input words filled
 ; out: CF=0 and IMG_W/IMG_H/IMG_STRIDE set; CF=1 and IMG_ERR names the reason.
@@ -175,6 +185,12 @@ IMG_E_VER    equ 9                 ; a format version this does not know
 ;
 ; The format is decided by the file's own first bytes and never by its name.
 ; A .PCX called .BMP is a picture; a name is a hint (54).
+;
+; IMG_ERR is zeroed as a WORD here and every refusal below stores a BYTE into
+; it: the high byte is therefore 0 on every path, which is what lets each
+; store be one byte shorter. W/H/STRIDE are not zeroed: img_setgeom stores all
+; three on every path that reaches a picture and .fail clears all three on
+; every path that does not, so a zero here was overwritten either way.
 ; -----------------------------------------------------------------------------
 img_load:
     push ax
@@ -182,15 +198,15 @@ img_load:
     push cx
     push dx
     push di
+    push bp
     push es
-    mov word [si+IMG_ERR], 0
-    mov word [si+IMG_W], 0
-    mov word [si+IMG_H], 0
-    mov word [si+IMG_STRIDE], 0
-    mov word [si+IMG_Y], 0
+    cld                                ; img_rowout's movsb, img_palmap's lodsb
+    xor ax, ax
+    mov [si+IMG_ERR], ax
     mov word [si+IMG_BPP], 4           ; what every path that does not say
-    mov word [si+IMG_NPL], 1           ; otherwise gets: one plane of 4-bit
-    mov word [si+IMG_NPAL], 16         ; pixels and a full sixteen colours
+    inc ax                             ; otherwise gets: one plane of 4-bit
+    mov [si+IMG_NPL], ax               ; pixels and a full sixteen colours
+    mov word [si+IMG_NPAL], 16
     mov es, [si+IMG_SRCSEG]
     cmp word [si+IMG_SRCLEN], 16       ; enough to TELL THEM APART, and to
     jb .short                          ; hold a whole .PIX header. Each
@@ -209,46 +225,47 @@ img_load:
                                        ; the header it claims is still
                                        ; refused, by the test that knows which
                                        ; header that is
-    cmp word [es:0], 'O' | ('8' << 8)  ; 'O8PIX' - the 61.7 archive
+    mov ax, [es:0]
+    cmp ax, 'O' | ('8' << 8)           ; 'O8PIX' - the 61.7 archive
     jne .notpix
     cmp word [es:2], 'P' | ('I' << 8)
     jne .notpix
     cmp byte [es:4], 'X'
     jne .notpix
     call img_pix
-    jmp .done
+    jmp short .done
 .notpix:
-    cmp word [es:0], 'B' | ('M' << 8)
+    cmp ax, 'B' | ('M' << 8)
     jne .notbmp
     call img_bmp
-    jmp .done
+    jmp short .done
 .notbmp:
-    cmp byte [es:0], 10                ; ZSoft's Manufacturer constant...
+    cmp al, 10                         ; ZSoft's Manufacturer constant...
     jne .unknown
     cmp byte [es:2], 1                 ; ...and the only Encoding there is
     jne .unknown
     call img_pcx
-    jmp .done
+.done:
+    cmp byte [si+IMG_ERR], 0           ; CF=0 whatever it compares
+    je .out
+    jmp short .fail
 .unknown:
-    mov word [si+IMG_ERR], IMG_E_WHAT
-    jmp .fail
+    mov byte [si+IMG_ERR], IMG_E_WHAT
+    jmp short .fail
 .short:
-    mov word [si+IMG_ERR], IMG_E_SHORT
+    mov byte [si+IMG_ERR], IMG_E_SHORT
 .fail:
-    mov word [si+IMG_W], 0             ; A REFUSAL LEAVES NO GEOMETRY BEHIND.
-    mov word [si+IMG_H], 0             ; img_setgeom stores all three before the
-    mov word [si+IMG_STRIDE], 0        ; pixel data has been proved to be inside
-    stc                                ; the file, so a truncated PCX refuses
-    jmp .out                           ; with a complete, plausible size in the
+    xor ax, ax                         ; A REFUSAL LEAVES NO GEOMETRY BEHIND.
+    mov [si+IMG_W], ax                 ; img_setgeom stores all three before the
+    mov [si+IMG_H], ax                 ; pixel data has been proved to be inside
+    mov [si+IMG_STRIDE], ax            ; the file, so a truncated PCX refuses
+    stc                                ; with a complete, plausible size in the
                                        ; block - and a caller that reads IMG_W
                                        ; as "there is a picture" draws half of
                                        ; one and half of a stale claim
-.done:
-    cmp word [si+IMG_ERR], 0
-    jne .fail
-    clc
 .out:
     pop es
+    pop bp
     pop di
     pop dx
     pop cx
@@ -259,13 +276,9 @@ img_load:
 ; -----------------------------------------------------------------------------
 ; img_setgeom - AX = width, BX = height are known. Check them, derive the
 ; destination stride, and prove the whole picture fits what the caller
-; reserved. out: CF=1 and IMG_ERR set on refusal.
+; reserved. out: CF=1 and IMG_ERR set on refusal. Clobbers AX, BX, CX, DX.
 ; -----------------------------------------------------------------------------
 img_setgeom:
-    push ax
-    push bx
-    push cx
-    push dx
     or ax, ax
     jz .bad
     or bx, bx
@@ -281,74 +294,75 @@ img_setgeom:
     or dx, dx                          ; writes DX, and a picture whose size
     jnz .big                           ; needs more than a word cannot fit one
     mov cx, [si+IMG_DSTMAX]            ; segment however big the claim is
-    or cx, cx
-    jz .fits                           ; 0 means the whole 64KB
+    jcxz .fits                         ; 0 means the whole 64KB
     cmp ax, cx
     ja .big
 .fits:
     clc
-    jmp .out
+    ret
 .big:
-    mov word [si+IMG_ERR], IMG_E_BIG
+    mov byte [si+IMG_ERR], IMG_E_BIG
     stc
-    jmp .out
+    ret
 .bad:
-    mov word [si+IMG_ERR], IMG_E_DIM
+    mov byte [si+IMG_ERR], IMG_E_DIM
     stc
-.out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; img_rowout - the packed half of the caller's row buffer holds [IMG_STRIDE]
-; bytes; write them into the destination as row [IMG_Y]. Preserves all.
+; bytes; write them into the destination as row [IMG_Y], then step IMG_Y.
+; out: CF=1 (JB) while rows remain. Keeps SI and ES; clobbers AX-DI.
 ;
 ; IMG_FLIP inverts the row number rather than the loop, so a bottom-up BMP and
-; a top-down one share one reader and differ in one subtraction.
+; a top-down one share one reader and differ in one subtraction. The step and
+; the test are here and not in the three row loops because all three ended
+; in the same three instructions.
 ; -----------------------------------------------------------------------------
 img_rowout:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
     mov ax, [si+IMG_Y]
-    cmp word [si+IMG_FLIP], 0
+    cmp byte [si+IMG_FLIP], 0          ; 0 or 1, stored as a word
     je .down
-    mov bx, [si+IMG_H]
-    dec bx
-    sub bx, ax
-    mov ax, bx
+    not ax                             ; H-1-Y, as H + (-Y-1)
+    add ax, [si+IMG_H]
 .down:
     mov cx, [si+IMG_STRIDE]
-    push si
     mul cx                             ; DX:AX = the row's offset; img_setgeom
-    pop si                             ; already proved the product fits
-    mov di, ax
+    xchg di, ax                        ; already proved the product fits
+    push es
+    push si
     mov es, [si+IMG_DSTSEG]
-    mov cx, [si+IMG_STRIDE]
-    mov ax, [si+IMG_ROWBUF]
-    add ax, OS88IMG_RAW
-    mov si, ax
-    cld
+    mov si, [si+IMG_ROWBUF]
+    add si, OS88IMG_RAW
     rep movsb
-    pop es
-    pop di
     pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    pop es
+    inc word [si+IMG_Y]
+    mov ax, [si+IMG_Y]
+    cmp ax, [si+IMG_H]
+    ret
+
+; -----------------------------------------------------------------------------
+; img_copy - [IMG_P] onward in the FILE, CX bytes into DS:DI; then IMG_P steps
+; on by the SOURCE stride IMG_SBPR, so a padded row steps over its own padding
+; whatever CX took. The .PIX and .BMP row loops' shared first half. Clobbers
+; AL, BX, CX, DI.
+; -----------------------------------------------------------------------------
+img_copy:
+    mov bx, [si+IMG_P]
+.c:
+    mov al, [es:bx]                    ; NOT movsb: the source is ES and the
+    mov [di], al                       ; destination DS, the one pairing the
+    inc bx                             ; string instructions cannot spell
+    inc di
+    loop .c
+    mov ax, [si+IMG_SBPR]
+    add [si+IMG_P], ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; img_rowconv - the raw half of the caller's row buffer holds one SOURCE row;
-; build the packed half from it. Preserves all.
+; build the packed half from it. Clobbers AX-DI, as the row routines do.
 ;
 ; Five accepted arrangements, two row routines, and IMG_BPP alone decides:
 ;
@@ -366,25 +380,20 @@ img_rowout:
 ; loop, so neither one is a loop that has only ever run against the test file
 ; written to exercise it - each arrived already proved by the other format's
 ; corpus, including a 1152x90 file this project did not write.
+;
+; img_rowmask follows it in the file and both arms end in it.
 ; -----------------------------------------------------------------------------
 img_rowconv:
-    push ax
-    push bx
-    cmp word [si+IMG_BPP], 4
+    cmp byte [si+IMG_BPP], 4           ; 1 or 4, stored as a word
     jne .planes
     call img_row_nib
-    jmp .tail
+    jmp short img_rowmask
 .planes:
-    call img_row_planes
-.tail:
-    call img_rowmask
-    pop bx
-    pop ax
-    ret
+    call img_row_planes                ; ...and on into img_rowmask
 
 ; -----------------------------------------------------------------------------
 ; img_rowmask - AN ODD WIDTH LEAVES THE LAST LOW NIBBLE OF THE PACKED ROW
-; UNUSED, AND IT IS ZERO. Preserves all.
+; UNUSED, AND IT IS ZERO. Clobbers BX.
 ;
 ; It is outside the picture, so nothing draws it and nothing looks at it - and
 ; it still has to be decided, because the routines above did not agree about
@@ -405,149 +414,96 @@ img_rowconv:
 ; one format whose padding nibble was whatever the file said.
 ; -----------------------------------------------------------------------------
 img_rowmask:
-    push ax
-    push bx
-    test word [si+IMG_W], 1
+    test byte [si+IMG_W], 1
     jz .out
     mov bx, [si+IMG_ROWBUF]
-    add bx, OS88IMG_RAW
     add bx, [si+IMG_STRIDE]
-    dec bx
-    mov al, [bx]
-    and al, 0xF0
-    mov [bx], al
+    and byte [bx+OS88IMG_RAW-1], 0xF0
 .out:
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; img_palmap - fill [SI+IMG_PAL] with, for each of [SI+IMG_NPAL] source RGB
 ; triples at ES:DI, the nearest os8088 colour. DL = 0 for a PCX's R,G,B
-; triples or 1 for a BMP's B,G,R,reserved quads. Preserves all.
+; triples or 1 for a BMP's B,G,R,reserved quads. Clobbers AX-DI and BP.
 ;
 ; The table is sixteen entries whatever the file carries, and the entries the
 ; file does NOT carry are left as the IDENTITY rather than as zero. A 1bpp BMP
 ; can only ever produce index 0 or 1, so the tail is unreachable through the
 ; pixels - but it is reachable through a corrupt one, and a defined answer
 ; there is a wrong colour instead of a whole picture in black.
+;
+; THE TWO ORDERS ARE ONE ARM: they agree about the middle byte and differ in
+; which end is red, so the entry is read once and the ends are exchanged for a
+; BMP. The candidate walk then steps BX by three through the table - a channel
+; at a time, so no `mul` finds a triple - and the two formats differ again only
+; in the size of an entry, DX (0 or 1) on top of three.
 ; -----------------------------------------------------------------------------
 img_palmap:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    push es
     call img_palident                  ; the entries the file does not carry
+    mov dh, 0
     mov word [si+IMG_PI], 0
 .entry:
-    cmp dl, 0
-    je .rgb
-    mov al, [es:di+2]                  ; a BMP palette entry is B,G,R,reserved
-    mov [si+IMG_SRGB], al
-    mov al, [es:di+1]
-    mov [si+IMG_SRGB+1], al
-    mov al, [es:di]
-    mov [si+IMG_SRGB+2], al
-    jmp .have
-.rgb:
-    mov al, [es:di]                    ; a PCX one is plain R,G,B
-    mov [si+IMG_SRGB], al
-    mov al, [es:di+1]
-    mov [si+IMG_SRGB+1], al
-    mov al, [es:di+2]
-    mov [si+IMG_SRGB+2], al
-.have:
-    push di
     push dx
-    mov word [si+IMG_BESTI], 0
-    mov word [si+IMG_BESTD], 0xFFFF
-    xor bx, bx                         ; bx = the candidate, 0..15
+    mov al, [es:di]                    ; R,G,B - or B,G,R,reserved
+    mov ah, [es:di+1]
+    mov cl, [es:di+2]
+    or dl, dl
+    jz .rgb
+    xchg al, cl                        ; a BMP's red is at the other end
+.rgb:
+    mov [si+IMG_SRGB], ax              ; R and G
+    mov [si+IMG_SRGB+2], cl            ; ...and B
+    mov bp, 0xFFFF                     ; BP = the best distance so far
+    xor ax, ax                         ; AH stays 0 for every `add cx, ax`
+    xor bx, bx                         ; BX = the candidate's triple
+    cwd                                ; DL = the candidate, DH = 0
 .cand:
-    mov di, bx
-    push bx
-    mov ax, di
-    mov bx, 3
-    mul bx                             ; DX:AX = the triple's offset; three
-    pop bx                             ; times fifteen needs no high word
-    mov di, ax
-    xor cx, cx
-    mov al, [si+IMG_SRGB]              ; |dR| - IMG_PAL8088 IS READ THROUGH CS.
-    sub al, [cs:di+img_pal8088]        ; It is a table in this file's own
-    jnc .r                             ; IMAGE, and if this include is built
-    neg al                             ; into an overlay that image is not the
-.r:                                    ; one DS points at (93.2)
-    mov ah, 0
+    push si
+    add si, IMG_SRGB
+    xor cx, cx                         ; CX = |dR|+|dG|+|dB|, under 766
+    mov dh, 3
+.chan:
+    lodsb                              ; IMG_PAL8088 IS READ THROUGH CS. It is
+    sub al, [cs:bx+img_pal8088]        ; a table in this file's own IMAGE, and
+    jnc .pos                           ; if this include is built into an
+    neg al                             ; overlay that image is not the one DS
+.pos:                                  ; points at (93.2)
     add cx, ax
-    mov al, [si+IMG_SRGB+1]            ; + |dG|
-    sub al, [cs:di+img_pal8088+1]
-    jnc .g
-    neg al
-.g:
-    mov ah, 0
-    add cx, ax
-    mov al, [si+IMG_SRGB+2]            ; + |dB|, and the sum is under 766
-    sub al, [cs:di+img_pal8088+2]
-    jnc .b
-    neg al
-.b:
-    mov ah, 0
-    add cx, ax
-    cmp cx, [si+IMG_BESTD]
-    jae .next
-    mov [si+IMG_BESTD], cx
-    mov [si+IMG_BESTI], bx
-.next:
     inc bx
-    cmp bx, 16
+    dec dh
+    jnz .chan
+    pop si
+    cmp cx, bp
+    jae .next
+    mov bp, cx
+    mov [si+IMG_BESTI], dl
+.next:
+    inc dx                             ; DH is 0 again: this is DL
+    cmp dl, 16
     jb .cand
+    mov bx, [si+IMG_PI]
+    mov al, [si+IMG_BESTI]
+    mov [bx+si+IMG_PAL], al
     pop dx
-    pop di
-    mov bx, si
-    add bx, IMG_PAL
-    add bx, [si+IMG_PI]
-    mov ax, [si+IMG_BESTI]
-    mov [bx], al
-    cmp dl, 0
-    je .step3
-    add di, 4
-    jmp .stepped
-.step3:
-    add di, 3
-.stepped:
-    mov ax, [si+IMG_NPAL]
-    inc word [si+IMG_PI]
-    cmp [si+IMG_PI], ax
+    add di, 3                          ; three bytes an entry, or four
+    add di, dx
+    inc bx
+    mov [si+IMG_PI], bx
+    cmp bx, [si+IMG_NPAL]
     jb .entry
-    pop es
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; img_palident - no palette in the file: source index IS an os8088 colour.
 ; .PIX blocks are already written in our own indices (61.7), so this is what
 ; they get, and it is also the identity a BMP written by this tree lands on.
+; Clobbers BX.
 img_palident:
-    push ax
-    push bx
-    push cx
-    mov bx, si
-    add bx, IMG_PAL
-    xor cx, cx
+    mov bx, 15
 .l:
-    mov al, cl
-    mov [bx], al
-    inc bx
-    inc cx
-    cmp cx, 16
-    jb .l
-    pop cx
-    pop bx
-    pop ax
+    mov [bx+si+IMG_PAL], bl
+    dec bx
+    jns .l
     ret
 
 ; os8088's own sixteen, CBLACK..CWHITE, as R,G,B: the table
@@ -569,40 +525,43 @@ img_pal8088:
 ; a caller has to know: [IMG_PICNO] chooses, and 0 means "the first entry",
 ; because picture NUMBERS are not contiguous (Standard 8.8.6.1) and a caller
 ; that just wants the artwork should not have to know what they are.
+;
+; Every exit is a bare `ret` now and the error stores share one tail, which
+; brought img_setgeom's `jc .out` from exactly +127 - the last distance a short
+; jump reaches, so NASM emitted it short or as a near pair according to the
+; includer's layout - to +80, short in every includer.
 ; =============================================================================
 img_pix:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
     cmp byte [es:5], 1                 ; ZP_FMT_VER. A different version is
     jne .ver                           ; refused whole rather than read hopefully
     cmp word [es:10], 16               ; the entry size is IN the file so that a
     jne .ver                           ; future tool that grows it is refused
     mov cx, [es:6]                     ; here instead of misread here
-    or cx, cx
-    jz .nopic
+    jcxz .nopic
     mov di, 16                         ; the directory starts after the header
     mov ax, cx
     mov bx, 16
     mul bx                             ; DX:AX = its length
     or dx, dx
     jnz .trunc
-    add ax, 16
+    add ax, bx
     jc .trunc
     cmp ax, [si+IMG_SRCLEN]
     ja .trunc
 .scan:
-    cmp word [si+IMG_PICNO], 0
+    mov ax, [si+IMG_PICNO]
+    or ax, ax
     je .found                          ; 0 = whichever is first
-    mov ax, [es:di]
-    cmp ax, [si+IMG_PICNO]
+    cmp ax, [es:di]
     je .found
-    add di, 16
-    dec cx
-    jnz .scan
-    jmp .nopic
+    add di, bx
+    loop .scan
+.nopic:
+    mov al, IMG_E_NOPIC
+    jmp short .err
+.ver:
+    mov al, IMG_E_VER
+    jmp short .err
 .found:
     mov ax, [es:di+2]                  ; width
     mov bx, [es:di+4]                  ; height
@@ -616,9 +575,8 @@ img_pix:
     mov [si+IMG_SBPR], cx              ; padded wider than ours
     cmp cx, [si+IMG_STRIDE]
     jb .trunc                          ; a stride under (w+1)/2 cannot hold the
-    mov ax, cx                         ; row it claims to
-    mov bx, [si+IMG_H]
-    mul bx                             ; DX:AX = the block. The tool refuses
+    xchg ax, cx                        ; row it claims to
+    mul word [si+IMG_H]                ; DX:AX = the block. The tool refuses
     or dx, dx                          ; one over 64KB and so does zpic.inc,
     jnz .trunc                         ; so this agrees with both
     add ax, [si+IMG_P]
@@ -626,43 +584,22 @@ img_pix:
     cmp ax, [si+IMG_SRCLEN]
     ja .trunc
     call img_palident                  ; already our own indices
-    mov word [si+IMG_FLIP], 0
-    mov word [si+IMG_Y], 0
+    mov [si+IMG_FLIP], dx              ; DX is 0 from the multiply
+    mov [si+IMG_Y], dx
 .row:
     mov di, [si+IMG_ROWBUF]
     add di, OS88IMG_RAW                ; straight into the packed half: there
     mov cx, [si+IMG_STRIDE]            ; is nothing to convert
-    mov bx, [si+IMG_P]
-.copy:
-    mov al, [es:bx]
-    mov [di], al
-    inc bx
-    inc di
-    dec cx
-    jnz .copy
+    call img_copy
     call img_rowmask                   ; the one format that does not convert
     call img_rowout                    ; still owes the output format its rule
-    mov ax, [si+IMG_SBPR]              ; the SOURCE stride, so a padded row
-    add [si+IMG_P], ax                 ; steps over its own padding
-    inc word [si+IMG_Y]
-    mov ax, [si+IMG_Y]
-    cmp ax, [si+IMG_H]
     jb .row
-    jmp .out
-.ver:
-    mov word [si+IMG_ERR], IMG_E_VER
-    jmp .out
-.nopic:
-    mov word [si+IMG_ERR], IMG_E_NOPIC
-    jmp .out
+    ret
 .trunc:
-    mov word [si+IMG_ERR], IMG_E_TRUNC
+    mov al, IMG_E_TRUNC
+.err:
+    mov [si+IMG_ERR], al
 .out:
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -678,11 +615,6 @@ img_pix:
 ; segment nobody else can see. Same posture as pt_bmp_in (42.6).
 ; =============================================================================
 img_bmp:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
     cmp word [si+IMG_SRCLEN], 54       ; 14 + the smallest BITMAPINFOHEADER.
     jb .trunc                          ; every header word read below is
                                        ; inside that, and the palette and the
@@ -715,46 +647,44 @@ img_bmp:
     cmp word [es:20], 0
     jne .trunc
     mov ax, [es:18]                    ; biWidth, low word
-    cmp word [es:24], 0                ; biHeight is SIGNED and 32-bit, so its
-    jne .maybeflip                     ; sign is in the HIGH word - testing
-    mov bx, [es:22]                    ; [es:22] tests the height itself, which
-    mov word [si+IMG_FLIP], 1          ; is nonzero for every real picture, and
-    jmp .geom                          ; sent every BOTTOM-UP file down the
-.maybeflip:                            ; top-down path
-    cmp word [es:24], 0xFFFF           ; a 32-bit negative small enough to be a
-    jne .trunc                         ; height is FFFF:xxxx; anything else is
-    mov bx, [es:22]                    ; a height over 65535
-    neg bx
-    mov word [si+IMG_FLIP], 0          ; a NEGATIVE height is top-down
+    mov bx, [es:22]                    ; biHeight, low word
+    mov cx, [es:24]                    ; biHeight is SIGNED and 32-bit, so its
+    jcxz .up                           ; sign is in the HIGH word - testing
+    inc cx                             ; [es:22] tests the height itself, which
+    jnz .trunc                         ; is nonzero for every real picture, and
+    neg bx                             ; sent every BOTTOM-UP file down the
+    jmp short .geom                    ; top-down path. A 32-bit negative small
+                                       ; enough to be a height is FFFF:xxxx and
+                                       ; anything else is a height over 65535;
+                                       ; a NEGATIVE height is top-down, and CX
+.up:                                   ; is 0 for it. A positive one is
+    inc cx                             ; bottom-up: FLIP = 1
 .geom:
+    mov [si+IMG_FLIP], cx
     call img_setgeom
     jc .out
     mov ax, [si+IMG_W]                 ; the SOURCE row, rounded up to a
-    cmp word [si+IMG_BPP], 1           ; multiple of FOUR BYTES - the BMP rule,
-    je .sbpr1                          ; not ours, and it is padding whichever
-    inc ax                             ; depth it is. 4bpp: two pixels a byte
-    shr ax, 1
-    jmp .sbprpad
-.sbpr1:
-    add ax, 7                          ; 1bpp: eight
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-.sbprpad:
+    mov cl, 1                          ; multiple of FOUR BYTES - the BMP rule,
+    cmp byte [si+IMG_BPP], 1           ; not ours, and it is padding whichever
+    jne .sbpr                          ; depth it is. 4bpp: two pixels a byte,
+    add ax, 6                          ; 1bpp: eight - which is the same round-
+    mov cl, 3                          ; up by 1 and by 7 and the same shift
+.sbpr:                                 ; by 1 and by 3
+    inc ax
+    shr ax, cl
     add ax, 3
-    and ax, 0xFFFC
+    and al, 0xFC
     mov [si+IMG_SBPR], ax
     mov [si+IMG_BPL], ax               ; ONE plane, so the plane stride IS the
     cmp ax, OS88IMG_RAW                ; row - which is the whole of what lets
     ja .dim                            ; a 1bpp row reach img_row_planes
-    mov ax, 16                         ; a 1bpp file carries TWO entries, and
-    cmp word [si+IMG_BPP], 1           ; reading sixteen out of one walks into
+    mov cx, 16                         ; a 1bpp file carries TWO entries, and
+    cmp byte [si+IMG_BPP], 1           ; reading sixteen out of one walks into
     jne .havenpal                      ; its pixels - or off the end of a small
-    mov ax, 2                          ; file, which is the same bug in a hat
+    mov cl, 2                          ; file, which is the same bug in a hat
 .havenpal:
-    mov [si+IMG_NPAL], ax
-    mov cx, ax                         ; four bytes an entry
-    shl cx, 1
+    mov [si+IMG_NPAL], cx
+    shl cx, 1                          ; four bytes an entry
     shl cx, 1
     mov di, 14                         ; the palette follows the info header
     add di, [si+IMG_P]
@@ -769,58 +699,42 @@ img_bmp:
     mov ax, [es:10]                    ; bfOffBits, at last
     mov [si+IMG_P], ax
     mov ax, [si+IMG_SBPR]
-    mov bx, [si+IMG_H]
-    mul bx                             ; DX:AX = every source row
+    mul word [si+IMG_H]                ; DX:AX = every source row
     or dx, dx
     jnz .trunc
     add ax, [si+IMG_P]
     jc .trunc
     cmp ax, [si+IMG_SRCLEN]
     ja .trunc
-    mov word [si+IMG_Y], 0
+    mov [si+IMG_Y], dx
 .row:
     mov cx, [si+IMG_SBPR]              ; one source row into the raw half...
     mov di, [si+IMG_ROWBUF]
-    mov bx, [si+IMG_P]
-.copy:
-    mov al, [es:bx]
-    mov [di], al
-    inc bx
-    inc di
-    dec cx
-    jnz .copy
+    call img_copy
     call img_rowconv                   ; ...and through the palette map
     call img_rowout
-    mov ax, [si+IMG_SBPR]
-    add [si+IMG_P], ax
-    inc word [si+IMG_Y]
-    mov ax, [si+IMG_Y]
-    cmp ax, [si+IMG_H]
     jb .row
-    jmp .out
+    ret
 .depth:
-    mov word [si+IMG_ERR], IMG_E_DEPTH
-    jmp .out
+    mov al, IMG_E_DEPTH
+    jmp short .err
 .comp:
-    mov word [si+IMG_ERR], IMG_E_COMP
-    jmp .out
+    mov al, IMG_E_COMP
+    jmp short .err
 .dim:
-    mov word [si+IMG_ERR], IMG_E_DIM
-    jmp .out
+    mov al, IMG_E_DIM
+    jmp short .err
 .trunc:
-    mov word [si+IMG_ERR], IMG_E_TRUNC
+    mov al, IMG_E_TRUNC
+.err:
+    mov [si+IMG_ERR], al
 .out:
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; img_row_nib - the raw half holds one row of 4-bit pixels, two to a byte with
 ; the high nibble leftmost; build the packed half with every nibble mapped
-; through IMG_PAL.
+; through IMG_PAL. Clobbers AX, BX, CX, DX, DI.
 ;
 ; That is a 4bpp BMP row and it is equally a 4bpp one-plane PCX row - the two
 ; formats differ in how the row got into the buffer and not at all in what is
@@ -835,22 +749,13 @@ img_bmp:
 ; borrowing CL would mean banking the loop counter around every pixel.
 ; -----------------------------------------------------------------------------
 img_row_nib:
-    push ax
-    push bx
-    push cx
-    push dx
     push si
-    push di
     mov cx, [si+IMG_STRIDE]
-    mov dx, [si+IMG_ROWBUF]
-    mov bx, si
-    add bx, IMG_PAL                    ; BX = XLAT's table, computed while SI
-    mov si, dx                         ; is still the block
-    mov di, dx
-    add di, OS88IMG_RAW
+    lea bx, [si+IMG_PAL]               ; BX = XLAT's table, computed while SI
+    mov si, [si+IMG_ROWBUF]            ; is still the block
+    lea di, [si+OS88IMG_RAW]
 .b:
-    mov al, [si]
-    inc si
+    lodsb
     mov ah, al                         ; both nibbles banked
     shr al, 1
     shr al, 1
@@ -869,12 +774,7 @@ img_row_nib:
     mov [di], al                       ; NOT stosb: ES is the source FILE here,
     inc di                             ; and the packed row lives in DS
     loop .b
-    pop di
     pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -910,31 +810,25 @@ img_row_nib:
 ; that is the file this refuses.
 ; =============================================================================
 img_pcx:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
     cmp word [si+IMG_SRCLEN], 128      ; the whole PCX header - which is where
     jb .trunc                          ; the sixteen-colour palette lives, so
                                        ; there is no shorter legal one
+    xor ax, ax
     mov al, [es:3]                     ; BitsPerPixel, PER PLANE
-    xor ah, ah
     mov [si+IMG_BPP], ax
     mov al, [es:65]                    ; NPlanes
-    xor ah, ah
     mov [si+IMG_NPL], ax
-    cmp word [si+IMG_BPP], 1
+    cmp byte [si+IMG_BPP], 1           ; (AH is 0: both are bytes in the file)
     je .onebit
-    cmp word [si+IMG_BPP], 4           ; 4 bits in ONE plane: the other legal
+    cmp byte [si+IMG_BPP], 4           ; 4 bits in ONE plane: the other legal
     jne .depth                         ; sixteen-colour spelling, and already
-    cmp ax, 1                          ; the layout we want. 4 bits in FOUR
+    cmp al, 1                          ; the layout we want. 4 bits in FOUR
     jne .depth                         ; planes would be 16-bit colour
-    jmp .npok
+    jmp short .npok
 .onebit:
-    cmp ax, 1                          ; one 1-bit plane is monochrome...
+    cmp al, 1                          ; one 1-bit plane is monochrome...
     je .npok
-    cmp ax, 4                          ; ...and four ARE a 4-bit index
+    cmp al, 4                          ; ...and four ARE a 4-bit index
     jne .depth
 .npok:
     mov ax, [es:8]                     ; Xmax
@@ -950,17 +844,17 @@ img_pcx:
     mov ax, [es:66]                    ; BytesPerLine - carried, never derived
     or ax, ax
     jz .dim
-    test ax, 1
+    test al, 1
     jnz .dim                           ; "MUST be an EVEN number"
     mov [si+IMG_BPL], ax
     mov cx, [si+IMG_W]                 ; ...and it must still cover the width
-    cmp word [si+IMG_BPP], 1           ; it claims, which is a different number
+    cmp byte [si+IMG_BPP], 1           ; it claims, which is a different number
     jne .min4                          ; at each depth
     add cx, 7                          ; 1bpp: eight pixels a byte
     shr cx, 1
     shr cx, 1
     shr cx, 1
-    jmp .havemin
+    jmp short .havemin
 .min4:
     inc cx                             ; 4bpp: two
     shr cx, 1
@@ -978,7 +872,7 @@ img_pcx:
     mov di, 16                         ; 16 are then not a palette, and a file
     xor dl, dl                         ; that leaves them zero maps every index
     call img_palmap                    ; to CBLACK - a whole picture in black,
-    jmp .havepal                       ; which is the outcome the palette pass
+    jmp short .havepal                 ; which is the outcome the palette pass
 .nopal:                                ; exists to avoid. The palette a version
     call img_palident                  ; 3 file means is the fixed EGA one, and
 .havepal:                              ; that IS os8088's own sixteen in order.
@@ -992,10 +886,11 @@ img_pcx:
                                        ; black and BLUE, and it is on the page
                                        ; to say so
     mov word [si+IMG_P], 128           ; the pixel data begins after the header
-    mov word [si+IMG_FLIP], 0          ; PCX is top-down
-    mov word [si+IMG_Y], 0
+    xor ax, ax
+    mov [si+IMG_FLIP], ax              ; PCX is top-down
+    mov [si+IMG_Y], ax
 .row:
-    mov word [si+IMG_RUNC], 0          ; a run never spans a scan line
+    mov byte [si+IMG_RUNC], 0          ; a run never spans a scan line
     mov cx, [si+IMG_TOT]
     mov di, [si+IMG_ROWBUF]
 .fill:
@@ -1003,87 +898,69 @@ img_pcx:
     jc .trunc
     mov [di], al
     inc di
-    dec cx
-    jnz .fill
+    loop .fill
     call img_rowconv
     call img_rowout
-    inc word [si+IMG_Y]
-    mov ax, [si+IMG_Y]
-    cmp ax, [si+IMG_H]
     jb .row
-    jmp .out
+    ret
 .depth:
-    mov word [si+IMG_ERR], IMG_E_DEPTH
-    jmp .out
+    mov al, IMG_E_DEPTH
+    jmp short .err
 .dim:
-    mov word [si+IMG_ERR], IMG_E_DIM
-    jmp .out
+    mov al, IMG_E_DIM
+    jmp short .err
 .trunc:
-    mov word [si+IMG_ERR], IMG_E_TRUNC
+    mov al, IMG_E_TRUNC
+.err:
+    mov [si+IMG_ERR], al
 .out:
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; img_pcxbyte - the next decoded byte of the stream, in AL. CF=1 = the file
-; ended first. Preserves everything else.
+; ended first. Clobbers AH and BX.
 ;
 ; "If the top two bits are set, the remaining six bits in the byte show how
 ; many times to duplicate the next byte in the file. If the top two bits are
 ; not set, the first byte is the data itself, with a count of one."
+;
+; IMG_RUNC and IMG_RUNV are reached as BYTES only: a count is at most 62 and a
+; value is a byte, so neither word's high byte is ever read.
 ; -----------------------------------------------------------------------------
 img_pcxbyte:
-    push bx
-    cmp word [si+IMG_RUNC], 0          ; still owed some of a run?
-    je .fresh
-    dec word [si+IMG_RUNC]
-    mov ax, [si+IMG_RUNV]
-    clc
-    jmp .out
+    cmp byte [si+IMG_RUNC], 0          ; still owed some of a run?
+    je .fresh                          ; (CF=0 whatever it compares, and `dec`
+    dec byte [si+IMG_RUNC]             ; leaves CF alone)
+    mov al, [si+IMG_RUNV]
+    ret
 .fresh:
     mov bx, [si+IMG_P]
     cmp bx, [si+IMG_SRCLEN]
     jae .end
     mov al, [es:bx]
     inc bx
-    mov [si+IMG_P], bx
-    and al, 0xC0
     cmp al, 0xC0                       ; both top bits, and only both
-    jne .literal
-    mov al, [es:bx-1]
+    jb .lit
     and al, 0x3F                       ; 1..63; a count of 0 is a corrupt file
-    xor ah, ah                         ; and would spin here forever
-    or ax, ax
-    jz .end
+    jz .end                            ; and would spin here forever
     cmp bx, [si+IMG_SRCLEN]
     jae .end
     dec ax                             ; this call returns the first of them
-    mov [si+IMG_RUNC], ax
+    mov [si+IMG_RUNC], al
     mov al, [es:bx]
-    xor ah, ah
-    mov [si+IMG_RUNV], ax
     inc bx
+    mov [si+IMG_RUNV], al
+.lit:
     mov [si+IMG_P], bx
     clc
-    jmp .out
-.literal:
-    mov al, [es:bx-1]
-    xor ah, ah
-    clc
-    jmp .out
+    ret
 .end:
     stc
-.out:
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
 ; img_row_planes - the raw half holds one scanline as IMG_NPL 1-bit planes of
-; IMG_BPL bytes each; build the packed half.
+; IMG_BPL bytes each; build the packed half. Clobbers AX, BX, CX, DX, DI, BP.
 ;
 ; Plane p contributes BIT p of every pixel's index - EGA's own arrangement, so
 ; four 1-bit planes are a 4-bit colour with nothing lost. ONE plane gives 0 or
@@ -1095,68 +972,45 @@ img_pcxbyte:
 ; loop with one test per plane. Twiddling eight pixels at a time is possible
 ; and would fold the plane count, the width remainder and the palette map into
 ; one unrolled path - the sort of routine that works on the picture you tested
-; and drops a column on the picture you did not.
+; and drops a column on the picture you did not. What it does NOT do any more
+; is MULTIPLY per plane per pixel to find the plane: the planes are IMG_BPL
+; apart, so the byte steps down by that much instead, and the bit's mask is
+; one shift by CL rather than a loop of them.
 ; -----------------------------------------------------------------------------
 img_row_planes:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    push bp
     mov di, [si+IMG_ROWBUF]
     add di, OS88IMG_RAW                ; DI = the packed row being built
     xor bp, bp                         ; BP = x, the pixel being assembled
 .pixel:
-    mov ax, bp                         ; which byte of a plane holds it...
-    mov cx, ax
-    and cx, 7
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    mov [si+IMG_BPOS], ax
-    mov al, 0x80                       ; ...and which bit. Bit 7 is LEFTMOST,
-.mask:                                 ; so the mask walks down from it
-    or cx, cx
-    jz .masked
-    shr al, 1
-    dec cx
-    jmp .mask
-.masked:
-    mov [si+IMG_MASK], al
-    xor dl, dl                         ; DL = the index being gathered
-    mov dh, 1                          ; DH = the bit this plane contributes
-    xor cx, cx
+    mov bx, bp                         ; which byte of a plane holds it...
+    mov cl, bl
+    and cl, 7
+    mov ah, 0x80                       ; ...and which bit. Bit 7 is LEFTMOST,
+    shr ah, cl                         ; so the mask walks down from it
+    shr bx, 1
+    shr bx, 1
+    shr bx, 1
+    add bx, [si+IMG_ROWBUF]            ; BX = that byte in plane 0
+    xor dx, dx                         ; DL = the index being gathered
+    inc dh                             ; DH = the bit this plane contributes
+    mov cx, [si+IMG_NPL]
 .plane:
-    mov ax, cx
-    push dx
-    mul word [si+IMG_BPL]              ; DX:AX = the plane's first byte. `mul`
-    pop dx                             ; writes DX and DX is carrying the two
-    add ax, [si+IMG_BPOS]              ; halves of the answer
-    add ax, [si+IMG_ROWBUF]
-    mov bx, ax
-    mov al, [bx]
-    and al, [si+IMG_MASK]
+    test [bx], ah
     jz .noplane
     or dl, dh
 .noplane:
     shl dh, 1
-    inc cx
-    cmp cx, [si+IMG_NPL]
-    jb .plane
-    mov bx, si                         ; the index, through the palette map
-    add bx, IMG_PAL
-    xor dh, dh
-    add bx, dx
-    mov al, [bx]
+    add bx, [si+IMG_BPL]               ; the same byte, one plane on
+    loop .plane
+    mov bl, dl                         ; the index, through the palette map
+    mov bh, 0
+    mov al, [bx+si+IMG_PAL]
     test bp, 1
     jnz .odd
-    shl al, 1                          ; an even x is the HIGH nibble, and
-    shl al, 1                          ; waits for its partner
-    shl al, 1
-    shl al, 1
+    mov cl, 4                          ; an even x is the HIGH nibble, and
+    shl al, cl                         ; waits for its partner
     mov [si+IMG_ACC], al
-    jmp .next
+    jmp short .next
 .odd:
     or al, [si+IMG_ACC]
     mov [di], al
@@ -1165,17 +1019,11 @@ img_row_planes:
     inc bp
     cmp bp, [si+IMG_W]
     jb .pixel
-    test word [si+IMG_W], 1            ; an odd width leaves one pixel in the
+    test byte [si+IMG_W], 1            ; an odd width leaves one pixel in the
     jz .done                           ; high nibble with no partner, and the
     mov al, [si+IMG_ACC]               ; stride (w+1)/2 has the room for it
     mov [di], al
 .done:
-    pop bp
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 %endif  ; OS88IMG_CONSTS_ONLY

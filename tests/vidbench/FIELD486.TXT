@@ -5,7 +5,8 @@ A bootable fixed disk: the os8088 kernel, the Video
 Player, three benches and some test clips (read
 this file on the host: the disk has no text viewer).
 What it measures becomes a new encoder target (a
-"486" profile), the way the 286-vga one was made.
+"486-dx2-66" profile), the way the 286-speeddemon
+one was made.
 
   17 sectors, 15 heads, 250 cylinders (31 MB), IDE.
   In 86Box: `make 486-video`, or your own 486 with

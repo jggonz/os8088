@@ -52,8 +52,8 @@ cs_f_dome:                          ; a box with a pyramid on it: eight
     CS_SIDES 0, CSI_WALL, CSI_WALL2
     CS_SIDES 4, CSI_WALL, CSI_WALL2
 cs_f_hill:                          ; a frustum in the hill's ink
-    CS_SIDES 0, CSI_HILL, CSI_HILL
-    CS_TOP 4, CSI_HILL
+    CS_SIDES 0, CSI_HILL, CSI_HILL2  ; two-tone, as a building is (88.4.4.1)
+    CS_TOP 4, CSI_HILLTOP
 cs_f_sacre:                         ; a box, its roof, a drum and a dome
     CS_SIDES 0, CSI_WALL, CSI_WALL2
     CS_TOP 4, CSI_ROOF

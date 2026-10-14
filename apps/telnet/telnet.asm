@@ -115,10 +115,13 @@ TE_TX       equ 256                 ; keystrokes and protocol replies waiting
                                     ; for the worker - 64 before SPEC.md
                                     ; 70.10.3, and still a power of two so the
                                     ; index is `and`-masked
-TE_PND      equ 32                  ; ...and the ONE refused reply, held whole:
-                                    ; a Zmodem hex header is 21 bytes and a
-                                    ; binary one at most 18 after escaping,
-                                    ; `SB TTYPE IS` is 10 and `SB NAWS` is 9
+TE_PND      equ 21                  ; ...and the ONE refused reply, held whole:
+                                    ; the longest reply this end composes is a
+                                    ; Zmodem hex header, 21 bytes with its XON
+                                    ; (TZ_OBMAX); NAWS's WILL and size are 12,
+                                    ; `SB TTYPE IS` and the cancel 10 each. It
+                                    ; was 32, for a binary header this end
+                                    ; never sends
 
 TE_SLINE    equ 44                  ; the status field, in CELLS. It was 16 -
                                     ; the longest connection state - and
@@ -179,24 +182,17 @@ te_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [te_win], bx
-    push ax                         ; **THE GESTURE'S TWO SLOTS** (SPEC.md
-    push bx                         ; 20.5.1.3): neither is a template word
-    push si
-    push di
-    push dx
-    mov ax, bx
-    mov bx, te_btrec
-    mov si, te_onup
-    mov di, te_ondrag
-    mov dx, te_onclick                ; OUR own click work; the library
-                                    ; takes the press FIRST and chains
+    mov ax, bx                      ; **THE GESTURE'S TWO SLOTS** (SPEC.md
+    mov bx, te_btrec                ; 20.5.1.3): neither is a template word.
+    mov si, te_onup                 ; os88ui_btninit keeps every register and
+    mov di, te_ondrag               ; nothing below reads the ones it is
+    mov dx, te_onclick              ; handed - BX is re-loaded where it is
+                                    ; wanted, SI is the entry's own and is
+                                    ; popped at .out - so there is no frame
+                                    ; round it. DX is OUR own click work; the
+                                    ; library takes the press FIRST and chains
                                     ; here (SPEC.md 20.5.1.3.3)
     call os88ui_btninit
-    pop dx
-    pop di
-    pop si
-    pop bx
-    pop ax
     ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
     ; exists, and not beside any worker's declaration: a package with
     ; NO worker is the case that moves most easily, and putting it at
@@ -205,7 +201,7 @@ te_entry:
     OS88_ALTENTER_ARM               ; SPEC.md 11.2.1.1: nothing tracks a
                                     ; scancode until something asks, and both
                                     ; halves of the chord ride on that map
-    OS88_REGION_MOVABLE
+    OS88_REGION_MOVABLE te_escape.stay  ; ...a bare `ret` of ours IS the proc
     mov word [te_line + LN_BUF], te_hbuf    ; **THE BLOCK'S BUFFER WORDS, and
     mov word [te_line + LN_MAX], TE_HOSTMAX ; they are not optional**: bss
                                             ; arrives ZEROED (SPEC.md 21 step
@@ -213,14 +209,15 @@ te_entry:
                                             ; offset 0 - the package's own
                                             ; header - and the first keystroke
                                             ; writes into it
-    mov byte [te_lfg], 0x07         ; SPEC.md 70.9.4's LOGICAL state, and
-    call te_derive                  ; [con_attr] is derived from it and never
+    call te_reset                   ; SPEC.md 70.9.4's LOGICAL state, and
+                                    ; [con_attr] is derived from it and never
                                     ; set by hand - which is the whole reason
                                     ; `CSI 7;31m` comes out black on red. bss
                                     ; arrives ZEROED (SPEC.md 21 step 5), and
                                     ; a logical foreground of zero would derive
-                                    ; black on black
-    mov byte [con_cvis], 1           ; ...and the cursor is drawn until `?25l`
+                                    ; black on black - so the launch takes a
+                                    ; new session's own start, which also has
+                                    ; the cursor drawn until `?25l`
     call con_font                    ; the 256 CP437 glyphs, ROM where there is
     call con_clear                   ; one and the shipped table where not
     mov al, 1
@@ -231,10 +228,9 @@ te_entry:
                                     ; adapters (SPEC.md 11.94)
     push si
     mov si, te_menus
-    call OSAPI_MENU_SET
-    mov al, 1
-    mov bx, [te_win]
-    call OSAPI_WM_SIZABLE           ; **RESIZABLE, AND NOTHING REFLOWS.**
+    call OSAPI_MENU_SET             ; ...and BX is [te_win] from here on: this
+    mov al, 1                       ; and the three slots below preserve every
+    call OSAPI_WM_SIZABLE           ; register. **RESIZABLE, AND NOTHING REFLOWS.**
                                     ; te_layout derives con_vcols and con_vrows
                                     ; from the LIVE content box on every call,
                                     ; so both axes change how much of the
@@ -242,7 +238,6 @@ te_entry:
                                     ; neither changes the screen. The window
                                     ; opens wide enough for all of it
     mov ax, tz_wake
-    mov bx, [te_win]
     call OSAPI_WM_ONWAKE            ; **THE UI-TASK HALF** (SPEC.md 70.11.3):
                                     ; everything in this package that touches a
                                     ; file happens in there, because a worker
@@ -426,25 +421,14 @@ te_paint:
                                     ; answer
     call te_hire
     call te_layout
-    push si
-    mov si, te_line
-    call os88line_draw
-    pop si
-    call te_button
+    call te_chrome
     call te_screen
-    call te_status
     call te_promise                 ; a full paint settles every debt, so the
                                     ; glass matches the buffer and the window
                                     ; may be banked again (SPEC.md 70.7). This
                                     ; is where the promise comes BACK after a
                                     ; covered session withdrew it
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp te_pop6
 
 ; The record's two arrays. The LABEL one is a single entry and is PATCHED,
 ; because this button's caption changes with the session (SPEC.md 20.5.1.3's
@@ -474,6 +458,16 @@ te_button:
     pop ax
     ret
 
+; --- te_chrome - the host field, the button and the status line ------------
+; Everything on the window that is not the terminal, which three callers draw
+; together: a paint, a click in the field and a key that edited it.
+te_chrome:
+    push si
+    mov si, te_line
+    call os88line_draw
+    pop si
+    call te_button                  ; ...and falls into te_status
+
 ; --- te_status - one line under the screen: what the connection is doing -----
 ; ONE OPAQUE font_run, space-padded (SPEC.md 6.1): the field changes on every
 ; state edge and a fill-then-letter pair would blank it each time.
@@ -500,11 +494,12 @@ te_status:
     xor bh, bh
     shl bx, 1
     mov si, [te_names + bx]
-    cmp byte [te_state], TS_ERR
+    cmp bl, TS_ERR * 2
     jne .have
-    cmp word [te_msg], 0
-    je .have
-    mov si, [te_msg]                ; **THE REASON AND NOT THE STATE.** `Failed`
+    mov ax, [te_msg]
+    or ax, ax
+    jz .have
+    xchg ax, si                     ; **THE REASON AND NOT THE STATE.** `Failed`
                                     ; is what every one of these looks like from
                                     ; the outside; `No partner` and `Refused`
                                     ; are different things to go and do
@@ -542,13 +537,7 @@ te_status:
     mov al, CBLACK
     mov ah, CWHITE
     call OSAPI_FONT_RUN
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp te_pop6
 
 ; --- te_screen - every row of the terminal (a repaint owes all of them) -----
 te_screen:
@@ -599,31 +588,25 @@ te_wscroll:
 .out:
     pop cx
     ret
-te_onup:
-    push ax
-    push bx
-    push si
-    push di
-    mov bx, te_btrec
+te_onup:                            ; ...and AX and BX are the only two
+    push ax                         ; anything here writes: os88ui_btnup and
+    push bx                         ; btndrag keep the rest, and so do
+    mov bx, te_btrec                ; te_toggle and te_button
     call os88ui_btnup               ; AX = what FIRED, 0 = cancelled
     or ax, ax
     jz .uout
     call te_toggle
     call te_button                  ; the caption follows the state
 .uout:
-    pop di
-    pop si
     pop bx
     pop ax
     ret
 
 te_ondrag:
-    push ax
     push bx
     mov bx, te_btrec
     call os88ui_btndrag
     pop bx
-    pop ax
     ret
 
 te_onclick:
@@ -660,20 +643,9 @@ te_onclick:
     pop si
     jc .out
 .redraw:
-    push si
-    mov si, te_line
-    call os88line_draw
-    pop si
-    call te_button
-    call te_status
+    call te_chrome
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp te_pop6
 
 ; -----------------------------------------------------------------------------
 ; te_onkey - AL = ascii, AH = scan, SI = window; lock held
@@ -702,14 +674,13 @@ te_onkey:
     cmp byte [te_line + LN_FOCUS], 0
     je .host
     cmp al, 13
-    je .go
+    je .leave
     cmp al, 9
     jne .host
-.defocus:
-    mov byte [te_line + LN_FOCUS], 0    ; Tab leaves the box, which is the
-    jmp short .drawfield                ; only way to reach the screen with
-.go:                                    ; the keyboard
-    mov byte [te_line + LN_FOCUS], 0
+.leave:                                 ; Tab leaves the box, which is the
+    mov byte [te_line + LN_FOCUS], 0    ; only way to reach the screen with
+    cmp al, 13                          ; the keyboard - and Return leaves it
+    jne .drawfield                      ; CONNECTING
     call te_toggle
     jmp short .drawfield
 .host:
@@ -727,26 +698,12 @@ te_onkey:
     call te_tx                      ; ...QUEUED, not sent: the wire belongs to
     jmp short .out                  ; the worker and a callback that touched it
 .fsx:
-    push si
-    mov si, [te_win]
-    call te_fsx
-    pop si
-    jmp short .out
+    call te_fsx                     ; SI is still the window: os88line_key's
+    jmp short .out                  ; call above kept it
 .drawfield:                         ; would hold the gfx lock across it
-    push si
-    mov si, te_line
-    call os88line_draw
-    pop si
-    call te_button
-    call te_status
+    call te_chrome
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp te_pop6
 
 ; =============================================================================
 ; THE KEYS (SPEC.md 70.10.2)
@@ -765,42 +722,50 @@ te_onkey:
 ; SPEC.md 9.6's keyboard-mouse takes Home, Up, PgUp, Left, Right, End, Down and
 ; PgDn for pointer movement and Ins, Del and Space for the buttons whenever
 ; [mou_ptr] is 0. ScrollLock is the escape hatch and it is the only one, so the
-; About panel says so (SPEC.md 70.10.2, te_ab5).
+; About panel says so (SPEC.md 70.10.2, te_abtext's sixth line).
 ; =============================================================================
-; --- the extended-key table: scan, length, then the bytes -------------------
+; --- the extended-key table: scan, then what the key sends -----------------
 ; ANSI-BBS conventions rather than the VT's - `ESC [ K` for End and `ESC [ V` /
 ; `ESC [ U` for the page keys are what a DOOR game reads, and every board's own
 ; help screen names them.
+;
+; **TWO BYTES A KEY, NOT THE SEQUENCE** - three shapes cover all twenty-two,
+; and te_tx composes the bytes from the second one:
+;   0x7F        Del, which is that byte and nothing else
+;   0x80 + n    `ESC [ n ~`, n two decimal digits (F5..F12)
+;   'P'..'S'    `ESC O x` (F1..F4, SS3)
+;   anything    `ESC [ x` - and no CSI final in this table is P..S, which is
+;   else        the one fact the decoder rests on
 te_keytab:
-    db 0x48, 3, 0x1B, '[', 'A'      ; Up
-    db 0x50, 3, 0x1B, '[', 'B'      ; Down
-    db 0x4D, 3, 0x1B, '[', 'C'      ; Right
-    db 0x4B, 3, 0x1B, '[', 'D'      ; Left
-    db 0x47, 3, 0x1B, '[', 'H'      ; Home
-    db 0x4F, 3, 0x1B, '[', 'K'      ; End
-    db 0x49, 3, 0x1B, '[', 'V'      ; PgUp
-    db 0x51, 3, 0x1B, '[', 'U'      ; PgDn
-    db 0x52, 3, 0x1B, '[', '@'      ; Ins
-    db 0x53, 1, 0x7F                ; Del
-    db 0x3B, 3, 0x1B, 'O', 'P'      ; F1
-    db 0x3C, 3, 0x1B, 'O', 'Q'      ; F2
-    db 0x3D, 3, 0x1B, 'O', 'R'      ; F3
-    db 0x3E, 3, 0x1B, 'O', 'S'      ; F4
-    db 0x3F, 5, 0x1B, '[', '1', '5', '~'    ; F5
-    db 0x40, 5, 0x1B, '[', '1', '7', '~'    ; F6
-    db 0x41, 5, 0x1B, '[', '1', '8', '~'    ; F7
-    db 0x42, 5, 0x1B, '[', '1', '9', '~'    ; F8
-    db 0x43, 5, 0x1B, '[', '2', '0', '~'    ; F9
-    db 0x44, 5, 0x1B, '[', '2', '1', '~'    ; F10
-    db 0x85, 5, 0x1B, '[', '2', '3', '~'    ; F11 - and it MAY NEVER ARRIVE:
-    db 0x86, 5, 0x1B, '[', '2', '4', '~'    ; F12   the kernel polls int 16h
-    db 0                                    ;       AH=01h/00h and never the
-                                            ;       enhanced AH=10h/11h, so an
-                                            ;       XT-class BIOS does not
-                                            ;       surface 0x85/0x86. The rows
-                                            ;       are here so a machine whose
-                                            ;       BIOS does sends the right
-                                            ;       thing; nothing depends on it
+    db 0x48, 'A'                    ; Up
+    db 0x50, 'B'                    ; Down
+    db 0x4D, 'C'                    ; Right
+    db 0x4B, 'D'                    ; Left
+    db 0x47, 'H'                    ; Home
+    db 0x4F, 'K'                    ; End
+    db 0x49, 'V'                    ; PgUp
+    db 0x51, 'U'                    ; PgDn
+    db 0x52, '@'                    ; Ins
+    db 0x53, 0x7F                   ; Del
+    db 0x3B, 'P'                    ; F1
+    db 0x3C, 'Q'                    ; F2
+    db 0x3D, 'R'                    ; F3
+    db 0x3E, 'S'                    ; F4
+    db 0x3F, 0x80 + 15              ; F5
+    db 0x40, 0x80 + 17              ; F6
+    db 0x41, 0x80 + 18              ; F7
+    db 0x42, 0x80 + 19              ; F8
+    db 0x43, 0x80 + 20              ; F9
+    db 0x44, 0x80 + 21              ; F10
+    db 0x85, 0x80 + 23              ; F11 - and it MAY NEVER ARRIVE:
+    db 0x86, 0x80 + 24              ; F12   the kernel polls int 16h
+    db 0                            ;       AH=01h/00h and never the
+                                    ;       enhanced AH=10h/11h, so an
+                                    ;       XT-class BIOS does not
+                                    ;       surface 0x85/0x86. The rows
+                                    ;       are here so a machine whose
+                                    ;       BIOS does sends the right
+                                    ;       thing; nothing depends on it
 te_k_crlf:  db 13, 10
 te_k_iac:   db IAC, IAC
 
@@ -816,8 +781,10 @@ te_k_iac:   db IAC, IAC
 ; `ESC [ 1 5 ~` on the wire is `15~` typed into a board's menu.
 ; -----------------------------------------------------------------------------
 te_tx:
+    push ax
     push cx
     push si
+    push di
     or al, al
     jz .ext
     cmp al, 13
@@ -840,27 +807,52 @@ te_tx:
     mov cx, 2
     jmp short .send
 .ext:
-    mov si, te_keytab
+    mov si, te_keytab - 2
 .scan:
+    inc si
+    inc si
     mov cl, [si]
     or cl, cl
     jz .out                         ; not a key this terminal sends: dropped,
     cmp cl, ah                      ; which is what a bare scan code with no
-    je .found                       ; meaning to a board deserves
-    mov cl, [si+1]
-    xor ch, ch
-    add si, cx
-    add si, 2
-    jmp short .scan
-.found:
-    mov cl, [si+1]
-    xor ch, ch
-    add si, 2
+    jne .scan                       ; meaning to a board deserves
+    mov al, [si+1]                  ; ...and what it sends, composed in tz_dig:
+    mov di, tz_dig                  ; the UI task's scratch, and te_tx is the
+    mov si, di                      ; UI task's alone (a key or the bracket's
+    mov cx, 1                       ; poll), so nothing else can be in it too
+    cmp al, 0x7F
+    je .last                        ; Del: the byte itself
+    mov word [di], 0x5B1B           ; ESC [
+    inc di
+    inc di
+    mov cl, 3
+    or al, al
+    jns .three
+    and al, 0x7F                    ; ESC [ n ~
+    aam                             ; AH = tens, AL = units
+    xchg al, ah
+    add ax, '00'
+    mov [di], ax
+    inc di
+    inc di
+    mov al, '~'
+    mov cl, 5
+    jmp short .last
+.three:
+    cmp al, 'P'
+    jb .last
+    cmp al, 'S'
+    ja .last
+    mov byte [di-1], 'O'            ; F1..F4: SS3, ESC O x
+.last:
+    mov [di], al
 .send:
     call te_enq
 .out:
+    pop di
     pop si
     pop cx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -924,12 +916,9 @@ te_enq:
     sub bx, [te_txw]
     dec bx
     and bx, TE_TX-1                 ; BX = the free bytes
-    xor dx, dx                      ; DX = 0 taken, 1 refused
     cmp bx, cx
-    jae .copy
-    inc dx
-    jmp short .done
-.copy:
+    sbb dx, dx                      ; DX = 0 taken, -1 refused
+    jnz .done
     mov bx, [te_txw]
     jcxz .store
 .byte:
@@ -943,22 +932,12 @@ te_enq:
     mov [te_txw], bx
 .done:
     popf                            ; ...and the answer is carried in DX, not
-    or dx, dx                       ; in CF: popf restores the flags this proc
-    jnz .full                       ; was entered with (SPEC.md 1's critical
-    pop si                          ; section is pushf/cli...popf, never
-    pop dx                          ; cli/sti)
-    pop cx
-    pop bx
+    neg dx                          ; in CF: popf restores the flags this proc
+    pop si                          ; was entered with (SPEC.md 1's critical
+    pop dx                          ; section is pushf/cli...popf, never
+    pop cx                          ; cli/sti). `neg` sets CF exactly when DX
+    pop bx                          ; is not zero, and `pop` writes no flag
     pop ax
-    clc
-    ret
-.full:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1080,20 +1059,36 @@ te_toggle:
 ; later that nobody remembered to add here is a session that starts dirty -
 ; which is the failure this shape makes impossible rather than unlikely.
 te_reset:
+    push cx
+    push di
+    mov di, te_pst
+    mov cx, TE_PSTATE
+    call te_zero
+    mov byte [con_cvis], 1           ; ...the one byte of it that is not zero
+    mov byte [te_lfg], 0x07         ; ...SGR 0's state, through the one routine
+    call te_derive                  ; that owns the derivation
+    call tz_sfree                   ; ...and a staging claim the last session's
+                                    ; transfer left behind: [te_zon] and
+                                    ; [tz_req] are both zero now (SPEC.md
+                                    ; 70.11.3), and this is the UI task
+    pop di
+    pop cx
+    ret
+
+; --- te_zero - CX bytes at DS:DI to zero; every register kept ---------------
+; The one `rep stosb` behind te_reset, tz_begin and a new file's counters
+; (tz_poll, tz_infodone): ES is the KERNEL's on a callback and the worker's
+; may be anything, so it is set here and nowhere else.
+te_zero:
     push ax
     push cx
     push di
     push es
     push ds
-    pop es                          ; ...ES is the KERNEL's on a callback
+    pop es
     cld
-    mov di, te_pst
-    mov cx, TE_PSTATE
     xor al, al
     rep stosb
-    mov byte [con_cvis], 1           ; ...the one byte of it that is not zero
-    mov byte [te_lfg], 0x07         ; ...SGR 0's state, through the one routine
-    call te_derive                  ; that owns the derivation
     pop es
     pop di
     pop cx
@@ -1394,8 +1389,7 @@ te_close:
     mov bh, NET_CLASS
     mov bl, NETV_CLOSE
     call OSAPI_DRV_CALL
-    mov si, te_s_closed
-    mov [te_msg], si
+    mov word [te_msg], te_s_closed
     pop bx
     pop ax
 te_drop:
@@ -1505,45 +1499,59 @@ te_byte:
     or bl, bl
     jnz .proto
     cmp al, IAC
-    jne .text
-    mov byte [te_ph], 1
-    jmp .out
-.proto:
-    cmp bl, 1
-    je .cmd
-    cmp bl, 2
-    je .optn
-    cmp bl, TP_SBOPT
-    je .sbopt
-    cmp bl, TP_SBODY
-    je .sbody
-    cmp bl, TP_SBIAC
-    je .sbiac
-    mov byte [te_ph], 0
-    jmp .out
+    je .iac
+.text:                              ; **THE APPLICATION BYTE, and the hot path
+    cmp byte [te_zon], 0            ; falls straight through to it**: GROUND,
+    jne .zm                         ; not an IAC, not a transfer
+    call te_pbyte                   ; ...the PARSER (SPEC.md 70.9)
+.out:
+    pop bx
+    ret
+.zm:
+    call tz_byte                    ; ...or to the Zmodem receiver, which is
+    pop bx                          ; BELOW this layer for a reason that is not
+    ret                             ; cosmetic: a data subpacket contains every
+                                    ; byte value, and a receiver reading IAC IAC
+                                    ; as two 0xFFs corrupts every download with
+                                    ; one in it (SPEC.md 70.11)
+.iac:
+    mov bl, 1
+.ph:                                ; BL = the phase the NEXT byte is read in
+    mov [te_ph], bl
+    pop bx
+    ret
+.proto:                             ; [te_ph] 1..5, one `dec` an arm
+    dec bl
+    jz .cmd
+    dec bl
+    jz .optn
+    dec bl
+    jz .sbopt                       ; TP_SBOPT
+    dec bl
+    jz .sbody                       ; TP_SBODY
+    dec bl
+    jz .sbiac                       ; TP_SBIAC
+.ph0:
+    xor bl, bl
+    jmp short .ph
 .cmd:
     cmp al, IAC
     je .escaped                     ; IAC IAC is a literal 255
+    mov bl, TP_SBOPT
     cmp al, T_SB
-    je .startsb
+    je .ph
     cmp al, T_WILL
-    jae .want
-    mov byte [te_ph], 0             ; a two-byte command we ignore
-    jmp .out
+    jb .ph0                         ; a two-byte command we ignore
+    mov [te_verb], al               ; DO/DONT/WILL/WONT: the option follows
+    mov bl, 2
+    jmp short .ph
 .escaped:
     mov byte [te_ph], 0
-    jmp .text
-.startsb:
-    mov byte [te_ph], TP_SBOPT
-    jmp .out
-.want:
-    mov [te_verb], al               ; DO/DONT/WILL/WONT: the option follows
-    mov byte [te_ph], 2
-    jmp .out
+    jmp short .text
 .optn:
     mov byte [te_ph], 0
     call te_option
-    jmp .out
+    jmp short .out
 .sbopt:
     cmp al, IAC
     je .cmd                         ; **A WAY OUT** (the w3 review's MINOR 3):
@@ -1554,16 +1562,17 @@ te_byte:
                                     ; `^]` to recover it. teansi.inc's MUSIC and
                                     ; STRING swallows both abort on CAN and SUB
                                     ; and say why; this one sits ABOVE them and
-                                    ; can swallow just as much. [te_ph] is 1 on
-                                    ; this path - .cmd is the arm that phase
-                                    ; names - so the byte is simply handed on,
-                                    ; and `IAC SB IAC IAC` still takes a literal
+                                    ; can swallow just as much. Every exit of
+                                    ; .cmd stores the phase it names, so the
+                                    ; byte is simply handed on, and
+                                    ; `IAC SB IAC IAC` still takes a literal
                                     ; option 255
     mov [te_sbopt], al              ; WHICH subnegotiation, and how far in we
-    mov byte [te_sbn], 0            ; are: `SB TTYPE SEND` is the option, then
-    mov byte [te_sbsnd], 0          ; a single 1
-    mov byte [te_ph], TP_SBODY
-    jmp .out
+    mov word [te_sbn], 0            ; are: `SB TTYPE SEND` is the option, then
+                                    ; a single 1 - [te_sbn] and [te_sbsnd], one
+                                    ; word
+    mov bl, TP_SBODY
+    jmp short .ph
 .sbody:
     cmp al, IAC
     je .sbesc                       ; **AND IT IS AN IAC THAT ENDS ONE**, not a
@@ -1577,21 +1586,20 @@ te_byte:
 .sbmore:
     inc byte [te_sbn]
     cmp byte [te_sbn], TE_SBMAX
-    jb .out
-    mov byte [te_ph], 0             ; ...**AND A BOUND**. No option this terminal
-    jmp .out                        ; answers sends a body this long, so a
-                                    ; runaway one is by definition a stream that
+    jae .ph0                        ; ...**AND A BOUND**. No option this terminal
+    pop bx                          ; answers sends a body this long, so a
+    ret                             ; runaway one is by definition a stream that
                                     ; has gone wrong - and abandoning it puts the
                                     ; screen back rather than eating the session
 .sbesc:
-    mov byte [te_ph], TP_SBIAC
-    jmp .out
+    mov bl, TP_SBIAC
+    jmp .ph
 .sbiac:
     cmp al, T_SE
     je .sbend
-    mov byte [te_ph], TP_SBODY      ; IAC IAC inside a body, or a command this
-    inc byte [te_sbn]               ; does not act on: back to swallowing - and
-    jmp .out                        ; **THE ESCAPED IAC IS COUNTED** (the w3
+    inc byte [te_sbn]               ; IAC IAC inside a body, or a command this
+    mov bl, TP_SBODY                ; does not act on: back to swallowing - and
+    jmp .ph                         ; **THE ESCAPED IAC IS COUNTED** (the w3
                                     ; review's MINOR 4). Without it a body whose
                                     ; first byte is a literal 0xFF left the
                                     ; counter at 0 and the SECOND body byte was
@@ -1601,23 +1609,10 @@ te_byte:
 .sbend:
     mov byte [te_ph], 0
     cmp byte [te_sbsnd], 0
-    je .out
+    je .sbout
     mov byte [te_sbsnd], 0
     call te_say_ttype
-    jmp .out
-.text:
-    cmp byte [te_zon], 0
-    jne .zm
-    call te_pbyte                   ; ...and the APPLICATION byte goes to the
-    jmp short .out                  ; parser (SPEC.md 70.9)
-.zm:
-    call tz_byte                    ; ...or to the Zmodem receiver, which is
-                                    ; BELOW this layer for a reason that is not
-                                    ; cosmetic: a data subpacket contains every
-                                    ; byte value, and a receiver reading IAC IAC
-                                    ; as two 0xFFs corrupts every download with
-                                    ; one in it (SPEC.md 70.11)
-.out:
+.sbout:
     pop bx
     ret
 
@@ -1806,9 +1801,38 @@ te_about:
     mov [te_win], si
     call te_layout
     mov byte [te_abon], 1
-    mov al, CWHITE                  ; the terminal's own area, cleared - the
-    call OSAPI_SET_COLOR            ; host box and the button stay, because
-    call con_wpx                     ; nothing here covers them
+    call te_blank                   ; the terminal's own area, cleared - the
+                                    ; host box and the button stay, because
+                                    ; nothing here covers them
+    mov si, te_abtext               ; the lines are CONSECUTIVE strings, ended
+    mov dx, [con_oy]                ; by a 0xFF where a line would start
+    add dx, TE_TOPY + 12
+    cld
+.line:
+    mov cx, [con_px]
+    add cx, 16
+    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the box this routine
+    push si                         ; filled white just above
+    call OSAPI_FONT_RUN
+    pop si
+.skip:
+    lodsb
+    or al, al
+    jnz .skip
+    add dx, 12
+    cmp byte [si], 0xFF
+    jne .line
+    jmp te_pop6
+
+; --- te_blank - the terminal's own area in white, for a TAKEOVER -----------
+; in:  te_layout run, the gfx lock held; out: the colour BLACK, AX..DX spent
+; The About panel's and the Zmodem progress panel's, which were one sequence
+; written twice: from the text pen to the view's right edge, and from the
+; first text row to just above the status line - which neither redraws.
+te_blank:
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    call con_wpx
     mov cx, [con_px]
     add cx, ax
     dec cx
@@ -1817,34 +1841,10 @@ te_about:
     add bx, TE_TOPY
     mov dx, [con_oy]
     add dx, [te_chh]
-    sub dx, TE_STATH + 1            ; ...and NOT over the status line, which
-    call OSAPI_GFX_FILL             ; te_abdismiss does not redraw
+    sub dx, TE_STATH + 1
+    call OSAPI_GFX_FILL
     mov al, CBLACK
     call OSAPI_SET_COLOR
-    mov si, te_ablines
-    mov dx, [con_oy]
-    add dx, TE_TOPY + 12
-.line:
-    mov cx, [si]
-    or cx, cx
-    jz .done
-    push si
-    mov si, cx
-    mov cx, [con_px]
-    add cx, 16
-    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the box this routine
-    call OSAPI_FONT_RUN             ; filled white just above
-    pop si
-    add si, 2
-    add dx, 12
-    jmp short .line
-.done:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- te_abdismiss - CF=1 if this event was spent putting the terminal back ---
@@ -1859,23 +1859,22 @@ te_abdismiss:
     clc
     ret
 
-te_ablines:
-    dw te_ab1, te_ab2, te_ab2b, te_ab3, te_ab4, te_ab5, te_ab6, 0
-te_ab1:     db 'Telnet for os8088 - an ANSI-BBS terminal', 0
-te_ab2:     db 'RFC 854 over the socket API, 80x25, colour', 0
-te_ab2b:    db 'Zmodem receive, CRC-16, to the Save dialog', 0
-te_ab3:     db 0                    ; a blank line is a line with no glyphs
-te_ab4:     db 'A board needs the arrow keys, and with no', 0
-te_ab5:     db 'mouse SCROLL LOCK is what gives them back.', 0
+te_abtext:  db 'Telnet for os8088 - an ANSI-BBS terminal', 0
+            db 'RFC 854 over the socket API, 80x25, colour', 0
+            db 'Zmodem receive, CRC-16, to the Save dialog', 0
+            db 0                    ; a blank line is a line with no glyphs
+            db 'A board needs the arrow keys, and with no', 0
+            db 'mouse SCROLL LOCK is what gives them back.', 0
                                     ; **SPEC.md 9.6's keyboard-mouse takes
                                     ; eleven of SPEC.md 70.10.2's keys** - the
                                     ; arrows, Home, End, PgUp, PgDn, Ins, Del
                                     ; and Space - whenever [mou_ptr] is 0, and
-                                    ; kbm_slock is the ONLY escape hatch. A
-                                    ; board is unusable without them, so this
+                                    ; Scroll Lock (kbm_shf) is the ONLY escape
+                                    ; hatch. A board is unusable without them, so this
                                     ; is on the panel rather than in a document
                                     ; nobody has beside the machine
-te_ab6:     db 'Contributed by Elendilon', 0
+            db 'Contributed by Elendilon', 0
+            db 0xFF                 ; ...and no line starts with that byte
 
 ; -----------------------------------------------------------------------------
 ; te_split - the host box into te_host and te_port
@@ -1883,54 +1882,47 @@ te_ab6:     db 'Contributed by Elendilon', 0
 ; `host`, `host:port`. A missing port is 23, which is the only default a
 ; Telnet client may have.
 ; -----------------------------------------------------------------------------
-te_split:
-    push ax
+te_split:                           ; ...and DX, which the `mul` spends:
+    push ax                         ; te_step is the one caller and banks it
     push bx
     push cx
     push si
     push di
+    cld
     mov si, te_hbuf
     mov di, te_host
     mov cx, TE_HOSTMAX-1
-    mov word [te_port], 23
 .copy:
-    mov al, [si]
-    or al, al
-    jz .done
+    lodsb
     cmp al, ':'
-    je .port
+    je .colon
     mov [di], al
     inc di
-    inc si
-    loop .copy
-.done:
-    mov byte [di], 0
-    jmp short .out
-.port:
-    mov byte [di], 0
-    inc si
-    xor ax, ax
-    mov word [te_port], 0
+    or al, al
+    loopnz .copy                    ; ...to the NUL, or the box's last byte
+    jmp short .dflt
+.colon:
+    xor bx, bx                      ; BX = the port so far
 .dig:
-    mov bl, [si]
-    inc si
-    cmp bl, '0'
-    jb .pdone
-    cmp bl, '9'
-    ja .pdone
-    mov ax, [te_port]
+    lodsb
+    sub al, '0'
+    cmp al, 9
+    ja .pend                        ; a non-digit, the NUL among them
+    cbw
+    xchg ax, bx
     mov cx, 10
     mul cx
-    sub bl, '0'
-    xor bh, bh
-    add ax, bx
-    mov [te_port], ax
+    add bx, ax                      ; BX = BX*10 + the digit
     jmp short .dig
-.pdone:
-    cmp word [te_port], 0
-    jne .out
-    mov word [te_port], 23
-.out:
+.pend:
+    xchg ax, bx
+    or ax, ax
+    jnz .set                        ; `host:` and `host:0` are both 23
+.dflt:
+    mov ax, 23
+.set:
+    mov [te_port], ax
+    mov byte [di], 0                ; the host ends at the colon, or the box
     pop di
     pop si
     pop cx
@@ -1946,37 +1938,33 @@ te_split:
 
 te_oncmd:
     push ax
+    push bx
     push si
-    or al, al                       ; **AL IS THE ITEM AND AH IS THE MENU.**
-    jnz .i1                         ; This tested AH, and there is exactly one
-    call te_toggle                  ; menu here - so it was always 0 and Clear
-    jmp short .rp                   ; Screen could never be reached. The
-.i1:                                ; browser's Go menu had the same fault at
-    cmp al, 1                       ; the same place (SPEC.md 71.8)
-    jne .i2
-    call con_clear
-    jmp short .rp
-.i2:
-    cmp al, 2
-    jne .i3
-    call te_ice_flip
-    jmp short .rp
-.i3:
-    cmp al, 4
-    jne .fs
-    call tz_ask                     ; ASKED, not done: the wire is the worker's
-    jmp short .rp                   ; (SPEC.md 70.2) and te_pnd has one writer
-.fs:
     mov si, [te_win]
-    call te_fsx                     ; ...and the bracket repaints the world on
-    jmp short .out                  ; its way out (SPEC.md 53.6), so this one
-.rp:                                ; owes no paint
-    mov si, [te_win]
+    cmp al, 3                       ; **AL IS THE ITEM AND AH IS THE MENU.**
+    je .fs                          ; This tested AH once, and there is exactly
+    cmp al, 4                       ; one menu here - so it was always 0 and
+    ja .fs                          ; Clear Screen could never be reached. The
+    mov bl, al                      ; browser's Go menu had the same fault at
+    xor bh, bh                      ; the same place (SPEC.md 71.8)
+    shl bx, 1
+    call [te_cmds + bx]             ; ...each keeps every register, SI too
     call te_paint
-.out:
-    pop si
+    jmp short .out
+.fs:
+    call te_fsx                     ; ...and the bracket repaints the world on
+.out:                               ; its way out (SPEC.md 53.6), so this one
+    pop si                          ; owes no paint
+    pop bx
     pop ax
     ret
+te_cmds:    dw te_toggle            ; 0 Connect / Close
+            dw con_clear            ; 1 Clear Screen
+            dw te_ice_flip          ; 2 iCE Colours
+            dw 0                    ; 3 Full Screen - te_fsx, above
+            dw tz_ask               ; 4 Receive File: ASKED, not done - the wire
+                                    ;   is the worker's (SPEC.md 70.2) and
+                                    ;   te_pnd has one writer
 
 ; -----------------------------------------------------------------------------
 ; te_ice_flip - iCE COLOURS (SPEC.md 70.8.9)
@@ -2024,7 +2012,9 @@ te_ice_label:
 te_name_s:  db 'Telnet', 0
 te_m_sess:  db 'Session', 0
 te_i_sess:  dw te_it_conn, te_it_clr, te_it_ice, te_it_fs, tz_it_rx
-te_it_conn: db 'Connect / Close', 0
+te_it_conn: db 'Connect / '
+te_s_disc:  db 'Close', 0           ; ...the button's caption is the item's
+                                    ; tail
 te_it_clr:  db 'Clear Screen', 0
 te_it_ice:  db 'iCE Colours', 0
 te_it_icy:  db 'iCE Colours (on)', 0
@@ -2045,13 +2035,12 @@ te_s_refused: db 'Refused', 0
 te_s_closed: db 'Host closed', 0
 te_s_lost:  db 'Link lost', 0
 te_s_conn:  db 'Connect', 0
-te_s_disc:  db 'Close', 0
-te_ttl:     db 'Telnet', 0
 
 ; --- window template (SPEC.md 11) -------------------------------------------
 te_tpl:
     dw 40, 40, TE_W, TE_H
-    dw te_ttl, te_paint, te_onkey, te_onclick
+    dw te_name_s, te_paint, te_onkey, te_onclick    ; the title is the
+                                                    ; app name's string
 
 %include "os88alt.inc"          ; SPEC.md 11.2.1.1's edge, for the bracket
 %define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)
@@ -2071,6 +2060,11 @@ te_tpl:
                                 ; second reader is tools/ansisim.py and whose
                                 ; gate is tests/telansi.py
 %include "tetxt.inc"            ; ...and the text-mode screen (SPEC.md 70.6)
+%include "os88m83.inc"          ; the 8.3 mangle, FTPD's too (SPEC.md 77.20)
+%define DEC_U32                 ; dec_u32c: `16,384 / 40,960` (SPEC.md 70.11.3)
+%define DEC_SEP
+%define DEC_U16                 ; ...and the DSR reply's row and column
+%include "os88dec.inc"
 %include "tezm.inc"             ; THE ZMODEM RECEIVER (SPEC.md 70.11), whose
                                 ; other end is tools/os88bbs.py's sender and
                                 ; whose gate is tests/telzm.py
@@ -2089,6 +2083,22 @@ te_tpl:
 ; ...and a CHAIN rather than literal offsets, which is what made the extraction
 ; a renumbering job: five words came out of the middle of the old one and every
 ; line below them had to be re-counted by hand.
+; --- THE SIZES THE CODE NEEDS, declared before the chain that uses them ----
+; tz_name, tz_msg, tz_bmsg and tz_ob are chained WITH these, so a buffer is
+; exactly what its writer needs and a guard on it would compare an expression
+; with itself. Each line says which writer, and why that many.
+TZ_NAMEMAX  equ 13                  ; tz_dlgdone copies 12 and terminates
+TZ_MSGMAX   equ 44                  ; tz_text: 12 of name, 2, 13, 3, 13, NUL
+TZ_BMSGMAX  equ 23                  ; tz_bigmsg: `Cluster ` 8, [tz_clus] - a
+                                    ; WORD, so `65,535` at most - 6, ` too big`
+                                    ; 8 and the NUL. It was declared 32 against
+                                    ; a guard of 30, which counted the number
+                                    ; as 32 bits it never is
+TZ_DIGMAX   equ 5                   ; te_tx's composed key: ESC [ n n ~. It
+                                    ; was 12, tz_num's digits, until the numbers
+                                    ; moved onto the stack in os88dec.inc
+TZ_OBMAX    equ 21                  ; tz_hex: 4 + 2 + 8 + 4 + 2 + XON
+
 te_win      equ os88_image_end + CON_BSS
 te_ox       equ te_win + 2           ; the content origin's left...
 te_cw       equ te_ox + 2            ; ...and the content box, which THIS
@@ -2107,22 +2117,27 @@ te_dirty    equ te_want + 1
 te_btn      equ te_dirty + 1         ; 8: the Connect button's rect
 te_line     equ te_btn + 8           ; OS88LINE_SZ
 te_hbuf     equ te_line + OS88LINE_SZ ; TE_HOSTMAX: what the user typed
-te_host     equ te_hbuf + TE_HOSTMAX  ; ...and the half before the colon
-te_sline    equ te_host + TE_HOSTMAX  ; CON_COLS+1: the padded status field.
-                                      ; It used to be con_rowfont's NUL run as
+te_sline    equ te_hbuf + TE_HOSTMAX  ; TE_SLINE+1: the padded status field -
+                                      ; TE_SLINE cells at most, whatever the
+                                      ; viewport (te_status clamps DOWN to
+                                      ; con_vcols), and it was CON_COLS+1. It
+                                      ; used to be con_rowfont's NUL run as
                                       ; well, on the argument that the two
                                       ; cannot overlap in time - true here and
                                       ; not a promise a library may make about
                                       ; a carrier, so [con_run] is its own now
-te_txb      equ te_sline + CON_COLS+1  ; TE_TX
+te_txb      equ te_sline + TE_SLINE+1 ; TE_TX
 te_pnd      equ te_txb + TE_TX        ; TE_PND: the ONE refused reply, held
                                       ; whole and retried at the top of the
                                       ; next worker pass (SPEC.md 70.10.3)
-te_say      equ te_pnd + TE_PND       ; 3: an option reply, composed before it
-                                      ; is enqueued, because IAC/verb/option
-                                      ; goes on the wire whole or not at all
-te_ans      equ te_say + 3            ; TE_ANS: `ESC [ <row> ; <col> R`
-te_rx       equ te_ans + TE_ANS       ; TE_RX
+te_rx       equ te_pnd + TE_PND       ; TE_RX
+te_host     equ te_rx                 ; ...and the half of the host box before
+                                      ; the colon, which LIVES IN te_rx: it is
+                                      ; built by te_split in TS_OPEN and read by
+                                      ; NETV_OPEN, which COPIES it (both drivers'
+                                      ; open verbs), and te_rx holds nothing
+                                      ; until NETV_RECV in TS_UP - two passes
+                                      ; later at the least
 te_abon     equ te_rx + TE_RX        ; byte: the credits have the screen
 te_txm      equ te_abon + 1           ; byte: a FOREIGN TEXT MODE is up, so
                                       ; every kernel drawing slot is off-limits
@@ -2156,10 +2171,14 @@ te_psink    equ te_pn + 1             ; byte: the ninth parameter onward goes
 te_ppfx     equ te_psink + 1          ; byte: the private prefix, 0x3C..0x3F,
                                       ; and only the FIRST one is it
 te_prm      equ te_ppfx + 1           ; TE_PMAX bytes, each clamped at 255
+; ...and SGR's LOGICAL state in an ORDER te_sgr1 indexes: SGR 5, 7 and 8 set
+; [te_blk + code - 5], so te_blk, te_rev and te_con sit at +0, +2 and +3 with
+; te_lbg in the +1 that SGR 6 would name - a code te_sgr1 refuses before the
+; store. And `CSI 0 m` is two word stores and a byte over the lot.
 te_lfg      equ te_prm + TE_PMAX      ; byte: LOGICAL foreground, 4 bits
-te_lbg      equ te_lfg + 1            ; byte: ...background, 3 bits
-te_blk      equ te_lbg + 1            ; byte: SGR 5
-te_rev      equ te_blk + 1            ; byte: SGR 7 - **A FLAG, and not a swap
+te_blk      equ te_lfg + 1            ; byte: SGR 5
+te_lbg      equ te_blk + 1            ; byte: ...background, 3 bits
+te_rev      equ te_lbg + 1            ; byte: SGR 7 - **A FLAG, and not a swap
                                       ; of the attribute's nibbles**: a parser
                                       ; that swapped when it saw the 7 and then
                                       ; wrote a 31 into the low nibble draws
@@ -2219,12 +2238,9 @@ tz_lst      equ tz_pend + 1           ; byte: the last header type we SENT, for
 tz_owe      equ tz_lst + 1            ; byte: 1 = a ZRINIT is owed, 2 = a ZRPOS -
                                       ; each waiting on a commit, because
                                       ; [tz_pos] is not final until one lands
-tz_half     equ tz_owe + 1            ; byte: which staging half is filling
-tz_dbl      equ tz_half + 1           ; byte: double-buffered (a cluster of
+tz_dbl      equ tz_owe + 1            ; byte: double-buffered (a cluster of
                                       ; 4,096 or less)
-tz_made     equ tz_dbl + 1            ; byte: the file exists, so the next commit
-                                      ; is an APPEND and not a WRITE
-tz_wtok     equ tz_made + 1           ; word: the file's WRITE_SEQ token
+tz_wtok     equ tz_dbl + 1            ; word: the file's WRITE_SEQ token
                                       ; (SPEC.md 18.4.9, 70.11.7)
 tz_req      equ tz_wtok + 2           ; byte: TZ_* - **THE WHOLE HANDSHAKE**,
                                       ; written last by the worker and cleared
@@ -2250,24 +2266,17 @@ tz_pan      equ tz_want + 1           ; byte: the progress takeover has the
 tz_cans     equ tz_pan + 1            ; byte: `ZDLE ZDLE`s in a row - five is
                                       ; the sender's ABORT and not a lost place
 tz_oo       equ tz_cans + 1           ; byte: `O`s of the sender's closing `OO`
-tz_ferr     equ tz_oo + 1             ; byte: the FERR_* a commit was refused
-                                      ; with, because `Disk error` is what all
-                                      ; of them look like from outside
-tz_try      equ tz_ferr + 1             ; byte: timeouts in a row
+tz_try      equ tz_oo + 1             ; byte: timeouts in a row
 tz_dtry     equ tz_try + 1            ; byte: ...and refused dialogs in a row
 tz_un       equ tz_dtry + 1            ; word: bytes in the half handed over
-tz_fill     equ tz_un + 2             ; word: bytes in the half being filled
-tz_chunk    equ tz_fill + 2           ; word: the commit size, a whole number of
+tz_chunk    equ tz_un + 2             ; word: the commit size, a whole number of
                                       ; the DESTINATION's clusters (SPEC.md
                                       ; 18.4.4)
 tz_clus     equ tz_chunk + 2          ; word: the DESTINATION's cluster in
                                       ; bytes, so a refusal names the FACT
                                       ; rather than the word "large"
                                       ; (SPEC.md 47)
-tz_skip     equ tz_clus + 2          ; word: bytes the sender is re-sending
-                                      ; over ones already committed, dropped as
-                                      ; they arrive (SPEC.md 70.11.2)
-tz_n        equ tz_skip + 2           ; word: HEADER bytes or nibbles, and a
+tz_n        equ tz_clus + 2           ; word: HEADER bytes or nibbles, and a
                                       ; subpacket's two CRC bytes
 tz_dn       equ tz_n + 2              ; word: ...and a subpacket's DATA bytes,
                                       ; which is a SECOND counter because
@@ -2278,11 +2287,21 @@ tz_crc      equ tz_dn + 2              ; word: the running CRC-16
 tz_tick     equ tz_crc + 2            ; word: when the last byte arrived
 tz_dlgt     equ tz_tick + 2           ; word: ...when the dialog went up
 tz_kick     equ tz_dlgt + 2           ; word: ...and when the UI was last kicked
-tz_dot      equ tz_kick + 2           ; word: tz_mangle's last dot
-tz_bw       equ tz_dot + 2            ; word: the progress bar's width
+tz_bw       equ tz_kick + 2            ; word: the progress bar's width
 tz_bf       equ tz_bw + 2             ; word: ...and how much of it is filled
-tz_why      equ tz_bf + 2             ; word: -> why a transfer stopped
-tz_pos      equ tz_why + 2            ; dword: bytes the UI task has WRITTEN -
+tz_why      equ tz_bf + 2             ; word: -> why a transfer stopped. NOT in
+                                      ; the run below: te_status reads it on
+                                      ; the UI task, and te_zero's byte stores
+                                      ; could hand it half a pointer
+; --- A FILE'S RUN: what a file starts with zeroed, CONTIGUOUS so it is one
+;     te_zero (tz_poll's `.chosen`, tz_infodone's repeated ZFILE) - tz_fill
+;     through tz_made, TZ_FRUN bytes. A counter a new file must not inherit
+;     belongs between the two
+tz_fill     equ tz_why + 2            ; word: bytes in the half being filled
+tz_skip     equ tz_fill + 2           ; word: bytes the sender is re-sending
+                                      ; over ones already committed, dropped as
+                                      ; they arrive (SPEC.md 70.11.2)
+tz_pos      equ tz_skip + 2           ; dword: bytes the UI task has WRITTEN -
                                       ; the only offset a ZRPOS may name
 tz_rcv      equ tz_pos + 4            ; dword: ...and bytes accepted into
                                       ; staging, which is what a ZACK names
@@ -2292,7 +2311,11 @@ tz_sub0     equ tz_rcv + 4            ; dword: where the subpacket now filling
                                       ; straddled a chunk boundary has part of
                                       ; itself already on the disk, and there is
                                       ; no truncate verb to take it back
-tz_fsz      equ tz_sub0 + 4            ; dword: the size the sender declared
+tz_half     equ tz_sub0 + 4           ; byte: which staging half is filling
+tz_made     equ tz_half + 1           ; byte: the file exists, so the next commit
+                                      ; is an APPEND and not a WRITE
+TZ_FRUN     equ (tz_made + 1) - tz_fill
+tz_fsz      equ tz_made + 1           ; dword: the size the sender declared
 tz_cb       equ tz_fsz + 4            ; 2: a subpacket's two CRC bytes
 tz_hb       equ tz_cb + 2             ; 8: a header - type, four, and its CRC
 TZ_CTL      equ (tz_hb + 8) - tz_st   ; ...and tz_begin zeroes the LOT
@@ -2319,27 +2342,45 @@ tz_diag     equ te_fsi + FSI_SIZE     ; byte: WHAT HAPPENED TO THE DIALOG, one
                                       ; all (SPEC.md 38.6), so the only way to
                                       ; tell those apart from outside is to
                                       ; write them down
-tz_name     equ tz_diag + 1           ; 14: the 8.3 name, mangled then chosen
-tz_msg      equ tz_name + 14          ; 48: the progress line
-tz_bmsg     equ tz_msg + 48           ; 32: ...and a REFUSAL, which needs a
+tz_name     equ tz_diag + 1           ; TZ_NAMEMAX: the 8.3 name, mangled then
+                                      ; chosen
+tz_msg      equ tz_name + TZ_NAMEMAX  ; TZ_MSGMAX: the progress line
+tz_bmsg     equ tz_msg + TZ_MSGMAX    ; TZ_BMSGMAX: ...and a REFUSAL, which needs a
                                       ; buffer of its own because te_status
                                       ; rewrites the progress line on every draw
-tz_dig      equ tz_bmsg + 32          ; 12: tz_num's digits, written backwards.
-                                      ; **ONE TASK**: te_status calls tz_text
-                                      ; and tz_dlgdone calls tz_bigmsg, and both
-                                      ; are the UI task's. A worker-side caller
-                                      ; would be the first thing to break that
-tz_ob       equ tz_dig + 12           ; 24: one composed header, on its way out
-tz_ohdr     equ tz_ob + 24            ; 4: ...and its four header bytes
+tz_ewhy     equ tz_bmsg + TZ_BMSGMAX  ; 16: ...and WHICH refusal a commit met,
+                                      ; in the kernel's words (OSAPI_FERR_TEXT,
+                                      ; SPEC.md 18.4.11) - copied by tz_commit
+                                      ; on the UI task, the one te_status runs
+                                      ; on, because `Disk error` is what all of
+                                      ; them look like from outside
+tz_dig      equ tz_ewhy + 16          ; TZ_DIGMAX: a key's escape sequence,
+                                      ; composed by te_tx (the UI task's)
+tz_ob       equ tz_dig + TZ_DIGMAX    ; TZ_OBMAX: one composed header, on its
+                                      ; way out - and **THE WORKER'S ONE REPLY
+                                      ; SCRATCH**: te_say (an option reply) and
+                                      ; te_ans (a DSR answer) are composed here
+                                      ; too. All three are the WORKER's, each is
+                                      ; built and handed to te_reply inside one
+                                      ; call - which copies it into the ring or
+                                      ; into te_pnd - so no two are ever live
+te_say      equ tz_ob                 ; 3: IAC, verb, option
+te_ans      equ tz_ob                 ; TE_ANS: `ESC [ <row> ; <col> R`
+tz_ohdr     equ tz_ob + TZ_OBMAX      ; 4: ...and its four header bytes
 tz_info     equ tz_ohdr + 4           ; TZ_INFOSZ: the ZFILE info block
-tz_stg      equ tz_info + TZ_INFOSZ   ; TZ_STGSZ: **THE STAGING AREA, IN THE
-                                      ; PACKAGE'S OWN SEGMENT** and not in a
-                                      ; heap claim - OSAPI_DRV_CALL is an X stub
-                                      ; and puts the CALLER's segment in ES, so
-                                      ; a buffer anywhere else is read out of
-                                      ; this package's own image instead
-                                      ; (SPEC.md 77.2/70.11.3)
-TE_BSS      equ (tz_stg - os88_image_end) + TZ_STGSZ
+tz_sseg     equ tz_info + TZ_INFOSZ   ; word: **THE STAGING AREA'S SEGMENT**, 0 =
+                                      ; not held. It was TZ_STGSZ bytes of this
+                                      ; bss, under a comment saying a heap claim
+                                      ; would be read out of our own image by
+                                      ; OSAPI_DRV_CALL - true of a SOCKET buffer,
+                                      ; and no NETV_* verb is ever handed this
+                                      ; one (SPEC.md 70.11.3). So it is claimed
+                                      ; for a transfer and freed after it, and
+                                      ; an idle terminal is 8 KB smaller. OUTSIDE
+                                      ; te_reset's run for tz_diag's reason: a
+                                      ; reconnect that zeroed it would LEAK the
+                                      ; claim (tz_sfree is what gives it back)
+TE_BSS      equ (tz_sseg - os88_image_end) + 2
 
 ; --- and the one place a bss ORDER is load-bearing (teansi.inc's te_pclear) --
 ; That routine clears te_pn and te_psink with a single WORD store, so a reorder
@@ -2348,6 +2389,12 @@ TE_BSS      equ (tz_stg - os88_image_end) + TZ_STGSZ
 ; 31 on the sequence AFTER the one that filled the eight, and nothing else.
 %if te_psink != te_pn + 1 || te_ppfx != te_psink + 1
   %error "te_pclear stores a WORD over te_pn/te_psink: the three must be adjacent"
+%endif
+%if te_rev != te_blk + 2 || te_con != te_blk + 3 || te_lbg != te_blk + 1 || te_blk != te_lfg + 1
+  %error "te_sgr1 stores SGR 5/7/8 at [te_blk + code - 5] and resets the lot in two words"
+%endif
+%if te_sbsnd != te_sbn + 1
+  %error "te_byte clears te_sbn and te_sbsnd with one word store"
 %endif
 
 ; --- ...and the SECOND bss-order fact, which cost a blocker to learn --------
@@ -2368,41 +2415,23 @@ TE_BSS      equ (tz_stg - os88_image_end) + TZ_STGSZ
 ; was a tautology that could never fire at all, so it is gone.
 ;
 ; What nothing tied down is the seven fixed-size buffers between `te_fsi` and
-; `tz_stg`, each chained with a literal that no code references. All of them fit
+; `tz_sseg`, each chained with a literal that no code references. All of them fit
 ; today and all of them are one caption or one separator from not fitting, and
 ; overrunning any of them writes into its neighbour with no symptom until the
 ; neighbour is read. These are the sizes the CODE needs, written where the
 ; sizes are declared.
-TZ_NAMEMAX  equ 13                  ; tz_dlgdone copies 12 and terminates
-TZ_MSGMAX   equ 44                  ; tz_text: 12 of name, 2, 13, 3, 13, NUL
-TZ_BMSGMAX  equ 30                  ; tz_bigmsg: 8 + up to 13 + 8 + NUL, and
-                                    ; [tz_clus] is a WORD so it is really 6
-TZ_DIGMAX   equ 12                  ; tz_num: ten digits and a NUL, and the
-                                    ; NUL goes at tz_dig + 11 - so the SPAN it
-                                    ; needs is twelve, not eleven. Guarded at
-                                    ; eleven, a future editor who shrank the
-                                    ; buffer to eleven would pass and write the
-                                    ; NUL into tz_ob, which is the exact failure
-                                    ; the guard exists for
-TZ_OBMAX    equ 21                  ; tz_hex: 4 + 2 + 8 + 4 + 2 + XON
-%if tz_msg - tz_name < TZ_NAMEMAX
-  %error "tz_name is smaller than the 8.3 name tz_dlgdone copies into it"
-%endif
-%if tz_bmsg - tz_msg < TZ_MSGMAX
-  %error "tz_msg is smaller than tz_text's longest progress line"
-%endif
-%if tz_dig - tz_bmsg < TZ_BMSGMAX
-  %error "tz_bmsg is smaller than tz_bigmsg's longest refusal"
-%endif
 %if tz_ob - tz_dig < TZ_DIGMAX
-  %error "tz_dig is smaller than tz_num's ten digits and its NUL"
+  %error "tz_dig is smaller than te_tx's longest key, ESC [ n n ~"
 %endif
-%if tz_ohdr - tz_ob < TZ_OBMAX
-  %error "tz_ob is smaller than the 21-byte hex header tz_hex composes in it"
-%endif
-%if tz_stg - tz_info < TZ_INFOSZ
+%if tz_sseg - tz_info < TZ_INFOSZ
   %error "tz_info is smaller than TZ_INFOSZ, which is what tz_sink bounds against"
 %endif
-%if TE_SLINE + 1 > CON_COLS + 1
-  %error "te_sline holds the status field: TE_SLINE cells plus a NUL"
+%if TZ_OBMAX > TE_PND
+  %error "te_pnd holds a refused reply whole, and a hex header is TZ_OBMAX bytes"
+%endif
+%if TE_ANS > TZ_OBMAX || 3 > TZ_OBMAX
+  %error "te_ans and te_say are composed in tz_ob, which must hold the longest"
+%endif
+%if TE_HOSTMAX > TE_RX
+  %error "te_host lives in te_rx, which must hold TE_HOSTMAX"
 %endif

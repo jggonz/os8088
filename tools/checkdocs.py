@@ -257,6 +257,8 @@ def main() -> int:
             text = open(path, encoding="utf-8").read()
         except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
             continue                                        # binary, or gone
+        if "<<<<<<< " not in text and ">>>>>>> " not in text:
+            continue                    # the cheap necessary condition
         lines = text.split("\n")
         hits = [(n, ln) for n, ln in enumerate(lines, 1)
                 if ln.startswith("<<<<<<< ") or ln.startswith(">>>>>>> ")]
@@ -298,8 +300,19 @@ def main() -> int:
         except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
             continue
         own = docs.get(path, set())        # empty for every non-.md file
+        md = path.endswith(".md")
         for n, line in enumerate(text.split("\n"), 1):
-            for m in CITE.finditer(line):
+            # Each pattern below needs a literal its line must carry - CITE a
+            # `§` or `SPEC.md`, SITES `site`, SLOT `slot ` or `API ` - so a
+            # line with none of them is skipped before any regex runs. That
+            # is ~97% of the tree's 3.3M lines, and the three finditer calls
+            # on each were most of this gate's time on every `make`.
+            cite = "\u00a7" in line or "SPEC.md" in line
+            sites = md and "site" in line
+            slot = "slot " in line or "API " in line
+            if not (cite or sites or slot):
+                continue
+            for m in (CITE.finditer(line) if cite else ()):
                 if m.group(0).startswith("SPEC.md"):
                     target = "SPEC.md"
                 else:
@@ -321,7 +334,7 @@ def main() -> int:
                             and num not in own:
                         bad.append(f"{path}:{n}: SPEC.md §{num} is not a "
                                    "heading")
-            if reg is not None and path.endswith(".md"):
+            if reg is not None and sites:
                 for m in SITES.finditer(line):
                     pair = (int(m.group(1)), int(m.group(2)))
                     if pair == reg or pair in SITES_HIST:
@@ -331,7 +344,7 @@ def main() -> int:
                         f"{reg[0]} sites in {reg[1]} files. If this pair "
                         "describes an earlier moment, put it in SITES_HIST "
                         "with the moment")
-            for m in SLOT.finditer(line):
+            for m in (SLOT.finditer(line) if slot else ()):
                 num = m.group(1).lower()
                 if num not in api and num not in HELD:
                     bad.append(f"{path}:{n}: 'slot {m.group(1)}' is not an "

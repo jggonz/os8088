@@ -2208,7 +2208,10 @@ and not a transcript. Each line names where the detail is.
 - **Sound Blaster 1.0 and 1.5** (15.6): SOUND.DRV work, wants an SB 1.x
   86Box machine.
 - **XMS** (15.6, V4): both phases BUILT - above. More Live WINDOWS in XMS
-  (V4's other half) is not asked for.
+  (V4's other half) is not asked for. A file BIGGER than the pool - every
+  full-length VGA clip on a 286 - takes no hold at all; a rolling BANK ahead
+  of the ring for it, and what it costs a 286's CPU, is
+  docs/plans/VIDEO-XMS-PLAN.md (investigation, 2026-10-08).
 - **The keeper relocatable** (15.4 D): DONE 2026-09-30 (15.11) - the ring,
   the keeper, the page copy and the poster are movable between brackets
   and pinned for one, and at the video's own size there is no keeper.

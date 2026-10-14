@@ -241,6 +241,12 @@ Book8088's BIOS uses for flash drives, so the driver leaves a flash drive
 alone. It has been exercised against a model of the chip rather than a real
 Book8088, so a report from one is welcome (SPEC.md 9.12).
 
+An **EMS board** -- a Lo-tech 2MB board, or a PicoMEM's EMS -- gives programs
+up to 4MB of expanded memory, even on an XT: tick **EMS** on the Drivers page.
+It looks for the board at its usual places (ports 260h-26Ch, frame E000h,
+D000h or C000h) and needs no setting. Programs that use it are still to come;
+the driver is the first step (SPEC.md 107).
+
 ## What it does
 
 Boots straight into the GUI, and boots *clean* — nothing is running, and

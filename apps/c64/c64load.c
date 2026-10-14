@@ -90,12 +90,13 @@ static int ovl_load_prg(const char *name, unsigned size_lo)
      * not. `n - 1 > 0xFFFF - load` asks the question about the last byte and
      * is exact in 16 bits. n is at least 1 here (size_lo >= 3 above), and the
      * test says so anyway. */
-    if (n != 0 && (unsigned)(n - 1) > (unsigned)(0xFFFFu - load)) {
-        os88_mem_free(seg);
-        c64_say("PRG runs past $FFFF.");
-        return 1;                            /* SAID. 0 is the runtime's
-                                             * refusal alone (the header) */
-    }
+    if (n != 0)
+        if ((unsigned)(n - 1) > (unsigned)(0xFFFFu - load)) {
+            os88_mem_free(seg);
+            c64_say("PRG runs past $FFFF.");
+            return 1;                            /* SAID. 0 is the runtime's
+                                                 * refusal alone (the header) */
+        }
     c64_zzcopy_in(load, seg, 2, n);
     os88_mem_free(seg);
     /* every page the move touched (9.2). The core's own write path sets these

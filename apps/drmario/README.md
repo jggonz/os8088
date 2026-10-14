@@ -196,7 +196,10 @@ capture crops Mode X after the BIOS mode transition; the `*-native.png`
 images decode all video planes, and `vga-qemu.png` verifies the complete
 320×240 display using a second emulator. QEMU supplies no speed measurements.
 
-Measured in MartyPC at 4,772,727 Hz (2026-09-28):
+Measured in MartyPC at 4,772,727 Hz (2026-09-28). **These figures are the
+renderer as it shipped before apps size pass 1 (2ab4288e)**, which reworked
+the drawing and decoding code for size; they have not been re-taken since,
+so read them as that renderer's numbers and re-measure before quoting one:
 
 | Operation | VGA | CGA |
 |---|---:|---:|
@@ -238,8 +241,8 @@ VGA/CGA. The existing dense animation peaks still span multiple frame periods;
 these measurements do not claim fixed 54.6 FPS on every animation frame or
 physical-hardware validation.
 
-The splash build uses 49,685 image + 6,648 BSS = 56,333 bytes, within the
-61,440-byte package limit. The compressed package is 25,550 bytes. Supporting
+The splash build uses 31,579 image + 6,141 BSS = 37,720 bytes, within the
+61,440-byte package limit. The compressed package is 21,343 bytes. Supporting
 VGA/CGA/Hercules artwork files are 26,947/5,139/10,112 bytes; only the current
 adapter's file is loaded. Music adds no framebuffer or kernel allocation.
 

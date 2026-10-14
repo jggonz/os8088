@@ -326,18 +326,16 @@ sw_spans:
     jc .next
     mov dl, [sw_pat]
     mov dh, dl                      ; left edge (the whole row if 1 byte wide)
-    and dh, ah
-    not ah
-    and [es:di], ah
-    or  [es:di], dh
+    xor dh, [es:di]                 ; ONE STORE an edge byte - sw_col's
+    and dh, ah                      ; dest ^= (pat ^ dest) & mask, and for
+    xor [es:di], dh                 ; sw_col's reason
     or bx, bx
     jz .next
     add di, bx                      ; right edge
     mov dh, dl
+    xor dh, [es:di]
     and dh, al
-    not al
-    and [es:di], al
-    or  [es:di], dh
+    xor [es:di], dh
     dec bx                          ; interior bytes
     jz .next
     sub di, bx                      ; DI is on the right edge: step back over
@@ -501,7 +499,20 @@ sw_plane_op:
 ;          XOR mode: dest ^= mask. Else: dest = (dest & ~mask) |
 ;          (pattern & mask), pattern xor-stepped by [sw_altm] per row.
 ; in:       AH = mask, DI = top byte, ES = plane; [sw_mode]/[sw_pat]/[sw_altm]
-; clobbers: AL, BX, CX, DX, SI, DI, BP, flags (AH and ES survive)
+; clobbers: AL, CX, DX, SI, DI, BP, flags (AH, BX and ES survive)
+;
+; **ONE STORE A BYTE.** The masked row was `and [es:di], ~mask` then
+; `or [es:di], pat & mask` - two writes, and the first leaves the masked bits
+; BLACK until the second lands. The CRTC scans the framebuffer while the CPU
+; writes it, so a row the beam passed between the two was displayed with the
+; hole in it: three alternating pixels of a dither edge black for one frame,
+; on a different row each time, about one gesture in six on CGA
+; (tests/deskflash.py, which had carried it as a known flake). SPEC.md 6.6's
+; rule - nothing writes a pixel twice - at the scale of one byte. It is now
+; dest ^= (pat ^ dest) & mask, vga12.inc's own masked-blit idiom: the same
+; ten bytes, three bus accesses where there were four, and the bits outside
+; the mask are never written with a stale value even if an interrupt touches
+; the byte between the read and the store.
 ;
 ; It preserves NOTHING, deliberately: sw_plane_op banks BX/DX for the whole
 ; plane and reloads AH, DI, SI and BP itself around every call, so the five
@@ -511,8 +522,6 @@ sw_plane_op:
 ; gfx_nextrow's step and wrap bit across the row loop.
 ; -----------------------------------------------------------------------------
 sw_col:
-    mov bl, ah
-    not bl                      ; BL = ~mask
     mov cx, [sw_altm]           ; CL = toggle, CH = running pattern - ONE word
                                 ; read where two byte reads were. The two are
                                 ; declared adjacent in .bss with a %if that
@@ -524,10 +533,10 @@ sw_col:
     cmp byte [sw_mode], SWM_XOR ; around them cost as much again
     je .xrow
 %ifdef GFX_COLFAST
-    or bl, bl                   ; --- SPEC.md 39.25: A WHOLE COLUMN NEEDS NO
-    jz .frow                    ;     READ. ~mask = 0 means the byte is ours
+    cmp ah, 0xFF                ; --- SPEC.md 39.25: A WHOLE COLUMN NEEDS NO
+    je .frow                    ;     READ. mask = FF means the byte is ours
 %endif                          ;     entire, so there is nothing under it to
-                                ;     preserve and the read-modify-write pair
+                                ;     preserve and the read-modify-write
                                 ;     below is doing nothing but cost. That is
                                 ;     not a rare shape: gfx_rect_setup takes
                                 ;     the left mask from x1 & 7 and the right
@@ -537,9 +546,9 @@ sw_col:
                                 ;     with BOTH edge columns whole
 .row:
     mov al, ch
-    and al, ah                  ; AL = pattern & mask
-    and [es:di], bl
-    or  [es:di], al
+    xor al, [es:di]             ; AL = (pattern ^ dest) & mask...
+    and al, ah
+    xor [es:di], al             ; ...and ONE store (see the header)
     xor ch, cl
     add di, si
     test di, bp

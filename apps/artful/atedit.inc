@@ -1561,43 +1561,110 @@ at_selall:
 ; =============================================================================
 
 ; at_undo_init - one-time heap claim (first fullscreen entry)
+;
+; SPEC.md 46.6.3: the arena is claimed at AT_UKB0 and GROWS as the stacks fill,
+; to the same 24K + 24K it always had (at_agrow). It used to be claimed whole -
+; 48 KB the moment the editor opened, which on an untouched document held 48
+; KB of heap to store nothing, and the redo half stays empty until an Undo.
+; [at_usz] is therefore always AT_USZ: the books are the same books, and only
+; what is HELD follows them.
 at_undo_init:
     push ax
-    push bx
-    push cx
+    push dx
     cmp word [at_aseg], 0
     jne .out
-    mov ax, 48                      ; 48KB: 24K undo + 24K redo. It was 64 with
-    mov bx, 24576                   ; a 16K clip slice on the end of it; the
-    call at_ualloc                  ; clipboard is the machine's now (46.6.1),
-    jnc .out                        ; so the claim shrinks by exactly that and
-    mov ax, 24                      ; the undo depth does not move
-    mov bx, 12288
-    call at_ualloc
-    jnc .out
-    mov ax, 12
-    mov bx, 6144
-    call at_ualloc
+    mov ax, AT_UKB0
+    call OSAPI_MEM_CLAIM            ; AX KB -> DX segment (SPEC.md 50.3)
+    jc .out                         ; no claim: the menus grey Undo/Redo
+    mov [at_aseg], dx
+    mov [at_akb], ax
+    mov ax, at_reloc                ; the arena moves too (SPEC.md 66.5.7):
+    call OSAPI_MEM_MOVABLE          ; every span within it is an OFFSET
+    mov word [at_usz], AT_USZ
 .out:
-    pop cx
-    pop bx
+    pop dx
     pop ax
     ret
 
-; at_ualloc - AX = KB wanted; BX = per-stack bytes (undo at 0, redo at BX)
-at_ualloc:
+; at_agrow - make the arena hold CX bytes (SPEC.md 46.6.3)
+; in:  CX = the byte the new entry ends at, from the arena's base
+; out: CF=0 it does (grown by OSAPI_MEM_REGROW in AT_UGROWKB steps when it
+;      did not already), CF=1 the heap refused and nothing moved; preserves
+;      all registers
+at_agrow:
+    push ax
+    push cx
     push dx
-    call OSAPI_MEM_CLAIM            ; AX KB -> DX segment (SPEC.md 50.3)
+    mov ax, cx
+    add ax, 1023
+    mov cl, 10
+    shr ax, cl                      ; AX = KB this entry needs
+    cmp ax, [at_akb]
+    ja .grow
+    clc                             ; already held: the common case - and the
+    jmp short .ok                   ; compare's own CF says BELOW, not refused
+.grow:
+    add ax, AT_UGROWKB - 1          ; a quantum at a time, so a typing run's
+    and ax, -AT_UGROWKB             ; snapshot does not regrow every 1 KB
+    call at_aregrow
+    jnc .ok
+    pop dx                          ; refused: the exact need, once more,
+    pop cx                          ; before the caller drops an entry
+    push cx
+    push dx
+    mov ax, cx
+    add ax, 1023
+    mov cl, 10
+    shr ax, cl
+    call at_aregrow
+.ok:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; at_aregrow - the arena to AX KB; CF as OSAPI_MEM_REGROW; clobbers DX
+at_aregrow:
+    mov dx, [at_aseg]
+    call OSAPI_MEM_REGROW           ; DX = the base NOW, the bytes with it
     jc .no
     mov [at_aseg], dx
-    push ax                         ; the arena moves too (SPEC.md 66.5.7):
-    mov ax, at_reloc                ; [at_usz] is an OFFSET and so is every
-    call OSAPI_MEM_MOVABLE          ; span within it, so at_reloc has one more
-    pop ax                          ; word to fix and nothing else
-    mov [at_usz], bx
-    clc
+    mov [at_akb], ax
 .no:
+    ret
+
+; at_afit - give back what neither stack is using (SPEC.md 46.6.3)
+; Called where a stack has just been EMPTIED - redo by a fresh edit, both by
+; a new document or a load - which is where the arena's high water falls. A
+; shrink always succeeds in place (SPEC.md 50.3.1). Preserves all registers.
+at_afit:
+    cmp word [at_aseg], 0
+    je .out
+    push ax
+    push cx
+    push dx
+    mov ax, [at_utop]               ; the undo stack's top...
+    cmp word [at_rcnt], 0
+    je .hi
+    mov ax, [at_usz]                ; ...or, while redo holds anything, the
+    add ax, [at_rtop]               ; redo stack's, which sits above it
+.hi:
+    add ax, 1023
+    mov cl, 10
+    shr ax, cl
+    add ax, AT_UGROWKB - 1          ; at_agrow's own rounding, so the size a
+    and ax, -AT_UGROWKB             ; push grew to is never given back by the
+    jnz .kb                         ; at_afit that follows it - a shrink and a
+    mov ax, AT_UKB0                 ; regrow every typing run otherwise
+.kb:
+    cmp ax, [at_akb]
+    jae .done                       ; nothing to give back
+    call at_aregrow
+.done:
     pop dx
+    pop cx
+    pop ax
+.out:
     ret
 
 ; at_undo_push - snapshot the document onto the undo stack; clears redo
@@ -1607,12 +1674,15 @@ at_undo_push:
     call at_snap_push
     mov word [at_rcnt], 0           ; a fresh edit invalidates redo
     mov word [at_rtop], 0
+    call at_afit                    ; ...and the arena gives redo's back
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; at_snap_push - push a document snapshot onto stack AL (0 undo / 1 redo)
 ; A snapshot: len, caret, sela, selb, then len bytes of text.
+; out: CF=0 pushed, CF=1 not (no arena, too big for a stack, or the heap
+;      would not grow the arena even with the stack emptied - 46.6.3)
 ; -----------------------------------------------------------------------------
 at_snap_push:
     push ax
@@ -1623,6 +1693,7 @@ at_snap_push:
     push di
     push es
     cmp word [at_aseg], 0
+    stc
     je .out
     mov [at_snstk], al
     call at_snvars                  ; stage the stack's books
@@ -1640,8 +1711,18 @@ at_snap_push:
     jmp short .fit
 .room:
     cmp word [at_sncnt], AT_UMAX
-    jb .slot
+    jb .held
     call at_sndrop
+.held:
+    mov cx, [at_sntop]              ; SPEC.md 46.6.3: the books say it fits,
+    add cx, ax                      ; and the ARENA must hold it too - grown
+    add cx, [at_snbase]             ; to it, or the oldest entry goes, which
+    call at_agrow                   ; is what running out of room has always
+    jnc .slot                       ; meant here
+    cmp word [at_sncnt], 0
+    je .wipe
+    call at_sndrop
+    jmp short .held
 .slot:
     ; write header + text at the staged top
     mov es, [at_aseg]
@@ -1670,11 +1751,13 @@ at_snap_push:
     add ax, 8
     mov [at_sntop], ax
     call at_snstore
+    clc
     jmp short .out
 .wipe:
     mov word [at_sncnt], 0
     mov word [at_sntop], 0
     call at_snstore
+    stc
 .out:
     pop es
     pop di
@@ -1792,6 +1875,7 @@ at_undo:
     ja .out                         ; the only copy would die unwarned
     mov al, 1                       ; current state -> the REDO stack
     call at_snap_push
+    jc .out                         ; ...and only once it IS there (46.6.3)
     mov al, 0
     call at_snap_take
 .out:
@@ -1808,6 +1892,7 @@ at_redo:
     ja .out
     mov al, 0                       ; current state -> the UNDO stack,
     call at_snap_push               ; WITHOUT clearing redo
+    jc .out
     mov al, 1
     call at_snap_take
 .out:

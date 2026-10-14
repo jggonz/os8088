@@ -691,3 +691,13 @@ The pull-down is also the one that happens constantly. If it is taken later,
 
 **What is left**: nothing in this plan. 2a, 2b, 4a and Wave 6 are settled and
 refused; everything else is built.
+
+**AND WAVE 1's FALLBACK HAS GONE** (SPEC.md 46.4.12), in the apps size pass
+rather than here. Wave 1 kept `at_expand`, `at_x4w`/`at_x4g` and `at_strip4` -
+11,168 bytes of every running instance - as the fallback for a refused
+`gfx_blit1` and for a colour adapter's code line. SPEC.md 5.4.2.5.1 had since
+put the body on kern_small, so the first could not happen, and the second is
+now a few bands in their own pens out of the same `at_strip1`. Nothing above is
+undone: every line that is not a colour code line runs the instructions it ran
+before, and `tests/atblit.py` still compares against `NOATBLIT1=1`, which keeps
+the whole 4bpp path.

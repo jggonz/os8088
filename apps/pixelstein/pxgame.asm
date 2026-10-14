@@ -73,6 +73,22 @@ PX_W4TAB    equ PX_W4BUF + PX_W4ROWS * PX_BAND * 4   ; ...and the two 32 ->
                                     ; 16 tables after it, the even rows' and
                                     ; the odd rows' (wave 6's dither):
                                     ; 16,320..16,383 - the claim's last byte
+PX_SHKB86   equ ((PX_ROWS + PX_HUDROWS) * PX_STRIDE + 1023) / 1024
+                                    ; ...and the claim on an 8086 (CPU_8086 =
+                                    ; 0 is the tier px_w4want refuses WIN4):
+                                    ; the view's 80 rows and the bar's 24 are
+                                    ; every byte the other backends write or
+                                    ; read - 8,320 bytes, 9 KB, so the strip
+                                    ; and its tables' 7 KB are never claimed
+                                    ; on the machine that cannot use them.
+                                    ; Rows 100 is greyed "(not built)": its
+                                    ; 20 rows join this sum the day it is.
+                                    ; The LOADER keeps PXL_SHKB = 16 for its
+                                    ; two decisions, so they stay the facts
+                                    ; the captions quote, if 7 KB generous
+%if CPU_8086 != 0 || PX_SHKB86 > 255
+%error "px_entry tests CPU_8086 with `or al, al` and loads PX_SHKB86 into AL alone"
+%endif
 %if PX_W4BUF < (PX_ROWS + 20 + PX_HUDROWS) * PX_STRIDE
 %error "WIN4's strip overlaps the rows Rows 100 and its bar would take (97.14)"
 %endif
@@ -145,7 +161,7 @@ PXC_BLOCK   equ 0x10                ; an OPEN cell's high nibble, which the
                                     ; 0-1 alone): a blocking static is here
 PXC_ACTOR   equ 0x20                ; ...an actor's centre is here
 PXC_PLAYER  equ 0x40                ; ...the player's
-PX_GENKB_CAP equ 51                 ; pxstein.asm's PX_GENKB, restated for
+PX_GENKB_CAP equ 50                 ; pxstein.asm's PX_GENKB, restated for
                                     ; the greyed caption's guard below and
                                     ; held to the loader's by the loader
                                     ; (pxstein.asm's own %if)
@@ -320,9 +336,13 @@ px_entry:
     call OSAPI_SRAND
     call OSAPI_CPU_INFO
     mov [px_tier], al
-    mov ax, PX_SHKB                 ; THE SHADOW, BEFORE THE WINDOW (97.9): a
-    call OSAPI_MEM_CLAIM            ; refusal is a sentence in the window and
-    jc .noshadow                    ; never a black bounce
+    or al, al                       ; THE SHADOW, BEFORE THE WINDOW (97.9): a
+    mov ax, PX_SHKB                 ; refusal is a sentence in the window and
+    jnz .shk                        ; never a black bounce - and on an 8086,
+    mov al, PX_SHKB86               ; which px_w4want never gives WIN4, only
+.shk:                               ; the picture and the bar (PX_SHKB86)
+    call OSAPI_MEM_CLAIM
+    jc .noshadow
     mov [px_shseg], dx
 .noshadow:
     mov byte [px_levnext], 0xFF     ; the player, before the first floor
@@ -730,7 +750,7 @@ px_oncmd:
     jne .dok
     cmp byte [px_texok], 0
     je .out                         ; greyed (MENU_DIS: "Textured (needs
-                                    ; 118 KB)") - the kernel never
+                                    ; 117 KB)") - the kernel never
                                     ; dispatches it, and this return is for
                                     ; a shortcut, which goes near no menu
 .dok:
@@ -823,12 +843,12 @@ px_s_dflat:  db 'Flat', 0
 px_s_dtex:   db 'Textured', 0
 px_s_dtexs:  db 'Textured (sprites 76 KB)', 0 ; the walls textured and
                                             ; the sprites BOXES: the loader
-                                            ; found the 118 KB but not the
+                                            ; found the 117 KB but not the
                                             ; sprite set's claim after it
                                             ; (97.9: PXS_KB + the shadow) -
                                             ; live, and it says so (SPEC.md
                                             ; 47; review r1: it said nothing)
-px_s_dtexn:  db MENU_DIS, 'Textured (needs 118 KB)', 0 ; SPEC.md 47:
+px_s_dtexn:  db MENU_DIS, 'Textured (needs 117 KB)', 0 ; SPEC.md 47:
                                             ; greyed, and the caption says
                                             ; why - the scratch, the byte
                                             ; set and the art claim (97.9),
@@ -837,7 +857,8 @@ px_s_dtexn:  db MENU_DIS, 'Textured (needs 118 KB)', 0 ; SPEC.md 47:
                                             ; (the first cut said 82 with
                                             ; the sum at 111; review, wave 3 -
                                             ; 118 since wave 6's dog: the
-                                            ; art claim 30 -> 37 KB)
+                                            ; art claim 30 -> 37 KB; 117
+                                            ; since the scratch's 50)
                                             ; - the %if is after pxart.inc.
                                             ; EVERY caption of the four
                                             ; menus fits MENU_MAXCH = 24
@@ -889,7 +910,7 @@ px_s_r100:   db MENU_DIS, 'Rows 100 (not built)', 0 ; greyed: not built - a
                                             ; fact about the software, the
                                             ; only one there is until it
                                             ; exists (97.3)
-px_s_nomem:  db 'Not enough memory for the picture (16 KB)', 0
+px_s_nomem:  db 'Not enough memory for the picture', 0
 px_ttl:      db 'Pixelstein 3D', 0
 
 px_tpl:
@@ -1019,7 +1040,7 @@ px_ab10:     db 'walks a frozen world at 9.9 fps.', 0  ; quoted a frozen
 %include "pxart.inc"
 ; THE GREYED CAPTION IS A FACT (SPEC.md 47): held to the three constants it
 ; is the sum of, here because two of them are pxart.inc's
-%if PX_GENKB_CAP + PXA_BTKB + PXA_KB != 118
+%if PX_GENKB_CAP + PXA_BTKB + PXA_KB != 117
 %error "the greyed Textured caption names a number that is not PX_GENKB + PXA_BTKB + PXA_KB: fix px_s_dtexn"
 %endif
 %if PXS_KB + PX_SHKB != 76
@@ -1163,7 +1184,8 @@ px_ab10:     db 'walks a frozen world at 9.9 fps.', 0  ; quoted a frozen
     ZBUF  px_drv2p, 4               ; ...and the sprite pass's (PXG_DRV2)
     ZWORD px_qp                     ; the draw queue's write pointer
     ZWORD px_gcot                   ; the codeofs table being reserved (97.3)
-    ZBUF  px_gcotv, (PXA_TEX + 1) * 2   ; ...and the loads it is built from
+px_gcotv equ px_bstage + PXG_DIRSZ ; ...and the loads it is built from (in
+                                    ; the transpose's stage: below)
     ZBYTE px_gphn                   ; the phase's byte count...
     ZBUF  px_gph, 4                 ; ...and bytes
     ZBYTE px_gword                  ; the set being emitted: 0 byte, 1 word
@@ -1175,16 +1197,19 @@ px_ab10:     db 'walks a frozen world at 9.9 fps.', 0  ; quoted a frozen
     ZWORD px_glim                   ; ...and the most DI may hold before an
                                     ; emission: the part's end (PXH_GENLEN)
                                     ; less PXG_EMITMAX
-    ZBUF  px_gent, PXG_DIRSZ        ; a generated height's entry, by h
+px_gent  equ px_bstage            ; a generated height's entry, by h - IN
+                                    ; THE TRANSPOSE'S STAGE, with px_gcotv
+                                    ; after it: both live only inside
+                                    ; px_gen_build, the stage only inside
+                                    ; px_bt_build and px_spr_build, and
+                                    ; px_tex_setup runs the three one after
+                                    ; another on one task (apps size pass 1)
     ZBUF  px_sctab, PXG_DIRSZ * 2   ; the two scaler directories, Full then Low
     ZBUF  px_c2t, PXG_DIRSZ * 2     ; ...and the two col2tex directories
     ZBYTE px_sound                  ; wave 4's two bytes, kept in the file
     ZBYTE px_mouse
     ZBYTE px_cfgdirty               ; a V key in the bracket: write on leaving
     ZBYTE px_setread                ; the file was read (once)
-    ZWORD px_sdclus                 ; px_set_enter's way home
-    ZBYTE px_sddrv
-    ZBUF  px_sdfind, 32             ; OSAPI_FILE_FIND's row
     ZBUF  px_setbuf, PX_SETFSZ      ; the file as last read or written
     ZBUF  px_setnew, PX_SETFSZ      ; ...and the record being written, until
                                     ; the write says it landed (pxset.inc)
@@ -1192,6 +1217,9 @@ px_ab10:     db 'walks a frozen world at 9.9 fps.', 0  ; quoted a frozen
     ZWORD px_bmat                   ; ...and the master it is on
     ZBUF  px_bstage, PXA_SPRMSZ     ; ...staged here (one master: a wall's
                                     ; 512 bytes or a sprite's 640)
+%if PXG_DIRSZ + (PXA_TEX + 1) * 2 > PXA_SPRMSZ
+%error "px_gent and px_gcotv outgrew px_bstage, which they share"
+%endif
     ZBYTE px_bcnt                   ; the sprite transpose: frames left...
     ZBYTE px_bcols                  ; ...a frame's columns
     ZWORD px_bmsz                   ; ...its master's bytes

@@ -508,14 +508,29 @@ os88spk_grant:
     pop bx
     ret
 .dry:
+%ifdef OS88SPK_DRYCNT               ; A FIELD DIAGNOSTIC (the package's to
+    cmp byte [cs:os88spk_dry], 0    ; define): how often the ring ran dry -
+    jne .dd                         ; a stretch counted once - and for how
+    inc word [cs:os88spk_dryg]      ; many samples, which were silence and
+.dd:                                ; not counted as played: the clock stood
+%endif
     mov word [cs:os88spk_rp], os88spk_silb
     mov [cs:os88spk_rp+2], cs
     mov byte [cs:os88spk_dry], 1
     mov ax, OS88SPK_DRYN            ; a run of silence, the period's end the
     cmp ax, [cs:os88spk_kr]         ; sooner
+%ifdef OS88SPK_DRYCNT
+    jbe .dn
+    mov ax, [cs:os88spk_kr]
+.dn:
+    add [cs:os88spk_dryn], ax
+    adc word [cs:os88spk_dryn+2], 0
+    jmp short .g
+%else
     jbe .g
     mov ax, [cs:os88spk_kr]
     jmp short .g
+%endif
 
 ; os88spk_acct - IF = 0: the grant's played samples into CONS (none, for a dry
 ; one), and the grant closed. out DS:BX -> TOTAL. clobbers AX
@@ -543,6 +558,10 @@ os88spk_chain:  dw 0, 0             ; the kernel's IRQ0, far: what the vector
 os88spk_sil:    db 0                ; a dry grant's count: the table's middle
 os88spk_silb:   times OS88SPK_DRYN db 0     ; ...a run of it, os88spk_go's
 os88spk_dry:    db 0                ; the grant is that, and plays nothing
+%ifdef OS88SPK_DRYCNT
+os88spk_dryn:   dw 0, 0             ; samples played dry (OS88SPK_DRYCNT)
+os88spk_dryg:   dw 0                ; ...in how many stretches
+%endif
 os88spk_rl:     dw 0                ; RL: where TOTAL and CONS are
 os88spk_rseg:   dw 0                ; the ring's segment
 os88spk_n:      dw 0                ; the PIT counts a PULSE: N / pulses

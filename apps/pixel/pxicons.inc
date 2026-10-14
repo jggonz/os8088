@@ -2,11 +2,12 @@
 ; os8088 - apps/pixel/pxicons.inc
 ;
 ; PiXEL's pictures (SPEC.md 106.3): the toolbar's, the tool column's and the
-; empty canvas's, each an OSAPI_ICON_DRAW record - `db 1, 16`, sixteen MASK
-; words, sixteen DATA words, bit 15 leftmost. The mask is FULL (0xFFFF every
-; row), which is what OS88UI_IMG asks for (SPEC.md 13.8.9): the picture is
-; then opaque over its own 16x16 cell, ground and ink in one pass, and a button
-; never writes a pixel twice.
+; empty canvas's, each an OSAPI_ICON_DRAW record - `db ICON_SOLID, 16` and
+; sixteen DATA words, bit 15 leftmost. The mask is FULL, which is what
+; OS88UI_IMG asks for (SPEC.md 13.8.9): the picture is then opaque over its
+; own 16x16 cell, ground and ink in one pass, and a button never writes a
+; pixel twice. A full mask is a constant, so it is not stored - the kernel
+; fills it in as it stages the record (SPEC.md 25.6.2).
 ;
 ; THE CGA DRAWS THEM AT HALF HEIGHT. A CGA pixel is 2.4 times as tall as it is
 ; wide, so a 16-row picture there stands as a 16x38 sliver. px_halfinit
@@ -17,8 +18,7 @@
 ; =============================================================================
 
 pxi_open:
-    db 1, 16
-    times 16 dw 0xFFFF
+    db ICON_SOLID, 16
     dw 0x0000    ; ................
     dw 0x0000    ; ................
     dw 0x7800    ; .####...........
@@ -37,8 +37,7 @@ pxi_open:
     dw 0x0000    ; ................
 
 pxi_save:
-    db 1, 16
-    times 16 dw 0xFFFF
+    db ICON_SOLID, 16
     dw 0x0000    ; ................
     dw 0x7FFE    ; .##############.
     dw 0x6817    ; .##.#......#.###
@@ -57,8 +56,7 @@ pxi_save:
     dw 0x0000    ; ................
 
 pxi_prev:
-    db 1, 16
-    times 16 dw 0xFFFF
+    db ICON_SOLID, 16
     dw 0x0000    ; ................
     dw 0x0000    ; ................
     dw 0x0000    ; ................
@@ -77,8 +75,7 @@ pxi_prev:
     dw 0x0000    ; ................
 
 pxi_next:
-    db 1, 16
-    times 16 dw 0xFFFF
+    db ICON_SOLID, 16
     dw 0x0000    ; ................
     dw 0x0000    ; ................
     dw 0x0000    ; ................
@@ -97,8 +94,7 @@ pxi_next:
     dw 0x0000    ; ................
 
 pxi_zoomin:
-    db 1, 16
-    times 16 dw 0xFFFF
+    db ICON_SOLID, 16
     dw 0x0000    ; ................
     dw 0x0F80    ; ....#####.......
     dw 0x3060    ; ..##.....##.....
@@ -117,8 +113,7 @@ pxi_zoomin:
     dw 0x0006    ; .............##.
 
 pxi_zoomout:
-    db 1, 16
-    times 16 dw 0xFFFF
+    db ICON_SOLID, 16
     dw 0x0000    ; ................
     dw 0x0F80    ; ....#####.......
     dw 0x3060    ; ..##.....##.....
@@ -137,8 +132,7 @@ pxi_zoomout:
     dw 0x0006    ; .............##.
 
 pxi_fit:
-    db 1, 16
-    times 16 dw 0xFFFF
+    db ICON_SOLID, 16
     dw 0x0000    ; ................
     dw 0x0000    ; ................
     dw 0x76DC    ; .###.##.##.###..
@@ -157,8 +151,7 @@ pxi_fit:
     dw 0x0000    ; ................
 
 pxi_rotate:
-    db 1, 16
-    times 16 dw 0xFFFF
+    db ICON_SOLID, 16
     dw 0x0000    ; ................
     dw 0x07E0    ; .....######.....
     dw 0x1818    ; ...##......##...
@@ -177,8 +170,7 @@ pxi_rotate:
     dw 0x0000    ; ................
 
 pxi_show:
-    db 1, 16
-    times 16 dw 0xFFFF
+    db ICON_SOLID, 16
     dw 0x0000    ; ................
     dw 0x0000    ; ................
     dw 0x1000    ; ...#............
@@ -197,8 +189,7 @@ pxi_show:
     dw 0x0000    ; ................
 
 pxi_hand:
-    db 1, 16
-    times 16 dw 0xFFFF
+    db ICON_SOLID, 16
     dw 0x0300    ; ......##........
     dw 0x04B0    ; .....#..#.##....
     dw 0x04C8    ; .....#..##..#...
@@ -217,8 +208,7 @@ pxi_hand:
     dw 0x0FE0    ; ....#######.....
 
 pxi_magnify:
-    db 1, 16
-    times 16 dw 0xFFFF
+    db ICON_SOLID, 16
     dw 0x0000    ; ................
     dw 0x0F80    ; ....#####.......
     dw 0x3060    ; ..##.....##.....
@@ -237,8 +227,7 @@ pxi_magnify:
     dw 0x0006    ; .............##.
 
 pxi_marquee:
-    db 1, 16
-    times 16 dw 0xFFFF
+    db ICON_SOLID, 16
     dw 0x0000    ; ................
     dw 0x0000    ; ................
     dw 0x6DB4    ; .##.##.##.##.#..
@@ -257,8 +246,7 @@ pxi_marquee:
     dw 0x0000    ; ................
 
 pxi_crop:
-    db 1, 16
-    times 16 dw 0xFFFF
+    db ICON_SOLID, 16
     dw 0x0000    ; ................
     dw 0x0C00    ; ....##..........
     dw 0x0C00    ; ....##..........
@@ -277,8 +265,7 @@ pxi_crop:
     dw 0x0000    ; ................
 
 pxi_eyedrop:
-    db 1, 16
-    times 16 dw 0xFFFF
+    db ICON_SOLID, 16
     dw 0x0000    ; ................
     dw 0x0006    ; .............##.
     dw 0x000F    ; ............####
@@ -297,8 +284,7 @@ pxi_eyedrop:
     dw 0x0000    ; ................
 
 pxi_photo:
-    db 1, 16
-    times 16 dw 0xFFFF
+    db ICON_SOLID, 16
     dw 0x0000    ; ................
     dw 0xFFFF    ; ################
     dw 0x8001    ; #..............#
@@ -317,8 +303,7 @@ pxi_photo:
     dw 0x0000    ; ................
 
 pxi_stop:
-    db 1, 16
-    times 16 dw 0xFFFF
+    db ICON_SOLID, 16
     dw 0x0000    ; ................
     dw 0x1FF8    ; ...##########...
     dw 0x3FFC    ; ..############..
@@ -337,4 +322,4 @@ pxi_stop:
     dw 0x0000    ; ................
 
 PXI_N equ 16                    ; records above, each PXI_SZ bytes
-PXI_SZ equ 2 + 16 * 4
+PXI_SZ equ 2 + 16 * 2

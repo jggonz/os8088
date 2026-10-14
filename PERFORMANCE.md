@@ -1299,6 +1299,7 @@ list to check yourself against.
 | Paint's canvas, redrawn | a BMP in memory, transposed into the card's four planes on every repaint - 106.9 cycles a pixel of which nearly all is the transpose, **1,148 ms** for 466x110 | the canvas IS four planes, so a repaint is a COPY: **162 ms**, 7.1x again and **44x** on the run writer this line started from. No heap: the two formats want the identical stride | §42.13, §5.4.3 |
 | Paint's canvas on an UNCOVER, 1bpp | the raise cache banked the tool column and the bottom strip - 3 KB - and left the canvas to be redrawn: an uncover issues a **376x110** `gfx_blit4`, and the whole 466x110 canvas is **399 ms** on a cycle-accurate 5150/CGA (31.2 cycles a pixel in `sw_blit_row`, 1.4 in `gfx_blit4`, and §5.4.1.2 had already taken the 2x in the loop) | on a 1bpp adapter the WHOLE content is banked instead - measured **9 KB** against the band's 3, and granted - so an uncover issues **no canvas blit at all**. The reduction cannot be made cheaper (the canvas is 4bpp because it is the FILE, and §39.4 maps sixteen colours onto three classes), so it is not made at all | §11.96.11.3 |
 | Paint's Copy and Paste | the clipboard was packed 4bpp whatever the canvas was, so a Copy off a four-plane canvas transposed the selection out a pixel at a time and a Paste transposed it back - a row-table lookup and a four-bit gather, or four read-modify-writes, PER PIXEL. Bracketed entry-to-return: **1,044 cycles a pixel to copy and 1,619 to paste**, which is **4.38 s and 6.79 s** for a 200x100 block at 4.77MHz - beside an Undo of the same rows that is a `rep movsw` and instant | the clipboard holds what the CANVAS holds, so a row is four byte runs and a row is four byte moves - and neither inner loop tests per byte what it can decide per operation, so a middle byte is a shift and a STORE: **96 and 145** cycles a pixel, **0.40 s and 0.61 s**, which is **10.9x and 11.2x**. Measured with the block off the byte grid at BOTH ends; on it, 56 and 102. What is left is the variable shift an unaligned phase needs, 8+4n on an 8088 | §42.13.3 |
+| Paint's Copy and Paste on a 1bpp ADAPTER | the planar row above was the only byte path: a one-bit canvas (every Hercules and CGA since §42.23) and a packed one went through `pt_getpx`/`pt_setpx` a pixel at a time, and `pt_setpx` folds every pixel into the band table. Bracketed on a 5150 with Hercules, 200x100 off the grid: one bit **714 and 2,005 cycles a pixel, 2.99 s and 8.41 s**; packed 694 and 1,808, 2.91 s and 7.58 s | the three formats are ONE bitstream - packed is a plane of four bits a pixel, one bit a plane of one - so the planar grab and merge serve all three with the column counted in bits: one bit **28 and 67, 0.12 s and 0.28 s** (25x and 30x), packed **91 and 175, 0.38 s and 0.73 s**; and 10 bytes smaller | §42.13.3.1 |
 | Paint's canvas going back to nibbles | `pt_topacked` was `pt_line_get` then `pt_line_put` - a planar row unpacked into one colour index a BYTE and packed again, two passes and a 736-byte buffer between them to move eight bits: **377.7 cycles a pixel**, **4,056 ms** for 466x110. On a two-card machine that is what a window dragged onto the mono monitor costs before it draws | one loop: four plane bytes of a byte column in, four packed bytes out, eight `shl`/`rcl` pairs a pixel and no buffer between. **108.4 cycles a pixel**, **1,165 ms**, 3.48x. The break-even against KEEPING the planes - 164 ms a repaint through `gfx_blitp` against 1,161 through `gfx_blit4` - goes from 4.1 repaints to 1.2. Two table designs were costed against the shift loop and both lose | §42.13.1.2 |
 | Paint's GIF save, per row | `pt_line_get`'s planar loop is the writer's row reader, one call a row, and a pixel in it is eight shifts wrapped in a `cmp`/`jae`/`dec`/`jnz`: **190.3 cycles a pixel**, 18.58 ms a row, **2,044 ms** of a 466x110 save | the whole byte column unrolled, the rolled loop kept for the partial one at the end of a row: **141.1 cycles a pixel**, 13.78 ms a row, **1,516 ms**, 26% off every save. `tests/paintrow.py` calls the routine directly - nothing that draws goes near it | §42.13.1.2 |
 | Paint's GIF **open**, the LZW loop | LZW hands a string back last character first, so the reader unwound it onto a character stack and emitted it in reverse - a near call per pixel into `pt_gemit`, two more around it for `pt_gpush`/`pt_gpop`, and a `pt_pmap` lookup inside the innermost one: **999 cycles a pixel**, **10.6 s** of a 466x110 picture | the stack the walk fills IS the string, backwards - so it is filled DOWNWARDS from the top of the same 4,096 bytes and comes out forwards, and a run is one `rep movsb` at 17 cycles a pixel. Row end, crop and interlace are decided once per RUN (30 pixels here), the palette once per STRING: **205 cycles a pixel**, **4.87x**, for **27 bytes** and three routines deleted. With the row packing below it, `OS8088.GIF` opens in **3,494 ms on a VGA against 12,547, and 2,687 against 12,755 on a CGA** | §42.21, `tests/paintlzw.py` |
@@ -1473,6 +1474,52 @@ In rough order of cost, and you do not always need all of it.
    session can conclude.
 6. **Watch it with your eyes** if the change is about flash or redraw. That
    judgement is made on hardware and by a person. Nothing above substitutes.
+7. **A size pass that must leave the hot path alone: diff it per ROUTINE.**
+   `tools/os88rdiff.py` assembles a package (or the kernel) at a base commit
+   and at the working tree and reports every top-level label as `same`,
+   `equ` (identical but for a layout-derived `equ` such as a segment base),
+   `relaxed` (identical but for BRANCH FORM), `changed`, `new` or `gone`,
+   with its size delta and its address shift and that shift's PARITY.
+   Relocated fields and relative branches are resolved to `label+offset`
+   against each build's own map, so a moved target is not a difference and
+   a retargeted one is.
+
+   ```
+   python3 tools/os88rdiff.py apps/video/video.asm e8f9e5a1 \
+           --hot 'vd_.*' --hot 'vp_(play|worker|hook|adue|frame)'   # exit 1 = moved
+   python3 tools/os88rdiff.py apps/video/video.asm e8f9e5a1 -D VP_DIAG   # a knob's arm
+   python3 tools/os88rdiff.py kernel HEAD~1 --show 'sch_isr'             # the kernel, one diff
+   python3 tools/os88rdiff.py --selfcheck                                # the tool, planted
+   ```
+
+   **The reason it exists is that a cold-only edit is not hot-safe.** NASM
+   assembles every `jz label` short when the target is in range and as
+   `jnz +3 / jmp near` when it is not, and every `jmp` as EB or E9 - no
+   source line says which. Delete forty bytes of cold code and some far
+   branch comes into range, shrinks by one or three bytes, and everything
+   after it moves by an ODD amount: the hot routines are instruction-identical
+   and no longer where they were. On a 16-bit bus (an 8086, a V30, every 286
+   here) a word fetch at an odd address is two bus cycles, so an odd shift
+   re-prices the loop; an 8088 fetches a byte at a time and does not care.
+   The first apps size pass's Video set (docs/reports/APPS-SIZE-P1-SET6-2026-10-12.md)
+   found five such branches and wrote them back by hand as `jnz .x / jmp near
+   .far / .x:`, which the tool reads as the five bytes nasm synthesises and
+   so reports `same`. `--hot` (repeatable, or `--hot-file`) names the
+   routines that must be `same` at a shift that is a multiple of `--align`
+   (2); a failure names each routine, groups them by shift and says WHERE
+   the alignment was lost - usually one `relaxed` routine, which is the
+   branch to pin. A `--hot` pattern that matches nothing is a failure, not
+   a pass.
+
+   The include path and literal `-D`s come from the Makefile's own recipe
+   at each commit; a Makefile VARIABLE (`$(VPDEF)`) is the caller's to pass
+   with `-D`. A commit is exported with `git archive` - its `.asm`/`.inc`
+   files only, a few MB - under `build/rdiff/`, which is removed afterwards.
+   The listings are made with nasm's `-Le`, the one listing that says which
+   `section` line a false `%if` threw away; every routine's listed bytes are
+   checked to add up to its size in the map, and a build where they do not
+   is named on stderr rather than trusted. `--lst A.lst B.lst` compares two
+   listings you already have (each with its `.map` beside it).
 
 **Under QEMU, wall clock is still a lower bound worth having.** Paint's
 measured figures under `make run-640` — a full-canvas flood fill in ~4 s, a

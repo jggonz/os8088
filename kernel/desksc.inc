@@ -18,7 +18,7 @@
 ;            OSAPI_DESK_ITEM link, and the SYSTEM.CFG trailer. Every one of
 ;            them ends in a SYSTEM.CFG write and the writer is already in that
 ;            image, so the gesture rides the load the save needed anyway
-;   .ovl     the boot reader, which runs once and is gone
+;   .boot2     the boot reader, which runs once and is gone
 ;
 ; THE TABLE IS A HEAP CLAIM, never .bss: one claim for every shortcut, grown
 ; and shrunk a KB at a time (eight records a KB), freed when the last one goes.
@@ -72,6 +72,9 @@ SC_OP_MOVE  equ 1               ; core's one entry (SPEC.md 2.8.7) - takes
 SC_OP_DEL   equ 2               ; these in AH (SPEC.md 26.8.7)
 SC_OP_ADD   equ 3               ; a package's link, OSAPI_DESK_ITEM (26.9)
 SC_OP_PDEL  equ 4               ; ...and its remove, named by the record
+SC_OP_VGC   equ 5               ; ...and Force Color at boot (SPEC.md 39.28):
+                                ; not a shortcut, but the core is the part of
+                                ; CTRL.DRV a boot can afford to read
 
 ; =============================================================================
 section .cold
@@ -271,23 +274,49 @@ desk_key_x:
 ;
 ; On a shortcut: select it and pop its one command (SPEC.md 26.8.5) - which
 ; IS Locator's File item, kept current by desk_select, so the popup and the
-; menu cannot disagree. A drive or the service item has no command to offer.
+; menu cannot disagree. On a drive that is a MOUNTED IMAGE: its one command,
+; Unmount Image (SPEC.md 18.101.5) - the same string and the same verb as the
+; Disk window's menu. Any other drive, and the service item, has none.
 ; -----------------------------------------------------------------------------
 sc_rclick_x:
     call desk_hit               ; AL = the zone under it...
     jc .out
+%ifdef OS88_IMG
+    cmp al, DESK_SVZ            ; a DRIVE's zone is its volume (desk_open),
+    jae .notvol                 ; and a mounted image's has one command:
+    mov bl, al                  ; Unmount Image (SPEC.md 18.101.5)
+    call dsk_vol_row_x          ; CF = 1 a free row - ZF is then set (the
+    jc .out                     ; `cmp` with DVK_FREE), so test CF first
+    cmp byte [bx+DV_CLASS], DRVC_IMG
+    je .pop
+.notvol:
+%endif
     cmp al, DESK_SC0            ; ...and only a SHORTCUT has the command
     jb .out
+.pop:
     call desk_select
     call ct_cw_gfx_lock
     push ax
+    mov bx, menu_items_file + 2
+%ifdef OS88_IMG
+    cmp al, DESK_SVZ
+    jae .items
+    mov bx, sc_umnt
+.items:
+%endif
     mov cx, di
     mov dx, si
-    mov bx, menu_items_file + 2
     mov ax, 1
     call KERNEL_SEG:cw_menu_popup
     pop ax                      ; `pop` writes no flag: the pick's CF stands
     jc .u
+%ifdef OS88_IMG
+    cmp al, DESK_SVZ
+    jae .del
+    mov dl, CLV_UNMNT           ; AL = the volume: it says what happened, and
+    call fm_imgcall             ; the zone goes with the row (dsk_vol_del's
+    jmp short .u                ; desk_reflow)
+%endif
 .del:
     mov ah, SC_OP_DEL
     call sc_modcall
@@ -295,6 +324,35 @@ sc_rclick_x:
     call ct_cw_gfx_unlock
 .out:
     stc
+    retf
+
+; -----------------------------------------------------------------------------
+; vgcf_boot - Force Color at boot (SPEC.md 39.28), from drv_boot_x
+; in:  [drv_cfg+CFG_VGC], just read; the system volume mounted
+; out: nothing; every register preserved
+;
+; The box's TEST is here and not at the call site because the call site is
+; the boot overlay, which is full (SPEC.md 39.28 prices both).
+;
+; FAR, for the boot overlay, and NOT sc_modcall: that one's refusal is
+; `Needs Sys Disk A:` as a toast, and there is no desktop yet to say it on. A
+; core that cannot be read here leaves the BIOS's palette as it was - the
+; machine boots grey, exactly as it would with the box clear.
+; -----------------------------------------------------------------------------
+vgcf_boot:
+    cmp byte [drv_cfg+CFG_VGC], 0
+    je .ret                     ; the box is clear: the BIOS's verdict stands
+    push ax
+    mov al, MOD_SETS
+    call mod_need               ; every register kept, CF = could not
+    jc .out
+    mov ah, SC_OP_VGC
+    call far [SETFP]            ; the core's one slot, CPE_SC
+    mov al, MOD_SETS
+    call mod_drop
+.out:
+    pop ax
+.ret:
     retf
 
 ; =============================================================================
@@ -312,6 +370,9 @@ sc_reloc:
 ; --- the File menu's item and the right-click's, ONE string ------------------
 ; desk_select points item 1 at the MENU_DIS byte or past it, the Close Window
 ; idiom (menu.inc), so the greyed twin costs one byte and not a second string.
+%ifdef OS88_IMG
+sc_umnt     dw fm_s_umnt        ; the image zone's one-item popup (sc_rclick)
+%endif
 sc_s_remx   db MENU_DIS
 sc_s_rem    db 'Remove Shortcut'    ; NO NUL OF ITS OWN: it ends on sc_nul's,
 sc_nul      db 0                ; ...which is also an EMPTY name, for a
@@ -332,7 +393,6 @@ section .bss
 ; =============================================================================
 sc_seg      resw 1              ; the table's claim, 0 = no shortcuts
 sc_nrows    resb 1              ; rows the claim holds, 0..SC_MAX
-sc_vol      resb 1              ; sc_open: the volume, across its walk
 
 ; =============================================================================
 section .modc                   ; CTRL.DRV (SPEC.md 26.8.7): CS = the image,
@@ -350,7 +410,12 @@ modc_e_sc:                      ; CPE_SC (SPEC.md 2.8.7): AH = the operation
     dec ah
     jz .del
     dec ah
-    jnz .pdel
+    jz .add
+    dec ah
+    jz .pdel
+    call cp_vgc_force           ; SC_OP_VGC (SPEC.md 39.28)
+    jmp short .out
+.add:
     call sc_m_add
     jmp short .out
 .pdel:
@@ -1140,9 +1205,9 @@ sc_s_many   db 'Too many shortcuts', 0      ; copies, and these cost the
 sc_s_path   db 'Path too long', 0           ; kernel nothing (SPEC.md 2.8)
 
 ; =============================================================================
-section .ovl                    ; the BOOT half (SPEC.md 2.5.1): runs once,
+section .boot2                    ; the BOOT half (SPEC.md 2.5.1): runs once,
 ; =============================================================================
-; from ovc_load, and costs no resident byte and no disk read - .ovl rides the
+; from ovc_load, and costs no resident byte and no disk read - .boot2 rides the
 ; fixed ten-sector blob (docs/plans/completed/DESKTOP-SHORTCUTS-PLAN.md 3.1).
 
 ; ovl_sc_load's EXITS, AHEAD OF ITS ENTRY. Behind the body they were ~250

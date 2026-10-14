@@ -35,10 +35,16 @@ the band arm takes, and `gfx_blit1` must rise to one per line.
 
 The band arm is reached by a DIFFERENT gate per adapter, which is why this
 runs on three: 1bpp takes it outright (`at_codebg` has already cleared
-`at_cellbg`, so no grey column survives), and a colour adapter takes it only
-for a line with no code span. The `code` line below is therefore the one line
-that must still go through the expander on VGA and must not on CGA or
-Hercules - so on VGA the census floor for `gfx_blit4` is not zero.
+`at_cellbg`, so no grey column survives), and a colour adapter takes the ONE
+band only for a line with no code span. The `code` line below is the one line
+that a colour adapter splits into RUNS of bands, each in its own pen (SPEC.md
+46.4.12) - the expander that line used to need is gone, and with it the
+shipped arm's last `gfx_blit4` on any adapter.
+
+THE RUN SPLIT IS VGA'S ALONE, so the registered `atblit` row (CGA) cannot see
+it at all: drawing a code run in the text run's pen is GREEN there and red on
+`--card vga` (the code span's grey ground comes out white). That is why
+`atblitvga` is a row of its own.
 """
 import sys, os, argparse
 # THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
@@ -458,8 +464,8 @@ def drive(img, apps, machine, card, tree, census, shot=None):
                 "document, which is a regression in whatever wave is under "
                 "test, OR the scene has drifted and no longer reaches a "
                 "scrolled state, in which case it tests much less than it "
-                "looks like it does. /tmp/atblit/*-zoom.png tells them "
-                "apart.")
+                "looks like it does. %s/atblit/*-zoom.png tells them "
+                "apart." % tempfile.gettempdir())
         ui.settle()
         w5, h5, zoomed = m.fbuf()
         if shot:
@@ -554,16 +560,16 @@ def main():
     print("   shipped arm: %s" % os.path.relpath(shipped.dir, ROOT))
     print("   %s arm: %s" % (a.knob, os.path.relpath(knob.dir, ROOT)))
 
-    os.makedirs("/tmp/atblit", exist_ok=True)
+    os.makedirs(tempfile.gettempdir() + "/atblit", exist_ok=True)
     w, h, bsp, band, bsc, bzi, bzm, bun, cb = drive(shipped.img("os8088-360.img"),
                                 shipped.img("apps360.img"), machine, a.card,
                                 shipped,
-                                a.census, "/tmp/atblit/%s-shipped-%s.png" % (a.knob, a.card))
+                                a.census, tempfile.gettempdir() + "/atblit/%s-shipped-%s.png" % (a.knob, a.card))
     w2, h2, esp, expa, esc, ezi, ezm, eun, ce = drive(knob.img("os8088-360.img"),
                                   knob.img("apps360.img"), machine, a.card,
                                   knob,
                                   a.census,
-                                  "/tmp/atblit/%s-knob-%s.png" % (a.knob, a.card))
+                                  tempfile.gettempdir() + "/atblit/%s-knob-%s.png" % (a.knob, a.card))
 
     if (w, h) != (w2, h2):
         print("FAIL: the two arms rasterised %dx%d against %dx%d"
@@ -602,7 +608,7 @@ def main():
                     if band[base+col*3:base+col*3+3]
                     != expa[base+col*3:base+col*3+3])
             print("      y=%-4d %d" % (row, c))
-        print("   captures in /tmp/atblit/")
+        print("   captures in %s/atblit/" % tempfile.gettempdir())
         print("FAIL: the shipped arm and %s drew different pictures" % a.knob)
         return 1
     print("ok: %s draws the identical picture on %s" % (a.knob, a.card))

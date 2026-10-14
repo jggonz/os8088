@@ -140,32 +140,60 @@ def rules(lines, v):
     return out
 
 
+# Each file's directives, parsed ONCE however many packages include it: the
+# shared SDK includes are in nearly all 141 roots, and re-reading them per root
+# was 900 parses and 5.8M regex calls - 3.7s of a fast row that is ~0.3s.
+_DIRECTIVES = {}
+_EXISTS = {}
+_INC = re.compile(r'%include\s+"([^"]+)"')
+
+
+def directives(src):
+    """[(conditional, name)] for every %include in `src`, in order, or None."""
+    got = _DIRECTIVES.get(src, False)
+    if got is not False:
+        return got
+    try:
+        txt = open(os.path.join(ROOT, src)).read()
+    except OSError:
+        _DIRECTIVES[src] = None
+        return None
+    out, depth = [], 0
+    for ln in txt.split("\n"):
+        t = ln.lstrip()
+        if not t.startswith("%"):
+            continue
+        if t.startswith("%if"):
+            depth += 1
+        elif t.startswith("%endif"):
+            depth = max(0, depth - 1)
+        else:
+            m = _INC.match(t)
+            if m:
+                out.append((depth > 0, m.group(1)))
+    _DIRECTIVES[src] = out
+    return out
+
+
+def _exists(c):
+    got = _EXISTS.get(c)
+    if got is None:
+        got = _EXISTS[c] = os.path.exists(os.path.join(ROOT, c))
+    return got
+
+
 def includes(src, ipaths, seen, cond):
     """The transitive %include set, and the names that were conditional."""
     if src in seen:
         return
     seen.add(src)
-    try:
-        txt = open(os.path.join(ROOT, src)).read()
-    except OSError:
-        return
-    depth = 0
-    for ln in txt.split("\n"):
-        t = ln.strip()
-        if re.match(r"%if", t):
-            depth += 1
-        elif re.match(r"%endif", t):
-            depth = max(0, depth - 1)
-        m = re.match(r'\s*%include\s+"([^"]+)"', ln)
-        if not m:
-            continue
-        name = m.group(1)
-        if depth:
+    for conditional, name in directives(src) or ():
+        if conditional:
             cond.add(name)
         for c in [os.path.join(os.path.dirname(src), name)] + \
                  [os.path.join(p, name) for p in ipaths]:
             c = os.path.normpath(c)
-            if os.path.exists(os.path.join(ROOT, c)):
+            if _exists(c):
                 includes(c, ipaths, seen, cond)
                 break
 

@@ -511,7 +511,8 @@ runprog_at:
 ;   $C000  the first soft switch, through the call out  -> $00 ^ $5A = $5A
 ;   $C0FF  the last one                                 -> $FF ^ $5A = $A5
 ;   $C100  the first byte of slot space                 -> $FF
-;   $CF00  THE CORE'S OWN SCRATCH PAGE                  -> $FF
+;   $C130  THE CORE'S OWN SCRATCH PAGE - its "wrote"    -> $FF
+;          byte, which this very run sets to 1
 ;   $CFFF  the last byte of slot space                  -> $FF
 ;   $D000  the first byte of ROM                        -> $DD
 ;   $FFFF  the last                                     -> $DF
@@ -575,7 +576,7 @@ p_rd:
     db 0x8D, 0x42, 0x09
     db 0xAD, 0x00, 0xC1
     db 0x8D, 0x43, 0x09
-    db 0xAD, 0x00, 0xCF
+    db 0xAD, 0x30, 0xC1
     db 0x8D, 0x44, 0x09
     db 0xAD, 0xFF, 0xCF
     db 0x8D, 0x45, 0x09
@@ -589,7 +590,7 @@ p_rd:
 ; ROW 4 - WRITES ACROSS EVERY BOUNDARY, INCLUDING THE DROP ABOVE $C0FF
 ;
 ; $BFFF takes the byte. $C055 goes out through the call out and the stub logs
-; it. **$C100, $CF00, $CFFF, $D000 and $FFFF ARE DROPPED** - slot space and ROM
+; it. **$C100, $C1F0, $CFFF, $D000 and $FFFF ARE DROPPED** - slot space and ROM
 ; are not writable on this machine - so the claim still holds mem_init's poison
 ; at every one of them, and the io stub's write counter moved exactly once.
 ;
@@ -616,7 +617,7 @@ row_wr:
     call ram_rd
     cmp al, 0x99                    ; the poison is untouched: DROPPED
     jne .bad
-    mov bx, 0xCF00
+    mov bx, 0xC1F0                  ; the scratch page's spare tail
     call ram_rd
     cmp al, 0x99
     jne .bad
@@ -652,7 +653,7 @@ row_wr:
     pop si
     ret
 
-; LDA #$5C / STA $BFFF / STA $C055 / STA $C100 / STA $CF00 / STA $CFFF
+; LDA #$5C / STA $BFFF / STA $C055 / STA $C100 / STA $C1F0 / STA $CFFF
 ; STA $D000 / STA $FFFF / JAM
 p_wr:
     db 24
@@ -660,7 +661,7 @@ p_wr:
     db 0x8D, 0xFF, 0xBF
     db 0x8D, 0x55, 0xC0
     db 0x8D, 0x00, 0xC1
-    db 0x8D, 0x00, 0xCF
+    db 0x8D, 0xF0, 0xC1
     db 0x8D, 0xFF, 0xCF
     db 0x8D, 0x00, 0xD0
     db 0x8D, 0xFF, 0xFF
@@ -877,22 +878,22 @@ p_seg:
 ; rests on nothing in the emulated machine being able to see them. Three
 ; questions:
 ;
-;   (a) a READ of $CF24 - the countdown's own address - answers the slot
+;   (a) a READ of $C124 - the countdown's own address - answers the slot
 ;       ladder's $FF and not the counter;
-;   (b) a WRITE of $00 to $CF24 does not stop the machine: the program runs on
+;   (b) a WRITE of $00 to $C124 does not stop the machine: the program runs on
 ;       and reaches its store;
-;   (c) EXECUTING at $CF10 runs $FF (ISC $FFFF), not the bytes the harness put
+;   (c) EXECUTING at $C110 runs $FF (ISC $FFFF), not the bytes the harness put
 ;       there behind the ladder's back - so a program cannot jump into the
 ;       scratch and find code.
 ;
 ; The NEGATIVE CONTROL moves the $C000 fence to $D000 (see row 5), which biases
-; $CF00 to RAM - precisely the core that WOULD execute the harness's bytes.
+; $C100 to RAM - precisely the core that WOULD execute the harness's bytes.
 ; -----------------------------------------------------------------------------
 row_scratch:
     push si
     ; (c)'s bytes, written straight into the claim - the emulated machine has
     ; no way to put them there
-    mov bx, 0xCF10
+    mov bx, 0xC110
     mov al, 0xA9                    ; LDA #$C5
     call ram_wr
     inc bx
@@ -929,7 +930,7 @@ row_scratch:
     mov es, [_a2_m+AM_RAMSEG]
     mov byte [es:0x0972], 0
     pop es
-    mov bx, 0xCF10
+    mov bx, 0xC110
     call bnd_run
     mov bx, 0x0972
     call ram_rd
@@ -943,13 +944,13 @@ row_scratch:
     pop si
     ret
 
-; LDA $CF24 / STA $0970 / LDA #$00 / STA $CF24 / LDA #$C4 / STA $0971 / JAM
+; LDA $C124 / STA $0970 / LDA #$00 / STA $C124 / LDA #$C4 / STA $0971 / JAM
 p_scr:
     db 17
-    db 0xAD, 0x24, 0xCF
+    db 0xAD, 0x24, 0xC1
     db 0x8D, 0x70, 0x09
     db 0xA9, 0x00
-    db 0x8D, 0x24, 0xCF
+    db 0x8D, 0x24, 0xC1
     db 0xA9, 0xC4
     db 0x8D, 0x71, 0x09
     db 0x02
@@ -1819,7 +1820,7 @@ dormann_main:
     pop es
     pop ds
     ; ...AND THE CORE'S SCRATCH IS CLEARED AFTER THE LOAD. The fixture is a
-    ; whole 64KB image and it lands ON TOP of $CF00-$CFFF, so whatever the test
+    ; whole 64KB image and it lands ON TOP of $C100-$C1FF, so whatever the test
     ; has at those addresses becomes the pending-interrupt byte, the countdown
     ; and the dirty bitmap. apple2.c does the same thing at launch
     ; (a2_scratch_clear).

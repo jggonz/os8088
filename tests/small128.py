@@ -58,30 +58,16 @@ def u16(b, i=0):
     return b[i] | (b[i + 1] << 8)
 
 
-# A PRIVATE TREE (tools/os88build.py), shared with tests/smallboot.py: the
-# targets are the same, so the two rows key the same directory and the second
-# one to run finds it built. `make small` writes build/*.drv as well as
-# build/smallk/ - t_buildmatrix measured it restamping build/hddtool.drv - so
-# out of tree is what lets this row run beside anything else.
-_T = os88build.tree(targets=("small", "apps360.img"))
-
-# **AND THE SYMBOL READER FOLLOWS IT.** The two lines at the top of this file
-# point os88sym at the SHARED `build/smallk`, which is where `make small`
-# writes - and this row has not booted that kernel since it moved to a private
-# tree. It agreed for as long as the two directories held the same build, and
-# stopped the moment they did not: cherry-picking this work onto a re-cut
-# integration branch left `build/smallk/kernel.bin` carrying BUILD_NUM 497
-# against a checkout at 142, and the row failed with "the map describes a
-# DIFFERENT kernel" - correctly, about a kernel it was not running.
-#
-# `_T.apply()` is NOT the way to do it, and that is worth saying because it is
-# the obvious move. `defines_for` asks how the tree's DEFAULT kernel target is
-# compiled, so a tree built for the `small` GOAL still answers `KERN_BIG`;
-# apply() would point the reader at the right directory with the wrong
-# defines. The kern_small kernel is in the tree's own `smallk/` subdirectory,
-# exactly as it is under `build/`, so name that and keep KERN_SMALL.
-os.environ["OS88_BUILD"] = os.path.join(_T.dir, "smallk")
-os88sym.default_defines(*DEFS)
+# THE SHARED BUILD, declared as `wants=` (tests/suite.py), and no longer a
+# private tree. `make small` on top of a current `make` adds build/smallk/,
+# build/smallapp/ and the two small disks and touches nothing a plain `make`
+# wrote (checked file by file on 2026-10-11), so the private tree it used to
+# build - which was the reason this row cost ~40s of a ~180s tier - bought
+# nothing but a second assembly of every package: 49s of CPU against 10.6s.
+# The runner prebuilds a `wants=` artefact before any row starts, which is
+# the moment a shared `make` is safe, and `make test-full` carries it as a
+# prerequisite. use_build() above points the symbol reader at build/smallk,
+# through os88build.at() so a frozen soak tree is honoured.
 
 # ...and the FLOOR MACHINE has to be staged. tools/martypc/build.sh appends
 # os8088_machines.toml to upstream's ibm5150.toml, so a run tree built before
@@ -94,7 +80,7 @@ if os.path.exists(_cfg) and MACHINE not in open(_cfg, errors="replace").read():
     sys.exit("tests/small128.py: build/martypc/ has no %s - it was staged "
              "before that profile existed. Re-run `make marty`." % MACHINE)
 
-with M.launch(_T.img("small360.img"), apps=_T.img("apps360.img"),
+with M.launch("build/small360.img", apps="build/apps360.img",
               machine=MACHINE) as m:
     M.no_saver(m)
     M.settle(m, limit=180)

@@ -9,6 +9,7 @@ content box, which is what this window did before the dirty mask and the
 scrolled log.
 """
 import subprocess
+import tempfile
 import sys
 
 sys.path.insert(0, 'tools')
@@ -62,7 +63,7 @@ def boot():
 
 
 def log_state(m):
-    """fd_st .. fd_lognext (os88_image_end + 48 .. + 59, apps/ftpd/ftpd.asm)
+    """fd_st .. fd_lognext (os88_image_end + 42 .. + 53, apps/ftpd/ftpd.asm)
     out of the package's own bss - tests/ftpd.py's read_state, widened."""
     for i in reversed(dispcp.win_list(m, S)):
         w = dispcp.win_rect(m, S, i)[2]
@@ -72,7 +73,7 @@ def log_state(m):
         seg = dispcp._u16(r, 22)
         o88 = open(os88build.at("build/ftpd.o88"), "rb").read()
         img = o88[8] | (o88[9] << 8)
-        return m.readseg(seg, img + 48, 12)
+        return m.readseg(seg, img + 42, 12)
     return None
 
 
@@ -109,7 +110,7 @@ def session(tag):
     # RAW PIXELS, cropped to the WINDOW - a PNG's bytes differ for reasons
     # that are not pixels, and the menu bar carries a clock that moves between
     # two runs minutes apart.
-    out = "/tmp/%s.ppm" % tag
+    out = tempfile.gettempdir() + "/%s.ppm" % tag
     subprocess.run(["python3", "tools/qmp.py", SOCK,
                     'screendump %s' % out], check=True, capture_output=True)
     rect = G.ftp_win(m)

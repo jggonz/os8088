@@ -54,7 +54,13 @@ B2_STACK    equ 0x7C00          ; stage 1's STACK_TOP, which is still ours
 BS_CYLASK   equ 509             ; boot/boot.asm's: the Floppy page's Cylinder
                                 ; byte in the boot sector, which stage 1's
                                 ; relocated copy still holds at SS:7C00 here
-KSIG_OFF    equ 5632            ; SPEC.md 18.93.1's probe, as a MEMORY offset
+KSIG_OFF    equ 5632 - BOOT2_KNOBSEC * 512 ; SPEC.md 18.93.1's probe, as a
+                                ; MEMORY offset - one sector lower on a knob
+                                ; build, whose blob is a sector longer
+                                ; (kernel.asm's BOOT2_KNOBSEC), so the FILE
+                                ; sector is 21 at either length. The shipped
+                                ; literal stays first for t_canary's compare.
+                                ; ...as a MEMORY offset
                                 ; from KERNEL_SEG - the Makefile reads the same
                                 ; bytes out of the file at KSIG_OFF + BOOT2_PAD,
                                 ; which is FILE SECTOR 21 and has to be: the

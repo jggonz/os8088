@@ -83,6 +83,13 @@ struct rc_zregs {
 };
 extern struct rc_zregs rc_z;
 
+/* RC_W - a 16-bit result, as the Z80 and the BDOS keep it. On the target
+ * unsigned IS 16 bits and the mask is the identity, and costs nothing:
+ * SmallerC emits it as `and ax, -1`, which tools/ccpeep.py deletes wherever
+ * the flags it sets are not read (SPEC.md 73.15). It is spelled for the host
+ * harnesses, whose unsigned is 32 (LESSONS.md 7) */
+#define RC_W(x) ((x) & 0xFFFF)
+
 #define RC_RUN_SLICE 0
 #define RC_RUN_BIOS  1
 #define RC_RUN_BDOS  2
@@ -134,42 +141,48 @@ static const unsigned char rc_dph[16] = {
  * resolves RUNCPM.OVL in the launch folder - and it answers 1, so a 0 is
  * the module refused (no heap, no file, a stale one: cc_ovneed toasted why)
  * and rc_boot stops the machine on it. */
+/* the fixed bytes _PatchCPM writes, as they land: page zero's two jumps
+ * (0000: JP BIOS+3, WBOOT; 0005: JP BDOSjmppage+6), the BDOS jump page's
+ * first 9 bytes (the version word 0x1600 the CCP reads, two zero words, JP
+ * BDOSpage) and the BDOS handoff stub (RST 10h; RET; NOP) */
+static const unsigned char rc_pz_wboot[3] = {
+    Z_JP, (RC_BIOSJMPPAGE + 3) & 0xFF, (RC_BIOSJMPPAGE + 3) >> 8 };
+static const unsigned char rc_pz_bdos[3] = {
+    Z_JP, (RC_BDOSJMPPAGE + 6) & 0xFF, (RC_BDOSJMPPAGE + 6) >> 8 };
+static const unsigned char rc_bdosjmp[9] = {
+    0x00, 0x16, 0x00, 0x00, 0x00, 0x00,
+    Z_JP, RC_BDOSPAGE & 0xFF, RC_BDOSPAGE >> 8 };
+static const unsigned char rc_bdosstub[3] = { Z_RST10, Z_RET, Z_NOP };
+
 static int ovl_patch_cpm(void)
 {
     unsigned i;
-    static unsigned char jp[3];
-    static unsigned char stub[3];
+    unsigned char *b;
 
-    jp[0] = Z_JP;
-    jp[1] = (RC_BIOSJMPPAGE + 3) & 0xFF;      /* 0000: JP BIOS+3 (WBOOT) */
-    jp[2] = (RC_BIOSJMPPAGE + 3) >> 8;
-    rc_zcopy_in(0x0000, jp, 3);
+    rc_zcopy_in(0x0000, rc_pz_wboot, 3);
     if (rc_status != RC_ST_RESTART) {
         rc_wr(RC_IOBYTE, 0x3D);               /* IOBYTE: the console */
         rc_wr(RC_DSKBYTE, 0x00);              /* A:/0 */
     }
-    jp[1] = (RC_BDOSJMPPAGE + 6) & 0xFF;      /* 0005: JP BDOSjmppage+6 */
-    jp[2] = (RC_BDOSJMPPAGE + 6) >> 8;
-    rc_zcopy_in(0x0005, jp, 3);
+    rc_zcopy_in(0x0005, rc_pz_bdos, 3);
+    rc_zcopy_in(RC_BDOSJMPPAGE, rc_bdosjmp, 9);
+    rc_zcopy_in(RC_BDOSPAGE, rc_bdosstub, 3);
 
-    rc_wr16(RC_BDOSJMPPAGE, 0x1600);          /* the CCP reads the version */
-    rc_wr16(RC_BDOSJMPPAGE + 2, 0x0000);
-    rc_wr16(RC_BDOSJMPPAGE + 4, 0x0000);
-    jp[1] = RC_BDOSPAGE & 0xFF;               /* +6: JP BDOSpage */
-    jp[2] = RC_BDOSPAGE >> 8;
-    rc_zcopy_in(RC_BDOSJMPPAGE + 6, jp, 3);
-    stub[0] = Z_RST10;                        /* BDOSpage: RST 10h; RET; NOP */
-    stub[1] = Z_RET;
-    stub[2] = Z_NOP;
-    rc_zcopy_in(RC_BDOSPAGE, stub, 3);
-
-    stub[0] = Z_RST08;                        /* _PatchBIOS: 33 entries */
-    for (i = 0; i < 99; i += 3) {
-        jp[1] = (RC_BIOSPAGE + i) & 0xFF;
-        jp[2] = (RC_BIOSPAGE + i) >> 8;
-        rc_zcopy_in(RC_BIOSJMPPAGE + i, jp, 3);
-        rc_zcopy_in(RC_BIOSPAGE + i, stub, 3);
+    /* _PatchBIOS: 33 entries, JP BIOSpage+3n at BIOSjmppage+3n and RST 08h;
+     * RET; NOP at BIOSpage+3n - both pages composed in rc_bandbuf (the band
+     * composer's scratch: no band is being composed on a wake's boot path)
+     * and copied in with one move each */
+    b = rc_bandbuf;
+    for (i = 0; i < 99; i += 3, b += 3) {
+        b[0] = Z_JP;
+        b[1] = (unsigned char)((RC_BIOSPAGE + i) & 0xFF);
+        b[2] = (unsigned char)((RC_BIOSPAGE + i) >> 8);
+        b[99] = Z_RST08;
+        b[100] = Z_RET;
+        b[101] = Z_NOP;
     }
+    rc_zcopy_in(RC_BIOSJMPPAGE, rc_bandbuf, 99);
+    rc_zcopy_in(RC_BIOSPAGE, rc_bandbuf + 99, 99);
     rc_zcopy_in(RC_DPBADDR, rc_dpb, 15);
     rc_zcopy_in(RC_DPHADDR, rc_dph, 16);
     return 1;
@@ -188,6 +201,12 @@ static int ovl_patch_cpm(void)
 #define RC_ERR_SELECT    2                    /* disk.h errSELECT */
 static int rc_errwait;                        /* printed; a key ends it */
 static int rc_errkind;                        /* ...which error it was */
+
+/* rc_crlf - "\r\n" to the console: a dozen sites, one copy of the call */
+static void rc_crlf(void)
+{
+    rc_puts("\r\n");
+}
 
 static void rc_error(int err)
 {
@@ -219,12 +238,24 @@ static int rs_on;                             /* mid-line: the state is live */
 static unsigned rs_max_i, rs_cnt_i, rs_chr_i; /* chrsMaxIdx / chrsCntIdx / chrsIdx */
 static int rs_max, rs_cnt, rs_col;            /* chrsMax / chrsCnt / curCol */
 static unsigned char rs_last[256];            /* the last command (^W) */
+static const char rs_retype[] = "#\b\n";       /* ^R and ^U's mark */
 
 static void rc_con_reset(void)                /* a warm boot, or the loader:
                                                * no line, no error, wait */
 {
     rs_on = 0;
     rc_errwait = 0;
+}
+
+/* rs_shl - the line's characters from column `at + by` to the count move
+ * down to column `at`: cpm.h's ascending byte loop (`for (i = at, j = at +
+ * by; j < count; ...) buf[i] = buf[j]`) as ONE ascending move within the
+ * Z80's RAM (BIOS MOVE's mover: rep movsb, the offsets wrapping at 64KB as
+ * the byte loop's 16-bit indices did), the same bytes in the same order */
+static void rs_shl(int at, int by)
+{
+    rc_zzcopy_in(RC_W(rs_chr_i + at), rc_z.seg, RC_W(rs_chr_i + at + by),
+                 rs_cnt - at - by);
 }
 
 static int rc_readstr(void)
@@ -236,8 +267,8 @@ static int rc_readstr(void)
          * shape, kept as upstream keeps it) */
         unsigned base = rc_z.de ? rc_z.de : rc_dma;
         rs_max_i = base;
-        rs_cnt_i = (base + 1) & 0xFFFF;
-        rs_chr_i = (base + 2) & 0xFFFF;
+        rs_cnt_i = RC_W(base + 1);
+        rs_chr_i = RC_W(base + 2);
         rs_max = rc_rd(rs_max_i);             /* the max number of characters */
         rs_cnt = 0;
         rs_col = 0;
@@ -280,10 +311,8 @@ static int rc_readstr(void)
         }
         if (chr == 7) {                       /* ^G - delete at the cursor */
             if (rs_col < rs_cnt) {
-                for (i = rs_col, j = i + 1; j < rs_cnt; i++, j++) {
-                    ch = rc_rd((rs_chr_i + j) & 0xFFFF);
-                    rc_wr((rs_chr_i + i) & 0xFFFF, ch);
-                }
+                rs_shl(rs_col, 1);            /* cpm.h's byte loop, as
+                                               * ONE ascending move */
                 reType = postBS = rs_cnt - rs_col;
                 rs_cnt--;
             } else {
@@ -293,10 +322,7 @@ static int rc_readstr(void)
         if (chr == 0x08 || chr == 0x7F) {     /* ^H and DEL - delete left */
             if (rs_col > 0) {                 /* not at BOL */
                 if (rs_col < rs_cnt) {        /* not at EOL */
-                    for (i = rs_col, j = i - 1; i < rs_cnt; i++, j++) {
-                        ch = rc_rd((rs_chr_i + i) & 0xFFFF);
-                        rc_wr((rs_chr_i + j) & 0xFFFF, ch);
-                    }
+                    rs_shl(rs_col - 1, 1);
                     preBS++;
                     reType = postBS = rs_cnt - rs_col + 1;   /* one extra
                                                               * erases EOL */
@@ -319,13 +345,13 @@ static int rc_readstr(void)
             }
         }
         if (chr == 18) {                      /* ^R - retype the line */
-            rc_puts("#\b\n");
+            rc_puts(rs_retype);
             preBS = rs_col;
             reType = rs_cnt;
             postBS = rs_cnt - rs_col;
         }
         if (chr == 21) {                      /* ^U - delete all */
-            rc_puts("#\b\n");
+            rc_puts(rs_retype);
             preBS = rs_col;
             rs_cnt = 0;
         }
@@ -333,8 +359,7 @@ static int rc_readstr(void)
             if (!rs_col) {
                 int lastCnt = rs_last[0];
                 if (lastCnt) {
-                    for (j = 0; j <= lastCnt; j++)
-                        rc_wr((rs_cnt_i + j) & 0xFFFF, rs_last[j]);
+                    rc_zcopy_in(rs_cnt_i, rs_last, lastCnt + 1);
                     reType = (rs_cnt > lastCnt) ? rs_cnt : lastCnt;
                     rs_cnt = lastCnt;
                     postBS = reType - rs_cnt;
@@ -347,10 +372,7 @@ static int rc_readstr(void)
         }
         if (chr == 24) {                      /* ^X - delete left of cursor */
             if (rs_col > 0) {
-                for (i = 0, j = rs_col; j < rs_cnt; i++, j++) {
-                    ch = rc_rd((rs_chr_i + j) & 0xFFFF);
-                    rc_wr((rs_chr_i + i) & 0xFFFF, ch);
-                }
+                rs_shl(0, rs_col);
                 preBS = rs_col;
                 reType = rs_cnt;
                 postBS = rs_cnt;
@@ -360,8 +382,8 @@ static int rc_readstr(void)
             }
         }
         if (chr == 31) {                      /* ^? - help */
-            rc_puts("\n\r^A Left  ^B B/EOL ^C Abort ^E N/Lin ^F Right ^G Del@C ^H/Del BackSp\n\r");
-            rc_puts("^K DelEOL ^R Retype ^U DelAll ^W Recall ^X DelBOL ^? Help\n\r");
+            rc_puts("\n\r^A Left  ^B B/EOL ^C Abort ^E N/Lin ^F Right ^G Del@C ^H/Del BackSp\n\r"
+                    "^K DelEOL ^R Retype ^U DelAll ^W Recall ^X DelBOL ^? Help\n\r");
             preBS = rs_col;
             reType = rs_cnt;
             postBS = rs_cnt - rs_col;
@@ -370,11 +392,11 @@ static int rc_readstr(void)
                                                               * (^Z allowed) */
             if (rs_col < rs_cnt) {            /* open the hole */
                 for (i = rs_cnt, j = i - 1; i > rs_col; i--, j--) {
-                    ch = rc_rd((rs_chr_i + j) & 0xFFFF);
-                    rc_wr((rs_chr_i + i) & 0xFFFF, ch);
+                    ch = rc_rd(RC_W(rs_chr_i + j));
+                    rc_wr(RC_W(rs_chr_i + i), ch);
                 }
             }
-            rc_wr((rs_chr_i + rs_col) & 0xFFFF, chr);
+            rc_wr(RC_W(rs_chr_i + rs_col), chr);
             rs_cnt++;
             reType = rs_cnt - rs_col;
             postBS = reType - 1;
@@ -385,7 +407,7 @@ static int rc_readstr(void)
             rs_col--;
         }
         for (i = 0; i < reType; i++) {        /* retype */
-            ch = (rs_col < rs_cnt) ? rc_rd((rs_chr_i + rs_col) & 0xFFFF) : ' ';
+            ch = (rs_col < rs_cnt) ? rc_rd(RC_W(rs_chr_i + rs_col)) : ' ';
             rc_putc(ch);
             rs_col++;
         }
@@ -398,10 +420,8 @@ static int rc_readstr(void)
     }
 
     rc_wr(rs_cnt_i, rs_cnt);                  /* the count read */
-    if (rs_cnt) {                             /* ...saved as the last command */
-        for (j = 0; j <= rs_cnt; j++)
-            rs_last[j] = (unsigned char)rc_rd((rs_cnt_i + j) & 0xFFFF);
-    }
+    if (rs_cnt)                               /* ...saved as the last command */
+        rc_zcopy_out(rs_last, rs_cnt_i, rs_cnt + 1);
     rc_putc('\r');                            /* the read ended */
     rs_on = 0;
     return rs_cnt;
@@ -503,8 +523,8 @@ static int rc_bios(void)
                                                * BC = 0xFFFF (the post-
                                                * decrement's last step) */
         rc_zzcopy_in(rc_z.hl, rc_z.seg, rc_z.de, rc_z.bc);
-        rc_z.hl = (rc_z.hl + rc_z.bc) & 0xFFFF;
-        rc_z.de = (rc_z.de + rc_z.bc) & 0xFFFF;
+        rc_z.hl = RC_W(rc_z.hl + rc_z.bc);
+        rc_z.de = RC_W(rc_z.de + rc_z.bc);
         rc_z.bc = 0xFFFF;
         break;
     case 90:                                  /* USERF */
@@ -526,6 +546,12 @@ static int rc_bios(void)
  * 33-36, 40 and 249 - answer through rcfs.c (SPEC.md 74.3), and an _error
  * inside one (Select, R/O, CP/M ERR) leaves rc_errwait for the tail below,
  * which finishes the erring function by number. */
+/* rc_x55 - v x 55 in 16 bits: a tick in ms (18.2 Hz, 54.9 ms a tick) */
+static unsigned rc_x55(unsigned v)
+{
+    return RC_W(v * 55);
+}
+
 static int rc_bdos(void)
 {
     int fn = RC_C();
@@ -548,7 +574,7 @@ errwait:
             return 0;
         }
         rc_errwait = 0;
-        rc_puts("\r\n");
+        rc_crlf();
         rc_cdrive = rc_odrive = rc_rd(RC_DSKBYTE) & 0x0F;
         rc_status = RC_ST_RESTART;
         hl = 0xFF;                            /* _SelectDisk's result */
@@ -580,19 +606,19 @@ errwait:
         hl = c;
         break;
     case 2:                                   /* C_WRITE */
-        rc_putc(RC_E());
+        rc_putc(e);
         break;
     case 3:                                   /* A_READ */
         hl = 0x1A;
         break;
     case 4:                                   /* A_WRITE: A/0/PUN.TXT */
-        rc_fs_capture(0, RC_E());
+        rc_fs_capture(0, e);
         break;
     case 5:                                   /* L_WRITE: A/0/LST.TXT */
-        rc_fs_capture(1, RC_E());
+        rc_fs_capture(1, e);
         break;
     case 6:                                   /* C_RAWIO */
-        c = RC_E();
+        c = e;
         if (c == 0xFF) {
             c = rc_key_pop();                 /* _getconNB: 0 if none */
             hl = (c < 0) ? 0 : c;
@@ -604,7 +630,7 @@ errwait:
         hl = rc_rd(RC_IOBYTE);
         break;
     case 8:                                   /* A_STATOUT: set it */
-        rc_wr(RC_IOBYTE, RC_E());
+        rc_wr(RC_IOBYTE, e);
         break;
     case 9:                                   /* C_WRITESTR: to '$'; DE walks
                                                * as cpm.h's _RamRead(DE++) does
@@ -621,16 +647,17 @@ errwait:
                                                * sees exactly cpm.h's
                                                * behaviour. */
         {
-            unsigned k = 0;
-            while ((c = rc_rd(rc_z.de)) != '$') {
-                rc_z.de = (rc_z.de + 1) & 0xFFFF;
+            unsigned k = 0, de = rc_z.de;     /* walked in a local: rc_putc
+                                               * never reads rc_z */
+            while ((c = rc_rd(de)) != '$') {
+                de = RC_W(de + 1);
                 rc_putc(c);
-                k = (k + 1) & 0xFFFF;
+                k = RC_W(k + 1);
                 if (k == 0)
                     break;                    /* 65,536 reads: the whole lap */
             }
+            rc_z.de = RC_W(de + 1);
         }
-        rc_z.de = (rc_z.de + 1) & 0xFFFF;
         break;
     case 10:                                  /* C_READSTR: the line editor */
         c = rc_readstr();
@@ -671,7 +698,7 @@ errwait:
                                                * shift is only reached for a
                                                * drive that exists) */
         rc_odrive = rc_cdrive;
-        rc_cdrive = RC_E();
+        rc_cdrive = e;
         if (rc_fs_cd(rc_cdrive, rc_user) >= 0) {
             rc_login |= 1 << rc_cdrive;
             hl = 0;
@@ -713,10 +740,10 @@ errwait:
                                                * does, and the user folder
                                                * MADE for 0-15 (_MakeUserDir,
                                                * rcfs.c) */
-        if (RC_E() == 0xFF)
+        if (e == 0xFF)
             hl = rc_user;
         else
-            ovl_fs_setuser(RC_E());
+            ovl_fs_setuser(e);
         break;
     case 37:                                  /* DRV_RESET */
         rc_rovec &= ~rc_z.de;
@@ -770,7 +797,7 @@ errwait:
         break;
     /* --- RunCPM's private calls, cpm.h 2038-2135 --------------------------- */
     case 230:                                 /* F_SETMASK: mask8bit */
-        rc_mask = RC_E();
+        rc_mask = e;
         break;
     case 231:                                 /* F_BDOSCALL: host.h hostbdos */
         hl = 0;
@@ -785,12 +812,10 @@ errwait:
                                                * wrap at the hour the 16-bit
                                                * count does */
         {
-            unsigned t = rc_ticks32(), th = t >> 8, tl = t & 0xFF, h = rc_tk_hi;
-            unsigned lo55 = (tl << 5) + (tl << 4) + (tl << 2) + (tl << 1) + tl;
-            unsigned hi55 = (th << 5) + (th << 4) + (th << 2) + (th << 1) + th;
-            hl = ((t << 5) + (t << 4) + (t << 2) + (t << 1) + t) & 0xFFFF;
-            rc_z.de = (((hi55 + (lo55 >> 8)) >> 8) +
-                       (h << 5) + (h << 4) + (h << 2) + (h << 1) + h) & 0xFFFF;
+            unsigned t = rc_ticks32();
+            unsigned lo55 = rc_x55(t & 0xFF), hi55 = rc_x55(t >> 8);
+            hl = rc_x55(t);
+            rc_z.de = RC_W(((hi55 + (lo55 >> 8)) >> 8) + rc_x55(rc_tk_hi));
         }
         break;
     case 249:                                 /* F_MAKEDISK: _sys_makedisk -

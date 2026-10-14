@@ -103,15 +103,12 @@ rh_entry:
     mov [es:di+RP_CARVE], ax        ; fourth check - it may not free this
 
     ; --- and the hand-off itself -------------------------------------------
-    ; AX is what the kernel bounds the part's image + bss against, so it is
-    ; OUR word for what is actually there and not the part's word for what it
-    ; wants (SPEC.md 20.12.10.4). The part is padded to image + bss, so its
-    ; own two header fields ARE that length - said by adding them rather than
-    ; by a constant this file would have to keep in step.
-    mov ax, [es:LD_H_IMG]
-    add ax, [es:LD_H_BSS]
+    ; In the KEEP form (SPEC.md 20.12.10.5): the standard keeps the carve to
+    ; the end of its last part - the ASSET, here, which the program goes on
+    ; reading - and the kernel cuts the read's margin past it. tests/rehome.py
+    ; asserts the claim ends exactly there.
     mov dx, [rh_pseg]
-    call OSAPI_PKG_REHOME
+    OS88_REHOME
     jc .refuse
     xor bx, bx                      ; NO WINDOW (SPEC.md 20.12.10.6): ours is
     clc                             ; the region that is about to be freed

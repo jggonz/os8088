@@ -143,9 +143,9 @@ static void ovl_newdoc(void *win)
 /* ovl_font_open - drop the list down, scanning the system disk if this is the
  * first time anybody asked.
  *
- * THE SCAN RUNS ONCE, WHATEVER THE ANSWER. It is five remounts and three
- * directory listings of real floppy I/O (SPEC.md 19.8) - a couple of seconds on
- * the target machine - so a person who never opens this box pays nothing for
+ * THE SCAN RUNS ONCE, WHATEVER THE ANSWER. It walks the system disk's
+ * SYSTEM/FONTS and lists it (SPEC.md 19.8) - quiet stands since os88type.inc
+ * stopped remounting, but still floppy reads on the target machine - so a person who never opens this box pays nothing for
  * it, and a machine with no `SYSTEM/FONTS` is not walked again on the next
  * press. cw_scanned is what says "asked", as against cw_nfam, which says
  * "found": without the difference an empty disk is re-read on every click. */

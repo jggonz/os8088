@@ -403,32 +403,12 @@ tk_lgarm:
     push di
     push es
     call tk_lgcell
-    xor bx, bx                      ; --- the forward half, segments 0..e-1 ---
-    xor cx, cx
-.f:
-    cmp cx, [tk_lge]
-    jae .fd
-    mov ax, cx
-    xor dl, dl
-    call tk_lgseg
-    call tk_seglen
-    add bx, ax
-    inc cx
-    jmp short .f
-.fd:
+    xor cx, cx                      ; --- the forward half, segments 0..e-1 ---
+    mov di, [tk_lge]
+    call tk_lgsum
     mov [tk_lgflen], bx
-    xor bx, bx                      ; --- and the backward half, e..np-1 -----
-.b:
-    cmp cx, [tk_lgnp]
-    jae .bd
-    mov ax, cx
-    xor dl, dl
-    call tk_lgseg
-    call tk_seglen
-    add bx, ax
-    inc cx
-    jmp short .b
-.bd:
+    mov di, [tk_lgnp]               ; --- and the backward half, e..np-1 -----
+    call tk_lgsum
     mov [tk_lgblen], bx
 
     mov si, tk_curfh                ; the two that lay the moving ink...
@@ -445,6 +425,23 @@ tk_lgarm:
     pop cx
     pop bx
     pop ax
+    ret
+
+; tk_lgsum - BX = the walk length of the current glyph's segments CX..DI-1,
+;            and CX = DI.  clobbers AX, DX
+tk_lgsum:
+    xor bx, bx
+.s:
+    cmp cx, di
+    jae .d
+    mov ax, cx
+    xor dl, dl
+    call tk_lgseg
+    call tk_seglen
+    add bx, ax
+    inc cx
+    jmp short .s
+.d:
     ret
 
 ; tk_lgpair - arm the forward cursor SI and the backward cursor DI
@@ -617,10 +614,8 @@ tk_band_text:
     add ax, cx
     mov si, tk_hsn
     add si, ax
-    mov al, [si]
-    mov [di], al
-    mov al, [si+1]
-    mov [di+1], al
+    mov ax, [si]
+    mov [di], ax
     mov al, [si+2]
     mov [di+2], al
     add di, 3
@@ -633,7 +628,7 @@ tk_band_text:
     mov ax, [si]
     mov dx, [si+2]
     mov di, tk_numbuf
-    call tk_utoa
+    call dec_u32
     mov si, tk_numbuf
     call tk_strlen                  ; CX = its digits
     pop di
@@ -692,11 +687,7 @@ tk_band_full:
     mov bx, TK_BANDY
     mov ax, [tk_at_scr]
 .r:
-    push ax
-    push cx
-    call tk_band_row
-    pop cx
-    pop ax
+    call tk_band_row                ; ...which keeps every register
     inc ax
     cmp ax, TK_NLIST
     jb .w
@@ -886,16 +877,14 @@ tk_at_left:
 
 ; -----------------------------------------------------------------------------
 ; tk_at_step - one wake of the attract animation. Lock NOT held on entry.
+; CLOBBERS EVERY REGISTER: tk_worker is its only caller and keeps nothing
+; across it.
 ; -----------------------------------------------------------------------------
 tk_at_step:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
     call OSAPI_GFX_LOCK             ; **THE LOCK FIRST, THEN THE QUESTION**
+    cmp byte [tk_atstale], 0        ; a bracket has run since the last paint,
+    jne .unlock                     ; and the walk buffers are tk_kx's bytes
+                                    ; until tk_paint re-arms them (85.10.5)
     cmp byte [tk_abon], 0           ; ...and the credits are the same question:
     jne .unlock                     ; while they are up the UI task owns the
                                     ; content, and tk_abdismiss repaints the
@@ -962,15 +951,11 @@ tk_at_step:
 .dgo:
     pop cx
     loop .dseg
-    push si                         ; this step's segments, in ONE arrival
-    call gfxe_pput                  ; (SPEC.md 85.10.4) - it used to be one
-    pop si                          ; far call each
-    jmp .scroll
-.done:
+    call gfxe_pput                  ; this step's segments, in ONE arrival
+    jmp .scroll                     ; (SPEC.md 85.10.4) - it used to be one
+.done:                              ; far call each
     pop cx
-    push si
     call gfxe_pput
-    pop si
     mov byte [tk_at_glow], 1        ; the outline is whole: the gaps take over
     mov word [tk_lgi], 0
     call tk_lgarm
@@ -1023,15 +1008,7 @@ tk_at_step:
     mov [tk_at_blt], al
     call tk_at_play
 .unlock:
-    call OSAPI_GFX_UNLOCK
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    call OSAPI_GFX_UNLOCK           ; a FAR cell: called, never jumped to
     ret
 
 ; -----------------------------------------------------------------------------

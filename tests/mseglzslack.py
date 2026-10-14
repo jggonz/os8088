@@ -3,6 +3,16 @@
 volume's (SPEC.md 88.10.4.1, 20.12.7.4).
 
     make mseglz && python3 tests/mseglzslack.py [machine] [system-image]
+    make msegpl && python3 tests/mseglzslack.py --plain [machine] [system-image]
+
+`--plain` is the same four assertions on an UNCOMPRESSED lazy part (SPEC.md
+20.12.7.4.4): MSEG exactly as `make mseg` builds it, on the same 8KB-cluster
+disk. A plain row is read into a claim of `slack + len` rounded to a cluster
+and has no decoder to put it anywhere, so op_fetch MOVES it down onto the
+claim's base and shrinks the claim; before that it banked the part's place
+past the slack, kept the whole claim, and op_drop ran the slack arithmetic
+backwards to free it. MSEG's own verdict (`MSEG 7/7 OK`) is computed over the
+moved bytes, so a copy one byte off fails assertion 2.
 
 `op_fetch` claims `op_lazykb`'s figure for an `OP_COMP | OP_LAZY` row - R plus
 the read of the packed part rounded to whole clusters - because a read may
@@ -40,8 +50,8 @@ FOUR ASSERTIONS:
      this fixture;
 
   4. A SECOND KEY GIVES IT BACK: the claim table is BYTE-FOR-BYTE what it was
-     before the fetch. op_drop frees a compressed row's banked word as it
-     stands and still takes the slack off a plain one - and OSAPI_MEM_FREE
+     before the fetch. op_drop frees the banked word as it stands, the
+     claim's base on a plain row and a compressed one alike - and OSAPI_MEM_FREE
      matches a claim's base exactly and op_drop never reads its CF, so a
      wrong free here is a SILENT leak that only this comparison sees.
 
@@ -64,10 +74,13 @@ import os88geom                                              # noqa: E402
 import dispcp                                                # noqa: E402
 import msegsym                                               # noqa: E402
 
-MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_herc_gla_144"
-SYS_IMG = sys.argv[2] if len(sys.argv) > 2 else "build/os8088-360.img"
-APPS_IMG = "build/mseglz.img"
-O88 = "build/mseglzd/MSEG.O88"
+ARGS = [a for a in sys.argv[1:] if a != "--plain"]
+PLAIN = len(ARGS) != len(sys.argv) - 1
+MACHINE = ARGS[0] if len(ARGS) > 0 else "os8088_5150_herc_gla_144"
+SYS_IMG = ARGS[1] if len(ARGS) > 1 else "build/os8088-360.img"
+APPS_IMG = "build/msegpl.img" if PLAIN else "build/mseglz.img"
+O88 = "build/msegpld/MSEG.O88" if PLAIN else "build/mseglzd/MSEG.O88"
+KIND = "an uncompressed" if PLAIN else "a compressed"
 LAZY = 6
 MEM_MAX, MC_SIZE = os88geom.MEM_MAX, os88geom.MC_SIZE
 MC_SEG, MC_PARA, MC_OWN = os88geom.MC_SEG, os88geom.MC_PARA, os88geom.MC_OWN
@@ -80,7 +93,7 @@ def say(s):
 
 
 def sym(name):
-    return msegsym.MSEGLZ.sym(name)
+    return (msegsym.MSEG if PLAIN else msegsym.MSEGLZ).sym(name)
 
 
 def claims(m):
@@ -105,12 +118,14 @@ def title_of(m, seg, rec):
 def run():
     for f in (APPS_IMG, O88, SYS_IMG):
         if not os.path.exists(os88build.at(f)):
-            raise SystemExit("mseglzslack: %s is missing - `make mseglz` "
-                             "(and `make` for the system disk)" % f)
+            raise SystemExit("mseglzslack: %s is missing - `make %s` "
+                             "(and `make` for the system disk)"
+                             % (f, "msegpl" if PLAIN else "mseglz"))
     blob = open(os88build.at(O88), "rb").read()
     rows = os88parts.rows(blob[:blob[8] | (blob[9] << 8)])
     row = rows[LAZY]
-    want_flags = os88parts.EQU["OP_COMP"] | os88parts.EQU["OP_LAZY"]
+    want_flags = os88parts.EQU["OP_LAZY"] | (
+        0 if PLAIN else os88parts.EQU["OP_COMP"])
     img = open(os88build.at(APPS_IMG), "rb").read(512)
     clb = struct.unpack_from("<H", img, 11)[0] * img[13]
     slack = (row["off"] * 512) & (clb - 1)
@@ -120,10 +135,12 @@ def run():
         % (LAZY, row["off"], row["len"], row["flags"], clb, slack))
 
     # --- 1. the fixture is what it says ----------------------------------
-    if row["flags"] & want_flags != want_flags:
-        raise SystemExit("mseglzslack: part %d is not OP_COMP | OP_LAZY "
-                         "(flags 0x%02X) - the fixture is not built "
-                         "-DMSEG_LZC" % (LAZY, row["flags"]))
+    if (row["flags"] & (want_flags | os88parts.EQU["OP_COMP"])) != want_flags:
+        raise SystemExit("mseglzslack: part %d's flags are 0x%02X and the "
+                         "fixture wants %s lazy row - the image is not "
+                         "built %s" % (LAZY, row["flags"], KIND,
+                                       "as `make mseg` builds it" if PLAIN
+                                       else "-DMSEG_LZC"))
     if clb <= 512 or slack == 0:
         raise SystemExit(
             "mseglzslack: the fixture has clusters of %d bytes and a head "
@@ -177,8 +194,9 @@ def run():
             fails.append(
                 "MSEG says %r after the fetch and should say %r: the part's "
                 "bytes are not at the segment op_seg answers. op_fetch "
-                "expands a compressed lazy row onto its claim's BASE and "
-                "banks that (SPEC.md 20.12.7.4)" % (t, want))
+                "expands a compressed lazy row onto its claim's BASE, moves "
+                "a plain one down onto it, and banks that (SPEC.md "
+                "20.12.7.4, 20.12.7.4.4)" % (t, want))
 
         # --- 3. the segment is a claim's base, and the claim is the part --
         after = claims(m)
@@ -192,17 +210,18 @@ def run():
                 "no claim BEGINS at the part's segment %04X - it is inside "
                 "%s, %d paragraphs in. That is the head slack (%d bytes, %d "
                 "paragraphs) still in front of the part for the session: "
-                "op_fetch must expand an OP_COMP | OP_LAZY row onto the "
-                "claim's base, because a shrink only takes the tail (SPEC.md "
-                "88.10.4.1)"
+                "op_fetch must put %s lazy row on the claim's base, because "
+                "a shrink only takes the tail (SPEC.md 88.10.4.1, "
+                "20.12.7.4.4)"
                 % (ps, ["%04X+%d" % c[:2] for c in holder],
-                   ps - holder[0][0] if holder else -1, slack, slack // 16))
+                   ps - holder[0][0] if holder else -1, slack, slack // 16,
+                   KIND))
         elif at and at[0][1] != kept_kb * 64:
             fails.append(
                 "the claim at %04X is %d paragraphs and the part is %d bytes, "
                 "so the session should keep %dKB = %d paragraphs. op_fetch "
                 "shrinks the claim through OSAPI_MEM_REGROW once the part "
-                "has expanded (SPEC.md 88.10.4.1)"
+                "has arrived (SPEC.md 88.10.4.1, 20.12.7.4.4)"
                 % (ps, at[0][1], row["len"], kept_kb, kept_kb * 64))
         if len(new) != 1:
             fails.append("the fetch added %d claims and should add ONE "
@@ -222,14 +241,19 @@ def run():
             fails.append(
                 "the claim table is not what it was before the fetch:\n"
                 "    before %r\n    after  %r\n"
-                "op_drop frees a compressed lazy row's banked word AS IT "
-                "STANDS - it is the claim's base now - and OSAPI_MEM_FREE "
+                "op_drop frees a lazy row's banked word AS IT STANDS - it "
+                "is the claim's base now, plain or compressed - and "
+                "OSAPI_MEM_FREE "
                 "matches a base exactly with nobody reading its CF, so a "
                 "free of the wrong word is a silent leak" % (before, final))
+        # what the fetch kept before it put the part on the base: a
+        # compressed row was shrunk past the slack, a plain one never
+        # shrunk at all and kept the whole read, rounded to a cluster
+        was = ((slack + row["len"] + clb - 1) // clb * clb // 1024 if PLAIN
+               else (slack + row["len"] + 1023) // 1024)
         say("kept %dKB for a %d-byte part on %d-byte clusters (the slack in "
-            "front of it would have made it %dKB)"
-            % (kept_kb, row["len"], clb,
-               (slack + row["len"] + 1023) // 1024))
+            "front of it made it %dKB)"
+            % (kept_kb, row["len"], clb, was))
 
 
 def main():
@@ -239,8 +263,9 @@ def main():
         for f in fails:
             print("  " + f)
         return 1
-    print("\nmseglzslack: a compressed lazy part kept its own length at its "
-          "claim's base, and the drop gave it all back - PASS on %s" % MACHINE)
+    print("\nmseglzslack: %s lazy part kept its own length at its "
+          "claim's base, and the drop gave it all back - PASS on %s"
+          % (KIND, MACHINE))
     return 0
 
 

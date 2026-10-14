@@ -1,5 +1,10 @@
 ; =============================================================================
-; os8088 - clone.inc
+; os8088 - diskops.inc
+;
+; THE DISK OPERATIONS MODULE, `DISKOPS.DRV`. It was CLONE.DRV, named for the
+; first thing it did, and it is a collection now: the disk cloner and Write Img
+; (SPEC.md 18.99, prefix `clo_`), and the compressor and Uncompress To...
+; that ride in the same image (compress.inc, prefix `cmz_`, SPEC.md 20.15.3).
 ;
 ; The disk cloner (SPEC.md 18.99), prefix `clo_`. It copies LBA 0 to
 ; LBA N-1 from one floppy to another - or from one floppy to a second disk in
@@ -8,7 +13,7 @@
 ; the system disk, on a disk whose BPB SPEC.md 18.2 would refuse, and on a
 ; disk holding a file system nobody here has heard of.
 ;
-; **AN ON-DEMAND MODULE** (SPEC.md 2.8), shipped as `CLONE.DRV`. It qualifies
+; **AN ON-DEMAND MODULE** (SPEC.md 2.8), shipped as `DISKOPS.DRV`. It qualifies
 ; on docs/plans/completed/ONDEMAND-PLAN.md 1's test for the formatter's reason with one more
 ; term in its favour: preparing a disk already has a trip to the disk box in
 ; it, and a clone has TWO.
@@ -39,7 +44,7 @@ CERR_FULL    equ 6              ; the volume the image would go on is too full
 CERR_NOTIMG  equ 7              ; that file is not a whole floppy (SPEC.md 18.99.8)
 CERR_SAME    equ 8              ; ...and it may not live on the disk itself
 CERR_BUSY    equ 9              ; a clone is ALREADY running (SPEC.md 22.21.2)
-CERR_NOMOD   equ 10             ; CLONE.DRV itself could not be read: the
+CERR_NOMOD   equ 10             ; DISKOPS.DRV itself could not be read: the
                                 ; system disk is not in the boot drive
                                 ; (SPEC.md 18.99.7). NOT CERR_NODISK, whose
                                 ; 'No disk' read as "no disk to image" off
@@ -89,6 +94,13 @@ CLV_SAVED    equ 4              ; the Save dialog answered: do the whole
                                 ; To...'s join there (SPEC.md 22.23.6)
 CLV_WIMG     equ 5              ; the Open dialog answered: size it, claim,
                                 ; and arm the confirmation
+CLV_MOUNT    equ 6              ; a *.IMG was double-clicked: mount it, or
+                                ; unmount it if it is a drive already
+                                ; (SPEC.md 18.101, kern_big)
+CLV_MNTDLG   equ 7              ; ...or picked in Disk > Mount Image...'s Open
+                                ; box: the same verb, named by the dialog
+CLV_UNMNT    equ 8              ; Disk > Unmount Image: the image the acting
+                                ; window is SHOWING (SPEC.md 18.101.5)
 
 ; --- the job block, at offset 0 of the claim (SPEC.md 18.99.1) ---------------
 CL_SRC       equ 0              ; db: the source volume index
@@ -224,7 +236,7 @@ section .modl                   ; the on-demand image (SPEC.md 2.8)
 modl_hdr:
     dw 0x384F                   ; MOD_H_MAGIC
     db MOD_VER                  ; MOD_H_VER
-    db MOD_CLONE                ; MOD_H_ID
+    db MOD_DISKOPS                ; MOD_H_ID
     dw BUILD_NUM                ; MOD_H_BUILD
     dw MOD_STAMP                ; MOD_H_STAMP
     dw modl_end                 ; MOD_H_IMG
@@ -285,6 +297,20 @@ clo_disp_x:
     jne .n4
     jmp clo_wimg
 .n4:
+%ifdef OS88_IMG
+    cmp dl, CLV_MOUNT
+    jne .n5
+    jmp clo_mount
+.n5:
+    cmp dl, CLV_MNTDLG
+    jne .n6
+    jmp clo_mntdlg
+.n6:
+    cmp dl, CLV_UNMNT
+    jne .n7
+    jmp clo_unmnt
+.n7:
+%endif
     jmp clo_free
 
 ; -----------------------------------------------------------------------------
@@ -1382,7 +1408,7 @@ clo_key:
 .out:
     clc                         ; **EVERY EXIT IS AN ANSWER, SO CF IS CLEAR**
                                 ; (SPEC.md 18.99.7). The resident caller reads
-                                ; CF=1 as the OTHER alphabet - CLONE.DRV could
+                                ; CF=1 as the OTHER alphabet - DISKOPS.DRV could
                                 ; not be re-read, AX = a bare CERR_* - and
                                 ; repacks it. `.err` arrives from a `jc` and a
                                 ; `mov` writes no flag, so CLA_ERR went back
@@ -1412,7 +1438,7 @@ clo_key:
     jmp .line                   ; as a five-byte inverted pair (an 8086 has no
                                 ; near `jcc`) and from here they are two, with
                                 ; nothing added at all - this jump was here
-                                ; already.  -6 on CLONE.DRV
+                                ; already.  -6 on DISKOPS.DRV
 .pickgo:
     cmp al, 13
     jne .linej
@@ -2819,6 +2845,518 @@ clo_free:
     pop ax
     ret
 
+%ifdef OS88_IMG
+; =============================================================================
+; MOUNTING A .IMG AS A DRIVE (SPEC.md 18.101) - kern_big only
+; =============================================================================
+; One verb, CLV_MOUNT, reached from a double-click on a *.IMG in a Disk window
+; (files.inc's fm_img_open). It MOUNTS the file, or UNMOUNTS it if it is
+; already a drive - the second double-click is the eject. Every outcome is
+; said here, out of this image's own strings, and the answer is CF = 0: the
+; resident hook says nothing itself but the one thing it must, that this image
+; could not be read.
+;
+; The claim, MEM_K_IMG, is NOT [clo_seg]: a mount outlives this image, which
+; fm_img_open drops the moment this verb returns. Its layout is SPEC.md
+; 18.101.1's - the first eight bytes and the runs are what dsk_xfer reads -
+; plus the file's NAME, its FOLDER and three bytes at the END that only this
+; file reads - which is what lets an unmount start from the VOLUME (Disk >
+; Unmount Image) as well as from the file (a second double-click).
+IMG_KB       equ 1
+IMG_M_NAME   equ IMG_KB*1024 - 19  ; 13 bytes: the file's 8.3 name on its host
+IMG_M_DIR    equ IMG_KB*1024 - 6   ; dw: the folder that holds it (0 = root)
+IMG_M_CLUS   equ IMG_KB*1024 - 4   ; dw: the file's first cluster on its host
+IMG_M_ATTR   equ IMG_KB*1024 - 2   ; db: its attribute byte before the mount
+IMG_M_RES    equ IMG_KB*1024 - 1   ; db: ...and its byte 12 before the mount
+IMG_TABMAX   equ IMG_M_NAME - 2    ; the sentinel's word must fit below these
+IMG_MARK     equ 0xC1              ; byte 12 of a mounted file's entry: the
+                                   ; reserved byte DOS ignores. Bits 3 and 4
+                                   ; are NT's lower-case flags and are clear,
+                                   ; so no other system reads the name wrongly
+IMG_LBLMAX   equ 5                 ; IMG_DVSEG's rule (disk.inc)
+DSKW_RDO_M   equ 1                 ; = diskw.inc's DSKW_RDO
+DE_ATTR      equ 11                ; a raw entry's attribute byte...
+DE_RES       equ 12                ; ...and the reserved one after it
+DE_CLUS      equ 26                ; ...and its first cluster
+
+; CLO_KCALL proc - a .cold near proc of the kernel's, from this image
+%macro CLO_KCALL 1
+    mov bp, %1
+    call COLD_SEG:wm_cbd
+%endmacro
+
+; -----------------------------------------------------------------------------
+; clo_mount - CLV_MOUNT
+; in:  SI = the staged directory entry (SPEC.md 19.1) of a *.IMG, its display
+;      name at +0; [fm_vp] = the acting Disk window; gfx lock held, UI task
+; out: CF = 0 always - every answer has been said
+; clobbers: AX, BX, CX, DX, SI, DI, flags - BP is KEPT, fm_img_open's caller
+;      being fm_open_sel, whose frame does not restore it
+; -----------------------------------------------------------------------------
+clo_mount:
+    push bp
+    push es
+    mov di, clo_fnbuf           ; the NAME, into the one buffer the file API
+    call clo_ds13               ; reads through DS (SPEC.md 18.99.8)
+    mov di, [fm_vp]             ; ...and the window's own folder current: the
+    mov al, [di+FS_DRV]         ; listing it was clicked in may not be what is
+    mov bx, [di+FS_CWD]         ; mounted now
+    mov [cs:clo_mdir], bx
+    call COLD_SEG:fcpf_fcp_goto
+    jc .ioerr
+.named:
+    mov si, clo_fnbuf
+    call COLD_SEG:dwf_dskw_stat ; AL = attr, BX = first cluster, DX:CX = size
+    jc .ioerr
+    ; --- is it ALREADY a drive? Then this double-click is the eject ---------
+    call clo_mfind              ; CF = 0 and AL = its volume, ES = its claim
+    jc .new
+    jmp clo_umount
+.new:
+    mov ah, [dskw_raw+DE_ATTR]
+    mov [cs:clo_mattr], ah
+    mov ah, [dskw_raw+DE_RES]
+    mov [cs:clo_mres], ah
+    mov byte [cs:clo_mflg], 0
+    test byte [cs:clo_mattr], DSKW_RDO_M
+    jz .rw
+    cmp byte [cs:clo_mres], IMG_MARK    ; read-only AND ours: a mount the
+    jne .ro                     ; machine stopped under. Writable, and its
+    and byte [cs:clo_mattr], ~DSKW_RDO_M ; real attribute is restored at the
+    mov byte [cs:clo_mres], 0   ; next unmount
+    jmp short .rw
+.ro:
+    mov byte [cs:clo_mflg], IMGF_RO     ; the USER's read-only: honoured
+.rw:
+    ; --- the host must have SECTORS, and must not be an image itself -------
+    cmp byte [dsk_vkind], DVK_FILE
+    je .nohost
+    push bx
+    mov bl, [disk_drive]
+    call COLD_SEG:dskf_dsk_vol_row
+    jc .nohostp
+    cmp byte [bx+DV_CLASS], DRVC_IMG
+    pop bx
+    je .nohost
+    ; --- the size: whole sectors, and under 32MB -----------------------------
+    test cx, 0x01FF
+    jnz .notimg
+    cmp dx, 0x01FF              ; DX:CX / 512 must fit a word, with a
+    jae .notimg                 ; cluster's slack: the run walk counts in
+    mov al, ch                  ; whole clusters and must not wrap
+    mov ah, dl                  ; AX = DX:CX >> 8 ...
+    shr ax, 1                   ; ... >> 9 = the sectors
+    or ax, ax
+    jz .notimg
+    mov [cs:clo_mtot], ax
+    mov [cs:clo_mclus], bx
+    ; --- the table ----------------------------------------------------------
+    push bx
+    mov ax, IMG_KB
+    mov bx, MEM_K_IMG
+    CLO_KCALL mem_claim_hi_x    ; DX = the claim, top-down and pinned
+    pop bx
+    jc .nomem
+    mov es, dx
+    mov [cs:clo_mseg], dx
+    push bx
+    mov si, clo_fnbuf           ; the name and its folder, kept for the
+    mov di, IMG_M_NAME          ; unmount that starts from the volume - and
+    mov cx, 13                  ; for clo_mhost, which goes back to it
+    rep movsb                   ; DS:SI -> ES:DI, DF=0 (SPEC.md 1)
+    mov bx, [cs:clo_mdir]
+    mov [es:IMG_M_DIR], bx
+    pop bx
+    call clo_mruns              ; CF = 1 too fragmented, or a broken chain
+    jc .badrun
+    mov ax, [cs:clo_mclus]
+    mov [es:IMG_M_CLUS], ax
+    mov ax, [cs:clo_mattr]      ; ...and IMG_M_RES with it: a word store
+    mov [es:IMG_M_ATTR], ax     ; of two adjacent CS bytes (asserted below)
+    mov al, [cs:clo_mflg]
+    mov [es:IMG_FLG], al
+    mov al, [disk_drive]        ; the HOST's transport, in dsk_img_swap's
+    mov [es:0], al              ; order: volume, spt, heads
+    mov ax, [disk_spt]
+    mov [es:1], ax
+    mov ax, [disk_heads]
+    mov [es:3], ax
+    ; --- the row ------------------------------------------------------------
+    call clo_mlabel             ; SI = up to five letters of the name, in DS
+    push ds
+    pop es
+    mov byte [dsk_vcls], DRVC_IMG
+    xor ax, ax                  ; AL = the handle: unused, an image's row is
+    xor dx, dx                  ; found by IMG_DVSEG and never by DV_UNIT
+    mov cx, [cs:clo_mtot]
+    CLO_KCALL dsk_vol_add       ; AL = the volume, CF = no row free
+    jc .full
+    mov [cs:clo_mvol], al
+    call clo_mrow               ; BX = its row
+    mov dx, [cs:clo_mseg]
+    mov [bx+IMG_DVSEG], dx      ; ...and now dsk_xfer can serve it
+    ; --- prove it: mount it once --------------------------------------------
+    xor bx, bx
+    call COLD_SEG:fcpf_fcp_goto ; AL = the volume, BX = its root
+    jc .notfat
+    ; --- mark the file, on its host, now the mount is known good -----------
+    call clo_mhost              ; the host current again, the entry staged
+    jc .marked                  ; a failure here only leaves it unmarked
+    test byte [cs:clo_mflg], IMGF_RO
+    jnz .marked                 ; the user's read-only is mark enough
+    or byte [dskw_raw+DE_ATTR], DSKW_RDO_M
+    mov byte [dskw_raw+DE_RES], IMG_MARK
+    call clo_mstore
+.marked:
+    mov si, clo_s_mis
+    call clo_msay2              ; 'TEST.IMG is drive D:'
+    jmp short .out
+
+.notfat:                        ; it does not mount: take the row back
+    call clo_mhost
+    call clo_mdrop
+.notimg:
+    mov al, CERR_NOTIMG         ; 'Not a disk image'
+    jmp short .cerr
+.badrun:
+    call clo_mfree
+    mov si, clo_s_mfrag         ; 'Too fragmented to mount'
+    jmp short .say
+.full:
+    call clo_mfree
+    mov si, clo_s_mfull         ; 'No drive letter free'
+    jmp short .say
+.nomem:
+    mov al, CERR_MEM
+    jmp short .cerr
+.nohostp:
+    pop bx
+.nohost:
+    mov si, clo_s_mhost         ; 'Cannot mount from here'
+.say:
+    call clo_mtoast
+    jmp short .out
+.ioerr:
+    mov al, CERR_IO
+.cerr:
+    CLO_KCALL fm_saycl
+.out:
+    pop es
+    pop bp
+    clc
+    ret
+
+; clo_umount - the eject: ES = the claim, AL = its volume, the host current
+; and the file's entry staged by the stat clo_mount just made. Jumped to, so
+; it leaves through clo_mount's own exit
+clo_umount:
+    mov [cs:clo_mvol], al
+    mov [cs:clo_mseg], es
+    mov ax, [es:IMG_M_ATTR]     ; the attribute and byte 12 as they were
+    mov [dskw_raw+DE_ATTR], ax  ; (adjacent in both: asserted below)
+    call clo_mstore
+.drop:                          ; (clo_unmnt's, for a file no longer there)
+    call clo_mdrop
+    mov si, clo_s_mun
+    call clo_msay1              ; 'TEST.IMG unmounted'
+    jmp short clo_mount.out
+
+;-----------------------------------------------------------------------------
+; clo_mntdlg - CLV_MNTDLG: Disk > Mount Image...'s Open box answered
+; in:  [fdlg_name] = the file; its volume mounted and its folder current,
+;      which is what the dialog leaves behind (SPEC.md 38.6)
+; out, clobbers: clo_mount's
+; -----------------------------------------------------------------------------
+clo_mntdlg:
+    push bp
+    push es
+    mov si, fdlg_name
+    mov di, clo_fnbuf
+    call clo_ds13
+    mov ax, [dsk_cwd]           ; the dialog's folder, not the window's
+    mov [cs:clo_mdir], ax
+    jmp clo_mount.named
+
+; -----------------------------------------------------------------------------
+; clo_unmnt - CLV_UNMNT: unmount the image that is volume AL
+; in:  AL = the volume - the acting Disk window's (Disk > Unmount Image, greyed
+;      unless it is an image: fm_bar_gate) or a desktop zone's (its right-
+;      click, offered only on an image: sc_rclick). This checks again
+; out: CF = 0 always and everything said; [disk_drive] is the HOST on the
+;      way out, which is where the caller sends the window
+; clobbers: clo_mount's
+;
+; The claim names the file (IMG_M_NAME, IMG_M_DIR), so the host goes current,
+; the entry is staged by NAME and checked by CLUSTER, and the rest is the
+; double-click's own eject. A file that is no longer where the mount found it
+; still unmounts: the row and the claim go, and only the attribute is left as
+; it was - which the next mount reads as the stale marker it then is.
+; -----------------------------------------------------------------------------
+clo_unmnt:
+    push bp
+    push es
+    cmp al, DVOL_MAX
+    jae .not
+    call clo_mrowal             ; BX = its row
+    cmp byte [bx+DV_KIND], DVK_DRV
+    jne .not                    ; (a FREE row keeps its old class byte)
+    cmp byte [bx+DV_CLASS], DRVC_IMG
+    jne .not
+    mov [cs:clo_mvol], al
+    mov es, [bx+IMG_DVSEG]
+    mov [cs:clo_mseg], es
+    push ds
+    push es
+    push ds
+    pop es                      ; ES = the kernel's DS...
+    pop ds                      ; ...and DS = the claim, for one move
+    mov si, IMG_M_NAME
+    mov di, clo_fnbuf
+    mov cx, 13
+    rep movsb
+    pop ds
+    mov es, [cs:clo_mseg]
+    call clo_mhost              ; the host current, the entry staged
+    jc .gone
+    mov bx, [dskw_raw+DE_CLUS]  ; ...and it is still THE file the mount found
+    cmp bx, [es:IMG_M_CLUS]
+    jne .gone
+    mov al, [cs:clo_mvol]
+    jmp clo_umount
+.gone:
+    jmp clo_umount.drop
+.not:
+    jmp clo_mount.out
+
+; -----------------------------------------------------------------------------
+; clo_mfind - is the file stat just staged a MOUNTED image?
+; in:  BX = its first cluster, the host current
+; out: CF = 0, AL = the image's volume, ES = its claim; CF = 1 it is not
+; clobbers: AX, flags
+; -----------------------------------------------------------------------------
+clo_mfind:
+    push bx
+    push dx
+    mov dx, bx
+    mov al, 2
+.next:
+    inc ax
+    cmp al, DVOL_MAX
+    jae .no
+    call clo_mrowal             ; BX = row AL
+    cmp byte [bx+DV_KIND], DVK_DRV
+    jne .next
+    cmp byte [bx+DV_CLASS], DRVC_IMG
+    jne .next
+    mov es, [bx+IMG_DVSEG]
+    mov ah, [disk_drive]
+    cmp ah, [es:0]
+    jne .next
+    cmp dx, [es:IMG_M_CLUS]
+    jne .next
+    cmp byte [dskw_raw+DE_RES], IMG_MARK    ; ...and the ENTRY says so: a
+    jne .ownro                  ; different disk in the same floppy drive
+    clc                         ; could hold a file at the same cluster
+    jmp short .out
+.ownro:
+    test byte [es:IMG_FLG], IMGF_RO     ; the user's read-only is never
+    jz .next                    ; marked, so it is matched on the rest
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop dx
+    pop bx
+    ret
+
+; clo_mrow - BX = the row of [cs:clo_mvol]; clo_mrowal - ...of AL
+clo_mrow:
+    mov al, [cs:clo_mvol]
+clo_mrowal:
+    push ax
+    mov bl, DV_SIZE
+    mul bl
+    add ax, dsk_vtab
+    xchg ax, bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; clo_mruns - the file's chain as runs, into the claim at ES (SPEC.md 18.101.1)
+; in:  [cs:clo_mclus] = the first cluster, [cs:clo_mtot] = sectors, the host
+;      current
+; out: CF = 0 and the table complete; CF = 1 more runs than the claim holds,
+;      or a chain that ends before the file does
+; clobbers: AX, BX, CX, DX, DI, flags
+; -----------------------------------------------------------------------------
+clo_mruns:
+    mov di, IMG_TAB
+    xor cx, cx                  ; CX = file sectors covered so far
+    mov ax, [cs:clo_mclus]
+.clus:
+    cmp ax, 2
+    jb .bad
+    cmp ax, [dsk_maxclus]
+    ja .bad
+    push ax
+    CLO_KCALL dsk_clus2lba_x    ; AX = its first LBA, [dsk_c2hi] the high word
+    mov dx, [dsk_c2hi]
+    cmp di, IMG_TAB
+    je .newrun
+    cmp ax, [cs:clo_mnxlo]      ; does it follow the run in hand?
+    jne .newrun
+    cmp dx, [cs:clo_mnxhi]
+    je .grown
+.newrun:
+    cmp di, IMG_TABMAX - IMG_REC
+    jae .badp                   ; the sentinel must still fit after it
+    mov [es:di], cx
+    mov [es:di+2], ax
+    mov [es:di+4], dx
+    add di, IMG_REC
+.grown:
+    mov bl, [dsk_spc]
+    xor bh, bh
+    add ax, bx
+    adc dx, 0
+    mov [cs:clo_mnxlo], ax
+    mov [cs:clo_mnxhi], dx
+    add cx, bx
+    pop ax
+    cmp cx, [cs:clo_mtot]
+    jae .done
+    CLO_KCALL dsk_next_clus_x   ; AX = the next link
+    jnc .clus
+.bad:
+    stc
+    ret
+.badp:
+    pop ax
+    stc
+    ret
+.done:
+    mov ax, [cs:clo_mtot]
+    mov [es:di], ax             ; the sentinel
+    mov [es:IMG_END], di
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; clo_mlabel - SI = the desktop label: the name up to its dot, five letters
+; at most (IMG_DVSEG's rule), staged in fm_hdrbuf + 32
+; -----------------------------------------------------------------------------
+clo_mlabel:
+    mov si, clo_fnbuf
+    mov di, fm_hdrbuf + 32
+    mov cx, IMG_LBLMAX
+.l:
+    mov al, [si]
+    cmp al, '.'
+    je .end
+    or al, al
+    jz .end
+    mov [di], al
+    inc si
+    inc di
+    loop .l
+.end:
+    mov byte [di], 0
+    mov si, fm_hdrbuf + 32
+    ret
+
+; clo_mhost - the image's HOST current again, and the file's entry staged.
+; out: CF as dskw_stat answered
+clo_mhost:
+    push es
+    push ax
+    push bx
+    mov es, [cs:clo_mseg]
+    mov al, [es:0]
+    mov bx, [es:IMG_M_DIR]
+    call COLD_SEG:fcpf_fcp_goto
+    jc .out
+    mov si, clo_fnbuf
+    call COLD_SEG:dwf_dskw_stat
+.out:
+    pop bx
+    pop ax
+    pop es
+    ret
+
+; clo_mstore - the staged entry back to its sector, and the caches told
+clo_mstore:
+    mov byte [dskw_zapnext], 0
+    CLO_KCALL dskw_ent_store
+    CLO_KCALL dskw_sync_x
+    ret
+
+; clo_mdrop - the row of [cs:clo_mvol] and the claim in [cs:clo_mseg] both go
+clo_mdrop:
+    mov al, [cs:clo_mvol]
+    CLO_KCALL dsk_vol_del
+clo_mfree:
+    mov dx, [cs:clo_mseg]
+    mov bx, MEM_K_IMG
+    call COLD_SEG:mmf_mem_free
+    ret
+
+; clo_msay2 - '<file><SI><letter>:' as a toast, composed in fm_hdrbuf;
+; clo_msay1 - '<file><SI>'. TOAST_MAX is 24 (toast.inc), and a 12-letter
+; name with ' is drive D:' is exactly that
+clo_msay1:
+    call clo_msname
+    jmp short clo_msgo
+clo_msay2:
+    call clo_msname
+    mov al, [cs:clo_mvol]
+    call clo_drv
+    mov word [di], ':'          ; ':' and its NUL
+clo_msgo:
+    push ds
+    pop es
+    mov si, fm_hdrbuf
+    jmp short clo_mtoast.es
+
+clo_msname:
+    mov di, fm_hdrbuf
+    push si
+    mov si, clo_fnbuf
+    call clo_dscat
+    pop si
+    jmp clo_cat
+
+; clo_mtoast - one of this image's strings, SI, as a toast
+clo_mtoast:
+    push cs
+    pop es
+.es:
+    xor cx, cx
+    call KERNEL_SEG:cw_toast_show
+    ret
+
+clo_s_mis:   db ' is drive ', 0
+clo_s_mun:   db ' unmounted', 0
+clo_s_mfrag: db 'Too fragmented to mount', 0
+clo_s_mfull: db 'No drive letter free', 0
+clo_s_mhost: db 'Cannot mount from here', 0
+
+; this image's own working cells (a module may write to itself, SPEC.md 2.8)
+clo_mtot:    dw 0
+clo_mclus:   dw 0
+clo_mseg:    dw 0
+clo_mnxlo:   dw 0
+clo_mnxhi:   dw 0
+clo_mattr:   db 0               ; ...and clo_mres right after it: one word
+clo_mres:    db 0               ; store puts both in the claim
+clo_mflg:    db 0
+clo_mvol:    db 0
+clo_mdir:    dw 0               ; the host folder holding the file
+%if clo_mres - clo_mattr != 1 || IMG_M_RES - IMG_M_ATTR != 1 || DE_RES - DE_ATTR != 1
+  %error "clo_mount moves the attribute and byte 12 as ONE WORD in three places"
+%endif
+%endif ; OS88_IMG
+
 section .text
 ; The one resident datum (SPEC.md 18.99.1). `.text` and not `.bss`, because
 ; -f bin zeroes nothing and this word decides whether clo_free dereferences
@@ -2834,7 +3372,7 @@ clo_fnbuf:  times 13 db 0       ; the image file's 8.3 name (SPEC.md 18.99.8).
 
 section .cold
 ; -----------------------------------------------------------------------------
-; clo_need - make CLONE.DRV's image resident (SPEC.md 2.8.1)
+; clo_need - make DISKOPS.DRV's image resident (SPEC.md 2.8.1)
 ; out: CF = 1 it is not.  AX and every other register preserved - `pop ax` and
 ;      `ret` write no flag, so mod_need's CF reaches the caller intact
 ;
@@ -2847,7 +3385,7 @@ section .cold
 ; -----------------------------------------------------------------------------
 clo_need:
     push ax
-    mov al, MOD_CLONE
+    mov al, MOD_DISKOPS
     call mod_need
     pop ax
     ret
@@ -2887,7 +3425,7 @@ clo_call:
 ; free the code that is about to run.
 ; -----------------------------------------------------------------------------
 clo_drop:
-    mov al, MOD_CLONE           ; A TAIL JUMP, and it is a CONTRACT CHANGE:
+    mov al, MOD_DISKOPS           ; A TAIL JUMP, and it is a CONTRACT CHANGE:
     jmp mod_drop                ; this routine now clobbers AL where it used to
                                 ; preserve AX. mod_drop preserves every
                                 ; register and takes AL as its input, so the
@@ -2896,7 +3434,7 @@ clo_drop:
                                 ; followed by `.armed: ret` and reads nothing,
                                 ; and its second has its own push/pop ax round
                                 ; the pair. A THIRD CALLER WILL NOT BE TOLD.
-                                ; The near `jmp` is legal because clone.inc and
+                                ; The near `jmp` is legal because diskops.inc and
                                 ; mod.inc are both `.cold` and mod_drop's `ret`
                                 ; is near - it lands on our caller's return
                                 ; address. It does NOT generalise to clo_call

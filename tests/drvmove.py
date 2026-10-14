@@ -22,7 +22,7 @@ would have to be right about all of them for ever. So this row asserts the
 RAM disk's image moves AND that the machine still has a working driver behind
 it - `drv_tab`'s row, the published class fast path and the volume all agree.
 
-FOUR ASSERTIONS:
+FIVE ASSERTIONS:
 
   1. the image claim is declared movable at all - `MC_RLOC` out of `mem_tab`,
      because `drv_load` declares it and a silent refusal there would leave
@@ -33,7 +33,13 @@ FOUR ASSERTIONS:
      fault: it far-calls a dispatcher in freed memory on the next volume
      access, which is the failure this row exists to make loud;
   4. and the machine still draws afterwards, because on an 8086 a wild far
-     call executes rather than trapping.
+     call executes rather than trapping;
+  5. INT 33h FOLLOWS THE IMAGE (SPEC.md 66.6.3.1): the row plants the vector
+     a pointing driver hooks - USBMOUSE.DRV's PicoMEM backend does - on the
+     RAM disk's image before the move and reads it after. Red with
+     `MEM_RR_ONE 0x33*4 + 2` taken out of mem_rr_tab: the vector stays on
+     the vacated copy, which is a dead pointer after a Video Player play
+     (docs/FIELD-NOTES.md 67).
 """
 import argparse
 import os
@@ -67,7 +73,10 @@ def main():
     a = ap.parse_args()
     S = os88sym.linear
 
-    with M.launch("build/os8088-360.img", apps=a.apps,
+    # THE HARD DISK ANSWERED OFF (tests/hdoff.py): SPEC.md 51.3.2 loads
+    # HDD.DRV at boot here, and this row ticks it in itself
+    import hdoff
+    with M.launch(hdoff.image(), apps=a.apps,
                   machine=a.machine) as m:
         M.settle(m)
         M.no_saver(m)
@@ -125,6 +134,18 @@ def main():
             sys.exit("the hard-disk driver did not unmount, so no hole opened")
         print("      hard disk unmounted - the hole is above the RAM disk now")
 
+        # --- int 33h on the image, as USBMOUSE.DRV's PicoMEM backend hooks it
+        # (SPEC.md 9.12.7, 66.6.3.1). The RAM disk hooks nothing, so the row
+        # PLANTS the vector a pointing driver would have - rd0:offset - and
+        # puts the machine's own back at the end. Nothing on this desktop
+        # calls int 33h, so a planted vector is never entered. Before the
+        # row was there the move left it on rd0, the copy the compactor had
+        # just vacated: the card's next report ran there and its feed was
+        # refused (docs/FIELD-NOTES.md 67)
+        V33 = 0x33 * 4
+        old33 = m.read(V33, 4)
+        m.write(V33, struct.pack("<HH", 0x0123, rd0))
+
         # --- force ------------------------------------------------------------
         mo.click(cp[1] + 8, cp[2] + 9)          # close the panel
         heaphi.quiet(m)
@@ -178,10 +199,11 @@ def main():
         # move can actually get wrong is a word left holding the OLD segment,
         # so that is what this reads - every one of them, by name.
         words = {"drv_fseg": 0, "drv_fseg2": 0, "drv_fseg3": 0,
-                 "drv_fseg4": 0, "drv_fseg5": 0, "drv_blkseg": 0}
+                 "drv_fseg4": 0, "drv_fseg5": 0, "drv_fseg6": 0,
+                 "drv_fseg7": 0, "drv_fseg8": 0, "drv_blkseg": 0}
         for n in words:
             words[n] = u16(m.read(S(n), 2))
-        rows = {"drv_tab[%d]" % r: seg(r) for r in range(6)}
+        rows = {"drv_tab[%d]" % r: seg(r) for r in range(7)}
         owners = {"claim owner %04x" % o: o
                   for o in set(c[2] for c in claims(m, S))}
         stale = sorted(k for k, v in
@@ -193,6 +215,16 @@ def main():
                  "STALE: %s - a far call through one of these lands in freed "
                  "memory on the next volume access" % ", ".join(stale)))
         bad += bool(stale)
+
+        v33 = struct.unpack("<HH", m.read(V33, 4))
+        m.write(V33, old33)
+        ok33 = moved and v33 == (0x0123, rd1)
+        print("  5 int 33h follows the image  %s"
+              % ("OK (%04x:%04x)" % (v33[1], v33[0]) if ok33 else
+                 "NO (%04x:%04x, image at %04x) <-- a pointing driver's "
+                 "vector left on the copy the compactor vacated" %
+                 (v33[1], v33[0], rd1)))
+        bad += not ok33
 
         # ...and the machine is still RUNNING after it. A wild far call through
         # a word the move missed does not fault on an 8086, it executes - so

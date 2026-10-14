@@ -30,7 +30,7 @@ different half of what had to change:
              the temporary name only if the streamed path ran - and its cut
              stays in the output window, so the truncate must NOT run.
              It was 250KB, whose 531KB the heap only just failed to fund:
-             CLONE.DRV's claim fell a KB (SPEC.md 2.8) and the file went
+             DISKOPS.DRV's claim fell a KB (SPEC.md 2.8) and the file went
              WHOLE - correctly, and with the right bytes - so the row failed
              on a fixture that had stopped being too big. 569KB is ~25KB
              past everything 640KB holds above a 96.5KB kern_big, so the
@@ -62,6 +62,7 @@ DOS-DEBUGGING.md's trap), so a 360KB or 720KB disk would either not hold them
 or hand the verb a short read and a wrong answer.
 """
 import argparse
+import tempfile
 import os
 import subprocess
 import sys
@@ -143,7 +144,7 @@ def watched(m, mo, wx, wy, fails):
     moves = sum(1 for a, b in zip(look, look[1:])
                 if a[0] and b[0] and (a[1], a[2]) != (b[1], b[2]))
     # the toast goes up once the module is in and the file sized - the first
-    # second of the hold is CLONE.DRV's own read - so it is counted from the
+    # second of the hold is DISKOPS.DRV's own read - so it is counted from the
     # look where it first appears, and from there it must never go down
     first = next((i for i, s in enumerate(held)
                   if s[3] and s[4].startswith(lzcomp.BUSY)), len(held))
@@ -228,7 +229,7 @@ def streamed(m, mo, wx, wy, fl, name, want, trunc, fails):
     # ...AND THE VOLUME IS STILL A VOLUME. A truncate that freed one cluster
     # too few leaks it, and one too many cross-links the next file: the bytes
     # of THIS file read back perfectly either way, so os88disk's fsck is asked
-    img = "/tmp/lzbig-fsck-%d.img" % os.getpid()
+    img = tempfile.gettempdir() + "/lzbig-fsck-%d.img" % os.getpid()
     fl.save(1, img)
     r = subprocess.run([sys.executable,
                         os.path.join(HERE, "..", "tools", "os88disk.py"),
@@ -274,7 +275,7 @@ def main():
     # Per-run and removed on the way out: the verbs WRITE this disk, so a kept
     # image would hand the next run files that are already compressed
     # (tests/lzcomp.py's note on the same trap).
-    img = "/tmp/lzbig-%d.img" % os.getpid()
+    img = tempfile.gettempdir() + "/lzbig-%d.img" % os.getpid()
     d = os.path.join(os88build.at("build"), "lzbig")
     os.makedirs(d, exist_ok=True)
     disk = os88marty.scratch_disk(
@@ -336,10 +337,7 @@ def main():
         leg("unbig1", "BIG1.TXT", big1, item=FM_IUNCOMP,
             expect="Uncompressed")
 
-    try:
-        os.remove(img)
-    except OSError:
-        pass
+    os88marty.scratch_drop(img)         # and scratch_disk's sidecar
     for f in fails:
         say("  FAIL: " + f)
     say("lzbig: %s" % ("FAILED" if fails else "ok"))

@@ -448,7 +448,7 @@ before the far call**, because a module can re-enter itself through a callback.
 
 **That price is affordable, and §4.3 costs it: ~104 bytes.** The count is
 `resb MOD_MAX` in `.bss`, an increment in `mod_need` — which already holds the id
-— and a small `mod_leave` that the **29 thunk sites** (over seven far-pointer bases in seven files — `CMZFP` is `CLFP+4`, the compressor riding in `CLONE.DRV`) call after their
+— and a small `mod_leave` that the **29 thunk sites** (over seven far-pointer bases in seven files — `CMZFP` is `CLFP+4`, the compressor riding in `DISKOPS.DRV`) call after their
 `call far [XXFP + n*4]`. It has to reach the thunks that deliberately do *not*
 call `mod_need` (SPEC.md 13.8.3's two edges, kernel/ctrl.inc:5820), which is
 break 3 in §8.
@@ -472,7 +472,7 @@ and nothing will call it again"* (kernel/diskw.inc:4869). The whole resident
 mechanism today is **477 bytes** on kern_big (`.cold` 309 + `.text` 56 + `.bss`
 112), so the pin is a 22% addition to it.
 
-**Measured, not estimated**: `CTRL.DRV` 7,397 bytes (an 8KB claim), `CLONE.DRV`
+**Measured, not estimated**: `CTRL.DRV` 7,397 bytes (an 8KB claim), `DISKOPS.DRV`
 5,810 (6KB), `HIBER.DRV` 3,398 (4KB), `FORMAT.DRV` 1,129 (2KB) on kern_big — 20KB
 if every one were resident, which the features being mutually exclusive means
 never happens. kern_small adds `FILECP.DRV` 2,161 (3KB) and `FDLG.DRV` 3,243
@@ -506,7 +506,7 @@ depending on where the user is standing, and the rank is a judgement about which
 end of that to design for rather than a settled number.
 
 Third, **five of the six modules claim memory from inside their own image**
-(kernel/ctrl.inc:5507, clone.inc:413, compress.inc:983, filecp.inc:593,
+(kernel/ctrl.inc:5507, diskops.inc:413, compress.inc:983, filecp.inc:593,
 hiber.inc:1361), so each is pinned at exactly the moment a drop would be worth
 most; and **shedding `FDLG.DRV` on kern_small breaks a live dialog**: its six thunks far-call **without** reloading (kernel/fdlg.inc:3108-3167)
 and `mod_tab[MOD_FDLG].MODR_SEG` is read at kernel/ui.inc:546 and
@@ -826,7 +826,7 @@ nesting count per module, pinned while non-zero, incremented by the stub before
 the far call. Per module and not one flag, because a module can re-enter itself
 through a callback."* `resb MOD_MAX` in `.bss` (4 on kern_big, 5 on kern_small),
 incremented in `mod_need` — which already holds the id — and decremented by a
-small `mod_leave` that each of the **29 thunk sites** (over seven far-pointer bases in seven files — `CMZFP` is `CLFP+4`, the compressor riding in `CLONE.DRV`) calls after its
+small `mod_leave` that each of the **29 thunk sites** (over seven far-pointer bases in seven files — `CMZFP` is `CLFP+4`, the compressor riding in `DISKOPS.DRV`) calls after its
 `call far [XXFP + K*4]`.
 
 That is the pin `mod_drop`'s banner says nothing can supply, and with it
@@ -2283,7 +2283,7 @@ that has never made a sound has none, and 5b would have been vacuous on it.
 ### 10.14 On-demand kernel MODULES are let off the hook, conditionally
 
 The one population left pinned, and it is a **decision** rather than a
-mechanism. `CTRL.DRV`, `FORMAT.DRV`, `CLONE.DRV`, `HIBER.DRV` and, on
+mechanism. `CTRL.DRV`, `FORMAT.DRV`, `DISKOPS.DRV`, `HIBER.DRV` and, on
 kern_small, `FILECP.DRV` and `FDLG.DRV` are each loaded for a *temporary
 action* - the user opens the Control Panel, formats a disk, clones one,
 hibernates, copies a file, picks a file - completes it and leaves. So a module

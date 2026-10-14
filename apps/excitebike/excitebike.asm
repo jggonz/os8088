@@ -214,6 +214,9 @@ xb_credit3: db 'Inspired by Excitebike (Nintendo, 1984)',0
 %if XB_CID_MAX != EXB_RUNWAY + 2 * EXB_LAP_MAX
 %error "const.inc XB_CID_MAX disagrees with the compiler RUNWAY/LAP_MAX"
 %endif
+%if EXB_NCOLS > XB_TOK_SKIP
+%error "a course stream's column ids reach its skip and copy tokens"
+%endif
 %define OS88UI_ABOUT
 %define OS88UI_NOBTN
 %include "os88ui.inc"
@@ -256,8 +259,6 @@ VAR xb_reveal,2
 VAR xb_artseg,2
 VAR xb_artsize,2
 VAR xb_artkind,1
-VAR xb_rows,3456                ; 16 decoded splash rows (16 x 216)
-VAR xb_queue,432                ; clipped-fallback row conversion
 VAR xb_fsi,FSI_SIZE
 VAR xb_gfxseg,2
 VAR xb_gfxsize,2
@@ -270,7 +271,8 @@ VAR xb_x0,2
 VAR xb_ncols,2
 VAR xb_gshift,1                 ; log2 of a font glyph's bytes: 3 (VGA) or 4 (CGA)
 VAR xb_cell,2                   ; VRAM bytes a text cell advances: 1 (VGA) or 2 (CGA)
-VAR xb_font,1024
+VAR xb_font,1024 + 38            ; the font, then the PAL record (xb_font_copy)
+VAR xb_pal,2                    ; ...where that PAL copy starts
 VAR xb_cid,XB_CID_MAX
 ; the frame clock, governor and the scripted scroll test (game.inc)
 VAR xb_subs,2
@@ -401,7 +403,7 @@ VAR xb_cn,2
 VAR xb_clap,2
 VAR xb_chdr,20                  ; the custom course's header, in the layout of exbtracks.inc
 VAR xb_cbuf,256                 ; EXBTRACK.DAT
-VAR xb_ctrig,64                 ; ...and its trigger list
+VAR xb_ctrig,15 * 3 + 2         ; ...and its trigger list (at most 15, then 0FFFFh)
 VAR xa_ps,XM_STATE_SZ
 VAR xa_st,XB_NAI_MAX * XM_STATE_SZ
 VAR xa_recs,4 * XA_REC_SZ
@@ -422,13 +424,12 @@ VAR xa_nb,1
 VAR xa_bases,8
 VAR xb_simon,1                  ; 1 = the race, 0 = the wave-2 scripted scroll (the video tests)
 VAR xb_inp,1
-VAR xb_tmode,1                  ; the harness feeds xb_tscript to the steps and reads xb_ttrace
+VAR xb_tmode,1                  ; the harness feeds its script to the steps and reads the trace (xb_tseg)
 VAR xb_treset,1
 VAR xb_tdone,1
 VAR xb_tsn,2
 VAR xb_tsi,2
-VAR xb_tscript,XB_TSTEPS
-VAR xb_ttrace,XB_TSTEPS * 16
+VAR xb_tseg,2                   ; the harness's script and trace: a claim (game.inc xb_tclaim), 0 = none
 ; sprites (sprite.inc)
 VAR xb_nspr,1
 VAR xb_sprseg,2
@@ -448,7 +449,6 @@ VAR xs_k,2
 VAR xs_ph,1
 VAR xs_cnt,2
 VAR xs_row,1
-VAR xs_tmp,384
 ; the VGA back end (vga.inc)
 VAR xv_pg,1
 VAR xv_pbase,2
@@ -539,7 +539,30 @@ VAR xc_np,2
 VAR xc_plist,XB_MAXBIKES * 2
 VAR xc_cnt,2
 VAR xc_nbx,2
+; ONE REGION, THREE TENANTS THAT ARE NEVER LIVE AT ONCE.  The CGA's and the
+; Hercules' sprite boxes exist only in a race frame, inside the fullscreen bracket;
+; the splash's decode rows only for one call of xb_frontband, on the desktop; the
+; sprite loader's shift and expansion scratch (and the loading screen's widened
+; glyph) only at the top of the bracket, before a race has drawn a box.  The window
+; is never painted inside the bracket and the bracket never runs inside a paint, so
+; the three share the bytes (4,800 of bss).
+%assign XB_U0 XB_BSS
 VAR xc_boxes,4096
+%assign XB_U1 XB_BSS
+%assign XB_BSS XB_U0
+VAR xb_rows,3456                ; 16 decoded splash rows (16 x 216)
+VAR xb_queue,432                ; clipped-fallback row conversion
+%if XB_BSS > XB_U1
+%error "the splash rows outgrow the box region they share"
+%endif
+%assign XB_BSS XB_U0
+VAR xs_tmp,384                  ; (sprite.inc: VGA load scratch)
+VAR xs_exp,512                  ; (sprite.inc: CGA load scratch)
+VAR xb_ldglyph,16               ; (video.inc: a loading-screen glyph widened, before the art loads)
+%if XB_BSS > XB_U1
+%error "the sprite loader's scratch outgrows the box region it shares"
+%endif
+%assign XB_BSS XB_U1
 VAR xc_bx0,2
 VAR xc_by0,2
 VAR xc_bw,2
@@ -564,7 +587,6 @@ VAR xc_byte0,2
 VAR xc_phase,2
 VAR xs_rowi,2
 VAR xs_ink55,4
-VAR xs_exp,512
 VAR xs_w,2
 VAR xs_opb,8
 VAR xs_orb,8

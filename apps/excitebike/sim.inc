@@ -541,7 +541,7 @@ xm_column:
     mov [xm_tbase], ax              ; lap 2's triggers count from its first column
     or byte [xm_ev], XEV_LAP
 .nolap:
-    ; ---- script triggers: (column, id) pairs, lap relative ---------------------
+    ; ---- script triggers: (word column, byte id), lap relative ----------------
 .trig:
     mov si, [xm_trigp]
     mov ax, [si]
@@ -550,7 +550,8 @@ xm_column:
     add ax, [xm_tbase]
     cmp ax, [xm_col]
     jne .notrig
-    mov bx, [si + 2]
+    mov bl, [si + 2]
+    xor bh, bh
     shl bx, 1
     mov ax, [exb_scripts + bx - 2]
     mov [xm_scr], ax
@@ -558,7 +559,7 @@ xm_column:
     mov [xm_sbase], ax
     mov byte [xm_sdefer], 0
     mov word [xm_lastfire], 0ffffh
-    add word [xm_trigp], 4
+    add word [xm_trigp], 3
     jmp .trig
 .notrig:
     call xm_getcls
@@ -995,34 +996,36 @@ xm_bikes:
 
 ; -----------------------------------------------------------------------------
 ; xm_trace - the test harness's per-step record (tests/excitebike_ref.py):
-; 16 bytes at xb_ttrace + 16 x [xb_tsi], the layout of Sim.rec()
+; 16 bytes at XB_TTRACE + 16 x [xb_tsi] in the harness claim, the layout of Sim.rec()
 ; -----------------------------------------------------------------------------
 xm_trace:
+    push es
+    mov es, [xb_tseg]
     mov bx, [xb_tsi]
     and bx, XB_TSTEPS - 1
     mov cl, 4
     shl bx, cl
-    add bx, xb_ttrace
     mov ax, [xm_pos]
-    mov [bx], ax
+    mov [es:bx + XB_TTRACE], ax
     mov ax, [xm_pos + 2]
-    mov [bx + 2], ax
+    mov [es:bx + XB_TTRACE + 2], ax
     mov ax, [xm_speed]
-    mov [bx + 4], ax
+    mov [es:bx + XB_TTRACE + 4], ax
     mov ax, [xm_A]
-    mov [bx + 6], ax
+    mov [es:bx + XB_TTRACE + 6], ax
     mov ax, [xm_vy]
-    mov [bx + 8], ax
+    mov [es:bx + XB_TTRACE + 8], ax
     mov ax, [xm_temp]
-    mov [bx + 10], ax
+    mov [es:bx + XB_TTRACE + 10], ax
     mov al, [xm_mode]
-    mov [bx + 12], al
+    mov [es:bx + XB_TTRACE + 12], al
     mov al, [xm_pitch]
-    mov [bx + 13], al
+    mov [es:bx + XB_TTRACE + 13], al
     mov al, [xm_lane]
-    mov [bx + 14], al
+    mov [es:bx + XB_TTRACE + 14], al
     call xm_pose
-    mov [bx + 15], al
+    mov [es:bx + XB_TTRACE + 15], al
+    pop es
     ret
 
 ; the collision row of a lane number (lane_row in tools/exbsim.py): 5 below 16, else 5 - (lane - 8) / 8

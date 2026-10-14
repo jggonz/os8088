@@ -29,15 +29,15 @@ OS88_ICON16_END
 %endmacro
 
 n_entry:
-    mov ax, 64
+    mov ax, N_CANVAS_KB
     call OSAPI_MEM_CLAIM
     jc .out
     mov [n_canvas], dx
-    mov ax, 64
+    mov ax, N_GFX_KB
     call OSAPI_MEM_CLAIM
     jc .out
     mov [n_graphics], dx
-    mov ax,64
+    mov ax, N_GFX2_KB
     call OSAPI_MEM_CLAIM
     jc .out
     mov [n_graphics2],dx
@@ -72,7 +72,7 @@ n_entry:
     ret
 
 n_paint:
-    SAVE
+    call n_pushall
     call n_frontpaint
     cmp byte [n_abon],0
     je .out
@@ -80,13 +80,22 @@ n_paint:
     mov si,n_ablines
     call os88ui_about_d
 .out:
-    RESTORE
-    ret
+    jmp n_popall
 n_about:
-    SAVE
+    call n_pushall
     mov byte [n_abon],1
     mov si, n_ablines
     call os88ui_about
+    jmp n_popall
+; Shared SAVE/RESTORE for routines off the per-sprite and per-frame paths:
+; "call n_pushall" at entry, "jmp n_popall" for RESTORE+ret. Not re-entrant
+; across the two instructions that touch n_pushret, which nothing interrupts
+; into (this package has no ISR and no worker).
+n_pushall:
+    pop word [cs:n_pushret]
+    SAVE
+    jmp [cs:n_pushret]
+n_popall:
     RESTORE
     ret
 %include "front.inc"
@@ -277,6 +286,7 @@ n_msgresume: db 'P TO RESUME',0
     %assign NBSS NBSS + %2
 %endmacro
 VAR n_abon,1
+VAR n_pushret,2
 VAR n_frontstatic,1
 VAR n_frontready,2
 VAR n_frontband,2
@@ -286,6 +296,7 @@ VAR n_frontscale,1
 VAR n_frontkind,1
 VAR n_frontwant,1
 VAR n_fronthelp,1
+VAR n_frontlbl,1
 VAR n_canvas,2
 VAR n_win,2
 VAR n_seed,2
@@ -329,7 +340,8 @@ VAR n_pickx,2
 VAR n_picky,2
 VAR n_islandy,2
 VAR n_wavey,2
-; Native renderer scratch and per-page damage lists.
+; Native renderer scratch and per-page damage lists. *N_ROM: cartridge-route
+; state, zero bytes (an alias) in the original-art build that never uses it.
 VAR n_graphics,2
 VAR n_graphics2,2
 VAR n_scene,2
@@ -353,24 +365,24 @@ VAR n_record,2
 VAR n_plane,2
 VAR n_vorigin,2
 VAR n_scroll,2
-VAR n_worldy,2
-VAR n_worldpage,2
+VAR n_worldy,2*N_ROM
+VAR n_worldpage,2*N_ROM
 VAR n_scrollstage,2
 VAR n_ringstart,2
 VAR n_ringend,2
 VAR n_ringbytes,2
 VAR n_worldheight,2
-VAR n_scanline,256
-VAR n_rowmap,2
-VAR n_rowtile,2
-VAR n_rowhalf,2
+VAR n_scanline,256*N_ROM
+VAR n_rowmap,2*N_ROM
+VAR n_rowtile,2*N_ROM
+VAR n_rowhalf,2*N_ROM
 VAR n_cacheend,2
 VAR n_cachestart,2
-VAR n_rowdest,2
+VAR n_rowdest,2*N_ROM
 VAR n_rowrepeat,2
-VAR n_toprow,2
-VAR n_toppage,2
-VAR n_logicalrow,2
+VAR n_toprow,2*N_ROM
+VAR n_toppage,2*N_ROM
+VAR n_logicalrow,2*N_ROM
 VAR n_cgastart,2
 VAR n_prepare,1
 VAR n_damagevalid,1

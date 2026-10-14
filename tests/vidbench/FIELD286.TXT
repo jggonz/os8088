@@ -1,0 +1,44 @@
+VIDEO PLAYER - 286 DECODE BENCH
+===============================
+
+One question: how fast does THIS 286 decode a video
+frame? The encoder's "286-speeddemon" profile (then
+"286-vga") was measured on 86Box's 286; this floppy
+measures a real one, and
+what it reads becomes that machine's own profile.
+The frames are the same synthetic set the 86Box 286
+and 486 profiles were fitted from, so the three
+machines can be set side by side.
+
+Nothing here writes anything but its reports, on
+THIS floppy. Leave it write-enabled.
+
+PLEASE NOTE THE MACHINE: CPU and clock, the video
+card and its BUS (8 or 16-bit ISA), and whether the
+BIOS shadows the video ROM.
+
+HOW
+---
+1. Boot this round's os8088 system floppy.
+2. Put this disk in B: and open it.
+3. VIDBENCH.O88, press R. Screen garbage while it
+   runs is expected - it is drawing the frames. The
+   report is saved here as VIDBENCH.TXT.
+   CLOSE THE WINDOW before the next one.
+4. Optional, with a Sound Blaster: VIDSND.O88, R
+   -> VIDSND.TXT.
+
+Bring the .TXT files back (or photograph every page:
+Space / PgDn / PgUp page through the results).
+
+WHAT MATTERS IN VIDBENCH.TXT
+----------------------------
+  the raw rows    8,000 bytes to the screen and to RAM,
+                  read from the screen, the 12h store
+                  and the latch copy: the CARD's speed.
+  every frame     "nat scr" is the player's own decoder
+                  drawing it. OK/BAD per frame: BAD and
+                  the timing does not count.
+
+VIDDISK.O88 (X, E, R, W) and VIDEOD.O88 - the player
+with the long info card - are here too.

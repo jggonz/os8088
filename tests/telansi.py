@@ -249,6 +249,9 @@ def wait_desktop(m, letter="A", secs=90):
             return False
     if os88qemu.acted(m, zone, secs=secs, what="drive %s's zone" % letter,
                       poll=0.4):
+        # ...and the first paint after it: a cell is PLACED before it is
+        # drawn, and a click that lands mid-paint is a click on nothing
+        os88qemu.ui_done(m, S, cap=8.0, what="the first desktop")
         return
     sys.exit("%s: drive %s: had no desktop zone after %ds - the guest never "
              "reached a desktop (a boot failure, not a %s failure)"

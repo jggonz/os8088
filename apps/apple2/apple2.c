@@ -1,7 +1,7 @@
 /* ============================================================================
  * os8088 - apps/apple2/apple2.c    APPLE2: an Apple II Plus, written in C
  *
- * A windowed 48K Apple II Plus as an os8088 package: a 6502 in a 64KB heap
+ * A windowed 48K Apple II Plus as an os8088 package: a 6502 in a 49KB heap
  * claim, Applesoft BASIC and the Autostart Monitor read from a ROM PART
  * inside APPLE2.O88, the II+'s four soft-switch display modes composed into
  * 1bpp bands and blitted into a window, and - from wave 5 - a foreign video
@@ -120,7 +120,7 @@ void  os88_onfile(int mode, const char *name,
  * core loads and stores it with no frame: this is the C's view of the same
  * bytes and the field order IS the layout (APPLE2-SPEC section 4.1). */
 struct a2_mach {
-    unsigned ramseg;                        /* the 64KB RAM claim */
+    unsigned ramseg;                        /* the 49KB RAM claim */
     unsigned romseg;                        /* the ROM PART's base segment */
     unsigned pc;
     unsigned a, x, y, s, p;
@@ -274,7 +274,7 @@ unsigned a2_fsx_key(void);              /* the polled int 16h: 0xFFFF for
 unsigned char a2_chr[512];
 
 /* --- the core's scratch, as the C reads it (section 3.3) ------------------ */
-#define A2_SCR_BASE  0xCF00
+#define A2_SCR_BASE  0xC100
 #define A2_SCR_DIRTY 0x00                   /* 32 bytes: the page bitmap */
 #define A2_SCR_WLO   0x2C                   /* the write window */
 #define A2_SCR_WHI   0x2E
@@ -282,12 +282,35 @@ unsigned char a2_chr[512];
 #define A2_SCR_WATLO 0x32                   /* the watch range: the LIVE */
 #define A2_SCR_WATHI 0x34                   /*   display page */
 
+/* THE RAM CLAIM IS 52KB AND NOT 64 (APPLE2-SPEC section 3.1). The claim is
+ * the Apple's address space biased at offset 0, but only TWO stretches of it
+ * are ever addressed through the RAM segment: the 48K at $0000-$BFFF and the
+ * core's scratch page at $C100-$C1FF. Every read at or above $C000 goes to
+ * the soft-switch ladder, the slot space's $FF or the ROM PART (a2cpu.inc's
+ * a2_rd_bx); every write there is dropped or called out (a2_wr_bx, a2_wr);
+ * the fetch is bounded at $C000 and re-biases onto the ROM part above $CFFF
+ * (a2_rebias_go). So $D000-$FFFF of a 64KB claim was 12,288 bytes of heap
+ * nothing ever touched. The claim ends at the scratch page's last byte -
+ * and the scratch is at $C100, the first page above the soft switches, so
+ * that last byte is $C1FF and the claim is 49KB rather than the 52 it was
+ * with the page at $CF00 (a2cpu.inc's A2_SCR_BASE says why the two are the
+ * same page to the emulated machine). */
+#define A2_RAMKB     ((A2_SCR_BASE + 0x100 + 1023) / 1024)     /* 49 */
+
 /* --- the ROM part (section 1.4, 1.5) -------------------------------------- */
 #define A2_ROM_PART   0
 #define A2_ROM_MAIN   0x0000                /* 12,288 bytes: $D000-$FFFF */
 #define A2_ROM_CHRGEN 0x3000                /*  2,048 bytes: the II+ chargen */
 #define A2_ROM_DISK2  0x3800                /*    256 bytes: the P5 boot ROM */
 #define A2_ROM_SIZE   14848
+/* ...and what of it stays after os88_main: the main ROM alone (section 1.5).
+ * THE DISK II FOLLOW-UP MOVES THIS to A2_ROM_DISK2 + 256 - the P5 ROM is the
+ * one tail byte a running machine would read again. */
+#define A2_ROM_KEEP   A2_ROM_CHRGEN
+/* The parts carve's claim BASE (apps/os88parts.inc's op_base, aliased in
+ * apple2.asm): os88_part_seg answers the PART, which sits the run's head
+ * slack above it, and OSAPI_MEM_REGROW takes the claim. */
+extern unsigned a2_opbase;
 /* Block $C0 of the character generator is the NORMAL form of all 64 glyphs
  * and its bit 7 carries nothing, so `& 0x7F` is the whole decode - which is
  * a2_chargen's job. Blocks $40, $80 and $C0 are byte-identical and block $00
@@ -831,6 +854,7 @@ static char a2_title[] = "Apple II Plus Emulator";   /* section 16.1's long
 
 /* --- what the parts define, declared here so no part declares it twice ---- */
 static void a2_say(const char *s);
+static void a2_kickw(void *win);            /* a2_kick = 1, then wake */
 static void a2_flush(void *win);
 static void a2_sh_inval(void);
 static void a2_dirty_all(void);
@@ -938,6 +962,16 @@ static int  ovl_a2_confirm(void *win);
  * os88_about and os88_onfile are all dispatched under the desktop's gfx lock,
  * which is the whole machine stopped. The WAKE holds no lock and may call the
  * file slots by contract (SPEC.md 74.1), so it is what loads it. */
+/* a2_kickw - the KICK and the post, which every route that owes the wake a
+ * pass makes together: a2_kick says the wake must run whatever a2_wants_wake
+ * answers, and os88_wm_wake posts it. ONE call rather than the pair at
+ * fourteen sites (apps size pass 1). */
+static void a2_kickw(void *win)
+{
+    a2_kick = 1;
+    os88_wm_wake(win);
+}
+
 static int a2_ovl_ready(void *win)
 {
     (void)win;
@@ -1570,17 +1604,24 @@ static void a2_reset_service(void)
 void os88_paint(void *win)
 {
     static struct os88_rect d;
-    int whole;
+    int whole, hit;
 
+    /* NESTED TESTS AND NOT `&&` / `||` IN THIS CALLBACK (apps size pass 1):
+     * SmallerC turns each operand of either into a 0/1 value and tests that,
+     * where a nested `if` is the compare and one branch. */
     whole = os88_wm_damage(win, &d);
-    if (!whole && d.x1 > d.x2)
-        return;                             /* nothing of us is exposed */
+    if (!whole)
+        if (d.x1 > d.x2)
+            return;                         /* nothing of us is exposed */
     if (a2_geom(win) < 0)
         return;
     a2_covered = 0;                         /* something of us IS exposed -
                                              * that is what a W_PAINT means */
 
-    if (whole || !a2_sh_ok)
+    if (whole)
+        a2_sh_ok = 0;                       /* ...which a2_sh_inval clears
+                                             * anyway: one test below, not two */
+    if (!a2_sh_ok)
         a2_sh_inval();
     else
         a2_blank_rect(d.x1, d.y1, d.x2, d.y2);
@@ -1605,8 +1646,12 @@ void os88_paint(void *win)
      * range emptied so the flush stops skipping rows for a panel that is not
      * on the glass, and the rect it held handed on as damage before the flush
      * below draws it. */
-    if (a2_abt_up && (!a2_ovl_ready(win) || !ovl_about_geom()))
-        a2_about_gone();
+    if (a2_abt_up) {
+        if (!a2_ovl_ready(win))
+            a2_about_gone();
+        else if (!ovl_about_geom())
+            a2_about_gone();
+    }
 
     a2_flush(win);
     /* THE PANEL OWNS ITS ROWS AND THE FLUSH SKIPPED THEM, so it is redrawn
@@ -1625,18 +1670,24 @@ void os88_paint(void *win)
      * hold range has to stay true between paints or the next wake's flush
      * composes and blits straight through the panel. a2_about_close is what
      * empties it, and it forces exactly those lines on the way out. */
-    if (a2_abt_up
-        && (whole || (d.x1 <= a2_abt_x + a2_abt_w - 1 && d.x2 >= a2_abt_x
-                      && d.y1 <= a2_abt_y + a2_abt_h - 1
-                      && d.y2 >= a2_abt_y))
-        && !ovl_about_paint(win)) {
+    if (a2_abt_up) {
+        hit = whole;
+        if (!hit)
+            if (d.x1 <= a2_abt_x + a2_abt_w - 1)
+                if (d.x2 >= a2_abt_x)
+                    if (d.y1 <= a2_abt_y + a2_abt_h - 1)
+                        if (d.y2 >= a2_abt_y)
+                            hit = 1;
+        if (hit)
+            if (!ovl_about_paint(win)) {
         /* ...AND THE SAME ANSWER ONE CALL LATER. The module can go between
          * the geom above and this - a compaction, a claim that could not be
          * made - and a refusal here means the panel's pixels were never
          * drawn. The rows it held are then owed to the next wake, which is
          * what a2_kick posts. */
-        a2_about_gone();
-        a2_kick = 1;
+                a2_about_gone();
+                a2_kick = 1;
+            }
     }
     /* ...AND THE FIRST WAKE HAS TO BE ASKED FOR. os88_wm_onwake INSTALLS the
      * handler; os88_wm_wake POSTS the kick, and without this line the machine
@@ -1650,6 +1701,8 @@ void os88_paint(void *win)
 
 void os88_onkey(int ascii, int scan, void *win)
 {
+    int k;
+
     if (a2_state == A2_ST_DEAD)
         return;
 
@@ -1687,8 +1740,19 @@ void os88_onkey(int ascii, int scan, void *win)
      * The pair is ahead of the About panel deliberately: 11.2.1's door is
      * unconditional, and a modal panel that swallowed it would be the same
      * trap with one more step in it. */
-    if ((ascii == 6)
-        || (ascii == 0 && (scan == KSC_ENTER || scan == KSC_ALT_ENTER))) {
+    k = 0;                                  /* the chord, as a flag set by
+                                             * nested tests rather than an
+                                             * `||` of `&&`s made into values
+                                             * (apps size pass 1) */
+    if (ascii == 6)
+        k = 1;
+    else if (ascii == 0) {
+        if (scan == KSC_ENTER)
+            k = 1;
+        else if (scan == KSC_ALT_ENTER)
+            k = 1;
+    }
+    if (k) {
         a2_fullscreen_toggle(win);
         return;
     }
@@ -1704,20 +1768,27 @@ void os88_onkey(int ascii, int scan, void *win)
              * had forgotten was behind a card - answers NO and dismisses. A
              * confirmation nobody can dismiss by accident is the whole point
              * of having one. */
-            a2_panel_close(win, (ascii == 13 || ascii == 'y' || ascii == 'Y')
-                                ? 1 : 0);
+            k = 0;
+            if (ascii == 13)
+                k = 1;
+            else if (ascii == 'y')
+                k = 1;
+            else if (ascii == 'Y')
+                k = 1;
+            a2_panel_close(win, k);
             return;
         }
         a2_about_close(win);
         return;
     }
     a2_key(ascii, scan, win);
-    a2_kick = 1;
-    os88_wm_wake(win);
+    a2_kickw(win);
 }
 
 void os88_onclick(int x, int y, void *win)
 {
+    int k;
+
     if (a2_state == A2_ST_DEAD)
         return;
     if (a2_abt_up) {
@@ -1732,10 +1803,13 @@ void os88_onclick(int x, int y, void *win)
              * border - answers NO and dismisses, for the same reason Esc
              * does. The one thing a data-loss box must not do is stay up with
              * no obvious way out. */
-            a2_panel_close(win,
-                           (y >= a2_cfm_by && y < a2_cfm_by + A2_CFM_BH
-                            && x >= a2_cfm_bx[0]
-                            && x < a2_cfm_bx[0] + A2_CFM_BW) ? 1 : 0);
+            k = 0;
+            if (y >= a2_cfm_by)
+                if (y < a2_cfm_by + A2_CFM_BH)
+                    if (x >= a2_cfm_bx[0])
+                        if (x < a2_cfm_bx[0] + A2_CFM_BW)
+                            k = 1;
+            a2_panel_close(win, k);
             return;
         }
         a2_about_close(win);
@@ -1745,8 +1819,7 @@ void os88_onclick(int x, int y, void *win)
     (void)y;
     /* A CLICK KICKS THE SLICE DRIVER, so a wake the event ring refused cannot
      * park a running machine (SPEC.md 74.1). */
-    a2_kick = 1;
-    os88_wm_wake(win);
+    a2_kickw(win);
 }
 
 /* The kernel's name pull-down. It arrives UNDER the gfx lock and with NO clip
@@ -1805,8 +1878,7 @@ void os88_onfile(int mode, const char *name,
     a2_fmode = mode;
     a2_fsize = size_lo;
     a2_fileq = 1;
-    a2_kick = 1;
-    os88_wm_wake(win);
+    a2_kickw(win);
 }
 
 /* ==========================================================================
@@ -1928,8 +2000,7 @@ void os88_ontimer(void *win)
     if (a2_state == A2_ST_DEAD)
         return;
     if (a2_flash_step(os88_ticks())) {
-        a2_kick = 1;
-        os88_wm_wake(win);
+        a2_kickw(win);
     }
     /* AND IT IS NOT RE-ARMED WHILE THE FEATURE IS OFF. Machine > Flashing
      * text is what arms it again (a2menu.c), so a user who turned the phase
@@ -1940,8 +2011,7 @@ void os88_ontimer(void *win)
                                              * the wake's poll takes it back
                                              * over rather than the phase
                                              * simply stopping */
-        a2_kick = 1;
-        os88_wm_wake(win);
+        a2_kickw(win);
     }
 }
 
@@ -2060,11 +2130,16 @@ void os88_onwake(void *win)
         } else {
             a2_argp = 0;
             /* ...AND THE `goto` GETS ITS OWN ARM. It answers -1 when the
-             * folder could not be listed, and with no arm the whole launch
+             * folder could not be reached, and with no arm the whole launch
              * failed in silence - the window came up at `]` and a
              * double-click looked like it had done nothing, which is the trap
-             * cword.c:2650 records one package along. */
-            if (os88_file_goto(&a2_argplace) != 0)
+             * cword.c's os88_onwake records one package along. It is
+             * os88_file_goto_q_mark() and not os88_file_goto(): the load reads
+             * by name and never has the kernel list the folder, so a display
+             * remount is motor time for nothing (docs/plans/NAV-COST-PLAN.md)
+             * - and a refused GOTO_QM MOVES NOTHING, so this arm is also what
+             * stops a same-named program loading from where we stand. */
+            if (os88_file_goto_q_mark(a2_argplace.clus, a2_argplace.vol) != 0)
                 a2_say("Cannot open that folder.");
             else if (a2_ovl_ready(win))
                 ovl_a2_prog(OS88_FDLG_OPEN, a2_argname, 0, win);
@@ -2230,8 +2305,7 @@ void os88_onwake(void *win)
 
     a2_kick = 0;
     if (a2_wants_wake()) {
-        a2_kick = 1;
-        os88_wm_wake(win);
+        a2_kickw(win);
     }
 }
 
@@ -2275,10 +2349,11 @@ void *os88_main(void)
     int wh, i, j;
 
     /* --- the claims (APPLE2-SPEC section 3.1) ----------------------------- */
-    a2_m.ramseg = os88_mem_claim(64);       /* the Apple's address space is its
-                                             * own segment */
+    a2_m.ramseg = os88_mem_claim(A2_RAMKB); /* the Apple's address space is its
+                                             * own segment, up to the scratch
+                                             * page's last byte */
     if (a2_m.ramseg == 0) {
-        a2_refuse_kb("APPLE2: 64K, ");
+        a2_refuse_kb("APPLE2: 49K, ");
         return 0;
     }
     /* THE ROM IS A PART AND IT IS ALREADY HERE (section 1.5, SPEC.md 20.12).
@@ -2310,17 +2385,26 @@ void *os88_main(void)
      * driven QMP run and not a registered test row, which is what the wave's
      * done_when asked for. */
     a2_chargen(a2_chr, a2_m.romseg, A2_CHR_BLOCK, sizeof(a2_chr));
-    for (i = 0; i < 128; i++) {
-        j = 0;
-        if (i & 0x01) j |= 0x40;
-        if (i & 0x02) j |= 0x20;
-        if (i & 0x04) j |= 0x10;
-        if (i & 0x08) j |= 0x08;
-        if (i & 0x10) j |= 0x04;
-        if (i & 0x20) j |= 0x02;
-        if (i & 0x40) j |= 0x01;
-        a2_rev[i] = (unsigned char)j;
-    }
+    /* ...AND THE CARVE GIVES BACK WHAT THE DECODE HAS JUST MADE DEAD
+     * (APPLE2-SPEC section 1.5). Past A2_ROM_KEEP the part is the CHARGEN -
+     * a2_chr holds everything any composer reads of it from here on - the P5
+     * ROM no slot maps yet (section 14) and the pad, so a shrink in place
+     * (SPEC.md 50.3.1 path 1, which cannot move the base) hands 2,560 bytes
+     * and the KB rounding over them back to the heap: a 15KB carve becomes
+     * 12KB, or 13 where the run starts half a cluster up. The claim's BASE
+     * is the carve's and not the part's (a run starts on a cluster boundary,
+     * SPEC.md 20.12.2), so the size kept is the head slack plus the main ROM.
+     * A refusal leaves the claim as it was, which is only the old cost. */
+    os88_mem_regrow(a2_opbase,
+                    (int)(((a2_m.romseg - a2_opbase) * 16u + A2_ROM_KEEP
+                           + 1023u) >> 10));
+    /* ...built FROM ITSELF (apps size pass 1): i's low bit is the reversal's
+     * bit 6, and the reversal of the other six is the reversal of i >> 1
+     * shifted down one - whose bit 0 is i >> 1's bit 6, which is 0. One
+     * statement a byte where the bit-by-bit form was seven tests. */
+    a2_rev[0] = 0;
+    for (i = 1; i < 128; i++)
+        a2_rev[i] = (unsigned char)((a2_rev[i >> 1] >> 1) | ((i & 1) << 6));
 
     /* --- the interleaved row bases (section 7.2) -------------------------- */
     /* ...AND EDIT > COPY'S FOLD, HERE FOR THE SAME REASON ONE STEP ALONG.
@@ -2339,9 +2423,11 @@ void *os88_main(void)
     }
 
     for (i = 0; i < A2_ROWS; i++) {
-        a2_tbase[i] = (unsigned)(1024 + 256 * ((i / 2) % 4)
-                                      + 128 * (i % 2)
-                                      + A2_X40((i / 8) % 4));
+        /* SHIFTS AND MASKS AND NOT `/` AND `%`, which are signed IDIVs in
+         * this C (apps size pass 1); i is never negative, so they agree. */
+        a2_tbase[i] = (unsigned)(1024 + (((unsigned)i >> 1) & 3) * 256u
+                                      + ((unsigned)i & 1) * 128u
+                                      + A2_X40(((unsigned)i >> 3) & 3));
         a2_hbase[i] = a2_tbase[i] + 0x1C00u;        /* ...and the hi-res map,
                                                      * which IS that one plus
                                                      * $1C00 (section 7.2) */

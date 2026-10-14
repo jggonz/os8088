@@ -17,7 +17,11 @@ indicator, so each check is about the mechanic:
      piston does;
   3. WASSMER BIJAVE - no engine. It starts in the AIR at CSP_LAUNCH with the
      tow-released message, its thrust is zero however hard the throttle key
-     is held, and left alone it comes down;
+     is held, and left alone it comes down. The air is strongest at a
+     thermal's core and weaker toward its rim, the swoop is shorter there,
+     and it repeats while the glider is inside (88.7.6.5); and dry land off
+     the runway is an OUTLANDING for it where water is still a ditching
+     (88.7.6.6);
   4. ICON A5 - CSPF_AMPHIB. It starts ON THE WATER, gets off it under its own
      power, and a touchdown inside the water strip is a LANDING with the
      water's name on the strip. The same touchdown in the Cessna is a crash,
@@ -72,13 +76,15 @@ if _miss:
     sys.exit("skiesfleet: skies.asm no longer defines %s" % ", ".join(_miss))
 globals().update({n: _E[n] for n in _WANT})
 CSG_TAKEOFF, CSG_RELEASE, CSG_SPLASH, CSG_TOAST = 1, 7, 8, 9
+CSG_LANDOUT = 10
 # ...and csflight.inc's own, which is where the air lives
 _EF = {}
 for _l in open(os.path.join(ROOT, "apps", "skies", "csflight.inc")):
     _m = re.match(r"^(CS[A-Z]*_[A-Z0-9_]+)\s+equ\s+(-?\d+)\s*(?:;|$)", _l)
     if _m:
         _EF[_m.group(1)] = int(_m.group(2))
-for _n in ("CS_NLIFT", "CSAIR_SIZE", "CSAIR_DX", "CSAIR_DZ", "CSAIR_RATE",
+for _n in ("CS_NLIFT", "CSAIR_SIZE", "CSAIR_DX", "CSAIR_DZ", "CSAIR_RATE", "CSAIR_HW",
+           "CSAIR_HD",
            "CS_AIRTILE", "CS_LIFTCLR"):
     if _n not in _EF:
         sys.exit("skiesfleet: csflight.inc no longer defines %s" % _n)
@@ -110,6 +116,8 @@ def main(argv):
                     help="cs_inwater always answers NO: must go red")
     ap.add_argument("--clobber-tail", action="store_true",
                     help="make the rate decay as slowly as it builds: red")
+    ap.add_argument("--clobber-ramp", action="store_true",
+                    help="the calm bubble cuts the air again, no ramp: red")
     a = ap.parse_args(argv)
     os.chdir(ROOT)
     mp = dispapps._map("skies")
@@ -158,6 +166,20 @@ def main(argv):
                     mp["cs_att_trim"].to_bytes(2, "little"))
             m.run()
             print("  (the Magister given the trainer's model: this must fail)")
+        if a.clobber_ramp:
+            # cs_lift's `cmp ax, 256` caps the bubble's share; an immediate of
+            # 0 makes `jb .k` never taken, so the share is 256 one metre past
+            # the edge - the bubble as it was, a wall the air stops at
+            lo = mp["cs_lift"]
+            code = m.read(lin + lo, 120)
+            i = code.find(b"\x3D\x00\x01\x72")    # cmp ax, 256 ; jb
+            if i < 0:
+                sys.exit("skiesfleet: cs_lift does not cap its ramp the way "
+                         "this patch expects")
+            m.pause()
+            m.write(lin + lo + i + 2, b"\x00")
+            m.run()
+            print("  (the calm bubble cuts again: the ramp check must fail)")
         if a.clobber_tail:
             # cs_lagax turns a quarter of the gap into three quarters on the
             # decay arm with `neg ax / add ax, cx`; without those the rate
@@ -264,7 +286,7 @@ def main(argv):
             m.run()
             return out
 
-        def airborne(spd, alt=600, pitch=0):
+        def airborne(spd, alt=600, pitch=0, at=(-2400, -2000)):
             # ...ONLY IF IT IS RUNNING. `sample` calls this as a `pin` with
             # the guest already stopped at a cs_step breakpoint, and pausing
             # an already-stopped machine leaves the next `run` with nothing
@@ -273,7 +295,7 @@ def main(argv):
             # names it (docs/plans/HANDOFF-STOP-DETECTION.md) went in.
             if m.status().get("state") == "running":
                 m.pause()
-            for nm, v in (("cs_px", -2400), ("cs_py", alt), ("cs_pz", -2000)):
+            for nm, v in (("cs_px", at[0]), ("cs_py", alt), ("cs_pz", at[1])):
                 poke(nm, ((v * 256) & 0xFFFFFFFF).to_bytes(4, "little"))
             poke("cs_hdg", (7282).to_bytes(2, "little"))
             poke("cs_pitch", (int(pitch * DEG) & 0xFFFF).to_bytes(2, "little"))
@@ -394,7 +416,12 @@ def main(argv):
         check(w("cs_thrust") == 0,
               "no throttle key can give it thrust (%d)" % w("cs_thrust"))
         m.pause()
-        airborne(25, alt=900, pitch=-2)
+        # ...IN STILL AIR: inside the calm bubble round the release, which is
+        # 600 m since 88.7.6.7 - the old fixed pin is a thermal now, and a
+        # glider in lift climbs and swoops, which read as "it does not come
+        # down" and "it makes an engine tone"
+        airborne(25, alt=900, pitch=-2,
+                 at=(sg(w("cs_airx")), sg(w("cs_airz")) - 300))
         m.run()
         a0 = int.from_bytes(m.readseg(seg, base + off("cs_py") + 1, 2), "little")
         x0, z0 = sg(dw("cs_px") >> 8) & 0xFFFF, 0
@@ -486,13 +513,18 @@ def main(argv):
         # rect is reached at its own place in ANY tile - which is the property
         # under test and not an accident of the arithmetic: the rows below
         # step one whole tile out on each axis and expect the same air
-        port = w("cs_airport")
-        fx, fz = sg(rec(port, CSA_X)), sg(rec(port, CSA_Z))
+        # THE ANCHOR IS THE RELEASE, at the tile's CENTRE (88.7.6.7): what
+        # cs_reset put in [cs_airx]/[cs_airz], and a row's (dx, dz) is half a
+        # tile off it
+        fx, fz = sg(w("cs_airx")), sg(w("cs_airz"))
+        half = CS_AIRTILE // 2
         lifts = []
         for row in range(CS_NLIFT):
             at = mp["cs_lifts"] + row * CSAIR_SIZE
-            lifts.append((sg(rec(at, CSAIR_DX)), sg(rec(at, CSAIR_DZ)),
-                          sg(rec(at, CSAIR_RATE))))
+            lifts.append((sg(rec(at, CSAIR_DX)) - half,
+                          sg(rec(at, CSAIR_DZ)) - half,
+                          sg(rec(at, CSAIR_RATE)), rec(at, CSAIR_HW),
+                          rec(at, CSAIR_HD)))
         up = max(lifts, key=lambda r: r[2])
         dn = min(lifts, key=lambda r: r[2])
 
@@ -552,16 +584,30 @@ def main(argv):
             # a later read loses nothing - it is the countdown beside it that
             # could not survive the wait.
             sw = byte("cs_swdir")               # the CROSSING's own swoop
+            airf, swd = w("cs_airf"), byte("cs_swd")
+            # ...AND IT KEEPS TALKING (88.7.6.5): clear the arm record once
+            # more, and a swoop armed after it is a REPEAT, not the crossing
+            m.pause()
+            poke("cs_swdir", b"\x00")
+            m.run()
             m.advance(frames=60)
             m.run()
             y1 = sg(int.from_bytes(m.readseg(seg, base + off("cs_py") + 1, 2),
                                    "little"))
-            return air, y0, y1, sw
+            return air, y0, y1, sw, airf, swd, byte("cs_swdir")
 
         calm = soar(0, 400)                     # INSIDE the calm bubble
         lift = soar(up[0], up[1])
         sink = soar(dn[0], dn[1])
-        far = soar(up[0] + CS_AIRTILE, up[1] + CS_AIRTILE)   # the NEXT tile
+        # ...and the next tile on both axes is the table TURNED (88.7.6.7):
+        # tile (1, 1) is variant (3 xor 5) and 7 = 6, mirrored on both axes,
+        # so the same rect is at (T - dx, T - dz) in it - asked of the guest,
+        # which is what puts cs_airtile's arithmetic under test
+        far = soar(CS_AIRTILE + half - (up[0] + half),
+                   CS_AIRTILE + half - (up[1] + half))
+        # ...and tile (1, -1) is variant 0, the table as written
+        same = soar(up[0] + CS_AIRTILE, up[1] - CS_AIRTILE)
+        rim = soar(up[0] + up[3] * 4 // 5, up[1])     # 4/5 of the way out
         print("      the air: calm %+d (%d->%d), lift %+d (%d->%d, swoop %d), "
               "sink %+d (%d->%d, swoop %d), one tile on %+d"
               % (calm[0], calm[1], calm[2], lift[0], lift[1], lift[2], lift[3],
@@ -578,11 +624,56 @@ def main(argv):
         check(lift[3] > 0 and sink[3] > 0,
               "and CROSSING into either arms the swoop (%d, %d)"
               % (lift[3], sink[3]))
+        # STRONG IN THE MIDDLE, WEAK AT THE EDGE (88.7.6.5): the table's rate
+        # is the core's and 1 - m^2 takes it down toward the rim - and the
+        # swoop says which: shorter at the rim, and it REPEATS in both
+        print("      core f %d swoop %d Hz/tick; rim %+d f %d swoop %d; "
+              "repeats %d %d %d" % (lift[4], lift[5], rim[0], rim[4], rim[5],
+                                   lift[6], sink[6], rim[6]))
+        check(0 < rim[0] < up[2] * 3 // 4 and rim[4] < lift[4],
+              "4/5 of the way to the rim the lift is WEAKER than its core "
+              "(%+d against %+d, f %d against %d)"
+              % (rim[0], up[2], rim[4], lift[4]))
+        check(rim[5] < lift[5],
+              "...and its swoop is a SHORTER climb (%d Hz a tick against %d)"
+              % (rim[5], lift[5]))
+        check(lift[6] == 1 and sink[6] == 0xFF and rim[6] == 1,
+              "the swoop REPEATS while inside, rising in lift and falling in "
+              "sink (%d, %d, %d)" % (lift[6], sink[6], rim[6]))
         # ...AND IT TILES (88.7.6.4), which is the whole of the fix for air
         # nobody could find: the same rect one tile out on BOTH axes
         check(far[0] == up[2] and far[2] > far[1],
-              "one whole tile out on both axes the same lift is there (%+d "
-              "for %+d, %d -> %d)" % (far[0], up[2], far[1], far[2]))
+              "one whole tile out on both axes the same lift is there, where "
+              "the tile's MIRRORED variant puts it (%+d for %+d, %d -> %d)"
+              % (far[0], up[2], far[1], far[2]))
+        unturned = soar(up[0] + CS_AIRTILE, up[1] + CS_AIRTILE)
+        check(same[0] == up[2] and unturned[0] != up[2],
+              "...and a variant-0 tile has it where the table says, while "
+              "the mirrored tile does NOT at the table's own place (%+d, %+d)"
+              % (same[0], unturned[0]))
+        # ...AND THE BUBBLE RAMPS, it does not CUT (88.7.6.5.1): the field read
+        # "37 up, a short sweep, then instantly 11 down" crossing its edge
+        # inside a rect. The lift rect nearest the release reaches across the
+        # edge (88.7.6.7), so the row puts the glider ten metres past the
+        # edge inside it, and at the same place in the rect one variant-0
+        # tile away (tile (1, -1)), and asks the first for almost nothing and
+        # the second for the rect's own strength there: the old edge gave the
+        # first the second's air
+        nr = min((r for r in lifts if r[2] > 0),
+                 key=lambda r: abs(r[0]) + abs(r[1]))
+        ez = nr[1] - nr[4] // 2                         # inside it, north
+        ex = CS_LIFTCLR + 10 - abs(ez)                  # ten metres out
+        if not (abs(ex - nr[0]) < nr[3] and abs(ez - nr[1]) < nr[4]):
+            sys.exit("skiesfleet: the rect nearest the release (%s) does not "
+                     "reach the bubble's edge at (%d, %d)" % (nr, ex, ez))
+        edge = soar(ex, ez)
+        away = soar(ex + CS_AIRTILE, ez - CS_AIRTILE)   # the same air, far
+        print("      the bubble's edge: %+d ten metres past it, %+d the same "
+              "place a tile on" % (edge[0], away[0]))
+        check(abs(away[0]) > 64 and abs(edge[0]) * 8 < abs(away[0]),
+              "ten metres past the calm bubble's edge the air is coming IN, "
+              "not all there: %+d against %+d a tile on"
+              % (edge[0], away[0]))
 
         # --- 4. the A5 --------------------------------------------------------
         a5 = fly(4)
@@ -812,6 +903,35 @@ def main(argv):
                 break
         check(byte("cs_state") == CS_ST_CRASH,
               "the SAME touchdown in the Cessna is a crash (state %d)"
+              % byte("cs_state"))
+
+        # --- A SAILPLANE LANDS IN A FIELD (SPEC.md 88.7.6.6) ------------------
+        # The dry land that crashed the A5 above is an OUTLANDING for the
+        # Bijave, which has no engine to go round with - and the water the
+        # A5 lands on is still a ditching for it
+        fly(3)
+        land2 = w("cs_landings")
+        splashdown((ox & 0xFFFF, 0))
+        for _ in range(20):
+            m.advance(frames=20)
+            m.run()
+            if byte("cs_state") != CS_ST_AIR:
+                break
+        check(byte("cs_state") == CS_ST_GROUND
+              and byte("cs_msg") == CSG_LANDOUT
+              and w("cs_landings") == land2 + 1,
+              "the sailplane on dry land off the runway LANDS OUT (state %d, "
+              "msg %d, landings %d -> %d)" % (byte("cs_state"), byte("cs_msg"),
+                                              land2, w("cs_landings")))
+        fly(3)
+        splashdown()
+        for _ in range(20):
+            m.advance(frames=20)
+            m.run()
+            if byte("cs_state") != CS_ST_AIR:
+                break
+        check(byte("cs_state") == CS_ST_CRASH,
+              "...and on the water it still DITCHES (state %d)"
               % byte("cs_state"))
         m.type_text("f")
         m.advance(frames=40)

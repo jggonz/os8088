@@ -26,6 +26,10 @@ def animation(m, p, code, tag):
     m.run()
     assert m.wait_stop(30) == 'breakpoint'
     ms = (m.status()['cycles'] - start) / G.M.GUEST_HZ * 1000
+    # The masks and sprites the frame drew from are DERIVED by the guest
+    # (SPEC.md 99.3): hold them to the generator before trusting the pixels.
+    G.check_caches(p)
+    G.check_inkpairs(p)
     scene = p.data('scene', 16384)
     reference = bytearray(scene)
     def pixel(x, y, ink):
@@ -43,15 +47,15 @@ def animation(m, p, code, tag):
         spark(253, 125-y)
     for ape, x in enumerate((80, 160)):
         label = 'gr_aperight' if (ape ^ p.b('pose')) & 1 else 'gr_apeleft'
-        raw = m.read(p.base + code[label], 160)
+        raw = G.poses()[label]
         for y in range(20):
             for col in range(16):
                 ink = (raw[y*8+col//2] >> (0 if col & 1 else 4)) & 15
                 pixel(x+col, 80+y, ink)
     state, music = p.b('state'), p.w('musicptr')
-    # The gameplay renderer may borrow the inactive intro cache. This
-    # debugger-only reference paint must not force the next timed animation
-    # to rebuild it (real gameplay -> intro transitions do rebuild it).
+    # The gameplay renderer no longer borrows the intro cache (SPEC.md 99.5),
+    # but this debugger-only reference paint must still leave the next timed
+    # animation exactly the cache it had: restore it rather than trust that.
     cache, cachekey = p.data('lightcache', 6400), p.data('cachekey', 2)
     m.write(p.base + p.offsets['gr_scene'], reference)
     m.write(p.base + p.offsets['gr_state'], b'\x01')

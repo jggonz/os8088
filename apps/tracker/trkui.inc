@@ -323,35 +323,19 @@ tui_fillc:
     ret
 
 tui_framec:
-    push ax
-    push bx
-    push cx
-    push dx
     add ax, [tui_ox]
     add cx, [tui_ox]
     add bx, [tui_oy]
     add dx, [tui_oy]
     call OSAPI_GFX_FRAME
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 tui_grayc:
-    push ax
-    push bx
-    push cx
-    push dx
     add ax, [tui_ox]
     add cx, [tui_ox]
     add bx, [tui_oy]
     add dx, [tui_oy]
     call OSAPI_GFX_FILL_GRAY
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 tui_hlinec:                         ; AX = x1, BX = x2, DX = y
@@ -561,18 +545,15 @@ tui_bevelc:
 tui_facec:
     TSETC TC_FACE
     call tui_fillc
-    call tui_bevelc
-    ret
+    jmp tui_bevelc
 
 tui_deskfill:
     cmp byte [tui_mono], 0
     jne .mono
     TSETC TC_FACE
-    call tui_fillc
-    ret
+    jmp tui_fillc
 .mono:
-    call tui_grayc
-    ret
+    jmp tui_grayc
 
 ; =============================================================================
 ; Small text helpers
@@ -825,8 +806,7 @@ tui_msg_draw:
     mov cx, [tui_lay + TL_STX]
     mov dx, [tui_lay + TL_STY]
     mov bx, [tui_lay + TL_STW]
-    mov ah, TC_STATB
-    mov al, TC_STATT
+    mov ax, (TC_STATB << 8) | TC_STATT
     call tui_rdout
     jmp .out
 .win:
@@ -860,12 +840,6 @@ tui_el_posed:
 tui_val_posed:
     mov byte [tui_vonly], 1
 tui_posed_body:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     xor ax, ax
     xor bx, bx
     mov cx, 111
@@ -975,16 +949,9 @@ tui_posed_body:
     mov cx, 38
     mov dx, 66
     mov bx, 16
-    mov ah, TC_FACE
-    mov al, TC_FACET
+    mov ax, (TC_FACE << 8) | TC_FACET
     call tui_rdout
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -1006,19 +973,13 @@ tui_posed_body:
 
 ; --- BPM / Spd values, inside the box tui_el_bpm draws ------------------------
 tui_val_bpm:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
     mov al, [tui_abpm]
     call tui_dec3
     mov si, tui_nbuf
     mov cx, 168
     mov dx, 36
     mov bx, 24
-    mov ah, TC_FACE
-    mov al, TC_FACET
+    mov ax, (TC_FACE << 8) | TC_FACET
     call tui_rdout
     mov al, [tui_aspd]
     call tui_dec3
@@ -1026,58 +987,35 @@ tui_val_bpm:
     mov cx, 168
     mov dx, 50
     mov bx, 24
-    mov ah, TC_FACE
-    mov al, TC_FACET
+    mov ax, (TC_FACE << 8) | TC_FACET
     call tui_rdout
     mov al, [tui_abpm]
     mov [tui_lbpm], al
     mov al, [tui_aspd]
     mov [tui_lspd], al
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- Ptn / Np values ('Ln 64' is a constant and is never redrawn) -------------
 tui_val_ptn:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
     mov al, [tui_apat]
     call tui_hex2
     mov si, tui_nbuf
     mov cx, 258
     mov dx, 36
     mov bx, 16
-    mov ah, TC_FACE
-    mov al, TC_FACET
+    mov ax, (TC_FACE << 8) | TC_FACET
     call tui_rdout
     call tui_hexnp
     mov si, tui_nbuf
     mov cx, 258
     mov dx, 64
     mov bx, 16
-    mov ah, TC_FACE
-    mov al, TC_FACET
+    mov ax, (TC_FACE << 8) | TC_FACET
     call tui_rdout
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- the nameplate strip (112,0)-(290,31) --------------------------------------
 tui_el_logo:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
     mov ax, 112
     xor bx, bx
     mov cx, 290
@@ -1100,20 +1038,10 @@ tui_el_logo:
     mov dx, 12
     call tui_textc
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- BPM / Spd box (112,32)-(205,76) -------------------------------------------
 tui_el_bpm:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
     mov ax, 112
     mov bx, 32
     mov cx, 205
@@ -1145,20 +1073,10 @@ tui_el_bpm:
     mov al, [tui_aspd]
     mov [tui_lspd], al
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- Ptn / Ln box (206,32)-(290,76) --------------------------------------------
 tui_el_ptn:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
     mov ax, 206
     mov bx, 32
     mov cx, 290
@@ -1192,20 +1110,10 @@ tui_el_ptn:
     mov cx, 258
     call tui_textc
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- status bar (0,77)-(290,91) ------------------------------------------------
 tui_el_status:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
     xor ax, ax
     mov bx, 77
     mov cx, 290
@@ -1225,11 +1133,6 @@ tui_el_status:
     mov dx, [tui_lay + TL_STY]
     call tui_textc
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1262,12 +1165,6 @@ tui_scellxy:
 ; Frames, channel numbers and MUTE flags here (redrawn on mute change and by
 ; the top refresh); the bars themselves are tui_draw_vu's, every frame.
 tui_el_scopes:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     mov byte [tui_chn], 0
 .cell:
     mov al, [tui_chn]
@@ -1329,8 +1226,7 @@ tui_el_scopes:
                                     ; row, not this field's background
     mov dx, 52
     mov bx, 176
-    mov ah, TC_STATB
-    mov al, TC_STATT
+    mov ax, (TC_STATB << 8) | TC_STATT
     call tui_rdout
 .sync:
     mov ax, [mp_mute]               ; remember what we drew, so tui_draw_dyn
@@ -1342,12 +1238,6 @@ tui_el_scopes:
     mov [tui_vupx + 2], ax          ; (SPEC.md 45.12)
     mov [tui_vupx + 4], ax
     mov [tui_vupx + 6], ax
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1388,12 +1278,6 @@ tui_btn:
 ; Decorative in v1 (SPEC.md 45: every action is a key), but they are the FT2
 ; signature and each names the key that does the same thing.
 tui_el_menus:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     mov ax, 291
     xor bx, bx
     mov cx, 355
@@ -1416,12 +1300,6 @@ tui_el_menus:
     mov cx, 359
     call tui_stack
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 tui_stack:                          ; DI = dw label table (0-ended), CX = x
@@ -1448,15 +1326,9 @@ tui_stack:                          ; DI = dw label table (0-ended), CX = x
 ; -----------------------------------------------------------------------------
 ; tui_insget - instrument AL's 22-byte name (raw blob bytes, hostile) into
 ;              tui_insbuf: 17 chars kept, control bytes spaced, NUL added
-; out: tui_insbuf; preserves registers (ES restored per the mp_insname rule)
+; out: tui_insbuf; clobbers AX..DI (tui_el_instr allows it); ES = DS on the way out
 ; -----------------------------------------------------------------------------
 tui_insget:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     call mp_insname                 ; -> ES:SI, CF=1 none/invalid
     jc .none
     mov di, tui_insbuf
@@ -1481,22 +1353,10 @@ tui_insget:
 .done:
     push ds
     pop es                          ; caller's ES = DS restored
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- the instrument list + song name (421,0)-(631,172), VGA only ---------------
 tui_el_instr:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     mov ax, 421
     xor bx, bx
     mov cx, 631
@@ -1545,23 +1405,12 @@ tui_el_instr:
     mov dx, 158
     call tui_textc
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
 ; The compact (CGA 640x200) top: one title/readout line
 ; =============================================================================
 tui_top_cga:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
     xor ax, ax
     xor bx, bx
     mov cx, [tui_vw]
@@ -1592,20 +1441,9 @@ tui_top_cga:
     call tui_val_cga_bs
     call tui_val_cga_pos
     call tui_msg_draw
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 tui_val_cga_pos:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     mov di, tui_nbuf                ; 'pp/ll'
     mov al, [tui_apos]
     call tui_hexb
@@ -1618,57 +1456,37 @@ tui_val_cga_pos:
     mov cx, 232
     xor dx, dx
     mov bx, 40
-    mov ah, TC_BG
-    mov al, TC_TEXT
+    mov ax, (TC_BG << 8) | TC_TEXT
     call tui_rdout
     mov al, [tui_apat]
     call tui_hex2
     mov si, tui_nbuf
     mov cx, 320
     mov bx, 16
-    mov ah, TC_BG
-    mov al, TC_TEXT
+    mov ax, (TC_BG << 8) | TC_TEXT
     call tui_rdout
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 tui_val_cga_bs:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
     mov al, [tui_abpm]
     call tui_dec3
     mov si, tui_nbuf
     mov cx, 96
     xor dx, dx
     mov bx, 24
-    mov ah, TC_BG
-    mov al, TC_TEXT
+    mov ax, (TC_BG << 8) | TC_TEXT
     call tui_rdout
     mov al, [tui_aspd]
     call tui_dec3
     mov si, tui_nbuf
     mov cx, 168
     mov bx, 24
-    mov ah, TC_BG
-    mov al, TC_TEXT
+    mov ax, (TC_BG << 8) | TC_TEXT
     call tui_rdout
     mov al, [tui_abpm]
     mov [tui_lbpm], al
     mov al, [tui_aspd]
     mov [tui_lspd], al
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -1679,11 +1497,6 @@ tui_val_cga_bs:
 
 ; --- the channel digit strip + rule --------------------------------------------
 tui_hdr:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
     mov ax, [tui_lay + TL_CHX]
     mov bx, [tui_lay + TL_HDRY]
     mov cx, [tui_chend]
@@ -1718,11 +1531,6 @@ tui_hdr:
     add dx, 8
     call tui_hlinec
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2075,12 +1883,6 @@ tui_xt_y:
 ; difference between a line floating in a black field and a line sitting in
 ; the four-channel view it belongs to.
 tui_xt_clear:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    push si
     xor ax, ax
     mov bx, [tui_lay + TL_ROWT]
     mov cx, [tui_vw]
@@ -2103,20 +1905,10 @@ tui_xt_clear:
     add ax, si
     dec di
     jnz .sep
-    pop si
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; tui_xt_line - the one line, plus the change markers the caller compares on
 tui_xt_line:
-    push ax
-    push bx
-    push cx
-    push dx
     call tui_marks                  ; [tui_cvr] = the row to show
     mov byte [tui_band], 1
     mov al, [tui_cvr]
@@ -2126,10 +1918,6 @@ tui_xt_line:
     mov dx, ax
     call tui_row1
     mov byte [tui_band], 0
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; tui_xt_on - is the single-line view active right now?
@@ -2143,10 +1931,6 @@ tui_draw_pat:
 %ifdef TRKDBG
     inc word [tds_pat]              ; tests/trkscrl.inc
 %endif
-    push ax
-    push bx
-    push cx
-    push dx
     call tui_xt_on                  ; 8088 + playing: one line, no grid
     jz .grid
     call tui_xt_clear
@@ -2183,10 +1967,6 @@ tui_draw_pat:
     pop cx
     loop .lo
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2229,12 +2009,6 @@ tui_draw_pat:
 ; too little left in it to be worth preserving.
 ; -----------------------------------------------------------------------------
 tui_scrl:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     mov al, [tui_apos]
     cmp al, [tui_lpos]
     jne .no
@@ -2368,12 +2142,6 @@ tui_scrl:
 %endif
     stc
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2383,9 +2151,6 @@ tui_scrl:
 ; dialog still blanks nothing.
 ; -----------------------------------------------------------------------------
 tui_row_lt:
-    push ax
-    push bx
-    push dx
     call tui_viewrow
     mov al, [tui_arow]
     mov [tui_lrow], al
@@ -2396,9 +2161,6 @@ tui_row_lt:
     mov dx, [tui_lay + TL_BANDY]
     call tui_row1
     mov byte [tui_band], 0
-    pop dx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -2445,12 +2207,6 @@ tui_vu_step:
     ret
 
 tui_draw_vu:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     mov byte [tui_chn], 0
 .c:
     mov bl, [tui_chn]
@@ -2509,67 +2265,21 @@ tui_draw_vu:
     inc byte [tui_chn]
     cmp byte [tui_chn], 4
     jb .c
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; tui_scopehit - which scope cell does a click land in? (fullscreen mute)
-; in:  CX = x, DX = y (absolute screen); out CF=0 AL = channel 0..3, CF=1 miss
-; preserves all other registers
-; -----------------------------------------------------------------------------
-tui_scopehit:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    sub cx, [tui_ox]
-    sub dx, [tui_oy]
-    mov al, 0
-.h:
-    call tui_scellxy
-    mov bx, [tui_t1]
-    cmp cx, bx
-    jb .n
-    add bx, [tui_lay + TL_SCW]
-    cmp cx, bx
-    jae .n
-    mov bx, [tui_t2]
-    cmp dx, bx
-    jb .n
-    add bx, [tui_lay + TL_SCH]
-    cmp dx, bx
-    jae .n
-    clc
-    jmp .done
-.n:
-    inc al
-    cmp al, 4
-    jb .h
-    stc
-.done:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     ret
 
 ; =============================================================================
 ; The top-area redraw (full draw, and the every-16th-frame refresh that also
 ; erases the menu-bar strip a cancelled file dialog leaves on a fullscreen
 ; surface - SPEC.md 38.6/45)
+;
+; REGISTERS ARE BANKED ONCE, BY THE TWO ROOTS: tui_draw_all and tui_draw_dyn
+; save AX..DI, and every element below them that only they reach (this, the
+; tui_el_* boxes, tui_hdr, tui_top_cga, the tui_val_* readouts, tui_scrl,
+; tui_draw_pat and its XT line, tui_draw_vu) clobbers freely. The primitives
+; the elements share - tui_row1, tui_rdout, tui_fillc and the rest - still
+; keep everything, because their callers hold coordinates across them.
 ; =============================================================================
 tui_draw_top:
-    push ax
-    push bx
-    push cx
-    push dx
     test byte [tui_lay + TL_FLAGS], TLF_CMPCT
     jnz .cga
     mov ax, [tui_lay + TL_SLX]      ; the sliver right of the top blocks:
@@ -2607,10 +2317,6 @@ tui_draw_top:
     call tui_el_scopes
 .hdr:
     call tui_hdr
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -2857,7 +2563,7 @@ tui_col_mono:                       ; 1bpp: no colour 9 anywhere (SPEC.md 39.4)
 tui_hexd:    db '0123456789ABCDEF'
 
 ; labels
-tui_s_name:  db 'TRACKER', 0
+tui_s_name equ ttx_s_name           ; 'TRACKER', ttx_s_name's own bytes
 tui_s_logo:  db 'T R A C K E R', 0
 tui_s_bpm:   db 'BPM', 0
 tui_s_spd:   db 'Spd', 0
@@ -2867,7 +2573,7 @@ tui_s_64:    db '64', 0
 tui_s_np:    db 'Np', 0
 tui_s_len:   db 'Len', 0
 tui_s_posl2: db 'Pos', 0
-tui_s_mute:  db 'MUTE', 0
+tui_s_mute equ ttx_s_mute + 3       ; 'MUTE', the tail of ttx_s_mute's bytes
 tui_s_bpmc:  db 'BPM:', 0
 tui_s_spdc:  db 'SPD:', 0
 tui_s_posc:  db 'POS:', 0
@@ -2876,13 +2582,13 @@ tui_s_ptnc:  db 'PTN:', 0
 ; the FT2 button stacks (decorative in v1; each names its key)
 tui_mbl:     dw tui_b_about, tui_b_mute, tui_b_scroll, tui_b_pos, tui_b_exit, 0
 tui_mbr:     dw tui_b_play, tui_b_ppat, tui_b_stop, tui_b_load, tui_b_full, 0
-tui_b_about: db 'About', 0
+tui_b_about equ tw_s_about          ; 'About', tw_s_about's own bytes
 tui_b_mute:  db 'Mute1-4', 0
 tui_b_scroll:db 'Rows'
              db 0
 tui_b_pos:   db 'Pos <->', 0
 tui_b_exit:  db 'Esc=win', 0
-tui_b_play:  db 'Play', 0
+tui_b_play equ trk_s_rspkp + 13     ; 'Play', the tail of trk_s_rspkp's bytes
 tui_b_ppat:  db 'Pattern', 0
 tui_b_stop:  db 'Stop', 0
 tui_b_load:  db 'Load L', 0

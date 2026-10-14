@@ -14,11 +14,10 @@
 ; =============================================================================
 
 PX_CHUNK    equ 16384               ; a ring slot, unless a cluster is bigger
-PX_CHUNKLO  equ 8192                ; ...or the heap will not give 33 KB
-PX_RINGKB   equ 17                  ; the ring the SCALE is decided against:
-                                    ; 2 x 8 KB + the KB the 512 alignment may
-                                    ; cost - the floor, so a bigger ring never
-                                    ; changes which scale a picture gets
+PX_CHUNKLO  equ 8192                ; ...or the heap will not give 32 KB
+PX_RINGKB   equ 16                  ; the ring the SCALE is decided against:
+                                    ; 2 x 8 KB - the floor, so a bigger ring
+                                    ; never changes which scale a picture gets
 PX_HEADMAX  equ 2048                ; the bytes a header may be parsed from
 PX_FLATWIN  equ 32768               ; an in-memory file, as the worker sees it
 PXS_DEFER   equ px_pdefer           ; byte: px_pumpfill has deferred a fill
@@ -31,23 +30,29 @@ JOB_TABLES  equ 2                   ; tables and histogram (a restored picture,
                                     ; or a display of another depth)
 
 ; =============================================================================
-; CLAIMS FOR THE DISK (SPEC.md 2.1.1): DMA-safe, and 512-aligned by hand
+; CLAIMS FOR THE DISK (SPEC.md 2.1.1): DMA-safe, and 512-aligned
 ; =============================================================================
 
-; px_dmaclaim - AX = KB of disk buffer: claims one KB more, page-safe, and
-; rounds the base up to 32 paragraphs. out CF = 0, DX = the aligned
-; segment, BX = the claim (what to free); CF = 1 refused. Preserves AX, CX
+; px_dmaclaim - AX = KB of disk buffer, page-safe, its base ASSERTED on 32
+; paragraphs rather than rounded: kernel.asm's guard 6b pins every base
+; mem_claim hands out to HEAP_SEG + n*MEM_PARA_KB paragraphs, MEM_PARA_KB a
+; multiple of 32, so the round-up this used to do could never move a base
+; and cost a KB of claim (os88type.inc's ty_open, SPEC.md 6.4). A package
+; cannot see guard 6b, so a base that is not aligned is given back and
+; refused rather than handed to int 13h (SPEC.md 22.5). out CF = 0, DX = the
+; segment, BX = the claim (the same: what to free); CF = 1 refused.
+; Preserves AX, CX
 px_dmaclaim:
     push ax
     push cx
-    inc ax
     mov cx, ax
     call OSAPI_MEM_CLAIM_DMA
     jc .out
     mov bx, dx
-    add dx, 31
-    and dx, 0xFFE0
-    clc
+    test dl, 0x1F                   ; (CF = 0)
+    jz .out
+    call OSAPI_MEM_FREE
+    stc
 .out:
     pop cx
     pop ax
@@ -86,7 +91,7 @@ px_clbytes:
 ; =============================================================================
 
 ; px_ringclaim - the ring: two 16 KB slots - or two of 8 KB when the heap
-; will not give 33, or one cluster-sized one where a cluster is bigger. A
+; will not give 32, or one cluster-sized one where a cluster is bigger. A
 ; read is priced per int 13h and not per sector (CLAUDE.md), and a 16 KB one
 ; crosses a cylinder about half as often a sector as an 8 KB one; with both
 ; slots empty px_pumpfill reads the two as ONE call (SPEC.md 106.9).
@@ -135,11 +140,7 @@ px_ringclaim:
     mov [px_sseg + 2], dx
     clc
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp px_ld_4
 
 ; px_pumpinit - a fresh stream: every slot empty, both ends at offset 0, the
 ; READ_SEQ cursor cold. Preserves all
@@ -206,8 +207,15 @@ px_pumpfill:
                                     ; next slot empty), not ahead of it -
     jne .wait                       ; unless rows are decoded and NONE is
     cmp word [px_srcdone], 0        ; showable yet (an interlaced picture's
-    jne .painted                    ; early passes, SPEC.md 106.18): then no
-.wait:                              ; paint is coming to wait for...
+    je .wait                        ; early passes, SPEC.md 106.18): then no
+    test byte [px_k + PXK_FLAGS], PXKF_DCT  ; paint is coming to wait for...
+    jz .painted                     ; - but a JPEG's rows come a BAND at a
+                                    ; time, completed by px_kfix: rows out
+                                    ; and none complete is a band under way,
+                                    ; and its paint IS coming. A wake that
+                                    ; landed there read 16 KB in front of
+                                    ; the first rows, 1.3 s on the 5150
+.wait:
     push bx
     mov bl, [px_wslot]
     xor bh, bh

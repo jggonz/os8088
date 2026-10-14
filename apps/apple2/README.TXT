@@ -1,7 +1,7 @@
 APPLE2 - an Apple II Plus for os8088
 ===================================
 
-APPLE2.O88 is a windowed 48K Apple II Plus: a 6502 in a 64KB heap claim,
+APPLE2.O88 is a windowed 48K Apple II Plus: a 6502 in a 49KB heap claim,
 Applesoft BASIC and the Autostart Monitor in ROM, and the machine's 280x192
 screen composed into 1bpp bands and blitted into a window.
 

@@ -35,6 +35,8 @@ n_frontgeom:
 ; The cache is 24 independent six-row bands (12 on compact mono CGA).
 ; VGA: four native planes followed by the packed fallback, 2592 bytes/band.
 ; Mono: one native plane, 336 bytes/band (12 trailing pad bytes). Both strides are paragraph aligned.
+N_FRONT_END equ 24*2592            ; end of the splash cache in the canvas claim
+N_FRONT_LABEL equ 24*16           ; one rendered menu label (n_frontlabel)
 n_frontsegment:
     mov ax,[n_frontband]
     mov bx,21
@@ -97,7 +99,7 @@ n_frontpaint:
     jmp n_frontmenu
 
 n_fronttimer:
-    SAVE
+    call n_pushall
     cmp byte [n_abon],0
     jne .again
     cmp byte [n_infs],0
@@ -136,8 +138,7 @@ n_fronttimer:
     xor ax,ax
     call OSAPI_WM_TIMER
 .out:
-    RESTORE
-    ret
+    jmp n_popall
 
 n_frontblit:
     call n_frontsegment
@@ -245,15 +246,12 @@ n_frontmenu:
 .label:
     call n_frontrow
     push bx
+    push di
     mov bx,di
-    cmp byte [n_frontscale],2
-    jne .small
-    add bx,2
-.small:
-    mov si,[n_frontlabels+bx]
+    shr bx,1
+    call n_frontlabel
+    pop di
     pop bx
-    push ds
-    pop es
     mov ax,[n_frontx]
     add ax,136
     mov cx,192
@@ -304,8 +302,83 @@ n_frontpointer:
     call OSAPI_GFX_BLIT1
     ret
 
-n_frontlabels: dw n_front_one1,n_front_one2,n_front_two1,n_front_two2
-    dw n_front_resume1,n_front_resume2,n_front_new1,n_front_new2
+; BX = label*2 -> ES:SI = its 192-pixel 1bpp bitmap (24 bytes a row, 8 rows
+; a scale step). The tool used to store all eight renders; they are built from
+; an 8x8 glyph subset of the game font, a glyph row doubled nibble by nibble at
+; scale 2. All four go into the sprite claim, which is free scratch on the
+; desktop, and stay there until the scale changes or n_launch hands the claim
+; back to n_loadgfx - so a cached repaint blits exactly what it used to.
+n_frontlabel:
+    push bx
+    mov al,[n_frontscale]
+    cmp al,[n_frontlbl]
+    je .ready
+    mov [n_frontlbl],al
+    mov es,[n_graphics]
+    xor di,di
+    xor ax,ax
+    mov cx,4*N_FRONT_LABEL/2
+    rep stosw
+    mov si,n_front_one             ; the four strings lie back to back
+    xor di,di
+.label:
+    push di
+.char:
+    lodsb
+    cmp al,0ffh
+    je .endlabel
+    cmp al,0feh
+    je .next
+    push si
+    mov si,ax
+    add si,n_front_font
+    mov bp,di
+    mov bx,n_frontdbl
+    mov cx,8
+.row:
+    lodsb
+    cmp byte [n_frontscale],2
+    je .double
+    mov [es:bp],al
+    add bp,24
+    loop .row
+    jmp .glyphdone
+.double:
+    mov dl,al                      ; each nibble doubles into one byte
+    shr al,1
+    shr al,1
+    shr al,1
+    shr al,1
+    xlat
+    xchg al,dl
+    and al,0fh
+    xlat
+    mov dh,al                      ; DL = left byte, DH = right
+    mov [es:bp],dx
+    mov [es:bp+24],dx
+    add bp,48
+    loop .row
+.glyphdone:
+    pop si
+.next:
+    inc di
+    cmp byte [n_frontscale],2
+    jne .char
+    inc di
+    jmp .char
+.endlabel:
+    pop di
+    add di,N_FRONT_LABEL
+    cmp di,4*N_FRONT_LABEL
+    jb .label
+.ready:
+    pop bx
+    mov es,[n_graphics]
+    mov ax,N_FRONT_LABEL/2
+    mul bx
+    mov si,ax
+    ret
+n_frontdbl: db 00h,03h,0ch,0fh,30h,33h,3ch,3fh,0c0h,0c3h,0cch,0cfh,0f0h,0f3h,0fch,0ffh
 n_fronthint: db '1/2 SELECT   ENTER START   H CONTROLS',0
 n_frontresumehint: db 'ENTER RESUME   N NEW GAME   H CONTROLS',0
 n_fronthelp1: db 'ARROWS MOVE   SPACE / Z FIRE   X ROLL',0
@@ -321,7 +394,7 @@ n_frontupdate:
 .out: ret
 
 n_click:
-    SAVE
+    call n_pushall
     cmp byte [n_abon],0
     je .normal
     call n_frontdismiss
@@ -366,11 +439,10 @@ n_click:
     mov byte [n_fronthelp],0
     call n_frontupdate
 .out:
-    RESTORE
-    ret
+    jmp n_popall
 
 n_key:
-    SAVE
+    call n_pushall
     cmp byte [n_abon],0
     je .normal
     call n_frontdismiss
@@ -422,8 +494,7 @@ n_key:
 .run:
     call n_launch
 .out:
-    RESTORE
-    ret
+    jmp n_popall
 
 n_launch:
     mov bx,[n_win]
@@ -437,6 +508,7 @@ n_launch:
     mov byte [n_error],0
     mov byte [n_fronthelp],0
     mov byte [n_frontkind],0
+    mov byte [n_frontlbl],0        ; n_loadgfx reuses the label scratch
     mov ax,n_exclusive
     mov bx,[n_win]
     mov cx,FSXF_FASTTICK

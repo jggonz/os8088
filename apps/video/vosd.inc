@@ -30,8 +30,9 @@
 ; =============================================================================
 VO_ROWS     equ 12                  ; the box: 2 rows of ground, the glyph's
 VO_YOFF     equ 4                   ; 8, 2 more - 4 rows into the canvas
-VO_MAXC     equ 10                  ; the longest line: "Repeat off"
-VO_SAV      equ 1152                ; a page's save at the widest: 96 x 12
+VO_MAXC     equ 18                  ; the longest line: "Buffering 37% ~24s"
+VO_SAV      equ (VO_MAXC + 2) * 8 * VO_ROWS ; a page's save at the widest: a
+                                    ; character and its ground at 8 bytes
 VO_TOASTT   equ 27                  ; a toast's ticks: 1.5 s
 VO_INK      equ 255                 ; 256 colours' brightest (the palette's
                                     ; order, SPEC.md 98.2.3)
@@ -44,6 +45,8 @@ VOK_SNDOFF  equ 6                   ; M, S: muted (98.3.17)
 VOK_LOWMEM  equ 7                   ; the ring short of the stream's
 VOK_SNDON   equ 8                   ; ...and on again
 VOK_SNDNX   equ 9                   ; ...from the next play (no key to seek)
+VOK_BUF     equ 10                  ; the bank's prefill (98.3.18.3)
+VOK_BIGKEY  equ 11                  ; no seek: keys past one read here
 VOM_1       equ 1                   ; the renderers
 VOM_2       equ 2
 VOM_8       equ 3
@@ -268,8 +271,12 @@ vo_update:
     mov si, vo_s_roff
 .s3:
     cmp al, VOK_NOKEY
-    jne .s35
+    jne .s34
     mov si, vo_s_nokey
+.s34:
+    cmp al, VOK_BIGKEY
+    jne .s35
+    mov si, vo_s_bigkey
 .s35:
     cmp al, VOK_LOWMEM
     jne .s4
@@ -369,6 +376,19 @@ vo_post:
     je .un                          ; and every page it is on is put back
     cmp byte [vo_chg], 0
     je .dr
+    mov bl, 1                       ; ...unless it is A NEW TEXT AS WIDE as
+    cmp word [vp_foff], 0           ; the one up, on the page on the glass
+    je .o1                          ; and only there: drawn straight over
+    inc bl                          ; it, ground and glyph in one pass - put
+.o1:                                ; back first, the box was off the glass
+    cmp [vo_drawn], bl              ; between, which a prefill's line
+    jne .un                         ; changing every chunk made a flicker
+    mov al, [vo_n]                  ; (98.3.18.3) - on a FLIPPED file too,
+    cmp al, [vo_dn]                 ; page-ahead's among them: one page
+    jne .un                         ; holds the box while nothing decodes
+    mov byte [vo_chg], 0
+    shr bl, 1
+    jmp vo_draw
 .un:
     call vo_unall
     mov byte [vo_chg], 0
@@ -980,6 +1000,9 @@ vc_setup:
 ; VC_POKE n - the list of n-byte changes, round the box: BX the next range's
 ; start less n-1, so the compare is the whole test while the addresses rise
 %macro VC_POKE 1
+    shr word [cs:vd_map], 1         ; SUB2's list map (98.1.3.2.4)
+    jc .s%1
+    jmp .z%1
 .s%1:
     lodsb
     xor ah, ah
@@ -1031,6 +1054,12 @@ vc_setup:
 ; screen, BP the origin; [vc_mask] the planes the stores reach. SI past
 ; them. Clobbers AX, BX, CX, DX, DI, flags
 vd_clip:
+    mov word [cs:vd_map], 0xFFFF    ; every list there
+    jmp short vd_clgo
+vd_clipm:                           ; ...or a SUB2 sub-record's: its list map
+    lodsw                           ; first (98.1.3.2.4)
+    mov [cs:vd_map], ax
+vd_clgo:
     cld
     mov byte [cs:vc_fillf], 0
     VC_POKE 1
@@ -1040,6 +1069,9 @@ vd_clip:
     VC_POKE 5
     VC_POKE 6
     mov byte [cs:vc_lst], 6         ; the spans: SLICE, RUN, SLICEL, RUNL
+.sg:
+    shr word [cs:vd_map], 1
+    jnc .sn
 .sl:
     lodsb
     xor ah, ah
@@ -1078,8 +1110,48 @@ vd_clip:
 .sn:
     inc byte [cs:vc_lst]
     cmp byte [cs:vc_lst], 10
-    jb .sl
+    jb .sg
     ret
+
+; vc_m3b - vd_walk's routine for a COLOUR sub-record round the box (SPEC.md
+; 98.1.3.2.4): DI the byte's screen address, AL its mask, the GC in write
+; mode 3. Outside the box the store is the screen's; inside it, the save's
+; byte in each plane takes the mask's bits set where the colour [vp_m3c] has
+; that plane's and cleared where not - which is what the card would have
+; done to it. Clobbers AX, BX, CX, DX
+vc_m3b:
+    call vc_find
+    cmp bx, [cs:vo_rows2]
+    jae .scr
+    cmp di, [cs:vc_rs+bx]
+    jb .scr
+    mov dx, di                      ; in the box: its byte of the save
+    sub dx, [cs:vc_rs+bx]
+    add dx, [cs:vc_rv+bx]
+    mov bx, dx
+    mov ah, [cs:vp_m3c]
+    mov cl, [cs:vo_pl]
+    xor ch, ch
+.p:
+    shr ah, 1
+    jnc .c
+    or [cs:bx], al
+    jmp short .n
+.c:
+    not al
+    and [cs:bx], al
+    not al
+.n:
+    add bx, [cs:vc_pls]
+    loop .p
+    ret
+.scr:
+    cmp byte [cs:vp_m3ok], 0        ; (no write mode 3: a plane at a time)
+    je .pl
+    and [es:di], al
+    ret
+.pl:
+    jmp vp_m3pl
 
 ; vc_one - list [vc_lst]'s span at DI, its length and bytes (or a run's
 ; value) off DS:SI, stored round the box. Clobbers AX, BX, CX
@@ -1376,8 +1448,9 @@ vo_s_roff:    db 'Repeat off', 0
 vo_s_soff:    db 'Sound off', 0
 vo_s_son:     db 'Sound on', 0
 vo_s_snx:     db 'Next play', 0
-vo_s_nokey:   db 'No seeking', 0
-vo_s_lowmem:  db 'Low memory', 0    ; (VO_MAXC: ten at most)
+vo_s_nokey:   db 'Seek: no keyframes', 0
+vo_s_bigkey:  db 'Seek: keys too big', 0
+vo_s_lowmem:  db 'Low memory', 0    ; (VO_MAXC: eighteen at most)
 vo_mode:      db 0                  ; the renderer, 0 none
 vo_rows:      dw VO_ROWS            ; the box's rows of the canvas (TEXT's 1),
 vo_rows2:     dw VO_ROWS * 2        ; ...twice that,

@@ -55,6 +55,7 @@ import stkwater
 import dispcp
 import dispapps
 import os88build
+import os88pkg
 
 # The static chain tools/stkdepth.py composes for cc_worker is 160 bytes
 # (SPEC.md 91). The interrupt floor on top of it is 32-38 measured here and 64
@@ -485,9 +486,14 @@ def main():
         #
         # Everything else - 37KB of code and arcade ROM tables - must be byte
         # for byte the file.
-        disk = Path(os88build.at('build/paccman.o88')).read_bytes()
+        # THE FILE IS NOT THE IMAGE once PKGZ packs it (SPEC.md 20.13.5):
+        # the comparison is against what the loader expanded.
+        disk = os88pkg.image_unwrap(
+            Path(os88build.at('build/paccman.o88')).read_bytes())
         live = m.read(base, len(disk))
-        allow = []
+        allow = [(3, 4)]                # the flags byte: image_unwrap clears
+                                        # the packed bits the loaded header
+                                        # may still carry
         for name, span in (('_pmc_items', 8), ('_pmc_mset', 64),
                            ('cc_tpl', 10),
                            ('_pmc_step', 2), ('_pmc_rows', 2),

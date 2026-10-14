@@ -3,7 +3,7 @@
 
     python3 tests/modstr.py
 
-`CLONE.DRV` and `FORMAT.DRV` carry their prompts, their key lines and their
+`DISKOPS.DRV` and `FORMAT.DRV` carry their prompts, their key lines and their
 verdicts in the IMAGE and read them through CS. The failure that change can
 produce is silent and specific: a string read through `DS` instead lands at
 that offset in `KERNEL_SEG`, which is kernel code - so the line letters
@@ -44,7 +44,7 @@ import dispcp                                             # noqa: E402
 from harness import check, done                           # noqa: E402
 
 MACHINE = "os8088_5150_cga_gla"
-FILE_X, BAR_Y = 120, 8
+DISK_X, BAR_Y = 256, 8
 ITEM0_Y, ITEM_H = 28, 16
 
 
@@ -98,13 +98,13 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
     hdr, toast = m.sym("fm_hdrbuf"), m.sym("toast_buf")
     print("== %s : a module's own strings (SPEC.md 2.8.6) ==" % MACHINE)
 
-    # --- CLONE.DRV, on A: ----------------------------------------------------
+    # --- DISKOPS.DRV, on A: ----------------------------------------------------
     dispcp.open_drive(m, mo, lambda n: m.sym(n), M.settle, letter="A")
-    mo.menu(FILE_X, BAR_Y, FILE_X + 30, ITEM0_Y + FM_ICLONE * ITEM_H)
+    mo.menu(DISK_X, BAR_Y, DISK_X + 30, ITEM0_Y + FM_ICLONE * ITEM_H)
     M.settle(m)
     got = text(m, hdr)
     check(got == "Spc=drive  Enter=yes  Esc=no",
-          "CLONE.DRV letters its own key line",
+          "DISKOPS.DRV letters its own key line",
           "the string is in the image and read through CS (SPEC.md 2.8.6); a "
           "DS read lands at that offset in KERNEL_SEG, which is kernel code, "
           "and letters rubbish that does not fault",
@@ -122,7 +122,7 @@ with M.launch("build/os8088-360.img", apps="build/apps360.img",
 
     # --- FORMAT.DRV, on B: (which the clone above has just overwritten) ------
     dispcp.open_drive(m, mo, lambda n: m.sym(n), M.settle, letter="B")
-    mo.menu(FILE_X, BAR_Y, FILE_X + 30, ITEM0_Y + FM_IFMT * ITEM_H)
+    mo.menu(DISK_X, BAR_Y, DISK_X + 30, ITEM0_Y + FM_IFMT * ITEM_H)
     M.settle(m)
     got = text(m, hdr)
     check(got == "Enter=yes  Esc=no", "FORMAT.DRV letters its own key line",

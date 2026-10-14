@@ -10,7 +10,7 @@ WPOW equ 14
 WSIZE equ 16
 
 n_stageinit:
-    SAVE
+    call n_pushall
     push ds
     pop es
     xor ax,ax
@@ -23,39 +23,38 @@ n_stageinit:
     mov di,n_blasts
     mov cx,24
     rep stosw
-    mov ax,0ffffh
+    mov di,n_motion
+    mov cx,12*24/2
+    rep stosw
+    mov [n_picktype],ax
+    mov [n_spawned],ax
+    mov [n_enemyfirecount],ax
+    mov [n_bigfirecount],ax
+    mov [n_burstleft],ax
+    mov [n_kills],ax
+    mov [n_distance],ax
+    mov [n_routefrac],ax
+    mov [n_scrollfrac],ax
+    mov [n_scrollrows],ax
+    mov [n_endclear],ax
+    mov [n_roll],ax
+    mov [n_effectptr],ax
+    mov [n_scrollstage],ax
+    mov [n_rebuild],al
+    mov [n_bossmade],al
+    mov [n_bosslive],al
+    dec ax
     mov di,n_shots
     mov cx,16*2+16*4
     rep stosw
     mov [n_picky],ax
-    mov word [n_picktype],0
-    mov word [n_spawned],0
-    mov word [n_enemyfirecount],0
-    mov word [n_bigfirecount],0
-    mov word [n_burstleft],0
-    mov word [n_kills],0
-    mov word [n_distance],0
-    mov word [n_routefrac],0
-    mov word [n_scrollfrac],0
-    mov word [n_scrollrows],0
-    mov word [n_endclear],0
-    mov di,n_motion
-    mov cx,12*24/2
-    xor ax,ax
-    rep stosw
     mov word [n_rolls],3
-    mov word [n_roll],0
     mov word [n_grace],60
     mov word [n_px],116
     mov word [n_py],176
     mov word [n_bank],n_playerart
     mov word [n_flightphase],1
     mov word [n_flightphasetime],32
-    mov word [n_effectptr],0
-    mov byte [n_rebuild],0
-    mov byte [n_bossmade],0
-    mov byte [n_bosslive],0
-    mov word [n_scrollstage],0
     mov bx,[n_stage]
     dec bx
     shl bx,1
@@ -64,39 +63,30 @@ n_stageinit:
     mov byte [n_huddirty],1
     mov ax,4
     call n_music
-    RESTORE
-    ret
+    jmp n_popall
 
 n_campaignnew:
-    SAVE
-    mov word [n_entryseq],0
-    mov word [n_activeplayer],0
-    mov word [n_wings],0
+    call n_pushall
+    push ds
+    pop es
+    xor ax,ax
+    mov [n_entryseq],ax
+    mov [n_activeplayer],ax
+    mov [n_wings],ax
+    mov [n_secretkills],ax
+    mov [n_extended],ax
     mov word [n_nextlife],400
-    mov word [n_secretkills],0
     mov word [n_secretlimit],200
-    mov word [n_playersave+0],3
-    mov word [n_playersave+2],1
-    mov word [n_playersave+4],0
-    mov word [n_playersave+6],0
-    mov word [n_playersave+8],1
-    mov word [n_playersave+10],400
-    mov word [n_playersave+12],0
-    mov word [n_playersave+14],200
-    mov word [n_playersave+16],0
-    mov word [n_playersave+18],3
-    mov word [n_playersave+20],1
-    mov word [n_playersave+22],0
-    mov word [n_playersave+24],0
-    mov word [n_playersave+26],1
-    mov word [n_playersave+28],400
-    mov word [n_playersave+30],0
-    mov word [n_playersave+32],200
-    mov word [n_playersave+34],0
-    mov word [n_extended],0
+    mov di,n_playersave             ; both players' saved state
+    mov si,n_playerinit
+    mov cx,9
+    rep movsw
+    mov si,n_playerinit
+    mov cl,9
+    rep movsw
     call n_stageinit
-    RESTORE
-    ret
+    jmp n_popall
+n_playerinit: dw 3,1,0,0,1,400,0,200,0
 
 n_scripts:
     SAVE
@@ -141,10 +131,11 @@ n_scripts:
     cmp [n_distance],ax
     pop ax
     jb .currentpage
-    add word [n_event],4
+    add word [n_event],3
     jmp .events
 .currentpage:
-    mov bx,[si+2]
+    xor bx,bx
+    mov bl,[si+2]
 %if !N_ROM
     ; Original-art schedules use compact wave IDs for their orange groups.
     cmp bx,4
@@ -242,7 +233,7 @@ n_scripts:
     mov [n_orangewave+WPOW],ax
 .queued:
     mov word [di+WF],0
-    add word [n_event],4
+    add word [n_event],3
     jmp .events
 .queues:
     mov di,n_waveslive
@@ -612,7 +603,7 @@ n_smallmove:
     ret
 
 n_depart:                           ; AX=0 escaped, 1 killed; SI=actor
-    SAVE
+    call n_pushall
     mov word [si+EON],0
     cmp word [si+EKIND],2
     jne .group
@@ -645,11 +636,10 @@ n_depart:                           ; AX=0 escaped, 1 killed; SI=actor
     mov ax,500
     call n_addscore
 .out:
-    RESTORE
-    ret
+    jmp n_popall
 
 n_awardpow:
-    SAVE
+    call n_pushall
     mov ax,[n_picktype]
     cmp ax,1
     je .bomb
@@ -704,8 +694,7 @@ n_awardpow:
     call n_addscore
     mov ax,15
     call n_effect
-    RESTORE
-    ret
+    jmp n_popall
 
 n_wingfire:
     test word [n_wings],1
@@ -821,7 +810,7 @@ n_wingcontact:                      ; SI=enemy, BX=kind*2; CF=wing collision
     ret
 
 n_results:
-    SAVE
+    call n_pushall
     mov word [n_flightphase],3
     mov word [n_flightphasetime],100
     xor ax,ax
@@ -838,10 +827,10 @@ n_results:
     mov [n_percent],ax
     mov bx,ax
     shl bx,1
-    shl bx,1
-    mov ax,[n_bonuses+bx]
+    mov ax,[n_bonuses+bx]          ; stored in tens
+    mov bx,10
+    mul bx
     mov [n_percentbonus],ax
-    mov dx,[n_bonuses+bx+2]
     mov [n_percentbonus+2],dx
     or dx,dx
     jz .award
@@ -857,8 +846,7 @@ n_results:
     call n_addscore
     mov ax,11
     call n_music
-    RESTORE
-    ret
+    jmp n_popall
 
 n_flightphaseupdate:
     SAVE
@@ -944,7 +932,7 @@ n_flightphaseupdate:
     ret
 
 n_turn:
-    SAVE
+    call n_pushall
     mov word [n_wings],0
     mov word [n_weapon],1
     mov bx,[n_activeplayer]
@@ -996,8 +984,7 @@ n_turn:
     mov ax,7
     call n_music
 .out:
-    RESTORE
-    ret
+    jmp n_popall
 n_savefields: dw n_lives,n_weapon,n_scorelo,n_scorehi,n_stage,n_nextlife,n_secretkills,n_secretlimit,n_extended
 
 n_flightphaseart:
@@ -1146,7 +1133,7 @@ n_dirs60: dw n_dir60_0art,n_dir60_1art,n_dir60_2art,n_dir60_3art,n_dir60_4art,n_
 %include "audio.inc"
 
 n_hightext:
-    SAVE
+    call n_pushall
     mov bx,[n_highlo]
     mov bp,[n_highhi]
     mov si,n_highmsg+10
@@ -1168,6 +1155,5 @@ n_hightext:
     mov cx,80
     mov dx,200
     call n_text
-    RESTORE
-    ret
+    jmp n_popall
 n_highmsg: db 'HIGH 000000',0

@@ -249,15 +249,30 @@ tpl_play:
     call trk_play
     jmp short .out
 .fetch:
-    call OSAPI_FILE_HERE            ; already there? A GOTO is a REMOUNT - real
-    cmp bl, [si + TPL_E_DRV]        ; floppy I/O - so it is only paid for when
-    jne .go                         ; the entry is somewhere else
+    call OSAPI_FILE_HERE            ; already there? Then not even the quiet
+    cmp bl, [si + TPL_E_DRV]        ; stand below is paid - it is only for an
+    jne .go                         ; entry that lives somewhere else
     cmp dx, [si + TPL_E_CLU]
     je .here
 .go:
     mov bl, [si + TPL_E_DRV]
     mov dx, [si + TPL_E_CLU]
-    call OSAPI_FILE_GOTO
+    push si                         ; the entry, live below - and a redirected
+    call OSAPI_FILE_GOTO_QM         ; volume's FSV_CHDIR owns SI (SPEC.md
+    pop si                          ; 62.9.1); `pop` keeps CF
+                                    ;
+                                    ; OSAPI_FILE_GOTO_QM, as aplist.inc's
+                                    ; apl_goto_cur: trk_fdone's load resolves
+                                    ; the name in the INSTANCE's folder, and
+                                    ; QM is the quiet stand that moves it. The
+                                    ; listing remount (directory scan, sort, an
+                                    ; icon read per file - ~0.5 s on a 4.77 MHz
+                                    ; XT, docs/plans/NAV-COST-PLAN.md) was paid
+                                    ; here under the gfx lock at every song
+                                    ; change into another folder, for no
+                                    ; reader. CF=1 moved NOTHING, so the load
+                                    ; would find a same-named stranger where we
+                                    ; stand - refuse with the not-found line
     jnc .here
     push si
     mov si, trk_s_noent
@@ -562,11 +577,6 @@ tpl_bstate:
 ; hash moved: '>' beside what is playing, INVERTED for the selection (SPEC.md
 ; 56.4: inversion survives every reduction, a colour does not)
 tpl_row:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
     push di
     mov bx, di
     mov di, tw_line
@@ -634,11 +644,6 @@ tpl_row:
     call tw_run
 .out:
     pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; tpl_draw - the rows and buttons that changed; [tpl_full] = all of it
@@ -723,8 +728,7 @@ tpl_paint:
     call tpl_org
     mov byte [tpl_full], 1
     call tpl_draw
-    call tpl_unorg
-    ret
+    jmp tpl_unorg
 
 ; tpl_refresh - what changed, from a handler: arms the clip on the editor.
 ; Never inside the fsx bracket: N/B walk the list from there, and the editor
@@ -903,8 +907,7 @@ tpl_run:
     pop ax
     ret
 tpl_b_clear:
-    mov byte [tpl_n], 0
-    mov byte [tpl_cur], 0FFh
+    mov word [tpl_n], 0FF00h        ; no entries, and none playing (tpl_cur)
     mov byte [tpl_sel], 0
     ret
 
@@ -1127,13 +1130,13 @@ tpl_tpl:
     OS88UI_BTNREC tpl_btns, tpl_rects_b, tpl_labels, tpl_flags_b, TPL_NB
 tpl_labels: dw tpl_s_add, tpl_s_rem, tpl_s_clr, tpl_s_shuf, tpl_s_sort
             dw tpl_s_play
-tpl_ttl:     db 'PlayList', 0
-tpl_s_add:   db 'Add...', 0
+tpl_ttl equ tpl_s_added + 13        ; 'PlayList', the tail of tpl_s_added's bytes
+tpl_s_add equ tpl_s_empty + 8       ; 'Add...', the tail of tpl_s_empty's bytes
 tpl_s_rem:   db 'Remove', 0
 tpl_s_clr:   db 'Clear', 0
-tpl_s_shuf:  db 'Shuffle', 0
+tpl_s_shuf equ tw_s_shuf            ; 'Shuffle', tw_s_shuf's own bytes
 tpl_s_sort:  db 'Sort', 0
-tpl_s_play:  db 'Play', 0
+tpl_s_play equ trk_s_rspkp + 13     ; 'Play', the tail of trk_s_rspkp's bytes
 tpl_s_empty: db 'Empty - Add...', 0
 tpl_s_full:  db 'PlayList is full', 0
 tpl_s_added: db 'Added to the PlayList', 0
@@ -1193,6 +1196,9 @@ TPL_NT equ 22
     TRKB tpl_cur                    ; the one playing, 0FFh = none (the entry
                                     ; proc sets it: bss arrives zeroed)
     TRKB tpl_sel                    ; the editor's selection
+%if tpl_cur != tpl_n + 1
+  %error "tpl_cur must follow tpl_n: tpl_b_clear writes the pair in one word"
+%endif
     TRKB tpl_played                 ; songs since a deliberate start (56.8)
     TRKB tpl_inplay                 ; trk_fdone is loading a LIST entry
     TRKW tpl_rq                     ; a posted request: TPLQ_*, and its byte

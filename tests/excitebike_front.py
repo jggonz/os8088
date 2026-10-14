@@ -552,6 +552,7 @@ def arm(tag, sym, art, sp):
         m.run()
         assert m.wait_stop(120) == "breakpoint"
         c1 = m.status()["cycles"]
+        assert p.w("gfxseg"), "art claim missing"
         if tag == "vga":
             # the loading screen stayed up through the whole disk read
             m.bp_exec(p.addr("palette"))
@@ -559,10 +560,12 @@ def arm(tag, sym, art, sp):
             assert m.wait_stop(60) == "breakpoint"
             check_loading_glass(m, art)
             m.bp_exec(p.addr("palette"))
-        assert p.w("gfxseg"), "art claim missing"
         m.bp_exec(p.addr("race"))
         m.run()
         assert m.wait_stop(120) == "breakpoint"
+        # the art claim is handed back once the back end is built: nothing in a race
+        # reads the art file (the font and the palette are copied into the package)
+        assert p.w("gfxseg") == 0, "the art claim outlived xb_race_open"
         c2 = m.status()["cycles"]
         ms = lambda a, b: (b - a) / M.GUEST_HZ * 1000
         print("%s guest time: load+verify %.0f ms (disk incl.), font/track/palette/engine start %.0f ms" %

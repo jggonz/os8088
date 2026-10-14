@@ -36,6 +36,7 @@ trigger that fired too rarely would let the primitive draw through an armed
 clip region, which is a corrupted repaint and not a slow one.
 """
 import argparse
+import tempfile
 import hashlib
 import os
 import subprocess
@@ -66,7 +67,7 @@ def moff(name):
     """Every equate in the package, from nasm's own [map]."""
     if not _MAP:
         src = os.path.join(ROOT, "tests", "spantest", "spantest.asm")
-        tmp, mp = "/tmp/os88_spantest_map.asm", "/tmp/os88_spantest.map"
+        tmp, mp = tempfile.gettempdir() + "/os88_spantest_map.asm", tempfile.gettempdir() + "/os88_spantest.map"
         open(tmp, "w").write(open(src).read() + "\n[map all %s]\n" % mp)
         subprocess.check_call(["nasm", "-f", "bin", "-I",
                                os.path.join(ROOT, "apps") + os.sep,

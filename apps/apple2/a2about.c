@@ -66,10 +66,13 @@
 #define A2_CFM_ROWS 3
 #define A2_CFM_H    (A2_ABT_PADY + A2_CFM_ROWS * A2_ABT_LH + 16)
 
-static const char *a2_cfm_text[2] = {
+static const char *a2_cfm_text[A2_CFM_ROWS] = {
     "Are you sure you want to reboot?",     /* WinFrame.cpp:2003 */
-    "(All data will be lost!)"              /* WinFrame.cpp:2004 */
+    "(All data will be lost!)",             /* WinFrame.cpp:2004 */
+    ""                                      /* ...and the third row is the
+                                             * blank above the buttons */
 };
+static const char *a2_abt_btn[1] = { "OK" };   /* the About panel's one */
 static const char *a2_cfm_btn[2] = { "Yes", "No" };  /* MB_YESNO, in MB_YESNO's
                                                       * own order: Yes is
                                                       * button 0 and is where
@@ -225,28 +228,40 @@ static int ovl_about_geom(void)
  * the other broken. */
 static int ovl_about_draw(void)
 {
-    int i, y, w, x, bx, by, nrows, nbtn;
+    int i, y, w, x, bx, by, nrows, nbtn, x1, y1;
+    const char **text, **btn;
     const char *row;
 
+    /* THE KIND IS ASKED ONCE AND THE CORNER IS COMPUTED ONCE (apps size pass
+     * 1): each `a2_pan_kind == A2_PAN_CFM ? :` was a compare materialised as
+     * a 0/1 value and tested, four times over, and each corner sum two
+     * global reads and an add, twice. */
+    x1 = a2_abt_x + a2_abt_w - 1;
+    y1 = a2_abt_y + a2_abt_h - 1;
     os88_set_color(OS88_WHITE);
-    os88_gfx_fill(a2_abt_x, a2_abt_y,
-                  a2_abt_x + a2_abt_w - 1, a2_abt_y + a2_abt_h - 1);
+    os88_gfx_fill(a2_abt_x, a2_abt_y, x1, y1);
     os88_set_color(OS88_BLACK);
-    os88_gfx_frame(a2_abt_x, a2_abt_y,
-                   a2_abt_x + a2_abt_w - 1, a2_abt_y + a2_abt_h - 1);
-    nrows = (a2_pan_kind == A2_PAN_CFM) ? A2_CFM_ROWS : A2_ABT_ROWS;
-    nbtn = (a2_pan_kind == A2_PAN_CFM) ? 2 : 1;
+    os88_gfx_frame(a2_abt_x, a2_abt_y, x1, y1);
+    nrows = A2_ABT_ROWS;
+    nbtn = 1;
+    text = a2_abt_text;
+    btn = a2_abt_btn;
+    if (a2_pan_kind == A2_PAN_CFM) {
+        nrows = A2_CFM_ROWS;
+        nbtn = 2;
+        text = a2_cfm_text;                 /* its third row is blank: the
+                                             * table is three long for it */
+        btn = a2_cfm_btn;
+    }
     for (i = 0; i < nrows; i++) {
-        row = (a2_pan_kind == A2_PAN_CFM)
-            ? ((i < 2) ? a2_cfm_text[i] : "")
-            : a2_abt_text[i];
+        row = text[i];
         if (row[0] == 0)
             continue;                       /* an empty row is a blank line
                                              * and not a call */
         w = (int)os88_strlen(row) * 8;
         x = a2_abt_x + (a2_abt_w - w) / 2;
         y = a2_abt_y + A2_ABT_PADY + i * A2_ABT_LH;
-        if (y + 8 > a2_abt_y + a2_abt_h - 1)
+        if (y + 8 > y1)
             break;                          /* the panel was clamped to a
                                              * short content box: a row that
                                              * would fall outside it is not
@@ -272,8 +287,8 @@ static int ovl_about_draw(void)
      * the button is placed against the panel's own foot when the rows have
      * eaten the space. */
     by = a2_abt_y + A2_ABT_PADY + nrows * A2_ABT_LH;
-    if (by + A2_CFM_BH > a2_abt_y + a2_abt_h - 1)
-        by = a2_abt_y + a2_abt_h - A2_CFM_BH - 2;
+    if (by + A2_CFM_BH > y1)
+        by = y1 - A2_CFM_BH - 1;
     a2_cfm_by = by;
     for (i = 0; i < nbtn; i++) {
         /* ONE button centred, or TWO with a 16-pixel gap - and the rects are
@@ -288,7 +303,7 @@ static int ovl_about_draw(void)
                                              * content box: no room for a row
                                              * of buttons in it */
         os88_gfx_frame(bx, by, bx + A2_CFM_BW - 1, by + A2_CFM_BH - 1);
-        row = (a2_pan_kind == A2_PAN_CFM) ? a2_cfm_btn[i] : "OK";
+        row = btn[i];
         w = (int)os88_strlen(row) * 8;
         os88_font_run(bx + (A2_CFM_BW - w) / 2, by + 3, row,
                       OS88_BLACK, OS88_WHITE);
@@ -370,8 +385,7 @@ static void a2_panel_close(void *win, int yes)
                                              * gfx lock (apple2.c's
                                              * a2_reset_service) */
     a2_pan_kind = A2_PAN_ABOUT;
-    a2_kick = 1;
-    os88_wm_wake(win);
+    a2_kickw(win);
 }
 
 /* a2_about_close - the About panel's own route out, which is a2_panel_close

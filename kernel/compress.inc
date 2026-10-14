@@ -98,7 +98,7 @@ CMZ_XTOAST  equ apic_toast_show          ; OSAPI_TOAST, and it is what lets this
 CMZ_WMAX    equ 16384           ; the compressor's window, largest first: 2
 CMZ_WMIN    equ 1024            ; bytes of prev[] each (SPEC.md 20.15.1)
 CMZFP       equ CLFP + 4        ; the cloner's SECOND entry (SPEC.md 20.15.3):
-                                ; this whole file is part of CLONE.DRV's
+                                ; this whole file is part of DISKOPS.DRV's
                                 ; image, so it costs no mod_tab row, no file
                                 ; name and no mod_fp block of its own - one
                                 ; far-pointer slot, in a block that had six
@@ -137,7 +137,7 @@ CMZFP       equ CLFP + 4        ; the cloner's SECOND entry (SPEC.md 20.15.3):
 %endmacro
 
 section .modl                   ; the cloner's image (SPEC.md 2.8, 18.99) -
-                                ; clone.inc has already laid the header, and
+                                ; diskops.inc has already laid the header, and
                                 ; kernel.asm's modl_end comes after this
 
 %ifndef NOCURDISK
@@ -1375,10 +1375,12 @@ cmz_verb:
 ; routine it replaced: the entry is already in hand.
 ; -----------------------------------------------------------------------------
 cmz_sizes:
+%ifdef OS88_REDIR               ; SPEC.md 62.9.2.3
     cmp byte [dsk_vkind], DVK_FILE
     je .nofs                    ; a REDIRECTED volume (SPEC.md 62.9): no entry
                                 ; to read a hint out of, and nothing on it is
                                 ; compressed
+%endif
     mov si, fm_onam
     call COLD_SEG:dwf_dskw_stat ; AL = attribute, BX = cluster, DX:CX = size
     jc .out
@@ -1400,10 +1402,12 @@ cmz_sizes:
     ret                         ; above is taken with CF SET for an LZ4 mark,
                                 ; and a `mov` carries it out - so an LZ4 file
                                 ; answered a FERR whose number was its own size
+%ifdef OS88_REDIR
 .nofs:
     mov ax, FERR_PROT
     stc
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; cmz_compress - File > Compress (SPEC.md 22.22)
@@ -2873,7 +2877,7 @@ cmz_jmsg:
 ; Uncompress To... (SPEC.md 22.23.6) - kern_big's alone
 ; =============================================================================
 ; cmz_gosrc / cmz_godst - stand in the source's folder or the target's, through
-; the far door CLONE.DRV already uses (fcp_goto, SPEC.md 18.99.8). Free inside
+; the far door DISKOPS.DRV already uses (fcp_goto, SPEC.md 18.99.8). Free inside
 ; the run's batch bracket (SPEC.md 18.9.3), and a word when the two are one
 ; folder. A failure never returns (cmz_jerr). clobbers: flags
 cmz_gosrc:

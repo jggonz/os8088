@@ -83,18 +83,30 @@ static const struct rc_abl rc_ab_lines[] = {
 /* the panel's live geometry, resident bss: the close fills it, the click
  * tests the button (rc_ab_bx/by is the OK box's top-left) */
 static int rc_ab_x, rc_ab_y, rc_ab_w, rc_ab_h, rc_ab_bx, rc_ab_by;
-static unsigned char rc_abrow[RC_COLS];      /* a label's cells for the band */
 
 /* one label as ONE band (rc_draw_band: blit1, or font_run if refused);
- * x is on a byte boundary by construction (the panel's x is snapped) */
+ * x is on a byte boundary by construction (the panel's x is snapped). The
+ * label IS the band's row of cells - rc_band reads n characters from it and
+ * no further - so nothing is copied */
 static void ovl_ab_text(int x, int y, const char *s)
 {
     int n = (int)os88_strlen(s);
     if (n > RC_COLS)
         n = RC_COLS;
-    os88_memcpy(rc_abrow, s, n);
     os88_memset(rc_want_at, 0, RC_ATTRB);   /* no reverse cell */
-    rc_draw_band(x, y, rc_abrow, 0, n);
+    rc_draw_band(x, y, (const unsigned char *)s, 0, n);
+}
+
+/* ovl_ab_box - a white box with a frame and a second frame 2 px inside it
+ * (the panel, and the OK button wearing its focus frame): three calls */
+static void ovl_ab_box(int x1, int y1, int x2, int y2)
+{
+    os88_set_color(OS88_WHITE);
+    os88_gfx_fill(x1, y1, x2, y2);
+    os88_set_color(OS88_BLACK);
+    os88_gfx_frame(x1, y1, x2, y2);
+    os88_gfx_frame(x1 + 2, y1 + 2, x2 - 2, y2 - 2);
+    rc_n_calls += 3;
 }
 
 /* ovl_about_show - lay the panel out from the LIVE content box and draw it
@@ -104,7 +116,8 @@ static int ovl_about_show(void *win)
 {
     static struct os88_pt org;
     static struct os88_size sz;
-    int i, w, x, y;
+    int w, x, y, bx, by;
+    const struct rc_abl *l;
 
     if (os88_wm_geom(win, &sz) < 0)
         return 1;                            /* not visible: nothing to draw */
@@ -114,9 +127,8 @@ static int ovl_about_show(void *win)
      * wider; clamped onto the content box - two adapters of three are
      * 640x200 (SPEC.md 39) */
     w = (RC_AB_BW + 6) << 3;
-    for (i = 0; i < RC_AB_NL; i++) {
-        int r = (rc_ab_lines[i].col << 3) + 24 +
-                ((int)os88_strlen(rc_ab_lines[i].text) << 3);
+    for (l = rc_ab_lines; l < rc_ab_lines + RC_AB_NL; l++) {
+        int r = ((l->col + 3 + (int)os88_strlen(l->text)) << 3);
         if (r > w)
             w = r;
     }
@@ -137,30 +149,19 @@ static int ovl_about_show(void *win)
     x = rc_ab_x;
 
     rc_abt = 1;
-    os88_set_color(OS88_WHITE);
-    os88_gfx_fill(x, y, x + w, y + rc_ab_h);
-    os88_set_color(OS88_BLACK);
-    os88_gfx_frame(x, y, x + w, y + rc_ab_h);
-    os88_gfx_frame(x + 2, y + 2, x + w - 2, y + rc_ab_h - 2);
-    rc_n_calls += 3;
-    for (i = 0; i < RC_AB_NL; i++)
-        ovl_ab_text(x + 8 + (rc_ab_lines[i].col << 3),
-                    y + 6 + rc_ab_lines[i].row * 10, rc_ab_lines[i].text);
+    ovl_ab_box(x, y, x + w, y + rc_ab_h);
+    for (l = rc_ab_lines; l < rc_ab_lines + RC_AB_NL; l++)
+        ovl_ab_text(x + 8 + (l->col << 3), y + 6 + l->row * 10, l->text);
 
     /* the OK button, centred, and it wears the focus frame: Enter presses
      * it (cword's dialogs, the same shape) */
-    rc_ab_bx = x + ((((w >> 3) - RC_AB_BW) >> 1) << 3);
-    rc_ab_by = y + 6 + RC_AB_OKROW * 10;
+    rc_ab_bx = bx = x + ((((w >> 3) - RC_AB_BW) >> 1) << 3);
+    rc_ab_by = by = y + 6 + RC_AB_OKROW * 10;
     /* the box is y-3..y+10 and the focus frame y-1..y+8, one pixel row clear
      * of the 8-row band the text goes down as - a frame line at y would be
      * cut where the band's cells cover it (seen at zoom 8) */
-    os88_set_color(OS88_WHITE);
-    os88_gfx_fill(rc_ab_bx, rc_ab_by - 3, rc_ab_bx + (RC_AB_BW << 3) - 1, rc_ab_by + 10);
-    os88_set_color(OS88_BLACK);
-    os88_gfx_frame(rc_ab_bx, rc_ab_by - 3, rc_ab_bx + (RC_AB_BW << 3) - 1, rc_ab_by + 10);
-    os88_gfx_frame(rc_ab_bx + 2, rc_ab_by - 1, rc_ab_bx + (RC_AB_BW << 3) - 3, rc_ab_by + 8);
-    rc_n_calls += 3;
-    ovl_ab_text(rc_ab_bx + 16, rc_ab_by, "OK");
+    ovl_ab_box(bx, by - 3, bx + (RC_AB_BW << 3) - 1, by + 10);
+    ovl_ab_text(bx + 16, by, "OK");
     return 1;
 }
 
@@ -184,6 +185,8 @@ static void rc_about_close(void *win)
 /* is (x, y) - absolute, as W_ONCLICK gives it - on the OK button? */
 static int rc_about_hit_ok(int x, int y)
 {
-    return x >= rc_ab_bx && x < rc_ab_bx + (RC_AB_BW << 3) &&
-           y >= rc_ab_by - 3 && y <= rc_ab_by + 10;
+    if (x >= rc_ab_bx && x < rc_ab_bx + (RC_AB_BW << 3) &&
+        y >= rc_ab_by - 3 && y <= rc_ab_by + 10)
+        return 1;
+    return 0;
 }

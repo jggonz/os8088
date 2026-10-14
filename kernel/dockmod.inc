@@ -1427,20 +1427,24 @@ dkx_pass:
     cmp byte [dock_up], 0
     jne .open
     cmp byte [mouse_btn], 0
-    jne .off
+    jne .offj
 %ifdef KERN_BIG
     cmp byte [blk_sv], 0
-    jne .off
+    jne .offj
 %endif
     cmp word [fdlg_win], 0
-    jne .off
+    jne .offj
     push cs
     call dkk_wm_fs_vis
-    jc .off
+    jc .offj
     call dkx_hit
-    jc .off
+    jc .offj
     mov bx, DOCK_HOVER_T
     jmp short .count
+.offj:                          ; ONE relay for the five refusals above, each
+    jmp .off                    ; a relaxed five-byte pair before (kernel size
+                                ; pass 11: -12 of DOCK.DRV, and the pass that
+                                ; finds nothing is 12 cycles a test faster)
 .open:
     push cs
     call dkk_wm_fs_vis

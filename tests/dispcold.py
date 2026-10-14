@@ -47,11 +47,11 @@ FILE.
     end of the file.
 
 Both are gone below, and the second is why the length is derived rather than
-written down: the span runs from `.cold`'s file offset to `OVLW_START`, which
-is where `.ovlw` begins. **It used to run to EOF**, on the belief that `.cold`
+written down: the span runs from `.cold`'s file offset to `OVL_START`, which
+is where `.ovl` begins. **It used to run to EOF**, on the belief that `.cold`
 was the last thing in `kernel.bin` - true when that was written, false since
-`.ovlw` landed after it, and this row then failed on every build with 37,376
-of rung plus 5,215 of `.ovlw` measured as one 42,591-byte section.
+`.ovl` landed after it, and this row then failed on every build with 37,376
+of rung plus 5,215 of `.ovl` measured as one 42,591-byte section.
 
 The lesson is one line and it has now cost three rows - this one,
 tests/linefast.py and tests/wirefps.py: **a segment delta is not a file
@@ -93,7 +93,7 @@ TITLE_H = 18
 # what gives its length without needing a section-size accessor. It is the
 # right upper bound in its own right: past FAT_SEG is the FAT window, which
 # the first mount has overwritten (SPEC.md 2.5), so there is nothing there to
-# compare.  FAT_SEG is read from the map's equates now - `.ovl` used to land
+# compare.  FAT_SEG is read from the map's equates now - the boot overlay used to land
 # there and gave the same answer through segment_of("ovl_base"), and since
 # SPEC.md 2.9.6 the overlay is in stage 2's blob and has no fixed segment.
 # ...and where it sits in kernel.bin, which is os88layout's answer and not

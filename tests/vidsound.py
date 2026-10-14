@@ -142,19 +142,11 @@ def clip(tmp, nf, afmt, loop=None, resident=None, live=False, ahead=0,
 
 
 def snd_sym(name):
-    """A symbol's offset in SOUND.DRV's image, off nasm's own map"""
-    with tempfile.TemporaryDirectory() as d:
-        cp, mp = os.path.join(d, "s.asm"), os.path.join(d, "s.map")
-        open(cp, "w").write(open("drivers/sound/sound.asm").read() +
-                            "\n[map symbols %s]\n" % mp)
-        subprocess.run(["nasm", "-f", "bin", "-w+error", "-I",
-                        "drivers/sound/", "-I", "drivers/", "-I", "apps/",
-                        "-o", os.path.join(d, "s.bin"), cp], check=True)
-        for line in open(mp):
-            f = line.split()
-            if len(f) >= 3 and f[-1] == name:
-                return int(f[1], 16)
-    raise KeyError(name)
+    """A symbol's offset in SOUND.DRV's image - off the Makefile's own recipe
+    and checked against build/sound.bin (tools/os88drvsym.py); the line this
+    used to write by hand had no -DPICOMEM and was 341 bytes out."""
+    import os88drvsym
+    return os88drvsym.symbols("sound.bin")[name]
 
 
 def button(m, ui, base, rw, rb, bad):
@@ -172,19 +164,25 @@ def button(m, ui, base, rw, rb, bad):
     def click():
         ui.mo.click(*at())
 
-    pressed = [0]
+    pressed = [0, 0]
 
     def hold(cond, what, guest=20.0):
         """A press IN A BRACKET, held until the player has acted on it: the
         play polls the buttons between frames and a press is an edge
         between two polls, so a click shorter than a poll can fall between
         them - as it cannot for a hand, whose click is ~100 ms. [pressed]
-        is the frames drawn AT the press: the pointer's trip to the button
-        is guest time the play goes on through"""
+        is the frames drawn either side of the press: the pointer's trip to
+        the button is guest time the play goes on through, and so is the
+        packet's - three bytes at 1,200 baud are 25 ms, most of a frame at
+        30 a second. So the press is a WINDOW, from the frames drawn before
+        the packet was sent to the frames drawn once the guest's own
+        mouse_btn says the button is down, and the frame the player acts on
+        is somewhere in it"""
         ui.mo.to(*at())
         ui.mo._sep()
         pressed[0] = rw("vp_done")
         ui.mo._edge(True)
+        pressed[1] = rw("vp_done")
         until(cond, what, guest)
         ui.mo._edge(False)
     click()
@@ -209,18 +207,30 @@ def button(m, ui, base, rw, rb, bad):
                                   4772727.0)
     mid = (rb("vp_ready"), rb("vp_winm"))
     hold(lambda mm: rb("vp_mute") == 0, "the click to unmute the play")
-    d1 = pressed[0]
+    d1, d1hi = pressed
     until(lambda mm: rb("vp_winm") == 1 and rb("vp_ready") == 1 and
           rb("vp_snd") == 1 and rb("vp_sopn") == 1,
           "the play again in the window, with its sound", 60.0)
+    # WHERE THE PLAYER WAS WHEN IT ACTED, off the player itself: the restart
+    # is vp_after's, which hands vp_keyat the last frame drawn, and vp_keyat
+    # keeps it in [vp_kat_t] - nothing else calls it in this run. Bounding
+    # the restart by [pressed]'s FIRST reading instead was the row's flake
+    # (~1 in 7): a press read at frame 60 and acted on at 61, with a key AT
+    # 61, restarts from 61 exactly as SPEC.md 98.3.17 says - at the key at
+    # or before where it was - and was reported as going on past 60
+    acted = rw("vp_kat_t") + 1
     print("   mid-play: muted at frame %d, on silent at %.1f fps in the "
-          "window %s; unmuted at %d, on again from frame %d with its sound"
-          % (d0, fps, mid, d1, rw("vp_base")))
+          "window %s; unmuted at %d..%d, acted on at %d, on again from "
+          "frame %d with its sound"
+          % (d0, fps, mid, d1, d1hi, acted, rw("vp_base")))
     if not 25 <= fps <= 35:
         bad.append("muted, the play ran at %.1f fps, not 30" % fps)
-    if rw("vp_base") > d1:
+    if not d1 <= acted <= d1hi + 2:
+        bad.append("unmuted, the player acted on frame %d, outside the "
+                   "press's frames %d..%d" % (acted, d1, d1hi))
+    if rw("vp_base") > acted:
         bad.append("unmuted, the play went on from frame %d, past %d"
-                   % (rw("vp_base"), d1))
+                   % (rw("vp_base"), acted))
     if not lat & 0x0020:
         bad.append("the Mute button did not stand down")
     if mid != (1, 1):

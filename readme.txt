@@ -2,292 +2,268 @@
   os8088 - READ ME FIRST
 ============================
 
-How to use os8088. Widen this window and the text re-flows to fit.
+What os8088 does that is not obvious from the screen. Widen this window and the text re-flows.
 
 
 CONTENTS
 
-  1  The screen
-  2  Windows and menus
-  3  Disks and folders
-  4  Working with files
-  5  Running programs
-  6  The Control Panel
-  7  The clock
+  1  The chip menu
+  2  Windows, dock, desktop
+  3  Disk windows
+  4  Files and disks
+  5  Programs
+  6  Control Panel
+  7  Drivers
   8  Linking to a DOS PC
-  9  Using a hard disk
- 10  If you have no mouse
- 11  Keys worth knowing
- 12  Messages explained
- 13  Limits, restarting and
-     switching off
+  9  Hard disk, hibernate
+ 10  No mouse
+ 11  Messages
+ 12  Limits, switching off
 
 
 ----------------------------
-1. THE SCREEN
+1. THE CHIP MENU
 ----------------------------
 
-MENU BAR
-The strip across the top: the system menu (the small logo), the name of the program you are using, that program's menus, and the clock. Short messages appear here too - "Settings Saved" - and fade after a moment.
+The small chip at the far left of the menu bar is the system menu, the same in every program:
 
-DESKTOP
-The patterned area behind everything. A drive icon sits near the right edge for each disk, labelled with its letter: A:, B:, and C: onwards for a hard disk, a RAM disk or a linked DOS PC.
+  About os8088  version,
+                build,
+                display
+  Control Panel section 6
+  Task Manager  what runs,
+                and memory
+  Hibernate     section 9
+  Restart       reboot now
+  Shut Down     save
+                settings,
+                stop safely
+
+Task Manager only watches: click its window to step through processes, memory map and heap. It cannot stop a program.
+
+Beside the chip is the name of the program in front. That is a menu too: About the program, if it has one, and always Close.
+
+Click the clock to set it (Control Panel > Date/Time). Short messages appear in the bar and fade.
+
+
+----------------------------
+2. WINDOWS, DOCK, DESKTOP
+----------------------------
+
+The left title box closes, the right puts the window away into the dock. Both act on release, so slide off to change your mind. Double-click a title bar to fill the screen; again to restore. Right-click a back window to raise it. Keys go only to the front window.
 
 DOCK
-The white strip along the bottom, one small tile per running program. A heavy border marks the one in use; a tile drawn in reverse is a program put away out of sight. Clicking a tile does whatever it is not: it brings back a program put away, puts away the one in use, and brings any other to the front. The right button offers Close.
+One tile per program. Clicking a tile brings back one put away, puts away the one in front, or raises any other; right-click offers Close. Control Panel > Dock moves it Left or Right and can auto-hide it to a 1-pixel line that opens when the pointer rests on it.
 
-SCREEN BLANKING
-After five minutes with no key pressed and no mouse moved the screen goes dark, to save the tube. Any key or a nudge of the mouse brings it back as you left it, and that first press is not passed on, so nothing can happen by accident while you cannot see.
+DESKTOP
+Drag a file, folder or program from a disk window onto the bare desktop to make a SHORTCUT (arrow badge). Double-click or Enter opens it; Del, right-click or File > Remove Shortcut takes it away (the file stays). Any icon, drive icons included, can be dragged to a new place. Up to 15 shortcuts, kept in SYSTEM.CFG, so the system disk must be in A:.
 
+With no window in front the bar reads Locator: File (Close Window, Remove Shortcut) and Builtins (Timer, Bounce, Disk). Builtins > Disk opens a disk window.
 
-----------------------------
-2. WINDOWS AND MENUS
-----------------------------
-
-The front window's title bar is striped and has a small box at each end. The LEFT box closes the window; the RIGHT puts it away into the dock, which does not close it - the program keeps running and its tile brings it back. Drag the bar to move the window, and the grow box in the bottom right corner to resize it.
-
-Only the front window receives what you type, so click a window before typing into it.
-
-To use a menu, press on its title, slide down to the item, and let go. Greyed items cannot be used just now.
-
-THE SYSTEM MENU
-The logo at the far left, the same in every program: About os8088, Control Panel, Task Manager and Restart. About gives the version, the build number and the display card found at start-up. Task Manager shows what is running and where the memory has gone, but it cannot stop a program.
-
-Beside the logo is the name of the program you are using. That is a menu too, and its bottom item is always Close.
-
-THE DESKTOP'S OWN MENUS
-When no program is in front the menu bar reads Locator and carries two menus: File, holding Close Window, and Builtins, holding Timer, Bounce and Disk. Disk opens a disk window, Timer is a stopwatch and Bounce is a toy. Clicking the bare desktop always brings these menus back.
+SCREEN SAVER
+After 5 idle minutes. The key or mouse move that wakes it is swallowed. Control Panel > Theme > Screen Saver picks the scenes, the timing, or 0 for off.
 
 
 ----------------------------
-3. DISKS AND FOLDERS
+3. DISK WINDOWS
 ----------------------------
 
-os8088 comes on two disks: the system disk, which is the OS, and the apps disk, which holds the programs. With two floppy drives, keep the apps disk in B:. With one, put it in and press R in a disk window, and it then answers as A:. Both are ordinary FAT floppies, so a DOS PC reads and writes them too.
+Double-click a drive icon. Up to four windows, each on its own folder. Refresh re-reads (after a floppy swap); the other header button switches list and icons. The title shows the path, the bottom line size and free space. Lists sort by name; one item is selected at a time.
 
-Double-click a drive icon to open a disk window. Up to four can be open at once, each on its own disk or folder.
+Double-click opens: a folder in place, a program runs, a document opens in its program (searched on every mounted disk). Right-click any item or empty space for a menu of what applies there, including Open in New Window and Paste Into.
 
-Two buttons sit at the top right: Refresh re-reads the disk, which you want after swapping a floppy, and the other switches between list and icon views. The status line along the bottom shows the size of what is listed and the room free.
+FILE MENU
+Open, New Folder, Rename, Delete. Compress packs a file - every program reads it unpacked, so it only saves room; Uncompress undoes it, Uncompress To joins a split set. Format Disk, Clone Disk (floppy to floppy or to a .IMG file) and Write Img (an image back onto a floppy) only work on floppy windows. Nav holds New Window, Up One Folder, Root Folder and the drives.
 
-Double-click an item to open it. A folder opens in the same window, a program starts, and a document opens in the program that made it if that program is on either disk. Backspace, or Nav > Up One Folder, goes back up; the ".." at the top of every folder does the same. The top of a disk is the root, and there is nothing above it.
-
-THE MENUS
-While a disk window is in front the menu bar carries four. File holds Open, New Folder, Rename, Delete, Compress and Format Disk. Edit holds Cut, Copy and Paste. Nav is everywhere you can go: new windows, Refresh, up one folder, the root, and either floppy drive. Builtins is the desktop's own menu again.
-
-The right button inside a disk window opens a short menu of commands for whatever is under the pointer.
-
-
-----------------------------
-4. WORKING WITH FILES
-----------------------------
-
-New Folder, Rename and Delete are on the File menu, and all three ask on the status line: type a name and press Enter, or Esc to change your mind. Delete asks you to confirm instead - Enter means yes and ANY other key means no.
-
-There is no undo and no wastebasket. A deleted file is gone, and deleting a folder deletes everything inside it.
-
-COPY AND MOVE
-Cut, Copy and Paste are on the Edit menu, and on Ctrl+X, Ctrl+C and Ctrl+V. Paste puts the item into the folder the window is showing, which may be on another disk. A cut item moves; a copied one can be pasted again and again; folders copy whole, with everything inside them. Dragging an item onto a folder, here or in another window, always MOVES it - it never copies.
-
-If a file of that name is already there you are asked: Enter replaces that one, A replaces every one without asking again, Esc stops.
-
-NAMES
-Up to eight characters, then optionally a dot and up to three more: TEXT.TXT, NOTES, WAVE-1. Letters, digits and - _ # $ % & @ are fine; spaces and most other punctuation are refused as you type. Lower case becomes capitals.
-
-FORMATTING A DISK
-File > Format Disk prepares a floppy, erasing anything on it. os8088 offers the size it believes the disk to be; Space offers the other where there is a choice, Enter goes ahead, Esc stops. The item is greyed unless the window shows a floppy.
+KEYS
+  Enter     open
+  Backspace up one folder
+  A, B      show A:, B:
+  R         re-read
+  V         list / icons
+  N         new folder
+  Del       delete: press
+            Del again to
+            confirm
+  Up, Down  move selection
+  PgUp,PgDn by a page
+  Ctrl+X    cut
+  Ctrl+C    copy
+  Ctrl+V    paste
 
 
 ----------------------------
-5. RUNNING PROGRAMS
+4. FILES AND DISKS
 ----------------------------
 
-Programs are in APPS and GAMES; the apps disk has them all and the system disk a core set. Open a folder and double-click one. An F88 in SYSTEM/FONTS is a typeface, and double-clicking one shows it.
+The system disk is the OS; the apps disk holds the programs. With two drives keep apps in B:. With one, swap disks and press R. Both are plain FAT floppies a DOS PC can read and write.
 
-Several programs can run at once, and most can be started more than once. The machine shares time between them, so a game keeps moving while a file is copied. Programs that handle text share one clipboard, so you can copy in one and paste in another, even after closing the first.
+Names are 8.3, capitals only. Letters, digits and $ % ' - _ @ ~ ` ! ( ) { } ^ # & are allowed. New Folder and Rename ask on the status line: Enter accepts, Esc cancels.
 
-Save your work before you close a program - nothing is saved for you.
+There is no undo and no wastebasket. Deleting a folder deletes its contents.
 
-Programs that read and write documents put up the same box for both jobs, with a Drive button to change disks. It remembers where each program last used it.
+Paste puts the clipboard item into the folder shown, on any disk; folders copy whole. A DRAG always MOVES - across disks too, by copy then delete. If a name exists: Enter replaces, A replaces all, Esc stops. The machine is busy until a copy ends.
 
-If a program will not start, the disk window says why: see section 12.
+Programs' open/save box is a disk window with Open or Save, Cancel and Drive (steps through every drive). It starts in MEDIA and then remembers each program's last folder. Type a save name on its status line; clicking a file copies the name. An existing file is replaced without asking.
+
+Folders: APPS and GAMES hold programs, MEDIA sample documents, SYSTEM/APPDATA programs' own settings, SYSTEM/FONTS typefaces (double-click one to see it), SYSTEM/DOS the DOS-side programs. System files are hidden and "Protected".
 
 
 ----------------------------
-6. THE CONTROL PANEL
+5. PROGRAMS
 ----------------------------
 
-System menu > Control Panel. The list on the left picks a page.
+Several run at once and most can be started twice. Text programs share one clipboard. Nothing is saved for you. Many go full screen on F or Alt+Enter; Esc comes back.
 
-SCHEDULER
-How the machine shares time between programs. Leave it on Pre-emptive; Cooperative lets one program hold the machine until it gives way - a little faster, much less smooth.
+Types that open by double-click: TXT Note Pad, BMP/GIF Paint, MOD Tracker, MD Artful Type, COM/EXE/LNK DOS, and whatever else installed programs declare.
 
-DRIVERS
-Optional extras, off until you switch them on. Tick a box to load one now; under each name it says whether it loaded, or why not. There are four: Sound, Hard Drive, Ram Disk (a fast temporary disk made from spare memory, emptied at switch-off) and os88net (section 8). A driver that loads adds a page of its own to the list.
+NOTE PAD: up to 16KB. Ctrl+O/S open/save, Ctrl+Z undo, Ctrl+A select all, Ctrl+F find, Ctrl+R replace, F3 / Shift+F3 next / previous, Tab between the boxes, Esc closes the panel. Tick Rx for patterns: . [a-z] [^a] * + ? ^ $, \ for a literal.
 
-SOUND
-Which sound hardware to use: PC Speaker, AdLib or Sound Blaster. Hardware the machine does not have is greyed out, and the Test button plays a tone through whatever is picked.
+TEXPAD: LaTeX source left, typeset page right. F5 typesets, Esc typesets and moves to the page, [ and ] turn pages, Ctrl+C copies the whole source, Ctrl+X cuts a line. Exports PDF and PostScript.
 
-DISPLAY
-Only on a machine with two video cards. One row per card, and Set Primary moves the machine onto the one you pick. Below that, under Desktop Extension Mode, Single uses just that card, while Right and Below let the desktop span both screens.
+SHEET: 256x16384 cells, four sheets. F2 edits in place, Tab/Enter commit and move, Shift+arrows select. Saves SLK, DIF or BIF; only BIF keeps all sheets. CHART graphs a column of one and exports BMP.
+
+PAINT: Ctrl+Z undoes and redoes, Ctrl+F full screen, Del clears a selection. Opens BMP and GIF, saves either.
+
+CALCULATOR: type it. N negate, Q root, R 1/x, E clear entry, Esc all, H the tape.
+
+ARTFUL TYPE: Markdown, full screen. Ctrl+B/I/K/L bold, italic, code, link; Shift+Ctrl+Z redo; Esc leaves.
+
+BROWSER, TELNET: need Ethernet or os88net. The browser speaks plain HTTP; for HTTPS and modern pages run tools/os88proxy.py on another computer and Open Location <that host>:8088. Telnet takes host:port, speaks ANSI with F-keys, Ctrl+] full screen, and receives Zmodem by itself.
+
+FTP SERVER: port 21, one client. Setup sets the user, password, root folder and Read Only - with no user, anyone may log in.
+
+TRACKER, AUDIO, MIDIRACK, VIDEO: MOD, WAV, MIDI and V88 players. Space pauses, Left/Right step. Tracker: 1-4 mute channels, P loops a pattern, R sample rate, E edits the play list. Audio plays on in the background; a WAV opened while it runs joins its list. MIDIRack: L loops, I file info, output in Options > Settings. Video: R repeats, M mutes, I info. Sound card, Covox or PC speaker.
+
+PIANO plays from a s d f... (black keys w e t...). FRACTAL zooms where clicked. PIXEL opens most image formats; F1 lists its keys. MINES: right-click flags.
+
+DOS: runs real DOS .COM and .EXE in a window. Has CD, DIR, COPY, TYPE, OPEN and HELP. Setup > Memory > Shut down the OS gives the program the whole machine (~586K of 640K); os8088 starts again when it exits.
+
+THE WIRE: the Wire desktop icon, shown while a network link is up, opens os8088.com's program library: Load Program runs one, Add to Disk keeps it.
+
+GAMES: F full screen and P pause in most. Arkanoid: Space serves. Tank: arrows or WASD, Space fires. Cyclone: Z superzapper, J jump. Clear Skies: arrows fly, W/S throttle, A/D rudder, B brakes, R back to the runway; full throttle, pull back at 55 knots. Missile: 1/2/3 fire from a base. Solitaire: A finishes. TameGram: Space rotates, Enter drops, C colour-blind. Pixelstein: Ctrl fires, Space opens doors, Shift runs, Tab map. DrMarco: Z/X rotate, H help.
+
+More disks: Frotz (Infocom stories), Word, CWord, RunCPM, C64, Apple II, Weave/Loom. Word keeps Word 1.1's keys: Ctrl+C centres, Shift+Del cuts, Shift+Ins pastes.
+
+
+----------------------------
+6. CONTROL PANEL
+----------------------------
+
+Pages: Scheduler (leave Pre-emptive), Date/Time (with 12-hour and seconds options; names the clock chip found), Drivers, Display (two cards only: Set Primary, and Right or Below to span both screens), Sound, Theme (Bright, Dark, Color on VGA/EGA; window animations; screen saver), Dock, Floppy (each drive's type, and whether to read a track or a cylinder at a time; applies at the next start) - plus a page per loaded driver.
 
 *** IMPORTANT ***
-Settings are written to the system disk when you CLOSE the Control Panel - the box at the LEFT of its title bar. Putting it away into the dock does not save them. If the system disk is not in A:, or is write-protected, the menu bar says so and the machine starts up with the old settings.
+Settings are written when you CLOSE the panel (its left title box), or by Restart or Shut Down. Putting it in the dock does not save. The system disk must be in A: and writable; the bar says if not.
 
 
 ----------------------------
-7. THE CLOCK
+7. DRIVERS
 ----------------------------
 
-The time sits at the right of the menu bar; click it to jump to the Date/Time page of the Control Panel. Click a field there - month, day, year, hour, minute, second - and use the + and - buttons. Below are two options: 12-hour clock, and seconds in the menu bar.
+Off until ticked in Control Panel > Drivers; a tick loads it now and every start after. Each row says Loaded or why not.
 
-The bottom line names the clock chip the machine has, or says none. Without one os8088 keeps time while it is switched on but starts from a fixed date each time; you can still set it by hand. Close the Control Panel so the setting is kept.
+  Sound      AdLib, Sound
+             Blaster, Covox,
+             MPU-401
+  Hard Drive section 9
+  Ethernet   NE1000/NE2000
+             network card
+  Ram Disk   a disk in spare
+             memory
+  os88net    section 8
+  USB Mouse  CH375 card
+
+The Ethernet page shows the address DHCP gave; Renew asks again and Set Up enters a fixed address, subnet, router and name server.
+
+Load Sound before picking a card on the Sound page; Test plays a tone. Ram Disk and os88net cannot run together. The Ram Disk page sets the size, uses XMS above 1MB if present, and Preserve / Load keep its contents in a .RAM file across switch-off.
 
 
 ----------------------------
 8. LINKING TO A DOS PC
 ----------------------------
 
-os8088 can borrow the files of a DOS machine beside it, over a cable between the two printer ports. That machine's folder appears as another drive icon, and you open, copy and save on it as if it were a floppy - the easy way to get files onto these disks.
-
-WHAT YOU NEED
-A parallel data-transfer cable, the kind sold for LapLink, InterLnk or FastLynx. An ordinary printer cable will NOT do - it does not carry the return wires. You also need OS88NET.COM, which is on the apps disk in the folder SYSTEM, inside DOS, copied onto the DOS machine.
-
-ON THE DOS MACHINE
-Change to the folder you want to share and run the program:
+A DOS machine's folder becomes a drive here, over a parallel data-transfer (LapLink) cable - not a printer cable. Copy SYSTEM/DOS/OS88NET.COM from the apps disk to the DOS machine and run it in the folder to share:
 
   C> CD \PHOTOS
   C> OS88NET
 
-That shares that folder and everything under it. The program prints the port it chose and what it is sharing, then waits; ESC stops it.
+ESC stops it. Switches:
 
-The switches, none of which is usually needed:
+  folder   share this one
+  /W       every drive
+  /RO      read only
+  /P:378   this port only
+  /N       carry network
+           traffic too
+  /?       list them
 
-  /W       share every drive
-           instead of one
-           folder
-  /RO      refuse all writes
-  /P:378   use this printer
-           port, in hex.
-           Without it, every
-           port is tried
-  /?       list the switches
-
-ON THE os8088 MACHINE
-Tick os88net once in Control Panel > Drivers. That adds an os88net page to the list on the left; go to it and click Connect. The page names the printer port it found and then says either No partner or Linked. Linked means the two machines are talking, and a new drive icon appears on the desktop; Disconnect takes it away.
-
-No partner means the trouble is the cable or the far end rather than os8088: check that it is a data-transfer cable, that it is in the printer socket at both ends, and that OS88NET is really running and waiting. If the two machines use different ports, tell the DOS end which with /P:.
-
-The cable is about a quarter the floppy's speed, and the machine sits still while a file moves.
+Here: tick os88net in Drivers, open its page, Connect. Linked means a Link drive icon is on the desktop. No partner means the cable or the DOS end; set /P: if the ports differ. With /N and a DOS packet driver the Browser, Telnet and The Wire work through the PC. About a quarter of floppy speed.
 
 
 ----------------------------
-9. USING A HARD DISK
+9. HARD DISK, HIBERNATE
 ----------------------------
 
-Switch on Hard Drive in Control Panel > Drivers. Partitions it finds and understands appear as drive icons, and it remembers them next time.
+Tick Hard Drive in Drivers; each FAT partition becomes a drive. Its page: Format (make and format a partition, click twice to confirm), Mount, and Install, which copies os8088 to a partition so the machine starts with no floppy. Install keeps existing files unless Erase is ticked; the partition you started from is never offered.
 
-Its own Control Panel page prepares a disk that is not ready yet. It lists the four partition slots with what each holds, and one Format button both makes a partition and prepares it. Formatting erases that partition.
-
-That page can also INSTALL os8088 onto a partition, so the machine starts from the hard disk with no floppy at all. It copies both disks, asking for the apps disk when it needs it. The partition the machine is running from is never offered, and reads "Booted From" instead.
+Hibernate (chip menu) writes everything to C:\HIBERNAT.IMG and stops. At the next start choose Resume to get every window back, or Discard. It needs the Hard Drive driver.
 
 
 ----------------------------
-10. IF YOU HAVE NO MOUSE
+10. NO MOUSE
 ----------------------------
 
-With no mouse attached, the arrow keys become one.
+With no mouse and Num Lock off, the keypad drives the pointer:
 
-  Arrows     move the
-             pointer; hold
-             one to speed up
-  Space,     the left button
-  keypad 0,
-  keypad 5
-  Del        the right
-             button
+  Arrows     move; hold to
+             speed up
+  Home,PgUp, diagonals
+  End,PgDn
+  Space,     left button
+  keypad 0/5
+  Del        right button
 
-A press is a click for buttons and icons, and a hold for menus and drags: press over a menu title, arrow down, press again on the item. Two presses close together are a double-click.
-
-While this is on, programs cannot see the arrow keys. Press SCROLL LOCK to hand the whole keyboard to the window under the pointer, and Scroll Lock again to get the pointer back. If a mouse IS attached none of this happens and the arrow keys go to programs as usual.
-
-os8088 finds a serial mouse on COM1 or COM2 by itself, but only if it was plugged in before the machine was switched on. Check that first if yours is not found.
+A press is a click on buttons and a hold for menus and drags; two quick presses double-click. In an open menu arrows step through items. SCROLL LOCK hands the keys to the window under the pointer, and back. Serial (COM1/COM2), PS/2 and plugged-in-later mice are found by themselves; once one is seen this mode is off.
 
 
 ----------------------------
-11. KEYS WORTH KNOWING
+11. MESSAGES
 ----------------------------
 
-In a disk window:
+Needs NAME.O88
+  The program for that
+  document is on no
+  mounted disk.
 
-  A          show drive A:
-  B          show drive B:
-  R          re-read this
-             disk
-  V          list / icons
-  N          new folder
-  Backspace  up one folder
-  Enter      open the
-             selected item
-  Del        delete the
-             selected item
-  Up, Down   scroll a line
-  PgUp,PgDn  scroll a page
-  Ctrl+X     cut
-  Ctrl+C     copy
-  Ctrl+V     paste
+Needs Sys Disk A:
+  Put the system disk in.
 
-
-----------------------------
-12. MESSAGES EXPLAINED
-----------------------------
-
-Messages appear on the status line of a disk window, in the menu bar, or in a small notice window. Most say what they mean - "Protected" is a system file os8088 needs and will not let you change. These are the rest:
-
-No os8088 disk (B:)
-  There is a disk, but not
-  one os8088 understands.
-  Format Disk makes it into
-  one, erasing it.
+Load failed
+  Not a program, or
+  damaged.
 
 Folder full
-  The top level of a disk
-  holds only so many items.
-  Make a folder and put
-  things inside it.
+  Too many items; make a
+  folder.
 
-Bad package / Load failed
-  Not a program, or a
-  damaged one. A data file
-  nothing claims gives this
-  when double-clicked.
+No os8088 disk
+  Format Disk makes it one.
 
-NAME.O88 - not on this disk
-  You opened a document but
-  the program that reads it
-  is on neither floppy. Put
-  the apps disk in and try
-  again.
+RAM (at start)
+  Too little memory.
 
-RAM
-  (at start-up) The machine
-  has too little memory to
-  run os8088.
-
-DSK
-  (at start-up) The system
-  disk could not be read.
-  Try again, or use another
-  copy.
+Disk error (at start)
+  The system disk could
+  not be read.
 
 
 ----------------------------
-13. LIMITS, RESTARTING AND
-    SWITCHING OFF
+12. LIMITS, SWITCHING OFF
 ----------------------------
 
-A folder lists at most 32 items on a floppy and 64 elsewhere; it can hold more, but only that many are shown. How many programs run at once depends on free memory rather than a fixed number, and the Task Manager shows how much is left.
+A folder shows 64 items (32 on a 128KB machine, which also has no drivers and does not save settings). Programs run as memory allows; Task Manager shows how much.
 
-System menu > Restart reboots the machine at once, from any program, so close your work first. There is no shut-down command: close what you were working in, wait for the drive light to go out, and switch off. Never switch off or take a disk out while that light is on - that is when the disk is being written to.
+Restart reboots at once. Shut Down asks first (Enter yes, Esc no), saves settings, stops the drives and says when to switch off; close your work before either. Never switch off or remove a disk while its light is on.
 
 
 ----------------------------

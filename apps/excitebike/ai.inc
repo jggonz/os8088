@@ -545,7 +545,7 @@ xa_place:
     add ax, [xm_tbase]
     cmp ax, bx
     ja .set                         ; a script at a later column: that is the next
-    add si, 4                       ; (one AT this column would fire next step: skipped)
+    add si, 3                       ; (one AT this column would fire next step: skipped)
     jmp .scan
 .set:
     mov [xm_trigp], si

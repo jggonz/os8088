@@ -24,29 +24,39 @@
 ; sample in SPKFX_SPARSE; the level it asks for (one step up a span at most,
 ; any number down); the carrier's target.
 ;
-;   os88spkfx_init   after os88spk_init. DI = 256 x SPKFX_NLEV bytes in the
-;                    package's own segment for the family, AL = SPKFX_PRE_*,
+;   os88spkfx_init   after os88spk_init. ES:DI = SPKFX_FAMSZ bytes for the
+;                    family, in the segment the shaper will WRITE TO - a
+;                    player's RING, at RL + SPKFX_RINGX (claim the ring
+;                    RL + SPKFX_RINGEND), AL = SPKFX_PRE_*,
 ;                    AH = 1 to put the carrier away in the quiet (0 not).
 ;                    BOTH ARE IGNORED for a Covox (os88spk_lpt): PRE_NONE
 ;                    and no carrier, whatever was asked (SPEC.md 34.14).
 ;                    Builds the family (~0.2 s on a 5150); os88spk_sil
 ;                    becomes 1 with AH = 1 (a dry ring is then silent AND
 ;                    quiet). Any time outside a play
-;   os88spkfx_level  DS:SI = a span, CX its length (1..65535): decides it.
-;                    out AL = its peak. Call it once a span, before emitting
+;   os88spkfx_level  DS:SI = a span, CX its length (1..65535), ES = the
+;                    family's segment: decides it. out AL = its peak. Call it
+;                    once a span, before emitting
 ;   os88spkfx_emit   DS:SI -> ES:DI, CX samples of the span as counts, in
-;                    any number of pieces. SI and DI advance, CX = 0
+;                    any number of pieces, ES the family's segment. SI and DI
+;                    advance, CX = 0
 ;
 ; All preserve every register but their outputs. Labels os88spkfx_; the state
-; is in the including package's image, through CS - the family too, which is
-; why it must be in the package's own segment (`cs xlatb`: DS is the source
-; and ES the ring). Needs apps/os88spk.inc included FIRST.
+; is in the including package's image, through CS. THE FAMILY IS NOT: it is
+; read `es xlatb` - DS is the source and ES the ring - so it lives in the
+; ring's claim and a machine that never shapes never holds its 2,816 bytes
+; (SPEC.md 34.11.9). `es` costs exactly what `cs` did: one prefix byte, the
+; same clocks. Needs apps/os88spk.inc included FIRST.
 ; =============================================================================
 
 SPKFX_PRE_NONE  equ 0
 SPKFX_PRE_DIFF  equ 1
 
 %include "os88spkfx_t.inc"
+
+SPKFX_FAMSZ     equ SPKFX_NLEV * 256        ; the level family, 2,816 bytes
+SPKFX_RINGX     equ SND_EXT_TAB + 256       ; ...at RL + this in a ring: after
+SPKFX_RINGEND   equ SPKFX_RINGX + SPKFX_FAMSZ ; the count table, to RL + this
 
 ; -----------------------------------------------------------------------------
 os88spkfx_init:
@@ -57,7 +67,7 @@ os88spkfx_init:
     push si
     push di
     push ds
-    push es
+    push es                         ; (ES: the family's segment, kept)
     cmp word [cs:os88spk_lptp], 0   ; ON A COVOX IT IS A LEVELLER AND NOTHING
     je .spk                         ; ELSE (SPEC.md 34.14): no pre-emphasis -
     xor ax, ax                      ; the tilt is for a cone that cannot move
@@ -80,8 +90,6 @@ os88spkfx_init:
     mov [cs:os88spkfx_xm], ah
     mov [cs:os88spkfx_et], dx
     mov [cs:os88spkfx_etz], cx
-    push cs
-    pop es                          ; the family: our own segment
     mov ds, [cs:os88spk_rseg]       ; the count table t[]: the ring's,
     mov si, [cs:os88spk_rl]         ; at RL + SND_EXT_TAB
     add si, SND_EXT_TAB
@@ -131,7 +139,7 @@ os88spkfx_init:
     xor bl, 0x80
     xor bh, bh
     add bx, [cs:os88spkfx_fam]
-    mov al, [cs:bx]
+    mov al, [es:bx]
     mov [cs:os88spkfx_c0], al
     xor ah, ah
     cmp byte [cs:os88spkfx_idle], 0
@@ -282,10 +290,10 @@ os88spkfx_level:
     mov ch, [cs:os88spkfx_xm]
     xor bl, ch
     xor bh, bh
-    mov al, [cs:si+bx]
+    mov al, [es:si+bx]              ; (the family: ES, as emit's)
     mov bl, ch
     xor bl, 0x80
-    sub al, [cs:si+bx]
+    sub al, [es:si+bx]
     mov ah, al                      ; q += q / 4 + 2
     shr ah, 1
     shr ah, 1
@@ -406,7 +414,7 @@ os88spkfx_%1z %+ c:                 ; count below 1 to fix
     sub al, ah
     rcr al, 1
 %endif
-    cs xlatb
+    es xlatb                        ; (the family: ES, the ring's)
     stosb
 %endmacro
 %macro SPKFX_ONE 1                  ; %1 = d (diff) or n; the copy is c
@@ -417,7 +425,7 @@ os88spkfx_%1 %+ c:
     sub al, ah                      ; prev - x rotated with its borrow: the
     rcr al, 1                       ; index with its top bit flipped, which
 %endif                              ; is how PRE_DIFF's rows are stored
-    cs xlatb                        ; the level's count
+    es xlatb                        ; the level's count (the family: ES)
     sub al, dh                      ; the carrier's shift, saturating at 1
     jbe os88spkfx_%1f %+ c
 os88spkfx_%1r %+ c:
@@ -486,7 +494,7 @@ os88spkfx_enz:
 %assign c c-1
 %endrep
 
-os88spkfx_fam:  dw 0                ; the family, in our segment
+os88spkfx_fam:  dw 0                ; the family, in ES's segment
 os88spkfx_pre:  db 0                ; SPKFX_PRE_*
 os88spkfx_idle: db 0                ; the carrier put away in the quiet
 os88spkfx_c0:   db 0                ; the centre count

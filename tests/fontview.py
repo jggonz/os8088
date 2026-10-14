@@ -38,19 +38,25 @@ def package_segment(m, slot):
     return u16(rec, 22)
 
 
-def fv_state(m, base):
-    b = m.read(base, 13)
-    o = lambda name: MAP[name] - IMAGE_END       # noqa: E731 - map-derived
-    return dict(selected=b[o("fv_selected")], loaded=b[o("fv_loaded")],
-                face=b[o("fv_face")], pending=b[o("fv_pending")],
-                error=b[o("fv_error")], arghave=b[o("fv_arghave")],
-                textlen=b[o("fv_textlen")])
+STATE = ("selected", "loaded", "face", "pending", "error", "textlen")
 
 
-def fv_quiet(m, base):
+def fv_state(m, seg):
+    """Each byte at its OWN mapped offset from the region's base. They are not
+    one block: [fv_loaded], [fv_pending], [fv_error] and [fv_textlen] start
+    non-zero and so live in the IMAGE, and the rest in the bss after the
+    specimen's tail (SPEC.md 90.10) - which is the reason to read the map and
+    not a span off os88_image_end."""
+    lo = min(MAP["fv_" + n] for n in STATE)
+    hi = max(MAP["fv_" + n] for n in STATE)
+    b = m.read(seg * 16 + lo, hi - lo + 1)
+    return {n: b[MAP["fv_" + n] - lo] for n in STATE}
+
+
+def fv_quiet(m, seg):
     """Until the viewer's state AND the drive both stop moving: a face load is
     disk reads between which the state bytes can sit still."""
-    os88marty.quiesce(m, lambda: (fv_state(m, base), m.disk().get("reads")),
+    os88marty.quiesce(m, lambda: (fv_state(m, seg), m.disk().get("reads")),
                       guest=1.0, what="the face load to finish")
 
 
@@ -92,15 +98,13 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     fvslot = after[-1]
     seg = package_segment(m, fvslot)
     image_end = u16(m.read(seg * 16, 32), 8)
-    base = seg * 16 + image_end
-    fv_quiet(m, base)
-    state = fv_state(m, base)
+    if image_end != IMAGE_END:
+        raise SystemExit("fontview: the running image is %d bytes and the "
+                         "map's is %d - a different build" % (image_end,
+                                                              IMAGE_END))
+    fv_quiet(m, seg)
+    state = fv_state(m, seg)
     print("associated launch:", state)
-    if not (state["selected"] == state["loaded"] and state["face"] > 0
-            and not state["pending"] and not state["error"]
-            and state["arghave"]):
-        fails.append("CHARTER.F88 did not become the open selected face: %r"
-                     % state)
 
     # ty_nfam, off the map.  It must agree with the directory rather than
     # merely reaching TY_MAXFAM and silently hiding a family.
@@ -111,25 +115,39 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         fails.append("viewer lists %d of %d installed faces" %
                      (found, len(installed)))
 
+    # THE LAUNCH NAME PICKED ITS OWN ROW: which row Charter is comes off the
+    # viewer's own catalogue (ty_fnames, TY_NAMSZ = 13 bytes a family), so a
+    # launch that fell back to row 0 fails unless Charter really is row 0.
+    names = m.read(seg * 16 + MAP["ty_fnames"], 13 * max(found, 1))
+    rows = [names[i * 13:(i + 1) * 13].split(b"\0")[0].decode("ascii", "replace")
+            for i in range(found)]
+    want = rows.index("CHARTER.F88") if "CHARTER.F88" in rows else -1
+    print("Charter is row", want, "of", rows)
+    if not (want >= 0 and state["selected"] == want
+            and state["selected"] == state["loaded"] and state["face"] > 0
+            and not state["pending"] and not state["error"]):
+        fails.append("CHARTER.F88 did not become the open selected face: %r"
+                     % state)
+
     oldlen = state["textlen"]
     m.type_text("XYZ")
     os88marty.settle(m)
-    state = fv_state(m, base)
+    state = fv_state(m, seg)
     print("after typing XYZ:", state)
     if state["textlen"] != oldlen + 3:
         fails.append("typing changed specimen length %d -> %d, wanted %d" %
                      (oldlen, state["textlen"], oldlen + 3))
     m.key("Backspace")
     os88marty.settle(m)
-    state = fv_state(m, base)
+    state = fv_state(m, seg)
     if state["textlen"] != oldlen + 2:
         fails.append("Backspace did not edit the specimen")
 
     old = state["loaded"]
     m.key("ArrowDown")
-    fv_quiet(m, base)
+    fv_quiet(m, seg)
     os88marty.settle(m)
-    state = fv_state(m, base)
+    state = fv_state(m, seg)
     print("after Down:", state)
     if (state["loaded"] == old or state["selected"] != state["loaded"]
             or not state["face"] or state["pending"] or state["error"]):
@@ -137,13 +155,13 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
 
     # The mouse path is separate from the arrow path: click row 4 using the
     # content origin the package banked from WM_CONTENT.
-    raw = m.read(base, 6)
-    cx, cy = u16(raw, 2), u16(raw, 4)
+    raw = m.read(seg * 16 + MAP["fv_x"], 4)
+    cx, cy = u16(raw, 0), u16(raw, 2)
     target = 4
     mo.click(cx + 12, cy + FV_LISTY + target * FV_ROWH + 4)
-    fv_quiet(m, base)
+    fv_quiet(m, seg)
     os88marty.settle(m)
-    state = fv_state(m, base)
+    state = fv_state(m, seg)
     print("after clicking row 4:", state)
     if (state["selected"] != target or state["loaded"] != target
             or state["pending"] or state["error"]):

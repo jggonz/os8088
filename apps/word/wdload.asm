@@ -87,7 +87,10 @@ wdl_entry:
     pop ax
     jne .no
 
-    call OSAPI_PKG_REHOME           ; DX = the program, AX = image + bss
+    OS88_REHOME                     ; DX = the program; the KEEP form, so
+                                    ; the carve is cut where PART 1 ends and
+                                    ; not where the program does (SPEC.md
+                                    ; 20.12.10.5) - wdparts' check C
     jc .no
     xor bx, bx                      ; NO WINDOW: ours is the region that is
     clc                             ; about to be freed (SPEC.md 20.12.10.6)

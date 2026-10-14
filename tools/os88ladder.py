@@ -179,13 +179,9 @@ def constants(build="build"):
     # scrape the self-check does not reach is one that fails after the walk,
     # with the minutes already spent - which is how this one was found, its
     # pattern binding on a comment the tree had since rewritten.
-    c["OVL_AT"] = grab("kernel/kernel.asm", r"^OVL_AT\s+equ\s+(\d+)",
-                       "OVL_AT - where `.ovl` sits inside the blob",
-                       "kernel/kernel.asm; `section .ovl start=OVL_AT` is the "
-                       "line that uses it")
-    # MIN_RAM_KB is NOT scraped: kernel.asm defines it twice, once per build,
-    # and a regex picks whichever it happens to reach. tools/kernsize.py is
-    # told which build it is measuring and reports the one that applies.
+    # MIN_RAM_KB is NOT scraped: tools/kernsize.py is told which build it is
+    # measuring and reports the figure that build was assembled with, which
+    # stays right if the two kernels' figures ever part again.
     return c
 
 
@@ -209,7 +205,7 @@ def ladder(build="build", defines=()):
     k = json.loads(out)
     for want in ("kseg", "imgpara", "coldpara", "fatpara", "lowpara",
                  "vgabufpara", "kend", "ksize", "text", "bss", "cold",
-                 "lowbss", "ovlw", "ovl", "boot2", "stk0"):
+                 "lowbss", "ovl", "boot2", "stk0"):
         if want not in k:
             raise Stale("tools/kernsize.py no longer reports `%s`" % want,
                         "tools/kernsize.py --json",
@@ -458,7 +454,7 @@ def walk(image, machine, defines, lad, cons, limit=240.0, verbose=True,
                     % len(sites),
                     "tools/os88boot.py callsites()",
                     "kmain has ~30; the listing parser has lost the macro "
-                    "expansions again - OVWCALL and friends list as `%1`")
+                    "expansions again - OVLCALL and friends list as `%1`")
 
     ev = []                             # the timeline, in cycle order
     t = {"prev": 0, "pdisk": None}
@@ -598,7 +594,7 @@ def walk(image, machine, defines, lad, cons, limit=240.0, verbose=True,
                         m.status()["cycles"], m.disk())
             row["bar"] = p.bar()
             row["heap"] = p.heap(cons["MC_SIZE"], cons["MEM_MAX"])
-            # WATCH THE FAT WINDOW. `.ovlw` is boot-overlay CODE that rides
+            # WATCH THE FAT WINDOW. `.ovl` is boot-overlay CODE that rides
             # the kernel's own read onto FAT_SEG and is forfeit at the first
             # mount (SPEC.md 2.5.3) - so somewhere in this walk those bytes
             # stop being the code that is running and become a FAT snapshot.
@@ -706,7 +702,7 @@ STAGES = [
          focus=["ktext"],
          take=dict(phases=["ovl_spl_msg_fdd", "desk_init", "dock_init",
                            "files_init_x", "drv_init_x",
-                           "drv_snd_sniff", "snd_init", "splf_step"])),
+                           "drv_sniff", "snd_init", "splf_step"])),
     dict(id="drvboot", short="mount + drivers", title="The floppy is mounted - over the start-up code",
          moved="the disk's index, written across 5KB of code that was running",
          take=dict(phases=["drv_boot_x", "hb_probe_x", "xm_boot_x",
@@ -893,7 +889,6 @@ def regions(stage_id, lad, cons, vol, ram_kb, heap, loaded_sectors, spl_first,
     are what the kernel actually had, not what it ought to have had.
     """
     top = ram_kb * 1024
-    ovl_at = cons["OVL_AT"]
     order = [st["id"] for st in STAGES]
     at = order.index(stage_id)
 
@@ -923,7 +918,7 @@ def regions(stage_id, lad, cons, vol, ram_kb, heap, loaded_sectors, spl_first,
              "dpt": "Drive settings", "vbr": "Boot sector",
              "vbrtop": "Boot sector (moved)", "vbrstk": "Boot stack",
              "ktext": "System code", "kcold": "System code 2",
-             "ovlw": "Start-up code", "ovl": "Start-up code",
+             "ovl": "Start-up code", "ovl": "Start-up code",
              "fatwin": "Room for the index", "fatw": "Disk index",
              "lowbss": "Stacks + buffers", "vgabuf": "Graphics scratch",
              "blob": "Loader", "pending": "Still on the floppy",
@@ -1098,19 +1093,19 @@ def regions(stage_id, lad, cons, vol, ram_kb, heap, loaded_sectors, spl_first,
                 continue
             add(a, min(b, img_end) if not since("kernel") else b,
                 rid, lab, cls, note)
-        # ...AND THE OVERLAY, ON A LAYER OF ITS OWN. `.ovlw` is 5,215 bytes
+        # ...AND THE OVERLAY, ON A LAYER OF ITS OWN. `.ovl` is 5,215 bytes
         # against the FAT window's 4,608, so it does not fit the block it is
         # drawn over: it runs on into the bottom of `.lowbss`, where SPEC.md
         # 2.1.2 deliberately put the three MOUNT-OWNED buffers so that it
         # could. Drawing it as a raised band that spans both is the only
         # honest picture - it is not a region of the map, it is code lying
         # ACROSS two of them until the mount takes the ground back.
-        if not since("drvboot") and lad["ovlw"] and unpacked:
+        if not since("drvboot") and lad["ovl"] and unpacked:
             ov_a = lad["fat_seg"] * 16
-            ov_b = ov_a + lad["ovlw"]
+            ov_b = ov_a + lad["ovl"]
             if since("kernel") or img_end > ov_a:
                 add(ov_a, min(ov_b, img_end) if not since("kernel") else ov_b,
-                    "ovlw", "Start-up code - borrowed space", "ovl",
+                    "ovl", "Start-up code - borrowed space", "ovl",
                     "%s bytes of [[overlay|start-up code]]. It rides in on the "
                     "same continuous read as everything else and lands on the "
                     "space reserved for the disk index - so it costs nothing "
@@ -1120,20 +1115,10 @@ def regions(stage_id, lad, cons, vol, ram_kb, heap, loaded_sectors, spl_first,
                     "start-up work you can click on runs from here; the one "
                     "step that does not is the mount itself, because that is "
                     "the step that overwrites it."
-                    % "{:,}".format(lad["ovlw"]), layer=1)
-        # `.ovl`, the other half, is a band inside the blob for the same
-        # reason: it is a passenger, not a region.
-        if since("blob") and not since("unblob") and lad["ovl"]:
-            ova = lad["kend"] * 16 + ovl_at
-            add(ova, ova + lad["ovl"], "ovl",
-                "Start-up code that outlives the mount", "ovl",
-                "%s bytes riding inside the loader's %s, and the half that has "
-                "to survive the [[mount]]: the mount itself is here, and so "
-                "are the two captions the loading screen shows while it waits. "
-                "It goes back to the [[memory pool]] with the rest of the "
-                "loader once the desktop is ready to draw."
-                % ("{:,}".format(lad["ovl"]),
-                   "{:,}".format(cons["BOOT2_SECS"] * vol["bps"])), layer=1)
+                    % "{:,}".format(lad["ovl"]), layer=1)
+        # The overlay's OTHER half has no band of its own: since SPEC.md
+        # 2.9.14 it is part of `.boot2`, one section with the loader, so it is
+        # the blob's region below and not a passenger inside it.
         if not since("kernel") and img_end < lad["kend"] * 16:
             add(img_end, lad["kend"] * 16, "pending",
                 "Still on the floppy", "free",
@@ -1635,11 +1620,11 @@ NOTES = {
     'drv_init_x':
         'The [[driver]] table - before the sound layer, whose tone '
         'routine reads it on its very first timer tick.',
-    'drv_snd_sniff':
-        'Is there a music chip at the usual address? If so its '
-        '[[driver]] becomes wanted by default - which the settings file '
-        'then overrides if it says otherwise, so this is only ever the '
-        'answer on a machine nobody has told.',
+    'drv_sniff':
+        'Is there a music chip at the usual address, or a hard disk the '
+        'BIOS knows about? If so that [[driver]] becomes wanted by '
+        'default - and the settings file overrides it only where the user '
+        'has ticked or unticked it themselves.',
     'snd_init':
         'The sound layer publishes itself last. Its timer routine has '
         'been running, and deliberately doing nothing, since task '
@@ -1739,7 +1724,7 @@ TITLES = {
     "dock_init": "Set up the dock",
     "files_init_x": "Set up the file browser",
     "drv_init_x": "Create the driver table",
-    "drv_snd_sniff": "Look for a music chip",
+    "drv_sniff": "Look for a music chip and a hard disk",
     "snd_init": "Start the sound layer",
     "drv_boot_x": "Mount the floppy, and load what it asks for",
     "hb_probe_x": "Is there a hibernation to resume?",
@@ -1757,7 +1742,7 @@ TITLES = {
 
 SECTION_REGION = {
     ".text": "ktext", ".bss": "ktext", ".cold": "kcold",
-    ".ovlw": "ovlw", ".ovl": "blob", ".boot2": "blob",
+    ".ovl": "ovl", ".boot2": "blob",
     ".lowbss": "lowbss", ".vgabuf": "vgabuf",
 }
 
@@ -1775,7 +1760,7 @@ def check_fatw(stages):
     """PROVE the band goes away where the page says it does.
 
     walk() digests the first 256 bytes of FAT_SEG at every kmain stop: while
-    `.ovlw` is the code that is running they do not change, and the mount is
+    `.ovl` is the code that is running they do not change, and the mount is
     what overwrites them with the disk's index. The page draws that band as
     forfeit at `drvboot`. Reading the digests back is what turns that from a
     thing the page asserts into a thing the walk saw - and a walk in which
@@ -1797,7 +1782,7 @@ def check_fatw(stages):
         return "no FAT-window digests in this walk"
     if first is None:
         raise Stale("the FAT window never changed across kmain, so the walk "
-                    "never saw the mount overwrite `.ovlw`",
+                    "never saw the mount overwrite `.ovl`",
                     "walk()'s `fatw` digest, against STAGES' `drvboot`",
                     "either the mount no longer lands on FAT_SEG (SPEC.md "
                     "2.5.3) or the digest is read from the wrong place")
@@ -1876,7 +1861,7 @@ def build_page(walkdata, lad, cons, vol, defines, strs, notes=NOTES,
             if s in SECTION_REGION:
                 rid = SECTION_REGION[s]
                 # A section's home can be OFF this stage's map by the time a
-                # step in it runs: `.ovlw` is gone once the mount has been
+                # step in it runs: `.ovl` is gone once the mount has been
                 # through it, and the blob is gone once `mem_unblob_x` has
                 # given it back - yet `spl_finish` runs from the blob in
                 # that same stage. Light whatever the map draws where the
@@ -1884,7 +1869,7 @@ def build_page(walkdata, lad, cons, vol, defines, strs, notes=NOTES,
                 # the free run for the other, rather than a name the map
                 # does not have.
                 if not any(r["id"] == rid for r in regs):
-                    home = {"ovlw": lad["fat_seg"], "blob": lad["kend"]}.get(rid)
+                    home = {"ovl": lad["fat_seg"], "blob": lad["kend"]}.get(rid)
                     rid = region_at(regs, home) if home else None
                 mem.append(rid)
             elif e["kind"] == "rom":
@@ -2061,8 +2046,8 @@ def build_page(walkdata, lad, cons, vol, defines, strs, notes=NOTES,
         "cons": cons, "vol": vol, "strings": strs,
         "ladder": {k: lad[k] for k in
                    ("kseg", "cold_seg", "fat_seg", "low_seg", "vgabuf_seg",
-                    "kend", "text", "bss", "cold", "lowbss", "vgabuf", "ovlw",
-                    "ovl", "boot2", "ksize", "minramkb")},
+                    "kend", "text", "bss", "cold", "lowbss", "vgabuf", "ovl",
+                    "boot2", "ksize", "minramkb")},
         "ksecs": ksecs,
         "stages": out,
     }
@@ -3533,7 +3518,7 @@ def render(p, fragment=False):
                sum(1 for st in p["stages"] for x in st["steps"]
                    if x.get("sectors")),
                cons["BOOT2_SECS"], "{:,}".format(lad["ksize"]),
-               "{:,}".format(lad["ovlw"] + lad["ovl"]),
+               "{:,}".format(lad["ovl"] + lad["boot2"]),
                m["total_ms"] / 1000.0,
                p["stages"][0]["ms"] / 1000.0)),
     }

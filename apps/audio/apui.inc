@@ -83,13 +83,7 @@ apu_layout:
     inc di
     jmp .brow
 .bdone:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ap_ret6
 
 ; =============================================================================
 ; apu_origin - AX = content left, DX = content top (screen coords)
@@ -263,13 +257,7 @@ apu_draw:
     je .done
     call apu_about_card
 .done:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ap_ret6
 
 ; =============================================================================
 ; apu_about_card - the OSAPI_ABOUT_SET card (SPEC.md 86.7): a white panel with
@@ -315,7 +303,7 @@ apu_about_card:
     shr ax, 1
     add ax, [apu_oy]
     mov [apab_y1], ax              ; y1
-    ; --- white fill ---
+    ; --- white fill, then the black frame on the same rect ---
     mov al, 15
     call OSAPI_SET_COLOR
     mov ax, [apab_x1]
@@ -325,62 +313,32 @@ apu_about_card:
     sub cx, 9                      ; x2
     mov dx, bx
     add dx, APU_ABH - 1            ; y2
-    call OSAPI_GFX_FILL
-    ; --- black frame ---
+    call OSAPI_GFX_FILL            ; (every OSAPI slot preserves its inputs)
+    push ax
     mov al, 0
     call OSAPI_SET_COLOR
-    mov ax, [apab_x1]
-    mov bx, [apab_y1]
-    mov cx, [apu_ox]
-    add cx, [apu_cw]
-    sub cx, 9
-    mov dx, bx
-    add dx, APU_ABH - 1
-    call OSAPI_GFX_FRAME
-    ; --- four lines (ink 0 on paper 15) ---
-    mov si, apu_ab1
-    mov cx, [apab_x1]
-    add cx, 8
-    mov dx, [apab_y1]
-    add dx, 7 + 0 * APU_ABLH
-    mov ax, 0x0F00
-    call OSAPI_FONT_RUN
-    mov si, apu_ab2
-    mov cx, [apab_x1]
-    add cx, 8
-    mov dx, [apab_y1]
-    add dx, 7 + 1 * APU_ABLH
-    mov ax, 0x0F00
-    call OSAPI_FONT_RUN
-    mov si, apu_ab3
-    mov cx, [apab_x1]
-    add cx, 8
-    mov dx, [apab_y1]
-    add dx, 7 + 2 * APU_ABLH
-    mov ax, 0x0F00
-    call OSAPI_FONT_RUN
-    mov si, apu_ab4
-    mov cx, [apab_x1]
-    add cx, 8
-    mov dx, [apab_y1]
-    add dx, 7 + 3 * APU_ABLH
-    mov ax, 0x0F00
-    call OSAPI_FONT_RUN
-    mov si, apu_ab5                ; the credit (SPEC.md 20.5.1.1, 86.7)
-    mov cx, [apab_x1]
-    add cx, 8
-    mov dx, [apab_y1]
-    add dx, 7 + 4 * APU_ABLH
-    mov ax, 0x0F00
-    call OSAPI_FONT_RUN
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     pop ax
-    ret
+    call OSAPI_GFX_FRAME
+    ; --- five lines (ink 0 on paper 15), apu_ab1.. back to back ---
+    mov cx, ax
+    add cx, 8                      ; x1 + 8
+    mov dx, bx
+    add dx, 7                      ; y1 + 7, then APU_ABLH a line
+    mov si, apu_ab1                ; (the credit is the fifth: SPEC.md
+    mov ax, 0x0F00                 ; 20.5.1.1, 86.7)
+    mov bl, 5
+    cld
+.ln:
+    call OSAPI_FONT_RUN
+    add dx, APU_ABLH
+.nul:
+    lodsb                          ; SI past this line's NUL - AL ends 0,
+    or al, al                      ; so AX is 0x0F00 again
+    jnz .nul
+    dec bl
+    jnz .ln
+.out:
+    jmp ap_ret6
 
 ; =============================================================================
 ; apu_draw_stats - the Diagnostics view (SPEC.md 86.5.1). Formatted ONCE per
@@ -477,13 +435,7 @@ apu_draw_stats:
     call aps_line
 %endif
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ap_ret6
 
 %ifndef APROF
 aps_none: db 'Diagnostics: rebuild with -DAPROF', 0
@@ -830,13 +782,7 @@ ap_diag_dump:
 
     call ap_que_home              ; back to the track's directory (quiet)
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ap_ret6
 %endif
 
 ; --- apu_draw_time_full - the "MM:SS [bar] MM:SS" row, all of it -------------
@@ -884,13 +830,7 @@ apu_draw_time_full:
 
     call apu_draw_bar_fill
 
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ap_ret6
 
 ; --- apu_draw_bar_fill - clear the bar interior, then fill the played part ---
 apu_draw_bar_fill:
@@ -1021,13 +961,7 @@ apu_draw_dyn:
     mov ah, 15                     ; paper white
     call OSAPI_FONT_RUN
     call apu_draw_bar_delta
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ap_ret6
 
 ; --- apu_draw_buttons -----------------------------------------------------
 apu_draw_buttons:
@@ -1078,13 +1012,7 @@ apu_draw_buttons:
     inc di
     jmp .b
 .done:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ap_ret6
 
     OS88UI_BTNREC apu_btrec, apu_arects, apu_blabs, apu_bflg, 7
 apu_blabs:
@@ -1142,13 +1070,7 @@ apu_draw_list:
     inc di
     jmp .row
 .done:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ap_ret6
 
 apu_sp: db ' ', 0
 apu_gt: db '>', 0
@@ -1240,6 +1162,5 @@ apu_baim:
                                    ; drawn control and the clickable control
                                    ; are one description (SPEC.md 22's fm_hit)
     APBUF apu_bflg, 14             ; ...and its seven flag words
-    APBUF apu_abr, 8               ; scratch absolute button rect
     APW   apu_bpitch
     APW   apu_ln

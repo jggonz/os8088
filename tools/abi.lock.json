@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "92a3f9f49dd174f8f17a703767c6586fed5dbef67fc36a1ceef31fef1e9cb30e",
+  "fingerprint": "acbc5cdf8628e40b6dd72ad8a9e3e9a8bf0aff2464e7294cac97e0ce311210cd",
   "version": 9
  },
  "PKG_FMT": {
-  "fingerprint": "e786ef0bd74bf964ad033e9168823810b6ca9861367ffdb3b867224cd6950b8a",
+  "fingerprint": "a2bee65027656e83a58bf15dfe7f26bb38dbfa83ae59f54904e877f89414fe13",
   "version": 8
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -35,6 +35,20 @@
    "from": 9,
    "guard": "DRV_VER",
    "reason": "OSAPI_DRV_CFG answers from DRVV_ATTACH (the drv_tab row is the fence); DRVPIN_* and OS88_PIN for the Drivers page's Ports view's port pins (SPEC.md 51.9.2). Old drivers ignore pins; a pinning driver on an older kernel reads Auto. No number moves.",
+   "to": 9
+  },
+  {
+   "fingerprint": "a2bee65027656e83a58bf15dfe7f26bb38dbfa83ae59f54904e877f89414fe13",
+   "from": 8,
+   "guard": "PKG_FMT",
+   "reason": "elendilon's round since #241, squashed onto main (the lock predates it on that branch). Every change still runs what was built before: OSAPI_FERR_TEXT is a NEW cell at a free slot (0x0467); DRVC_EMS/DRVC_FILE2, EMSV_*/EMSE_*, DRVE_NOVOL, MEM_K_IMG, MEM_P_FLIST, ICON_SOLID, WSEQF_* and the OS88_* macros are additions; OSAPI_PKG_REHOME's AX = 0 keep form was a refusal before (no room); OSAPI_VOL_ADD's DX != 0 take reads a register every driver built on main zeroes (22.6 retired the donated listing claim - HDD, NET and RAMDISK all pass 0); the rest are contracts clarified (DRV_CFG's DS, the file read's size probe, registers preserved). No number moves.",
+   "to": 8
+  },
+  {
+   "fingerprint": "acbc5cdf8628e40b6dd72ad8a9e3e9a8bf0aff2464e7294cac97e0ce311210cd",
+   "from": 9,
+   "guard": "DRV_VER",
+   "reason": "elendilon's round since #241, squashed onto main (the lock predates it on that branch). Every change still runs what was built before: OSAPI_FERR_TEXT is a NEW cell at a free slot (0x0467); DRVC_EMS/DRVC_FILE2, EMSV_*/EMSE_*, DRVE_NOVOL, MEM_K_IMG, MEM_P_FLIST, ICON_SOLID, WSEQF_* and the OS88_* macros are additions; OSAPI_PKG_REHOME's AX = 0 keep form was a refusal before (no room); OSAPI_VOL_ADD's DX != 0 take reads a register every driver built on main zeroes (22.6 retired the donated listing claim - HDD, NET and RAMDISK all pass 0); the rest are contracts clarified (DRV_CFG's DS, the file read's size probe, registers preserved). No number moves.",
    "to": 9
   }
  ]

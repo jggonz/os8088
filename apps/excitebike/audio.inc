@@ -52,11 +52,13 @@ XU_VSIZE        equ 8                   ; a music voice: next event, loop event,
 ; got and the speaker takes over.  A machine with nothing is the speaker's, silently.
 xu_open:
     SAVE
-    mov byte [xu_live], 0
-    mov byte [xu_fm], 0
-    mov byte [xu_pat], 0
-    mov word [xu_sent], -1
-    mov word [xu_ksent], -1
+    xor ax, ax
+    mov [xu_live], al
+    mov [xu_fm], al
+    mov [xu_pat], al
+    dec ax
+    mov [xu_sent], ax
+    mov [xu_ksent], ax
     cmp byte [xu_mute], 0
     jne .out
     call OSAPI_SND_CAPS
@@ -99,22 +101,23 @@ xu_open:
 
 ; xu_start - the bracket's top: a clean sequencer, then the claim
 xu_start:
+    xor ax, ax
     mov byte [xu_cur], XU_NONE
-    mov byte [xu_race], 0
-    mov byte [xu_fin], 0
-    mov byte [xu_fxchg], 0
-    mov byte [xu_fxpri], 0
-    mov word [xu_fxp], 0
-    mov word [xu_v], 0
-    mov word [xu_v + XU_VSIZE], 0
-    mov word [xu_v + 2 * XU_VSIZE], 0
-    mov word [xu_v + 6], 0
-    mov byte [xu_phase], 0
+    mov [xu_race], al
+    mov [xu_fin], al
+    mov [xu_fxchg], al
+    mov [xu_fxpri], al
+    mov [xu_fxp], ax
+    mov [xu_v], ax
+    mov [xu_v + XU_VSIZE], ax
+    mov [xu_v + 2 * XU_VSIZE], ax
+    mov [xu_v + 6], ax
+    mov [xu_phase], al
     mov byte [xu_sub], 1
-    mov byte [xu_hold], 0
-    mov byte [xu_heavy], 0
-    mov byte [xu_defer], 0
-    mov word [xu_enghz], 0
+    mov [xu_hold], al
+    mov [xu_heavy], al
+    mov [xu_defer], al
+    mov [xu_enghz], ax
     jmp xu_open
 
 ; xu_close - the bracket's end and the M key: silence, release.  Tone leases end by
@@ -122,13 +125,14 @@ xu_start:
 xu_close:
     cmp byte [xu_live], 0
     je .out
-    mov byte [xu_fxpri], 0          ; (no stale effect resumes at the next unmute)
-    mov word [xu_fxp], 0
-    mov word [xu_fxhz], 0
-    mov word [xu_fxw], 0
     push ax
     push cx
     push dx
+    xor ax, ax
+    mov [xu_fxpri], al              ; (no stale effect resumes at the next unmute)
+    mov [xu_fxp], ax
+    mov [xu_fxhz], ax
+    mov [xu_fxw], ax
     cmp byte [xu_fm], 0
     je .spk
     mov al, 3
@@ -140,11 +144,13 @@ xu_close:
     mov dl, 40h
     call OSAPI_SND_TONE
 .clr:
-    mov byte [xu_live], 0
-    mov byte [xu_run], 0
-    mov byte [xu_fm], 0
-    mov word [xu_sent], -1
-    mov word [xu_ksent], -1
+    xor ax, ax
+    mov [xu_live], al
+    mov [xu_run], al
+    mov [xu_fm], al
+    dec ax
+    mov [xu_sent], ax
+    mov [xu_ksent], ax
     pop dx
     pop cx
     pop ax
@@ -864,11 +870,12 @@ xu_race_begin:
     call xu_setrun
     call xu_want_engine
     mov byte [xu_k], XU_IDLE_K
-    mov word [xu_enghz], 0
-    mov word [xu_enghz2], 0
-    mov word [xu_ksent], 0
-    mov word [xu_fxp], 0
-    mov byte [xu_fxpri], 0
+    xor ax, ax
+    mov [xu_enghz], ax
+    mov [xu_enghz2], ax
+    mov [xu_ksent], ax
+    mov [xu_fxp], ax
+    mov [xu_fxpri], al
     mov al, EXBFX_START_LIGHT
     call xu_fx
     RESTORE
@@ -877,12 +884,13 @@ xu_race_begin:
 ; a race ends (any way): everything off, back to the menus' patches
 xu_race_end:
     SAVE
-    mov byte [xu_race], 0
-    mov byte [xu_run], 0
-    mov byte [xu_fin], 0
-    mov word [xu_fxp], 0
-    mov byte [xu_fxpri], 0
-    mov byte [xu_fxchg], 0
+    xor ax, ax
+    mov [xu_race], al
+    mov [xu_run], al
+    mov [xu_fin], al
+    mov [xu_fxp], ax
+    mov [xu_fxpri], al
+    mov [xu_fxchg], al
     call xu_silence
     mov al, XU_NONE
     call xu_song

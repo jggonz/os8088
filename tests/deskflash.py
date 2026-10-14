@@ -50,10 +50,18 @@ against the second build of SPEC.md 26.9.9:
 compare also found that build's one bug, a caption head byte drawn under an
 empty `gfx_b1hm` mask, one stray column at x 576.)
 
-ONE READING IN ABOUT SIX shows three alternating pixels on one CGA row
-change and change back (`ffffff`, `000000`, `ffffff`) - on the kernel before
-the second build as well (1 of 6 runs), at a different row each time, and in
-an in-place leg as often as a drag one. It is not a cell's draw order.
+ONE READING IN ABOUT SIX used to show three alternating pixels on one CGA
+row change and change back (`ffffff`, `000000`, `ffffff`), at a different row
+each time, and this note called it "not a cell's draw order" and left it. It
+was not the cells; it was REAL, and it was the column writer under them:
+`sw_col` stored a masked edge byte twice - `and` the mask out, then `or` the
+pattern in - so a row the CRTC scanned between the two stores went to the
+glass with the dither's white pixels black for one frame (x 554/556/558 of
+the 553-wide sliver's head byte, at y 58 and y 144 in the two runs that
+caught it). SPEC.md 39.25.1 makes it one store; 2 of 16 runs flashed before
+and 0 of 16 after. So a flash here is a finding again, never a known flake -
+and since a rate is the only way that break shows, putting the two-store pair
+back is a 1-in-8 red, not a certain one.
 """
 import argparse
 import os

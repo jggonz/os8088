@@ -1,0 +1,15 @@
+# tools/os88rdiff.py --hot-file for VIDEO: every routine a play runs, which a
+# size or cold-code change must leave identical and at an even shift.
+# `python3 tools/os88rdiff.py apps/video/video.asm <base> --hot-file apps/video/rdiffhot.txt`
+#
+# Video's play path (docs/reports/APPS-SIZE-P1-SET6-2026-10-12.md): the
+# decoder, the OSD, the card clock, the bank/XMS reader and the loop itself
+vd_.*
+vo_.*
+vc_.*
+vb_.*
+vh_.*
+vx_.*
+os88spk.*
+vp_(play|worker|hook|adue|frame|ringkb|bkkb|bkrd|rdat|bkind)
+vp_x(free|copy|in|rdat|fill|put|end|step|quiet)

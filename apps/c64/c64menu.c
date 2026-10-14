@@ -189,7 +189,7 @@ static const char *c64_file_items[] = {
 
 /* --- Edit (edit_menu) ----------------------------------------------------
  * BOTH ITEMS ARE GREYED BY STATE, in c64_menu_state() below, and the two
- * spellings are here for the same reason c64_s_adv's are (rule 4's machinery,
+ * spellings are here for the same reason c64_t_adv's are (rule 4's machinery,
  * rule 3's meaning):
  *
  *  - PASTE greys with no C64.ROM, on a JAM, AND WHILE THE MACHINE IS PAUSED.
@@ -217,16 +217,20 @@ static const char *c64_file_items[] = {
  * a paused machine and delivers it on resume; here nothing would ever drink
  * it, because c64_paste_feed is called only from the running arm of
  * os88_onwake. */
-static const char *c64_s_copy[2] = { "Copy  Alt+Delete",
-                                     D "Copy  Alt+Delete" };
-static const char *c64_s_paste[2] = { "Paste  Alt+Insert",
-                                      D "Paste  Alt+Insert" };
+/* ONE STRING EACH, and the greyed spelling is the WHOLE of it while the
+ * live one starts a byte in: the MENU_DIS prefix is one byte, so `+ 1` skips
+ * it. It was two literals and a third copy in the item table - SmallerC
+ * merges no string - for two spellings that differ by their first byte
+ * (apps size pass 1). Copy has no greyed spelling at all any more: it is
+ * always live (c64_menu_state says why), and its item is the one literal
+ * below. */
+static char c64_t_paste[] = D "Paste  Alt+Insert";
 
 /* NOT const: c64_menu_state() writes these entries, exactly as it writes
  * c64_pref_items'. */
 static const char *c64_edit_items[] = {
     "Copy  Alt+Delete",                     /* :540  + hotkeys.vhk edit-copy */
-    "Paste  Alt+Insert"                     /* :544  + hotkeys.vhk edit-paste.
+    c64_t_paste + 1                         /* :544  + hotkeys.vhk edit-paste.
                                              * LIVE AS OF WAVE 3, and greyed
                                              * before it with the fact that
                                              * greyed them: neither the
@@ -278,25 +282,28 @@ static const char *c64_snap_items[] = {
 /* the six CHECK items' two spellings (rule 4). They are file-scope strings
  * rather than literals inside the array because the array's entries are
  * REPOINTED at run time by c64_menu_state(). */
-static const char *c64_s_full[2] = { OFF "Fullscreen  Alt+D",
-                                     ON  "Fullscreen  Alt+D" };
-static const char *c64_s_warp[2] = { OFF "Warp mode  Alt+W",
-                                     ON  "Warp mode  Alt+W" };
-static const char *c64_s_paus[2] = { OFF "Pause emulation  Alt+P",
-                                     ON  "Pause emulation  Alt+P" };
-static const char *c64_s_swap[2] = { OFF "Swap joysticks  Alt+J",
-                                     ON  "Swap joysticks  Alt+J" };
+/* ...AND THEY ARE ONE STRING EACH NOW, whose first byte c64_menu_state
+ * writes: ON and OFF differ in that byte alone (`* ` against two spaces),
+ * and the kernel reads the text through the pointer at draw time, so
+ * rewriting the byte in place is the same event as repointing the entry -
+ * the pointer below simply never moves. It was two literals per item plus a
+ * third in the table, three copies of the same 20-odd bytes (apps size
+ * pass 1). */
+static char c64_t_full[] = OFF "Fullscreen  Alt+D";
+static char c64_t_warp[] = OFF "Warp mode  Alt+W";
+static char c64_t_paus[] = OFF "Pause emulation  Alt+P";
+static char c64_t_swap[] = OFF "Swap joysticks  Alt+J";
+static const char c64_mark[2] = { ' ', '*' };   /* OFF[0], ON[0] */
 /* ...and ONE item that is greyed by STATE rather than checked by it. Advance
  * frame is live while there is a machine to advance and greyed when there is
- * not - a JAMMED CPU - because c64_advance_frame answers that state by doing
+ * not - a JAMMED CPU - because ovl_advance_frame answers that state by doing
  * nothing at all, and SPEC.md 47 forbids exactly that shape: a live black
  * item that is a silent no-op is worse than one that says "not yet". The FACT
  * that greys it is already on the glass and permanent: `Main CPU: JAM at
  * $xxxx` (§4.5), on the status row, which is the window's bottom row and is
  * always drawn. (A disk with no C64.ROM used to be the other state; the ROM
  * is a part of the package now, §1.4.) */
-static const char *c64_s_adv[2] = { "Advance frame",
-                                    D "Advance frame" };
+static char c64_t_adv[] = D "Advance frame";   /* live at + 1 (Paste's) */
 
 /* NOT const: c64_menu_state() writes these entries. The kernel keeps a COPY
  * of the SET (SPEC.md 12.2) but reads the ITEM STRINGS through the `items`
@@ -304,7 +311,7 @@ static const char *c64_s_adv[2] = { "Advance frame",
  * pointer here is enough and os88_menu_set() is not called again -
  * apps/solitaire/solitaire.asm:3435's sol_dealmenu, exactly. */
 static const char *c64_pref_items[] = {
-    OFF "Fullscreen  Alt+D",                /* :682  + hotkeys.vhk <Alt>d.
+    c64_t_full,                             /* :682  + hotkeys.vhk <Alt>d.
                                              * UI_MENU_TYPE_ITEM_CHECK, so
                                              * rule 4's marker.
                                              * A stated exception to SPEC.md
@@ -338,15 +345,15 @@ static const char *c64_pref_items[] = {
                                              * row is the window's bottom row
                                              * and is always drawn. 17 glyphs
                                              * after the MENU_DIS byte */
-    OFF "Warp mode  Alt+W",                 /* :704  + hotkeys.vhk <Alt>w.
+    c64_t_warp,                             /* :704  + hotkeys.vhk <Alt>w.
                                              * CHECK, and the warp latch also
                                              * has a dot on the status row
                                              * (C64-SPEC §10.2) */
-    OFF "Pause emulation  Alt+P",           /* :708  + hotkeys.vhk <Alt>p.
+    c64_t_paus,                             /* :708  + hotkeys.vhk <Alt>p.
                                              * CHECK, and the second status
                                              * dot. `* Pause emulation  Alt+P`
                                              * is exactly 24 glyphs */
-    "Advance frame",                        /* :712. <Alt><Shift>p is 11
+    c64_t_adv + 1,                          /* :712. <Alt><Shift>p is 11
                                              * glyphs and does not fit, so the
                                              * caption is dropped by rule 2 and
                                              * the chord is in C64-SPEC §11.1's
@@ -370,7 +377,7 @@ static const char *c64_pref_items[] = {
                                              * prints it (10.2) */
     D "Mouse grab  Alt+M",                  /* :757  + hotkeys.vhk <Alt>m.
                                              * No 1351 mouse in this build */
-    OFF "Swap joysticks  Alt+J",            /* :771  + hotkeys.vhk <Alt>j.
+    c64_t_swap,                             /* :771  + hotkeys.vhk <Alt>j.
                                              * CHECK, and the swapped state is
                                              * also on the status row's two
                                              * joystick indicators */
@@ -423,16 +430,18 @@ static struct os88_menuset c64_menus = {
  * no kernel call, because the kernel reads the strings through `items`. */
 static void c64_menu_state(void)
 {
-    c64_pref_items[C64_I_FULLSCR] = c64_s_full[c64_full ? 1 : 0];
-    c64_pref_items[C64_I_WARP]    = c64_s_warp[c64_warp ? 1 : 0];
-    c64_pref_items[C64_I_PAUSE]   = c64_s_paus[c64_pause ? 1 : 0];
-    c64_pref_items[C64_I_SWAPJOY] = c64_s_swap[c64_joyswap ? 1 : 0];
+    /* every latch is 0 or 1, so it indexes the mark directly */
+    c64_t_full[0] = c64_mark[c64_full];
+    c64_t_warp[0] = c64_mark[c64_warp];
+    c64_t_paus[0] = c64_mark[c64_pause];
+    c64_t_swap[0] = c64_mark[c64_joyswap];
     /* ...and the fifth entry is a GREYING, not a check (§47): with no machine
      * running there is nothing to advance, and the reason is already the
      * permanent line on the status row. c64_jam() and os88_main both call
      * this, which is what makes the two states reachable here. */
-    c64_pref_items[C64_I_ADVANCE] =
-        c64_s_adv[(c64_state == C64_ST_JAM) ? 1 : 0];
+    c64_pref_items[C64_I_ADVANCE] = c64_t_adv;      /* greyed... */
+    if (c64_state != C64_ST_JAM)
+        c64_pref_items[C64_I_ADVANCE] = c64_t_adv + 1;  /* ...or live */
     /* ...and the Edit menu's two, for the reasons written beside their
      * spellings above: Paste is dead in all THREE of its states, Copy only
      * without a machine. Every path that leaves C64_ST_JAM re-runs this
@@ -447,14 +456,11 @@ static void c64_menu_state(void)
      * self-heals instead of lasting the session. The pause latch in ovl_cmd
      * already calls this routine, so the item greys and un-greys with the
      * state (SPEC.md 47: a greying must not outlive its fact). */
-    c64_edit_items[C64_I_COPY] =
-        c64_s_copy[0];                      /* ALWAYS LIVE. It was greyed with
-                                             * `no C64.ROM` too, and the ROM
-                                             * is a part now (1.4): a greying
-                                             * may not outlive its reason
-                                             * (SPEC.md 47), so the one fact
-                                             * left is none */
-    c64_edit_items[C64_I_PASTE] =
-        c64_s_paste[(c64_state == C64_ST_JAM || c64_pause)
-                    ? 1 : 0];
+    /* COPY IS ALWAYS LIVE, so nothing here writes its entry. It was greyed
+     * with `no C64.ROM` too, and the ROM is a part now (1.4): a greying may
+     * not outlive its reason (SPEC.md 47), so the one fact left is none. */
+    c64_edit_items[C64_I_PASTE] = c64_t_paste;      /* greyed... */
+    if (c64_state != C64_ST_JAM)
+        if (!c64_pause)
+            c64_edit_items[C64_I_PASTE] = c64_t_paste + 1;  /* ...or live */
 }

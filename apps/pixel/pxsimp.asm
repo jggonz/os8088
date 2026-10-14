@@ -1483,27 +1483,6 @@ px_dbmp:
 .ret:
     ret
 
-; px_swaprb - the row buffer's w triples B, G, R -> R, G, B. Preserves all
-px_swaprb:
-    push ax
-    push cx
-    push si
-    push ds
-    mov cx, [px_cur + PXR_SW]       ; (the package's, before DS moves)
-    mov ds, [px_wseg]
-    xor si, si
-.l:
-    mov al, [si]
-    xchg al, [si + 2]
-    mov [si], al
-    add si, 3
-    loop .l
-    pop ds
-    pop si
-    pop cx
-    pop ax
-    ret
-
 ; px_masklut - each channel's table in the work claim's tables: v (0..max)
 ; -> (v x 255 + max / 2) div max (SPEC.md 106.10). Preserves all
 px_masklut:

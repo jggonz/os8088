@@ -1206,16 +1206,16 @@ xb_custom_check:
     jae .no
     cmp di, xb_ctrig
     je .first
-    cmp ax, [di - 4]                ; the columns must ascend
+    cmp ax, [di - 3]                ; the columns must ascend
     jb .no
 .first:
     stosw
-    lodsw
+    lodsw                           ; (the file's id is a word; the list's a byte, as exbtracks.inc's)
     or ax, ax
     jz .no
     cmp ax, EXB_NSCRIPTS
     ja .no
-    stosw
+    stosb
     loop .tr
 .term:
     mov ax, 0ffffh

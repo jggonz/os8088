@@ -27,6 +27,7 @@ is two colours, so every pixel on the screen belongs to a solid class and the
 canvas can be compared against THE FILE. This row only supplies the kernel.
 """
 import argparse
+import tempfile
 import os
 import subprocess
 import sys
@@ -70,7 +71,7 @@ def main():
     # and a run that dies in the middle would leave every emulator row after
     # it driving a kernel nobody asked for - described perfectly by its own
     # symbol map, so nothing would complain.
-    apps = "/tmp/paintpack.img"
+    apps = tempfile.gettempdir() + "/paintpack.img"
     os88marty.scratch_disk(apps, "APPS:build/paint.o88",
                            "MEDIA:" + gif)
 

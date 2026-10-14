@@ -1,6 +1,19 @@
 ; =============================================================================
 ; os8088 - apps/skies/skies.asm
 ;
+; *** A SIZE PASS IS OWED BEFORE ANY NEW FEATURE GOES IN HERE ***
+;
+; To the next session asked to add to Clear Skies: STOP and remind the owner,
+; before writing anything, that this package needs a SIZE PASS first - their
+; standing request (2026-10-14, after SPEC.md 88.16.1). It is one segment, and
+; tools/csworlds.py's ceiling for the worlds overlay is 58,400 bytes of image +
+; bss. At b4eb39fe the shipped build stood at 58,300 - ONE HUNDRED bytes left -
+; and the CSDIAG watchdog and CSHZPROBE instrument already had to drop the map
+; (CS_NOMAP) to fit, as CSPROBE had dropped the haze. The likely shape is
+; moving a part out of the segment (an embedded part or overlay, SPEC.md 20.12)
+; rather than shaving bytes; agree which with the owner, do it, and then take
+; this note out in the commit that makes room.
+;
 ; CLEAR SKIES, a filled-polygon flight simulator (SPEC.md 88): take off from
 ; an airport, fly over Paris, land - or crash and be put back on the runway.
 ; A .o88 package at org 0 owning a segment (SPEC.md 20.1), prefix `cs_`,
@@ -97,7 +110,41 @@ CSI_BLACK  equ 14               ; NOTHING: the ground band with the Terrain
                                 ; on a 1bpp adapter the sky IS black and the
                                 ; two are the same row, but on a colour one
                                 ; the whole world would then read as sky
-CSI_NINK   equ 16
+CSI_HILL2  equ 16               ; A HILL'S OTHER SIDES (88.4.4.1): its +-x
+                                ; faces a shade down from the +-z ones, the
+                                ; two-tone every BUILDING already had in
+                                ; CSI_WALL / CSI_WALL2, so a ridge reads as a
+                                ; shape and not as a cut-out. Inks from here
+                                ; up are TERRAIN to cs_fillon
+CSI_HILLTOP equ 17              ; ...and its cap, a shade UP: a plateau is
+                                ; where the light falls
+CSI_HZS2   equ 18               ; THE HAZE (88.4.1.1): the sky's outer band,
+CSI_HZS1   equ 19               ; ...its inner one at the horizon, and the
+CSI_HZG1   equ 20               ; ground's one band (88.4.1.1.1). Never a
+                                ; face's ink: cs_hazerows lays them
+CSI_FIELD  equ 21               ; THE GROUND'S TEXTURE (88.13.1.5), Ultra's
+CSI_FIELD2 equ 22               ; fields in two kinds, and the second green
+CSI_GRALT  equ 23               ; Mode X's ground checker is laid with, and
+CSI_HZGALT equ 24               ; the haze band's (88.13.1.5.2)
+CSI_ROAD   equ 25               ; A ROAD'S LINE (88.13.1.5.3): CSI_MARK's, but
+                                ; on CGA brown and not the ground's green -
+                                ; never a face's ink, so cs_fillon never
+                                ; sees it
+CSI_LIFT   equ 26               ; LIFT ON THE MAP (88.16.1): a sailplane's
+                                ; thermals, a rough dither over the ground.
+                                ; Never a face's ink, so cs_fillon never
+                                ; sees it - the map lays it by cs_poly
+CSI_NINK   equ 27
+CS_MXSTIP  equ 0xE0             ; Mode X: a pattern byte 0xE0 + planes is
+                                ; CSI_LIFT through THOSE planes only, so the
+                                ; ground shows between its dots (88.16.1)
+CS_MXLAT   equ 0xF8             ; Mode X: a pattern byte from here up is
+                                ; LATCHED (88.13.1.5.2) - 0xF8 + phase the
+                                ; haze's ground band, 0xFC + phase the
+                                ; ground...
+CS_MXPAT   equ 0xFF00           ; ...and its eight latch bytes, past the two
+                                ; pages (0 and 19,200, 19,200 bytes each),
+                                ; and a ninth for a band's plain side
 
 ; --- the world (SPEC.md 88.5, 88.6) -------------------------------------------
 ; Metres. x east, z north, y up; the Eiffel Tower at the origin.
@@ -159,6 +206,10 @@ CS_SHKB   equ 16                ; ...as a claim
 CSM_STACK equ 0                 ; levels of (wx, h, wz): boxes, pyramids, the
                                 ; tower (SPEC.md 88.5)
 CSM_FLAT  equ 1                 ; explicit (x, z) pairs on the ground
+CSM_TEXT  equ 0x81              ; ...and THE GROUND'S TEXTURE (88.13.1.5): a
+                                ; flat model - the CSM_FLAT bit, which is the
+                                ; one cs_drawobj tests - that cs_drawpass
+                                ; draws in a pass of its own, before the rest
 
 ; --- a model: db type, nverts (STACK: nlevels), nfaces, nedges, edge ink, 0;
 ;     dw radius, verts, faces, edges ---------------------------------------------
@@ -224,6 +275,8 @@ CSBL_MOD    equ 3                ; ...and the rest of what is built: THE
 CSBL_HIGH   equ 4                ; ...and CSO_DENSE over that - the dense
                                  ;    city, which is a 286/386 rung and not
                                  ;    an 8088 one (88.13.1)
+CSBL_ULTRA  equ 5                ; ...and the GROUND'S TEXTURE (88.13.1.5):
+                                 ;    fields under the aeroplane, for a 386
 CSZ_SMALL  equ 0                ; Size: half the moderate view each way
 CSZ_MOD    equ 1                ; ...the Hercules default, 75% elsewhere
 CSZ_FULL   equ 2                ; ...the whole box, whatever it costs
@@ -241,6 +294,12 @@ CSFL_TERRAIN equ 1               ; Fill: TERRAIN - the ground under the
                                  ;    surface rather than anything built on
                                  ;    it (88.13.3)
 CSFL_BLDG   equ 2                ; ...and everything built on it
+CSFL_HAZE   equ 4                ; ...and THE HAZE (88.4.1.1.1): a toggle of
+                                 ;    its own, on F6, kept in the same byte so
+                                 ;    the settings file has the same five
+CSFL_GTEX   equ 8                ; ...and THE GROUND'S TEXTURE (88.13.1.5.2):
+                                 ;    the ground's second tone, on F7 - free,
+                                 ;    so on by default on every machine
 CSFL_ALL    equ 3                ; both, which is a filled world; neither is
                                  ; a wireframe one, its lines still hidden
 
@@ -523,6 +582,7 @@ CSG_TOAST  equ 9                ; A SETTING JUST CHANGED (88.13.8): its name
                                 ; and its new value, composed into cs_toastbuf
                                 ; and shown for CS_TOASTT ticks in place of
                                 ; whatever the strip was saying
+CSG_LANDOUT equ 10              ; a sailplane down in a field (88.7.6.6)
 CS_TOASTT  equ 27               ; ...which is a second and a half at 18.2 Hz
 
 ; --- the attract window (SPEC.md 88.10) ---------------------------------------
@@ -560,9 +620,9 @@ cs_entry:
     ; ES:SI is the name we were launched from - ES is KERNEL_SEG on entry, by
     ; the callback contract - and it points at a buffer the loader REUSES on
     ; the next launch, so a world read minutes from now cannot use it.
-    ; Thirteen bytes, banked before anything else runs.
-    push ax
-    push cx
+    ; Thirteen bytes, banked before anything else runs. SI and DI are the two
+    ; registers this proc gives back, and they are pushed ONCE for the copy and
+    ; the rest of it: AX and CX are the next call's outputs anyway.
     push si
     push di
     mov di, cs_lname
@@ -573,30 +633,34 @@ cs_entry:
     inc si
     inc di
     loop .name
-    pop di
-    pop si
-    pop cx
-    pop ax
 
-    push si
-    push di
+    ; --- OUR REGION IS ALREADY WHAT WE ARE (SPEC.md 88.10.8) -----------------
+    ; It is the parts carve the loader read us into, and csload hands it over
+    ; in OSAPI_PKG_REHOME's KEEP form (20.12.10.5): the kernel cuts its head
+    ; to us and its tail to our image + bss, to the paragraph, before this
+    ; proc runs. The OSAPI_MEM_REGROW that stood here did the tail itself, to
+    ; the KB, and is gone - on a region already cut to the paragraph it would
+    ; be a GROW.
+
     call OSAPI_VIDEO                ; AX = w, BX = h, CX = the dock's top row
     mov [cs_scrw], ax
     mov [cs_dock], cx
 
     mov byte [cs_setbld], CSBL_MOD   ; the settings' defaults (88.13): all of
-    mov byte [cs_setlod], CSL_MOD   ; them are what the simulator shipped
-    mov byte [cs_setfill], CSFL_ALL  ; with, so a player who never opens the
+    mov word [cs_setlod], CSL_MOD | ((CSFL_ALL | CSFL_GTEX) << 8) ; them are what the
+                                    ; simulator shipped with (cs_setfill is the
+                                    ; byte after cs_setlod, asserted at the
+                                    ; bss), so a player who never opens the
                                     ; page is flying exactly what they flew.
                                     ; Size is the fourth and cannot be set
                                     ; here: it is the ADAPTER's, and the
                                     ; adapter is not known until the window
                                     ; exists (below)
 
-    call cs_artload                 ; where the LOADER put the title bands
-                                    ; (88.10.4), before the window that draws
-                                    ; them exists. A refusal here is a plainer
-                                    ; page and not a failed launch
+    call cs_artload                 ; the title bands into the union (88.10.7),
+                                    ; before the window that draws them exists.
+                                    ; A refusal here is a plainer page and not
+                                    ; a failed launch
 
     mov al, KSC_SPACE               ; ARMING the scancode reader: the first
     call OSAPI_KEY_DOWN             ; answer is always "up" and this is where
@@ -636,27 +700,23 @@ cs_entry:
     jc .full
     mov [cs_win], bx
     ; OUR REGION MAY MOVE (SPEC.md 66.6.1), and the macro's bare `ret` IS the
-    ; proc - because every word that names this region is the kernel's. It
-    ; named a cs_reloc for a cycle, on the belief that [cs_artseg] pointed
-    ; INSIDE our carve and had to follow it. It does not: the title bands are
-    ; an OP_COMP | OP_LAZY part, and csl_art's op_fetch expands them into a
-    ; claim of their OWN, outside the carve, and hands us THAT segment
-    ; (SPEC.md 88.10.4.1). After mem_reown_x that claim is slot-owned with no
-    ; proc, so it never moves - and a proc that added the region's delta to
-    ; [cs_artseg] would have pointed the title page at 11KB of whatever the
-    ; compactor packed there the first time this region moved. Nothing
-    ; exercised it; SPEC.md 66.6.1.1 records the correction.
+    ; proc - because every word that names this region is the kernel's. The
+    ; title bands are INSIDE it now, in the union (88.10.7), and that still
+    ; needs no proc: nothing caches their segment. cs_artes adds the union's
+    ; paragraph to DS every time it is asked, so the bands are wherever the
+    ; region is. (A cached segment was the cs_reloc of SPEC.md 66.6.1.1 - a
+    ; proc for a word that pointed OUTSIDE the carve, which was wrong the other
+    ; way round.)
     OS88_REGION_MOVABLE
-    mov [cs_drplane + OS88UI_DR_WIN], bx    ; the drop-downs arm their clips
-    mov [cs_drport + OS88UI_DR_WIN], bx     ; off it (os88ui.inc)
-    mov si, cs_setdrops             ; ...AND THE SETTINGS PAGE'S FOUR, off the
-    mov cx, 4                       ; table rather than by name, so a fifth
-.win:                               ; control cannot be added to the page and
-    mov di, [si]                    ; forgotten here. With WIN zero
-    mov [di + OS88UI_DR_WIN], bx    ; OSAPI_WM_CLIP_SET refuses and drpress
-    inc si                          ; answers SPENT with the list never drawn
-    inc si                          ; - a drop-down that cannot be dropped
-    LOOPF .win                      ; down (SPEC.md 88.13.6)
+    mov si, cs_alldrops             ; the drop-downs arm their clips off it
+    mov cx, CS_NSETALL + 2          ; (os88ui.inc): the title page's two and
+.win:                               ; THE SETTINGS PAGE'S FOUR, off the table
+    lodsw                           ; rather than by name, so a fifth control
+    xchg ax, di                     ; cannot be added to the page and forgotten
+    mov [di + OS88UI_DR_WIN], bx    ; here. With WIN zero OSAPI_WM_CLIP_SET
+    loop .win                       ; refuses and drpress answers SPENT with
+                                    ; the list never drawn - a drop-down that
+                                    ; cannot be dropped down (SPEC.md 88.13.6)
     mov al, 1                       ; an 8-aligned content origin: the two
     call OSAPI_WM_SNAP              ; bands land on the byte grid (SPEC.md
                                     ; 5.4.2) and font_run reaches 6.1's
@@ -700,45 +760,138 @@ cs_entry:
     ret
 
 ; -----------------------------------------------------------------------------
-; cs_artload - where the LOADER put the title bands (SPEC.md 88.10.4)
+; cs_artload - make sure the title bands are KEPT, packed, in cs_artz
+;              (SPEC.md 88.10.7, 88.10.7.1)
 ;
-; out: [cs_artseg] = the art part's base segment, or 0.  preserves every
-;      register
+; out: [cs_artzok] = 1 when cs_artz holds them
+; clobbers: AX, BX, CX, DX, SI, DI, ES, flags - and both callers can afford it:
+;      cs_entry calls cs_wldpick, which clobbers the same seven, next, and
+;      cs_fsx_main is returning to the kernel
 ;
 ; The six bands are 10,480 bytes and no frame reads one: the title page draws
-; them and the fsx bracket never does. They used to be an LZ4 stream in the
-; IMAGE that this expanded into a claim of its own, which cost the package
-; 4,487 of a 60KB segment (APP_MAX_SIZE) for bytes nothing on a frame's path
-; ever touches. THEY ARE A PART NOW (88.10.4.1): an OP_COMP | OP_LAZY row the
-; LOADER fetches, which expands it into a claim of its own and hands this
-; program the segment, so the image carries csart.inc's OFFSETS and not one
-; byte of picture, and this routine is the assignment that used to be a claim
-; and a decode.
+; them and the fsx bracket never does. AND THE BRACKET'S OWN TABLES ARE THE
+; OTHER WAY ROUND - cs_kx, cs_ky, cs_lend and cs_rend are 10,752 bytes that
+; cs_r_setup builds on the way in and nothing outside the bracket reads. So the
+; two share ONE run of the bss, the union, and neither has a claim of its own.
+; The bands were an 11KB claim held for the whole session - through every
+; flight - for a page the flight cannot show (88.10.4.1 had them slot-owned
+; and pinned, a wall in the heap that never moved).
 ;
-; A BAND HOLDS NO POINTER, which is what made both moves free: what was a
-; label in this segment is an offset into the blob (csart.inc's equs), the
-; plane records' CSP_ART goes on assembling because an equ is a constant like
-; any other, and the three blits read ES = [cs_artseg].
+; WHAT LEAVING A FLIGHT COSTS IS TWO SMALL DECODES (88.10.7.1). The bands are
+; packed ONE BY ONE and this keeps all six, packed, in cs_artz for the life of
+; the instance; cs_artes expands a band into the union the first time it is
+; DRAWN after cs_r_setup cleared [cs_artok]. So the way out of a flight reads
+; nothing and decodes nothing here: the kernel's repaint of the title page
+; (SPEC.md 53.6) expands the title and the aeroplane in use, and the other four
+; wait until the Plane list shows one. It was a read of the whole stream and a
+; decode of all six every time (88.10.7), and the owner traded the region for
+; that half second back.
+;
+; THE READ IS STILL HERE, for the launch and for the case it failed: with
+; nothing kept, this reads the art stream with cs_wldget, which keeps it
+; rather than expanding it (a destination of paragraph 0), and cs_fsx_main
+; calls this on its way out - inside the bracket, the file API being legal
+; there (SPEC.md 53.1) and the paint after it not being a place to read a
+; disk from. Kept, it is one compare.
+;
+; A BAND HOLDS NO POINTER, which is what made every move of them free: csart.inc
+; gives OFFSETS from the bands' base, the plane records' CSP_ART goes on
+; assembling because an equ is a constant, and the blits read ES:offset with ES
+; out of cs_artes - COMPUTED from DS each time and never cached, because the
+; region is movable and the union moves with it (SPEC.md 66.6.1.1).
 ;
 ; A REFUSAL IS STILL A NORMAL PATH (SPEC.md 20.6, 47) and it is the SAME path:
-; the loader hands over 0 for bands it could not fetch, and 0 is the page the blit
-; slot's own refusal already drew - the title lettered in the 8x8 face and no
-; aeroplane. Nothing to undo on the way out: the bands' claim is slot-owned
-; since the re-home, and the kernel frees it with the instance.
+; no loader, a disk that will not read, or a band that will not expand all
+; leave its bit of [cs_artok] clear, and clear is the page the blit slot's own
+; refusal already drew - the title lettered in the 8x8 face, or no aeroplane.
+; A launch read that failed kept nothing, so the next way out reads again.
 ; -----------------------------------------------------------------------------
 cs_artload:
+    mov al, CS_STREAM_ART
+    xor bx, bx                      ; no destination: KEEP it (cs_wldget)
+    cmp [cs_artzok], bl             ; (BL = 0: a byte under `cmp [m], 0`, and
+    jne .ret                        ; the one that keeps every routine below
+                                    ; at an EVEN shift - 8086 fetch parity)
+    jmp cs_wldget                   ; ...whose CF nobody needs: [cs_artzok]
+.ret:                               ; is the answer
+    ret
+
+; -----------------------------------------------------------------------------
+; cs_artes - ES = the bands' segment, with band SI expanded in it
+; in:  SI = the band's offset in the bands (a cs_art_* name)
+; out: ES = the union, in which SI is the band; ZF = 1 when it is not there
+;      and could not be put there
+; preserves every register but ES
+;
+; ONE BAND, ON DEMAND (SPEC.md 88.10.7.1). Bit n of [cs_artok] says band n is
+; expanded; cs_r_setup clears the byte when it builds its tables over the
+; union, and this puts a band back from cs_artz the first time it is asked
+; for afterwards: one OSAPI_DECOMP of that band's own stream into ES:0 of its
+; own paragraph - csworlds.py refuses a band that is not one - out of our own
+; bss, so no claim and no file. cs_paint asks for the title and the plane in
+; use, which is what the way out of a flight pays for; cs_artdraw asks when
+; the Plane list changes the aeroplane, which is the only other time a band
+; is wanted.
+; -----------------------------------------------------------------------------
+cs_artes:
     push ax
-    xor ax, ax
-    cmp word [cs_hand + CSH_MAGIC], 'CS'
-    jne .set                        ; NO LOADER, NO ART - and that is a real
-                                    ; state rather than a paranoid one: this
-                                    ; image is a PART and the only thing that
-                                    ; starts it is csload.asm, so a zero magic
-                                    ; means the bss was zeroed by an ordinary
-                                    ; launch and there is no carve to point at
-    mov ax, [cs_hand + CSH_ART]
-.set:
-    mov [cs_artseg], ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, ds
+    add ax, CS_UNI_AT / 16
+    mov es, ax
+    push es                         ; ...for the way out: `pop` keeps ZF
+    xor bx, bx                      ; BX = 2 x the band
+.find:
+    cmp si, [cs_artroff + bx]
+    je .found
+    inc bx
+    inc bx
+    cmp bx, 2 * CS_NBANDS
+    jb .find
+    xor ax, ax                      ; not a band at all: ZF = 1
+    jmp short .out
+.found:
+    mov cl, bl
+    shr cl, 1
+    mov al, 1
+    shl al, cl                      ; AL = the band's bit...
+    test [cs_artok], al
+    jnz .out                        ; ...there: ZF = 0
+    cmp byte [cs_artzok], 0
+    je .out                         ; nothing kept: ZF = 1
+    push ax
+    mov cl, 4
+    shr si, cl
+    mov ax, es
+    add ax, si
+    mov es, ax                      ; ES:0 = where the band goes
+    mov dx, [cs_artroff + bx + 2]
+    sub dx, [cs_artroff + bx]       ; DX = what it expands to...
+    mov si, [cs_artzoff + bx]
+    mov cx, [cs_artzoff + bx + 2]
+    sub cx, si                      ; ...CX = its packed length...
+    add si, cs_artz                 ; ...and DS:SI its stream
+    xor di, di
+    xor bx, bx                      ; BX:DX the EXACT output (20.13.3)
+    mov al, OSAPI_LZ_LZ4
+    call OSAPI_DECOMP
+    pop ax
+    jc .none
+    or [cs_artok], al               ; ZF = 0: AL is a bit
+    jmp short .out
+.none:
+    xor ax, ax                      ; ZF = 1
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -754,8 +907,9 @@ cs_artload:
 ;
 ; A world is 11,904 bytes across nine countries and exactly one is under the
 ; aeroplane, so the program carries none of them: the loader wrote down where
-; each packed stream sits in the file (88.10.4.2's handoff, extended), and this
-; reads the one it wants and expands it into cs_wldat.
+; csw.z begins in the file (88.10.4.2's handoff), cs_wstroff says where each
+; packed stream sits inside it (88.10.7), and this reads the one it wants and
+; expands it into the overlay.
 ;
 ; IT DOES NOTHING IF THE WORLD IS ALREADY THERE, which is most picks: nine
 ; locations stand in eight worlds, so Paris' two share one, and re-picking the
@@ -789,7 +943,6 @@ cs_wldpick:
     push ax                         ; --- the vocabulary, once
     mov al, CS_STREAM_VOCAB
     mov bx, CS_VOCAB_AT / 16
-    mov cx, [cs_wstrraw + CS_STREAM_VOCAB * 2]
     call cs_wldget
     pop ax
     jc .no
@@ -799,17 +952,7 @@ cs_wldpick:
                                     ; world, and so does re-picking the same
     push ax
     add al, CS_STREAM_WLD0
-    push bx
-    xor bh, bh
-    mov bl, al
-    shl bx, 1
-    mov cx, [cs_wstrraw + bx]       ; THE EXACT LENGTH and not CS_WLD_MAX: the
-    pop bx                          ; overlay's ROOM is not what the stream
-    mov bx, CS_WLD_AT / 16          ; expands to, and OSAPI_DECOMP CHECKS the
-                                    ; number it is given (SPEC.md 20.13.3) -
-                                    ; writing the bytes and THEN refusing, so
-                                    ; the wrong one reads as a world that
-                                    ; loaded and a load that failed (88.10.5.4)
+    mov bx, CS_WLD_AT / 16
     call cs_wldget
     pop ax
     jc .no
@@ -825,39 +968,54 @@ cs_wldpick:
     ret
 
 ; -----------------------------------------------------------------------------
-; cs_wldget - read stream AL out of our own file and expand it into the overlay
-; in:  AL = the stream's row in the loader's directory, BX = the PARAGRAPH the
-;      expansion goes to, relative to our own segment, CX = the bytes it
-;      expands to
+; cs_wldget - read stream AL out of our own file and expand it at paragraph BX
+; in:  AL = the stream's row in csw.z (CS_STREAM_*), BX = the PARAGRAPH the
+;      expansion goes to, relative to our own segment
 ; out: CF = 0 done; CF = 1 nothing was written
 ; clobbers: AX, BX, CX, DX, SI, DI, ES, flags
 ;
 ; TWO CONTRACTS SHAPE THIS AND NEITHER IS OURS. OSAPI_DECOMP wants its
 ; destination at OFFSET 0 of a segment (SPEC.md 20.13.3), which is why the
-; caller passes a paragraph and why both overlay addresses are multiples of 16.
+; caller passes a paragraph and why every destination is a multiple of 16.
 ; And OSAPI_FILE_READ_AT wants a CLUSTER multiple for the offset and the
-; capacity alike (20.14.3) while a part begins on a 512-byte boundary - so on a
-; volume with bigger clusters the read starts BELOW the stream and the slack is
-; stepped over afterwards. That is op_claim's arithmetic (20.12.2) done once,
-; for one stream, instead of for a whole run.
+; capacity alike (20.14.3) while a stream begins wherever the one before it
+; ended - so the read starts at the cluster at or below the stream and the
+; slack is stepped over afterwards. That is op_claim's arithmetic (20.12.2)
+; done once, for one stream, instead of for a whole run.
+;
+; THE SIZE OSAPI_DECOMP IS TOLD IS THE STREAM'S OWN UNPACKED LENGTH, out of
+; cs_wstrraw, and never the room it lands in: the kernel CHECKS it, writing the
+; bytes and THEN refusing, so the room reads as a world that loaded and a load
+; that failed (88.10.5.4).
 ; -----------------------------------------------------------------------------
 cs_wldget:
+    cmp word [cs_hand + CSH_MAGIC], 'CS'
+    jne .no                         ; NO LOADER, NO FILE TO READ - and that is
+                                    ; a real state rather than a paranoid one:
+                                    ; this image is a PART and the only thing
+                                    ; that starts it is csload.asm, so a zero
+                                    ; magic means the bss was zeroed by an
+                                    ; ordinary launch, and a cluster size of 0
+                                    ; is a DIVIDE BY ZERO below
     mov [cs_wgpar], bx
-    mov [cs_wgout], cx
-    xor ah, ah
+    cbw                             ; AH = 0: a row is under 128
     shl ax, 1
-    shl ax, 1                       ; four bytes a row: the sector, the length
     mov si, ax
-    mov ax, [cs_hand + CSH_WDIR + si]
-    mov [cs_wgsec], ax
-    mov ax, [cs_hand + CSH_WDIR + si + 2]
-    mov [cs_wglen], ax
+    mov ax, [cs_wstrraw + si]       ; what it expands to...
+    mov [cs_wgout], ax
+    mov bx, [cs_wstroff + si]       ; ...where it begins inside csw.z...
+    mov ax, [cs_wstroff + si + 2]
+    sub ax, bx
+    mov [cs_wglen], ax              ; ...and its packed length, to the next
 
-    mov ax, [cs_wgsec]              ; --- the stream's byte offset, 32 bits: a
-    xor dx, dx                      ;     part may sit past 64KB in the file
+    mov ax, [cs_hand + CSH_SEC]     ; --- the stream's byte offset in the FILE,
+    mov dx, ax                      ;     32 bits: csw.z's sector x 512, whose
+    mov cl, 7                       ;     high half is the sector >> 7, plus
+    shr dx, cl                      ;     the stream's offset inside it
     mov cl, 9
     shl ax, cl
-    rcl dx, cl
+    add ax, bx
+    adc dx, 0
     mov bx, [cs_hand + CSH_CLB]
     dec bx                          ; the cluster mask
     mov cx, ax
@@ -915,6 +1073,28 @@ cs_wldget:
     cmp ax, bx                      ; (BX is dead here - the destination one
     jb .free                        ; below is loaded fresh past .got)
 .got:
+    ; --- A STREAM WITH NO DESTINATION IS KEPT (SPEC.md 88.10.7.1) ----------
+    ; Paragraph 0 is our own image and never a place to expand to, so it is
+    ; how cs_artload says "the bands": their packed stream is copied whole into
+    ; cs_artz rather than expanded, and cs_artes expands a band from there when
+    ; it is first drawn. A stream of any other length is not kept - cs_artz is
+    ; CS_ARTZ_SIZE and a stale index must not overrun it.
+    cmp word [cs_wgpar], 0
+    jne .exp
+    mov cx, [cs_wglen]
+    cmp cx, CS_ARTZ_SIZE
+    jne .free
+    push ds
+    pop es
+    mov di, cs_artz
+    mov si, [cs_wgslk]
+    push ds
+    mov ds, [cs_wgseg]
+    rep movsb
+    pop ds
+    mov byte [cs_artzok], 1
+    jmp short .done
+.exp:
     ; --- and the expansion, ES:0 by contract (SPEC.md 20.13.3) --------------
     ; EVERY WORD IS FETCHED BEFORE DS MOVES. The stream is in the buffer and
     ; the destination is ours, so this is the one place in the package where DS
@@ -936,6 +1116,7 @@ cs_wldget:
     call OSAPI_DECOMP
     pop ds
     jc .free
+.done:
     mov dx, [cs_wgseg]
     call OSAPI_MEM_FREE
     clc
@@ -967,8 +1148,9 @@ cs_adapter:
     call OSAPI_FSX_CAPS
     mov [cs_caps], ax
     mov [cs_vidk], dl
-    mov byte [cs_want], CSB_NONE
-    mov byte [cs_fsxm], 0FFh
+    mov bx, CSB_NONE | (0FFh << 8)  ; BL = [cs_want] and BH = [cs_fsxm], which
+                                    ; are ADJACENT (asserted at the bss) and
+                                    ; stored as one word at .say
     ; --- THE 16-COLOUR TEXT HACK IS A REAL CGA'S AND NOBODY ELSE'S (88.15.7).
     ;     It is programmed by writing the 6845 directly, and a VGA or an EGA
     ;     running mode 3 answers 3D4h with a CRTC that is not one - so the
@@ -985,31 +1167,28 @@ cs_adapter:
     jne .modex
     cmp byte [cs_modepref], 0       ; a real CGA's two are 320x200x4 and the
     je .cga                         ; hack, in that order (88.15.7)
-    mov byte [cs_want], CSB_C160
-    mov byte [cs_fsxm], FSXM_TEXT80
+    mov bx, CSB_C160 | (FSXM_TEXT80 << 8)
     jmp short .say
 .modex:
     test ax, 1 << FSXM_MODEX
     jz .cga
     cmp byte [cs_modepref], 0       ; Mode X, unless CGA was asked for: a
     jne .cga                        ; VGA in an XT runs it at 4 fps (88.12)
-    mov byte [cs_want], CSB_MODEX   ; and the Mode menu is the choice
-    mov byte [cs_fsxm], FSXM_MODEX
+    mov bx, CSB_MODEX | (FSXM_MODEX << 8) ; and the Mode menu is the choice
     jmp short .say
 .cga:
     test ax, 1 << FSXM_CGA320
     jz .herc
-    mov byte [cs_want], CSB_CGA
-    mov byte [cs_fsxm], FSXM_CGA320
+    mov bx, CSB_CGA | (FSXM_CGA320 << 8)
     jmp short .say
 .herc:
     test ax, 1 << FSXM_HERC
     jz .say
-    mov byte [cs_want], CSB_HERC
-    mov byte [cs_fsxm], FSXM_HERC
+    mov bx, CSB_HERC | (FSXM_HERC << 8)
 .say:
+    mov [cs_want], bx               ; ...and [cs_fsxm] with it
     mov dx, cs_s_fly                ; the menu says WHY not, off the same
-    cmp byte [cs_want], CSB_NONE    ; predicate the command refuses on
+    cmp bl, CSB_NONE                ; predicate the command refuses on
     jne .ok                         ; (SPEC.md 47)
     mov dx, cs_s_flyn
 .ok:
@@ -1061,13 +1240,20 @@ CS_SETDW  equ 140                   ; a control's width
 CS_SETY   equ 16                    ; the first label's row...
 CS_SETDY  equ 34                    ; ...and the pitch down to the second
 CS_SETLH  equ 11                    ; a label's height above its control
-CS_SETFY  equ 90                    ; the fill boxes' row...
+CS_SETFY  equ 82                    ; the fill boxes' row, up under the
+                                    ; drop-downs (the field: "move the
+                                    ; entire Fill block up, in between the
+                                    ; button and the dropdowns")...
 CS_SETFX  equ 44                    ; ...their first column and pitch
 CS_SETFW  equ 124                   ; ...WIDE ENOUGH FOR THE NOTES (88.13.11):
 CS_SETFB  equ 120                   ; 'Buildings' plus its own is 17 + 72 + 8 +
                                     ; 32 = 129 from the box's left edge, and
                                     ; the row has 44..304 for two of them
-CS_SETBY  equ 112                   ; Done
+CS_SETF2Y equ 97                    ; ...the second row of them (88.13.1.5.2)
+CS_SETBY  equ 114                   ; Done, in the BOTTOM-RIGHT CORNER, clear
+                                    ; of the boxes above and the edge below
+CS_SETBX  equ CS_WINW - 2 - 6 - CS_FLYW ; ...the content's right edge less a
+                                    ; margin
 
 ; -----------------------------------------------------------------------------
 ; cs_paint - W_PAINT.  in: SI = window ptr; gfx lock held.  preserves all
@@ -1084,8 +1270,8 @@ cs_paint:
     call OSAPI_WM_CONTENT
     mov [cs_winox], ax
     mov [cs_winoy], dx
-    mov bx, [cs_win]
-    call OSAPI_WM_GEOM              ; CX/DX = the content box
+    call OSAPI_WM_GEOM              ; CX/DX = the content box - BX is still
+                                    ; [cs_win], the slot preserving it
     jc .out
     mov [cs_cw], cx
     mov [cs_ch], dx
@@ -1111,10 +1297,12 @@ cs_paint:
     ; --- the title, one blit; lettered in the 8x8 face where the blit is
     ;     refused (kern_small carries the slot and not the body) OR where the
     ;     bands never unpacked, which is the same plainer page (88.10.2) ----
-    mov es, [cs_artseg]             ; ES:offset, not DS:label - the bands live
-    mov si, es                      ; in cs_artload's claim now. A zero segment
-    or si, si                       ; is "there is no claim", and it takes the
-    jz .notitle                     ; path a refused blit already took
+    mov si, cs_art_title
+    call cs_artes                   ; ES:offset, not DS:label - the bands live
+    jz .notitle                     ; in the union (88.10.7), and a band that
+                                    ; is not expanded yet is expanded here
+                                    ; (88.10.7.1). Not there takes the path a
+                                    ; refused blit already took
     mov ax, [cs_winox]
     add ax, CS_TITLEX
     mov bx, [cs_winoy]
@@ -1122,7 +1310,6 @@ cs_paint:
     mov cx, cs_art_title_w
     mov dx, cs_art_title_h
     mov bp, cs_art_title_w / 8
-    mov si, cs_art_title
     call OSAPI_GFX_BLIT1
     jnc .plane
 .notitle:
@@ -1135,9 +1322,9 @@ cs_paint:
                                     ; (88.10.1), so the picture follows the
                                     ; Plane list. Every band shares the frame,
                                     ; so only the offset changes
-    mov es, [cs_artseg]
-    mov si, es
-    or si, si
+    mov si, [cs_plane]
+    mov si, [si + CSP_ART]
+    call cs_artes
     jz .noplane
     mov ax, [cs_winox]
     add ax, CS_ARTX
@@ -1146,8 +1333,6 @@ cs_paint:
     mov cx, cs_art_plane_w
     mov dx, cs_art_plane_h
     mov bp, cs_art_plane_w / 8
-    mov si, [cs_plane]
-    mov si, [si + CSP_ART]
     call OSAPI_GFX_BLIT1            ; refused: a plainer page, and that is all
 .noplane:
     push ds                         ; ES back to ours: everything below this
@@ -1274,7 +1459,7 @@ cs_set_page:
     pop di
     pop cx
     inc di
-    LOOPF .row
+    loop .row
     ; --- the fill boxes, across --------------------------------------------
     mov si, cs_s_lfill
     mov cx, CS_SETX
@@ -1285,13 +1470,13 @@ cs_set_page:
     xor di, di
 .box:
     push cx
-    mov ax, di
-    mov bl, CS_SETFW
-    mul bl
-    add ax, CS_SETFX
+    mov si, di
+    shl si, 1
+    shl si, 1
+    mov ax, [cs_boxpos + si]
+    mov bx, [cs_boxpos + si + 2]
     mov cx, ax
     add cx, CS_SETFB - 1
-    mov bx, CS_SETFY
     mov dx, bx
     add dx, 11
     push di
@@ -1302,8 +1487,8 @@ cs_set_page:
     pop di
     pop cx
     inc di
-    LOOPF .box
-    mov ax, CS_SETX2                ; ...and Done, under the right column
+    loop .box
+    mov ax, CS_SETBX                ; ...and Done, in the bottom-right corner
     mov bx, CS_SETBY
     mov cx, ax
     add cx, CS_FLYW - 1
@@ -1327,12 +1512,13 @@ cs_set_page:
     call os88ui_chk
     pop di
     push di                         ; ...and its hotkey after the label the
-    mov ax, di                      ; widget just drew (SPEC.md 88.13.11)
-    mov bl, CS_SETFW
-    mul bl
-    add ax, CS_SETFX + OS88UI_CKBOX + OS88UI_CKGAP
-    mov cx, ax                      ; CX = where that label starts...
-    mov bx, CS_SETFY + 2            ; ...and the row os88ui_chk centres it on
+    mov si, di                      ; widget just drew (SPEC.md 88.13.11)
+    shl si, 1
+    shl si, 1
+    mov cx, [cs_boxpos + si]
+    add cx, OS88UI_CKBOX + OS88UI_CKGAP ; CX = where that label starts...
+    mov bx, [cs_boxpos + si + 2]
+    add bx, 2                       ; ...and the row os88ui_chk centres it on
     mov si, di
     shl si, 1
     mov di, [cs_fillhk + si]
@@ -1342,7 +1528,7 @@ cs_set_page:
     pop di
     pop cx
     inc di
-    LOOPF .dbox
+    loop .dbox
     call cs_nsets                   ; ...however many this display HAS
     mov cx, di                      ; (DI = the last, so the count is
     inc cx                          ;  one more - 88.13.11)
@@ -1363,7 +1549,7 @@ cs_set_page:
     pop di
     pop cx
     dec di
-    LOOPF .ddrop
+    loop .ddrop
     pop di
     pop si
     pop dx
@@ -1584,7 +1770,7 @@ cs_setclick:
     pop di
     jnc .filled
     inc di
-    cmp di, 3
+    cmp di, CS_NFILL
     jb .b
     jmp short .done
 .filled:
@@ -1629,18 +1815,17 @@ cs_flybtn:
     or di, OS88UI_DIS
 .live:
     cmp byte [cs_flydn], 0
+.dn:                            ; (cs_donebtn joins here with ITS flag tested)
     je .draw
     or di, OS88UI_DOWN
 .draw:
     push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
-    push bx                     ; already holds this button's rect, SI its
-    mov [cs_btlbl], si          ; label and DI its flags, so the record takes
-    mov [cs_btflg], di          ; all three and the picture is identical
-    mov [cs_btrec+OS88UI_BT_RECTS], bx
-    mov bx, cs_btrec
-    mov al, 1
+    mov [cs_btlbl], si          ; already holds this button's rect, SI its
+    mov [cs_btflg], di          ; label and DI its flags, so the record takes
+    mov [cs_btrec+OS88UI_BT_RECTS], bx  ; all three and the picture is
+    mov bx, cs_btrec            ; identical. os88ui_btn keeps every register,
+    mov al, 1                   ; and BX is the frame's to put back below
     call os88ui_btn
-    pop bx
     pop ax
     pop di
     pop si
@@ -1648,7 +1833,8 @@ cs_flybtn:
     ret
 
 ; cs_donebtn - the Settings page's Done as it stands: down while pressed.
-;              Never greyed - leaving a page always means something
+;              Never greyed - leaving a page always means something. Its
+;              flag is tested here and the rest is the Fly button's own body
 cs_donebtn:
     push bx
     push si
@@ -1657,46 +1843,19 @@ cs_donebtn:
     mov si, cs_s_done
     mov di, OS88UI_DEF | OS88UI_FILL
     cmp byte [cs_donedn], 0
-    je .draw
-    or di, OS88UI_DOWN
-.draw:
-    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
-    push bx                     ; already holds this button's rect, SI its
-    mov [cs_btlbl], si          ; label and DI its flags, so the record takes
-    mov [cs_btflg], di          ; all three and the picture is identical
-    mov [cs_btrec+OS88UI_BT_RECTS], bx
-    mov bx, cs_btrec
-    mov al, 1
-    call os88ui_btn
-    pop bx
-    pop ax
-    pop di
-    pop si
-    pop bx
-    ret
+    jmp short cs_flybtn.dn
 
-; cs_donedraw - it alone, from a click handler: cs_flydraw's reason exactly
+; cs_donedraw / cs_flydraw / cs_repaint - one control, or the page, from a
+;              click handler: no region is armed there (SPEC.md 11.3), so one
+;              is, and it dies at its own gfx_unlock. Preserve every register
 cs_donedraw:
-    push bx
-    mov bx, [cs_win]
-    call OSAPI_WM_CLIP_SET
-    jc .out
-    call cs_donebtn
-.out:
-    pop bx
-    ret
-
-; cs_flydraw - the button alone, from a click handler: no region is armed
-;              there (SPEC.md 11.3), so one is
+    push ax
+    mov ax, cs_donebtn
+    jmp short cs_clipdo
 cs_flydraw:
-    push bx
-    mov bx, [cs_win]
-    call OSAPI_WM_CLIP_SET
-    jc .out
-    call cs_flybtn
-.out:
-    pop bx
-    ret
+    push ax
+    mov ax, cs_flybtn
+    jmp short cs_clipdo
 
 ; cs_rect_at - DI -> a 4-word rect; AX/BX/CX/DX = it, in CONTENT coordinates:
 ;              write it in screen coordinates. Preserves every register
@@ -1747,13 +1906,17 @@ cs_instr_page:
 ;              W_PAINT and for nothing else (SPEC.md 11.3), so one is armed
 ;              here and dies at its own gfx_unlock
 cs_repaint:
+    push ax
+    mov ax, cs_paint
+cs_clipdo:                      ; AX = the painter, the caller's AX pushed
     push bx
     mov bx, [cs_win]
     call OSAPI_WM_CLIP_SET
     jc .gone
-    call cs_paint
+    call ax
 .gone:
     pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1781,23 +1944,21 @@ cs_artdraw:
     jne .out
     mov bx, [cs_win]
     call OSAPI_WM_CLIP_SET
-    jc .out
-    mov bx, [cs_win]
+    jc .out                         ; (BX is still [cs_win]: CLIP_SET keeps it)
     call OSAPI_WM_CONTENT           ; AX/DX, read again rather than remembered:
     mov [cs_winox], ax              ; a window that moved moved the picture
     mov [cs_winoy], dx
-    mov es, [cs_artseg]             ; the claim, or 0 - and with no claim there
-    mov si, es                      ; is no picture to put back (88.10.2)
-    or si, si
-    jz .out
+    mov si, [cs_plane]
+    mov si, [si + CSP_ART]
+    call cs_artes                   ; the band, expanded if this aeroplane's
+    jz .out                         ; has not been since the last flight
+                                    ; (88.10.7.1); not there, no picture
     add ax, CS_ARTX
     mov bx, dx
     add bx, CS_ARTY
     mov cx, cs_art_plane_w
     mov dx, cs_art_plane_h
     mov bp, cs_art_plane_w / 8
-    mov si, [cs_plane]
-    mov si, [si + CSP_ART]
     call OSAPI_GFX_BLIT1            ; refused: the page keeps the last one
 .out:
     pop es
@@ -1937,7 +2098,7 @@ cs_onclick:
     mov bx, cs_drplane              ; list slides UP over the PLANE box, and
     cmp byte [bx + OS88UI_DR_OPEN], 0   ; os88ui_drpress lets a closed control
     jne .p0drop                     ; claim a press that lands on its own box -
-    mov bx, cs_drplane              ; so the box underneath took the press and
+                                    ; so the box underneath took the press and
     call os88ui_drpress             ; opened ITS list while the one on top was
     call cs_drtake                  ; still up. Neither open: the drawn order,
     jc .out                         ; where a press can only be on one box
@@ -2027,7 +2188,7 @@ cs_ondrag:
     pop di
     pop cx
     inc di
-    LOOPF .d
+    loop .d
     jmp short .out
 .title:
     mov bx, cs_drplane
@@ -2236,11 +2397,12 @@ cs_s_fly:    db 'Fly', 0                          ; cs_adapter when no mode
 cs_s_flyn:   db 'Fly (no mode)', 0                ; can be had
 cs_s_instr:  db 'Instructions', 0
 
-cs_ttl:      db 'Clear Skies', 0
+cs_ttl       equ cs_m_name        ; ONE 'Clear Skies': the window's title is
+                                    ; the menu's name, byte for byte
 cs_s_title:  db 'CLEAR SKIES', 0    ; the title where the blit is refused
 cs_s_plane:  db 'Plane', 0
 cs_s_airport: db 'Location', 0
-cs_s_flybtn: db 'Fly', 0
+cs_s_flybtn  equ cs_s_fly         ; ...and the button says what the item does
 
 ; the drop-downs (os88ui.inc, OS88UI_DROP): the rect follows the window, the
 ; pick is an index into the tables below - the names the list shows and the
@@ -2257,7 +2419,7 @@ cs_flyrect:  dw 0, 0, 0, 0
 ; --- the Settings page's controls (SPEC.md 88.13). Every one of them is the
 ;     shared drop-down or the shared check box, and the page is the first
 ;     user of the second ---------------------------------------------------
-cs_drbld:    dw 0, 0, 0, 0, cs_i_bld,  5, CSBL_MOD, 0
+cs_drbld:    dw 0, 0, 0, 0, cs_i_bld,  6, CSBL_MOD, 0
              db 0, 0FFh
              dw 0, 0, 0, 0
 cs_drlod:    dw 0, 0, 0, 0, cs_i_lod,  4, CSL_MOD, 0
@@ -2271,50 +2433,64 @@ cs_drmode:   dw 0, 0, 0, 0, cs_i_mode, 2, 0, 0
              dw 0, 0, 0, 0
 cs_ckterr:   dw 0, 0, 0, 0, cs_s_terr, 1
 cs_ckbld:    dw 0, 0, 0, 0, cs_s_bld, 1
+cs_ckhaze:   dw 0, 0, 0, 0, cs_s_haze, 1
+cs_ckgtex:   dw 0, 0, 0, 0, cs_s_gtex, 1
 cs_donerect: dw 0, 0, 0, 0
 cs_setlbls:  dw cs_s_lbld, cs_s_llod, cs_s_lsize, cs_s_lmode
+cs_alldrops: dw cs_drplane, cs_drport   ; ...the title page's two, IMMEDIATELY
+                                    ; before the settings page's four, so
+                                    ; cs_entry arms all six in one walk
 cs_setdrops: dw cs_drbld, cs_drlod, cs_drsize, cs_drmode
 CS_NSETALL   equ ($ - cs_setdrops) / 2  ; ...and MODE IS LAST, which is what
                                     ; lets cs_nsets hide it by returning one
                                     ; fewer (88.13.11)
-cs_setboxes: dw cs_ckterr, cs_ckbld
-CS_NFILL     equ ($ - cs_setboxes) / 2
+cs_setboxes: dw cs_ckterr, cs_ckbld, cs_ckhaze, cs_ckgtex ; ...a BIT each,
+CS_NFILL     equ ($ - cs_setboxes) / 2              ; Terrain's first (cs_setsync)
+cs_boxpos:   dw CS_SETFX, CS_SETFY              ; ...and where each one is:
+             dw CS_SETFX + CS_SETFW, CS_SETFY   ; the fills across, and the
+             dw CS_SETFX, CS_SETF2Y             ; two looks under them, a grid
+             dw CS_SETFX + CS_SETFW, CS_SETF2Y  ; with Done below it
 cs_setbytes: dw cs_setbld, cs_setlod, cs_setsize, cs_modepref
 cs_i_bld:    dw cs_s_bnone, cs_s_broad, cs_s_blow, cs_s_bmod, cs_s_bhigh
+             dw cs_s_lultra
 cs_i_lod:    dw cs_s_lnear, cs_s_lmod, cs_s_lfar, cs_s_lultra
 cs_i_size:   dw cs_s_zsml, cs_s_zmod, cs_s_zful
 cs_i_mode:   dw cs_s_modex, cs_s_cga
 cs_i_mode160: dw cs_s_cga, cs_s_c160   ; a real CGA's two (SPEC.md 88.15.7)
 cs_sethk:    dw cs_s_hk1, cs_s_hk2, cs_s_hk3, 0   ; Mode has no hotkey
-cs_fillhk:   dw cs_s_hk4, cs_s_hk5
+cs_fillhk:   dw cs_s_hk4, cs_s_hk5, cs_s_hk6, cs_s_hk7
 cs_s_hk1:    db '(F1)', 0
 cs_s_hk2:    db '(F2)', 0
 cs_s_hk3:    db '(F3)', 0
 cs_s_hk4:    db '(F4)', 0
 cs_s_hk5:    db '(F5)', 0
+cs_s_hk6:    db '(F6)', 0
+cs_s_hk7:    db '(F7)', 0
 cs_s_setttl: db 'SETTINGS', 0
 cs_s_lbld:   db 'Detail Level', 0
 cs_s_llod:   db 'Draw Distance', 0
 cs_s_lsize:  db 'Size', 0
 cs_s_lmode:  db 'Mode', 0
-cs_s_lfill:  db 'Fill', 0
+cs_s_lfill   equ cs_g_fill        ; the toast's 'Fill' (csgame.inc), shared
 cs_s_bnone:  db 'None', 0
 cs_s_broad:  db 'Only Roads', 0
 cs_s_blow:   db 'Low', 0
 cs_s_bmod:   db 'Moderate', 0
 cs_s_bhigh:  db 'High', 0
 cs_s_lnear:  db 'Near', 0
-cs_s_lmod:   db 'Moderate', 0
+cs_s_lmod    equ cs_s_bmod        ; ONE 'Moderate' for all three lists
 cs_s_lfar:   db 'Far', 0
 cs_s_lultra: db 'Ultra', 0
 cs_s_zsml:   db 'Small', 0
-cs_s_zmod:   db 'Moderate', 0
+cs_s_zmod    equ cs_s_bmod
 cs_s_zful:   db 'Full', 0
 cs_s_modex:  db 'Mode X, 256 col', 0
 cs_s_cga:    db 'CGA, 4 col', 0
 cs_s_c160:   db 'CGA, 16 col', 0
 cs_s_terr:   db 'Terrain', 0
 cs_s_bld:    db 'Buildings', 0
+cs_s_haze:   db 'Haze', 0
+cs_s_gtex:   db 'Texture', 0
 cs_s_done:   db 'Done', 0
 cs_s_setts:  db 'Settings', 0
 cs_planes:   dw cs_p_c172, cs_p_pitts, cs_p_fouga, cs_p_bijave, cs_p_a5
@@ -2339,16 +2515,16 @@ cs_i_lines:  dw cs_i1, cs_i2, cs_i3, cs_i4, cs_i5, cs_i6, cs_i7, cs_i8
 cs_i1:       db 'INSTRUCTIONS', 0     ; every line under 38 cells: the
 cs_i2:       db 0                     ; content is 310 wide (88.10)
 cs_i3:       db 'Arrows    pitch and roll', 0
-cs_i4:       db 'W and S   throttle up and down', 0
+cs_i4:       db 'W S, 0-9  throttle; 0 shut, 9 full', 0
 cs_i5:       db 'A and D   rudder', 0
 cs_i6:       db 'B         brakes', 0
 cs_i7:       db 'P         pause', 0
 cs_i8:       db 'R         back to the runway', 0
-cs_i9:       db 'M         engine sound on and off', 0
+cs_i9:       db 'M, Q      map; engine sound on/off', 0
 cs_i10:      db 'Esc or F  back to this window', 0
 cs_i11:      db 'Full throttle; pull back at 55 knots.', 0
 cs_i12:      db 'Click, or press a key, to return.', 0
-cs_i13:      db 'F1 to F5  step a setting, in flight', 0   ; in the blank
+cs_i13:      db 'F1 to F7  step a setting, in flight', 0   ; in the blank
                                                           ; separator's place:
                                                           ; the page is full
                                                           ; at thirteen lines
@@ -2401,7 +2577,23 @@ cs_tpl:
 %endif
 
 %include "csraster.inc"
+%include "csgtex.inc"       ; Ultra's fields (SPEC.md 88.13.1.5)
+%ifndef CSPROBE
+%include "cshaze.inc"       ; the horizon's haze (SPEC.md 88.4.1.1) - and NOT
+%endif                      ; in the CSPROBE instrument, which is the one
+                            ; build at APP_MAX_SIZE and asks about edges,
+                            ; faces and culls, none of them the haze's: 1.6KB
+                            ; it would otherwise not fit by (SPEC.md 88.14)
 %include "cs3d.inc"
+%ifdef CSDIAG               ; M in flight: the map (SPEC.md 88.16) - and NOT
+  %define CS_NOMAP          ; in the CSDIAG watchdog or the CSHZPROBE
+%endif                      ; instrument, which hunt a freeze in the flight
+%ifdef CSHZPROBE            ; and time the haze, and ran out of segment for
+  %define CS_NOMAP          ; it when the map learned the lift (88.16.1)
+%endif
+%ifndef CS_NOMAP
+%include "csmap.inc"
+%endif
 %include "csworld.inc"
 %include "csflight.inc"
 %include "csgame.inc"
@@ -2419,24 +2611,22 @@ cs_tpl:
 ; package nothing at all - not the 1,219 bytes of the standard's code, not the
 ; table, not its own header.
 ;
-; THE HANDOFF IS THE WHOLE INTERFACE, and it is four bytes. The kernel does not
+; THE HANDOFF IS THE WHOLE INTERFACE, and it is six bytes. The kernel does not
 ; zero a part, which is what lets a loader write into the head of a program's
 ; bss and the program read it back; nothing was published, stamped or
 ; registered to make that work.
 ; =============================================================================
 CSH_MAGIC  equ 0                ; word: 'CS' - the loader ran
-CSH_ART    equ 2                ; word: where it put the title bands
+CSH_SEC    equ 2                ; word: the SECTOR csw.z begins at in our own
+                                ; file - every stream this program reads for
+                                ; itself, the art included (88.10.7)
 CSH_CLB    equ 4                ; word: this volume's bytes per cluster, which
                                 ; is what OSAPI_FILE_READ_AT rounds to and the
                                 ; one thing about the disk we cannot work out
-CSH_WDIR   equ 6                ; 9 rows of (sector, packed length): the shared
-                                ; vocabulary and then the eight worlds, in
-                                ; tools/csworlds.py's own order
-CSH_NDIR   equ 9
-CSH_SIZE   equ CSH_WDIR + CSH_NDIR * 4
-
-CS_STREAM_VOCAB equ 0           ; ...and the rows, by name
-CS_STREAM_WLD0  equ 1
+CSH_SIZE   equ 6
+                                ; (CS_STREAM_* - each stream's row in csw.z -
+                                ; come out of the generated cswidx.inc, with
+                                ; the offsets and lengths they index)
 %include "csdiag.inc"       ; CSDIAG=1 only: the watchdog (SPEC.md 88.14)
 
 ; =============================================================================
@@ -2477,6 +2667,7 @@ cs_hand equ os88_image_end      ; THE HANDOFF IS THE FIRST THING IN THE BSS,
     ZWORD cs_caps
     ZBYTE cs_want
     ZBYTE cs_fsxm
+    OS88_ADJACENT cs_want, cs_fsxm, 1   ; cs_adapter stores the pair as a word
     ZBYTE cs_vidk
     ZBYTE cs_abon
     ZBYTE cs_page                   ; the launcher's page: 0 the title, 1 the
@@ -2487,6 +2678,7 @@ cs_hand equ os88_image_end      ; THE HANDOFF IS THE FIRST THING IN THE BSS,
                                     ; once a frame instead of once an object
     ZBYTE cs_setlod                 ; picture below the top of each list is
     ZBYTE cs_setfill                ; a trade the player asked for
+    OS88_ADJACENT cs_setlod, cs_setfill, 1  ; cs_entry sets both in one word
     ZWORD cs_adtn                   ; the half-width table's rows, 0 = unbuilt
     ZBUF  cs_adtab, (CS_ADHMAX + 1) * 2
     ZWORD cs_odx                    ; the object's world offset from the EYE at
@@ -2502,10 +2694,12 @@ cs_hand equ os88_image_end      ; THE HANDOFF IS THE FIRST THING IN THE BSS,
     ZBUF  cs_fsi, FSI_SIZE
     ZBYTE cs_back
     ZBYTE cs_par
-    ZBYTE cs_kshift                 ; log2 of the pixels in a byte: 3 or 2
     ZBYTE cs_quit
-    ZWORD cs_vx                     ; THE NINE WORDS cs_vptab's row lands on,
-    ZWORD cs_vy                     ; in its order: the box...
+    ; --- THE BACKEND'S RECORD (SPEC.md 88.3.7): what cs_vptab's row lands on,
+    ;     IN ITS ORDER and contiguous, because cs_r_setup copies the whole row
+    ;     in one `rep movsw` where it used to store each field by hand ------
+    ZWORD cs_vx                     ; the box...
+    ZWORD cs_vy
     ZWORD cs_vw
     ZWORD cs_vh
     ZWORD cs_wx0                    ; ...the view's first x, width and height
@@ -2513,6 +2707,30 @@ cs_hand equ os88_image_end      ; THE HANDOFF IS THE FIRST THING IN THE BSS,
     ZWORD cs_wh
     ZWORD cs_sclx                   ; ...and the two scales
     ZWORD cs_scly
+    ZWORD cs_panrows                ; rows the panel wants under the view: a
+                                    ; cockpit's 88, or the strip's 13 (88.15.5)
+    ZWORD cs_pasp                   ; rows per logical x unit, Q8 (88.9.2)
+    ZWORD cs_plblp                  ; the fixed labels this panel letters...
+    ZWORD cs_plabw                  ; ...how many CELLS along its number goes
+    ZWORD cs_msgtabp                ; ...the message strings it can fit
+    ZWORD cs_msgx0                  ; ...and where its strip starts (88.15.6)
+    ZWORD cs_inktab
+    ZWORD cs_hrunproc
+    ZWORD cs_lrunproc               ; the run a LINE's slice lays
+    ZWORD cs_rowsproc               ; the polygon's row loop (88.4.6)
+    ZWORD cs_rowsprocc              ; ...and the arm that CLAMPS (88.4.5.4)
+    ZWORD cs_glyphproc
+    ZWORD cs_lsh                    ; the walk trio: shallow, steep, vertical
+    ZWORD cs_lst
+    ZWORD cs_lvt
+    ZWORD cs_shkb                   ; the shadow's claim in KB, 0 on Mode X -
+                                    ; half on C160, a hundred rows (88.10.9)
+    ZWORD cs_shclr                  ; ...and the WORDS cs_clearall zeroes of it
+    ZBYTE cs_conebase               ; the cull's cone: 0 = 0.5, 1 = 0.75
+    ZBYTE cs_gcellb                 ; bytes an 8-pixel glyph cell covers
+    ZBYTE cs_kshift                 ; log2 of the pixels in a byte
+    ZBYTE cs_pbg8                   ; the panel's ground, as a glyph stores it
+CS_BEREC equ cs_pbg8 + 1 - cs_vx    ; ...a row of cs_vptab, in bytes
     ZWORD cs_wx1                    ; the view's last x
     ZWORD cs_wb0                    ; ...its first byte and byte count
     ZWORD cs_wbn
@@ -2523,16 +2741,17 @@ cs_hand equ os88_image_end      ; THE HANDOFF IS THE FIRST THING IN THE BSS,
     ZWORD cs_page0
     ZWORD cs_page1
     ZWORD cs_shseg
-    ZWORD cs_artseg                 ; the title art, unpacked (88.10.2): the
-                                    ; claim's segment, or 0 if it was refused -
-                                    ; which is a page without the bands and not
-                                    ; a launch that fails
-    ZWORD cs_inktab
-    ZWORD cs_hrunproc
-    ZWORD cs_rowsproc               ; the polygon's row loop (88.4.6)
-    ZWORD cs_rowsprocc              ; ...and the arm that CLAMPS (88.4.5.4)
+    ZBYTE cs_artok                  ; bit n: the union holds band n
+                                    ; (88.10.7): 0 before they are read, after
+                                    ; cs_r_setup builds its tables over them,
+                                    ; and when a read was refused - which is a
+                                    ; page without the bands and not a launch
+                                    ; that fails
+    ZBYTE cs_artzok                 ; cs_artz holds the bands' PACKED stream
+                                    ; (88.10.7.1): set by the launch read and
+                                    ; never cleared, so every way out of a
+                                    ; flight decodes rather than reads
     ZBYTE cs_cone                   ; the cull's cone factor this frame (88.5.1)
-    ZBYTE cs_conebase               ; ...and the backend's: 0 = 0.5, 1 = 0.75
     ZBYTE cs_ownmk                  ; a segment marks its own rows: the
                                     ; panel's, whose drawing is no object's
                                     ; (88.3.2); zero for the scene
@@ -2594,13 +2813,8 @@ cs_hand equ os88_image_end      ; THE HANDOFF IS THE FIRST THING IN THE BSS,
     ZWORD cs_bwp                    ; ...the half-width in PIXELS, and the
     ZWORD cs_brx                    ; screen-space half-width vector it turns
     ZWORD cs_bry                    ; into: w (cos r, -sin r)
-    ZWORD cs_glyphproc
-    ZWORD cs_lsh                    ; the walk trio: shallow, steep, vertical
-    ZWORD cs_lst
-    ZWORD cs_lvt
     ZBYTE cs_ink
     ZBYTE cs_ink8
-    ZBYTE cs_pbg8                   ; the panel's ground, as a glyph stores it
     ZBUF  cs_pat, 4                 ; the ink's four pattern bytes
     ZWORD cs_spcur                  ; this frame's span set and the last
     ZWORD cs_spprv                  ; frame's (SPEC.md 85.3.1, 88.3)
@@ -2672,7 +2886,6 @@ cs_hand equ os88_image_end      ; THE HANDOFF IS THE FIRST THING IN THE BSS,
                                     ; view edge (88.4.5.1): 0 when none can,
                                     ; which the row loop takes in BP
     ZBYTE cs_eside                  ; the chain an edge is on: 0 both, 1, 2
-    ZWORD cs_lrunproc               ; the run a LINE's slice lays
     ZBUF  cs_pv, CS_MAXPV * 4       ; a projected face: (x, y) pairs
     ZBYTE cs_fcut                   ; ...the near plane CUT it, so cs_pv is
                                     ; not the model's vertices (88.13.3)
@@ -2828,13 +3041,8 @@ CS_DBGSCR equ 112               ; ...and the copy A/B's scratch is 112 rows,
     ZWORD cs_mdl
     ZWORD cs_obj
     ZBYTE cs_pass
-    ; --- THE ROW LOOP'S TWO END TABLES (88.4.5.5), 640 entries each: a
-    ;     view's x cannot leave [0, 639] because the shadow row is 80 bytes
-    ;     and cs_vptab's Hercules box is 640 wide. 2,560 bytes of the CLAIM
-    ;     and near enough nothing of the disk - the bss ships inside the
-    ;     part as a run of zeros and LZ4 is best at exactly that ---------
-    ZBUF  cs_lend, CS_ENDN * 2      ; (mask << 8) | (x >> 3), the left end
-    ZBUF  cs_rend, CS_ENDN * 2      ; ...and the right
+    ; (THE ROW LOOP'S TWO END TABLES, cs_lend and cs_rend, are in the
+    ;  UNION at the end of this chain with cs_kx and cs_ky - 88.10.7)
     ZBUF  cs_col0, 6                ; the three scaled columns (88.5)
     ZBUF  cs_col1, 6
     ZBUF  cs_col2, 6
@@ -2875,8 +3083,8 @@ CS_DBGSCR equ 112               ; ...and the copy A/B's scratch is 112 rows,
     ZWORD cs_nb
     ZWORD cs_nnum
     ZWORD cs_nden
-    ZBUF  cs_kx, 2048 * 2           ; the projection tables (85.5.3, 88.5)
-    ZBUF  cs_ky, 2048 * 2
+    ; (THE PROJECTION TABLES, cs_kx and cs_ky, are in the UNION at the end
+    ;  of this chain - 88.10.7)
     ZBUF  cs_vis, CS_NVIS * CS_VISZ ; the frame's objects: ptr, reach, along
     ZBUF  cs_vkey, CS_NVIS * 4      ; ...sorted far to near: along, record
     ZWORD cs_nvisn
@@ -2910,10 +3118,11 @@ CS_DBGSCR equ 112               ; ...and the copy A/B's scratch is 112 rows,
     ; --- WHAT A CRASH NEEDS THE AEROPLANE TO BE BELOW, one word an object
     ;     (88.7.13): cs_ctopbuild fills it when a location is picked, and
     ;     -32768 stands for an object that cannot be hit at all, so the
-    ;     walk's first compare rejects a non-collider too. A world blob is
-    ;     CS_WLD_MAX bytes and an object twenty of them, so this cannot be
-    ;     short ---------------------------------------------------------
-    ZBUF  cs_ctop, (CS_WLD_MAX / CSO_SIZE) * 2
+    ;     walk's first compare rejects a non-collider too. CS_MAXOBJ is the
+    ;     most objects any location's table holds, which tools/csworlds.py
+    ;     MEASURES (88.10.5.6) - 47, Paris'. It was CS_WLD_MAX / CSO_SIZE,
+    ;     a row for every twenty bytes of the largest world: 244 bytes for 94
+    ZBUF  cs_ctop, CS_MAXOBJ * 2
     ; --- the eye's position PRE-SHIFTED for each of the three scales
     ;     (88.5.6.3): three groups of {x', y', z'}, nine words, rebuilt once
     ;     a frame by cs_eyeshift and read by cs_scale as a plain word -----
@@ -3009,7 +3218,6 @@ CS_DBGSCR equ 112               ; ...and the copy A/B's scratch is 112 rows,
     ZWORD cs_darg
     ZWORD cs_dpx
     ZWORD cs_dsi                    ; ...and the row itself, across cs_setink
-    ZWORD cs_pasp                   ; rows per logical x unit, Q8 (88.9.2)
     ZWORD cs_pbarx                  ; the throttle bar's left end, top row
     ZWORD cs_pbary                  ; and width, off the cockpit
     ZWORD cs_pbarw
@@ -3023,6 +3231,8 @@ CS_SWOOPT equ 8                 ; ticks the air's swoop lasts (88.7.6.3)...
 CS_SWOOPD equ 75                ; ...hertz a tick of it, and the two ends it
 CS_SWOOPLO equ 300              ; runs between: UP from the bottom in lift,
 CS_SWOOPHI equ 900              ; DOWN from the top in sink
+CS_SWGAP0 equ 2                 ; ticks between two swoops at a thermal's
+                                ; core - up to 8 more at its rim (88.7.6.5)
 
     ZBYTE cs_msgt                   ; ...and what is left of them
     ZBYTE cs_hzbit                  ; which axis cs_ease is on (88.7.3.1)
@@ -3048,6 +3258,72 @@ CS_SWOOPHI equ 900              ; DOWN from the top in sink
     ZBYTE cs_airs                   ; of the last one, and the swoop it starts
     ZBYTE cs_swdir
     ZBYTE cs_swt
+    ZBYTE cs_swd                    ; ...its hertz a tick, the gap before the
+    ZBYTE cs_swgap                  ; next, and where in the thermal the
+    ZWORD cs_airf                   ; aeroplane is, 256 core to 0 rim
+    ZBYTE cs_landout                ; this touchdown was off the field
+    ZWORD cs_liftk                  ; the calm bubble's ramp, 0..256 (88.7.6.5.1)
+    ZWORD cs_airx                   ; THE AIR'S ANCHOR (88.7.6.7): where the
+    ZWORD cs_airz                   ; aeroplane was put at reset, in metres
+    ZBUF  cs_gtobj, CS_GTF * CSO_SIZE  ; ULTRA'S FIELDS (88.13.1.5):
+    ZWORD cs_gtel                   ; the tiles, the field's elevation and
+    ZWORD cs_gtx0                   ; the first column's centre
+    ZBYTE cs_hzform                 ; THE HAZE (88.4.1.1): the horizon's
+    ZWORD cs_hzxb                   ; form (0 off the view, 1 steep, 2
+    ZBYTE cs_hzlast                 ; flat), the steep one's last-row x,
+%ifndef CSPROBE                     ; ...and the rest the pass's own (the
+                                    ; CSPROBE build has none, cshaze.inc):
+    ZBYTE cs_hzgl                   ; the
+    ZBYTE cs_hzag                   ; ground left, what a row wholly above
+    ZBYTE cs_hzbg                   ; or below a line counts, the rows the
+    ZWORD cs_hze0                   ; bands start and end on, the horizon's
+    ZWORD cs_hze1                   ; own two, the step a row and the x it
+    ZWORD cs_hzyl                   ; is at (16.16), the five offsets and
+    ZWORD cs_hzyh                   ; the five lines, the six inks and their
+    ZBUF  cs_hzst, 4                ; pattern tables, and a row's state: its
+    ZBUF  cs_hzx, 4                 ; number, crossings, how many are left
+    ZBUF  cs_hzof, CS_HZN * 2       ; and where, the ink, its step, the next
+    ZBUF  cs_hzln, CS_HZN * CS_HZL  ; byte, the half-composed one, the span,
+    ZBUF  cs_hzik, CS_HZN + 1       ; the patterns, and whether the sides
+    ZBUF  cs_hzpt, (CS_HZN + 1) * 2 ; swapped this frame
+    ZWORD cs_hzrr
+    ZBUF  cs_hzcx, CS_HZN * 2
+    ZWORD cs_hzce
+    ZWORD cs_hzcp
+    ZBYTE cs_hzg
+    ZBYTE cs_hzgr
+    ZWORD cs_hzdw
+    ZWORD cs_hzgp
+    ZWORD cs_hzxs
+    ZBUF  cs_hzpp, 4 * 8
+    ZBYTE cs_hzg0
+    ZBUF  cs_hzrend, CS_MAXROW
+    ZBYTE cs_hzwide
+    ZWORD cs_hzw                    ; 2S: the furthest any line reaches
+%endif
+    ZBYTE cs_hzlat                  ; cs_hzrows: this call's rows are latched
+    ZBYTE cs_mxgc5                  ; ...the Graphics Mode register less its
+    ZBYTE cs_mxon                   ; write mode, and whether mode 1 is armed
+    ZBUF  cs_mxla4, 8               ; ...a latched band's latch bytes, per
+    ZBUF  cs_mxra4, 8               ; row phase, left and right
+    ZWORD cs_mxla                   ; ...and this row's
+    ZWORD cs_mxra
+    ZBYTE cs_map                    ; THE MAP (88.16): 0 off, 1 near, 2 far
+    ZBYTE cs_mapsh                  ; ...its scale, a shift of metres
+    ZWORD cs_mapky                  ; ...z's 256ths of a pixel a pixel of x
+    ZWORD cs_maphw                  ; ...and the view's half-extents in
+    ZWORD cs_maphz                  ; pixels of x's size
+    ZWORD cs_maex                   ; ...and its LIFT (88.16.1): the eye in the
+    ZWORD cs_maez                   ; air tile's frame, the tile walk's first
+    ZWORD cs_mahz                   ; (the view's half-height in metres)
+    ZWORD cs_matx0                  ; and last columns and rows, the tile it
+    ZWORD cs_matx1                  ; is at, its corner from the eye and
+    ZWORD cs_matx                   ; its variant
+    ZWORD cs_matz
+    ZWORD cs_matz1
+    ZWORD cs_mabx
+    ZWORD cs_mabz
+    ZBYTE cs_mavar
     ZWORD cs_wname                  ; cs_inwater (88.7.7.1): the touched
     ZWORD cs_wobj                   ; water's name, and the walk's own state -
     ZWORD cs_wnob                   ; the object, how many are left, the face
@@ -3141,19 +3417,9 @@ CS_SWOOPHI equ 900              ; DOWN from the top in sink
                                    ; one toast from the next (88.13.8)
     ZBUF  cs_setbuf, CS_SETFSZ     ; the settings file, as it sits on the disk
     ZBYTE cs_setread               ; ...read once (88.13.9)
-    ZWORD cs_sdclus                ; where we were standing before it
-    ZBYTE cs_sddrv
-    ZBUF  cs_sdfind, OSAPI_FIND_SZ
     ZWORD cs_pwl                   ; a window's edges while it is
     ZWORD cs_pwr                   ; being resolved (88.9.5)
     ZBYTE cs_pfirst                 ; bit n: page n has never had its ground
-    ZBYTE cs_gcellb                 ; bytes an 8-pixel glyph cell covers
-    ZWORD cs_panrows                ; rows the panel wants under the view: a
-                                    ; cockpit's 88, or the strip's 12 (88.15.5)
-    ZWORD cs_plblp                  ; the fixed labels this panel letters...
-    ZWORD cs_plabw                  ; ...how many CELLS along its number goes
-    ZWORD cs_msgtabp                ; ...and the message strings it can fit
-    ZWORD cs_msgx0                  ; ...and where its strip starts (88.15.6)
 
 ; --- the world overlay's own state (SPEC.md 88.10.5) -------------------------
     ZBYTE cs_wldnow                 ; which world is IN the overlay, 0xFF = the
@@ -3161,8 +3427,7 @@ CS_SWOOPHI equ 900              ; DOWN from the top in sink
     ZBYTE cs_apnow                  ; ...and which LOCATION row is picked
     ZWORD cs_wgpar                  ; cs_wldget's: where the expansion goes...
     ZWORD cs_wgout                  ; ...and how many bytes it is
-    ZWORD cs_wgsec                  ; the stream's sector and packed length,
-    ZWORD cs_wglen                  ; out of the loader's directory
+    ZWORD cs_wglen                  ; the stream's packed length
     ZWORD cs_wgslk                  ; how far past a cluster it begins
     ZWORD cs_wgoff                  ; ...and the cluster-aligned read offset,
     ZWORD cs_wgoff2                 ; 32 bits (ADJACENT: cs_wgoff+2 is read)
@@ -3173,6 +3438,46 @@ CS_SWOOPHI equ 900              ; DOWN from the top in sink
                                     ; loader reuses on the next launch
                                     ; (SPEC.md 20.2), so a world read minutes
                                     ; later cannot use it
+    ZBUF  cs_artz, CS_ARTZ_SIZE     ; THE BANDS, PACKED, for the instance's
+                                    ; life (SPEC.md 88.10.7.1): the way out of
+                                    ; a flight expands them from here into the
+                                    ; union, so it reads no disk. OSAPI_DECOMP
+                                    ; takes its SOURCE at any DS:SI, so this
+                                    ; needs no alignment - the destination is
+                                    ; the one with the paragraph rule
+
+; --- THE UNION (SPEC.md 88.10.7): the bracket's tables and the title page's
+;     bands, which are never wanted at the same time ------------------------
+; cs_r_setup builds cs_kx, cs_ky, cs_lend and cs_rend on the way INTO every
+; bracket and nothing outside one reads them; the title bands are drawn only
+; by the windowed page, which no bracket can show. So they share one run, and
+; the 11KB claim the bands used to hold for the whole session - every flight
+; included - is gone. [cs_artok] says which of the two is in it, and
+; cs_fsx_main puts the bands back on its way out (cs_artload).
+;
+; IT IS THE LAST THING IN THE CHAIN AND IT IS PARAGRAPH-ALIGNED, because the
+; bands are expanded into it by OSAPI_DECOMP, which wants its destination at
+; offset 0 of a segment (SPEC.md 20.13.3). The chain reserves its size, so
+; tools/csworlds.py's derivation - the image plus CS_BSS rounded UP to a
+; paragraph - is CS_VOCAB_AT exactly as before, and the union is the
+; CS_UNI_SIZE bytes immediately below it: at or above where the chain ends,
+; and a multiple of 16 from a multiple of 16.
+CS_UNI_SIZE equ 2 * 2048 * 2 + 2 * CS_ENDN * 2
+%assign CS_BSS CS_BSS + 2 * 2048 * 2 + 2 * 640 * 2  ; ...reserved: CS_UNI_SIZE
+                                    ; spelled for the preprocessor, which
+                                    ; cannot read an equ. The `times` below
+                                    ; holds the two to each other
+CS_UNI_AT   equ CS_VOCAB_AT - CS_UNI_SIZE
+cs_kx       equ $$ + CS_UNI_AT      ; the projection tables (85.5.3, 88.5) -
+                                    ; `$$ +` so that they are LABELS in the
+                                    ; map, where a test can find them, and not
+                                    ; bare numbers it cannot
+cs_ky       equ cs_kx + 2048 * 2
+cs_lend     equ cs_ky + 2048 * 2    ; THE ROW LOOP'S TWO END TABLES
+cs_rend     equ cs_lend + CS_ENDN * 2 ; (88.4.5.5), 640 entries each: a view's
+                                    ; x cannot leave [0, 639] because the
+                                    ; shadow row is 80 bytes and cs_vptab's
+                                    ; Hercules box is 640 wide
 
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
 %define OS88UI_ABOUT            ; the standard About card, the standard
@@ -3264,4 +3569,12 @@ CS_SWOOPHI equ 900              ; DOWN from the top in sink
     times CS_BSS db 0                       ; the declared bss...
     times (CS_VOCAB_AT - (os88_image_end - $$)) - CS_BSS db 0    ; ...the gap...
     times CS_VOCAB_MAX + CS_WLD_MAX db 0    ; ...and the overlay
+; THE UNION's two spellings agree, it holds the bands, and it is a paragraph
+; (88.10.7): each `times` goes NEGATIVE, and nasm refuses the file, when its
+; sentence is false
+    times -(CS_UNI_SIZE != 2 * 2048 * 2 + 2 * 640 * 2) db 0
+    times -(CS_ART_SIZE > CS_UNI_SIZE) db 0
+    times -((CS_UNI_AT & 15) != 0) db 0
+; ...and cs_vptab is four rows of exactly the record cs_r_setup copies (88.3.7)
+    times -((cs_vptab_end - cs_vptab) != 4 * CS_BEREC) db 0
 %endif

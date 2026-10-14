@@ -56,9 +56,9 @@
 ; monolith wants: a rock that flares, then narrows to a small summit. Both
 ; Sugarloaf and Corcovado use it, so the nine faces are declared once.
 cs_f_sdu_dome:
-    CS_SIDES 0, CSI_HILL, CSI_HILL
-    CS_SIDES 4, CSI_HILL, CSI_HILL
-    CS_TOP 8, CSI_HILL
+    CS_SIDES 0, CSI_HILL, CSI_HILL2  ; two-tone (88.4.4.1)
+    CS_SIDES 4, CSI_HILL, CSI_HILL2
+    CS_TOP 8, CSI_HILLTOP
 
 ; ...and the beach, which is a ribbon of three quads in CSI_MARK rather than in
 ; CSI_RIVER. CSI_MARK is the ground ink - roads and runway edges - and it is

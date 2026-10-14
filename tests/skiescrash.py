@@ -104,8 +104,23 @@ def main(argv):
 
         m.advance(frames=40)
         m.run()
+        # ...AND WAIT FOR cs_reset, which is what puts the aeroplane on the
+        # runway: a pin poked before it is overwritten. This row gave the
+        # bracket a fixed 100 frames, which was a guess that held until the
+        # image grew - then a soak lane pinned first, the horizon came out at
+        # row 55 where the pose puts it at 30, and the crash drew nothing
+        m.pause()
+        poke("cs_inited", b"\x00")
+        m.run()
         m.type_text("f")
-        m.advance(frames=100)
+        for _ in range(60):
+            m.advance(frames=20)
+            m.run()
+            if byte("cs_back") and byte("cs_inited"):
+                break
+        else:
+            sys.exit("skiescrash: the flight never initialised")
+        m.advance(frames=20)
         m.run()
 
         def guest_frames(n, cap=40):

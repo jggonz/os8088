@@ -3,9 +3,24 @@
 N_LIST_BYTES equ 1536
 N_BACK equ N_PAGE_BYTES*2
 N_CBUF equ 16384
+; Instance claims are sized from what is read or composed into them, not a
+; flat 64KB each (SPEC 101.1). Every bank read passes its exact size as the
+; FILE_READ capacity, so a larger or damaged file is refused, never overrun.
+%define N_MAX(a,b) ((a)+((b)-(a))*((b)>(a)))
+%if N_ROM
+N_CANVAS_KB equ 64                 ; WORLD bank occupies the upper half
+%else
+N_CANVAS_VGA equ N_MAX(N_FRONT_END,61448)
+N_CANVAS_CGA equ N_MAX(N_L_SIZE,N_CBUF*2)
+N_CANVAS_BYTES equ N_MAX(N_CANVAS_VGA,N_CANVAS_CGA)
+N_CANVAS_KB equ (N_CANVAS_BYTES+1023)/1024
+%endif
+N_GFX_BYTES equ N_MAX(N_V_SIZE,N_C_SIZE)
+N_GFX_KB equ (N_MAX(N_GFX_BYTES,4*N_FRONT_LABEL)+1023)/1024   ; + desktop labels
+N_GFX2_KB equ (N_MAX(N_VX_SIZE,N_CX_SIZE)+1023)/1024
 
 n_palette:
-    SAVE
+    call n_pushall
     cmp byte [n_cga],0
     jne .cga
     mov dx,3c8h
@@ -30,8 +45,7 @@ n_palette:
     mov dx,3d9h
     out dx,al
 .out:
-    RESTORE
-    ret
+    jmp n_popall
 
 ; Load and check the exact compiled bank before following any offset in it.
 ; ES=claim, SI=name, CX=expected size, BP=checksum. CF on any failure.
@@ -265,9 +279,13 @@ n_geometry:
     mov si,cx
     shl si,1
     mov dx,[n_xc+si]
-    mov si,[n_spriteid]
-    mov bx,[n_cgawidths+si]
-    mov bp,[n_cgaheights+si]
+    ; CGA extents follow from the logical ones: BX = width (BH = 0), BP =
+    ; height, both <= 64. Two 65-byte tables, not two words per sprite.
+    mov si,bp
+    mov cl,[n_cgaht+si]
+    xor ch,ch
+    mov bp,cx
+    mov bl,[n_cgawt+bx]
     mov [n_height],bp
     jmp .common
 .vga:
@@ -400,21 +418,25 @@ n_sprite:
     mov ax,[n_fsi+FSI_SEG]
     mov es,ax
     mov ds,ax
+    ; Groups: map-mask byte (0 ends), run-count byte, then 5-byte runs of
+    ; destination word, cache word, length byte. BH and CH stay zero.
+    xor bx,bx
+    xor cx,cx
 .group:
-    mov ax,[cs:bp]
-    add bp,2
-    or ax,ax
+    mov ah,[cs:bp]
+    or ah,ah
     jz .cachedone
+    mov al,2
     out dx,ax
-    mov bx,[cs:bp]
+    mov bl,[cs:bp+1]
     add bp,2
 .latches:
     mov di,[cs:bp]
     add di,[cs:n_vorigin]
     mov si,[cs:bp+2]
-    mov cx,[cs:bp+4]
+    mov cl,[cs:bp+4]
     rep movsb
-    add bp,6
+    add bp,5
     dec bx
     jnz .latches
     jmp .group
@@ -588,7 +610,7 @@ n_cfullrect: dw 0,80,200
 n_hudrect: dw 8,64,16
 n_chudrect: dw 0,80,14
 n_clear:
-    SAVE
+    call n_pushall
     mov byte [n_damagevalid],0
     mov word [n_cgastart],0
     mov word [n_counts],0
@@ -620,8 +642,7 @@ n_clear:
     mov word [n_page],0
     mov word [n_drawbase],N_PAGE_PAD
     mov byte [n_rendered],1
-    RESTORE
-    ret
+    jmp n_popall
 n_erase:
     SAVE
     mov word [n_scrollrows],0

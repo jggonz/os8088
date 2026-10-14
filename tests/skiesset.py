@@ -12,7 +12,7 @@ something different.
      MODERATE (88.13.1.1) - in the byte and in the drop-down's own record -
      because Moderate carries every location's whole table and High is the
      286/386 rung above it;
-  1. Flight -> Settings opens the page and the painter writes all seven
+  1. Flight -> Settings opens the page and the painter writes all eight
      controls' rects (four drop-downs, two fill boxes, Done);
   2. picking Detail Level = Low leaves fewer objects in the frame - cs_nvisn,
      which is what the cull filed - and the frame gets measurably shorter;
@@ -92,11 +92,12 @@ import dispapps                                             # noqa: E402
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CPS = 4772727
 CSBL_NONE, CSBL_ROADS, CSBL_LOW, CSBL_MOD, CSBL_HIGH = 0, 1, 2, 3, 4
+CSBL_ULTRA = 5                  # High's world and the ground's fields (88.13.1.5)
 CSL_NEAR, CSL_MOD, CSL_FAR, CSL_ULTRA = 0, 1, 2, 3
 CSZ_SMALL, CSZ_MOD, CSZ_FULL = 0, 1, 2
 CSA_OBJS, CSA_NOBJ = 18, 20        # the location's object table
 CSO_SKIP, CSO_SIZE = 18, 20        # ...and one object's deferral
-CSFL_TERRAIN, CSFL_BLDG, CSFL_ALL = 1, 2, 3
+CSFL_TERRAIN, CSFL_BLDG, CSFL_ALL, CSFL_HAZE, CSFL_GTEX = 1, 2, 3, 4, 8
 CSG_TAKEOFF, CSG_TOAST = 1, 9
 CSM_STACK = 0                           # a model of LEVELS, so its first pair
                                         # of words IS a footprint - a CSM_FLAT
@@ -142,6 +143,7 @@ def main(argv):
         slot, seg = dispapps.pkg_seg(m, 0)
         lin = seg << 4
         base = int.from_bytes(m.readseg(seg, 8, 2), "little")
+        fsx_task = m.sym("fsx_task")    # the kernel's bracket owner, 0xFF none
 
         def w(n):
             return int.from_bytes(m.readseg(seg, base + off(n), 2), "little")
@@ -172,7 +174,7 @@ def main(argv):
             return False
 
         def bld(rung):
-            return to_rung("F1", "cs_setbld", rung, CSBL_HIGH + 1)
+            return to_rung("F1", "cs_setbld", rung, CSBL_ULTRA + 1)
 
         m.advance(frames=30)
         m.run()
@@ -265,17 +267,30 @@ def main(argv):
               % byte("cs_page"))
         # MODE IS NOT ONE OF THEM ON THIS MACHINE (SPEC.md 88.13.11). This
         # row flies a Hercules, which has one raster, so the Mode row is left
-        # OFF the page rather than greyed and the painter writes SIX rects.
-        # Asserting seven made this row red for the fix working. The row that
+        # OFF the page rather than greyed and the painter writes six controls'
+        # rects, and the Haze and Texture boxes (88.4.1.1.1, 88.13.1.5.2)
+        # are the seventh and eighth. Asserting nine made
+        # this row red for the fix working. The row that
         # covers Mode on both kinds of display is `skiesmode`; the predicate
         # is not repeated here, because a second copy of it in Python is a
         # second thing to get wrong.
         names = ("cs_drbld", "cs_drlod", "cs_drsize",
-                 "cs_ckterr", "cs_ckbld", "cs_donerect")
+                 "cs_ckterr", "cs_ckbld", "cs_ckhaze", "cs_ckgtex",
+                 "cs_donerect")
         rects = {n: rect(n) for n in names}
         wrote = [n for n in names if rects[n][2] > rects[n][0]]
         check(len(wrote) == len(names),
-              "the painter wrote all six live controls' rects (%d)" % len(wrote))
+              "the painter wrote all eight live controls' rects (%d)" % len(wrote))
+        # ...and none of them overlaps another: four boxes in a grid now,
+        # with Done moved under it, in a window that had room for three
+        lap = [(p, q) for i, p in enumerate(names) for q in names[i + 1:]
+               if rects[p][0] <= rects[q][2] and rects[q][0] <= rects[p][2]
+               and rects[p][1] <= rects[q][3] and rects[q][1] <= rects[p][3]]
+        check(not lap, "...and no two of them overlap (%s)" % lap)
+        fill0 = byte("cs_setfill")
+        check(fill0 == CSFL_ALL | CSFL_GTEX,
+              "an 8088 with no file starts with Terrain, Buildings and the "
+              "Texture, and without the Haze (%d)" % fill0)
         r = rect("cs_drmode")
         check(r[2] <= r[0],
               "...and the MODE row, which this display cannot use, has no "
@@ -295,12 +310,32 @@ def main(argv):
             now = byte("cs_setfill")
             check(now == was & ~bit, "the %s box clears its fill bit (%d -> %d)"
                   % (lbl, was, now))
-        check(byte("cs_setfill") == 0, "both off is the wireframe (%d)"
-              % byte("cs_setfill"))
+        check(byte("cs_setfill") & CSFL_ALL == 0,
+              "both off is the wireframe (%d)" % byte("cs_setfill"))
         for nm in ("cs_ckterr", "cs_ckbld"):
             r = rects[nm]
             click((r[0] + r[2]) // 2, (r[1] + r[3]) // 2)
-        check(byte("cs_setfill") == CSFL_ALL, "...and back on again (%d)"
+        check(byte("cs_setfill") == fill0, "...and back on again (%d)"
+              % byte("cs_setfill"))
+        # ...and THE HAZE IS A BOX OF ITS OWN (88.4.1.1.1): an 8088 starts it
+        # off, the box turns it on and off and touches no other bit
+        r = rects["cs_ckhaze"]
+        click((r[0] + r[2]) // 2, (r[1] + r[3]) // 2)
+        check(byte("cs_setfill") == fill0 | CSFL_HAZE,
+              "the Haze box sets its own bit and no other (%d)"
+              % byte("cs_setfill"))
+        click((r[0] + r[2]) // 2, (r[1] + r[3]) // 2)
+        check(byte("cs_setfill") == fill0, "...and clears it (%d)"
+              % byte("cs_setfill"))
+        # ...and so is the TEXTURE (88.13.1.5.2), on by default, so its box
+        # clears first
+        r = rects["cs_ckgtex"]
+        click((r[0] + r[2]) // 2, (r[1] + r[3]) // 2)
+        check(byte("cs_setfill") == fill0 & ~CSFL_GTEX,
+              "the Texture box clears its own bit and no other (%d)"
+              % byte("cs_setfill"))
+        click((r[0] + r[2]) // 2, (r[1] + r[3]) // 2)
+        check(byte("cs_setfill") == fill0, "...and sets it again (%d)"
               % byte("cs_setfill"))
 
         # --- 2. Buildings = Few, on the page ---------------------------------
@@ -547,10 +582,20 @@ def main(argv):
             for _ in range(30):
                 m.advance(frames=20)
                 m.run()
-                if inside() == want:
+                if inside() == want and (want or bracket_gone()):
                     return
             sys.exit("skiesset: %s - cs_back %d, quit %d"
                      % (who, byte("cs_back"), byte("cs_quit")))
+
+        def bracket_gone():
+            """...and OUT means the KERNEL's bracket is down too, not merely
+            that cs_quit is latched. cs_quit is set at the top of the way
+            out, and the way out reads the title bands back off the disk
+            (SPEC.md 88.10.7) before fsx_restore drains the key buffer
+            (53.6 step 2) - so a `f` typed the moment cs_quit flips lands in
+            that drain and is thrown away, and the row waits for a bracket
+            nobody asked for. [fsx_task] is 0xFF once step 3 has disarmed."""
+            return m.read(fsx_task, 1)[0] == 0xFF
 
         def go(row):
             """Fly `row`'s world - OUT of the bracket, pick, and back in.
@@ -841,7 +886,7 @@ def main(argv):
                    .split(b"\0")[0].decode("ascii", "replace"))
             m.run()
             return out
-        for key, name, rungs in (("F1", "cs_setbld", CSBL_HIGH + 1),
+        for key, name, rungs in (("F1", "cs_setbld", CSBL_ULTRA + 1),
                                  ("F2", "cs_setlod", CSL_ULTRA + 1),
                                  ("F3", "cs_setsize", CSZ_FULL + 1)):
             was = byte(name)
@@ -855,7 +900,8 @@ def main(argv):
             check(byte(name) == was,
                   "...and a full lap of %d comes home (%d against %d)"
                   % (rungs, byte(name), was))
-        for key, bit in (("F4", CSFL_TERRAIN), ("F5", CSFL_BLDG)):
+        for key, bit in (("F4", CSFL_TERRAIN), ("F5", CSFL_BLDG),
+                         ("F6", CSFL_HAZE), ("F7", CSFL_GTEX)):
             was = byte("cs_setfill")
             press(key, "cs_setfill")
             check(byte("cs_setfill") == was ^ bit,
@@ -895,6 +941,14 @@ def main(argv):
             check(st[4] == CSG_TOAST and st[6] == want,
                   "%s toasts %r (%r)" % (key, want, st[6]))
             press(key, "cs_setfill")        # ...and back
+        # ...but the HAZE is a thing there or not, so it is ON or OFF
+        for key, bit, label in (("F6", CSFL_HAZE, "HAZE"),
+                                ("F7", CSFL_GTEX, "TEXTURE")):
+            st = press(key, "cs_setfill")
+            want = "%s: %s" % (label, "ON" if st[3] & bit else "OFF")
+            check(st[4] == CSG_TOAST and st[6] == want,
+                  "%s toasts %r (%r)" % (key, want, st[6]))
+            press(key, "cs_setfill")
         # AND A SECOND TOAST REPAINTS THE STRIP. cs_k_msg is the panel's key
         # for it and it was (cs_msg, the low byte of cs_crashwhy) - identical
         # for two toasts in a row, so the second setting changed under a line

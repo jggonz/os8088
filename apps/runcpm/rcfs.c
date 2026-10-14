@@ -130,24 +130,26 @@
 static struct os88_place rc_home;            /* the launch folder: FILEBASE */
 static struct os88_place rc_cur;             /* where the instance stands */
 static struct os88_find rc_ff;               /* os88_file_find's answer */
-static unsigned rc_pl_clus[RC_DRIVES * RC_USERS];    /* (drive,user) -> the
-                                              * folder's first cluster... */
-static unsigned char rc_pl_ok[RC_DRIVES * RC_USERS]; /* ...once resolved: 1
-                                              * = known, 2 = known absent, 3
-                                              * = absent and UNMAKEABLE this
-                                              * session (a USER n whose mkdir
-                                              * the disk refused: full or
-                                              * protected - the DRI CCP sets
-                                              * the user at every warm boot,
-                                              * and one refusal is enough
-                                              * disk work; an ERA that frees
-                                              * something, or BDOS 249,
-                                              * resets it) */
-static unsigned rc_dr_clus[RC_DRIVES];       /* drive -> the letter folder's
-                                              * first cluster... */
-static unsigned char rc_dr_ok[RC_DRIVES];    /* ...once resolved: 1 = known,
-                                              * 2 = known absent (the Select
-                                              * fact, per letter) */
+/* THE PLACE TABLE: (drive,user) -> the folder's first cluster, and drive ->
+ * the letter folder's - each word ALSO its state. A folder's first cluster
+ * is never 0 and never 0xFFFE/0xFFFF (FAT's free and end-of-chain values),
+ * so those three spell the states a byte array beside each table used to
+ * (272 bytes of bss). `unsigned short` so that the host harness, whose
+ * unsigned is 32 bits, stores rc_fs_subdir's -1 as the same 0xFFFF. */
+#define RC_PL_UNK  0                         /* not looked for yet */
+#define RC_PL_NONE 0xFFFF                    /* known absent: the Select fact,
+                                              * per letter; an empty area */
+#define RC_PL_NOMK 0xFFFE                    /* a user folder absent AND
+                                              * UNMAKEABLE this session (a
+                                              * USER n whose mkdir the disk
+                                              * refused: full or protected -
+                                              * the DRI CCP sets the user at
+                                              * every warm boot, and one
+                                              * refusal is enough disk work;
+                                              * an ERA that frees something,
+                                              * or BDOS 249, resets it) */
+static unsigned short rc_pl_clus[RC_DRIVES * RC_USERS];   /* (drive,user) */
+static unsigned short rc_dr_clus[RC_DRIVES]; /* drive: its letter's folder */
 static char rc_fs_name[13];                  /* a folder or file name */
 static unsigned rc_n_find;                   /* os88_file_find calls: the
                                               * measure of a folder walk */
@@ -155,10 +157,15 @@ static unsigned rc_n_find;                   /* os88_file_find calls: the
 /* --- the directory cache: TWO (drive,user) areas' files ---------------- */
 #define RC_DC_MAX 128
 #define RC_DC_SLOTS 2
-struct rc_dent {
+struct rc_dent {                             /* 14 bytes */
     char name[11];                           /* FCB form: 8 + 3, spaces */
-    unsigned char big;                       /* size_hi != 0: > 65,535 */
-    unsigned size_lo, size_hi;
+    unsigned char size_hi;                   /* bits 16-23 of the size: != 0
+                                              * is > 65,535. 24 bits: a file
+                                              * of 16MB or more (a hard disk
+                                              * only - CP/M 2.2 addresses 8)
+                                              * is held as 16MB - 1 (SPEC.md
+                                              * 74.3) */
+    unsigned size_lo;
 };
 struct rc_dcache {
     int valid;                               /* the slot describes... */
@@ -168,14 +175,14 @@ struct rc_dcache {
                                               * nothing can be made there) */
     int n;
     unsigned lru;                            /* rc_dc_clock at last want */
-    struct rc_dent e[RC_DC_MAX];             /* 16 bytes each: 2KB */
+    struct rc_dent e[RC_DC_MAX];             /* 14 bytes each: 1,792 */
 };
 static struct rc_dcache rc_dcs[RC_DC_SLOTS]; /* two slots, least recently
                                               * wanted replaced: a session on
                                               * B: keeps A:'s (the CCP's
                                               * .COMs, $$$.SUB, PUN.TXT) and
                                               * PIP B:=A:*.* walks neither
-                                              * twice - 4KB of bss */
+                                              * twice - 3.5KB of bss */
 static struct rc_dcache *rc_dcc;             /* the slot rc_dc_want chose */
 static unsigned rc_dc_clock;
 static char rc_dc_n11[11];                   /* the fill's name scratch */
@@ -196,11 +203,13 @@ struct rc_ofile {
     unsigned size;                           /* bytes, 0..65535 */
     unsigned kb;                             /* the claim's size */
     unsigned lru;                            /* rc_oft_clock at last use */
-    unsigned pad1[4];                        /* 32 bytes a row: index by shift */
-};
+};                                           /* 24 bytes a row: walked by
+                                              * pointer, never indexed */
 static struct rc_ofile rc_oft[RC_OFT];
 static unsigned rc_oft_clock;
 static int rc_pun_open, rc_lst_open;         /* cpm.h pun_open / lst_open */
+static const char rc_s_pun[] = "PUN     TXT";    /* ...their files, as 11 */
+static const char rc_s_lst[] = "LST     TXT";
 
 /* --- the FCB at DE, copied out; the search state ------------------------ */
 static unsigned char rc_fcb[36];
@@ -218,10 +227,26 @@ static unsigned rc_s_recs, rc_s_exts, rc_s_used, rc_s_ffab;   /* fileRecords,
                                               * fileExtents, fileExtentsUsed,
                                               * firstFreeAllocBlock */
 static unsigned char rc_dirent[32];
-static char rc_tmsg[26];                     /* a toast: 24 characters */
+static char rc_tmsg[26];                     /* THE toast being built - 24
+                                              * characters and room for one
+                                              * more number: the refusals
+                                              * here, the launch refusals and
+                                              * Alt+C (runcpm.c) */
 
 static struct rc_dcache *rc_dc_slot(int d, int u);
 static void rc_say_now(const char *msg);
+
+/* rc_tcat / rc_tcatu - text, or a number, onto the end of rc_tmsg */
+static void rc_tcat(const char *s)
+{
+    unsigned n = os88_strlen(rc_tmsg);
+    os88_strcpy(rc_tmsg + n, s, sizeof(rc_tmsg) - n);
+}
+static void rc_tcatu(unsigned v)
+{
+    os88_utoa(v, rc_tmsg + os88_strlen(rc_tmsg));   /* <= 6 bytes: every
+                                              * caller leaves them */
+}
 
 static void rc_fs_init(void)
 {
@@ -273,23 +298,16 @@ static int rc_fs_home(void)
  * walk it, and nothing else moves. */
 static int rc_fs_drive_exists(int d)
 {
-    int c;
     if (d < 0 || d >= RC_DRIVES)
         return 0;
-    if (rc_dr_ok[d] == 0) {
+    if (rc_dr_clus[d] == RC_PL_UNK) {
         if (rc_fs_home() < 0)
             return 0;
         rc_fs_name[0] = (char)('A' + d);
         rc_fs_name[1] = 0;
-        c = rc_fs_subdir(rc_fs_name);
-        if (c < 0) {
-            rc_dr_ok[d] = 2;
-        } else {
-            rc_dr_clus[d] = (unsigned)c;
-            rc_dr_ok[d] = 1;
-        }
+        rc_dr_clus[d] = rc_fs_subdir(rc_fs_name);    /* -1: RC_PL_NONE */
     }
-    return rc_dr_ok[d] == 1;
+    return rc_dr_clus[d] != RC_PL_NONE;
 }
 
 /* rc_fs_cd - stand the instance in drive d (0 = A) user u (0..31): the
@@ -302,43 +320,44 @@ static int rc_fs_drive_exists(int d)
  * Each fact is looked up ONCE per drive and once per (drive,user). */
 static int rc_fs_cd(int d, int u)
 {
-    int i, c;
-    unsigned dst;
+    int i;
+    unsigned dst, c;
     if (u < 0 || !rc_fs_drive_exists(d))
         return -1;
-    i = (d << 4) + (u & 15);
-    if (u >= RC_USERS) {
-        dst = rc_dr_clus[d];
-        goto stand;
-    }
-    if (rc_pl_ok[i] == 0) {                  /* the user folder, once */
-        if (rc_fs_stand(rc_dr_clus[d]) < 0)
+    dst = rc_dr_clus[d];
+    if (u >= RC_USERS)
+        goto drive;
+    i = (d << 4) + u;                        /* every FCB call comes here:
+                                              * an index, not a pointer
+                                              * (d << 5 is 28 cycles) */
+    if (rc_pl_clus[i] == RC_PL_UNK) {        /* the user folder, once */
+        if (rc_fs_stand(dst) < 0)
             return -1;
         rc_fs_name[0] = (char)(u < 10 ? '0' + u : 'A' + u - 10);
         rc_fs_name[1] = 0;
-        c = rc_fs_subdir(rc_fs_name);
-        if (c < 0) {
-            rc_pl_ok[i] = 2;
-        } else {
-            rc_pl_clus[i] = (unsigned)c;
-            rc_pl_ok[i] = 1;
-        }
+        rc_pl_clus[i] = rc_fs_subdir(rc_fs_name);   /* -1: RC_PL_NONE */
     }
-    dst = (rc_pl_ok[i] == 1) ? rc_pl_clus[i] : rc_dr_clus[d];
-stand:
+    c = rc_pl_clus[i];
+    if (c < RC_PL_NOMK) {                    /* neither sentinel: ONE compare
+                                              * (a cluster is never 0 here) */
+        if (rc_fs_stand(c) < 0)
+            return -1;
+        return 0;
+    }
+drive:
     if (rc_fs_stand(dst) < 0)
         return -1;
-    return (u < RC_USERS && rc_pl_ok[i] == 1) ? 0 : 1;
+    return 1;
 }
 
-/* ovl_pl_unmark - every 'unmakeable' user folder (rc_pl_ok 3) is merely
+/* ovl_pl_unmark - every 'unmakeable' user folder (RC_PL_NOMK) is merely
  * absent again: something was deleted, so the disk may have room */
 static void ovl_pl_unmark(void)
 {
     int i;
     for (i = 0; i < RC_DRIVES * RC_USERS; i++)
-        if (rc_pl_ok[i] == 3)
-            rc_pl_ok[i] = 2;
+        if (rc_pl_clus[i] == RC_PL_NOMK)
+            rc_pl_clus[i] = RC_PL_NONE;
 }
 
 /* ovl_fs_mkuser - _MakeUserDir: create the user folder <hex> of (d,u) when
@@ -351,20 +370,19 @@ static void ovl_fs_mkuser(int d, int u)
     if (u >= RC_USERS || rc_fs_cd(d, u) != 1)
         return;                              /* absent drive, or it exists */
     i = (d << 4) + u;
-    if (rc_pl_ok[i] == 3)
+    if (rc_pl_clus[i] == RC_PL_NOMK)
         return;                              /* refused once this session:
                                               * not asked again at every ^C */
     rc_fs_name[0] = (char)(u < 10 ? '0' + u : 'A' + u - 10);
     rc_fs_name[1] = 0;
     if (os88_file_mkdir(rc_fs_name) < 0 && os88_ferr() != OS88_FERR_EXIST) {
-        rc_pl_ok[i] = 3;                     /* full, or protected */
+        rc_pl_clus[i] = RC_PL_NOMK;          /* full, or protected */
         return;
     }
     c = rc_fs_subdir(rc_fs_name);            /* standing in the drive folder */
     if (c < 0)
         return;
     rc_pl_clus[i] = (unsigned)c;
-    rc_pl_ok[i] = 1;
     rc_fs_stand((unsigned)c);
     if (rc_dc_slot(d, u))
         rc_dcc->valid = 0;                   /* it was cached as absent */
@@ -534,7 +552,7 @@ static int rc_seldisk(int dr, int u)
 static char rc_dc_hn[13], rc_dc_hq[13];
 static void rc_dc_insert(const char *n11, unsigned lo, unsigned hi)
 {
-    struct rc_dent *q, *p;                  /* by pointer: rows are 16 bytes */
+    struct rc_dent *q, *p;                  /* by pointer: rows are 14 bytes */
     int lo_i = 0, hi_i = rc_dcc->n, mid, j;
     rc_n11_host(n11, rc_dc_hn);
     while (lo_i < hi_i) {
@@ -552,8 +570,9 @@ static void rc_dc_insert(const char *n11, unsigned lo, unsigned hi)
         os88_memcpy(p, p - 1, sizeof(struct rc_dent));
     os88_memcpy(q->name, n11, 11);
     q->size_lo = lo;
-    q->size_hi = hi;
-    q->big = (hi != 0);
+    q->size_hi = (unsigned char)(hi > 0xFF ? 0xFF : hi);
+    if (hi > 0xFF)
+        q->size_lo = 0xFFFF;                 /* 16MB - 1: the cap */
     rc_dcc->n++;
 }
 
@@ -574,12 +593,12 @@ static struct rc_dcache *rc_dc_slot(int d, int u)
 /* rc_dc_subfact - the $-file fact of A\u, from a slot that describes it */
 static void rc_dc_subfact(void)
 {
-    int i;
+    struct rc_dent *e = rc_dcc->e, *end = e + rc_dcc->n;
     if (rc_dcc->drive != 0 || rc_dcc->user >= RC_USERS)
         return;
     rc_subfact[rc_dcc->user] = 1;
-    for (i = 0; i < rc_dcc->n; i++)
-        if (rc_dcc->e[i].name[0] == '$') {
+    for (; e < end; e++)
+        if (e->name[0] == '$') {
             rc_subfact[rc_dcc->user] = 2;
             return;
         }
@@ -618,17 +637,9 @@ static int rc_dc_want(int d, int u)
     /* the walk is seconds on a machine without the track cache (SPEC.md
      * 74.3: 238 int 13h calls for A\0), inside THIS wake with the glass
      * frozen - say so first: "RunCPM: reading A:0" (19 chars) */
-    os88_strcpy(rc_tmsg, "RunCPM: reading ", sizeof(rc_tmsg));
+    os88_strcpy(rc_tmsg, "RunCPM: reading A:", sizeof(rc_tmsg));
     rc_tmsg[16] = (char)('A' + d);
-    rc_tmsg[17] = ':';
-    if (u < 10) {
-        rc_tmsg[18] = (char)('0' + u);
-        rc_tmsg[19] = 0;
-    } else {
-        rc_tmsg[18] = '1';
-        rc_tmsg[19] = (char)('0' + u - 10);
-        rc_tmsg[20] = 0;
-    }
+    rc_tcatu(u);                             /* 0..15: the folder exists */
     rc_say_now(rc_tmsg);
     o = 0;
     while (rc_dcc->n < RC_DC_MAX && (o = os88_file_find(o, &rc_ff)) >= 0) {
@@ -644,13 +655,14 @@ static int rc_dc_want(int d, int u)
     return 0;
 }
 
-static int rc_dc_find(const char *n11)
+/* rc_dc_find - the row of rc_dcc named n11, or 0 */
+static struct rc_dent *rc_dc_find(const char *n11)
 {
-    int i;
-    for (i = 0; i < rc_dcc->n; i++)
-        if (rc_n11_eq(rc_dcc->e[i].name, n11))
-            return i;
-    return -1;
+    struct rc_dent *e = rc_dcc->e, *end = e + rc_dcc->n;
+    for (; e < end; e++)
+        if (rc_n11_eq(e->name, n11))
+            return e;
+    return 0;
 }
 
 /* rc_dc_note - our own change to (d,u): a file made or resized. Only the
@@ -658,40 +670,37 @@ static int rc_dc_find(const char *n11)
  * is next wanted. */
 static void rc_dc_note(int d, int u, const char *n11, unsigned size)
 {
-    int i;
+    struct rc_dent *e;
     if (d == 0 && u < RC_USERS && n11[0] == '$')
         rc_subfact[u] = 2;                   /* a $-file on A: - whether or
                                               * not a slot describes A\u */
     if (!rc_dc_slot(d, u))
         return;
-    i = rc_dc_find(n11);
-    if (i < 0) {
+    e = rc_dc_find(n11);
+    if (!e) {
         if (rc_dcc->n >= RC_DC_MAX)
             return;
         rc_dc_insert(n11, size, 0);
         return;
     }
-    rc_dcc->e[i].size_lo = size;
-    rc_dcc->e[i].size_hi = 0;
-    rc_dcc->e[i].big = 0;
+    e->size_lo = size;
+    e->size_hi = 0;
 }
 
 static void rc_dc_forget(int d, int u, const char *n11)
 {
-    int i;
+    struct rc_dent *e, *end;
     if (!rc_dc_slot(d, u)) {
         if (d == 0 && u < RC_USERS && n11[0] == '$')
             rc_subfact[u] = 0;               /* unknown again: resolved by
                                               * name at the next _CheckSUB */
         return;
     }
-    i = rc_dc_find(n11);
-    if (i >= 0) {
-        rc_dcc->n--;
-        while (i < rc_dcc->n) {
-            os88_memcpy(&rc_dcc->e[i], &rc_dcc->e[i + 1], sizeof(struct rc_dent));
-            i++;
-        }
+    e = rc_dc_find(n11);
+    if (e) {
+        end = rc_dcc->e + --rc_dcc->n;
+        for (; e < end; e++)
+            os88_memcpy(e, e + 1, sizeof(struct rc_dent));
     }
     if (n11[0] == '$')
         rc_dc_subfact();
@@ -711,9 +720,9 @@ static void rc_say(const char *msg)
 {
     os88_toast(msg, 0);
     if (rc_full) {
-        rc_puts("\r\n");
+        rc_crlf();
         rc_puts(msg);
-        rc_puts("\r\n");
+        rc_crlf();
     }
 }
 
@@ -734,34 +743,40 @@ static void rc_say_now(const char *msg)
     os88_gfx_unlock();
 }
 
+/* the toast texts more than one refusal names (one copy each) */
+static const char rc_s_runcpm[] = "RunCPM: ";
+static const char rc_s_ram[] = "RunCPM RAM? ";
+static const char rc_s_64k[] = ">64K";
+#define rc_empty (rc_s_64k + 4)              /* "": the NUL of ">64K" */
+
 static void rc_toast_name(const char *head, const char *n11, const char *tail)
 {
-    unsigned n;
     os88_strcpy(rc_tmsg, head, sizeof(rc_tmsg));
-    n = os88_strlen(rc_tmsg);
-    rc_n11_host(n11, rc_tmsg + n);
-    n = os88_strlen(rc_tmsg);
-    os88_strcpy(rc_tmsg + n, tail, sizeof(rc_tmsg) - n);
+    rc_n11_host(n11, rc_tmsg + os88_strlen(rc_tmsg));
+    rc_tcat(tail);
     rc_say(rc_tmsg);
 }
 
-static int rc_oft_find(int d, int u, const char *n11)
+/* the open-file table is walked and handed around BY POINTER - a row is a
+ * `struct rc_ofile *`, 0 = none - so no field access recomputes an index
+ * (SmallerC rebuilds `rc_oft[i]` at every use: a shift and an add) */
+static struct rc_ofile *rc_oft_find(int d, int u, const char *n11)
 {
-    int i;
-    for (i = 0; i < RC_OFT; i++)
-        if (rc_oft[i].live && rc_oft[i].drive == d && rc_oft[i].user == u &&
-            rc_n11_eq(rc_oft[i].name, n11))
-            return i;
-    return -1;
+    struct rc_ofile *o;
+    for (o = rc_oft; o < rc_oft + RC_OFT; o++)
+        if (o->live && o->drive == d && o->user == u &&
+            rc_n11_eq(o->name, n11))
+            return o;
+    return 0;
 }
 
 /* rc_oft_drop - the entry goes, its bytes with it (a delete, an eviction) */
-static void rc_oft_drop(int i)
+static void rc_oft_drop(struct rc_ofile *o)
 {
-    if (rc_oft[i].live && rc_oft[i].seg)
-        os88_mem_free(rc_oft[i].seg);
-    rc_oft[i].live = 0;
-    rc_oft[i].seg = 0;
+    if (o->live && o->seg)
+        os88_mem_free(o->seg);
+    o->live = 0;
+    o->seg = 0;
 }
 
 /* rc_oft_flush - write a modified file back WHOLE. The entry STAYS, clean:
@@ -772,18 +787,17 @@ static void rc_oft_drop(int i)
  * -1 when the write failed (the reason toasted: the disk is full,
  * write-protected, or the folder is gone) - then the entry is dropped and
  * the bytes are lost, as upstream's would be on a failed fwrite. */
-static int rc_oft_flush(int i)
+static int rc_oft_flush(struct rc_ofile *o)
 {
     int r = 0;
-    if (!rc_oft[i].live)
+    if (!o->live)
         return 0;
-    if (rc_oft[i].dirty) {
-        if (rc_fs_cd(rc_oft[i].drive, rc_oft[i].user) == 0) {
-            rc_n11_host(rc_oft[i].name, rc_hname);
-            r = os88_file_write_seg(rc_hname, rc_oft[i].seg, rc_oft[i].size);
+    if (o->dirty) {
+        if (rc_fs_cd(o->drive, o->user) == 0) {
+            rc_n11_host(o->name, rc_hname);
+            r = os88_file_write_seg(rc_hname, o->seg, o->size);
             if (r == 0)
-                rc_dc_note(rc_oft[i].drive, rc_oft[i].user, rc_oft[i].name,
-                           rc_oft[i].size);
+                rc_dc_note(o->drive, o->user, o->name, o->size);
         } else {
             r = -1;
         }
@@ -797,11 +811,11 @@ static int rc_oft_flush(int i)
             rc_toast_name(e == OS88_FERR_DIRFULL ? "Dir full: " :
                           e == OS88_FERR_FULL ? "Disk full: " :
                           (e == OS88_FERR_PROT || e == OS88_FERR_WPROT) ? "Protected: " :
-                          "Not saved: ", rc_oft[i].name, "");
-            rc_oft_drop(i);
+                          "Not saved: ", o->name, rc_empty);
+            rc_oft_drop(o);
             return r;
         }
-        rc_oft[i].dirty = 0;
+        o->dirty = 0;
     }
     return 0;
 }
@@ -813,40 +827,39 @@ static int rc_oft_flush(int i)
  * machine's CCP reads a .COM from the disk every time) */
 static void rc_fs_flush_all(void)
 {
-    int i;
-    for (i = 0; i < RC_OFT; i++) {
-        rc_oft_flush(i);
-        rc_oft_drop(i);
+    struct rc_ofile *o;
+    for (o = rc_oft; o < rc_oft + RC_OFT; o++) {
+        rc_oft_flush(o);
+        rc_oft_drop(o);
     }
 }
 
 /* rc_oft_evict - drop the least recently used CLEAN entry; 0 = none */
 static int rc_oft_evict(void)
 {
-    int i, v = -1;
-    for (i = 0; i < RC_OFT; i++)
-        if (rc_oft[i].live && !rc_oft[i].dirty &&
-            (v < 0 || rc_oft[i].lru < rc_oft[v].lru))
-            v = i;
-    if (v < 0)
+    struct rc_ofile *o, *v = 0;
+    for (o = rc_oft; o < rc_oft + RC_OFT; o++)
+        if (o->live && !o->dirty && (!v || o->lru < v->lru))
+            v = o;
+    if (!v)
         return 0;
     rc_oft_drop(v);
     return 1;
 }
 
 /* rc_oft_slot - a free row, evicting a clean one if the table is full;
- * -1 with the toast when every entry is a modified file (SPEC.md 74.4) */
-static int rc_oft_slot(void)
+ * 0 with the toast when every entry is a modified file (SPEC.md 74.4) */
+static struct rc_ofile *rc_oft_slot(void)
 {
-    int i;
+    struct rc_ofile *o;
     for (;;) {
-        for (i = 0; i < RC_OFT; i++)
-            if (!rc_oft[i].live)
-                return i;
+        for (o = rc_oft; o < rc_oft + RC_OFT; o++)
+            if (!o->live)
+                return o;
         if (!rc_oft_evict()) {
             rc_say("RunCPM: 8 files open");
             rc_error(RC_ERR_CPM);            /* 'Bdos Err on X: CP/M ERR' */
-            return -1;
+            return 0;
         }
     }
 }
@@ -862,25 +875,30 @@ static unsigned rc_oft_claim(int kb)
     return s;
 }
 
-/* rc_oft_grow - room for `need` bytes in entry i (regrow, moving if it
+/* rc_kb - bytes as whole KB, rounded up, in 16 bits (never n + 1023) */
+static unsigned rc_kb(unsigned n)
+{
+    return (n >> 10) + ((n & 1023) ? 1 : 0);
+}
+
+/* rc_oft_grow - room for `need` bytes in entry o (regrow, moving if it
  * must; clean entries evicted for the room); 0 = ok, -1 = refused */
-static int rc_oft_grow(int i, unsigned need)
+static int rc_oft_grow(struct rc_ofile *o, unsigned need)
 {
     unsigned s;
     int kb;
-    if (rc_oft[i].kb >= 64 || need <= (rc_oft[i].kb << 10))
+    if (o->kb >= 64 || need <= (o->kb << 10))
         return 0;
-    kb = (int)((need >> 10) + ((need & 1023) ? 1 : 0)) + 3;   /* 3KB of slack:
-                                              * a SAVE growing
+    kb = (int)rc_kb(need) + 3;               /* 3KB of slack: a SAVE growing
                                               * a record at a time regrows
                                               * every 24 records, not 8 */
     if (kb > 64)
         kb = 64;
-    while ((s = os88_mem_regrow(rc_oft[i].seg, kb)) == 0)
+    while ((s = os88_mem_regrow(o->seg, kb)) == 0)
         if (!rc_oft_evict())
             return -1;
-    rc_oft[i].seg = s;
-    rc_oft[i].kb = (unsigned)kb;
+    o->seg = s;
+    o->kb = (unsigned)kb;
     return 0;
 }
 
@@ -889,57 +907,61 @@ static int rc_oft_grow(int i, unsigned need)
  * read into a claim), 1 = create empty if it does not exist (F_MAKE: an
  * existing file keeps its bytes, fopen "a"), 2 = create empty, TRUNCATING
  * an existing one (the capture files' first open). Answers the row, or
- * -1: not found / too big (toasted) / no memory (toasted) / no folder. */
-static int rc_oft_get(int d, int u, const char *n11, int mode)
+ * 0: not found / too big (toasted) / no memory (toasted) / no folder. */
+static struct rc_ofile *rc_oft_get(int d, int u, const char *n11, int mode)
 {
-    int i, k, exists;
+    struct rc_ofile *o;
+    struct rc_dent *e;
+    int k, exists;
     unsigned size, n, cap;
-    i = rc_oft_find(d, u, n11);
-    if (i >= 0) {
+    o = rc_oft_find(d, u, n11);
+    if (o) {
         if (mode == 2) {
-            rc_oft[i].size = 0;
-            rc_oft[i].dirty = 1;
+            o->size = 0;
+            o->dirty = 1;
         }
-        rc_oft[i].lru = ++rc_oft_clock;
-        return i;
+        o->lru = ++rc_oft_clock;
+        return o;
     }
     if (rc_dc_want(d, u) != 0)
-        return -1;                           /* absent area: nothing here, and
+        return 0;                            /* absent area: nothing here, and
                                               * nothing can be made here */
-    k = rc_dc_find(n11);
-    exists = (k >= 0);
+    e = rc_dc_find(n11);
+    exists = (e != 0);
     size = 0;
     if (exists) {
-        if (rc_dcc->e[k].big) {
-            rc_toast_name("RunCPM: ", n11, ">64K");
-            return -1;
+        if (e->size_hi) {
+            rc_toast_name(rc_s_runcpm, n11, rc_s_64k);
+            return 0;
         }
-        size = rc_dcc->e[k].size_lo;
+        size = e->size_lo;
     } else if (mode == 0) {
-        return -1;
+        return 0;
     }
-    i = rc_oft_slot();
-    if (i < 0)
-        return -1;
+    o = rc_oft_slot();
+    if (!o)
+        return 0;
     if (mode == 2)
         size = 0;
-    k = (int)((size >> 10) + ((size & 1023) ? 1 : 0));   /* 16 bits: never
-                                              * size + 1023 */
+    k = (int)rc_kb(size);
     if (k < 1)
         k = 1;
-    rc_oft[i].seg = rc_oft_claim(k);
-    if (rc_oft[i].seg == 0) {
-        rc_toast_name("RunCPM RAM? ", n11, "");
-        return -1;
+    o->seg = rc_oft_claim(k);
+    if (o->seg == 0) {
+        rc_toast_name(rc_s_ram, n11, rc_empty);
+        return 0;
     }
-    rc_oft[i].kb = (unsigned)k;
-    rc_oft[i].live = 1;
-    rc_oft[i].drive = (unsigned char)d;
-    rc_oft[i].user = (unsigned char)u;
-    os88_memcpy(rc_oft[i].name, n11, 11);
-    rc_oft[i].size = size;
-    rc_oft[i].dirty = (mode != 0 && (!exists || mode == 2));
-    rc_oft[i].lru = ++rc_oft_clock;
+    o->kb = (unsigned)k;
+    o->live = 1;
+    o->drive = (unsigned char)d;
+    o->user = (unsigned char)u;
+    os88_memcpy(o->name, n11, 11);
+    o->size = size;
+    o->dirty = 0;                            /* a made, or a truncated, file is
+                                              * owed to the disk at its close */
+    if (mode != 0 && (!exists || mode == 2))
+        o->dirty = 1;
+    o->lru = ++rc_oft_clock;
     if (exists && mode != 2 && size) {
         rc_n11_host(n11, rc_hname);
         cap = (k >= 64) ? 0xFFFF : (unsigned)(k << 10);
@@ -949,27 +971,38 @@ static int rc_oft_get(int d, int u, const char *n11, int mode)
                                               * already valid, and the last
                                               * flush may have left the
                                               * instance in another area */
-            n = os88_file_read_seg(rc_hname, rc_oft[i].seg, cap);
+            n = os88_file_read_seg(rc_hname, o->seg, cap);
         if (n != size) {
             /* the file changed under the cache, or the read failed */
-            rc_oft_drop(i);
+            rc_oft_drop(o);
             if (rc_dc_slot(d, u))
                 rc_dcc->valid = 0;
-            return -1;
+            return 0;
         }
     }
-    return i;
+    return o;
+}
+
+/* rc_fcb_n11 - the FCB's fn/tp into rc_hname and rc_n11; 0 when it is a
+ * pattern or invalid (empty) - not a file */
+static int rc_fcb_n11(void)
+{
+    if (!rc_fcb2host(rc_fcb, rc_hname) || rc_hname[0] == 0)
+        return 0;
+    rc_host2n11(rc_hname, rc_n11);
+    return 1;
 }
 
 /* the FCB's (drive, name) as an OFT key: the drive from rc_seldisk, the
  * name from fn/tp, the user the current one (upstream is by name and by
  * the current userCode on every call) */
-static int rc_oft_of_fcb(int d, int mode)
+static struct rc_ofile *rc_oft_of_fcb(int d, int mode)
 {
-    if (!rc_fcb2host(rc_fcb, rc_hname))
-        return -1;                           /* a pattern is not a file */
-    if (rc_hname[0] == 0)
-        return -1;
+    /* rc_fcb_n11's body, spelled out: this is every RECORD's path (F_READ,
+     * F_WRITE, the random pair), and a call level here is ~65 cycles a
+     * record on the 8088 */
+    if (!rc_fcb2host(rc_fcb, rc_hname) || rc_hname[0] == 0)
+        return 0;                            /* a pattern is not a file */
     rc_host2n11(rc_hname, rc_n11);
     return rc_oft_get(d, rc_user, rc_n11, mode);
 }
@@ -981,23 +1014,23 @@ static int rc_oft_of_fcb(int d, int mode)
 
 /* rc_rec_read - answers disk.h's codes: 0 read, 1 past the end (nothing
  * moved) */
-static int rc_rec_read(int i, unsigned rec)
+static int rc_rec_read(struct rc_ofile *o, unsigned rec)
 {
     unsigned off, n;
     if (rec > RC_MAXREC_R)
         return 1;
-    off = (rec << 7) & 0xFFFF;
-    if (off >= rc_oft[i].size)
+    off = RC_W(rec << 7);
+    if (off >= o->size)
         return 1;
-    n = rc_oft[i].size - off;
+    n = o->size - off;
     if (n > RC_BLKSZ)
         n = RC_BLKSZ;
-    rc_zzcopy_in(rc_dma, rc_oft[i].seg, off, n);
+    rc_zzcopy_in(rc_dma, o->seg, off, n);
     if (n < RC_BLKSZ)                        /* the partial last record: the
                                               * rest is ^Z, as _sys_readseq's
                                               * 0x1A-filled dmabuf */
-        rc_zfill((rc_dma + n) & 0xFFFF, 0x1A, RC_BLKSZ - n);
-    rc_oft[i].lru = ++rc_oft_clock;
+        rc_zfill(RC_W(rc_dma + n), 0x1A, RC_BLKSZ - n);
+    o->lru = ++rc_oft_clock;
     return 0;
 }
 
@@ -1005,34 +1038,34 @@ static int rc_rec_read(int i, unsigned rec)
  * this model holds - toasted - or no memory), the code upstream's
  * _sys_writeseq/_sys_writerand answer for a failed fwrite; a gap past the
  * end is zeros (fseek + fwrite) */
-static int rc_rec_write(int i, unsigned rec)
+static int rc_rec_write(struct rc_ofile *o, unsigned rec)
 {
     unsigned off, end;
     if (rec > RC_MAXREC_W) {
-        rc_toast_name("RunCPM: ", rc_oft[i].name, ">64K");
+        rc_toast_name(rc_s_runcpm, o->name, rc_s_64k);
         return 0xFF;
     }
-    off = (rec << 7) & 0xFFFF;
+    off = RC_W(rec << 7);
     end = off + RC_BLKSZ;                    /* <= 65,408: rec <= 510 */
-    if (rc_oft_grow(i, end) < 0) {
-        rc_toast_name("RunCPM RAM? ", rc_oft[i].name, "");
+    if (rc_oft_grow(o, end) < 0) {
+        rc_toast_name(rc_s_ram, o->name, rc_empty);
         return 0xFF;
     }
-    if (off > rc_oft[i].size)
-        rc_sfill(rc_oft[i].seg, rc_oft[i].size, 0, off - rc_oft[i].size);
-    rc_zzcopy_out(rc_oft[i].seg, off, rc_dma, RC_BLKSZ);
-    if (end > rc_oft[i].size)
-        rc_oft[i].size = end;
-    rc_oft[i].dirty = 1;
-    rc_oft[i].lru = ++rc_oft_clock;
+    if (off > o->size)
+        rc_sfill(o->seg, o->size, 0, off - o->size);
+    rc_zzcopy_out(o->seg, off, rc_dma, RC_BLKSZ);
+    if (end > o->size)
+        o->size = end;
+    o->dirty = 1;
+    o->lru = ++rc_oft_clock;
     return 0;
 }
 
 /* the sequential record the FCB names: (s2 & 15) * 4096 + ex * 128 + cr */
 static unsigned rc_fcb_rec(void)
 {
-    return (((unsigned)(rc_fcb[14] & RC_MAXS2) << 12) +
-            ((unsigned)rc_fcb[12] << 7) + rc_fcb[32]) & 0xFFFF;
+    return RC_W(((unsigned)(rc_fcb[14] & RC_MAXS2) << 12) +
+            ((unsigned)rc_fcb[12] << 7) + rc_fcb[32]);
 }
 
 /* ==========================================================================
@@ -1042,19 +1075,39 @@ static unsigned rc_fcb_rec(void)
 
 #define RC_RW (rc_rovec & (1 << rc_cdrive))
 
+/* rc_fcb_sel - every FCB function's head: the FCB at DE copied out and its
+ * drive selected (rc_seldisk, 'Bdos Err on X: Select' raised on a refusal)
+ * - and, for a function that WRITES (w), the drive's R/O bit tested ('Bdos
+ * Err on X: R/O' raised). The drive, or -1: the caller answers 0xFF. */
+static int rc_fcb_sel(int w)
+{
+    int d;
+    rc_fcbaddr = rc_z.de;                    /* rc_fcb_load's body: a record's
+                                              * path makes no more calls than
+                                              * it did before this head was
+                                              * shared */
+    rc_zcopy_out(rc_fcb, rc_fcbaddr, 36);
+    d = rc_seldisk(rc_fcb[0], rc_user);
+    if (d >= 0 && w && RC_RW) {
+        rc_error(RC_ERR_WRITEPROT);
+        d = -1;
+    }
+    return d;
+}
+
 /* F_OPEN (15) - _OpenFile */
 static unsigned ovl_fs_open(void)
 {
-    int d, i;
+    int d;
+    struct rc_ofile *o;
     unsigned recs;
-    rc_fcb_load(rc_z.de);
-    d = rc_seldisk(rc_fcb[0], rc_user);
+    d = rc_fcb_sel(0);
     if (d < 0)
         return 0xFF;
-    i = rc_oft_of_fcb(d, 0);
-    if (i < 0)
+    o = rc_oft_of_fcb(d, 0);
+    if (!o)
         return 0xFF;
-    recs = (rc_oft[i].size >> 7) + ((rc_oft[i].size & 127) ? 1 : 0);
+    recs = (o->size >> 7) + ((o->size & 127) ? 1 : 0);
     rc_fcb[13] = 0;                          /* s1 */
     rc_fcb[14] = 0x80;                       /* s2: unmodified */
     rc_fcb[15] = (unsigned char)(recs > RC_BLKEX ? RC_BLKEX : recs);
@@ -1066,15 +1119,14 @@ static unsigned ovl_fs_open(void)
 /* F_CLOSE (16) - _CloseFile */
 static unsigned ovl_fs_close(void)
 {
-    int d, i;
-    rc_fcb_load(rc_z.de);
-    d = rc_seldisk(rc_fcb[0], rc_user);
+    int d;
+    struct rc_ofile *o;
+    d = rc_fcb_sel(0);
     if (d < 0)
         return 0xFF;
-    if (!rc_fcb2host(rc_fcb, rc_hname) || rc_hname[0] == 0)
+    if (!rc_fcb_n11())
         return 0xFF;                         /* invalid filename */
-    rc_host2n11(rc_hname, rc_n11);
-    i = rc_oft_find(d, rc_user, rc_n11);
+    o = rc_oft_find(d, rc_user, rc_n11);
     if (rc_fcb[14] & 0x80)                   /* not modified: nothing owed
                                               * (the entry stays for a
                                               * reopen; rc_oft_flush) */
@@ -1089,35 +1141,31 @@ static unsigned ovl_fs_close(void)
          * and closes - CCP-DR.60K at 0xE56D) - loaded for it if the table
          * let it go */
         unsigned n = (unsigned)rc_fcb[15] << 7;
-        if (i < 0)
-            i = rc_oft_get(d, rc_user, rc_n11, 0);
-        if (i >= 0 && n < rc_oft[i].size) {
-            rc_oft[i].size = n;
-            rc_oft[i].dirty = 1;
+        if (!o)
+            o = rc_oft_get(d, rc_user, rc_n11, 0);
+        if (o && n < o->size) {
+            o->size = n;
+            o->dirty = 1;
         }
     }
-    if (i < 0)
+    if (!o)
         return 0;                            /* modified, but nothing of it
                                               * is held: nothing to write */
-    return rc_oft_flush(i) < 0 ? 0xFF : 0;
+    return rc_oft_flush(o) < 0 ? 0xFF : 0;
 }
 
 /* F_MAKE (22) - _MakeFile */
 static unsigned ovl_fs_make(void)
 {
-    int d, i;
-    rc_fcb_load(rc_z.de);
-    d = rc_seldisk(rc_fcb[0], rc_user);
+    int d;
+    struct rc_ofile *o;
+    d = rc_fcb_sel(1);
     if (d < 0)
         return 0xFF;
-    if (RC_RW) {
-        rc_error(RC_ERR_WRITEPROT);
+    o = rc_oft_of_fcb(d, 1);
+    if (!o)
         return 0xFF;
-    }
-    i = rc_oft_of_fcb(d, 1);
-    if (i < 0)
-        return 0xFF;
-    rc_dc_note(d, rc_user, rc_n11, rc_oft[i].size);
+    rc_dc_note(d, rc_user, rc_n11, o->size);
     rc_fcb[12] = 0;                          /* ex */
     rc_fcb[13] = 0;                          /* s1 */
     rc_fcb[14] = 0;                          /* s2: modified already */
@@ -1177,8 +1225,9 @@ static void ovl_mock_dirent(void)
  * DMA+0) or 0xFF. */
 static unsigned ovl_search_next(int isdir)
 {
-    int i, r;
+    int r;
     unsigned lo, hi;
+    struct rc_dent *e;
     if (rc_s_allext && rc_s_recs) {          /* the last file's next extent */
         ovl_mock_dirent();
         return 0;
@@ -1188,16 +1237,16 @@ static unsigned ovl_search_next(int isdir)
         if (r < 0)
             return 0xFF;
         while (r == 0 && rc_s_pos < rc_dcc->n) {
-            i = rc_s_pos++;
-            if (!rc_match(rc_dcc->e[i].name, rc_s_pat))
+            e = rc_dcc->e + rc_s_pos++;
+            if (!rc_match(e->name, rc_s_pat))
                 continue;
-            os88_memcpy(rc_s_name, rc_dcc->e[i].name, 11);
+            os88_memcpy(rc_s_name, e->name, 11);
             if (isdir) {
                 /* records = bytes rounded up to a whole record, in 32
                  * bits: (hi:lo + 127) >> 7 - a uint16 as upstream's */
-                lo = rc_dcc->e[i].size_lo;
-                hi = rc_dcc->e[i].size_hi;
-                rc_s_recs = ((hi << 9) + (lo >> 7) + ((lo & 127) ? 1 : 0)) & 0xFFFF;
+                lo = e->size_lo;
+                hi = e->size_hi;
+                rc_s_recs = RC_W((hi << 9) + (lo >> 7) + ((lo & 127) ? 1 : 0));
                 rc_s_exts = (rc_s_recs >> 7) + ((rc_s_recs & 127) ? 1 : 0);
                 rc_s_used = 0;
                 rc_s_ffab = RC_FBAD;
@@ -1256,29 +1305,25 @@ static unsigned ovl_fs_snext(void)
  * capture closed by name */
 static unsigned ovl_fs_delete(void)
 {
-    int d, i;
+    int d;
+    struct rc_ofile *o;
     unsigned r, deleted = 0xFF;
-    rc_fcb_load(rc_z.de);
-    d = rc_seldisk(rc_fcb[0], rc_user);
+    d = rc_fcb_sel(1);
     if (d < 0)
         return 0xFF;
-    if (RC_RW) {
-        rc_error(RC_ERR_WRITEPROT);
-        return 0xFF;
-    }
     r = ovl_search_first(rc_z.de, 0);
     while (r != 0xFF) {
         if (rc_errwait)
             return 0xFF;
-        i = rc_oft_find(rc_s_drive, rc_user, rc_s_name);
-        if (i >= 0)
-            rc_oft_drop(i);                  /* its bytes go with it */
+        o = rc_oft_find(rc_s_drive, rc_user, rc_s_name);
+        if (o)
+            rc_oft_drop(o);                  /* its bytes go with it */
         /* disk.h 489-500: the capture is closed by NAME alone, whatever
          * drive or user the ERA ran on (ERA B:PUN.TXT restarts A\0\PUN.TXT
          * at the next punch, upstream and here) */
-        if (rc_n11_eq(rc_s_name, "PUN     TXT"))
+        if (rc_n11_eq(rc_s_name, rc_s_pun))
             rc_pun_open = 0;
-        if (rc_n11_eq(rc_s_name, "LST     TXT"))
+        if (rc_n11_eq(rc_s_name, rc_s_lst))
             rc_lst_open = 0;
         rc_n11_host(rc_s_name, rc_hname);
         rc_fs_cd(rc_s_drive, rc_user);
@@ -1304,16 +1349,13 @@ static unsigned ovl_fs_delete(void)
 /* F_RENAME (23) - _RenameFile: fn/tp -> the name at FCB+17 */
 static unsigned ovl_fs_rename(void)
 {
-    int d, i;
+    int d;
+    struct rc_ofile *o;
     unsigned lo, hi;
-    rc_fcb_load(rc_z.de);
-    d = rc_seldisk(rc_fcb[0], rc_user);
+    struct rc_dent *e;
+    d = rc_fcb_sel(1);
     if (d < 0)
         return 0xFF;
-    if (RC_RW) {
-        rc_error(RC_ERR_WRITEPROT);
-        return 0xFF;
-    }
     rc_fcb[16] = rc_fcb[0];                  /* no move between folders */
     rc_wr(rc_z.de + 16, rc_fcb[0]);
     rc_fcb2host(rc_fcb + 16, rc_hname2);
@@ -1321,22 +1363,22 @@ static unsigned ovl_fs_rename(void)
     if (rc_hname2[0] == 0 || rc_hname[0] == 0)
         return 0xFF;
     rc_host2n11(rc_hname, rc_n11);
-    i = rc_oft_find(d, rc_user, rc_n11);
-    if (i >= 0)
-        rc_oft_flush(i);                     /* the bytes reach the disk
+    o = rc_oft_find(d, rc_user, rc_n11);
+    if (o)
+        rc_oft_flush(o);                     /* the bytes reach the disk
                                               * under the old name first */
     if (rc_dc_want(d, rc_user) != 0)
         return 0xFF;
     if (os88_file_rename(rc_hname, rc_hname2) < 0)
         return 0xFF;
-    if (i >= 0 && rc_oft[i].live)            /* the held bytes follow the
+    if (o && o->live)                        /* the held bytes follow the
                                               * name (rc_oft_flush kept them) */
-        rc_host2n11(rc_hname2, rc_oft[i].name);
-    i = rc_dc_find(rc_n11);
-    if (i >= 0) {                            /* out and back in: the slot
+        rc_host2n11(rc_hname2, o->name);
+    e = rc_dc_find(rc_n11);
+    if (e) {                                 /* out and back in: the slot
                                               * stays in name order (glob's) */
-        lo = rc_dcc->e[i].size_lo;
-        hi = rc_dcc->e[i].size_hi;
+        lo = e->size_lo;
+        hi = e->size_hi;
         rc_dc_forget(d, rc_user, rc_n11);
         rc_host2n11(rc_hname2, rc_dc_n11);
         rc_dc_insert(rc_dc_n11, lo, hi);
@@ -1349,15 +1391,15 @@ static unsigned ovl_fs_rename(void)
 /* F_READ (20) - _ReadSeq */
 static unsigned rc_fs_readseq(void)
 {
-    int d, i, r;
-    rc_fcb_load(rc_z.de);
-    d = rc_seldisk(rc_fcb[0], rc_user);
+    int d, r;
+    struct rc_ofile *o;
+    d = rc_fcb_sel(0);
     if (d < 0)
         return 0xFF;
-    i = rc_oft_of_fcb(d, 0);
-    if (i < 0)
+    o = rc_oft_of_fcb(d, 0);
+    if (!o)
         return 0x10;                         /* _sys_readseq: no such file */
-    r = rc_rec_read(i, rc_fcb_rec());
+    r = rc_rec_read(o, rc_fcb_rec());
     if (r != 0)
         return (unsigned)r;
     if (++rc_fcb[32] >= RC_MAXCR) {          /* cr, ex, s2 stepped */
@@ -1377,19 +1419,15 @@ static unsigned rc_fs_readseq(void)
 /* F_WRITE (21) - _WriteSeq */
 static unsigned rc_fs_writeseq(void)
 {
-    int d, i, r;
-    rc_fcb_load(rc_z.de);
-    d = rc_seldisk(rc_fcb[0], rc_user);
+    int d, r;
+    struct rc_ofile *o;
+    d = rc_fcb_sel(1);
     if (d < 0)
         return 0xFF;
-    if (RC_RW) {
-        rc_error(RC_ERR_WRITEPROT);
-        return 0xFF;
-    }
-    i = rc_oft_of_fcb(d, 0);
-    if (i < 0)
+    o = rc_oft_of_fcb(d, 0);
+    if (!o)
         return 0x10;
-    r = rc_rec_write(i, rc_fcb_rec());
+    r = rc_rec_write(o, rc_fcb_rec());
     if (r != 0)
         return (unsigned)r;
     rc_fcb[14] &= 0x7F;                      /* modified */
@@ -1423,14 +1461,14 @@ static void rc_fcb_setrec(unsigned rec, int keep_unmod)
 /* F_READRAND (33) - _ReadRand */
 static unsigned rc_fs_readrand(void)
 {
-    int d, i, r;
+    int d, r;
+    struct rc_ofile *o;
     unsigned rec;
-    rc_fcb_load(rc_z.de);
-    d = rc_seldisk(rc_fcb[0], rc_user);
+    d = rc_fcb_sel(0);
     if (d < 0)
         return 0xFF;
-    i = rc_oft_of_fcb(d, 0);
-    if (i < 0)
+    o = rc_oft_of_fcb(d, 0);
+    if (!o)
         return 0x10;
     rec = rc_fcb[33] | ((unsigned)rc_fcb[34] << 8);
     if (rc_fcb[35])
@@ -1441,7 +1479,7 @@ static unsigned rc_fs_readrand(void)
                                               * from the record's low bits
                                               * (6 is only a FAILED fseek) */
     else
-        r = rc_rec_read(i, rec);             /* 0, or 1: unwritten */
+        r = rc_rec_read(o, rec);             /* 0, or 1: unwritten */
     rc_fcb_setrec(rec, 1);
     rc_fcb_store();
     return (unsigned)r;
@@ -1450,27 +1488,23 @@ static unsigned rc_fs_readrand(void)
 /* F_WRITERAND (34) and F_WRITEZF (40) - _WriteRand */
 static unsigned rc_fs_writerand(void)
 {
-    int d, i, r;
+    int d, r;
+    struct rc_ofile *o;
     unsigned rec;
-    rc_fcb_load(rc_z.de);
-    d = rc_seldisk(rc_fcb[0], rc_user);
+    d = rc_fcb_sel(1);
     if (d < 0)
         return 0xFF;
-    if (RC_RW) {
-        rc_error(RC_ERR_WRITEPROT);
-        return 0xFF;
-    }
-    i = rc_oft_of_fcb(d, 0);
-    if (i < 0)
+    o = rc_oft_of_fcb(d, 0);
+    if (!o)
         return 0x10;
     if (rc_fcb[35])
         return 6;
     rec = rc_fcb[33] | ((unsigned)rc_fcb[34] << 8);
     if (rec > RC_MAXREC_W) {
-        rc_toast_name("RunCPM: ", rc_oft[i].name, ">64K");
+        rc_toast_name(rc_s_runcpm, o->name, rc_s_64k);
         return 6;                            /* seek past the disk (74.4) */
     }
-    r = rc_rec_write(i, rec);
+    r = rc_rec_write(o, rec);
     if (r != 0)
         return (unsigned)r;
     rc_fcb_setrec(rec, 0);                   /* resets the unmodified flag */
@@ -1481,33 +1515,33 @@ static unsigned rc_fs_writerand(void)
 /* F_SIZE (35) - _GetFileSize: r0..r2 = the records, rounded up */
 static unsigned ovl_fs_size(void)
 {
-    int d, i, k;
+    int d;
+    struct rc_ofile *o;
     unsigned lo, hi, r_lo, r_hi;
-    rc_fcb_load(rc_z.de);
-    d = rc_seldisk(rc_fcb[0], rc_user);
+    struct rc_dent *e;
+    d = rc_fcb_sel(0);
     if (d < 0)
         return 0xFF;
-    if (!rc_fcb2host(rc_fcb, rc_hname) || rc_hname[0] == 0)
+    if (!rc_fcb_n11())
         return 0xFF;
-    rc_host2n11(rc_hname, rc_n11);
-    i = rc_oft_find(d, rc_user, rc_n11);
-    if (i >= 0) {
-        lo = rc_oft[i].size;
+    o = rc_oft_find(d, rc_user, rc_n11);
+    if (o) {
+        lo = o->size;
         hi = 0;
     } else {
         if (rc_dc_want(d, rc_user) != 0)
             return 0xFF;
-        k = rc_dc_find(rc_n11);
-        if (k < 0)
+        e = rc_dc_find(rc_n11);
+        if (!e)
             return 0xFF;
-        lo = rc_dcc->e[k].size_lo;
-        hi = rc_dcc->e[k].size_hi;
+        lo = e->size_lo;
+        hi = e->size_hi;
     }
     /* (hi:lo + 127) >> 7, 24 bits of it, in words */
     r_lo = (lo >> 7) + ((lo & 127) ? 1 : 0);          /* <= 512 */
     r_hi = hi >> 7;
-    hi = ((hi & 0x7F) << 9) & 0xFFFF;
-    r_lo = (r_lo + hi) & 0xFFFF;
+    hi = RC_W((hi & 0x7F) << 9);
+    r_lo = RC_W(r_lo + hi);
     if (r_lo < hi)
         r_hi++;                                        /* the carry */
     rc_fcb[33] = (unsigned char)(r_lo & 0xFF);
@@ -1554,13 +1588,12 @@ static unsigned ovl_fs_makedisk(void)
     rc_fs_name[1] = 0;
     if (os88_file_mkdir(rc_fs_name) < 0)
         return 0xFE;
-    rc_dr_ok[d] = 0;                         /* known absent no longer */
+    rc_dr_clus[d] = RC_PL_UNK;               /* known absent no longer */
     c = rc_fs_subdir(rc_fs_name);
     if (c < 0)
         return 0xFE;
     rc_dr_clus[d] = (unsigned)c;
-    rc_dr_ok[d] = 1;
-    rc_pl_ok[d << 4] = 0;
+    rc_pl_clus[d << 4] = RC_PL_UNK;
     ovl_fs_mkuser(d, 0);                      /* <letter>/0 */
     return 0;
 }
@@ -1611,7 +1644,8 @@ static unsigned ovl_fs_checksub(void)
  * warm boot like any other and reopened for append) */
 static void rc_fs_capture(int lst, int c)
 {
-    int i, first;
+    int first;
+    struct rc_ofile *o;
     unsigned s;
     if (lst) {
         first = !rc_lst_open;
@@ -1620,15 +1654,15 @@ static void rc_fs_capture(int lst, int c)
         first = !rc_pun_open;
         rc_pun_open = 1;
     }
-    i = rc_oft_get(0, 0, lst ? "LST     TXT" : "PUN     TXT", first ? 2 : 1);
-    if (i < 0)
+    o = rc_oft_get(0, 0, lst ? rc_s_lst : rc_s_pun, first ? 2 : 1);
+    if (!o)
         return;                              /* pun_dev == NULL: dropped */
-    s = rc_oft[i].size;
-    if (s == 0xFFFF || rc_oft_grow(i, s + 1) < 0)
+    s = o->size;
+    if (s == 0xFFFF || rc_oft_grow(o, s + 1) < 0)
         return;
-    os88_poke(rc_oft[i].seg, s, c);
-    rc_oft[i].size = s + 1;
-    rc_oft[i].dirty = 1;
+    os88_poke(o->seg, s, c);
+    o->size = s + 1;
+    o->dirty = 1;
     if (first)
-        rc_dc_note(0, 0, rc_oft[i].name, 0);
+        rc_dc_note(0, 0, o->name, 0);
 }

@@ -50,8 +50,10 @@
 ;
 ; A driver has no instance, so it has no folder of its own and uses the
 ; machine's (SPEC.md 19.2.1 - inst_vol_enter says so in its own comment):
-; every file call here acts on the global current volume, and OSAPI_FILE_GOTO
-; is how it moves. The volume is banked and restored around each stage,
+; every file call here acts on the global current volume, and
+; OSAPI_FILE_GOTO_Q is how it moves - the QUIET one, every site (SPEC.md
+; 19.2.2): nothing here shows a folder. The volume is banked and restored
+; around each stage,
 ; SPEC.md 51.5.2's rule, learned when a Control Panel click silently moved
 ; the user to A:.
 ; =============================================================================
@@ -1412,6 +1414,11 @@ hd_bn_total:
 ; Failure is SILENT and that is deliberate - a write-protected or full floppy
 ; must not turn a finished install into an error, and the four rows are still
 ; on screen either way.
+;
+; Both moves are QUIET (SPEC.md 19.2.2): a file written by name, nothing shown.
+; A refused GOTO_Q has moved nothing - not even to A:'s root with the gate
+; shut, which is where the old FILE_GOTO left a failure - so the `jc` is what
+; keeps INSTBNCH.TXT out of whatever folder the user was standing in.
 hd_bn_save:
     push ax
     push bx
@@ -1425,7 +1432,7 @@ hd_bn_save:
     mov [hd_bvclus], dx
     xor dx, dx                      ; A:, root - the disk in the drive
     xor bl, bl
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_Q          ; QUIET; CF=1 = nothing moved, so no write
     jc .out
     mov di, hd_bbuf
     mov si, hd_s_bhdr               ; a header, so a photograph of the file
@@ -1463,8 +1470,8 @@ hd_bn_save:
     call OSAPI_FILE_WRITE
 .out:
     mov dx, [hd_bvclus]             ; back where the user was, whatever
-    mov bl, [hd_bvdrv]              ; happened above (SPEC.md 51.5.2)
-    call OSAPI_FILE_GOTO
+    mov bl, [hd_bvdrv]              ; happened above (SPEC.md 51.5.2); CX,
+    call OSAPI_FILE_GOTO_Q          ; SI and DI are spent and popped below
     pop es
     pop di
     pop si
@@ -2044,15 +2051,33 @@ hd_ivol_bank_v2:
     popf
     ret
 
+; hd_ivol_back is QUIET, as drv_vol_back's own restore is (kernel/drvvol.inc):
+; handing the volume back is not putting a listing on screen, and every Disk
+; window paints from its own view cache. It used to be the full
+; OSAPI_FILE_GOTO on the belief that the full one paid the [dsk_lstale] debt
+; the quiet moves leave; for a DRIVER it has not since the listing lost its
+; resting home (docs/plans/LISTING-HOME-PLAN.md 13) - a caller with no
+; dsk_dest_x store gets a quiet listing whichever slot it calls, so the old
+; restore left the debt owed too and bought only a remount. It runs about ten
+; times an install. And it banks CX, SI and DI, which it did not need to
+; before: the user's volume may be REDIRECTED, where GOTO_Q reaches that
+; driver's FSV_CHDIR and those three are its to spend (os88api.inc, at
+; GOTO_Q) - and ten callers are ten places to be holding one.
 hd_ivol_back:
     pushf
     push ax
     push bx
+    push cx
     push dx
+    push si
+    push di
     mov dx, [hd_ivcwd]
     mov bl, [hd_ivdrv]
-    call OSAPI_FILE_GOTO        ; a failed restore is SWALLOWED by the popf,
-    pop dx                      ; deliberately - drv_vol_back's rule
+    call OSAPI_FILE_GOTO_Q      ; a failed restore is SWALLOWED by the popf,
+    pop di                      ; deliberately - drv_vol_back's rule
+    pop si
+    pop dx
+    pop cx
     pop bx
     pop ax
     popf
@@ -2133,8 +2158,8 @@ hd_iapps_cand:
 ; once at the end instead of once per drive, which is a whole remount saved
 ; for every candidate that answers no. Both gotos are QUIET (SPEC.md 19.2.2)
 ; for hd_isrc's reason - nothing here SHOWS a folder, OSAPI_FILE_FIND walking
-; raw directory sectors - and the restore at the boundary is the full one,
-; which is what pays the [dsk_lstale] debt they leave.
+; raw directory sectors - and so is the restore at the boundary, hd_ivol_back
+; (whose header says why the debt they leave is one nothing here can pay).
 ;
 ; The test for the disk itself is an APPS FOLDER in its root, which is what
 ; makes it the apps disk (SPEC.md 19.2) and what the system disk does not
@@ -2295,16 +2320,16 @@ hd_iapps_find:
 ; and reverting it changed nothing at all. What actually broke was
 ; dskw_read_at refusing the very call that should have answered "finished".
 ;
-; THE BOUNDARY KEEPS THE FULL GOTO, and that is the rule rather than an
-; omission: hd_ivol_back hands the machine back to the user, and a quiet
-; mount there would leave the global listing empty with [dsk_lstale] owed for
-; whatever they do next. Quiet inside the loop, full at the boundary.
-; hd_iapps_find's probe keeps it too - it runs once, so it buys nothing.
+; THE BOUNDARY IS QUIET NOW TOO. It kept the full goto on the reading that
+; a quiet one would leave the global listing empty with [dsk_lstale] owed for
+; whatever the user did next - but a driver's OSAPI_FILE_GOTO has supplied no
+; listing store since docs/plans/LISTING-HOME-PLAN.md 13, so it left exactly
+; that already; hd_ivol_back's header has the rest.
 ;
 ; There were four of these: hd_isrc_sub and hd_idst_sub stood in THE folder,
 ; singular, which is all a one-level walk ever had to name. The level stack
 ; replaced them with hd_isrc_here / hd_idst_here, which stand in whichever
-; folder the walk is in - and cluster 0 is a root to OSAPI_FILE_GOTO, so those
+; folder the walk is in - and cluster 0 is a root to OSAPI_FILE_GOTO_Q, so those
 ; two subsume these as well.
 hd_isrc:
     call os88_ent
@@ -2339,7 +2364,7 @@ hd_idst:
 ; arrays and a return pops them, so the stack depth is the same at level 5 as
 ; at level 0 and the bound is a number rather than a hope.
 ;
-; Level 0 is the ROOT of both volumes: cluster 0 is what OSAPI_FILE_GOTO takes
+; Level 0 is the ROOT of both volumes: cluster 0 is what OSAPI_FILE_GOTO_Q takes
 ; for a root, so the root is an ordinary level and nothing below here carries a
 ; special case for it.
 ; -----------------------------------------------------------------------------
@@ -2930,7 +2955,7 @@ hd_find_di:
 ; hd_isrc_here / hd_idst_here - the folder the walk is IN (module internal)
 ;
 ; The level stack says which one on each volume (SPEC.md 52.10.13), and
-; cluster 0 is a root to OSAPI_FILE_GOTO - so a root file and a file five
+; cluster 0 is a root to OSAPI_FILE_GOTO_Q - so a root file and a file five
 ; folders down take the same two routines and neither has a special case.
 ;
 ; They read [hd_ilvl] rather than a "am I in a folder" flag, which is what

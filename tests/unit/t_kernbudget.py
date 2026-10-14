@@ -54,11 +54,11 @@ def budgets():
     is ASSERTED rather than assumed: a file that grew a third arm, or lost the
     `%ifdef`, would otherwise be read confidently and wrongly.
 
-    BIG'S IS DERIVED AND NOT A LITERAL.  Rule 3 says kern_big fully resides in
-    KERN_RESIDENT_KB once it is at the desktop, and the span starts at
-    KERNEL_SEG, so there is nothing left to choose - the arm reads
-    `KERN_RESIDENT_KB*1024 - KERNEL_SEG*16` and this evaluates it from the same
-    file.  Only that one shape: an arm doing arithmetic this does not
+    BOTH ARE DERIVED AND NOT LITERALS.  Each kernel fully resides in its KB
+    figure once it is at the desktop (KERN_RESIDENT_KB for big,
+    KERN_SMALL_RESIDENT_KB for small), and the span starts at KERNEL_SEG, so
+    there is nothing left to choose - each arm reads `<that>*1024 -
+    KERNEL_SEG*16` and this evaluates it from the same file.  Only that one shape: an arm doing arithmetic this does not
     recognise has to fail rather than be guessed at, for the reason the
     positional parse above fails.
     """
@@ -73,15 +73,17 @@ def budgets():
         if re.fullmatch(r"\d+", expr):
             out[key] = int(expr)
             continue
-        if expr != "KERN_RESIDENT_KB*1024 - KERNEL_SEG*16":
+        kb = {"big": "KERN_RESIDENT_KB",
+              "small": "KERN_SMALL_RESIDENT_KB"}[key]
+        if expr != kb + "*1024 - KERNEL_SEG*16":
             return None
         c = {}
-        for name in ("KERN_RESIDENT_KB", "KERNEL_SEG"):
+        for name in (kb, "KERNEL_SEG"):
             m = re.search(r"^%s\s+equ\s+(0x[0-9A-Fa-f]+|\d+)" % name, src, re.M)
             if not m:
                 return None
             c[name] = int(m.group(1), 0)
-        out[key] = c["KERN_RESIDENT_KB"] * 1024 - c["KERNEL_SEG"] * 16
+        out[key] = c[kb] * 1024 - c["KERNEL_SEG"] * 16
     return out
 
 
@@ -109,7 +111,7 @@ def main():
               r"^KERN_BUDGET\s+equ", open(KERNEL, errors="replace").read(),
               re.M))),
           want="exactly 2 after `%ifdef KERN_BIG`, each a literal or "
-               "`KERN_RESIDENT_KB*1024 - KERNEL_SEG*16`")
+               "`<RESIDENT_KB>*1024 - KERNEL_SEG*16`")
     check(base is not None,
           "docs/KERNEL-MEMORY.md carries a readable kernsize baseline",
           "tools/kernsize.py writes it and reads it; without it every report "

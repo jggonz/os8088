@@ -94,6 +94,17 @@ RUNGS = [("apps/taskmgr/taskmgr.asm", ["-DTMF_MEM"],
 # is optional; that is a good outcome, not a failing gate.
 MIN_SAVING = 0.05
 
+# ...AND SOLITAIRE IS BELOW EVEN THAT NOW, for the same reason told again. The
+# apps size pass's set 6 (SPEC.md 43.11.5) took the full arm 7,425 -> 5,737
+# bytes and the small one 6,973 -> 5,534 - and one of its wins is that the win
+# plaque and the About card became ONE routine, so the card's drawing stopped
+# being About-only bytes at all. What the small arm still drops is the About
+# handler, its credit lines and Auto Finish, ~200 bytes: 3.5% of a smaller
+# whole. The floor is per package rather than lowered for all five, because it
+# is a floor under "the define stopped reaching the source" and the others
+# still sit far above 5%.
+FLOORS = {"solitaire": 0.03}
+
 
 # The package defines the Makefile built the SHIPPED .o88 with - $(PKGSBDEF),
 # which is SBDRAGOFF=/SBRATE= and nothing else today. `make test-fast` passes
@@ -229,11 +240,12 @@ def main():
               "if these match, -DAPP_SMALL has stopped reaching the source and "
               "build/smallapps*.img is the ordinary floppy under another name",
               got="%d vs %d bytes" % (cs, cf), want="smaller")
-        check(saved >= MIN_SAVING,
-              "%s: the small build saves at least %d%%" % (name, MIN_SAVING * 100),
+        floor = FLOORS.get(name, MIN_SAVING)
+        check(saved >= floor,
+              "%s: the small build saves at least %d%%" % (name, floor * 100),
               "a floor under 'the gates carry nothing', not a target - the "
               "real figure is ~34%% and is allowed to move",
-              got="%.1f%%" % (saved * 100), want=">= %d%%" % (MIN_SAVING * 100))
+              got="%.1f%%" % (saved * 100), want=">= %d%%" % (floor * 100))
     rungs(tmp)
     disks(tmp)
     done("t_appsmall")

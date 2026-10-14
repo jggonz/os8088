@@ -54,7 +54,8 @@ MACHINE = {"cga": "os8088_5150_cga_gla", "herc": "os8088_5150_herc_gla"}
 # page, and two files disagreeing about where that row is would be a test
 # failure that means nothing about the kernel.
 DRVR_SZ, DRVR_SEG = drvcall.DRVR_SZ, drvcall.DRVR_SEG
-DRVC_FILE = 5                       # SPEC.md 51.2's class, RAMDISK.DRV's
+DRVC_FILE = 8                       # RAMDISK.DRV's class: DRVC_FILE2 since
+                                    # SPEC.md 62.9.19 gave the cable its own
 RD_ROW = drvcall.RD_ROW
 
 

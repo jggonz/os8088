@@ -330,7 +330,9 @@ FD_WDOG_T   equ 1638                ; ticks: 90s at 18.2065 Hz
 ; A word still bounds it - [fd_sfill] and [fd_sout] are words, so 65536
 ; would be zero in one - but that ceiling is no longer the binding one.
 ; -----------------------------------------------------------------------------
-FD_STGSZ    equ 8192
+%ifndef FD_STGSZ                     ; `make ftpspeed` builds a 32K arm
+FD_STGSZ    equ 8192                ; with -DFD_STGSZ= (SPEC.md 77.50)
+%endif
 ; --- THE SECOND STAGE IS A HEAP CLAIM, AND OPTIONAL --------------------------
 ; Stage 0 is `fd_stage`, in our own bss, and is always there. Stage 1 is
 ; `OSAPI_MEM_CLAIM`'s, taken in the entry proc, and **the server runs perfectly
@@ -350,6 +352,43 @@ FD_STGSZ    equ 8192
 ; a movable one could be relocated at a park point with the driver holding its
 ; segment.
 FD_STGKB    equ FD_STGSZ / 1024
+
+; --- FD_WSEQF - A STOR IS A HELD, KEPT STREAM (SPEC.md 77.50) ---------------
+; Every chunk used to be COMMITTED - a FAT write and the directory entry, and
+; on a hard disk the head leaving the data for cylinder 0 and coming back,
+; once per FD_STGSZ. That is the clicking the field heard and most of the
+; time a STOR spent on a fast machine. HELD writes the data and grows an
+; unlinked chain; KEPT lets the hold outlive this package's wake on a FIXED
+; disk (SPEC.md 18.4.9.3), so nothing is committed until FD_CKPT has gone by,
+; the transfer ends, or the user does anything at all. A crash loses at most
+; the bytes since the last checkpoint - unlinked, so never a wrong file.
+; `make ... FTPPLAIN=1` is the per-chunk commit back, for the A/B.
+%ifdef FTPPLAIN
+FD_WSEQF    equ 0
+%else
+FD_WSEQF    equ WSEQF_HELD | WSEQF_KEEP
+%endif
+FD_CKPT     equ 262144              ; bytes between checkpoints
+
+; --- FD_BIGSZ - STOR COMMITS 32KB AT A TIME (SPEC.md 77.50.2, 77.50.3) -----
+; Measured on both machines the field has. A 286, 737,280 bytes to its hard
+; disk: 8KB kept 81.9 KB/s, 32KB kept 92.2 - the 32KB stage writes at the
+; drive's own rate. A 5150 (86Box): kept 8KB 34.3 KB/s against the plain
+; per-chunk server's 31.4-32.1, and kept 32KB measured once at 36.0. The
+; 8088 had kept 8KB on two refusals (77.21, 77.24), both taken against a
+; server whose commits cost a second each and neither true of the kept
+; stream, so every CPU claims a 32KB stage for STOR alone. RETR and LIST keep
+; the 8KB one in our segment. A refused claim is the 8KB server, which works. Not
+; 64KB: [fd_sfill] and the commit's CX are words. `-DFD_NOBIG` (ftpspeed's
+; 8KB arms) or a bigger FD_STGSZ turns it off.
+FD_BIGSZ    equ 32768
+%ifdef FD_NOBIG
+FD_TIER     equ 0
+%elif FD_STGSZ < FD_BIGSZ
+FD_TIER     equ 1
+%else
+FD_TIER     equ 0
+%endif
 
 ; --- FD_STG2 - AND IT IS 0, BECAUSE THE MACHINE CANNOT OVERLAP THEM ---------
 ; **THE SECOND STAGE WORKS AND BUYS NOTHING** (SPEC.md 77.41.2). The field ran
@@ -448,6 +487,18 @@ fd_entry:
     jc .nostage2
     mov [fd_stg2], dx
 .nostage2:
+%endif
+    mov word [fd_bigseg], 0         ; ...and STOR's stage (77.50.2, 77.50.3)
+    mov word [fd_wstg], FD_STGSZ
+    mov byte [fd_ckpn], FD_CKPT / FD_STGSZ
+%if FD_TIER
+    mov ax, FD_BIGSZ / 1024
+    call OSAPI_MEM_CLAIM            ; a whole number of KB, so 512-aligned
+    jc .nobig                       ; refused: the 8KB server, which works
+    mov [fd_bigseg], dx
+    mov word [fd_wstg], FD_BIGSZ
+    mov byte [fd_ckpn], FD_CKPT / FD_BIGSZ
+.nobig:
 %endif
     mov bx, [fd_win]
     mov ax, fd_onup
@@ -563,15 +614,13 @@ fd_layout:
     mov [fd_setb+2], ax
     mov ax, [fd_btn+6]
     mov [fd_setb+6], ax
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x4
 
 ; --- fd_paint - W_PAINT: SI = window, gfx lock held --------------------------
+%ifdef FTPDBG                       ; the split's clock and nothing else's
 %include "os88pit.inc"              ; pit_now - the clock SPEC.md 72.15.1 built
                                     ; for the driver, shared (SPEC.md 77.32)
+%endif
 %include "os88rseq.inc"             ; os88_rseq - READ_AT's registers on
                                     ; READ_SEQ's walk (SPEC.md 18.4.8.1)
 
@@ -647,7 +696,16 @@ FT_IDLE     equ 4               ; because "the wall minus the three" turned out
                                 ; here overlaps: step + draw + wait + idle is
                                 ; the wall, and what is left over is other
                                 ; tasks
-FT_N        equ 8
+FT_CMAX     equ 8               ; NOT a bracket: t0s holds the open COMMIT's
+                                ; start and tms the LONGEST one (SPEC.md
+                                ; 77.50). A total over commits is `disk`; what
+                                ; a seek-bound disk shows is the worst one
+FT_N        equ 9
+%ifdef FTPDBG                   ; ...and what the knob's bss costs: the two
+FD_DBG      equ 1               ; pass counters (8), the gap pair and the
+%else                           ; commit counters (8) and the brackets
+FD_DBG      equ 0               ; (FT_N * 8). A shipping build lays out none
+%endif                          ; of it - every reader is FTPDBG's
 
 ; **GATED, AND THIS REVERSES 77.32's "ALWAYS ON"** (SPEC.md 77.43). That
 ; decision was right while the split was finding things - "a split that needs
@@ -676,6 +734,14 @@ FT_N        equ 8
 %endmacro
 %endif
 
+; --- THE BODIES ARE THE KNOB'S TOO --------------------------------------------
+; 77.43 gated the macros and the CALLS, and left fd_tbeg, fd_tend, fd_tzero,
+; fd_tms_ms, its two 32-bit helpers and fd_log_split assembling into every
+; shipping image with nothing reaching them but fd_tzero - which zeroed and
+; stamped the brackets once per transfer for nobody to read. The gap pair in
+; fd_count went with them: the `gap Ns` suffix is the knob's, so a shipping
+; build no longer asks the tick on every SEND and every RECV.
+%ifdef FTPDBG
 ; --- fd_tbeg / fd_tend - AL = a stage. Both preserve everything, flags too --
 fd_tbeg:
     pushf
@@ -802,6 +868,24 @@ fd_div32:
     pop si
     pop bx
     ret
+%endif                              ; FTPDBG: the split's bodies
+
+; --- THE SHARED EPILOGUE LADDER ----------------------------------------------
+; Most routines here push some leading run of AX BX CX DX SI DI ES, in that
+; order, and end by popping it back. They `jmp` to the rung that pops what they
+; pushed rather than each carrying its own copy (a clc/stc goes BEFORE the
+; jump: a pop writes no flag). NOT on the transfer path: fd_send_stage,
+; fd_recv_stage, fd_step, fd_wake, fd_do_read/_write and everything they call
+; per pass keep their own epilogues, so the loop the KB/s is measured on does
+; not gain a jump.
+fd_x7:  pop es
+fd_x6:  pop di
+fd_x5:  pop si
+fd_x4:  pop dx
+fd_x3:  pop cx
+fd_x2:  pop bx
+        pop ax
+        ret
 
 fd_paint:
     FT_B FT_DRAW                    ; the gfx lock is held for all of this
@@ -889,25 +973,14 @@ fd_spend:
     mov al, [fd_dirty]
     test al, FDD_RO | FDD_MACH
     jz .sdone
-    push bx
-    push si
     call fd_setup_rects
-    test byte [fd_dirty], FDD_RO
+    test al, FDD_RO
     jz .smach
-    mov bx, fd_rchk
-    mov si, fd_s_ro
-    mov al, [fd_ro]
-    call fd_setup_box
+    call fd_draw_rchk
 .smach:
-    test byte [fd_dirty], FDD_MACH
-    jz .sdone2
-    mov bx, fd_mchk
-    mov si, fd_s_mach
-    mov al, [fd_mach]
-    call fd_setup_box
-.sdone2:
-    pop si
-    pop bx
+    test al, FDD_MACH
+    jz .sdone
+    call fd_draw_mchk
 .sdone:
     mov byte [fd_dirty], 0
     pop ax
@@ -953,22 +1026,16 @@ fd_clear_content:
     call OSAPI_GFX_FILL
     mov al, CBLACK                  ; ...and the pen is PUT BACK, or the next
     call OSAPI_SET_COLOR            ; caller inherits this one exactly as this
-    pop dx                          ; routine inherited its bug
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x4                       ; routine inherited its bug
 
 fd_draw_all:
     cmp byte [fd_page], FP_ABOUT
     jne .nab
-    call fd_draw_about
-    ret
+    jmp fd_draw_about
 .nab:
     cmp byte [fd_page], FP_SETUP
     jne .face
-    call fd_draw_setup
-    ret
+    jmp fd_draw_setup
 .face:
     call fd_clear_content
     call fd_draw_btn
@@ -992,10 +1059,9 @@ fd_btflg: dw 0
     OS88UI_BTNREC fd_btrec, 0, fd_btlbl, fd_btflg, 1
 
 fd_draw_btn:
-    push ax
-    push bx
     push si
-    push di
+    push bx
+    push cx
     mov si, fd_s_start
     cmp byte [fd_st], FD_OFF
     je .have
@@ -1004,7 +1070,7 @@ fd_draw_btn:
     mov si, fd_s_stop
 .have:
     mov bx, fd_btn
-    mov di, OS88UI_FILL             ; **NEVER GREYED, AND IT USED TO BE.** The
+    mov cx, FD_R_MAIN               ; **NEVER GREYED, AND IT USED TO BE.** The
                                     ; greying was on FD_ERR with a comment
                                     ; saying "no staging buffer, so there is
                                     ; nothing to start" - and the stage moved
@@ -1019,24 +1085,29 @@ fd_draw_btn:
                                     ; button is a dead end you cannot retry
                                     ; from. SPEC.md 48.5's rule, and 47 rule 3
                                     ; agrees: the only honest test is Start
-    cmp word [fd_down], FD_R_MAIN   ; ...and the PRESSED look comes from the
+; --- fd_btn_draw - the body all three buttons share, entered by a JUMP --------
+; in:  SI = the label, BX = the rect, CX = the FD_R_* that is this control on
+;      its page, and the caller has pushed SI, BX, CX in that order - they are
+;      popped here. Everything is preserved.
+fd_btn_draw:
+    push ax
+    push di
+    mov di, OS88UI_FILL
+    cmp [fd_down], cx               ; ...and the PRESSED look comes from the
     jne .draw                       ; VARIABLE, so a W_PAINT arriving mid-
     or di, OS88UI_DOWN              ; gesture draws it the way it really is
 .draw:                              ; (SPEC.md 13.8.2)
-    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
-    push bx                     ; already holds this button's rect, SI its
-    mov [fd_btlbl], si          ; label and DI its flags, so the record takes
-    mov [fd_btflg], di          ; all three and the picture is identical
-    mov [fd_btrec+OS88UI_BT_RECTS], bx
+    mov [fd_btlbl], si          ; THE ONE CONTROL (SPEC.md 20.5.1.3): the
+    mov [fd_btflg], di          ; record takes the rect, label and flags, so
+    mov [fd_btrec+OS88UI_BT_RECTS], bx  ; the picture is identical
     mov bx, fd_btrec
     mov al, 1
     call os88ui_btn
-    pop bx
-    pop ax
     pop di
-    pop si
-    pop bx
     pop ax
+    pop cx
+    pop bx
+    pop si
     ret
 
 ; --- fd_draw_setb - the way IN, because a menu item is not a way in ----------
@@ -1045,30 +1116,13 @@ fd_draw_btn:
 ; fix, and it is drawn only by fd_draw_all: its label never changes, so there
 ; is no dirty bit for it and nothing incremental to spend.
 fd_draw_setb:
-    push bx
     push si
-    push di
+    push bx
+    push cx
     mov si, fd_s_setup
     mov bx, fd_setb
-    mov di, OS88UI_FILL
-    cmp word [fd_down], FD_R_C2
-    jne .draw
-    or di, OS88UI_DOWN
-.draw:
-    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
-    push bx                     ; already holds this button's rect, SI its
-    mov [fd_btlbl], si          ; label and DI its flags, so the record takes
-    mov [fd_btflg], di          ; all three and the picture is identical
-    mov [fd_btrec+OS88UI_BT_RECTS], bx
-    mov bx, fd_btrec
-    mov al, 1
-    call os88ui_btn
-    pop bx
-    pop ax
-    pop di
-    pop si
-    pop bx
-    ret
+    mov cx, FD_R_C2
+    jmp short fd_btn_draw
 
 fd_draw_ro:
     push ax
@@ -1095,16 +1149,8 @@ fd_draw_ro:
     mov dx, [fd_rob+2]
     add dx, 2
     mov si, fd_s_ro
-    mov al, CBLACK
-    mov ah, CWHITE
-    call OSAPI_FONT_RUN
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    call fd_run
+    jmp fd_x6
 
 ; -----------------------------------------------------------------------------
 ; fd_draw_done / fd_draw_rchk / fd_draw_mchk - the SETUP page's three
@@ -1117,30 +1163,13 @@ fd_draw_ro:
 ; needs.
 ; -----------------------------------------------------------------------------
 fd_draw_done:
-    push bx
     push si
-    push di
+    push bx
+    push cx
     mov si, fd_s_done
     mov bx, fd_done
-    mov di, OS88UI_FILL
-    cmp word [fd_down], FD_R_MAIN
-    jne .draw
-    or di, OS88UI_DOWN
-.draw:
-    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
-    push bx                     ; already holds this button's rect, SI its
-    mov [fd_btlbl], si          ; label and DI its flags, so the record takes
-    mov [fd_btflg], di          ; all three and the picture is identical
-    mov [fd_btrec+OS88UI_BT_RECTS], bx
-    mov bx, fd_btrec
-    mov al, 1
-    call os88ui_btn
-    pop bx
-    pop ax
-    pop di
-    pop si
-    pop bx
-    ret
+    mov cx, FD_R_MAIN               ; Done sits in Start's slot: FD_R_MAIN
+    jmp fd_btn_draw
 
 fd_draw_rchk:
     push ax
@@ -1182,16 +1211,8 @@ fd_draw_stat:
     mov dx, [fd_oy]
     add dx, FD_PAD + FD_BTNH + 4
     mov si, fd_sline
-    mov al, CBLACK
-    mov ah, CWHITE
-    call OSAPI_FONT_RUN
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    call fd_run
+    jmp fd_x6
 
 ; --- fd_stat_text - compose the status line into fd_sline, space-padded ------
 ; **PADDED, not fill-then-letter**: a space paints background on font_run's
@@ -1280,13 +1301,7 @@ fd_draw_log:
     popf                            ; undercount - a whole-band redraw is the
                                     ; honest next pass, a mislabelled scroll
                                     ; is not
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x6
 
 ; --- fd_log_y - bank the first row's pen y in [fd_leny] ---------------------
 fd_log_y:
@@ -1312,9 +1327,7 @@ fd_log_row:
     mov dx, ax
     mov cx, [fd_ox]
     add cx, FD_TEXTX
-    mov al, CBLACK
-    mov ah, CWHITE
-    call OSAPI_FONT_RUN
+    call fd_run
     pop si
     pop dx
     pop cx
@@ -1532,31 +1545,11 @@ fd_dcatn:
     ret
 
 ; --- fd_dnum - append AX as unsigned decimal ---------------------------------
-fd_dnum:
-    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
-    push ax
-    push bx
-    push cx
-    push dx
-    xor cx, cx
-    mov bx, 10
-.d:
-    xor dx, dx
-    div bx
-    push dx
-    inc cx
-    or ax, ax
-    jnz .d
-.e:
-    pop ax
-    add al, '0'
-    mov [di], al
-    inc di
-    loop .e
+fd_dnum:                            ; the 32-bit one with a zero high word:
+    push dx                         ; one digit loop in the image, not two,
+    xor dx, dx                      ; and every 16-bit number that used to
+    call fd_dnum32                  ; zero DX and call fd_dnum32 calls this
     pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- fd_dnum32 - append DX:AX as unsigned decimal ----------------------------
@@ -1599,12 +1592,7 @@ fd_dnum32:
     inc di
     dec si
     jnz .e
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x5
 
 ; --- fd_dpad - append spaces until DI reaches AX -----------------------------
 fd_dpad:
@@ -1642,8 +1630,8 @@ fd_hire:
     ; The kernel restarts a worker only where it PARKS, which for us is
     ; inside OSAPI_TASK_ALIVE at the top of the loop; we do not declare
     ; OSAPI_MEM_PARKSAFE, so the gfx-lock park is not in play.
-    OS88_WORKER_RESTARTABLE fd_worker
-.out:
+    OS88_WORKER_RESTARTABLE_NOKEEP fd_worker    ; AX is popped and CF
+.out:                               ; set below: nothing to keep
     pop bx
     pop ax
     clc
@@ -1751,6 +1739,7 @@ fd_step:
     ; it, and the one-shots read fd_leaf out of a resolution that is in
     ; flight - so they wait exactly as they did.
     ; -----------------------------------------------------------------------
+%if FD_STG2                         ; (FD_STG2 = 0 assembles none of this:
     cmp word [fd_stg2], 0           ; no second stage, so nowhere to put a byte
     je .waiting                     ; while they hold this one
     cmp byte [fd_xf], FX_STOR
@@ -1763,6 +1752,9 @@ fd_step:
     call fd_kick                    ; the UI task is still owed its turn
     call fd_recv_stage              ; ...and we fill the other stage meanwhile
     jmp .done
+%else                               ; one stage is always theirs while a
+    jmp short .waiting              ; request is out)
+%endif
 .idlereq:
     cmp byte [fd_st], FD_LISTEN
     je .listening
@@ -1866,6 +1858,7 @@ fd_step:
 ; an offset - and BOTH are 512-aligned, which int 13h requires of anything it
 ; touches (CLAUDE.md): fd_stage is aligned by FD_SOFF's rounding and a heap
 ; claim's base is aligned by the kernel's own guard.
+%if FD_STG2
 fd_fillp:
     mov al, [fd_sfb]
     jmp short fd_stgp
@@ -1874,13 +1867,26 @@ fd_commp:
 fd_stgp:
     or al, al
     jnz .claim
+%else                               ; ONE stage: the fill stage and the commit
+fd_fillp:                           ; stage are the same buffer, so the pair is
+fd_commp:                           ; one answer and the index never existed
+fd_stgp:
+%endif
+    mov dx, [fd_bigseg]             ; STOR's 32KB stage (77.50.2, 77.50.3):
+    or dx, dx                       ; only STOR reaches this pair, so RETR and
+    jz .own                         ; LIST, which name fd_stage, keep 8KB
+    xor ax, ax
+    ret
+.own:
     mov ax, fd_stage
     mov dx, ds
     ret
+%if FD_STG2
 .claim:
     xor ax, ax
     mov dx, [fd_stg2]
     ret
+%endif
 
 ; --- fd_handoff - the fill stage becomes the commit stage, and we flip ------
 ; The worker's half of the two-buffer handshake (SPEC.md 77.41), and it runs
@@ -1888,17 +1894,21 @@ fd_stgp:
 ; so everything it will read must already be true.
 fd_handoff:
     push ax
+%if FD_STG2
     mov al, [fd_sfb]
     mov [fd_scb], al
+%endif
     mov ax, [fd_sfill]
     mov [fd_scnt], ax
     mov word [fd_sfill], 0
+%if FD_STG2
     cmp word [fd_stg2], 0           ; no second stage: stay on 0 and the next
     je .out                         ; .commit waits, exactly as it always did
     mov al, [fd_sfb]
     xor al, 1
     mov [fd_sfb], al
 .out:
+%endif
     pop ax
     ret
 
@@ -1950,8 +1960,8 @@ fd_kick:
 ; a wire exchange: a NETV_RECV is up to 274 ms on the cable and the cursor
 ; would stop dead for it (SPEC.md 20.6 rule 3).
 fd_flush_glass:
-    call fd_paint_now               ; ...and the whole of it is fd_paint_now
-    ret                             ; now, which the wake path shares (77.33)
+    jmp fd_paint_now               ; ...and the whole of it is fd_paint_now
+                                    ; now, which the wake path shares (77.33)
 
 ; -----------------------------------------------------------------------------
 ; fd_promise - "the glass matches the face" / "it does not"
@@ -2153,9 +2163,8 @@ fd_reply_h:
 .tx:
     push cx
     mov ax, di                      ; AL = the socket this reply goes on
-    mov bh, NET_CLASS
-    mov bl, NETV_SEND
-    call OSAPI_DRV_CALL             ; out CX = what was TAKEN
+    mov bl, NETV_SEND               ; out CX = what was TAKEN
+    call fd_net
     jc .busy
     pop ax                          ; AX = what was asked
     sub ax, cx                      ; ...and what is left
@@ -2173,14 +2182,7 @@ fd_reply_h:
     call OSAPI_TASK_YIELD           ; let the stack pump before asking again
     jmp short .tx
 .sent:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x7
 
 ; -----------------------------------------------------------------------------
 ; fd_ctl_poll - take what has arrived and run any COMPLETE line
@@ -2407,31 +2409,24 @@ fd_command:
     jne .dn
     cmp dx, [bx+2]
     jne .dn
-    mov si, [bx+4]                  ; the flags word: does it need a login?
-    test si, 1
-    jz .go
+    cmp bx, fd_ctab_login           ; past this row, a login is required
+    jb .go
     cmp byte [fd_auth], 0
     jne .go
     mov si, fd_r530
     call fd_reply
     jmp short .out
 .go:
-    call word [bx+6]
+    call word [bx+4]
     jmp short .out
 .dn:
-    add bx, 8
+    add bx, FD_CTSZ
     jmp short .d
 .unknown:
     mov si, fd_r502
     call fd_reply
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x6
 
 ; --- fd_logcmd - the command, as the window shows it -------------------------
 ; PASS is logged as its verb alone. A password is not something to put on a
@@ -2475,44 +2470,47 @@ fd_logcmd:
     ret
 
 ; -----------------------------------------------------------------------------
-; THE TABLE: verb (two words), flags, handler.
-; flags bit 0 = a login is required, which is RFC 959's rule and the whole of
-; this server's access control - see fd_c_pass.
+; THE TABLE: verb (two words), handler - and ORDERED by login: every row from
+; fd_ctab_login on needs one, which is RFC 959's rule and the whole of this
+; server's access control (see fd_c_pass). It was a flags word per row, 64
+; bytes of table to carry one bit that the row's POSITION already could.
 ; -----------------------------------------------------------------------------
+FD_CTSZ     equ 6
 fd_ctab:
-    dw 'US','ER', 0, fd_c_user
-    dw 'PA','SS', 0, fd_c_pass
-    dw 'QU','IT', 0, fd_c_quit
-    dw 'NO','OP', 0, fd_c_noop
-    dw 'SY','ST', 0, fd_c_syst
-    dw 'FE','AT', 0, fd_c_feat
-    dw 'TY','PE', 1, fd_c_type
-    dw 'MO','DE', 1, fd_c_mode
-    dw 'ST','RU', 1, fd_c_stru
-    dw 'PA','SV', 1, fd_c_pasv
-    dw 'EP','SV', 1, fd_c_epsv
-    dw 'PO','RT', 1, fd_c_port
-    dw 'PW','D ', 1, fd_c_pwd
-    dw 'XP','WD', 1, fd_c_pwd
-    dw 'CW','D ', 1, fd_c_cwd
-    dw 'XC','WD', 1, fd_c_cwd
-    dw 'CD','UP', 1, fd_c_cdup
-    dw 'XC','UP', 1, fd_c_cdup
-    dw 'LI','ST', 1, fd_c_list
-    dw 'NL','ST', 1, fd_c_nlst
-    dw 'RE','TR', 1, fd_c_retr
-    dw 'ST','OR', 1, fd_c_stor
-    dw 'DE','LE', 1, fd_c_dele
-    dw 'MK','D ', 1, fd_c_mkd
-    dw 'XM','KD', 1, fd_c_mkd
-    dw 'RN','FR', 1, fd_c_rnfr
-    dw 'RN','TO', 1, fd_c_rnto
-    dw 'SI','ZE', 1, fd_c_size
-    dw 'AL','LO', 1, fd_c_noop
-    dw 'AB','OR', 1, fd_c_abor
-    dw 'RM','D ', 1, fd_c_rmd
-    dw 'XR','MD', 1, fd_c_rmd
-    dw 0, 0, 0, 0
+    dw 'US','ER', fd_c_user
+    dw 'PA','SS', fd_c_pass
+    dw 'QU','IT', fd_c_quit
+    dw 'NO','OP', fd_c_noop
+    dw 'SY','ST', fd_c_syst
+    dw 'FE','AT', fd_c_feat
+fd_ctab_login:
+    dw 'TY','PE', fd_c_type
+    dw 'MO','DE', fd_c_mode
+    dw 'ST','RU', fd_c_stru
+    dw 'PA','SV', fd_c_pasv
+    dw 'EP','SV', fd_c_epsv
+    dw 'PO','RT', fd_c_port
+    dw 'PW','D ', fd_c_pwd
+    dw 'XP','WD', fd_c_pwd
+    dw 'CW','D ', fd_c_cwd
+    dw 'XC','WD', fd_c_cwd
+    dw 'CD','UP', fd_c_cdup
+    dw 'XC','UP', fd_c_cdup
+    dw 'LI','ST', fd_c_list
+    dw 'NL','ST', fd_c_nlst
+    dw 'RE','TR', fd_c_retr
+    dw 'ST','OR', fd_c_stor
+    dw 'DE','LE', fd_c_dele
+    dw 'MK','D ', fd_c_mkd
+    dw 'XM','KD', fd_c_mkd
+    dw 'RN','FR', fd_c_rnfr
+    dw 'RN','TO', fd_c_rnto
+    dw 'SI','ZE', fd_c_size
+    dw 'AL','LO', fd_c_noop
+    dw 'AB','OR', fd_c_abor
+    dw 'RM','D ', fd_c_rmd
+    dw 'XR','MD', fd_c_rmd
+    dw 0                            ; the end: no verb is two NULs
 
 ; --- the simple ones ---------------------------------------------------------
 fd_c_user:
@@ -2633,13 +2631,11 @@ fd_eqz:
 fd_c_quit:
     mov si, fd_r221
     call fd_reply
-    call fd_bye
-    ret
+    jmp fd_bye
 
 fd_c_noop:
     mov si, fd_r200
-    call fd_reply
-    ret
+    jmp fd_reply
 
 ; -----------------------------------------------------------------------------
 ; fd_c_syst - and why it says UNIX when this is manifestly not Unix
@@ -2656,8 +2652,7 @@ fd_c_noop:
 ; -----------------------------------------------------------------------------
 fd_c_syst:
     mov si, fd_r215
-    call fd_reply
-    ret
+    jmp fd_reply
 
 fd_c_feat:
     push si
@@ -2739,8 +2734,7 @@ fd_c_abor:
     call fd_data_drop
     call fd_reset_xfer
     mov si, fd_r226a
-    call fd_reply
-    ret
+    jmp fd_reply
 
 ; -----------------------------------------------------------------------------
 ; fd_c_rmd - and it is a real command now (SPEC.md 18.90.2)
@@ -2826,6 +2820,7 @@ fd_count:
     push dx
     add [fd_xbytes], cx
     adc word [fd_xbytes+2], 0
+%ifdef FTPDBG
     ; --- and HOW LONG SINCE THE LAST TIME (SPEC.md 77.26) -----------------
     ; The client watches its DATA connection, so what decides whether it
     ; gives up is the LONGEST single silence, not the average rate. That is
@@ -2841,6 +2836,7 @@ fd_count:
     mov [fd_gapmax], ax
 .keep:
     mov [fd_tlast], dx
+%endif                              ; FTPDBG: the gap is the knob's (77.43)
     pop dx
     pop ax
     popf
@@ -2848,17 +2844,23 @@ fd_count:
 
 fd_xstart:
     push ax
+%ifdef FTPDBG
     call fd_tzero                   ; the split is one transfer's, not the
-    call OSAPI_GET_TICKS            ; session's (SPEC.md 77.32)
+%endif                              ; session's (SPEC.md 77.32)
+    call OSAPI_GET_TICKS
     mov [fd_t0], ax
+%ifdef FTPDBG
     mov [fd_tlast], ax              ; the first gap is measured from the 150,
     mov word [fd_gapmax], 0         ; which is when the client starts watching
-    mov word [fd_xbytes], 0
-    mov word [fd_xbytes+2], 0
     mov word [fd_npass], 0
     mov word [fd_npass+2], 0
     mov word [fd_nwake], 0
     mov word [fd_nwake+2], 0
+    mov word [fd_ncmt], 0
+    mov word [fd_nck], 0
+%endif
+    mov word [fd_xbytes], 0
+    mov word [fd_xbytes+2], 0
     call fd_wdog_stamp              ; the 90-second clock starts when the
                                     ; TRANSFER does (77.19) - stamped only at
                                     ; fd_reset_xfer, a session that browsed
@@ -2907,8 +2909,7 @@ fd_log_rate:
     mov bx, 1                       ; under a second: call it one, so the
 .sec:                               ; divide below has a divisor
     mov ax, bx
-    xor dx, dx
-    call fd_dnum32
+    call fd_dnum
     mov si, fd_l_sec
     call fd_dcat
     ; --- and the rate: a 32-bit dividend over a 16-bit divisor -------------
@@ -2935,8 +2936,7 @@ fd_log_rate:
     xor dx, dx
     mov bx, 73
     div bx                          ; whole seconds, the same 4/73 as above
-    xor dx, dx
-    call fd_dnum32
+    call fd_dnum
     mov si, fd_l_gs
     call fd_dcat
 %endif
@@ -2946,14 +2946,9 @@ fd_log_rate:
 %ifdef FTPDBG
     call fd_log_split               ; ...and where it went (SPEC.md 77.32)
 %endif
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x6
 
+%ifdef FTPDBG
 ; -----------------------------------------------------------------------------
 ; fd_log_split - the second line: where the transfer's time went ABOVE the
 ;                driver (SPEC.md 77.32)
@@ -3036,13 +3031,32 @@ fd_log_split:
     mov byte [di], 0
     mov si, fd_outb2
     call fd_log
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+%ifdef FTPDBG
+    ; --- ...and the fourth: the COMMITS (SPEC.md 77.50) ----------------
+    mov di, fd_outb2
+    mov si, fd_l_stg
+    call fd_dcat
+    mov ax, [fd_wstg]
+    call fd_dnum
+    mov si, fd_l_cm
+    call fd_dcat
+    mov ax, [fd_ncmt]
+    call fd_dnum
+    mov si, fd_l_max
+    call fd_dcat
+    mov bx, FT_CMAX * 4
+    call fd_tms_ms
+    call fd_dnum32
+    mov si, fd_l_ck
+    call fd_dcat
+    mov ax, [fd_nck]
+    call fd_dnum
+    mov byte [di], 0
+    mov si, fd_outb2
+    call fd_log
+%endif
+    jmp fd_x6
+%endif                              ; FTPDBG
 
 ; --- fd_log_pasv - the endpoint the 227 just named --------------------------
 ; `Data port 2048` in the window, at the moment it matters. A passive
@@ -3058,8 +3072,7 @@ fd_log_pasv:
     mov si, fd_l_dport
     call fd_dcat
     mov ax, [fd_dport]
-    xor dx, dx
-    call fd_dnum32
+    call fd_dnum
     mov byte [di], 0
     mov si, fd_outb2
     call fd_log
@@ -3077,9 +3090,8 @@ fd_data_listen:
     call fd_pasv_port
     mov [fd_dport], ax
     mov cx, ax
-    mov bh, NET_CLASS
     mov bl, NETV_LISTEN
-    call OSAPI_DRV_CALL
+    call fd_net
     jc .no
     mov [fd_dlhnd], al
     mov byte [fd_dmode], DM_PASV
@@ -3088,9 +3100,8 @@ fd_data_listen:
     ; accepts - so the wish is recorded here and inherited by the child. The
     ; control connection deliberately does NOT ask: it carries command lines,
     ; and a first-come rule would give it the one big ring in the pool.
-    mov bh, NET_CLASS
-    mov bl, NETV_BULK
-    call OSAPI_DRV_CALL             ; CF is not tested: a driver without the
+    mov bl, NETV_BULK               ; CF is not tested: a driver without the
+    call fd_net
                                     ; verb, or a pool with the ring already
                                     ; out, means a slower transfer and not a
                                     ; failed one
@@ -3128,8 +3139,7 @@ fd_log_sockfail:
     mov di, fd_outb2
     mov si, fd_l_nosock
     call fd_dcat
-    xor dx, dx
-    call fd_dnum32
+    call fd_dnum
     mov byte [di], 0
     mov si, fd_outb2
     call fd_log
@@ -3198,13 +3208,7 @@ fd_c_pasv:
     mov si, fd_r425
     call fd_reply
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x6
 
 ; -----------------------------------------------------------------------------
 ; fd_pasv_addr - the address to put in a 227, into fd_ip
@@ -3301,33 +3305,8 @@ fd_c_port:
 .nf:
     cmp cx, 6
     jae .built
-    xor bx, bx                      ; the accumulator
-    mov byte [fd_tmpb], 0           ; ...and whether it saw a digit. IN MEMORY:
-                                    ; `mul` below writes DX, so a flag there
-                                    ; would be destroyed by the first digit
-.dg:
-    mov al, [si]
-    cmp al, '0'
-    jb .fend
-    cmp al, '9'
-    ja .fend
-    inc si
-    sub al, '0'
-    xor ah, ah
-    push ax
-    mov ax, bx
-    mov bx, 10
-    mul bx                          ; DX:AX, and a field is < 256 by the test
-    mov bx, ax                      ; below, so AX alone is the answer
-    pop ax
-    add bx, ax
-    mov byte [fd_tmpb], 1
-    cmp bx, 255
-    ja .bad                         ; a field that cannot be a byte is not a
-    jmp short .dg                   ; PORT argument, whatever else it is
-.fend:
-    cmp byte [fd_tmpb], 0
-    je .bad                         ; an empty field
+    call fd_pbyte                   ; a field that is empty, or cannot be a
+    jc .bad                         ; byte, is not a PORT argument
     mov [di], bx
     add di, 2
     inc cx
@@ -3363,16 +3342,15 @@ fd_c_port:
     jz .bad                         ; port 0 is not a port
     mov si, fd_dhost
     mov cx, ax
-    mov bh, NET_CLASS
     mov bl, NETV_OPEN
-    call OSAPI_DRV_CALL
+    call fd_net
     jc .noconn                      ; **NOT 501.** The argument parsed; what
                                     ; failed is the CONNECTION
     mov [fd_dhnd], al
     mov byte [fd_dmode], DM_PORT
-    mov bh, NET_CLASS               ; ACTIVE mode dials out, so the socket is
-    mov bl, NETV_BULK               ; here rather than accepted later - and it
-    call OSAPI_DRV_CALL             ; is still empty, so the swap is free
+    mov bl, NETV_BULK               ; ACTIVE mode dials out, so the socket is
+    call fd_net                     ; here rather than accepted later - and it
+                                    ; is still empty, so the swap is free
     mov al, [fd_dhnd]               ; (SPEC.md 72.21.1)
     mov si, fd_r200
     call fd_reply
@@ -3393,13 +3371,7 @@ fd_c_port:
     mov si, fd_r501
     call fd_reply
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x6
 
 ; --- fd_stale - is the session holding the server worth keeping? ------------
 ; out: CF=1 = yes, keep it (refuse the newcomer); CF=0 = it is stale
@@ -3423,9 +3395,8 @@ fd_stale:
     mov al, [fd_chnd]
     or al, al
     jz .gone
-    mov bh, NET_CLASS
     mov bl, NETV_STATUS
-    call OSAPI_DRV_CALL
+    call fd_net
     jc .clock                       ; the driver would not say: fall back on
     cmp ah, NSK_UP                  ; the clock rather than guess
     je .clock
@@ -3530,9 +3501,8 @@ fd_second:
     mov si, fd_r421
     call fd_reply_h
     mov al, [fd_rjhnd]
-    mov bh, NET_CLASS
     mov bl, NETV_ABORT              ; refused before it said a word: there is
-    call OSAPI_DRV_CALL             ; nothing in flight for it to lose
+    call fd_net                     ; nothing in flight for it to lose
     mov si, fd_l_busy
     call fd_log
 .out:
@@ -3574,25 +3544,49 @@ fd_data_drop:
 fd_data_drop_v:
     push ax
     push bx
-    cmp byte [fd_dhnd], 0
-    je .l
-    mov al, [fd_dhnd]
-    mov bh, NET_CLASS
+    push si
+    mov si, fd_dhnd
     mov bl, [fd_dverb]
-    call OSAPI_DRV_CALL
-    mov byte [fd_dhnd], 0
-.l:
-    cmp byte [fd_dlhnd], 0
-    je .out
-    mov al, [fd_dlhnd]
-    mov bh, NET_CLASS
+    call fd_hverb
+    mov si, fd_dlhnd
     mov bl, [fd_dverb]
-    call OSAPI_DRV_CALL
-    mov byte [fd_dlhnd], 0
-.out:
+    call fd_hverb
     mov byte [fd_dmode], DM_NONE
-    pop bx
-    pop ax
+    pop si
+    jmp fd_x2
+
+; --- fd_hclose / fd_hverb - one socket handle byte, given back --------------
+; in:  SI -> the handle byte (0 = none, and then nothing happens); fd_hverb
+;      takes the verb in BL, fd_hclose is NETV_CLOSE
+; out: the byte is 0. AX and BX are the driver's; everything else preserved
+fd_hclose:
+    mov bl, NETV_CLOSE
+fd_hverb:
+    mov al, [si]
+    or al, al
+    jz .none
+    call fd_net
+    mov byte [si], 0
+.none:
+    ret
+
+; --- fd_run - OSAPI_FONT_RUN, black on white: SI = text, CX,DX = the pen -----
+; Every run this window letters is the same pair, and eight sites carried it.
+; AX is clobbered (it was the colour pair at every one of them).
+fd_run:
+    mov ax, CWHITE * 256 + CBLACK
+    call OSAPI_FONT_RUN
+    ret
+
+; --- fd_net - OSAPI_DRV_CALL on NET_CLASS, verb in BL -----------------------
+; Every register as OSAPI_DRV_CALL takes and leaves it; BH is NET_CLASS after.
+; The ONE-OFF verbs come through here - listen, open, close, the reply's send.
+; What a transfer does per pass (fd_send_stage, fd_recv_stage, fd_data_ready,
+; fd_ctl_poll, fd_second's knock) keeps the inline far call, so the loop the
+; KB/s is measured on gains no near call.
+fd_net:
+    mov bh, NET_CLASS
+    call OSAPI_DRV_CALL
     ret
 
 ; --- fd_reset_xfer - forget everything about a transfer ----------------------
@@ -3600,8 +3594,10 @@ fd_reset_xfer:
     mov byte [fd_xf], FX_NONE
     mov word [fd_sfill], 0
     mov word [fd_sout], 0
+%if FD_STG2
     mov byte [fd_sfb], 0            ; **BOTH STAGES BACK TO THE START**
     mov byte [fd_scb], 0            ; (SPEC.md 77.41): LIST and RETR use stage
+%endif
     mov word [fd_scnt], 0           ; 0 only, so every transfer begins there
     mov word [fd_foff], 0
     mov word [fd_foff+2], 0
@@ -3610,11 +3606,10 @@ fd_reset_xfer:
     mov byte [fd_lmore], 0
     mov word [fd_xbytes], 0
     mov word [fd_xbytes+2], 0
-    call fd_wdog_stamp              ; LAST, so the stamp records the counters
+    jmp fd_wdog_stamp              ; LAST, so the stamp records the counters
                                     ; this routine just zeroed rather than the
                                     ; finished transfer's - a fresh deadline
                                     ; for whatever comes next
-    ret
 
 ; -----------------------------------------------------------------------------
 ; fd_data_ready - is the data connection usable yet?
@@ -3642,9 +3637,8 @@ fd_data_ready:
     jz .no                          ; nobody yet - the ordinary answer
     mov [fd_dhnd], al
     mov al, [fd_dlhnd]              ; **THE LISTENER GOES NOW.** It is single-use
-    mov bh, NET_CLASS               ; and it is the fourth of four handles
-    mov bl, NETV_CLOSE
-    call OSAPI_DRV_CALL
+    mov bl, NETV_CLOSE              ; and it is the fourth of four handles
+    call fd_net
     mov byte [fd_dlhnd], 0
     mov byte [fd_dmode], DM_UP
     jmp short .yes
@@ -3693,8 +3687,7 @@ fd_data_ready:
 ; place, and the UI task may run the instant this byte lands.
 fd_post:
     mov [fd_req], al
-    call fd_kick
-    ret
+    jmp fd_kick
 
 ; -----------------------------------------------------------------------------
 ; fd_xfer_poll - push whatever transfer is running along by one step
@@ -3729,9 +3722,8 @@ fd_log_stall:
     mov si, fd_l_stb
     call fd_dcat
     mov al, [fd_dhnd]               ; ...and what the DRIVER thinks of it
-    mov bh, NET_CLASS
     mov bl, NETV_STATUS
-    call OSAPI_DRV_CALL
+    call fd_net
     jc .nost
     push cx
     mov al, ah                      ; AH = NSK_*
@@ -3745,13 +3737,7 @@ fd_log_stall:
     mov byte [di], 0
     mov si, fd_outb2
     call fd_log
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x6
 
 ; -----------------------------------------------------------------------------
 ; fd_cidle_stamp / fd_cidle_check - the control connection's idle clock
@@ -4041,11 +4027,15 @@ fd_recv_stage:
     mov al, FR_WAPPEND
 .p:
     call fd_post
+%if FD_STG2
     cmp word [fd_stg2], 0
     je .out                         ; one stage: this pass is done, as before
     jmp .more                       ; ...AND KEEP READING, into the stage the
                                     ; handoff just moved us to. Bounded: the
                                     ; next .commit finds [fd_req] set
+%else
+    jmp short .out                  ; one stage: this pass is done
+%endif
 .quiet:
     ; NOTHING READ IS NOT AN END (netpkg.inc): the end is NSK_CLOSING with
     ; nothing left to read, and a transfer that believed a zero would truncate
@@ -4067,8 +4057,13 @@ fd_recv_stage:
     cmp word [fd_sfill], 0
     jne .last
     cmp byte [fd_created], 0
-    jne .fin
-.last:
+    je .last
+%if FD_WSEQF
+    cmp byte [fd_noseq], 0          ; A HELD STREAM OWES ITS CLOSE (SPEC.md
+    je .last                        ; 77.50.1): a file that is a whole number
+%endif                              ; of chunks ends with nothing staged, and
+    jmp short .fin                  ; finishing here sent the 226 with the last
+.last:                              ; up-to-256KB still unlinked
     call fd_handoff                 ; the tail is a commit like any other
     mov al, FR_WCREATE
     cmp byte [fd_created], 0
@@ -4111,8 +4106,7 @@ fd_xrefuse:
     call fd_data_abort              ; refused before a byte moved: nothing is
                                     ; in flight for the peer to lose
     call fd_reset_xfer
-    call fd_reply
-    ret
+    jmp fd_reply
 
 ; --- fd_xdone - a transfer finished cleanly ----------------------------------
 fd_xdone:
@@ -4145,6 +4139,19 @@ fd_xdone:
     call fd_reply
     pop si
     ret
+
+; --- the one-shots' reply tails ---------------------------------------------
+; Every fd_do_* ends by putting the folder back (fd_unbank, which keeps AX
+; and SI) and answering: a fixed reply, 550, or the FERR_* in AX translated.
+fd_unb550:
+    mov si, fd_r550
+fd_unbreply:
+    call fd_unbank
+    jmp fd_reply
+fd_unbferr:
+    call fd_unbank
+    call fd_ferr_sel
+    jmp fd_reply
 
 ; -----------------------------------------------------------------------------
 ; fd_ferr_sel - AX = a FERR_* -> SI = the reply that is TRUE about it
@@ -4204,8 +4211,7 @@ fd_xfail:
     call fd_data_abort              ; FAILED: the peer is gone, so the slot
                                     ; comes back now (SPEC.md 77.25)
     call fd_reset_xfer
-    call fd_reply
-    ret
+    jmp fd_reply
 
 ; =============================================================================
 ; THE COMMANDS THAT MOVE DATA
@@ -4326,13 +4332,18 @@ fd_c_stor:
 .allowed:
     mov word [fd_sfill], 0
     mov word [fd_sout], 0
+%if FD_STG2
     mov byte [fd_sfb], 0            ; ...and the stages, for the same reason
     mov byte [fd_scb], 0
+%endif
     mov word [fd_scnt], 0
     mov byte [fd_created], 0
     mov byte [fd_lmore], 0
+    push cx
+    mov cx, [fd_wstg]               ; STOR's stage, 32KB if claimed (77.50.3)
     call fd_setchunk                ; the cluster-rounded commit size, for THIS
-    jc .noroom                      ; volume, now (SPEC.md 52.3)
+    pop cx                          ; volume, now (SPEC.md 52.3)
+    jc .noroom
     call fd_keepname
     mov si, fd_r150
     call fd_reply
@@ -4386,7 +4397,7 @@ fd_setchunk:
     mov bx, ax
     or bx, bx
     jz .no
-    mov ax, FD_STGSZ
+    mov ax, cx                      ; the STAGE's bytes, which differ by verb
     xor dx, dx
     div bx                          ; how many whole clusters fit the stage
     or ax, ax
@@ -4436,9 +4447,8 @@ fd_socks:
                                     ; write through (SPEC.md 20.11)
     mov di, fd_skbuf
     mov cx, FD_SKBSZ
-    mov bh, NET_CLASS
     mov bl, NETV_SKTAB
-    call OSAPI_DRV_CALL
+    call fd_net
     jnc .have
     mov si, fd_l_nosk               ; an older driver, or no card: say so
     call fd_log                     ; rather than printing an empty table
@@ -4462,8 +4472,7 @@ fd_socks:
     call fd_dcat
     mov al, cl
     xor ah, ah
-    xor dx, dx
-    call fd_dnum32
+    call fd_dnum
     mov si, fd_l_sp
     call fd_dcat
     ; --- the TCP state BY NAME, because a number is not a diagnosis ---------
@@ -4478,31 +4487,22 @@ fd_socks:
     mov si, [fd_ts_tab+bx]
     xchg ax, bx                     ; ...and back
     call fd_dcat
-    mov si, fd_l_skl
+    mov si, fd_sk_flds              ; the five WORD fields, label then value,
+.fld:                               ; out of fd_sk_flds rather than five
+    lodsw                           ; copies of the same four lines
+    push si
+    xchg ax, si
     call fd_dcat
-    mov ax, [fd_skbuf+bx+SKI_LP]
-    xor dx, dx
-    call fd_dnum32
-    mov si, fd_l_skr
-    call fd_dcat
-    mov ax, [fd_skbuf+bx+SKI_RP]
-    xor dx, dx
-    call fd_dnum32
-    mov si, fd_l_skrx
-    call fd_dcat
-    mov ax, [fd_skbuf+bx+SKI_RXN]
-    xor dx, dx
-    call fd_dnum32
-    mov si, fd_l_skc                ; the ring it holds, as its size: 0 for a
-    call fd_dcat                    ; listener, lean for a control connection,
-    mov ax, [fd_skbuf+bx+SKI_RXC]   ; the bulk rung for a transfer (72.21)
-    xor dx, dx
-    call fd_dnum32
-    mov si, fd_l_sktx
-    call fd_dcat
-    mov ax, [fd_skbuf+bx+SKI_TXN]
-    xor dx, dx
-    call fd_dnum32
+    pop si
+    lodsb                           ; AL = the field's offset in the record
+    cbw
+    push bx
+    add bx, ax
+    mov ax, [fd_skbuf+bx]
+    pop bx
+    call fd_dnum
+    cmp si, fd_sk_flds + 5*3
+    jb .fld
     ; --- THE FLAGS, AND NOT ON A CLOSED SLOT --------------------------------
     ; ORPH and ACPT are the stranded-socket tell, so a column of ' f0' would
     ; bury them - but a slot that is TS_CLOSED is FREE, and sk_alloc zeroes
@@ -4520,8 +4520,7 @@ fd_socks:
     call fd_dcat
     pop ax
     xor ah, ah
-    xor dx, dx
-    call fd_dnum32
+    call fd_dnum
 .noflg:
     mov byte [di], 0
     push bx
@@ -4535,14 +4534,7 @@ fd_socks:
     cmp cl, [fd_skn]
     jb .row
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x7
 
 ; -----------------------------------------------------------------------------
 ; fd_lsopts - drop leading `-x` option words from the LIST/NLST argument
@@ -4765,58 +4757,13 @@ fd_wake:
     call fd_dfree_bank              ; the volume's cluster size, banked for
     FT_E FT_DFREE                   ; fd_setchunk on the worker's side
 .nodfree:
-    mov al, [fd_req]
-    cmp al, FR_LIST
-    je .r_list
-    cmp al, FR_RDCHK
-    je .r_rdchk
-    cmp al, FR_READ
-    je .r_read
-    cmp al, FR_WCREATE
-    je .r_write
-    cmp al, FR_WAPPEND
-    je .r_write
-    cmp al, FR_DELE
-    je .r_dele
-    cmp al, FR_MKD
-    je .r_mkd
-    cmp al, FR_RNFR
-    je .r_rnfr
-    cmp al, FR_RNTO
-    je .r_rnto
-    cmp al, FR_CWD
-    je .r_cwd
-    cmp al, FR_PWD
-    je .r_pwd
-    cmp al, FR_SIZE
-    je .r_size
-    cmp al, FR_RMD
-    je .r_rmd
-    jmp .clear
-
-.r_list:  call fd_do_list
-          jmp short .clear
-.r_rdchk: call fd_do_rdchk
-          jmp short .clear
-.r_read:  call fd_do_read
-          jmp short .clear
-.r_write: call fd_do_write
-          jmp short .clear
-.r_dele:  call fd_do_dele
-          jmp short .clear
-.r_mkd:   call fd_do_mkd
-          jmp short .clear
-.r_rnfr:  call fd_do_rnfr
-          jmp short .clear
-.r_rnto:  call fd_do_rnto
-          jmp short .clear
-.r_cwd:   call fd_do_cwd
-          jmp short .clear
-.r_pwd:   call fd_do_pwd
-          jmp short .clear
-.r_size:  call fd_do_size
-          jmp short .clear
-.r_rmd:   call fd_do_rmd
+    mov al, [fd_req]                ; (AL = the request, as it always was on
+    cmp al, FR_RMD                  ; the way into every handler)
+    ja .clear
+    mov bl, al                      ; ONE TABLE, indexed by FR_* (1..FR_RMD),
+    xor bh, bh                      ; where a thirteen-arm compare chain and
+    shl bx, 1                       ; thirteen call/jmp pairs were
+    call [fd_rqtab - 2 + bx]
 
 .clear:
     mov byte [fd_req], FR_NONE      ; **LAST, AND AFTER EVERY RESULT IS
@@ -4837,6 +4784,15 @@ fd_wake:
     pop bx
     pop ax
     ret
+
+; --- fd_rqtab - fd_wake's handlers, by FR_* (FR_LIST = 1 is the first word) --
+fd_rqtab:
+    dw fd_do_list, fd_do_rdchk, fd_do_read, fd_do_write, fd_do_write
+    dw fd_do_dele, fd_do_mkd, fd_do_rnfr, fd_do_rnto, fd_do_cwd, fd_do_pwd
+    dw fd_do_size, fd_do_rmd
+%if FR_LIST != 1 || FR_WAPPEND != 5 || FR_RMD != 13
+  %error "fd_rqtab's order is FR_*'s - renumber one and the table moves with it"
+%endif
 
 ; --- fd_dfree_bank - the volume's cluster size, for fd_setchunk --------------
 ; No disk I/O (the SDK says so), so this is free to ask on every request.
@@ -4874,6 +4830,16 @@ fd_dfree_bank:
 ; fd_split - SI = a path; leave the LEAF in fd_leaf and walk to its directory
 ; out: CF=1 = a component did not exist; [fd_banked] says whether to walk back
 ; -----------------------------------------------------------------------------
+; --- fd_argsplit / fd_xfersplit - point fd_pathp at the argument (or at the
+; transfer's banked name) and split it: fd_split's own entry, with the
+; `call fd_argpath / mov si, [fd_pathp]` every caller carried folded in
+fd_argsplit:
+    mov si, fd_arg
+    jmp short fd_psplit
+fd_xfersplit:
+    mov si, fd_xname
+fd_psplit:
+    mov [fd_pathp], si              ; ...and falls into fd_split, SI = the path
 fd_split:
     push ax
     push bx
@@ -4924,30 +4890,24 @@ fd_split:
     pop si
     jc .fail
     jmp short .comp
-.leaf:
-    mov si, fd_comp
-    mov di, fd_leaf
-    call fd_copyz
-    call fd_mangle83                ; ...and the leaf is 8.3 by the time ANY
-    pop di                          ; command sees it (SPEC.md 77.20)
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
 .bare:
     cmp byte [fd_mlevel], 0         ; A BARE NAME AT THE MACHINE ROOT IS NOT A
     jne .fail                       ; FILE. There is no directory to resolve it
                                     ; in, and resolving it in whichever volume
                                     ; happened to be current last would serve a
                                     ; folder the client was never shown
+.leaf:
+    ; THE LEAF IS MANGLED OUT OF THE WHOLE PATH (SPEC.md 77.20), on both
+    ; exits - the bare name too, or `STOR long name.mod` in the served root
+    ; would still refuse. m83_mangle cuts at the last separator itself, so
+    ; the leaf is never fd_comp's copy: that one stops at FD_NAMEMAX - 1, and
+    ; `/pub/banana split.mod` reached the mangle as `banana split` - BANANA~1
+    ; with no extension - while the bare name came out BANANA~1.MOD.
     mov si, [fd_pathp]
     mov di, fd_leaf
-    call fd_copyz
-    call fd_mangle83                ; the bare-name exit takes the same path,
-    pop di                          ; or `STOR long name.mod` in the served
-    pop dx                          ; root would still refuse
+    call m83_mangle                 ; apps/os88m83.inc, Telnet's Zmodem too
+    pop di
+    pop dx
     pop cx
     pop bx
     pop ax
@@ -4962,236 +4922,14 @@ fd_split:
     stc
     ret
 
-; =============================================================================
-; fd_mangle83 - collapse [fd_leaf] to a name 8.3 can hold (SPEC.md 77.20)
-;
-; `banana split.mod` becomes `BANANA~1.MOD`, the way every DOS-era system
-; showed a long name, rather than being refused. The field asked for exactly
-; this: a refusal that explains itself is honest, but a name that WORKS is
-; better, and the client has no way to know this machine's rules in advance.
-;
-; **A NAME THAT IS ALREADY LEGAL IS LEFT ALONE**, and that is what makes the
-; mapping round-trip: LIST shows `BANANA~1.MOD`, the client asks for
-; `BANANA~1.MOD`, and that name passes through here untouched, so RETR, DELE,
-; SIZE and RNFR all reach the file LIST advertised. Mangling unconditionally
-; would collapse `BANANA~1.MOD` to `BANANA~1.MOD` by luck and something like
-; `README.TXT` to `README~1.TXT` by rule, breaking every name it had just
-; shown.
-;
-; It is DETERMINISTIC - always `~1`, never a search for a free `~2` - and
-; that is a deliberate trade rather than an oversight. A counter has to be
-; resolved against the directory, which makes the name depend on what is
-; already there: the same upload would land on a different name on a
-; different disk, and DELE could not compute the name it had listed. The cost
-; is that two long names sharing their first six legal characters collapse
-; together, and the second STOR replaces the first - which is what STOR means
-; anyway. `~1` is a courtesy to a human reading the listing, not a counter.
-; =============================================================================
-fd_mangle83:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call fd_is83                    ; already legal? then it is not ours to
-    jnc .out                        ; touch
-    ; --- the extension: the LAST dot, up to three legal characters ---------
-    mov si, fd_leaf
-    call fd_lastdot                 ; BX -> the last '.', or 0
-    mov di, fd_mext
-    xor cx, cx
-    or bx, bx
-    jz .noext
-    mov si, bx
-    inc si
-.ex:
-    mov al, [si]
-    or al, al
-    jz .noext
-    call fd_c83                     ; upcases, CF=1 = drop it
-    jc .exn
-    cmp cx, 3
-    jae .noext
-    mov [di], al
-    inc di
-    inc cx
-.exn:
-    inc si
-    jmp short .ex
-.noext:
-    mov byte [di], 0
-    ; --- the stem: up to SIX legal characters before that dot -------------
-    mov si, fd_leaf
-    mov di, fd_leaf
-    xor cx, cx
-.st:
-    mov al, [si]
-    or al, al
-    jz .stn
-    cmp si, bx                      ; stop AT the last dot (bx = 0 means no
-    je .stn                         ; dot, and si never equals 0)
-    call fd_c83
-    jc .stnx
-    cmp cx, 6
-    jae .stn
-    mov [di], al
-    inc di
-    inc cx
-.stnx:
-    inc si
-    jmp short .st
-.stn:
-    jcxz .nostem
-.tilde:
-    mov word [di], '~1'             ; two bytes, low first: '~' then '1'
-    add di, 2
-    mov si, fd_mext
-    cmp byte [si], 0
-    je .done
-    mov byte [di], '.'
-    inc di
-.ec:
-    mov al, [si]
-    or al, al
-    jz .done
-    mov [di], al
-    inc di
-    inc si
-    jmp short .ec
-.done:
-    mov byte [di], 0
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-.nostem:
-    mov di, fd_leaf                 ; nothing legal survived - `...` or a name
-    mov si, fd_s_file               ; that is all spaces. It still has to
-    call fd_copyz                   ; become SOMETHING, and FILE~1 is a name a
-    mov di, fd_leaf                 ; person can see and delete
-    add di, 4
-    jmp short .tilde
-
-; --- fd_is83 - is [fd_leaf] already a legal 8.3 name? CF=0 = yes ------------
-; The kernel's dskw_name83 rule, asked rather than assumed: stem 1..8 legal
-; characters, at most one dot, extension 1..3 if the dot is there.
-fd_is83:
-    push ax
-    push cx
-    push si
-    mov si, fd_leaf
-    xor cx, cx
-.s:
-    mov al, [si]
-    or al, al
-    jz .send
-    cmp al, '.'
-    je .dot
-    call fd_c83
-    jc .no
-    inc cx
-    cmp cx, 8
-    ja .no
-    inc si
-    jmp short .s
-.send:
-    jcxz .no                        ; empty
-    jmp short .yes
-.dot:
-    jcxz .no                        ; '.TXT' has no stem
-    inc si
-    xor cx, cx
-.e:
-    mov al, [si]
-    or al, al
-    jz .eend
-    cmp al, '.'
-    je .no                          ; a second dot
-    call fd_c83
-    jc .no
-    inc cx
-    cmp cx, 3
-    ja .no
-    inc si
-    jmp short .e
-.eend:
-    jcxz .no                        ; a trailing dot
-.yes:
-    pop si
-    pop cx
-    pop ax
-    clc
-    ret
-.no:
-    pop si
-    pop cx
-    pop ax
-    stc
-    ret
-
-; --- fd_c83 - AL upcased; CF=1 = 8.3 may not hold it ------------------------
-; dskw_char_x's set, mirrored: A-Z, 0-9 and dskw_syms. A SPACE is not in it,
-; which is what `banana split.mod` fell foul of.
-fd_c83:
-    cmp al, 'a'
-    jb .nf
-    cmp al, 'z'
-    ja .nf
-    sub al, 32
-.nf:
-    cmp al, 'A'
-    jb .na
-    cmp al, 'Z'
-    jbe .ok
-.na:
-    cmp al, '0'
-    jb .sym
-    cmp al, '9'
-    jbe .ok
-.sym:
-    push si
-    mov si, fd_syms
-.sc:
-    cmp byte [si], 0
-    je .bad
-    cmp al, [si]
-    je .gs
-    inc si
-    jmp short .sc
-.gs:
-    pop si
-.ok:
-    clc
-    ret
-.bad:
-    pop si
-    stc
-    ret
-
-; --- fd_lastdot - SI = a NUL string -> BX = the last '.', or 0 --------------
-fd_lastdot:
-    push ax
-    push si
-    xor bx, bx
-.l:
-    mov al, [si]
-    or al, al
-    jz .out
-    cmp al, '.'
-    jne .n
-    mov bx, si
-.n:
-    inc si
-    jmp short .l
-.out:
-    pop si
-    pop ax
-    ret
+; THE 8.3 MANGLE (SPEC.md 77.20) is apps/os88m83.inc's m83_mangle, the one
+; Telnet's Zmodem receive runs too: `banana split.mod` becomes `BANANA~1.MOD`,
+; a name that is already legal is left alone (which is what makes LIST ->
+; RETR round-trip), and it is always `~1` (a counter resolved against the
+; directory would land the same upload differently on two disks, and DELE
+; could not compute the name it listed). The why is SPEC.md 77.20; the rule's
+; reference is tools/os88bbs.py's mangle83 and tests/m83.py runs this code
+; against it.
 
 ; --- fd_lastsep - AX = non-zero if the path at [fd_pathp] holds a '/' --------
 fd_lastsep:
@@ -5396,15 +5134,8 @@ fd_root_resolve:
     je .out
     mov byte [fd_mlevel], 1
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     clc
-    ret
+    jmp fd_x7
 .bad:
     ; **A ROOT THAT WILL NOT RESOLVE IS A REFUSAL, and this used to fall back**
     ; - to the folder the app was launched from, silently. That is the worst
@@ -5417,15 +5148,8 @@ fd_root_resolve:
     mov bl, [fd_rrdrv]              ; refused Start leaves the instance exactly
     call OSAPI_FILE_GOTO_QM            ; where it was - in a real volume, which is
     mov byte [fd_mlevel], 0         ; what that byte has to agree with
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     stc
-    ret
+    jmp fd_x7
 
 ; --- fd_issep - AL. CF=0 = it is a path separator ---------------------------
 fd_issep:
@@ -5652,9 +5376,9 @@ fd_do_list:
     mov byte [fd_lmore], 0
     cmp byte [fd_lsdir], 0          ; an ARGUMENT names the directory to list:
     je .here                        ; walk to it now, THIS pass - the session
-    call fd_xferpath                ; stands wherever the last command left it,
-    mov si, [fd_pathp]              ; and the walk banks/unbanks around every
-    call fd_split                   ; stage exactly as fd_do_read's does
+    call fd_xfersplit               ; stands wherever the last command left it,
+                                    ; and the walk banks/unbanks around every
+                                    ; stage exactly as fd_do_read's does
     jc .nodir
 .here:
     cmp byte [fd_mlevel], 0         ; **THE MACHINE ROOT IS ANSWERED FIRST AND
@@ -5706,14 +5430,7 @@ fd_do_list:
                                     ; connection WITH the refusal (77.25)
 .out:
     call fd_unbank                  ; every path: a no-op unless fd_split
-    pop es                          ; moved us this pass
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x7                       ; moved us this pass
 
 ; -----------------------------------------------------------------------------
 ; fd_list_vols - the whole-machine root: one folder row per mounted volume
@@ -5762,13 +5479,7 @@ fd_list_vols:
     mov [fd_sfill], di
     mov word [fd_sout], 0
     mov byte [fd_lmore], 0
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x6
 
 ; -----------------------------------------------------------------------------
 ; fd_list_row - one listing line from fd_fbuf, appended at ES:DI
@@ -5827,12 +5538,7 @@ fd_list_row:
     inc di
     mov byte [di], 10
     inc di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x5
 
 ; --- fd_ewidth32 - how many decimal digits DX:AX takes. out CX --------------
 ; So the size column can be right-aligned, which is what an `ls -l` parser
@@ -5879,9 +5585,7 @@ fd_do_rdchk:
     push dx
     push si
     push di
-    call fd_xferpath
-    mov si, [fd_pathp]
-    call fd_split
+    call fd_xfersplit
     jc .no
     mov si, fd_leaf
     call fd_find
@@ -5891,12 +5595,11 @@ fd_do_rdchk:
     jae .no                         ; 'type < OSAPI_FT_DIR' is the SDK's own
                                     ; way of asking (type 1 is a PACKAGE, not
                                     ; "a file")
-    mov ax, [fd_fbuf+18]
-    mov [fd_fsize], ax
-    mov ax, [fd_fbuf+20]
-    mov [fd_fsize+2], ax
     call fd_unbank
+    push cx
+    mov cx, FD_STGSZ                ; RETR reads into fd_stage, always 8KB
     call fd_setchunk
+    pop cx
     jc .noroom
     mov si, fd_r150
     call fd_reply
@@ -5914,13 +5617,7 @@ fd_do_rdchk:
     mov si, fd_r550
     call fd_xfail
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x6
 
 ; -----------------------------------------------------------------------------
 ; fd_do_read - one chunk of the file at [fd_foff] into the stage
@@ -5952,9 +5649,7 @@ fd_do_read:
                                     ; - fd_split's goroot, fd_unbank's move
                                     ; back - cost more than the call did and
                                     ; was invisible
-    call fd_xferpath
-    mov si, [fd_pathp]
-    call fd_split
+    call fd_xfersplit
     jc .no
     mov si, fd_leaf
     mov bx, fd_stage                ; ES:BX - ES is ours, set by fd_wake, and a
@@ -6020,9 +5715,10 @@ fd_do_write:
     push di
     push es
     FT_B FT_DISK                    ; the whole body, for fd_do_read's reason
-    call fd_xferpath
-    mov si, [fd_pathp]
-    call fd_split
+%ifdef FTPDBG
+    FT_B FT_CMAX                    ; ...and this commit alone (SPEC.md 77.50)
+%endif
+    call fd_xfersplit
     jc .nopath                      ; NOT .no: AX here is fd_wake's dispatch
                                     ; value (FR_WCREATE/FR_WAPPEND), and fed
                                     ; to fd_ferr_sel it matched no FERR_* and
@@ -6044,24 +5740,58 @@ fd_do_write:
     jc .no                          ; means
     mov byte [fd_created], 1
     mov word [fd_wtok], 0           ; a NEW file: no older token may be hot
-    jmp short .ok
+    mov byte [fd_ckn], 0
+    jmp short .last                 ; the whole file, if it was one chunk
 .append:
-    jcxz .ok                        ; an empty tail needs no append at all -
+    jcxz .last                      ; an empty tail needs no append at all -
                                     ; and APPEND's own contract wants CX >= 1
     cmp byte [fd_noseq], 0          ; A STREAMING APPEND (SPEC.md 77.49): the
     jne .app                        ; kernel keeps the file's entry and last
     mov di, [fd_wtok]               ; cluster under this token, so a chunk is
-    xor al, al                      ; no lookup and no walk of the chain from
+    mov al, FD_WSEQF                ; no lookup and no walk of the chain from
     call OSAPI_FILE_WRITE_SEQ       ; its front - which made a long STOR
-    mov [fd_wtok], di               ; QUADRATIC. PLAIN, not HELD: a wake
-    jnc .ok                         ; commits one chunk and the unlock after
-                                    ; it would commit a hold anyway
+    mov [fd_wtok], di               ; QUADRATIC. HELD AND KEPT (SPEC.md
+    jnc .held                       ; 77.50): the FAT and the entry are not
+                                    ; written per chunk at all
     cmp ax, FERR_NAME               ; kern_small's cell answers this - and so
     jne .no                         ; does APPEND, for the arguments it would
     mov byte [fd_noseq], 1          ; refuse, so falling back to it is exact
 .app:
     call OSAPI_FILE_APPEND
     jc .no
+    jmp short .ok
+.held:
+%if FD_WSEQF
+    inc byte [fd_ckn]               ; ...BUT EVERY [fd_ckpn] CHUNKS, A
+    mov al, [fd_ckn]                ; CHECKPOINT: the stream so far committed
+    cmp al, [fd_ckpn]
+    jb .last                        ; and the token still hot, so what a crash
+    mov al, FD_WSEQF | WSEQF_CKPT   ; can lose is bounded by FD_CKPT and not
+    jmp short .seal                 ; by the file
+%endif
+.last:
+%if FD_WSEQF
+    cmp byte [fd_lmore], 2          ; the LAST commit closes the stream, so
+    jne .ok                         ; the 226 goes out with the file whole on
+    cmp byte [fd_noseq], 0          ; the disk
+    jne .ok
+    xor al, al
+.seal:
+    mov byte [fd_ckn], 0
+    xor cx, cx                      ; CX = 0: a close, or with WSEQF_CKPT a
+    mov di, [fd_wtok]               ; checkpoint
+    call OSAPI_FILE_WRITE_SEQ
+    mov [fd_wtok], di
+    jnc .sealed
+    cmp ax, FERR_NAME               ; a kernel with no WRITE_SEQ has nothing
+    jne .no                         ; held to close - a one-chunk file never
+    mov byte [fd_noseq], 1          ; asked it before
+    jmp short .ok
+.sealed:
+%ifdef FTPDBG
+    inc word [fd_nck]
+%endif
+%endif
 .ok:
     call fd_unbank
     mov word [fd_scnt], 0           ; **NOT fd_sfill** - the worker owns that
@@ -6070,21 +5800,29 @@ fd_do_write:
     cmp byte [fd_lmore], 2          ; fd_recv_stage marks the final commit, so
     jne .out                        ; the transfer ends here rather than after
     mov byte [fd_lmore], 0          ; one more empty round trip
+%ifdef FTPDBG
+    call fd_cmax_end                ; ...and THIS commit is in the split it
+%endif                              ; prints: fd_xdone letters it, so both
+    FT_E FT_DISK                    ; brackets close first (SPEC.md 77.50.1)
     call fd_xdone
-    jmp short .out
+    jmp short .pops
 .nopath:
     call fd_unbank
     mov si, fd_r550                 ; a static 'No such file or directory'
     call fd_xfail
     jmp short .out
 .no:
-    push ax                         ; THE FERR, and fd_unbank must not eat it -
-    call fd_unbank                  ; it is the whole difference between "your
-    pop ax                          ; name is wrong" and "my disk is full"
+    call fd_unbank                  ; THE FERR, and fd_unbank must not eat it -
     call fd_ferr_sel
     call fd_xfail
+                                    ; it is the whole difference between "your
+                                    ; name is wrong" and "my disk is full"
 .out:
+%ifdef FTPDBG
+    call fd_cmax_end
+%endif
     FT_E FT_DISK
+.pops:
     pop es
     pop di
     pop si
@@ -6094,33 +5832,51 @@ fd_do_write:
     pop ax
     ret
 
+%ifdef FTPDBG
+; --- fd_cmax_end - one commit is over: count it, and keep the LONGEST --------
+; A seek-bound disk shows in the worst commit and not in the total (SPEC.md
+; 77.50): `disk` over `cm` is the mean, and this is the tail
+fd_cmax_end:
+    push ax
+    push dx
+    call pit_now
+    sub ax, [fd_t0s+FT_CMAX*4]
+    sbb dx, [fd_t0s+FT_CMAX*4+2]
+    cmp dx, [fd_tms+FT_CMAX*4+2]
+    jb .n
+    ja .s
+    cmp ax, [fd_tms+FT_CMAX*4]
+    jbe .n
+.s:
+    mov [fd_tms+FT_CMAX*4], ax
+    mov [fd_tms+FT_CMAX*4+2], dx
+.n:
+    inc word [fd_ncmt]
+    pop dx
+    pop ax
+    ret
+%endif
+
 ; --- the one-shots -----------------------------------------------------------
 fd_do_dele:
     push si
-    call fd_argpath
-    mov si, [fd_pathp]
-    call fd_split
+    call fd_argsplit
     jc .no
     mov si, fd_leaf
     call OSAPI_FILE_DELETE
     jc .ferr
-    call fd_unbank
     mov si, fd_r250
-    call fd_reply
+    call fd_unbreply
     pop si
     ret
 .ferr:
-    push ax                         ; THE KERNEL SAID WHICH IT WAS - a
-    call fd_unbank                  ; write-protected disk answered "no such
-    pop ax                          ; file" here, which is not even close
-    call fd_ferr_sel
-    call fd_reply
+    call fd_unbferr                 ; THE KERNEL SAID WHICH IT WAS - a
+                                    ; write-protected disk answered "no such
+                                    ; file" here, which is not even close
     pop si
     ret
 .no:
-    call fd_unbank                  ; fd_split's own failure: AX is not a FERR
-    mov si, fd_r550
-    call fd_reply
+    call fd_unb550                  ; fd_split's own failure: AX is not a FERR
     pop si
     ret
 
@@ -6136,51 +5892,41 @@ fd_do_dele:
 fd_do_rmd:
     push ax
     push si
-    call fd_argpath
-    mov si, [fd_pathp]
-    call fd_split
+    call fd_argsplit
     jc .no
     mov si, fd_leaf
     xor al, al                      ; STRICT - see fd_c_rmd
     call OSAPI_FILE_RMDIR
     jc .fail
-    call fd_unbank
     mov si, fd_r250
-    call fd_reply
+    call fd_unbreply
     pop si
     pop ax
     ret
 .fail:
     cmp ax, FERR_PROT
     je .notempty
-    push ax                         ; everything else - FERR_WPROT, FERR_IO -
-    call fd_unbank                  ; the kernel named, and "no such directory"
-    pop ax                          ; named none of them
-    call fd_ferr_sel
-    call fd_reply
+    call fd_unbferr                 ; everything else - FERR_WPROT, FERR_IO -
+                                    ; the kernel named, and "no such directory"
+                                    ; named none of them
     pop si
     pop ax
     ret
 .notempty:
-    call fd_unbank
     mov si, fd_r550n
-    call fd_reply
+    call fd_unbreply
     pop si
     pop ax
     ret
 .no:
-    call fd_unbank                  ; fd_split's own failure: AX is not a FERR
-    mov si, fd_r550
-    call fd_reply
+    call fd_unb550                  ; fd_split's own failure: AX is not a FERR
     pop si
     pop ax
     ret
 
 fd_do_mkd:
     push si
-    call fd_argpath
-    mov si, [fd_pathp]
-    call fd_split
+    call fd_argsplit
     jc .no
     mov si, fd_leaf
     call OSAPI_FILE_MKDIR
@@ -6207,17 +5953,14 @@ fd_do_mkd:
     pop si
     ret
 .bad:
-    push ax                         ; MKD fails for the SAME two reasons STOR
-    call fd_unbank                  ; does - a name 8.3 cannot hold, or a full
-    pop ax                          ; volume - and said "no such directory" to
-    call fd_ferr_sel                ; both, which is true of neither
-    call fd_reply
+    call fd_unbferr                 ; MKD fails for the SAME two reasons STOR
+                                    ; does - a name 8.3 cannot hold, or a full
+                                    ; volume - and said "no such directory" to
+                                    ; both, which is true of neither
     pop si
     ret
 .no:
-    call fd_unbank
-    mov si, fd_r550
-    call fd_reply
+    call fd_unb550
     pop si
     ret
 
@@ -6229,9 +5972,7 @@ fd_do_mkd:
 fd_do_rnfr:
     push si
     push di
-    call fd_argpath
-    mov si, [fd_pathp]
-    call fd_split
+    call fd_argsplit
     jc .no
     mov si, fd_leaf
     call fd_find
@@ -6305,8 +6046,9 @@ fd_do_rnto:
     call fd_copyz
     mov word [fd_pathp], fd_rnfrom
     mov si, fd_rnfrom
-    call fd_leafof                  ; ...and the source contributes its leaf
-    call fd_mangle83                ; through 77.20's mapping, the same one
+    mov di, fd_leaf
+    call m83_mangle                 ; ...and the source contributes its leaf,
+                                    ; through 77.20's mapping, the same one
                                     ; RNFR's find answered 350 for - a long
                                     ; source name otherwise failed here after
                                     ; succeeding there
@@ -6314,25 +6056,21 @@ fd_do_rnto:
     mov di, fd_rnto_l
     call OSAPI_FILE_RENAME
     jc .ferr
-    call fd_unbank
     mov si, fd_r250
-    call fd_reply
+    call fd_unbreply
     pop di
     pop si
     ret
 .ferr:
-    push ax                         ; FERR_EXIST is the one a client MEETS
-    call fd_unbank                  ; here, and "no such file" is its exact
-    pop ax                          ; inversion - the name is taken, not absent
-    call fd_ferr_sel
-    call fd_reply
+    call fd_unbferr                 ; FERR_EXIST is the one a client MEETS
+                                    ; here, and "no such file" is its exact
+                                    ; inversion - the name is taken, not absent
     pop di
     pop si
     ret
 .no:
-    call fd_unbank                  ; fd_split, or the two names disagreeing
-    mov si, fd_r550                 ; about their directory: AX is not a FERR
-    call fd_reply
+    call fd_unb550                  ; fd_split, or the two names disagreeing
+                                    ; about their directory: AX is not a FERR
     pop di
     pop si
     ret
@@ -6341,31 +6079,6 @@ fd_do_rnto:
     call fd_reply
     pop di
     pop si
-    ret
-
-; --- fd_leafof - SI = a path; put its last component in fd_leaf, NO walking --
-fd_leafof:
-    push ax
-    push si
-    push di
-    mov ax, si
-.l:
-    cmp byte [si], 0
-    je .done
-    cmp byte [si], '/'
-    jne .n
-    mov ax, si
-    inc ax
-.n:
-    inc si
-    jmp short .l
-.done:
-    mov si, ax
-    mov di, fd_leaf
-    call fd_copyz
-    pop di
-    pop si
-    pop ax
     ret
 
 ; --- CWD ---------------------------------------------------------------------
@@ -6474,13 +6187,7 @@ fd_do_cwd:
     mov si, fd_r550d
     call fd_reply
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x6
 
 ; -----------------------------------------------------------------------------
 ; fd_cpush / fd_up - the parent stack, and why the kernel cannot keep it
@@ -6746,9 +6453,7 @@ fd_do_size:
     push dx
     push si
     push di
-    call fd_argpath
-    mov si, [fd_pathp]
-    call fd_split
+    call fd_argsplit
     jc .no
     mov si, fd_leaf
     call fd_find
@@ -6771,9 +6476,7 @@ fd_do_size:
     pop ax
     ret
 .no:
-    call fd_unbank
-    mov si, fd_r550
-    call fd_reply
+    call fd_unb550
     pop di
     pop si
     pop dx
@@ -6798,9 +6501,8 @@ fd_getaddr:
     call net_find
     jc .no
     mov di, fd_ip
-    mov bh, NET_CLASS
     mov bl, NETV_ADDR
-    call OSAPI_DRV_CALL
+    call fd_net
     jc .no
     mov di, fd_ipstr
     xor bx, bx
@@ -6816,28 +6518,16 @@ fd_getaddr:
     jmp short .q
 .done:
     mov byte [di], 0
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     clc
-    ret
+    jmp fd_x7
 .no:
     mov si, fd_s_noaddr             ; **NOT A FAILURE TO START.** A machine
     mov di, fd_ipstr                ; whose DHCP has not bound yet still serves
     call fd_copyz                   ; perfectly to a client that knows where to
-    pop es                          ; find it; what it cannot do is answer PASV,
-    pop di                          ; and fd_c_pasv says so at the moment it is
-    pop si                          ; asked (netpkg.inc's NETV_ADDR)
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     stc
-    ret
+    jmp fd_x7                       ; find it; what it cannot do is answer PASV,
+                                    ; and fd_c_pasv says so at the moment it is
+                                    ; asked (netpkg.inc's NETV_ADDR)
 
 ; -----------------------------------------------------------------------------
 ; fd_start - open the listener
@@ -6853,16 +6543,14 @@ fd_start:
     call net_find                   ; WHICH DRIVER: the card's class or the
     jc .nodrv                       ; cable's, and not the RAM disk sharing the
                                     ; second (apps/os88sock.inc, SPEC.md 20.11.1)
-    mov bh, NET_CLASS
     mov bl, NETV_STATE
-    call OSAPI_DRV_CALL
+    call fd_net
     jc .nodrv
     test al, NSTF_SOCK
     jz .nolink
     mov cx, FTP_PORT
-    mov bh, NET_CLASS
     mov bl, NETV_LISTEN
-    call OSAPI_DRV_CALL
+    call fd_net
     jc .noport
     mov [fd_lhnd], al
     mov byte [fd_st], FD_LISTEN
@@ -6895,21 +6583,17 @@ fd_start:
     jc .noworker                    ; none of it, the window says Listening
     jmp short .out                  ; and every client is ignored (SPEC.md 77.1)
 .noworker:
-    mov al, [fd_lhnd]               ; so the port goes back, exactly as .badroot
-    mov bh, NET_CLASS               ; gives it back - one of NET_SOCKS held for
-    mov bl, NETV_CLOSE              ; the window's life is the SPEC.md 77.28 leak
-    call OSAPI_DRV_CALL
-    mov byte [fd_lhnd], 0
+    mov si, fd_lhnd                 ; so the port goes back, exactly as .badroot
+    call fd_hclose                  ; gives it back - one of NET_SOCKS held for
+                                    ; the window's life is the SPEC.md 77.28 leak
     mov si, fd_e_nowork
     call fd_log                     ; ...and the log has just said "Listening",
                                     ; which this contradicts - so it says so
     jmp short .fail                 ; there too, before fd_msg carries it
 .badroot:
-    mov al, [fd_lhnd]               ; the port is open and nothing is going to
-    mov bh, NET_CLASS               ; serve on it, so it goes back rather than
-    mov bl, NETV_CLOSE              ; being held for the session
-    call OSAPI_DRV_CALL
-    mov byte [fd_lhnd], 0
+    mov si, fd_lhnd                 ; the port is open and nothing is going to
+    call fd_hclose                  ; serve on it, so it goes back rather than
+                                    ; being held for the session
     mov si, fd_e_root
     jmp short .fail
 .nodrv:
@@ -6936,10 +6620,12 @@ fd_start:
 ; fd_onclose - W_ONCLOSE: the settings' last chance to reach the disk
 ;
 ; **MARK ON CLICK, WRITE ON CLOSE** is SPEC.md 31.8's rule for the Control
-; Panel and this is the same trade: a FTPD.CFG write is a mount, a data
-; sector, a FAT sector, a directory sector and a remount, which on the machine
-; this is for is seconds of frozen UI - unaffordable on the click of a check
-; box and entirely affordable once, on the way out.
+; Panel and this is the same trade: a FTPD.CFG write is a walk to
+; SYSTEM\APPDATA, a data sector, a FAT sector, a directory sector and a walk
+; back, which on the machine this is for is a second or more of frozen UI -
+; unaffordable on the click of a check box and entirely affordable once, on
+; the way out. (os88data.inc has made a REPEAT save a banked GOTO_QM and one
+; data sector, but the first of a session is still the full write.)
 ;
 ; It NEVER refuses. There is nothing here a user could lose by closing the
 ; window - the log is a log and a transfer in flight is the client's problem,
@@ -6984,14 +6670,9 @@ fd_bye:
     call fd_data_drop
 .dropped:
     call fd_reset_xfer
-    cmp byte [fd_chnd], 0
-    je .n
-    mov al, [fd_chnd]
-    mov bh, NET_CLASS
-    mov bl, NETV_CLOSE
-    call OSAPI_DRV_CALL
-    mov byte [fd_chnd], 0
-.n:
+    mov si, fd_chnd
+    call fd_hclose
+
     mov byte [fd_auth], 0
     mov word [fd_clen], 0
     mov byte [fd_havern], 0
@@ -7015,22 +6696,11 @@ fd_shutdown:
     push si
     call fd_data_drop
     call fd_reset_xfer
-    cmp byte [fd_chnd], 0
-    je .l
-    mov al, [fd_chnd]
-    mov bh, NET_CLASS
-    mov bl, NETV_CLOSE
-    call OSAPI_DRV_CALL
-    mov byte [fd_chnd], 0
-.l:
-    cmp byte [fd_lhnd], 0
-    je .done
-    mov al, [fd_lhnd]
-    mov bh, NET_CLASS
-    mov bl, NETV_CLOSE
-    call OSAPI_DRV_CALL
-    mov byte [fd_lhnd], 0
-.done:
+    mov si, fd_chnd
+    call fd_hclose
+    mov si, fd_lhnd
+    call fd_hclose
+
     mov byte [fd_auth], 0
     mov word [fd_clen], 0
     mov byte [fd_req], FR_NONE
@@ -7093,13 +6763,8 @@ fd_onclick:
                                     ; draws nothing
     call fd_setdown                 ; ...and the pressed look, through the one
 .out:                               ; writer - 0 is a legal argument, so a
-    pop di                          ; press that lands on nothing needs no test
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret                             ; near: dispatched (SPEC.md 20.5)
+    jmp fd_x6                       ; press that lands on nothing needs no test
+                                    ; near: dispatched (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; fd_ondrag - W_ONDRAG (SPEC.md 13.8.2): the pointer moved, the press is live
@@ -7142,13 +6807,7 @@ fd_ondrag:
 .set:
     call fd_setdown                 ; ...which draws only if that CHANGED
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret                             ; near: dispatched (SPEC.md 20.5)
+    jmp fd_x6                       ; near: dispatched (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; fd_onup - W_ONMOUSEUP (SPEC.md 13.7): the control FIRES here
@@ -7239,13 +6898,7 @@ fd_onup:
     call fd_layout
     call fd_spend
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret                             ; near: dispatched (SPEC.md 20.5)
+    jmp fd_x6                       ; near: dispatched (SPEC.md 20.5)
 
 ; =============================================================================
 ; THE PRESS/DRAG/RELEASE GESTURE (SPEC.md 13.7, 13.8.2, 77.18)
@@ -7556,13 +7209,7 @@ fd_line_init:
     inc bx
     cmp bx, FD_FN
     jb .f
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x6
 
 ; --- fd_fblock - in BX = a field index; out SI = its block, DI = its row ------
 fd_fblock:
@@ -7629,6 +7276,39 @@ fd_setup_commit:
     ret
 
 ; --- fd_parseip - SI = dotted quad -> DI = four bytes. CF=1 = it is not one --
+; --- fd_pbyte - one decimal field, 0..255, at SI ------------------------------
+; out: BX = the value, SI past its digits; CF = 1 if there was no digit or
+;      the value passed 255 (SI is then wherever the walk stopped). Every
+;      other register preserved. PORT's six fields and the PASV override's
+;      four are the same grammar and were the same loop, twice.
+fd_pbyte:
+    push ax
+    push dx
+    xor bx, bx                      ; the accumulator
+    xor dh, dh                      ; ...and whether it saw a digit
+.d:
+    mov al, [si]
+    sub al, '0'
+    cmp al, 9
+    ja .end
+    inc si
+    xor ah, ah
+    xchg ax, bx                     ; AX = the value so far, BX = the digit
+    mov dl, 10
+    mul dl                          ; < 2560: AX alone is the answer
+    add bx, ax
+    mov dh, 1
+    cmp bx, 255
+    jbe .d
+    stc                             ; not a byte
+    jmp short .out
+.end:
+    cmp dh, 1                       ; CF = 1 exactly when no digit was seen
+.out:
+    pop dx
+    pop ax
+    ret
+
 fd_parseip:
     push ax
     push bx
@@ -7638,31 +7318,8 @@ fd_parseip:
     push di
     xor cx, cx                      ; fields taken
 .f:
-    xor bx, bx
-    mov byte [fd_tmpb], 0
-.d:
-    mov al, [si]
-    cmp al, '0'
-    jb .fend
-    cmp al, '9'
-    ja .fend
-    inc si
-    sub al, '0'
-    xor ah, ah
-    push ax
-    mov ax, bx
-    mov bx, 10
-    mul bx
-    mov bx, ax
-    pop ax
-    add bx, ax
-    mov byte [fd_tmpb], 1
-    cmp bx, 255
-    ja .no                          ; not a byte, so not a quad
-    jmp short .d
-.fend:
-    cmp byte [fd_tmpb], 0
-    je .no                          ; an empty field
+    call fd_pbyte                   ; empty, or not a byte: not a quad
+    jc .no
     mov [di], bl
     inc di
     inc cx
@@ -7678,23 +7335,11 @@ fd_parseip:
 .end:
     cmp cx, 4
     jne .no
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     clc
-    ret
+    jmp fd_x6
 .no:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     stc
-    ret
+    jmp fd_x6
 
 ; --- fd_pasv_str - render [fd_pasv] into the field, or empty when it is unset
 fd_pasv_str:
@@ -7976,9 +7621,7 @@ fd_draw_setup:
     mov dx, [fd_oy]
     add dx, FD_PAD + 3
     mov si, fd_s_sethd
-    mov al, CBLACK
-    mov ah, CWHITE
-    call OSAPI_FONT_RUN
+    call fd_run
     xor bx, bx                      ; (the rects were derived above, with
                                     ; Done's - one call for the whole page)
 .f:
@@ -7989,9 +7632,7 @@ fd_draw_setup:
     mov dx, [si + LN_Y1]
     add dx, 3
     mov si, [di+FDF_LBL]
-    mov al, CBLACK
-    mov ah, CWHITE
-    call OSAPI_FONT_RUN
+    call fd_run
     pop bx
     call fd_fblock
     call os88line_draw
@@ -8012,16 +7653,8 @@ fd_draw_setup:
     mov dx, [fd_mchk+2]
     add dx, 18
     mov si, fd_s_sethelp
-    mov al, CBLACK
-    mov ah, CWHITE
-    call OSAPI_FONT_RUN
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    call fd_run
+    jmp fd_x6
 
 ; --- fd_setup_box - BX = a rect, SI = its label, AL = its state -------------
 fd_setup_box:
@@ -8060,9 +7693,7 @@ fd_setup_box:
     add cx, 6
     mov dx, [bx+2]
     add dx, 2
-    mov al, CBLACK
-    mov ah, CWHITE
-    call OSAPI_FONT_RUN
+    call fd_run
     pop di
     pop si
     pop dx
@@ -8110,10 +7741,7 @@ fd_box_rects:
     mov bx, fd_mchk
     mov cx, 1
     call fd_box_rect
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x3
 
 ; --- fd_box_rect - BX = the rect, CX = which row under the fields ------------
 fd_box_rect:
@@ -8172,125 +7800,36 @@ FC_RO       equ 'O'                 ; 1 byte: refuse every write
 
 fd_cfg_name: db 'FTPD.CFG', 0
 fd_cfg_sig:  db 'O88FTPD', 0        ; 8 bytes, and compared as 8
-fd_d_system: db 'SYSTEM', 0
-fd_d_appdat: db 'APPDATA', 0
-
-; --- fd_data_enter / fd_data_leave - stand in SYSTEM\APPDATA on OUR volume --
-; Cyclone's routine (SPEC.md 67.20) and its trap, which is worth repeating
-; where the next person will read it: **IT IS OSAPI_FILE_GOTO_QM AND NOT ITS
-; QUIET TWIN.** GOTO_Q moves the GLOBAL cwd and deliberately not the
-; INSTANCE's, while OSAPI_FILE_FIND, _READ and _WRITE every one resolve in the
-; instance's folder through inst_vol_enter - so a quiet move is undone by the
-; very next call and the write lands where the app was launched from. SPEC.md
-; 19.9's own prose says to use the quiet twin and is wrong about it.
-fd_data_enter:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    push ds
-    pop es
-    call OSAPI_FILE_HERE            ; DX = our cwd, BL = our drive
-    mov [fd_dbclus], dx
-    mov [fd_dbdrv], bl
-    xor dx, dx                      ; the ROOT of that same volume
-    call OSAPI_FILE_GOTO_QM
-    jc .back
-    mov si, fd_d_system
-    call fd_data_dive
-    jc .back
-    mov si, fd_d_appdat
-    call fd_data_dive
-    jc .back
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-.back:
-    ; A DISK WITHOUT THE FOLDER IS NOT AN ERROR (SPEC.md 19.9) - it is a user's
-    ; own disk. Put the volume back and refuse; the caller then keeps its state
-    ; in memory and says nothing, which is what a refused write already did.
-    call fd_data_home
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
-
-fd_data_leave:
-    pushf                           ; the caller's result is in CF and AX
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    call fd_data_home
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    popf
-    ret
-
-fd_data_home:
-    push ax
-    push bx
-    push dx
-    mov dx, [fd_dbclus]
-    mov bl, [fd_dbdrv]
-    call OSAPI_FILE_GOTO_QM
-    pop dx
-    pop bx
-    pop ax
-    ret
-
-; --- fd_data_dive - step into the folder named at SI. CF=1 = no such folder --
-fd_data_dive:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call fd_find                    ; the ordinal walk, fd_fbuf filled
-    jc .no
-    cmp word [fd_fbuf+14], OSAPI_FT_DIR
-    jne .no
-    mov dx, [fd_fbuf+16]
-    call OSAPI_FILE_HERE            ; BL = the drive; DX is spent by it...
-    mov dx, [fd_fbuf+16]            ; ...so the folder's cluster goes back
-    call OSAPI_FILE_GOTO_QM
-    jc .no
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-.no:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
+; --- SYSTEM\APPDATA on OUR volume: apps/os88data.inc ---------------------------
+; od_read / od_write stand in SYSTEM\APPDATA on the instance's own volume with
+; OSAPI_FILE_GOTO_QM - the quiet stand that MOVES THE INSTANCE, so the
+; FIND/READ/WRITE after it resolve there (GOTO_Q moves only the global cwd and
+; the very next file cell would undo it; that was Cyclone's trap, SPEC.md
+; 67.20, and this file's own walker documented it) - and put us back where we
+; stood on every answer. What the shared walker adds over the copy this file
+; carried (docs/plans/NAV-COST-PLAN.md, SPEC.md 19.9.1):
+;
+;  - THE FOLDER IS BANKED after the first walk, so a later visit is one
+;    GOTO_QM and not root -> SYSTEM -> APPDATA. A banked visit that finds no
+;    FTPD.CFG walks once more and asks again, and a full OSAPI_FILE_WRITE -
+;    which creates or replaces - only ever goes where a FRESH walk says, never
+;    through a bank nothing has re-checked.
+;  - A SAVE CAN BE ONE SECTOR. The file is variable-length (at most FD_CFGSZ),
+;    and od_write's in-place arm is OSAPI_FILE_WRITE_AT at offset 0, which is
+;    still correct for us: the same length is SPEC.md 18.4.7's INSIDE arm,
+;    a LONGER one grows inside the cluster the file already owns (18.4.7.2,
+;    the size word set to the new end), and a SHORTER one is refused - a count
+;    below the size must be a multiple of 512, and ours never is - so it falls
+;    back to the full write that truncates. [fd_cfgip] is the per-file stamp
+;    that says this program wrote the file in full, plain, this session.
+;    kern_small has no WRITE_AT and every save there is the full write, with
+;    no display remount in it.
+;
+; A DISK WITHOUT THE FOLDER IS NOT AN ERROR (SPEC.md 19.9) - it is a user's
+; own disk. od_read / od_write refuse with FERR_NOENT and the volume back where
+; it was; the caller keeps its state in memory and says nothing.
+%include "os88data.inc"
+%include "os88m83.inc"               ; m83_mangle, SPEC.md 77.20 - Telnet's too
 
 ; --- fd_cfg_load - read FTPD.CFG if it is there. Never fails visibly --------
 fd_cfg_load:
@@ -8303,32 +7842,21 @@ fd_cfg_load:
     push es
     push ds
     pop es
-    call fd_data_enter
-    jc .out
     mov si, fd_cfg_name
     mov bx, fd_cfgb
     mov cx, FD_CFGSZ
     xor dx, dx
-    call OSAPI_FILE_READ            ; DX:AX = the size
-    jc .leave
+    call od_read                    ; DX:AX = the size, and we stand where we
+    jc .out                         ; stood whatever it answered
     or dx, dx
-    jnz .leave                      ; longer than our buffer: not ours
+    jnz .out                        ; longer than our buffer: not ours
     cmp ax, 10
-    jb .leave                       ; too short to hold a header
+    jb .out                         ; too short to hold a header
     mov [fd_cfgn], ax
     call fd_cfg_parse
-.leave:
-    call fd_data_leave
 .out:
     call fd_pasv_str                ; the field shows whatever survived
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x7
 
 ; --- fd_cfg_parse - the records, skipping what this build does not know -----
 fd_cfg_parse:
@@ -8567,22 +8095,12 @@ fd_cfg_save:
     inc di
     mov cx, di
     sub cx, fd_cfgb
-    call fd_data_enter
-    jc .out
     mov si, fd_cfg_name
     mov bx, fd_cfgb
-    xor dx, dx
-    call OSAPI_FILE_WRITE
-    call fd_data_leave
+    mov di, fd_cfgip                ; in place once a full write has landed
+    call od_write                   ; (a refusal is silent, as it always was)
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x7
 
 ; -----------------------------------------------------------------------------
 ; fd_about - the credits, as a MODE of the window rather than a second window
@@ -8620,20 +8138,12 @@ fd_draw_about:
     mov cx, [fd_ox]
     add cx, FD_PAD
     mov dx, bx
-    mov al, CBLACK
-    mov ah, CWHITE
-    call OSAPI_FONT_RUN
+    call fd_run
     add bx, FD_ROWH + 2
     add di, 2
     jmp short .l
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp fd_x6
 
 ; =============================================================================
 ; STRINGS
@@ -8644,7 +8154,7 @@ fd_draw_about:
 ; =============================================================================
 fd_ttl:     db 'FTP Server', 0
 fd_name_s:  db 'Ftpd', 0
-fd_m_srv:   db 'Server', 0
+fd_m_srv    equ fd_ttl + 4          ; 'Server' - the tail of fd_ttl (shared)
 fd_i_srv:   dw fd_it_run, fd_it_clr, fd_it_set, fd_it_sk
 fd_it_run:  db 'Start / Stop', 0
 fd_it_clr:  db 'Clear Log', 0
@@ -8654,13 +8164,30 @@ fd_it_sk:   db 'Sockets', 0
 ; --- the socket dump's strings (SPEC.md 72.20) -------------------------------
 fd_l_skhd:  db '-- sockets --', 0
 fd_l_nosk:  db 'Sockets: the driver refused', 0
-fd_l_sk:    db 's', 0
-fd_l_sp:    db ' ', 0
+fd_l_sk     equ fd_l_bps + 2        ; 's' - the tail of fd_l_bps (shared)
+fd_l_sp     equ fd_s_at + 3         ; ' ' - the tail of fd_s_at (shared)
 fd_l_skl:   db ' L', 0
 fd_l_skr:   db ' R', 0
 fd_l_skrx:  db ' rx', 0
 fd_l_skc:   db '/', 0
 fd_l_sktx:  db ' tx', 0
+; --- fd_sk_flds - fd_socks' word fields: label, then the offset in a record --
+; The ring it holds is RXC, as its size: 0 for a listener, lean for a control
+; connection, the bulk rung for a transfer (72.21).
+fd_sk_flds:
+    dw fd_l_skl
+    db SKI_LP
+    dw fd_l_skr
+    db SKI_RP
+    dw fd_l_skrx
+    db SKI_RXN
+    dw fd_l_skc
+    db SKI_RXC
+    dw fd_l_sktx
+    db SKI_TXN
+%if SKI_TXN > 127
+  %error "fd_sk_flds' offsets are sign-extended with cbw"
+%endif
 fd_l_skf:   db ' f', 0
 FD_NTS      equ 11
 %if FD_NTS != TS_CLOSEW + 1     ; the driver's TS_* range is what sizes this
@@ -8687,8 +8214,8 @@ fd_s_state: dw fd_s_off, fd_s_lis, fd_s_ctl, fd_s_err
 fd_s_off:   db 'Stopped', 0
 fd_s_lis:   db 'Listening', 0
 fd_s_ctl:   db 'Client connected', 0
-fd_s_err:   db '', 0
-fd_s_onport: db ' port ', 0
+fd_s_err    equ fd_l_bps + 3        ; '' - the tail of fd_l_bps (shared)
+fd_s_onport equ fd_l_dport + 4      ; ' port ' - the tail of fd_l_dport (shared)
 fd_s_at:    db ' at ', 0
 fd_l_dport: db 'Data port ', 0
 fd_l_nosock: db 'No data socket: err ', 0
@@ -8703,6 +8230,7 @@ fd_l_sent:  db 'Sent ', 0
 fd_l_in:    db ' in ', 0
 fd_l_sec:   db 's ', 0
 fd_l_bps:   db 'B/s', 0
+%ifdef FTPDBG
 fd_l_gap:   db ' gap ', 0
 fd_l_disk:  db 'disk ', 0            ; the split line (SPEC.md 77.32), 28
 fd_l_net:   db ' net ', 0            ; characters at its widest - inside
@@ -8713,22 +8241,27 @@ fd_l_wake:  db ' wake ', 0           ; leftover actually was
 fd_l_dfree: db 'dfree ', 0           ; ...and the third line, which bisects
 fd_l_glass: db ' glass ', 0          ; fd_wake itself (SPEC.md 77.39)
 fd_l_wk:    db ' wk ', 0
+fd_l_stg:   db 'stage ', 0           ; ...and the fourth (SPEC.md 77.50)
+fd_l_cm:    db ' cm ', 0
+fd_l_max:   db ' max ', 0
+fd_l_ck:    db ' ck ', 0
 fd_l_pass:  db ' pass ', 0
 fd_l_gs:    db 's', 0
+%endif                              ; FTPDBG: the gap suffix and the split
 fd_l_prange: db 'Passive data ports 2048-2055', 0
 fd_s_noaddr: db '(no address)', 0
-fd_s_start: db 'Start', 0
-fd_s_stop:  db 'Stop', 0
+fd_s_start  equ fd_l_ready + 14     ; 'Start' - the tail of fd_l_ready (shared)
+fd_s_stop   equ fd_it_run + 8       ; 'Stop' - the tail of fd_it_run (shared)
 fd_s_ro:    db 'Read Only', 0
 fd_s_setup: db 'Setup', 0
-fd_s_done:  db 'Done', 0
+fd_s_done   equ fd_r250 + 4         ; 'Done' - the tail of fd_r250 (shared)
 
 ; --- what the log says -------------------------------------------------------
 fd_l_ready: db 'Ready - press Start', 0
 fd_l_listen: db 'Listening on port 21', 0
-fd_l_conn:  db 'Client connected', 0
+fd_l_conn   equ fd_s_ctl + 0        ; 'Client connected' - the tail of fd_s_ctl (shared)
 fd_l_bye:   db 'Client disconnected', 0
-fd_l_stop:  db 'Stopped', 0
+fd_l_stop   equ fd_s_off + 0        ; 'Stopped' - the tail of fd_s_off (shared)
 
 ; --- why it would not start --------------------------------------------------
 fd_e_nodrv: db 'No network driver', 0
@@ -8788,9 +8321,6 @@ fd_r553:    db '553 File name not allowed - 8.3 only, no spaces', 0
 fd_l_stall: db 'Stalled: ', 0
 fd_l_stb:   db ' bytes, sk ', 0
 fd_l_stq:   db ' q ', 0
-fd_s_file:  db 'FILE', 0
-fd_syms:    db '$', '%', 0x27, '-', '_', '@', '~', 0x60
-            db '!', '(', ')', '{', '}', '^', '#', '&', 0
 fd_r552f:   db '552 No free space on the volume', 0
 
 ; --- the listing's fixed columns ---------------------------------------------
@@ -8798,7 +8328,7 @@ fd_r552f:   db '552 No free space on the volume', 0
 ; directory, and they are the only part of the row a client acts on.
 fd_ls_file: db '-rw-rw-rw-   1 os8088   os8088   ', 0
 fd_ls_dir:  db 'drwxrwxrwx   1 os8088   os8088   ', 0
-fd_ls_date: db ' Jan  1  1980 ', 0
+fd_ls_date  equ fd_ls_zero + 10     ; ' Jan  1  1980 ' - the tail of fd_ls_zero (shared)
 fd_ls_zero: db '         0 Jan  1  1980 ', 0
 FD_ROWMAX   equ 80                  ; the longest row fd_list_row can emit: the
                                     ; 32-byte prefix, 10 of size, 14 of date,
@@ -8826,9 +8356,9 @@ fd_ftab:
 ; About box.
 fd_ab_l:    dw fd_ab1, fd_ab2, fd_ab3, fd_ab4, fd_ab5, 0
 fd_ab1:     db 'FTP Server for os8088', 0
-fd_ab2:     db 0
+fd_ab2      equ fd_l_bps + 3        ; '' - the tail of fd_l_bps (shared)
 fd_ab3:     db 'RFC 959, one client at a time.', 0
-fd_ab4:     db 0
+fd_ab4      equ fd_l_bps + 3        ; '' - the tail of fd_l_bps (shared)
 fd_ab5:     db 'Contributed by Elendilon', 0
 
     OS88_MENUSET fd_menus, fd_name_s, fd_oncmd
@@ -8851,6 +8381,9 @@ fd_tpl:
     OS88_IMAGE_END
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5) -----------------------------------
+; **TWO TESTS READ THIS BLOCK BY NUMBER**: tests/ftpd.py's FD_ST_OFF and
+; FD_PAGE_OFF, and tests/ftpdpix.py's twelve bytes from fd_st - move fd_st,
+; fd_page or anything between fd_st and fd_lognext and move them too.
 fd_win      equ os88_image_end + 0   ; word
 fd_ox       equ os88_image_end + 2   ; word
 fd_oy       equ os88_image_end + 4   ; word
@@ -8866,62 +8399,59 @@ fd_arglen   equ os88_image_end + 26  ; word
 fd_dport    equ os88_image_end + 28  ; word
 fd_lord     equ os88_image_end + 30  ; word: the listing's next ordinal
 fd_foff     equ os88_image_end + 32  ; dword: the read offset
-fd_fsize    equ os88_image_end + 36  ; dword: the file's size
-fd_bclus    equ os88_image_end + 40  ; word: the banked directory
-fd_pathp    equ os88_image_end + 42  ; word: which string fd_split is walking
-fd_dpp      equ os88_image_end + 44  ; word: PORT's p1, across the fields
+fd_bclus    equ os88_image_end + 36  ; word: the banked directory
+fd_pathp    equ os88_image_end + 38  ; word: which string fd_split is walking
 fd_utmp     equ os88_image_end + 12  ; word: the folder a descent is leaving
                                      ; (the two words fd_sseg/fd_ssz freed
                                      ; when the stage moved into bss)
 fd_bdepth   equ os88_image_end + 14  ; byte: the banked depth
 fd_cdepth   equ os88_image_end + 15  ; byte: how deep the session has walked
-fd_msg      equ os88_image_end + 46  ; word: -> why it will not start
-fd_st       equ os88_image_end + 48  ; byte: FD_*
-fd_xf       equ os88_image_end + 49  ; byte: FX_* - WHAT is moving
-fd_dmode    equ os88_image_end + 71  ; byte: DM_* - HOW the data connection
+fd_msg      equ os88_image_end + 40  ; word: -> why it will not start
+fd_st       equ os88_image_end + 42  ; byte: FD_*
+fd_xf       equ os88_image_end + 43  ; byte: FX_* - WHAT is moving
+fd_dmode    equ os88_image_end + 65  ; byte: DM_* - HOW the data connection
                                      ; is made. A SEPARATE BYTE, and the
                                      ; comment by DM_NONE says what sharing
                                      ; one cost
-fd_req      equ os88_image_end + 50  ; byte: FR_* - **THE HANDSHAKE**
-fd_spawned  equ os88_image_end + 51  ; byte
-fd_lhnd     equ os88_image_end + 52  ; byte: the port-21 listener
-fd_chnd     equ os88_image_end + 53  ; byte: the control connection
-fd_dlhnd    equ os88_image_end + 54  ; byte: the passive listener
-fd_dhnd     equ os88_image_end + 55  ; byte: the data connection
-fd_auth     equ os88_image_end + 56  ; byte: PASS has been seen
-fd_ro       equ os88_image_end + 57  ; byte: the Read Only box
-fd_dirty    equ os88_image_end + 58  ; byte: FDD_* - what on the face is
+fd_req      equ os88_image_end + 44  ; byte: FR_* - **THE HANDSHAKE**
+fd_spawned  equ os88_image_end + 45  ; byte
+fd_lhnd     equ os88_image_end + 46  ; byte: the port-21 listener
+fd_chnd     equ os88_image_end + 47  ; byte: the control connection
+fd_dlhnd    equ os88_image_end + 48  ; byte: the passive listener
+fd_dhnd     equ os88_image_end + 49  ; byte: the data connection
+fd_auth     equ os88_image_end + 50  ; byte: PASS has been seen
+fd_ro       equ os88_image_end + 51  ; byte: the Read Only box
+fd_dirty    equ os88_image_end + 52  ; byte: FDD_* - what on the face is
                                      ; behind the glass
-fd_lognext  equ os88_image_end + 59  ; byte: the ring's write slot
-fd_lstyle   equ os88_image_end + 60  ; byte: 0 = LIST, 1 = NLST
-fd_lmore    equ os88_image_end + 61  ; byte: there is more to come (2 = last)
-fd_created  equ os88_image_end + 62  ; byte: STOR has made the file
-fd_banked   equ os88_image_end + 63  ; byte: fd_split moved us
-fd_bdrv     equ os88_image_end + 64  ; byte: ...and the drive it moved from
-fd_spc      equ os88_image_end + 65  ; byte: sectors per cluster, banked
-fd_havern   equ os88_image_end + 66  ; byte: RNFR has been accepted
-fd_pasvn    equ os88_image_end + 67  ; byte: the rotating passive port
-fd_page     equ os88_image_end + 68  ; byte: FP_* - which face is drawn
-fd_pfoc     equ os88_image_end + 69  ; byte: the Setup field has the caret
-fd_tmpb     equ os88_image_end + 70  ; byte: PORT's saw-a-digit flag
-fd_lsdir    equ os88_image_end + 76  ; byte: LIST/NLST carried a path, banked
+fd_lognext  equ os88_image_end + 53  ; byte: the ring's write slot
+fd_lstyle   equ os88_image_end + 54  ; byte: 0 = LIST, 1 = NLST
+fd_lmore    equ os88_image_end + 55  ; byte: there is more to come (2 = last)
+fd_created  equ os88_image_end + 56  ; byte: STOR has made the file
+fd_banked   equ os88_image_end + 57  ; byte: fd_split moved us
+fd_bdrv     equ os88_image_end + 58  ; byte: ...and the drive it moved from
+fd_spc      equ os88_image_end + 59  ; byte: sectors per cluster, banked
+fd_havern   equ os88_image_end + 60  ; byte: RNFR has been accepted
+fd_pasvn    equ os88_image_end + 61  ; byte: the rotating passive port
+fd_page     equ os88_image_end + 62  ; byte: FP_* - which face is drawn
+fd_pfoc     equ os88_image_end + 63  ; byte: the Setup field has the caret
+fd_lsdir    equ os88_image_end + 70  ; byte: LIST/NLST carried a path, banked
                                      ; in fd_xname with a '/' appended - each
                                      ; fd_do_list pass walks it (SPEC.md 77.16)
-fd_down     equ os88_image_end + 72  ; word: WHICH CONTROL IS DRAWN PRESSED,
+fd_down     equ os88_image_end + 66  ; word: WHICH CONTROL IS DRAWN PRESSED,
                                      ; as bfind's index+1 on the page that is
                                      ; up, 0 = none. The PAINTER reads it, so
                                      ; a W_PAINT arriving mid-gesture draws
                                      ; the control the way it actually is
                                      ; (SPEC.md 13.8.2's first consequence)
-fd_dnb      equ os88_image_end + 74  ; word: what os88ui_bfind answered last
+fd_dnb      equ os88_image_end + 68  ; word: what os88ui_bfind answered last
                                      ; time fd_ondrag ran - the drag handler
                                      ; redraws ONLY on a change, and this is
                                      ; what "a change" is measured against
                                      ; (SPEC.md 13.8.2's third consequence)
-fd_verb     equ os88_image_end + 88  ; 4, space padded
-fd_pf       equ os88_image_end + 92  ; 6 words: PORT's fields
-fd_ip       equ os88_image_end + 104 ; 4: our own address
-fd_fbuf     equ os88_image_end + 108 ; OSAPI_FIND_SZ
+fd_verb     equ os88_image_end + 71  ; 4, space padded
+fd_pf       equ os88_image_end + 75  ; 6 words: PORT's fields
+fd_ip       equ os88_image_end + 87  ; 4: our own address
+fd_fbuf     equ os88_image_end + 91  ; OSAPI_FIND_SZ
 fd_sline    equ fd_fbuf + OSAPI_FIND_SZ         ; FD_LOGW + 1
 fd_ipstr    equ fd_sline + FD_LOGW + 1          ; 16
 fd_tmp      equ fd_ipstr + 16                   ; FD_LOGW + 1
@@ -8935,13 +8465,11 @@ fd_path     equ fd_xname + FD_PATHMAX           ; FD_PATHMAX: what PWD prints
 fd_rnfrom   equ fd_path + FD_PATHMAX            ; FD_PATHMAX
 fd_leaf     equ fd_rnfrom + FD_PATHMAX          ; FD_PATHMAX
 fd_comp     equ fd_leaf + FD_PATHMAX            ; FD_NAMEMAX
-fd_rnto_l   equ fd_comp + FD_NAMEMAX            ; FD_PATHMAX
-fd_dhost    equ fd_rnto_l + FD_PATHMAX          ; 20: PORT's dotted quad
+fd_dhost    equ fd_comp + FD_NAMEMAX            ; 20: PORT's dotted quad
 fd_cstack   equ fd_dhost + 20                   ; FD_CDMAX words: the clusters
                                      ; a CWD descended through, so CDUP has
                                      ; somewhere to go back to
-fd_path2    equ fd_cstack + FD_CDMAX*2          ; FD_PATHMAX: the banked path
-fd_pasv     equ fd_path2 + FD_PATHMAX           ; 4: the PASV override, wire
+fd_pasv     equ fd_cstack + FD_CDMAX*2          ; 4: the PASV override, wire
                                      ; order. All zero = unset, use our own
 fd_pasvs    equ fd_pasv + 4                     ; FD_IPMAX: ...as typed
 fd_roots    equ fd_pasvs + FD_IPMAX             ; FD_ROOTMAX: the folder to
@@ -8967,14 +8495,44 @@ fd_bmlevel  equ fd_rowed + 1                    ; byte: ...banked with the
 fd_rdrv     equ fd_bmlevel + 1                  ; byte: the resolved root...
 fd_rclus    equ fd_rdrv + 1                     ; word: ...as (drive, cluster)
 fd_cfgb     equ fd_rclus + 2                    ; FD_CFGSZ: FTPD.CFG, whole
-fd_dbclus   equ fd_cfgb + FD_CFGSZ              ; word: the banked folder
-fd_dbdrv    equ fd_dbclus + 2                   ; byte: ...and its drive
-fd_cfgn     equ fd_dbdrv + 1                    ; word: bytes read
+; -----------------------------------------------------------------------------
+; fd_cfgb IS A SCRATCH, AND THREE OTHER BUFFERS LIVE IN IT
+;
+; Nothing in it outlives the call that filled it: fd_cfg_load reads and parses
+; it at entry, fd_cfg_save composes and writes it whole, and neither keeps a
+; byte for next time (the in-place stamp is fd_cfgip, beside it). Three more
+; buffers have exactly that shape, and every one of the five is the UI TASK's
+; alone - fd_wake, fd_oncmd, fd_onclose and fd_setup_commit are callbacks, the
+; UI task runs one at a time, and none of the five calls another's owner:
+;
+;   fd_rnto_l  RNTO's target leaf, filled and handed to OSAPI_FILE_RENAME
+;              inside one fd_do_rnto (fd_wake)
+;   fd_path2   CWD's banked path, filled by fd_pbank and read back by
+;              fd_punbank inside one fd_do_cwd (fd_wake)
+;   fd_skbuf   the NETV_SKTAB snapshot, filled and lettered inside one
+;              fd_socks (fd_oncmd)
+;
+; The WORKER never names any of them. 368 bytes of every instance's region.
+; -----------------------------------------------------------------------------
+fd_rnto_l   equ fd_cfgb                         ; FD_PATHMAX, in fd_cfgb
+fd_path2    equ fd_cfgb                         ; FD_PATHMAX, in fd_cfgb
+%if FD_PATHMAX > FD_CFGSZ
+  %error "ftpd: fd_rnto_l and fd_path2 no longer fit inside fd_cfgb"
+%endif
+fd_cfgip    equ fd_cfgb + FD_CFGSZ              ; byte: os88data.inc's in-place
+                                     ; stamp for FTPD.CFG (0 at load)
+fd_cfgn     equ fd_cfgip + 1                    ; word: bytes read
 fd_wtok     equ fd_cfgn + 2                     ; word: STOR's WRITE_SEQ token
                                      ; (SPEC.md 77.49), PLAIN: every chunk
                                      ; committed, as APPEND's were
 fd_noseq    equ fd_wtok + 2                    ; byte: the kernel has no
                                      ; WRITE_SEQ (kern_small): APPEND instead
+fd_ckn      equ fd_noseq + 1                    ; byte: chunks held since the
+                                     ; last checkpoint (SPEC.md 77.50)
+fd_ckpn     equ fd_ckn + 1                      ; byte: ...and how many make one
+fd_bigseg   equ fd_ckpn + 1                     ; word: STOR's 32KB stage, 0 =
+                                     ; none (the claim refused: 77.50.3)
+fd_wstg     equ fd_bigseg + 2                   ; word: STOR's stage in bytes
 ; -----------------------------------------------------------------------------
 ; THE TWO RECT TABLES - CONTIGUOUS, because os88ui_bfind strides an array
 ;
@@ -8989,7 +8547,7 @@ fd_noseq    equ fd_wtok + 2                    ; byte: the kernel has no
 ; the four Setup fields keep the press, because focusing a field is
 ; SELECTING and SPEC.md 13.8.8 keeps the press for exactly that.
 ; -----------------------------------------------------------------------------
-fd_rcur     equ fd_noseq + 1                    ; FSEQ_SIZE: RETR's READ_SEQ
+fd_rcur     equ fd_wstg + 2                     ; FSEQ_SIZE: RETR's READ_SEQ
                                      ; cursor (SPEC.md 18.4.8.1)
 fd_rects    equ fd_rcur + FSEQ_SIZE              ; 24: the LOG page's three
 fd_btn      equ fd_rects + 0                    ; ...Start/Stop
@@ -9021,7 +8579,7 @@ fd_sfb      equ fd_stg2 + 2                     ; byte: which stage the WORKER i
                                      ; filling (SPEC.md 77.41)
 fd_scb      equ fd_sfb + 1                      ; byte: ...and which one it has
                                      ; handed to the UI task
-fd_scnt     equ fd_scb + 1                      ; word: how many bytes are in
+fd_scnt     equ fd_stg2 + 4*FD_STG2                     ; word: how many bytes are in
                                      ; that one. NOT fd_sfill - the worker has
                                      ; already reset that and moved on, which
                                      ; is the entire point
@@ -9034,11 +8592,7 @@ fd_npass    equ fd_nwake + 4                    ; 32-bit: worker passes this
                                      ; cost PER pass, which is the difference
                                      ; between cheap-and-often and dear-and-rare
                                      ; and is not recoverable from either alone
-fd_mext     equ fd_npass + 4                    ; 4: the extension fd_mangle83
-                                     ; lifted out, while it rewrites the stem
-                                     ; UNDER it - the two overlap in fd_leaf,
-                                     ; so the ext cannot stay where it was
-fd_rjhnd    equ fd_mext + 4                     ; byte: the second client's
+fd_rjhnd    equ fd_nwake + 8*FD_DBG                     ; byte: the second client's
                                      ; handle. Ours is NOT banked beside it -
                                      ; fd_reply_h takes the socket in AL
 fd_cidle    equ fd_rjhnd + 1                    ; word: the tick the control
@@ -9046,12 +8600,15 @@ fd_cidle    equ fd_rjhnd + 1                    ; word: the tick the control
 fd_tlast    equ fd_cidle + 2                    ; word: the tick a byte last
                                      ; crossed, for the gap
 fd_gapmax   equ fd_tlast + 2                    ; word: ...and the longest hole
-fd_t0s      equ fd_gapmax + 2                   ; FT_N dwords: each stage's
+fd_ncmt     equ fd_gapmax + 2                   ; word: how many commits
+                                     ; (fd_do_write calls) this transfer...
+fd_nck      equ fd_ncmt + 2                     ; word: ...and checkpoints
+fd_t0s      equ fd_nck + 2                      ; FT_N dwords: each stage's
 fd_tms      equ fd_t0s + FT_N * 4               ; open bracket, and the total
                                      ; it accumulates into. CONTIGUOUS and in
                                      ; that order - fd_tzero clears both with
                                      ; one rep stosb of FT_N * 8
-fd_dverb    equ fd_tms + FT_N * 4                ; byte: NETV_CLOSE or NETV_ABORT
+fd_dverb    equ fd_tlast + FD_DBG*(8 + FT_N*8)               ; byte: NETV_CLOSE or NETV_ABORT
 fd_t0       equ fd_dverb + 2                    ; word: the tick a transfer
                                      ; STARTED, for the rate line
 fd_wdog     equ fd_t0 + 2                       ; word: the tick the transfer
@@ -9091,9 +8648,12 @@ fd_skn      equ fd_wprog + 2                    ; byte: how many socket records
                                      ; so a package built against a smaller
                                      ; table still reads whole records
 FD_SKBSZ    equ NET_SOCKS * SKI_SZ
-fd_skbuf    equ fd_skn + 1                      ; the snapshot itself (72.20)
+fd_skbuf    equ fd_cfgb                         ; FD_SKBSZ, in fd_cfgb (above)
+%if FD_SKBSZ > FD_CFGSZ
+  %error "ftpd: the socket snapshot no longer fits inside fd_cfgb"
+%endif                      ; the snapshot itself (72.20)
 
-FD_SOFF     equ ((fd_skbuf + FD_SKBSZ - $$) + 511) & ~511
+FD_SOFF     equ ((fd_skn + 1 - $$) + 511) & ~511
 fd_stage    equ $$ + FD_SOFF     ; ...and the rounding is done on the offset
                                  ; from the section base, because that is the
                                  ; only form of it NASM will let `&` touch

@@ -1116,15 +1116,7 @@ px_qtabs:
     inc si
     cmp si, 16
     jb .k
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp px_ld_8
 
 ; px_qpage1 - one page at ES:DI (DI advanced by 256): AL = T, BL = n, BH =
 ; the multiplier. Clobbers AX, CX, DX

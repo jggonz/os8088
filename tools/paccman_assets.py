@@ -330,6 +330,60 @@ def snd_dump(vals, nvoices):
     return hz, vol, ticks
 
 
+# --- the packed forms (apps size pass 1, SPEC.md 91) -------------------------
+# Every encoding below is DECODED again here and compared with its source, so a
+# table this tool writes is one it has proved round-trips.
+MIRROR_SELF = (0xDB, 0xDC, 0xDD, 0xDE, 0xDF, 0xE5)   # walls that are their own
+                                                      # mirror image at >= 0xD0
+
+
+def mirror_tile(t):
+    """pmc_vid.c's pmc_mirror_tile, the same predicate: a wall tile at or above
+    0xD0 has its left-right mirror at t ^ 1, except the six that are
+    symmetric themselves; everything below 0xD0 is symmetric."""
+    if t < 0xD0 or t in MIRROR_SELF:
+        return t
+    return t ^ 1
+
+
+def maze_half(full):
+    """The left 14 columns, after proving column 27-x is mirror_tile of x."""
+    half = []
+    for r in range(MAZE_ROWS):
+        row = full[r * MAZE_COLS:(r + 1) * MAZE_COLS]
+        for x in range(MAZE_COLS // 2):
+            if row[MAZE_COLS - 1 - x] != mirror_tile(row[x]):
+                sys.exit('paccman_assets: the maze is not mirror-symmetric at '
+                         'row %d column %d (0x%02X against 0x%02X)'
+                         % (r, x, row[x], row[MAZE_COLS - 1 - x]))
+        half.extend(row[:MAZE_COLS // 2])
+    return half
+
+
+def snd_pack_nibble(hz, vol):
+    """(note index << 4) | volume, one byte a tick; the notes sorted."""
+    notes = sorted(set(hz))
+    if len(notes) > 16:
+        sys.exit('paccman_assets: %d distinct notes in a nibble-packed voice'
+                 % len(notes))
+    ticks = [(notes.index(h) << 4) | v for h, v in zip(hz, vol)]
+    assert [notes[b >> 4] for b in ticks] == hz
+    assert [b & 15 for b in ticks] == vol
+    return notes, ticks
+
+
+def snd_pack_532(hz, vol):
+    """(volume index << 5) | note index, one byte a tick."""
+    notes, vols = sorted(set(hz)), sorted(set(vol))
+    if len(notes) > 32 or len(vols) > 8:
+        sys.exit('paccman_assets: %d notes / %d volumes will not pack 5:3'
+                 % (len(notes), len(vols)))
+    ticks = [(vols.index(v) << 5) | notes.index(h) for h, v in zip(hz, vol)]
+    assert [notes[b & 31] for b in ticks] == hz
+    assert [vols[b >> 5] for b in ticks] == vol
+    return notes, vols, ticks
+
+
 HEADER = '''/* ============================================================================
  * os8088 - apps/paccman/pmc_rom.c   *** GENERATED - DO NOT EDIT ***
  *
@@ -422,9 +476,13 @@ def generate(src, ref_head):
                         zero_mask_table(), per_row=16))
 
     parts.append('\n/* the 31x28 playfield, rows 3..33, pre-decoded to tile\n'
-                 ' * codes: neither the map string nor the char table ships. */')
+                 ' * codes: neither the map string nor the char table ships.\n'
+                 ' * The LEFT 14 columns only - the maze is mirror-symmetric,\n'
+                 ' * and column 27-x is column x through pmc_mirror_tile\n'
+                 ' * (pmc_vid.c), which this tool proves for every cell. */')
     parts.append(carray('static const unsigned char pmc_maze[%d * %d]'
-                        % (MAZE_ROWS, MAZE_COLS), maze(src), per_row=MAZE_COLS))
+                        % (MAZE_ROWS, MAZE_COLS // 2), maze_half(maze(src)),
+                        per_row=MAZE_COLS // 2))
 
     parts.append('\n/* the 21-row level table, as three parallel arrays. */')
     parts.append(carray('static const unsigned char pmc_lvl_fruit[21]', fruit, per_row=21))
@@ -444,19 +502,26 @@ def generate(src, ref_head):
 
     parts.append('\n/* the prelude dump: voice 0 is the bass, voice 1 the\n'
                  ' * MELODY - every 32-bit register reduced on the host to a\n'
-                 ' * frequency in Hz and a 4-bit volume (pacman.c 3949-3958). */')
+                 ' * frequency in Hz and a 4-bit volume (pacman.c 3949-3958).\n'
+                 ' * One byte a tick a voice: the high nibble indexes that\n'
+                 " * voice's note table, the low nibble IS the volume. */")
     for v in range(2):
-        parts.append(carray('static const unsigned int pmc_snd_prelude_hz%d[%d]' % (v, p_ticks),
-                            p_hz[v], per_row=12, kind='unsigned int'))
-    for v in range(2):
-        parts.append(carray('static const unsigned char pmc_snd_prelude_vol%d[%d]' % (v, p_ticks),
-                            p_vol[v], per_row=24))
+        notes, ticks = snd_pack_nibble(p_hz[v], p_vol[v])
+        parts.append(carray('static const unsigned int pmc_snd_prelude_n%d[%d]'
+                            % (v, len(notes)), notes, per_row=13, kind='unsigned int'))
+        parts.append(carray('static const unsigned char pmc_snd_prelude%d[%d]' % (v, p_ticks),
+                            ticks, per_row=24))
 
-    parts.append('\n/* the death dump, voice 2. */')
-    parts.append(carray('static const unsigned int pmc_snd_dead_hz[%d]' % d_ticks,
-                        d_hz[0], per_row=12, kind='unsigned int'))
-    parts.append(carray('static const unsigned char pmc_snd_dead_vol[%d]' % d_ticks,
-                        d_vol[0], per_row=24))
+    parts.append('\n/* the death dump, voice 2, one byte a tick: the low five\n'
+                 ' * bits index the note table and the high three the volume\n'
+                 ' * table. */')
+    notes, vols, ticks = snd_pack_532(d_hz[0], d_vol[0])
+    parts.append(carray('static const unsigned int pmc_snd_dead_n[%d]' % len(notes),
+                        notes, per_row=14, kind='unsigned int'))
+    parts.append(carray('static const unsigned char pmc_snd_dead_v[%d]' % len(vols),
+                        vols, per_row=8))
+    parts.append(carray('static const unsigned char pmc_snd_dead[%d]' % d_ticks,
+                        ticks, per_row=24))
 
     return '\n'.join(parts) + '\n'
 

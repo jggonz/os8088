@@ -464,7 +464,11 @@ int os88_file_mkdir(const char *name) { n_mkdir++; ferr = OS88_FERR_FULL; return
 int os88_mem_free(unsigned seg) { printf("HARNESS: os88_mem_free(%04x): not here\n", seg); exit(1); }
 unsigned os88_mem_regrow(unsigned seg, int kb) { printf("HARNESS: os88_mem_regrow: not here\n"); exit(1); }
 int  os88_peek(unsigned seg, unsigned off) { printf("HARNESS: os88_peek: not here\n"); exit(1); }
-void os88_poke(unsigned seg, unsigned off, int value) { printf("HARNESS: os88_poke: not here\n"); exit(1); }
+void os88_poke(unsigned seg, unsigned off, int value)
+{
+    if (seg != 0x3000 || off >= 2048) { printf("HARNESS: os88_poke(%04x:%04x): not the CCP claim\n", seg, off); exit(1); }
+    ccpram[off] = (unsigned char)value;     /* rc_ax_load's AUTOEXEC poke */
+}
 int os88_file_write_seg(const char *name, unsigned seg, unsigned count) { printf("HARNESS: os88_file_write_seg(%s): not here\n", name); exit(1); }
 int os88_file_delete(const char *name) { printf("HARNESS: os88_file_delete(%s): not here\n", name); exit(1); }
 int os88_file_rename(const char *o, const char *n) { printf("HARNESS: os88_file_rename(%s): not here\n", o); exit(1); }
@@ -564,7 +568,14 @@ void rc_zzcopy_in(unsigned zaddr, unsigned seg, unsigned off, unsigned n)
     for (i = 0; i < n; i++)
         zram[(zaddr + i) & 0xFFFF] = zram[(off + i) & 0xFFFF];
 }
-void rc_zzcopy_out(unsigned seg, unsigned off, unsigned zaddr, unsigned n) { (void)seg; (void)off; (void)zaddr; (void)n; }
+void rc_zzcopy_out(unsigned seg, unsigned off, unsigned zaddr, unsigned n)
+{
+    unsigned i;
+    if (seg != 0x3000) return;              /* the file layer's: not here */
+    if (off + n > 2048) { printf("HARNESS: rc_zzcopy_out past the CCP claim\n"); exit(1); }
+    for (i = 0; i < n; i++)
+        ccpram[off + i] = zram[(zaddr + i) & 0xFFFF];   /* AUTOEXEC.TXT in */
+}
 void rc_zfill(unsigned zaddr, int v, unsigned n)
 { unsigned i; for (i = 0; i < n; i++) zram[(zaddr + i) & 0xFFFF] = (unsigned char)v; }
 
@@ -783,7 +794,7 @@ static void run_all(int cols_geom, int rows_geom, int table)
      * TPA (cleared behind it): its first 125 bytes cached, cut at the first
      * control character */
     if (strcmp(last_read, "AUTOEXEC.TXT") != 0 || n_axreads != 1) { printf("FAIL: os88_main read '%s' (%u AUTOEXEC reads), wanted the CCP then AUTOEXEC.TXT once\n", last_read, n_axreads); fails++; }
-    if ((int)rc_axlen != ax_len || memcmp(rc_axbuf, autoexec_text, ax_len) != 0 || rc_axbuf[ax_len] != 0) { printf("FAIL: the AUTOEXEC cache: len %u, wanted %d\n", rc_axlen, ax_len); fails++; }
+    if (ccpram[7] != ax_len || memcmp(ccpram + 8, autoexec_text, ax_len) != 0 || ccpram[8 + ax_len] != 0) { printf("FAIL: AUTOEXEC.TXT in the CCP claim: len %u, wanted %d\n", ccpram[7], ax_len); fails++; }
     if (zram[0x200] != 0 || zram[0x200 + ax_len - 1] != 0) { printf("FAIL: AUTOEXEC.TXT's bytes left in the TPA\n"); fails++; }
     expose();
     audit("expose after launch");
@@ -950,6 +961,30 @@ static void run_all(int cols_geom, int rows_geom, int table)
     audit("^X");
     expect_row("^X", 16, "A>");
     expect_cursor("^X", 2, 16);
+    /* the three left-shifts MID-LINE, where bytes actually move (the cases
+     * above all move none: ^G on the last character, ^X at EOL, DEL at
+     * EOL): 'abcdef', back two, ^G 'e' -> 'abcdf'; BS 'd' -> 'abcf'; ^X the
+     * three left of the cursor -> 'f'; ^G the 'f' - an empty line again */
+    KEY('a', 0x1E); KEY('b', 0x30); KEY('c', 0x2E); KEY('d', 0x20); KEY('e', 0x12); KEY('f', 0x21);
+    KEY(1, 0x1E); KEY(1, 0x1E);
+    KEY(7, 0x22);
+    audit("^G mid-line");
+    expect_row("^G mid-line", 16, "A>abcdf");
+    expect_cursor("^G mid-line", 6, 16);
+    if (memcmp(zram + 0xE408, "abcdf", 5) != 0) { printf("FAIL: ^G mid-line left '%.5s' in the buffer, wanted 'abcdf'\n", zram + 0xE408); fails++; }
+    KEY(8, 0x0E);                              /* BS mid-line: 'd' goes */
+    audit("BS mid-line");
+    expect_row("BS mid-line", 16, "A>abcf");
+    expect_cursor("BS mid-line", 5, 16);
+    if (memcmp(zram + 0xE408, "abcf", 4) != 0) { printf("FAIL: BS mid-line left '%.4s' in the buffer, wanted 'abcf'\n", zram + 0xE408); fails++; }
+    KEY(24, 0x2D);                             /* ^X mid-line: 'abc' go */
+    audit("^X mid-line");
+    expect_row("^X mid-line", 16, "A>f");
+    expect_cursor("^X mid-line", 2, 16);
+    if (zram[0xE408] != 'f') { printf("FAIL: ^X mid-line left '%c' in the buffer, wanted 'f'\n", zram[0xE408]); fails++; }
+    KEY(7, 0x22);                              /* ^G on the only character */
+    expect_row("^G last", 16, "A>");
+    expect_cursor("^G last", 2, 16);
     callreset();
     KEY(3, 0x2E);                              /* ^C on an empty line: '^C', a warm boot */
     audit("^C");

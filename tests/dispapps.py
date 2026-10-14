@@ -22,6 +22,7 @@ package header's image size, so a moved word is an error here rather than a
 plausible number nobody attributes.
 """
 import argparse
+import tempfile
 import os
 import subprocess
 import sys
@@ -79,8 +80,8 @@ def _map(app, defines=()):
     # offsets came from a half-written map. Every one of those points at the
     # package under test rather than at the harness.
     tag = app + "".join("_" + d.lstrip("-D") for d in defines)
-    tmp = "/tmp/os88_%s_map_%d.asm" % (tag, os.getpid())
-    mp = "/tmp/os88_%s_%d.map" % (tag, os.getpid())
+    tmp = tempfile.gettempdir() + "/os88_%s_map_%d.asm" % (tag, os.getpid())
+    mp = tempfile.gettempdir() + "/os88_%s_%d.map" % (tag, os.getpid())
     open(tmp, "w").write(open(src).read() + "\n[map all %s]\n" % mp)
     inc = ["-I", os.path.join(ROOT, "apps") + os.sep,
            "-I", os.path.join(ROOT, "apps", app) + os.sep,
@@ -115,7 +116,7 @@ def _map(app, defines=()):
                                         # that happened to share a name with a
                                         # source include must never be the one
                                         # nasm finds first.
-    bn = "/tmp/os88_%s_%d.bin" % (tag, os.getpid())
+    bn = tempfile.gettempdir() + "/os88_%s_%d.bin" % (tag, os.getpid())
     r = subprocess.run(["nasm", "-f", "bin", "-w+error"] + inc + list(defines) +
                        ["-o", bn, tmp],
                        capture_output=True, text=True)
@@ -232,7 +233,7 @@ def skies_port(m, seg, mp, want):
     return None, None
 
 
-def colour_gif(src="build/OS8088.GIF", dst="/tmp/OS88COL.GIF"):
+def colour_gif(src="build/OS8088.GIF", dst=tempfile.gettempdir() + "/OS88COL.GIF"):
     """`src` with a FOUR-entry colour table, so SPEC.md 42.23.6 keeps it 4bpp.
 
     **Every pixel INDEX is identical, and what the indices mean is not** - the
@@ -410,7 +411,7 @@ def main(argv):
              "solitaire": ["sol_cw", "sol_ch", "sol_pitch", "sol_taby",
                            "sol_bpp"],
              "missile": ["mc_mono", "mc_ecoarse", "mc_expfr", "mc_caps"],
-             "piano": ["pn_kby2", "pn_bky2", "pn_wlbl", "pn_blbl"]}
+             "piano": ["pn_kby2", "pn_bky2"]}
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
         mo = os88mouse.Mouse(marty=m)
         if dispfit.kind(m) != VID_VGA:
@@ -477,11 +478,12 @@ def main(argv):
                     break
             if got is None:
                 w, h, d = m.fbuf()
-                os88marty.write_png_rgb("/tmp/dispapps-stuck.png", w, h, d)
-                sys.exit("dispapps: %s did not open - windows %r, see "
-                         "/tmp/dispapps-stuck.png"
+                stuck = os.path.join(tempfile.gettempdir(),
+                                     "dispapps-stuck.png")
+                os88marty.write_png_rgb(stuck, w, h, d)
+                sys.exit("dispapps: %s did not open - windows %r, see %s"
                          % (app, [(i, dispcp.win_rect(m, S, i))
-                                  for i in dispcp.win_list(m, S)]))
+                                  for i in dispcp.win_list(m, S)], stuck))
             segs[app] = got[1]
             slots[app] = got[0]
             say("%s: segment %04x" % (app, got[1]))

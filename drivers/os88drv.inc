@@ -210,6 +210,14 @@ DRVE_TWICE   equ 7              ; YOU were asked to attach while you were
                                 ; it beside your name, so the bug arrives with
                                 ; a sentence instead of as a heap that is
                                 ; quietly short (SPEC.md 51.2.2)
+DRVE_NOVOL   equ 8              ; ...and the one for READY, not attach: you
+                                ; came up and found NOTHING TO DO - a disk
+                                ; driver whose automount mounted no volume.
+                                ; Answered as DRVV_READY's CF=1, so you stay
+                                ; loaded; the Drivers page says it beside your
+                                ; name, and a row the MACHINE chose rather than
+                                ; the user is taken down again at boot
+                                ; (SPEC.md 51.3.2)
 
 ; --- the service table you return in SI at attach ----------------------------
 ; Offsets in YOUR segment. The kernel copies the whole thing once, so it may
@@ -315,6 +323,9 @@ DSV_PKGCALL  equ 34             ; dw: near proc reached by OSAPI_DRV_CALL -
                                 ; can reach DSV_BLK and write a raw sector.
                                 ;
                                 ;   in  BL = a verb YOU define, BH = your class
+                                ;       - except DRVC_EMS, which gets the
+                                ;       CALLER'S INSTANCE SLOT there and puts
+                                ;       its class back (SPEC.md 107.1)
                                 ;       AX/CX/DX/SI/DI = yours to define
                                 ;       ES = THE CALLING PACKAGE'S SEGMENT, so
                                 ;            a buffer it hands you is ES:SI or
@@ -550,10 +561,15 @@ FSV_SIZE     equ 30
 ;                        CX = the volume's sector count, for the kernel's own
 ;                            "does this BPB claim to be bigger than its
 ;                            partition" check
-;                        DX = RESERVED, pass 0. It took a listing claim your
-;                            driver funded, which SPEC.md 22.6 retired: the
-;                            kernel lists every volume into its own buffers
-;                            now, at the same cap for all of them
+;                        DX = 0. It took a listing claim your driver
+;                            funded, which SPEC.md 22.6 retired: the kernel
+;                            lists every volume into its own buffers now, at
+;                            the same cap for all of them. DX != 0 is a TAKE
+;                            (SPEC.md 52.1.1): DL = the index OSAPI_VOL_AT
+;                            answered for a BIOS volume on a disk you have
+;                            PROVED is that int 13h drive, AL = your handle;
+;                            CX and SI unread. The row is yours, mounted as it
+;                            is, and OSAPI_VOL_DEL gives it back to the BIOS
 ;                        SI = a NUL desktop label in YOUR segment (0 = the
 ;                            kernel derives 'Disk X' from the index)
 ;                    out CF = 0 and AL = the volume index; CF = 1 = no room
