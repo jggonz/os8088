@@ -24,7 +24,7 @@
 
 ; --- instance record, 32 bytes (SPEC.md 29.1) ---------------------------------
 I_STATE  equ 0                  ; byte: 0 free, 1 live, 2 dying
-I_FLAGS  equ 1                  ; byte: bit0 = minimized, bit1 = IF_FSMIN
+I_FLAGS  equ 1                  ; byte: bit0 = minimized, bit1 = IF_FSMIN, bit2 = IF_DESK
 IF_MIN   equ 1                  ; I_FLAGS bit0: minimized (window hidden, tile
                                 ; in the dock inverted)
 IF_FSMIN equ 2                  ; I_FLAGS bit1: ...and it went down from
@@ -39,6 +39,13 @@ IF_FSMIN equ 2                  ; I_FLAGS bit1: ...and it went down from
                                 ; splash card the user is never going to see
                                 ; is a promise about where the window is
                                 ; going that is not kept
+IF_DESK  equ 4                  ; I_FLAGS bit2: this instance's window is a
+                                ; DESK window (SPEC.md 11.103), so it has NO
+                                ; dock tile (SPEC.md 30). Set by OSAPI_WM_DESK's
+                                ; MAKE on the CALLER's record - in the entry
+                                ; proc, before the loader's step 9 publishes it
+                                ; (which writes no I_FLAGS) - and zeroed with
+                                ; the record by inst_alloc
 I_KIND   equ 2                  ; byte: KIND_*; bit 7 = package
 I_TASK   equ 3                  ; byte: task slot (SPEC.md 8), 0xFF = none
 I_WIN    equ 4                  ; word: window record ptr
@@ -982,6 +989,17 @@ inst_find_kind:
 ; dock_paint, the snapshot - skips a free row, and both callers write
 ; I_TASK = 0xFF before the record publishes.
 ; -----------------------------------------------------------------------------
+%ifdef KERN_BIG
+; inst_alloc_di - inst_alloc's zeroing tail on a record the CALLER chose
+; in: DI = a FREE record (I_STATE = 0); out: inst_alloc's, CF = 0
+; The loader's top-down pick for a package with header flag OS88_F_DESK
+; (SPEC.md 11.103.9, 30): the widget takes the LAST free slot, so its empty
+; tile position is at the strip's far end. Three bytes: the scan is the
+; caller's, and everything a reused record must lose is this tail's.
+inst_alloc_di:
+    push cx
+    jmp short inst_alloc.hit
+%endif
 inst_alloc:
     push cx
     mov di, inst_tab

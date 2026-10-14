@@ -889,6 +889,8 @@ dkx_key:
     jz .out
     cmp byte [di+I_STATE], 1    ; live only - dying and free records have no
     jne .out                    ; tile (SPEC.md 29.2 rule 3)
+    test byte [di+I_FLAGS], IF_DESK
+    jnz .out                    ; ...and nor does a DESK instance (SPEC.md 30)
     mov ax, [di+I_ICON]
     rol ax, 1                   ; x3 - the pointer's high bits reach the low
     rol ax, 1                   ; end. THREE 1-BIT ROTATES: 6 bytes against
@@ -1139,8 +1141,11 @@ dkx_hit:
     je .in                      ; none
     call KERNEL_SEG:cw_inst_ptr               ; DI = record (in: AL = index; AX survives)
     cmp byte [di+I_STATE], 1
-    je .in                      ; live: DI is the answer
-    xor di, di                  ; empty or dying: no tile here
+    jne .none
+    test byte [di+I_FLAGS], IF_DESK
+    jz .in                      ; live and not a DESK instance (SPEC.md 30):
+.none:                          ; DI is the answer
+    xor di, di                  ; empty, dying or a widget: no tile here
 .in:
     clc
 .miss:                          ; (`jc` arrives with CF = 1)
@@ -1331,6 +1336,8 @@ dkx_map:
 .count:
     cmp byte [si+I_STATE], 1
     jne .cnext
+    test byte [si+I_FLAGS], IF_DESK
+    jnz .cnext                  ; a DESK instance spends no tile (SPEC.md 30)
     inc cl
     test byte [si+I_FLAGS], 1
     jz .cnext
@@ -1359,6 +1366,8 @@ dkx_map:
 .walk:
     cmp byte [si+I_STATE], 1
     jne .wnext
+    test byte [si+I_FLAGS], IF_DESK
+    jnz .wnext                  ; ...and takes no position either
     test byte [si+I_FLAGS], 1
     jz .open
     or dh, dh

@@ -838,6 +838,10 @@ db_key:
     xor ax, ax
     cmp byte [di+I_STATE], 1    ; live only - dying and free records have no
     jne .out                    ; tile (SPEC.md 29.2 rule 3)
+%ifdef KERN_BIG
+    test byte [di+I_FLAGS], IF_DESK
+    jnz .out                    ; ...and nor does a DESK instance (SPEC.md 30,
+%endif                          ; 11.103): AX = 0 is "no tile"
     mov ax, [di+I_ICON]
     rol ax, 1                   ; x3 - the pointer's high bits reach the low
     rol ax, 1                   ; end. THREE 1-BIT ROTATES: 6 bytes against
@@ -1080,7 +1084,14 @@ db_hit:
     jae .in
     call inst_ptr               ; DI = record (in: AL = index; AX survives)
     cmp byte [di+I_STATE], 1
+%ifdef KERN_BIG
+    jne .none
+    test byte [di+I_FLAGS], IF_DESK
+    jz .in                      ; live, and not a DESK instance (SPEC.md 30):
+.none:                          ; DI is the answer
+%else
     je .in                      ; live: DI is the answer
+%endif
     xor di, di                  ; empty or dying: no tile here
 .in:
     clc                         ; ...and falls into the exit the miss jumps to

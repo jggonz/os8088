@@ -455,6 +455,13 @@ ui_task:
     ; AL = 0: content. Raise a background window; the front one gets its
     ; W_ONCLICK (if any) under the gfx lock, like W_ONKEY above.
     mov si, bx                  ; keep the hit window; wm_top returns in BX
+%ifdef KERN_BIG
+    test byte [si+W_FLAGS+1], WF_DESK >> 8
+    jnz .content_front          ; A DESK WINDOW TAKES ITS PRESS WITHOUT A
+%endif                          ; RAISE (SPEC.md 11.103.4): menu_activate above
+                                ; has already handed it the bar, and the front
+                                ; application window keeps its place and its
+                                ; pinstripes - a bare-desktop click's split
     call wm_top
     cmp bx, si
     je .content_front           ; already frontmost: feed the click handler

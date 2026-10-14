@@ -283,10 +283,43 @@ WF_STALE   equ 0x8000          ; W_FLAGS bit15: THE PIXELS ON THE GLASS NO
 ; and mou_apply DROPS them when it reads one, so a bit added to one mask and
 ; not the other either eats the shape or is read as one. Both derive from here
 ; now, so there is one place to add the next.
-WF_HIBITS  equ (WF_STALE | WF_NOANIM | WF_1BPP | WF_USRSZ) >> 8
+WF_DESK    equ 0x0400          ; W_FLAGS bit10: a DESK WINDOW (SPEC.md 11.103) -
+                               ; under every application window, never
+                               ; raised, no chrome, no dock tile. Set ONLY by
+                               ; OSAPI_WM_DESK's MAKE, on a hidden window, and
+                               ; read by wm_top, wm_lift, wm_show_b, wm_front_b,
+                               ; wm_draw_win, wm_su_rect, the content press and
+                               ; the chromeless sites (t_chromesites). A bit and
+                               ; not a table, so wm_create/wm_destroy's whole-
+                               ; word stores clear it. In this byte for the
+                               ; reason the three below give, so WF_HIBITS
+                               ; carries it across the shape field
+WF_HOVER   equ 0x0800          ; W_FLAGS bit11: the pointer is over this DESK
+                               ; window (SPEC.md 11.103.7, W2). Set and cleared
+                               ; only by cur_shape_pass's hover edge - SET or
+                               ; CLEAR, never toggled - and read by the
+                               ; widget's W_ONWAKE
+WF_HIBITS  equ (WF_STALE | WF_NOANIM | WF_1BPP | WF_USRSZ | WF_DESK | WF_HOVER) >> 8
 %if WF_HIBITS & (CUR_NWSHAPE - 1)
   %error "WF_HIBITS overlaps the cursor shape field - SPEC.md 7.2.1/11.96.17"
 %endif
+
+; WM_CHROMELESS reg - ZF = 0 when the window at [reg] draws NO CHROME: no title
+; bar, no border, no drop shadow, its frame all content. That is WF_FULL
+; (SPEC.md 11.2) and, on kern_big, a DESK window (SPEC.md 11.103.5) - ONE
+; word test of WF_FULL|WF_DESK (0x0408), a byte longer than the byte test it
+; replaces. kern_small has no desk layer and keeps the byte test, so not one
+; of its bytes moves. tests/unit/t_chromesites.py classifies EVERY WF_FULL
+; site in kernel/: the ones that mean "no chrome" are written with this, the
+; ones that mean THE LATCH (the machine's one fullscreen window) are not, and
+; an unregistered site fails `make`.
+%macro WM_CHROMELESS 1
+%ifdef KERN_BIG
+    test word [%1+W_FLAGS], WF_FULL | WF_DESK
+%else
+    test byte [%1+W_FLAGS], WF_FULL
+%endif
+%endmacro
 
 WF_KEEPH   equ 128             ; W_FLAGS bit7: this window's HEIGHT is not the
                                 ; kernel's to reduce (SPEC.md 11.93). wm_fit
@@ -3338,8 +3371,33 @@ wm_lk_tail:                     ; ...and osapi_wm_resize's
     pop ax
     ret
 
+%ifdef KERN_BIG
+; A DESK window is shown by the DAMAGE PASS (SPEC.md 11.103.3): visible, then
+; wm_paint_dmg over its frame, which draws it in z-order - under every window
+; above it, which the marking pass redraws where they overlap - with no
+; precover, no zoom, no raise and no menu_activate. NOT wm_draw_win under the
+; cull: wm_clip_test rounds OUTWARD, so a glyph straddling a covering window
+; would be drawn whole over it, and outside wm_dmg_wins nothing repairs that.
+; [wm_dmg_stwin] is 0 here (a one-shot), so wm_dmg_stale marks the widget.
+wm_show_desk:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    or byte [bx+W_FLAGS], 2
+    mov si, bx
+    call wm_win_rect            ; AX..DX = its frame (no shadow: chromeless)
+    call wm_paint_dmg           ; under wm_show's lock
+    jmp kret_si
+%endif
+
 wm_show_b:
     CURLOG 'W'
+%ifdef KERN_BIG
+    test byte [bx+W_FLAGS+1], WF_DESK >> 8
+    jnz wm_show_desk
+%endif
     push ax
     push bx
     push bp
@@ -4415,7 +4473,17 @@ wm_front_b:
     mov bp, bx                  ; preserved, so AL needs no bank
     mov bx, di
     cmp bp, di
+%ifdef KERN_BIG
+    je .arm
+    test byte [di+W_FLAGS+1], WF_DESK >> 8
+    jz .go                      ; another window was in front: raise us -
+.arm:                           ; ...unless we are a DESK window, which is
+                                ; ACTIVATED and never moved (SPEC.md 11.103.4):
+                                ; the bar, the dock's cue, and wm_lift is a
+                                ; no-op for it
+%else
     jne .go                     ; another window was in front: raise us
+%endif
     call menu_activate          ; ALREADY FRONTMOST, whatever AL says: not even
                                 ; the title bar changes - the degenerate case,
                                 ; chrome only, but the bar and the dock are
@@ -4453,6 +4521,13 @@ wm_lift:
     push ax
     push cx
     push si
+%ifdef KERN_BIG
+    test byte [bx+W_FLAGS+1], WF_DESK >> 8
+    jnz .out                    ; A DESK WINDOW IS NEVER LIFTED (SPEC.md
+%endif                          ; 11.103.1): this is the one reordering writer
+                                ; of wm_zord, so the band at its bottom - every
+                                ; WF_DESK entry in [0..k-1], no count byte -
+                                ; holds because nothing else can move one
     call wm_zcut
     jc .out
     mov [si], al                ; and we land on top
@@ -4553,9 +4628,15 @@ wm_cursor:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_top - find the frontmost visible window
+; wm_top - find the frontmost visible APPLICATION window
 ; in:  nothing
 ; out: BX = window ptr, or 0 if no window is visible
+;
+; A DESK window is never the answer (SPEC.md 11.103.2): every caller - the key
+; router, Close Window, menu_check's promotion, the pinstripes, dock_act,
+; OSAPI_WM_TOP - means "the front ORDINARY window", and with only widgets up
+; this answers 0, which is Locator. One word test where the bit test stood:
+; visible AND NOT WF_DESK is `(W_FLAGS & 0x0402) == 2`, +5 bytes on kern_big.
 ; -----------------------------------------------------------------------------
 wm_top:
     push ax
@@ -4570,8 +4651,15 @@ wm_top:
     dec si
     mov al, [si]
     call wm_idx2ptr
+%ifdef KERN_BIG
+    mov ax, [bx+W_FLAGS]        ; AL is spent: wm_idx2ptr has had it, and the
+    and ax, WF_DESK | 2         ; next pass reloads it from [si]
+    cmp ax, 2
+    je .done
+%else
     test byte [bx+W_FLAGS], 2
     jnz .done
+%endif
     loop .next
 .none:
     xor bx, bx
@@ -4623,7 +4711,7 @@ wm_hit:
     add ax, [bx+W_H]
     cmp dx, ax
     jge .next
-    test byte [bx+W_FLAGS], WF_FULL
+    WM_CHROMELESS bx
     jnz .plain                  ; fullscreen: no chrome - every point is
                                 ; content (SPEC.md 11.2)
     mov ax, dx                  ; hit: AX = dy within the frame
@@ -4708,7 +4796,7 @@ wm_win_rect:
     add cx, [si+W_W]
     mov dx, bx
     add dx, [si+W_H]
-    test byte [si+W_FLAGS], WF_FULL
+    WM_CHROMELESS si
     jz .out
     dec cx                      ; fullscreen draws no shadow (SPEC.md 11.2)
     dec dx
@@ -4789,7 +4877,7 @@ wm_dmg_bit:
 ; missing one leaves a black line eaten out of a window nobody touched.
 ; -----------------------------------------------------------------------------
 wm_dmg_shadowed:
-    test byte [si+W_FLAGS], WF_FULL
+    WM_CHROMELESS si
     jnz .no                     ; fullscreen draws none (SPEC.md 11.2), and
                                 ; wm_win_rect has shrunk the rect to say so
     cmp [wm_dmg_x2], cx
@@ -5565,7 +5653,7 @@ wm_paint_all:
 wm_content:
     mov ax, [bx+W_X]
     mov dx, [bx+W_Y]
-    test byte [bx+W_FLAGS], WF_FULL
+    WM_CHROMELESS bx
     jnz .full
     add dx, TITLE_H
     call wm_flush               ; a window spanning the screen has no LEFT
@@ -5637,7 +5725,7 @@ wm_about_get:
 wm_geom:
     mov cx, [bx+W_W]
     mov dx, [bx+W_H]
-    test byte [bx+W_FLAGS], WF_FULL
+    WM_CHROMELESS bx
     jnz .vis                    ; fullscreen: the frame IS the content
     sub dx, TITLE_H + 1         ; content rows y+TITLE_H .. y+h-2
     push ax                     ; content cols x+b .. x+w-1-b, so the WIDTH is
@@ -5970,7 +6058,7 @@ wm_clip_set:
     mov si, dx
     add si, [bx+W_H]
     dec si
-    test byte [bx+W_FLAGS], WF_FULL
+    WM_CHROMELESS bx
     jnz .seed                   ; fullscreen: the frame IS the content
     dec cx                      ; else x+1 .. x+w-2, y+TITLE_H .. y+h-2
     add dx, TITLE_H
@@ -6407,7 +6495,7 @@ wm_seed_frame:
     add cx, [bx+W_W]
     mov si, dx
     add si, [bx+W_H]
-    test byte [bx+W_FLAGS], WF_FULL
+    WM_CHROMELESS bx
     jz wm_clip_seed
     dec cx
     dec si
@@ -7554,7 +7642,7 @@ wm_draw_title:
     mov word [snap_cur], 0
     pop ax
 %endif
-    test byte [di+W_FLAGS], WF_FULL
+    WM_CHROMELESS di
     jnz .none                   ; a fullscreen window HAS no title bar
                                 ; (SPEC.md 11.2), and drawing one anyway put
                                 ; a full-width white strip with a centred
@@ -7993,7 +8081,7 @@ wm_chrome_rect_x:
 wm_chrome_relit_x:
     cmp di, [ui_armw]
     jne .out                    ; a different window: this draw says nothing
-    test byte [di+W_FLAGS], WF_FULL
+    WM_CHROMELESS di
     jnz .clear                  ; no title bar at all (SPEC.md 11.2)
     cmp di, bp
     jne .clear                  ; not frontmost: no boxes were drawn
@@ -8084,7 +8172,7 @@ wm_title_set:
                                 ; the window until wm_clip_occl has had it
     test byte [di+W_FLAGS], 2
     jz .out                     ; hidden: no pixels on screen to correct
-    test byte [di+W_FLAGS], WF_FULL
+    WM_CHROMELESS di
     jnz .out                    ; fullscreen has no title bar (SPEC.md 11.2)
 
     call wm_ttl_rect            ; the strip, and wm_clip_seed takes y1 in DX
@@ -9228,7 +9316,22 @@ wm_bar_span:
 
 ; wm_su_rect - DI = window -> AX/BX/CX/DX = its content rect, the same four
 ; numbers wm_draw_win's white fill uses
+;
+; A DESK window's content IS its frame (SPEC.md 11.103.5): wm_damage hands a
+; widget the damage CLIPPED to this rect, and the title inset below would cut
+; its top TITLE_H rows and its borders off every OSAPI_WM_DAMAGE answer.
+; wm_win_rect's chromeless arm has already taken the shadow off.
 wm_su_rect:
+%ifdef KERN_BIG
+    test byte [di+W_FLAGS+1], WF_DESK >> 8
+    jz .ord
+    push si
+    mov si, di
+    call wm_win_rect
+    pop si
+    ret
+.ord:
+%endif
     call wm_bar_span
     mov bx, [di+W_Y]
     add bx, TITLE_H
@@ -10646,6 +10749,13 @@ wm_draw_win:
     mov dx, bx
     add dx, [di+W_H]
     dec dx
+%ifdef KERN_BIG
+    test byte [di+W_FLAGS+1], WF_DESK >> 8
+    jnz .paint                  ; A DESK WINDOW (SPEC.md 11.103.5): no outline,
+%endif                          ; shadow, title or raise cache, and no white
+                                ; fill - MAKE forced WF_OWNBG, so W_PAINT owns
+                                ; every pixel - and W_PAINT under wm_dw_cull as
+                                ; every window's is
     test byte [di+W_FLAGS], WF_FULL
     jz .chrome                  ; fullscreen: no chrome at all - the whole
     mov byte [gfx_color], CWHITE; frame is content, white-filled, then
@@ -11458,6 +11568,95 @@ wm_nest_pop_x:
 wm_cbd:
     call bp
     retf
+
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; osapi_wm_desk_x - OSAPI_WM_DESK, the desk layer's one door (SPEC.md 11.103.9)
+; far, DS = KERNEL_SEG (api_rsc). in: AL = the verb, BX = the window for 1-3.
+; out: CF = 0 done / CF = 1 refused; every register preserved.
+;   AL = 0 QUERY    the layer exists (kern_small's cell is mod_gone: CF = 1)
+;   AL = 1 MAKE     BX = a used, HIDDEN, not-FULL, not-SIZABLE window nobody
+;                   owns yet, asked for INSIDE A PACKAGE'S ENTRY PROC:
+;                   WF_DESK|WF_NOANIM|WF_OWNBG on, WF_SAVEU|WF_1BPP off,
+;                   IF_DESK on the loading record, the z entry moved to [0]
+;   AL = 2 DRAG     W2 (SPEC.md 11.103.6) - refused until then
+;   AL = 3 RELEASE  [menu_win] = BX: the bar (and the keys) to wm_top, redrawn
+;
+; MAKE IS THE ENTRY PROC'S, and that is what lets it name its caller for
+; nothing. wm_owner is published only at the loader's step 9, AFTER the entry
+; proc returns (SPEC.md 21), so the window a package is setting up is the one
+; with NO owner, and the record it belongs to is [ld_rec] - reserved at step 5,
+; zeroed by inst_alloc, unpublished (I_STATE = 0) until step 9, which writes no
+; I_FLAGS. A window that is owned, or a call with no load in progress (the
+; record already published), is refused. Package window pointers are trusted
+; here as at every wm_* cell (wm_ptr2idx's own div); the USED bit is what
+; guarantees the window is in wm_zord, which the rotation below relies on.
+; -----------------------------------------------------------------------------
+osapi_wm_desk_x:
+    cmp al, 1
+    je .make
+    jb .ok                      ; 0, QUERY
+    cmp al, 3
+    jne .no                     ; DRAG (W2) and any verb nobody defined
+    cmp bx, [menu_win]          ; --- RELEASE
+    jne .ok                     ; not the bar's owner: nothing to give back
+    push bx
+    call KERNEL_SEG:apic_wm_top ; BX = the front APPLICATION window, 0 =
+    call KERNEL_SEG:cw_menu_activate ; Locator (SPEC.md 11.103.2)
+    call KERNEL_SEG:cw_menu_draw_bar
+    pop bx
+.ok:
+    clc
+    retf
+.no:
+    stc
+    retf
+.ref:
+    stc
+.pop:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    retf
+.make:
+    push ax
+    push cx
+    push si
+    push di
+    mov al, [bx+W_FLAGS]        ; used, HIDDEN, not FULL, not SIZABLE
+    and al, 1 | 2 | WF_FULL | WF_SIZABLE
+    cmp al, 1
+    jne .ref
+    mov di, [ld_rec]            ; ...inside a load: its record unpublished
+    cmp byte [di+I_STATE], 0
+    jne .ref
+    mov ax, bx
+    sub ax, wm_wins
+    mov cl, WIN_SIZE
+    div cl                      ; AL = the window's index (< 128)...
+    cbw                         ; ...so AH = 0, whatever the remainder was
+    xchg ax, si
+    cmp byte [wm_owner+si], 0FFh
+    jne .ref                    ; owned: not the window being set up
+    xchg ax, si                 ; AL = the index
+    mov ah, al                  ; --- THE Z ENTRY TO [0] (SPEC.md 11.103.1) as
+    mov si, wm_zord             ; one ROTATION: [0] takes the index and each
+.rot:                           ; slot hands its old entry up one, until the
+    xchg al, [si]               ; entry carried up IS the index - its old slot,
+    inc si                      ; which the entry below has just overwritten.
+    cmp al, ah                  ; Already at [0]: one step, nothing moved
+    jne .rot
+    and word [bx+W_FLAGS], 0FFFFh & ~(WF_SAVEU | WF_1BPP)
+    or word [bx+W_FLAGS], WF_DESK | WF_NOANIM | WF_OWNBG
+    or byte [di+I_FLAGS], IF_DESK
+    clc                         ; (no cli round the two stores: the window is
+    jmp short .pop              ; the entry proc's own and no worker of its
+                                ; package can exist yet - SPEC.md 20.6)
+%else
+osapi_wm_desk_x equ mod_gone    ; kern_small has no desk layer (SPEC.md
+                                ; 11.103.9): every verb refuses, QUERY first
+%endif
 section .text
 
 ; -----------------------------------------------------------------------------
@@ -11496,6 +11695,11 @@ wm_pkgd:    resw 1              ; NESTING DEPTH OF KERNEL -> PACKAGE CALLS. A
                                 ; that one already
 wm_pkgs:    resw WM_PKGD_MAX
 wm_wins:    resb MAX_WIN * WIN_SIZE ; 12 windows x WIN_SIZE bytes
+; THE DESK BAND (SPEC.md 11.103.1): every WF_DESK window occupies
+; wm_zord[0 .. k-1] and every ordinary one is above them - no count byte. The
+; four writers keep it: wm_create appends (born hidden and ordinary),
+; OSAPI_WM_DESK's MAKE moves an entry to [0] once, wm_lift never moves a desk
+; window, and wm_destroy's wm_zcut compaction keeps the order.
 wm_zord:    resb MAX_WIN            ; window indices, [0] = backmost
 wm_zn:      resb 1                  ; entries in wm_zord
 %ifdef BANDCOMP

@@ -20,6 +20,7 @@ Read first: [§11 wm.inc — windows](../SPEC.md#11-wminc--windows); [§20 Loada
 | `0x008E` | `OSAPI_WM_CONTENT` | BX=win ptr; out AX=content left, DX=top |
 | `0x0096` | `OSAPI_WM_OBSCURED` | BX=win ptr; out CF=1 if covered - which INCLUDES your window being hidden, so a worker gating a draw on this needs no visibility test of its own... |
 | `0x03BF` | `OSAPI_WM_OWNSEG` | AL = a window slot; out CF=1 no live window in that slot, else CF=0 and DX = the owning segment... |
+| `0x046D` | `OSAPI_WM_DESK` | AL = 0 QUERY: CF=0 this kernel has the layer (kern_small: CF=1, and every verb refuses there)... |
 | `0x00F1` | `OSAPI_WM_SIZABLE` | BX=win ptr, AL = 0 clear / non-zero set WF_SIZABLE; call from the entry proc after OSAPI_WM_CREATE... |
 | `0x03CD` | `OSAPI_WM_NOANIM` | BX = win ptr; NO other argument and no answer: this window does not zoom open (SPEC.md 11.99.2.1). Call it between OSAPI_WM_CREATE and OSAPI_WM_SHOW... |
 | `0x0413` | `OSAPI_WM_MINIMIZE` | BX = a window of YOURS; the gfx lock held (a window callback does)... |
@@ -35,7 +36,7 @@ Read first: [§11 wm.inc — windows](../SPEC.md#11-wminc--windows); [§20 Loada
 | `0x033A` | `OSAPI_WM_TIMER` | BX = win ptr, AX = TICKS from now (0 cancels). CALL ME BACK IN N TICKS (SPEC.md 13.9)... |
 | `0x0342` | `OSAPI_WM_ONTIMER` | BX = win ptr, AX = a near proc in YOUR segment (0 clears it): what the timer above calls... |
 | `0x01D3` | `OSAPI_WM_TITLE` | BX = win ptr, AX = a NUL string IN YOUR OWN SEGMENT, or 0 to mean "the bytes W_TITLE already names changed underneath it"... |
-| `0x01EC` | `OSAPI_WM_TOP` | out BX = the frontmost VISIBLE window, 0 if none. Preserves everything else, takes no lock, callable from a worker. "Do I have focus?"... |
+| `0x01EC` | `OSAPI_WM_TOP` | out BX = the frontmost VISIBLE window that is not a DESK window (SPEC.md 11.103.2), 0 if none... |
 | `0x01F2` | `OSAPI_WM_SNAP` | BX = window ptr, AL = 0 clear / non-zero set. Out: nothing... |
 | `0x02D3` | `OSAPI_WM_BAND` | BX = window ptr, AL = edge (0 left, 1 right, 2 top, 3 bottom), CX = the band's extent in pixels measured in from that edge, 0..255... |
 | `0x02E5` | `OSAPI_WM_CURSOR` | BX = your window ptr, AL = OSAPI_CUR_*. The pointer wears it over your window's CONTENT and nowhere else... |
@@ -95,6 +96,7 @@ Read first: [§5 vga12.inc](../SPEC.md#5-vga12inc); [§25 icons.inc — icon for
 | `0x039D` | `OSAPI_ICON_DRAW` | CX = x, DX = y, SI -> the record. out CF = 1 refused (a record wider than one word a row, or taller than 16) |
 | `0x0393` | `OSAPI_GFX_BLIT1_PEN` | AL = ink (what a SET bit in the next OSAPI_GFX_BLIT1's band becomes), AH = paper (a CLEAR one). SPEC.md 5.4.2.2... |
 | `0x00B3` | `OSAPI_SET_COLOR` | AL -> [gfx_color] |
+| `0x0473` | `OSAPI_GFX_DESK` | AX,BX = x1,y1 CX,DX = x2,y2 (inclusive), lock held (W_PAINT): lay the DESKTOP'S OWN GROUND there... |
 | `0x019C` | `OSAPI_GFX_SCROLL` | move a rect's contents up or down instead of redrawing them (SPEC.md 5.5): AX/BX/CX/DX = x1/y1/x2/y2 inclusive ABSOLUTE screen coords, SI = signed... |
 | `0x03A4` | `OSAPI_GFX_BLITP` | ES:SI = plane 0's first row, DI = the step to the next plane, BP = the row stride inside one, AX = x (A MULTIPLE OF 8), BX = y, CX = width in pixels,... |
 | `0x03DC` | `OSAPI_GFX_SAVE` | AX = x1, BX = y1, CX = x2, DX = y2 (INCLUSIVE, absolute screen), ES:DI = your buffer. Copies those pixels into it... |

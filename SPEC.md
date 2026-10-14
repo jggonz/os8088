@@ -10161,6 +10161,17 @@ the pointer off the screen there by construction, so an exclusive app draws
 its own pointer and always did. Missile Command therefore keeps `mc_cross_*`
 for its bracket and drops it windowed, which is where the two pointers were.
 
+**The same answer is the desk layer's HOVER EDGE** (§11.103.7, W2). Right
+after `cur_shape_pass`'s `wm_hit`, one compare of BX against `[cur_hovw]`;
+only a CHANGE of window far-calls a cold body that clears `WF_HOVER` on the
+old window and sets it on the new one - each only if it is a `WF_DESK`
+window - and posts `wm_wake` to each. So a widget learns "the pointer is over
+me" at the cost of one compare per pass that runs anyway, with nothing at all
+while the pointer rests, and the edge inherits this section's two properties
+for free: it is UI-task-only, so the z-order cannot tear under it, and every
+raise, hide, close or drag under a standing pointer already sets
+`[cur_shchk]`, so a window opened over a hovered widget is a leave.
+
 ### 7.2.1.1 The "nothing moved" test sits ABOVE the frame
 
 `cur_shape_pass` is called by the UI ladder **671 times a second on an idle
@@ -19709,6 +19720,267 @@ slices cannot renumber what a package asked for, and cannot hand it a slice
 smaller than it declared.
 
 
+### 11.103 The desk layer (`WF_DESK`): windows that live under every application
+
+A **DESK WINDOW** is a window that belongs to the desktop rather than to the
+stack of applications: §107's widgets, the Desk Calendar first. It is drawn
+above the desktop's ground and its icons and **below every ordinary window**,
+it is never raised, it has no title bar, frame, shadow or boxes, it has no
+dock tile, and it takes the menu bar and the keys only while it is the last
+thing the user pressed. The owner asked for exactly that: *"the always behind
+layer, and ... a different window treatment than regular apps to
+differentiate them"*. The treatment itself - the cards, the name tag, the
+hover handle - is package code shared as source (`apps/os88dia.inc`,
+§107.11); what is here is the kernel's half, which is the layer and nothing
+that draws.
+
+It is **kern_big's** (and kern_emu's, which is kern_big plus §9.11.7).
+kern_small carries the two cells and refuses the one that matters (§11.103.9).
+
+**The bits.** `WF_DESK` = `0x0400` (W_FLAGS bit 10) marks a desk window and
+`WF_HOVER` = `0x0800` (bit 11) is §11.103.7's hover state. Both are in the
+shape byte, so both are in `WF_HIBITS` and `wm_cursor` and `cur_shape_pass`
+mask them by construction (§7.2.1, §11.96.17). `IF_DESK` = 4 (I_FLAGS bit 2)
+marks the owning INSTANCE, which is what the dock reads (§30). The SDK
+publishes all three as READ-ONLY facts - `[es:bx+W_FLAGS+1]` and the
+snapshot's `SSI_FLAGS` - and `OSAPI_WM_DESK` is the only writer, so the
+"never by hand" rule binds as it does for every kernel bit.
+`tools/os88geom.py` mirrors them and `t_mirror` holds the copies.
+
+**What it costs**, measured at wave 1 (§107.6): **+104** bytes of `.text`
+on kern_big and kern_emu (image rungs 183 and 430 left before) and **+154**
+of `.cold` (351 and 227 before - kern_emu's is the binding one, 73 left
+after); kern_small spends the two cells' 12 bytes of `.text` and nothing
+else. No rung was crossed. **A rung crossing is a stop for the owner**, not a
+build fix (CLAUDE.md): the cut order is §107.10's.
+
+#### 11.103.1 The z invariant: every desk window is at the BOTTOM of `wm_zord`
+
+Every `WF_DESK` window occupies `wm_zord[0 .. k-1]` (`[0]` is the backmost)
+and every ordinary window is above them. There is **no count byte**: the
+invariant is kept by the only four writers `wm_zord` has, and they are
+named at its declaration.
+
+| writer | what it does with a desk window |
+|---|---|
+| `wm_create` | appends at the top, unchanged: the window is born hidden and ORDINARY |
+| `OSAPI_WM_DESK` MAKE (§11.103.9) | moves the entry to `[0]` ONCE, so the newest widget is the backmost - the rest shift up one, keeping their order |
+| `wm_lift` | **a no-op** for a desk window (`test` + `jnz` before `wm_zcut`, 6 bytes). It is the only reordering writer, so nothing else can lift one |
+| `wm_destroy` (`wm_zcut` + `dec [wm_zn]`) | the compaction keeps the order |
+
+Because the band is at the bottom, every reader of the order that walks
+ABOVE a window - `wm_obscured`, `wm_clip_set`, the damage pass's marking,
+`wm_hit` front to back - is correct with no change, and an ordinary window
+never pays clip arithmetic for a widget. `wm_paint_all` starts at
+`wm_fs_zpos` under a fullscreen window (§11.2), so a widget under one is not
+drawn and the fullscreen window wins `wm_hit`.
+
+#### 11.103.2 "Front" means the front ORDINARY window: `wm_top`
+
+`wm_top`'s loop tests **visible and not `WF_DESK`** (`mov ax, [bx]` /
+`and ax, 0x0402` / `cmp ax, 2` in place of a one-bit test: +5 bytes on a
+path that runs per key and per raise). So every caller of it now means "the
+frontmost visible APPLICATION window": the key router (§13), Close Window and
+its greying (`ui_loc_gate`), `menu_check`'s promotion (§12), `wm_raise`'s
+outgoing title, `wm_dmg_wins`' pinstripes, `dock_act` (§30), the precover and
+the grow-box tests, and `OSAPI_WM_TOP`. With only widgets up, `wm_top`
+answers 0 - Locator - so Close Window greys and the bar goes to Locator when
+the last application closes, never to a widget.
+
+**`OSAPI_WM_TOP`'s contract changes in one word**: it was "the frontmost
+visible window" and it is "the frontmost visible window that is not a desk
+window". No shipped package can tell the difference, because no shipped
+package other than a DIA makes one, and a DIA asking `OSAPI_WM_TOP` about
+itself is asking the wrong question (§12.6's `OSAPI_MENU_OWNER` is the right
+one: "do I own the bar").
+
+#### 11.103.3 A desk window is SHOWN by the damage pass, and why not by the cull
+
+`wm_show_b` takes a desk arm before `wm_top` and the precover: the visible bit
+goes on, `wm_win_rect` is the damage, and **`wm_paint_dmg`** draws it - the
+drag-release pattern (`ui.inc`'s `wm_dmg_vacate` / `wm_paint_dmg`), under the
+lock `wm_show` already holds. `[wm_dmg_stwin]` is 0 (it is a one-shot), so
+`wm_dmg_stale` marks the widget, and the marking pass marks every ordinary
+window above it that it overlaps, which `wm_dmg_wins` redraws over it in
+z-order. There is no precover, no zoom (MAKE sets `WF_NOANIM`), no
+`wm_raise` and no `menu_activate`: showing a widget does not take the bar.
+
+**Not by `wm_draw_win` under `[wm_dmg_cullq]`**, the obvious shorter arm.
+`wm_dw_cull` arms `wm_clip_set` and `wm_clip_test` then ROUNDS OUTWARD -
+containment with the corners exchanged (`wm.inc`, "THE CULL ROUNDS
+OUTWARD") - so a glyph cell or an icon body straddling a covering window is
+drawn WHOLE, over that window. Inside `wm_dmg_wins` that is repaired, because
+the frame grows the damage for the windows above; outside it nothing repairs
+it, and "a package never draws a glyph in `W_PAINT`" is not an invariant
+anyone can hold. Showing a widget under open windows therefore redraws the
+ordinary windows it overlaps whole (`.mbelow`): that is rare - a boot's
+autostart runs before any application is open - and safe.
+
+A desk window already on the glass shown again is the same arm: one damage
+pass over its frame.
+
+#### 11.103.4 Activation without a raise: the press, the keys and RELEASE
+
+- **A press on a desk window** is delivered without a raise. `wm_hit`
+  answers region 0 everywhere on it (§11.103.5), `ui.inc`'s
+  `menu_activate` on every window hit hands it the bar (CF = 1 repaints the
+  bar), and the content press then tests `WF_DESK` before `wm_top` and goes
+  straight to `.content_front` (+6 bytes): `W_ONCLICK` runs under the lock and
+  `[ui_armw]` owes it the release. The front application window keeps its z
+  place AND its pinstripes - the same split as a press on the bare desktop,
+  where the bar says Locator and the stripes stay on `wm_top` (§12.6).
+- **`wm_front` on a visible desk window** takes the existing already-frontmost
+  arm: `menu_activate`, `menu_draw_bar`, `wm_dock_under` - it activates and
+  never moves (+6 bytes). That covers the keyboard mouse (§9.6), the right
+  press's raise, `app_launch` at a singleton's refusal or the instance cap,
+  and a package's own `OSAPI_WM_FRONT`. A right press activates a widget and
+  delivers no `W_ONRC` (§13): a widget offers its commands in its own face.
+- **Keys follow a desk window that owns the bar.** The key router asks
+  `wm_top` and then `fdlg_top_x`; kern_big's body of the latter (`.cold`,
+  `kernel/fdlg.inc`) gains an arm on its "no chooser" path: if `[menu_win]` is
+  a visible `WF_DESK` window, the key goes to IT (§12.6). A modal Standard
+  File chooser is tested first and still takes every key (§38.2); a chooser
+  gone and not yet reaped still sends the key nowhere. `desk_key_x` is already
+  gated on `[menu_win]` = 0 (§26.8.5), so a widget typing never selects a
+  desktop icon. 0 resident bytes.
+- **The keys and the bar go back** on any press elsewhere (`ui.inc`'s
+  `menu_activate` on every window hit and on the bare desktop), on any raise
+  (`wm_raise`'s `menu_activate`), when the widget closes (`menu_check`, which
+  now promotes the front ORDINARY window), and when the widget gives them
+  back itself: `OSAPI_WM_DESK` RELEASE, which a widget calls on Esc.
+- **There is no lost-focus event.** A widget that shows focus polls
+  `OSAPI_MENU_OWNER` (an inline cell) only while it owns the bar (§107.11).
+
+#### 11.103.5 No chrome: the chromeless sites, and the `t_chromesites` ratchet
+
+`WF_FULL` (§11.2) was already the kernel's "no title, no border, no shadow"
+and most of its byte tests mean exactly that; a few mean THE LATCH - the one
+fullscreen window of the machine - and must not see a widget. **Each test is
+classified**, and `tests/unit/t_chromesites.py` (fast tier) is the ratchet:
+every `WF_FULL` reference in `kernel/` is registered by its enclosing routine
+as CHROMELESS (it must read `test word [..+W_FLAGS], WF_FULL | WF_DESK`,
+`0x0408`, one byte longer than the byte test) or FULL-ONLY (it must not name
+`WF_DESK`), each with its reason, and an unregistered or a stale entry fails
+`make`.
+
+| routine | class | why |
+|---|---|---|
+| `wm_hit` | CHROMELESS | every point is content: no title region, no boxes |
+| `wm_win_rect` | CHROMELESS | no drop shadow, so the occupied rect is the frame |
+| `wm_dmg_shadowed` | CHROMELESS | no shadow to owe |
+| `wm_content` | CHROMELESS | the content origin is `(W_X, W_Y)`: the frame IS the content |
+| `wm_geom` | CHROMELESS | ...and so is its size, `W_W` x `W_H` |
+| `wm_clip_set` (the seed) | CHROMELESS | the region is seeded with the frame |
+| `wm_seed_frame` | CHROMELESS | no shadow in the seed |
+| `wm_draw_title` | CHROMELESS | no title bar to draw |
+| `wm_chrome_relit_x` | CHROMELESS | no boxes to have lit |
+| `wm_title_set` | CHROMELESS | a retitle draws nothing (W_TITLE is still the widget's NAME, which the bar and the gates read) |
+| `wm_refit` | FULL-ONLY | the latch's refit to its display |
+| `wm_raise` | FULL-ONLY | the incoming window covers the screen; a desk window is never raised |
+| `wm_snap_want` (and its assertion) | FULL-ONLY | a desk window KEEPS §11.94's snap: `W_X` = 7 mod 8, so the face at `W_X + 1` is on the byte grid (§107.11) |
+| `wm_fullscreen` | FULL-ONLY | the latch's own setter |
+| `wm_damage` | FULL-ONLY | FULL forces "whole" because its fill ignores `WF_OWNBG`; a desk window is OWNBG and gets a sub-rect |
+| `wm_cov_rect` | FULL-ONLY | a desk window reaches the frame through `wm_su_rect` (below) |
+| `wm_su_take` | FULL-ONLY | a desk window has no `WF_SAVEU`, so it never banks |
+| `wm_draw_win` | FULL-ONLY | the FULL arm fills white; the desk arm is a test of its own before it (below) |
+| `wm_grow_erase`, `wm_grow_paint` | FULL-ONLY | MAKE refuses a sizable window |
+| `inst_minimize` (`instance.inc`) | FULL-ONLY | `IF_FSMIN`: a DIA never minimizes its widget (§11.103.8) |
+
+Two sites carry the desk fact with a test of their own, because the `WF_FULL`
+arm there does something a widget must not:
+
+- **`wm_draw_win`**: `test byte [di+W_FLAGS+1], WF_DESK >> 8` / `jnz .paint`
+  ahead of the FULL test (+6 bytes). A desk window skips the outline, the
+  shadow, the title, `wm_su_try` and the white fill - MAKE forces
+  `WF_OWNBG`, so the package paints every pixel - and `W_PAINT` runs under
+  `wm_dw_cull` exactly as every other window's does.
+- **`wm_su_rect`**: a desk window answers its FRAME (`wm_win_rect`, which the
+  chromeless arm has already shrunk by the shadow). `wm_su_rect` is "the
+  content rect" for `wm_damage`, `wm_cov_rect`, the raise cache and the drag
+  cache, and its title inset would otherwise cut the top `TITLE_H` rows and
+  the borders off every damage rect `OSAPI_WM_DAMAGE` hands a widget (§107.9).
+
+#### 11.103.6 The posted drag, and no drag cache
+
+**W2.** A widget has no title bar, so the kernel's outline drag (`ui_drag`)
+is started by the package: `OSAPI_WM_DESK` DRAG (§11.103.9), legal only
+inside `W_ONCLICK`, POSTS the request into `[ui_dragq]`, and the content
+press picks it up after its `gfx_unlock` - the drag cannot run inside the
+callback, because `gfx_lock` is not recursive and `ui_track` takes it. The
+pick-up zeroes `[ui_dragq]` and `[ui_armw]` (the drag eats the release),
+reloads the press from `[ui_dragx]`/`[ui_dragy]` and far-calls `ui_drag`, so
+the outline, the clamps, `wm_snap_ax`, `wm_dock_snap` and `wm_paint_dmg` over
+the vacated and the new rects are the kernel's, unchanged. **A desk window
+takes `.nocache`**: `wm_dc_take` banks from the glass, which under a covering
+window is somebody else's pixels, and `ui_drag_phase` snaps `x` only, so a
+replay at an odd `dy` would bring a widget's desktop-pattern gaps back in
+inverse phase. A drop costs one `W_PAINT`. In W1 the DRAG verb refuses.
+
+#### 11.103.7 The hover edge (`WF_HOVER`, `[cur_hovw]`)
+
+**W2.** `cur_shape_pass` already asks `wm_hit` which window is under the
+pointer on every move and every z change (§7.2.1). After that call, one
+compare against `[cur_hovw]`; on a change a cold body XCHGs the word, clears
+`WF_HOVER` on the old window and posts `wm_wake` to it if it is a desk window,
+and sets `WF_HOVER` and posts `wm_wake` on the new one if it is a desk window
+and no Standard File chooser is up (`[fdlg_win]`, the `dkx_pass` precedent,
+§30.6). It only ever SETS or CLEARS, never toggles, so a destroyed or reused
+record cannot desynchronise it. Idle cost zero; a widget reads the bit in its
+`W_ONWAKE`. Nothing is revealed with a button held, over a covering window
+(`wm_hit` answers the covering one), under a fullscreen window or a saver, or
+during a menu drop or another window's drag - no pass runs then, and one
+correct edge arrives afterwards.
+
+#### 11.103.8 What a DIA must not do with its widget
+
+- **No `OSAPI_WM_MINIMIZE` and no `OSAPI_FULLSCREEN`** on a desk window. It
+  has no tile, so a minimized widget could not be brought back; a fullscreen
+  one would be a latch over the screen with no title to leave it by. A
+  written rule rather than a kernel refusal (§107's open decision 12, the
+  default): `os88dia.inc` never calls either.
+- **No `OSAPI_SAVEU` after MAKE.** MAKE clears `WF_SAVEU` and `WF_1BPP`: a
+  covered widget banked off the glass would bank other windows' pixels, and a
+  widget under the Color theme shows teal in its gaps, which `WF_1BPP` would
+  promise away (§11.96.17).
+- **A future window cycler skips `WF_DESK`.** There is none in the tree; Close
+  Window never reaches a widget because `wm_top` does not.
+
+#### 11.103.9 The two cells: `OSAPI_WM_DESK` (0x046D) and `OSAPI_GFX_DESK` (0x0473)
+
+**`OSAPI_WM_DESK`**, a rare cell (`OSAPI_RCSLOT`) whose body is `.cold`.
+`AL` = the verb; every register but the documented outputs is preserved, and
+CF answers.
+
+| AL | verb | in | what |
+|---|---|---|---|
+| 0 | QUERY | - | CF = 0: this kernel has the desk layer. kern_small answers CF = 1, and so does every verb |
+| 1 | MAKE | BX = your window | make it a desk window - **in your ENTRY PROC only**, between `OSAPI_WM_CREATE` and its return. **Refused (CF = 1)** for a window not in use, VISIBLE, `WF_FULL` or `WF_SIZABLE`, for a window that already HAS an owner, and with no load in progress. That is how MAKE knows its caller for nothing: `wm_owner` is published only at the loader's step 9, AFTER the entry proc returns (§21), so the window being set up is the one nobody owns yet, and its instance is the loader's `[ld_rec]` - reserved at step 5, zeroed by `inst_alloc`, unpublished (`I_STATE` = 0) until step 9, which writes no `I_FLAGS` (§107.9). Effect: `WF_DESK \| WF_NOANIM \| WF_OWNBG` on, `WF_SAVEU \| WF_1BPP` off, `IF_DESK` on that record, and the z entry ROTATED to `[0]` (each entry below it moves up one, in order) |
+| 2 | DRAG | BX = your window | **W2**: post the kernel's outline drag for the press being delivered (§11.103.6); legal only inside `W_ONCLICK`. In W1 it refuses |
+| 3 | RELEASE | BX = your window | if `[menu_win]` is BX, the bar - and with it the keys - goes to `wm_top` (the front application window, or Locator) and is redrawn. From a callback, under the lock (a widget's `W_ONKEY` on Esc). CF = 0 |
+
+**`OSAPI_GFX_DESK`**, a rare cell (`OSAPI_RSLOT thm_desk`): AX, BX = x1, y1
+and CX, DX = x2, y2, inclusive, with the gfx lock held - a `W_PAINT`. It lays
+**the desktop's own ground** over the rect: the theme's (§76.2) - Bright is
+§26's 50% dither phased on SCREEN coordinates, exactly `gfx_fill_gray`'s, so
+a widget's gaps meet the desktop with no seam; Dark is black; Color teal - and
+per display through `GFXDISP` (§39.14). **It leaves the theme's colour in
+`[gfx_color]`** on Dark and Color (`thm_desk` writes it), so a caller sets its
+own pen after. kern_small has no themes (§76.13), and there it IS
+`gfx_fill_gray`. Until this cell a package could reach only
+`OSAPI_GFX_FILL_GRAY`, which is right on Bright alone.
+
+**The header flag, `OS88_F_DESK`** (flags bit 6, §20.2): a package that will
+make a desk window says so in its header, so that the loader can take its
+instance record from the TOP of `inst_tab` down (`inst_alloc_di`, a 3-byte
+entry into `inst_alloc`'s zeroing tail). The widget's slot is then
+`INST_MAX - 1`, its empty tile position is at the far end of the strip, and
+the user's first application takes tile 0 (§30). It changes nothing else, and
+kern_small's loader ignores it.
+
+Both cells are appended at the table's end, so the ABI lock moves without a
+`PKG_FMT` bump (§20.2.0.1). A package that calls either ships beside its own
+kernel - §107.8's "not on The Wire" already applies to every DIA.
+
 ## 12. menu.inc
 
 Menu bar: rows 0..MBAR_H-1, white, 1px black line at row MBAR_H-1. Its
@@ -23630,6 +23902,17 @@ sets the mode, the next worker frame reads the same unchanged owner and pauses
 again. `OSAPI_WM_FRONT` on the frontmost window is the whole fix, and §44.8.1
 is the worked example.
 
+**The desk layer is the case where the KEYS part from `wm_top` as well**
+(§11.103.4). A press on a desk window activates it without raising it, so
+`[menu_win]` names the widget while `wm_top` still names the application in
+front - and the key router sends keystrokes to `[menu_win]` when that window
+is visible and `WF_DESK` (kern_big's `fdlg_top_x` body, after the modal
+chooser's test). That is the only time keys follow the bar rather than the
+z-order. They come back with the bar: a press anywhere else, any raise, the
+widget's close, or its own `OSAPI_WM_DESK` RELEASE. A widget asking "am I
+focused" asks THIS slot, never `wm_top`, which by §11.103.2 never names a
+desk window at all.
+
 ### 12.7 The app-name menu — `About` when it is offered, `Close` always
 
 The application's name in the bar is a **menu cell for every application**,
@@ -25014,6 +25297,12 @@ Two rules, and they are the whole of it:
   `CX`/`DX` are screen coordinates and may fall outside the content box, or
   go negative once the caller subtracts its origin. Range-testing them is the
   caller's job.
+- **A press on a DESK window is delivered without a raise** (§11.103.4):
+  `wm_hit` reports region 0 over the whole frame, the press activates it
+  (the bar, and with it the keys) and goes straight to `W_ONCLICK`, so the
+  release is armed exactly as for the front window. `OSAPI_WM_DESK` DRAG is
+  legal only INSIDE that `W_ONCLICK` (§11.103.6): it posts the kernel's drag
+  for the press being delivered, and the drag then eats the release.
 
 **The kernel guarantees delivery; the package decides identity.** There is no
 widget layer, so the kernel cannot know what "the same control" means here and
@@ -27491,6 +27780,16 @@ byte: the whole menu block is `%ifdef OS88UI_MENU` and `apps/word` is its only
 definer (§6.2 of docs/plans/completed/GFX-EMBEDDABLE-PLAN.md). It also takes
 `apps/os88ui.inc` to **zero `OSAPI_GFX_LINE` call sites**, which is one of the
 conversions that plan's wave 8 needs.
+
+**A desk widget's check box carries a real tick, and it is not this mark
+revived** (§107.11, §107's open decision 4). What this section retired was a
+pair of 1-pixel `gfx_line` diagonals, which are scattered single pixels on a
+1bpp adapter. The widget's tick is COMPOSED into its card's slab with strokes
+at least 2 pixels wide, and blitted with the rest of the slab in the one
+`OSAPI_GFX_BLIT1` - so it is solid on CGA and Hercules, and it costs the
+toggle no extra call. `os88ui.inc`'s solid square stands for every other
+package; the widget's form must be LOOKED at on both 1bpp adapters (§39.4)
+before it ships.
 
 #### 13.16.3 …and the drawing and the hit test
 
@@ -38633,7 +38932,7 @@ each needed a mechanism**:
 |-----|------|------------------------------------------------------------|
 | 0   | 2    | magic: bytes `'O','8'` (word 0x384F)                      |
 | 2   | 1    | format version = **8** (`PKG_FMT`): the segment-per-package layout, built against the API table as §20.3 lays it out now. Anything else — 1 to 7 included — is refused (§20.2.0) |
-| 3   | 1    | flags: bit 0 = embedded icon follows the header; bit 1 = an association block follows it (§54.6); **bit 2 = the FILE is longer than the image and the rest is the package's own (§20.12)**; **bit 3 = the image is COMPRESSED and the file is SHORTER than it, bit 4 = which format (0 = LZ4, 1 = LZB)** — docs/plans/O88-COMPRESSION-PLAN.md; **bit 5 = a 16-byte DOCUMENT-GLYPH block follows the association block (§54.3.2)**; bits 6–7 zero |
+| 3   | 1    | flags: bit 0 = embedded icon follows the header; bit 1 = an association block follows it (§54.6); **bit 2 = the FILE is longer than the image and the rest is the package's own (§20.12)**; **bit 3 = the image is COMPRESSED and the file is SHORTER than it, bit 4 = which format (0 = LZ4, 1 = LZB)** — docs/plans/O88-COMPRESSION-PLAN.md; **bit 5 = a 16-byte DOCUMENT-GLYPH block follows the association block (§54.3.2)**; **bit 6 = `OS88_F_DESK`, the package makes a desk window (§11.103.9): kern_big's loader takes its instance record from the top of the table down**; bit 7 zero |
 | 4   | 2    | link base — must be **0**: a v3 package links at org 0     |
 | 6   | 2    | entry offset (≥ 0x20; ≥ 0x60 with icon; < image size)      |
 | 8   | 2    | image size = resident bytes: header + icon + code + data. Equals the file size exactly — **unless flags bit 2 is set, when it may be smaller and the file's tail is the package's (§20.12)**. |
@@ -38846,9 +39145,13 @@ cells **inline** and took the table to **1,093 bytes**: 43 plain SLOTs and 11
 X cells hot, 95 rare cells, 15 inline cells, six jump cells and the far cell.
 `OSAPI_FILE_READ_SEQ` (18.4.8) and `OSAPI_FSX_SPK` (34.11) have since added a
 96th and a 97th rare cell, **1,105 bytes**; `OSAPI_FILE_WRITE_SEQ` (18.4.9) a
-98th, 1,111; and `OSAPI_CLK_GET` (§37.96, at `0x0467`) a 99th, **1,117
-bytes**, which is what `kernel.asm`'s length guard asserts from the counts.
-`osapi_table_end` is `0x046D`.
+98th, 1,111; and `OSAPI_CLK_GET` (§37.96, at `0x0467`) a 99th, 1,117
+bytes. The desk layer (§11.103.9) appends a 100th and a 101st -
+`OSAPI_WM_DESK` at `0x046D` (a cold body, `kern_small`'s the `mod_gone`
+refusal) and `OSAPI_GFX_DESK` at `0x0473` (`thm_desk`, which IS
+`gfx_fill_gray` on `kern_small`) - **1,129 bytes**, which is what
+`kernel.asm`'s length guard asserts from the counts. `osapi_table_end` is
+`0x0479`.
 Those counts are the tree it landed on, not a contract; `t_api_abi` prints
 the span it walked.
 
@@ -58056,6 +58359,17 @@ and so cannot be frontmost, but nothing depends on that; and a heavier
 border survives the reduction to three inks (§39.4) where a second colour
 would not.
 
+**A desk instance has no tile** (§11.103, `IF_DESK`): `db_key` answers 0 for
+it, `db_hit` reports no tile under it, and DOCK.DRV's twins - `dkx_key`,
+`dkx_hit` and `dkx_map`'s count and walk - skip it, so a packed side strip
+does not spend a tile on it either. Its SLOT still exists, so on the stable
+mapping its position is an empty hole - which is why a package with header
+flag `OS88_F_DESK` (§20.2) is given the TOP free record (`INST_MAX - 1`
+first) and the hole lands at the far end of the strip, where nothing follows
+it: the user's first application is tile 0, as it would be with no widget at
+all. `dock_act` needs nothing, because `wm_top` never names a desk window
+(§11.103.2).
+
 ### Geometry (pinned)
 
 ```nasm
@@ -58698,6 +59012,13 @@ rests **on the line for `DOCK_HOVER_T` = 5 ticks** (0.27 s, the nearest
 tick to ¼ s) opens it; once open, it closes **`DOCK_LEAVE_T` = 14 ticks**
 (0.77 s, the nearest to ¾ s) after the pointer leaves the strip's rect, and
 a pointer that comes back inside that time resets the count.
+
+**A desk widget's handle uses the same two constants BY NAME** (§107.11):
+it is revealed `DOCK_HOVER_T` ticks after the pointer comes onto the widget
+and hidden `DOCK_LEAVE_T` ticks after it leaves, and it declines on the same
+four facts this strip declines on - a button held, a saver, a modal chooser,
+a fullscreen window - so the two auto-hiding things on the desktop keep one
+rhythm.
 
 `[dock_hidden]` is the one byte the module's own painters ask, and
 `dkx_live_set` is its one writer: hidden is *auto and not open*. It is in the
@@ -169229,9 +169550,18 @@ A:\SYSTEM\APPDATA\DESKCAL.DAT    its state (§19.9), written at runtime, never s
   belongs to the disk the machine booted from, so it rides no apps disk.
 - **Each DIA keeps to ONE APPDATA file.** `SYSTEM\APPDATA` holds ~14 entries
   on a 1.44 MB or 1.2 MB root (FERR_DIRFULL, §18.5).
-- **A DIA is a normal window in this version** (§107.8): title bar, frame,
-  shadow, a dock tile, raised by a click. "Placed wherever" is a window drag;
-  §11.94's snap applies to it as to every window.
+- **A DIA is a DESK WINDOW** (§11.103) on kern_big and kern_emu: under
+  every application window, never raised, no title bar, frame, shadow or
+  dock tile, the bar and the keys only while it is the last thing pressed.
+  Its look is the WIDGET TREATMENT (§107.11) - chromeless cards with the
+  desktop between them and a name tag that turns into a handle under the
+  pointer - drawn by the package through `os88dia.inc`. On kern_small, and
+  under any kernel whose `OSAPI_WM_DESK` QUERY refuses, it is the TITLED
+  FALLBACK: an ordinary window with v2's face (§107.7). §11.94's snap
+  applies to both forms.
+- **Version 1** - an ordinary titled window with a dock tile, raised by a
+  click - is what the Desk Calendar still is until v2's wave 4 (§107.10); the
+  rest of this section describes v1 where it says "the window".
 - `apps/os88dia.inc` is the framework (§107.5): it loads the state file in the
   entry proc — legal there, because the entry proc is stamped with its
   instance (`kernel/loader.inc`'s note; §20.12) — places the window, and on
@@ -169298,6 +169628,23 @@ the window, the month and its navigation; wave 3 the appointments, the tasks,
 the one-line entry and the Remind menu's lead times; wave 4 the reminders'
 FIRING (below), `kern_small`'s worker arm run end to end, and the
 measurements (§107.6).
+
+**v2 replaces this window with three CARDS** (§107.11 is the contract, and
+the owner's second mockup the picture; it lands in v2's wave 4, §107.10, and
+until then everything below is v1 and true): card 1 a big day number,
+weekday and month, a bare `<  August 2026  >` and an unruled MONDAY-FIRST
+grid with a dot under each day holding appointments and today inverse; card
+2 `Today` with `+`, two appointments, a rule and two tasks with real ticks
+and a `+N more` pager; card 3 the reminder - a bell, its time, its text and
+`Snooze • Dismiss` - which REPLACES the alert-on-fire (the toast and the chirp
+stay). Snooze is 5 minutes (`DC_SNOOZE`), held in the payload's spare words
++4/+6 with two new appointment flags, `DCA_SNOOZED` = 4 and `DCA_DUE` = 8, so
+an old file reads as nothing due and nothing snoozed and needs no version
+bump. Per adapter the layout is chosen by `OSAPI_VIDEO`'s HEIGHT and not by
+the adapter kind: TALL at 400 rows or more (VGA), MID at 300-399 (Hercules
+and EGA - which v1's `OS88_PREFER` wrongly gives VGA's pair), COMPACT below
+(CGA, one paged slot for cards 2 and 3). The Calendar and Remind menus stay,
+shown while the widget owns the bar.
 
 ```
 apps/deskcal/deskcal.asm   header, entry proc, menus, keys, clicks, the tick
@@ -169834,9 +170181,9 @@ payload.
 |---|---|---|
 | +0 | 2 | `'DA'` |
 | +2 | 1 | header version, 1 |
-| +3 | 1 | flags: bit 0 = the position is valid |
-| +4 | 2 | the frame's x (`W_X`) |
-| +6 | 2 | the frame's y (`W_Y`) |
+| +3 | 1 | flags: bit 0 = the position is valid; **bit 1 = `DIA_HF_CONT`, +4/+6 are the FACE's origin** (v2, §107.11) |
+| +4 | 2 | the frame's x (`W_X`) - or, with bit 1, the face's x |
+| +6 | 2 | the frame's y (`W_Y`) - or, with bit 1, the face's y |
 | +8 | 2 | the screen's width when it was saved |
 | +10 | 2 | the screen's height when it was saved |
 | +12 | 1 | the payload's version (`DIA_PAYVER`) |
@@ -169973,6 +170320,11 @@ GOTO_QM    home
   DOWN (under the menu bar) and `x` are the fit's. The bank `wm_refit`
   replays on an adapter change already holds the restored place, because
   `dia_load` put it in the template the bank was taken from.
+- **v2: the give-back is measured with the FACE** (§107.11): a desk frame
+  is the face plus one ground column, so the shown height is the face's; a
+  titled fallback's is the face's plus `TITLE_H` + 1 less the tag and the
+  last gap. Either way the floor is the display's height less that height
+  less 1, as above.
 - **Nothing is written that the user did not cause.** `dia_made` takes the
   place the window OPENED at as the place on record, and the poll owes a
   save only when two polls agree on a DIFFERENT one. So a launch with no
@@ -170040,6 +170392,27 @@ call (§18.91.1), paid on every desktop gesture's core load.
 Nothing else moved: no `.bss`, no boot-overlay byte, no new module, no new
 SYSTEM.CFG key, and no `PKG_FMT` or `DRV_VER` bump — `OSAPI_CLK_GET` is a
 cell appended at the end, which §20.2.0.1 records without one.
+
+**v2's kernel half** (§11.103), wave 1, MEASURED against the tree it was cut
+from (8311137f):
+
+| | `.text` | `.cold` | `.bss` | rungs left after (before) |
+|---|---:|---:|---:|---|
+| kern_big | **+104** | **+154** | 0 | image 79 (183), cold 197 (351) |
+| kern_emu | +104 | +154 | 0 | image 326 (430), cold **73** (227) |
+| kern_small | **+12** | 0 | 0 | image 303 (315), cold 65 (65) |
+| DOCK.DRV (on demand) | | | | 2,246 → 2,270 bytes, 5 sectors |
+
+No rung is crossed on any kernel; the first MAKE did cross kern_emu's cold
+rung and was rewritten (§107.9). Wave 2's drag and hover come out of what is
+left - kern_emu's 73 cold bytes bind.
+
+**v2's widget** (§107.11), planned: the full paint ~18 calls on VGA (11 card
+slabs, the ground column, 3 gaps, the tag's two sides and its plate) against
+v1's 65, ≤ 20 TALL and ≤ 14 COMPACT as `deskcalperf`'s budget; a day select
+≤ 5, a month ≤ 8, a tick 1, a reveal 1 and a hide 3, idle 0. `DESKCAL.O88`
+grows from 13,168 to ~14.0-14.5 KB of image and ~0.8 KB of bss; the include
+~500 bytes of image under `DIA_WIDGET`.
 
 **Waves 2, 3 and 4 moved no kernel byte.** Re-measured at wave 4's head,
 `tools/kernsize.py` reads `unchanged` on both kernels, and the absolute
@@ -170157,14 +170530,31 @@ a reset brings no calendar back, and opened by hand again it is where it was
 dragged with its data. Nothing about the calendar is a different build on
 kern_small: the same `DESKCAL.O88` is on both kinds of system disk.
 
+**v2: the titled fallback with v2's face** (§107.11, open decision 9's
+default). kern_small has the two cells of §11.103.9 and nothing else of the
+layer - its `.cold` rung has 65 bytes, and it has no WM timer for a handle's
+dwell - so `OSAPI_WM_DESK` QUERY refuses there and `dia_load` sizes a TITLED
+frame: v1's window - title bar, shadow, a dock tile, raised by a click, the
+kernel's close box and title-bar drag - wearing v2's cards, with the gaps
+white and ruled by a centred 1-pixel line rather than showing the desktop,
+and no tag. The face is at `(W_X + 1, W_Y + TITLE_H)`, so its `x` is the
+desk form's, and the state file's face origin means the same place on both
+kernels. The worker arm still beats and a reminder rings card 3 (or the CGA
+slot) with its single note.
+
 ### 107.8 What is not done
 
-- **A desk LAYER.** A DIA is a normal window: it opens on top, a click on a
-  covered one raises it and is swallowed (`ui.inc`'s content press), and it
-  has a dock tile. A layer behind every window, with no raise and no tile, is
-  ~100 resident bytes in hot paths (`wm_lift`, the content press, the dock's
-  tile walk, the drag cache) and waits on the owner's decision.
-- **No chrome removal**: the ten `WF_FULL` sites, a separate decision.
+- **The desk layer and the chrome are DONE in v2** (§11.103, §107.11): the
+  owner asked for both. What v2 leaves:
+- **A drop repaints the widget.** A desk window takes no drag cache
+  (§11.103.6), so a move costs one `W_PAINT` - a few slabs' `BLIT1`s.
+- **Desktop shortcuts under a widget** are invisible and unclickable, as
+  under any window, and a shortcut DROPPED under one is accepted (`desk_free`
+  knows no windows; §107's open decision 14). The right-anchored default
+  place keeps a widget off the drive column.
+- **A DIA runs only beside its own kernel**: `OSAPI_WM_DESK` and
+  `OSAPI_GFX_DESK` join `OSAPI_CLK_GET` on the list an older kernel at the
+  same `PKG_FMT` does not have (below).
 - **No move notification.** The position is polled every 2 s and written once
   two polls agree, so a power-off within ~4 s of a drag loses that drag.
 - **No shutdown hook.** Restart and power-off do not close windows; the row
@@ -170509,6 +170899,64 @@ kern_small: the same `DESKCAL.O88` is on both kinds of system disk.
     it had the boxes' 2-pixel line against the frame on both sides. No call
     and no visible column of text is spent - the pen stays on cell 1.
 
+- **v2, wave 1 (the kernel's desk layer, §11.103)** - where the code proved
+  the design record wrong, each one kept here and in the builders' log:
+  - **The key target is in kern_big's `fdlg_top_x` BODY**, the `FDBODY` in
+    `.cold`, not the stub the design named: that stub is kern_small's
+    FDLG.DRV resident half (`%ifdef FDLG_MOD`), which kern_big does not
+    assemble. And it tests `WF_DESK` without the visible bit: every hide
+    repaints through `menu_draw_bar`, whose `menu_check` takes the bar off a
+    window that is not visible, so `[menu_win]` is never a hidden window past
+    the paint that hid it. 16 bytes of `.cold`.
+  - **`wm_su_rect` answers a desk window's FRAME** (§11.103.5). The design
+    kept `wm_damage` FULL-only and was right to, but missed that its
+    sub-rect path INTERSECTS the damage with `wm_su_rect`'s title-inset
+    content rect, which would have cut the top `TITLE_H` rows and the borders
+    off every `OSAPI_WM_DAMAGE` a widget is handed. One arm there (14 bytes)
+    also covers `wm_cov_rect`, which then stays FULL-only.
+  - **MAKE is the entry proc's alone**, and its caller is the loader's
+    `[ld_rec]`. The design's "`inst_win_owner` against the caller" cannot
+    work: `wm_owner` is published at step 9, after the entry proc returns
+    (§21), so the window being made is the one with NO owner; and the cold
+    body cannot reach `inst_caller` (`.text`) without a trampoline. "Unowned,
+    and a load in progress" names the window and the record for nothing. The
+    z entry moves to `[0]` by one ROTATION (`xchg al, [si]` up the order
+    until the carried entry is the window's) - 12 bytes against a 33-byte
+    scan-and-shift.
+  - **The desk frame is 178 wide, not 177**: `wm_create`'s size snap
+    (§11.94.5) puts `W_W` at 8k + 2 before MAKE runs, so the face has a
+    column of the desktop's ground on BOTH sides. That is the titled
+    fallback's width as well, so the two forms are one width (§107.11).
+  - **The header flag rides `[ld_cfmt]` bit 3**: step 5 runs before the image
+    is read, and `ld_check_hdr`'s two callers leave the header in different
+    places, so the flags byte's bit 6 is kept three shifts down beside the
+    compression format (`LD_CFMT_KEEP`) and the two format tests read bits 0-1
+    alone. No new `.bss` byte.
+  - **The chromeless sites are a macro, `WM_CHROMELESS`**, not 11 inline
+    word tests: on kern_small it is the old byte test, so not one byte of
+    that kernel moves (it spends exactly the two cells' 12 bytes).
+    `t_chromesites` checks the macro's body as well as every site.
+  - **kern_small's `OSAPI_GFX_DESK` names `gfx_fill_gray` itself**:
+    `vga12.inc`'s `%define thm_desk` on a theme-less build comes after the
+    table.
+  - **The probe opts in as a SECOND build of its source**, `DESKPROB.O88`
+    (`-DDP_DESK`), not by changing `DIAPROBE.O88`: `diaboot` drags DiaProbe
+    by its title bar and closes it with its close box, and a desk window has
+    neither until wave 2 brings DRAG and the widget's own close. The four
+    rows are one script, `tests/desklayer.py --leg z|dock|keys|small`; `deskz`
+    uses a Disk window over the probe, the calendar being v1 this wave.
+  - **What it cost, measured** (`tools/kernsize.py`, against the tree it was
+    cut from): kern_big and kern_emu `.text` **+104**, `.cold` **+154**,
+    `.bss` 0; kern_small `.text` **+12**, `.cold` 0. The design priced the
+    wave-1 items at ~75 and ~105: MAKE alone was first written at 182 bytes
+    of `.cold` and crossed **kern_emu's cold rung** (+512, 58 → 57 steps);
+    rewritten as above it is 98, and no rung is crossed on any kernel -
+    kern_big image 79 left (was 183), cold 197 (351); kern_emu image 326
+    (430), cold **73** (227); kern_small image 303 (315), cold 65 (65).
+    DOCK.DRV grew 24 bytes, still 5 sectors. **Wave 2 inherits 73 bytes of
+    kern_emu's cold rung** for the drag pick-up (~22) and the hover edge
+    (~40), so its own measurement decides whether §107.10's cut order runs.
+
 ### 107.10 How it was built, and its gates
 
 | wave | what | gates |
@@ -170517,6 +170965,24 @@ kern_small: the same `DESKCAL.O88` is on both kinds of system disk.
 | 2 | `os88dia.inc` in full (singleton, anchoring, damaged-file question, kern_small's worker arm), the calendar's window, grid and navigation, `SYSTEM\DIA\` on every system disk | `diaregister`, `diamove`, `diamovecga`, `diaanchor`, `deskcalgrid`, `diaswap` D; `t_dia` E-G |
 | 3 | appointments and tasks: the payload checked at load, the one-line entry and its parser, the sorted insert, edit and delete, the check boxes, the limits greyed, the Remind menu's lead times | `deskcaledit`, `deskcaltask`; `t_dia` G (the new bss fields) |
 | 4 | reminders, kern_small's worker arm, measurement | `deskcalremind`, `diasmall`, `deskcalperf` |
+
+**v2** (the desk layer and the widget treatment; the owner asked for both,
+and every §7 default of the design record was taken):
+
+| wave | what | gates |
+|---|---|---|
+| W0 | this document first: §11.103, §7.2.1, §12.6, §13.7, §13.16.2.1, §20.2, §20.3, §30, §30.6, §107.x; PERFORMANCE.md Part 5's placeholders and docs/KERNEL-MEMORY.md's planned bytes; the kernsize baselines | - |
+| W1 | the kernel layer: the flags, `wm_top`, `wm_lift`, `wm_show_b`'s and `wm_front_b`'s desk arms, the chromeless sites and `wm_draw_win`'s and `wm_su_rect`'s arms, the press without a raise, the key target, `OSAPI_WM_DESK` QUERY / MAKE / RELEASE and `OSAPI_GFX_DESK`, header flag bit 6 with the top-down slot, the dock and DOCK.DRV; `tests/diaprobe`'s desk build. **The Desk Calendar is untouched** | `t_chromesites` (fast); `deskz`, `deskdock`, `deskkeys`, `desksmall`; kernsize on all three kernels - **a crossed rung is a stop for the owner**; `t_api_abi`, the ABI lock, `os88sym --all`, `os88ladder --selfcheck`, buildmatrix, test-full alone |
+| W2 | the DRAG verb, its pick-up and the desk `.nocache`; the hover edge | `deskdrag`, `deskhover`, `deskclose` |
+| W3 | `apps/os88gfx.inc` `GFXE_TEXT` / `GFXE_BITS`; `os88dia.inc`'s `DIA_WIDGET` (§107.11); `tools/os88dia.py` and `t_dia` | `deskground`, `deskfit` |
+| W4 | the Desk Calendar as three cards (§107.3's v2 paragraph) | every `dia*` / `deskcal*` row updated; `deskcalcards`, `deskcalsnooze`, `deskmodal` |
+| W5 | look on 1bpp, EGA, Dark and Color; measure on MartyPC's 5150; `kernsize --bless`; `docs/dia/` retaken | `deskcalperf`'s new budgets, test-full alone, the soak |
+
+**If W1 or W2 measures a crossed rung**, the cut order is: move
+`wm_show_b`'s desk arm behind a far call into `.cold` (−17 `.text`, +22
+`.cold`); fold the hover edge's inline compare into its far call (−6
+`.text`, +13 µs a mouse packet); and only then, on the owner's word, accept
+the rung (KERN_SIZE +512, one footprint step).
 
 The kernel half, exactly:
 
@@ -170599,3 +171065,77 @@ the small pair and `emu.img` when their own targets have built them since the
 package), NO data image carries a DIA, and the calendar's payload layout, its
 bss fields and the include's `dia_st` - evaluated by NASM from the package's
 own source - equal `tools/os88dia.py`'s.
+
+### 107.11 The widget treatment (v2: `%define DIA_WIDGET`)
+
+What makes a DIA LOOK like a widget is package code, shared as source in
+`apps/os88dia.inc` and opted into with `%define DIA_WIDGET`, so a DIA that
+does not define it stays v1. **No pixel of it is the kernel's**: the kernel's
+part is §11.103's layer, and it draws nothing.
+
+**Geometry.** The FACE is the column of cards plus the name tag, 22 cells
+(176 px) wide. The desk FRAME is **178** x H: a column of the desktop's
+ground either side - at `W_X` and at `W_X + 177` - and the face at
+`W_X + 1`, which §11.94's snap (`W_X` = 7 mod 8) puts on the byte grid for
+nothing. 178 and not the 177 one ground column would take, because
+`wm_create`'s SIZE snap (§11.94.5) puts every frame's `W_W` at 8k + 2 before
+MAKE runs (§107.9). The titled fallback (§107.7) is 178 wide too, with the
+face at `W_X + 1` again, so `x` and the width are the same in both forms.
+
+**Every pixel is written once per paint**:
+
+| pixels | drawn with | owner |
+|---|---|---|
+| the ground columns at `W_X` and `W_X + 177`, each gap, and the ground either side of the tag's plate | `OSAPI_GFX_DESK` (§11.103.9) | the include |
+| the tag's plate - at rest, inverse (focused) or the handle (hovered) - one composed slab | one `OSAPI_GFX_BLIT1` | the include |
+| each card's interior, white included, composed one 32-row slab at a time into a 704-byte band | one `OSAPI_GFX_BLIT1` a slab | the package |
+
+The slab is composed with **1 = white**, the default CWHITE ink on CBLACK
+paper, which means the same on all three adapters. Cards are content and are
+never themed (§76); under Dark the gaps are black and under Color teal. There
+is no save-under: the widget holds no themed pixel in any cache, so a theme
+change needs no drop. The composer is `apps/os88gfx.inc`'s two new
+capabilities, `GFXE_TEXT` (an 8x8 glyph from `OSAPI_FONT_GLYPHS` at any
+pixel `x`, normal or inverse, x1/x2/x3, optionally bold) and `GFXE_BITS` (a
+16-wide bit record ANDed or ORed in: the tick, the bell, the x, the grip, the
+dot).
+
+**The tag and its states.** Only the tag row changes - nothing overlays a
+card:
+
+| state | the tag row |
+|---|---|
+| REST | a white plate 112 px wide (13 cells and 4 px each side) with the name, ground either side |
+| FOCUS (the widget owns the bar) | the same plate inverse, like a selected icon's label (§76.8) |
+| HOVER | a face-width black bar: a white 10x10 close box with a black x at face `x` + 3..12, the name in white centred, a three-line dotted grip at `x` + 158..170 |
+
+It is revealed `DOCK_HOVER_T` ticks after the pointer comes over any visible
+part of the frame (§30.6's constants by name) and hidden `DOCK_LEAVE_T`
+ticks after it leaves; crossing a gap is not a leave, and a press anywhere
+on the widget reveals at once. Never with a button held, under a chooser,
+over a covering window, under a fullscreen window or a saver (§11.103.7).
+While the widget owns the bar its tick polls `OSAPI_MENU_OWNER` every 4
+ticks, and only then, so focus loss un-inverts the plate within 220 ms.
+
+**Gestures**: a press on the tag (outside a revealed x), a gap or the ground
+column DRAGS (`OSAPI_WM_DESK` DRAG, §11.103.6); a press on the revealed x
+arms it and its release closes through `dia_close`'s negotiator and then
+`OSAPI_WM_CLOSE`, sliding off cancels (§13.5); a press on a card is the
+package's. The keyboard has every route: the keyboard mouse (§9.6), the
+app-name cell's About and Close while the widget owns the bar (§12.7), Esc
+for RELEASE.
+
+**The include's API**, under `DIA_WIDGET`: `DIA_TAG` (the name, which equals
+`W_TITLE`), `DIA_LAYOUTS` (card count, heights, gaps and tag height per
+layout, each table with a `%error` sum against its band), `DIA_PAINTCARD`
+(AL = card, BX..DX = its damaged rows), `DIA_ONCARD` / `DIA_ONCARDUP`
+(card-relative press and release), `DIA_ONFOCUS` (AL = 1 gained, 0 lost);
+`dia_paint` is `W_PAINT` and draws only what intersects `OSAPI_WM_DAMAGE`;
+`dia_click` / `dia_mup` are the prefilters; `dia_wake` is `W_ONWAKE` (free on
+kern_big) and reconciles the hover state; `dia_quit` is the close. **The
+state file's place is the FACE's origin** (header +3 bit 1, §107.5): a v1
+file holds a titled frame, so its face is `(x + 1, y + TITLE_H)`, and no
+`DIA_HDR_VER` bump - no existing file reads as damaged. D rows carry no
+geometry (§107.2), so nothing migrates there.
+
+It lands in v2's wave 3 (§107.10); the Desk Calendar adopts it in wave 4.

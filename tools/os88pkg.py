@@ -170,9 +170,10 @@ def main() -> int:
     if version != VERSION:
         fail(f"bad version {version} (want {VERSION}; rebuild against the "
              "v3 os88api.inc)")
-    if flags & 0xD8:
+    if flags & 0x98:
         fail(f"flags 0x{flags:02X} has reserved bits set (bits 3-4 are this "
-             f"tool's to set, bits 6-7 must be 0)")
+             f"tool's to set, bit 7 must be 0; bit 6 is OS88_F_DESK, "
+             f"SPEC.md 11.103.9)")
     if link != 0:
         fail(f"bad link base 0x{link:04X}: a v3 package links at org 0")
     if a[12:15] != DISPATCH:

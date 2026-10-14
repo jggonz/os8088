@@ -379,6 +379,14 @@ FAST = [
     Row("mirror", "fast", py("tests/unit/t_mirror.py"), 4.5,
         "a constant written down in two files must agree in both; there is no "
         "linker here to notice"),
+    Row("chromesites", "fast", py("tests/unit/t_chromesites.py"), 0.2,
+        "SPEC.md 11.103.5: every WF_FULL test in kernel/ is REGISTERED as "
+        "CHROMELESS (written WM_CHROMELESS - on kern_big a word test of "
+        "WF_FULL|WF_DESK, so a desk window draws no chrome either) or "
+        "FULL-ONLY (the machine's one fullscreen latch, which a widget must "
+        "never see), each with its reason - the two look identical in a diff "
+        "and the next one is written by copying the last; an unregistered or "
+        "a vanished site fails make"),
     Row("dia", "fast", py("tests/unit/t_dia.py"), 0.5,
         "SPEC.md 107.10: a DIA's shared half between MartyPC runs - "
         "tools/os88dia.py --selfcheck, tests/diaprobe ASSEMBLED so the SDK's "
@@ -8981,6 +8989,46 @@ SOAK = [
         "the new day goes off.",
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
+    Row("deskz", "soak", py("tests/desklayer.py", "--leg", "z"), 30.0,
+        "SPEC.md 11.103: the DESK LAYER on MartyPC's VGA XT, off `make "
+        "diatest`'s diadesk360.img (DESKPROB.O88, tests/diaprobe's -DDP_DESK "
+        "build). MAKE took (WF_DESK|WF_OWNBG|WF_NOANIM, no WF_SAVEU, IF_DESK on "
+        "the record) and the face is two white cards with the desktop's own "
+        "dither in the gaps and down both ground columns; a Disk window opened "
+        "over it is ABOVE it in wm_zord and is wm_top; a press on the widget's "
+        "visible part reaches its W_ONCLICK and W_ONMOUSEUP with NO wm_raise "
+        "and NO wm_zcut, leaves wm_zord, wm_top and the Disk window's "
+        "overlapping pixels byte for byte as they were, and hands the widget "
+        "the bar; a press on the Disk window takes it back; closing the Disk "
+        "window gives it to LOCATOR, never the widget; and with only the "
+        "widget up Close Window is the MENU_DIS twin.",
+        needs=("marty",), timeout=600, wants=("build/diadesk360.img",)),
+    Row("deskdock", "soak", py("tests/desklayer.py", "--leg", "dock"), 25.0,
+        "SPEC.md 30, 11.103.9: a package with header flag OS88_F_DESK takes "
+        "the TOP instance slot (INST_MAX - 1); the strip draws no tile for an "
+        "IF_DESK instance (the slot's rect is bare strip); a click where its "
+        "tile would be fronts nothing, minimizes nothing and reaches nothing; "
+        "and the first application opened is tile 0.",
+        needs=("marty",), timeout=600, wants=("build/diadesk360.img",)),
+    Row("deskkeys", "soak", py("tests/desklayer.py", "--leg", "keys"), 45.0,
+        "SPEC.md 11.103.4, 12.6: Note Pad in front; a press on the widget "
+        "sends the keys to IT while Note Pad stays wm_top, and Note Pad's "
+        "W_ONKEY is never entered (a breakpoint on it, its positive control "
+        "a key after the release); Esc is the widget's OSAPI_WM_DESK RELEASE "
+        "and the bar and the keys go back; a press on Note Pad takes them "
+        "too; a Standard File chooser takes the keys over a widget that owns "
+        "the bar.",
+        needs=("marty",), timeout=600, wants=("build/diadesk360.img",)),
+    Row("desksmall", "soak", py("tests/desklayer.py", "--leg", "small"), 30.0,
+        "SPEC.md 11.103.9, 107.7: kern_small has the two cells and no layer. "
+        "On MartyPC's 128KB CGA 5150 off `make small`'s system disk with "
+        "DESKPROB.O88 mcopied into SYSTEM\\DIA\\: QUERY refuses, so the probe "
+        "is the TITLED FALLBACK - no WF_DESK, no IF_DESK, an ordinary 130 x "
+        "115 frame with a dock tile and a title-bar drag - and "
+        "OSAPI_GFX_DESK still lays the desktop's dither in its gaps.",
+        needs=("marty", "mtools"), timeout=600,
+        wants=("build/small360.img", "build/smallk/kernel.bin",
+               "build/deskprob.o88")),
     Row("diasmall", "soak", py("tests/diasmall.py"), 35.0,
         "SPEC.md 107.7: the Desk Calendar on kern_small, end to end, on "
         "MartyPC's 128KB CGA 5150 off `make small`'s system disk. There is no "

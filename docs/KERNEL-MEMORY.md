@@ -1075,6 +1075,7 @@ answer for anything a single driver consumes.
 | kernel size pass 4 (docs/plans/completed/HANDOFF-KERNEL-SIZE-P5.md): resident sections −4,661 big / −2,646 small, the segment −3,384 big | unchanged | −5,120 (big, 105,984), −3,072 (small, 71,168) |
 | `kern_small` stops supporting VGA, on-demand `FILECP.DRV`/`FDLG.DRV`, the two-sector FAT window (docs/plans/completed/KERN-SMALL-CUT-BUILT.md) | small 105 KB | small 76.5 KB |
 | Desktop Integrated Applications' kernel half (SPEC.md 107.6): `OSAPI_CLK_GET` on both, the DIA row's boot relaunch on kern_big - big/emu `.text` +6 `.cold` +116, small `.text` +6 `.cold` +32, no rung crossed; `CTRL.DRV`'s settings core 5 → 6 sectors | unchanged | unchanged |
+| DIA v2's desk layer, wave 1 (SPEC.md 11.103, 107.6): big/emu `.text` +104 `.cold` +154 `.bss` 0, small `.text` +12 (the two cells) `.cold` 0, no rung crossed - kern_big image 79 / cold 197 left, kern_emu image 326 / cold **73**, kern_small image 303 / cold 65; the first MAKE crossed kern_emu's cold rung and was rewritten (SPEC.md 107.9); DOCK.DRV +24 | unchanged | unchanged |
 
 **The 35-move ledger of `KERN_BUDGET` lives in `kernel/kernel.asm`**, in the
 constant's own comment, per move: what was asked for, what was granted, what

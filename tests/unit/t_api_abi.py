@@ -162,6 +162,11 @@ ALIAS = {
     # that OSAPI_WM_HIDE and this are different cells, since a plain hide
     # leaves a tile that does nothing (the slot's own comment has the account).
     "OSAPI_WM_MINIMIZE":  "inst_minimize",
+    # SPEC.md 11.103.9: a package asks for the DESKTOP'S GROUND and the
+    # kernel's routine for it is the theme's, thm_desk (SPEC.md 76.2) - which
+    # on a build with no themes (kern_small) is gfx_fill_gray itself, the
+    # cell then naming that body. The SDK name says what it is FOR.
+    "OSAPI_GFX_DESK":     "thm_desk",
     # Two cells, one routine, on purpose: the difference is the STUB, not the
     # body - 0x0448 goes through OSAPI_XSTUB and overwrites ES, 0x04A0 through
     # the ordinary SLOT and does not (SPEC.md 20.11.2).

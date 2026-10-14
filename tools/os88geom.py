@@ -185,9 +185,13 @@ _MIRROR = {
     # WF_HIBITS' sake - see the derivation below.
     "WF_NOANIM": ("kernel/wm.inc", 0x4000),
     "WF_STALE": ("kernel/wm.inc", 0x8000),
+    # ...and the desk layer's two (SPEC.md 11.103), in the same byte
+    "WF_DESK": ("kernel/wm.inc", 0x0400),
+    "WF_HOVER": ("kernel/wm.inc", 0x0800),
     # kernel/instance.inc - the instance record (SPEC.md 29)
     "I_STATE": ("kernel/instance.inc", 0),
     "I_FLAGS": ("kernel/instance.inc", 1),
+    "IF_DESK": ("kernel/instance.inc", 4),
     "I_KIND": ("kernel/instance.inc", 2),
     "I_TASK": ("kernel/instance.inc", 3),
     "I_WIN": ("kernel/instance.inc", 4),
@@ -452,8 +456,8 @@ def __getattr__(name):
 
 # Derived, and not mirrored: W_FLAGS bits 0 and 1 have no names in wm.inc.
 WF_USED, WF_VIS = 1, 2
-# WF_STALE|WF_NOANIM|WF_1BPP: the kernel's bits in the shape byte (SPEC.md
-# 11.96.17), and `WF_HIBITS equ (WF_STALE | WF_NOANIM | WF_1BPP) >> 8` in
+# WF_STALE|WF_NOANIM|WF_1BPP|WF_USRSZ|WF_DESK|WF_HOVER: the kernel's bits in
+# the shape byte (SPEC.md 11.96.17, 11.103), and `WF_HIBITS equ (...) >> 8` in
 # wm.inc is an EXPRESSION, which _equs deliberately refuses to evaluate. So it
 # is derived here from three values that ARE checked, rather than written down
 # as a literal - which is what it was, with only WF_1BPP of the three mirrored,
@@ -461,7 +465,7 @@ WF_USED, WF_VIS = 1, 2
 # VID_CTX_SZ's failure exactly: watching some of the inputs and none of the
 # answer. Getting this wrong reads a kernel bit as a cursor shape, which is the
 # defect WF_STALE's own banner records having shipped once.
-WF_HIBITS = (WF_STALE | WF_NOANIM | WF_1BPP) >> 8
+WF_HIBITS = (WF_STALE | WF_NOANIM | WF_1BPP | WF_USRSZ | WF_DESK | WF_HOVER) >> 8
 
 # ...and the FOUR the kernel derives from VID_CTX_W the same way. They are
 # EXPRESSIONS in vidsel.inc (`VID_CTX_W*2`, `VID_CTX_W*2+5`), which _equs
@@ -880,8 +884,9 @@ def top(m, sym=None):
     raw = m.read(S("wm_wins"), MAX_WIN * WIN_SIZE)
     for k in range(n - 1, -1, -1):
         i = zord[k]
-        if struct.unpack_from("<H", raw, i * WIN_SIZE)[0] & WF_VIS:
-            return S("wm_wins") + i * WIN_SIZE
+        f = struct.unpack_from("<H", raw, i * WIN_SIZE)[0]
+        if f & (WF_VIS | WF_DESK) == WF_VIS:    # SPEC.md 11.103.2: a desk
+            return S("wm_wins") + i * WIN_SIZE  # window is never wm_top's
     return 0
 
 

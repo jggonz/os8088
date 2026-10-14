@@ -673,14 +673,32 @@ FDBODY fdlg_grab_x
 
 ; fdlg_top - in: BX = wm_top's answer; out: BX = the chooser instead, if up,
 ; and 0 - the key goes nowhere - if it has gone and is not yet reaped
+;
+; ...and on kern_big, with no chooser at all, a DESK window that owns the bar
+; (SPEC.md 11.103.4, 12.6): [menu_win] visible and WF_DESK takes the key in
+; wm_top's place. The chooser is asked FIRST, so a modal one still takes every
+; key over a focused widget. A stale [menu_win] is safe: wm_destroy zeroes
+; W_FLAGS, and a reused record is born without WF_DESK.
 FDBODY fdlg_top_x
     push ax
     push bx
     call fdlg_gate
     pop ax                      ; AX = wm_top's answer
     jnc .out
+%ifdef KERN_BIG
+    jnz .gone                   ; ZF=0: gone (SPEC.md 38.2)
+    mov bx, [menu_win]          ; ZF=1: there is none - so does a WIDGET own
+    or bx, bx                   ; the bar? Never a HIDDEN one: every hide
+    jz .stand                   ; repaints through menu_draw_bar, whose
+    test byte [bx+W_FLAGS+1], WF_DESK >> 8 ; menu_check takes the bar off
+    jnz .out                    ; a window that is not visible. Yes: BX = it
+    jmp short .stand
+.gone:
+    xor ax, ax
+%else
     jz .stand                   ; ZF=1: there is none
     xor ax, ax                  ; ZF=0: gone (SPEC.md 38.2)
+%endif
 .stand:
     xchg ax, bx                 ; ...which stands
 .out:

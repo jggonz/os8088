@@ -247,6 +247,24 @@ def main():
                   "assembled it, so an edit that broke it passed `make` and "
                   "`make test-full`",
               got=r.stderr.strip()[-400:], want="a package image")
+        # ...and the DESK build of the same source (SPEC.md 11.103, v2 W1):
+        # DESKPROB, header flag bit 6 (OS88_F_DESK) set and nothing else new
+        out = os.path.join(tmp, "deskprobe.bin")
+        r = subprocess.run([NASM, "-f", "bin", "-w+error", "-I", "apps/",
+                            "-DDP_DESK", "-o", out,
+                            "tests/diaprobe/diaprobe.asm"],
+                           capture_output=True, text=True, cwd=ROOT)
+        ok = r.returncode == 0 and os.path.getsize(out) > 64
+        check(ok, "the desk probe (-DDP_DESK) assembles",
+              why="tests/desk*.py boot it; only `make diatest` builds it",
+              got=r.stderr.strip()[-400:], want="a package image")
+        if ok:
+            b = open(out, "rb").read()
+            check(b[3] & 0x40 and b[16:25] == b"DeskProbe",
+                  "the desk probe's header carries OS88_F_DESK (bit 6)",
+                  why="the loader's top-down slot is keyed on it (SPEC.md "
+                      "11.103.9), and tests/deskdock.py asserts that slot",
+                  got=hex(b[3]), want="bit 6 set")
 
         # C ---------------------------------------------------------------
         inc = plain_equs(os.path.join(ROOT, "apps", "os88dia.inc"))

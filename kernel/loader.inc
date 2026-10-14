@@ -73,6 +73,18 @@ PKG_FMT     equ 8               ; the package format, and it is the API
                                 ; 20.2.0, 20.8 rule 4). Mirrored in
                                 ; apps/os88api.inc and tools/os88pkg.py,
                                 ; and tests/unit/t_mirror.py holds them together
+LD_F_DESK   equ 0x40            ; LD_H_FLAGS bit 6, OS88_F_DESK: the package
+                                ; makes a DESK window (SPEC.md 11.103.9), so
+                                ; kern_big's step 5 takes its instance record
+                                ; from the TOP of the table down
+%ifdef KERN_BIG
+LD_CFMT_KEEP equ 3 | (LD_F_DESK >> 3) ; [ld_cfmt]: bits 0-1 the format and,
+                                ; three shifts down, bit 3 the desk flag - so
+                                ; step 5 reads it with no byte of its own, and
+                                ; the two format tests below ask bits 0-1 alone
+%else
+LD_CFMT_KEEP equ 3              ; kern_small has no desk layer
+%endif
 LD_H_FLAGS  equ 3               ; byte: bit 0 = embedded 16x16 icon
 LD_HF_GLYPH equ 0x20            ; ...its bit 5: a 16-byte DOCUMENT-GLYPH block
                                 ; follows the association block (SPEC.md
@@ -446,7 +458,7 @@ ld_check_hdr:
     shr al, 1                               ; bits 3 and 4, as a number: 0 =
     shr al, 1                               ; plain, 1 = LZ4, 3 = LZB - and 2,
     shr al, 1                               ; bit 4 without bit 3, is not a
-    and al, 3                               ; thing os88pkg.py writes; it reads
+    and al, LD_CFMT_KEEP                    ; thing os88pkg.py writes; it reads
     mov [ld_cfmt], al                       ; (CX is a caller's, so no `shr
                                             ; al, cl`)
                                             ; as LZB and the decoder refuses
@@ -884,8 +896,13 @@ ld_run_body_x:
                                 ; carrying parts the region holds the primary
                                 ; alone and the rest is the package's to read
                                 ; (SPEC.md 20.12)
+%ifdef KERN_BIG
+    test byte [ld_cfmt], 3      ; the FORMAT bits (bit 3 is the desk flag)
+    jz .rdgo
+%else
     cmp byte [ld_cfmt], 0
     je .rdgo
+%endif
     ; COMPRESSED (SPEC.md 20.13): read the FILE, and read it HIGH so step 6a
     ; can expand it DOWNWARDS into the same region - no second buffer and no
     ; second claim, which is what makes this admissible on a 128KB machine.
@@ -914,8 +931,13 @@ ld_run_body_x:
                                 ; SPEC.md 21 step 6
 
     ; --- 6a. expand it, if it came compressed (SPEC.md 20.13) -----------------
+%ifdef KERN_BIG
+    test byte [ld_cfmt], 3      ; (the format bits alone, as at step 6)
+    jz .expanded
+%else
     cmp byte [ld_cfmt], 0
     je .expanded
+%endif
                                 ; LD_EXPAND, inlined (its header, above, is
                                 ; the account of both moves)
     push ds
@@ -1039,6 +1061,19 @@ ld_alloc:
 
     ; --- 5. reserve an instance record + a pool region -------------------------
     mov bp, inst_alloc
+%ifdef KERN_BIG
+    test byte [ld_cfmt], LD_F_DESK >> 3
+    jz .rec                     ; OS88_F_DESK (SPEC.md 11.103.9, 30): the LAST
+    mov di, inst_tab + INST_MAX * I_RECSZ ; free record, scanning down, so
+.dscan:                         ; the widget's empty tile position is at the
+    sub di, I_RECSZ             ; far end of the strip. None free: inst_alloc
+    cmp di, inst_tab            ; answers the full table itself
+    jb .rec
+    cmp byte [di+I_STATE], 0
+    jne .dscan
+    mov bp, inst_alloc_di
+.rec:
+%endif
     call ct_cw_mem_disp         ; DI = record (unpublished: still free on
     jc .nomem                   ; any later failure)
     mov [ld_rec], di            ; banked in .bss, not in BP: BP carries the

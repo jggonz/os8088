@@ -7361,11 +7361,13 @@ DIACFG_short   := --short 'A:SYSTEM/TASKMGR.O88=TASKMGR@1,3' \
                   --short 'A:SYSTEM=SYSTEM@2,4' \
                   --short 'A:README.TXT=README.TXT@0,5'
 DIACFG_hiber   := --want 2 --dia A:SYSTEM/DIA/DIAPROBE.O88=DiaProbe
+DIACFG_desk    := --dia A:SYSTEM/DIA/DESKPROB.O88=DeskProbe
 
 .PHONY: diatest
-diatest: $(foreach t,$(DIATESTS),$(BUILD)/dia$(t)360.img) $(BUILD)/diarestore.img
-	@echo "diatest: build/dia<restore|ghost|bvol|short|hiber>360.img and build/diarestore.img"
-	@echo "         Run them with: python3 tests/diaboot.py (diamiss, diashort, diahiber)"
+diatest: $(foreach t,$(DIATESTS),$(BUILD)/dia$(t)360.img) $(BUILD)/diarestore.img $(BUILD)/diadesk360.img $(BUILD)/deskprob.o88
+	@echo "diatest: build/dia<restore|ghost|bvol|short|hiber|desk>360.img and build/diarestore.img"
+	@echo "         Run them with: python3 tests/diaboot.py (diamiss, diashort, diahiber;"
+	@echo "         deskz, deskdock, deskkeys, and desksmall after make small)"
 
 $(BUILD)/diaprobe.bin: tests/diaprobe/diaprobe.asm apps/os88dia.inc apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ tests/diaprobe/diaprobe.asm
@@ -7376,7 +7378,7 @@ $(BUILD)/diaprobe.o88: $(BUILD)/diaprobe.bin tools/os88pkg.py
 
 # ...SECONDARY, or make deletes each as the intermediate of a pattern rule and
 # rebuilds every image on the next run
-.SECONDARY: $(foreach t,$(DIATESTS),$(DIAFIX)/$(t)/system.cfg)
+.SECONDARY: $(foreach t,$(DIATESTS) desk,$(DIAFIX)/$(t)/system.cfg)
 $(DIAFIX)/%/system.cfg: tools/os88dia.py Makefile | $(BUILD)
 	@mkdir -p $(DIAFIX)/$*
 	python3 tools/os88dia.py cfg -o $@ $(DIACFG_$*)
@@ -7384,6 +7386,29 @@ $(DIAFIX)/%/system.cfg: tools/os88dia.py Makefile | $(BUILD)
 $(DIAFIX)/DIAPROBE.DAT: tools/os88dia.py | $(BUILD)
 	@mkdir -p $(DIAFIX)
 	python3 tools/os88dia.py dat -o $@ --x 303 --y 184 --screen 640x480
+
+# THE DESK BUILD of the same probe (SPEC.md 11.103, v2's wave 1): DESKPROB.O88,
+# header flag OS88_F_DESK, OSAPI_WM_DESK's MAKE, a face of two white cards
+# with the desktop's ground between them. Its own build because the v1 rows
+# drag DiaProbe by a title bar a desk window has not got. DESKPROB.DAT puts
+# the frame at (375,184): 375 = 7 mod 8, the snap's fixpoint (SPEC.md 11.94)
+$(BUILD)/deskprob.bin: tests/diaprobe/diaprobe.asm apps/os88dia.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DDP_DESK -o $@ tests/diaprobe/diaprobe.asm
+	@echo "deskprob: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/deskprob.o88: $(BUILD)/deskprob.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/deskprob.bin -o $@
+
+$(DIAFIX)/DESKPROB.DAT: tools/os88dia.py | $(BUILD)
+	@mkdir -p $(DIAFIX)
+	python3 tools/os88dia.py dat -o $@ --x 375 --y 184 --screen 640x480
+
+$(BUILD)/diadesk360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/deskprob.o88 $(DIAFIX)/desk/system.cfg $(DIAFIX)/DESKPROB.DAT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		SYSTEM/DIA:$(BUILD)/deskprob.o88 SYSTEM/APPDATA:$(DIAFIX)/DESKPROB.DAT \
+		$(DIAFIX)/desk/system.cfg
 
 $(BUILD)/dia%360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/diaprobe.o88 $(DIAFIX)/%/system.cfg $(DIAFIX)/DIAPROBE.DAT tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \

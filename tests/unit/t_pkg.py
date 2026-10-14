@@ -67,13 +67,15 @@ MOD_H_IMG, MOD_H_NENT = 8, 10
 
 def app(blob, nm, flags, entry, image, bss):
     """SPEC.md 20.2 - a v3 application package."""
-    check(not (flags & 0xC0), "%s: no reserved flag bits" % nm, got=hex(flags),
+    check(not (flags & 0x80), "%s: no reserved flag bits" % nm, got=hex(flags),
           why="bit 0 is an embedded icon, bit 1 an association block (SPEC.md "
               "54.6), bit 2 says the FILE is longer than the image on purpose "
               "(SPEC.md 20.12), bits 3-4 say it is SHORTER because the "
               "image is compressed and in which format (SPEC.md 20.13), and "
               "bit 5 says a shipped document glyph follows the association "
-              "block (SPEC.md 54.3.2). Bits 6-7 are nobody's yet")
+              "block (SPEC.md 54.3.2), and bit 6 is OS88_F_DESK, a package "
+              "that makes a desk window (SPEC.md 11.103.9). Bit 7 is nobody's "
+              "yet")
     if flags & 0x20:
         check(flags & 3 == 3, "%s: the shipped glyph has an icon and a "
               "declaration in front of it" % nm, got=hex(flags),

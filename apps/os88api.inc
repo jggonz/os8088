@@ -340,6 +340,42 @@ CWHITE    equ 15
                                  ; task (entry proc, callback, ONWAKE); a
                                  ; worker may see a torn read at a rollover
 
+; --- the desk layer (SPEC.md 11.103) -----------------------------------------
+; A DESK WINDOW lives under every application window: never raised, no title
+; bar, frame, shadow or dock tile, the bar and the keys only while it was the
+; last thing pressed. apps/os88dia.inc is the way to use these; a package
+; that calls either ships beside its own kernel (SPEC.md 107.8).
+%define OSAPI_WM_DESK       KERNEL_SEG:0x046D   ; AL = 0 QUERY: CF=0 this
+                                 ; kernel has the layer (kern_small: CF=1, and
+                                 ; every verb refuses there). AL = 1 MAKE, BX
+                                 ; = your window, HIDDEN, not fullscreen, not
+                                 ; sizable - and ONLY in your entry proc,
+                                 ; between OSAPI_WM_CREATE and its return
+                                 ; (anywhere else it refuses): it
+                                 ; becomes a desk window - WF_DESK, WF_NOANIM
+                                 ; and WF_OWNBG on, WF_SAVEU and WF_1BPP off
+                                 ; (never ask for a save-under after), your
+                                 ; instance gets IF_DESK and no dock tile, and
+                                 ; it is put at the BOTTOM of the z-order.
+                                 ; Its content is its whole frame: OSAPI_WM_
+                                 ; CONTENT answers (W_X, W_Y). AL = 2 DRAG:
+                                 ; refused in this version. AL = 3 RELEASE,
+                                 ; BX = your window: if it owns the menu bar,
+                                 ; the bar and the keys go back to the front
+                                 ; application window (call it from a
+                                 ; callback, under the lock - Esc). CF=1 =
+                                 ; refused; every register preserved. NEVER
+                                 ; minimize or fullscreen a desk window: it
+                                 ; has no tile to come back by
+%define OSAPI_GFX_DESK      KERNEL_SEG:0x0473   ; AX,BX = x1,y1  CX,DX = x2,y2
+                                 ; (inclusive), lock held (W_PAINT): lay the
+                                 ; DESKTOP'S OWN GROUND there - the theme's,
+                                 ; Bright's dither phased on the screen as the
+                                 ; desktop's is, so a gap in your window shows
+                                 ; the desktop with no seam. [gfx_color] is
+                                 ; the THEME'S afterwards on Dark and Color:
+                                 ; set your own pen again. Both kernels
+
 ; --- is this key DOWN right now? (SPEC.md 9.7) -------------------------------
 ; int 16h answers what was TYPED. There is no key-up in it, and a typematic
 ; repeat is byte-identical to a fresh press, so "is left held" cannot be asked
@@ -1996,7 +2032,9 @@ SS_INST    equ SS_TCYC + SS_TMAX * 4       ; ...then the instance records
 ; renumber changes this file and kernel/instance.inc together, the standing
 ; arrangement MAX_TASKS, INST_MAX and MEM_MAX are already under.
 SSI_STATE  equ 0                ; byte: 0 free, 1 live, 2 dying
-SSI_FLAGS  equ 1                ; byte: bit 0 = minimized (was a pad)
+SSI_FLAGS  equ 1                ; byte: bit 0 = minimized (was a pad), bit 2
+                                ; = IF_DESK, a desk window's instance
+IF_DESK    equ 4                ; SSI_FLAGS / I_FLAGS bit 2 (SPEC.md 11.103)
 SSI_KIND   equ 2                ; byte: bit 7 (KIND_PKG) = a loaded package
 SSI_TASK   equ 3                ; byte: its task slot, 0xFF = task-less
 SSI_WIN    equ 4                ; word: OPAQUE - the kernel's own window record.
@@ -2922,6 +2960,12 @@ WF_NOANIM  equ 0x4000            ; W_FLAGS bit14: this window does NOT zoom
                                  ; number it did not expect. The kernel masks
                                  ; them off both ways round, which is why
                                  ; OSAPI_WM_CURSOR does not clear this one
+WF_DESK    equ 0x0400            ; W_FLAGS bit10: a DESK window (SPEC.md
+                                 ; 11.103) - READ it, never write it: set by
+                                 ; OSAPI_WM_DESK's MAKE alone
+WF_HOVER   equ 0x0800            ; W_FLAGS bit11: the pointer is over this desk
+                                 ; window (SPEC.md 11.103.7) - read it in your
+                                 ; W_ONWAKE; the kernel sets and clears it
 WF_SIZABLE equ 4                 ; W_FLAGS bit2: resizable (SPEC.md 11.1)
 WF_FULL    equ 8                 ; W_FLAGS bit3: fullscreen (SPEC.md 11.2)
 WF_NOSNAP  equ 16                ; W_FLAGS bit4: this window has OPTED OUT of
@@ -3095,6 +3139,11 @@ WT_SIZE    equ 16
 OS88_F_ICON   equ 1             ; an embedded 16x16 icon follows the header
 OS88_F_ASSOC  equ 2             ; ...and an association block follows that (54.6)
 OS88_F_PARTS  equ 4             ; the FILE is longer than the image, on purpose
+OS88_F_DESK   equ 64            ; this package makes a DESK window (SPEC.md
+                                ; 11.103.9): kern_big gives it the TOP free
+                                ; instance slot, so its empty dock position is
+                                ; at the strip's far end. Older kernels and
+                                ; kern_small ignore it
 OS88_F_GLYPH  equ 32            ; a 16-byte DOCUMENT-GLYPH block follows the
                                 ; association block (SPEC.md 54.3.2): the 8x8
                                 ; your documents wear, SHIPPED rather than
@@ -3539,7 +3588,9 @@ OS88_BSS_SIZE equ 0
                                                 ; by hand
 
 %define OSAPI_WM_TOP        KERNEL_SEG:0x01EC   ; out BX = the frontmost
-                                                ; VISIBLE window, 0 if none.
+                                                ; VISIBLE window that is not
+                                                ; a DESK window (SPEC.md
+                                                ; 11.103.2), 0 if none.
                                                 ; Preserves everything else,
                                                 ; takes no lock, callable from
                                                 ; a worker.

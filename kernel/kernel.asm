@@ -4548,7 +4548,23 @@ apic_inst_minimize:               ; DOCK.DRV's door (SPEC.md 30.4)
                                   ;          AH = second, AL = bit 0 RTC
                                   ;          found / bit 1 12-hour; the live
                                   ;          fields under cli. Both kernels
-osapi_table_end:                  ; 0x046D today (0x0467 before OSAPI_CLK_GET,
+    OSAPI_RCSLOT osapi_wm_desk_x  ; 0x046D - THE DESK LAYER (SPEC.md 11.103.9):
+                                  ;          AL = 0 QUERY, 1 MAKE BX = a hidden
+                                  ;          window, 2 DRAG (W2), 3 RELEASE
+                                  ;          the bar. CF = 1 refused, and every
+                                  ;          verb refuses on kern_small
+%ifdef OS88_THEME                 ; (vga12.inc's %define of thm_desk on a
+    OSAPI_RSLOT thm_desk          ; build with no themes comes later than this)
+%else
+    OSAPI_RSLOT gfx_fill_gray
+%endif                            ; 0x0473 - THE DESKTOP'S GROUND over AX,BX
+                                  ;          .. CX,DX, lock held (SPEC.md
+                                  ;          11.103.9, 76.2): the theme's, per
+                                  ;          display; [gfx_color] is the theme's
+                                  ;          after on Dark/Color. kern_small's
+                                  ;          thm_desk IS gfx_fill_gray
+osapi_table_end:                  ; 0x0479 today (0x046D before the desk layer,
+                                  ; 0x0467 before OSAPI_CLK_GET,
                                   ; 0x05A8 before pass 4's renumber). TWO cells came off the tail in
                                   ; the size pass: OSAPI_MEM_COMPACT_WAKE
                                   ; (0x0598) is 0x0590's MEMC_POST verb
@@ -4566,8 +4582,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 99*6 + 6*3 + 6 + 12*5 + 3*6
-%error "os8088 API jump table must be exactly 0x045D bytes: 43 SLOT (8), 11 XCELL (7), 99 rare (6), 6 JCELL (3), 1 FCELL (6), 15 ICELL (12 of 5, 3 of 6)"
+%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 101*6 + 6*3 + 6 + 12*5 + 3*6
+%error "os8088 API jump table must be exactly 0x0469 bytes: 43 SLOT (8), 11 XCELL (7), 101 rare (6), 6 JCELL (3), 1 FCELL (6), 15 ICELL (12 of 5, 3 of 6)"
 %endif
 
 ; =============================================================================
