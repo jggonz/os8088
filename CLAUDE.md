@@ -2,6 +2,10 @@
 
 Guidance for Claude Code (claude.ai/code) working in this repository.
 
+`CLAUDE.md` and `AGENTS.md` carry the same repository guidance. Update both
+when changing a rule or lesson; only their titles and introductory agent
+descriptions differ.
+
 ## Before designing anything: `docs/INDEX.md`
 
 **Read `docs/INDEX.md` before writing a mechanism of your own.** Every `OSAPI_*`
@@ -852,6 +856,107 @@ field measurements:
   flicker or smoothness — those are the harness manuals.
 - **Part 9** only to find where a number came from, or when taking a new field
   set. Never as briefing.
+
+### Fast fullscreen VRAM games (SPEC.md §53, §107.5)
+
+Use [WireBall's renderer](apps/wireball/wbvideo.inc) and
+[game loop](apps/wireball/wireball.asm) as worked examples. The contracts are
+§53.4 (mode info), §53.7 (legal calls) and §53.10 (page selection);
+[PERFORMANCE.md Set 160](PERFORMANCE.md#set-160--wireball-local-serial-collisions-and-pixel-movement-on-the-xt-specmd-1075)
+records the measurements. These techniques belong inside an exclusive
+`OSAPI_FSX_RUN` bracket. A windowed game still uses the desktop's clipping,
+damage and drawing APIs.
+
+**Choose by capability, then prove the page is usable.** Ask
+`OSAPI_FSX_CAPS` for your window's current display, set an offered mode with
+`OSAPI_FSX_MODE`, and use its `FSI_*` geometry and framebuffer segment. An
+advertised `FSI_PAGES` count alone does not grant access to a second page:
+check `OSAPI_FSX_PAGE`'s carry flag before writing there. WireBall uses:
+
+| Adapter and mode | VRAM layout in that mode | Presentation |
+| --- | --- | --- |
+| VGA, 320×240 Mode X | two of the three pages, offsets 0 and 19,200 **per plane** | `OSAPI_FSX_PAGE` |
+| Lone Hercules, 720×348 | offsets 0 and 8000h in B000h | `OSAPI_FSX_PAGE` |
+| CGA/EGA, 640×200 mono; Hercules with a color card | one page | `OSAPI_FSX_WAIT`, `FSXW_VSYNC`, then short changed spans |
+
+Those offsets describe these modes, not arbitrary framebuffers. Hercules
+page 1 occupies physical **B8000h**, the color card's aperture on a dual-card
+machine; the page API refuses it there. Keep the single-page path. Select
+page 0 before leaving a flipping bracket; return through FSX so the kernel
+restores the desktop, video configuration and clock. Do not replace these
+APIs with private CRTC flips, BIOS mode sets or PIT channel-0 programming.
+
+**Draw the hidden page, then show it.** Initialize the static court on every
+page and establish which page is displayed before starting the loop. Draw
+the next scene into the other page, call `OSAPI_FSX_PAGE` to show it, then
+switch the drawing target. The API waits for the retrace that latches the
+page; after it returns the other page is safe to modify. An extra VSYNC wait
+before the flip spends another refresh. Flipping changes the display address;
+it does not copy a RAM framebuffer. A single-page retrace wait is only the
+start of a short drawing window, not a promise that unlimited writes fit in
+blanking or that real CGA hardware cannot snow.
+
+**Damage history belongs to each VRAM page.** Keep separate old sprite
+rectangles and HUD caches for each page: its pixels are from the last time
+that page was drawn, not the last displayed frame. Skip unchanged rectangles.
+For a vertically moving solid paddle, retain the overlap, erase only the
+exposed end strip and paint only the newly covered strip; use a full update
+when dimensions change or the rectangles no longer overlap. WireBall's
+black court permits erasing to black. On a patterned background restore the
+background and redraw intersecting sprites in order. Cache the HUD's small
+state signature **before** building strings or comparing glyphs, then draw
+only changed cells. Copy `OSAPI_FONT_GLYPHS` before entering the foreign
+mode, as WireBall does; desktop drawing slots are off-limits in that mode.
+
+**Make the inner loop match the adapter.** In Mode X, up to four adjacent
+pixels share one byte offset in different planes. Group equal-color pixels
+under one sequencer map mask and write once; mixed-color pixels need their
+own plane data. For narrow packed-mono sprites, combine the end masks into
+one byte or word read/modify/write, preserving neighboring bits. Calculate
+the first scanline address once, then advance by additions through the
+2000h banks: two interleaved banks with 80-byte rows on CGA, four with
+90-byte rows on Hercules. Avoid multiplication, port writes and mask
+branches per pixel when their result can be reused across a span. A full
+screen clear belongs at initialization or a scene change, not every frame.
+
+**Physics and presentation have separate clocks.** Catch up fixed motion
+steps, prepare the next page immediately, then let presentation wait for
+retrace. Waiting for a motion deadline before drawing can miss retrace and
+reduce the display rate. WireBall requests `FSXF_RATE` with divisor 2048
+(about 582 Hz), accumulates the hook's elapsed-period count and advances
+motion every eight periods (about 72.8 Hz). OS ticks retain 18.2 Hz sound,
+serve and link deadlines. Keep fractional positions through simulation and
+convert to whole pixels at drawing time; use the same extents and coordinate
+scale in the collision checks and the visible sprites. `kern_small` refuses
+`FSXF_RATE`: handle that refusal with a supported slower/text fallback.
+
+**Retrace waits still owe the hardware service.** An original 8250 has a
+one-byte receive buffer; at 2400 baud 8N1 a byte takes about 4.17 ms, less
+than a refresh. WireBall's short rate hook captures UART bytes/status and
+advances queued TX while the foreground waits. It publishes completed queue
+entries last; parsing, commands, collision work and rendering stay in the
+foreground. Follow §53.2.2's hook restrictions: no kernel calls, at most
+48 bytes of stack, and the documented interrupt/register contract. The hook
+is armed before the entry proc runs: guard device access with a readiness
+flag until initialization is complete. Disable device service
+before restoring borrowed UART/PIC state. See
+[the hook and queue](apps/wireball/wblink.inc). Poll between bounded work
+chunks in a fallback without a rate hook.
+
+**Measure an active rally on the emulated XT.** QEMU checks behavior and
+serial bytes, not 4.77 MHz speed. In the final pass described below, use
+MartyPC's guest cycles with held-key motion, wall/paddle hits and no pause or
+serve countdown; report display frames and physics steps separately.
+WireBall's `wireballvideo` row checks VGA, CGA, lone Hercules and dual-card
+Hercules, page counts, exact sprite occupancy after movement, fractional
+controls and restored desktop/input state. `wireballphysics` checks swept
+contacts and their cycle budget. Include real serial traffic when changing
+the renderer's service budget. Set 160 measured 46–59 display frames/s and
+about 73 motion steps/s, not a guarantee for every game or physical XT.
+Read [Hercules testing](docs/HERCULES-TESTING.md) and
+[MartyPC debugging](docs/MARTYPC-DEBUG.md) before interpreting raster captures
+or changing the emulator's page mapping. Name the relevant rows during
+implementation; run their deduplicated union once after the last batch.
 
 ## Testing
 
