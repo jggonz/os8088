@@ -46,17 +46,21 @@ IT_MPAGE    equ IT_MLUT >> 8        ; the mono table's first 256-byte page
   %error "the mono table must start on a 256-byte page"
 %endif
 
-; the overlay records (it_ov): three, in row order - the HUD's left, the
-; message, the HUD's right (SPEC.md 108.11.5)
+; the overlay records (it_ov), in row order - the HUD's left, the title's
+; five lines (wave 4, SPEC.md 108.13.1), the message, the HUD's right
+; (SPEC.md 108.11.5). The HUD and the title's lines never show at once, so
+; the left HUD sharing rows with them is all the order needs
+IT_TLINES   equ 5
 OV_R0       equ 0                   ; word: the first device row (picture)
 OV_J0       equ 2                   ; byte: the first device byte
 OV_J1       equ 3                   ; byte: the last (inclusive)
 OV_STR      equ 4                   ; word: the text, 0 = none
 OV_SIZE     equ 6
-OV_N        equ 3
+OV_N        equ 3 + IT_TLINES
 OV_L        equ 0
-OV_M        equ OV_SIZE
-OV_R        equ 2 * OV_SIZE
+OV_T        equ OV_SIZE             ; the title's lines
+OV_M        equ (1 + IT_TLINES) * OV_SIZE
+OV_R        equ OV_M + OV_SIZE
 
 ; the governor (SPEC.md 108.11.6), in os88pit.inc's 838 ns counts
 IT_G45      equ 53700               ; a lock hold over 45 ms: every 2nd wake
@@ -207,6 +211,23 @@ it_rowmaps:
     mov [it_ov + OV_M + OV_R0], ax
     add ax, 16
     mov [it_ov + OV_R + OV_R0], ax
+    ; --- the title's lines, over the void above the slab (logical rows 0 ..
+    ; 73): a line every 8 device rows from row 1 when that void is 50 rows
+    ; (CGA, Hc 136), else every 10 from row 8 (SPEC.md 108.13.1)
+    mov ax, 1
+    mov dx, 8
+    cmp word [it_hc], 200
+    jb .tr
+    mov ax, 8
+    mov dx, 10
+.tr:
+    mov bx, OV_T
+.tl:
+    mov [it_ov + bx + OV_R0], ax
+    add ax, dx
+    add bx, OV_SIZE
+    cmp bx, OV_M
+    jb .tl
     call it_ovl_none                ; whatever showed was the old layout's
     ret
 
@@ -360,6 +381,8 @@ it_present:
     jne .owed
     cmp byte [it_msgd], 0
     jne .owed
+    cmp byte [it_state], ST_SWEEP   ; a sweep's items (itsweep.inc)
+    je .owed
     call it_box_any
     jnc .out
     ; --- THE PRESENTATION GOVERNOR (108.11.6): every second wake ------------
@@ -384,6 +407,11 @@ it_present:
     call it_pen_ck
     cmp byte [it_full], 0
     je .part
+    cmp byte [it_state], ST_SWEEP   ; a whole present owed ENDS a sweep: it
+    jne .whole                      ; shows the arena whole (itsweep.inc)
+    call it_sw_finish
+.whole:
+    call it_wait_ol                 ; (WAIT's arena: whole, outline and all)
     mov byte [it_gpres], 0          ; a WHOLE present is not the governor's:
     call it_present_band            ; it is a new arena's or a relayout's,
     ret                             ; never a step's (108.11.6)
@@ -393,15 +421,20 @@ it_present:
     cmp byte [it_hudd], 0           ; A LINE OF TEXT is not a step's either:
     jne .txt                        ; a round's end letters its result, and
     cmp byte [it_msgd], 0           ; on a VGA font_run is a fill and a
-    je .out                         ; glyph pass (~1 ms a cell) - so the
+    je .sw                          ; glyph pass (~1 ms a cell) - so the
 .txt:                               ; governor does not count this wake
     mov byte [it_gpres], 0
     call it_ovl_update
+.sw:
+    cmp byte [it_state], ST_SWEEP   ; THE SWEEP: the items due, in holds of
+    jne .out                        ; at most IT_GBAND (itsweep.inc) - nor is
+    mov byte [it_gpres], 0          ; it the governor's
+    call it_sw_run
 .out:
     ret
 .small:
     cmp byte [it_full], 0
-    je .out
+    je .sksw
     call it_draw_small
     mov byte [it_full], 0
     call it_box_clear
@@ -411,9 +444,13 @@ it_present:
     ; owed for them - the window has no save-under (it never promised
     ; OSAPI_WM_SAVEU), so whatever uncovers it is a W_PAINT of the exposed
     ; rect from the canvas as it is then (SPEC.md 11.3). A whole present
-    ; owed stays owed.
+    ; owed stays owed. A sweep's items go by unpresented, and the uncover's
+    ; paint presents the ones done (it_sw_paint).
     call it_box_clear
-    ret
+.sksw:
+    cmp byte [it_state], ST_SWEEP
+    jne .out
+    jmp it_sw_skip
 
 ; -----------------------------------------------------------------------------
 ; it_present_band - THE WHOLE PICTURE, every pixel once, IN BANDS: it_full =
@@ -827,6 +864,8 @@ it_pbox:
 ; Clobbers everything but DS.
 ; -----------------------------------------------------------------------------
 it_praw:
+    cmp byte [it_pfill], 0          ; A VOID piece (a sweep's, itsweep.inc):
+    jne it_pfill_rect               ; black, one gfx_fill
     push word [it_pr0]              ; the rect comes back as it went in: the
     push word [it_pj0]              ; presenters walk it, and it_pbox cuts
     push word [it_pj1]              ; two pieces out of one band
@@ -840,6 +879,36 @@ it_praw:
     pop word [it_pj1]               ; (pop writes no flag: CF comes out)
     pop word [it_pj0]
     pop word [it_pr0]
+    ret
+
+; it_pfill_rect - device rows [it_pr0, it_pr1) by bytes [it_pj0, it_pj1],
+; VOID: one OSAPI_GFX_FILL in CBLACK, which VOID is in every look and on
+; every surface (SPEC.md 108.11.1), through whatever clip is armed. The cost
+; is the fill's, not ~400 cycles a converted device byte. CF = 0.
+it_pfill_rect:
+    mov ax, [it_pr0]
+    cmp ax, [it_pr1]
+    jge .out
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    mov ax, [it_pj0]
+    mov cl, 3
+    shl ax, cl
+    add ax, [it_ox]                 ; x1
+    mov cx, [it_pj1]
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    add cx, [it_ox]
+    add cx, 7                       ; x2
+    mov bx, [it_pr0]
+    add bx, [it_oy]                 ; y1
+    mov dx, [it_pr1]
+    add dx, [it_oy]
+    dec dx                          ; y2
+    call OSAPI_GFX_FILL
+.out:
+    clc
     ret
 
 ; --- MONO: one OSAPI_GFX_BLIT1 a chunk of rows ---------------------------------
@@ -1317,10 +1386,38 @@ it_c4off:
 ; it_ovl_none - no overlay shows (a relayout: the old rects were the old
 ; picture's). Preserves all.
 it_ovl_none:
-    mov word [it_ov + OV_L + OV_STR], 0
-    mov word [it_ov + OV_M + OV_STR], 0
-    mov word [it_ov + OV_R + OV_STR], 0
+    push bx
+    xor bx, bx
+.l:
+    mov word [it_ov + bx + OV_STR], 0
+    add bx, OV_SIZE
+    cmp bx, OV_N * OV_SIZE
+    jb .l
+    pop bx
     ret
+
+; it_ovl_tstr - out: AX = the title's line for the record at BX (OV_T +
+; 6k, the same offset in it_ov and itfs.inc's it_ovf), when the state shows
+; the title; else 0. Preserves all but AX.
+it_ovl_tstr:
+    xor ax, ax
+    cmp byte [it_state], ST_TITLE
+    jne .out
+    push dx
+    push si
+    mov ax, bx
+    sub ax, OV_T                    ; 6k ...
+    mov dl, 3
+    div dl                          ; ... / 3 = 2k, the table's word
+    mov si, ax
+    mov ax, [it_ttab + si]
+    pop si
+    pop dx
+.out:
+    ret
+%if (OV_SIZE != 6) || (OV_T != 6)
+  %error "it_ovl_tstr divides a record's offset by 3: records 6 bytes, from 6"
+%endif
 
 ; it_ovl_want - out: AX, CX, DX = the strings the state wants on the left
 ; HUD, the message and the right HUD (0 = none). The HUD's two are rebuilt.
@@ -1351,6 +1448,13 @@ it_ovl_compose:
     mov ax, dx
     mov bx, OV_R
     call it_ovl_rect
+    mov bx, OV_T                    ; the title's lines
+.t:
+    call it_ovl_tstr
+    call it_ovl_rect
+    add bx, OV_SIZE
+    cmp bx, OV_M
+    jb .t
     ret
 
 ; it_ovl_rect - overlay BX's string = AX, and its bytes from the length:
@@ -1485,6 +1589,18 @@ it_ovl_update:
     mov ax, cx
     mov bx, OV_M
     call it_ovl_swap
+    mov bx, OV_T                    ; the title's lines go with the message
+.t:
+    call it_ovl_tstr
+    cmp ax, [it_ov + bx + OV_STR]
+    je .tn                          ; (unchanged: not drawn again)
+    push bx
+    call it_ovl_swap
+    pop bx
+.tn:
+    add bx, OV_SIZE
+    cmp bx, OV_M
+    jb .t
 .out:
     ret
 
@@ -1506,9 +1622,16 @@ it_ovl_swap:
     mov [it_pr0], dx
     add dx, 8
     mov [it_pr1], dx
+    cmp bx, OV_T                    ; A TITLE LINE lies over the void above
+    jb .pb                          ; level 1 (SPEC.md 108.13.1), VOID in the
+    cmp bx, OV_M                    ; canvas: its rect goes out as a fill,
+    jae .pb                         ; not converted
+    mov byte [it_pfill], 1
+.pb:
     push bx
     call it_pbox
     pop bx
+    mov byte [it_pfill], 0
 .new:
     call it_ovl_draw
     ret
@@ -1704,6 +1827,12 @@ it_paint_win:
     jc .out                         ; a blitp refused: the worker's, whole
     cmp byte [it_pwhole], 0
     je .out
+    cmp byte [it_state], ST_SWEEP   ; a sweep's whole paint is NOT a whole
+    jne .wp                         ; present: its unswept items are still
+    mov byte [it_hudd], 0           ; owed - only the overlays it composed
+    mov byte [it_msgd], 0           ; and drew are not
+    ret
+.wp:
     mov byte [it_full], 0           ; THIS WAS THE WHOLE PRESENT
     inc word [it_nwhole]
     mov byte [it_fillr], 0
@@ -1757,6 +1886,9 @@ it_paint_pen:
 ; Clobbers everything but DS.
 ; -----------------------------------------------------------------------------
 it_paint_rect:
+    cmp byte [it_bldq], 0
+    jne .bld
+    call it_wait_ol                 ; (WAIT's arena: whole, outline and all)
     mov [it_dmg], ax
     mov [it_dmg + 2], bx
     mov [it_dmg + 4], cx
@@ -1783,10 +1915,56 @@ it_paint_rect:
     sar cx, 1
     sar cx, 1                       ; (left of the picture: -1, nothing)
     mov [it_pj1], cx
+    cmp byte [it_state], ST_SWEEP   ; A SWEEP: only what it has presented
+    jne .all                        ; (itsweep.inc it_sw_paint)
+    call it_sw_paint
+    jmp short .ov
+.all:
     call it_pbox
+.ov:
     pushf
     call it_ovl_draw_all            ; (each only if it meets the rect)
     call it_fill_rest               ; (likewise)
     mov byte [it_dmgon], 0
     popf
+    ret
+.bld:
+    ; A CANVAS BUILD OWED OR UNDER WAY (itrules.inc it_bld_post): the
+    ; canvas is no picture until it is done, so the damage - cut to the
+    ; content box - goes black in one gfx_fill and a whole present is owed,
+    ; which the worker makes once the build is in
+    cmp ax, [it_cx]
+    jge .k0
+    mov ax, [it_cx]
+.k0:
+    cmp bx, [it_cy]
+    jge .k1
+    mov bx, [it_cy]
+.k1:
+    push ax
+    mov ax, [it_cx]
+    add ax, [it_cw]
+    dec ax
+    cmp cx, ax
+    jle .k2
+    mov cx, ax
+.k2:
+    mov ax, [it_cy]
+    add ax, [it_ch]
+    dec ax
+    cmp dx, ax
+    jle .k3
+    mov dx, ax
+.k3:
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    pop ax
+    cmp ax, cx
+    jg .k4
+    cmp bx, dx
+    jg .k4
+    call OSAPI_GFX_FILL
+.k4:
+    mov byte [it_full], 1
+    stc
     ret

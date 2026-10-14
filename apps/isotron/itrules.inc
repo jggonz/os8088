@@ -16,9 +16,12 @@
 ; it_flow - the state machine, once a wake. ES = the claim.
 ; -----------------------------------------------------------------------------
 it_flow:
-    cmp byte [it_tpause], 0
-    jne .out                        ; the harness is reading a finished round
     mov al, [it_state]
+    cmp byte [it_tpause], 0         ; THE HARNESS IS READING A ROUND (HOLD):
+    je .run                         ; nothing of the game moves - but a SWEEP
+    cmp al, ST_SWEEP                ; and READY run on, being the picture's and
+    jb .out                         ; not the game's, so a held game stops at
+.run:                               ; its round's first iteration, drawn
     cmp al, ST_TITLE
     je .title
     cmp al, ST_PLAY
@@ -29,8 +32,10 @@ it_flow:
     je .over
     cmp al, ST_NEXT
     je .next
-.out:                               ; ST_WAIT: Space (it_commands) moves on
-    ret
+    cmp al, ST_READY
+    je .ready
+.out:                               ; ST_WAIT: Space (it_commands) moves on;
+    ret                             ; ST_SWEEP: the presenters (itsweep.inc)
 .title:
     test byte [it_tflags], IT_TF_NOFLOW
     jz .out
@@ -51,11 +56,55 @@ it_flow:
     call it_play
     ret
 .crash:
+    ; THE CRASH (SPEC.md 108.13.2): 0.8 s; the winner's score changes 0.27 s
+    ; into it (the footage's 0.25), then WAIT says who won - or, the third
+    ; loss in a row, GAME OVER does
     call OSAPI_GET_TICKS
+    mov dx, ax
+    sub ax, [it_tend]               ; AX = now - the end: -15 .. 0 and on
+    cmp ax, IT_HUDT - IT_CRASHT
+    jl .out
+    xor cl, cl
+    xchg cl, [it_hudp]              ; the score, once
+    or [it_hudd], cl
+    or ax, ax
+    js .out
+    mov byte [it_msgd], 1
+    cmp byte [it_lossrow], 3
+    jae .gover
+    mov byte [it_state], ST_WAIT
+    ; THE NEXT ARENA IS BUILT NOW, while the game waits for Space - the
+    ; tower's height is known from the round's end - so the sweep Space
+    ; starts presents from its first wake (SPEC.md 108.13.3); windowed, by
+    ; the worker after its lock hold (it_bld_post)
+    mov al, IT_BQ_WAIT
+    call it_bld_post
+    ret
+.gover:
+    mov byte [it_state], ST_OVER
+    mov byte [it_qcont], 0          ; (a Space from CRASH: not GAME OVER's)
+    add dx, IT_OVERT
+    mov [it_tend], dx
+    ret
+.ready:
+    ; READY (108.13.2): 0.5 s with the arena drawn and nothing moving, then
+    ; the round - its pace from the first wake that owes no present (it_play).
+    ; The About card up (nothing is presented under it) holds READY: its
+    ; 0.5 s start again from the card's going
+    call OSAPI_GET_TICKS
+    cmp byte [it_abon], 0
+    je .rd
+    add ax, IT_READYT
+    mov [it_tend], ax
+    ret
+.rd:
     sub ax, [it_tend]
     js .out
-    mov byte [it_state], ST_WAIT
-    mov byte [it_msgd], 1
+    IT_MARK it_rdy1
+    mov byte [it_state], ST_PLAY
+    mov byte [it_vsync], 1
+    mov byte [it_gskip], 0
+    mov byte [it_gquiet], 0
     ret
 .over:
     call OSAPI_GET_TICKS
@@ -74,11 +123,52 @@ it_flow:
     ret
 
 ; -----------------------------------------------------------------------------
-; it_to_title - back to the title (End Game, or a game over that has shown)
+; it_to_title - back to the title (End Game, or a game over that has shown).
+; Preserves every register.
 ; -----------------------------------------------------------------------------
 it_to_title:
     mov byte [it_state], ST_TITLE
     mov byte [it_paused], 0
+    mov byte [it_hudp], 0           ; (a score still owed is the title's no more)
+    mov byte [it_swpre], 0          ; (nor an arena built for a round, nor the
+    mov byte [it_qround], 0         ; round one was being built for)
+    mov byte [it_full], 1           ; ...presented whole, its overlays with it
+    push ax
+    mov al, IT_BQ_TITLE             ; the title's picture (itcanvas.inc)
+    call it_bld_post
+    pop ax
+    ret
+
+; =============================================================================
+; THE CANVAS BUILDS, OUTSIDE THE LOCK (SPEC.md 108.13.2)
+;
+; A build - WAIT's next arena (0.32 - 0.45 s on the 5150), the title (0.8 s
+; with its lettering), a game's first arena - touches the canvas and the
+; grid and nothing on the glass, so in a window it is NOT done in the wake
+; that asks for it, inside OSAPI_GFX_LOCK with the pointer off and every
+; other task's drawing blocked: it_bld_post leaves IT_BQ_* in it_bldq, that
+; wake presents nothing (it_wake), and the worker builds it after
+; OSAPI_GFX_UNLOCK (it_bld_run), its next wake presenting the result. While
+; one is owed or being built the canvas is not a picture: a W_PAINT makes
+; its damage black and owes a whole present (itwin.inc it_paint_rect), and
+; the bracket's entry builds or waits for it first (it_bld_sync). In a
+; bracket - the lock held throughout, the worker frozen, no pointer - a
+; build is done where it is asked for.
+; =============================================================================
+
+; it_bld_post - AL = IT_BQ_*: the build, now in a bracket, else owed to the
+; worker. Preserves every register.
+it_bld_post:
+    cmp byte [it_fsm], 0
+    jne it_bld_do
+    mov [it_bldq], al
+    ret
+
+; it_bld_do - build AL = IT_BQ_* (ES set here: the claim). WAIT's arena or a
+; game's first one (it_sw_build), the round it is for then started by the
+; next wake's it_commands (it_qround); or the title's picture. Preserves
+; every register.
+it_bld_do:
     push ax
     push bx
     push cx
@@ -86,8 +176,22 @@ it_to_title:
     push si
     push di
     push bp
-    call it_title_build             ; the title's picture (itcanvas.inc)
-    call it_box_clear
+    push es
+    mov es, [it_seg]
+    cmp al, IT_BQ_TITLE
+    je .title
+    cmp al, IT_BQ_ROUND
+    jne .wait
+    mov byte [it_qround], 1
+.wait:
+    call it_sw_build
+    mov byte [it_swpre], 1
+    jmp short .x
+.title:
+    call it_title_build
+    call it_box_clear               ; (its spans' boxes: a whole present owed)
+.x:
+    pop es
     pop bp
     pop di
     pop si
@@ -95,7 +199,72 @@ it_to_title:
     pop cx
     pop bx
     pop ax
-    mov byte [it_full], 1           ; ...presented whole, its overlays with it
+    ret
+
+; it_bld_run - the worker, after OSAPI_GFX_UNLOCK: the build owed, if one is,
+; claimed (bit 7) in one critical section - the UI task's it_bld_sync claims
+; the same byte - then built and cleared. Clobbers AX.
+it_bld_run:
+    pushf
+    cli
+    mov al, [it_bldq]
+    or al, al
+    jz .none
+    test al, IT_BQ_BUSY
+    jnz .none
+    or byte [it_bldq], IT_BQ_BUSY
+    popf
+    IT_MARK it_bld0
+    call it_bld_do
+    IT_MARK it_bld1
+    mov byte [it_bldq], 0
+    ret
+.none:
+    popf
+    ret
+
+; it_bld_sync - the bracket's entry (the UI task, the lock held): a build
+; owed and not started is built here, one being built is waited for - the
+; worker's build takes no lock, so it finishes while we yield. out: CF = 1
+; it did not finish in IT_BLDWAIT ticks (the bracket is not entered).
+; Preserves every register.
+IT_BLDWAIT  equ 54                  ; 3 s: the longest build is 0.8 s
+it_bld_sync:
+    push ax
+    push dx
+    pushf
+    cli
+    mov al, [it_bldq]
+    or al, al
+    jz .free
+    test al, IT_BQ_BUSY
+    jnz .busy
+    mov byte [it_bldq], 0
+    popf
+    call it_bld_do
+    jmp short .ok
+.free:
+    popf
+.ok:
+    pop dx
+    pop ax
+    clc
+    ret
+.busy:
+    popf
+    call OSAPI_GET_TICKS
+    mov dx, ax
+.w:
+    call OSAPI_TASK_YIELD
+    cmp byte [it_bldq], 0
+    je .ok
+    call OSAPI_GET_TICKS
+    sub ax, dx
+    cmp ax, IT_BLDWAIT
+    jb .w
+    pop dx
+    pop ax
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -323,6 +492,23 @@ it_game_start:
     mov word [it_sc], 0
     mov word [it_round], 0
     mov byte [it_paused], 0
+    mov byte [it_hudp], 0
+    or byte [it_hudd], 3            ; the HUD's two lines appear (a swept
+                                    ; start letters them; NOFLOW's whole
+                                    ; present composes them)
+    ; A GAME STARTED OVER AN ARENA ALREADY BUILT for the last game's next
+    ; round (WAIT), or over a sweep half out: the canvas is not this game's
+    ; and the glass is not the picture a sweep's region assumes (it_swoo is
+    ; the canvas's last height, not the glass's) - so the arena is built
+    ; again and goes out as a whole present, the sweep ending at once
+    cmp byte [it_swpre], 0
+    jne .stale
+    cmp byte [it_state], ST_SWEEP
+    jne .go
+.stale:
+    mov byte [it_swpre], 0
+    mov byte [it_full], 1
+.go:
     call it_round_start
     ret
 
@@ -336,9 +522,36 @@ it_round_start:
     push dx
     push si
     push di
+    test byte [it_tflags], IT_TF_NOFLOW
+    jnz .nf
+    ; --- THE SWEEP'S START (SPEC.md 108.13.3): the arena - built when WAIT
+    ; began (it_swpre), or not yet: a game's first round has no WAIT before
+    ; it, so in a window its build is owed to the worker (it_bld_post) and
+    ; the round waits for it in WAIT, unpresented, its next wake starting it
+    ; (it_qround); in a bracket it is built here. Then the clock it is paced
+    ; on, from the arena built
+    mov byte [it_qround], 0
+    cmp byte [it_swpre], 0
+    jne .pre
+    cmp byte [it_fsm], 0
+    jne .inl
+    mov byte [it_state], ST_WAIT
+    mov al, IT_BQ_ROUND
+    call it_bld_post
+    jmp .rs
+.inl:
+    call it_sw_build
+.pre:
+    IT_MARK it_sw0
+    call OSAPI_GET_TICKS
+    mov [it_swt0], ax
+    mov byte [it_swpre], 0          ; (the build emptied the grid)
+    jmp short .built
+.nf:
     call it_grid_reset
     mov al, [it_h]
     call it_rebuild                 ; THE ARENA: the tower of h, no walls
+.built:
     mov byte [it_maxspan], 0        ; (itcanvas.inc) - the start cells' spans
     mov byte [it_maxprobe], 0       ; below are the round's first
     mov word [it_ck], 0
@@ -419,9 +632,14 @@ it_round_start:
     mov dh, al
     call it_span
     call it_box_clear               ; the whole picture is owed instead
-    mov byte [it_full], 1
-    mov byte [it_state], ST_PLAY
     mov byte [it_paused], 0
+    test byte [it_tflags], IT_TF_NOFLOW
+    jnz .whole
+    call it_sw_start                ; SWEPT onto the glass (itsweep.inc)
+    jmp short .rs
+.whole:
+    mov byte [it_full], 1           ; the harness's NOFLOW: whole, at once
+    mov byte [it_state], ST_PLAY
     ; --- the pace starts now: V = now, and it is the LAST thing done ------------
     ; (SPEC.md 108.4.2: no burst at a round's start. The canvas build is
     ; behind V here, and the round's WHOLE PRESENT - which goes out in bands
@@ -431,6 +649,7 @@ it_round_start:
     mov byte [it_vsync], 1
     mov byte [it_gskip], 0          ; ...and the presentation governor starts
     mov byte [it_gquiet], 0         ; a round clear (108.11.6), as the pace does
+.rs:                                ; (a swept start does both at READY's end)
     pop di
     pop si
     pop dx
@@ -681,29 +900,26 @@ it_round_end:
 .prev:
     mov al, [it_winner]
     mov [it_prev], al
-    or [it_hudd], al                ; the winner's HUD line: 1 left, 2 right
-    mov byte [it_msgd], 1
     test byte [it_tflags], IT_TF_HOLD
     jz .flow
     mov byte [it_tpause], 1         ; the harness reads the round, then clears
 .flow:
     test byte [it_tflags], IT_TF_NOFLOW
     jz .shown
+    or [it_hudd], al                ; the winner's HUD line: 1 left, 2 right
+    mov byte [it_msgd], 1           ; - at once, the result with it
     mov byte [it_state], ST_NEXT    ; no crash pause, no wait, no sweep
     ret
 .shown:
+    mov [it_hudp], al               ; ...the score 0.27 s into CRASH (it_flow)
     call OSAPI_GET_TICKS
-    cmp byte [it_lossrow], 3
-    jb .crash
-    add ax, IT_OVERT
-    mov [it_tend], ax
-    mov byte [it_state], ST_OVER
-    inc word [it_gover]
-    ret
-.crash:
     add ax, IT_CRASHT
     mov [it_tend], ax
-    mov byte [it_state], ST_CRASH
+    mov byte [it_state], ST_CRASH   ; and GAME OVER only after it
+    cmp byte [it_lossrow], 3
+    jb .out
+    inc word [it_gover]
+.out:
     ret
 
 ; -----------------------------------------------------------------------------

@@ -226,11 +226,19 @@ ST_CRASH    equ 2               ; the 0.8 s after a crash
 ST_WAIT     equ 3               ; ...waiting for Space
 ST_OVER     equ 4               ; three losses in a row
 ST_NEXT     equ 5               ; the harness's NOFLOW: the next round at once
+ST_SWEEP    equ 6               ; the new arena going onto the glass (itsweep.inc)
+ST_READY    equ 7               ; ...and the 0.5 s before the walls move
 WIN_NONE    equ 0
 WIN_PLAYER  equ 1
 WIN_COMP    equ 2
 IT_CRASHT   equ 15              ; 0.8 s of CRASH, in ticks
+IT_HUDT     equ 5               ; ...the score changes 0.27 s into it
 IT_OVERT    equ 64              ; 3.5 s of GAME OVER
+IT_READYT   equ 9               ; 0.5 s of READY
+IT_BQ_WAIT  equ 1               ; it_bldq: WAIT's next arena (it_sw_build)
+IT_BQ_TITLE equ 2               ; ...the title's picture (it_title_build)
+IT_BQ_ROUND equ 3               ; ...a game's first arena, then its round
+IT_BQ_BUSY  equ 0x80            ; ...being built, outside the lock
 
 ; =============================================================================
 ; it_entry - package entry point (SPEC.md 20.2)
@@ -485,14 +493,20 @@ it_oncmd:
     jnz .out
     cmp al, 3
     jb .tier                        ; 0..2: a new game at that tier, with sound
+    cmp al, IT_MI_PAUSE
     je .pause
-    cmp al, 5
+    cmp al, IT_MI_COL
     je .look                        ; Colours: C's look (itfs.inc)
-    cmp al, 6
+    cmp al, IT_MI_FULL
     je .full                        ; Full Screen: F's bracket (itfs.inc)
-    cmp al, 7
-    jne .out                        ; 4, Sound, is greyed: never picked
+    cmp al, IT_MI_SND
+    je .snd                         ; Sound: M's toggle, posted
+    cmp al, IT_MI_END
+    jne .out                        ; (a rule is greyed: never picked)
     mov byte [it_qesc], 1           ; End Game
+    jmp short .out
+.snd:
+    mov byte [it_qsnd], 1
     jmp short .out
 .look:
     call it_look_key
@@ -648,8 +662,10 @@ it_worker:
     jne .yield                      ; (itwin.inc it_present_band): the next
     test byte [it_tflags], IT_TF_FAST ; band at once, the lock released and
     jz .sleep                       ; every other task given its turn between
-    cmp byte [it_state], ST_TITLE   ; FAST, and a game to play: no sleep
-    je .sleep
+    cmp byte [it_state], ST_PLAY    ; FAST, and a round to play: no sleep -
+    je .yield                       ; nor in the harness's NOFLOW step to the
+    cmp byte [it_state], ST_NEXT    ; next round; every other state is paced
+    jne .sleep                      ; on the ticks, a sweep's above all
 .yield:
     call OSAPI_TASK_YIELD
     jmp short .wake
@@ -663,7 +679,8 @@ it_worker:
     call it_wake
     call OSAPI_GFX_UNLOCK
     IT_MARK it_wake1
-    IT_MARK it_frame_end
+    call it_bld_run                 ; a canvas build owed: here, OUTSIDE the
+    IT_MARK it_frame_end            ; lock (itrules.inc, SPEC.md 108.13.2)
     jmp .loop
 
 ; -----------------------------------------------------------------------------
@@ -703,6 +720,8 @@ it_wake:
     mov [it_gt0 + 2], dx
     call it_commands                ; what the UI task asked for (itinput.inc)
     call it_flow                    ; the state machine and the pace governor
+    cmp byte [it_bldq], 0           ; (a canvas build owed: it is built after
+    jne .out                        ; this hold, and the next wake presents it)
     call it_present                 ; ...and what changed, to the glass
     cmp byte [it_gpres], 0
     je .out
@@ -789,6 +808,10 @@ it_msg_str:
     xor si, si
     cmp byte [it_state], ST_PLAY
     je .out
+    cmp byte [it_state], ST_CRASH   ; the crash itself says nothing: the
+    je .out                         ; score changes, then WAIT says who won
+    cmp byte [it_state], ST_SWEEP   ; ...and the new arena and READY are the
+    jae .out                        ; picture's (SWEEP, READY)
     mov si, it_s_over
     cmp byte [it_state], ST_OVER
     je .out
@@ -850,6 +873,7 @@ it_putdec:
 %include "itcanvas.inc"
 %include "itwin.inc"
 %include "itfs.inc"
+%include "itsweep.inc"
 %include "os88pit.inc"
 
 ; =============================================================================
@@ -871,23 +895,35 @@ it_tpl:
 
 ; --- the app menu set (SPEC.md 12.2) ------------------------------------------
     OS88_MENUSET it_menus, it_name, it_oncmd
-        OS88_MENU it_m_game, it_i_game, 8
+        OS88_MENU it_m_game, it_i_game, IT_MI_N
     OS88_MENUSET_END it_menus
 
 it_name:     db 'isoTron', 0
 it_ttl:      db 'isoTron', 0
 it_m_game:   db 'Game', 0
-it_i_game:   dw it_it_rook, it_it_vet, it_it_lun, it_it_pause
-             dw it_it_snd, it_it_col, it_it_full, it_it_end
+; THE GAME MENU (ISOTRON-PLAN 9.2): the tiers, then the switches, then the
+; end - its separators the kernel's own convention (a greyed rule)
+it_i_game:   dw it_it_rook, it_it_vet, it_it_lun, it_it_sep
+             dw it_it_snd, it_it_col, it_it_full, it_it_pause
+             dw it_it_sep, it_it_end
+IT_MI_N      equ ($ - it_i_game) / 2
+IT_MI_SND    equ 4                      ; (the items a handler relabels)
+IT_MI_COL    equ 5
+IT_MI_FULL   equ 6
+IT_MI_PAUSE  equ 7
+IT_MI_END    equ 9
+it_it_sep:   db MENU_DIS, '----------------', 0
 it_it_rook:  db 'Rookie', 0
 it_it_vet:   db 'Veteran', 0
 it_it_lun:   db 'Lunatic', 0
 it_it_pause: db 'Pause', 0
-; GREYED WITH THEIR REASON (SPEC.md 47 rule 3): Sound is a real item of the
-; finished game and is greyed until the wave that builds it; Colours and
-; Full Screen are live, and itfs.inc it_fs_menu swaps in their greyed forms
-; on every paint when the window's display has no colour or no mode
-it_it_snd:   db MENU_DIS, 'Sound (not yet)', 0
+; SOUND NAMES ITS STATE (PIXELSTEIN's px_s_sndon: an app menu has no check
+; mark), relabelled by itinput.inc it_snd_label wherever it_snd changes.
+; GREYED WITH THEIR REASON (SPEC.md 47 rule 3): Colours and Full Screen,
+; whose greyed forms itfs.inc it_fs_menu swaps in on every paint when the
+; window's display has no colour or no mode
+it_it_snd:   db 'Sound: On', 0
+it_it_sndo:  db 'Sound: Off', 0
 it_it_col:   db 'Colours', 0
 it_it_coln:  db MENU_DIS, 'Colours (mono display)', 0
 it_it_full:  db 'Full Screen', 0
@@ -917,6 +953,14 @@ it_s_player: db 'PLAYER ', 0
 it_s_comp:   db 'COMPUTER ', 0
 ; (each at most 40 characters: the full-screen picture is 40 cells across)
 it_s_title:  db '1 Rookie 2 Veteran 3 Lunatic; A-C silent', 0
+; THE TITLE'S OWN LINES (SPEC.md 108.13.1), over the void above the slab:
+; our wording, and no credit, publisher, year or legal line (108.1)
+it_ttab:     dw it_s_t0, it_s_t1, it_s_t2, it_s_t3, it_s_t4
+it_s_t0:     db 'A light-wall duel in three dimensions.', 0
+it_s_t1:     db 'Turn: Ins/Del, Left/Right or Z/X.', 0
+it_s_t2:     db 'Faster: F10 or Up. Normal: F9 or Down.', 0
+it_s_t3:     db 'In a game: P pause, C colours, M sound.', 0
+it_s_t4:     db 'F full screen. Esc ends, Space continues', 0
 it_s_paused: db 'PAUSED - PRESS P', 0
 it_s_pwin:   db 'Player wins. Press Space to continue.', 0
 it_s_cwin:   db 'Computer wins. Press Space to continue.', 0
@@ -1029,12 +1073,14 @@ it_s_nomem3: db ' KB.', 0
     WORDV it_rbf0                   ; its face's rows, in a level's t
     WORDV it_rbf1
     BYTEV it_rbfid                  ; ...and the face's id, shifted
-    BYTEV it_lu                     ; it_title_build's walk of a stroke
-    BYTEV it_ld
-    BYTEV it_lu0
-    BYTEV it_lu1
-    BYTEV it_ld1
-    BYTEV it_lv
+    WORDV it_lgx                    ; it_title_build's walk of the word: the
+    WORDV it_lgy                    ; letter's column and cell row, its rows,
+    WORDV it_lgp                    ; the cell's column, the pixel, the
+    WORDV it_lgc                    ; letter's width and the row's bits
+    WORDV it_lgxx
+    WORDV it_lgyy
+    BYTEV it_lgw
+    BYTEV it_lgb
     BUFV  it_lhead, H_SIZE          ; ...the head record a letter cell borrows
     BUFV  it_hudl, 16               ; "PLAYER n"
     BUFV  it_hudr, 16               ; "COMPUTER n"
@@ -1045,6 +1091,57 @@ it_s_nomem3: db ' KB.', 0
     WORDV it_lookp                  ; the 16-colour look: it_col or it_colc
     BYTEV it_clook                  ; ...1 = Classic
     BYTEV it_cgahi                  ; CGA full screen at high intensity
+    BYTEV it_pfill                  ; it_praw: the piece is VOID, one gfx_fill
+
+; --- the sweep (itsweep.inc, SPEC.md 108.13.3) ---------------------------------
+    WORDV it_swk                    ; the next item, 0 .. SW_N
+    WORDV it_swt0                   ; the tick it started (before the rebuild)
+    WORDV it_swo                    ; the new arena's offset, 24(h - 1)
+    WORDV it_swoo                   ; ...and the old picture's
+    WORDV it_nsweep                 ; sweeps ended (the harness's)
+    WORDV it_swrn                   ; it_sw_rects: the slots' bytes...
+    BUFV  it_swr, SW_RMAX * SW_SIZE ; ...and them
+%assign IT_SG0 IT_BSS                ; (it_sgr .. it_sgx: one block, which a
+    BUFV  it_sgr, SW_RMAX * SW_SIZE ; paint's replay sets aside: it_sgsv)
+    WORDV it_sgn                    ; it_sw_group: the merged present, its
+    WORDV it_sgs                    ; slots' bytes, the slot going out, and
+    WORDV it_sgy                    ; its next device row
+    WORDV it_sglim                  ; ...the items it may take
+    BYTEV it_sgx                    ; ...the slots that must match
+%assign IT_SGSZ IT_BSS - IT_SG0
+    BUFV  it_sgsv, IT_SGSZ          ; it_sw_paint: the group set aside
+    WORDV it_swc0                   ; it_sw_put: device rows [swc0, swc1)
+    WORDV it_swc1
+    BYTEV it_swdn                   ; ...and the rect is out
+    WORDV it_sbx0                   ; it_sw_band: the band's columns...
+    WORDV it_sbx1
+    WORDV it_sbp                    ; ...and its table entry (it_sbt)
+    BUFV  it_sby, 14                ; it_sw_bandc: seven row boundaries
+    BUFV  it_sbt, 7 * SW_BANDS      ; it_sw_tab: every band's, a byte each
+    BUFV  it_sdr, 8                 ; it_sw_paint: the damage, device rows
+    WORDV it_sbk                    ; ...and the items it may present
+    WORDV it_sbd0                   ; ...the damage's bands [sbd0, sbd1]
+    WORDV it_sbd1
+    WORDV it_sbb                    ; ...the band, and a replay run's end
+    WORDV it_sbe
+    BYTEV it_rbnoe                  ; it_rebuild: the top level's outline VOID
+    BYTEV it_rbedge                 ; ...its outline id this column
+    BYTEV it_rbe                    ; ...and the lower body's, this level
+    BYTEV it_swpre                  ; the next arena is built (WAIT, 108.13.3)
+    BUFV  it_spl, SW_SPN * 4        ; it_sw_dspan: the span list...
+    WORDV it_spn                    ; ...its bytes, its first device row,
+    WORDV it_spr0                   ; the logical row and rows left, the x
+    WORDV it_spy                    ; (or x + y) and a row's end, and 1 for
+    WORDV it_spk                    ; a diagonal
+    WORDV it_spc
+    WORDV it_spc2
+    BYTEV it_spd
+    WORDV it_spxm                   ; ...the picture's last device x
+    BYTEV it_spno                   ; ...GFX_SPANS refused: rects (it_sw_run)
+    WORDV it_swbud                  ; it_sw_run: the hold's budget, half counts
+    BYTEV it_bldq                   ; a canvas build owed outside the lock
+                                    ; (IT_BQ_*; bit 7 = being built: it_bld_run)
+    BYTEV it_qround                 ; ...and the round it was for, to start
 
 ; --- full screen (itfs.inc, SPEC.md 108.12) -------------------------------------
     BYTEV it_fsm                    ; a bracket is up
@@ -1072,10 +1169,15 @@ it_s_nomem3: db ' KB.', 0
     WORDV it_fy1                    ; cells [fc0, fc1)
     WORDV it_fc0
     WORDV it_fc1
+    WORDV it_fa0                    ; it_fs_area: logical rows [fa0, fa1),
+    WORDV it_fa1                    ; cells [fac0, fac1), and the first row
+    WORDV it_fac0                   ; not yet presented
+    WORDV it_fac1
+    WORDV it_fab
     WORDV it_fhc                    ; ...the presenters' row (CGA, Hercules: the
     WORDV it_fhb                    ; pair's first), and VGA's first byte /
                                     ; Hercules' bytes a row
-    BUFV  it_ovf, 3 * OVF_SIZE      ; the full-screen overlay records
+    BUFV  it_ovf, OVF_N * OVF_SIZE  ; the full-screen overlay records
     BUFV  it_fsrow, 2 * IT_HROWS    ; a device / card row's first byte
     BUFV  it_hktop, 8               ; the span: TOP's bits a place (CGA: a
                                     ; byte each; Hercules: a word, by parity)
@@ -1124,6 +1226,8 @@ IT_PLAYER equ it_heads + MAXHEADS * H_SIZE
     BYTEV it_qhold                  ; pause if in play (the About card)
     BYTEV it_qesc
     BYTEV it_qcont
+    BYTEV it_qsnd                   ; M or Game > Sound: toggle it_snd
+    BYTEV it_hudp                   ; the winner's HUD line, owed 0.25 s on
 
 %include "ittest.inc"
 

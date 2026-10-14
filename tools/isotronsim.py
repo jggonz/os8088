@@ -37,6 +37,7 @@ per-pixel one by --selfcheck. `--present SURF --png F` draws one for a person.
 """
 import argparse
 import os
+import re
 import hashlib
 import json
 import sys
@@ -507,72 +508,43 @@ def level_parts(j, full):
     return out
 
 
-# THE TITLE'S LETTERING (SPEC.md 108.9.4): "isoTron" as strokes on the floor,
-# each one a straight run of grid cells that the wall renderer extrudes - so
-# the letters stand in the game's own projection. Our own block letters,
-# typed here: (u0, d0, u1, d1), one axis constant, inclusive.
-def _logo_strokes():
-    xh, cap = 44, 64                 # x-height and cap height, in cells: tall
-    u, d0 = 14, 18                   # enough that a back stroke's 22-row face
-    w, tw, gap = 22, 30, 7           # stops short of the front one's top edge
-    s = []
-
-    def seg(a0, b0, a1, b1):
-        s.append((u + a0, d0 + b0, u + a1, d0 + b1))
-    # i: a stem and its dot
-    seg(1, 0, 1, xh)
-    seg(1, xh + 7, 1, xh + 11)
-    u += 3 + gap
-    # s
-    seg(0, 0, w - 1, 0)
-    seg(w - 1, 0, w - 1, xh // 2)
-    seg(0, xh // 2, w - 1, xh // 2)
-    seg(0, xh // 2, 0, xh)
-    seg(0, xh, w - 1, xh)
-    u += w + gap
-    # o
-    seg(0, 0, w - 1, 0)
-    seg(0, 0, 0, xh)
-    seg(w - 1, 0, w - 1, xh)
-    seg(0, xh, w - 1, xh)
-    u += w + gap
-    # T
-    seg(0, cap, tw - 1, cap)
-    seg(tw // 2, 0, tw // 2, cap)
-    u += tw + gap
-    # r: a stem, its arm and the arm's drop
-    seg(0, 0, 0, xh)
-    seg(0, xh, 16, xh)
-    seg(16, xh - 8, 16, xh)
-    u += 17 + gap
-    # o
-    seg(0, 0, w - 1, 0)
-    seg(0, 0, 0, xh)
-    seg(w - 1, 0, w - 1, xh)
-    seg(0, xh, w - 1, xh)
-    u += w + gap
-    # n
-    seg(0, 0, 0, xh)
-    seg(0, xh, w - 1, xh)
-    seg(w - 1, 0, w - 1, xh)
-    return s
-
-
-LOGO = _logo_strokes()
+# THE TITLE'S LETTERING (SPEC.md 108.9.4): "isoTron" in our own 5 x 7 block
+# glyphs, laid out ON THE GLASS - each glyph cell IT_LOGOS x IT_LOGOS pixels
+# from (LOGO_X, LOGO_Y) - and every pixel turned into the floor cell whose top
+# it is (d = 174 - y, u = x - d). A glyph is (width, seven rows), bit 7 the
+# leftmost cell; the guest's it_logo is the same bytes (guest_tables).
+LOGO_X, LOGO_Y, LOGO_S = 98, 100, 4
+LOGO = [
+    (1, (0x80, 0x00, 0x80, 0x80, 0x80, 0x80, 0x80)),     # i
+    (4, (0x00, 0x00, 0xF0, 0x80, 0xF0, 0x10, 0xF0)),     # s
+    (4, (0x00, 0x00, 0xF0, 0x90, 0x90, 0x90, 0xF0)),     # o
+    (5, (0xF8, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20)),     # T
+    (4, (0x00, 0x00, 0xF0, 0x80, 0x80, 0x80, 0x80)),     # r
+    (4, (0x00, 0x00, 0xF0, 0x90, 0x90, 0x90, 0xF0)),     # o
+    (4, (0x00, 0x00, 0xF0, 0x90, 0x90, 0x90, 0x90)),     # n
+]
 
 
 def logo_cells():
-    """Every cell of the lettering, in the guest's order: stroke by stroke,
-    each from (u0, d0) to (u1, d1), a cell already set skipped."""
+    """Every cell of the lettering: letter by letter, row by row, each set
+    glyph cell's LOGO_S x LOGO_S pixels the tops of floor cells."""
     out, seen = [], set()
-    for u0, d0, u1, d1 in LOGO:
-        assert u0 == u1 or d0 == d1, "a stroke is a straight run"
-        ns = 1 if u0 == u1 else 0
-        for d in range(d0, d1 + 1):
-            for u in range(u0, u1 + 1):
-                if (u, d) not in seen:
-                    seen.add((u, d))
-                    out.append((u, d, C_LOGO | ns))
+    x = LOGO_X
+    for w, rows in LOGO:
+        for r, bits in enumerate(rows):
+            for c in range(w):
+                if not bits & (0x80 >> c):
+                    continue
+                for yy in range(LOGO_S):
+                    for xx in range(LOGO_S):
+                        px, py = x + c * LOGO_S + xx, LOGO_Y + r * LOGO_S + yy
+                        d = Y_FRONT - py
+                        u = px - d
+                        assert 1 <= u <= GW - 2 and 1 <= d <= GH - 2, "a letter off the floor"
+                        assert (u, d) not in seen
+                        seen.add((u, d))
+                        out.append((u, d, C_LOGO))
+        x += (w + 1) * LOGO_S
     return out
 
 
@@ -1449,9 +1421,13 @@ def guest_tables():
     if colc != want:
         probs.append("itfs.inc it_colc %r is not CLASSIC %r" % (colc, want))
     logo = _db_block(can, "it_logo")
-    want = [v for st in LOGO for v in st] + [0xFF]
+    want = [v for w, rows in LOGO for v in (w,) + tuple(rows)] + [0]
     if logo != want:
         probs.append("itcanvas.inc it_logo is not LOGO")
+    eq = dict(re.findall(r"^(IT_LOGO[XYS])\s+equ\s+(\d+)", can, re.M))
+    if (int(eq.get("IT_LOGOX", -1)), int(eq.get("IT_LOGOY", -1)), int(eq.get("IT_LOGOS", -1))) \
+            != (LOGO_X, LOGO_Y, LOGO_S):
+        probs.append("itcanvas.inc IT_LOGOX/Y/S are not LOGO_X/Y/S")
     return probs
 
 

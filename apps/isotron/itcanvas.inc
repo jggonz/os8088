@@ -188,6 +188,12 @@ it_rebuild:
     jz .ev
     mov bx, it_rbido
 .ev:
+    mov al, [bx + ID_EDGE]          ; LEVEL h's OUTLINE, or VOID when the sweep
+    cmp byte [it_rbnoe], 0          ; writes it last (it_rbnoe, SPEC.md
+    je .eo                          ; 108.13.3): its four edges, the top face's
+    xor al, al                      ; two and the lower body's two
+.eo:
+    mov [it_rbedge], al
     ; --- level h's top face (whole only), in row order ----------------------
     mov si, 74                      ; the back outline, t = 74 (x >= 100) ...
     cmp bp, 100
@@ -196,7 +202,7 @@ it_rebuild:
     sub si, bp
 .ol:
     mov dx, si
-    RB_RUN [bx + ID_EDGE]
+    RB_RUN [it_rbedge]
     mov si, 175                     ; the back rim: max(75, 175-x) ..
     sub si, bp                      ; min(96, 389-x)
     cmp si, 75
@@ -285,10 +291,14 @@ it_rebuild:
     mov [it_rbfid], al
     mov al, [it_rbh]
     mov [it_rbj], al                ; levels h .. 1, each 24 rows further down
+    mov al, [it_rbedge]             ; (level h's outline, or VOID)
+    mov [it_rbe], al
 .lvl:
     mov si, [it_rbe0]
     mov dx, si
-    RB_RUN [bx + ID_EDGE]
+    RB_RUN [it_rbe]
+    mov al, [bx + ID_EDGE]          ; every lower level's outline is drawn
+    mov [it_rbe], al
     mov si, [it_rbf0]
     mov dx, [it_rbf1]
     RB_RUN [it_rbfid]
@@ -326,72 +336,147 @@ it_rbido:
 %endif
 
 ; -----------------------------------------------------------------------------
-; it_title_build - the title picture (SPEC.md 108.9.4): the grid reset, level
-; 1, and the lettering - every letter cell placed in the grid as a C_LOGO cell
-; and drawn by it_span, the step's own renderer, so the word stands in the
-; game's projection. ES = the claim. Clobbers AX..DI, BP.
+; it_outline - THE SWEEP'S LAST WRITE (SPEC.md 108.13.3): level h's outline,
+; EDGE, into a canvas it_rebuild made with it_rbnoe - in column x the top
+; face's edge (the back one at t = 74 from x = 100, the left one at
+; t = 174 - x before it) and the lower body's (the front one at t = 174 to
+; x = 216, the right one at t = 390 - x after it), at offset [it_swo]. The
+; same pixels a plain rebuild writes there, so the canvas is then the
+; model's byte for byte: no wall reaches an outline row (SPEC.md 108.9.3 -
+; a wall stops at the ring's row). 317 columns, two byte stores each,
+; ~25k cycles. Clobbers AX, BX, CX, DX, SI, DI.
 ; -----------------------------------------------------------------------------
+it_outline:
+    push es
+    mov es, [it_cseg]
+    xor si, si                      ; SI = x
+.col:
+    mov bx, si
+    shl bx, 1
+    mov di, [it_xcol + bx]
+    sub di, [it_swo]                ; DI = the column's level row t = 0 byte
+    mov al, ID_EDGE << 4            ; the column's nibble of EDGE
+    test si, 1
+    jz .ev
+    mov al, ID_EDGE
+.ev:
+    mov bx, 74                      ; the top face's edge
+    cmp si, 100
+    jae .t
+    mov bx, 174
+    sub bx, si
+.t:
+    mov [es:di + bx], al
+    mov bx, 174                     ; the lower body's
+    cmp si, 216
+    jbe .b
+    mov bx, 390
+    sub bx, si
+.b:
+    mov [es:di + bx], al
+    inc si
+    cmp si, IT_SLABX1
+    jbe .col
+    pop es
+    ret
+
+; -----------------------------------------------------------------------------
+; it_title_build - the title picture (SPEC.md 108.9.4): the grid reset, level
+; 1, and the word isoTron - BLOCK GLYPHS laid out ON THE GLASS (it_logo: 5 x
+; 7 cells a letter, each cell IT_LOGOS x IT_LOGOS pixels) and turned into
+; the floor cells whose top pixels they are: (x, y) is the top of cell
+; d = 174 - y, u = x - d (SPEC.md 108.2). Each is a C_LOGO cell placed in the
+; grid and drawn by it_span, the step's own renderer, so the letters'
+; surfaces are wall TOPS - the glyph, white - and each letter's lower edges
+; hang a LOGOF face 22 rows down, cut by the cells in front of it: raised
+; block letters, read square-on, in the game's projection. Wave 2's
+; letters were strokes laid along the floor's axes, and leaned with it;
+; on the glass they read as blocks rather than as a word. ES = the claim.
+; ~1,260 cells, one it_span each: ~0.25 s at the title. Clobbers AX..DI, BP.
+; -----------------------------------------------------------------------------
+IT_LOGOX    equ 98                  ; the word's left column and top row on
+IT_LOGOY    equ 100                 ; the glass (level 1's floor holds it and
+IT_LOGOS    equ 4                   ; its 22-row faces), and a cell's pixels
+%if (IT_LOGOY + 7 * IT_LOGOS + IT_WALLH > IT_YFRONT) || (IT_LOGOX < 197 - IT_LOGOY)
+  %error "the title's word does not stand on level 1's floor"
+%endif
+
 it_title_build:
     call it_grid_reset
     mov al, 1
     call it_rebuild
     mov si, it_logo
-.stroke:
-    mov al, [si]                    ; u0, d0, u1, d1; 0FFh ends the table
-    cmp al, 0xFF
-    je .done
-    mov [it_lu0], al
-    mov [it_lu], al
-    mov al, [si + 1]
-    mov [it_ld], al
-    mov al, [si + 2]
-    mov [it_lu1], al
-    mov al, [si + 3]
-    mov [it_ld1], al
-    mov ah, C_LOGO                  ; an E/W stroke (d constant)...
-    mov al, [si + 1]
-    cmp al, [si + 3]
-    je .ax
-    or ah, 1                        ; ...or N/S (the axis bit)
-.ax:
-    mov [it_lv], ah
-    push si
-.cell:
-    mov al, [it_ld]                 ; idx = d * 217 + u
+    mov word [it_lgx], IT_LOGOX     ; the letter's left column
+.letter:
+    lodsb                           ; its width in cells; 0 ends the word
+    or al, al
+    jz .done
+    mov [it_lgw], al
+    mov [it_lgp], si                ; its seven rows of bits
+    mov word [it_lgy], IT_LOGOY     ; the cell row's top
+.row:
+    mov si, [it_lgp]
+    lodsb
+    mov [it_lgp], si
+    mov [it_lgb], al                ; bit 7 the leftmost cell
+    mov ax, [it_lgx]
+    mov [it_lgc], ax                ; the cell's left column
+.col:
+    shl byte [it_lgb], 1
+    jnc .nc
+    mov ax, [it_lgy]                ; IT_LOGOS x IT_LOGOS pixels, each the
+    mov [it_lgyy], ax               ; top of a floor cell
+.by:
+    mov ax, [it_lgc]
+    mov [it_lgxx], ax
+.bx:
+    call it_logo_cell
+    inc word [it_lgxx]
+    mov ax, [it_lgxx]
+    sub ax, [it_lgc]
+    cmp ax, IT_LOGOS
+    jb .bx
+    inc word [it_lgyy]
+    mov ax, [it_lgyy]
+    sub ax, [it_lgy]
+    cmp ax, IT_LOGOS
+    jb .by
+.nc:
+    add word [it_lgc], IT_LOGOS
+    cmp byte [it_lgb], 0            ; (a row's bits past its width are 0)
+    jne .col
+    add word [it_lgy], IT_LOGOS
+    cmp word [it_lgy], IT_LOGOY + 7 * IT_LOGOS
+    jb .row
+    mov al, [it_lgw]                ; the next letter, a cell's gap on
+    inc al
+    mov ah, IT_LOGOS
+    mul ah
+    add [it_lgx], ax
+    mov si, [it_lgp]
+    jmp .letter
+.done:
+    ret
+
+; it_logo_cell - the floor cell whose top pixel is (it_lgxx, it_lgyy), once
+it_logo_cell:
+    mov ax, IT_YFRONT
+    sub ax, [it_lgyy]               ; AL = d
+    mov dx, [it_lgxx]
+    sub dx, ax                      ; DX = u
+    mov bx, it_lhead
+    mov [bx + H_U], dl
+    mov [bx + H_D], al
     mov ah, GW
     mul ah
-    add al, [it_lu]
-    adc ah, 0
-    mov si, ax
+    add ax, dx
+    mov si, ax                      ; SI = d * 217 + u
     cmp byte [es:si + IT_GRID], 0
-    jne .skip                       ; a corner two strokes share: once
-    mov dh, [it_lv]
+    jne .x                          ; (never: a pixel is one cell)
+    mov dh, C_LOGO
     mov [es:si + IT_GRID], dh
-    mov bx, it_lhead
-    mov al, [it_lu]
-    mov [bx + H_U], al
-    mov al, [it_ld]
-    mov [bx + H_D], al
     call it_span
-.skip:
-    mov al, [it_lu]
-    cmp al, [it_lu1]
-    jae .du
-    inc byte [it_lu]                ; along u...
-    jmp short .cell
-.du:
-    mov al, [it_ld]
-    cmp al, [it_ld1]
-    jae .next
-    inc byte [it_ld]                ; ...or along d
-    mov al, [it_lu0]
-    mov [it_lu], al
-    jmp short .cell
-.next:
-    pop si
-    add si, 4
-    jmp .stroke
-.done:
+.x:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -597,32 +682,16 @@ it_wide:
 it_wido:
     IT_WIDS 0
 
-; THE TITLE'S LETTERING (SPEC.md 108.9.4): "isoTron" as straight strokes on the
-; floor, (u0, d0, u1, d1), one axis constant, inclusive; our own block letters,
-; typed here and in tools/isotronsim.py's _logo_strokes, which a selfcheck
-; holds to this table.
+; THE TITLE'S LETTERING (SPEC.md 108.9.4): "isoTron", our own 5 x 7 block
+; glyphs - a width in cells, then seven rows, bit 7 the leftmost cell - and a
+; 0. tools/isotronsim.py's LOGO is the same table and its selfcheck holds the
+; two together.
 it_logo:
-    db 15, 18, 15, 62               ; i
-    db 15, 69, 15, 73
-    db 24, 18, 45, 18               ; s
-    db 45, 18, 45, 40
-    db 24, 40, 45, 40
-    db 24, 40, 24, 62
-    db 24, 62, 45, 62
-    db 53, 18, 74, 18               ; o
-    db 53, 18, 53, 62
-    db 74, 18, 74, 62
-    db 53, 62, 74, 62
-    db 82, 82, 111, 82              ; T
-    db 97, 18, 97, 82
-    db 119, 18, 119, 62             ; r
-    db 119, 62, 135, 62
-    db 135, 54, 135, 62
-    db 143, 18, 164, 18             ; o
-    db 143, 18, 143, 62
-    db 164, 18, 164, 62
-    db 143, 62, 164, 62
-    db 172, 18, 172, 62             ; n
-    db 172, 62, 193, 62
-    db 193, 18, 193, 62
-    db 0xFF
+    db 1, 0x80, 0x00, 0x80, 0x80, 0x80, 0x80, 0x80   ; i
+    db 4, 0x00, 0x00, 0xF0, 0x80, 0xF0, 0x10, 0xF0   ; s
+    db 4, 0x00, 0x00, 0xF0, 0x90, 0x90, 0x90, 0xF0   ; o
+    db 5, 0xF8, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20   ; T
+    db 4, 0x00, 0x00, 0xF0, 0x80, 0x80, 0x80, 0x80   ; r
+    db 4, 0x00, 0x00, 0xF0, 0x90, 0x90, 0x90, 0xF0   ; o
+    db 4, 0x00, 0x00, 0xF0, 0x90, 0x90, 0x90, 0x90   ; n
+    db 0

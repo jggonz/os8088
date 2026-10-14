@@ -100,6 +100,8 @@ it_key:
     je .right
     cmp bl, 'p'
     je .pause
+    cmp bl, 'm'
+    je .snd
     cmp bl, 'c'                     ; (at the title C is a silent Lunatic)
     jne .out
     call it_look_key                ; the look (itfs.inc, SPEC.md 108.12.2)
@@ -133,6 +135,9 @@ it_key:
     ret
 .esc:
     mov byte [it_qesc], 1
+    ret
+.snd:
+    mov byte [it_qsnd], 1           ; M: the sound, any time (Game > Sound)
     ret
 .cont:
     mov byte [it_qcont], 1
@@ -201,6 +206,14 @@ it_fifo_pop:
 ; (the game state's one writer). ES = the claim.
 ; -----------------------------------------------------------------------------
 it_commands:
+    xor al, al                      ; A ROUND WHOSE ARENA THE WORKER HAS JUST
+    xchg al, [it_qround]            ; BUILT (it_bld_do): it starts now, in
+    or al, al                       ; the WAIT it waited in unpresented
+    jz .start
+    cmp byte [it_state], ST_WAIT
+    jne .start
+    call it_round_start
+.start:
     xor al, al
     xchg al, [it_qstart]
     or al, al
@@ -210,7 +223,12 @@ it_commands:
     rol ah, 1
     and ah, 1
     mov [it_snd], ah
-    xor ah, ah                      ; the clock's seed, not the harness's
+    call it_snd_label
+    xor ah, ah                      ; the clock's seed - or, the harness's
+    test byte [it_tflags], IT_TF_SEED ; SEED flag set, it_tseed: a stored
+    jz .seed                        ; game through the real title (108.7.2)
+    inc ah
+.seed:
     call it_game_start
 .esc:
     xor al, al
@@ -242,6 +260,13 @@ it_commands:
     mov byte [it_msgd], 1
 .cont:
     xor al, al
+    xchg al, [it_qsnd]              ; M / Game > Sound: the flag, and the
+    or al, al                       ; menu item that names it
+    jz .cn
+    xor byte [it_snd], 1
+    call it_snd_label
+.cn:
+    xor al, al
     xchg al, [it_qcont]
     or al, al
     jz .out
@@ -253,6 +278,8 @@ it_commands:
 .wait:
     cmp byte [it_state], ST_CRASH
     jne .wt
+    cmp byte [it_lossrow], 3        ; (the third loss: GAME OVER follows, and
+    jae .out                        ; only a fresh Space cuts its 3.5 s short)
     mov byte [it_qcont], 1          ; Space during the 0.8 s of CRASH is kept,
     ret                             ; not lost: WAIT takes it on arrival
 .wt:
@@ -265,4 +292,20 @@ it_commands:
     jne .out
     call it_to_title
 .out:
+    ret
+
+; -----------------------------------------------------------------------------
+; it_snd_label - Game > Sound names the state it_snd is in ('Sound: On' /
+; 'Sound: Off'). One word store, so the UI task's menu draw never reads half
+; of it, nor the other label for a moment. Preserves every register.
+; -----------------------------------------------------------------------------
+it_snd_label:
+    push ax
+    mov ax, it_it_snd
+    cmp byte [it_snd], 0
+    jne .on
+    mov ax, it_it_sndo
+.on:
+    mov [it_i_game + 2 * IT_MI_SND], ax
+    pop ax
     ret

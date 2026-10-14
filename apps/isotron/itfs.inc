@@ -76,17 +76,25 @@ IT_HYP      equ IT_STRIP + 1206     ; point for c(y)'s bank phase (it_fs_herc_ta
 %endif
 
 ; the full-screen overlay records (it_ovf), in 8 x 8 logical cells of a
-; 40 x 25 grid: the HUD's left line, the message, the HUD's right line -
-; in ROW order, which it_fs_whole relies on (SPEC.md 108.12.5)
+; 40 x 25 grid: the HUD's left line, the title's five lines (wave 4), the
+; message, the HUD's right line - in ROW order, which it_fs_area relies on
+; (SPEC.md 108.12.5, 108.13.1). The HUD and the title's lines never show at
+; once, so the left HUD sharing rows with none of them is all the order needs
 OVF_ROW     equ 0
 OVF_C0      equ 1
 OVF_LEN     equ 2
 OVF_STR     equ 4
 OVF_SIZE    equ 6
 OVF_L       equ 0
-OVF_M       equ OVF_SIZE
-OVF_R       equ 2 * OVF_SIZE
+OVF_T       equ OVF_SIZE            ; the title's lines, rows 1 .. 5
+OVF_M       equ (1 + IT_TLINES) * OVF_SIZE
+OVF_R       equ OVF_M + OVF_SIZE
+OVF_N       equ 3 + IT_TLINES
 OVF_LROW    equ 0
+OVF_TROW    equ 1
+%if OVF_T != OVF_TROW * OVF_SIZE
+  %error "it_ovf_set takes a title line's row from its record's index"
+%endif
 OVF_MROW    equ 23
 OVF_RROW    equ 24
 
@@ -141,15 +149,15 @@ it_fs_menu:
     push ax
     push bx
     push dx
-    mov word [it_i_game + 2 * 6], it_it_full
+    mov word [it_i_game + 2 * IT_MI_FULL], it_it_full
     call it_fs_pick
     jnc .col
-    mov word [it_i_game + 2 * 6], it_it_fulln
+    mov word [it_i_game + 2 * IT_MI_FULL], it_it_fulln
 .col:
-    mov word [it_i_game + 2 * 5], it_it_col
+    mov word [it_i_game + 2 * IT_MI_COL], it_it_col
     cmp byte [it_surf], 0
     jne .out
-    mov word [it_i_game + 2 * 5], it_it_coln
+    mov word [it_i_game + 2 * IT_MI_COL], it_it_coln
 .out:
     pop dx
     pop bx
@@ -181,6 +189,8 @@ it_fs_go:
     jne .out
     call it_fs_pick
     jc .out                         ; the menu item is greyed for this too
+    call it_bld_sync                ; the worker frozen in a build owed or
+    jc .out                         ; half done: it is finished first (itrules)
     mov ax, it_fs_main
     mov bx, [it_win]
     mov cx, FSXF_FASTTICK           ; 54.6 sub-ticks a second: the frame clock
@@ -825,6 +835,11 @@ it_look_flip:
 it_fs_present:
     cmp byte [it_full], 0
     je .part
+    cmp byte [it_state], ST_SWEEP   ; a whole present owed ends a sweep: it
+    jne .w                          ; shows the arena whole (itsweep.inc)
+    call it_sw_finish
+.w:
+    call it_wait_ol                 ; (WAIT's arena: whole, outline and all)
     IT_MARK it_fsw0
     call it_fs_whole
     IT_MARK it_fsw1
@@ -843,8 +858,14 @@ it_fs_present:
     je .ega
     mov al, [it_hudd]
     or al, [it_msgd]
-    jz .out
+    jz .sw
     call it_fs_ovl_update
+.sw:
+    cmp byte [it_state], ST_SWEEP   ; THE SWEEP: the items due, all of them -
+    jne .out                        ; no lock to let go here (itsweep.inc)
+    call it_vga_plain_ck
+    call it_sw_run
+    call it_vga_span_ck
 .out:
     ret
 .ega:
@@ -854,6 +875,10 @@ it_fs_present:
     ret
 .e1:
     call it_ovl_update              ; (nothing when nothing changed)
+    cmp byte [it_state], ST_SWEEP
+    jne .e2
+    call it_sw_run                  ; (through gfx_blitp at its geometry)
+.e2:
     call OSAPI_GET_TICKS
     cmp ax, [it_fsptk]
     je .out
@@ -911,64 +936,104 @@ it_fs_whole:
 .direct:
     call it_fs_ovl_compose
     call it_vga_plain_ck
-    xor bp, bp                      ; BP = the first row not yet presented
-    xor bx, bx                      ; BX = the overlay (in row order)
+    xor ax, ax                      ; the whole picture minus the text...
+    mov [it_fa0], ax
+    mov [it_fac0], ax
+    mov word [it_fa1], IT_CROWS
+    mov word [it_fac1], IT_FCELLS
+    call it_fs_area
+    xor bx, bx                      ; ...then the text
+.tx:
+    push bx
+    call it_ovf_draw
+    pop bx
+    add bx, OVF_SIZE
+    cmp bx, OVF_N * OVF_SIZE
+    jb .tx
+    call it_vga_span_ck
+    ret
+
+; -----------------------------------------------------------------------------
+; it_fs_area - logical rows [it_fa0, it_fa1) (EVEN) by cells [it_fac0,
+; it_fac1) of the picture, minus every overlay's text cells: each overlay the
+; rect meets cuts it into the rows above it, across; its own rows, left and
+; right of its text; and on below - the records in row order (OVF_*). Every
+; byte outside the text once. A whole present (it_fs_whole) and a sweep's
+; rect (itsweep.inc) alike. Clobbers everything but DS.
+; -----------------------------------------------------------------------------
+it_fs_area:
+    mov ax, [it_fa0]
+    mov [it_fab], ax                ; the first row not yet presented
+    xor bx, bx
 .ov:
     cmp word [it_ovf + bx + OVF_STR], 0
     je .on
     mov al, [it_ovf + bx + OVF_ROW]
     mov ah, 8
     mul ah                          ; AX = its first row
-    cmp ax, bp
-    jbe .band
-    mov [it_fy1], ax                ; the rows above it, whole
-    mov [it_fy0], bp
-    mov word [it_fc0], 0
-    mov word [it_fc1], IT_FCELLS
+    cmp ax, [it_fa1]
+    jae .on                         ; below the rect
+    mov dx, ax
+    add dx, 8                       ; DX = its end
+    cmp dx, [it_fab]
+    jbe .on                         ; above what is left of it
+    mov cl, [it_ovf + bx + OVF_C0]
+    xor ch, ch
+    cmp cx, [it_fac1]
+    jae .on                         ; right of it
+    mov si, cx
+    add cl, [it_ovf + bx + OVF_LEN]
+    adc ch, 0
+    cmp cx, [it_fac0]
+    jbe .on                         ; left of it
+    push bx
+    push cx                         ; the text's cells: [SI, CX)
+    push si
+    push dx
+    cmp ax, [it_fab]
+    jbe .own
+    mov [it_fy1], ax                ; the rows above it, across
     push ax
-    push bx
-    call it_fs_rect
-    pop bx
+    mov ax, [it_fab]
+    mov [it_fy0], ax
+    call .full
     pop ax
-.band:
-    mov [it_fy0], ax                ; its own 8 rows: left of it, right of it
-    add ax, 8
-    mov [it_fy1], ax
-    mov bp, ax
-    push bx
-    mov word [it_fc0], 0
-    mov al, [it_ovf + bx + OVF_C0]
-    xor ah, ah
+    mov [it_fab], ax
+.own:
+    pop dx                          ; its own rows, to the rect's end
+    cmp dx, [it_fa1]
+    jbe .oe
+    mov dx, [it_fa1]
+.oe:
+    mov ax, [it_fab]
+    mov [it_fy0], ax
+    mov [it_fy1], dx
+    mov [it_fab], dx
+    pop ax                          ; left of the text
+    mov cx, [it_fac0]
+    mov [it_fc0], cx
     mov [it_fc1], ax
-    call it_fs_rect
-    pop bx
-    push bx
-    mov al, [it_ovf + bx + OVF_C0]
-    add al, [it_ovf + bx + OVF_LEN]
-    xor ah, ah
+    call it_fs_rect                 ; (nothing when empty)
+    pop ax                          ; right of it
     mov [it_fc0], ax
-    mov word [it_fc1], IT_FCELLS
+    mov ax, [it_fac1]
+    mov [it_fc1], ax
     call it_fs_rect
     pop bx
 .on:
     add bx, OVF_SIZE
-    cmp bx, 3 * OVF_SIZE
+    cmp bx, OVF_N * OVF_SIZE
     jb .ov
-    mov [it_fy0], bp                ; and below the last
-    mov word [it_fy1], IT_CROWS
-    mov word [it_fc0], 0
-    mov word [it_fc1], IT_FCELLS
-    call it_fs_rect
-    xor bx, bx                      ; then the text
-.tx:
-    push bx
-    call it_ovf_draw
-    pop bx
-    add bx, OVF_SIZE
-    cmp bx, 3 * OVF_SIZE
-    jb .tx
-    call it_vga_span_ck
-    ret
+    mov ax, [it_fab]                ; and on below the last
+    mov [it_fy0], ax
+    mov ax, [it_fa1]
+    mov [it_fy1], ax
+.full:
+    mov ax, [it_fac0]
+    mov [it_fc0], ax
+    mov ax, [it_fac1]
+    mov [it_fc1], ax
+    jmp it_fs_rect
 
 ; it_vga_plain_ck / it_vga_span_ck - the GC's state, on VGA alone
 it_vga_plain_ck:
@@ -1001,9 +1066,64 @@ it_fs_rect:
     cmp ax, [it_fc1]
     jge .none
     push bp
+    cmp byte [it_pfill], 0          ; VOID (a sweep's fill): zeros, no tables
+    jne .fill
     call [it_fsrect]
     pop bp
 .none:
+    ret
+.fill:
+    call it_fs_fill
+    pop bp
+    ret
+
+; it_fs_fill - it_fs_rect's rows and cells as VOID, which is ink 0 on every
+; surface and in every look: zero bytes, a `rep stosb` a device row - on
+; VGA 0Dh in the PLAIN state (set/reset off, every plane mapped), so a 0 is
+; colour 0 in all four planes. Rows: the CGA's and VGA's one a logical row,
+; the Hercules' card rows c(fy0) .. c(fy1) (1.5 a row; fy0 is even). A
+; cell is 2 bytes on the CGA and the Hercules, 1 on VGA. Clobbers AX..DI.
+it_fs_fill:
+    mov ax, [it_fy0]
+    mov dx, [it_fy1]
+    mov cl, 1                       ; CL = bytes a cell
+    cmp byte [it_fsk], FSK_VGA
+    je .g
+    inc cl
+    cmp byte [it_fsk], FSK_HERC
+    jne .g
+    mov bx, ax                      ; card rows: c(y) = y + y / 2, y even
+    shr bx, 1
+    add ax, bx
+    mov bx, dx
+    shr bx, 1
+    add dx, bx
+.g:
+    mov si, ax                      ; SI = the first device row, DX its end
+    mov ax, [it_fc0]
+    mul cl
+    mov bx, ax                      ; BX = the first byte in a row
+    mov ax, [it_fc1]
+    sub ax, [it_fc0]
+    mul cl
+    mov bp, ax                      ; BP = bytes a row
+    push es
+    mov es, [it_fseg]
+    cld
+    xor al, al
+.r:
+    cmp si, dx
+    jae .x
+    mov di, si
+    shl di, 1
+    mov di, [it_fsrow + di]
+    add di, bx
+    mov cx, bp
+    rep stosb
+    inc si
+    jmp short .r
+.x:
+    pop es
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1024,6 +1144,13 @@ it_fs_ovl_compose:
     mov ax, dx
     mov bx, OVF_R
     call it_ovf_set
+    mov bx, OVF_T                   ; the title's lines
+.t:
+    call it_ovl_tstr
+    call it_ovf_set
+    add bx, OVF_SIZE
+    cmp bx, OVF_M
+    jb .t
     ret
 
 ; it_ovf_set - record BX gets string AX (0 = none): its length (at most 40)
@@ -1056,9 +1183,18 @@ it_ovf_set:
     cmp bx, OVF_R
     je .set
     mov al, OVF_MROW
+    cmp bx, OVF_M
+    je .mid
+    mov al, bl                      ; a title line: its row is its record's
+    xor ah, ah                      ; index, 1 .. 5 (OVF_T = OVF_SIZE)
+    push cx
+    mov cl, OVF_SIZE
+    div cl
+    pop cx
+.mid:
     mov ah, IT_FCELLS
     sub ah, cl
-    shr ah, 1                       ; the message: centred
+    shr ah, 1                       ; the message and the title: centred
 .set:
     mov [it_ovf + bx + OVF_ROW], al
     mov [it_ovf + bx + OVF_C0], ah
@@ -1096,6 +1232,18 @@ it_fs_ovl_update:
     mov ax, cx
     mov bx, OVF_M
     call it_ovf_swap
+    mov bx, OVF_T                   ; the title's lines go with the message
+.t:
+    call it_ovl_tstr
+    cmp ax, [it_ovf + bx + OVF_STR]
+    je .tn                          ; (unchanged: not drawn again)
+    push bx
+    call it_ovf_swap
+    pop bx
+.tn:
+    add bx, OVF_SIZE
+    cmp bx, OVF_M
+    jb .t
 .out:
     call it_vga_span_ck
     ret

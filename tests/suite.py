@@ -2866,6 +2866,23 @@ SOAK = [
         "comes home with the VGA lit again. Measured ~60 s (wave 3)",
         needs=("marty", "nasm"),
         wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotronflow", "soak", py("tests/isotron.py", "--flow", "all"), 90.0,
+        "isoTron's FLOW driven through its UI (SPEC.md 108.13.6), MartyPC's "
+        "XT-VGA: the title's own lines over the void and the block-letter word "
+        "the model's; `1` - a real key - starts a STORED game (it_tflags SEED, "
+        "BOT, FAST, HOLD) and EVERY round's arena is SWEPT in: at its first "
+        "iteration the canvas is the model's for that height byte for byte and "
+        "the glass the model's presenter of it, outline and all; after every "
+        "round the state is the model's, the score is NOT yet on the HUD at "
+        "the crash (it is owed 0.27 s into CRASH), WAIT shows it with the "
+        "result line, and Space - a real key - continues; the tower 1, 2, 3, "
+        "4, 1 is seen on the glass (ISOTRON_SHOTS keeps the series beside the "
+        "model's pictures); the third loss is CRASH then GAME OVER with its "
+        "line on the glass, then the title, its picture the model's again; "
+        "About from the app menu opens the card and a key takes it down. "
+        "Measured ~56 s for both machines (wave 4)",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img", "build/os8088-360.img")),
     Row("isotronperf", "soak", py("tests/isotron.py", "--perf", "all"), 720.0,
         "isoTron's windowed price on the XT (SPEC.md 108.10.3, 108.11.7; "
         "ISOTRON-PLAN section 16), MartyPC's cycle counter on the 5150 CGA, "
@@ -2896,8 +2913,15 @@ SOAK = [
         "1.5 s and every band hold after it against 50 ms. EGA (the VIDEO=ega "
         "tree on the XT-VGA) adds its presents and way back - its whole "
         "present reported, not gated - and a Lunatic h4 frame with the "
-        "bracket's presentation governor. Measured ~700 s for the four "
-        "machines in a soak lane (wave 3 fix)",
+        "bracket's presentation governor. AND THE SWEEP (wave 4, SPEC.md "
+        "108.13.4), a boot of its own a machine: MartyPC's cycle counter from "
+        "it_sw0 (Space's own wake, before anything of the sweep) to it_sw1 "
+        "(the outline out) for the title to h1, a raise 3 -> 4, a reset 4 -> 1 "
+        "and a round at the same h1 windowed, then F and the raise, the reset "
+        "and the same height in full screen - every one against 2.2 s, ~1.5 s "
+        "reported where the surface keeps the pace. Measured ~700 s for the "
+        "four machines in a soak lane (wave 3 fix); 574 s with the sweep's "
+        "four boots, alone in a lane (wave 4)",
         needs=("marty", "nasm"), serial=True,
         wants=("build/isotron360.img", "build/os8088-360.img")),
     Row("excitebikesim", "soak", py("tools/exbsim.py", "--selfcheck"), 3.0,

@@ -15,7 +15,16 @@
 ;                     bit 2 NOFLOW  the title starts a game on it_tgo; no
 ;                                   crash pause, no wait, no sweep
 ;                     bit 3 HOLD    stop at every round's end: it_tpause = 1
+;                                   (a SWEEP and READY still run while it is
+;                                   set, so a held game stops at its next
+;                                   round's first iteration, the arena drawn)
+;                     bit 4 SEED    a game the KEYS or the menu start (1-3,
+;                                   A-C) takes it_tseed rather than the clock
+;                                   - isotronflow plays a stored game through
+;                                   the real title that way (wave 4)
 ;   it_tgo      byte  1 = start the NOFLOW game now (the worker clears it)
+;   it_tswk     word  0, or the sweep's last due item: a sweep stops there
+;                     until it is cleared (isotronflow's paint mid-sweep)
 ;   it_tinn     byte  entries in it_tinput (FAST without BOT): a script of
 ;   it_tinput   8 x   (word iteration, byte key) - K_LEFT, K_RIGHT, K_BOOST,
 ;               3 B   K_NORMAL - played at that iteration of every round,
@@ -40,6 +49,8 @@
 ;   it_ck       word  rol(ck, 1) XOR idx over every cell placed this round
 ;   it_nsteps   word  head-steps this round
 ;   it_gover    word  games that have ended in three losses
+;   it_nsweep   word  sweeps ended (wave 4; isotron.asm's bss, itsweep.inc)
+;   it_nswp     word  W_PAINTs made during a sweep (itsweep.inc it_sw_paint)
 ;
 ; THE BOUND COUNTERS (SPEC.md 108.10.2), kept by itcanvas.inc it_span:
 ;
@@ -77,6 +88,7 @@ IT_TF_FAST   equ 1
 IT_TF_BOT    equ 2
 IT_TF_NOFLOW equ 4
 IT_TF_HOLD   equ 8
+IT_TF_SEED   equ 16
 IT_TINMAX    equ 8
 
 ; --- inputs ------------------------------------------------------------------
@@ -85,6 +97,7 @@ IT_TINMAX    equ 8
     BYTEV it_tflags
     BYTEV it_tgo
     BYTEV it_tpause
+    WORDV it_tswk
     BYTEV it_tinn
     BUFV  it_tinput, IT_TINMAX * 3
 
@@ -104,3 +117,4 @@ IT_TINMAX    equ 8
     WORDV it_gover
     BYTEV it_maxprobe
     BYTEV it_maxspan
+    WORDV it_nswp

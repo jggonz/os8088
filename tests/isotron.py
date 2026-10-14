@@ -8,6 +8,12 @@
     python3 tests/isotron.py --fs cga|herc|vga|ega|all
     python3 tests/isotron.py --toggle cga|vga|all
     python3 tests/isotron.py --twodisp
+    python3 tests/isotron.py --flow cga|vga|all
+    python3 tests/isotron.py --perf all --sweep   (the sweep part alone)
+
+FLOW (wave 4, SPEC.md 108.13): --flow is isotronflow, the game driven through
+its UI with every arena SWEPT in and held to the model, and --perf adds a
+boot a machine timing the sweep in both modes (--sweep: that alone).
 
 FULL SCREEN (wave 3, SPEC.md 108.12): --fs is isotronfs (and `--win ega`
 runs the EGA's full-screen half after its windowed one), --toggle is
@@ -277,15 +283,27 @@ def keys_leg(g):
         g.put("it_tpause", 0)
         m.run()
         wait(lambda: g.b("it_tpause") == 1, "the round to end", guest=30)
-        if g.b("it_state") == L.ST_OVER:
+        assert g.b("it_state") == L.ST_CRASH, \
+            "a round's end is not CRASH (state %d)" % g.b("it_state")
+        if g.b("it_lossrow") >= 3:      # the third loss: CRASH, THEN GAME OVER
             break
-        assert g.b("it_state") == L.ST_CRASH
         key("Space")                            # a player win: once more
     else:
         raise AssertionError("four rounds and the computer never won one")
+    # a Space in the third loss's CRASH is NOT kept: it would cut GAME OVER's
+    # line short on arrival, and only a fresh Space may (SPEC.md 108.13.2)
+    key("Space")
+    t = m.status()["cycles"]
+    wait(lambda: m.status()["cycles"] - t > M.GUEST_HZ // 4, "a quarter of a guest second")
+    assert g.b("it_qcont") == 0, "Space in the third loss's CRASH was kept for GAME OVER"
     m.pause()
     g.put("it_tpause", 0)
     m.run()
+    wait(lambda: g.b("it_state") == L.ST_OVER, "CRASH to give way to GAME OVER", guest=5)
+    t = m.status()["cycles"]
+    wait(lambda: m.status()["cycles"] - t > M.GUEST_HZ, "a guest second of GAME OVER")
+    assert g.b("it_state") == L.ST_OVER, \
+        "GAME OVER's line did not hold (state %d a second in)" % g.b("it_state")
     wait(lambda: g.b("it_state") == L.ST_TITLE and g.w("it_gover") == gover0 + 1,
          "GAME OVER to return to the title", guest=10)
     print("    keys: Esc ends a game; three losses: GAME OVER, then the title", flush=True)
@@ -1058,6 +1076,10 @@ def fs_want(state, sp=0, sc=0, winner=None):
            "wait": guest_str("it_s_pwin" if winner == "P" else "it_s_cwin")}[state]
     if state != "title":
         recs.append((0, 2, len(left), left))
+    else:                               # the title's own lines (SPEC.md 108.13.1)
+        for k in range(L.TLINES):
+            t = guest_str("it_s_t%d" % k)[:S.FS_CELLS]
+            recs.append((1 + k, (S.FS_CELLS - len(t)) // 2, len(t), t))
     if msg:
         msg = msg[:S.FS_CELLS]
         recs.append((23, (S.FS_CELLS - len(msg)) // 2, len(msg), msg))
@@ -1954,6 +1976,469 @@ def fs_perf_leg(tag, out):
     return 0
 
 
+# =============================================================================
+# WAVE 4: THE GAME'S FLOW AND THE SWEEP (SPEC.md 108.13)
+# =============================================================================
+_E_SW = L._equs()                   # (the sweep's item numbers, off its source)
+
+
+def start_canvas(h):
+    """The model's canvas at a round's first iteration at height h: the
+    tower rebuilt and the two start cells' walls (S.Round places them; their
+    values do not depend on the RNG - SPEC.md 108.3)."""
+    c = S.Canvas()
+    S.Round(h, 1, S.Rng(1), S.Grid(), c)
+    return c
+
+
+def flow_shot(g, tag, name, canvas):
+    """Keep the glass and the model's own picture of `canvas` side by side
+    (ISOTRON_SHOTS) - the tower picture series is these."""
+    if not REPORTS:
+        return
+    geo = g.geom()
+    S.png_win(os.path.join(REPORTS, name + "-model.png"), canvas, geo["hc"], tag in ("cga", "herc"))
+
+
+HOLD_CEIL = 100.0                   # ms: a worker's lock hold between rounds -
+                                    # a sweep's (80 ms of budget and the last
+                                    # iteration), a build's wake (the build is
+                                    # outside the lock): SPEC.md 108.13.2, 108.13.4
+PAINT_RATIO = 1.2                   # a W_PAINT mid-sweep against the same rect's
+                                    # plain paint (SPEC.md 108.13.3)
+
+
+def holds_of(hits, a, b):
+    """Every [a, b) interval in a trace's hits, in ms of guest time."""
+    out, cur = [], None
+    for h in hits:
+        if h["addr"] == a:
+            cur = h["cycles"]
+        elif h["addr"] == b and cur is not None:
+            out.append(1000.0 * (h["cycles"] - cur) / M.GUEST_HZ)
+            cur = None
+    return out
+
+
+def flow_leg(tag):
+    """isotronflow (SPEC.md 108.13.6): the game driven through its UI.
+
+    One boot. The title's lines are on the glass; `1` - a real key - starts a
+    STORED game (it_tflags SEED: the harness's seed instead of the clock's,
+    BOT plays, FAST rounds, HOLD stops each one), and EVERY round's arena is
+    swept onto the glass: at its first iteration the canvas is the model's
+    for that height byte for byte, the glass equals the model's presenter of
+    it, the outline is back and the sweep counter moved. After every round the
+    state is the model's; the score is NOT yet on the HUD at the crash (it is
+    owed 0.27 s into CRASH), WAIT then shows it and the result line, and Space
+    - a real key - continues. The third loss in a row: CRASH, then GAME OVER
+    with its line on the glass, then the title on its own. Last, About from
+    the app menu opens the card, and a key takes it down.
+
+    ISOTRON_SHOTS=DIR keeps the glass and the model picture at the first round
+    of each height in the order 1, 2, 3, 4, 1 - the tower picture series."""
+    system, apps, machine = boot_for(tag)
+    seed, tier, nr, hs = next(x for x in S.STORED if x[1] == 1)
+    model = S.Game(seed, tier)
+    want = model.play()
+    assert S.has_tower_cycle(want), "stored game %d has no tower 1-2-3-4-1" % seed
+    series, nextw = [], [1, 2, 3, 4, 1]
+    with os88ui.boot(system, apps=apps, machine=machine) as ui:
+        g = L.open_game(ui)
+        m = ui.m
+        M.until(m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.2, guest=20)
+        presented(ui, g)
+        # --- the title -------------------------------------------------------------
+        texts = [t for _, _, _, _, t in g.overlays()]
+        lines = [guest_str("it_s_t%d" % k) for k in range(L.TLINES)] + [guest_str("it_s_title")]
+        assert texts == lines, "the title shows %r, not its own lines %r" % (texts, lines)
+        tg, tc = S.Grid(), S.Canvas()
+        tc.title(tg)
+        n, _ = check_glass(g, tag, tc, "title", "w4-%s-title" % tag)
+        print("  title: its %d lines over the void, %d pixels equal the model's"
+              % (len(texts), n), flush=True)
+
+        def swept(k, h, what):
+            """The round about to start (held at its first iteration): the
+            sweep done, canvas and glass the model's at height h."""
+            M.until(m, lambda _: g.b("it_state") == L.ST_PLAY and g.w("it_nsweep") == k,
+                    "%s: the sweep and READY" % what, poll=0.1, guest=20)
+            presented(ui, g)
+            c = start_canvas(h)
+            assert g.canvas() == c.pack(), \
+                "%s: the swept canvas is not the model's arena at h%d" % (what, h)
+            name = None
+            if nextw and h == nextw[0]:
+                nextw.pop(0)
+                name = "w4-%s-tower%d-h%d" % (tag, len(series) + 1, h)
+                series.append(h)
+            px, _ = check_glass(g, tag, c, what, name)
+            if name:
+                flow_shot(g, tag, name, c)
+            return px
+
+        m.pause()
+        g.put("it_tseed", seed, 2)
+        g.put("it_tflags", L.TF_FAST | L.TF_BOT | L.TF_SEED | L.TF_HOLD)
+        g.put("it_tpause", 1)           # (a held game sweeps, and stops at PLAY)
+        m.run()
+        m.key("Digit1")
+        px = swept(1, 1, "game start")
+        print("  1: a game, its arena swept in; h1 on the glass, %d px the model's" % px,
+              flush=True)
+        gover0 = g.w("it_gover")
+        waitwhole = False
+        for k, rec in enumerate(want):
+            sc0 = (g.w("it_sp"), g.w("it_sc"))
+            m.pause()
+            g.put("it_tpause", 0)
+            m.run()
+            M.until(m, lambda _: g.b("it_tpause") == 1, "round %d to end" % (k + 1),
+                    poll=0.1, guest=120)
+            m.pause()
+            st, ovs, state = g.state(), g.overlays(), g.b("it_state")
+            m.run()
+            bad = [(x, st[x], rec[x]) for x in KEYS if st[x] != rec[x]]
+            assert not bad, "round %d: guest and model disagree on %r" % (k + 1, bad)
+            assert state == L.ST_CRASH, "round %d ended in state %d, not CRASH" % (k + 1, state)
+            hud = [t for _, _, _, _, t in ovs]
+            old = ["PLAYER %d" % sc0[0], "COMPUTER %d" % sc0[1]]
+            new = ["PLAYER %d" % rec["sp"], "COMPUTER %d" % rec["sc"]]
+            assert hud == old, \
+                "round %d: the HUD changed AT the crash (%r) - it is owed 0.27 s on" % (k + 1, hud)
+            # ...AND IT COMES 0.27 s INTO CRASH, not later (SPEC.md 108.13.2).
+            # HOLD stopped CRASH at its start and the time held is no part of
+            # it, so its clock starts again at the release, and the guest is
+            # run by cycles: 1.5 ticks in, the old score, still owed (a
+            # negative control: IT_HUDT = 0 fails here); IT_HUDT + 1 in, the
+            # new one on the HUD and the state still CRASH (a score that came
+            # only with WAIT fails there)
+            tick = M.GUEST_HZ / 18.2065
+            m.pause()
+            now = struct.unpack("<H", m.read(m.sym("ticks"), 2))[0]
+            g.put("it_tend", now + _E_SW["IT_CRASHT"], 2)
+            g.put("it_tpause", 0)
+            m.advance(cycles=int(1.5 * tick))
+            hud = [t for _, _, _, _, t in g.overlays()]
+            assert g.b("it_state") == L.ST_CRASH and g.b("it_hudp") != 0 and hud == old, \
+                "round %d: 1.5 ticks into CRASH the score is out (state %d, owed %d, %r)" \
+                % (k + 1, g.b("it_state"), g.b("it_hudp"), hud)
+            m.advance(cycles=int(_E_SW["IT_HUDT"] * tick))
+            for _ in range(40):         # (its present: a wake or two)
+                if not g.b("it_hudp") and not g.b("it_hudd"):
+                    break
+                m.advance(cycles=int(tick / 4))
+            hud = [t for _, _, _, _, t in g.overlays()]
+            assert g.b("it_state") == L.ST_CRASH and hud == new, \
+                "round %d: %d ticks into CRASH the HUD shows %r in state %d, not the new " \
+                "score in CRASH" % (k + 1, _E_SW["IT_HUDT"] + 1, hud, g.b("it_state"))
+            m.run()
+            if rec["lossrow"] >= 3:
+                break
+            M.until(m, lambda _: g.b("it_state") == L.ST_WAIT and not g.owed(),
+                    "round %d: WAIT" % (k + 1), poll=0.1, guest=10)
+            res = guest_str("it_s_pwin" if rec["winner"] == "P" else "it_s_cwin")
+            hud = [t for _, _, _, _, t in g.overlays()]
+            assert hud == ["PLAYER %d" % rec["sp"], res, "COMPUTER %d" % rec["sc"]], \
+                "round %d: WAIT shows %r" % (k + 1, hud)
+            if rec["hnext"] >= 2 and not waitwhole:
+                # A WHOLE PRESENT IN WAIT (a toggle, a look, a relayout: it_full)
+                # shows the next arena WHOLE, its outline written in first -
+                # never a slab with no boundary (SPEC.md 108.13.2)
+                m.pause()
+                g.put("it_full", 1)
+                m.run()
+                presented(ui, g)
+                c = S.Canvas()
+                c.rebuild(rec["hnext"])
+                assert g.canvas() == c.pack(), \
+                    "round %d: WAIT's canvas is not the next arena h%d whole" % (k + 1, rec["hnext"])
+                px, _ = check_glass(g, tag, c, "a whole present in WAIT")
+                waitwhole = True
+                print("    WAIT, a whole present: the next arena h%d whole, outline and all, "
+                      "%d px the model's" % (rec["hnext"], px), flush=True)
+            m.pause()
+            g.put("it_tpause", 1)
+            m.run()
+            m.key("Space")
+            px = swept(k + 2, rec["hnext"], "round %d" % (k + 2))
+            print("    round %2d: %s, %d-%d; Space; h%d swept in, %d px the model's"
+                  % (k + 1, rec["winner"], rec["sp"], rec["sc"], rec["hnext"], px), flush=True)
+        else:
+            raise AssertionError("the game never reached three losses")
+        # --- GAME OVER, then the title -------------------------------------------
+        M.until(m, lambda _: g.b("it_state") == L.ST_OVER and not g.owed(),
+                "CRASH to give way to GAME OVER", poll=0.1, guest=5)
+        over = guest_str("it_s_over")
+        ovs = g.overlays()
+        assert over in [t for _, _, _, _, t in ovs], "GAME OVER shows %r" % ovs
+        w, h, rows = glass(m, tag, "w4-%s-gameover" % tag)
+        geo = g.geom()
+        x0, y0, x1, y1, _ = next(o for o in ovs if o[4] == over)
+        lit = sum(1 for y in range(geo["oy"] + y0, geo["oy"] + y1)
+                  for x in range(geo["ox"] + x0, geo["ox"] + x1) if rows[y][x])
+        assert lit > 4 * len(over), "the GAME OVER line is not on the glass"
+        assert g.w("it_gover") == gover0 + 1
+        nw0 = g.w("it_nwhole")          # (the title's own present: it_to_title
+        B = g.base                      # sets the state before it builds the
+        W0, W1 = B + g.code["it_wake0"], B + g.code["it_wake1"]     # picture)
+        with M.bp_trace(m, W0, W1, cap=4000) as tr:
+            M.until(m, lambda _: g.b("it_state") == L.ST_TITLE and g.w("it_nwhole") != nw0,
+                    "GAME OVER to end in the title", poll=0.1, guest=10)
+        hold = max(holds_of(tr.hits, W0, W1) or [0])
+        assert hold <= HOLD_CEIL, "GAME OVER -> the title: a %.0f ms hold (the title's " \
+            "build is the worker's, outside the lock: SPEC.md 108.13.2)" % hold
+        presented(ui, g)
+        assert [t for _, _, _, _, t in g.overlays()] == lines, "the title came back without its lines"
+        assert g.canvas() == tc.pack(), "the title's canvas is not the model's"
+        check_glass(g, tag, tc, "the title again")
+        print("  three losses: CRASH, then '%s' on the glass, then the title (the longest "
+              "hold %.0f ms)" % (over, hold), flush=True)
+        assert series == [1, 2, 3, 4, 1], "the tower series is %r" % series
+        # --- A NEW GAME FROM THE MENU IN WAIT, over the arena WAIT built for
+        # the old game's next round (h3 here): the new game's arena is ITS
+        # OWN - level 1, canvas and glass the model's (SPEC.md 108.13.3)
+        m.pause()
+        g.put("it_tflags", L.TF_FAST | L.TF_BOT | L.TF_SEED | L.TF_HOLD)
+        g.put("it_tpause", 0)
+        m.run()
+        m.key("Digit1")
+        M.until(m, lambda _: g.b("it_tpause") == 1, "a round to end", poll=0.1, guest=120)
+        m.pause()
+        g.put("it_lossrow", 0)
+        g.put("it_h", 3)
+        g.put("it_tpause", 0)
+        m.run()
+        M.until(m, lambda _: g.b("it_state") == L.ST_WAIT and not g.owed(),
+                "WAIT, the next arena h3 built", poll=0.1, guest=20)
+        n0 = g.w("it_nsweep")
+        m.pause()
+        g.put("it_tpause", 1)
+        g.put("it_qstart", 0x81)        # (Game > Rookie posts exactly this)
+        m.run()
+        px = swept(n0 + 1, 1, "a new game from WAIT over h3's arena")
+        print("  a new game in WAIT over an arena built for h3: its own h1, %d px the model's"
+              % px, flush=True)
+        to_title(g)
+        # --- About ---------------------------------------------------------------
+        m.pause()
+        g.put("it_tflags", 0)
+        m.run()
+        item = "About " + L.TITLE       # the app-name cell's (OSAPI_ABOUT_SET)
+        ui.menu_pick(L.TITLE, item)
+        M.until(m, lambda _: g.b("it_abon") == 1, "About to open", poll=0.1, guest=10)
+        glass(m, tag, "w4-%s-about" % tag)
+        m.key("Space")
+        M.until(m, lambda _: g.b("it_abon") == 0, "a key to take About down", poll=0.1, guest=10)
+        print("  About: '%s' opens the card; a key takes it down" % item, flush=True)
+        # --- a PAINT in the middle of a sweep, and the focus pause ----------------
+        # (SPEC.md 108.13.3: a paint presents only what the sweep has already
+        # presented; 108.7.1: a game that loses the front pauses.) A game
+        # posted under the Disk window (it_qstart, as the menu would), its
+        # sweep stopped by the harness after half the floor's bands
+        # (it_tswk); ours raised back - an uncover W_PAINT mid-sweep - and
+        # the glass under where the Disk window was must be the arena in the
+        # floor bands swept and NOT in the ones still owed; released, the
+        # arena comes out the model's to the pixel
+        ours = ui.window(L.TITLE)
+        disk = ui.disk_window()
+        n0 = g.w("it_nsweep")
+        kc = 20                             # C bands 0 .. 19 swept
+        stop = 4 * _E_SW["SW_BANDS"] + _E_SW["SW_NB"] + kc     # SW_C0 + kc
+        ui.raise_window(disk)
+        m.pause()
+        g.put("it_tflags", L.TF_BOT | L.TF_SEED)
+        g.put("it_tpause", 1)
+        g.put("it_tswk", stop, 2)
+        g.put("it_qstart", 0x81)
+        m.run()
+        M.until(m, lambda _: g.b("it_state") == L.ST_SWEEP and g.w("it_swk") == stop
+                and g.w("it_sgs") >= g.w("it_sgn"), "the sweep to stop at item %d" % stop,
+                poll=0.05, guest=10)
+        dk = ui.disk_window()
+        np0 = g.w("it_nswp")
+        P0, P1 = g.base + g.code["it_paint_rect"], g.base + g.code["it_paint_rect.ov"]
+        with M.bp_trace(m, P0, P1, cap=4000) as tr:
+            ui.raise_window(ours)
+            M.until(m, lambda _: g.w("it_nswp") != np0, "the uncover's paint mid-sweep",
+                    poll=0.1, guest=10)
+            M.guest_sleep(m, 0.5)
+        pmid = sum(holds_of(tr.hits, P0, P1))
+        M.guest_sleep(m, 0.3)
+        geo = g.geom()
+        _, _, rows = glass(m, tag, "w4-%s-midsweep-paint" % tag)
+        c = start_canvas(1)
+        want = S.win1(c, geo["hc"]) if tag in ("cga", "herc") else S.win4(c, geo["hc"])
+        rmap = S.row_map(geo["hc"])
+        good = [0, 0]
+        owed = [0, 0]
+        for R in range(geo["hc"]):
+            y = rmap[R]
+            Y = geo["oy"] + R
+            if not dk.y <= Y < dk.y + dk.h or not 97 < y < 172:
+                continue
+            for X in range(dk.x, dk.x + dk.w):
+                px = X - geo["ox"]
+                if not 0 <= px < 8 * geo["pwb"]:
+                    continue
+                x = px // 2
+                b = x // 8
+                if not 197 - y < x < 389 - y:
+                    continue                # the floor proper (stage C's alone)
+                hit = rows[Y][X] == want[R][px]
+                (good if b < kc else owed)[0 if hit else 1] += 1
+        print("    paint mid-sweep: swept floor %d of %d px the arena's; owed floor %d of %d"
+              % (good[0], sum(good), owed[0], sum(owed)), flush=True)
+        assert sum(good) > 500 and good[1] == 0, "the paint did not present the swept bands"
+        assert sum(owed) > 500 and owed[1] > sum(owed) // 4, \
+            "the paint presented floor the sweep still owes (%d of %d match)" % (owed[0], sum(owed))
+        m.pause()
+        g.put("it_tswk", 0, 2)
+        m.run()
+        px = swept(n0 + 1, 1, "a sweep with a paint in it")
+        print("  a paint mid-sweep presents the swept bands only; released, the arena is "
+              "the model's, %d px" % px, flush=True)
+        m.pause()                       # (no bot: the bot needs no audience,
+        g.put("it_tflags", L.TF_SEED)   # and it_focus_ck leaves its game be)
+        m.run()
+        ui.raise_window(disk)           # the front lost in play: paused
+        M.until(m, lambda _: g.b("it_paused") == 1, "the lost front to pause the game",
+                poll=0.1, guest=10)
+        presented(ui, g)
+        with M.bp_trace(m, P0, P1, cap=4000) as tr:
+            ui.raise_window(ours)           # (the same rect, a plain paint)
+            presented(ui, g)
+        pplain = sum(holds_of(tr.hits, P0, P1))
+        print("  the uncover's paint: %.0f ms mid-sweep, %.0f ms the same rect in play"
+              % (pmid, pplain), flush=True)
+        assert pplain > 0 and pmid <= PAINT_RATIO * pplain, \
+            "a paint mid-sweep costs %.0f ms, the same rect's plain paint %.0f: over %.1fx " \
+            "(SPEC.md 108.13.3)" % (pmid, pplain, PAINT_RATIO)
+        assert guest_str("it_s_paused") in [t for _, _, _, _, t in g.overlays()], \
+            "the auto-pause shows no PAUSED line"
+        assert g.b("it_paused") == 1, "the pause is sticky: back in front, still paused"
+        m.key("KeyP")
+        M.until(m, lambda _: g.b("it_paused") == 0, "P to resume", poll=0.1, guest=10)
+        print("  the front lost in play: PAUSED, sticky; P resumes", flush=True)
+        m.pause()
+        g.put("it_tflags", 0)
+        g.put("it_tpause", 0)
+        g.put("it_qesc", 1)
+        m.run()
+    return 0
+
+
+SWEEP_CEIL = 2200.0                 # ms, every surface (ISOTRON-PLAN section 16)
+SWEEP_TARGET = 1600.0               # "~1.5 s" where the surface keeps up (the
+                                    # schedule's last item is due at tick 25)
+
+
+def sweep_leg(tag, out=None):
+    """isotronperf's sweep part (SPEC.md 108.13.4): MartyPC's cycle counter
+    from it_sw0 (the round's start, its arena built) to it_sw1 (the outline
+    out) for four sweeps windowed - the title to h1, a raise 3 -> 4, a reset
+    4 -> 1 and a round at the same h1 - and then in full screen the raise,
+    the reset and the same height, each against 2.2 s. The heights are poked
+    at WAIT, so the cases are the worst a game can make. Every windowed lock
+    hold from the trigger to the sweep's end, and every CRASH -> WAIT wake's
+    (the arena's build is the worker's, outside the lock), is held under
+    HOLD_CEIL."""
+    system, apps, machine = boot_for(tag)
+    ms = lambda c: 1000.0 * c / M.GUEST_HZ                      # noqa: E731
+    res, bad = {}, []
+    with os88ui.boot(system, apps=apps, machine=machine) as ui:
+        g = L.open_game(ui)
+        m = ui.m
+        M.until(m, lambda _: g.b("it_spawned") == 1, "the worker to start", poll=0.2, guest=20)
+        presented(ui, g)
+        B = g.base
+        W0, W1 = B + g.code["it_wake0"], B + g.code["it_wake1"]
+        S0, S1 = B + g.code["it_sw0"], B + g.code["it_sw1"]
+
+        def one(lab, trigger):
+            with M.bp_trace(m, W0, W1, S0, S1, cap=4000) as tr:
+                trigger()
+                tr.until(lambda: any(h["addr"] == S1 for h in tr.hits), lab, limit=200)
+            hs = tr.hits
+            s0 = next(h for h in hs if h["addr"] == S0)["cycles"]
+            s1 = next(h for h in hs if h["addr"] == S1)["cycles"]
+            holds, cur = [], None           # (every hold from the trigger on:
+            for h in hs:                    # a first round's request wake too)
+                if h["addr"] == W0:
+                    cur = h["cycles"]
+                elif h["addr"] == W1 and cur is not None:
+                    if cur < s1:
+                        holds.append(h["cycles"] - cur)
+                    cur = None
+            r = dict(ms=ms(s1 - s0), holds=len(holds), hold_max_ms=ms(max(holds or [0])))
+            res[lab] = r
+            flag = "" if r["ms"] <= SWEEP_TARGET else " (behind the ~1.5 s pace: flat out)"
+            print("  %s %s: %.0f ms%s; %d holds, the longest %.1f ms"
+                  % (tag, lab, r["ms"], flag, r["holds"], r["hold_max_ms"]), flush=True)
+            if r["ms"] > SWEEP_CEIL:
+                bad.append("%s %s %.0f ms > %.0f" % (tag, lab, r["ms"], SWEEP_CEIL))
+            if not lab.startswith("fs") and r["hold_max_ms"] > HOLD_CEIL:
+                bad.append("%s %s: a %.0f ms hold > %.0f" % (tag, lab, r["hold_max_ms"], HOLD_CEIL))
+
+        def round_to_wait(hset):
+            m.pause()                       # (held at the round's end: CRASH)
+            g.put("it_lossrow", 0)          # (no game over in the middle)
+            g.put("it_h", hset)             # the tower WAIT builds the arena of
+            g.put("it_tpause", 0)
+            with M.bp_trace(m, W0, W1, cap=4000) as tr:
+                m.run()
+                M.until(m, lambda _: g.b("it_state") == L.ST_WAIT and not g.owed(), "WAIT",
+                        poll=0.1, guest=60)
+            hold = max(holds_of(tr.hits, W0, W1) or [0])
+            res.setdefault("wait_hold_max_ms", 0.0)
+            res["wait_hold_max_ms"] = max(res["wait_hold_max_ms"], hold)
+            if not g.b("it_fsm") and hold > HOLD_CEIL:
+                bad.append("%s CRASH -> WAIT at h%d: a %.0f ms hold > %.0f (the build is "
+                           "the worker's, outside the lock)" % (tag, hset, hold, HOLD_CEIL))
+
+        def nxt(lab, hset):
+            round_to_wait(hset)
+            if lab:
+                one(lab, lambda: g.put("it_qcont", 1))
+            else:
+                g.put("it_qcont", 1)
+            M.until(m, lambda _: g.b("it_tpause") == 1, "the round", poll=0.2, guest=120)
+
+        m.pause()
+        g.put("it_tseed", 2425, 2)
+        g.put("it_tflags", L.TF_BOT | L.TF_FAST | L.TF_SEED | L.TF_HOLD)
+        g.put("it_tpause", 0)
+        m.run()
+        one("title -> h1", lambda: m.key("Digit1"))
+        M.until(m, lambda _: g.b("it_tpause") == 1, "round 1", poll=0.2, guest=120)
+        nxt(None, 3)
+        nxt("raise 3 -> 4", 4)
+        nxt("reset 4 -> 1", 1)
+        nxt("same h1", 1)
+        # --- full screen: F at WAIT, then the same three ---------------------------
+        round_to_wait(3)
+        fs_enter(ui, g, "F")
+        g.put("it_qcont", 1)
+        M.until(m, lambda _: g.b("it_tpause") == 1, "the round", poll=0.2, guest=120)
+        nxt("fs raise 3 -> 4", 4)
+        nxt("fs reset 4 -> 1", 1)
+        nxt("fs same h1", 1)
+        m.pause()
+        g.put("it_tflags", 0)
+        g.put("it_tpause", 0)
+        g.put("it_qesc", 1)
+        m.run()
+    if out:
+        import json
+        json.dump(res, open(out, "w"), indent=1)
+    print("  %s: CRASH -> WAIT, the longest hold %.1f ms (the build outside the lock)"
+          % (tag, res.get("wait_hold_max_ms", 0.0)), flush=True)
+    assert not bad, "; ".join(bad)
+    print("  %s: every sweep under %.1f s, every windowed hold under %.0f ms"
+          % (tag, SWEEP_CEIL / 1000, HOLD_CEIL), flush=True)
+    return res
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--rules", action="store_true", help="the isotronrules row")
@@ -1968,7 +2453,14 @@ def main():
     ap.add_argument("--toggle", metavar="TAG", help="cga, vga or all: isotrontoggle")
     ap.add_argument("--twodisp", action="store_true", help="the isotrontwodisp row")
     ap.add_argument("--fsonly", action="store_true", help="--perf: the full-screen part alone")
+    ap.add_argument("--flow", metavar="TAG", help="cga, herc, vga or all: isotronflow")
+    ap.add_argument("--sweep", action="store_true", help="--perf: the sweep part alone")
     a = ap.parse_args()
+    if a.flow:
+        for tag in (("cga", "vga") if a.flow == "all" else a.flow.split(",")):
+            flow_leg(tag)
+        print("isotronflow: ok (%s)" % a.flow)
+        return 0
     if a.rules:
         return rules(a)
     if a.bound:
@@ -1996,9 +2488,12 @@ def main():
         return 0
     if a.perf:
         for tag in (("cga", "herc", "vga", "ega") if a.perf == "all" else a.perf.split(",")):
-            if not a.fsonly and tag != "ega":   # (EGA's windowed lines are isotronega's)
-                perf_leg(tag, a.json and a.json.replace(".json", "-%s.json" % tag))
-            fs_perf_leg(tag, a.json and a.json.replace(".json", "-fs-%s.json" % tag))
+            if not a.sweep:
+                if not a.fsonly and tag != "ega":   # (EGA's windowed lines are isotronega's)
+                    perf_leg(tag, a.json and a.json.replace(".json", "-%s.json" % tag))
+                fs_perf_leg(tag, a.json and a.json.replace(".json", "-fs-%s.json" % tag))
+            if not a.fsonly:                    # wave 4: the sweep, both modes
+                sweep_leg(tag, a.json and a.json.replace(".json", "-sweep-%s.json" % tag))
         print("isotronperf: ok (%s)" % a.perf)
         return 0
     ap.print_help()

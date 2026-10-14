@@ -44,17 +44,19 @@ FILE = "ISOTRON.O88"
 SRC = os.path.join(ROOT, "apps", "isotron", "isotron.asm")
 INCS = (os.path.join(ROOT, "apps") + os.sep, os.path.join(ROOT, "apps", "isotron") + os.sep)
 BSS_SRCS = ("isotron.asm", "ittest.inc")
-EQU_SRCS = ("isotron.asm", "ittest.inc", "itcanvas.inc", "itwin.inc", "itfs.inc")
+EQU_SRCS = ("isotron.asm", "ittest.inc", "itcanvas.inc", "itwin.inc", "itfs.inc",
+            "itsweep.inc")
 MARKS = ("it_step0", "it_step1", "it_wake0", "it_wake1", "it_frame_end",
          "it_hs0", "it_hs1", "it_worker", "it_iterate", "it_move", "it_round_end",
          "it_span", "it_present", "it_rb0", "it_rb1", "it_fdone", "it_ai1", "it_span0",
          "it_fsw0", "it_fsw1", "it_fs_frame", "it_fsx0", "it_fsback", "it_fsf0",
-         "it_fr_cga", "it_fr_vga", "it_fr_herc")
+         "it_fr_cga", "it_fr_vga", "it_fr_herc", "it_sw0", "it_sw1", "it_rdy1",
+         "it_swp0", "it_swp1", "it_bld0", "it_bld1", "it_paint_rect", "it_paint_rect.ov")
 
 # it_tflags (ittest.inc)
-TF_FAST, TF_BOT, TF_NOFLOW, TF_HOLD = 1, 2, 4, 8
+TF_FAST, TF_BOT, TF_NOFLOW, TF_HOLD, TF_SEED = 1, 2, 4, 8, 16
 # it_state (isotron.asm)
-ST_TITLE, ST_PLAY, ST_CRASH, ST_WAIT, ST_OVER, ST_NEXT = range(6)
+ST_TITLE, ST_PLAY, ST_CRASH, ST_WAIT, ST_OVER, ST_NEXT, ST_SWEEP, ST_READY = range(8)
 
 
 def _equs():
@@ -76,8 +78,9 @@ HD_N, HD_E, HD_S, HD_W = _E["HD_N"], _E["HD_E"], _E["HD_S"], _E["HD_W"]
 K_LEFT, K_RIGHT = _E["K_LEFT"], _E["K_RIGHT"]
 H_BX0, H_BX1, H_BMV = _E["H_BX0"], _E["H_BX1"], _E["H_BMV"]
 CSIZE = _E["IT_CCOL"] * _E["IT_CCOLS"]             # the canvas claim's bytes
-OV_SIZE, OV_N = _E["OV_SIZE"], 3                    # the overlay records
-OVF_SIZE = _E["OVF_SIZE"]                           # ...and full screen's
+TLINES = _E["IT_TLINES"]                            # the title's own lines
+OV_SIZE, OV_N = _E["OV_SIZE"], 3 + TLINES           # the overlay records
+OVF_SIZE, OVF_N = _E["OVF_SIZE"], 3 + TLINES        # ...and full screen's
 FSK = {"cga": _E["FSK_CGA"], "vga": _E["FSK_VGA"], "herc": _E["FSK_HERC"],
        "ega": _E["FSK_EGA"]}                        # it_fsk: the bracket's surface
 IT_MLUT = _E["IT_MLUT"]
@@ -204,9 +207,9 @@ class Game:
     def fs_overlays(self):
         """The full-screen overlay records that show, as (row, c0, cells,
         text) in 8 x 8 cells of the logical picture (itfs.inc it_ovf)."""
-        raw = self.m.read(self.a("it_ovf"), 3 * OVF_SIZE)
+        raw = self.m.read(self.a("it_ovf"), OVF_N * OVF_SIZE)
         out = []
-        for k in range(3):
+        for k in range(OVF_N):
             row, c0, n, _, sp = struct.unpack_from("<BBBBH", raw, k * OVF_SIZE)
             if sp and n:
                 txt = self.m.read(self.base + sp, 64).split(b"\0")[0].decode("latin-1")
@@ -214,12 +217,20 @@ class Game:
         return out
 
     def fs_owed(self):
-        """Is any full-screen present still owed (a whole one, an overlay)?"""
-        return bool(self.b("it_full") or self.b("it_hudd") or self.b("it_msgd"))
+        """Is any full-screen present still owed (a whole one, an overlay, a
+        sweep's items)?"""
+        return bool(self.b("it_full") or self.b("it_hudd") or self.b("it_msgd")
+                    or self.b("it_state") == ST_SWEEP)
 
     def owed(self):
-        """Is any present still owed (a box, an overlay, a whole present)?"""
+        """Is any present still owed (a box, an overlay, a whole present, a
+        sweep's items, a canvas build the worker has yet to make or a round
+        waiting on one)?"""
         if self.b("it_full") or self.b("it_hudd") or self.b("it_msgd"):
+            return True
+        if self.b("it_bldq") or self.b("it_qround"):
+            return True
+        if self.b("it_state") == ST_SWEEP:
             return True
         heads = self.m.read(self.a("it_heads"), (MAXHEADS + 1) * H_SIZE)
         return any(heads[k * H_SIZE + H_BMV] for k in range(MAXHEADS + 1))
