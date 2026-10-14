@@ -383,7 +383,17 @@ with os88ui.boot(SYS_IMG, apps=host, machine=MACHINE) as ui:
     txt = ui.wait_toast(says="unmounted")
     check(txt == "TEST.IMG unmounted", "Disk > Unmount Image unmounts it",
           txt)
-    drv = ui.m.read(ui._fsblk(iw) + FS_DRV, 1)[0]
+    # The toast is said INSIDE the verb, and fm_c_unmnt sends the window to
+    # the host only after the verb returns - a mount, with its disk reads - so
+    # the window's drive is waited for on the guest's clock rather than read
+    # the moment the toast lands (the soak caught it at 3, mid-fm_mount).
+    fsdrv = lambda: ui.m.read(ui._fsblk(iw) + FS_DRV, 1)[0]
+    try:
+        os88marty.until(ui.m, lambda _: fsdrv() == 1, "the window to go to "
+                        "the host", guest=60)
+    except Exception:
+        pass                                # ...and the check names it
+    drv = fsdrv()
     check(drv == 1, "...and the window goes to the HOST", drv)
     data = host_now(ui, "dlgun")
     _f, _e, attr, res = entry(data, b"TEST    IMG")
