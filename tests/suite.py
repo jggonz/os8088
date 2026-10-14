@@ -2778,7 +2778,7 @@ SOAK = [
         "REDLINE four FAT12 geometries and actual recorded reference (SPEC.md 103)",
         needs=("nasm",), wants=("build/redline.img", "build/redline720.img",
                                "build/redline120.img", "build/redline360.img")),
-    Row("csprobe", "soak", py("tests/csprobe.py"), 30.0,
+    Row("csprobe", "soak", py("tests/csprobe.py"), 45.0,
         "REDLINE's chipset probes and writes (SPEC.md 103.6) under Unicorn: every "
         "probe against every modelled board on 8088/286/386, 22h written only "
         "40h/60h-67h, nothing on an 8088; every FE3001 write locked-in and with "

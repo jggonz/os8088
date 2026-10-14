@@ -26,7 +26,7 @@
 ; same handler had just opened, and the alert vanished unread (103.6).
 ; =============================================================================
 
-CS_LINES    equ 53                  ; report lines composed
+CS_LINES    equ 54                  ; report lines composed
 CS_LW       equ 74                  ; bytes a line slot: 72 cells + NUL + 1
 CS_COLS     equ 72
 CS_HELP0    equ 10                  ; the help lines: on the page, not in a
@@ -659,7 +659,7 @@ cs_tabkey:
 
 ; cs_canset - CF = 0 the picked row can write on this machine. A row whose
 ; knob READS BACK (the NEAT) writes only where its probe FOUND it: its data
-; port is the 8259's mask on a board that aliases 22h/23h (csne.inc), and a
+; port is the 8259's mask on a board that aliases 22h/23h (csknob.inc), and a
 ; chipset that can say what it runs at has no case for the leap of faith
 cs_canset:
     push ax
@@ -680,6 +680,8 @@ cs_canset:
     mov bl, [cs_pick]
     xor bh, bh
     cmp byte [cs_pres + bx], CSO_FOUND
+    je .yes
+    cmp byte [cs_pres + bx], CSO_ONPICK ; its probe runs at the Proceed
     jne .no
 .yes:
     clc
@@ -694,17 +696,67 @@ cs_canset:
 ; cs_rowlist - SI = the picked row's knob list (csweep.inc), first knob
 ; first; CF = 1 a row that writes nothing
 cs_rowlist:
-    mov si, cs_klist_fe
-    cmp byte [cs_pick], CS_F3
-    je .ok
-    mov si, cs_klist_ne
-    cmp byte [cs_pick], CS_NE
-    je .ok
-    stc
-    ret
+    push ax
+    push bx
+    mov bx, cs_lists
+    jmp short cs_rowfind
+; cs_rowxlist - SI = the picked row's BUS CLOCK experiment list (103.6.3.3);
+; CF = 1 a row with no bus clock REDLINE can set
+cs_rowxlist:
+    push ax
+    push bx
+    mov bx, cs_xlists
+cs_rowfind:                         ; BX = a table of {db row, dw list}
+    mov al, [cs_pick]
+.f:
+    mov ah, [bx]
+    cmp ah, 0FFh
+    je .no
+    cmp ah, al
+    je .hit
+    add bx, 3
+    jmp short .f
+.hit:
+    mov si, [bx + 1]
+    cmp al, CS_SM                   ; a SCAMP that is not a SCAMP I
+    jne .ok                         ; (VL82C310/311, ID D0h-D7h) has other
+    mov ah, [cs_pval + 2 * CS_SM]   ; registers: SCAMP II and TOPCAT are
+    and ah, 0xF8                    ; identify-only
+    cmp ah, 0xD0
+    jne .no
 .ok:
     clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop bx
+    pop ax
     ret
+cs_lists:   db CS_F3
+            dw cs_klist_fe
+            db CS_NE
+            dw cs_klist_ne
+            db CS_CA
+            dw cs_klist_ca
+            db CS_SM
+            dw cs_klist_sm
+            db CS_W7
+            dw cs_klist_w7
+            db CS_O3
+            dw cs_klist_o3
+            db 0FFh
+cs_xlists:  db CS_NE
+            dw cs_klist_nex
+            db CS_CA
+            dw cs_klist_cax
+            db CS_SM
+            dw cs_klist_smx
+            db CS_W7
+            dw cs_klist_w7x
+            db CS_O3
+            dw cs_klist_o3
+            db 0FFh
 
 ; cs_rowdesc - BX = the picked row's FIRST knob, the one the state field
 ; names; CF = 1 a row that writes nothing
@@ -785,23 +837,30 @@ cs_klistput:
     push ax
     push bx
     push si
+    xor ah, ah                      ; AH = 1 once a knob is out
 .k:
     mov bx, [si]
     or bx, bx
     jz .out
+    add si, 2
+    test byte [bx + CSD_FLAGS], CSF_X
+    jnz .k                          ; the bus clock has the clock line's
+    or ah, ah
+    jz .first
+    push si
+    mov si, cs_s_comma
+    call cs_put
+    pop si
+.first:
+    mov ah, 1
+    push ax
     mov al, [cs_setv]
     cmp word [bx + CSD_GET], 0
     je .put
     call [bx + CSD_GET]
 .put:
     call cs_knobput
-    add si, 2
-    cmp word [si], 0
-    je .out
-    push si
-    mov si, cs_s_comma
-    call cs_put
-    pop si
+    pop ax
     jmp short .k
 .out:
     pop si
@@ -853,9 +912,11 @@ cs_act_key:
     cmp al, 'T'
     jne .go
     cmp byte [cs_target], 2         ; Bus clock x2: its own question, every
-    jne .t0                         ; session, on the one row that has one
-    cmp byte [cs_pick], CS_NE
-    jne .go
+    jne .t0                         ; session, on a row that has a clock
+    push si
+    call cs_rowxlist
+    pop si
+    jc .go
     mov ah, [cs_pick]
     inc ah
     cmp ah, [cs_bwarn]
@@ -927,6 +988,27 @@ cs_conf_ans:
     jmp short .again
 .det:
     mov [cs_conf], al
+    push bx                         ; a row probed only on a pick: probe it
+    push si                         ; now, and go on only if it is there
+    mov bl, [cs_pick]
+    xor bh, bh
+    cmp byte [cs_pres + bx], CSO_ONPICK
+    jne .noprobe
+    mov al, CSR_SIZE
+    mul bl
+    mov si, ax
+    add si, cs_rows
+    call cs_probe1
+    cmp byte [cs_pres + bx], CSO_FOUND
+    je .noprobe
+    pop si
+    pop bx
+    mov byte [cs_act], 2
+    mov word [cs_amsg], cs_s_pnot
+    jmp cs_recompose
+.noprobe:
+    pop si
+    pop bx
     jmp short .again
 .warn:
     mov [cs_warn], al
@@ -1018,8 +1100,8 @@ cs_do_bus:
     push di
     mov byte [cs_act], 2
     mov word [cs_amsg], cs_s_nobus
-    cmp byte [cs_pick], CS_NE
-    jne .out
+    call cs_rowxlist
+    jc .out
     call cs_romref                  ; the references, as Tune's
     call cs_scrseg
     xor bx, bx
@@ -1034,7 +1116,8 @@ cs_do_bus:
     jc .long
     mov byte [cs_dmaok], 1
 .long:
-    mov si, cs_klist_nex + 2        ; every wait and delay to its longest
+    call cs_rowxlist
+    add si, 2                       ; every wait and delay to its longest
 .l:
     mov bx, [si]
     or bx, bx
@@ -1046,11 +1129,10 @@ cs_do_bus:
     jmp short .l
 .run:
     mov byte [cs_sw_xmode], 1
-    mov si, cs_klist_nex
+    call cs_rowxlist
     call cs_sw_tune                 ; AL = the clock's divider, kept
     mov byte [cs_sw_xmode], 0
     mov [cs_tfast], al
-    call cs_ne_getw8
     mov [cs_setv], al               ; "something was set this session"
     mov byte [cs_meth], 3
     mov byte [cs_saved], 0
@@ -1284,19 +1366,32 @@ cs_knobput:
     pop ax
     ret
 
-; cs_neatws - a NEAT that its probe FOUND keeps its wait states where they
-; read back: read them LIVE [NEAT p31], so the page says what the chip runs
-; whoever wrote it - the BIOS, RLAPPLY or this Tune. out: CF = 0, AL = 8-bit
-; wait states (2-5), AH = 16-bit (0-3); CF = 1 not a NEAT that answered
+; cs_neatws - a chipset that READS BACK and that its probe FOUND (the NEAT,
+; the CS8230, a SCAMP I, the WD76C10A, the OPTi 82C283) keeps its timing
+; where it reads, so the page reads it LIVE, whoever wrote it - the BIOS,
+; RLAPPLY or this Tune. out: CF = 0, AL = the first knob's value; CF = 1 not
+; such a row
 cs_neatws:
-    cmp byte [cs_pick], CS_NE
+    push bx
+    push si
+    call cs_rowlist
+    jc .no
+    mov bx, [si]
+    cmp word [bx + CSD_GET], 0
+    je .no
+    mov bl, [cs_pick]
+    xor bh, bh
+    cmp byte [cs_pres + bx], CSO_FOUND
     jne .no
-    cmp byte [cs_pres + CS_NE], CSO_FOUND
-    jne .no
-    call cs_ne_get
+    mov bx, [si]
+    call [bx + CSD_GET]
+    pop si
+    pop bx
     clc
     ret
 .no:
+    pop si
+    pop bx
     stc
     ret
 
@@ -1322,9 +1417,12 @@ cs_setline:
     mov si, cs_s_rnsv
     jmp short .put
 .notread:
-    mov si, cs_s_nefind
-    cmp byte [cs_pick], CS_NE
-    je .put
+    mov si, cs_s_nefind             ; a row that reads back and was not found
+    call cs_rowdesc
+    jc .nf
+    cmp word [bx + CSD_GET], 0
+    jne .put
+.nf:
     mov si, cs_s_norow
     call cs_canset
     jc .put
@@ -1434,12 +1532,15 @@ cs_actline:
 .bus:
     mov si, cs_s_bus                ; "Bus clock: BCLK=CLK2IN/1 kept; 2
     call cs_put                     ; failed" - the waits are on line 3
-    mov bx, cs_desc_nebc
+    push si
+    call cs_rowxlist
+    mov bx, [si]                    ; the clock's own descriptor
+    pop si
     mov al, [cs_tfast]
     call cs_knobput
     mov si, cs_s_bkept
-    cmp al, 1
-    je .bk
+    cmp al, [bx + CSD_BOOK]
+    jb .bk
     mov si, cs_s_bnot
 .bk:
     call cs_put
@@ -1511,12 +1612,14 @@ cs_clockline:
     call cs_put
     jmp short .out
 .bclk:
-    call cs_neatws                  ; the NEAT's bus clock, read back
+    call cs_neatws                  ; the row's bus clock, read back
     jc .out
+    call cs_rowxlist
+    jc .out
+    mov bx, [si]
     mov si, cs_s_comma2
     call cs_put
-    mov bx, cs_desc_nebc
-    call cs_ne_getbclk
+    call [bx + CSD_GET]
     call cs_knobput
 .out:
     pop si
@@ -2490,30 +2593,7 @@ cs_fieldlines:
     cmp bx, cs_bt + 2 * CS_BTW
     jb .bt
     call cs_lbeg                    ; the registers
-    mov si, cs_s_noregs
-    cmp byte [cs_pres + CS_NE], CSO_FOUND
-    jne .rgput
-    mov si, cs_s_neregs
-    call cs_put
-    push ax
-    mov ah, 0x60
-.rg:
-    mov al, ' '
-    call cs_ch1
-    pushf
-    cli
-    mov al, ah
-    out 0x22, al
-    in al, 0x23
-    popf
-    call cs_hex2
-    inc ah
-    cmp ah, 0x70
-    jb .rg
-    pop ax
-    mov si, cs_k_none
-.rgput:
-    call cs_put
+    call cs_rdump
     call cs_lfin
     inc ax
     call cs_lbeg                    ; the raw counts
@@ -2598,6 +2678,116 @@ cs_fieldlines:
     pop bx
     pop ax
     ret
+
+; cs_rdump - the registers line: the registers of the first row its probe
+; FOUND that the report should carry, read through csknob.inc's own access
+; (a SCAMP's index read back, the WD76C10's unlock bracket) - the NEAT's as
+; a run of bytes, the others as index=value. A row nothing found has none
+cs_rdump:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov si, cs_dumps
+.f:
+    mov bl, [si]
+    cmp bl, 0FFh
+    je .none
+    xor bh, bh
+    cmp byte [cs_pres + bx], CSO_FOUND
+    je .hit
+    add si, CSDU_SIZE
+    jmp short .f
+.none:
+    mov si, cs_s_noregs
+    call cs_put
+    jmp short .out
+.hit:
+    mov bx, cs_dkrow                ; a knob row to read through
+    mov al, [si + 3]
+    mov [bx], al                    ; the protocol
+    mov cl, [si + 4]
+    xor ch, ch
+    mov dl, [si + 5]                ; DL = 1: a run of values, no indices
+    push si
+    mov si, [si + 1]
+    call cs_put                     ; the label
+    pop si
+    mov si, [si + 6]                ; the register list
+.r:
+    mov al, ' '
+    call cs_ch1
+    cmp byte [bx], CSKP_WD
+    je .wd
+    lodsb
+    mov [bx + 1], al
+    or dl, dl
+    jnz .rd
+    call cs_hex2
+    mov al, '='
+    call cs_ch1
+.rd:
+    pushf
+    cli
+    call cs_rg_rd
+    popf
+    call cs_hex2
+    jmp short .nx
+.wd:
+    lodsw
+    mov [bx + 2], ax
+    call cs_hex4
+    mov al, '='
+    call cs_ch1
+    pushf
+    cli
+    call cs_rg_rd
+    popf
+    call cs_hex4
+.nx:
+    loop .r
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+CSDU_SIZE   equ 8                   ; db row, dw label, db protocol,
+cs_dumps:                           ; db count, db run, dw list
+    db CS_NE
+    dw cs_s_neregs
+    db CSKP_22, 16, 1
+    dw cs_dl_ne
+    db CS_CA
+    dw cs_s_caregs
+    db CSKP_22, 4, 0
+    dw cs_dl_ca
+    db CS_SM
+    dw cs_s_smregs
+    db CSKP_EC, 7, 0
+    dw cs_dl_sm
+    db CS_O3
+    dw cs_s_o3regs
+    db CSKP_24, 5, 0
+    dw cs_dl_o3
+    db CS_W7
+    dw cs_s_w7regs
+    db CSKP_WD, 5, 0
+    dw cs_dl_w7
+    db 0FFh
+cs_dl_ne:   db 0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67
+            db 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x6F
+cs_dl_ca:   db 0x04, 0x05, 0x06, 0x08
+cs_dl_sm:   db 0x00, 0x05, 0x06, 0x07, 0x14, 0x15, 0x16
+cs_dl_o3:   db 0x10, 0x11, 0x12, 0x13, 0x14
+cs_dl_w7:   dw 0x1872, 0x2872, 0x9872, 0xE472, 0xFC72
+cs_dkrow:   times CSK_ROW db 0
+cs_s_caregs: db 'CS8230 regs:', 0
+cs_s_smregs: db 'SCAMP regs:', 0
+cs_s_o3regs: db 'OPTi regs:', 0
+cs_s_w7regs: db 'WD76C10 regs:', 0
 
 ; cs_swrow - SI = a step of cs_sw_log: its line
 cs_swrow:
@@ -2904,13 +3094,14 @@ cs_s_ds:    db 'Mfg spec set: ', 0
 cs_s_ds2:   db ', the data sheet', 27h, 's value', 0
 cs_s_rsv:   db ' (saved)', 0
 cs_s_rnsv:  db ' (unsaved)', 0
-cs_s_nefind: db 'The NEAT is written only where its probe found it', 0
+cs_s_nefind: db 'Not found by its probe: REDLINE writes it only where found', 0
+cs_s_pnot:  db 'Its probe did not find that chipset here: nothing written', 0
 cs_s_warn:  db 'Untested timings: may need a reset', 0
 cs_s_bwarn: db 'Doubles the bus clock: may hang', 0
-cs_s_nobus: db 'Bus clock x2: only the C&T NEAT has a bus clock to set', 0
+cs_s_nobus: db 'Bus clock x2: this chipset has no bus clock REDLINE can set', 0
 cs_s_bus:   db 'Bus clock: ', 0
-cs_s_bkept: db ' kept, doubled', 0
-cs_s_bnot:  db ', not doubled', 0
+cs_s_bkept: db ' kept, faster', 0
+cs_s_bnot:  db ', not changed', 0
 cs_s_btxt:  db 'BIOS: ', 0
 cs_s_btnone: db 'none found', 0
 cs_s_noregs: db 'Registers: none this chipset lets us read', 0
@@ -2983,9 +3174,14 @@ cs_s_alias: db '  22h/23h MIRROR THE 8259 - not probed', 0
 cs_s_ind:   db '  ', 0
 cs_s_read2: db '  read ', 0
 cs_s_out:   dw cs_o_nr, cs_o_cpu, cs_o_ali, cs_o_abs, cs_o_fnd, cs_o_pick
+            dw cs_o_onp                ; CSO_ONPICK
+%if ($ - cs_s_out) != 2 * (CSO_ONPICK + 1)
+    %error cs_s_out does not name every CSO_ outcome
+%endif
 cs_o_nr:    db 'not run', 0
 cs_o_cpu:   db 'skipped on this CPU class', 0
 cs_o_ali:   db 'skipped: 22h/23h are the 8259', 0
 cs_o_abs:   db 'absent', 0
 cs_o_fnd:   db 'FOUND', 0
 cs_o_pick:  db 'no probe - pick it', 0
+cs_o_onp:   db 'probed when picked (386 only)', 0

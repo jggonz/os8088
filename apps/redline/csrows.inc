@@ -14,10 +14,20 @@
 ;       ECh/EDh       VLSI SCAMP and TOPCAT (never EEh/EFh: on those a READ
 ;                     of EFh resets the CPU)
 ;       1EDh/1EFh     Headland
+;       E472h, F073h, FC72h, 9872h   WD76C10A, word ports at full 16-bit
+;                     addresses - with the RTC index at 70h pointed at 0Dh,
+;                     read-only register D, first, because a board that
+;                     decodes A9-A0 alone takes E472h for 072h/073h; the
+;                     read of E472h decides, and F073h (the unlock) is
+;                     written only where E472h answered as a WD does
 ;       22h/23h       C&T SCAT and NEAT - 286 CPUs only (an Intel 82335 keeps
 ;                     real registers at 22h on 386SX boards, and a Cyrix SLC
 ;                     uses the pair), and only after cs_alias says the pair
 ;                     does not mirror the 8259's 20h/21h.
+;   * on a 386, the 22h family's rows (CS8230, OPTi 82C283) are probed only
+;     when the user PICKS one and says Proceed (CSP_PICK22, cs_probe1): the
+;     automatic pass never writes 22h on a 386, for the 82335's and the
+;     Cyrix's sake, and the pick is the user saying the board is that.
 ;     The ONLY bytes a probe writes to 22h are 40h and 60h-67h: on a board
 ;     that aliases 22h onto the master 8259 those decode as OCW2 "no
 ;     operation" and "specific EOI on an idle level". 48h-4Fh/68h-6Fh (OCW3,
@@ -42,6 +52,8 @@ CSS_VERIFIED  equ 2                 ; run on real hardware
 CSP_NONE    equ 0                   ; BIOS image only
 CSP_ATPORT  equ 1                   ; a port pair nothing else on an AT owns
 CSP_22H     equ 2                   ; 22h/23h: 286 only, after cs_alias
+CSP_PICK22  equ 3                   ; 22h on a 386: probed only when picked
+                                    ; and confirmed, after cs_alias
 
 ; Probe outcomes, one byte a row in cs_pres
 CSO_NOTRUN  equ 0
@@ -50,6 +62,7 @@ CSO_SKIPALI equ 2                   ; 22h/23h mirror the 8259
 CSO_ABSENT  equ 3
 CSO_FOUND   equ 4
 CSO_PICK    equ 5                   ; no probe exists: the drop-down names it
+CSO_ONPICK  equ 6                   ; probed only when picked (CSP_PICK22)
 
 CS_NONE     equ 0                   ; row 0 is "None / unknown"
 CS_F3       equ 1                   ; WD FE3600 - row numbers are stable,
@@ -61,19 +74,21 @@ CS_SX       equ 6
 CS_NE       equ 7
 CS_W7       equ 8
 CS_O3       equ 9
-CS_NROWS    equ 10
+CS_CA       equ 10                  ; (rows are appended, never renumbered)
+CS_NROWS    equ 11
 
 cs_rows:
     dw 'NO', cs_n_none,     0,             CSS_IDENTIFY  | (CSP_NONE << 8),   0
     dw 'F3', cs_n_fe3600,   cs_id_fe3600,  CSS_VERIFIED  | (CSP_NONE << 8),   cs_ap_fe
     dw 'CQ', cs_n_compaq,   cs_id_compaq,  CSS_IDENTIFY  | (CSP_NONE << 8),   0
-    dw 'SM', cs_n_scamp,    cs_id_scamp,   CSS_IDENTIFY  | (CSP_ATPORT << 8), 0
+    dw 'SM', cs_n_scamp,    cs_id_scamp,   CSS_DATASHEET | (CSP_ATPORT << 8), cs_ap_sm
     dw 'HL', cs_n_headland, cs_id_headland, CSS_IDENTIFY | (CSP_ATPORT << 8), 0
     dw 'SC', cs_n_scat,     cs_id_scat,    CSS_IDENTIFY  | (CSP_22H << 8),    0
     dw 'SX', cs_n_scatsx,   cs_id_scatsx,  CSS_IDENTIFY  | (CSP_22H << 8),    0
     dw 'NE', cs_n_neat,     cs_id_neat,    CSS_VERIFIED  | (CSP_22H << 8),    cs_ap_ne
-    dw 'W7', cs_n_wd76,     0,             CSS_IDENTIFY  | (CSP_NONE << 8),   0
-    dw 'O3', cs_n_opti283,  0,             CSS_IDENTIFY  | (CSP_NONE << 8),   0
+    dw 'W7', cs_n_wd76,     cs_id_w7,      CSS_DATASHEET | (CSP_ATPORT << 8), cs_ap_w7
+    dw 'O3', cs_n_opti283,  cs_id_o3,      CSS_DATASHEET | (CSP_PICK22 << 8), cs_ap_o3
+    dw 'CA', cs_n_cs8230,   cs_id_ca,      CSS_DATASHEET | (CSP_PICK22 << 8), cs_ap_ca
 
 cs_n_none:     db 'None / unknown', 0
 cs_n_fe3600:   db 'WD FE3600', 0
@@ -85,6 +100,7 @@ cs_n_scatsx:   db 'C&T SCATsx', 0
 cs_n_neat:     db 'C&T NEAT', 0
 cs_n_wd76:     db 'WD76C10', 0
 cs_n_opti283:  db 'OPTi 82C283', 0
+cs_n_cs8230:   db 'C&T CS8230/8231', 0
 
 ; --- the state every caller reads ---------------------------------------------
 cs_tier:    db 0                    ; OSAPI_CPU_INFO's AL
@@ -96,6 +112,8 @@ cs_compaqf: db 0                    ; 'COMPAQ' at F000:FFEA
 cs_aliased: db 0                    ; 22h/23h mirror 20h/21h
 cs_pres:    times CS_NROWS db 0     ; CSO_* per row
 cs_pval:    times CS_NROWS dw 0     ; the raw value each probe read
+cs_wd_ul:   db 0                    ; 1: the BIOS left the WD76C10 unlocked,
+                                    ; so an access leaves it so
 
 ; --- FE3600 allowlist: BIOS CRC and the date bytes of boards known to carry it
 ; (103.6.2). A board joins by its own field run printing its fingerprint.
@@ -122,6 +140,9 @@ cs_id_headland equ 0
 cs_id_scat     equ 0
 cs_id_scatsx   equ 0
 cs_id_neat     equ 0
+cs_id_w7       equ 0
+cs_id_o3       equ 0
+cs_id_ca       equ 0
 %else
 ; =============================================================================
 ; cs_identify - the whole read-only pass. Fills every field above.
@@ -151,28 +172,64 @@ cs_identify:
 .row:
     cmp bx, CS_NROWS
     jae .done
+    cmp byte [si + CSR_PORTS], CSP_PICK22
+    jne .auto
+    mov byte [cs_pres + bx], CSO_ONPICK
+    jmp short .next
+.auto:
+    call cs_probe1
+.next:
+    add si, CSR_SIZE
+    inc bx
+    jmp short .row
+.done:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cs_probe1 - BX = a row, SI = its record: run its probe under the row's port
+; rules, and record the outcome (cs_pres, cs_pval, cs_found). cs_identify's
+; body for every row, and the Proceed of a pick for a CSP_PICK22 row: that
+; is the one probe that writes 22h on a 386, and only after cs_alias.
+; Every register preserved
+; -----------------------------------------------------------------------------
+cs_probe1:
+    push ax
+    push di
     mov ax, [si + CSR_IDENT]
     or ax, ax
     jnz .has
     mov byte [cs_pres + bx], CSO_PICK
-    jmp short .next
+    jmp short .out
 .has:
     mov al, [si + CSR_PORTS]
     cmp al, CSP_NONE
     je .run
     cmp byte [cs_tier], CPU_8086    ; no port of any kind on an XT
     je .skipcpu
+    cmp al, CSP_ATPORT
+    je .run
     cmp al, CSP_22H
-    jne .run
+    jne .p386
     cmp byte [cs_tier], CPU_286     ; 22h/23h: a 286 only...
     jne .skipcpu
+    jmp short .ali
+.p386:
+    cmp byte [cs_tier], CPU_386     ; CSP_PICK22: a 386 only, and picked
+    jne .skipcpu
+.ali:
     cmp byte [cs_aliased], 0        ; ...and only when they are not the PIC
     je .run
     mov byte [cs_pres + bx], CSO_SKIPALI
-    jmp short .next
+    jmp short .out
 .skipcpu:
     mov byte [cs_pres + bx], CSO_SKIPCPU
-    jmp short .next
+    jmp short .out
 .run:
     push bx
     push si
@@ -189,16 +246,8 @@ cs_identify:
     mov di, bx
     shl di, 1
     mov [cs_pval + di], ax
-.next:
-    add si, CSR_SIZE
-    inc bx
-    jmp short .row
-.done:
-    pop es
+.out:
     pop di
-    pop si
-    pop cx
-    pop bx
     pop ax
     ret
 %endif
@@ -289,14 +338,14 @@ cs_s_compaq: db 'COMPAQ'
 ; decoded coarsely, and no probe of ours may write there (103.6.1). A chipset
 ; whose data port happens to equal the IMR once is told apart by the second
 ; register: its index port does not read back the 8259's IRR.
-; Only meaningful on a 286; harmless reads anywhere.
+; A 286's, and a 386's for the rows probed on a pick; harmless reads.
 ; -----------------------------------------------------------------------------
 cs_alias:
     push ax
     push bx
     mov byte [cs_aliased], 0
-    cmp byte [cs_tier], CPU_286
-    jne .out
+    cmp byte [cs_tier], CPU_8086
+    je .out
     pushf
     cli
     in al, 0x21
@@ -535,5 +584,201 @@ cs_id_neat:
 .yes:
     pop bx
     clc
+    ret
+
+; C&T CS8230/CS8231 (386DX: 82C301 with an 82C302 or 82C307): index 22h, data
+; 23h, a fresh index before each read. 04h bits 7:6 the 82C301's version
+; and bit 5 reserved, all 0 [CS8230 p16]; 08h & E0h is 00h or 20h on an
+; 82C302 and 80h on an 82C307 [p45, p49, p164]; 06h bits 1:0 never 10
+; (reserved) [p17]. NOT "three registers reading alike": a CS8230 at
+; power-on reads 00h in all three - version 0, the most wait states, an
+; initial 82C302 - and a floating bus is already refused by 04h's zero
+; bits, an aliased 8259 by cs_alias. CSP_PICK22: run only on a 386 whose user picked
+; the row and said Proceed, after cs_alias - and 04h, 06h and 08h to an
+; 8259 at 22h would be OCW2 "rotate in AEOI, clear" and an OCW3 no-op.
+; AX = 08h : 06h
+cs_id_ca:
+    push bx
+    push dx
+    pushf
+    cli
+    mov al, 0x04
+    call cs_neatrd
+    mov bl, al
+    mov al, 0x08
+    call cs_neatrd
+    mov bh, al
+    mov al, 0x06
+    call cs_neatrd
+    mov dl, al
+    popf
+    mov ah, bh
+    mov al, dl
+    test bl, 0xE0                   ; 04h: version 0, reserved 0
+    jnz .no
+    mov dh, bh
+    and dh, 0xE0
+    jz .c8
+    cmp dh, 0x20
+    je .c8
+    cmp dh, 0x80
+    jne .no
+.c8:
+    mov dh, dl
+    and dh, 3
+    cmp dh, 2
+    je .no
+    pop dx
+    pop bx
+    clc
+    ret
+.no:
+    pop dx
+    pop bx
+    stc
+    ret
+
+; OPTi 82C283 (386SX): index 22h, data 24h, the index reset after every
+; access [283 p11]. There is no device ID: 10h bit 7 is the revision, and on
+; revision A 10h bit 6 and 14h bits 4:3 must read 0 [283 p11-13]. A floating
+; 24h reads FFh. A weak probe, and so CSP_PICK22: it runs only on a picked
+; row, after cs_alias - 10h and 14h written to an 8259 at 22h would be ICW1,
+; a PIC reset, which is why the alias check is not optional here.
+; AX = 10h : 14h
+cs_id_o3:
+    push bx
+    pushf
+    cli
+    mov al, 0x10
+    out 0x22, al
+    in al, 0x24
+    mov bh, al
+    mov al, 0x14
+    out 0x22, al
+    in al, 0x24
+    mov bl, al
+    popf
+    mov ax, bx
+    cmp bh, 0xFF
+    je .no
+    cmp bl, 0xFF
+    je .no
+    test bh, 0x80                   ; revision B: nothing more to hold it to
+    jnz .yes
+    test bh, 0x40
+    jnz .no
+    test bl, 0x18
+    jnz .no
+.yes:
+    pop bx
+    clc
+    ret
+.no:
+    pop bx
+    stc
+    ret
+
+; WD76C10A: its word registers sit at full 16-bit ports and are locked
+; until DAh is written to F073h [WD91 p12-15]; a board that decodes only
+; A9-A0 takes every one of them for 072h/073h, the clock chip's. So:
+; the RTC index to 0Dh first, read-only register D; then E472h, the "Port
+; 70H Shadow Register", which needs no unlock - its low byte is the 0Dh just
+; written, bits 11-8 read 0, and bit 14 (REFDT) changes on each refresh
+; [WD93 p95], so eight readings a refresh apart (port 61h bit 4, an AT's
+; refresh toggle) must see it move. Only then is F073h written: FC72h read
+; twice before (bit 15 toggling = the BIOS left it unlocked, cs_wd_ul) and
+; after the unlock (it must toggle now), and 9872h read for the version
+; [WD93 p101]. Locked again unless it was found unlocked. Never on a board
+; the FE3600 allowlist matched: there 072h/073h are the FE3001's own.
+; A pre-A WD76C10 has no E472h, and is not found. AX = 9872h
+cs_id_w7:
+    push bx
+    push cx
+    push dx
+    push si
+    cmp byte [cs_pres + CS_F3], CSO_FOUND
+    je .no0
+    pushf
+    cli
+    mov al, 0x0D
+    out 0x70, al
+    mov dx, 0xE472
+    in ax, dx
+    mov bh, ah                      ; BH = the first reading's bit 14
+    and bh, 0x40
+    xor bl, bl                      ; BL = 1 once bit 14 has moved
+    mov si, 8
+.r:
+    cmp al, 0x0D                    ; the low byte: what 70h was given
+    jne .nop
+    test ah, 0x0F                   ; bits 11-8: 0
+    jnz .nop
+    and ah, 0x40
+    cmp ah, bh
+    je .same
+    mov bl, 1
+.same:
+    in al, 0x61                     ; one refresh: 61h bit 4 changes
+    and al, 0x10
+    mov ah, al
+    mov cx, 400
+.w:
+    in al, 0x61
+    and al, 0x10
+    cmp al, ah
+    loope .w
+    in ax, dx
+    dec si
+    jnz .r
+    or bl, bl
+    jz .nop
+    mov dx, 0xFC72                  ; locked or not, as the BIOS left it
+    in ax, dx
+    mov bx, ax
+    in ax, dx
+    xor ax, bx
+    and ah, 0x80
+    mov [cs_wd_ul], ah              ; nonzero: it toggled, so unlocked
+    mov dx, 0xF073
+    mov al, 0xDA
+    out dx, al                      ; the unlock
+    mov dx, 0xFC72
+    in ax, dx
+    mov bx, ax
+    in ax, dx
+    xor bx, ax
+    mov dx, 0x9872
+    in ax, dx
+    mov cx, ax                      ; CX = the version register
+    cmp byte [cs_wd_ul], 0
+    jne .keep
+    push ax
+    push dx
+    mov dx, 0xF073
+    xor al, al
+    out dx, al                      ; locked again
+    pop dx
+    pop ax
+.keep:
+    popf
+    mov ax, cx
+    test bh, 0x80                   ; FC72h bit 15 toggled once unlocked
+    jz .no
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.nop:
+    popf
+.no0:
+    xor ax, ax
+.no:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    stc
     ret
 %endif

@@ -145,7 +145,7 @@ ra_s_knob:   db 'REDLINE.CFG: bad setting', 0
 %include "os88data.inc"
 %include "redline/csrows.inc"
 %include "redline/csfe.inc"
-%include "redline/csne.inc"
+%include "redline/csknob.inc"
 %include "redline/csapply.inc"
 
     OS88_BSS 0

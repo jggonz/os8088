@@ -291,5 +291,26 @@ cs_ap_fe:                           ; FE3600: knob 4 = R4, 4..15
     stc
     ret
 
-cs_ap_ne:                           ; C&T NEAT: knobs 1-4 (csne.inc), each
-    jmp cs_ne_put                   ; refused outside its field
+cs_ap_ne:                           ; the readable rows (csknob.inc): every
+    push si                         ; knob through its table, each refused
+    mov si, cs_kt_ne                ; outside its field
+    jmp short cs_ap_k
+cs_ap_ca:
+    push si
+    mov si, cs_kt_ca
+    jmp short cs_ap_k
+cs_ap_sm:
+    push si
+    mov si, cs_kt_sm
+    jmp short cs_ap_k
+cs_ap_w7:
+    push si
+    mov si, cs_kt_w7
+    jmp short cs_ap_k
+cs_ap_o3:
+    push si
+    mov si, cs_kt_o3
+cs_ap_k:
+    call cs_kput
+    pop si
+    ret

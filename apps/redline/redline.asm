@@ -1038,7 +1038,7 @@ rl_blit4:
 %include "os88data.inc"
 %include "redline/csrows.inc"
 %include "redline/csfe.inc"
-%include "redline/csne.inc"
+%include "redline/csknob.inc"
 %include "redline/csapply.inc"
 %include "redline/csweep.inc"
 %include "redline/chipset.inc"

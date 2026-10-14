@@ -174477,9 +174477,28 @@ what each row declares. The order is the safety policy:
    and TOPCAT (E0h-E3h, F0h-F3h), and Headland's 1EDh/1EFh. A row never
    reads EEh or EFh: a READ of EFh resets the CPU on all three VLSI
    families, and EEh moves A20.
-3. **The 22h/23h index pair, last**, and only on a 286-class CPU. On a 386
-   an Intel 82335 keeps real registers at 22h, and a Cyrix SLC/DLC uses the
-   pair too. Those boards are named with the drop-down.
+   **The WD76C10A** is here too, though its ports are not unclaimed: its
+   word registers sit at full 16-bit addresses xx72h, which a board that
+   decodes only A9-A0 takes for 072h/073h, the clock chip's. So its probe
+   first points the RTC index at 0Dh (port 70h), register D, read-only;
+   then reads E472h, the read-only "Port 70H Shadow Register" that needs no
+   unlock [WD93 p95] - its low byte must be the 0Dh just written, bits 11-8
+   zero, and bit 14 (REFDT) must change across eight readings a refresh
+   apart (port 61h bit 4). Only then is DAh written to F073h (the unlock),
+   FC72h read twice for bit 15 to toggle, 9872h read for the version, and
+   the part relocked - unless FC72h was already toggling before the unlock,
+   the BIOS having left it so. It is never run where the FE3600 allowlist
+   matched (072h/073h are the FE3001's there), and a pre-A WD76C10, which
+   has no E472h, is not found.
+3. **The 22h/23h index pair, last**, and automatically only on a 286-class
+   CPU. On a 386 an Intel 82335 keeps real registers at 22h, and a Cyrix
+   SLC/DLC uses the pair too, so the 386 rows of the 22h family - the C&T
+   CS8230/CS8231 and the OPTi 82C283 - are probed only when the user
+   PICKS one and answers the not-detected question with Proceed
+   (`CSP_PICK22`, `cs_probe1`), after the alias check; until then the probe
+   list says `probed when picked (386 only)`. The pick is the user's
+   statement that the board is that chipset, which is what the 82335 and
+   Cyrix cases lacked.
 
 **The 22h/23h rule.** On a board that decodes ports coarsely, a genuine IBM
 AT among them, 22h/23h ARE the master 8259's 20h/21h. So every byte a probe
@@ -174497,10 +174516,13 @@ between two of its own. A port pair whose reads mirror 20h/21h - the IMR at
 23h AND the 8259's read at 22h - is reported as aliased, and no 22h row
 runs.
 
-A row whose chipset says nothing until it has been WRITTEN - the WD76C10
-(unlock at F073h) and every OPTi part (index 10h-14h at 22h is ICW1 to an
-aliased 8259) - has **no probe**: the drop-down names it and nothing finds
-it.
+The alias check reads only, so it runs on a 386 as well as a 286. The
+CS8230's probe writes 04h, 06h and 08h to 22h - OCW2 "rotate in AEOI,
+clear" and an OCW3 no-op to an 8259 - and the OPTi's 10h and 14h, which
+WOULD be ICW1, a PIC reset: for that row the alias check is what stands in
+front of the write, and a pair that aliases skips the probe. Every row
+that writes a register it READS BACK (the NEAT, CS8230, SCAMP, WD76C10A,
+OPTi) writes only where its probe FOUND it.
 
 **The user's pick is the final word.** A drop-down names every row plus
 `None / unknown`, and a pick outlives the tab for the session. Choosing
@@ -174510,7 +174532,11 @@ a sentence, before that row's first write.
 `tests/csprobe.py` runs `cs_identify` under Unicorn against a model of every
 board and three CPU classes and fails on a wrong row, two rows matching one
 board, any port outside the set above, EEh/EFh, a 22h byte other than 40h
-or 60h-67h, any port on an 8088 and any 22h access on a 386.
+or 60h-67h, any port on an 8088, any 22h WRITE in a 386's automatic pass,
+70h given anything but 0Dh, and F073h written on a board that is not a
+WD76C10. A picked row's probe is run the way Proceed runs it, on every CPU
+class and on an aliased board, and the WD probe's lock discipline both
+ways.
 
 #### 103.6.2 Rows
 
@@ -174615,7 +174641,7 @@ fitted. Until that run it was `DATASHEET`, and swept behind the warning.
   RLAPPLY alike; the 16-bit memory command delay (61h bits 5:4, already
   0), quick mode and address hold (61h bits 7:6), and every 82C212
   register.
-  `cs_ne_put` (`apps/redline/csne.inc`) reads the register, replaces ONE
+  `cs_kput` (`apps/redline/csknob.inc`) reads the register, replaces ONE
   field and writes the rest back as the chip had them - the PB286LP reads
   62h bits 7:6 as 01, which the book calls reserved - with a fresh index
   write before each data access [NEAT p29, p46] and interrupts off.
@@ -174637,6 +174663,39 @@ fitted. Until that run it was `DATASHEET`, and swept behind the warning.
   0 and bought nothing** - the I/O read 800 to 798 ns for the I/O delay,
   and the memory delay had no 8-bit memory to time or check at all, that
   boot having shadowing on. The keep rule below is what that run taught.
+
+**The first field round's four, `DATASHEET`, every one from the data books
+in docs/reports/CHIPSET-REGISTERS-2026-10-13.md and none yet run on iron.**
+Each is a knob table in `apps/redline/csknob.inc` - one row per knob: its
+port protocol, index, shift, width, the value a zero field means and
+whether it counts down, and the largest field that may be written - over
+one routine, `cs_kput`, which RLAPPLY carries too. Each Mfg spec is the
+register defaults its book prints. Each has a bus clock for the Bus clock
+x2 experiment (§103.6.3.3) and is otherwise swept by Fastest tested.
+
+| row | knobs (Fastest tested) | bus clock (Bus clock x2) | found by |
+|---|---|---|---|
+| C&T CS8230/CS8231 (386DX) | 06h 8-bit waits 5-2 and 16-bit 3-0, **inverted** (00 = most); 05h 8-bit memory and I/O command delays 1-0 [CS8230 p16-17] | 06h 1:0: /3 (00, default) to /2 (01); 10 reserved and 11 ATCLK never written | its probe, on a pick |
+| VLSI SCAMP I (VL82C310/311) | BUSCTL 16h: 8WS (4 or 5), CMDLY2 (8-bit memory AND I/O), CMDLY1 (16-bit memory), 16WS (0 or 1), every one's PC/AT value the zero side and so both its book and its floor [S1 p54] | CLKCTL 07h SCLKDIV, /2 /4 /6 /8, from /4 to /2 [S1 p49-50] | its ECh/EDh probe (D0h-D7h; SCAMP II and TOPCAT stay identify-only) |
+| WD76C10A | 1872h WSM8 and WSI8, 8-bit memory and I/O waits 5-2 (book 4); WSM16, WSI16 1-2 (book 1, the floor) [WD91 p32-34] | 1872h BUS_MOD bit 10, the divide-by within the selected clock: /2 to /1 | its E472h probe |
+| OPTi 82C283 (386SX) | none: the book documents no AT wait-state or delay field [283 p13] | 14h bit 0: CPUCLK2/6 (0) to /4 (1) | its probe, on a pick |
+
+- **What Fastest tested can do on a SCAMP** is only put back the PC/AT
+  values a BIOS made slower: the book offers nothing faster than 4 and 0
+  waits except a card's own -WS0. Its gain is the SYSCLK divider, the
+  experiment's.
+- **The WD76C10's every access** points the RTC index at 0Dh, unlocks,
+  reads or writes 1872h as a word and relocks (unless the BIOS had it
+  unlocked); `tests/csprobe.py` fails an unlock made with the index
+  anywhere else.
+- **A SCAMP whose BIOS LOCKED it** (F9h) drops the index write, so the data
+  port would answer for the previous register: every access reads ECh back
+  first and writes nothing on a mismatch. REDLINE never touches F9h/FBh.
+- **The OPTi has no device ID**, so its probe is the book's reserved bits
+  and a data port that does not float, run only where the user picked it.
+- The registers line of the report reads each found row's own: the
+  CS8230's 04h-06h and 08h, SCAMP 00h, 05h-07h and 14h-16h, the OPTi's
+  10h-14h and the WD76C10's 1872h, 2872h, 9872h, E472h and FC72h.
 
 #### 103.6.3 The two Targets, and the verified sweep
 
@@ -174827,6 +174886,15 @@ up can hold the bus with nothing left to catch it.
   and what it keeps is SET and Saved like any Tune. The setting line and
   the clock line say where it stands (`BCLK=CLK2IN/1`).
 
+**Every row with a bus clock has the experiment**, from its own knob, its
+own book value the baseline: the NEAT's BCLK /2 to /1, the CS8230's /3 to
+/2, a SCAMP's SCLKDIV /4 to /2, the WD76C10's BUS_MOD /2 to /1, the OPTi's
+CPUCLK2/6 to /4. Each row's experiment list puts its waits and delays at
+their longest first, as the NEAT's does; a row with none (the OPTi) is the
+clock alone. The PB286LP's first run (2026-10-14) refused the doubled
+clock on its checks and did NOT hang, which is the case the warning is
+for; the owner kept both.
+
 ##### 103.6.3.2 The report's field data
 
 The owner's rule for a chipset going out to boards nobody here has: **one
@@ -174869,7 +174937,7 @@ the BIOS's values.
 +0   'RLCFG',0,0,0      signature
 +8   dw  row code       two ASCII: F3 FE3600, NE NEAT, SC SCAT, SX SCATsx,
                         SM SCAMP, HL Headland, O3 OPTi 82C283, W7 WD76C10,
-                        CQ Compaq
+                        CQ Compaq, CA CS8230/CS8231
 +10  db  method         1 data sheet, 2 tuned + margin, 3 tuned fastest
 +11  db  n              knobs that follow, 1..8
 +12  dw  BIOS CRC-16    the fingerprint at Save
@@ -174901,7 +174969,7 @@ from Tune, so it went: `cs_cfg_load` and `cs_cfg_apply` assemble only with
     the row's probe again: the fingerprint IS the identification, the one
     the user confirmed when the setting was tuned and saved on this board.
 
-It is `apps/rlapply/rlapply.asm`, **1,835 bytes with no bss** (the NEAT's five knobs were 122), its 64-byte icon included, and it is the
+It is `apps/rlapply/rlapply.asm`, **2,244 bytes with no bss** (the NEAT's five knobs were 122, and the four rows of the first field round's tables, protocols and apply procs 409 more), its 64-byte icon included, and it is the
 shared files assembled `CS_APPLY_ONLY`: the row table and the fingerprint
 with no probe, the knob with no sweep, the file and the apply - so **nothing
 it can run touches a port before the fingerprint has matched**. It has no

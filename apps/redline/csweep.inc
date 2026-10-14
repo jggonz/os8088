@@ -107,7 +107,7 @@ cs_desc_neio: db 1, 0, 1, CS_NE_CIO
 cs_desc_ne16: db 1, 0, 1, CS_NE_W16
             dw cs_ne_setw16, cs_ne_getw16, cs_k_16b, cs_k_waits
             db CSS_DATASHEET, 0x01, 0 ; the screen, a 16-bit card on an AT
-; the bus clock, as its divider (csne.inc): 2 = CLK2IN/2, Mfg spec, and a
+; the bus clock, as its divider (csknob.inc): 2 = CLK2IN/2, Mfg spec, and a
 ; SYSCLK of CLK2IN/4 - 6 MHz on the PB286LP, the bottom of the book's 6-8
 ; MHz AT range [NEAT p5]; 1 = CLK2IN, twice that. It times everything
 cs_desc_nebc: db 2, 1, 1, CS_NE_BCLK
@@ -126,9 +126,66 @@ cs_desc_xio: db 3, 0, 1, CS_NE_CIO
 cs_desc_x16: db 3, 0, 1, CS_NE_W16
             dw cs_ne_setw16, cs_ne_getw16, cs_k_16b, cs_k_waits
             db CSS_DATASHEET, 0x01, 0
-cs_ne_getw8:
-    mov al, CS_NE_W8
-    jmp cs_ne_kget
+; --- the four rows added for the first field round (SPEC.md 103.6.2): each
+; DATASHEET, its normal list's books the register defaults the data book
+; prints, its experiment's knobs from their LONGEST. GOV as the NEAT's
+%macro CS_DESC 10                   ; book floor step knob set get pre suf
+    db %1, %2, %3, %4               ;   ver gov+flags packed as two args
+    dw %5, %6, %7, %8
+    db CSS_DATASHEET, %9, %10
+%endmacro
+; C&T CS8230/CS8231 - waits inverted (00 = 5 and 3), the clock /3 or /2
+cs_klist_ca: dw cs_d_ca1, cs_d_ca2, cs_d_ca3, cs_d_ca4, cs_d_ca5, 0
+cs_klist_cax: dw cs_d_ca5, cs_d_cax1, cs_d_cax2, cs_d_cax3, cs_d_cax4, 0
+cs_d_ca1:   CS_DESC 5, 2, 1, 1, cs_ca_set1, cs_ca_get1, cs_k_8b, cs_k_waits, 0x0E, 0
+cs_d_ca2:   CS_DESC 1, 0, 1, 2, cs_ca_set2, cs_ca_get2, cs_k_8bd, cs_k_none, 0x06, 0
+cs_d_ca3:   CS_DESC 1, 0, 1, 3, cs_ca_set3, cs_ca_get3, cs_k_iod, cs_k_none, 0x08, 0
+cs_d_ca4:   CS_DESC 3, 0, 1, 4, cs_ca_set4, cs_ca_get4, cs_k_16b, cs_k_waits, 0x01, 0
+cs_d_ca5:   CS_DESC 3, 2, 1, 5, cs_ca_set5, cs_ca_get5, cs_k_proc, cs_k_none, 0x0F, CSF_X | CSF_DMA
+cs_d_cax1:  CS_DESC 5, 2, 1, 1, cs_ca_set1, cs_ca_get1, cs_k_8b, cs_k_waits, 0x0E, 0
+cs_d_cax2:  CS_DESC 3, 0, 1, 2, cs_ca_set2, cs_ca_get2, cs_k_8bd, cs_k_none, 0x06, 0
+cs_d_cax3:  CS_DESC 3, 0, 1, 3, cs_ca_set3, cs_ca_get3, cs_k_iod, cs_k_none, 0x08, 0
+cs_d_cax4:  CS_DESC 3, 0, 1, 4, cs_ca_set4, cs_ca_get4, cs_k_16b, cs_k_waits, 0x01, 0
+; VLSI SCAMP I - BUSCTL's PC/AT values are both the book and the floor, so
+; Fastest tested can only put back what a BIOS made slower; the SYSCLK
+; divider is the experiment (2 = /4, the book's default, then 1 = /2)
+cs_klist_sm: dw cs_d_sm1, cs_d_sm2, cs_d_sm3, cs_d_sm4, cs_d_sm5, 0
+cs_klist_smx: dw cs_d_sm5, cs_d_smx1, cs_d_smx2, cs_d_smx3, cs_d_smx4, 0
+cs_d_sm1:   CS_DESC 4, 4, 1, 1, cs_sm_set1, cs_sm_get1, cs_k_8b, cs_k_waits, 0x0E, 0
+cs_d_sm2:   CS_DESC 0, 0, 1, 2, cs_sm_set2, cs_sm_get2, cs_k_cmd, cs_k_none, 0x0E, 0
+cs_d_sm3:   CS_DESC 0, 0, 1, 3, cs_sm_set3, cs_sm_get3, cs_k_16d, cs_k_none, 0x01, 0
+cs_d_sm4:   CS_DESC 0, 0, 1, 4, cs_sm_set4, cs_sm_get4, cs_k_16b, cs_k_waits, 0x01, 0
+cs_d_sm5:   CS_DESC 2, 1, 1, 5, cs_sm_set5, cs_sm_get5, cs_k_sclk, cs_k_none, 0x0F, CSF_X | CSF_DMA
+cs_d_smx1:  CS_DESC 5, 4, 1, 1, cs_sm_set1, cs_sm_get1, cs_k_8b, cs_k_waits, 0x0E, 0
+cs_d_smx2:  CS_DESC 1, 0, 1, 2, cs_sm_set2, cs_sm_get2, cs_k_cmd, cs_k_none, 0x0E, 0
+cs_d_smx3:  CS_DESC 1, 0, 1, 3, cs_sm_set3, cs_sm_get3, cs_k_16d, cs_k_none, 0x01, 0
+cs_d_smx4:  CS_DESC 1, 0, 1, 4, cs_sm_set4, cs_sm_get4, cs_k_16b, cs_k_waits, 0x01, 0
+; WD76C10 - 8-bit memory and I/O waits 2-5 (book 4), 16-bit memory and I/O
+; 1-2 (book 1, also the floor), BUS_MOD's divide-by bit the experiment
+cs_klist_w7: dw cs_d_w71, cs_d_w72, cs_d_w73, cs_d_w74, cs_d_w75, 0
+cs_klist_w7x: dw cs_d_w75, cs_d_w7x1, cs_d_w7x2, cs_d_w7x3, cs_d_w7x4, 0
+cs_d_w71:   CS_DESC 4, 2, 1, 1, cs_w7_set1, cs_w7_get1, cs_k_m8, cs_k_waits, 0x06, 0
+cs_d_w72:   CS_DESC 4, 2, 1, 2, cs_w7_set2, cs_w7_get2, cs_k_i8, cs_k_waits, 0x08, 0
+cs_d_w73:   CS_DESC 1, 1, 1, 3, cs_w7_set3, cs_w7_get3, cs_k_m16, cs_k_waits, 0x01, 0
+cs_d_w74:   CS_DESC 1, 1, 1, 4, cs_w7_set4, cs_w7_get4, cs_k_i16, cs_k_waits, 0x00, 0
+cs_d_w75:   CS_DESC 2, 1, 1, 5, cs_w7_set5, cs_w7_get5, cs_k_bmod, cs_k_none, 0x0F, CSF_X | CSF_DMA
+cs_d_w7x1:  CS_DESC 5, 2, 1, 1, cs_w7_set1, cs_w7_get1, cs_k_m8, cs_k_waits, 0x06, 0
+cs_d_w7x2:  CS_DESC 5, 2, 1, 2, cs_w7_set2, cs_w7_get2, cs_k_i8, cs_k_waits, 0x08, 0
+cs_d_w7x3:  CS_DESC 2, 1, 1, 3, cs_w7_set3, cs_w7_get3, cs_k_m16, cs_k_waits, 0x01, 0
+cs_d_w7x4:  CS_DESC 2, 1, 1, 4, cs_w7_set4, cs_w7_get4, cs_k_i16, cs_k_waits, 0x00, 0
+; OPTi 82C283 - only the AT clock, CPUCLK2/6 or /4 (3 or 2)
+cs_klist_o3: dw cs_d_o31, 0
+cs_d_o31:   CS_DESC 3, 2, 1, 1, cs_o3_set1, cs_o3_get1, cs_k_atck, cs_k_none, 0x0F, CSF_X | CSF_DMA
+cs_k_proc:  db 'BCLK=PROC/', 0
+cs_k_cmd:   db 'cmd delay ', 0
+cs_k_16d:   db '16b delay ', 0
+cs_k_sclk:  db 'SYSCLK=CLK/2x', 0
+cs_k_m8:    db 'mem8 ', 0
+cs_k_i8:    db 'io8 ', 0
+cs_k_m16:   db 'mem16 ', 0
+cs_k_i16:   db 'io16 ', 0
+cs_k_bmod:  db 'BUS_MOD /', 0
+cs_k_atck:  db 'ATCLK=CLK2/2x', 0
 cs_k_r4:    db 'R4 '
 cs_k_none:  db 0
 cs_k_waits: db ' waits', 0

@@ -18,6 +18,20 @@ h_cpuinfo:
     ret
 cs_ap_fe:                           ; the rows' apply procs (csapply.inc):
 cs_ap_ne:                           ; not this harness's subject -
+cs_ap_ca:
+cs_ap_sm:
+cs_ap_w7:
+cs_ap_o3:
     stc                             ; feharness.asm's
     ret
 %include "redline/csrows.inc"
+; h_probe1 - AL = a row: its probe, as a pick's Proceed runs it (cs_probe1)
+h_probe1:
+    mov bl, al
+    xor bh, bh
+    mov al, CSR_SIZE
+    mul bl
+    mov si, ax
+    add si, cs_rows
+    call cs_probe1
+    hlt

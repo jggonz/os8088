@@ -544,6 +544,12 @@ org 0x7C00
     mov dh, 1
     int 0x13
     jc fail
+    mov bx, 0x8E00
+    mov ax, 0x0212
+    mov cx, 0x0201
+    xor dh, dh
+    int 0x13
+    jc fail
     jmp 0x1000:ENTRY
 fail:
     mov al, 0x11
@@ -555,7 +561,7 @@ fail:
             bootbin = td / 'boot.bin'
             subprocess.run(['nasm', '-f', 'bin', '-o', str(bootbin), str(boot)], check=True)
             disk, dump = td / 'probe.img', td / 'probe.dump'
-            assert len(blob) <= 71*512, len(blob)  # the four reads above
+            assert len(blob) <= 89*512, len(blob)  # the five reads above
             disk.write_bytes((bootbin.read_bytes()+blob).ljust(1440*1024, b'\0'))
             run = subprocess.run(['qemu-system-i386', '-machine', 'pc', '-cpu', cpu, '-m', str(ram),
                                   '-drive', 'file=%s,format=raw,if=floppy' % disk,

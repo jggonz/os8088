@@ -126,6 +126,43 @@ h_bus_ne:                           ; Bus clock x2, as cs_do_bus runs it:
     mov byte [cs_sw_xmode], 0
     ret
 h_norom:    db 0                    ; 1: h_tune_ne has no ROM reference
+h_list:     dw 0                    ; the test's: a knob table or a list
+h_kput:                             ; AL = knob, AH = value through [h_list]
+    mov si, [h_list]
+    jmp cs_kput
+h_kget:
+    mov si, [h_list]
+    jmp cs_kget
+h_tunel:                            ; Tune over the list at [h_list]
+    mov ax, 0xA000
+    xor bx, bx
+    mov cx, 0xC000
+    call cs_sw_refs
+    mov si, [h_list]
+    mov al, [h_home]
+    jmp cs_sw_tune
+h_busl:                             ; Bus clock x2 over the list at [h_list]
+    mov ax, 0xA000
+    xor bx, bx
+    mov cx, 0xC000
+    call cs_sw_refs
+    mov si, [h_list]
+    add si, 2
+.l:
+    mov bx, [si]
+    or bx, bx
+    jz .run
+    mov [cs_sw_desc], bx
+    mov al, [bx + CSD_BOOK]
+    call cs_sw_set
+    add si, 2
+    jmp short .l
+.run:
+    mov byte [cs_sw_xmode], 1
+    mov si, [h_list]
+    call cs_sw_tune
+    mov byte [cs_sw_xmode], 0
+    ret
 cs_sw_measure:                      ; REDLINE times each step; the model has
     push ax                         ; no clock, so the harness makes one up:
     push bx                         ; 300 + 100 x the candidate, a step one
@@ -150,7 +187,7 @@ cs_sw_measure:                      ; REDLINE times each step; the model has
     ret
 %include "redline/csrows.inc"
 %include "redline/csfe.inc"
-%include "redline/csne.inc"
+%include "redline/csknob.inc"
 %include "redline/csapply.inc"
 %include "redline/csweep.inc"
 cs_sw_ref:  times 1024 db 0

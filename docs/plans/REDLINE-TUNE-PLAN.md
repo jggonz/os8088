@@ -504,7 +504,7 @@ docs/reports/.
   3, answered below): a DATASHEET row SWEEPS, after a warning, because a row
   that may not sweep until verified can only be verified by a second build
   and a second report, once per board.
-  - `csne.inc` is the NEAT's knob, 62h bits 3:2, Mfg spec 4 (what the
+  - `csne.inc` (now `csknob.inc`, wave 3.10) is the NEAT's knob, 62h bits 3:2, Mfg spec 4 (what the
     PB286LP runs), floor 2. It reads back, so the page reads it live and
     the sweep checks the knob took. RLAPPLY carries it: 1,776 bytes.
   - `csweep.inc` is the sweep, lifted out of `csfe.inc` and driven by a
@@ -604,6 +604,30 @@ docs/reports/.
     CLK2IN). It doubles every card's timing at once, so a sweep's checks
     say less about it than about a wait state - a card that holds IOCHRDY
     will read right and still be run out of spec.
+- **Wave 3.10 — the first field round: four more chipsets. BUILT** (SPEC.md
+  103.6.1, 103.6.2). The owner: *"Implement the 4 we know of, and then
+  we'll initially ship like that"* - every chipset the data books give
+  writable bus timing for, so a user of any of them can Tune and send a
+  report: the C&T CS8230/CS8231, VLSI SCAMP I, WD76C10A and OPTi 82C283,
+  all `DATASHEET` behind the warning.
+  - `csknob.inc` replaced `csne.inc`: a knob is a TABLE ROW (protocol,
+    index, field, base, direction, largest field) over one `cs_kput`, so a
+    chipset is a table and an apply proc. Four protocols: 22h/23h, ECh/EDh
+    with the index read back (a locked SCAMP), 22h/24h with the index reset
+    after each access, and the WD76C10's word registers behind the unlock
+    with the RTC index parked at 0Dh first.
+  - The 386 rows of the 22h family are probed only on a pick and Proceed,
+    so the automatic pass still never writes 22h on a 386; the WD76C10A is
+    found by the read-only E472h before its unlock is ever written.
+  - Every row with a bus clock has Bus clock x2. A SCAMP's BUSCTL fields
+    are already at their PC/AT values by default, so its Fastest tested can
+    only undo a slow BIOS; its gain is the clock.
+  - RLAPPLY is 2,244 bytes. csprobe: 354 runs, every new rule with a
+    break-it that goes red (a dropped inversion, a dropped RTC guard, a
+    dropped SCAMP read-back, a clock's field limit raised).
+  - OWED: a report from any board with one of the four. The pre-A WD76C10
+    (no E472h) stays identify-only; SCAMP II and TOPCAT (other registers)
+    and the OPTi 281/291/391 and UMC parts (no row yet) are the next round.
 - **Wave 4 — the Compaq's CPU-speed row.** Field run on the Portable III.
 - **Wave 5 onward — one chipset a wave, as books arrive.**
   - NEAT first: the most common, with known fields.

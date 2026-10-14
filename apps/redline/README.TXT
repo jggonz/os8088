@@ -78,7 +78,12 @@ count - so it is right after a reboot, or after RLAPPLY, too. The buttons:
 On a WD FE3600 board (the Packard Bell Victory 286) Tune sets R4, the 8-bit
 wait states; on a C&T NEAT board (the Packard Bell PB286LP) the 8-bit wait
 states, then the 8-bit memory and I/O command delays and the 16-bit wait
-states, one after another. What Fastest tested cannot read back - video
+states, one after another. From the data books, not yet run on a real
+board: the C&T CS8230/CS8231 (pick it, on a 386DX), a VLSI SCAMP
+(VL82C310/311), a WD76C10A and an OPTi 82C283 (pick it, on a 386SX) - each
+with its waits and delays where the book has them, and its bus clock under
+Bus clock x2. If you have one, Tune and Save report: that report is what
+makes it supported. What Fastest tested cannot read back - video
 writes, the keyboard controller, the clock chip, serial ports, an 8-bit
 disk card - is why Mfg spec is there: if anything misbehaves, Tune to it,
 or reset, and keep backups before you Save a tuned setting. A chipset the

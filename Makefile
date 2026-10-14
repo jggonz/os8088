@@ -3572,7 +3572,7 @@ $(BUILD)/taskmgr.o88: $(BUILD)/taskmgr.bin tools/os88pkg.py $(PKGZSTAMP)
 # apply code as SOURCE, so those are its prerequisites too
 $(BUILD)/rlapply.bin: apps/rlapply/rlapply.asm apps/os88api.inc \
                       apps/os88data.inc apps/redline/csrows.inc \
-                      apps/redline/csfe.inc apps/redline/csne.inc apps/redline/csapply.inc | $(BUILD)
+                      apps/redline/csfe.inc apps/redline/csknob.inc apps/redline/csapply.inc | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ -o $@ apps/rlapply/rlapply.asm
 	@echo "rlapply: $(call FILESIZE,$@) bytes"
 
@@ -15182,7 +15182,7 @@ excitebikeload: excitebikedisk $(BUILD)/os8088-360.img
 # REDLINE native CPU/graphics performance lab (SPEC.md 103).
 .PHONY: redline redlinedisk redline-profile
 redline: $(BUILD)/redline.o88
-$(BUILD)/redline.bin: apps/redline/redline.asm apps/redline/detect.inc apps/redline/workloads.inc apps/redline/ui.inc apps/redline/csrows.inc apps/redline/csfe.inc apps/redline/csne.inc apps/redline/csapply.inc apps/redline/csweep.inc apps/redline/chipset.inc apps/os88data.inc apps/redline/baseline.inc apps/redline/baseline-herc.inc apps/redline/baseline-vga.inc apps/os88api.inc apps/os88ui.inc tests/benchlib.inc | $(BUILD)
+$(BUILD)/redline.bin: apps/redline/redline.asm apps/redline/detect.inc apps/redline/workloads.inc apps/redline/ui.inc apps/redline/csrows.inc apps/redline/csfe.inc apps/redline/csknob.inc apps/redline/csapply.inc apps/redline/csweep.inc apps/redline/chipset.inc apps/os88data.inc apps/redline/baseline.inc apps/redline/baseline-herc.inc apps/redline/baseline-vga.inc apps/os88api.inc apps/os88ui.inc tests/benchlib.inc | $(BUILD)
 	python3 tools/benchlint.py apps/redline/redline.asm
 	$(NASM) -f bin -w+error -I apps/ -I tests/ -l $(BUILD)/redline.lst -o $@ apps/redline/redline.asm
 $(BUILD)/redline.o88: $(BUILD)/redline.bin tools/os88pkg.py $(PKGZSTAMP)

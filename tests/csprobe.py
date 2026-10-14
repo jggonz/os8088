@@ -23,6 +23,19 @@ Checked, per board and per CPU class:
 Break it on purpose: make cs_id_neat write 0x68 to 22h, or drop the CPU_286
 test in cs_identify, and the matrix goes red naming the board and the port.
 
+THE FIRST FIELD ROUND'S FOUR (SPEC.md 103.6.1, 103.6.2): the CS8230 and the
+OPTi 82C283 are probed only on a pick (CSP_PICK22) - never in a 386's
+automatic pass, never on an aliased pair, never on a 286 - and the WD76C10A
+by its read-only E472h, with port 70h given only 0Dh and F073h written only
+where E472h answered as a WD and relocked unless the BIOS had it unlocked.
+Each of their knob tables (csknob.inc) against a board model of its own
+protocol: every value put and read back, the values outside it refused
+with nothing written, a locked SCAMP's dropped index, the WD's unlock only
+with the RTC index at 0Dh, Tune and Bus clock x2 against thresholds, the
+expectations computed from the descriptors in the assembled image. Break
+it: drop the CS8230 table's inversion, cs_wd_open's 70h write, the SCAMP
+read-back compare or a clock's field limit, and this goes red.
+
 THE WRITE SIDE (tests/csprobe/feharness.asm: csfe.inc and csapply.inc):
   * every FE3001 write is 63h=04h, 72h, 73h, 63h=84h, with interrupts OFF
     at each OUT, and no other port is written;
@@ -51,14 +64,17 @@ except ImportError:
     print("SKIP: unicorn not installed (pip install unicorn)")
     sys.exit(0)
 
-ROWS = ["NO", "F3", "CQ", "SM", "HL", "SC", "SX", "NE", "W7", "O3"]
-CSO = {0: "notrun", 1: "skipcpu", 2: "skipali", 3: "absent", 4: "FOUND", 5: "pick"}
+ROWS = ["NO", "F3", "CQ", "SM", "HL", "SC", "SX", "NE", "W7", "O3", "CA"]
+CSO = {0: "notrun", 1: "skipcpu", 2: "skipali", 3: "absent", 4: "FOUND", 5: "pick",
+       6: "onpick"}
 
 
 def build(src="tests/csprobe/harness.asm"):
     d = tempfile.mkdtemp(prefix="csprobe")
     out, lst = os.path.join(d, "h.bin"), os.path.join(d, "h.lst")
+    mp = os.path.join(d, "h.map")
     subprocess.check_call(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
+                           "--before", "[map symbols %s]" % mp,
                            "-l", lst, "-o", out, src],
                           cwd=ROOT)
     syms = {}
@@ -73,6 +89,20 @@ def build(src="tests/csprobe/harness.asm"):
             for p in pend:
                 syms.setdefault(p, int(m.group(1), 16) + 0x100)
             pend = []
+    # ...and the MAP, which also names the labels a macro made (csknob.inc's
+    # CS_KSET/CS_KGET procs), which the listing shows only as the call
+    sect = False
+    for ln in open(mp, errors="replace"):
+        if ln.startswith("---- Section"):
+            sect = True
+            continue
+        m = re.match(r"\s*([0-9A-F]+)\s+([0-9A-F]+)\s+([A-Za-z_][\w.]*)\s*$", ln)
+        if sect and m and "." not in m.group(3):
+            v = int(m.group(1), 16)
+            if m.group(3) in syms and syms[m.group(3)] != v:
+                raise SystemExit("csprobe: the map says %s is %X, the listing %X"
+                                 % (m.group(3), v, syms[m.group(3)]))
+            syms.setdefault(m.group(3), v)
     return open(out, "rb").read(), syms
 
 
@@ -152,6 +182,10 @@ class Board:
     def wr(self, p, v):
         self.write(p, v)
 
+    def rd16(self, p):
+        """a word IN: a board that decodes A9-A0 alone floats it"""
+        return 0xFFFF
+
     def read(self, p):
         return 0xFF
 
@@ -192,6 +226,65 @@ def mk(cls_name, row, iport, dport, regs, idx_reads=False):
                                            idx_reads=idx_reads))
 
 
+class WDBoard(Board):
+    """A WD76C10A: E472h shadows the 70h index in its low byte and toggles
+    bit 14 with refresh (port 61h bit 4 here); the xx72h registers answer
+    only after DAh to F073h, FC72h bit 15 toggling on each read; 9872h's
+    version 110b."""
+    name = "WD76C10A"
+    row = "W7"
+
+    def __init__(self):
+        super().__init__()
+        self.rtc, self.ref, self.ul, self.fc = 0, 0, False, 0
+
+    def read(self, p):
+        if p == 0x61:               # the refresh toggle: one step a read,
+            self.ref += 1           # and REFDT moving every third
+            return 0x10 if self.ref & 1 else 0
+        return 0xFF
+
+    def rd16(self, p):
+        if p == 0xE472:
+            return (0x4000 if (self.ref // 3) & 1 else 0) | self.rtc
+        if not self.ul:
+            return 0xFFFF                   # locked: the AT bus, floating
+        if p == 0xFC72:
+            self.fc ^= 0x8000
+            return self.fc | 0x0100
+        if p == 0x9872:
+            return 0xC080
+        return 0xFFFF
+
+    def write(self, p, v):
+        if p == 0x70:
+            self.rtc = v & 0x7F
+        if p == 0xF073:
+            self.ul = v == 0xDA
+
+
+class Opti283(Board):
+    """OPTi 82C283: 22h index, 24h data, the index reset after each access"""
+    name = "OPTi 82C283"
+    row = "O3"
+    regs = {0x10: 0x30, 0x14: 0x00}
+
+    def __init__(self):
+        super().__init__()
+        self.i = None
+
+    def read(self, p):
+        if p == 0x24:
+            v = self.regs.get(self.i, 0xFF) if self.i is not None else 0xFF
+            self.i = None
+            return v
+        return 0xFF
+
+    def write(self, p, v):
+        if p == 0x22:
+            self.i = v
+
+
 BOARDS = [Board, Aliased,
           mk("VLSI SCAMP 311", "SM", 0xEC, 0xED, {0: 0xD6}, True),
           mk("VLSI SCAMP 310", "SM", 0xEC, 0xED, {0: 0xD1}, True),
@@ -205,12 +298,20 @@ BOARDS = [Board, Aliased,
              {0x60: 0x00, 0x61: 0x5D, 0x62: 0x3C, 0x64: 0x20}),
           mk("C&T NEAT (rev 0)", "NE", 0x22, 0x23,
              {0x60: 0x40, 0x62: 0x04, 0x64: 0x00}),
+          mk("C&T CS8230", "CA", 0x22, 0x23,
+             {0x04: 0x00, 0x05: 0x05, 0x06: 0x00, 0x08: 0x00}),
+          mk("C&T CS8231", "CA", 0x22, 0x23,
+             {0x04: 0x00, 0x05: 0x00, 0x06: 0x58, 0x08: 0x80}),
+          WDBoard, Opti283,
           ]
+# the rows the automatic pass never finds: probed only on a pick (CSP_PICK22)
+ONPICK = ("CA", "O3")
 
-ALLOWED_RD = {0x20, 0x21, 0x22, 0x23, 0xEC, 0xED, 0x1ED, 0x1EF}
+ALLOWED_RD = {0x20, 0x21, 0x22, 0x23, 0xEC, 0xED, 0x1ED, 0x1EF, 0x61,
+              0xE472, 0xFC72, 0x9872}
 
 
-def run(img, syms, board, tier, rom):
+def run(img, syms, board, tier, rom, pick=None):
     mu = Uc(UC_ARCH_X86, UC_MODE_16)
     mu.mem_map(0, 0x100000)
     mu.mem_write(0x100, img)
@@ -222,18 +323,23 @@ def run(img, syms, board, tier, rom):
     log = []
 
     def hin(uc, port, size, user):
-        v = board.rd(port)
+        v = board.rd16(port) if size == 2 else board.rd(port)
         log.append(("in", port, v))
         return v
 
     def hout(uc, port, size, value, user):
-        log.append(("out", port, value & 0xFF))
+        log.append(("out", port, value & (0xFFFF if size == 2 else 0xFF)))
         board.wr(port, value & 0xFF)
 
     mu.hook_add(UC_HOOK_INSN, hin, None, 1, 0, UC_X86_INS_IN)
     mu.hook_add(UC_HOOK_INSN, hout, None, 1, 0, UC_X86_INS_OUT)
     end = syms["h_start"] + 3            # the hlt after the call
     mu.emu_start(syms["h_start"], end, count=5_000_000)
+    if pick is not None:                 # ...then the picked row's Proceed
+        del log[:]
+        mu.reg_write(UC_X86_REG_SP, 0xFFF0)
+        mu.reg_write(UC_X86_REG_AX, ROWS.index(pick))
+        mu.emu_start(syms["h_probe1"], 0, count=5_000_000)
     pres = mu.mem_read(syms["cs_pres"], len(ROWS))
     found = mu.mem_read(syms["cs_found"], 1)[0]
     crc = int.from_bytes(mu.mem_read(syms["cs_crc"], 2), "little")
@@ -271,11 +377,17 @@ def main():
                 if d == "out":
                     ok = ((p == 0x22 and (v == 0x40 or 0x60 <= v <= 0x67))
                           or (p == 0xEC and v == 0x00)
-                          or (p == 0x1ED))
+                          or (p == 0x1ED)
+                          or (p == 0x70 and v == 0x0D)
+                          or (p == 0xF073 and b.row == "W7"
+                              and v in (0xDA, 0x00)))
                     if not ok:
                         bad(f"{tag}: wrote {v:02X}h to port {p:X}h")
-            if tier == 2 and ports & {0x22, 0x23}:
-                bad(f"{tag}: a 386 touched 22h/23h")
+            if tier == 2 and any(d == "out" and p in (0x22, 0x23, 0x24)
+                                 for d, p, _ in log):
+                bad(f"{tag}: a 386's automatic pass wrote 22h/23h/24h")
+            if b.row != "W7" and any(d == "out" and p == 0xF073 for d, p, _ in log):
+                bad(f"{tag}: the WD76C10's unlock written on another board")
             if tier == 1 and b.aliased and any(d == "out" and p in (0x22, 0x23)
                                                for d, p, _ in log):
                 bad(f"{tag}: wrote 22h/23h while they alias the 8259")
@@ -285,6 +397,10 @@ def main():
                 want = "NO"
             if tier == 2 and want in ("SC", "SX", "NE"):
                 want = "NO"
+            if want in ONPICK:
+                want = "NO"
+            if tier in (1, 2) and any(pres[ROWS.index(r)] != 6 for r in ONPICK):
+                bad(f"{tag}: the pick-probed rows ran in the automatic pass")
             if ROWS[found] != want:
                 bad(f"{tag}: found {ROWS[found]}, want {want} "
                     f"({' '.join(r + '=' + CSO[s] for r, s in zip(ROWS, pres))})")
@@ -314,9 +430,60 @@ def main():
             rom = forge(vic, want)
             log, pres, found, crc = run(img, syms, Board(), tier, rom)
             checked += 1
+            if row == "F3" and log and any(p != 0x21 and p not in (0x20, 0x22, 0x23)
+                                           and p not in (0xEC, 0xED, 0x1ED, 0x1EF)
+                                           for _, p, _ in log):
+                bad("tier %d, FE3600 BIOS %04X: probes touched %s"
+                    % (tier, want, sorted({hex(p) for _, p, _ in log})))
             if ROWS[found] != row:
                 bad("tier %d, BIOS %04X %s: found %s, want %s"
                     % (tier, want, date.decode(), ROWS[found], row))
+    # PROBED ON A PICK: the CS8230 and the OPTi 82C283 (CSP_PICK22) - a 386
+    # only, never where 22h aliases the 8259, and writing to 22h nothing but
+    # their own indices (04h/06h/08h, OCW2/OCW3 no-ops to an 8259; 10h/14h,
+    # which WOULD be ICW1, so the alias check is what stands in front)
+    for row, B, tier, want, idxs in (
+            ("CA", BOARDS[-4], 2, 4, {4, 6, 8}),
+            ("CA", BOARDS[-3], 2, 4, {4, 6, 8}),
+            ("CA", Board, 2, 3, {4, 6, 8}),
+            ("CA", Aliased, 2, 2, set()),
+            ("CA", BOARDS[-4], 1, 1, set()),
+            ("CA", BOARDS[-4], 0, 1, set()),
+            ("O3", Opti283, 2, 4, {0x10, 0x14}),
+            ("O3", Board, 2, 3, {0x10, 0x14}),
+            ("O3", Aliased, 2, 2, set()),
+            ("O3", Opti283, 1, 1, set())):
+        b = B()
+        log, pres, found, crc = run(img, syms, b, tier, bytes(rom), pick=row)
+        checked += 1
+        got = pres[ROWS.index(row)]
+        w22 = {v for d, p, v in log if d == "out" and p == 0x22}
+        other = {p for d, p, v in log if d == "out" and p != 0x22}
+        tag = "pick %s on %s, tier %d" % (row, b.name, tier)
+        if got != want or w22 - idxs or other:
+            bad("%s: %s, wrote 22h %s and %s; want %s"
+                % (tag, CSO[got], sorted(map(hex, w22)),
+                   sorted(map(hex, other)), CSO[want]))
+    # THE WD76C10A: 70h is given 0Dh BEFORE the unlock, the unlock is
+    # followed by a relock - unless the BIOS had left it unlocked, which the
+    # probe reads first and then respects
+    for preul in (False, True):
+        b = WDBoard()
+        b.ul = preul
+        log, pres, found, crc = run(img, syms, b, 1, bytes(rom))
+        checked += 1
+        outs = [(p, v) for d, p, v in log if d == "out" and p in (0x70, 0xF073)]
+        want = [(0x70, 0x0D), (0xF073, 0xDA)] + ([] if preul else [(0xF073, 0x00)])
+        if ROWS[found] != "W7" or outs != want or b.ul != (preul or False) \
+                and not preul:
+            bad("WD76C10A, BIOS left it %s: found %s, wrote %s, want %s"
+                % ("unlocked" if preul else "locked", ROWS[found],
+                   [(hex(p), hex(v)) for p, v in outs],
+                   [(hex(p), hex(v)) for p, v in want]))
+        if not preul and b.ul:
+            bad("WD76C10A: left unlocked by the probe")
+        if preul and not b.ul:
+            bad("WD76C10A: the BIOS's unlock taken away by the probe")
     # the Compaq signature
     rq = bytearray(rom)
     rq[0xFFEA:0xFFF0] = b"COMPAQ"
@@ -496,6 +663,149 @@ class NEBoard(FEBoard):
             self.bad.append("wrote port %Xh" % p)
 
 
+class KBoard(FEBoard):
+    """Any of csknob.inc's readable rows, by its PROTOCOL: '22' (index 22h,
+    data 23h, a fresh index before every data access), 'EC' (index ECh read
+    back; a LOCKED chip drops the index write), '24' (index 22h, data 24h,
+    the index reset after each access) or 'WD' (word registers at xx72h,
+    answering only after DAh to F073h, which must come with the RTC index at
+    0Dh). `knobs` mirrors the table: (register, shift, mask, base, inverted,
+    max field); a knob's value under its threshold makes every read go wrong.
+    A data write may change ONE knob's field and nothing else, with
+    interrupts off; a field past its max (ATCLK, a reserved code) is bad."""
+
+    def __init__(self, T, mu, spec, pico=False):
+        FEBoard.__init__(self, T, mu, pico)
+        self.proto, self.knobs = spec["proto"], spec["knobs"]
+        self.regs = dict(spec["regs"])
+        self.thr = list(spec.get("thr") or [None] * len(self.knobs))
+        self.slock = spec.get("locked", False)
+        self.i, self.rtc, self.ul, self.n61 = None, 0, False, 0
+        self.fields = {}
+        for reg, sh, m, base, inv, mx in self.knobs:
+            self.fields[reg] = self.fields.get(reg, 0) | (m << sh)
+        self.wrong = None
+        self.apply()
+
+    def val(self, k):
+        reg, sh, m, base, inv, mx = self.knobs[k]
+        f = (self.regs.get(reg, 0) >> sh) & m
+        return base - f if inv else base + f
+
+    def vals(self):
+        return [self.val(k) for k in range(len(self.knobs))]
+
+    def apply(self):
+        v = self.vals()
+        self.r4 = v[0]
+        wrong = any(t is not None and x < t for x, t in zip(v, self.thr))
+        if wrong != self.wrong:
+            self.wrong = wrong
+            x = (lambda b: bytes(c ^ 0x5A for c in b)) if wrong else (lambda b: b)
+            self.mu.mem_write(0xC0000 + 3, x(self.rom[3:]))
+            self.mu.mem_write(0xA0000, x(self.scr))
+
+    def rd(self, p):
+        pr = self.proto
+        if pr in ("22", "24") and p == (0x23 if pr == "22" else 0x24):
+            if self.i is None:
+                self.bad.append("data read without a fresh index")
+            v = self.regs.get(self.i, 0xFF)
+            self.i = None
+            return v & 0xFF
+        if pr == "EC" and p == 0xEC:
+            return 0xFF if self.i is None else self.i
+        if pr == "EC" and p == 0xED:
+            return self.regs.get(self.i, 0xFF) & 0xFF
+        if pr == "WD" and p == 0x61:
+            self.n61 += 1
+            return 0x10 if self.n61 & 1 else 0
+        return FEBoard.rd(self, p)
+
+    def rd16(self, p):
+        if self.proto == "WD" and self.ul and p in self.regs:
+            return self.regs[p]
+        self.bad.append("word read of %Xh%s" % (p, "" if self.ul else " while locked"))
+        return 0xFFFF
+
+    def put(self, reg, v):
+        old = self.regs.get(reg, 0)
+        ch = old ^ v
+        if reg not in self.fields:
+            self.bad.append("register %s written, which no knob owns"
+                            % ("(no index)" if reg is None else "%Xh" % reg))
+            return
+        if ch & ~self.fields[reg]:
+            self.bad.append("%Xh: bits outside the knobs changed, %Xh -> %Xh"
+                            % (reg, old, v))
+            return
+        hit = [k for k in self.knobs if k[0] == reg and not ch & ~(k[2] << k[1])]
+        if ch and not hit:
+            self.bad.append("%Xh: one write moved two fields, %Xh -> %Xh"
+                            % (reg, old, v))
+            return
+        for reg_, sh, m, base, inv, mx in self.knobs:
+            if reg_ == reg and ((v >> sh) & m) > mx:
+                self.bad.append("%Xh: field at bit %d written %d, past its max %d"
+                                % (reg, sh, (v >> sh) & m, mx))
+        self.regs[reg] = v
+        self.apply()
+
+    def wr(self, p, v, iflag):
+        if p == 0x85:
+            self.page = v & 0xFF
+            return
+        self.log.append((p, v))
+        pr = self.proto
+        if iflag and p not in (0x70,):
+            self.bad.append("OUT %Xh with interrupts ON" % p)
+        if pr in ("22", "24") and p == 0x22:
+            self.i = v & 0xFF
+        elif pr in ("22", "24") and p == (0x23 if pr == "22" else 0x24):
+            if self.i is None:
+                self.bad.append("data write without a fresh index")
+            else:
+                self.put(self.i, v & 0xFF)
+            self.i = None
+        elif pr == "EC" and p == 0xEC:
+            if not self.slock:
+                self.i = v & 0xFF
+        elif pr == "EC" and p == 0xED:
+            self.put(self.i, v & 0xFF)
+        elif pr == "WD" and p == 0x70:
+            self.rtc = v & 0x7F
+        elif pr == "WD" and p == 0xF073:
+            if (v & 0xFF) == 0xDA and self.rtc != 0x0D:
+                self.bad.append("WD unlocked with the RTC index at %02Xh, not 0Dh"
+                                % self.rtc)
+            self.ul = (v & 0xFF) == 0xDA
+        elif pr == "WD" and p in self.regs:
+            if not self.ul:
+                self.bad.append("%Xh written while locked" % p)
+            self.put(p, v & 0xFFFF)
+        else:
+            self.bad.append("wrote port %Xh" % p)
+
+
+# the four rows' boards, mirroring csknob.inc's tables
+KSPECS = {
+    "cs_kt_ca": dict(proto="22", regs={4: 0, 5: 0x05, 6: 0x00, 8: 0},
+                     knobs=[(6, 2, 3, 5, True, 3), (5, 2, 3, 0, False, 3),
+                            (5, 0, 3, 0, False, 3), (6, 4, 3, 3, True, 3),
+                            (6, 0, 3, 3, True, 1)]),
+    "cs_kt_sm": dict(proto="EC", regs={0: 0xD6, 0x16: 0x01, 0x07: 0x01},
+                     knobs=[(0x16, 0, 1, 4, False, 1), (0x16, 3, 1, 0, False, 1),
+                            (0x16, 2, 1, 0, False, 1), (0x16, 1, 1, 0, False, 1),
+                            (0x07, 0, 3, 1, False, 3)]),
+    "cs_kt_w7": dict(proto="WD", regs={0x1872: 0x00CA},
+                     knobs=[(0x1872, 0, 3, 2, False, 3), (0x1872, 2, 3, 2, False, 3),
+                            (0x1872, 4, 1, 1, False, 1), (0x1872, 5, 1, 1, False, 1),
+                            (0x1872, 10, 1, 2, True, 1)]),
+    "cs_kt_o3": dict(proto="24", regs={0x10: 0x30, 0x14: 0x00},
+                     knobs=[(0x14, 0, 1, 3, True, 1)]),
+}
+
+
 class Rig:
     def __init__(self, img, syms, board_cls, *a, tier=1, rom=None, **kw):
         self.syms = syms
@@ -507,18 +817,22 @@ class Rig:
         mu.mem_write(syms["h_tier"], bytes([tier]))
         for r in (UC_X86_REG_CS, UC_X86_REG_DS, UC_X86_REG_ES, UC_X86_REG_SS):
             mu.reg_write(r, 0)
-        self.b = (board_cls(*a, mu=mu, **kw) if board_cls in (FEBoard, NEBoard)
+        self.b = (board_cls(*a, mu=mu, **kw) if board_cls in (FEBoard, NEBoard,
+                                                              KBoard)
                   else board_cls())
         b = self.b
 
         def hin(uc, port, size, user):
+            if size == 2:
+                return b.rd16(port) if hasattr(b, "rd16") else 0xFFFF
             return b.rd(port)
 
         def hout(uc, port, size, value, user):
-            if isinstance(b, FEBoard):     # and the NEAT, its subclass
-                b.wr(port, value & 0xFF, uc.reg_read(UC_X86_REG_EFLAGS) & 0x200)
+            v = value & (0xFFFF if size == 2 else 0xFF)
+            if isinstance(b, FEBoard):     # the NEAT and KBoard, its subclasses
+                b.wr(port, v, uc.reg_read(UC_X86_REG_EFLAGS) & 0x200)
             else:
-                b.wr(port, value & 0xFF)
+                b.wr(port, v)
 
         mu.hook_add(UC_HOOK_INSN, hin, None, 1, 0, UC_X86_INS_IN)
         mu.hook_add(UC_HOOK_INSN, hout, None, 1, 0, UC_X86_INS_OUT)
@@ -554,6 +868,120 @@ class Rig:
 
 
 L = 16      # CSL_SIZE: one step of csweep.inc's cs_sw_log
+
+
+def descs(r, lst):
+    """The knob descriptors a list names, read out of the assembled image:
+    (address, book, floor, step, knob, gov, flags)"""
+    out, a = [], r.syms[lst]
+    while True:
+        d = int.from_bytes(r.mu.mem_read(a, 2), "little")
+        if not d:
+            return out
+        b = r.mu.mem_read(d, 15)
+        out.append((d, b[0], b[1], b[2], b[3], b[13], b[14]))
+        a += 2
+
+
+def k_rows(img, syms, bad):
+    """THE FOUR ROWS ADDED FOR THE FIRST FIELD ROUND (SPEC.md 103.6.2):
+    CS8230, SCAMP, WD76C10, OPTi 82C283 - each table's every knob put and
+    read back, its refusals, its protocol's own rule, and its Tune and Bus
+    clock x2 against a board that goes wrong under a threshold"""
+    runs = 0
+    rows = (("cs_kt_ca", "cs_klist_ca", "cs_klist_cax"),
+            ("cs_kt_sm", "cs_klist_sm", "cs_klist_smx"),
+            ("cs_kt_w7", "cs_klist_w7", "cs_klist_w7x"),
+            ("cs_kt_o3", "cs_klist_o3", "cs_klist_o3"))
+    for kt, lst, xlst in rows:
+        spec = KSPECS[kt]
+        # (a) every knob, every legal value, and the values either side
+        for k, (reg, sh, m, base, inv, mx) in enumerate(spec["knobs"]):
+            legal = [base - f if inv else base + f for f in range(mx + 1)]
+            for v in range(0, 8):
+                r = Rig(img, syms, KBoard, 0, spec=spec)
+                r.wb("h_list", r.syms[kt].to_bytes(2, "little"))
+                ax, cf = r.call("h_kput", ax=(v << 8) | (k + 1))
+                runs += 1
+                tag = "%s knob %d = %d" % (kt, k + 1, v)
+                if v in legal:
+                    if cf or r.b.val(k) != v or r.b.bad:
+                        bad("%s: CF %d, reads %d, %s" % (tag, cf, r.b.val(k), r.b.bad[:3]))
+                    ax, cf = r.call("h_kget", ax=k + 1)
+                    if ax & 0xFF != v:
+                        bad("%s: read back %d" % (tag, ax & 0xFF))
+                else:
+                    if not cf or r.b.vals() != Rig(img, syms, KBoard, 0,
+                                                    spec=spec).b.vals():
+                        bad("%s: refused CF %d, knobs %s" % (tag, cf, r.b.vals()))
+        # (b) Tune: each knob from where it reads, down to its threshold,
+        # an experiment's knob left alone - expected from the descriptors
+        for thr_off in (0, 1):
+            r = Rig(img, syms, KBoard, 0, spec=spec)
+            ds = descs(r, lst)
+            home = r.b.vals()
+            thr = [None] * len(spec["knobs"])
+            for d in ds:
+                if not d[6] & 1 and d[1] > d[2]:
+                    thr[d[4] - 1] = d[2] + thr_off
+            r = Rig(img, syms, KBoard, 0, spec=dict(spec, thr=thr))
+            r.wb("h_list", r.syms[lst].to_bytes(2, "little"))
+            ax, cf = r.call("h_tunel", watch_if=True)
+            runs += 1
+            want = list(home)
+            for d in ds:
+                _, book, floor, step, knob, gov, fl = d
+                if fl & 1 or not gov & 0x0F:
+                    continue
+                last = home[knob - 1]
+                c = book
+                while c >= floor:
+                    if thr[knob - 1] is not None and c < thr[knob - 1]:
+                        break
+                    last = c
+                    c -= step
+                want[knob - 1] = last
+            if r.b.vals() != want or r.b.bad:
+                bad("%s Tune (thresholds +%d): knobs %s, want %s; %s"
+                    % (lst, thr_off, r.b.vals(), want, r.b.bad[:3]))
+        # (c) Bus clock x2: the clock with every other knob at its longest,
+        # then each back down - a clock that reads wrong stays put
+        for clock_ok in (True, False):
+            r = Rig(img, syms, KBoard, 0, spec=spec)
+            ds = descs(r, xlst)
+            ck = ds[0]
+            thr = [None] * len(spec["knobs"])
+            if not clock_ok:
+                thr[ck[4] - 1] = ck[1]          # anything faster than the book
+            r = Rig(img, syms, KBoard, 0, spec=dict(spec, thr=thr))
+            r.wb("h_list", r.syms[xlst].to_bytes(2, "little"))
+            ax, cf = r.call("h_busl", watch_if=True)
+            runs += 1
+            want = r.b.vals()[:]
+            want[ck[4] - 1] = ck[2] if clock_ok else ck[1]
+            for d in ds[1:]:
+                _, book, floor, step, knob, gov, fl = d
+                want[knob - 1] = floor if gov & 0x0F else book
+            if r.b.vals() != want or r.b.bad:
+                bad("%s Bus clock x2 (clock %s): knobs %s, want %s; %s"
+                    % (xlst, "fine" if clock_ok else "WRONG", r.b.vals(), want,
+                       r.b.bad[:3]))
+    # (d) A LOCKED SCAMP drops the index write: nothing is written, CF = 1
+    r = Rig(img, syms, KBoard, 0, spec=dict(KSPECS["cs_kt_sm"], locked=True))
+    r.wb("h_list", r.syms["cs_kt_sm"].to_bytes(2, "little"))
+    ax, cf = r.call("h_kput", ax=(5 << 8) | 1)
+    runs += 1
+    if not cf or any(p == 0xED for p, v in r.b.log):
+        bad("locked SCAMP: CF %d, wrote %s" % (cf, r.b.log))
+    # (e) The WD76C10: relocked after every access, never written locked
+    r = Rig(img, syms, KBoard, 0, spec=KSPECS["cs_kt_w7"])
+    r.wb("h_list", r.syms["cs_kt_w7"].to_bytes(2, "little"))
+    r.call("h_kput", ax=(3 << 8) | 1)
+    runs += 1
+    if r.b.ul or r.b.bad or r.b.val(0) != 3:
+        bad("WD76C10 put: unlocked after %s, mem8 %d, %s"
+            % (r.b.ul, r.b.val(0), r.b.bad[:3]))
+    return runs
 
 
 def nelog(r):
@@ -792,6 +1220,7 @@ def write_side(bad):
         runs += 1
         if not cf or r.b.log:
             bad("cs_ap_ne took %s: CF %d, wrote %s" % (what, cf, r.b.log))
+    runs += k_rows(img, syms, bad)
     # 3. REDLINE.CFG
     rom = bytearray(os.urandom(0x10000))
     rom[0xFFF5:0xFFFD] = b"03/12/88"
