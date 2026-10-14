@@ -259,6 +259,20 @@ squashed, and that shapes what to write:
   down. It is an archive rather than a narrative, so the *title* carries the
   meaning and the individual commit messages fill the archive — both are worth
   writing well, for different reasons.
+- **A bug the cycle created and fixed inside the cycle is not a bugfix to
+  `main`, and stays out of the description.** `main` never had it, so to
+  `main`'s reader it is part of the feature it was found in, and listing it
+  makes the round read as buggier than what it ships. That holds for every
+  PR description, not only this cycle's. "Fixes" names only defects that are
+  in `main`. Check each one against `main`'s own source before listing it —
+  the lines the fix removed or guards should be in `git show upstream/main:<file>`
+  and reachable there. Two cases need care:
+  - **A defect latent in `main`, exposed by this cycle's work**, is a fix to
+    `main` when `main`'s code is wrong in itself (a primitive that misdraws
+    any input `main` could hand it). It is not one when `main`'s code is only
+    wrong for an input this cycle invented (a stub no `main` caller reaches).
+  - **A fix to a feature this cycle added** belongs in that feature's
+    paragraph, if anywhere, never under Fixes.
 - **Never re-add `build/`.** It is gitignored outright and no artifact in it is
   tracked (SPEC.md §16).
 - **`make budget-check` must pass first.** The integration branch may carry a
