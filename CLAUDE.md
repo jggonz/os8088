@@ -859,6 +859,17 @@ rows are host-side invariant checks over what `make` just built, the build
 configurations `all` never builds, and whole scripted sessions driven through
 an emulator.
 
+**Soak and `test-full` run ONCE, after the last batch** (the owner's rule).
+When a change lands as batches or waves — review-fork-pr's `fix.js`,
+port-to-os8088 and native-game-port waves, refresh-stale-pr fixes, any agent
+fix series — no batch runs a soak row or `test-full`. A batch verifies on the
+host (`make`, which runs the fast tier; `make KERN_SMALL=1`;
+`tools/kernsize.py` on both kernels; pure host checks) and NAMES the
+`tests/suite.py` rows covering what it changed. After the last batch, one
+`os88test.py soak -k … -k …` call runs the deduplicated union — any A/B leg
+against the starting commit in that same pass — then `test-full` once. A soak
+row is minutes, and a per-batch rerun buys no new information.
+
 Everything else is still boot `make test`, then drive it over QMP.
 
 ```
