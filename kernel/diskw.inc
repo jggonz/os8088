@@ -2731,8 +2731,8 @@ dskw_read_at_x:
 %ifndef KERN_SMALL
     mov cl, 9                   ; ...and DX the bytes into the one it lands
     shr dx, cl                  ; in: its SECTORS, which dsk_read_chain skips
-    mov [dsk_csk], dl           ; in that cluster alone (18.4.4.2)
-%endif
+%endif                          ; in that cluster alone (18.4.4.2) - DL, kept
+                                ; through the walk and armed at .atclus
     mov cx, ax
 %ifdef DSK_STREAM
     or di, di                   ; ...ONE, from a HOT READ_SEQ cursor's
@@ -2751,6 +2751,12 @@ dskw_read_at_x:
                                 ; own range test (FERR_IO either way). It was
                                 ; asked here as well, a dskw_clok a cluster
 .atclus:
+%ifndef KERN_SMALL
+    mov [dsk_csk], dl           ; ARMED ONLY NOW, with the chain read next:
+%endif                          ; armed above the walk, a walk that failed
+                                ; left it set and the NEXT chain read or
+                                ; write anywhere began that many sectors in,
+                                ; CF=0 (dsk_next_clus_x keeps DX)
     push ax                     ; THE CLUSTER IS NEVER STORED. It was banked
                                 ; in [dwr_clus], which on kern_big IS the
                                 ; READ_SEQ cursor's +6 - so a read that FAILED

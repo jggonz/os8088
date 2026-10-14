@@ -3015,6 +3015,9 @@ dsk_vol_del:
                                   ; it pack up into it (SPEC.md 26.9)
     call dsk_fatw_drop          ; AL is still the index; it also puts the
                                 ; live window back if this volume owned it
+%ifdef OS88_IMG
+    call KERNEL_SEG:dsk_img_orphan  ; ...AND AN IMAGE IT HOSTED IS ORPHANED
+%endif                          ; (SPEC.md 18.101.1): AL kept, BX banked above
     cmp al, [disk_drive]
     jne .out
     xor ax, ax                  ; the mounted volume just went away: fall back
@@ -3027,6 +3030,45 @@ dsk_vol_del:
     pop bx
     pop ax
     ret
+
+%ifdef OS88_IMG
+section .text                   ; ...in the KERNEL SEGMENT, by size alone:
+                                ; .cold had 20 bytes of its rung left and
+                                ; this was 41 there, a 512-byte step on
+                                ; every machine; .text's rung holds it
+; -----------------------------------------------------------------------------
+; dsk_img_orphan - orphan every mounted image hosted on volume AL (SPEC.md
+;                  18.101.1). FAR entry: dsk_vol_del's free path, from .cold
+; in:  AL = the volume index just freed
+; out: nothing
+; clobbers: BX (dsk_vol_del's, banked there)
+;
+; Its claim's host byte goes to 0xFF, which no row is, so its next transfer
+; fails at the inner row lookup - Disk error, never a sector. Left naming the
+; index, the row's next tenant served it: another image recursed through .img
+; and traded the wrong claim back, and a partition took the image's writes at
+; its host LBAs. From row 3: dsk_vol_add never gives an image C:.
+; -----------------------------------------------------------------------------
+dsk_img_orphan:
+    push es
+    mov bx, dsk_vtab + 3*DV_SIZE
+.orph:
+    cmp byte [bx+DV_KIND], DVK_DRV  ; a FREE row keeps its old class AND its
+    jne .onext                  ; IMG_DVSEG, which then names a freed claim
+    cmp byte [bx+DV_CLASS], DRVC_IMG
+    jne .onext
+    mov es, [bx+IMG_DVSEG]
+    cmp [es:0], al
+    jne .onext
+    mov byte [es:0], 0xFF
+.onext:
+    add bx, DV_SIZE
+    cmp bx, dsk_vtab + DVOL_MAX*DV_SIZE
+    jb .orph
+    pop es
+    retf
+section .cold                   ; ...and back to resident cold code
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dsk_vol_drop_drv - drop every driver-backed volume (drv_release, SPEC 51.8)

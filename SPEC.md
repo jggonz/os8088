@@ -34757,7 +34757,13 @@ into its cluster in `[dsk_csk]`, the walk counts them as read (so the run's
 length and its last cluster come out exactly as the cluster read's), and the
 first run's flush starts that many sectors in and moves that many fewer. It
 is spent once a call, in the flush and never per cluster, and is cleared on
-every way out so no other caller's chain can inherit it. A chunk still ends
+every way out so no other caller's chain can inherit it. **`dskw_read_at`
+arms it only once its walk has REACHED that cluster**, with the chain read
+the next call: armed above the walk, a chain shorter than the directory size
+or a FAT sector that failed to read returned `FERR_IO` with the byte still
+set, and the next `dsk_read_chain`/`dsk_write_chain` anywhere - a copy, a
+package load, `WRITE_AT`'s inside arm - began that many sectors into its
+first cluster and answered CF = 0. A chunk still ends
 where the next one starts - at a sector rather than a cluster - and a
 cluster-aligned caller is served exactly as before.
 
@@ -37681,6 +37687,20 @@ The table, a 1KB `MEM_K_IMG` claim (`0xFF12`), top-down and pinned:
 **A read-only image refuses a write with `int 13h`'s own 03h** in
 `[dsk_ioerr]`, so every caller already says *Write protected*.
 
+**An image whose HOST row is freed is ORPHANED, not left naming the row.**
+`dsk_vol_drop_drv` never sweeps a `DRVC_IMG` row, so unloading the driver
+under an image's host (`HDD.DRV`, the RAM disk) leaves the image a drive -
+and the freed row is the next mount's, `dsk_vol_add` handing out the first
+free one. Left naming the index, the image's transfers went to whatever took
+it: another image recursed through `.img`, overwrote `[dsk_imgcur]` and
+traded the wrong claim back, and a partition took the image's writes at its
+host LBAs. So `dsk_vol_del`'s free path far-calls `dsk_img_orphan`, which
+walks the rows from 3 (an image is never C:) and sets byte 0 of every
+`DRVC_IMG` claim naming the freed index to `0xFF`, which no row is: the image's next transfer fails at the inner
+`dsk_vol_row_x`, *Disk error* and never a sector, and Unmount Image still
+takes the row and the claim through its *file not where it was* path
+(§18.101.2) - `fcp_goto` on `0xFF` fails the way a free row's does.
+
 **Coherence with §18.95.** Image reads skip the cache, because `[dsk_vkind]` is
 the image mount's `DVK_DRV`. Every piece calls `dsk_rah_wr` with the host
 volume current and host-relative LBAs - on a read too, where dropping a slot
@@ -37774,6 +37794,16 @@ inline rather than a routine. `DISKOPS.DRV` grew 9,211 -> 10,143 bytes - its
 claim 9KB -> 10KB, which is heap while it is loaded and nothing resident.
 kern_small and kern_dos: zero, byte-identical. `tests/imgmount.py` is the
 gate (`soak -k imgmount`).
+
+**The orphan walk (§18.101.1) is 47 more resident bytes**, and they are over
+that 200: 245 for the feature. It is a `.text` far entry - `.text` +42, and
+`.cold` +5 for the call - because inline in `dsk_vol_del` it was 41 `.cold`
+bytes against the 20 left in that rung, a crossing and **+512** of footprint;
+in `.text` it crosses nothing (`KERN_SIZE` 98,816 either side, `.text`'s rung
+327 -> 285 left, `.cold`'s 20 -> 15). The cheaper guard - refusing in `.img`
+when the host row is free or itself an image - stops the recursion and leaves
+a partition that takes the row writing the image's sectors, so it is not the
+fix; whether 245 stands is the owner's to take.
 
 #### 18.101.5 Disk > Mount Image… and Unmount Image
 
