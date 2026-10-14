@@ -165675,6 +165675,18 @@ encoded exactly as it would be alone, and the gate asserts it.
   after its frame is stepped over, never played late. A layer record is
   values, so one left out leaves the base's bytes until something writes
   them again.
+- **Since 2026-10-14 a frame WAITS for its layer record** (`vp_lyready`,
+  before `vp_frame` takes the base's): not read yet, and the hook not
+  behind, the frame stalls as for a base record not in the ring. Each
+  layer record carries only what the ones before it left, so one missed
+  is a repair never sent again: on the owner's 486 the base's cut
+  leftovers - red tail lights across a whole shot, for a second, at every
+  play - with no record skipped and the miss counter at one or two. The
+  layer is read only with the disk free (the ring and the bank full),
+  which the busy stretches of a base deny it; a waiting picture frees it.
+  Measured on the owner's GasGas under QEMU, held at frames 1163, 1175 and
+  1192: 44,685, 4,079 and 3,289 pixels off the reference's layered decode
+  before, 0 after.
 - **A seek** reads the key's entry out of the layer's key table and puts
   the cursor at its record, the read at the chunk that holds it. Not with
   Repeat (the seam would want the layer's place again), a flipped play,

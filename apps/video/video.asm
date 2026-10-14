@@ -10393,6 +10393,71 @@ vp_lybh:
 .r:
     ret
 
+; vp_lyready - in the hook, before frame [vp_done]'s base record (98.1.9):
+; CF=1 when the layer is played, the hook is not behind, and that frame's
+; layer record is not read yet - its chunk, or the next one it runs on into.
+; The FRAME WAITS (a stall, as for a base record not in the ring), because
+; drawn without it the layer's next records repair a picture they were not
+; made for: each carries only what the ones before it left, so a record
+; MISSED is a repair never sent again - on the owner's 486 the base's cut
+; leftovers, red tail lights across a whole shot for a second, where every
+; skip and miss counter said nothing had gone. The layer is read only when
+; the disk is free (vp_lyread), which a waiting picture makes it. Every
+; register kept
+vp_lyready:
+    cmp byte [vp_lyon], 0
+    je .ok
+    cmp byte [vp_lybeh], 0          ; (behind: vp_lydec steps over it)
+    jne .ok
+    push ax
+    mov ax, [vp_lynx]
+    cmp ax, [vp_done]               ; (ahead of the picture, or an earlier
+    pop ax                          ; frame's to step over: not this one)
+    jne .ok
+    push ax
+    push bx
+    push cx
+    push si
+    push es
+    mov ax, [vp_lyuse]              ; its chunk in...
+    cmp ax, [vp_lyrd]
+    jae .no
+    inc ax
+    mov si, [vp_lyo]
+    cmp si, VP_CHUNK - 1            ; ...and its length word's,
+    jb .lw
+    cmp ax, [vp_lyrd]
+    jae .no
+.lw:
+    mov bx, [vp_lyns]
+    dec bx
+    and bx, [vp_lyuse]
+    call vp_lyslseg
+    mov es, bx
+    mov cx, [es:si]
+    add cx, si
+    jc .nx                          ; (a damaged length: vp_lydec's to stop)
+    cmp cx, VP_CHUNK                ; ...and the next chunk if the record
+    jbe .yes                        ; runs on into it
+.nx:
+    cmp ax, [vp_lyrd]
+    jae .no
+.yes:
+    clc
+.out:
+    pop es
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+.no:
+    stc
+    jmp short .out
+.ok:
+    clc
+    ret
+
 ; vp_lydec - in the hook, frame [vp_done]'s base record just decoded: its
 ; layer record decoded on top - or stepped over, the hook behind or the
 ; record's chunk not read yet. Records before the frame are stepped over
@@ -14073,6 +14138,8 @@ vp_frame:
     cmp ax, [vp_aseq]
     jae .no
 .go:
+    call vp_lyready                 ; THE LAYER'S RECORD READ FIRST (98.1.9)
+    jc .stall
     mov bx, vp_pc
     call vp_next                    ; DX:SI = the record, CX = its len
     jnc .dec
