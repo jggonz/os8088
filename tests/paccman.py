@@ -483,6 +483,12 @@ def main():
         #                   "never drawn" needs a third value and a non-zero
         #                   initialiser is what puts it in .data. Both arms see
         #                   this one, because -1 is not a phase.
+        #   _pmc_rndstate   the xorshift state pmc_time.c draws from, seeded
+        #                   0x1234 and re-seeded at each round's start. A
+        #                   frightened ghost picks its turns from it, so
+        #                   whether it has moved when this reads depends on
+        #                   whether a ghost turned yet - which is why the row
+        #                   failed 2 runs in 6 at every commit it was rated at.
         #
         # Everything else - 37KB of code and arcade ROM tables - must be byte
         # for byte the file.
@@ -497,7 +503,8 @@ def main():
         for name, span in (('_pmc_items', 8), ('_pmc_mset', 64),
                            ('cc_tpl', 10),
                            ('_pmc_step', 2), ('_pmc_rows', 2),
-                           ('_pmc_rsh', 2), ('_pmc_promptph', 2)):
+                           ('_pmc_rsh', 2), ('_pmc_promptph', 2),
+                           ('_pmc_rndstate', 2)):
             if name in symbols:
                 allow.append((symbols[name], symbols[name] + span))
         bad = [(i, a, b) for i, (a, b) in enumerate(zip(live, disk))
