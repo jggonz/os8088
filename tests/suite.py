@@ -8999,9 +8999,12 @@ SOAK = [
         "visible part reaches its W_ONCLICK and W_ONMOUSEUP with NO wm_raise "
         "and NO wm_zcut, leaves wm_zord, wm_top and the Disk window's "
         "overlapping pixels byte for byte as they were, and hands the widget "
-        "the bar; a press on the Disk window takes it back; closing the Disk "
-        "window gives it to LOCATOR, never the widget; and with only the "
-        "widget up Close Window is the MENU_DIS twin.",
+        "the bar - and the include's FOCUS (DIA_ONFOCUS 1), its tag plate "
+        "inverse pixel for pixel; a press on the Disk window takes it back "
+        "and the plate un-inverts within 6 ticks (the 4-tick focus poll, "
+        "DIA_ONFOCUS 0); closing the Disk window gives the bar to LOCATOR, "
+        "never the widget; and with only the widget up Close Window is the "
+        "MENU_DIS twin.",
         needs=("marty",), timeout=600, wants=("build/diadesk360.img",)),
     Row("deskdock", "soak", py("tests/desklayer.py", "--leg", "dock"), 25.0,
         "SPEC.md 30, 11.103.9: a package with header flag OS88_F_DESK takes "
@@ -9034,13 +9037,18 @@ SOAK = [
         "Disk window redrawn whole, which the backmost window's drop still "
         "owes (107.9's owner item); a DRAG posted from the beat's TIMER "
         "leaves the widget's record in [ui_dragy] and is inert - the next "
-        "card press is a click; and DESKPROB.DAT holds the place.",
+        "card press is a click; DESKPROB.DAT holds the FACE's origin with "
+        "DIA_HF_CONT (107.11); and a drop that leaves the frame's bottom "
+        "past the screen - ui_drag's bound is the title bar's - is put back "
+        "on the glass by the include's next beat and saved there.",
         needs=("marty",), timeout=900,
         wants=("build/diadesk360.img",)),
     Row("deskhover", "soak", py("tests/desklayer.py", "--leg", "hover"), 80.0,
         "SPEC.md 11.103.7: the HOVER EDGE on MartyPC's VGA XT. The pointer on "
         "a gap sets WF_HOVER, names the widget in [cur_hovw] and wakes it "
-        "ONCE, and the probe's W_ONWAKE draws its handle (every tag pixel); "
+        "ONCE, and os88dia.inc's dia_wake (DIA_WIDGET, 107.11) shows the "
+        "handle after DIA_HOVER_T's dwell - every tag pixel against the "
+        "guest's own font; "
         "card, gap, card is one window and no further edge; off it, the "
         "clear, a second wake and the rest plate. Over a covering Disk window "
         "there is no hover and no wake, and a reveal on the visible part is "
@@ -9053,12 +9061,14 @@ SOAK = [
                                    "hovercga"), 40.0,
         "SPEC.md 11.103.7 on the 5150's CGA (MartyPC os8088_5150_cga, its "
         "GLaBIOS twin): the edge, the one wake and the handle and rest "
-        "pictures read off the 1bpp framebuffer's own bits.",
+        "pictures read off the 1bpp framebuffer's own bits, in the COMPACT "
+        "layout the include picks for 200 rows.",
         needs=("marty",), timeout=900, wants=("build/diadesk360.img",)),
     Row("deskhoverherc", "soak", py("tests/desklayer.py", "--leg",
                                     "hoverherc"), 40.0,
         "SPEC.md 11.103.7 on the 5150's Hercules card (720x348): the edge, "
-        "the one wake and both tag pictures off the 1bpp framebuffer.",
+        "the one wake and both tag pictures off the 1bpp framebuffer, in "
+        "the MID layout.",
         needs=("marty",), timeout=900, wants=("build/diadesk360.img",)),
     Row("deskclose", "soak", py("tests/desklayer.py", "--leg", "close"), 45.0,
         "SPEC.md 11.103.6-7, 107.11: a widget closes by its OWN box. On the "
@@ -9070,13 +9080,34 @@ SOAK = [
         "row.",
         needs=("marty",), timeout=900,
         wants=("build/diadesk360.img",)),
+    Row("deskground", "soak", py("tests/desklayer.py", "--leg", "ground"),
+        60.0,
+        "SPEC.md 107.11 (wave 3): the THEME in a widget's gaps. On MartyPC's "
+        "VGA XT, with DESKPROB up, Bright, then Dark and Color picked on the "
+        "Control Panel's Theme page: every gap pixel, both ground columns "
+        "and the tag row beside the plate are the desktop's own ground - "
+        "the dither by screen parity, black, teal - the cards and the plate "
+        "white, and both cards byte for byte what GFXE_TEXT / GFXE_BITS "
+        "compose on the host from the guest's own font (x3 across two "
+        "16-row slabs, bold, white on black, a tick, x2 bold off the grid); "
+        "under Color a Disk window laid over it and closed leaves teal.",
+        needs=("marty",), timeout=900, wants=("build/diadesk360.img",)),
+    Row("deskfit", "soak", py("tests/desklayer.py", "--leg", "fit"), 45.0,
+        "SPEC.md 107.11 (wave 3): the layout by the screen's HEIGHT. A "
+        "VIDEO=ega kernel in a private tree (39.24's 640x350 on a VGA): the "
+        "include picks MID - [dia_li] 1, a 130 x 83 frame, not TALL's 104 - "
+        "and it sits inside the 306-row band between the bar and the dock, "
+        "its face drawn.",
+        needs=("marty", "nasm"), timeout=1200,
+        wants=("build/diadesk360.img",)),
     Row("desksmall", "soak", py("tests/desklayer.py", "--leg", "small"), 30.0,
         "SPEC.md 11.103.9, 107.7: kern_small has the two cells and no layer. "
         "On MartyPC's 128KB CGA 5150 off `make small`'s system disk with "
         "DESKPROB.O88 mcopied into SYSTEM\\DIA\\: QUERY refuses, so the probe "
-        "is the TITLED FALLBACK - no WF_DESK, no IF_DESK, an ordinary 130 x "
-        "123 frame with a dock tile and a title-bar drag - and "
-        "OSAPI_GFX_DESK still lays the desktop's dither in its gaps.",
+        "is the TITLED FALLBACK - no WF_DESK, no IF_DESK, the COMPACT "
+        "layout, an ordinary 130 x 70 frame (no tag row, no last gap) with "
+        "a dock tile and a title-bar drag - and its gap is white with a "
+        "1-px rule, one BLIT1 (107.7).",
         needs=("marty", "mtools"), timeout=600,
         wants=("build/small360.img", "build/smallk/kernel.bin",
                "build/deskprob.o88")),

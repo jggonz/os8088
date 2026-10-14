@@ -7390,9 +7390,11 @@ $(DIAFIX)/DIAPROBE.DAT: tools/os88dia.py | $(BUILD)
 # THE DESK BUILD of the same probe (SPEC.md 11.103, v2's wave 1): DESKPROB.O88,
 # header flag OS88_F_DESK, OSAPI_WM_DESK's MAKE, a face of two white cards
 # with the desktop's ground between them. Its own build because the v1 rows
-# drag DiaProbe by a title bar a desk window has not got. DESKPROB.DAT puts
-# the frame at (375,184): 375 = 7 mod 8, the snap's fixpoint (SPEC.md 11.94)
-$(BUILD)/deskprob.bin: tests/diaprobe/diaprobe.asm apps/os88dia.inc apps/os88api.inc | $(BUILD)
+# drag DiaProbe by a title bar a desk window has not got. Since wave 3 it is
+# the include's DIA_WIDGET (SPEC.md 107.11), whose state file holds the FACE:
+# DESKPROB.DAT puts the face at (376,184), the frame at (375,184) - 375 = 7
+# mod 8, the snap's fixpoint (SPEC.md 11.94)
+$(BUILD)/deskprob.bin: tests/diaprobe/diaprobe.asm apps/os88dia.inc apps/os88gfx.inc apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -DDP_DESK -o $@ tests/diaprobe/diaprobe.asm
 	@echo "deskprob: $(call FILESIZE,$@) bytes"
 
@@ -7401,7 +7403,7 @@ $(BUILD)/deskprob.o88: $(BUILD)/deskprob.bin tools/os88pkg.py
 
 $(DIAFIX)/DESKPROB.DAT: tools/os88dia.py | $(BUILD)
 	@mkdir -p $(DIAFIX)
-	python3 tools/os88dia.py dat -o $@ --x 375 --y 184 --screen 640x480
+	python3 tools/os88dia.py dat -o $@ --x 376 --y 184 --screen 640x480 --cont
 
 $(BUILD)/diadesk360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/deskprob.o88 $(DIAFIX)/desk/system.cfg $(DIAFIX)/DESKPROB.DAT tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \

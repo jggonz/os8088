@@ -128,7 +128,14 @@ INCLUDES = [
      "your own KEEPH/PREFER, `dia_painted` as the LAST thing your W_PAINT "
      "does (kern_small's worker is hired there - without it that kernel has "
      "no tick, no save and no reminders, and says nothing), and `dia_touch` "
-     "whenever your payload changes."),
+     "whenever your payload changes. `%define DIA_WIDGET` (§107.11) is the "
+     "widget TREATMENT: a desk window (§11.103) of chromeless cards with the "
+     "desktop between them and a name tag that becomes a handle - x to "
+     "close, drag by the tag or a gap - under the pointer; you give "
+     "`DIA_LAYOUT`s (picked by the screen's height) and a card painter "
+     "(`dia_slabs` + `DIA_COMPOSE` into os88gfx.inc's band), it owns every "
+     "other pixel, the gestures, the hover and focus states and the titled "
+     "fallback on kern_small."),
     ("os88line.inc", "83",
      "A one-line text field: caret, horizontal scroll, focus, click-to-position "
      "and the editing keys. The caller owns a 20-byte block."),
@@ -197,7 +204,11 @@ INCLUDES = [
      "`%define GFXE_LINE` adds the Bresenham, which implies the band because a "
      "line needs somewhere to land. An app-side rasteriser is FASTER than the "
      "slot (24.6 us a pixel against `gfx_line`'s 31.6 with the arrival "
-     "removed)."),
+     "removed). `%define GFXE_TEXT` puts the kernel's 8x8 glyphs into the "
+     "band at any x - normal or inverse, x1/x2/x3, bold - plus a rectangle "
+     "fill, and `%define GFXE_BITS` a 16-wide bit record (a tick, a bell): "
+     "a whole card composed and put down in one BLIT1, nothing drawn twice "
+     "(§5.12.8)."),
     ("os88rseq.inc", "18.4.8.1",
      "`os88_rseq`: `OSAPI_FILE_READ_AT`'s registers plus a 16-byte cursor at "
      "`DS:DI`, served by `OSAPI_FILE_READ_SEQ` - one FAT link a chunk where "

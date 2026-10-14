@@ -7132,6 +7132,8 @@ and for os88ui.inc's reason (20.2's fixed image offsets).
 |---|---|---|
 | `GFXE_BAND` | — | compose into your own 1bpp band; commit it with one `OSAPI_GFX_BLIT1`. **The pixel primitive lives here** — a bit-set, not a slot |
 | `GFXE_LINE` | `GFXE_BAND` | Bresenham, whole line, into the band |
+| `GFXE_TEXT` | `GFXE_BAND` | the kernel's 8x8 glyphs into the band at ANY pixel `x`, normal or inverse, x1/x2/x3, optionally bold, rows clipped to the band; and a sub-rectangle fill (§5.12.8) |
+| `GFXE_BITS` | `GFXE_BAND` | a 16-wide bit record ANDed or ORed into the band at any `x` (§5.12.8) |
 
 ```
 gfxe_bnew     AX = x, DX = y            seed the running bounds
@@ -7382,6 +7384,46 @@ byte survives, `[gfx_ln_ink]`, and `gfx_points` is its only reader.
   had to be a row rather than a note.
 - **`apps/paint`'s `PT_LNLINE` arm** — deleted. It was the A/B §42.23.8 was
   measured with, and that measurement cannot be repeated.
+
+#### 5.12.8 `GFXE_TEXT` and `GFXE_BITS` — a widget's face, composed (§107.11)
+
+The DIA widget treatment (§107.11) draws every pixel of a card into ONE band
+and puts it down with ONE `OSAPI_GFX_BLIT1`, so text on a card is never a
+`font_run` over a fill and nothing is written twice. These two capabilities
+are what it composes with; both imply `GFXE_BAND` and draw into
+`GFXE_BAND_BUF` at the caller's stride.
+
+```
+gfxe_glyph   AL = char, CX = x, DX = y       one 8x8 glyph; out CX += 8 x scale
+gfxe_text    SI = NUL string, CX = x, DX = y  ...a string; out CX after, SI past
+                                               the NUL
+gfxe_bfill   AX = x, BX = y, CX = w, DX = h   a rectangle of ink
+gfxe_bits    SI = record, CX = x, DX = y      a bit record: db rows, then a word
+                                               a row, bit 15 leftmost
+[gfxe_tsty]  the STYLE, a byte in the image: GFXE_INV (1) = SET bits - white
+             ink on a black ground - else CLEAR them (black ink on the lit
+             paper, §5.12.2's polarity); GFXE_BOLD (2) = the glyph ORed with
+             itself one pixel right; GFXE_X2 (4) / GFXE_X3 (8) = the scale
+```
+
+- **Any `x`, both senses.** `x` is a band pixel and need not be on the byte
+  grid: a row's pattern is built left-aligned in 32 bits and shifted into
+  place, so a x3 bold glyph (25 bits) still fits. The INVERSE sense is the
+  one §5.12.2 kept out of this file as untested; it is tested now - the
+  widget's focused plate and its handle are white text on black, and
+  `deskground` compares them pixel for pixel with the guest's own font.
+- **Clipping is by ROW and by the stride.** `y` is SIGNED and rows outside
+  `0 .. GFXE_BAND_H - 1` are skipped, which is what lets a card be composed
+  32 rows at a time (§107.11's slabs) with a glyph that straddles two slabs
+  drawn half into each; bytes past the stride are skipped; `x` itself must
+  not be negative. `gfxe_bfill` clips both ways.
+- **The glyphs are the kernel's** (`OSAPI_FONT_GLYPHS`, 8 bytes a glyph),
+  asked for ONCE and kept in three image words; a code outside the table's
+  range advances the pen and draws nothing.
+- **Cost on a 4.77 MHz 8088**: a x1 glyph is eight row merges, each a
+  shift by `x & 7` and two read-modify-writes - about 0.1-0.2 ms, against a
+  `font_run` cell's ~900 µs that would also have to be clipped to a slab it
+  cannot see. x2 and x3 expand a row bit by bit (the big day number only).
 
 ### 5.13 `gfx_pixel` and `gfx_points` — which to reach for
 
@@ -170616,7 +170658,17 @@ slabs, the ground column, 3 gaps, the tag's two sides and its plate) against
 v1's 65, ≤ 20 TALL and ≤ 14 COMPACT as `deskcalperf`'s budget; a day select
 ≤ 5, a month ≤ 8, a tick 1, a reveal 1 and a hide 3, idle 0. `DESKCAL.O88`
 grows from 13,168 to ~14.0-14.5 KB of image and ~0.8 KB of bss; the include
-~500 bytes of image under `DIA_WIDGET`.
+~500 bytes of image under `DIA_WIDGET`. **Measured at wave 3, the include is
+2,235 bytes** of image under `DIA_WIDGET` (the paint 273, the tag 273, the
+slab painter 150, the hover and focus states ~550, the prefilters ~400, the
+sizing and the re-fit ~350) and `GFXE_TEXT` + `GFXE_BITS` ~600 more, which
+the plan did not price: a DIA pays ~2.8 KB for the treatment, in its own
+image and no resident byte, and wave 4 re-prices the calendar's file
+against the 360 KB system disk's clusters with that number. The probe's
+whole paint is 13 calls by its layout (6 card slabs, 2 ground columns, 2
+gaps, the tag's three); MEASURED, a reveal is 1 `BLIT1` and a hide 2
+`OSAPI_GFX_DESK` + 1 `BLIT1`, exactly 5 and 14 ticks after the kernel's
+edge (`deskhover`).
 
 **Waves 2, 3 and 4 moved no kernel byte.** Re-measured at wave 4's head,
 `tools/kernsize.py` reads `unchanged` on both kernels, and the absolute
@@ -170741,10 +170793,18 @@ dwell - so `OSAPI_WM_DESK` QUERY refuses there and `dia_load` sizes a TITLED
 frame: v1's window - title bar, shadow, a dock tile, raised by a click, the
 kernel's close box and title-bar drag - wearing v2's cards, with the gaps
 white and ruled by a centred 1-pixel line rather than showing the desktop,
-and no tag. The face is at `(W_X + 1, W_Y + TITLE_H)`, so its `x` is the
-desk form's, and the state file's face origin means the same place on both
-kernels. The worker arm still beats and a reminder rings card 3 (or the CGA
-slot) with its single note.
+and no tag and no last gap: the frame is `DIA_FACE_W + 2` by the face less
+its tag row and last gap, plus `TITLE_H + 1`. Each gap is composed in the
+band and put down in ONE `OSAPI_GFX_BLIT1` - white rows and the rule in one
+pass, never a fill and a line over it. `OWNBG` and `SAVEU ON|1BPP` are set
+for it, as v1 did; a press on a card is still `DIA_ONCARD`'s, and there is
+no hover, no handle and no `DIA_ONFOCUS` (an ordinary window owns the bar
+the ordinary way). The face is at `(W_X + 1, W_Y + TITLE_H)`, so its `x` is
+the desk form's, and the state file's face origin means the same place on
+both kernels. The worker arm still beats and a reminder rings card 3 (or the
+CGA slot) with its single note. `desksmall` is its gate: COMPACT on the
+128 KB CGA 5150, a 130 x 70 frame for the probe, a dock tile, the title-bar
+drag, and the gap white with its rule.
 
 ### 107.8 What is not done
 
@@ -171277,6 +171337,55 @@ slot) with its single note.
     (§2.8's claim paragraph): zero bytes on every build that fitted, which
     are byte-identical, and no resident byte.
 
+- **v2, wave 3 (the widget treatment, §107.11 and §5.12.8)** - where the
+  code proved the design record wrong, or settled what it left open:
+  - **`GFXE_TEXT` carries a rectangle fill** (`gfxe_bfill`): the focused
+    plate, the handle's white box, the titled fallback's rule and a card's
+    inverse boxes are rectangles of ink in the band, and the design's two
+    capabilities had no way to lay one.
+  - **The plate fills the tag row**, the name at `(h - 8) / 2`: the design's
+    "plate 1+8+1" for an 11-row tag summed to 10, and the handle's close box
+    is 10 rows, so a tag row is 10 rows or more (`DIA_LAYOUT` refuses less).
+  - **A titled gap is ONE `BLIT1`** - its white rows and the rule composed
+    together - where the design said a fill plus a 1-px `gfx_hline`: the
+    same pixels in one pass and one call.
+  - **Focus GAIN is read at every press and every timer fire**, not only
+    polled while the widget owns the bar: a right press and a keyboard-mouse
+    front give the widget the bar (§11.103.4) without reaching any callback
+    of its, so a poll that ran only while it was already known to be focused
+    could never see them. Loss is still the 4-tick poll, only while focused.
+    `DIA_ONFOCUS` is the desk form's alone.
+  - **ONE timer, absolute deadlines.** The beat, the dwell or linger and the
+    focus poll each keep an absolute tick and every arm takes the soonest,
+    so a hover deadline never delays a beat and a beat never runs early -
+    the design's "a beat that comes early is harmless" was true of the poll
+    but would have run `DIA_ONTICK` early too.
+  - **The re-fit after an out-of-band drop is hide, `W_Y`, show** (no move
+    cell exists): two repaints, once, from the beat, before the place is
+    saved.
+  - **API additions**: `DIA_FACE_W` (a widget narrower than the calendar's
+    22 cells - the probe's is 16), `DIA_RIGHT`, `DIA_WAKE` (a package that
+    wants every wake), and `dia_slabs` + `DIA_COMPOSE` as the slab painter a
+    composing `DIA_PAINTCARD` is; `DIA_LAYOUT` is the include's macro, so
+    the tables go after the `%include`.
+  - **A MAKE refused after QUERY said yes** (never, in practice: MAKE
+    refuses only outside the entry proc, or a visible, fullscreen or sizable
+    window) is painted as titled in the frame it has.
+  - **What it cost**: the include **2,235** bytes of image under
+    `DIA_WIDGET` against ~500 planned, `GFXE_TEXT` / `GFXE_BITS` ~600 more
+    (§107.6). **No kernel byte**: `tools/kernsize.py` reads byte for byte the
+    same on kern_big, kern_emu and kern_small, and a v1 DIA - `DIAPROBE.O88`,
+    `DESKCAL.O88` until wave 4 - assembles byte for byte as it did.
+  - **The gates**: the probe is the include's now (three layouts, a 128-wide
+    face, a 16-row band so a glyph straddles two slabs, `DESKPROB.DAT`
+    written `--cont` at face (376,184)); `deskground` changes the theme on
+    the Control Panel at RUNTIME rather than in a SYSTEM.CFG record, because
+    the harness's desktop gate reads Bright's menu bar - which is also the
+    stronger test, the widget being up through the change; `desksmall`
+    asserts the white ruled gap, so `OSAPI_GFX_DESK` on kern_small is no
+    longer seen by a row; `deskhover` now measures the dwell, the linger and
+    the calls per edge that wave 2 left to this wave.
+
 ### 107.10 How it was built, and its gates
 
 | wave | what | gates |
@@ -171294,7 +171403,7 @@ and every §7 default of the design record was taken):
 | W0 | this document first: §11.103, §7.2.1, §12.6, §13.7, §13.16.2.1, §20.2, §20.3, §30, §30.6, §107.x; PERFORMANCE.md Part 5's placeholders and docs/KERNEL-MEMORY.md's planned bytes; the kernsize baselines | - |
 | W1 | the kernel layer: the flags, `wm_top`, `wm_lift`, `wm_show_b`'s and `wm_front_b`'s desk arms, the chromeless sites and `wm_draw_win`'s and `wm_su_rect`'s arms, the press without a raise, the key target, `OSAPI_WM_DESK` QUERY / MAKE / RELEASE and `OSAPI_GFX_DESK`, header flag bit 6 with the top-down slot, the dock and DOCK.DRV; `tests/diaprobe`'s desk build. **The Desk Calendar is untouched** | `t_chromesites` (fast); `deskz`, `deskdock`, `deskkeys`, `desksmall`; kernsize on all three kernels - **a crossed rung is a stop for the owner**; `t_api_abi`, the ABI lock, `os88sym --all`, `os88ladder --selfcheck`, buildmatrix, test-full alone |
 | W2 | the DRAG verb (`[ui_dragy]` = the caller's window), its pick-up and desk test, the desk `.nocache` and the drag's `[wm_dmg_npro]`; the hover edge (`[cur_hovw]`, `cur_hov_x`, `WF_HOVER`); `tests/diaprobe`'s tag row, handle and close box | `deskdrag`, `deskhover`, `deskhovercga`, `deskhoverherc`, `deskclose` (each broken on purpose and failing, §107.9); kernsize on all three kernels - measured +46 / +54, no rung crossed, kern_big image 5 and kern_emu cold 1 left; the review fixes +5 / -1, kern_big image **0** and kern_emu cold 2 left; `deskz`, `deskdock`, `deskkeys`, `desksmall` again |
-| W3 | `apps/os88gfx.inc` `GFXE_TEXT` / `GFXE_BITS`; `os88dia.inc`'s `DIA_WIDGET` (§107.11); `tools/os88dia.py` and `t_dia` | `deskground`, `deskfit` |
+| W3 | `apps/os88gfx.inc` `GFXE_TEXT` / `GFXE_BITS` (§5.12.8); `os88dia.inc`'s `DIA_WIDGET` (§107.11): the geometry, the paint, the prefilters, the hover and focus states, `dia_quit`, the face-origin header, the titled fallback; `tests/diaprobe`'s desk build onto it; `tools/os88dia.py` (`DIA_HF_CONT`, `widget_off`) and `t_dia` W | `deskground`, `deskfit` (new); every wave 1 and 2 row re-gated on the include - the tag row pixel for pixel against the guest's font, the dwell and linger to the tick, 1 / 3 calls an edge, the re-fit; kernsize unchanged on all three kernels |
 | W4 | the Desk Calendar as three cards (§107.3's v2 paragraph) | every `dia*` / `deskcal*` row updated; `deskcalcards`, `deskcalsnooze`, `deskmodal` |
 | W5 | look on 1bpp, EGA, Dark and Color; measure on MartyPC's 5150; `kernsize --bless`; `docs/dia/` retaken | `deskcalperf`'s new budgets, test-full alone, the soak |
 
@@ -171374,6 +171483,14 @@ Later's minute and must not call it missed - the toast is the no-RTC one
 and Later goes off on the first beat; `deskcalperf` counts both
 reminder-caused saves at the drive.
 
+**v2 wave 3's rows** (`tests/desklayer.py`, MartyPC, off `make diatest`'s
+`diadesk360.img`):
+
+| row | asserts |
+|---|---|
+| `deskground` | the VGA XT, the probe up: Bright, then Dark and Color picked on the Control Panel's Theme page - every gap pixel, both ground columns and the tag row beside the plate are the desktop's ground (the dither by screen parity, black, teal (0,170,170)), the cards and the plate white, both cards every pixel what the host composes from the guest's font (x3 across two slabs, bold, white on black, a tick, x2 bold at an odd `x`); under Color a Disk window over it, closed, leaves teal and the cards whole |
+| `deskfit` | a `VIDEO=ega` kernel in a private tree: `[vid_h]` 350, `[dia_li]` 1 (MID, not TALL), a 130 x 83 frame inside the 306-row band, its face drawn |
+
 **`t_dia`** (fast tier) is what keeps that include honest between MartyPC
 runs: it runs `tools/os88dia.py --selfcheck`, assembles `diaprobe.asm` (so
 `os88dia.inc` is assembled by every `make`, where before only `make diatest`
@@ -171451,17 +171568,93 @@ package's. The keyboard has every route: the keyboard mouse (§9.6), the
 app-name cell's About and Close while the widget owns the bar (§12.7), Esc
 for RELEASE.
 
-**The include's API**, under `DIA_WIDGET`: `DIA_TAG` (the name, which equals
-`W_TITLE`), `DIA_LAYOUTS` (card count, heights, gaps and tag height per
-layout, each table with a `%error` sum against its band), `DIA_PAINTCARD`
-(AL = card, BX..DX = its damaged rows), `DIA_ONCARD` / `DIA_ONCARDUP`
-(card-relative press and release), `DIA_ONFOCUS` (AL = 1 gained, 0 lost);
-`dia_paint` is `W_PAINT` and draws only what intersects `OSAPI_WM_DAMAGE`;
-`dia_click` / `dia_mup` are the prefilters; `dia_wake` is `W_ONWAKE` (free on
-kern_big) and reconciles the hover state; `dia_quit` is the close. **The
-state file's place is the FACE's origin** (header +3 bit 1, §107.5): a v1
-file holds a titled frame, so its face is `(x + 1, y + TITLE_H)`, and no
-`DIA_HDR_VER` bump - no existing file reads as damaged. D rows carry no
-geometry (§107.2), so nothing migrates there.
+**The include's API**, under `DIA_WIDGET` (wave 3). The caller defines,
+beside v1's (§107.5):
+
+```
+%define DIA_WIDGET
+%define DIA_TAG      'Desk Calendar'  the name tag - equal to the window's title
+DIA_FACE_W   equ 176                  the face's width: a multiple of 8, no wider
+                                      than GFXE_BAND_W (default 176, 22 cells)
+DIA_RIGHT    equ 264                  optional: with no saved place the face
+                                      opens at x = screen width - DIA_RIGHT
+%define DIA_LAYOUTS  my_lays          three DIA_LAYOUT entries: TALL, MID, COMPACT
+%define DIA_PAINTCARD proc            AL = the card, BX..DX = its damaged rows
+                                      (card-local, inclusive); or dia_slabs
+%define DIA_COMPOSE  proc             dia_slabs' painter (below)
+%define DIA_ONCARD   proc             optional: AL = the card, CX,DX = the press,
+                                      card-relative - W_ONCLICK's environment
+%define DIA_ONCARDUP proc             optional: ...the release (it may be OFF
+                                      the card: the package decides "inside")
+%define DIA_ONFOCUS  proc             optional: AL = 1 gained the bar, 0 lost it
+%define DIA_WAKE     proc             optional: the W_ONWAKE it installs - a
+                                      package that wants to see every wake
+                                      tail-jumps to dia_wake (the probe counts)
+%define GFXE_TEXT / GFXE_BITS         and os88gfx.inc, whose band (GFXE_BAND_BUF,
+                                      GFXE_BAND_W >= DIA_FACE_W, GFXE_BAND_H >= the
+                                      tag row) the include composes the tag in
+```
+
+`DIA_LAYOUT band, facey, tagh, h0,g0 [, h1,g1 [, h2,g2 [, h3,g3]]]` is one
+layout: up to four cards, each with the gap UNDER it, the tag row's height
+(10 rows or more - the handle's box is 10 - and no taller than the band) and
+the default face `y`; it refuses at assembly time a face taller than `band`
+or a titled frame (the face less its tag and last gap, plus `TITLE_H` + 1)
+taller than `band`. It is a macro of the include's, so the table goes AFTER
+the `%include`. `dia_load` picks the layout from **`OSAPI_VIDEO`'s
+height** - 400 rows or more TALL, 300-399 MID, below that COMPACT - so EGA's
+640x350 takes Hercules' layout and not VGA's (§107.3's PREFER pair took the
+adapter's kind), and sizes the template itself.
+
+**Its calls** are v1's - `dia_load` in the entry proc, `dia_made` after
+`OSAPI_WM_CREATE`, `dia_touch` - plus:
+
+| call | what |
+|---|---|
+| `dia_load` | also: `OSAPI_WM_DESK` QUERY; the layout; the template's size and, from the state file or the default, its place - converting a v1 file's titled frame to a face |
+| `dia_made` | also: MAKE (the desk form) or `OWNBG` + `SAVEU ON\|1BPP` (the titled fallback); `W_ONCLICK` = `dia_click`, `W_ONMOUSEUP` = `dia_mup`, `W_ONWAKE` = `DIA_WAKE`; the place on record is the FACE's |
+| `dia_paint` | the template's `W_PAINT` (or the package's, tail-jumping to it): `OSAPI_WM_DAMAGE`, then only what intersects it - the two ground columns and every gap by `OSAPI_GFX_DESK`, each card by `DIA_PAINTCARD`, the tag row from the state - and `dia_painted` |
+| `dia_slabs` | the slab painter a `DIA_PAINTCARD` may be: for each `GFXE_BAND_H`-row slab of the card that the rows touch, paper the band white, call `DIA_COMPOSE` (AL = the card, BX = the slab's first card row, CX = its rows; compose with `y` = card row - BX) and blit the damaged rows of it, ONE `OSAPI_GFX_BLIT1` |
+| `dia_click`, `dia_mup` | the prefilters (the gestures above) |
+| `dia_wake` | `W_ONWAKE`: on the worker arm, v1's beat; otherwise the hover edge's reconcile |
+| `dia_quit` | the close: `dia_close`'s negotiator and then `OSAPI_WM_CLOSE` |
+
+What it publishes for the painter, bss words: `[dia_fx]`, `[dia_fy]` (the
+face's screen origin), `[dia_cy]`/`[dia_ch]` (the card being painted: its
+screen top and its height), `[dia_li]` (the layout, 0-2) and `[dia_lay]` (its
+entry).
+
+**The hover state is level-triggered** (`[dia_hv]`: HIDDEN, DWELL, SHOWN,
+LINGER, with FOCUS and ARMED bits in `[dia_wf]`). A wake reads `WF_HOVER`
+and moves HIDDEN to DWELL or SHOWN to LINGER - each with a deadline - or
+DWELL back to HIDDEN and LINGER back to SHOWN, and draws nothing: it has no
+lock. ONE timer serves everything: the beat, the dwell or linger, and the
+focus poll each keep an ABSOLUTE deadline in ticks and every arm takes the
+soonest, so a hover deadline never delays a beat and a beat that comes early
+does nothing early. When the dwell expires with a button held it waits
+another `DOCK_HOVER_T`; a linger that expires while the x is pressed waits
+for the release. The picture is drawn only on a change of it
+(`[dia_tagp]`), under `OSAPI_WM_CLIP_SET`. **Focus is read off
+`OSAPI_MENU_OWNER` at every press and at every timer fire** - so a press
+inverts the plate at once, a right press or a keyboard-mouse front (which
+reach no callback) within one beat, and a loss within `DIA_FOCUS_T` = 4
+ticks while the widget holds the bar, the only time the timer runs that
+often. The plate's picture is FOCUS only when the handle is down: the
+handle wins.
+
+**After a drop that left the frame's bottom past its display**
+(§11.103.6's bound is the title bar's), the beat hides the window, puts its
+`W_Y` back on the glass and shows it - there is no move cell, so it is two
+repaints, once, before the place is saved. `deskdrag`'s H leg drops the
+probe to a bottom at 544 on a 480-row screen and reads it back at 480.
+
+**The state file's place is the FACE's origin** (header +3 bit 1,
+`DIA_HF_CONT`, §107.5): a v1 file holds a titled frame, so its face is
+`(x + 1, y + TITLE_H)`, and there is no `DIA_HDR_VER` bump - no existing file
+reads as damaged. The bit is set in memory the moment the place on record is
+taken, so a v1 file is converted once, by its next save, and never twice.
+`dia_anchor` measures with the FACE's size. D rows carry no geometry
+(§107.2), so nothing migrates there. A `DIA_WIDGET` build is the only one
+that writes the bit; a v1 DIA's file is byte for byte what it was.
 
 It lands in v2's wave 3 (§107.10); the Desk Calendar adopts it in wave 4.

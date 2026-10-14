@@ -67,6 +67,33 @@ kernel's hover edge says WF_HOVER - and these legs:
               the box's place unrevealed drags, and a press and release on it
               closes the widget and removes its DIA row by name.
 
+WAVE 3 (SPEC.md 107.11) MOVES THE PROBE ONTO os88dia.inc's DIA_WIDGET: its
+face, tag, gestures and timers are the include's, so every leg above now
+gates the INCLUDE - the tag row is compared pixel for pixel with a picture
+composed here from the guest's own font ([font_seg]:[font_base]), the
+handle comes after the dwell (DIA_HOVER_T) and goes after the linger
+(DIA_LEAVE_T), and the geometry is the layout the include picked by the
+screen's height ([dia_li]: TALL on VGA, MID on Hercules, COMPACT on CGA).
+Two legs are new:
+
+  --leg ground (row deskground, MartyPC's VGA XT) the THEME reaches the
+              gaps: under Bright, Dark and Color - each picked on the
+              Control Panel's Theme page with the widget up, the user's own
+              route, so no cache is dropped for it - every gap
+              pixel, both ground columns and the tag row beside the plate
+              are the desktop's own ground (Bright's dither by screen
+              parity, Dark's black, Color's teal, each sampled off the bare
+              desktop beside the frame), the cards and the plate stay white,
+              the two cards are byte for byte what GFXE_TEXT and GFXE_BITS
+              compose here from the same font (a x3 pair across two 16-row
+              slabs, bold, white on a black box, a tick, x2 bold off the
+              grid), and under Color a Disk window laid over the widget and
+              closed leaves the gaps teal.
+  --leg fit   (row deskfit) a VIDEO=ega kernel - SPEC.md 39.24's 640x350 on a
+              VGA, built into a private tree - picks the MID layout (83
+              rows, not TALL's 104), and the frame sits inside the 306-row
+              band between the menu bar and the dock.
+
 Wave 2's break-its: take the content press's `je .qdrag` out and `drag`
 fails at A on a spurious W_ONDRAG after the drop (the arm is set and
 ui_arm_trk finds [ui_dragy] holding the post); turn the pick-up's
@@ -100,7 +127,8 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--leg", choices=("z", "dock", "keys", "small", "drag",
-                                  "hover", "hovercga", "hoverherc", "close"),
+                                  "hover", "hovercga", "hoverherc", "close",
+                                  "ground", "fit"),
                 required=True)
 ARGS = ap.parse_args()
 
@@ -112,6 +140,7 @@ if ARGS.leg == "small":
 else:
     PKGDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
 
+import os88build   # noqa: E402
 import os88ui      # noqa: E402
 import os88marty   # noqa: E402
 import os88geom as geom   # noqa: E402
@@ -126,19 +155,48 @@ IF_DESK = geom.IF_DESK
 # the probe's bss (tests/diaprobe/diaprobe.asm, DP_DESK): image + these
 DP_CLICKS, DP_UPS, DP_KEYS, DP_DESK, DP_LASTKEY, DP_PAINTS, DP_REL = \
     0, 1, 2, 3, 4, 6, 8
-DP_WAKES, DP_REV, DP_XARM, DP_DRAGS, DP_TDRAG, DP_CLOSES, DP_TAGS = \
-    9, 10, 11, 12, 13, 14, 15
-DP_ONDRAGS = 16
-FACE_W, C1, GAP, C2, GAP2, TAG = 128, 40, 8, 40, 4, 12
-TY = C1 + GAP + C2 + GAP2       # the tag row's first face row (wave 2)
-FACE_H = TY + TAG
-PX, PW, XX, XW = 32, 64, 3, 10  # the rest plate; the handle's close box
-# os88dia.inc's bss after the probe's own 32 bytes (DIA_BSS), through the
-# host tool's own arithmetic
-DP_DIA_BSS = 32                 # the probe's DIA_BSS (diaprobe.asm, DP_DESK)
+DP_WAKES, DP_TDRAG, DP_ONDRAGS, DP_FOCI, DP_FOCL, DP_LCARD = \
+    9, 13, 16, 17, 18, 19
+# os88dia.inc's bss after the probe's own 288 bytes (DIA_BSS: 32 of counters
+# and a 128 x 16 band), through the host tool's own arithmetic
+DP_DIA_BSS = 288
 DIA_HDR = os88dia.dia_hdr_off(DP_DIA_BSS)
 DIA_ST = os88dia.dia_st_off(DP_DIA_BSS, 0)
+WOFF = os88dia.widget_off(DP_DIA_BSS, 0)
 DIA_S_ROW, DIA_S_DIRTY = 2, 16
+HV_HIDDEN, HV_SHOWN = 0, 2
+P_REST, P_FOCUS, P_HAND, P_ARMED = 0, 1, 2, 3
+W_FOCUS, W_ARMED = os88dia.DIA_W_FOCUS, os88dia.DIA_W_ARMED
+
+# THE PROBE'S THREE LAYOUTS (diaprobe.asm's dp_lays), by [dia_li]: the tag
+# row's height and (card, the gap under it)
+LAYOUTS = {0: (12, ((40, 8), (40, 4))),        # TALL - VGA
+           1: (11, ((32, 4), (32, 4))),        # MID - Hercules, EGA
+           2: (11, ((24, 3), (24, 3)))}        # COMPACT - CGA
+FACE_W = 128
+NAME = "DeskProbe"
+PW = len(NAME) * 8 + 8                  # the plate: the name, 4 px each side
+PX = (FACE_W - PW) // 2
+NX = (FACE_W - len(NAME) * 8) // 2      # the handle's name...
+GX = FACE_W - 18                        # ...and its grip
+XX, XW = 3, 10                          # the handle's close box
+XBITS = (0x8400, 0x4800, 0x3000, 0x3000, 0x4800, 0x8400)    # os88dia.inc's
+GRIP = (0xAAA8, 0, 0, 0xAAA8, 0, 0, 0xAAA8)                 # records
+TICK = (0x0030, 0x0060, 0x00C0, 0xC180, 0x6300, 0x3600, 0x1C00, 0x0800)
+C1 = GAP = C2 = GAP2 = TAG = TY = FACE_H = LI = None
+
+
+def set_layout(li):
+    """The module's geometry, from the layout the INCLUDE picked."""
+    global C1, GAP, C2, GAP2, TAG, TY, FACE_H, LI
+    LI = li
+    TAG, ((C1, GAP), (C2, GAP2)) = LAYOUTS[li]
+    TY = C1 + GAP + C2 + GAP2       # the tag row's first face row
+    FACE_H = TY + TAG
+
+
+set_layout(0)
+TITLED_H = C1 + GAP + C2        # the titled fallback's face: no tag, no last gap
 
 fails = []
 
@@ -162,6 +220,25 @@ class Probe(object):
         self.seg = struct.unpack_from("<H", self.m.read(
             self.rec() + geom.W_SEG, 2))[0]
         self.img = image_size()
+        self.li = self.b(WOFF["dia_li"])
+        if self.li in LAYOUTS:
+            set_layout(self.li)
+
+    def hv(self):
+        return self.b(WOFF["dia_hv"])
+
+    def wf(self):
+        return self.b(WOFF["dia_wf"])
+
+    def tagp(self):
+        return self.b(WOFF["dia_tagp"])
+
+    def rev(self):
+        """The HANDLE is the picture on the glass (os88dia.inc's dia_tagp)."""
+        return self.tagp() in (P_HAND, P_ARMED)
+
+    def armed(self):
+        return bool(self.wf() & W_ARMED)
 
     def rec(self):
         return self.ui._S("wm_wins") + self.w.i * geom.WIN_SIZE
@@ -351,6 +428,9 @@ def leg_z(ui):
     check(zord(ui) == z, "wm_zord unchanged: %r" % (zord(ui),))
     check(top_i(ui) == d.i, "wm_top is STILL the Disk window")
     check(menu_win_i(ui) == p.w.i, "[menu_win] is the widget: it owns the bar")
+    check(p.wf() & W_FOCUS and p.b(DP_FOCL) == 1,
+          "...and the include saw it: FOCUS, DIA_ONFOCUS(1) (wf %#x, focl %d)"
+          % (p.wf(), p.b(DP_FOCL)))
     os88marty.guest_sleep(m, 0.5)
     check(TITLE in bar_names(ui), "the bar names it: %r" % (bar_names(ui),))
     park(ui)
@@ -376,10 +456,24 @@ def leg_z(ui):
           "wm_zord %r and wm_top unchanged" % (zord(ui),))
 
     print("D: a press on the Disk window takes the bar back")
-    press(ui, d.x + 60, d.y + d.h - 40)
+    press(ui, *pt)                          # the widget's bar again...
+    ui._wait(lambda: menu_win_i(ui) == p.w.i, "the widget's bar", 20)
+    park(ui)                                # ...the handle gone (the linger),
+    ui._wait(lambda: p.tagp() == P_FOCUS, "the focused plate", 20,
+             snapshot=lambda: "tagp %d hv %d" % (p.tagp(), p.hv()))
+    bad, n = tag_bad(ui, w, "focus", [(d.x, d.y, d.w + 1, d.h + 1)])
+    check(not bad, "the plate is INVERSE while the widget owns the bar (%d "
+          "of %d off: %r)" % (len(bad), n, bad[:6]))
+    ui.mo.click(d.x + 60, d.y + d.h - 40, settle=0)
     ui._wait(lambda: menu_win_i(ui) == d.i, "the Disk window's bar", 20,
              snapshot=lambda: "menu_win = %r" % menu_win_i(ui))
+    t0 = bios_ticks(m)
+    ui._wait(lambda: p.tagp() == P_REST, "the plate un-inverted", 20)
+    dt = (bios_ticks(m) - t0) & 0xFFFF
     check(menu_win_i(ui) == d.i, "[menu_win] is the Disk window again")
+    check(dt <= 6 and not p.wf() & W_FOCUS and p.b(DP_FOCL) == 0,
+          "the plate un-inverted %d tick(s) after the bar went - the 4-tick "
+          "focus poll (at most 6), DIA_ONFOCUS(0)" % dt)
 
     print("E: closing the Disk window gives the bar to LOCATOR")
     ui.close(d)
@@ -573,9 +667,11 @@ def leg_small(ui):
     check(not f & WF_DESK, "no WF_DESK (W_FLAGS %#06x)" % f)
     check(p.b(DP_DESK) == 0, "the probe saw MAKE refused")
     w = p.win()
-    check((w.w, w.h) == (FACE_W + 2, FACE_H + geom.TITLE_H + 1),
-          "the TITLED fallback, 130 x %d: %r"
-          % (FACE_H + geom.TITLE_H + 1, (w.w, w.h)))
+    check(p.li == 2, "the COMPACT layout on a 200-row screen ([dia_li] %d)"
+          % p.li)
+    th = C1 + GAP + C2 + geom.TITLE_H + 1   # no tag row, no last gap
+    check((w.w, w.h) == (FACE_W + 2, th),
+          "the TITLED fallback, 130 x %d: %r" % (th, (w.w, w.h)))
     inst = geom.instances(m)
     mine = [s for s, r in inst.items()
             if win_i(ui, r["win"]) == w.i]
@@ -589,10 +685,13 @@ def leg_small(ui):
               for xx in range(tx, tx + geom.DOCK_TILE_W) if not rows[yy][xx])
     check(ink > 20, "it has a dock tile (%d ink pixels)" % ink)
     fx, fy = w.x + 1, w.y + geom.TITLE_H
-    gy = fy + C1 + 3
-    dither = all((rows[gy][x] != 0) == ((x + gy) % 2 == 0)
-                 for x in range(fx, fx + FACE_W))
-    check(dither, "OSAPI_GFX_DESK laid the dither in its gap (row %d)" % gy)
+    gap = [[rows[fy + C1 + r][x] != 0 for x in range(fx, fx + FACE_W)]
+           for r in range(GAP)]
+    rule = GAP // 2
+    check(all(all(g) if r != rule else not any(g) for r, g in enumerate(gap)),
+          "its gap is white with a 1-px rule through row %d of %d - one "
+          "BLIT1, no ground (SPEC.md 107.7): lit per row %r"
+          % (rule, GAP, [sum(g) for g in gap]))
     card = all(rows[fy + 5][x] for x in range(fx, fx + FACE_W))
     check(card, "card 1 is white across the face")
     print("B: it is an ordinary window: its title bar drags it")
@@ -605,27 +704,131 @@ def leg_small(ui):
 # WAVE 2 (SPEC.md 11.103.6-7): the posted drag, the hover edge, the close
 # =============================================================================
 class Screen(object):
-    """One read of the glass: `lit(x, y)`. VGA through the card's rendered
-    framebuffer (mode 12h has no flat memory), 1bpp through its own bits."""
+    """One read of the glass: `lit(x, y)`, and `rgb(x, y)`. VGA through the
+    card's rendered framebuffer (mode 12h has no flat memory), 1bpp through
+    its own bits."""
     def __init__(self, m):
         vt = m.cmd(cmd="video")["type"]
         if vt in ("cga", "mda", "hercules"):
             _, _, rows = m.vram()
             self.lit = lambda x, y: rows[y][x] != 0
+            self.rgb = lambda x, y: (255, 255, 255) if rows[y][x] else (0, 0, 0)
         else:
             fw, _, fb = m.fbuf()
             self.lit = lambda x, y: fb[(y * fw + x) * 3] > 128
+            self.rgb = lambda x, y: tuple(fb[(y * fw + x) * 3:
+                                             (y * fw + x) * 3 + 3])
 
 
 def inside(x, y, r):
     return r[0] <= x < r[0] + r[2] and r[1] <= y < r[1] + r[3]
 
 
-def tag_bad(m, w, state, cover=()):
-    """How many of the tag row's pixels are NOT the `state` picture ('rest':
-    the white plate on the desktop's dither; 'handle': black, the close box's
-    interior white), the pixels under any `cover` (x,y,w,h) skipped."""
+# --- the host's own composer: GFXE_TEXT and GFXE_BITS again (SPEC.md 5.12.8)
+_FONT = {}
+
+
+def font(ui):
+    """The 8x8 table the KERNEL draws with - [font_seg]:[font_base], glyph 32
+    first - read once out of the guest, so a picture composed here is the
+    picture the include should have composed there."""
+    if not _FONT:
+        seg, base = ui._word("font_seg"), ui._word("font_base")
+        raw = bytes(ui.m.readseg(seg, base, 95 * 8))
+        for i in range(95):
+            _FONT[32 + i] = raw[i * 8:i * 8 + 8]
+    return _FONT
+
+
+class Band(object):
+    """A w x h picture, True = lit: what the include's band means."""
+    def __init__(self, w, h, lit=True):
+        self.w, self.h = w, h
+        self.px = [[lit] * w for _ in range(h)]
+
+    def put(self, x, y, on, inv):
+        if 0 <= x < self.w and 0 <= y < self.h and on:
+            self.px[y][x] = inv          # GFXE_INV sets (white), else clears
+
+    def glyph(self, f, ch, x, y, inv=False, bold=False, scale=1):
+        rows = f.get(ord(ch), bytes(8))
+        for r in range(8):
+            bits = [(rows[r] >> (7 - i)) & 1 for i in range(8)]
+            cols = [b for b in bits for _ in range(scale)]
+            if bold:
+                cols = [c or (i > 0 and cols[i - 1]) for i, c in
+                        enumerate(cols)] + [cols[-1]]
+            for k in range(scale):
+                for i, c in enumerate(cols):
+                    self.put(x + i, y + r * scale + k, c, inv)
+        return x + 8 * scale
+
+    def text(self, f, t, x, y, **kw):
+        for ch in t:
+            x = self.glyph(f, ch, x, y, **kw)
+        return x
+
+    def fill(self, x, y, w, h, inv=False):
+        for yy in range(y, y + h):
+            for xx in range(x, x + w):
+                self.put(xx, yy, True, inv)
+
+    def bits(self, rec, x, y, inv=False):
+        for r, word in enumerate(rec):
+            for i in range(16):
+                self.put(x + i, y + r, (word >> (15 - i)) & 1, inv)
+
+
+def tag_picture(f, state):
+    """The tag row as the include draws it: rows of True/False (lit), None
+    where it is the DESKTOP'S ground - 'rest', 'focus', 'handle', 'armed'."""
+    if state in ("rest", "focus"):
+        inv = state == "focus"
+        b = Band(PW, TAG, lit=not inv)
+        b.text(f, NAME, 4, (TAG - 8) // 2, inv=inv)
+        out = [[None] * FACE_W for _ in range(TAG)]
+        for r in range(TAG):
+            out[r][PX:PX + PW] = b.px[r]
+        return out
+    b = Band(FACE_W, TAG, lit=False)
+    by = (TAG - XW) // 2
+    if state == "handle":
+        b.fill(XX, by, XW, XW, inv=True)
+        b.bits(XBITS, XX + 2, by + 2)
+    else:
+        b.bits(XBITS, XX + 2, by + 2, inv=True)
+    b.text(f, NAME, NX, (TAG - 8) // 2, inv=True)
+    b.bits(GRIP, GX, (TAG - 7) // 2, inv=True)
+    return b.px
+
+
+def card_picture(f, card, rows):
+    """A card as dp_compose composes it (diaprobe.asm), `rows` tall."""
+    b = Band(FACE_W, rows)
+    if card == 0:
+        b.text(f, NAME, 8, 8)
+    else:
+        b.text(f, "24", 4, 6, scale=3)
+        b.text(f, "Mo", 60, 6, bold=True)
+        b.fill(58, 18, 36, 10)
+        b.text(f, "AUG", 60, 19, inv=True)
+        b.bits(TICK, 100, 8)
+        b.text(f, "7", 101, 22, scale=2, bold=True)
+    return b.px
+
+
+def bright(x, y):
+    """Bright's ground: SPEC.md 26's dither, phased on the SCREEN."""
+    return (x + y) % 2 == 0
+
+
+def tag_bad(ui, w, state, cover=(), ground=None):
+    """The tag row's pixels that are NOT the `state` picture, every pixel,
+    the ones under any `cover` (x,y,w,h) skipped. `ground(x, y, scr)` says
+    whether a desktop pixel is right (Bright's dither by default)."""
+    m = ui.m
     scr = Screen(m)
+    want = tag_picture(font(ui), state)
     fx0, ty = w.x + 1, w.y + TY
     bad, n = [], 0
     for r in range(TAG):
@@ -634,39 +837,82 @@ def tag_bad(m, w, state, cover=()):
             x = fx0 + c
             if any(inside(x, y, cv) for cv in cover):
                 continue
-            if state == "handle":
-                want = XX <= c < XX + XW and 1 <= r <= TAG - 2
-            else:
-                want = True if PX <= c < PX + PW else (x + y) % 2 == 0
             n += 1
-            if scr.lit(x, y) != want:
+            wv = want[r][c]
+            if wv is None:
+                ok = ground(x, y, scr) if ground else \
+                    scr.lit(x, y) == bright(x, y)
+            else:
+                ok = scr.lit(x, y) == wv
+            if not ok:
                 bad.append((x, y))
     return bad, n
 
 
-def face_bad(m, w, cover=()):
-    """The cards white and both gaps the desktop's dither, at the frame's
-    place NOW - a drop that left a ghost of what covered it fails here."""
+def face_bad(m, w, cover=(), ground=None):
+    """The cards white where nothing is composed and the gaps the desktop's
+    ground, at the frame's place NOW - a drop that left a ghost of what
+    covered it fails here."""
     scr = Screen(m)
     fx0 = w.x + 1
     bad = []
-    rows = [(w.y + r, "card") for r in (0, C1 // 2, C1 - 1)] + \
+    # rows nothing is composed on, in every layout: card 0's label is rows
+    # 8..15 and card 1's sample rows 6..37 (card_picture)
+    c2 = (0, 2, 5) + ((C2 - 1,) if C2 > 38 else ())
+    rows = [(w.y + r, "card") for r in (0, 2, 5, C1 - 1)] + \
         [(w.y + C1 + r, "gap") for r in (0, GAP - 1)] + \
-        [(w.y + C1 + GAP + r, "card") for r in (0, C2 - 1)] + \
+        [(w.y + C1 + GAP + r, "card") for r in c2] + \
         [(w.y + C1 + GAP + C2 + r, "gap") for r in (0, GAP2 - 1)]
     for y, kind in rows:
         for x in range(fx0, fx0 + FACE_W):
             if any(inside(x, y, cv) for cv in cover):
                 continue
-            want = True if kind == "card" else (x + y) % 2 == 0
-            if scr.lit(x, y) != want:
+            if kind == "card":
+                ok = scr.lit(x, y)
+            else:
+                ok = ground(x, y, scr) if ground else \
+                    scr.lit(x, y) == bright(x, y)
+            if not ok:
                 bad.append((x, y))
     for x in (w.x, w.x + w.w - 1):          # both ground columns
         for y in range(w.y, w.y + w.h):
-            if not any(inside(x, y, cv) for cv in cover) and \
-                    scr.lit(x, y) != ((x + y) % 2 == 0):
+            if any(inside(x, y, cv) for cv in cover):
+                continue
+            ok = ground(x, y, scr) if ground else \
+                scr.lit(x, y) == bright(x, y)
+            if not ok:
                 bad.append((x, y))
     return bad
+
+
+def bios_ticks(m):
+    """The BIOS tick count's low word, 0040:006C - the guest's own clock."""
+    return struct.unpack("<H", bytes(m.read(0x46C, 2)))[0]
+
+
+def edge_trace(m):
+    """The hover edge (cur_hov_x, the kernel's) and every BLIT1 and desktop
+    ground the include lays after it, each stamped with the BIOS tick."""
+    return os88marty.bp_trace(m, "cur_hov_x", "gfx_blit1", "thm_desk",
+                              on_hit=lambda mm, r: bios_ticks(mm))
+
+
+def edge_check(tr, what, blits, grounds, ticks, why):
+    """SPEC.md 107.11's price of an edge: `blits` BLIT1s and `grounds`
+    OSAPI_GFX_DESKs, `ticks` (to 2 more) after the kernel's edge."""
+    edges = [h for h in tr.hits if h["name"] == "cur_hov_x"]
+    after = [h for h in tr.hits if h["name"] != "cur_hov_x"]
+    if not check(edges and after, "%s: the edge, then the draw (%r)"
+                 % (what, tr.names())):
+        return
+    nb = sum(1 for h in after if h["name"] == "gfx_blit1")
+    ng = sum(1 for h in after if h["name"] == "thm_desk")
+    dt = (after[0]["hit"] - edges[-1]["hit"]) & 0xFFFF
+    check(nb == blits and ng == grounds,
+          "%s costs %d BLIT1 and %d GFX_DESK (%d, %d)"
+          % (what, blits, grounds, nb, ng))
+    check(ticks <= dt <= ticks + 2, "...%d tick(s) after the edge - %s is %d"
+          % (dt, why, ticks))
 
 
 def hovw(ui):
@@ -726,13 +972,11 @@ def leg_drag(ui, tmp):
     w0 = p.win()
     print("A: a press on the TAG posts DRAG, and the kernel moves it")
     park(ui)
-    c0, u0, d0, n0 = p.b(DP_CLICKS), p.b(DP_UPS), p.b(DP_DRAGS), \
-        p.wd(DP_PAINTS)
+    c0, u0, n0 = p.b(DP_CLICKS), p.b(DP_UPS), p.wd(DP_PAINTS)
     o0 = p.b(DP_ONDRAGS)
     with os88marty.bp_trace(m, "ui_drag", "wm_dc_take") as tr:
         wdrag(ui, p, tag_point(w0), 43, 33)
     w1 = p.win()
-    check(p.b(DP_DRAGS) == (d0 + 1) & 255, "the probe posted ONE DRAG")
     check(tr.count("ui_drag") == 1, "ui_drag ran once (%d)" % tr.count("ui_drag"))
     check(tr.count("wm_dc_take") == 0, "...and took NO drag cache (%d): a desk "
           "window is .nocache" % tr.count("wm_dc_take"))
@@ -761,16 +1005,19 @@ def leg_drag(ui, tmp):
           % len(vac))
 
     print("B: from a GAP, and from the LEFT GROUND COLUMN, back")
-    wdrag(ui, p, gap_point(w1), -43, -33)
+    with os88marty.bp_trace(m, "ui_drag") as trb:
+        wdrag(ui, p, gap_point(w1), -43, -33)
     w2 = p.win()
     check((w2.x, w2.y) == (w0.x, w0.y) or w2.y == w0.y,
           "a gap drags it back: (%d,%d)" % (w2.x, w2.y))
-    wdrag(ui, p, (w2.x, w2.y + 20), 16, 8)
+    with os88marty.bp_trace(m, "ui_drag") as trc:
+        wdrag(ui, p, (w2.x, w2.y + 20), 16, 8)
     w3 = p.win()
     check((w3.x, w3.y) == (w2.x + 16, w2.y + 8),
           "the 1-px ground column drags it: (%d,%d) -> (%d,%d)"
           % (w2.x, w2.y, w3.x, w3.y))
-    check(p.b(DP_DRAGS) == (d0 + 3) & 255, "three DRAGs posted in all")
+    check(trb.count("ui_drag") == 1 and trc.count("ui_drag") == 1,
+          "the gap and the column each posted ONE drag")
 
     print("C: a press that does not move repaints nothing")
     gp = gap_point(w3)
@@ -865,13 +1112,42 @@ def leg_drag(ui, tmp):
     w7 = p.win()
     hdr = lambda: struct.unpack("<HH", m.readseg(p.seg, p.img + DIA_HDR + 4, 4))
     st = lambda: m.readseg(p.seg, p.img + DIA_ST, 1)[0]
-    ui._wait(lambda: hdr() == (w7.x, w7.y) and not st() & DIA_S_DIRTY,
+    face = (w7.x + 1, w7.y)             # a desk window's face: one column in
+    ui._wait(lambda: hdr() == face and not st() & DIA_S_DIRTY,
              "the drag's save", 120,
              snapshot=lambda: "header %r, dia_st %#x" % (hdr(), st()))
     dd = dat(ui, m, tmp)
-    check(dd["pos"] and (dd["x"], dd["y"]) == (w7.x, w7.y),
-          "DESKPROB.DAT on A: holds the frame's place %r (%r)"
-          % ((w7.x, w7.y), dd))
+    check(dd["pos"] and dd["cont"] and (dd["x"], dd["y"]) == face,
+          "DESKPROB.DAT on A: holds the FACE's origin %r with DIA_HF_CONT "
+          "(%r)" % (face, dd))
+
+    print("H: dropped with its tag row off the glass, the beat puts it back")
+    w8 = p.win()
+    vh = ui._word("vid_h")
+    # the drop is read AT the re-fit's own wm_hide: the beat that re-fits can
+    # come within a guest second of the drop, so a read after the drag is a race
+    m.bp_exec(ui._S("wm_hide"))
+    ui.mo.drag(w8.x, w8.y + 2, w8.x, vh - 38, settle=0)     # by its column
+    hit = m.wait_stop(90) == "breakpoint"
+    w9 = p.win()
+    m.bp_exec()
+    m.run()
+    check(hit and w9.y + w9.h > vh,
+          "the drop left the frame's bottom at %d, past the %d-row screen - "
+          "ui_drag's bound is the title bar's (SPEC.md 11.103.6) - and the "
+          "beat's re-fit HID it there (%s)" % (w9.y + w9.h, vh, hit))
+    ui._wait(lambda: lock_free(ui) and p.win().y + p.win().h <= vh,
+             "the re-fit", 60, snapshot=lambda: "y %d" % p.win().y)
+    w10 = p.win()
+    check(w10.y + w10.h == vh, "the beat re-fitted it: bottom at %d"
+          % (w10.y + w10.h))
+    park(ui)
+    bad, n = tag_bad(ui, w10, "rest")
+    check(not bad, "...and its tag row is on the glass, the plate (%d of %d "
+          "off)" % (len(bad), n))
+    ui._wait(lambda: hdr() == (w10.x + 1, w10.y) and not st() & DIA_S_DIRTY,
+             "the re-fit's save", 120,
+             snapshot=lambda: "header %r, dia_st %#x" % (hdr(), st()))
 
 
 def leg_hover(ui, tmp, full=True):
@@ -882,23 +1158,26 @@ def leg_hover(ui, tmp, full=True):
     print("A: at rest - no hover, the plate")
     park(ui)
     check(not p.flags() & geom.WF_HOVER, "no WF_HOVER (W_FLAGS %#06x)" % p.flags())
-    check(p.b(DP_REV) == 0, "the probe shows the rest plate")
-    bad, n = tag_bad(m, w, "rest")
+    check(not p.rev(), "the probe shows the rest plate")
+    bad, n = tag_bad(ui, w, "rest")
     check(n and not bad, "the tag row is the white plate on the desktop's "
           "dither (%d of %d off: %r)" % (len(bad), n, bad[:6]))
 
     print("B: the pointer on a GAP: the edge, the wake, the handle")
     wk0 = p.b(DP_WAKES)
-    ui.mo.to(*gap_point(w))
-    ui._wait(lambda: p.b(DP_REV) == 1, "the handle", 20,
-             snapshot=lambda: "W_FLAGS %#06x wakes %d"
-             % (p.flags(), p.b(DP_WAKES)))
+    with edge_trace(m) as tr:
+        ui.mo.to(*gap_point(w))
+        ui._wait(lambda: p.rev(), "the handle", 20,
+                 snapshot=lambda: "W_FLAGS %#06x wakes %d"
+                 % (p.flags(), p.b(DP_WAKES)))
+        os88marty.guest_sleep(m, 0.3)
+    edge_check(tr, "the reveal", 1, 0, 5, "DIA_HOVER_T's dwell")
     check(p.flags() & geom.WF_HOVER, "WF_HOVER is set")
     check(hovw(ui) == p.w.i, "[cur_hovw] names the widget (%r)" % hovw(ui))
     check(p.b(DP_WAKES) == (wk0 + 1) & 255, "ONE wake (%d -> %d)"
           % (wk0, p.b(DP_WAKES)))
     os88marty.guest_sleep(m, 0.4)
-    bad, n = tag_bad(m, w, "handle")
+    bad, n = tag_bad(ui, w, "handle")
     check(not bad, "the tag row is the handle: black, the close box white "
           "(%d of %d off: %r)" % (len(bad), n, bad[:6]))
     print("B2: card, gap, card - one window, so NO further edge")
@@ -909,13 +1188,16 @@ def leg_hover(ui, tmp, full=True):
           % p.b(DP_WAKES))
 
     print("C: the pointer off: the leave, the plate back")
-    park(ui)
-    ui._wait(lambda: p.b(DP_REV) == 0, "the rest plate", 20)
+    with edge_trace(m) as tr:
+        park(ui)
+        ui._wait(lambda: not p.rev(), "the rest plate", 20)
+        os88marty.guest_sleep(m, 0.3)
+    edge_check(tr, "the hide", 1, 2, 14, "DIA_LEAVE_T's linger")
     check(not p.flags() & geom.WF_HOVER, "WF_HOVER is clear")
     check(hovw(ui) is None, "[cur_hovw] is the desktop (0)")
     check(p.b(DP_WAKES) == (wk0 + 2) & 255, "the second wake")
     os88marty.guest_sleep(m, 0.4)
-    bad, n = tag_bad(m, w, "rest")
+    bad, n = tag_bad(ui, w, "rest")
     check(not bad, "the plate again, every pixel (%d off)" % len(bad))
     if not full:
         return
@@ -933,7 +1215,7 @@ def leg_hover(ui, tmp, full=True):
     wk1 = p.b(DP_WAKES)
     ui.mo.to(ov[0] + ov[2] // 2, ov[1] + ov[3] // 2)
     os88marty.guest_sleep(m, 0.6)
-    check(not p.flags() & geom.WF_HOVER and p.b(DP_REV) == 0,
+    check(not p.flags() & geom.WF_HOVER and not p.rev(),
           "on the Disk window over it: no WF_HOVER, no handle")
     check(hovw(ui) == d.i, "[cur_hovw] is the Disk window")
     check(p.b(DP_WAKES) == wk1, "and the widget was not woken")
@@ -941,34 +1223,34 @@ def leg_hover(ui, tmp, full=True):
     check(not inside(vis[0], vis[1], (d.x, d.y, d.w + 20, d.h + 20)),
           "a visible gap point %r clear of the Disk window" % (vis,))
     ui.mo.to(*vis)
-    ui._wait(lambda: p.b(DP_REV) == 1, "the handle on the visible part", 20)
+    ui._wait(lambda: p.rev(), "the handle on the visible part", 20)
     after = os88marty.crop_rgb(m, *ov)
     check(after == before, "the reveal was CLIPPED: the Disk window's pixels "
           "over the widget are as they were (%d bytes)" % len(before))
     cover = [(d.x, d.y, d.w + 1, d.h + 1)]
-    bad, n = tag_bad(m, w, "handle", cover)
+    bad, n = tag_bad(ui, w, "handle", cover)
     check(not bad, "the visible part of the tag row is the handle (%d of %d "
           "off)" % (len(bad), n))
     park(ui)
-    ui._wait(lambda: p.b(DP_REV) == 0, "the plate", 20)
+    ui._wait(lambda: not p.rev(), "the plate", 20)
     ui.close(d)
 
     print("E: a BUTTON HELD: the kernel reports the edge, the probe refuses")
     c1 = p.b(DP_CLICKS)
     ui.mo.to(w.x + 40, w.y + 10)                    # card 1: revealed
-    ui._wait(lambda: p.b(DP_REV) == 1, "the handle", 20)
+    ui._wait(lambda: p.rev(), "the handle", 20)
     ui.mo._sep()
     ui.mo._edge(True)                               # ...pressed, and held
     ui._wait(lambda: p.b(DP_CLICKS) != c1, "the card press", 20)
     ui.mo.to(40, 60, l=True)                        # off, held
-    ui._wait(lambda: not p.flags() & geom.WF_HOVER and p.b(DP_REV) == 0,
+    ui._wait(lambda: not p.flags() & geom.WF_HOVER and not p.rev(),
              "the leave with the button held", 20)
     wk2 = p.b(DP_WAKES)
     ui.mo.to(*gap_point(w), l=True)                 # back on, held
     ui._wait(lambda: p.flags() & geom.WF_HOVER, "the re-entry's edge", 20)
     os88marty.guest_sleep(m, 0.6)
     check(p.b(DP_WAKES) == (wk2 + 1) & 255, "the re-entry woke the widget")
-    check(p.b(DP_REV) == 0, "...which did NOT reveal: a button is held")
+    check(not p.rev(), "...which did NOT reveal: a button is held")
     ui.mo._edge(False)
     os88marty.guest_sleep(m, 0.4)
     park(ui)
@@ -999,14 +1281,14 @@ def leg_hover(ui, tmp, full=True):
     wk3 = p.b(DP_WAKES)
     ui.mo.to(*vis)
     os88marty.guest_sleep(m, 0.8)
-    check(not p.flags() & geom.WF_HOVER and p.b(DP_REV) == 0,
+    check(not p.flags() & geom.WF_HOVER and not p.rev(),
           "on the widget under the chooser: no WF_HOVER, no handle")
     check(hovw(ui) is None and p.b(DP_WAKES) == wk3,
           "[cur_hovw] 0 and no wake (%r, %d)" % (hovw(ui), p.b(DP_WAKES)))
     ui.chooser_cancel()
     ui._wait(lambda: ui._word("fdlg_win") == 0, "the chooser reaped", 30)
     ui.mo.to(vis[0] + 2, vis[1])                    # the first move after
-    ui._wait(lambda: p.b(DP_REV) == 1, "the handle once the chooser is gone",
+    ui._wait(lambda: p.rev(), "the handle once the chooser is gone",
              20)
     check(p.flags() & geom.WF_HOVER, "...and WF_HOVER")
 
@@ -1023,51 +1305,54 @@ def leg_close(ui, tmp):
           "SYSTEM.CFG on A: carries its DIA row before the close")
     print("A: press the box, slide off, release: still open")
     ui.mo.to(*box_point(w))
-    ui._wait(lambda: p.b(DP_REV) == 1, "the handle", 20)
+    ui._wait(lambda: p.rev(), "the handle", 20)
     ui.mo._sep()
     ui.mo._edge(True)
-    ui._wait(lambda: p.b(DP_XARM) == 1, "the box armed", 20)
+    ui._wait(lambda: p.armed(), "the box armed", 20)
     os88marty.guest_sleep(m, 0.3)
-    scr = Screen(m)
-    bx0, by0 = w.x + 1 + XX, w.y + TY + 1
     hx, hy = box_point(w)               # the arrow hangs right of and below
-    left = [(x, y) for y in range(by0, by0 + TAG - 2)   # its hot spot
-            for x in range(bx0, bx0 + XW) if x < hx or y < hy]
-    lit = sum(1 for (x, y) in left if not scr.lit(x, y))
-    check(left and lit == len(left), "the box is LIT: its interior clear of "
-          "the arrow is dark (%d of %d)" % (lit, len(left)))
+    cover = [(hx, hy, 16, 20)]          # its hot spot: skip what it covers
+    ui._wait(lambda: p.tagp() == P_ARMED, "the lit picture", 20)
+    bad, n = tag_bad(ui, w, "armed", cover)
+    check(not bad, "the box is LIT - black, its x white - every pixel clear "
+          "of the arrow (%d of %d off)" % (len(bad), n))
     ui.mo.to(40, 60, l=True)
     ui.mo._edge(False)
-    ui._wait(lambda: p.b(DP_XARM) == 0, "the release", 20)
+    ui._wait(lambda: not p.armed(), "the release", 20)
     os88marty.guest_sleep(m, 0.6)
-    check(p.b(DP_CLOSES) == 0 and "DeskProbe" in ui.titles(),
-          "slid off: nothing closed, the widget is up")
-    check(p.b(DP_REV) == 0, "...and its handle went with the pointer")
-    bad, _ = tag_bad(m, w, "rest")
-    check(not bad, "the rest plate, every pixel (%d off)" % len(bad))
+    check("DeskProbe" in ui.titles(), "slid off: nothing closed, the widget "
+          "is up")
+    ui._wait(lambda: not p.rev(), "the handle to go with the pointer "
+             "(the linger)", 20)
+    check(p.wf() & W_FOCUS, "the press on the x handed the widget the bar")
+    bad, _ = tag_bad(ui, w, "focus")
+    check(not bad, "...so its plate is the INVERSE one, every pixel (%d off)"
+          % len(bad))
 
     print("B: a press on the box's place while NOT revealed drags")
     ui.mo.to(*box_point(w))
-    ui._wait(lambda: p.b(DP_REV) == 1, "the handle", 20)
-    m.write(p.seg * 16 + p.img + DP_REV, b"\x00")      # the probe's own word:
-    d0 = p.b(DP_DRAGS)                                 # "not revealed"
-    ui.mo._sep()
-    ui.mo._edge(True)
-    ui.mo._edge(False)
-    ui._wait(lambda: lock_free(ui), "the drag to finish", 30)
-    os88marty.guest_sleep(m, 0.5)
-    check(p.b(DP_DRAGS) == (d0 + 1) & 255 and p.b(DP_XARM) == 0,
-          "it posted a DRAG and armed nothing")
+    ui._wait(lambda: p.rev(), "the handle", 20)
+    # the include's own state: "not revealed" (the dwell not yet run out)
+    m.write(p.seg * 16 + p.img + WOFF["dia_hv"], bytes([HV_HIDDEN]))
+    with os88marty.bp_trace(m, "ui_drag") as tr:
+        ui.mo._sep()
+        ui.mo._edge(True)
+        ui.mo._edge(False)
+        ui._wait(lambda: lock_free(ui), "the drag to finish", 30)
+        os88marty.guest_sleep(m, 0.5)
+    check(tr.count("ui_drag") == 1 and not p.armed(),
+          "it posted a DRAG (ui_drag %d) and armed nothing"
+          % tr.count("ui_drag"))
     check("DeskProbe" in ui.titles(), "the widget is still up")
     park(ui)                                           # the picture right again
     ui._wait(lambda: not p.flags() & geom.WF_HOVER, "the leave", 20)
 
     print("C: press and release ON the box: the widget closes")
     ui.mo.to(*box_point(w))
-    ui._wait(lambda: p.b(DP_REV) == 1, "the handle", 20)
+    ui._wait(lambda: p.rev(), "the handle", 20)
     ui.mo._sep()
     ui.mo._edge(True)
-    ui._wait(lambda: p.b(DP_XARM) == 1, "the box armed", 20)
+    ui._wait(lambda: p.armed(), "the box armed", 20)
     ui.mo._edge(False)
     ui._wait(lambda: "DeskProbe" not in ui.titles(), "the widget to close", 30)
     check("DeskProbe" not in ui.titles(), "the window is gone")
@@ -1080,10 +1365,152 @@ def leg_close(ui, tmp):
           % (rows,))
 
 
+# =============================================================================
+# WAVE 3 (SPEC.md 107.11): the theme in the gaps, and the layout by height
+# =============================================================================
+THEMES = ("Bright", "Dark", "Color")
+
+
+CPH_ROWS = {0: 22, 1: 38, 2: 55}        # the Theme page's radios, pane-relative
+                                        # y (tests/dispthm.py's, kernel/ctrl.inc)
+
+
+def set_theme(ui, kind):
+    """The Control Panel's Theme page, the radio, the close box - the user's
+    own route, on the RUNNING widget: a theme change must reach its gaps with
+    no cache to drop (SPEC.md 107.11)."""
+    import dispcp
+    m = ui.m
+    settle = os88marty.settle
+    dispcp.open_panel(m, ui.mo, ui._S, settle, page=dispcp.CP_ITHM)
+    wx, wy = dispcp._cp_win(m, ui._S)
+    ui.mo.click(wx + 1 + dispcp.CP_RX + dispcp.CP_PGX + 6,
+                wy + geom.TITLE_H + 1 + CPH_ROWS[kind], settle=0)
+    ui._wait(lambda: ui._byte("thm_kind") == kind, "the %s theme"
+             % THEMES[kind], 30)
+    dispcp.close_panel(m, ui.mo, ui._S, settle)
+    ui.settle()
+
+
+def ground_of(scr, w, kind):
+    """(predicate, what) for the DESKTOP'S ground under `kind`, taken off the
+    bare desktop beside the frame: Bright by screen parity, the other two one
+    solid colour - which is sampled, and the sample is held to be solid."""
+    if kind == 0:
+        return (lambda x, y, sc: sc.lit(x, y) == bright(x, y)), "the dither"
+    pts = [(w.x - dx, w.y + dy) for dx in (3, 6, 9) for dy in (5, 30, 60)]
+    cols = set(scr.rgb(x, y) for x, y in pts)
+    want = scr.rgb(*pts[0])
+    return (lambda x, y, sc: sc.rgb(x, y) == want), \
+        "%s %r (the desktop beside it: %d colour(s))" % (
+            THEMES[kind], want, len(cols))
+
+
+def cards_bad(ui, w):
+    """Both cards against what GFXE_TEXT and GFXE_BITS compose HERE from the
+    guest's font: every pixel of both."""
+    scr = Screen(ui.m)
+    f = font(ui)
+    bad, n = [], 0
+    for card, top, rows in ((0, 0, C1), (1, C1 + GAP, C2)):
+        pic = card_picture(f, card, rows)
+        for r in range(rows):
+            for c in range(FACE_W):
+                x, y = w.x + 1 + c, w.y + top + r
+                n += 1
+                if scr.lit(x, y) != pic[r][c]:
+                    bad.append((card, c, r))
+    return bad, n
+
+
+def leg_ground(tmp):
+    img = os.path.join(tmp, "diadesk360.img")
+    shutil.copy(os.path.join(PKGDIR, "diadesk360.img"), img)
+    with os88ui.boot(img, machine="os8088_xt_vga") as ui:
+        m = ui.m
+        p = Probe(ui)
+        ui.settle()
+        for kind in (0, 1, 2):
+            print("%s: the desktop's ground in the gaps" % THEMES[kind].upper())
+            if kind:
+                set_theme(ui, kind)
+            park(ui)
+            os88marty.guest_sleep(m, 0.5)
+            check(ui._byte("thm_kind") == kind, "[thm_kind] = %d, %s"
+                  % (ui._byte("thm_kind"), THEMES[kind]))
+            w = p.win()
+            scr = Screen(m)
+            gnd, what = ground_of(scr, w, kind)
+            if kind == 1:
+                check(scr.rgb(w.x - 3, w.y + 5) == (0, 0, 0),
+                      "Dark's desktop is black")
+            if kind == 2:
+                r_, g_, b_ = scr.rgb(w.x - 3, w.y + 5)
+                check(g_ == b_ and g_ > r_, "Color's desktop is teal %r"
+                      % ((r_, g_, b_),))
+            bad = face_bad(m, w, ground=gnd)
+            check(not bad, "every gap pixel and both ground columns are %s; "
+                  "the cards white (%d off: %r)" % (what, len(bad), bad[:6]))
+            want = "focus" if p.wf() & W_FOCUS else "rest"
+            bad, n = tag_bad(ui, w, want, ground=gnd)
+            check(not bad, "the tag row: the %s plate and its name, %s either "
+                  "side (%d of %d off: %r)" % (want, what, len(bad), n,
+                                               bad[:6]))
+            bad, n = cards_bad(ui, w)
+            check(not bad, "the two cards are what GFXE_TEXT / GFXE_BITS "
+                  "compose from the guest's font, every pixel - a card is "
+                  "never themed (%d of %d off: %r)" % (len(bad), n, bad[:6]))
+            if kind != 2:
+                continue
+            print("COLOR: a window laid over it and taken away")
+            d = ui.open_drive("A")
+            ui.settle()
+            d = ui.window("Disk")
+            ui.move_window(d, max(0, w.x + 60 - d.w), w.y + 20)
+            d = ui.window("Disk")
+            ov = rect_overlap((d.x, d.y, d.w + 1, d.h + 1),
+                              (w.x, w.y, w.w, w.h))
+            check(ov is not None, "the Disk window covers part of it: %r"
+                  % (ov,))
+            ui.close(d)
+            park(ui)
+            ui.settle()
+            bad = face_bad(m, w, ground=gnd)
+            check(not bad, "uncovered, the gaps are teal again and the cards "
+                  "white (%d off: %r)" % (len(bad), bad[:6]))
+            bad, n = cards_bad(ui, w)
+            check(not bad, "...and the cards recomposed whole (%d of %d off)"
+                  % (len(bad), n))
+
+
+def leg_fit(tmp):
+    tree = os88build.tree("VIDEO=ega", targets=("diadesk360.img",)).apply()
+    img = os.path.join(tmp, "ega.img")
+    shutil.copy(tree.img("diadesk360.img"), img)
+    with os88ui.boot(img, machine="os8088_xt_vga") as ui:
+        p = Probe(ui)
+        ui.settle()
+        vh = ui._word("vid_h")
+        check(vh == 350, "the VIDEO=ega kernel's screen is 350 rows (%d)" % vh)
+        check(p.li == 1, "the include picked MID by the HEIGHT, not TALL by "
+              "the adapter's kind ([dia_li] %d)" % p.li)
+        w = p.win()
+        check((w.w, w.h) == (FACE_W + 2, FACE_H) and FACE_H == 83,
+              "the frame is 130 x 83, MID's column: %r" % ((w.w, w.h),))
+        check(w.y >= 20 and w.y + w.h <= vh - 24,
+              "...inside the %d-row band between the menu bar and the dock: "
+              "rows %d..%d" % (vh - 44, w.y, w.y + w.h - 1))
+        bad = face_bad(ui.m, w)
+        check(not bad, "its face is drawn: cards white, gaps the dither "
+              "(%d off: %r)" % (len(bad), bad[:8]))
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="desklayer-")
     try:
-        if ARGS.leg == "small":
+        if ARGS.leg in ("ground", "fit"):
+            {"ground": leg_ground, "fit": leg_fit}[ARGS.leg](tmp)
+        elif ARGS.leg == "small":
             img = os.path.join(tmp, "small360.img")
             shutil.copy(os.path.join(PKGDIR, "small360.img"), img)
             r = subprocess.run(["mcopy", "-o", "-i", img,
@@ -1099,14 +1526,15 @@ def main():
             machine = {"hovercga": os88marty.machine("os8088_5150_cga"),
                        "hoverherc": "os8088_5150_herc_gla"}.get(
                            ARGS.leg, "os8088_xt_vga")
-        with os88ui.boot(img, machine=machine) as ui:
-            {"z": leg_z, "dock": leg_dock, "keys": leg_keys,
-             "small": leg_small,
-             "drag": lambda u: leg_drag(u, tmp),
-             "hover": lambda u: leg_hover(u, tmp),
-             "hovercga": lambda u: leg_hover(u, tmp, full=False),
-             "hoverherc": lambda u: leg_hover(u, tmp, full=False),
-             "close": lambda u: leg_close(u, tmp)}[ARGS.leg](ui)
+        if ARGS.leg not in ("ground", "fit"):
+            with os88ui.boot(img, machine=machine) as ui:
+                {"z": leg_z, "dock": leg_dock, "keys": leg_keys,
+                 "small": leg_small,
+                 "drag": lambda u: leg_drag(u, tmp),
+                 "hover": lambda u: leg_hover(u, tmp),
+                 "hovercga": lambda u: leg_hover(u, tmp, full=False),
+                 "hoverherc": lambda u: leg_hover(u, tmp, full=False),
+                 "close": lambda u: leg_close(u, tmp)}[ARGS.leg](ui)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("desk%s: %s" % (ARGS.leg, "PASS" if not fails else

@@ -21,7 +21,9 @@ fixture it accepts is one the machine accepts.
     os88dia.py cfg -o SYSTEM.CFG [--want BITS] [--dia A:SYSTEM/DIA/X.O88=Cap]...
                                  [--short A:PATH=Caption@kind,cell]...
     os88dia.py dat -o X.DAT --x 303 --y 184 --screen 640x480 [--payver 1]
-                   [--paylen 0 | --deskcal]
+                   [--paylen 0 | --deskcal] [--cont]
+                 --cont: x,y are a widget's FACE origin (header +3 bit 1,
+                 DIA_HF_CONT, SPEC.md 107.11), not a titled frame's
     os88dia.py dump FILE         a SYSTEM.CFG or a .DAT, as JSON
     os88dia.py --selfcheck       round-trip and refusal checks; exit 0 = good
 """
@@ -66,6 +68,8 @@ DIA_HDR_SIZE = 16
 DIA_HDR_MAGIC = b"DA"
 DIA_HDR_VER = 1
 DIA_HF_POS = 1
+DIA_HF_CONT = 2                 # v2 (SPEC.md 107.11): +4/+6 are the FACE's
+TITLE_H = 18                    # ...and a v1 file's frame is a title bar up
 
 # --- the Desk Calendar's payload v1 (SPEC.md 107.3, 107.5) --------------------
 DESKCAL_PAYVER = 1
@@ -118,6 +122,33 @@ def dia_st_off(dia_bss, paylen):
 def dia_hdr_off(dia_bss):
     """The DIA header in the package's bss (os88dia.inc's dia_file)."""
     return dia_bss
+
+
+# os88dia.inc's DIA_WIDGET fields (SPEC.md 107.11), after v1's dia_nx - in
+# the include's order; tests/unit/t_dia.py has NASM evaluate each against a
+# DIA_WIDGET build and holds this table to it
+WIDGET_FIELDS = (("dia_wf", 1), ("dia_hv", 1), ("dia_tagp", 1),
+                 ("dia_press", 1), ("dia_li", 1), ("dia_ci", 1),
+                 ("dia_lay", 2), ("dia_fh", 2), ("dia_fx", 2), ("dia_fy", 2),
+                 ("dia_cy", 2), ("dia_ch", 2), ("dia_dmg", 8), ("dia_pp", 2),
+                 ("dia_gh", 2), ("dia_tbeat", 2), ("dia_thov", 2),
+                 ("dia_qx", 2), ("dia_qy", 2), ("dia_pre", 1), ("dia_sc", 1),
+                 ("dia_ss", 2), ("dia_sr0", 2), ("dia_sr1", 2), ("dia_ty", 2))
+DIA_HV = {0: "hidden", 1: "dwell", 2: "shown", 3: "linger"}
+DIA_W_DESK, DIA_W_FOCUS, DIA_W_ARMED = 1, 2, 4
+DIA_P = {0: "rest", 1: "focus", 2: "handle", 3: "armed", 0xFF: "none"}
+
+
+def widget_off(dia_bss, paylen):
+    """{field: offset past the image} for a DIA_WIDGET package's state -
+    dia_st, then v1's 37 bytes (dia_st .. dia_nx), then WIDGET_FIELDS."""
+    off = dia_st_off(dia_bss, paylen) + 1 + 2 + 2 + 2 + 1 + 1 + 24 + 1 + 2 + 1
+    out = {}
+    for name, size in WIDGET_FIELDS:
+        out[name] = off
+        off += size
+    out["end"] = off
+    return out
 
 
 class DiaError(ValueError):
@@ -250,16 +281,18 @@ def dia_rows(data):
 # the state file
 # =============================================================================
 
-def dat(payload=b"", x=None, y=None, screen=None, payver=1):
+def dat(payload=b"", x=None, y=None, screen=None, payver=1, cont=False):
     """A DIA state file: header + payload. A position needs all of x, y and
-    the screen it was saved on."""
+    the screen it was saved on; `cont` says they are a widget's FACE origin
+    (DIA_HF_CONT), which only a DIA_WIDGET package writes."""
     payload = bytes(payload)
     pos = x is not None
     if pos and (y is None or screen is None):
         raise DiaError("a position is x, y AND the screen it was saved on")
     sw, sh = screen if pos else (0, 0)
     hdr = DIA_HDR_MAGIC + struct.pack(
-        "<BBHHHHBBH", DIA_HDR_VER, DIA_HF_POS if pos else 0,
+        "<BBHHHHBBH", DIA_HDR_VER,
+        (DIA_HF_POS if pos else 0) | (DIA_HF_CONT if cont else 0),
         x if pos else 0, y if pos else 0, sw, sh, payver, 0, len(payload))
     assert len(hdr) == DIA_HDR_SIZE
     return hdr + payload
@@ -283,7 +316,11 @@ def parse_dat(data, paylen, payver):
         raise DiaError("payload version %d, not %d" % (pv, payver))
     if ln != paylen:
         raise DiaError("payload length %d, not %d" % (ln, paylen))
-    out = {"pos": bool(flags & DIA_HF_POS), "x": x, "y": y,
+    cont = bool(flags & DIA_HF_CONT)
+    out = {"pos": bool(flags & DIA_HF_POS), "x": x, "y": y, "cont": cont,
+           # the FACE a widget reads it as (SPEC.md 107.11): its own origin,
+           # or a v1 file's titled frame - a border in, a title bar down
+           "face": [x, y] if cont else [x + 1, y + TITLE_H],
            "screen": [sw, sh], "payver": pv, "paylen": ln,
            "payload": data[DIA_HDR_SIZE:]}
     return out
@@ -443,6 +480,15 @@ def selfcheck():
     refuses(lambda: parse_dat(d, 0, 2), "another payload version")
     refuses(lambda: dat(b"", x=1), "a position without its screen")
     ok(not parse_dat(dat(b"\0" * 4), 4, 1)["pos"], "no position is no POS bit")
+    ok(not q["cont"] and q["face"] == [304, 202],
+       "a v1 file's titled frame is read as a face a border in, a bar down")
+    c = parse_dat(dat(b"", x=376, y=184, screen=(640, 480), cont=True), 0, 1)
+    ok(c["cont"] and c["pos"] and c["face"] == [376, 184] and
+       dat(b"", x=1, y=2, screen=(3, 4), cont=True)[3] == 3,
+       "a face origin round-trips with +3 = POS | CONT")
+    w = widget_off(288, 0)
+    ok(w["dia_wf"] == dia_st_off(288, 0) + 37 and w["dia_hv"] == w["dia_wf"] + 1,
+       "the widget's fields follow v1's 37 bytes")
 
     # the Desk Calendar's payload
     pay = deskcal(appts=[((2026, 10, 13), 570, "Dentist"),
@@ -511,6 +557,8 @@ def main(argv):
     d.add_argument("--paylen", type=int, default=0)
     d.add_argument("--deskcal", action="store_true",
                    help="an EMPTY Desk Calendar payload (v1, 2,440 bytes)")
+    d.add_argument("--cont", action="store_true",
+                   help="x,y are a widget's FACE origin (DIA_HF_CONT)")
     u = sub.add_parser("dump", help="a SYSTEM.CFG or a .DAT, as JSON")
     u.add_argument("file")
     u.add_argument("--paylen", type=int)
@@ -545,7 +593,8 @@ def main(argv):
             payload, payver = bytes(a.paylen), a.payver
         screen = tuple(int(v) for v in a.screen.split("x")) if a.screen \
             else None
-        data = dat(payload, x=a.x, y=a.y, screen=screen, payver=payver)
+        data = dat(payload, x=a.x, y=a.y, screen=screen, payver=payver,
+                   cont=a.cont)
         open(a.o, "wb").write(data)
         print("os88dia: %s %d bytes" % (a.o, len(data)))
         return 0

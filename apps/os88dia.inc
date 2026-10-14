@@ -87,6 +87,9 @@
 DIA_HDR_MAGIC   equ 0x4144      ; 'DA' (SPEC.md 107.5)
 DIA_HDR_VER     equ 1
 DIA_HF_POS      equ 1           ; +3 bit 0: the position is valid
+DIA_HF_CONT     equ 2           ; +3 bit 1: +4/+6 are the FACE's origin, not
+                                ; a titled frame's (v2, SPEC.md 107.11) - only
+                                ; a DIA_WIDGET build writes it
 DIA_H_MAGIC     equ 0
 DIA_H_VER       equ 2
 DIA_H_FLAGS     equ 3
@@ -145,10 +148,162 @@ dia_fl      equ dia_fnd + OSAPI_FIND_SZ                     ; DIA_F_* (wave 2)
 dia_wy      equ dia_fl + 1                                  ; the restored y
 dia_nx      equ dia_wy + 2                                  ; the next beat,
                                 ; ticks, once - 0: DIA_TICKS (wave 4)
+%ifndef DIA_WIDGET
 DIA_BSS_END equ DIA_BSS + DIA_HDR_SIZE + DIA_PAYLEN + OSAPI_DI_SIZE + 13 + 2 + 1 + 1 + 2 + 2 + 2 + 1 + 1 + OSAPI_FIND_SZ + 1 + 2 + 1
+%else
+; THE WIDGET'S OWN (SPEC.md 107.11), after v1's - so every v1 offset above
+; is where it was, and tools/os88dia.py's widget_off() names these
+dia_wf      equ dia_nx + 1      ; db DIA_W_*: the form, the focus, the x armed
+dia_hv      equ dia_wf + 1      ; db the hover state, DIA_HV_*
+dia_tagp    equ dia_hv + 1      ; db the tag's picture on the glass, DIA_P_*
+dia_press   equ dia_tagp + 1    ; db the card a press went to, + 1 (0 none)
+dia_li      equ dia_press + 1   ; db the layout: 0 TALL, 1 MID, 2 COMPACT
+dia_ci      equ dia_li + 1      ; db the paint's card
+dia_lay     equ dia_ci + 1      ; dw ...its DIA_LAYOUT entry
+dia_fh      equ dia_lay + 2     ; dw the face's height as SHOWN: the whole
+                                ; column on a desk window, less the tag row
+                                ; and the last gap in the titled fallback
+dia_fx      equ dia_fh + 2      ; dw the face's screen origin, as the last
+dia_fy      equ dia_fx + 2      ; dw ...paint, press or draw found it
+dia_cy      equ dia_fy + 2      ; dw the card being painted: its screen top
+dia_ch      equ dia_cy + 2      ; dw ...and its height
+dia_dmg     equ dia_ch + 2      ; 4 dw: the paint's damage rect, inclusive
+dia_pp      equ dia_dmg + 8     ; dw the paint's walk over the layout's pairs
+dia_gh      equ dia_pp + 2      ; dw a gap's rows
+dia_tbeat   equ dia_gh + 2      ; dw the next BEAT, an absolute tick
+dia_thov    equ dia_tbeat + 2   ; dw ...the dwell's or the linger's
+dia_qx      equ dia_thov + 2    ; dw a press or release point, banked
+dia_qy      equ dia_qx + 2
+dia_pre     equ dia_qy + 2      ; db the hover state BEFORE a press
+dia_sc      equ dia_pre + 1     ; db dia_slabs: the card
+dia_ss      equ dia_sc + 1      ; dw ...the slab's first card row
+dia_sr0     equ dia_ss + 2      ; dw ...the damaged rows, card-local
+dia_sr1     equ dia_sr0 + 2
+dia_ty      equ dia_sr1 + 2     ; dw the tag row's screen top, as drawn
+DIA_BSS_END equ dia_ty + 2 - os88_image_end
+%endif
 %if OSAPI_DI_SIZE < DIA_SLACK
   %error "os88dia: dia_rec is the read's slack before it is the row"
 %endif
+
+; DIA_PLACE reg - AX, DX = the place a window's record means to the state
+; file: its frame's x,y (v1), or its FACE's origin (DIA_WIDGET, SPEC.md
+; 107.11). `reg` holds the record, ES = KERNEL_SEG; nothing else changes
+%macro DIA_PLACE 1
+%ifdef DIA_WIDGET
+  %ifidni %1, si
+    call dia_place
+  %else
+    push si
+    mov si, %1
+    call dia_place
+    pop si
+  %endif
+%else
+    mov ax, [es:%1+W_X]
+    mov dx, [es:%1+W_Y]
+%endif
+%endmacro
+
+%ifdef DIA_WIDGET
+; --- THE WIDGET TREATMENT (SPEC.md 107.11) -----------------------------------
+%ifndef GFXE_TEXT
+  %error "os88dia: DIA_WIDGET composes with os88gfx.inc - define GFXE_TEXT"
+%endif
+%ifndef GFXE_BITS
+  %error "os88dia: DIA_WIDGET composes with os88gfx.inc - define GFXE_BITS"
+%endif
+%ifndef DIA_TAG
+  %error "os88dia: DIA_WIDGET wants DIA_TAG, the name tag (= the title)"
+%endif
+%ifndef DIA_LAYOUTS
+  %error "os88dia: DIA_WIDGET wants DIA_LAYOUTS - three DIA_LAYOUT entries"
+%endif
+%ifndef DIA_PAINTCARD
+  %error "os88dia: DIA_WIDGET wants DIA_PAINTCARD (dia_slabs + DIA_COMPOSE)"
+%endif
+%ifndef DIA_FACE_W
+  %define DIA_FACE_W 176        ; 22 cells, the mockup's column
+%endif
+%ifndef DIA_WAKE
+  %define DIA_WAKE dia_wake
+%endif
+%if DIA_FACE_W % 8
+  %error "os88dia: DIA_FACE_W must be a multiple of 8 (BLIT1's grid on small)"
+%endif
+%if DIA_FACE_W > GFXE_BAND_W
+  %error "os88dia: the band is narrower than the face (GFXE_BAND_W)"
+%endif
+DIA_HOVER_T equ 5               ; the dock's DOCK_HOVER_T and DOCK_LEAVE_T
+DIA_LEAVE_T equ 14              ; (kernel/dock.inc, SPEC.md 30.6) by value -
+                                ; tests/unit/t_dia.py holds them equal
+DIA_FOCUS_T equ 4               ; the focus poll, only while owning the bar
+DIA_HV_HIDDEN equ 0             ; dia_hv: the handle down...
+DIA_HV_DWELL  equ 1             ; ...the pointer on it, the dwell running
+DIA_HV_SHOWN  equ 2             ; ...the handle up
+DIA_HV_LINGER equ 3             ; ...up, the pointer gone, the linger running
+DIA_W_DESK  equ 1               ; dia_wf: a desk window (MAKE took)
+DIA_W_FOCUS equ 2               ; ...owning the menu bar and the keys
+DIA_W_ARMED equ 4               ; ...a press on the handle's x is armed
+DIA_P_REST  equ 0               ; dia_tagp: the plate,
+DIA_P_FOCUS equ 1               ; ...the plate inverse,
+DIA_P_HAND  equ 2               ; ...the handle,
+DIA_P_ARMED equ 3               ; ...the handle with its x lit,
+DIA_P_NONE  equ 0FFh            ; ...or not known: the next sync draws
+DIAL_N      equ 0               ; a DIA_LAYOUT entry: db the cards,
+DIAL_TAG    equ 1               ; db the tag row's height,
+DIAL_FY     equ 2               ; dw the default face y,
+DIAL_CARDS  equ 4               ; then (db height, db the gap under it) x 4
+DIAL_MAX    equ 4
+DIAL_SZ     equ DIAL_CARDS + 2 * DIAL_MAX
+DIA_XX      equ 3               ; the handle's close box: face x 3..12
+DIA_XW      equ 10
+%strlen DIA_TAGLEN DIA_TAG
+DIA_TAGW    equ DIA_TAGLEN * 8
+DIA_PW      equ DIA_TAGW + 8    ; the plate: the name and 4 px each side
+DIA_PX      equ (DIA_FACE_W - DIA_PW) / 2
+DIA_NX      equ (DIA_FACE_W - DIA_TAGW) / 2     ; the handle's name
+DIA_GX      equ DIA_FACE_W - 18                 ; ...and its grip
+%if DIA_PW > DIA_FACE_W
+  %error "os88dia: DIA_TAG is wider than the face"
+%endif
+%if DIA_NX < DIA_XX + DIA_XW + 1 || DIA_NX + DIA_TAGW > DIA_GX - 1
+  %error "os88dia: DIA_TAG crowds the handle's x or its grip"
+%endif
+
+; DIA_LAYOUT band, facey, tagh, h0,g0 [, h1,g1 [, h2,g2 [, h3,g3]]] - one
+; layout: each card with the gap UNDER it; refused at assembly time when the
+; face, or the titled fallback's frame, is taller than `band`
+%macro DIA_LAYOUT 5-11
+  %if (%0 - 3) % 2
+    %error "DIA_LAYOUT: a height and a gap per card"
+  %endif
+  %assign %%n (%0 - 3) / 2
+  %assign %%band %1
+  %assign %%tag %3
+  %if %%tag < 10 || %%tag > GFXE_BAND_H
+    %error "DIA_LAYOUT: the tag row is 10 rows or more, and no taller than the band"
+  %endif
+    db %%n, %3
+    dw %2
+  %assign %%sum %3
+  %assign %%last 0
+  %rotate 3
+  %rep %%n
+    db %1, %2
+    %assign %%sum %%sum + %1 + %2
+    %assign %%last %2
+    %rotate 2
+  %endrep
+    times 2 * (DIAL_MAX - %%n) db 0
+  %if %%sum > %%band
+    %error "DIA_LAYOUT: the face is taller than its band"
+  %endif
+  %if %%sum - %%tag - %%last + TITLE_H + 1 > %%band
+    %error "DIA_LAYOUT: the titled fallback is taller than its band"
+  %endif
+%endmacro
+%endif ; DIA_WIDGET
 
 ; -----------------------------------------------------------------------------
 ; dia_load - the entry proc's half (SPEC.md 107.5, 107.5.2)
@@ -171,6 +326,10 @@ dia_load:
     push si
     push di
     push es
+%ifdef DIA_WIDGET
+    call dia_wsize              ; QUERY, the layout, the template's size and
+                                ; its default place (SPEC.md 107.11)
+%endif
     push di
     push ds                     ; the NAME, out of KERNEL_SEG: copy it, the
     push ds                     ; loader reuses the buffer (SPEC.md 20.2)
@@ -227,6 +386,10 @@ dia_load:
     pop di                      ; the template
     push di
     call OSAPI_VIDEO            ; AX = width, BX = height
+%ifdef DIA_WIDGET
+    call dia_wplace             ; the FACE's place, anchored, into the
+                                ; template's frame - SI = its y
+%else
     mov cx, [dia_file+DIA_H_SW]
     mov dx, [di+WT_W]
     mov si, [dia_file+DIA_H_X]
@@ -238,6 +401,7 @@ dia_load:
     mov si, [dia_file+DIA_H_Y]
     call dia_anchor
     mov [di+WT_Y], si           ; wm_create clamps it onto the glass (39.7)
+%endif
     mov [dia_wy], si            ; ...and dia_made gives back what that clamp
     or byte [dia_fl], DIA_F_PLACED  ; took to keep it off the dock
     jmp short .home
@@ -356,6 +520,10 @@ dia_made:
     mov [dia_win], bx
     mov ax, KERNEL_SEG          ; the record (SPEC.md 20.1)
     mov es, ax
+%ifdef DIA_WIDGET
+    call dia_wmade              ; MAKE, or the titled fallback's promises; the
+                                ; prefilters and the wake (SPEC.md 107.11)
+%endif
     test byte [dia_fl], DIA_F_PLACED
     jz .rec
     mov ax, [dia_wy]            ; THE RESTORED y. wm_create's fit keeps every
@@ -376,8 +544,12 @@ dia_made:
     jle .rec
     mov [es:bx+W_Y], ax
 .rec:
-    mov ax, [es:bx+W_X]         ; THE PLACE ON RECORD is where it opened: the
-    mov dx, [es:bx+W_Y]         ; poll owes a save only for another one, so a
+    DIA_PLACE bx                ; THE PLACE ON RECORD is where it opened: the
+                                ; poll owes a save only for another one, so a
+%ifdef DIA_WIDGET
+    or byte [dia_file+DIA_H_FLAGS], DIA_HF_CONT ; ...a FACE's from now on: a
+                                ; v1 file is converted by its next save, once
+%endif
     mov [dia_px], ax            ; launch alone writes nothing (107.5.2). The
     mov [dia_py], dx            ; header's screen goes with it, or a later
     mov [dia_file+DIA_H_X], ax  ; save would pair this place with the old
@@ -451,15 +623,18 @@ dia_worker:
 
 ; dia_wake - the worker's kick (SI = the window, the UI task, NO lock): take
 ; the lock so the beat - and DIA_ONTICK - sees kern_big's environment exactly
+%ifndef DIA_WIDGET              ; (a widget's is below: the hover edge's too)
 dia_wake:
     call OSAPI_GFX_LOCK
     call dia_beat
     call OSAPI_GFX_UNLOCK
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dia_tick - the timer (SI = the window; the UI task, the gfx lock held)
 ; -----------------------------------------------------------------------------
+%ifndef DIA_WIDGET              ; (a widget's multiplexes, below)
 dia_tick:
     call dia_beat
     push ax
@@ -475,6 +650,7 @@ dia_tick:
     pop bx
     pop ax
     ret
+%endif
 
 ; dia_beat - one tick's work, on either arm: the UI task, the lock held
 dia_beat:
@@ -493,8 +669,10 @@ dia_beat:
     mov ax, KERNEL_SEG          ; ES = KERNEL_SEG on entry to a callback -
     mov es, ax                  ; and the registration's ES = DS since
     mov si, [dia_win]
-    mov ax, [es:si+W_X]
-    mov dx, [es:si+W_Y]
+%ifdef DIA_WIDGET
+    call dia_refit              ; a drop that left the tag off the glass
+%endif                          ; (SPEC.md 11.103.6's bound)
+    DIA_PLACE si
     cmp ax, [dia_px]
     jne .moved                  ; still moving, or just started
     cmp dx, [dia_py]
@@ -543,7 +721,11 @@ dia_pos:
     call OSAPI_VIDEO
     mov [dia_file+DIA_H_SW], ax
     mov [dia_file+DIA_H_SH], bx
+%ifdef DIA_WIDGET
+    or byte [dia_file+DIA_H_FLAGS], DIA_HF_POS | DIA_HF_CONT
+%else
     or byte [dia_file+DIA_H_FLAGS], DIA_HF_POS
+%endif
     or byte [dia_st], DIA_S_DIRTY
     pop dx
     pop cx
@@ -639,8 +821,7 @@ dia_close:
     mov es, ax
 .pos:
     mov si, [dia_win]
-    mov ax, [es:si+W_X]
-    mov dx, [es:si+W_Y]
+    DIA_PLACE si
     test byte [dia_file+DIA_H_FLAGS], DIA_HF_POS
     jz .p
     cmp ax, [dia_file+DIA_H_X]
@@ -900,6 +1081,1191 @@ dia_seek:
     pop di
     pop cx
     ret
+
+%ifdef DIA_WIDGET
+; =============================================================================
+; THE WIDGET TREATMENT (SPEC.md 107.11) - the face, its tag and its gestures.
+; No pixel of it is the kernel's: the kernel's part is SPEC.md 11.103's layer
+; =============================================================================
+
+; dia_wsize - dia_load's first step (DI = the template): QUERY, the layout by
+; the screen's HEIGHT, the template's size, and - with DIA_RIGHT - its default
+; place. Every register kept
+dia_wsize:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov al, 0
+    call OSAPI_WM_DESK          ; CF = 0: this kernel has the desk layer
+    jc .q
+    or byte [dia_wf], DIA_W_DESK
+.q:
+    call OSAPI_VIDEO            ; AX = width, BX = height
+    push ax
+    xor cx, cx                  ; TALL at 400 rows or more, MID from 300 -
+    cmp bx, 400                 ; Hercules' 348 AND EGA's 350, which the
+    jae .l                      ; adapter's kind would have called VGA -
+    inc cx                      ; COMPACT below (SPEC.md 107.11)
+    cmp bx, 300
+    jae .l
+    inc cx
+.l:
+    mov [dia_li], cl
+    mov ax, DIAL_SZ
+    mul cx
+    add ax, DIA_LAYOUTS
+    mov si, ax
+    mov [dia_lay], si
+    call dia_fsum               ; DX = the whole column, CX = tag + last gap
+    test byte [dia_wf], DIA_W_DESK
+    jnz .d
+    sub dx, cx                  ; the titled fallback: no tag, no last gap
+    mov [dia_fh], dx
+    add dx, TITLE_H + 1
+    jmp short .h
+.d:
+    mov [dia_fh], dx
+.h:
+    mov [di+WT_H], dx
+    mov word [di+WT_W], DIA_FACE_W + 2
+    pop ax
+%ifdef DIA_RIGHT
+    sub ax, DIA_RIGHT + 1       ; the default place: the face DIA_RIGHT in
+    mov [di+WT_X], ax           ; from the right edge, at the layout's y -
+    mov ax, [si+DIAL_FY]        ; a state file's place overrides it
+    test byte [dia_wf], DIA_W_DESK
+    jnz .y
+    sub ax, TITLE_H
+.y:
+    mov [di+WT_Y], ax
+%endif
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dia_fsum - SI = a layout entry: DX = its whole face height, CX = its tag row
+; plus its last gap. Keeps the rest
+dia_fsum:
+    push ax
+    push bx
+    xor dx, dx
+    xor ax, ax
+    mov cl, [si+DIAL_N]
+    xor ch, ch
+    lea bx, [si+DIAL_CARDS]
+.s:
+    mov al, [bx]
+    add dx, ax
+    mov al, [bx+1]
+    add dx, ax
+    add bx, 2
+    loop .s
+    mov cl, [si+DIAL_TAG]       ; AL = the last gap
+    add dx, cx
+    add cx, ax
+    pop bx
+    pop ax
+    ret
+
+; dia_wplace - dia_load's restored place (AX, BX = the screen, DI = the
+; template): the FACE's origin out of the header - a v1 file's titled frame
+; converted - anchored with the face's size, into the template's FRAME. Out
+; SI = the frame's y; AX..DX spent
+dia_wplace:
+    mov si, [dia_file+DIA_H_X]
+    mov dx, [dia_file+DIA_H_Y]
+    test byte [dia_file+DIA_H_FLAGS], DIA_HF_CONT
+    jnz .f
+    inc si                      ; v1: a titled frame, so the face is a
+    add dx, TITLE_H             ; border in and a title bar down
+.f:
+    push dx
+    mov cx, [dia_file+DIA_H_SW]
+    mov dx, DIA_FACE_W
+    call dia_anchor
+    dec si                      ; the face is one column in from the frame,
+    mov [di+WT_X], si           ; in both forms
+    pop si
+    mov ax, bx
+    mov cx, [dia_file+DIA_H_SH]
+    mov dx, [dia_fh]
+    call dia_anchor
+    test byte [dia_wf], DIA_W_DESK
+    jnz .d
+    sub si, TITLE_H             ; wm_create clamps it onto the glass
+.d:
+    mov [di+WT_Y], si
+    ret
+
+; dia_wmade - dia_made's first step (BX = the window, ES = KERNEL_SEG): MAKE,
+; or the titled fallback's two promises; the prefilters and the wake. Every
+; register kept
+dia_wmade:
+    push ax
+    test byte [dia_wf], DIA_W_DESK
+    jz .t
+    mov al, 1
+    call OSAPI_WM_DESK          ; MAKE: we are in the entry proc, the window
+    jnc .cb                     ; hidden and nobody's yet (SPEC.md 11.103.9)
+    and byte [dia_wf], ~DIA_W_DESK & 0FFh   ; refused: painted as titled
+.t:
+    mov al, 1
+    call OSAPI_WM_OWNBG         ; every pixel is ours (OSAPI_WM_DAMAGE wants it)
+    mov al, OSAPI_SAVEU_ON | OSAPI_SAVEU_1BPP   ; ...and two colours, as v1
+    call OSAPI_WM_SAVEU
+.cb:
+    mov ax, dia_click
+    call OSAPI_WM_ONCLICK
+    mov ax, dia_mup
+    call OSAPI_WM_ONMOUSEUP
+    mov ax, DIA_WAKE            ; the hover edge's wake (kern_small's worker
+    call OSAPI_WM_ONWAKE        ; arm puts its own over it)
+    mov byte [dia_tagp], DIA_P_NONE
+    call OSAPI_GET_TICKS
+    mov [dia_tbeat], ax         ; the first beat is due at once
+    pop ax
+    ret
+
+; dia_place - SI = our window (ES = KERNEL_SEG): AX, DX = the FACE's origin.
+; Nothing else changes
+dia_place:
+    mov ax, [es:si+W_X]
+    inc ax
+    mov dx, [es:si+W_Y]
+    test byte [dia_wf], DIA_W_DESK
+    jnz .r
+    add dx, TITLE_H
+.r:
+    ret
+
+; dia_org - dia_place, kept in [dia_fx]/[dia_fy] for the painter
+dia_org:
+    call dia_place
+    mov [dia_fx], ax
+    mov [dia_fy], dx
+    ret
+
+; dia_refit - the beat's (SI = the window, ES = KERNEL_SEG, lock held): a
+; desk window dropped with its bottom past its display - ui_drag's bound is
+; the title bar's (SPEC.md 11.103.6) - is put back on it before the place is
+; saved. There is no move cell, so it is hidden, moved and shown: two
+; repaints, once, after a drop nobody should make. Every register kept
+dia_refit:
+    test byte [dia_wf], DIA_W_DESK
+    jz .r
+    test byte [es:si+W_FLAGS], 2
+    jz .r
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov bx, si
+    call OSAPI_WM_DISPLAY       ; BX = the display's height (AX CX SI DX)
+    pop si
+    mov ax, [es:si+W_Y]
+    add ax, [es:si+W_H]
+    cmp ax, bx
+    jle .x                      ; on the glass
+    sub bx, [es:si+W_H]
+    cmp bx, MBAR_H
+    jge .y
+    mov bx, MBAR_H
+.y:
+    push bx
+    mov bx, si
+    call OSAPI_WM_HIDE
+    pop ax
+    mov [es:si+W_Y], ax
+    call OSAPI_WM_SHOW
+.x:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.r:
+    ret
+
+; -----------------------------------------------------------------------------
+; dia_paint - W_PAINT (SI = the window, lock held, the kernel's clip armed):
+; only what intersects OSAPI_WM_DAMAGE, every pixel once - the ground columns
+; and the gaps by OSAPI_GFX_DESK, each card by DIA_PAINTCARD, the tag from
+; the state - then dia_painted
+; -----------------------------------------------------------------------------
+dia_paint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov bx, si
+    call OSAPI_WM_DAMAGE        ; CF = 1: the whole of it, AX..DX either way
+    mov [dia_dmg], ax
+    mov [dia_dmg+2], bx
+    mov [dia_dmg+4], cx
+    mov [dia_dmg+6], dx
+    call dia_org                ; AX, DX = the face
+    test byte [dia_wf], DIA_W_DESK
+    jz .cards
+    mov bx, dx                  ; the two ground columns, the column's height
+    add dx, [dia_fh]
+    dec dx
+    dec ax
+    mov cx, ax
+    call dia_desk               ; at x - 1...
+    add ax, DIA_FACE_W + 1
+    mov cx, ax
+    call dia_desk               ; ...and x + DIA_FACE_W
+.cards:
+    mov di, [dia_fy]            ; DI = the walk's screen y
+    mov si, [dia_lay]
+    lea ax, [si+DIAL_CARDS]
+    mov [dia_pp], ax
+    mov byte [dia_ci], 0
+.card:
+    mov bx, [dia_pp]
+    xor ax, ax
+    mov al, [bx]
+    mov [dia_ch], ax
+    mov [dia_cy], di
+    mov ax, [dia_fx]
+    mov bx, di
+    mov cx, ax
+    add cx, DIA_FACE_W - 1
+    mov dx, di
+    add dx, [dia_ch]
+    dec dx
+    call dia_cut                ; CF = 1: the damage misses it
+    jc .gap
+    sub bx, di                  ; card-local rows
+    sub dx, di
+    mov al, [dia_ci]
+    push di
+    call DIA_PAINTCARD
+    pop di
+.gap:
+    add di, [dia_ch]
+    mov bx, [dia_pp]
+    xor ax, ax
+    mov al, [bx+1]
+    or ax, ax
+    jz .next
+    mov [dia_gh], ax
+    mov bx, [dia_lay]
+    mov cl, [dia_ci]
+    inc cl
+    cmp cl, [bx+DIAL_N]
+    jb .g                       ; the last gap is the tag's - the titled
+    test byte [dia_wf], DIA_W_DESK  ; fallback has neither
+    jz .next
+.g:
+    mov ax, [dia_fx]
+    mov bx, di
+    mov cx, ax
+    add cx, DIA_FACE_W - 1
+    mov dx, di
+    add dx, [dia_gh]
+    dec dx
+    test byte [dia_wf], DIA_W_DESK
+    jz .tg
+    call dia_desk               ; the desktop, in the gap
+    jmp short .gn
+.tg:
+    call dia_tgap               ; white, with a rule through its middle
+.gn:
+    add di, [dia_gh]
+.next:
+    add word [dia_pp], 2
+    inc byte [dia_ci]
+    mov bx, [dia_lay]
+    mov al, [dia_ci]
+    cmp al, [bx+DIAL_N]
+    jb .card
+    test byte [dia_wf], DIA_W_DESK
+    jz .done
+    xor ax, ax                  ; the tag row: drawn whole if the damage
+    mov al, [bx+DIAL_TAG]       ; touches it
+    mov bx, di
+    mov dx, di
+    add dx, ax
+    dec dx
+    mov ax, [dia_fx]
+    mov cx, ax
+    add cx, DIA_FACE_W - 1
+    call dia_cut
+    jc .done
+    call dia_tagdraw
+.done:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jmp dia_painted             ; tail: kern_small hires its worker there
+
+; dia_cut - AX..DX (inclusive) intersected with the paint's damage: CF = 1
+; empty, else AX..DX the intersection
+dia_cut:
+    cmp ax, [dia_dmg]
+    jge .a
+    mov ax, [dia_dmg]
+.a:
+    cmp bx, [dia_dmg+2]
+    jge .b
+    mov bx, [dia_dmg+2]
+.b:
+    cmp cx, [dia_dmg+4]
+    jle .c
+    mov cx, [dia_dmg+4]
+.c:
+    cmp dx, [dia_dmg+6]
+    jle .d
+    mov dx, [dia_dmg+6]
+.d:
+    cmp ax, cx
+    jg .e
+    cmp bx, dx
+    jg .e
+    clc
+    ret
+.e:
+    stc
+    ret
+
+; dia_desk - the desktop's own ground over AX..DX, cut to the damage. Every
+; register kept
+dia_desk:
+    push ax
+    push bx
+    push cx
+    push dx
+    call dia_cut
+    jc .x
+    call OSAPI_GFX_DESK
+.x:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dia_tgap - the titled fallback's gap (AX..DX = it, DI = its top, [dia_gh]
+; its rows): white with a 1 px rule through its middle, composed and put down
+; in ONE BLIT1 - never a fill and a line over it. Every register kept
+dia_tgap:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call dia_cut
+    jc .x
+    push bx
+    push dx
+    push di                     ; the composer spends DI
+    mov ax, [dia_gh]
+    mov [gfxe_bh], ax
+    mov ax, 0FFFFh
+    call gfxe_bclear            ; the gap's rows, white...
+    mov byte [gfxe_tsty], 0
+    xor ax, ax
+    mov bx, [dia_gh]
+    shr bx, 1
+    mov cx, DIA_FACE_W
+    mov dx, 1
+    call gfxe_bfill             ; ...and the rule, black
+    pop di
+    pop dx
+    pop bx
+    mov si, bx
+    sub si, di                  ; the band row the damage starts at
+    sub dx, bx
+    inc dx                      ; its rows
+    mov ax, [dia_fx]
+    mov cx, DIA_FACE_W
+    call dia_blit
+.x:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dia_blit - the band onto the glass: AX = x, BX = y, CX = width, DX = rows,
+; SI = the band row to start from. One OSAPI_GFX_BLIT1; every register kept
+dia_blit:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push bp
+    push es
+    push ax
+    push dx
+    mov ax, GFXE_BAND_ST
+    mul si
+    add ax, GFXE_BAND_BUF
+    mov si, ax
+    pop dx
+    pop ax
+    push ds
+    pop es
+    mov bp, GFXE_BAND_ST
+    call OSAPI_GFX_BLIT1
+    pop es
+    pop bp
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dia_slabs - a DIA_PAINTCARD that composes: AL = the card, BX..DX = its
+; damaged rows (card-local); [dia_fx], [dia_cy], [dia_ch] as dia_paint left
+; them. For each GFXE_BAND_H-row slab those rows touch: the band papered
+; white, DIA_COMPOSE (AL = the card, BX = the slab's first card row, CX = its
+; rows - compose at y = card row - BX), and the damaged rows of it blitted:
+; ONE OSAPI_GFX_BLIT1 a slab. Every register kept
+; -----------------------------------------------------------------------------
+dia_slabs:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov [dia_sc], al
+    mov [dia_sr0], bx
+    mov [dia_sr1], dx
+    mov ax, bx
+    xor dx, dx
+    mov cx, GFXE_BAND_H
+    div cx
+    mul cx
+    mov [dia_ss], ax            ; the first slab touched
+.slab:
+    mov cx, [dia_ch]
+    sub cx, [dia_ss]
+    cmp cx, GFXE_BAND_H
+    jbe .n
+    mov cx, GFXE_BAND_H
+.n:
+    mov [gfxe_bh], cx
+    mov ax, 0FFFFh
+    call gfxe_bclear            ; white paper: a card is never themed
+%ifdef DIA_COMPOSE
+    mov al, [dia_sc]
+    mov bx, [dia_ss]
+    mov cx, [gfxe_bh]
+    call DIA_COMPOSE
+%endif
+    mov bx, [dia_sr0]           ; the rows of this slab that are damaged
+    cmp bx, [dia_ss]
+    jge .b0
+    mov bx, [dia_ss]
+.b0:
+    mov dx, [dia_ss]
+    add dx, [gfxe_bh]
+    dec dx
+    cmp dx, [dia_sr1]
+    jle .b1
+    mov dx, [dia_sr1]
+.b1:
+    mov si, bx
+    sub si, [dia_ss]
+    sub dx, bx
+    inc dx
+    add bx, [dia_cy]
+    mov ax, [dia_fx]
+    mov cx, DIA_FACE_W
+    call dia_blit
+    mov ax, [dia_ss]
+    add ax, GFXE_BAND_H
+    mov [dia_ss], ax
+    cmp ax, [dia_sr1]
+    jle .slab
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dia_want - AL = the tag picture the state asks for. Nothing else changes
+dia_want:
+    mov al, [dia_hv]
+    cmp al, DIA_HV_SHOWN
+    jb .plate
+    mov al, DIA_P_HAND
+    test byte [dia_wf], DIA_W_ARMED
+    jz .r
+    inc ax                      ; DIA_P_ARMED
+    ret
+.plate:
+    mov al, DIA_P_REST
+    test byte [dia_wf], DIA_W_FOCUS
+    jz .r
+    inc ax                      ; DIA_P_FOCUS
+.r:
+    ret
+
+; -----------------------------------------------------------------------------
+; dia_tagdraw - the tag row as the state asks ([dia_fx]/[dia_fy] the face,
+; lock held, clipped): REST and FOCUS are ground | plate | ground - two
+; OSAPI_GFX_DESK and one BLIT1 - and the handle ONE face-wide BLIT1. Every
+; register kept
+; -----------------------------------------------------------------------------
+dia_tagdraw:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call dia_want
+    mov [dia_tagp], al
+    mov bx, [dia_lay]
+    xor cx, cx
+    mov cl, [bx+DIAL_TAG]
+    mov [gfxe_bh], cx
+    mov dx, [dia_fy]
+    add dx, [dia_fh]
+    sub dx, cx
+    mov [dia_ty], dx            ; the tag row's screen top
+    cmp al, DIA_P_HAND
+    jae .hand
+    push ax                     ; --- the PLATE: white, or inverse focused
+    xor bx, bx
+    cmp al, DIA_P_FOCUS
+    je .p
+    dec bx
+.p:
+    mov ax, bx
+    call gfxe_bclear
+    pop ax
+    mov bl, 0
+    cmp al, DIA_P_FOCUS
+    jne .s
+    mov bl, GFXE_INV
+.s:
+    mov [gfxe_tsty], bl
+    mov si, dia_tags
+    mov cx, 4
+    mov dx, [gfxe_bh]
+    sub dx, 8
+    shr dx, 1
+    call gfxe_text
+%if DIA_PX > 0
+    mov ax, [dia_fx]            ; the ground left of it...
+    mov cx, ax
+    add cx, DIA_PX - 1
+    call dia_tagrows
+    call OSAPI_GFX_DESK
+%endif
+    mov ax, [dia_fx]            ; ...the plate...
+    add ax, DIA_PX
+    mov cx, DIA_PW
+    jmp short .put
+.hand:
+    push ax                     ; --- the HANDLE: a black bar
+    xor ax, ax
+    call gfxe_bclear
+    pop ax
+    push ax
+    cmp al, DIA_P_ARMED
+    je .lit
+    mov byte [gfxe_tsty], GFXE_INV  ; the close box white...
+    mov ax, DIA_XX
+    call dia_boxy
+    mov cx, DIA_XW
+    mov dx, DIA_XW
+    call gfxe_bfill
+    mov byte [gfxe_tsty], 0     ; ...with a black x
+    jmp short .xm
+.lit:
+    mov byte [gfxe_tsty], GFXE_INV  ; armed: the box black, its x white
+.xm:
+    call dia_boxy
+    mov dx, bx
+    add dx, 2
+    mov si, dia_xbits
+    mov cx, DIA_XX + 2
+    call gfxe_bits
+    pop ax
+    mov byte [gfxe_tsty], GFXE_INV  ; the name in white, centred
+    mov si, dia_tags
+    mov cx, DIA_NX
+    mov dx, [gfxe_bh]
+    sub dx, 8
+    shr dx, 1
+    call gfxe_text
+    mov si, dia_grip            ; ...and the grip
+    mov cx, DIA_GX
+    mov dx, [gfxe_bh]
+    sub dx, 7
+    shr dx, 1
+    call gfxe_bits
+    mov ax, [dia_fx]
+    mov cx, DIA_FACE_W
+.put:
+    mov bx, [dia_ty]
+    mov dx, [gfxe_bh]
+    xor si, si
+    call dia_blit
+    cmp byte [dia_tagp], DIA_P_HAND
+    jae .out
+%if DIA_PX + DIA_PW < DIA_FACE_W
+    mov ax, [dia_fx]            ; ...and the ground right of it
+    add ax, DIA_PX + DIA_PW
+    mov cx, [dia_fx]
+    add cx, DIA_FACE_W - 1
+    call dia_tagrows
+    call OSAPI_GFX_DESK
+%endif
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dia_tagrows - BX, DX = the tag row's screen rows
+dia_tagrows:
+    mov bx, [dia_ty]
+    mov dx, bx
+    add dx, [gfxe_bh]
+    dec dx
+    ret
+
+; dia_boxy - BX = the close box's first band row, (tag rows - 10) / 2
+dia_boxy:
+    mov bx, [gfxe_bh]
+    sub bx, DIA_XW
+    shr bx, 1
+    ret
+
+; dia_tagsync - the tag to what the state asks, drawn only on a change of the
+; picture, under OSAPI_WM_CLIP_SET (lock held). Every register kept
+dia_tagsync:
+    test byte [dia_wf], DIA_W_DESK
+    jz .r
+    push ax
+    push bx
+    push dx
+    push si
+    push es
+    call dia_want
+    cmp al, [dia_tagp]
+    je .x
+    mov ax, KERNEL_SEG
+    mov es, ax
+    mov si, [dia_win]
+    test byte [es:si+W_FLAGS], 2
+    jz .x                       ; not on the glass: the next paint has it
+    mov bx, si
+    call OSAPI_WM_CLIP_SET
+    jc .x                       ; none of it showing
+    call dia_org
+    call dia_tagdraw
+.x:
+    pop es
+    pop si
+    pop dx
+    pop bx
+    pop ax
+.r:
+    ret
+
+; dia_hit - CX, DX = a screen point, [dia_fx]/[dia_fy] the face. CF = 0 a
+; card: AL = it, CX, DX card-relative. CF = 1 the frame - a ground column, a
+; gap or the tag row - and AH = 1 when the point is on the handle's x
+dia_hit:
+    push bx
+    push si
+    push bp
+    sub cx, [dia_fx]
+    sub dx, [dia_fy]
+    mov si, [dia_lay]
+    lea bx, [si+DIAL_CARDS]
+    xor ax, ax
+    cmp cx, DIA_FACE_W
+    jae .no                     ; a ground column (unsigned: -1 too)
+.c:
+    cmp al, [si+DIAL_N]
+    jae .tag
+    push ax
+    mov al, [bx]
+    xor ah, ah
+    mov bp, ax
+    pop ax
+    cmp dx, bp
+    jl .card
+    sub dx, bp
+    push ax
+    mov al, [bx+1]
+    xor ah, ah
+    mov bp, ax
+    pop ax
+    cmp dx, bp
+    jl .no                      ; a gap
+    sub dx, bp
+    add bx, 2
+    inc al
+    jmp short .c
+.tag:                           ; DX = the row in the tag row
+    cmp cx, DIA_XX
+    jl .no
+    cmp cx, DIA_XX + DIA_XW
+    jge .no
+    xor ax, ax
+    mov al, [si+DIAL_TAG]
+    sub ax, DIA_XW
+    shr ax, 1
+    cmp dx, ax
+    jl .no
+    add ax, DIA_XW
+    cmp dx, ax
+    jge .no
+    mov ax, 0100h
+    jmp short .fr
+.no:
+    xor ax, ax
+.fr:
+    stc
+    jmp short .out
+.card:
+    clc
+.out:
+    pop bp
+    pop si
+    pop bx
+    ret
+
+; dia_ctop - AL = a card: BX = its top, face-relative. Keeps the rest
+dia_ctop:
+    push ax
+    push cx
+    push si
+    mov si, [dia_lay]
+    lea si, [si+DIAL_CARDS]
+    xor bx, bx
+    mov cl, al
+    xor ch, ch
+    jcxz .r
+    xor ax, ax
+.l:
+    mov al, [si]
+    add bx, ax
+    mov al, [si+1]
+    add bx, ax
+    add si, 2
+    loop .l
+.r:
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dia_click - W_ONCLICK (SI = the window, CX, DX the press, lock held). A card
+; is the package's (DIA_ONCARD); on a desk window anything else is the
+; frame's: the x - once the handle was SHOWING before this press - arms, and
+; the rest posts OSAPI_WM_DESK DRAG (SPEC.md 11.103.6). A press reveals the
+; handle at once, and hands the widget the bar (ui.inc's menu_activate did).
+; -----------------------------------------------------------------------------
+dia_click:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov [dia_qx], cx
+    mov [dia_qy], dx
+    mov al, [dia_hv]
+    mov [dia_pre], al
+    call dia_org
+    mov cx, [dia_qx]
+    mov dx, [dia_qy]
+    call dia_hit
+    jc .frame
+    inc ax
+    mov [dia_press], al
+    dec ax
+%ifdef DIA_ONCARD
+    push si
+    call DIA_ONCARD
+    pop si
+%endif
+    jmp short .after
+.frame:
+    test byte [dia_wf], DIA_W_DESK
+    jz .focus                   ; the titled frame is the kernel's
+    cmp byte [dia_pre], DIA_HV_SHOWN
+    jb .drag                    ; the x only once it was SHOWING
+    or ah, ah
+    jz .drag
+    or byte [dia_wf], DIA_W_ARMED
+    jmp short .after
+.drag:
+    mov bx, si
+    mov al, 2
+    call OSAPI_WM_DESK          ; the kernel's drag, once we return
+.after:
+    test byte [dia_wf], DIA_W_DESK
+    jz .focus
+    mov byte [dia_hv], DIA_HV_SHOWN ; a press reveals at once
+.focus:
+    call dia_focus
+    call dia_tagsync
+    call dia_arm
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dia_mup - W_ONMOUSEUP (SI = the window, CX, DX the release, lock held): an
+; armed x acts only if the release is ON it - a slide off cancels (SPEC.md
+; 13.5) - and a card's release is DIA_ONCARDUP's, card-relative
+dia_mup:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    test byte [dia_wf], DIA_W_ARMED
+    jz .card
+    and byte [dia_wf], ~DIA_W_ARMED & 0FFh
+    mov [dia_qx], cx
+    mov [dia_qy], dx
+    call dia_org
+    mov cx, [dia_qx]
+    mov dx, [dia_qy]
+    call dia_hit
+    jnc .stay
+    or ah, ah
+    jz .stay
+    call dia_quit               ; CF = 0: going - nothing drawn after this
+    jnc .out
+.stay:
+    call dia_tagsync            ; the x unlit, or the plate if it was left
+    jmp short .out
+.card:
+    mov al, [dia_press]
+    or al, al
+    jz .out
+    mov byte [dia_press], 0
+%ifdef DIA_ONCARDUP
+    dec ax
+    mov [dia_sc], al
+    mov [dia_qx], cx
+    mov [dia_qy], dx
+    call dia_org
+    mov al, [dia_sc]
+    call dia_ctop
+    mov cx, [dia_qx]
+    sub cx, [dia_fx]
+    mov dx, [dia_qy]
+    sub dx, [dia_fy]
+    sub dx, bx
+    mov al, [dia_sc]
+    push si
+    call DIA_ONCARDUP
+    pop si
+%endif
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dia_quit - the widget's close (SI = the window, lock held): dia_close's
+; negotiator, then OSAPI_WM_CLOSE. CF = 0 the close is under way - draw
+; nothing more and return; CF = 1 it was declined (the disk, SPEC.md 107.5)
+dia_quit:
+    call dia_close
+    jc .r
+    push bx
+    mov bx, si
+    call OSAPI_WM_CLOSE
+    pop bx
+    clc
+.r:
+    ret
+
+; -----------------------------------------------------------------------------
+; dia_wake - W_ONWAKE (SI = the window, the UI task, NO lock). The worker arm's
+; kick is v1's beat; otherwise it is the hover edge (SPEC.md 11.103.7), and
+; LEVEL-triggered: WF_HOVER is read, the state moves, a deadline is armed -
+; and nothing is drawn, there being no lock
+; -----------------------------------------------------------------------------
+dia_wake:
+    test byte [dia_st], DIA_S_WORKER
+    jz .hov
+    call OSAPI_GFX_LOCK
+    call dia_beat
+    call OSAPI_GFX_UNLOCK
+    ret
+.hov:
+    push ax
+    push es
+    mov ax, KERNEL_SEG
+    mov es, ax
+    mov al, [dia_hv]
+    test byte [es:si+W_FLAGS+1], WF_HOVER >> 8
+    jz .off
+    cmp al, DIA_HV_HIDDEN
+    jne .on2
+    mov byte [dia_hv], DIA_HV_DWELL
+    mov ax, DIA_HOVER_T
+    jmp short .dl
+.on2:
+    cmp al, DIA_HV_LINGER
+    jne .x
+    mov byte [dia_hv], DIA_HV_SHOWN ; back before the linger ran out
+    jmp short .x
+.off:
+    cmp al, DIA_HV_DWELL
+    jne .off2
+    mov byte [dia_hv], DIA_HV_HIDDEN    ; gone before the dwell ran out
+    jmp short .x
+.off2:
+    cmp al, DIA_HV_SHOWN
+    jne .x
+    mov byte [dia_hv], DIA_HV_LINGER
+    mov ax, DIA_LEAVE_T
+.dl:
+    call dia_hset
+    call dia_arm
+.x:
+    pop es
+    pop ax
+    ret
+
+; dia_tick - the timer (SI = the window, lock held), which serves the beat,
+; the dwell or linger and the focus poll at once: each keeps an ABSOLUTE
+; deadline and dia_arm takes the soonest, so a hover deadline never delays a
+; beat and a beat that comes early does nothing early
+dia_tick:
+    push ax
+    push bx
+    call OSAPI_GET_TICKS
+    mov bx, ax
+    sub bx, [dia_tbeat]
+    js .nb                      ; the beat is not due
+    push ax
+    call dia_beat
+    pop ax
+    xor bx, bx
+    xchg bl, [dia_nx]           ; a sooner beat the application asked for,
+    or bl, bl                   ; once (SPEC.md 107.5)
+    jnz .t
+    mov bl, DIA_TICKS
+.t:
+    add ax, bx
+    mov [dia_tbeat], ax
+.nb:
+    call dia_hvtick
+    call dia_focus
+    call dia_tagsync
+    call dia_arm
+    pop bx
+    pop ax
+    ret
+
+; dia_hvtick - a dwell or a linger that has run out (lock held)
+dia_hvtick:
+    push ax
+    push cx
+    push dx
+    push si
+    push es
+    mov ax, KERNEL_SEG
+    mov es, ax
+    mov si, [dia_win]
+    mov al, [dia_hv]
+    cmp al, DIA_HV_DWELL
+    je .dw
+    cmp al, DIA_HV_LINGER
+    jne .x
+    call dia_hdue
+    jc .x
+    test byte [dia_wf], DIA_W_ARMED
+    jnz .wait                   ; the x is held: its release decides
+    test byte [es:si+W_FLAGS+1], WF_HOVER >> 8
+    jz .hide
+    mov byte [dia_hv], DIA_HV_SHOWN
+    jmp short .x
+.wait:
+    mov ax, DIA_LEAVE_T
+    call dia_hset
+    jmp short .x
+.dw:
+    call dia_hdue
+    jc .x
+    test byte [es:si+W_FLAGS+1], WF_HOVER >> 8
+    jz .hide
+    call OSAPI_MOUSE            ; AL = the buttons
+    test al, 3
+    jz .show
+    mov ax, DIA_HOVER_T         ; a button held: never revealed (SPEC.md
+    call dia_hset               ; 107.11) - ask again a dwell later
+    jmp short .x
+.show:
+    mov byte [dia_hv], DIA_HV_SHOWN
+    jmp short .x
+.hide:
+    mov byte [dia_hv], DIA_HV_HIDDEN
+.x:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; dia_hdue - CF = 1 the dwell or linger is still ahead. AX spent
+dia_hdue:
+    call OSAPI_GET_TICKS
+    sub ax, [dia_thov]
+    js .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; dia_hset - AX = ticks from now: the dwell's or linger's deadline. AX spent
+dia_hset:
+    push bx
+    mov bx, ax
+    call OSAPI_GET_TICKS
+    add ax, bx
+    mov [dia_thov], ax
+    pop bx
+    ret
+
+; dia_focus - does the widget own the menu bar (OSAPI_MENU_OWNER, an inline
+; cell)? On a change, DIA_ONFOCUS (AL = 1 gained, 0 lost; lock held). A desk
+; window's only: the titled fallback is an ordinary window. Every register
+; kept
+dia_focus:
+    test byte [dia_wf], DIA_W_DESK
+    jz .r
+    push ax
+    push bx
+    call OSAPI_MENU_OWNER
+    cmp bx, [dia_win]
+    je .own
+    test byte [dia_wf], DIA_W_FOCUS
+    jz .x
+    and byte [dia_wf], ~DIA_W_FOCUS & 0FFh
+    mov al, 0
+    jmp short .say
+.own:
+    test byte [dia_wf], DIA_W_FOCUS
+    jnz .x
+    or byte [dia_wf], DIA_W_FOCUS
+    mov al, 1
+.say:
+%ifdef DIA_ONFOCUS
+    push si
+    mov si, [dia_win]
+    call DIA_ONFOCUS
+    pop si
+%endif
+.x:
+    pop bx
+    pop ax
+.r:
+    ret
+
+; dia_arm - the one timer, at the soonest deadline: the beat's, the dwell's
+; or linger's, and - only while the widget owns the bar - the focus poll's
+; DIA_FOCUS_T. Every register kept
+dia_arm:
+    push ax
+    push bx
+    push cx
+    call OSAPI_GET_TICKS
+    mov cx, ax
+    mov ax, [dia_tbeat]
+    sub ax, cx
+    cmp ax, 1
+    jge .b
+    mov ax, 1
+.b:
+    mov bl, [dia_hv]
+    cmp bl, DIA_HV_DWELL
+    je .h
+    cmp bl, DIA_HV_LINGER
+    jne .f
+.h:
+    mov bx, [dia_thov]
+    sub bx, cx
+    cmp bx, 1
+    jge .h1
+    mov bx, 1
+.h1:
+    cmp bx, ax
+    jge .f
+    mov ax, bx
+.f:
+    test byte [dia_wf], DIA_W_FOCUS
+    jz .set
+    cmp ax, DIA_FOCUS_T
+    jle .set
+    mov ax, DIA_FOCUS_T
+.set:
+    mov bx, [dia_win]
+    call OSAPI_WM_TIMER         ; CF = 1 on kern_small: there is no timer, and
+    pop cx                      ; the worker's beat is the whole of it
+    pop bx
+    pop ax
+    ret
+
+; the name, and the handle's two bit records (GFXE_BITS: db rows, then words)
+dia_tags    db DIA_TAG, 0
+dia_xbits   db 6                ; the x, 6 x 6, two in from the box's corner
+            dw 08400h, 04800h, 03000h, 03000h, 04800h, 08400h
+dia_grip    db 7                ; the grip: three dotted lines, 13 wide
+            dw 0AAA8h, 0, 0, 0AAA8h, 0, 0, 0AAA8h
+%endif ; DIA_WIDGET
 
 dia_dname   db DIA_DATNAME, 0
 dia_dsys    db 'SYSTEM', 0

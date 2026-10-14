@@ -35,6 +35,12 @@ were written the same afternoon. So:
      no small apps disk carries SYSTEM/DIA or a DESKCAL.O88 - a widget
      belongs to the BOOT volume, and its row names a path on it (SPEC.md
      107.1, the THEWIRE rule).
+  W  the WIDGET's (v2 wave 3, SPEC.md 107.11): DIA_HF_CONT is the host
+     tool's; every DIA_WIDGET bss field the soak rows read out of a running
+     probe (dia_hv, dia_tagp, dia_wf, dia_li, ...) is where
+     os88dia.widget_off() says, EVALUATED BY NASM from the desk probe's own
+     build; and DIA_HOVER_T / DIA_LEAVE_T are kern_big's DOCK_HOVER_T /
+     DOCK_LEAVE_T, which the widget reuses by value (SPEC.md 30.6).
   G  the Desk Calendar's numbers are the host tool's: the payload's layout
      (deskcal.asm's DCP_* against os88dia.py's DESKCAL_*), its own bss
      fields the soak rows read out of a running guest (DC_BSS_*), and the
@@ -223,6 +229,26 @@ def deskcal_equs(tmp):
     return dict(zip(names, struct.unpack_from("<%dH" % len(names), b, i)))
 
 
+def probe_equs(tmp, names, defines=("-DDP_DESK",)):
+    """tests/diaprobe/diaprobe.asm's numbers, evaluated by NASM in the build
+    `defines` makes - deskcal_equs' marker shape."""
+    src = open(os.path.join(ROOT, "tests", "diaprobe", "diaprobe.asm")).read()
+    probe = ("\n    db 'T_DIA_PROBE'\n" +
+             "".join("    dw %s\n" % n for n in names))
+    at = src.rindex("    align 16, db 0")
+    path = os.path.join(tmp, "diaprobe_probe.asm")
+    open(path, "w").write(src[:at] + probe + src[at:])
+    out = os.path.join(tmp, "diaprobe_probe.bin")
+    r = subprocess.run([NASM, "-f", "bin", "-w+error", "-I", "apps/"]
+                       + list(defines) + ["-o", out, path],
+                       capture_output=True, text=True, cwd=ROOT)
+    if r.returncode:
+        raise RuntimeError(r.stderr.strip()[-400:])
+    b = open(out, "rb").read()
+    i = b.index(b"T_DIA_PROBE") + len("T_DIA_PROBE")
+    return dict(zip(names, struct.unpack_from("<%dH" % len(names), b, i)))
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="t_dia.")
     try:
@@ -299,6 +325,45 @@ def main():
                   "writes that field" % (name, off), got=got, want=want,
                   why="the package and the host tool read one file; a skew "
                       "is a state file every boot calls DAMAGED")
+
+        # W ---------------------------------------------------------------
+        check(inc.get("DIA_HF_CONT") == os88dia.DIA_HF_CONT,
+              "the face-origin flag agrees", got=inc.get("DIA_HF_CONT"),
+              want=os88dia.DIA_HF_CONT,
+              why="a widget's state file holds its FACE when +3 bit 1 is "
+                  "set (SPEC.md 107.11); a skew converts a face twice")
+        names = ["%s - os88_image_end" % n for n, _ in os88dia.WIDGET_FIELDS]
+        names += ["DIA_BSS", "DIA_HOVER_T", "DIA_LEAVE_T", "DIA_W_DESK",
+                  "DIA_W_FOCUS", "DIA_W_ARMED"]
+        try:
+            pe = probe_equs(tmp, names)
+        except (RuntimeError, ValueError) as ex:
+            pe = {}
+            check(False, "the desk probe assembles with the marker",
+                  got=str(ex))
+        wo = os88dia.widget_off(pe.get("DIA_BSS", 0), 0)
+        for n, _ in os88dia.WIDGET_FIELDS:
+            got = pe.get("%s - os88_image_end" % n)
+            check(got == wo[n], "os88dia.inc's %s is where widget_off() "
+                  "says (+%s)" % (n, wo[n]), got=got, want=wo[n],
+                  why="tests/desklayer.py reads the include's state out of a "
+                      "running probe by these offsets")
+        for n in ("DIA_W_DESK", "DIA_W_FOCUS", "DIA_W_ARMED"):
+            check(pe.get(n) == getattr(os88dia, n), "%s agrees" % n,
+                  got=pe.get(n), want=getattr(os88dia, n))
+        try:
+            kd = nasm_eval(["DOCK_HOVER_T", "DOCK_LEAVE_T"], "big", tmp)
+        except (KeyError, RuntimeError) as ex:
+            kd = {}
+            check(False, "kern_big's DOCK_HOVER_T and DOCK_LEAVE_T evaluate",
+                  got=str(ex))
+        for mine, theirs in (("DIA_HOVER_T", "DOCK_HOVER_T"),
+                             ("DIA_LEAVE_T", "DOCK_LEAVE_T")):
+            check(pe.get(mine) == kd.get(theirs) and pe.get(mine),
+                  "os88dia.inc's %s is the dock's %s" % (mine, theirs),
+                  got=pe.get(mine), want=kd.get(theirs),
+                  why="a widget's handle comes and goes on the strip's own "
+                      "timings, by name in SPEC.md 30.6")
 
         # D ---------------------------------------------------------------
         try:

@@ -53,6 +53,14 @@
 ;                 one OSAPI_GFX_POINTS (SPEC.md 5.6.9). For a SPARSE figure -
 ;                 a few pixels scattered over a large area - where a band
 ;                 would be mostly paper.
+;   GFXE_TEXT     the kernel's 8x8 glyphs INTO the band at any pixel x -
+;                 normal or inverse, x1/x2/x3, optionally bold - and a
+;                 sub-rectangle fill; rows clipped to the band, so a card can
+;                 be composed a slab at a time (SPEC.md 5.12.8). Implies
+;                 GFXE_BAND.
+;   GFXE_BITS     a 16-wide bit record ANDed or ORed into the band at any x:
+;                 a tick, a bell, a close box's x (SPEC.md 5.12.8). Implies
+;                 GFXE_BAND.
 ;   GFXE_WALK     SPEC.md 5.6.7's RESUMABLE walk, in your image: "draw the
 ;                 next N pixels of this line", state in a block you own, so
 ;                 the erase replays exactly what the draw laid down. Implies
@@ -90,6 +98,12 @@
   %define GFXE_BAND                     ; the lattice, downward only: a line
 %endif                                  ; needs somewhere to land, a band does
                                         ; not need a line
+%ifdef GFXE_TEXT
+  %define GFXE_BAND                     ; glyphs land in the band (SPEC.md
+%endif                                  ; 5.12.8)...
+%ifdef GFXE_BITS
+  %define GFXE_BAND                     ; ...and so do bit records
+%endif
 %ifdef GFXE_WALK
   %define GFXE_POINTS                   ; ...and a walk needs somewhere too.
 %endif                                  ; A BAND is the wrong one for it: two
@@ -438,6 +452,396 @@ gfxe_line:
     ret
 %endif ; GFXE_LINE
 
+%ifdef GFXE_TEXT
+  %define GFXE_STYLED
+%endif
+%ifdef GFXE_BITS
+  %define GFXE_STYLED
+%endif
+
+%ifdef GFXE_STYLED
+; =============================================================================
+; GFXE_TEXT / GFXE_BITS - a widget's face, composed (SPEC.md 5.12.8, 107.11)
+;
+; Both draw into the band at the caller's stride, in the STYLE [gfxe_tsty]:
+;
+;   GFXE_INV   set bits: WHITE ink on a black ground. Without it the ink
+;              CLEARS bits - black on the lit paper, the polarity above
+;   GFXE_BOLD  the glyph ORed with itself one pixel to the right
+;   GFXE_X2 / GFXE_X3   the glyph at twice or three times its size
+;
+; THE OPPOSITE POLARITY THE HEADER KEEPS OUT IS HERE, and it is tested: the
+; DIA widget's focused plate and its handle are white text on black, and
+; tests/desklayer.py's deskground leg compares them pixel for pixel with the
+; guest's own font. Only these two capabilities carry it.
+;
+; x is a band PIXEL and need not be on the byte grid: a row's pattern is built
+; left-aligned in 32 bits (DX:AX, bit 15 of DX leftmost) and shifted into
+; place. y is SIGNED, and a row outside 0 .. GFXE_BAND_H - 1 is skipped - so
+; a card composed one slab at a time draws a glyph that straddles two slabs
+; half into each. Bytes past the stride are skipped; x itself is >= 0.
+; =============================================================================
+GFXE_INV    equ 1
+GFXE_BOLD   equ 2
+GFXE_X2     equ 4
+GFXE_X3     equ 8
+
+; gfxe_rowput - merge one row's pattern into the band
+; in:  DX:AX = the pattern, left-aligned; BX = the band row (the caller has
+;      clipped it to 0 .. GFXE_BAND_H - 1); [gfxe_tx] = x (>= 0)
+; out: clobbers AX, BX, CX, DX, DI, flags
+gfxe_rowput:
+    mov cx, [gfxe_tx]
+    and cl, 7
+    jz .al
+.sh:
+    shr dx, 1                   ; the pixel phase: x & 7 places right
+    rcr ax, 1
+    dec cl
+    jnz .sh
+.al:
+    push ax
+    push dx
+    mov ax, bx
+    GFXE_ROWOFF                 ; AX = the row's offset (CL, and DX/BX on the
+    mov di, ax                  ; mul arm - both banked or spent)
+    mov ax, [gfxe_tx]
+    mov cl, 3
+    shr ax, cl                  ; the first byte column
+    add di, ax
+    mov cx, GFXE_BAND_ST
+    sub cx, ax                  ; bytes left in the row (pop writes no flag)
+    pop dx
+    pop ax
+    jbe .out                    ; x past the stride: nothing
+    mov bh, 4                   ; at most four bytes: DH, DL, AH, AL
+.b:
+    mov bl, dh
+    or bl, bl
+    jz .nx                      ; nothing in this byte
+    test byte [gfxe_tsty], GFXE_INV
+    jnz .o
+    not bl                      ; black ink: clear the bits
+    and [GFXE_BAND_BUF + di], bl
+    jmp short .nx
+.o:
+    or [GFXE_BAND_BUF + di], bl ; white ink: set them
+.nx:
+    inc di
+    dec cx
+    jz .out                     ; the stride's end
+    mov dh, dl
+    mov dl, ah
+    mov ah, al
+    dec bh
+    jnz .b
+.out:
+    ret
+%endif ; GFXE_STYLED
+
+%ifdef GFXE_TEXT
+; -----------------------------------------------------------------------------
+; gfxe_glyph - one 8x8 glyph into the band, in the style [gfxe_tsty]
+; in:  AL = the character, CX = x (>= 0), DX = y (signed); band coordinates
+; out: CX = x + 8 x the scale; clobbers AX, BX, DX, SI, DI, BP, flags. ES kept
+;
+; The kernel's table (OSAPI_FONT_GLYPHS), asked for once. A code outside it
+; advances the pen and draws nothing.
+; -----------------------------------------------------------------------------
+gfxe_glyph:
+    push es
+    mov [gfxe_tx], cx
+    mov [gfxe_ty], dx
+    mov bl, [gfxe_tsty]
+    and bl, GFXE_X2 | GFXE_X3
+    mov cl, 2
+    shr bl, cl
+    inc bl                      ; 1, 2 or 3
+    cmp bl, 3
+    jbe .s
+    mov bl, 3
+.s:
+    mov [gfxe_ts], bl
+    call gfxe_font
+    cmp al, [gfxe_f0]
+    jb .adv
+    cmp al, [gfxe_f1]
+    ja .adv
+    sub al, [gfxe_f0]
+    xor ah, ah
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1                   ; 8 bytes a glyph
+    add ax, [gfxe_foff]
+    mov si, ax
+    mov es, [gfxe_fseg]
+    mov bp, 8                   ; the glyph's eight rows
+.row:
+    mov al, [es:si]
+    inc si
+    call gfxe_expand            ; DX:AX = the row, scaled, bolded, left-aligned
+    mov cl, [gfxe_ts]           ; ...once a scale row
+.rep:
+    mov bx, [gfxe_ty]
+    inc word [gfxe_ty]
+    or bx, bx
+    js .skip                    ; above the band
+    cmp bx, GFXE_BAND_H
+    jge .skip                   ; below it
+    push ax
+    push cx
+    push dx
+    call gfxe_rowput
+    pop dx
+    pop cx
+    pop ax
+.skip:
+    dec cl
+    jnz .rep
+    dec bp
+    jnz .row
+.adv:
+    mov al, [gfxe_ts]
+    mov cl, 3
+    shl al, cl
+    xor ah, ah
+    mov cx, [gfxe_tx]
+    add cx, ax
+    pop es
+    ret
+
+; gfxe_expand - AL = a glyph row -> DX:AX, left-aligned: [gfxe_ts] copies of
+; each bit, then ORed one pixel right with GFXE_BOLD. Keeps BX and CX
+gfxe_expand:
+    push bx
+    push cx
+    cmp byte [gfxe_ts], 1
+    jne .wide
+    mov dh, al
+    xor dl, dl
+    xor ax, ax
+    jmp short .bold
+.wide:
+    mov bl, al                  ; 8 x s bits, built right-aligned...
+    xor ax, ax
+    xor dx, dx
+    mov bh, 8
+.bit:
+    mov ch, 0
+    shl bl, 1
+    adc ch, 0                   ; CH = this pixel
+    mov cl, [gfxe_ts]
+.cp:
+    shl ax, 1
+    rcl dx, 1
+    or al, ch
+    dec cl
+    jnz .cp
+    dec bh
+    jnz .bit
+    cmp byte [gfxe_ts], 2       ; ...then left-aligned: 16 bits are AX, 24
+    jne .three                  ; are DL:AX
+    mov dx, ax
+    xor ax, ax
+    jmp short .bold
+.three:
+    mov dh, dl
+    mov dl, ah
+    mov ah, al
+    xor al, al
+.bold:
+    test byte [gfxe_tsty], GFXE_BOLD
+    jz .r
+    mov bx, dx
+    mov cx, ax
+    shr bx, 1
+    rcr cx, 1
+    or dx, bx
+    or ax, cx
+.r:
+    pop cx
+    pop bx
+    ret
+
+; gfxe_font - the kernel's glyph table, into [gfxe_fseg]:[gfxe_foff] and the
+; codes it covers, ONCE. Every register kept
+gfxe_font:
+    cmp word [gfxe_fseg], 0
+    jne .r
+    push ax
+    push cx
+    push dx
+    push si
+    call OSAPI_FONT_GLYPHS      ; DX:SI, AL = first, AH = last, CX = 8
+    mov [gfxe_fseg], dx
+    mov [gfxe_foff], si
+    mov [gfxe_f0], al
+    mov [gfxe_f1], ah
+    pop si
+    pop dx
+    pop cx
+    pop ax
+.r:
+    ret
+
+; -----------------------------------------------------------------------------
+; gfxe_text - a NUL string of glyphs, in the style [gfxe_tsty]
+; in:  SI = the string (DS), CX = x, DX = y
+; out: CX = past the last glyph, SI = past the NUL; clobbers AX, BX, DI, BP
+; -----------------------------------------------------------------------------
+gfxe_text:
+    cld
+.c:
+    lodsb
+    or al, al
+    jz .r
+    push si
+    push dx
+    call gfxe_glyph
+    pop dx
+    pop si
+    jmp short .c
+.r:
+    ret
+
+; -----------------------------------------------------------------------------
+; gfxe_bfill - a rectangle of ink: cleared bits (black), or set ones with
+; GFXE_INV (white)
+; in:  AX = x, BX = y, CX = w, DX = h (band coordinates, signed; clipped to the
+;      band both ways - an empty one draws nothing)
+; out: clobbers AX, BX, CX, DX, SI, DI, BP, flags
+; -----------------------------------------------------------------------------
+gfxe_bfill:
+    or ax, ax
+    jns .x0
+    add cx, ax
+    xor ax, ax
+.x0:
+    mov si, ax
+    add si, cx                  ; SI = x end, exclusive
+    cmp si, GFXE_BAND_W
+    jle .x1
+    mov si, GFXE_BAND_W
+.x1:
+    cmp si, ax
+    jle .out
+    or bx, bx
+    jns .y0
+    add dx, bx
+    xor bx, bx
+.y0:
+    mov di, bx
+    add di, dx                  ; DI = y end, exclusive
+    cmp di, GFXE_BAND_H
+    jle .y1
+    mov di, GFXE_BAND_H
+.y1:
+    cmp di, bx
+    jle .out
+    sub di, bx
+    mov [gfxe_frows], di        ; the rows
+    dec si                      ; the last pixel
+    mov cl, al
+    and cl, 7
+    mov dl, 0FFh
+    shr dl, cl                  ; DL = the first byte's mask
+    mov cx, si
+    and cl, 7
+    mov dh, 0FFh
+    mov ch, 7
+    sub ch, cl
+    mov cl, ch
+    shl dh, cl                  ; DH = the last byte's
+    mov cl, 3
+    shr si, cl                  ; the last byte column
+    mov cx, ax
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1                   ; ...and the first
+    sub si, cx                  ; SI = the bytes between, less one
+    jnz .w
+    and dl, dh                  ; one byte: both edges in it
+.w:
+    mov [gfxe_fmask], dx
+    mov [gfxe_fcol], cx
+    mov ax, bx
+    GFXE_ROWOFF                 ; the first row's offset
+    add ax, [gfxe_fcol]
+    mov di, ax
+.row:
+    push di
+    mov al, [gfxe_fmask]        ; the first byte
+    call gfxe_fbyte
+    inc di
+    mov cx, si
+    jcxz .rowx                  ; one byte: done
+    dec cx
+    jz .last
+.mid:
+    mov al, 0FFh                ; every byte between, whole
+    call gfxe_fbyte
+    inc di
+    loop .mid
+.last:
+    mov al, [gfxe_fmask + 1]
+    call gfxe_fbyte
+.rowx:
+    pop di
+    add di, GFXE_BAND_ST
+    dec word [gfxe_frows]
+    jnz .row
+.out:
+    ret
+
+; gfxe_fbyte - AL = a mask: those bits of the band byte at DI set (GFXE_INV)
+; or cleared. Keeps everything but AL and the flags
+gfxe_fbyte:
+    test byte [gfxe_tsty], GFXE_INV
+    jnz .o
+    not al
+    and [GFXE_BAND_BUF + di], al
+    ret
+.o:
+    or [GFXE_BAND_BUF + di], al
+    ret
+%endif ; GFXE_TEXT
+
+%ifdef GFXE_BITS
+; -----------------------------------------------------------------------------
+; gfxe_bits - a 16-wide bit record into the band, in the style's GFXE_INV
+; in:  SI = the record - db rows, then a word a row, bit 15 the leftmost
+;      pixel; CX = x (>= 0), DX = y (signed), band coordinates
+; out: clobbers AX, BX, CX, DX, SI, DI, BP, flags
+; -----------------------------------------------------------------------------
+gfxe_bits:
+    cld
+    mov [gfxe_tx], cx
+    mov [gfxe_ty], dx
+    lodsb
+    xor ah, ah
+    mov bp, ax
+    or bp, bp
+    jz .r
+.row:
+    lodsw
+    mov bx, [gfxe_ty]
+    inc word [gfxe_ty]
+    or bx, bx
+    js .skip
+    cmp bx, GFXE_BAND_H
+    jge .skip
+    mov dx, ax                  ; the row's 16 bits, left-aligned in 32
+    xor ax, ax
+    push si
+    call gfxe_rowput
+    pop si
+.skip:
+    dec bp
+    jnz .row
+.r:
+    ret
+%endif ; GFXE_BITS
+
 %ifdef GFXE_POINTS
 ; =============================================================================
 ; GFXE_POINTS - the SPARSE sink: your own point array, one OSAPI_GFX_POINTS
@@ -709,6 +1113,21 @@ gfxe_bx0:   dw 0                    ; ...closed by gfxe_bsize into the band
 gfxe_by0:   dw 0
 gfxe_bw:    dw 0
 gfxe_bh:    dw 0
+%endif
+%ifdef GFXE_STYLED
+gfxe_tsty:  db 0                    ; the style: GFXE_INV / BOLD / X2 / X3
+gfxe_ts:    db 1                    ; ...its scale, as gfxe_glyph decoded it
+gfxe_tx:    dw 0                    ; the pen, as a glyph or record is merged
+gfxe_ty:    dw 0
+%endif
+%ifdef GFXE_TEXT
+gfxe_fseg:  dw 0                    ; the kernel's glyph table, asked for once
+gfxe_foff:  dw 0
+gfxe_f0:    db 0                    ; ...the first code it covers
+gfxe_f1:    db 0                    ; ...and the last
+gfxe_frows: dw 0                    ; gfxe_bfill's working set
+gfxe_fmask: dw 0
+gfxe_fcol:  dw 0
 %endif
 %ifdef GFXE_POINTS
 gfxe_pn:    dw 0                    ; how many points are in the list...
