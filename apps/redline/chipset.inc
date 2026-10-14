@@ -26,7 +26,7 @@
 ; same handler had just opened, and the alert vanished unread (103.6).
 ; =============================================================================
 
-CS_LINES    equ 39                  ; report lines composed
+CS_LINES    equ 45                  ; report lines composed
 CS_LW       equ 74                  ; bytes a line slot: 72 cells + NUL + 1
 CS_COLS     equ 72
 CS_HELP0    equ 10                  ; the help lines: on the page, not in a
@@ -686,19 +686,143 @@ cs_canset:
     pop ax
     ret
 
-; cs_rowdesc - BX = the picked row's sweep descriptor (csweep.inc); CF = 1
-; a row that writes nothing
-cs_rowdesc:
-    mov bx, cs_desc_fe
+; cs_rowlist - SI = the picked row's knob list (csweep.inc), first knob
+; first; CF = 1 a row that writes nothing
+cs_rowlist:
+    mov si, cs_klist_fe
     cmp byte [cs_pick], CS_F3
     je .ok
-    mov bx, cs_desc_ne
+    mov si, cs_klist_ne
     cmp byte [cs_pick], CS_NE
     je .ok
     stc
     ret
 .ok:
     clc
+    ret
+
+; cs_rowdesc - BX = the picked row's FIRST knob, the one the state field
+; names; CF = 1 a row that writes nothing
+cs_rowdesc:
+    push si
+    call cs_rowlist
+    jc .out
+    mov bx, [si]
+.out:
+    pop si
+    ret
+
+; cs_lver - CF = 1 a knob of the picked row has not been run on iron
+cs_lver:
+    push bx
+    push si
+    call cs_rowlist
+    jc .ok
+.k:
+    mov bx, [si]
+    or bx, bx
+    jz .ok
+    cmp byte [bx + CSD_VER], CSS_VERIFIED
+    jne .no
+    add si, 2
+    jmp short .k
+.ok:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop si
+    pop bx
+    ret
+
+; cs_lclass - a row whose knobs all read back: SI = its state, by EVERY
+; knob against its book - one below it is Tuned, all at it Mfg spec, any
+; over it (and none below) Stock. Every other register kept
+cs_lclass:
+    push ax
+    push bx
+    push dx
+    push di
+    call cs_rowlist
+    mov di, si
+    xor dl, dl
+.k:
+    mov bx, [di]
+    or bx, bx
+    jz .done
+    call [bx + CSD_GET]
+    cmp al, [bx + CSD_BOOK]
+    jb .tuned
+    je .nx
+    mov dl, 1
+.nx:
+    add di, 2
+    jmp short .k
+.tuned:
+    mov si, cs_st_tuned
+    jmp short .out
+.done:
+    mov si, cs_st_spec
+    or dl, dl
+    jz .out
+    mov si, cs_st_stk
+.out:
+    pop di
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; cs_klistput - SI = a knob list: "8-bit 2 waits, 8-bit delay 1, ..." -
+; each knob as it reads back, or [cs_setv] for one that cannot
+cs_klistput:
+    push ax
+    push bx
+    push si
+.k:
+    mov bx, [si]
+    or bx, bx
+    jz .out
+    mov al, [cs_setv]
+    cmp word [bx + CSD_GET], 0
+    je .put
+    call [bx + CSD_GET]
+.put:
+    call cs_knobput
+    add si, 2
+    cmp word [si], 0
+    je .out
+    push si
+    mov si, cs_s_comma
+    call cs_put
+    pop si
+    jmp short .k
+.out:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; cs_swfails - AX = the steps of the last Tune that read wrong
+cs_swfails:
+    push bx
+    push cx
+    xor ax, ax
+    mov bx, cs_sw_log + CSL_BAD
+    mov cl, [cs_sw_n]
+    xor ch, ch
+    jcxz .out
+.s:
+    cmp word [bx], 0
+    je .ok
+    inc ax
+.ok:
+    add bx, CSL_SIZE
+    loop .s
+.out:
+    pop cx
+    pop bx
     ret
 
 ; cs_act_key - AL = 'T' or 'K' (upper case). Two questions, each asked once
@@ -735,7 +859,10 @@ cs_act_key:
     cmp byte [cs_rows + bx + CSR_STAT], CSS_VERIFIED
     pop bx
     pop ax
-    je .go
+    jne .unv
+    call cs_lver                    ; ...and every knob it will sweep
+    jnc .go
+.unv:
     mov ah, [cs_pick]
     inc ah
     cmp ah, [cs_warn]
@@ -791,16 +918,27 @@ cs_conf_ans:
 cs_do_ds:
     push ax
     push bx
-    call cs_rowdesc
+    push si
+    call cs_rowlist
     jc .out
+.k:
+    mov bx, [si]                    ; every knob to its book's value
+    or bx, bx
+    jz .set
     mov [cs_sw_desc], bx
     mov al, [bx + CSD_BOOK]
     call cs_sw_set
+    add si, 2
+    jmp short .k
+.set:
+    call cs_rowdesc
+    mov al, [bx + CSD_BOOK]
     mov [cs_setv], al
     mov byte [cs_meth], 1
     mov byte [cs_saved], 0
     mov byte [cs_act], 3
 .out:
+    pop si
     pop bx
     pop ax
     jmp cs_after
@@ -812,6 +950,7 @@ cs_do_tune:
     push ax
     push bx
     push cx
+    push si
     call cs_romref                  ; CX = the slow ROM, or 0 (measures first)
     call cs_scrseg                  ; AX = the screen's segment
     xor bx, bx
@@ -822,14 +961,16 @@ cs_do_tune:
     call cs_sw_refs
     call cs_rowdesc
     jc .out
-    call cs_tunehome                ; AL = what the board runs now
-    call cs_sw_sweep                ; AL = the fastest that read right, SET
+    call cs_tunehome                ; AL = what the first knob runs at now
+    call cs_rowlist
+    call cs_sw_tune                 ; every knob; AL = the first's fastest
     mov [cs_tfast], al
     mov [cs_setv], al
     mov byte [cs_meth], 3
     mov byte [cs_saved], 0
     mov byte [cs_act], 1
 .out:
+    pop si
     pop cx
     pop bx
     pop ax
@@ -897,16 +1038,29 @@ cs_romref:
 cs_do_save:
     push ax
     push bx
+    push si
     cmp byte [cs_setv], 0FFh
     je .out
-    call cs_rowdesc
+    call cs_rowlist
     jc .out
     mov al, [cs_pick]
     mov ah, [cs_meth]
     call cs_cfg_new
+.k:
+    mov bx, [si]                    ; every knob: as it reads back, or as it
+    or bx, bx                       ; was set where it cannot be read
+    jz .save
+    mov al, [cs_setv]
+    cmp word [bx + CSD_GET], 0
+    je .v
+    call [bx + CSD_GET]
+.v:
+    mov ah, al
     mov al, [bx + CSD_KNOB]
-    mov ah, [cs_setv]
     call cs_cfg_knob
+    add si, 2
+    jmp short .k
+.save:
     mov byte [cs_act], 2
     mov word [cs_amsg], cs_s_svno
     call cs_cfg_save
@@ -914,10 +1068,12 @@ cs_do_save:
     mov byte [cs_saved], 1
     mov word [cs_amsg], cs_s_saved
 .done:
+    pop si
     pop bx
     pop ax
     jmp cs_recompose
 .out:
+    pop si
     pop bx
     pop ax
     ret
@@ -953,13 +1109,12 @@ cs_sw_measure:
     pop ax
     ret
 
-; cs_knobput - AL = a value of the knob the last write went through: 'R4 8'
-; on the FE3600, '3 waits' on the NEAT
+; cs_knobput - BX = a knob's descriptor, AL = a value of it: 'R4 8' on the
+; FE3600, '8-bit 3 waits' on the NEAT
 cs_knobput:
     push ax
     push bx
     push si
-    mov bx, [cs_sw_desc]
     mov si, [bx + CSD_PRE]
     call cs_put
     xor ah, ah
@@ -996,19 +1151,10 @@ cs_setline:
     je .put
     call cs_neatws                  ; a chipset that SAYS what it runs at
     jc .notread
-    mov si, cs_s_rd8
+    mov si, cs_s_now
     call cs_put
-    push ax
-    xor ah, ah
-    call cs_dec
-    pop ax
-    mov si, cs_s_rd16
-    call cs_put
-    mov al, ah
-    xor ah, ah
-    call cs_dec
-    mov si, cs_s_rdw
-    call cs_put
+    call cs_rowlist
+    call cs_klistput                ; every knob, read back
     mov si, cs_k_none
     cmp byte [cs_setv], 0FFh        ; written this session: is it kept?
     je .put
@@ -1072,7 +1218,7 @@ cs_actline:
     mov si, cs_s_hpick
 .say:
     call cs_put
-    jmp short .out
+    jmp .out
 .msg:
     mov si, [cs_amsg]
     call cs_put
@@ -1080,25 +1226,34 @@ cs_actline:
     jne .out
     mov si, [cs_rname]
     call cs_put
-    jmp short .out
+    jmp .out
 .ds:
     mov si, cs_s_ds
     call cs_put
-    mov bx, [cs_sw_desc]
+    call cs_rowlist
+    cmp word [si + 2], 0            ; more than one knob: each as it is now
+    jne .all
+    mov bx, [si]
     mov al, [bx + CSD_BOOK]
     call cs_knobput
     mov si, cs_s_ds2
     jmp short .last
+.all:
+    call cs_klistput
+    jmp short .out
 .tune:
     mov si, cs_s_tune
     call cs_put
+    call cs_rowlist
+    cmp word [si + 2], 0
+    jne .tall
+    mov bx, [si]
     mov al, [cs_tfast]
     call cs_knobput
     mov si, cs_s_tune2
     call cs_put
     mov si, cs_s_tfl
     call cs_put
-    mov bx, [cs_sw_desc]
     mov al, [bx + CSD_FLOOR]
     mov si, cs_s_tnone
     cmp byte [cs_sw_fail], 0
@@ -1115,6 +1270,17 @@ cs_actline:
     call cs_put
     call cs_knobput
     mov si, cs_k_none
+    jmp short .last
+.tall:
+    call cs_klistput                ; every knob where Tune left it, and how
+    call cs_swfails                 ; many steps read wrong on the way
+    mov si, cs_k_none
+    or ax, ax
+    jz .last
+    mov si, cs_s_tfl
+    call cs_put
+    call cs_dec
+    mov si, cs_s_tfails
 .last:
     call cs_put
 .out:
@@ -1818,9 +1984,12 @@ cs_statcomp:
 .meas:
     mov ah, '~'                     ; measured, not written by us
     jmp short .name
+.live:                              ; read back: named by every knob
+    xor ah, ah
+    call cs_lclass
+    jmp short .head
 .set:
     mov al, [cs_setv]
-.live:
     xor ah, ah
 .name:
     mov si, cs_st_tuned
@@ -2177,8 +2346,6 @@ cs_fieldlines:
     mov si, cs_s_swh
     call cs_put
     push ax
-    mov al, [cs_sw_home]
-    call cs_knobput
     mov si, cs_s_swf
     call cs_put
     mov al, [cs_sw_fdc]
@@ -2241,9 +2408,15 @@ cs_swrow:
     mov al, ' '
     call cs_ch1
     call cs_ch1
+    mov bx, [si + CSL_DESC]
     mov al, [si + CSL_VAL]
     call cs_knobput
     mov bx, si
+    mov si, cs_s_swfrom             ; and where that knob's sweep started
+    call cs_put
+    mov al, [bx + CSL_HOME]
+    xor ah, ah
+    call cs_dec
     cmp word [bx + CSL_BAD], 0
     jne .fail
     mov si, cs_s_swok
@@ -2503,9 +2676,8 @@ cs_s_sid:   db 'IDENTIFY (reports, writes nothing)', 0
 cs_s_sds:   db 'DATASHEET (book values, never run)', 0
 cs_s_sver:  db 'VERIFIED (run on real hardware)', 0
 cs_s_xt:    db 'An 8088/8086: the bus is the CPU', 27h, 's own, nothing to tune.', 0
-cs_s_rd8:   db 'Set now (read back): 8-bit ', 0
-cs_s_rd16:  db ' waits, 16-bit ', 0
-cs_s_rdw:   db ' waits', 0
+cs_s_now:   db 'Now: ', 0
+cs_s_comma: db ', ', 0
 cs_s_norow: db 'This chipset is identified only: nothing on it can be set.', 0
 cs_s_unset: db 'Set now: nothing - the BIOS', 27h, 's own timing is running', 0
 cs_s_set:   db 'Set now: R4 ', 0
@@ -2521,13 +2693,14 @@ cs_s_tune2: db ' is the fastest that passed', 0
 cs_s_tfl:   db '; ', 0
 cs_s_tfl2:  db ' read ', 0
 cs_s_tfl3:  db ' wrong', 0
+cs_s_tfails: db ' failed', 0
 cs_s_tnone: db 'none failed down to ', 0
 cs_s_ds:    db 'Mfg spec set: ', 0
 cs_s_ds2:   db ', the data sheet', 27h, 's value', 0
-cs_s_rsv:   db ' - saved', 0
-cs_s_rnsv:  db ' - not saved', 0
+cs_s_rsv:   db ' (saved)', 0
+cs_s_rnsv:  db ' (not saved)', 0
 cs_s_nefind: db 'The NEAT is written only where its probe found it', 0
-cs_s_warn:  db 'Untested chipset: may need a reset', 0
+cs_s_warn:  db 'Untested timings: may need a reset', 0
 cs_s_btxt:  db 'BIOS: ', 0
 cs_s_btnone: db 'none found', 0
 cs_s_noregs: db 'Registers: none this chipset lets us read', 0
@@ -2538,7 +2711,7 @@ cs_s_rawm:  db ', MUL ', 0
 cs_s_rawn:  db ', I/O NOP ', 0
 cs_s_rawi:  db ', IN ', 0
 cs_s_swno:  db 'Tune sweep: not run', 0
-cs_s_swh:   db 'Sweep from ', 0
+cs_s_swh:   db 'Sweep checks', 0
 cs_s_swf:   db ': 3F4h=', 0
 cs_s_swnone: db '--', 0
 cs_s_swp:   db ' 85h=', 0
@@ -2547,20 +2720,21 @@ cs_s_swno2: db 'no', 0
 cs_s_swscr: db ' scr ', 0
 cs_s_swrom: db ' rom ', 0
 cs_s_swpm:  db ' pm ', 0
+cs_s_swfrom: db ' from ', 0
 cs_s_swok:  db ': ok, ns', 0
-cs_s_nscr:  db ' screen ', 0
-cs_s_npm:   db ' PicoMEM ', 0
-cs_s_nrom:  db ' ROM ', 0
-cs_s_nio:   db ' I/O ', 0
+cs_s_nscr:  db ' scr ', 0
+cs_s_npm:   db ' pm ', 0
+cs_s_nrom:  db ' rom ', 0
+cs_s_nio:   db ' io ', 0
 cs_s_swfail: db ': FAIL, ', 0
 cs_s_swwrong: db ' wrong:', 0
-cs_s_wscr:  db ' screen', 0
-cs_s_wrom:  db ' ROM', 0
-cs_s_wpm:   db ' PicoMEM', 0
+cs_s_wscr:  db ' scr', 0
+cs_s_wrom:  db ' rom', 0
+cs_s_wpm:   db ' pm', 0
 cs_s_wramp: db ' 2A3h', 0
-cs_s_wfdc:  db ' floppy-status', 0
-cs_s_wpage: db ' I/O-write', 0
-cs_s_wrb:   db ' read-back', 0
+cs_s_wfdc:  db ' fdc', 0
+cs_s_wpage: db ' io-w', 0
+cs_s_wrb:   db ' rb', 0
 cs_st_stock: db 'Stock: BIOS timing', 0
 cs_st_stk:  db 'Stock: ', 0
 cs_st_tuned: db 'Tuned: ', 0

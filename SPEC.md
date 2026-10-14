@@ -174588,16 +174588,45 @@ fitted. Until that run it was `DATASHEET`, and swept behind the warning.
   is the 8259's mask on a board that aliases 22h, and a chipset that reads
   back has no case for the drop-down's leap of faith, so `cs_canset` greys
   it when picked and not found.
-- **Its one knob is 62h bits 3:2, the 8-bit AT cycle's wait states**, 00 = 2
-  to 11 = 5 [NEAT p31]. `apps/redline/csne.inc` reads 62h, replaces those
-  two bits and writes the rest back as the chip had them - the PB286LP
-  reads bits 7:6 as 01, which the book calls reserved - with a fresh index
+- **Four knobs, swept in this order**, every one a two-bit field of a
+  register that is R/W in every field [NEAT p30, p31]:
+
+  | knob | field | values | Mfg spec | status |
+  |---|---|---|---|---|
+  | 1 | 62h bits 3:2, 8-bit AT cycle wait states | 2-5 (00 = 2) | 4 | `VERIFIED` |
+  | 2 | 61h bits 3:2, 8-bit AT memory command delay | 0-3 BCLKs | 1 | `DATASHEET` |
+  | 3 | 61h bits 1:0, AT I/O command delay | 0-3 BCLKs | 1 | `DATASHEET` |
+  | 4 | 62h bits 5:4, 16-bit AT cycle wait states | 0-3 | 1 | `DATASHEET` |
+
+  Knob 1 went to its floor on the PB286LP with every check passing, so the
+  8-bit wait states have nothing left there; the next three are what the
+  same bus still spends. The status is the KNOB's (`CSD_VER`), so a row
+  that is `VERIFIED` warns before a sweep that will reach a knob nobody has
+  run (§103.6.2's warning, now `Untested timings: may need a reset`).
+- **Mfg spec is the book's PROSE and what the PB286LP's BIOS runs**, which
+  agree for every field: 4 and 1 waits ("8 bit AT memory cycles will have 4
+  wait states, 16 bit AT memory cycles will have 1") where the register
+  page says 5 and 3 [NEAT p25, p31], and one command delay each, the
+  register page's default (61h = 45h, read on that board).
+- **What is never written**: the BCLK source (62h bits 1:0, the bus CLOCK -
+  a step that changes every card's timing at once, left for a round of its
+  own), the 16-bit memory command delay (61h bits 5:4, already 0), quick
+  mode and address hold (61h bits 7:6), and every 82C212 register.
+  `cs_ne_put` (`apps/redline/csne.inc`) reads the register, replaces ONE
+  field and writes the rest back as the chip had them - the PB286LP reads
+  62h bits 7:6 as 01, which the book calls reserved - with a fresh index
   write before each data access [NEAT p29, p46] and interrupts off.
-- **Mfg spec is 4.** The book says 4 in its prose and 5 on its register
-  page [NEAT p25, p31]; 4 is what the PB286LP's BIOS runs, so at least one
-  board with this chipset runs it. The floor is 2 and the step 1.
+  `tests/csprobe.py`'s model refuses a write that moves a bit outside the
+  knob fields or two fields at once.
+- **What checks a 16-bit knob is thinner than what checks an 8-bit one**:
+  of the references only the screen is likely to be a 16-bit card, and a
+  16-bit I/O port (a hard disk's data port) is not safe to read. Its log
+  lines say what the screen read at each step, which is what the next
+  round needs to decide whether that is enough.
 - **It reads back**, so the setting line and the state field read the chip
-  live, and the sweep checks the knob took (§103.6.3).
+  live - every knob, `Now: 8-bit 4 waits, 8-bit delay 1, I/O delay 1,
+  16-bit 1 waits` - the state field names the row Tuned when ANY knob is
+  under its book, and the sweep checks each knob took (§103.6.3).
 
 #### 103.6.3 The two Targets, and the verified sweep
 
@@ -174643,9 +174672,11 @@ fitted. Until that run it was `DATASHEET`, and swept behind the warning.
     PicoMEM and the ROM in ns over RAM, the 3F4h read in ns over a NOP - and
     **every step is LOGGED** with what failed, for the report (§103.6.3.2).
 - The steps are the book's value and then one bus clock less at a time,
-  2 for the FE3600 (10, 8, 6, 4) and 1 for the NEAT (4, 3, 2), stopping at
-  the first wrong read; the floor is never crossed. When even the book's
-  value fails, the board stays at home.
+  2 for the FE3600 (10, 8, 6, 4) and 1 for the NEAT's (4, 3, 2 and 1, 0),
+  stopping at the first wrong read; the floor is never crossed. When even
+  the book's value fails, the board stays at home. A row with several knobs
+  sweeps them in turn (`cs_sw_tune`), each from where it reads, so a knob
+  is tested with every knob before it already at its fastest.
 - **The fastest that passed is SET, and nothing is asked** (method 3), on a
   `VERIFIED` row. A question asked here was the alert the first field
   build painted over (§103.6), and on the Victory the margin it offered was
@@ -174806,7 +174837,7 @@ from Tune, so it went: `cs_cfg_load` and `cs_cfg_apply` assemble only with
     the row's probe again: the fingerprint IS the identification, the one
     the user confirmed when the setting was tuned and saved on this board.
 
-It is `apps/rlapply/rlapply.asm`, **1,776 bytes with no bss** (the NEAT's knob was 63), its 64-byte icon included, and it is the
+It is `apps/rlapply/rlapply.asm`, **1,817 bytes with no bss** (the NEAT's four knobs were 104), its 64-byte icon included, and it is the
 shared files assembled `CS_APPLY_ONLY`: the row table and the fingerprint
 with no probe, the knob with no sweep, the file and the apply - so **nothing
 it can run touches a port before the fingerprint has matched**. It has no

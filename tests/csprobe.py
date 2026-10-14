@@ -414,6 +414,10 @@ class NEBoard(FEBoard):
     must survive the write. The PB286LP's own values."""
 
     book = 4
+    # where the OTHER knobs go wrong: 8-bit command delay, I/O command delay,
+    # 16-bit waits - below these the reads go wrong as they do below T
+    Tk = (0, 0, 0)
+    MASK = {0x61: 0x0F, 0x62: 0x3C}     # the fields a write may change
 
     def __init__(self, T, mu, pico=False):
         self.T, self.mu, self.pico = T, mu, pico
@@ -431,9 +435,15 @@ class NEBoard(FEBoard):
     def ws(self):
         return ((self.regs[0x62] >> 2) & 3) + 2
 
+    def knobs(self):
+        """8-bit waits, 8-bit command delay, I/O command delay, 16-bit waits"""
+        return (self.ws(), (self.regs[0x61] >> 2) & 3, self.regs[0x61] & 3,
+                (self.regs[0x62] >> 4) & 3)
+
     def apply(self):
         self.r4 = self.ws()
-        wrong = self.r4 < self.T
+        k = self.knobs()
+        wrong = self.r4 < self.T or any(v < t for v, t in zip(k[1:], self.Tk))
         if wrong != self.wrong:
             self.wrong = wrong
             x = (lambda b: bytes(c ^ 0x5A for c in b)) if wrong else (lambda b: b)
@@ -460,13 +470,17 @@ class NEBoard(FEBoard):
         elif p == 0x23:
             if iflag:
                 self.bad.append("23h written with interrupts ON")
-            if not self.fresh or self.idx != 0x62:
+            ch = v ^ self.regs.get(self.idx, 0)
+            if not self.fresh or self.idx not in self.MASK:
                 self.bad.append("23h written at index %s" % self.idx)
-            elif (v ^ self.regs[0x62]) & 0xF3:
-                self.bad.append("62h's other bits changed: %02Xh -> %02Xh"
-                                % (self.regs[0x62], v))
+            elif ch & ~self.MASK[self.idx] & 0xFF:
+                self.bad.append("%02Xh's other bits changed: %02Xh -> %02Xh"
+                                % (self.idx, self.regs[self.idx], v))
+            elif ch and not any(ch & ~f == 0 for f in (0x03, 0x0C, 0x30)):
+                self.bad.append("%02Xh: one write moved two fields, %02Xh -> %02Xh"
+                                % (self.idx, self.regs[self.idx], v))
             else:
-                self.regs[0x62] = v
+                self.regs[self.idx] = v
                 self.apply()
             self.fresh = False
         else:
@@ -512,8 +526,9 @@ class Rig:
 
             def code(uc, addr, size, user):
                 f = uc.reg_read(UC_X86_REG_EFLAGS) & 0x200
-                if f and not prev[0] and b.r4 < b.T:
-                    b.bad.append("interrupts on at R4 %d, below %d" % (b.r4, b.T))
+                if f and not prev[0] and b.wrong:
+                    b.bad.append("interrupts on with the board reading wrong "
+                                 "(R4 %d, T %d)" % (b.r4, b.T))
                 prev[0] = f
             h = mu.hook_add(UC_HOOK_CODE, code)
         mu.emu_start(s[name], s["h_ret"], count=20_000_000)
@@ -527,6 +542,9 @@ class Rig:
 
     def wb(self, name, data):
         self.mu.mem_write(self.syms[name], bytes(data))
+
+
+L = 16      # CSL_SIZE: one step of csweep.inc's cs_sw_log
 
 
 def write_side(bad):
@@ -566,10 +584,10 @@ def write_side(bad):
             # read goes wrong at once, so at least the screen (1) and the ROM
             # (16), and the PicoMEM's count (64) where there is one; a step
             # that passed names nothing
-            log = r.rb("cs_sw_log", 6 * 12)
+            log = r.rb("cs_sw_log", 12 * L)
             want = 0x11 | (0x40 if pico else 0)
             for i in range(r.rb("cs_sw_n")[0]):
-                v, w = log[i * 12], log[i * 12 + 1]
+                v, w = log[i * L + 2], log[i * L + 3]
                 if (v == fail) != bool(w) or (w and w & want != want):
                     bad("%s: step %d's why is %02Xh" % (tag, v, w))
             if r.b.bad:
@@ -594,16 +612,16 @@ def write_side(bad):
         b.io_rd = one
         ax, cf = r.call("h_sweep", watch_if=True)
         runs += 1
-        why = r.rb("cs_sw_log", 6 * 12)
+        why = r.rb("cs_sw_log", 12 * L)
         if ax & 0xFF != 8 or r.rb("cs_sw_fail")[0] != 6:
             bad("I/O check %Xh: fastest %d, failed at %d, want 8 and 6"
                 % (port, ax & 0xFF, r.rb("cs_sw_fail")[0]))
         # the log names the check that failed, and only that one: steps 10,
         # 8 and 6, so R4 6's why is the third record's second byte
         wwhy = 2 if port == 0x3F4 else 4      # CSW_FDC, CSW_PAGE
-        if why[0 * 12 + 1] or why[1 * 12 + 1] or why[2 * 12 + 1] != wwhy:
+        if why[0 * L + 3] or why[1 * L + 3] or why[2 * L + 3] != wwhy:
             bad("I/O check %Xh: the log's why is %s, want 0, 0, %d"
-                % (port, [why[i * 12 + 1] for i in range(3)], wwhy))
+                % (port, [why[i * L + 3] for i in range(3)], wwhy))
         b.apply = orig_apply
     # 2c. THE NEAT: its set preserves 62h's other bits, reads back, and its
     # sweep stops at the first wrong read for every threshold
@@ -636,8 +654,56 @@ def write_side(bad):
             bad("%s: failed at %d, want %d" % (tag, r.rb("cs_sw_fail")[0], wfail))
         if r.b.bad:
             bad("%s: %s" % (tag, sorted(set(r.b.bad))[:4]))
+    # 2d. EVERY NEAT knob through cs_ne_put and back through cs_ne_kget, each
+    # field alone (the model refuses a write that moves two)
+    for k, lo, hi in ((1, 2, 5), (2, 0, 3), (3, 0, 3), (4, 0, 3)):
+        for v in range(lo, hi + 1):
+            r = Rig(img, syms, NEBoard, 0)
+            ax, cf = r.call("cs_ne_put", ax=(v << 8) | k)
+            runs += 1
+            if cf or r.b.knobs()[k - 1] != v or r.b.bad:
+                bad("cs_ne_put knob %d = %d: CF %d, knobs %s, %s"
+                    % (k, v, cf, r.b.knobs(), r.b.bad))
+            ax, cf = r.call("cs_ne_kget", ax=k)
+            if ax & 0xFF != v:
+                bad("cs_ne_kget knob %d after %d: %d" % (k, v, ax & 0xFF))
+    # 2e. THE WHOLE ROW, as REDLINE's Tune runs it: each knob from where it
+    # reads, stopping at its own threshold, the next carrying on from there;
+    # one log step a candidate, knob by knob, each naming its knob and home
+    descs = ("cs_desc_ne", "cs_desc_nec8", "cs_desc_neio", "cs_desc_ne16")
+    books, floors = (4, 1, 1, 1), (2, 0, 0, 0)
+    for T in (2, 3, 4):
+        for Tk in ((0, 0, 0), (1, 0, 1), (1, 1, 1), (0, 1, 0)):
+            r = Rig(img, syms, NEBoard, T)
+            r.b.Tk = Tk
+            r.b.apply()
+            home = r.b.knobs()
+            ax, cf = r.call("h_tune_ne", watch_if=True)
+            runs += 1
+            thr = (T,) + Tk
+            want, steps = [], []
+            for i in range(4):
+                last = home[i]
+                for c in range(books[i], floors[i] - 1, -1):
+                    ok = c >= thr[i]
+                    steps.append((syms[descs[i]], c, ok, home[i]))
+                    if not ok:
+                        break
+                    last = c
+                want.append(last)
+            tag = "NEAT Tune T=%d, others %s" % (T, Tk)
+            if list(r.b.knobs()) != want or ax & 0xFF != want[0] or r.b.bad:
+                bad("%s: knobs %s, AL %d, want %s; %s"
+                    % (tag, r.b.knobs(), ax & 0xFF, want, r.b.bad[:3]))
+            n = r.rb("cs_sw_n")[0]
+            log = r.rb("cs_sw_log", 12 * L)
+            got = [(int.from_bytes(log[i * L:i * L + 2], "little"), log[i * L + 2],
+                    log[i * L + 3] == 0, log[i * L + 6]) for i in range(n)]
+            if got != steps:
+                bad("%s: the log is %s, want %s" % (tag, got, steps))
     for ax_, what in (((6 << 8) | 1, "6 waits"), ((1 << 8) | 1, "1 wait"),
-                      ((3 << 8) | 4, "knob 4")):
+                      ((3 << 8) | 5, "knob 5"), ((3 << 8) | 0, "knob 0"),
+                      ((4 << 8) | 2, "8-bit delay 4"), ((4 << 8) | 4, "16-bit 4 waits")):
         r = Rig(img, syms, NEBoard, 0)
         ax, cf = r.call("cs_ap_ne", ax=ax_)
         runs += 1

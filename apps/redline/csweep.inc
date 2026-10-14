@@ -42,13 +42,18 @@ CSD_SET     equ 4                   ; dw proc: AL = value, every reg kept
 CSD_GET     equ 6                   ; dw proc: AL = value read, or 0
 CSD_PRE     equ 8                   ; dw the value's words, before it ('R4 ')
 CSD_SUF     equ 10                  ; dw ...and after it (' waits')
+CSD_VER     equ 12                  ; db CSS_VERIFIED, or CSS_DATASHEET: this
+                                    ; KNOB's own status, which a row's newer
+                                    ; knobs do not share with its first
 
-CS_SWMAX    equ 6                   ; steps logged
-CSL_VAL     equ 0                   ; db the candidate
-CSL_WHY     equ 1                   ; db what went wrong (CSW_*), 0 = passed
-CSL_BAD     equ 2                   ; dw wrong reads
-CSL_NS      equ 4                   ; 4 dw: screen, PicoMEM, ROM, I/O (ns)
-CSL_SIZE    equ 12
+CS_SWMAX    equ 12                  ; steps logged, every knob's
+CSL_DESC    equ 0                   ; dw the knob's descriptor
+CSL_VAL     equ 2                   ; db the candidate
+CSL_WHY     equ 3                   ; db what went wrong (CSW_*), 0 = passed
+CSL_BAD     equ 4                   ; dw wrong reads
+CSL_HOME    equ 6                   ; db where that knob's sweep started
+CSL_NS      equ 8                   ; 4 dw: screen, PicoMEM, ROM, I/O (ns)
+CSL_SIZE    equ 16
 CSW_SCR     equ 1                   ; the screen read wrong
 CSW_FDC     equ 2                   ; the floppy status changed
 CSW_PAGE    equ 4                   ; the I/O write did not read back
@@ -62,13 +67,36 @@ CSW_RAMP    equ 64                  ; the PicoMEM's 2A3h count skipped
 CS_SW_PBUF  equ 0x5000              ; a PicoMEM's disk transfer buffer
 CS_SW_PAGE  equ 0x85                ; an unused DMA page register
 
+; A row's knobs, swept in this order: each starts from where the knobs
+; before it were left
+cs_klist_fe: dw cs_desc_fe, 0
+cs_klist_ne: dw cs_desc_ne, cs_desc_nec8, cs_desc_neio, cs_desc_ne16, 0
+
 cs_desc_fe: db CS_FE_BOOK, CS_FE_FLOOR, 2, CS_FE_R4
             dw cs_fe_set, 0, cs_k_r4, cs_k_none
+            db CSS_VERIFIED
 cs_desc_ne: db CS_NE_BOOK, CS_NE_FLOOR, 1, CS_NE_W8
-            dw cs_ne_set, cs_ne_get, cs_k_none, cs_k_waits
+            dw cs_ne_set, cs_ne_getw8, cs_k_8b, cs_k_waits
+            db CSS_VERIFIED         ; the PB286LP, 2026-10-14
+cs_desc_nec8: db 1, 0, 1, CS_NE_C8
+            dw cs_ne_setc8, cs_ne_getc8, cs_k_8bd, cs_k_none
+            db CSS_DATASHEET
+cs_desc_neio: db 1, 0, 1, CS_NE_CIO
+            dw cs_ne_setcio, cs_ne_getcio, cs_k_iod, cs_k_none
+            db CSS_DATASHEET
+cs_desc_ne16: db 1, 0, 1, CS_NE_W16
+            dw cs_ne_setw16, cs_ne_getw16, cs_k_16b, cs_k_waits
+            db CSS_DATASHEET
+cs_ne_getw8:
+    mov al, CS_NE_W8
+    jmp cs_ne_kget
 cs_k_r4:    db 'R4 '
 cs_k_none:  db 0
 cs_k_waits: db ' waits', 0
+cs_k_8b:    db '8-bit ', 0
+cs_k_16b:   db '16-bit ', 0
+cs_k_8bd:   db '8-bit delay ', 0
+cs_k_iod:   db 'I/O delay ', 0
 
 cs_sw_desc: dw 0
 cs_sw_home: db 0                    ; the setting the sweep started from
@@ -411,12 +439,17 @@ cs_sw_logit:
     push ds
     pop es
     cld
+    mov ax, [cs_sw_desc]
+    stosw
     mov al, [cs_sw_cand]
     stosb
     mov al, [cs_sw_why]
     stosb
     mov ax, [cs_sw_bad]
     stosw
+    mov al, [cs_sw_home]
+    stosb
+    inc di
     mov si, cs_sw_ns
     mov cx, 4
     rep movsw
@@ -429,12 +462,12 @@ cs_sw_logit:
     ret
 
 ; -----------------------------------------------------------------------------
-; cs_sw_sweep - BX = a row's descriptor, AL = HOME (what the board runs
+; cs_sw_sweep - BX = a knob's descriptor, AL = HOME (what the board runs
 ; now: read off a chipset that can say, measured off one that cannot). The
 ; book's value, then one bus clock less at a time to the floor, stopping at
 ; the first wrong read. out AL = the fastest that passed - HOME when not even
 ; the book's did - and it is SET; [cs_sw_fail] = the first that failed or
-; 0; cs_sw_log every step tried.
+; 0; every step tried appended to cs_sw_log.
 ; -----------------------------------------------------------------------------
 cs_sw_sweep:
     push bx
@@ -442,7 +475,6 @@ cs_sw_sweep:
     mov [cs_sw_desc], bx
     mov [cs_sw_home], al
     mov byte [cs_sw_fail], 0
-    mov byte [cs_sw_n], 0
     mov cl, al                      ; CL = the last that passed: home
     mov al, [bx + CSD_BOOK]
 .step:
@@ -460,6 +492,47 @@ cs_sw_sweep:
     call cs_sw_set                  ; the last that passed
 .done:
     mov al, cl
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; cs_sw_tune - SI = a row's knob list (cs_klist_*), AL = HOME for a knob
+; that cannot be read back (the FE3600's R4, measured by the caller). Every
+; knob in turn, each from where it reads now; the log starts empty. out AL =
+; the FIRST knob's fastest. Every other register preserved
+; -----------------------------------------------------------------------------
+cs_sw_tune:
+    push bx
+    push cx
+    push dx
+    push si
+    mov byte [cs_sw_n], 0
+    mov dl, al
+    xor cx, cx                      ; CL = the first knob's answer, CH = had it
+.k:
+    mov bx, [si]
+    or bx, bx
+    jz .out
+    mov al, dl
+    mov ax, [bx + CSD_GET]
+    or ax, ax
+    mov al, dl
+    jz .home
+    call [bx + CSD_GET]             ; its own answer, in AL
+.home:
+    call cs_sw_sweep
+    or ch, ch
+    jnz .next
+    mov cl, al
+    inc ch
+.next:
+    add si, 2
+    jmp short .k
+.out:
+    mov al, cl
+    pop si
+    pop dx
     pop cx
     pop bx
     ret

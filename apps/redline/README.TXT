@@ -72,7 +72,8 @@ count - so it is right after a reboot, or after RLAPPLY, too. The buttons:
 
 On a WD FE3600 board (the Packard Bell Victory 286) Tune sets R4, the 8-bit
 wait states; on a C&T NEAT board (the Packard Bell PB286LP) the 8-bit wait
-states in register 62h. What Fastest tested cannot read back - video
+states, then the 8-bit memory and I/O command delays and the 16-bit wait
+states, one after another. What Fastest tested cannot read back - video
 writes, the keyboard controller, the clock chip, serial ports, an 8-bit
 disk card - is why Mfg spec is there: if anything misbehaves, Tune to it,
 or reset, and keep backups before you Save a tuned setting. A chipset the

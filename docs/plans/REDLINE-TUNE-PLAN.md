@@ -559,6 +559,21 @@ docs/reports/.
     - Its RAM read is 482 ns a byte at 12 MHz and 720 at 8 (`Raw PIT
       counts`), about 5.8 CPU clocks either way, where `rep lodsb` is 4 -
       wait states on its own memory.
+- **Wave 3.8 — the NEAT's other three knobs. BUILT** (SPEC.md 103.6.2).
+  The owner's word after the first NEAT run: *"If there is more to tune for
+  the PB286LP, then lets do that. The more we try, the more we learn."*
+  Its 8-bit waits passed to their floor, so what that bus still spends is
+  the 8-bit memory and I/O command delays (61h, one BCLK each) and the
+  16-bit waits (62h bits 5:4, one). Each is a descriptor beside the first,
+  `DATASHEET` on its own, and Tune sweeps the four in turn. `cs_ne_put` is
+  one field write for all four, so RLAPPLY grew 41 bytes (1,817).
+  - OWED: the PB286LP's Tune and report. Its log carries every step of all
+    four knobs with the screen, ROM and I/O times at each, so one run says
+    what each delay is worth in ns and whether 16-bit waits move the screen.
+  - NOT TAKEN, for its own round: the BUS CLOCK (62h bits 1:0, CLK2IN/2 ->
+    CLK2IN). It doubles every card's timing at once, so a sweep's checks
+    say less about it than about a wait state - a card that holds IOCHRDY
+    will read right and still be run out of spec.
 - **Wave 4 — the Compaq's CPU-speed row.** Field run on the Portable III.
 - **Wave 5 onward — one chipset a wave, as books arrive.**
   - NEAT first: the most common, with known fields.

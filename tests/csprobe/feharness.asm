@@ -74,9 +74,16 @@ h_sweep_fe:
     mov ax, 0xA000
     mov cx, 0xC000
     call cs_sw_refs
-    mov bx, cs_desc_fe
+    mov si, cs_klist_fe             ; REDLINE's own path: the row's list
     mov al, [h_home]
-    jmp cs_sw_sweep
+    jmp cs_sw_tune
+h_tune_ne:                          ; every NEAT knob, as REDLINE's Tune
+    mov ax, 0xA000
+    xor bx, bx
+    mov cx, 0xC000
+    call cs_sw_refs
+    mov si, cs_klist_ne
+    jmp cs_sw_tune
 h_sweep_ne:                         ; the NEAT's, the same references; home
     mov ax, 0xA000                  ; is what the chip says it runs
     xor bx, bx

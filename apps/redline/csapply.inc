@@ -291,19 +291,5 @@ cs_ap_fe:                           ; FE3600: knob 4 = R4, 4..15
     stc
     ret
 
-cs_ap_ne:                           ; C&T NEAT: knob 1 = 8-bit waits, 2..5
-    cmp al, CS_NE_W8
-    jne .no
-    cmp ah, CS_NE_FLOOR
-    jb .no
-    cmp ah, CS_NE_MAXW
-    ja .no
-    push ax
-    mov al, ah
-    call cs_ne_set
-    pop ax
-    clc
-    ret
-.no:
-    stc
-    ret
+cs_ap_ne:                           ; C&T NEAT: knobs 1-4 (csne.inc), each
+    jmp cs_ne_put                   ; refused outside its field
