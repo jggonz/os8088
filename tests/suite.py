@@ -8922,7 +8922,7 @@ SOAK = [
         "seven guest seconds later.",
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
-    Row("deskcaledit", "soak", py("tests/deskcaledit.py"), 60.0,
+    Row("deskcaledit", "soak", py("tests/deskcaledit.py"), 76.0,
         "SPEC.md 107.3: the Desk Calendar's APPOINTMENTS, read back off the "
         "guest's own disk by tools/os88dia.py. A DAMAGED state file (count "
         "60) opens empty and its first edit asks `Replace damaged calendar?` "
@@ -8935,15 +8935,17 @@ SOAK = [
         "answers N with `Calendar is full (48)`.",
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
-    Row("deskcaltask", "soak", py("tests/deskcaltask.py"), 55.0,
-        "SPEC.md 107.3, 13.15.2: the Desk Calendar's TASKS on a Hercules 5150 "
+    Row("deskcaltask", "soak", py("tests/deskcaltask.py"), 85.0,
+        "SPEC.md 107.3: the Desk Calendar's TASKS on a Hercules 5150 "
         "(TALL, a readable 1bpp framebuffer). Three typed tasks are three in "
         "the state file; a click on a box checks it and the window differs "
         "in its 6x6 mark and NOTHING ELSE, with ZERO runs through the "
         "package's own dc_run (a breakpoint counter; a selection click, two "
         "runs, is its control); Space on a selected task the same; Clear "
         "Done Tasks greyed `(none done)` until one is checked and leaving the "
-        "unchecked one; Del and Yes empty the list.",
+        "unchecked one; Del and Yes empty the list; and a PAGED list - a "
+        "delete that ends paging starts it at its top, and a pager that goes "
+        "away is erased (row 4 ground, every pixel).",
         needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
     Row("deskcalgrid", "soak", py("tests/deskcalgrid.py"), 40.0,
         "SPEC.md 107.3: the Desk Calendar's 42-byte grid, read out of the "

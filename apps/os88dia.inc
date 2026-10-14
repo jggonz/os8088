@@ -37,7 +37,12 @@
 ;                                       offset 0 of a segment (OSAPI_FILE_READ)
 ;   %define DIA_ONTICK  proc            optional: a near proc, every tick -
 ;                                       the UI task with the gfx lock HELD on
-;                                       both kernels, no clip region armed
+;                                       both kernels, no clip region armed.
+;                                       It ANSWERS: CF = 1 holds any save
+;                                       owed to a later poll (a field open,
+;                                       a question up, an edit this poll),
+;                                       CF = 0 lets it go. A save is seconds
+;                                       of disk on a 5150 (SPEC.md 107.6)
 ;   %define DIA_ONCLOSE proc            optional: before the row is removed
 ;   %define DIA_ISOPEN  'Desk Calendar is open'   optional: the toast a SECOND
 ;                                       launch is refused with (<= 24 chars,
@@ -494,7 +499,8 @@ dia_beat:
     mov [dia_py], dx
 .app:
 %ifdef DIA_ONTICK
-    call DIA_ONTICK
+    call DIA_ONTICK             ; CF = 1: the package is mid-edit - any save
+    jc .arm                     ; owed waits for a later poll (SPEC.md 107.5)
 %endif
     test byte [dia_st], DIA_S_DIRTY
     jz .arm

@@ -784,7 +784,9 @@ dc_tpage:
     pop di
     ret
 
-; dc_ashown / dc_tshown - CL = the lines (rows) that are not blank now
+; dc_ashown / dc_tshown - CL = the lines (rows) that are not blank now: the
+; items from the top, or - when the list pages - every row to the PAGER, which
+; is the last row whatever a short last page holds (SPEC.md 107.3)
 dc_ashown:
     push ax
     push bx
@@ -804,6 +806,10 @@ dc_shown:                       ; AL = items from the top, BL/BH the page
     jbe .k
     mov al, bl
 .k:
+    or bh, bh
+    jz .n
+    mov al, bl                  ; paging: the rows above the pager, all of them
+.n:
     add al, bh
     mov cl, al
     pop bx
@@ -1083,6 +1089,40 @@ dc_ckaim:
     add ax, OS88UI_CKBOX - 1
     mov [dc_ck + 4], ax
     pop dx
+    pop ax
+    ret
+
+; dc_tmark - task row AL's MARK alone, AH = 1 checked: ONE fill, the 6x6
+; square os88ui_glyph puts inside the frame (box + 3 .. box + 8), black or
+; white (SPEC.md 107.3). Not os88ui_chkmark: that is the glyph whole and it
+; clears the box first, so the frame - known to be on the glass here - would
+; be written twice. The clip armed. Keeps every register
+dc_tmark:
+    push ax
+    push bx
+    push cx
+    push dx
+    call dc_trowy               ; DX = the row's top: the box's
+    push ax
+    mov al, CWHITE
+    or ah, ah
+    jz .c
+    mov al, CBLACK
+.c:
+    call OSAPI_SET_COLOR
+    pop ax
+    add dx, [dc_oy]
+    add dx, 3
+    mov bx, dx
+    add dx, OS88UI_CKBOX - 7
+    mov ax, [dc_ox]
+    add ax, 3
+    mov cx, ax
+    add cx, OS88UI_CKBOX - 7
+    call OSAPI_GFX_FILL
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 

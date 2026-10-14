@@ -169362,8 +169362,9 @@ TALL shows both lists, one under the other. COMPACT has room for one: the
 row under the rule is the day heading while the AGENDA is on show and
 ` Tasks` while the TASKS are, and `Tab`, a click on that row or Calendar >
 Show Tasks / Show Day swaps them (the item is greyed `(both shown)` on
-TALL). Every task row and agenda line is a fixed 26-cell run, so both
-layouts are the same code with these numbers in it.
+TALL). Every agenda line is a fixed 26-cell run and every task row the
+check box's glyph and a 24-cell run over cells 2..25, so both layouts are the
+same code with these numbers in it.
 
 **A day field is three cells, `[m][d][d]`**: the mark cell first, then the
 day right-aligned in two. Cell 0 is a `*` when the day has an appointment,
@@ -169452,8 +169453,13 @@ by `os88ui_chkdraw` and `os88ui_chkhit`, the shared control's own routines -
 and the text as the calendar's own 24-cell run from cell 2, because
 `os88ui_chk`'s label pen is the box's width plus a gap, 18 pixels in, and an
 unaligned run takes `font_run`'s two-pass fallback (§6.1). A click on a box
-toggles DONE and redraws THE MARK and nothing else - the glyph, through
-`os88ui_chkmark` (§13.15.2) - and so does `Space` on the selected task. The
+toggles DONE and redraws THE MARK and nothing else - ONE fill, the 6x6 square
+inside the frame, black or white - and so does `Space` on the selected task.
+It is not `os88ui_chkmark`: that routine is the shared glyph whole, and its
+published contract (§13.15.1) clears the box white before the frame and the
+mark go back, so a toggle through it writes the frame's 44 pixels twice.
+Here the frame is known to be on the glass, so the press is hit-tested with
+`os88ui_bhit` against the box's rect and the mark alone is filled. The
 selected task is its text inverse; more tasks than rows makes a pager row,
 as the agenda's.
 
@@ -169468,7 +169474,13 @@ and closing it is the heading's run and the two gap rows it took. A
 keystroke is `os88line_edit`'s, which repaints the cell it changed (§83.1.1).
 `Enter` keeps it, `Esc` throws it away, and while it is open the rest of the
 calendar waits: a click elsewhere in it does nothing, and a menu pick closes
-the field as `Esc` does before it acts.
+the field as `Esc` does before it acts. A click IN the field moves the caret:
+the old bar's cell repainted and the new bar drawn, two cells, where the
+caret did move (`os88line_caroff` / `os88line_caron`, the DOS box's
+`dos_caret_to`). New Appointment, New Task and Edit Item are GREYED while the
+field is open (`(typing)`), because each would close it - throwing the typed
+line away - and draw the heading band only for the new field to be drawn over
+it.
 
 What an appointment's line MEANS is decided by its first word:
 
@@ -169504,12 +169516,22 @@ the question is up nothing in the calendar can be changed - the item it asks
 about is the one deleted. Calendar > Clear Done Tasks removes every task
 whose box is checked, without asking: the user checked each box.
 
+**A page is re-derived whenever its list can change shape**: after a delete,
+the first item on show is the page that holds it NOW (or the first page, when
+the page emptied) - a delete that takes a list down to its row count ends
+paging, and a top left mid-table would hide the items above it with no pager
+to reach them. So does a layout change (§11.98, TALL and COMPACT page at
+different counts). The rows on the glass are counted to the PAGER when there
+is one - it is the last row, whatever a short last page holds - so the next
+partial redraw takes a pager that went away off the glass.
+
 **What a limit looks like** (§47, grey a fact). The 49th appointment is not
 refused at the keyboard alone: Calendar > New Appointment is GREYED as `New
 Appointment (full)` while the table holds 48, `N` answers `Calendar is full
 (48)`, and the same for tasks at 32 (`New Task (full)`, `Task list is full
 (32)`). Edit Item and Delete Item are greyed `(no item)` with nothing
-selected, Clear Done Tasks `(none done)` with no box checked. The items are
+selected, and Clear Done Tasks reads `Clear Done (none done)` with no box
+checked. The items are
 switched by a store into the menu's item array (§12.2): the kernel reads the
 array when the menu drops, so nothing is re-registered.
 
@@ -169558,7 +169580,8 @@ Month. `Remind`: At the Time, 5 Min Early, 15 Min Early, 30 Min Early, 1 Hour
 Early, No Reminder. The application-name menu carries `About Desk Calendar`
 and the kernel's own `Close`, which goes through `os88dia.inc`'s negotiator
 like the close box. The menus carry only what works in the wave that ships
-them.
+them, with one stated exception: wave 3's Remind STORES a lead - the toast
+says so and the `!` mark shows it - and wave 4 is what fires it.
 
 **The state file**, `SYSTEM\APPDATA\DESKCAL.DAT`, is §107.5's 16-byte header
 and this payload, 2,440 bytes, so the file is 2,456 bytes - five sectors, one
@@ -169583,18 +169606,24 @@ read and one write:
 The bullet in a day's mark cell is an appointment on that date. The flags
 byte at +3 is bit 0 = new appointments get NO reminder (Remind > No Reminder
 with nothing timed selected). An edit owes a save (`dia_touch`), which the
-next tick makes - one write of the whole file, about two seconds after the
-edit.
+next tick makes - and a save is not one write: it is `dia_enter`'s remount
+and walk and then `OSAPI_FILE_WRITE`, 2 reads and 6 writes, about 3.2 s of
+disk on a 5150 with the lock held (§107.6). So the calendar HOLDS it
+(`DIA_ONTICK` answers CF = 1, §107.5) while the entry field or the Delete
+question is open - a save in the middle of a typed word stalls the echo for
+seconds - and until one poll has passed with no edit, so a burst of ticked
+boxes is one save, 2 to 4 seconds after the last of them.
 `tools/os88dia.py` writes and reads the same layout (`deskcal()`,
 `parse_deskcal()`), and `t_dia` holds its offsets equal to `deskcal.asm`'s.
 
 **What a change costs, wave 3**, in primitive calls: a new selected day is
 wave 2's three plus one run per agenda line that was or is now occupied (a
 day with nothing on it, moved to another with nothing, costs nothing more);
-selecting an item is two runs; a check box is the glyph's two or three
-calls and nothing else; a keystroke in the field is `os88line_edit`'s one
+selecting an item is two runs; a check box is one fill (and one pen) and
+nothing else; a keystroke in the field is `os88line_edit`'s one
 cell; opening the field is one `os88line_draw` and closing it one run and
-two one-row fills; an insert or a delete is the occupied agenda lines (or
+two fills - the frame's top rows (three on TALL, two on COMPACT, whose frame
+top is the rule) and its bottom row; an insert or a delete is the occupied agenda lines (or
 the task rows from the one that changed), plus the day's field and its frame
 when its bullet came or went. A full paint adds the two lists: an agenda
 line is ONE run (pitch 8, no gaps), a task row is the glyph, one run and the
@@ -169709,7 +169738,7 @@ four that wave 2 added):
 | `dia_made` | after `OSAPI_WM_CREATE` **and the package's own sizing calls** (`KEEPH`, `PREFER`) | give back a restored `y` the create's fit pulled up and re-fit under the window's own height rule (§107.5.2); take the place the window OPENED at as the place on record; install `OSAPI_WM_ONTIMER` and `OSAPI_WM_ONCLOSE`; arm a 1-tick timer - or, where the timer is refused (kern_small), install the wake handler for the worker arm |
 | `dia_painted` | the end of the package's `W_PAINT` | on kern_small, hire the worker (once); nothing elsewhere |
 | `dia_touch` | whenever the payload changed | owe a save; the next tick makes it |
-| `dia_tick` | each timer tick (UI task, lock held) | the FIRST registers the DIA row (`OSAPI_DESK_ITEM` AL = 1, +3 = `'D'`, path from `OSAPI_FILE_PATH`); every one polls the frame's x,y and, once two polls agree on a place that is NOT the one on record, records it and owes a save; calls `DIA_ONTICK`; saves what is owed; re-arms for 36 ticks. A widget that has not been moved or edited writes nothing, whatever its state file was |
+| `dia_tick` | each timer tick (UI task, lock held) | the FIRST registers the DIA row (`OSAPI_DESK_ITEM` AL = 1, +3 = `'D'`, path from `OSAPI_FILE_PATH`); every one polls the frame's x,y and, once two polls agree on a place that is NOT the one on record, records it and owes a save; calls `DIA_ONTICK`, whose CF = 1 holds any save owed to a later poll (the package is mid-edit); saves what is owed; re-arms for 36 ticks. A widget that has not been moved or edited writes nothing, whatever its state file was |
 | `dia_close` | `W_ONCLOSE` | `DIA_ONCLOSE`; remove the row by name (AL = 0, AH = 0xFF); save; let the close proceed - except that a remove `OSAPI_DESK_ITEM` REFUSED (no system disk in A: to read `CTRL.DRV` from, whose own toast asks for it) declines the FIRST close (CF = 1) so the user can put the disk back and close again; the next close goes ahead whatever the remove answers, so a refusal can never make the window unclosable. `DIA_ONCLOSE` can therefore run twice |
 
 **The row is about the PROGRAM, not the state file**, so the first tick
@@ -169899,7 +169928,7 @@ First registration and close each write SYSTEM.CFG once.
 
 | | image | bss | on disk (lz4) |
 |---|---:|---:|---:|
-| `DESKCAL.O88`, wave 3 | **12,160** | 2,860 | **10,411** |
+| `DESKCAL.O88`, wave 3 | **12,368** (12,160 before the review fixes) | 2,860 | **10,544** (10,411) - the same 11 clusters |
 | `DESKCAL.O88`, wave 2 | 6,080 (5,808 before the review fixes) | 2,748 | 5,343 |
 | `DIAPROBE.O88` (never shipped) | 1,520 (wave 1: 1,120) | 196 | 1,520 |
 
@@ -170117,7 +170146,8 @@ silent. The small system disks carry `SYSTEM\DIA\` too (§24.5.1).
   - **The task's label is the calendar's own run**, not `os88ui_chk`'s:
     that label's pen is the box's width plus a gap, 18 pixels in, which is
     `font_run`'s two-pass fallback (§6.1). The box is the shared control's
-    `os88ui_chkdraw` / `chkhit` / `chkmark`.
+    `os88ui_chkdraw`; a toggle fills the mark alone (the review's change,
+    below).
   - **All-day appointments sort FIRST in their day** - the key is
     `time + 1`, where 0FFFFh wraps to 0 - and the design's `(date, time)`
     put them last; `tools/os88dia.py` writes the same order.
@@ -170137,6 +170167,19 @@ silent. The small system disks carry `SYSTEM\DIA\` too (§24.5.1).
   - **While the Delete question is up nothing can be changed**, and its Yes
     fixes the bullet of the deleted appointment's OWN day - the user may
     have moved to another day meanwhile.
+  - **Wave 3's review moved four things.** `DIA_ONTICK` gained an answer,
+    CF = 1 = hold the save: the design priced a save as "one write" and it
+    is §107.6's 2 reads and 6 writes, ~3.2 s with the lock held, which
+    landed in the middle of a typed word at the next 2 s poll; the
+    calendar holds it while the field or its question is open and until a
+    poll passes with no edit. A check box's toggle is the calendar's own
+    6x6 fill and not `os88ui_chkmark`, whose published clear-the-box
+    contract writes the frame twice. The rows on the glass are counted to
+    the pager, so a pager that goes away is erased, and a page is
+    re-derived after a delete and a layout change, so a list that stops
+    paging starts at its top. New Appointment, New Task and Edit Item grey
+    `(typing)` while the field is open rather than close it and redraw the
+    band twice.
 
 ### 107.10 How it was built, and its gates
 
@@ -170191,7 +170234,7 @@ no fixture, because what is on it is what a user has:
 | row | asserts |
 |---|---|
 | `deskcaledit` | MartyPC's VGA XT, the clock at 2026-10-14. A DAMAGED state file opens empty and its first edit puts `Replace damaged calendar?` up with the file on A: the fixture byte for byte, until Yes; `9:30 Dentist`, `1230 Lunch`, `815 Gym` and `Mum's birthday` are four appointments IN ORDER, all-day first and the three timed ones armed (H:MM, HHMM and HMM each by what the guest wrote); a clicked line and Enter open the field holding `09:30 Dentist`, and `Doctor` keeps the reminder; Del asks, Yes deletes; 26 characters are refused (`At most 25 letters`, the field still open, nothing written). A second boot with 48 appointments: New Appointment greyed `(full)`, `N` answering `Calendar is full (48)` |
-| `deskcaltask` | MartyPC's Hercules 5150 (TALL, a 1bpp framebuffer it reads whole). Three typed tasks in order; Clear Done greyed `(none done)`; a click on a box checks it and the window differs in the 6x6 mark and nothing else, with ZERO runs through the package's own `dc_run` (a breakpoint counter at the label a NASM map of the running image names; selecting a row, two runs, is its control); Space on the selected task the same; Clear Done Tasks leaves the unchecked one; Del and Yes empty the list |
+| `deskcaltask` | MartyPC's Hercules 5150 (TALL, a 1bpp framebuffer it reads whole). Three typed tasks in order; Clear Done greyed `(none done)`; a click on a box checks it and the window differs in the 6x6 mark and nothing else, with ZERO runs through the package's own `dc_run` (a breakpoint counter at the label a NASM map of the running image names; selecting a row, two runs, is its control); Space on the selected task the same; Clear Done Tasks leaves the unchecked one; Del and Yes empty the list; and a PAGED list (six tasks): a delete that ends paging starts the list at its top, and a pager that goes away is erased - row 4 ground, every pixel |
 
 Both are verified to fail on a broken build: a parser that refuses three
 digits stores `815 Gym` as an all-day line, and a toggle that redraws its row

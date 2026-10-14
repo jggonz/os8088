@@ -154,9 +154,11 @@ dc_selk     equ os88_image_end + DC_BSS_SELK
 dc_seli     equ os88_image_end + DC_BSS_SELI
 dc_pane     equ os88_image_end + 103    ; db COMPACT: 0 the agenda, 1 the tasks
 dc_atop     equ os88_image_end + 104    ; db the agenda's first item on show
-dc_ttop     equ os88_image_end + 105    ; db ...and the tasks'
+DC_BSS_TTOP equ 105                     ; db ...and the tasks'
+DC_BSS_TSHOW equ 107                    ; db task rows occupied on the glass
+dc_ttop     equ os88_image_end + DC_BSS_TTOP
 dc_ashow    equ os88_image_end + 106    ; db agenda lines occupied on the glass
-dc_tshow    equ os88_image_end + 107    ; db ...task rows
+dc_tshow    equ os88_image_end + DC_BSS_TSHOW
 dc_ask      equ os88_image_end + 108    ; db our Delete question is up
 dc_delk     equ os88_image_end + 109    ; db ...about this kind
 dc_deli     equ os88_image_end + 110    ; db ...and index
@@ -168,8 +170,9 @@ DC_BSS_EBUF equ 134                     ; 32: its text
 dc_ebuf     equ os88_image_end + DC_BSS_EBUF
 dc_ck       equ os88_image_end + 166    ; 12: one check box, aimed at a row
 dc_rec      equ os88_image_end + 178    ; 32: an appointment being inserted
+dc_tq       equ os88_image_end + 210    ; db an edit since the last poll
 DC_BSS      equ 224                     ; a multiple of 16 (os88dia.inc)
-%if 178 + DCP_APPTSZ > DC_BSS
+%if 178 + DCP_APPTSZ > 210
   %error "deskcal: its own bss has outgrown DC_BSS"
 %endif
 
@@ -287,6 +290,13 @@ dc_paint:
 ; CX/DX = the new content box. No drawing; the full paint follows
 dc_onresize:
     call dc_layout
+    push ax                     ; TALL and COMPACT page at different counts:
+    mov al, [dc_atop]           ; each list's top re-derived as the page of
+    add al, [dc_afirst]         ; the new layout that holds it (SPEC.md 107.3)
+    call dc_aview
+    mov al, [dc_ttop]
+    call dc_tview
+    pop ax
     jmp dc_menulive             ; Show Tasks greys on TALL
 
 ; -----------------------------------------------------------------------------
@@ -612,7 +622,16 @@ dc_onclick:
     jc .x
     call dc_frect
     mov si, dc_ln
+    mov bx, [si + LN_CAR]       ; the bar's old cell
     call os88line_click
+    jc .x                       ; outside the field
+    mov ax, [si + LN_CAR]
+    cmp ax, bx
+    je .x                       ; the same cell: nothing moved
+    xchg ax, bx
+    call os88line_caroff        ; ...and the BAR follows it: the old cell
+    xchg ax, bx                 ; repainted, the new bar drawn (the DOS box's
+    call os88line_caron         ; dos_caret_to, SPEC.md 107.3)
     jmp short .x
 .cal:
     push cx                     ; the screen point, for a check box's hit
@@ -759,7 +778,7 @@ dc_aclick:
     je .sel
     xor byte [si + DCA_FLAGS], DCA_REMIND   ; the reminder, on or off, at
     and byte [si + DCA_FLAGS], ~DCA_FIRED & 0FFh ; its own lead
-    call dia_touch
+    call dc_touch
 .sel:
     mov bl, DCS_APPT
     mov bh, al
@@ -776,8 +795,9 @@ dc_aclick:
     ret
 
 ; dc_tclick - a press on task row AL at the screen point CX, DX: the pager
-; pages; on a task, a press on its BOX toggles it - os88ui_chkhit, which
-; redraws the mark and nothing else - and anywhere else selects it
+; pages; on a task, a press on its BOX (os88ui_bhit on the box's rect)
+; toggles it - dc_toggle, which fills the mark and nothing else - and
+; anywhere else selects it
 dc_tclick:
     push ax
     push bx
@@ -802,22 +822,13 @@ dc_tclick:
     call dc_busy
     jc .sel
     push ax
-    call dc_tptr
-    mov ah, [si + DCT_FLAGS]
-    and ah, DCT_DONE
     sub al, [dc_ttop]           ; the row again
-    call dc_arm
-    jc .nb
-    call dc_ckaim
+    call dc_ckaim               ; the box's rect (dc_org is current)
     mov bx, dc_ck
-    call os88ui_chkhit          ; CF = 0 it was the box: toggled and drawn
-.nb:
+    call os88ui_bhit            ; CF = 0 the press is on the box
     pop ax
     jc .sel
-    call dc_tptr
-    xor byte [si + DCT_FLAGS], DCT_DONE
-    call dia_touch
-    call dc_menulive
+    call dc_toggle
     jmp short .x
 .sel:
     mov bl, DCS_TASK
@@ -846,6 +857,7 @@ dc_oncmd:
     mov byte [dc_redo], 1       ; 107.3) - and a field under it goes with it,
     mov byte [dc_ed], 0         ; unseen
     mov byte [dc_ln + LN_FOCUS], 0
+    call dc_menulive
 .go:
     cmp byte [dc_ed], 0
     je .shut
@@ -912,6 +924,12 @@ dc_cmds:    dw dc_newa, dc_newt, dc_edit, dc_askdel, dc_clear, dc_pswap
 ; paint shows the state as it is)
 ; -----------------------------------------------------------------------------
 
+; dc_touch - an edit: a save owed (dia_touch), held to the next quiet poll
+; (dc_tick). Every register and the flags kept
+dc_touch:
+    mov byte [dc_tq], 1
+    jmp dia_touch
+
 ; dc_busy - CF = 1 nothing may be changed now: the field is open, or our
 ; Delete question is up (its answer deletes the item it asked about)
 dc_busy:
@@ -965,6 +983,12 @@ dc_menulive:
 .e:
     mov [dc_i_cal + 2 * DCM_EDIT], ax
     mov [dc_i_cal + 2 * DCM_DEL], di
+    cmp byte [dc_ed], 0         ; the field open: the three that would close
+    je .ne                      ; it, throwing its line away, and open
+    mov word [dc_i_cal + 2 * DCM_NEWA], dc_i_newa1  ; another over the band
+    mov word [dc_i_cal + 2 * DCM_NEWT], dc_i_newt1  ; that close just drew
+    mov word [dc_i_cal + 2 * DCM_EDIT], dc_i_edit1  ; (SPEC.md 107.3)
+.ne:
     mov ax, dc_i_clr
     call dc_anydone
     jnc .c
@@ -1213,6 +1237,7 @@ dc_fopen:
     push cx
     push di
     mov [dc_ed], al
+    call dc_menulive            ; the three that would close it grey
     mov word [dc_ln + LN_BUF], dc_ebuf
     mov word [dc_ln + LN_MAX], DC_ESZ
     cmp al, DCE_NEWT
@@ -1264,6 +1289,7 @@ dc_fclose:
     call dc_fhead               ; AX = its heading's row - asked while open
     mov byte [dc_ed], 0
     mov byte [dc_ln + LN_FOCUS], 0
+    call dc_menulive            ; ...and are live again
     call dc_arm
     jc .x
     mov di, [dc_lay]
@@ -1387,7 +1413,7 @@ dc_cappt:
     mov dh, [dc_seli]           ; drawn plain again (an appointment's line is
     mov byte [dc_selk], DCS_APPT    ; the agenda's, which is redrawn)
     mov [dc_seli], al
-    call dia_touch
+    call dc_touch
     call dc_fclose
     call dc_arange
     call dc_aview               ; its page
@@ -1447,7 +1473,7 @@ dc_ctask:
     push word [dc_selk]         ; the selection before (SELK, SELI adjacent)
     mov byte [dc_selk], DCS_TASK
     mov [dc_seli], al
-    call dia_touch
+    call dc_touch
     call dc_fclose
     call dc_tview               ; its page
     call dc_menulive
@@ -1657,14 +1683,16 @@ dc_delans:
     pushf
     call dc_adel
     call dc_fixsel
-    call dia_touch
+    call dc_touch
     call dc_arange
     mov al, [dc_atop]           ; a page that emptied: the first
     cmp al, [dc_acnt]
     jb .ka
-    mov byte [dc_atop], 0
+    xor al, al
 .ka:
-    call dc_build
+    add al, [dc_afirst]         ; ...and the page holding the top NOW - the
+    call dc_aview               ; first, when the delete ended paging (SPEC.md
+    call dc_build               ; 107.3). dc_agnew draws from line 0 anyway
     mov al, bh
     popf
     call dc_markfix
@@ -1686,12 +1714,16 @@ dc_delans:
 .tdn:
     dec byte [dc_seli]
 .kt:
-    call dia_touch
-    mov ah, [dc_ttop]
-    cmp ah, [DIA_PAY + DCP_NTASK]
+    call dc_touch
+    push ax
+    mov al, [dc_ttop]           ; a page that emptied: the first...
+    cmp al, [DIA_PAY + DCP_NTASK]
     jb .tk
-    mov byte [dc_ttop], 0
+    xor al, al
 .tk:
+    call dc_tview               ; ...and the page holding the top NOW: the
+    pop ax                      ; first when the delete ended paging, which
+                                ; BL != [dc_ttop] below redraws whole
     call dc_menulive
     call dc_arm
     jc .x
@@ -1713,7 +1745,8 @@ dc_delans:
     pop ax
     ret
 
-; dc_toggle - task AL checked or not (Space): the mark redrawn, nothing else
+; dc_toggle - task AL checked or not (Space, a press on its box): the mark
+; redrawn, ONE fill and nothing else (SPEC.md 107.3)
 dc_toggle:
     call dc_busy
     jc .r
@@ -1723,7 +1756,7 @@ dc_toggle:
     xor byte [si + DCT_FLAGS], DCT_DONE
     mov ah, [si + DCT_FLAGS]
     and ah, DCT_DONE
-    call dia_touch
+    call dc_touch
     call dc_menulive
     sub al, [dc_ttop]
     jb .x
@@ -1736,14 +1769,7 @@ dc_toggle:
     jc .x
     call dc_arm
     jc .x
-    call dc_ckaim
-    push bx
-    push di
-    mov bx, dc_ck
-    xor di, di
-    call os88ui_chkmark         ; the mark (SPEC.md 13.15.2)
-    pop di
-    pop bx
+    call dc_tmark
 .x:
     pop si
     pop ax
@@ -1763,7 +1789,7 @@ dc_clear:
     mov byte [dc_selk], 0
 .k:
     mov byte [dc_ttop], 0
-    call dia_touch
+    call dc_touch
     call dc_menulive
     call dc_arm
     jc .x
@@ -1820,7 +1846,7 @@ dc_remind:
     and byte [DIA_PAY + DCP_FLAGS], ~DCF_NOREM & 0FFh
     mov [DIA_PAY + DCP_LEAD], ah
 .say:
-    call dia_touch
+    call dc_touch
     push di                     ; the toast: its prefix and the lead's words
     call dc_blank
     pop si
@@ -1844,7 +1870,11 @@ dc_remind:
 ; day (a run lays the frame's side columns). The month on show does not
 ; change with the date, so nothing else is drawn; nor is anything while the
 ; About card is up - the paint that takes it down shows the new today
-; (SPEC.md 107.3). The minute's work is wave 4's
+; (SPEC.md 107.3). The minute's work is wave 4's.
+; out: CF = 1 HOLD the save owed (os88dia.inc): the entry field or our Delete
+;      question is open, or an edit landed since the last poll - a save is
+;      seconds of disk with the lock held (SPEC.md 107.6), so it waits for a
+;      quiet poll and a burst of edits is one save
 ; -----------------------------------------------------------------------------
 dc_tick:
     push ax
@@ -1874,6 +1904,11 @@ dc_tick:
 .fr:
     call dc_selon
 .x:
+    mov al, [dc_tq]             ; an edit this poll...
+    mov byte [dc_tq], 0
+    or al, [dc_ed]              ; ...the field open, the question up
+    or al, [dc_ask]
+    neg al                      ; CF = 1 for any of them
     pop bx
     pop ax
     ret
@@ -1920,6 +1955,9 @@ dc_i_newt:  db 'New Task  K', 0                        ; the words WHY
 dc_i_newt0: db MENU_DIS, 'New Task (full)', 0          ; (SPEC.md 47)
 dc_i_edit:  db 'Edit Item  Enter', 0
 dc_i_edit0: db MENU_DIS, 'Edit Item (no item)', 0
+dc_i_newa1: db MENU_DIS, 'New Appointment (typing)', 0
+dc_i_newt1: db MENU_DIS, 'New Task (typing)', 0
+dc_i_edit1: db MENU_DIS, 'Edit Item (typing)', 0
 dc_i_del:   db 'Delete Item  Del', 0
 dc_i_del0:  db MENU_DIS, 'Delete Item (no item)', 0
 dc_i_clr:   db 'Clear Done Tasks', 0

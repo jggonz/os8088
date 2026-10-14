@@ -98,6 +98,8 @@ DESKCAL_BSS_EDI = 100           # db ...the item it edits
 DESKCAL_BSS_SELK = 101          # db the selected item: 0, 1 appt, 2 task
 DESKCAL_BSS_SELI = 102          # db ...its index in its table
 DESKCAL_BSS_EBUF = 134          # 32: the entry field's text, NUL
+DESKCAL_BSS_TTOP = 105          # db the first task on show
+DESKCAL_BSS_TSHOW = 107         # db task rows on the glass, to the pager
 DESKCAL_NOREM = 1               # payload +3 bit 0: new ones get no reminder
 
 
@@ -296,7 +298,8 @@ def unpack_date(w):
 
 
 def deskcal(appts=(), tasks=(), lead=5, flags=0):
-    """appts: (date-tuple, minute-of-day or None, text, remind, fired, lead);
+    """appts: (date-tuple, minute-of-day or None, text, remind, fired, lead),
+    remind defaulting to "timed" - an all-day one has none (SPEC.md 107.3);
     tasks: (text, done, due-date-tuple or None). Sorted by (date, time + 1) as the
     package keeps them."""
     appts, tasks = list(appts), list(tasks)
@@ -307,7 +310,7 @@ def deskcal(appts=(), tasks=(), lead=5, flags=0):
     recs = []
     for a in appts:
         date, t, text = a[0], a[1], a[2]
-        remind = a[3] if len(a) > 3 else True
+        remind = a[3] if len(a) > 3 else (t is not None)  # all day: none
         fired = a[4] if len(a) > 4 else False
         al = a[5] if len(a) > 5 else lead
         recs.append((pack_date(*date), TIME_ALLDAY if t is None else t,
@@ -450,6 +453,8 @@ def selfcheck():
     ok(dc["appts"][2]["time"] == 570 and dc["appts"][2]["remind"],
        "9:30 with its reminder")
     ok(dc["appts"][1]["time"] is None, "all-day reads back as all-day")
+    ok(not dc["appts"][1]["remind"],
+       "an all-day appointment has no reminder by default, as the package")
     ok(dc["tasks"][1]["done"] and dc["tasks"][1]["due"] == [2026, 10, 20],
        "a done, dated task")
     ok(unpack_date(pack_date(2099, 12, 31)) == (2099, 12, 31)

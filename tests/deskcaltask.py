@@ -14,13 +14,20 @@ file is flushed off the emulated drive and parsed by tools/os88dia.py.
      > Clear Done Tasks is GREYED `Clear Done (none done)` (SPEC.md 47).
   B  a click on Buy milk's BOX checks it: the screen differs from before in
      the box's 6x6 mark and in NOTHING ELSE - not the label, not the frame,
-     not another row (os88ui_chkhit -> os88ui_chkmark, SPEC.md 13.15.2) - and
+     not another row (dc_tmark's one fill, SPEC.md 107.3) - and
      after the debounce the file has it DONE. Clear Done Tasks is live.
   C  a click on Post letter's TEXT selects it, and Space checks it: the same
      mark-only picture, and DONE in the file.
   D  Calendar > Clear Done Tasks leaves `Call plumber` alone in the file,
      the item greyed again.
   E  Call plumber selected, Del, and Yes: the file has no task.
+  F  a PAGED list (SPEC.md 107.3): six tasks put the sixth on page 2, whose
+     pager is row 4 - and the rows on the glass count to it (5). Deleting
+     one ends paging, so the list starts at its TOP again (dc_ttop 0), not
+     mid-table with no pager to reach the rest. Six again, page 2, its two
+     tasks checked and cleared: four are left and row 4 - the old pager's -
+     is ground, every pixel of its text, which a count that stopped at the
+     short page's last task never erased.
 
 What "nothing else" means is asserted twice, because a picture cannot say
 it alone: a redraw of the label lays the same pixels again and changes none
@@ -31,7 +38,8 @@ with a selection click, two runs, as the counter's own control.
 
 **BREAK IT ON PURPOSE**: make dc_tclick redraw the whole row after the
 toggle (call dc_trow) and B's counter reads 1; take the DONE flip out of
-dc_tclick and B's file check fails.
+dc_toggle and B's file check fails; take dc_shown's pager arm out and F's
+row 4 keeps `page 2 of 2`.
 """
 import os
 import re
@@ -232,6 +240,70 @@ def main():
             c.answer_yes("the Delete question")
             got = tasks()
             check(got == [], "no task is left in the file (%r)" % (got,))
+
+            print("F: a paged list")
+
+            def tbss(off):
+                return c.bss(off)[0]
+
+            def add(line):
+                c.key("KeyK")
+                c.type(line)
+                c.key("Enter")
+                c.field_shut("the field to shut after %r" % line)
+                os88marty.pace(m, 0.5)
+
+            for line in ("T0", "T1", "T2", "T3", "T4", "T5"):
+                add(line)
+            check(tbss(os88dia.DESKCAL_BSS_TTOP) == 4,
+                  "the sixth task is on page 2 (dc_ttop %d)"
+                  % tbss(os88dia.DESKCAL_BSS_TTOP))
+            check(tbss(os88dia.DESKCAL_BSS_TSHOW) == 5,
+                  "...and the rows on the glass count to its pager (%d)"
+                  % tbss(os88dia.DESKCAL_BSS_TSHOW))
+            c.front()
+            ui.mo.click(x + 100, y + TPITCH + 5)     # T5, row 1
+            os88marty.pace(m, 1.0)
+            c.key("Delete")
+            ui._wait(lambda: len([w for w in ui.windows()
+                                  if w.title == TITLE]) == 2,
+                     "the Delete question", 30)
+            c.answer_yes("the Delete question")
+            got = tasks()
+            check([t for t, _ in got] == ["T0", "T1", "T2", "T3", "T4"],
+                  "five left (%r)" % (got,))
+            check(tbss(os88dia.DESKCAL_BSS_TTOP) == 0,
+                  "paging ended, so the list starts at its top (dc_ttop %d)"
+                  % tbss(os88dia.DESKCAL_BSS_TTOP))
+            img = frame_now()
+            ox, oy = c.origin()
+            row0 = [(px, oy + T0 + 2 + j) for px in range(ox + 16, ox + 40)
+                    for j in range(8)]
+            check(any(not img[py][px] for px, py in row0),
+                  "row 0 shows T0's text")
+            add("T6")
+            check(tbss(os88dia.DESKCAL_BSS_TTOP) == 4,
+                  "six again: page 2 (dc_ttop %d)"
+                  % tbss(os88dia.DESKCAL_BSS_TTOP))
+            for k in (0, 1):
+                c.front()
+                ui.mo.click(x + 5, y + k * TPITCH + 5)
+                os88marty.pace(m, 1.0)
+            c.front()
+            ui.menu_pick("Calendar", "Clear Done Tasks")
+            got = tasks()
+            check([t for t, _ in got] == ["T0", "T1", "T2", "T3"],
+                  "Clear Done leaves four (%r)" % (got,))
+            img = frame_now()
+            row4 = [(px, oy + T0 + 4 * TPITCH + 2 + j)
+                    for px in range(ox + 16, ox + 16 + 24 * 8)
+                    for j in range(8)]
+            ink = [p for p in row4 if not img[p[1]][p[0]]]
+            check(not ink, "row 4, the old pager's, is ground (%d ink "
+                  "pixels%s)" % (len(ink), bbox(set(ink))))
+            check(tbss(os88dia.DESKCAL_BSS_TSHOW) == 4,
+                  "...and four rows are counted on the glass (%d)"
+                  % tbss(os88dia.DESKCAL_BSS_TSHOW))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("deskcaltask: %s" % ("PASS" if not fails else
