@@ -12618,6 +12618,20 @@ SOAK = [
         "pictures drifting apart - red with dsk_img_icon's call taken out. "
         "Measured at 75s",
         needs=("marty",), serial=True),
+    Row("imgswap", "soak", py("tests/imgswap.py"), 45.0,
+        "SPEC.md 18.101.7: an image on a FLOPPY is swapped with that floppy. "
+        "TEST.IMG (tests/imgfix.py's 1.44MB set) mounts off B: and lists; "
+        "its BPB bank must not be PERMANENT (dsk_bpbok != 1, read off the "
+        "guest); then, motor stopped, B: is swapped under the running machine "
+        "(MartyPC's mount) for ANOTHER disk - one patterned file covering "
+        "every host LBA the image occupied - and New Folder is asked of the "
+        "image's drive. The other disk, flushed back to the host, must be "
+        "UNCHANGED to the byte. As first built the image row was a fixed "
+        "DVK_DRV row: banked for good, never re-read, never re-validated by "
+        "dsk_media_ok, so the write landed at the image's old host LBAs on "
+        "the new disk with CF = 0 - which is what this row fails on at the "
+        "commit before dsk_vol_rmv. Estimated, not yet measured",
+        needs=("marty",), serial=True),
     Row("wimgtrip", "soak", py("tests/wimgtrip.py"), 56.0,
         "wimgtrip - Write Image... (SPEC.md 18.99.8) driven to the end and "
         "diffed: apps360.img as a FILE on a 720KB B:, written over the 360KB "

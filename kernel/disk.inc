@@ -950,8 +950,10 @@ dsk_bpb_flopzap:
 ; ONE LOOP FOR BOTH (size pass 10, -15): a row is 0, 1 or 2 and nothing
 ; else (dsk_bpb_bank's one store is [dsk_vflop] + 1, and [dsk_vflop] is 0 or
 ; 1), so "zero every row at or above AL" is the flop zap at AL = 2 and the
-; whole bank at AL = 1. The bank zap was a `rep stosb`, which wanted ES and
-; DF banked around it; the compare touches neither.
+; whole bank at AL = 1. kern_big's image on a floppy banks a 3 (vflop 2,
+; SPEC.md 18.101.7), which the flop zap takes with the 2s. The bank zap was a
+; `rep stosb`, which wanted ES and DF banked around it; the compare touches
+; neither.
 ; -----------------------------------------------------------------------------
 dsk_bpb_bank_zap:
     pushf                       ; AX included: this is called at the TOP of
@@ -1026,8 +1028,13 @@ dsk_bpb_bank:
     call kentc_di               ; KENT: push ax..di (no flag moves)
     push es
     sbb dx, dx                  ; DX = 0 GET, 0xFFFF PUT (`push` writes no flag)
+%ifdef OS88_IMG
+    cmp byte [dsk_vflop], 0     ; ...and an image ON one, vflop 2 (SPEC.md
+    je .ok                      ; 18.101.7), is swapped with it
+%else
     cmp byte [dsk_vflop], 1
-    jne .ok                     ; a floppy is the one that can be swapped, so
+    jne .ok
+%endif                          ; a floppy is the one that can be swapped, so
     cmp byte [dsk_batch], 0     ; it needs the CALLER's assertion that it has
     je .no                      ; not been (SPEC.md 18.9.3), either way
 .ok:
@@ -1054,7 +1061,8 @@ dsk_bpb_bank:
     shr bx, 1
     mov al, [dsk_vflop]         ; 1 = permanent (a fixed volume, vflop 0)...
     inc ax                      ; ...2 = only for as long as this batch runs
-    mov [bx+dsk_bpbok], al      ; (a floppy, vflop 1)
+    mov [bx+dsk_bpbok], al      ; (a floppy, vflop 1), and 3 the same for an
+                                ; image on a floppy (vflop 2, OS88_IMG)
     mov si, dsk_bpbh
 .move:
     rep movsw
@@ -2709,6 +2717,13 @@ dsk_vol_fixed_x:
                                 ; assumed, so a change to either breaks the
                                 ; BUILD instead of the published ABI
     mov al, 1                   ; a driver volume is fixed by construction
+%ifdef OS88_IMG
+    call dsk_vol_rmv            ; ...BUT A MOUNTED IMAGE IS ITS HOST'S MEDIUM
+    sbb al, 0                   ; (SPEC.md 18.101.7), so one on a floppy is
+                                ; removable and a WSEQF_KEEP hold on it ends
+                                ; with its callback. The %else arm's test,
+                                ; asked there of the host: AL 1 -> 0 on CF = 1
+%else
 %ifdef OS88_DRIVERS             ; (kern_small and kern_dos: every row is BIOS)
     cmp ah, DVK_BIOS            ; (SPEC.md 52 mounts partitions and nothing
     jne .out                    ; else through DSV_BLK), and so is a REDIRECTED
@@ -2729,7 +2744,8 @@ dsk_vol_fixed_x:
     jnz .out                    ; when its int 13h drive says so - disk_mount's
     dec ax                      ; own test, in the one place that owns it.
                                 ; AL 1 -> 0 and AH (VT_BIOS) untouched: no
-.out:                           ; borrow out of a 1 (size pass 10, -3)
+%endif                          ; borrow out of a 1 (size pass 10, -3)
+.out:
     pop bx
     clc
     ret
@@ -2737,6 +2753,37 @@ dsk_vol_fixed_x:
     pop bx
     stc
     ret
+
+%ifdef OS88_IMG
+; -----------------------------------------------------------------------------
+; dsk_vol_rmv - can this row's MEDIUM be swapped? (SPEC.md 18.101.7)
+; in:  BX = a live row
+; out: CF = 1 removable, BL = its int 13h unit (0xFF: none); CF = 0 fixed
+; clobbers: BX, flags
+;
+; The three medium questions - disk_mount_x's, dsk_media_ok's and the one
+; above - asked once. A MOUNTED IMAGE answers for its HOST, because its sectors
+; ARE the host's: one on a floppy is on a medium the user can take out, and
+; the next floppy in that drive is written at the image's old host LBAs if
+; nothing asks. One whose host is gone answers removable with no unit:
+; re-validated and never trusted. The host is never an image itself
+; (clo_mount refuses it), so one step is the whole walk.
+; -----------------------------------------------------------------------------
+dsk_vol_rmv:
+    call KERNEL_SEG:dsk_img_host    ; BX = the row whose medium this is
+    jc .gone
+    mov bx, [bx+DV_KIND]        ; BL = the kind, BH = the unit (asserted)...
+    xchg bl, bh                 ; ...and BX below 80h is exactly "a BIOS row
+    cmp bx, 0x0080              ; whose drive is below 80h": a floppy. CF is
+    ret                         ; the answer, BL the unit
+.gone:
+    mov bl, 0xFF                ; `mov` leaves the lookup's CF = 1
+    ret
+%if DV_UNIT != DV_KIND + 1 || DVK_BIOS != 0
+  %error "dsk_vol_rmv reads the kind and the unit as ONE word, BIOS = 0"
+%endif
+%endif
+
 %if VT_BIOS != DVK_BIOS || VT_DRIVER != DVK_DRV || VT_FILE != DVK_FILE
   %error "disk: SPEC.md 18.7.2 - VT_* must equal DVK_*, or dsk_vol_fixed lies"
 %endif
@@ -3066,6 +3113,31 @@ dsk_img_orphan:
     cmp bx, dsk_vtab + DVOL_MAX*DV_SIZE
     jb .orph
     pop es
+    retf
+
+; -----------------------------------------------------------------------------
+; dsk_img_host - a MOUNTED IMAGE's host row (SPEC.md 18.101.7). FAR entry:
+;                dsk_vol_rmv's, from .cold - here by size, as dsk_img_orphan is
+; in:  BX = a live row
+; out: CF = 0 and BX = the HOST's row if BX was an image's, BX unchanged if
+;      not; CF = 1 = an image whose host is gone (BX = 0)
+; clobbers: BX, flags
+;
+; Byte 0 of the claim is the host's volume, dsk_img_swap's own byte; an
+; ORPHAN's is 0xFF (dsk_img_orphan), which no row is. The class alone is the
+; test, as at every other DRVC_IMG site: a live row of any other kind never
+; carries it (dsk_vol_add stamps the class on every row it hands out).
+; -----------------------------------------------------------------------------
+dsk_img_host:
+    cmp byte [bx+DV_CLASS], DRVC_IMG
+    clc                         ; CLC writes CF alone: ZF is still the cmp's
+    jne .own
+    push es
+    mov es, [bx+IMG_DVSEG]
+    mov bl, [es:0]              ; the HOST's volume
+    pop es
+    jmp COLD_SEG:dskf_dsk_vol_row   ; ...its row, CF = 1 none: its retf is ours
+.own:
     retf
 section .cold                   ; ...and back to resident cold code
 %endif
@@ -3549,7 +3621,16 @@ disk_mount_x:
     mov ax, [dsk_boothds]       ; Never probed: leave the floppy fallback and
     mov [disk_heads], ax        ; let the mount fail honestly
 .nofloppy:
+%ifdef OS88_IMG
+    call dsk_vol_rmv            ; ...BUT A MOUNTED IMAGE ON A FLOPPY HAS A
+    sbb al, al                  ; FLOPPY'S MEDIUM (SPEC.md 18.101.7): vflop 2,
+    and al, 2                   ; so its BPB is banked for a batch only, LBA 0
+    mov [dsk_vflop], al         ; is re-read at every other mount and a
+                                ; swapped host fails there - under an image's
+                                ; BPB rules still (dsk_bpb_check's mask)
+%else
     mov byte [dsk_vflop], 0
+%endif
 .kindok:
     pop bx
     ; THE GEOMETRY IS SETTLED ABOVE, inside the block that already had the
@@ -4242,6 +4323,12 @@ dsk_bpb_check:
                                 ; rule 14, dsk_copy_in_x banks everything it
                                 ; touches and never names BX, and `mul` writes
                                 ; only AX and DX
+%ifdef OS88_IMG
+    and bh, 1                   ; ...the FLOPPY bit alone: an image on a
+                                ; floppy (vflop 2, SPEC.md 18.101.7) has a
+                                ; floppy's medium and an image's BPB rules -
+                                ; any geometry, bounded by its DV_SECS
+%endif
 
     ; rule 3: bytes/sector == 512 exactly (disk_read moves exactly 512)
     cmp word [dsk_bpb+DSK_B_BPS], 512
@@ -4298,8 +4385,8 @@ dsk_bpb_check:
     mov ax, [dsk_bpb+DSK_B_FATSZ]
     test ax, ax
     jz .jfail1
-    test bh, bh                 ; [dsk_vflop] is 0 or 1 - its only two stores
-    jz .r11                     ; in disk_mount_x - so a test is the compare
+    test bh, bh                 ; BH is 0 or 1 - [dsk_vflop], masked above on
+    jz .r11                     ; kern_big - so a test is the compare
     cmp ax, DSK_FAT_SECS
     ja .jfail1
 .r11:
@@ -7101,6 +7188,12 @@ dsk_media_ok:
     mov bl, dl
     call dsk_vol_row_x
     jc .no
+%ifdef OS88_IMG
+    call dsk_vol_rmv            ; the test below, and A MOUNTED IMAGE asks it
+    jnc .yes                    ; of its HOST (SPEC.md 18.101.7): an image on
+                                ; a floppy gets that drive's motor test, and
+                                ; BL = the unit, 0xFF for an orphan (-> .no)
+%else
     cmp byte [bx+DV_KIND], DVK_BIOS
     jne .yes                    ; not removable: nothing to re-validate. Both
                                 ; non-BIOS kinds, and a REDIRECTED volume
@@ -7119,6 +7212,7 @@ dsk_media_ok:
                                 ; it mounts) - the cost is correctness kept
                                 ; and the whole optimisation lost on the one
                                 ; volume an installed machine uses most
+%endif
     cmp bl, 4
     jae .no                     ; only drives 0..3 have a bit in 0040:003F
     xor bh, bh                  ; BL was the row pointer's low half a moment
@@ -9647,7 +9741,8 @@ dsk_bpbv:     resb DVOL_MAX * DSK_BPB_SZ
 dsk_bpbsg:    resw DVOL_MAX
 dsk_bpbok:    resb DVOL_MAX     ; 0 = nothing banked, 1 = banked and good
                                 ; for ever (a fixed disk), 2 = good only until
-                                ; this batch ends (SPEC.md 18.9.3)
+                                ; this batch ends (SPEC.md 18.9.3), and 3 the
+                                ; same for an image on a floppy (18.101.7)
 dsk_bpbpre:   resb 1            ; dsk_bpb already holds a banked head
 
 dsk_ent:    resb DSK_DE_SIZE    ; one staged directory entry (dsk_get_dir);
@@ -9708,7 +9803,9 @@ dsk_vflop:    resb 1            ; ...and whether it is a FLOPPY, which is what
                                 ; BPB rules 10..13 need and is no longer the
                                 ; same question (SPEC.md 52.10.3): a boot
                                 ; partition is a DVK_BIOS row with a 64-sector
-                                ; FAT, and rule 10 caps a floppy's at 9
+                                ; FAT, and rule 10 caps a floppy's at 9. 2 on
+                                ; kern_big = a mounted image ON a floppy: a
+                                ; floppy's bank, an image's rules (18.101.7)
 dsk_vsecs:    resw 1            ; ...and the sector count its driver declared,
                                 ; which is rule 13's replacement
 %ifdef OS88_REDIR

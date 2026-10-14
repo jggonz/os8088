@@ -32168,7 +32168,9 @@ icon** — every boot, on the only machine that could show it.
 `dsk_vol_fixed` is the one predicate now: BL = volume index, CF=1 for no such
 volume, CF=0 with AL = 0 removable / 1 fixed. It is `DVK_DRV` *or* a BIOS unit
 with bit 7 set — `disk_mount`'s own test, in the one place that owns it. The
-desktop and the API call it, so they cannot drift.
+desktop and the API call it, so they cannot drift. A **mounted image**
+(§18.101) is the one `DVK_DRV` row it does not call fixed: it answers for
+the image's HOST, so an image on a floppy is removable (§18.101.7).
 
 **`OSAPI_VOL_KIND` (slot 0x0190)** publishes it: AL = a volume index in,
 CF=1 = no such volume, CF=0 with **AL = `VK_REMOVABLE` / `VK_FIXED`** and
@@ -37643,9 +37645,12 @@ A mounted image is a **`DVK_DRV` row whose `DV_CLASS` is `DRVC_IMG`** (`0x41`).
 That is a pseudo-class like `DRVC_OVL`: outside `1..DRVC_MAX`, never published,
 refused by `drv_cls_idx` on range, and never matched by `dsk_vol_drop_drv`, so
 no driver's unload can sweep it up. As a `DVK_DRV` row it is already what every
-kind test in the kernel should take it for: not a floppy, not cached by
-§18.95, and served by somebody other than `int 13h` at its own address.
-`dsk_vol_add` stamps it with no change, given `[dsk_vcls]` = `DRVC_IMG`.
+kind test in the kernel should take it for: not a floppy's BPB rules, not
+cached by §18.95, and served by somebody other than `int 13h` at its own
+address. `dsk_vol_add` stamps it with no change, given `[dsk_vcls]` =
+`DRVC_IMG`. **The MEDIUM is the exception**: an image on a floppy is swapped
+with that floppy, so the three questions about the medium ask the HOST
+(§18.101.7).
 
 `dsk_xfer`'s `.drv` arm tests the class first and, for an image, **re-issues
 each piece of the transfer as an ordinary `dsk_xfer` on the HOST volume**. The
@@ -37860,6 +37865,75 @@ was about space, so the copy that costs less wins. What it gives up is that
 the two pictures can drift, and `tests/imgmount.py` leg 0 is what stops that:
 it computes the fold from `ico_disk32`'s pool rows on the host and compares
 the drawn pixels with it.
+
+#### 18.101.7 An image on a floppy is a floppy
+
+**An image's sectors are its host's, so its MEDIUM is its host's too.** As
+first built an image row answered every medium question as the `DVK_DRV` row
+it is - fixed - and on a floppy host that was a write to the wrong disk: its
+BPB was banked for good (§18.9.2), so no mount of it read its boot sector
+again and §18.8.1's signature never ran; `dsk_media_ok` called it not
+removable, so `fcp_goto` never re-mounted it; and the run table sent its
+writes to the image's old host LBAs on whatever floppy was now in the drive,
+every call answering CF = 0. Swap B: under a mounted `B:\GAMES.IMG`, save to
+D:, and an unrelated disk was silently overwritten. Floppy hosts are kept -
+they are the feature's first case on a floppy-only XT - and given a floppy's
+protection instead.
+
+**`dsk_vol_rmv` asks the host** (`.cold`; BX = a live row, CF = 1 removable
+with BL = its int 13h unit, CF = 0 fixed). A `DRVC_IMG` row is answered for
+its HOST row, which `dsk_img_host` (a `.text` far entry, by size) finds
+through byte 0 of the claim; any other row answers for itself. Removable is
+a BIOS row whose unit is below 80h - kind and unit read as one word, which
+is below `0x0080` exactly then. The host is never an image (§18.101.2 step
+2), so one step is the whole walk. An **orphaned** image (§18.101.1, byte 0 =
+`0xFF`) answers removable with unit `0xFF`: re-validated and never trusted.
+Three callers ask it, and they are the three medium questions:
+
+1. **`disk_mount`** sets `[dsk_vflop]` = **2** for a non-BIOS row whose medium
+   is removable. `dsk_bpb_bank` treats any non-zero `[dsk_vflop]` as a floppy,
+   so the image's BPB is banked for a batch only (`dsk_bpbok` = 3, which the
+   flop zap takes with the 2s) and its boot sector is **re-read through the
+   image arm at every unbatched mount**. After a swap that read is whatever
+   the new disk holds at the image's first host LBA, which is file data or
+   free space and fails the BPB rules - so the mount refuses, the write gate
+   stays shut and nothing is written.
+   **The BPB rules stay an image's**: `dsk_bpb_check` masks the value to its
+   floppy bit, because vflop 1 would also apply the four floppy rules - the
+   geometry whitelists, the FAT cap and a total bound of `spt x heads x 80`,
+   looser than the image's own `DV_SECS`. Every standard floppy image (160K,
+   180K, 320K, 360K, 720K, 1.2M, 1.44M) passes those too, so it was a choice
+   of the tighter bound and of not refusing an image of odd geometry, not a
+   rescue.
+2. **`dsk_media_ok`** gives the image the HOST drive's motor test (§18.9.1),
+   so a package's quiet stand on D: re-mounts once the host's motor has
+   stopped, exactly as one on B: does.
+3. **`dsk_vol_fixed`** calls it removable, so a `WSEQF_KEEP` hold
+   (§18.4.9.3) on it ends with its callback. The same answer reaches the
+   desktop - the image's zone draws a diskette, not a hard disk - and
+   `OSAPI_VOL_KIND` (`VK_REMOVABLE`, still `VT_DRIVER`), and keeps
+   hibernate (§87) from choosing it.
+
+An image on a hard disk, a boot partition, the RAM disk or a `HDD.DRV`
+volume behaves exactly as before. Inside a batch the image is trusted as
+far as a floppy is and no further (§18.9.3); a second disk carrying a
+byte-identical copy at the same place is the same disk to it, as it is to
+B:. **What is left** is a new disk holding a VALID boot sector at exactly
+that host LBA - another image, laid out at the same cluster: it mounts, with
+its own signature and FAT window, through THIS image's run table, so a write
+past the first run follows the old file's clusters. Telling that apart needs
+the host's own identity kept in the claim and asked at every image mount,
+which is bytes this section did not spend.
+
+**35 resident bytes** - `.text` +23 for `dsk_img_host`, `.cold` +12 (the
+callers' own tests moved into `dsk_vol_rmv`, which is 19) - and no rung
+crossed on any kernel, though it leaves 3 bytes in kern_big's `.cold` rung
+and 3 in kern_emu's image rung. All `.text` would have been 35 there and
+crossed kern_emu's image rung; all `.cold`, kern_big's cold one. kern_small
+and kern_dos assemble byte-identical. `tests/imgswap.py` is the gate (`soak -k
+imgswap`): it mounts an image off B:, swaps B: for another disk under the
+running machine, writes to the image's drive and reads the new disk back on
+the host, which must be unchanged.
 
 ## 19. FAT12/FAT16 — the data-disk format (data floppies)
 

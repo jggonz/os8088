@@ -270,7 +270,7 @@ had added.
     "bss": 5214,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 38385,
+    "cold": 38397,
     "coldpara": 2400,
     "fatpara": 288,
     "grace": 2048,
@@ -283,7 +283,7 @@ had added.
     "minramkb": 128,
     "ovl": 5105,
     "stk0": 512,
-    "text": 43653,
+    "text": 43676,
     "vgabuf": 336,
     "vgabufpara": 32
   },
@@ -293,7 +293,7 @@ had added.
     "bss": 5214,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 38380,
+    "cold": 38397,
     "coldpara": 2400,
     "fatpara": 288,
     "grace": 2048,
@@ -306,7 +306,7 @@ had added.
     "minramkb": 128,
     "ovl": 5105,
     "stk0": 512,
-    "text": 43870,
+    "text": 43935,
     "vgabuf": 336,
     "vgabufpara": 32
   },
@@ -702,14 +702,14 @@ there and nowhere else.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,615 | 36.1% |
+| the file system, end to end | 29,650 | 36.1% |
 | the window system and its furniture | 22,323 | 27.2% |
 | drawing: adapters, primitives, glyphs, icons | 13,064 | 15.9% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 8,094 | 9.9% |
 | the kernel proper: API table, heap, scheduler, events | 7,147 | 8.7% |
 | the three built-in kinds | 1,442 | 1.8% |
 | the Control Panel | 353 | 0.4% |
-| **total** | **82,038** | |
+| **total** | **82,073** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -717,7 +717,7 @@ there and nowhere else.
 |---|---:|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 1,173 | 8,117 | **9,290** | 583 | — | — |
 | `wm.inc` — the window manager (§11) | 9,148 | 140 | **9,288** | 1,132 | — | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 437 | 6,398 | **6,835** | 418 | — | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 460 | 6,410 | **6,870** | 418 | — | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,289 | 1,146 | **6,435** | 40 | 526 | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 24 | 4,975 | **4,999** | 180 | — | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,845 | — | **3,845** | 107 | 128 | — |
@@ -769,7 +769,7 @@ there and nowhere else.
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,203 | 171 | **2,374** | — | — | 605 |
-| **total** | **43,653** | **38,385** | **82,038** | **5,214** | **5,598** | **4,857** |
+| **total** | **43,676** | **38,397** | **82,073** | **5,214** | **5,598** | **4,857** |
 <!-- END generated table -->
 
 ### Reading it
