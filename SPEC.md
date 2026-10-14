@@ -7159,7 +7159,7 @@ picked by a `%if` on the constant. It is once a **line**, not once a pixel, so
 even the multiply is noise against the walk — what the `%if` buys is that a
 caller who sizes a band conveniently is not paying for one who did not.
 
-#### 5.12.2 The ink polarity, and the one deliberately NOT there
+#### 5.12.2 The ink polarity, and where the other one is NOT
 
 A band is composed on **lit paper and inked by CLEARING bits**. `1 = a lit
 pixel` is `OSAPI_GFX_BLIT1`'s own convention (5.4.2) and 42.23 measured it the
@@ -7174,9 +7174,10 @@ branch for the wrap, and it is the whole reason a band composer beats a
 per-pixel slot.
 
 **The opposite polarity — ink that SETS bits, for white on a black ground — is
-six lines under a `%if` and is NOT in the file**, because an untested arm in a
-shared library is worse than an absent one. What it needs is written down rather
-than guessed at: BL walks a **one** (`mov bl, 080h`), the combine is `or`, and
+NOT in the PLOT** (`gfxe_bpix`, `gfxe_line`), because an untested arm in a
+shared library is worse than an absent one. `GFXE_TEXT` and `GFXE_BITS` DO
+carry it, as `GFXE_INV`, and it is tested there (§5.12.8). What the plot would
+need is written down rather than guessed at: BL walks a **one** (`mov bl, 080h`), the combine is `or`, and
 the two wrap branches invert sense because the carry out of the rotate is then
 the bit that just left. `gfxe_bclear` takes the paper word in AX already, so
 that half needs nothing.
@@ -7418,12 +7419,40 @@ gfxe_bits    SI = record, CX = x, DX = y      a bit record: db rows, then a word
   drawn half into each; bytes past the stride are skipped; `x` itself must
   not be negative. `gfxe_bfill` clips both ways.
 - **The glyphs are the kernel's** (`OSAPI_FONT_GLYPHS`, 8 bytes a glyph),
-  asked for ONCE and kept in three image words; a code outside the table's
-  range advances the pen and draws nothing.
-- **Cost on a 4.77 MHz 8088**: a x1 glyph is eight row merges, each a
-  shift by `x & 7` and two read-modify-writes - about 0.1-0.2 ms, against a
-  `font_run` cell's ~900 µs that would also have to be clipped to a slab it
-  cannot see. x2 and x3 expand a row bit by bit (the big day number only).
+  kept in three image words and asked for again whenever `[gfxe_fseg]` is
+  0 - **the address can MOVE**: a hibernate resume re-runs `FONT_PICK`
+  (`kernel/hiber.inc` step 4a) and replaces a ROM pointer with the resuming
+  machine's, so a caller that outlives a resume zeroes the word before it
+  composes. `os88dia.inc` does it at every `dia_paint` and tag draw, one far
+  call a paint. A code outside the table's range advances the pen and draws
+  nothing.
+- **A glyph wholly outside the band's rows costs the reject alone**, ~390
+  cycles (0.08 ms): a card composed one slab at a time visits every glyph
+  once a slab, so this is the price a slab pays for each glyph it does not
+  hold.
+- **The STRAIGHT PATH, x1** (bold or not, either ink, whenever the glyph has
+  two band bytes to land in): its visible rows clipped once, the row offset
+  taken once and stepped by the stride, the ink and the bold chosen once -
+  four loop bodies - and each row one `shr ax, cl` into two bytes (a bold x1
+  row is 9 bits and `x & 7` at most 7, so 16 bits always hold it). x2, x3
+  and a glyph in the stride's last byte take the GENERAL path: a nibble at
+  a time out of two 16-entry tables (`gfxe_x2t`, `gfxe_x3t`), shifted into
+  place once a glyph row, merged once a scale row, and a glyph row whose
+  copies miss the band never expanded.
+- **Cost on a 4.77 MHz 8088, MEASURED** (MartyPC's cycle counter at
+  `gfxe_glyph`'s entry and its `ret`, the probe's whole paint): a x1 glyph
+  **2,350 cycles, 0.49 ms**, black or white ink; bold **0.55 ms**; x1 in the
+  stride's last byte 1.1-1.3 ms; x2 bold 1.8-2.7 ms and x3 2.7-3.6 ms for the
+  half of a glyph that one slab holds. It was 2.3 ms a visit (median, every
+  style) before the straight path and the reject, and the probe's whole
+  paint **171 ms; it is 68 ms**, with two more glyphs in it. The x1 figure
+  beats a `font_run` cell's ~900 µs - which would also have to be clipped to
+  a slab it cannot see - but it is NOT the 0.1-0.2 ms this section first
+  claimed: a row is ~200 cycles on the 8088's bus, ~22 bytes of code
+  fetched at 4 clocks a byte and two read-modify-writes, so eight rows and
+  the setup are ~2,350. A face of ~190 x1 glyphs composes in ~95 ms before
+  its blits, and a `DIA_COMPOSE` that skips the glyphs a slab cannot hold
+  saves the rejects as well (§107.6).
 
 ### 5.13 `gfx_pixel` and `gfx_points` — which to reach for
 
@@ -170663,12 +170692,16 @@ grows from 13,168 to ~14.0-14.5 KB of image and ~0.8 KB of bss; the include
 slab painter 150, the hover and focus states ~550, the prefilters ~400, the
 sizing and the re-fit ~350) and `GFXE_TEXT` + `GFXE_BITS` ~600 more, which
 the plan did not price: a DIA pays ~2.8 KB for the treatment, in its own
-image and no resident byte, and wave 4 re-prices the calendar's file
+image and no resident byte (**after wave 3's review, ~3.3 KB**: the
+include ~2,305 bytes and the composer **994**, its straight path and nibble
+tables bought for 2.5x the speed - §5.12.8 - and the probe 4,832 → 5,360
+bytes of image with its own two additions), and wave 4 re-prices the calendar's file
 against the 360 KB system disk's clusters with that number. The probe's
 whole paint is 13 calls by its layout (6 card slabs, 2 ground columns, 2
 gaps, the tag's three); MEASURED, a reveal is 1 `BLIT1` and a hide 2
 `OSAPI_GFX_DESK` + 1 `BLIT1`, exactly 5 and 14 ticks after the kernel's
-edge (`deskhover`).
+edge (`deskhover`), and a focus edge 1 `BLIT1` (`deskz`, after wave 3's
+review: it was 3).
 
 **Waves 2, 3 and 4 moved no kernel byte.** Re-measured at wave 4's head,
 `tools/kernsize.py` reads `unchanged` on both kernels, and the absolute
@@ -171385,6 +171418,21 @@ drag, and the gap white with its rule.
     asserts the white ruled gap, so `OSAPI_GFX_DESK` on kern_small is no
     longer seen by a row; `deskhover` now measures the dwell, the linger and
     the calls per edge that wave 2 left to this wave.
+  - **Wave 3's review** (each finding re-verified against the code):
+    **the composer was 10x slower than this record said** - 0.1-0.2 ms a
+    glyph claimed, 2.3 ms a visit measured on MartyPC - so it has a reject
+    and a straight x1 path now, 0.49 ms, and §5.12.8 states the measured
+    figure; the design's ~90-110 ms full calendar paint rested on the old
+    claim and wave 4 re-prices it from §5.12.8's numbers. **The re-fit only
+    lifts** a frame, once: the layout is the primary's, and a face taller
+    than a second display was re-shown every beat. **`DIA_LAYOUT` refuses
+    a gap between cards taller than the band**, which the titled fallback
+    composes whole. **The worker arm keeps the package's `DIA_WAKE`**
+    instead of putting `dia_wake` over it. **The glyph table is asked for
+    at every paint**, a resume being able to move it. **A focus edge is
+    the plate alone**, 1 call where it was 3. **A quit owes nothing more**
+    (`DIA_F_QUIT`). `desksmall` sees `OSAPI_GFX_DESK` on kern_small again,
+    through a probe verb its beat lays on request.
 
 ### 107.10 How it was built, and its gates
 
@@ -171589,7 +171637,10 @@ DIA_RIGHT    equ 264                  optional: with no saved place the face
 %define DIA_ONFOCUS  proc             optional: AL = 1 gained the bar, 0 lost it
 %define DIA_WAKE     proc             optional: the W_ONWAKE it installs - a
                                       package that wants to see every wake
-                                      tail-jumps to dia_wake (the probe counts)
+                                      tail-jumps to dia_wake (the probe counts).
+                                      On BOTH arms: kern_small's worker kick
+                                      reaches it too, and dia_wake tells the
+                                      two apart by DIA_S_WORKER
 %define GFXE_TEXT / GFXE_BITS         and os88gfx.inc, whose band (GFXE_BAND_BUF,
                                       GFXE_BAND_W >= DIA_FACE_W, GFXE_BAND_H >= the
                                       tag row) the include composes the tag in
@@ -171598,9 +171649,15 @@ DIA_RIGHT    equ 264                  optional: with no saved place the face
 `DIA_LAYOUT band, facey, tagh, h0,g0 [, h1,g1 [, h2,g2 [, h3,g3]]]` is one
 layout: up to four cards, each with the gap UNDER it, the tag row's height
 (10 rows or more - the handle's box is 10 - and no taller than the band) and
-the default face `y`; it refuses at assembly time a face taller than `band`
-or a titled frame (the face less its tag and last gap, plus `TITLE_H` + 1)
-taller than `band`. It is a macro of the include's, so the table goes AFTER
+the default face `y`; it refuses at assembly time a face taller than `band`,
+a titled frame (the face less its tag and last gap, plus `TITLE_H` + 1)
+taller than `band`, and **a gap BETWEEN two cards taller than
+`GFXE_BAND_H`** - the titled fallback composes such a gap whole in the band
+(`dia_tgap`), and `gfxe_bclear` does not clip, so a taller one would paper
+past the band over the include's own bss (the state file's header and
+payload, the D row the close removes by name). The last gap is the tag's,
+drawn by `OSAPI_GFX_DESK` on a desk window and not at all titled, so it is
+not bound. It is a macro of the include's, so the table goes AFTER
 the `%include`. `dia_load` picks the layout from **`OSAPI_VIDEO`'s
 height** - 400 rows or more TALL, 300-399 MID, below that COMPACT - so EGA's
 640x350 takes Hercules' layout and not VGA's (§107.3's PREFER pair took the
@@ -171617,12 +171674,13 @@ adapter's kind), and sizes the template itself.
 | `dia_slabs` | the slab painter a `DIA_PAINTCARD` may be: for each `GFXE_BAND_H`-row slab of the card that the rows touch, paper the band white, call `DIA_COMPOSE` (AL = the card, BX = the slab's first card row, CX = its rows; compose with `y` = card row - BX) and blit the damaged rows of it, ONE `OSAPI_GFX_BLIT1` |
 | `dia_click`, `dia_mup` | the prefilters (the gestures above) |
 | `dia_wake` | `W_ONWAKE`: on the worker arm, v1's beat; otherwise the hover edge's reconcile |
-| `dia_quit` | the close: `dia_close`'s negotiator and then `OSAPI_WM_CLOSE` |
+| `dia_quit` | the close: `dia_close`'s negotiator and then `OSAPI_WM_CLOSE` - which is DEFERRED (§75.2), and `ui_task`'s timer pass runs before its close pass, so `dia_quit` sets `DIA_F_QUIT` and `dia_tick` and `dia_wake` do nothing once it is set: no beat - no `DIA_ONTICK` - after `DIA_ONCLOSE`, and no tag drawn |
 
-What it publishes for the painter, bss words: `[dia_fx]`, `[dia_fy]` (the
+What it publishes for the painter: the bss WORDS `[dia_fx]`, `[dia_fy]` (the
 face's screen origin), `[dia_cy]`/`[dia_ch]` (the card being painted: its
-screen top and its height), `[dia_li]` (the layout, 0-2) and `[dia_lay]` (its
-entry).
+screen top and its height) and `[dia_lay]` (the layout's entry), and the
+BYTE `[dia_li]` (the layout, 0-2) - a byte, `[dia_ci]` (the paint's card)
+sits right after it.
 
 **The hover state is level-triggered** (`[dia_hv]`: HIDDEN, DWELL, SHOWN,
 LINGER, with FOCUS and ARMED bits in `[dia_wf]`). A wake reads `WF_HOVER`
@@ -171634,7 +171692,11 @@ soonest, so a hover deadline never delays a beat and a beat that comes early
 does nothing early. When the dwell expires with a button held it waits
 another `DOCK_HOVER_T`; a linger that expires while the x is pressed waits
 for the release. The picture is drawn only on a change of it
-(`[dia_tagp]`), under `OSAPI_WM_CLIP_SET`. **Focus is read off
+(`[dia_tagp]`), under `OSAPI_WM_CLIP_SET` - and a change from one PLATE to
+the other (a focus edge: REST and FOCUS differ in the plate alone) is the
+plate's `BLIT1` and nothing else, the ground beside it being on the glass
+already; a paint sets `[dia_tagp]` unknown first and draws the row whole.
+So a focus edge is 1 call, a reveal 1 and a hide 3. **Focus is read off
 `OSAPI_MENU_OWNER` at every press and at every timer fire** - so a press
 inverts the plate at once, a right press or a keyboard-mouse front (which
 reach no callback) within one beat, and a loss within `DIA_FOCUS_T` = 4
@@ -171645,7 +171707,13 @@ handle wins.
 **After a drop that left the frame's bottom past its display**
 (§11.103.6's bound is the title bar's), the beat hides the window, puts its
 `W_Y` back on the glass and shows it - there is no move cell, so it is two
-repaints, once, before the place is saved. `deskdrag`'s H leg drops the
+repaints, once, before the place is saved. **The layout is the PRIMARY's**
+(`OSAPI_VIDEO`'s height, chosen once at `dia_load`), so a face dropped on a
+shorter second display - a MID face on a 200-row CGA beside a Hercules, a
+TALL one on a 348-row Hercules beside a VGA - may not fit it at any `y`:
+the re-fit then lifts it to the menu bar ONCE and leaves it, because it
+moves a frame only UP. Without that rule it was hidden and shown again
+every beat, forever. `deskdrag`'s H leg drops the
 probe to a bottom at 544 on a 480-row screen and reads it back at 480.
 
 **The state file's place is the FACE's origin** (header +3 bit 1,

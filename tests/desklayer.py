@@ -11,7 +11,8 @@ DESKPROB.O88 - tests/diaprobe built with -DDP_DESK: header flag OS88_F_DESK,
 OSAPI_WM_DESK's QUERY and MAKE in its entry proc, a face of two white cards
 with the desktop's ground between them through OSAPI_GFX_DESK, and counters
 of its presses, releases and keys in its bss - with a SYSTEM.CFG DIA row and
-a DESKPROB.DAT that put it at (375,184). Every assertion is the GUEST'S
+a DESKPROB.DAT that put its FACE at (376,184), the frame at (375,184) - a
+v2 header with DIA_HF_CONT (SPEC.md 107.11). Every assertion is the GUEST'S
 state: wm_zord, [menu_win], W_FLAGS, I_FLAGS, the probe's bss, breakpoints,
 and the framebuffer.
 
@@ -40,10 +41,14 @@ and the framebuffer.
               takes them too; and a Standard File chooser takes the keys over
               a widget that owns the bar.
   --leg small (row desksmall, MartyPC's 128KB CGA 5150, kern_small) QUERY
-              refuses, so the probe is the TITLED FALLBACK: no WF_DESK, an
-              ordinary 130 x 123 frame with a title, a dock tile, a
-              title-bar drag that moves it, and OSAPI_GFX_DESK still lays the
-              desktop's dither in its gaps.
+              refuses, so the probe is the TITLED FALLBACK (SPEC.md 107.7):
+              no WF_DESK, the COMPACT layout, an ordinary 130 x 70 frame with
+              a title (no tag row, no last gap), a dock tile, a gap that is
+              WHITE with a 1-px rule through its middle, the worker's kicks
+              reaching the probe's own DIA_WAKE, OSAPI_GFX_DESK laying the
+              desktop's dither when the probe's beat is asked to (the cell's
+              one runtime caller on kern_small), and a title-bar drag that
+              moves it.
 
 WAVE 2 (SPEC.md 11.103.6-7) gives the probe a TAG ROW under its cards - a
 white plate at rest, a black handle with a white close box while the
@@ -59,12 +64,13 @@ kernel's hover edge says WF_HOVER - and these legs:
   --leg hover (row deskhover) the edge, ONE wake, the handle; no edge
               across a gap; the leave; no hover over a covering window and a
               CLIPPED reveal beside it; the edge with a button held and the
-              probe's refusal; nothing under a chooser, and the reveal after.
+              include's refusal (asked again a dwell later); nothing under a chooser, and the reveal after.
   --leg hovercga / hoverherc (rows deskhovercga, deskhoverherc) the first
               three of those on the 5150's CGA and Hercules, off the 1bpp
               framebuffer's own bits.
-  --leg close (row deskclose) the box arms and lights, a slide off cancels,
-              the box's place unrevealed drags, and a press and release on it
+  --leg close (row deskclose) the box arms and lights, a slide off cancels
+              (the handle goes after the linger, the plate focused), the
+              box's place unrevealed drags, and a press and release on it
               closes the widget and removes its DIA row by name.
 
 WAVE 3 (SPEC.md 107.11) MOVES THE PROBE ONTO os88dia.inc's DIA_WIDGET: its
@@ -74,7 +80,9 @@ composed here from the guest's own font ([font_seg]:[font_base]), the
 handle comes after the dwell (DIA_HOVER_T) and goes after the linger
 (DIA_LEAVE_T), and the geometry is the layout the include picked by the
 screen's height ([dia_li]: TALL on VGA, MID on Hercules, COMPACT on CGA).
-Two legs are new:
+`z` prices the focus loss too: the plate un-inverted by ONE BLIT1 inside
+dia_tagdraw and no OSAPI_GFX_DESK - plate to plate, the ground beside it is
+on the glass already. Two legs are new:
 
   --leg ground (row deskground, MartyPC's VGA XT) the THEME reaches the
               gaps: under Bright, Dark and Color - each picked on the
@@ -87,7 +95,9 @@ Two legs are new:
               the two cards are byte for byte what GFXE_TEXT and GFXE_BITS
               compose here from the same font (a x3 pair across two 16-row
               slabs, bold, white on a black box, a tick, x2 bold off the
-              grid), and under Color a Disk window laid over the widget and
+              grid, x1 off the grid across a slab - the straight path,
+              clipped head and foot - and bold in the stride's last byte,
+              cut there), and under Color a Disk window laid over the widget and
               closed leaves the gaps teal.
   --leg fit   (row deskfit) a VIDEO=ega kernel - SPEC.md 39.24's 640x350 on a
               VGA, built into a private tree - picks the MID layout (83
@@ -206,6 +216,34 @@ def check(cond, what):
     if not cond:
         fails.append(what)
     return cond
+
+
+_PSYMS = {}
+
+
+def probe_sym(name):
+    """An offset in the PROBE's image: diaprobe.asm assembled again with a
+    symbol map, refused unless it is byte for byte build/deskprob.bin."""
+    if not _PSYMS:
+        import re
+        tmp = tempfile.mkdtemp(prefix="dpsym-")
+        wrap, mp, out = (os.path.join(tmp, n) for n in ("w.asm", "p.map",
+                                                        "w.bin"))
+        open(wrap, "w").write('[map symbols %s]\n%%include '
+                              '"tests/diaprobe/diaprobe.asm"\n' % mp)
+        subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
+                        "-I", "tests/diaprobe/", "-DDP_DESK", "-o", out, wrap],
+                       check=True, cwd=ROOT)
+        if open(out, "rb").read() != open(os.path.join(
+                PKGDIR, "deskprob.bin"), "rb").read():
+            raise SystemExit("diaprobe.asm does not assemble to "
+                             "deskprob.bin - `make` first")
+        for line in open(mp):
+            f = line.split()
+            if len(f) == 3 and re.match(r"^[0-9A-Fa-f]+$", f[0]):
+                _PSYMS[f[2]] = int(f[0], 16)
+        shutil.rmtree(tmp, ignore_errors=True)
+    return _PSYMS[name]
 
 
 def image_size():
@@ -464,12 +502,36 @@ def leg_z(ui):
     bad, n = tag_bad(ui, w, "focus", [(d.x, d.y, d.w + 1, d.h + 1)])
     check(not bad, "the plate is INVERSE while the widget owns the bar (%d "
           "of %d off: %r)" % (len(bad), n, bad[:6]))
-    ui.mo.click(d.x + 60, d.y + d.h - 40, settle=0)
-    ui._wait(lambda: menu_win_i(ui) == d.i, "the Disk window's bar", 20,
-             snapshot=lambda: "menu_win = %r" % menu_win_i(ui))
-    t0 = bios_ticks(m)
-    ui._wait(lambda: p.tagp() == P_REST, "the plate un-inverted", 20)
+    # the trace is armed BEFORE the click, and only what dia_tagdraw itself
+    # lays is counted - between its entry and its ret - so the kernel's own
+    # drawing for the click is outside it and the 4-tick poll cannot win a
+    # race with the arming
+    td0 = p.seg * 16 + probe_sym("dia_tagdraw")
+    td1 = p.seg * 16 + probe_sym("dia_tagrows") - 1
+    blit, gnd = m.sym("gfx_blit1"), m.sym("thm_desk")
+    tr = os88marty.bp_trace(m, td0, td1, blit, gnd)
+    with tr:
+        ui.mo.click(d.x + 60, d.y + d.h - 40, settle=0)
+        ui._wait(lambda: menu_win_i(ui) == d.i, "the Disk window's bar", 20,
+                 snapshot=lambda: "menu_win = %r" % menu_win_i(ui))
+        t0 = bios_ticks(m)
+        ui._wait(lambda: p.tagp() == P_REST, "the plate un-inverted", 20)
     dt = (bios_ticks(m) - t0) & 0xFFFF
+    inside, draws, nb, ng = False, 0, 0, 0
+    for h in tr.hits:
+        a = h["addr"]
+        if a == td0:
+            inside, draws, nb, ng = True, draws + 1, 0, 0
+        elif a == td1:
+            inside = False
+        elif inside and a == blit:
+            nb += 1
+        elif inside and a == gnd:
+            ng += 1
+    check(draws and nb == 1 and ng == 0,
+          "the focus edge is the plate ALONE: 1 BLIT1 and no OSAPI_GFX_DESK "
+          "(%d, %d; %d tag draw(s)) - the ground beside it is on the glass "
+          "already" % (nb, ng, draws))
     check(menu_win_i(ui) == d.i, "[menu_win] is the Disk window again")
     check(dt <= 6 and not p.wf() & W_FOCUS and p.b(DP_FOCL) == 0,
           "the plate un-inverted %d tick(s) after the bar went - the 4-tick "
@@ -694,6 +756,20 @@ def leg_small(ui):
           % (rule, GAP, [sum(g) for g in gap]))
     card = all(rows[fy + 5][x] for x in range(fx, fx + FACE_W))
     check(card, "card 1 is white across the face")
+    k0 = p.b(DP_WAKES)
+    os88marty.guest_sleep(m, 5)
+    k1 = p.b(DP_WAKES)
+    check(k1 != k0, "the worker's kicks reach the package's DIA_WAKE (%d -> "
+          "%d): the worker arm keeps it, SPEC.md 107.11" % (k0, k1))
+    print("A2: OSAPI_GFX_DESK on kern_small, laid by the probe's beat")
+    m.write(p.seg * 16 + p.img + DP_TDRAG, b"\x03")
+    ui._wait(lambda: p.b(DP_TDRAG) == 4, "the beat's OSAPI_GFX_DESK", 30)
+    park(ui)
+    fw, fh, rows = m.vram("cga")
+    bad = [(x, y) for y in range(fy, fy + 4) for x in range(fx, fx + FACE_W)
+           if (rows[y][x] != 0) != bright(x, y)]
+    check(not bad, "kern_small's OSAPI_GFX_DESK lays the desktop's dither "
+          "over the face's top 4 rows (%d off: %r)" % (len(bad), bad[:6]))
     print("B: it is an ordinary window: its title bar drags it")
     ui.drag_window(w, 96, 0)
     w2 = p.win()
@@ -807,6 +883,8 @@ def card_picture(f, card, rows):
     b = Band(FACE_W, rows)
     if card == 0:
         b.text(f, NAME, 8, 8)
+        b.text(f, "Q", 113, 12)             # the straight path, two slabs
+        b.text(f, "W", 122, 12, bold=True)  # the general x1, cut at 128
     else:
         b.text(f, "24", 4, 6, scale=3)
         b.text(f, "Mo", 60, 6, bold=True)

@@ -121,6 +121,9 @@ DIA_F_ASKING    equ 1           ; the damaged-file question is on the glass
 DIA_F_CLOSING   equ 2           ; dia_close's save: never ask from there
 DIA_F_PLACED    equ 4           ; the template's place came from the file
 DIA_F_KEPT      equ 8           ; a close was declined once (dia_close)
+DIA_F_QUIT      equ 16          ; dia_quit's OSAPI_WM_CLOSE is posted: the
+                                ; close is deferred (SPEC.md 75.2), so a tick
+                                ; or a wake before it does nothing
 DIA_BKMAX       equ 16          ; a refusal that may clear waits 1, 2, 4, 8,
                                 ; then 16 polls before the next try
 
@@ -245,6 +248,8 @@ DIA_HV_LINGER equ 3             ; ...up, the pointer gone, the linger running
 DIA_W_DESK  equ 1               ; dia_wf: a desk window (MAKE took)
 DIA_W_FOCUS equ 2               ; ...owning the menu bar and the keys
 DIA_W_ARMED equ 4               ; ...a press on the handle's x is armed
+DIA_W_PLATE equ 8               ; ...dia_tagdraw: plate to plate, the ground
+                                ; beside it is on the glass already
 DIA_P_REST  equ 0               ; dia_tagp: the plate,
 DIA_P_FOCUS equ 1               ; ...the plate inverse,
 DIA_P_HAND  equ 2               ; ...the handle,
@@ -273,7 +278,10 @@ DIA_GX      equ DIA_FACE_W - 18                 ; ...and its grip
 
 ; DIA_LAYOUT band, facey, tagh, h0,g0 [, h1,g1 [, h2,g2 [, h3,g3]]] - one
 ; layout: each card with the gap UNDER it; refused at assembly time when the
-; face, or the titled fallback's frame, is taller than `band`
+; face, or the titled fallback's frame, is taller than `band`, and when a gap
+; BETWEEN two cards is taller than GFXE_BAND_H - the titled fallback composes
+; such a gap in the band whole (dia_tgap); the last gap is the tag's and is
+; never composed
 %macro DIA_LAYOUT 5-11
   %if (%0 - 3) % 2
     %error "DIA_LAYOUT: a height and a gap per card"
@@ -288,9 +296,14 @@ DIA_GX      equ DIA_FACE_W - 18                 ; ...and its grip
     dw %2
   %assign %%sum %3
   %assign %%last 0
+  %assign %%i 0
   %rotate 3
   %rep %%n
     db %1, %2
+    %assign %%i %%i + 1
+    %if %%i < %%n && %2 > GFXE_BAND_H
+      %error "DIA_LAYOUT: a gap between cards is taller than the band - the titled fallback composes it there whole (dia_tgap)"
+    %endif
     %assign %%sum %%sum + %1 + %2
     %assign %%last %2
     %rotate 2
@@ -566,8 +579,10 @@ dia_made:
     call OSAPI_WM_TIMER         ; CF = 1: kern_small, which has no timer -
     jnc .t                      ; the WORKER ARM (SPEC.md 107.5.2): the
     or byte [dia_st], DIA_S_WORKER  ; first paint hires it, and its wake is
-    mov ax, dia_wake            ; the tick
-    call OSAPI_WM_ONWAKE
+%ifndef DIA_WIDGET              ; the tick - a widget's W_ONWAKE is DIA_WAKE
+    mov ax, dia_wake            ; already (dia_wmade), which reaches dia_wake,
+    call OSAPI_WM_ONWAKE        ; and dia_wake reads DIA_S_WORKER (SPEC.md
+%endif                          ; 107.11)
 .t:
     pop es
     pop si
@@ -1223,8 +1238,8 @@ dia_wmade:
     call OSAPI_WM_ONCLICK
     mov ax, dia_mup
     call OSAPI_WM_ONMOUSEUP
-    mov ax, DIA_WAKE            ; the hover edge's wake (kern_small's worker
-    call OSAPI_WM_ONWAKE        ; arm puts its own over it)
+    mov ax, DIA_WAKE            ; the hover edge's wake - and kern_small's
+    call OSAPI_WM_ONWAKE        ; worker kick, which dia_wake tells apart
     mov byte [dia_tagp], DIA_P_NONE
     call OSAPI_GET_TICKS
     mov [dia_tbeat], ax         ; the first beat is due at once
@@ -1254,7 +1269,10 @@ dia_org:
 ; desk window dropped with its bottom past its display - ui_drag's bound is
 ; the title bar's (SPEC.md 11.103.6) - is put back on it before the place is
 ; saved. There is no move cell, so it is hidden, moved and shown: two
-; repaints, once, after a drop nobody should make. Every register kept
+; repaints, once, after a drop nobody should make. A face taller than the
+; display it was dropped on (a shorter SECOND display: the layout is the
+; primary's) is lifted to the menu bar once and then left - the move is made
+; only when it is UP. Every register kept
 dia_refit:
     test byte [dia_wf], DIA_W_DESK
     jz .r
@@ -1275,8 +1293,10 @@ dia_refit:
     sub bx, [es:si+W_H]
     cmp bx, MBAR_H
     jge .y
-    mov bx, MBAR_H
-.y:
+    mov bx, MBAR_H              ; a face taller than this display (the
+.y:                             ; layout is the PRIMARY's) goes up to the bar
+    cmp bx, [es:si+W_Y]         ; ...and ONLY up, once: at the bar already, it
+    jge .x                      ; is left where it is, never re-shown a beat
     push bx
     mov bx, si
     call OSAPI_WM_HIDE
@@ -1305,6 +1325,8 @@ dia_paint:
     push si
     push di
     push bp
+    mov word [gfxe_fseg], 0     ; the glyph table is asked for again: a
+                                ; resume may have MOVED it (SPEC.md 5.12.8)
     mov bx, si
     call OSAPI_WM_DAMAGE        ; CF = 1: the whole of it, AX..DX either way
     mov [dia_dmg], ax
@@ -1401,6 +1423,7 @@ dia_paint:
     add cx, DIA_FACE_W - 1
     call dia_cut
     jc .done
+    mov byte [dia_tagp], DIA_P_NONE ; drawn whole, the ground beside it too
     call dia_tagdraw
 .done:
     pop bp
@@ -1632,8 +1655,9 @@ dia_want:
 ; -----------------------------------------------------------------------------
 ; dia_tagdraw - the tag row as the state asks ([dia_fx]/[dia_fy] the face,
 ; lock held, clipped): REST and FOCUS are ground | plate | ground - two
-; OSAPI_GFX_DESK and one BLIT1 - and the handle ONE face-wide BLIT1. Every
-; register kept
+; OSAPI_GFX_DESK and one BLIT1, or the BLIT1 ALONE when [dia_tagp] says the
+; glass holds the other plate (a focus edge: dia_paint sets DIA_P_NONE first)
+; - and the handle ONE face-wide BLIT1. Every register kept
 ; -----------------------------------------------------------------------------
 dia_tagdraw:
     push ax
@@ -1644,6 +1668,13 @@ dia_tagdraw:
     push di
     push bp
     call dia_want
+    and byte [dia_wf], ~DIA_W_PLATE & 0FFh
+    cmp al, DIA_P_HAND          ; REST <-> FOCUS differs in the plate alone:
+    jae .pn                     ; the ground beside it is left as it is
+    cmp byte [dia_tagp], DIA_P_HAND
+    jae .pn
+    or byte [dia_wf], DIA_W_PLATE
+.pn:
     mov [dia_tagp], al
     mov bx, [dia_lay]
     xor cx, cx
@@ -1677,11 +1708,14 @@ dia_tagdraw:
     shr dx, 1
     call gfxe_text
 %if DIA_PX > 0
+    test byte [dia_wf], DIA_W_PLATE
+    jnz .pl
     mov ax, [dia_fx]            ; the ground left of it...
     mov cx, ax
     add cx, DIA_PX - 1
     call dia_tagrows
     call OSAPI_GFX_DESK
+.pl:
 %endif
     mov ax, [dia_fx]            ; ...the plate...
     add ax, DIA_PX
@@ -1735,6 +1769,8 @@ dia_tagdraw:
     call dia_blit
     cmp byte [dia_tagp], DIA_P_HAND
     jae .out
+    test byte [dia_wf], DIA_W_PLATE
+    jnz .out
 %if DIA_PX + DIA_PW < DIA_FACE_W
     mov ax, [dia_fx]            ; ...and the ground right of it
     add ax, DIA_PX + DIA_PW
@@ -1789,6 +1825,7 @@ dia_tagsync:
     mov bx, si
     call OSAPI_WM_CLIP_SET
     jc .x                       ; none of it showing
+    mov word [gfxe_fseg], 0     ; ...as dia_paint: the table may have moved
     call dia_org
     call dia_tagdraw
 .x:
@@ -2020,7 +2057,8 @@ dia_mup:
 dia_quit:
     call dia_close
     jc .r
-    push bx
+    or byte [dia_fl], DIA_F_QUIT    ; DIA_ONCLOSE has run: no beat after it,
+    push bx                         ; and no tag drawn (dia_tick, dia_wake)
     mov bx, si
     call OSAPI_WM_CLOSE
     pop bx
@@ -2035,6 +2073,8 @@ dia_quit:
 ; and nothing is drawn, there being no lock
 ; -----------------------------------------------------------------------------
 dia_wake:
+    test byte [dia_fl], DIA_F_QUIT
+    jnz .q                      ; closing: nothing more
     test byte [dia_st], DIA_S_WORKER
     jz .hov
     call OSAPI_GFX_LOCK
@@ -2075,6 +2115,7 @@ dia_wake:
 .x:
     pop es
     pop ax
+.q:
     ret
 
 ; dia_tick - the timer (SI = the window, lock held), which serves the beat,
@@ -2082,6 +2123,10 @@ dia_wake:
 ; deadline and dia_arm takes the soonest, so a hover deadline never delays a
 ; beat and a beat that comes early does nothing early
 dia_tick:
+    test byte [dia_fl], DIA_F_QUIT
+    jz .go
+    ret                         ; closing: no beat after DIA_ONCLOSE, no tag
+.go:
     push ax
     push bx
     call OSAPI_GET_TICKS

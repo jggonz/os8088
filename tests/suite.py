@@ -9002,7 +9002,8 @@ SOAK = [
         "the bar - and the include's FOCUS (DIA_ONFOCUS 1), its tag plate "
         "inverse pixel for pixel; a press on the Disk window takes it back "
         "and the plate un-inverts within 6 ticks (the 4-tick focus poll, "
-        "DIA_ONFOCUS 0); closing the Disk window gives the bar to LOCATOR, "
+        "DIA_ONFOCUS 0) for ONE BLIT1 and no OSAPI_GFX_DESK inside "
+        "dia_tagdraw - plate to plate, the ground beside it stays; closing the Disk window gives the bar to LOCATOR, "
         "never the widget; and with only the widget up Close Window is the "
         "MENU_DIS twin.",
         needs=("marty",), timeout=600, wants=("build/diadesk360.img",)),
@@ -9053,8 +9054,8 @@ SOAK = [
         "clear, a second wake and the rest plate. Over a covering Disk window "
         "there is no hover and no wake, and a reveal on the visible part is "
         "CLIPPED (the Disk window's pixels unchanged); with a button held the "
-        "re-entry still wakes it and the probe refuses to reveal; under a "
-        "Standard File chooser nothing is hovered and nothing woken, and the "
+        "re-entry still wakes it and the include refuses to reveal, asking "
+        "again a dwell later; under a Standard File chooser nothing is hovered and nothing woken, and the "
         "first move after the chooser is reaped reveals.",
         needs=("marty",), timeout=900, wants=("build/diadesk360.img",)),
     Row("deskhovercga", "soak", py("tests/desklayer.py", "--leg",
@@ -9073,8 +9074,8 @@ SOAK = [
     Row("deskclose", "soak", py("tests/desklayer.py", "--leg", "close"), 45.0,
         "SPEC.md 11.103.6-7, 107.11: a widget closes by its OWN box. On the "
         "revealed handle a press arms and lights the box; slid off and "
-        "released, nothing closes and the handle goes; a press on the box's "
-        "place while not revealed posts a DRAG and arms nothing; a press and "
+        "released, nothing closes, and the handle goes only after the linger, "
+        "leaving the focused plate; a press on the box's place while not revealed posts a DRAG and arms nothing; a press and "
         "release ON it runs the include's negotiator and OSAPI_WM_CLOSE - "
         "the window and the instance go, and SYSTEM.CFG on A: holds no DIA "
         "row.",
@@ -9089,7 +9090,9 @@ SOAK = [
         "the dither by screen parity, black, teal - the cards and the plate "
         "white, and both cards byte for byte what GFXE_TEXT / GFXE_BITS "
         "compose on the host from the guest's own font (x3 across two "
-        "16-row slabs, bold, white on black, a tick, x2 bold off the grid); "
+        "16-row slabs, bold, white on black, a tick, x2 bold off the grid, "
+        "an x1 glyph off the grid across a slab on the straight path and a "
+        "bold one cut at the stride on the general path); "
         "under Color a Disk window laid over it and closed leaves teal.",
         needs=("marty",), timeout=900, wants=("build/diadesk360.img",)),
     Row("deskfit", "soak", py("tests/desklayer.py", "--leg", "fit"), 45.0,
@@ -9107,7 +9110,11 @@ SOAK = [
         "is the TITLED FALLBACK - no WF_DESK, no IF_DESK, the COMPACT "
         "layout, an ordinary 130 x 70 frame (no tag row, no last gap) with "
         "a dock tile and a title-bar drag - and its gap is white with a "
-        "1-px rule, one BLIT1 (107.7).",
+        "1-px rule, one BLIT1 (107.7); the worker's kicks reach the probe's "
+        "own DIA_WAKE (the worker arm keeps it, 107.11); and kern_small's "
+        "OSAPI_GFX_DESK, laid by the probe's beat over the face's top 4 "
+        "rows on request, is the desktop's dither - the cell's only runtime "
+        "caller there, the titled gaps being white.",
         needs=("marty", "mtools"), timeout=600,
         wants=("build/small360.img", "build/smallk/kernel.bin",
                "build/deskprob.o88")),

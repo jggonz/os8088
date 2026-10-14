@@ -111,7 +111,11 @@ dp_paints   equ os88_image_end + 6  ; word: W_PAINTs
 dp_rel      equ os88_image_end + 8  ; byte: RELEASE's CF on the last Esc + 1
 dp_wakes    equ os88_image_end + 9  ; byte: W_ONWAKEs taken (the hover edge)
 dp_tdrag    equ os88_image_end + 13 ; byte: 1 = post a DRAG from the TIMER
-                                    ; (the test sets it), 2 = it was posted
+                                    ; (the test sets it), 2 = it was posted;
+                                    ; 3 = lay OSAPI_GFX_DESK over the face's
+                                    ; top 4 rows from the beat, 4 = laid -
+                                    ; the cell's one runtime caller on
+                                    ; kern_small, whose titled gaps are white
 dp_ondrags  equ os88_image_end + 16 ; byte: W_ONDRAGs taken - a posted drag
                                     ; must deliver NONE (it arms nothing)
 dp_foci     equ os88_image_end + 17 ; byte: DIA_ONFOCUS calls
@@ -186,6 +190,15 @@ dp_compose:
     mov cx, 8
     mov dx, 8
     call dp_text
+    mov si, dp_sq                       ; x1 off the grid in the stride's
+    mov cx, 113                         ; last two bytes, across a slab: the
+    mov dx, 12                          ; straight path clipped head and foot
+    call dp_text
+    mov byte [gfxe_tsty], GFXE_BOLD     ; ...and bold in the LAST byte, cut
+    mov si, dp_sw                       ; at the stride: the general path's x1
+    mov cx, 122
+    mov dx, 12
+    call dp_text
     ret
 .c1:
     cmp al, 1
@@ -231,8 +244,30 @@ dp_text:                        ; gfxe_text at card row DX
     jmp gfxe_text
 
 ; dp_ontick - DIA_ONTICK, the beat (the timer, lock held): a DRAG posted from
-; HERE when the test asks, which the next press must not turn into a drag
+; HERE when the test asks, which the next press must not turn into a drag -
+; or the desktop's ground laid over the face's top rows (no clip is armed
+; here: desksmall asks with the probe alone on the glass)
 dp_ontick:
+    cmp byte [dp_tdrag], 3
+    jne .d
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [dia_fx]
+    mov bx, [dia_fy]
+    mov cx, ax
+    add cx, DIA_FACE_W - 1
+    mov dx, bx
+    add dx, 3
+    call OSAPI_GFX_DESK
+    mov byte [dp_tdrag], 4
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jmp short .r
+.d:
     cmp byte [dp_tdrag], 1
     jne .r
     push ax
@@ -275,6 +310,8 @@ dp_s24:     db '24', 0
 dp_smo:     db 'Mo', 0
 dp_saug:    db 'AUG', 0
 dp_s7:      db '7', 0
+dp_sq:      db 'Q', 0
+dp_sw:      db 'W', 0
 dp_tick:    db 8                ; a 2-px tick, 12 wide
             dw 00030h, 00060h, 000C0h, 0C180h, 06300h, 03600h, 01C00h, 00800h
 dp_r0:      dw 0                ; dp_compose's slab row
