@@ -101,9 +101,10 @@ UNREGISTERED = {
                  "message about the wrong subject. tests/dosxlat.py is the "
                  "registered row that reads through it",
     "os88qemu.py": "the teardown every QEMU launcher registers, written once "
-                   "rather than thirteen times - library, not a test. What "
-                   "checks it is `t_qemuown`, which asserts every launcher "
-                   "calls it",
+                   "rather than thirteen times, and the ISOLATED launcher "
+                   "(`launch`/`boot`) - library, not a test. What checks it "
+                   "is `t_qemuown`, which asserts every `make test` launcher "
+                   "calls own(), and this file's `isolated=` check",
     "benchlib.inc": "a benchmark library, not a test",
     "trklog.inc": "tracker's logging build, %included by apps/tracker",
     "trkscrl.inc": "tracker's scroll-gate build, %included by apps/tracker",
@@ -462,6 +463,39 @@ def main():
                   "writes build/ without a `make`",
                   got="builds=True", want="a `make` in %s"
                        % (", ".join(scripts) or "its command"))
+
+    # ...AND `isolated=True` IS CHECKED AGAINST THE SCRIPT, both ways.
+    #
+    # The runner puts an isolated QEMU row in the shared emulator lane
+    # (tools/os88test.py), which is only safe when its machine really is
+    # tests/os88qemu.py's private instance: a `make test` row beside another
+    # drives the other's machine through build/qmp.sock or dies on
+    # build/os8088.img's write lock - the leak t_qemuown was written about,
+    # made concurrent. So the flag needs the launcher in the script, and the
+    # launcher with `qemu` in needs= needs the flag: without it the row waits
+    # in the one-at-a-time lane for a hazard it does not have.
+    iso = re.compile(r"\bos88qemu\.(?:launch|boot)\s*\(")
+    for r in suite.rows():
+        scripts = [c for c in r.cmd
+                   if c.startswith("tests/") and c.endswith(".py")]
+        uses = [c for c in scripts
+                if iso.search(open(os.path.join(ROOT, c)).read())]
+        reaches = bool(uses) and "qemu" in r.needs
+        if r.isolated:
+            check("qemu" in r.needs and "marty" not in r.needs and bool(uses),
+                  "row %s is isolated=True and its script launches an "
+                  "isolated QEMU" % r.name,
+                  "the flag puts the row in the shared emulator lane, which "
+                  "is safe only for os88qemu.launch's private instance",
+                  got="needs=%r, launcher in %r" % (r.needs, uses),
+                  want="needs qemu (not marty) and os88qemu.launch/boot")
+        elif reaches:
+            check(False, "row %s launches an isolated QEMU and is not "
+                  "isolated=True" % r.name,
+                  "%s uses os88qemu.launch, so the row can share the emulator "
+                  "lane; without the flag it waits in the one-at-a-time lane "
+                  "for nothing" % ", ".join(uses),
+                  got="isolated=False", want="isolated=True")
 
     # ...AND NOT ONE OF THEM MAY NAME AN ABSOLUTE CHECKOUT PATH.
     #

@@ -147,7 +147,7 @@ class _Booted(object):
 
 def boot(image, apps=None, machine="os8088_5150_cga", card=None,
          saver=False, why_ibm=None, verbose=True, limit=180.0, settle=True,
-         **kw):
+         launcher=None, **kw):
     """Launch, boot to a settled desktop, turn the saver off, hand back a UI.
 
     THE THREE LINES 175 SCRIPTS OPEN WITH, and the two things most of them
@@ -174,7 +174,16 @@ def boot(image, apps=None, machine="os8088_5150_cga", card=None,
         long input-free wait such a row had.
 
     Everything else is `os88marty.launch`'s, passed straight through.
+
+    `launcher` is ANOTHER EMULATOR's launch with the same shape -
+    tests/os88qemu.py's isolated QEMU, through `os88qemu.boot`. `machine` and
+    `why_ibm` are MartyPC's and do not reach it; the instance is started
+    unsettled, because `up` and `settle` below are the boot gate.
     """
+    if launcher is not None:
+        return _Booted(launcher(image, apps=apps, boot=False, **kw),
+                       card=card, saver=saver, verbose=verbose, limit=limit,
+                       settle=settle)
     cm = os88marty.launch(image, apps=apps,
                           machine=os88marty.machine(machine, why_ibm),
                           card=card, **kw)

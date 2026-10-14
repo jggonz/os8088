@@ -138,10 +138,11 @@ class Row:
     """One registered test."""
 
     __slots__ = ("name", "tier", "cmd", "secs", "needs", "serial", "why",
-                 "timeout", "builds", "alone", "wants", "cpus")
+                 "timeout", "builds", "alone", "wants", "cpus", "isolated")
 
     def __init__(self, name, tier, cmd, secs, why, needs=(), serial=False,
-                 timeout=None, builds=False, alone=False, wants=(), cpus=1):
+                 timeout=None, builds=False, alone=False, wants=(), cpus=1,
+                 isolated=False):
         self.name, self.tier, self.cmd = name, tier, cmd
         self.secs, self.why = secs, why
         self.needs = tuple(needs)
@@ -199,6 +200,15 @@ class Row:
         # the 690 CPU seconds of a 165-second row in 378 of wall and were
         # killed. Both figures are divided back out by this.
         self.cpus = cpus
+        # ISOLATED: a `qemu` row whose emulator is tests/os88qemu.py's
+        # `launch` - a private run directory, socket and floppy copies, run as
+        # the row's CHILD - rather than `make test`'s one build/qmp.sock and
+        # write-locked build/os8088.img. Only that makes a QEMU row safe to
+        # share the emulator lane the way every MartyPC row does, and it is a
+        # claim about the SCRIPT, so `tests/unit/t_registry.py` checks it
+        # against the script in both directions rather than trusting it. A
+        # pilot (docs/TESTING.md).
+        self.isolated = isolated
         # A generous default: the point of the per-row timeout is to stop a
         # hung emulator eating the tier, not to police a slow machine.
         self.timeout = timeout or max(60, int(secs * 4) + 30)

@@ -91,7 +91,11 @@ every emulator test drove one debug server on one fixed port, and two rows in
 parallel would not fail - the second would silently drive the FIRST one's
 machine.  It is not forced any more.  `os88marty.launch` gives every instance
 its own port, its own run directory and its own disks (docs/MARTYPC-DEBUG.md),
-so `--marty-jobs N` widens that lane to N.
+so `--marty-jobs N` widens that lane to N.  A QEMU row joins that lane only
+when it is `isolated=True` - its instance is tests/os88qemu.py's `launch`,
+private socket and floppies, run as the row's own child (a pilot,
+docs/TESTING.md); a `make test` QEMU row shares build/qmp.sock and
+build/os8088.img's write lock and still runs one at a time.
 
 WHAT STILL RUNS ALONE, and it is no longer about the emulator.  TWO flags,
 and they are different claims:
@@ -308,7 +312,8 @@ class Result:
 # backstop.
 #
 # ONLY WHERE THE CPU CAN BE SEEN. With no /proc (macOS) `_tree_cpu` answers
-# None, and every QEMU launcher in tests/ runs `-daemonize`, which reparents
+# None, and every `make test` QEMU launcher in tests/ runs `-daemonize`
+# (an ISOLATED row's QEMU is its own child, and is seen), which reparents
 # the emulator to init and out of the row's tree - so a hung QEMU row is a
 # Python asleep on QMP that never trips the CPU limit. Either way the declared
 # timeout is the WALL limit again, as it was before any of this: a backstop
@@ -490,15 +495,18 @@ def run_row(row, caps, strict, verbose, unbuilt=()):
                              stderr=subprocess.PIPE, text=True)
     except OSError as e:
         return Result(row, False, False, time.time() - t0, str(e), "could not run")
+    # An ISOLATED qemu row's emulator is its own child, not a daemon
+    # reparented to init, so its CPU is in the row's tree like a MartyPC's.
+    iso = getattr(row, "isolated", False)
     so, se, cpu, timed_out = _communicate(p, row.timeout,
                                           getattr(row, "cpus", 1),
-                                          "qemu" not in row.needs)
+                                          "qemu" not in row.needs or iso)
     out = so + se
     ok = p.returncode == 0 and not timed_out
     reason = "" if ok else "exit %d" % p.returncode
     if timed_out:
         ok, reason = False, "TIMEOUT after %ds" % row.timeout
-        if "qemu" in row.needs:
+        if "qemu" in row.needs and not iso:
             out += _sweep_qemu()
     return Result(row, ok, False, time.time() - t0, out, reason, cpu)
 
@@ -856,8 +864,13 @@ def main():
     # emulator row that does not build can share the machine with another,
     # because every instance has its own port, directory and disks now.
     mj = max(1, a.mj)
+    # ...and an ISOLATED qemu row is the same kind of instance (Row.isolated,
+    # tests/os88qemu.py `launch`): its own run directory, socket and floppy
+    # copies. A `make test` qemu row is not - one build/qmp.sock and a
+    # write-locked build/os8088.img - and stays in the one-at-a-time lane.
     conc = [r for r in ser
-            if mj > 1 and "marty" in r.needs and not r.builds and not r.alone]
+            if mj > 1 and ("marty" in r.needs or getattr(r, "isolated", False))
+            and not r.builds and not r.alone]
     ser = [r for r in ser if r not in conc]
     if conc:
         print("os88test: %d emulator row(s) in a lane of %d; %d run alone"
