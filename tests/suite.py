@@ -8847,13 +8847,17 @@ SOAK = [
         "defect: the save's walk used the row record as its find buffer and "
         "the closed widget came back at every boot.",
         needs=("marty",), timeout=600, wants=("build/diarestore360.img",)),
-    Row("diaswap", "soak", py("tests/diaswap.py"), 30.0,
+    Row("diaswap", "soak", py("tests/diaswap.py"), 50.0,
         "SPEC.md 107.5.1: a DIA's save asks whether the disk is still HOME. "
         "The apps disk goes in A: under the running probe and it is dragged: "
         "nothing is written there (every shipped disk has SYSTEM\\APPDATA, "
         "and a W1 build wrote its state onto it), the save stays owed and is "
         "BACKED OFF rather than re-walked every poll, and when the system "
-        "disk comes back the owed save lands there. Both floppies --verify.",
+        "disk comes back the owed save lands there. Then the apps disk "
+        "again and the close box: CTRL.DRV cannot be read, its toast asks "
+        "for the system disk, and the close is DECLINED once rather than "
+        "stranding the row; with the disk back the next close takes it "
+        "away. Every floppy --verify.",
         needs=("marty",), timeout=900,
         wants=("build/diarestore360.img", "build/apps360.img")),
     Row("diamiss", "soak", py("tests/diamiss.py"), 21.0,
@@ -8881,11 +8885,13 @@ SOAK = [
         "row still carries the mark - kept for the next ordinary boot.",
         needs=("marty",), serial=True, timeout=900,
         wants=("build/diahiber360.img",)),
-    Row("diaregister", "soak", py("tests/diaregister.py"), 30.0,
+    Row("diaregister", "soak", py("tests/diaregister.py"), 50.0,
         "SPEC.md 107.2/107.5.2: the Desk Calendar REGISTERS itself, once, off "
         "the SHIPPED 360KB system disk. Double-clicked out of SYSTEM\\DIA it "
         "opens on OSAPI_CLK_GET's today, and its first tick writes ONE DIA "
-        "row (KIND 1, 'D', SYSTEM\\DIA\\DESKCAL.O88, `Calendar`); a second "
+        "row (KIND 1, 'D', SYSTEM\\DIA\\DESKCAL.O88, `Calendar`) and, "
+        "untouched, writes nothing more - no DESKCAL.DAT seven guest seconds "
+        "on; a second "
         "double-click is refused by the package's own singleton - `Desk "
         "Calendar is open`, LD_EABORT, no write, SYSTEM.CFG unchanged; the "
         "close box removes the row by name and saves a 2,456-byte "
@@ -8898,6 +8904,24 @@ SOAK = [
         "after a RESET dia_boot relaunches it from its row and dia_load puts "
         "it back at the dragged place, not the template's, holding no cell.",
         needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
+    Row("diamovecga", "soak", py("tests/diamove.py", "--leg", "cga"), 25.0,
+        "SPEC.md 107.3/107.5.2: diamove on the 5150's CGA, the adapter the "
+        "COMPACT frame exists for. Wave 2 authored the template at the TALL "
+        "frame, so wm_create's fit cut it to the 155-row band and clamped "
+        "every restored y to 20 before PREFER made it 139 - the place came "
+        "back at y = 20 and the next poll saved 20 over the user's. A drag "
+        "to y = 24 must come back at y = 24 after a reset.",
+        needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
+    Row("diaanchor", "soak", py("tests/diamove.py", "--leg", "anchor"), 25.0,
+        "SPEC.md 107.5.2: a place saved on ANOTHER screen. tools/os88dia.py "
+        "puts DESKCAL.DAT at (503,88) on 720x348 into the shipped disk; on "
+        "the VGA XT's 640x480 the calendar opens anchored to the far edges "
+        "at (423,220) - a frame hanging over the dock, which wm_create's fit "
+        "pulls up above it and dia_made gives back - and, untouched, "
+        "writes nothing: the state file is the fixture byte for byte "
+        "seven guest seconds later.",
+        needs=("marty", "mtools"), timeout=900,
+        wants=("build/os8088-360.img",)),
     Row("deskcalgrid", "soak", py("tests/deskcalgrid.py"), 40.0,
         "SPEC.md 107.3: the Desk Calendar's 42-byte grid, read out of the "
         "running guest's bss, is Python calendar's for Oct 2026, Feb 2028 "

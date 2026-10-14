@@ -632,11 +632,15 @@ dc_all:
     pop ax
     ret
 
-; dc_regrid - a new month: header, weeks, frame, heading (lock held)
+; dc_regrid - a new month: header, weeks, frame, heading (lock held) - or
+; the whole content when a menu pick has just taken the About card down
+; (dc_redo), whose ground the four rows would not cover
 dc_regrid:
     call dc_build
     call dc_arm
     jc .x
+    cmp byte [dc_redo], 0
+    jne dc_redraw
     call dc_head
     call dc_weeks
     call dc_selon
@@ -644,12 +648,19 @@ dc_regrid:
 .x:
     ret
 
+; dc_redraw - dc_redo's whole paint, once (the clip armed)
+dc_redraw:
+    mov byte [dc_redo], 0
+    jmp dc_all
+
 ; dc_reselect - the selection moved from grid index AL, inside one month:
 ; the old frame off, the old field re-run when it was today (the white frame
 ; cut its inverse ground), the new frame on, the heading (lock held)
 dc_reselect:
     call dc_arm
     jc .x
+    cmp byte [dc_redo], 0
+    jne dc_redraw               ; the About card was down by a menu pick
     push ax
     mov ah, CWHITE
     call dc_frame

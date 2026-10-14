@@ -17,10 +17,16 @@ user swaps A: to reach anything else, and every shipped disk carries
   C  the system disk goes back and the owed save lands THERE: its
      DIAPROBE.DAT holds the dragged place and the state is clean, and both
      floppies still pass os88disk.py --verify.
+  D  the apps disk goes in again and the probe's close box is clicked: the
+     remove cannot read CTRL.DRV, whose toast asks for the system disk, and
+     the close is DECLINED once (SPEC.md 107.5) - the probe stays up rather
+     than closing with its row stranded in SYSTEM.CFG. The system disk back,
+     the next close goes ahead and the row is gone.
 
 **BREAK IT ON PURPOSE**: take dia_enter's own-name FIND out of os88dia.inc
 and B fails (the apps disk gains SYSTEM/APPDATA/DIAPROBE.DAT); take the
-backoff out of dia_tick and B's read count fails.
+backoff out of dia_tick and B's read count fails; make dia_close ignore
+the remove's CF and D fails (the probe closes, its row left behind).
 """
 import os
 import shutil
@@ -129,7 +135,33 @@ def main():
             dat = {"pos": False, "x": None, "y": None, "err": str(e)}
         check(dat["pos"] and (dat["x"], dat["y"]) == moved,
               "the system disk's DIAPROBE.DAT holds %r (%r)" % (moved, dat))
-    for f in (out, back):
+
+        print("D: closed with the apps disk in A: - declined ONCE")
+        m.mount(0, apps)
+        os88marty.pace(m, 3)
+        w = ui.window("DiaProbe")
+        ui.raise_window(w)
+        w = ui.window("DiaProbe")
+        ui.mo.click(*geom.close_xy(w.x, w.y), settle=0)
+        txt = ui.wait_toast(says="Sys Disk", limit=60)
+        check("Needs Sys Disk" in txt, "CTRL.DRV's toast asks for the "
+              "system disk (%r)" % txt)
+        os88marty.guest_sleep(m, 3.0)
+        check(any(o.title == "DiaProbe" for o in ui.windows()),
+              "the close was DECLINED: the probe is still up, so the row "
+              "still on the system disk is not stranded")
+        m.mount(0, back)                # the system disk as C left it
+        os88marty.pace(m, 3)
+        ui.close(ui.window("DiaProbe"))
+        fin = snap(m, tmp, "home_fin.img")
+        cfg = os88flush.Volume(open(fin, "rb").read())
+        try:
+            rows = os88dia.dia_rows(cfg.read("SYSTEM.CFG"))
+        except Exception:
+            rows = []
+        check(not rows, "with the system disk back the next close goes "
+              "ahead and takes the row away (%d DIA rows left)" % len(rows))
+    for f in (out, back, fin):
         r = subprocess.run([sys.executable, os.path.join(ROOT, "tools",
                                                          "os88disk.py"),
                             "--verify", f], capture_output=True, text=True)

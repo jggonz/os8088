@@ -107,8 +107,10 @@ dc_oy       equ os88_image_end + 64
 dc_cw       equ os88_image_end + 66     ; dw the content box
 dc_ch       equ os88_image_end + 68
 dc_line     equ os88_image_end + 70     ; 28: a row being built, and its NUL
+dc_redo     equ os88_image_end + 98     ; db the next draw is a WHOLE paint: a
+                                        ; menu pick took the About card down
 DC_BSS      equ 112                     ; a multiple of 16 (os88dia.inc)
-%if 70 + 28 > DC_BSS
+%if 98 + 1 > DC_BSS
   %error "deskcal: its own bss has outgrown DC_BSS"
 %endif
 
@@ -120,6 +122,21 @@ DC_BSS      equ 112                     ; a multiple of 16 (os88dia.inc)
 dc_entry:
     push si
     push di
+    push si
+    call OSAPI_VIDEO            ; DL = the adapter: the TEMPLATE takes its
+    pop si                      ; preferred frame BEFORE the create, whose
+    cmp dl, VID_CGA             ; wm_fit runs before PREFER can - a 255-row
+    jbe .kind                   ; template on a CGA was cut to the band and
+    mov dl, VID_VGA             ; its y clamped for a height it never had
+.kind:                          ; (SPEC.md 107.3). EGA takes VGA's, as the
+    mov bl, dl                  ; kernel does (11.100.1)
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    mov ax, [dc_pref + bx]
+    mov [dc_tpl + WT_W], ax
+    mov ax, [dc_pref + bx + 2]
+    mov [dc_tpl + WT_H], ax     ; ...and dia_anchor measures with it too
     mov di, dc_tpl
     call dia_load               ; places the template; CF = 1 one is open
     jc .out
@@ -155,7 +172,7 @@ dc_entry:
     mov dx, [es:bx + W_H]       ; answers "not visible" until the loader has
     sub dx, TITLE_H + 1         ; shown us)
     call dc_layout
-    call dia_made
+    call dia_made               ; LAST: after KEEPH and PREFER (os88dia.inc)
     clc
 .out:
     pop di
@@ -487,22 +504,44 @@ dc_onclick:
 ; dc_oncmd - AM_ONCMD (AL = the item, AH = the menu; lock held, no clip)
 ; -----------------------------------------------------------------------------
 dc_oncmd:
-    call dc_abdismiss           ; a pick takes the card down, then does what
-    or al, al                   ; it says (dc_abdismiss keeps AX)
+    push ax
+    cmp byte [dc_abon], 0       ; a pick takes the card down BY its own draw:
+    je .go                      ; one whole paint rather than the card's
+    mov byte [dc_abon], 0       ; repaint and then the month over it (SPEC.md
+    mov byte [dc_redo], 1       ; 107.3)
+.go:
+    or al, al
     je .today
     cmp al, 1
     je .prev
     mov al, 1
-    jmp dc_month
+    call dc_month
+    jmp short .done
 .prev:
     mov al, 0FFh
-    jmp dc_month
+    call dc_month
+    jmp short .done
 .today:
-    jmp dc_gotoday
+    call dc_gotoday
+.done:
+    cmp byte [dc_redo], 0       ; the pick drew nothing - refused at an end
+    je .x                       ; of the range, or today selected already -
+    mov byte [dc_redo], 0       ; and the card's ground is still owed
+    call dc_arm
+    jc .x
+    call dc_all
+.x:
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; dc_tick - DIA_ONTICK, every 36 ticks (the UI task, lock held, no clip): a
-; new DATE moves today's inverse. The minute's work is wave 4's
+; new DATE moves today's inverse - the old field and the new, each re-run
+; alone when it is on show, and the frame again when either is the selected
+; day (a run lays the frame's side columns). The month on show does not
+; change with the date, so nothing else is drawn; nor is anything while the
+; About card is up - the paint that takes it down shows the new today
+; (SPEC.md 107.3). The minute's work is wave 4's
 ; -----------------------------------------------------------------------------
 dc_tick:
     push ax
@@ -511,14 +550,35 @@ dc_tick:
     mov bl, al
     call dc_today               ; CF = 1 the date changed
     jnc .x
+    cmp byte [dc_abon], 0
+    jne .x
     call dc_tidx
-    and al, bl
-    cmp al, 0FFh
-    je .x                       ; neither on show: nothing to draw
-    call dc_regrid
+    mov bh, al                  ; BL = the old today's index, BH = the new
+    and al, bl                  ; (each 0FFh when not on show; an index is
+    cmp al, 0FFh                ; < 42, so the AND is 0FFh only for both)
+    je .x
+    call dc_arm
+    jc .x                       ; not visible: the next paint draws it
+    mov al, bl
+    call .one
+    mov al, bh
+    call .one
+    call dc_sidx
+    cmp al, bl
+    je .fr
+    cmp al, bh
+    jne .x
+.fr:
+    call dc_selon
 .x:
     pop bx
     pop ax
+    ret
+.one:
+    cmp al, 0FFh
+    je .r
+    call dc_field
+.r:
     ret
 
 ; --- the window (SPEC.md 107.3) -----------------------------------------------

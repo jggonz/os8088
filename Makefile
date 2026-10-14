@@ -13151,9 +13151,12 @@ LIVEPKGARGS := $(addprefix APPS:,$(BUILD)/recorder.o88 $(BUILD)/hello.o88) \
                $(addprefix SCRIBE:,$(SCRIBEDISK)) \
                $(addprefix MEDIA:,$(MEDIA_EXTRA)) \
                $(MIDISONGARGS)
-$(if $(LIVESYSARGS),,$(error LIVESYSARGS is empty - $(SYSAPPS) and $(APPSYS) \
-     no longer differ, so THEWIRE.O88 is either on every apps disk or on \
-     none; SPEC.md 92.11 says it is on neither))
+$(if $(filter-out $(APPSYS),$(SYSAPPS)),,$(error the SYSAPPS live set is \
+     empty - $(SYSAPPS) and $(APPSYS) no longer differ, so THEWIRE.O88 is \
+     either on every apps disk or on none; SPEC.md 92.11 says it is on \
+     neither))
+# (the FILTER, not $(LIVESYSARGS): that also carries $(DIAARGS), so testing
+# it could never fire again - SPEC.md 107.9)
 
 # THE WHOLE STORY LIBRARY (SPEC.md 61, 80.6). FROTZ.O88 rides APPS/ on this
 # volume and has ridden it since the everything disk was built - WITH NOTHING

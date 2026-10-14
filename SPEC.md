@@ -169321,11 +169321,24 @@ can keep:
 | `OSAPI_WM_KEEPH` | the layout is fixed rather than reflowing |
 | `OSAPI_WM_ONRESIZE` | the layout is re-chosen from the new content box after an adapter switch or a drag onto another display (§11.98) |
 
+**The template is sized for the adapter BEFORE `OSAPI_WM_CREATE`**: the
+entry proc copies the `OSAPI_WM_PREFER` pair for `OSAPI_VIDEO`'s kind (EGA
+takes VGA's, as §11.100.1 does) into `dc_tpl`'s width and height, and only
+then calls `dia_load` and creates. `wm_create`'s own `wm_fit` runs before
+any of the calls above can, and `PREFER` and `KEEPH` resize WITHOUT moving
+the window (§11.100.9) - so a 255-row template on a CGA was cut to the
+155-row band and its `y` clamped to 20 against a height it never had, and
+every restored `y` came back as 20 and was then saved as 20 (§107.9). Sized
+first, the create's fit clamps the place against the frame the window will
+really have, and `dia_anchor` measures the frame's middle with it too.
+
 **Two layouts, one code path.** The content is 208 pixels wide - 26 cells -
 on both. Which one is drawn is decided from the CONTENT HEIGHT the kernel
-gave the window (`OSAPI_WM_GEOM` at entry, `OSAPI_WM_ONRESIZE` after), not
-from an adapter code: 236 rows or more is TALL, anything less is COMPACT. A
-layout is a row of seven `y` values in a table:
+gave the window (the record's `W_W`/`W_H` at entry, because
+`OSAPI_WM_GEOM` answers "not visible" until the loader has shown the window;
+`OSAPI_WM_GEOM` in every paint; `OSAPI_WM_ONRESIZE` after), not from an
+adapter code: 236 rows or more is TALL, anything less is COMPACT. A layout
+is a row of seven `y` values in a table:
 
 | row | TALL (208 x 236) | COMPACT (208 x 120) |
 |---|---|---|
@@ -169358,15 +169371,27 @@ We Th Fr Sa`.
 - **Every pixel is written once** in a full paint: a run per text row, a
   `gfx_fill` per gap between rows, one `gfx_hline` for the rule, one fill for
   the blank pane. No fill lies under a run. The one primitive drawn over
-  another's pixels is the selection frame, whose two side columns are ground
-  the field's run has just laid - 16 pixels, never a glyph's.
+  another's pixels is the selection frame: its two side columns are ground
+  the field's run has just laid (16 pixels) and its top and bottom rows are
+  ground the gap fills above and below the week row have just laid (24 each)
+  - **64 pixels**, never a glyph's.
 - **What a change costs**, in primitive calls (PERFORMANCE.md's unit): a
-  full paint is ~22 (one run per row, ~13 gap fills, the rule, the frame) and
-  two more when today is on show; a new selected day is 3 - the old frame
-  in white, the new in black, the heading - and 4 when the old day was
-  today; a new month is ~18 (header, weeks and their gaps, frame, heading);
-  an idle tick is **0**, one `OSAPI_CLK_GET` and a compare. `deskcalperf`
-  (wave 4) measures them.
+  full paint is ~22 - nine runs (header, weekday row, six weeks, the
+  heading), **10 gap fills** (header to weekday row, above the first week,
+  below each of the six, rule to heading, the pane; 11 when the content box
+  is wider than 208), the rule and the frame - and two more when today is on
+  show; a new selected day is 3 - the old frame in white, the new in black,
+  the heading - and 4 when the old day was today; a new month is ~18
+  (header, weeks and their gaps, frame, heading); a new DATE is one run per
+  changed field that is on show and the frame again when one of them is the
+  selected day, 1-3 calls; an idle tick is **0**, one `OSAPI_CLK_GET` and a
+  compare. `deskcalperf` (wave 4) measures them.
+- **The About card** (`os88ui_about`) lies over the content until a key, a
+  click or a menu pick takes it down. Nothing draws under it: a date change
+  while it is up only updates the state, and the paint that takes it down
+  shows the new today. A menu pick that redraws the month takes the card
+  down BY that redraw - one whole paint, not the card's repaint and then the
+  month's over it, which is the double draw §6.1 forbids.
 
 **Date maths** (`dcdate.inc`), all integer and 8086: the day of the week is
 Sakamoto's (as `apps/dos`'s `dos_dow`), exact over the whole range; the days
@@ -169382,9 +169407,11 @@ compares it with Python's `calendar`.
 **Today** comes from `OSAPI_CLK_GET` (§37.96) at launch, clamped to the range
 above, and the calendar opens on today's month with today selected. The
 DIA tick (`DIA_ONTICK`, every 36 ticks) asks again, and when the DATE has
-changed moves the inverse: the old today's field and the new one are re-run,
-and the whole month is redrawn when the new today is in another month that
-is on show. The clock's own year is what `OSAPI_CLK_GET` answers, so a
+changed moves the inverse: each of the old today's field and the new one
+that is in the month on show is re-run alone - the month on show does not
+change with the date, so nothing else is - and the selection frame is drawn
+again when either is the selected day, because a field's run lays the
+frame's side columns. The clock's own year is what `OSAPI_CLK_GET` answers, so a
 machine with no RTC opens on whatever the PIT clock says (§37.0.1).
 
 **Input**, while the calendar is the front window:
@@ -169514,7 +169541,14 @@ payload.
 | +14 | 2 | the payload's length: must equal `DIA_PAYLEN` AND the file's size − 16 |
 
 A file that is not exactly that is refused whole — missing is "defaults",
-damaged is "run empty, never overwrite silently". **`tools/os88dia.py`** is
+damaged is "run empty, never overwrite silently". A file that could not be
+READ - `OSAPI_FILE_READ` answering `FERR_NODISK` or `FERR_IO` - is neither:
+nothing is known about it, so the widget runs on the defaults with the state
+READ-ONLY for the session (`DIA_S_RDONLY`), the unread file is never written
+over and never called damaged, and the next launch reads it again. A walk to
+`SYSTEM\APPDATA` that fails at the load (`DIA_S_NOHOME`) stops every save for
+the same reason, whether the folder is absent or the disk would not answer:
+a save over a file nobody has read is the one thing this must not do. **`tools/os88dia.py`** is
 the independent host reader and writer of both this header and the SYSTEM.CFG
 trailer's DIA row, `--selfcheck` round-trips them, and every fixture the
 gates boot is written by it.
@@ -169525,11 +169559,11 @@ four that wave 2 added):
 | call | when | what |
 |---|---|---|
 | `dia_load` | the entry proc, before `OSAPI_WM_CREATE` | refuse a SECOND instance (CF = 1, §107.5.2); copy the 8.3 name; bank `OSAPI_FILE_HERE` ONCE - the launch folder is HOME for the session; walk to `SYSTEM\APPDATA`; read and validate the file; place the template, anchored when the screen differs |
-| `dia_made` | after `OSAPI_WM_CREATE` | install `OSAPI_WM_ONTIMER` and `OSAPI_WM_ONCLOSE`; arm a 1-tick timer - or, where the timer is refused (kern_small), install the wake handler for the worker arm |
+| `dia_made` | after `OSAPI_WM_CREATE` **and the package's own sizing calls** (`KEEPH`, `PREFER`) | give back a restored `y` the create's fit pulled up and re-fit under the window's own height rule (§107.5.2); take the place the window OPENED at as the place on record; install `OSAPI_WM_ONTIMER` and `OSAPI_WM_ONCLOSE`; arm a 1-tick timer - or, where the timer is refused (kern_small), install the wake handler for the worker arm |
 | `dia_painted` | the end of the package's `W_PAINT` | on kern_small, hire the worker (once); nothing elsewhere |
 | `dia_touch` | whenever the payload changed | owe a save; the next tick makes it |
-| `dia_tick` | each timer tick (UI task, lock held) | the FIRST registers the DIA row (`OSAPI_DESK_ITEM` AL = 1, +3 = `'D'`, path from `OSAPI_FILE_PATH`); every one polls the frame's x,y and saves once two polls agree; calls `DIA_ONTICK`; saves what is owed; re-arms for 36 ticks |
-| `dia_close` | `W_ONCLOSE` | `DIA_ONCLOSE`; remove the row by name (AL = 0, AH = 0xFF); save; let the close proceed |
+| `dia_tick` | each timer tick (UI task, lock held) | the FIRST registers the DIA row (`OSAPI_DESK_ITEM` AL = 1, +3 = `'D'`, path from `OSAPI_FILE_PATH`); every one polls the frame's x,y and, once two polls agree on a place that is NOT the one on record, records it and owes a save; calls `DIA_ONTICK`; saves what is owed; re-arms for 36 ticks. A widget that has not been moved or edited writes nothing, whatever its state file was |
+| `dia_close` | `W_ONCLOSE` | `DIA_ONCLOSE`; remove the row by name (AL = 0, AH = 0xFF); save; let the close proceed - except that a remove `OSAPI_DESK_ITEM` REFUSED (no system disk in A: to read `CTRL.DRV` from, whose own toast asks for it) declines the FIRST close (CF = 1) so the user can put the disk back and close again; the next close goes ahead whatever the remove answers, so a refusal can never make the window unclosable. `DIA_ONCLOSE` can therefore run twice |
 
 **The row is about the PROGRAM, not the state file**, so the first tick
 registers on every launch whatever the file said: missing, DAMAGED, or no
@@ -169611,10 +169645,36 @@ GOTO_QM    home
   one. Whatever is left over is `wm_fit`'s, which clamps the frame onto the
   glass inside `wm_create` (§39.7) - so an anchor that lands below a short
   screen's dock is pulled up rather than lost. A negative result is clamped
-  to 0 here first.
+  to 0 here first. The template's `w` and `h` are the package's, so a
+  package whose frame differs by adapter sizes its template for this one
+  before `dia_load` (the calendar does, §107.3).
+- **A place over the dock is restored over the dock.** `wm_fit` keeps every
+  frame that FITS the band above the dock at creation, `OSAPI_WM_KEEPH` or
+  not (the flag only lowers the floor for a frame taller than the band) -
+  but a frame DRAGGED more than half over the strip is left there on
+  purpose (`wm_dock_snap`), and that is the place the user chose. So when
+  the place came from the state file and the create's fit pulled its `y`
+  UP, `dia_made` writes the restored `y` back into the record (the window
+  is not shown yet), down to `OSAPI_WM_DISPLAY`'s height − `W_H` − 1 - the
+  lowest `y` whose frame and shadow are on the display, which is `wm_fit`'s
+  own floor for a `KEEPH` window - and never past it. A `y` the fit pushed
+  DOWN (under the menu bar) and `x` are the fit's. The bank `wm_refit`
+  replays on an adapter change already holds the restored place, because
+  `dia_load` put it in the template the bank was taken from.
+- **Nothing is written that the user did not cause.** `dia_made` takes the
+  place the window OPENED at as the place on record, and the poll owes a
+  save only when two polls agree on a DIFFERENT one. So a launch with no
+  state file writes nothing until the first drag, edit or close (§107.6's
+  "the first time the calendar is closed or moved"), and a place anchored or
+  clamped at launch is not written back as though the user had chosen it -
+  the file keeps the place the user DID choose, for the screen they chose it
+  on. A wave-2 build compared against "never saved" and wrote a missing file
+  ~2 s after every first launch, and put the damaged-file question up
+  unprompted ~2 s after every launch over a damaged one.
 - **A DAMAGED file is asked about, once, before it is overwritten.** Wave 1
-  never saved over one. Now the first save that is owed - a settled drag, an
-  edit - asks `DIA_DAMAGEDQ` (`Replace damaged calendar?`) through
+  never saved over one. Now the first save that is owed - a settled drag
+  away from where the window opened, an edit (`dia_touch`); never a launch
+  by itself - asks `DIA_DAMAGEDQ` (`Replace damaged calendar?`) through
   `os88ui_ask` with Yes / No, when the package includes `os88ui.inc` with
   `OS88UI_ALERT` and defines that string. **Yes** clears the damage and the
   next tick writes a whole new file; **No**, or a dismissed alert, makes the
@@ -169631,9 +169691,12 @@ GOTO_QM    home
   the loader has not published the instance yet (`apps/taskmgr`'s rule,
   §28). The worker is `OSAPI_TASK_SLEEP` 36, `OSAPI_TASK_ALIVE`,
   `OSAPI_WM_WAKE`, round again, and touches no file (§20.6 rule 7);
-  `dia_wake` runs on the UI task WITHOUT the lock, so it polls the place,
-  takes `OSAPI_GFX_LOCK` around `DIA_ONTICK` so the application sees the
-  same environment as on kern_big, and saves after the unlock. The worker is
+  `dia_wake` runs on the UI task WITHOUT the lock, so it takes
+  `OSAPI_GFX_LOCK` around the WHOLE beat - the poll, `DIA_ONTICK` and the
+  save - which is kern_big's timer environment exactly: the application's
+  tick sees what it sees there, and the save runs under the lock as it does
+  there (its damaged-file question is an `os88ui_ask`, which wants the lock
+  held). One body, `dia_beat`, serves both arms. The worker is
   declared restartable (§66.6.2). There is no registration on kern_small,
   whose `OSAPI_DESK_ITEM` is the refusal (§107.7).
 
@@ -169689,8 +169752,8 @@ First registration and close each write SYSTEM.CFG once.
 
 | | image | bss | on disk (lz4) |
 |---|---:|---:|---:|
-| `DESKCAL.O88` | 5,808 | 2,746 | 5,114 |
-| `DIAPROBE.O88` (never shipped) | 1,392 (wave 1: 1,120) | 194 | 1,392 |
+| `DESKCAL.O88` | 6,080 (5,808 before the review fixes) | 2,748 | 5,343 |
+| `DIAPROBE.O88` (never shipped) | 1,520 (wave 1: 1,120) | 196 | 1,520 |
 
 `os88dia.inc` grew ~260 bytes in wave 2 - the singleton, the anchor, the
 worker arm and `dia_touch` - plus the damaged-file question in a package that
@@ -169702,8 +169765,9 @@ ABI lock is untouched.
 more. Measured with `os88disk.py --verify`: the 360 KB system disk went from
 **313 to 319 of 354 clusters** and the small 360 KB one from 262 to 268; the
 `readme.txt` paragraph that tells a user about it took one more cluster on
-each (it crossed a 1 KB boundary), so the shipped 360 KB system disk is
-**320 of 354, 34 left**. The state file is three more clusters at runtime,
+each (it crossed a 1 KB boundary), so the shipped 360 KB system disk was
+320 of 354; the review fixes' 229 lz4 bytes crossed one more, and it is
+**321 of 354, 33 left**. The state file is three more clusters at runtime,
 in `SYSTEM\APPDATA`, the first time the calendar is closed or moved.
 
 ### 107.7 `kern_small`
@@ -169835,13 +169899,51 @@ silent. The small system disks carry `SYSTEM\DIA\` too (§24.5.1).
   so the design's deferred `[desk_zdirty]` path was not needed; and
   `OSAPI_FILE_HERE`'s `BL` is `inst_fdrv`, the volume index a row's +0 holds
   — `diaboot`'s byte-identical SYSTEM.CFG is that fact measured.
+- **Wave 2's review fixes** (no kernel or SDK byte; the package and the
+  include only):
+  - **The restored `y` was lost on a CGA**, and wherever the frame hung over
+    the dock. The design put the saved place in the template and trusted
+    `wm_fit` inside `wm_create` to clamp "whatever is left" - but that fit
+    runs before the entry proc's `PREFER` and `KEEPH`, which resize without
+    moving (§11.100.9), so it clamped against the 255-row TALL template on a
+    155-row band and every `y` came back as 20; and it keeps every frame
+    that fits the band above the dock, where `wm_dock_snap` lets a drag
+    leave one over it. The template is now sized for the adapter before the
+    create (§107.3) and `dia_made` gives a pulled-up `y` back (§107.5.2).
+    `diamove` ran on VGA alone, where neither shows; `diamovecga` and
+    `diaanchor` are the rows that would have caught both.
+  - **The poll compares against the place the window OPENED at**, not
+    against "never saved". The design's own words - the file appears "the
+    first time the calendar is closed or moved", the damaged question comes
+    from "a settled drag, an edit" - were what the wave-2 build broke: it
+    wrote a missing file ~2 s after every first launch (2 reads, 6 writes
+    under the lock), and put `Replace damaged calendar?` up unprompted ~2 s
+    after every launch over a damaged one, a Yes to which replaced a file
+    the user had not touched.
+  - **A read that FAILED is not a damaged file.** `FERR_NODISK` and
+    `FERR_IO` made the file DAMAGED, so the first owed save offered to
+    replace a file that had never been read; they are now read-only for the
+    session (§107.5). A walk that fails at the load stays `DIA_S_NOHOME` -
+    whatever the cause, saving over an unread file is what must not happen.
+  - **A close whose remove is refused is declined once** (§107.5): with the
+    system disk out of A:, `CTRL.DRV` cannot load, the row stayed and the
+    widget came back at the next boot although the user had closed it.
+    Declining every time would make it unclosable (§75.1), so only the first.
+  - **A date change re-runs the two fields** rather than the month (`~18`
+    calls to 1-3), and draws nothing under an open About card; a menu pick
+    takes the card down by its own draw, not by the card's repaint followed
+    by the month's (§107.3).
+  - `DIA_CAP` is checked by `%strlen`: the old check passed 13 and 14
+    characters into the row's picture header. The Makefile's `LIVESYSARGS`
+    guard tests the SYSAPPS filter itself, since `$(DIAARGS)` made the
+    variable it tested never empty.
 
 ### 107.10 How it was built, and its gates
 
 | wave | what | gates |
 |---|---|---|
 | 1 | the kernel half (K1-K6 below), the SDK, `tools/os88dia.py`, `tests/diaprobe/`, `make diatest` | `diaboot`, `diamiss`, `diashort`, `diahiber`; `desksc`, `deskitem`, `cfgtrip` unchanged |
-| 2 | `os88dia.inc` in full (singleton, anchoring, damaged-file question, kern_small's worker arm), the calendar's window, grid and navigation, `SYSTEM\DIA\` on every system disk | `diaregister`, `diamove`, `deskcalgrid`; `t_dia` E-G |
+| 2 | `os88dia.inc` in full (singleton, anchoring, damaged-file question, kern_small's worker arm), the calendar's window, grid and navigation, `SYSTEM\DIA\` on every system disk | `diaregister`, `diamove`, `diamovecga`, `diaanchor`, `deskcalgrid`, `diaswap` D; `t_dia` E-G |
 | 3 | appointments and tasks | `deskcaledit`, `deskcaltask` |
 | 4 | reminders, kern_small's worker arm, measurement | `deskcalremind`, `diasmall`, `deskcalperf` |
 
@@ -169877,8 +169979,10 @@ no fixture, because what is on it is what a user has:
 
 | row | asserts |
 |---|---|
-| `diaregister` | double-clicked out of `SYSTEM\DIA`, the calendar opens on `OSAPI_CLK_GET`'s today and registers ONE DIA row; a second double-click is refused by the singleton (`Desk Calendar is open`, `LD_EABORT`, nothing written, SYSTEM.CFG unchanged); the close box removes the row and saves a 2,456-byte state file holding its place; a reset brings nothing back |
+| `diaregister` | double-clicked out of `SYSTEM\DIA`, the calendar opens on `OSAPI_CLK_GET`'s today and registers ONE DIA row, and untouched it writes nothing more (no `DESKCAL.DAT` seven guest seconds on); a second double-click is refused by the singleton (`Desk Calendar is open`, `LD_EABORT`, nothing written, SYSTEM.CFG unchanged); the close box removes the row and saves a 2,456-byte state file holding its place; a reset brings nothing back |
 | `diamove` | a drag is saved within two polls, with the 640x480 screen; after a RESET the boot relaunches it at the dragged place, holding no cell |
+| `diamovecga` | the same on the 5150's CGA (MartyPC `os8088_5150_cga`, its GLaBIOS twin), the adapter COMPACT is for: opened at (359,36), dragged to (143,24), and back at (143,24) after a reset - wave 2 brought every CGA place back at `y` = 20 |
+| `diaanchor` | `DESKCAL.DAT` written by `tools/os88dia.py` at (503,88) on 720x348 and put on the disk with `mcopy`: on 640x480 the calendar opens at (423,220), both axes anchored to the far edges and the frame hanging over the dock as it was left; seven guest seconds later nothing is owed and the file on A: is the fixture byte for byte |
 | `deskcalgrid` | the 42-byte grid read out of the guest's bss is Python `calendar`'s for Oct 2026, Feb 2028, Mar 2028 (by PgDn), Jan 1980 and Dec 2099, each reached by setting the machine's clock and pressing `T`; past either end the step is refused and the other way still moves |
 
 **`t_dia`** (fast tier) is what keeps that include honest between MartyPC

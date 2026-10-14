@@ -58,9 +58,12 @@
 ;               has been told, and your entry proc must return CF = 1 having
 ;               done nothing else. CF = 0: the state file is read and the
 ;               template placed (anchored if it was saved on another screen).
-;   dia_made    after OSAPI_WM_CREATE, BX = the window: installs the timer -
-;               or, on kern_small, the wake handler of the worker arm - and
-;               the close negotiator, and arms the first tick.
+;   dia_made    after OSAPI_WM_CREATE AND your own OSAPI_WM_KEEPH /
+;               OSAPI_WM_PREFER, BX = the window: puts back a restored y the
+;               create's fit pulled up off the dock, takes the place the window opened at
+;               as the place on record, installs the timer - or, on
+;               kern_small, the wake handler of the worker arm - and the close
+;               negotiator, and arms the first tick.
 ;   dia_painted the LAST thing your W_PAINT does (lock held): on kern_small
 ;               it hires the worker on the first paint; elsewhere a test.
 ;   dia_touch   your payload changed: a save is owed, and the next tick
@@ -104,6 +107,8 @@ DIA_S_HIRED     equ 128         ; ...and the worker is running
 ; dia_fl bits
 DIA_F_ASKING    equ 1           ; the damaged-file question is on the glass
 DIA_F_CLOSING   equ 2           ; dia_close's save: never ask from there
+DIA_F_PLACED    equ 4           ; the template's place came from the file
+DIA_F_KEPT      equ 8           ; a close was declined once (dia_close)
 DIA_BKMAX       equ 16          ; a refusal that may clear waits 1, 2, 4, 8,
                                 ; then 16 polls before the next try
 
@@ -128,7 +133,8 @@ dia_fnd     equ dia_bn + 1                                  ; the walk's FIND
                                 ; row from the first tick to the close, and
                                 ; the close removes by it (SPEC.md 107.5)
 dia_fl      equ dia_fnd + OSAPI_FIND_SZ                     ; DIA_F_* (wave 2)
-DIA_BSS_END equ DIA_BSS + DIA_HDR_SIZE + DIA_PAYLEN + OSAPI_DI_SIZE + 13 + 2 + 1 + 1 + 2 + 2 + 2 + 1 + 1 + OSAPI_FIND_SZ + 1
+dia_wy      equ dia_fl + 1                                  ; the restored y
+DIA_BSS_END equ DIA_BSS + DIA_HDR_SIZE + DIA_PAYLEN + OSAPI_DI_SIZE + 13 + 2 + 1 + 1 + 2 + 2 + 2 + 1 + 1 + OSAPI_FIND_SZ + 1 + 2
 %if OSAPI_DI_SIZE < DIA_SLACK
   %error "os88dia: dia_rec is the read's slack before it is the row"
 %endif
@@ -186,7 +192,12 @@ dia_load:
     jnc .got
     cmp ax, FERR_NOENT
     je .home                    ; MISSING: the defaults, and the first save
-    jmp short .bad              ; makes it
+    cmp ax, FERR_IO             ; makes it
+    ja .bad                     ; the FILE's fault (too big, not ours)
+    or byte [dia_st], DIA_S_RDONLY  ; FERR_NODISK / FERR_IO: UNREAD - nothing
+    jmp short .zero             ; is known about it, so it is neither damaged
+                                ; nor ever written over this session; the
+                                ; next launch reads it again (SPEC.md 107.5)
 .got:
     or dx, dx
     jnz .bad
@@ -216,9 +227,12 @@ dia_load:
     mov si, [dia_file+DIA_H_Y]
     call dia_anchor
     mov [di+WT_Y], si           ; wm_create clamps it onto the glass (39.7)
+    mov [dia_wy], si            ; ...and dia_made gives back what that clamp
+    or byte [dia_fl], DIA_F_PLACED  ; took to keep it off the dock
     jmp short .home
 .bad:
     or byte [dia_st], DIA_S_DAMAGED
+.zero:
     push ds                     ; DAMAGED: run empty, and never overwrite it
     pop es                      ; silently (dia_save asks first, 107.5.2)
     mov di, dia_file
@@ -323,7 +337,44 @@ dia_single:
 ; -----------------------------------------------------------------------------
 dia_made:
     push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
     mov [dia_win], bx
+    mov ax, KERNEL_SEG          ; the record (SPEC.md 20.1)
+    mov es, ax
+    test byte [dia_fl], DIA_F_PLACED
+    jz .rec
+    mov ax, [dia_wy]            ; THE RESTORED y. wm_create's fit keeps every
+    cmp ax, [es:bx+W_Y]         ; frame that fits above the dock, but a frame
+    jle .rec                    ; DRAGGED half over it is left there on
+    push ax                     ; purpose (wm_dock_snap) - and that is the
+    call OSAPI_WM_DISPLAY       ; place the user chose. Give back what the fit
+    mov cx, bx                  ; took, down to the lowest y whose frame and
+    mov bx, [dia_win]           ; shadow are on this display - wm_fit's own
+    pop ax                      ; floor for a KEEPH window, ph - h - 1 - and
+    sub cx, [es:bx+W_H]         ; never past it (SPEC.md 107.5.2). The window
+    dec cx                      ; is not shown yet; x is clamped the same
+    cmp ax, cx                  ; either way and is not touched
+    jle .put
+    mov ax, cx
+.put:
+    cmp ax, [es:bx+W_Y]
+    jle .rec
+    mov [es:bx+W_Y], ax
+.rec:
+    mov ax, [es:bx+W_X]         ; THE PLACE ON RECORD is where it opened: the
+    mov dx, [es:bx+W_Y]         ; poll owes a save only for another one, so a
+    mov [dia_px], ax            ; launch alone writes nothing (107.5.2). The
+    mov [dia_py], dx            ; header's screen goes with it, or a later
+    mov [dia_file+DIA_H_X], ax  ; save would pair this place with the old
+    mov [dia_file+DIA_H_Y], dx  ; screen; DIA_HF_POS is left as the file had
+    call OSAPI_VIDEO            ; it, so a close still writes a missing file
+    mov [dia_file+DIA_H_SW], ax
+    mov [dia_file+DIA_H_SH], bx
+    mov bx, [dia_win]
     mov ax, dia_tick
     call OSAPI_WM_ONTIMER
     mov ax, dia_close
@@ -335,6 +386,11 @@ dia_made:
     mov ax, dia_wake            ; the tick
     call OSAPI_WM_ONWAKE
 .t:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -427,12 +483,10 @@ dia_beat:
     jne .moved                  ; still moving, or just started
     cmp dx, [dia_py]
     jne .moved
-    test byte [dia_file+DIA_H_FLAGS], DIA_HF_POS
-    jz .new                     ; settled, and never saved: save it
-    cmp ax, [dia_file+DIA_H_X]
-    jne .new
-    cmp dx, [dia_file+DIA_H_Y]
-    je .app                     ; settled where it was saved: nothing owed
+    cmp ax, [dia_file+DIA_H_X]  ; two polls agree: against the place on
+    jne .new                    ; record - where it was saved, or where it
+    cmp dx, [dia_file+DIA_H_Y]  ; opened (dia_made) - and only another place
+    je .app                     ; owes a save: a launch alone writes nothing
 .new:
     call dia_pos                ; two polls agree: the drag is over
 .moved:
@@ -533,7 +587,11 @@ dia_register:
 ; dia_close - the close negotiator (SI = the window; UI task, lock held). The
 ; application's own close, the row away BY NAME, the last place saved; and the
 ; close goes ahead (CF = 0). Restart and power-off do not come here (SPEC.md
-; 107.4): the row stays, which is what restore wants
+; 107.4): the row stays, which is what restore wants. A remove REFUSED - no
+; system disk in A: to read CTRL.DRV from, whose toast asks for it - declines
+; the FIRST close (CF = 1), so the user can put it back and close again; the
+; next one goes ahead whatever the remove says, so the window can never be
+; made unclosable (SPEC.md 75.1). DIA_ONCLOSE can therefore run twice
 ; -----------------------------------------------------------------------------
 dia_close:
     push ax
@@ -553,6 +611,13 @@ dia_close:
     mov si, dia_rec
     mov ax, 0xFF00              ; AL = 0 remove, AH = 0xFF: by NAME
     call OSAPI_DESK_ITEM
+    jnc .gone
+    test byte [dia_fl], DIA_F_KEPT
+    jnz .gone                   ; refused twice: close anyway, the row stays
+    or byte [dia_fl], DIA_F_KEPT
+    stc                         ; refused once: stay up, save nothing - the
+    jmp short .ret              ; disk is not home either
+.gone:
     mov ax, KERNEL_SEG          ; the window record again
     mov es, ax
 .pos:
@@ -573,6 +638,8 @@ dia_close:
     or byte [dia_fl], DIA_F_CLOSING ; never ask from here: the alert would
     call dia_save               ; die with this package (SPEC.md 107.5.2)
 .out:
+    clc
+.ret:
     pop es
     pop di
     pop si
@@ -580,7 +647,6 @@ dia_close:
     pop cx
     pop bx
     pop ax
-    clc
     ret
 
 ; dia_save - the state file, header and payload in one write (SPEC.md
@@ -826,10 +892,11 @@ dia_isopen  db 'Already open', 0
 %ifdef DIA_DAMAGEDQ
 dia_damq    db DIA_DAMAGEDQ, 0
 %endif
+%strlen DIA_CAPLEN DIA_CAP
+%if DIA_CAPLEN > 12             ; the row's caption is 13 bytes, its NUL in
+  %error "os88dia: DIA_CAP is at most 12 characters"  ; them: +62 and +63 are
+%endif                          ; the kernel's picture header (SPEC.md 26.8.1)
 dia_cap     db DIA_CAP, 0
             times OSAPI_DI_BODY - OSAPI_DI_CAP - ($ - dia_cap) db 0
-%if ($ - dia_cap) != OSAPI_DI_BODY - OSAPI_DI_CAP
-  %error "os88dia: DIA_CAP is at most 12 characters"
-%endif
 
 %endif ; OS88DIA_INC

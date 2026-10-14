@@ -123,8 +123,12 @@ INCLUDES = [
      "(SYSTEM\\APPDATA, a 16-byte DIA header then your payload), its DIA row "
      "in SYSTEM.CFG's desktop trailer, registered on the first tick and "
      "removed by name on close, and a 36-tick poll that saves the window's "
-     "place once a drag settles. `dia_load` in the entry proc, `dia_made` "
-     "after OSAPI_WM_CREATE."),
+     "place once a drag settles. `dia_load` in the entry proc (size your "
+     "template for the adapter first), `dia_made` after OSAPI_WM_CREATE and "
+     "your own KEEPH/PREFER, `dia_painted` as the LAST thing your W_PAINT "
+     "does (kern_small's worker is hired there - without it that kernel has "
+     "no tick, no save and no reminders, and says nothing), and `dia_touch` "
+     "whenever your payload changes."),
     ("os88line.inc", "83",
      "A one-line text field: caret, horizontal scroll, focus, click-to-position "
      "and the editing keys. The caller owns a 20-byte block."),

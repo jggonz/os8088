@@ -13,7 +13,9 @@ DESKCAL.DAT. One boot on a VGA XT (MartyPC), driven by name:
      its first tick registers it - SYSTEM.CFG on the guest's A: holds ONE
      DIA row (+3 = 'D', KIND 1), whose path is SYSTEM\\DIA\\DESKCAL.O88 and
      whose caption is `Calendar`. OSAPI_CLK_GET's first caller is here too:
-     the month on show and the selected day are today's.
+     the month on show and the selected day are today's. Untouched, it then
+     WRITES NOTHING: seven guest seconds on, no save is owed and A: has no
+     DESKCAL.DAT (SPEC.md 107.5.2).
   C  a second double-click is REFUSED by the package itself (dia_load's
      singleton, SPEC.md 107.5.2): `Desk Calendar is open`, ld_status
      LD_EABORT, one calendar window - and SYSTEM.CFG is byte-identical to
@@ -26,7 +28,9 @@ DESKCAL.DAT. One boot on a VGA XT (MartyPC), driven by name:
 
 **BREAK IT ON PURPOSE**: take dia_single's call out of dia_load and C fails
 (a second window opens); take dia_register's call out of dia_beat and B
-fails (no row); make dia_close skip the remove and D and E fail.
+fails (no row); put dia_beat's "never saved: save it" branch back and B
+fails (an unasked DESKCAL.DAT); make dia_close skip the remove and D and E
+fail.
 """
 import os
 import shutil
@@ -37,6 +41,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 import os88ui      # noqa: E402
+import os88marty   # noqa: E402
 import os88geom as geom   # noqa: E402
 import os88flush   # noqa: E402
 import os88dia     # noqa: E402
@@ -131,14 +136,23 @@ def main():
               "it opened on today's month with today selected (%d-%d %d)"
               % (y, mo, sel))
 
-        # the FIRST save: a calendar with no state file writes one as soon
-        # as two polls agree on its place - wait for it, so what C counts is
-        # the refused launch alone
+        # A LAUNCH ALONE WRITES NOTHING (SPEC.md 107.5.2): with no state
+        # file the place on record is where the window opened, so three
+        # polls later no save is owed and A: has no DESKCAL.DAT - a wave-2
+        # build wrote one ~2 s after every first launch. The file comes with
+        # the close (D) or a drag (diamove)
         def hdr():
             return m.readseg(wseg, image + os88dia.DESKCAL_DIA_BSS, 4)
-        ui._wait(lambda: hdr()[3] & os88dia.DIA_HF_POS
-                 and not st() & DIA_S_DIRTY, "the first save", 60,
-                 snapshot=lambda: "dia_st = %#x" % st())
+        os88marty.guest_sleep(m, 7.0)
+        check(not hdr()[3] & os88dia.DIA_HF_POS and not st() & DIA_S_DIRTY,
+              "untouched, nothing is owed (dia_st = %#x, header flags %#x)"
+              % (st(), hdr()[3]))
+        try:
+            volume(m, tmp).read("SYSTEM/APPDATA/DESKCAL.DAT")
+            had = True
+        except Exception:
+            had = False
+        check(not had, "...and A: has no DESKCAL.DAT yet")
 
         print("C: a second launch is refused, and writes nothing")
         m.disk(reset=True)
