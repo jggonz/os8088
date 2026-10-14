@@ -874,8 +874,10 @@ hd_cfgbuf    equ hd_mbr         ; the blob, staged for OSAPI_DRV_CFG: its
 ; hd_at_dup - is the drive IDENTIFY just answered for one rung 0 already has?
 ; in:  hd_idbuf holds IDENTIFY's answer; the rung 0 rows are in hd_devs
 ; out: CF = 0 yes - the BIOS reported it and this unit gets no row of its own,
-;      and that BIOS row is now SPENT; CF = 1 no
-; clobbers: AX, DX, DI, flags (BX, the base port, is kept)
+;      and that BIOS row is now SPENT: ZF = 1 and DI = the row to pair it
+;      with, or ZF = 0 and no pairing (AMBIGUOUS, or more heads than a task
+;      file has); CF = 1 no
+; clobbers: AX, CX, DX, DI, flags (BX, the base port, is kept)
 ;
 ; The key is the GEOMETRY, because it is the only thing the two rungs both
 ; answer for: a BIOS row's unit is 80h/81h and an IDE row's is 0/1 on a base
@@ -897,18 +899,28 @@ hd_cfgbuf    equ hd_mbr         ; the blob, staged for OSAPI_DRV_CFG: its
 ; it, and SPEC.md 52.6.1's automount then mounts every partition on it twice -
 ; once through each transport, as C: and again as D:, on a desktop with two
 ; icons per volume and two FAT caches over the same sectors.
+;
+; **A PAIRING IS TAKEN ONLY WHEN IT IS THE ONLY ONE** (SPEC.md 52.1.1): the
+; key is not identity, and hd_twins' proof is LBA 0, which two drives
+; partitioned alike share byte for byte. So a unit that more than one BIOS
+; row matches - spent or not - pairs with none, and every OTHER matching row
+; is unpaired on the way past, which also undoes an earlier unit's pairing
+; when a second unit turns out to match the same row. Both units then stay
+; on rung 0, as before rung 1 could take a drive: a crossed pair would hand
+; the kernel's C: to the other physical disk.
 ; -----------------------------------------------------------------------------
 hd_at_dup:
+    push si
+    xor si, si                  ; SI = the first unspent match, 0 = none
+    xor ch, ch                  ; CH = how many OTHER rows match
     mov dx, 0x0100              ; DL = the row index, DH = its bit in [hd_dupd]
 .scan:
     cmp dl, [hd_ndev]
-    jae .no
+    jae .end
     mov al, dl
     call hd_dev_row
     cmp byte [di+HDD_KIND], HDK_BIOS
     jne .next
-    test [hd_dupd], dh          ; already paired with an earlier IDE unit?
-    jnz .next
     mov ax, [hd_idbuf + 3*2]    ; word 3: heads
     cmp ax, [di+HDD_HEADS]
     jne .next
@@ -918,14 +930,31 @@ hd_at_dup:
     mov ax, [hd_idbuf + 1*2]    ; word 1: cylinders - the BIOS may report
     cmp [di+HDD_CYL], ax        ; fewer, never more
     ja .next
-    or [hd_dupd], dh            ; spent - and `or` leaves CF = 0
-    ret
+    test [hd_dupd], dh          ; already paired with an earlier IDE unit?
+    jnz .other
+    or si, si
+    jnz .other
+    mov si, di
+    or [hd_dupd], dh            ; spent
+    jmp short .next
+.other:
+    inc ch                      ; a second candidate: unpaired, whoever had it
+    mov al, [di+HDD_BIOS]
+    mov [di+HDD_UNIT], al
+    mov word [di+HDD_BASE], 0
 .next:
     inc dx
     shl dh, 1
     jmp short .scan
-.no:
-    stc
+.end:
+    mov di, si
+    cmp si, 1                   ; CF = 1: no row matched
+    jc .out
+    cmp word [di+HDD_HEADS], 16 ; a task file has four bits of head: CF = 0,
+    ja .out                     ; ZF = 0
+    or ch, ch                   ; CF = 0, and ZF = 1 only when it is the one
+.out:
+    pop si
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1207,12 +1236,12 @@ hd_at_channel:
     jc .next
     call hd_at_dup              ; the BIOS's own row for this drive is the one
     jc .new                     ; to keep (SPEC.md 52.1) - but TAKEN by this
-    cmp word [di+HDD_HEADS], 16 ; rung if it is the same disk, which
-    ja .next                    ; hd_twins proves at DRVV_READY (52.1.1): the
-    pop cx                      ; unit and the port go in the BIOS row now, and
-    push cx                     ; a task file has four bits of head. Rung 0
-    mov [di+HDD_UNIT], cl       ; asks HDD_BIOS for the drive, so HDD_UNIT is
-    mov [di+HDD_BASE], bx       ; free to carry the IDE unit until then
+    jnz .next                   ; rung if it is the same disk, which
+    pop cx                      ; hd_twins proves at DRVV_READY (52.1.1): the
+    push cx                     ; unit and the port go in the BIOS row now
+    mov [di+HDD_UNIT], cl       ; (hd_at_dup's ZF). Rung 0 asks HDD_BIOS for
+    mov [di+HDD_BASE], bx       ; the drive, so HDD_UNIT is free to carry the
+                                ; IDE unit until then
     jmp short .next
 .new:
     call hd_at_new

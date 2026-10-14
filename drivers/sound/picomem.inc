@@ -472,16 +472,23 @@ pm_undo:
 ; CPU), and a fall of more than PM_RACE bytes is a channel no DSP is pacing.
 ; Real DMA at 44 kHz moves ~5 bytes in that window. A reload between the two
 ; reads (the count going UP) decides nothing; the next tick asks again.
-; Only on a card pm_init configured, and only until it has fired.
+; Only on a card pm_init configured, only until it has fired, and only for
+; the first PM_RCHK ticks after a stream starts or resumes ([pm_rchk], loaded
+; in sb.inc): a channel that has not raced by then is a 2.x's real DMA or a
+; machine where it does not race, and the question costs ~0.6 ms of IRQ0.
 ; -----------------------------------------------------------------------------
 PM_RACE      equ 32             ; bytes in ~100 bus cycles: a racing channel
 PM_RACEN     equ 100            ; ...and the bus cycles between the two reads
+PM_RCHK      equ 18             ; ...asked on this many ticks a stream: a second
 
 pm_runaway:
     cmp byte [pm_up], 0
     je .ret
     cmp byte [sbl_drqmask], 0
     jne .ret
+    cmp byte [pm_rchk], 0
+    je .ret
+    dec byte [pm_rchk]
     push ax
     push bx
     push cx
@@ -489,8 +496,9 @@ pm_runaway:
     mov bx, ax                  ; BX = the count now
     mov cx, PM_RACEN
 .w:
-    in al, 0x08                 ; one ISA bus cycle each - the 8237's status
-    loop .w
+    in al, 0x61                 ; one ISA bus cycle each - port B, whose read
+    loop .w                     ; changes nothing (the 8237's status at 08h
+                                ; clears its terminal-count bits)
     call .cnt
     sub bx, ax                  ; BX = how far it fell
     jb .out                     ; it rose: a reload between the reads
@@ -593,3 +601,4 @@ pm_sbports: dw PM_SB_PORT, 0x240, 0x230, 0x250, 0x260, 0
 pm_irq:     db 0                ; the line the firmware accepted, 0 = none
 pm_up:      db 0                ; 1 = we turned the DSP on and owe an undo
 pm_keepc:   db 0                ; pm_tick's count toward PM_KEEPT
+pm_rchk:    db 0                ; pm_runaway's ticks left this stream

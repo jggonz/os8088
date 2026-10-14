@@ -64267,15 +64267,23 @@ snooped and never reads the mask bit, and the card's BIOS still writes the
 advanced address and count back after each copy. A 2.x does - it DMAs on
 DRQ1. So the decision is made from the RATE, while a stream plays:
 `pm_runaway` (picomem.inc), a leaf of `sbl_tick` on a card `pm_init`
-configured, reads channel 1's count, makes 100 reads of the 8237's status -
-ISA bus cycles, which pace themselves whatever the CPU - and reads it again.
+configured, reads channel 1's count, makes 100 reads of port 61h - ISA bus
+cycles, which pace themselves whatever the CPU, on a port whose read changes
+nothing (the 8237's status at 08h, which it read first, clears the
+terminal-count bits) - and reads it again.
 A fall of more than **32** bytes is a channel no DSP is pacing (real DMA at
 44 kHz moves ~5 in that window): the channel is masked at once and
 `[sbl_drqmask]` = 4, which every unmask in sb.inc ORs in, so it stays masked
 for the session. A count that ROSE (a reload between the two reads) decides
 nothing and the next tick asks again; once it has fired it costs nothing.
+**It is asked for `PM_RCHK` = 18 ticks a stream and then not at all**:
+`[pm_rchk]` is loaded wherever a stream enters `SBL_ST_PLAY` (open, capture,
+resume) and counted down by each ask. Without the bound a card whose channel
+never races - a 2.x doing real DMA, a 1.x on a machine where it does not -
+paid ~0.6 ms of IRQ0, ~1.1% of a 4.77 MHz 8088, on every tick of every play.
 `tests/picomem.py`'s sb leg runs it against a racing count, one moving at a
-DSP's pace, a still one, and no card, where the 8237 is not touched.
+DSP's pace, a still one, and no card, where the 8237 is not touched, and
+with the stream's ticks spent, where it asks nothing.
 
 #### 34.10.6 The card switches its AdLib off after four quiet seconds
 
@@ -90155,6 +90163,16 @@ an XT-IDE ROM, 15.4% of pulses lost while the ring refills; files made for a
   IDE drive it does not, of the same heads and sectors, and two blank disks
   would agree on LBA 0. Anything short of proof leaves the BIOS row exactly
   as it was.
+- **An AMBIGUOUS match pairs nothing.** LBA 0 is not identity either: two
+  drives partitioned by this installer, or written from one image, carry the
+  same 512 bytes, and a BIOS that numbers its drives in another order than
+  the probe (a boot-from-D: setup, an XTIDE Universal BIOS's drive swap)
+  would cross both pairs, both proofs would pass, and the kernel's C: would
+  be handed to the other physical disk. So `hd_at_dup` pairs a unit only
+  when it is the ONE BIOS row its key matches, spent or not, and unpairs
+  every other matching row on the way past - which also undoes an earlier
+  unit's pairing when a second unit turns out to match the same row. Those
+  units stay on rung 0 and get no IDE row, exactly as before this section.
 - **The row keeps its int 13h drive** in `HDD_BIOS` (offset 3, which was
   padding), because two things still ask by it: `hd_kvol`, so the boot
   partition of an installed machine is still recognised as the KERNEL'S
@@ -154643,8 +154661,9 @@ memory.
 So **`BL` is a bitmap of classes to let go of anyway**, bit `1 << class`, and
 `BL = 0` is exactly the set a suspend has always taken. A bit does not *add*
 a class to the sweep — it takes one **off the skip list** — so the register
-can only reach the three rows the loop was already deciding about, and naming
-a class the sweep was going to take regardless changes nothing.
+can only reach the rows the loop was already deciding about (`DRVC_EMS`'s
+too, §107.6), and naming a class the sweep was going to take regardless
+changes nothing.
 
 **The whole resident cost is ZERO**, and it was four bytes plus a `.bss` byte
 until somebody asked what they were for. `drv_suspend_x` used to bank `BL` in
@@ -179476,7 +179495,7 @@ against this one:
 | `.cold` | **+3** | 0 |
 | `.ovl` | **+1**: `drv_cfgbit`'s byte (not resident) | 0 |
 | the footprint | **no rung crossed** | no rung |
-| the system disk | `EMS.DRV`, 702 bytes of image (32 of them zero state, off the disk), **670 on the floppy** packed, and a **1 KB** claim when loaded (it was 1,206 bytes and two KB until kernel size pass 11: a 256-byte per-page owner table repeated what the handles say, and first fit now asks the eight handles; and its service table is the one door cell, the kernel reading nothing else of it - `docs/plans/completed/ksp11/drivers.md`) | none |
+| the system disk | `EMS.DRV`, 705 bytes of image (32 of them zero state, off the disk), **673 on the floppy** packed, and a **1 KB** claim when loaded (it was 1,206 bytes and two KB until kernel size pass 11: a 256-byte per-page owner table repeated what the handles say, and first fit now asks the eight handles; and its service table is the one door cell, the kernel reading nothing else of it - `docs/plans/completed/ksp11/drivers.md`) | none |
 
 113 resident bytes on every `kern_big` machine, board or none - the estimate
 in VIDEO-XMS-PLAN 10.5 was 95-100, short by the teardown call's banking.
@@ -179497,6 +179516,19 @@ naming freed memory (§66.6.3; the row counts `DRVC_MAX` now).
   not found.
 - `int 67h` for DOS programs (VIDEO-XMS-PLAN 10.6).
 - A use: the video bank on EMS is VIDEO-XMS-PLAN waves E2 and E3.
+- **Surviving a re-attach.** A fresh attach signs every page and maps the
+  quarters to 0..3 with empty handle tables, and nothing tells a holder. So
+  `hbm_sweep` skips `DRVC_EMS` as it skips the RAM disk: `OSAPI_DRV_SUSPEND`
+  (the DOS box, while other packages run, §51.11.1) leaves the board and its
+  holders alone unless the caller names bit `1 << 7` (§51.11.4), and a
+  hibernate keeps the driver in the image. **The board's CONTENTS do not
+  survive a hibernate's power-off**: the restored driver's handles and
+  quarters name pages the board no longer holds, and its page registers are
+  whatever the board powered up with. A holder across a hibernate is not
+  supported.
+- A `DRVV_HWINFO` record: there is no class-7 layout, so the driver answers
+  CF = 1, `os88drv.inc`'s "nothing to say", and a sweep that asks stores
+  nothing for it. DETACH, TIER and READY answer CF = 0.
 
 ### 107.7 The gate
 

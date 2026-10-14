@@ -1605,6 +1605,7 @@ hbm_tty:
 ; THE SKIP LIST: DRVC_DISK is memory and the ROM's int 13h, DRVC_FILE is the
 ; RAM disk, and both are things a DOS program WANTS rather than fights -
 ; neither owns a chip anyone is about to take. The caller's third is 96.23.6.
+; DRVC_EMS is a board's memory with packages holding pages of it (107.6).
 ;
 ; ...AND THE CALLER MAY HAVE ASKED FOR ONE OF THEM ANYWAY (SPEC.md 51.11.4).
 ; [cs:hbm_spm] is the slot's BL, bit 1<<class: a set bit does not ADD a class
@@ -1629,6 +1630,10 @@ hbm_sweep:
     cmp al, DRVC_FILE2
     je .asked                   ; the RAM disk: memory, and it stays - and
                                 ; 1 << 8 is 0 in CH, so no caller can name it
+    cmp al, DRVC_EMS
+    je .asked                   ; the EMS board: memory with holders, and a
+                                ; fresh attach would sign every page and remap
+                                ; the quarters under them (SPEC.md 107.6)
     cmp al, dl
     jne .take                   ; ...and the caller's own
 .asked:                         ; ...unless this call named it (51.11.4)

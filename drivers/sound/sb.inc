@@ -596,6 +596,9 @@ sbl_resume:
     xor ax, ax
     mov [sbl_paused], al
     mov [sbl_str_state], al     ; SBL_ST_PLAY
+%ifdef PICOMEM
+    mov byte [pm_rchk], PM_RCHK ; pm_runaway asks again (SPEC.md 34.10.5)
+%endif
     inc ax
     mov [sbl_expect], al
     mov ax, [sbl_wd_rst]
@@ -1390,6 +1393,9 @@ sbl_v_open:
     mov [sbl_paused], al
     mov [sbl_str_dir], al       ; an OUTPUT stream (SPEC.md 34.6)
     mov [sbl_str_state], al     ; SBL_ST_PLAY
+%ifdef PICOMEM
+    mov byte [pm_rchk], PM_RCHK ; pm_runaway asks again (SPEC.md 34.10.5)
+%endif
     mov al, [sbl_oflags]        ; commit the ring flag into the record
     and al, SND_OPENF_RING      ; (SPEC.md 34.5; sbl_rmask was set above)
     mov [sbl_ring_on], al
@@ -1543,6 +1549,9 @@ sbl_v_open_in:
     mov [sbl_paused], al
     mov [sbl_ring_on], al       ; input has no ring mode (SPEC.md 34.5)
     mov [sbl_str_state], al     ; SBL_ST_PLAY
+%ifdef PICOMEM
+    mov byte [pm_rchk], PM_RCHK ; pm_runaway asks again (SPEC.md 34.10.5)
+%endif
     inc ax
     mov [sbl_str_dir], al       ; an INPUT stream (SPEC.md 34.6)
     inc byte [sbl_gen]

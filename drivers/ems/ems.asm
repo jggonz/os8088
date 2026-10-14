@@ -63,10 +63,16 @@ EM_SLOTX    equ 0xFE            ; AN OWNER IS KEPT AS ITS SLOT XOR THIS, so 0
 em_entry:
     cmp al, DRVV_DETACH
     jb em_attach
-    ret                         ; DETACH, CF = 0 off the compare: nothing is
+    cmp al, DRVV_HWINFO
+    cmc
+    ret                         ; DETACH, TIER and READY CF = 0: nothing is
                                 ; hooked and nothing is claimed - the board
                                 ; keeps its contents, and a holder's next call
-                                ; answers "no driver"
+                                ; answers "no driver". HWINFO and any later
+                                ; verb CF = 1: nothing to say (os88drv.inc)
+%if DRVV_DETACH != 1 || DRVV_TIER != 2 || DRVV_READY != 3 || DRVV_HWINFO != 4
+    %error "em_entry's cmc answers CF = 0 below DRVV_HWINFO and CF = 1 from it"
+%endif
 em_none:                        ; attach's refusal, out here where its jump
     mov al, DRVE_HW             ; stays short
     stc

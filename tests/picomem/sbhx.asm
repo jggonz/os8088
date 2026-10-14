@@ -16,7 +16,12 @@ org 0x100
 start:
     call pm_init
     hlt
-entry_race:
+entry_shut:                     ; the stream's window spent: asks nothing
+    mov byte [pm_rchk], 0
+    call pm_runaway
+    hlt
+entry_race:                     ; a stream just started (sb.inc loads it)
+    mov byte [pm_rchk], PM_RCHK
     call pm_runaway
     hlt
 entry_keep:                     ; pm_tick, once (SPEC.md 34.10.6)

@@ -403,7 +403,7 @@ def leg_sb(tmp):
     # (the card's own IRQ, CMS on 220h) - the second is the 5150's 2.x as its
     # own Devices page showed it, CMS holding 220h-22Fh (SPEC.md 34.10.2)
     # ...and how fast channel 1's count falls while the stream plays, in
-    # bytes per bus cycle (the status reads pm_runaway paces itself by): the
+    # bytes per bus cycle (the port B reads pm_runaway paces itself by): the
     # field 286's 1.x races (FIELD-NOTES 66), real DMA at 44 kHz moves ~5
     # bytes in its window, and only the race may mask the channel
     for pmirq, cms, rate in ((7, False, 0), (7, True, 1 / 20),
@@ -418,7 +418,10 @@ def leg_sb(tmp):
         def inb(p):
             if p == 0x21:
                 return st["pic"]
-            if p == 0x08:           # the 8237's status: one bus cycle
+            if p == 0x08:           # the 8237's status: its read clears the
+                st["tc08"] = st.get("tc08", 0) + 1      # TC bits, so never
+                return 0
+            if p == 0x61:           # port B: one bus cycle, no side effect
                 st["cnt"] -= rate
                 return 0
             if p == 0x03:           # channel 1's count, lo then hi
@@ -534,14 +537,19 @@ def leg_sb(tmp):
                                     ["%03X" % a for c, a in st["cmds"] if c == 0x78]))
 
         check(not st["dma"], "attach leaves the 8237 alone (%s)" % st["dma"])
-        box.go("entry_race")
         race = rate >= 1
+        box.go("entry_shut")
+        check(not st["dma"] and box.b("sbl_drqmask") == 0,
+              "the stream's PM_RCHK ticks spent: pm_runaway asks nothing")
+        box.go("entry_race")
         check(box.b("sbl_drqmask") == (4 if race else 0) and
               (((0x0A, 0x05) in st["dma"]) == race),
               "channel 1 %s: %s (sbl_drqmask %d, %s)"
               % ("racing" if race else "paced or still",
                  "MASKED, and kept so" if race else "left open",
                  box.b("sbl_drqmask"), st["dma"]))
+        check(not st.get("tc08"), "the delay never reads the 8237's status "
+              "(%d reads of 08h)" % st.get("tc08", 0))
         box.go("entry_disc")
         cell = lambda n: (int.from_bytes(box.lin((8 + n) * 4, 2), "little"),
                           int.from_bytes(box.lin((8 + n) * 4 + 2, 2), "little"))
