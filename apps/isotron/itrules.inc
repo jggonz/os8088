@@ -79,8 +79,23 @@ it_flow:
 it_to_title:
     mov byte [it_state], ST_TITLE
     mov byte [it_paused], 0
-    mov byte [it_msgd], 1
-    mov byte [it_hudd], 1
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call it_title_build             ; the title's picture (itcanvas.inc)
+    call it_box_clear
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    mov byte [it_full], 1           ; ...presented whole, its overlays with it
     ret
 
 ; -----------------------------------------------------------------------------
@@ -98,6 +113,16 @@ it_play:
     jne .resync
     test byte [it_tflags], IT_TF_FAST
     jnz .fast
+    cmp byte [it_vsync], 0          ; A ROUND STARTED: nothing iterates while
+    je .tick                        ; its whole present is still owed - or
+    cmp byte [it_full], 0           ; still going out in bands, whichever task
+    jne .resync                     ; started the round - and V = now in the
+    mov byte [it_vsync], 0          ; first wake after it is on the glass, so
+    call OSAPI_GET_TICKS            ; nothing the picture cost is owed
+    mov [it_lastt], ax
+    mov word [it_debt], 0
+    jmp short .gov
+.tick:
     call OSAPI_GET_TICKS
     mov dx, ax
     sub ax, [it_lastt]              ; ticks since the last wake, wrap-safe
@@ -268,7 +293,10 @@ it_round_start:
     push si
     push di
     call it_grid_reset
-    call it_dbg_ring                ; the debug view: the new grid is a ring
+    mov al, [it_h]
+    call it_rebuild                 ; THE ARENA: the tower of h, no walls
+    mov byte [it_maxspan], 0        ; (itcanvas.inc) - the start cells' spans
+    mov byte [it_maxprobe], 0       ; below are the round's first
     mov word [it_ck], 0
     mov word [it_iter], 0
     mov word [it_nsteps], 0
@@ -293,7 +321,8 @@ it_round_start:
     mov si, ax
     mov al, C_PLAYER | 1            ; entered N/S: the axis bit
     call it_place
-    call it_dbg_cell
+    mov dh, al
+    call it_span                    ; its wall's first column
     ; --- the computer: h heads from (108, 90) ----------------------------------
     mov al, [it_h]
     mov [it_nheads], al
@@ -317,16 +346,17 @@ it_round_start:
     inc cl
     jmp short .head
 .placed:
+    mov [it_hend], bx               ; the head loop's end (it_iterate)
     mov al, [it_h]                  ; every head alive: it_live and the cost
     mov [it_live], al               ; base A + B * h, the one MUL of a round
     xor ah, ah
     mul word [it_B]
     add ax, [it_A]
     mov [it_costb], ax
-    mov byte [it_opener], 1         ; h >= 2: the E head (index 1) opens
-    cmp byte [it_h], 1
+    mov word [it_openp], it_heads + H_SIZE ; h >= 2: the E head (index 1)
+    cmp byte [it_h], 1                     ; opens
     jne .one
-    mov byte [it_opener], 0         ; h = 1: the one head, E or W by the
+    mov word [it_openp], it_heads   ; h = 1: the one head, E or W by the
     call it_rand                    ; round's first RNG byte (bit 0: 1 = W)
     mov ah, HD_E
     test al, 1
@@ -342,18 +372,23 @@ it_round_start:
     xor al, 1                       ; the axis bit: 1 = N/S (heading bit 0 = 0)
     or al, C_COMP
     call it_place                   ; the shared start cell, once
-    call it_dbg_cell
+    mov dh, al
+    call it_span
+    call it_box_clear               ; the whole picture is owed instead
+    mov byte [it_full], 1
     mov byte [it_state], ST_PLAY
     mov byte [it_paused], 0
-    mov byte [it_hudd], 1
-    mov byte [it_msgd], 1
     ; --- the pace starts now: V = now, and it is the LAST thing done ------------
-    ; (SPEC.md 108.4.2: no burst at a round's start. Whatever the round start
-    ; cost - and wave 2's canvas build will sit right here - is behind V, so
-    ; the governor's first wake owes only the ticks after it.)
+    ; (SPEC.md 108.4.2: no burst at a round's start. The canvas build is
+    ; behind V here, and the round's WHOLE PRESENT - which goes out in bands
+    ; from this wake on - is behind it too: while it_vsync is set, it_play
+    ; iterates nothing and takes V = now in every wake until it_full is 0.)
     call OSAPI_GET_TICKS
     mov [it_lastt], ax
     mov word [it_debt], 0
+    mov byte [it_vsync], 1
+    mov byte [it_gskip], 0          ; ...and the presentation governor starts
+    mov byte [it_gquiet], 0         ; a round clear (108.11.6), as the pace does
     pop di
     pop si
     pop dx
@@ -457,10 +492,6 @@ it_iterate:
     jbe .sp
     mov al, P_MAX
 .sp:
-    cmp al, [it_pspeed]
-    je .same
-    mov byte [it_hudd], 1           ; the HUD shows the speed
-.same:
     mov [it_pspeed], al
     add [it_pacc], al
     ; --- the player's whole cells -------------------------------------------------
@@ -491,24 +522,30 @@ it_iterate:
     jmp short .cost
     ; --- each live computer head, in index order -----------------------------------
 .comp:
-    xor cx, cx
-    mov bx, it_heads
-.hl:
-    cmp cl, [it_nheads]
+    mov bx, it_heads                ; (by record, no index: it_ai, it_move
+.hl:                                ; and it_span keep no CX for it)
+    cmp bx, [it_hend]
     jae .hd
     cmp byte [bx + H_ALIVE], 0
     je .hn
-    call it_rand                    ; ONE byte a head-move, whatever it decides
-    call it_ai                      ; itai.inc: BX head, CL index, AL r
+    IT_MARK it_hs0                  ; A COMPUTER HEAD-STEP, logic and canvas:
+    mov ax, [it_rng]                ; ONE byte a head-move, whatever it decides
+    mov dx, 25173                   ; (it_rand, inline: its call, push and
+    mul dx                          ; pop were 100 of 273 cycles here)
+    add ax, 13849
+    mov [it_rng], ax
+    mov al, ah
+    call it_ai                      ; itai.inc: BX head, AL r
+    IT_MARK it_ai1                  ; (the decision's end: SPEC.md 108.10.3)
     mov al, C_COMP
     call it_move
+    IT_MARK it_hs1                  ; (the 3,000-cycle line, SPEC.md 108.10.3)
     jnc .hn
     dec byte [it_live]              ; a head died: the next iteration's
     mov ax, [it_B]                  ; cost loses its B
     sub [it_costb], ax
 .hn:
     add bx, H_SIZE
-    inc cl
     jmp short .hl
 .hd:
     cmp byte [it_live], 0
@@ -529,18 +566,17 @@ it_iterate:
 
 ; -----------------------------------------------------------------------------
 ; it_move - one cell for the head at BX, its owner bits in AL. ES = the claim.
-; out: CF = 1 it crashed (and is dead). Preserves BX and CX; clobbers AX, DX,
-; SI, DI.
+; out: CF = 1 it crashed (and is dead). Preserves BX; clobbers AX, CX, DX,
+; SI, DI, BP.
 ;
 ; ONE HEAD-STEP, the unit the per-step budget is priced in: one grid
 ; compare, one store, the u/d bookkeeping and the checksum. it_place is
 ; INLINED here (its call, push and pop were ~70 cycles of every step) and
 ; one 4-byte row of it_mv per heading gives the delta, du and dd off a
-; single index. MEASURED before this pass at ~525 cycles on MartyPC's 5150
-; without the debug view's bit (it_dbg_cell, ~460 more, wave 1 only) - the
-; plan's 150 is under the 8088's fetch floor for this many instructions and
-; was re-priced in SPEC.md 108.6. it_step0..it_step1 brackets it for the
-; cycle rows.
+; single index - ~467 cycles MEASURED on MartyPC's 5150 (wave 1), the plan's
+; 150 being under the 8088's fetch floor for this many instructions. Wave 2
+; adds the cell's picture, it_span (itcanvas.inc). it_step0..it_step1
+; brackets the two together for the cycle rows.
 ; -----------------------------------------------------------------------------
 it_move:
     IT_MARK it_step0                ; (isotron.asm: a mark, never a label)
@@ -557,17 +593,20 @@ it_move:
     or al, dl
     xor al, 1                       ; ...stored as 1 = N/S (heading bit 0 = 0)
     mov [es:si + IT_GRID], al       ; it_place, inline: the cell...
+    mov dh, al                      ; (its value, for the span)
     mov ax, [it_ck]
     rol ax, 1
     xor ax, si
     mov [it_ck], ax                 ; ...and ck = rol(ck, 1) XOR idx
     mov [bx + H_IDX], si
-    mov ax, [it_mv + 2 + di]        ; AL = du, AH = dd
-    add [bx + H_U], al
-    add [bx + H_D], ah
+    mov ax, [bx + H_U]              ; AL = u, AH = d: one load and one store
+    add al, [it_mv + 2 + di]        ; + du
+    add ah, [it_mv + 3 + di]        ; + dd
+    mov [bx + H_U], ax
     inc byte [bx + H_LEG]
     inc word [it_nsteps]
-    call it_dbg_cell
+    IT_MARK it_span0                ; (the move's end, the picture's start)
+    call it_span_ud                 ; ...and its wall: one column (108.10)
     IT_MARK it_step1
     clc
     ret
@@ -600,7 +639,7 @@ it_round_end:
 .prev:
     mov al, [it_winner]
     mov [it_prev], al
-    mov byte [it_hudd], 1
+    or [it_hudd], al                ; the winner's HUD line: 1 left, 2 right
     mov byte [it_msgd], 1
     test byte [it_tflags], IT_TF_HOLD
     jz .flow

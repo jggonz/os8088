@@ -12,13 +12,14 @@
 ; normatively, in tools/isotronsim.py; tests/isotron.py holds the guest and the
 ; model together round by round on MartyPC.
 ;
-; --- WAVE 1 (docs/plans/ISOTRON-PLAN.md section 19) ---------------------------
-; This build is the RULES ENGINE in its real shell: the window, the menus, the
-; About card, the one claim with its refusal in words, the worker with its
-; pace governor, the turn FIFO and the harness. What it draws is a FLAT
-; top-down DEBUG VIEW of the occupancy grid, one pixel a cell, composed into
-; the claim's canvas region and put down through OSAPI_GFX_BLIT1 a dirty row
-; range at a time. Wave 2 replaces the view with the 3D canvas and deletes it.
+; --- WAVE 2 (docs/plans/ISOTRON-PLAN.md section 19) ---------------------------
+; The rules engine of wave 1 in its real shell, now DRAWING: the slab, the
+; tower and every wall in a 320 x 200 canvas of surface ids (itcanvas.inc,
+; SPEC.md 108.9 - 108.10: one column a step, at most 22 probes, nothing
+; redrawn), presented in a desktop window on every adapter (itwin.inc,
+; SPEC.md 108.11: 2x across, a row map down, mono through OSAPI_GFX_BLIT1 and
+; 16 colours through OSAPI_GFX_BLITP, one lock hold a wake). Full screen is
+; wave 3's, the round flow's sweep and the title text wave 4's.
 ;
 ; --- THE THREE DECISIONS THAT DECIDE EVERYTHING ------------------------------
 ;
@@ -50,10 +51,11 @@
     OS88_HEADER 'isoTron', it_entry, 1, OS88_STACK_192
                                 ; the worker's stack class (SPEC.md 8.7):
                                 ; tools/stkdepth.py prices it_worker's
-                                ; deepest static chain at 34 bytes (a
-                                ; relayout's HUD line); with the 64-byte
-                                ; interrupt floor that is 98 of 192, 1.96x.
-                                ; t_stkclass holds the bar at 1.25x
+                                ; deepest static chain at 40 bytes (a
+                                ; band's boxes, presented in colour, wave
+                                ; 2); with the 64-byte interrupt floor
+                                ; that is 104 of 192, 1.85x. t_stkclass
+                                ; holds the bar at 1.25x
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) --------------------------
 ; A slab in the game's own projection with a wall standing on it.
@@ -124,22 +126,37 @@
   %endif
 %endmacro
 
-; --- the instance claim (SPEC.md 108.8) ---------------------------------------
-; ONE OSAPI_MEM_CLAIM, pinned, holding the three things that are too big for
-; the package's own segment. Wave 1 uses the GRID, and borrows the CANVAS's
-; first 32,000 bytes for the debug view's band (80 bytes x 400 rows); wave 2
-; gives the canvas back to the 4-bit picture it is laid out for.
-IT_CANVAS   equ 0               ; 32,000: 320 x 200 x 4 bits (wave 2)
-IT_GRID     equ 32000           ; 21,917: 217 x 101, one byte a cell
-IT_STRIP    equ 53920           ; 5,120: the presenters' strip (wave 2), on a
-IT_STRIPSZ  equ 5120            ; 16-byte boundary (53,917 rounded up)
-IT_CLAIMEND equ IT_STRIP + IT_STRIPSZ
+; --- the instance's two claims (SPEC.md 108.8) --------------------------------
+; TWO OSAPI_MEM_CLAIMs, pinned. THE CANVAS (it_cseg) is a segment of its own:
+; one byte a pixel, 64,000 bytes (itcanvas.inc says why: a wall row is then
+; ONE store, where a packed nibble is a read-modify-write - ~800 cycles a
+; step). THE WORK CLAIM (it_seg) holds the grid, the presenters' strip and
+; their tables, so a presenter's lookups and stores need no override and only
+; its canvas reads carry one (itwin.inc).
+IT_GRID     equ 0               ; 21,917: 217 x 101, one byte a cell. No
+                                ; read reaches below it or past it: every
+                                ; run, look and move stops AT the outline ring
+                                ; (wave 2's grid probe, which read below, is
+                                ; gone - k* comes off the canvas, 108.10.1)
+IT_STRIP    equ 21920           ; 5,120: the presenters' strip, on a 16-byte
+IT_STRIPSZ  equ 5120            ; boundary (21,917 rounded up)
+IT_MLUT     equ 27648           ; 1,024: the mono tables, four 256-byte PAGES
+                                ; (HI and LO for each row parity), 1,024-
+                                ; ALIGNED: a lookup is `mov bl, b / mov al,
+                                ; [bx]`, and the next row's pair of pages is
+                                ; `xor bh, 2` (itwin.inc it_praw1)
+IT_TA01     equ IT_MLUT + 1024  ; 2,048: the colour tables, four of 256 WORDS:
+IT_TA23     equ IT_TA01 + 512   ; planes 0-1 and 2-3 of a canvas byte as the
+IT_TB01     equ IT_TA23 + 512   ; left (TA) or the right (TB) half of a
+IT_TB23     equ IT_TB01 + 512   ; device byte
+IT_CLAIMEND equ IT_TB23 + 512
 IT_CLAIMKB  equ (IT_CLAIMEND + 1023) / 1024
+IT_CANVKB   equ (64000 + 1023) / 1024   ; the canvas claim: 63 KB
 %if IT_CLAIMEND > 65535
-  %error "isoTron's claim layout passes 64 KB - one segment cannot address it"
+  %error "isoTron's work claim passes 64 KB - one segment cannot address it"
 %endif
-%if (IT_GRID < 32000) || (IT_STRIP < IT_GRID + 21917) || (IT_STRIP & 15)
-  %error "isoTron's claim layout overlaps or the strip is not 16-byte aligned"
+%if (IT_STRIP < IT_GRID + 21917) || (IT_STRIP & 15) || (IT_MLUT < IT_STRIP + IT_STRIPSZ) || (IT_MLUT & 1023)
+  %error "isoTron's work claim overlaps, the strip is not 16-byte aligned or the mono tables are not 1,024-aligned"
 %endif
 
 ; --- the grid (SPEC.md 108.2) -------------------------------------------------
@@ -167,15 +184,20 @@ MAXHEADS    equ 4
 
 ; --- a head (the player is record 4) ------------------------------------------
 H_IDX       equ 0               ; word: d*217 + u
-H_U         equ 2
-H_D         equ 3
+H_U         equ 2               ; (it_span reads u and d as one word:
+H_D         equ 3               ; H_D must follow H_U)
 H_HD        equ 4
 H_ALIVE     equ 5
 H_LEG       equ 6               ; cells moved since the last turn
 H_TURNED    equ 7               ; turned at all this round
 H_UPEND     equ 8               ; a U-turn armed: moves until it fires
 H_USIDE     equ 9               ; ...and its side: 0 left, 1 right
-H_SIZE      equ 10
+H_BX0       equ 10              ; word: the head's DIRTY BOX this wake, in
+H_BX1       equ 12              ; logical px - columns BX0..BX1 (BX0 > BX1:
+H_BY0       equ 14              ; empty), rows BY0 .. BY1 - 1 (itcanvas.inc
+H_BY1       equ 15              ; it_span grows it, itwin.inc presents it)
+H_BMV       equ 16              ; byte: the head moved since the box went out
+H_SIZE      equ 18
 
 ; --- turn keys, the FIFO's bytes and the harness script's -------------------
 K_LEFT      equ 1
@@ -201,19 +223,6 @@ WIN_PLAYER  equ 1
 WIN_COMP    equ 2
 IT_CRASHT   equ 15              ; 0.8 s of CRASH, in ticks
 IT_OVERT    equ 64              ; 3.5 s of GAME OVER
-
-; --- the debug view's band (wave 1 only) --------------------------------------
-IT_BSTRIDE  equ 80              ; bytes a band row: 640 px
-IT_BROWS    equ 400             ; ...and its rows: 32,000 bytes, the canvas
-IT_GX       equ 16              ; the grid's top-left inside the band, px
-IT_GY       equ 12              ; (u = 0 at x = 16; d = 100 on row 12)
-IT_HUDY     equ 2               ; the HUD line's band row
-IT_MSGY     equ IT_GY + GH + 4  ; ...and the message line's
-IT_OXPAD   equ 7               ; the most the band's origin is pushed right
-                                ; to reach the byte grid (it_geom)
-IT_NEEDW    equ IT_GX + GW + 8 + IT_OXPAD ; the smallest content that holds it
-IT_NEEDH    equ IT_MSGY + 8 + 1
-IT_TEXTN    equ 76              ; cells a text line may carry (78 on 640)
 
 ; =============================================================================
 ; it_entry - package entry point (SPEC.md 20.2)
@@ -248,23 +257,36 @@ it_entry:
     mov byte [it_tier], 1
     mov byte [it_snd], 1
     call OSAPI_MEM_AVAIL            ; ASK BEFORE CLAIMING (os88api.inc): a
-    cmp ax, IT_CLAIMKB              ; claim that fails SHEDS the disk caches on
+    cmp ax, IT_CANVKB               ; claim that fails SHEDS the disk caches on
     jb .nomem                       ; its way down, and kern_small - the
-    mov ax, IT_CLAIMKB              ; machine this refusal is for - would pay
+    mov ax, IT_CANVKB               ; machine this refusal is for - would pay
     call OSAPI_MEM_CLAIM            ; that on every launch. The CF test stays:
     jc .nomem                       ; the answer is the deliverable, not a vow
+    mov [it_cseg], dx               ; THE CANVAS, then the work claim
+    call OSAPI_MEM_AVAIL
+    cmp ax, IT_CLAIMKB
+    jb .nomem2
+    mov ax, IT_CLAIMKB
+    call OSAPI_MEM_CLAIM
+    jc .nomem2
     mov [it_seg], dx
     mov bx, [it_win]
     mov al, 1
-    call OSAPI_WM_OWNBG             ; the band is every pixel of the content
-    call OSAPI_FONT_GLYPHS          ; the 8x8 table the band's text is copied
-    mov [it_gseg], dx               ; from (DX:SI; AL..AH the codes it covers)
-    mov [it_goff], si
-    mov [it_gfirst], al
-    mov [it_glast], ah
+    call OSAPI_WM_OWNBG             ; the picture is every pixel of the content
+    push es
+    mov es, [it_seg]
+    call it_canvas_init             ; the row bases
+    call it_lut_build               ; the presenters' tables, in the claim
+    call it_title_build             ; the title's picture, before the first
+    call it_box_clear               ; paint shows anything
+    pop es
+    mov byte [it_full], 1
     jmp short .ok
+.nomem2:
+    mov dx, [it_cseg]               ; half a game is no game: the canvas back
+    call OSAPI_MEM_FREE
 .nomem:
-    call it_nomem_msg               ; "isoTron needs 58 KB ..." in it_msgbuf
+    call it_nomem_msg               ; "isoTron needs 63 KB and 35 KB ..."
     mov byte [it_nomem], 1
 .ok:
     mov bx, [it_win]
@@ -284,6 +306,10 @@ it_nomem_msg:
     push di
     mov di, it_msgbuf
     mov si, it_s_nomem1
+    call it_strcpy
+    mov ax, IT_CANVKB
+    call it_putdec
+    mov si, it_s_nomem1b
     call it_strcpy
     mov ax, IT_CLAIMKB
     call it_putdec
@@ -322,11 +348,7 @@ it_paint:
     call it_spawn_ck                ; the worker starts here, not at the entry
                                     ; proc: TASK_SPAWN refuses there (the
                                     ; loader has not published the instance)
-    call it_geom
-    jc .done                        ; not visible: nothing to draw
-    call it_layout_ck
-    mov byte [it_full], 1
-    call it_present_now             ; the whole band, every pixel once
+    call it_paint_win               ; itwin.inc: the damage, from the canvas
     cmp byte [it_abon], 0
     je .done
     mov bx, [it_win]
@@ -334,8 +356,8 @@ it_paint:
     call os88ui_about_d             ; the card LAST, over its own rect
     jmp short .done
 .nomem:
-    ; NO CLAIM, SO NO BAND: the kernel filled the content white (no OWNBG on
-    ; this path) and one opaque run letters the refusal over it
+    ; NO CLAIM, SO NO PICTURE: the kernel filled the content white (no OWNBG
+    ; on this path) and one opaque run letters the refusal over it
     mov bx, [it_win]
     call OSAPI_WM_CONTENT           ; AX = left, DX = top
     mov cx, ax
@@ -488,12 +510,98 @@ it_about:
     pop bx
     ret
 
+; it_abdismiss - the card down, and THE CARD'S RECT put back from the canvas
+; here and now (itwin.inc it_paint_rect, with a clip armed for it as
+; os88ui_about arms one): the picture under it is the canvas, so a whole
+; present would redraw ~40 times the pixels it covered (rule 1). Called from
+; the callbacks, the lock held; preserves every register.
 it_abdismiss:
     cmp byte [it_abon], 0
     je .none
     mov byte [it_abon], 0
-    mov byte [it_full], 1           ; the worker puts the band back
+    cmp byte [it_nomem], 0
+    jne .none
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov bx, [it_win]
+    call OSAPI_WM_CLIP_SET
+    jc .x                           ; not one pixel shows: the uncover paints
+    call it_geom
+    jc .x
+    call it_layout_ck
+    cmp byte [it_layok], 0
+    je .small
+    call it_surf_wake
+    call it_paint_pen
+    call it_abrect                  ; AX, BX, CX, DX: the card, as os88ui drew it
+    call it_paint_rect
+    jmp short .x
+.small:
+    call it_draw_small
+.x:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
 .none:
+    ret
+
+; it_abrect - the About card's rect, inclusive and absolute, measured exactly
+; as os88ui_about_d measures it (SPEC.md 20.5.1): the widest line plus the
+; side margins and the lines' pitch plus the top and bottom ones, each
+; clamped to the content box, centred in it. it_geom first.
+; out: AX, BX, CX, DX. Clobbers SI, DI, BP.
+it_abrect:
+    mov si, it_ablines
+    xor bp, bp                      ; BP = the widest line, px
+    mov di, OS88UI_ABPADY * 2       ; DI = the card's height
+.m:
+    lodsw
+    or ax, ax
+    jz .md
+    push si
+    xchg si, ax
+    call OSAPI_FONT_WIDTH           ; AX = its pixels
+    pop si
+    add di, OS88UI_ABLH
+    cmp ax, bp
+    jbe .m
+    mov bp, ax
+    jmp short .m
+.md:
+    cmp di, [it_ch]
+    jbe .h
+    mov di, [it_ch]
+.h:
+    add bp, OS88UI_ABPADX * 2
+    cmp bp, [it_cw]
+    jbe .w
+    mov bp, [it_cw]
+.w:
+    mov ax, [it_cw]                 ; left = cx + (cw - w) / 2
+    sub ax, bp
+    shr ax, 1
+    add ax, [it_cx]
+    mov bx, [it_ch]                 ; top = cy + (ch - h) / 2
+    sub bx, di
+    shr bx, 1
+    add bx, [it_cy]
+    mov cx, ax
+    add cx, bp
+    dec cx
+    mov dx, bx
+    add dx, di
+    dec dx
     ret
 
 ; =============================================================================
@@ -515,10 +623,13 @@ it_worker:
 .loop:
     mov bx, [it_win]
     call OSAPI_TASK_ALIVE           ; the lock must NOT be held here
-    test byte [it_tflags], IT_TF_FAST
-    jz .sleep
+    cmp byte [it_byield], 0         ; A WHOLE PRESENT GOING OUT IN BANDS
+    jne .yield                      ; (itwin.inc it_present_band): the next
+    test byte [it_tflags], IT_TF_FAST ; band at once, the lock released and
+    jz .sleep                       ; every other task given its turn between
     cmp byte [it_state], ST_TITLE   ; FAST, and a game to play: no sleep
     je .sleep
+.yield:
     call OSAPI_TASK_YIELD
     jmp short .wake
 .sleep:
@@ -526,11 +637,11 @@ it_worker:
     call OSAPI_TASK_SLEEP
 .wake:
     call it_focus_ck                ; no lock: WM_TOP and MENU_OWNER take none
-    call OSAPI_GFX_LOCK
-    IT_MARK it_wake0
+    IT_MARK it_wake0                ; (a wake's price includes the lock: the
+    call OSAPI_GFX_LOCK             ; pointer comes off and goes back there)
     call it_wake
-    IT_MARK it_wake1
     call OSAPI_GFX_UNLOCK
+    IT_MARK it_wake1
     IT_MARK it_frame_end
     jmp .loop
 
@@ -566,392 +677,77 @@ it_wake:
     cmp byte [it_nomem], 0
     jne .out
     mov es, [it_seg]                ; ES = the claim for the whole of the logic
+    call pit_now                    ; the hold starts (os88pit.inc, 838 ns)
+    mov [it_gt0], ax
+    mov [it_gt0 + 2], dx
     call it_commands                ; what the UI task asked for (itinput.inc)
-    call it_flow                    ; the state machine and the governor
+    call it_flow                    ; the state machine and the pace governor
     call it_present                 ; ...and what changed, to the glass
+    cmp byte [it_gpres], 0
+    je .out
+    ; --- THE PRESENTATION GOVERNOR (SPEC.md 108.11.6) -------------------------
+    ; A hold over 45 ms presents every second wake from then on - the logic
+    ; still runs every wake, and what a skipped wake owes stays in the boxes -
+    ; and 32 presenting wakes under 30 ms put it back. An overloaded machine
+    ; loses frame rate and keeps the game's pace (108.4.2).
+    call pit_now
+    sub ax, [it_gt0]
+    sbb dx, [it_gt0 + 2]            ; DX:AX = the hold
+    cmp byte [it_gskip], 0
+    jne .on
+    or dx, dx                       ; PRESENTING EVERY WAKE: over 45 ms
+    jnz .slow                       ; engages it
+    cmp ax, IT_G45
+    jbe .out
+.slow:
+    mov byte [it_gskip], 1
+    mov byte [it_gquiet], 0
+    ret
+.on:
+    ; ENGAGED, a present carries TWO wakes of steps, so a wake's share is
+    ; half the hold - and it is that share that must be under 30 ms, 32
+    ; presents running, to go back: comparing the whole hold with 30 latched
+    ; the governor on wherever one wake cost 15 to 30 ms (measured on the
+    ; XT-VGA). The hold is under 60 ms when DX:AX < 2 * IT_G30.
+    cmp dx, (2 * IT_G30) >> 16
+    jb .quiet
+    ja .busy
+    cmp ax, (2 * IT_G30) & 0xFFFF
+    jb .quiet
+.busy:
+    mov byte [it_gquiet], 0
+    ret
+.quiet:
+    inc byte [it_gquiet]
+    cmp byte [it_gquiet], IT_GQUIET
+    jb .out
+    mov byte [it_gskip], 0
+    mov byte [it_gquiet], 0
 .out:
     ret
 
 ; =============================================================================
-; GEOMETRY AND THE DEBUG VIEW'S BAND (wave 1; wave 2 replaces all of this)
+; THE HUD AND THE MESSAGE (SPEC.md 108.11.5): the strings the overlays show
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; it_geom - bank the content box. out: CF=1 the window is not visible.
-; Clobbers AX, BX, CX, DX.
-; -----------------------------------------------------------------------------
-it_geom:
-    mov bx, [it_win]
-    call OSAPI_WM_CONTENT           ; AX = left, DX = top (a drag moves these
-    mov [it_cx], ax                 ; and tells nobody, so it is asked every
-    mov [it_cy], dx                 ; time - SPEC.md 93.3.4.2's lesson)
-    add ax, IT_OXPAD                ; the band goes down at the first BYTE
-    and ax, 0xFFF8                  ; column inside the content: gfx_blit1
-    mov [it_ox], ax                 ; reads an x off the grid as a HEAD mask
-                                    ; (SPEC.md 5.4.2.8) - the band's first
-                                    ; x & 7 px not drawn, its bit 7 on the
-                                    ; byte column holding x - and kern_small
-                                    ; refuses one outright. A content box at
-                                    ; x = 1 (CGA, VGA) or 3 (Hercules) lost
-                                    ; the ring's u = 0 side to exactly that.
-    mov bx, [it_win]
-    call OSAPI_WM_GEOM              ; CX = width, DX = height, CF = hidden
-    jc .out
-    mov [it_cw], cx
-    mov [it_ch], dx
-    clc
-.out:
-    ret
-
-; -----------------------------------------------------------------------------
-; it_layout_ck - recompose the band if the content box changed size (or was
-;                never laid out). Clobbers AX..DI; ES = the claim on return.
-; -----------------------------------------------------------------------------
-it_layout_ck:
-    mov ax, [it_cw]
-    cmp ax, [it_lcw]
-    jne it_layout
-    mov ax, [it_ch]
-    cmp ax, [it_lch]
-    jne it_layout
-    cmp byte [it_laid], 0
-    je it_layout
-    ret
-
-; -----------------------------------------------------------------------------
-; it_layout - the band: cleared, the text lines composed, the grid walked
-; -----------------------------------------------------------------------------
-it_layout:
-    mov ax, [it_cw]
-    mov [it_lcw], ax
-    mov bx, [it_ch]
-    mov [it_lch], bx
-    mov byte [it_laid], 1
-    sub ax, IT_OXPAD                ; the band starts up to 7 px in (it_ox),
-    jnc .wpad                       ; so it is 7 px narrower than the content
-    xor ax, ax                      ; whatever the drag phase: no relayout is
-.wpad:                              ; owed when only the window moved
-    cmp ax, IT_BSTRIDE * 8
-    jbe .w
-    mov ax, IT_BSTRIDE * 8
-.w:
-    mov [it_bw], ax                 ; the band's width in px: the content's,
-    cmp bx, IT_BROWS                ; to 640 (wider content is filled once)
-    jbe .h
-    mov bx, IT_BROWS
-.h:
-    mov [it_bh], bx
-    mov es, [it_seg]
-    mov cx, bx                      ; clear the band's rows: (rows * 80) / 2
-    mov ax, IT_BSTRIDE / 2          ; words
-    mul cx
-    mov cx, ax
-    xor di, di
-    xor ax, ax
-    cld
-    rep stosw
-    mov byte [it_layok], 0
-    cmp word [it_cw], IT_NEEDW
-    jb .small
-    cmp word [it_ch], IT_NEEDH
-    jb .small
-    mov byte [it_layok], 1
-    call it_dbg_grid
-    mov byte [it_hudd], 1
-    mov byte [it_msgd], 1
-    call it_compose_text
-    jmp short .out
-.small:
-    mov si, it_s_small              ; "Window too small." - in the band, so the
-    mov di, IT_HUDY * IT_BSTRIDE    ; same single blit paints it
-    call it_text
-.out:
-    mov byte [it_full], 1
-    ret
-
-; -----------------------------------------------------------------------------
-; it_dbg_grid - walk the whole grid into the band: one bit a cell, d = 100 at
-;               the top. Clears the grid's 101 rows first. ES = the claim.
-; MEASURED on MartyPC's 5150: 2,136,141 cycles, ~97 a cell, 448 ms - so it is
-; a RELAYOUT's alone (the grid is arbitrary there), never a round start's
-; (it_dbg_ring) and never a step's.
-; -----------------------------------------------------------------------------
-it_dbg_grid:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push ds
-    mov di, IT_GY * IT_BSTRIDE
-    mov cx, GH * IT_BSTRIDE / 2
-    xor ax, ax
-    cld
-    rep stosw
-    mov ax, es
-    mov ds, ax                      ; DS = ES = the claim for the walk
-    mov si, IT_GRID + (GH - 1) * GW ; d = 100 first: the top row
-    mov di, IT_GY * IT_BSTRIDE + IT_GX / 8
-    mov dx, GH
-.row:
-    push si
-    push di
-    mov cx, GW
-    mov bl, 0x80                    ; the bit a cell lands on
-    xor bh, bh                      ; ...and the byte it is building
-.cell:
-    lodsb
-    or al, al
-    jz .nob
-    or bh, bl
-.nob:
-    shr bl, 1
-    jnz .more
-    mov [es:di], bh
-    inc di
-    mov bl, 0x80
-    xor bh, bh
-.more:
-    loop .cell
-    mov [es:di], bh                 ; the last partial byte (217 = 27*8 + 1)
-    pop di
-    pop si
-    sub si, GW
-    add di, IT_BSTRIDE
-    dec dx
-    jnz .row
-    pop ds
-    mov word [it_dmin], IT_GY
-    mov word [it_dmax], IT_GY + GH - 1
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; it_dbg_ring - the debug view of a FRESH grid (a round start): the band's
-;               grid rows cleared and the outline set directly - two full rows
-;               and a bit each side of the 99 between - instead of walking
-;               21,917 cells. The start cells are it_dbg_cell's. ES = the
-;               claim. Preserves everything. ~4,040 word stores and ~250 byte
-;               writes, against it_dbg_grid's 2.14M cycles under the lock.
-; -----------------------------------------------------------------------------
-%if IT_GX & 7
-%error "it_dbg_ring assumes the grid starts on a band byte"
-%endif
-it_dbg_ring:
-    cmp byte [it_layok], 0
-    je .out
-    push ax
-    push cx
-    push di
-    cld
-    mov di, IT_GY * IT_BSTRIDE
-    mov cx, GH * IT_BSTRIDE / 2
-    xor ax, ax
-    rep stosw
-    mov al, 0xFF
-    mov di, IT_GY * IT_BSTRIDE + IT_GX / 8          ; d = 100, every u
-    mov cx, GW / 8
-    rep stosb
-    mov byte [es:di], (0xFF00 >> (GW & 7)) & 0xFF
-    mov di, (IT_GY + GH - 1) * IT_BSTRIDE + IT_GX / 8   ; d = 0, every u
-    mov cx, GW / 8
-    rep stosb
-    mov byte [es:di], (0xFF00 >> (GW & 7)) & 0xFF
-    mov di, (IT_GY + 1) * IT_BSTRIDE                ; u = 0 and u = 216
-    mov cx, GH - 2
-.side:
-    or byte [es:di + IT_GX / 8], 0x80
-    or byte [es:di + (IT_GX + GW - 1) / 8], 0x80 >> ((IT_GX + GW - 1) & 7)
-    add di, IT_BSTRIDE
-    loop .side
-    mov word [it_dmin], IT_GY
-    mov word [it_dmax], IT_GY + GH - 1
-    pop di
-    pop cx
-    pop ax
-.out:
-    ret
-
-; -----------------------------------------------------------------------------
-; it_dbg_cell - one cell's bit, after a move. in: BX = the head record (its
-;               H_U / H_D are the cell). ES = the claim. Preserves everything.
-; MEASURED ~463 cycles on MartyPC's 5150 (the review's bracket), not the
-; ~110 first pinned: the min/max compares and the shift-multiply are fetch-
-; bound. Wave 1's alone - wave 2 deletes the view.
-; -----------------------------------------------------------------------------
-it_dbg_cell:
-    cmp byte [it_layok], 0
-    je .out
-    push ax
-    push cx
-    push di
-    mov al, GH - 1 + IT_GY
-    sub al, [bx + H_D]              ; the band row: IT_GY + 100 - d
-    xor ah, ah
-    cmp ax, [it_dmin]
-    jae .lo
-    mov [it_dmin], ax
-.lo:
-    cmp ax, [it_dmax]
-    jbe .hi
-    mov [it_dmax], ax
-.hi:
-    mov cl, 4
-    shl ax, cl                      ; row * 16
-    mov di, ax
-    shl ax, 1
-    shl ax, 1                       ; row * 64
-    add di, ax                      ; row * 80
-    mov al, [bx + H_U]
-    add al, IT_GX
-    xor ah, ah
-    mov cl, al
-    and cl, 7
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    add di, ax
-    mov al, 0x80
-    shr al, cl
-    or [es:di], al
-    pop di
-    pop cx
-    pop ax
-.out:
-    ret
-
-; -----------------------------------------------------------------------------
-; it_text - compose one 8-row text line into the band. in: SI = a NUL string
-;           (DS), DI = the band offset of the line's first cell (row * 80 +
-;           byte). ES = the claim. The line's 8 rows are cleared across the
-;           band's full width first. Clobbers AX, CX, SI, DI.
-; -----------------------------------------------------------------------------
-it_text:
-    push bx
-    push dx
-    push di
-    mov ax, di                      ; the row's start: DI - (DI mod 80)
-    xor dx, dx
-    mov bx, IT_BSTRIDE
-    div bx
-    mul bx
-    mov di, ax
-    mov cx, 8 * IT_BSTRIDE / 2
-    xor ax, ax
-    cld
-    rep stosw
-    pop di
-    mov dx, IT_TEXTN
-.ch:
-    lodsb
-    or al, al
-    jz .done
-    dec dx
-    js .done                        ; ...and no further than the line holds
-    cmp al, [it_gfirst]
-    jb .blank
-    cmp al, [it_glast]
-    ja .blank
-    sub al, [it_gfirst]
-    xor ah, ah
-    mov cl, 3
-    shl ax, cl                      ; 8 bytes a glyph
-    add ax, [it_goff]
-    push si
-    push ds
-    mov si, ax
-    mov ds, [it_gseg]
-    mov cx, 8
-    mov bx, di
-.gl:
-    mov al, [si]
-    mov [es:bx], al
-    inc si
-    add bx, IT_BSTRIDE
-    loop .gl
-    pop ds
-    pop si
-.blank:
-    inc di
-    jmp short .ch
-.done:
-    pop dx
-    pop bx
-    ret
-
-; -----------------------------------------------------------------------------
-; it_compose_text - the HUD and message lines, when they are owed
-; -----------------------------------------------------------------------------
-it_compose_text:
-    cmp byte [it_layok], 0
-    je .out
-    push ax
-    push cx
-    push si
-    push di
-    cmp byte [it_hudd], 0
-    je .msg
-    call it_hud_str
-    mov si, it_hudbuf
-    mov di, IT_HUDY * IT_BSTRIDE + IT_GX / 8
-    call it_text
-.msg:
-    cmp byte [it_msgd], 0
-    je .done
-    call it_msg_str                 ; SI = the state's line
-    mov di, IT_MSGY * IT_BSTRIDE + IT_GX / 8
-    call it_text
-.done:
-    pop di
-    pop si
-    pop cx
-    pop ax
-.out:
-    ret
-
-; -----------------------------------------------------------------------------
-; it_hud_str - "PLAYER n   COMPUTER n   TOWER h   Rookie   SPEED p/6"
+; it_hud_str - "PLAYER n" into it_hudl and "COMPUTER n" into it_hudr
 ; -----------------------------------------------------------------------------
 it_hud_str:
     push ax
     push si
     push di
-    mov di, it_hudbuf
+    mov di, it_hudl
     mov si, it_s_player
     call it_strcpy
     mov ax, [it_sp]
     call it_putdec
+    mov byte [di], 0
+    mov di, it_hudr
     mov si, it_s_comp
     call it_strcpy
     mov ax, [it_sc]
     call it_putdec
-    mov si, it_s_tower
-    call it_strcpy
-    mov al, [it_h]
-    xor ah, ah
-    call it_putdec
-    mov si, it_s_sep
-    call it_strcpy
-    mov al, [it_tier]
-    xor ah, ah
-    dec ax
-    shl ax, 1
-    mov si, ax
-    mov si, [it_tiername + si]
-    call it_strcpy
-    mov si, it_s_speed
-    call it_strcpy
-    mov al, [it_pspeed]
-    xor ah, ah
-    call it_putdec
-    mov si, it_s_sixth
-    call it_strcpy
     mov byte [di], 0
     pop di
     pop si
@@ -959,7 +755,8 @@ it_hud_str:
     ret
 
 ; -----------------------------------------------------------------------------
-; it_msg_str - out: SI = the line the state wants under the grid
+; it_msg_str - out: SI = the message line the state wants, 0 = none (a round
+; in play shows the HUD alone)
 ; -----------------------------------------------------------------------------
 it_msg_str:
     mov si, it_s_paused
@@ -968,7 +765,7 @@ it_msg_str:
     mov si, it_s_title
     cmp byte [it_state], ST_TITLE
     je .out
-    mov si, it_s_play
+    xor si, si
     cmp byte [it_state], ST_PLAY
     je .out
     mov si, it_s_over
@@ -978,201 +775,6 @@ it_msg_str:
     cmp byte [it_winner], WIN_PLAYER
     je .out
     mov si, it_s_cwin
-.out:
-    ret
-
-; -----------------------------------------------------------------------------
-; it_present - the worker's present: lock held. Re-checks visibility and arms
-;              the clip (SPEC.md 20.6 rule 5), then puts down what is owed.
-;
-; NOTHING OWED, NOTHING ASKED: a wake with no dirty row, no text line and no
-; full repaint owed returns before the clip, the content box and the layout
-; check - MEASURED at 12.5k of a 13.2k-cycle idle wake (the title, a pause,
-; WAIT, OVER: ~5% of an XT, 18 times a second). It is safe because nothing
-; that needs the glass to follow arrives without one of the four: a resize
-; sets it_full (it_onresize), an expose or a move comes through it_paint,
-; and a hidden window's skip below sets it_full.
-; -----------------------------------------------------------------------------
-it_present:
-    cmp byte [it_abon], 0
-    jne .out                        ; the card is up: it owns its rect
-    cmp byte [it_full], 0
-    jne .owed
-    cmp byte [it_hudd], 0
-    jne .owed
-    cmp byte [it_msgd], 0
-    jne .owed
-    mov ax, [it_dmax]
-    cmp ax, [it_dmin]
-    jb .out                         ; no grid row either: not a call made
-.owed:
-    mov ax, KERNEL_SEG
-    mov es, ax
-    mov bx, [it_win]
-    test word [es:bx + W_FLAGS], 2
-    jz .skip
-    call OSAPI_WM_CLIP_SET
-    jc .skip                        ; not one pixel of us is showing
-    call it_geom
-    jc .skip
-    call it_layout_ck               ; the box changed size under us
-    call it_present_now
-    jmp short .out
-.skip:
-    mov byte [it_full], 1           ; the glass did not follow: owe it all
-.out:
-    ret
-
-; -----------------------------------------------------------------------------
-; it_present_now - put the owed rows down. A clip is armed (the paint's or
-; it_present's). Clobbers everything but DS.
-;
-; WHAT A WAKE COSTS, MEASURED on MartyPC's 5150 (the W1 review): a paced
-; Rookie h1 wake is 104.9k cycles median (~22 ms), not the ~36k first
-; estimated, because the dirty range is the UNION of every head's rows - the
-; player near d = 27 and the computer near d = 90 make it ~60 rows a wake,
-; each blitted 217 px (28 bytes) wide. The text lines are one 8-row blit
-; each, and only when they changed. Wave 1's alone: wave 2 replaces it.
-; -----------------------------------------------------------------------------
-it_present_now:
-    mov es, [it_seg]
-    call it_compose_text
-    cmp byte [it_full], 0
-    je .part
-    ; --- the whole band, and whatever of the content lies outside it --------
-    mov byte [it_full], 0
-    xor ax, ax
-    mov cx, [it_bh]
-    mov dx, [it_bw]
-    xor bx, bx
-    call it_blit_rows               ; rows 0..bh-1, the full band width
-    call it_fill_rest
-    jmp short .clean
-.part:
-    cmp byte [it_layok], 0
-    je .clean                       ; too small: nothing of it to show, and
-                                    ; nothing left owed for the early-out
-    cmp byte [it_hudd], 0
-    je .msg
-    mov ax, IT_HUDY
-    mov cx, 8
-    mov dx, [it_bw]
-    xor bx, bx
-    call it_blit_rows
-.msg:
-    cmp byte [it_msgd], 0
-    je .grid
-    mov ax, IT_MSGY
-    mov cx, 8
-    mov dx, [it_bw]
-    xor bx, bx
-    call it_blit_rows
-.grid:
-    mov ax, [it_dmin]
-    mov cx, [it_dmax]
-    cmp cx, ax
-    jb .clean                       ; nothing moved
-    sub cx, ax
-    inc cx
-    mov dx, GW                      ; the grid's own columns, not the band's
-    mov bx, IT_GX / 8
-    call it_blit_rows
-.clean:
-    mov byte [it_hudd], 0
-    mov byte [it_msgd], 0
-    mov word [it_dmin], 0xFFFF
-    mov word [it_dmax], 0
-.out:
-    ret
-
-; -----------------------------------------------------------------------------
-; it_blit_rows - band rows [AX, AX+CX) to the glass, DX px wide from band
-;                byte BX. ES = the claim. 255 rows a call (gfx_blit1's limit).
-; Clobbers AX, BX, CX, DX, SI, BP.
-; -----------------------------------------------------------------------------
-it_blit_rows:
-    push di
-    mov [it_bx0], bx
-    mov [it_bwid], dx
-.chunk:
-    jcxz .out
-    mov di, cx
-    cmp di, 255
-    jbe .n
-    mov di, 255                     ; DI = this call's rows
-.n:
-    push ax
-    push cx
-    mov bx, ax                      ; the first row
-    mov dx, IT_BSTRIDE
-    mul dx
-    add ax, [it_bx0]
-    mov si, ax                      ; SI = row * 80 + the first byte
-    add bx, [it_cy]                 ; BX = y
-    mov ax, [it_bx0]
-    mov cl, 3
-    shl ax, cl
-    add ax, [it_ox]                 ; AX = x: the band's origin, ON the byte
-                                    ; grid, + the byte's px
-    mov cx, [it_bwid]               ; CX = width
-    mov dx, di                      ; DX = rows
-    mov bp, IT_BSTRIDE
-    call OSAPI_GFX_BLIT1            ; CF = refused: the arguments are ours and
-    pop cx                          ; legal, and a debug view has no second
-    pop ax                          ; path to fall back to
-    add ax, di
-    sub cx, di
-    jmp short .chunk
-.out:
-    pop di
-    ret
-
-; -----------------------------------------------------------------------------
-; it_fill_rest - the content outside the band, filled once in black: the
-;                0..7 columns left of it_ox, the columns right of the band
-;                (past 640 on a Hercules, and the 7 - pad the narrowing
-;                leaves) and the rows past 400. Clobbers AX..DX.
-; -----------------------------------------------------------------------------
-it_fill_rest:
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov ax, [it_cx]                 ; the left strip: x = cx .. ox-1
-    mov cx, [it_ox]
-    cmp cx, ax
-    jbe .right                      ; the content is on the grid already
-    dec cx
-    mov bx, [it_cy]
-    mov dx, bx
-    add dx, [it_bh]
-    dec dx
-    call OSAPI_GFX_FILL
-.right:
-    mov ax, [it_ox]                 ; the right strip: x = ox + bw ..
-    add ax, [it_bw]                 ; cx + cw - 1, all bh rows
-    mov cx, [it_cx]
-    add cx, [it_cw]
-    cmp ax, cx
-    jae .rows                       ; the band reaches the right edge
-    dec cx
-    mov bx, [it_cy]
-    mov dx, bx
-    add dx, [it_bh]
-    dec dx
-    call OSAPI_GFX_FILL
-.rows:
-    mov ax, [it_ch]
-    cmp ax, [it_bh]
-    jbe .out
-    mov ax, [it_cx]                 ; the bottom strip: every column
-    mov bx, [it_cy]
-    add bx, [it_bh]
-    mov cx, [it_cx]
-    add cx, [it_cw]
-    dec cx
-    mov dx, [it_cy]
-    add dx, [it_ch]
-    dec dx
-    call OSAPI_GFX_FILL
 .out:
     ret
 
@@ -1224,6 +826,9 @@ it_putdec:
 %include "itrules.inc"
 %include "itai.inc"
 %include "itinput.inc"
+%include "itcanvas.inc"
+%include "itwin.inc"
+%include "os88pit.inc"
 
 ; =============================================================================
 ; TABLES
@@ -1231,12 +836,16 @@ it_putdec:
 
 ; --- window template (SPEC.md 11: 16 bytes, 8 words) --------------------------
 it_tpl:
-    dw 0, 30, 638, 420
+    dw 0, 30, 640, 420
     dw it_ttl, it_paint, it_onkey, it_onclick
 
-; --- what we ask for on each adapter (SPEC.md 11.100.1): the frame sizes the
-; 3D picture of wave 2 is cut from (ISOTRON-PLAN 7.1); the kernel clamps
-    OS88_PREFER it_pref, 638, 420, 718, 300, 638, 200
+; --- what we ask for on each adapter (SPEC.md 11.100.1): a frame SPANNING THE
+; DISPLAY, which drops both side borders (11.95.2), so the content is the
+; whole width from x = 0 - 640 on VGA, EGA and CGA, 720 on a Hercules - and
+; the 2x picture (640 device px, SPEC.md 108.11.2) fits it on the byte grid.
+; A 638 frame was content 1..632, eight pixels short. The kernel clamps the
+; heights.
+    OS88_PREFER it_pref, 640, 420, 720, 300, 640, 200
 
 ; --- the app menu set (SPEC.md 12.2) ------------------------------------------
     OS88_MENUSET it_menus, it_name, it_oncmd
@@ -1275,21 +884,16 @@ it_ab5:      db '1, 2 or 3 starts a game; P pauses.', 0
 %include "os88ui.inc"
 
 ; --- strings ------------------------------------------------------------------
-it_tiername: dw it_it_rook, it_it_vet, it_it_lun
 it_s_player: db 'PLAYER ', 0
-it_s_comp:   db '   COMPUTER ', 0
-it_s_tower:  db '   TOWER ', 0
-it_s_sep:    db '   ', 0
-it_s_speed:  db '   SPEED ', 0
-it_s_sixth:  db '/6', 0
-it_s_title:  db '1 Rookie, 2 Veteran, 3 Lunatic (A, B, C: silent)', 0
-it_s_play:   db 'Ins/Del or Left/Right turn. F10 faster, F9 normal.', 0
+it_s_comp:   db 'COMPUTER ', 0
+it_s_title:  db '1 Rookie   2 Veteran   3 Lunatic   (A B C: silent)', 0
 it_s_paused: db 'PAUSED - PRESS P', 0
 it_s_pwin:   db 'The player wins the round. Space to continue.', 0
 it_s_cwin:   db 'The computer wins the round. Space to continue.', 0
 it_s_over:   db 'THREE LOSSES IN A ROW. GAME OVER.', 0
 it_s_small:  db 'Window too small.', 0
 it_s_nomem1: db 'isoTron needs ', 0
+it_s_nomem1b: db ' KB and ', 0
 it_s_nomem2: db ' KB of free memory; this machine has ', 0
 it_s_nomem3: db ' KB.', 0
 
@@ -1313,34 +917,96 @@ it_s_nomem3: db ' KB.', 0
 
 ; --- the window and the surface ------------------------------------------------
     WORDV it_win
-    WORDV it_seg                    ; the claim
+    WORDV it_seg                    ; the work claim: grid, strip, tables
+    WORDV it_cseg                   ; the canvas claim
     BYTEV it_nomem                  ; ...which was refused
     BYTEV it_spawned
     BYTEV it_abon
     WORDV it_cx                     ; the content box, absolute
-    WORDV it_ox                     ; the band's origin: cx up to the grid
     WORDV it_cy
     WORDV it_cw
     WORDV it_ch
-    WORDV it_lcw                    ; ...as it was when the band was laid out
+    WORDV it_lcw                    ; ...as it was when the picture was laid out
     WORDV it_lch
+    BYTEV it_lcx7                   ; ...and its phase on the byte grid
     BYTEV it_laid
-    BYTEV it_layok                  ; the view fits
-    WORDV it_bw                     ; the band: px wide, rows
-    WORDV it_bh
-    BYTEV it_full                   ; the whole band is owed
-    BYTEV it_hudd                   ; the HUD line changed
+    BYTEV it_layok                  ; the picture fits
+    WORDV it_xoff                   ; the picture's origin from the content's x
+    WORDV it_ox                     ; the picture's origin: ON the byte grid
+    WORDV it_oy
+    WORDV it_hc                     ; its rows: min(content height, 400)
+    WORDV it_pwb                    ; its device bytes across: 80 (or 79)
+    BYTEV it_surf                   ; 0 mono (BLIT1), 1 colour (BLITP)
+    BYTEV it_bpp                    ; our display's bits a pixel
+    BYTEV it_nocol                  ; a blitp refused after its probe said yes
+    BYTEV it_pok                    ; this present cleared the clip (colour)
+    WORDV it_scx                    ; where the content was when the surface
+    WORDV it_scy                    ; was last asked
+    BYTEV it_full                   ; a whole present is owed: 1 from the
+                                    ; top, 2 going out in bands (it_band)
+    WORDV it_band                   ; ...the next band's first device row
+    WORDV it_bnew                   ; ...and this band's end
+    BUFV  it_bt0, 4                 ; ...and when it started, pit_now
+    BYTEV it_byield                 ; ...more owed: the worker yields
+    WORDV it_fx                     ; the frame (W_X, W_Y, W_W, W_H) when the
+    WORDV it_fy                     ; content box was last asked (it_geom_ck)
+    WORDV it_fw
+    WORDV it_fh
+    BUFV  it_dmg, 8                 ; a paint's rect, absolute, inclusive...
+    BYTEV it_dmgon                  ; ...and that one is being painted
+    BYTEV it_pwhole                 ; ...and it is the whole content
+    BYTEV it_fillr                  ; ...and the content around the picture
+    BYTEV it_hudd                   ; the HUD changed: bit 0 left, bit 1 right
     BYTEV it_msgd                   ; ...the message line
-    WORDV it_dmin                   ; the grid rows dirtied since the present
-    WORDV it_dmax
-    WORDV it_bx0                    ; it_blit_rows' scratch
-    WORDV it_bwid
-    WORDV it_gseg                   ; the 8x8 glyph table
-    WORDV it_goff
-    BYTEV it_gfirst
-    BYTEV it_glast
-    BUFV  it_hudbuf, 96
-    BUFV  it_msgbuf, 96
+    BYTEV it_hmask                  ; it_ovl_update's copy of it_hudd
+    WORDV it_hright                 ; ...and the right line it wants
+    BYTEV it_gpres                  ; this wake presented (the governor's)
+    BYTEV it_gskip                  ; the governor: every second wake
+    BYTEV it_gquiet                 ; ...presenting wakes under 30 ms since
+    BYTEV it_godd
+    BUFV  it_gt0, 4                 ; the hold's start, pit_now
+    BUFV  it_ov, OV_N * OV_SIZE     ; the overlays (itwin.inc)
+    BUFV  it_bxs, (MAXHEADS + 1) * 8  ; the boxes of a present
+    WORDV it_nbx
+    WORDV it_pr0                    ; it_pbox / it_praw: device rows [r0, r1)
+    WORDV it_pr1
+    WORDV it_pbe
+    WORDV it_pj0                    ; ...and bytes [j0, j1]
+    WORDV it_pj1
+    WORDV it_pnb                    ; it_praw: bytes a row, rows a strip,
+    WORDV it_pcap                   ; rows this strip, the plane step, the
+    WORDV it_pn                     ; source's first byte, the strip row
+    WORDV it_pps
+    WORDV it_psrc
+    WORDV it_pdst
+    WORDV it_pend                   ; ...the strip's end row
+    WORDV it_pst1                   ; ...DI's step past one strip row, two
+    WORDV it_pst2
+    BYTEV it_plast                  ; ...and the logical row it last converted
+    BUFV  it_rmap, IT_HCMAX         ; device row -> logical row
+    BUFV  it_rfirst, 2 * (IT_CROWS + 1) ; logical row -> first device row
+    BUFV  it_xcol, 2 * IT_CCOLS     ; canvas column -> its first byte
+    BUFV  it_ctop, IT_CCOLS         ; ...and its lowest TOP row so far
+    BYTEV it_ybase                  ; level h's front outline row: 174 - 24(h-1)
+    BYTEV it_rbh                    ; it_rebuild's height, the levels left
+    BYTEV it_rbj
+    WORDV it_rbo                    ; ...level h's offset, 24(h - 1)
+    WORDV it_rbcol                  ; ...the column's row-0 byte
+    WORDV it_rbcb                   ; ...the level's row t = 0 byte in it
+    WORDV it_rbe0                   ; ...the lower body's outline row, and
+    WORDV it_rbf0                   ; its face's rows, in a level's t
+    WORDV it_rbf1
+    BYTEV it_rbfid                  ; ...and the face's id, shifted
+    BYTEV it_lu                     ; it_title_build's walk of a stroke
+    BYTEV it_ld
+    BYTEV it_lu0
+    BYTEV it_lu1
+    BYTEV it_ld1
+    BYTEV it_lv
+    BUFV  it_lhead, H_SIZE          ; ...the head record a letter cell borrows
+    BUFV  it_hudl, 16               ; "PLAYER n"
+    BUFV  it_hudr, 16               ; "COMPUTER n"
+    BUFV  it_msgbuf, 96             ; the refusal's sentence
     BUFV  it_decbuf, 6              ; it_putdec's five digits
 
 ; --- the game --------------------------------------------------------------------
@@ -1351,6 +1017,7 @@ it_s_nomem3: db ' KB.', 0
     WORDV it_tend                   ; a timed state's end, in ticks
     WORDV it_lastt                  ; the governor's last tick
     WORDV it_debt                   ; now - V, in u (signed; SPEC.md 108.4.2)
+    BYTEV it_vsync                  ; V = now at the next wake (a round start)
     WORDV it_A                      ; the tier's cost and the computer's
     WORDV it_B                      ; parameters (it_tiers)
     WORDV it_C
@@ -1358,7 +1025,9 @@ it_s_nomem3: db ' KB.', 0
     BYTEV it_icpt
     BYTEV it_wander
     BYTEV it_nheads
-    BYTEV it_opener                 ; the head the opening rule is for
+    WORDV it_hend                   ; it_heads + nheads * H_SIZE: the
+                                    ; head loop's end, so it needs no index
+    WORDV it_openp                  ; the head record the opening rule is for
     BYTEV it_live                   ; computer heads alive (a running count)
     WORDV it_costb                  ; A + B * it_live, kept with it
     WORDV it_cost                   ; this iteration's cost, built as it runs
@@ -1367,7 +1036,6 @@ it_s_nomem3: db ' KB.', 0
     BYTEV it_inboost                ; the iteration's keys
     BYTEV it_inf9
     BYTEV it_r                      ; the AI's RNG byte
-    BYTEV it_n                      ; ...and the head it is for
     BYTEV it_side
     WORDV it_t                      ; the intercept's t
     BUFV  it_heads, (MAXHEADS + 1) * H_SIZE ; four computer heads, the player

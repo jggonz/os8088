@@ -14341,3 +14341,100 @@ different governor history), and the Hercules is 2.5% under it.
 frame), whose remaining ideas are its "what was not done" list (merged boxes, a register-only `xc_drawc`, skip lists) - each a
 rewrite of a pixel-verified path, not a cheap change. No code changed in this audit; the audit added `tests/excitebike_load.py`'s
 timeline.
+
+### Set 155 — isoTron windowed: the head-step and the wake on the XT (SPEC.md §108.10.3, §108.11.7)
+
+Measured 2026-10-13 on MartyPC's 4.77 MHz 8088 models `os8088_5150_cga_gla`, `os8088_5150_herc_gla` and `os8088_xt_vga`, the
+package (`build/isotron.o88`, image 9,106 bytes) on `build/isotron360.img`, by `tests/isotron.py --perf all` (the `isotronperf`
+row; log in the wave's reports, `w2/perf-final.log`). Emulator numbers: no real card wait states (docs/FIELD-MACHINES.md).
+
+**The head-step** is a computer head's whole step - its RNG byte, its decision (SPEC.md §108.6), its move and its picture
+(§108.10) - between the `it_hs0` / `it_hs1` marks, as the MEDIAN over six windows of 60 head-steps 2.5 guest seconds apart in a
+seeded FAST game, so an early round's open field and a late round's crowded one both count (the first measurement took round 1's
+opening only and read ~300 cycles low at Lunatic):
+
+| cycles, median (p90) | Rookie | Lunatic | move + picture | plan §16 ceiling |
+| --- | ---: | ---: | ---: | ---: |
+| CGA | **2,415** (3,347) | **2,669** (3,207) | ~1,540 | 3,000 |
+| Hercules | **2,468** (2,860) | **2,707** (3,698) | ~1,545 | 3,000 |
+| XT-VGA | **2,440** (3,435) | **2,754** (3,848) | ~1,545 | 3,000 |
+
+The path there, Lunatic medians: **3,735** at the first build - its picture 2,118 (424 to find the column and ids, 628 for 22 grid
+probes in pairs, 657 for 22 nibble read-modify-writes, 178 of counters, 231 of dirty box) - then the canvas one byte a pixel and
+column-major (the face one `rep stosb`, 657 -> 276), k* off the canvas column by `repne scasb` with a per-column fast path
+(628 -> 478, and nothing in an open column), the RNG inline (273 -> ~170), the dirty box grown on the one side a step can grow it
+(231 -> ~100), the AI's look-ahead unrolled per tier and inline (54 -> ~30 a cell), N/S runs the ring bounds as an unrolled scan
+and one DIV (54 -> ~25 a cell), and rule 5 skipped in one test for a head whose sides are parallel to the player. A head-step's
+logic is now ~1,100-1,200 of it and its picture ~1,000; the move ~460 of that is wave 1's.
+
+**The wake** is one worker pass's gfx lock hold, from before `OSAPI_GFX_LOCK` to after `OSAPI_GFX_UNLOCK` (`it_wake0` /
+`it_wake1`), wakes in play only, a paced BOT game (Rookie h1, the bot's one F10: p = 3) and a Lunatic round at h4 with p = 9:
+
+| ms, median (most) | CGA | Hercules | XT-VGA | ceiling 1bpp / VGA |
+| --- | ---: | ---: | ---: | ---: |
+| Rookie h1 | **13.6** (17.4) | **16.8** (23.4) | **27.3** (39.3) | 22 / 30 |
+| Lunatic h4, full boost | **24.9** (33.3) | **27.8** (50.4) | **37.1** (97.9) | 35 / 50 |
+| presentation governor | idle / idle | idle / engaged | idle / engaged | above 45 ms |
+
+What the XT-VGA wake is made of, measured inside it: the fixed part of a present ~9,800 cycles (CLIP_SET and the content box
+~8,000, OBSERVED and CLIP_CLEAR ~1,400) once the surface probe (~11,900, asked every wake at first) moved to when the window
+moves; and per head a box of 1-2 device bytes by ~46 device rows, ~50-70k cycles - `gfx_blitp`'s plane-major ~5,000 + ~340 a row,
+and the conversion ~1,000 a logical row for both its device rows (it was ~1,073 a device row plus ~1,003 a copied one). The
+1bpp cards are the cheap ones: ~150 cycles a device byte of conversion and `gfx_blit1`. **The governor latched on at Rookie
+three ways, each found here**: round-start whole presents (now not counted), the round's result lettered by a VGA `font_run`
+(~1 ms a cell: not counted), and its own doubled presents compared whole with the 30 ms release (the share is now half the
+hold); and it now starts every round clear.
+
+**Verdict.** Every §16 windowed ceiling is met on all three machines. The tightest lines are the Lunatic head-step (~250 cycles
+under 3,000, and the median moves ~100 with the sample) and the XT-VGA Rookie wake (27.3 of 30 ms). A real 8-bit VGA pays more
+on the `gfx_blitp` half than MartyPC's (Set 107's caveat), so that line is the one to re-measure on iron.
+
+**The review's fix pass** (same machines, same row, `isotronperf` with its new round-start lines; package image 9,882 bytes).
+The wake, median (most), ms:
+
+| ms | CGA | Hercules | XT-VGA |
+| --- | ---: | ---: | ---: |
+| Rookie h1 | **11.7** (15.8) | **13.1** (21.0) | **21.1** (36.9) |
+| Lunatic h4, full boost | **23.5** (28.3) | **27.6** (36.3) | **32.9** (78.8) |
+
+The XT-VGA Rookie wake went 27.3 -> 21.1 ms, counted from the review's breakdown: a box no longer carries the column its head
+stood on (14,649 logical byte-rows presented for 12,034 changed, x1.217, over 509 boxes); the narrow colour row loop lost a
+call, two pushes and five `cs:` operands a logical row (~450 cycles); the mono row loop its five-instruction page and 12-byte end
+test (`xor bh, 2` on 1,024-aligned tables, one compare); and the content box is asked only when the frame moves (3,043 cycles a
+wake). **A round's start** was ONE lock hold - rebuild and whole present - of 2.61 / 2.84 s (h1 / h4) on the XT-VGA, 1.82 s on
+the Hercules, 0.99 / 1.22 s on the CGA, and the first paint then drew the picture a second time behind it. Now the rebuild is
+one pass down the column-major canvas, every byte once (1.84M -> 1.49M cycles at h1, 2.94M -> 2.06M at h4: 0.31 / 0.43 s), and
+the whole present goes out in 4-row bands in holds of at most 43 ms with a yield between, on the glass 0.71 s (CGA), 1.46 s
+(Hercules) and 3.28 s (XT-VGA) after the rebuild - against 0.57 / 1.17 / 2.18 s in one hold, the difference being each hold's
+own fixed part (the lock's release alone ~15,000 cycles on the XT-VGA). The head-step medians moved with where the windows
+landed (Lunatic 2,554 - 2,984 across runs on the CGA, 2,685 - 2,944 elsewhere), not with the step, which changed by a few tens of
+cycles. **What it leaves**: the XT-VGA's whole present (3.28 s banded) is over both wave 3's 1.5 s toggle and wave 4's 2.2 s
+sweep, and its conversion (~402 cycles a device byte of 32,000) is most of it.
+
+**Wave 2's repair** (same machines; `isotronperf` run four times, three of them directly with `--json`, logs in the wave's
+reports, `w2r/`). The verification failed the row on two counts, and neither was the step's cost alone. **The sample**: six
+windows of ~50 consecutive head-steps landed wherever the harness's host-timed pokes put them, and the Lunatic median read
+2,581 - 3,072 across runs, over 3,000 once on the Hercules. Traced whole, all nine rounds of that game (13,344 computer
+head-steps, every tower height) read **2,648 - 2,691** a round on the same build, so the spread was the windows'. The row now
+takes EVERY computer head-step of two whole rounds (Rookie 1,049, Lunatic 3,177), each round's count held to the model's, and
+reads the same head-steps on every run:
+
+| cycles, median (p90) | Rookie | Lunatic |
+| --- | ---: | ---: |
+| CGA | **2,375 - 2,377** (2,943 - 2,957) | **2,576** (3,409 - 3,413) |
+| Hercules | **2,375 - 2,377** (2,942 - 2,943) | **2,575 - 2,576** (3,407 - 3,409) |
+| XT-VGA | **2,377 - 2,383** (2,959 - 3,008) | **2,575 - 2,576** (3,404 - 3,472) |
+
+**The margin**, Lunatic round 2 whole on the CGA, **2,648 -> 2,553**: rule 5 in one try (the two sides share k and their t
+differ in sign, so only the side with t > 0 can pass: a try was ~390 cycles, made in pairs about one step in three; p90 3,875
+-> 3,628); `it_span` with BX the head throughout and SI its one scratch, so no `push bx`, no `push di` round the scan and ES put
+back as `it_seg` (picture 1,135 -> 1,089); the head loop by record (`it_hend`, `it_openp`) so nothing keeps CX (1,089 -> 1,061,
+and ~36 off the decision); and an E/W look-ahead a word a pair of cells (seven byte compares ~245 -> three words and a byte
+~115). Found by single-stepping 150 head-steps and summing MartyPC's cycles per instruction (`it_span_ud` 1,072, `it_ai` 854,
+`it_move` 479, `it_icpt_try` 310 a head-step on average). **The round-start lines** were the other failure: a pause from the
+harness thread inside the trace could resume past a stop the pump had not yet recorded - a lost `it_rb0` crashed the row, a
+lost `it_wake0` charged a 431 ms rebuild to a 1 ms hold. The round is now started by one byte written inside the trace, the
+wait is for the `it_fdone` after the rebuild, and a trace with non-alternating wake marks is refused. Wakes (median, ms):
+Rookie h1 11.7 - 11.8 / 13.1 / 21.1 - 21.2, Lunatic h4 full boost 23.0 - 23.2 / 27.3 - 27.5 / 32.8 - 34.6 (CGA / Hercules /
+XT-VGA). Every §16 windowed ceiling is met, the head-step's by ~420 cycles (14%) at Lunatic and ~620 at Rookie, with no sampling
+spread left to eat it.

@@ -44,8 +44,10 @@ FILE = "ISOTRON.O88"
 SRC = os.path.join(ROOT, "apps", "isotron", "isotron.asm")
 INCS = (os.path.join(ROOT, "apps") + os.sep, os.path.join(ROOT, "apps", "isotron") + os.sep)
 BSS_SRCS = ("isotron.asm", "ittest.inc")
+EQU_SRCS = ("isotron.asm", "ittest.inc", "itcanvas.inc", "itwin.inc")
 MARKS = ("it_step0", "it_step1", "it_wake0", "it_wake1", "it_frame_end",
-         "it_worker", "it_iterate", "it_move", "it_round_end")
+         "it_hs0", "it_hs1", "it_worker", "it_iterate", "it_move", "it_round_end",
+         "it_span", "it_present", "it_rb0", "it_rb1", "it_fdone", "it_ai1", "it_span0")
 
 # it_tflags (ittest.inc)
 TF_FAST, TF_BOT, TF_NOFLOW, TF_HOLD = 1, 2, 4, 8
@@ -57,7 +59,7 @@ def _equs():
     """The package's own numeric `equ`s, read off its source - a row reads the
     heads and the mailbox by these, and a second copy here would drift."""
     out = {}
-    for fn in ("isotron.asm", "ittest.inc"):
+    for fn in EQU_SRCS:
         text = open(os.path.join(ROOT, "apps", "isotron", fn), encoding="utf-8").read()
         for name, val in re.findall(r"^(\w+)\s+equ\s+(0x[0-9A-Fa-f]+|\d+)\b", text, re.M):
             out[name] = int(val, 0)
@@ -70,6 +72,10 @@ MAXHEADS, H_SIZE = _E["MAXHEADS"], _E["H_SIZE"]     # the player is record MAXHE
 H_U, H_D, H_HD, H_ALIVE = _E["H_U"], _E["H_D"], _E["H_HD"], _E["H_ALIVE"]
 HD_N, HD_E, HD_S, HD_W = _E["HD_N"], _E["HD_E"], _E["HD_S"], _E["HD_W"]
 K_LEFT, K_RIGHT = _E["K_LEFT"], _E["K_RIGHT"]
+H_BX0, H_BX1, H_BMV = _E["H_BX0"], _E["H_BX1"], _E["H_BMV"]
+CSIZE = _E["IT_CCOL"] * _E["IT_CCOLS"]             # the canvas claim's bytes
+OV_SIZE, OV_N = _E["OV_SIZE"], 3                    # the overlay records
+IT_MLUT = _E["IT_MLUT"]
 P_NORMAL, P_D0 = _E["P_NORMAL"], _E["P_D0"]
 WIN = {0: None, 1: "P", 2: "C"}
 
@@ -163,6 +169,50 @@ class Game:
                     hnext=self.b("it_h"), lossrow=self.b("it_lossrow"),
                     rng=self.w("it_rng"), ck=self.w("it_ck"),
                     nsteps=self.w("it_nsteps"))
+
+
+    # --- wave 2: the picture ------------------------------------------------
+    def canvas(self):
+        """The guest's 64,000-byte canvas claim, as isotronsim's pack()."""
+        return self.m.read(self.w("it_cseg") << 4, CSIZE)
+
+    def geom(self):
+        """The picture's place: origin, rows and bytes across."""
+        return dict(ox=self.w("it_ox"), oy=self.w("it_oy"), hc=self.w("it_hc"),
+                    pwb=self.w("it_pwb"), cx=self.w("it_cx"), cy=self.w("it_cy"),
+                    cw=self.w("it_cw"), ch=self.w("it_ch"), surf=self.b("it_surf"),
+                    bpp=self.b("it_bpp"), layok=self.b("it_layok"))
+
+    def overlays(self):
+        """The overlay rects that show, as (x0, y0, x1, y1) device px in the
+        picture (x1, y1 exclusive), with their text."""
+        raw = self.m.read(self.a("it_ov"), OV_N * OV_SIZE)
+        out = []
+        for k in range(OV_N):
+            r0, j0, j1, sp = struct.unpack_from("<HBBH", raw, k * OV_SIZE)
+            if sp:
+                txt = self.m.read(self.base + sp, 64).split(b"\0")[0].decode("latin-1")
+                out.append((8 * j0, r0, 8 * j1 + 8, r0 + 8, txt))
+        return out
+
+    def owed(self):
+        """Is any present still owed (a box, an overlay, a whole present)?"""
+        if self.b("it_full") or self.b("it_hudd") or self.b("it_msgd"):
+            return True
+        heads = self.m.read(self.a("it_heads"), (MAXHEADS + 1) * H_SIZE)
+        return any(heads[k * H_SIZE + H_BMV] for k in range(MAXHEADS + 1))
+
+
+def fresh_disk(img):
+    """THE DISK MUST BE THE BUILD. `make` rebuilds build/isotron.o88 and not
+    the on-demand isoTron floppies, so a row booting a disk older than the
+    package drives the LAST wave's game through THIS wave's offsets - which
+    wave 2 did, and read a debug view as a garbled 3D one."""
+    o88 = os88build.at("build/isotron.o88")
+    if os.path.getmtime(img) < os.path.getmtime(o88):
+        sys.exit("isotronlib: %s is older than build/isotron.o88 - run `make isotrondisk`"
+                 % img)
+    return img
 
 
 def open_game(ui, drive="B"):

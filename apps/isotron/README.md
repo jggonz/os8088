@@ -10,11 +10,13 @@ It is a native 8086 assembly remake of a 1982 IBM PC game, written from the
 game's observed rules alone: there is no original code in it, and every
 picture it draws is drawn by code.
 
-**Status: wave 1 of 6.** The rules, the computer and the pace are complete
-and are checked against a reference model (`tools/isotronsim.py`). What the
-window shows for now is a flat top-down view of the arena, one pixel a cell;
-the 3D picture, full screen and sound arrive in the next waves. See SPEC.md
-section 108 and `docs/plans/ISOTRON-PLAN.md`.
+**Status: wave 2 of 6.** The rules, the computer and the pace are complete
+and are checked against a reference model (`tools/isotronsim.py`). The
+window shows the arena in 3D - the slab, the tower and every wall, one
+column a step - on VGA and EGA in 16 colours and on CGA and Hercules in
+black-and-white patterns, the picture held pixel for pixel to the model's.
+Full screen, the round flow's screens and sound arrive in the next waves.
+See SPEC.md section 108 and `docs/plans/ISOTRON-PLAN.md`.
 
 ## Keys
 
@@ -37,9 +39,11 @@ The Game menu starts a game at any tier, pauses and ends the game.
 ```
 make isotron        # build/isotron.o88
 make isotrondisk    # four standalone floppies: 1.44MB, 720KB, 1.2MB, 360KB
-make isotrontest    # the host model's selfcheck, then seeded games on MartyPC
+make isotrontest    # the host model's selfcheck, then on MartyPC seeded games
+                    # against it, the canvas byte for byte and the window's
+                    # picture pixel for pixel on CGA, Hercules, VGA and EGA
 ```
 
 `ISOTRON.O88` also ships in `GAMES/` on the apps disks (and on
-`games360.img` at 360KB). It claims 58 KB of free memory beside its own
-~5 KB, and says so in words when the machine has less.
+`games360.img` at 360KB). It claims 63 KB for its picture and 30 KB for its
+work beside its own ~12 KB, and says so in words when the machine has less.

@@ -41,13 +41,24 @@
 ;   it_nsteps   word  head-steps this round
 ;   it_gover    word  games that have ended in three losses
 ;
-; THE BOUND COUNTERS (it_nprobe, it_maxprobe, it_span, it_maxspan, it_ncol)
-; count the occlusion probe and the canvas span, which are wave 2's; they
-; arrive with them rather than sit here reading zero.
+; THE BOUND COUNTERS (SPEC.md 108.10.2), kept by itcanvas.inc it_span:
 ;
-; MARKS (for bp_trace): it_step0 / it_step1 bracket one head-step (itrules.inc
-; it_move), it_wake0 / it_wake1 one wake's work under the lock and
-; it_frame_end the end of a worker pass (isotron.asm). They are NOT labels:
+;   it_maxspan  byte  the most rows a step wrote this round: min(k*, 23)
+;   it_maxprobe byte  ...the most canvas bytes a step's k* scan EXAMINED:
+;                     0 on the fast path (no TOP below in the column), m
+;                     when it found k* = m, len when it found none - counted
+;                     where the scan ends, and at most 22 (108.10.2)
+;
+; (A span cannot leave its column - y + k* <= 196 - so there is no column
+; count: itcanvas.inc's %error holds that, by construction.)
+; it_round_start sets them before the start cells' spans.
+;
+; MARKS (for bp_trace): it_step0 / it_step1 bracket one head-step's move and
+; picture (itrules.inc it_move), it_hs0 / it_hs1 a computer head-step whole -
+; its RNG byte, its decision, its move and its picture, it_ai1 the decision's
+; end and it_span0 the picture's start inside it - it_wake0 / it_wake1
+; one wake, the gfx lock and its release included, and it_frame_end the end
+; of a worker pass (isotron.asm). They are NOT labels:
 ; IT_MARK makes each an `equ $`, and only under -DIT_MARKS (tests/isotronlib.py
 ; assembles with it), so no symbol splits a routine for tools/stkdepth.py and
 ; the shipped image is byte-identical either way.
@@ -82,3 +93,5 @@ IT_TINMAX    equ 8
     WORDV it_ck
     WORDV it_nsteps
     WORDV it_gover
+    BYTEV it_maxprobe
+    BYTEV it_maxspan

@@ -230,7 +230,6 @@ it_commands:
     cmp byte [it_state], ST_PLAY
     jne .cont
     xor byte [it_paused], 1
-    mov byte [it_hudd], 1
     mov byte [it_msgd], 1
 .cont:
     xor al, al

@@ -29,9 +29,10 @@
 ;
 ; MEASURED on MartyPC's 5150, minima per count: the first version's 13-byte
 ; loop was fetch-bound at 195 + 82.5 cycles a cell. Now a N/S run is a
-; 7-byte `add / cmp / loope` loop, 250 + 54 a cell, and an E/W run - the
-; grid's own byte order - is one `repe scasb`, DF set for W, 228 + 15.6 a
-; cell. Either way the count is the cap less what CX has left, less one when
+; 7-byte `add / cmp / loope` loop, 250 + 54 a cell - or, when the cap is one
+; the ring always beats (101 or more), an unrolled scan at ~25 a cell and one
+; DIV for the count (wave 2) - and an E/W run - the grid's own byte order -
+; is one `repe scasb`, DF set for W, 228 + 15.6 a cell. Either way the count is the cap less what CX has left, less one when
 ; the scan stopped ON a wall (ZF = 0): a scan that ran out with ZF = 1 found
 ; every one of its cap cells free. (SPEC.md 108.6 has the worst decision.)
 ; -----------------------------------------------------------------------------
@@ -55,11 +56,14 @@ it_run_go:
     neg di                          ; ...S: -217
 .ns:
     add si, IT_GRID
-.lp:
+    cmp bx, GH                      ; A CAP THE RING BEATS: a N/S run meets the
+    jae .nsf                        ; outline within 99 cells, so a cap of 101
+.lp:                                ; or more (rule 2's 255) never binds
     add si, di
     cmp [es:si], al
     loope .lp
     jmp short .tally
+
 .ew:
     lea di, [si + IT_GRID + 1]      ; E: the next byte up...
     test dl, 2
@@ -80,18 +84,78 @@ it_run_go:
     pop di
     pop si
     ret
+.nsf:
+    ; ...and needs no counter: an unrolled scan to the first set cell (7
+    ; bytes, ~25 cycles a cell against the loop's 54) and the count from how
+    ; far it went, one DIV. Rule 2 on a blocked E/W head measures both its
+    ; N/S sides to the ring this way (SPEC.md 108.10.3's head-step).
+    push dx
+    mov cx, si                      ; CX = the head's cell
+.nf:
+%rep 8
+    add si, di
+    cmp [es:si], al
+    jne .nhit
+%endrep
+    jmp short .nf
+.nhit:
+    mov ax, si
+    sub ax, cx                      ; +-217 * (free cells + 1)
+    jns .npos
+    neg ax
+.npos:
+    xor dx, dx
+    mov cx, GW
+    div cx
+    dec ax                          ; AX = the free cells
+    pop dx
+    jmp short .out
 
 ; -----------------------------------------------------------------------------
-; it_ai - decide for the computer head at BX (index CL), AL = its RNG byte.
-; A turn sets H_HD, zeroes H_LEG and sets H_TURNED. Preserves BX and CX;
-; clobbers AX, DX, SI, DI.
+; LOOK_EW n - rule 2's look-ahead for an E or W head (DL = its heading, SI =
+; its cell, AX = 0): ANY of the n cells ahead taken jumps to .bl, else on to
+; .upn. An E/W run is the grid's own byte order, so the cells go a WORD at a
+; time - E the pairs from SI + 1 up, W from SI - 2 down - and an odd n ends
+; on a byte: half the compares of the N/S cell-by-cell walk, the same cells
+; and only those (a run that reaches the ring stops on it either way).
+; -----------------------------------------------------------------------------
+%macro LOOK_EW 1
+    cmp dl, HD_E
+    jne %%w
+  %assign %%k 1
+  %rep %1 / 2
+    cmp [es:si + IT_GRID + %%k], ax
+    jne .bl
+    %assign %%k %%k + 2
+  %endrep
+  %if %1 % 2
+    cmp [es:si + IT_GRID + %%k], al
+    jne .bl
+  %endif
+    jmp .upn
+%%w:
+  %assign %%k 2
+  %rep %1 / 2
+    cmp [es:si + IT_GRID - %%k], ax
+    jne .bl
+    %assign %%k %%k + 2
+  %endrep
+  %if %1 % 2
+    cmp [es:si + IT_GRID - %%k + 1], al
+    jne .bl
+  %endif
+    jmp .upn
+%endmacro
+
+; -----------------------------------------------------------------------------
+; it_ai - decide for the computer head at BX, AL = its RNG byte. A turn sets
+; H_HD, zeroes H_LEG and sets H_TURNED. Preserves BX; clobbers AX, CX, DX,
+; SI, DI. (The head is its RECORD: the opening rule's is it_openp.)
 ; -----------------------------------------------------------------------------
 it_ai:
-    push cx
     mov [it_r], al
-    mov [it_n], cl
     ; --- 1. the opening ---------------------------------------------------------
-    cmp cl, [it_opener]
+    cmp bx, [it_openp]
     jne .blk
     cmp byte [bx + H_TURNED], 0
     jne .blk
@@ -100,17 +164,59 @@ it_ai:
     cmp byte [bx + H_LEG], OPEN_LEG
     jne .blk
     mov dl, HD_S
-    call it_run_look
-    cmp al, [it_look]
-    jbe .blk
+    call it_look_blk                ; run(S, LOOK+1) <= LOOK: no opening
+    jc .blk
     mov al, HD_S
     jmp .turn
     ; --- 2. blocked --------------------------------------------------------------
 .blk:
+    ; run(ahead, LOOK + 1) <= LOOK - any of the LOOK + 1 cells ahead taken -
+    ; is it_look_blk's question, asked INLINE here because rule 2 asks it on
+    ; every move (its call, pushes and pops were ~80 cycles of the step)
     mov dl, [bx + H_HD]
-    call it_run_look
-    cmp al, [it_look]
-    ja .upn
+    xor dh, dh
+    mov di, dx
+    shl di, 1
+    shl di, 1
+    mov di, [it_mv + di]            ; DI = the heading's step in the grid
+    mov si, [bx + H_IDX]
+    xor ax, ax                      ; AX = 0: a free cell, a free pair
+    cmp byte [it_look], 3
+    je .b3
+    ja .b6
+    test dl, 1                      ; Rookie: LOOK 1, two cells
+    jnz .b1ew                      ; (N/S falls through: no taken jump)
+%rep 2
+    add si, di
+    cmp [es:si + IT_GRID], al
+    jne .bl
+%endrep
+    jmp .upn
+.b1ew:
+    LOOK_EW 2
+.b3:
+    test dl, 1                      ; Veteran: LOOK 3, four cells
+    jnz .b3ew                      ; (N/S falls through: no taken jump)
+%rep 4
+    add si, di
+    cmp [es:si + IT_GRID], al
+    jne .bl
+%endrep
+    jmp .upn
+.b3ew:
+    LOOK_EW 4
+.b6:
+    test dl, 1                      ; Lunatic: LOOK 6, seven cells
+    jnz .b6ew                      ; (N/S falls through: no taken jump)
+%rep 7
+    add si, di
+    cmp [es:si + IT_GRID], al
+    jne .bl
+%endrep
+    jmp .upn
+.b6ew:
+    LOOK_EW 7
+.bl:
     mov cx, RUN_CAP
     mov dl, [bx + H_HD]
     add dl, 3                       ; left
@@ -169,17 +275,15 @@ it_ai:
     jae .wand
     cmp byte [IT_PLAYER + H_ALIVE], 0
     je .wand
+    mov dl, [bx + H_HD]             ; OUR SIDES ARE PARALLEL TO THE PLAYER when
+    xor dl, [IT_PLAYER + H_HD]      ; our axis is not the player's: then the
+    test dl, 1                      ; model skips both, and so is asked once
+    jnz .wand                       ; here instead of in two calls
     mov dl, [bx + H_HD]
-    add dl, 3                       ; left first
-    and dl, 3
-    call it_icpt_try
-    jc .side
-    mov dl, [bx + H_HD]
-    inc dl                          ; ...then right
-    and dl, 3
-    call it_icpt_try
-    jnc .wand
-.side:
+    add dl, 3                       ; left first, then right - ONE try: the
+    and dl, 3                       ; two sides share k and their t differ in
+    call it_icpt_try                ; sign, so at most one can pass, and the
+    jnc .wand                       ; try picks it (DL comes back the side)
     mov al, dl
     jmp .turn
     ; --- 6. wander ------------------------------------------------------------------
@@ -218,35 +322,76 @@ it_ai:
     mov byte [bx + H_LEG], 0
     mov byte [bx + H_TURNED], 1
 .out:
-    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
-; it_run_look - it_run_hd from the head at BX heading DL, capped at LOOK + 1.
-; A tail jump: one call level for the AI's commonest question. CLOBBERS CX
-; (it_ai's own CX is saved at its entry and nothing after the opener test
-; reads it).
+; it_look_blk - THE LOOK-AHEAD, the question rules 1 and 2 ask every move:
+; CF = 1 when run(dir, LOOK + 1) <= LOOK, i.e. when ANY of the LOOK + 1 cells
+; from the head at BX heading DL is occupied - exactly that, and nothing of
+; the count. One unrolled run per tier (LOOK is 1, 3 or 6), a cell a 10-byte
+; `add / cmp / jne` at ~30 cycles: the Lunatic's 7 cells N/S were 628 cycles
+; through it_run's counting loop and are ~260 here, the Rookie's 2 ~120
+; against 358 (SPEC.md 108.10.3's head-step). Preserves everything but AX.
 ; -----------------------------------------------------------------------------
-it_run_look:
-    mov cl, [it_look]
-    xor ch, ch
-    inc cx
-    jmp it_run_hd
+it_look_blk:
+    push bx
+    push si
+    push di
+    mov si, [bx + H_IDX]
+    mov bl, dl
+    and bx, 3
+    shl bx, 1
+    shl bx, 1
+    mov di, [it_mv + bx]            ; DI = the heading's step in the grid
+    xor al, al
+    cmp byte [it_look], 3
+    je .l3
+    ja .l6
+%rep 2                              ; Rookie: LOOK 1, two cells
+    add si, di
+    cmp [es:si + IT_GRID], al
+    jne .blk
+%endrep
+    jmp short .free
+.l3:
+%rep 4                              ; Veteran: LOOK 3, four cells
+    add si, di
+    cmp [es:si + IT_GRID], al
+    jne .blk
+%endrep
+    jmp short .free
+.l6:
+%rep 7                              ; Lunatic: LOOK 6, seven cells
+    add si, di
+    cmp [es:si + IT_GRID], al
+    jne .blk
+%endrep
+.free:
+    clc
+    jmp short .out
+.blk:
+    stc
+.out:
+    pop di
+    pop si
+    pop bx
+    ret
 
 ; -----------------------------------------------------------------------------
-; it_icpt_try - rule 5 for one side. in: BX = the head, DL = the side's
-; heading. out: CF = 1 turn there. Preserves BX, DX; clobbers AX, CX, SI, DI.
+; it_icpt_try - rule 5, BOTH sides in one. in: BX = the head, DL = its LEFT
+; side's heading, on the axis the player is NOT on (it_ai has asked). out:
+; CF = 1 turn to DL - which is then the side that passed, left or right.
+; Preserves BX and DH; clobbers AX, CX, SI, DI.
 ;
-; M is where the side's ray meets the player's forward ray: t = cells for us,
-; k = cells for the player, both signed by the rays' directions. A side
-; parallel to the player's heading has no M.
+; M is where a side's ray meets the player's forward ray: t = cells for us,
+; k = cells for the player, both signed by the rays' directions. The right
+; side is the left one reversed, so k is the SAME for both and t only changes
+; sign: at most one side has t > 0, and the model's "left, then right" is
+; exactly "the side whose t is positive" - no try of the other could pass.
+; (It was two calls, each working out k and t again: ~390 cycles a try,
+; and a Lunatic head-step made one in ten pairs of them - SPEC.md 108.10.3.)
 ; -----------------------------------------------------------------------------
 it_icpt_try:
-    push dx
-    mov al, dl
-    xor al, [IT_PLAYER + H_HD]
-    test al, 1
-    jz .no                          ; parallel (the same axis)
     test dl, 1
     jz .vert
     ; --- the side is E or W: M = (pu, our d) ----------------------------------
@@ -288,17 +433,22 @@ it_icpt_try:
     je .have
     neg ax                          ; ...times -1 for a player heading W
 .have:
-    ; SI = t, AX = k
-    or si, si
-    jle .no
+    ; SI = the left side's t, AX = k
     or ax, ax
-    jle .no
+    jle .no                         ; k <= 0: neither side
+    or si, si
+    jg .side                        ; t > 0: the left side
+    jz .no                          ; t = 0: neither
+    neg si                          ; t < 0: the RIGHT side's t is -t > 0
+    xor dl, 2                       ; (h + 1 = left + 2)
+.side:
     ; The model's test is t + 2 < pi <= 120 with pi = ceil(6k / p), the
     ; player's iterations to M. Neither half needs the quotient: for an
     ; integer n, ceil(x) > n exactly when x > n, and ceil(x) <= 120 exactly
     ; when x <= 120 - so it is 6k > p(t + 2) and 6k <= 120p, i.e. k <= 20p.
     ; No word MUL and no DIV (~270 cycles a try saved): shifts and one byte
     ; MUL. k <= 216 and t + 2 <= 218, so p(t + 2) <= 1,962 fits the word.
+    push dx                         ; DL = the side (DX goes to the sums)
     mov cl, [it_pspeed]             ; CL = p, 1..9
     xor ch, ch
     mov di, cx
@@ -309,7 +459,7 @@ it_icpt_try:
     shl dx, 1                       ; 16p
     add dx, di                      ; 20p
     cmp ax, dx
-    ja .no                          ; k > 20p: pi > 120
+    ja .nop                         ; k > 20p: pi > 120
     shl ax, 1                       ; 2k
     mov dx, ax
     shl ax, 1                       ; 4k
@@ -318,18 +468,21 @@ it_icpt_try:
     add al, 2                       ; t + 2 (t <= 216: no carry)
     mul cl                          ; AX = p(t + 2)
     cmp ax, dx
-    jae .no                         ; t + 2 < pi needs 6k > p(t + 2)
-    pop dx
-    push dx
-    mov cx, si                      ; the t cells to M are free
+    jae .nop                        ; t + 2 < pi needs 6k > p(t + 2)
+    pop dx                          ; the side again
+    mov cx, si                      ; the t cells to M are free: run(side, t)
+    test dl, 1                      ; >= t is run(side, unbounded) >= t, so a
+    jnz .cap                        ; N/S side scans to the ring (it_run's
+    mov cx, RUN_CAP                 ; unrolled .nsf, ~25 a cell) and an E/W
+.cap:                               ; one stops at t (repe scasb)
     call it_run_hd
     cmp ax, si
     jb .no
-    pop dx
     stc
     ret
-.no:
+.nop:
     pop dx
+.no:
     clc
     ret
 

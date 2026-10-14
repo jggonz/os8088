@@ -14744,7 +14744,7 @@ excitebikeload: excitebikedisk $(BUILD)/os8088-360.img
 # SHIPS through APPS_GAMES; `isotrondisk` is its own floppy in all four
 # geometries, carrying the package and its README.
 .PHONY: isotron isotrondisk isotrontest
-$(BUILD)/isotron.bin: apps/isotron/isotron.asm apps/isotron/itrules.inc apps/isotron/itai.inc apps/isotron/itinput.inc apps/isotron/ittest.inc apps/os88api.inc apps/os88ui.inc | $(BUILD)
+$(BUILD)/isotron.bin: apps/isotron/isotron.asm apps/isotron/itrules.inc apps/isotron/itai.inc apps/isotron/itinput.inc apps/isotron/ittest.inc apps/isotron/itcanvas.inc apps/isotron/itwin.inc apps/os88api.inc apps/os88ui.inc apps/os88pit.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/isotron/ -l $(BUILD)/isotron.lst -o $@ $<
 
 $(BUILD)/isotron.o88: $(BUILD)/isotron.bin tools/os88pkg.py $(PKGZSTAMP)
@@ -14766,12 +14766,18 @@ $(BUILD)/isotron360.img: $(ISO_DISKFILES) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(ISO_DISKFILES)
 	python3 tools/os88disk.py --verify $@
 isotrondisk: $(BUILD)/isotron.img $(BUILD)/isotron720.img $(BUILD)/isotron120.img $(BUILD)/isotron360.img
-# The rules gate by hand (the isotronrules and isotronsim soak rows): the host
-# model's selfcheck, then seeded bot games on MartyPC's 5150, round for round
-# against the model
+# The gates by hand (the isotronsim, isotronrules, isotronbound, isotronwin and
+# isotronega soak rows): the host model's selfcheck, then on MartyPC seeded bot
+# games round for round against the model, the canvas byte for byte after
+# every round, and the windowed picture pixel for pixel on CGA, Hercules, VGA
+# and an EGA kernel. The price (isotronperf) is `python3 tests/isotron.py
+# --perf all`: minutes, so not here.
 isotrontest: isotrondisk $(BUILD)/os8088-360.img
 	python3 tools/isotronsim.py --selfcheck
 	python3 tests/isotron.py --rules
+	python3 tests/isotron.py --bound
+	python3 tests/isotron.py --win all
+	python3 tests/isotron.py --win ega
 
 # REDLINE native CPU/graphics performance lab (SPEC.md 103).
 .PHONY: redline redlinedisk redline-profile

@@ -2735,17 +2735,23 @@ SOAK = [
         "sentence is VGA, CGA OR HERC ONLY since wave 6). "
         "Splash and help pixel-identical, Enter refused, heap back",
         needs=("marty", "nasm"), wants=("build/excitebike360.img",)),
-    Row("isotronsim", "soak", py("tools/isotronsim.py", "--selfcheck"), 2.0,
+    Row("isotronsim", "soak", py("tools/isotronsim.py", "--selfcheck"), 11.0,
         "isoTron's host reference model (tools/isotronsim.py, SPEC.md 108.3 - "
-        "108.6), which is NORMATIVE for the rules, the computer and the pace: "
-        "six stored seeded bot games (two a tier, each covering a tower "
-        "1-2-3-4-1 and ending in three losses) replayed by hash, the Rookie "
-        "rate table of 108.4.1, the RNG's first bytes, the tower rule re-derived "
-        "from the winners, and three NEGATIVE CONTROLS that must each change "
-        "the stored hashes - 'every win raises', the LCG multiplier 25175 and "
-        "the computer moving before the player. It is the oracle isotronrules "
-        "holds the guest to, so it is held first. No emulator"),
-    Row("isotronrules", "soak", py("tests/isotron.py", "--rules"), 30.0,
+        "108.11), which is NORMATIVE for the rules, the computer, the pace and "
+        "the picture: six stored seeded bot games (two a tier, each covering a "
+        "tower 1-2-3-4-1 and ending in three losses) replayed by hash, the "
+        "Rookie rate table of 108.4.1, the RNG's first bytes, the tower rule "
+        "re-derived from the winners; THE CANVAS - the k* = 1, 22 and 23 "
+        "fixtures, and 30 rounds (64,000+ steps) held to an independent full "
+        "repaint after EVERY step (back-to-front walls cut only at the ring, "
+        "sharing no code with the probe); the windowed presenters' look-up "
+        "tables built the guest's way against a per-pixel rendering of each "
+        "look at Hc 136, 284, 286 and 400; the guest's own look tables and "
+        "lettering read out of its source and compared. FIVE NEGATIVE CONTROLS "
+        "must each fail: 'every win raises', the LCG multiplier 25175, the "
+        "computer moving before the player, a probe that stops at 21 and a "
+        "span that is not clipped. Measured 6.8 s alone, 10.9 s in a soak lane (wave 2). No emulator"),
+    Row("isotronrules", "soak", py("tests/isotron.py", "--rules"), 45.0,
         "isoTron's rules on the 8088 (SPEC.md 108.3 - 108.7): MartyPC's 5150 "
         "with a CGA plays the first stored game of each tier with the harness "
         "flags FAST | BOT | NOFLOW | HOLD, and after EVERY round the guest's "
@@ -2759,6 +2765,67 @@ SOAK = [
         "real keystrokes through it_key: the FIFO's depth and drop, F10/F9, "
         "a double-tap U-turn, P, Space kept during CRASH, Esc, GAME OVER",
         needs=("marty", "nasm"),
+        wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotronbound", "soak", py("tests/isotron.py", "--bound"), 40.0,
+        "isoTron's occlusion bound on the 8088 (SPEC.md 108.10): MartyPC's 5150 "
+        "CGA plays two stored games (Rookie 2425, Lunatic 702: 17 rounds, every "
+        "tower height) FAST | BOT | NOFLOW | HOLD and after EVERY round reads "
+        "the guest's bound counters and its whole 64,000-byte canvas claim: "
+        "the most canvas bytes a step's k* scan examined <= 22 and the most "
+        "rows it wrote <= 23, both COUNTED in it_span and both equal to the "
+        "model's count of the same thing, with the model's probe limit of 21 "
+        "required to count differently (the negative control), and the "
+        "PACKAGE assembled with -DIT_SCAN21 (the scan one row short, two "
+        "bytes of the image) booted from a scratch floppy and refused by the "
+        "same comparison (the guest's); and the canvas "
+        "byte for byte the model's. The "
+        "guest finds k* by scanning its canvas COLUMN for the first TOP pixel "
+        "(Lemma 3) and the model by probing the GRID's front diagonal (Lemma "
+        "2), so the equality holds two derivations to each other; the title's "
+        "canvas is compared first",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotronwin", "soak", py("tests/isotron.py", "--win", "all"), 60.0,
+        "isoTron's windowed picture on the GLASS (SPEC.md 108.11), on MartyPC's "
+        "5150 CGA, 5150 Hercules and XT-VGA: the title and four rounds of a "
+        "seeded game (h1, h1, h2, h3), each read off the card - the CGA and "
+        "Hercules framebuffers, the VGA's own rendering - and compared PIXEL "
+        "FOR PIXEL with the model's presenter (win1 on the 1bpp cards, win4 in "
+        "16 colours) of the model's canvas, outside the overlay text rects; "
+        "the content around the picture black; the overlays' text present; "
+        "and the guest's canvas equal to the model's at each. It holds the "
+        "whole present, the per-step boxes, their merging and the box-minus-"
+        "overlays cut together",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotronega", "soak", py("tests/isotron.py", "--win", "ega"), 75.0,
+        "isoTron's windowed picture on an EGA desktop (SPEC.md 39.24, 108.11): "
+        "a private VIDEO=ega kernel tree (tools/os88build.py) on MartyPC's "
+        "XT-VGA - the 640 x 350 x 16 geometry, as excitebike_front's ega arm "
+        "does - and the same title-and-four-rounds comparison as isotronwin "
+        "against the model's 16-colour presenter at the EGA's Hc. Measured 20 s "
+        "with the tree built, ~70 s when it builds it",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img",)),
+    Row("isotronperf", "soak", py("tests/isotron.py", "--perf", "all"), 270.0,
+        "isoTron's windowed price on the XT (SPEC.md 108.10.3, 108.11.7; "
+        "ISOTRON-PLAN section 16), MartyPC's cycle counter on the 5150 CGA, "
+        "5150 Hercules and XT-VGA: a computer HEAD-STEP whole - its RNG byte, "
+        "its decision, its move and its picture - as the median over EVERY "
+        "computer head-step of two whole rounds of a seeded FAST game at "
+        "Rookie and at Lunatic (1,049 and 3,177, each round's count held to "
+        "the model's, so the sample is the same on every run), against 3,000 "
+        "cycles; a paced WAKE (the lock, the steps and the "
+        "present) at Rookie h1 against 22 ms on 1bpp and 30 on VGA, and at "
+        "Lunatic h4 at full boost against 35 / 50 ms - and when such a wake "
+        "passes 45 ms, the presentation governor must have engaged after it. "
+        "Then a ROUND'S START at h1 and h4: the rebuild, its wake's hold, and "
+        "the whole present going out in bands - every band's hold under 50 ms "
+        "- with the span from the rebuild to the last band reported, each "
+        "round started by ONE byte written inside the trace (no pause there, "
+        "which could resume past a stop the pump had not recorded). "
+        "Measured 260 s for the three machines (wave 2's repair)",
+        needs=("marty", "nasm"), serial=True,
         wants=("build/isotron360.img", "build/os8088-360.img")),
     Row("excitebikesim", "soak", py("tools/exbsim.py", "--selfcheck"), 3.0,
         "the reference model's own gate (tools/exbsim.py, SPEC.md 102.3, 102.6): "
