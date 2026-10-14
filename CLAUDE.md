@@ -102,23 +102,11 @@ make bootdiag # WHY a BIOS answers `Disk error` and stops (§2.9.10). SIX
               # BOOTDIAG.COM rides on all six for a machine that boots DOS
               # but not this. Nothing here ever writes to a disk
 make test-fast   # THE REGRESSION SUITE (docs/TESTING.md, tools/os88test.py,
-make test-full   #   tests/suite.py). Three tiers, each with an ENFORCED
-make test-soak   #   budget CHARGED IN CPU, not wall clock, so a loaded box
-                 #   cannot fail it — the runner FAILS a tier that
-                 #   overruns, so a row that no longer fits is a decision
-                 #   somebody takes rather than a drift nobody notices.
-                 #   fast ~2s, host-side only, and it already runs as part of
-                 #     `all`: the API table decoded out of kernel.bin and
-                 #     compared with the SDK, a constant mirrored in two files,
-                 #     every shipped floppy walked by an independent FAT12
-                 #     reader, unreachable code, the doc gate, and that every
-                 #     test in tests/ is registered somewhere or says why not
-                 #   full ~50s, THE PRE-MERGE GATE — adds the knob kernels and
-                 #     kern_small (every configuration `all` does NOT build, so
-                 #     the only thing keeping them assembling), the C toolchain
-                 #     and a boot to a desktop on both 1bpp adapters
-                 #   soak no budget — the rest of tests/, one subject each:
-                 #     `python3 tools/os88test.py soak -k 'disp*'`
+make test-full   #   tests/suite.py). fast (host-side, run by every `make`)
+make test-soak   #   and full (did you obviously break the OS?) fail over a
+                 #   CPU-charged budget. soak is the rest, one subject a
+                 #   row, and takes a -k: `os88test.py soak -k 'disp*'`.
+                 #   The knob kernels are `soak -k buildmatrix`
 make zcheck   # play every Z-machine story to a script and diff it against
               # dfrotz (§61.13). `make zh` builds the harness interpreter;
               # `tools/zharness.py <story> --repl` types at one by hand. This
@@ -708,15 +696,17 @@ whose `LESSONS.md` is what MIDIRack's (SPEC.md §105.9.4, §105.9.5) learned.
 - **Every disk-visible base is 512-byte aligned.** int 13h answers a transfer
   straddling a 64KB physical boundary with error 09h, and only starting
   512-aligned prevents it. The symptom is "Disk error" on a large save.
-- **Memory is two guards, not one** (docs/KERNEL-MEMORY.md): `KERN_BUDGET` is
-  the kernel's whole RAM footprint, `KERN_CODE_MAX` is `.text` + `.bss` inside
-  one 64KB window because offsets are 16 bits. They are relieved by different
-  mechanisms. **Raising either is a decision to take with whoever asked for the
-  feature, not a build fix.**
+- **Memory is two guards: `kern_big` resides in 100KB, `kern_small` in 64KB**
+  (`KERN_BUDGET`, docs/KERNEL-MEMORY.md). Both boot on 128KB, and `.text` +
+  `.bss` stay inside one 64KB window (`KERN_CODE_MAX`). Development may run 2KB
+  over a budget (`KERN_GRACE`); `make budget-check` holds it exactly before a
+  PR or release. **Raising any of them is a decision to take with whoever asked
+  for the feature, not a build fix.**
 - **Before spending a resident byte, ask whether the feature is an ON-DEMAND
   MODULE** (§2.8, `kernel/mod.inc`, docs/plans/completed/ONDEMAND-PLAN.md §1's
   test): kernel code that ships as a file (`CTRL.DRV`, `FORMAT.DRV`,
-  `CLONE.DRV`, `HIBER.DRV`, on kern_big `DOCK.DRV` and `EXTD.DRV`, and on
+  `DISKOPS.DRV`, `HIBER.DRV`, on kern_big `DOCK.DRV`, `EXTD.DRV` and
+  `WIN95.DRV`, and on
   kern_small `FILECP.DRV` and `FDLG.DRV`) and
   is read into a heap claim when the feature is asked for, freed when it is
   done. A feature qualifies when the system disk is already required to use
@@ -831,10 +821,9 @@ The rules that fall out:
 7. **Degrade by tier.** `OSAPI_CPU_INFO` answers `CPU_8086` for the target
    machine, which is a fact the code can test rather than a guess about speed.
 
-Three defects are **invisible in an emulator** and cost this project bug after
-bug: a **visible redraw** (seconds on real hardware), a **double-draw flash**
-(anything drawn twice), and **input overrun**. None showed in a screendump;
-every one was found on hardware or by counting.
+Three defects cost this project bug after bug: a **visible redraw**, a
+**double-draw flash** and **input overrun**. A screendump shows none of them;
+MartyPC's `flicker()`/`pace()` measure them (PERFORMANCE.md Part 3.1/3.2).
 
 That is the whole of it that applies to every change. Open PERFORMANCE.md
 itself for one of four reasons — it is 6,553 lines and over half is a log of
