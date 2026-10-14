@@ -169085,3 +169085,390 @@ a look apart agree, and says so when they did not - and in five runs alone
 afterwards it said so in every one, the pixels that moved the status bar's
 `Memory:` digits (the CGA's 368-390 x 165-171, the VGA's 464-486 x 475-481)
 and the menu bar's clock: the cause, seen. All five passed.
+
+## 108. isoTron — a light-wall duel in a raised 3D arena (`apps/isotron/isotron.asm`)
+
+ISOTRON.O88 is a light-wall duel: the player against the computer on a raised
+slab, each trailing a wall that is a crash to touch. It is a native 8086
+remake of a 1982 IBM PC game, written from that game's **observed rules** -
+there is no source and no disassembly behind it - and drawn in the original's
+45-degree cabinet projection, every trail an extruded wall. A player win that
+follows a player win stacks the next arena one slab higher, with one more
+computer head; past four the tower starts again. The design record is
+`docs/plans/ISOTRON-PLAN.md`. This section is the contract, written wave by
+wave and each subsection before the code it describes; until a subsection
+exists, nothing it would describe is built.
+
+`tools/isotronsim.py` is the host reference model and is **normative** for
+§108.2 - §108.6: the rules, the computer's decisions and the pace are written
+there as code a second time, and `tests/isotron.py` holds the guest to it
+round by round on MartyPC (§108.7).
+
+### 108.1 Provenance (binding, the owner's decision)
+
+1. The constants below - the grid, the projection, the wall, the starts, the
+   tower rule and the fitted pace - are **facts measured from footage of the
+   original running on an IBM 5150 and from emulator captures of it**, pinned
+   as the remake's own constants. Rules are not expression. The computer's
+   decision rules, the difficulty tiers beyond the first, the sounds, the
+   colours, the 1bpp patterns, the screens and every word of text are this
+   project's own invention, and say so where they are pinned.
+2. The name is **isoTron** on every screen, in the window title and in every
+   file. The original's title, its publisher's name and address, its
+   copyright line and its joke labels never appear; there is no copyright
+   line anywhere. The title lettering (wave 4) is the game's own wall
+   renderer drawing block letters.
+3. The reference footage, the original executable and the working files the
+   rules were read from live **outside the tree**. Nothing in `make` or in
+   any test reads them. `tests/unit/t_isotron_clean.py` (fast tier) fails the
+   build if any file the game owns - `apps/isotron/`, every `tools/` and
+   `tests/` file named for it, and the Makefile's isoTron block - names the
+   reference folder or the original executable, if the shipped package
+   carries the original's name, its publisher's or a copyright line, if a
+   tool imports beyond the standard library, or if `apps/isotron/` holds a
+   binary. Its `--selftest` injects a token into a temporary copy of the tree
+   and must see the scan fail.
+
+### 108.2 Coordinates, the grid and the projection (wave 1)
+
+| constant | value |
+|---|---|
+| playfield | u = 1..215 (left to right) by d = 1..99 (front to back): 21,285 cells |
+| outline ring | u = 0 or 216, d = 0 or 100: occupied cells (`C_EDGE` = 03h) |
+| grid | one byte a cell, `idx = d*217 + u`, 217 x 101 = **21,917 bytes**; E/W are +-1, N/S are +-217 |
+| headings | 0 N (+d), 1 E (+u), 2 S (-d), 3 W (-u); left = (h+3)&3, right = (h+1)&3; bit 0 is the axis |
+| a cell's contents | 0 free, `C_EDGE`, or the owner (`C_PLAYER` 10h, `C_COMP` 20h) OR'd with bit 0 = 1 when the move that entered it was N/S |
+| screen position of (u, d) at tower height h | top pixel at x = u + d, y = 174 - d - 24(h-1), in a 320 x 200 logical picture |
+| one step | E is (+1, 0) on the screen, N is (+1, -1) |
+| a wall | one screen column: 1 top pixel and 22 face rows |
+| collision | moving into a non-zero cell (a wall or the outline) is a crash. The rims are paint only |
+| player start | (108, 27) heading N; the cell is occupied at round start |
+| computer start | (108, 90), on the back rim; one cell for every head, occupied once |
+
+The slab, the canvas, the occlusion span and its proof are wave 2's, and
+their subsections land with it.
+
+### 108.3 A round, an iteration, the score and the tower (wave 1)
+
+**A round** at tower height h:
+
+1. The grid is cleared and its outline ring set. The player is placed at its
+   start, heading N, speed p = 2 sixths, accumulator 0, turn FIFO empty.
+2. **h computer heads** start from (108, 90). At h = 1 there is one, heading
+   E or W by the round's **first RNG byte** (bit 0: 0 = E, 1 = W). At h = 2..4
+   they head W, E, S, N, taking the first h, and are moved in that index
+   order. The *opening head* (§108.6 rule 1) is index 0 at h = 1 and the E
+   head (index 1) above.
+3. The round runs in **iterations**:
+   - **The player first.** F9 resets p to 2; then each F10 adds 1, to at most
+     9. `acc += p`, and while `acc >= 6`: `acc -= 6`, pop at most one turn
+     from the FIFO and apply it, and move one cell. A crash kills the player
+     and **the computer wins now**: the heads do not move in that iteration.
+   - **Then each live computer head, in index order**: draw one RNG byte, run
+     the decision (§108.6), move one cell. A crash kills that head; its wall
+     stays.
+   - If every computer head is dead, **the player wins**. A contested cell
+     goes to whoever moved into it first in this order.
+   - The iteration is charged its cost (§108.4).
+4. Every cell placed - the two starts, then every move - folds into the
+   round's checksum: `ck = rol(ck, 1) XOR idx`, starting from 0.
+
+**The score.** The winner of a round scores 1; the scores run for the game,
+with no target (the footage ends a game at 10-9). **Three losses in a row end
+the game**; a win resets the count.
+
+**The tower** (the anomaly the brief asked about, resolved):
+
+- a player win raises the tower **only if the previous round was also a
+  player win**;
+- h + 1 = 5 resets it to 1;
+- a loss never lowers it;
+- a new game starts at h = 1 with "previous round" set to none, and after a
+  reset "previous round was a win" stays true, as the rule says.
+
+This fits **all 22 rounds** of the footage. The brief's simpler rule, "every
+win raises", is refuted by six of them: it would raise after the first round
+of a game, after a win that followed a loss, and after each win of the
+alternating run late in the second game, none of which the footage shows.
+Whether a win immediately after a reset raises again is not observable (the
+footage's next round was a loss); the rule above is the reading taken, and it
+is one line of `it_round_end` and of `Game.play_round` should the owner read
+it otherwise.
+
+### 108.4 The pace (wave 1)
+
+The original's speed came from its CPU: it had no timer, and its loop did one
+iteration's work as fast as the 5150 could. isoTron keeps the **iteration**
+as the unit of the game and charges each one its **fitted 5150 cost**, so a
+4.77 MHz XT and a 386 play at the original's pace and the couplings the
+footage shows survive - more heads slow everyone, a boost slows the computer,
+a dying head speeds the game.
+
+#### 108.4.1 The cost
+
+In u = **1/768 of a BIOS tick** (71.52 us):
+
+```
+cost(iteration) = A + B * (live heads at the iteration's start)
+                    + C * (player cells moved in it)
+```
+
+| tier | A | B | C | pace |
+|---|---|---|---|---|
+| 1 / A **Rookie** | 36 | 178 | 62 | the 5150 footage's: 2.57, 12.73 and 4.43 ms |
+| 2 / B **Veteran** | 27 | 134 | 47 | x4/3 (ours) |
+| 3 / C **Lunatic** | 18 | 89 | 31 | x2 (ours) |
+
+The player's speed p is in **sixths of a cell an iteration**: 2 normal, each
+F10 or Up keystroke +1 (typematic repeats included, so a held key ramps it as
+the footage shows) to at most 9, and F9 or Down back to 2. The rates this
+gives at Rookie, computer cells/s per head and player cells/s:
+
+| h | p = 2 | p = 9 |
+|---|---|---|
+| 1 | 59.6 / 19.9 | 45.5 / 68.3 |
+| 2 | 33.9 / 11.3 | 28.8 / 43.2 |
+| 3 | 23.7 / 7.9 | 21.1 / 31.6 |
+| 4 | 18.2 / 6.1 | 16.6 / 24.9 |
+
+The footage measured 60 / 20 at h1 and 34 / 12 at h2. Every Lunatic rate is
+double; the worst case anywhere is **228 head-steps a second** (Lunatic, h1,
+full boost). `python3 tools/isotronsim.py --rates` prints the whole table and
+its `--selfcheck` holds the Rookie rows to 0.15.
+
+#### 108.4.2 The clock and the governor
+
+Windowed, the worker (§108.8) wakes once a tick (`OSAPI_TASK_SLEEP` 1) and
+keeps `debt` = now - V in u, a signed word:
+
+```
+debt += min(ticks elapsed since the last wake, 2) * 768
+debt  = min(debt, 1536)            ; a stall owes at most one tick past this one
+while debt >= 0 and the round goes on:  iterate(); debt -= cost
+```
+
+- A stall - a floppy access, a long paint - drops the time it owes rather
+  than bursting the heads across the arena. Every move still tests one cell,
+  so nothing ever tunnels.
+- `debt = 0` (V = now) at round start, and on every wake while paused, so
+  nothing bursts after either. At a round start it is the **last** thing
+  done, after every picture is built: wave 1 first took V before its
+  448 ms debug-grid walk, and every paced round then opened with a 2-tick
+  burst. Wave 2's canvas build sits in the same place and inherits the rule.
+- The logic runs whether or not the window can be seen; presentation is per
+  wake. **An overloaded machine loses frame rate and keeps the game's pace.**
+- The full-screen clock (FASTTICK sub-ticks) is wave 3's.
+
+### 108.5 Between rounds (wave 1)
+
+| state | what | leaves on |
+|---|---|---|
+| CRASH | the round's result is shown | 15 ticks (0.8 s) |
+| WAIT | "Space to continue" | Space or Enter: the next round |
+| GAME OVER | `THREE LOSSES IN A ROW. GAME OVER.` | 64 ticks (3.5 s), or Space: the title |
+
+The slab's paced sweep, the round-start beeps and the tower chime are waves 4
+and 5. Esc ends a game from any of these and from play; at the title it does
+nothing in a window.
+
+### 108.6 The computer (wave 1)
+
+**The RNG** is the package's own: a 16-bit LCG, `s = s*25173 + 13849 (mod
+65536)`, and the byte drawn is `s >> 8` - one `MUL` on the 8088. A game is
+seeded from `OSAPI_GET_TICKS` (or the harness word `it_tseed`).
+**Every computer head-move draws exactly one byte before it decides**, so the
+stream depends on the move count alone; the h = 1 heading at round start is
+the only other draw. `OSAPI_RAND` is not used: its seed is a kernel global
+any package can stir.
+
+**run(dir, cap)** is the number of free cells from a head along dir, counted
+up to cap. Each rule below names its cap, and the caps are part of the
+contract: the decision is identical to an uncapped one, and they are what
+bounds the worst case.
+
+Per head, in order; **the first rule that turns ends the decision**:
+
+1. **Opening.** The opening head (§108.3), not yet turned this round,
+   heading E or W, with `leg == 32` and `run(S, LOOK+1) > LOOK`: turn S.
+2. **Blocked.** If `run(ahead, LOOK+1) <= LOOK`: compare `run(left, 255)`
+   and `run(right, 255)` and turn to the larger. On a tie, `r & 1` decides
+   (0 = left); if both are 0, go straight - and crash.
+3. **U-turn pending.** If a wander armed one, decrement it; at 0, turn to
+   its side if `run(side, 17) > 16`, else carry on down the list.
+4. If `leg < 8`, go straight.
+5. **Intercept**, if `r < ICPT` and the player is alive: for side in (left,
+   right), skipping a side parallel to the player's heading, find M where
+   the side's ray meets the player's forward ray; `t` = the head's cells to
+   M and `k` = the player's, both > 0; the player's iterations there are
+   `pi = ceil(6k / p)`; turn if `t + 2 < pi <= 120` and `run(side, t) >= t`.
+6. **Wander.** If `(r XOR A5h) < WANDER`: side = left if `r & 1`, else
+   right. If `run(side, 17) > 16`, turn there and arm a U-turn
+   `8 + (r & 7)` moves on, to the same side.
+7. Otherwise go straight. A turn sets `leg = 0` and marks the head turned;
+   each move increments `leg`.
+
+| tier | LOOK | ICPT (/256) | WANDER (/256) |
+|---|---|---|---|
+| Rookie | 1 | 64 | 6 |
+| Veteran | 3 | 96 | 4 |
+| Lunatic | 6 | 128 | 2 |
+
+Rookie's three are the footage's reading (the computer turned at the last
+cell, cut across the player's path about a quarter of the time it could, and
+made parallel "ladders" of U-turns rarely); the other two tiers are ours.
+
+**The worst decision** is rule 2 with both sides open. MEASURED on MartyPC's
+5150 (wave 1's review, then its fixes): `it_run` costs **250 + 54 cycles a
+cell** for a N/S run (a 7-byte `add / cmp / loope` loop at the fetch floor)
+and **228 + 15.6 a cell** for an E/W run (one `repe scasb`, DF set for W),
+where the first version was 195 + 82.5 either way. E/W sides of up to 215
+cells each are the worst, ~7.2k cycles for the pair (~7.6k with the look); a
+N/S pair shares one column, so at most 98 cells between them, ~5.8k. A
+typical decision measures **871 cycles median at Rookie and 1,180 at
+Lunatic** (1,028 and 1,457 before the fixes). Rule 5 decides without a
+divide: `t + 2 < ceil(6k / p) <= 120` is exactly `6k > p(t + 2)` and
+`k <= 20p`.
+
+### 108.7 Input, and the harness (wave 1)
+
+#### 108.7.1 Keys and the turn FIFO
+
+Keystrokes arrive in `W_ONKEY` on the UI task; the game runs on the worker.
+Turns go through a **3-entry single-producer single-consumer ring**: the
+producer writes the slot and then its head byte, the consumer reads the slot
+and then advances its tail byte, and neither writes the other's - so there
+is no lock, which a worker may not take (§20.6 rule 7). **One turn is popped
+per player cell**, so a fast double tap between two cells is two turns, a
+U-turn, and is never lost. A full ring drops the newest. Boosts are a count
+the producer increments and the consumer subtracts (one read-modify-write
+instruction each); F9 is a flag taken with `XCHG`. Start, pause, Esc and
+continue are flag bytes the worker acts on inside its own lock hold, so the
+game state has one writer - the About card's pause too, which the UI task
+POSTS (`it_qhold`: pause a round in play, never resume) rather than writes;
+the focus check that pauses a game that has lost the front runs on the
+worker. A pause, either way, redraws the message line, which is what says
+`PAUSED`. Steering keys are posted only in play, unpaused. A Space pressed
+during the 0.8 s of CRASH is KEPT and WAIT takes it on arrival. At the title
+a digit `1`-`3` in AL starts a game whatever AH says, so keypad 1, 2 and 3
+with NumLock (AH 4Fh, 50h - which is Down - and 51h) all do.
+
+| action | keys |
+|---|---|
+| turn left | Ins (52h), Left (4Bh), Z |
+| turn right | Del (53h), Right (4Dh), X |
+| faster | F10 (44h), Up (48h); every keystroke, repeats included |
+| normal speed | F9 (43h), Down (50h) |
+| pause | P |
+| continue | Space, Enter |
+| end the game | Esc |
+| at the title | 1, 2, 3: a game with sound; A, B, C: silent |
+
+Extended keys are tested on **AH** before anything looks at AL, and AL is
+never case-folded first (§67.11.1); keypad Ins with NumLock on (AL = '0',
+AH = 52h) is still Ins. The typematic filter on turns, the windowed /
+full-screen toggle keys and M are waves 3 and 5.
+
+#### 108.7.2 The harness (`apps/isotron/ittest.inc`)
+
+Bytes in the bss, **always assembled**. Inputs: `it_tseed` (word),
+`it_tdiff` (1..3), `it_tflags` (bit 0 FAST: iterations without the clock,
+16 a wake; bit 1 BOT: the harness's player; bit 2 NOFLOW: the title starts a
+game on `it_tgo`, and no crash pause or wait follows a round; bit 3 HOLD: at
+every round's end set `it_tpause` = 1 and do nothing until the test clears
+it), `it_tgo`, and `it_tinn` / `it_tinput`, a script of up to eight
+(iteration, key) entries for a FAST game without the bot. Outputs, read
+after every round: `it_iter`, `it_round`, `it_sp`, `it_sc`, `it_h` (the
+tower now), `it_hplayed`, `it_lossrow`, `it_prev`, `it_winner`, `it_rng`,
+`it_ck`, `it_nsteps` and `it_gover` (games ended). Marks: `it_step0` /
+`it_step1` bracket one head-step, `it_wake0` / `it_wake1` one wake's work
+under the lock, `it_frame_end` a worker pass. A mark is `name equ $` emitted
+only under `-DIT_MARKS` (`IT_MARK`): it adds no byte, so that image is the
+shipped one, and without the define the symbol stays out of nasm's map,
+where `tools/stkdepth.py` would read it as a routine boundary and price a
+worker that never reaches its own work. `tests/isotronlib.py` assembles with
+the define and checks the image against `build/isotron.o88`.
+
+**The bot** plays the player: one F10 at iteration 0, and, whenever the FIFO
+is empty and `run(ahead, 4) <= 3`, a turn toward the side with the larger
+`run(side, 255)` (left on a tie). It runs before each iteration, exactly
+where the model's `bot_input` does.
+
+#### 108.7.3 What is tested, and how
+
+| row | tier | asserts |
+|---|---|---|
+| `isotronclean` | fast | §108.1's provenance gate; its `--selftest` injection must fail |
+| `isotronsim` | soak | `tools/isotronsim.py --selfcheck`: six stored seeded bot games (two a tier, each covering a tower 1-2-3-4-1 and ending in three losses) by hash, the Rookie rate table, the RNG's first bytes, the tower rule re-derived from the winners, and three NEGATIVE CONTROLS that must each change the stored hashes: "every win raises", the LCG multiplier 25175, and the computer moving before the player |
+| `isotronrules` | soak | MartyPC 5150 CGA: the first stored game of each tier played FAST + BOT + NOFLOW + HOLD on the guest; after EVERY round the guest's height, winner, iterations, scores, tower, losses in a row, RNG state, checksum and head-steps equal the model's; the game ends and returns to the title; and the model with "every win raises" must disagree with what the guest played. Then a SCRIPTED game (`it_tinput`: two F10s, a right turn, a left and an F9 at fixed iterations of every round, no bot) is held to the model the same way: `it_script` POSTS each entry into the UI task's mailbox (`it_kboost`, `it_kf9`, the FIFO) as `it_key` would, so the worker's own consumer takes it. LAST, THE KEYBOARD ITSELF (HOLD only - no FAST, BOT or NOFLOW): real keystrokes through MartyPC's keyboard into `W_ONKEY`, `it_key` and `it_turn_ok`, with the worker held by `it_tpause` so each post is read before an iteration takes it - `1` starts a game; `P` pauses it and a Del while paused is refused; Space resumes; Del Ins Ins Ins leave the FIFO right-left-left (depth 3, newest dropped); F10 F10 F9 post 2 and 1; released, the speed is 4/6 and the turns are a double-tap U-turn (d = 28, heading W); Space during CRASH is kept and WAIT takes it; Esc ends a game; and a game at two losses in a row goes CRASH -> GAME OVER -> the title |
+
+### 108.8 The package (wave 1)
+
+- **One window** (`isoTron`), `OSAPI_WM_PREFER` 638x420 / 718x300 / 638x200
+  frames, `OSAPI_WM_OWNBG`, not resizable but `OSAPI_WM_ONRESIZE` hooked,
+  `OS88_REGION_MOVABLE`, `OS88_ALTENTER_ARM`.
+- **The About card** through `OSAPI_ABOUT_SET` and `os88ui.inc`'s standard
+  card (`OS88UI_ABOUT`): the name, one line of what it is, two of keys. No
+  Help menu, no credit line, no copyright line. A game in play pauses under
+  the card; any key, click or menu pick takes it down.
+- **The Game menu**: Rookie, Veteran, Lunatic (a new game at that tier, with
+  sound), Pause, Sound, Colours and Full Screen - the last three greyed with
+  their reason, "(not yet)", until waves 3 and 5 - and End Game.
+- **One claim**, `OSAPI_MEM_CLAIM` of 58 KB, pinned (§66's default):
+
+  | offset | bytes | what |
+  |---|---|---|
+  | 0 | 32,000 | the canvas (wave 2; wave 1's debug view borrows it) |
+  | 32,000 | 21,917 | the grid |
+  | 53,920 | 5,120 | the presenters' strip (wave 2), on a 16-byte boundary |
+  | **59,040** | | the end; `%error` if the layout passes 64 KB |
+
+  A refused claim is said in words in the window - `isoTron needs 58 KB of
+  free memory; this machine has N KB.`, N being `OSAPI_MEM_AVAIL`'s largest
+  run - and no worker is started. That is `kern_small`'s answer (a 52.5 KB
+  arena): a package that merely wants heap refuses itself (§24.5). It ASKS
+  before it claims (`OSAPI_MEM_AVAIL` against 58, then the claim, whose CF
+  is still tested): a claim that fails sheds the disk caches on its way
+  down, and that machine would otherwise pay for it on every launch.
+- **The worker** (`OS88_STACK_192`: `tools/stkdepth.py` prices its deepest
+  static chain at 34 bytes, a relayout's HUD line, so 98 with the 64-byte
+  interrupt floor, 1.96x; spawned from the first paint and declared
+  restartable, `OS88_WORKER_RESTARTABLE`): `OSAPI_TASK_ALIVE`, then
+  a one-tick sleep (a FAST harness game yields instead), the focus check
+  (`OSAPI_WM_TOP` and `OSAPI_MENU_OWNER`: losing the front pauses a game,
+  stickily), then under the gfx lock: the commands the UI task posted, the
+  state machine and the governor, and the present. **Every grid write happens
+  inside a lock hold**, so a `W_PAINT` never sees half an iteration.
+- **Wave 1's picture is a debug view**, deleted in wave 2: a flat top-down
+  image of the grid, one pixel a cell (d = 100 at the top), composed into a
+  1bpp band in the canvas region (80 bytes x up to 400 rows, the content's
+  width to 640) with a HUD line and a message line of 8x8 glyphs copied
+  from `OSAPI_FONT_GLYPHS`. A step sets one bit and widens a dirty row range;
+  a wake blits that range 217 px wide through `OSAPI_GFX_BLIT1` - MEASURED
+  on MartyPC's 5150 at 61k cycles median a paced Rookie wake and 99k at
+  Lunatic (the dirty range is the UNION of every head's rows: the player
+  near d = 27 and the computer near d = 90 make it ~60 rows) - and a text
+  line only when it changed. A wake with nothing owed returns before the
+  clip, the content box and the layout check: 947 cycles at the title and
+  1,175 paused, where it was 13.2k (5% of the XT, 18 times a second). A
+  round start draws the fresh grid's ring directly; the full walk (2.14M
+  cycles, 448 ms) is a relayout's alone, and the whole round start measures
+  254k cycles where it was 2.32M. A paint
+  blits the whole band and fills what lies outside it (past 640 columns on a
+  Hercules, past 400 rows) once - every pixel of the content written once.
+  **The band goes down ON the byte grid**: its origin is the content's x
+  rounded UP to a multiple of 8 (`it_ox`), and the band is the content's
+  width less 7. A content box is not on the grid (x = 1 on CGA and VGA, 3 on
+  Hercules), and §5.4.2.8 reads an x off it as a HEAD mask - the band's
+  first byte lands on the byte column holding x and its first x & 7 pixels
+  are not drawn - so the first cut, which blitted at the content's own x,
+  drew the whole view shifted left and lost the ring's u = 0 side on every
+  adapter (u = 0..2 on Hercules, trails there included); `kern_small`
+  refuses such an x outright. The 0..7 columns left of the origin and the
+  ones right of the band are filled black with the strips past 640 and 400.
+  Content under 248 x 126 shows `Window too small.` in the band.
+- **Disks.** `ISOTRON.O88` is in `APPS_GAMES`: `GAMES/` on the 1.44MB, 1.2MB
+  and 720KB apps disks, `games360.img`, the everything set and the live
+  media. It is **not** on `apps360.img` (§24.6.1, dated 2026-10-13: that disk
+  had 29 clusters free) nor the 360KB combo (`COMBO_DROP`, the same ground).
+  `make isotrondisk` builds its own floppy in all four geometries, each
+  `os88disk.py --verify`'d, carrying the package and `README.MD`.

@@ -272,6 +272,18 @@ FAST = [
         "Makefile block reads no reference directory. FAST because a "
         "provenance rule belongs in front of the next make, and it costs a "
         "directory walk"),
+    Row("isotronclean", "fast", py("tests/unit/t_isotron_clean.py"), 0.2,
+        "isoTron carries nothing from the game it remakes (SPEC.md 108.1, "
+        "docs/plans/ISOTRON-PLAN.md section 0). It is a remake from OBSERVED "
+        "RULES and the reference footage and the original executable live "
+        "outside the tree; this walks every file the game owns "
+        "(apps/isotron/, the tools and tests named for it, the Makefile's "
+        "isoTron block) for the reference folder's and the executable's "
+        "names, holds the shipped package to no original name, publisher or "
+        "copyright line, keeps apps/isotron text-only and the tools on the "
+        "standard library. `--selftest` is its negative control (an injected "
+        "token must fail). FAST because a provenance rule belongs in front of "
+        "the next make, and it costs a directory walk"),
     Row("excitebikeaudiohost", "fast", py("tests/excitebike_audio.py", "--host"), 1.0,
         "EXCITEBIKE EXB.SND (SPEC.md 102.5) read back by a decoder that shares nothing with "
         "tools/excitebike_audio.py: <= 3,072 bytes, every voice of every song summing to the steps "
@@ -2723,6 +2735,31 @@ SOAK = [
         "sentence is VGA, CGA OR HERC ONLY since wave 6). "
         "Splash and help pixel-identical, Enter refused, heap back",
         needs=("marty", "nasm"), wants=("build/excitebike360.img",)),
+    Row("isotronsim", "soak", py("tools/isotronsim.py", "--selfcheck"), 2.0,
+        "isoTron's host reference model (tools/isotronsim.py, SPEC.md 108.3 - "
+        "108.6), which is NORMATIVE for the rules, the computer and the pace: "
+        "six stored seeded bot games (two a tier, each covering a tower "
+        "1-2-3-4-1 and ending in three losses) replayed by hash, the Rookie "
+        "rate table of 108.4.1, the RNG's first bytes, the tower rule re-derived "
+        "from the winners, and three NEGATIVE CONTROLS that must each change "
+        "the stored hashes - 'every win raises', the LCG multiplier 25175 and "
+        "the computer moving before the player. It is the oracle isotronrules "
+        "holds the guest to, so it is held first. No emulator"),
+    Row("isotronrules", "soak", py("tests/isotron.py", "--rules"), 30.0,
+        "isoTron's rules on the 8088 (SPEC.md 108.3 - 108.7): MartyPC's 5150 "
+        "with a CGA plays the first stored game of each tier with the harness "
+        "flags FAST | BOT | NOFLOW | HOLD, and after EVERY round the guest's "
+        "height, winner, iterations, scores, tower, losses in a row, RNG "
+        "state, placement checksum and head-steps must equal the model's - one "
+        "decision, one cell or one RNG byte apart fails the round it happened "
+        "in. Each game covers a tower 1-2-3-4-1 and ends in three losses and "
+        "the title; the model with the brief's 'every win raises' must "
+        "disagree with what the guest played (the row's negative control). "
+        "Then a scripted game posted through the UI task's mailbox, and LAST "
+        "real keystrokes through it_key: the FIFO's depth and drop, F10/F9, "
+        "a double-tap U-turn, P, Space kept during CRASH, Esc, GAME OVER",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img", "build/os8088-360.img")),
     Row("excitebikesim", "soak", py("tools/exbsim.py", "--selfcheck"), 3.0,
         "the reference model's own gate (tools/exbsim.py, SPEC.md 102.3, 102.6): "
         "the reference rider finishes both courses at turbo and each committed par "

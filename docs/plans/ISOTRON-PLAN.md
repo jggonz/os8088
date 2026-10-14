@@ -480,7 +480,15 @@ OSAPI_GFX_UNLOCK
    (2 logical px) into a device nibble through a 2 x 256 LUT indexed by
    device row parity.
 3. Write the nibbles into a strip.
-4. One `OSAPI_GFX_BLIT1` per box (at most 255 rows a call).
+4. One `OSAPI_GFX_BLIT1` per box (at most 255 rows a call), **at an x ON
+   the byte grid**. The content box is not on it (x = 1 on CGA and VGA, 3 on
+   Hercules), and SPEC.md 5.4.2.8 reads an x off the grid as a head mask -
+   the strip's first byte lands on the byte column holding x and its first
+   x & 7 pixels are not drawn; `kern_small` refuses such an x outright. Wave
+   1's debug view shipped exactly that and lost the arena's u = 0 wall on
+   every adapter, so the picture's origin is the content's x rounded UP to a
+   multiple of 8 (wave 1's `it_ox`), with the 0..7 columns left of it filled
+   once at a paint. `OSAPI_GFX_BLITP` takes the same origin.
 
 **Colour (VGA, EGA).**
 
@@ -949,7 +957,7 @@ the unpacked image size at +8 of `build/isotron.bin`.
 
 | row | tier | what it asserts | machine |
 |---|---|---|---|
-| `isotronclean` | **fast** (~0.2 s) | the provenance gate (§0.3, §12.1); a `--selftest` injects a token into a temp copy and must fail | host |
+| `isotronclean` | **fast** (~0.2 s) | the provenance gate (this plan's section 0, item 3); a `--selftest` injects a token into a temp copy and must fail | host |
 | `isotronsim` | soak | `tools/isotronsim.py --selfcheck`, including its negative controls | host |
 | `isotronrules` | soak | FAST + BOT seeded games at all 3 tiers. After every round, guest = sim on (winner, `it_iter`, scores, h, `it_lossrow`, `it_rng`, `it_ck`). Asserts a tower 1-2-3-4-1 and a three-loss game over. Negative control: the sim with "every win raises" must disagree | MartyPC `os8088_5150_cga_gla` |
 | `isotronbound` | soak | `it_maxprobe` and `it_maxspan` equal the sim's, and are at most 22 and 23; `it_ncol == 1` every step; the canvas (32,000 bytes) equals the sim's after each round | MartyPC |
@@ -1028,17 +1036,19 @@ path in it.
 
 ## 16. The per-step cycle budget on a 4.77 MHz XT (the gate the waves are measured against)
 
-**One head-step** (cycles, paper estimates; wave 2 and wave 3 replace each
-line with a MartyPC minimum-of-25):
+**One head-step** (cycles; the first two lines are MEASURED on MartyPC's
+5150 after wave 1's review fixes - the paper figures were 150 and 600 /
+9,000, under the 8088's fetch floor - and wave 2 and wave 3 replace the rest
+with a MartyPC minimum-of-25):
 
 | component | typical | worst | note |
 |---|---|---|---|
-| move, collision, grid mark, `it_ck` | 150 | 150 | |
-| AI decision (computer head) | 600 | 9,000 | worst = blocked: two runs of up to 215 cells |
+| move, collision, grid mark, `it_ck` | 470 | 470 | measured: 927 median with wave 1's debug bit, which is 460 of it |
+| AI decision (computer head) | 870 / 1,180 | ~7,600 | measured medians, Rookie / Lunatic. `it_run` is 250 + 54 a cell N/S and 228 + 15.6 a cell E/W (`repe scasb`); worst = blocked heading N/S with both E/W sides 215 free (a N/S pair shares one column, at most 98 cells between them) |
 | occlusion probes | 200 | 700 | at most 22, unrolled |
 | canvas span | 1,100 | 1,300 | at most 23 nibbles, read-modify-write |
 | counters and harness | 60 | 60 | |
-| **logic + canvas** | **2,100** | **11,200** | |
+| **logic + canvas** | **~2,800** | **~10,100** | Lunatic's typical; the 3,000 ceiling below has ~200 to spare |
 
 **Full-screen span hook**, added to each head-step:
 
@@ -1050,9 +1060,9 @@ line with a MartyPC minimum-of-25):
 | EGA | 0 per step (per-tick boxes, §8.2) |
 
 **Machine load at the worst rate** (228 head-steps/s, Lunatic h1 full
-boost), full screen: 228 x (2,100 + 1,800) + 54.6 frames x 1,500 =
-**971k cycles/s = 20%** of the XT on the slowest surface (Hercules). It is
-about 17% on CGA and VGA.
+boost), full screen: 228 x (2,800 + 1,800) + 54.6 frames x 1,500 =
+**1,131k cycles/s = 24%** of the XT on the slowest surface (Hercules). It is
+about 21% on CGA and VGA. (It read 971k / 20% on the paper logic figures.)
 
 **Ceilings the perf row enforces** (each line also at most +25% of its
 measured wave value once pinned):
@@ -1199,7 +1209,7 @@ python3 tools/os88test.py soak -k 'isotronperf'   # windowed lines under the sec
 ```
 
 - A human-checked picture of each windowed adapter goes in the reports
-  folder and the PR body, judged against §17.1 and §17.2.
+  folder and the PR body, judged against this plan's section 17, items 1 and 2.
 
 ### Wave 3 - the full-screen colour renderers and the toggle
 

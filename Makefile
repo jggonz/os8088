@@ -12043,7 +12043,7 @@ APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BUILD)/cyclone.o88 \
               $(BUILD)/mines.o88 $(BUILD)/skies.o88 $(BUILD)/dotdel.o88 \
               $(BUILD)/missile.o88 $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88 \
               $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88 \
-              $(DM_SHIP)
+              $(DM_SHIP) $(BUILD)/isotron.o88
 
 # PIXELSTEIN 3D IS NOT ON apps360.img (SPEC.md 97.9, 24.6.1's dated
 # decision, taken 2026-09-13): that geometry sat at 313 of 354 clusters and
@@ -12076,8 +12076,13 @@ APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BUILD)/cyclone.o88 \
 # (2026-09-30): that disk was 354 of 354 clusters when DrMarco stopped being a
 # `local` package, and DrMarco is ~68 of them with its three front screens.
 # games360.img carries it, which is where a 360KB machine finds every game.
+#
+# ISOTRON IS NOT ON apps360.img EITHER (SPEC.md 108.8, 24.6.1's rule, dated
+# 2026-10-13): that disk had 29 of its 354 clusters free when isoTron arrived,
+# and the curation is remade every time this geometry runs out - games360.img
+# carries every game, isoTron among them, and is where a 360KB machine finds it.
 APPS_GAMES_360 := $(filter-out $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88 \
-                    $(BUILD)/dotdel.o88 $(DM_SHIP),$(APPS_GAMES))
+                    $(BUILD)/dotdel.o88 $(DM_SHIP) $(BUILD)/isotron.o88,$(APPS_GAMES))
 
 # The CORE PACKAGES (SPEC.md 24.3) are a SECOND copy on the system disk and
 # never a move, so the two lists above are unchanged and still carry every
@@ -13373,10 +13378,13 @@ imager:
 # DRMARCO (SPEC.md 100) goes on PIXELSTEIN's ground, with its three front
 # screens: ~68 clusters at 360 KB, a game and not a calibration instrument,
 # added 2026-09-30 when it stopped being a `local` package.
+#
+# ISOTRON (SPEC.md 108) goes on the same ground, added 2026-10-13: a game, not
+# a calibration instrument, and games360.img carries it at this geometry.
 COMBO_DROP := $(BUILD)/artful.o88 $(BUILD)/texpad.o88 \
               $(BUILD)/tracker.o88 \
               $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
-              $(BUILD)/pxstein.o88 $(DM_SHIP)
+              $(BUILD)/pxstein.o88 $(DM_SHIP) $(BUILD)/isotron.o88
 COMBO_TOOLS := $(filter-out $(COMBO_DROP),$(APPS_TOOLS))
 COMBO_GAMES := $(filter-out $(COMBO_DROP),$(APPS_GAMES))
 
@@ -14728,6 +14736,42 @@ xt-excitebike: $(IMG360) $(BUILD)/excitebike360.img
 	$(BOX) -P $(VMXTEXCITEBIKE) -N
 excitebikeload: excitebikedisk $(BUILD)/os8088-360.img
 	python3 tests/excitebike_load.py
+
+# isoTron (SPEC.md 108): a light-wall duel on a raised slab, a remake from
+# OBSERVED RULES. Every surface is drawn by code and nothing outside the tree
+# is read, at build time or at run time (tests/unit/t_isotron_clean.py holds
+# the tree to that), so this block needs NASM and nothing else. The package
+# SHIPS through APPS_GAMES; `isotrondisk` is its own floppy in all four
+# geometries, carrying the package and its README.
+.PHONY: isotron isotrondisk isotrontest
+$(BUILD)/isotron.bin: apps/isotron/isotron.asm apps/isotron/itrules.inc apps/isotron/itai.inc apps/isotron/itinput.inc apps/isotron/ittest.inc apps/os88api.inc apps/os88ui.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/isotron/ -l $(BUILD)/isotron.lst -o $@ $<
+
+$(BUILD)/isotron.o88: $(BUILD)/isotron.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+
+isotron: $(BUILD)/isotron.o88
+
+ISO_DISKFILES := $(BUILD)/isotron.o88 apps/isotron/README.md
+$(BUILD)/isotron.img: $(ISO_DISKFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(ISO_DISKFILES)
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/isotron720.img: $(ISO_DISKFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(ISO_DISKFILES)
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/isotron120.img: $(ISO_DISKFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(ISO_DISKFILES)
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/isotron360.img: $(ISO_DISKFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(ISO_DISKFILES)
+	python3 tools/os88disk.py --verify $@
+isotrondisk: $(BUILD)/isotron.img $(BUILD)/isotron720.img $(BUILD)/isotron120.img $(BUILD)/isotron360.img
+# The rules gate by hand (the isotronrules and isotronsim soak rows): the host
+# model's selfcheck, then seeded bot games on MartyPC's 5150, round for round
+# against the model
+isotrontest: isotrondisk $(BUILD)/os8088-360.img
+	python3 tools/isotronsim.py --selfcheck
+	python3 tests/isotron.py --rules
 
 # REDLINE native CPU/graphics performance lab (SPEC.md 103).
 .PHONY: redline redlinedisk redline-profile
