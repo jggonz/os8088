@@ -4,6 +4,8 @@
     python3 tools/isotronsim.py --selfcheck
     python3 tools/isotronsim.py --game SEED --tier T [--bot] [--inputs FILE] [--json]
     python3 tools/isotronsim.py --rates
+    python3 tools/isotronsim.py --present cga|vga|herc|ega [--look classic]
+                                [--game SEED --rounds N] --png FILE
 
 Standard library only. Nothing here reads anything outside the tree: the
 rules are the remake's own, pinned in SPEC.md 108 and written down a second
@@ -26,7 +28,12 @@ What it models (wave 1):
            and a turn toward the larger side when the way ahead is <= 3
   Pace     the iteration model's cost and the rates it produces
 
-The canvas, the occlusion span and every presenter arrive in wave 2.
+Wave 2 added the canvas, the occlusion span and the windowed presenters
+(win1, win4); wave 3 the full-screen ones (SPEC.md 108.12): cga320 (the
+16 KB of a CGA's mode 4), vga0d (320 x 200 palette indices), herc (the
+32 KB of a Hercules at 2 x 1.5, centred) and ega (640 x 350 indices: win4 at
+Hc 350), each also built the guest's way, through its tables, and held to the
+per-pixel one by --selfcheck. `--present SURF --png F` draws one for a person.
 """
 import argparse
 import os
@@ -784,8 +791,9 @@ def win1(canvas, hc, rows=None):
     return out
 
 
-def win4(canvas, hc, rows=None):
+def win4(canvas, hc, rows=None, look=None):
     """The windowed 16-colour picture, per pixel: hc rows of 640 indices."""
+    look = COLOUR if look is None else look
     s = row_map(hc)
     out = []
     for r in (range(hc) if rows is None else rows):
@@ -793,7 +801,7 @@ def win4(canvas, hc, rows=None):
         line = bytearray(WIN_W)
         base = y * CW
         for x in range(CW):
-            c = COLOUR[canvas.px[base + x]][x & 1]
+            c = look[canvas.px[base + x]][x & 1]
             line[2 * x] = c
             line[2 * x + 1] = c
         out.append(line)
@@ -815,13 +823,14 @@ def lut_mono():
     return out
 
 
-def lut_colour():
+def lut_colour(look=None):
     """(TA, TB): 256 four-byte entries, plane p's byte of a packed canvas
     byte's four device pixels as the HIGH nibble (TA, the left canvas byte of
     a device byte) or the LOW nibble (TB)."""
+    look = COLOUR if look is None else look
     ta, tb = [], []
     for b in range(256):
-        ce, co = COLOUR[b >> 4][0], COLOUR[b & 15][1]
+        ce, co = look[b >> 4][0], look[b & 15][1]
         a, bb = [], []
         for p in range(4):
             nib = (((ce >> p) & 1) * 0b1100) | (((co >> p) & 1) * 0b0011)
@@ -851,9 +860,9 @@ def win1_lut(raw, hc):
     return out
 
 
-def win4_lut(raw, hc):
+def win4_lut(raw, hc, look=None):
     """win4 through the guest's tables: per row, four planes of 80 bytes."""
-    ta, tb = lut_colour()
+    ta, tb = lut_colour(look)
     s = row_map(hc)
     out = []
     for r in range(hc):
@@ -880,6 +889,209 @@ def planes_to_index(planes):
                 if (b >> (7 - k)) & 1:
                     out[i * 8 + k] |= 1 << p
     return out
+
+
+# --- full screen (SPEC.md 108.12, wave 3) -------------------------------------
+# CGA 320 x 200 x 4, palette 1: an id's ink at an even x / an odd x - the
+# original's own four colours (ISOTRON-PLAN 6.2; the stripes CONFIRMED off
+# the footage). itfs.inc it_cgaink is this table, read back by the selfcheck.
+CGA_INK = [
+    (0, 0), (0, 0), (1, 1), (2, 2),  # VOID, FLOOR, FLOORDOT cyan, RIM magenta
+    (3, 3), (0, 3), (0, 3), (1, 3),  # EDGE, SLABF stripes, SLABR, PFRONT
+    (1, 1), (3, 3), (0, 2), (2, 0),  # PSIDE cyan, TOP, CFRONT, CSIDE stripes
+    (0, 0), (1, 1), (0, 0), (3, 3),  # (free), LOGOF, (free), FLASH
+]
+# CLASSIC: the CGA look in the 16-colour palette (C on VGA and EGA)
+CLASSIC = [tuple((0, 3, 5, 7)[i] for i in p) for p in CGA_INK]
+LOOKS = {"isotron": COLOUR, "classic": CLASSIC}
+# palette 1 at low and at high intensity: ink -> RGB (for pictures, and for
+# the glass test's reading of a CGA's rendering)
+CGA_RGB = {False: [(0, 0, 0), (0, 170, 170), (170, 0, 170), (170, 170, 170)],
+           True: [(0, 0, 0), (85, 255, 255), (255, 85, 255), (255, 255, 255)]}
+
+FS_CELLS = 40                        # a full-screen row of 8 x 8 text cells
+HERC_X, HERC_Y, HERC_ROWS = 5, 24, 300   # card byte, card row, card rows
+EGA_HC = 350                         # 200 logical rows x 1.75
+
+
+def cga_off(y):
+    return (y & 1) * 0x2000 + (y >> 1) * 80
+
+
+def herc_c(y):
+    """The first card row (of the picture) of logical row y: 1.5 rows a
+    row, an even row 2 card rows and an odd one 1."""
+    return y + ((y + 1) >> 1)
+
+
+def herc_off(r):
+    """Picture card row r's first byte: card row R = 24 + r, 4 banks."""
+    R = HERC_Y + r
+    return (R & 3) * 0x2000 + (R >> 2) * 90 + HERC_X
+
+
+def cga320(canvas):
+    """The CGA's 16 KB in mode 4, per pixel: ink(id, x parity) at 2 bits."""
+    out = bytearray(0x4000)
+    for y in range(CH):
+        o = cga_off(y)
+        base = y * CW
+        for x in range(CW):
+            ink = CGA_INK[canvas.px[base + x]][x & 1]
+            out[o + (x >> 2)] |= ink << ((3 - (x & 3)) * 2)
+    return bytes(out)
+
+
+def vga0d(canvas, look=None):
+    """Mode 0Dh's picture as 200 rows of 320 palette indices."""
+    look = COLOUR if look is None else look
+    return [bytes(look[canvas.px[y * CW + x]][x & 1] for x in range(CW))
+            for y in range(CH)]
+
+
+def herc(canvas):
+    """The Hercules' 32 KB: two card pixels a logical pixel (MONO's pair,
+    by the CARD row's parity), 1.5 card rows a logical row, the picture at
+    card (40, 24); everything else 0 (the mode set clears it)."""
+    out = bytearray(0x8000)
+    for y in range(CH):
+        c0, c1 = herc_c(y), herc_c(y + 1)
+        base = y * CW
+        for r in range(c0, c1):
+            o = herc_off(r)
+            par = (HERC_Y + r) & 1
+            for x in range(CW):
+                pat = MONO[canvas.px[base + x]][par][x & 1]
+                out[o + (x >> 2)] |= pat << ((3 - (x & 3)) * 2)
+    return bytes(out)
+
+
+def ega(canvas, look=None):
+    """EGA's same-mode full screen: the windowed colour picture at Hc 350,
+    640 x 350 indices (the origin is FSX_SURF's, (0, 0) on an EGA)."""
+    return win4(canvas, EGA_HC, look=look)
+
+
+# --- the full-screen tables, built the guest's way (itfs.inc) ------------------
+def lut_cga():
+    """(TA, TB): a packed canvas byte to pixels 0-1 / 2-3 of a CGA byte."""
+    ta = bytearray(256)
+    for b in range(256):
+        ta[b] = (CGA_INK[b >> 4][0] << 6) | (CGA_INK[b & 15][1] << 4)
+    return ta, bytes(v >> 4 for v in ta)
+
+
+def lut_vga(look=None):
+    """tables[q][b] = the four plane bytes of packed canvas byte b's two
+    pixels at positions 2q, 2q + 1 of a plane byte."""
+    look = COLOUR if look is None else look
+    out = []
+    for q in range(4):
+        t = []
+        for b in range(256):
+            ce, co = look[b >> 4][0], look[b & 15][1]
+            t.append([((((ce >> p) & 1) << 1) | ((co >> p) & 1)) << (6 - 2 * q)
+                      for p in range(4)])
+        out.append(t)
+    return out
+
+
+def cga320_lut(raw):
+    ta, tb = lut_cga()
+    out = bytearray(0x4000)
+    for y in range(CH):
+        o = cga_off(y)
+        for j in range(CW // 4):
+            out[o + j] = ta[_pair(raw, 4 * j, y)] | tb[_pair(raw, 4 * j + 2, y)]
+    return bytes(out)
+
+
+def lut_vga_mem(look=None):
+    """The guest's IT_FV block as it lays it out (itfs.inc it_fs_lut_vga):
+    for pair position q, at q * 1,024 a 256-WORD table T01 (planes 0, 1: the
+    low byte plane 0) and 512 on T23 (planes 2, 3), entry b at 2 * b - so the
+    presenter indexes it with the canvas byte * 2 and AH held 0."""
+    t = lut_vga(look)
+    mem = bytearray(4096)
+    for q in range(4):
+        for b in range(256):
+            e = t[q][b]
+            for p in range(4):
+                mem[q * 1024 + (p >> 1) * 512 + 2 * b + (p & 1)] = e[p]
+    return bytes(mem)
+
+
+def vga0d_lut(raw, look=None):
+    """0Dh presented the guest's way: two word look-ups a canvas byte pair out
+    of lut_vga_mem's block, ORed, a cell's four plane bytes (it_fr_vga)."""
+    mem = lut_vga_mem(look)
+    rows = []
+    for y in range(CH):
+        planes = [bytearray(40) for _ in range(4)]
+        for c in range(40):
+            w01 = w23 = 0
+            for q in range(4):
+                i = q * 1024 + 2 * _pair(raw, 8 * c + 2 * q, y)
+                w01 |= mem[i] | (mem[i + 1] << 8)
+                w23 |= mem[i + 512] | (mem[i + 513] << 8)
+            planes[0][c], planes[1][c] = w01 & 255, w01 >> 8
+            planes[2][c], planes[3][c] = w23 & 255, w23 >> 8
+        rows.append(bytes(planes_to_index(planes)))
+    return rows
+
+
+def herc_lut(raw):
+    luts = lut_mono()
+    out = bytearray(0x8000)
+    for y in range(CH):
+        for r in range(herc_c(y), herc_c(y + 1)):
+            hi, lo = luts[(HERC_Y + r) & 1]
+            o = herc_off(r)
+            for j in range(CW // 4):
+                out[o + j] = hi[_pair(raw, 4 * j, y)] | lo[_pair(raw, 4 * j + 2, y)]
+    return bytes(out)
+
+
+def fs_cells(kind, row, c0, n):
+    """The full-screen overlay rect of n cells at (row, c0), as the device
+    rows and the bytes (or, on VGA, pixels) it covers on surface `kind`:
+    [(row, x0, x1)] with x1 exclusive."""
+    out = []
+    for y in range(8 * row, 8 * row + 8):
+        if kind == "cga":
+            out.append((y, 2 * c0, 2 * (c0 + n)))
+        elif kind == "vga":
+            out.append((y, 8 * c0, 8 * (c0 + n)))
+        elif kind == "herc":
+            for r in range(herc_c(y), herc_c(y + 1)):
+                out.append((r, 2 * c0, 2 * (c0 + n)))
+    return out
+
+
+def fs_rgb(kind, canvas, look="isotron", hi=False):
+    """A full-screen picture as (w, h, rgb rows), for a person."""
+    if kind == "cga":
+        v = cga320(canvas)
+        pal = CGA_RGB[hi]
+        rows = []
+        for y in range(CH):
+            o = cga_off(y)
+            rows.append(b"".join(bytes(pal[(v[o + (x >> 2)] >> ((3 - (x & 3)) * 2)) & 3])
+                                 for x in range(CW)))
+        return CW, CH, rows
+    if kind == "vga":
+        return CW, CH, [b"".join(bytes(EGA_RGB[i]) for i in r)
+                        for r in vga0d(canvas, LOOKS[look])]
+    if kind == "ega":
+        return WIN_W, EGA_HC, [b"".join(bytes(EGA_RGB[i]) for i in r)
+                               for r in ega(canvas, LOOKS[look])]
+    v = herc(canvas)
+    rows = []
+    for R in range(348):
+        o = (R & 3) * 0x2000 + (R >> 2) * 90
+        rows.append(b"".join(b"\xff\xff\xff" if (v[o + (x >> 3)] >> (7 - (x & 7))) & 1
+                             else b"\0\0\0" for x in range(720)))
+    return 720, 348, rows
 
 
 # --- pictures, for people (standard library only) -----------------------------
@@ -1174,6 +1386,24 @@ def present_check():
             if any(bytes(planes_to_index(lut[r])) != bytes(ref[r]) for r in range(hc)):
                 probs.append("%s: the colour tables differ from the per-pixel look at Hc %d"
                              % (name, hc))
+    # THE FULL-SCREEN TABLES (wave 3): each surface's guest-shaped table
+    # presentation equal to its per-pixel one, in both 16-colour looks
+    for name, c in (("title", t), ("h4", game.canvas)):
+        raw = c.pack()
+        if cga320_lut(raw) != cga320(c):
+            probs.append("%s: the CGA 320 tables differ from the per-pixel look" % name)
+        if herc_lut(raw) != herc(c):
+            probs.append("%s: the Hercules full-screen tables differ" % name)
+        for lk in ("isotron", "classic"):
+            if vga0d_lut(raw, LOOKS[lk]) != vga0d(c, LOOKS[lk]):
+                probs.append("%s: the 0Dh c2p tables differ (%s)" % (name, lk))
+            ref = ega(c, LOOKS[lk])
+            lut = win4_lut(raw, EGA_HC, LOOKS[lk])
+            if any(bytes(planes_to_index(lut[r])) != bytes(ref[r]) for r in range(EGA_HC)):
+                probs.append("%s: the EGA presenter differs at Hc 350 (%s)" % (name, lk))
+    # the Hercules geometry: 300 card rows, contiguous, inside 348
+    if [herc_c(y) for y in (0, 1, 2, 199, 200)] != [0, 2, 3, 299, 300]:
+        probs.append("the Hercules row map is not 1.5 rows a row")
     return probs
 
 
@@ -1209,6 +1439,15 @@ def guest_tables():
     want = [(e << 4) | o for e, o in COLOUR]
     if col != want:
         probs.append("itwin.inc it_col %r is not COLOUR %r" % (col, want))
+    fs = open(os.path.join(GUEST, "itfs.inc"), encoding="utf-8").read()
+    ink = _db_block(fs, "it_cgaink")
+    want = [(e << 4) | o for e, o in CGA_INK]
+    if ink != want:
+        probs.append("itfs.inc it_cgaink %r is not CGA_INK %r" % (ink, want))
+    colc = _db_block(fs, "it_colc")
+    want = [(e << 4) | o for e, o in CLASSIC]
+    if colc != want:
+        probs.append("itfs.inc it_colc %r is not CLASSIC %r" % (colc, want))
     logo = _db_block(can, "it_logo")
     want = [v for st in LOGO for v in st] + [0xFF]
     if logo != want:
@@ -1293,9 +1532,28 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--rates", action="store_true")
     ap.add_argument("--find", type=int, nargs=2, metavar=("START", "COUNT"))
+    ap.add_argument("--present", metavar="SURF",
+                    help="cga, vga, herc or ega: a full-screen picture (with --png)")
+    ap.add_argument("--look", default="isotron", choices=sorted(LOOKS))
+    ap.add_argument("--rounds", type=int, default=0,
+                    help="--present: the canvas after this many rounds of --game's "
+                         "seed (0: the title)")
+    ap.add_argument("--png", metavar="FILE")
     a = ap.parse_args(argv)
     if a.selfcheck:
         return selfcheck()
+    if a.present:
+        if a.rounds:
+            g = Game(a.game or 2425, a.tier, canvas=True)
+            for _ in range(a.rounds):
+                g.play_round()
+            c = g.canvas
+        else:
+            c = Canvas()
+            c.title(Grid())
+        w, h, rows = fs_rgb(a.present, c, a.look)
+        write_png(a.png or ("isotron-%s.png" % a.present), w, h, rows)
+        return 0
     if a.rates:
         print("tier   h  p   head/s  player/s  head-steps/s")
         for t, h, p, c, pl, hs in Pace.table():

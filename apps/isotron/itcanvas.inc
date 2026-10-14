@@ -156,7 +156,8 @@ it_canvas_init:
 
 it_rebuild:
     IT_MARK it_rb0
-    push es
+    mov word [it_spanhk], it_span_box ; a new picture's own spans are boxes
+    push es                         ; until it is presented whole (itfs.inc)
     mov [it_rbh], al
     mov ah, IT_LEVELDY              ; o = 24(h - 1), level h's offset, and
     dec al                          ; it_ybase = 174 - o
@@ -508,6 +509,14 @@ it_span_ud:
     jbe .nc
     mov [it_maxspan], dh
 .nc:
+    ; --- THE SURFACE'S TAIL (SPEC.md 108.12.3): windowed, and in EGA's full
+    ; screen, the head's dirty box below; in a CGA, VGA or Hercules bracket
+    ; the span written straight into video memory (itfs.inc's hooks). One
+    ; indirect jump, ~30 cycles of a windowed step
+    jmp [it_spanhk]
+
+; it_span_box - it_span's windowed tail: BX = the head, BP = x, DL = y, DH = k*
+it_span_box:
     ; --- the head's dirty box: x in BP, rows DL .. DL + DH -------------------
     ; THE FIRST STEP since the box went out starts it AT THIS COLUMN: a step
     ; writes its own column and no other (Lemma 1), so the column the head

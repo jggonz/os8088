@@ -10,12 +10,16 @@ It is a native 8086 assembly remake of a 1982 IBM PC game, written from the
 game's observed rules alone: there is no original code in it, and every
 picture it draws is drawn by code.
 
-**Status: wave 2 of 6.** The rules, the computer and the pace are complete
+**Status: wave 3 of 6.** The rules, the computer and the pace are complete
 and are checked against a reference model (`tools/isotronsim.py`). The
 window shows the arena in 3D - the slab, the tower and every wall, one
 column a step - on VGA and EGA in 16 colours and on CGA and Hercules in
 black-and-white patterns, the picture held pixel for pixel to the model's.
-Full screen, the round flow's screens and sound arrive in the next waves.
+**Full screen** (F or Alt+Enter, or Game > Full Screen) plays the same game
+in colour wherever the card has it: the 1982 look in CGA 320 x 200 with
+palette 1, sixteen colours on a VGA (320 x 200) and on an EGA (its own
+640 x 350), and black-and-white patterns at 640 x 300 on a Hercules. The
+round flow's screens and sound arrive in the next waves.
 See SPEC.md section 108 and `docs/plans/ISOTRON-PLAN.md`.
 
 ## Keys
@@ -29,10 +33,14 @@ See SPEC.md section 108 and `docs/plans/ISOTRON-PLAN.md`.
 | F10, Up | faster (each press, held keys too, up to 9/6 of a cell) |
 | F9, Down | back to normal speed |
 | P | pause |
+| C (in a game) | the colours: Classic (the 1982 four) or isoTron on a 16-colour card; high intensity on a CGA in full screen |
+| F, Alt+Enter | full screen, and back |
 | Space, Enter | continue after a round |
-| Esc | end the game |
+| Esc | end the game; at the title in full screen, back to the window |
 
-The Game menu starts a game at any tier, pauses and ends the game.
+The Game menu starts a game at any tier, pauses, changes the colours, goes
+full screen and ends the game. Full Screen is greyed, with its reason, on a
+display that has no mode for it.
 
 ## Build
 
@@ -41,9 +49,11 @@ make isotron        # build/isotron.o88
 make isotrondisk    # four standalone floppies: 1.44MB, 720KB, 1.2MB, 360KB
 make isotrontest    # the host model's selfcheck, then on MartyPC seeded games
                     # against it, the canvas byte for byte and the window's
-                    # picture pixel for pixel on CGA, Hercules, VGA and EGA
+                    # picture pixel for pixel on CGA, Hercules, VGA and EGA,
+                    # full screen on all four, the toggle, two displays
 ```
 
 `ISOTRON.O88` also ships in `GAMES/` on the apps disks (and on
 `games360.img` at 360KB). It claims 63 KB for its picture and 30 KB for its
-work beside its own ~12 KB, and says so in words when the machine has less.
+work beside its own ~16 KB (12 KB on the disk), and says so in words when
+the machine has less.

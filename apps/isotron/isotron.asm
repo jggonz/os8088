@@ -42,8 +42,16 @@
 ;     and the occlusion probe of wave 2 is an unrolled run of compares.
 ;
 ; Keys: Ins / Del (or Left / Right, Z / X) turn; F10 / Up faster, F9 / Down
-; normal; P pauses; Space continues; Esc ends the game. At the title 1, 2, 3
-; start a game with sound and A, B, C a silent one.
+; normal; P pauses; Space continues; Esc ends the game (and at the title,
+; leaves full screen); F / Alt+Enter toggle full screen; C the colours. At
+; the title 1, 2, 3 start a game with sound and A, B, C a silent one.
+;
+; --- WAVE 3 -------------------------------------------------------------------
+; FULL SCREEN (itfs.inc, SPEC.md 108.12): the same canvas through a colour
+; presenter for the window's display - CGA 320 x 200 palette 1, VGA 0Dh in
+; 16 colours, Hercules 1bpp at 2 x 1.5, EGA's own 640 x 350 x 16 in a same-
+; mode bracket - with a step's one column written straight into video
+; memory, and the game run by the bracket's own loop on the sub-tick clock.
 ; =============================================================================
 
 %include "os88api.inc"
@@ -273,6 +281,8 @@ it_entry:
     mov bx, [it_win]
     mov al, 1
     call OSAPI_WM_OWNBG             ; the picture is every pixel of the content
+    mov word [it_spanhk], it_span_box ; a step's tail: windowed (itfs.inc)
+    mov word [it_lookp], it_col     ; the isoTron look, until C
     push es
     mov es, [it_seg]
     call it_canvas_init             ; the row bases
@@ -349,6 +359,7 @@ it_paint:
                                     ; proc: TASK_SPAWN refuses there (the
                                     ; loader has not published the instance)
     call it_paint_win               ; itwin.inc: the damage, from the canvas
+    call it_fs_menu                 ; the items that depend on the display
     cmp byte [it_abon], 0
     je .done
     mov bx, [it_win]
@@ -475,10 +486,20 @@ it_oncmd:
     cmp al, 3
     jb .tier                        ; 0..2: a new game at that tier, with sound
     je .pause
+    cmp al, 5
+    je .look                        ; Colours: C's look (itfs.inc)
+    cmp al, 6
+    je .full                        ; Full Screen: F's bracket (itfs.inc)
     cmp al, 7
-    jne .out                        ; 4..6 are greyed (MENU_DIS): never picked
+    jne .out                        ; 4, Sound, is greyed: never picked
     mov byte [it_qesc], 1           ; End Game
     jmp short .out
+.look:
+    call it_look_key
+    jmp short .out
+.full:
+    call it_fs_go                   ; a menu handler: the UI task, the lock
+    jmp short .out                  ; held - OSAPI_FSX_RUN's own contract
 .tier:
     inc al
     or al, 0x80                     ; bit 7: sound on (the plan's 9.2: the
@@ -828,6 +849,7 @@ it_putdec:
 %include "itinput.inc"
 %include "itcanvas.inc"
 %include "itwin.inc"
+%include "itfs.inc"
 %include "os88pit.inc"
 
 ; =============================================================================
@@ -861,35 +883,43 @@ it_it_rook:  db 'Rookie', 0
 it_it_vet:   db 'Veteran', 0
 it_it_lun:   db 'Lunatic', 0
 it_it_pause: db 'Pause', 0
-; GREYED WITH THEIR REASON (SPEC.md 47 rule 3): the three are real items of
-; the finished game and arrive with the waves that build them
+; GREYED WITH THEIR REASON (SPEC.md 47 rule 3): Sound is a real item of the
+; finished game and is greyed until the wave that builds it; Colours and
+; Full Screen are live, and itfs.inc it_fs_menu swaps in their greyed forms
+; on every paint when the window's display has no colour or no mode
 it_it_snd:   db MENU_DIS, 'Sound (not yet)', 0
-it_it_col:   db MENU_DIS, 'Colours (not yet)', 0
-it_it_full:  db MENU_DIS, 'Full Screen (not yet)', 0
+it_it_col:   db 'Colours', 0
+it_it_coln:  db MENU_DIS, 'Colours (mono display)', 0
+it_it_full:  db 'Full Screen', 0
+it_it_fulln: db MENU_DIS, 'Full Screen (no mode)', 0
 it_it_end:   db 'End Game', 0
 
 ; --- the About card: the name, what it is, the keys. No credit line, no
 ; legal line and no year (SPEC.md 108.1)
 it_ablines:
-    dw it_ab1, it_ab2, it_ab3, it_ab4, it_ab5, 0
+    dw it_ab1, it_ab2, it_ab3, it_ab4, it_ab5, it_ab6, it_ab7, 0
 it_ab1:      db 'isoTron', 0
 it_ab2:      db 0
 it_ab3:      db 'A light-wall duel in three dimensions.', 0
 it_ab4:      db 'Ins/Del or the arrows turn. F10 faster.', 0
 it_ab5:      db '1, 2 or 3 starts a game; P pauses.', 0
+it_ab6:      db 'F or Alt+Enter: full screen.', 0
+it_ab7:      db 'C in a game: the colours.', 0   ; (C at the title is a tier)
 
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
 %define OS88UI_ABOUT
 %define OS88UI_NOBTN
 %include "os88ui.inc"
+%include "os88alt.inc"              ; Alt+Enter in the bracket (os88alt_edge)
 
 ; --- strings ------------------------------------------------------------------
 it_s_player: db 'PLAYER ', 0
 it_s_comp:   db 'COMPUTER ', 0
-it_s_title:  db '1 Rookie   2 Veteran   3 Lunatic   (A B C: silent)', 0
+; (each at most 40 characters: the full-screen picture is 40 cells across)
+it_s_title:  db '1 Rookie 2 Veteran 3 Lunatic; A-C silent', 0
 it_s_paused: db 'PAUSED - PRESS P', 0
-it_s_pwin:   db 'The player wins the round. Space to continue.', 0
-it_s_cwin:   db 'The computer wins the round. Space to continue.', 0
+it_s_pwin:   db 'Player wins. Press Space to continue.', 0
+it_s_cwin:   db 'Computer wins. Press Space to continue.', 0
 it_s_over:   db 'THREE LOSSES IN A ROW. GAME OVER.', 0
 it_s_small:  db 'Window too small.', 0
 it_s_nomem1: db 'isoTron needs ', 0
@@ -946,6 +976,8 @@ it_s_nomem3: db ' KB.', 0
                                     ; top, 2 going out in bands (it_band)
     WORDV it_band                   ; ...the next band's first device row
     WORDV it_bnew                   ; ...and this band's end
+    WORDV it_bprev                  ; ...the last band's first row, and
+    BYTEV it_bpend                  ; ...an overlay it passed owed its text
     BUFV  it_bt0, 4                 ; ...and when it started, pit_now
     BYTEV it_byield                 ; ...more owed: the worker yields
     WORDV it_fx                     ; the frame (W_X, W_Y, W_W, W_H) when the
@@ -1008,6 +1040,46 @@ it_s_nomem3: db ' KB.', 0
     BUFV  it_hudr, 16               ; "COMPUTER n"
     BUFV  it_msgbuf, 96             ; the refusal's sentence
     BUFV  it_decbuf, 6              ; it_putdec's five digits
+    WORDV it_nwhole                 ; windowed whole presents (the harness's)
+    WORDV it_spanhk                 ; it_span's tail: it_span_box, or a hook
+    WORDV it_lookp                  ; the 16-colour look: it_col or it_colc
+    BYTEV it_clook                  ; ...1 = Classic
+    BYTEV it_cgahi                  ; CGA full screen at high intensity
+
+; --- full screen (itfs.inc, SPEC.md 108.12) -------------------------------------
+    BYTEV it_fsm                    ; a bracket is up
+    BYTEV it_fsk                    ; ...its surface, FSK_*
+    BYTEV it_fsq                    ; ...asked to end
+    BYTEV it_fsega                  ; ...borrowed the windowed geometry (EGA)
+    BYTEV it_fsret                  ; ...ended: the exit paint owes the picture
+                                    ; (itwin.inc it_paint_win)
+    WORDV it_fsn                    ; whole full-screen presents (the harness's)
+    WORDV it_fsout                  ; brackets ended and repainted (likewise)
+    WORDV it_fseg                   ; the video segment (FSI_SEG)
+    BUFV  it_fsi, FSI_SIZE          ; OSAPI_FSX_MODE's block
+    WORDV it_fstk                   ; the sub-tick clock: the tick, and the
+    BYTEV it_fsph                   ; FSXW_FRAMEs since it moved (0..2)
+    BYTEV it_lastph                 ; the governor's last phase (it_clock)
+    WORDV it_fsptk                  ; EGA: the tick its boxes last went out
+    WORDV it_fshook                 ; the surface's span hook
+    WORDV it_fsrect                 ; ...its rect presenter
+    WORDV it_fsglyph                ; ...its glyph writer
+    WORDV it_gseg                   ; OSAPI_FONT_GLYPHS: the table, and the
+    WORDV it_goff                   ; first and last character it holds
+    BYTEV it_gfirst
+    BYTEV it_glast
+    WORDV it_fy0                    ; it_fs_rect: logical rows [fy0, fy1),
+    WORDV it_fy1                    ; cells [fc0, fc1)
+    WORDV it_fc0
+    WORDV it_fc1
+    WORDV it_fhc                    ; ...the presenters' row (CGA, Hercules: the
+    WORDV it_fhb                    ; pair's first), and VGA's first byte /
+                                    ; Hercules' bytes a row
+    BUFV  it_ovf, 3 * OVF_SIZE      ; the full-screen overlay records
+    BUFV  it_fsrow, 2 * IT_HROWS    ; a device / card row's first byte
+    BUFV  it_hktop, 8               ; the span: TOP's bits a place (CGA: a
+                                    ; byte each; Hercules: a word, by parity)
+    BUFV  it_fvtop, 2               ; VGA: TOP's colour at an even / odd x
 
 ; --- the game --------------------------------------------------------------------
     BYTEV it_state

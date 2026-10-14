@@ -118,22 +118,11 @@ it_play:
     cmp byte [it_full], 0           ; still going out in bands, whichever task
     jne .resync                     ; started the round - and V = now in the
     mov byte [it_vsync], 0          ; first wake after it is on the glass, so
-    call OSAPI_GET_TICKS            ; nothing the picture cost is owed
-    mov [it_lastt], ax
-    mov word [it_debt], 0
+    call it_clock_sync              ; nothing the picture cost is owed
     jmp short .gov
 .tick:
-    call OSAPI_GET_TICKS
-    mov dx, ax
-    sub ax, [it_lastt]              ; ticks since the last wake, wrap-safe
-    mov [it_lastt], dx
-    cmp ax, 2
-    jbe .add
-    mov ax, 2                       ; ...and no more than two of them
-.add:
-    mov dx, U_TICK
-    mul dx                          ; AX = ticks * 768 (<= 1,536)
-    add ax, [it_debt]
+    call it_clock                   ; AX = u since the last wake (<= 1,536;
+    add ax, [it_debt]               ; a full-screen frame's sub-ticks too)
     cmp ax, DEBT_CAP
     jle .cap
     mov ax, DEBT_CAP
@@ -158,12 +147,67 @@ it_play:
 .out:
     ret
 .resync:
-    call OSAPI_GET_TICKS            ; paused: V = now on the way out of it
-    mov [it_lastt], ax
-    mov word [it_debt], 0
+    call it_clock_sync              ; paused: V = now on the way out of it
     ret
 .ended:
     call it_round_end
+    ret
+
+; -----------------------------------------------------------------------------
+; it_clock - the governor's clock (SPEC.md 108.4.2, 108.12.4): AX = the time,
+; in u, since the last call or it_clock_sync - whole ticks (at most two: a
+; stall owes no more) times 768, and in a full-screen bracket also the
+; sub-ticks of FSXF_FASTTICK at 256 each, so `now` = ticks * 768 + phase *
+; 256 and a tick's u are the same 768 whichever way they arrive. Wrap-safe.
+; Preserves all but AX.
+; -----------------------------------------------------------------------------
+it_clock:
+    push bx
+    push cx
+    push dx
+    call OSAPI_GET_TICKS
+    mov bx, ax                      ; BX = the tick now
+    sub ax, [it_lastt]
+    mov [it_lastt], bx
+    cmp ax, 2
+    jbe .t
+    mov ax, 2
+.t:
+    mov cx, U_TICK
+    mul cx                          ; AX = ticks * 768
+    cmp byte [it_fsm], 0
+    je .out
+    xor cl, cl                      ; the phase now: the sub-tick count of
+    cmp bx, [it_fstk]               ; this tick (0 when the tick moved since
+    jne .ph                         ; the frame clock last looked)
+    mov cl, [it_fsph]
+.ph:
+    mov ch, cl
+    sub cl, [it_lastph]             ; -2 .. 2: a moved tick's 768 less the
+    mov [it_lastph], ch             ; phase it had already paid
+    add ah, cl                      ; AX += CL * 256 (the sum is >= 0)
+.out:
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; it_clock_sync - V = now: the debt nothing, the clock's last reading the
+; reading now (a toggle, a round's start, a resume). Preserves everything.
+it_clock_sync:
+    push ax
+    call OSAPI_GET_TICKS
+    mov [it_lastt], ax
+    mov byte [it_lastph], 0
+    cmp byte [it_fsm], 0
+    je .z
+    cmp ax, [it_fstk]
+    jne .z
+    mov al, [it_fsph]
+    mov [it_lastph], al
+.z:
+    mov word [it_debt], 0
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -383,9 +427,7 @@ it_round_start:
     ; behind V here, and the round's WHOLE PRESENT - which goes out in bands
     ; from this wake on - is behind it too: while it_vsync is set, it_play
     ; iterates nothing and takes V = now in every wake until it_full is 0.)
-    call OSAPI_GET_TICKS
-    mov [it_lastt], ax
-    mov word [it_debt], 0
+    call it_clock_sync
     mov byte [it_vsync], 1
     mov byte [it_gskip], 0          ; ...and the presentation governor starts
     mov byte [it_gquiet], 0         ; a round clear (108.11.6), as the pace does

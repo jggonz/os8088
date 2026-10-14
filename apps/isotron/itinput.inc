@@ -33,9 +33,8 @@ KSC_F10     equ 0x44
 ; Clobbers AX, BX.
 ; -----------------------------------------------------------------------------
 it_key:
-    cmp ax, KEY_ALTENTER
-    je .out                         ; full screen is wave 3's (the menu item
-                                    ; says so); the chord is armed already
+    cmp ax, KEY_ALTENTER            ; THE FULL-SCREEN KEY, windowed (SPEC.md
+    je .fs                          ; 11.2.1.1: the kernel synthesises it)
     cmp byte [it_state], ST_TITLE   ; AT THE TITLE a digit in AL is a game,
     jne .scan                       ; whatever AH says: keypad 1/2/3 with
     cmp al, '1'                     ; NumLock arrive as '1' + 4Fh, '2' + 50h
@@ -67,6 +66,10 @@ it_key:
     je .cont
     or al, al
     jz .out                         ; any other extended key: nothing
+    mov bl, al
+    or bl, 0x20                     ; a letter, so folding is safe now
+    cmp bl, 'f'
+    je .fs                          ; F / f: full screen, in any state
     cmp byte [it_state], ST_TITLE
     jne .ingame
     ; --- at the title: 1 2 3 with sound, A B C silent ---------------------------
@@ -97,7 +100,13 @@ it_key:
     je .right
     cmp bl, 'p'
     je .pause
+    cmp bl, 'c'                     ; (at the title C is a silent Lunatic)
+    jne .out
+    call it_look_key                ; the look (itfs.inc, SPEC.md 108.12.2)
 .out:
+    ret
+.fs:
+    call it_fs_go                   ; (it refuses inside a bracket: itfs.inc)
     ret
 .left:
     mov al, K_LEFT

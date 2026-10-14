@@ -49,6 +49,15 @@
 ;                     when it found k* = m, len when it found none - counted
 ;                     where the scan ends, and at most 22 (108.10.2)
 ;
+; FULL SCREEN's (wave 3, SPEC.md 108.12; the bytes live in isotron.asm's
+; bss): it_fsm (a bracket is up), it_fsk (its surface), it_fsn (full-screen
+; whole presents), it_fsout (brackets RETURNED - the kernel's repaint done),
+; it_nwhole (windowed whole presents), it_ovf (the full-screen text records);
+; marks it_fsw0 / it_fsw1, it_fsf0 / it_fs_frame (a frame's work: its
+; logic and its present), it_fsx0 / it_fsback (itfs.inc). The harness also
+; breaks on the rect presenters' entries (it_fr_cga, it_fr_vga, it_fr_herc:
+; labels) and reads it_fy0..it_fc1 there, to tile a whole present.
+;
 ; (A span cannot leave its column - y + k* <= 196 - so there is no column
 ; count: itcanvas.inc's %error holds that, by construction.)
 ; it_round_start sets them before the start cells' spans.

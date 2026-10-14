@@ -167,6 +167,14 @@ it_layout:
     jb .small
     mov [it_hc], ax
     mov byte [it_layok], 1
+    call it_rowmaps
+.small:
+    ret
+
+; it_rowmaps - the row maps for [it_hc], and the overlays' rows (no overlay
+; shows until composed): the window's layout, and the EGA full screen's at
+; Hc 350 (itfs.inc). Clobbers AX, BX, DX, SI.
+it_rowmaps:
     ; --- rmap[r] = (r * 200) / Hc, rfirst[y] = ceil(y * Hc / 200) -----------
     xor si, si                      ; SI = r
 .rm:
@@ -200,7 +208,6 @@ it_layout:
     add ax, 16
     mov [it_ov + OV_R + OV_R0], ax
     call it_ovl_none                ; whatever showed was the old layout's
-.small:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -413,7 +420,8 @@ it_present:
 ; 1 starts it at device row 0 (the overlays composed then, so their changes
 ; until it ends wait for it), 2 carries on at [it_band]. Each wake presents
 ; IT_BANDR rows at a time - the picture minus the overlays' rects, each
-; overlay lettered as the band passes its last row - while the hold so far
+; overlay lettered in a hold OF ITS OWN once a band has passed its last row
+; (it_bpend: a band and a 40-cell line were 50 ms) - while the hold so far
 ; plus the last band's cost stays under IT_GBAND (40 ms), and always one; a
 ; band left over sets it_byield and the worker yields for the next rather
 ; than sleeping a tick, so the lock is let go between holds and the
@@ -429,10 +437,42 @@ it_present_band:
     je .go
     call it_ovl_compose
     mov word [it_band], 0
+    mov byte [it_bpend], 0
     mov byte [it_full], 2
     mov byte [it_hudd], 0
     mov byte [it_msgd], 0
 .go:
+    cmp byte [it_bpend], 0          ; THE TEXT THE LAST BAND PASSED, in a hold
+    je .gb                          ; of its own: a band and a 40-cell line in
+    mov byte [it_bpend], 0          ; one hold was 50 ms on the XT-VGA
+    xor bx, bx                      ; (font_run, ~0.7 ms a cell there)
+.pt:
+    cmp word [it_ov + bx + OV_STR], 0
+    je .pn
+    mov ax, [it_ov + bx + OV_R0]
+    add ax, 8                       ; its last row + 1, in [bprev, band]?
+    cmp ax, [it_bprev]
+    jbe .pn
+    cmp ax, [it_band]
+    ja .pn
+    call it_ovl_draw
+.pn:
+    add bx, OV_SIZE
+    cmp bx, OV_N * OV_SIZE
+    jb .pt
+    mov ax, [it_band]
+    cmp ax, [it_hc]
+    jb .pm
+    call it_box_any                 ; the picture is out: this wake's steps
+    jnc .pd                         ; were made after its last band, so their
+    call it_present_boxes           ; boxes go out before .done settles them
+    jc .out
+.pd:
+    jmp .done
+.pm:
+    mov byte [it_byield], 1         ; (the next band, in the next hold)
+    ret
+.gb:
     call it_box_any
     jnc .band
     call it_present_boxes           ; (clipped at it_band while it_full = 2)
@@ -456,23 +496,27 @@ it_present_band:
     mov [it_pj1], ax
     call it_pbox
     jc .out                         ; refused: it_full = 1, from the top again
+    mov ax, [it_band]
+    mov [it_bprev], ax
+    mov ax, [it_bnew]
+    mov [it_band], ax
     xor bx, bx                      ; each overlay whose last row this band
-.ov:                                ; passed: [band, bnew) holds R0 + 7
-    cmp word [it_ov + bx + OV_STR], 0
+.ov:                                ; passed - [bprev, band) holds R0 + 7 -
+    cmp word [it_ov + bx + OV_STR], 0 ; is lettered in the NEXT hold, alone
     je .on
     mov ax, [it_ov + bx + OV_R0]
     add ax, 8
-    cmp ax, [it_band]
+    cmp ax, [it_bprev]
     jbe .on
-    cmp ax, [it_bnew]
+    cmp ax, [it_band]
     ja .on
-    call it_ovl_draw
+    mov byte [it_bpend], 1
+    jmp short .more
 .on:
     add bx, OV_SIZE
     cmp bx, OV_N * OV_SIZE
     jb .ov
-    mov ax, [it_bnew]
-    mov [it_band], ax
+    mov ax, [it_band]
     cmp ax, [it_hc]
     jae .done
     ; --- another, if the hold has room for one more like it ----------------
@@ -500,6 +544,7 @@ it_present_band:
     ret
 .done:
     IT_MARK it_fdone
+    inc word [it_nwhole]            ; (the harness counts whole presents)
     mov byte [it_full], 0
     cmp byte [it_fillr], 0
     je .fr
@@ -1126,11 +1171,16 @@ it_c4_64:
 
 ; -----------------------------------------------------------------------------
 ; it_lut_build - the presenters' tables, in the claim (SPEC.md 108.11.1),
-; from it_mono and it_col: the mono pages HI/LO for each row parity, and the
+; from it_mono and the look in force ([it_lookp]: it_col, or itfs.inc's
+; it_colc after C): the mono pages HI/LO for each row parity, and the
 ; colour TA/TB word tables. Once at entry (~0.1 s). ES = the claim.
 ; Clobbers AX..DI, BP.
 ; -----------------------------------------------------------------------------
 it_lut_build:
+    call it_lut_mono
+    jmp it_lut_col
+
+it_lut_mono:
     xor bp, bp                      ; BP = the canvas byte b
 .b:
     ; --- mono: for parity p, nib = pat(b>>4, p, even) << 2 | pat(b&15, p, odd)
@@ -1166,15 +1216,26 @@ it_lut_build:
     shl dh, cl
     mov [es:di + IT_MLUT + 512], dh ; page 2: HI
     mov [es:di + IT_MLUT + 768], dl ; page 3: LO
+    inc bp
+    cmp bp, 256
+    jb .b
+    ret
+
+; it_lut_col - the colour tables alone, from the look in force: at entry, and
+; on C (itfs.inc it_look_flip). ES = the claim. Clobbers AX..DI, BP.
+it_lut_col:
+    xor bp, bp
+.b:
     ; --- colour: ce = colour of b>>4 at even x, co = of b&15 at odd x -------
+    mov si, [it_lookp]
     mov bx, bp
     mov cl, 4
     shr bl, cl
-    mov al, [it_col + bx]
+    mov al, [si + bx]
     shr al, cl                      ; AL = ce
     mov bx, bp
     and bl, 15
-    mov ah, [it_col + bx]
+    mov ah, [si + bx]
     and ah, 15                      ; AH = co
     mov di, bp
     shl di, 1                       ; the word tables' entry
@@ -1535,6 +1596,21 @@ it_dmg_ck:
 ; IT_HCMIN rows or 632 px). Clobbers AX..DX, SI.
 ; -----------------------------------------------------------------------------
 it_draw_small:
+    call it_fill_content
+    mov cx, [it_cx]
+    add cx, 8
+    and cx, 0xFFF8                  ; (a whole cell on the byte grid)
+    mov dx, [it_cy]
+    add dx, 4
+    mov si, it_s_small
+    mov al, CWHITE
+    mov ah, CBLACK
+    call OSAPI_FONT_RUN
+    ret
+
+; it_fill_content - the whole content box black, one gfx_fill (the clip in
+; force bounds it). Clobbers AX..DX.
+it_fill_content:
     mov al, CBLACK
     call OSAPI_SET_COLOR
     mov ax, [it_cx]
@@ -1546,15 +1622,6 @@ it_draw_small:
     add dx, [it_ch]
     dec dx
     call OSAPI_GFX_FILL
-    mov cx, [it_cx]
-    add cx, 8
-    and cx, 0xFFF8                  ; (a whole cell on the byte grid)
-    mov dx, [it_cy]
-    add dx, 4
-    mov si, it_s_small
-    mov al, CWHITE
-    mov ah, CBLACK
-    call OSAPI_FONT_RUN
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1611,6 +1678,8 @@ it_paint_win:
     pop ax
     jl .part
     mov byte [it_pwhole], 1
+    cmp byte [it_fsret], 0
+    jne .fsret
 .part:
     ; THE OVERLAYS' RECORDS are what the glass shows, so a part of it is
     ; painted from them as they are - a change still owed swaps them later.
@@ -1636,12 +1705,31 @@ it_paint_win:
     cmp byte [it_pwhole], 0
     je .out
     mov byte [it_full], 0           ; THIS WAS THE WHOLE PRESENT
+    inc word [it_nwhole]
     mov byte [it_fillr], 0
     mov byte [it_hudd], 0
     mov byte [it_msgd], 0
     mov byte [it_byield], 0
     call it_box_clear
 .out:
+    ret
+.fsret:
+    ; THE WAY BACK FROM FULL SCREEN (SPEC.md 108.12.6): this paint is inside
+    ; the kernel's exit wm_paint_all, one hold with the pointer off, and the
+    ; whole picture here was 2.18 s of it on the XT-VGA. So the content is
+    ; made black - ONE gfx_fill; under WF_OWNBG the kernel left the desktop
+    ; there - and the picture is OWED: the worker puts it out in bands
+    ; (it_present_band) in holds of at most IT_GBAND, a top-to-bottom reveal
+    ; over the black, the round start's trade, with a round's pace held
+    ; until it is out. (The picture's pixels are written twice, black then
+    ; the picture: the price of first light in ~0.5 s rather than 2.65.)
+    mov byte [it_fsret], 0
+    call it_fill_content
+    mov byte [it_fillr], 0          ; (the content around the picture is done)
+    mov byte [it_full], 1
+    cmp byte [it_state], ST_PLAY
+    jne .out
+    mov byte [it_vsync], 1
     ret
 
 ; -----------------------------------------------------------------------------

@@ -44,10 +44,12 @@ FILE = "ISOTRON.O88"
 SRC = os.path.join(ROOT, "apps", "isotron", "isotron.asm")
 INCS = (os.path.join(ROOT, "apps") + os.sep, os.path.join(ROOT, "apps", "isotron") + os.sep)
 BSS_SRCS = ("isotron.asm", "ittest.inc")
-EQU_SRCS = ("isotron.asm", "ittest.inc", "itcanvas.inc", "itwin.inc")
+EQU_SRCS = ("isotron.asm", "ittest.inc", "itcanvas.inc", "itwin.inc", "itfs.inc")
 MARKS = ("it_step0", "it_step1", "it_wake0", "it_wake1", "it_frame_end",
          "it_hs0", "it_hs1", "it_worker", "it_iterate", "it_move", "it_round_end",
-         "it_span", "it_present", "it_rb0", "it_rb1", "it_fdone", "it_ai1", "it_span0")
+         "it_span", "it_present", "it_rb0", "it_rb1", "it_fdone", "it_ai1", "it_span0",
+         "it_fsw0", "it_fsw1", "it_fs_frame", "it_fsx0", "it_fsback", "it_fsf0",
+         "it_fr_cga", "it_fr_vga", "it_fr_herc")
 
 # it_tflags (ittest.inc)
 TF_FAST, TF_BOT, TF_NOFLOW, TF_HOLD = 1, 2, 4, 8
@@ -75,6 +77,9 @@ K_LEFT, K_RIGHT = _E["K_LEFT"], _E["K_RIGHT"]
 H_BX0, H_BX1, H_BMV = _E["H_BX0"], _E["H_BX1"], _E["H_BMV"]
 CSIZE = _E["IT_CCOL"] * _E["IT_CCOLS"]             # the canvas claim's bytes
 OV_SIZE, OV_N = _E["OV_SIZE"], 3                    # the overlay records
+OVF_SIZE = _E["OVF_SIZE"]                           # ...and full screen's
+FSK = {"cga": _E["FSK_CGA"], "vga": _E["FSK_VGA"], "herc": _E["FSK_HERC"],
+       "ega": _E["FSK_EGA"]}                        # it_fsk: the bracket's surface
 IT_MLUT = _E["IT_MLUT"]
 P_NORMAL, P_D0 = _E["P_NORMAL"], _E["P_D0"]
 WIN = {0: None, 1: "P", 2: "C"}
@@ -194,6 +199,23 @@ class Game:
                 txt = self.m.read(self.base + sp, 64).split(b"\0")[0].decode("latin-1")
                 out.append((8 * j0, r0, 8 * j1 + 8, r0 + 8, txt))
         return out
+
+    # --- wave 3: full screen ------------------------------------------------
+    def fs_overlays(self):
+        """The full-screen overlay records that show, as (row, c0, cells,
+        text) in 8 x 8 cells of the logical picture (itfs.inc it_ovf)."""
+        raw = self.m.read(self.a("it_ovf"), 3 * OVF_SIZE)
+        out = []
+        for k in range(3):
+            row, c0, n, _, sp = struct.unpack_from("<BBBBH", raw, k * OVF_SIZE)
+            if sp and n:
+                txt = self.m.read(self.base + sp, 64).split(b"\0")[0].decode("latin-1")
+                out.append((row, c0, n, txt[:n]))
+        return out
+
+    def fs_owed(self):
+        """Is any full-screen present still owed (a whole one, an overlay)?"""
+        return bool(self.b("it_full") or self.b("it_hudd") or self.b("it_msgd"))
 
     def owed(self):
         """Is any present still owed (a box, an overlay, a whole present)?"""

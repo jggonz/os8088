@@ -14438,3 +14438,96 @@ wait is for the `it_fdone` after the rebuild, and a trace with non-alternating w
 Rookie h1 11.7 - 11.8 / 13.1 / 21.1 - 21.2, Lunatic h4 full boost 23.0 - 23.2 / 27.3 - 27.5 / 32.8 - 34.6 (CGA / Hercules /
 XT-VGA). Every §16 windowed ceiling is met, the head-step's by ~420 cycles (14%) at Lunatic and ~620 at Rookie, with no sampling
 spread left to eat it.
+
+### Set 156 — isoTron full screen: the step on the glass, the whole present and the way back (SPEC.md §108.12.7)
+
+Measured 2026-10-14 on MartyPC's 4.77 MHz 8088 models `os8088_5150_cga_gla`, `os8088_5150_herc_gla` and `os8088_xt_vga` (and
+the XT-VGA running the `VIDEO=ega` kernel tree for EGA), the package on `build/isotron360.img`, by `tests/isotron.py --perf all
+--json` (the `isotronperf` row, a boot of its own a machine; JSON in the wave's reports, `w3/perf-fs-*.json` for the first
+build and `w3fix/perfall-*.json` for the review's fix pass). Emulator numbers: no real card wait states, and MartyPC's VGA writes
+are ~0.9 cycles over RAM where an 8-bit ISA VGA's are more (docs/FIELD-MACHINES.md) - the VGA and EGA lines are floors.
+
+**The head-step with its span hook** - RNG byte, decision, move, canvas, and the new wall's column written straight into video
+memory (SPEC.md §108.12.3) - over EVERY computer head-step of Set 155's two whole rounds of a seeded FAST game (1,049 at Rookie,
+3,177 at Lunatic), in the bracket. The median is the gate (ISOTRON-PLAN 16's ceilings); the fix pass's numbers:
+
+| cycles, median (p90) | Rookie | Lunatic | the hook, ~ | ceiling |
+| --- | ---: | ---: | ---: | ---: |
+| CGA 320 x 200 x 4 | **3,979** (4,663) | **3,455** (5,033) | 1,550 | 4,500 |
+| Hercules 2x by 1.5 | **4,536 - 4,641** (5,801 - 5,989) | **3,949 - 3,953** (6,257) | 2,150 | 5,000 |
+| VGA 0Dh | **3,287** (3,906) | **3,316** (4,360) | 850 | 4,000 |
+
+A device row is ONE read-modify-write (CGA, Hercules) or ONE `xchg` (VGA set/reset: the read loads the latches) at a fixed
+displacement in an unrolled run entered by count - ~50 cycles a row, 12 bytes and fetch-bound on the 8088, VGA's ~30. The
+Hercules pays per CARD row, 1.5 a logical row, so a full 23-row wall is ~34 of them; its first build worked the row numbers out
+and read **4,869** at Rookie; the per-row tables (`it_fs_herc_tabs`, 1.6 KB in the windowed strip) took ~330 off. **The
+Hercules' Rookie median is not one number**: two runs of one build read 4,536 and 4,641, because it falls between round 1's own
+median (4,780) and round 2's (4,530) and moves with where the timer's interrupts land - the margin to 5,000 is ~360 cycles. The
+fix pass gave the runs their shortest displacements (k = 0, which every face executes, is `[di]`) and the Hercules' a COMPUTED
+entry instead of four 34-word jump tables (272 bytes): about even on the step, by count, and no change the medians can resolve.
+
+**The whole present** - the canvas through the surface's tables minus the text cells, then the text, every byte once (SPEC.md
+§108.12.5) - on F, at the title and in a round with the HUD up:
+
+| | CGA | Hercules | VGA 0Dh | EGA | ceiling |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| W3's first build, at the title | 0.86 s (4.12M) | 1.25 s (5.97M) | 1.38 s (6.60M) | - | 1.5 s |
+| W3's first build, in a round | - | - | **2.89 s** (2 x the picture, below) | - | 1.5 s |
+| the fix pass, at the title | **0.67 s** (3.21M) | **0.88 s** (4.22M) | **1.27 s** (6.04M) | 2.08 s (9.92M) | 1.5 s (EGA reported) |
+| the fix pass, in a round | **0.67 s** | **0.88 s** | **1.29 s** | 2.08 s | 1.5 s |
+
+**ISOTRON-PLAN 8.3 priced these at 0.23 / 0.57 / 0.3 s** (CGA / VGA / Hercules), from a device byte's table look-ups alone (~70
+cycles on the CGA), and the first build measured 3.7x / 2.4x / 4.2x that: the column-major canvas puts a device byte's four canvas bytes 200 apart, so
+each was four `es:`-overridden disp16 byte reads (~257 cycles a CGA device byte, all in). The fix reads a canvas WORD - rows y and
+y + 1 of one column - so two output rows share every read: the CGA's loop is 27 bytes an output byte where it was 39, and the
+Hercules' converts a row PAIR into its THREE card rows where it converted two card rows for every logical row and threw one away
+for each odd one (0.66M cycles). The VGA's c2p tables became eight 512-byte WORD tables (planes 0-1 and 2-3 a pair position),
+indexed with `mov bx, ax / shl bx, 1` and AH held 0 where it was `xor bh, bh / mov bl, al / shl bx, 1 / shl bx, 1` four times a
+cell: ~740 -> ~640 cycles a cell. **The 2.89 s**: `it_fs_whole` kept its row cursor in BP across `it_fs_rect`, and the VGA
+presenter counted its cells in BP and returned it 0, so with the HUD up the last two passes presented rows [0, 192) and [0, 200)
+- the picture twice, the left HUD blanked for 1.4 s; nothing measured F in a round. `it_fs_rect` keeps BP now, and the row tiles
+every traced present: the rects, read at the presenters' entries, cover the 200 x 40 cells exactly once outside the text (with
+the defect put back it fails, "row 0 cell 0 presented twice").
+
+**The way back** - the bracket's last frame to `OSAPI_FSX_RUN`'s return: the kernel's exit mode set and whole-desktop
+`wm_paint_all` with our `W_PAINT` inside it. The first build made the window's whole picture in that paint, one hold with the
+pointer off; the fix pass makes the content black there and owes the picture, which the worker puts out in bands (SPEC.md
+§108.12.6):
+
+| | CGA | Hercules | VGA 0Dh | EGA | ceiling |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| W3's first build: one hold | 0.88 s | **1.57 s** | **2.65 s** | - | 1.5 s |
+| the fix pass: first light | **0.38 s** | **0.48 s** | **0.59 s** | **0.34 s** | 1.5 s |
+| ...then the band holds, the longest | 40.5 ms (22) | 40.1 ms (48) | 33.5 ms (100) | 43.9 ms (73) | 50 ms |
+| ...and the picture all out, after first light | 0.70 s | 1.47 s | 3.29 s | 2.82 s | reported |
+
+The trade: no hold over 44 ms and first light in 0.3 - 0.6 s, for a reveal that takes longer in total than the one hold did -
+the VGA's 4-row band is ~22 ms, so each hold carries one, and each pays the lock, the clip and the yield. The first build also
+synced the governor's clock INSIDE the bracket, before the way back, so the worker's first wake after it owed DEBT_CAP: 7
+iterations where a paced wake runs 3. V = now is taken once `OSAPI_FSX_RUN` returns, and the round's pace waits for the banded
+picture (`it_vsync`): the first wake that iterates runs 1 (`isotrontoggle`, CGA and XT-VGA).
+
+**EGA in full screen** presents the steps as dirty boxes through the windowed colour presenter once a tick, now under a
+presentation governor (SPEC.md §108.12.4: a present that runs into the next tick engages it; the TICK, because FASTTICK runs PIT
+channel 0 at 3x and `os88pit.inc` assumes one period a tick). Lunatic h4 at speed 9, a frame's work (logic and present): at most
+52.0 / 52.0 / 68.5 ms over three runs; in the third the governor engaged and the median frame fell to 4.5 ms. The game held 33
+iterations a second in all three. Its whole present, 2.08 s, is the windowed one at Hc 350 (Set 155's colour conversion) and is
+over 1.5 s: reported, not gated.
+
+**The windowed lines after wave 3** (the same run; every windowed step now ends in `jmp [it_spanhk]`, and a band that passes an
+overlay's last row leaves its text to a hold of its own - the title's 40-cell line with a band was ~50 ms on the XT-VGA):
+
+| | CGA | Hercules | XT-VGA | ceiling |
+| --- | ---: | ---: | ---: | ---: |
+| head-step, median: Rookie / Lunatic | 2,416 / 2,619 | 2,423 / 2,619 | 2,420 / 2,615 | 3,000 |
+| ...Set 155's (wave 2's repair) | 2,375 - 2,377 / 2,576 | 2,375 - 2,377 / 2,575 - 2,576 | 2,377 - 2,383 / 2,575 - 2,576 | |
+| wake, median (most), ms: Rookie h1 | 11.7 (15.8) | 13.2 (21.1) | 21.1 (36.9) | 22 / 22 / 30 |
+| wake, Lunatic h4 full boost | 23.1 (27.4) | 27.6 (36.3) | 35.4 (86.3, governor engaged) | 35 / 35 / 50 |
+| round start, the longest band hold (h1, h4) | 40.0, 39.9 ms | 40.0, 40.0 ms | 33.0, 33.0 ms | 50 ms |
+
+The indirect jump is ~40 cycles a windowed head-step (2,576 -> 2,619 at Lunatic): the Lunatic margin to 3,000 is ~380 cycles.
+
+**The package** after the fix pass: image 16,286 bytes (12,648 lz4), bss 3,000; ISOTRON-PLAN 13's budget is 16 KB, 98 to spare.
+
+At Lunatic's worst rate (228 head-steps a second, ISOTRON-PLAN 4.1) the full-screen steps alone cost ~19% of the XT on the
+Hercules and ~17% on the CGA (the plan's paper 24% / 21% also charged each of 54.6 frames a second ~1,500 of its own).
