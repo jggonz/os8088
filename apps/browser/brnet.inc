@@ -33,9 +33,8 @@
 ; to BR_MAXKB for no gain.
 ;
 ; No chunked encoding: HTTP/1.0 is what this asks for and a 1.0 server answers
-; with a length or a close. No redirects yet - a 301 shows its own body, which
-; every server writes as a link, so the page says where it went and a click
-; will follow it once links do.
+; with a length or a close. 301/302/303/307/308 retain only Location and reuse
+; the same claims for at most three hops.
 ;
 ; EVERYTHING OFF THE WIRE IS HOSTILE (docs/plans/completed/NET-STACK-PLAN.md 8.5). The only
 ; thing this trusts a server about is how many bytes it just handed over, and
@@ -190,6 +189,7 @@ br_go:
 .abort:
     call br_abort
 .free:
+    mov word [br_nmsg], 0
     call br_split                   ; the URL into host, port and path
     jc .badurl
     push si
@@ -211,6 +211,10 @@ br_go:
     call br_free_all
     call br_claim
     jc .nomem
+    mov byte [br_frameappend], 0
+    mov byte [br_framecount], 0
+    mov byte [br_frameidx], 0
+    mov byte [br_framecut], 0
     mov word [br_nmsg], 0           ; ...and a new fetch owns the state line, so
                                     ; last time's verdict goes: without this a
                                     ; `Saved` would survive into the next page
@@ -227,6 +231,10 @@ br_go:
                                     ; reported every page after it as cut
     mov word [br_hcol], 0           ; ...and the HEADER scan's own two, which
     mov byte [br_hstate], 0         ; are per-fetch as much as the count is:
+    mov byte [br_lstate], 0
+    mov word [br_redirlen], 0
+    mov byte [br_redirurl], 0
+    mov byte [br_redirs], 0
                                     ; [br_hcol] only ever counts up, so it sat
                                     ; at 12 after the first reply's status line
                                     ; and every byte of every later fetch was
@@ -259,6 +267,9 @@ br_go:
     call br_toolbar                 ; the strip, because br_hpush above has
     jmp short .out                  ; just moved what Back and Forward may do
 .badurl:
+    mov si, [br_nmsg]
+    or si, si
+    jnz .say
     mov si, br_s_badurl
     jmp short .say
 .nomem:
@@ -387,6 +398,14 @@ br_split:
     inc di
     inc si
     loop .hloop
+    mov al, [si]
+    or al, al
+    jz .hend
+    cmp al, '/'
+    je .hend
+    cmp al, ':'
+    je .colon
+    jmp .long
 .hend:
     mov byte [di], 0
     cmp di, br_host
@@ -432,11 +451,17 @@ br_split:
     inc di
     inc si
     loop .ploop
+    cmp byte [si], 0
+    jne .long
 .pend:
     mov byte [di], 0
     clc
     jmp short .out
 .bad:
+    stc
+    jmp .out
+.long:
+    mov word [br_nmsg], br_s_urltoo
     stc
 .out:
     pop di
@@ -854,6 +879,9 @@ br_hdrb:
     push ax
     push bx
     push cx
+    push dx
+    push si
+    push di
     cmp word [br_hcol], 12
     jae .eol
     cmp word [br_hcol], 9
@@ -880,6 +908,7 @@ br_hdrb:
     je .cr
     cmp al, 10
     je .lf
+    call br_locbyte
     mov byte [br_hstate], 0         ; any other byte breaks the run
     jmp short .out
 .cr:
@@ -891,6 +920,7 @@ br_hdrb:
     mov byte [br_hstate], 3
     jmp short .out
 .lf:
+    mov byte [br_lstate], 0
     cmp byte [br_hstate], 3
     je .blank
     cmp byte [br_hstate], 1
@@ -903,6 +933,63 @@ br_hdrb:
 .blank:
     mov byte [br_nstate], BN_BODY   ; ...and everything after this is the page
 .out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; Recognise "Location:" at the start of a line while the bytes pass.  Only its
+; value survives; retaining a 160-byte general header line would buy nothing.
+br_locbyte:
+    push ax
+    push bx
+    push cx
+    push si
+    mov bl, [br_lstate]
+    cmp bl, 0FFh
+    je .out
+    cmp bl, 9
+    jae .value
+    xor bh, bh
+    mov cl, al
+    cmp cl, 'A'
+    jb .cmp
+    cmp cl, 'Z'
+    ja .cmp
+    or cl, 0x20
+.cmp:
+    cmp cl, [br_s_location+bx]
+    jne .miss
+    inc byte [br_lstate]
+    cmp byte [br_lstate], 9
+    jne .out
+    mov word [br_redirlen], 0
+    mov byte [br_redirurl], 0
+    jmp .out
+.value:
+    cmp bl, 9
+    jne .store
+    cmp al, ' '
+    ja .first
+    jmp short .out
+.first:
+    inc byte [br_lstate]
+.store:
+    mov bx, [br_redirlen]
+    cmp bx, BR_UBUF-1
+    jae .out
+    mov [br_redirurl+bx], al
+    inc bx
+    mov [br_redirlen], bx
+    mov byte [br_redirurl+bx], 0
+    jmp .out
+.miss:
+    mov byte [br_lstate], 0FFh
+.out:
+    pop si
     pop cx
     pop bx
     pop ax
@@ -924,6 +1011,58 @@ br_finish:
     push si
     push di
     call br_hclose
+    mov ax, [br_code]
+    cmp ax, 301
+    je .redirect
+    cmp ax, 302
+    je .redirect
+    cmp ax, 303
+    je .redirect
+    cmp ax, 307
+    je .redirect
+    cmp ax, 308
+    jne .page
+.redirect:
+    cmp byte [br_redirurl], 0
+    je .redirfail
+    cmp byte [br_redirs], 3
+    jae .redirfail
+    inc byte [br_redirs]
+    mov si, br_redirurl
+    call OSAPI_GFX_LOCK
+    call br_resolve
+    pushf
+    call OSAPI_GFX_UNLOCK
+    popf
+    jc .redirresolved
+    mov si, br_ubuf
+    call br_split
+    jc .redirfail
+    mov word [br_nlen], 0
+    mov word [br_code], 0
+    mov byte [br_trunc], 0
+    mov word [br_hcol], 0
+    mov byte [br_hstate], 0
+    mov byte [br_lstate], 0
+    mov word [br_redirlen], 0
+    mov byte [br_redirurl], 0
+    mov byte [br_nstate], BN_OPEN
+    jmp .out
+.redirresolved:
+    call br_nshow
+    jmp .out
+.redirfail:
+    cmp byte [br_redirs], 3
+    jb .redirectbad
+    mov word [br_nmsg], br_s_redirect
+    jmp .redirectsay
+.redirectbad:
+    mov word [br_nmsg], br_s_redirbad
+.redirectsay:
+    mov byte [br_nstate], BN_ERR
+    call br_nshow
+    jmp .out
+.page:
     mov ax, [br_nlen]
     mov [br_srclen], ax
     or ax, ax
@@ -933,8 +1072,84 @@ br_finish:
     call br_parse                   ; way in and br_flushbuf may set it again,
     pop ax                          ; so the two truncations are one answer
     or al, [br_trunc]
-    jz .notrunc
+    or [br_framecut], al
+    cmp byte [br_frameappend], 0
+    jne .framechild
+    cmp byte [br_framecount], 0
+    je .parsed
+    cmp byte [br_framecut], 0
+    jne .parsed                     ; a cut frameset cannot be safely composed
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    mov si, br_ptitle
+    mov di, br_frametitle
+    mov cx, BR_TITMAX
+    rep movsb
+    pop es
+    pop di
+    pop si
+    pop cx
+    mov word [br_doclen], 0         ; frame order is rebuilt from queue metadata
+    mov byte [br_factive], 0
+    mov byte [br_frameappend], 1
+    mov byte [br_frameidx], 0
+    call br_framefetch
+    jmp .out
+.framechild:
+    cmp byte [br_framecut], 0
+    jne .framedone                  ; stop fetching after the document ceiling
+    mov bx, [br_doclen]
+    or bx, bx
+    jz .noend
+    dec bx
+    mov es, [br_docseg]
+    cmp byte [es:bx], D_END
+    jne .noend
+    dec word [br_doclen]            ; remove this fragment's D_END
+.noend:
+    mov al, [br_frameidx]
+    cmp al, [br_framecount]
+    jae .framedone
+    call br_framefetch
+    jmp .out
+.framedone:
+    cmp byte [br_factive], 0
+    je .frameend
+    mov al, D_TAB0
+    call br_put
+    mov byte [br_factive], 0
+.frameend:
+    mov al, D_END
+    call br_put
+    call br_flushbuf
+    mov byte [br_frameappend], 0
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    mov si, br_frametitle
+    mov di, br_ptitle
+    mov cx, BR_TITMAX
+    rep movsb
+    pop es
+    pop di
+    pop si
+    pop cx
+.parsed:
+    cmp byte [br_framecut], 0
+    je .linkwarn
     mov word [br_nmsg], br_s_trunc  ; ...and a page that was CUT says so, which
+    jmp .notrunc
+.linkwarn:
+    cmp byte [br_linklimited], 0
+    je .notrunc
+    mov word [br_nmsg], br_s_linklim
 .notrunc:                           ; is SPEC.md 47 rule 3: the state line is
                                     ; the only place it can, and `Ready` under
                                     ; an article that stops mid-sentence reads
@@ -994,6 +1209,122 @@ br_finish:
     mov byte [br_nstate], BN_ERR
     call br_nshow
 .out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; Reuse the source and socket for one queued frame. br_frameidx is the next
+; link-arena entry; no frame-sized allocation or retained response is needed.
+br_framefetch:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    ; Restore the base URL of the frameset before resolving relative srcs.
+    push ds
+    pop es
+    mov si, br_framehost
+    mov di, br_host
+    mov cx, BR_HOSTMAX
+    rep movsb
+    mov si, br_framepath
+    mov di, br_path
+    mov cx, BR_PATHMAX
+    rep movsb
+    xor bx, bx
+    mov bl, [br_frameidx]
+    shl bx, 1
+    mov si, [br_lnkoff+bx]
+    mov es, [br_lnkseg]
+    mov bx, br_s_schemes
+    call br_hrefpfx
+    jnc .failed                     ; HTTPS cannot be fetched by this stack
+    call br_resolve
+    jc .failed
+    ; Save this frame's resolved base URL once in the existing link arena.
+    ; Every anchor in the frame can then keep its short source href.
+    mov ax, [br_upos]
+    inc ax                              ; include the terminating NUL
+    mov bx, [br_lnkw]
+    add ax, bx
+    cmp ax, [br_linkcap]
+    jae .nobase
+    mov cx, [br_upos]
+    inc cx
+    mov si, br_ubuf
+    mov dx, [br_lnkw]
+    mov di, dx
+    mov es, [br_lnkseg]
+    cld
+    rep movsb
+    mov [br_lnkw], di
+    push ds
+    pop es
+    xor bx, bx
+    mov bl, [br_frameidx]
+    shl bx, 1
+    mov [br_lnkoff+bx], dx
+.nobase:
+    mov al, [br_frameidx]
+    mov [br_framecurrent], al
+    mov si, br_ubuf
+    call br_split
+    jc .failed
+    xor bx, bx
+    mov bl, [br_frameidx]
+    mov ah, [br_frameflags+bx]
+    test ah, 2                      ; horizontal frames share a table row
+    jz .fullwidth
+    cmp byte [br_factive], 0
+    jne .tableopen
+    mov al, D_TAB1
+    call br_put
+    mov byte [br_factive], 1
+.tableopen:
+    test ah, 1
+    jz .cell
+    mov al, D_ROW
+    call br_put
+.cell:
+    mov al, D_CELL
+    call br_put
+    jmp .markers
+.fullwidth:
+    cmp byte [br_factive], 0
+    je .rule
+    mov al, D_TAB0
+    call br_put
+    mov byte [br_factive], 0
+.rule:
+    mov al, D_HR
+    call br_put
+.markers:
+    call br_flushbuf
+    mov word [br_nlen], 0
+    mov word [br_code], 0
+    mov byte [br_trunc], 0
+    mov word [br_hcol], 0
+    mov byte [br_hstate], 0
+    mov byte [br_lstate], 0
+    mov word [br_redirlen], 0
+    mov byte [br_redirurl], 0
+    mov byte [br_redirs], 0
+    inc byte [br_frameidx]
+    mov byte [br_nstate], BN_OPEN
+    jmp .out
+.failed:
+    mov word [br_nmsg], br_s_framebad
+    mov byte [br_nstate], BN_ERR
+    call br_nshow
+.out:
+    pop es
     pop di
     pop si
     pop dx
@@ -1116,7 +1447,7 @@ br_status:
 
 br_s_get:    db 'GET ', 0
 br_s_http:   db ' HTTP/1.0', 13, 10, 'Host: ', 0
-br_s_tail:   db 13, 10, 'User-Agent: os8088 Browser 1.0', 13, 10
+br_s_tail:   db 13, 10, 'User-Agent: os8088 Browser 1.2b', 13, 10
              db 'Connection: close', 13, 10, 13, 10, 0
 br_scheme:   db 'https://', 0
 br_scheme2:  db 'http://', 0
@@ -1136,4 +1467,9 @@ br_s_lost:   db 'Link lost', 0
 br_s_empty:  db 'Empty reply', 0
 br_s_badurl: db 'Not an http URL', 0
 br_s_trunc:  db 'Page truncated', 0
+br_s_location: db 'location:', 0
+br_s_redirect: db 'Too many redirects', 0
+br_s_redirbad: db 'Redirect failed', 0
+br_s_framebad: db 'Frame URL invalid', 0
+br_s_linklim: db 'Links limited', 0
 br_s_nomem:  db 'Not enough memory', 0

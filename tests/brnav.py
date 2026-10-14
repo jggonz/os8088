@@ -543,7 +543,7 @@ def main():
     n = rw("br_lnkn")
     seg = rw("br_lnkseg")
     print("frogfind: %d link(s), arena %04X, action %r, %d field(s)"
-          % (n, seg, bytes(m.readseg(pseg, sy["br_faction"], 40))
+          % (n, seg, bytes(m.readseg(pseg, sy["br_factions"], 40))
              .split(b"\0")[0].decode("latin-1"), rb("br_fn")))
     if not seg:
         fails.append("the link arena was not claimed on the NETWORK path - "
@@ -571,7 +571,7 @@ def main():
             fails.append("frogfind field: " + err)
         else:
             m_type("os8088")
-            sub0 = rw("br_subofs")
+            sub0 = rw("br_subs")
             err = click_offset(sub0 + 2)
             if err:
                 fails.append("frogfind submit: " + err)

@@ -109329,6 +109329,39 @@ the dash moves one cell right and 144 is blank.
 HTTP, on purpose &mdash; see below"* — so this was on the page the project
 hosts for as long as there has been one. **Three bytes of package.**
 
+### 71.14 Compatibility controls and HTTP redirects remain bounded
+
+The Browser identifies itself as **os8088 Browser 1.2b**. Its compatibility
+work stays inside the existing source, document and link claims: no control or
+redirect allocates memory. A response with status 301, 302, 303, 307 or 308
+may be followed at most three times when its `Location` is an absolute HTTP
+URL or an HTTP-relative reference. HTTPS is still refused by name as in
+section 71.2. Missing locations and redirect loops end with a visible status
+rather than parsing the redirect body as a page.
+
+Forms are a fixed table of at most four forms and twelve controls. Every
+control belongs to the form that contained it, so a later form cannot replace
+an earlier form's action or fields. Text and search inputs display their
+initial `value`; submit inputs display their own `value`; hidden inputs are
+submitted without being drawn. A `select` is drawn as a compact text control
+and a click advances through its options, wrapping at the end. The first
+option is the default unless an option has `selected`; submission sends the
+option's `value`, or its visible label when `value` is absent. Radio buttons and
+checkboxes use `( )`/`(*)` and `[ ]`/`[x]`; a click toggles a checkbox and
+selects one radio in its same-name group. GET submission includes only the
+controls owned by that submit button's form, and omits unchecked radio and
+checkbox controls. POST remains recorded and visibly unsupported as in
+section 71.5.
+
+Image data remains undisplayed, but an `img` with `alt` contributes that text,
+including inside a link. HTML5 structural containers (`main`, `article`,
+`section`, `header`, `footer`, `nav`, `figure`, `figcaption`, `details` and
+`summary`) receive the same bounded paragraph breaks as the existing block
+tags. Link memory is claimed in descending fixed sizes (6, 4, 2, then 1 KB);
+when the claim or table fills, the state line says `Links limited`. A URL,
+host or path that exceeds its fixed buffer is refused with `URL too long`
+instead of being silently truncated.
+
 ### 72.1 What the packages did have to change, which is one question
 
 The claim "without one byte changing" is not quite true and the exact shortfall

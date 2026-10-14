@@ -139,8 +139,10 @@ def fold(ch):
 # implementation is a check on the parts it implements and SILENT on the rest.
 BLOCK = {"p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li",
          "dl", "dt", "dd", "caption",
-         "pre", "table", "tr", "hr", "center", "blockquote", "form"}
-DROP_CONTENT = {"script", "style", "head", "title", "select", "textarea"}
+         "pre", "table", "tr", "hr", "center", "blockquote", "form",
+         "main", "article", "section", "header", "footer", "nav", "figure",
+         "figcaption", "details", "summary"}
+DROP_CONTENT = {"script", "style", "head", "title", "textarea"}
 HEADING = {"h1": 1, "h2": 2, "h3": 3, "h4": 4, "h5": 5, "h6": 6}
 
 TAG_RE = re.compile(rb"<(/?)([A-Za-z][A-Za-z0-9]*)((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>")
@@ -225,6 +227,7 @@ def parse(raw):
     text, enc = decode(raw)
     ops = []
     stack = []            # open Table objects; a nested table pushes
+    frame_depth = 0        # nested framesets share the guest's one table
     style = {"b": 0, "i": 0, "link": 0}
     pre = 0
     st = dict(enc=enc, tags=set(), dropped=set(), links=0, imgs=0, ents=0,
@@ -273,6 +276,21 @@ def parse(raw):
         pos = lt + mt.end()
         st["tags"].add(tag)
 
+        if tag == "select" and not closing:
+            end = re.search(r"</\s*select\s*>", text[pos:], re.I)
+            body = text[pos:] if not end else text[pos:pos + end.start()]
+            opts = list(re.finditer(
+                r"<option\b([^>]*)>(.*?)(?=<option\b|$)", body,
+                re.I | re.S))
+            chosen = next((o for o in opts if re.search(r"\bselected\b", o.group(1), re.I)),
+                          opts[0] if opts else None)
+            if chosen:
+                label = re.sub(r"<[^>]*>", "", chosen.group(2)).strip()
+                label = unescape(label)[:8]
+                add_text("[" + label + " " * (8 - len(label)) + "]")
+            pos = n if not end else pos + end.end()
+            continue
+
         if tag in DROP_CONTENT:
             if not closing:
                 end = re.search(r"</\s*%s\s*>" % tag, text[pos:], re.I)
@@ -282,7 +300,26 @@ def parse(raw):
 
         a = {k.lower(): v.strip("\"'") for k, v in ATTR_RE.findall(attrs)}
 
-        if tag == "table":
+        if tag == "frameset":
+            if not closing:
+                if frame_depth == 0:
+                    stack.append(Table())
+                frame_depth += 1
+            elif frame_depth:
+                frame_depth -= 1
+                if frame_depth == 0 and stack:
+                    emit(("TABLE", stack.pop()))
+        elif tag == "frame" and not closing:
+            if stack and frame_depth:
+                label = a.get("name", "Frame")[:16] or "Frame"
+                row = [Cell(1, True), Cell(1, False)]
+                row[0].ops.append(("RUN", label, dict(style), False))
+                row[1].ops.extend((
+                    ("HREF", a.get("src", "")),
+                    ("RUN", "Open", dict(style, link=1), False)))
+                stack[-1].rows.append(row)
+                st["links"] += 1
+        elif tag == "table":
             if closing:
                 if stack:
                     t = stack.pop()
@@ -319,6 +356,23 @@ def parse(raw):
             alt = a.get("alt", "").strip()
             if alt:
                 add_text(unescape(alt))
+        elif tag == "input" and not closing:
+            typ = a.get("type", "text").lower()
+            if typ == "hidden":
+                pass
+            elif typ == "submit":
+                add_text("< " + unescape(a.get("value", "submit")) + " >")
+            elif typ == "checkbox":
+                add_text("[x]" if re.search(r"\bchecked\b", attrs, re.I) else "[ ]")
+            elif typ == "radio":
+                add_text("(*)" if re.search(r"\bchecked\b", attrs, re.I) else "( )")
+            elif typ != "image":
+                try:
+                    width = max(1, min(40, int(a.get("size", "20"))))
+                except ValueError:
+                    width = 20
+                value = unescape(a.get("value", ""))[:width]
+                add_text("[" + value + " " * (width - len(value)) + "]")
         elif tag == "a":
             if closing:
                 style["link"] = max(0, style["link"] - 1)

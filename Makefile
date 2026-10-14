@@ -10629,8 +10629,9 @@ $(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
 
 # --- the BROWSER's test disk (docs/plans/completed/BROWSER-PLAN.md 10 step 1) -----------------
 # The renderer with no network in the machine: the package plus tests/htm/'s
-# fixtures, so a scripted session can open demo.htm, torture.htm and the
-# FrogFind capture off a floppy and diff the framebuffer. On demand only -
+# fixtures, so a scripted session can open demo.htm, torture.htm, the
+# FrogFind capture and the frameset fixture off a floppy and diff the
+# framebuffer. On demand only -
 # `all` builds none of it and nothing here ships.
 #
 #   make browsertest                      # build the disks
@@ -10688,7 +10689,7 @@ $(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
 BRFILES := $(BUILD)/browser.o88 apps/browser/browser.htm $(BUILD)/DEMO.HTM \
            $(BUILD)/TORTURE.HTM \
            $(BUILD)/UTF8.HTM $(BUILD)/FROGFIND.HTM $(BUILD)/FFHOME.HTM \
-           $(BUILD)/LINKS.HTM $(BUILD)/PUBZONE.HTM
+           $(BUILD)/LINKS.HTM $(BUILD)/PUBZONE.HTM $(BUILD)/FRAMESET.HTM
 
 browsertest: $(BUILD)/brtest.img $(BUILD)/brtest360.img
 
@@ -10705,6 +10706,8 @@ $(BUILD)/FFHOME.HTM: tests/htm/frogfind-home.htm | $(BUILD)
 $(BUILD)/LINKS.HTM: tests/htm/links.htm | $(BUILD)
 	cp $< $@
 $(BUILD)/PUBZONE.HTM: tests/htm/pubzone.htm | $(BUILD)
+	cp $< $@
+$(BUILD)/FRAMESET.HTM: tests/htm/frameset.htm | $(BUILD)
 	cp $< $@
 
 $(BUILD)/brtest.img: $(BRFILES) tools/os88disk.py

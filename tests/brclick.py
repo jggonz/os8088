@@ -264,7 +264,9 @@ def main():
 
         # --- 3: the form field, then the submit button -------------------
         fofs = u16(m.readseg(pseg, sy["br_flds"], 2))
-        sub0, sub1 = rw("br_subofs"), rw("br_subend")
+        subs = sy["br_subs"]
+        sub0 = u16(m.readseg(pseg, subs, 2))
+        sub1 = u16(m.readseg(pseg, subs + 2, 2))
         say("field @%d, submit %d..%d" % (fofs, sub0, sub1))
         err = click_offset(fofs)
         if err:
