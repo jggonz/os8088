@@ -1015,15 +1015,17 @@ fmv_here:
 ; -----------------------------------------------------------------------------
 ; fmv_ishere - does the state block in DI show the folder the globals hold?
 ; in:  DI = state block
-; out: ZF = 1 yes - its drive is [disk_drive] AND its folder is [dsk_cwd]
-; clobbers: AX, flags
+; out: ZF = 1 yes - its drive is [disk_drive] AND its folder is [dsk_cwd],
+;      and then DL = the drive and AX = the folder: dsk_chdir_q_x's own
+;      arguments, which fmv_sync_x hands straight on
+; clobbers: AX, DL, flags
 ;
 ; The question fmv_sync_x, fmv_mark and fmv_bcast each asked in eighteen
 ; bytes of their own (kernel size pass 9).
 ; -----------------------------------------------------------------------------
 fmv_ishere:
-    mov al, [di+FS_DRV]
-    cmp al, [disk_drive]
+    mov dl, [di+FS_DRV]         ; DL and not AL, at the same size: all three
+    cmp dl, [disk_drive]        ; callers bank DX in their KENT frame
     jne .r
     mov ax, [di+FS_CWD]
     cmp ax, [dsk_cwd]
@@ -1730,6 +1732,17 @@ fmv_sync_x:
     ; loud remount - the scan, the sort and one int 13h per type-1 file - in
     ; front of every delete, rename, New Folder, compress and format whenever
     ; the debt happened to be raised.
+    ;
+    ; **BUT STANDING STILL ASKS THE MEDIA HALF** (SPEC.md 18.9.1.2). The
+    ; compare says the VOLUME is where the window stands, not that the DISK
+    ; is: swap the floppy under a Disk window and New Folder wrote the new
+    ; disk with the old disk's FAT and directory, and under an image mounted
+    ; off that floppy (18.101.7) it wrote the image's old host LBAs. The
+    ; quiet stand is free while the medium cannot have changed and a quiet
+    ; mount when it might - which reads the boot sector, so a disk that is
+    ; not the one mounted is re-validated or refused (dsk_mntok = 0, and
+    ; every dskw_* gate answers FERR_NODISK) before anything is written
+    call dsk_chdir_q_x          ; DL, AX = fmv_ishere's; CF is the gate's
     jmp short .out
 .load:
     call fmv_here

@@ -33014,6 +33014,32 @@ operation the motor never stops and the skip holds, and two operations
 separated by a human hand mount once. A package that walks a path still pays
 one mount for the walk.
 
+### 18.9.1.2 …and neither had the Disk window's
+
+A Disk window acts BY NAME in the folder it stands in - New Folder, Rename,
+Delete, Compress, Format - and `fmv_sync` is how it stands there. Its
+"already here" arm was the `(drive, cwd)` compare and nothing else, so it
+was §18.9.1.1's defect a third time: swap the floppy under an open B:
+window, press N, and the folder was written onto the NEW disk through the
+OLD disk's FAT window and free map (measured: LBAs 2, 11, 19 and a data
+cluster of an unrelated disk changed). Under an image mounted off that
+floppy (§18.101.7) the same keystroke wrote the image's old host LBAs, past
+all three of that section's medium questions, because none of them was
+asked.
+
+**The arm now hands its own compare's answer to `dsk_chdir_q`**, which is
+`dsk_here_ok` and then, only if the medium may have changed, a QUIET mount -
+the boot sector and the FAT window, and no scan, sort or harvest, which is
+the cost the comment above `fmv_sync`'s arm refuses to pay. A disk that is
+the same disk re-validates and the action proceeds; one that is not either
+mounts as itself (a floppy) or fails the BPB rules (an image's host LBA 0
+on another disk), and a failed mount leaves `[dsk_mntok]` = 0, which every
+`dskw_*` gate answers with `FERR_NODISK` before a sector is written. A
+fixed disk and a driver volume answer the media half with no I/O, as
+before. `fmv_ishere` leaves DL = the drive beside AX = the folder for it,
+at the same size. **3 bytes of `.cold`**, which is the whole of kern_big's
+cold rung. `tests/imgswap.py` is the gate.
+
 ### 18.9.2 …and a FIXED disk validates its BPB once, ever
 
 `disk_mount` re-read LBA 0 on every switch to a volume, to validate the BPB

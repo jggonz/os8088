@@ -14,7 +14,10 @@ that sequence, end to end, with the verdict read off the DISK:
      one big file whose bytes cover every host LBA TEST.IMG occupied, so the
      image's boot sector there is not a boot sector - and New Folder is
      asked of D:.
-  4. The other disk, flushed back to the host, is UNCHANGED to the byte.
+  4. The write is refused ("No disk"): the Disk window's stand asks the
+     media half (SPEC.md 18.9.1.2), the quiet mount re-reads the image's
+     boot sector off the other disk and fails the BPB rules.
+  5. The other disk, flushed back to the host, is UNCHANGED to the byte.
 
     python3 tests/imgswap.py [--machine NAME]
 """
@@ -95,7 +98,7 @@ check(img_lbas[-1] < o_fat.datalba + 1_400_000 // 512
 sec0 = other_orig[first_lba * 512:first_lba * 512 + 512]
 check(sec0[510:512] != b"\x55\xAA", "precondition: the image's boot sector's "
       "host LBA holds no boot sector on the other disk", first_lba)
-other_run = os.path.join(OUT, "other-run.img")
+other_run = os.path.abspath(os.path.join(OUT, "other-run.img"))
 shutil.copyfile(other, other_run)       # MartyPC uses `mount`'s file in place
 
 with os88ui.boot(SYS_IMG, apps=host, machine=MACHINE) as ui:
@@ -129,7 +132,10 @@ with os88ui.boot(SYS_IMG, apps=host, machine=MACHINE) as ui:
         ui.m.key("Key" + ch)
     ui.m.key("Enter")
     os88marty.settle(ui.m)
-    say("toast after the write: %r" % (ui.toast()[0],))
+    txt = ui.toast()[0]
+    check(txt == "No disk", "New Folder on %s: is REFUSED - the stand "
+          "re-read the image's boot sector off the other disk and the mount "
+          "failed (SPEC.md 18.9.1.2)" % letter, txt)
 
     # --- 4. the other disk, read back on the host ---------------------------
     motor_off(ui)
