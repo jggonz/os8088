@@ -73,6 +73,10 @@
 ;               it hires the worker on the first paint; elsewhere a test.
 ;   dia_touch   your payload changed: a save is owed, and the next tick
 ;               makes it. Every register and the flags kept.
+;   [dia_nx]    a byte: store n (1..35) from DIA_ONTICK and the NEXT beat is
+;               n ticks out instead of 36, once - a second note of a chirp
+;               (SPEC.md 107.3). The timer arm's; kern_small's worker has
+;               begun its next sleep before the beat runs, and ignores it.
 ;
 ; SPEC.md 107.5 and 107.5.2 are the contract.
 ; =============================================================================
@@ -139,7 +143,9 @@ dia_fnd     equ dia_bn + 1                                  ; the walk's FIND
                                 ; the close removes by it (SPEC.md 107.5)
 dia_fl      equ dia_fnd + OSAPI_FIND_SZ                     ; DIA_F_* (wave 2)
 dia_wy      equ dia_fl + 1                                  ; the restored y
-DIA_BSS_END equ DIA_BSS + DIA_HDR_SIZE + DIA_PAYLEN + OSAPI_DI_SIZE + 13 + 2 + 1 + 1 + 2 + 2 + 2 + 1 + 1 + OSAPI_FIND_SZ + 1 + 2
+dia_nx      equ dia_wy + 2                                  ; the next beat,
+                                ; ticks, once - 0: DIA_TICKS (wave 4)
+DIA_BSS_END equ DIA_BSS + DIA_HDR_SIZE + DIA_PAYLEN + OSAPI_DI_SIZE + 13 + 2 + 1 + 1 + 2 + 2 + 2 + 1 + 1 + OSAPI_FIND_SZ + 1 + 2 + 1
 %if OSAPI_DI_SIZE < DIA_SLACK
   %error "os88dia: dia_rec is the read's slack before it is the row"
 %endif
@@ -459,7 +465,12 @@ dia_tick:
     push ax
     push bx
     mov bx, [dia_win]
-    mov ax, DIA_TICKS
+    xor ax, ax
+    xchg al, [dia_nx]           ; a sooner beat the application asked for,
+    or al, al                   ; once (SPEC.md 107.5)
+    jnz .t
+    mov al, DIA_TICKS
+.t:
     call OSAPI_WM_TIMER
     pop bx
     pop ax

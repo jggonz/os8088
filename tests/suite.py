@@ -8955,6 +8955,63 @@ SOAK = [
         "asserted every leg - and stepping past either end of the range is "
         "refused while the other direction still moves.",
         needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
+    Row("deskcalremind", "soak", py("tests/deskcalremind.py"), 65.0,
+        "SPEC.md 107.3: the Desk Calendar's REMINDERS, on MartyPC's VGA XT "
+        "with the clock SET through the live clk_* fields. A launch at 09:28 "
+        "sums up ONE missed reminder in one toast and marks it FIRED; at "
+        "09:30 Dentist goes off - the alert `Reminder 09:30 Dentist` (OK "
+        "alone, read through os88ui.inc's own message pointer), the toast "
+        "`09:30 Dentist`, OSAPI_SND_TONE asked for 880 then 660 Hz four ticks "
+        "each (a breakpoint on the cell), and ONE run, its line's mark `!` to "
+        "`-`; ONE AT A TIME - two minutes pass under its alert and Call Bob "
+        "waits, then goes off alone at the next minute after OK; a 23-letter "
+        "text drops the `Reminder ` prefix rather than lose a letter; nothing "
+        "goes off with the entry field open; an appointment typed for a "
+        "moment already past is created FIRED; the state file has every "
+        "FIRED; a relaunch with no RTC says `No RTC - check the time`; and "
+        "at midnight today's inverse moves (two runs) and a 00:00 reminder on "
+        "the new day goes off.",
+        needs=("marty", "mtools"), timeout=900,
+        wants=("build/os8088-360.img",)),
+    Row("diasmall", "soak", py("tests/diasmall.py"), 35.0,
+        "SPEC.md 107.7: the Desk Calendar on kern_small, end to end, on "
+        "MartyPC's 128KB CGA 5150 off `make small`'s system disk. There is no "
+        "OSAPI_WM_TIMER there, so the first paint HIRES THE WORKER (dia_st "
+        "WORKER | HIRED), registration is never tried and NOTHING is said; a "
+        "drag is saved by the worker's beat (640x200 in the state file); an "
+        "appointment goes off through the same beat with ONE 880 Hz note of "
+        "8 ticks (the worker's sleep has begun before a sooner beat could be "
+        "asked for); the close box closes it at once with the state written; "
+        "a RESET brings no calendar back (no autostart on kern_small); and "
+        "opened again by hand it is where it was dragged, its data FIRED.",
+        needs=("marty",), timeout=900,
+        wants=("build/small360.img", "build/smallk/kernel.bin")),
+    Row("deskcalperf", "soak", py("tests/deskcalperf.py"), 60.0,
+        "SPEC.md 107.6 / PERFORMANCE.md Part 5: what the Desk Calendar's "
+        "gestures COST in primitive calls - a breakpoint on every drawing "
+        "cell of the API table, a call counted only when its far return "
+        "address is the calendar's own segment - on the VGA XT (TALL) and "
+        "the 5150 CGA (COMPACT): the first paint, the same picture by the "
+        "About card's take-down, a day select (the frame pair, today's field, "
+        "the heading and the agenda lines that were occupied - asserted "
+        "exactly), an IDLE stretch of three beats and a minute boundary that "
+        "must draw ZERO, and a reminder (one run of the calendar's own, the "
+        "rest the alert's paint); then two cold boots - no SYSTEM.CFG, and a "
+        "DIA row - timed to dia_boot and to ui_task with the drive's "
+        "counters: a boot with no row makes no disk call after its paint.",
+        needs=("marty", "mtools"), timeout=1200,
+        wants=("build/os8088-360.img",)),
+    Row("deskcal1bpp", "soak", py("tests/deskcal1bpp.py"), 45.0,
+        "SPEC.md 107.3, 39.4, 47: the Desk Calendar on BOTH 1bpp adapters, "
+        "asserted on the framebuffer's own bits (MartyPC's 5150 with a CGA, "
+        "and with a Hercules card): COMPACT 210x139 and TALL 210x255; today's "
+        "field mostly ink (inverse) and a plain day's mostly ground; a click "
+        "on the 20th puts an unbroken ink rectangle round its field and takes "
+        "the 14th's away while the 14th stays inverse; the 20th's mark cell "
+        "carries its `*`; and with the Calendar menu held down, every item's "
+        "band - the greyed `(no item)` ones included - carries ink.",
+        needs=("marty", "mtools"), timeout=900,
+        wants=("build/os8088-360.img",)),
     Row("curdisk", "soak", py("tests/curdisk.py"), 240.0,
         "SPEC.md 7.4: the arrow TRACKS the hand through a disk transfer. It "
         "used to freeze with the machine and then LEAVE THE SCREEN - once an "

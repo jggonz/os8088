@@ -210,15 +210,22 @@ dc_marked:
 
 ; -----------------------------------------------------------------------------
 ; dc_today - today, from OSAPI_CLK_GET, clamped into 1980-01-01..2099-12-31
-; out: [dc_ty] [dc_tm] [dc_td]; CF = 1 it differs from what they held. Every
-;      register kept
+; out: [dc_ty] [dc_tm] [dc_td]; CF = 1 it differs from what they held. Also
+;      [dc_now] = the minute of the day and [dc_rtc] = the cell's flags, for
+;      the reminders (dcrem.inc). Every register kept
 ; -----------------------------------------------------------------------------
 dc_today:
     push ax
     push bx
     push cx
     push dx
-    call OSAPI_CLK_GET          ; CX = year, DH = month, DL = day
+    call OSAPI_CLK_GET          ; CX = year, DH = month, DL = day, BH:BL =
+    mov [dc_rtc], al            ; hour:minute, AL bit 0 = an RTC
+    mov al, 60
+    mul bh                      ; AX = the hour's minutes (DX is not mul r8's)
+    xor bh, bh
+    add ax, bx
+    mov [dc_now], ax
     cmp cx, DC_Y0
     jae .lo
     mov cx, DC_Y0

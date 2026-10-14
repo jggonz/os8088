@@ -169213,8 +169213,10 @@ learn there was nothing to do. A §51 DRIVER cannot do the job at all: a
 driver attaches inside `drv_boot` before `ui_task` exists, cannot reach
 `OSAPI_PKG_START`, and its worker may not touch a file (§20.6 rule 7).
 
-The design record is the DIA design note this wave was built from; what the
-code proved it wrong about is recorded where it bound (§107.9).
+The design record is `docs/plans/completed/DIA-PLAN.md`, the judged design
+the waves were built from with the builders' log of every deviation at its
+end; what the code proved it wrong about is also recorded here, where it
+bound (§107.9).
 
 ### 107.1 What a DIA is, and where it lives
 
@@ -169293,8 +169295,9 @@ reminders, two-colour on every adapter. `DESKCAL.O88` ships in `SYSTEM\DIA\`
 on every system disk - the four geometries, `emu.img`, both small system
 disks and the live media - and on no apps disk (§107.1). Wave 2 (§107.10) is
 the window, the month and its navigation; wave 3 the appointments, the tasks,
-the one-line entry and the Remind menu's lead times; the reminders' FIRING is
-wave 4, and this section grows with it.
+the one-line entry and the Remind menu's lead times; wave 4 the reminders'
+FIRING (below), `kern_small`'s worker arm run end to end, and the
+measurements (§107.6).
 
 ```
 apps/deskcal/deskcal.asm   header, entry proc, menus, keys, clicks, the tick
@@ -169304,6 +169307,8 @@ apps/deskcal/dcdraw.inc    the two layouts and every draw, the agenda, the
                            tasks and the entry field among them
 apps/deskcal/dcdata.inc    the payload: its check at load, the sorted insert,
                            delete, the tasks, and the entry's time parser
+apps/deskcal/dcrem.inc     the reminders: the minute pass, the firing, the
+                           missed-at-launch summary
 ```
 
 **The package.** `OS88_HEADER 'Desk Calendar', dc_entry, OS88_F_ICON`, a
@@ -169402,7 +169407,9 @@ We Th Fr Sa`.
   (header, weeks and their gaps, frame, heading); a new DATE is one run per
   changed field that is on show and the frame again when one of them is the
   selected day, 1-3 calls; an idle tick is **0**, one `OSAPI_CLK_GET` and a
-  compare. `deskcalperf` (wave 4) measures them.
+  compare. Wave 4's `deskcalperf` measured them with the lists in (§107.6):
+  a full paint is **54** calls on TALL and **28** on COMPACT, a selection
+  leaving today with two appointments on it **6**, an idle beat **0**.
 - **The About card** (`os88ui_about`) lies over the content until a key, a
   click or a menu pick takes it down. Nothing draws under it: a date change
   while it is up only updates the state, and the paint that takes it down
@@ -169439,8 +169446,8 @@ one 26-cell run a line:
  --:--  Mum's birthday     all day
 ```
 
-The mark is `!` while a reminder is armed, `-` once it has FIRED (wave 4)
-and a space when there is none. A day with more appointments than there are
+The mark is `!` while a reminder is armed, `-` once it has FIRED
+(**Reminders**, below) and a space when there is none. A day with more appointments than there are
 lines shows one fewer and makes the last line a PAGER, `  more...  page 1 of
 3`; a click on it shows the next page, and the last page's click shows the
 first. The selected appointment is its line drawn INVERSE - the one more
@@ -169541,8 +169548,8 @@ appointment's (its FIRED mark cleared, its line redrawn) and the toast says
 `Reminder 15 min early`; with nothing timed selected it is the DEFAULT for
 new appointments (`lead_default`, and the payload's flags bit 0 for No
 Reminder) and the toast says `Default: 15 min early`. A click on a timed
-line's mark column toggles its reminder at the lead it has. The firing is
-wave 4's.
+line's mark column toggles its reminder at the lead it has. Both arm it
+afresh: FIRED is cleared - unless its moment has already passed, below.
 
 **A damaged state file** - not ours, or a payload whose counts or order fail
 the check above - opens EMPTY and is never written over silently: the first
@@ -169580,8 +169587,68 @@ Month. `Remind`: At the Time, 5 Min Early, 15 Min Early, 30 Min Early, 1 Hour
 Early, No Reminder. The application-name menu carries `About Desk Calendar`
 and the kernel's own `Close`, which goes through `os88dia.inc`'s negotiator
 like the close box. The menus carry only what works in the wave that ships
-them, with one stated exception: wave 3's Remind STORES a lead - the toast
-says so and the `!` mark shows it - and wave 4 is what fires it.
+them; wave 3's Remind stored a lead that wave 4 fires.
+
+**Reminders** (`dcrem.inc`, wave 4). The DIA beat (`DIA_ONTICK`, every 36
+ticks, about 2 s) asks `OSAPI_CLK_GET` for the date and the minute of the
+day, and does the reminders' work only when the MINUTE has changed since the
+last beat that looked - or the date has, which changes it too:
+
+- **The due check.** The first appointment that is TODAY's, TIMED, ARMED
+  (`REMIND`) and not `FIRED`, whose moment `max(0, time - lead)` is at or
+  before now. The table is in date order, so this is a scan of at most 48
+  records and two compares each; a minute with nothing due draws NOTHING, and
+  a beat inside a minute is one `OSAPI_CLK_GET` and a compare - **0 draw
+  calls** (§107.6 measures both). The moment is clamped at midnight rather
+  than reaching into yesterday: `00:30` an hour early is due at `00:00`.
+- **Firing it** is five things, in this order: `FIRED` set and a save owed;
+  a two-note chirp through `OSAPI_SND_TONE` (880 Hz for 4 ticks, then 660 Hz
+  for 4 - one tone channel, so the second note is a second request, made on a
+  beat the include re-arms 4 ticks out instead of 36, `dia_nx` §107.5); that
+  appointment's agenda line, where it is on show, redrawn - `!` to `-`, ONE
+  run - BEFORE the alert exists, because the clip it draws through is the
+  window's visible region as it is at that moment; the toast, `09:30
+  Dentist` - the user's text LAST, because 24 characters reach the bar
+  (§59.10); and an alert with OK alone (`os88ui_ask`, `OS88UI_AOK`),
+  `Reminder 09:30 Dentist` - or, when the prefix would take the line past
+  `OS88UI_AMAX`'s 34 characters, `09:30 Dentist` without it, so the user's
+  text is never the part that is lost.
+- **One alert at a time.** While any alert of the calendar's is up - the
+  reminder's own, the Delete question, the damaged-file question; they share
+  `os88ui.inc`'s one gate - or the entry field is open, the minute passes and
+  nothing fires. The next one due fires at the first minute after, so two
+  reminders due in one minute are a minute apart and never stacked, and a
+  reminder that came due while the user was typing waits until the line is
+  done rather than taking the keyboard from under it. The SAVE the firing
+  owes is held while the alert is up (`DIA_ONTICK`'s CF, §107.5), so the
+  user's OK is never queued behind seconds of disk.
+- **Missed at launch.** At the entry proc, today's armed reminders whose
+  moment is BEFORE this minute - they came due while the widget was not
+  running - are marked `FIRED` and summarised in ONE toast, `1 missed
+  reminder` or `3 missed reminders`. Earlier days are not replayed. One whose
+  moment IS this minute is not missed: the first beat fires it, because the
+  minute last seen starts as none.
+- **A moment already past is fired at once, silently**, whenever a reminder
+  is ARMED: a new timed appointment, an edit that moves its time (or gives an
+  all-day one a time), a click on the mark column, a Remind pick. A reminder
+  for a moment the user has just typed past would otherwise go off the
+  instant it was typed; its mark reads `-`.
+- **Midnight.** The beat that finds the date changed moves today's inverse
+  (above) and runs the minute's work for the NEW day, so a `00:00` reminder
+  fires at the rollover. The selected day and the month on show stay where
+  the user left them.
+- **No hardware clock.** `OSAPI_CLK_GET`'s AL bit 0 = 0 says the time is the
+  PIT's since boot (§37.0.1): right only if somebody set it this session,
+  which the cell cannot say. So at launch, with no RTC and an armed reminder
+  still to come, the toast is `No RTC - check the time` - unless reminders
+  were missed, whose toast it does not displace (the slot holds one line,
+  §59.3).
+- **Reminders fire only while the widget runs** - minimized included, its
+  timer runs (§13.9) - which autostart (§107.4) makes the normal case.
+  `readme.txt` says so.
+- **On `kern_small`** the beat is the worker's wake (§107.5.2), and the chirp
+  is ONE note, 880 Hz for 8 ticks: the worker's sleep for the next beat has
+  already begun when the beat that would shorten it runs.
 
 **The state file**, `SYSTEM\APPDATA\DESKCAL.DAT`, is §107.5's 16-byte header
 and this payload, 2,440 bytes, so the file is 2,456 bytes - five sectors, one
@@ -169738,7 +169805,7 @@ four that wave 2 added):
 | `dia_made` | after `OSAPI_WM_CREATE` **and the package's own sizing calls** (`KEEPH`, `PREFER`) | give back a restored `y` the create's fit pulled up and re-fit under the window's own height rule (§107.5.2); take the place the window OPENED at as the place on record; install `OSAPI_WM_ONTIMER` and `OSAPI_WM_ONCLOSE`; arm a 1-tick timer - or, where the timer is refused (kern_small), install the wake handler for the worker arm |
 | `dia_painted` | the end of the package's `W_PAINT` | on kern_small, hire the worker (once); nothing elsewhere |
 | `dia_touch` | whenever the payload changed | owe a save; the next tick makes it |
-| `dia_tick` | each timer tick (UI task, lock held) | the FIRST registers the DIA row (`OSAPI_DESK_ITEM` AL = 1, +3 = `'D'`, path from `OSAPI_FILE_PATH`); every one polls the frame's x,y and, once two polls agree on a place that is NOT the one on record, records it and owes a save; calls `DIA_ONTICK`, whose CF = 1 holds any save owed to a later poll (the package is mid-edit); saves what is owed; re-arms for 36 ticks. A widget that has not been moved or edited writes nothing, whatever its state file was |
+| `dia_tick` | each timer tick (UI task, lock held) | the FIRST registers the DIA row (`OSAPI_DESK_ITEM` AL = 1, +3 = `'D'`, path from `OSAPI_FILE_PATH`); every one polls the frame's x,y and, once two polls agree on a place that is NOT the one on record, records it and owes a save; calls `DIA_ONTICK`, whose CF = 1 holds any save owed to a later poll (the package is mid-edit); saves what is owed; re-arms for 36 ticks - or ONCE for `dia_nx` ticks, when `DIA_ONTICK` stored a sooner beat there (the calendar's second chirp note, §107.3; the worker arm's sleep ignores it). A widget that has not been moved or edited writes nothing, whatever its state file was |
 | `dia_close` | `W_ONCLOSE` | `DIA_ONCLOSE`; remove the row by name (AL = 0, AH = 0xFF); save; let the close proceed - except that a remove `OSAPI_DESK_ITEM` REFUSED (no system disk in A: to read `CTRL.DRV` from, whose own toast asks for it) declines the FIRST close (CF = 1) so the user can put the disk back and close again; the next close goes ahead whatever the remove answers, so a refusal can never make the window unclosable. `DIA_ONCLOSE` can therefore run twice |
 
 **The row is about the PROGRAM, not the state file**, so the first tick
@@ -169901,6 +169968,19 @@ Nothing else moved: no `.bss`, no boot-overlay byte, no new module, no new
 SYSTEM.CFG key, and no `PKG_FMT` or `DRV_VER` bump — `OSAPI_CLK_GET` is a
 cell appended at the end, which §20.2.0.1 records without one.
 
+**Waves 2, 3 and 4 moved no kernel byte.** Re-measured at wave 4's head,
+`tools/kernsize.py` reads `unchanged` on both kernels, and the absolute
+figures are the ledger above applied to the tree it was cut from:
+
+| | `.text` | `.cold` | `.bss` | `.lowbss` | `.ovl` | image rung left | cold rung left | footprint |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| kern_big | 44,346 | 38,049 | 5,135 | 5,598 | 2,490 | 183 | 351 | 99,328 of 129,536 (59 steps spare) |
+| kern_small (`--build build/smallk -DKERN_SMALL`) | 32,933 | 23,999 | 3,104 | 2,868 | 2,086 | 315 | 65 | 65,024 of 107,520 (83 steps spare) |
+
+The whole of the reminders (§107.3) is the package's: the shared include
+gained one bss byte, `dia_nx` - the once-only sooner beat the chirp's second
+note rides on.
+
 **At runtime**, a machine with no DIA row reads nothing at boot (§107.4).
 What a widget costs, MEASURED on MartyPC's 4.77 MHz XT with its FDC counters
 (the probe: a 1 KB package and a 16-byte state file - the calendar adds its
@@ -169914,9 +169994,13 @@ larger package and a five-sector file to the reads):
 | a settled drag's save | 2 reads, 6 writes | ~3.2 s at PERFORMANCE.md's 400 ms a call | yes |
 | the close of a widget that owes nothing: the settings core, the row away, SYSTEM.CFG written | 8 reads, 6 writes | | yes |
 | an idle widget | 0 | 0 | |
+| **the calendar, wave 4**: reset to `ui_task` with its row in SYSTEM.CFG, against the same disk with none | 7 reads, 44 sectors in `dia_boot` | **19.02 s against 14.85 s**: +0.55 s reading the trailer before the paint, +3.62 s autostarting | no |
 
 The design priced an autostart at 8-10 calls and 3-4 s and a save at "one
-write, 1-2 s"; both were short. The FIRST TICK's cost is paid on EVERY
+write, 1-2 s"; both were short. The calendar's own autostart (`deskcalperf`'s
+boot leg, MartyPC's VGA XT, cold) is 7 reads before `ui_task` and its first
+tick's 7 after - and a boot with NO row makes **no** disk call after its
+paint, which the row asserts. The FIRST TICK's cost is paid on EVERY
 launch, a double-click included, because the widget registers on every one
 (§107.5). The save's writes are the file system's own - the directory entry,
 the FAT and its copy, the data - and what §107.5.1's walk changed is the rest:
@@ -169928,7 +170012,8 @@ First registration and close each write SYSTEM.CFG once.
 
 | | image | bss | on disk (lz4) |
 |---|---:|---:|---:|
-| `DESKCAL.O88`, wave 3 | **12,368** (12,160 before the review fixes) | 2,860 | **10,544** (10,411) - the same 11 clusters |
+| `DESKCAL.O88`, wave 4 | **13,024** | 2,909 | **11,111** - the same 11 clusters |
+| `DESKCAL.O88`, wave 3 | 12,368 (12,160 before the review fixes) | 2,860 | 10,544 (10,411) |
 | `DESKCAL.O88`, wave 2 | 6,080 (5,808 before the review fixes) | 2,748 | 5,343 |
 | `DIAPROBE.O88` (never shipped) | 1,520 (wave 1: 1,120) | 196 | 1,520 |
 
@@ -169938,7 +170023,22 @@ lists, the field, the parser and the edits are the rest. The code
 compresses poorly (lz4 keeps 86% of it), so the floppy bought most of it:
 the 360 KB system disk went from **321 to 326 of 354 clusters, 28 left**
 (three more at runtime for the state file), and the small 360 KB one from
-270 to 275.
+270 to 275. Wave 4's 567 more bytes on disk stayed inside the eleventh
+cluster: 326 and 275, unchanged.
+
+**What the calendar's gestures cost** (`tests/deskcalperf.py`; PERFORMANCE.md
+Part 5 carries the rows): primitive calls counted at the API table's drawing
+cells, a call counted when its far return is the calendar's own segment, and
+the time from the first call to the last off MartyPC's cycle counter on a
+4.77 MHz 8088:
+
+| gesture | TALL (VGA XT) | COMPACT (5150, CGA) |
+|---|---|---|
+| the first paint (two appointments, three tasks) | **54** calls - 24 runs, 25 fills, 4 frames, 1 rule - 159 ms | **28** - 15 runs, 11 fills, 1 frame, 1 rule - 106 ms |
+| the About card taken down (the same picture, `dc_all`) | 54, 170 ms | 28, 110 ms |
+| selecting an empty day from today, which has two appointments | **6** - 2 frames, today's field, the heading, the two agenda lines that were occupied | 6 |
+| an idle stretch: five / four beats and a minute boundary, nothing due | **0** | **0** |
+| a reminder going off | **1** run of the calendar's (its line) + the alert's paint, 5 | 1 + 5 |
 
 `os88dia.inc` grew ~260 bytes in wave 2 - the singleton, the anchor, the
 worker arm and `dia_touch` - plus the damaged-file question in a package that
@@ -169965,6 +170065,18 @@ have is `OSAPI_CLK_GET` (the cell is in both kernels, §20.8 rule 4; its
 a widget launched by hand on kern_small opens where it was left, with its
 data, because both live in its state file. A registration refused there is
 silent. The small system disks carry `SYSTEM\DIA\` too (§24.5.1).
+
+**The worker arm, end to end** (wave 4's `diasmall`, MartyPC's 128 KB 5150
+with a CGA, off `make small`'s 360 KB system disk): the first paint hires the
+worker (`dia_st` = WORKER | HIRED), registration is never TRIED - the worker
+arm skips it, so nothing is asked and nothing is said, no toast at all - a
+drag is saved by the worker's beat, a reminder goes off through the same
+beat with its alert and ONE note (880 Hz, 8 ticks: the worker's 36-tick
+sleep has begun before the beat that could shorten it runs, so there is no
+second note to time), the close box closes at once with nothing to remove,
+a reset brings no calendar back, and opened by hand again it is where it was
+dragged with its data. Nothing about the calendar is a different build on
+kern_small: the same `DESKCAL.O88` is on both kinds of system disk.
 
 ### 107.8 What is not done
 
@@ -170180,6 +170292,43 @@ silent. The small system disks carry `SYSTEM\DIA\` too (§24.5.1).
     paging starts at its top. New Appointment, New Task and Edit Item grey
     `(typing)` while the field is open rather than close it and redraw the
     band twice.
+- **Wave 4** (the package, the include's one byte, the gates; no kernel or
+  SDK byte):
+  - **The chirp's second note needed a beat of its own.** `OSAPI_SND_TONE`
+    is one channel and one request, so "880 then 660" is two requests four
+    ticks apart, and the DIA beat is 36 ticks: the include gained `dia_nx`,
+    a once-only sooner re-arm the package stores from `DIA_ONTICK`. The
+    worker arm cannot honour it - its next sleep has begun before the beat
+    runs - so kern_small chirps ONE note, 880 Hz for 8 ticks.
+  - **The agenda line is redrawn BEFORE the alert opens**, not after: the
+    clip a draw outside `W_PAINT` arms is the window's visible region as it
+    is then, and an alert created first would lie inside a region computed
+    before it existed.
+  - **The alert's line drops its `Reminder ` prefix when the text is long**
+    (over 19 characters), rather than letting `OS88UI_AMAX` clip the user's
+    text off its end. The design's "<= 34 characters" did not say which part
+    gives.
+  - **Missed at launch is strictly BEFORE this minute**; one due THIS minute
+    is the first beat's to fire, because the minute last seen starts as
+    none. The design's "due-but-unfired" left a launch at 09:30 reporting a
+    09:30 reminder as missed.
+  - **A reminder armed for a moment already past is fired at once,
+    silently** - a new appointment, a moved time, the mark column, a Remind
+    pick - which the design did not cover: typed at 10:00, a 09:30 appointment
+    went off the instant it was entered.
+  - **Nothing fires while the entry field is open**, as well as while an
+    alert is up: an alert takes the keyboard (keys go to the front window),
+    so one opening mid-word would have swallowed the rest of the line. The
+    reminder fires at the first minute after the field closes. The SAVE a
+    firing owes is held while its alert is up (`DIA_ONTICK`'s CF).
+  - **The no-RTC toast is `No RTC - check the time`**, not `Clock not set
+    (no RTC)`: `OSAPI_CLK_GET` says there is no chip, not whether anybody set
+    the clock this session, and §47's rule is to say a fact. It is said at
+    launch only when a reminder is still to come and nothing was missed -
+    the toast slot holds one line, and the missed count is the one the user
+    can act on.
+  - **A reminder's moment is clamped at midnight**: `00:30` an hour early is
+    due at `00:00` that day, not at `23:30` the day before.
 
 ### 107.10 How it was built, and its gates
 
@@ -170239,6 +170388,21 @@ no fixture, because what is on it is what a user has:
 Both are verified to fail on a broken build: a parser that refuses three
 digits stores `815 Gym` as an all-day line, and a toggle that redraws its row
 reads one run on the counter.
+
+**Wave 4's rows**:
+
+| row | asserts |
+|---|---|
+| `deskcalremind` | MartyPC's VGA XT, the clock SET through the live `clk_*` fields. A launch at 09:28 says `1 missed reminder` and marks it FIRED; at 09:30 Dentist goes off - the alert reads `Reminder 09:30 Dentist` (through `os88ui.inc`'s own message pointer), the toast `09:30 Dentist`, `OSAPI_SND_TONE` was asked for 880 then 660 Hz four ticks each (a breakpoint on the cell, AX and CX read at the stop), ONE run drawn, its line's mark `-`; two minutes pass under that alert and Call Bob waits, then goes off ALONE at the next minute after OK though another is due; a 23-letter text loses the prefix and keeps every letter; nothing goes off under an open entry field; a 09:30 appointment typed at 09:37 is created FIRED; the state file has every FIRED; a relaunch with the RTC flag down and a reminder to come says `No RTC - check the time`; at 23:59 the 23:00 one goes off, and at the rollover today's inverse moves in TWO runs and the 15th's 00:00 reminder goes off |
+| `diasmall` | §107.7's paragraph, on MartyPC's 128 KB CGA 5150 |
+| `deskcalperf` | §107.6's tables, asserting the zeros and the selection's count exactly, and that a boot with no DIA row makes no disk call after its paint |
+| `deskcal1bpp` | MartyPC's 5150 with a CGA and with a Hercules card, on the framebuffer's own bits: COMPACT 210x139 and TALL 210x255; today's field mostly ink and a plain day's mostly ground; a click on the 20th puts an unbroken ink rectangle round it and takes the 14th's off, which stays inverse; the 20th's mark cell carries its `*`; and the Calendar menu held down shows every item - the greyed `(no item)` ones included - with ink in its band |
+
+Each was verified to FAIL on a broken build: without dc_rpass's one-alert
+gate `deskcalremind` sees Call Bob go off under Dentist's alert; with the
+worker test taken out of dc_fire `diasmall` hears two requests, the second
+36 ticks late; and a frame drawn every beat makes `deskcalperf`'s idle read
+4 calls.
 
 **`t_dia`** (fast tier) is what keeps that include honest between MartyPC
 runs: it runs `tools/os88dia.py --selfcheck`, assembles `diaprobe.asm` (so

@@ -83,7 +83,7 @@ TIME_ALLDAY = 0xFFFF
 # The gates read these out of a live guest (tests/deskcalgrid.py, diaboot.py
 # and their kin); tests/unit/t_dia.py has NASM evaluate the package's own
 # equs and holds these equal, so a moved field fails `make` and not a soak.
-DESKCAL_DIA_BSS = 224           # deskcal.asm's DC_BSS: its own state first
+DESKCAL_DIA_BSS = 272           # deskcal.asm's DC_BSS: its own state first
 DESKCAL_BSS_GRID = 0            # 42 bytes, the month on show
 DESKCAL_BSS_Y = 42              # dw the year on show
 DESKCAL_BSS_M = 44              # db its month
@@ -100,6 +100,10 @@ DESKCAL_BSS_SELI = 102          # db ...its index in its table
 DESKCAL_BSS_EBUF = 134          # 32: the entry field's text, NUL
 DESKCAL_BSS_TTOP = 105          # db the first task on show
 DESKCAL_BSS_TSHOW = 107         # db task rows on the glass, to the pager
+DESKCAL_BSS_ALERT = 211         # db a reminder's alert is up (wave 4)
+DESKCAL_BSS_NOW = 212           # dw the minute of the day, as the last beat
+DESKCAL_BSS_LNOW = 214          # dw ...and the one the reminders looked at
+DESKCAL_BSS_RMSG = 224          # 42: `Reminder HH:MM text`, the toast at +9
 DESKCAL_NOREM = 1               # payload +3 bit 0: new ones get no reminder
 
 

@@ -171,8 +171,24 @@ dc_ebuf     equ os88_image_end + DC_BSS_EBUF
 dc_ck       equ os88_image_end + 166    ; 12: one check box, aimed at a row
 dc_rec      equ os88_image_end + 178    ; 32: an appointment being inserted
 dc_tq       equ os88_image_end + 210    ; db an edit since the last poll
-DC_BSS      equ 224                     ; a multiple of 16 (os88dia.inc)
-%if 178 + DCP_APPTSZ > 210
+DC_BSS_ALERT equ 211                    ; db our reminder's alert is up
+DC_BSS_NOW  equ 212                     ; dw the minute of the day, as the
+DC_BSS_LNOW equ 214                     ; dw last beat read it, and the one the
+                                        ; reminders last looked at (0FFFFh none)
+dc_alert    equ os88_image_end + DC_BSS_ALERT
+dc_now      equ os88_image_end + DC_BSS_NOW
+dc_lnow     equ os88_image_end + DC_BSS_LNOW
+dc_chirp    equ os88_image_end + 216    ; db the chirp's second note is owed
+dc_rtc      equ os88_image_end + 217    ; db OSAPI_CLK_GET's AL: bit 0 an RTC
+dc_fresh    equ os88_image_end + 218    ; db dc_cappt: the reminder is armed
+                                        ; afresh (new, or its time moved)
+DC_BSS_RMSG equ 224                     ; 42: `Reminder HH:MM text`, NUL - the
+dc_rmsg     equ os88_image_end + DC_BSS_RMSG    ; alert's line, which it
+                                        ; repaints from while it is up; the
+                                        ; toast is the same from +9
+DC_RMSG_PRE equ 9                       ; `Reminder `
+DC_BSS      equ 272                     ; a multiple of 16 (os88dia.inc)
+%if 178 + DCP_APPTSZ > 210 || DC_BSS_RMSG + DC_RMSG_PRE + 6 + DCA_TMAX + 1 > DC_BSS || 218 >= DC_BSS_RMSG
   %error "deskcal: its own bss has outgrown DC_BSS"
 %endif
 
@@ -217,6 +233,8 @@ dc_entry:
     or byte [dia_st], DIA_S_DAMAGED
 .ok:
     call dc_today               ; today, and the month on show is today's
+    mov word [dc_lnow], 0FFFFh  ; no minute seen: the first beat looks
+    call dc_missed              ; what came due while we were not running
     mov ax, [dc_ty]
     mov [dc_y], ax
     mov al, [dc_tm]
@@ -778,6 +796,7 @@ dc_aclick:
     je .sel
     xor byte [si + DCA_FLAGS], DCA_REMIND   ; the reminder, on or off, at
     and byte [si + DCA_FLAGS], ~DCA_FIRED & 0FFh ; its own lead
+    call dc_stale               ; ...fired at once if its moment is past
     call dc_touch
 .sel:
     mov bl, DCS_APPT
@@ -1359,6 +1378,7 @@ dc_cappt:
 .x0:
     jmp .x
 .fits:
+    mov byte [dc_fresh], 1      ; armed afresh, unless an edit keeps its time
     push si                     ; dc_rec := the new appointment
     push cx
     push ds
@@ -1397,7 +1417,10 @@ dc_cappt:
     je .del
     mov ah, [si + DCA_FLAGS]
     cmp dx, bx
-    je .same
+    jne .moved
+    mov byte [dc_fresh], 0      ; the same time: its FIRED stands
+    jmp short .same
+.moved:
     and ah, ~DCA_FIRED & 0FFh
 .same:
     mov [dc_rec + DCA_FLAGS], ah
@@ -1409,6 +1432,10 @@ dc_cappt:
 .ins:
     call dc_ains                ; AL = where it went (a new one was refused
     jc .full                    ; at the table's end before the field opened)
+    cmp byte [dc_fresh], 0
+    je .kept
+    call dc_stale               ; a moment already past: fired, silently
+.kept:
     mov dl, [dc_selk]           ; DX = the selection before: a TASK's row is
     mov dh, [dc_seli]           ; drawn plain again (an appointment's line is
     mov byte [dc_selk], DCS_APPT    ; the agenda's, which is redrawn)
@@ -1827,6 +1854,7 @@ dc_remind:
     or byte [si + DCA_FLAGS], DCA_REMIND
     mov [si + DCA_LEAD], ah
 .one:
+    call dc_stale               ; armed for a moment already past: fired
     push bx
     mov bl, DCS_APPT
     mov bh, al
@@ -1870,28 +1898,42 @@ dc_remind:
 ; day (a run lays the frame's side columns). The month on show does not
 ; change with the date, so nothing else is drawn; nor is anything while the
 ; About card is up - the paint that takes it down shows the new today
-; (SPEC.md 107.3). The minute's work is wave 4's.
-; out: CF = 1 HOLD the save owed (os88dia.inc): the entry field or our Delete
-;      question is open, or an edit landed since the last poll - a save is
-;      seconds of disk with the lock held (SPEC.md 107.6), so it waits for a
-;      quiet poll and a burst of edits is one save
+; (SPEC.md 107.3). Then the reminders' minute (dcrem.inc), and the second
+; note of a chirp one beat after the first.
+; out: CF = 1 HOLD the save owed (os88dia.inc): the entry field, our Delete
+;      question or a reminder's alert is open, or an edit landed since the
+;      last poll - a save is seconds of disk with the lock held (SPEC.md
+;      107.6), so it waits for a quiet poll and a burst of edits is one save
 ; -----------------------------------------------------------------------------
 dc_tick:
     push ax
     push bx
+    cmp byte [dc_chirp], 0
+    je .c
+    mov byte [dc_chirp], 0      ; the chirp's second note, four ticks after
+    push cx                     ; its first (dia_nx)
+    push dx
+    mov ax, 660
+    mov cx, 4
+    mov dl, 40h
+    call OSAPI_SND_TONE
+    pop dx
+    pop cx
+.c:
     call dc_tidx                ; the old today, if it is on show
     mov bl, al
     call dc_today               ; CF = 1 the date changed
-    jnc .x
+    jnc .min
+    mov word [dc_lnow], 0FFFFh  ; a new day: the minute's work for it
     cmp byte [dc_abon], 0
-    jne .x
+    jne .min
     call dc_tidx
     mov bh, al                  ; BL = the old today's index, BH = the new
     and al, bl                  ; (each 0FFh when not on show; an index is
     cmp al, 0FFh                ; < 42, so the AND is 0FFh only for both)
-    je .x
+    je .min
     call dc_arm
-    jc .x                       ; not visible: the next paint draws it
+    jc .min                     ; not visible: the next paint draws it
     mov al, bl
     call .one
     mov al, bh
@@ -1900,14 +1942,16 @@ dc_tick:
     cmp al, bl
     je .fr
     cmp al, bh
-    jne .x
+    jne .min
 .fr:
     call dc_selon
-.x:
+.min:
+    call dc_rpass               ; the reminders: nothing unless the minute moved
     mov al, [dc_tq]             ; an edit this poll...
     mov byte [dc_tq], 0
-    or al, [dc_ed]              ; ...the field open, the question up
-    or al, [dc_ask]
+    or al, [dc_ed]              ; ...the field open, a question or a
+    or al, [dc_ask]             ; reminder up
+    or al, [dc_alert]
     neg al                      ; CF = 1 for any of them
     pop bx
     pop ax
@@ -2001,6 +2045,7 @@ dc_ab4:     db 'SYSTEM\DIA  -  SPEC.md 107', 0
 %include "dcdraw.inc"
 
 %include "dcdata.inc"
+%include "dcrem.inc"
 
 %define OS88UI_ABOUT
 %define OS88UI_ALERT
