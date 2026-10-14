@@ -58,6 +58,11 @@ says what Tune sets the bus to:
                   right. The default.
   Mfg spec    the chipset data sheet's value (R4 10 on a WD FE3600,
               4 waits on a C&T NEAT).
+  Bus clock x2  C&T NEAT only, and an EXPERIMENT: doubles the AT bus
+              clock (6 to 12 MHz on a 12 MHz 286), past the data book's
+              6-8 MHz, with every wait at its longest first and a read of
+              A:'s boot sector to check disk DMA. It may hang the machine;
+              a reset puts everything back. Put a disk in A: first.
 
 The framed field after them says what the bus runs at now: Stock (the
 BIOS's own timing), Tuned: n waits or Mfg spec: n waits. With a ~ it was

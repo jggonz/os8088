@@ -174597,6 +174597,7 @@ fitted. Until that run it was `DATASHEET`, and swept behind the warning.
   | 2 | 61h bits 3:2, 8-bit AT memory command delay | 0-3 BCLKs | 1 | `DATASHEET` |
   | 3 | 61h bits 1:0, AT I/O command delay | 0-3 BCLKs | 1 | `DATASHEET` |
   | 4 | 62h bits 5:4, 16-bit AT cycle wait states | 0-3 | 1 | `DATASHEET` |
+  | 5 | 62h bits 1:0, the BUS CLOCK as its divider: 2 = CLK2IN/2, 1 = CLK2IN | 1-2 | 2 | `DATASHEET`, Bus clock x2 only (§103.6.3.3) |
 
   Knob 1 went to its floor on the PB286LP with every check passing, so the
   8-bit wait states have nothing left there; the next three are what the
@@ -174608,10 +174609,12 @@ fitted. Until that run it was `DATASHEET`, and swept behind the warning.
   wait states, 16 bit AT memory cycles will have 1") where the register
   page says 5 and 3 [NEAT p25, p31], and one command delay each, the
   register page's default (61h = 45h, read on that board).
-- **What is never written**: the BCLK source (62h bits 1:0, the bus CLOCK -
-  a step that changes every card's timing at once, left for a round of its
-  own), the 16-bit memory command delay (61h bits 5:4, already 0), quick
-  mode and address hold (61h bits 7:6), and every 82C212 register.
+- **What is never written**: BCLK = ATCLK (62h bits 1:0 = 10, which leaves a
+  board with no ATCLK crystal without a bus clock - a hang) or the reserved
+  11, which `cs_ne_kt`'s per-knob field limit refuses for REDLINE and
+  RLAPPLY alike; the 16-bit memory command delay (61h bits 5:4, already
+  0), quick mode and address hold (61h bits 7:6), and every 82C212
+  register.
   `cs_ne_put` (`apps/redline/csne.inc`) reads the register, replaces ONE
   field and writes the rest back as the chip had them - the PB286LP reads
   62h bits 7:6 as 01, which the book calls reserved - with a fresh index
@@ -174782,6 +174785,48 @@ What it rests on is one fitted constant and a timed clock. Both are field
 questions, and the other boards that can answer them are named in
 docs/plans/REDLINE-TUNE-PLAN.md.
 
+##### 103.6.3.3 Bus clock x2: the experiment
+
+The Target drop-down's third answer. It is NOT part of Fastest tested,
+and the line between the two is the owner's: Fastest tested is for what
+is unlikely to crash the machine while it is tested, and this is not -
+wait states stay inside what the chip was designed to time, a doubled bus
+is outside what the CARDS were designed for, and a card that cannot keep
+up can hold the bus with nothing left to catch it.
+- **What it doubles**: the NEAT's BCLK from CLK2IN/2 to CLK2IN, so SYSCLK -
+  the ISA bus clock - from CLK2IN/4 to CLK2IN/2: 6 MHz to 12 MHz on the
+  PB286LP, whose wait state measured 176 ns, one SYSCLK. The book: SYSCLK
+  "should be between 6 and 8 MHz for maintaining correct AT I/O bus timing
+  compatibility with the IBM PC/AT" [NEAT p5], so this is half again past
+  its top. With quick mode off (61h bit 6 = 1, the PB286LP's) it is the
+  book's own DELAYED mode, "useful for slow peripheral AT add-on cards"
+  [NEAT p26-27]. No 8 MHz step exists; ATCLK is never written.
+- **What it does not touch**: the timer's 1.19 MHz is OSC/12 off the
+  82C212's own 14.318 MHz crystal [NEAT p12], not BCLK, so the PIT the
+  sweep times itself against does not move with it.
+- **The order is longest first**: every wait and delay goes to its LONGEST
+  (8-bit 5, 16-bit 3, both command delays 3) at the clock the board has -
+  slower is safe - then the clock is swept (`cs_desc_nebc`: book 2, the
+  baseline, then 1) with every check of §103.6.3 plus a DMA read, and then
+  the four come back down from their longest (`cs_klist_nex`) under the
+  keep rule. At 12 MHz with 5 waits an 8-bit cycle is ~583 ns against
+  today's 667, so the doubled bus starts out no shorter than what runs now.
+  If the clock fails, the four come down at /2 and land where Fastest
+  tested would.
+- **The DMA check** (`CSF_DMA`, `cs_sw_dma`): A:'s boot sector is read
+  through the BIOS at home into `bl_out` (512-aligned, so it cannot cross a
+  64KB page) and read again at the doubled clock, and the two must match.
+  It is the one bus cycle the other checks never make - floppy and hard
+  disk data move by DMA - and it is a READ. It runs with interrupts ON,
+  the floppy controller answering on IRQ6. With no disk in A: there is no
+  reference, the sweep line says `A:=--`, and the clock is checked without
+  it. The OS publishes no raw sector read (MODULE-SELFCONTAIN-PLAN §5) and
+  this does not add one: it is REDLINE calling the ROM, as its PicoMEM
+  probe does, on the UI task, which is the only task that may touch a disk.
+- **It asks every session**, `Doubles the bus clock: may hang`, once a row,
+  and what it keeps is SET and Saved like any Tune. The setting line and
+  the clock line say where it stands (`BCLK=CLK2IN/1`).
+
 ##### 103.6.3.2 The report's field data
 
 The owner's rule for a chipset going out to boards nobody here has: **one
@@ -174856,7 +174901,7 @@ from Tune, so it went: `cs_cfg_load` and `cs_cfg_apply` assemble only with
     the row's probe again: the fingerprint IS the identification, the one
     the user confirmed when the setting was tuned and saved on this board.
 
-It is `apps/rlapply/rlapply.asm`, **1,817 bytes with no bss** (the NEAT's four knobs were 104), its 64-byte icon included, and it is the
+It is `apps/rlapply/rlapply.asm`, **1,835 bytes with no bss** (the NEAT's five knobs were 122), its 64-byte icon included, and it is the
 shared files assembled `CS_APPLY_ONLY`: the row table and the fingerprint
 with no probe, the knob with no sweep, the file and the apply - so **nothing
 it can run touches a port before the fingerprint has matched**. It has no

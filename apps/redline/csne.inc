@@ -14,7 +14,10 @@
 ;        bits 5:4  16-bit memory command delay   (kept: 0 already)
 ;        bit 6 quick mode off, bit 7 address hold (kept)
 ;   62h  RA2 "Wait States" [NEAT p31]
-;        bits 1:0  BCLK source                   (kept - the bus CLOCK)
+;        bits 1:0  BCLK source, 00 = CLK2IN/2    <- knob 5, the bus CLOCK:
+;                  01 = CLK2IN doubles SYSCLK; 10 is ATCLK, which HANGS a
+;                  board with no ATCLK crystal, and 11 is reserved - so the
+;                  knob's field may hold 0 or 1 and never more (cs_ne_kt)
 ;        bits 3:2  8-bit AT cycle waits, 00 = 2  <- knob 1, book 4
 ;        bits 5:4  16-bit AT cycle waits, 00 = 0 <- knob 4, book 1
 ;        bits 7:6  reserved - the PB286LP reads them 01, so every write
@@ -38,19 +41,25 @@ CS_NE_C8    equ 2                   ; knob 2: 61h 3:2, 8-bit memory command
                                     ;   delay, 0..3 BCLK [NEAT p30]
 CS_NE_CIO   equ 3                   ; knob 3: 61h 1:0, I/O command delay
 CS_NE_W16   equ 4                   ; knob 4: 62h 5:4, 16-bit waits 0..3
-CS_NE_NK    equ 4
+CS_NE_BCLK  equ 5                   ; knob 5: 62h 1:0, the bus clock: 2 =
+                                    ;   CLK2IN/2 (field 00), 1 = CLK2IN (01)
+CS_NE_NK    equ 5
 CS_NE_BOOK  equ 4
 CS_NE_FLOOR equ 2
 CS_NE_MAXW  equ 5
 
-; The knobs' fields, three bytes each: index, shift, and the value a field
-; of zero means (2 for the 8-bit waits, whose 00 is 2 waits; 0 elsewhere).
-; Every field is two bits wide, and 61h and 62h are R/W in every field
-; [NEAT p30, p31]
-cs_ne_kt:   db 0x62, 2, 2
-            db 0x61, 2, 0
-            db 0x61, 0, 0
-            db 0x62, 4, 0
+; The knobs' fields, four bytes each: index, shift, the value a field of
+; zero means (2 for the 8-bit waits, whose 00 is 2 waits), and the largest
+; FIELD that may be written. Every field is two bits wide, and 61h and 62h
+; are R/W in every field [NEAT p30, p31]. The bus clock is the one knob
+; whose value runs AGAINST its field - a larger value is a slower bus,
+; like every other knob, so it is the divider: 2 is field 00, 1 is 01 -
+; and its largest field is 01, which is what keeps ATCLK unwritable
+cs_ne_kt:   db 0x62, 2, 2, 3
+            db 0x61, 2, 0, 3
+            db 0x61, 0, 0, 3
+            db 0x62, 4, 0, 3
+            db 0x62, 0, 0, 1
 
 ; cs_ne_put - AL = a knob (CS_NE_*), AH = its value: read the register,
 ; replace that field, write the rest back as the chip had it, a fresh index
@@ -67,12 +76,17 @@ cs_ne_put:
     ja .no
     dec al
     mov bl, al
-    add bl, al
-    add bl, al
+    shl bl, 1
+    shl bl, 1
     xor bh, bh                      ; BX = the knob's row of cs_ne_kt
+    cmp al, CS_NE_BCLK - 1          ; the divider: 2 -> 00, 1 -> 01
+    jne .field
+    neg ah                          ; (0 or over 2 lands outside 0..1,
+    add ah, 2                       ; which the field's limit refuses)
+.field:
     sub ah, [cs_ne_kt + bx + 2]
     jb .no
-    cmp ah, 3
+    cmp ah, [cs_ne_kt + bx + 3]
     ja .no
     mov cl, [cs_ne_kt + bx + 1]
     shl ah, cl                      ; AH = the field, in place
@@ -126,6 +140,7 @@ cs_ne_set:
     CS_NE_SETK cs_ne_setc8, CS_NE_C8
     CS_NE_SETK cs_ne_setcio, CS_NE_CIO
     CS_NE_SETK cs_ne_setw16, CS_NE_W16
+    CS_NE_SETK cs_ne_setbclk, CS_NE_BCLK
 
 ; cs_ne_kget - AL = a knob (1..CS_NE_NK): AL = its value, read back.
 ; Interrupts off around the index/data pair. Every other register kept
@@ -133,9 +148,10 @@ cs_ne_kget:
     push bx
     push cx
     dec al
+    mov ch, al                      ; CH = the knob, less one
     mov bl, al
-    add bl, al
-    add bl, al
+    shl bl, 1
+    shl bl, 1
     xor bh, bh
     pushf
     cli
@@ -147,6 +163,11 @@ cs_ne_kget:
     shr al, cl
     and al, 3
     add al, [cs_ne_kt + bx + 2]
+    cmp ch, CS_NE_BCLK - 1          ; the bus clock reads as its divider -
+    jne .out                        ; and a field this code never writes
+    neg al                          ; (10, 11) reads as 0 and -1, which
+    add al, 2                       ; no sweep or Save will take
+.out:
     pop cx
     pop bx
     ret
@@ -158,6 +179,7 @@ cs_ne_kget:
     CS_NE_GETK cs_ne_getc8, CS_NE_C8
     CS_NE_GETK cs_ne_getcio, CS_NE_CIO
     CS_NE_GETK cs_ne_getw16, CS_NE_W16
+    CS_NE_GETK cs_ne_getbclk, CS_NE_BCLK
 
 ; cs_ne_get - AL = the 8-bit wait states 62h says, AH = the 16-bit ones
 cs_ne_get:

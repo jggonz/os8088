@@ -26,7 +26,7 @@
 ; same handler had just opened, and the alert vanished unread (103.6).
 ; =============================================================================
 
-CS_LINES    equ 45                  ; report lines composed
+CS_LINES    equ 53                  ; report lines composed
 CS_LW       equ 74                  ; bytes a line slot: 72 cells + NUL + 1
 CS_COLS     equ 72
 CS_HELP0    equ 10                  ; the help lines: on the page, not in a
@@ -54,7 +54,11 @@ cs_ready:   db 0                    ; 1: identified and measured once
 cs_pick:    db 0                    ; the row the user has (the drop-down)
 cs_conf:    db 0                    ; pick + 1 the user confirmed writing to
 cs_warn:    db 0                    ; pick + 1 the user let sweep, untested
-cs_pask:    db 0                    ; the alert up: 0 not detected, 1 untested
+cs_pask:    db 0                    ; the alert up: 0 not detected, 1 untested,
+                                    ; 2 the bus clock
+cs_bwarn:   db 0                    ; pick + 1 the user let double its bus
+cs_dmaok:   db 0                    ; 1: A:'s boot sector read at home, the
+                                    ;   DMA reference (cs_sw_dma)
 cs_pend:    db 0                    ; the key that asked, while the alert is up
 cs_setv:    db 0FFh                 ; the R4 set this session, 0FFh = none
 cs_meth:    db 0                    ; REDLINE.CFG's method for it
@@ -120,10 +124,10 @@ cs_drop:    dw 0, 0, 0, 0           ; OS88UI_DR_RECT, filled by cs_geom
 cs_s_pick:  db 'Chipset:', 0
 
 ; The TARGET: what Tune sets the bus to. Live only where Tune is
-cs_titems:  dw cs_t_fast, cs_t_spec
+cs_titems:  dw cs_t_fast, cs_t_spec, cs_t_bus
 cs_tgt:     dw 0, 0, 0, 0           ; OS88UI_DR_RECT, filled by cs_geom
             dw cs_titems            ; OS88UI_DR_ITEMS
-            dw 2                    ; OS88UI_DR_N
+            dw 3                    ; OS88UI_DR_N
             dw 0                    ; OS88UI_DR_SEL
             dw 0                    ; OS88UI_DR_WIN
             db 0, 0FFh              ; OS88UI_DR_OPEN, OS88UI_DR_HOT
@@ -136,6 +140,7 @@ cs_tgt:     dw 0, 0, 0, 0           ; OS88UI_DR_RECT, filled by cs_geom
 cs_s_tgt:   db 'Target:', 0
 cs_t_fast:  db 'Fastest tested', 0
 cs_t_spec:  db 'Mfg spec', 0
+cs_t_bus:   db 'Bus clock x2', 0
 
 ; =============================================================================
 ; The tabs. cs_tabset changes the state and draws nothing; cs_settab is it
@@ -847,6 +852,19 @@ cs_act_key:
 .found:
     cmp al, 'T'
     jne .go
+    cmp byte [cs_target], 2         ; Bus clock x2: its own question, every
+    jne .t0                         ; session, on the one row that has one
+    cmp byte [cs_pick], CS_NE
+    jne .go
+    mov ah, [cs_pick]
+    inc ah
+    cmp ah, [cs_bwarn]
+    je .go
+    push si
+    mov byte [cs_pask], 2
+    mov si, cs_s_bwarn
+    jmp short .ask
+.t0:
     cmp byte [cs_target], 0
     jne .go
     push ax
@@ -887,6 +905,8 @@ cs_act_key:
     jne .keep
     cmp byte [cs_target], 0         ; Tune sets what the Target names
     je cs_do_tune
+    cmp byte [cs_target], 2
+    je cs_do_bus
     jmp cs_do_ds
 .keep:
     cmp al, 'K'
@@ -900,8 +920,12 @@ cs_conf_ans:
     jne .no
     mov al, [cs_pick]
     inc al
-    cmp byte [cs_pask], 0
-    jne .warn
+    cmp byte [cs_pask], 1
+    jb .det
+    je .warn
+    mov [cs_bwarn], al
+    jmp short .again
+.det:
     mov [cs_conf], al
     jmp short .again
 .warn:
@@ -975,6 +999,140 @@ cs_do_tune:
     pop bx
     pop ax
     jmp cs_after
+
+; -----------------------------------------------------------------------------
+; Bus clock x2 (SPEC.md 103.6.3.3): the NEAT's BCLK from CLK2IN/2 to CLK2IN,
+; which doubles SYSCLK past the book's 6-8 MHz AT range [NEAT p5]. Not
+; Fastest tested, because the owner's rule for that is "unlikely to crash
+; the machine" and this is not: a card that cannot keep up can hold the
+; bus. Every wait and delay goes to its LONGEST first, at the clock it has
+; now (slower is safe), the clock is swept with every check plus a DMA
+; read of A:'s boot sector, and then the four come back down from there
+; under the keep rule. What it finds is SET, like any Tune.
+; -----------------------------------------------------------------------------
+cs_do_bus:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov byte [cs_act], 2
+    mov word [cs_amsg], cs_s_nobus
+    cmp byte [cs_pick], CS_NE
+    jne .out
+    call cs_romref                  ; the references, as Tune's
+    call cs_scrseg
+    xor bx, bx
+    call cs_pmfind
+    jc .nopm
+    mov bx, [cs_pmseg]
+.nopm:
+    call cs_sw_refs
+    mov di, bl_out                  ; the DMA reference, at the bus it has
+    call cs_dmard
+    mov byte [cs_dmaok], 0
+    jc .long
+    mov byte [cs_dmaok], 1
+.long:
+    mov si, cs_klist_nex + 2        ; every wait and delay to its longest
+.l:
+    mov bx, [si]
+    or bx, bx
+    jz .run
+    mov [cs_sw_desc], bx
+    mov al, [bx + CSD_BOOK]
+    call cs_sw_set
+    add si, 2
+    jmp short .l
+.run:
+    mov byte [cs_sw_xmode], 1
+    mov si, cs_klist_nex
+    call cs_sw_tune                 ; AL = the clock's divider, kept
+    mov byte [cs_sw_xmode], 0
+    mov [cs_tfast], al
+    call cs_ne_getw8
+    mov [cs_setv], al               ; "something was set this session"
+    mov byte [cs_meth], 3
+    mov byte [cs_saved], 0
+    mov byte [cs_act], 4
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    jmp cs_after
+
+; cs_dmard - A:'s boot sector into DS:DI (512 bytes, 512-aligned: bl_out is,
+; so it cannot cross a 64KB page) by the BIOS - a DMA transfer, the one kind
+; of bus cycle the sweep's own checks never make. Three tries with a reset
+; between, the BIOS's own convention for a motor coming up. CF = 1 failed.
+; Interrupts ON: the floppy controller answers on IRQ6
+cs_dmard:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    push ds
+    pop es
+    mov si, 3
+.try:
+    mov bx, di
+    mov ax, 0x0201
+    mov cx, 0x0001
+    xor dx, dx
+    int 0x13
+    jnc .out
+    xor ax, ax
+    xor dx, dx
+    int 0x13
+    dec si
+    jnz .try
+    stc
+.out:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; cs_sw_dma - csweep.inc's hook, for a knob that moves DMA: the sector read
+; again at the candidate must match the one read at home. CF = 1 it did
+; not (or the read failed); CF = 0 it did, or there was no reference to
+; hold it to (no disk in A:, which the report's sweep line says)
+cs_sw_dma:
+    push cx
+    push si
+    push di
+    push es
+    cmp byte [cs_dmaok], 0
+    je .ok
+    mov di, bl_out + 512
+    call cs_dmard
+    jc .out
+    push ds
+    pop es
+    mov si, bl_out
+    mov di, bl_out + 512
+    mov cx, 256
+    cld
+    repe cmpsw
+    jne .bad
+.ok:
+    clc
+    jmp short .out
+.bad:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    ret
 
 ; cs_tunehome - BX = a descriptor: AL = HOME, the setting the board runs now
 ; and so the one the sweep's references are read at. A chipset that reads
@@ -1207,6 +1365,8 @@ cs_actline:
     je .msg
     cmp al, 3
     je .ds
+    cmp al, 4
+    je .bus
     mov si, cs_s_hfe                ; nothing yet: the first thing to press
     call cs_canset
     jnc .say
@@ -1237,10 +1397,10 @@ cs_actline:
     mov al, [bx + CSD_BOOK]
     call cs_knobput
     mov si, cs_s_ds2
-    jmp short .last
+    jmp .last
 .all:
     call cs_klistput
-    jmp short .out
+    jmp .out
 .tune:
     mov si, cs_s_tune
     call cs_put
@@ -1271,6 +1431,27 @@ cs_actline:
     call cs_knobput
     mov si, cs_k_none
     jmp short .last
+.bus:
+    mov si, cs_s_bus                ; "Bus clock: BCLK=CLK2IN/1 kept; 2
+    call cs_put                     ; failed" - the waits are on line 3
+    mov bx, cs_desc_nebc
+    mov al, [cs_tfast]
+    call cs_knobput
+    mov si, cs_s_bkept
+    cmp al, 1
+    je .bk
+    mov si, cs_s_bnot
+.bk:
+    call cs_put
+    call cs_swfails
+    mov si, cs_k_none
+    or ax, ax
+    jz .last
+    mov si, cs_s_tfl
+    call cs_put
+    call cs_dec
+    mov si, cs_s_tfails
+    jmp short .last
 .tall:
     call cs_klistput                ; every knob where Tune left it, and how
     call cs_swfails                 ; many steps read wrong on the way
@@ -1293,6 +1474,7 @@ cs_actline:
 ; and, on a row whose book gives the sum, the setting that read means
 cs_clockline:
     push ax
+    push bx
     push si
     mov si, cs_s_ck88
     cmp byte [cs_tier], CPU_8086
@@ -1316,7 +1498,7 @@ cs_clockline:
     mov si, cs_s_ck4
     call cs_put
     cmp byte [cs_pick], CS_F3       ; the sum is the FE3600's book
-    jne .out
+    jne .bclk
     mov ax, [cs_tq]
     call cs_fewaits
     jc .out
@@ -1327,8 +1509,18 @@ cs_clockline:
     jmp short .out
 .put:
     call cs_put
+    jmp short .out
+.bclk:
+    call cs_neatws                  ; the NEAT's bus clock, read back
+    jc .out
+    mov si, cs_s_comma2
+    call cs_put
+    mov bx, cs_desc_nebc
+    call cs_ne_getbclk
+    call cs_knobput
 .out:
     pop si
+    pop bx
     pop ax
     ret
 
@@ -2364,6 +2556,14 @@ cs_fieldlines:
     mov si, cs_s_swno2
 .pg:
     call cs_put
+    mov si, cs_s_swa                ; the DMA reference, Bus clock x2's
+    call cs_put
+    mov si, cs_s_swyes
+    cmp byte [cs_dmaok], 0
+    jne .dm
+    mov si, cs_s_swnone
+.dm:
+    call cs_put
     mov bx, cs_swsegs
 .seg:
     mov si, [bx]
@@ -2451,7 +2651,7 @@ cs_swrow:
     mov si, cs_s_swwrong
     call cs_put
     mov al, [bx + CSL_WHY]
-    mov cx, 7
+    mov cx, 8
     mov si, cs_swwhy
 .why:
     shr al, 1
@@ -2580,7 +2780,7 @@ cs_swsegs:  dw cs_s_swscr, cs_sw_sseg, cs_s_swrom, cs_sw_rseg
             dw cs_s_swpm, cs_sw_pseg
 cs_swnames: dw cs_s_nscr, cs_s_npm, cs_s_nrom, cs_s_nio
 cs_swwhy:   dw cs_s_wscr, cs_s_wfdc, cs_s_wpage, cs_s_wrb  ; CSW_ bit order
-            dw cs_s_wrom, cs_s_wpm, cs_s_wramp
+            dw cs_s_wrom, cs_s_wpm, cs_s_wramp, cs_s_wdma
 
 ; =============================================================================
 ; cs_report - every line but the help, CR LF, into bl_out, written as
@@ -2682,6 +2882,7 @@ cs_s_sver:  db 'VERIFIED (run on real hardware)', 0
 cs_s_xt:    db 'An 8088/8086: the bus is the CPU', 27h, 's own, nothing to tune.', 0
 cs_s_now:   db 'Now: ', 0
 cs_s_comma: db ', ', 0
+cs_s_comma2: db '; ', 0
 cs_s_norow: db 'This chipset is identified only: nothing on it can be set.', 0
 cs_s_unset: db 'Set now: nothing - the BIOS', 27h, 's own timing is running', 0
 cs_s_set:   db 'Set now: R4 ', 0
@@ -2705,6 +2906,11 @@ cs_s_rsv:   db ' (saved)', 0
 cs_s_rnsv:  db ' (unsaved)', 0
 cs_s_nefind: db 'The NEAT is written only where its probe found it', 0
 cs_s_warn:  db 'Untested timings: may need a reset', 0
+cs_s_bwarn: db 'Doubles the bus clock: may hang', 0
+cs_s_nobus: db 'Bus clock x2: only the C&T NEAT has a bus clock to set', 0
+cs_s_bus:   db 'Bus clock: ', 0
+cs_s_bkept: db ' kept, doubled', 0
+cs_s_bnot:  db ', not doubled', 0
 cs_s_btxt:  db 'BIOS: ', 0
 cs_s_btnone: db 'none found', 0
 cs_s_noregs: db 'Registers: none this chipset lets us read', 0
@@ -2738,6 +2944,8 @@ cs_s_wscr:  db ' scr', 0
 cs_s_wrom:  db ' rom', 0
 cs_s_wpm:   db ' pm', 0
 cs_s_wramp: db ' 2A3h', 0
+cs_s_wdma:  db ' dma', 0
+cs_s_swa:   db ' A:=', 0
 cs_s_wfdc:  db ' fdc', 0
 cs_s_wpage: db ' io-w', 0
 cs_s_wrb:   db ' rb', 0

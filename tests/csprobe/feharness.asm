@@ -97,6 +97,34 @@ h_sweep_ne:                         ; the NEAT's, the same references; home
     mov bx, cs_desc_ne
     jmp cs_sw_sweep
 h_flat:     db 0                    ; 1: every step times the same
+h_dmabad:   db 0                    ; 1: the DMA read comes back wrong
+cs_sw_dma:                          ; REDLINE re-reads A:'s boot sector; the
+    push ax                         ; harness answers h_dmabad (CF = bit 0)
+    mov al, [h_dmabad]
+    shr al, 1
+    pop ax
+    ret
+h_bus_ne:                           ; Bus clock x2, as cs_do_bus runs it:
+    mov ax, 0xA000                  ; the references, every wait and delay
+    xor bx, bx                      ; to its longest, then the experiment's
+    mov cx, 0xC000                  ; list with its knobs switched on
+    call cs_sw_refs
+    mov si, cs_klist_nex + 2
+.l:
+    mov bx, [si]
+    or bx, bx
+    jz .run
+    mov [cs_sw_desc], bx
+    mov al, [bx + CSD_BOOK]
+    call cs_sw_set
+    add si, 2
+    jmp short .l
+.run:
+    mov byte [cs_sw_xmode], 1
+    mov si, cs_klist_nex
+    call cs_sw_tune
+    mov byte [cs_sw_xmode], 0
+    ret
 h_norom:    db 0                    ; 1: h_tune_ne has no ROM reference
 cs_sw_measure:                      ; REDLINE times each step; the model has
     push ax                         ; no clock, so the harness makes one up:

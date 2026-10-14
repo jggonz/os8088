@@ -417,7 +417,8 @@ class NEBoard(FEBoard):
     # where the OTHER knobs go wrong: 8-bit command delay, I/O command delay,
     # 16-bit waits - below these the reads go wrong as they do below T
     Tk = (0, 0, 0)
-    MASK = {0x61: 0x0F, 0x62: 0x3C}     # the fields a write may change
+    fastbus = True                      # False: the doubled bus reads wrong
+    MASK = {0x61: 0x0F, 0x62: 0x3F}     # the fields a write may change
 
     def __init__(self, T, mu, pico=False):
         self.T, self.mu, self.pico = T, mu, pico
@@ -440,10 +441,15 @@ class NEBoard(FEBoard):
         return (self.ws(), (self.regs[0x61] >> 2) & 3, self.regs[0x61] & 3,
                 (self.regs[0x62] >> 4) & 3)
 
+    def bclk(self):
+        """the bus clock as the knob's divider: field 00 is 2, 01 is 1"""
+        return 2 - (self.regs[0x62] & 3)
+
     def apply(self):
         self.r4 = self.ws()
         k = self.knobs()
-        wrong = self.r4 < self.T or any(v < t for v, t in zip(k[1:], self.Tk))
+        wrong = (self.r4 < self.T or any(v < t for v, t in zip(k[1:], self.Tk))
+                 or (self.bclk() == 1 and not self.fastbus))
         if wrong != self.wrong:
             self.wrong = wrong
             x = (lambda b: bytes(c ^ 0x5A for c in b)) if wrong else (lambda b: b)
@@ -476,6 +482,9 @@ class NEBoard(FEBoard):
             elif ch & ~self.MASK[self.idx] & 0xFF:
                 self.bad.append("%02Xh's other bits changed: %02Xh -> %02Xh"
                                 % (self.idx, self.regs[self.idx], v))
+            elif self.idx == 0x62 and v & 3 > 1:
+                self.bad.append("62h's BCLK source written %d - ATCLK or "
+                                "reserved, which HANGS a board" % (v & 3))
             elif ch and not any(ch & ~f == 0 for f in (0x03, 0x0C, 0x30)):
                 self.bad.append("%02Xh: one write moved two fields, %02Xh -> %02Xh"
                                 % (self.idx, self.regs[self.idx], v))
@@ -550,7 +559,7 @@ L = 16      # CSL_SIZE: one step of csweep.inc's cs_sw_log
 def nelog(r):
     """cs_sw_log as (descriptor, value, read right, home, note) a step"""
     n = r.rb("cs_sw_n")[0]
-    log = r.rb("cs_sw_log", 12 * L)
+    log = r.rb("cs_sw_log", 20 * L)
     return [(int.from_bytes(log[i * L:i * L + 2], "little"), log[i * L + 2],
              log[i * L + 3] == 0, log[i * L + 6], log[i * L + 7]) for i in range(n)]
 
@@ -592,7 +601,7 @@ def write_side(bad):
             # read goes wrong at once, so at least the screen (1) and the ROM
             # (16), and the PicoMEM's count (64) where there is one; a step
             # that passed names nothing
-            log = r.rb("cs_sw_log", 12 * L)
+            log = r.rb("cs_sw_log", 20 * L)
             want = 0x11 | (0x40 if pico else 0)
             for i in range(r.rb("cs_sw_n")[0]):
                 v, w = log[i * L + 2], log[i * L + 3]
@@ -620,7 +629,7 @@ def write_side(bad):
         b.io_rd = one
         ax, cf = r.call("h_sweep", watch_if=True)
         runs += 1
-        why = r.rb("cs_sw_log", 12 * L)
+        why = r.rb("cs_sw_log", 20 * L)
         if ax & 0xFF != 8 or r.rb("cs_sw_fail")[0] != 6:
             bad("I/O check %Xh: fastest %d, failed at %d, want 8 and 6"
                 % (port, ax & 0xFF, r.rb("cs_sw_fail")[0]))
@@ -664,12 +673,13 @@ def write_side(bad):
             bad("%s: %s" % (tag, sorted(set(r.b.bad))[:4]))
     # 2d. EVERY NEAT knob through cs_ne_put and back through cs_ne_kget, each
     # field alone (the model refuses a write that moves two)
-    for k, lo, hi in ((1, 2, 5), (2, 0, 3), (3, 0, 3), (4, 0, 3)):
+    for k, lo, hi in ((1, 2, 5), (2, 0, 3), (3, 0, 3), (4, 0, 3), (5, 1, 2)):
         for v in range(lo, hi + 1):
             r = Rig(img, syms, NEBoard, 0)
             ax, cf = r.call("cs_ne_put", ax=(v << 8) | k)
             runs += 1
-            if cf or r.b.knobs()[k - 1] != v or r.b.bad:
+            got = r.b.bclk() if k == 5 else r.b.knobs()[k - 1]
+            if cf or got != v or r.b.bad:
                 bad("cs_ne_put knob %d = %d: CF %d, knobs %s, %s"
                     % (k, v, cf, r.b.knobs(), r.b.bad))
             ax, cf = r.call("cs_ne_kget", ax=k)
@@ -703,6 +713,8 @@ def write_side(bad):
             if list(r.b.knobs()) != want or ax & 0xFF != want[0] or r.b.bad:
                 bad("%s: knobs %s, AL %d, want %s; %s"
                     % (tag, r.b.knobs(), ax & 0xFF, want, r.b.bad[:3]))
+            if r.b.bclk() != 2:
+                bad("%s: Fastest tested moved the bus clock to %d" % (tag, r.b.bclk()))
             got = nelog(r)
             steps = [s + (0,) for s in steps]
             if got != steps:
@@ -734,9 +746,47 @@ def write_side(bad):
             or r.b.bad:
         bad("no 8-bit memory: knobs %s, the memory delay's log %s; %s"
             % (r.b.knobs(), mem, r.b.bad[:3]))
+    # 2h. BUS CLOCK x2: every wait and delay to its longest, the clock
+    # doubled, then each back down from its longest - and the same with a
+    # bus that reads wrong doubled, and one whose DMA read comes back wrong,
+    # where the clock stays at /2 and the waits still come down at it
+    xd = ("cs_desc_xw8", "cs_desc_xc8", "cs_desc_xio", "cs_desc_x16")
+    xbooks, xfloors = (5, 3, 3, 3), (2, 0, 0, 0)
+    for T, fast, dmabad in ((2, True, False), (3, True, False), (2, False, False),
+                            (2, True, True), (4, False, True)):
+        r = Rig(img, syms, NEBoard, T)
+        r.b.fastbus = fast
+        r.wb("h_dmabad", [1 if dmabad else 0])
+        ax, cf = r.call("h_bus_ne", watch_if=True)
+        runs += 1
+        ok = fast and not dmabad
+        tag = "Bus clock x2 T=%d bus %s dma %s" % (T, "ok" if fast else "WRONG",
+                                                  "WRONG" if dmabad else "ok")
+        want_b = 1 if ok else 2
+        want = (max(T, 2), 0, 0, 0)
+        steps = [(syms["cs_desc_nebc"], 2, True, 2, 0),
+                 (syms["cs_desc_nebc"], 1, ok, 2, 0)]
+        for i in range(4):
+            for c in range(xbooks[i], xfloors[i] - 1, -1):
+                good = c >= (T if i == 0 else 0)
+                steps.append((syms[xd[i]], c, good, xbooks[i], 0))
+                if not good:
+                    break
+        log = nelog(r)
+        if r.b.bclk() != want_b or r.b.knobs() != want or ax & 0xFF != want_b \
+                or log != steps[:20] or r.b.bad:
+            bad("%s: bus /%d waits %s AL %d, want /%d %s; log %s, want %s; %s"
+                % (tag, r.b.bclk(), r.b.knobs(), ax & 0xFF, want_b, want,
+                   log, steps[:20], r.b.bad[:3]))
+        if dmabad and fast:
+            raw = r.rb("cs_sw_log", 20 * L)
+            if not raw[1 * L + 3] & 0x80:
+                bad("%s: the clock's step does not say dma" % tag)
     for ax_, what in (((6 << 8) | 1, "6 waits"), ((1 << 8) | 1, "1 wait"),
                       ((3 << 8) | 5, "knob 5"), ((3 << 8) | 0, "knob 0"),
-                      ((4 << 8) | 2, "8-bit delay 4"), ((4 << 8) | 4, "16-bit 4 waits")):
+                      ((4 << 8) | 2, "8-bit delay 4"), ((4 << 8) | 4, "16-bit 4 waits"),
+                      ((0 << 8) | 5, "bus divider 0 (field 10, ATCLK)"),
+                      ((3 << 8) | 5, "bus divider 3"), ((0xFF << 8) | 5, "bus divider FF")):
         r = Rig(img, syms, NEBoard, 0)
         ax, cf = r.call("cs_ap_ne", ax=ax_)
         runs += 1

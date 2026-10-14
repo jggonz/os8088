@@ -47,8 +47,14 @@ CSD_VER     equ 12                  ; db CSS_VERIFIED, or CSS_DATASHEET: this
                                     ; knobs do not share with its first
 CSD_GOV     equ 13                  ; db what it TIMES, cs_sw_ns's order: 1
                                     ; screen, 2 PicoMEM, 4 ROM, 8 I/O read
+CSD_FLAGS   equ 14                  ; db CSF_*
+CSF_X       equ 1                   ; an EXPERIMENT's knob: Fastest tested
+                                    ; leaves it alone ([cs_sw_xmode] = 0)
+CSF_DMA     equ 2                   ; a step that read right must also pass
+                                    ; the includer's cs_sw_dma
 
-CS_SWMAX    equ 12                  ; steps logged, every knob's
+CS_SWMAX    equ 20                  ; steps logged, every knob's (Bus
+                                    ; clock x2 takes 2 + 4 x 4 at most)
 CSL_DESC    equ 0                   ; dw the knob's descriptor
 CSL_VAL     equ 2                   ; db the candidate
 CSL_WHY     equ 3                   ; db what went wrong (CSW_*), 0 = passed
@@ -64,6 +70,7 @@ CSW_RB      equ 8                   ; the knob did not read back
 CSW_ROM     equ 16                  ; the option ROM read wrong
 CSW_PM      equ 32                  ; a PicoMEM pattern read wrong
 CSW_RAMP    equ 64                  ; the PicoMEM's 2A3h count skipped
+CSW_DMA     equ 128                 ; the DMA read (cs_sw_dma) came back wrong
                                     ; (one flag a reference: the Victory's
                                     ; first report said "memory" and could
                                     ; not say which of three it was)
@@ -78,23 +85,47 @@ CS_SW_PAGE  equ 0x85                ; an unused DMA page register
 ; A row's knobs, swept in this order: each starts from where the knobs
 ; before it were left
 cs_klist_fe: dw cs_desc_fe, 0
-cs_klist_ne: dw cs_desc_ne, cs_desc_nec8, cs_desc_neio, cs_desc_ne16, 0
+cs_klist_ne: dw cs_desc_ne, cs_desc_nec8, cs_desc_neio, cs_desc_ne16
+            dw cs_desc_nebc, 0      ; (the bus clock: Bus clock x2 only)
+; Bus clock x2 (SPEC.md 103.6.3.3): the clock first, with every wait and
+; delay at its LONGEST, then each of them back down from there
+cs_klist_nex: dw cs_desc_nebc, cs_desc_xw8, cs_desc_xc8, cs_desc_xio
+            dw cs_desc_x16, 0
 
 cs_desc_fe: db CS_FE_BOOK, CS_FE_FLOOR, 2, CS_FE_R4
             dw cs_fe_set, 0, cs_k_r4, cs_k_none
-            db CSS_VERIFIED, 0x0E   ; 8-bit memory and I/O
+            db CSS_VERIFIED, 0x0E, 0 ; 8-bit memory and I/O
 cs_desc_ne: db CS_NE_BOOK, CS_NE_FLOOR, 1, CS_NE_W8
             dw cs_ne_set, cs_ne_getw8, cs_k_8b, cs_k_waits
-            db CSS_VERIFIED, 0x0E   ; the PB286LP, 2026-10-14
+            db CSS_VERIFIED, 0x0E, 0 ; the PB286LP, 2026-10-14
 cs_desc_nec8: db 1, 0, 1, CS_NE_C8
             dw cs_ne_setc8, cs_ne_getc8, cs_k_8bd, cs_k_none
-            db CSS_DATASHEET, 0x06  ; 8-bit MEMORY: a ROM or a PicoMEM
+            db CSS_DATASHEET, 0x06, 0 ; 8-bit MEMORY: a ROM or a PicoMEM
 cs_desc_neio: db 1, 0, 1, CS_NE_CIO
             dw cs_ne_setcio, cs_ne_getcio, cs_k_iod, cs_k_none
-            db CSS_DATASHEET, 0x08  ; the I/O read
+            db CSS_DATASHEET, 0x08, 0 ; the I/O read
 cs_desc_ne16: db 1, 0, 1, CS_NE_W16
             dw cs_ne_setw16, cs_ne_getw16, cs_k_16b, cs_k_waits
-            db CSS_DATASHEET, 0x01  ; the screen, a 16-bit card on an AT
+            db CSS_DATASHEET, 0x01, 0 ; the screen, a 16-bit card on an AT
+; the bus clock, as its divider (csne.inc): 2 = CLK2IN/2, Mfg spec, and a
+; SYSCLK of CLK2IN/4 - 6 MHz on the PB286LP, the bottom of the book's 6-8
+; MHz AT range [NEAT p5]; 1 = CLK2IN, twice that. It times everything
+cs_desc_nebc: db 2, 1, 1, CS_NE_BCLK
+            dw cs_ne_setbclk, cs_ne_getbclk, cs_k_bclk, cs_k_none
+            db CSS_DATASHEET, 0x0F, CSF_X | CSF_DMA
+; ...and the four knobs as Bus clock x2 sweeps them: from their LONGEST
+cs_desc_xw8: db CS_NE_MAXW, CS_NE_FLOOR, 1, CS_NE_W8
+            dw cs_ne_set, cs_ne_getw8, cs_k_8b, cs_k_waits
+            db CSS_DATASHEET, 0x0E, 0
+cs_desc_xc8: db 3, 0, 1, CS_NE_C8
+            dw cs_ne_setc8, cs_ne_getc8, cs_k_8bd, cs_k_none
+            db CSS_DATASHEET, 0x06, 0
+cs_desc_xio: db 3, 0, 1, CS_NE_CIO
+            dw cs_ne_setcio, cs_ne_getcio, cs_k_iod, cs_k_none
+            db CSS_DATASHEET, 0x08, 0
+cs_desc_x16: db 3, 0, 1, CS_NE_W16
+            dw cs_ne_setw16, cs_ne_getw16, cs_k_16b, cs_k_waits
+            db CSS_DATASHEET, 0x01, 0
 cs_ne_getw8:
     mov al, CS_NE_W8
     jmp cs_ne_kget
@@ -105,6 +136,7 @@ cs_k_8b:    db '8-bit ', 0
 cs_k_16b:   db '16-bit ', 0
 cs_k_8bd:   db 'mem delay ', 0
 cs_k_iod:   db 'I/O delay ', 0
+cs_k_bclk:  db 'BCLK=CLK2IN/', 0
 
 cs_sw_desc: dw 0
 cs_sw_home: db 0                    ; the setting the sweep started from
@@ -122,6 +154,7 @@ cs_sw_n:    db 0                    ; steps logged
 cs_sw_ns:   times 4 dw 0            ; cs_sw_measure's answer
 cs_sw_kns:  times 4 dw 0            ; ...at the last step KEPT
 cs_sw_last: dw 0                    ; the log step cs_sw_logit wrote, or 0
+cs_sw_xmode: db 0                   ; 1: an experiment's knobs are swept too
 cs_sw_log:  times CS_SWMAX * CSL_SIZE db 0
 
 ; cs_sw_refs - AX = the screen's segment, BX = a PicoMEM's or 0, CX = an
@@ -512,6 +545,20 @@ cs_sw_sweep:
     jc .bad
     or ch, ch                       ; the book's value is the baseline: the
     jz .keep                        ; data sheet's own, kept as it reads
+    test byte [bx + CSD_FLAGS], CSF_DMA
+    jz .gain
+    call cs_sw_dma                  ; the includer's: DMA, interrupts ON
+    jnc .gain
+    push bx
+    mov bx, [cs_sw_last]            ; onto the step it failed
+    or bx, bx
+    jz .dmab
+    or byte [bx + CSL_WHY], CSW_DMA
+    inc word [bx + CSL_BAD]
+.dmab:
+    pop bx
+    jmp short .bad
+.gain:
     call cs_sw_faster
     jnc .keep
     push ax
@@ -665,6 +712,11 @@ cs_sw_tune:
     mov bx, [si]
     or bx, bx
     jz .out
+    test byte [bx + CSD_FLAGS], CSF_X
+    jz .sw
+    cmp byte [cs_sw_xmode], 0       ; an experiment's knob, outside it
+    je .next
+.sw:
     mov al, dl
     mov ax, [bx + CSD_GET]
     or ax, ax

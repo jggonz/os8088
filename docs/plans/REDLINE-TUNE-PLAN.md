@@ -583,9 +583,23 @@ docs/reports/.
     explains: 68h read 0Fh (C000-CFFF shadowed, C000 at 0-3 ns) in the
     first report and this one, 00h in the two between (C000 at 876 ns), and
     65h bit 7 with it (9Fh/1Fh). Nothing REDLINE writes reaches either.
-    The 82C212's registers are reset only by power-good [NEAT p12, p19],
-    so the open question for the owner is whether the two runs without it
-    followed a WARM reboot.
+    The 82C212's registers are reset only by power-good [NEAT p12, p19].
+    The owner: the run with shadowing was a COLD power-on, and the two
+    without it were probably warm - so on this board a Ctrl-Alt-Del comes
+    up with the ROM shadow off, the BIOS's warm path evidently skipping a
+    step its cold one takes.
+- **Wave 3.9 — Bus clock x2, the experiment. BUILT** (SPEC.md 103.6.3.3).
+  The bus clock was held out of wave 3.8 for a round of its own, and the
+  owner set the line: if a test is likely to crash the machine it is a
+  separate experiment, otherwise part of Fastest tested. A doubled ISA
+  bus is likely, so it is a third Target. The book puts SYSCLK at 6-8 MHz
+  for AT compatibility [NEAT p5] and the PB286LP runs 6; the chip's only
+  faster setting is 12. Every wait and delay goes to its longest first,
+  the clock is checked with a DMA read of A:'s boot sector beside the rest,
+  and the four come back down. `cs_ne_put` gained a per-knob field limit
+  so ATCLK (a hang on a board without its crystal) cannot be written.
+  - OWED: the PB286LP's run, with a disk in A: so the DMA check has a
+    reference.
   - NOT TAKEN, for its own round: the BUS CLOCK (62h bits 1:0, CLK2IN/2 ->
     CLK2IN). It doubles every card's timing at once, so a sweep's checks
     say less about it than about a wait state - a card that holds IOCHRDY
