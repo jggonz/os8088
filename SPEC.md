@@ -169086,6 +169086,142 @@ afterwards it said so in every one, the pixels that moved the status bar's
 `Memory:` digits (the CGA's 368-390 x 165-171, the VGA's 464-486 x 475-481)
 and the menu bar's clock: the cause, seen. All five passed.
 
+## 107. WireBall — Pong across a null modem (`apps/wireball/`)
+
+`WIREBALL.O88` is an 8086 package with a desktop launch panel and an exclusive
+80x25 text-mode court (§53). The desktop splash has generated CRT/cable
+artwork, Serial Match and Practice buttons, a controls page and a sound toggle.
+S starts serial play; L starts practice against an AI. The same CP437 court runs on VGA, CGA, EGA and Hercules. Up/Down or W/S
+move a four-cell paddle; P requests pause, N requests a new match, M toggles
+sound, and Escape
+returns to the desktop. First to 11 wins, without a win-by-two requirement.
+
+### 107.1 Port lifetime
+
+Serial play borrows the BIOS-advertised standard COM1/COM2 UARTs only inside
+the exclusive bracket, where all other tasks are frozen. It saves each UART's
+LCR, IER, divisor and MCR, masks IRQ3/IRQ4 (the mouse ISR scans both UARTs),
+and polls at 2400 baud, 8N1, without hardware flow control. Presence is tested
+with two divisor-low-latch patterns, restoring DLL and LCR on both acceptance
+and refusal. The probe supports original 8250 UARTs, which lack the scratch
+register at base+7 (§9.5). It never hooks an
+interrupt vector or changes the kernel ABI. Each loop services both UARTs;
+transmit is nonblocking and graphics are direct VRAM cell updates. No sleeps,
+disk operations or BIOS video calls occur while the wire is active. All saved
+UART registers and the original PIC bits 3/4 are restored before the bracket
+returns, including Escape, no-port and connection-loss paths. Practice never
+touches a UART. Use a crossed TX/RX null modem with a shared signal ground;
+COM1 and COM2 are the supported standard base addresses. Other serial devices
+on those ports should be disconnected during serial play.
+
+### 107.2 Discovery and protocol version 2
+
+Each peer generates a nonzero 32-bit identity from the running PIT and the OS
+random generator. HELLO is sent on both ports until a valid peer is found.
+The first peer/port is bound; the lower unsigned identity owns the left court
+and simulates the entire match. Equal identities are regenerated. Each peer
+echoes the other's identity; only an addressed reply establishes a match.
+The right peer sends its paddle and command counter, and renders authoritative
+snapshots with bounded prediction between them. A three-second silence or BYE
+stops play and resumes discovery; reconnection starts a fresh match.
+
+Frames start and end with 7Eh. Payload 7Eh/7Dh is escaped as 7Dh followed by
+the byte XOR 20h. A frame is exactly 26 decoded bytes: `W B`, version 2,
+type (0 HELLO, 1 STATE, 2 INPUT, 3 BYE), sender identity (little endian
+32 bits), recipient identity (32 bits, zero for initial HELLO), left and
+right paddle top (bytes, 0..16), ball X and Y (little endian words, quarter
+cells, X 0..620, Y 0..76), signed velocity X/Y (bytes), scores (0..11),
+flags (bit 0 pause, bit 1 finished), serve countdown (ticks, 0..36), command
+counter, and XOR of the preceding 25 bytes. Bounds, magic, version, checksum,
+peer, port and recipient are checked before applying state. An overlong,
+truncated or damaged frame is discarded at the next delimiter. UART line
+errors discard the partial frame. Full snapshots repair missed frames; input
+and command counters repeat, so packet loss does not lose pause/restart.
+STATE velocities must have `1 <= abs(VX) <= 16` and `abs(VY) <= 8`.
+Version 2 expands the velocity bounds for rally acceleration; older games
+cannot join a match with this version.
+
+Simulation runs at 18.2 Hz, snapshots/input every three ticks and HELLO every
+18 ticks. INPUT's flags carry the latest command (1 pause, 2 new match); its
+counter is applied once and acknowledged in STATE. The court has 156 columns,
+78 per monitor, and 20 playable rows. Practice uses 78 columns on one monitor.
+
+Ball motion uses four bounded substeps per tick, with quarter-cell remainders
+retained across substeps. At the maximum speed a substep spans at most one
+column or half a row. Each substep polls the UARTs and resolves wall/paddle
+collisions; wall and paddle rebounds reflect the overshoot rather than
+discarding the rest of the movement. Finite ball/paddle overlap uses the
+paddle center (top row * 4 + 6), half-height 8 and ball half-height 2.
+Contact offset selects one of eleven integer direction vectors from 0 to
+60 degrees. A moving paddle biases the offset by two quarter-row units in
+its movement direction, clamped to the same angle limit. Remote movement is
+estimated from successive INPUT positions and expires after four ticks.
+Velocity vectors account for the text court's approximately 2:1 cell aspect;
+no floating-point or trigonometry runs on the guest. Nominal speed begins at
+8 quarter-columns/tick and increases by 1 every two returns, capped at 16;
+each point resets the speed and chooses a gentle serve angle. Only the left
+peer resolves paddles and scoring; the right predicts bounded motion and
+uses the transmitted authoritative velocity.
+
+Design references: [SparkFun's Analog Pong](https://cdn.sparkfun.com/assets/resources/6/2/Analog_Pong_with_Processing.pdf)
+for hit-position and paddle-motion response, and
+[Catlike Coding's Paddle Square](https://catlikecoding.com/unity/tutorials/prototypes/paddle-square/)
+for ball extents and conserving movement after a collision. The four-substep
+integer implementation is WireBall's adaptation for the 8088.
+
+### 107.3 Build and validation
+
+`python3 tools/wireball-pair.py` (or `make wireball-pair`) builds the two
+360KB disks and launches two 86Box 6.0+ XT profiles on macOS or Linux.
+Generated profiles and independent writable disk copies live under
+`build/86box-wireball-pair/pc1` and `pc2`. COM1 carries the serial mouse;
+COM2 uses a shared FIFO prefix with explicit server/client modes and automatic
+reconnection. The launcher resolves paths from the checkout, accepts
+`--86box` and `--roms` overrides, and leaves an already-running pair alone.
+If only one profile is running it refuses to replace either disk; close both
+before relaunching. `--prepare-only` creates the profiles without opening VMs.
+Open B:WIREBALL.O88 and choose Serial Match on each desktop.
+
+`make wireball` builds the package. `make wireballdisk` builds application
+floppies in 360KB, 720KB, 1.2MB and 1.44MB geometries. The package also rides
+the games category disks. `make wireballtest` boots two QEMU machines with
+their serial ports connected and exercises discovery, cross-screen movement,
+commands, scoring, recovery and desktop restoration. The `wireballmono` soak
+row verifies original-8250 discovery (without a scratch register), 2400/8N1
+setup, UART/PIC restoration, practice and controls on CGA and Hercules 8088s. The
+`wireballfront` row validates the splash, controls and release/cancel gestures
+on all three adapters. `wireballphysics` invokes the shipped collision/motion
+routines on an 8088 and verifies aiming, motion impulse, finite overlap, speed
+limits, displacement, overshoot and receiver prediction. The serial row captures both PC speakers and checks
+paddle/victory pitches, mute and sound release on exit. Emulator evidence
+does not measure polling margins on physical 8250 UARTs; period-machine and real
+null modem runs remain hardware validation.
+
+### 107.4 Splash artwork and sound
+
+The splash owns its background (§11.90.1) and publishes 418x295 VGA/Hercules
+and 418x154 CGA frame preferences with a 418x154 floor. Layout is computed
+from the actual content box. A 416x104 title strip is embedded in packed
+4bpp color and 1bpp monochrome forms; compact windows draw alternate source
+rows at half height. The instruction area and standard release-fired buttons
+use native OS text and `os88ui.inc` (§20.5.1.3). H opens/closes controls;
+clicking background artwork does not start a match. About temporarily
+withdraws the button group's live count, so its dismissal cannot also launch.
+The source image, prompt and deterministic palette conversion live under
+`apps/wireball/art/`; the generated include is reproducible at build time.
+No picture sidecar, worker, interrupt hook or additional heap claim is needed.
+
+Sound is on by default, with M or the splash's Sound button toggling a
+per-instance preference. Wall (440 Hz), paddle (880 Hz), point (220/165 Hz),
+serve (660 Hz), connection (440/880 Hz) and victory (784/988/1175 Hz) cues
+are finite, nonblocking `OSAPI_SND_TONE` requests at priority 40h (§34).
+The OS selects the PC speaker or the user's sound-driver route. A small
+sequencer advances only on game ticks; it never sleeps, changes the PIT,
+plays blocking PCM, or delays UART polling. Pause, mute, link loss and exit
+silence only this instance's tone. The right peer derives cues from validated
+snapshot changes (score, velocity and serve countdown), without changing
+message fields or making duplicate snapshots repeat sounds.
+
 ## 108. isoTron — a light-wall duel in a raised 3D arena (`apps/isotron/isotron.asm`)
 
 ISOTRON.O88 is a light-wall duel: the player against the computer on a raised

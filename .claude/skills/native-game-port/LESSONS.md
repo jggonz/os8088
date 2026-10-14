@@ -38,6 +38,16 @@ Ordered the way a run meets them. Numbers are from the run that made PR #206.
    third of review findings were wrong or unmeasured ("skip covered bands via
    CLIP_TEST": CLIP_TEST cannot tell partly from fully covered). Skips are
    logged in `wave-N-fix.md`; do not force them.
+8. **Soak runs once, at the close, and nowhere else** (CLAUDE.md, Testing).
+   isoTron's six waves (2026-10-13/14) let every implementer, fixer,
+   verifier and repairer re-run the game's soak group and its perf row: about
+   eight of nineteen wave hours went to emulator rows, 285 minutes of it
+   polling background runs and 106 more in 531 direct `tests/<row>.py` calls,
+   and the 11-minute perf row ran three or four times a wave. `port.js` now
+   keeps waves to host checks and screenshots, collects row names in
+   `soak-rows.txt`, and has one final-gate agent run their union and
+   `test-full` once. A wave's MartyPC acceptance number is read from that
+   pass; only a number that DECIDES a design is taken mid-wave, once.
 
 ## Design that worked (and its arithmetic lives in the plan)
 
