@@ -5001,6 +5001,18 @@ def broken_spans(q_bad, fps, most=8):
     return [(a / fps, (b - a + 1) / fps) for a, b in out[:most]], len(out)
 
 
+LAYER_NOMIX = os.environ.get("OS88_LAYER_MIX") != "1"
+                        # NO MIXED BYTE (98.1.9, 2026-10-14): the layer does
+                        # not change a byte the base's next write to - on
+                        # the page the layer draws on, before a flip -
+                        # stores in PLANES. Such a write lands on the
+                        # layer's colour and makes one neither stream chose,
+                        # on the glass until the layer's record after it:
+                        # the owner's white flicker, 117 frames of GasGas
+                        # with over 100 such pixels. OS88_LAYER_MIX=1 is the
+                        # A/B (an instrument's, not an option)
+LAYER_NOMIXW = int(os.environ.get("OS88_LAYER_MIXW", "100000"))
+                        # ...the base's frames it looks ahead (an instrument's)
 LAYER_LAG = 8.0         # seconds the layer is encoded behind the base: the
                         # CPU bucket is a second deep, and a base at ~70% of
                         # it frees a full one in ~3 s, so 8 is near exact
@@ -5084,6 +5096,8 @@ class LayerEnc(object):
         self.seek = seek_ms / 1000.0
         self.lag = max(2, round(LAYER_LAG * base.fps))
         self.buf = []
+        self.bw = []                        # ...each one's bytes, their planes
+        self.nomix = 0                      # bytes the layer left (NOMIX)
         self.f = 0
         self.bytes = self.recs = self.skipped = 0
         self.cycles = 0.0
@@ -5142,6 +5156,7 @@ class LayerEnc(object):
         a page-ahead play starts at - priced and counted on this machine
         with the base's own record, a hidden record riding in it"""
         hrec = vid.record(hops, self.b.g, limit=None) if hops else b""
+        self.bw.append(self._planes(ops))
         self.buf.append((target, ops, rec + hrec, self.m.cost(rec) +
                          (self.m.cost(hrec) if hrec else 0.0), pal, hops,
                          flip, pre, key))
@@ -5155,6 +5170,56 @@ class LayerEnc(object):
         while self.buf:
             out.append(self._one(True))
         return out
+
+    def _planes(self, ops):
+        """A base frame's writes on the page shown -> (the bytes, whether
+        each takes ALL FOUR planes): a write mode 3 sub-record's colour
+        does, and so do plane sub-records whose masks add up to 15 in the
+        frame. None on a screen without planes (LAYER_NOMIX's only)"""
+        g = self.b.g
+        if not LAYER_NOMIX or not getattr(g, "bitplanes", False):
+            return None
+        acc = np.zeros(65536, np.uint8)
+        for m, sub in ops:
+            pm = 15 if m >= 16 else m
+            for a, bs, run in sub:
+                acc[a:a + len(bs)] |= pm
+        at = np.nonzero(acc)[0]
+        return at, acc[at] == 15
+
+    def _nomix(self, target):
+        """THE LAYER'S TARGET with every byte the base will next store in
+        planes - before the next flip - held at what this screen shows, so
+        the layer leaves it: the base's planes land on the base's own
+        colour, as they do without a layer (LAYER_NOMIX)"""
+        g, e = self.b.g, self.e
+        if not self.bw or self.bw[0] is None:
+            return target
+        dec = np.zeros(65536, np.int8)      # 0 unseen, 1 whole, 2 planes
+        for n_, (w, t) in enumerate(zip(self.bw, self.buf)):
+            if t[6] or n_ >= LAYER_NOMIXW:  # (a flip: this page goes hidden)
+                break
+            at, whole = w
+            new = dec[at] == 0
+            dec[at[new]] = np.where(whole[new], 1, 2)
+        bad = np.nonzero(dec == 2)[0]
+        if not len(bad):
+            return target
+        if not hasattr(self, "_rows"):
+            rows = np.full(65536, -1, np.int32)
+            xb = np.zeros(65536, np.int32)
+            for y in range(g.h):
+                rows[g.base[y]:g.base[y] + g.wb] = y
+                xb[g.base[y]:g.base[y] + g.wb] = np.arange(g.wb)
+            self._rows, self._xb = rows, xb
+        y = self._rows[bad]
+        ok = y >= 0
+        bm = np.zeros((g.h, g.wb), bool)
+        bm[y[ok], self._xb[bad[ok]]] = True
+        pm = np.repeat(bm, 8, axis=1)[:, :target.shape[1]]
+        self.nomix += int(np.count_nonzero(bm & np.any(
+            (target != e.screen).reshape(g.h, g.wb, -1), axis=2)))
+        return np.where(pm, e.screen, target)
 
     def _reqs(self, bcap):
         """THE BASE'S WHOLE FUTURE ON THIS DISK (98.2.1.3.3), from the first
@@ -5215,6 +5280,7 @@ class LayerEnc(object):
         room = min(max(0.0, self.S - need), max(0.0, m.peak - c))
         e.future = [t[0] for t in self.buf[1:1 + b.look]]
         self.buf.pop(0)
+        self.bw.pop(0)
         if not self.track:
             eh = self.eh
             if eh is not None and flip:     # (the frame's record onto the
@@ -5282,7 +5348,7 @@ class LayerEnc(object):
             e.cpu.per, e.cpu.level = 0.0, room
             e.peak = room
             e.disk.per = 0.0
-            lops, lrec = e.frame(target, b"")
+            lops, lrec = e.frame(self._nomix(target), b"")
             if lops and (b.g.planes == 1 or any(sub for m, sub in lops)):
                 cl = e.cost(lrec)
                 e.disk.level = have

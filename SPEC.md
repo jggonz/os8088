@@ -166110,6 +166110,40 @@ is every `vidly*` row and `vidlayer` on the new format;
 record across it - and broken on purpose (`vp_lymir` a bare `ret`) its hold before frame 89 is
 16 bytes off.
 
+##### 98.1.9.9 No mixed byte (2026-10-14)
+
+The owner's GasGas4 on a 486 flickered WHITE during its heavy scene, one
+frame at a time and only with the layer on. Neither stream draws white
+there. The cause is a base write that stores by PLANE GROUP (98.1.3.2) onto
+a byte the layer changed: it replaces only the planes it names, so the byte
+shows the layer's other planes under the base's own, a colour neither
+stream chose, until the layer's record after it lands. On 10 s of the
+scene (source 58-68 s) that is 8,363 pixels of "neither picture", 20
+frames past 100 and the worst 921.
+
+**The encoder answers it, and the player is untouched**: `LayerEnc` holds
+its target at the screen's value on every byte whose next base write, on
+the page the layer draws on and before a flip, is a partial plane group
+(`_nomix`). The base's ops for the frames after it are already in
+`self.buf`, the layer being encoded LAYER_LAG behind, so the look-ahead
+costs no second pass.
+
+| the same 10 s | neither picture | frames past 100 | worst | layered error / worst second | layer data |
+|---|---|---|---|---|---|
+| mixed (`OS88_LAYER_MIX=1`) | 8,363 | 20 | 921 | 0.02% / 0.18% | 749 KB |
+| no mixed byte, 1 frame ahead | 8,409 | 19 | 941 | 0.06% / 0.33% | 508 KB |
+| ...4 frames ahead | 582 | 1 | 142 | 0.09% / 0.55% | 362 KB |
+| ...to the flip (shipped) | 344 | 0 | 32 | 0.09% / 0.55% | 354 KB |
+
+The base alone reads 0.14%. One frame of look-ahead buys nothing, so the
+flicker is a byte the layer changed several frames before the base
+reaches it; 24 frames read 347, so the window is the page. What it costs
+is the layer's sharpness on those bytes (0.02% -> 0.09%, still better than
+the base) and half its data. The alternative, the player re-drawing the
+layer's byte after every plane-group write, was priced at 20-40% of the
+decode and refused by the owner. `OS88_LAYER_MIX=1` and
+`OS88_LAYER_MIXW=<n>` are the instruments the table came off, not options.
+
 ### 98.2 The host tools — `tools/os88vid.py`
 
 | command | what it does |
