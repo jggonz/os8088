@@ -80,7 +80,10 @@ def clip(path):
         cvs.append(bytes(cv))
     pal = bytes((i * 3) % 64 for i in range(768))
     vid.encode_canvases(cvs, vid.Geom(vid.LAY_LIN320, W, H), path, FPS,
-                        vid.PF_VGA8, pal, "clus", keysecs=KEYSECS)
+                        vid.PF_VGA8, pal, "clus", keysecs=KEYSECS,
+                        kpart=None)     # (WHOLE keys: a key past a cluster
+                                        # read is what is under test - one in
+                                        # parts, SPEC.md 98.1.3.8, never is)
     vid.verify_v88(path)
 
 
