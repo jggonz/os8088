@@ -69,7 +69,8 @@ def main():
           "lock nobody reads", want=False)
     # THE GUARDED NUMBER ITSELF - excluded, so the bump is the decision.
     moves("the PKG_FMT line",
-          api.replace("PKG_FMT equ 8", "PKG_FMT equ 9", 1),
+          api.replace("PKG_FMT equ %d" % abilock.version("PKG_FMT"),
+                      "PKG_FMT equ %d" % (abilock.version("PKG_FMT") + 1), 1),
           "the bump is checked against the lock's version, not folded into "
           "the fingerprint it decides about", want=False)
 

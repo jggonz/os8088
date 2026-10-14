@@ -7,7 +7,7 @@ Kernel size pass 4 moved 158 of the API table's cells (SPEC.md 20.3) and left
 the header's format byte at 3, so a package built for the old table and loaded
 by the new kernel - or the other way round - did not fault. It loaded, and
 its first `call OSAPI_*` landed in the middle of some other cell. The format
-byte is the TABLE'S now (PKG_FMT = 8), and the loader's test was always
+byte is the TABLE'S now (PKG_FMT = 10), and the loader's test was always
 EQUALITY, so the fix is the number and not the check: a kernel handed a
 package of any other format refuses it before a byte of it runs - as LD_EVER,
 `Wrong os8088 version`, since SPEC.md 20.2.0 gave the refusal its own verdict

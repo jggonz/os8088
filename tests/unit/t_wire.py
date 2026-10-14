@@ -77,7 +77,7 @@ S_SCMAX = 32                            # sidecars a record (8 before v1.0.20261
 S_DESCN, S_DESCW = 5, 28
 S_WF_DISK, S_WF_PIC, S_WF_NEW, S_WF_FLOPPY, S_WF_ARC = 1, 2, 4, 8, 16
 S_PKGFMT_OFF, S_NEEDW_OFF, S_LEVEL = 252, 253, 2   # WC_PKGFMT, WC_NEEDW, WIRE_LEVEL
-S_PKGFMT = 8                            # SPEC.md 20.2's format byte
+S_PKGFMT = 10                           # SPEC.md 20.2's format byte
 S_ARCMAX = 0x100000                 # WIRE_ARCMAX, the archive's own ceiling
 
 # --- SPEC.md 92.13, the same way ---------------------------------------------

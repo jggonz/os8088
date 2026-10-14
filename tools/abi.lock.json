@@ -1,11 +1,11 @@
 {
  "DRV_VER": {
-  "fingerprint": "acbc5cdf8628e40b6dd72ad8a9e3e9a8bf0aff2464e7294cac97e0ce311210cd",
-  "version": 9
+  "fingerprint": "f313c179bb120bd6508c57bf54a87ccd8e31ad8329f9515c8ac8dd6d037e88ea",
+  "version": 11
  },
  "PKG_FMT": {
   "fingerprint": "a2bee65027656e83a58bf15dfe7f26bb38dbfa83ae59f54904e877f89414fe13",
-  "version": 8
+  "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
  "history": [
@@ -50,6 +50,20 @@
    "guard": "DRV_VER",
    "reason": "elendilon's round since #241, squashed onto main (the lock predates it on that branch). Every change still runs what was built before: OSAPI_FERR_TEXT is a NEW cell at a free slot (0x0467); DRVC_EMS/DRVC_FILE2, EMSV_*/EMSE_*, DRVE_NOVOL, MEM_K_IMG, MEM_P_FLIST, ICON_SOLID, WSEQF_* and the OS88_* macros are additions; OSAPI_PKG_REHOME's AX = 0 keep form was a refusal before (no room); OSAPI_VOL_ADD's DX != 0 take reads a register every driver built on main zeroes (22.6 retired the donated listing claim - HDD, NET and RAMDISK all pass 0); the rest are contracts clarified (DRV_CFG's DS, the file read's size probe, registers preserved). No number moves.",
    "to": 9
+  },
+  {
+   "fingerprint": "a2bee65027656e83a58bf15dfe7f26bb38dbfa83ae59f54904e877f89414fe13",
+   "from": 8,
+   "guard": "PKG_FMT",
+   "reason": "PKG_FMT 8 -> 10 and DRV_VER 9 -> 11 (SPEC.md 20.2.0): the RAM disk's class moved 5 -> 8 (DRVC_FILE -> DRVC_FILE2, SPEC.md 62.9.19), which the round's entry above recorded as an addition. It is not: RAMDISK.DRV's header class and RD_CLASS (drivers/ramdisk/rdpkg.inc, outside the locked surface) both name 8 now and drv_tab row 3 expects it, so an old RAMDISK.DRV would have been refused by drv_check as a bad driver, and an old package reaching the RAM disk through RD_CLASS - THEWIRE.O88's archive path - would have called class 5, NET.DRV's slot, and been told there is no RAM disk. At the new numbers that package is Wrong os8088 version (LD_EVER) at load and that driver fails on its version byte. 10 and 11 collide with no number ever used (module 5, package 3/6/8, driver 4/7/9) nor with each other.",
+   "to": 10
+  },
+  {
+   "fingerprint": "f313c179bb120bd6508c57bf54a87ccd8e31ad8329f9515c8ac8dd6d037e88ea",
+   "from": 9,
+   "guard": "DRV_VER",
+   "reason": "PKG_FMT 8 -> 10 and DRV_VER 9 -> 11 (SPEC.md 20.2.0): the RAM disk's class moved 5 -> 8 (DRVC_FILE -> DRVC_FILE2, SPEC.md 62.9.19), which the round's entry above recorded as an addition. It is not: RAMDISK.DRV's header class and RD_CLASS (drivers/ramdisk/rdpkg.inc, outside the locked surface) both name 8 now and drv_tab row 3 expects it, so an old RAMDISK.DRV would have been refused by drv_check as a bad driver, and an old package reaching the RAM disk through RD_CLASS - THEWIRE.O88's archive path - would have called class 5, NET.DRV's slot, and been told there is no RAM disk. At the new numbers that package is Wrong os8088 version (LD_EVER) at load and that driver fails on its version byte. 10 and 11 collide with no number ever used (module 5, package 3/6/8, driver 4/7/9) nor with each other.",
+   "to": 11
   }
  ]
 }

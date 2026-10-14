@@ -23625,10 +23625,13 @@ else had `.mup_pkg` test and dispatch through an arbitrary kernel offset.
 reads `[ui_armw]` against the record the press went to. **A `W_ONCLICK`
 handler still gives SI back**, as the SDK says at `W_ONCLICK` and §13.14
 tells: the bank is this kernel's defence and not a new contract. `PKG_FMT`
-did not move, so a package built now loads on a kernel before the bank,
-which arms the release on whatever SI the handler returns - TAMEGRAM's
-came back holding a string offset from its repaint until it banked SI
-round it. Until `PKG_FMT` moves, only `AM_ONCMD` may clobber SI.
+did not move for it, so at format 8 a package built with the bank loaded on a
+kernel before it, which arms the release on whatever SI the handler returns
+- TAMEGRAM's came back holding a string offset from its repaint until it
+banked SI round it. `PKG_FMT` has moved since, to 10 for §62.9.19's class
+(§20.2.0), so no kernel before the bank loads a package built now; widening
+`W_ONCLICK`'s contract is a decision of its own all the same, and until it is
+taken only `AM_ONCMD` may clobber SI.
 
 so it may draw, may call the file API of §18.4, and — like every other
 window callback — **must not** take the gfx lock, and must never
@@ -39202,7 +39205,7 @@ honour system:
 - `drv_tab` is a **fixed kernel-side table** of known driver files, so the
   set of things that can ever be a driver is decided when the kernel is
   built and a user cannot add to it;
-- a `.DRV` carries **header version 9** (`DRV_VER`; 4, then 7, before §20.2.0), which `ld_check_hdr` refuses for an
+- a `.DRV` carries **header version 11** (`DRV_VER`; 4, then 7, then 9, before §20.2.0), which `ld_check_hdr` refuses for an
   application, and `disk_mount` types only `*.O88` as launchable — two
   independent gates, so a driver can never be double-clicked into existence;
 - and the driver files themselves are hidden + system + read-only on the
@@ -39859,7 +39862,7 @@ each needed a mechanism**:
 | off | size | contents                                                  |
 |-----|------|------------------------------------------------------------|
 | 0   | 2    | magic: bytes `'O','8'` (word 0x384F)                      |
-| 2   | 1    | format version = **8** (`PKG_FMT`): the segment-per-package layout, built against the API table as §20.3 lays it out now. Anything else — 1 to 7 included — is refused (§20.2.0) |
+| 2   | 1    | format version = **10** (`PKG_FMT`): the segment-per-package layout, built against the API table as §20.3 lays it out now. Anything else — 1 to 9 included — is refused (§20.2.0) |
 | 3   | 1    | flags: bit 0 = embedded icon follows the header; bit 1 = an association block follows it (§54.6); **bit 2 = the FILE is longer than the image and the rest is the package's own (§20.12)**; **bit 3 = the image is COMPRESSED and the file is SHORTER than it, bit 4 = which format (0 = LZ4, 1 = LZB)** — docs/plans/O88-COMPRESSION-PLAN.md; **bit 5 = a 16-byte DOCUMENT-GLYPH block follows the association block (§54.3.2)**; bits 6–7 zero |
 | 4   | 2    | link base — must be **0**: a v3 package links at org 0     |
 | 6   | 2    | entry offset (≥ 0x20; ≥ 0x60 with icon; < image size)      |
@@ -39902,6 +39905,21 @@ every driver released before this carries, so a format-7 package would be a
 driver to every kernel that shipped — the equality test fences the kinds only
 while no number is ever reused for another kind, so a package skips the
 driver's old number and the driver takes the next one past it.
+
+**8 became 10 and 9 became 11** when the RAM disk moved publication slot
+(§62.9.19): `RAMDISK.DRV` and `RD_CLASS` (`drivers/ramdisk/rdpkg.inc`) went
+from `DRVC_FILE` (5) to `DRVC_FILE2` (8), so the RAM disk and the cable can be
+attached at once. The lock below did not see it - `DRVC_FILE2` is an ADDITION
+to the SDK and `RD_CLASS` lives outside it - but both kinds of binary built
+before it stop working: `drv_check` holds the header's class against
+`drv_tab`'s row, so an old `RAMDISK.DRV` is refused as a bad driver, and an
+old package that reaches the RAM disk through `RD_CLASS` - The Wire's archive
+path (§92.13) - calls class 5, which is `NET.DRV`'s, and is told there is no
+RAM disk. At the new numbers that package is `Wrong os8088 version` at load
+rather than a program that runs and cannot find its store, and an old driver
+fails on its version byte before its class is read. **Why 10 and 11**: the
+same rule as last time - 9 is every driver released at the old numbers, so a
+package skips it and the driver takes the next number past the package's.
 
 **A package of another format SAYS SO: `LD_EVER`.** The refusal above is
 exact and early, and through v1.0.20261010 it read `Load failed` -
@@ -40716,7 +40734,7 @@ emits the §20.2 header (image size via a forward-referenced
 end-of-file macro — exact macro design is the implementer's, but a package
 source must be able to consist of just `%include "os88api.inc"`, the header
 macro, code/data, and an end macro). `OS88_HEADER` opens with `org 0`,
-emits **version 8** (`PKG_FMT`, §20.2.0), a zero link base, the entry offset, and the four
+emits **version 10** (`PKG_FMT`, §20.2.0), a zero link base, the entry offset, and the four
 **dispatcher bytes at +12** (§20.2) — which is the one part a package author
 must not hand-roll and, because the macro emits it, cannot get wrong.
 Every `OSAPI_*` is a `%define` of `KERNEL_SEG:offset`, so `call OSAPI_X` is
@@ -45034,7 +45052,7 @@ kernel-segment buffer first and validate the copy, and nothing ever compared
 the two — each call simply re-ran the same tests. The buffer and the copying
 are gone; the disk-swap guard step 6 exists for is untouched, because what
 catches a swap is re-running this routine on what the *full read* delivered,
-not the staged copy. Checks: magic; **version = 8** (`PKG_FMT` - a file
+not the staged copy. Checks: magic; **version = 10** (`PKG_FMT` - a file
 built for another API table, or a v1 or v2 file → "Bad package", §20.2.0); link base = 0; image ≥ 0x20; entry in [0x20, image) (the icon
 rule is enforced by os88pkg, not re-checked); **image+bss ≤ APP_MAX_SIZE,
 fenced on the CARRY**, because both operands are separately bounded at
@@ -88533,8 +88551,9 @@ does. Four things differ, and each is doing work:
 - **It is a `.DRV` file.** The mount types a directory entry as an
   application only when its extension is `O88` (§19), so a driver is *data*
   to the file manager and can never be double-clicked into the loader.
-- **Its header version is 9** (`DRV_VER`, §20.2.0; it was 4 until the API
-  table moved, and 7 until two cells were re-contracted). A package is 8,
+- **Its header version is 11** (`DRV_VER`, §20.2.0; it was 4 until the API
+  table moved, 7 until two cells were re-contracted, and 9 until the RAM
+  disk's class moved). A package is 10,
   so if one ever did reach `ld_check_hdr` it would be refused there too. Two independent gates,
   because "the kernel ran a driver as an application" is not a failure mode
   worth one gate.
@@ -92544,7 +92563,7 @@ Per type-1 entry (§19.1 — a PACKAGE, not "a file"):
 - **one `OSAPI_FILE_READ_AT` of the first cluster**, whose capacity must be a
   whole number of clusters (§18.4.4) — `OSAPI_FILE_DFREE` answers the sectors
   per cluster, which is what sizes the claim below.
-- the header is checked as `build_assoc` checks it — `'O8'`, version 8 (`PKG_FMT`) — and
+- the header is checked as `build_assoc` checks it — `'O8'`, version 10 (`PKG_FMT`) — and
   the icon is the 64 bytes at +32 when flags bit 0 is set, the declaration
   block at +96 (or +32 with no icon) when bit 1 is.
 
@@ -101117,7 +101136,10 @@ with it; `apps/os88sock.inc`'s `net_find` still tries `DRVC_NET` then
 `DRVC_FILE` for the cable and needed nothing. `PKGV_IDENT` (§20.11.1) is still
 asked first. A `RAMDISK.DRV` built before this declares class 5, which
 `drv_check` holds against row 3's class 8 and refuses - the driver and the
-kernel move together, as a class number always has.
+kernel move together, as a class number always has. `DRV_VER` and `PKG_FMT`
+moved with it (§20.2.0, 11 and 10), so that old driver fails on its version
+byte, and a package built before this - which would call class 5 and be
+answered by `NET.DRV` - is refused at load as `Wrong os8088 version`.
 
 **What it cost: 103 resident bytes on kern_big** (`.bss` +42, `.cold` +72,
 `.text` -11), measured at one commit against the tree before it. The class's
@@ -114786,7 +114808,7 @@ Three things follow, and each is why a directive is written the way it is:
 The 32-byte header itself is emitted by the C runtime include and not by
 `OS88_HEADER`: that macro emits `org 0` of its own and closes with the `$$`
 arithmetic above, so a C package uses a sibling pair of macros with the same
-field layout, the same magic, the same version (`PKG_FMT`, 8) and the same `FF D5 CB 00`
+field layout, the same magic, the same version (`PKG_FMT`, 10) and the same `FF D5 CB 00`
 dispatcher bytes at +12. **The header a C package emits is byte-identical in
 shape to an assembly package's** — that is the requirement, and `os88pkg.py`
 plus `ld_check_hdr` (§21) are the two things that prove it on every build.
