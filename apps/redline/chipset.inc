@@ -61,6 +61,7 @@ cs_dmaok:   db 0                    ; 1: A:'s boot sector read at home, the
                                     ;   DMA reference (cs_sw_dma)
 cs_pend:    db 0                    ; the key that asked, while the alert is up
 cs_setv:    db 0FFh                 ; the R4 set this session, 0FFh = none
+cs_setrow:  db 0FFh                 ; the row it was set ON: Save keeps no other
 cs_meth:    db 0                    ; REDLINE.CFG's method for it
 cs_saved:   db 0                    ; 1: REDLINE.CFG holds it
 cs_tfast:   db 0                    ; Tune: the fastest that passed
@@ -363,6 +364,18 @@ cs_tabpaint:
 ; to the pane's width (SP_PAINT, so ru_spto scrolls it)
 cs_panepaint:
     push ax
+    push cx
+    mov ax, [bx + SP_TOP]
+    mov cx, [bx + SP_VIS]
+    call cs_panelines
+    pop cx
+    pop ax
+    ret
+
+; cs_panelines - BX = the pane, AX = a line, CX = how many from it: those of
+; them the pane shows, drawn as cs_panepaint draws them (a pick's few)
+cs_panelines:
+    push ax
     push bx
     push cx
     push dx
@@ -371,8 +384,25 @@ cs_panepaint:
     push bp
     mov bp, bx
     mov di, [ds:bp + SP_TOP]
-    mov dx, [ds:bp + SP_Y]
-    mov cx, [ds:bp + SP_VIS]
+    mov dx, [ds:bp + SP_VIS]
+    add dx, di                      ; DX = past the pane's last line
+    add cx, ax                      ; CX = past the last one asked for
+    cmp cx, dx
+    jbe .end
+    mov cx, dx
+.end:
+    cmp ax, di
+    jae .first
+    mov ax, di                      ; above the pane: from its top
+.first:
+    sub cx, ax                      ; CX = how many it shows
+    jbe .out
+    xchg ax, di                     ; DI = the first, AX = SP_TOP
+    neg ax
+    add ax, di                      ; AX = lines down the pane
+    mul word [ds:bp + SP_PITCH]
+    add ax, [ds:bp + SP_Y]
+    mov dx, ax
 .line:
     jcxz .out
     cmp di, CS_LINES
@@ -409,6 +439,7 @@ cs_panepaint:
 
 ; cs_flags - the Tune foot's greying, for ru_buttons_paint: Tune is live on
 ; a row that can write on this machine, Save setting once something is set
+; and while the pick is the row it was set on (cs_setrow)
 cs_flags:
     push ax
     xor ax, ax
@@ -418,7 +449,13 @@ cs_flags:
 .live:
     mov [ru_buttonflags], ax        ; Tune
     cmp byte [cs_setv], 0FFh
-    jne .keep
+    je .dis
+    push ax
+    mov al, [cs_pick]               ; Save: only on the row it was SET on
+    cmp al, [cs_setrow]
+    pop ax
+    je .keep
+.dis:
     mov ax, OS88UI_DIS
 .keep:
     mov [ru_buttonflags + 2], ax    ; Save setting
@@ -514,6 +551,34 @@ cs_recompose:
     call cs_compose
     jmp cs_redraw
 
+; cs_pickdraw - a drop-down's pick (103.6): composed, and repainted only
+; where a pick reaches - the state field, CX pane lines from line AX, and
+; the foot only when the pick moved its greying. Nothing scrolled, so the
+; bar stands. CLIPPED, as cs_redraw; every register preserved
+cs_pickdraw:
+    call cs_compose
+    push ax
+    push bx
+    call ru_clip
+    jc .out
+    call ru_geometry
+    call cs_statpaint
+    mov bx, cs_pane
+    call cs_panelines
+    mov ax, [ru_buttonflags]        ; the foot as it is drawn...
+    mov bx, [ru_buttonflags + 2]
+    call cs_flags                   ; ...and as the pick has it
+    cmp ax, [ru_buttonflags]
+    jne .foot
+    cmp bx, [ru_buttonflags + 2]
+    je .out
+.foot:
+    call ru_buttons_paint           ; Tune's greying is the Target's too
+.out:
+    pop bx
+    pop ax
+    ret
+
 ; =============================================================================
 ; Input. The press and release halves come from ui.inc (ru_press,
 ; ru_mouseup) with ru_geometry run; the buttons themselves are the record's.
@@ -562,15 +627,23 @@ cs_dranswer:
     jz .no
     cmp al, 0FFh
     je .yes
+    mov byte [cs_act], 0
+    push ax
+    push cx
     cmp bx, cs_tgt
     jne .chip
     mov [cs_target], al             ; the target: what the NEXT Tune sets
+    mov ax, 4                       ; line 4 alone: the hint comes back
+    mov cx, 1
     jmp short .picked
 .chip:
     mov [cs_pick], al               ; a pick is the user's final word (103.6.1)
+    mov ax, 2                       ; lines 2-7: the pick, its setting, the
+    mov cx, 6                       ; hint, and the FE3600's own reads
 .picked:
-    mov byte [cs_act], 0
-    call cs_recompose
+    call cs_pickdraw
+    pop cx
+    pop ax
 .yes:
     stc
     ret
@@ -1040,6 +1113,8 @@ cs_do_ds:
     call cs_rowdesc
     mov al, [bx + CSD_BOOK]
     mov [cs_setv], al
+    mov al, [cs_pick]
+    mov [cs_setrow], al
     mov byte [cs_meth], 1
     mov byte [cs_saved], 0
     mov byte [cs_act], 3
@@ -1072,6 +1147,8 @@ cs_do_tune:
     call cs_sw_tune                 ; every knob; AL = the first's fastest
     mov [cs_tfast], al
     mov [cs_setv], al
+    mov al, [cs_pick]
+    mov [cs_setrow], al
     mov byte [cs_meth], 3
     mov byte [cs_saved], 0
     mov byte [cs_act], 1
@@ -1134,6 +1211,8 @@ cs_do_bus:
     mov byte [cs_sw_xmode], 0
     mov [cs_tfast], al
     mov [cs_setv], al               ; "something was set this session"
+    mov al, [cs_pick]
+    mov [cs_setrow], al
     mov byte [cs_meth], 3
     mov byte [cs_saved], 0
     mov byte [cs_act], 4
@@ -1281,6 +1360,9 @@ cs_do_save:
     push si
     cmp byte [cs_setv], 0FFh
     je .out
+    mov al, [cs_pick]               ; the row Tune set, and no other: a pick
+    cmp al, [cs_setrow]             ; since is not an identification (103.6)
+    jne .out
     call cs_rowlist
     jc .out
     mov al, [cs_pick]

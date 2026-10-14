@@ -174840,7 +174840,12 @@ The foot's six become four:
 - **Quit**.
 
 Tune and the Target are greyed where the picked row cannot write or the CPU
-is an 8088, and Save setting until something is set. Each button has a key
+is an 8088, and Save setting until something is set - and then everywhere
+but the row it was set ON (`cs_setrow`, written beside the value by Mfg
+spec, Tune and Bus clock x2). A pick after a Tune is not an identification:
+Save reaches no question and no probe, so a REDLINE.CFG may only ever name
+a row that went through Tune's, and `cs_do_save` refuses any other even by
+its key. Each button has a key
 (T, K, S, Q) and none has only a key. There is **no Measure**: entering the tab
 identifies and measures, and every write measures again, so the 8-bit read
 on the page is always the timing that is set. Nothing applies a saved
@@ -174862,6 +174867,19 @@ its page straight over the alert the same handler had just raised: the
 alert was up, modal and invisible, and its default answer fired when the
 window closed. `rl_repaint` and the tab's incremental redraws all take the
 clip now.
+
+A **drop-down pick repaints only what a pick reaches** (rule 1 of
+PERFORMANCE.md): the state field, and the pane's lines 2-7 for a Chipset
+pick (the pick and its status, the setting, the hint and the two lines that
+read the FE3600's book) or line 4 alone for a Target one, through
+`cs_panelines`, which draws those of them the pane shows. The scroll bar is
+not touched, nothing having scrolled, and the foot only when the pick moved
+Tune's or Save setting's greying (`ru_buttons_paint`, which redraws the
+Target's greying with it). Tune, Bus clock x2, Mfg spec and Save report
+rewrite the sweep and the field lines and keep the whole-pane `cs_redraw`.
+With 37 lines in view (VGA) a Chipset pick is 7 opaque runs instead of 38
+plus the bar and the whole foot - about 0.4 s rather than 2.5 on a 4.77 MHz
+XT.
 
 The cost it removes is measured in docs/reports/FE3001-VICTORY-2026-10-13.md:
 - An AT chipset pads every 8-bit bus cycle, for compatibility, to an 8 MHz
@@ -175104,7 +175122,11 @@ x2 experiment (§103.6.3.3) and is otherwise swept by Fastest tested.
 - **The WD76C10's every access** points the RTC index at 0Dh, unlocks,
   reads or writes 1872h as a word and relocks (unless the BIOS had it
   unlocked); `tests/csprobe.py` fails an unlock made with the index
-  anywhere else.
+  anywhere else. RLAPPLY runs no probe, so `cs_cfg_apply` reads that state
+  itself - FC72h twice, cs_id_w7's own test - ONCE, after the fingerprint
+  matched and before the first knob, since every access closes behind it
+  and a sample taken after one would always read locked. A board whose BIOS
+  leaves the part unlocked keeps it so whichever of the two wrote it.
 - **A SCAMP whose BIOS LOCKED it** (F9h) drops the index write, so the data
   port would answer for the previous register: every access reads ECh back
   first and writes nothing on a mismatch. REDLINE never touches F9h/FBh.
@@ -175386,7 +175408,7 @@ from Tune, so it went: `cs_cfg_load` and `cs_cfg_apply` assemble only with
     the row's probe again: the fingerprint IS the identification, the one
     the user confirmed when the setting was tuned and saved on this board.
 
-It is `apps/rlapply/rlapply.asm`, **2,244 bytes with no bss** (the NEAT's five knobs were 122, and the four rows of the first field round's tables, protocols and apply procs 409 more), its 64-byte icon included, and it is the
+It is `apps/rlapply/rlapply.asm`, **2,282 bytes with no bss** (the NEAT's five knobs were 122, the four rows of the first field round's tables, protocols and apply procs 409 more, and the WD76C10's lock sample 32), its 64-byte icon included, and it is the
 shared files assembled `CS_APPLY_ONLY`: the row table and the fingerprint
 with no probe, the knob with no sweep, the file and the apply - so **nothing
 it can run touches a port before the fingerprint has matched**. It has no

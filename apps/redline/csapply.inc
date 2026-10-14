@@ -249,6 +249,22 @@ cs_cfg_apply:
     xor ch, ch
     mov cl, [cs_cfg + 11]
     mov si, cs_cfg + CS_CFG_HDR
+    cmp byte [cs_cfgrow], CS_W7     ; the WD76C10: locked as the BIOS left it?
+    jne .k                          ; Once, BEFORE the first knob - each access
+    pushf                           ; closes behind it, so a sample after one
+    cli                             ; reads locked - and cs_id_w7's way: FC72h
+    push dx                         ; bit 15 toggles while unlocked (103.6.2)
+    mov al, 0x0D
+    out 0x70, al
+    mov dx, 0xFC72
+    in ax, dx
+    mov bx, ax
+    in ax, dx
+    xor ax, bx
+    and ah, 0x80
+    mov [cs_wd_ul], ah
+    pop dx
+    popf
 .k:
     mov ax, [si]
     call di
