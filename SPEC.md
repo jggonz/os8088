@@ -94329,8 +94329,10 @@ addresses. A bracket does not change where the cards are. The predicate is
 `vid_dual_ok` (a mono card *and* a colour card), not `[vid_ndisp]`, which
 `vid_fsx_enter` has already forced to 1 before any call can reach here; on a
 lone-Hercules XT it answers no and the page is available as advertised. Page
-**0** takes 3BFh back to 1 on its way in, so the bracket leaves the register
-as the desktop's own value rather than as whatever the last flip wanted.
+**0** keeps 3BFh = 3 on a lone Hercules, so the hidden 32KB page remains
+decoded and bit 7 can switch back from page 1. On a dual-card machine
+page 0 leaves 3BFh = 1 and page 1 refuses. The bracket's mode restore
+takes the configuration back to the desktop's 3BFh = 1 on exit.
 
 **TANK ATTACK (§85) is the consumer that asked for it**, and it is the first
 thing in this tree to page-flip at all. Its Mode X backend draws into the
@@ -179653,17 +179655,2147 @@ and `EMSTEST.O88` (`tests/emstest/`, not shipped); `tests/ems.py` (soak row
 Broken on purpose: with `xm_release_rec`'s `EMSV_GONE` call removed the third
 instance finds 125 pages and no quarter free; with `drv_pkg_call_x`'s slot
 swap removed the second instance is GIVEN the first's quarter and its handle.
-## 108. WireBall — Pong across a null modem (`apps/wireball/`)
+
+## 108. isoTron — a light-wall duel in a raised 3D arena (`apps/isotron/isotron.asm`)
+
+ISOTRON.O88 is a light-wall duel: the player against the computer on a raised
+slab, each trailing a wall that is a crash to touch. It is a native 8086
+remake of a 1982 IBM PC game, written from that game's **observed rules** -
+there is no source and no disassembly behind it - and drawn in the original's
+45-degree cabinet projection, every trail an extruded wall. A player win that
+follows a player win stacks the next arena one slab higher, with one more
+computer head; past four the tower starts again. The design record is
+`docs/plans/ISOTRON-PLAN.md`. This section is the contract, written wave by
+wave and each subsection before the code it describes; until a subsection
+exists, nothing it would describe is built.
+
+`tools/isotronsim.py` is the host reference model and is **normative** for
+§108.2 - §108.6: the rules, the computer's decisions and the pace are written
+there as code a second time, and `tests/isotron.py` holds the guest to it
+round by round on MartyPC (§108.7).
+
+### 108.1 Provenance (binding, the owner's decision)
+
+1. The constants below - the grid, the projection, the wall, the starts, the
+   tower rule and the fitted pace - are **facts measured from footage of the
+   original running on an IBM 5150 and from emulator captures of it**, pinned
+   as the remake's own constants. Rules are not expression. The computer's
+   decision rules, the difficulty tiers beyond the first, the sounds, the
+   colours, the 1bpp patterns, the screens and every word of text are this
+   project's own invention, and say so where they are pinned.
+2. The name is **isoTron** on every screen, in the window title and in every
+   file. The original's title, its publisher's name and address, its
+   copyright line and its joke labels never appear; there is no copyright
+   line anywhere. The title lettering (wave 4) is the game's own wall
+   renderer drawing block letters.
+3. The reference footage, the original executable and the working files the
+   rules were read from live **outside the tree**. Nothing in `make` or in
+   any test reads them. `tests/unit/t_isotron_clean.py` (fast tier) fails the
+   build if any file the game owns - `apps/isotron/`, every `tools/` and
+   `tests/` file named for it, and the Makefile's isoTron block - names the
+   reference folder or the original executable, if the shipped package
+   carries the original's name, its publisher's or a copyright line, if a
+   tool imports beyond the standard library, or if `apps/isotron/` holds a
+   binary. Its `--selftest` injects a token into a temporary copy of the tree
+   and must see the scan fail.
+
+### 108.2 Coordinates, the grid and the projection (wave 1)
+
+| constant | value |
+|---|---|
+| playfield | u = 1..215 (left to right) by d = 1..99 (front to back): 21,285 cells |
+| outline ring | u = 0 or 216, d = 0 or 100: occupied cells (`C_EDGE` = 03h) |
+| grid | one byte a cell, `idx = d*217 + u`, 217 x 101 = **21,917 bytes**; E/W are +-1, N/S are +-217 |
+| headings | 0 N (+d), 1 E (+u), 2 S (-d), 3 W (-u); left = (h+3)&3, right = (h+1)&3; bit 0 is the axis |
+| a cell's contents | 0 free, `C_EDGE`, or the owner (`C_PLAYER` 10h, `C_COMP` 20h) OR'd with bit 0 = 1 when the move that entered it was N/S |
+| screen position of (u, d) at tower height h | top pixel at x = u + d, y = 174 - d - 24(h-1), in a 320 x 200 logical picture |
+| one step | E is (+1, 0) on the screen, N is (+1, -1) |
+| a wall | one screen column: 1 top pixel and 22 face rows |
+| collision | moving into a non-zero cell (a wall or the outline) is a crash. The rims are paint only |
+| player start | (108, 27) heading N; the cell is occupied at round start |
+| computer start | (108, 90), on the back rim; one cell for every head, occupied once |
+
+The slab, the canvas, the occlusion span and its proof are §108.9 and
+§108.10 (wave 2).
+
+### 108.3 A round, an iteration, the score and the tower (wave 1)
+
+**A round** at tower height h:
+
+1. The grid is cleared and its outline ring set. The player is placed at its
+   start, heading N, speed p = 2 sixths, accumulator 0, turn FIFO empty.
+2. **h computer heads** start from (108, 90). At h = 1 there is one, heading
+   E or W by the round's **first RNG byte** (bit 0: 0 = E, 1 = W). At h = 2..4
+   they head W, E, S, N, taking the first h, and are moved in that index
+   order. The *opening head* (§108.6 rule 1) is index 0 at h = 1 and the E
+   head (index 1) above.
+3. The round runs in **iterations**:
+   - **The player first.** F9 resets p to 2; then each F10 adds 1, to at most
+     9. `acc += p`, and while `acc >= 6`: `acc -= 6`, pop at most one turn
+     from the FIFO and apply it, and move one cell. A crash kills the player
+     and **the computer wins now**: the heads do not move in that iteration.
+   - **Then each live computer head, in index order**: draw one RNG byte, run
+     the decision (§108.6), move one cell. A crash kills that head; its wall
+     stays.
+   - If every computer head is dead, **the player wins**. A contested cell
+     goes to whoever moved into it first in this order.
+   - The iteration is charged its cost (§108.4).
+4. Every cell placed - the two starts, then every move - folds into the
+   round's checksum: `ck = rol(ck, 1) XOR idx`, starting from 0.
+
+**The score.** The winner of a round scores 1; the scores run for the game,
+with no target (the footage ends a game at 10-9). **Three losses in a row end
+the game**; a win resets the count.
+
+**The tower** (the anomaly the brief asked about, resolved):
+
+- a player win raises the tower **only if the previous round was also a
+  player win**;
+- h + 1 = 5 resets it to 1;
+- a loss never lowers it;
+- a new game starts at h = 1 with "previous round" set to none, and after a
+  reset "previous round was a win" stays true, as the rule says.
+
+This fits **all 22 rounds** of the footage. The brief's simpler rule, "every
+win raises", is refuted by six of them: it would raise after the first round
+of a game, after a win that followed a loss, and after each win of the
+alternating run late in the second game, none of which the footage shows.
+Whether a win immediately after a reset raises again is not observable (the
+footage's next round was a loss); the rule above is the reading taken, and it
+is one line of `it_round_end` and of `Game.play_round` should the owner read
+it otherwise.
+
+### 108.4 The pace (wave 1)
+
+The original's speed came from its CPU: it had no timer, and its loop did one
+iteration's work as fast as the 5150 could. isoTron keeps the **iteration**
+as the unit of the game and charges each one its **fitted 5150 cost**, so a
+4.77 MHz XT and a 386 play at the original's pace and the couplings the
+footage shows survive - more heads slow everyone, a boost slows the computer,
+a dying head speeds the game.
+
+#### 108.4.1 The cost
+
+In u = **1/768 of a BIOS tick** (71.52 us):
+
+```
+cost(iteration) = A + B * (live heads at the iteration's start)
+                    + C * (player cells moved in it)
+```
+
+| tier | A | B | C | pace |
+|---|---|---|---|---|
+| 1 / A **Rookie** | 36 | 178 | 62 | the 5150 footage's: 2.57, 12.73 and 4.43 ms |
+| 2 / B **Veteran** | 27 | 134 | 47 | x4/3 (ours) |
+| 3 / C **Lunatic** | 18 | 89 | 31 | x2 (ours) |
+
+The player's speed p is in **sixths of a cell an iteration**: 2 normal, each
+F10 or Up keystroke +1 (typematic repeats included, so a held key ramps it as
+the footage shows) to at most 9, and F9 or Down back to 2. The rates this
+gives at Rookie, computer cells/s per head and player cells/s:
+
+| h | p = 2 | p = 9 |
+|---|---|---|
+| 1 | 59.6 / 19.9 | 45.5 / 68.3 |
+| 2 | 33.9 / 11.3 | 28.8 / 43.2 |
+| 3 | 23.7 / 7.9 | 21.1 / 31.6 |
+| 4 | 18.2 / 6.1 | 16.6 / 24.9 |
+
+The footage measured 60 / 20 at h1 and 34 / 12 at h2. Every Lunatic rate is
+double; the worst case anywhere is **228 head-steps a second** (Lunatic, h1,
+full boost). `python3 tools/isotronsim.py --rates` prints the whole table and
+its `--selfcheck` holds the Rookie rows to 0.15.
+
+#### 108.4.2 The clock and the governor
+
+Windowed, the worker (§108.8) wakes once a tick (`OSAPI_TASK_SLEEP` 1) and
+keeps `debt` = now - V in u, a signed word:
+
+```
+debt += min(ticks elapsed since the last wake, 2) * 768
+debt  = min(debt, 1536)            ; a stall owes at most one tick past this one
+while debt >= 0 and the round goes on:  iterate(); debt -= cost
+```
+
+- A stall - a floppy access, a long paint - drops the time it owes rather
+  than bursting the heads across the arena. Every move still tests one cell,
+  so nothing ever tunnels.
+- `debt = 0` (V = now) at round start, and on every wake while paused, so
+  nothing bursts after either. At a round start it is the **last** thing
+  done, after every picture is built: wave 1 first took V before its
+  448 ms debug-grid walk, and every paced round then opened with a 2-tick
+  burst. Wave 2's canvas build sits in the same place and inherits the rule,
+  and so does the round's **whole present**: while `it_vsync` is set
+  nothing iterates and every wake takes V = now, until the present is on
+  the glass (`it_full` = 0, §108.11.4). Wave 2 first consumed `it_vsync` in
+  the wake after the round started, which is the SAME wake when a key or
+  the menu starts the round (`it_commands` runs before `it_flow`), so a
+  round started by Space opened with the burst again; only the harness's
+  NOFLOW path had the intended resync.
+- The logic runs whether or not the window can be seen; presentation is per
+  wake. **An overloaded machine loses frame rate and keeps the game's pace.**
+- **In a full-screen bracket** (§108.12.4) the same governor runs on the
+  bracket's own loop, and `now` gains FSXF_FASTTICK's sub-ticks: `now =
+  ticks * 768 + phase * 256`, `phase` counting the `FSXW_FRAME` returns since
+  `[ticks]` last moved, at most 2. `it_clock` hands the governor the u since
+  its last reading - whole ticks capped at 2, as windowed, plus the phase's
+  change - so a tick's 768 u arrive whichever way it is cut, and a moved
+  tick pays only what its phases had not. **V = now on both sides of every
+  toggle** (`it_clock_sync`), and after every full-screen whole present.
+- **Verified on the 5150 (wave 5, §108.14.3)**: iterations per guest second
+  within 0.65% of the model at Rookie h1, Rookie h2 and Lunatic h1 in both
+  modes; a forced stall of ten ticks credits exactly `1,536 - 256 *
+  lastph` u - its own tick and one owed, the phase a bracket frame had
+  already paid taken off - and never the ten.
+
+### 108.5 Between rounds (wave 1; wave 4's flow is §108.13.2)
+
+| state | what | leaves on |
+|---|---|---|
+| CRASH | the crash; the winner's score 0.27 s into it | 15 ticks (0.8 s): WAIT, or after the third loss in a row GAME OVER |
+| WAIT | the round's result and "Space to continue" | Space or Enter: the next round, SWEPT in (§108.13.3) |
+| SWEEP, READY | the new arena going onto the glass, then 0.5 s of it standing | the sweep's end; 9 ticks |
+| GAME OVER | `THREE LOSSES IN A ROW. GAME OVER.` | 64 ticks (3.5 s), or Space: the title |
+
+Their sounds - the crash's sweep, READY's beeps, the tower's chime and GAME
+OVER's phrase - are §108.14.1's. Esc ends a game from any of these and from
+play; at the title it does nothing in a window.
+
+### 108.6 The computer (wave 1)
+
+**The RNG** is the package's own: a 16-bit LCG, `s = s*25173 + 13849 (mod
+65536)`, and the byte drawn is `s >> 8` - one `MUL` on the 8088. A game is
+seeded from `OSAPI_GET_TICKS` (or the harness word `it_tseed`).
+**Every computer head-move draws exactly one byte before it decides**, so the
+stream depends on the move count alone; the h = 1 heading at round start is
+the only other draw. `OSAPI_RAND` is not used: its seed is a kernel global
+any package can stir.
+
+**run(dir, cap)** is the number of free cells from a head along dir, counted
+up to cap. Each rule below names its cap, and the caps are part of the
+contract: the decision is identical to an uncapped one, and they are what
+bounds the worst case.
+
+Per head, in order; **the first rule that turns ends the decision**:
+
+1. **Opening.** The opening head (§108.3), not yet turned this round,
+   heading E or W, with `leg == 32` and `run(S, LOOK+1) > LOOK`: turn S.
+2. **Blocked.** If `run(ahead, LOOK+1) <= LOOK`: compare `run(left, 255)`
+   and `run(right, 255)` and turn to the larger. On a tie, `r & 1` decides
+   (0 = left); if both are 0, go straight - and crash.
+3. **U-turn pending.** If a wander armed one, decrement it; at 0, turn to
+   its side if `run(side, 17) > 16`, else carry on down the list.
+4. If `leg < 8`, go straight.
+5. **Intercept**, if `r < ICPT` and the player is alive: for side in (left,
+   right), skipping a side parallel to the player's heading, find M where
+   the side's ray meets the player's forward ray; `t` = the head's cells to
+   M and `k` = the player's, both > 0; the player's iterations there are
+   `pi = ceil(6k / p)`; turn if `t + 2 < pi <= 120` and `run(side, t) >= t`.
+6. **Wander.** If `(r XOR A5h) < WANDER`: side = left if `r & 1`, else
+   right. If `run(side, 17) > 16`, turn there and arm a U-turn
+   `8 + (r & 7)` moves on, to the same side.
+7. Otherwise go straight. A turn sets `leg = 0` and marks the head turned;
+   each move increments `leg`.
+
+| tier | LOOK | ICPT (/256) | WANDER (/256) |
+|---|---|---|---|
+| Rookie | 1 | 64 | 6 |
+| Veteran | 3 | 96 | 4 |
+| Lunatic | 6 | 128 | 2 |
+
+Rookie's three are the footage's reading (the computer turned at the last
+cell, cut across the player's path about a quarter of the time it could, and
+made parallel "ladders" of U-turns rarely); the other two tiers are ours.
+
+**The worst decision** is rule 2 with both sides open. MEASURED on MartyPC's
+5150 (wave 1's review, then its fixes): `it_run` costs **250 + 54 cycles a
+cell** for a N/S run (a 7-byte `add / cmp / loope` loop at the fetch floor)
+and **228 + 15.6 a cell** for an E/W run (one `repe scasb`, DF set for W),
+where the first version was 195 + 82.5 either way. E/W sides of up to 215
+cells each are the worst, ~7.2k cycles for the pair (~7.6k with the look),
+and that path is unchanged. **Wave 2** sends every N/S run whose cap the
+ring always beats (101 or more: rule 2's 255, and rule 5's run(side, t) >=
+t, now uncapped) through an unrolled scan at ~25 cycles a cell and one DIV
+(~150) for the count, so a N/S pair - one column, at most 98 cells between
+its two sides - is COUNTED at ~2.5k + 2 x ~400 of call, DIV and setup,
+~3.3k, where wave 1's loop made it ~5.8k; the 54-a-cell loop is left for
+the capped N/S runs (rules 3 and 6's 17, the opening's LOOK + 1, which the
+inline look-ahead mostly replaced). A typical decision measured **871
+cycles median at Rookie and 1,180 at Lunatic in wave 1** (1,028 and 1,457
+before its fixes); wave 2 measures the whole COMPUTER HEAD-STEP instead -
+the RNG byte, this decision, the move and the picture - in §108.10.3, which
+is the figure the 3,000-cycle ceiling is about. Rule 5 decides without a
+divide: `t + 2 < ceil(6k / p) <= 120` is exactly `6k > p(t + 2)` and
+`k <= 20p`; and in ONE try for both sides, which share k and whose t differ
+only in sign, so only the side with t > 0 can pass (§108.10.3).
+
+### 108.7 Input, and the harness (wave 1)
+
+#### 108.7.1 Keys and the turn FIFO
+
+Keystrokes arrive in `W_ONKEY` on the UI task; the game runs on the worker.
+Turns go through a **3-entry single-producer single-consumer ring**: the
+producer writes the slot and then its head byte, the consumer reads the slot
+and then advances its tail byte, and neither writes the other's - so there
+is no lock, which a worker may not take (§20.6 rule 7). **One turn is popped
+per player cell**, so a fast double tap between two cells is two turns, a
+U-turn, and is never lost. A full ring drops the newest. Boosts are a count
+the producer increments and the consumer subtracts (one read-modify-write
+instruction each); F9 is a flag taken with `XCHG`. Start, pause, Esc and
+continue are flag bytes the worker acts on inside its own lock hold, so the
+game state has one writer - the About card's pause too, which the UI task
+POSTS (`it_qhold`: pause a round in play, never resume) rather than writes;
+the focus check that pauses a game that has lost the front runs on the
+worker. A pause, either way, redraws the message line, which is what says
+`PAUSED`. Steering keys are posted only in play, unpaused. A Space pressed
+during the 0.8 s of CRASH is KEPT and WAIT takes it on arrival. At the title
+a digit `1`-`3` in AL starts a game whatever AH says, so keypad 1, 2 and 3
+with NumLock (AH 4Fh, 50h - which is Down - and 51h) all do.
+
+| action | keys |
+|---|---|
+| turn left | Ins (52h), Left (4Bh), Z |
+| turn right | Del (53h), Right (4Dh), X |
+| faster | F10 (44h), Up (48h); every keystroke, repeats included |
+| normal speed | F9 (43h), Down (50h) |
+| pause | P |
+| sound on / off | M (Game > Sound) |
+| continue | Space, Enter |
+| end the game | Esc (in full screen at the title: back to the window, §108.12.6) |
+| full screen and back | F, f, Alt+Enter (§108.12.6) |
+| the look | C, in a game (§108.12.2) |
+| at the title | 1, 2, 3: a game with sound; A, B, C: silent (so C there is a silent Lunatic, not the look) |
+
+Extended keys are tested on **AH** before anything looks at AL, and AL is
+never case-folded first (§67.11.1); keypad Ins with NumLock on (AL = '0',
+AH = 52h) is still Ins. M (and Game > Sound) toggles the sound flag, which
+the Sound item names (wave 4); the tones it gates are §108.14.1, and the
+**typematic filter** that makes a held turn key ONE turn - and a double tap
+two - is §108.14.2 (wave 5).
+
+#### 108.7.2 The harness (`apps/isotron/ittest.inc`)
+
+Bytes in the bss, **always assembled**. Inputs: `it_tseed` (word),
+`it_tdiff` (1..3), `it_tflags` (bit 0 FAST: iterations without the clock,
+16 a wake; bit 1 BOT: the harness's player; bit 2 NOFLOW: the title starts a
+game on `it_tgo`, and no crash pause or wait follows a round; bit 3 HOLD: at
+every round's end set `it_tpause` = 1 and do nothing until the test clears
+it - a SWEEP and READY still run while it is set, being the picture's and
+not the game's, so a held game stops at its next round's first iteration
+with the arena drawn; bit 4 SEED, wave 4: a game the KEYS or the menu
+start takes `it_tseed` rather than the clock, so a stored game is played
+through the real title), `it_tgo`, `it_tswk` (wave 4: 0, or the sweep's last
+due item - a sweep stops there until it is cleared), `it_tstall` (wave 5: the
+next PACED `it_play` waits that many real ticks before it reads the clock -
+`isotronpace`'s forced stall, §108.14.3), and `it_tinn` / `it_tinput`, a script of up to eight
+(iteration, key) entries for a FAST game without the bot. Outputs, read
+after every round: `it_iter`, `it_round`, `it_sp`, `it_sc`, `it_h` (the
+tower now), `it_hplayed`, `it_lossrow`, `it_prev`, `it_winner`, `it_rng`,
+`it_ck`, `it_nsteps` and `it_gover` (games ended), and wave 2's bound
+counters (§108.10.2): `it_maxspan` and `it_maxprobe`. Wave 3's: `it_fsm`
+(a bracket is up), `it_fsk` (its surface, `FSK_*`), `it_fsn` (full-screen
+whole presents), `it_fsout` (brackets that have RETURNED - the kernel's exit
+mode set and repaint done; `it_fsm` drops before both), `it_nwhole` (windowed
+whole presents, a band's end or a whole paint), `it_cgahi` / `it_clook` (the
+looks) and `it_ovf` (the full-screen overlay records). Marks:
+`it_step0` / `it_step1` bracket a head's move and its picture (`it_move`),
+`it_hs0` / `it_hs1` a computer head-step whole - its RNG byte, its decision,
+its move and its picture - `it_wake0` / `it_wake1` one wake, the gfx lock
+and its release included, `it_frame_end` a worker pass; wave 3's `it_fsw0` /
+`it_fsw1` a full-screen whole present, `it_fs_frame` a bracket frame's end,
+and `it_fsx0` / `it_fsback` the way back (the bracket's last frame to
+`OSAPI_FSX_RUN`'s return); wave 4's `it_nsweep` (sweeps ended) and the
+marks `it_sw0` (a sweep's start: Space's wake, before anything of it) /
+`it_sw1` (its end: the outline out), `it_rdy1` (READY's end) and `it_swp0` /
+`it_swp1` around one windowed piece of it; wave 5's `it_ntone` (every
+`OSAPI_SND_TONE` call), `it_nturn` / `it_ndrop` (turn keystrokes the
+typematic filter took and dropped), `it_nstall` (stalls served) and the marks
+`it_tonecall` / `it_tonecall1` around the package's one call to the driver
+and `it_fssnd1` after a bracket frame's sound. A mark is `name equ $` emitted
+only under `-DIT_MARKS` (`IT_MARK`): it adds no byte, so that image is the
+shipped one, and without the define the symbol stays out of nasm's map,
+where `tools/stkdepth.py` would read it as a routine boundary and price a
+worker that never reaches its own work. `tests/isotronlib.py` assembles with
+the define and checks the image against `build/isotron.o88`.
+
+**The bot** plays the player: one F10 at iteration 0, and, whenever the FIFO
+is empty and `run(ahead, 4) <= 3`, a turn toward the side with the larger
+`run(side, 255)` (left on a tie). It runs before each iteration, exactly
+where the model's `bot_input` does.
+
+#### 108.7.3 What is tested, and how
+
+| row | tier | asserts |
+|---|---|---|
+| `isotronclean` | fast | §108.1's provenance gate; its `--selftest` injection must fail |
+| `isotronsim` | soak | `tools/isotronsim.py --selfcheck`: six stored seeded bot games (two a tier, each covering a tower 1-2-3-4-1 and ending in three losses) by hash, the Rookie rate table, the RNG's first bytes, the tower rule re-derived from the winners, and three NEGATIVE CONTROLS that must each change the stored hashes: "every win raises", the LCG multiplier 25175, and the computer moving before the player |
+| `isotronbound` | soak | MartyPC 5150 CGA, two stored games (17 rounds, every tower height): after EVERY round the guest's whole 64,000-byte canvas claim byte for byte the model's, and the two bound counters COUNTED in `it_span` (§108.10.2) - `it_maxprobe`, the most canvas bytes a k* scan examined, <= 22, and `it_maxspan`, the most rows a step wrote, <= 23 - each equal to the model's count of the same thing; the model with a probe limit of 21 must count differently (it does, in 16 rounds of 17), and the GUEST assembled with `-DIT_SCAN21` must be refused by the same comparison, so the probe line can tell a broken bound on either side. The guest finds k* off its canvas column (§108.10.1, Lemma 3) and the model off the grid's diagonal (Lemma 2), so the equality holds the two derivations to each other |
+| `isotronwin` | soak | MartyPC 5150 CGA, 5150 Hercules and XT-VGA: the title and four rounds of a seeded game, the windowed picture on the GLASS (the 1bpp framebuffers, the VGA's own rendering) pixel for pixel equal to the model's `win1` / `win4` of the same canvas outside the overlay text rects; the content around the picture black; the overlays' text present |
+| `isotronega` | soak | the same on an EGA desktop: a private `VIDEO=ega` kernel tree (`tools/os88build.py`) on MartyPC's XT-VGA, the 640 x 350 geometry (excitebike_front's `ega` arm is the precedent); and since wave 3 its FULL SCREEN, the same-mode bracket's rendering equal to the model's `ega` presenter (§108.12.9) |
+| `isotronfs` | soak | wave 3, §108.12.9: the full-screen glass on MartyPC's 5150 CGA, 5150 Hercules and XT-VGA - video memory byte for byte (CGA, Hercules) or the rendering pixel for pixel (VGA 0Dh) against the model's presenter of the same canvas AND its text (the records the state shows, the guest's glyphs; nothing skipped), at the title and after three rounds, with two negative controls; C and back; Esc's two full-screen cases |
+| `isotrontoggle` | soak | wave 3, §108.12.9: twelve toggles mid-round by F, Alt+Enter and the menu, the game's bytes unchanged by every one and the glass right on both sides; a round toggled while it runs still the model's, and no burst after its way back; Esc's four cases |
+| `isotrontwodisp` | soak | wave 3, §108.12.9: a VGA beside a Hercules - the seam's format switch is one whole present, and the Hercules bracket leaves the VGA's mode and memory alone |
+| `isotronperf` | soak, serial | MartyPC's cycle counter on the three machines: the computer head-step's median over every computer head-step of two whole rounds of a seeded FAST game (the count held to the model's, so the sample is the same on every run), Rookie and Lunatic, against 3,000 cycles; the paced wake at Rookie h1 (22 ms 1bpp, 30 ms VGA) and at Lunatic h4 full boost (35 / 50 ms) WITH the sound (`it_snd` poked on, at least 20 calls over the trace, §108.14.4), sampled once the round's whole present is out, and a wake over 45 ms must find the governor engaged; then a ROUND'S START at h1 and h4 - the rebuild, its wake's hold, every hold that puts the whole present out in bands (each under 50 ms) and the span from the rebuild to the last band (§108.11.7); and since wave 3 the FULL SCREEN, a boot of its own a machine: F's whole present at the title and in a round against 1.5 s, its rects tiling the picture exactly once outside the text, the head-step with its span hook over the same rounds against 4,500 (CGA) / 5,000 (Hercules) / 4,000 (VGA 0Dh) cycles, the way back's first light against 1.5 s and its band holds against 50 ms; the EGA tree's presents, way back and Lunatic h4 frame (§108.12.7) |
+| `isotronflow` | soak | wave 4, §108.13.5: the title, a stored game played through the real keys with every arena swept in and held to the model, the score's delay, WAIT and Space, the tower 1-2-3-4-1 on the glass, GAME OVER and the title, About, a paint mid-sweep, the focus pause |
+| `isotronrules` | soak | MartyPC 5150 CGA: the first stored game of each tier played FAST + BOT + NOFLOW + HOLD on the guest; after EVERY round the guest's height, winner, iterations, scores, tower, losses in a row, RNG state, checksum and head-steps equal the model's; the game ends and returns to the title; and the model with "every win raises" must disagree with what the guest played. Then a SCRIPTED game (`it_tinput`: two F10s, a right turn, a left and an F9 at fixed iterations of every round, no bot) is held to the model the same way: `it_script` POSTS each entry into the UI task's mailbox (`it_kboost`, `it_kf9`, the FIFO) as `it_key` would, so the worker's own consumer takes it. LAST, THE KEYBOARD ITSELF (HOLD only - no FAST, BOT or NOFLOW): real keystrokes through MartyPC's keyboard into `W_ONKEY`, `it_key` and `it_turn_ok`, with the worker held by `it_tpause` so each post is read before an iteration takes it - `1` starts a game; `P` pauses it and a Del while paused is refused; Space resumes; Del Ins Ins Ins leave the FIFO right-left-left (depth 3, newest dropped); F10 F10 F9 post 2 and 1; released, the speed is 4/6 and the turns are a double-tap U-turn (d = 28, heading W); Space during CRASH is kept and WAIT takes it; Esc ends a game; and a game at two losses in a row goes CRASH -> GAME OVER -> the title, a Space pressed in that third loss's CRASH NOT kept (it would cut GAME OVER's line short) and the line still up a guest second in |
+
+### 108.8 The package (waves 1 and 2)
+
+- **One window** (`isoTron`), `OSAPI_WM_OWNBG`, not resizable but
+  `OSAPI_WM_ONRESIZE` hooked, `OS88_REGION_MOVABLE`, `OS88_ALTENTER_ARM`.
+  The template and `OSAPI_WM_PREFER` ask for a frame **spanning the
+  display** - 640 x 420 on VGA and EGA, 720 x 300 on a Hercules, 640 x 200 on
+  a CGA - because such a frame drops both side borders (§11.95.2) and its
+  content is the whole width from x = 0: the 2x picture is 640 device pixels
+  (§108.11.2) and must land on the byte grid. Wave 1's 638 frames came back
+  as content 1..632, eight pixels short. The kernel clamps the heights.
+- **The About card** through `OSAPI_ABOUT_SET` and `os88ui.inc`'s standard
+  card (`OS88UI_ABOUT`): the name, one line of what it is, two of keys. No
+  Help menu, no credit line, no copyright line. A game in play pauses under
+  the card; any key, click or menu pick takes it down.
+- **The Game menu** (wave 4, ISOTRON-PLAN 9.2): Rookie, Veteran, Lunatic (a
+  new game at that tier, with sound); a rule; **Sound: On / Sound: Off** (M,
+  the item naming its state - an app menu has no check mark, PIXELSTEIN's
+  precedent), Colours, Full Screen, Pause; a rule; End Game - the rules the
+  kernel's own convention, a greyed row of dashes. **Colours** is C (§108.12.2), greyed "Colours (mono
+  display)" while the window's picture is mono; **Full Screen** is F's
+  bracket (§108.12), greyed "Full Screen (no mode)" when `OSAPI_FSX_CAPS`
+  offers the window's display nothing - both re-read at every paint (a drag
+  is one), so the items answer for the display the window is on (§47,
+  §53.7.1).
+- **Two claims**, `OSAPI_MEM_CLAIM`, pinned (§66's default). **The canvas**
+  (`it_cseg`, 63 KB) is a segment of its own, 64,000 bytes, one byte a pixel
+  (§108.9.1 says why). **The work claim** (`it_seg`, 30 KB):
+
+  | offset | bytes | what |
+  |---|---|---|
+  | 0 | 21,917 | the grid (§108.2) |
+  | 21,920 | 5,120 | the presenters' strip, on a 16-byte boundary |
+  | 27,648 | 1,024 | the mono tables: four 256-byte PAGES, **1,024-aligned**, so the next row parity's pair is `xor bh, 2` (§108.11.4) |
+  | 28,672 | 2,048 | the colour tables: four tables of 256 words |
+  | **30,720** | | the end; `%error` if the layout passes 64 KB, overlaps or loses an alignment |
+
+  Nothing reads below the grid or past it: every run, look-ahead and move
+  stops AT the outline ring. Wave 2's first build kept 5,120 bytes of
+  headroom below it for a front-diagonal probe's second read; k* comes off
+  the canvas now (§108.10.1), so that 5 KB of every instance went.
+
+  The presenters' inner loops look up their tables and write their strip in
+  the work claim with DS on it, and read the canvas through an `es:`
+  override - one prefix a canvas read, and none anywhere else. A refused
+  claim is said in words in the window - `isoTron needs 63 KB and 30 KB of
+  free memory; this machine has N KB.`, N being `OSAPI_MEM_AVAIL`'s largest
+  run - and no worker is started; when the canvas was granted and the work
+  claim is not, the canvas is freed first. It ASKS before each claim
+  (`OSAPI_MEM_AVAIL`), because a claim that fails sheds the disk caches on
+  its way down. `kern_small` (a 52.5 KB arena) refuses on the first.
+  ISOTRON-PLAN section 13 planned one 59 KB claim with a 32 KB packed canvas;
+  the 64 KB canvas is §108.10.3's measured trade, ~34 KB more a running
+  instance for ~800 cycles off every step (~29 KB more since the headroom
+  went).
+- **The worker** (`OS88_STACK_192`: `tools/stkdepth.py` prices its deepest
+  static chain at 40 bytes, a band's boxes presented in colour; spawned from the
+  first paint and declared
+  restartable, `OS88_WORKER_RESTARTABLE`): `OSAPI_TASK_ALIVE`, a one-tick
+  sleep (a FAST harness game yields instead, and so does any wake that left
+  a whole present half out in bands, §108.11.4), the focus check
+  (`OSAPI_WM_TOP` and `OSAPI_MENU_OWNER`: losing the front pauses a game,
+  stickily), then under ONE gfx lock hold: the commands the UI task posted,
+  the state machine and the pace governor, and the present (§108.11.4).
+  **The posts are taken in the order a player makes them**: a round whose
+  arena was just built (`it_qround`), then Esc (`it_qesc`), THEN a new game
+  (`it_qstart`) - so Esc and `1` typed while the worker was busy (the
+  title's 0.81 s build) end the old game and start the new one. Wave 5's
+  `isotroninput` found them the other way round: the new game began and the
+  same pass's Esc ended it, the `1` consumed and the state left at TITLE.
+  **Every grid and canvas write happens inside a lock hold**, so a `W_PAINT`
+  never sees half an iteration. Wave 1's flat debug view is gone.
+- **Disks.** `ISOTRON.O88` is in `APPS_GAMES`: `GAMES/` on the 1.44MB, 1.2MB
+  and 720KB apps disks, `games360.img`, the everything set and the live
+  media. It is **not** on `apps360.img` (§24.6.1, dated 2026-10-13: that disk
+  had 29 clusters free) nor the 360KB combo (`COMBO_DROP`, the same ground).
+  `make isotrondisk` builds its own floppy in all four geometries, each
+  `os88disk.py --verify`'d, carrying the package and `README.MD`. `make` does
+  not rebuild them, so `tests/isotronlib.py` refuses a disk older than
+  `build/isotron.o88` rather than drive the last build's game through this
+  build's offsets (which wave 2 did once, and read a debug view as a garbled
+  3D picture).
+
+### 108.9 The canvas (wave 2)
+
+The picture lives ONCE, adapter-independent: a 320 x 200 picture of 4-bit
+**surface ids**, in the canvas claim. A pixel is a surface - floor, rim, a
+player's wall face - and never a colour; every presenter turns an id into
+colour or pattern through its own look-up table (§108.11.1), so a look change
+and a window / full-screen toggle are a **present**, never a redraw of the
+game. The canvas holds the picture only: no text. Text is an overlay each
+presenter draws itself (§108.11.5), so the canvas compares exactly.
+`tools/isotronsim.py`'s `Canvas` is the same picture and is normative.
+
+#### 108.9.1 Format and the ids
+
+**One byte a pixel, column-major**: pixel (x, y) is byte `x * 200 + y` of
+the canvas claim, 64,000 bytes. An EVEN column's id sits in the byte's high
+nibble and an ODD column's in its low nibble, the other nibble zero, so the
+OR of a column pair's two bytes is the plan's packed canvas byte (high nibble
+= even x) and a presenter's table takes it as it is. What the layout buys is
+the step (§108.10.3): a wall is one column, a column is consecutive bytes,
+and a wall's face is ONE `rep stosb` (~10 cycles a row) where a packed nibble
+canvas is a read-modify-write a row (~50); and the step can find k* in the
+canvas itself with one `repne scasb` (Lemma 3). What it costs is the
+presenters' reads: four bytes 200 apart a device byte (§108.11.4).
+
+| id | surface | id | surface |
+|---|---|---|---|
+| 0 | VOID | 8 | PSIDE (player, N/S move) |
+| 1 | FLOOR | 9 | **TOP** - every wall's top pixel, whoever's |
+| 2 | FLOORDOT | 10 | CFRONT (computer, E/W move) |
+| 3 | RIM | 11 | CSIDE (computer, N/S move) |
+| 4 | EDGE (outline) | 12 | (free) |
+| 5 | SLABF (the slab's front face) | 13 | LOGOF (a title letter's face) |
+| 6 | SLABR (the slab's right face) | 14 | (free) |
+| 7 | PFRONT (player, E/W move) | 15 | FLASH (presenter-only, reserved) |
+
+**ONE TOP id** where ISOTRON-PLAN 6.1 had three (player, computer, letter):
+the step scans its column for the first TOP byte below a new cell (§108.10.1),
+and a scan compares one value. The three were one colour in every look but
+the 1bpp player top, a black notch the plan drew over the player's solid
+E/W face; on 1bpp that face's top now merges into it, and the wall still
+reads (§108.11.1).
+
+#### 108.9.2 The slab and the tower
+
+Level j of a tower is drawn at offset o = 24(j - 1); its row t is canvas row
+t - o:
+
+| part | rows t | columns x | id | drawn |
+|---|---|---|---|---|
+| back outline | 74 | 100..316 | EDGE | whole level |
+| left outline | 75..174 | x = 174 - t | EDGE | whole level |
+| back rim | 75..96 | 175-t .. 389-t | RIM | whole level |
+| left rim | 97..173 | 175-t .. 196-t | RIM | whole level |
+| floor | 97..173 | 197-t .. 389-t | FLOOR; FLOORDOT where (x + y) & 3 = 0 | whole level |
+| front outline | 174 | 0..216 | EDGE | every level |
+| right outline | 74..173 | x = 390 - t | EDGE | every level |
+| front face | 175..196 | 0..215 | SLABF | every level |
+| right face | 75..196 | max(217, 391-t) .. min(316, 412-t) | SLABR | every level |
+
+`canvas_rebuild(h)` clears the canvas to VOID, draws the **lower bodies** of
+levels 1..h-1 (the "every level" rows) and then level h whole. The one-row
+gap between levels stays VOID. A new arena, a raise and a reset are all this
+one call, and it erases the last round's walls with it. The footage shows
+the same stack: front faces under front faces and right faces beside right
+faces, no lower level's top in sight. Within a level no two parts overlap but
+the outline's corners, which are the same id, so order matters only between
+levels. **The guest draws it in ONE PASS down the canvas** - in column x
+every part of every level is one interval of rows, and they come down the
+column in level order (level h's top face, its lower body, then the lower
+bodies of h-1 .. 1), so a cursor walks the 64,000 bytes once: VOID up to a
+part, the part (word stores), on; the floor's dots a store every fourth row
+after it; no separate clear, nothing written twice but an outline's shared
+corner, which the cursor skips; the x-dependent bounds made once a column
+and the lower body's once for all its levels; the ids pre-shifted for the
+column's nibble - and **the model row by row**: two derivations of one
+slab, held byte for byte (`isotronbound`, every height). MEASURED on
+MartyPC's 5150 (`isotronperf`): **1.49M cycles (0.31 s) at h = 1 and 2.06M
+(0.43 s) at h = 4**; wave 2's first build - a 64,000-byte clear, then each
+level a column at a time through a called run that shifted its id every
+time - was 1.84M and 2.94M (0.39 / 0.62 s; this section said "~0.3 s at h =
+4", which was never measured). A round start's, never a step's - and, in a
+played game, NO LOCK HOLD'S: the worker builds it after `OSAPI_GFX_UNLOCK`
+(§108.13.2's `it_bld_post`), so the pointer stays up and every other task
+draws through it. Only the harness's NOFLOW start (§108.7.2) and a bracket,
+which holds the lock throughout, still build where they ask (§108.11.7).
+
+#### 108.9.3 The walls
+
+Cell (u, d) of level h is column x = u + d; its top pixel is row
+y = 174 - d - 24(h - 1), id TOP, and its face rows follow it down: PFRONT or
+PSIDE for the player by the axis of the move that entered the cell, CFRONT or
+CSIDE for the computer, LOGOF for a title letter. How many rows show is
+§108.10.
+
+#### 108.9.4 The title's lettering (waves 2 and 4)
+
+The title picture is level 1 and the word **isoTron** in raised block
+letters - our own 5 x 7 glyphs (`it_logo` in `apps/isotron/itcanvas.inc`, a
+width and seven rows of bits a letter; `LOGO` in the model, whose selfcheck
+reads the guest's bytes and its `IT_LOGOX/Y/S` out of the source and
+compares), laid out **on the glass**: a glyph cell is 4 x 4 pixels from
+(98, 100), and every pixel of it is turned into the floor cell whose top
+pixel it is - d = 174 - y, u = x - d (§108.2) - placed in the grid as a
+`C_LOGO` cell and drawn by `it_span`, the step's own renderer. So each
+letter's surface is wall TOPs - the glyph itself, white in the 16-colour
+looks - and its lower edges hang a LOGOF face 22 rows down, cut by the cells
+in front: block letters standing on the floor, square to the viewer, in the
+game's projection. 1,264 cells. **Only the last row of each glyph cell's
+block goes through `it_span`** (the closing audit, PERFORMANCE.md Set 159):
+a column's pixels are drawn top to bottom, every one on `it_span`'s fast
+path, and the next one down - x the same, d one less, u one more, so k_ring
+and k* fall by at most one - writes its TOP over this one's first face row
+and its own face over the rest, so a face above the block's last row is
+never seen. The three rows above it write their TOP byte and the column's
+lowest TOP (`it_ctop`) and nothing else; the canvas is byte for byte the
+model's, which still draws every span whole (`isotronwin` compares them).
+Measured on MartyPC's 5150: the word **0.443 s -> 0.285 s** (2.11M -> 1.36M
+cycles; the first version's comment had said ~0.25 s), the whole title
+build 0.794 -> 0.635 s, at every launch and every return to the title.
+
+Wave 2's letters were straight strokes laid along the floor's two axes
+(`u` and `d`), which on the glass lean at 45 degrees and stack their
+22-row faces into one another; the wave-3 verifier found them hard to read
+on both emulators, and the glyphs above are the cure: the word reads on
+every adapter, the 1bpp ones included (TOP is 11/11, LOGOF 10/00).
+
+### 108.10 Occlusion: one span a step, and its proof (wave 2)
+
+#### 108.10.1 The proof
+
+**Lemma 1 (one cell, one column).** Cell (u,d) is drawn only in screen column
+`x = u + d`. Two cells share a column exactly when they lie on one sight
+diagonal (u+k, d-k). The one with the larger k is k rows lower and nearer
+the viewer.
+
+**Lemma 2 (the visible span).** Given the occupied set, including the
+outline ring, cell c's visible pixels are column x(c), rows
+`[y_c, y_c + min(k*, 23))`. Here k* is the least k in 1..22 for which
+(u+k, d-k) is occupied, and 23 when no such k exists. The front and right
+edge clips are this same rule: the outline cell met on the diagonal is the
+front edge (k = d) or the right edge (k = 216 - u), and its top row is
+exactly the first clipped row. **No separate clip arithmetic exists.**
+
+**Theorem (one span per step).** Entering cell c and writing its span
+(top-pixel id at y_c, face id below, `min(k*, 23)` rows in all) produces
+exactly the canvas a full painter's repaint of the new occupied set
+produces. Cases:
+
+- **Cells in front of c, and every other column.** Their visible spans do
+  not depend on c, and nothing of theirs is written.
+- **Cells behind c, at (u-j, d+j).** Each one's old visible span ended at
+  `y_c - j + k_old`. Every occupied cell between it and c is in front of it,
+  so `k_old = j + k*` whenever no cell between them was occupied. Its span
+  therefore ended exactly at `y_c + k*`, which is where c's span ends. Rows
+  `y_c .. y_c + k* - 1` were its pixels or the floor's, and they are now
+  c's. A cell with an occupied cell between itself and c had no pixel in
+  that range.
+- **The floor and rims beneath c** are simply overwritten.
+
+**The bound.** A step makes at most **22 grid probes** and writes **one
+column of at most 23 rows**. It **redraws no previously drawn cell**, so
+drawing order does not matter. The brief asked us to "redraw the occupied
+cells in front that overlap". On this grid that set is always empty,
+because clipping the new span is the equivalent and cheaper operation.
+
+**Lemma 3 (k* is in the canvas; wave 2's guest).** Before c is drawn, the
+canvas column x(c) below c's top row holds only faces of cells BEHIND c and
+the slab, down to the TOP pixel of the nearest occupied cell in FRONT, at
+row `y_c + k*`. A cell behind c has its top above y_c and its visible span
+ends at or above `y_c + k*` (the case above); a cell further in front has its
+top lower than `y_c + k*`; and that cell's own top pixel is never overwritten,
+because nothing behind it reaches its row and nothing in front of it reaches
+that high. So k* is **the first row below y_c in the column whose id is
+TOP**, within `min(22, k_ring - 1)` rows, where `k_ring = min(d, 216 - u)` is
+the ring's distance; and k* is `that + 1` (the ring, or 23) when there is
+none. The guest scans for it with `repne scasb`; the model probes the grid's
+diagonal (Lemma 2). They are two derivations of the same k*, and
+`isotronbound` holds the canvases they build byte for byte equal after every
+round. **A fast path**: the guest keeps, per canvas column, the lowest TOP
+row drawn so far (`it_ctop`, reset with the canvas). If it is above c, no
+cell in front of c has been drawn in that column at all, and k* is
+`min(k_ring, 23)` with no scan - the early round's usual case.
+
+**Every wall pixel lies inside its level's top polygon.** The top pixel of
+(u,d) is at x = u+d, y = 174-d (offset 0). Its distance from the left edge
+175-y is u-1, which is at least 0. The right edge is the probe's clip
+(Lemma 2). Face rows run down to at most 173, the front clip. The top row
+of a wall is 174-99 = 75 or lower, so no wall pixel is above the back
+outline. So a span never leaves its column in the column-major canvas
+either: its last row is at most 173 + 0 of 199.
+
+#### 108.10.2 What is counted
+
+- `it_maxspan`: the most rows a step wrote this round, `min(k*, 23)` - at
+  most 23, counted where the column is written;
+- `it_maxprobe`: the most canvas bytes a step's k* scan EXAMINED this round
+  - none on the fast path (no TOP below this one in its column yet), m when
+  the scan found k* = m, and all of its len = min(22, k_ring - 1) when it
+  found none - so at most 22, counted where the scan ends, on the scan path
+  alone. The model counts the same quantity off the GRID (`Canvas.step`:
+  `min(k*, len)` behind a column's lowest TOP, 0 otherwise), which is what
+  makes the equality a test: wave 2's first build derived the figure as
+  `min(it_maxspan, 22)` on both sides, so `<= 22` held by construction.
+
+A span cannot leave its column, and that needs no counter: a cell's top
+pixel is at y = ybase - d with d >= 1, so at most 173, and its span ends at
+`y + k* <= 196` - never past row 199 into the next canvas column, which in a
+column-major canvas is the one way a span could touch another. An
+`%error` in `itcanvas.inc` holds it. (Wave 2's first build counted it as
+`it_ncol`, a figure that could not move off 1.)
+
+`isotronbound` reads both after every round, with the canvas, and
+`tools/isotronsim.py --selfcheck` checks **incremental equals full repaint
+after every step** for 30 rounds (64,628 steps): every byte a step writes is
+in its own column, and that column equals an independent repaint of it - the
+column's walls drawn back to front, 23 rows each, cut only at the ring's row,
+sharing no code with the probe; a column the step did not touch cannot
+differ, because a column's picture is its own cells' alone. Each round's end
+is compared whole as well. The fixtures put a cell exactly 1, 22 and 23
+diagonals behind another (k* = 1, 22, 23: 1 probe and 1 row, 22 and 22, 22
+and 23), and the **negative controls** - a probe limit of 21, and a span of
+23 rows regardless of k* - must break both the fixtures and the step-by-step
+equality, and do. **The guest has its own**: `isotronbound` assembles the
+package with `-DIT_SCAN21` - `IT_PROBES` 21, which the row checks is the
+image's only two changed bytes, so every offset still holds - boots it from a
+scratch floppy of its own and plays the first stored game against the TRUE
+model, and the comparison must refuse it within four rounds (§108.7.3).
+
+#### 108.10.3 The head-step, measured
+
+MartyPC's 5150, `isotronperf`: a COMPUTER head-step whole - its RNG byte,
+its decision (§108.6), its move and its picture - as the median over EVERY
+computer head-step of two WHOLE rounds of a seeded FAST game, each from its
+open field to its crowded end: Rookie seed 2425 rounds 1 and 2 (h1, h1;
+1,049 head-steps) and Lunatic seed 702 rounds 2 and 3 (h1, h2; 3,177). A
+seeded game is a pure function of its seed, so the sample is the SAME
+head-steps on every run and every adapter, and the row holds each round's
+count of `it_hs0 .. it_hs1` pairs to the model's, crashes included:
+
+| head-step, median (90th centile) | Rookie | Lunatic | ceiling |
+|---|---|---|---|
+| CGA 5150 | **2,377** (2,957) | **2,576** (3,413) | 3,000 |
+| Hercules 5150 | **2,377** (2,943) | **2,575** (3,407) | 3,000 |
+| XT-VGA | **2,383** (2,959) | **2,575** (3,404) | 3,000 |
+| of which the move and its picture | ~1,525 | ~1,530 | |
+
+The step touches no adapter, so the three rows differ only where an
+interrupt lands inside a head-step - a few in thousands, which move the
+maximum and not the median. The 90th centile is the crowded field: a blocked
+head measuring both its sides, and walls near enough that the scan runs.
+
+**Why whole rounds.** The row first took six windows of ~50 consecutive
+head-steps 2.5 guest seconds apart, and WHERE those landed in the game moved
+with the harness's host-timed pokes: one game's Lunatic median read 2,554 -
+2,984 on the CGA and 2,684 - 3,072 on the Hercules across runs, and the
+wave's verification caught it over the line once. Traced whole, all nine
+rounds of that game - 13,344 computer head-steps at every tower height - read
+2,648 - 2,691 a round on the same build: the spread was the windows', not the
+game's. Whole rounds cost the row ~25 s an adapter of breakpoint round trips.
+
+**What the repair took out** (Lunatic, round 2 whole, the CGA: **2,648 ->
+2,553**; the 90th centile 3,875 -> 3,628):
+
+- **Rule 5 in one try** (`it_icpt_try`). The two sides share k and their t
+  differ only in sign, so at most one can pass and "left, then right" is "the
+  side whose t is positive": one try, which picks it. A try was ~390 cycles
+  and a Lunatic head-step made a pair of them about one step in three.
+- **`it_span` saves nothing.** BX stays the head throughout and SI is its one
+  scratch index, so there is no `push bx`; the scan keeps its start in SI
+  instead of `push di`; ES is put back as `it_seg` rather than pushed; and k*
+  lives in DH. The picture 1,135 -> 1,089.
+- **The head loop walks records** (`it_hend`, and `it_openp` for rule 1's
+  head), so `it_ai`, `it_move` and `it_span` keep no CX: 1,089 -> 1,061 of
+  the picture and ~36 of the decision.
+- **An E/W look-ahead compares a word a pair of cells**, the grid's own byte
+  order (Lunatic: seven byte compares, ~245 cycles, to three words and a
+  byte, ~115), the same cells and only those; a N/S head falls through to the
+  cell-by-cell walk with no taken jump.
+
+Each exact: the six stored games and the scripted one replay round for round
+(`isotronrules --all`) and the canvas equals the model's after every round
+(`isotronbound`).
+
+How it got there, each step measured, Lunatic: the first build (a packed
+nibble canvas, the grid probed in pairs, the span's bookkeeping recomputed
+every step) was **3,735** - the span alone 2,118: 424 to find its column and
+ids, 628 for 22 grid probes, 657 for 22 nibble read-modify-writes, 178 of
+counters and 231 of dirty box. Then: the canvas one byte a pixel and
+column-major, so the face is one `rep stosb` (657 -> 276); k* off the canvas
+by `repne scasb` (Lemma 3) and the fast path above (628 -> 478, and nothing
+in an open column); the RNG inline (273 -> ~170); u and d as one word; the
+box grown on the one side a step can grow it (231 -> ~100); the column
+count moved to where boxes end; rule 2's look-ahead unrolled per tier and
+inline (§108.6's run(ahead, LOOK+1) <= LOOK is "any of LOOK+1 cells taken":
+~30 cycles a cell against `it_run`'s 54); a N/S `it_run` whose cap the ring
+always beats (101 or more: rule 2's 255, and rule 5's run(side, t) >= t,
+which is run(side, unbounded) >= t) an unrolled scan at ~25 a cell with one
+DIV for the count; and rule 5 skipped in one test when the head's sides are
+parallel to the player. Every one exact: the six stored games and the
+scripted one replay round for round (`isotronrules --all`).
+
+### 108.11 The windowed renderer (wave 2)
+
+The canvas, presented in a desktop window on every adapter os8088 drives.
+
+#### 108.11.1 The looks
+
+Ours, data, and to be LOOKED at (§39.4, §47). `it_mono` and `it_col` in
+`apps/isotron/itwin.inc`; `MONO` and `COLOUR` in the model, whose selfcheck
+reads the guest's two out of its source and compares.
+
+| id | 1bpp: two device px a logical px, device row 0 / row 1 | 16 colours (the default EGA/VGA palette), even x / odd x |
+|---|---|---|
+| VOID, FLOOR | 00 / 00 | 0 / 0 |
+| FLOORDOT | 10 / 00 | 1 / 1 blue |
+| RIM | 11 / 00: horizontal stripes | 5 / 5 magenta |
+| EDGE | 11 / 11 | 15 / 15 white |
+| SLABF | 10 / 01: checker | 8 / 7 greys |
+| SLABR | 10 / 00 | 0 / 8 dark |
+| PFRONT | 11 / 11 | 11 / 11 light cyan |
+| PSIDE | 11 / 10 | 3 / 3 cyan |
+| TOP | 11 / 11 | 15 / 15 white |
+| CFRONT | 00 at an even x, 11 at an odd one: vertical stripes | 5 / 13 magentas |
+| CSIDE | 11 even x, 00 odd | 13 / 5 |
+| LOGOF | 10 / 00: dim, so the white edges read | 1 / 1 blue |
+| FLASH | 11 / 11 | 12 / 12 (reserved) |
+
+The 1bpp row parity is the device row's **within the picture**, so a drag
+never shears a pattern; the x parity is the logical pixel's, and the
+picture's origin is on the byte grid, so it never shears either. No DAC or
+palette register is written: the colours are the default palette's.
+
+**The tables** (in the work claim, built once at entry by `it_lut_build`):
+- **mono**: for each device row parity, two 256-byte pages, HI and LO: a
+  packed canvas byte (two logical pixels, four device pixels) to its device
+  nibble in the high or the low half of a device byte, so a device byte is
+  `HI[b0] | LO[b1]` - page-aligned, so a lookup is `mov bl, b / mov al, [bx]`;
+- **colour**: four tables of 256 words, TA01, TA23, TB01, TB23: planes 0-1
+  and 2-3 of a canvas byte's four device pixels as the left (TA, high
+  nibble) or the right (TB, low nibble) half of a device byte, so a device
+  byte's four plane bytes are two word ORs.
+
+The model builds the same tables the same way (`lut_mono`, `lut_colour`) and
+its selfcheck holds a table presentation of the title and of a tower of four
+equal to the per-pixel look at Hc 136, 284, 286 and 400.
+
+#### 108.11.2 Geometry
+
+- **2x across, on every adapter**: logical x is device x / 2, so the 320
+  columns are 640 device pixels, 80 bytes, and a device byte is 4 logical
+  pixels - two packed canvas bytes.
+- **The origin** is the content's x rounded UP to the byte grid (§5.4.2.8:
+  `gfx_blit1` reads an x off it as a head mask; `gfx_blitp` refuses one),
+  then centred on whole bytes in what is left: **0 on a 640 desktop, 40 on a
+  Hercules**. The picture is 80 bytes across, or 79 if that is all there is
+  (column 316, the right face's last top pixel, is then lost).
+- **Down, a row map**: `Hc = min(content height, 400)`, and device row r
+  shows logical row `s(r) = (r * 200) / Hc`. `rfirst[y] = ceil(y * Hc / 200)`
+  is the first device row showing row y or later, so a logical span [a, b) is
+  ONE run of device rows, `[rfirst[a], rfirst[b])`. Measured content and Hc:
+  VGA 640 x 401 (Hc 400, scale 2.0), Hercules 720 x 281 (Hc 281), CGA
+  640 x 136 (Hc 136: one row in three dropped - a wall's TOP row can be the
+  dropped one, ISOTRON-PLAN section 17 item 2; it is legible on the glass and
+  left so), EGA 640 x 286.
+- Below Hc 120 or 632 pixels, "Window too small." in words, on black.
+- A relayout (the size changed, or the origin's phase on the byte grid) re-cuts
+  the maps and owes a whole present; a plain drag needs nothing - the drag
+  cache carried the pixels and the phase with them.
+
+#### 108.11.3 The surface
+
+`OSAPI_WM_DISPLAY` (DH = bits a pixel of the window's OWN display), then
+`gfx_blitp`'s probe (DI bit 15, with bit 14 so the answer is the rect's and
+not the clip's) on the picture's rect - the one question that also answers
+"no straddle, and not off the screen's side" (§5.4.3.2). **Colour** when
+both say yes; otherwise **mono**, with `OSAPI_GFX_BLIT1_PEN` CLCYAN on
+CBLACK on a colour display. A `gfx_blitp` that refuses after its probe said
+yes makes mono sticky (`it_nocol`) and owes a whole present. A change of
+surface is a whole present by the worker (unless a paint covering the whole
+content made it); a paint presents only its rect in whatever surface it
+finds. **The surface is asked only when the answer can have changed** - the
+content moved (a drag can carry the window to another display) or a whole
+present is STARTING (a new arena, a relayout, an adapter switch, which fires
+`OSAPI_WM_ONRESIZE`) - by the worker, a paint and the About card's dismissal
+alike (`it_surf_wake`): ISOTRON-PLAN 7.3 asked every wake, and the question
+measures ~11,900 cycles on the XT-VGA, 2.5 ms of every wake - and of every
+band of a whole present - for an answer that does not move. The content box
+likewise: `OSAPI_WM_CONTENT` and `OSAPI_WM_GEOM` (two far calls, 3,043
+cycles on all three machines) are asked by the worker only when the frame's
+`W_X`/`W_Y`/`W_W`/`W_H` (public in `os88api.inc`) differ from the last
+asking, or a whole present is starting.
+
+#### 108.11.4 One wake, and a paint
+
+```
+TASK_SLEEP 1
+GFX_LOCK; ES = the work claim
+  commands, the state machine, the pace governor -> grid, canvas, and per
+  head a DIRTY BOX (its steps' spans this wake, logical px)
+  visible? CLIP_SET (CF: nothing shows - drop the boxes; the uncover paints)
+  the frame moved? the content box; relayout if its size or phase changed
+  the surface (108.11.3); colour and nothing over us -> CLIP_CLEAR (the
+  region is the content rect, which nothing here draws outside: gfx_blitp's
+  plane-major path); mono on a colour display -> the pen
+  whole present owed? its next bands : each box, then the overlays that changed
+GFX_UNLOCK  (bands left over: TASK_YIELD, not TASK_SLEEP)
+```
+
+- **The boxes.** A step grows its head's box (`it_span`). The FIRST step
+  since the box went out starts it at that step's own column and rows - a
+  step writes its own column and no other (Lemma 1), so the column the head
+  stood on was presented when it was drawn; wave 2's first build started the
+  box at the head's cell, and 509 presented boxes of a paced Rookie game on
+  the 5150 carried 14,649 logical byte-rows for 12,034 changed (x1.217).
+  After that x moves by exactly one a step, up for N and E and down for S
+  and W, so one side of the column range can grow, and the top row only on
+  a N step. At the present, boxes become device
+  rects (bytes `x / 4`, rows through `rfirst`), and **intersecting ones
+  merge** - two heads from one start cell, a player crossing a computer's
+  column - so no pixel is written twice.
+- **A rect is presented minus the overlays' rects** (`it_pbox`): rows above
+  an overlay whole, the overlay's rows left and right of its text, the rest
+  whole. Every device pixel of a present is written once.
+- **Mono** (`it_praw1`): each device row's bytes - four canvas bytes 200
+  apart, OR'd in pairs into two packed bytes - through the row parity's two
+  pages into a strip, a 37-byte loop at **~222 cycles a device byte**
+  (MEASURED, MartyPC's 5150 Hercules, a whole present's 22,480 bytes); one
+  `OSAPI_GFX_BLIT1` a strip (at most 255 rows). The row loop keeps the page
+  pair in BH - the next row's is `xor bh, 2`, the tables being
+  1,024-aligned - and ends on a row number made once (it recomputed the
+  page in five instructions and the end in a 12-byte test every row).
+- **Colour** (`it_praw4`): each LOGICAL row's bytes through the four word
+  tables into a four-plane strip, the planes 16 bytes apart inside a row for
+  a box of up to 16 bytes and 64 apart for a wider one, so every plane store
+  is an 8-bit displacement, **~402 cycles a device byte** (MEASURED,
+  XT-VGA, `it_c4_64`). A step's narrow box converts each logical row once
+  straight into every device row that shows it (Hc 400: two), with the row
+  loop around the byte loop - the device row on the stack, DI stepped on by
+  a stride made once - where it was a call a row with five `cs:` operands
+  (~450 cycles a logical row); a whole present's wide box COPIES a repeated
+  row. One `OSAPI_GFX_BLITP` a strip, DI bit 14 so an armed clip is walked
+  (§5.4.3.6); a box wider than 64 bytes goes in two pieces.
+- **A whole present** is the whole picture minus the overlays, then the
+  overlays, then - after a relayout - the content around the picture,
+  black. It is owed by a new arena, a relayout and a surface change, and it
+  goes out **IN BANDS** of 4 device rows (`it_present_band`): `it_full` = 1
+  starts it at row 0 with the overlays composed (their changes wait for the
+  end), 2 carries on at `it_band`; a wake presents bands while the hold so
+  far plus the last band's cost is under 40 ms, and always one; each
+  overlay is lettered in a hold OF ITS OWN once a band has passed its last
+  row (`it_bpend`: a band and the title's 40-cell line in one hold were
+  ~50 ms on the XT-VGA - wave 3) - a step made meanwhile is presented before
+  `.done` settles the boxes; a band left over
+  makes the worker YIELD rather than sleep a tick, so the lock is let go
+  between holds and every other task gets its turn, and the picture takes
+  about what one hold would have plus the holds' own fixed part. A step
+  made meanwhile (a FAST harness game; a relayout in play) is presented
+  ABOVE the band only - below it the band reaches the canvas later. The
+  round's pace waits for the end (`it_vsync`, §108.4.2). Wave 2 first made
+  it in ONE hold with the round's rebuild: 2.61 s (h1) and 2.84 s (h4) on
+  the XT-VGA, 1.82 s on the Hercules, the pointer off and the desktop
+  frozen for all of it, every round (§108.11.7 has the banded figures).
+- **A wake whose window shows nothing** (hidden, or CLIP_SET: not one pixel)
+  drops its boxes and owes nothing more for them: the window promised no
+  save-under (`OSAPI_WM_SAVEU`), so what uncovers it is a `W_PAINT` of the
+  exposed rect from the canvas as it then is (§11.3). It owed a whole
+  present for it in wave 2's first build.
+- **The way back from full screen** is a whole paint that OWES rather than
+  makes the picture (`it_fsret`, §108.12.6): the content black, the bands
+  after.
+- **`W_PAINT`** (the UI task, the lock held, the kernel's clip armed):
+  `OSAPI_WM_DAMAGE`'s rect from the canvas in whole device bytes (the region
+  cuts it), then each overlay and each of the up to three fills around the
+  picture **that meets the rect** (a clipped-out `font_run` or fill still
+  pays its fixed part), the overlays as their records stand - what the glass
+  shows, a change still owed swapping them later. The About card last, over
+  its own rect. **A paint whose damage is the whole content IS a whole
+  present** and pays off what the worker owes - `it_full`, the fill, the
+  overlays' changes, the boxes - so at launch and after a relayout the
+  picture is drawn once: wave 2's first build drew it in the first paint and
+  then again in the worker the paint had just spawned.
+- **The About card's dismissal** puts back the card's rect - measured
+  exactly as `os88ui_about_d` measures it - from the canvas there and then,
+  through the paint's own rect path with a clip armed as `os88ui_about`
+  arms one; it owed a whole present, ~40 times the pixels the card covered.
+
+#### 108.11.5 The overlays
+
+Lines of the desktop's own font (`font_run`, opaque), never in the canvas:
+**`PLAYER n`** at the picture's top left (byte 1, row 0), **`COMPUTER n`** at
+its bottom right (to byte pwb - 2, row Hc - 8), the **title's five lines**
+(wave 4, §108.13.1) centred over the void above the slab - a line every 8
+device rows from row 1 where that void is ~50 rows (the CGA's Hc 136), else
+every 10 from row 8 - and the **message** centred at row Hc - 24: the title's `1 Rookie 2 Veteran 3 Lunatic; A-C silent`, `PAUSED - PRESS P`, a round's result with `Space to continue.`,
+`THREE LOSSES IN A ROW. GAME OVER.` The title shows its lines and the
+message; a round in play the HUD alone. The records (`it_ov`, eight) are in
+row order - the left HUD, the title's five, the message, the right HUD - and
+the HUD and the title's lines never show at once, which is all `it_pbox`'s
+one-band-a-record walk needs. A title line's old rect goes out as a FILL
+(`it_pfill`, one `gfx_fill`): it lies over level 1's void, VOID in the
+canvas, so there is nothing to convert. A changed line presents its old rect from the
+canvas minus every rect now wanted, then draws the new text: the HUD's two
+lines change one at a time (the winner's), and an unchanged one is not
+redrawn.
+
+#### 108.11.6 The presentation governor
+
+A lock hold over **45 ms** (`os88pit.inc`'s 838 ns clock) presents every
+SECOND wake from then on; the logic still runs every wake, and a skipped
+wake's steps stay in their boxes for the next. **32 presenting wakes whose
+share is under 30 ms** put it back - and the share is HALF the hold while it
+is engaged, because a present then carries two wakes of steps: the first
+build compared the whole hold with 30 ms and latched the governor on
+wherever one wake cost 15 to 30. What does not count: a whole present (a new
+arena's or a relayout's - counted, every round start held the governor on
+for three seconds) - nor any band of one - and a wake that letters an
+overlay (a round's result: `font_run` on a VGA is a fill and a glyph pass,
+~1 ms a cell). An overloaded machine loses frame rate and keeps the game's
+pace (§108.4.2).
+
+#### 108.11.7 What a wake costs, measured
+
+MartyPC, paced games, the wake from before `OSAPI_GFX_LOCK` to after
+`OSAPI_GFX_UNLOCK` (the pointer comes off and goes back inside it), wakes in
+play only, sampled once the round's whole present is out, median (most):
+
+| wake | CGA 5150 | Hercules 5150 | XT-VGA | ceiling 1bpp / VGA |
+|---|---|---|---|---|
+| Rookie h1 | **11.8 ms** (15.7) | **13.1 ms** (21.0) | **21.1 ms** (36.9) | 22 / 30 ms |
+| Lunatic h4, full boost | **23.2 ms** (27.6) | **27.3 ms** (36.1) | **33.6 ms** (77.2) | 35 / 50 ms |
+
+(Wave 2's repair, three runs: Rookie 11.7 - 11.8 / 13.1 / 21.1 - 21.2 ms and
+Lunatic 23.0 - 23.2 / 27.3 - 27.5 / 32.8 - 34.6: the head-step's ~90 cycles
+off - §108.10.3 - show at Lunatic h4 at full boost, the wake that makes the
+most of them.)
+
+The governor stays idle through every trace but the XT-VGA's Lunatic h4,
+where it engages after its first wake over 45 ms; that line's "most" is a
+double present it then makes. Wave 2's first build measured 13.6 / 16.8 /
+**27.3** ms at Rookie and 24.9 / 27.8 / 37.1 at Lunatic - the XT-VGA's Rookie
+wake 2.7 ms under its ceiling, on an emulator whose `gfx_blitp` is cheaper
+than an 8-bit card's. What took the ~6 ms out of it, each counted from the
+review's breakdown of a presenting wake: the boxes no longer carry the
+column a head stood on (x1.217 presented against changed, §108.11.4); the
+colour row loop lost its call, pushes and `cs:` reloads (~450 cycles a
+logical row); the mono row loop its page arithmetic and end test; and the
+content box is no longer asked every presenting wake (3,043 cycles,
+§108.11.3). A step's box on the XT-VGA is 1 or 2 device bytes by ~46 device
+rows (the 23-row wall at 2x); its `gfx_blitp` measures ~530 cycles a row
+with the call's fixed part (a narrow box's call, 29.2k for ~46 rows - this
+section said ~340, which left the fixed part out).
+
+**A round's start**, the same machines (`isotronperf`; h1 is a game's first
+round, h4 the next with the tower poked):
+
+| | CGA 5150 | Hercules 5150 | XT-VGA |
+|---|---|---|---|
+| the rebuild, h1 / h4 | 0.31 / 0.43 s | 0.31 / 0.43 s | 0.31 / 0.43 s |
+| ...its wake's whole hold, h1 / h4 | 0.37 / 0.49 s | 0.37 / 0.49 s | 0.38 / 0.50 s |
+| the whole present: holds, the longest | 21, 43.1 ms | 44, 40.1 ms | 99, 35.2 ms |
+| ...on the glass, after the rebuild | **0.71 s** | **1.46 s** | **3.28 s** |
+| wave 2's first build: rebuild and present in ONE hold, h1 / h4 | 0.99 / 1.22 s | - / 1.82 s | **2.61 / 2.84 s** |
+
+**How those are read.** The trace is armed with everything set but ONE byte
+- `it_tgo` for a game's first round, `it_tpause` for a held one - and that
+byte is written inside it, with no pause there: a pause from the harness
+thread can land on a stop the trace's pump has not recorded yet, and the
+resume after it then runs past that stop. It did, in wave 2's first runs: a
+lost `it_wake0` charged the rebuild to the wake before it ("431 ms in a 1 ms
+hold"), and a lost `it_rb0` was a crash in the row. The row now waits for the
+first `it_fdone` AFTER the rebuild (a present already going out when the
+trace armed ends with one before it), refuses a trace whose wake marks do not
+alternate, and refuses a hold shorter than the rebuild inside it. The h1 hold
+reads 0.37 s where the first runs read 0.33 around the same 311 ms rebuild:
+armed before the wake begins, the row counts that wake from its `it_wake0`,
+the game's start ahead of the rebuild included (four runs, every one 0.37 -
+0.38).
+
+The rebuild is the one long hold left in the harness's NOFLOW start, which
+this row measures (a played game's is the worker's, outside the lock:
+§108.13.2); the whole present
+goes out in holds of at most ~43 ms with the lock let go between them, and
+`isotronperf` holds every band's hold under 50 ms. What the bands cost is
+each hold's own fixed part - the lock and its release (~15,000 cycles on the
+XT-VGA), `CLIP_SET`, the clock reads - paid once a band: the XT-VGA's
+present was 2.18 s in one hold (10.38M cycles: `it_c4_64` 5.15M at ~402 a
+device byte, the narrow remainder 1.49M, row copies 0.67M, `gfx_blitp`
+2.77M in 31 calls) and is 3.28 s in 99; the Hercules' 1.17 s and 1.46 (its
+conversion ~222 cycles a device byte, `gfx_blit1` 0.54M); the CGA's 0.57 and
+0.71. Wave 3's toggle (ISOTRON-PLAN section 16: 1.5 s) and wave 4's sweep
+(2.2 s) start from these lines, and on the XT-VGA neither is met by this
+present: its conversion is most of it.
+
+What the measuring found and changed, each line re-measured on the XT-VGA:
+the per-wake surface probe was ~11,900 cycles (now asked only when the
+window moved or a whole present starts); the colour present converted each
+device row and COPIED a repeated one at ~1,000 cycles a row (now one pass
+writes both rows of a logical row: a box ~2x cheaper); and the governor
+latched on at Rookie, first on round-start whole presents, then on the
+round's result being lettered (VGA `font_run`, ~1 ms a cell), then on its
+own doubled presents (§108.11.6 has all three).
+
+### 108.12 Full screen (wave 3)
+
+**The same canvas, a colour presenter for the window's display, and no
+worker.** F or f, Alt+Enter or Game > Full Screen calls `OSAPI_FSX_RUN`
+(§53.1) with `FSXF_FASTTICK` from the UI task, the lock held, and the
+bracket's own loop runs the game - the same `it_commands`, `it_flow` and
+governor the worker runs (§108.4.2) - while the worker is frozen (no
+`FSXF_KEEPWORKER`: two loops driving one screen are two writers, §93). Nothing
+of the game is touched by the toggle: the grid, the canvas, the RNG, the
+iteration and the scores are the same bytes on both sides, and V = now on
+both. `apps/isotron/itfs.inc`.
+
+#### 108.12.1 The mode, by the window's display
+
+`OSAPI_FSX_CAPS` with our window (`DL` = the kind of the display the window
+is on, §53.7.1; never `OSAPI_VIDEO`, the primary's), asked again at every
+entry, because a window moves between displays:
+
+| display | mode | colours | geometry | a step on the glass |
+|---|---|---|---|---|
+| CGA | `FSXM_CGA320` | palette 1 at **low** intensity - black, cyan, magenta, grey, the 1982 look - set through `int 10h AH=0Bh` (BH = 1 BL = 1, then BH = 0 BL = 0; never port 3D9h, Clear Skies' `cs_cga_pal`); C: high | 1:1 | a read-modify-write a row, two banks |
+| VGA | `FSXM_VGA0D`, 320 x 200 x 16 planar, stride 40 | the BIOS's default palette, **no DAC write**: the isoTron look; C: Classic | 1:1 | set/reset and a one-bit bit mask, one `xchg` a row |
+| Hercules | `FSXM_HERC` | 1bpp: §108.11.1's pair patterns by **card-row** parity | 2x across, 1.5 rows down (an even logical row 2 card rows, an odd one 1): 640 x 300 centred at card (40, 24) | a read-modify-write a card row, four banks |
+| EGA | **no mode**: a same-mode bracket on the desktop's own 640 x 350 x 16 (§53.7 grants it the drawing slots) | the same 16-colour tables as the window | the windowed colour presenter at 2x by 1.75 - Hc = 350 - at `OSAPI_FSX_SURF`'s origin | the dirty box, presented through `gfx_blitp` once a tick |
+
+The EGA falls back to `FSXM_CGA320` when the rect `OSAPI_FSX_SURF` answers is
+smaller than 640 x 350 or `gfx_blitp`'s probe refuses it. A display with no
+mode greys the menu item, "Full Screen (no mode)", and F does nothing there.
+Rejected, with ISOTRON-PLAN 8.1's reasons: 13h, Mode X and 12h on the VGA,
+C160 and 640 x 200 composite on the CGA, and direct planar writes on the
+EGA's own desktop mode (ISOTRON-PLAN 18 item 3, an owner's decision).
+
+#### 108.12.2 The looks
+
+**CGA**, an id's ink at an even x / an odd x (palette 1: 0 black, 1 cyan,
+2 magenta, 3 grey or white) - `it_cgaink` in `itfs.inc`, the model's
+`CGA_INK`, whose selfcheck reads it out of the source:
+
+| id | ink | id | ink |
+|---|---|---|---|
+| VOID, FLOOR | 0 / 0 | PFRONT | 1 / 3 (cyan and white: INFERRED from the composite footage's periwinkle - no true-palette frame shows a player E/W face) |
+| FLOORDOT | 1 / 1 | PSIDE | 1 / 1 (solid cyan, CONFIRMED) |
+| RIM | 2 / 2 | TOP | 3 / 3 |
+| EDGE | 3 / 3 | CFRONT | 0 / 2 (stripes, CONFIRMED) |
+| SLABF, SLABR | 0 / 3 (stripes) | CSIDE | 2 / 0 (CONFIRMED) |
+| LOGOF | 1 / 1 | FLASH | 3 / 3 |
+
+**Classic** is that table on a 16-colour card, ink 1 -> 3 cyan, 2 -> 5
+magenta, 3 -> 7 grey (`it_colc`, the model's `CLASSIC`). **C** cycles the
+look: on a CGA in full screen it is the intensity alone, through the BIOS -
+no table, no present; on VGA 0Dh, on EGA and in a colour window it is
+isoTron <-> Classic, the tables rebuilt and a whole present owed (a present,
+never a redraw of the game); on a mono surface nothing. At the title C is
+still a silent Lunatic game (§108.7.1). The windowed colour tables follow the
+look too, so a toggle shows the same one on both sides.
+
+#### 108.12.3 A step on the glass: the span hooks
+
+`it_span` (§108.10) ends in `jmp [it_spanhk]`: windowed and on EGA that is
+`it_span_box`, the head's dirty box; in a CGA, VGA or Hercules bracket it is
+the surface's **span hook**, which writes the new wall's column - the top
+pixel and `k* - 1` face rows, the very pixels the step wrote into the canvas
+(§108.10.2) - straight into video memory. The ids are fixed for the step and
+so are the bits: a hook looks them up once (the face's canvas byte, which
+carries the column's nibble, indexes the presenter's own table - `TA[id << 4]`
+is an even column's bits at place 0, `TA[id]` an odd one's at place 1, VOID
+being ink 0 in every look), then writes each device row ONCE:
+
+- **CGA**: `mov al, [di + d] / and al, ah / or al, bl / mov [di + d], al` -
+  the TOP row, then the face rows through an UNROLLED run per bank phase
+  (`IT_CGSEQ`), entered by count through a jump table (a run in reverse:
+  entry k writes the k-th row below the first, a count of m enters at
+  k = m - 1 and falls through to 0) - no branch and no address arithmetic a
+  row, ~50 cycles a row (12 bytes, fetch-bound). The displacements are
+  NASM's shortest, so k = 0 - the last entry, which every face executes - is
+  `[di]` and 8 bytes.
+- **VGA 0Dh**: the Graphics Controller in its SPAN state (§108.12.8): the bit
+  mask is the pixel's bit, set/reset the TOP's colour for one `xchg al, [di]`
+  (the read loads the latches, the write puts the colour under the mask), then
+  the face's colour for the run (`it_vgs`: `xchg al, [di + 40 (k + 1)]`).
+- **Hercules**: the TOP's 1 or 2 card rows, each with its parity's bits, then
+  the face's card rows c(y + 1) .. c(y + n) - 1 through a run per bank phase
+  (`IT_HGSEQ`, 33 entries: 22 logical rows are at most 33 card rows), each
+  entry's parity fixed by its place. Every row number and address is looked
+  up in tables built at entry (`it_fs_herc_tabs`): ~300 cycles a step under
+  working them out. **No jump table**: entries k >= 1 are exactly 12 bytes
+  (their displacements forced to 16 bits, a `times` assertion holds it), so
+  the entry for m card rows is the run's m = 0 point less 12 m - two shifts
+  and two subtractions, then `jmp si` - and k = 0, displacement 0, sits last
+  in its short form. The four 34-word tables were 272 bytes of a 16 KB image.
+
+The rebuild resets the tail to the box (`it_rebuild`), so a new picture's own
+spans - the title's letters, a round's start cells - are presented by the
+whole present that follows rather than written twice; the first whole present
+of each picture sets the hook again.
+
+**No wall reaches a text cell during play** (§108.12.5): the HUD's left line
+is cells 2..10 of row 0 (x <= 87, rows 0..7), and at h = 4 the slab's left
+outline at those rows is at x >= 95, its back outline at row 2 starts at
+x = 100, and every wall lies inside its level's top polygon (§108.10.1); the
+right line is row 24 (rows 192..199), and a span ends at row `ybase - d + k*`
+<= 174 because the front ring clips it (k* <= d). The message shows only
+when nothing moves (paused, between rounds, the title). So a hook never
+writes under text and needs no clip.
+
+#### 108.12.4 The bracket
+
+```
+it_fs_main:   OS88_ALTENTER_SEED; wait for Enter and F to be UP (a BIOS mode
+              set would mask the break - Excitebike's xb_fullscreen)
+              the mode, the palette, the tables, the row offsets
+              a whole present owed; V = now
+  frame:      drain int 16h -> it_fs_key            (every frame, §67.11.2)
+              os88alt_edge -> leave                  (Alt+Enter: no XT BIOS
+                                                      enqueues it, §9.7.1)
+              ES = the work claim; it_commands; it_flow (each step's hook
+                                                      writes the glass)
+              it_fs_present: a whole present if owed, else the overlays
+                             that changed (EGA: the boxes, once a tick,
+                             under the presentation governor)
+              FSXW_FRAME; the sub-tick clock
+  leave:      it_fs_exit; return (the kernel's mode set, then wm_paint_all,
+              our W_PAINT among it: the content black, the picture owed -
+              §53.6, §108.12.6); it_fs_go: V = now
+```
+
+The clock: `it_fs_sub` after each `FSXW_FRAME` counts the sub-tick phase
+(0..2) of the current tick, and `it_clock` charges the governor in u (§108.4.2).
+After every whole present the clock is synced: a present's time is a stall
+and is not owed. `it_fs_reset` (entry) and `it_fs_exit` empty the turn FIFO
+and the key counts; `it_fs_exit` also points the tail back at the box,
+composes the window's overlay records for the paint that follows (or, after
+the EGA's bracket, which borrowed the windowed geometry, has the window
+re-cut by it) and sets `it_fsret` (§108.12.6). **V = now is taken in
+`it_fs_go`, once `OSAPI_FSX_RUN` has RETURNED** - after the kernel's exit
+mode set and its `wm_paint_all` - and not in `it_fs_exit`: wave 3 first
+synced there, inside the bracket, and the way back's 0.9 - 2.7 s was then
+owed - the worker's first wake ran DEBT_CAP, seven iterations where a paced
+wake runs three (`isotrontoggle` counts it now: 1). In a round the exit paint
+also sets `it_vsync`, so nothing iterates until the banded picture is out.
+
+**EGA's presentation governor.** EGA's steps are dirty boxes presented
+through the windowed colour presenter once a tick (§108.12.5), the presenter
+that needed §108.11.6's governor windowed at Lunatic h4. The bracket has it
+too, in `it_fs_present`: a tick's first frame presents the boxes; one whose
+boxes run it into the NEXT tick engages the governor - boxes every second
+tick, the steps' boxes uniting meanwhile - and 32 presents that end in their
+own tick let it go. It is the TICK and not `pit_now` because FASTTICK runs PIT
+channel 0 at three times its rate (§53.2.1) and `os88pit.inc`'s clock assumes
+one 65,536-count period a tick. Measured (MartyPC's XT-VGA, the `VIDEO=ega`
+tree, Lunatic h4 at speed 9), three runs of the row: a frame's work at most
+52.0, 52.0 and 68.5 ms - two stayed inside the tick, and in the third a
+present ran into the next one and the governor ENGAGED (the median frame
+then 4.5 ms: most frames carry no boxes); the game held its pace in all
+three, 33 iterations a second. `isotronperf` also engages it by hand and
+sees 32 quiet presents let it go. An 8-bit EGA's slower writes reach it
+sooner.
+
+#### 108.12.5 Whole presents and the text
+
+A **whole present** (entry, a new arena, a look change) is the canvas
+through the surface's tables, MINUS the overlays' text cells, then the text -
+every device byte once:
+
+| surface | method | measured (§108.12.7) |
+|---|---|---|
+| CGA | a device byte is 4 logical pixels, `TA[b0] \| TB[b1]` (two 256-byte tables), for TWO rows at once: one WORD read of each canvas column is rows y and y + 1, so `b0`, `b1` come in pairs and each feeds a row buffer; then `rep movsb` to each row's bank | 0.67 s (0.86 s before the word reads) |
+| VGA 0Dh | a plane byte is 8 logical pixels: four canvas byte pairs through the chunky-to-planar tables - for each pair position a 256-WORD table of planes 0-1 and one of planes 2-3, indexed by the byte * 2 with AH held 0 (`mov bx, ax / shl bx, 1`) - two word ORs a pair, into four plane rows; then each plane with ONE map-mask write and one `rep movsb` | 1.27 s (1.38 s before the word tables) |
+| Hercules | the windowed mono pages by card-row parity, for a logical row PAIR: rows y (even) and y + 1 own card rows c, c + 1 and c + 2 (1.5 a row), so one word read of each canvas column makes three output rows - c and c + 2 in one parity, c + 1 in the other - and no row is converted that is not shown | 0.88 s (1.25 s converting a card row per row pair it threw away) |
+| EGA | the windowed colour presenter's `it_pbox` over 350 rows x 80 bytes through `gfx_blitp`, then `font_run` - **over the 1.5 s ceiling, and not gated**: it is §108.11.7's windowed whole present at Hc 350 | 2.08 s (MartyPC's XT-VGA running the `VIDEO=ega` kernel: the EGA's instruction count and `gfx_blitp` path, the VGA's wait states) |
+
+**The rows come in pairs, and every rect is 8-row aligned** - `it_fs_whole`'s
+bands (an overlay's 8 rows, the rows between overlays at multiples of 8) and
+`it_ovf_swap`'s cells - so a pair never straddles a rect. **`it_fs_rect`
+preserves BP**, which `it_fs_whole` carries its row cursor in across the
+calls: the VGA presenter counts its cells in BP, and W3's first build let it
+come back 0, so mid-round - with the HUD up - the right line's "rows above"
+pass presented rows [0, 192) and the last pass [0, 200): the whole picture
+twice, 2.9 s, the left HUD blanked for 1.4 s of it. `isotronperf` now tiles
+every traced whole present (title and in a round): the presenters' rects,
+read at their entries, must cover the 200 x 40 cells EXACTLY once outside the
+text cells and never inside them.
+
+**ISOTRON-PLAN 8.3's estimates were low** (0.23 / 0.57 / 0.3 s for CGA /
+VGA / Hercules against W3's first measured 0.86 / 1.38 / 1.25 s - 3.7x, 2.4x
+and 4.2x): it priced a
+device byte from its table look-ups (~70 cycles on the CGA) and missed the
+canvas reads under it - four `es:`-overridden disp16 byte reads a CGA device
+byte, eight a VGA cell, the column-major canvas (§108.9.1) putting a cell's
+columns 200 bytes apart; ~257 cycles a CGA device byte, measured. The word
+reads above halve them, and a budget is to be taken from §108.12.7, not 8.3.
+
+The tables live in the windowed presenters' **strip** (§108.8's work claim):
+nothing windowed is presented while a bracket is up, so its 5,120 bytes are
+free and the claim stays 30 KB.
+
+**The text** is the windowed renderer's lines (the HUD's two, the title's
+five, the message), in 8 x 8 cells of the logical picture - a 40 x 25 grid:
+the left HUD line at row 0 from cell 2, the title's lines centred on rows 1
+to 5 (wave 4), the message centred on row 23 (across the slab's front face
+at h = 1), the right HUD line on row 24 ending at cell 38. `it_fs_area`
+(wave 4) is a rect minus every record's text cells, the records in row
+order; a whole present is `it_fs_area` over the picture, then the text.
+Every string is at most 40 characters for it (the title's and the round
+results' were shortened). The glyphs come from `OSAPI_FONT_GLYPHS` (legal in a
+bracket, §53.7), white on black, opaque, each byte once: on the CGA a glyph
+row's 8 bits are two bytes of ink 3 or 0 (`it_nib2`); on the Hercules the
+same two bytes on the row's 1 or 2 card rows; on VGA 0Dh one byte into all
+four planes in the PLAIN state. On EGA the text is `font_run`'s, at the
+windowed overlays' places for Hc 350. A line that changes presents its old
+cells minus its new ones from the canvas, then the new text.
+
+#### 108.12.6 The toggle, and Esc (binding, §11.2.1)
+
+- **F / f, Alt+Enter, and Game > Full Screen** go in; **F / f and Alt+Enter**
+  come out. Windowed, F and Alt+Enter arrive in `W_ONKEY` (`KEY_ALTENTER` is
+  the kernel's synthesis, §9.7.1); in the bracket F through `int 16h` and
+  Alt+Enter off the key-state map (`os88alt_edge`, seeded "held" at entry).
+- **Esc** keeps meaning cancel first:
+
+  | where | Esc |
+  |---|---|
+  | full screen, a game (in a round or between rounds) | ends the game; the title stays full screen |
+  | full screen, the title | leaves full screen |
+  | windowed, a game | ends the game |
+  | windowed, the title | nothing |
+
+- **A toggle changes no game state**: the iteration, the RNG, the checksum,
+  the grid and the canvas are bit-identical across it (`isotrontoggle`
+  asserts all five after every one of twelve), V = now on both sides - going
+  in at the first whole present, coming back once `OSAPI_FSX_RUN` has
+  returned (§108.12.4) - and the turn FIFO and the key counts are emptied.
+  Windowed -> full screen is a callback with the lock held, so the worker
+  cannot be mid-step (it changes the game only in its own lock hold); full
+  screen -> windowed is the bracket proc returning, the kernel's exit mode
+  set and `wm_paint_all`, and the worker resuming on its next wake.
+- **The way back is banded** (`it_fsret`): the kernel's `wm_paint_all` is one
+  hold with the pointer off, and W3's first build made the window's whole
+  picture inside it - 2.65 s on the XT-VGA, 1.57 s on the Hercules, over
+  ISOTRON-PLAN 16's 1.5 s. Now that paint, whole and with `it_fsret` set,
+  makes the content BLACK (one `gfx_fill`: under `WF_OWNBG` the kernel left
+  the desktop there, §11.90.1) and OWES the picture (`it_full`; `it_vsync` in
+  a round), and the worker puts it out in bands, each hold under 50 ms
+  (§108.11.4). **The trade, stated**: first light - the desktop back, the
+  window black - in 0.3 - 0.6 s instead of the whole picture in one 0.9 -
+  2.7 s hold, and then a top-to-bottom reveal that takes LONGER in total
+  (the bands' own fixed part a hold), the picture's pixels written twice
+  (black, then the picture). It is the round start's trade (§108.11.4), and
+  it holds the pointer and every other task for at most one band.
+
+#### 108.12.7 Measured
+
+MartyPC's cycle counter (`isotronperf`, a boot of its own a machine; the
+wave-3 fix's run, `tests/isotron.py --perf all --json`). **The head-step
+with its span hook** - the RNG byte, the decision, the move, the canvas and
+the column written into video memory - over EVERY computer head-step of the
+same two whole rounds of a seeded FAST game as §108.10.3 (1,049 at Rookie,
+3,177 at Lunatic), so the sample is the same on every run; the gate is the
+MEDIAN, a stricter statistic than ISOTRON-PLAN 16's minimum of 25 samples (a
+minimum is at most a median), and the sample's minimum is reported:
+
+| head-step + span | CGA 5150 | Hercules 5150 | XT-VGA (0Dh) |
+|---|---|---|---|
+| Rookie, median (p90; min) | **3,979** (4,663; 2,281) | **4,536 - 4,641** (5,801 - 5,989; 2,275) | **3,287** (3,906; 2,275) |
+| Lunatic, median (p90; min) | **3,455** (5,033; 1,675) | **3,949 - 3,953** (6,257 - 6,261; 1,675) | **3,316** (4,360; 1,675) |
+| ceiling (ISOTRON-PLAN 16) | 4,500 | 5,000 | 4,000 |
+| the hook's own share (Rookie, against §108.10.3's windowed step) | ~1,550 | ~2,200 | ~850 |
+
+The Hercules line was **4,869** at Rookie before its row numbers became
+table lookups (`it_fs_herc_tabs`): a step's 1.5-row arithmetic, its top-row
+loop and two memory temporaries were ~330 cycles of it. Its runs' computed
+entry (§108.12.3, no jump table) and the short k = 0 entry were priced at
+about even (~12 cycles more for the entry, ~17 fewer for k = 0); the Rookie median reads **4,536 - 4,641** across two runs of one build (W3's first: 4,539) because it falls between the two rounds' own medians (4,780 and 4,530): the whole-round sample is the same head-steps on every run, where the timer's interrupts land in them is not - so the Hercules' margin is ~360 cycles, not ~460. At
+Lunatic's worst rate (228 head-steps a second, ISOTRON-PLAN 4.1) the
+Hercules' Lunatic median is ~19% of the XT and the CGA's ~17%.
+
+**The whole present on F** (`it_fsw0` .. `it_fsw1`), at the title and in a
+round with the HUD up - both gated, and both TILED (§108.12.5):
+
+| | CGA | Hercules | VGA 0Dh | EGA (`VIDEO=ega` tree) | ceiling |
+|---|---:|---:|---:|---:|---:|
+| at the title | **0.67 s** (3.21M) | **0.88 s** (4.22M) | **1.27 s** (6.04M) | 2.08 s (9.92M) | 1.5 s (EGA reported) |
+| in a round | **0.67 s** | **0.88 s** | **1.29 s** | 2.08 s | 1.5 s |
+| W3's first build | 0.86 s | 1.25 s | 1.38 s at the title, **2.89 s in a round** (the BP defect) | - | |
+
+The VGA's is ~640 cycles a cell of 8 pixels now (the word tables took ~70 off
+each, §108.12.5); the CGA's ~200 a device byte and the Hercules' ~175 a card
+byte (the word reads; the Hercules' pairs no longer convert a discarded row).
+
+**The way back** (`it_fsx0` .. `it_fsback`: the bracket's last frame to
+`OSAPI_FSX_RUN`'s return - the kernel's mode set, its whole-desktop
+`wm_paint_all` and our `W_PAINT`, which makes the content black and owes the
+picture, §108.12.6) is now the window's FIRST LIGHT, and then the worker's
+band holds put the picture out:
+
+| | CGA | Hercules | VGA 0Dh | EGA | ceiling |
+|---|---:|---:|---:|---:|---:|
+| first light | **0.38 s** | **0.48 s** | **0.59 s** | **0.34 s** | 1.5 s |
+| band holds after it, the longest | 40.5 ms (22 holds) | 40.1 ms (48) | 33.5 ms (100) | 43.9 ms (73) | 50 ms |
+| the picture all out, after first light | 0.70 s | 1.47 s | 3.29 s | 2.82 s | reported |
+| W3's first build: one hold | 0.88 s | 1.57 s | 2.65 s | - | |
+
+The trade is §108.12.6's: first light 0.3 - 0.6 s with no hold over 44 ms,
+for a reveal that takes longer in total than the one hold did (the VGA's
+picture is 100 bands of one hold each - a 4-row band is ~22 ms there, so two
+never fit the 40 ms budget - and each hold pays the lock, the clip and the
+yield). The EGA's way back has no mode set (a same-mode bracket) and is the
+kernel's desktop repaint and our fill.
+
+**EGA's Lunatic h4 frame** at speed 9 (the frame's work: its logic and its
+present, `it_fsf0` .. `it_fs_frame`): 4.5 ms median, 68.5 ms at most - a
+present that ran into the next tick, after which the governor ENGAGED and
+the boxes went out every second tick (§108.12.4); the game held 33 iterations
+a second. `isotronperf` also engages it by hand and sees 32 quiet presents
+let it go.
+
+**The windowed lines after wave 3** (`it_span`'s `jmp [it_spanhk]` on every
+step, ~30 cycles, and §108.11.4's text-in-its-own-hold), the same run:
+head-step median Rookie 2,416 / 2,423 / 2,420 and Lunatic 2,619 / 2,619 /
+2,615 on CGA / Hercules / XT-VGA, against 3,000; a paced wake 11.7 / 13.2 /
+21.1 ms at Rookie h1 and 23.1 / 27.6 / 35.4 ms at Lunatic h4 (the XT-VGA's
+governor engaged, 86.3 ms the most); round-start band holds 40.0 / 40.0 /
+33.0 ms at most. PERFORMANCE.md Set 156 has the table.
+
+**The package** (wave 3; wave 4's is §108.13.4): image 16,286 bytes (12,648 on the disk, lz4), bss 3,000;
+ISOTRON-PLAN 13's image budget is 16 KB, with 98 bytes to spare - the
+unrolled span runs are ~2.0 KB of it (CGA 2 x 22 entries and their tables,
+VGA 22 and its table, Hercules 4 x 33 at 12 bytes an entry with no table).
+
+#### 108.12.8 Register hygiene
+
+- **VGA 0Dh** has two Graphics Controller states. SPAN (after setup, after
+  every whole present and every text write): write mode 0, enable set/reset
+  0Fh, map mask 0Fh; a hook sets the bit mask and the set/reset colour.
+  PLAIN (a whole present, text): enable set/reset 0, bit mask FFh, map mask
+  per plane (0Fh for text). No palette, attribute or DAC register is
+  written. The exit mode set (§53.6) restores everything.
+- **CGA**: the palette through the BIOS only; no port 3D9h (an EGA or VGA
+  in mode 4 has none).
+- **EGA**: no register at all - every write is the kernel's `gfx_blitp` or
+  `font_run`, and there is no exit mode set to undo anything.
+- **MartyPC's VGA rendering** (not the card): after a 320 x 200 bracket its
+  usual aperture keeps answering 400 lines until the next mode change,
+  though the card is in 12h again (`tests/pxfsx.py` found it on 13h); the
+  tests read the desktop out of the whole field there (`vga_desk`).
+
+#### 108.12.9 What is tested
+
+| row | asserts |
+|---|---|
+| `isotronfs` | MartyPC 5150 CGA, 5150 Hercules and XT-VGA: F at the title enters the window display's bracket; at the title and after each of three rounds of a seeded game the canvas is the model's and the card is the model's presenter of it WITH ITS TEXT - the CGA's 16 KB and the Hercules' 32 KB of video memory byte for byte, the VGA's rendering pixel for pixel, no unit skipped: the guest's overlay records must be the ones the model's state shows (`fs_want`: the strings and §108.12.5's places) and their cells the glyphs of the guest's own table - and the CGA's rendering holding exactly palette 1's four low-intensity inks (high after C); negative controls: the check must fail against the previous round's canvas and with a score one off; C on the CGA presents nothing, on the VGA it is Classic, and back; Esc in a game ends it and stays full screen (waited on the title's own present, `it_fsn`: `it_to_title` sets the state before it builds the canvas); Esc at the title leaves and the window shows the title |
+| `isotronega` (full-screen half) | the same on a `VIDEO=ega` kernel: the same-mode bracket's 640 x 350 rendering pixel for pixel the model's `ega` (win4 at Hc 350) with its text (the windowed overlays' places, `font_run` white on black, the guest's glyph table), at the title and three rounds, the negative controls, C and back, Esc |
+| `isotrontoggle` | MartyPC 5150 CGA and XT-VGA: a paced seeded round frozen mid-way by `it_tpause`, then F, Alt+Enter and the menu in and F, Alt+Enter out, twice over - twelve toggles - each leaving the iteration, RNG, checksum, scores, the 21,917-byte grid and the 64,000-byte canvas the same bytes, and the glass the model's presenter of the canvas (and its text) on both sides; released, the round ends as the model's, and `snap` must see that released stretch move (negative control); a second round toggled WHILE IT RUNS ends as the model's too, and coming home from it the worker's first iterating wake runs at most a paced wake's median (V = now after the way back: 1 against 3; the W3-first-build sync inside the bracket ran 7, and the row fails on it); Esc's four cases |
+| `isotrontwodisp` | MartyPC `os8088_xt_vga_herc`, extended right: the window on the VGA is colour; dragged across the seam (the kernel refits it, 722 x 300, the restrictive card's) it is mono after EXACTLY ONE whole present (`it_nwhole`); F asks for the WINDOW's display and enters `FSXM_HERC`, its 32 KB the model's; the VGA keeps its 640 x 480 raster and its memory below the menu bar (plane 0, 38,400 bytes) unwritten, and is dark - §39.18 blanks the other display of a mode-setting bracket; Esc comes home and the VGA is lit again |
+| `isotronperf` (full-screen part) | §108.12.7's lines on the three machines and the EGA tree: F's whole present at the title and in a round under 1.5 s (EGA reported), its rects tiling the 200 x 40 cells exactly once outside the text (fails on the BP defect of §108.12.5: "row 0 cell 0 presented twice"); the head-step + span median under 4,500 / 5,000 / 4,000; the way back's first light under 1.5 s and every band hold after it under 50 ms, at the title and in a round; EGA's Lunatic h4 frame, the governor engaged on any frame over a tick, and engaged by hand it lets go |
+| `isotronsim` | the full-screen presenters built the guest's way (`cga320_lut`, `herc_lut`, `vga0d_lut` in both looks, `win4_lut` at Hc 350) equal to their per-pixel ones (`cga320`, `herc`, `vga0d`, `ega`) on the title and a tower of four; the Hercules row map 1.5 rows a row; `it_cgaink` and `it_colc` read out of the source |
+
+### 108.13 The screens and the game's flow (wave 4)
+
+The title, the menus, everything between two rounds - the crash, the score,
+the wait for Space, the new arena going onto the glass, READY - the game's
+end, and the pauses. Every timed state runs on `OSAPI_GET_TICKS`, the same
+in a window and in a bracket. The harness's NOFLOW games (§108.7.2) keep
+wave 1's shape - no crash pause, no wait, no sweep, the arena presented
+whole - so every row before this wave is unchanged by it.
+
+#### 108.13.1 The title
+
+The picture is level 1 and the word (§108.9.4). Over the void above the slab
+go the title's own five lines and, over its front face, the tier line - our
+wording, and no credit, publisher, year or legal line anywhere (§108.1):
+
+```
+  A light-wall duel in three dimensions.
+  Turn: Ins/Del, Left/Right or Z/X.
+  Faster: F10 or Up. Normal: F9 or Down.
+  In a game: P pause, C colours, M sound.
+  F full screen. Esc ends, Space continues
+  ...
+  1 Rookie 2 Veteran 3 Lunatic; A-C silent
+```
+
+Each is at most 40 characters, the full-screen picture's width in cells: in
+a window the lines are `font_run` overlays (§108.11.5), in a bracket glyph
+cells on rows 1 - 5 and 23 (§108.12.5). At the title `1`, `2` and `3` start a
+game with sound, `A`, `B` and `C` a silent one (C there is a tier, not the
+look - which is why the line that names the look says "in a game"), F and
+Alt+Enter toggle full screen, and Esc leaves a bracket and does
+nothing in a window. The title is presented whole - in bands in a window
+(§108.11.4) - at launch, after Esc and after a game over.
+
+The menus are §108.8's: About isoTron on the app-name cell (the standard
+card, the only Help there is), and the Game menu - the tiers, a rule, Sound
+(named for its state), Colours, Full Screen, Pause, a rule, End Game.
+
+#### 108.13.2 Between rounds
+
+| state | what the glass shows | how long | then |
+|---|---|---|---|
+| PLAY | the round | | a crash: the round's result is decided (§108.3) |
+| CRASH | the crash; at **5 ticks (0.27 s)** the winner's HUD line changes (the footage's 0.25 s) | 15 ticks, 0.8 s | WAIT - or, the third loss in a row, GAME OVER |
+| WAIT | the round's result and `Space to continue.` | until Space or Enter | SWEEP |
+| SWEEP | the next arena going onto the glass (§108.13.3) | ~1.5 s, 2.2 s at most | READY |
+| READY | the arena, standing | 9 ticks, 0.5 s | PLAY, its pace from the first wake that owes no present (`it_vsync`, §108.4.2) |
+| GAME OVER | `THREE LOSSES IN A ROW. GAME OVER.` | 64 ticks, 3.5 s, or Space | the title |
+
+The score is owed, not drawn, at the crash (`it_hudp`), and CRASH's own
+clock lets it out - `isotronflow` reads the HUD at the crash and finds the
+old score there, 1.5 ticks into CRASH still the old one, and IT_HUDT + 1
+ticks in the new one with the state still CRASH. A Space pressed in CRASH is
+kept and WAIT takes it on arrival (§108.7.1) - but not in the third loss's
+CRASH: GAME OVER follows, and only a fresh Space cuts its 3.5 s short (the
+key is dropped, and CRASH -> GAME OVER clears `it_qcont`).
+
+**WAIT builds the next arena** (`it_sw_build`: the tower WITHOUT its top
+outline, and the grid emptied): the tower's height is known the moment the
+round ends, so the rebuild - 0.32 s at h = 1, 0.45 s at h = 4 on the 5150
+(§108.9.2) - is spent while the game waits for the player, and Space's sweep
+presents from its first wake. **No build is a lock hold** (`itrules.inc`,
+"THE CANVAS BUILDS"): WAIT's arena, the title's picture (0.81 s with its
+lettering) and a game's first arena touch the canvas and the grid and
+nothing on the glass, so in a window `it_bld_post` leaves the request in
+`it_bldq`, the wake that asked presents nothing, and the worker builds it
+after `OSAPI_GFX_UNLOCK` (`it_bld_run`; bit 7 claims it in one critical
+section). A game's first round - from the title, no WAIT before it - waits
+for its arena in WAIT, unpresented, and its next wake starts it
+(`it_qround`). While a build is owed or under way the canvas is no picture:
+a W_PAINT makes its damage black in one `gfx_fill` and owes a whole present,
+and the bracket's entry builds an owed one itself or yields until the
+worker's is in (`it_bld_sync`). In a bracket, which holds the lock
+throughout with the worker frozen and no pointer, a build is done where it
+is asked for. MEASURED (MartyPC, `w4fix/bldhold.py`): the CRASH -> WAIT
+wakes' longest hold **17 - 21 ms** on the 5150 CGA and the XT-VGA (was 335 -
+471 ms with the rebuild inside it), GAME OVER -> the title **41 - 46 ms**
+(was 834 ms), the title's `1` -> the first arena **62 ms** on the 1bpp
+windows and **83 ms** on the XT-VGA (was 0.43 s), the grid's ~35 ms having
+moved into the build too.
+
+Until the sweep presents it, the glass still shows the last round. A
+present of WAIT's canvas before Space - a toggle, a look, a relayout, a
+paint - writes the outline in first (`it_wait_ol`), so what it shows is the
+NEXT arena whole, outline and all, not the last round's maze: the canvas is
+already the next round's (`isotronflow` makes one whole present in WAIT and
+holds canvas and glass to the bare tower of the next height). A NEW GAME
+started over an arena WAIT built for the old game's next round, or over a
+sweep half out (`it_game_start`), is not that arena and not the picture a
+sweep's region assumes - `it_swoo` is the canvas's last height, not the
+glass's - so `it_swpre` is cleared, the arena built again and a whole
+present owed, and the sweep ends at once (`isotronflow`: a game posted as
+Game > Rookie posts it, in WAIT over h3's arena, starts at h1, canvas and
+glass the model's; without the rule its canvas held h3's tower).
+
+**Pause** is P in play (and Space resumes, §108.7.1), the About card's (a
+round in play pauses under it), and the window's: a game in play that loses
+the front - `OSAPI_WM_TOP` or `OSAPI_MENU_OWNER` another's - pauses, and stays
+paused when the front comes back; P or Space resumes (`it_focus_ck`, Dot
+Delirium's shape; never for the harness's bot, which needs no audience). In
+a bracket the game is the machine and nothing takes its front. Every pause
+letters `PAUSED - PRESS P` on the message line. **The look** is C in a game
+(§108.12.2: isoTron and Classic on 16 colours, the intensity on the CGA's
+bracket, nothing on 1bpp) and Game > Colours; it is a present, never a
+redraw of the game. The About card in READY HOLDS READY (nothing is
+presented under the card, and a round must not start unseen): its 0.5 s
+start again when the card goes. **Sound** is M or Game > Sound, the item naming its
+state; the tones it gates are wave 5's.
+
+#### 108.13.3 The sweep
+
+The original drew a new slab in a fixed order, over the old picture: the
+rims and the right face at once, the front face left to right, the floor's
+dither left to right, and the white outline - the collision boundary - last.
+That order is the game's visual signature and is kept; the pace is ours.
+`apps/isotron/itsweep.inc` is the whole of it, and it is PRESENTATION only:
+the canvas is rebuilt at once (WAIT's `it_sw_build`, the tower WITHOUT its
+top level's outline: `it_rbnoe` puts VOID where `it_rebuild` puts those four
+edges) and the glass catches up. The bands' geometry below is computed once
+a sweep into a table (`it_sw_tab`, a byte a boundary, 280 bytes): the sweep
+asks it ~250 times and a paint ~280, and computed each time it was ~2,900
+cycles a call with the rects' - 154 ms of the XT-VGA's raise in
+`it_sw_group`, 89 ms looked up (MEASURED).
+
+**What is presented is not the picture.** Between two rounds only the old
+TOP level and the new one can differ, so each 8-px band of columns carries
+only the rows between the two levels' tops and the lower of their bottoms -
+with o the new level's offset 24(h - 1) and oo the old one's (the last
+rebuild's height; the title's is 1), x0 .. x1 the band's columns:
+
+| boundary | rows (logical; o, oo subtracted as shown) |
+|---|---|
+| R0, the region's top | min of the two tops: (x1 >= 100 ? 74 : 174 - x1) - o and - oo, down to even |
+| T, the new level's top | (x1 >= 100 ? 74 : 174 - x1) - o, down to even: rows [R0, T) are VOID in the new picture |
+| FL0, FL1, the new floor | [max(97, 197 - x1), min(174, 390 - x0)) - o, both down to even; none past x0 = 292 |
+| B0, B1, the new front outline and face | [174, 198) - o to x0 = 216; none after |
+| R1, the region's end | max of the new level's bottom (197, or past x0 = 216 min(197, 413 - x0)) - o and the old level's front outline's next row (175, or 391 - x0) - oo, up to even |
+
+**Why nothing outside a band's [R0, R1) differs.** Every wall pixel lies in
+its level's top face (§108.10.1's Lemma 2 clips it there), so the old
+picture differs from a bare tower only inside the old top level. Lower
+levels are drawn at fixed rows whatever h is (§108.9.2), so the two
+pictures' lower bodies agree wherever both have one. A round at the same
+height changes only the top face and its outline. A RAISE moves the top 24
+rows up: the old top face and outline become the new level h - 1's lower
+body - the same rows of front and right face the old one already showed -
+plus the region's rows. A RESET drops from h to 1: the old levels above
+the new top are VOID in the new picture, all of them between the old top and
+the new level's bottom. In every case the rows that differ lie inside
+[R0, R1), and `isotronflow` holds the glass equal to the model's presenter of
+the new canvas after every sweep, every height and both kinds of change.
+
+**The items** (242 of them, numbered in presentation order):
+
+| items | stage | a band's rows | |
+|---|---|---|---|
+| 0 - 159 | A, four passes over the 40 bands: 0 [R0, T) VOID, a FILL; 1 [T, FL0) the old leftovers, the outline row, the back and left rims; 2 [FL1, B0) the right outline and face; 3 [B1, R1) below the front face | | all due at once |
+| 160 - 187 | B, bands 0 - 27 | [B0, B1): the front outline row and the front face - NOTHING when the two levels are one (the same height, the title's level 1): those pixels are on the glass already | over ticks 2 - 8, 4 bands a tick |
+| 188 - 227 | C, bands 0 - 39 | [FL0, FL1): the floor | over ticks 9 - 24, 5 bands every 2 |
+| 228 - 241 | D: the outline into the canvas (`it_outline`, the same bytes a plain rebuild writes) and onto the glass: D0 the back and front edges, D1 - D13 a band of each diagonal (as spans: D1 - D4 the two diagonals' halves, D5 - D13 nothing) | | at tick 25 |
+
+Ticks count from the sweep's start, Space's wake (the arena built), so the
+last item is due 1.37 s in and a surface that keeps up ends at ~1.5 s. One that does not runs
+flat out: the windowed worker YIELDS while due work is left, and presents
+what is due together together.
+
+**Merging** (`it_sw_group`): the items due, in one stage, go out as ONE
+present, slot by slot. MEASURED on MartyPC's XT-VGA, a windowed colour
+present costs ~6,900 cycles a call, ~475 a device row whatever its width
+(`gfx_blitp`'s four plane loops and the strip's row loop) and ~298 a device
+byte, so a band's 2-byte-wide, 150-row present was ~970 cycles a byte where
+a 16-byte one is ~330. B, C, D's diagonals and A's last pass are UNIONED
+(at most SW_GMAX = 8 bands: the bounding box is the waste): the rows a band
+adds to its neighbours' columns are rows the sweep has already presented
+there (A before B and C, all before D) or rows the two pictures share, so
+they go out again unchanged and never early. A's first three passes border
+a later stage or are a fill, so they merge only while their rows are the
+same band to band - the back rim's run from x = 100 merges whole; a union
+there would show the floor, or fill a wall, before its time. D0 and each
+diagonal band stay alone (a union of diagonal boxes is mostly a triangle of
+nothing).
+
+**On each surface:**
+
+- **a window** (and EGA's bracket, which borrows its geometry): a slot goes
+  out through `it_pbox` - device rows by the row map, bytes x / 4, minus the
+  overlays - in PIECES of ~512 device bytes (`SW_PIECEB`). THE HOLD'S BUDGET
+  is 80 ms on a colour window (`IT_GSWP`) and 40 on a 1bpp one (`IT_GSWP1`,
+  the whole present's band budget: a 1bpp window keeps the pace on it). A
+  hold goes on to another iteration - a piece, and the group building or D
+  item before it, `it_bt0` being stamped once an iteration - while the hold
+  so far plus the NEXT one's price stays under the budget, the price being
+  the last iteration's cost and never under half the budget (a VOID fill or
+  an empty group priced the next piece at nothing, and a full band's piece
+  after one was a 110 ms hold on the XT-VGA); and a wake that comes in with
+  half the budget spent already (a round's start, its overlays' text)
+  presents nothing and yields. MEASURED, the longest windowed hold of any
+  sweep: **83 - 87 ms** on the XT-VGA (was 109 - 125), **38 - 62 ms** on the
+  1bpp windows (was 81 - 111), 77 - 93 ms on EGA. A VOID slot is ONE
+  `gfx_fill` in CBLACK, VOID's colour in every look and on every surface
+  (`it_pfill`). On a colour window with nothing over it (the clip cleared)
+  and in EGA's bracket, D is SPANS (`OSAPI_GFX_SPANS`, §5.10): the outline is
+  one id, one colour in every 16-colour look, one pixel wide, and a span is a
+  row of it - the D items as rects were ~0.3 s of the XT-VGA's sweep, as
+  spans ~0.1 - each diagonal in two halves (a whole one was a ~58 ms item,
+  which no hold's budget can split), the spans cut at the picture's last
+  device column (column 316 is not the picture's when it is 79 bytes,
+  §108.11.2, and `gfx_spans` clips nothing with the clip cleared). A
+  REFUSAL is read: `gfx_spans` refuses on a second display and on kern_small
+  as well as under an armed clip, so CF = 1 sets `it_spno` and the item goes
+  again as rects (D0, or from D1: as rects D1 - D13 hold both diagonals), and
+  so does the rest of that sweep - the rects being 13 presents where the
+  API's own fallback, a `gfx_fill` a span, is ~240 calls a diagonal on the
+  VGA. Elsewhere (an armed clip; 1bpp is fast enough) D is rects;
+- **a direct bracket** (CGA, VGA 0Dh, Hercules): a slot whole through
+  `it_fs_area` - a rect minus the overlays' text cells (§108.12.5) - and a
+  VOID slot as zero bytes, a `rep stosb` a device row (`it_fs_fill`; 0Dh in
+  its PLAIN state, so a 0 is colour 0 in every plane): the VGA's reset 4 -> 1
+  was 2.32 s converting VOID and is 1.58.
+
+**A W_PAINT during a sweep** (`it_sw_paint`) presents its damage from the
+canvas OUTSIDE every band's region - where the old picture and the new are
+one - and the front face at one level (the same pixels in both, and no item
+owns them), and inside the region only the rects of the items already
+taken; the rest is owed to the sweep (ISOTRON-PLAN 7.2), the canvas there
+being the NEW arena already. It is PRICED LIKE THE SWEEP: only the bands
+the damage meets; the rows above every region, [0, R0), are VOID in both
+pictures and go out as a FILL; neighbouring bands' outside rects with the
+same rows go out as one (R0 is one value from x = 100 on and R1 one value
+to x = 216: ~26 presents, not 80 - 120 two bytes wide); and the items
+taken are replayed MERGED by `it_sw_grpl` - `it_sw_group` with the limit in
+CX - each stage's run over the damage's bands, the sweep's own group in
+hand set aside (`it_sgsv`) and put back. MEASURED on the Disk-window
+uncover with A, B and C taken: **375 ms on the XT-VGA against 1,281** (the
+same rect's plain paint is 597: VOID converted there and filled here), **291
+ms on the 5150 CGA against 775** (plain 292). `isotronflow` stops a sweep
+half-way through the floor (the harness's `it_tswk`), uncovers the window,
+and finds the swept floor bands the new arena's and the owed ones not - and,
+released, the arena whole and the model's - and holds that paint under
+1.2 times the same rect's plain paint, which it makes later in the row.
+
+**A whole present owed ends a sweep** (`it_sw_finish`: the outline written,
+every item done, READY's clock started): a toggle, a look, a relayout, a
+`gfx_blitp` that refused - that present shows the arena whole; and a round
+started while one is owed (the title's still going out in bands) sweeps
+nothing and that present shows it. Esc during a sweep or READY ends the game
+like anywhere else. In a bracket the steps' span hook goes back on the glass
+at the sweep's end.
+
+#### 108.13.4 Measured
+
+MartyPC's cycle counter (`isotronperf`'s sweep part, `tests/isotron.py
+--perf all --sweep`), from `it_sw0` (the round's start, its arena built -
+WAIT's, or a first round's by the worker outside the lock) to `it_sw1` (the
+outline out), the heights poked at the round's end so the cases are the
+worst a game can make; ceiling 2.2 s on every surface, ~1.5 s where the
+surface keeps the pace; and every windowed lock hold from the trigger to
+the sweep's end, and every CRASH -> WAIT wake's, under 100 ms:
+
+| sweep | CGA 5150 | Hercules 5150 | XT-VGA | EGA (`VIDEO=ega` on the XT-VGA) |
+|---|---|---|---|---|
+| windowed: the title to h1 | 1.53 s | 1.58 s | 1.76 s | 1.56 s |
+| windowed: raise 3 -> 4 | 1.53 s | 1.58 s | 2.00 s | 1.72 s |
+| windowed: reset 4 -> 1 | 1.53 s | 1.58 s | 2.10 s | 1.81 s |
+| windowed: the same h1 | 1.53 s | 1.58 s | 1.73 s | 1.53 s |
+| windowed: the longest hold | 62 ms | 62 ms | 87 ms | 93 ms |
+| full screen: raise 3 -> 4 | 1.43 s | 1.46 s | 1.58 s (0Dh) | 1.61 s |
+| full screen: reset 4 -> 1 | 1.47 s | 1.49 s | 1.54 s | 1.66 s |
+| full screen: the same h1 | 1.47 s | 1.49 s | 1.56 s | 1.50 s |
+
+The 1bpp windows and every bracket keep the pace; the colour windows run
+flat out and stay under the ceiling - the XT-VGA's ~0.1 s under it, its
+colour presenter's per-byte and per-row costs above being the whole of the
+difference, and its whole present §108.11.7's 3.28 s. A windowed hold is
+the budget's (80 ms colour, 40 on 1bpp) plus at most one iteration over
+it; the title's `1` -> the first arena is the longest on the 1bpp windows
+(the HUD's and the title lines' text in the round's first wake). How it got
+there, each step re-measured on the XT-VGA's windowed raise: 3.57 s with a
+present a band (~970 cycles a device byte); 2.78 s merging the due items (A
+still band by band); 2.62 s with A in passes and pieces sized by bytes;
+2.15 s with the arena built at WAIT; 2.04 s with D as spans; 2.00 s with the
+bands' table (`it_sw_tab`); 2.06 s with the holds cut to the budget (109 -
+125 ms before: more, shorter wakes); and 2.00 s again with the grid's ~35 ms
+reset moved out of Space's wake into WAIT's build. Moving the rebuild's work to the region's rows alone did
+not pay (it is ~3,000 cycles of setup a column, not its stores) and was
+taken out.
+
+**The package** after wave 4: image **20,573** bytes (16,211 on the disk,
+lz4), bss 3,710 - over ISOTRON-PLAN 13's 16 KB budget by ~4.2 KB: the sweep
+(~2.6 KB with its spans, the bands' table and the paint's merged replay),
+the flow, the builds outside the lock and the title's lines (~0.9 KB), the
+glyph lettering (smaller than the strokes it replaced, but its walk is
+code). The bss holds the bands' table (280 bytes) and the paint's set-aside
+group (49). The budget is the plan's, not a loader's (`APP_MAX_SIZE` is 60
+KB), and is wave 6's to settle.
+
+#### 108.13.5 What is tested
+
+| row | asserts |
+|---|---|
+| `isotronflow` | MartyPC's 5150 CGA and XT-VGA, the game through its UI: the title's lines and the word's picture the model's; `1` (a real key) starts a STORED game (`it_tflags` SEED, BOT, FAST, HOLD) and every round's arena is SWEPT in - at its first iteration the canvas is the model's for that height byte for byte and the glass the model's presenter of it, outline and all; after every round the state is the model's, the HUD still shows the OLD score at the crash and - CRASH's clock restarted at the release and the guest run by cycles - 1.5 ticks in still the old one and owed, IT_HUDT + 1 ticks in the new one with the state still CRASH; WAIT shows the new score and the result line, and Space (a real key) continues; at the first WAIT before h2 a whole present (`it_full`) shows the next arena whole, outline and all, canvas and glass the bare tower's; the tower 1, 2, 3, 4, 1 seen on the glass in that order (`ISOTRON_SHOTS` keeps the series beside the model's own pictures); the third loss: CRASH, then GAME OVER with its line lit on the glass, then the title, the model's again, no lock hold on the way over 100 ms; a game in WAIT over an arena built for h3 and a NEW GAME posted as Game > Rookie posts it: its arena is h1, canvas and glass the model's; About from the app menu opens the card and a key takes it down; a game posted under the Disk window has its sweep stopped half-way through the floor and is uncovered - the swept floor bands the arena's, the owed ones not, and the paint under 1.2 times the same rect's plain paint, made later in the row - and released, the arena whole; and a game in play that loses the front pauses with `PAUSED - PRESS P`, stays paused when the front comes back, and P resumes it |
+| `isotronperf` (the sweep part) | §108.13.4's table, each line under 2.2 s, on the four machines; every windowed lock hold from the trigger to a sweep's end, and every CRASH -> WAIT wake's, under 100 ms |
+| `isotronrules` (wave 4's change) | the keyboard leg's game at two losses in a row now goes CRASH, then GAME OVER, then the title; a Space in that third loss's CRASH is not kept, and GAME OVER's line is still up a guest second in |
+| `isotronsim` | the lettering's table and `IT_LOGOX/Y/S` read out of the guest's source and equal to the model's `LOGO` |
+
+### 108.14 Sound, keys and the pace (wave 5)
+
+`apps/isotron/itsnd.inc`, the typematic filter in `itinput.inc`, and the
+pace's verification. Rows: `isotronsound`, `isotroninput`, `isotronpace`
+(`tests/isotronlive.py`, §108.14.5).
+
+#### 108.14.1 The sounds (ours; the original's are not reproduced)
+
+`OSAPI_SND_TONE` only (§34.3): worker-safe, billed to this instance and
+released by `snd_release_inst` at teardown, so closing isoTron cannot leave a
+tone droning. No FM, no PCM, no driver.
+
+| event | sound | priority | calls |
+|---|---|---|---|
+| wall tick | 110 Hz, 165 Hz while boosted (p > 2), a ONE-TICK lease (CX = 1), every 4th player cell, **at most one a frame**; windowed its lease ends it at the tick, in full screen an explicit off goes out on the next frame | 40h | at most 2 a 4 cells |
+| crash | 1,400 Hz falling x15/16 a tick (1,400, 1,312, 1,230, 1,154, 1,081, 1,014, 951, 891, 835, 783, 734, 688, 645, 605, 567), 15 entries one a tick - CRASH's whole 0.8 s - each with a two-tick lease, then off | 60h | 16 |
+| round start | 440, 440, 880 Hz, two ticks on and one off, over READY's nine ticks | 50h | 6 |
+| tower rises | 523, 659, 784 Hz, three ticks each, while the raised level sweeps in (a raise only: not a reset to 1, not a game's first round) | 50h | 4 |
+| game over | 523, 392, 330, 262 Hz, four ticks each, under the line | 50h | 5 |
+
+(ISOTRON-PLAN 12 said the crash fell "to about 110 Hz"; fifteen steps of
+x15/16 from 1,400 Hz end at 567, and the fifteen steps are what is pinned.)
+
+- **Every off goes out at 60h**: an off obeys the priority compare as an on
+  does (§34.3), so an off at the tick's 40h could not silence a phrase's 50h.
+  And an off is sent **only while a tone of ours may still sound** -
+  `it_sndlive` set by a granted on, and its lease not yet out (`it_sndexp`,
+  the tick it ends): a 60h off respects no owner, and an unneeded one would
+  silence another package's 40h tone. Both are written **only on a grant**
+  (CF = 0, an on): a refused call leaves them as they were, so a lease that
+  was never ours is never trusted. The expiry is read BEFORE the call - a
+  tick landing between makes it early, which only skips an off the kernel's
+  `snd_tick` sends anyway, where late would send one into another tone.
+- **One writer.** Events only POST - a phrase pointer (`it_snd_post`), the
+  wall tick's flag (`it_sndtk`, set by `it_iterate` at every 4th player
+  cell, ~40 cycles a cell). `it_snd_frame` is the one routine that calls the
+  driver, through `it_tone`, the one call site (`it_ntone` counts it, the
+  `it_tonecall` mark is its breakpoint), and it runs **after the measured
+  work**: at the end of the worker's wake, inside its lock hold and after
+  the presentation governor has read the hold; at the end of a bracket frame,
+  after its present and before `FSXW_FRAME` (Excitebike's rule, §102.5).
+- **A phrase is a table**: a priority byte, a start byte, then (tick, Hz)
+  rows, Hz 0 an off. A frame that comes late skips to the newest row due, so
+  a stall costs notes and never stretches a phrase; a row's lease is the
+  ticks to the next row plus one. The START BYTE says when its tick 0 is:
+  the crash and GAME OVER are posted early in their wake (by the iterations,
+  by the state machine) and start at once, so the crash's off lands on
+  CRASH's last tick - before WAIT's canvas build (§108.13.2), which would
+  otherwise hold the worker for 0.3 - 0.45 s past it; READY's and the
+  tower's are posted at the end of a sweep's long hold (up to 80 ms) and
+  start at the NEXT frame - begun there, READY's first 440 Hz was MEASURED
+  at 1.06 ticks, not two.
+- **A phrase that replaces our own 60h tone frees the channel first.** GAME
+  OVER is posted on CRASH's last tick, the very wake the crash's off row is
+  due - and the post replaces the crash's phrase before that row is sent, so
+  the crash's last entry (567 Hz, a two-tick lease at 60h) still owned the
+  channel and GAME OVER's first 523 Hz at 50h was REFUSED (MEASURED: CF = 1,
+  owner 60h - 567 Hz a tick longer, three silent ticks, then 392). `it_flow`
+  calls `it_snd_quiet` before that post, so our own off goes out at 60h and
+  the 523 is granted. `isotronsound` fails on any refused call in the stored
+  game's log, the chimes and GAME OVER included - verified to fail with the
+  quiet taken out.
+- **Silence on**: pause **in play** (P, the About card and focus loss all
+  set `it_paused`, and only in `ST_PLAY`); **the About card in every state**
+  (`it_abon`, tested by `it_snd_frame` itself) - READY's beeps then wait for
+  the card to go, as READY's 0.5 s does: `it_flow` re-posts READY's phrase
+  every wake under the card and it begins on the first frame after it, so
+  they are never spent under the card; M and Game > Sound, a silent tier
+  (`it_snd` = 0: no call is made at all), Esc, a new game, both sides of
+  every toggle (`it_fs_main`'s entry and `it_fs_exit`), and close (the
+  kernel's teardown). **Focus loss outside play pauses nothing**
+  (`it_focus_ck` asks only in `ST_PLAY`), so a phrase already running there
+  plays out under another window - CRASH's 0.8 s, GAME OVER's 1.1 s, a
+  chime's 0.5 s, READY's - none longer than its own state.
+- The harness's NOFLOW games are silent (`it_snd` = 0), as wave 1's comment
+  always said; `isotronsound` plays through the real keys.
+
+#### 108.14.2 The typematic filter (turns only)
+
+A held turn key is ONE turn. A turn keystroke counts when
+
+1. it is a different key from the last turn keystroke, or
+2. `OSAPI_KEY_DOWN` saw that key UP at some sample since it - each worker
+   wake (`it_tsample`, inside the lock hold), each bracket frame, and in
+   `W_ONKEY` at the keystroke itself, so a tap already released by the time
+   it is dispatched has been seen up - or
+3. the last ACCEPTED turn was under `IT_TQUICK` = 4 ticks (220 ms) ago, under
+   the SHORTEST typematic delay a keyboard can be set to - an AT's 250 ms,
+   which many AMI and Award ROMs program at POST (an XT's is ~500 ms); 6
+   ticks (330 ms) let such a keyboard's first repeat, at ~4.6 ticks, through
+   as a second turn - a U-turn into the player's own wall: a real fast
+   re-press whose up fell between two samples.
+
+Otherwise it is a repeat and is dropped (`it_ndrop`). **A double tap is
+two turns** - by rule 3 inside 220 ms, by rule 2 after it (an up lasting a
+tick or more is sampled) - and so a U-turn. The speed keys
+are NOT filtered: a held F10 (or Up) ramps p by its repeats, as the footage
+shows. Every writer of the tracking (`it_tkey`, `it_tup`, `it_tacc`) holds
+the gfx lock (`W_ONKEY`, the worker's wake) or is the bracket, so they never
+interleave. The tracking is forgotten (`it_treset`) at every round's start
+and on both sides of every toggle, so the first turn keystroke after either
+counts - a key HELD across one gives one more turn, which is the price of a
+key map the BIOS mode set can leave stale (the bracket's entry waits only for
+F and Enter, §108.12.4). `KEY_DOWN` is a map read with no lock and no VRAM,
+legal from a worker (`kernel/mouse.inc` `kbd_down`); the filter costs ~280
+cycles a wake while a key is tracked and not yet seen up, ~30 otherwise.
+
+Keys by **AH**: keypad Ins with NumLock on (AL '0', AH 52h) is Ins; Up and
+Down are F10's and F9's twins (AH 48h, 50h).
+
+#### 108.14.3 The pace, verified
+
+§108.4's clock and governor, unchanged by this wave and now measured on the
+5150 (`isotronpace`). A seeded harness round (NOFLOW, paced, nobody steering,
+p = 2, a seed whose every head lives through each window - the model says)
+is traced at every wake end (`it_wake1`) or frame end (`it_fs_frame`), where
+the debt is in (-cost, 0], so a count between two of them is good to one
+iteration:
+
+| iterations / guest s | windowed | full screen | the model (108.4.1) |
+|---|---:|---:|---:|
+| Rookie h1 | 59.53 (-0.10%) | 59.55 (-0.05%) | 59.58 |
+| Rookie h2 | 34.10 (+0.65%) | 33.77 (-0.34%) | 33.88 |
+| Lunatic h1 | 119.71 (+0.45%) | 119.17 (+0.00%) | 119.17 |
+
+and the governor's CREDIT over each window - its iterations' costs plus the
+debt's change - equals 768 u a BIOS tick (28,416 u over 37 ticks windowed),
+plus 256 a phase in full screen, to within a tick.
+
+- **The stall.** `it_tstall` makes one paced wake (frame) wait ten real ticks
+  of the BIOS clock, the lock held, before it reads its clock. It credits
+  EXACTLY `1,536 - 256 * it_lastph` u: windowed 1,536 after 11.0 ticks, in
+  full screen 1,024 after 10.4 (the last frame had paid phase 2) - its own
+  tick and one owed, the other eight or nine dropped. A stall never bursts.
+- **V = now** after a resume (P, a guest second, P: the first wake back
+  credits 768 u windowed, 256 in full screen - one tick or one phase) and on
+  both sides of a toggle mid-round (the first iterating frame after the
+  entry's whole present credits 256 u; the window's first wake back 0).
+
+#### 108.14.4 Measured
+
+MartyPC's 5150 CGA (PERFORMANCE.md Set 157): one `OSAPI_SND_TONE` costs
+**1,814 cycles** on and **1,521** off (the call site's marks, medians); a
+bracket frame's sound **390 cycles** when it calls nothing and **2,528** when
+it calls once. The worst rate the wall tick can be asked for - Lunatic h1 at
+full boost, 34 four-cell boundaries a second - is COMPUTED from those
+medians, not measured (the cost leg runs at Rookie, p = 5): the window calls
+at most once a wake, 18.2 x ~2,530 = ~46k cycles/s, **~1.0%** of the XT;
+full screen at most once a FRAME, so 54.6 x 2,528 = ~138k cycles/s, **2.9%**,
+is a hard bound, and the expected rate is under it (a tick's off is skipped
+once its lease has run out: ~48 calls a second, ~2.6%).
+
+**The windowed wake carries the sound** - `it_snd_frame` is the last thing
+inside its lock hold, after the governor has read it - so a wake that calls
+grows by ~2,530 cycles (0.53 ms), and every wake by `it_tsample`'s ~30 -
+280. A NOFLOW harness game is silent, so `isotronperf` pokes `it_snd` on for
+its Lunatic h4 full-boost wake line and fails it unless at least 20 calls
+were made: the ceiling is gated WITH the sound. Measured: **24.5 / 28.9 /
+34.0 ms** median (CGA / Hercules / VGA; 83, 76 and 89 calls over 120 wakes)
+against the silent 23.0 - 23.5 / 27.3 - 27.6 / 32.8 - 35.4, under 35 / 35 /
+50. The head-step and the bracket's frame work are unchanged: the sound is
+after them. The image is **21,312 bytes** (+739 over wave 4: the sound ~460
+with its phrase tables, the filter ~120, the stall and the counters) and
+the bss **3,734** (+24); 16,845 bytes on the disk lz4-packed.
+
+#### 108.14.5 What is tested
+
+| row | asserts |
+|---|---|
+| `isotronsound` | MartyPC's 5150 CGA, the speaker CAPTURED (`MARTYPC_WAV`) and every `OSAPI_SND_TONE` traced at `it_tonecall` (AX, CX, DL, and the driver's CF: a refused call fails): `1` (a real key) starts a seeded game nobody steers - READY's 440/440/880 Hz at 50h on ticks 0, 3, 6 with offs at 60h on 2, 5, 8; the wall ticks 110 Hz at 40h with CX = 1, 165 Hz once F10 boosts, one every 4th player cell (+-1), never two in a wake; the crash's 15 entries a tick apart at 60h with CX = 2, then its off. M mutes a whole round (sweep, READY, play, crash: no call) and unmutes; `A`, a silent tier, makes no call through a round. A stored game played FAST by the bot through the real title: every raise has its chime on ticks 0, 3, 6 (off on 9) and a reset or the same height none; GAME OVER's four notes on 0, 4, 8, 12 (off on 16). THE GATE: port 61h & 3 = 0 and no call for a guest second after P pauses a round with the wall ticking, and after Esc, F into full screen and F out of it, each pressed at a crash's first entry - at most eight more, ONE off at 60h, then silence; in full screen a wall tick followed by its explicit off a frame on. THE CAPTURE: READY's 880 Hz where the trace asked for it (the capture's clock is the guest's), the crash tick by tick (Goertzel, `tools/sndcheck.py`) within 3% of the table and FALLING, silence after its off and through the muted and the silent rounds; then §108.14.4's costs |
+| `isotroninput` | MartyPC's 5150 CGA, real keys: F10 HELD ramps p 2 -> 9 through every value, sampled at each wake; Del held 1.5 s (the game held still) posts ONE turn and the filter counts at least five repeats dropped (the control: the keyboard repeated - 24 to 26 measured); NumLock on, keypad Ins (AL '0', AH 52h) turns left; a double tap of Ins is two turns, a U-turn; Up x3 posts three boosts (p 5) and Down F9 (p 2); a toggle forgets the tracked key, both ways |
+| `isotronpace` | §108.14.3: the six rates within 2% of the model with every head alive and p = 2; the credit 768 u a tick (+256 a phase) within a tick; the stall's exact credit; V = now after a resume and a toggle |
+
+One emulator lesson, which the rows carry: **a key sent while a `bp_trace`
+pump has MartyPC stopped can lose its release** (one `key` command carrying
+both: F stayed down in the kernel's key map and the bracket's entry, which
+waits for F's release, never ended) **or the keystroke** (Esc, once in three
+runs) - **or a byte written to the guest** (`it_tstall` read back 0 and the
+stall was never served, twice in ~12 runs). The rows send the press and the
+release as two commands a few guest ms apart (`tap`), retry a key that must
+change something (`press`), and write a poke FROM a breakpoint stop, in the
+pump's own callback. **And a host-timed hold is not a guest-timed one**: `tap`'s "40 ms"
+`guest_sleep` polls by host round trips while MartyPC runs ~7-8x real time,
+and measured 0.40 - 0.55 guest s - across the keyboard's ~500 ms typematic
+delay, so one Up in three or four posted a REPEAT and the package, rightly
+(§108.4.1), counted a fourth boost. Wave 6 made the input leg's COUNTED
+taps GUEST-EXACT (`tap_exact`: paused, the press, `advance` by 40 ms of
+cycles, the release, run) - NumLock, keypad Ins, Ins twice, Up three times,
+Down, and Del either side of a toggle: 5 of 5 runs, where the host-timed tap
+failed 4 of 8. The rest still use the host-timed `tap`: the input leg's
+game-start `1` (`go_round`), the sound leg's starts and `boost`'s F10s, and
+the pace leg's F; none of those rows has failed on a repeat, and one that
+does is fixed the same way.
+
+### 108.15 The audit, the machines and the disks (wave 6)
+
+Wave 6 re-measured every line of ISOTRON-PLAN 16 on MartyPC, pinned what it
+read, and settled where isoTron ships and on what it refuses. It changed two
+bytes of the package: the entry proc's half-claimed path (the canvas granted,
+the work claim refused) now zeroes `it_cseg` as it frees the canvas
+(`xor dx, dx` / `xchg dx, [it_cseg]` for the `mov` it replaced), so a freed
+segment no longer reads as a claim held. The image is **21,314 bytes**
+(16,846 on the disk lz4-packed) and the bss **3,734**; that path is off every
+hot one, and an 8088's byte-wide bus does not care where a loop lands.
+
+#### 108.15.1 Every line, re-measured and pinned
+
+MartyPC's cycle counter, `tests/isotron.py --perf all` (the `isotronperf`
+row: four boots a machine on the 5150 CGA, the 5150 Hercules and the XT-VGA,
+plus a `VIDEO=ega` tree on the XT-VGA), 2026-10-14. The head-step samples are
+§108.10.3's whole rounds (1,049 computer head-steps at Rookie, 3,177 at
+Lunatic), so they are the same head-steps on every run; the plan's paper
+figure is beside each line, then its ceiling.
+
+| line (ISOTRON-PLAN 16) | paper | CGA 5150 | Hercules 5150 | XT-VGA | ceiling |
+|---|---:|---:|---:|---:|---:|
+| head-step, logic + canvas, Rookie median (p90) | ~2,800 | **2,416** (2,987) | **2,417** (3,028) | **2,417** (2,989) | 3,000 |
+| ...Lunatic median (p90) | | **2,610** (3,453) | **2,612** (3,459) | **2,612** (3,448) | 3,000 |
+| of which the move and its picture, median | 470 + 1,100 | 1,563 / 1,569 | 1,563 / 1,570 | 1,563 / 1,570 | |
+| head-step + full-screen span, Rookie median (p90) | 4,000 / 4,600 / 3,800 | **3,983** (4,673) | **4,534** (5,801) | **3,280** (3,911) | 4,500 / 5,000 / 4,000 |
+| ...Lunatic median (p90) | | **3,449** (5,035) | **3,951** (6,251) | **3,317** (4,354) | 4,500 / 5,000 / 4,000 |
+| the span hook's own share (Rookie) | 1,200 / 1,800 / 1,000 | ~1,567 | ~2,117 | ~863 | |
+| windowed wake, Rookie h1, median (most) | 16.7 / 16.7 / 23.5 ms | **12.3** (16.3) | **13.6** (21.5) | **22.3** (37.4) | 22 / 22 / 30 ms |
+| windowed wake, Lunatic h4 full boost, AUDIBLE | 28.5 / 28.5 / 44.5 ms | **24.5** (29.1) | **28.4** (37.3) | **34.6** (80.9) | 35 / 35 / 50 ms |
+| F's whole present, title / in a round | 0.23 / 0.3 / 0.57 s | **0.73 / 0.67 s** | **0.94 / 0.88 s** | **1.13 / 1.29 s** | 1.5 s |
+| the sweep, windowed (title->h1, raise, reset, same) | 1.5 s | 1.53 on all four | 1.58 on all four | 1.76 / 2.04 / 2.11 / 1.75 | 2.2 s |
+| the sweep, full screen (raise, reset, same) | 1.5 s | 1.47 / 1.47 / 1.45 | 1.49 / 1.49 / 1.49 | 1.54 / 1.54 / 1.54 | 2.2 s |
+
+Every line is under its ceiling. The head-steps are a fixed sample and read
+within a few cycles of waves 3 - 5; the WAKES are not a fixed sample (120
+wakes from wherever the trace arms in a live game) and carry run-to-run noise:
+the XT-VGA's Rookie h1 median read 21.6 ms on wave 5's fix and 22.3 on wave 6
+with the package byte-identical between them (+0.7 ms, 3%), and 21.1 on wave
+2's (+1.2 ms, 6%); the Hercules' 13.1 then 13.6, its Lunatic h4 28.9 then
+28.4, the VGA's 32.9 - 34.6. So a wake's pin is one run's median and about 3%
+of it is noise - well inside the +25% the gate allows. **Nothing was over
++25% of its pinned value and nothing was tuned**. Two lines are over the plan's PAPER
+figure and were before: the CGA span hook (~1,567 against 1,200: four
+instructions a row at the 8088's fetch floor, §108.12.3, which the plan priced
+at the instructions' clocks) and the whole presents on F (the paper priced a
+table lookup a byte and not the 2 x 256 tables' word reads and the cell walk,
+§108.12.5); both were measured and pinned in wave 3 and stand under their
+ceilings.
+
+**The pinned gate.** `isotronperf` now fails a line over **1.25 x its pinned
+value** as well as over the ceiling, whichever is LOWER (`tests/isotron.py`'s
+`PINNED`): the plan's ceilings sit well above most lines - the CGA's Rookie
+wake is 12.3 ms against 22 - so a regression of a third would have passed
+them silently. EVERY gated line is pinned, each at its OWN value (the higher
+of wave 5's fix and wave 6 where both read it): head-step 2,417 / 2,612;
+wakes 12.3 / 13.6 / 22.3 and 24.5 / 28.9 / 34.6 ms; the full-screen step
+3,983 / 4,547 / 3,280 at Rookie and 3,449 / 3,952 / 3,317 at Lunatic; F's
+present title / round 725 / 670, 944 / 883 and 1,129 / 1,294 ms (one pin for
+both let the CGA's and Hercules' round and the VGA's title grow by a third);
+first light 379 / 481 / 595 ms (EGA 342); the round start's longest band hold
+40.7 / 42.5 / 33.5 ms; every sweep case its own (the seven of Set 158's
+table); the windowed sweep's longest hold 62.3 / 61.8 / 86.7 ms (EGA 90.7);
+CRASH -> WAIT's 18.6 / 18.4 / 22.4 ms (EGA 21.2); and EGA's windowed wakes,
+21.0 and 33.8 ms (§108.15.2). Where 1.25 x a pin is above the ceiling the CEILING is the gate
+and the pin changes nothing, and those lines are named rather than implied:
+the XT-VGA's windowed sweeps (1,751 - 2,108 against 2,200 - the reset is the
+tightest line in the row, 4% under, on an emulator §108.11.7 says
+under-prices an 8-bit card's `gfx_blitp`), the 1bpp and EGA round start's
+band holds,
+every hold on F's way back (40.7 - 44.5 ms against 50), and the XT-VGA's and
+EGA's sweep holds. EGA's whole present stays REPORTED (ISOTRON-PLAN 16
+exempts it). Moving a pin is a decision with its reason written down, as
+this one is.
+
+**The presentation governor is idle at Rookie** (§108.11.6): no wake of the
+Rookie h1 trace reads `it_gskip` on any of the three machines, and the row
+now FAILS if one does (ISOTRON-PLAN 17.3: a governor engaging at the
+footage's own pace would halve the frame rate for nothing). It engages where
+it was built to - the XT-VGA's Lunatic h4 audible wake, whose longest is
+80.9 ms, presents every second wake after it - and the game keeps its pace.
+
+**The machine load at the worst rate** (Lunatic h1 at full boost, 228
+head-steps a second, §108.4.1) is an ESTIMATE and not a bound. It is
+ISOTRON-PLAN 16's own formula with the measured terms put in: 228 x the
+head-step with its span + 54.6 FASTTICK frames x (the frame's own work + its
+sound). The step is the larger of the two tiers' medians - Rookie's rounds are
+whole h1 rounds, an open field whose spans are long, and read higher on the
+1bpp surfaces than Lunatic's crowded h1/h2 ones; the frame's own work (the
+int 16h poll, the edge filter, the commands, the present, `FSXW_FRAME`) is
+still the plan's paper ~1,500 cycles, never measured alone, 82k cycles a
+second; the sound is §108.14.4's measured 2,528 a frame, charged on EVERY
+frame, which is its hard bound (138k, 2.9%). Pricing every step as a
+computer's prices the decision a player's step does not make; it does not
+bound the span, which is the step's variable part:
+
+| full screen, Lunatic h1 full boost | Hercules | CGA 320 | VGA 0Dh |
+|---|---:|---:|---:|
+| at the median step (4,534 / 3,983 / 3,317) | **1.25M, 26%** | 1.13M, 24% | 0.98M, 20% |
+| at the 90th centile step (6,251 / 5,035 / 4,354) | 1.65M, 34% | 1.37M, 29% | 1.21M, 25% |
+
+The plan's paper 24% on Hercules is close to the median line, and was the
+closer figure: the 19% this section first printed (228 x 3,951, the step
+alone at Lunatic's median) left out the frame and the sound and took the
+cheaper tier's step. Neither line is a ceiling - the longest single step in
+the Hercules traces reads 13,405 cycles - but
+the 90th centile is what nine steps in ten stay under, and a third of the
+machine at it leaves the rest of the XT its own. Windowed, the wake lines
+above are the whole of it.
+
+#### 108.15.2 EGA's cost is modelled
+
+MartyPC has no EGA. Every EGA figure here is the `VIDEO=ega` kernel - the
+640 x 350 geometry the kernel would drive on an EGA - on MartyPC's XT-VGA:
+the CPU's side exact, the card's not. A real IBM EGA in an XT is an 8-bit
+card whose memory cycles MartyPC does not model, so these are a FLOOR:
+
+| EGA (`VIDEO=ega` on the XT-VGA) | measured | gated |
+|---|---:|---|
+| F's whole present, title / round | 2.07 / 2.08 s | reported (ISOTRON-PLAN 16 exempts it) |
+| the way back: first light, then all out | 0.34 s, then 2.83 s | first light 1.5 s, holds 50 ms (44.5 at most) |
+| a Lunatic h4 frame at speed 9, median (most) | 4.4 ms (66.5) | the bracket's governor must engage: it does; 33 iterations a second |
+| the sweep, windowed / full screen | 1.54 - 1.82 / 1.49 - 1.66 s | 2.2 s |
+| windowed wake, Rookie h1, median (most) | 21.0 ms (33.8); the governor idle | 30 ms (VGA's), pinned 21.0 |
+| windowed wake, Lunatic h4 full boost, audible | 33.8 ms (74.2), 88 calls; the governor engaged | 50 ms, pinned 33.8 |
+| round start: rebuild h1 / h4; the longest band hold | 322 / 450 ms; 44.3 ms (73 bands, all out in 2.86 s) | 50 ms a hold |
+| a head-step | the windowed one (box only, §108.12.3) | |
+
+The plan modelled the whole present at 1.0 - 1.3 s from ~6.3 us a
+plane-byte; what it left out is the conversion (§108.11.4's colour tables,
+~400 cycles a device byte), which is most of the 2.07 s. An EGA is usually in an AT, about four
+times faster. `make xt-isotron-ega` (§108.15.3) is where it is LOOKED at on a
+period BIOS and a real mode 10h; nothing asserts there.
+
+#### 108.15.3 The machines (86Box, for looking)
+
+Four XTs at 4.77 MHz, each a copy of an existing machine with **only** the
+uuid and `fdd_02_fn` changed (B: = `build/isotron360.img`, A: the 360KB
+system disk), targets in `.PHONY`:
+
+| target | copied from | adapter, and what F does |
+|---|---|---|
+| `make xt-isotron` | `vm/xt-excitebike` (640KB, OTI-067 VGA) | windowed 16 colours; F: VGA 0Dh |
+| `make xt-isotron-cga` | `vm/xt-pixelstein` (640KB `ibmxt86`) | windowed 1bpp; F: CGA 320 x 200 x 4, palette 1 |
+| `make xt-isotron-herc` | `vm/xt-pixelstein-herc` | windowed 1bpp; F: 720 x 348 at 2x by 1.5 |
+| `make xt-isotron-ega` | `vm/xt-ega` (256KB `ibmxt`, a real EGA) | windowed 16 colours at 640 x 350; F: the same-mode bracket |
+
+**256KB holds it.** isoTron is ~25 KB of image and bss and two claims of
+63 and 30 KB - ~118 KB a running instance - and on MartyPC's 256KB 5150
+(`os8088_5150_cga_gla_256k`, kern_big) it launches with both claims granted,
+plays and goes full screen and back. So `xt-isotron-ega` keeps `xt-ega`'s
+256KB rather than bending the copy rule as PIXELSTEIN's machines did.
+
+#### 108.15.4 The disks, and the floor machine
+
+- **Fit**, `os88disk.py --verify` on each: `games360.img` 273 of 354
+  clusters (81 free), `apps720.img` 660 of 713, `apps.img` / `apps120.img`
+  1,708 of 2,847 / 2,371, `isotron360.img` 23 of 354. `apps360.img` does not
+  carry it (§108.8, dated 2026-10-13) and neither does the 360KB combo
+  (`COMBO_DROP`). `combo144.img` builds with it (2,342 of 2,847).
+  `combo720.img` does NOT build - "packages need 1,187 clusters; disk holds
+  713" - and that is not isoTron's: its 17 clusters are inside the 474 over,
+  which the 720KB combo was before isoTron arrived (dropping it would leave
+  1,170).
+- **The live media** (§80.6): `make usb` builds with `GAMES/ISOTRON.O88` on
+  the volume, and `t_livefull`'s PART B walked that image (496 entries, 3,791
+  of 16,324 clusters) green.
+- **kern_small refuses in words, so isoTron stays on the small disks**
+  (§24.5: a package that merely wants heap refuses itself). On
+  `os8088_5150_cga_128k` with `smallapps360.img` the LOADER places its ~25 KB
+  (segment 19C0h), and the entry proc, ASKING `OSAPI_MEM_AVAIL` before each
+  claim, takes neither: the window says `isoTron needs 63 KB and 30 KB of free
+  memory; this machine has 38 KB.` in one `OSAPI_FONT_RUN`, no worker starts
+  and `1` starts nothing. No `SMALLOMIT_GAMES` line and no `t_smallreq` row
+  are needed (its denylist is for a package that CANNOT say so - DrMarco,
+  which the loader cannot place). `isotronsmall` is that measurement kept
+  runnable.
+
+#### 108.15.5 What is tested
+
+| row | asserts |
+|---|---|
+| `isotronperf` | §108.15.1: every gated line under the LOWER of its ceiling and 1.25 x its own pinned value - the head-steps, the wakes (EGA's windowed ones too), the round start's band holds, F's whole presents title and round, first light, every sweep case, the sweep and CRASH -> WAIT holds; the lines where 1.25 x the pin is above the ceiling are held to the ceiling and named there; EGA's whole present is reported. The governor never engaged at Rookie h1 |
+| `isotronload` | PERFORMANCE.md Set 159, on the 5150 CGA, 5150 Hercules and XT-VGA: the launch walked by breakpoints from the loader's entry to the title's whole present, then from the `1` key's arrival to the first wall moving, no harness flag set; and a BOT round at Rookie h1 and Lunatic h1 p 9, windowed and in the bracket, every head-step counted over two guest seconds within 3% of §108.4.1's model, with each step's price and the share of the machine the frames hold. The figures are the record; `--profile win\|fs` is the sampling instrument the audit used |
+| `isotronsmall` | MartyPC's `os8088_5150_cga_128k` on kern_small: A the loader places ISOTRON.O88 off `smallapps360.img`; B `it_nomem` = 1 with neither claim held, and - the two API cells traced across the launch - the package called `OSAPI_MEM_AVAIL` and never `OSAPI_MEM_CLAIM` (a build with the ask deleted fails here: it claims, is refused and sheds the caches, the hole growing 14 -> 32 KB); C `it_msgbuf` is `isoTron needs 63 KB and 30 KB of free memory; this machine has N KB.` with N between the claim map's largest hole and every paragraph no ordinary claim holds (14 <= 38 <= 38 KB); D that sentence's black ink over white in the CGA's video memory under its cells; E no worker, and `1` reaches `it_onkey` and posts nothing (`it_qstart` 0 - a build without `it_onkey`'s `it_nomem` guard fails here with 129) |
+| `isotroninput` | as §108.14.5, its counted taps guest-exact |
+
+#### 108.15.6 Launch to play, the rate and the machine it leaves (the closing audit)
+
+PERFORMANCE.md Set 159 is the record; `isotronload` keeps it runnable. On
+MartyPC's 4.77 MHz 5150 CGA, 5150 Hercules and XT-VGA, the shipped build:
+
+| | CGA | Hercules | XT-VGA |
+|---|---:|---:|---:|
+| double-click to the title up, taking keys | 3.06 s | 3.69 s | 4.77 s |
+| ...then `1` to the first wall moving (2.0 s of it the sweep's and READY's pace) | 2.52 s | 2.58 s | 2.72 s |
+| head-steps a guest second, Lunatic h1 p 9, windowed / full screen (model 227.7) | 228.4 / 228.3 | 228.3 / 227.3 | 229.5 / 227.8 |
+| the share of the XT that rate takes, windowed / full screen | 35% / 26% | 43% / 30% | 53% / 23% |
+
+The floppy is read before the entry proc and never again; the title's word
+draws a TOP byte alone above each glyph cell's last row (§108.9.4), which
+took the title build from 0.794 to 0.635 s. At Rookie the rate is the
+footage's - 59.5 computer and 19.8 player cells a second at h1 (§108.14.3),
+against the 5150's ~60 and ~17 - 20 - on every adapter in both modes, so
+an XT plays the original's pace with about half its time or more to spare.
+
+## 109. WireBall — Pong across a null modem (`apps/wireball/`)
 
 `WIREBALL.O88` is an 8086 package with a desktop launch panel and an exclusive
-80x25 text-mode court (§53). The desktop splash has generated CRT/cable
-artwork, Serial Match and Practice buttons, a controls page and a sound toggle.
-S starts serial play; L starts practice against an AI. The same CP437 court runs on VGA, CGA, EGA and Hercules. Up/Down or W/S
-move a four-cell paddle; P requests pause, N requests a new match, M toggles
-sound, and Escape
-returns to the desktop. First to 11 wins, without a win-by-two requirement.
+pixel court (§53), with a text fallback on `kern_small`. The desktop splash
+has generated CRT/cable artwork, Serial Match and Practice buttons, a controls page and a sound toggle.
+S starts serial play; L starts practice against an AI. Up/Down or W/S
+move a four-row paddle in quarter-row increments; P requests pause, N
+requests a new match, M toggles sound, and Escape returns to the desktop.
+First to 11 wins, without a win-by-two requirement.
 
-### 108.1 Port lifetime
+### 109.1 Port lifetime
 
 Serial play borrows the BIOS-advertised standard COM1/COM2 UARTs only inside
 the exclusive bracket, where all other tasks are frozen. It saves each UART's
@@ -179672,8 +181804,11 @@ and polls at 2400 baud, 8N1, without hardware flow control. Presence is tested
 with two divisor-low-latch patterns, restoring DLL and LCR on both acceptance
 and refusal. The probe supports original 8250 UARTs, which lack the scratch
 register at base+7 (§9.5). It never hooks an
-interrupt vector or changes the kernel ABI. Each loop services both UARTs;
-transmit is nonblocking and graphics are direct VRAM cell updates. No sleeps,
+interrupt vector or changes the kernel ABI. Foreground polling decodes frames. A registered FSXF_RATE callback, with
+PIT divisor 2048 (about 582 Hz), services raw RX/TX while page selection
+waits for vertical retrace. Each port has a 64-entry byte/status ring;
+overflow or UART line errors invalidate the partial frame. UART IER stays
+zero and no IRQ3/IRQ4 handler is installed. Transmit is nonblocking; no sleeps,
 disk operations or BIOS video calls occur while the wire is active. All saved
 UART registers and the original PIC bits 3/4 are restored before the bracket
 returns, including Escape, no-port and connection-loss paths. Practice never
@@ -179681,62 +181816,79 @@ touches a UART. Use a crossed TX/RX null modem with a shared signal ground;
 COM1 and COM2 are the supported standard base addresses. Other serial devices
 on those ports should be disconnected during serial play.
 
-### 108.2 Discovery and protocol version 2
+### 109.2 Discovery and protocol version 3
 
 Each peer generates a nonzero 32-bit identity from the running PIT and the OS
 random generator. HELLO is sent on both ports until a valid peer is found.
 The first peer/port is bound; the lower unsigned identity owns the left court
-and simulates the entire match. Equal identities are regenerated. Each peer
+and serves first. Equal identities are regenerated. Each peer
 echoes the other's identity; only an addressed reply establishes a match.
-The right peer sends its paddle and command counter, and renders authoritative
-snapshots with bounded prediction between them. A three-second silence or BYE
+Each peer judges collisions on its own half of the court. The ball's current
+owner simulates motion and scoring, then grants ownership at the center with
+the full state and an incremented handoff generation. The sender freezes and
+repeats the grant until a reply acknowledges it. A grant is accepted only from
+the previous owner for the next generation; a duplicate cannot rewind the local
+ball or bounce twice. Each peer retains its local paddle when copying remote
+state. A right-side hit therefore uses the paddle the right player sees,
+rather than a delayed copy on the left PC. A three-second silence or BYE
 stops play and resumes discovery; reconnection starts a fresh match.
 
 Frames start and end with 7Eh. Payload 7Eh/7Dh is escaped as 7Dh followed by
-the byte XOR 20h. A frame is exactly 26 decoded bytes: `W B`, version 2,
+the byte XOR 20h. A frame is exactly 30 decoded bytes: `W B`, version 3,
 type (0 HELLO, 1 STATE, 2 INPUT, 3 BYE), sender identity (little endian
 32 bits), recipient identity (32 bits, zero for initial HELLO), left and
-right paddle top (bytes, 0..16), ball X and Y (little endian words, quarter
-cells, X 0..620, Y 0..76), signed velocity X/Y (bytes), scores (0..11),
+right paddle top (bytes, quarter rows, 0..64), ball X and Y (little endian words,
+quarter cells, X 0..620, Y 0..78), signed velocity X/Y (bytes), scores (0..11),
 flags (bit 0 pause, bit 1 finished), serve countdown (ticks, 0..36), command
-counter, and XOR of the preceding 25 bytes. Bounds, magic, version, checksum,
+counter, owner (0 left, 1 right), handoff generation (word), rally returns
+(0..16), and XOR of the preceding 29 bytes. Bounds, magic, version, checksum,
 peer, port and recipient are checked before applying state. An overlong,
 truncated or damaged frame is discarded at the next delimiter. UART line
 errors discard the partial frame. Full snapshots repair missed frames; input
 and command counters repeat, so packet loss does not lose pause/restart.
 STATE velocities must have `1 <= abs(VX) <= 16` and `abs(VY) <= 8`.
-Version 2 expands the velocity bounds for rally acceleration; older games
+Version 3 adds local collision ownership and handoff state; older games
 cannot join a match with this version.
 
-Simulation runs at 18.2 Hz, snapshots/input every three ticks and HELLO every
+Physics and local paddle movement advance at 72.8 Hz; timers and sound remain
+18.2 Hz, snapshots/input every three ticks and HELLO every
 18 ticks. INPUT's flags carry the latest command (1 pause, 2 new match); its
-counter is applied once and acknowledged in STATE. The court has 156 columns,
+counter is applied once and acknowledged in STATE.
+If ownership arrives before a local command was acknowledged, the new owner
+applies that command locally and rebases its request counter to the grant's
+last acknowledgment. Old-generation INPUT frames are rejected, so the command
+cannot replay when ownership later returns.
+The court has 156 columns,
 78 per monitor, and 20 playable rows. Practice uses 78 columns on one monitor.
 
 Ball motion uses four bounded substeps per tick, with quarter-cell remainders
 retained across substeps. At the maximum speed a substep spans at most one
-column or half a row. Each substep polls the UARTs and resolves wall/paddle
-collisions; wall and paddle rebounds reflect the overshoot rather than
-discarding the rest of the movement. Finite ball/paddle overlap uses the
-paddle center (top row * 4 + 6), half-height 8 and ball half-height 2.
+column or half a row. Foreground polling and the rate callback service the UARTs independently
+of motion. Each substep resolves walls, then computes the ball Y at the
+exact swept paddle X plane from its previous position and velocity.
+Overlap is judged there, including ball extents, rather than at the final
+substep Y. The remaining fraction of the substep continues along the new
+return vector. Quarter-of-quarter-cell remainders are retained through
+contact and wall reflection. The ball is 4 quarter-columns by 2 quarter-rows;
+paddles are 16 quarter-rows tall. The difference between ball top and
+paddle top + 7 has a contact radius of 9 quarter-rows.
 Contact offset selects one of eleven integer direction vectors from 0 to
 60 degrees. A moving paddle biases the offset by two quarter-row units in
-its movement direction, clamped to the same angle limit. Remote movement is
-estimated from successive INPUT positions and expires after four ticks.
-Velocity vectors account for the text court's approximately 2:1 cell aspect;
+its movement direction, clamped to the same angle limit. Both collisions use the owning player's local movement direction.
+Velocity vectors account for the court's approximately 2:1 logical cell aspect;
 no floating-point or trigonometry runs on the guest. Nominal speed begins at
 8 quarter-columns/tick and increases by 1 every two returns, capped at 16;
-each point resets the speed and chooses a gentle serve angle. Only the left
-peer resolves paddles and scoring; the right predicts bounded motion and
-uses the transmitted authoritative velocity.
+each point resets the speed and chooses a gentle serve angle. Each peer
+resolves its local paddle and scores while it owns the ball;
+ownership passes with the transmitted position and velocity at the center.
 
 Design references: [SparkFun's Analog Pong](https://cdn.sparkfun.com/assets/resources/6/2/Analog_Pong_with_Processing.pdf)
 for hit-position and paddle-motion response, and
 [Catlike Coding's Paddle Square](https://catlikecoding.com/unity/tutorials/prototypes/paddle-square/)
-for ball extents and conserving movement after a collision. The four-substep
+for ball extents and conserving movement after a collision. The swept
 integer implementation is WireBall's adaptation for the 8088.
 
-### 108.3 Build and validation
+### 109.3 Build and validation
 
 `python3 tools/wireball-pair.py` (or `make wireball-pair`) builds the two
 360KB disks and launches two 86Box 6.0+ XT profiles on macOS or Linux.
@@ -179759,12 +181911,15 @@ setup, UART/PIC restoration, practice and controls on CGA and Hercules 8088s. Th
 `wireballfront` row validates the splash, controls and release/cancel gestures
 on all three adapters. `wireballphysics` invokes the shipped collision/motion
 routines on an 8088 and verifies aiming, motion impulse, finite overlap, speed
-limits, displacement, overshoot and receiver prediction. The serial row captures both PC speakers and checks
+limits, displacement, swept upper/lower end contact and remaining movement
+after contact on both paddles. `wireballvideo` checks native pixel coordinates,
+quarter-row controls, page counts and display/physics frame rates on VGA,
+CGA and Hercules at 4.77 MHz. The serial row captures both PC speakers and checks
 paddle/victory pitches, mute and sound release on exit. Emulator evidence
 does not measure polling margins on physical 8250 UARTs; period-machine and real
 null modem runs remain hardware validation.
 
-### 108.4 Splash artwork and sound
+### 109.4 Splash artwork and sound
 
 The splash owns its background (§11.90.1) and publishes 418x295 VGA/Hercules
 and 418x154 CGA frame preferences with a 418x154 floor. Layout is computed
@@ -179785,6 +181940,49 @@ are finite, nonblocking `OSAPI_SND_TONE` requests at priority 40h (§34).
 The OS selects the PC speaker or the user's sound-driver route. A small
 sequencer advances only on game ticks; it never sleeps, changes the PIT,
 plays blocking PCM, or delays UART polling. Pause, mute, link loss and exit
-silence only this instance's tone. The right peer derives cues from validated
+silence only this instance's tone. The remote peer derives cues from validated
 snapshot changes (score, velocity and serve countdown), without changing
 message fields or making duplicate snapshots repeat sounds.
+
+### 109.5 Pixel rendering and timing
+
+On the big kernel, FSXF_RATE supplies a 582 Hz clock. Eight periods advance
+a motion step (72.8 Hz); the main loop catches up before each refresh. It
+prepares the next display page immediately after the previous flip, rather
+than waiting for the next motion deadline and risking a missed retrace. OS ticks
+retain the original 18.2 Hz serve, sound and link deadlines. On `kern_small`,
+where rate callbacks are unavailable, WireBall retries the exclusive bracket
+without the rate flag and advances four substeps per OS tick on a text court.
+It polls both UARTs between those substeps and around text-HUD construction.
+
+VGA uses 320x240 Mode X, selecting two display pages at offsets 0 and 19200
+through OSAPI_FSX_PAGE. A lone Hercules uses 720x348 with a centered 640-pixel
+court and pages at 0 and 8000h. Page 1 is used only after OSAPI_FSX_PAGE
+approves it; dual-card Hercules remains on page 0, protecting the color
+card's B8000h aperture (§53.10). On exit page 0 is selected before restoring
+the desktop mode. CGA/EGA use 640x200 monochrome, one page, with changed
+packed sprite spans written after OSAPI_FSX_WAIT with FSXW_VSYNC.
+
+Each page caches its last paddle/ball rectangles and HUD text. Drawing erases
+only changed old rectangles, paints new ones and updates changed HUD glyphs.
+Overlapping vertical paddle movement clears the newly exposed strip and
+paints the newly covered strip, retaining the overlapping pixels in VRAM.
+Each page also caches the HUD's phase, side, scores, flags, serve-ready bit
+and port selection; unchanged state skips string building and glyph comparison.
+Mode X combines neighboring uniform pixels into one plane-mask write;
+packed mono writes preserve adjacent
+bits. One/two-byte mono sprite spans use masked byte/word operations and
+advance banked scanline addresses by addition, avoiding multiplication and
+per-byte mask branches on every row. Fractional ball coordinates contribute
+whole pixels wherever the adapter's coordinate scale permits. There is no
+full-frame copy or allocated shadow framebuffer. The
+visible rectangles use the same ball/paddle dimensions and coordinate scales
+as collision checks. The app copies ASCII 32..127 glyphs from OSAPI_FONT_GLYPHS
+before entering FSX, and clears/draws the static court before borrowing UARTs.
+The VGA/CGA raster uses two pixels per quarter-row and the Hercules raster
+four, allowing finer paddle and ball movement than the old text court.
+
+The cycle-accurate video regression requires at least 45 displayed frames/s
+and 68 physics steps/s at 4.77 MHz. The native UART rate callback keeps an
+original 8250 serviced across vertical-retrace waits; its raw queue drains
+through the ordinary frame parser in the foreground.

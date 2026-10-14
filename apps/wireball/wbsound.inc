@@ -1,4 +1,4 @@
-; Finite, tick-driven cues through the OS's tone route (SPEC.md 108.4, 34).
+; Finite, tick-driven cues through the OS's tone route (SPEC.md 109.4, 34).
 ; No direct PIT/speaker/OPL access, no blocking playback or sleeps.
 WB_FX_WALL equ 1
 WB_FX_PADDLE equ 2

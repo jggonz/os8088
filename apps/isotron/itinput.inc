@@ -1,0 +1,413 @@
+; =============================================================================
+; apps/isotron/itinput.inc - keys, the turn FIFO and the UI task's mailbox
+; (SPEC.md 108.7.1)
+;
+; TWO TASKS, ONE PRODUCER EACH WAY. W_ONKEY runs on the UI task; the game
+; runs on the worker. Turns go through a 3-deep single-producer single-
+; consumer ring: the producer writes the slot and THEN its head byte, the
+; consumer reads the slot and THEN advances its tail byte, and neither ever
+; writes the other's byte - so there is no lock, which matters because a
+; worker may not take one (SPEC.md 20.6 rule 7 is this handshake's shape).
+; A turn is popped once per PLAYER CELL (itrules.inc), so a fast double tap
+; between two cells is two turns - a U-turn - and is never lost.
+;
+; Boosts are a count the producer increments and the consumer subtracts what
+; it took (one read-modify-write instruction each, so neither can tear); F9
+; is a flag the consumer takes with XCHG. Commands (start, pause, Esc,
+; continue) are flag bytes the worker acts on inside its own lock hold, so
+; the game state has exactly one writer.
+;
+; KEYS BY SCANCODE, LETTERS BY ASCII (SPEC.md 67.11.1's lesson): an extended
+; key is tested on AH before anything looks at AL, and AL is never case-
+; folded first - `or al, 20h` turns an extended key's 0 into a space. Keypad
+; Ins with NumLock on arrives as AL = '0', AH = 52h, and is still Ins.
+; =============================================================================
+
+KSC_INS     equ 0x52
+KSC_DEL     equ 0x53
+KSC_F9      equ 0x43
+KSC_F10     equ 0x44
+
+; -----------------------------------------------------------------------------
+; it_key - one keystroke from W_ONKEY. AL = ascii, AH = scan. Lock held.
+; Clobbers AX, BX.
+; -----------------------------------------------------------------------------
+it_key:
+    cmp ax, KEY_ALTENTER            ; THE FULL-SCREEN KEY, windowed (SPEC.md
+    je .fs                          ; 11.2.1.1: the kernel synthesises it)
+    cmp byte [it_state], ST_TITLE   ; AT THE TITLE a digit in AL is a game,
+    jne .scan                       ; whatever AH says: keypad 1/2/3 with
+    cmp al, '1'                     ; NumLock arrive as '1' + 4Fh, '2' + 50h
+    jb .scan                        ; (= Down, normal speed) and '3' + 51h,
+    cmp al, '3'                     ; and all three must start a game
+    jbe .digit
+.scan:
+    cmp ah, KSC_INS
+    je .left
+    cmp ah, KSC_LEFT
+    je .left
+    cmp ah, KSC_DEL
+    je .right
+    cmp ah, KSC_RIGHT
+    je .right
+    cmp ah, KSC_F10
+    je .boost
+    cmp ah, KSC_UP
+    je .boost
+    cmp ah, KSC_F9
+    je .normal
+    cmp ah, KSC_DOWN
+    je .normal
+    cmp ah, KSC_ESC
+    je .esc
+    cmp ah, KSC_SPACE
+    je .cont
+    cmp ah, KSC_ENTER
+    je .cont
+    or al, al
+    jz .out                         ; any other extended key: nothing
+    mov bl, al
+    or bl, 0x20                     ; a letter, so folding is safe now
+    cmp bl, 'f'
+    je .fs                          ; F / f: full screen, in any state
+    cmp byte [it_state], ST_TITLE
+    jne .ingame
+    ; --- at the title: 1 2 3 with sound, A B C silent ---------------------------
+    cmp al, '1'
+    jb .ingame
+    cmp al, '3'
+    jbe .digit
+    mov bl, al
+    or bl, 0x20                     ; a letter, so folding is safe now
+    cmp bl, 'a'
+    jb .ingame
+    cmp bl, 'c'
+    ja .ingame
+    sub bl, 'a' - 1                 ; 1..3, silent
+    mov [it_qstart], bl
+    ret
+.digit:
+    sub al, '0'
+    or al, 0x80                     ; with sound
+    mov [it_qstart], al
+    ret
+.ingame:
+    mov bl, al
+    or bl, 0x20
+    cmp bl, 'z'
+    je .left
+    cmp bl, 'x'
+    je .right
+    cmp bl, 'p'
+    je .pause
+    cmp bl, 'm'
+    je .snd
+    cmp bl, 'c'                     ; (at the title C is a silent Lunatic)
+    jne .out
+    call it_look_key                ; the look (itfs.inc, SPEC.md 108.12.2)
+.out:
+    ret
+.fs:
+    call it_fs_go                   ; (it refuses inside a bracket: itfs.inc)
+    ret
+.left:
+    mov al, K_LEFT
+    jmp short .turn
+.right:
+    mov al, K_RIGHT
+.turn:
+    call it_turn_ok
+    jc .out
+    call it_tfilt                   ; a typematic REPEAT of a held turn key is
+    jc .out                         ; dropped (SPEC.md 108.14.2); AH = its key
+    call it_fifo_push
+    ret
+.boost:
+    call it_turn_ok
+    jc .out
+    inc byte [it_kboost]            ; each keystroke, typematic repeats too: a
+    ret                             ; held F10 ramps the speed (SPEC.md 108.4.1)
+.normal:
+    call it_turn_ok
+    jc .out
+    mov byte [it_kf9], 1
+    ret
+.pause:
+    mov byte [it_qpause], 1
+    ret
+.esc:
+    mov byte [it_qesc], 1
+    ret
+.snd:
+    mov byte [it_qsnd], 1           ; M: the sound, any time (Game > Sound)
+    ret
+.cont:
+    mov byte [it_qcont], 1
+    ret
+
+; -----------------------------------------------------------------------------
+; it_turn_ok - CF = 0 when a steering key may be posted: a round in play, not
+; paused, and not a harness game whose bot is the player (it is then the
+; FIFO's only producer)
+; -----------------------------------------------------------------------------
+it_turn_ok:
+    cmp byte [it_state], ST_PLAY
+    jne .no
+    cmp byte [it_paused], 0
+    jne .no
+    test byte [it_tflags], IT_TF_BOT
+    jnz .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; =============================================================================
+; THE TYPEMATIC FILTER, TURNS ONLY (SPEC.md 108.14.2). A held turn key is ONE
+; turn: the keyboard's repeats (after ~500 ms, then ~10 a second on an XT) are
+; byte-identical keystrokes, and four of them would spin the player on the
+; spot into its own wall. A turn keystroke counts when
+;
+;   1. it is another key than the last turn keystroke, or
+;   2. OSAPI_KEY_DOWN saw that key UP at some sample since it (each worker
+;      wake, each bracket frame, and in W_ONKEY at the keystroke itself), or
+;   3. the last one ACCEPTED was under IT_TQUICK = 4 ticks ago (220 ms, under
+;      the SHORTEST typematic delay a keyboard can be set to - an AT's 250
+;      ms, which many AMI and Award ROMs program at POST; an XT's is ~500):
+;      a real fast re-press whose up fell between two samples - so a double
+;      tap is two turns, a U-turn, by rule 3 inside 220 ms and by rule 2
+;      after it (an up lasting a tick or more is sampled).
+;
+; Otherwise it is a repeat, and dropped (it_ndrop). The speed keys are NOT
+; filtered: a held F10 ramps the speed by its repeats, as the footage shows.
+; The tracking resets (it_treset) at every round's start and on both sides of
+; every toggle, so the first turn keystroke after either always counts.
+;
+; Every writer of it_tkey / it_tup holds the gfx lock (W_ONKEY, the worker's
+; wake) or is the bracket, which is the machine - so the two never interleave.
+; =============================================================================
+IT_TQUICK   equ 4
+
+; it_tfilt - AH = the turn keystroke's scancode. out: CF = 1 a repeat (drop
+; it). Preserves every register.
+it_tfilt:
+    push ax
+    push dx
+    mov dl, ah                      ; DL = the key
+    call OSAPI_GET_TICKS            ; AX = now
+    cmp dl, [it_tkey]
+    jne .take                       ; 1: another key
+    cmp byte [it_tup], 0
+    jne .take                       ; 2: seen up since its last keystroke
+    push ax
+    sub ax, [it_tacc]
+    cmp ax, IT_TQUICK
+    pop ax
+    jb .take                        ; 3: a fast re-press
+    inc word [it_ndrop]             ; a REPEAT
+    call .track
+    stc
+    jmp short .x
+.take:
+    mov [it_tacc], ax
+    inc word [it_nturn]
+    call .track
+    clc
+.x:
+    pop dx
+    pop ax
+    ret
+.track:                             ; this keystroke is the one tracked, and
+    mov [it_tkey], dl               ; its key is sampled at once: a tap that
+    mov byte [it_tup], 0            ; is already up by the time W_ONKEY runs
+    mov al, dl                      ; has been seen up
+    jmp short it_tsample1
+
+; it_tsample - the tracked turn key's level, once a wake (the worker) or a
+; frame (the bracket): up is remembered until the key's next keystroke.
+; ~280 cycles while a key is tracked and not yet seen up, ~30 otherwise.
+; Preserves every register (not the flags).
+it_tsample:
+    cmp byte [it_tup], 0
+    jne .out
+    push ax
+    mov al, [it_tkey]
+    or al, al
+    jz .none
+    call OSAPI_KEY_DOWN             ; no lock, no VRAM: legal from the worker
+    jc .none                        ; (kernel/mouse.inc kbd_down)
+    mov byte [it_tup], 1
+.none:
+    pop ax
+.out:
+    ret
+
+; it_tsample1 - .track's tail: AL = the key just tracked; up now -> seen up
+it_tsample1:
+    call OSAPI_KEY_DOWN
+    jc .down
+    mov byte [it_tup], 1
+.down:
+    ret
+
+; it_treset - forget the tracked key (a round's start, a toggle). Preserves
+; every register.
+it_treset:
+    mov byte [it_tkey], 0
+    mov byte [it_tup], 0
+    ret
+
+; -----------------------------------------------------------------------------
+; it_fifo_push - post a turn (AL = K_LEFT / K_RIGHT). A full ring drops the
+; newest. The PRODUCER's half: slot first, head byte last. Preserves all.
+; -----------------------------------------------------------------------------
+it_fifo_push:
+    push ax
+    push bx
+    mov bl, [it_fhead]
+    mov ah, bl
+    sub ah, [it_ftail]
+    cmp ah, FIFO_N
+    jae .full
+    and bx, 3
+    mov [it_fifo + bx], al
+    inc byte [it_fhead]
+.full:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; it_fifo_pop - take the oldest turn. out: CF = 1 empty, else AL = the turn.
+; The CONSUMER's half: slot first, tail byte last. Preserves all but AL.
+; -----------------------------------------------------------------------------
+it_fifo_pop:
+    push bx
+    mov bl, [it_ftail]
+    cmp bl, [it_fhead]
+    je .empty
+    and bx, 3
+    mov al, [it_fifo + bx]
+    inc byte [it_ftail]
+    pop bx
+    clc
+    ret
+.empty:
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; it_commands - act on what the UI task posted, inside the worker's lock hold
+; (the game state's one writer). ES = the claim.
+; -----------------------------------------------------------------------------
+it_commands:
+    xor al, al                      ; A ROUND WHOSE ARENA THE WORKER HAS JUST
+    xchg al, [it_qround]            ; BUILT (it_bld_do): it starts now, in
+    or al, al                       ; the WAIT it waited in unpresented
+    jz .start
+    cmp byte [it_state], ST_WAIT
+    jne .start
+    call it_round_start
+.start:                             ; ESC BEFORE START (108): an Esc and a
+                                    ; start pending together (Esc then 1 typed
+                                    ; while the worker was busy) must end the
+                                    ; old game and START the new one - taken
+                                    ; the other way round, the new game began
+                                    ; and the same pass ended it
+    xor al, al
+    xchg al, [it_qesc]
+    or al, al
+    jz .newg
+    cmp byte [it_state], ST_TITLE
+    je .newg                        ; Esc at the title does nothing windowed
+    call it_to_title                ; ...anywhere else it ends the game
+.newg:
+    xor al, al
+    xchg al, [it_qstart]
+    or al, al
+    jz .hold
+    mov ah, al                      ; a new game: tier in bits 0-1, sound bit 7
+    and al, 3
+    rol ah, 1
+    and ah, 1
+    mov [it_snd], ah
+    call it_snd_label
+    xor ah, ah                      ; the clock's seed - or, the harness's
+    test byte [it_tflags], IT_TF_SEED ; SEED flag set, it_tseed: a stored
+    jz .seed                        ; game through the real title (108.7.2)
+    inc ah
+.seed:
+    call it_game_start
+.hold:
+    xor al, al
+    xchg al, [it_qhold]             ; the About card: pause, never resume
+    or al, al
+    jz .pause
+    cmp byte [it_state], ST_PLAY
+    jne .pause
+    cmp byte [it_paused], 0
+    jne .pause
+    mov byte [it_paused], 1
+    mov byte [it_msgd], 1
+.pause:
+    xor al, al
+    xchg al, [it_qpause]
+    or al, al
+    jz .cont
+    cmp byte [it_state], ST_PLAY
+    jne .cont
+    xor byte [it_paused], 1
+    mov byte [it_msgd], 1
+.cont:
+    xor al, al
+    xchg al, [it_qsnd]              ; M / Game > Sound: the flag, and the
+    or al, al                       ; menu item that names it
+    jz .cn
+    xor byte [it_snd], 1
+    call it_snd_label
+.cn:
+    xor al, al
+    xchg al, [it_qcont]
+    or al, al
+    jz .out
+    cmp byte [it_paused], 0
+    je .wait
+    mov byte [it_paused], 0         ; Space resumes a pause as P does
+    mov byte [it_msgd], 1
+    ret
+.wait:
+    cmp byte [it_state], ST_CRASH
+    jne .wt
+    cmp byte [it_lossrow], 3        ; (the third loss: GAME OVER follows, and
+    jae .out                        ; only a fresh Space cuts its 3.5 s short)
+    mov byte [it_qcont], 1          ; Space during the 0.8 s of CRASH is kept,
+    ret                             ; not lost: WAIT takes it on arrival
+.wt:
+    cmp byte [it_state], ST_WAIT
+    jne .over
+    call it_round_start
+    ret
+.over:
+    cmp byte [it_state], ST_OVER
+    jne .out
+    call it_to_title
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; it_snd_label - Game > Sound names the state it_snd is in ('Sound: On' /
+; 'Sound: Off'). One word store, so the UI task's menu draw never reads half
+; of it, nor the other label for a moment. Preserves every register.
+; -----------------------------------------------------------------------------
+it_snd_label:
+    push ax
+    mov ax, it_it_snd
+    cmp byte [it_snd], 0
+    jne .on
+    mov ax, it_it_sndo
+.on:
+    mov [it_i_game + 2 * IT_MI_SND], ax
+    pop ax
+    ret

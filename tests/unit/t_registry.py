@@ -84,6 +84,13 @@ UNREGISTERED = {
     "pxpartemu.py": "PiXEL's linked parts run on the host under Unicorn "
                     "(SPEC.md 106.24) - imported by pxedit and pxsave for "
                     "their host legs, not a test",
+    "isotronlib.py": "isoTron's guest reader (SPEC.md 108.7.2) - the "
+                     "package's bss offsets by re-assembling its source with "
+                     "`dw name - os88_image_end` appended, the check that "
+                     "build/isotron.o88 is the tree, and the Game class that "
+                     "reads and pokes the harness by name - imported by "
+                     "tests/isotron.py and not a test: a library registered "
+                     "as a row is a row that cannot fail (dispcp.py below)",
     "pxslib.py": "PIXELSTEIN 3D's guest reader (SPEC.md 97.12) - the "
                  "package's symbols out of nasm's map, its window and part-0 "
                  "segment, the loader's handoff words, the pinned scenes "

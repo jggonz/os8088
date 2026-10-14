@@ -6,8 +6,8 @@ export const meta = {
   phases: [
     { title: 'Scout', detail: 'five parallel deep reads: game logic, graphics, audio, XT perf techniques, integration conventions' },
     { title: 'Plan', detail: 'architect writes docs/plans/${NAME.toUpperCase()}-PLAN.md and the wave list' },
-    { title: 'Waves', detail: 'implement -> 3 review lenses -> fix -> verify on emulator, per wave' },
-    { title: 'Close', detail: 'completeness critic, SPEC/docs/index/test registration' },
+    { title: 'Waves', detail: 'implement -> 3 review lenses -> fix -> verify on the host and by screenshot, per wave (no soak rows)' },
+    { title: 'Close', detail: 'completeness critic, then the single soak pass + test-full, then the perf audit from its logs' },
   ],
 }
 
@@ -38,7 +38,8 @@ CONTEXT
 - Reference source for game LOGIC study only (read-only, external): ${REF} (disassembly/source files, RAM maps, CHR/asset dumps, any replay files). 
 - Repo rules: CLAUDE.md (already in your context) is binding. Read docs/INDEX.md before inventing a mechanism. Text via font_run. 8086-only NASM. SPEC.md is updated BEFORE/with each change (new section, next free number after 101). Never spend kernel bytes: this is a package, no new API slots, no kernel change.
 - Reports go to files under ${REP}/ (write the full report there; your final message is a SHORT summary plus the file path). Messages truncate; files do not.
-- Emulator tests: MartyPC is the timing-faithful 4.77MHz XT model. A fresh worktree lacks build/martypc: copy it from /Users/jggonz/Repos/os8088/build/martypc (cp -R, not symlink) and run 'make marty' if needed. Use short paths for sockets. Run 'make' output through a check for 'Error' (exit-code hygiene: wrappers can hide 'make: *** Error').`
+- Emulator tests: MartyPC is the timing-faithful 4.77MHz XT model. A fresh worktree lacks build/martypc: copy it from /Users/jggonz/Repos/os8088/build/martypc (cp -R, not symlink) and run 'make marty' if needed. Use short paths for sockets. Run 'make' output through a check for 'Error' (exit-code hygiene: wrappers can hide 'make: *** Error').
+- SOAK RUNS ONCE, AT THE END (CLAUDE.md, Testing): during a wave NO agent runs a soak row or 'make test-full' - not via os88test.py, not as 'python3 tests/<row>.py', not launched in the background and polled, not as a scratch MartyPC script that measures what a row measures. A wave checks on the host ('make', which runs the fast tier; host-side unit checks; 'make KERN_SMALL=1' and tools/kernsize.py if kernel/ or the Makefile moved) and by LOOKING (one boot, screenshots cropped and zoomed). Append the tests/suite.py row names covering what you changed, one per line, to ${REP}/soak-rows.txt; the close runs their union once. The one exception is a number that DECIDES a design (which renderer, which table size): take it once, write it in your report, and nobody re-takes it. Never wait for host load before a MartyPC cycle measurement - the cycle counter is emulated.`
 
 const SCOUTS = [
   { key: 'game', prompt: `Deep-read the game-logic sources under ${REF}. Produce a port-oriented account of the GAME LOGIC: main state machine, game modes (selection A/B, design track, Excitebike race, time trial), the rider physics (speed, gears/boost, temperature/overheat, lane change, jump pitch/landing, wheelie, crashes), the track data format and track-piece/obstacle/ramp/hurdle/mud/arrow definitions, the AI opponents, lap timer/rank/qualification, the horizontal scroll model, RNG, the demo/attract mode. For each: routine names, line ranges, RAM variables, constants and the rules in plain words, plus what to simplify for an 8088 and what must stay faithful for the feel. Also inspect the ${REF}/_misc replay .fm2 files: could they serve as deterministic regression input for a host-side reference model (what would that cost)? Output the report to ${REP}/scout-game.md.` },
@@ -106,7 +107,7 @@ phase('Plan')
 const plan = await agent(`${COMMON}
 
 You are the ARCHITECT. Read all five scout reports in ${REP}/ (already written; the ART AND ASSET POLICY above supersedes their import advice). If ${WT}/docs/plans/${NAME.toUpperCase()}-PLAN.md already exists, REVISE it instead of starting over, but rewrite every graphics/audio/level/asset decision to follow that policy, stating how the original art is authored and generated reproducibly (tool and inputs) and the hard byte budget it must fit. Reports in ${REP}/ (scout-game.md, scout-gfx.md, scout-audio.md, scout-perf.md, scout-integ.md), fill any gap by reading the sources yourself, then write ${WT}/docs/plans/${NAME.toUpperCase()}-PLAN.md: the design record. It must decide and justify with arithmetic: per-adapter video scheme (VGA / CGA / Hercules-or-not), scroll scheme, memory map of the package's claims, sprite representation, simulation timestep and target frame rate on a 4.77MHz XT with the per-frame cycle budget table, game scope (user scope: ${SCOPE}; say what ships, what is cut, and why), the input scheme (keyboard, and how it maps to A/B/Up/Down/Left/Right), audio design, art, sound and level authoring pipeline per the ASSET POLICY (incl. image-generation prompts and where masters are committed), the file/section layout of apps/${LOW}/, and how it will be tested (a MartyPC frame-rate gate priced in emulated cycles, screenshot gates on each adapter, a host reference model the guest must equal step for step, a pixel-exact reference renderer, each with a negative control, and any check against the disassembly skipping cleanly when it is absent).
-Then split the work into 4-7 sequential WAVES, each independently buildable and verifiable on the emulator, each with acceptance criteria that are a command or a measurable observation. Suggested order (adapt freely): 1 art/sound/level compilers (and generated masters) + package skeleton + build/disk/SPEC/tests registration + splash; 2 video + horizontal scroll engine with a scrolling test track at the target rate; 3 rider physics, controls, obstacles/ramps/crashes, HUD; 4 lap timer/race flow/AI/modes; 5 audio; 6 polish, all adapters, all disk geometries, docs. Return the plan path and the waves.`, { label: 'architect', phase: 'Plan', schema: PLAN_SCHEMA })
+Then split the work into 4-7 sequential WAVES, each independently buildable, each with acceptance criteria a wave can check WITHOUT a soak row (a host command, a host-side unit check, or a screenshot of the build) plus the tests/suite.py rows that will prove it in the close's single soak pass; a criterion that is a MartyPC measurement names its row and is taken in that pass, not per wave (CLAUDE.md, Testing). Suggested order (adapt freely): 1 art/sound/level compilers (and generated masters) + package skeleton + build/disk/SPEC/tests registration + splash; 2 video + horizontal scroll engine with a scrolling test track at the target rate; 3 rider physics, controls, obstacles/ramps/crashes, HUD; 4 lap timer/race flow/AI/modes; 5 audio; 6 polish, all adapters, all disk geometries, docs. Return the plan path and the waves.`, { label: 'architect', phase: 'Plan', schema: PLAN_SCHEMA })
 
 if (!plan || !plan.waves || !plan.waves.length) { log('no plan produced'); return { error: 'plan failed' } }
 log(`plan: ${plan.waves.length} waves -> ${plan.planPath}`)
@@ -122,7 +123,7 @@ You are the IMPLEMENTER of wave ${w.id}: ${w.title}.
 Read ${plan.planPath} fully, and the scout reports in ${REP}/. Previous waves' results: ${JSON.stringify(results.map(r => ({ id: r.id, verify: r.verify && r.verify.pass, notes: r.summary })))}.
 SCOPE: ${w.scope}
 ACCEPTANCE: ${w.acceptance}
-Rules: write real, complete code - no stubs that pretend. Speed is the product: every hot path priced in 8088 cycles in a comment where non-obvious; no per-pixel conversion in the frame loop; compiled/latched/REP-string operations; nothing writes a pixel twice. Update SPEC.md in the same wave. Register anything new in tests/suite.py (with a budget note) and run 'make' plus your wave's tests until green, checking for 'Error' in output. If an acceptance criterion cannot be met, say so precisely rather than weakening it silently. Write your wave log (what changed, measured numbers, open issues) to ${REP}/wave-${w.id}-impl.md.`,
+Rules: write real, complete code - no stubs that pretend. Speed is the product: every hot path priced in 8088 cycles in a comment where non-obvious; no per-pixel conversion in the frame loop; compiled/latched/REP-string operations; nothing writes a pixel twice. Update SPEC.md in the same wave. Register anything new in tests/suite.py (with a budget note) and run 'make' and the host-side checks until green, checking for 'Error' in output; run no soak row (see SOAK RUNS ONCE) and append the rows covering this wave to ${REP}/soak-rows.txt. If an acceptance criterion cannot be met, say so precisely rather than weakening it silently. Write your wave log (what changed, measured numbers, open issues) to ${REP}/wave-${w.id}-impl.md.`,
     { label: `impl:${w.id}`, phase: 'Waves' })
 
   const lenses = [
@@ -143,7 +144,7 @@ Inspect the uncommitted changes (git -C ${WT} status / diff) and the wave log ${
   if (all.length) {
     fixNote = await agent(`${COMMON}
 
-You are the FIXER for wave ${w.id}. Apply fixes for these review findings in ${WT}, but FIRST re-check each against the code and skip (with a reason) any that are wrong or already handled. Do not regress performance to fix style. Then re-run 'make' and the wave's tests until green.
+You are the FIXER for wave ${w.id}. Apply fixes for these review findings in ${WT}, but FIRST re-check each against the code and skip (with a reason) any that are wrong or already handled. Do not regress performance to fix style. Then re-run 'make' and the host-side checks until green (no soak row; add any newly covering row to ${REP}/soak-rows.txt).
 FINDINGS:
 ${JSON.stringify(all, null, 1)}
 Write what you fixed/skipped to ${REP}/wave-${w.id}-fix.md and reply with a 3-line summary.`, { label: `fix:${w.id}`, phase: 'Waves' })
@@ -151,8 +152,8 @@ Write what you fixed/skipped to ${REP}/wave-${w.id}-fix.md and reply with a 3-li
 
   const verify = await agent(`${COMMON}
 
-You are the INDEPENDENT VERIFIER of wave ${w.id} (${w.title}). You did not write this code; trust nothing in the logs. In ${WT}: run 'make' (must be clean, no 'Error'), the wave's registered tests, 'make test-fast', and the ACCEPTANCE criterion: ${w.acceptance}
-Drive the actual build on the emulator (MartyPC for timing and CPU-priced numbers; QEMU/QMP screenshots via tools/shot.py for the picture) and LOOK at screenshots (Read the PNG) on every adapter the wave touches - crop and zoom before concluding anything. Record numbers (emulated cycles per frame, fps). pass=true only if every acceptance item is demonstrated with evidence; otherwise list each failure precisely. Save evidence images under ${REP}/wave-${w.id}-*.png.`,
+You are the INDEPENDENT VERIFIER of wave ${w.id} (${w.title}). You did not write this code; trust nothing in the logs. In ${WT}: run 'make' (must be clean, no 'Error'; it runs the fast tier) and the host-side checks, then the ACCEPTANCE criterion: ${w.acceptance}
+Boot the actual build (QEMU/QMP or MartyPC) and LOOK at screenshots via tools/shot.py (Read the PNG) on every adapter the wave touches - crop and zoom before concluding anything. Run NO soak row (see SOAK RUNS ONCE): an acceptance item that is a soak row or a MartyPC measurement is listed as 'deferred to the final pass' with its row name in ${REP}/soak-rows.txt, and is not a failure. pass=true only if every item checkable without a row is demonstrated with evidence; otherwise list each failure precisely. Save evidence images under ${REP}/wave-${w.id}-*.png.`,
     { label: `verify:${w.id}`, phase: 'Waves', schema: VERIFY_SCHEMA })
 
   let v = verify
@@ -163,10 +164,10 @@ Drive the actual build on the emulator (MartyPC for timing and CPU-priced number
 Wave ${w.id} FAILED independent verification. Repair the code in ${WT} so it passes, without weakening the acceptance criterion (${w.acceptance}). Failures:
 ${JSON.stringify(v.failures, null, 1)}
 Evidence: ${v.evidence}
-Re-run make and the tests until green; log to ${REP}/wave-${w.id}-repair.md.`, { label: `repair:${w.id}`, phase: 'Waves' })
+Re-run make and the host-side checks until green (no soak row); log to ${REP}/wave-${w.id}-repair.md.`, { label: `repair:${w.id}`, phase: 'Waves' })
     v = await agent(`${COMMON}
 
-Re-verify wave ${w.id} (${w.title}) from scratch, independently, as before: make clean of errors, registered tests, make test-fast, and ACCEPTANCE: ${w.acceptance}. Look at real screenshots. Be strict.`,
+Re-verify wave ${w.id} (${w.title}) from scratch, independently, as before: make clean of errors, the host-side checks, and ACCEPTANCE: ${w.acceptance}. Look at real screenshots. Run no soak row; defer row-only items to the final pass as before. Be strict.`,
       { label: `reverify:${w.id}`, phase: 'Waves', schema: VERIFY_SCHEMA })
   }
   results.push({ id: w.id, title: w.title, verify: v, summary: (typeof fixNote === 'string' ? fixNote : '').slice(0, 400) })
@@ -175,14 +176,20 @@ Re-verify wave ${w.id} (${w.title}) from scratch, independently, as before: make
 
 // ---- Close
 phase('Close')
-const closing = await parallel([
-  () => agent(`${COMMON}
+const critic = await agent(`${COMMON}
 
-COMPLETENESS CRITIC. Compare the finished work in ${WT} against ${plan.planPath} and ${REP}/scout-integ.md's checklist. List what is missing or unverified (modes promised but absent, adapters untested, disk geometries not built, docs/SPEC/INDEX/PERFORMANCE entries, live-payload/EXEMPT registration, site/README hooks, suite registration, gitignore for imported assets). FIX every gap that is mechanical; report the rest. Run 'make' and 'make test-full' at the end (check for 'Error'; run alone, no concurrent make). Write ${REP}/close-critic.md.`, { label: 'critic', phase: 'Close' }),
-  () => agent(`${COMMON}
+COMPLETENESS CRITIC. Compare the finished work in ${WT} against ${plan.planPath} and ${REP}/scout-integ.md's checklist. List what is missing or unverified (modes promised but absent, adapters untested, disk geometries not built, docs/SPEC/INDEX/PERFORMANCE entries, live-payload/EXEMPT registration, site/README hooks, suite registration, gitignore for imported assets). FIX every gap that is mechanical; report the rest. Verify on the host only ('make', checking for 'Error'); the final gate runs the rows. Add the rows covering your fixes to ${REP}/soak-rows.txt. Write ${REP}/close-critic.md.`, { label: 'critic', phase: 'Close' })
 
-FINAL PERFORMANCE AUDIT on MartyPC (4.77MHz 8088 model): measure the shipped build's steady-state frame time in emulated cycles on VGA and CGA during scrolling with the rider at speed, jumping and with obstacles, and record fps, plus boot-to-play load time. Add the measurements to PERFORMANCE.md as a new Set in the same style as the 1942/DrMarco entries. If a hot path is clearly improvable by a cheap change, do it and re-measure. Write ${REP}/close-perf.md.`, { label: 'perf-audit', phase: 'Close' }),
-])
+// The single soak pass of the whole run (CLAUDE.md, Testing): the deduplicated
+// union of every row the waves named, then test-full once.
+const gate = await agent(`${COMMON}
+
+FINAL GATE - the only soak pass of this run. Quiet the worktree (no other make or emulator of ours running). Read ${REP}/soak-rows.txt, deduplicate it, add every row under tests/suite.py whose name starts with '${LOW}' and the shared rows the integration touched (live media, disks, buildmatrix if the Makefile moved), and run them in ONE call: 'python3 tools/os88test.py soak -k <row> -k <row> ...' with the log under ${REP}/final-soak.log. Then 'make test-full' once, log under ${REP}/final-full.log. Separate pre-existing main failures (see CLAUDE.md and the docs it names) from ours. For each failure of ours: fix it, re-run ONLY the failing rows, and run test-full again only if the fix touched code outside them. Every MartyPC number the waves deferred is read from this pass's logs. Write ${REP}/close-gate.md with the row table (row, result, the numbers it printed).`, { label: 'final-gate', phase: 'Close' })
+
+const perf = await agent(`${COMMON}
+
+FINAL PERFORMANCE AUDIT, from the final gate's logs (${REP}/close-gate.md, ${REP}/final-soak.log): the shipped build's steady-state frame time in emulated cycles on VGA and CGA during scrolling with the rider at speed, jumping and with obstacles, fps, and boot-to-play load time. Measure on MartyPC only what the gate's rows did not print, once. Add the measurements to PERFORMANCE.md as a new Set in the same style as the 1942/DrMarco entries. If a hot path is clearly improvable by a cheap change, do it, then re-run only the perf row and the rows covering that file. Write ${REP}/close-perf.md.`, { label: 'perf-audit', phase: 'Close' })
+const closing = [critic, gate, perf]
 
 return {
   plan: plan.planPath,

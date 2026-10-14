@@ -39,9 +39,14 @@ wb_openports:
     xor dx, dx
 .second:
     call wb_openone
+    mov al, [wv_fast]
+    mov [wb_async], al
     pop es
     ret
 wb_openone:
+    mov byte [si+WP_QHEAD], 0
+    mov byte [si+WP_QTAIL], 0
+    mov byte [si+WP_QERR], 0
     mov word [si+WP_BASE], 0
     mov byte [si+WP_TLEN], 0
     mov byte [si+WP_TPOS], 0
@@ -50,7 +55,7 @@ wb_openone:
     or dx, dx
     jz .out
     ; Every 8250 has a divisor latch; the original has no scratch register.
-    ; Read back two patterns, then restore DLL/LCR even on refusal (§108.1).
+    ; Read back two patterns, then restore DLL/LCR even on refusal (§109.1).
     add dx, 3
     in al, dx
     mov [si+WP_LCR], al
@@ -125,6 +130,7 @@ wb_openone:
 wb_closeports:
     pushf
     cli
+    mov byte [wb_async], 0
     mov si, wb_ports
     call wb_closeone
     mov si, wb_ports+WP_SIZE
@@ -173,6 +179,8 @@ wb_service:
     call wb_serviceone
     ret
 wb_serviceone:
+    cmp byte [wb_async], 0
+    jne wb_queued
     mov dx, [si+WP_BASE]
     or dx, dx
     jz .out
@@ -316,10 +324,14 @@ wb_accept:
     mov [wb_port], si
     mov byte [wb_bound], 1
     mov byte [wb_phase], 1
-    mov byte [wb_left], 8
-    mov byte [wb_right], 8
+    mov byte [wb_left], 32
+    mov byte [wb_right], 32
     mov byte [wb_command], 0
     mov byte [wb_ack], 0
+    mov byte [wb_peerack], 0
+    mov byte [wb_owner], 0
+    mov word [wb_generation], 0
+    mov byte [wb_pending], 0
     mov byte [wb_side], 0
     cmp dx, [wb_identity_value+2]
     ja .bound
@@ -339,14 +351,56 @@ wb_accept:
     je .lost
     cmp byte [di+3], WB_HELLO
     je .hello
-    cmp byte [wb_side], 0
-    je .input
     cmp byte [di+3], WB_STATE
-    jne .out
+    jne .input
     call wb_state_valid
     jc .out
+    mov ax, [di+26]
+    cmp byte [wb_phase], 2
+    jne .initial
+    cmp ax, [wb_generation]
+    jne .grant
+    mov al, [wb_owner]
+    cmp al, [wb_side]
+    jne .remote_state
+    cmp al, [di+25]
+    jne .out
+    mov byte [wb_urgent], 1     ; repeat the acknowledgment, never rewind
+    jmp .heartbeat
+.remote_state:
+    cmp al, [di+25]
+    jne .out
+    jmp .state
+.grant:
+    mov ax, [wb_generation]
+    inc ax
+    cmp ax, [di+26]
+    jne .out
+    mov al, [wb_owner]
+    cmp al, [wb_side]
+    je .out                    ; only the previous owner may grant the ball
+    mov al, [wb_side]
+    cmp al, [di+25]
+    jne .out
+    mov byte [wb_urgent], 1
+    jmp .state
+.initial:
+    cmp byte [wb_side], 1
+    jne .out
+    cmp word [di+26], 0
+    jne .initial_grant
+    cmp byte [di+25], 0
+    jne .out
+    jmp .state
+.initial_grant:
+    cmp word [di+26], 1
+    jne .out
+    cmp byte [di+25], 1
+    jne .out
+    mov byte [wb_urgent], 1
+.state:
     call wb_sound_remote
-    push word [wb_right]        ; retain local input; a delayed echo must not move our paddle back
+    push word [wb_left]         ; preserve the paddle displayed on this PC
     mov bx, wb_left
     push di
     add di, 12
@@ -359,23 +413,64 @@ wb_accept:
     loop .copy
     pop di
     pop ax
-    mov [wb_right], al
+    cmp byte [wb_side], 0
+    jne .keep_right
+    mov [wb_left], al
+    jmp .metadata
+.keep_right:
+    mov [wb_right], ah
+.metadata:
+    mov al, [di+25]
+    mov [wb_owner], al
+    mov ax, [di+26]
+    mov [wb_generation], ax
+    mov al, [di+28]
+    mov [wb_returns], al
+    mov byte [wb_pending], 0
+    mov byte [wb_fracx], 0
+    mov byte [wb_fracy], 0
     mov al, [di+24]
     mov [wb_ack], al
     mov byte [wb_phase], 2
+    mov al, [wb_owner]
+    cmp al, [wb_side]
+    jne .heartbeat
+    mov al, [wb_command]
+    cmp al, [wb_ack]
+    je .heartbeat
+    ; A request can be in flight when the old owner grants the ball. Finish
+    ; it here and cancel its wire counter back to the grant's last ACK.
+    ; Generation checks discard old INPUTs; rebasing prevents a later replay.
+    mov al, [wb_cmdtype]
+    call wb_applycommand
+    mov al, [wb_ack]
+    mov [wb_command], al
+    mov byte [wb_urgent], 1
     jmp .heartbeat
 .input:
     cmp byte [di+3], WB_INPUT
     jne .out
+    cmp byte [di+12], WB_PMAX
+    ja .out
     cmp byte [di+13], WB_PMAX
     ja .out
     cmp byte [di+22], 2
     ja .out
+    mov ax, [di+26]
+    cmp ax, [wb_generation]
+    jne .out
+    mov al, [di+25]
+    cmp al, [wb_owner]
+    jne .out
+    cmp al, [wb_side]
+    jne .out
     cmp byte [wb_phase], 2
     je .paddle
     call wb_newgame
     mov byte [wb_phase], 2
 .paddle:
+    cmp byte [wb_side], 0
+    jne .leftpaddle
     mov al, [di+13]
     mov byte [wb_rspin], 0
     cmp al, [wb_right]
@@ -386,10 +481,15 @@ wb_accept:
 .still:
     mov byte [wb_spinage], 0
     mov [wb_right], al
+    jmp .command
+.leftpaddle:
+    mov al, [di+12]
+    mov [wb_left], al
+.command:
     mov al, [di+24]
-    cmp al, [wb_ack]
+    cmp al, [wb_peerack]
     je .heartbeat
-    mov [wb_ack], al
+    mov [wb_peerack], al
     mov al, [di+22]
     call wb_applycommand
     jmp .heartbeat
@@ -414,6 +514,10 @@ wb_accept:
     ret
 
 wb_state_valid:
+    cmp byte [di+25], 1
+    ja .bad
+    cmp byte [di+28], 16
+    ja .bad
     cmp byte [di+12], WB_PMAX
     ja .bad
     cmp byte [di+13], WB_PMAX
@@ -464,6 +568,8 @@ wb_lost:
     ret
 
 wb_schedule:
+    cmp byte [wb_urgent], 0
+    jne .send
     mov ax, [wb_last]
     sub ax, [wb_send]
     mov cx, 3
@@ -473,6 +579,7 @@ wb_schedule:
 .rate:
     cmp ax, cx
     jb .out
+.send:
     mov ax, [wb_last]
     mov [wb_send], ax
     mov si, wb_ports
@@ -494,6 +601,7 @@ wb_scheduleone:
     jb .out                      ; never wait for a busy UART
     call wb_packet_make
     call wb_encode
+    mov byte [wb_urgent], 0
 .out:
     ret
 
@@ -504,8 +612,11 @@ wb_packet_make:
     cmp byte [wb_phase], 2
     jne .ids
     mov byte [wb_packet+3], WB_STATE
-    cmp byte [wb_side], 0
+    mov al, [wb_owner]
+    cmp al, [wb_side]
     je .ids
+    cmp byte [wb_pending], 0
+    jne .ids
     mov byte [wb_packet+3], WB_INPUT
 .ids:
     mov ax, [wb_identity_value]
@@ -525,14 +636,20 @@ wb_packet_make:
     inc bx
     inc di
     loop .copy
-    mov al, [wb_ack]
-    cmp byte [wb_side], 0
-    je .ack
+    mov al, [wb_peerack]
+    cmp byte [wb_packet+3], WB_INPUT
+    jne .ack
     mov al, [wb_cmdtype]
     mov [wb_packet+22], al
     mov al, [wb_command]
 .ack:
     mov [wb_packet+24], al
+    mov al, [wb_owner]
+    mov [wb_packet+25], al
+    mov ax, [wb_generation]
+    mov [wb_packet+26], ax
+    mov al, [wb_returns]
+    mov [wb_packet+28], al
     ret
 
 wb_encode:
@@ -547,7 +664,7 @@ wb_encode:
     xor al, [bx]
     inc bx
     loop .sum
-    mov [wb_packet+25], al
+    mov [wb_packet+WB_FRAME-1], al
     mov bx, wb_packet
     mov cx, WB_FRAME
 .byte:
@@ -570,6 +687,97 @@ wb_encode:
     sub di, si
     sub di, WP_TX
     mov ax, di
+    pushf
+    cli
     mov [si+WP_TLEN], al
     mov byte [si+WP_TPOS], 0
+    popf
+    ret
+
+; A 582 Hz FSXF_RATE hook keeps the 8250 serviced during retrace waits.
+; No kernel calls or frame decoding here; depth including helpers is 16 bytes.
+wb_ratehook:
+    add [wv_clock], ax
+    cmp byte [wb_async], 0
+    je .out
+    mov si, wb_ports
+    call wb_capture
+    mov si, wb_ports+WP_SIZE
+    call wb_capture
+.out:
+    ret
+wb_capture:
+    mov dx, [si+WP_BASE]
+    or dx, dx
+    jz .out
+    add dx, 5
+    in al, dx
+    mov ah, al
+    test al, 1
+    jz .tx
+    sub dx, 5
+    in al, dx
+    mov cl, [si+WP_QHEAD]
+    mov ch, cl
+    inc ch
+    and ch, 63
+    cmp ch, [si+WP_QTAIL]
+    je .full
+    mov bl, cl
+    xor bh, bh
+    shl bx, 1
+    mov di, si
+    add di, bx
+    mov [di+WP_QUEUE], ax
+    mov [si+WP_QHEAD], ch
+    jmp .received
+.full:
+    mov byte [si+WP_QERR], 1
+.received:
+    add dx, 5
+.tx:
+    test ah, 0x20
+    jz .out
+    mov bl, [si+WP_TPOS]
+    cmp bl, [si+WP_TLEN]
+    jae .out
+    xor bh, bh
+    mov di, si
+    add di, bx
+    mov al, [di+WP_TX]
+    sub dx, 5
+    out dx, al
+    inc byte [si+WP_TPOS]
+.out:
+    ret
+wb_queued:
+    cmp byte [si+WP_QERR], 0
+    je .start
+    mov byte [si+WP_QERR], 0
+    mov byte [si+WP_RLEN], 0xff
+    mov byte [si+WP_ESC], 0
+.start:
+    mov bp, 16                  ; bounded decode work between motion frames
+.byte:
+    mov bl, [si+WP_QTAIL]
+    cmp bl, [si+WP_QHEAD]
+    je .out
+    xor bh, bh
+    shl bx, 1
+    mov di, si
+    add di, bx
+    mov ax, [di+WP_QUEUE]
+    inc byte [si+WP_QTAIL]
+    and byte [si+WP_QTAIL], 63
+    test ah, 0x1e
+    jnz .error
+    call wb_receive
+    jmp .next
+.error:
+    mov byte [si+WP_RLEN], 0xff
+    mov byte [si+WP_ESC], 0
+.next:
+    dec bp
+    jnz .byte
+.out:
     ret

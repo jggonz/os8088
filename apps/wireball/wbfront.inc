@@ -1,4 +1,4 @@
-; Desktop splash and native release-fired controls (SPEC.md 108.4).
+; Desktop splash and native release-fired controls (SPEC.md 109.4).
 ; Artwork is embedded, with no file access, worker or separate heap claim.
 WB_FRONT_W equ 416
 WB_FRONT_BIG equ 250

@@ -890,12 +890,17 @@ fsx_page:
 .herc:
     cmp al, 2
     jae fsx_wait.fail
-    mov bx, 0x010A                  ; BL = graphics + video on, BH = 3BFh bit
-    or al, al                       ; 0 alone, which is what vid_setmode leaves
-    jz .h0                          ; (SPEC.md 39.6). One word, two registers
+    mov bx, 0x030A                  ; graphics + video, both lone-Hercules pages
 %ifdef KERN_BIG
+    push ax
     call vid_dual_ok                ; **AND THE SECOND PAGE IS REFUSED ON A
-    jnc fsx_wait.fail                       ; MACHINE THAT HAS A COLOUR CARD TOO**
+    pop ax
+    jc .single
+    or al, al
+    jnz fsx_wait.fail               ; MACHINE THAT HAS A COLOUR CARD TOO**
+    mov bh, 1                      ; dual-card page 0 must not decode B8000h
+    jmp .h0
+.single:
 %endif                              ; (SPEC.md 53.10). vid_setmode leaves 3BFh
                                     ; bit 1 clear for a reason it states at the
                                     ; write: that page is at B8000, where a CGA
@@ -908,12 +913,14 @@ fsx_page:
                                     ; NOT [vid_ndisp]: vid_fsx_enter has
                                     ; already forced that to 1 by the time any
                                     ; call can reach here
+    or al, al
+    jz .h0
     or bl, 0x80                     ; ...and page 1
     mov bh, 3                       ; ...whose decode has to be allowed with it
 .h0:
     mov dx, 0x3BF                   ; ALLOW the second page: bit 0 graphics,
-    mov al, bh                      ; bit 1 the page - and bit 1 goes back off
-    out dx, al                      ; for page 0, which needs no second decode
+    mov al, bh                      ; retain both pages on a lone Hercules
+    out dx, al                      ; dual-card page 0 retains only its own RAM
     mov dl, 0xB8                    ; and is the state the desktop comes back
     mov al, bl                      ; to (3B8h: DH is still 3)
     out dx, al

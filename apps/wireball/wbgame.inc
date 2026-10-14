@@ -1,8 +1,8 @@
-; Simulation and incremental 80x25 CP437 court. No BIOS drawing in the hot loop.
+; Local simulation and the small-kernel text court. Pixel drawing is in wbvideo.inc.
 wb_newgame:
     push ax
-    mov byte [wb_left], 8
-    mov byte [wb_right], 8
+    mov byte [wb_left], 32
+    mov byte [wb_right], 32
     mov byte [wb_scorel], 0
     mov byte [wb_scorer], 0
     mov byte [wb_flags], 0
@@ -25,6 +25,8 @@ wb_serve:
     mov word [wb_bally], 10*4
     mov byte [wb_count], 36
     mov byte [wb_returns], 0
+    mov byte [wb_fracx], 0
+    mov byte [wb_fracy], 0
     mov al, WB_SPEED_MIN
     cmp byte [wb_vx], 0
     jge .direction
@@ -81,6 +83,7 @@ wb_keys:
     ret
 
 wb_tick:
+    mov byte [wv_legacytick], 1
     call wb_sound_tick
     mov al, 0x32                 ; release re-arms the M toggle
     call OSAPI_KEY_DOWN
@@ -133,10 +136,25 @@ wb_tick:
     cmp byte [wb_spinage], 4
     jae .stalespin
     inc byte [wb_spinage]
-    jmp .local
+    jmp .timer
 .stalespin:
     mov byte [wb_rspin], 0
-.local:
+.timer:
+    cmp byte [wb_count], 0
+    je .out
+    test byte [wb_flags], 3
+    jnz .out
+    mov al, [wb_owner]
+    cmp al, [wb_side]
+    jne .out
+    dec byte [wb_count]
+    jnz .out
+    mov al, WB_FX_SERVE
+    call wb_sound_play
+.out:
+    ret
+
+wb_controls:
     mov bx, wb_left
     cmp byte [wb_side], 0
     je .paddle
@@ -169,72 +187,47 @@ wb_tick:
     mov al, [bx]
     sub al, [wb_padold]
     cmp byte [wb_side], 0
-    jne .flags
+    jne .rightspin
     mov [wb_lspin], al
-.flags:
+    ret
+.rightspin:
+    mov [wb_rspin], al
+    ret
+wb_frame:
+    inc word [wb_subtick]
+    cmp byte [wb_phase], 2
+    jne .out
+    call wb_controls
     test byte [wb_flags], 3
     jnz .out
     cmp byte [wb_practice], 0
-    je .count
+    je .owner
     mov al, [wb_right]
     mov [wb_padold], al
     call wb_ai
     mov al, [wb_right]
     sub al, [wb_padold]
     mov [wb_rspin], al
-.count:
+.owner:
     cmp byte [wb_count], 0
-    je .motion
-    dec byte [wb_count]
-    jnz .out
-    mov al, WB_FX_SERVE
-    call wb_sound_play
-    ret
-.motion:
-    jmp wb_integrate
-.out:
-    ret
-
-; Four small motion steps per render tick; UART service stays bounded between
-; collisions. The receiver predicts walls only; the authority owns all points.
-wb_integrate:
-    mov byte [wb_fracx], 0
-    mov byte [wb_fracy], 0
-    mov byte [wb_steps], 4
-.step:
-    cmp byte [wb_practice], 0
-    jne .move
-    call wb_service
-    cmp byte [wb_phase], 2
     jne .out
-.move:
+    mov al, [wb_owner]
+    cmp al, [wb_side]
+    jne .out
     call wb_motion
-    cmp byte [wb_side], 0
-    jne .prediction
+    call wb_pass
+    mov al, [wb_owner]
+    cmp al, [wb_side]
+    jne .out
     call wb_collide
-    cmp byte [wb_count], 0
-    jne .out                    ; a point has centered the ball for the next serve
-    jmp .next
-.prediction:
-    ; Only the left machine can bounce paddles or award points. A missed state
-    ; cannot invent a score; prediction stops at the outer edge until repaired.
-    cmp word [wb_ballx], 8
-    jge .rightlimit
-    mov word [wb_ballx], 8
-.rightlimit:
-    cmp word [wb_ballx], 612
-    jle .next
-    mov word [wb_ballx], 612
-.next:
-    dec byte [wb_steps]
-    jnz .step
 .out:
     ret
 
 wb_command_request:
     cmp byte [wb_phase], 2
     jne .out
-    cmp byte [wb_side], 0
+    mov ah, [wb_side]
+    cmp ah, [wb_owner]
     je wb_applycommand
     mov ah, [wb_command]
     cmp ah, [wb_ack]
@@ -263,16 +256,14 @@ wb_applycommand:
     ret
 
 wb_ai:
-    test word [wb_ticksim], 1
+    test word [wb_subtick], 1
     jnz .out
     mov ax, [wb_width]
     shr ax, 1
     cmp [wb_ballx], ax
     jb .out
     mov ax, [wb_bally]
-    shr ax, 1
-    shr ax, 1
-    sub ax, 2
+    sub ax, 8
     jns .positive
     xor ax, ax
 .positive:
@@ -291,6 +282,25 @@ wb_ai:
     ret
 
 wb_motion:
+    mov ax, [wb_ballx]
+    shl ax, 1
+    shl ax, 1
+    xor bx, bx
+    mov bl, [wb_fracx]
+    add ax, bx
+    mov [wb_prevx], ax
+    mov ax, [wb_bally]
+    shl ax, 1
+    shl ax, 1
+    mov bl, [wb_fracy]
+    add ax, bx
+    mov [wb_prevy], ax
+    mov al, [wb_vx]
+    cbw
+    mov [wb_stepvx], ax
+    mov al, [wb_vy]
+    cbw
+    mov [wb_stepvy], ax
     mov dx, [wb_ballx]
     mov al, [wb_vx]
     cbw
@@ -341,7 +351,11 @@ wb_motion:
     pop ax
 .bottom:
     cmp ax, WB_YMAX
-    jle .store
+    jl .store
+    jg .reflect
+    cmp byte [wb_fracy], 0
+    je .store
+.reflect:
     neg ax
     add ax, WB_YMAX*2
     call wb_yfraction
@@ -363,27 +377,26 @@ wb_yfraction:
     and byte [wb_fracy], 3
 .out:
     ret
-wb_xfraction:
-    cmp byte [wb_fracx], 0
-    je .out
-    dec word [wb_ballx]
-    neg byte [wb_fracx]
-    and byte [wb_fracx], 3
-.out:
-    ret
-
 wb_collide:
     cmp byte [wb_vx], 0
     jg .right
+    cmp byte [wb_practice], 0
+    jne .leftlocal
+    cmp byte [wb_side], 0
+    jne .out
+.leftlocal:
     cmp word [wb_ballx], 8
     jg .out
+    jl .leftcontact
+    cmp byte [wb_fracx], 0
+    jne .out
+.leftcontact:
     mov bl, [wb_left]
     mov cl, [wb_lspin]
-    call wb_hit
+    mov dx, 8
+    call wb_contact
     jc .missleft
-    neg word [wb_ballx]
-    add word [wb_ballx], 16
-    call wb_xfraction
+    call wb_finishcontact
     mov al, WB_FX_PADDLE
     call wb_sound_play
     ret
@@ -392,21 +405,21 @@ wb_collide:
     mov byte [wb_vx], -8
     jmp .point
 .right:
+    cmp byte [wb_practice], 0
+    jne .rightlocal
+    cmp byte [wb_side], 1
+    jne .out
+.rightlocal:
     mov dx, [wb_width]
     sub dx, 12
     cmp [wb_ballx], dx
     jl .out
     mov bl, [wb_right]
     mov cl, [wb_rspin]
-    push dx
-    call wb_hit
-    pop dx
+    call wb_contact
     jc .missright
-    shl dx, 1
-    sub dx, [wb_ballx]
-    mov [wb_ballx], dx
-    call wb_xfraction
     neg byte [wb_vx]
+    call wb_finishcontact
     mov al, WB_FX_PADDLE
     call wb_sound_play
     ret
@@ -431,33 +444,47 @@ wb_hit:
     ; Ball and paddle centers are quarter rows. Include the ball's extent so
     ; grazing an end is a real contact, rather than a whole-cell miss.
     xor bh, bh
+    add bx, 7
     shl bx, 1
     shl bx, 1
-    add bx, 6
     mov ax, [wb_bally]
+    shl ax, 1
+    shl ax, 1
+    xor dx, dx
+    mov dl, [wb_fracy]
+    add ax, dx
     sub ax, bx
-    cmp ax, -10
+    cmp ax, -36
     jl .miss
-    cmp ax, 10
+    cmp ax, 36
     jg .miss
     mov bx, ax
     mov al, cl
     cbw
     shl ax, 1                  ; paddle motion adds a modest directional impulse
+    shl ax, 1
+    shl ax, 1
     add ax, bx
-    cmp ax, -10
+    cmp ax, -36
     jge .upper
-    mov ax, -10
+    mov ax, -36
 .upper:
-    cmp ax, 10
+    cmp ax, 36
     jle .angle
-    mov ax, 10
+    mov ax, 36
 .angle:
     mov cx, ax                 ; signed impact offset
     or ax, ax
     jns .positive
     neg ax
 .positive:
+    mov bx, 10
+    mul bx
+    add ax, 18
+    mov bx, 36
+    xor dx, dx
+    div bx
+.index:
     mov bx, ax
     shl bx, 1
     cmp byte [wb_returns], 16
@@ -492,7 +519,103 @@ wb_angles:
     db 206,75, 190,86, 171,95, 150,104, 128,111
 wb_serveangles: db -2,-1,1,2
 
+; DX = contact plane, BL = local paddle, CL = its movement. Test at the
+; exact plane crossing, including the quarter-unit fraction, not at the end
+; of the microstep (which can already be above/below a grazing paddle).
+wb_contact:
+    mov [wb_contactpad], bl
+    mov [wb_contactspin], cl
+    shl dx, 1
+    shl dx, 1
+    mov [wb_plane], dx
+    sub dx, [wb_prevx]
+    mov [wb_gap], dx
+    mov ax, dx
+    imul word [wb_stepvy]
+    idiv word [wb_stepvx]
+    add ax, [wb_prevy]
+    jns .bottom
+    neg ax
+.bottom:
+    cmp ax, WB_YMAX*4
+    jle .impact
+    neg ax
+    add ax, WB_YMAX*8
+.impact:
+    mov [wb_impact], ax
+    mov dx, ax
+    and dl, 3
+    mov [wb_fracy], dl
+    shr ax, 1
+    shr ax, 1
+    mov [wb_bally], ax
+    mov bl, [wb_contactpad]
+    mov cl, [wb_contactspin]
+    jmp wb_hit
+
+wb_finishcontact:
+    mov ax, [wb_stepvx]
+    sub ax, [wb_gap]
+    mov [wb_remainder], ax
+    mov al, [wb_vx]
+    cbw
+    imul word [wb_remainder]
+    idiv word [wb_stepvx]
+    add ax, [wb_plane]
+    mov dx, ax
+    and dl, 3
+    mov [wb_fracx], dl
+    shr ax, 1
+    shr ax, 1
+    mov [wb_ballx], ax
+    mov al, [wb_vy]
+    cbw
+    imul word [wb_remainder]
+    idiv word [wb_stepvx]
+    add ax, [wb_impact]
+    jns .bottom
+    neg ax
+    neg byte [wb_vy]
+.bottom:
+    cmp ax, WB_YMAX*4
+    jle .store
+    neg ax
+    add ax, WB_YMAX*8
+    neg byte [wb_vy]
+.store:
+    mov dx, ax
+    and dl, 3
+    mov [wb_fracy], dl
+    shr ax, 1
+    shr ax, 1
+    mov [wb_bally], ax
+    ret
+
+; Each paddle is judged locally. Freeze and repeat a center-crossing grant
+; until the receiving owner replies with the same generation.
+wb_pass:
+    cmp byte [wb_practice], 0
+    jne .out
+    cmp byte [wb_side], 0
+    jne .leftwards
+    cmp word [wb_ballx], 312
+    jb .out
+    mov byte [wb_owner], 1
+    jmp .grant
+.leftwards:
+    cmp word [wb_ballx], 312
+    jae .out
+    mov byte [wb_owner], 0
+.grant:
+    inc word [wb_generation]
+    mov byte [wb_pending], 1
+    mov byte [wb_urgent], 1
+.out:
+    ret
+
 wb_board:
+    cmp byte [wv_graphics], 0
+    jne wv_board
     push es
     mov ax, [wb_vseg]
     mov es, ax
@@ -537,6 +660,8 @@ wb_board:
 
 ; Erase just the previous sprites, then stamp this frame's three small objects.
 wb_draw:
+    cmp byte [wv_graphics], 0
+    jne wv_draw
     push es
     mov ax, [wb_vseg]
     mov es, ax
@@ -639,6 +764,8 @@ wb_seam:
     ret
 
 wb_paddlepos:
+    shr al, 1
+    shr al, 1
     xor ah, ah
 wb_paddlepos_word:
     add ax, 3
@@ -657,6 +784,17 @@ wb_paddledraw:
     ret
 
 wb_huddraw:
+    cmp byte [wb_practice], 0
+    jne .make
+    call wb_service
+.make:
+    call wb_hudmake
+    cmp byte [wb_practice], 0
+    jne .paint
+    call wb_service
+.paint:
+    jmp wb_hudput
+wb_hudmake:
     ; Build a fixed-width line in RAM. Only cells that changed reach VRAM.
     mov di, wb_hud
     mov cx, 80
@@ -731,6 +869,8 @@ wb_huddraw:
 .word:
     call wb_hudstr
 .write:
+    ret
+wb_hudput:
     push es
     mov ax, [wb_vseg]
     mov es, ax

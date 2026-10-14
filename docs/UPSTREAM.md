@@ -310,7 +310,16 @@ squashed, and that shapes what to write:
   - #252: `main`'s §107 WireBall (#254) met the branch's §107 `EMS.DRV` —
     WireBall became **§108**, 17 citations: its section and four
     subsections, `docs/INDEX.md`'s row, the Makefile's comment, four
-    `tests/suite.py` rows and the comments in `apps/wireball/`.
+    `tests/suite.py` rows and the comments in `apps/wireball/`. A second
+    merge the same day met `main`'s §108 isoTron (#250), whose ~400 citations
+    include bare numbers (`equ 108`, `(108, 90)`) a rewrite must not touch, so
+    the SMALLER footprint moved instead: WireBall became **§109** and isoTron
+    kept §108. That is the rule's intent - renumber what `main` brought in -
+    applied to whichever incoming section has the fewer citations: WireBall's
+    section moved after isoTron's, its six headings, `docs/INDEX.md`, the
+    Makefile's comment, six `tests/suite.py` rows, five `apps/wireball/`
+    comments, and #257/#258's §107.5 in `CLAUDE.md`, `AGENTS.md` (heading and
+    Set 160 anchor), `PERFORMANCE.md` Set 160 and `docs/MARTYPC-DEBUG.md`.
 
 ## Quick reference
 

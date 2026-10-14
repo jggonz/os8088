@@ -239,7 +239,12 @@ When the last wave is done:
 3. **The gates.** `make clean && make` (nothing in `all` may need the
    compiler — your targets are on demand); `make <name>disk`; the host
    harness; boot the 360KB image once (`make test TESTAPPS=build/<name>360.img`);
-   `VIDEO=cga` once and look at a dialog and a greyed item on it.
+   `VIDEO=cga` once and look at a dialog and a greyed item on it. Then the
+   **one soak pass of the whole port** (CLAUDE.md, Testing): every wave's
+   report ends `Rows: …`, so deduplicate those into one
+   `python3 tools/os88test.py soak -k … -k …` call, then `make test-full`
+   once. A failure re-runs only the failing rows after its fix. No wave runs
+   either.
 4. **The PR.** Push the branch and open the PR against `main` with the body
    CONTRIBUTING.md §7 asks for: what changed and why, which SPEC sections
    moved, **how you verified it** with the exact commands and cropped

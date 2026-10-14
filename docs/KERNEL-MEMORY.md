@@ -283,7 +283,7 @@ had added.
     "minramkb": 128,
     "ovl": 5097,
     "stk0": 512,
-    "text": 43716,
+    "text": 43726,
     "vgabuf": 336,
     "vgabufpara": 32
   },
@@ -306,7 +306,7 @@ had added.
     "minramkb": 128,
     "ovl": 5097,
     "stk0": 512,
-    "text": 43975,
+    "text": 43985,
     "vgabuf": 336,
     "vgabufpara": 32
   },
@@ -703,13 +703,13 @@ there and nowhere else.
 | theme | bytes | share |
 |---|---:|---:|
 | the file system, end to end | 29,693 | 36.2% |
-| the window system and its furniture | 22,323 | 27.2% |
+| the window system and its furniture | 22,333 | 27.2% |
 | drawing: adapters, primitives, glyphs, icons | 13,064 | 15.9% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 8,094 | 9.9% |
 | the kernel proper: API table, heap, scheduler, events | 7,147 | 8.7% |
 | the three built-in kinds | 1,442 | 1.8% |
 | the Control Panel | 353 | 0.4% |
-| **total** | **82,116** | |
+| **total** | **82,126** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -737,7 +737,7 @@ there and nowhere else.
 | `loader.inc` — the package loader (§21) | 4 | 1,256 | **1,260** | 48 | — | — |
 | `icons.inc` — the icon renderer (§10) | 1,081 | — | **1,081** | 288 | — | — |
 | `dock.inc` — the dock strip (§30) | 925 | 45 | **970** | 59 | — | 75 |
-| `fsx.inc` — fullscreen exclusive (§53) | 925 | — | **925** | 9 | — | — |
+| `fsx.inc` — fullscreen exclusive (§53) | 935 | — | **935** | 9 | — | — |
 | `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 868 | — | **868** | 74 | — | 422 |
 | `snd.inc` — the sound layer (§34) | 800 | — | **800** | 35 | — | — |
 | `viddet.inc` — adapter detection and geometry (§39) | 770 | — | **770** | — | 696 | 97 |
@@ -769,7 +769,7 @@ there and nowhere else.
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,203 | 171 | **2,374** | — | — | 605 |
-| **total** | **43,716** | **38,400** | **82,116** | **5,214** | **5,598** | **4,857** |
+| **total** | **43,726** | **38,400** | **82,126** | **5,214** | **5,598** | **4,857** |
 <!-- END generated table -->
 
 ### Reading it
