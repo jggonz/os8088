@@ -1266,6 +1266,7 @@ list to check yourself against.
 | PIXELSTEIN 3D: the seen fold at the spotvis wrap (SPEC.md 97.6, wave 6) | both marks folded a byte at a time: **449,843 clk = 94.3 ms** on the frame the generation wraps, every 255 frames | eight plain cells and two transposed ones at a look (the usual cell was never crossed): **186,969 clk = 39.2 ms** once every 255 frames, ~0.15 ms a frame amortised — but paid INSIDE one live frame: with the two clears that frame reads **167.0 ms against 113.9** (+53.1), kept (§97.6 says why) | §97.6 |
 | PIXELSTEIN 3D: Auto after a fight on an 8086 (SPEC.md 97.8, wave 6's close) | a step-up line of half the budget, 62.5 ms, under every frame an 8086 draws at any position: a fight's sprites stepped a 5150 down and it never climbed back, the plainer picture for the rest of the session; and a ladder through Flat Full, which is DEARER than the Textured Low res above it (164.4 ms against 113.9) | a line per position, the budget over the largest measured cost ratio between the landing rung and the one under it (111.1 ms onto Textured Low res), and an 8086 ladder that skips Flat Full both ways: two guards at the elbow step a 5150 from Textured Low res (145.2–147.6 ms, forced repaints) straight to Flat Low res, and the empty hall (98.2–152.1, median 99.4; the top is the one seen-fold frame) steps it back after 228 ticks — the 10 s hold-down and 64 frames under the line (`tests/pxsauto.py` leg f); +65 bytes of part 0 | §97.8 |
 | PIXELSTEIN 3D: the finished frame, the last build (SPEC.md 97.15) | — (the standing number) | the default (Textured Low res 64 × 80) on the CGA 5150: **113.9 ms = 8.78 fps full repaint, 117.5 = 8.51 finished** on scene A (8.67 / 8.40 on B); Hercules 8.67 / 8.41; wave 6 moved no CGA row of the pinned scenes by more than 0.1 ms (Mode X's whole-retrace cells move by a field; the finished frames with sprites by ~1% between runs) | §97.15 |
+| isoTron step: one column, <=22 probes, 0 redraws (SPEC.md 108.10, 108.15) | ISOTRON-PLAN 2.2's scouts: a constant table of 9 to 36 OCCLUDING CELLS redrawn a step in front of the new wall, on blocks several pixels wide - and wave 2's first build of the one-pixel grid, a packed nibble canvas with the grid probed in pairs, at **3,735 cycles** a Lunatic head-step | one cell owns one screen column, so the cells in front of a new wall are its own sight diagonal, and §108.10.1's proof makes the step ONE column written: at most **22 grid probes** (k* off the canvas by `repne scasb`), at most **23 rows** (`rep stosb` down a column-major byte canvas), **no previously drawn cell redrawn** - counted (`it_maxprobe`, `it_maxspan`; a span cannot leave its column, an `%error` in `itcanvas.inc`, SPEC.md 108.10.2) and held to the model's full repaint after every step. A computer head-step whole: **2,417 / 2,612 cycles** median Rookie / Lunatic, all three adapters; with the full-screen span written straight into video memory **3,983 / 4,534 / 3,280** (CGA / Hercules / VGA 0Dh, Rookie). `isotronperf` fails a line 1.25 x over its pin | §108.10, §108.15.1, `tests/isotron.py --bound/--perf` |
 | Missile Command explosion (1bpp / 8088) | a full disc **every** frame for 27 frames plus 12 ring erases — ~750 fills a burst, 124 ms a frame in a busy wave | three drawn states, five-rect discs — 22 fills a burst, 7.9 ms | §48.8 |
 | Missile Command terrain repair | `[mc_gdirty]`, one byte: the whole ground band, six cities and three bases — **143 ms**, five times in 86 frames | a damage **span**: 16.5 ms, byte-identical to a full repaint | §48.9 |
 | Missile Command score strip | the whole strip blanked and re-lettered on every kill | three `font_run` fields, space-padded — no blank interval | §48.9, §6.1 |
@@ -14595,3 +14596,57 @@ the sound - measured 2026-10-14:
 | `OSAPI_SND_TONE` calls over the 120 wakes | 83 | 76 | 89 | |
 
 against Set 155's silent 23.0 - 23.5 / 27.3 - 27.6 / 32.8 - 35.4: about a millisecond, a call most wakes.
+
+### Set 158 — isoTron, the shipped build: every ISOTRON-PLAN 16 line on the XT (final audit; SPEC.md §108.15)
+
+Measured 2026-10-14 on MartyPC's 4.77 MHz 8088 models `os8088_5150_cga_gla`, `os8088_5150_herc_gla` and `os8088_xt_vga`
+(plus a `VIDEO=ega` tree on the XT-VGA), the package as wave 6 found it - image 21,312 bytes, 16,845 lz4 on the disk, bss 3,734 (wave 6's fix then added two bytes off every hot path, §108.15) -
+by `python3 tests/isotron.py --perf all --json` (the `isotronperf` row, alone in its lane). MartyPC's cycle
+counter throughout; host load 4.4 - 5.6 moved no number, since none is a wall clock.
+
+| line | CGA 5150 | Hercules 5150 | XT-VGA | ceiling | the wave it was pinned in |
+| --- | ---: | ---: | ---: | ---: | --- |
+| head-step, Rookie / Lunatic median | 2,416 / 2,610 | 2,417 / 2,612 | 2,417 / 2,612 | 3,000 | 2 (2,375 / 2,576), 3 - 5 (~2,417 / ~2,615) |
+| ...90th centile | 2,987 / 3,453 | 3,028 / 3,459 | 2,989 / 3,448 | | |
+| head-step + full-screen span, Rookie / Lunatic | 3,983 / 3,449 | 4,534 / 3,951 | 3,280 / 3,317 | 4,500 / 5,000 / 4,000 | 3 (3,979 / 4,536 - 4,641 / 3,287) |
+| wake, Rookie h1, ms median (most) | 12.3 (16.3) | 13.6 (21.5) | 22.3 (37.4) | 22 / 22 / 30 | 2 (11.7 / 13.1 / 21.1) |
+| wake, Lunatic h4 full boost, audible | 24.5 (29.1) | 28.4 (37.3) | 34.6 (80.9) | 35 / 35 / 50 | 5 (24.5 / 28.9 / 34.0) |
+| round start: rebuild h1 / h4; longest band hold | 322 / 450 ms; 40.7 | 322 / 450; 42.5 | 322 / 450; 33.5 | 50 ms a hold | 2 |
+| F's whole present, title / round | 725 / 670 ms | 944 / 883 | 1,129 / 1,294 | 1,500 | 3 - 4 |
+| the way back: first light | 379 ms | 481 | 595 | 1,500 | 3 |
+| sweep, windowed (4 cases) / full screen (3) | 1,534 - 1,535 / 1,453 - 1,471 ms | 1,578 - 1,581 / 1,493 - 1,494 | 1,751 - 2,108 / 1,540 - 1,541 | 2,200 | 4 |
+| CRASH -> WAIT, the longest hold | 18.6 ms | 18.4 | 22.4 | 100 | 4 |
+
+EGA (`VIDEO=ega` on the XT-VGA, MODELLED - the card's memory cycles are not MartyPC's): F's whole present 2.07 / 2.08 s
+(reported, exempt), first light 342 ms then 2.83 s to all out, holds at most 44.5 ms; a Lunatic h4 frame at speed 9 4.4 ms
+median and 66.5 at most, the bracket's governor engaged, 33 iterations a second; sweeps 1.54 - 1.82 s windowed and 1.49 -
+1.66 full screen. WINDOWED (measured after the review, the colour window at 640 x 350): the Rookie h1 wake **21.0 ms**
+median (33.8 most, the governor idle), the Lunatic h4 audible wake **33.8 ms** (74.2 most, 88 calls, the governor engaged),
+the round start's longest band hold 44.3 ms over 73 bands - against VGA's 30 / 50 / 50 ceilings, and pinned.
+
+**Nothing moved and nothing was tuned**: the head-steps (a fixed sample, §108.10.3) read within a few cycles of the wave
+that pinned them; the wakes (120 from wherever the trace arms) carry run-to-run noise of about 3% - the XT-VGA's Rookie h1
+median read 21.6 ms on wave 5's fix and 22.3 here with the package byte-identical (+0.7 ms), 21.1 in wave 2 (+1.2 ms, 6%),
+the Hercules' 13.1 then 13.6. None is over +25% of its pin, and every one is under its ceiling. The two lines over the plan's PAPER figures - the
+CGA span hook at ~1,567 against 1,200 and F's whole presents at 0.67 - 1.29 s against 0.23 - 0.57 - were measured and pinned
+in wave 3 (Set 156 has why: the hook is fetch-bound at four instructions a row, the presents read word tables a cell).
+
+**What the row gates now.** The plan's ceilings are a paper budget most lines sit far under (12.3 ms against 22), so
+`isotronperf` also fails every gated line over **1.25 x its own pinned value**, whichever is lower (`PINNED` in
+`tests/isotron.py`; SPEC.md §108.15.1 lists them) - the head-steps, the wakes, the band holds, F's presents title and round
+pinned apart, first light, every sweep case, the sweep and CRASH -> WAIT holds, and EGA's windowed wakes; where 1.25 x the
+pin is above the ceiling (the XT-VGA's windowed sweeps, the holds on F's way back) the ceiling stays the gate - and
+fails if the windowed presentation governor engages at Rookie h1 - it did not on any machine: `it_gskip` never set in the 81 -
+95 wakes traced. It does engage on the XT-VGA's Lunatic h4 audible wake (80.9 ms the longest) and the pace holds.
+
+**The worst rate, ESTIMATED** (Lunatic h1 full boost, 228 head-steps a second; not a bound): ISOTRON-PLAN 16's formula
+with the measured terms, 228 x the step with its span + 54.6 frames x (the plan's paper ~1,500 a frame, never measured
+alone + Set 157's 2,528 of sound charged on every frame, its hard bound). The step is the larger tier median - Rookie's
+whole h1 rounds, long spans in an open field: 4,534 / 3,983 / 3,317. That reads **1.25M cycles a second, 26%** in the
+Hercules bracket, 24% on the CGA's and 20% in VGA 0Dh - and at the 90th centile step (6,251 / 5,035 / 4,354) 34% / 29% /
+25%. The plan's paper 24% was the closer figure; this set first printed 19% (228 x 3,951, Lunatic's median step alone,
+no frame and no sound). SPEC.md §108.15.1 has the table.
+
+**Two more facts this set rests on**: on MartyPC's 256KB 5150 (kern_big) isoTron launches with both claims (63 + 30 KB)
+granted, plays and toggles full screen; on kern_small's 128KB floor machine it refuses in its own words with 38 KB the
+largest run (`isotronsmall`). Both are SPEC.md §108.15.3 / §108.15.4.

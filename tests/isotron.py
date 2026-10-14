@@ -705,9 +705,59 @@ PERF_ROUNDS = ((2425, 1, "rookie", (1, 2)), (702, 3, "lunatic", (2, 3)))
 CEIL = {  # ISOTRON-PLAN section 16: cycles, then ms
     "step": 3000,
     "band_hold": 50.0,                  # a hold while a whole present goes out
-    "wake_rookie": {"cga": 22.0, "herc": 22.0, "vga": 30.0},
-    "wake_lunatic4": {"cga": 35.0, "herc": 35.0, "vga": 50.0},
+    "wake_rookie": {"cga": 22.0, "herc": 22.0, "vga": 30.0, "ega": 30.0},
+    "wake_lunatic4": {"cga": 35.0, "herc": 35.0, "vga": 50.0, "ega": 50.0},
 }
+
+
+# THE PINNED LINES (ISOTRON-PLAN 16: "each line also at most +25% of its
+# measured wave value once pinned"; SPEC.md 108.15.1). The ceilings above are
+# the plan's paper budget and every line sits well under most of them, so a
+# regression of a third would pass them silently: each line is ALSO held to
+# 1.25 x what wave 6's audit measured - the figure SPEC.md 108.15.1 and
+# PERFORMANCE.md Set 158 quote - and the row fails on whichever is lower.
+# Re-pin (and say why in Set 158's successor) when a change MEANS to move one.
+#
+# EVERY GATED LINE IS PINNED, each at its own value: a line pinned at a
+# neighbour's (the title's present at the round's) is a line that can grow by
+# a third unseen. Where 1.25 x the pin is ABOVE the ceiling the ceiling is
+# the gate and the pin changes nothing - the VGA's windowed sweeps, every
+# hold of F's way back (40.7 - 44.5 ms against 50), the XT-VGA's sweep holds -
+# and that is said rather than left out. What stays ungated is EGA's whole
+# present (ISOTRON-PLAN 16 exempts it: modelled, SPEC.md 108.15.2).
+PIN_SLACK = 1.25
+PINNED = {          # wave 6's audit (and wave 5's where a run read higher)
+    "step": {"rookie": 2417, "lunatic": 2612},                       # cycles
+    "wake_rookie": {"cga": 12.3, "herc": 13.6, "vga": 22.3, "ega": 21.0},    # ms
+    "wake_lunatic4": {"cga": 24.5, "herc": 28.9, "vga": 34.6, "ega": 33.8},  # ms
+    "band_hold": {"cga": 40.7, "herc": 42.5, "vga": 33.5, "ega": 44.3},  # ms, round start
+    "fs_step": {"rookie": {"cga": 3983, "herc": 4547, "vga": 3280},  # cycles
+                "lunatic": {"cga": 3449, "herc": 3952, "vga": 3317}},
+    "fs_present_ms": {"cga": {"title": 725.0, "round": 670.0},
+                      "herc": {"title": 944.0, "round": 883.0},
+                      "vga": {"title": 1129.0, "round": 1294.0}},
+    "first_light_ms": {"cga": 379.0, "herc": 481.0, "vga": 595.0, "ega": 342.0},
+    "sweep_ms": {   # windowed (4) and full screen (3), each case its own
+        "cga": {"title -> h1": 1535.0, "raise 3 -> 4": 1534.0, "reset 4 -> 1": 1535.0,
+                "same h1": 1535.0, "fs raise 3 -> 4": 1471.0, "fs reset 4 -> 1": 1471.0,
+                "fs same h1": 1471.0},
+        "herc": {"title -> h1": 1581.0, "raise 3 -> 4": 1578.0, "reset 4 -> 1": 1578.0,
+                 "same h1": 1578.0, "fs raise 3 -> 4": 1494.0, "fs reset 4 -> 1": 1494.0,
+                 "fs same h1": 1493.0},
+        "vga": {"title -> h1": 1762.0, "raise 3 -> 4": 2041.0, "reset 4 -> 1": 2108.0,
+                "same h1": 1751.0, "fs raise 3 -> 4": 1577.0, "fs reset 4 -> 1": 1577.0,
+                "fs same h1": 1576.0},
+        "ega": {"title -> h1": 1564.0, "raise 3 -> 4": 1769.0, "reset 4 -> 1": 1820.0,
+                "same h1": 1542.0, "fs raise 3 -> 4": 1609.0, "fs reset 4 -> 1": 1661.0,
+                "fs same h1": 1504.0}},
+    "sweep_hold_ms": {"cga": 62.3, "herc": 61.8, "vga": 86.7, "ega": 90.7},  # windowed
+    "wait_hold_ms": {"cga": 18.6, "herc": 18.4, "vga": 22.4, "ega": 21.2},   # CRASH -> WAIT
+}
+
+
+def line(ceiling, pinned):
+    """The gate: the plan's ceiling or the pinned value's +25%, the lower."""
+    return min(ceiling, PIN_SLACK * pinned)
 
 
 def comp_steps(seed, tier):
@@ -750,7 +800,11 @@ def stats(xs):
                 max=xs[-1])
 
 
-def perf_leg(tag, out):
+def perf_leg(tag, out, heads=True):
+    """isotronperf's windowed part. `heads` = False leaves out the head-step
+    rounds - the canvas's own price, which is no adapter's (2,417 / 2,612 on
+    all three) - for EGA, whose windowed lines are its WAKES and its round
+    start: the colour window at 640 x 350 (SPEC.md 108.15.2, modelled)."""
     system, apps, machine = boot_for(tag)
     res = {}
     with os88ui.boot(system, apps=apps, machine=machine) as ui:
@@ -766,7 +820,7 @@ def perf_leg(tag, out):
         # WHOLE ROUNDS (PERF_ROUNDS): every computer head-step of each, from
         # the round's open field to its crowded end, the count held to the
         # model's - 1,049 at Rookie (h1, h1) and 3,177 at Lunatic (h1, h2)
-        for seed, tier, lab, rounds in PERF_ROUNDS:
+        for seed, tier, lab, rounds in (PERF_ROUNDS if heads else ()):
             hs_all, mv_all = [], []
             want = comp_steps(seed, tier)
             for r in range(1, max(rounds) + 1):
@@ -988,23 +1042,39 @@ def perf_leg(tag, out):
             m.run()
         rs4 = roundstart("h4", h4_prep, lambda: g.put("it_tpause", 0))
         to_title(g)
-    kind = "vga" if tag in ("vga", "ega") else tag
+    kind = tag                          # (EGA has its own pins: SPEC.md 108.15.2)
     bad = []
-    for lab in ("rookie", "lunatic"):
-        if res["headstep_" + lab]["med"] > CEIL["step"]:
-            bad.append("%s head-step %d cycles > %d" % (lab, res["headstep_" + lab]["med"],
-                                                       CEIL["step"]))
-    if rook["ms_med"] > CEIL["wake_rookie"][kind]:
-        bad.append("Rookie h1 wake %.1f ms > %.1f" % (rook["ms_med"], CEIL["wake_rookie"][kind]))
-    if luna["ms_med"] > CEIL["wake_lunatic4"][kind]:
-        bad.append("Lunatic h4 wake %.1f ms > %.1f" % (luna["ms_med"], CEIL["wake_lunatic4"][kind]))
+    for lab in (("rookie", "lunatic") if heads else ()):
+        lim = line(CEIL["step"], PINNED["step"][lab])
+        if res["headstep_" + lab]["med"] > lim:
+            bad.append("%s head-step %d cycles > %d (ceiling %d, pinned %d)"
+                       % (lab, res["headstep_" + lab]["med"], lim, CEIL["step"],
+                          PINNED["step"][lab]))
+    lim = line(CEIL["wake_rookie"][kind], PINNED["wake_rookie"][kind])
+    if rook["ms_med"] > lim:
+        bad.append("Rookie h1 wake %.1f ms > %.1f (ceiling %.1f, pinned %.1f)"
+                   % (rook["ms_med"], lim, CEIL["wake_rookie"][kind],
+                      PINNED["wake_rookie"][kind]))
+    lim = line(CEIL["wake_lunatic4"][kind], PINNED["wake_lunatic4"][kind])
+    if luna["ms_med"] > lim:
+        bad.append("Lunatic h4 wake %.1f ms > %.1f (ceiling %.1f, pinned %.1f)"
+                   % (luna["ms_med"], lim, CEIL["wake_lunatic4"][kind],
+                      PINNED["wake_lunatic4"][kind]))
+    # THE GOVERNOR IS IDLE AT ROOKIE (ISOTRON-PLAN 17.3, SPEC.md 108.11.6):
+    # it exists for Lunatic h4 on a colour window, and one engaging at the
+    # pace the footage was measured at would be a frame rate halved for
+    # nothing - the plan's risk 3 says re-price if it does
+    if res.get("governor_rookie_seen"):
+        bad.append("the presentation governor engaged at Rookie h1")
     for lab, w in (("Rookie h1", rook), ("Lunatic h4", luna)):
         if w["over45"] and not w["engaged"]:
             bad.append("%s: a wake over 45 ms and the governor never engaged after it" % lab)
+    lim = line(CEIL["band_hold"], PINNED["band_hold"][tag])
     for lab, r in (("h1", rs1), ("h4", rs4)):
-        if r["band_max_ms"] > CEIL["band_hold"]:
-            bad.append("%s round start: a band's hold %.1f ms > %.1f"
-                       % (lab, r["band_max_ms"], CEIL["band_hold"]))
+        if r["band_max_ms"] > lim:
+            bad.append("%s round start: a band's hold %.1f ms > %.1f (ceiling %.1f, pinned %.1f)"
+                       % (lab, r["band_max_ms"], lim, CEIL["band_hold"],
+                          PINNED["band_hold"][tag]))
     if out:
         import json
         json.dump(res, open(out, "w"), indent=1)
@@ -1962,21 +2032,28 @@ def fs_perf_leg(tag, out):
     if tag != "ega":
         for lab in ("rookie", "lunatic"):
             med = res["fs_headstep_" + lab]["med"]
-            if med > FS_CEIL["step"][tag]:
-                bad.append("%s full-screen head-step %d cycles > %d"
-                           % (lab, med, FS_CEIL["step"][tag]))
+            lim = line(FS_CEIL["step"][tag], PINNED["fs_step"][lab][tag])
+            if med > lim:
+                bad.append("%s full-screen head-step %d cycles > %d (ceiling %d, pinned %d)"
+                           % (lab, med, lim, FS_CEIL["step"][tag],
+                              PINNED["fs_step"][lab][tag]))
         for lab in ("title", "round"):
-            if res["fs_present_" + lab]["ms"] > FS_CEIL["present_ms"]:
-                bad.append("F's whole present (%s) %.0f ms > %.0f"
-                           % (lab, res["fs_present_" + lab]["ms"], FS_CEIL["present_ms"]))
+            pin = PINNED["fs_present_ms"][tag][lab]
+            lim = line(FS_CEIL["present_ms"], pin)
+            if res["fs_present_" + lab]["ms"] > lim:
+                bad.append("F's whole present (%s) %.0f ms > %.0f (ceiling %.0f, pinned %.0f)"
+                           % (lab, res["fs_present_" + lab]["ms"], lim,
+                              FS_CEIL["present_ms"], pin))
     else:
         f = res["fs_frame_lunatic4"]
         if f["over_tick"] and not f["engaged"]:
             bad.append("EGA Lunatic h4: a frame over a tick and the governor never engaged")
+    lim = line(FS_CEIL["first_light_ms"], PINNED["first_light_ms"][tag])
     for k in ("fs_back", "fs_back_round"):
-        if res[k]["ms"] > FS_CEIL["first_light_ms"]:
-            bad.append("%s: first light %.0f ms > %.0f" % (k, res[k]["ms"],
-                                                          FS_CEIL["first_light_ms"]))
+        if res[k]["ms"] > lim:
+            bad.append("%s: first light %.0f ms > %.0f (ceiling %.0f, pinned %.0f)"
+                       % (k, res[k]["ms"], lim, FS_CEIL["first_light_ms"],
+                          PINNED["first_light_ms"][tag]))
         if res[k]["hold_max_ms"] > CEIL["band_hold"]:
             bad.append("%s: a band's hold %.1f ms > %.1f" % (k, res[k]["hold_max_ms"],
                                                             CEIL["band_hold"]))
@@ -2387,10 +2464,16 @@ def sweep_leg(tag, out=None):
             flag = "" if r["ms"] <= SWEEP_TARGET else " (behind the ~1.5 s pace: flat out)"
             print("  %s %s: %.0f ms%s; %d holds, the longest %.1f ms"
                   % (tag, lab, r["ms"], flag, r["holds"], r["hold_max_ms"]), flush=True)
-            if r["ms"] > SWEEP_CEIL:
-                bad.append("%s %s %.0f ms > %.0f" % (tag, lab, r["ms"], SWEEP_CEIL))
-            if not lab.startswith("fs") and r["hold_max_ms"] > HOLD_CEIL:
-                bad.append("%s %s: a %.0f ms hold > %.0f" % (tag, lab, r["hold_max_ms"], HOLD_CEIL))
+            pin = PINNED["sweep_ms"][tag][lab]
+            lim = line(SWEEP_CEIL, pin)
+            if r["ms"] > lim:
+                bad.append("%s %s %.0f ms > %.0f (ceiling %.0f, pinned %.0f)"
+                           % (tag, lab, r["ms"], lim, SWEEP_CEIL, pin))
+            lim = line(HOLD_CEIL, PINNED["sweep_hold_ms"][tag])
+            if not lab.startswith("fs") and r["hold_max_ms"] > lim:
+                bad.append("%s %s: a %.0f ms hold > %.0f (ceiling %.0f, pinned %.1f)"
+                           % (tag, lab, r["hold_max_ms"], lim, HOLD_CEIL,
+                              PINNED["sweep_hold_ms"][tag]))
 
         def round_to_wait(hset):
             m.pause()                       # (held at the round's end: CRASH)
@@ -2404,9 +2487,11 @@ def sweep_leg(tag, out=None):
             hold = max(holds_of(tr.hits, W0, W1) or [0])
             res.setdefault("wait_hold_max_ms", 0.0)
             res["wait_hold_max_ms"] = max(res["wait_hold_max_ms"], hold)
-            if not g.b("it_fsm") and hold > HOLD_CEIL:
-                bad.append("%s CRASH -> WAIT at h%d: a %.0f ms hold > %.0f (the build is "
-                           "the worker's, outside the lock)" % (tag, hset, hold, HOLD_CEIL))
+            lim = line(HOLD_CEIL, PINNED["wait_hold_ms"][tag])
+            if not g.b("it_fsm") and hold > lim:
+                bad.append("%s CRASH -> WAIT at h%d: a %.1f ms hold > %.1f (ceiling %.0f, "
+                           "pinned %.1f; the build is the worker's, outside the lock)"
+                           % (tag, hset, hold, lim, HOLD_CEIL, PINNED["wait_hold_ms"][tag]))
 
         def nxt(lab, hset):
             round_to_wait(hset)
@@ -2459,7 +2544,7 @@ def main():
     ap.add_argument("--bound", action="store_true", help="the isotronbound row")
     ap.add_argument("--win", metavar="TAG", help="cga, herc, vga, ega or all: isotronwin(ega)")
     ap.add_argument("--perf", metavar="TAG", help="cga, herc, vga, ega or all: isotronperf "
-                    "(ega: the full-screen part alone)")
+                    "(ega: the wakes and the round start windowed, no head-steps)")
     ap.add_argument("--json", metavar="FILE", help="--perf: keep the numbers")
     ap.add_argument("--fs", metavar="TAG", help="cga, herc, vga, ega or all: isotronfs")
     ap.add_argument("--toggle", metavar="TAG", help="cga, vga or all: isotrontoggle")
@@ -2501,8 +2586,9 @@ def main():
     if a.perf:
         for tag in (("cga", "herc", "vga", "ega") if a.perf == "all" else a.perf.split(",")):
             if not a.sweep:
-                if not a.fsonly and tag != "ega":   # (EGA's windowed lines are isotronega's)
-                    perf_leg(tag, a.json and a.json.replace(".json", "-%s.json" % tag))
+                if not a.fsonly:    # EGA: its wakes and round start, no head-steps
+                    perf_leg(tag, a.json and a.json.replace(".json", "-%s.json" % tag),
+                             heads=(tag != "ega"))
                 fs_perf_leg(tag, a.json and a.json.replace(".json", "-fs-%s.json" % tag))
             if not a.fsonly:                    # wave 4: the sweep, both modes
                 sweep_leg(tag, a.json and a.json.replace(".json", "-sweep-%s.json" % tag))

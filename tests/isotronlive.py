@@ -190,6 +190,25 @@ def tap(m, name, secs=0.04):
         m.key(name, down=False, up=True)
 
 
+def tap_exact(m, name, secs=0.04):
+    """One keystroke held EXACTLY `secs` of guest time: paused, the press,
+    `advance` by the cycles, the release, run. tap()'s hold is a host-timed
+    guest_sleep, and on MartyPC that polls by host round trips while the
+    guest runs ~7-8x real time - a "40 ms" tap measured 0.40-0.55 guest s,
+    which straddles the keyboard's ~500 ms typematic delay, so one Up in
+    three or four posted a REPEAT and the package rightly counted it as a
+    second boost (SPEC.md 108.4.1: F10/Up repeats ramp the speed). Only
+    OUTSIDE a bp_trace: a pause from this thread can land on a stop a pump
+    has not recorded (tests/isotron.py's roundstart says why)."""
+    m.pause()
+    try:
+        m.key(name, down=True, up=False)
+        m.advance(cycles=int(secs * M.GUEST_HZ))
+        m.key(name, down=False, up=True)
+    finally:
+        m.run()
+
+
 # =============================================================================
 # SOUND
 # =============================================================================
@@ -776,15 +795,15 @@ def input_leg():
         # --- NumLock: keypad Ins is still Ins (E -> N) ---------------------------------
         M.guest_sleep(m, 0.3)
         hold(g, True)
-        tap(m, "NumLock")
+        tap_exact(m, "NumLock")
         M.guest_sleep(m, 0.1)
         assert m.read(0x417, 1)[0] & 0x20, "NumLock is not on"
         nt = g.w("it_nturn")
-        tap(m, "Numpad0")
+        tap_exact(m, "Numpad0")
         M.guest_sleep(m, 0.1)
         assert fifo(g) == [L.K_LEFT] and g.w("it_nturn") == nt + 1, \
             "keypad Ins with NumLock on posted %r" % fifo(g)
-        tap(m, "NumLock")
+        tap_exact(m, "NumLock")
         M.guest_sleep(m, 0.1)
         assert not m.read(0x417, 1)[0] & 0x20, "NumLock is still on"
         hold(g, False)
@@ -797,9 +816,9 @@ def input_leg():
         M.guest_sleep(m, 0.1)
         nt, nd = g.w("it_nturn"), g.w("it_ndrop")
         u0, d0, hdb = ph(g, L.H_U), ph(g, L.H_D), ph(g, L.H_HD)
-        tap(m, "Insert")
+        tap_exact(m, "Insert")
         M.guest_sleep(m, 0.08)
-        tap(m, "Insert")
+        tap_exact(m, "Insert")
         M.guest_sleep(m, 0.1)
         assert fifo(g) == [L.K_LEFT, L.K_LEFT] and g.w("it_nturn") - nt == 2 \
             and g.w("it_ndrop") == nd, "a double tap posted %r" % fifo(g)
@@ -814,14 +833,14 @@ def input_leg():
         # --- Up and Down are F10 and F9 --------------------------------------------------
         hold(g, True)
         for _ in range(3):
-            tap(m, "ArrowUp")
+            tap_exact(m, "ArrowUp")
             M.guest_sleep(m, 0.05)
         M.guest_sleep(m, 0.1)
         assert g.b("it_kboost") == 3, "Up x3 posted %d boosts" % g.b("it_kboost")
         hold(g, False)
         until(g, lambda: g.b("it_pspeed") == P_NORMAL + 3, "Up x3 to make p 5")
         hold(g, True)
-        tap(m, "ArrowDown")
+        tap_exact(m, "ArrowDown")
         M.guest_sleep(m, 0.1)
         assert g.b("it_kf9") == 1, "Down did not post F9's normal"
         hold(g, False)
@@ -830,12 +849,12 @@ def input_leg():
         fresh_round(g)
         # --- a toggle resets the tracking ---------------------------------------------------
         hold(g, True)
-        tap(m, "Delete")
+        tap_exact(m, "Delete")
         M.guest_sleep(m, 0.1)
         assert g.b("it_tkey") == 0x53, "Del is not the tracked key (%02x)" % g.b("it_tkey")
         T.fs_enter(ui, g, "F")
         assert g.b("it_tkey") == 0, "full screen kept the tracked key"
-        tap(m, "Delete")
+        tap_exact(m, "Delete")
         M.guest_sleep(m, 0.1)
         assert g.b("it_tkey") == 0x53, "Del in full screen is not tracked"
         T.fs_leave(ui, g, "F")

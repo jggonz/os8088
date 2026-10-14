@@ -10,7 +10,7 @@ It is a native 8086 assembly remake of a 1982 IBM PC game, written from the
 game's observed rules alone: there is no original code in it, and every
 picture it draws is drawn by code.
 
-**Status: wave 5 of 6.** The rules, the computer and the pace are complete
+**Status: complete (wave 6 of 6).** The rules, the computer and the pace are complete
 and are checked against a reference model (`tools/isotronsim.py`). The
 window shows the arena in 3D - the slab, the tower and every wall, one
 column a step - on VGA and EGA in 16 colours and on CGA and Hercules in
@@ -31,7 +31,9 @@ tower rises and four notes at the game's end - M turns them off, and a
 silent tier never makes them. A held turn key turns you ONCE; tap it twice
 for a U-turn. Windowed or full screen, the game keeps the original's pace
 on any PC - measured on an emulated 4.77 MHz XT (MartyPC) to within a
-percent.
+percent. On that XT a step of the game costs about 2,400 cycles, about
+half a millisecond: each wall grows by one column of the picture
+and nothing already drawn is drawn again.
 See SPEC.md section 108 and `docs/plans/ISOTRON-PLAN.md`.
 
 ## Keys
@@ -68,7 +70,11 @@ make isotrontest    # the host model's selfcheck, then on MartyPC seeded games
                     # (the speaker captured), the keys and the pace
 ```
 
+On period hardware (86Box, for looking): `make xt-isotron` (a VGA XT),
+`make xt-isotron-cga`, `make xt-isotron-herc` and `make xt-isotron-ega` (a
+256KB XT with a real EGA), each with the 360KB isoTron disk in B:.
+
 `ISOTRON.O88` also ships in `GAMES/` on the apps disks (and on
 `games360.img` at 360KB). It claims 63 KB for its picture and 30 KB for its
-work beside its own ~21 KB (16 KB on the disk), and says so in words when
-the machine has less.
+work beside its own ~21 KB (16 KB on the disk) - a 256KB XT runs it - and
+says so in words when the machine has less (the 128KB floor machine does).

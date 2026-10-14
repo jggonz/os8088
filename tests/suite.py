@@ -2921,7 +2921,14 @@ SOAK = [
         "(the control: the keyboard really repeated); NumLock on, keypad Ins "
         "(AL '0', AH 52h) turns left; a DOUBLE TAP of Ins is two turns, a "
         "U-turn; Up x3 posts three boosts (p 5) and Down F9's normal (p 2); a "
-        "toggle forgets the tracked turn key, both ways. Measured ~18 s (wave 5)",
+        "toggle forgets the tracked turn key, both ways. The COUNTED taps - "
+        "NumLock, keypad Ins, Ins x2, Up x3, Down, Del either side of a toggle "
+        "- are GUEST-EXACT (tap_exact: paused, the press, 40 ms of cycles "
+        "advanced, the release - wave 6; the game-start 1 stays host-timed): "
+        "a host-timed '40 ms' tap held the key "
+        "0.40-0.55 guest s, across the ~0.5 s typematic delay, and one Up in "
+        "three or four rightly posted a repeat as a fourth boost. Measured ~18 s "
+        "(wave 5)",
         needs=("marty", "nasm"),
         wants=("build/isotron360.img", "build/os8088-360.img")),
     Row("isotronpace", "soak", py("tests/isotronlive.py", "--pace"), 75.0,
@@ -2942,7 +2949,7 @@ SOAK = [
         "Measured ~32 s (wave 5)",
         needs=("marty", "nasm"),
         wants=("build/isotron360.img", "build/os8088-360.img")),
-    Row("isotronperf", "soak", py("tests/isotron.py", "--perf", "all"), 720.0,
+    Row("isotronperf", "soak", py("tests/isotron.py", "--perf", "all"), 900.0,
         "isoTron's windowed price on the XT (SPEC.md 108.10.3, 108.11.7; "
         "ISOTRON-PLAN section 16), MartyPC's cycle counter on the 5150 CGA, "
         "5150 Hercules and XT-VGA: a computer HEAD-STEP whole - its RNG byte, "
@@ -2981,11 +2988,35 @@ SOAK = [
         "(the outline out) for the title to h1, a raise 3 -> 4, a reset 4 -> 1 "
         "and a round at the same h1 windowed, then F and the raise, the reset "
         "and the same height in full screen - every one against 2.2 s, ~1.5 s "
-        "reported where the surface keeps the pace. Measured ~700 s for the "
-        "four machines in a soak lane (wave 3 fix); 574 s with the sweep's "
-        "four boots, alone in a lane (wave 4)",
+        "reported where the surface keeps the pace. WAVE 6 PINNED EVERY GATED "
+        "LINE (SPEC.md 108.15.1, PINNED in tests/isotron.py): each also fails "
+        "over 1.25 x its own wave-6 value, whichever of that and its ceiling "
+        "is lower - the head-steps, the wakes, the band holds, F's presents "
+        "title and round apart, first light, every sweep case, the sweep and "
+        "CRASH -> WAIT holds - and the row fails if it_gskip (the windowed "
+        "presentation governor) is ever set in the Rookie h1 trace. EGA adds "
+        "its WINDOWED wakes and round start (no head-steps: the canvas's price "
+        "is no adapter's), its own pins under VGA's ceilings. Measured ~700 s "
+        "for the four machines in a soak lane (wave 3 fix); 574 s with the "
+        "sweep's four boots, alone in a lane (wave 4); 641 s (wave 6), plus "
+        "EGA's windowed boot",
         needs=("marty", "nasm"), serial=True,
         wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotronsmall", "soak", py("tests/isotronsmall.py"), 40.0,
+        "isoTron on kern_small's 128KB floor machine (SPEC.md 108.15.4, 24.5): "
+        "the package is ON smallapps360.img (APPS_GAMES, not SMALLOMIT_GAMES), "
+        "and that rests on this measurement - the LOADER places its ~25 KB of "
+        "image and bss on os8088_5150_cga_128k, and the entry proc, having ASKED "
+        "OSAPI_MEM_AVAIL before claiming, refuses ITSELF: it_nomem = 1 with "
+        "neither the 63 KB canvas nor the 30 KB work claim held, its sentence "
+        "'isoTron needs 63 KB and 30 KB of free memory; this machine has N KB.' "
+        "with N under 63, that sentence's ink on the CGA's glass, no worker, "
+        "and `1` at the title starting nothing. A window that never opened "
+        "would mean `Load failed` - DrMarco's ground for SMALLOMIT_GAMES. "
+        "Measured ~30 s; SOAK for ddsmall's reason (one package, one build)",
+        needs=("marty",),
+        wants=("build/smallapps360.img", "build/small360.img"),
+        serial=True),
     Row("excitebikesim", "soak", py("tools/exbsim.py", "--selfcheck"), 3.0,
         "the reference model's own gate (tools/exbsim.py, SPEC.md 102.3, 102.6): "
         "the reference rider finishes both courses at turbo and each committed par "

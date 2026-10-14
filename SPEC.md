@@ -170985,4 +170985,201 @@ runs) - **or a byte written to the guest** (`it_tstall` read back 0 and the
 stall was never served, twice in ~12 runs). The rows send the press and the
 release as two commands a few guest ms apart (`tap`), retry a key that must
 change something (`press`), and write a poke FROM a breakpoint stop, in the
-pump's own callback.
+pump's own callback. **And a host-timed hold is not a guest-timed one**: `tap`'s "40 ms"
+`guest_sleep` polls by host round trips while MartyPC runs ~7-8x real time,
+and measured 0.40 - 0.55 guest s - across the keyboard's ~500 ms typematic
+delay, so one Up in three or four posted a REPEAT and the package, rightly
+(§108.4.1), counted a fourth boost. Wave 6 made the input leg's COUNTED
+taps GUEST-EXACT (`tap_exact`: paused, the press, `advance` by 40 ms of
+cycles, the release, run) - NumLock, keypad Ins, Ins twice, Up three times,
+Down, and Del either side of a toggle: 5 of 5 runs, where the host-timed tap
+failed 4 of 8. The rest still use the host-timed `tap`: the input leg's
+game-start `1` (`go_round`), the sound leg's starts and `boost`'s F10s, and
+the pace leg's F; none of those rows has failed on a repeat, and one that
+does is fixed the same way.
+
+### 108.15 The audit, the machines and the disks (wave 6)
+
+Wave 6 re-measured every line of ISOTRON-PLAN 16 on MartyPC, pinned what it
+read, and settled where isoTron ships and on what it refuses. It changed two
+bytes of the package: the entry proc's half-claimed path (the canvas granted,
+the work claim refused) now zeroes `it_cseg` as it frees the canvas
+(`xor dx, dx` / `xchg dx, [it_cseg]` for the `mov` it replaced), so a freed
+segment no longer reads as a claim held. The image is **21,314 bytes**
+(16,846 on the disk lz4-packed) and the bss **3,734**; that path is off every
+hot one, and an 8088's byte-wide bus does not care where a loop lands.
+
+#### 108.15.1 Every line, re-measured and pinned
+
+MartyPC's cycle counter, `tests/isotron.py --perf all` (the `isotronperf`
+row: four boots a machine on the 5150 CGA, the 5150 Hercules and the XT-VGA,
+plus a `VIDEO=ega` tree on the XT-VGA), 2026-10-14. The head-step samples are
+§108.10.3's whole rounds (1,049 computer head-steps at Rookie, 3,177 at
+Lunatic), so they are the same head-steps on every run; the plan's paper
+figure is beside each line, then its ceiling.
+
+| line (ISOTRON-PLAN 16) | paper | CGA 5150 | Hercules 5150 | XT-VGA | ceiling |
+|---|---:|---:|---:|---:|---:|
+| head-step, logic + canvas, Rookie median (p90) | ~2,800 | **2,416** (2,987) | **2,417** (3,028) | **2,417** (2,989) | 3,000 |
+| ...Lunatic median (p90) | | **2,610** (3,453) | **2,612** (3,459) | **2,612** (3,448) | 3,000 |
+| of which the move and its picture, median | 470 + 1,100 | 1,563 / 1,569 | 1,563 / 1,570 | 1,563 / 1,570 | |
+| head-step + full-screen span, Rookie median (p90) | 4,000 / 4,600 / 3,800 | **3,983** (4,673) | **4,534** (5,801) | **3,280** (3,911) | 4,500 / 5,000 / 4,000 |
+| ...Lunatic median (p90) | | **3,449** (5,035) | **3,951** (6,251) | **3,317** (4,354) | 4,500 / 5,000 / 4,000 |
+| the span hook's own share (Rookie) | 1,200 / 1,800 / 1,000 | ~1,567 | ~2,117 | ~863 | |
+| windowed wake, Rookie h1, median (most) | 16.7 / 16.7 / 23.5 ms | **12.3** (16.3) | **13.6** (21.5) | **22.3** (37.4) | 22 / 22 / 30 ms |
+| windowed wake, Lunatic h4 full boost, AUDIBLE | 28.5 / 28.5 / 44.5 ms | **24.5** (29.1) | **28.4** (37.3) | **34.6** (80.9) | 35 / 35 / 50 ms |
+| F's whole present, title / in a round | 0.23 / 0.3 / 0.57 s | **0.73 / 0.67 s** | **0.94 / 0.88 s** | **1.13 / 1.29 s** | 1.5 s |
+| the sweep, windowed (title->h1, raise, reset, same) | 1.5 s | 1.53 on all four | 1.58 on all four | 1.76 / 2.04 / 2.11 / 1.75 | 2.2 s |
+| the sweep, full screen (raise, reset, same) | 1.5 s | 1.47 / 1.47 / 1.45 | 1.49 / 1.49 / 1.49 | 1.54 / 1.54 / 1.54 | 2.2 s |
+
+Every line is under its ceiling. The head-steps are a fixed sample and read
+within a few cycles of waves 3 - 5; the WAKES are not a fixed sample (120
+wakes from wherever the trace arms in a live game) and carry run-to-run noise:
+the XT-VGA's Rookie h1 median read 21.6 ms on wave 5's fix and 22.3 on wave 6
+with the package byte-identical between them (+0.7 ms, 3%), and 21.1 on wave
+2's (+1.2 ms, 6%); the Hercules' 13.1 then 13.6, its Lunatic h4 28.9 then
+28.4, the VGA's 32.9 - 34.6. So a wake's pin is one run's median and about 3%
+of it is noise - well inside the +25% the gate allows. **Nothing was over
++25% of its pinned value and nothing was tuned**. Two lines are over the plan's PAPER
+figure and were before: the CGA span hook (~1,567 against 1,200: four
+instructions a row at the 8088's fetch floor, §108.12.3, which the plan priced
+at the instructions' clocks) and the whole presents on F (the paper priced a
+table lookup a byte and not the 2 x 256 tables' word reads and the cell walk,
+§108.12.5); both were measured and pinned in wave 3 and stand under their
+ceilings.
+
+**The pinned gate.** `isotronperf` now fails a line over **1.25 x its pinned
+value** as well as over the ceiling, whichever is LOWER (`tests/isotron.py`'s
+`PINNED`): the plan's ceilings sit well above most lines - the CGA's Rookie
+wake is 12.3 ms against 22 - so a regression of a third would have passed
+them silently. EVERY gated line is pinned, each at its OWN value (the higher
+of wave 5's fix and wave 6 where both read it): head-step 2,417 / 2,612;
+wakes 12.3 / 13.6 / 22.3 and 24.5 / 28.9 / 34.6 ms; the full-screen step
+3,983 / 4,547 / 3,280 at Rookie and 3,449 / 3,952 / 3,317 at Lunatic; F's
+present title / round 725 / 670, 944 / 883 and 1,129 / 1,294 ms (one pin for
+both let the CGA's and Hercules' round and the VGA's title grow by a third);
+first light 379 / 481 / 595 ms (EGA 342); the round start's longest band hold
+40.7 / 42.5 / 33.5 ms; every sweep case its own (the seven of Set 158's
+table); the windowed sweep's longest hold 62.3 / 61.8 / 86.7 ms (EGA 90.7);
+CRASH -> WAIT's 18.6 / 18.4 / 22.4 ms (EGA 21.2); and EGA's windowed wakes,
+21.0 and 33.8 ms (§108.15.2). Where 1.25 x a pin is above the ceiling the CEILING is the gate
+and the pin changes nothing, and those lines are named rather than implied:
+the XT-VGA's windowed sweeps (1,751 - 2,108 against 2,200 - the reset is the
+tightest line in the row, 4% under, on an emulator §108.11.7 says
+under-prices an 8-bit card's `gfx_blitp`), the 1bpp and EGA round start's
+band holds,
+every hold on F's way back (40.7 - 44.5 ms against 50), and the XT-VGA's and
+EGA's sweep holds. EGA's whole present stays REPORTED (ISOTRON-PLAN 16
+exempts it). Moving a pin is a decision with its reason written down, as
+this one is.
+
+**The presentation governor is idle at Rookie** (§108.11.6): no wake of the
+Rookie h1 trace reads `it_gskip` on any of the three machines, and the row
+now FAILS if one does (ISOTRON-PLAN 17.3: a governor engaging at the
+footage's own pace would halve the frame rate for nothing). It engages where
+it was built to - the XT-VGA's Lunatic h4 audible wake, whose longest is
+80.9 ms, presents every second wake after it - and the game keeps its pace.
+
+**The machine load at the worst rate** (Lunatic h1 at full boost, 228
+head-steps a second, §108.4.1) is an ESTIMATE and not a bound. It is
+ISOTRON-PLAN 16's own formula with the measured terms put in: 228 x the
+head-step with its span + 54.6 FASTTICK frames x (the frame's own work + its
+sound). The step is the larger of the two tiers' medians - Rookie's rounds are
+whole h1 rounds, an open field whose spans are long, and read higher on the
+1bpp surfaces than Lunatic's crowded h1/h2 ones; the frame's own work (the
+int 16h poll, the edge filter, the commands, the present, `FSXW_FRAME`) is
+still the plan's paper ~1,500 cycles, never measured alone, 82k cycles a
+second; the sound is §108.14.4's measured 2,528 a frame, charged on EVERY
+frame, which is its hard bound (138k, 2.9%). Pricing every step as a
+computer's prices the decision a player's step does not make; it does not
+bound the span, which is the step's variable part:
+
+| full screen, Lunatic h1 full boost | Hercules | CGA 320 | VGA 0Dh |
+|---|---:|---:|---:|
+| at the median step (4,534 / 3,983 / 3,317) | **1.25M, 26%** | 1.13M, 24% | 0.98M, 20% |
+| at the 90th centile step (6,251 / 5,035 / 4,354) | 1.65M, 34% | 1.37M, 29% | 1.21M, 25% |
+
+The plan's paper 24% on Hercules is close to the median line, and was the
+closer figure: the 19% this section first printed (228 x 3,951, the step
+alone at Lunatic's median) left out the frame and the sound and took the
+cheaper tier's step. Neither line is a ceiling - the longest single step in
+the Hercules traces reads 13,405 cycles - but
+the 90th centile is what nine steps in ten stay under, and a third of the
+machine at it leaves the rest of the XT its own. Windowed, the wake lines
+above are the whole of it.
+
+#### 108.15.2 EGA's cost is modelled
+
+MartyPC has no EGA. Every EGA figure here is the `VIDEO=ega` kernel - the
+640 x 350 geometry the kernel would drive on an EGA - on MartyPC's XT-VGA:
+the CPU's side exact, the card's not. A real IBM EGA in an XT is an 8-bit
+card whose memory cycles MartyPC does not model, so these are a FLOOR:
+
+| EGA (`VIDEO=ega` on the XT-VGA) | measured | gated |
+|---|---:|---|
+| F's whole present, title / round | 2.07 / 2.08 s | reported (ISOTRON-PLAN 16 exempts it) |
+| the way back: first light, then all out | 0.34 s, then 2.83 s | first light 1.5 s, holds 50 ms (44.5 at most) |
+| a Lunatic h4 frame at speed 9, median (most) | 4.4 ms (66.5) | the bracket's governor must engage: it does; 33 iterations a second |
+| the sweep, windowed / full screen | 1.54 - 1.82 / 1.49 - 1.66 s | 2.2 s |
+| windowed wake, Rookie h1, median (most) | 21.0 ms (33.8); the governor idle | 30 ms (VGA's), pinned 21.0 |
+| windowed wake, Lunatic h4 full boost, audible | 33.8 ms (74.2), 88 calls; the governor engaged | 50 ms, pinned 33.8 |
+| round start: rebuild h1 / h4; the longest band hold | 322 / 450 ms; 44.3 ms (73 bands, all out in 2.86 s) | 50 ms a hold |
+| a head-step | the windowed one (box only, §108.12.3) | |
+
+The plan modelled the whole present at 1.0 - 1.3 s from ~6.3 us a
+plane-byte; what it left out is the conversion (§108.11.4's colour tables,
+~400 cycles a device byte), which is most of the 2.07 s. An EGA is usually in an AT, about four
+times faster. `make xt-isotron-ega` (§108.15.3) is where it is LOOKED at on a
+period BIOS and a real mode 10h; nothing asserts there.
+
+#### 108.15.3 The machines (86Box, for looking)
+
+Four XTs at 4.77 MHz, each a copy of an existing machine with **only** the
+uuid and `fdd_02_fn` changed (B: = `build/isotron360.img`, A: the 360KB
+system disk), targets in `.PHONY`:
+
+| target | copied from | adapter, and what F does |
+|---|---|---|
+| `make xt-isotron` | `vm/xt-excitebike` (640KB, OTI-067 VGA) | windowed 16 colours; F: VGA 0Dh |
+| `make xt-isotron-cga` | `vm/xt-pixelstein` (640KB `ibmxt86`) | windowed 1bpp; F: CGA 320 x 200 x 4, palette 1 |
+| `make xt-isotron-herc` | `vm/xt-pixelstein-herc` | windowed 1bpp; F: 720 x 348 at 2x by 1.5 |
+| `make xt-isotron-ega` | `vm/xt-ega` (256KB `ibmxt`, a real EGA) | windowed 16 colours at 640 x 350; F: the same-mode bracket |
+
+**256KB holds it.** isoTron is ~25 KB of image and bss and two claims of
+63 and 30 KB - ~118 KB a running instance - and on MartyPC's 256KB 5150
+(`os8088_5150_cga_gla_256k`, kern_big) it launches with both claims granted,
+plays and goes full screen and back. So `xt-isotron-ega` keeps `xt-ega`'s
+256KB rather than bending the copy rule as PIXELSTEIN's machines did.
+
+#### 108.15.4 The disks, and the floor machine
+
+- **Fit**, `os88disk.py --verify` on each: `games360.img` 273 of 354
+  clusters (81 free), `apps720.img` 660 of 713, `apps.img` / `apps120.img`
+  1,708 of 2,847 / 2,371, `isotron360.img` 23 of 354. `apps360.img` does not
+  carry it (§108.8, dated 2026-10-13) and neither does the 360KB combo
+  (`COMBO_DROP`). `combo144.img` builds with it (2,342 of 2,847).
+  `combo720.img` does NOT build - "packages need 1,187 clusters; disk holds
+  713" - and that is not isoTron's: its 17 clusters are inside the 474 over,
+  which the 720KB combo was before isoTron arrived (dropping it would leave
+  1,170).
+- **The live media** (§80.6): `make usb` builds with `GAMES/ISOTRON.O88` on
+  the volume, and `t_livefull`'s PART B walked that image (496 entries, 3,791
+  of 16,324 clusters) green.
+- **kern_small refuses in words, so isoTron stays on the small disks**
+  (§24.5: a package that merely wants heap refuses itself). On
+  `os8088_5150_cga_128k` with `smallapps360.img` the LOADER places its ~25 KB
+  (segment 19C0h), and the entry proc, ASKING `OSAPI_MEM_AVAIL` before each
+  claim, takes neither: the window says `isoTron needs 63 KB and 30 KB of free
+  memory; this machine has 38 KB.` in one `OSAPI_FONT_RUN`, no worker starts
+  and `1` starts nothing. No `SMALLOMIT_GAMES` line and no `t_smallreq` row
+  are needed (its denylist is for a package that CANNOT say so - DrMarco,
+  which the loader cannot place). `isotronsmall` is that measurement kept
+  runnable.
+
+#### 108.15.5 What is tested
+
+| row | asserts |
+|---|---|
+| `isotronperf` | §108.15.1: every gated line under the LOWER of its ceiling and 1.25 x its own pinned value - the head-steps, the wakes (EGA's windowed ones too), the round start's band holds, F's whole presents title and round, first light, every sweep case, the sweep and CRASH -> WAIT holds; the lines where 1.25 x the pin is above the ceiling are held to the ceiling and named there; EGA's whole present is reported. The governor never engaged at Rookie h1 |
+| `isotronsmall` | MartyPC's `os8088_5150_cga_128k` on kern_small: A the loader places ISOTRON.O88 off `smallapps360.img`; B `it_nomem` = 1 with neither claim held, and - the two API cells traced across the launch - the package called `OSAPI_MEM_AVAIL` and never `OSAPI_MEM_CLAIM` (a build with the ask deleted fails here: it claims, is refused and sheds the caches, the hole growing 14 -> 32 KB); C `it_msgbuf` is `isoTron needs 63 KB and 30 KB of free memory; this machine has N KB.` with N between the claim map's largest hole and every paragraph no ordinary claim holds (14 <= 38 <= 38 KB); D that sentence's black ink over white in the CGA's video memory under its cells; E no worker, and `1` reaches `it_onkey` and posts nothing (`it_qstart` 0 - a build without `it_onkey`'s `it_nomem` guard fails here with 129) |
+| `isotroninput` | as §108.14.5, its counted taps guest-exact |

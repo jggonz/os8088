@@ -2095,6 +2095,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         cc-note chello covl pkgrun pkgbig pkgfmt cword cworddisk 386-c-word runcpm runcpmdisk \
         paccman paccmandisk pmcbandbench xt-paccman 386-paccman \
         xt-pixelstein xt-pixelstein-herc xt-pixel 386-pixel \
+        xt-isotron xt-isotron-cga xt-isotron-herc xt-isotron-ega \
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
         allapps usb usb-emu iso live burn rcbandbench \
@@ -14776,7 +14777,9 @@ isotrondisk: $(BUILD)/isotron.img $(BUILD)/isotron720.img $(BUILD)/isotron120.im
 # alone, the Hercules bracket of a two-display desktop, the flow through the
 # real keys, and (wave 5, tests/isotronlive.py) the speaker captured, the
 # typematic filter and the pace in guest seconds. The price
-# (isotronperf) is `python3 tests/isotron.py --perf all`: minutes, so not here.
+# (isotronperf) is `python3 tests/isotron.py --perf all`: minutes, so not here,
+# and the kern_small refusal (isotronsmall, SPEC.md 108.15.4) needs the small
+# disks: `make small smallapps && python3 tests/isotronsmall.py`.
 isotrontest: isotrondisk $(BUILD)/os8088-360.img
 	python3 tools/isotronsim.py --selfcheck
 	python3 tests/isotron.py --rules
@@ -14790,6 +14793,38 @@ isotrontest: isotrondisk $(BUILD)/os8088-360.img
 	python3 tests/isotronlive.py --sound
 	python3 tests/isotronlive.py --input
 	python3 tests/isotronlive.py --pace
+
+# isoTron on period hardware (SPEC.md 108.15): four 4.77MHz XTs with the 360KB
+# system floppy in A: and build/isotron360.img in B:, each a copy of an existing
+# machine with the uuid and fdd_02_fn changed and NOTHING else, for the
+# standing reason (86Box rewrites an unrecognised key): `xt-isotron` is
+# vm/xt-excitebike's 640KB OTI-067 VGA XT (windowed 16 colours, F the 0Dh
+# bracket), `xt-isotron-cga` vm/xt-pixelstein's 640KB CGA XT (windowed 1bpp, F
+# the 320x200x4 palette-1 bracket), `xt-isotron-herc` vm/xt-pixelstein-herc's
+# Hercules (F the 720x348 bracket at 2x by 1.5), and `xt-isotron-ega`
+# vm/xt-ega's 256KB IBM XT with a real EGA - the ONLY place the EGA same-mode
+# bracket runs on a period BIOS and the real mode 10h; isoTron's two claims and
+# image are ~118KB, which a 256KB kern_big machine holds (SPEC.md 108.15
+# measured it on MartyPC's 256KB 5150). 86Box cannot ASSERT anything
+# (docs/TESTING.md): every number is MartyPC's (isotronperf), and these are
+# where a human LOOKS - the slab, the walls' patterns, the sweep, the tower -
+# and double-clicks ISOTRON.O88 in B:. $(UNPROTECT) for the standing reason.
+VMXTISO     := $(CURDIR)/vm/xt-isotron
+VMXTISOCGA  := $(CURDIR)/vm/xt-isotron-cga
+VMXTISOHERC := $(CURDIR)/vm/xt-isotron-herc
+VMXTISOEGA  := $(CURDIR)/vm/xt-isotron-ega
+xt-isotron: $(IMG360) $(BUILD)/isotron360.img
+	@$(UNPROTECT) $(VMXTISO)/86box.cfg
+	$(BOX) -P $(VMXTISO) -N
+xt-isotron-cga: $(IMG360) $(BUILD)/isotron360.img
+	@$(UNPROTECT) $(VMXTISOCGA)/86box.cfg
+	$(BOX) -P $(VMXTISOCGA) -N
+xt-isotron-herc: $(IMG360) $(BUILD)/isotron360.img
+	@$(UNPROTECT) $(VMXTISOHERC)/86box.cfg
+	$(BOX) -P $(VMXTISOHERC) -N
+xt-isotron-ega: $(IMG360) $(BUILD)/isotron360.img
+	@$(UNPROTECT) $(VMXTISOEGA)/86box.cfg
+	$(BOX) -P $(VMXTISOEGA) -N
 
 # REDLINE native CPU/graphics performance lab (SPEC.md 103).
 .PHONY: redline redlinedisk redline-profile

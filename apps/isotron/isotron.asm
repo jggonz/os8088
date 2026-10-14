@@ -308,10 +308,11 @@ it_entry:
     mov byte [it_full], 1
     jmp short .ok
 .nomem2:
-    mov dx, [it_cseg]               ; half a game is no game: the canvas back
-    call OSAPI_MEM_FREE
+    xor dx, dx                      ; half a game is no game: the canvas back,
+    xchg dx, [it_cseg]              ; and the word zeroed with it - a freed
+    call OSAPI_MEM_FREE             ; segment still held reads as a claim
 .nomem:
-    call it_nomem_msg               ; "isoTron needs 63 KB and 35 KB ..."
+    call it_nomem_msg               ; "isoTron needs 63 KB and 30 KB ..."
     mov byte [it_nomem], 1
 .ok:
     mov bx, [it_win]
