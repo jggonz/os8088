@@ -442,8 +442,28 @@ dc_weeks:
     pop ax
     ret
 
-; dc_day - the selected day's heading, ` Tue 13 October 2026`
+; dc_day - the heading under the rule as it is now: the selected day's, or on
+; COMPACT with the tasks on show, ` Tasks`. dc_dayq - the day's, only when it
+; is the one on show (a new day changes nothing else there)
 dc_day:
+    call dc_tsolo
+    jc dc_dayh
+    push dx
+    push di
+    mov di, [dc_lay]
+    mov dx, [di + DCL_HEAD]
+    call dc_tasksh
+    pop di
+    pop dx
+    ret
+
+dc_dayq:
+    call dc_tsolo
+    jc dc_dayh
+    ret
+
+; dc_dayh - the selected day's heading, ` Tue 13 October 2026`
+dc_dayh:
     push ax
     push bx
     push cx
@@ -598,17 +618,7 @@ dc_all:
     mov dx, [di + DCL_RULE]
     add dx, [dc_oy]
     call OSAPI_GFX_HLINE
-    mov bx, [di + DCL_RULE]
-    inc bx
-    mov dx, [di + DCL_HEAD]
-    dec dx
-    call dc_fill
-    call dc_day
-    mov bx, [di + DCL_HEAD]     ; the pane: blank until wave 3 fills it
-    add bx, 8
-    mov dx, [dc_ch]
-    dec dx
-    call dc_fill
+    call dc_panes               ; the heading under the rule, and the lists
     cmp word [dc_cw], DC_CW
     jbe .w
     mov al, CWHITE              ; a content box wider than the 26 cells -
@@ -637,6 +647,7 @@ dc_all:
 ; (dc_redo), whose ground the four rows would not cover
 dc_regrid:
     call dc_build
+    call dc_newday
     call dc_arm
     jc .x
     cmp byte [dc_redo], 0
@@ -644,7 +655,8 @@ dc_regrid:
     call dc_head
     call dc_weeks
     call dc_selon
-    call dc_day
+    call dc_dayq
+    call dc_agnew
 .x:
     ret
 
@@ -657,24 +669,790 @@ dc_redraw:
 ; the old frame off, the old field re-run when it was today (the white frame
 ; cut its inverse ground), the new frame on, the heading (lock held)
 dc_reselect:
+    call dc_newday
     call dc_arm
     jc .x
     cmp byte [dc_redo], 0
     jne dc_redraw               ; the About card was down by a menu pick
     push ax
+    push bx
     mov ah, CWHITE
     call dc_frame
-    mov ah, al
+    mov ah, al                  ; AH = the old field
     call dc_tidx
     cmp al, ah
-    jne .nt
+    je .rr                      ; today: the white frame cut its ground
+    mov bl, ah
+    xor bh, bh
+    mov al, [dc_grid + bx]
+    call dc_marked              ; marked: the frame cut its star's middle
+    jz .nt
+.rr:
+    mov al, ah
     call dc_field
 .nt:
+    pop bx
     pop ax
     call dc_selon
-    call dc_day
+    call dc_dayq
+    call dc_agnew
 .x:
     ret
+
+; =============================================================================
+; THE LISTS (SPEC.md 107.3): the day's agenda, the tasks, and the entry field
+; that takes a heading's place. Every line is one 26-cell run; a task row is
+; the check box's glyph and a 24-cell run from cell 2 (8-aligned, so font_run
+; takes its one-pass path - os88ui_chk's own label would sit 18 px in)
+; =============================================================================
+
+; dc_tsolo - CF = 0: COMPACT with the TASKS on show, so the row under the
+; rule is the task list's heading. CF = 1 otherwise. Every register kept
+dc_tsolo:
+    push di
+    mov di, [dc_lay]
+    cmp word [di + DCL_SPLIT], 0
+    jne .no
+    cmp byte [dc_pane], 0
+    je .no
+    pop di
+    clc
+    ret
+.no:
+    pop di
+    stc
+    ret
+
+; dc_aon / dc_ton - CF = 0 the agenda / the tasks are on show. Keep all
+dc_aon:
+    push di
+    mov di, [dc_lay]
+    cmp word [di + DCL_SPLIT], 0
+    jne .yes
+    cmp byte [dc_pane], 0
+    jne .no
+.yes:
+    pop di
+    clc
+    ret
+.no:
+    pop di
+    stc
+    ret
+
+dc_ton:
+    push di
+    mov di, [dc_lay]
+    cmp word [di + DCL_SPLIT], 0
+    jne .yes
+    cmp byte [dc_pane], 0
+    je .no
+.yes:
+    pop di
+    clc
+    ret
+.no:
+    pop di
+    stc
+    ret
+
+; dc_apage / dc_tpage - BL = items a page, BH = 1 when there is more than
+; one page (and the last line is the pager). Every other register kept
+dc_apage:
+    push di
+    mov di, [dc_lay]
+    mov bl, [di + DCL_AN]
+    xor bh, bh
+    cmp [dc_acnt], bl
+    jbe .x
+    dec bl
+    inc bh
+.x:
+    pop di
+    ret
+
+dc_tpage:
+    push di
+    mov di, [dc_lay]
+    mov bl, [di + DCL_TN]
+    xor bh, bh
+    cmp [DIA_PAY + DCP_NTASK], bl
+    jbe .x
+    dec bl
+    inc bh
+.x:
+    pop di
+    ret
+
+; dc_ashown / dc_tshown - CL = the lines (rows) that are not blank now
+dc_ashown:
+    push ax
+    push bx
+    call dc_apage
+    mov al, [dc_acnt]
+    sub al, [dc_atop]
+    jmp short dc_shown
+
+dc_tshown:
+    push ax
+    push bx
+    call dc_tpage
+    mov al, [DIA_PAY + DCP_NTASK]
+    sub al, [dc_ttop]
+dc_shown:                       ; AL = items from the top, BL/BH the page
+    cmp al, bl
+    jbe .k
+    mov al, bl
+.k:
+    add al, bh
+    mov cl, al
+    pop bx
+    pop ax
+    ret
+
+; dc_putn - AL (0..99) at DI, one digit or two; DI advances. Keeps the rest
+dc_putn:
+    cmp al, 10
+    jae .two
+    push ax
+    add al, '0'
+    mov [di], al
+    inc di
+    pop ax
+    ret
+.two:
+    jmp dc_put2z
+
+; dc_pager - `  more...   page p of q` at dc_line + cell AL: CL = the first
+; item on show, BL = items a page, CH = items. Keeps every register
+dc_pager:
+    push ax
+    push cx
+    push si
+    push di
+    xor ah, ah
+    mov di, dc_line
+    add di, ax
+    mov si, dc_s_more
+    call dc_puts
+    mov al, cl
+    xor ah, ah
+    div bl
+    inc ax                      ; this page, from 1
+    call dc_putn
+    mov si, dc_s_of
+    call dc_puts
+    mov al, ch
+    add al, bl
+    xor ah, ah
+    dec ax
+    div bl                      ; the pages
+    call dc_putn
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; dc_tfmt - the minute of the day AX as `HH:MM` at DI; DI advances by 5
+dc_tfmt:
+    push ax
+    push bx
+    mov bl, 60
+    div bl                      ; AL = the hour, AH = the minute
+    mov bl, ah
+    call dc_put2z
+    mov byte [di], ':'
+    inc di
+    mov al, bl
+    call dc_put2z
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dc_aline - agenda line AL (0..AN-1) as it is now: an appointment, the
+; pager, or blank; inverse when it is the selected appointment. One run.
+; Every register kept
+; -----------------------------------------------------------------------------
+dc_aline:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ah, al                  ; AH = the line
+    mov di, [dc_lay]
+    mov dl, al
+    xor dh, dh
+    mov cl, 3
+    shl dx, cl
+    add dx, [di + DCL_PANE]
+    push dx                     ; its row
+    call dc_blank
+    mov dx, DC_INK              ; DX = the colours, until the run
+    call dc_apage
+    cmp ah, bl
+    jb .item
+    or bh, bh
+    jz .run                     ; past the page and no pager: blank
+    mov cl, [dc_atop]
+    mov ch, [dc_acnt]
+    mov al, 2
+    call dc_pager
+    jmp short .run
+.item:
+    mov al, ah
+    add al, [dc_atop]
+    cmp al, [dc_acnt]
+    jae .run
+    add al, [dc_afirst]         ; AL = its index in the table
+    cmp byte [dc_selk], DCS_APPT
+    jne .f
+    cmp al, [dc_seli]
+    jne .f
+    mov dx, DC_INV
+.f:
+    call dc_afmt
+.run:
+    mov ax, dx
+    pop dx
+    mov si, dc_line
+    xor cl, cl
+    call dc_run
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dc_afmt - appointment AL into dc_line: ` HH:MM! text`, `--:--` all day, the
+; mark `!` armed, `-` fired; 18 cells of its text. Keeps every register
+dc_afmt:
+    push ax
+    push cx
+    push si
+    push di
+    call dc_aptr
+    mov di, dc_line + 1
+    mov ax, [si + DCA_TIME]
+    cmp ax, DC_ALLDAY
+    jne .t
+    mov word [di], '--'
+    mov byte [di + 2], ':'
+    mov word [di + 3], '--'
+    jmp short .tx
+.t:
+    cmp ax, 24 * 60
+    jae .tx                     ; not a time: nothing in the column
+    call dc_tfmt
+    mov al, ' '
+    test byte [si + DCA_FLAGS], DCA_REMIND
+    jz .mk
+    mov al, '!'
+    test byte [si + DCA_FLAGS], DCA_FIRED
+    jz .mk
+    mov al, '-'
+.mk:
+    mov [dc_line + DC_AMARK], al
+.tx:
+    add si, DCA_TEXT
+    mov di, dc_line + 8
+    mov cx, DC_CELLS - 8
+    cld
+.c:
+    lodsb
+    or al, al
+    jz .x
+    mov [di], al
+    inc di
+    loop .c
+.x:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dc_agenda - agenda lines from AL down, when the agenda is on show (the clip
+; armed): AH = 0 only as far as a line that is or was occupied - a day with
+; nothing on it, after another with nothing, costs nothing - and AH = 1 every
+; line (a full paint). [dc_ashow] follows. Every register kept
+; -----------------------------------------------------------------------------
+dc_agenda:
+    call dc_aon
+    jc .r
+    push ax
+    push cx
+    push di
+    mov di, [dc_lay]
+    mov ch, [di + DCL_AN]
+    call dc_ashown              ; CL = occupied now
+    or ah, ah
+    jnz .set
+    mov ch, cl
+    cmp ch, [dc_ashow]
+    jae .set
+    mov ch, [dc_ashow]
+.set:
+    mov [dc_ashow], cl
+.l:
+    cmp al, ch
+    jae .x
+    call dc_aline
+    inc ax
+    jmp short .l
+.x:
+    pop di
+    pop cx
+    pop ax
+.r:
+    ret
+
+; dc_agnew - the agenda from its first line, the occupied ones (lock, clip)
+dc_agnew:
+    push ax
+    xor ax, ax
+    call dc_agenda
+    pop ax
+    ret
+
+; dc_newday - the selected day changed: its appointments, from their first
+; page, and no appointment selected (it was the other day's). State only
+dc_newday:
+    cmp byte [dc_selk], DCS_APPT
+    jne .k
+    mov byte [dc_selk], 0
+.k:
+    mov byte [dc_atop], 0
+    call dc_arange
+    jmp dc_menulive
+
+; -----------------------------------------------------------------------------
+; the task rows. Row k: the box (os88ui's check glyph) at x 0..11, rows
+; y..y+11; the text a run of cells 2..25 at y + 2; the 4 columns between them
+; and the strips between rows belong to the full paint (dc_tpaint)
+; -----------------------------------------------------------------------------
+
+; dc_trowy - DX = task row AL's top, content-relative. Keeps the rest
+dc_trowy:
+    push ax
+    push di
+    mov di, [dc_lay]
+    mov dl, DC_TPITCH
+    mul dl
+    add ax, [di + DCL_T0]
+    mov dx, ax
+    pop di
+    pop ax
+    ret
+
+; dc_titem - CF = 0: task row AL shows a task, AL = its index; CF = 1 it is
+; the pager or blank, and BH = 1 the pager. BL = tasks a page either way
+dc_titem:
+    call dc_tpage
+    cmp al, bl
+    jae .not
+    add al, [dc_ttop]
+    cmp al, [DIA_PAY + DCP_NTASK]
+    jae .blank
+    clc
+    ret
+.blank:
+    xor bh, bh
+.not:
+    stc
+    ret
+
+; dc_ckaim - dc_ck at task row AL's box, its mark AH (0 / 1). Keeps all
+dc_ckaim:
+    push ax
+    push dx
+    mov [dc_ck + OS88UI_CK_ON], ah
+    call dc_trowy
+    add dx, [dc_oy]
+    mov [dc_ck + 2], dx
+    add dx, OS88UI_CKBOX - 1
+    mov [dc_ck + 6], dx
+    mov ax, [dc_ox]
+    mov [dc_ck + 0], ax
+    add ax, OS88UI_CKBOX - 1
+    mov [dc_ck + 4], ax
+    pop dx
+    pop ax
+    ret
+
+; dc_tleft - task row AL's box: the glyph with its mark, or white. Keep all
+dc_tleft:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov ah, al
+    call dc_titem
+    jc .white
+    push si
+    call dc_tptr
+    mov bl, [si + DCT_FLAGS]
+    pop si
+    and bl, DCT_DONE
+    mov al, ah
+    mov ah, bl
+    call dc_ckaim
+    mov bx, dc_ck
+    xor di, di
+    call os88ui_chkdraw         ; the shared control's own box (13.15.2)
+    jmp short .x
+.white:
+    mov al, ah
+    call dc_trowy
+    mov bx, dx
+    add dx, DC_TPITCH - 1
+    xor ax, ax
+    mov cx, OS88UI_CKBOX - 1
+    call dc_fillr
+.x:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dc_ttext - task row AL's text: one run of cells 2..25, inverse for the
+; selected task, the pager's words, or blank. Keeps every register
+dc_ttext:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ah, al
+    call dc_trowy
+    add dx, 2
+    push dx
+    call dc_blank
+    mov dx, DC_INK
+    mov al, ah
+    call dc_titem
+    jnc .item
+    or bh, bh
+    jz .run
+    mov cl, [dc_ttop]
+    mov ch, [DIA_PAY + DCP_NTASK]
+    mov al, 4
+    call dc_pager
+    jmp short .run
+.item:
+    cmp byte [dc_selk], DCS_TASK
+    jne .f
+    cmp al, [dc_seli]
+    jne .f
+    mov dx, DC_INV
+.f:
+    call dc_tptr
+    add si, DCT_TEXT
+    mov di, dc_line + 3
+    mov cx, DCT_TMAX
+    cld
+.c:
+    lodsb
+    or al, al
+    jz .run
+    mov [di], al
+    inc di
+    loop .c
+.run:
+    mov ax, dx
+    pop dx
+    mov cx, (DC_CELLS << 8) | 2
+    call dc_part
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dc_trow - task row AL whole: the box and the text
+dc_trow:
+    call dc_tleft
+    jmp dc_ttext
+
+; dc_tasks - task rows from AL down when the tasks are on show (the clip
+; armed), as far as a row that is or was occupied; [dc_tshow] follows
+dc_tasks:
+    call dc_ton
+    jc .r
+    push ax
+    push cx
+    call dc_tshown
+    mov ch, cl
+    cmp ch, [dc_tshow]
+    jae .set
+    mov ch, [dc_tshow]
+.set:
+    mov [dc_tshow], cl
+.l:
+    cmp al, ch
+    jae .x
+    call dc_trow
+    inc ax
+    jmp short .l
+.x:
+    pop cx
+    pop ax
+.r:
+    ret
+
+; dc_tpaint - the task list whole (a full paint, the clip armed): the column
+; between the boxes and the text, the strip above the first row, and each row
+; with the strip under it. Every pixel once
+dc_tpaint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov di, [dc_lay]
+    mov bx, [di + DCL_T0]
+    mov dx, [dc_ch]
+    dec dx
+    mov ax, OS88UI_CKBOX
+    mov cx, 15
+    call dc_fillr               ; x 12..15, every row
+    mov dx, bx
+    inc dx
+    mov ax, 16
+    mov cx, DC_CW - 1
+    call dc_fillr               ; above the first row's text
+    xor al, al
+.r:
+    call dc_trow
+    push ax
+    call dc_trowy
+    mov bx, dx
+    add bx, 10
+    add dx, DC_TPITCH + 1       ; to the next text's top (y + 13)...
+    cmp dx, [dc_ch]
+    jb .s
+    mov dx, [dc_ch]             ; ...or the content's bottom
+    dec dx
+.s:
+    mov ax, 16
+    mov cx, DC_CW - 1
+    call dc_fillr
+    pop ax
+    inc al
+    cmp al, [di + DCL_TN]
+    jb .r
+    call dc_tshown
+    mov [dc_tshow], cl
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dc_tasksh - ` Tasks` at content row DX
+dc_tasksh:
+    push ax
+    push cx
+    push si
+    push di
+    call dc_blank
+    inc di
+    mov si, dc_s_tasks
+    call dc_puts
+    mov si, dc_line
+    xor cl, cl
+    mov ax, DC_INK
+    call dc_run
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; dc_ttaskh - the TALL task heading, at its own row
+dc_ttaskh:
+    push dx
+    push di
+    mov di, [dc_lay]
+    mov dx, [di + DCL_THEAD]
+    call dc_tasksh
+    pop di
+    pop dx
+    ret
+
+; dc_fillr - white over content columns AX..CX, rows BX..DX (relative,
+; inclusive). Every register kept
+dc_fillr:
+    push ax
+    push bx
+    push cx
+    push dx
+    push ax
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    pop ax
+    add ax, [dc_ox]
+    add cx, [dc_ox]
+    add bx, [dc_oy]
+    add dx, [dc_oy]
+    call OSAPI_GFX_FILL
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; the entry field (os88line.inc) - in the place of a HEADING: the day's for an
+; appointment, the task list's for a task (COMPACT: the one row, both)
+; -----------------------------------------------------------------------------
+
+; dc_fhead - AX = the content row of the heading the field takes. Keeps rest
+dc_fhead:
+    push di
+    mov di, [dc_lay]
+    mov ax, [di + DCL_HEAD]
+    cmp byte [dc_ed], DCE_NEWT
+    jb .x
+    cmp word [di + DCL_SPLIT], 0
+    je .x
+    mov ax, [di + DCL_THEAD]
+.x:
+    pop di
+    ret
+
+; dc_frect - the field's rect on the glass now (the window may have moved):
+; the content's width, from three rows above the heading to eight below
+dc_frect:
+    push ax
+    call dc_fhead
+    sub ax, 3
+    add ax, [dc_oy]
+    mov [dc_ln + LN_Y1], ax
+    add ax, 11
+    mov [dc_ln + LN_Y2], ax
+    mov ax, [dc_ox]
+    mov [dc_ln + LN_X1], ax
+    add ax, DC_CW - 1
+    mov [dc_ln + LN_X2], ax
+    pop ax
+    ret
+
+; dc_fdraw - the field whole (the clip armed)
+dc_fdraw:
+    push si
+    call dc_frect
+    mov si, dc_ln
+    call os88line_draw
+    pop si
+    ret
+
+; dc_band - content rows BX..DX round the heading at row AX, drawn by the
+; proc at SI: the gaps and the heading - or, when the field is in this
+; heading's place, one fill and the field (SPEC.md 107.3: the one double
+; write, a full paint's while the field is open). Every register kept
+dc_band:
+    push ax
+    push bx
+    push dx
+    cmp byte [dc_ed], 0
+    je .head
+    push ax
+    push dx
+    mov dx, ax
+    call dc_fhead
+    cmp ax, dx
+    pop dx
+    pop ax
+    jne .head
+    call dc_fill
+    call dc_fdraw
+    jmp short .x
+.head:
+    push dx
+    mov dx, ax
+    dec dx
+    call dc_fill                ; above it
+    mov dx, ax
+    call si                     ; the heading's run (DX = its row)
+    mov bx, ax
+    add bx, 8
+    pop dx
+    call dc_fill                ; below it
+.x:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dc_panes - everything under the rule (a full paint, the clip armed): the
+; heading's band, then TALL's agenda, task band and tasks, or COMPACT's one
+; list. Every register kept
+; -----------------------------------------------------------------------------
+dc_panes:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov di, [dc_lay]
+    mov bx, [di + DCL_RULE]
+    inc bx
+    mov dx, [di + DCL_PANE]
+    dec dx
+    mov ax, [di + DCL_HEAD]
+    mov si, dc_dayat
+    call dc_band
+    call dc_tsolo
+    jnc .tasks
+    mov ax, 0x0100
+    call dc_agenda              ; every line
+    mov bx, [di + DCL_AN]       ; the agenda's end
+    mov cl, 3
+    shl bx, cl
+    add bx, [di + DCL_PANE]
+    cmp word [di + DCL_SPLIT], 0
+    jne .split
+    mov dx, [dc_ch]             ; COMPACT: white to the bottom
+    dec dx
+    call dc_fill
+    jmp short .x
+.split:
+    mov dx, [di + DCL_T0]
+    dec dx
+    mov ax, [di + DCL_THEAD]
+    mov si, dc_tasksh
+    call dc_band
+.tasks:
+    call dc_tpaint
+.x:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dc_dayat - dc_band's proc for the row under the rule (DX = its row, which
+; dc_day knows already)
+dc_dayat:
+    jmp dc_day
 
 ; --- the two layouts (SPEC.md 107.3): the y of each row, content-relative ----
 DCL_HDR     equ 0
@@ -683,12 +1461,20 @@ DCL_W0      equ 4
 DCL_PITCH   equ 6
 DCL_RULE    equ 8
 DCL_HEAD    equ 10
-DCL_PANE    equ 12
+DCL_PANE    equ 12              ; the agenda's first line
+DCL_AN      equ 14              ; agenda lines (pitch 8)
+DCL_THEAD   equ 16              ; the task heading's row
+DCL_T0      equ 18              ; the first task row (pitch 12)
+DCL_TN      equ 20              ; task rows
+DCL_SPLIT   equ 22              ; 1: both lists on show; 0: one at a time
 
-dc_ltall:   dw 0, 12, 24, 10, 88, 92, 104
-dc_lcomp:   dw 0, 9, 18, 9, 72, 75, 84
+dc_ltall:   dw 0, 12, 24, 10, 88, 92, 104, 7, 164, 176, 5, 1
+dc_lcomp:   dw 0, 9, 18, 9, 72, 75, 84, 4, 75, 84, 3, 0
 
 dc_s_wk:    db '   Su Mo Tu We Th Fr Sa   ', 0
+dc_s_more:  db 'more...  page ', 0
+dc_s_of:    db ' of ', 0
+dc_s_tasks: db 'Tasks', 0
 dc_dshort:  dw dc_d0, dc_d1, dc_d2, dc_d3, dc_d4, dc_d5, dc_d6
 dc_d0:      db 'Sun', 0
 dc_d1:      db 'Mon', 0

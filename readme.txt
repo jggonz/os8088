@@ -112,7 +112,7 @@ Programs that read and write documents put up the same box for both jobs, with a
 If a program will not start, the disk window says why: see section 12.
 
 DESK CALENDAR
-SYSTEM/DIA holds programs that live on the desktop. The Desk Calendar shows a month: click a day, or use the arrow keys; PgUp and PgDn change the month and T comes back to today. Drag it wherever you like. Once opened it comes back at every start, where you left it, until you close it (not on the small system disk for 128KB machines: there, open it again from SYSTEM/DIA and it opens where you left it). Only one can be open.
+SYSTEM/DIA holds programs that live on the desktop. The Desk Calendar shows a month: click a day, or use the arrow keys; PgUp and PgDn change the month and T comes back to today. N types an appointment for the chosen day ("9:30 Dentist" - no time makes it all day) and K a task; click one to choose it, Enter to change it, Del to delete it. Click a task's box to tick it. Drag it wherever you like. Once opened it comes back at every start, where you left it, until you close it (not on the small system disk for 128KB machines: there, open it again from SYSTEM/DIA and it opens where you left it). Only one can be open.
 
 
 ----------------------------

@@ -83,7 +83,7 @@ TIME_ALLDAY = 0xFFFF
 # The gates read these out of a live guest (tests/deskcalgrid.py, diaboot.py
 # and their kin); tests/unit/t_dia.py has NASM evaluate the package's own
 # equs and holds these equal, so a moved field fails `make` and not a soak.
-DESKCAL_DIA_BSS = 112           # deskcal.asm's DC_BSS: its own state first
+DESKCAL_DIA_BSS = 224           # deskcal.asm's DC_BSS: its own state first
 DESKCAL_BSS_GRID = 0            # 42 bytes, the month on show
 DESKCAL_BSS_Y = 42              # dw the year on show
 DESKCAL_BSS_M = 44              # db its month
@@ -91,6 +91,14 @@ DESKCAL_BSS_SEL = 45            # db the selected day
 DESKCAL_BSS_TY = 46             # dw today's year
 DESKCAL_BSS_TM = 48             # db ...month
 DESKCAL_BSS_TD = 49             # db ...day
+DESKCAL_BSS_OX = 62             # dw the content origin, as the last draw
+DESKCAL_BSS_OY = 64             # found it
+DESKCAL_BSS_ED = 99             # db the entry field: 0 shut, 1..4 its mode
+DESKCAL_BSS_EDI = 100           # db ...the item it edits
+DESKCAL_BSS_SELK = 101          # db the selected item: 0, 1 appt, 2 task
+DESKCAL_BSS_SELI = 102          # db ...its index in its table
+DESKCAL_BSS_EBUF = 134          # 32: the entry field's text, NUL
+DESKCAL_NOREM = 1               # payload +3 bit 0: new ones get no reminder
 
 
 def dia_st_off(dia_bss, paylen):
@@ -289,7 +297,7 @@ def unpack_date(w):
 
 def deskcal(appts=(), tasks=(), lead=5, flags=0):
     """appts: (date-tuple, minute-of-day or None, text, remind, fired, lead);
-    tasks: (text, done, due-date-tuple or None). Sorted by (date, time) as the
+    tasks: (text, done, due-date-tuple or None). Sorted by (date, time + 1) as the
     package keeps them."""
     appts, tasks = list(appts), list(tasks)
     if len(appts) > DESKCAL_NAPPT or len(tasks) > DESKCAL_NTASK:
@@ -305,7 +313,9 @@ def deskcal(appts=(), tasks=(), lead=5, flags=0):
         recs.append((pack_date(*date), TIME_ALLDAY if t is None else t,
                      (APPT_REMIND if remind else 0)
                      | (APPT_FIRED if fired else 0), al, text))
-    recs.sort(key=lambda r: (r[0], r[1]))
+    # the package's own order (SPEC.md 107.3): (date, time + 1) as words,
+    # so ALL DAY (0FFFFh) wraps to 0 and comes first in its day
+    recs.sort(key=lambda r: (r[0], (r[1] + 1) & 0xFFFF))
     for i, (d, t, f, al, text) in enumerate(recs):
         b = text.encode("latin-1")[:25]
         o = DESKCAL_APPT0 + i * DESKCAL_APPT
@@ -435,11 +445,11 @@ def selfcheck():
     full = dat(pay, x=400, y=40, screen=(640, 480), payver=DESKCAL_PAYVER)
     ok(len(full) == 2456, "the whole file is 2,456 bytes, five sectors")
     dc = parse_deskcal(parse_dat(full, DESKCAL_PAYLEN, 1)["payload"])
-    ok([a["text"] for a in dc["appts"]] == ["Earlier", "Dentist", "Birthday"],
-       "kept sorted by (date, time), all-day last")
-    ok(dc["appts"][1]["time"] == 570 and dc["appts"][1]["remind"],
+    ok([a["text"] for a in dc["appts"]] == ["Earlier", "Birthday", "Dentist"],
+       "kept sorted by (date, time + 1): all-day FIRST in its day")
+    ok(dc["appts"][2]["time"] == 570 and dc["appts"][2]["remind"],
        "9:30 with its reminder")
-    ok(dc["appts"][2]["time"] is None, "all-day reads back as all-day")
+    ok(dc["appts"][1]["time"] is None, "all-day reads back as all-day")
     ok(dc["tasks"][1]["done"] and dc["tasks"][1]["due"] == [2026, 10, 20],
        "a done, dated task")
     ok(unpack_date(pack_date(2099, 12, 31)) == (2099, 12, 31)

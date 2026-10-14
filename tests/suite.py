@@ -8922,6 +8922,29 @@ SOAK = [
         "seven guest seconds later.",
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
+    Row("deskcaledit", "soak", py("tests/deskcaledit.py"), 60.0,
+        "SPEC.md 107.3: the Desk Calendar's APPOINTMENTS, read back off the "
+        "guest's own disk by tools/os88dia.py. A DAMAGED state file (count "
+        "60) opens empty and its first edit asks `Replace damaged calendar?` "
+        "with the file untouched until Yes; `9:30 Dentist`, `1230 Lunch`, "
+        "`815 Gym` and `Mum's birthday` are four appointments IN ORDER, "
+        "all-day first, the timed ones armed; Enter on a clicked line edits "
+        "it in the field (09:30 Doctor, reminder kept); Del asks and Yes "
+        "deletes; 26 characters are refused (`At most 25 letters`, nothing "
+        "written); and a full table of 48 greys New Appointment `(full)` and "
+        "answers N with `Calendar is full (48)`.",
+        needs=("marty", "mtools"), timeout=900,
+        wants=("build/os8088-360.img",)),
+    Row("deskcaltask", "soak", py("tests/deskcaltask.py"), 55.0,
+        "SPEC.md 107.3, 13.15.2: the Desk Calendar's TASKS on a Hercules 5150 "
+        "(TALL, a readable 1bpp framebuffer). Three typed tasks are three in "
+        "the state file; a click on a box checks it and the window differs "
+        "in its 6x6 mark and NOTHING ELSE, with ZERO runs through the "
+        "package's own dc_run (a breakpoint counter; a selection click, two "
+        "runs, is its control); Space on a selected task the same; Clear "
+        "Done Tasks greyed `(none done)` until one is checked and leaving the "
+        "unchecked one; Del and Yes empty the list.",
+        needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
     Row("deskcalgrid", "soak", py("tests/deskcalgrid.py"), 40.0,
         "SPEC.md 107.3: the Desk Calendar's 42-byte grid, read out of the "
         "running guest's bss, is Python calendar's for Oct 2026, Feb 2028 "

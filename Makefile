@@ -5229,7 +5229,8 @@ $(BUILD)/calc.o88: $(BUILD)/calc.bin tools/os88pkg.py $(PKGZSTAMP)
 # SYSTEM/DIA/ on every system disk ($(DIAARGS) above) and on no apps disk.
 # apps/os88dia.inc is its widget half - place, state file, desktop row.
 DESKCALSRC := apps/deskcal/deskcal.asm apps/deskcal/dcdate.inc \
-              apps/deskcal/dcdraw.inc apps/os88dia.inc apps/os88ui.inc \
+              apps/deskcal/dcdraw.inc apps/deskcal/dcdata.inc \
+              apps/os88dia.inc apps/os88ui.inc apps/os88line.inc \
               apps/os88api.inc
 $(BUILD)/deskcal.bin: $(DESKCALSRC) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/deskcal/ -o $@ apps/deskcal/deskcal.asm
