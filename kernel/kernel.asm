@@ -646,8 +646,8 @@ BOOT_STACK  equ 2048            ; ...and its stack, growing down from there
 ; top of that machine and still read the kernel AND its stage-2 blob in
 ; underneath. It is a different question from residing - KERN_BUDGET's - and
 ; kernsize prints both lines so that neither is steered by alone.
-; tests/small128.py and tests/big128.py boot each kernel on the 128KB machine,
-; which is the half an assembler cannot answer.
+; tests/small128.py and tests/kernresident.py boot each kernel on the 128KB
+; machine, which is the half an assembler cannot answer.
 MIN_RAM_KB  equ 128
 
 %ifdef KERN_SMALL

@@ -5517,7 +5517,9 @@ def selfcheck():
                      "<H", struct.unpack_from("<H", dk, ko + kn0 - 2)[0] + 1)
                  + dk[ko + kn0:]),
                 ("a key in parts with no KPARTS flag",
-                 dk[:7] + bytes([dk[7] & ~(F_KPARTS >> 8)]) + dk[8:])):
+                 dk[:7] + bytes([dk[7] & ~(F_KPARTS >> 8)]) + dk[8:]),
+                ("a key part of no bytes",      # (the player re-read it
+                 dk[:ko - 2] + struct.pack("<HH", kn0, 0) + dk[ko + 2:])):
             bad = kp + ".bad"
             open(bad, "wb").write(d)
             try:
@@ -5880,7 +5882,7 @@ def selfcheck():
               "a resident file's blocks "
               "round-trip, CGA4, C160, C512 and TEXT round-trip, a palette "
               "a scene and a page-ahead file round-trip, a live file's "
-              "blit runs cover its writes, and twenty-eight corruptions "
+              "blit runs cover its writes, and twenty-nine corruptions "
               "were refused")
     return 1 if fails else 0
 

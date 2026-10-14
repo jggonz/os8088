@@ -21,7 +21,7 @@ below were read off the tool at the last bless.
 |---|---|---|
 | 1 | **`kern_big` fully RESIDES in 100KB** once it is at the desktop | guard 1, `KERN_BUDGET` = 100,864, plus `tests/kernresident.py` |
 | 2 | **`kern_small` fully RESIDES in 64KB** once it is at the desktop | guard 1, `KERN_BUDGET` = 64,000, plus `tests/small128.py`'s no-pinned-claim check |
-| 3 | **BOTH BOOT on 128KB** | guard 5, `MIN_RAM_KB` = 128, plus `tests/small128.py` and `tests/big128.py` on the 128KB machine |
+| 3 | **BOTH BOOT on 128KB** | guard 5, `MIN_RAM_KB` = 128, plus `tests/small128.py` and `tests/kernresident.py` on the 128KB machine |
 
 **A budget is met EXACTLY at an upstream merge or a release, and branch work
 may run up to 2KB over it.** Features land whole and are size-passed after, so

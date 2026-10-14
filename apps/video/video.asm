@@ -2500,6 +2500,7 @@ vp_kpic:
     add dx, ax
     and si, 15
     call vp_khdr                    ; (98.1.3.8: another part after it?)
+    jc .free
     add si, 6                       ; past len, y0, y1
     push ds
     mov ds, dx
@@ -2537,7 +2538,9 @@ vp_kfirst:
 ; with another after it - its y0's bit 15 - has the bit taken off in memory,
 ; so it decodes as any record, [vp_kmore] 1, [vp_knext] its last two bytes,
 ; the next read's length, and [vp_kfo] moved past it to where that read
-; starts. Else [vp_kmore] 0. Preserves all
+; starts. Else [vp_kmore] 0. CF=1 a part whose length is not its read's, or
+; is less than a header and a list's (a hostile file: a part of 0 moved the
+; walk on by nothing, and re-read itself forever). Preserves all
 vp_khdr:
     push ax
     push bx
@@ -2546,8 +2549,12 @@ vp_khdr:
     mov ds, dx
     test byte [si+3], 0x80
     jz .r
+    mov ax, [si]                    ; this part's length: its READ's, and
+    cmp ax, [cs:vp_kpn]             ; REC_HDR + 3 at least, as os88vid.py's
+    jne .bad                        ; reader asks (98.1.3.8)
+    cmp ax, 9
+    jb .bad
     and byte [si+3], 0x7F
-    mov ax, [si]                    ; this part's length...
     mov bx, si
     add bx, ax
     mov bx, [bx-2]                  ; ...and the next read's, its last word
@@ -2555,11 +2562,15 @@ vp_khdr:
     add [cs:vp_kfo], ax
     adc word [cs:vp_kfo+2], 0
     mov byte [cs:vp_kmore], 1
+    clc
 .r:
     pop ds
     pop bx
     pop ax
     ret
+.bad:
+    stc
+    jmp short .r
 
 ; vp_knrd - the next part's read (vp_khdr found one) into [vp_rdseg], SI
 ; where it landed, [vp_kpn] its length - CF=1 if it could not be read, or
@@ -11237,6 +11248,7 @@ vp_main:
     add dx, ax
     and si, 15
     call vp_khdr                    ; (98.1.3.8: another part after it?)
+    jc .kpbad
     push dx
     mov ax, si
     add ax, [vp_kpn]

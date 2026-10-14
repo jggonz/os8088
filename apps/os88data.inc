@@ -58,7 +58,10 @@
 ; write - quiet, walk-free once banked, but a full write - and every save
 ; after it is one sector. kern_small has no WRITE_AT (18.4.7.4): its stub
 ; answers CF=1, and every save there takes the full arm, still with no
-; display remount in it.
+; display remount in it. A count that is a WHOLE number of sectors takes the
+; full arm too: WRITE_AT refuses a write ending short of the size only when
+; its last sector is partial (18.4.7), so 512 bytes into a file of 1,024
+; would answer CF=0 and leave the old size and the old tail.
 ;
 ; WHAT YOU GET
 ;   od_read   SI = a NUL 8.3 name, ES:BX = buffer, DX:CX = its capacity.
@@ -294,6 +297,8 @@ od_write:
     mov al, [od_gen]                ; ONE SECTOR, when the last full write of
     cmp al, [di]                    ; this file is of the folder we stand in
     jne .full
+    test cx, 511                    ; ...and not a WHOLE number of sectors:
+    jz .full                        ; WRITE_AT lets such a count end short
     xor ax, ax                      ; offset 0 (DX:AX), CX bytes
     xor dx, dx
     call OSAPI_FILE_WRITE_AT        ; INSIDE (18.4.7): no FAT, no entry

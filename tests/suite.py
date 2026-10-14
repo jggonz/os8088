@@ -341,6 +341,15 @@ FAST = [
         "noticed; this is the noticing as a gate. Also proves the "
         "fingerprint moves for a moved cell, a changed contract and a header "
         "field, and stands for SDK prose", needs=()),
+    Row("ccvoid", "fast", py("tests/unit/t_ccvoid.py"), 0.1,
+        "SPEC.md 73: tools/ccpeep.py's void_functions() reads a C "
+        "function's OWN return type out of SmallerC's nested `; glb` "
+        "comment - not a function-pointer parameter's `) void`, and not a "
+        "function that RETURNS a void function pointer. Either misread "
+        "deleted the return value under the `dead` rule, and ccverify, "
+        "asking the same function, called it equivalent. Host-side, no "
+        "compiler: SmallerC's comments for five shapes. With the first "
+        "version's first-`)` read it FAILS on two", needs=()),
     Row("stackprose", "soak", py("tests/unit/t_stackprose.py"), 10.0,
         "a doc or comment that names the task stack's SIZE names the one the kernel has. SCH_STACK has been 1,536, 512, 256 and 384; SPEC.md 2.1 and 20.6 rule 6 followed it every time and the forty-odd places CITING them did not. That is not a typo class - docs/UPSTREAM.md's stale 256 had a session report a worker-stack contract difference between this branch and `main` that had not existed since #112, and go looking for what to adapt. os88geom guards the copies a SCRIPT retyped; this guards the ones a HUMAN did."
         "SOAK rather than fast or full: a stale comment misleads a reader, "
@@ -11670,6 +11679,15 @@ SOAK = [
         "the stream's start on black and the hold after it is frame 0 "
         "exact. With the fallback leaving key 0's super-packet armed it "
         "FAILS by 100 bytes",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidkpartbad", "soak", py("tests/vidkpartbad.py"), 45.0,
+        "SPEC.md 98.1.3.8: a HOSTILE key in parts - vidkpartpv's clip with "
+        "the poster's first part saying it is 0 bytes and the word before "
+        "it naming its own read. The open refuses the picture and returns, "
+        "a Right is answered and key 2's picture is made. With vp_khdr's "
+        "length tests taken out the open re-reads the part forever, the "
+        "gfx lock held, and it FAILS",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
     Row("vidpageherc", "soak", py("tests/vidpage.py", "--layout", "herc"),

@@ -605,7 +605,11 @@ tg_panel_off:
 tg_onclick:
     call tg_track
     call tg_panel_off
-    jc tg_draw_all
+    jnc .out
+    push si                         ; W_ONCLICK gives SI back (os88api.inc):
+    call tg_draw_all                ; a PKG_FMT-8 kernel before this one arms
+    pop si                          ; the release on whatever SI comes back
+.out:
     ret
 
 ; =============================================================================

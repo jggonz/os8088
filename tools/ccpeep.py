@@ -300,7 +300,7 @@ class Node:
         self.post = None            # a label to materialise after this node
 
 
-GLB = re.compile(r"^;\s*glb\s+(\w+)\s*:\s*\(")
+GLB = re.compile(r"^;\s*glb\s+(\w+)\s*:\s*\(\s*$")
 GLB_END = re.compile(r"^;\s*\)\s*(.*?)\s*$")
 
 
@@ -308,21 +308,34 @@ def void_functions(text):
     """The C functions SmallerC's own `; glb f : ( ... ) void` comment says
     return nothing. AX is not live at such a function's `ret`: no C caller
     can read the value of a void call, and crt0.asm's trampolines for the
-    void callbacks (cc_paint, cc_onkey, ...) read nothing back either."""
-    out, cur = set(), None
+    void callbacks (cc_paint, cc_onkey, ...) read nothing back either.
+
+    The comment NESTS: a parameter that is a function pointer with
+    parameters of its own (`; prm cb : * (`) closes with its own `) void`,
+    and a function RETURNING one closes its parameters with `) * (` and its
+    pointer's with `) void`. Only the `)` that closes the function's own
+    list is its return type, and a `) ... (` there is a pointer, not void.
+    A `; glb f : (void) ...` line opens nothing and is never classed."""
+    out, cur, depth = set(), None, 0
     for line in text.split("\n"):
         m = GLB.match(line)
         if m:
-            cur = m.group(1)
+            cur, depth = m.group(1), 1
             continue
         if cur:
+            if not line.startswith(";"):
+                cur = None
+                continue
             e = GLB_END.match(line)
             if e:
-                if e.group(1) == "void":
-                    out.add("_" + cur)
-                cur = None
-            elif not line.startswith(";"):
-                cur = None
+                depth -= 1
+                if not depth:
+                    if e.group(1) == "void":
+                        out.add("_" + cur)
+                    cur = None
+                    continue
+            if line.rstrip().endswith("("):
+                depth += 1
     return out
 
 

@@ -23622,7 +23622,13 @@ it did, a handler that clobbered SI exactly as this contract permits armed
 the release on whatever SI held: zero lost the release outright and anything
 else had `.mup_pkg` test and dispatch through an arbitrary kernel offset.
 `tests/muptest`'s `W_ONCLICK` zeroes SI on purpose and `tests/mouseup.py`
-reads `[ui_armw]` against the record the press went to.
+reads `[ui_armw]` against the record the press went to. **A `W_ONCLICK`
+handler still gives SI back**, as the SDK says at `W_ONCLICK` and §13.14
+tells: the bank is this kernel's defence and not a new contract. `PKG_FMT`
+did not move, so a package built now loads on a kernel before the bank,
+which arms the release on whatever SI the handler returns - TAMEGRAM's
+came back holding a string offset from its repaint until it banked SI
+round it. Until `PKG_FMT` moves, only `AM_ONCMD` may clobber SI.
 
 so it may draw, may call the file API of §18.4, and — like every other
 window callback — **must not** take the gfx lock, and must never
@@ -39615,7 +39621,12 @@ headers that the shared include was the obvious next step. It is one file now,
   refused `WRITE_AT` is also the bank's witness: `FERR_NOENT` at a banked
   folder means it is not the folder we banked, and the call falls back to a
   walk and a full write. `kern_small` has no `WRITE_AT` (§18.4.7.4) and takes
-  the full arm every time, still with no display remount in it.
+  the full arm every time, still with no display remount in it. **A count
+  that is a whole number of sectors takes the full arm too**: `WRITE_AT`
+  refuses a write ending short of the size only when its last sector is
+  partial, so 512 bytes saved into a file of 1,024 would answer `CF = 0` and
+  keep the old size and the old tail. Every caller today writes less than a
+  sector, so none of them loses the one-sector save.
 
 So a save is: the first one of a session, a quiet mount if the motor has
 stopped plus a walk out of the cached window plus a full write; every one after
@@ -116298,7 +116309,11 @@ output is never peepholed - it is a measurement, not a build.
 **What it may assume is what cc8086.py's own liveness already rests on**
 (§73.6.1): the input is compiled C. Arguments go on the stack and the answer
 comes back in AX, so a call reads no register and defines AX and FLAGS; a
-`; glb f : (...) void` comment means AX is not live at f's `ret`. A call is
+`; glb f : (...) void` comment means AX is not live at f's `ret`. That is
+the `)` closing f's OWN list: the comment nests, and a function-pointer
+parameter's `) void`, or the pointer's of a function that returns one, is
+not f's - both were read as f's at first, and the return value deleted
+(`tests/unit/t_ccvoid.py`). A call is
 deliberately NOT modelled as killing BX, CX or DX - the conservative
 direction - and an instruction the pass does not model reads everything, so an
 unknown is a missed rewrite and never a wrong one. Every rewrite replaces a
@@ -165195,7 +165210,14 @@ last      = len(16) y0(16) y1(16) lists [hidden record]
   (`vp_kfirst`) and decodes it; `vp_khdr` takes `KEY_MORE` off the part in
   memory and keeps the next read's length and place, and `vp_knrd` reads
   that over the last one - in the same claim, so a key in parts needs no
-  more memory than a key in one read. Three places walk it: a play's start
+  more memory than a key in one read. **A part whose `len` is not its
+  read's, or is under `REC_HDR` + 3 (9), refuses the key** - `vp_khdr`
+  answers CF = 1, and the picture or the play refuses as a key that cannot
+  be read (`vp_s_kbad`): the reference reader's two tests. Every part then
+  moves the walk on by a whole read, so it ends at the file's end at the
+  latest; a hostile part of 0 bytes, which moved it on by nothing,
+  re-read itself forever with the gfx lock held, on the file's OPEN.
+  Three places walk it: a play's start
   and every seek (`.first`, after `vp_spos`), and the Preview's picture
   (`vp_kpic`). **Repeat's lap** joins at key 0 inside the hook, which
   cannot read a second part: `vp_warm` finds `KEY_MORE` on the key it
@@ -165211,13 +165233,16 @@ last      = len(16) y0(16) y1(16) lists [hidden record]
   and keys are left out of the table only in files that keep them whole.
 - **Gates**: the selfcheck (a ~62 KB key kept first and later with its
   lead asked inline, a page-ahead clip in parts read back from every key,
-  two damaged files refused); `vidkpart`/`vidkparth` (page-ahead keys in
-  45 and 14 parts on VGA and Hercules), `vidkpartfs` (the full screen's
+  three damaged files refused, the third a part of no bytes);
+  `vidkpart`/`vidkparth` (page-ahead keys in 45 and 14 parts on VGA and
+  Hercules), `vidkpartfs` (the full screen's
   seeks into 15-part keys), `vidkpartpv` (the Preview's posters, made part
   by part, to the byte) and `vidkpartrep` (Repeat's lap with key 0 in
   parts) - each a row about keys made small with `--kpart`, so every key
   is many parts. Broken on purpose - `vp_khdr` never finding a next part -
-  every hold of the first four FAILS.
+  every hold of the first four FAILS. `vidkpartbad` is the hostile part
+  of 0 bytes: the open returns and the next key's picture is made, and
+  with `vp_khdr`'s length tests taken out it FAILS.
 
 #### 98.1.4 The stream: chained super-packets
 
