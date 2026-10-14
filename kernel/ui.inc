@@ -368,7 +368,7 @@ ui_task:
     mov [ui_click_t], ax        ; double-click detectors (SPEC 22, 26)
 
     call COLD_SEG:fdlg_grab_x   ; a modal file dialog swallows every press
-    jc .yj1                     ; outside its own frame (SPEC.md 38.2).
+    jc short .yj1               ; outside its own frame (SPEC.md 38.2).
                                 ; AHEAD of every branch below - modality is
                                 ; not a window property, and a press on the
                                 ; menu bar must die as firmly as one on
@@ -450,7 +450,11 @@ ui_task:
     je .grow_box                ; wm_hit reports AL=4 on the frontmost
                                 ; resizable window only (SPEC.md 11.1)
     cmp al, 1
-    je .title_bar
+    je short .title_bar         ; SHORT, said: the posted drag's pick-up below
+                                ; (SPEC.md 11.103.6) leaves this and the `jc`
+                                ; to .yj1 above both inside a short reach, and
+                                ; NASM's growing passes widened both anyway -
+                                ; +6 bytes kern_big's image rung could not pay
 
     ; AL = 0: content. Raise a background window; the front one gets its
     ; W_ONCLICK (if any) under the gfx lock, like W_ONKEY above.
@@ -489,9 +493,23 @@ ui_task:
                                 ; TOLD about, so its first W_ONDRAG is the
                                 ; first place the pointer is not. BEFORE the
                                 ; dispatch: ui_bill does not preserve CX/DX
-%endif
+    push cx                     ; ...and the press point banked across it, for
+    push dx                     ; a DRAG the handler posts (SPEC.md 11.103.6):
+%endif                          ; [ui_dragy] holds the sentinel by then
     call gfx_lock               ; W_ONCLICK contract: CX=x, DX=y, SI=win
     call ui_bill              ; (CX/DX survived wm_hit/wm_top/gfx_lock)
+%ifdef KERN_BIG
+    pop dx
+    pop cx
+    cmp word [ui_dragy], -1     ; THE POSTED DRAG (SPEC.md 11.103.6): the
+    je .qdrag                   ; handler's OSAPI_WM_DESK DRAG wrote the one y
+                                ; no screen has over the seed above. A post
+                                ; made anywhere but inside this W_ONCLICK was
+                                ; wiped by that seed, so it is inert here -
+                                ; no test of who posted it is needed. BEFORE
+                                ; the arm: the drag eats the release. ZF
+                                ; carries the answer past gfx_unlock below
+%endif
     mov [ui_armw], si           ; ...and the RELEASE is owed to this window
     mov word [ui_post], 0x0001  ; ...SAY SO once (SPEC.md 13.13), and [ui_armr]
                                 ; = 0, the byte after it (the %if under the
@@ -499,8 +517,22 @@ ui_task:
                                 ; W_ONCLICK actually ran. A press that merely
                                 ; raised a window, or that this window refused
                                 ; above, arms nothing
+%ifdef KERN_BIG
+.qdrag:
+    pushf                       ; ZF = 1: a DRAG was posted (the two movs above
+    call gfx_unlock             ; write no flag) - and gfx_unlock writes them
+    popf
+    jne .yj1
+    mov bx, si                  ; the title bar's own drag of the window that
+    jmp short .drag             ; was PRESSED, CX/DX the press point (SPEC.md
+                                ; 11.103.6); ui_track takes the lock itself.
+                                ; HERE and not out of line: every byte between
+                                ; .region's `je .title_bar` and its target is
+                                ; a byte of a short jump's reach
+%else
     call gfx_unlock
     jmp .yj1
+%endif
 
 .desk_icons:
     call dock_click             ; CX/DX; CF=1 = consumed (locks internally,
@@ -1578,6 +1610,10 @@ ui_drag:
                                 ; "because a drag does not resize" (SPEC.md
                                 ; 11.96.12). wm_su_ck would refuse the buffer
                                 ; anyway; this saves taking it
+    test byte [bx + W_FLAGS + 1], WF_DESK >> 8
+    jnz .nocache                ; ...nor is a DESK window's (SPEC.md 11.103.6):
+                                ; banked off the glass it holds whatever covers
+                                ; it, and wm_draw_win's desk arm never replays
 %endif
     call ui_drag_phase          ; ...onto a multiple of 8 FIRST (SPEC.md
                                 ; 11.96.13): the cache can only replay the
@@ -1661,6 +1697,15 @@ ui_drag:
                                 ; It is what makes dragging a window ACROSS
                                 ; another one cost the other one nothing
     call wm_dmg_union           ; ...grown to cover where it is now
+%ifdef KERN_BIG
+    mov byte [wm_dmg_npro], 1   ; A DRAG PROMOTES NOBODY (SPEC.md 11.103.6): it
+%endif                          ; never changes which window is front. An
+                                ; ordinary window was raised before its title
+                                ; drag and is the moved window the marking
+                                ; pass always redraws, so .promote had nothing
+                                ; to do; a WIDGET's front application window
+                                ; lies clear of the damage and was re-titled
+                                ; on every drop - the 15-call path
     call wm_paint_dmg           ; caller-held lock, per the wm contract
 %ifndef NODRAGCACHE
     call wm_dc_done             ; ...and the waiver is spent (SPEC.md 11.96.12)
@@ -2975,7 +3020,11 @@ ui_dragy:   resw 1              ; delivered at, seeded at the press with the
                                 ; point W_ONCLICK was given. Only meaningful
                                 ; while [ui_armw] is set and [ui_armr] is 0,
                                 ; which is why nothing clears it - the arm
-                                ; re-seeds it every time
+                                ; re-seeds it every time. [ui_dragy] = -1 is
+                                ; also OSAPI_WM_DESK DRAG's POST (SPEC.md
+                                ; 11.103.6), asked after W_ONCLICK returns -
+                                ; the press's seed is what makes a post from
+                                ; anywhere else inert
 ui_armlit:  resb 1              ; SPEC.md 13.8.1: is that box currently DRAWN
                                 ; down? THE GLASS ALWAYS SHOWS THIS BYTE - that
                                 ; is the invariant the whole feature rests on,

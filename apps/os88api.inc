@@ -362,8 +362,13 @@ CWHITE    equ 15
                                  ; gets IF_DESK and no dock tile only when
                                  ; the window it returns is the desk one.
                                  ; Its content is its whole frame: OSAPI_WM_
-                                 ; CONTENT answers (W_X, W_Y). AL = 2 DRAG:
-                                 ; refused in this version. AL = 3 RELEASE,
+                                 ; CONTENT answers (W_X, W_Y). AL = 2 DRAG,
+                                 ; from your W_ONCLICK ONLY: when it returns,
+                                 ; the kernel's outline drag moves the window
+                                 ; that was pressed (BX is not read), and the
+                                 ; drag EATS the release - no W_ONMOUSEUP.
+                                 ; Made anywhere else it is inert: the next
+                                 ; press forgets it. CF=0. AL = 3 RELEASE,
                                  ; BX = your window: if it owns the menu bar,
                                  ; the bar and the keys go back to the front
                                  ; application window (call it from a
@@ -2969,10 +2974,13 @@ WF_DESK    equ 0x0400            ; W_FLAGS bit10: a DESK window (SPEC.md
                                  ; OSAPI_WM_DESK's MAKE alone
 WF_HOVER   equ 0x0800            ; W_FLAGS bit11: the pointer is over this desk
                                  ; window (SPEC.md 11.103.7) - read it in your
-                                 ; W_ONWAKE; the kernel sets and clears it.
-                                 ; NOT SET YET: the hover edge is wave 2 of
-                                 ; SPEC.md 107.10, and until it lands this
-                                 ; bit reads 0 for ever
+                                 ; W_ONWAKE; the kernel sets and clears it on
+                                 ; every change of the window under the
+                                 ; pointer and wakes you each time. Never set
+                                 ; under a Standard File chooser or over a
+                                 ; window covering yours; a BUTTON HELD is
+                                 ; yours to refuse (OSAPI_MOUSE), the kernel
+                                 ; still reports the edge
 WF_SIZABLE equ 4                 ; W_FLAGS bit2: resizable (SPEC.md 11.1)
 WF_FULL    equ 8                 ; W_FLAGS bit3: fullscreen (SPEC.md 11.2)
 WF_NOSNAP  equ 16                ; W_FLAGS bit4: this window has OPTED OUT of

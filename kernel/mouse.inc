@@ -4852,6 +4852,15 @@ cur_shape_pass:
     mov dx, [mouse_y]           ; went through AX/BX until size pass 9)
     call wm_hit                 ; BX = the topmost visible window over the
                                 ; point (0 = none), AL = which part of it
+%ifdef KERN_BIG
+    cmp bx, [cur_hovw]          ; THE HOVER EDGE (SPEC.md 11.103.7): the same
+    je .hov                     ; answer, asked whether it CHANGED - one
+    push bx                     ; compare per pass, and only a change pays the
+    xor cx, cx                  ; far call: WF_HOVER off the old window and on
+    call COLD_SEG:cur_hov_x     ; the new, each a desk window's, and a wake to
+    pop bx                      ; each. CL = 0 is the body's first pass (the
+.hov:                           ; clear); CX is spent, AX is kept
+%endif
     mov ah, CUR_ARROWSH
     or bx, bx
     jz .set                     ; the desktop, the dock and the menu bar are
@@ -5579,6 +5588,13 @@ cur_shchk   db 0                ; "the window under the pointer may have
                                 ; changed without the pointer moving": a
                                 ; raise, a hide, a destroy or a drag. One
                                 ; byte, the [fm_fchk] shape (SPEC.md 22.8)
+%ifdef KERN_BIG
+cur_hovw    dw 0                ; the window the HOVER EDGE last answered
+                                ; (SPEC.md 11.103.7), 0 = none or a chooser
+                                ; up. Only ever compared and passed through
+                                ; cur_hov_x's tests, never trusted, so a
+                                ; record that died since is harmless
+%endif
 %ifndef NOCURDISK
 cur_barok   db 0                ; **THE PAINTER ON TASK (this - 1) IS CONFINED
                                 ; TO THE MENU BAR** (SPEC.md 7.4.3): the

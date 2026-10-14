@@ -9019,6 +9019,54 @@ SOAK = [
         "too; a Standard File chooser takes the keys over a widget that owns "
         "the bar.",
         needs=("marty",), timeout=600, wants=("build/diadesk360.img",)),
+    Row("deskdrag", "soak", py("tests/desklayer.py", "--leg", "drag"), 75.0,
+        "SPEC.md 11.103.6: the POSTED DRAG on MartyPC's VGA XT. A press on the "
+        "probe's tag row, then a gap, then its 1-px ground column posts "
+        "OSAPI_WM_DESK DRAG from W_ONCLICK and the kernel's ui_drag moves it: "
+        "W_Y by the odd 33, W_X onto 7 mod 8, NO wm_dc_take, ONE W_PAINT, no "
+        "W_ONMOUSEUP (the drag eats it), [ui_armw] 0, the gaps the (x+y) "
+        "dither at their new screen coordinates and the vacated strip the "
+        "desktop's. A press that does not move runs ui_drag and no "
+        "wm_paint_dmg; a drop with the front Disk window clear of it draws NO "
+        "title bar (the drag promotes nobody); a drag out from under the Disk "
+        "window leaves no ghost and the Disk window byte for byte; a DRAG "
+        "posted from the beat's TIMER is inert - the next card press is a "
+        "click; and DESKPROB.DAT holds the place.",
+        needs=("marty",), timeout=900,
+        wants=("build/diadesk360.img",)),
+    Row("deskhover", "soak", py("tests/desklayer.py", "--leg", "hover"), 80.0,
+        "SPEC.md 11.103.7: the HOVER EDGE on MartyPC's VGA XT. The pointer on "
+        "a gap sets WF_HOVER, names the widget in [cur_hovw] and wakes it "
+        "ONCE, and the probe's W_ONWAKE draws its handle (every tag pixel); "
+        "card, gap, card is one window and no further edge; off it, the "
+        "clear, a second wake and the rest plate. Over a covering Disk window "
+        "there is no hover and no wake, and a reveal on the visible part is "
+        "CLIPPED (the Disk window's pixels unchanged); with a button held the "
+        "re-entry still wakes it and the probe refuses to reveal; under a "
+        "Standard File chooser nothing is hovered and nothing woken, and the "
+        "first move after the chooser is reaped reveals.",
+        needs=("marty",), timeout=900, wants=("build/diadesk360.img",)),
+    Row("deskhovercga", "soak", py("tests/desklayer.py", "--leg",
+                                   "hovercga"), 40.0,
+        "SPEC.md 11.103.7 on the 5150's CGA (MartyPC os8088_5150_cga, its "
+        "GLaBIOS twin): the edge, the one wake and the handle and rest "
+        "pictures read off the 1bpp framebuffer's own bits.",
+        needs=("marty",), timeout=900, wants=("build/diadesk360.img",)),
+    Row("deskhoverherc", "soak", py("tests/desklayer.py", "--leg",
+                                    "hoverherc"), 40.0,
+        "SPEC.md 11.103.7 on the 5150's Hercules card (720x348): the edge, "
+        "the one wake and both tag pictures off the 1bpp framebuffer.",
+        needs=("marty",), timeout=900, wants=("build/diadesk360.img",)),
+    Row("deskclose", "soak", py("tests/desklayer.py", "--leg", "close"), 45.0,
+        "SPEC.md 11.103.6-7, 107.11: a widget closes by its OWN box. On the "
+        "revealed handle a press arms and lights the box; slid off and "
+        "released, nothing closes and the handle goes; a press on the box's "
+        "place while not revealed posts a DRAG and arms nothing; a press and "
+        "release ON it runs the include's negotiator and OSAPI_WM_CLOSE - "
+        "the window and the instance go, and SYSTEM.CFG on A: holds no DIA "
+        "row.",
+        needs=("marty",), timeout=900,
+        wants=("build/diadesk360.img",)),
     Row("desksmall", "soak", py("tests/desklayer.py", "--leg", "small"), 30.0,
         "SPEC.md 11.103.9, 107.7: kern_small has the two cells and no layer. "
         "On MartyPC's 128KB CGA 5150 off `make small`'s system disk with "

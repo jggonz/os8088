@@ -11598,7 +11598,10 @@ wm_cbd:
 ;                   INSIDE ITS ENTRY PROC: WF_DESK|WF_NOANIM|WF_OWNBG on,
 ;                   WF_SAVEU|WF_1BPP off, the z entry moved to [0]. IF_DESK
 ;                   is the loader's step 9's, off the window it RETURNS
-;   AL = 2 DRAG     W2 (SPEC.md 11.103.6) - refused until then
+;   AL = 2 DRAG     post the kernel's outline drag of the window being
+;                   PRESSED: [ui_dragy] = -1, which the content press asks
+;                   when W_ONCLICK returns (SPEC.md 11.103.6). BX is not
+;                   read; posted anywhere else the next press's seed wipes it
 ;   AL = 3 RELEASE  [menu_win] = BX: the bar (and the keys) to wm_top, redrawn
 ;
 ; MAKE IS THE ENTRY PROC'S, and that is what lets it name its caller for
@@ -11619,7 +11622,8 @@ osapi_wm_desk_x:
     je .make
     jb .ok                      ; 0, QUERY
     cmp al, 3
-    jne .no                     ; DRAG (W2) and any verb nobody defined
+    ja .no                      ; any verb nobody defined
+    jb .drag                    ; 2, DRAG
     cmp bx, [menu_win]          ; --- RELEASE
     jne .ok                     ; not the bar's owner: nothing to give back
     push bx
@@ -11633,6 +11637,9 @@ osapi_wm_desk_x:
 .no:
     stc
     retf
+.drag:                          ; --- DRAG: the sentinel over the press's seed
+    or word [ui_dragy], -1      ; (SPEC.md 11.103.6). One word, no test of
+    jmp short .ok               ; the caller: only W_ONCLICK's is ever read
 .ref:
     stc
 .pop:
@@ -11679,6 +11686,40 @@ osapi_wm_desk_x:
     clc                         ; (no cli round the two stores: the window is
     jmp short .pop              ; the entry proc's own and no worker of its
                                 ; package can exist yet - SPEC.md 20.6)
+
+; -----------------------------------------------------------------------------
+; cur_hov_x - the HOVER EDGE's body (SPEC.md 11.103.7), far, from
+;             cur_shape_pass on the UI task, which has just asked wm_hit
+; in:  BX = the window under the pointer (0 = none), NOT [cur_hovw]; CL = 0
+; out: AX kept; BX, CX spent (the caller banks BX). Flags spent
+;
+; One loop, two passes: CL = 0 takes WF_HOVER OFF the window [cur_hovw] named,
+; CL = WF_HOVER >> 8 puts it ON the one it names now - each only if it is a
+; desk window, and each gets a wake (the cell is the shim). SET or CLEAR,
+; never toggle: a record that died has W_FLAGS = 0 and is no desk window, and
+; one reborn as a widget gets a clear it already had. A Standard File chooser
+; up makes the new window NOTHING (dkx_pass's refusal, SPEC.md 30.6): a handle
+; revealed under it could not be pressed (SPEC.md 38.2)
+; -----------------------------------------------------------------------------
+cur_hov_x:
+    cmp word [fdlg_win], 0
+    je .k
+    xor bx, bx                  ; a chooser up: nothing is hovered
+.k:
+    xchg bx, [cur_hovw]         ; BX = the old one, [cur_hovw] = the new
+.e:
+    or bx, bx
+    jz .n
+    test byte [bx + W_FLAGS + 1], WF_DESK >> 8
+    jz .n
+    and byte [bx + W_FLAGS + 1], ~(WF_HOVER >> 8) & 0xFF
+    or [bx + W_FLAGS + 1], cl   ; ...and on again for the NEW one
+    call KERNEL_SEG:apic_wm_wake    ; it tells the widget; preserves all
+.n:
+    xor cl, WF_HOVER >> 8       ; the first pass done: CL = the bit, ZF = 0
+    mov bx, [cur_hovw]          ; ...and the second: CL = 0 again, ZF = 1
+    jnz .e
+    retf
 %else
 osapi_wm_desk_x equ mod_gone    ; kern_small has no desk layer (SPEC.md
                                 ; 11.103.9): every verb refuses, QUERY first
