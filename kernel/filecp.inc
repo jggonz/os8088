@@ -486,21 +486,8 @@ fcp_lnext:
     cmp al, FCPS_ASK            ; below it DONE (FERR_EXIST - the folder it
     je .ret                     ; came from - is a DONE, and the list goes
     jnc .stop                   ; on), above it ERR
-    cmp word [fcp_lseg], 1      ; purged UNDER the paste - another task's
-    jc .stop                    ; claim, while a question was up: it ends
-    sub word [fcp_lcnt], 16
-    jz .stop                    ; record 0 was the clipboard's: AL = DONE
-    mov si, [fcp_lcnt]
-    push es
-    push ds
-    pop es
-    mov di, fcp_type            ; the operation's own record, which [fcp_all],
-    mov cx, 15                  ; the source and the target outlive
-    push ds
-    mov ds, [fcp_lseg]
-    rep movsb
-    pop ds
-    pop es
+    call KERNEL_SEG:fcp_lrec    ; ZF = 1: record 0 was the clipboard's, or
+    jz .stop                    ; the list was purged - AL = DONE either way
     call fcp_run2
     jmp short fcp_lnext
 .stop:
@@ -2387,6 +2374,41 @@ fcp_lfree:
     pop dx                      ; needs no test of its own
     pop bx
     ret
+
+section .text
+; fcp_lrec - fcp_lnext's next record into the operation's own, which
+; [fcp_all], the source and the target outlive. A far entry in .text, where
+; it costs no .cold rung. out: ZF = 1 = stop, AL untouched when the count ran
+; out and AX = 0 when the list was purged; clobbers AX, CX, SI, DI
+;
+; The naming word is read ONCE and the copy made under the same cli: the list
+; is purgeable (MEM_P_FLIST), and another task's claim between a test and the
+; movsb sheds it - mem_shed_one zeroes the word and frees the block - so a
+; second read would copy from 0000:SI, and an unlocked copy from a freed one
+fcp_lrec:
+    sub word [fcp_lcnt], 16
+    jz .out                     ; record 0 was the clipboard's
+    mov si, [fcp_lcnt]
+    push es
+    push ds
+    pop es
+    mov di, fcp_type
+    mov cx, 15
+    pushf
+    cli
+    mov ax, [fcp_lseg]          ; purged UNDER the paste - another task's
+    or ax, ax                   ; claim, while a question was up: it ends
+    jz .gone
+    push ds
+    mov ds, ax
+    rep movsb
+    pop ds
+.gone:
+    popf
+    pop es
+    or ax, ax                   ; (popf put the flags back)
+.out:
+    retf
 
 %endif
 

@@ -5603,8 +5603,9 @@ fm_clone_res:
 ; fm_imgcall - one of DISKOPS.DRV's image verbs, its refusal said, the image
 ;              dropped (SPEC.md 18.101)
 ; in:  DL = CLV_MOUNT / CLV_MNTDLG / CLV_UNMNT; clo_call's contract otherwise
-; out: CF = 1 only when the image could not be read (and that is said here);
-;      every other answer the verb has said itself
+; out: CF = 1 only when the image could not be read, or a clone or join holds
+;      [clo_seg] and the verb was refused CERR_BUSY (both said here); every
+;      other answer the verb has said itself
 ; clobbers: clo_call's, and AL
 ;
 ; A mount OUTLIVES the image (its claim is MEM_K_IMG and not [clo_seg]), so
@@ -5613,7 +5614,7 @@ fm_clone_res:
 ; -----------------------------------------------------------------------------
 fm_imgcall:
     call clo_call               ; CF = 1 only when the image cannot be read:
-    jnc .ok                     ; AL = CERR_NOMOD
+    jnc .ok                     ; AL = CERR_NOMOD - or CERR_BUSY, refused
     call fm_saycl
     stc
 .ok:
@@ -6972,6 +6973,19 @@ fm_dgdrop:
     pop bx
     jb .have                    ; a file: into the window's folder
     mov bx, [si+18]             ; a folder (or '..'): into THAT one
+%ifdef FM_MSEL
+    jne .have                   ; ('..' is never in a list: fm_armset's walk)
+    cmp word [fcp_lcnt], 0      ; a LIST dropped on one of its OWN folders,
+    je .have                    ; in the window it came from: refused here,
+    push bx                     ; because the list would run every entry
+    mov di, [fm_vp]             ; before that one and then stop on it
+    call fmv_winof              ; (SPEC.md 22.27). BX = the hit window
+    cmp bx, [fm_dgwin]
+    pop bx
+    jne .have
+    call fm_misin               ; DI = its block, AX = the row; CX clobbered
+    jnz .out                    ; ZF = 0: a member - the drag goes nowhere
+%endif
 .have:
     mov al, [fm_dgdrv]
     cmp al, [fcp_cbdrv]           ; the same folder it came from? then the

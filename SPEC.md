@@ -37725,6 +37725,14 @@ so. It drops the module afterwards unless `[clo_seg]` is live, a clone or a
 join holding it (module drops are not counted, §2.8.3). A file chooser's pick
 (§38.4) is tested first and still wins.
 
+**While `[clo_seg]` is live all three image verbs refuse `CERR_BUSY`** -
+`Clone already running` - in `clo_disp_x`, before any of them runs, with
+CF = 1 so the hook says it and Unmount Image leaves the window where it is.
+Each verb writes the image's name into `clo_fnbuf`, and that is the one
+buffer an armed Write Img (§18.99.8) or a join reopens its file by on every
+chunk: a mount while the prompt is up would have written ANOTHER image onto
+the disk with the first one's geometry.
+
 `clo_mount` works in the CLICKED WINDOW's folder (`fcp_goto` on its `FS_DRV`
 and `FS_CWD`, since the listing that was clicked need not be the mounted one)
 and stats the file. Then:
@@ -49850,7 +49858,13 @@ Copy or Cut alike**: the clipboard is spent and the claim freed when the paste
 ends. While it runs the task's purge floor is raised to MED (SPEC.md 50.6.6),
 so the copy buffer each entry claims cannot shed the list being walked; a list
 purged BEFORE its paste is an empty clipboard, and one purged UNDER it - by
-another task's claim while a question is up - ends the paste there. Arming one is refused while a
+another task's claim while a question is up - ends the paste there. That
+test and the record's copy are ONE read of `[fcp_lseg]` under `pushf`/`cli`
+(`fcp_lrec`, a `.text` far entry): a shed between a second read and the
+`movsb` would copy from `0000:SI`, or from a block already freed. It is 40
+bytes of `.text`, and the 29 of `.cold` it took out of `fcp_lnext` pay for
+the drop's member test below, so `.cold` - at 3 bytes from its next rung -
+did not move. Arming one is refused while a
 paste is running, and one entry put on the clipboard ends any list.
 
 **Delete asks about "N items"** - `Delete 5 items +contents? Del=yes Esc=no`
@@ -49864,7 +49878,10 @@ walk and is said, and what WAS deleted is broadcast either way.
 **A drag** of a selected entry moves the whole set; of an unselected one, that
 entry alone. **Ctrl+drag copies**, and **a drop on another DRIVE copies** - the
 reason a drag was always a move, *"a modifier key it has no way to report"*,
-is gone.
+is gone. **A set dropped on one of its OWN folders, in the window it came
+from, goes nowhere** (`fm_dgdrop` asks `fm_misin` of the row): the list runs
+record 0 and then the last one down, so a refusal at that folder's turn would
+have moved the entries before it and left the rest, and said `Bad name`.
 
 ### 22.28 The bar is File · Edit · Nav · Disk
 

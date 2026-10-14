@@ -298,6 +298,14 @@ clo_disp_x:
     jmp clo_wimg
 .n4:
 %ifdef OS88_IMG
+    cmp dl, CLV_MOUNT           ; the three image verbs all write clo_fnbuf,
+    jb .n7                      ; which a live clone or Write Img reopens by
+    cmp word [clo_seg], 0       ; name on every chunk: refused while one is
+    je .n4a                     ; armed, CF=1 for fm_imgcall to say (SPEC.md
+    mov ax, CERR_BUSY           ; 18.101.2)
+    stc
+    ret
+.n4a:
     cmp dl, CLV_MOUNT
     jne .n5
     jmp clo_mount
@@ -2945,8 +2953,9 @@ clo_mount:
     jae .notimg                 ; cluster's slack: the run walk counts in
     mov al, ch                  ; whole clusters and must not wrap
     mov ah, dl                  ; AX = DX:CX >> 8 ...
-    shr ax, 1                   ; ... >> 9 = the sectors
-    or ax, ax
+    shr dh, 1                   ; ...with DH's bit 0 (16MB) in CF...
+    rcr ax, 1                   ; ... >> 9 = the sectors
+    or ax, ax                   ; (rcr sets no ZF)
     jz .notimg
     mov [cs:clo_mtot], ax
     mov [cs:clo_mclus], bx

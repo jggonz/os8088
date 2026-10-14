@@ -283,7 +283,7 @@ had added.
     "minramkb": 128,
     "ovl": 5105,
     "stk0": 512,
-    "text": 43676,
+    "text": 43716,
     "vgabuf": 336,
     "vgabufpara": 32
   },
@@ -702,20 +702,20 @@ there and nowhere else.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,650 | 36.1% |
+| the file system, end to end | 29,690 | 36.2% |
 | the window system and its furniture | 22,323 | 27.2% |
 | drawing: adapters, primitives, glyphs, icons | 13,064 | 15.9% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 8,094 | 9.9% |
 | the kernel proper: API table, heap, scheduler, events | 7,147 | 8.7% |
 | the three built-in kinds | 1,442 | 1.8% |
 | the Control Panel | 353 | 0.4% |
-| **total** | **82,073** | |
+| **total** | **82,113** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` | `.boot2` |
 |---|---:|---:|---:|---:|---:|---:|
-| `files.inc` — the Disk window (§22) | 1,173 | 8,117 | **9,290** | 583 | — | — |
+| `files.inc` — the Disk window (§22) | 1,173 | 8,146 | **9,319** | 583 | — | — |
 | `wm.inc` — the window manager (§11) | 9,148 | 140 | **9,288** | 1,132 | — | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 460 | 6,410 | **6,870** | 418 | — | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,289 | 1,146 | **6,435** | 40 | 526 | — |
@@ -728,7 +728,7 @@ there and nowhere else.
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 430 | 1,928 | **2,358** | 306 | — | 1,133 |
 | `assoc.inc` — file type associations (§54) | 419 | 1,925 | **2,344** | 31 | — | — |
 | `font.inc` — the 8×8 glyph renderer (§6) | 2,224 | — | **2,224** | 22 | 16 | 236 |
-| `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,014 | **2,014** | 152 | — | — |
+| `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | 40 | 1,985 | **2,025** | 152 | — | — |
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 23 | 1,940 | **1,963** | 91 | — | — |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,818 | 126 | **1,944** | 722 | — | — |
 | `apps.inc` — the three built-in kinds (§14) | 282 | 1,160 | **1,442** | 11 | 240 | — |
@@ -769,7 +769,7 @@ there and nowhere else.
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,203 | 171 | **2,374** | — | — | 605 |
-| **total** | **43,676** | **38,397** | **82,073** | **5,214** | **5,598** | **4,857** |
+| **total** | **43,716** | **38,397** | **82,113** | **5,214** | **5,598** | **4,857** |
 <!-- END generated table -->
 
 ### Reading it
