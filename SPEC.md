@@ -119016,11 +119016,15 @@ how Windows behaves.
 
 **Esc** closes it, **Up**/**Down** step the highlight over separators and
 greyed items (wrapping), **Enter** runs the highlighted item. Any other key is
-`kbm_pollm`'s, as in every modal loop, so the keyboard mouse still works - and
-so is a pass with the BIOS buffer EMPTY, because keypad 5 never reaches
-`int 16h` (§9.6.4): only `kbm_poll0` spends its latched press, and a press left
-latched would arrive as a click on whatever is under the pointer once the menu
-had closed. The same call spends a pending overrun beep (§9.8).
+`kbm_pollm`'s, as in every modal loop, so the keyboard mouse still works. A
+pass with the BIOS buffer EMPTY goes to `kbm_poll`, because keypad 5 never
+reaches `int 16h` (§9.6.4): only `kbm_poll0` spends its latched press, and a
+press left latched would arrive as a click on whatever is under the pointer
+once the menu had closed. The same call spends a pending overrun beep (§9.8).
+It is `kbm_poll` and NOT `kbm_pollm` because `kbm_poll0` peeks again: a key
+that lands between the loop's peek and that one is left for the next pass,
+where `kbm_pollm` would eat an Up or a Down unseen - which `tests/thm95.py`
+caught every time, the idle loop spending much of its pass between the two.
 Left/Right to the neighbouring menu wants the bar to slide between titles,
 which is phase 4 of the plan, with the bar.
 

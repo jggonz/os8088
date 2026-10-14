@@ -684,7 +684,12 @@ wn_stick:
 .wait:
     mov ah, 1
     int 0x16
-    jz .svc                     ; empty: still the keyboard mouse's turn
+    jnz .key
+    WNK kbm_poll                ; empty: still the keyboard mouse's turn -
+    jmp short .nokey            ; PEEK-ONLY, so a key landing between the
+                                ; two peeks waits for the next pass rather
+                                ; than being eaten (kbm_pollm's) unseen
+.key:
     cmp ah, 0x01                ; Esc: close
     je .k_esc
     cmp ah, 0x48                ; Up
@@ -693,7 +698,6 @@ wn_stick:
     je .k_down
     cmp ah, 0x1C                ; Enter
     je .k_enter
-.svc:                           ; keypad 5 is not in int 16h (SPEC.md 9.6.4)
     WNK kbm_pollm               ; anything else is the modal loop's (the
     jmp short .nokey            ; keyboard mouse may release or press)
 .k_esc:
