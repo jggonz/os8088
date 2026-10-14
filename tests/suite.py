@@ -2171,7 +2171,8 @@ SOAK = [
         "still answers `MSEG 6/6 OK`, which is why neither alone is the "
         "gate. Needs `make mseg`.",
         needs=("marty",), serial=True, wants=("build/mseg360.img",)),
-    Row("msegz", "soak", py("tests/multiseg.py", "1440", "--comp"), 60.0,
+    Row("msegz", "soak",
+        py("tests/multiseg.py", "1440", "--comp", "--qemu"), 10.0,
         "SPEC.md 20.12.7: the same seven parts with two of them COMPRESSED. "
         "It is one source built twice - `-DMSEG_COMP` puts OP_COMP on parts 0 "
         "and 2 - so every assertion the row above makes has to come out "
@@ -2186,8 +2187,21 @@ SOAK = [
         "format byte left unread, op_unpack handed the decoder the low half "
         "of a SEGMENT as the format and every stream was refused - `A part "
         "will not unpack` on a package whose bytes, lengths and pointers "
-        "were all correct. Needs `make msegz`.",
-        needs=("marty",), serial=True, wants=("build/msegz.img",)),
+        "were all correct. Needs `make msegz`."
+        " QEMU PILOT (docs/TESTING.md): an isolated instance from "
+        "tests/os88qemu.py `launch` under `-m 1M` - nothing above 1MB, so part "
+        "5's OSAPI_XMEM_CAPS answers 0 and it takes the conventional fallback "
+        "an 8088 takes, which the row's own `part 5 has no segment` check would"
+        " catch if it did not - so it shares the emulator lane (isolated=True)."
+        " Measured at 9.7s on a loaded box; the MartyPC row declared 60.0s. ITS"
+        " DOCUMENTED NEGATIVE CONTROL DOES NOT BITE HERE: with op_unpack's "
+        "format byte left unread the decoder is handed the low half of the "
+        "source segment, which is 9C80 under QEMU - 0x80 is OSAPI_LZ_LZ4 | "
+        "OSAPI_LZ_BIG with AH zeroed, the right answer by luck - so the row "
+        "stays green where MartyPC goes red. Measured both ways; reading the "
+        "packed length as the unpacked one does go red here.",
+        needs=("qemu",), serial=True, isolated=True,
+        wants=("build/msegz.img",)),
     Row("msegz360", "soak", py("tests/multiseg.py", "360", "--comp"), 60.0,
         "...and off a 360KB disk, where op_claim's head slack is 512 rather "
         "than 0 - so op_unpack's walk starts a paragraph run into the claim "
@@ -2406,7 +2420,7 @@ SOAK = [
         "fixtures are *.O88 files that are deliberately not packages, and "
         "validate_o88 exists to make those unbuildable. 40s measured.",
         needs=("marty",), serial=True, wants=("build/pkgbig.img",)),
-    Row("pkgfmt", "soak", py("tests/pkgfmt.py"), 30.0,
+    Row("pkgfmt", "soak", py("tests/pkgfmt.py", "--qemu"), 17.0,
         "SPEC.md 20.2.0: the package format byte is the API TABLE'S. Kernel "
         "size pass 4 moved 158 cells and left the byte at 3, so a package "
         "built for one table loaded under the other and far-called the wrong "
@@ -2418,8 +2432,14 @@ SOAK = [
         "PKG_FMT set back to 3) it goes red on OLDCALC opening. The other "
         "direction - the #197 kernel refusing a format-6 file - is a property "
         "of a shipped kernel and was measured once with --swap from a worktree "
-        "of the squash. 23s measured.",
-        needs=("marty",), wants=("build/pkgfmt360.img",)),
+        "of the squash. 23s measured."
+        " QEMU PILOT (docs/TESTING.md): an isolated instance from "
+        "tests/os88qemu.py `launch` under `-m 1M` - ld_check_hdr's equality "
+        "test on one header byte is the same instructions on any CPU - so it "
+        "shares the emulator lane (isolated=True). Measured at 16.6s on a "
+        "loaded box; the MartyPC row declared 30.0s.",
+        needs=("qemu",), serial=True, isolated=True,
+        wants=("build/pkgfmt360.img",)),
     Row("pkgfence", "soak", py("tests/pkgfence.py"), 60.0,
         "SPEC.md 21 steps 4 and 6's WRITE BOUND: ld_check_hdr's `image + bss` "
         "fence. Both operands are separately bounded at APP_MAX_SIZE, so "
@@ -2449,7 +2469,7 @@ SOAK = [
         "SPEC.md 11.96.18: a wholly covered window keeps its raise cache when"
         "it arms a clip, and a partly covered one still loses it.",
         needs=("marty",), serial=True),
-    Row("fcpapi", "soak", py("tests/fcpapi.py"), 55.0,
+    Row("fcpapi", "soak", py("tests/fcpapi.py", "--qemu"), 10.0,
         "OSAPI_FILE_COPY, THE PUBLISHED ENGINE, BOTH VERBS (SPEC.md "
         "22.24). EVERY "
         "ANSWER IS A FILE: a copy engine that goes wrong strands clusters, "
@@ -2476,10 +2496,19 @@ SOAK = [
         "open at once. The other half is the answer AX=0, 'not attempted': a "
         "cross-volume move must give that and not a FERR_*, because a caller "
         "that reads it as a failure gives up on a move it could make and one "
-        "that reads it as success deletes a source that never went anywhere.",
-        needs=("marty",), serial=True,
+        "that reads it as success deletes a source that never went anywhere."
+        " QEMU PILOT (docs/TESTING.md): an isolated instance from "
+        "tests/os88qemu.py `launch` under `-m 1M` - the engine is "
+        "kernel/filecp.inc's FAT walk and every answer is the package's verdict"
+        " or the host's read of the volume, none of it gated on a CPU tier. It "
+        "stands in for `heapscrl`, which is NOT portable: its subject is the "
+        "Task Manager's TWO-COLUMN heap page, which only a 640x200 screen lays "
+        "out, and QEMU has only a VGA - so it shares the emulator lane "
+        "(isolated=True). Measured at 9.6s on a loaded box; the MartyPC row "
+        "declared 55.0s.",
+        needs=("qemu",), serial=True, isolated=True,
         wants=("build/fcpapi.img",)),
-    Row("fcpcopy", "soak", py("tests/fcpcopy.py"), 70.0,
+    Row("fcpcopy", "soak", py("tests/fcpcopy.py", "--qemu"), 21.0,
         "SPEC.md 22.3-22.5: Cut/Copy/Paste actually moves a file AND a folder "
         "tree. Nothing exercised kernel/filecp.inc at all until this row - a "
         "whole-file pass over the copy engine could be green on assembly, "
@@ -2493,8 +2522,15 @@ SOAK = [
         "with FERR_FULL and the row would be measuring the geometry. "
         " because the script can shell out to `make small` when it "
         "is pointed at kern_small (the fcpsmall row below), and the runner "
-        "gives a building row the tree to itself.",
-        needs=("marty",), serial=True,
+        "gives a building row the tree to itself."
+        " QEMU PILOT (docs/TESTING.md): an isolated instance from "
+        "tests/os88qemu.py `launch` under `-m 1M` - Cut/Copy/Paste is FAT "
+        "arithmetic through the kernel's own disk layer with no CPU tier "
+        "anywhere in it, and every wait is on [fcp_busy]. `fcpsmall` below runs"
+        " the same script WITHOUT --qemu and stays on MartyPC - so it shares "
+        "the emulator lane (isolated=True). Measured at 20.6s on a loaded box; "
+        "the MartyPC row declared 70.0s.",
+        needs=("qemu",), serial=True, isolated=True,
         wants=("build/small.img", "build/smallapps.img")),
     Row("fcpsmall", "soak",
         # OS88_APPSIMG IS NOT OPTIONAL HERE. The default is build/apps.img,
@@ -11439,7 +11475,7 @@ SOAK = [
         "66.2/42).",
         needs=("marty",), serial=True,
         wants=("build/heapfrag360.img",)),
-    Row("rdmove", "soak", py("tests/rdmove.py"), 30.0,
+    Row("rdmove", "soak", py("tests/rdmove.py", "--qemu"), 22.0,
         "Compact the heap out from under the RAM disk's store (SPEC.md "
         "66.5.10). The hole under the store is BUILT: a second heapfrag "
         "opens while the first still holds the floor, the first closes, and "
@@ -11447,8 +11483,14 @@ SOAK = [
         "hole first. It used to reopen heapfrag after the close, whose comb "
         "refilled the hole and left the store flush against a pinned block or "
         "not by the luck of L/8, and a 512-byte kernel cut flipped it red. "
-        "Measured at 26.3s.",
-        needs=("marty",), serial=True,
+        "Measured at 26.3s."
+        " QEMU PILOT (docs/TESTING.md): an isolated instance from "
+        "tests/os88qemu.py `launch` under `-m 1M` - the store stays RDL_CONV "
+        "(nothing above 1MB to pick) and no XMEM.DRV image sits on the heap, "
+        "and compaction is the kernel's arithmetic on its own claim table with "
+        "no CPU tier in it - so it shares the emulator lane (isolated=True). "
+        "Measured at 21.6s on a loaded box; the MartyPC row declared 30.0s.",
+        needs=("qemu",), serial=True, isolated=True,
         wants=("build/heapfrag360.img",)),
     Row("hdnoclaim", "soak", py("tests/hdnoclaim.py"), 75.0,
         "A mounted hard-disk partition costs NO HEAP (SPEC.md 22.6). It "

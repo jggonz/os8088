@@ -48,6 +48,14 @@ sectors, and the row failed in `open_drive` with B:'s window at its root and
 FS_MOK = 0 - "front is 'Disk' (1, 0, 0); [fm_vinst] = 8419", reproduced
 exactly by booting kern_small with build/apps.img. A copy caught mid-write
 gives the same picture on either kernel (a truncated B: answers int 13h 80h).
+
+`--qemu` RUNS IT ON AN ISOLATED QEMU (tests/os88qemu.py `launch`) instead of
+MartyPC - a pilot (docs/TESTING.md), taken by the `fcpcopy` row and NOT by
+`fcpsmall`. kernel/filecp.inc is FAT arithmetic and int 13h through the
+kernel's own disk layer: no CPU tier gate, no extended memory, nothing the
+BIOS answers differently beyond how long a sector takes, and every wait here
+is on the engine's own [fcp_busy] rather than on a duration. `m.flush` copies
+the instance's private floppy, which QEMU writes through to its file.
 """
 import os
 import subprocess
@@ -66,7 +74,9 @@ import os88fat
 from os88geom import FERR_FULL                           # noqa: E402
 
 S = os88sym.linear
-MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_herc_gla_144"
+QEMU = "--qemu" in sys.argv
+_ARGS = [a for a in sys.argv[1:] if a != "--qemu"]
+MACHINE = _ARGS[0] if _ARGS else "os8088_5150_herc_gla_144"
 # The images, overridable so this row can be pointed at a SECOND kernel.
 # kern_small carries Cut/Copy/Paste as an on-demand module (SPEC.md 22.3,
 # docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md 9.2), so the engine this script drives is
@@ -234,7 +244,12 @@ def main():
     # NO SCRATCH COPY: launch() clones SRC_APPS into this instance's private
     # run directory, and the paste writes that clone - never the shipped
     # image, and never a file another copy of this row is cloning at the time
-    with os88marty.launch(SYS_IMG, apps=SRC_APPS, machine=MACHINE) as m:
+    if QEMU:
+        import os88qemu
+        machine = os88qemu.launch(SYS_IMG, apps=SRC_APPS)
+    else:
+        machine = os88marty.launch(SYS_IMG, apps=SRC_APPS, machine=MACHINE)
+    with machine as m:
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
@@ -330,7 +345,8 @@ def main():
         return 1
     os.remove(out)              # per-PID, so nothing else will reclaim it
     print("\nfcpcopy: the copy engine moved a file and a folder tree, and left "
-          "a sound volume - PASS on %s" % MACHINE)
+          "a sound volume - PASS on %s"
+          % ("QEMU (isolated, -m 1M)" if QEMU else MACHINE))
     return 0
 
 

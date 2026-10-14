@@ -699,6 +699,17 @@ Several instances run at once and nothing has to be arranged between them:
 `launch()` gives each its own port, run directory and disks. Take the address
 off the object (`m.addr`), never type 9001.
 
+A QEMU row that has earned its place on that list has the same option:
+`os88qemu.launch(image, apps=...)` (tests/os88qemu.py) gives it a private
+socket, private floppies and a child process. The object it returns is driven
+with the same `os88marty`, `os88mouse` and `os88ui` calls as a MartyPC
+instance, and `os88qemu.boot` mirrors `os88ui.boot`. Mark the row
+`isolated=True` and it runs in the emulator lane instead of on its own.
+`t_registry` checks the flag against the script. The machine is `-m 1M` and
+a 386; docs/TESTING.md's pilot section lists what that does and does not
+change. Five MartyPC rows run on it while the owner measures whether it is
+faster. That is a pilot, not a new entry on the list above.
+
 ---
 
 ## 10. Output

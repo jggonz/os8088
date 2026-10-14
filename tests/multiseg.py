@@ -31,6 +31,18 @@ to 32KB on a volume neither of these is. So on the 360KB disk the read starts
 BELOW the run and `op_claim`'s head slack is what puts each part's segment
 where it belongs (SPEC.md 20.12.2). At 1.44MB the slack is always zero and
 that arithmetic never runs at all.
+
+`--qemu` RUNS IT ON AN ISOLATED QEMU (tests/os88qemu.py `launch`) instead of
+MartyPC - a pilot (docs/TESTING.md), and only the `msegz` row takes it. It is
+portable for ONE reason and the reason has to hold: part 5 is OP_XMS, and
+apps/os88partsbody.inc decides its path on `call OSAPI_XMEM_CAPS` / `jz
+.nostore`. Under QEMU's default 128MB that answers a store and part 5 goes
+above 1MB - which is msegxms's subject, and fails `part 5 has no segment`
+here. The launcher's `-m 1M` has nothing above 1MB, so kernel/xmem.inc's
+xm_sniff takes its `jz .out` ("a 1MB AT"), XMEM.DRV is never loaded, CAPS
+answers 0 and part 5 takes the conventional fallback every 8088 takes - and
+that assertion is what says so on every run. Everything else here is the
+loader's and the package's arithmetic, the same on any CPU.
 """
 import struct
 import sys
@@ -73,7 +85,8 @@ COMP = "--comp" in sys.argv
 # because a padding that shrank would let this row pass on a carve the old
 # bound allowed.
 WIDE = "--wide" in sys.argv
-argv = [a for a in sys.argv if a not in ("--comp", "--wide")]
+QEMU = "--qemu" in sys.argv
+argv = [a for a in sys.argv if a not in ("--comp", "--wide", "--qemu")]
 
 GEOM = argv[1] if len(argv) > 1 else "1440"
 if GEOM not in ("1440", "360"):
@@ -103,7 +116,13 @@ def say(s):
     print("  " + s)
 
 
-with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
+if QEMU:
+    import os88qemu
+    MACHINE = "QEMU (isolated, -m 1M: no store above 1MB)"
+    machine = os88qemu.launch(SYS_IMG, apps=APPS_IMG)
+else:
+    machine = os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE)
+with machine as m:
     mo = os88mouse.Mouse(marty=m)
     dispcp.open_drive(m, mo, S, os88marty.settle, "B")
     wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]

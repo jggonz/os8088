@@ -34,6 +34,13 @@ verdicts the other way round. The commit that added this file records it.
 
 THE INSTRUMENT IS `[ld_status]`, read out of the guest - the loader's own
 verdict, not the pixels of a toast - exactly as tests/pkgbig.py reads it.
+
+`--qemu` RUNS IT ON AN ISOLATED QEMU (tests/os88qemu.py `launch`) instead of
+MartyPC, and that is what the suite row does - a pilot (docs/TESTING.md). The
+subject is `ld_check_hdr`'s equality test on one header byte, which is the
+same instructions on any CPU and asks nothing of the BIOS beyond a floppy
+read, so nothing here takes a different path on a 386 under SeaBIOS. The
+machine argument is MartyPC's and is ignored there.
 """
 import sys
 sys.path.insert(0, "tools")
@@ -45,6 +52,7 @@ import dispcp
 
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
 SWAP = "--swap" in sys.argv
+QEMU = "--qemu" in sys.argv
 MACHINE = args[0] if len(args) > 0 else "os8088_5150_cga_gla"
 SYS_IMG = args[1] if len(args) > 1 else "build/os8088-360.img"
 APPS_IMG = args[2] if len(args) > 2 else "build/pkgfmt360.img"
@@ -75,7 +83,13 @@ else:
     plan = [("OLDCALC.O88", LD_EVER, "a format-3 package on this kernel"),
             ("CALC.O88", LD_OK, "this tree's own Calculator")]
 
-with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
+if QEMU:
+    import os88qemu
+    MACHINE = "QEMU (isolated, -m 1M)"
+    machine = os88qemu.launch(SYS_IMG, apps=APPS_IMG)
+else:
+    machine = os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE)
+with machine as m:
     mo = os88mouse.Mouse(marty=m)
     dispcp.open_drive(m, mo, S, os88marty.settle, "B")
     wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]

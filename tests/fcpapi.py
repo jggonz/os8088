@@ -27,6 +27,13 @@ would pass every row the package writes: the file is in the new folder, it is
 gone from the old one, and the bytes are right.  What says it was RE-LINKED is
 that the first cluster is the SAME NUMBER before and after, which needs both
 images open at once - so that check is here and not in the package.
+
+`--qemu` RUNS IT ON AN ISOLATED QEMU (tests/os88qemu.py `boot`) instead of
+MartyPC - a pilot (docs/TESTING.md), and the suite row takes it. Every check
+is the package's own verdict or the host's reading of the volume, and the
+engine is kernel/filecp.inc's FAT walk behind a register-filled operation
+record: no CPU tier, no extended memory, nothing a 386 under SeaBIOS
+answers differently but the time a sector takes.
 """
 import os
 import shutil
@@ -124,7 +131,12 @@ def main():
     # boot the shipped one would see it.
     shutil.copyfile(_at(GATE), _at(SCRATCH))
 
-    with os88ui.boot(SYS, apps=SCRATCH) as ui:
+    if "--qemu" in sys.argv:
+        import os88qemu
+        booted = os88qemu.boot(SYS, apps=SCRATCH)
+    else:
+        booted = os88ui.boot(SYS, apps=SCRATCH)
+    with booted as ui:
         # A LONGER WAIT, WITH THE REASON THE MESSAGE ASKS FOR: this package
         # does every one of its checks INSIDE ITS ENTRY, and a window is not
         # up until the entry returns. Five copies, reads and writes is tens of

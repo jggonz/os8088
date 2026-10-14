@@ -50,6 +50,19 @@ DOWN, into the hole.
 
 The A/B is `--expect-nomove`, which builds HEAPCOMPACT=0 into a private tree
 of its own (tools/os88build.py) and asserts the store stays where it was.
+
+`--qemu` RUNS IT ON AN ISOLATED QEMU (tests/os88qemu.py `launch`) instead of
+MartyPC - a pilot (docs/TESTING.md), and the suite row takes it. Two things
+had to hold, and both are in the launcher's `-m 1M` rather than in luck:
+the store is CONVENTIONAL - drivers/ramdisk/rdstore.inc branches on
+`[rd_loc]`, which is RDL_CONV until somebody picks Xms, and with nothing
+above 1MB nobody can - and the heap carries no XMEM.DRV image, which QEMU's
+default 128MB would have the kernel load at boot (kernel/xmem.inc xm_sniff).
+Compaction itself (SPEC.md 66) is the kernel's arithmetic on its own claim
+table, with no CPU tier anywhere in it, and the hole is BUILT by the steps
+above rather than found - and its precondition is asserted - so a heap laid
+out differently by a different BIOS cannot make this pass for the wrong
+reason.
 """
 import sys, os, re, hashlib, argparse, subprocess, tempfile
 # THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
@@ -164,6 +177,9 @@ def main():
     ap.add_argument("--machine", default="os8088_5150_cga_gla")
     ap.add_argument("--expect-nomove", action="store_true",
                     help="the A/B: built HEAPCOMPACT=0, so nothing may move")
+    ap.add_argument("--qemu", action="store_true",
+                    help="an isolated QEMU (tests/os88qemu.py) instead of "
+                         "MartyPC; --machine is then ignored")
     a = ap.parse_args()
 
     if a.expect_nomove:
@@ -178,8 +194,15 @@ def main():
 
     R = drv_syms()
 
-    with os88marty.launch("build/os8088-360.img", apps="build/heapfrag360.img",
-                          machine=a.machine, boot=False) as m:
+    if a.qemu:
+        import os88qemu
+        machine = os88qemu.launch("build/os8088-360.img",
+                                  apps="build/heapfrag360.img", boot=False)
+    else:
+        machine = os88marty.launch("build/os8088-360.img",
+                                   apps="build/heapfrag360.img",
+                                   machine=a.machine, boot=False)
+    with machine as m:
         m.run()
         os88marty.settle(m, gate=os88marty.desktop_up)
         mo = os88mouse.Mouse(marty=m)

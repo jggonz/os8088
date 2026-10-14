@@ -73,6 +73,47 @@ is the teardown every launcher owes and `tests/unit/t_qemuown.py` checks it is
 used. And **`tests/dispcp.py` drives QEMU rows too**, without `m.sym` or a
 cycle counter, so its waits there are host-clock loops.
 
+### The isolated QEMU launcher — a pilot, pending the owner's decision
+
+`os88qemu.launch(image, apps=...)` (tests/os88qemu.py) is `os88marty.launch`
+on QEMU. Every `make test` row shares `build/qmp.sock`, `build/qemu.pid` and a
+write-locked `build/os8088.img`, so QEMU rows ran one at a time. An isolated
+instance has its own short directory under `/tmp` (an AF_UNIX path is ~104
+bytes), its own socket and pidfile, private copies of both floppies, and QEMU
+as the row's own child, so the runner sees its CPU and atexit or SIGTERM ends
+it by pid. The object subclasses `os88marty.Marty`. `settle`, `until`,
+`ui_done`, `os88mouse.Mouse(marty=m)`, `os88ui` and `dispcp` take it
+unchanged, with `m.sym` and the full `os88ui` path. Its `cycles` are made up
+from the BIOS tick at `0040:006C`, at `GUEST_PACE` harness-seconds per QEMU
+second, so a pause costs the same host time as on an idle MartyPC. Guest RAM
+is a memory-backend file that the harness maps, so reads and writes below
+`0xA0000` are not QMP round trips. A verb QEMU cannot answer, such as a
+breakpoint, a step, `flicker` or a snapshot, raises an error and does not
+guess. **The default is `-m 1M`**: 640KB and nothing above 1MB, the memory
+shape of the MartyPC machines. QEMU's own 128MB default loads `XMEM.DRV` at
+boot. The CPU is still a 386 (`CPU_386` tier), so each row still has to be
+judged by hand. A row on this launcher is `isolated=True` in `tests/suite.py`
+and shares the emulator lane (`--marty-jobs`) with the MartyPC rows.
+`tests/unit/t_registry.py` checks the flag against the script.
+
+**Five rows moved, as a pilot.** The question is whether QEMU makes the soak
+faster, and the maintainer's A/B decides that. MartyPC stays the default
+instrument. Each script keeps its MartyPC path, and the row passes `--qemu`:
+
+| row | why its subject takes the same path on a 386 under SeaBIOS |
+|---|---|
+| `msegz` | Part 5 is `OP_XMS`. Under `-m 1M`, `xm_sniff` sees `AH=88h` answer 0, so `OSAPI_XMEM_CAPS` answers 0 and the part takes the 8088's conventional fallback. The row's own `part 5 has no segment` check fails if it does not. The rest is loader and `op_unpack` arithmetic. **Its documented negative control does not fail here.** With the format byte left unread, the decoder gets the low byte of a source segment, and QEMU's heap layout puts that segment at `9C80`. `0x80` is LZ4 with the BIG bit set, which happens to decode correctly, so the row stays green. Reading the packed length as the unpacked length does make it fail. A defect whose symptom depends on a segment value can hide behind a different BIOS's heap |
+| `rdmove` | The store stays `RDL_CONV`, because nothing above 1MB can be picked, and no `XMEM.DRV` image sits on the heap. Compaction is the kernel's own claim-table arithmetic. The row builds the hole under the store itself and asserts that precondition |
+| `pkgfmt` | `ld_check_hdr` makes an equality test on one header byte |
+| `fcpcopy` | `kernel/filecp.inc` is FAT arithmetic through the kernel's disk layer, and every wait is on `[fcp_busy]`. `fcpsmall` runs the same script without `--qemu` and stays on MartyPC |
+| `fcpapi` | The same engine through `OSAPI_FILE_COPY`. Every answer is the package's `RESULT.TXT` or the host's read of the volume |
+
+`heapscrl` was a candidate and is **not** portable. Its subject is the Task
+Manager's two-column heap page (SPEC.md 28.1.1), which needs a 640x200 screen,
+and QEMU has only a VGA. `msegw` and `mseg360` would port as `msegz` did and
+were left for the measurement. Rows that count `int 13h` with a breakpoint, or
+that measure a rate, cannot move.
+
 | reach for | when | why |
 |---|---|---|
 | **MartyPC** | **the default** — any 8088 machine, any of the three adapters, any question of the form *what is the machine doing* | cycle-accurate CPU, a real BIOS ROM, modelled CGA/Hercules/VGA, and a debugger that perturbs nothing |
