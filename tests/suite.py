@@ -11152,6 +11152,16 @@ SOAK = [
         "write mode 3 never selected, every hold FAILS",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
+    Row("vidfskeysink", "soak", py("tests/vidfskeys.py", "--kind", "vga4",
+                                   "--whitein", "7"), 45.0,
+        "SPEC.md 98.3.13: the full screen's text on a file's OWN sixteen is "
+        "drawn in the palette's BRIGHTEST entry (vp_inkset) - the EGA's with "
+        "white moved to entry 7, so the box's ink is 7 and every hold exact. "
+        "The owner's GasGas put a dark grey in 15, and its Buffering line "
+        "was all but invisible. Broken on purpose - the ink pinned at 15 - "
+        "1, 3 and 4 FAIL",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
     Row("vidfskeysvga4pl", "soak", py("tests/vidfskeys.py", "--kind",
                                       "vga4m3", "--nowm3"), 55.0,
         "SPEC.md 98.1.3.2.4: vidfskeysvga4m3's clip and questions with the "

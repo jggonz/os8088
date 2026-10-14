@@ -1217,8 +1217,11 @@ def key_view(r, f):
 def key_picture(r, i):
     """(its frame, its picture): keyframe `i` drawn from itself alone"""
     k, rec, spo, spn, idx = r.key(i)
-    surf = r.g.surface()
-    r.apply(surf, rec, key=True)
+    if r.page:      # (98.1.3.7: the shown page's, the hidden record after
+        surf = r.key_pages(rec)[0][0]   # its lists - which a plain decode
+    else:                               # refuses, and the picture was black)
+        surf = r.g.surface()
+        r.apply(surf, rec, key=True)
     return k, render(r, surf, k)
 
 

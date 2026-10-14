@@ -441,6 +441,41 @@ def legpev(tmp, bad):
                    "(%s, wanted %s)" % (wrong, got[wrong[0]], want[wrong[0]]))
 
 
+def legpgkey(tmp, bad):
+    """THE KEYS OF A PAGE-AHEAD FILE (98.1.3.7, the owner: the poster and
+    the keyframes showed black): a key carries the hidden page's record
+    after its lists, which the plain decode refuses - so every key's picture
+    is drawn as its shown page, against decode_at at its frame; whole, and
+    IN PARTS (98.1.3.8). Broken on purpose (key_picture's plain decode put
+    back) it raises, and this FAILS"""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import vidpage
+    for kp in (vid.KEY_PART, 400):
+        p = vidpage.clip(tmp, vid.LAY_LIN80, kpart=kp,
+                         name="PG%d.V88" % kp)[0]
+        r = vid.Reader(p)
+        for i in range(r.nkeys):
+            try:
+                k, img = G.key_picture(r, i)
+            except vid.V88Error as e:
+                bad.append("a page-ahead key's picture (key %d%s): %s"
+                           % (i, ", in parts" if kp < vid.KEY_PART else "", e))
+                continue
+            want = G.render(r, _surf(r, k), k)
+            if img.tobytes() != want.tobytes():
+                bad.append("a page-ahead key's picture (key %d%s) is not "
+                           "its frame" % (i, ", in parts" if kp <
+                                          vid.KEY_PART else ""))
+    print("   page-ahead keys' pictures, whole and in parts: checked")
+
+
+def _surf(r, k):
+    """the surface of frame k by the reference's decode"""
+    s = r.g.surface()
+    r.g.put(s, vid.decode_at(r, k))
+    return s
+
+
 def main():
     bad = []
     # --- 1
@@ -644,6 +679,7 @@ def main():
         leg10(tmp, bad)
         leg12(tmp, bad)
         legpev(tmp, bad)
+        legpgkey(tmp, bad)
         legdisk(tmp, bad)
     for b in bad:
         print("   FAIL: %s" % b)

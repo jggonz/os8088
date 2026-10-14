@@ -165586,7 +165586,13 @@ XMS BANK and PREFILL.
 decides which machine it is on:
 - **The yardstick is the play's own work.** The encoder models key 0's
   decode - its LAST part, if it is in parts (98.1.3.8), that being the
-  record the player has in hand once the key is drawn - on both machines and writes the two times in the header. At a
+  record the player has in hand once the key is drawn - AS THE PLAYER DOES
+  IT (`key_bench`, 2026-10-14): `vp_decboth` draws a flipped or page-ahead
+  file's key onto both pages, and a page-ahead one's hidden record after
+  it, where the model had priced the record's own lists once - a third of
+  the work on the owner's page-ahead GasGas, whose 486 timed 6 ms against
+  a yardstick of 2.26 (6.86, modelled right) and left the layer it was
+  made for unread - on both machines and writes the two times in the header. At a
   session's first frame, the key just drawn, the player decodes the same
   record again for eight ticks from a tick's edge (`vp_lybench`, ~0.45 s)
   and reads the layer only if its time is under the line: the mean of the
@@ -170397,7 +170403,8 @@ per screen mode:
 
 | mode | renderer |
 |---|---|
-| CGA 640, Hercules, mode 12h | one bit: the glyph's byte as it is (12h through the Map Mask, all four planes) |
+| CGA 640, Hercules | one bit: the glyph's byte as it is |
+| mode 12h (and 0Dh) | one bit in the INK: the glyph's byte onto the Map Mask's planes of the ink, 0 onto the rest. The ink is the palette's BRIGHTEST by 30 R + 59 G + 11 B (`vp_inkset`, at every load of the sixteen: a scene's too), 15 on the EGA's own - a file's own sixteen are in no order, and the owner's GasGas had a dark grey in 15 and a Buffering line all but invisible (2026-10-14) |
 | CGA 320 | two bits: each bit doubled, colour 3 |
 | 13h | a byte a pixel: 255 or 0. A VGA8 palette is sorted darkest first (98.2.3), so 255 is its brightest |
 | Mode X | the same, a plane at a time |

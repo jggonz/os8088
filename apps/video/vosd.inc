@@ -785,7 +785,31 @@ vo_draw:
     mov bl, [vo_mode]
     cmp bl, VOM_1
     jne .m2
-    rep movsb                       ; ONE BIT: the glyph's bytes
+    cmp byte [vo_mx], 0             ; ONE BIT: the glyph's bytes...
+    jne .b1i
+    rep movsb
+    jmp .rn
+.b1i:                               ; ...on SIXTEEN, onto the planes of the
+    push cx                         ; ink (the palette's brightest, vp_inkset)
+    push di                         ; and 0 onto the rest, so ground is
+    mov dx, 0x3C4                   ; colour 0, black in every scene
+    mov ah, [vo_ink4]
+    mov al, 2
+    out dx, ax
+    rep movsb
+    pop di
+    pop cx
+    mov ah, [vo_ink4]
+    not ah
+    and ah, 0x0F
+    jz .b1a
+    mov al, 2
+    out dx, ax
+    xor al, al
+    rep stosb
+.b1a:
+    mov ax, 0x0F02                  ; (every plane again, as vp_mxall left it)
+    out dx, ax
     jmp .rn
 .m2:
     cmp bl, VOM_2
@@ -1460,6 +1484,7 @@ vo_xoff:      dw 0
 vo_cmax:      db 0                  ; the characters the canvas holds
 vo_pl:        db 0                  ; the planes a save takes
 vo_mx:        db 0                  ; ...and whether they are the VGA's ports
+vo_ink4:      db 15                 ; sixteen colours' ink: the brightest
 vo_gseg:      dw 0                  ; the kernel's glyphs
 vo_goff:      dw 0
 vo_gfst:      db 0

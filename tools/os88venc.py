@@ -6133,6 +6133,20 @@ def page_passes(a, keep, tick, readers, mode="on"):
                 pass
 
 
+def key_bench(m, rec, wr):
+    """THE YARDSTICK'S WORK (98.1.9, 98.3.18.9): key 0's record as the
+    player decodes it to time itself - vp_lybench's vp_decboth, which on a
+    flipped or page-ahead file draws the key onto BOTH pages, and on a
+    page-ahead one the hidden page's record after it. `m.cost` prices one
+    record's lists once, so a page-ahead key was modelled at a third of
+    the work: the owner's 486 timed 6 ms against a yardstick of 2.26, and
+    the layer it was made for went unread"""
+    if wr.page:
+        flip, own, hrec = vid.page_parts(rec, wr.g)
+        return 2 * m.cost(own) + (m.cost(hrec) if hrec else 0)
+    return (2 if wr.flip else 1) * m.cost(rec)
+
+
 def page_key0(path, res):
     """A page-ahead file's KEY 0, as (frame, bytes), when the player cannot
     read it - left out of the table, or past KEY_PLAYER - else None"""
@@ -7464,8 +7478,8 @@ def _encode(a, keep, tick, readers):
         # itself against, to give the bank the CPU the speaker would take
         # (in parts, 98.1.3.8: the LAST part, which is what the player has
         # in hand to time once the key is decoded)
-        wr.ybase = max(1, int(round(enc.cost(vid.key_split(
-            wr.keys[0][1])[-1]) / (
+        wr.ybase = max(1, int(round(key_bench(enc, vid.key_split(
+            wr.keys[0][1])[-1], wr) / (
             vid.HZ * (prof.get("speed") or 1)) * 1e5)))
     if lay is not None:
         for lops in lay.flush():
@@ -7482,7 +7496,7 @@ def _encode(a, keep, tick, readers):
         if wr.keys:
             kr = vid.key_split(wr.keys[0][1])[-1]      # (98.1.3.8: as above)
             ts = tuple(min(65535, max(1, int(round(
-                mm.cost(kr) / (vid.HZ * sp) * 1e5))))
+                key_bench(mm, kr, wr) / (vid.HZ * sp) * 1e5))))
                 for mm, sp in ((lay.m, lay.speeds[0]), (enc, lay.speeds[1])))
             wr.layer = wr.layer[:4] + ts
     if enc.bank and getattr(a, "bank_auto", False):

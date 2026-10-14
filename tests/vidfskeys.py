@@ -240,6 +240,10 @@ def main():
                     "the row's own (its screen the KIND's)")
     ap.add_argument("--span", type=int, default=12, help="with --cost: the "
                     "frames timed, from 21")
+    ap.add_argument("--whitein", type=int, help="vga4: the clip's OWN "
+                    "sixteen - the EGA's with white moved to this entry and "
+                    "15 given its colour - so the text is drawn in THAT entry, "
+                    "the palette's brightest (vp_inkset), and not in 15")
     ap.add_argument("--kpart", type=int, default=vid.KEY_PART,
                     help="a key's read at most (98.1.3.8): a small one cuts "
                     "every key into KEY PARTS, which every seek then reads")
@@ -259,6 +263,13 @@ def main():
     px = a.kind in ("vga8", "modex", "modexflip", "vga4", "vga4m3")
     flip = a.kind == "modexflip"
     ink = 15 if a.kind in ("vga4", "vga4m3") else 255
+    pal16 = None
+    if a.whitein is not None:       # (white at entry N, N's colour at 15)
+        p_ = bytearray(vid.STD16[:48])
+        w_ = a.whitein * 3
+        p_[45:48], p_[w_:w_ + 3] = p_[w_:w_ + 3], p_[45:48]
+        pal16 = bytes(p_) + bytes(vid.PAL_BYTES - 48)
+        ink = a.whitein
     os.chdir(ROOT)
     bad = []
     retries = [0]
@@ -279,7 +290,7 @@ def main():
         g.sub2 = a.kind == "vga4m3"
         clip = os.path.join(tmp, "KEYS.V88")
         vid.encode_canvases(canvases(row, px, nf, vmax), g, clip, FPS, pf,
-                            palette() if pf == vid.PF_VGA8 else None, "keys",
+                            palette() if pf == vid.PF_VGA8 else pal16, "keys",
                             keysecs=keysecs, flip=flip,
                             subs=m3_subs if g.sub2 else None,
                             cgapal=CGAPAL if pf == vid.PF_CGA4 else
@@ -307,7 +318,7 @@ def main():
             if not r.g.sub2 or n3 < 100:
                 bad.append("the vga4m3 clip has %d colour sub-records" % n3)
         keyf = [e[0] for e in r.keys]
-        src = r.palette if pf == vid.PF_VGA8 else vid.STD16
+        src = r.palette if pf == vid.PF_VGA8 or pal16 else vid.STD16
         rgb = [tuple((v * 255 + 31) // 63 for v in src[3 * i:3 * i + 3])
                for i in range(len(src) // 3)]
         disk = os.path.join(tmp, "keys.img")

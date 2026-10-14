@@ -3451,7 +3451,8 @@ vp_c16tim:
 ; tools/os88vid.py's vga8_lum16. CF=1 with [vp_msg] set: unreadable, or a
 ; value past the DAC's 63. Nothing for any other format
 vp_rdpal:
-    cmp byte [vp_pixfmt], PF_VGA8
+    mov byte [vo_ink4], 15          ; (the EGA's white, until a palette of
+    cmp byte [vp_pixfmt], PF_VGA8   ; its own says another: vp_inkset)
     je .go
     cmp byte [vp_pixfmt], PF_VGA4   ; ...or a VGA4 file's own sixteen
     jne .none                       ; (98.1.3.2.1), when it has them
@@ -3651,6 +3652,47 @@ vp_dacw:
     lodsb
     out dx, al
     loop .l
+    cmp byte [vp_pixfmt], PF_VGA4   ; (sixteen: the text's ink, vp_inkset)
+    jne .r
+    jmp vp_inkset
+.r:
+    ret
+
+; vp_inkset - THE TEXT'S INK on sixteen colours (98.3.13): the brightest of
+; vp_pal's sixteen, by 30 R + 59 G + 11 B, into [vo_ink4] - a file's own
+; sixteen are in no order (a scene's are placed for its plane codes), so
+; entry 15, the EGA's white, was any colour, and on the owner's GasGas the
+; Buffering line was a dark grey on black. Clobbers AL, CX, DX, SI
+vp_inkset:
+    push ax
+    push bx
+    mov si, vp_pal
+    xor bx, bx                      ; BL = the entry, BH = the best's
+    xor dx, dx                      ; DX = its brightness
+.e:
+    lodsb
+    mov ah, 30
+    mul ah
+    mov cx, ax
+    lodsb
+    mov ah, 59
+    mul ah
+    add cx, ax
+    lodsb
+    mov ah, 11
+    mul ah
+    add cx, ax
+    cmp cx, dx
+    jb .n
+    mov dx, cx                      ; (ties to the later: the EGA's 15)
+    mov bh, bl
+.n:
+    inc bl
+    cmp bl, 16
+    jb .e
+    mov [vo_ink4], bh
+    pop bx
+    pop ax
     ret
 
 ; vp_scrset - a VGA4 file's SCREEN OF ITS OWN (98.1.3.2.1), once the bracket
