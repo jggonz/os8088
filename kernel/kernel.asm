@@ -8111,10 +8111,33 @@ MODK_SIZE equ modk_end - $$
 %endif
 %endif
 
+%ifdef OS88_DRIVERS
+section .modcb                  ; ABOVE `.modu`'s end and not with the other
+modcb_end:                      ; bss ends below: the pad two blocks down is a
+MODC_BSS equ modcb_end - $$     ; `times`, whose count must be known when it
+%endif                          ; is read
+
 section .modc
 mods_end:
 MODS_SIZE equ mods_end - $$     ; the settings core: CTRL.DRV's first bytes
 section .modu
+%ifdef OS88_DRIVERS
+                                ; THE DEAD ZONE (MODULE-SELFCONTAIN-PLAN 3.2):
+MODC_UNPAD equ MODS_SIZE + ($ - $$) ; an image that ends fewer than MODC_BSS
+                                ; bytes short of a KB boundary has no room for
+                                ; its bss in the claim mod_need makes, which
+                                ; is the image's own KB rounding. The pad
+                                ; carries the image ONE BYTE PAST that
+                                ; boundary, so the claim is the next KB - the
+                                ; claim the bss needs anyway - for no resident
+                                ; byte, where the plan's named fallback is 8 of
+                                ; them. Zero bytes outside the zone, so a build
+                                ; that fits is byte-identical; it is what keeps
+                                ; ANIMOFF=1
+                                ; assembling, whose 124 fewer bytes of panel
+                                ; land CTRL.DRV inside the zone (SPEC.md 2.8)
+    times (MODC_UNPAD + MODC_BSS > ((MODC_UNPAD + 1023) / 1024) * 1024) * (((MODC_UNPAD + 1023) / 1024) * 1024 + 1 - MODC_UNPAD) db 0
+%endif
 modc_end:
 MODU_SIZE equ modc_end - $$     ; ...the panel behind it...
 MODC_SIZE equ MODS_SIZE + MODU_SIZE ; ...and the WHOLE image: align=1 on both
@@ -8135,12 +8158,6 @@ MODH_SIZE equ modh_end - $$
 section .modhb
 modhb_end:
 MODH_BSS equ modhb_end - $$
-%endif
-
-%ifdef OS88_DRIVERS
-section .modcb
-modcb_end:
-MODC_BSS equ modcb_end - $$
 %endif
 
 %ifdef FCP_MOD

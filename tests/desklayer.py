@@ -68,7 +68,10 @@ kernel's hover edge says WF_HOVER - and these legs:
               closes the widget and removes its DIA row by name.
 
 Wave 2's break-its: take the content press's `je .qdrag` out and `drag`
-fails at A (no move); take ui_drag's WF_DESK `.nocache` test out and A
+fails at A on a spurious W_ONDRAG after the drop (the arm is set and
+ui_arm_trk finds [ui_dragy] holding the post); turn the pick-up's
+`jne .yj1` into a `jmp` and A fails with no move; take ui_drag's WF_DESK
+`.nocache` test out and A
 fails on wm_dc_take; take the `[wm_dmg_npro]` store out and D fails on a
 title bar drawn; take the hover edge's compare out of cur_shape_pass and
 `hover` fails at B; take cur_hov_x's chooser test out and F fails.
@@ -816,11 +819,22 @@ def leg_drag(ui, tmp):
     src = (w4.x + w4.w - 2, w4.y + C1 + GAP // 2)       # a gap, right end
     check(not inside(src[0], src[1], (d.x, d.y, d.w + 1, d.h + 1)),
           "the grab point %r is the widget's" % (src,))
-    with os88marty.bp_trace(m, "wm_dc_take") as tr:
+    with os88marty.bp_trace(m, "wm_dc_take", "wm_draw_win") as tr:
         wdrag(ui, p, src, 0, -(w4.y - 30))
     w5 = p.win()
     park(ui)
     check(tr.count("wm_dc_take") == 0, "no drag cache taken")
+    # THE PRICE OF A DROP UNDER A COVERING WINDOW (SPEC.md 11.103.6): ui_drag's
+    # drop was written for a FRONT window and a widget is the BACKMOST, so the
+    # Disk window over its old rect is marked stale and redrawn whole - chrome,
+    # title bar and W_PAINT - over pixels that were already right. Measured
+    # rather than refused: the cure is resident bytes kern_big does not have
+    # (107.9's owner item), and this count is what says it is still paid.
+    print("   a drop under the Disk window ran wm_draw_win %d times "
+          "(the widget, and the Disk window redrawn whole)"
+          % tr.count("wm_draw_win"))
+    check(tr.count("wm_draw_win") == 2, "wm_draw_win twice on the drop: the "
+          "widget and the covering Disk window (%d)" % tr.count("wm_draw_win"))
     cover = [(d.x, d.y, d.w + 1, d.h + 1)]
     bad = face_bad(m, w5, cover)
     check(not bad, "the face at (%d,%d) carries none of the Disk window "
@@ -833,8 +847,10 @@ def leg_drag(ui, tmp):
     w6 = p.win()
     m.write(p.seg * 16 + p.img + DP_TDRAG, b"\x01")
     ui._wait(lambda: p.b(DP_TDRAG) == 2, "the beat's DRAG", 30)
-    check(ui._word("ui_dragy") == 0xFFFF,
-          "the timer's post is in [ui_dragy] (%#x)" % ui._word("ui_dragy"))
+    wrec = p.rec() - geom.KERNEL_SEG * 16       # the record's KERNEL_SEG offset
+    check(ui._word("ui_dragy") == wrec,
+          "the timer's post is in [ui_dragy]: the widget's record %#x (%#x)"
+          % (wrec, ui._word("ui_dragy")))
     c1, u1 = p.b(DP_CLICKS), p.b(DP_UPS)
     with os88marty.bp_trace(m, "ui_drag") as tr:
         press(ui, w6.x + 60, w6.y + 10)                 # card 1

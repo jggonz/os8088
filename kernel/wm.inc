@@ -11598,10 +11598,11 @@ wm_cbd:
 ;                   INSIDE ITS ENTRY PROC: WF_DESK|WF_NOANIM|WF_OWNBG on,
 ;                   WF_SAVEU|WF_1BPP off, the z entry moved to [0]. IF_DESK
 ;                   is the loader's step 9's, off the window it RETURNS
-;   AL = 2 DRAG     post the kernel's outline drag of the window being
-;                   PRESSED: [ui_dragy] = -1, which the content press asks
-;                   when W_ONCLICK returns (SPEC.md 11.103.6). BX is not
-;                   read; posted anywhere else the next press's seed wipes it
+;   AL = 2 DRAG     post the kernel's outline drag of BX, the window being
+;                   PRESSED: [ui_dragy] = BX, which the content press
+;                   compares with the pressed window when W_ONCLICK returns
+;                   and honours for a DESK window only (SPEC.md 11.103.6);
+;                   posted anywhere else the next press's seed wipes it
 ;   AL = 3 RELEASE  [menu_win] = BX: the bar (and the keys) to wm_top, redrawn
 ;
 ; MAKE IS THE ENTRY PROC'S, and that is what lets it name its caller for
@@ -11637,9 +11638,10 @@ osapi_wm_desk_x:
 .no:
     stc
     retf
-.drag:                          ; --- DRAG: the sentinel over the press's seed
-    or word [ui_dragy], -1      ; (SPEC.md 11.103.6). One word, no test of
-    jmp short .ok               ; the caller: only W_ONCLICK's is ever read
+.drag:                          ; --- DRAG: the caller's window over the
+    mov [ui_dragy], bx          ; press's seed (SPEC.md 11.103.6). No test
+    jmp short .ok               ; here: the pick-up asks whether it is the
+                                ; window pressed, and a desk one
 .ref:
     stc
 .pop:

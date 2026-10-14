@@ -361,6 +361,14 @@ ui_task:
     call ui_rdown               ; in: CX/DX, which fdlg_grab preserves (the
     jmp short .yj2              ; left button's path below rests on that too)
 
+.grow_box:                      ; HERE, ABOVE .mdown and behind .yj2's jump:
+    call ui_grow                ; the region dispatch's `je` reaches back to it
+    jmp short .yj2              ; in two bytes, and its five are then outside
+                                ; the reach of `je short .title_bar`, which the
+                                ; posted drag's desk test spends (SPEC.md
+                                ; 11.103.6). In: BX = window, CX/DX = the
+                                ; mousedown x/y
+
 .mdown:
     mov cx, [ui_ev + EV_A]      ; CX = click x
     mov dx, [ui_ev + EV_B]      ; DX = click y
@@ -477,10 +485,6 @@ ui_task:
                                 ; out of short range is a five-byte
                                 ; inverted pair. Every branch below that
                                 ; reaches HERE reaches .yield one hop on
-.grow_box:                      ; (HERE, behind .yj1's jump and in short
-    call ui_grow                ; reach of the region dispatch, so its `je`
-    jmp short .yj1              ; is two bytes and not five) in: BX = window,
-                                ; CX/DX = mousedown x/y
 
 .content_front:
     mov bp, [si + W_ONCLICK]
@@ -495,18 +499,20 @@ ui_task:
                                 ; dispatch: ui_bill does not preserve CX/DX
     push cx                     ; ...and the press point banked across it, for
     push dx                     ; a DRAG the handler posts (SPEC.md 11.103.6):
-%endif                          ; [ui_dragy] holds the sentinel by then
+%endif                          ; [ui_dragy] holds the post by then
     call gfx_lock               ; W_ONCLICK contract: CX=x, DX=y, SI=win
     call ui_bill              ; (CX/DX survived wm_hit/wm_top/gfx_lock)
 %ifdef KERN_BIG
     pop dx
     pop cx
-    cmp word [ui_dragy], -1     ; THE POSTED DRAG (SPEC.md 11.103.6): the
-    je .qdrag                   ; handler's OSAPI_WM_DESK DRAG wrote the one y
-                                ; no screen has over the seed above. A post
-                                ; made anywhere but inside this W_ONCLICK was
-                                ; wiped by that seed, so it is inert here -
-                                ; no test of who posted it is needed. BEFORE
+    cmp [ui_dragy], si          ; THE POSTED DRAG (SPEC.md 11.103.6): the
+    je .qdrag                   ; handler's OSAPI_WM_DESK DRAG wrote ITS OWN
+                                ; WINDOW over the seed above - a record
+                                ; address, which no screen y can equal. A post
+                                ; made before this W_ONCLICK was wiped by that
+                                ; seed, and one naming any window but the one
+                                ; PRESSED (a worker's, during another
+                                ; package's handler) does not match it. BEFORE
                                 ; the arm: the drag eats the release. ZF
                                 ; carries the answer past gfx_unlock below
 %endif
@@ -523,6 +529,10 @@ ui_task:
     call gfx_unlock             ; write no flag) - and gfx_unlock writes them
     popf
     jne .yj1
+    test byte [si + W_FLAGS + 1], WF_DESK >> 8
+    jz .yj1                     ; ...and only a DESK window's: a fullscreen
+                                ; one would be clamped off its latch by the
+                                ; drop's MBAR_H floor (SPEC.md 11.103.6)
     mov bx, si                  ; the title bar's own drag of the window that
     jmp short .drag             ; was PRESSED, CX/DX the press point (SPEC.md
                                 ; 11.103.6); ui_track takes the lock itself.
@@ -3020,11 +3030,13 @@ ui_dragy:   resw 1              ; delivered at, seeded at the press with the
                                 ; point W_ONCLICK was given. Only meaningful
                                 ; while [ui_armw] is set and [ui_armr] is 0,
                                 ; which is why nothing clears it - the arm
-                                ; re-seeds it every time. [ui_dragy] = -1 is
-                                ; also OSAPI_WM_DESK DRAG's POST (SPEC.md
-                                ; 11.103.6), asked after W_ONCLICK returns -
-                                ; the press's seed is what makes a post from
-                                ; anywhere else inert
+                                ; re-seeds it every time. [ui_dragy] = a
+                                ; window record is also OSAPI_WM_DESK DRAG's
+                                ; POST (SPEC.md 11.103.6), compared with the
+                                ; window pressed after W_ONCLICK returns - the
+                                ; press's seed is what makes an earlier post
+                                ; move nothing (an ARMED press still sees one
+                                ; W_ONDRAG at an unmoved point)
 ui_armlit:  resb 1              ; SPEC.md 13.8.1: is that box currently DRAWN
                                 ; down? THE GLASS ALWAYS SHOWS THIS BYTE - that
                                 ; is the invariant the whole feature rests on,

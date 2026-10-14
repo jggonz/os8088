@@ -1987,7 +1987,15 @@ one-user argument they already shared), the arrow triangles' half-width
 tables (computed now: row r's width is r, or 3 − r), and `CTRL.DRV`'s own
 `SYSTEM.CFG` file buffer, which is the image's `.modcb` BSS rather than
 `times` bytes (MODULE-SELFCONTAIN-PLAN 3; it fits the claim's KB rounding and
-kernel.asm asserts so). What moved is page *body* text, whose only readers are the `cp_*_paint` bodies
+kernel.asm asserts so). **An image that ends fewer than its bss's bytes short
+of a KB boundary is padded one byte PAST it** (kernel.asm's `MODC_UNPAD`
+`times`, `CTRL.DRV` only): the slack is then a whole KB, the claim is the one
+the bss needed anyway, and no resident byte is spent - where
+MODULE-SELFCONTAIN-PLAN 3.2's named fallback, a word per module in `mod_tab`,
+is 8 of them. The pad is zero bytes outside that zone, so every build that
+already fitted is byte-identical; it exists because `ANIMOFF=1` takes 124
+bytes of panel out and landed `CTRL.DRV` at 12,193 + 141 against a 12,288
+claim, refusing the knob build on §107's branch. What moved is page *body* text, whose only readers are the `cp_*_paint` bodies
 and their click ladders — every one inside the image, entered only through
 `call far [CPFP+…]` after `mod_need` succeeded. **The module-cannot-load path
 reads none of them**: `cp_open_x` is `.cold` and letters `cp_s_noload` /
@@ -10166,8 +10174,9 @@ after `cur_shape_pass`'s `wm_hit`, one compare of BX against `[cur_hovw]`;
 only a CHANGE of window far-calls a cold body (`cur_hov_x`, with BX banked
 round it, so the shape below is still `wm_hit`'s answer) that clears
 `WF_HOVER` on the old window and sets it on the new one - each only if it is
-a `WF_DESK` window, and the new one only with no Standard File chooser up -
-and posts `wm_wake` to each. So a widget learns "the pointer is over
+a `WF_DESK` window, and the new one only with no Standard File chooser up
+(a hover standing when a chooser opens is not cleared, §11.103.7) - and
+posts `wm_wake` to each. So a widget learns "the pointer is over
 me" at the cost of one compare per pass that runs anyway, with nothing at all
 while the pointer rests, and the edge inherits this section's two properties
 for free: it is UI-task-only, so the z-order cannot tear under it, and every
@@ -19761,7 +19770,11 @@ kern_emu image 298, cold **55**; kern_small unchanged. Wave 2 (the posted
 drag and the hover edge, §11.103.6-7) adds **+46** of `.text` (two of them
 `[cur_hovw]`, initialised data) and **+54** of `.cold` on both, and nothing
 on kern_small, which assembles byte for byte as before: kern_big image **5**
-left, cold 125; kern_emu image 252, cold **1** (§107.9). **A
+left, cold 125; kern_emu image 252, cold **1** (§107.9). Wave 2's review
+fixes (§107.9) add **+5** of `.text` and take **1** of `.cold` back on both -
+the DRAG post names its window and the pick-up asks for a desk one - and
+nothing on kern_small: kern_big image **0** left, cold 126; kern_emu image
+247, cold **2**. **A
 rung crossing is a stop for the owner**, not a build fix (CLAUDE.md): the cut
 order is §107.10's.
 
@@ -19837,7 +19850,9 @@ the frame grows the damage for the windows above; outside it nothing repairs
 it, and "a package never draws a glyph in `W_PAINT`" is not an invariant
 anyone can hold. Showing a widget under open windows therefore redraws the
 ordinary windows it overlaps whole (`.mbelow`): that is rare - a boot's
-autostart runs before any application is open - and safe.
+autostart runs before any application is open - and safe. **A DROP is the
+same marking and is not rare** once a widget can be dragged: §11.103.6
+prices it, and the cure is an owner's decision (§107.9).
 
 A desk window already on the glass shown again is the same arm: one damage
 pass over its frame.
@@ -19848,8 +19863,8 @@ test in `wm_hide_b`), the one-shot `desk_cell_rect` already uses (§11.91.6).
 A desk window is never `wm_top`, so its coming or going changes no front
 window, and without the store `.promote` re-drew the front application's
 title bar and grow box - the 15-call path, a visible re-flash - whenever that
-window lay clear of the widget. 16 bytes of `.text`. W2's desk drag owes the
-same store.
+window lay clear of the widget. 16 bytes of `.text`. W2's desk drag pays
+the same store, for every window (§11.103.6).
 
 #### 11.103.4 Activation without a raise: the press, the keys and RELEASE
 
@@ -19944,25 +19959,37 @@ started by the package: `OSAPI_WM_DESK` DRAG (§11.103.9), from inside
 has returned. It cannot run inside the callback: `gfx_lock` is not recursive
 and `ui_track` takes it.
 
-**The post is a sentinel in `[ui_dragy]`, not a word of its own.**
+**The post is the caller's window in `[ui_dragy]`, not a word of its own.**
 `.content_front` seeds `[ui_dragx]` / `[ui_dragy]` with the press point
-before every `W_ONCLICK` (§13.8.2), so DRAG writes `-1` - a y no screen has -
-into `[ui_dragy]`, and right after `ui_bill` returns the press asks one
-compare. A DRAG made ANYWHERE ELSE - a timer, a key, a wake, a paint, a
-worker - is overwritten by the very next press's seed before that press's
-`W_ONCLICK` runs, so "legal only inside `W_ONCLICK`" is a property of where
-the word is written rather than a test anybody makes: posted elsewhere it is
-inert, and no later press on the same window can turn into a drag because of
-it. It moves the window that was PRESSED (`SI`), whatever `BX` said, so a
-package can only ever drag its own window from its own press. Any window's
-`W_ONCLICK` may post it; a desk window is why it exists.
+before every `W_ONCLICK` (§13.8.2), so DRAG writes `BX` - a window record's
+address, which no screen y equals - into `[ui_dragy]`, and right after
+`ui_bill` returns the press compares it with `SI`, the window PRESSED, and
+honours it only for a `WF_DESK` one. A DRAG made BEFORE the press is
+overwritten by that press's seed, so no later press can turn into a drag
+because of it; one naming any other window - a worker's, landing while the
+UI task is inside another package's `W_ONCLICK`, which is a race the worker
+cannot see - does not match; and one from an ordinary or a FULLSCREEN
+window's own `W_ONCLICK` fails the desk test, so the drop's `MBAR_H` floor
+can never pull a latched fullscreen window 20 rows off its latch (§11.2).
+That refusal is a misuse refused, not a feature: it comes after the arm is
+skipped, so it costs that press its `W_ONMOUSEUP`. A package therefore drags
+only a desk window it names, from that window's own press, and the SDK says
+"from its `W_ONCLICK`, on the UI task".
+
+**Posted outside `W_ONCLICK` it moves nothing, and it is not free.**
+`[ui_dragy]` is also what `ui_arm_trk` measures an ARMED region-0 press
+against (§13.8.2), so a post while any press is armed - a DIA's `W_ONTIMER`
+or `W_ONWAKE` during Calculator's button press - hands that press one
+`W_ONDRAG` at a point that did not move. §13.8.2's "only when the pointer
+actually MOVED" holds for every package that keeps DRAG in its own
+`W_ONCLICK`, which is the only place the SDK lets it be posted.
 
 **The pick-up sits BEFORE the arm.** When it fires, `[ui_armw]` is never set,
 so the drag eats the release (`ui_track`'s `evq_mup`) and no `W_ONMOUSEUP` or
 `W_ONDRAG` follows; the lock is given back and `ui_drag` runs with the press
 point, which `.content_front` banks on the stack across the dispatch (two
 pushes - `ui_bill` does not preserve `CX`/`DX`, and `[ui_dragy]` holds the
-sentinel by then). The outline, the clamps, `wm_snap_ax`, `wm_dock_snap` and
+post by then). The outline, the clamps, `wm_snap_ax`, `wm_dock_snap` and
 `wm_paint_dmg` over the vacated and the new rects are the kernel's,
 unchanged, and a press that does not move repaints nothing (§13). There is
 no cold body and no far shim: the pick-up jumps to the title bar's own
@@ -19970,12 +19997,49 @@ no cold body and no far shim: the pick-up jumps to the title bar's own
 `je .title_bar` and of the press's `jc .yj1`, and NASM's growing passes
 widened both to five bytes although both still reached - so both are
 written `short` now, which costs nothing and is checked by the assembler
-(and `.yj1`'s own `jmp .yield` did go near, one byte).
+(and `.yj1`'s own `jmp .yield` did go near, one byte). The desk test's six
+bytes then left `je short .title_bar` three past its reach, and they were
+paid by MOVING `.grow_box` (`call ui_grow` / `jmp short`, five bytes) above
+`.mdown`, behind `.yj2`'s jump: the region dispatch's `je .grow_box` reaches
+back to it in two bytes, and `je short .title_bar` is at 125 of 127 again.
 
 **A desk window takes `.nocache`**: `wm_dc_take` banks from the glass,
 which under a covering window is somebody else's pixels, and `wm_draw_win`'s
 desk arm never replays a cache anyway (a desk window's `x` is snapped, so
-`ui_drag_phase` has nothing to do for it either). A drop costs one `W_PAINT`.
+`ui_drag_phase` has nothing to do for it either). A drop costs the widget
+one `W_PAINT` - **and it costs every ORDINARY window that overlaps the
+widget's old or new rect a whole redraw**, which is the design record's
+"one `W_PAINT`" proved wrong. `ui_drag`'s drop was written for a FRONT
+window and a desk window is the BACKMOST: `wm_dmg_stale` marks a window over
+the vacated rect that the new frame does not re-cover, `.mbelow` (the
+outward-rounding cull, §11.103.3) marks every window above the widget that
+it overlaps, and `wm_dg_precover` banks a save-under window behind the front
+one off the glass - and all of those pixels were already right. `deskdrag`
+E MEASURES it: a drop from under a Disk window runs `wm_draw_win` twice, the
+widget's and the Disk window's whole chrome, 15-call title bar and
+`W_PAINT` - on a 5150 about 40 ms of title bar and a package's paint a drop,
+on the order of a second with a Note Pad window over the widget. The same
+root is a standing cost once a widget is left over the dock: every dock
+change marks it through `dock_px_hit`, and that marks every window above it.
+**The cure is resident and kern_big's image rung has none** (§107.9's owner
+item): make "a desk window paints with exact primitives only" a contract,
+then have `wm_dmg_stale` treat the windows above a `WF_DESK`
+`[wm_dmg_stwin]` as clean and skip `.mbelow` - about 10 to 16 bytes of
+`.text`.
+
+**The drop's bound is the title bar's**, `y + TITLE_H <= [vid_h]`
+(`vid_ymax`), and a widget has no title bar: its grab handle and close box
+are in the tag row at the BOTTOM of its face. With `wm_dock_snap`'s
+half-strip rule, a widget can be dropped with only its top 18 rows on the
+glass - card 1, where a press is not a drag - so the tag row, the handle and
+the box are off it, the only grab points left are the 1-px ground columns,
+and the dock tiles under it answer the widget. `DESKPROB.DAT` saves that
+place and `dia_anchor` keeps a same-screen place unchanged. The kernel spends
+no byte on it (a `WF_DESK` clamp of `y + h` to the dock's top is 8 to 10 of
+`.text`, kern_big has 0): **wave 3's include re-fits the frame** - after a
+drop whose bottom is past `[vid_h]`, the poll that sees the drag is over
+brings the whole frame back on the glass before it saves the place, at one
+extra paint for an out-of-band drop only (§107.11).
 
 **A drag promotes nobody**: `ui_drag` stores `[wm_dmg_npro]` = 1 before its
 `wm_paint_dmg`, on kern_big, for EVERY window. A drag never changes which
@@ -19987,18 +20051,21 @@ every drop - the 15-call path, a visible re-flash, which is §11.103.3's
 store owed here too. Unconditional is 5 bytes; tested for `WF_DESK` it was
 11.
 
-Cost: **29** bytes of `.text` (the pick-up 18, `.nocache` 6, the store 5)
-and the verb's **9** of `.cold`; no `.bss`. The pick-up's `je .qdrag` past
-the arm is two of them, and they are not decoration: without it the arm is
-set, `ui_drag` eats the release, and `ui_arm_trk` delivers a `W_ONDRAG` the
-very next pass because `[ui_dragy]` holds the sentinel - `deskdrag` reads
-one on a broken build.
+Cost: **34** bytes of `.text` (the pick-up 17 and its desk test 6,
+`.nocache` 6, the store 5; the move of `.grow_box` is free) and the verb's
+**8** of `.cold`; no `.bss`. Wave 2 measured 29 and 9: the review's fix
+traded the `-1` sentinel's `or`/`cmp word ..., -1` for a register store and
+a register compare, a byte each, and spent six on the desk test. The
+pick-up's `je .qdrag` past the arm is two of them, and they are not
+decoration: without it the arm is set, `ui_drag` eats the release, and
+`ui_arm_trk` delivers a `W_ONDRAG` the very next pass because `[ui_dragy]`
+holds the post - `deskdrag` reads one on a broken build.
 
 #### 11.103.7 The hover edge (`WF_HOVER`, `[cur_hovw]`)
 
 `cur_shape_pass` already asks `wm_hit` which window is under the pointer on
 every move and every z change (§7.2.1). After that call, ONE compare of `BX`
-against `[cur_hovw]` (a `.bss` word, kern_big's); only a CHANGE of window
+against `[cur_hovw]` (an initialised `.text` word, kern_big's); only a CHANGE of window
 banks `BX`, sets `CL` = 0 and far-calls `cur_hov_x` (`.cold`). The body:
 
 - a Standard File chooser up (`[fdlg_win]` non-zero) makes the new window
@@ -20022,11 +20089,33 @@ value from a warm boot is harmless too.
 over a covering window (`wm_hit` answers the covering one, so moving onto it
 is a leave), under a fullscreen window, a saver or a chooser, or during a
 menu drop or another window's title drag - no pass runs then, and one
-correct edge arrives afterwards. Under a chooser `[cur_hovw]` stays 0, so
-every packet over a window far-calls the body for the chooser's life (one
-compare and a `retf`'s worth of work), and once the chooser is REAPED the
-first move gives the enter edge: its hide repaints while `[fdlg_win]` still
-names it. A BUTTON HELD is the package's to refuse, at its dwell's expiry
+correct edge arrives afterwards. Under a chooser no NEW hover begins:
+`[cur_hovw]` goes to 0 at the first change of window, so every packet over a
+window far-calls the body for the chooser's life (one compare and a `retf`'s
+worth of work), and once the chooser is REAPED the first move gives the
+enter edge: its hide repaints while `[fdlg_win]` still names it.
+
+**Two refusals are NOT made**, both because the body runs only on a CHANGE
+of `wm_hit`'s answer and both for want of a byte:
+
+- **A hover standing when a chooser opens stays.** The chooser's repaint
+  sets `cur_shchk`, but `wm_hit` still answers the widget, which is
+  `[cur_hovw]`, so the body never runs and `WF_HOVER` stays set until the
+  pointer leaves the widget - the handle revealed under a modal chooser,
+  and a press on it swallowed by `fdlg_grab_x` like every press outside a
+  chooser (§38.2): a dead control shown, never a live one. The cure is an
+  edge to nothing at the chooser's show (`xor bx, bx` / `xor cx, cx` / the
+  far call, about 8 bytes of `.cold`), and kern_emu's cold rung has 2: the
+  owner's (§107.9). A package can refuse only for a chooser of its OWN.
+- **An open auto-hide dock over a widget is not a cover.** The edge asks
+  bare `wm_hit`, which does not know `[dock_up]` (§30.6.1), so the pointer
+  on an open strip lying over a widget reads as a hover. A hidden strip has
+  `dock_thk` = 0, so `wm_dock_snap` never nudged the widget off it. The
+  reveal is clipped round the strip and every press there goes to the dock
+  first (`ui.inc`'s `.on_desktop`), so again it is a handle shown that
+  cannot be pressed, and only while the dock is open; `dkx_pass`'s own
+  refusal in `cur_hov_x` is the cure, at `.cold` bytes kern_emu does not
+  have. A BUTTON HELD is the package's to refuse, at its dwell's expiry
 (`OSAPI_MOUSE`), not the kernel's: an armed press keeps the ladder running
 (§13.8.2), and a widget must see the leave and the re-entry of a press
 dragged off and back.
@@ -20060,7 +20149,7 @@ CF answers.
 |---|---|---|---|
 | 0 | QUERY | - | CF = 0: this kernel has the desk layer. kern_small answers CF = 1, and so does every verb |
 | 1 | MAKE | BX = your window | make it a desk window - **in your ENTRY PROC only**, between `OSAPI_WM_CREATE` and its return. **Refused (CF = 1)** for a window not in use, VISIBLE, `WF_FULL` or `WF_SIZABLE`, for a window that already HAS an owner, with no load in progress, and for a window the loading package did not make. That is how MAKE knows its caller for nothing: `wm_owner` is published only at the loader's step 9, AFTER the entry proc returns (§21), so the window being set up is the one nobody owns yet; `[ld_base]` is the loading package's segment from step 5 until step 9's show and 0 otherwise, so `W_SEG` = `[ld_base]` (non-zero) says the window is ITS, made in this load; and the loader's `[ld_rec]` is still unpublished (`I_STATE` = 0), which a callback that step 9's own repaint reaches is not (§107.9). Effect: `WF_DESK \| WF_NOANIM \| WF_OWNBG` on, `WF_SAVEU \| WF_1BPP` off, and the z entry ROTATED to `[0]` (each entry below it moves up one, in order). **`IF_DESK` is step 9's, not MAKE's**: the loader sets it on the record when the window the entry proc RETURNS is `WF_DESK`, so an instance is tile-less exactly when its own window is a widget - a DIA that also opens an ordinary window and returns that one keeps its tile, and the window it can be minimized by |
-| 2 | DRAG | BX = your window (not read) | post the kernel's outline drag of the window being PRESSED (§11.103.6): `[ui_dragy]` = -1, which the content press asks once its `W_ONCLICK` has returned. Meaningful only inside `W_ONCLICK` - anywhere else the next press's seed wipes it, so it is inert rather than refused. CF = 0. The drag eats the release: no `W_ONMOUSEUP` follows |
+| 2 | DRAG | BX = your DESK window | post the kernel's outline drag of BX (§11.103.6): `[ui_dragy]` = BX, which the content press compares with the window PRESSED once its `W_ONCLICK` has returned, and honours only for a `WF_DESK` one - so it is for your desk window's own `W_ONCLICK`, on the UI task, and never for a fullscreen window. Posted before a press, the press's seed wipes it; naming another window it does not match; from a worker it is a race. Anywhere else it moves nothing, but an ARMED press is handed one `W_ONDRAG` at an unmoved point. CF = 0. The drag eats the release: no `W_ONMOUSEUP` follows (nor after a refused post, which skipped the arm) |
 | 3 | RELEASE | BX = your window | if `[menu_win]` is BX, the bar - and with it the keys - goes to `wm_top` (the front application window, or Locator) and is redrawn. From a callback, under the lock (a widget's `W_ONKEY` on Esc). CF = 0 |
 
 **`OSAPI_GFX_DESK`**, a rare cell (`OSAPI_RSLOT thm_desk`): AX, BX = x1, y1
@@ -25406,10 +25495,13 @@ Two rules, and they are the whole of it:
   `wm_hit` reports region 0 over the whole frame, the press activates it
   (the bar, and with it the keys) and goes straight to `W_ONCLICK`, so the
   release is armed exactly as for the front window. `OSAPI_WM_DESK` DRAG is
-  legal only INSIDE that `W_ONCLICK` (§11.103.6): it posts the kernel's drag
-  for the press being delivered, the press then arms NOTHING, and the drag
-  eats the release - no `W_ONMOUSEUP`. Posted from anywhere else it is
-  inert: the next press's seed of `[ui_dragy]` wipes it.
+  for INSIDE that `W_ONCLICK` (§11.103.6), naming the window pressed: it
+  posts the kernel's drag for the press being delivered, the press then arms
+  NOTHING, and the drag eats the release - no `W_ONMOUSEUP`. Posted from
+  anywhere else it moves nothing - the next press's seed of `[ui_dragy]`
+  wipes it - but a press already armed is handed one `W_ONDRAG` at an
+  unmoved point (§13.8.2 measures against that word), and from a worker it
+  races the press it lands in.
 
 **The kernel guarantees delivery; the package decides identity.** There is no
 widget layer, so the kernel cannot know what "the same control" means here and
@@ -171113,10 +171205,10 @@ slot) with its single note.
     can read it - the design's "legal only inside `W_ONCLICK`" and its
     "a DRAG posted from a timer does not turn the next press into a drag"
     hold by construction, where a word of its own needed a clear before
-    every dispatch. The verb does not read `BX`: the window PRESSED is what
-    moves. The reason is the budget, measured: wave 1 left kern_emu's cold
-    rung **55** bytes, and the design's ~22 + ~40 of `.cold` would have
-    crossed it; the verb is 9.
+    every dispatch. The reason is the budget, measured: wave 1 left
+    kern_emu's cold rung **55** bytes, and the design's ~22 + ~40 of `.cold`
+    would have crossed it; the verb is 9. (Wave 2's review replaced the `-1`
+    with the caller's `BX` and added the desk test - the bullets below.)
   - **The pick-up is BEFORE the arm, and inline**: the press point is
     banked on the stack across the dispatch (`ui_bill` keeps neither CX nor
     DX, and `[ui_dragy]` holds the sentinel), `ZF` is carried past
@@ -171157,6 +171249,33 @@ slot) with its single note.
     spend a resident kernel byte, and anything later that does crosses a
     rung, which is the owner's call. §107.10's cut order was not run and
     could not have helped: each of its cuts moves bytes INTO `.cold`.
+- **v2, wave 2's review fixes** - what the review proved, and what it cost:
+  - **The DRAG post names its window, and the pick-up honours a desk one
+    only** (§11.103.6). A bare `-1` tied the post to nobody: a worker's
+    post during another package's `W_ONCLICK` dragged THAT window, and a
+    fullscreen window's own post was clamped 20 rows off its latch. `mov
+    [ui_dragy], bx` and `cmp [ui_dragy], si` are a byte shorter each than
+    the sentinel's pair, and the desk test is 6: **+5** `.text`, **-1**
+    `.cold`. `je short .title_bar` then over-reached by three, and moving
+    `.grow_box` above `.mdown` paid them for nothing. kern_big's image rung
+    has **0** bytes left.
+  - **Measured, not cured** (each needs resident bytes there are none of,
+    so each is the OWNER's): a drop redraws every ordinary window over the
+    widget's old or new rect whole (§11.103.6 - `deskdrag` E now counts
+    `wm_draw_win` twice); a hover standing when a chooser opens stays set,
+    and an open auto-hide dock over a widget is no cover (§11.103.7). The
+    SPEC sentences that said otherwise ("a drop costs one `W_PAINT`", "a
+    package can only ever drag its own window", "never set under a
+    chooser", "a post anywhere else is inert") are corrected.
+  - **The drop's bound is the title bar's** (§11.103.6), so a widget can be
+    left with its tag row off the glass; wave 3's include re-fits it after a
+    drop, for no kernel byte.
+  - **`make ANIMOFF=1` assembles again.** DIA v1's `desksc.inc` grew
+    `CTRL.DRV` to 12,317 bytes, so the knob's 124 fewer landed it at 12,193
+    + 141 of bss against a 12,288 claim, and kernel.asm refused. The image
+    is now padded one byte past a KB boundary when its bss would not fit
+    (§2.8's claim paragraph): zero bytes on every build that fitted, which
+    are byte-identical, and no resident byte.
 
 ### 107.10 How it was built, and its gates
 
@@ -171174,7 +171293,7 @@ and every §7 default of the design record was taken):
 |---|---|---|
 | W0 | this document first: §11.103, §7.2.1, §12.6, §13.7, §13.16.2.1, §20.2, §20.3, §30, §30.6, §107.x; PERFORMANCE.md Part 5's placeholders and docs/KERNEL-MEMORY.md's planned bytes; the kernsize baselines | - |
 | W1 | the kernel layer: the flags, `wm_top`, `wm_lift`, `wm_show_b`'s and `wm_front_b`'s desk arms, the chromeless sites and `wm_draw_win`'s and `wm_su_rect`'s arms, the press without a raise, the key target, `OSAPI_WM_DESK` QUERY / MAKE / RELEASE and `OSAPI_GFX_DESK`, header flag bit 6 with the top-down slot, the dock and DOCK.DRV; `tests/diaprobe`'s desk build. **The Desk Calendar is untouched** | `t_chromesites` (fast); `deskz`, `deskdock`, `deskkeys`, `desksmall`; kernsize on all three kernels - **a crossed rung is a stop for the owner**; `t_api_abi`, the ABI lock, `os88sym --all`, `os88ladder --selfcheck`, buildmatrix, test-full alone |
-| W2 | the DRAG verb (`[ui_dragy]`'s sentinel), its pick-up, the desk `.nocache` and the drag's `[wm_dmg_npro]`; the hover edge (`[cur_hovw]`, `cur_hov_x`, `WF_HOVER`); `tests/diaprobe`'s tag row, handle and close box | `deskdrag`, `deskhover`, `deskhovercga`, `deskhoverherc`, `deskclose` (each broken on purpose and failing, §107.9); kernsize on all three kernels - measured +46 / +54, no rung crossed, kern_big image 5 and kern_emu cold 1 left; `deskz`, `deskdock`, `deskkeys`, `desksmall` again |
+| W2 | the DRAG verb (`[ui_dragy]` = the caller's window), its pick-up and desk test, the desk `.nocache` and the drag's `[wm_dmg_npro]`; the hover edge (`[cur_hovw]`, `cur_hov_x`, `WF_HOVER`); `tests/diaprobe`'s tag row, handle and close box | `deskdrag`, `deskhover`, `deskhovercga`, `deskhoverherc`, `deskclose` (each broken on purpose and failing, §107.9); kernsize on all three kernels - measured +46 / +54, no rung crossed, kern_big image 5 and kern_emu cold 1 left; the review fixes +5 / -1, kern_big image **0** and kern_emu cold 2 left; `deskz`, `deskdock`, `deskkeys`, `desksmall` again |
 | W3 | `apps/os88gfx.inc` `GFXE_TEXT` / `GFXE_BITS`; `os88dia.inc`'s `DIA_WIDGET` (§107.11); `tools/os88dia.py` and `t_dia` | `deskground`, `deskfit` |
 | W4 | the Desk Calendar as three cards (§107.3's v2 paragraph) | every `dia*` / `deskcal*` row updated; `deskcalcards`, `deskcalsnooze`, `deskmodal` |
 | W5 | look on 1bpp, EGA, Dark and Color; measure on MartyPC's 5150; `kernsize --bless`; `docs/dia/` retaken | `deskcalperf`'s new budgets, test-full alone, the soak |
@@ -171313,8 +171432,14 @@ card:
 It is revealed `DOCK_HOVER_T` ticks after the pointer comes over any visible
 part of the frame (§30.6's constants by name) and hidden `DOCK_LEAVE_T`
 ticks after it leaves; crossing a gap is not a leave, and a press anywhere
-on the widget reveals at once. Never with a button held, under a chooser,
-over a covering window, under a fullscreen window or a saver (§11.103.7).
+on the widget reveals at once. Never with a button held, over a covering
+window, under a fullscreen window or a saver, and no new reveal under a
+chooser (§11.103.7) - but the kernel does not clear a hover that was
+standing when a chooser opened, nor one under an open auto-hide dock
+(§11.103.7's two refusals not made), so the include keeps a reveal it can
+leave up there. **After a drop** the include brings a frame whose bottom is
+past the screen back onto it before it saves the place (§11.103.6's bound),
+for no kernel byte.
 While the widget owns the bar its tick polls `OSAPI_MENU_OWNER` every 4
 ticks, and only then, so focus loss un-inverts the plate within 220 ms.
 

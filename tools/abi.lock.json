@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "3e0bdcb0b221b188fb1bed371a0b432682e641ce95f5eccf5b09be3942a63727",
+  "fingerprint": "e3f079124479e7e9f01fcd00b82288eaf7b61a0a47b6505a1b1919ea75720ae9",
   "version": 9
  },
  "PKG_FMT": {
-  "fingerprint": "7d5d321c36fdc50e453655b327b578ed7a4cad695110eab2c2a0a843e19768f0",
+  "fingerprint": "e8a2734d75cfb47c465f4b9811936289dda3616c5de6918c2092950d4fe0e7e5",
   "version": 8
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -91,6 +91,20 @@
    "from": 9,
    "guard": "DRV_VER",
    "reason": "OSAPI_WM_DESK verb 2 DRAG defined (was refused; no package called it) and WF_HOVER now set by the hover edge - a contract filled in, nothing built before stops running (SPEC.md 11.103.6-7)",
+   "to": 9
+  },
+  {
+   "fingerprint": "e8a2734d75cfb47c465f4b9811936289dda3616c5de6918c2092950d4fe0e7e5",
+   "from": 8,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_WM_DESK DRAG reads BX now (your desk window) and WF_HOVER's chooser/dock caveats are written down: a contract clarified, no cell moved, so no PKG_FMT bump",
+   "to": 8
+  },
+  {
+   "fingerprint": "e3f079124479e7e9f01fcd00b82288eaf7b61a0a47b6505a1b1919ea75720ae9",
+   "from": 9,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_WM_DESK DRAG reads BX now (your desk window) and WF_HOVER's chooser/dock caveats are written down: a contract clarified, no cell moved, so no PKG_FMT bump",
    "to": 9
   }
  ]

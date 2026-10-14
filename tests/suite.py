@@ -9029,9 +9029,12 @@ SOAK = [
         "desktop's. A press that does not move runs ui_drag and no "
         "wm_paint_dmg; a drop with the front Disk window clear of it draws NO "
         "title bar (the drag promotes nobody); a drag out from under the Disk "
-        "window leaves no ghost and the Disk window byte for byte; a DRAG "
-        "posted from the beat's TIMER is inert - the next card press is a "
-        "click; and DESKPROB.DAT holds the place.",
+        "window leaves no ghost and the Disk window byte for byte - and "
+        "PRICES that drop, wm_draw_win twice: the widget and the covering "
+        "Disk window redrawn whole, which the backmost window's drop still "
+        "owes (107.9's owner item); a DRAG posted from the beat's TIMER "
+        "leaves the widget's record in [ui_dragy] and is inert - the next "
+        "card press is a click; and DESKPROB.DAT holds the place.",
         needs=("marty",), timeout=900,
         wants=("build/diadesk360.img",)),
     Row("deskhover", "soak", py("tests/desklayer.py", "--leg", "hover"), 80.0,
@@ -9072,7 +9075,7 @@ SOAK = [
         "On MartyPC's 128KB CGA 5150 off `make small`'s system disk with "
         "DESKPROB.O88 mcopied into SYSTEM\\DIA\\: QUERY refuses, so the probe "
         "is the TITLED FALLBACK - no WF_DESK, no IF_DESK, an ordinary 130 x "
-        "115 frame with a dock tile and a title-bar drag - and "
+        "123 frame with a dock tile and a title-bar drag - and "
         "OSAPI_GFX_DESK still lays the desktop's dither in its gaps.",
         needs=("marty", "mtools"), timeout=600,
         wants=("build/small360.img", "build/smallk/kernel.bin",
