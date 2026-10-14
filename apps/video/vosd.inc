@@ -581,10 +581,10 @@ vo_page:
     mov word [vo_pgo], 0
     or bl, bl
     jz .ret
-    push ax
-    mov ax, [vp_page]
-    mov [vo_pgo], ax
-    pop ax
+    push ax                         ; (THE SCREEN'S page: Mode X's 19,200,
+    mov ax, [vp_page]               ; 640 x 400's 32,000, a Hercules's
+    mov [vo_pgo], ax                ; 8000h - VP_PAGE put a 640 x 400 box
+    pop ax                          ; for page 1 into page 0's row 240)
 .ret:
     ret
 
@@ -954,8 +954,18 @@ vc_setup:
     mov byte [vo_clip], 0
     cmp byte [vp_shadow], 0
     jne .ret
-    cmp byte [vp_flip], 0
-    jne .ret
+    cmp byte [vp_flip], 1           ; (FLIPPED, every frame onto the page
+    je .ret                         ; not shown: the box put back there)
+    cmp byte [vp_flip], 2           ; PAGE-AHEAD decodes on the page SHOWN:
+    jne .pg0                        ; round the box there, as unflipped - its
+    mov bl, 1                       ; save that page's (vp_pgdec sets it up
+    cmp word [vp_foff], 0           ; again at every flip)
+    je .pgb
+    inc bl
+.pgb:
+    test [vo_drawn], bl
+    jz .ret                         ; (not on that page: nothing to go round)
+.pg0:
     mov al, [vo_dn]                 ; the box's bytes a row, as it is drawn
     add al, 2
     mul byte [vo_bpc]
@@ -965,7 +975,11 @@ vc_setup:
     mul cx
     mov [vc_pls], ax
     xor si, si                      ; SI = the row, x 2
-    mov dx, vo_sav                  ; DX = its row of the save
+    mov dx, vo_sav                  ; DX = its row of the save (page 1's
+    cmp word [vp_foff], 0           ; past page 0's, vo_io's)
+    je .sv
+    add dx, VO_SAV
+.sv:
 .r:
     mov ax, si
     shr ax, 1
@@ -973,6 +987,7 @@ vc_setup:
     mov bl, [vp_tlay]
     call vp_rowaddr
     add ax, [vp_org]
+    add ax, [vp_foff]               ; (the page shown: 0 but page-ahead's)
     add ax, [vo_xoff]               ; AX = its first byte in the box
     mov di, si                      ; in address order: the banks
 .ins:                               ; interleave the rows

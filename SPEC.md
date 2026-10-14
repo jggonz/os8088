@@ -170431,6 +170431,18 @@ again keeps the text for good.
 - **Onto the screen, the decode goes ROUND the box** (98.3.13.1): a store
   under it goes into the save instead, so the save is always the picture
   and the text never leaves the glass.
+- **A PAGE-AHEAD play** (98.3.8.3) decodes on the page SHOWN, so it goes
+  ROUND the box as an unflipped one does, on that page and its save
+  (`vc_setup`, set up again after every flip in `vp_pgdec`). Until
+  2026-10-14 it took the flipped rule - the box put back before every
+  frame and drawn after - and every toast blinked through a play on the
+  owner's 486; page 1's box also went to Mode X's page (VP_PAGE, 19,200)
+  where a 640 x 400 screen's is 32,000 (`vo_page` reads `[vp_page]`).
+  `vidpagetext` is the gate. And **Low memory** is not said on a layer's
+  machine whose pool split gave the base's bank to the layer: it is
+  measured against what that machine needs for the base (`[vp_lyneed]`),
+  not the file's ask (`vp_bshort`) - it was said on every play after the
+  first, the split being once a file.
 - **Page flipping (98.3.8) keeps one save a page**: the page drawn next has
   its box put back (`vo_pre`) and is decoded into, and the text is drawn on
   it BEFORE it is shown (`vo_flipon`).

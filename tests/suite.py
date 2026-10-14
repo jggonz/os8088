@@ -11584,6 +11584,15 @@ SOAK = [
         "decode's (the owner: a broken start beats no play)",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
+    Row("vidpagetext", "soak", py("tests/vidpagetext.py"), 40.0,
+        "SPEC.md 98.3.13, 98.3.8.3: the full screen's text on a PAGE-AHEAD "
+        "play stays on the glass - decoded ROUND on the page shown, set up "
+        "again at every flip, page 1's box at the screen's page and not "
+        "Mode X's. A toast kept up across vidpage's flips and Repeat's laps, "
+        "forty looks: on the glass in all but the joins, on both pages. "
+        "Broken on purpose (the tree before) it is there in none",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
     Row("vidkpart", "soak", py("tests/vidpage.py", "--kpart", "400"), 61.0,
         "SPEC.md 98.1.3.8: KEYS IN PARTS - vidpage with every key cut into "
         "reads of 400 bytes or less (key 1, its hidden page with it, in 45 "

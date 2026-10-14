@@ -6399,7 +6399,13 @@ vp_bpre:
 vp_bshort:
     push ax
     mov ax, [vp_hxb]
-    or ax, ax
+    cmp byte [vp_lysplt], 0         ; THE LAYER'S MACHINE (98.1.9.2): once
+    je .ask                         ; the pool is split and the layer read,
+    cmp byte [vp_lyon], 0           ; the base's bank is what that machine
+    je .ask                         ; needs ([vp_lyneed]) and not the file's
+    mov ax, [vp_lyneed]             ; ask - its own split's doing, and no
+.ask:                               ; shortage (the owner: Low memory on the
+    or ax, ax                       ; second play, never on the first)
     jz .out
     cmp byte [vp_xon], 0
     je .short
@@ -14499,7 +14505,8 @@ vp_pgdec:
     call vp_flipto                  ; ...and shown, the retrace waited for:
     mov [vp_foff], ax               ; the next hidden record may be this
     call vp_palev                   ; call's, into the page just left - and
-    jmp short .hid                  ; a scene's sixteen in that same blank
+    mov byte [vp_pgfl], 1           ; a scene's sixteen in that same blank
+    jmp short .hid
 .here:
     call vp_palev                   ; (drawn in place: before, as unflipped)
     mov ax, [vp_foff]
@@ -14520,6 +14527,13 @@ vp_pgdec:
 .r:
     mov ax, [vp_foff]
     mov [vp_poff], ax
+    cmp byte [vp_pgfl], 0           ; FLIPPED: the text is decoded round on
+    je .nf                          ; the page now shown, its own box and
+    mov byte [vp_pgfl], 0           ; save (vc_setup) - the last page's left
+    cmp byte [vo_mode], 0           ; every store under the new one's box
+    je .nf                          ; going onto the glass over the text
+    call vc_setup
+.nf:
     ret
 
 ; vp_pghid - DX:SI = a hidden record (98.1.3.7): into the page that is not
@@ -17579,6 +17593,7 @@ vp_poff:      dw 0                  ; ...the page being drawn...
 vp_foff:      dw 0                  ; ...the one on the glass...
 vp_pgsi:      dw 0                  ; PAGE-AHEAD (98.3.8.3): a record's start
 vp_pgend:     dw 0                  ; ...and past its lists
+vp_pgfl:      db 0                  ; ...a flip in this record (vc_setup after)
 vp_pgclip:    db 0                  ; ...vo_clip, while the other page is drawn
 vp_shown:     dw 0                  ; the start address vp_show last wrote
 vp_kpo:       dw 0                  ; ...the one vp_kmove uses...
