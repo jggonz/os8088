@@ -81,6 +81,10 @@ h_tune_ne:                          ; every NEAT knob, as REDLINE's Tune
     mov ax, 0xA000
     xor bx, bx
     mov cx, 0xC000
+    cmp byte [h_norom], 0           ; a board with shadowing ON: no ROM to
+    je .refs                        ; read, no PicoMEM, so nothing 8-bit
+    xor cx, cx                      ; MEMORY at all
+.refs:
     call cs_sw_refs
     mov si, cs_klist_ne
     jmp cs_sw_tune
@@ -92,8 +96,30 @@ h_sweep_ne:                         ; the NEAT's, the same references; home
     call cs_ne_get
     mov bx, cs_desc_ne
     jmp cs_sw_sweep
+h_flat:     db 0                    ; 1: every step times the same
+h_norom:    db 0                    ; 1: h_tune_ne has no ROM reference
 cs_sw_measure:                      ; REDLINE times each step; the model has
-    ret                             ; no clock, so the harness does not
+    push ax                         ; no clock, so the harness makes one up:
+    push bx                         ; 300 + 100 x the candidate, a step one
+    push cx                         ; bus clock FASTER on all four - or 500
+    mov ax, 500                     ; everywhere with h_flat, a step that
+    cmp byte [h_flat], 0            ; buys nothing
+    jne .put
+    mov al, [cs_sw_cand]
+    mov ah, 100
+    mul ah
+    add ax, 300
+.put:
+    xor bx, bx
+    mov cx, 4
+.w:
+    mov [cs_sw_ns + bx], ax
+    add bx, 2
+    loop .w
+    pop cx
+    pop bx
+    pop ax
+    ret
 %include "redline/csrows.inc"
 %include "redline/csfe.inc"
 %include "redline/csne.inc"

@@ -567,9 +567,25 @@ docs/reports/.
   16-bit waits (62h bits 5:4, one). Each is a descriptor beside the first,
   `DATASHEET` on its own, and Tune sweeps the four in turn. `cs_ne_put` is
   one field write for all four, so RLAPPLY grew 41 bytes (1,817).
-  - OWED: the PB286LP's Tune and report. Its log carries every step of all
-    four knobs with the screen, ROM and I/O times at each, so one run says
-    what each delay is worth in ns and whether 16-bit waits move the screen.
+  - **FIELD RUN (2026-10-14).** Nothing misbehaved after it, by the
+    owner's account. 8-bit waits 4, 3, 2 (I/O 1,147, 972, 800 ns, the same
+    as the run before); **16-bit 0 waits FAILED with 164 wrong screen
+    reads**, so 16-bit stays 1 and the screen is a fair 16-bit check on
+    that board; **both command delays passed at 0 and bought nothing** -
+    the I/O read 799 to 798 and 800 to 798 ns. That made the sweep keep two
+    settings for no return, one of them (the 8-bit MEMORY delay) with no
+    8-bit memory read at all, so the sweep now sweeps a knob only where
+    something it times can be read and keeps a step only when it is
+    measurably faster (SPEC.md 103.6.3). The book's account fits: a
+    command delay holds the command back inside a cycle whose length the
+    wait states set, so it moves nothing a read can time.
+  - **Shadowing comes and goes on the PB286LP**, which no setup option
+    explains: 68h read 0Fh (C000-CFFF shadowed, C000 at 0-3 ns) in the
+    first report and this one, 00h in the two between (C000 at 876 ns), and
+    65h bit 7 with it (9Fh/1Fh). Nothing REDLINE writes reaches either.
+    The 82C212's registers are reset only by power-good [NEAT p12, p19],
+    so the open question for the owner is whether the two runs without it
+    followed a WARM reboot.
   - NOT TAKEN, for its own round: the BUS CLOCK (62h bits 1:0, CLK2IN/2 ->
     CLK2IN). It doubles every card's timing at once, so a sweep's checks
     say less about it than about a wait state - a card that holds IOCHRDY

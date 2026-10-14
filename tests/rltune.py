@@ -8,16 +8,18 @@ the keyboard's PPI. MartyPC is an 8088. QEMU's 386 is an AT, where 63h, 72h
 and 73h decode to nothing that matters, so the FE3600 row's writes land
 harmlessly and the whole flow - the Tune tab, pick, Target, confirm, Tune,
 Save setting, RLAPPLY - can run on the real package. What it cannot show is
-a TIMING: no read ever goes wrong in QEMU, so Tune always reaches the floor. The sweep's
-verdicts are tests/csprobe.py's, against a board model that does go wrong.
+a TIMING: no read ever goes wrong in QEMU and no R4 makes anything faster, so
+Tune keeps the book's value (or, on a jitter, a step below it). The sweep's
+verdicts - wrong reads, no gain, nothing to time - are tests/csprobe.py's,
+against a board model that does go wrong and does get faster.
 
 Asserted:
   1. On the Tune tab, picking the FE3600 (which nothing detects here), the
      Target Mfg spec and pressing Tune (T) asks first; Proceed sets R4
      10, the data sheet's, and the state field reads `Mfg spec: 10 waits`.
-  2. Target Fastest tested and Tune sweep to the floor, 4, and SET it -
-     method 3, no alert (the question it used to ask is gone, 103.6.3), and
-     the state field reads `Tuned: 4 waits`.
+  2. Target Fastest tested and Tune SETS what it kept - method 3, no alert
+     (the question it used to ask is gone, 103.6.3) - and the state field
+     names that value: `Mfg spec: 10 waits`, or `Tuned: n waits` below it.
   3. Save setting (K) writes SYSTEM\\APPDATA\\REDLINE.CFG on the BOOT disk,
      and its bytes are 103.6.4's layout with this machine's fingerprint - the
      CRC of the BIOS read out of the guest, its date and its model byte.
@@ -231,16 +233,21 @@ def main():
         pick(m, mo, p, "cs_tgt", 0)
         until("the Target is Fastest tested", lambda: p.b("cs_target") == b"\0")
         key(m, "t")
-        until("the fastest is set", lambda: p.b("cs_setv") == b"\4"
-              and p.b("cs_meth") == b"\3")
-        if p.b("cs_tfast") != b"\4":
-            fails.append("Tune's fastest is %r, want 4" % p.b("cs_tfast"))
+        until("Tune sets what it kept", lambda: p.b("cs_meth") == b"\3")
+        # QEMU's R4 writes land on nothing, so no step is FASTER and Tune
+        # keeps the book's 10 (SPEC.md 103.6.3's keep rule); its I/O read
+        # jitters by a few ns, though, so which step wins is not the
+        # assertion - that whatever was kept is SET and NAMED is
+        fast = p.b("cs_tfast")[0]
+        if fast not in (10, 8, 6, 4) or p.b("cs_setv")[0] != fast:
+            fails.append("Tune kept %d, set %d" % (fast, p.b("cs_setv")[0]))
         settle(m)
         if p.w("os88ui_awin") != 0:
             fails.append("Tune raised an alert; it asks nothing now")
-        if stat(p) != "Tuned: 4 waits":
-            fails.append("the state field read %r after Tune" % stat(p))
-        say("2. Tune swept to 4 and set it, method 3, no question, 'Tuned: 4 waits'")
+        want = "Mfg spec: 10 waits" if fast == 10 else "Tuned: %d waits" % fast
+        if stat(p) != want:
+            fails.append("the state field read %r after Tune, want %r" % (stat(p), want))
+        say("2. Tune kept R4 %d and set it, method 3, no question, %r" % (fast, want))
         # 3. Save setting, then the file on the BOOT image
         key(m, "k")
         until("Save", lambda: p.b("cs_saved") == b"\1", 60)
@@ -248,7 +255,7 @@ def main():
         bios = m.read(0xF0000, 0x10000)
         want = (b"RLCFG\0\0\0" + b"F3" + bytes([3, 1])
                 + struct.pack("<H", crc16(bios)) + bios[0xFFF5:0xFFFD]
-                + bytes([bios[0xFFFE], 0]) + bytes([4, 4]))
+                + bytes([bios[0xFFFE], 0]) + bytes([4, fast]))
         from t_image import Vol
         v = Vol(open(SYSIMG, "rb").read(), SYSIMG)
         got = None

@@ -174624,9 +174624,16 @@ fitted. Until that run it was `DATASHEET`, and swept behind the warning.
   lines say what the screen read at each step, which is what the next
   round needs to decide whether that is enough.
 - **It reads back**, so the setting line and the state field read the chip
-  live - every knob, `Now: 8-bit 4 waits, 8-bit delay 1, I/O delay 1,
-  16-bit 1 waits` - the state field names the row Tuned when ANY knob is
-  under its book, and the sweep checks each knob took (§103.6.3).
+  live - every knob, `Now: 8-bit 4 waits, mem delay 1, I/O delay 1, 16-bit
+  1 waits` - the state field names the row Tuned when ANY knob is under its
+  book, and the sweep checks each knob took (§103.6.3).
+- **The first four-knob run (PB286LP, 2026-10-14)**: the 8-bit waits went
+  4, 3, 2 again (I/O 1,147, 972, 800 ns); **16-bit 0 waits FAILED**, 164
+  wrong reads of the screen, so 1 was kept - the screen IS a 16-bit card
+  there, and the thin check caught it; and **both command delays passed at
+  0 and bought nothing** - the I/O read 800 to 798 ns for the I/O delay,
+  and the memory delay had no 8-bit memory to time or check at all, that
+  boot having shadowing on. The keep rule below is what that run taught.
 
 #### 103.6.3 The two Targets, and the verified sweep
 
@@ -174671,6 +174678,16 @@ fitted. Until that run it was `DATASHEET`, and swept behind the warning.
   - **A step that passed is TIMED where it stands** - the screen, the
     PicoMEM and the ROM in ns over RAM, the 3F4h read in ns over a NOP - and
     **every step is LOGGED** with what failed, for the report (§103.6.3.2).
+- **A knob is swept only where something it TIMES can be read, and a step
+  is kept only when it is MEASURABLY faster.** Each descriptor names what
+  it governs (`CSD_GOV`: the screen, a PicoMEM, a ROM, the I/O read), and a
+  step that read right but moved none of those by 20 ns, or by 1/32 of the
+  reading where that is more (the screen wanders ~60 ns run to run), is
+  logged `no gain` and the step before it kept: a faster setting that is
+  not faster is risk with no return. A knob none of whose timings is
+  readable on this board - an 8-bit memory knob with shadowed ROMs and no
+  PicoMEM - is not swept at all, and its log line says so. The book's
+  value is the baseline and is kept as it reads.
 - The steps are the book's value and then one bus clock less at a time,
   2 for the FE3600 (10, 8, 6, 4) and 1 for the NEAT's (4, 3, 2 and 1, 0),
   stopping at the first wrong read; the floor is never crossed. When even
@@ -174786,8 +174803,10 @@ page, and the report with it, carries eleven more lines:
   re-derived off the report with a better model rather than re-measured.
 - **The last sweep**: where it started (home, whether 3F4h and 85h were
   usable, the three reference segments), then each step - `ok` with its
-  four times, or `FAIL` with its wrong reads and every check that saw one
-  (screen, ROM, PicoMEM, 2A3h, floppy-status, I/O-write, read-back). One
+  times, `no gain` when it read right and was not kept, `not swept` for a
+  knob nothing here can time, or `FAIL` with its wrong reads and every
+  check that saw one (screen, ROM, PicoMEM, 2A3h, floppy-status, I/O-write,
+  read-back). Only the timings taken are printed. One
   flag a REFERENCE: the Victory's first such report said `memory` for R4
   6's 5,108 wrong reads and could not say which of three it was.
 

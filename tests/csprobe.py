@@ -547,6 +547,14 @@ class Rig:
 L = 16      # CSL_SIZE: one step of csweep.inc's cs_sw_log
 
 
+def nelog(r):
+    """cs_sw_log as (descriptor, value, read right, home, note) a step"""
+    n = r.rb("cs_sw_n")[0]
+    log = r.rb("cs_sw_log", 12 * L)
+    return [(int.from_bytes(log[i * L:i * L + 2], "little"), log[i * L + 2],
+             log[i * L + 3] == 0, log[i * L + 6], log[i * L + 7]) for i in range(n)]
+
+
 def write_side(bad):
     img, syms = build("tests/csprobe/feharness.asm")
     runs = 0
@@ -695,12 +703,37 @@ def write_side(bad):
             if list(r.b.knobs()) != want or ax & 0xFF != want[0] or r.b.bad:
                 bad("%s: knobs %s, AL %d, want %s; %s"
                     % (tag, r.b.knobs(), ax & 0xFF, want, r.b.bad[:3]))
-            n = r.rb("cs_sw_n")[0]
-            log = r.rb("cs_sw_log", 12 * L)
-            got = [(int.from_bytes(log[i * L:i * L + 2], "little"), log[i * L + 2],
-                    log[i * L + 3] == 0, log[i * L + 6]) for i in range(n)]
+            got = nelog(r)
+            steps = [s + (0,) for s in steps]
             if got != steps:
                 bad("%s: the log is %s, want %s" % (tag, got, steps))
+    # 2f. A STEP THAT BUYS NOTHING IS NOT KEPT: every knob reads right all
+    # the way down but times the same, so each stays at its book's value
+    # and the one step below it is logged CSN_NOGAIN (the PB286LP's command
+    # delays, which passed at 0 and moved the I/O read 2 ns)
+    r = Rig(img, syms, NEBoard, 0)
+    r.wb("h_flat", [1])
+    ax, cf = r.call("h_tune_ne", watch_if=True)
+    runs += 1
+    want = [(syms[d], b, True, b, 0) for d, b in zip(descs, books)]
+    want = [x for d, b, f in zip(descs, books, floors)
+            for x in ((syms[d], b, True, b, 0), (syms[d], b - 1, True, b, 1))]
+    if list(r.b.knobs()) != list(books) or nelog(r) != want or r.b.bad:
+        bad("flat timings: knobs %s, want %s; log %s, want %s; %s"
+            % (r.b.knobs(), books, nelog(r), want, r.b.bad[:3]))
+    # 2g. A KNOB NOTHING CAN TIME IS NOT SWEPT: with no ROM and no PicoMEM
+    # there is no 8-bit MEMORY to read, so the memory command delay is left
+    # where it reads and logged once, CSN_NOREF; the others sweep as ever
+    r = Rig(img, syms, NEBoard, 0)
+    r.wb("h_norom", [1])
+    ax, cf = r.call("h_tune_ne", watch_if=True)
+    runs += 1
+    log = nelog(r)
+    mem = [x for x in log if x[0] == syms["cs_desc_nec8"]]
+    if mem != [(syms["cs_desc_nec8"], 1, True, 1, 2)] or r.b.knobs() != (2, 1, 0, 0) \
+            or r.b.bad:
+        bad("no 8-bit memory: knobs %s, the memory delay's log %s; %s"
+            % (r.b.knobs(), mem, r.b.bad[:3]))
     for ax_, what in (((6 << 8) | 1, "6 waits"), ((1 << 8) | 1, "1 wait"),
                       ((3 << 8) | 5, "knob 5"), ((3 << 8) | 0, "knob 0"),
                       ((4 << 8) | 2, "8-bit delay 4"), ((4 << 8) | 4, "16-bit 4 waits")):

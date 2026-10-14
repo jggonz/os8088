@@ -2417,25 +2417,26 @@ cs_swrow:
     mov al, [bx + CSL_HOME]
     xor ah, ah
     call cs_dec
+    mov si, cs_s_swnoref
+    cmp byte [bx + CSL_NOTE], CSN_NOREF
+    je .say
     cmp word [bx + CSL_BAD], 0
     jne .fail
     mov si, cs_s_swok
+    cmp byte [bx + CSL_NOTE], CSN_NOGAIN
+    jne .ok
+    mov si, cs_s_swnog
+.ok:
     call cs_put
     xor cx, cx
 .ns:
-    mov si, cx
-    shl si, 1
-    mov si, [cs_swnames + si]
-    call cs_put
-    mov si, cx
-    shl si, 1
+    mov si, cx                      ; only what was timed: the line must
+    shl si, 1                       ; hold a step with all four
     mov ax, [bx + CSL_NS + si]
     cmp ax, CS_NOMEAS
-    jne .num
-    mov al, '-'
-    call cs_ch1
-    jmp short .nx
-.num:
+    je .nx
+    mov si, [cs_swnames + si]
+    call cs_put
     call cs_dec
 .nx:
     inc cx
@@ -2462,6 +2463,9 @@ cs_swrow:
 .wn:
     add si, 2
     loop .why
+    jmp short .out
+.say:
+    call cs_put
 .out:
     pop si
     pop cx
@@ -2698,7 +2702,7 @@ cs_s_tnone: db 'none failed down to ', 0
 cs_s_ds:    db 'Mfg spec set: ', 0
 cs_s_ds2:   db ', the data sheet', 27h, 's value', 0
 cs_s_rsv:   db ' (saved)', 0
-cs_s_rnsv:  db ' (not saved)', 0
+cs_s_rnsv:  db ' (unsaved)', 0
 cs_s_nefind: db 'The NEAT is written only where its probe found it', 0
 cs_s_warn:  db 'Untested timings: may need a reset', 0
 cs_s_btxt:  db 'BIOS: ', 0
@@ -2722,6 +2726,8 @@ cs_s_swrom: db ' rom ', 0
 cs_s_swpm:  db ' pm ', 0
 cs_s_swfrom: db ' from ', 0
 cs_s_swok:  db ': ok, ns', 0
+cs_s_swnog: db ': no gain, ns', 0      ; read right, not kept
+cs_s_swnoref: db ': not swept - nothing it times reads here', 0
 cs_s_nscr:  db ' scr ', 0
 cs_s_npm:   db ' pm ', 0
 cs_s_nrom:  db ' rom ', 0
