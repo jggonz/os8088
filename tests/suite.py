@@ -8955,7 +8955,7 @@ SOAK = [
         "asserted every leg - and stepping past either end of the range is "
         "refused while the other direction still moves.",
         needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
-    Row("deskcalremind", "soak", py("tests/deskcalremind.py"), 65.0,
+    Row("deskcalremind", "soak", py("tests/deskcalremind.py"), 72.0,
         "SPEC.md 107.3: the Desk Calendar's REMINDERS, on MartyPC's VGA XT "
         "with the clock SET through the live clk_* fields. A launch at 09:28 "
         "sums up ONE missed reminder in one toast and marks it FIRED; at "
@@ -8964,11 +8964,15 @@ SOAK = [
         "`09:30 Dentist`, OSAPI_SND_TONE asked for 880 then 660 Hz four ticks "
         "each (a breakpoint on the cell), and ONE run, its line's mark `!` to "
         "`-`; ONE AT A TIME - two minutes pass under its alert and Call Bob "
-        "waits, then goes off alone at the next minute after OK; a 23-letter "
+        "waits - the save Dentist's firing owed landing UNDER its alert, "
+        "which holds nothing - then goes off alone at the next minute after "
+        "OK; a 23-letter "
         "text drops the `Reminder ` prefix rather than lose a letter; nothing "
-        "goes off with the entry field open; an appointment typed for a "
-        "moment already past is created FIRED; the state file has every "
-        "FIRED; a relaunch with no RTC says `No RTC - check the time`; and "
+        "goes off with the entry field open; one typed for THIS minute goes "
+        "off on the next beat, and one for a moment already past is created "
+        "FIRED; the state file has every FIRED; a relaunch AT a reminder's "
+        "own minute with no RTC does not call it missed - the toast is `No "
+        "RTC - check the time` and it goes off on the first beat; and "
         "at midnight today's inverse moves (two runs) and a 00:00 reminder on "
         "the new day goes off.",
         needs=("marty", "mtools"), timeout=900,
@@ -8986,7 +8990,7 @@ SOAK = [
         "opened again by hand it is where it was dragged, its data FIRED.",
         needs=("marty",), timeout=900,
         wants=("build/small360.img", "build/smallk/kernel.bin")),
-    Row("deskcalperf", "soak", py("tests/deskcalperf.py"), 60.0,
+    Row("deskcalperf", "soak", py("tests/deskcalperf.py"), 63.0,
         "SPEC.md 107.6 / PERFORMANCE.md Part 5: what the Desk Calendar's "
         "gestures COST in primitive calls - a breakpoint on every drawing "
         "cell of the API table, a call counted only when its far return "
@@ -8996,7 +9000,9 @@ SOAK = [
         "the heading and the agenda lines that were occupied - asserted "
         "exactly), an IDLE stretch of three beats and a minute boundary that "
         "must draw ZERO, and a reminder (one run of the calendar's own, the "
-        "rest the alert's paint); then two cold boots - no SYSTEM.CFG, and a "
+        "rest the alert's paint) - and, counted at the drive, the save a "
+        "missed launch and a firing each owe, the second under its alert; "
+        "then two cold boots - no SYSTEM.CFG, and a "
         "DIA row - timed to dia_boot and to ui_task with the drive's "
         "counters: a boot with no row makes no disk call after its paint.",
         needs=("marty", "mtools"), timeout=1200,

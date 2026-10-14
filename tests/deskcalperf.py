@@ -26,7 +26,11 @@ and three tasks, the clock at Wed 14 Oct 2026 09:59:
                 MUST BE ZERO, and is asserted - the beats are counted at the
                 package's own dc_tick so the zero is not a machine that slept
   reminder      10:00, `Review` goes off: the calendar's own share (its agenda
-                line, counted at dc_run) and the alert's paint
+                line, counted at dc_run) and the alert's paint - and the
+                save its FIRED mark owes, counted at the drive and asserted
+                to land with the alert still up
+  missed        09:00 `Standup` came due before the launch: the save its
+                FIRED mark owes, the one write a launch makes by itself
 
 and on the VGA XT, two cold boots of the shipped 360KB disk - with no
 SYSTEM.CFG, and with one whose trailer holds the calendar's DIA row - timed
@@ -56,7 +60,7 @@ import os88ui      # noqa: E402
 import os88marty   # noqa: E402
 import os88dia     # noqa: E402
 import os88sym     # noqa: E402
-from deskcaledit import Cal, TITLE, disk_with   # noqa: E402
+from deskcaledit import Cal, TITLE, disk_with, DIA_S_DIRTY   # noqa: E402
 from deskcaltask import pkg_sym                 # noqa: E402
 
 ROOT = os.path.join(HERE, "..")
@@ -158,6 +162,13 @@ def ui_leg(tmp, machine, label, results):
                                         os88dia.DESKCAL_PAYLEN)
             ui._wait(lambda: c.bss(st_off)[0] & 3 == 3,
                      "the first tick's registration", 120)
+            # 09:00 Standup was missed: its FIRED mark owes the one save a
+            # launch makes by itself, at the first quiet poll after the
+            # registration (SPEC.md 107.5.2)
+            m.disk(reset=True)
+            ui._wait(lambda: not c.st() & DIA_S_DIRTY,
+                     "the missed reminder's save", 60)
+            box["miss"] = m.disk()
             os88marty.guest_sleep(m, 1.0)
         hits, _ = measure(m, launch)
         c = box["c"]
@@ -166,6 +177,13 @@ def ui_leg(tmp, machine, label, results):
         first = Gesture(hits, seg)
         print("%s: first paint      %s" % (label, first))
         r["first_paint"] = first.row()
+        d = box["miss"]
+        print("%s: missed at launch, the save: %d reads, %d writes"
+              % (label, d["reads"], d["writes"]))
+        check(d["writes"] > 0, "%s: a launch that missed a reminder SAVES "
+              "its FIRED mark (%d reads, %d writes)"
+              % (label, d["reads"], d["writes"]))
+        r["missed_save"] = {"reads": d["reads"], "writes": d["writes"]}
 
         tick_at = seg * 16 + pkg_sym(tmp, "dc_tick")
         run_at = seg * 16 + pkg_sym(tmp, "dc_run")
@@ -211,14 +229,20 @@ def ui_leg(tmp, machine, label, results):
               "lines that were occupied (%d: %r)" % (label, sel.n, sel.by))
 
         print("%s: idle - three beats and a minute boundary" % label)
-        m.write(ui._S("clk_sec"), bytes([54, 58, 9]))
-        lnow0 = struct.unpack("<H", bytes(c.bss(os88dia.DESKCAL_BSS_LNOW,
-                                                2)))[0]
+        # 09:58:53, and a beat that has SEEN 09:58 before the count starts:
+        # the launch's missed-reminder save may have carried the clock past
+        # 09:59 already, and the minute last seen must be the one before
+        m.write(ui._S("clk_sec"), bytes([53, 58, 9]))
+
+        def lnow():
+            return struct.unpack("<H", bytes(c.bss(
+                os88dia.DESKCAL_BSS_LNOW, 2)))[0]
+        ui._wait(lambda: lnow() == 9 * 60 + 58, "a beat at 09:58", 10)
+        lnow0 = lnow()
         hits, _ = measure(m, lambda: os88marty.guest_sleep(m, 8.0),
                           extra=(tick_at,))
         idle = Gesture(hits, seg, extra=(tick_at,))
-        lnow1 = struct.unpack("<H", bytes(c.bss(os88dia.DESKCAL_BSS_LNOW,
-                                                2)))[0]
+        lnow1 = lnow()
         print("%s: idle             %s, %d beats, minute %d -> %d"
               % (label, idle, idle.extra[tick_at], lnow0, lnow1))
         check(idle.extra[tick_at] >= 3, "%s: three beats or more ran (%d)"
@@ -238,14 +262,25 @@ def ui_leg(tmp, machine, label, results):
             ui._wait(lambda: c.bss(os88dia.DESKCAL_BSS_ALERT)[0] == 1,
                      "Review's alert", 60)
             os88marty.guest_sleep(m, 3.0)
+        m.disk(reset=True)
         hits, _ = measure(m, fire, extra=(run_at,))
         rem = Gesture(hits, seg, extra=(run_at,))
+        ui._wait(lambda: not c.st() & DIA_S_DIRTY,
+                 "the save Review's firing owed", 60)
+        d = m.disk()
+        up = c.bss(os88dia.DESKCAL_BSS_ALERT)[0]
+        print("%s: reminder, the save: %d reads, %d writes, alert up %d"
+              % (label, d["reads"], d["writes"], up))
+        check(d["writes"] > 0 and up == 1, "%s: the firing's save lands "
+              "with the alert still up (%d writes, alert %d)"
+              % (label, d["writes"], up))
         print("%s: reminder         %s, %d of them the calendar's own runs"
               % (label, rem, rem.extra[run_at]))
         check(rem.extra[run_at] == 1, "%s: the calendar drew ONE run, the "
               "line (%d)" % (label, rem.extra[run_at]))
         r["reminder"] = dict(rem.row(), calendar_runs=rem.extra[run_at],
-                             alert_calls=rem.n - rem.extra[run_at])
+                             alert_calls=rem.n - rem.extra[run_at],
+                             save_reads=d["reads"], save_writes=d["writes"])
         m.key("Enter")
         os88marty.pace(m, 1.0)
     results[label] = r

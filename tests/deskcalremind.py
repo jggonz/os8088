@@ -29,30 +29,38 @@ needs is ten guest seconds away rather than an hour. Today is Wed 14 October
      exactly ONE run, Dentist's agenda line with its mark gone from `!` to
      `-` (the line buffer read back).
   C  ONE AT A TIME: 09:31 and 09:32 pass with Dentist's alert still up and
-     Call Bob does not go off; OK, and at 09:33 it does - and only it, though
+     Call Bob does not go off - and the save Dentist's firing owed has landed
+     UNDER that alert, which holds nothing (an unanswered alert held every
+     save once, and a Restart lost them); OK, and at 09:33 it does - and only it, though
      Quarterly is due by then too; OK, and at 09:34 Quarterly's alert reads
      `09:33 Quarterly budget review`, the prefix dropped so the user's text
      is all there (OS88UI_AMAX is 34).
   D  NEVER UNDER A TYPED LINE: with the entry field open across 09:36 the
      Typing test does not go off; Esc, and at 09:37 it does.
-  E  A MOMENT ALREADY PAST: `0930 Late entry` typed at 09:37 is created
-     FIRED - no alert; `2300 Later` is armed and not fired.
+  E  THIS MINUTE IS NOT PAST: `0940 Right now` typed at 09:40 goes off on
+     the next beat, chirp and alert - its moment is now, not before it. A
+     MOMENT ALREADY PAST: `0930 Late entry` typed then is created FIRED - no
+     alert; `2300 Later` is armed and not fired.
   F  the state file, after the save the firings owed: Gym, Dentist, Call
-     Bob, Quarterly, Typing test and Late entry FIRED; Later and Midnight not.
-  G  NO RTC: closed and opened again with the clock's RTC flag down and
-     nothing missed - Later is still to come - the toast is `No RTC - check
-     the time`.
+     Bob, Quarterly, Typing test, Right now and Late entry FIRED; Later and
+     Midnight not.
+  G  A LAUNCH AT A REMINDER'S OWN MINUTE, and NO RTC: closed and opened
+     again at 23:00 - Later's minute - with the clock's RTC flag down. Later
+     is not MISSED (missed is strictly before this minute): the toast is
+     `No RTC - check the time`, the one said when nothing was missed and a
+     reminder is still to come, and Later goes off on the first beat.
   H  MIDNIGHT: at 23:59:52 the date rolls to the 15th - today's inverse
      moves (TWO runs: the old field and the new; the 14th is the selected
      day so its frame is redrawn and is not a run) - and Midnight, on the
-     new day, goes off at 00:00 - Later (23:00) having gone off, and been
-     answered, at 23:59 first.
+     new day, goes off at 00:00.
 
 **BREAK IT ON PURPOSE**: take the `os88ui_awin` test out of dc_rpass and C
 sees Call Bob go off at 09:31 (or the alert refused and its FIRED lost);
-make dc_missed compare with `<=` instead of `<` and A misses nothing that
-matters but a launch AT 09:30 would miss Dentist; drop dc_stale's call in
-dc_cappt and E's Late entry goes off at once.
+make dc_missed compare with `<=` instead of `<` and G's launch AT 23:00
+calls Later missed (`1 missed reminder`, and no alert); drop dc_stale's call
+in dc_cappt and E's Late entry goes off at once; fire this minute's moment
+silently in dc_stale and E's Right now never goes off; put dc_alert back in
+dc_tick's hold and C waits for a save that never comes.
 """
 import os
 import shutil
@@ -67,7 +75,7 @@ import os88ui      # noqa: E402
 import os88marty   # noqa: E402
 import os88dia     # noqa: E402
 import os88geom as geom   # noqa: E402
-from deskcaledit import Cal, TITLE, disk_with   # noqa: E402
+from deskcaledit import Cal, TITLE, disk_with, DIA_S_DIRTY   # noqa: E402
 from deskcaltask import pkg_sym                 # noqa: E402
 
 TODAY = (2026, 10, 14)
@@ -213,6 +221,12 @@ def main():
             check(r.fired("Call Bob") is False and r.windows() == 2,
                   "09:31 and 09:32 passed under Dentist's alert: Call Bob "
                   "has not gone off, and one alert is up")
+            ui._wait(lambda: not c.st() & DIA_S_DIRTY,
+                     "the save Dentist's firing owed, under its alert", 60,
+                     snapshot=lambda: "dia_st %#x, dc_alert %d"
+                     % (c.st(), r.alert()))
+            check(r.alert() == 1 and r.windows() == 2,
+                  "...and the save it owed landed with the alert still up")
             r.ok("Dentist's alert")
             r.clock(9, 32, 52)
             r.wait_alert("Call Bob's alert")
@@ -246,7 +260,19 @@ def main():
                   "at 09:37 it goes off (%r)" % r.rmsg())
             r.ok("Typing test's alert")
 
-            print("E: a moment already past")
+            print("E: this minute is not past; a moment already past is")
+            r.clock(9, 40, 0)
+            os88marty.guest_sleep(m, 2.5)       # a beat sees 09:40 first
+            c.key("KeyN")
+            c.type("0940 Right now")
+            c.key("Enter")
+            c.field_shut("the field to shut after 0940 Right now")
+            r.wait_alert("Right now's alert", 30)
+            check(r.rmsg() == "Reminder 09:40 Right now"
+                  and tuple(r.minute()) == (40, 9),
+                  "typed at 09:40, 09:40 goes off at once (%r at %02d:%02d)"
+                  % ((r.rmsg(),) + tuple(r.minute())[::-1]))
+            r.ok("Right now's alert")
             for line in ("0930 Late entry", "2300 Later"):
                 c.key("KeyN")
                 c.type(line)
@@ -255,7 +281,7 @@ def main():
             os88marty.guest_sleep(m, 3.0)
             check(r.appts().get("Late entry") == (True, True)
                   and r.alert() == 0,
-                  "Late entry (09:30, typed at 09:37) is armed and FIRED, "
+                  "Late entry (09:30, typed at 09:40) is armed and FIRED, "
                   "and no alert (%r)" % (r.appts().get("Late entry"),))
             check(r.appts().get("Later") == (True, False),
                   "Later (23:00) is armed and not fired")
@@ -266,29 +292,34 @@ def main():
             want = {"Mum's birthday": False, "Old one": True, "Gym": True,
                     "Dentist": True, "Call Bob": True,
                     "Quarterly budget review": True, "Typing test": True,
-                    "Late entry": True, "Later": False, "Midnight": False}
+                    "Right now": True, "Late entry": True, "Later": False, "Midnight": False}
             check(got == want, "FIRED as the file has it\n        got  %r\n"
                   "        want %r" % (got, want))
 
-            print("G: no RTC, nothing missed, a reminder to come")
+            print("G: a launch AT Later's minute, with no RTC")
             rtc = ui._S("clk_rtc")
             was = m.read(rtc, 1)
             r.close()
             m.write(rtc, b"\0")
             ui.m.write(ui._S("toast_buf"), b"\0")
-            c = Cal(ui, tmp, check=check)
+            c = Cal(ui, tmp, check=check,
+                    before=lambda: m.write(ui._S("clk_sec"),
+                                           bytes([0, 0, 23])))
             r = Rem(ui, c)
             run_at = c.wseg * 16 + pkg_sym(tmp, "dc_run")
             txt = ui.wait_toast(says="RTC")
-            check(txt == "No RTC - check the time", "the toast says %r" % txt)
+            now = struct.unpack("<H", bytes(c.bss(B.DESKCAL_BSS_NOW, 2)))[0]
+            check(now == 23 * 60, "the entry proc read 23:00, Later's own "
+                  "minute (%02d:%02d)" % divmod(now, 60))
+            check(txt == "No RTC - check the time", "the toast says %r - "
+                  "Later, due THIS minute, is not missed" % txt)
             m.write(rtc, bytes(was))
+            r.wait_alert("Later's alert", 30)
+            check(r.rmsg() == "Reminder 23:00 Later",
+                  "...and goes off on the first beat (%r)" % r.rmsg())
+            r.ok("Later's alert")
 
             print("H: midnight")
-            r.clock(23, 59, 20)         # Later (23:00) is due first, and is
-            r.wait_alert("Later's alert")   # answered before the rollover
-            check(r.rmsg() == "Reminder 23:00 Later",
-                  "Later goes off first (%r)" % r.rmsg())
-            r.ok("Later's alert")
             with os88marty.bp_trace(m, run_at) as tr:
                 r.clock(23, 59, 52)
                 r.wait_alert("Midnight's alert")

@@ -205,26 +205,37 @@ dc_remans:
     ret
 
 ; dc_stale - appointment AL was just ARMED (a new one, a moved time, the mark
-; toggled, a Remind pick): when its moment is already past - or is this very
-; minute - it is FIRED at once, silently, rather than going off the instant it
-; was typed (SPEC.md 107.3). Every register kept
+; toggled, a Remind pick). A moment already PAST - before this minute - is
+; FIRED at once, silently, rather than going off the instant it was typed;
+; one that IS this minute is the next beat's to fire, so the minute last
+; seen is forgotten and dc_rpass looks again (SPEC.md 107.3) - `0930` with
+; a 15-minute lead typed at 09:15 is a reminder now, not a missed one.
+; Every register kept
 dc_stale:
-    push ax
-    push dx
+    push bx
+    push cx
     push si
-    push ax
-    mov dx, [dc_now]
-    call dc_due                 ; the first due from AL on...
-    pop dx                      ; DL = AL as asked
-    jc .x
-    cmp al, dl
-    jne .x                      ; ...is another one: this is not due
-    call dc_aptr
+    call dc_aptr                ; SI = its record
+    mov cl, [si + DCA_FLAGS]
+    and cl, DCA_REMIND | DCA_FIRED
+    cmp cl, DCA_REMIND
+    jne .x                      ; not armed, or fired already
+    call dc_tpack
+    cmp [si + DCA_DATE], bx
+    jne .x                      ; not today's: its day will come
+    call dc_moment              ; CX = its moment
+    jc .x                       ; all day
+    cmp cx, [dc_now]
+    ja .x                       ; still to come
+    jb .past
+    mov word [dc_lnow], 0FFFFh  ; this minute: the next beat fires it
+    jmp short .x
+.past:
     or byte [si + DCA_FLAGS], DCA_FIRED
 .x:
     pop si
-    pop dx
-    pop ax
+    pop cx
+    pop bx
     ret
 
 ; dc_armed - CF = 0: an armed, unfired, timed reminder still to come, today

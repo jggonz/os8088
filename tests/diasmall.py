@@ -29,8 +29,10 @@ scratch file, on MartyPC's 128KB 5150 with a CGA - the floor machine, COMPACT.
 
 **BREAK IT ON PURPOSE**: make dia_made ignore the timer's CF (never set
 DIA_S_WORKER) and A finds no worker and B never saves; take the `test
-[dia_st], DIA_S_WORKER` out of dc_fire and C hears two requests, the second
-never made.
+[dia_st], DIA_S_WORKER` out of dc_fire and C hears TWO requests, (880,4)
+then (660,4) - the second made 36 ticks late, on the worker's next beat,
+because the sooner re-arm (dia_nx) is the timer's and the worker's sleep for
+that beat had already begun.
 """
 import os
 import shutil

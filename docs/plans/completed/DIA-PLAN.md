@@ -27,9 +27,11 @@ measured ones are §107.6's.
 | `wm_fit` clamps "whatever is left" | the template is sized for the adapter BEFORE the create, and `dia_made` gives a pulled-up `y` back | §107.5.2 |
 | a save at the next 2 s tick | held while the user is mid-edit (`DIA_ONTICK`'s CF), so a burst is one save | §107.5 |
 | the chirp 880 then 660 Hz everywhere | the same on kern_big through a once-only sooner beat (`dia_nx`); ONE 880 Hz note on kern_small's worker arm | §107.3 |
-| missed = due-but-unfired at launch | missed = due BEFORE this minute; a moment already past when ARMED is fired silently; nothing fires under an open entry field | §107.3 |
+| missed = due-but-unfired at launch | missed = due BEFORE this minute; a moment already past (before this minute) when ARMED is fired silently, one armed for this minute fires at the next beat; nothing fires under an open entry field | §107.3 |
+| "set FIRED and dirty" | the FIRED marks owe saves the user did not cause - a launch that missed reminders, an unattended firing - and they are priced; an alert holds no save | §107.3, §107.5.2, §107.6 |
+| `deskcalremind`'s QEMU `make test-snd` + `sndcheck.py` arm | the tone asserted at `OSAPI_SND_TONE`'s registers on MartyPC, not off the speaker | §107.9 |
 | `Clock not set (no RTC)` | `No RTC - check the time` (the cell cannot say whether it was set) | §107.3 |
-| §9's `make diashot` fixture and the PR's screenshot set | not built in waves 0-4: the 1bpp pictures are `tests/deskcal1bpp.py --shots`'s, and the gates assert on pixels and on the state file instead | §107.10 |
+| §9's `make diashot` fixture and the PR's screenshot set | not built in waves 0-4: the 1bpp pictures are `tests/deskcal1bpp.py --shots`'s, and the gates assert on pixels and on the state file instead; the set belongs to the pull request | §107.9 |
 
 The rows that hold it: `t_dia` (fast); `diaboot`, `diamiss`, `diashort`,
 `diahiber`, `diaswap`, `diaregister`, `diamove`, `diamovecga`, `diaanchor`,
@@ -1001,15 +1003,18 @@ prose.
 61. **Missed at launch = moment strictly BEFORE this minute**; one due this
     very minute is the first beat's to fire (dc_lnow starts 0FFFFh). Design
     "due-but-unfired" would report a 09:30 launch's 09:30 item as missed.
-62. **dc_stale: a reminder ARMED for a moment already past (or this minute)
-    is FIRED at once, silently** - new timed appointment, an edit that moves
+62. **dc_stale: a reminder ARMED for a moment already past is FIRED at
+    once, silently** (the review: past = strictly before this minute, as for
+    a launch; one armed for THIS minute fires at the next beat with its
+    alert) - new timed appointment, an edit that moves
     the time / gives an all-day one a time, the mark-column toggle, a Remind
     pick. Not in the design; without it a 09:30 appointment typed at 10:00
     went off the instant it was entered.
 63. **Nothing fires while the entry field is open** (as well as while any of
     our alerts is up - os88ui_awin, the shared gate). An alert takes the
-    keyboard; the rest of a typed line would go to it. The firing's owed save
-    is held while the reminder's alert is up (dc_alert in DIA_ONTICK's CF).
+    keyboard; the rest of a typed line would go to it. (The first build held
+    the firing's owed save while the alert was up; the review dropped it -
+    item 68.)
 64. **No-RTC toast is `No RTC - check the time`** (design `Clock not set (no
     RTC)`): CLK_GET's AL bit 0 says no chip, not whether the clock was set
     this session - say the fact (SPEC 47). Said at launch only with a
@@ -1025,3 +1030,28 @@ prose.
     PERFORMANCE.md Set 86 (a 27-cell font_run 8.4 ms on MartyPC's 5150) and
     not with Part 2's older field price of 905 us a cell. The CALLS are the
     unit the budget is kept in; the spans are reported as measured.
+
+## Wave 4 review
+
+68. **A reminder's alert holds no save.** Holding the firing's save until
+    the OK held every edit and drag made meanwhile for as long as the alert
+    stayed up, and a Restart closes nothing, so all of it was lost. The
+    save waits for the one quiet poll every edit waits for and lands under
+    the alert (3 reads + 8 writes, ~4.4 s on the lock; an OK clicked then
+    waits behind it).
+69. **dc_stale: past = strictly BEFORE this minute.** A moment equal to now
+    (`0930`, 15-minute lead, typed at 09:15) is a reminder now: dc_lnow is
+    forgotten and the next beat fires it with chirp and alert.
+70. **The FIRED marks owe saves the user did not cause** - a launch that
+    missed reminders and an unattended firing. SPEC 107.5.2's "nothing is
+    written that the user did not cause" names the exception; 107.6 and
+    PERFORMANCE.md Part 5 price both saves, and deskcalperf counts them at
+    the drive. Not saving them would re-toast the same missed reminders at a
+    relaunch.
+71. **No `make test-snd` / sndcheck arm**: the tone is asserted at the
+    SND_TONE cell's registers on MartyPC (design 8.x's QEMU arm not built).
+72. **No `make diashot` / docs/dia/ PNG set in waves 0-4**: it belongs to
+    the pull request.
+73. **The calendar's save is 3 reads + 8 writes at the drive** (4 + 8 after
+    a missed launch, deskcalperf), not the probe's 2 + 6 that wave 3's text
+    quoted for it: ~4.4 s at 400 ms a call.

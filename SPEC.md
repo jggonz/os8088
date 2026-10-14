@@ -169620,19 +169620,35 @@ last beat that looked - or the date has, which changes it too:
   reminders due in one minute are a minute apart and never stacked, and a
   reminder that came due while the user was typing waits until the line is
   done rather than taking the keyboard from under it. The SAVE the firing
-  owes is held while the alert is up (`DIA_ONTICK`'s CF, §107.5), so the
-  user's OK is never queued behind seconds of disk.
+  owes is NOT held while the alert is up: it waits for the one quiet poll
+  every edit waits for (`DIA_ONTICK`'s CF, §107.5), ~2 s, and then lands
+  under the alert - 3 reads and 8 writes, ~4.4 s of disk with the lock
+  held (§107.6), so an OK
+  clicked in that window waits behind it. Holding it until the OK (wave 4's
+  first build) held every edit and drag made meanwhile for as long as the
+  alert stayed up, behind another window or with nobody there, and a
+  Restart closes nothing (§107.4), so all of it was lost.
 - **Missed at launch.** At the entry proc, today's armed reminders whose
   moment is BEFORE this minute - they came due while the widget was not
   running - are marked `FIRED` and summarised in ONE toast, `1 missed
   reminder` or `3 missed reminders`. Earlier days are not replayed. One whose
   moment IS this minute is not missed: the first beat fires it, because the
-  minute last seen starts as none.
+  minute last seen starts as none. The FIRED marks are the state file's, so
+  a launch that missed any OWES A SAVE, made at the first quiet poll after
+  the registration (~2 s after it, ~4.4 s of disk on the lock, §107.6) -
+  the one write a launch makes that the user did not cause (§107.5.2). Not
+  saving them would cost a relaunch before the next save the user does
+  cause the same toast again, for reminders already reported.
 - **A moment already past is fired at once, silently**, whenever a reminder
   is ARMED: a new timed appointment, an edit that moves its time (or gives an
   all-day one a time), a click on the mark column, a Remind pick. A reminder
   for a moment the user has just typed past would otherwise go off the
-  instant it was typed; its mark reads `-`.
+  instant it was typed; its mark reads `-`. PAST is strictly before this
+  minute, as it is for a launch: a moment that IS this minute - `0930` with
+  the 15-minute lead typed at 09:15 - is a reminder NOW, so the minute last
+  seen is forgotten and the next beat fires it, chirp, toast and alert (a
+  wave-4 build counted this minute as past and fired it silently, so the
+  user was never told of an appointment fifteen minutes away).
 - **Midnight.** The beat that finds the date changed moves today's inverse
   (above) and runs the minute's work for the NEW day, so a `00:00` reminder
   fires at the rollover. The selected day and the month on show stay where
@@ -169674,8 +169690,10 @@ The bullet in a day's mark cell is an appointment on that date. The flags
 byte at +3 is bit 0 = new appointments get NO reminder (Remind > No Reminder
 with nothing timed selected). An edit owes a save (`dia_touch`), which the
 next tick makes - and a save is not one write: it is `dia_enter`'s remount
-and walk and then `OSAPI_FILE_WRITE`, 2 reads and 6 writes, about 3.2 s of
-disk on a 5150 with the lock held (§107.6). So the calendar HOLDS it
+and walk and then `OSAPI_FILE_WRITE` - for the calendar's five-sector file
+3 reads and 8 writes counted at the drive (`deskcalperf`; the probe's
+16-byte one is 2 and 6), about 4.4 s of disk on a 5150 with the lock held
+(§107.6). So the calendar HOLDS it
 (`DIA_ONTICK` answers CF = 1, §107.5) while the entry field or the Delete
 question is open - a save in the middle of a typed word stalls the echo for
 seconds - and until one poll has passed with no edit, so a burst of ticked
@@ -169805,7 +169823,7 @@ four that wave 2 added):
 | `dia_made` | after `OSAPI_WM_CREATE` **and the package's own sizing calls** (`KEEPH`, `PREFER`) | give back a restored `y` the create's fit pulled up and re-fit under the window's own height rule (§107.5.2); take the place the window OPENED at as the place on record; install `OSAPI_WM_ONTIMER` and `OSAPI_WM_ONCLOSE`; arm a 1-tick timer - or, where the timer is refused (kern_small), install the wake handler for the worker arm |
 | `dia_painted` | the end of the package's `W_PAINT` | on kern_small, hire the worker (once); nothing elsewhere |
 | `dia_touch` | whenever the payload changed | owe a save; the next tick makes it |
-| `dia_tick` | each timer tick (UI task, lock held) | the FIRST registers the DIA row (`OSAPI_DESK_ITEM` AL = 1, +3 = `'D'`, path from `OSAPI_FILE_PATH`); every one polls the frame's x,y and, once two polls agree on a place that is NOT the one on record, records it and owes a save; calls `DIA_ONTICK`, whose CF = 1 holds any save owed to a later poll (the package is mid-edit); saves what is owed; re-arms for 36 ticks - or ONCE for `dia_nx` ticks, when `DIA_ONTICK` stored a sooner beat there (the calendar's second chirp note, §107.3; the worker arm's sleep ignores it). A widget that has not been moved or edited writes nothing, whatever its state file was |
+| `dia_tick` | each timer tick (UI task, lock held) | the FIRST registers the DIA row (`OSAPI_DESK_ITEM` AL = 1, +3 = `'D'`, path from `OSAPI_FILE_PATH`); every one polls the frame's x,y and, once two polls agree on a place that is NOT the one on record, records it and owes a save; calls `DIA_ONTICK`, whose CF = 1 holds any save owed to a later poll (the package is mid-edit); saves what is owed; re-arms for 36 ticks - or ONCE for `dia_nx` ticks, when `DIA_ONTICK` stored a sooner beat there (the calendar's second chirp note, §107.3; the worker arm's sleep ignores it). A widget that has not been moved or edited writes nothing, whatever its state file was - unless its OWN payload changed by itself: the calendar's FIRED marks, set by a launch that missed reminders and by a reminder going off, owe a save like an edit (§107.3, §107.5.2) |
 | `dia_close` | `W_ONCLOSE` | `DIA_ONCLOSE`; remove the row by name (AL = 0, AH = 0xFF); save; let the close proceed - except that a remove `OSAPI_DESK_ITEM` REFUSED (no system disk in A: to read `CTRL.DRV` from, whose own toast asks for it) declines the FIRST close (CF = 1) so the user can put the disk back and close again; the next close goes ahead whatever the remove answers, so a refusal can never make the window unclosable. `DIA_ONCLOSE` can therefore run twice |
 
 **The row is about the PROGRAM, not the state file**, so the first tick
@@ -169913,7 +169931,11 @@ GOTO_QM    home
   the file keeps the place the user DID choose, for the screen they chose it
   on. A wave-2 build compared against "never saved" and wrote a missing file
   ~2 s after every first launch, and put the damaged-file question up
-  unprompted ~2 s after every launch over a damaged one.
+  unprompted ~2 s after every launch over a damaged one. **The one exception
+  is the calendar's reminders** (§107.3): a FIRED mark is the payload
+  changing, so a launch that finds reminders MISSED, and a reminder going
+  off with nobody at the machine, each owe a save at the next quiet poll -
+  §107.6 prices both. A launch with nothing missed still writes nothing.
 - **A DAMAGED file is asked about, once, before it is overwritten.** Wave 1
   never saved over one. Now the first save that is owed - a settled drag
   away from where the window opened, an edit (`dia_touch`); never a launch
@@ -169979,7 +170001,10 @@ figures are the ledger above applied to the tree it was cut from:
 
 The whole of the reminders (§107.3) is the package's: the shared include
 gained one bss byte, `dia_nx` - the once-only sooner beat the chirp's second
-note rides on.
+note rides on - and the few bytes of `dia_tick` that read it (an `xchg`, an
+`or` and a `jnz` ahead of the re-arm): `DIAPROBE.O88`, the include's own
+measure, went from 1,520 to **1,536** bytes of image and 196 to **197** of
+bss.
 
 **At runtime**, a machine with no DIA row reads nothing at boot (§107.4).
 What a widget costs, MEASURED on MartyPC's 4.77 MHz XT with its FDC counters
@@ -169992,9 +170017,10 @@ larger package and a five-sector file to the reads):
 | the first tick: `OSAPI_FILE_PATH`'s `..` walk, then the settings core's read for a compare that writes nothing | 7 reads | 2.05 s | yes |
 | **a whole autostart** | **13 reads** | **~4.9 s** | |
 | a settled drag's save | 2 reads, 6 writes | ~3.2 s at PERFORMANCE.md's 400 ms a call | yes |
+| **the calendar's save** (a five-sector file): any edit's or drag's, and the two the user does not cause - a reminder going off (~2 s after it, under its alert) and a launch that missed reminders (the first quiet poll after the registration) - for the FIRED marks | **3 reads, 8 writes** after a firing, 4 and 8 after a missed launch - counted at the drive by `deskcalperf` on both legs, both adapters | ~4.4-4.8 s at 400 ms a call | yes |
 | the close of a widget that owes nothing: the settings core, the row away, SYSTEM.CFG written | 8 reads, 6 writes | | yes |
 | an idle widget | 0 | 0 | |
-| **the calendar, wave 4**: reset to `ui_task` with its row in SYSTEM.CFG, against the same disk with none | 7 reads, 44 sectors in `dia_boot` | **19.02 s against 14.85 s**: +0.55 s reading the trailer before the paint, +3.62 s autostarting | no |
+| **the calendar, wave 4**: reset to `ui_task` with its row in SYSTEM.CFG, against the same disk with none | 7 reads, 44 sectors in `dia_boot` | **19.02 s against 14.85 s**: +0.55 s reading the trailer before the paint, +3.62 s autostarting - then the first tick's ~2 s, and on a day whose reminders came due before the boot (the first boot of a working day, typically) the missed marks' save ~2 s later, ~4.8 s more (the row above; `deskcalperf`'s boot leg has nothing missed) | no |
 
 The design priced an autostart at 8-10 calls and 3-4 s and a save at "one
 write, 1-2 s"; both were short. The calendar's own autostart (`deskcalperf`'s
@@ -170012,10 +170038,10 @@ First registration and close each write SYSTEM.CFG once.
 
 | | image | bss | on disk (lz4) |
 |---|---:|---:|---:|
-| `DESKCAL.O88`, wave 4 | **13,024** | 2,909 | **11,111** - the same 11 clusters |
+| `DESKCAL.O88`, wave 4 | **13,056** (13,024 before the review fixes) | 2,909 | **11,120** (11,111) - the same 11 clusters |
 | `DESKCAL.O88`, wave 3 | 12,368 (12,160 before the review fixes) | 2,860 | 10,544 (10,411) |
 | `DESKCAL.O88`, wave 2 | 6,080 (5,808 before the review fixes) | 2,748 | 5,343 |
-| `DIAPROBE.O88` (never shipped) | 1,520 (wave 1: 1,120) | 196 | 1,520 |
+| `DIAPROBE.O88` (never shipped) | 1,536 (waves 2-3: 1,520; wave 1: 1,120) | 197 (196) | 1,536, not compressed |
 
 Wave 3 doubled the image: `os88line.inc` and `os88ui.inc`'s check box
 (`OS88UI_CHK`) and alert are shared source the package now carries, and the
@@ -170038,7 +170064,8 @@ the time from the first call to the last off MartyPC's cycle counter on a
 | the About card taken down (the same picture, `dc_all`) | 54, 170 ms | 28, 110 ms |
 | selecting an empty day from today, which has two appointments | **6** - 2 frames, today's field, the heading, the two agenda lines that were occupied | 6 |
 | an idle stretch: five / four beats and a minute boundary, nothing due | **0** | **0** |
-| a reminder going off | **1** run of the calendar's (its line) + the alert's paint, 5 | 1 + 5 |
+| a reminder going off | **1** run of the calendar's (its line) + the alert's paint, 5 - and ~2 s later the save its FIRED mark owes, 3 reads and 8 writes (~4.4 s) on the lock, landing under the alert (asserted) | 1 + 5, and the same save |
+| a launch that missed a reminder | the first paint's calls, and the missed marks' save at the first quiet poll after the registration: 4 reads, 8 writes (asserted to write) | the same |
 
 `os88dia.inc` grew ~260 bytes in wave 2 - the singleton, the anchor, the
 worker arm and `dia_touch` - plus the damaged-file question in a package that
@@ -170093,6 +170120,18 @@ kern_small: the same `DESKCAL.O88` is on both kinds of system disk.
   save wrote.
 - **No relaunch after a hibernate Discard**; the widgets return at the next
   boot.
+- **The 12-hour display is not honoured.** `OSAPI_CLK_GET`'s AL bit 1 is
+  the user's 12-hour choice (§37), and the calendar ignores it: the agenda,
+  the alert and the toast are always 24-hour (`09:30`, `23:00`). The entry
+  parser reads 24-hour times only, so the two agree with each other.
+- **A past day's unfired reminders keep their `!`.** Earlier days are not
+  replayed at launch (§107.3), and nothing marks them, so an armed
+  reminder whose day went by with the calendar closed reads `!` on that
+  day for good.
+- **kern_small with no RTC toasts at every launch.** Its clock is the PIT's
+  (§107.7, `clk_rtc` = 0 there), so every launch with an armed reminder
+  still to come says `No RTC - check the time`, whether or not the user set
+  the clock this session - the cell cannot say which (§107.3).
 - **Not on The Wire**: a DIA calls `OSAPI_CLK_GET` (0x0467), which an older
   kernel at the same `PKG_FMT` does not have — the gap §20.2.0.1 names — so it
   ships only beside its own kernel until a "highest cell used" fence exists.
@@ -170281,7 +170320,8 @@ kern_small: the same `DESKCAL.O88` is on both kinds of system disk.
     have moved to another day meanwhile.
   - **Wave 3's review moved four things.** `DIA_ONTICK` gained an answer,
     CF = 1 = hold the save: the design priced a save as "one write" and it
-    is §107.6's 2 reads and 6 writes, ~3.2 s with the lock held, which
+    is a remount, a walk and the write (the calendar's: 3 reads and 8
+    writes, ~4.4 s, §107.6) with the lock held, which
     landed in the middle of a typed word at the next 2 s poll; the
     calendar holds it while the field or its question is open and until a
     poll passes with no edit. A check box's toggle is the calendar's own
@@ -170315,12 +170355,29 @@ kern_small: the same `DESKCAL.O88` is on both kinds of system disk.
   - **A reminder armed for a moment already past is fired at once,
     silently** - a new appointment, a moved time, the mark column, a Remind
     pick - which the design did not cover: typed at 10:00, a 09:30 appointment
-    went off the instant it was entered.
+    went off the instant it was entered. Past is strictly before this minute;
+    one armed for THIS minute fires at the next beat with its alert.
+  - **The FIRED marks owe saves the user did not cause**: a launch that
+    missed reminders and an unattended firing each write the state file
+    (§107.5.2's one exception, §107.6's row). The design's "set FIRED and
+    dirty" implied it; the contract text had said nothing is ever written
+    unprompted.
+  - **The tone is asserted at the cell, not off the speaker.** The design's
+    `deskcalremind` had a QEMU `make test-snd` arm with `tools/sndcheck.py`
+    hearing 880 Hz; what was built reads `OSAPI_SND_TONE`'s AX and CX at a
+    breakpoint on the cell on MartyPC, which proves the requests the
+    calendar makes and not that the speaker sounds them - the cell's own
+    gates (§34) own that half. Nothing in §107's rows plays the speaker.
+  - **No `make diashot` fixture and no `docs/dia/` screenshots yet.** The
+    design's §9 set belongs to the pull request that ships the series, and
+    is made there; wave 4 built the gates, and `deskcal1bpp`'s framebuffer
+    reads are what stands for the 1bpp look until then.
   - **Nothing fires while the entry field is open**, as well as while an
     alert is up: an alert takes the keyboard (keys go to the front window),
     so one opening mid-word would have swallowed the rest of the line. The
-    reminder fires at the first minute after the field closes. The SAVE a
-    firing owes is held while its alert is up (`DIA_ONTICK`'s CF).
+    reminder fires at the first minute after the field closes. (The first
+    build also held the firing's SAVE while its alert was up; the review
+    took that out, §107.3 - an alert can stay up for hours.)
   - **The no-RTC toast is `No RTC - check the time`**, not `Clock not set
     (no RTC)`: `OSAPI_CLK_GET` says there is no chip, not whether anybody set
     the clock this session, and §47's rule is to say a fact. It is said at
@@ -170395,14 +170452,19 @@ reads one run on the counter.
 |---|---|
 | `deskcalremind` | MartyPC's VGA XT, the clock SET through the live `clk_*` fields. A launch at 09:28 says `1 missed reminder` and marks it FIRED; at 09:30 Dentist goes off - the alert reads `Reminder 09:30 Dentist` (through `os88ui.inc`'s own message pointer), the toast `09:30 Dentist`, `OSAPI_SND_TONE` was asked for 880 then 660 Hz four ticks each (a breakpoint on the cell, AX and CX read at the stop), ONE run drawn, its line's mark `-`; two minutes pass under that alert and Call Bob waits, then goes off ALONE at the next minute after OK though another is due; a 23-letter text loses the prefix and keeps every letter; nothing goes off under an open entry field; a 09:30 appointment typed at 09:37 is created FIRED; the state file has every FIRED; a relaunch with the RTC flag down and a reminder to come says `No RTC - check the time`; at 23:59 the 23:00 one goes off, and at the rollover today's inverse moves in TWO runs and the 15th's 00:00 reminder goes off |
 | `diasmall` | §107.7's paragraph, on MartyPC's 128 KB CGA 5150 |
-| `deskcalperf` | §107.6's tables, asserting the zeros and the selection's count exactly, and that a boot with no DIA row makes no disk call after its paint |
+| `deskcalperf` | §107.6's tables, asserting the zeros and the selection's count exactly, that a boot with no DIA row makes no disk call after its paint, and - counted at the drive - that a launch that missed a reminder and a reminder going off each make the save their FIRED marks owe, the second with its alert still up |
 | `deskcal1bpp` | MartyPC's 5150 with a CGA and with a Hercules card, on the framebuffer's own bits: COMPACT 210x139 and TALL 210x255; today's field mostly ink and a plain day's mostly ground; a click on the 20th puts an unbroken ink rectangle round it and takes the 14th's off, which stays inverse; the 20th's mark cell carries its `*`; and the Calendar menu held down shows every item - the greyed `(no item)` ones included - with ink in its band |
 
 Each was verified to FAIL on a broken build: without dc_rpass's one-alert
 gate `deskcalremind` sees Call Bob go off under Dentist's alert; with the
 worker test taken out of dc_fire `diasmall` hears two requests, the second
 36 ticks late; and a frame drawn every beat makes `deskcalperf`'s idle read
-4 calls.
+4 calls. The review added three legs: `deskcalremind` C waits for the save
+Dentist's firing owed to land UNDER its alert, E types `0940 Right now` at
+09:40 and must see it go off (this minute is not past), and G relaunches AT
+Later's minute and must not call it missed - the toast is the no-RTC one
+and Later goes off on the first beat; `deskcalperf` counts both
+reminder-caused saves at the drive.
 
 **`t_dia`** (fast tier) is what keeps that include honest between MartyPC
 runs: it runs `tools/os88dia.py --selfcheck`, assembles `diaprobe.asm` (so

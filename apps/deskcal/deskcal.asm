@@ -1901,9 +1901,11 @@ dc_remind:
 ; (SPEC.md 107.3). Then the reminders' minute (dcrem.inc), and the second
 ; note of a chirp one beat after the first.
 ; out: CF = 1 HOLD the save owed (os88dia.inc): the entry field, our Delete
-;      question or a reminder's alert is open, or an edit landed since the
-;      last poll - a save is seconds of disk with the lock held (SPEC.md
-;      107.6), so it waits for a quiet poll and a burst of edits is one save
+;      question is open, or an edit landed since the last poll - a save is
+;      seconds of disk with the lock held (SPEC.md 107.6), so it waits for a
+;      quiet poll and a burst of edits is one save. A reminder's alert does
+;      NOT hold it: unanswered, it would hold every edit and drag for as
+;      long as it stays up, and lose them all at a Restart
 ; -----------------------------------------------------------------------------
 dc_tick:
     push ax
@@ -1949,10 +1951,10 @@ dc_tick:
     call dc_rpass               ; the reminders: nothing unless the minute moved
     mov al, [dc_tq]             ; an edit this poll...
     mov byte [dc_tq], 0
-    or al, [dc_ed]              ; ...the field open, a question or a
-    or al, [dc_ask]             ; reminder up
-    or al, [dc_alert]
-    neg al                      ; CF = 1 for any of them
+    or al, [dc_ed]              ; ...the field open, or the Delete
+    or al, [dc_ask]             ; question up. NOT a reminder's alert: it
+    neg al                      ; may stay up for hours, and a Restart
+                                ; closes nothing (107.4). CF = 1 for any
     pop bx
     pop ax
     ret

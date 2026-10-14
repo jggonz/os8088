@@ -92,13 +92,21 @@ def disk_with(tmp, name, dat):
 class Cal(object):
     """One running calendar: its bss, its state file on A:, its keys."""
 
-    def __init__(self, ui, tmp, check=check):
+    def __init__(self, ui, tmp, check=check, before=None):
+        """`before`, when given, runs with SYSTEM\\DIA open and the
+        double-click not yet made - so a caller can set the clock to the
+        very minute the entry proc will read."""
         self.ui, self.m, self.tmp = ui, ui.m, tmp
         self.image = image_size()
         m = self.m
         m.write(ui._S("clk_day"), bytes([TODAY[2], TODAY[1]]))
         m.write(ui._S("clk_year"), struct.pack("<H", TODAY[0]))
-        w = ui.path("A:/SYSTEM/DIA/DESKCAL.O88")
+        if before is None:
+            w = ui.path("A:/SYSTEM/DIA/DESKCAL.O88")
+        else:
+            ui.path("A:/SYSTEM/DIA")
+            before()
+            w = ui.open("DESKCAL.O88")
         check(w is not None and w.title == TITLE, "the calendar opened")
         self.wseg = struct.unpack_from("<H", m.read(
             ui._S("wm_wins") + w.i * geom.WIN_SIZE + geom.W_SEG, 2))[0]
