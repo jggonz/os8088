@@ -182,13 +182,17 @@ dc_chirp    equ os88_image_end + 216    ; db the chirp's second note is owed
 dc_rtc      equ os88_image_end + 217    ; db OSAPI_CLK_GET's AL: bit 0 an RTC
 dc_fresh    equ os88_image_end + 218    ; db dc_cappt: the reminder is armed
                                         ; afresh (new, or its time moved)
+dc_ltp      equ os88_image_end + 220    ; dw the LAUNCH's toast, owed to the
+                                        ; first beat (0 none): said after the
+                                        ; registration's `Settings Saved`, so
+                                        ; it is the line left on the bar
 DC_BSS_RMSG equ 224                     ; 42: `Reminder HH:MM text`, NUL - the
 dc_rmsg     equ os88_image_end + DC_BSS_RMSG    ; alert's line, which it
                                         ; repaints from while it is up; the
                                         ; toast is the same from +9
 DC_RMSG_PRE equ 9                       ; `Reminder `
 DC_BSS      equ 272                     ; a multiple of 16 (os88dia.inc)
-%if 178 + DCP_APPTSZ > 210 || DC_BSS_RMSG + DC_RMSG_PRE + 6 + DCA_TMAX + 1 > DC_BSS || 218 >= DC_BSS_RMSG
+%if 178 + DCP_APPTSZ > 210 || DC_BSS_RMSG + DC_RMSG_PRE + 6 + DCA_TMAX + 1 > DC_BSS || 220 + 2 > DC_BSS_RMSG
   %error "deskcal: its own bss has outgrown DC_BSS"
 %endif
 
@@ -1910,7 +1914,17 @@ dc_remind:
 dc_tick:
     push ax
     push bx
-    cmp byte [dc_chirp], 0
+    mov ax, [dc_ltp]            ; the launch's summary (dc_missed), said HERE:
+    or ax, ax                   ; the first registration writes SYSTEM.CFG
+    jz .ch                      ; on this same beat, before us, and CTRL.DRV
+    mov word [dc_ltp], 0        ; says `Settings Saved` for it - from the
+    push si                     ; entry proc the line was gone in seconds
+    mov si, ax                  ; (SPEC.md 107.3)
+    call dc_toast
+    pop si
+    jmp short .hold             ; ...and nothing else this beat, so no
+.ch:                            ; reminder's toast covers it: one due now
+    cmp byte [dc_chirp], 0      ; fires on the next, 2 s on
     je .c
     mov byte [dc_chirp], 0      ; the chirp's second note, four ticks after
     push cx                     ; its first (dia_nx)
@@ -1949,6 +1963,7 @@ dc_tick:
     call dc_selon
 .min:
     call dc_rpass               ; the reminders: nothing unless the minute moved
+.hold:
     mov al, [dc_tq]             ; an edit this poll...
     mov byte [dc_tq], 0
     or al, [dc_ed]              ; ...the field open, or the Delete

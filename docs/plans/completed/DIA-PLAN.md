@@ -1055,3 +1055,17 @@ prose.
 73. **The calendar's save is 3 reads + 8 writes at the drive** (4 + 8 after
     a missed launch, deskcalperf), not the probe's 2 + 6 that wave 3's text
     quoted for it: ~4.4 s at 400 ms a call.
+
+## Completeness pass
+
+74. **The launch's toast is the first beat's, not the entry proc's.** A hand
+    launch registers the row the last close removed - one SYSTEM.CFG write,
+    whose verdict CTRL.DRV toasts - so `1 missed reminder` said from the
+    entry proc became `Settings Saved` within seconds. dc_missed stages it
+    (dc_ltp) and the first DIA_ONTICK says it and nothing else that beat.
+    deskcalremind A re-reads the bar once the row is granted, verified to
+    fail with the old order.
+75. SPEC 107.5 states the registration's and the close's `Settings Saved`,
+    the silent autostart, and the live CD's unhandled refusal (§80.3).
+76. The live media's getruncpm `--reserve` list prices DESKCAL's clusters
+    ($(DIAAPPS)).

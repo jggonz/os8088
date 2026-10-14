@@ -169631,8 +169631,14 @@ last beat that looked - or the date has, which changes it too:
 - **Missed at launch.** At the entry proc, today's armed reminders whose
   moment is BEFORE this minute - they came due while the widget was not
   running - are marked `FIRED` and summarised in ONE toast, `1 missed
-  reminder` or `3 missed reminders`. Earlier days are not replayed. One whose
-  moment IS this minute is not missed: the first beat fires it, because the
+  reminder` or `3 missed reminders`. Earlier days are not replayed. **The
+  entry proc stages that line and the FIRST BEAT says it** (`dc_ltp`), after
+  the beat's registration: a hand launch registers a row the last close took
+  away, so it writes SYSTEM.CFG and `CTRL.DRV` says `Settings Saved` for the
+  write (§107.5), and a summary said from the entry proc was that line's
+  within seconds - the toast slot holds one (§59.3). The beat that says it
+  does nothing else, so no reminder's toast covers it either. One whose
+  moment IS this minute is not missed: the next beat fires it, because the
   minute last seen starts as none. The FIRED marks are the state file's, so
   a launch that missed any OWES A SAVE, made at the first quiet poll after
   the registration (~2 s after it, ~4.4 s of disk on the lock, §107.6) -
@@ -169658,7 +169664,7 @@ last beat that looked - or the date has, which changes it too:
   which the cell cannot say. So at launch, with no RTC and an armed reminder
   still to come, the toast is `No RTC - check the time` - unless reminders
   were missed, whose toast it does not displace (the slot holds one line,
-  §59.3).
+  §59.3). It is staged and said by the first beat as the missed summary is.
 - **Reminders fire only while the widget runs** - minimized included, its
   timer runs (§13.9) - which autostart (§107.4) makes the normal case.
   `readme.txt` says so.
@@ -169834,7 +169840,16 @@ closing, and the close removes only a row its own launch registered.
 
 A registration that is refused (no system disk in A:, a full table,
 kern_small) leaves the widget running and unregistered; `CTRL.DRV`'s own toast
-is the only message. The record it registered stays in memory untouched until
+is the only message. One that WRITES - a hand launch, since the close took
+the row away, or a launch from a new place - is a SYSTEM.CFG save like any
+other, and `CTRL.DRV` says its verdict, `Settings Saved` (or `Not saved: disk
+error`); so does the close's remove. An autostart, whose row is already
+there, writes nothing and says nothing. A widget with a launch message of
+its own says it from its first `DIA_ONTICK`, after the registration, or it is
+covered (§107.3's missed summary). On the live CD (§80.3) the write refuses
+where it happens - that toast, the row kept in memory for the session only,
+nothing back at the next boot - and is not handled specially; no gate
+drives it. The record it registered stays in memory untouched until
 the close removes by it: the walk below has a find buffer of its own (a W1
 build used the record AS that buffer, and after the first save the close
 removed by `APPDATA`'s directory entry, matched nothing, and the widget came
@@ -170038,7 +170053,7 @@ First registration and close each write SYSTEM.CFG once.
 
 | | image | bss | on disk (lz4) |
 |---|---:|---:|---:|
-| `DESKCAL.O88`, wave 4 | **13,056** (13,024 before the review fixes) | 2,909 | **11,120** (11,111) - the same 11 clusters |
+| `DESKCAL.O88`, wave 4 | **13,072** (13,056 before the completeness pass, 13,024 before the review fixes) | 2,909 | **11,141** (11,120; 11,111) - the same 11 clusters |
 | `DESKCAL.O88`, wave 3 | 12,368 (12,160 before the review fixes) | 2,860 | 10,544 (10,411) |
 | `DESKCAL.O88`, wave 2 | 6,080 (5,808 before the review fixes) | 2,748 | 5,343 |
 | `DIAPROBE.O88` (never shipped) | 1,536 (waves 2-3: 1,520; wave 1: 1,120) | 197 (196) | 1,536, not compressed |
@@ -170386,6 +170401,17 @@ kern_small: the same `DESKCAL.O88` is on both kinds of system disk.
     can act on.
   - **A reminder's moment is clamped at midnight**: `00:30` an hour early is
     due at `00:00` that day, not at `23:30` the day before.
+  - **The launch's own toast is the first beat's, not the entry proc's**
+    (the completeness pass). The design said the missed summary at launch;
+    said there, a hand launch's registration - one SYSTEM.CFG write, whose
+    verdict `CTRL.DRV` toasts - replaced it with `Settings Saved` within
+    seconds, every time a user opened the calendar by hand on a day it had
+    missed something. The entry proc stages it (`dc_ltp`, two bytes of the
+    calendar's spare bss) and the first `DIA_ONTICK` says it and nothing
+    else, so a reminder due that very minute goes off one beat (2 s) later.
+    `deskcalremind` A reads the bar again once the row is granted, and is
+    verified to read `Settings Saved` with the toast put back in the entry
+    proc.
 
 ### 107.10 How it was built, and its gates
 

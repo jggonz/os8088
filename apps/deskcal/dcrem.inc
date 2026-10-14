@@ -278,7 +278,8 @@ dc_armed:
 ; moment came BEFORE this minute, while the widget was not running, are
 ; FIRED and summed up in one toast, `3 missed reminders`. Earlier days are
 ; not replayed. Nothing missed and no RTC, with a reminder still to come:
-; `No RTC - check the time` (OSAPI_CLK_GET's AL bit 0; SPEC.md 107.3).
+; `No RTC - check the time` (OSAPI_CLK_GET's AL bit 0; SPEC.md 107.3). The
+; toast is STAGED in [dc_ltp] and said by the first beat (dc_tick).
 ; Every register kept
 dc_missed:
     push ax
@@ -319,16 +320,14 @@ dc_missed:
     inc di
 .z:
     mov byte [di], 0
-    mov si, dc_rmsg
-    call dc_toast
-    jmp short .x
+    mov word [dc_ltp], dc_rmsg  ; said by the FIRST BEAT, after the
+    jmp short .x                ; registration's own toast (dc_tick)
 .rtc:
     test byte [dc_rtc], 1
     jnz .x
     call dc_armed
     jc .x
-    mov si, dc_s_nortc
-    call dc_toast
+    mov word [dc_ltp], dc_s_nortc
 .x:
     pop di
     pop si

@@ -20,8 +20,11 @@ needs is ten guest seconds away rather than an hour. Today is Wed 14 October
     09:36    Typing test           due while the entry field is open
     00:00    Midnight (the 15th)   due at the rollover
 
-  A  launched at 09:28: ONE toast, `1 missed reminder`; Gym is FIRED in
-     memory, Old one still is, Dentist is not.
+  A  launched at 09:28: ONE toast, `1 missed reminder`, and it is STILL
+     the bar's line once the first beat's registration has written
+     SYSTEM.CFG (CTRL.DRV says `Settings Saved` for that write, and a
+     summary said from the entry proc lost to it); Gym is FIRED in memory,
+     Old one still is, Dentist is not.
   B  at 09:30 Dentist goes off: the alert's line is `Reminder 09:30 Dentist`
      (OK alone), the toast `09:30 Dentist`, the speaker asked for 880 Hz and
      then 660 Hz four ticks each (a breakpoint on the OSAPI_SND_TONE cell,
@@ -48,7 +51,8 @@ needs is ten guest seconds away rather than an hour. Today is Wed 14 October
      again at 23:00 - Later's minute - with the clock's RTC flag down. Later
      is not MISSED (missed is strictly before this minute): the toast is
      `No RTC - check the time`, the one said when nothing was missed and a
-     reminder is still to come, and Later goes off on the first beat.
+     reminder is still to come, and Later goes off on the beat after the
+     one that said it (that beat says the launch's line and nothing else).
   H  MIDNIGHT: at 23:59:52 the date rolls to the 15th - today's inverse
      moves (TWO runs: the old field and the new; the 14th is the selected
      day so its frame is redrawn and is not a run) - and Midnight, on the
@@ -57,7 +61,9 @@ needs is ten guest seconds away rather than an hour. Today is Wed 14 October
 **BREAK IT ON PURPOSE**: take the `os88ui_awin` test out of dc_rpass and C
 sees Call Bob go off at 09:31 (or the alert refused and its FIRED lost);
 make dc_missed compare with `<=` instead of `<` and G's launch AT 23:00
-calls Later missed (`1 missed reminder`, and no alert); drop dc_stale's call
+calls Later missed (`1 missed reminder`, and no alert); say dc_missed's
+toast from the entry proc again and A's second look reads `Settings Saved`;
+drop dc_stale's call
 in dc_cappt and E's Late entry goes off at once; fire this minute's moment
 silently in dc_stale and E's Right now never goes off; put dc_alert back in
 dc_tick's hold and C waits for a save that never comes.
@@ -76,6 +82,7 @@ import os88marty   # noqa: E402
 import os88dia     # noqa: E402
 import os88geom as geom   # noqa: E402
 from deskcaledit import Cal, TITLE, disk_with, DIA_S_DIRTY   # noqa: E402
+DIA_S_ROW = 2                           # os88dia.inc's dia_st: row granted
 from deskcaltask import pkg_sym                 # noqa: E402
 
 TODAY = (2026, 10, 14)
@@ -188,8 +195,19 @@ def main():
             run_at = c.wseg * 16 + pkg_sym(tmp, "dc_run")
 
             print("A: the launch sums up what it missed")
-            txt = ui.wait_toast(says="missed")
+            txt = ui.wait_toast(says="missed", limit=60)
             check(txt == "1 missed reminder", "the toast says %r" % txt)
+            # ...and it is the LAST word: the first beat's registration
+            # writes SYSTEM.CFG (no row on this disk) and CTRL.DRV says
+            # `Settings Saved` for it. A summary said from the entry proc
+            # was replaced by that line within seconds; the first beat says
+            # it after the registration (SPEC.md 107.3)
+            ui._wait(lambda: c.st() & DIA_S_ROW, "the registration", 60,
+                     snapshot=lambda: "dia_st = %#x" % c.st())
+            os88marty.guest_sleep(m, 1.0)
+            txt, _ = ui.toast()
+            check(txt == "1 missed reminder", "after the registration the "
+                  "bar still says %r" % txt)
             check(r.fired("Gym") is True, "Gym is FIRED in memory")
             check(r.fired("Old one") is True, "Old one still is")
             check(r.fired("Dentist") is False, "Dentist is not, yet")
@@ -316,7 +334,7 @@ def main():
             m.write(rtc, bytes(was))
             r.wait_alert("Later's alert", 30)
             check(r.rmsg() == "Reminder 23:00 Later",
-                  "...and goes off on the first beat (%r)" % r.rmsg())
+                  "...and goes off on the next beat (%r)" % r.rmsg())
             r.ok("Later's alert")
 
             print("H: midnight")
