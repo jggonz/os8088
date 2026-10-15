@@ -119,8 +119,8 @@ MS_SZ     equ 12
 ; nonzero defaults are set here.
 ; =============================================================================
 mp_init:
-    mov byte [mp_speed], 6
-    mov byte [mp_bpm], 125
+    mov word [mp_speed], (125 << 8) | 6 ; ProTracker's defaults: speed 6, and
+                                    ; mp_bpm, the byte after it, 125
     mov word [mp_mixrate], 11000
     mov byte [mp_master], 64        ; unity: the master volume is an
     ret                             ; ATTENUATOR, never a gain (mp_volsel)
@@ -184,29 +184,21 @@ mp_load:
     ; -- 3: magic at 1080 in {M.K., M!K!, 4CHN, FLT4} ------------------------
     mov ax, [es:1080]
     mov dx, [es:1082]
-    cmp ax, 0x2E4D              ; 'M.'
-    jne .m2
-    cmp dx, 0x2E4B              ; 'K.'
+    mov si, mp_magics
+    mov cx, 4
+.mg:
+    cmp ax, [si]
+    jne .mgn
+    cmp dx, [si+2]
     je .magic
-.m2:
-    cmp ax, 0x214D              ; 'M!'
-    jne .m3
-    cmp dx, 0x214B              ; 'K!'
-    je .magic
-.m3:
-    cmp ax, 0x4334              ; '4C'
-    jne .m4
-    cmp dx, 0x4E48              ; 'HN'
-    je .magic
-.m4:
-    cmp ax, 0x4C46              ; 'FL'
-    jne .e_notmod
-    cmp dx, 0x3454              ; 'T4'
-    je .magic
+.mgn:
+    add si, 4
+    loop .mg
 .e_notmod:
+    mov ax, mpe_notmod
+.err:
     push ds
     pop es
-    mov ax, mpe_notmod
     stc
     ret
 .magic:
@@ -235,11 +227,8 @@ mp_load:
     cmp al, 128
     jbe .slok
 .e_song:
-    push ds
-    pop es
     mov ax, mpe_song
-    stc
-    ret
+    jmp .err
 .slok:
     mov [mp_songlen], al
     mov ah, [es:951]
@@ -268,11 +257,7 @@ mp_load:
     inc ax                      ; AX = P (1..256)
     mov [mp_t1], ax
     ; extent = 1084 + 1024*P (32-bit), must be <= L
-    mov dx, ax
-    mov cl, 10
-    shl ax, cl                  ; low word of P<<10
-    mov cl, 6
-    shr dx, cl                  ; high word of P<<10
+    call trk_tobytes            ; DX:AX = P<<10
     add ax, 1084
     adc dx, 0                   ; DX:AX = pattern-block end = sample start
     cmp dx, [mp_bloblen_hi]
@@ -281,11 +266,8 @@ mp_load:
     cmp ax, [mp_bloblen_lo]
     jbe .extok
 .e_trunc:
-    push ds
-    pop es
     mov ax, mpe_trunc
-    stc
-    ret
+    jmp .err
 .extok:
     mov [mp_run_lo], ax         ; 32-bit running sample start offset
     mov [mp_run_hi], dx
@@ -296,26 +278,9 @@ mp_load:
                                 ; 1084 + 1024*P <= 131072 forces P <= 126 -
                                 ; a byte held it only by way of that cap
     ; -- 7..10: the 31 sample headers -> mp_smptab ---------------------------
-    mov word [mp_t1], 0         ; sample index 0..30
-.sm:
-    mov ax, [mp_t1]
-    mov bx, ax
-    mov cl, 5
-    shl ax, cl                  ; *32
-    shl bx, 1                   ; *2
-    sub ax, bx                  ; *30
-    add ax, 20
-    mov si, ax                  ; SI = header offset in blob
-    ; DI = table entry
-    mov ax, [mp_t1]
-    mov bx, ax
-    mov cl, 3
-    shl ax, cl                  ; *8
-    shl bx, 1
-    shl bx, 1                   ; *4
-    add ax, bx                  ; *12
-    add ax, mp_smptab
-    mov di, ax
+    mov si, 20                  ; SI = the header in the blob, 30 bytes each
+    mov di, mp_smptab           ; DI = its table entry; neither is written by
+.sm:                            ; the body, so both just walk
     ; length in words, big-endian -> DX:AX = bytes (17-bit)
     mov ax, [es:si+22]
     xchg al, ah
@@ -369,23 +334,18 @@ mp_load:
     sbb dx, [mp_run_hi]
     jc .zavail                  ; start already past EOF: nothing here
     or dx, dx
-    jz .avlo
+    jz .haveav
     mov ax, 0xFFFF              ; >= 64K available: the cap below decides
-.avlo:
-    jmp .haveav
+    jmp short .haveav
 .zavail:
     xor ax, ax
 .haveav:
     ; AX = available (capped 0xFFFF); stated in mp_t3:mp_t2
     cmp word [mp_t3], 0
-    jne .stbig
+    jne .lenset                 ; stated >= 64K: available (in AX) wins
     cmp ax, [mp_t2]
-    jbe .avwins
+    jbe .lenset                 ; ...and so it does when it is the smaller
     mov ax, [mp_t2]
-    jmp .lenset
-.stbig:
-    jmp .lenset                 ; stated >= 64K: available (in AX) wins
-.avwins:
 .lenset:
     cmp ax, MP_MAXSMP
     jbe .capok
@@ -429,8 +389,9 @@ mp_load:
     mov word [di+MS_LLEN], 0
     mov word [di+MS_LSTART], 0
 .snext:
-    inc word [mp_t1]
-    cmp word [mp_t1], 31
+    add si, 30
+    add di, MS_SZ
+    cmp di, mp_smptab + 31 * MS_SZ
     jae .smdone
     jmp .sm
 .smdone:
@@ -439,8 +400,7 @@ mp_load:
     call mp_vtbuild             ; the volume table, in the current
                                 ; mode's format (SPEC.md 45.9)
     ; -- done ----------------------------------------------------------------
-    mov byte [mp_songpos], 0
-    mov byte [mp_row], 0
+    mov word [mp_songpos], 0    ; ...and mp_row, the byte after it
     mov bx, [mp_orders]         ; BL = orders[0]
     mov al, bl
     mov [mp_pattern], al
@@ -545,15 +505,12 @@ mp_start:
     cmp ah, 2
     je .tempo                   ; resume: the row, the speed and the tempo are
     mov byte [mp_row], 0        ; the ones that were playing
-    mov byte [mp_speed], 6
-    mov byte [mp_bpm], 125
+    mov word [mp_speed], (125 << 8) | 6 ; speed 6, BPM 125 (mp_init's word)
 .tempo:
-    mov byte [mp_tick], 0
-    mov byte [mp_patdel], 0
-    mov byte [mp_patdel2], 0
-    mov byte [mp_pbreak], 0
-    mov byte [mp_pbrow], 0
-    mov byte [mp_posjmp], 0
+    xor ax, ax                      ; mp_tick, mp_patdel, mp_patdel2,
+    mov [mp_tick], ax               ; mp_pbreak, mp_pbrow and mp_posjmp: six
+    mov [mp_tick + 2], ax           ; bytes in a row (asserted at the bss)
+    mov [mp_tick + 4], ax
     mov bl, [mp_songpos]
     xor bh, bh
     and bx, 127                 ; load-bearing, not hygiene: a Bxx row holds
@@ -633,12 +590,12 @@ mp_setpos:
     xor bh, bh
     mov al, [mp_orders + bx]
     mov [mp_pattern], al
-    mov byte [mp_pbreak], 0
-    mov byte [mp_posjmp], 0
-    mov byte [mp_pbrow], 0
+    xor ax, ax
+    mov [mp_pbreak], ax             ; ...and mp_pbrow, the byte after it
+    mov [mp_posjmp], al
     cmp byte [mp_playing], 0
     jne .out                    ; playing: the row chain continues there
-    mov byte [mp_row], 0
+    mov [mp_row], al
 .out:
     ret
 
@@ -662,8 +619,7 @@ mp_timeat:
     xor ax, ax
     mov [mp_tacc], ax
     mov [mp_tacc + 2], ax
-    mov byte [mp_speed], 6
-    mov byte [mp_bpm], 125
+    mov word [mp_speed], (125 << 8) | 6 ; speed 6, BPM 125 (mp_init's word)
     call mp_calc_spt
     xor bx, bx                  ; BL = the order, BH = the row it starts on
 .ord:
@@ -855,10 +811,10 @@ mp_stamp:
 ; -----------------------------------------------------------------------------
 mp_stclear:
     push ax
-    mov byte [mp_stw], 0
-    mov byte [mp_str], 0
-    mov word [mp_hit], 0            ; strikes belong to the stream that made
-    mov word [mp_hit + 2], 0        ; them: a restart must not carry one over
+    xor ax, ax
+    mov [mp_stw], ax                ; ...and mp_str, the byte after it
+    mov [mp_hit], ax                ; strikes belong to the stream that made
+    mov [mp_hit + 2], ax            ; them: a restart must not carry one over
     mov al, [mp_songpos]        ; no row has begun since mp_start, so the
     mov [mp_pendpos], al        ; live position IS the pending one
     mov al, [mp_pattern]
@@ -1078,7 +1034,7 @@ mp_cell2txt:
 .insn:
     push di
     add di, 4
-    call mp_hexb
+    call tui_hexb
     pop di
 .fx:
     mov byte [di+6], ' '
@@ -1091,18 +1047,13 @@ mp_cell2txt:
     mov byte [di+9], '.'
     jmp .done
 .fxn:
-    mov al, bl
-    and al, 0x0F
-    push bx
-    mov bl, al
-    xor bh, bh
-    mov al, [mp_hexd + bx]
-    pop bx
+    xor bh, bh                  ; BL = the effect, masked above
+    mov al, [tui_hexd + bx]
     mov [di+7], al
     mov al, cl
     push di
     add di, 8
-    call mp_hexb
+    call tui_hexb
     pop di
 .done:
     mov byte [di+10], 0
@@ -1110,27 +1061,6 @@ mp_cell2txt:
     ret
 .no:
     stc
-    ret
-
-; mp_hexb - AL as two uppercase hex digits at DI (module-local helper)
-mp_hexb:
-    push ax
-    push bx
-    push cx
-    mov ah, al
-    mov cl, 4
-    shr al, cl
-    mov bl, al
-    xor bh, bh
-    mov al, [mp_hexd + bx]
-    mov [di], al
-    mov bl, ah
-    and bl, 0x0F
-    mov al, [mp_hexd + bx]
-    mov [di+1], al
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; mp_pfind - AX = period -> BX = note index 0..35 (first entry <= period;
@@ -1698,8 +1628,7 @@ mp_nextrow:
     jb .set
 .adv:
     mov al, [mp_pbrow]
-    mov byte [mp_pbrow], 0
-    mov byte [mp_posjmp], 0
+    mov word [mp_pbrow], 0      ; ...and mp_posjmp, the byte after it
     cmp al, 64
     jb .r0
     xor al, al
@@ -1867,43 +1796,30 @@ mp_readrow:
     jz .fxdone
     mov [di+MP_PSPD], cl
     jmp .fxdone
-.f4:
+.f4:                            ; 4xy and 7xy store the same sticky
+    lea si, [di+MP_VIBC]            ; nibbles into their own byte: SI names
+    jmp short .f47                  ; it (SI is the row's cell pointer, read
+.f7:                                ; out already and recomputed per channel)
+    lea si, [di+MP_TREC]
+.f47:
     mov al, cl
     and al, 0xF0
-    jz .f4y
-    mov ah, [di+MP_VIBC]
+    jz .f47y
+    mov ah, [si]
     and ah, 0x0F
     or ah, al
-    mov [di+MP_VIBC], ah
-.f4y:
+    mov [si], ah
+.f47y:
     mov al, cl
     and al, 0x0F
     jz .fxdone
-    mov ah, [di+MP_VIBC]
+    mov ah, [si]
     and ah, 0xF0
     or ah, al
-    mov [di+MP_VIBC], ah
-    jmp .fxdone
-.f7:
-    mov al, cl
-    and al, 0xF0
-    jz .f7y
-    mov ah, [di+MP_TREC]
-    and ah, 0x0F
-    or ah, al
-    mov [di+MP_TREC], ah
-.f7y:
-    mov al, cl
-    and al, 0x0F
-    jz .fxdone
-    mov ah, [di+MP_TREC]
-    and ah, 0xF0
-    or ah, al
-    mov [di+MP_TREC], ah
+    mov [si], ah
     jmp .fxdone
 .fB:
-    mov byte [mp_pbrow], 0      ; Bxx position jump
-    mov byte [mp_posjmp], 1
+    mov word [mp_pbrow], 0100h  ; Bxx position jump: row 0, and mp_posjmp
     cmp byte [mp_ploop], 0      ; pattern-loop mode never leaves the pattern
     jne .fxdone                 ; (mp_nextrow's contract): Bxx restarts the
                                 ; looped pattern from row 0, and the songpos
@@ -1946,36 +1862,31 @@ mp_readrow:
     jmp .fxdone
 .fE:
     mov al, cl
-    push cx
-    mov cl, 4
-    shr al, cl
-    pop cx
-    and cl, 0x0F                ; CL = x, AL = sub
-    cmp al, 1
+    and cl, 0x0F                ; CL = x
+    xor al, cl                  ; AL = sub << 4, unshifted: compared as is
+    cmp al, 0x10
     je .e1
-    cmp al, 2
+    cmp al, 0x20
     je .e2
-    cmp al, 6
+    cmp al, 0x60
     je .e6
-    cmp al, 0x0A
+    cmp al, 0xA0
     je .eA
-    cmp al, 0x0B
+    cmp al, 0xB0
     je .eB
-    cmp al, 0x0C
+    cmp al, 0xC0
     je .eC
-    cmp al, 0x0E
+    cmp al, 0xE0
     je .eE
     jmp .fxdone
 .e1:
-    mov ax, [di+MP_PER]         ; fine porta up
-    xor ch, ch
-    sub ax, cx
-    call mp_pclamp
-    mov [di+MP_PER], ax
-    jmp .fxdone
+    xor ch, ch                  ; fine porta up: the period LESS x, which is
+    neg cx                      ; the same 16 bits as adding -x
+    jmp short .e12
 .e2:
-    mov ax, [di+MP_PER]         ; fine porta down
-    xor ch, ch
+    xor ch, ch                  ; fine porta down
+.e12:
+    mov ax, [di+MP_PER]
     add ax, cx
     call mp_pclamp
     mov [di+MP_PER], ax
@@ -2157,123 +2068,16 @@ mp_tickfx:
     mov [di+MP_OVOL], al
     mov bl, [di+MP_EFF]
     mov cl, [di+MP_PARM]
-    or bl, bl
-    jz .f0
-    cmp bl, 1
-    je .f1
-    cmp bl, 2
-    je .f2
-    cmp bl, 3
-    je .f3
-    cmp bl, 4
-    je .f4
-    cmp bl, 5
-    je .f5
-    cmp bl, 6
-    je .f6
-    cmp bl, 7
-    je .f7
-    cmp bl, 0x0A
-    je .fA
-    cmp bl, 0x0E
-    je .fE
-    jmp .next
+    or bl, bl                   ; 0xy stays inline: the empty cell is most of
+    jz .f0                      ; every song, and it pays no table call
+    xor bh, bh
+    shl bx, 1
+    call [mp_tfxtab - 2 + bx]   ; 1..F: a near proc each, DI = the channel,
+    jmp short .next             ; CL = the parameter
 .f0:
     or cl, cl                   ; 0xy arpeggio (000 = empty cell)
     jz .next
     call mp_arp
-    jmp .next
-.f1:
-    mov ax, [di+MP_PER]         ; 1xx porta up
-    xor ch, ch
-    sub ax, cx
-    call mp_pclamp
-    mov [di+MP_PER], ax
-    mov [di+MP_OPER], ax
-    jmp .next
-.f2:
-    mov ax, [di+MP_PER]         ; 2xx porta down
-    xor ch, ch
-    add ax, cx
-    call mp_pclamp
-    mov [di+MP_PER], ax
-    mov [di+MP_OPER], ax
-    jmp .next
-.f3:
-    call mp_portastep
-    jmp .next
-.f4:
-    call mp_vibrato
-    jmp .next
-.f5:
-    call mp_portastep           ; 5xy = porta (memory) + volume slide xy
-    call mp_volslide
-    jmp .next
-.f6:
-    call mp_vibrato             ; 6xy = vibrato (memory) + volume slide xy
-    call mp_volslide
-    jmp .next
-.f7:
-    call mp_tremolo
-    jmp .next
-.fA:
-    call mp_volslide
-    jmp .next
-.fE:
-    mov al, cl
-    push cx
-    mov cl, 4
-    shr al, cl
-    pop cx
-    and cl, 0x0F
-    cmp al, 9
-    je .e9
-    cmp al, 0x0C
-    je .eC
-    cmp al, 0x0D
-    je .eD
-    jmp .next
-.e9:
-    or cl, cl                   ; E9x retrig every x ticks
-    jz .next
-    mov al, [mp_tick]
-    xor ah, ah
-    div cl
-    or ah, ah
-    jnz .next
-    mov ax, [di+MP_PER]
-    xor cx, cx
-    call mp_trig
-    jmp .next
-.eC:
-    cmp cl, [mp_tick]           ; ECx note cut at tick x
-    jne .next
-    mov byte [di+MP_VOL], 0
-    mov byte [di+MP_OVOL], 0
-    jmp .next
-.eD:
-    cmp cl, [mp_tick]           ; EDx delayed trigger at tick x
-    jne .next
-    mov al, [di+MP_DSMP]
-    or al, al
-    jz .edper
-    cmp al, 31
-    ja .edper
-    mov [di+MP_SMP], al
-    push bx
-    call mp_smpent
-    mov al, [bx+MS_VOL]
-    mov [di+MP_VOL], al
-    mov [di+MP_OVOL], al
-    pop bx
-.edper:
-    mov ax, [di+MP_DPER]
-    or ax, ax
-    jz .next
-    xor cx, cx
-    call mp_trig
-    mov ax, [di+MP_PER]
-    mov [di+MP_OPER], ax
 .next:
     add word [mp_crec], MP_CHSZ
     inc byte [mp_curc]
@@ -2283,16 +2087,92 @@ mp_tickfx:
 .done:
     ret
 
+; mp_tfxtab - mp_tickfx's effects 1..F. A table and not a compare ladder:
+; the ladder was ten compares to reach Exy and a `jmp .next` behind every
+; handler; here the handlers that are a routine already ARE the entry
+mp_tfxtab:
+    dw mp_tfx1, mp_tfx2, mp_portastep, mp_vibrato, mp_tfx5, mp_tfx6
+    dw mp_tremolo, mp_tfx0, mp_tfx0, mp_volslide, mp_tfx0, mp_tfx0
+    dw mp_tfx0, mp_tfxE, mp_tfx0
+
+mp_tfx1:
+    xor ch, ch                  ; 1xx porta up: the period LESS xx, the same
+    neg cx                      ; 16 bits as adding -xx
+    jmp short mp_tfx2.add
+mp_tfx2:
+    xor ch, ch                  ; 2xx porta down
+.add:
+    mov ax, [di+MP_PER]
+    add ax, cx
+    call mp_pclamp
+    mov [di+MP_PER], ax
+    mov [di+MP_OPER], ax
+    ret
+mp_tfx5:
+    call mp_portastep           ; 5xy = porta (memory) + volume slide xy
+    jmp mp_volslide
+mp_tfx6:
+    call mp_vibrato             ; 6xy = vibrato (memory) + volume slide xy
+    jmp mp_volslide
+
+mp_tfxE:
+    mov al, cl
+    and cl, 0x0F                ; CL = x
+    xor al, cl                  ; AL = sub << 4, compared unshifted
+    cmp al, 0x90
+    je .e9
+    cmp al, 0xC0
+    je .eC
+    cmp al, 0xD0
+    jne mp_tfx0
+    cmp cl, [mp_tick]           ; EDx delayed trigger at tick x
+    jne mp_tfx0
+    mov al, [di+MP_DSMP]
+    or al, al
+    jz .edper
+    cmp al, 31
+    ja .edper
+    mov [di+MP_SMP], al
+    call mp_smpent
+    mov al, [bx+MS_VOL]
+    mov [di+MP_VOL], al
+    mov [di+MP_OVOL], al
+.edper:
+    mov ax, [di+MP_DPER]
+    or ax, ax
+    jz mp_tfx0
+    xor cx, cx
+    call mp_trig
+    mov ax, [di+MP_PER]
+    mov [di+MP_OPER], ax
+    ret
+.e9:
+    or cl, cl                   ; E9x retrig every x ticks
+    jz mp_tfx0
+    mov al, [mp_tick]
+    xor ah, ah
+    div cl
+    or ah, ah
+    jnz mp_tfx0
+    mov ax, [di+MP_PER]
+    xor cx, cx
+    jmp mp_trig
+.eC:
+    cmp cl, [mp_tick]           ; ECx note cut at tick x
+    jne mp_tfx0
+    mov byte [di+MP_VOL], 0
+    mov byte [di+MP_OVOL], 0
+mp_tfx0:                        ; 8, 9, B, C, D, F: nothing per tick
+    ret
+
 ; --- per-tick effect bodies (DI = channel record; may clobber AX/CX/DX/SI) -----
 
 ; Axy / 5xy / 6xy volume slide: x up (wins), else y down; clamp 0..64
 mp_volslide:
     mov al, [di+MP_PARM]
     mov ah, al
-    push cx
     mov cl, 4
     shr ah, cl
-    pop cx
     and al, 0x0F
     mov dl, [di+MP_VOL]
     or ah, ah
@@ -2340,84 +2220,68 @@ mp_portastep:
 .out:
     ret
 
+; 7xy tremolo: delta = (vibtab[(pos>>2)&31] * depth) >> 6 on OVOL only
+mp_tremolo:
+    lea si, [di+MP_TREP]
+    mov cl, 6
+    jmp short mp_wave
 ; 4xy vibrato: delta = (vibtab[(pos>>2)&31] * depth) >> 7 on OPER only
 mp_vibrato:
-    mov al, [di+MP_VIBP]
-    push cx
-    mov cl, 2
-    shr al, cl
-    pop cx
+    lea si, [di+MP_VIBP]
+    mov cl, 7
+; mp_wave - the two are one walk of the same table: SI -> the position byte,
+; [si+1] its speed<<4 | depth, CL the shift (7 a period, 6 a volume)
+mp_wave:
+%if MP_VIBC != MP_VIBP + 1 || MP_TREC != MP_TREP + 1
+  %error "mp_wave: each wave's control byte must follow its position byte"
+%endif
+    mov al, [si]
+    mov ch, al                  ; CH = the position: its sign is the half
+    shr al, 1
+    shr al, 1
     and al, 31
     mov bl, al
     xor bh, bh
+    mov dl, [si+1]
+    mov al, dl
+    and al, 0xF0
+    shr al, 1
+    shr al, 1                   ; pos += speed * 4, the old pos read above
+    add [si], al
     mov al, [mp_vibtab + bx]
-    mov dl, [di+MP_VIBC]
     and dl, 0x0F
     mul dl                      ; AX = tab * depth (<= 3825)
-    mov cl, 7
-    shr ax, cl                  ; delta in PT period units
-    mov dx, [di+MP_PER]
-    test byte [di+MP_VIBP], 0x80
-    jnz .minus
+    shr ax, cl
+    cmp cl, 7
+    jne .vol
+    mov dx, [di+MP_PER]         ; vibrato: the delta in PT period units
+    test ch, 0x80
+    jnz .pminus
     add dx, ax
-    jmp .clip
-.minus:
+    jmp short .clip
+.pminus:
     sub dx, ax
 .clip:
     mov ax, dx
     call mp_pclamp
     mov [di+MP_OPER], ax
-    ; pos += speed * 4
-    mov al, [di+MP_VIBC]
-    push cx
-    mov cl, 4
-    shr al, cl
-    pop cx
-    shl al, 1
-    shl al, 1
-    add [di+MP_VIBP], al
     ret
-
-; 7xy tremolo: delta = (vibtab[(pos>>2)&31] * depth) >> 6 on OVOL only
-mp_tremolo:
-    mov al, [di+MP_TREP]
-    push cx
-    mov cl, 2
-    shr al, cl
-    pop cx
-    and al, 31
-    mov bl, al
-    xor bh, bh
-    mov al, [mp_vibtab + bx]
-    mov dl, [di+MP_TREC]
-    and dl, 0x0F
-    mul dl
-    mov cl, 6
-    shr ax, cl                  ; delta (<= 59)
-    mov dl, [di+MP_VOL]
+.vol:
+    mov dl, [di+MP_VOL]         ; tremolo: the delta (<= 59) in volume
     xor dh, dh
-    test byte [di+MP_TREP], 0x80
-    jnz .minus
+    test ch, 0x80
+    jnz .vminus
     add dx, ax
     cmp dx, 64
     jbe .st
     mov dx, 64
-    jmp .st
-.minus:
+    jmp short .st
+.vminus:
     sub dx, ax
     jnc .st
     xor dx, dx
 .st:
-    mov al, dl
-    mov [di+MP_OVOL], al
-    mov al, [di+MP_TREC]
-    push cx
-    mov cl, 4
-    shr al, cl
-    pop cx
-    shl al, 1
-    shl al, 1
-    add [di+MP_TREP], al
+    mov [di+MP_OVOL], dl
     ret
 
 ; 0xy arpeggio: tick%3 = 0 base note / 1 +x semitones / 2 +y semitones
@@ -2434,10 +2298,8 @@ mp_arp:
     and dl, 0x0F                ; +y
     jmp .have
 .hi:
-    push cx
     mov cl, 4
     shr dl, cl                  ; +x
-    pop cx
 .have:
     mov ax, [di+MP_PER]
     call mp_pfind               ; BX = note index of the playing period
@@ -2561,7 +2423,9 @@ mp_vibtab:
     db 180, 161, 141, 120,  97,  74,  49,  24
 
 mp_ntab:    db 'C-C#D-D#E-F-F#G-G#A-A#B-'
-mp_hexd:    db '0123456789ABCDEF'
+
+; the four magics at 1080 mp_load accepts, as the two words it reads there
+mp_magics:  db 'M.K.', 'M!K!', '4CHN', 'FLT4'
 
 ; the mp_load verdict strings (returned by offset in AX)
 mpe_notmod: db 'Not a MOD', 0
@@ -2580,6 +2444,9 @@ mpe_song:   db 'Bad song data', 0
     TRKB mp_pattern                 ; playing pattern number
     TRKB mp_speed                   ; ticks per row
     TRKB mp_bpm                     ; tempo
+%if mp_row != mp_songpos + 1 || mp_bpm != mp_speed + 1
+  %error "mp_row follows mp_songpos and mp_bpm follows mp_speed: both pairs are written as words"
+%endif
     TRKB mp_songlen                 ; order entries played
     TRKW mp_npat                    ; pattern count P - 1..256, so a WORD
                                     ; (SPEC.md 45.5.1)
@@ -2597,6 +2464,9 @@ mpe_song:   db 'Bad song data', 0
     TRKBUF mp_stamps, MP_ST_N * MP_ST_SIZE
     TRKB mp_stw                     ; next stamp to write
     TRKB mp_str                     ; the one being heard (only moves forward)
+%if mp_str != mp_stw + 1
+  %error "mp_str must follow mp_stw: mp_stclear zeroes both in one word"
+%endif
     TRKB mp_rowadv                  ; mp_dotick began a row; mp_gen owes a
                                     ; stamp at its current output cursor
     TRKB mp_pendpos                 ; that row's order position and pattern,
@@ -2626,6 +2496,9 @@ mpe_song:   db 'Bad song data', 0
     TRKB mp_pbreak                  ; E6x same-pattern jump flag
     TRKB mp_pbrow                   ; break/loop target row
     TRKB mp_posjmp                  ; Bxx/Dxx position advance flag
+%if mp_patdel != mp_tick + 1 || mp_patdel2 != mp_tick + 2 || mp_pbreak != mp_tick + 3 || mp_pbrow != mp_tick + 4 || mp_posjmp != mp_tick + 5
+  %error "mp_tick..mp_posjmp must be six bytes in a row: mp_start and mp_setpos zero them in words"
+%endif
     TRKB mp_curc                    ; channel loop counter
     TRKB mp_tvol                    ; volume-table build counter
     TRKB mp_xt                      ; XT mode (SPEC.md 45.9): 0 = default

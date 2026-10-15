@@ -207,55 +207,41 @@ section .data
 lpv_ready:  dw 0                    ; 0 until the bss below has been zeroed
 lpv_cdsw:   dw 0                    ; the caller's DS, re-banked every entry
 
-; -----------------------------------------------------------------------------
-; THE THUNK'S OWN STATE, which crt0.asm would have declared.
-;
-; apps/cc/os88thunk.asm is ONE file and it names six words of package state -
-; the wm_create template, the last file error, the file dialog's name buffer,
-; the association block, the banked window and the worker's stack top. This
-; module calls none of the routines that use them: it creates no window, opens
-; no file, declares no association and spawns no worker. They are here because
-; a nasm image resolves every name its text mentions, not because anything
-; reaches them, and thirty bytes is cheaper than a second copy of the thunk
-; with the window and file halves cut out - which would be exactly the "second
-; copy" WEAVE-SPEC 1.2 is about, said about the SDK.
-;
-; If a later wave gives this module a reason to create a window, cc_tpl's last
-; three words are the callback vectors and they are 0 here on purpose.
-; -----------------------------------------------------------------------------
-cc_tpl:     dw 0, 0, 0, 0           ; WT_X, WT_Y, WT_W, WT_H
-            dw 0                    ; WT_TITLE
-            dw 0, 0, 0              ; WT_PAINT, WT_ONKEY, WT_ONCLICK - none
-
 section .bss
 lpv_bss_beg:                        ; FIRST label in .bss: everything below it
                                     ; is zeroed by the entry above, and the
                                     ; compiled C's own bss follows because the
-                                    ; C was %included further up
-cc_win:     resw 1
-cc_ferr:    resw 1
-cc_fname:   resb 13
-cc_assoc:   resb 11
-cc_wksp:    resw 1
+                                    ; C is %included further down
 
 
 section .text
 
 ; =============================================================================
-; THE API BRIDGE
-;
-; apps/cc/os88thunk.asm on its own, WITHOUT apps/cc/crt0.asm: the thunk emits
-; no section directive of its own and names nothing crt0 declares, so it is
-; the one half of the C runtime a module can have. crt0's other half - the
-; package header, the entry and callback trampolines, the overlay runtime and
-; cc_iswk - is all about being a PACKAGE, and this is not one.
-; =============================================================================
-%include "cc/os88thunk.asm"
-
-; =============================================================================
 ; THE COMPILED C
 ; =============================================================================
 %include "lmpvmod.gen.asm"          ; found through -I build/
+
+; =============================================================================
+; THE API BRIDGE - AFTER THE C, GATED (SPEC.md 73.9.1)
+;
+; apps/cc/os88thunk.asm on its own, WITHOUT apps/cc/crt0.asm: the thunk emits
+; no section directive of its own beyond the state it reserves, so it is the
+; one half of the C runtime a module can have. crt0's other half - the package
+; header, the entry and callback trampolines, the overlay runtime and cc_iswk -
+; is all about being a PACKAGE, and this is not one.
+;
+; It is included HERE, after the compiled C and with CC_THUNK_GATED defined,
+; for the reason crt0.asm's CC_IMAGE_END gives: tools/cc8086.py has written a
+; `%define CC_U_<name>` at the head of lmpvmod.gen.asm for every thunk the C
+; names, so only those are assembled - a dozen of the file's ~130 - and the
+; thunk declares the little state it needs itself (cc_ferr, cc_assoc, and
+; then only if a thunk that uses them is in). Included BEFORE the C, as it
+; was, every gate opened and this module carried the whole bridge plus thirty
+; bytes of window, file and worker state it can never reach. Its bss lands
+; after lpv_bss_beg either way, so the entry's zero still covers it.
+; =============================================================================
+%define CC_THUNK_GATED
+%include "cc/os88thunk.asm"
 
 ; =============================================================================
 ; THE SHARED CONTROL LIBRARY, THEN THE CORES THAT NAME ITS CONSTANTS

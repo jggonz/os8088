@@ -126,8 +126,8 @@ dock_cfg:   db DOCK_P_BOTTOM
 ; in:  nothing
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
-; IN THE BOOT OVERLAY (SPEC.md 2.5.3 - the WINDOW half, which is what OVWCALL
-; reaches; 2.5.2 is `.ovl`), docs/plans/LAST-DROP-BYTES.md row 15. One caller,
+; IN THE BOOT OVERLAY (SPEC.md 2.5.3 - the WINDOW half, which is what OVLCALL
+; reaches; 2.5.2 is `.boot2`), docs/plans/LAST-DROP-BYTES.md row 15. One caller,
 ; kmain:4525.
 ;
 ; It has NO outbound call at all now, which is what it costs `.text`: it used
@@ -146,7 +146,7 @@ dock_cfg:   db DOCK_P_BOTTOM
 ; 8..316 and the rights 31..339, and every one of the twelve passes both
 ; bounds. [vid_pwm1] is live here - vid_init is kmain MARK 7 and this is
 ; between MARK 21 and 22.
-section .ovlw
+section .ovl
 dock_init:
     push ax
     mov word [dock_dx1], 0      ; THE WHOLE STRIP is owed - dock_force's own
@@ -160,7 +160,7 @@ dock_init:
     inc ax                      ; 07FFFh..08000h and refuses every rect
     mov [dock_px2], ax
     pop ax
-    retf                        ; FAR: kmain reaches this through OVLGATE1
+    retf                        ; FAR: kmain reaches this through SPLGATE1
 section .text
 
 %ifdef DOCK_OPT
@@ -213,7 +213,7 @@ DK_NENT       equ 2             ; DOCK.DRV's mod_fp entries: hook, unhook
 dkb_geom:
     cmp word [spl_fseg], COLD_SEG
     jbe .panel
-    OVLGATE1 ovl_dock_geom
+    SPLGATE1 ovl_dock_geom
     ret
 .panel:
     call far [CPFP + CPE_DOCK_GEOM*4]
@@ -255,7 +255,7 @@ dkb_geom:
     pop ax
     ret
 %endmacro
-section .ovl
+section .boot2
 ovl_dock_geom:
     call ovd_geom
     retf
@@ -489,14 +489,11 @@ db_paint:
                                 ; CF = 0, "nothing was drawn", which is what
                                 ; wm_dock_under needs to hear
 .go:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si                     ; SI IS ALREADY PRESERVED (nothing between
-    push di                     ; here and the exit touches it) - it is pushed
-                                ; to make ax..di the shared epilogue ladder's
-                                ; own run, which is what kret_di wants
+    call kent_di                ; = push ax/bx/cx/dx/si/di. SI IS ALREADY
+                                ; PRESERVED (nothing between here and the
+                                ; exit touches it) - it is banked to make
+                                ; ax..di the shared epilogue ladder's own
+                                ; run, which is what kret_di wants
 
     mov al, [gfx_color]         ; byte-only read: gfx_lock_flag lives next
     push ax                     ; door. ON THE STACK, not in .bss, and that

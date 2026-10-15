@@ -64,7 +64,8 @@ import kernsize                                           # noqa: E402
 # variant's row instead - `tools/kernsize.py --modules -DKERN_BIG -DKERN_EMU`
 # prints them, exactly as `--modules -DKERN_SMALL` prints kern_small's.
 KNOB_ONLY = ("band.inc", "bootprof.inc", "moudiag.inc", "stkdiag.inc",
-             "vmmouse.inc")
+             "vmmouse.inc",
+             "kbddiag.inc")     # KBDDIAG=1 (SPEC.md 9.8.1)
 
 # ...and a second reason for a zero row, which is NOT a knob: a file whose
 # whole contribution is an on-demand module IMAGE (SPEC.md 2.8).  Those

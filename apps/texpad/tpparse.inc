@@ -10,8 +10,6 @@ tp_typeset:
     push si
     push di
     push es
-    call tp_claim_src
-    jc .fail
     call tp_ts_init
     call tp_ts_scan
     call tp_ts_end
@@ -19,10 +17,6 @@ tp_typeset:
     mov byte [tp_needset], 0
     mov word [tp_ppage], 0
     mov word [tp_pscroll], 0
-    jmp .out
-.fail:
-    mov byte [tp_setok], 0
-.out:
     pop es
     pop di
     pop si
@@ -34,57 +28,36 @@ tp_typeset:
 
 tp_ts_init:
     push ax
+    push cx
+    push si
+    push di
     push ds
     pop es
-    mov word [tp_nruns], 0
-    mov word [tp_nboxes], 0
-    mov word [tp_tused], 0
-    mov word [tp_npages], 1
-    mov word [tp_page], 0
+    xor ax, ax
+    mov di, tp_nruns            ; tp_nruns, tp_nboxes, tp_tused
+    stosw
+    stosw
+    stosw
+    mov [tp_page], ax
+    mov di, tp_inpara           ; every per-document byte from tp_inpara to
+    mov cx, tp_onpage + 1 - tp_inpara   ; tp_onpage: the style, the numbering,
+    rep stosb                   ; the stacks and the centred line
+    mov [tp_title], al
+    mov [tp_author], al
+    mov [tp_date], al
+    mov [tp_si], ax
+    inc ax
+    mov [tp_npages], ax
+    mov [tp_needind], al
     call tp_geom
-    mov byte [tp_chno], 0
-    mov byte [tp_secno], 0
-    mov byte [tp_subno], 0
-    mov byte [tp_itemn], 0
-    mov byte [tp_made], 0
-    mov byte [tp_sty_n], 0
-    mov byte [tp_env_n], 0
-    mov byte [tp_clen], 0
-    mov byte [tp_inpara], 0
-    mov byte [tp_needind], 1
-    mov byte [tp_bold], 0
-    mov byte [tp_under], 0
-    mov byte [tp_align], 0
-    mov word [tp_chno], 0
-    mov word [tp_secno], 0
-    mov word [tp_subno], 0
-    mov byte [tp_title], 0
-    mov byte [tp_author], 0
-    mov byte [tp_date], 0
-    mov byte [tp_onpage], 0
-    ; padding
-    mov word [tp_parind], 24
-    mov word [tp_parskip], 6
-    mov word [tp_tlead], 14
-    mov word [tp_tabsep], 6
-    mov word [tp_stretch], 12
-    cmp byte [tp_pad], 0
-    jne .p1
-    mov word [tp_parind], 16
-    mov word [tp_parskip], 0
-    mov word [tp_tlead], 12
-    mov word [tp_tabsep], 3
-    mov word [tp_stretch], 10
-    jmp .fs
-.p1:
-    cmp byte [tp_pad], 2
-    jne .fs
-    mov word [tp_parind], 28
-    mov word [tp_parskip], 10
-    mov word [tp_tlead], 16
-    mov word [tp_tabsep], 8
-    mov word [tp_stretch], 14
-.fs:
+    mov al, [tp_pad]            ; padding: indent, skip, lead, column gap
+    mov ah, 8
+    mul ah
+    add ax, tp_padtab
+    xchg ax, si
+    mov di, tp_parind
+    mov cx, 4
+    rep movsw
     mov al, [tp_fsize]
     or al, al
     jnz .fsok
@@ -96,11 +69,19 @@ tp_ts_init:
     mov [tp_x], ax
     mov ax, [tp_ttop]
     mov [tp_y], ax
-    mov word [tp_si], 0
     mov ax, [tp_srclen]
     mov [tp_se], ax
+    pop di
+    pop si
+    pop cx
     pop ax
     ret
+
+; tp_parind, tp_parskip, tp_tlead, tp_tabsep for Compact, Normal and Loose
+tp_padtab:
+    dw 16, 0, 12, 3
+    dw 24, 6, 14, 6
+    dw 28, 10, 16, 8
 
 tp_ts_end:
     call tp_flush_c
@@ -191,11 +172,8 @@ tp_ts_scan:
     jmp .adv
 .nbsp:
     inc word [tp_si]
-    mov al, ' '
-    mov cx, 1
     mov si, tp_s_spch
-    mov byte [tp_s_spch], ' '
-    call tp_emit_str
+    call tp_emit_csi
     jmp .adv
 .amp:
     inc word [tp_si]
@@ -314,34 +292,19 @@ tp_ts_word:
     call tp_emit_csi
     jmp .o
 .q:
-    cmp al, '`'
+    cmp al, '`'                 ; `` and '' are both a straight double quote
     je .qq
     cmp al, 39
     jne .coll
-    inc si
-    cmp si, [tp_se]
-    jae .ch0
-    cmp byte [es:si], 39
-    jne .ch0
-    inc si
-    mov [tp_si], si
-    mov al, '"'
-    mov [tp_wbuf], al
-    mov byte [tp_wbuf+1], 0
-    mov si, tp_wbuf
-    call tp_emit_csi
-    jmp .o
 .qq:
     inc si
     cmp si, [tp_se]
     jae .ch0
-    cmp byte [es:si], '`'
+    cmp [es:si], al
     jne .ch0
     inc si
     mov [tp_si], si
-    mov al, '"'
-    mov [tp_wbuf], al
-    mov byte [tp_wbuf+1], 0
+    mov word [tp_wbuf], '"'     ; '"' and its NUL
     mov si, tp_wbuf
     call tp_emit_csi
     jmp .o
@@ -449,45 +412,24 @@ tp_ts_cmd:
     jc .o
     mov es, [tp_srcseg]
     mov si, [tp_si]
+    ; force command-name collect on any ASCII letter
+    call tp_isalpha
+    jnc .word
+    inc word [tp_si]
     ; \\ is a line break, not two printable slashes
     cmp al, '\'
-    jne .notnl
-    inc word [tp_si]
-    call tp_nl
-    jmp .o
-.notnl:
-    ; force command-name collect on any ASCII letter
-    cmp al, 'A'
-    jb .one
-    cmp al, 'Z'
-    jbe .word
-    cmp al, 'a'
-    jb .one
-    cmp al, 'z'
-    jbe .word
-.one:
-    inc word [tp_si]
-    cmp al, '\'
     je .nl
-    cmp al, '%'
-    je .lit
-    cmp al, '&'
-    je .lit
-    cmp al, '$'
-    je .lit
-    cmp al, '#'
-    je .lit
-    cmp al, '_'
-    je .lit
-    cmp al, '{'
-    je .lit
-    cmp al, '}'
-    je .lit
     cmp al, ' '
     je .sp
     cmp al, ','
     je .sp
-    jmp .o
+    push ds                     ; \% \& \$ \# \_ \{ \} are the character
+    pop es
+    mov di, tp_s_lit
+    mov cx, TP_NLIT
+    repne scasb
+    jne .o
+    jmp short .lit
 .nl:
     call tp_nl
     jmp .o
@@ -495,8 +437,8 @@ tp_ts_cmd:
     call tp_space
     jmp .o
 .lit:
-    mov [tp_wbuf], al
-    mov byte [tp_wbuf+1], 0
+    xor ah, ah
+    mov [tp_wbuf], ax           ; the character and its NUL
     mov si, tp_wbuf
     call tp_emit_csi
     jmp .o
@@ -526,7 +468,7 @@ tp_ts_cmd:
 .cd:
     mov [tp_si], si
     mov byte [di], 0
-    mov [tp_cmdn], cx
+    mov [tp_cmdn], cl           ; its length, which tp_cmd_disp compares first
     ; swallow one space
     cmp si, [tp_se]
     jae .disp
@@ -567,138 +509,116 @@ tp_isalpha:
 tp_cmd_disp:
     push bx
     push si
-    push di
-    mov bx, tp_cmdtab
+    mov si, tp_cmdtab
+    mov bl, [tp_cmdn]
 .lp:
-    mov si, [bx]
-    or si, si
-    jz .unk
-    mov di, tp_cmd
-    call tp_streq
+    mov al, [si]                ; an entry is the name's LENGTH, the name and
+    or al, al                   ; its handler, so a name of another length is
+    jz .unk                     ; passed over on one compare
+    cmp al, bl
+    jne .nx
+    call tp_cmdent
     je .hit
-    add bx, 4
+.nx:
+    xor ah, ah
+    add si, ax
+    add si, 3
     jmp .lp
 .hit:
-    mov ax, [bx+2]
-    pop di
+    xor ah, ah
+    add si, ax
+    mov ax, [si+1]
     pop si
     pop bx
     push ds
     pop es
-    call ax
-    ret
+    jmp ax
 .unk:
-    pop di
     pop si
     pop bx
-    call tp_skip_opt
+    call tp_skip_opt_store
     call tp_peek
     cmp al, '{'
     jne .o
-    call tp_read_group
+    jmp tp_read_group
 .o:
     ret
 
-; ZF=1 if DS:SI == DS:DI (NUL strings)
-tp_streq:
-    push ax
+; SI = a tp_cmdtab entry: ZF=1 when tp_cmd is its name. Preserves every
+; register but the flags.
+tp_cmdent:
+    push cx
     push si
     push di
-.lp:
-    mov al, [si]
-    cmp al, [di]
-    jne .no
+    push es
+    push ds
+    pop es
+    mov cl, [si]
+    xor ch, ch
     inc si
-    inc di
-    or al, al
-    jnz .lp
+    mov di, tp_cmd
+    repe cmpsb
+    jne .o
+    cmp byte [di], 0            ; ...and tp_cmd ends where the name does
+.o:
+    pop es
     pop di
     pop si
-    pop ax
-    xor ax, ax
+    pop cx
     ret
-.no:
-    pop di
+
+; ZF=1 when the command just read (tp_cmd) is \textbackslash. Preserves every
+; register but the flags.
+tp_is_bsl:
+    push si
+    mov si, tp_cn_bsl
+    call tp_cmdent
     pop si
-    pop ax
-    or al, 1
     ret
 
 tp_c_nop:
     ret
 
 tp_c_dclass:
-    call tp_skip_opt_store
-    ; look at tp_arg for 10pt/11pt/12pt
-    mov si, tp_arg
-    mov di, tp_k_10pt
-    call tp_has
-    jne .a11
-    mov byte [tp_fsize], 10
-    mov byte [tp_csize], 10
-    mov byte [tp_tsize], 10
-    mov word [tp_tlead], 12
-    jmp .paper
-.a11:
-    mov si, tp_arg
-    mov di, tp_k_11pt
-    call tp_has
-    jne .paper
-    mov byte [tp_fsize], 11
-    mov byte [tp_csize], 11
-    mov byte [tp_tsize], 11
-    mov word [tp_tlead], 13
+    call tp_skip_opt_store      ; the options, in tp_arg
+    mov si, tp_kw_size
+    call tp_argkw               ; 10pt / 11pt; 12pt is what is set already
+    cmp cx, 2
+    jae .paper
+    mov al, 10
+    add al, cl
+    mov [tp_fsize], al
+    mov [tp_csize], al
+    mov [tp_tsize], al
+    add cl, 12                  ; ...and the lead, 12 or 13
+    mov [tp_tlead], cx
 .paper:
-    mov si, tp_arg
-    mov di, tp_k_legal
-    call tp_has
-    jne .a4
-    mov byte [tp_psize], 1
-    jmp .side
-.a4:
-    mov si, tp_arg
-    mov di, tp_k_a4
-    call tp_has
-    jne .a5
-    mov byte [tp_psize], 2
-    jmp .side
-.a5:
-    mov si, tp_arg
-    mov di, tp_k_a5
-    call tp_has
-    jne .ltr
-    mov byte [tp_psize], 3
-    jmp .side
-.ltr:
-    mov si, tp_arg
-    mov di, tp_k_letter
-    call tp_has
-    jne .side
-    mov byte [tp_psize], 0
+    mov si, tp_kw_paper
+    call tp_argkw               ; legal / a4 / a5 / letter -> sizes 1, 2, 3, 0
+    cmp cx, 4
+    jae .side
+    inc cx
+    and cl, 3
+    mov [tp_psize], cl
 .side:
-    mov si, tp_arg
     mov di, tp_k_twoside
     call tp_has
     jne .cls
     mov byte [tp_bind], 1
 .cls:
-    call tp_read_group
-    mov si, tp_arg
+    call tp_read_group          ; the class
     mov di, tp_k_book
     call tp_has
     jne .geo
-    mov byte [tp_class], 1
     cmp byte [tp_bind], 2
     je .geo
     mov byte [tp_bind], 1
 .geo:
-    call tp_geom
-    ret
+    jmp tp_geom
 
 tp_c_skipg:
-    call tp_skip_opt
-    call tp_read_group
-    ret
+    call tp_skip_opt_store
+    jmp tp_read_group
 
 ; \title, \author and \date all land in a fixed bss field, and the text going
 ; into them is the document's - so each copy carries the field's own ceiling,
@@ -724,31 +644,25 @@ tp_nbuf_left:
     ret
 
 tp_c_title:
-    call tp_read_group
-    call tp_plain_arg
-    mov si, tp_wbuf
     mov di, tp_title
     mov cx, TP_TITLE_MAX
-    call tp_cpatn
-    mov byte [di], 0
-    ret
+    jmp short tp_setfield
 
 tp_c_author:
-    call tp_read_group
-    call tp_plain_arg
-    mov si, tp_wbuf
     mov di, tp_author
     mov cx, TP_AUTHOR_MAX
-    call tp_cpatn
-    mov byte [di], 0
-    ret
+    jmp short tp_setfield
 
 tp_c_date:
+    mov di, tp_date
+    mov cx, TP_DATE_MAX
+
+; DI = a field, CX = its ceiling: the command's {argument}, commands taken
+; out, copied in under the ceiling.
+tp_setfield:
     call tp_read_group
     call tp_plain_arg
     mov si, tp_wbuf
-    mov di, tp_date
-    mov cx, TP_DATE_MAX
     call tp_cpatn
     mov byte [di], 0
     ret
@@ -758,38 +672,21 @@ tp_c_maketitle:
     jne .done
     call tp_endpara
     sub word [tp_y], 12
-    cmp byte [tp_title], 0
-    je .au
-    mov al, 18
-    mov [tp_csize], al
-    mov byte [tp_align], 1
+    mov byte [tp_csize], 18
     mov si, tp_title
-    call tp_emit_line
-    call tp_nl
-    add word [tp_y], 0
+    call tp_mkline
+    jz .au
     sub word [tp_y], 6
 .au:
-    mov al, [tp_tsize]
-    mov [tp_csize], al
-    cmp byte [tp_author], 0
-    je .dt
-    mov byte [tp_align], 1
+    call tp_c_norm
     mov si, tp_author
-    call tp_emit_line
-    call tp_nl
-.dt:
-    cmp byte [tp_date], 0
-    je .rule
-    mov byte [tp_align], 1
+    call tp_mkline
     mov si, tp_date
-    call tp_emit_line
-    call tp_nl
-.rule:
+    call tp_mkline
     mov byte [tp_align], 0
     mov ax, [tp_left]
     mov bx, [tp_y]
     mov cx, [tp_tw]
-    xor dx, dx
     call tp_emit_box
     sub word [tp_y], 16
     mov byte [tp_made], 1
@@ -797,35 +694,32 @@ tp_c_maketitle:
 .done:
     ret
 
+; SI = a title-block line: set centred and ended, ZF=0 - or ZF=1 and nothing
+; when it is empty
+tp_mkline:
+    cmp byte [si], 0
+    je .o
+    mov byte [tp_align], 1
+    call tp_emit_line
+    call tp_nl
+    or si, si                   ; (ZF=0: SI is an address)
+.o:
+    ret
+
 tp_c_begin:
     call tp_read_group
-    mov si, tp_arg
-    mov di, tp_k_document
-    call tp_has
-    jne .ctr
-    ; Only \maketitle builds the title block. Auto-running it here
-    ; printed "Hello" / GUIDE titles twice.
-    jmp .o
+    mov si, tp_kw_env
+    call tp_argkw
+    mov bx, cx
+    shl bx, 1
+    jmp [tp_bgtab+bx]
 .ctr:
-    mov si, tp_arg
-    mov di, tp_k_center
-    call tp_has
-    jne .quo
     call tp_endpara
     call tp_sty_push
     mov byte [tp_align], 1
     mov al, 1
-    call tp_env_push
-    jmp .o
-.quo:
-    mov si, tp_arg
-    mov di, tp_k_quote
-    call tp_has
-    je .doq
-    mov si, tp_arg
-    mov di, tp_k_abstract
-    call tp_has
-    jne .itm
+    jmp tp_env_push
+.abs:
     call tp_endpara
     mov byte [tp_align], 1
     mov si, tp_s_abs
@@ -839,19 +733,11 @@ tp_c_begin:
     add word [tp_left], 36
     sub word [tp_right], 36
     mov byte [tp_needind], 0
-    jmp .o
-.itm:
-    mov si, tp_arg
-    mov di, tp_k_itemize
-    call tp_has
-    je .doi
-    mov si, tp_arg
-    mov di, tp_k_enumerate
-    call tp_has
-    jne .tab
+    ret
+.enu:
     mov al, 4
-    jmp .doi2
-.doi:
+    jmp short .doi2
+.itm:
     mov al, 3
 .doi2:
     call tp_endpara
@@ -859,131 +745,87 @@ tp_c_begin:
     add word [tp_left], 18
     mov byte [tp_itemn], 0
     mov byte [tp_needind], 0
-    jmp .o
-.tab:
-    mov si, tp_arg
-    mov di, tp_k_tabular
-    call tp_has
-    jne .tbl
-    call tp_skip_opt
-    call tp_read_group
-    call tp_do_tabular
-    jmp .o
-.tbl:
-    mov si, tp_arg
-    mov di, tp_k_table
-    call tp_has
-    jne .o
-    call tp_skip_opt
-    mov al, 5
-    call tp_env_push
-.o:
     ret
+.tab:
+    call tp_skip_opt_store
+    call tp_read_group
+    jmp tp_do_tabular
+.tbl:
+    call tp_skip_opt_store
+    mov al, 5
+    jmp tp_env_push
+.o:                             ; document (only \maketitle builds the title
+    ret                         ; block: running it here printed it twice),
+                                ; and anything unknown
+
+tp_bgtab:   dw tp_c_begin.o, tp_c_begin.ctr, tp_c_begin.doq, tp_c_begin.abs
+            dw tp_c_begin.itm, tp_c_begin.enu, tp_c_begin.tab, tp_c_begin.tbl
+            dw tp_c_begin.o
 
 tp_c_end:
     call tp_read_group
-    mov si, tp_arg
-    mov di, tp_k_document
-    call tp_has
-    jne .ctr
-    mov ax, [tp_se]
-    mov [tp_si], ax
-    jmp .o
-.ctr:
-    mov si, tp_arg
-    mov di, tp_k_center
-    call tp_has
-    jne .quo
-    call tp_endpara
+    mov si, tp_kw_env
+    call tp_argkw
+    jcxz .doc                   ; document
+    loop .ctr1
+    call tp_endpara             ; center
     call tp_sty_pop
+    jmp tp_env_pop
+.ctr1:                          ; (CX is one less than the index now)
+    cmp cl, 3
+    jb .quo                     ; quote, abstract
+    cmp cl, 5
+    jae .o                      ; (tabular and table end where they began)
+    call tp_endpara             ; itemize, enumerate
     call tp_env_pop
-    jmp .o
+    sub word [tp_left], 18
+    ret
 .quo:
-    mov si, tp_arg
-    mov di, tp_k_quote
-    call tp_has
-    je .unq
-    mov si, tp_arg
-    mov di, tp_k_abstract
-    call tp_has
-    jne .itm
-.unq:
     call tp_endpara
     call tp_env_pop
     sub word [tp_left], 36
     add word [tp_right], 36
-    jmp .o
-.itm:
-    mov si, tp_arg
-    mov di, tp_k_itemize
-    call tp_has
-    je .uni
-    mov si, tp_arg
-    mov di, tp_k_enumerate
-    call tp_has
-    jne .o
-.uni:
-    call tp_endpara
-    call tp_env_pop
-    sub word [tp_left], 18
+    ret
+.doc:
+    mov ax, [tp_se]
+    mov [tp_si], ax
 .o:
     ret
 
 tp_c_section:
-    call tp_skip_opt
-    call tp_read_group
-    call tp_plain_arg
-    call tp_endpara
+    call tp_hdarg
     sub word [tp_y], 10
     inc byte [tp_secno]
     mov byte [tp_subno], 0
     mov di, tp_nbuf
     mov al, [tp_secno]
-    xor ah, ah
-    call tp_u16_di
-    mov al, '.'
-    stosb
-    mov al, ' '
-    stosb
-    mov si, tp_wbuf
-    call tp_nbuf_left
-    call tp_cpatn
-    mov byte [di], 0
-    mov al, 14
-    mov [tp_csize], al
+    call tp_u8_di
+    mov ax, '. '
+    stosw
+    call tp_hdtail
+    mov byte [tp_csize], 14
     mov byte [tp_align], 0
-    mov si, tp_nbuf
     call tp_emit_line
-    mov al, [tp_tsize]
-    mov [tp_csize], al
+    call tp_c_norm
     call tp_nl
     sub word [tp_y], 4
     mov byte [tp_needind], 1
     ret
 
 tp_c_subsec:
-    call tp_skip_opt
-    call tp_read_group
-    call tp_plain_arg
-    call tp_endpara
+    call tp_hdarg
     sub word [tp_y], 6
     inc byte [tp_subno]
     mov di, tp_nbuf
     mov al, [tp_secno]
-    xor ah, ah
-    call tp_u16_di
+    call tp_u8_di
     mov al, '.'
     stosb
     mov al, [tp_subno]
-    xor ah, ah
-    call tp_u16_di
+    call tp_u8_di
     mov al, ' '
     stosb
-    mov si, tp_wbuf
-    call tp_nbuf_left
-    call tp_cpatn
-    mov byte [di], 0
-    mov si, tp_nbuf
+    call tp_hdtail
     call tp_emit_line
     call tp_nl
     sub word [tp_y], 2
@@ -991,10 +833,7 @@ tp_c_subsec:
     ret
 
 tp_c_chapter:
-    call tp_skip_opt
-    call tp_read_group
-    call tp_plain_arg
-    call tp_endpara
+    call tp_hdarg
     call tp_newpage
     inc byte [tp_chno]
     mov byte [tp_secno], 0
@@ -1002,24 +841,44 @@ tp_c_chapter:
     mov si, tp_s_chap
     call tp_cpat
     mov al, [tp_chno]
-    xor ah, ah
-    call tp_u16_di
+    call tp_u8_di
     mov byte [di], 0
     mov byte [tp_align], 1
     mov si, tp_nbuf
     call tp_emit_line
     call tp_nl
-    mov al, 18
-    mov [tp_csize], al
+    mov byte [tp_csize], 18
     mov si, tp_wbuf
     call tp_emit_line
-    mov al, [tp_tsize]
-    mov [tp_csize], al
+    call tp_c_norm
     mov byte [tp_align], 0
     call tp_nl
     sub word [tp_y], 12
     mov byte [tp_needind], 1
     ret
+
+; A heading's argument: the optional [..] skipped, the {..} read and its
+; commands taken out into tp_wbuf, and the paragraph before it ended.
+tp_hdarg:
+    call tp_skip_opt_store
+    call tp_read_group
+    call tp_plain_arg
+    jmp tp_endpara
+
+; ...and the heading's text after its number in tp_nbuf, under the ceiling
+; tp_nbuf_left works out: SI = tp_nbuf, ready to set.
+tp_hdtail:
+    mov si, tp_wbuf
+    call tp_nbuf_left
+    call tp_cpatn
+    mov byte [di], 0
+    mov si, tp_nbuf
+    ret
+
+; AL = 0..255 -> decimal at DI (tp_u16_di's)
+tp_u8_di:
+    xor ah, ah
+    jmp tp_u16_di
 
 tp_c_para:
     call tp_read_group
@@ -1030,33 +889,29 @@ tp_c_para:
     mov si, tp_wbuf
     call tp_emit_csi
     mov byte [tp_bold], 0
-    call tp_space
-    ret
+    jmp tp_space
 
 tp_c_textbf:
-    call tp_read_group
-    mov al, [tp_bold]
-    push ax
-    mov byte [tp_bold], 1
-    call tp_feed_arg
-    pop ax
-    mov [tp_bold], al
-    ret
+    mov bx, tp_bold
+    jmp short tp_styarg
 
 tp_c_emph:
+    mov bx, tp_under
+
+; BX = a style flag: the {argument} set with it on, and the flag put back.
+tp_styarg:
     call tp_read_group
-    mov al, [tp_under]
+    mov al, [bx]
     push ax
-    mov byte [tp_under], 1
+    mov byte [bx], 1
     call tp_feed_arg
     pop ax
-    mov [tp_under], al
+    mov [bx], al
     ret
 
 tp_c_texttt:
     call tp_read_group
-    call tp_feed_arg
-    ret
+    jmp tp_feed_arg
 
 ; \textbackslash plus following letters is one token ("\title"), so
 ; wrap cannot leave a lone backslash on the line.
@@ -1196,11 +1051,9 @@ tp_c_caption:
     mov [tp_csize], al
     mov si, tp_wbuf
     call tp_emit_line
-    mov al, [tp_tsize]
-    mov [tp_csize], al
+    call tp_c_norm
     mov byte [tp_align], 0
-    call tp_nl
-    ret
+    jmp tp_nl
 
 tp_c_cite:
     call tp_read_group
@@ -1215,30 +1068,14 @@ tp_c_cite:
 
 tp_c_pstyle:
     call tp_read_group
-    mov si, tp_arg
-    mov di, tp_k_empty
-    call tp_has
-    jne .plain
-    mov byte [tp_pstyle], 0
-    jmp .o
-.plain:
-    mov si, tp_arg
-    mov di, tp_k_head
-    call tp_has
-    jne .my
-    mov byte [tp_pstyle], 2
-    jmp .o
-.my:
-    mov si, tp_arg
-    mov di, tp_k_myhead
-    call tp_has
-    jne .on
-    mov byte [tp_pstyle], 3
-    jmp .o
-.on:
-    mov byte [tp_pstyle], 1
-.o:
+    mov si, tp_kw_pstyle
+    call tp_argkw               ; empty, myheadings, headings, or plain
+    mov bx, cx
+    mov al, [tp_pstab+bx]
+    mov [tp_pstyle], al
     ret
+
+tp_pstab:   db 0, 3, 2, 1
 
 tp_needgrp:
     call tp_skip_ws
@@ -1260,15 +1097,34 @@ tp_emit_bsname:
     pop si
     ret
 
-tp_c_oddm:
+; A dimension command's {argument} in points: CF=0 and AX - or, with no
+; group after it, CF=1 and the command set as text (\name), which is what
+; reading a group that is not there would otherwise have eaten
+tp_dimarg:
     call tp_needgrp
-    jc tp_emit_bsname
+    jnc .g
+    call tp_emit_bsname
+    stc
+    ret
+.g:
     call tp_read_group
     call tp_parse_dim
+    clc
+    ret
+
+; ...and AX under 36pt as an offset from the 72pt default margin
+tp_dimmarg:
+    call tp_dimarg
+    jc .o
     cmp ax, 36
-    jae .a
-    add ax, 72
-.a:
+    jae .o
+    add ax, 72                  ; (CF=0: no carry out of a small sum)
+.o:
+    ret
+
+tp_c_oddm:
+    call tp_dimmarg
+    jc tp_dimset.o
     mov [tp_left], ax
     mov [tp_tleft], ax
     add ax, [tp_tw]
@@ -1276,67 +1132,45 @@ tp_c_oddm:
     ret
 
 tp_c_topm:
-    call tp_needgrp
-    jc tp_emit_bsname
-    call tp_read_group
-    call tp_parse_dim
-    cmp ax, 36
-    jae .a
-    add ax, 72
-.a:
+    call tp_dimmarg
+    jc tp_dimset.o
     mov bx, [tp_ph]
     sub bx, ax
     mov [tp_ttop], bx
     ret
 
 tp_c_tw:
-    call tp_needgrp
-    jc tp_emit_bsname
-    call tp_read_group
-    call tp_parse_dim
+    call tp_dimarg
+    jc tp_dimset.o
     mov [tp_tw], ax
-    mov bx, [tp_left]
-    add bx, ax
-    mov [tp_right], bx
+    add ax, [tp_left]
+    mov [tp_right], ax
     ret
 
 tp_c_th:
-    call tp_needgrp
-    jc tp_emit_bsname
-    call tp_read_group
-    call tp_parse_dim
-    ret
+    jmp tp_dimarg               ; read and set aside: there is no text height
 
 tp_c_pind:
-    call tp_needgrp
-    jc tp_emit_bsname
-    call tp_read_group
-    call tp_parse_dim
-    mov [tp_parind], ax
-    ret
+    mov bx, tp_parind
+    jmp short tp_dimset
 
 tp_c_pskip:
-    call tp_needgrp
-    jc tp_emit_bsname
-    call tp_read_group
-    call tp_parse_dim
-    mov [tp_parskip], ax
-    ret
+    mov bx, tp_parskip
+    jmp short tp_dimset
 
 tp_c_base:
-    call tp_needgrp
-    jc tp_emit_bsname
-    call tp_read_group
-    call tp_parse_dim
-    mov [tp_tlead], ax
-    ret
+    mov bx, tp_tlead
+    jmp short tp_dimset
 
 tp_c_tsep:
-    call tp_needgrp
-    jc tp_emit_bsname
-    call tp_read_group
-    call tp_parse_dim
-    mov [tp_tabsep], ax
+    mov bx, tp_tabsep
+
+; BX = a dimension variable: the argument goes in it
+tp_dimset:
+    call tp_dimarg
+    jc .o
+    mov [bx], ax
+.o:
     ret
 
 tp_c_large:
@@ -1415,39 +1249,6 @@ tp_skip_ws:
 .o:
     pop es
     pop ax
-    ret
-
-tp_skip_opt:
-    call tp_skip_ws
-    call tp_peek
-    cmp al, '['
-    jne .o
-    inc word [tp_si]
-    push ax
-    push cx
-    push es
-    mov es, [tp_srcseg]
-    mov cx, 1
-.lp:
-    mov si, [tp_si]
-    cmp si, [tp_se]
-    jae .d
-    mov al, [es:si]
-    inc word [tp_si]
-    cmp al, '['
-    jne .rb
-    inc cx
-    jmp .lp
-.rb:
-    cmp al, ']'
-    jne .lp
-    dec cx
-    jnz .lp
-.d:
-    pop es
-    pop cx
-    pop ax
-.o:
     ret
 
 tp_skip_opt_store:
@@ -1561,7 +1362,8 @@ tp_read_group:
 ; document, and the destination is the 82-byte tp_wbuf that every other writer
 ; in here caps at 70. So the copy is capped at 70 as well: without it a
 ; \title{...} of more than 82 characters runs off the end of tp_wbuf and into
-; tp_linebuf, with the overrun length under the .TEX file's control.
+; whatever follows it, with the overrun length under the .TEX file's
+; control.
 TP_WBUF_MAX equ 70
 
 tp_plain_arg:
@@ -1603,39 +1405,9 @@ tp_plain_arg:
     jz .z
     call tp_isalpha
     jc .esc
-    ; named command: textbackslash -> '\'; else skip. CX is the tp_wbuf budget
-    ; from .lp, and this inner loop needs a counter of its own - so it borrows
-    ; CX and puts it back, rather than the budget silently becoming a command
-    ; name's length.
+    ; named command: textbackslash -> '\'; else skip
     dec si
-    push cx
-    push di
-    mov di, tp_cmd
-    xor cx, cx
-.en:
-    mov al, [si]
-    or al, al
-    jz .ed
-    call tp_isalpha
-    jc .ed
-    cmp cx, 24
-    jae .ed
-    mov [di], al
-    inc di
-    inc si
-    inc cx
-    jmp .en
-.ed:
-    mov byte [di], 0
-    pop di
-    pop cx
-    push si
-    mov si, tp_cmd
-    push di
-    mov di, tp_cn_bsl
-    call tp_streq
-    pop di
-    pop si
+    call tp_argname
     jne .grp
     mov al, '\'
     stosb
@@ -1716,13 +1488,15 @@ tp_parse_dim:
     pop bx
     ret
 
-; SI = haystack, DI = needle (both NUL). ZF=1 if needle occurs in haystack.
+; DI = a needle: ZF=1 when it occurs in tp_arg (both NUL-terminated).
+; Preserves every register but the flags.
 tp_has:
     push ax
     push bx
     push cx
     push si
     push di
+    mov si, tp_arg
     mov bx, di
     mov cx, 200
 .scan:
@@ -1750,145 +1524,112 @@ tp_has:
 .yes:
     pop di
     pop si
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    xor ax, ax
-    ret
+    xor ax, ax                  ; ZF = 1
+    jmp short .o
 .no:
+    or al, 1                    ; ZF = 0
+.o:
     pop di
     pop si
     pop cx
     pop bx
     pop ax
-    or al, 1
     ret
 
-tp_k_10pt:      db '10pt', 0
-tp_k_11pt:      db '11pt', 0
-tp_k_book:      db 'book', 0
-tp_k_document:  db 'document', 0
-tp_k_center:    db 'center', 0
-tp_k_quote:     db 'quote', 0
-tp_k_abstract:  db 'abstract', 0
-tp_k_itemize:   db 'itemize', 0
-tp_k_enumerate: db 'enumerate', 0
-tp_k_tabular:   db 'tabular', 0
-tp_k_table:     db 'table', 0
-tp_k_empty:     db 'empty', 0
-tp_k_letter:    db 'letterpaper', 0
-tp_k_legal:     db 'legalpaper', 0
-tp_k_a4:        db 'a4paper', 0
-tp_k_a5:        db 'a5paper', 0
+; SI = keywords, one NUL-terminated string after another and an empty one
+; last: CX = the index of the FIRST that occurs in tp_arg, or the count of
+; them when none does. Preserves everything else. A keyword that is part of
+; another goes AFTER it - "headings" is inside "myheadings".
+tp_argkw:
+    push si
+    push di
+    xor cx, cx
+.l:
+    cmp byte [si], 0
+    je .o
+    mov di, si
+    call tp_has
+    je .o
+    inc cx
+.z:
+    lodsb
+    or al, al
+    jnz .z
+    jmp .l
+.o:
+    pop di
+    pop si
+    ret
+
+tp_kw_size:     db '10pt', 0, '11pt', 0, 0
+tp_kw_paper:    db 'legalpaper', 0, 'a4paper', 0, 'a5paper', 0
+                db 'letterpaper', 0, 0
 tp_k_twoside:   db 'twoside', 0
-tp_k_head:      db 'headings', 0
-tp_k_myhead:    db 'myheadings', 0
+tp_k_book:      db 'book', 0
+tp_kw_env:      db 'document', 0, 'center', 0, 'quote', 0, 'abstract', 0
+                db 'itemize', 0, 'enumerate', 0, 'tabular', 0, 'table', 0, 0
+tp_kw_pstyle:   db 'empty', 0, 'myheadings', 0, 'headings', 0, 0
 
+; THE COMMANDS: the name's length, the name and its handler, so tp_cmd_disp
+; passes over a name of another length on one compare
+%macro TPC 2
+%strlen %%n %1
+    db %%n, %1
+    dw %2
+%endmacro
 tp_cmdtab:
-    dw tp_cn_dclass, tp_c_dclass
-    dw tp_cn_usep, tp_c_skipg
-    dw tp_cn_title, tp_c_title
-    dw tp_cn_author, tp_c_author
-    dw tp_cn_date, tp_c_date
-    dw tp_cn_make, tp_c_maketitle
-    dw tp_cn_begin, tp_c_begin
-    dw tp_cn_end, tp_c_end
-    dw tp_cn_sec, tp_c_section
-    dw tp_cn_sub, tp_c_subsec
-    dw tp_cn_ch, tp_c_chapter
-    dw tp_cn_parag, tp_c_para
-    dw tp_cn_bf, tp_c_textbf
-    dw tp_cn_emph, tp_c_emph
-    dw tp_cn_it, tp_c_emph
-    dw tp_cn_ul, tp_c_emph
-    dw tp_cn_tt, tp_c_texttt
-    dw tp_cn_bsl, tp_c_bslash
-    dw tp_cn_nl, tp_c_nl
-    dw tp_cn_par, tp_c_par
-    dw tp_cn_ni, tp_c_noindent
-    dw tp_cn_np, tp_c_newpage
-    dw tp_cn_cp, tp_c_newpage
-    dw tp_cn_pb, tp_c_newpage
-    dw tp_cn_vs, tp_c_vspace
-    dw tp_cn_big, tp_c_big
-    dw tp_cn_med, tp_c_med
-    dw tp_cn_sma, tp_c_sma
-    dw tp_cn_cen, tp_c_centering
-    dw tp_cn_item, tp_c_item
-    dw tp_cn_cap, tp_c_caption
-    dw tp_cn_lab, tp_c_skipg
-    dw tp_cn_cite, tp_c_cite
-    dw tp_cn_ps, tp_c_pstyle
-    dw tp_cn_od, tp_c_oddm
-    dw tp_cn_tm, tp_c_topm
-    dw tp_cn_tw, tp_c_tw
-    dw tp_cn_th, tp_c_th
-    dw tp_cn_pi, tp_c_pind
-    dw tp_cn_psk, tp_c_pskip
-    dw tp_cn_bs, tp_c_base
-    dw tp_cn_tcs, tp_c_tsep
-    dw tp_cn_hl, tp_c_nop
-    dw tp_cn_lg, tp_c_large
-    dw tp_cn_Lg, tp_c_Large
-    dw tp_cn_sm, tp_c_small
-    dw tp_cn_ns, tp_c_norm
-    dw tp_cn_tex, tp_c_tex
-    dw tp_cn_ltx, tp_c_latex
-    dw tp_cn_td, tp_c_today
-    dw 0
-
-tp_cn_dclass:   db 'documentclass', 0
-tp_cn_usep:     db 'usepackage', 0
-tp_cn_title:    db 'title', 0
-tp_cn_author:   db 'author', 0
-tp_cn_date:     db 'date', 0
-tp_cn_make:     db 'maketitle', 0
-tp_cn_begin:    db 'begin', 0
-tp_cn_end:      db 'end', 0
-tp_cn_sec:      db 'section', 0
-tp_cn_sub:      db 'subsection', 0
-tp_cn_ch:       db 'chapter', 0
-tp_cn_parag:    db 'paragraph', 0
-tp_cn_bf:       db 'textbf', 0
-tp_cn_emph:     db 'emph', 0
-tp_cn_it:       db 'textit', 0
-tp_cn_ul:       db 'underline', 0
-tp_cn_tt:       db 'texttt', 0
-tp_cn_bsl:      db 'textbackslash', 0
-tp_cn_nl:       db 'newline', 0
-tp_cn_par:      db 'par', 0
-tp_cn_ni:       db 'noindent', 0
-tp_cn_np:       db 'newpage', 0
-tp_cn_cp:       db 'clearpage', 0
-tp_cn_pb:       db 'pagebreak', 0
-tp_cn_vs:       db 'vspace', 0
-tp_cn_big:      db 'bigskip', 0
-tp_cn_med:      db 'medskip', 0
-tp_cn_sma:      db 'smallskip', 0
-tp_cn_cen:      db 'centering', 0
-tp_cn_item:     db 'item', 0
-tp_cn_cap:      db 'caption', 0
-tp_cn_lab:      db 'label', 0
-tp_cn_cite:     db 'cite', 0
-tp_cn_ps:       db 'pagestyle', 0
-tp_cn_od:       db 'oddsidemargin', 0
-tp_cn_tm:       db 'topmargin', 0
-tp_cn_tw:       db 'textwidth', 0
-tp_cn_th:       db 'textheight', 0
-tp_cn_pi:       db 'parindent', 0
-tp_cn_psk:      db 'parskip', 0
-tp_cn_bs:       db 'baselineskip', 0
-tp_cn_tcs:      db 'tabcolsep', 0
-tp_cn_hl:       db 'hline', 0
-tp_cn_lg:       db 'large', 0
-tp_cn_Lg:       db 'Large', 0
-tp_cn_sm:       db 'small', 0
-tp_cn_ns:       db 'normalsize', 0
-tp_cn_tex:      db 'TeX', 0
-tp_cn_ltx:      db 'LaTeX', 0
-tp_cn_td:       db 'today', 0
+    TPC 'documentclass', tp_c_dclass
+    TPC 'usepackage', tp_c_skipg
+    TPC 'title', tp_c_title
+    TPC 'author', tp_c_author
+    TPC 'date', tp_c_date
+    TPC 'maketitle', tp_c_maketitle
+    TPC 'begin', tp_c_begin
+    TPC 'end', tp_c_end
+    TPC 'section', tp_c_section
+    TPC 'subsection', tp_c_subsec
+    TPC 'chapter', tp_c_chapter
+    TPC 'paragraph', tp_c_para
+    TPC 'textbf', tp_c_textbf
+    TPC 'emph', tp_c_emph
+    TPC 'textit', tp_c_emph
+    TPC 'underline', tp_c_emph
+    TPC 'texttt', tp_c_texttt
+tp_cn_bsl:
+    TPC 'textbackslash', tp_c_bslash
+    TPC 'newline', tp_c_nl
+    TPC 'par', tp_c_par
+    TPC 'noindent', tp_c_noindent
+    TPC 'newpage', tp_c_newpage
+    TPC 'clearpage', tp_c_newpage
+    TPC 'pagebreak', tp_c_newpage
+    TPC 'vspace', tp_c_vspace
+    TPC 'bigskip', tp_c_big
+    TPC 'medskip', tp_c_med
+    TPC 'smallskip', tp_c_sma
+    TPC 'centering', tp_c_centering
+    TPC 'item', tp_c_item
+    TPC 'caption', tp_c_caption
+    TPC 'label', tp_c_skipg
+    TPC 'cite', tp_c_cite
+    TPC 'pagestyle', tp_c_pstyle
+    TPC 'oddsidemargin', tp_c_oddm
+    TPC 'topmargin', tp_c_topm
+    TPC 'textwidth', tp_c_tw
+    TPC 'textheight', tp_c_th
+    TPC 'parindent', tp_c_pind
+    TPC 'parskip', tp_c_pskip
+    TPC 'baselineskip', tp_c_base
+    TPC 'tabcolsep', tp_c_tsep
+    TPC 'hline', tp_c_nop
+    TPC 'large', tp_c_large
+    TPC 'Large', tp_c_Large
+    TPC 'small', tp_c_small
+    TPC 'normalsize', tp_c_norm
+    TPC 'TeX', tp_c_tex
+    TPC 'LaTeX', tp_c_latex
+    TPC 'today', tp_c_today
+    db 0
 
 ; ---- emit / wrap ------------------------------------------------------------
 ; One em = body point size. Preview maps 8px per em, so 12pt is
@@ -1919,30 +1660,20 @@ tp_emit_csi:
     ; SI = DS NUL string, current style
     push ax
     push bx
-    push cx
     push dx
-    push si
     call tp_strlen
-    mov cx, ax
-    jcxz .o
+    or ax, ax
+    jz .o
+    push ax
     call tp_ensure
     call tp_charw
-    mov bl, al
-    xor bh, bh
-    mul cl                      ; AX = width  (CL * charw) - only if CX<256
-    ; use BX * CX more carefully
-    mov al, [tp_csize]
-    ; recompute width = len * charw
-    call tp_charw
-    mov bl, al
-    xor bh, bh
-    mov ax, cx
-    mul bx                      ; DX:AX width
-    mov dx, ax                  ; width
+    pop dx
+    mul dx
+    xchg ax, dx                 ; DX = the width, len * the size
     cmp byte [tp_align], 0
     je .left
     call tp_c_append
-    jmp .o
+    jmp short .o
 .left:
     mov ax, [tp_x]
     cmp ax, [tp_left]
@@ -1955,32 +1686,8 @@ tp_emit_csi:
     call tp_put_run
     add [tp_x], dx
 .o:
-    pop si
     pop dx
-    pop cx
     pop bx
-    pop ax
-    ret
-
-tp_emit_str:
-    ; SI DS string CX len (not necessarily NUL)
-    push ax
-    push si
-    mov di, tp_wbuf
-    cmp cx, 70
-    jbe .c
-    mov cx, 70
-.c:
-    push cx
-    jcxz .z
-    rep movsb
-.z:
-    pop cx
-    mov bx, cx
-    mov byte [tp_wbuf+bx], 0
-    mov si, tp_wbuf
-    call tp_emit_csi
-    pop si
     pop ax
     ret
 
@@ -1992,19 +1699,29 @@ tp_emit_line:
     call tp_ensure
     cmp byte [tp_align], 0
     je .l
+    call tp_center
+    jmp short .o
+.l:
+    mov ax, [tp_left]
+    mov [tp_x], ax
+    call tp_put_run
+.o:
+    pop bx
+    pop ax
+    ret
+
+; SI = a NUL string: one run of it, centred between tp_left and tp_right.
+; Preserves every register.
+tp_center:
+    push ax
+    push bx
+    push cx
+    push dx
     call tp_strlen
+    push ax
     call tp_charw
-    mov bl, al
-    xor bh, bh
-    mul bl                      ; wait AX was len, then charw overwrote
-    ; redo
-    call tp_strlen
-    mov cx, ax
-    call tp_charw
-    mov bl, al
-    xor bh, bh
-    mov ax, cx
-    mul bx
+    pop dx
+    mul dx                      ; AX = its width
     mov cx, [tp_right]
     sub cx, [tp_left]
     sub cx, ax
@@ -2012,16 +1729,11 @@ tp_emit_line:
     xor cx, cx
 .p:
     shr cx, 1
-    mov ax, [tp_left]
-    add ax, cx
-    mov [tp_x], ax
+    add cx, [tp_left]
+    mov [tp_x], cx
     call tp_put_run
-    jmp .o
-.l:
-    mov ax, [tp_left]
-    mov [tp_x], ax
-    call tp_put_run
-.o:
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -2055,41 +1767,17 @@ tp_c_append:
 tp_flush_c:
     cmp byte [tp_clen], 0
     je .o
-    push ax
     push bx
-    push cx
     push si
-    mov byte [tp_cline + TP_CLINE_MAX], 0
-    xor ah, ah
-    mov al, [tp_clen]
-    mov bx, ax
-    mov byte [tp_cline+bx], 0
-    mov si, tp_cline
-    mov byte [tp_align], 0      ; emit_line uses align; we center here
-    call tp_strlen
-    mov cx, ax
-    call tp_charw
-    mov bl, al
+    mov bl, [tp_clen]
     xor bh, bh
-    mov ax, cx
-    mul bx
-    mov cx, [tp_right]
-    sub cx, [tp_left]
-    sub cx, ax
-    jns .p
-    xor cx, cx
-.p:
-    shr cx, 1
-    mov ax, [tp_left]
-    add ax, cx
-    mov [tp_x], ax
+    mov byte [tp_cline+bx], 0
+    mov byte [tp_align], 0      ; emit_line uses align; we center here
     mov si, tp_cline
-    call tp_put_run
+    call tp_center
     mov byte [tp_clen], 0
     pop si
-    pop cx
     pop bx
-    pop ax
 .o:
     ret
 
@@ -2113,20 +1801,30 @@ tp_ensure:
 .o:
     ret
 
+; One inter-word space, or none at the start of a line. PRESERVES EVERY
+; REGISTER, and that is a fix: it took SI for its own string, and tp_feed_arg
+; walks its argument in SI across this call - so the walk resumed on the
+; space it had just emitted, emitted it again, and never came back. Any
+; \textbf / \emph / \texttt group of two words or more did that, under the
+; gfx lock, until the run array, the page count and then tp_x itself wrapped.
 tp_space:
     cmp byte [tp_inpara], 0
     je .o
+    push si
+    mov si, tp_s_spch
     cmp byte [tp_align], 0
     je .l
-    mov si, tp_s_spch
     call tp_c_append
-    jmp .o
+    jmp short .p
 .l:
-    mov cx, [tp_left]
-    cmp [tp_x], cx
-    jbe .o
-    mov si, tp_s_spch
+    push ax
+    mov ax, [tp_left]
+    cmp [tp_x], ax
+    pop ax
+    jbe .p
     call tp_emit_csi
+.p:
+    pop si
 .o:
     ret
 
@@ -2206,18 +1904,14 @@ tp_footer:
     inc ax
     call tp_u16_di
     mov byte [di], 0
-    mov si, tp_nbuf
-    call tp_strlen
-    mov cx, ax
-    mov al, 10
-    push word [tp_csize]
-    mov [tp_csize], al
-    call tp_charw
-    mov bl, al
-    xor bh, bh
-    mov ax, cx
-    mul bx
-    mov cx, ax                  ; text width
+    xchg ax, di
+    sub ax, tp_nbuf             ; its length in cells...
+    mov ah, 10                  ; ...at 10pt, ten points a cell
+    mul ah
+    xchg ax, cx                 ; CX = the text width
+    mov al, [tp_csize]
+    push ax
+    mov byte [tp_csize], 10
     mov bx, 36
     cmp byte [tp_pstyle], 2
     jne .yok
@@ -2243,7 +1937,8 @@ tp_footer:
 .put:
     mov si, tp_nbuf
     call tp_put_run_at
-    pop word [tp_csize]
+    pop ax
+    mov [tp_csize], al
     pop di
     pop si
     pop cx
@@ -2260,7 +1955,9 @@ tp_put_run:
     call tp_put_run_at
     ret
 
-; AX=x BX=y SI=NUL
+; AX=x BX=y SI=NUL: one run at (x, y) in the current style - or nothing,
+; when the run array or the text pool is full (SPEC.md 69.3: a document that
+; overruns either is TRUNCATED, never overrun)
 tp_put_run_at:
     push ax
     push bx
@@ -2269,10 +1966,8 @@ tp_put_run_at:
     push si
     push di
     push es
-    mov [tp_rx], ax
-    mov [tp_ry], bx
-    mov cx, [tp_nruns]
-    cmp cx, TP_MAX_RUNS
+    xchg ax, dx                 ; DX = x
+    cmp word [tp_nruns], TP_MAX_RUNS
     jae .o
     call tp_strlen
     or ax, ax
@@ -2282,44 +1977,44 @@ tp_put_run_at:
     mov ax, 255
 .ln:
     mov cx, ax
-    mov ax, [tp_tused]
-    add ax, cx
+    add ax, [tp_tused]
     cmp ax, TP_TEXT_MAX
     jae .o
-    mov di, [tp_tused]
+    mov di, [tp_tused]          ; the text goes where the last run's ended
+    mov [tp_tused], ax
     add di, tp_text
-    push cx
-    push si
     push ds
     pop es
+    push cx
     rep movsb
-    pop si
     pop cx
     mov ax, [tp_nruns]
-    mov dx, TP_RUN_SZ
-    mul dx
-    mov di, ax
-    add di, tp_runs
-    mov al, [tp_page]
-    mov [di], al
-    mov al, [tp_bold]
-    and al, 1
-    mov ah, [tp_under]
-    and ah, 1
-    shl ah, 1
-    or al, ah
-    mov [di+1], al
-    mov ax, [tp_rx]
-    mov [di+2], ax
-    mov ax, [tp_ry]
-    mov [di+4], ax
-    mov al, [tp_csize]
-    mov [di+6], al
-    mov [di+7], cl
-    mov ax, [tp_tused]
-    mov [di+8], ax
-    add [tp_tused], cx
     inc word [tp_nruns]
+    mov di, ax
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    sub ax, di                  ; * TP_RUN_SZ, which is 8 - 1
+    add ax, tp_runs
+    xchg ax, di                 ; DI = the record
+    mov al, [tp_under]
+    and al, 1
+    shl al, 1
+    mov ah, [tp_bold]
+    and ah, 1
+    or al, ah
+    mov ah, cl                  ; AH = the length, for +6
+    mov cl, 4
+    shl al, cl                  ; TP_RUN_BOLD and TP_RUN_UNDER...
+    or al, [tp_page]            ; ...over the page
+    stosb
+    xchg ax, dx                 ; +1 x (and DH = the length)
+    stosw
+    xchg ax, bx                 ; +3 y
+    stosw
+    mov al, [tp_csize]          ; +5 size
+    mov ah, dh                  ; +6 length
+    stosw
     mov byte [tp_onpage], 1
 .o:
     pop es
@@ -2332,46 +2027,44 @@ tp_put_run_at:
     ret
 
 tp_emit_box:
-    ; AX=x BX=y CX=w DX=h
+    ; AX=x BX=y CX=w, a zero w drawn as 1, and every box ONE POINT TALL
+    ; (tp_tab_grid has why). Preserves every register.
     push ax
-    push bx
-    push cx
-    push dx
     push di
-    mov si, [tp_nboxes]
-    cmp si, TP_MAX_BOXES
+    push es
+    cmp word [tp_nboxes], TP_MAX_BOXES
     jae .o
     push ax
-    mov ax, si
-    mov si, TP_BOX_SZ
-    mul si
-    mov di, ax
-    add di, tp_boxes
-    pop ax
-    push ax
-    mov al, [tp_page]
-    mov [di], al
-    mov byte [di+1], 0
-    pop ax
-    or cx, cx
-    jnz .w
-    inc cx
-.w:
-    or dx, dx
-    jnz .h
-    inc dx
-.h:
-    mov [di+2], ax
-    mov [di+4], bx
-    mov [di+6], cx
-    mov [di+8], dx
+    mov ax, [tp_nboxes]
     inc word [tp_nboxes]
+    mov di, ax
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    sub ax, di                  ; * TP_BOX_SZ, which is 8 - 1
+    add ax, tp_boxes
+    xchg ax, di
+    push ds
+    pop es
+    mov al, [tp_page]
+    stosb
+    pop ax
+    stosw                       ; +1 x
+    xchg ax, bx
+    stosw                       ; +3 y
+    xchg ax, bx
+    push ax
+    mov ax, cx
+    or ax, ax
+    jnz .w
+    inc ax
+.w:
+    stosw                       ; +5 w
+    pop ax
     mov byte [tp_onpage], 1
 .o:
+    pop es
     pop di
-    pop dx
-    pop cx
-    pop bx
     pop ax
     ret
 
@@ -2445,11 +2138,31 @@ tp_env_pop:
 .o:
     ret
 
-; feed tp_arg as text (simple)
-tp_feed_arg:
-    push ax
-    push si
+; SI = a command name's first letter in tp_arg: the name (24 letters at
+; most) into tp_cmd, SI past it, and ZF=1 when it is \textbackslash. Keeps
+; every other register.
+tp_argname:
+    push cx
     push di
+    mov di, tp_cmd
+    mov cx, 24
+.en:
+    mov al, [si]
+    call tp_isalpha             ; (a NUL is not a letter)
+    jc .ed
+    mov [di], al
+    inc di
+    inc si
+    loop .en
+.ed:
+    mov byte [di], 0
+    pop di
+    pop cx
+    jmp tp_is_bsl
+
+; feed tp_arg as text (simple). A command handler's, so it banks nothing; it
+; leaves BX alone, which tp_styarg keeps its flag in.
+tp_feed_arg:
     mov si, tp_arg
 .lp:
     mov al, [si]
@@ -2471,9 +2184,13 @@ tp_feed_arg:
     je .sk1
     cmp al, '}'
     je .sk1
-    ; word
+    ; word - capped at TP_WBUF_MAX like every other writer into tp_wbuf
+    ; (SPEC.md 69.7): tp_arg holds up to TP_ARG_MAX, and a longer word ran
+    ; off tp_wbuf's end. A word past the cap goes out as two runs
     mov di, tp_wbuf
 .w:
+    cmp di, tp_wbuf + TP_WBUF_MAX
+    jae .ew
     mov al, [si]
     or al, al
     jz .ew
@@ -2495,6 +2212,7 @@ tp_feed_arg:
     jmp .w
 .ew:
     mov byte [di], 0
+.em:                            ; tp_wbuf out as one run, when it holds any
     push si
     mov si, tp_wbuf
     cmp byte [si], 0
@@ -2518,115 +2236,83 @@ tp_feed_arg:
     call tp_isalpha
     jc .escch
     ; named: textbackslash -> '\'; other names are dropped
-    mov di, tp_cmd
-    xor cx, cx
-.en:
-    mov al, [si]
-    or al, al
-    jz .ed
-    call tp_isalpha
-    jc .ed
-    cmp cx, 24
-    jae .ed
-    mov [di], al
-    inc di
-    inc si
-    inc cx
-    jmp .en
-.ed:
-    mov byte [di], 0
-    push si
-    mov si, tp_cmd
-    mov di, tp_cn_bsl
-    call tp_streq
-    pop si
+    call tp_argname
     jne .lp
     ; \textbackslash + letters -> one run ("\documentclass")
     mov di, tp_wbuf
     mov al, '\'
     stosb
-    xor cx, cx
+    mov cx, 24
 .gl:
     mov al, [si]
-    or al, al
-    jz .ge
-    cmp al, 'A'
-    jb .ge
-    cmp al, 'Z'
-    jbe .glet
-    cmp al, 'a'
-    jb .ge
-    cmp al, 'z'
-    ja .ge
-.glet:
-    cmp cx, 24
-    jae .ge
+    call tp_isalpha
+    jc .ew
     stosb
     inc si
-    inc cx
-    jmp .gl
-.ge:
-    mov byte [di], 0
-    push si
-    mov si, tp_wbuf
-    call tp_emit_csi
-    pop si
-    jmp .lp
+    loop .gl
+    jmp short .ew
 .escch:
     ; \% \{ \} \\ \& \$ \# \_
-    mov [tp_wbuf], al
-    mov byte [tp_wbuf+1], 0
+    xor ah, ah
+    mov [tp_wbuf], ax
     inc si
-    push si
-    mov si, tp_wbuf
-    call tp_emit_csi
-    pop si
-    jmp .lp
+    jmp short .em
 .o:
-    pop di
-    pop si
-    pop ax
     ret
 
 ; ---- tabular ----------------------------------------------------------------
+; THE TABLE WALK IS A COMMAND HANDLER'S, and a handler may clobber anything
+; (tp_ts_cmd banks what tp_ts_scan holds), so tp_do_tabular and the four
+; routines under it bank nothing: only tp_tab_note and tp_tab_cell, which the
+; walks call with the column in BX, keep what they are handed.
 tp_do_tabular:
     ; tp_arg holds column spec
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
     call tp_endpara
     call tp_tab_spec
-    call tp_tab_body
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+
+tp_tab_body:
+    ; gather rows from source until \end{tabular}: measure the column widths
+    ; on one walk, then set the cells on a second from the same start
+    push word [tp_si]           ; the body's start
+    push ds                     ; tp_colw is OURS: with ES still the SOURCE's
+    pop es                      ; segment this cleared 12 bytes there at
+    mov di, tp_colw             ; tp_colw's offset - past the end of an 8KB
+    mov cx, TP_COL_MAX          ; source claim, into whatever block came next
+    xor ax, ax                  ; (a Disk window's raise cache, which put the
+    rep stosw                   ; zeroed plane back on the glass as cyan)
+    call tp_tab_measure
+    pop word [tp_si]
+    call tp_tab_emit
+
+; skip \end{tabular}
+tp_tab_skip_end:
+    mov es, [tp_srcseg]
+    mov si, [tp_si]
+    mov cx, 20
+.lp:
+    cmp si, [tp_se]
+    jae .o
+    call tp_endtab
+    jnc .hit
+    inc si
+    loop .lp
+.o:
+    ret
+.hit:
+    mov [tp_si], si
     ret
 
 tp_tab_spec:
     push ax
+    push cx
     push si
     push di
     mov si, tp_arg
     xor di, di                  ; col count
-    xor ah, ah                  ; pending bar
-    mov byte [tp_colbar], 0
 .lp:
     lodsb
     or al, al
     jz .d
-    cmp al, '|'
-    jne .col
-    mov ah, 1
-    jmp .lp
-.col:
     cmp al, 'l'
     je .ok
     cmp al, 'c'
@@ -2659,148 +2345,39 @@ tp_tab_spec:
     cmp di, TP_COL_MAX
     jae .lp
     mov [tp_colk+di], al
-    mov [tp_colbar+di], ah
-    xor ah, ah
     inc di
     jmp .lp
 .d:
-    mov [tp_colbar+di], ah       ; trailing
     or di, di
     jnz .n
     inc di
     mov byte [tp_colk], 'l'
-    mov byte [tp_colbar], 0
 .n:
     mov [tp_tmp4], di           ; ncols
     pop di
-    pop si
-    pop ax
-    ret
-
-tp_tab_body:
-    ; gather rows from source until \end{tabular}
-    ; We measure and emit in one walk using a simple row buffer in linebuf.
-    ; First pass: measure col widths. Second: emit.
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov es, [tp_srcseg]
-    mov ax, [tp_si]
-    mov [tp_tmp], ax            ; body start
-    ; measure
-    xor ax, ax
-    mov cx, TP_COL_MAX
-    mov di, tp_colw
-    xor ax, ax
-    push cx
-    push di
-    push es
-    push ds                     ; tp_colw is OURS: with ES still the SOURCE's
-    pop es                      ; segment this cleared 12 bytes there at
-    xor ax, ax                  ; tp_colw's offset - past the end of an 8KB
-    mov cx, TP_COL_MAX          ; source claim, into whatever block came next
-    rep stosw                   ; (a Disk window's raise cache, which put the
-    pop es                      ; zeroed plane back on the glass as cyan)
-    pop di
-    pop cx
-    mov word [tp_tmp2], 0       ; nrows
-    mov word [tp_tmp3], 0       ; hline flags packed? skip, always rule if seen
-    call tp_tab_measure
-    ; emit
-    mov ax, [tp_tmp]
-    mov [tp_si], ax
-    call tp_tab_emit
-    ; skip \end{tabular}
-    call tp_tab_skip_end
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-tp_tab_skip_end:
-    push ax
-    push cx
-    push si
-    push es
-    mov es, [tp_srcseg]
-    mov si, [tp_si]
-    mov cx, 20
-.lp:
-    cmp si, [tp_se]
-    jae .o
-    cmp byte [es:si], '\'
-    je .try
-    inc si
-    loop .lp
-    jmp .o
-.try:
-    ; match end{tabular}
-    push si
-    inc si
-    push di
-    mov di, tp_s_endtab
-    ; compare
-.m:
-    mov al, [di]
-    or al, al
-    jz .hit
-    cmp al, [es:si]
-    jne .no
-    inc si
-    inc di
-    jmp .m
-.hit:
-    pop di
-    pop ax
-    mov [tp_si], si
-    jmp .o
-.no:
-    pop di
-    pop si
-    inc si
-    jmp .lp
-.o:
-    pop es
     pop si
     pop cx
     pop ax
     ret
 
 tp_tab_measure:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     mov es, [tp_srcseg]
     xor bx, bx                  ; col
     xor cx, cx                  ; cell len
-    mov word [tp_tmp2], 0
+    mov [tp_tmp2], cx           ; rows
 .lp:
     mov si, [tp_si]
     cmp si, [tp_se]
     jae .d
-    ; \end{tabular}?
     cmp byte [es:si], '\'
     jne .ch
-    call tp_tab_at_end
-    jc .cmd
-    jmp .d
-.cmd:
+    call tp_endtab              ; \end{tabular}?
+    jnc .d
     inc si
     ; hline or double-backslash
     cmp byte [es:si], '\'
     jne .hl
-    add si, 1
+    inc si
     mov [tp_si], si
     call tp_tab_note
     xor bx, bx
@@ -2809,7 +2386,16 @@ tp_tab_measure:
     jmp .lp
 .hl:
     ; skip command name
+    inc si
     mov [tp_si], si
+.skc:
+    ; skip letters
+    mov si, [tp_si]
+    cmp si, [tp_se]
+    jae .lp
+    mov al, [es:si]
+    call tp_isalpha
+    jc .lp
     inc word [tp_si]
     jmp .skc
 .ch:
@@ -2832,26 +2418,8 @@ tp_tab_measure:
     xor cx, cx
     jmp .lp
 .com:
-    ; skip to nl
-.cs:
-    mov si, [tp_si]
-    cmp si, [tp_se]
-    jae .lp
-    mov al, [es:si]
-    inc word [tp_si]
-    cmp al, 10
-    je .lp
-    jmp .cs
-.skc:
-    ; skip letters
-    mov si, [tp_si]
-    cmp si, [tp_se]
-    jae .lp
-    mov al, [es:si]
-    call tp_isalpha
-    jc .lp
-    inc word [tp_si]
-    jmp .skc
+    call tp_skip_com            ; (the source holds no CR: tp_crlf_fix)
+    jmp .lp
 .d:
     ; last row if any
     or cx, cx
@@ -2862,12 +2430,6 @@ tp_tab_measure:
     call tp_tab_note
     inc word [tp_tmp2]
 .o:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; CX = cell char count, BX = col. update colw
@@ -2892,12 +2454,13 @@ tp_tab_note:
     pop ax
     ret
 
-; CF=0 if at \end{tabular}
-tp_tab_at_end:
+; SI = a place in the source (ES = its segment): CF=0 and SI past it when an
+; \end{tabular} starts there, CF=1 and SI as it was when not. Preserves
+; everything else.
+tp_endtab:
     push ax
-    push si
     push di
-    mov si, [tp_si]
+    push si
     cmp byte [es:si], '\'
     jne .no
     inc si
@@ -2912,41 +2475,29 @@ tp_tab_at_end:
     inc di
     jmp .m
 .yes:
+    pop ax                      ; (the SI it came in with)
     pop di
-    pop si
     pop ax
     clc
     ret
 .no:
-    pop di
     pop si
+    pop di
     pop ax
     stc
     ret
 
 tp_tab_emit:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     ; total width
     xor ax, ax
-    mov cx, [tp_tmp4]
-    or cx, cx
-    jnz .tw0
-    inc cx
-.tw0:
+    mov cx, [tp_tmp4]           ; (tp_tab_spec made it at least 1)
+    mov [tp_tabn], cx
     xor si, si
 .tw:
     add ax, [tp_colw+si]
     add si, 2
     loop .tw
-    mov [tp_tmp5], ax           ; table width
     mov [tp_tabw], ax
-    mov ax, [tp_tmp4]
-    mov [tp_tabn], ax
     ; Row must clear an em of type plus the rules. 16pt was too
     ; short: 12pt glyphs sat on the bottom rule.
     mov al, [tp_csize]
@@ -2957,14 +2508,13 @@ tp_tab_emit:
     mov ax, 20
 .rh:
     mov [tp_rowh], ax
-    mov ax, [tp_rowh]
     mov bx, [tp_tmp2]
     or bx, bx
     jnz .nr
     inc bx
 .nr:
     mul bx
-    mov cx, ax                  ; table h
+    xchg ax, cx                 ; table h
     mov ax, [tp_y]
     sub ax, cx
     cmp ax, [tp_tbot]
@@ -2974,21 +2524,16 @@ tp_tab_emit:
     mov ax, [tp_y]
     mov [tp_tabtop], ax
     mov [tp_tabbot], ax
-    mov [tp_tmp3], ax
+    mov [tp_tmp2], ax           ; current row top
     ; walk rows again
     mov es, [tp_srcseg]
     xor bx, bx                  ; col
-    mov di, tp_linebuf          ; cell
-    mov byte [tp_linebuf], 0
-    mov word [tp_clen], 0       ; used as cell len here - careful
-    mov byte [tp_clen], 0
-    mov ax, [tp_y]
-    mov [tp_tmp2], ax           ; current row top
+    mov [tp_clen], bl           ; an empty cell
 .lp:
     mov si, [tp_si]
     cmp si, [tp_se]
     jae .fin
-    call tp_tab_at_end
+    call tp_endtab
     jnc .fin
     mov al, [es:si]
     cmp al, '\'
@@ -3002,24 +2547,22 @@ tp_tab_emit:
     je .lp
     cmp al, 13
     je .lp
-    ; append char
-    push bx
-    xor bh, bh
-    mov bl, [tp_clen]
-    cmp bl, 70
+.app:                           ; AL to the cell, which keeps the first 70.
+    push bx                     ; THE CELL IS tp_cline, and [tp_clen] its
+    xor bh, bh                  ; length: a centred line's buffer, which
+    mov bl, [tp_clen]           ; tp_endpara flushed before the table began
+    cmp bl, 70                  ; and nothing in a table refills
     jae .skc2
-    mov [tp_linebuf+bx], al
+    mov [tp_cline+bx], al
     inc byte [tp_clen]
     inc bx
-    mov byte [tp_linebuf+bx], 0
+    mov byte [tp_cline+bx], 0
 .skc2:
     pop bx
     jmp .lp
 .amp:
     call tp_tab_cell
     inc bx
-    mov byte [tp_clen], 0
-    mov byte [tp_linebuf], 0
     jmp .lp
 .bs:
     inc si
@@ -3035,12 +2578,9 @@ tp_tab_emit:
     mov [tp_tabbot], ax
     mov [tp_y], ax
     xor bx, bx
-    mov byte [tp_clen], 0
-    mov byte [tp_linebuf], 0
     jmp .lp
 .cmd:
-    inc word [tp_si]            ; past backslash
-    mov si, [tp_si]
+    mov [tp_si], si             ; past the backslash
     cmp si, [tp_se]
     jae .lp
     mov al, [es:si]
@@ -3065,38 +2605,16 @@ tp_tab_emit:
     jmp .tn
 .td:
     mov byte [di], 0
-    mov si, tp_cmd
-    mov di, tp_cn_bsl
-    call tp_streq
+    call tp_is_bsl
     jne .lp
     mov al, '\'
-    jmp .tadd
+    jmp .app
 .tesc:
     inc word [tp_si]
-    ; fall through, AL is the escaped char
-.tadd:
-    push bx
-    xor bh, bh
-    mov bl, [tp_clen]
-    cmp bl, 70
-    jae .tad2
-    mov [tp_linebuf+bx], al
-    inc byte [tp_clen]
-    inc bx
-    mov byte [tp_linebuf+bx], 0
-.tad2:
-    pop bx
-    jmp .lp
+    jmp .app                    ; AL is the escaped char
 .com:
-.cs:
-    mov si, [tp_si]
-    cmp si, [tp_se]
-    jae .lp
-    mov al, [es:si]
-    inc word [tp_si]
-    cmp al, 10
-    je .lp
-    jmp .cs
+    call tp_skip_com            ; (the source holds no CR: tp_crlf_fix)
+    jmp .lp
 .fin:
     cmp byte [tp_clen], 0
     je .grid
@@ -3106,16 +2624,10 @@ tp_tab_emit:
     mov ax, [tp_tmp2]
     sub ax, 8
     mov [tp_y], ax
-    call tp_tab_grid
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp tp_tab_grid
 
-; emit current cell at col BX, row top tmp2
+; emit current cell (tp_cline, [tp_clen] long) at col BX, row top tmp2, and
+; empty it. Preserves every register.
 tp_tab_cell:
     push ax
     push bx
@@ -3133,76 +2645,55 @@ tp_tab_cell:
     jb .col
     mov bx, TP_COL_MAX - 1
 .col:
-    ; x = left + sum of prior colw
+    cmp byte [tp_clen], 0
+    je .o
+    ; x = left + sum of prior colw, and SI = 2 * col, this column's word
     mov ax, [tp_left]
     xor si, si
     mov cx, bx
     jcxz .x
 .add:
     add ax, [tp_colw+si]
-    add si, 2
+    inc si
+    inc si
     loop .add
 .x:
     add ax, [tp_tabsep]
-    ; alignment
-    mov cl, [tp_colk+bx]
-    push ax
-    mov si, tp_linebuf
-    call tp_strlen
-    mov cx, ax
+    xchg ax, cx                 ; CX = the cell's left
     call tp_charw
-    mov dl, al
-    xor dh, dh
-    mov ax, cx
-    mul dx
-    mov dx, ax                  ; text w
-    pop ax
-    mov ch, [tp_colk+bx]
-    cmp ch, 'c'
-    je .c
-    cmp ch, 'r'
+    mul byte [tp_clen]
+    xchg ax, dx                 ; DX = text w
+    mov ah, [tp_colk+bx]
+    cmp ah, 'c'
+    je .al
+    cmp ah, 'r'
+    jne .put
+.al:                            ; the slack the column leaves, all of it on
+    mov al, ah                  ; the left for 'r' and half for 'c'
+    push ax
+    mov ax, [tp_colw+si]
+    sub ax, [tp_tabsep]
+    sub ax, [tp_tabsep]
+    sub ax, dx
+    jns .sl
+    xor ax, ax
+.sl:
+    pop dx
+    cmp dl, 'r'
     je .r
-    jmp .put
-.c:
-    push ax
-    mov ax, bx
-    shl ax, 1
-    mov si, ax
-    mov ax, [tp_colw+si]
-    sub ax, [tp_tabsep]
-    sub ax, [tp_tabsep]
-    sub ax, dx
-    jns .c2
-    xor ax, ax
-.c2:
     shr ax, 1
-    pop si
-    add ax, si
-    jmp .put
 .r:
-    push ax
-    mov ax, bx
-    shl ax, 1
-    mov si, ax
-    mov ax, [tp_colw+si]
-    sub ax, [tp_tabsep]
-    sub ax, [tp_tabsep]
-    sub ax, dx
-    jns .r2
-    xor ax, ax
-.r2:
-    pop si
-    add ax, si
+    add cx, ax
 .put:
-    mov si, tp_linebuf
-    cmp byte [si], 0
-    je .o
+    xchg ax, cx                 ; AX = x
     ; PDF y is the top of the 8px run. Hang it a few points
     ; under the top rule, not on the bottom rule.
     mov bx, [tp_tmp2]
     sub bx, 5
+    mov si, tp_cline
     call tp_put_run_at
 .o:
+    mov byte [tp_clen], 0       ; ...and the cell is empty again
     pop si
     pop dx
     pop cx
@@ -3210,19 +2701,19 @@ tp_tab_cell:
     pop ax
     ret
 
+; THE GRID'S RULES ARE ALL ONE POINT TALL, the frame and the column rules
+; included (SPEC.md 69.3): a box has no height. That is what this package has
+; always set - tp_emit_box's multiply clobbered the DX that carried the height,
+; so every box came out 1pt tall - and what the preview's box painter can
+; draw: a frame clipped to a scroll band would draw the two sides the clip
+; invents (tp_sheet_edges' reason). So the frame is its bottom rule and each
+; column rule a point at the foot of the column; drawing them full height is
+; a change to both, not a fix to this one.
 tp_tab_grid:
     push ax
     push bx
     push cx
-    push dx
     push si
-    mov ax, [tp_tabtop]
-    sub ax, [tp_tabbot]
-    cmp ax, 8
-    jae .hh
-    mov ax, 8
-.hh:
-    mov dx, ax
     mov ax, [tp_left]
     mov bx, [tp_tabbot]
     mov cx, [tp_tabw]
@@ -3231,26 +2722,15 @@ tp_tab_grid:
     mov cx, 120
 .ww:
     call tp_emit_box
-    mov ax, [tp_left]
+    mov cx, 1
     xor si, si
 .v:
     cmp si, [tp_tabn]
     jae .hs
-    push ax
-    push si
     shl si, 1
-    add ax, [tp_colw+si]
-    mov bx, [tp_tabbot]
-    mov cx, 1
-    mov dx, [tp_tabtop]
-    sub dx, [tp_tabbot]
+    add ax, [tp_colw+si]        ; the right edge of this column
+    shr si, 1
     call tp_emit_box
-    pop si
-    pop ax
-    push si
-    shl si, 1
-    add ax, [tp_colw+si]
-    pop si
     inc si
     jmp .v
 .hs:
@@ -3261,22 +2741,19 @@ tp_tab_grid:
     mov [tp_rowh], ax
 .hr0:
     mov ax, [tp_tabtop]
-    sub ax, [tp_rowh]
+    mov cx, [tp_tabw]
 .hr:
+    sub ax, [tp_rowh]
     cmp ax, [tp_tabbot]
     jle .o
-    push ax
     mov bx, ax
+    push ax
     mov ax, [tp_left]
-    mov cx, [tp_tabw]
-    mov dx, 1
     call tp_emit_box
     pop ax
-    sub ax, [tp_rowh]
     jmp .hr
 .o:
     pop si
-    pop dx
     pop cx
     pop bx
     pop ax
@@ -3296,3 +2773,5 @@ tp_s_tex:       db 'TeX', 0
 tp_s_latex:     db 'LaTeX', 0
 tp_s_today:     db 'August 2026', 0
 tp_s_endtab:    db 'end{tabular}', 0
+tp_s_lit:       db '%&$#_{}'        ; what a backslash makes a plain character
+TP_NLIT         equ $ - tp_s_lit

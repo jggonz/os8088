@@ -44,7 +44,6 @@ dm_entry:
     call OSAPI_GET_TICKS
     or ax, 1
     mov [dm_seed], ax
-    call dm_fontcache
     mov al, 4
     call dm_audio_song
     call dm_audio_open
@@ -538,6 +537,8 @@ VAR dm_board,128
 VAR dm_marks,128
 VAR dm_scene,128
 VAR dm_shadow,128
+VAR dm_celladdr,256
+VAR dm_oldnext,2
 VAR dm_olda,2
 VAR dm_oldb,2
 VAR dm_candidates,8
@@ -551,7 +552,10 @@ VAR dm_planeoff,2
 VAR dm_mask,1
 VAR dm_hud,256
 VAR dm_hudshadow,256
-VAR dm_glyphs,768
+dm_glyphs equ dm_queue                 ; 63*8 bytes, staged at mode entry
+%if 63*8 > 520
+%error dm_glyphs outgrew dm_queue
+%endif
 VAR dm_fontvga,4032
 dm_fontcga equ dm_fontvga
 VAR dm_animstart,0
@@ -575,6 +579,7 @@ VAR dm_audio_phase,2
 VAR dm_audio_sent,2
 VAR dm_audio_lease,1
 VAR dm_audio_voices,24
+VAR dm_audio_dur,3
 VAR dm_fx_ptr,2
 VAR dm_fx_hz,2
 VAR dm_fx_wait,1

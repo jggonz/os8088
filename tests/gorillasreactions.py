@@ -11,6 +11,8 @@ import gorillas as G
 import gorillascity as C
 import gorillasinput as I
 
+TONES_WALKED = []       # gr_musictick's decode, walked note by note, once a run
+
 
 def reactions(m, p, code, tag):
     def byte(name, value):
@@ -126,17 +128,17 @@ def reactions(m, p, code, tag):
             call('tick')
             assert p.b('dancing') == remaining
             pose = 'gr_apeleft' if remaining % 2 == 0 else 'gr_aperight'
-            packed = m.read(p.base + code[pose], 160)
+            packed = G.poses()[pose]
             expected = bytes(v for pair in packed for v in (pair >> 4, pair & 15))
             assert pixels(xs[winner], ys[winner], 16, 20) == expected, 'wrong arm pose'
             assert pixels(xs[victim], ys[victim], 16, 20) == loser, 'loser danced'
-            assert p.w('musicptr') == code['gr_musicvictory'] + 4
+            assert p.w('musicptr') == code['gr_musicvictory'] + 1   # a byte a note
             assert p.w('musicdue'), 'victory notes were not scheduled'
             C.check_pixels(m, p, tag)
             if remaining == 8:
                 byte('paused', 1)
                 call('tick')
-                assert p.b('dancing') == 8 and p.w('musicptr') == code['gr_musicvictory']+4
+                assert p.b('dancing') == 8 and p.w('musicptr') == code['gr_musicvictory']+1
                 byte('paused', 0)
         call('musicstop')
         call('tick')
@@ -149,8 +151,17 @@ def reactions(m, p, code, tag):
         if target > 1:
             assert p.b('turn') == (thrower ^ 1), 'round did not alternate throwers'
 
-    notes = struct.unpack('<17H', m.read(p.base + code['gr_musicvictory'], 34))
-    assert notes == (82, 1, 87, 1, 98, 1, 82, 1, 87, 1, 73, 1, 65, 1, 0, 4, 65535)
+    # VictoryDance's MFO0L32EFGEFDC and its rest, as the guest will play them;
+    # every score decodes to the generator's (Hz, ticks), the six of them.
+    assert G.score(m, p, code, 'victory') == [(82, 1), (87, 1), (98, 1), (82, 1), (87, 1),
+                                              (73, 1), (65, 1), (0, 4)]
+    for name, (_, notes) in G.gorillas_music.songs().items():
+        assert G.score(m, p, code, name) == notes, ('score differs', name)
+        # The decode is the same code on every adapter: walk it once a run.
+        if not TONES_WALKED:
+            assert G.tones(m, p, code, name) == notes, ('sequencer plays differently', name)
+    TONES_WALKED.append(tag)
+    call('musicstop')
     parity(m, p, code, tag)
     call('city')
     call('fullpaint')
@@ -351,7 +362,9 @@ def main():
                            'gr_musicstop', 'gr_musicvictory', 'gr_results', 'gr_fire',
                            'gr_gravity', 'gr_initmotion', 'gr_framebegin',
                            'gr_motionstep', 'gr_accelerate', 'gr_decimalparse',
-                           'gr_ape', 'gr_banana', 'gr_blaststart'))
+                           'gr_ape', 'gr_banana', 'gr_blaststart', 'gr_musichz',
+                           'gr_musictick')
+                          + tuple('gr_music' + n for n in G.gorillas_music.songs()))
     subprocess.run(['python3', 'tools/gorillas_music.py', '--check'], cwd=G.ROOT, check=True)
     with tempfile.TemporaryDirectory() as td:
         disk = Path(td) / 'gorillas.img'

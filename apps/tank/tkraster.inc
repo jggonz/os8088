@@ -38,11 +38,20 @@
 ; =============================================================================
 
 ; --- per-backend geometry, indexed by TKB_* - 1 -------------------------------
-;      vx,  vy,  vw,  vh,  sclx, scly
+;      vx,  vy,  vw,  vh,  sclx, scly, and the backend's ink table
+TK_SCLYC  equ 231                   ; the two shadow backends' vertical
+TK_SCLYH  equ 357                   ; scales, named for TK_RBROWS (tk3d.inc)
 tk_vptab:
-    dw   0,   0, 320, 240,  277, 277     ; MODEX: square pixels, so scly = sclx
-    dw   0,   0, 320, 200,  277, 231     ; CGA:   4:3 in 320x200
-    dw  40,  74, 640, 200,  554, 357     ; HERC:  a 640x200 box in 720x348
+    dw   0,   0, 320, 240,  277, 277, tk_inkmodex    ; MODEX: square pixels,
+                                                     ; so scly = sclx
+    dw   0,   0, 320, TK_SHROWS, 277, TK_SCLYC, tk_inkcga   ; CGA:  4:3 in
+                                                            ; 320x200
+    dw  40,  74, 640, TK_SHROWS, 554, TK_SCLYH, tk_inkherc  ; HERC: a 640x200
+                                                            ; box
+TK_VPROW equ ($ - tk_vptab) / 3                         ; in 720x348
+%if TK_SHROWS != 200 || TK_MAXROW < 240
+  %error "a shadow viewport is 200 rows and Mode X's is 240: the template's arrays are sized off both"
+%endif
 ; scly is not a taste: for the same horizontal field of view on every adapter,
 ; scly = sclx * A * vh / vw with A the viewport's PHYSICAL aspect. That is
 ; what keeps the enemy tank the same shape on all three.
@@ -55,32 +64,18 @@ tk_vptab:
 tk_r_setup:
     mov al, [tk_back]
     dec al
-    mov ah, 12
+    mov ah, TK_VPROW
     mul ah
     mov word [tk_spanp], tk_spans0
     mov word [tk_spanp+2], tk_spans1
-    mov word [tk_inktab], tk_inkmodex
-    cmp byte [tk_back], TKB_MODEX
-    je .inkok
-    mov word [tk_inktab], tk_inkcga
-    cmp byte [tk_back], TKB_CGA
-    je .inkok
-    mov word [tk_inktab], tk_inkherc
-.inkok:
     mov si, tk_vptab
     add si, ax
-    mov ax, [si]
-    mov [tk_vx], ax
-    mov ax, [si+2]
-    mov [tk_vy], ax
-    mov ax, [si+4]
-    mov [tk_vw], ax
-    mov ax, [si+6]
-    mov [tk_vh], ax
-    mov ax, [si+8]
-    mov [tk_sclx], ax
-    mov ax, [si+10]
-    mov [tk_scly], ax
+    push ds
+    pop es
+    mov di, tk_vx                   ; vx..inktab, adjacent in bss as in the row
+    mov cx, TK_VPROW / 2
+    cld
+    rep movsw
 
     mov ax, [tk_vw]                 ; the projection centre, and the horizon
     shr ax, 1                       ; with it: level camera, so a point at
@@ -260,7 +255,13 @@ tk_devrows:
     push dx
     push si
     push di
+%ifdef APP_SMALL
     mov di, tk_devoff
+%else
+    push es
+    mov es, [tk_shseg]              ; THE CLAIM'S TAIL (85.3.9): the shadow and
+    mov di, TK_DEVOFS               ; the template leave 768 bytes of it, and
+%endif                              ; Mode X, which has no claim, never writes
     xor bx, bx                      ; BX = r
 .row:
     mov ax, bx                      ; ...and the TARGET offset of the row, 80
@@ -269,6 +270,9 @@ tk_devrows:
     mov si, bx                      ; multiply (SPEC.md 85.3.4)
     shl si, 1
     mov [tk_rowoff + si], ax
+    cmp byte [tk_back], TKB_MODEX   ; THE DEVICE ROWS ARE THE BLIT'S, and
+    je .next                        ; Mode X flips instead: its 240 rows would
+                                    ; run 80 bytes past a TK_SHROWS table
     mov ax, bx
     add ax, [tk_vy]                 ; AX = the device row
     cmp byte [tk_back], TKB_HERC
@@ -297,11 +301,19 @@ tk_devrows:
     mov cl, 8
     shl dx, cl
     add ax, dx
+%ifdef APP_SMALL
     mov [di], ax
+%else
+    mov [es:di], ax
+%endif
     add di, 2
+.next:
     inc bx
     cmp bx, [tk_vh]
     jb .row
+%ifndef APP_SMALL
+    pop es
+%endif
     pop di
     pop si
     pop dx
@@ -744,6 +756,33 @@ tk_clip_y:
 ; to touch memory only where a pixel or a span mark needs it.
 ; =============================================================================
 
+; --- the bytes the halo pass flips (SPEC.md 85.8.1.1) --------------------------
+; TKP off, value - the byte `off` past here (in the instruction that follows)
+; is swapped for `value` while the halo is drawn. TKPW new - the same for the
+; 16-bit immediate of the `mov bx, imm16` that follows, which becomes `new`.
+; TKP_TABLE lab - the table of every TKP since TKP_FROM, as tk_eflip reads it:
+; the byte's address and its ERASE value, three bytes, ending in a zero word.
+%assign TKP_N 0
+%macro TKP 2
+tkp_%[TKP_N] equ $ + (%1)
+%xdefine TKPV_%[TKP_N] (%2)
+%assign TKP_N TKP_N + 1
+%endmacro
+%macro TKPW 1
+    TKP 1, ((%1) - $$) & 0xFF
+    TKP 2, (((%1) - $$) >> 8) & 0xFF
+%endmacro
+%macro TKP_TABLE 1
+%1:
+%assign %%i TKP_FROM
+%rep TKP_N - TKP_FROM
+    dw tkp_%[%%i]
+    db TKPV_%[%%i]
+%assign %%i %%i + 1
+%endrep
+    dw 0
+%endmacro
+
 ; --- mark this row's first / last touched byte --------------------------------
 %macro TK_MLO 0
     cmp [si], dl
@@ -765,27 +804,23 @@ tk_clip_y:
 ; cross they add - which on a vector display is what crossing beams do
 ; anyway. Mode X cannot read cheaply and does not need to: it stores.
 ;
-; The second parameter is the ERASE form (SPEC.md 85.8.1), and it exists
-; because an OR cannot take ink away: on a 1bpp adapter black is the ABSENCE
-; of a bit, so a halo drawn under the GAME OVER lettering has to clear what
-; the scene put there. The walk is otherwise identical - same recurrence, same
-; pixels - and the caller reaches it by swapping the three walk pointers, so
-; the drawing path pays nothing for its existence.
-%macro TK_PLOT 2
+; THE ERASE FORM IS THIS SAME CODE, FLIPPED (SPEC.md 85.8.1.1). An OR cannot
+; take ink away: on a 1bpp adapter black is the ABSENCE of a bit, so the halo
+; drawn under the GAME OVER lettering has to clear what the scene put there.
+; It used to be three more walks a backend; now every TKP below names a byte
+; that tk_eflip swaps for its erase form for the length of the halo pass - the
+; OR becomes an AND, and the mask it ANDs is kept INVERTED (a hole in a byte
+; of ones) by turning every shift that moves it into a ROTATE and every
+; "the bit fell off" test into "the hole wrapped" (jz/jnz on the shift's zero
+; become jnc/jc on the rotate's carry, same length). Mode X needs none of it:
+; it STORES, so the erase is the draw walk with ink 0. The drawing path is the
+; same bytes it always was and pays nothing for its existence.
+%macro TK_PLOT 1
   %if %1 == 3
-    %if %2
-    mov byte [es:di], 0
-    %else
     mov [es:di], al
-    %endif
   %else
-    %if %2
-    not al                          ; AL is the PIXEL's mask here, not an ink
-    and [es:di], al                 ; pattern - see TKI_MASK
-    not al
-    %else
+    TKP 1, 0x20                     ; or [es:di], al -> and [es:di], al
     or [es:di], al
-    %endif
   %endif
 %endmacro
 
@@ -803,12 +838,13 @@ tk_clip_y:
 %%setf:
     jmp short %%mask
   %else
-    %if %1 == 1
+    TKP 1, 0xC8                     ; shr al, 1 -> ror al, 1
     shr al, 1
-    %else
-    shr al, 1
+    %if %1 == 2
+    TKP 1, 0xC8
     shr al, 1
     %endif
+    TKP 0, 0x72                     ; jnz -> jc: the hole has NOT wrapped
     jnz %%done
     mov al, [tk_pat0]
     inc di
@@ -831,12 +867,13 @@ tk_clip_y:
     pop ax
     pop dx
   %else
-    %if %1 == 1
+    TKP 1, 0xC0                     ; shl al, 1 -> rol al, 1
     shl al, 1
-    %else
-    shl al, 1
+    %if %1 == 2
+    TKP 1, 0xC0
     shl al, 1
     %endif
+    TKP 0, 0x72                     ; jnz -> jc
     jnz %%done
     mov al, [tk_pat3]
     dec di
@@ -861,18 +898,23 @@ tk_clip_y:
   %if %1 == 1
     mov cl, al
     and cl, 7
+    TKP 1, 0x7F                     ; the pixel's bit, or a hole where it is
     mov al, 0x80
+    TKP 1, 0xC8                     ; shr al, cl -> ror al, cl
     shr al, cl
+    TKP 1, 0x7F
     mov ah, 0x80
   %elif %1 == 2
     and al, 3
     mov cl, 3
     sub cl, al
     shl cl, 1
-    mov al, [tk_ink8]
+    mov al, [tk_ink8]               ; the erase ink is 0xFC: a two-bit hole
+    TKP 1, 0xC0                     ; shl al, cl -> rol al, cl
     shl al, cl
     mov ah, [tk_ink8]
     mov cl, 6
+    TKP 1, 0xC4                     ; shl ah, cl -> rol ah, cl
     shl ah, cl
   %else
     and al, 3
@@ -895,10 +937,10 @@ tk_clip_y:
 ; ---- shallow: one run a row, so its ends are its first and last pixel -------
 ; The frequent step is `shr al, 1` and a `jz` that is NOT taken seven times in
 ; eight; the byte crossing and the y step are both off the common path.
-%macro TK_SHALLOW 2
+%macro TK_SHALLOW 1
     TK_MLO
 %%spx:
-    TK_PLOT %1, %2
+    TK_PLOT %1
     add bx, bp
     jg %%ys
 %%cont:
@@ -920,10 +962,13 @@ tk_clip_y:
     loop %%spx
     jmp short %%end
   %else
+    TKP 1, 0xC8                     ; shr al, 1 -> ror al, 1
     shr al, 1
     %if %1 == 2
+    TKP 1, 0xC8
     shr al, 1
     %endif
+    TKP 0, 0x73                     ; jz -> jnc: the hole wrapped
     jz %%nb
     loop %%spx
     jmp short %%end
@@ -959,9 +1004,9 @@ tk_clip_y:
 %endmacro
 
 ; ---- steep: a row IS a pixel, so both ends are the same byte ----------------
-%macro TK_STEEP 2
+%macro TK_STEEP 1
 %%st:
-    TK_PLOT %1, %2
+    TK_PLOT %1
     TK_MLO
     TK_MHI
     add di, 80
@@ -981,10 +1026,10 @@ tk_clip_y:
 ; ---- vertical: the steep walk with no error term at all ----------------------
 ; BP is free of e1 here, so the row stride rides in it and the step is two
 ; bytes where `add di, 80` is four. Every upright in the world takes this.
-%macro TK_VERT 2
+%macro TK_VERT 1
     mov bp, 80
 %%v:
-    TK_PLOT %1, %2
+    TK_PLOT %1
     TK_MLO
     TK_MHI
     add di, bp
@@ -1003,7 +1048,7 @@ tk_clip_y:
 ; half runs, which is what keeps the two ends on the endpoints.
 ;
 ; in: AX = lx, DI = the row base, SI = the span pair, CX = |dx|+1, BP = 2|dy|
-%macro TK_SLICE 2
+%macro TK_SLICE 1
     mov es, [tk_tseg]
     cld
     mov dx, ax                      ; DX = X, the run's first pixel
@@ -1048,9 +1093,11 @@ tk_clip_y:
     mov al, cl
   %if %1 == 1
     and al, 7
+    TKPW tk_hlmn                    ; the erase reads the tables' complements
     mov bx, tk_hlm
   %else
     and al, 3
+    TKPW tk_clmn
     mov bx, tk_clm
   %endif
     xlat                            ; AL = the first byte's pixels
@@ -1065,8 +1112,10 @@ tk_clip_y:
     xchg al, ah
     push bx
   %if %1 == 1
+    TKPW tk_hrmn
     mov bx, tk_hrm
   %else
+    TKPW tk_crmn
     mov bx, tk_crm
   %endif
     xlat                            ; AL = the last byte's pixels, AH the first's
@@ -1090,43 +1139,35 @@ tk_clip_y:
     mov [si+1], bl
 %%mh:
   %if %1 == 2
+    TKP 0, 0x0A                     ; and -> or: the erase's [tk_inkpat] is 0,
     and al, [tk_inkpat]             ; 2bpp: the ink's own bits, not all of them
+    TKP 0, 0x0A                     ; so the complements pass through whole
     and ah, [tk_inkpat]
   %endif
     cmp cx, bx
     jne %%multi
+    TKP 0, 0x08                     ; and al, ah -> or al, ah: two HOLES meet
     and al, ah                      ; one byte carries both ends
-  %if %2
-    not al
-    and [es:di+bx], al
-  %else
+    TKP 1, 0x20
     or [es:di+bx], al
-  %endif
     jmp short %%next
 %%multi:
-  %if %2
-    not al
-    and [es:di+bx], al              ; the last byte...
+    TKP 1, 0x20
+    or [es:di+bx], al               ; the last byte...
     xchg bx, cx
-    not ah
-    and [es:di+bx], ah              ; ...and the first
-  %else
-    or [es:di+bx], al
-    xchg bx, cx
-    or [es:di+bx], ah
-  %endif
+    TKP 1, 0x20
+    or [es:di+bx], ah               ; ...and the first
     sub cx, bx
     dec cx                          ; CX = whole bytes between them
     jz %%next
     push di
     add di, bx
     inc di
-  %if %2
-    xor al, al
-  %elif %1 == 1
+  %if %1 == 1
+    TKP 1, 0x00                     ; the run's whole bytes: ink, or nothing
     mov al, 0xFF
   %else
-    mov al, [tk_inkpat]
+    mov al, [tk_inkpat]             ; ...and the erase's [tk_inkpat] is 0
   %endif
     rep stosb
     pop di
@@ -1152,8 +1193,8 @@ tk_clip_y:
 %endmacro
 
 ; --- the three entries of one backend -----------------------------------------
-%macro TK_WALKS 3
-%3_sh:
+%macro TK_WALKS 2
+%2_sh:
   %if %1 != 3
     mov dx, bp                      ; eight or more pixels a row - |dx| >= 8|dy|,
     shl dx, 1                       ; which is CX-1 >= 4BP - takes the slice:
@@ -1162,41 +1203,61 @@ tk_clip_y:
     ja %%slice
   %endif
     TK_LENTER %1
-    TK_SHALLOW %1, %2
+    TK_SHALLOW %1
   %if %1 != 3
 %%slice:
-    TK_SLICE %1, %2
+    TK_SLICE %1
   %endif
-%3_st:
+%2_st:
     TK_LENTER %1
-    TK_STEEP %1, %2
-%3_vt:
+    TK_STEEP %1
+%2_vt:
     TK_LENTER %1
-    TK_VERT %1, %2
+    TK_VERT %1
 %endmacro
 
-; in: tk_seg's registers and [tk_ink8]; ES and every register clobbered
-TK_WALKS 1, 0, tk_line_herc
-TK_WALKS 2, 0, tk_line_cga
-TK_WALKS 3, 0, tk_line_modex
-
-; ...and the same walks taking ink AWAY. Reached only by swapping the three
-; walk pointers for the erase trio, and always after tk_setink TKI_MASK, which
-; is the ink whose device value is every bit of one pixel rather than a colour:
-; the walk then builds the right mask in AL and TK_PLOT's erase form ANDs its
-; complement.
-TK_WALKS 1, 1, tk_eline_herc
-TK_WALKS 2, 1, tk_eline_cga
-TK_WALKS 3, 1, tk_eline_modex
+; in: tk_seg's registers and [tk_ink8]; ES and every register clobbered.
+; Each shadow backend's walks are followed by the table of the bytes its halo
+; pass flips (TKP above, tk_eflip below); Mode X has nothing to flip.
+%assign TKP_FROM TKP_N
+TK_WALKS 1, tk_line_herc
+TKP_TABLE tk_ef_herc
+%assign TKP_FROM TKP_N
+TK_WALKS 2, tk_line_cga
+TKP_TABLE tk_ef_cga
+TK_WALKS 3, tk_line_modex
 
 ; The pointer trios, per backend: shallow, steep, vertical. tk_bindraster
-; copies one into tk_lsh/tk_lst/tk_lvt and the erase one into the tk_e* trio.
+; copies one into tk_lsh/tk_lst/tk_lvt.
 tk_lp_herc:  dw tk_line_herc_sh, tk_line_herc_st, tk_line_herc_vt
 tk_lp_cga:   dw tk_line_cga_sh, tk_line_cga_st, tk_line_cga_vt
 tk_lp_modex: dw tk_line_modex_sh, tk_line_modex_st, tk_line_modex_vt
-tk_ep_herc:  dw tk_eline_herc_sh, tk_eline_herc_st, tk_eline_herc_vt
-tk_ep_cga:   dw tk_eline_cga_sh, tk_eline_cga_st, tk_eline_cga_vt
-tk_ep_modex: dw tk_eline_modex_sh, tk_eline_modex_st, tk_eline_modex_vt
+
+; -----------------------------------------------------------------------------
+; tk_eflip - swap every byte a TKP names with its table's copy (SPEC.md 85.8.1.1)
+; in:  [tk_eftab] = the backend's table, or 0 for Mode X.  clobbers AX, BX, SI
+;
+; The swap IS the patch: the table is assembled holding the ERASE bytes, the
+; first call trades them for the drawing ones and the second trades back, so
+; there is one routine, no direction, and no second copy of the code bytes.
+; Run only from tk_gohalo, a whole call away from any walk it changes, so the
+; 8088's prefetch queue never holds a byte this writes.
+; -----------------------------------------------------------------------------
+tk_eflip:
+    mov si, [tk_eftab]
+    or si, si
+    jz .done
+.next:
+    lodsw
+    or ax, ax
+    jz .done
+    xchg ax, bx
+    lodsb
+    xchg al, [bx]
+    mov [si-1], al
+    jmp short .next
+.done:
+    ret
 
 ; -----------------------------------------------------------------------------
 ; tk_setink - adopt a logical ink (TKI_*) for the walks that follow
@@ -1315,7 +1376,11 @@ tk_blit:
     ; shadow segment is loaded around the `rep` alone.
     mov si, [tk_spcur]              ; this frame's set...
     mov di, [tk_spprv]              ; ...and last frame's
-    mov bx, tk_devoff               ; the device row table
+%ifdef APP_SMALL
+    mov bx, tk_devoff               ; the device row table...
+%else
+    mov bx, TK_DEVOFS               ; ...in the claim's tail, read below while
+%endif                              ; DS is the shadow for the copy
     xor dx, dx                      ; the row's base in the shadow
     mov bp, [tk_vh]
     mov es, [tk_fsi+FSI_SEG]
@@ -1350,12 +1415,18 @@ tk_blit:
     xor ah, ah                      ; AX = the first byte
     push si
     push di
+%ifdef APP_SMALL
     mov di, [bx]
     add di, ax                      ; ES:DI = the device row
+%endif
     mov si, dx
     add si, ax                      ; DS:SI = the shadow row
     push ds
     mov ds, [tk_shseg]
+%ifndef APP_SMALL
+    mov di, [bx]                    ; the same instruction, a segment along
+    add di, ax                      ; ES:DI = the device row
+%endif
     rep movsw
     pop ds
     pop di
@@ -1432,6 +1503,10 @@ tk_hlm:  db 0xFF, 0x7F, 0x3F, 0x1F, 0x0F, 0x07, 0x03, 0x01   ; 1bpp, pixels i..7
 tk_hrm:  db 0x80, 0xC0, 0xE0, 0xF0, 0xF8, 0xFC, 0xFE, 0xFF   ; 1bpp, pixels 0..i
 tk_clm:  db 0xFF, 0x3F, 0x0F, 0x03                           ; 2bpp, pixels i..3
 tk_crm:  db 0xC0, 0xF0, 0xFC, 0xFF                           ; 2bpp, pixels 0..i
+tk_hlmn: db 0x00, 0x80, 0xC0, 0xE0, 0xF0, 0xF8, 0xFC, 0xFE   ; ...and their
+tk_hrmn: db 0x7F, 0x3F, 0x1F, 0x0F, 0x07, 0x03, 0x01, 0x00   ; complements, for
+tk_clmn: db 0x00, 0xC0, 0xF0, 0xFC                           ; the slice's ERASE
+tk_crmn: db 0x3F, 0x0F, 0x03, 0x00                           ; (SPEC.md 85.8.1.1)
 tk_pml:  db 0x0F, 0x0E, 0x0C, 0x08                           ; planes i..3
 tk_pmr:  db 0x01, 0x03, 0x07, 0x0F                           ; planes 0..i
 

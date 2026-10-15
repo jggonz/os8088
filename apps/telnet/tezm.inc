@@ -59,6 +59,9 @@ ZCRCE       equ 0x68                ; the frame is over, say nothing
 ZCRCG       equ 0x69                ; it continues, say nothing
 ZCRCQ       equ 0x6A                ; it continues, ZACK the position
 ZCRCW       equ 0x6B                ; it is over, ZACK the position
+%if ZCRCG != ZCRCE + 1 || ZCRCQ != ZCRCG + 1 || ZCRCW != ZCRCQ + 1
+  %error "tz_subok tests the frame-end terminators as a range: E G Q W"
+%endif
 ZRUB0       equ 0x6C                ; a literal 0x7F
 ZRUB1       equ 0x6D                ; ...and a literal 0xFF
 
@@ -114,8 +117,11 @@ TZR_OK      equ 1
 TZR_CANCEL  equ 2
 TZR_BIG     equ 3                   ; the destination's cluster is over 8,192
 TZR_ERR     equ 4                   ; a file slot refused
+TZR_MEM     equ 5                   ; the staging area could not be claimed
 
-TZ_STGSZ    equ 8192                ; the staging area, two 4,096-byte halves
+TZ_STGSZ    equ 8192                ; the staging area, two 4,096-byte halves,
+                                    ; a HEAP CLAIM held only while a transfer
+                                    ; runs (tz_sclaim, SPEC.md 70.11.3)
 TZ_HALF     equ 4096
 TZ_INFOSZ   equ 64                  ; the ZFILE info block: only the NAME and
                                     ; the SIZE are read (SPEC.md 70.11.2), and
@@ -213,17 +219,11 @@ tz_start:
 ; in:  the WORKER's task (the wire is the worker's, SPEC.md 70.2)
 ; -----------------------------------------------------------------------------
 tz_begin:
-    push ax
     push cx
     push di
-    push es
-    push ds
-    pop es                          ; ...ES is the KERNEL's on a callback
-    cld
     mov di, tz_st
     mov cx, TZ_CTL
-    xor al, al
-    rep stosb                       ; one `rep stosb` over one contiguous run,
+    call te_zero                    ; one `rep stosb` over one contiguous run,
                                     ; so a state byte added later is covered by
                                     ; construction and not by somebody
                                     ; remembering (te_reset's own shape)
@@ -236,10 +236,8 @@ tz_begin:
     call tz_touch
     call tz_rinit
     mov byte [te_dirty], 1
-    pop es
     pop di
     pop cx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -251,15 +249,14 @@ tz_begin:
 ; -----------------------------------------------------------------------------
 tz_end:
     push ax
-    push bx
     mov byte [te_zon], 0
     mov byte [tz_st], ZR_OFF
     mov byte [tz_ps], ZP_IDLE
-    mov bx, CON_ROWS - 1
-    call con_mark                    ; ...and the row the FULL-SCREEN progress
-                                    ; line was written over, so it is re-emitted
-                                    ; from the buffer (SPEC.md 70.11.5)
-    call con_markall
+    call con_markall                ; ...every row, row 24 among them: the one
+                                    ; the FULL-SCREEN progress line was written
+                                    ; over, so it is re-emitted from the buffer
+                                    ; (SPEC.md 70.11.5). It was marked once more
+                                    ; on its own just before this, for nothing
     cmp byte [tz_req], TZ_NONE
     jne .nopost                     ; **AND THERE IS NO NEXT PASS.** [te_zon] is
                                     ; already clear above, and te_step only
@@ -284,7 +281,6 @@ tz_end:
     call con_markall
 .out:
     mov byte [te_dirty], 1
-    pop bx
     pop ax
     ret
 
@@ -304,7 +300,6 @@ tz_end:
 ; -----------------------------------------------------------------------------
 tz_fail:
     push ax
-    push bx
     push cx
     push si
     mov [tz_why], si
@@ -318,12 +313,11 @@ tz_fail:
     mov byte [tz_ps], ZP_IDLE
     mov byte [tz_pan], 0            ; the panel comes off NOW: the reason is on
     call con_markall                 ; the status line and the terminal is what
-                                    ; the user wants back (SPEC.md 70.11.5)
-    mov bx, CON_ROWS - 1
-    call con_mark
+                                    ; the user wants back (SPEC.md 70.11.5) -
+                                    ; row 24, the full-screen progress line's,
+                                    ; among them
     call tz_touchq
     mov byte [te_dirty], 1
-    pop bx
     pop ax
     ret
 
@@ -357,10 +351,8 @@ tz_hex:
     push si
     push di
     mov di, tz_ob
-    mov byte [di], ZPAD
-    mov byte [di+1], ZPAD           ; **TWO ZPADs on a hex header** and one on
-    mov byte [di+2], ZDLE           ; a binary one (SPEC.md 70.11.1)
-    mov byte [di+3], ZHEX
+    mov word [di], ZPAD | (ZPAD << 8)   ; **TWO ZPADs on a hex header** and
+    mov word [di+2], ZDLE | (ZHEX << 8) ; one on a binary one (SPEC.md 70.11.1)
     add di, 4
     mov word [tz_crc], 0
     mov dl, al                      ; DL = the frame type, kept past the CRC
@@ -379,8 +371,7 @@ tz_hex:
     call tz_hex2
     mov ax, [tz_crc]
     call tz_hex2
-    mov byte [di], 0x0D
-    mov byte [di+1], 0x0A
+    mov word [di], 0x0A0D           ; CR LF
     add di, 2
     cmp dl, ZF_FIN
     je .nox                         ; **NO XON ON ZFIN OR ZACK**, which is
@@ -393,13 +384,7 @@ tz_hex:
     mov cx, di
     sub cx, si
     call te_reply
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp te_pop6
 
 ; --- tz_hex2 - AL as two lower-case hex digits at DI -------------------------
 tz_hex2:
@@ -557,7 +542,11 @@ tz_poll:
     je .toobig
     cmp al, TZR_ERR
     je .diskerr
-    ; TZR_CANCEL: ZSKIP, and the sender goes on to the next file
+    cmp al, TZR_MEM
+    je .nomem
+    ; TZR_CANCEL: ZSKIP, and the sender goes on to the next file - and the two
+    ; refusals below come back here once they have said why
+.skip:
     mov byte [tz_st], ZR_SKIP
     mov al, ZF_SKIP
     call tz_say
@@ -567,18 +556,12 @@ tz_poll:
 .chosen:
     cmp byte [tz_st], ZR_DLG
     jne .noans                      ; a stale answer to a transfer that ended
-    mov word [tz_pos], 0
-    mov word [tz_pos+2], 0
-    mov word [tz_rcv], 0
-    mov word [tz_rcv+2], 0
-    mov word [tz_fill], 0
-    mov byte [tz_half], 0
-    mov byte [tz_made], 0
-    mov word [tz_sub0], 0           ; **PER FILE.** tz_begin clears it once a
-    mov word [tz_sub0+2], 0         ; SESSION, and `.repos` is reachable before
-    mov word [tz_skip], 0           ; the first ZDATA of the second file records
-                                    ; it - so without this the ZRPOS would name
-                                    ; the PREVIOUS file's subpacket offset
+    call tz_newfile                 ; **PER FILE**, and [tz_sub0] most of all:
+                                    ; tz_begin clears it once a SESSION, and
+                                    ; `.repos` is reachable before the first
+                                    ; ZDATA of the second file records it - so
+                                    ; without this the ZRPOS would name the
+                                    ; PREVIOUS file's subpacket offset
     mov word [tz_why], 0            ; ...and the last file's refusal, which has
                                     ; been on the status line since it happened
     mov byte [tz_st], ZR_DATA
@@ -594,46 +577,26 @@ tz_poll:
     ; may be saved somewhere else.
     ;
     ; **AND THE SENTENCE IS COMPOSED ON THE UI TASK, not here.** tz_bigmsg
-    ; calls tz_num, which writes tz_dig - and tz_text calls it too, from
-    ; te_status under the gfx lock. Composing here would have put a second TASK
-    ; on that scratch for the first time. tz_chunk_set already knows the cluster
+    ; writes tz_bmsg, which te_status reads under the gfx lock. Composing here
+    ; would have put a second TASK on that buffer for the first time. tz_chunk_set already knows the cluster
     ; is too big and already runs on the UI task, so it composes the sentence
     ; there and this arm only points at it.
     mov si, tz_bmsg
-    mov [tz_why], si
-    mov byte [tz_st], ZR_SKIP
-    mov al, ZF_SKIP
-    call tz_say
-    call tz_touch
+    jmp short .refuse
+.nomem:
+    mov si, tz_s_nomem              ; ...and the staging claim, which is the
+.refuse:                            ; same ZSKIP for the same reason: a fact
+    mov [tz_why], si                ; about NOW, and the next file asks again
     mov byte [te_dirty], 1
-    jmp .noans
+    jmp .skip
 .diskerr:
     ; **WHICH REFUSAL** (SPEC.md 47, SPEC.md 54.4.1's rule one application
     ; along). `Disk error` is what every one of them looks like from the
     ; outside, and the gate found the difference the hard way: a folder that
     ; cannot take another entry is FERR_DIRFULL and is a different thing to go
     ; and do about than a disk with no clusters left.
-    mov si, tz_s_derr
-    cmp byte [tz_ferr], FERR_DIRFULL
-    jne .d1
-    mov si, tz_s_dfull
-    jmp short .dsay
-.d1:
-    cmp byte [tz_ferr], FERR_FULL
-    jne .d2
-    mov si, tz_s_full
-    jmp short .dsay
-.d2:
-    cmp byte [tz_ferr], FERR_WPROT
-    jne .d3
-    mov si, tz_s_wprot
-    jmp short .dsay
-.d3:
-    cmp byte [tz_ferr], FERR_PROT
-    jne .dsay
-    mov si, tz_s_prot
-.dsay:
-    call tz_fail
+    mov si, tz_ewhy                 ; the kernel's words, which tz_commit
+    call tz_fail                    ; copied out on the UI task
     jmp .out                        ; NEAR: the ladder above pushed `.out` past
                                     ; a short jump's reach
 .noans:
@@ -713,6 +676,8 @@ tz_poll:
     call tz_saypos
     call tz_touch
 .noowe:
+    call OSAPI_GET_TICKS            ; DX = NOW, once, for the three clocks
+    mov dx, ax                      ; below (WM_WAKE keeps DX)
 
     ; --- the dialog's kick, so the 60-second backstop runs on the UI task ---
     ; --- **EVERY OUTSTANDING REQUEST IS KICKED FOR, not just TZ_NAME.**
@@ -730,12 +695,11 @@ tz_poll:
     cmp byte [tz_req], TZ_NONE
     je .nodlg
 .kick:
-    call OSAPI_GET_TICKS
-    mov bx, ax
+    mov ax, dx
     sub ax, [tz_kick]
     cmp ax, TZ_KICK
     jb .nodlg
-    mov [tz_kick], bx
+    mov [tz_kick], dx
     mov bx, [te_win]
     call OSAPI_WM_WAKE
 .nodlg:
@@ -743,13 +707,12 @@ tz_poll:
     ; --- the DRAIN's exit: quiet for two seconds and the stream is ours -----
     cmp byte [tz_st], ZR_DRAIN
     jne .nodrain
-    call OSAPI_GET_TICKS
+    mov ax, dx
     sub ax, [tz_tick]
     cmp ax, TZ_DRAINQ
     jb .out
-    mov byte [tz_st], ZR_ERR        ; ...and the REASON stays on the status line
-    call tz_end                     ; (SPEC.md 47), which tz_end does not touch
-    mov byte [tz_st], ZR_ERR
+    call tz_end                     ; ...and the REASON stays on the status line
+    mov byte [tz_st], ZR_ERR        ; (SPEC.md 47), which tz_end does not touch
     jmp .out
 .nodrain:
 
@@ -758,7 +721,7 @@ tz_poll:
     je .out                         ; **HELD**: the transfer sends nothing and
                                     ; times out on nothing while the user is
                                     ; being asked where to put it
-    call OSAPI_GET_TICKS
+    mov ax, dx
     sub ax, [tz_tick]
     cmp ax, TZ_TMO
     jb .out
@@ -880,24 +843,6 @@ tz_wmap:
     pop bx
     ret
 
-; --- tz_dgone - CF=1 if the dialog's OWN window slot is free again ----------
-tz_dgone:
-    push ax
-    cmp byte [tz_dslot], 0xFF
-    je .no                          ; the slot was never worked out: the
-                                    ; sixty-second backstop is the answer
-    mov al, [tz_dslot]
-    call OSAPI_WM_OWNSEG
-    jc .yes
-.no:
-    pop ax
-    clc
-    ret
-.yes:
-    pop ax
-    stc
-    ret
-
 ; --- tz_post - AL = a request; THE FLAG IS WRITTEN LAST ----------------------
 ; Every argument is already in place, and the UI task may run the instant this
 ; byte lands (SPEC.md 70.11.3, apps/ftpd's fd_post).
@@ -919,37 +864,34 @@ tz_post:
 ; behaves like one that is not.
 ; =============================================================================
 tz_byte:
+    call tz_touchq                  ; a byte arrived, so nothing is stuck - and
+    cmp byte [tz_st], ZR_DRAIN      ; it keeps every register, so a DRAIN,
+    jne .go                         ; where that is all a byte does, needs no
+    ret                             ; frame at all
+.go:
     push ax
     push bx
     push cx
     push dx
     push si
     push di
-    call tz_touchq                  ; a byte arrived, so nothing is stuck
-    cmp byte [tz_st], ZR_DRAIN
-    je .out                         ; ...and in a DRAIN that is all it does
 .top:
-    mov bl, [tz_ps]
-    cmp bl, ZP_IDLE
-    je .idle
-    cmp bl, ZP_PAD
-    je .pad
-    cmp bl, ZP_FMT
-    je .fmt
-    cmp bl, ZP_HEX
-    je .hex
-    cmp bl, ZP_HEOL
-    je .heol
-    cmp bl, ZP_BIN
-    je .bin
-    cmp bl, ZP_DATA
-    je .data
-    cmp bl, ZP_DCRC
-    je .dcrc
+    mov bl, [tz_ps]                 ; **A TABLE, NOT A COMPARE CHAIN**: ZP_DATA
+    xor bh, bh                      ; is the state every byte of a download
+    shl bx, 1                       ; arrives in, and it was the SEVENTH test
+    jmp [tz_pstab + bx]
+
+    ; **THE ORDER OF THE ARMS IS THE HOT PATH'S AND THE JUMPS'.** SUBPACKET
+    ; DATA falls straight into the epilogue; `.ps` (BL = the parser's next
+    ; state, `.ps0` = ZP_IDLE) sits with it; and every arm is placed within a
+    ; SHORT jump of an exit - there are two, `.out` and `.xout` - because a
+    ; conditional jump past 127 bytes is five bytes and a taken jump more.
+
     ; ZP_OO - the sender's two `O`s after our ZFIN. **BOTH of them**: ending on
     ; the first left [te_zon] clear when the second arrived, and te_byte then
     ; handed it to the ANSI parser - so every completed batch printed a stray
     ; `O` on the board's screen (the w4 review's MINOR 9).
+.oo:
     cmp al, 'O'
     jne .ooend
     inc byte [tz_oo]
@@ -958,6 +900,49 @@ tz_byte:
 .ooend:
     call tz_end
     jmp .out
+
+.term:
+    ; **THE CRC COVERS THE DATA PLUS THE FRAME-END BYTE** (SPEC.md 70.11.1),
+    ; which is the classic way to build a receiver that NAKs every subpacket
+    ; while looking correct.
+    mov [tz_fend], al
+    call tz_crcb
+    mov bl, ZP_DCRC
+    jmp .n0
+
+.fmt:
+    cmp al, ZHEX
+    je .ishex
+    cmp al, ZBIN
+    je .isbin
+    cmp al, ZBIN32
+    jne .ps0
+    ; **ZBIN32 IS ANSWERED ZNAK AND THE TRANSFER CONTINUES** (SPEC.md
+    ; 70.11.1) - that is what the negotiation is for. The header's own bytes
+    ; are then skipped by the ZPAD scan, which is safe rather than lucky: a
+    ; false restart needs a ZPAD, a ZDLE and an A/B/C in that order, and a
+    ; sender that has just been NAKed sends its next header immediately.
+    mov al, ZF_NAK
+    call tz_say
+    jmp .ps0
+.isbin:
+    mov word [tz_crc], 0
+    mov byte [tz_esc], 0
+    mov bl, ZP_BIN
+    jmp .n0
+.ishex:
+    mov bl, ZP_HEX
+.n0:
+    mov word [tz_n], 0
+    jmp .ps
+
+.pad:
+    cmp al, ZPAD
+    je .out                         ; a second (or third) pad: still a pad
+    cmp al, ZDLE
+    mov bl, ZP_FMT
+    je .ps
+    jmp .ps0
 
     ; --- IDLE: everything that is not a ZPAD is skipped ---------------------
     ; Which is what makes the trailer of a hex header free: the CR, the LF and
@@ -968,54 +953,55 @@ tz_byte:
 .idle:
     cmp al, ZPAD
     jne .out
-    mov byte [tz_ps], ZP_PAD
+    mov bl, ZP_PAD
+    jmp .ps
+
+    ; --- SUBPACKET DATA, and it FALLS INTO the epilogue ---------------------
+.data:
+    call tz_unesc
+    jc .cancel
+    cmp ah, 1
+    je .out                         ; the ZDLE itself
+    cmp ah, 2
+    je .term
+    mov byte [tz_cans], 0           ; ...and a byte that decoded resets the run
+    call tz_crcb
+    call tz_sink
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.ps0:
+    mov bl, ZP_IDLE
+.ps:                                ; BL = where the parser is next
+    mov [tz_ps], bl
     jmp .out
 
-.pad:
-    cmp al, ZPAD
-    je .out                         ; a second (or third) pad: still a pad
-    cmp al, ZDLE
-    je .isfmt
-    mov byte [tz_ps], ZP_IDLE
-    jmp .out
-.isfmt:
-    mov byte [tz_ps], ZP_FMT
-    jmp .out
-
-.fmt:
-    cmp al, ZHEX
-    je .ishex
-    cmp al, ZBIN
-    je .isbin
-    cmp al, ZBIN32
-    je .is32
-    mov byte [tz_ps], ZP_IDLE
-    jmp .out
-.ishex:
-    mov byte [tz_ps], ZP_HEX
-    mov word [tz_n], 0
-    jmp .out
-.isbin:
-    mov byte [tz_ps], ZP_BIN
-    mov word [tz_n], 0
-    mov word [tz_crc], 0
+.cancel:
+    ; ZDLE ZDLE is CANCEL and a bad escape is a protocol error - one of each
+    ; resynchronises on the next ZPAD rather than ending the session, because a
+    ; sender that has lost its place says so again.
+    ;
+    ; **FIVE IN A ROW IS THE SENDER'S ABORT** (the w4 review's MINOR 3), which
+    ; is what a user cancelling at the BBS end sends. Resynchronising on those
+    ; left the terminal showing nothing at all for TZ_TMO x TZ_TRIES = fifty
+    ; seconds before the retry count ran out.
     mov byte [tz_esc], 0
-    jmp .out
-.is32:
-    ; **ZBIN32 IS ANSWERED ZNAK AND THE TRANSFER CONTINUES** (SPEC.md
-    ; 70.11.1) - that is what the negotiation is for. The header's own bytes
-    ; are then skipped by the ZPAD scan, which is safe rather than lucky: a
-    ; false restart needs a ZPAD, a ZDLE and an A/B/C in that order, and a
-    ; sender that has just been NAKed sends its next header immediately.
-    mov byte [tz_ps], ZP_IDLE
-    mov al, ZF_NAK
-    call tz_say
+    inc byte [tz_cans]
+    cmp byte [tz_cans], 5
+    jb .ps0
+    mov si, tz_s_scan
+    call tz_fail                    ; ...which puts the parser in ZP_IDLE too
     jmp .out
 
     ; --- a HEX header: fourteen digits, then CR LF --------------------------
 .hex:
     call tz_nib
-    jc .hexbad
+    jc .ps0
     mov bx, [tz_n]
     mov si, bx
     shr si, 1                       ; SI = which of the seven bytes
@@ -1024,22 +1010,18 @@ tz_byte:
     mov cl, 4
     shl al, cl                      ; `shl reg, CL` is 8086 (CLAUDE.md)
     mov [tz_hb + si], al
-    jmp short .hexn
+    jmp .hexn
 .lo:
     or [tz_hb + si], al
 .hexn:
     inc word [tz_n]
     cmp word [tz_n], 14
     jb .out
-    mov byte [tz_ps], ZP_HEOL
     call tz_hcrc
-    jc .hexbad
+    jc .ps0
     mov byte [tz_pend], 1           ; the frame is GOOD and is dispatched by
-    jmp .out                        ; the trailer below, so a ZFILE's own
-                                    ; subpacket is not read as CR LF XON
-.hexbad:
-    mov byte [tz_ps], ZP_IDLE
-    jmp .out
+    mov bl, ZP_HEOL                 ; the trailer below, so a ZFILE's own
+    jmp .ps                         ; subpacket is not read as CR LF XON
 
 .heol:
     cmp al, 0x0D
@@ -1053,9 +1035,9 @@ tz_byte:
     call tz_frame                   ; ...which sets [tz_ps] for what follows
 .lf:
     cmp al, 0x0A
-    je .out
+    je .xout
     cmp al, 0x8A
-    je .out
+    je .xout
     jmp .top                        ; a trailer that was not the LF belongs to
                                     ; whatever the frame put us in - one
                                     ; re-entry, and tz_frame never sets ZP_HEOL
@@ -1076,7 +1058,7 @@ tz_byte:
 .binn:
     inc word [tz_n]
     cmp word [tz_n], 7
-    jb .out
+    jb .xout
     mov ax, [tz_crc]
     cmp ah, [tz_hb + 5]
     jne .binbad
@@ -1084,81 +1066,17 @@ tz_byte:
     jne .binbad
     mov byte [tz_ps], ZP_IDLE
     call tz_frame
-    jmp .out
+    jmp .xout
 .binbad:
-    mov byte [tz_ps], ZP_IDLE
     mov al, ZF_NAK
     call tz_say
-    jmp .out
+    jmp .xps0
 .binx:
     cmp ah, 1
-    je .out
-    mov byte [tz_ps], ZP_IDLE
-    jmp .out
-
-    ; --- SUBPACKET DATA -----------------------------------------------------
-.data:
-    call tz_unesc
-    jc .cancel
-    cmp ah, 1
-    je .out                         ; the ZDLE itself
-    cmp ah, 2
-    je .term
-    mov byte [tz_cans], 0           ; ...and a byte that decoded resets the run
-    call tz_crcb
-    call tz_sink
-    jmp .out
-.term:
-    ; **THE CRC COVERS THE DATA PLUS THE FRAME-END BYTE** (SPEC.md 70.11.1),
-    ; which is the classic way to build a receiver that NAKs every subpacket
-    ; while looking correct.
-    mov [tz_fend], al
-    call tz_crcb
-    mov byte [tz_ps], ZP_DCRC
-    mov word [tz_n], 0
-    jmp .out
-
-.dcrc:
-    call tz_unesc
-    jc .cancel
-    or ah, ah
-    jnz .out
-    mov bx, [tz_n]
-    cmp bx, 2
-    jae .out
-    mov [tz_cb + bx], al
-    inc word [tz_n]
-    cmp word [tz_n], 2
-    jb .out
-    mov ax, [tz_crc]
-    cmp ah, [tz_cb + 0]
-    jne .crcbad
-    cmp al, [tz_cb + 1]
-    jne .crcbad
-    call tz_subok
-    jmp short .out
-.crcbad:
-    call tz_subbad
-    jmp short .out
-
-.cancel:
-    ; ZDLE ZDLE is CANCEL and a bad escape is a protocol error - one of each
-    ; resynchronises on the next ZPAD rather than ending the session, because a
-    ; sender that has lost its place says so again.
-    ;
-    ; **FIVE IN A ROW IS THE SENDER'S ABORT** (the w4 review's MINOR 3), which
-    ; is what a user cancelling at the BBS end sends. Resynchronising on those
-    ; left the terminal showing nothing at all for TZ_TMO x TZ_TRIES = fifty
-    ; seconds before the retry count ran out.
-    mov byte [tz_ps], ZP_IDLE
-    mov byte [tz_esc], 0
-    inc byte [tz_cans]
-    cmp byte [tz_cans], 5
-    jb .out
-    mov si, tz_s_scan
-    call tz_fail
-    jmp .out
-.out:
+    je .xout
+.xps0:                              ; **THE SAME EXIT AGAIN**, for the arms
+    mov byte [tz_ps], ZP_IDLE       ; round it: one copy cannot reach both ends
+.xout:                              ; of this proc with a short jump
     pop di
     pop si
     pop dx
@@ -1166,6 +1084,36 @@ tz_byte:
     pop bx
     pop ax
     ret
+
+.dcrc:
+    call tz_unesc
+    jc .cancel
+    or ah, ah
+    jnz .xout
+    mov bx, [tz_n]
+    cmp bx, 2
+    jae .xout
+    mov [tz_cb + bx], al
+    inc word [tz_n]
+    cmp word [tz_n], 2
+    jb .xout
+    mov ax, [tz_crc]
+    cmp ah, [tz_cb + 0]
+    jne .crcbad
+    cmp al, [tz_cb + 1]
+    jne .crcbad
+    call tz_subok
+    jmp .xout
+.crcbad:
+    call tz_subbad
+    jmp .xout
+
+tz_pstab:   dw tz_byte.idle, tz_byte.pad, tz_byte.fmt, tz_byte.hex
+            dw tz_byte.heol, tz_byte.bin, tz_byte.data, tz_byte.dcrc
+            dw tz_byte.oo                   ; ...in ZP_* order, which the
+%if ZP_IDLE != 0 || ZP_PAD != 1 || ZP_FMT != 2 || ZP_HEX != 3 || ZP_HEOL != 4 || ZP_BIN != 5 || ZP_DATA != 6 || ZP_DCRC != 7 || ZP_OO != 8
+  %error "tz_pstab is indexed by [tz_ps]: it must list the ZP_* states in order"
+%endif
 
 ; --- tz_nib - AL = a hex digit -> its value, CF=1 if it is not one -----------
 tz_nib:
@@ -1282,18 +1230,15 @@ tz_unesc:
 ; =============================================================================
 ; WHERE A DECODED DATA BYTE GOES
 ; =============================================================================
+; THE STAGING ARM IS TESTED FIRST AND TAIL-JUMPED: it is every byte of a
+; download, and tz_store keeps every register, so it needs no frame here. The
+; info block is one subpacket a file.
 tz_sink:
-    push ax
+    cmp byte [tz_sk], TZS_STAGE
+    je tz_store
+    cmp byte [tz_sk], TZS_INFO
+    jne .none
     push bx
-    mov bl, [tz_sk]
-    cmp bl, TZS_INFO
-    je .info
-    cmp bl, TZS_STAGE
-    je .stage
-    pop bx
-    pop ax
-    ret
-.info:
     mov bx, [tz_dn]                 ; **[tz_dn] AND NOT [tz_n]**: `.term` zeroes
                                     ; [tz_n] to count the two CRC bytes, so a
                                     ; reader of it afterwards sees 2 - which
@@ -1306,12 +1251,7 @@ tz_sink:
     inc word [tz_dn]
 .idone:
     pop bx
-    pop ax
-    ret
-.stage:
-    call tz_store
-    pop bx
-    pop ax
+.none:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1323,9 +1263,7 @@ tz_sink:
 ; the receive entirely while a commit is out.
 ; -----------------------------------------------------------------------------
 tz_store:
-    push ax
     push bx
-    push si
     ; --- **THE SKIP, which is how a ZRPOS from the COMMITTED offset stays
     ; honest** (SPEC.md 70.11.2). A subpacket that straddles a chunk boundary
     ; has its first part committed before its CRC is checked, so a CRC error
@@ -1335,13 +1273,7 @@ tz_store:
     ; never moves, which is what keeps OSAPI_FILE_APPEND's cluster-multiple
     ; precondition true through a retry.
     cmp word [tz_skip], 0
-    je .live
-    dec word [tz_skip]
-    mov bx, tz_rcv
-    mov ax, 1
-    call tz_add32
-    jmp short .out
-.live:
+    jne .skip
     mov bx, [tz_fill]
     cmp bx, [tz_chunk]
     jb .put
@@ -1351,23 +1283,33 @@ tz_store:
     xor bx, bx                      ; so this cannot happen - and if it ever
 .put:                               ; does, a ZRPOS resynchronises rather than a
                                     ; byte going somewhere it must not
-    mov si, tz_stg                  ; **DX IS NOT AN ADDRESS REGISTER ON AN
-    cmp byte [tz_half], 0           ; 8086**: the modes are [BX], [BP], [SI],
-    je .h0                          ; [DI] and the four sums of one of each pair
-    add si, TZ_HALF
+    ; --- **THE AREA IS A CLAIM, so the store is through ES** (SPEC.md
+    ; 70.11.3). [tz_sseg] is non-zero in ZR_DATA by construction: the only way
+    ; in is TZR_OK, from a dialog tz_sclaim stood in front of. The half is an
+    ; addressing mode rather than an add, and the count below is two stores
+    ; rather than tz_add32's call, so this is fewer cycles a byte than the
+    ; DS-relative store it replaced (tebench: the download path, every byte).
+    push es
+    mov es, [tz_sseg]
+    cmp byte [tz_half], 0
+    je .h0
+    mov [es:bx + TZ_HALF], al
+    jmp short .h1
 .h0:
-    add si, bx
-    mov [si], al
+    mov [es:bx], al
+.h1:
+    pop es
     inc bx
     mov [tz_fill], bx
-    mov bx, tz_rcv
-    mov ax, 1
-    call tz_add32
+.cnt:
+    add word [tz_rcv], 1            ; [tz_rcv] += 1, a dword
+    adc word [tz_rcv + 2], 0
 .out:
-    pop si
     pop bx
-    pop ax
     ret
+.skip:
+    dec word [tz_skip]
+    jmp short .cnt
 .stuck:
     mov byte [tz_owe], 2            ; ...ask the sender to start again from the
     jmp short .out                  ; bytes committed, and drop this one
@@ -1397,6 +1339,17 @@ tz_raise:
     mov al, TZ_DATA
     call tz_post
     pop ax
+    ret
+
+; --- tz_newfile - a file starts at 0: tz_fill..tz_made, one te_zero --------
+tz_newfile:
+    push cx
+    push di
+    mov di, tz_fill
+    mov cx, TZ_FRUN
+    call te_zero
+    pop di
+    pop cx
     ret
 
 ; --- tz_cp32 - the dword at SI -> the dword at DI ----------------------------
@@ -1453,8 +1406,9 @@ tz_subok:
     je .info
     cmp bl, TZS_STAGE
     je .stage
-    jmp short .cont
-.info:
+    jmp short .cont                 ; (the terminators are 0x68..0x6B, E G Q W
+.info:                              ; in that order - asserted below - so each
+                                    ; test here is one compare on a range)
     call tz_infodone
     jmp short .out                  ; **AND NO ZACK.** SPEC.md 70.11.1's table
                                     ; is about a DATA subpacket; the ZFILE
@@ -1462,30 +1416,21 @@ tz_subok:
                                     ; ZRPOS or the ZSKIP the dialog decides,
                                     ; which is what the sender reads next
 .stage:
-    mov al, [tz_fend]
-    cmp al, ZCRCQ
-    je .ack
-    cmp al, ZCRCW
-    je .ack
-    jmp short .cont
-.ack:
+    cmp byte [tz_fend], ZCRCQ
+    jb .cont                        ; ZCRCQ and ZCRCW ask for a ZACK
     mov bx, tz_rcv                  ; the ACK names what has ARRIVED, which is
     mov al, ZF_ACK                  ; what the sender's own position is
     call tz_saypos
 .cont:
     mov al, [tz_fend]
-    cmp al, ZCRCG
-    je .more
-    cmp al, ZCRCQ
-    je .more
-    jmp short .out
-.more:
-    mov byte [tz_ps], ZP_DATA       ; the FRAME continues: another subpacket
-    mov word [tz_crc], 0            ; follows with no header in between
-    mov word [tz_n], 0
-    mov word [tz_dn], 0             ; ...and the DATA counter with them, which
-                                    ; only an INFO block continued by a ZCRCG
-                                    ; would ever have noticed
+    sub al, ZCRCG
+    cmp al, ZCRCQ - ZCRCG
+    ja .out                         ; ZCRCG and ZCRCQ continue the frame
+    call tz_subnext                 ; the FRAME continues: another subpacket
+                                    ; follows with no header in between - and
+                                    ; the DATA counter is reset with the rest,
+                                    ; which only an INFO block continued by a
+                                    ; ZCRCG would ever have noticed
     cmp byte [tz_sk], TZS_STAGE
     jne .out
     push si
@@ -1543,28 +1488,42 @@ tz_frame:
     je .eof
     cmp al, ZF_FIN
     je .fin
-    jmp .out                        ; ZRINIT is a STRAGGLER TO SKIP and never a
+.out:                               ; ZRINIT is a STRAGGLER TO SKIP and never a
                                     ; reason to resend (SPEC.md 70.11.2); ZACK,
                                     ; ZNAK, ZSKIP and ZRPOS are the sender's
                                     ; side of the conversation
+    pop di                          ; (the epilogue sits HERE, between the
+    pop si                          ; dispatch and the arms, so every arm
+    pop bx                          ; reaches it with a short jump)
+    pop ax
+    ret
 .rqinit:
     call tz_rinit                   ; it is still asking: say it again
     call tz_touch
     jmp .out
 
+.fin:
+    mov al, ZF_FIN
+    call tz_say
+    mov byte [tz_st], ZR_FIN
+    mov byte [tz_ps], ZP_OO         ; ...and the sender's `OO` ends it
+    call tz_touch
+    jmp .out
+
+.swallow:
+    mov bl, TZS_NONE
+    call tz_subgo
+    jmp .out
+
 .file:
     ; The info subpacket follows immediately, ZCRCW-terminated.
-    mov byte [tz_ps], ZP_DATA
-    mov word [tz_crc], 0
-    mov word [tz_n], 0
-    mov word [tz_dn], 0
-    mov byte [tz_esc], 0
-    mov byte [tz_sk], TZS_INFO
+    mov bl, TZS_INFO
     cmp byte [tz_st], ZR_DLG
     jne .fil2
-    mov byte [tz_sk], TZS_NONE      ; a dialog is already up for this file and
+    mov bl, TZS_NONE                ; a dialog is already up for this file and
                                     ; the sender is repeating itself: swallow it
 .fil2:
+    call tz_subgo
     call tz_touch
     jmp .out
 
@@ -1575,17 +1534,13 @@ tz_frame:
     mov di, tz_rcv
     call tz_eq32
     jne .repos                      ; it is resuming somewhere we are not
-    mov byte [tz_ps], ZP_DATA
-    mov word [tz_crc], 0
-    mov word [tz_n], 0
-    mov word [tz_dn], 0
-    mov byte [tz_esc], 0
-    mov byte [tz_sk], TZS_STAGE
+    mov bl, TZS_STAGE
+    call tz_subgo
     mov si, tz_rcv                  ; ...and where this subpacket STARTS, which
     mov di, tz_sub0                 ; is the offset a CRC error resumes from
     call tz_cp32
     call tz_touch
-    jmp short .out
+    jmp .out
 .repos:
     mov byte [tz_owe], 2
     jmp .swallow
@@ -1596,46 +1551,39 @@ tz_frame:
     mov si, tz_hb + 1               ; **ZEOF CARRIES THE FILE LENGTH AS ITS
     mov di, tz_rcv                  ; POSITION** (SPEC.md 70.11.1), so a
     call tz_eq32                    ; disagreement here is a lost subpacket
-    jne .eofbad                     ; ...and NOT `.repos`, which falls into
-                                    ; `.swallow` and puts the parser into
-                                    ; SUBPACKET mode. No subpacket follows a
-                                    ; ZEOF: the next bytes are the sender's
-                                    ; answer to our ZRPOS, and eating them as
-                                    ; data leaves recovery to whichever byte
-                                    ; pair happens to decode as a terminator
+    mov al, 2                       ; ...so it is owed a ZRPOS, and the scan
+    jne .owe                        ; stays in ZP_IDLE - and NOT `.repos`,
+                                    ; which falls into `.swallow` and puts the
+                                    ; parser into SUBPACKET mode. No subpacket
+                                    ; follows a ZEOF: the next bytes are the
+                                    ; sender's answer to our ZRPOS, and eating
+                                    ; them as data leaves recovery to whichever
+                                    ; byte pair happens to decode as a
+                                    ; terminator
     cmp word [tz_fill], 0
     je .eofr
     call tz_raise                   ; the LAST chunk is whatever is left, which
                                     ; is SPEC.md 18.4.4's own exception
 .eofr:
     mov byte [tz_st], ZR_EOF
-    mov byte [tz_owe], 1            ; ...and the ZRINIT waits for that commit,
-    call tz_touch                   ; so the sender cannot start the next file
-    jmp short .out                  ; while this one is still being written
+    call tz_touch                   ; ...and the ZRINIT waits for that commit,
+    mov al, 1                       ; so the sender cannot start the next file
+.owe:                               ; while this one is still being written
+    mov [tz_owe], al
+    jmp .out
 
-.eofbad:
-    mov byte [tz_owe], 2            ; a ZRPOS, and the scan stays in ZP_IDLE
-    jmp short .out
-.fin:
-    mov al, ZF_FIN
-    call tz_say
-    mov byte [tz_st], ZR_FIN
-    mov byte [tz_ps], ZP_OO         ; ...and the sender's `OO` ends it
-    call tz_touch
-    jmp short .out
-
-.swallow:
+; --- tz_subgo - a SUBPACKET follows: BL = where its bytes go (TZS_*) --------
+; Three of tz_frame's arms and tz_subok's continued frame all start one, and
+; the counters are the same four stores each time. tz_subnext is the continued
+; frame's entry: the same sink, so the sink and the escape are left alone.
+tz_subgo:
+    mov [tz_sk], bl
+    mov byte [tz_esc], 0
+tz_subnext:
     mov byte [tz_ps], ZP_DATA
     mov word [tz_crc], 0
     mov word [tz_n], 0
     mov word [tz_dn], 0
-    mov byte [tz_esc], 0
-    mov byte [tz_sk], TZS_NONE
-.out:
-    pop di
-    pop si
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1652,6 +1600,7 @@ tz_infodone:
     push cx
     push dx
     push si
+    push di                         ; m83_mangle's output pointer
     mov bx, [tz_dn]
     mov byte [tz_info + bx], 0      ; ...NUL-terminated whatever the sender did
     mov si, tz_info
@@ -1660,7 +1609,7 @@ tz_infodone:
     cmp byte [si], 0                ; goes at 63, so a scan of 63 inspects
     je .size                        ; 0..62, never sees it, and falls out with
     inc si                          ; SI at tz_info+63 - one `inc si` from
-    loop .skip                      ; tz_stg, where the PREVIOUS download's
+    loop .skip                      ; the then staging area, where the LAST download's
                                     ; digits were then parsed as this file's
                                     ; size and fed straight to the divisor
                                     ; BLOCKER 1 guards. The bound was written
@@ -1699,20 +1648,18 @@ tz_infodone:
     jmp short .dig
 .have:
     mov si, tz_info
-    call tz_mangle                  ; -> tz_name, SPEC.md 77.20's rule
+    mov di, tz_name
+    call m83_mangle                 ; -> tz_name, SPEC.md 77.20's rule
     cmp byte [tz_st], ZR_DATA
     jne .ask
     ; **A SECOND ZFILE FOR A FILE ALREADY OPEN IS IDEMPOTENT** (SPEC.md
     ; 70.11.2): our ZRPOS was lost, the sender repeated itself, and a receiver
     ; that treated the repeat as a new file would write the download twice or
     ; append it to itself - and the DISK would say so rather than the wire.
-    mov word [tz_pos], 0
-    mov word [tz_pos+2], 0
-    mov word [tz_rcv], 0
-    mov word [tz_rcv+2], 0
-    mov word [tz_fill], 0
-    mov byte [tz_half], 0
-    mov byte [tz_made], 0
+    ; THE WHOLE RUN, [tz_skip] and [tz_sub0] with it: this restarts the file
+    ; at 0, and a skip still owed from a straddle recovery would drop the
+    ; first bytes of the restart.
+    call tz_newfile
     mov bx, tz_pos
     mov al, ZF_RPOS
     call tz_saypos
@@ -1723,243 +1670,12 @@ tz_infodone:
     mov al, TZ_NAME
     call tz_post
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp te_pop6
 
-; =============================================================================
-; THE 8.3 MANGLE (SPEC.md 70.11.4, and it is SPEC.md 77.20's rule)
-;
-; A file this machine downloads by Zmodem and the same file uploaded to it by
-; FTP must land on the same name, so this is a second copy of the RULE and not
-; of the code - a package cannot call another package's proc - and
-; tests/telzm.py asserts both ends against tools/os88bbs.py's own
-; MANGLE83_CASES so the two cannot drift.
-;
-;   * everything up to and including the last `/` or `\` is dropped;
-;   * **a name that is already legal 8.3 is left alone**, case and all, which
-;     is what makes the mapping round-trip;
-;   * otherwise the extension is the first three legal characters after the
-;     LAST dot and the name is the first six legal plus `~1`;
-;   * it is DETERMINISTIC - always `~1`, never a search for a free `~2`,
-;     because a counter resolved against the directory makes the same download
-;     land differently on two disks;
-;   * a name with nothing legal in it becomes `FILE~1`.
-; =============================================================================
-tz_m83:     db "$%'-_@~`!(){}^#&", 0
-
-; --- tz_leg - AL legal in an 8.3 name? CF=0 and AL upcased if it is ----------
-tz_leg:
-    push bx
-    cmp al, 'a'
-    jb .up
-    cmp al, 'z'
-    ja .up
-    sub al, 32
-.up:
-    cmp al, 'A'
-    jb .dig
-    cmp al, 'Z'
-    jbe .yes
-.dig:
-    cmp al, '0'
-    jb .sym
-    cmp al, '9'
-    jbe .yes
-.sym:
-    mov bx, tz_m83
-.s:
-    cmp byte [bx], 0
-    je .no
-    cmp al, [bx]
-    je .yes
-    inc bx
-    jmp short .s
-.yes:
-    pop bx
-    clc
-    ret
-.no:
-    pop bx
-    stc
-    ret
-
-; --- tz_is83 - CF=0 if DS:SI is already a legal 8.3 name ---------------------
-tz_is83:
-    push ax
-    push cx
-    push si
-    xor cx, cx                      ; CL = stem length
-.stem:
-    mov al, [si]
-    or al, al
-    jz .nodot
-    cmp al, '.'
-    je .dot
-    call tz_leg
-    jc .no
-    cmp cl, 8
-    jae .no
-    inc cl
-    inc si
-    jmp short .stem
-.nodot:
-    or cl, cl
-    jz .no
-    jmp short .yes
-.dot:
-    or cl, cl
-    jz .no                          ; `.TXT` has no stem
-    inc si
-    xor ch, ch                      ; CH = extension length
-.ext:
-    mov al, [si]
-    or al, al
-    jz .edone
-    cmp al, '.'
-    je .no                          ; a SECOND dot
-    call tz_leg
-    jc .no
-    cmp ch, 3
-    jae .no
-    inc ch
-    inc si
-    jmp short .ext
-.edone:
-    or ch, ch
-    jz .no                          ; ...and a trailing dot is not an extension
-.yes:
-    pop si
-    pop cx
-    pop ax
-    clc
-    ret
-.no:
-    pop si
-    pop cx
-    pop ax
-    stc
-    ret
-
-; --- tz_mangle - DS:SI = the sender's pathname -> tz_name --------------------
-tz_mangle:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    ; --- the LEAF: a Zmodem pathname is a path and the file goes where the
-    ; user says, not where the sender says.
-    mov bx, si
-.leaf:
-    mov al, [si]
-    or al, al
-    jz .haveleaf
-    inc si
-    cmp al, '/'
-    je .cut
-    cmp al, '\'
-    jne .leaf
-.cut:
-    mov bx, si
-    jmp short .leaf
-.haveleaf:
-    mov si, bx
-    call tz_is83
-    jc .mangle
-    mov di, tz_name                 ; already legal: copied VERBATIM
-.cp:
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    or al, al
-    jnz .cp
-    jmp .out
-.mangle:
-    ; --- where the extension starts, if there is one ------------------------
-    xor dx, dx                      ; DX = the last dot, 0 = none
-    mov bx, si
-.fd:
-    mov al, [bx]
-    or al, al
-    jz .fdone
-    inc bx
-    cmp al, '.'
-    jne .fd
-    mov dx, bx                      ; ...just PAST the dot
-    jmp short .fd
-.fdone:
-    mov [tz_dot], dx
-    ; --- the stem: the first six legal characters before it -----------------
-    mov di, tz_name
-    xor cx, cx
-.st:
-    mov al, [si]
-    or al, al
-    jz .stdone
-    or dx, dx
-    jz .stkeep
-    mov bx, si
-    inc bx
-    cmp bx, dx
-    jae .stdone                     ; SI has reached the dot
-.stkeep:
-    call tz_leg
-    jc .stnext
-    cmp cl, 6
-    jae .stdone
-    mov [di], al
-    inc di
-    inc cl
-.stnext:
-    inc si
-    jmp short .st
-.stdone:
-    or cl, cl
-    jnz .tilde
-    mov byte [di], 'F'              ; nothing legal anywhere: it still has to be
-    mov byte [di+1], 'I'            ; something a person can see and delete
-    mov byte [di+2], 'L'
-    mov byte [di+3], 'E'
-    add di, 4
-.tilde:
-    mov byte [di], '~'
-    mov byte [di+1], '1'
-    add di, 2
-    mov si, [tz_dot]
-    or si, si
-    jz .term
-    mov byte [di], '.'
-    inc di
-    xor cx, cx
-.ex:
-    mov al, [si]
-    or al, al
-    jz .term
-    inc si
-    call tz_leg
-    jc .ex
-    cmp cl, 3
-    jae .term
-    mov [di], al
-    inc di
-    inc cl
-    jmp short .ex
-.term:
-    mov byte [di], 0
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+; THE 8.3 MANGLE (SPEC.md 70.11.4, and it is SPEC.md 77.20's rule) is
+; apps/os88m83.inc's m83_mangle, %include'd by telnet.asm - the SAME code FTPD
+; runs, so a file downloaded by Zmodem and the same file uploaded by FTP land on
+; the same name by construction. tests/m83.py runs it against the reference.
 
 ; =============================================================================
 ; THE UI TASK'S HALF - everything here that touches a disk (SPEC.md 70.11.3)
@@ -2056,17 +1772,16 @@ tz_wake:
     ; the backstop - the screensaver's relight is the concrete one - cancelled a
     ; file whose dialog the user was still reading, and every later file was
     ; then refused for a dialog this end had already written off.
-    cmp byte [tz_dslot], 0xFF
+    mov al, [tz_dslot]
+    cmp al, 0xFF
     je .paintonly                   ; tz_wmap's XOR came back empty and we never
-    call tz_dgone                   ; worked out which slot it took
-    jnc .tmo
-    call tz_dcancel
-    jmp short .glass
+                                    ; worked out which slot it took
+    call OSAPI_WM_OWNSEG            ; CF=1: the dialog's OWN slot is free - it
+    jc .cancel                      ; is gone, and nobody called back
+    jmp short .tmo
 .paintonly:
     cmp byte [tz_pcan], 0
-    je .tmo
-    call tz_dcancel
-    jmp short .glass
+    jne .cancel
 .tmo:
     ; ...and SIXTY SECONDS, which is a backstop and not the
     ; mechanism: it is there for the window that never goes away rather than
@@ -2078,6 +1793,7 @@ tz_wake:
     sub ax, [tz_dlgt]
     cmp ax, TZ_DLGTMO
     jb .glass
+.cancel:
     call tz_dcancel
 .glass:
     cmp byte [te_txm], 0
@@ -2112,9 +1828,29 @@ tz_wake:
     call te_status
     call OSAPI_GFX_UNLOCK
 .out:
+    call tz_sfree                   ; ...and the staging area, once a finished
+                                    ; transfer's last commit has landed - and
+                                    ; FALLS INTO the ladder below, which is
+                                    ; this proc's own epilogue
+
+; -----------------------------------------------------------------------------
+; te_pop7 / te_pop6 / te_pop5 / te_pop4 - THE SHARED EPILOGUE: pop the last N
+; of AX BX CX DX SI DI ES, in push order, and return. A COLD routine that
+; pushed the first N of that list ends in `jmp te_popN` instead of its own pops
+; - three bytes where five to eight were. The byte paths (tz_byte, te_csidisp,
+; te_step's pass, te_tx_owed's frame) keep their own: the jump is 15 clocks.
+; It is OS88_POPLADDER's ladder (SPEC.md 20.5) WRITTEN OUT, for Note Pad's
+; reason: tools/stkbalance.py could not then see a macro's labels (it can since
+; shared round 2, SPEC.md 20.5). Every rung below is
+; jumped to, because the walker enters an unreferenced label at depth 0.
+; -----------------------------------------------------------------------------
+te_pop7:
     pop es
+te_pop6:
     pop di
+te_pop5:
     pop si
+te_pop4:
     pop dx
     pop cx
     pop bx
@@ -2185,19 +1921,11 @@ tz_chunk_set:
     mov [tz_chunk], bx              ; 4,097..8,192: the whole area, SINGLE-
     mov byte [tz_dbl], 0            ; buffered - the worker fills it, then waits
 .ok:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     clc
-    ret
+    jmp te_pop4                     ; ...and `pop` writes no flag
 .big:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     stc
-    ret
+    jmp te_pop4
 
 tz_dlgopen:
     push ax
@@ -2218,6 +1946,18 @@ tz_dlgopen:
                                     ; and inferred a cancel on a dialog nobody
                                     ; had touched
     or byte [tz_diag], 1
+    ; --- **THE STAGING AREA, BEFORE THE QUESTION** (SPEC.md 70.11.3) -------
+    ; A name the user cannot save is not worth asking for, so a refused claim
+    ; answers without a dialog. A claim already held is the batch's and is
+    ; reused; tz_sfree gives it back when the transfer is over.
+    cmp word [tz_sseg], 0
+    jne .held
+    mov ax, TZ_STGSZ / 1024
+    call OSAPI_MEM_CLAIM            ; every register but DX
+    mov al, TZR_MEM
+    jc .answer
+    mov [tz_sseg], dx
+.held:
     call tz_wmap                    ; ...BEFORE it exists, so the bit that
     mov [tz_base], ax               ; appears is the slot it took. BANKED rather
                                     ; than stored: a REFUSED open must not move
@@ -2256,8 +1996,10 @@ tz_dlgopen:
                                     ; refused poll: one stuck dialog turned a
                                     ; twelve-file batch into one slow skip and
                                     ; ten instant ones
-    mov byte [tz_rst], TZR_CANCEL
-    mov byte [tz_req], TZ_NONE
+    mov al, TZR_CANCEL
+.answer:
+    mov [tz_rst], al
+    mov byte [tz_req], TZ_NONE      ; ...LAST (SPEC.md 70.11.3)
     jmp short .out
 .up:
     or byte [tz_diag], 16
@@ -2268,10 +2010,9 @@ tz_dlgopen:
     jz .noslot                      ; no new bit: fall back to the backstop
     xor cx, cx
 .bit:
-    test ax, 1
-    jnz .gotslot
-    shr ax, 1
-    inc cl
+    shr ax, 1                       ; bit CL into the carry
+    jc .gotslot
+    inc cx
     cmp cl, MAX_WIN
     jb .bit
     jmp short .noslot
@@ -2284,13 +2025,7 @@ tz_dlgopen:
     mov [tz_dlgt], ax
     mov [tz_kick], ax
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp te_pop6
 
 ; -----------------------------------------------------------------------------
 ; tz_dlgdone - the dialog's completion proc
@@ -2332,7 +2067,7 @@ tz_dlgdone:
     jnc .sized                      ; question is asked HERE because the Drive
     mov byte [tz_rst], TZR_BIG      ; button may have moved it (the w4 review's
     call tz_bigmsg                  ; MAJOR 2) - and the refusal's sentence is
-.sized:                             ; composed here too, so tz_dig keeps its
+.sized:                             ; composed here too, so tz_bmsg keeps its
                                     ; one-task property
     mov byte [tz_req], TZ_NONE      ; ...LAST, and BEFORE the paint below, which
                                     ; is the whole of the cancel inference: on a
@@ -2344,6 +2079,8 @@ tz_dlgdone:
                                     ; the kernel does not repaint for a
                                     ; completion proc (SPEC.md 38.6)
 .out:
+    call tz_sfree                   ; a transfer that ENDED while its dialog was
+                                    ; up has no worker left to kick a wake
     pop di
     pop si
     pop cx
@@ -2406,6 +2143,32 @@ tz_dcancel:
     ret
 
 ; -----------------------------------------------------------------------------
+; tz_sfree - the staging claim back, once nothing can touch it (SPEC.md 70.11.3)
+; in:  THE UI TASK, like every store to [tz_sseg]; out: every register kept
+;
+; [te_zon] clear is the worker's half - it stores into the area only in
+; ZR_DATA, with the stream - and [tz_req] at TZ_NONE is the UI task's, since a
+; TZ_DATA still outstanding is a commit about to READ it. tz_end clears
+; [te_zon] with a commit outstanding, so the commit's own wake is the one that
+; frees.
+; -----------------------------------------------------------------------------
+tz_sfree:
+    cmp byte [te_zon], 0
+    jne .out
+    cmp byte [tz_req], TZ_NONE
+    jne .out
+    push dx
+    xor dx, dx
+    xchg dx, [tz_sseg]
+    or dx, dx
+    jz .none
+    call OSAPI_MEM_FREE
+.none:
+    pop dx
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; tz_commit - [tz_un] bytes of half [tz_uh] onto the disk
 ;
 ; The FIRST chunk is OSAPI_FILE_WRITE, which creates or replaces; every later
@@ -2421,13 +2184,15 @@ tz_commit:
     push cx
     push dx
     push si
+    push es
     mov cx, [tz_un]
     jcxz .ok                        ; an empty tail needs no append at all - and
                                     ; APPEND's own contract wants CX >= 1
-    mov bx, tz_stg
-    cmp byte [tz_uh], 0
+    mov es, [tz_sseg]               ; ES:BX is the half: the area is a CLAIM
+    xor bx, bx                      ; (SPEC.md 70.11.3), and every file slot
+    cmp byte [tz_uh], 0             ; takes its buffer as ES:BX
     je .h0
-    add bx, TZ_HALF
+    mov bh, TZ_HALF >> 8
 .h0:
     mov si, tz_name
     cmp byte [tz_made], 0
@@ -2457,20 +2222,19 @@ tz_commit:
     mov byte [te_dirty], 1          ; the progress moves per COMMITTED CHUNK and
     jmp short .out                  ; not per subpacket (SPEC.md 70.11.5)
 .err:
-    mov [tz_ferr], al               ; ...WHICH refusal, because "Disk error" is
-                                    ; what every one of them looks like from the
-                                    ; outside and FERR_NAME, FERR_FULL and
-                                    ; FERR_PROT are three different things to go
-                                    ; and do something about (SPEC.md 54.4.1)
+    call OSAPI_FERR_TEXT            ; ...WHICH refusal, because "Disk error" is
+    mov bx, tz_ewhy                 ; what every one of them looks like from the
+.ew:                                ; outside and FERR_NAME, FERR_FULL and
+    es lodsb                        ; FERR_PROT are three different things to go
+    mov [bx], al                    ; and do something about (SPEC.md 54.4.1).
+    inc bx                          ; The KERNEL'S words, copied (SPEC.md
+    or al, al                       ; 18.4.11): ES and SI come back off the
+    jnz .ew                         ; stack below, and this is the UI task
     mov byte [tz_rst], TZR_ERR
 .out:
     mov word [tz_un], 0
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    pop es
+    jmp te_pop5
 
 ; =============================================================================
 ; PROGRESS (SPEC.md 70.11.5)
@@ -2506,27 +2270,18 @@ tz_text:
     inc di
     loop .n
 .nd:
-    mov byte [di], ' '
-    mov byte [di+1], ' '
+    mov word [di], '  '
     add di, 2
     mov ax, [tz_pos]
     mov dx, [tz_pos+2]
-    call tz_num
-    mov byte [di], ' '
-    mov byte [di+1], '/'
+    call dec_u32
+    mov word [di], ' /'
     mov byte [di+2], ' '
     add di, 3
     mov ax, [tz_fsz]
     mov dx, [tz_fsz+2]
-    call tz_num
-    mov byte [di], 0
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    call dec_u32                    ; ...which ends the line with its NUL
+    jmp te_pop6
 
 ; --- tz_bigmsg - out SI = `Cluster 16,384 too big` (SPEC.md 47) --------------
 ; **THE FACT AND NOT THE WORD.** SPEC.md 70.11.3 says the status line names the
@@ -2540,91 +2295,32 @@ tz_bigmsg:
     mov di, tz_bmsg                 ; **ITS OWN BUFFER.** tz_msg is the progress
     mov si, tz_s_big                ; line and te_status rewrites it on every
                                     ; draw, so a refusal composed there is a
-                                    ; refusal nobody ever reads
-.c:
-    mov al, [si]
-    or al, al
-    jz .num
-    mov [di], al
-    inc si
-    inc di
-    jmp short .c
-.num:
+    call tz_scopy                   ; refusal nobody ever reads
     mov ax, [tz_clus]
     xor dx, dx
-    call tz_num
+    call dec_u32
     mov si, tz_s_big2
-.d:
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    or al, al
-    jnz .d
+    call tz_scopy
     mov si, tz_bmsg
     pop dx
     pop di
     pop ax
     ret
 
-; --- tz_num - DX:AX as decimal with thousands separators, at DI --------------
-tz_num:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov si, tz_dig + 11
-    mov byte [si], 0
-    xor bx, bx
-.d:
-    call tz_div10                   ; DX:AX = the quotient, CX = the remainder
-    dec si
-    add cl, '0'
-    mov [si], cl
-    inc bx
-    mov cx, ax
-    or cx, dx
-    jnz .d
-.emit:
+; --- tz_scopy - the NUL string at SI to DI, NUL and all; AL is spent ----------
+; out: SI past the NUL, DI ON it - so a second call appends
+tz_scopy:
     mov al, [si]
-    mov [di], al
     inc si
+    mov [di], al
     inc di
-    dec bx
-    jz .out
-    mov ax, bx
-    xor dx, dx
-    mov cx, 3
-    div cx
-    or dx, dx
-    jnz .emit
-    mov byte [di], ','
-    inc di
-    jmp short .emit
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    or al, al
+    jnz tz_scopy
+    dec di
     ret
 
-; --- tz_div10 - DX:AX / 10 -> DX:AX, remainder in CX -------------------------
-tz_div10:
-    push bx
-    mov bx, 10
-    mov cx, ax
-    mov ax, dx
-    xor dx, dx
-    div bx                          ; AX = the high quotient, DX = into the low
-    push ax
-    mov ax, cx
-    div bx
-    mov cx, dx
-    pop dx
-    pop bx
-    ret
+; --- the numbers are apps/os88dec.inc's dec_u32 with DEC_SEP (SPEC.md 20.5.2):
+; `16,384`, NUL-ended, DI on the NUL - so the next piece appends.
 
 ; -----------------------------------------------------------------------------
 ; tz_panel - the takeover, on the terminal's own area
@@ -2638,21 +2334,8 @@ tz_panel:
     push si
     push di
     call tz_text
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    call con_wpx
-    mov cx, [con_px]
-    add cx, ax
-    dec cx
-    mov ax, [con_px]
-    mov bx, [con_oy]
-    add bx, TE_TOPY
-    mov dx, [con_oy]
-    add dx, [te_chh]
-    sub dx, TE_STATH + 1            ; ...and NOT over the status line, which
-    call OSAPI_GFX_FILL             ; carries the same figures
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
+    call te_blank                   ; ...and NOT over the status line, which
+                                    ; carries the same figures
     mov si, tz_s_hdr
     mov dx, [con_oy]
     add dx, TE_TOPY + 12
@@ -2668,13 +2351,7 @@ tz_panel:
     mov ax, (CWHITE << 8) | CBLACK
     call OSAPI_FONT_RUN
     call tz_bar
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp te_pop6
 
 ; --- tz_bar - the outline, and the share of it that has landed ---------------
 tz_bar:
@@ -2713,11 +2390,7 @@ tz_bar:
     add dx, 7
     call OSAPI_GFX_FILL
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp te_pop4
 
 ; -----------------------------------------------------------------------------
 ; tz_frac - out AX = how much of the bar the committed bytes have filled
@@ -2845,12 +2518,8 @@ tz_s_hdr:   db 'Receiving by Zmodem', 0
 tz_s_wait:  db '(waiting)', 0
 tz_s_big:   db 'Cluster ', 0
 tz_s_big2:  db ' too big', 0
-tz_s_derr:  db 'Disk error', 0
-tz_s_dfull: db 'Folder full', 0
-tz_s_full:  db 'Disk full', 0
-tz_s_wprot: db 'Disk is write-protected', 0
-tz_s_prot:  db 'That name is protected', 0
 tz_s_tmo:   db 'Sender stopped', 0
+tz_s_nomem: db 'Not enough memory', 0
 tz_s_scan:  db 'Cancelled by the host', 0
 ; --- ONE STRING AND TWO LABELS, which is what MENU_DIS's shape allows ------
 ; The greyed spelling of a menu item is the plain one with a single prefix

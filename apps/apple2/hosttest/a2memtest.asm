@@ -28,7 +28,7 @@
 ;      a2_rom_rd reads the OTHER claim;
 ;   2. **THE WRITE FENCE, AND THE SCRATCH'S ZERO STATED DEVIATIONS**
 ;      (section 3.3): a write at $C000 and above is DROPPED - so the core's
-;      scratch at $CF00 is unreachable from the emulated machine and needs no
+;      scratch at $C100 is unreachable from the emulated machine and needs no
 ;      deviation paragraph at all, where the C64's $FFC0 needed two - and
 ;      $BFFF is still real RAM;
 ;   3. the DIRTY BIT and the WRITE WINDOW a write leaves behind (7.5): the

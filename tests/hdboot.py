@@ -28,7 +28,7 @@ half-fixed version:
     screen still never appear, because `spl_step` used to be a no-op until
     somebody else had started it and stage 2 was the only somebody there was;
  3. the CLOCK IS DRAWN IN FULL. That is the boot overlay's own signature:
-    `clk_init` is an OVLGATE, so a kernel that did not get the blob skips it
+    `clk_init` is an SPLGATE, so a kernel that did not get the blob skips it
     along with cpu_detect, font_init, desk_init and the settings parse -
     and comes up looking almost right, with two glyphs where the date goes and
     no drivers configured. A boot that merely REACHES the desktop proves

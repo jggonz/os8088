@@ -376,6 +376,39 @@ extern int           lm_evline[LM_MAXEV];
 extern int           lm_nev;
 
 /* ============================================================================
+ * THE PHASE STORE - four passes' private tables, laid over one another.
+ *
+ * ovl_pack runs its passes strictly one after another (lmwrite.c): the WML
+ * pass, the script's collect, the sheet, the sprites, the script's code
+ * generation, the resolve, the write. Four of them keep tables in bss that
+ * nothing outside the pass reads - the WML pass's one-element attribute
+ * table, the sheet's formula source and RPN buffer, the sprite reader's row
+ * offsets, and the code generator's locals and loop stack - and every one of
+ * those is FILLED BEFORE IT IS READ inside the pass that owns it. A pass that
+ * relied on a table arriving zeroed would already be wrong on the second Pack
+ * of a session, which finds the first one's bytes there. So the four phases
+ * share one base, and 2,032 bytes of resident bss become 768 (the WML pass's,
+ * the largest).
+ *
+ * IT IS DONE IN THE ASSEMBLY AND NOT AS A C UNION, and the reason is
+ * measured: SmallerC does not fold a label and a member offset, so every
+ * access through a union member - even one at offset 0 - loses the indexed
+ * addressing the plain array gets. A union of four structs cost +1,202 bytes
+ * of code for its 1,264 of bss; one union per slot +521 for 960. So each C
+ * declaration below stays the plain array it was, the code compiles exactly
+ * as it did, and apps/loom/lmpool.py - the pass that already runs over this
+ * package's compiled assembly - reads the line below and lays the named
+ * reservations from one base, refusing if a name is not a plain .bss array.
+ * The declarations each carry "PHASE STORE" so a reader of the file sees it.
+ *
+ * WHAT WOULD BREAK IT: a pass reading another pass's table - a later pass
+ * reading what an earlier one left - or one pass running inside another.
+ * Neither happens today; a new table that crosses passes stays off the line.
+ *
+ * lmpool share: lmw_anoff lmw_avoff lmw_aline lmw_anlen lmw_avlen lmw_valbuf | lmc_loctok lmc_locdecl lmc_brkn lmc_contn lmc_contat lmc_brk lmc_cont | lm_fxbuf lms_fsrc | lms_rowoff
+ * ==========================================================================*/
+
+/* ============================================================================
  * THE COMPILERS - the overlay's tenants (WEAVE-SPEC 1.2's LOOM.OVL list, in
  * its order: the WML compiler, the WJS compiler, the FX pre-compiler, the
  * atom interner, the bundle writer).

@@ -13,8 +13,9 @@
 ; another for a host, which turns each name into its slot. So the ORDER of
 ; these lines is an ABI: inserting one in the middle moves every entry after
 ; it, in a build where the two halves are assembled separately and nothing
-; would say so. **APPEND, never insert**, and `tests/unit/t_doscore.py` is
-; what notices.
+; would say so. **APPEND, never insert** - and the rule is the whole guard:
+; NOTHING checks this order. A `tests/unit/t_doscore.py` was named here as the
+; check and was never written.
 ;
 ; **`dos_keeph` CAME OFF THIS LIST** (SPEC.md 96.44.6) and that is not a
 ; breach of the rule above: nothing SHIPS an old core against a new host - the
@@ -23,6 +24,11 @@
 ; Makefile cannot produce. What it was is a pure window routine marked core,
 ; whose only caller was in the window half all along, and it was carrying the
 ; last two `OSAPI_*` far calls in the core.
+;
+; **...AND SO DID `dos_blaster_set`, `dos_err_line` AND `dos_hexd`** (SPEC.md
+; 96.44.15), for the same reason: each one's only caller is the window, so
+; each was a row only a host crossed, and with them their strings and helpers
+; came out of the core part and out of `kern_dos`'s image.
 ;
 ; THE TWO POPULATIONS ARE NOT THE SAME KIND OF THING. A DOSC_E is CODE and its
 ; slot is a `jmp near`, so a host calls it exactly as it did when the core was
@@ -37,14 +43,11 @@
     DOSC_E dos_be_read
     DOSC_E dos_be_vkind
     DOSC_E dos_be_write
-    DOSC_E dos_blaster_set
     DOSC_E dos_build_psp
     DOSC_E dos_date_init
     DOSC_E dos_drv_bank
-    DOSC_E dos_err_line
     DOSC_E dos_exe_setup
     DOSC_E dos_fh_setup
-    DOSC_E dos_hexd
     DOSC_E dos_hook_vectors
     DOSC_E dos_is_exe
     DOSC_E dos_load

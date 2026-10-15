@@ -5,18 +5,18 @@
 ; the UI task EXCEPT ap_la_get / ap_la_avail / ap_src_eof, which the worker
 ; also calls and which touch only the free-running ring counters.
 ;
-;   look-ahead ring   ap_la_get / ap_ring_put over a 32 KB heap claim, with
-;                     free-running 16-bit ap_la_wr / ap_la_rd (SPEC.md 86.5)
+;   look-ahead ring   ap_la_get over a 32 KB heap claim, with free-running
+;                     16-bit ap_la_wr / ap_la_rd (SPEC.md 86.5); the disk
+;                     reads land in it directly (ap_refill_chunk)
 ;   track open        apl_goto_cur -> apw_parse -> claim -> grant -> pre-roll
 ;                     -> OSAPI_SND_STREAM verb 0 (ring mode)
-;   refill            ap_refill_chunk: one cluster read, head-skipped and
-;                     tail-clamped into the ring (UI task only, SPEC.md 20.6/7)
+;   refill            ap_refill_chunk: one gulp read into the ring itself,
+;                     head-skipped and tail-clamped (UI task only, SPEC.md 20.6/7)
 ;   close / reap      ap_stream_close drains [ap_mixing] first (SPEC.md 45.2)
 ; =============================================================================
 
     APBUF ap_findbuf, 24           ; OSAPI_FIND_SZ
     APW  ap_lg_got                 ; scratch: ap_la_get byte count
-    APW  ap_rp_n                   ; scratch: ap_ring_put byte count
 
 ; =============================================================================
 ; ap_la_avail -> AX = bytes queued in the look-ahead ring
@@ -107,52 +107,6 @@ ap_la_get:
     pop dx
     pop cx
     pop bx
-    ret
-
-; =============================================================================
-; ap_ring_put - copy CX bytes from DS:SI into the look-ahead ring
-; in:  SI = source offset (this segment), CX = bytes (<= AP_LA_SZ)
-; out: ap_la_wr advanced by CX
-; clobbers: nothing (all pushed).  UI task only.
-; =============================================================================
-ap_ring_put:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov [ap_rp_n], cx
-    mov ax, [ap_la_seg]
-    mov es, ax
-    mov di, [ap_la_wr]
-    and di, AP_LA_MASK
-    mov dx, AP_LA_SZ
-    sub dx, di                     ; DX = run to the ring seam
-    cld
-    cmp cx, dx
-    jbe .single
-    push cx
-    mov cx, dx
-    rep movsb
-    pop cx
-    sub cx, dx
-    xor di, di
-    rep movsb
-    jmp .fin
-.single:
-    rep movsb
-.fin:
-    mov ax, [ap_rp_n]
-    add [ap_la_wr], ax
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -321,9 +275,19 @@ ap_free_ring:
     ret
 
 ; =============================================================================
-; ap_refill_chunk - read ONE cluster of the data chunk into the ring, with the
-;                   first chunk's head skipped and the last chunk's tail
+; ap_refill_chunk - read ONE gulp of the data chunk STRAIGHT INTO THE RING,
+;                   the first gulp's head skipped and the last one's tail
 ;                   clamped at ap_data_end.  UI task only.
+;
+; The disk lands at DISK = ap_la_wr - ap_skip, the ring index of the next file
+; byte: a head skip still owed (the first gulp of a track, whose data does not
+; start on a cluster) is bytes the disk writes and nobody publishes, so the
+; track starts with ap_la_wr = ap_la_rd = ap_skip (ap_prep_track) and DISK at
+; 0. DISK only ever moves by whole clusters until the gulp that ends the data,
+; and the ring is a whole number of clusters, so a gulp is floored to the seam
+; as well and never splits (in practice every gulp is AP_RD_CHUNK: a refill is
+; asked for with more than that free, SPEC.md 86.5.2). The read writes only
+; free bytes, and ap_la_wr moves after it - the worker sees nothing early.
 ; out: nothing (ap_src_done latched when the whole chunk has been read)
 ; =============================================================================
 ap_refill_chunk:
@@ -336,13 +300,22 @@ ap_refill_chunk:
     push es
     cmp byte [ap_src_done], 0
     jne .out
-    ; --- how big a gulp? min(AP_RD_CHUNK, free) floored to a cluster ---------
-    ; A read holds sch_lock and costs ~1-2 disk revolutions whatever it moves
-    ; (SPEC.md 34.5 / 86.5.2), so we want the FEWEST, biggest reads the ring
-    ; has room for - not one cluster at a time.
-    call ap_la_avail
+    ; --- how big a gulp? min(AP_RD_CHUNK, free, run to the seam), floored to
+    ; a cluster. A read holds sch_lock and costs ~1-2 disk revolutions
+    ; whatever it moves (SPEC.md 34.5 / 86.5.2), so we want the FEWEST,
+    ; biggest reads the ring has room for - not one cluster at a time.
+    mov di, [ap_la_wr]
+    sub di, [ap_skip]              ; DI = DISK, free-running
     mov bx, AP_LA_SZ
-    sub bx, ax                     ; BX = free bytes in the ring
+    add bx, [ap_la_rd]
+    sub bx, di                     ; BX = free bytes from DISK
+    and di, AP_LA_MASK             ; DI = the read's offset in the ring
+    mov ax, AP_LA_SZ
+    sub ax, di                     ; AX = the run to the seam
+    cmp bx, ax
+    jbe .seam
+    mov bx, ax
+.seam:
     cmp bx, AP_RD_CHUNK
     jbe .cap
     mov bx, AP_RD_CHUNK
@@ -372,11 +345,10 @@ ap_refill_chunk:
                                    ; across; CF: the folder is gone - the track
                                    ; ends, and says why
 .inplace:
-    ; read [ap_rd_pos, +ap_rd_len) into ap_scratch
-    push ds
-    pop es
+    ; read [ap_rd_pos, +ap_rd_len) into the ring at DI
+    mov es, [ap_la_seg]
+    mov bx, di
     mov si, [apw_name]
-    mov bx, ap_scratch
     mov cx, [ap_rd_len]
     mov ax, [ap_rd_pos]
     mov dx, [ap_rd_pos+2]
@@ -387,31 +359,22 @@ ap_refill_chunk:
     jc .ioerr                     ; an I/O error ends the data - and says why
     APADD apc_rbytes, ax
     ; DX:AX = got; it fits a word (AP_RD_CHUNK <= 16384)
-    mov bx, ax                     ; BX = got (low word; DX must be 0)
+    mov cx, ax                     ; CX = got (low word; DX must be 0)
     or dx, dx
     jz .g0
-    mov bx, [ap_rd_len]
+    mov cx, [ap_rd_len]
 .g0:
-    or bx, bx
-    jz .done_all                  ; nothing delivered -> at/after EOF
+    jcxz .done_all                ; nothing delivered -> at/after EOF
 
     ; usable = got - head-skip, then clamp so we never pass ap_data_end
-    mov si, ap_scratch
-    mov cx, bx                     ; CX = usable count
     mov ax, [ap_skip]
-    or ax, ax
-    jz .noskip
-    cmp ax, cx
-    jae .allskip
-    add si, ax
     sub cx, ax
-    mov word [ap_skip], 0
-    jmp .clamp
-.allskip:
-    sub word [ap_skip], bx        ; whole chunk was pre-data - carry the skip
-    jmp .advance
+    jae .noskip
+    neg cx                        ; the whole gulp was pre-data: skip -= got,
+    mov [ap_skip], cx             ; so DISK moves by got and nothing is
+    jmp short .advance            ; published
 .noskip:
-.clamp:
+    mov word [ap_skip], 0
     ; bytes of real audio still wanted = ap_data_end - (ap_data_off + ap_got)
     mov ax, [ap_data_off]
     mov dx, [ap_data_off+2]
@@ -427,28 +390,25 @@ ap_refill_chunk:
     jae .putall
     mov cx, bx                     ; clamp to the tail
 .putall:
-    or cx, cx
-    jz .advance
-    call ap_ring_put              ; SI = source, CX = bytes
-    ; ap_got += CX
-    xor dx, dx
-    mov ax, cx
-    add [ap_got], ax
-    adc [ap_got+2], dx
+    add [ap_la_wr], cx            ; PUBLISH, last: the bytes are in already
+    add [ap_got], cx              ; ap_got += CX
+    adc word [ap_got+2], 0
 .advance:
     ; ap_rd_pos += ap_rd_len
     mov ax, [ap_rd_len]
     xor dx, dx
     add [ap_rd_pos], ax
     adc [ap_rd_pos+2], dx
-    ; done if the next read position is at/after the data end
+    ; done if the next read position is at/after the data end - which is
+    ; the data's END and not an error: this used to fall into .ioerr below,
+    ; so every track's last gulp put "Cannot read the file" on the status
+    ; line for the seconds the ring took to play out
     mov ax, [ap_rd_pos]
     mov dx, [ap_rd_pos+2]
-    cmp dx, [ap_data_end+2]
+    sub ax, [ap_data_end]
+    sbb dx, [ap_data_end+2]
     jb .out
-    ja .done_all
-    cmp ax, [ap_data_end]
-    jb .out
+    jmp short .done_all
 .ioerr:
     mov word [ap_msg], apw_e_io    ; a bad sector or a pulled disk: the status
                                    ; line says so, not "End of playlist"
@@ -456,13 +416,7 @@ ap_refill_chunk:
     mov byte [ap_src_done], 1
 .out:
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ap_ret6
 
 ; =============================================================================
 ; ap_prime - fill the look-ahead ring before playback starts (UI context, so
@@ -535,6 +489,8 @@ ap_prep_track:
     call ap_filesize             ; CF, DX:AX = size
     jc .badfile
 
+    call ap_ensure_bufs           ; the look-ahead ring: the parser's header
+    jc .nomem                     ; window too (whatever it held is dead here)
     call apw_parse                ; CF = 1 rejected, apw_err set
     jc .parseerr
 
@@ -565,6 +521,8 @@ ap_prep_track:
     mov cx, ax
     and cx, bx                     ; low bits
     mov [ap_skip], cx
+    mov [ap_la_wr], cx            ; the ring starts EMPTY at the skip: the
+    mov [ap_la_rd], cx            ; first gulp lands at index 0 (ap_refill_chunk)
     not bx
     and ax, bx
     mov [ap_rd_pos], ax
@@ -572,28 +530,23 @@ ap_prep_track:
     mov di, ap_rd_cur              ; a new track: the cursor names no file
     call os88_rseq_new
 
-    mov word [ap_got], 0
-    mov word [ap_got+2], 0
-    mov byte [ap_src_done], 0
-    mov word [ap_la_wr], 0
-    mov word [ap_la_rd], 0
-    mov word [ap_total], 0
-    mov word [ap_consumed], 0
-    mov word [ap_consumed_prev], 0
-    mov word [ap_played], 0
-    mov word [ap_played+2], 0
-    mov byte [ap_ended], 0
-    mov byte [ap_lasthalf], 0
-    mov byte [ap_paused], 0
-    mov byte [ap_req], FR_NONE
-    mov word [ap_elapsed_s], 0
-    mov word [ap_sub], 0
+    xor ax, ax                    ; (FR_NONE is 0 too)
+    mov [ap_got], ax
+    mov [ap_got+2], ax
+    mov [ap_src_done], al
+    mov [ap_total], ax
+    mov [ap_consumed], ax
+    mov [ap_consumed_prev], ax
+    mov [ap_played], ax
+    mov [ap_played+2], ax
+    mov [ap_ended], al
+    mov [ap_lasthalf], al
+    mov [ap_paused], al
+    mov [ap_req], al
+    mov [ap_elapsed_s], ax
 
     call ap_calc_duration         ; ap_total_s from datlen / rate / bytes-per-s
-    call ap_calc_bpt              ; ap_bpt = rate / 18.2065
 
-    call ap_ensure_bufs
-    jc .nomem
     call ap_prime                 ; fill the look-ahead ring
     clc
     ret
@@ -655,8 +608,8 @@ ap_open_card:
     ; The kernel restarts a worker only where it PARKS, which for us is
     ; inside OSAPI_TASK_ALIVE at the top of the loop; we do not declare
     ; OSAPI_MEM_PARKSAFE, so the gfx-lock park is not in play.
-    OS88_WORKER_RESTARTABLE ap_worker
-.running:
+    OS88_WORKER_RESTARTABLE_NOKEEP ap_worker    ; AX was spent already
+.running:                           ; (SPAWN's slot), CF is the `clc` below
     mov byte [ap_state], AP_ST_PLAY
     mov word [ap_msg], ap_s_playing
     clc
@@ -832,23 +785,6 @@ ap_stage_half:
     pop dx
     pop cx
     pop bx
-    ret
-
-; =============================================================================
-; ap_calc_bpt - ap_bpt = rate / 18.2065  (bytes of PCM8 per system tick)
-;               rate * 3600 / 65536 is that to 0.011%; take the product's high
-;               word.  (The Tracker idiom, SPEC.md 45.15.)
-; =============================================================================
-ap_calc_bpt:
-    push ax
-    push dx
-    mov ax, [ap_rate]
-    mov dx, 3600
-    mul dx                         ; DX:AX = rate * 3600
-    mov [ap_bpt_lo], dx
-    mov word [ap_bpt_hi], 0
-    pop dx
-    pop ax
     ret
 
 ; =============================================================================
@@ -1142,6 +1078,7 @@ ap_add_file:
     APB ap_af_vol
     APB ap_af_flags
 
+%ifdef AP_HANDOFF                 ; (only the handoff asks, SPEC.md 86.11.1)
 ; =============================================================================
 ; ap_find_sibling - CF = 0 iff another live "AUDIO PLAYER" instance exists in a
 ;                   different region segment (SPEC.md 86.11.1). Entry-proc only.
@@ -1179,6 +1116,7 @@ ap_find_sibling:
 .found:
     clc
     ret
+%endif
 
 %if %isdef(AP_HANDOFF) || %isdef(APROF) ; the root move: the handoff's, and
                                   ; APROF's dump. The shipped package calls

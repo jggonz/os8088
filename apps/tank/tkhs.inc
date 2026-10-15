@@ -11,11 +11,12 @@
 ;    not beside the game. The file browser is the whole of how a user reaches
 ;    an application here, so a data file in an app folder is a misclick
 ;    waiting to happen.
-;  - **It is OSAPI_FILE_GOTO and not its quiet twin.** GOTO_Q moves the
-;    GLOBAL cwd and deliberately not the instance's, while FILE_FIND, _READ
-;    and _WRITE all resolve in the INSTANCE's folder - so a quiet move is
-;    undone by the very next call, and the save writes nothing at all while
-;    the load appears to work.
+;  - **The folder is reached through apps/os88data.inc**, which walks with
+;    OSAPI_FILE_GOTO_QM - the quiet stand that MOVES THE INSTANCE, so the
+;    file cell after it resolves there - banks APPDATA's cluster, and
+;    rewrites a file of unchanged length with one sector. This file used to
+;    walk with OSAPI_FILE_GOTO, a remount for DISPLAY at every step, and a
+;    save cost about six seconds of floppy (docs/plans/NAV-COST-PLAN.md).
 ;
 ; And one rule of this game's own: the write happens INSIDE the fsx bracket,
 ; at the moment the initials are committed. That is legal - the file API is
@@ -30,48 +31,49 @@
 TK_NHS    equ 6                 ; rows in the table
 TK_HSFSZ  equ 4 + TK_NHS * 4 + TK_NHS * 3
 
+; THE TABLE IS THE FILE. tk_hsbuf is the four-byte magic and tk_hs and tk_hsn
+; follow it in bss - asserted where they are declared - so the load reads
+; straight into the live table and the save writes it as it stands, with no
+; staging copy of either; tk_hs_init stamps the magic with the defaults, so
+; the table in memory is a valid file from the entry proc on.
+TK_HSMAG0 equ 'TK'              ; 'TK8', 1: so a stale or foreign file is
+TK_HSMAG1 equ '8' | (1 << 8)    ; refused rather than decoded
+
 tk_hs_file:  db 'TANK.HS', 0
-tk_hs_magic: db 'TK8', 1        ; so a stale or foreign file is refused rather
-                                ; than decoded
-tk_d_system: db 'SYSTEM', 0
-tk_d_appdat: db 'APPDATA', 0
+tk_hs_ip:    db 0               ; os88data.inc's in-place stamp for TANK.HS
 tk_s_namep:  db 'NAME ', 0
 tk_s_hshead: db 'HIGH SCORES', 0
 
-; The table a machine with no file has ever seen. Descending, because
-; tk_hs_submit walks from the bottom and stops at the first row it beats.
+; The table a machine with no file has ever seen, magic first. Descending,
+; because tk_hs_submit walks from the bottom and stops at the first row it
+; beats.
 tk_hs_def:
+    dw TK_HSMAG0, TK_HSMAG1
     dw 6000, 0, 5000, 0, 4000, 0, 3000, 0, 2000, 0, 1000, 0
 
 ; -----------------------------------------------------------------------------
-; tk_hs_init - the built-in table, before any file is read
+; tk_hs_init - the built-in table, before any file is read (or over a bad one)
 ; -----------------------------------------------------------------------------
 tk_hs_init:
     push ax
-    push bx
     push cx
     push si
     push di
+    push es
+    push ds
+    pop es
+    cld
     mov si, tk_hs_def
-    mov di, tk_hs
-    mov cx, TK_NHS * 2
-.s:
-    mov ax, [si]
-    mov [di], ax
-    add si, 2
-    add di, 2
-    loop .s
-    mov di, tk_hsn
-    mov cx, TK_NHS
-.n:
-    mov word [di], '--'
-    mov byte [di+2], '-'
-    add di, 3
-    loop .n
+    mov di, tk_hsbuf
+    mov cx, 2 + TK_NHS * 2
+    rep movsw                       ; the magic and the six scores...
+    mov al, '-'                     ; ...and no initials, which tk_hsn follows
+    mov cx, TK_NHS * 3
+    rep stosb
+    pop es
     pop di
     pop si
     pop cx
-    pop bx
     pop ax
     ret
 
@@ -166,11 +168,9 @@ tk_hs_movename:
 ; tk_ient_begin - the score made the table: take three initials for it
 ; -----------------------------------------------------------------------------
 tk_ient_begin:
-    mov byte [tk_ient], 1
-    mov byte [tk_ipos], 0
-    mov word [tk_ibuf], '  '
-    mov byte [tk_ibuf+2], ' '
-    mov byte [tk_ibuf+3], 0
+    mov word [tk_ient], 1           ; [tk_ient] = 1 and [tk_ipos] = 0, adjacent
+    mov word [tk_ibuf], '  '        ; ...and three blanks and a NUL
+    mov word [tk_ibuf+2], ' '
     ret
 
 ; -----------------------------------------------------------------------------
@@ -239,12 +239,9 @@ tk_ient_commit:
     add ax, si
     mov di, tk_hsn
     add di, ax
-    mov si, tk_ibuf
-    mov al, [si]
-    mov [di], al
-    mov al, [si+1]
-    mov [di+1], al
-    mov al, [si+2]
+    mov ax, [tk_ibuf]
+    mov [di], ax
+    mov al, [tk_ibuf+2]
     mov [di+2], al
 .done:
     mov byte [tk_ient], 0
@@ -259,140 +256,7 @@ tk_ient_commit:
 ; SYSTEM\APPDATA, and the file
 ; =============================================================================
 
-; tk_data_enter - bank where we are and go to SYSTEM\APPDATA on this volume.
-; out: CF=1 we did not get there and NOTHING was banked or moved.
-tk_data_enter:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    push ds
-    pop es
-    call OSAPI_FILE_HERE            ; DX = our cwd cluster, BL = our drive
-    mov [tk_dbclus], dx
-    mov [tk_dbdrv], bl
-    xor dx, dx                      ; the ROOT of that same volume
-    call OSAPI_FILE_GOTO
-    jc .back
-    mov si, tk_d_system
-    call tk_data_dive
-    jc .back
-    mov si, tk_d_appdat
-    call tk_data_dive
-    jc .back
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-.back:
-    call tk_data_home               ; a disk without the folder is a user's own
-    pop es                          ; disk, not an error: put the volume back
-    pop di                          ; and refuse
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
-
-tk_data_leave:
-    pushf
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    call tk_data_home
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    popf
-    ret
-
-tk_data_home:
-    push ax
-    push bx
-    push dx
-    mov dx, [tk_dbclus]
-    mov bl, [tk_dbdrv]
-    call OSAPI_FILE_GOTO
-    pop dx
-    pop bx
-    pop ax
-    ret
-
-; tk_data_dive - step into the folder named at SI. CF=1 there is none.
-tk_data_dive:
-    push ax
-    push cx
-    push si
-    push di
-    xor cx, cx
-.each:
-    push ds                         ; ES EVERY TIME: nothing promises it
-    pop es                          ; survives a far call into the kernel
-    mov di, tk_dfind
-    call OSAPI_FILE_FIND
-    jc .none
-    cmp word [tk_dfind + 14], OSAPI_FT_DIR
-    jne .each                       ; only a FOLDER can be dived into, and
-                                    ; type 1 is a PACKAGE, not "a file"
-    push cx
-    push si
-    mov di, tk_dfind
-    call tk_data_same
-    pop si
-    pop cx
-    jc .each
-    mov dx, [tk_dfind + 16]
-    mov bl, [tk_dbdrv]
-    call OSAPI_FILE_GOTO
-    jc .none
-    pop di
-    pop si
-    pop cx
-    pop ax
-    clc
-    ret
-.none:
-    pop di
-    pop si
-    pop cx
-    pop ax
-    stc
-    ret
-
-; tk_data_same - is the NUL name at SI the one at DI? CF=0 yes.
-tk_data_same:
-    push ax
-.n:
-    mov al, [si]
-    cmp al, [di]
-    jne .no
-    or al, al
-    jz .yes
-    inc si
-    inc di
-    jmp short .n
-.yes:
-    pop ax
-    clc
-    ret
-.no:
-    pop ax
-    stc
-    ret
+%include "os88data.inc"
 
 ; -----------------------------------------------------------------------------
 ; tk_hs_load - read the table once, from the first paint. Anything wrong with
@@ -412,36 +276,22 @@ tk_hs_load:
     push es
     push ds
     pop es
-    call tk_data_enter
-    jc .done
     mov si, tk_hs_file
-    mov bx, tk_hsbuf
-    mov cx, TK_HSFSZ
-    xor dx, dx
-    call OSAPI_FILE_READ
-    call tk_data_leave              ; ...and we stand where we started again,
-    jc .done                        ; whatever the read answered
+    mov bx, tk_hsbuf                ; STRAIGHT INTO THE TABLE: a file that is
+    mov cx, TK_HSFSZ                ; not ours is caught below and the defaults
+    xor dx, dx                      ; written back over whatever it left
+    call od_read                    ; ...and we stand where we started again,
+    jc .bad                         ; whatever the read answered
     or dx, dx
-    jnz .done
+    jnz .bad
     cmp ax, TK_HSFSZ
-    jne .done
-    mov si, tk_hsbuf
-    mov di, tk_hs_magic
-    mov cx, 4
-.mag:
-    mov al, [si]
-    cmp al, [di]
-    jne .done
-    inc si
-    inc di
-    loop .mag
-    mov si, tk_hsbuf + 4
-    mov di, tk_hs
-    mov cx, TK_NHS * 4
-    call tk_bcopy
-    mov di, tk_hsn
-    mov cx, TK_NHS * 3
-    call tk_bcopy
+    jne .bad
+    cmp word [tk_hsbuf], TK_HSMAG0
+    jne .bad
+    cmp word [tk_hsbuf+2], TK_HSMAG1
+    je .done
+.bad:
+    call tk_hs_init
 .done:
     pop es
     pop di
@@ -467,42 +317,16 @@ tk_hs_save:
     push es
     push ds
     pop es
-    mov si, tk_hs_magic
-    mov di, tk_hsbuf
-    mov cx, 4
-    call tk_bcopy
-    mov si, tk_hs
-    mov cx, TK_NHS * 4
-    call tk_bcopy
-    mov si, tk_hsn
-    mov cx, TK_NHS * 3
-    call tk_bcopy
-    call tk_data_enter
-    jc .gone
     mov si, tk_hs_file
     mov bx, tk_hsbuf
     mov cx, TK_HSFSZ
-    xor dx, dx
-    call OSAPI_FILE_WRITE
-    call tk_data_leave
-.gone:
+    mov di, tk_hs_ip
+    call od_write                   ; one sector, after the session's first
     pop es
     pop di
     pop si
     pop dx
     pop cx
     pop bx
-    pop ax
-    ret
-
-; tk_bcopy - CX bytes DS:SI -> DS:DI, advancing both
-tk_bcopy:
-    push ax
-.each:
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    loop .each
     pop ax
     ret

@@ -750,15 +750,12 @@ def speaker_arm(tag="vga"):
 # the Sound Blaster machine: FM
 # ---------------------------------------------------------------------------------------------
 def driver_symbols():
-    names = ("opl_own", "opl_b0")
-    source = open(os.path.join(ROOT, "drivers", "sound", "sound.asm")).read()
-    with tempfile.TemporaryDirectory() as td:
-        p, b = os.path.join(td, "probe.asm"), os.path.join(td, "probe.bin")
-        open(p, "w").write(source + "\n" + "\n".join("dw " + n for n in names))
-        subprocess.run(["nasm", "-f", "bin", "-I", "drivers/", "-I", "drivers/sound/", "-I", "apps/",
-                        "-I", "build/", "-o", b, p], cwd=ROOT, check=True)
-        raw = open(b, "rb").read()
-        return dict(zip(names, struct.unpack("<%dH" % len(names), raw[-2 * len(names):])))
+    # off the Makefile's own recipe and checked against build/sound.bin
+    # (tools/os88drvsym.py) - a hand-written line without -DPICOMEM is 341
+    # bytes out (docs/plans/HANDOFF-APPS-SHARED.md 6.2)
+    import os88drvsym
+    s = os88drvsym.symbols("sound.bin")
+    return {n: s[n] for n in ("opl_own", "opl_b0")}
 
 
 def fm_arm(tag="vga"):

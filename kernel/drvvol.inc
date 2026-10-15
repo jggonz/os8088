@@ -119,14 +119,32 @@ drv_mounted:
 ; worked by DRIVE - a format and a driver load do not resolve a name in a
 ; directory - and the first caller that wrote a file BY NAME after a module
 ; load found it immediately. Four bytes shorter, and no far call.
+;
+; **A FAILED MOUNT IS NOT BANKED** (SPEC.md 51.5.2.1). With [dsk_mntok] shut
+; there is no validated position to go back to, and going back anyway is a
+; mount of whatever is in the drive - an EMPTY A: on a machine booted from C:,
+; three int 13h retries before the screen saver's first frame. It also never
+; healed: the restore fails the way the first mount did, so the next bracket
+; banks the same drive again. So it banks the BOOT volume's root, which is
+; where drv_mounted is about to stand, and drv_vol_back's compare then finds
+; nothing moved. The pushf is the contract's: this preserves the flags.
 ; -----------------------------------------------------------------------------
 drv_vol_bank:
+    pushf
     push ax
+    xor ax, ax                  ; the boot volume's ROOT, cluster 0
+    cmp [dsk_mntok], al
+    je .cwd                     ; the gate is shut: nothing validated to keep
     mov ax, [dsk_cwd]
+.cwd:
     mov [drv_vol_cwd], ax
+    mov al, [dsk_bootvol]       ; `mov` writes no flag, so the compare above
+    je .drv                     ; still decides this one too
     mov al, [disk_drive]
+.drv:
     mov [drv_vol_drv], al
     pop ax
+    popf
     ret
 
 drv_vol_back:
@@ -246,12 +264,7 @@ drv_find:
     jnz .no
     mov ax, cx                  ; CF = 0 from the `test`, which `mov` keeps
 .out:
-    pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp dskw_isempty.out        ; the same five pops (size pass 10, -3)
 .no:
     stc
     jmp short .out

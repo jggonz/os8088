@@ -183,6 +183,10 @@ def gameplay_tracks():
     c=_track(6,-3,[_INTRO,_MARCH,_THEME_LOW+_THEME_HI,_MARCH,_BRIDGE,_FANFARE,_THEME_HI+_THEME_LO],1)
     return [a,b,c]
 
+# Gunfire, destruction, player loss and roll on FM: (Hz, BIOS ticks).
+COMBAT_FX=[('n_gunfx',[(180,1),(90,1),(0,1)]),('n_boomfx',[(80,2),(40,2),(0,1)]),
+           ('n_lossfx',[(60,3),(30,3),(0,1)]),('n_rollfx',[(120,1),(90,1),(60,1),(0,1)])]
+
 def assembly(data,audio):
     out=['; Build-time cartridge/native gameplay tables.']
     for name in ('velocity','circle','centers','reverse'):
@@ -199,12 +203,22 @@ def assembly(data,audio):
     for i,positions in enumerate(data['starts']):
         out.append('n_starts%d:'%i)
         out.extend('    dw %d,%d'%tuple(p) for p in positions)
-    out.append('n_bonuses: dd '+','.join(map(str,data['bonuses'])))
-    out.append('n_stageevents: dw '+','.join('n_events%d'%i for i in range(32)))
+    # Bonuses are stored in tens (the cartridge's are 4 BCD digits x 10).
+    if any(v%10 or not 0<=v//10<65536 for v in data['bonuses']):raise ValueError('bonus table')
+    out.append('n_bonuses: dw '+','.join(str(v//10) for v in data['bonuses']))
+    # Events: distance word, wave byte; identical schedules share one list.
+    names,lists=[],{}
     for i,events in enumerate(data['stages']):
-        out.append('n_events%d:'%i)
-        out.extend('    dw %d,%d'%tuple(e) for e in events)
-        out.append('    dw 65535,0')
+        key=tuple(map(tuple,events))
+        if key not in lists:
+            lists[key]='n_events%d'%i
+            if any(not 0<=d<65535 or not 0<=k<256 for d,k in events):raise ValueError('stage event')
+        names.append(lists[key])
+    out.append('n_stageevents: dw '+','.join(names))
+    for events,name in lists.items():
+        out.append(name+':')
+        for d,k in events:out+=['    dw %d'%d,'    db %d'%k]
+        out+=['    dw 65535','    db 0']
     out.append('n_waves:')
     out.extend('    dw '+','.join(map(str,w)) for w in data['waves'])
     out.append('n_paths: dw '+','.join('n_path%d'%i for i in range(39)))
@@ -212,15 +226,41 @@ def assembly(data,audio):
         out.append('n_path%d:'%i)
         out.extend('    dw %d,%d'%tuple(p) for p in points)
         out.append('    dw 32767,32767')
-    out.append('n_soundtab: dw '+','.join('n_sound%d'%i for i in range(len(audio))))
+    # A note is ONE byte: an index into the (Hz, ticks) pair table, most
+    # frequent pairs first (n_notehz words, n_noteticks bytes). 254 is a
+    # literal note - Hz word, tick byte - for pairs past the 254 the table
+    # holds; 255 is followed by a word, the loop target or 0. Identical
+    # streams (the original-art cues) share one copy. The four combat FM
+    # arrangements (audio.inc n_effect) are native and live here too.
+    names,streams=[],{}
     for i,s in enumerate(audio):
-        out.append('n_sound%d:'%i)
+        key=repr(sorted(s.items()))
+        streams.setdefault(key,(i,s));names.append('n_sound%d'%streams[key][0])
+    out.append('n_soundtab: dw '+','.join(names))
+    body=[]
+    for i,s in streams.values():
         if 'loop_at' in s:                     # gameplay tracks: ticks, interior loop
-            for j,(hz,t) in enumerate(s['notes']):
-                if j==s['loop_at']:out.append('n_sound%d_loop:'%i)
-                out.append('    dw %d,%d'%(hz,t))
-            out.append('    dw 65535,n_sound%d_loop'%i)
-            continue
-        out.extend('    dw %d,%d'%(hz,max(1,(t*182+300)//600)) for hz,t in s['notes'])
-        out.append('    dw 65535,%s'%('n_sound%d'%i if s['loop'] else '0'))
+            notes=[(hz,t) for hz,t in s['notes']]
+            body.append(('n_sound%d'%i,notes,s['loop_at'],'n_sound%d_loop'%i))
+        else:
+            notes=[(hz,max(1,(t*182+300)//600)) for hz,t in s['notes']]
+            body.append(('n_sound%d'%i,notes,None,'n_sound%d'%i if s['loop'] else '0'))
+    out.append('n_combatfx: dw '+','.join(name for name,_ in COMBAT_FX))
+    for name,notes in COMBAT_FX:body.append((name,notes,None,'0'))
+    count={}
+    for _,notes,_,_ in body:
+        for note in notes:
+            if not 0<=note[0]<65536 or not 0<note[1]<256:raise ValueError('sound note')
+            count[note]=count.get(note,0)+1
+    pairs=sorted(count,key=lambda n:(-count[n],n))[:254]
+    index={n:i for i,n in enumerate(pairs)}
+    out.append('n_notehz: dw '+','.join(str(hz) for hz,_ in pairs))
+    out.append('n_noteticks: db '+','.join(str(t) for _,t in pairs))
+    for name,notes,loop_at,target in body:
+        out.append(name+':')
+        for j,note in enumerate(notes):
+            if j==loop_at:out.append(target+':')
+            out.append('    db %d'%index[note] if note in index else '    db 254\n    dw %d\n    db %d'%note)
+        out.append('    db 255')
+        out.append('    dw '+target)
     return out

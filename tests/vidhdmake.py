@@ -100,9 +100,12 @@ def main():
         vid.encode_canvases(cvs, g, v88, 15.0, title="hd", keysecs=1.0)
         ide = [d[1] == "hd" and d[2][0] == "IDE" for d in G.DISKS].index(True)
         miss = G.hd_missing(os88build.at("build"))
-        if miss:
-            print("   SKIP: build/ has no %s" % ", ".join(miss))
-            return 0
+        if miss:            # the row DECLARES these (`wants`), so the runner
+            # has built them or skipped the row; absent here is a broken tree,
+            # and the SKIP-and-exit-0 this was scored `ok` in a fraction of
+            # its 65s with nothing tested
+            print("   FAIL: build/ has no %s - `make` first" % ", ".join(miss))
+            return 1
         cmd, img = G.disk_argv(v88, ide, out=os.path.join(tmp, "V.VHD"),
                                build=os88build.at("build"))
         for flag, val in zip(("--cyls", "--heads", "--spt"), MARTY_GEOM):

@@ -24,7 +24,8 @@ were written the same afternoon. So:
      os88geom deliberately refuses to evaluate, so t_mirror cannot hold them:
      CFG_FBUF went 131 -> 141 when #248 added two port-pin keys, and the
      second reader then disagreed with the machine about a 132-141-byte file
-     with nothing failing. (DVOL_MAX and SC_MAX are plain integers and are
+     with nothing failing - and 141 -> 152 under #252, which this row
+     caught at the merge. (DVOL_MAX and SC_MAX are plain integers and are
      os88geom's.)
 
   E  every shipped SYSTEM image carries SYSTEM/DIA/DESKCAL.O88, byte for

@@ -98,7 +98,7 @@ A2_RUN_SLICE equ 0                  ; the wall-slice budget was spent
 A2_RUN_JAM   equ 1                  ; a JAM opcode; the machine stops
 
 ; --- the core's scratch, IN THE EMULATED MACHINE (APPLE2-SPEC section 3.3) ---
-; 256 bytes at $CF00-$CFFF of the 64KB claim, on C64-SPEC §3.5's mechanism and
+; 256 bytes at $C100-$C1FF of the RAM claim, on C64-SPEC §3.5's mechanism and
 ; for its reason: a hot counter in the package's own bss is a TCG slow path
 ; under QEMU when that page also holds translated code, and it cost RUNCPM 5x
 ; on the whole Z80 core (LESSONS.md 13).
@@ -109,18 +109,25 @@ A2_RUN_JAM   equ 1                  ; a JAM opcode; the machine stops
 ; write can reach it - the write ladder drops everything above $C0FF and the
 ; read ladder answers the soft switches, the slot ladder or the ROM. THE FETCH
 ; TAKES THE SAME LADDER: a fetch inside $C000-$CFFF goes through a2_rd_bx and
-; is never biased to RAM, which is what stops PC = $CF00 reading the scratch
+; is never biased to RAM, which is what stops PC = $C110 reading the scratch
 ; as code. `make a2cputest` row 7 is that assertion.
 ;
 ; THE CONDITION THAT MAKES THAT TRUE IS WRITTEN HERE BECAUSE IT IS THE THING
 ; THAT CAN STOP BEING TRUE (APPLE2-SPEC section 3.3): it holds only while
-; nothing models a Language Card and no card claims $C800-$CFFF expansion ROM.
-; Both are refused by this port (section 10.4). A future wave that adds either
-; MUST MOVE THE SCRATCH FIRST.
-A2_SCR_BASE  equ 0xCF00
+; nothing models a Language Card and no card claims SLOT 1's ROM at $C100-$C1FF
+; or $C800-$CFFF expansion ROM. All are refused by this port (section 10.4). A
+; future wave that adds one MUST MOVE THE SCRATCH FIRST.
+;
+; $C100 AND NOT $CF00, FROM APPS SIZE PASS 1 (APPLE2-SPEC section 3.1): the RAM
+; claim ends at the scratch page's last byte, and at $C1FF that is 49KB where
+; $CFFF was 52. Both pages are slot space - read as $FF, written nowhere,
+; fetched through a2_rd_bx - so the move changes no answer the emulated
+; machine can get, and no instruction's length: every access is a 16-bit
+; displacement either way.
+A2_SCR_BASE  equ 0xC100
 ; ...and the SAME address as a SIGNED displacement, for any access that
 ; reaches it through a base register. NASM 2.16 tightened `number-overflow`:
-; `[bx + 0xCF00]` is a 16-bit displacement and 52,992 is outside the signed
+; `[bx + 0xC100]` is a 16-bit displacement and 49,408 is outside the signed
 ; range it insists on, so `-w+error` refuses the line - `byte data exceeds
 ; bounds`, at a line with no `db` on it. The encoding is identical either way;
 ; only the spelling moves.
@@ -173,9 +180,9 @@ A2_SCR_CLKB  equ 0x36               ; THE EMULATED CLOCK'S BASE FOR THIS RUN
                                     ;   DEAD. The C sets it to `clock + budget`
                                     ;   before each a2_run and re-reads the
                                     ;   clock after
-A2_SCR_END   equ 0x38               ; ...and $CF38-$CFFF is spare. The whole
-                                    ;   page is reserved because $CF00-$CFFF
-                                    ;   is the expansion-ROM window this port
+A2_SCR_END   equ 0x38               ; ...and $C138-$C1FF is spare. The whole
+                                    ;   page is reserved because $C100-$C1FF
+                                    ;   is slot 1's ROM window this port
                                     ;   refuses to model, so reserving less
                                     ;   would buy nothing
 
@@ -339,7 +346,7 @@ a2_fetch:
 ;
 ; $C000-$CFFF IS THE TRUE SLOW FETCH PATH and is never biased to RAM. A byte
 ; there is a soft switch, a slot answering $FF, or the core's own scratch page
-; at $CF00 - and none of the three is memory the emulated machine may execute
+; at $C100 - and none of the three is memory the emulated machine may execute
 ; out of a bias. Every fetch in that range re-enters here and comes back
 ; through a2_rd_bx, which is exactly what a fetch out of an I/O page costs and
 ; what it is meant to cost.
@@ -500,7 +507,7 @@ a2_rd_bx:
 ;
 ; THE WRITE FENCE IS $C000 AND NOT $D000. On a 48K II+ everything above $BFFF
 ; is soft switches, slot space or ROM: $C000-$C0FF calls out, and EVERYTHING
-; ABOVE $C0FF IS DROPPED. That is also what makes the core's scratch at $CF00
+; ABOVE $C0FF IS DROPPED. That is also what makes the core's scratch at $C100
 ; safe with ZERO stated deviations (section 3.3), where the C64 needed two.
 a2_wr_bx:
     cmp bh, 0xC0
@@ -2141,6 +2148,7 @@ _a2_bread:
     pop bp
     ret
 
+%ifndef A2_SHIP                     ; no caller in the package (apps size pass 1)
 ; void a2_cut(void) - end the run that is in progress at once, WITHOUT
 ; disturbing the cycle accounting: the unspent countdown moves into CARRY and
 ; a2_expire puts it back, so `ran = asked - cnt` is still exact. a2io.c calls
@@ -2157,6 +2165,7 @@ _a2_cut:
     pop bx
     pop ds
     ret
+%endif                              ; A2_SHIP
 
 ; void a2_rebias(void) - PC moved under the core's feet (a reset, a poke).
 ; Emptying the fetch region forces the next fetch through a2_rebias_go, so no

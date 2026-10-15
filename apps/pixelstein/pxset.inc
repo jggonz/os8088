@@ -12,13 +12,14 @@
 ;
 ;  - **The file lives in SYSTEM\APPDATA on OUR OWN volume** (SPEC.md 19.9),
 ;    not beside the package.
-;  - **It is OSAPI_FILE_GOTO and not its quiet twin.** GOTO_Q moves the GLOBAL
-;    cwd and deliberately not the instance's, while FILE_FIND, _READ and
-;    _WRITE all resolve in the INSTANCE's folder.
+;  - **The folder is reached through apps/os88data.inc**, which walks with
+;    OSAPI_FILE_GOTO_QM - the quiet stand that MOVES THE INSTANCE, so the
+;    file cell after it resolves there - banks APPDATA's cluster, and
+;    rewrites a file of unchanged length with one sector.
 ;
-; This is the FIFTH copy of the eighty lines below. It is not folded into an
-; apps/os88data.inc here for csset's reason: four shipped packages carry the
-; others and moving them is a change to four packages rather than to this one.
+; This was the FIFTH copy of an eighty-line walker built out of
+; OSAPI_FILE_GOTO, a remount for DISPLAY at every step; it is the shared
+; include now, in all five packages (docs/plans/NAV-COST-PLAN.md).
 ;
 ; WHEN IT SAVES: on the UI task, from the menu handler and from the V key in
 ; a window; a V key inside the bracket banks px_cfgdirty and the file is
@@ -29,7 +30,7 @@
 ;
 ; A WRITE THAT FAILED IS NOT REMEMBERED AS ONE THAT LANDED (review, wave 2):
 ; the record is built in px_setnew and copied into px_setbuf - whose magic IS
-; the claim "this is what the disk holds" - only after OSAPI_FILE_WRITE
+; the claim "this is what the disk holds" - only after od_write
 ; answers CF=0, and px_cfgdirty is cleared on that same answer. The first
 ; cut filled px_setbuf first, so one refused directory or one write-protected
 ; floppy made every later save of the same settings take the nothing-changed
@@ -43,8 +44,8 @@ px_set_magic: db 'PXC', 2           ; so a stale or foreign file is refused
                                     ; seven-byte file of 1 is refused whole
                                     ; and the defaults stand, once)
                                     ; rather than decoded
-px_sd_system: db 'SYSTEM', 0
-px_sd_appdat: db 'APPDATA', 0
+px_set_ip:    db 0                  ; os88data.inc's in-place stamps:
+px_hs_ip:     db 0                  ; PXSTEIN.CFG, and pxhs.inc's PXSTEIN.HS
 
 ; What each byte is, and the largest value it may hold.
 px_set_at:  dw px_detail, px_res, px_sizeix, px_rowsix, px_modepick, px_sound, px_mouse
@@ -52,142 +53,7 @@ px_set_at:  dw px_detail, px_res, px_sizeix, px_rowsix, px_modepick, px_sound, p
 px_set_max: db PXD_TEX, 1, PX_NSIZES - 1, 0, 1, 1, 1, 1
 PX_SETN     equ 8
 
-; -----------------------------------------------------------------------------
-; px_set_enter / px_set_leave - stand in SYSTEM\APPDATA on our own volume, and
-;                               come back to where we were standing.
-;                               CF=1 there is no such folder.
-; -----------------------------------------------------------------------------
-px_set_enter:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    push ds
-    pop es
-    call OSAPI_FILE_HERE            ; DX = our cwd cluster, BL = our drive
-    mov [px_sdclus], dx
-    mov [px_sddrv], bl
-    xor dx, dx                      ; the ROOT of that same volume
-    call OSAPI_FILE_GOTO
-    jc .back
-    mov si, px_sd_system
-    call px_set_dive
-    jc .back
-    mov si, px_sd_appdat
-    call px_set_dive
-    jc .back
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-.back:
-    call px_set_home                ; a disk without the folder is a user's own
-    pop es                          ; disk, not an error: put the volume back
-    pop di                          ; and refuse
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
-
-px_set_leave:
-    pushf
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    call px_set_home
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    popf
-    ret
-
-px_set_home:
-    push ax
-    push bx
-    push dx
-    mov dx, [px_sdclus]
-    mov bl, [px_sddrv]
-    call OSAPI_FILE_GOTO
-    pop dx
-    pop bx
-    pop ax
-    ret
-
-; px_set_dive - step into the folder named at SI. CF=1 there is none.
-px_set_dive:
-    push ax
-    push cx
-    push si
-    push di
-    xor cx, cx
-.each:
-    push ds                         ; ES EVERY TIME: nothing promises it
-    pop es                          ; survives a far call into the kernel
-    mov di, px_sdfind
-    call OSAPI_FILE_FIND
-    jc .none
-    cmp word [px_sdfind + 14], OSAPI_FT_DIR
-    jne .each                       ; only a FOLDER can be dived into
-    push cx
-    push si
-    mov di, px_sdfind
-    call px_set_same
-    pop si
-    pop cx
-    jc .each
-    mov dx, [px_sdfind + 16]
-    mov bl, [px_sddrv]
-    call OSAPI_FILE_GOTO
-    jc .none
-    pop di
-    pop si
-    pop cx
-    pop ax
-    clc
-    ret
-.none:
-    pop di
-    pop si
-    pop cx
-    pop ax
-    stc
-    ret
-
-; px_set_same - is the NUL name at SI the one at DI? CF=0 yes.
-px_set_same:
-    push ax
-.n:
-    mov al, [si]
-    cmp al, [di]
-    jne .no
-    or al, al
-    jz .yes
-    inc si
-    inc di
-    jmp short .n
-.yes:
-    pop ax
-    clc
-    ret
-.no:
-    pop ax
-    stc
-    ret
+%include "os88data.inc"
 
 ; -----------------------------------------------------------------------------
 ; px_set_load - read the eight bytes once. Anything wrong with the file leaves
@@ -209,14 +75,11 @@ px_set_load:
     push es
     push ds
     pop es
-    call px_set_enter
-    jc .bad
     mov si, px_set_file
     mov bx, px_setbuf
     mov cx, PX_SETFSZ
     xor dx, dx
-    call OSAPI_FILE_READ
-    call px_set_leave               ; ...and we stand where we started again,
+    call od_read                    ; ...and we stand where we started again,
     jc .bad                         ; whatever the read answered
     or dx, dx
     jnz .bad
@@ -344,16 +207,14 @@ px_set_save:
     inc bx
     cmp bx, PX_SETN
     jb .each
-    call px_set_enter
-    jc .gone                        ; no folder: px_setbuf and px_cfgdirty
-                                    ; stand, and the next save tries again
     mov si, px_set_file
     mov bx, px_setnew
     mov cx, PX_SETFSZ
-    xor dx, dx
-    call OSAPI_FILE_WRITE
-    call px_set_leave               ; (flags preserved: the write's carry)
-    jc .gone                        ; refused or short: likewise
+    mov di, px_set_ip
+    call od_write                   ; one sector, after the session's first
+    jc .gone                        ; no folder, refused or short: px_setbuf
+                                    ; and px_cfgdirty stand, and the next
+                                    ; save tries again
     mov si, px_setnew               ; it landed: THIS is what the disk holds
     mov di, px_setbuf
     mov cx, PX_SETFSZ

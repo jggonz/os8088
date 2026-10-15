@@ -7,7 +7,7 @@
 package path (`mn_onrclick` -> `mn_hitcell` -> `mn_flag_toggle`), and only the
 two together are the feature. So every case below is driven with a REAL right
 press through QEMU's msmouse and read back out of Minesweeper's own bss -
-`mn_flags`, `mn_state`, `mn_revealed` - rather than off the screen: a flag is
+`mn_flags`, `mn_cell`, `mn_revealed` - rather than off the screen: a flag is
 16 pixels of red pennant and a screenshot cannot tell "the handler ran" from
 "the cell happened to redraw".
 
@@ -164,9 +164,11 @@ def cell_xy(rect, col, row):
 
 
 def state(m, seg, cell):
-    """One cell's MN_S_* byte, straight out of the package's bss."""
-    base = dispapps.img_size("mines") + dispapps.bss_off("mines", "mn_state")
-    return m.read((seg << 4) + base + cell, 1)[0]
+    """One cell's MN_S_* state, decoded out of the package's bss: `mn_cell`
+    is one byte a cell (SPEC.md 23) - MN_C_OPEN 0x40, MN_C_FLAG 0x20."""
+    base = dispapps.img_size("mines") + dispapps.bss_off("mines", "mn_cell")
+    b = m.read((seg << 4) + base + cell, 1)[0]
+    return MN_S_OPEN if b & 0x40 else MN_S_FLAG if b & 0x20 else MN_S_COVER
 
 
 def boot():
@@ -258,7 +260,7 @@ def _run(m):
     if not os88qemu.acted(m, zone, secs=90, what="drive B's zone", poll=0.4):
         sys.exit("minesrc: drive B: never got a desktop zone - the guest did "
                  "not reach a desktop")
-    os88qemu.pace(m, 1)
+    os88qemu.ui_done(m, S, cap=8.0, what="the first desktop")
     mo = Mouse()
     slot, seg, games = launch_mines(m, mo)
     rect = dispcp.win_rect(m, S, slot)

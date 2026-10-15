@@ -49,6 +49,43 @@ WHAT MATTERS IN VIDDISK.TXT
                             and nothing above counts.
   int13 one track / sector  the controller's own rate.
 
+ON A 286 OR BETTER: PRESS X AS WELL
+-----------------------------------
+X asks what a video's read-ahead held in extended
+memory (XMS) would cost this machine. It needs
+memory above 1 MB and STREAM.DAT (W, above) for its
+last two rows; with no XMS it says so and stops.
+Under a minute; saved here as VDXMS.TXT.
+
+  32 KB up and back         ok, or nothing below
+                            counts.
+  XMS up / down 32K .. 4K   microseconds a copy. On a
+                            286 the BIOS does it with
+                            interrupts off.
+  READ_SEQ alone            KB/s x 10, the disk alone.
+  READ_SEQ + copy up        the same, every 32 KB then
+                            copied into XMS. The gap
+                            between the two is what
+                            banking a byte costs.
+
+WITH AN EMS BOARD (A PICOMEM'S EMS TOO): PRESS E
+------------------------------------------------
+E looks for a Lo-tech-style EMS board at its own
+defaults: page registers 260h-263h, frame E000h.
+If an option ROM sits at E000h it says so and
+writes no port. Saved here as VDEMS.TXT.
+
+  EMS probe                 why it found no board,
+                            if it did not.
+  EMS pages (16 KB)         the board's size.
+  frame -> RAM 16K          microseconds to copy a
+                            page out of the board.
+  READ_SEQ into RAM         KB/s x 10, the disk.
+  READ_SEQ into frame       the same, read straight
+                            into the board's pages.
+  frame holds the file      ok, or the last row does
+                            not count.
+
 VIDSND.O88 is here too: the Sound Blaster, and whole
 tracks read while its interrupt burns 0-75% of a
 frame. Press R; it needs no file. With no card it

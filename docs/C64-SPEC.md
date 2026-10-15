@@ -900,7 +900,7 @@ clipboard (SPEC.md §55). Every conversion is transcribed from `src/charset.c`.
 **Where the work runs, and why.** `ovl_cmd` (in `C64.OVL`) sets a latch —
 `c64_copy_req` / `c64_paste_req` — and returns; `os88_oncmd` is dispatched
 **under the gfx lock** (SPEC.md §12.8.3), and a thousand converted cells
-there is the whole desktop stopped. The resident `c64_clip_service(base)`
+there is the whole desktop stopped. `ovl_clip_service(base)`, in `C64.OVL`
 (`c64kbd.c`) runs the whole body from the **top of the next wake**, with no
 lock held. The 6510 advances only inside `os88_onwake`, so between the pick
 and the top of the next wake not one emulated cycle has run: it is the same
@@ -1758,7 +1758,7 @@ Live items:
 | item | caption | note |
 |---|---|---|
 | File > Smart attach... | Alt+A | the Standard File dialog on `*.PRG` (§11.3) |
-| File > Reset > Reset machine CPU | Alt+F9 | **and it CLEARS THE PAUSE, which is VICE's own order**: `machine_reset_action` calls `ui_pause_disable()` straight after `machine_trigger_reset()`. `c64_adv` is cleared with it and `c64_menu_state` re-runs. The body is a latch (`c64_reset_req` = 1) spent by `c64_reset_service()` at the top of the next wake, out of the desktop's lock |
+| File > Reset > Reset machine CPU | Alt+F9 | **and it CLEARS THE PAUSE, which is VICE's own order**: `machine_reset_action` calls `ui_pause_disable()` straight after `machine_trigger_reset()`. `c64_adv` is cleared with it and `c64_menu_state` re-runs. The body is a latch (`c64_reset_req` = 1) spent by `ovl_reset_service()` at the top of the next wake, out of the desktop's lock |
 | File > Reset > Power cycle machine | Alt+F12 | caption kept; the item is the route (§7.5). **RAM pattern fill: VICE's C64 factory pattern** (`src/ram.c`, `ram_init_with_pattern`) — the eight-byte period `00 00 FF FF FF FF 00 00` with every other 16K block inverted, **not zeros**; `Reset machine CPU` does not touch RAM. The latch is `c64_reset_req` = 2, because `c64_zfill` over 65,536 bytes is about a quarter of a second on the target and `os88_oncmd` runs under the gfx lock |
 | File > Exit emulator | Alt+Q | **`os88_wm_close`, the kernel's own close path** (§15.2). Answered in the RESIDENT `os88_oncmd`, because it is the one command that must work on a disk whose `C64.OVL` is missing; `c64_exit_req` is set there and the top of `os88_onwake` spends it — sets `C64_ST_DEAD`, calls `os88_wm_close`, and returns with nothing after the call |
 | Edit > Copy | Alt+Delete | §7.7. Where a BIOS passes the chord, `os88_onkey` dispatches scan `0xA3` — a code no unmodified key produces, so it cannot be confused with the C64's own Del (`0x53`) |
@@ -1802,7 +1802,7 @@ greys them is on the status row and it can stop being true, so
 
 | item | greyed while | and the fact is |
 |---|---|---|
-| Preferences > Advance frame | `C64_ST_JAM` | §4.5's permanent line: `c64_advance_frame` answers a jam by doing nothing, and a live item that is a silent no-op is the shape SPEC.md §47 forbids |
+| Preferences > Advance frame | `C64_ST_JAM` | §4.5's permanent line: `ovl_advance_frame` answers a jam by doing nothing, and a live item that is a silent no-op is the shape SPEC.md §47 forbids |
 | Edit > Paste | `C64_ST_JAM` **or `c64_pause`** | in either, nothing would ever drain the queue (§7.7). **The paused case is a deliberate departure from VICE**, which queues a paste on a paused machine and delivers it on resume: there the queue is drained by the vsync handler, here `c64_paste_feed` runs only in the RUNNING arm of `os88_onwake`. The pause's fact is not a message (`Paused.` expires) but §10.2's `P` lamp and the check beside Pause emulation |
 | Edit > Copy | *nothing* | the frozen screen of a paused or jammed machine is real, and the body runs from the wake whatever the state |
 
@@ -1980,30 +1980,41 @@ prints.
 
 ### 13.0 The measured line
 
-From a clean `make c64` of the tree as it stands:
+From a clean `make c64` of the tree as it stands (after apps size pass 1):
 
 ```
-cc8086: build/c64.raw.asm: 92 function(s), 34 frame byte(s) max
-cc8086: overlay - 4 function(s) moved to .modc, 4 entry vector(s), 20 resident shim(s), 5 loading call site(s)
-os88ovl: build/c64.bin -> build/c64.trim.bin (41426 resident) + build/C64.OVL (2149 on demand)
-os88pkg: part 0 compressed lz4: 20480 -> 17361 bytes (84.8%), margin 1
-os88pkg: 'C64' entry=+0x0060 image=41426 bss=13190 icon=yes assoc=0
+cc8086: build/c64.raw.asm: 90 function(s), 34 frame byte(s) max
+cc8086: overlay - 7 function(s) moved to .modc, 7 entry vector(s), 29 resident shim(s), 7 loading call site(s)
+os88ovl: build/c64.bin -> build/c64.trim.bin (36088 resident) + build/C64.OVL (2323 tail)
+os88pkg: part 0 compressed lz4: 20480 -> 17362 bytes (84.8%)
+os88pkg: 'C64' entry=+0x0060 image=36088 bss=12950 icon=yes assoc=0
 ```
 
 | | measured | of |
 |---|---|---|
-| resident image | **41,426** | |
-| bss | **13,190** | |
-| **resident total** | **54,616** | **61,440** — 6,824 spare, and **384 under §73.9's 55,000 trigger**. This is the margin |
-| `C64.OVL` | **2,149** | on demand: `ovl_conv_init`, `ovl_cmd`, `ovl_load_prg`, `ovl_about_show` — the only four functions in `.modc` |
-| resident overlay shims | **20** | counted inside the image |
+| resident image | **36,088** | |
+| bss | **12,950** | |
+| **resident total** | **49,038** | **61,440** — 12,402 spare, and 5,962 under §73.9's 55,000 trigger |
+| `C64.OVL` | **2,323** | on demand, in a 3 KB claim (`cc_ovneed` rounds up): `ovl_conv_init`, `ovl_cmd`, `ovl_load_prg`, `ovl_about_show`, and the three once-per-pick bodies `ovl_clip_service`, `ovl_reset_service`, `ovl_advance_frame` - each reached only after an `ovl_cmd` pick, so the module is in memory whenever they run |
+| resident overlay shims | **29** | counted inside the image |
 | largest C frame | **34 bytes** | of the 96 SPEC.md §73 allows |
-| the file | **58,833** | image + `C64.OVL`'s trim + the 17,361-byte compressed part (§1.4) |
+| the file | **53,714** | image + `C64.OVL`'s trim + the 17,362-byte compressed part (§1.4) |
 
-The next feature worth a few hundred resident bytes will need a split first
-(SPEC.md §73.14), and what is resident is resident by nature — every
-callback, the core, the composer and the flush — so the split will be a real
-one. Where the bytes went, wave by wave, is the plan's record.
+**Apps size pass 1** took the resident total from 53,450 to 49,038 (-4,412,
+-8.3%) with no feature and no hot path touched except to make it shorter.
+The bulk is CODE SHAPE that SmallerC compiles badly: every `&&`/`||` chain
+and `? 1 : 0` was a 0/1 value per operand tested again (318 lowered `setcc`
+sites, 28 now), and every `x << 8`/`x >> 8` eight single shifts - so those
+are nested `if`s, switches, single range compares, ORs of 0/1 latches, and
+byte accesses (`C64_HIB`/`C64_LOB`/`C64_W` in `c64.c`). Every such rewrite
+executes FEWER instructions on every path, which is why the alarm scheduler,
+the timer step and the flush were allowed to take it. The rest is data:
+one string per menu check item with its mark byte written in place, the
+greyed and live spellings of an item sharing one literal (live = `+ 1`),
+one `Unable to load C64.OVL.` literal, `c64_kbd_init` harness-only (it
+stored zero over loader-zeroed bss), and the RAM-pattern page built in the
+composer's band. `hosttest/c64uitest.c` prints a byte-identical report
+before and after.
 
 ### 13.0.1 The line, by wave
 
@@ -2018,7 +2029,7 @@ figure somebody will quote.
 |---|---|---|
 | `apps/c64/c64.c` | the translation unit's root: the GPL-2 + VICE header, prototypes, the `C64_*` constants, the key ring, `os88_main` (the RAM claim, `os88_part_seg(0)`, the sound capability, `c64_x2init`, the tier, the register files, the RAM pattern, the scratch, the keyboard map armed, the window, the five-menu set, `about_set`, `onwake` installed and the first wake kicked), `os88_paint`, `os88_onkey` (the chords), `os88_onclick`, `os88_onfile` (§11.3), `os88_oncmd` (Exit answered here, everything else through `c64_ovl_ready` to `ovl_cmd`), **`os88_onwake` — the slice driver** (§4.4) with the latches it spends before the slice — `c64_exit_req`, `c64_reset_req`, `c64_copy_req`/`c64_paste_req` — and the `#include`s in order. **There is no `os88_worker`** | yes |
 | `apps/c64/c64io.c` | the `$D000-$DFFF` register files and the cdecl dispatch the core calls (§3.4); the alarm scheduler `c64_alarm_next` and `c64_advance` (§4.4); VIC, SID, colour RAM, CIA1/CIA2 with their TOD, the IRQ and NMI lines, the `$00`/`$01` port and the bank-map index (§3.2) | yes |
-| `apps/c64/c64kbd.c` | the two `gtk3_sym.vkm` tables, the cached matrix and the 16-entry down-list, the once-per-wake rebuild, the scan-routed Ctrl+H/I/M, the Ctrl-held digit poll, RESTORE with the Esc read, the joystick keyset, the ScrollLock hint, both of Copy's and Paste's loops and the two conversion tables they index (filled by `ovl_conv_init`), `c64_clip_service` and the `$0277` feeder (§7.7) | yes |
+| `apps/c64/c64kbd.c` | the two `gtk3_sym.vkm` tables, the cached matrix and the 16-entry down-list, the once-per-wake rebuild, the scan-routed Ctrl+H/I/M, the Ctrl-held digit poll, RESTORE with the Esc read, the joystick keyset, the ScrollLock hint, both of Copy's and Paste's loops and the two conversion tables they index (filled by `ovl_conv_init`), `ovl_clip_service` and the `$0277` feeder (§7.7) | yes |
 | `apps/c64/c64scr.c` | the dirty-page → cell-row mapping, the 1bpp frame shadow, the flush, the `k`-row shift test, `c64_geom` and the tier table, the luminance and EGA-16 tables, the border fills, the status row, the cost constants of §9.7 | yes |
 | `apps/c64/c64menu.c` | the five menu tables with every string and caption, the `OS88_MENU_DIS` greying with its fact in a comment beside it, the menu-set struct, `c64_menu_state` | yes |
 | `apps/c64/c64cmd.c` | `ovl_conv_init` (§13.3's first-wake probe and the two PETSCII tables) and `ovl_cmd`, every menu command's SHELL: the file dialog, the reset latches, the clipboard latches, fullscreen, warp, pause, advance frame, swap joysticks. No per-byte loop lives here (§7.7) and File > Exit is not here at all | **no** |

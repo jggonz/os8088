@@ -136,13 +136,7 @@ sc_pcomp:
     jmp short .qq
 .fin:
     mov [sc_fpwn], di
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_6
 
 ; -----------------------------------------------------------------------------
 ; sc_rxpand - expand the replacement's specials into [sc_frx] / [sc_frxn]
@@ -236,14 +230,7 @@ sc_rxpand:
     mov [sc_frxn], di
     clc
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_7
 
 ; =============================================================================
 ; THE SPAN THE THREE COMMANDS OPERATE ON (SPEC.md 68.9)
@@ -486,11 +473,7 @@ sc_uputp:
 .no:
     stc
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_4
 
 ; sc_dchb - AL = the CHP byte at document index AX. Preserves all others.
 sc_dchb:
@@ -578,14 +561,7 @@ sc_usplice:
 .no:
     stc
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_7
 
 ; =============================================================================
 ; UTILITIES > SORT (SPEC.md 68.9, Opus/sort.c)
@@ -723,11 +699,7 @@ sc_uemitp:
 .no:
     stc
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_4
 
 ; sc_utail - [sc_utl] = 1 when the span runs to the document's end without a
 ; closing ¶ (so the rebuilt span must not have one either). Preserves all.
@@ -1289,11 +1261,7 @@ sc_rnemit:
 .no:
     stc
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_4
 
 ; sc_rnval - write value AX in kind DL. CF=1 = full. Preserves all.
 sc_rnval:
@@ -1388,12 +1356,7 @@ sc_rnval:
 .no:
     stc
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_5
 
 ; sc_rnstr - write the NUL string at CS:SI, cased by DL. CF=1 = full.
 sc_rnstr:
@@ -1632,13 +1595,7 @@ sc_tcentry:
     call sc_tcput
     inc word [sc_tcn]
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_6
 
 ; sc_tclevel - DX = 1 + the left indent of the paragraph at BX, in tab stops,
 ; clamped to 9. Preserves all registers but DX.
@@ -1783,10 +1740,4 @@ sc_tcput:
     mov al, 13
     call sc_uput
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_6

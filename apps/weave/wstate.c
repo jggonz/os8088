@@ -16,8 +16,8 @@
  * ---------------------------------------------------------------------------
  * WHERE, AND WHY IT MOVED
  * ---------------------------------------------------------------------------
- * `SYSTEM/APPDATA/<stem>.SAV`, reached by SPEC.md 19.9's bank / GOTO / act /
- * GOTO-back. 8.3 said "beside the bundle" until wave 3 went to write one: a
+ * `SYSTEM/APPDATA/<stem>.SAV`, reached by SPEC.md 19.9's bank / GOTO_QM / act /
+ * GOTO_QM-back. 8.3 said "beside the bundle" until wave 3 went to write one: a
  * `.WAB` is a USER's document (wave 7 puts bundles in a writable PROJECTS/
  * folder), and 19.9's whole subject is that a program's own state does not go
  * where the user keeps things. The amendment is in 8.3, with the stem
@@ -55,11 +55,13 @@ static char              w_savname[16];
 /* ovl_dive - find the visible directory `name` where we stand and go into it.
  * 1 = we are in it, 0 = it is not here and nothing moved.
  *
- * SPEC.md 19.9 is explicit that SYSTEM/ is FOUND BY WALKING and not assumed,
- * and that it is OSAPI_FILE_GOTO rather than the quiet twin: GOTO_Q moves the
- * global cwd and deliberately not the instance's, so the quiet move is undone
- * by the very next FILE_WRITE. Cyclone's own header records the save that
- * wrote nothing at all while the load path appeared to work. */
+ * SPEC.md 19.9 is explicit that SYSTEM/ is FOUND BY WALKING and not assumed.
+ * Every step is os88_file_goto_q_mark - OSAPI_FILE_GOTO_QM, the quiet stand
+ * that MOVES THE INSTANCE (SPEC.md 74.1), so the next file call resolves
+ * there. It was os88_file_goto, a REMOUNT FOR DISPLAY at each of four steps,
+ * because the other quiet slot (GOTO_Q) is undone by the very next
+ * FILE_WRITE; QM is the one that sticks, and inside our own volume it is a
+ * word (docs/plans/NAV-COST-PLAN.md, apps/os88data.inc). */
 static int ovl_dive(const char *name)
 {
     int ord;
@@ -73,9 +75,7 @@ static int ovl_dive(const char *name)
             continue;
         if (!w_samename(w_savf.name, name))
             continue;
-        w_savhere2.clus = w_savf.clus;
-        w_savhere2.vol = w_savhere.vol;
-        return os88_file_goto(&w_savhere2) == 0;
+        return os88_file_goto_q_mark(w_savf.clus, w_savhere.vol) == 0;
     }
     return 0;
 }
@@ -85,12 +85,10 @@ static int ovl_dive(const char *name)
 static int ovl_data_enter(void)
 {
     os88_file_here(&w_savhere);
-    w_savhere2.clus = 0;                /* the ROOT of that same volume */
-    w_savhere2.vol = w_savhere.vol;
-    if (os88_file_goto(&w_savhere2) != 0)
+    if (os88_file_goto_q_mark(0, w_savhere.vol) != 0)  /* the ROOT of it */
         return 0;
     if (!ovl_dive("SYSTEM") || !ovl_dive("APPDATA")) {
-        os88_file_goto(&w_savhere);
+        os88_file_goto_q_mark(w_savhere.clus, w_savhere.vol);
         return 0;
     }
     return 1;
@@ -98,7 +96,8 @@ static int ovl_data_enter(void)
 
 static void ovl_data_leave(void)
 {
-    os88_file_goto(&w_savhere);         /* leaving the instance elsewhere would
+    os88_file_goto_q_mark(w_savhere.clus, w_savhere.vol);
+                                        /* leaving the instance elsewhere would
                                          * move where every unqualified name it
                                          * passes the file API resolves, and
                                          * where its next dialog opens (19.9) */

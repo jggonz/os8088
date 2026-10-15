@@ -190,6 +190,7 @@ cs_reset:
     ; the hull in. Every one of the nine locations has a strip, so this is
     ; where the A5 begins wherever you take it.
     mov byte [cs_onwater], 0
+    mov byte [cs_landout], 0
     mov di, [cs_plane]
     test word [di + CSP_FLAGS], CSPF_AMPHIB
     jz .nowater
@@ -229,6 +230,10 @@ cs_reset:
     ; and no tug: a launch is a scripted sequence and this is a state, so
     ; what it does is put the aeroplane where a launch would have left it -
     ; over the threshold, at best-glide speed, wings level, already flying.
+    mov ax, [cs_px+1]               ; THE AIR'S ANCHOR (88.7.6.7): the calm
+    mov [cs_airx], ax               ; bubble and the tile round where the
+    mov ax, [cs_pz+1]               ; aeroplane starts, which for a sailplane
+    mov [cs_airz], ax               ; is where the tow let it go
     mov di, [cs_plane]
     mov ax, [di + CSP_LAUNCH]
     or ax, ax
@@ -530,7 +535,11 @@ cs_step:
     add ax, [cs_airv]
     mov [cs_vs], ax
     ; --- crossing INTO it is what you HEAR: leaving is silent, arriving is
-    ;     a swoop, which is the cue a variometer's audio actually gives
+    ;     a swoop, which is the cue a variometer's audio actually gives -
+    ;     AND THEN IT KEEPS TALKING (SPEC.md 88.7.6.5). A swoop every
+    ;     CS_SWGAP0 + a gap that shrinks toward the core, each one taller the
+    ;     stronger the air, so a pilot hears the middle of a thermal as fast
+    ;     tall chirps and its rim as slow short ones, and can circle on it
     mov bl, 0
     mov ax, [cs_airv]
     or ax, ax
@@ -540,14 +549,40 @@ cs_step:
     mov bl, -1
 .sg:
     cmp bl, [cs_airs]
-    je .swok
+    je .same
     mov [cs_airs], bl
+    mov byte [cs_swgap], 0          ; a CROSSING speaks at once
+.same:
     or bl, bl
-    jz .swok
+    jz .swok                        ; still air, or leaving: silent
     cmp byte [cs_sound], 0          ; ...and it is SCHEDULED, so with the sound
     je .swok                        ; off there is nothing to schedule - one
-    mov [cs_swdir], bl              ; armed here and left standing is a swoop
-    mov byte [cs_swt], CS_SWOOPT    ; that plays when the sound comes back on
+    cmp byte [cs_swt], 0            ; armed here and left standing is a swoop
+    jne .swok                       ; that plays when the sound comes back on
+    cmp byte [cs_swgap], 0          ; ...and one plays to its end before the
+    je .arm                         ; next is counted
+    dec byte [cs_swgap]
+    jmp short .swok
+.arm:
+    mov [cs_swdir], bl
+    mov byte [cs_swt], CS_SWOOPT
+    mov ax, [cs_airf]               ; 0..256, the core's share
+    mov dx, ax
+    shr dx, 1
+    shr dx, 1
+    sub ax, dx                      ; 3f/4, 0..192
+    add ax, 64                      ; 64..256
+    mov dx, CS_SWOOPD
+    mul dx
+    mov [cs_swd], ah                ; the swoop's hertz a tick, 18..75: a
+                                    ; rim swoop rises a quarter of the way,
+                                    ; a core one the whole of it
+    mov ax, 256
+    sub ax, [cs_airf]
+    mov cl, 5
+    shr ax, cl                      ; 0 at the core .. 8 at the rim
+    add al, CS_SWGAP0
+    mov [cs_swgap], al
 .swok:
     call cs_move
     ; --- the ground, and what is standing on it ---------------------------
@@ -1260,17 +1295,22 @@ cs_fence:
 ; everywhere, a glider meets some inside a minute wherever it points, and
 ; the arithmetic is one AND per axis rather than a longer walk.
 ;
-; The tile is anchored on the LOCATION'S OWN CENTRE, so one table serves all
-; nine worlds and the pattern sits the same way round every runway.
+; The tile is anchored on the RELEASE (88.7.6.7) - [cs_airx]/[cs_airz], where
+; cs_reset put the aeroplane - at the tile's CENTRE, and each tile is one of
+; eight orientations of the table (cs_airtile), so one table serves all nine
+; worlds, the air is the same distance from every launch, and the map
+; (88.16.1) shows weather rather than a grid. The rows are a SEARCH's, not a
+; hand's: tests/unit/t_csair.py flies them.
 ;
-; CS_LIFTCLR is a CALM BUBBLE round the field and no longer a constraint on
+; CS_LIFTCLR is a CALM BUBBLE round the release and no longer a constraint on
 ; where a rect may be put: the distance test comes first and the tile is free
 ; to be dense. That is what makes the two requirements independent - a
-; guaranteed still circuit, and air you can find.
+; still moment after the tow, and air you can find.
 ;
-; The rate is cs_vs's own scale, m/s x 128, positive UP. A sailplane's still
-; air sink is about 1 m/s, so +448 is a climb you can work and -320 is air
-; worth leaving.
+; The rate is cs_vs's own scale, m/s x 128, positive UP, and it is the
+; CORE's: cs_lift falls it off as 1 - m^2 toward the rim (88.7.6.5). A
+; sailplane's still air sink is about 1 m/s, so a +640 core is a climb you
+; can work out to most of the way to the edge, and -448 is air worth leaving.
 ; =============================================================================
 CSAIR_DX    equ 0                   ; within the tile, metres
 CSAIR_DZ    equ 2
@@ -1278,15 +1318,25 @@ CSAIR_HW    equ 4                   ; ...and how far it reaches, half-extents
 CSAIR_HD    equ 6
 CSAIR_RATE  equ 8                   ; m/s x 128, + up
 CSAIR_SIZE  equ 10
-CS_NLIFT    equ 4
+CS_NLIFT    equ 9
 CS_AIRTILE  equ 4096                ; a POWER OF TWO: the wrap is an AND
-CS_LIFTCLR  equ 1800                ; the calm bubble round the field
+CS_LIFTCLR  equ 600                 ; the calm bubble round the release...
+CS_LIFTRMP  equ 512                 ; ...and the RAMP out of it (88.7.6.5.1): the
+                                    ; air comes in over this many metres, a
+                                    ; power of two so the share is a shift
 
+; THE CORE's rate: 88.7.6.5 falls it off to nothing at the rim, so a rect
+; averages half of it - 88.7.6.3's +3.5 was the whole rect's
 cs_lifts:
-    dw   800,  900,  600, 500,  448     ; +3.5 m/s
-    dw  2600,  700,  500, 450, -320     ; -2.5
-    dw  1500, 2800,  650, 550,  512     ; +4.0, the strong one
-    dw  3300, 2600,  500, 500, -256
+    dw  2505, 1436,  348, 321,  640     ; +5.0 m/s
+    dw  1160, 3559,  282, 519,  704     ; +5.5
+    dw   533, 1899,  533, 379,  576     ; +4.5
+    dw  3420,  365,  600, 265,  768     ; +6.0, the strong one
+    dw  2342, 2623,  432, 305,  640     ; +5.0, the one nearest the release
+    dw  1822,  658,  548, 336,  512     ; +4.0
+    dw  3578, 2369,  454, 479, -448     ; -3.5
+    dw  3330, 3383,  365, 406, -352     ; -2.75
+    dw  3457, 1236,  301, 340, -416     ; -3.25
 
 ; -----------------------------------------------------------------------------
 ; cs_lift - the air's vertical rate where the aeroplane is, in cs_vs's units
@@ -1304,11 +1354,10 @@ cs_lift:
     mov di, [cs_plane]
     cmp word [di + CSP_THRUST], 0
     jne .out
-    mov si, [cs_airport]
     mov cx, [cs_px+1]
-    sub cx, [si + CSA_X]
+    sub cx, [cs_airx]
     mov di, [cs_pz+1]
-    sub di, [si + CSA_Z]
+    sub di, [cs_airz]
     ; --- THE CALM BUBBLE FIRST (88.7.6.4): a launch is over the threshold and
     ;     a circuit is flown here, so the field's own air is still whatever
     ;     the tile says. Manhattan, which is what every other range in this
@@ -1319,10 +1368,24 @@ cs_lift:
     mov ax, di
     call cs_wabs
     add ax, bx
-    cmp ax, CS_LIFTCLR
+    sub ax, CS_LIFTCLR
     jb .none
-    and cx, CS_AIRTILE - 1          ; ...and the tile, which is why this is a
-    and di, CS_AIRTILE - 1          ; power of two
+    ; --- ...AND IT RAMPS, it does not cut (88.7.6.5.1): the field flew straight
+    ;     through the bubble's edge inside a thermal and read "37 up, a short
+    ;     sweep, then instantly 11 down" - the first rect's CORE sat at 1,700
+    ;     m out against a 1,800 m edge, and the edge took the air from all to
+    ;     nothing in one step. [cs_liftk] is the share, 0 at the edge to 256
+    ;     at CS_LIFTRMP past it
+    shr ax, 1
+    cmp ax, 256
+    jb .k
+    mov ax, 256
+.k:
+    mov [cs_liftk], ax
+%if CS_LIFTRMP != 512
+  %error "cs_lift's share is (d - CS_LIFTCLR) / 2: CS_LIFTRMP must be 512"
+%endif
+    call cs_airtile                 ; ...and the place in its tile
     mov si, cs_lifts
     mov bx, CS_NLIFT
 .l:
@@ -1331,20 +1394,129 @@ cs_lift:
     call cs_wabs
     cmp ax, [si + CSAIR_HW]
     jg .n
+    push bx
+    mov bx, [si + CSAIR_HW]
+    call cs_lnorm
+    push ax                         ; u = how far out along x, 0..256
     mov ax, di
     sub ax, [si + CSAIR_DZ]
     call cs_wabs
     cmp ax, [si + CSAIR_HD]
-    jg .n
-    mov ax, [si + CSAIR_RATE]
-    ret
+    jg .n2
+    mov bx, [si + CSAIR_HD]
+    call cs_lnorm                   ; v, the same along z
+    pop bx
+    cmp ax, bx
+    jae .m
+    mov ax, bx                      ; m = the nearer edge's share, max(u, v)
+.m:
+    ; --- STRONG IN THE MIDDLE, NOTHING AT THE EDGE (SPEC.md 88.7.6.5): the
+    ;     table's rate is the CORE's, and it falls off as 1 - m^2 - flat
+    ;     across the middle where a pilot circles, and steep at the rim where
+    ;     the air stops. Kept in [cs_airf] as well, which is what the swoop is
+    ;     made of: a variometer tells a pilot WHERE in the thermal they are
+    mul ax                          ; DX:AX = m^2, at most 10000h
+    mov al, ah
+    mov ah, dl                      ; m^2 / 256
+    neg ax
+    add ax, 256                     ; f = 256 - m^2/256: 256 core, 0 rim
+    pop bx                          ; (the row count: this row answers)
+    mul word [cs_liftk]             ; ...times the bubble's ramp, over 256
+    mov al, ah                      ; (f x k <= 65536: DX:AX, and DL is 1
+    mov ah, dl                      ; only at exactly 256 x 256)
+    mov [cs_airf], ax
+    imul word [si + CSAIR_RATE]     ; DX:AX = f x rate...
+    mov al, ah
+    mov ah, dl                      ; ...over 256, signed, and well inside
+    ret                             ; a word (|rate| < 1000)
+.n2:
+    pop ax
+    pop bx
 .n:
     add si, CSAIR_SIZE
     dec bx
     jnz .l
 .none:
     xor ax, ax
+    mov [cs_airf], ax
 .out:
+    ret
+
+; -----------------------------------------------------------------------------
+; cs_airtile - the place in the tile (SPEC.md 88.7.6.7)
+; in:  CX, DI = metres east and north of the anchor
+; out: CX, DI = 0..CS_AIRTILE-1, in the frame of THAT TILE'S VARIANT, and
+;      AL = the variant. Clobbers AX, BX
+;
+; The anchor is the tile's CENTRE, so the release point has the whole tile
+; round it and a heading along either axis crosses rects rather than running
+; down the tile's edge, where no rect may reach. Each tile is one of EIGHT
+; orientations of the one table - transposed or not, then mirrored on either
+; axis - picked off its own index by ((3 tx) xor (5 tz)) and 7, which gives
+; the anchor's tile the table as written and no two neighbours that are each
+; other's mirror across their shared edge or the same picture twice. Only the
+; index's low three bits enter, so the arithmetic can wrap and does not care.
+; A rect lies wholly inside its tile, so a tile turned against its neighbour
+; changes nothing at the seam.
+; -----------------------------------------------------------------------------
+cs_airtile:
+    add cx, CS_AIRTILE / 2
+    add di, CS_AIRTILE / 2
+%if CS_AIRTILE != 4096
+  %error "cs_airtile's index is the top nibble: CS_AIRTILE must be 4096"
+%endif
+    mov al, ch                      ; tx = x >> 12...
+    mov bx, di
+    mov bl, bh                      ; ...and tz, their low bits only
+    shr al, 1
+    shr bl, 1
+    shr al, 1
+    shr bl, 1
+    shr al, 1
+    shr bl, 1
+    shr al, 1
+    shr bl, 1
+    call cs_airvar                  ; AL = the variant
+    and cx, CS_AIRTILE - 1
+    and di, CS_AIRTILE - 1
+    test al, 1
+    jz .t
+    xchg cx, di                     ; transposed...
+.t:
+    test al, 2
+    jz .fx
+    neg cx                          ; ...mirrored east-west...
+    and cx, CS_AIRTILE - 1
+.fx:
+    test al, 4
+    jz .fz
+    neg di                          ; ...and north-south
+    and di, CS_AIRTILE - 1
+.fz:
+    ret
+
+; cs_airvar - AL = a tile's column, BL = its row (their low bits are
+;             enough); out AL = its variant, (3 tx xor 5 tz) and 7. Clobbers
+;             AH, BX
+cs_airvar:
+    mov ah, al
+    shl al, 1
+    add al, ah
+    mov bh, bl
+    shl bl, 1
+    shl bl, 1
+    add bl, bh
+    xor al, bl
+    and al, 7
+    ret
+
+; cs_lnorm - AX = AX x 256 / BX, for 0 <= AX <= BX (so 0..256). Clobbers DX
+cs_lnorm:
+    mov dl, ah
+    mov ah, al
+    xor al, al
+    xor dh, dh                      ; DX:AX = AX x 256
+    div bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1409,14 +1581,28 @@ cs_touch:
     neg ax
 .a1:
     cmp ax, [si + CSA_HLEN]
-    jg .crash
+    jg .off
     mov ax, [cs_across]
     or ax, ax
     jns .a2
     neg ax
 .a2:
     cmp ax, [si + CSA_HWID]
-    jg .crash
+    jle .limits
+.off:
+    ; --- A SAILPLANE CAN LAND IN A FIELD (SPEC.md 88.7.6.6). It has no
+    ;     engine to go round with, so wherever the height runs out is where
+    ;     it lands, and every gliding pilot plans for exactly that: an
+    ;     outlanding. Any LAND will do - the same limits on sink, bank and
+    ;     pitch as a runway - but water is still a ditching, so the polygon
+    ;     test the amphibian lands ON is the one the sailplane is refused by
+    mov di, [cs_plane]
+    cmp word [di + CSP_THRUST], 0
+    jne .crash                      ; an aeroplane with an engine: the runway
+    call cs_inwater                 ; (clobbers everything; names the water)
+    jc .crash
+    mov byte [cs_landout], 1
+    mov si, [cs_airport]
 .limits:
     cmp word [cs_vs], CS_LANDVS
     jl .crash
@@ -1442,6 +1628,10 @@ cs_touch:
     mov word [cs_vs], 0
     mov byte [cs_msg], CSG_LANDED
     mov byte [cs_msgt], CS_MSGAGE
+    cmp byte [cs_landout], 0
+    je .onfield
+    mov byte [cs_msg], CSG_LANDOUT  ; ...and it says it was not the field
+.onfield:
     cmp byte [cs_onwater], 0
     je .counted
     mov byte [cs_msg], CSG_SPLASH   ; ...and the water says WHICH water, off
@@ -1777,7 +1967,7 @@ cs_collide:
     test word [si + CSO_FLAGS], CSO_DENSE
     jz .solid                       ; ...AND YOU CANNOT HIT WHAT THE RUNG DOES
     cmp byte [cs_setbld], CSBL_HIGH ; NOT DRAW (88.13.1.4): a High tier is not
-    jne .next                       ; in the world below High, and this walker
+    jb .next                       ; in the world below High, and this walker
 .solid:                             ; reads the table and never the ladder, so
                                     ; without it Manhattan's twelve kill a
                                     ; player at Moderate out of clear air
@@ -1883,9 +2073,7 @@ cs_sound_step:
     dec byte [cs_swt]
     mov al, CS_SWOOPT
     sub al, [cs_swt]                ; 1..CS_SWOOPT: how far through it is
-    cbw
-    mov bx, CS_SWOOPD
-    imul bx
+    mul byte [cs_swd]               ; ...at THIS swoop's rate (88.7.6.5)
     cmp byte [cs_swdir], 0
     jg .swup
     neg ax                          ; sink: down from the top

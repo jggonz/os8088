@@ -38,20 +38,12 @@
 xv_init:
     SAVE
     call xv_dicts
-    mov bx, [xb_recs + EXBR_PAL * 2]
-    push ds
-    mov ds, [xb_gfxseg]
-    mov si, bx
+    mov si, [xb_pal]                    ; (the copy in our segment: xb_font_copy)
     add si, 240                     ; after the five themes: the four pose ink slots
-    lodsb
-    mov [cs:xv_ink], al
-    lodsb
-    mov [cs:xv_ink + 1], al
-    lodsb
-    mov [cs:xv_ink + 2], al
-    lodsb
-    mov [cs:xv_ink + 3], al
-    pop ds
+    lodsw
+    mov [xv_ink], ax
+    lodsw
+    mov [xv_ink + 2], ax
     RESTORE
     ret
 

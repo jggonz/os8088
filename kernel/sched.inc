@@ -294,27 +294,27 @@ SCH_WD_TICKS equ 18             ; cooperative mode: the watchdog forces a
 ;
 ; The vector store below is what makes it safe to be here and is worth reading
 ; before anything is added: `mov word [es:0x22], KERNEL_SEG` names the segment
-; as a CONSTANT. In `.ovl` CS is the BLOB's, and the blob is about to become
+; as a CONSTANT. In `.boot2` CS is the BLOB's, and the blob is about to become
 ; somebody's heap claim, so `mov [es:0x22], cs` would install a vector into
 ; freed memory and the machine would die later at an address with no connection
 ; to this file. tools/os88ovlchk.py rule 2b refuses that spelling outright now.
 ; -----------------------------------------------------------------------------
 %ifndef KERN_SMALL
-section .ovlw                   ; kern_big: the WINDOW half (SPEC.md 2.5.3),
+section .ovl                   ; kern_big: the WINDOW half (SPEC.md 2.5.3),
                                 ; whose window has room to spare
 %else
-section .ovl                    ; ...and kern_small: the BLOB half instead
+section .boot2                    ; ...and kern_small: the BLOB half instead
                                 ; (SPEC.md 2.5.3.2, mouse_init's shape). The
                                 ; deadline is the same either way - kmain runs
                                 ; this long before drv_boot - so the choice is
                                 ; only about WHOSE bytes. On that kernel
-                                ; `.ovlw` is read onto the FAT window and the
+                                ; `.ovl` is read onto the FAT window and the
                                 ; mount buffers, and SPEC.md 22.6.3 has just
                                 ; taken the LISTING out of that region: the
                                 ; 800 bytes it gave back are only 288 of heap
                                 ; while the overlay still needs the rest, so
                                 ; every body moved here turns one more of them
-                                ; into heap. `.ovl` is written LAST on
+                                ; into heap. `.boot2` is written LAST on
                                 ; purpose: tools/os88ovlchk.py reads SOURCE
                                 ; and cannot evaluate the %ifdef, so it files
                                 ; this block by the arm below - which is the
@@ -472,7 +472,7 @@ section .text
 ; (which this replaces outright - it WAS this routine, in the wrong module),
 ; and in snd.inc's PCM deadline prime.  Two copies are deliberately NOT
 ; converted:
-;   * sched_init's seed at the top of this file is `.ovlw`, the boot overlay,
+;   * sched_init's seed at the top of this file is `.ovl`, the boot overlay,
 ;     and a near call from there to `.text` would assemble cleanly and run
 ;     wrong;
 ;   * sch_account's is on the IRQ0 path and does more (the IRR coherence
@@ -779,14 +779,14 @@ sch_idle_body:
 ; IN THE BOOT OVERLAY (docs/plans/LAST-DROP-BYTES.md row 16). One caller, kmain:4182,
 ; and the idle task it spawns outlives it by construction - a task's code is
 ; sch_idle_body in `.text`, which is what BX = 0 above names. Taking the address
-; of a `.text` label from `.ovl` is correct and taking the address of an `.ovl`
+; of a `.text` label from `.boot2` is correct and taking the address of an `.boot2`
 ; one would not be: `.text` has vstart=0 and the consumer supplies KERNEL_SEG.
 ;
 ; **kmain does not read the CF this answers with**, which is what lets the site
-; use the flag-banking gate rather than OVLCALLC. If a caller ever does, the
+; use the flag-banking gate rather than SPLCALLC. If a caller ever does, the
 ; call has to change with it.
 ; -----------------------------------------------------------------------------
-section .ovlw
+section .ovl
 sch_idle_start:
     push bx
     push cx
@@ -804,7 +804,7 @@ sch_idle_start:
     mov cx, SCH_IDLE_STK        ; the smallest class: its own footprint is 4
                                 ; bytes and the rest is the floor (SPEC.md 8.7)
     mov dx, 0x00FF              ; DL -> T_INST = 0xFF, "owns no instance"
-    call KERNEL_SEG:cw_task_spawn ; FAR: `.ovl` -> resident, through the shim
+    call KERNEL_SEG:cw_task_spawn ; FAR: `.boot2` -> resident, through the shim
     jc .out                       ; driver.inc already needed
     mov [sch_idleslot], al      ; the ONE identifier for the idle task: the
                                 ; scan skips this index and the fallback picks
@@ -1055,165 +1055,11 @@ sch_frame:
     stosw                       ; FLAGS: IF=1, reserved bit 1 set
     ret
 
-%ifdef OS88_COMPACT
-; -----------------------------------------------------------------------------
-; sch_wk_restart - throw a worker's stack away and re-enter it (SPEC.md 66.6.2)
-; in:  AL = the task slot, BX = the segment to run it in, CX = the entry offset
-; out: nothing (all registers and the flags preserved)
-;
-; task_spawn's tail, run again on a slot that ALREADY EXISTS. It is the one way
-; past SPEC.md 66.6.1's limit: a worker's stack carries its own package's
-; segment from before its first instruction and at depths nothing can find
-; (docs/plans/HEAP-UNPIN-PLAN.md 4.1), so the answer is not to find them - it
-; is to arrange for the stack not to matter, which only the package can
-; authorise (OSAPI_TASK_RESTARTABLE).
-;
-; A REBUILD IN PLACE AND NOT A KILL AND RESPAWN, for two reasons that both
-; matter. A respawn can FAIL - first fit over a busy table - and the kernel
-; would then have destroyed a worker it could not promise to return; and
-; task_exit releases the INSTANCE record with the task, which is a package
-; being closed rather than a worker being restarted.
-;
-; WHAT IT DOES NOT REDO. The slice keeps its 0xCC fill and its SCH_MAGIC
-; canary: both are properties of a slice that has already been cut, and the
-; high-water mark tools/stkwater.py reads is MORE useful across a restart, not
-; less - it is still the deepest this worker has ever been.
-;
-; **IT MUST CLEAR [sch_parked].** The worker is standing in inst_park_hold or
-; in gfx_lock's .block arm, and BOTH clear that byte on the way out - which is
-; a way out this routine has just deleted. Left set, inst_seg_parked answers
-; "parked" for ever and the next compaction moves the claims of a worker that
-; is running. (gfx_lock's [gfx_lock_want] is left set and that one is
-; harmless: SPEC.md 7.3 makes it a fairness hint the next contended acquire
-; spends.)
-; -----------------------------------------------------------------------------
-sch_wk_restart:
-    push ax                     ; kret_es's order, and the flags INSIDE it:
-    push bx                     ; the pops need no IF = 0, so the window ends
-    push cx                     ; before them and the ladder is the exit
-    push dx
-    push si
-    push di
-    push bp
-    push es
-    pushf
-    cli                         ; the frame below is what sch_switch resumes
-                                ; from, so it is built whole or not at all
-    xor ah, ah                  ; AX = the slot
-    mov si, ax
-    mov byte [si+sch_parked], 0 ; ...and it is NOT parked any more: see above
-    shl si, 1                   ; SI = slot*2, the index BOTH slice tables take
-    mov di, [si+sch_stkbase]
-    add di, [si+sch_stksize]    ; base + size = the slice TOP...
-    sub di, SCH_FRAME           ; ...and the frame is carved from it, exactly
-    shl si, 1                   ; as task_spawn carves it. T_SIZE = 8, so the
-    shl si, 1                   ; record index is two more open shifts
-                                ; (sch_currec's idiom)
-    mov [si+sch_tasks+T_SP], di
-    mov dl, [si+sch_tasks+T_INST]   ; DX = THE INSTANCE INDEX and not the task
-    xor dh, dh                      ; slot: it is task_spawn's spawn argument
-                                    ; and the worker's documented `in:`, and
-                                    ; the two are different numbers
-    mov bp, bx                  ; the segment and the entry into the shared
-    mov si, cx                  ; builder's registers
-    push ss
-    pop es                      ; ES = LOW_SEG: the frame lives there and DS
-    cld                         ; cannot reach it
-    call sch_frame              ; ...and the same twelve words task_spawn
-    popf                        ; writes, from the same body
-    jmp kret_es
-%endif                          ; OS88_COMPACT - SPEC.md 66.6.2's restart is
-                                ; the compactor's only way past a worker's own
-                                ; stack, and kern_small has no compactor
+; (sch_wk_restart - SPEC.md 66.6.2's "throw a worker's stack away and re-enter
+; it" - stood here. It had one caller, memory.inc's mem_region_reloc, and is
+; written inline there since size pass 10, with its notes: the call and the
+; register bank its caller already held were twelve bytes of kern_big.)
 
-; -----------------------------------------------------------------------------
-; task_yield - give up the rest of this time slice
-;
-; Fakes the hardware int 08h frame (FLAGS with the caller's IF, CS, IP) with
-; pushf / cli / push cs / near call, then saves registers exactly like the
-; ISR and drops into the common switch. The eventual iret lands on the ret
-; below with all registers and the caller's IF restored.
-;
-; in:       nothing
-; out:      nothing (returns later, after other tasks have run)
-; clobbers: flags only (arithmetic flags; IF preserved via the frame)
-; -----------------------------------------------------------------------------
-task_yield:
-%ifdef KERN_EMU
-    ; --- the VMware absolute pointer's service point (SPEC.md 9.11.3) --------
-    ; vmmouse is POLLED, not interrupt-driven, so every spin loop that waits on
-    ; the mouse - a drag, a grow, a menu track, the file manager's icon drag -
-    ; has to pump it or the button-release it is waiting for never arrives (a
-    ; freeze). They ALL call task_yield, so draining it here services every one,
-    ; present and future, near and far (the cold segment's cw_task_yield lands
-    ; here too).
-    ;
-    ; **WRITTEN OUT RATHER THAN VMM_POLL, and the difference is DS.** The macro
-    ; is for ui_task and menu_drop, which already hold the kernel's; this site
-    ; does not - task_yield is an OSAPI slot, so the caller may be a package
-    ; with its own DS. The GATE is still the macro's cs-relative compare, and
-    ; the segment load moves INSIDE the branch: a machine with no backdoor pays
-    ; 9 bytes and ~39 clocks (the 8088's fetch floor over the encoding,
-    ; PERFORMANCE.md Part 2) instead of 16 and 91 - 8.2 us against 19.1, or
-    ; 1.2% of a 693 us switch instead of 2.8%.
-    ;
-    ; THE TARGET MACHINE NO LONGER PAYS EVEN THAT, and this block is why the
-    ; guard is KERN_EMU and not KERN_BIG (SPEC.md 9.11.7). task_yield is the
-    ; hottest thing in the kernel - every drag, every grow, every menu track
-    ; and every worker goes through it - so 9 bytes and 39 clocks HERE were the
-    ; largest single share of what an XT was charged for a protocol it cannot
-    ; speak. On kern_big this now assembles to nothing at all; the arithmetic
-    ; above is kept because it is what the arrangement buys on the build that
-    ; DOES take the branch, where a hypervisor guest pays the 9-byte form on
-    ; every switch the backdoor is idle for.
-    ;
-    ; Before the cli/frame build: this is still the caller's task context with
-    ; IF as it left it, exactly as ui_task's own VMM_POLL - and vmm_poll takes
-    ; its own cli, and its own STACK, around the apply.
-    cmp byte [cs:vmm_on], 0
-    jz .noyvmm
-    push ds
-    push ax
-    mov ax, KERNEL_SEG
-    mov ds, ax
-    call vmm_poll
-    pop ax
-    pop ds
-.noyvmm:
-%endif
-    ; STKBALANCE-OK: fabricates the int 08h frame (pushf / push cs /
-    ; call .save), so the ret below is reached by the scheduler's iret and not
-    ; by .save returning - the depth at that ret is the frame, by design.
-    pushf                       ; FLAGS slot - carries the caller's IF
-    cli                         ; frame build + switch must be atomic
-    push cs                     ; CS slot
-    call .save                  ; IP slot; iret resumes at the ret below
-    ret
-
-.save:
-    push ax
-    push cx
-    push dx
-    push bx
-    push si
-    push di
-    push bp
-    push es
-    push ds
-    push cs                     ; caller's DS is on the stack; we need ours
-    pop ds
-                                ; NO sch_account HERE (SPEC.md 8.1.1). It used
-                                ; to charge the slice unconditionally, and on a
-                                ; machine with one runnable task that is 500
-                                ; cycles to bill a task and then go on running
-                                ; the same task - 1,048 times a second, 10.9%
-                                ; of an idle 8088. sch_switch charges at .pick
-                                ; instead, and only when the pick is a real
-                                ; change; the sch_resume branch below is a
-                                ; no-change by construction
-    cmp byte [sch_lock], 0      ; scheduler locked: resume self immediately
-    jne sch_resume
-    jmp sch_switch
 
 ; -----------------------------------------------------------------------------
 ; task_sleep - block this task for AX timer ticks (18 ~= 1 second)
@@ -1909,6 +1755,102 @@ ddg_div:    resb 1
 ddg_buf:    resb 40
 section .text
 %endif
+
+; -----------------------------------------------------------------------------
+; task_yield - give up the rest of this time slice
+;
+; Fakes the hardware int 08h frame (FLAGS with the caller's IF, CS, IP) with
+; pushf / cli / push cs / near call, then saves registers exactly like the
+; ISR and drops into the common switch. The eventual iret lands on the ret
+; below with all registers and the caller's IF restored.
+;
+; in:       nothing
+; out:      nothing (returns later, after other tasks have run)
+; clobbers: flags only (arithmetic flags; IF preserved via the frame)
+; -----------------------------------------------------------------------------
+task_yield:
+%ifdef KERN_EMU
+    ; --- the VMware absolute pointer's service point (SPEC.md 9.11.3) --------
+    ; vmmouse is POLLED, not interrupt-driven, so every spin loop that waits on
+    ; the mouse - a drag, a grow, a menu track, the file manager's icon drag -
+    ; has to pump it or the button-release it is waiting for never arrives (a
+    ; freeze). They ALL call task_yield, so draining it here services every one,
+    ; present and future, near and far (the cold segment's cw_task_yield lands
+    ; here too).
+    ;
+    ; **WRITTEN OUT RATHER THAN VMM_POLL, and the difference is DS.** The macro
+    ; is for ui_task and menu_drop, which already hold the kernel's; this site
+    ; does not - task_yield is an OSAPI slot, so the caller may be a package
+    ; with its own DS. The GATE is still the macro's cs-relative compare, and
+    ; the segment load moves INSIDE the branch: a machine with no backdoor pays
+    ; 9 bytes and ~39 clocks (the 8088's fetch floor over the encoding,
+    ; PERFORMANCE.md Part 2) instead of 16 and 91 - 8.2 us against 19.1, or
+    ; 1.2% of a 693 us switch instead of 2.8%.
+    ;
+    ; THE TARGET MACHINE NO LONGER PAYS EVEN THAT, and this block is why the
+    ; guard is KERN_EMU and not KERN_BIG (SPEC.md 9.11.7). task_yield is the
+    ; hottest thing in the kernel - every drag, every grow, every menu track
+    ; and every worker goes through it - so 9 bytes and 39 clocks HERE were the
+    ; largest single share of what an XT was charged for a protocol it cannot
+    ; speak. On kern_big this now assembles to nothing at all; the arithmetic
+    ; above is kept because it is what the arrangement buys on the build that
+    ; DOES take the branch, where a hypervisor guest pays the 9-byte form on
+    ; every switch the backdoor is idle for.
+    ;
+    ; Before the cli/frame build: this is still the caller's task context with
+    ; IF as it left it, exactly as ui_task's own VMM_POLL - and vmm_poll takes
+    ; its own cli, and its own STACK, around the apply.
+    cmp byte [cs:vmm_on], 0
+    jz .noyvmm
+    push ds
+    push ax
+    mov ax, KERNEL_SEG
+    mov ds, ax
+    call vmm_poll
+    pop ax
+    pop ds
+.noyvmm:
+%endif
+    ; STKBALANCE-OK: fabricates the int 08h frame (pushf / push cs /
+    ; call .save), so the ret below is reached by the scheduler's iret and not
+    ; by .save returning - the depth at that ret is the frame, by design.
+    pushf                       ; FLAGS slot - carries the caller's IF
+    cli                         ; frame build + switch must be atomic
+    push cs                     ; CS slot
+    call .save                  ; IP slot; iret resumes at the ret below
+    ret
+
+.save:
+    push ax
+    push cx
+    push dx
+    push bx
+    push si
+    push di
+    push bp
+    push es
+    push ds
+    push cs                     ; caller's DS is on the stack; we need ours
+    pop ds
+                                ; NO sch_account HERE (SPEC.md 8.1.1). It used
+                                ; to charge the slice unconditionally, and on a
+                                ; machine with one runnable task that is 500
+                                ; cycles to bill a task and then go on running
+                                ; the same task - 1,048 times a second, 10.9%
+                                ; of an idle 8088. sch_switch charges at .pick
+                                ; instead, and only when the pick is a real
+                                ; change; the sch_resume branch below is a
+                                ; no-change by construction
+    cmp byte [sch_lock], 0      ; scheduler locked: resume self immediately -
+    jne sch_isr.sres            ; through the ISR's own `jmp sch_resume`, which
+    jmp sch_switch              ; is why this routine sits HERE, in short reach
+                                ; of it (size pass 10): the `jne sch_resume`
+                                ; this was is five bytes on an 8086, an
+                                ; inverted short over a near jmp, and the
+                                ; UNLOCKED yield paid the taken short (16
+                                ; clocks) to get past it where it now pays the
+                                ; untaken one (4). The locked yield, the rare
+                                ; one, pays the extra jmp instead
 
 sch_isr:
     push ax                     ; frame layout documented at top of file
@@ -2734,12 +2676,11 @@ sch_dphex2:
     call .nib
     pop ax
 .nib:
-    and al, 0x0F
-    add al, '0'
-    cmp al, '9'
-    jbe .put
-    add al, 'A' - '0' - 10
-.put:
+    and al, 0x0F                ; the nibble to its ASCII digit in four
+    add al, 0x90                ; instructions and no branch: 0..9 -> '0'..'9',
+    daa                         ; A..F -> 'A'..'F' (the 8086's own decimal
+    adc al, 0x40                ; adjust; two bytes under the compare and the
+    daa                         ; add it was until size pass 10)
     mov [sch_dphc], al          ; one digit as a one-character STRING, so the
     mov si, sch_dphc            ; hex path and the text path are the same two
     jmp short sch_dpstr         ; lines of drawing code and not two copies

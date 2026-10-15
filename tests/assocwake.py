@@ -98,13 +98,30 @@ def wait_toast_changes(m, was, limit):
     return now()
 
 
-def dbl_at_bp(m, mo, wx, wy, name, sym):
-    """Double-click `name` with `sym` armed across the second press.
+HANDOVER = "assoc_run_x.handover"     # inlined, size pass 9
 
-    assocopen.py's `bp_open`, and for its reasons: the arm goes BETWEEN the
-    two presses because the first legitimately draws, and the final release is
-    sent unproven because by then the guest may be standing at the breakpoint,
-    where it decodes nothing and `_edge` could only ever time out.
+
+def dbl_at_handover(m, mo, wx, wy, name, before_wins):
+    """Double-click `name`, and read the machine AT the handover and AT the
+    first toast after it - while the guest is STOPPED at each.
+
+    **Both reads happen in the trace's `on_hit`, and they have to.** A
+    `bp_trace` PUMPS: it resumes the guest at every stop by itself, so once
+    `tr.wait` has seen the handover the machine is already running on into
+    the document. This row used to read the screen and arm `toast_now` from
+    the body after that wait - so what it called "the screen at the handover"
+    was whatever the guest had reached by the time the host got there, and on
+    a loaded box Paint had raised 'Decoding GIF' before the second breakpoint
+    existed, the first toast caught was 'Opened', and the row failed naming
+    SPEC.md 42.14 for a race in its own harness. The callback runs before the
+    resume, so a read there IS the stop it belongs to, however slow the host.
+
+    The arm goes BETWEEN the two presses (assocopen.py's `bp_open`, for its
+    reasons): the first press legitimately draws, and the final release is
+    sent unproven because the guest may by then be standing at a stop.
+
+    Returns {"handover": (new_windows, rect, frame) or None,
+             "toast": bytes or None}.
     """
     entry = dispcp.row_of(m, S, name)
     row = dispcp.scroll_to(m, mo, S, os88marty.settle, wx, wy, entry)
@@ -118,14 +135,30 @@ def dbl_at_bp(m, mo, wx, wy, name, sym):
     t1 = mo.ticks()
     mo._edge(False)
 
-    # assocopen's reasoning, one row along: `_edge` proves the press against
-    # the published `mouse_btn`, which a guest stopped at `sym` cannot move.
-    with os88marty.bp_trace(m, sym) as tr:
+    seen = {"handover": None, "toast": None}
+
+    def on_hit(mm, rec):
+        if rec["name"] == HANDOVER and seen["handover"] is None:
+            new = [w for w in dispcp.win_list(mm, S) if w not in before_wins]
+            rect = dispcp.win_rect(mm, S, new[-1]) if new else None
+            seen["handover"] = (new, rect, frame(mm))
+        elif (rec["name"] == "toast_now" and seen["handover"] is not None
+              and seen["toast"] is None):
+            # toast_show has staged the message before it calls toast_now,
+            # so the buffer IS the toast this stop is drawing
+            said = mm.read(S("toast_buf"), len(WANT) + 1)
+            seen["toast"] = said.split(b"\0")[0]
+            mm.breakpoints([])          # the answer is in: the decode and the
+                                        # rest of the load run at full speed
+
+    with os88marty.bp_trace(m, HANDOVER, "toast_now", on_hit=on_hit) as tr:
         mo._edge(True)                  # ...the double-click
         t2 = mo.ticks()
         m.mouse(0, 0, l=False)
-        tr.wait(1, limit=30.0)
-    state = "breakpoint" if tr.n else None
+        if tr.until(lambda: seen["handover"] is not None, "assoc_handover",
+                    limit=30.0, required=False):
+            tr.until(lambda: seen["toast"] is not None,
+                     "a toast after the handover", limit=60.0, required=False)
 
     span = (t2 - t1) & 0xFFFFFFFF
     if span >= os88mouse.DBL_TICKS:
@@ -133,7 +166,7 @@ def dbl_at_bp(m, mo, wx, wy, name, sym):
                  "window is %d - the guest saw two FIRST clicks, so nothing "
                  "below is about a double-click at all"
                  % (span, os88mouse.DBL_TICKS))
-    return state
+    return seen
 
 
 with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
@@ -151,57 +184,43 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
     before = frame(m)
 
     # --- 1. the window is on the glass BEFORE the document is read ----------
-    try:
-        state = dbl_at_bp(m, mo, wx, wy, DOC, "assoc_run_x.handover")  # inlined, size pass 9
-        if state is None:
-            m.bp_exec()
-            m.run()
-            sys.exit("assocwake: assoc_handover was never reached - the "
-                     "double-click did not land, or the launch failed before "
-                     "the handover (SPEC.md 54.10)")
-        wins = dispcp.win_list(m, S)
-        new = [w for w in wins if w not in before_wins]
-        if not new:
-            m.bp_exec()
-            m.run()
-            sys.exit("assocwake: no new window at assoc_handover - the "
-                     "program did not launch, so nothing below is about the "
-                     "handover")
-        px, py, pw, ph = dispcp.win_rect(m, S, new[-1])
-        at_handover = frame(m)
-        drawn = rect_diff(before, at_handover, px, py, pw, ph)
-        area = pw * ph
-        say("at assoc_handover: window %d at (%d,%d) %dx%d, %d of %d frame "
-            "pixels changed" % (new[-1], px, py, pw, ph, drawn, area))
-        if drawn * 100 < area * 20:
-            fails.append(
-                "the launched window is NOT on the glass at assoc_handover: "
-                "only %d of its %d frame pixels differ from the desktop that "
-                "was there before the click. wm_show has to have drawn it "
-                "before the document is read, or the user waits at a screen "
-                "with nothing new on it (SPEC.md 54.10)" % (drawn, area))
+    seen = dbl_at_handover(m, mo, wx, wy, DOC, before_wins)
+    if seen["handover"] is None:
+        sys.exit("assocwake: assoc_handover was never reached - the "
+                 "double-click did not land, or the launch failed before "
+                 "the handover (SPEC.md 54.10)")
+    new, rect, at_handover = seen["handover"]
+    if not new:
+        sys.exit("assocwake: no new window at assoc_handover - the "
+                 "program did not launch, so nothing below is about the "
+                 "handover")
+    px, py, pw, ph = rect
+    drawn = rect_diff(before, at_handover, px, py, pw, ph)
+    area = pw * ph
+    say("at assoc_handover: window %d at (%d,%d) %dx%d, %d of %d frame "
+        "pixels changed" % (new[-1], px, py, pw, ph, drawn, area))
+    if drawn * 100 < area * 20:
+        fails.append(
+            "the launched window is NOT on the glass at assoc_handover: "
+            "only %d of its %d frame pixels differ from the desktop that "
+            "was there before the click. wm_show has to have drawn it "
+            "before the document is read, or the user waits at a screen "
+            "with nothing new on it (SPEC.md 54.10)" % (drawn, area))
 
-        # --- 2. ...and the DECODE says what it is doing ---------------------
-        m.bp_exec("toast_now")
-        m.run()
-        state = m.wait_stop(60.0)
-        if state is None:
-            fails.append("no toast was staged between the handover and the "
-                         "end of the load: pt_load owes 'Decoding GIF' at the "
-                         "instruction the read ends, where SPEC.md 12.8's "
-                         "widget has nothing left to report (SPEC.md 42.14)")
-        else:
-            said = m.read(S("toast_buf"), len(WANT) + 1)
-            said = said.split(b"\0")[0]
-            say("at toast_now: toast_buf = %r" % said)
-            if said != WANT:
-                fails.append(
-                    "the first toast of the load reads %r and not %r - "
-                    "SPEC.md 42.14 wants the decoder named at the point the "
-                    "machine goes quiet" % (said, WANT))
-    finally:
-        m.bp_exec()                     # BEFORE the run below, or the next hit
-        m.run()                         # stops the machine under the caller
+    # --- 2. ...and the DECODE says what it is doing -------------------------
+    said = seen["toast"]
+    if said is None:
+        fails.append("no toast was staged between the handover and the "
+                     "end of the load: pt_load owes 'Decoding GIF' at the "
+                     "instruction the read ends, where SPEC.md 12.8's "
+                     "widget has nothing left to report (SPEC.md 42.14)")
+    else:
+        say("at toast_now: toast_buf = %r" % said)
+        if said != WANT:
+            fails.append(
+                "the first toast of the load reads %r and not %r - "
+                "SPEC.md 42.14 wants the decoder named at the point the "
+                "machine goes quiet" % (said, WANT))
 
     # **NOT `settle` HERE.** It returns once two frames a second apart are
     # identical, and a decode holds the screen PERFECTLY still for as long as

@@ -135,7 +135,7 @@ ZI_DYNMAX    equ 0E000h
 ; name AND the pair that locates it, and the name alone is not enough: the
 ; entry proc runs while the kernel is standing in the PROGRAM's directory, so
 ; a story in B:\INFOCOM opened from the root is not found by name. frotz.asm
-; banks these two at entry and zi_openpend spends them on OSAPI_FILE_GOTO.
+; banks these two at entry and zi_openpend spends them on OSAPI_FILE_GOTO_QM.
 %define zi_argclus    (os88_image_end + ZIO_SLACK + 84)  ; word: its directory
 %define zi_argdrv     (os88_image_end + ZIO_SLACK + 86)  ; byte: and its volume
 %define zi_arghave    (os88_image_end + ZIO_SLACK + 87)  ; byte: ...and whether
@@ -316,26 +316,20 @@ zi_yield:
 ;
 ; The Z-stack is native little-endian - it is our data structure, not the
 ; story's - so this is a plain word access and NOT zmem's business. DS has to
-; move to reach it and DS is where [zf_stkseg] lives, so the segment is loaded
-; into a register first.
+; move to reach it and DS is where [zf_stkseg] lives - which `mov ds, [m]`
+; does in one instruction, the operand being read through the DS it replaces.
 ; -----------------------------------------------------------------------------
 zi_zsw:
     push ds
-    push si
-    mov si, [zf_stkseg]
-    mov ds, si
+    mov ds, [zf_stkseg]
     mov ax, [bx]
-    pop si
     pop ds
     ret
 
 zi_zsp:
     push ds
-    push si
-    mov si, [zf_stkseg]
-    mov ds, si
+    mov ds, [zf_stkseg]
     mov [bx], ax
-    pop si
     pop ds
     ret
 
@@ -381,8 +375,7 @@ zi_wd:
     mov al, dl
     stosb
     pop ax
-    call zi_ww
-    ret
+    jmp zi_ww
 
 ; -----------------------------------------------------------------------------
 ; zi_rw / zi_rd - read a big-endian word / dword out of the staging buffer
@@ -398,8 +391,7 @@ zi_rw:
 zi_rd:
     call zi_rw
     mov dx, ax
-    call zi_rw
-    ret
+    jmp zi_rw
 
 ; -----------------------------------------------------------------------------
 ; zi_scmp - compare story bytes against staged bytes
@@ -407,17 +399,13 @@ zi_rd:
 ; out: CF = 1 if they differ. SI/DI advanced, CX consumed.
 ;
 ; DS moves to the story claim so `repe cmpsb` can do the work in one
-; instruction; the story segment is loaded into AX first because [zf_sseg] is
-; unreachable once DS has moved.
+; instruction; `mov ds, [zf_sseg]` reads the word through the DS it replaces.
 ; -----------------------------------------------------------------------------
 zi_scmp:
-    push ax
     push ds
-    mov ax, [zf_sseg]
-    mov ds, ax
+    mov ds, [zf_sseg]
     repe cmpsb
     pop ds
-    pop ax
     jne .differ
     clc
     ret
@@ -535,7 +523,7 @@ zi_reload:
     push si
     push es
     mov byte [zf_reqres], ZRES_FAIL
-    call zm_dynlen                  ; AX = [zf_static]
+    mov ax, [zf_static]             ; the length of dynamic memory
     or ax, ax
     jz .done
     mov cx, ax
@@ -552,12 +540,7 @@ zi_reload:
 .done:
     mov byte [zf_req], ZREQ_NONE    ; last: the worker is watching this byte
     pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop5
 
 ; -----------------------------------------------------------------------------
 ; zi_restart - @restart's worker half (WORKER)
@@ -670,16 +653,14 @@ zi_dlg_story:
     pop cx
     cmp cx, ax
     ja .toobig
-    call zi_load
-    ret
+    jmp zi_load
 .nofile:
     mov si, zi_m_nofile
     jmp short .say
 .toobig:
     mov si, zi_m_toobig
 .say:
-    call zw_notice
-    ret
+    jmp zw_notice
 
 ; -----------------------------------------------------------------------------
 ; zi_dlg_save - the worker staged it; write it
@@ -792,7 +773,27 @@ zi_load:
     mov [zf_slen_h], dx
 
     call zm_setup                   ; CF=1 and AL = ZERR_* if unsupported
-    jc .badstory
+    jnc .story
+    ; The refusals sit HERE, in the middle, where the five jumps to them are
+    ; all short ones.
+.badstory:
+    mov si, zi_m_bad
+    jmp short .fail
+.ioerr:
+    mov si, zi_m_ioerr
+    jmp short .fail
+.nowin:
+    mov si, zi_m_nowin
+    jmp short .fail
+.nomem:
+    mov si, zi_m_nomem
+.fail:
+    call zw_notice
+    call zi_free_all
+    mov byte [zf_state], ZFS_NONE
+    stc
+    ret
+.story:
 
     mov dx, [zf_sseg]           ; ONLY NOW is it movable (SPEC.md 66.2/66.5.9)
     mov ax, zf_reloc            ; - not at the claim. OSAPI_FILE_READ above
@@ -812,15 +813,23 @@ zi_load:
     call OSAPI_MEM_MOVABLE      ; one word: every cursor into it - [zf_sp],
                                 ; [zf_fp], every frame's base - is a BYTE
                                 ; OFFSET, and zi_zsw/zi_zsp load ES per word
-    mov word [zf_sp], 0
-    mov word [zf_fp], 0FFFFh        ; no frame yet; zx_run pushes the dummy one
+    xor ax, ax
+    mov [zf_sp], ax
+    dec ax
+    mov [zf_fp], ax                 ; no frame yet; zx_run pushes the dummy one
 
     ; The staging buffer holds a whole Quetzal image: dynamic memory, the
-    ; frame chain, and about forty bytes of chunk headers.
-    call zm_dynlen                  ; AX = [zf_static]
+    ; frame chain, and fifty-two bytes of chunk headers and pads. The chain is
+    ; never longer in Quetzal than in our own stack - eight bytes of frame
+    ; header against our ten - so dynamic memory + ZI_STKKB + 52 bytes is the
+    ; most a save can be, and ONE more KB covers the 52 with 972 to spare.
+    ; The undo snapshot is twelve bytes of registers + dynamic memory + the
+    ; stack as it stands, which the same figure covers. It was + 2 KB, which
+    ; was a whole KB of every running story's heap, twice.
+    mov ax, [zf_static]             ; the length of dynamic memory
     mov [zi_dyn], ax
     call zi_kbof
-    add ax, ZI_STKKB + 2
+    add ax, ZI_STKKB + 1
     mov [zi_savkb], ax
     call OSAPI_MEM_CLAIM
     jc .nosave
@@ -840,12 +849,8 @@ zi_load:
     call OSAPI_MEM_CLAIM
     jc .noundo
     mov [zi_undoseg], dx
-    push ax
     mov ax, zf_reloc            ; one word too, and NOT a file target - a
     call OSAPI_MEM_MOVABLE      ; snapshot is a memory copy (Standard 6.1.2)
-    pop ax
-    mov ax, [zi_savkb]
-    mov [zi_undokb], ax
     jmp short .win
 .noundo:
     mov si, zi_m_noundo
@@ -913,24 +918,6 @@ zi_load:
     ; repaint retries (SPEC.md 20.6).
     call zf_hire
     clc
-    ret
-
-.ioerr:
-    mov si, zi_m_ioerr
-    jmp short .fail
-.badstory:
-    mov si, zi_m_bad
-    jmp short .fail
-.nowin:
-    mov si, zi_m_nowin
-    jmp short .fail
-.nomem:
-    mov si, zi_m_nomem
-.fail:
-    call zw_notice
-    call zi_free_all
-    mov byte [zf_state], ZFS_NONE
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1001,41 +988,40 @@ zf_reloc:
 ; the old one is released before the new one is claimed rather than both
 ; having to fit at once.
 ;
-; It does not touch zwin's scrollback claim: that is another module's state
-; (zbss.inc 4), and zw_setup reuses it.
+; IT FREES THE SCROLLBACK TOO, and that is a fix: this used to say zwin's
+; claim was left alone because "zw_setup reuses it" - and zw_setup zeroes
+; [zw_sbseg] and claims afresh, so every story opened after the first leaked
+; the previous one's scrollback (24KB, or 8) until the window closed.
 ; -----------------------------------------------------------------------------
 zi_free_all:
     push ax
+    push bx
     push dx
-    mov dx, [zf_sseg]
+    push si
+    cld
+    mov si, zi_claims
+.claim:
+    lodsw                           ; AX = the word that names one claim
+    xchg ax, bx
+    xor dx, dx
+    xchg dx, [bx]                   ; DX = its segment; the word is 0 now
     or dx, dx
-    jz .nostory
+    jz .none
     call OSAPI_MEM_FREE
-    mov word [zf_sseg], 0
-.nostory:
-    mov dx, [zf_stkseg]
-    or dx, dx
-    jz .nostack
-    call OSAPI_MEM_FREE
-    mov word [zf_stkseg], 0
-.nostack:
-    mov dx, [zi_savseg]
-    or dx, dx
-    jz .nosave
-    call OSAPI_MEM_FREE
-    mov word [zi_savseg], 0
-.nosave:
-    mov dx, [zi_undoseg]
-    or dx, dx
-    jz .noundo
-    call OSAPI_MEM_FREE
-    mov word [zi_undoseg], 0
-.noundo:
+.none:
+    cmp si, zi_claims_end
+    jb .claim
     mov byte [zi_undook], 0
     call zp_free                    ; the art goes back with the story that
-    pop dx                          ; named it, or opening a second one keeps
-    pop ax                          ; the first one's claim for ever
+    pop si                          ; named it, or opening a second one keeps
+    pop dx                          ; the first one's claim for ever
+    pop bx
+    pop ax
     ret
+
+zi_claims:
+    dw zf_sseg, zf_stkseg, zi_savseg, zi_undoseg, zw_sbseg
+zi_claims_end:
 
 ; =============================================================================
 ; THE WORKER SIDE: INPUT
@@ -1337,12 +1323,7 @@ zi_commit:
     xor dl, dl
     call zd_tokenise
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop5
 
 ; =============================================================================
 ; THE WORKER SIDE: SAVED GAMES
@@ -1525,20 +1506,12 @@ zi_save:
     call zw_notice
     stc
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop7
 
 ; A separate proc only so the CF that zi_request produces survives the pops.
 zi_ask_save:
     mov al, ZREQ_SAVE
-    call zi_request
-    ret
+    jmp zi_request
 
 ; -----------------------------------------------------------------------------
 ; zi_scpy - copy story bytes into the staging buffer
@@ -1551,13 +1524,10 @@ zi_ask_save:
 ; construction (Standard 1.1.1), so a single rep movsb reaches all of it.
 ; -----------------------------------------------------------------------------
 zi_scpy:
-    push ax
     push ds
-    mov ax, [zf_sseg]
-    mov ds, ax
+    mov ds, [zf_sseg]
     rep movsb
     pop ds
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1710,11 +1680,7 @@ zi_wframe:
     mov bx, [zi_ebase]
     call zi_wwords
 
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 ; -----------------------------------------------------------------------------
 ; zi_wwords - CX words off the Z-stack at BX, big-endian, to ES:DI
@@ -1772,13 +1738,7 @@ zi_restore:
 .ok:
     clc
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop6
 
 ; -----------------------------------------------------------------------------
 ; zi_parse - walk the IFF container and find the chunks
@@ -1791,10 +1751,11 @@ zi_restore:
 ; ends the walk instead of addressing memory we were not given.
 ; -----------------------------------------------------------------------------
 zi_parse:
-    mov word [zi_umoff], 0
-    mov word [zi_umlen], 0
-    mov word [zi_skoff], 0
-    mov word [zi_sklen], 0
+    xor ax, ax
+    mov [zi_umoff], ax
+    mov [zi_umlen], ax
+    mov [zi_skoff], ax
+    mov [zi_sklen], ax
     mov ax, [zi_savlen_l]
     cmp word [zi_savlen_h], 0
     je .havelen
@@ -1805,10 +1766,7 @@ zi_parse:
     jb .bad
     xor si, si
     call zi_rw
-    cmp ax, 4946h                   ; 'FO'... no: 'FORM' is 46 4F 52 4D
-    jmp short .form0
-.form0:
-    cmp ax, 464Fh
+    cmp ax, 464Fh                   ; 'FORM' is 46 4F 52 4D
     jne .bad
     call zi_rw
     cmp ax, 524Dh
@@ -1820,7 +1778,19 @@ zi_parse:
     jne .bad
     call zi_rw
     cmp ax, 5A53h
-    jne .bad
+    je .chunk
+    ; The two exits sit HERE, between the header checks and the chunk walk
+    ; that both reach them, so every jump to them is a short one.
+.bad:
+    mov si, zi_m_notsave
+    call zw_notice
+    stc
+    ret
+.walked:
+    cmp word [zi_umoff], 0
+    je .bad
+    clc
+    ret
 
 .chunk:
     mov ax, si
@@ -1884,17 +1854,6 @@ zi_parse:
     stc
     ret
 
-.walked:
-    cmp word [zi_umoff], 0
-    je .bad
-    clc
-    ret
-.bad:
-    mov si, zi_m_notsave
-    call zw_notice
-    stc
-    ret
-
 ; -----------------------------------------------------------------------------
 ; zi_ifhd - check the header chunk and take the PC out of it
 ; in:  ES = staging, SI = the body's offset, [zi_fixup] = its length
@@ -1945,18 +1904,12 @@ zi_apply:
     mov cx, [zi_umlen]
     cmp cx, [zf_static]
     jne .wrong                      ; a UMem body is dynamic memory exactly
-    mov si, [zi_umoff]
+    mov si, [zi_umoff]              ; DS:SI = the staged image
     xor di, di
-    push ds
-    push es
-    pop ds                          ; DS:SI = the staged image
-    mov ax, [zf_sseg - 0]
-    pop ds                          ; (restored below; see the reload)
     push es
     mov es, [zf_sseg]               ; ES:DI = dynamic memory
     push ds
-    mov ax, [zi_savseg]
-    mov ds, ax
+    mov ds, [zi_savseg]
     rep movsb
     pop ds
     pop es
@@ -1995,10 +1948,12 @@ zi_rstks:
     mov ax, si
     add ax, [zi_sklen]
     mov [zi_end], ax
-    mov word [zf_sp], 0
-    mov word [zf_fp], 0FFFFh
-    mov byte [zf_nlocals], 0
-    mov word [zi_cur], 0FFFFh       ; the previous frame's base
+    xor ax, ax
+    mov [zf_sp], ax
+    mov [zf_nlocals], al
+    dec ax
+    mov [zf_fp], ax
+    mov [zi_cur], ax                ; the previous frame's base
 .frame:
     mov ax, si
     add ax, 8
@@ -2164,13 +2119,7 @@ zi_save_undo:
     pop es
     stc
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop6
 
 ; -----------------------------------------------------------------------------
 ; zi_restore_undo - worker: @restore_undo
@@ -2231,13 +2180,7 @@ zi_restore_undo:
     pop es
     stc
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop6
 
 ; -----------------------------------------------------------------------------
 ; zi_stkcpy - CX bytes of Z-stack -> ES:DI
@@ -2246,43 +2189,33 @@ zi_restore_undo:
 ; All preserve every register except SI/DI/CX, which they consume.
 ; -----------------------------------------------------------------------------
 zi_stkcpy:
-    push ax
     push ds
     push si
-    mov ax, [zf_stkseg]
-    mov ds, ax
+    mov ds, [zf_stkseg]
     xor si, si
     rep movsb
     pop si
     pop ds
-    pop ax
     ret
 
 zi_ucpy:
-    push ax
     push ds
-    mov ax, [zi_undoseg]
-    mov ds, ax
+    mov ds, [zi_undoseg]
     rep movsb
     pop ds
-    pop ax
     ret
 
 zi_ustk:
-    push ax
     push es
     push di
-    mov ax, [zf_stkseg]
-    mov es, ax
+    mov es, [zf_stkseg]
     xor di, di
     push ds
-    mov ax, [zi_undoseg]
-    mov ds, ax
+    mov ds, [zi_undoseg]
     rep movsb
     pop ds
     pop di
     pop es
-    pop ax
     ret
 
 ; =============================================================================
@@ -2382,9 +2315,9 @@ zi_script_open:
     jc .no
     mov [zi_scrseg], dx
 .ok:
-    mov word [zi_scrlen], 0
-    mov byte [zi_scrfull], 0
-    clc
+    xor ax, ax                      ; (CF = 0)
+    mov [zi_scrlen], ax
+    mov [zi_scrfull], al
     jmp short .out
 .no:
     stc
@@ -2463,12 +2396,7 @@ zi_script_flush:
                                     ; the whole transcript every time
 .out:
     pop es                          ; back to KERNEL_SEG for the caller's
-    pop si                          ; [es:bx+W_*] reads
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop5                 ; [es:bx+W_*] reads
 
 zi_scrname:  db 'SCRIPT.TXT', 0
 zi_m_scrfull: db 'Transcript full - it stops here.', 0
@@ -2521,11 +2449,18 @@ zi_openpend:
     push di
     push es
 
-    ; THE GOTO GOES FIRST, before ES is set up, because it is a REMOUNT and
-    ; nothing promises what it leaves in ES. CF=1 is the folder no longer being
-    ; listable - a disk swapped between the double-click and this first paint -
-    ; and searching the wrong directory would report the wrong reason, so it
-    ; takes the not-found exit.
+    ; THE GOTO GOES FIRST, before ES is set up and with every register banked
+    ; above - it answers in AX, and on a redirected volume it reaches the
+    ; driver's FSV_CHDIR and CX, SI and DI are the driver's (SPEC.md 62.9.1).
+    ; It is OSAPI_FILE_GOTO_QM and not the listing remount OSAPI_FILE_GOTO:
+    ; the walk below is OSAPI_FILE_FIND over the raw directory sectors and the
+    ; read after it is by name, so the remount's scan, sort and icon harvest
+    ; were ~0.5 s of floppy for no reader (docs/plans/NAV-COST-PLAN.md, SPEC.md
+    ; 19.9.1); QM moves the instance with it, so both resolve THERE. CF=1 is
+    ; the folder not being reachable - a disk swapped between the double-click
+    ; and this first paint - and with QM NOTHING has moved, so searching on
+    ; would search the program's own folder and could find a same-named
+    ; stranger: it takes the not-found exit.
     ;
     ; Only when a locator actually came with the name. The harness build sets
     ; [zf_pend] itself and has none, and must go on searching where it already
@@ -2534,7 +2469,7 @@ zi_openpend:
     je .located
     mov dx, [zi_argclus]
     mov bl, [zi_argdrv]
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_QM
     jc .nofile
 .located:
 
@@ -2543,7 +2478,7 @@ zi_openpend:
     ; first version of this proc copied the name before setting ES and wrote
     ; thirteen bytes into the KERNEL's segment, which assembles cleanly, runs,
     ; and leaves [zi_name] empty so the search below finds nothing. It is set
-    ; here rather than at the top so that the remount above cannot come between
+    ; here rather than at the top so that the call above cannot come between
     ; the load and its use.
     push ds
     pop es
@@ -2581,14 +2516,7 @@ zi_openpend:
     mov si, zi_m_notfound
     call zw_notice
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop7
 
 zi_m_notfound: db 'That story is not on this disk.', 0
 

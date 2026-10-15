@@ -178,8 +178,14 @@ OT_SHELL  equ 5                 ; the player's
 OT_ESHELL equ 6                 ; theirs
 
 ; --- the projection -----------------------------------------------------------
-TK_MAXV   equ 16                ; vertices in the largest model
-TK_MAXROW equ 240               ; the tallest viewport any backend offers
+TK_MAXV   equ 13                ; vertices in the largest model (the tank's;
+                                ; tk3d.inc asserts every model against it)
+TK_MAXROW equ 240               ; the tallest viewport any backend offers...
+TK_SHROWS equ 200               ; ...and the tallest a SHADOW backend offers,
+                                ; which is every array only CGA and Hercules
+                                ; touch - the template's span sets, the device
+                                ; rows, the span store's index (tkraster.inc
+                                ; asserts tk_vptab against it)
 
 TK_LASTB  equ 79                ; the last byte of a viewport row - and it is
                                 ; 79 on ALL THREE, which is the coincidence
@@ -240,6 +246,11 @@ TKT_GAP   equ 4                 ; lit runs closer than this are ONE span, the
 %else
 TK_SHKB   equ 32                ; ...as a claim, with the HUD TEMPLATE in its
                                 ; second half (SPEC.md 85.3.5)
+TK_DEVOFS equ 2 * TK_SHSEG      ; ...and the blit's device-row table in the
+                                ; 768 bytes the two leave of it (85.3.9)
+%if TK_DEVOFS + TK_SHROWS * 2 > TK_SHKB * 1024
+  %error "the device-row table does not fit the claim's tail"
+%endif
 %endif
 
 
@@ -511,25 +522,21 @@ tk_adapter:
                                     ; question, and it is asked HERE so that a
                                     ; window dragged to the other card of a
                                     ; two-card machine re-answers it
-    mov byte [tk_want], TKB_NONE
-    mov byte [tk_fsxm], 0FFh
-
+    mov word [tk_want], TKB_NONE | (0FFh << 8)  ; [tk_want] and [tk_fsxm],
+                                    ; adjacent, as one word
     test ax, 1 << FSXM_MODEX        ; VGA first: Mode X is the only mode here
     jz .cga                         ; with a spare page in it
-    mov byte [tk_want], TKB_MODEX
-    mov byte [tk_fsxm], FSXM_MODEX
+    mov word [tk_want], TKB_MODEX | (FSXM_MODEX << 8)
     jmp short .say
 .cga:
     test ax, 1 << FSXM_CGA320       ; ...then the 1983 port's own mode
     jz .herc
-    mov byte [tk_want], TKB_CGA
-    mov byte [tk_fsxm], FSXM_CGA320
+    mov word [tk_want], TKB_CGA | (FSXM_CGA320 << 8)
     jmp short .say
 .herc:
     test ax, 1 << FSXM_HERC
     jz .say
-    mov byte [tk_want], TKB_HERC
-    mov byte [tk_fsxm], FSXM_HERC
+    mov word [tk_want], TKB_HERC | (FSXM_HERC << 8)
 .say:
     mov dx, tk_s_play               ; and the menu says WHY not, off the same
     cmp byte [tk_want], TKB_NONE    ; predicate the command refuses on
@@ -601,7 +608,8 @@ tk_paint:
     call tk_at_text                 ; and then the parts that never move
     call tk_band_full
     call tk_at_resume               ; the two gleam cursors are absolute, so a
-    call tk_hire                    ; window that MOVED has to re-init them
+    mov byte [tk_atstale], 0        ; window that MOVED has to re-init them -
+    call tk_hire                    ; and a bracket has just reused their bytes
     cmp byte [tk_abon], 0           ; ...and the About card LAST, over the
     je .out                         ; attract panel it is opaque about (20.5.1)
     push si
@@ -630,17 +638,13 @@ tk_onkey:
                                     ; opens it three lines down - so this is
                                     ; the chord agreeing with the key rather
                                     ; than a new action. On AX: ascii is 0
-    cmp al, 'f'
-    je .go
-    cmp al, 'F'
-    je .go
     cmp al, 0x0D
     je .go
+    or al, 0x20                     ; either case: only 'F' and 'N' fold onto
+    cmp al, 'f'                     ; the two letters below
+    je .go
     cmp al, 'n'
-    je .new
-    cmp al, 'N'
     jne .out
-.new:
     call tk_newgame
     call tk_paint                   ; the lock is held in a key callback, so
 .out:                               ; the panel is redrawn here and now
@@ -816,6 +820,7 @@ tk_tpl:
     ZWORD tk_caps
     ZBYTE tk_want
     ZBYTE tk_fsxm
+    OS88_ADJACENT tk_want, tk_fsxm, 1   ; tk_adapter writes the pair as a word
     ZBYTE tk_vidk                   ; the VID_* kind of the display we are on
     ZBUF  tk_numbuf, 14
     ZBYTE tk_ctry
@@ -827,14 +832,16 @@ tk_tpl:
 ; --- the raster ---------------------------------------------------------------
     ZBUF  tk_fsi, FSI_SIZE
     ZBYTE tk_back
-    ZWORD tk_vx
-    ZWORD tk_vy
+    ZWORD tk_vx                     ; these six are one row of tk_vptab,
+    ZWORD tk_vy                     ; copied as a block by tk_r_setup
     ZWORD tk_vw
     ZWORD tk_vh
-    ZWORD tk_vcx
-    ZWORD tk_vcy
     ZWORD tk_sclx
     ZWORD tk_scly
+    ZWORD tk_inktab                 ; the live backend's TKI_* -> device map
+    OS88_ADJACENT tk_vx, tk_inktab, 12
+    ZWORD tk_vcx
+    ZWORD tk_vcy
     ZWORD tk_ridgek
     ZWORD tk_tseg
     ZWORD tk_tbase
@@ -855,7 +862,7 @@ tk_tpl:
     ZBYTE tk_tmbits
     ZWORD tk_tmcur                  ; the rectangle being redrawn, or 0
 %ifdef APP_SMALL
-    ZBUF  tk_tmrix, (TK_MAXROW + 1) * 2 ; row r's records start at pool
+    ZBUF  tk_tmrix, (TK_SHROWS + 1) * 2 ; row r's records start at pool
                                     ; [tk_tmrix[r]] and end at [tk_tmrix[r+1]],
                                     ; which is why there is one more of these
                                     ; than there are rows (SPEC.md 85.3.5.1)
@@ -870,6 +877,8 @@ tk_tpl:
     ZBYTE tk_tmovf                  ; ...and whether a record ran into it
     ZWORD tk_tmpen                  ; the pool pen, while a row is written
 %endif
+    ZWORD tk_rb2                    ; tk_spans2 and tk_sprdg less the band's
+    ZWORD tk_rbd                    ; first row: an absolute row indexes both
     ZBYTE tk_rtm_on                 ; the template holds a ridge (85.3.8)...
     ZBYTE tk_rpa_tm                 ; ...drawn at this heading...
     ZBYTE tk_rpa_last               ; ...and the heading of the last frame
@@ -885,35 +894,41 @@ tk_tpl:
     ZWORD tk_lsh                    ; the live walk trio - shallow, steep,
     ZWORD tk_lst                    ; vertical - reached by `jmp` from tk_seg
     ZWORD tk_lvt                    ; (SPEC.md 85.3.4)
-    ZWORD tk_esh                    ; ...and the trio that takes ink AWAY
-    ZWORD tk_est
-    ZWORD tk_evt
+    ZWORD tk_eftab                  ; ...and the bytes the halo flips in it
+                                    ; (SPEC.md 85.8.1.1), 0 on Mode X
     ZBYTE tk_kshift                 ; log2 of the pixels in a byte: 3 or 2
     ZWORD tk_hrunproc
     ZWORD tk_glyphproc
     ZBYTE tk_ink
-    ZBYTE tk_ink8
-    ZBYTE tk_pat0
+    ZBYTE tk_ink8                   ; these four are complemented as two words
+    ZBYTE tk_pat0                   ; for the halo's erase (SPEC.md 85.8.1.1)
     ZBYTE tk_pat3
     ZBYTE tk_inkpat
+    OS88_ADJACENT tk_ink8, tk_pat0, 1
+    OS88_ADJACENT tk_pat0, tk_pat3, 1
+    OS88_ADJACENT tk_pat3, tk_inkpat, 1
     ZWORD tk_nibp
-    ZWORD tk_inktab                 ; the live backend's TKI_* -> device map
 
 ; The two span sets, with slack either side: a walk's LAST step can advance
 ; the row pointer one past the row it drew on, and the guard is cheaper than
-; a test in the inner loop (SPEC.md 85.3.2).
+; a test in the inner loop (SPEC.md 85.3.2). The two frame sets serve every
+; backend; the three after them and the device rows serve only the TEMPLATE,
+; which only a shadow backend has, so they are TK_SHROWS long.
     ZBUF  tk_spguard0, 8
     ZBUF  tk_spans0, TK_MAXROW * 2
     ZBUF  tk_spguard1, 8
     ZBUF  tk_spans1, TK_MAXROW * 2
     ZBUF  tk_spguard2, 8
-    ZBUF  tk_spans2, TK_MAXROW * 2  ; the ridge's old runs, then the union
-    ZBUF  tk_spguard3, 8            ; (85.3.8)
-    ZBUF  tk_sprdg, TK_MAXROW * 2   ; the runs the template's ridge lit
+    ZBUF  tk_spans2, TK_RBROWS * 2  ; the ridge's old runs, then the union
+    ZBUF  tk_spguard3, 8            ; (85.3.8) - over the BAND alone, so both
+    ZBUF  tk_sprdg, TK_RBROWS * 2   ; are the band's rows long and reached
+                                    ; through tk_rb2/tk_rbd (85.3.9)
     ZBUF  tk_spguard4, 8
-    ZBUF  tk_spjunk, TK_MAXROW * 2  ; the set a template draw marks: nobody
+    ZBUF  tk_spjunk, TK_SHROWS * 2  ; the set a template draw marks: nobody
     ZBUF  tk_spguard5, 8            ; reads it
-    ZBUF  tk_devoff, TK_MAXROW * 2
+%ifdef APP_SMALL
+    ZBUF  tk_devoff, TK_SHROWS * 2  ; the blit's, so a shadow's alone - and in
+%endif                              ; the claim's tail on the shipped build
     ZBUF  tk_rowoff, TK_MAXROW * 2  ; 80 x row: the target offset of a row,
                                     ; looked up rather than multiplied
 
@@ -943,10 +958,9 @@ tk_tpl:
     ZBYTE tk_dtype
     ZBYTE tk_rotdone
     ZBUF  tk_rotx, TK_MAXV * 2
-    ZBUF  tk_roty, TK_MAXV * 2
     ZBUF  tk_rotz, TK_MAXV * 2
     ZBUF  tk_cxv,  TK_MAXV * 2
-    ZBUF  tk_cyv,  TK_MAXV * 2
+    ZWORD tk_ycur                   ; the heights of the model tk_emit is on
     ZBUF  tk_czv,  TK_MAXV * 2
     ZBUF  tk_sxv,  TK_MAXV * 2
     ZBUF  tk_syv,  TK_MAXV * 2
@@ -963,8 +977,38 @@ tk_tpl:
     ZBUF  tk_ridgex, 25 * 2
     ZBUF  tk_rpy, 25 * 2
     ZBYTE tk_ra
-    ZBUF  tk_kx, 2048 * 2           ; the projection tables (85.5.3): sclx and
-    ZBUF  tk_ky, 2048 * 2           ; scly over the depth, a row a bucket
+%assign TK_UNION TK_BSS
+    ZBUF  tk_kxrows, (TK_KROWS - TK_NEARZ) * 2
+%assign TK_UEND TK_BSS
+; THE ATTRACT WINDOW'S WALK BUFFERS SHARE THE PROJECTION TABLE'S BYTES
+; (SPEC.md 85.10.5). tk_ktabs rebuilds the table at the top of every bracket,
+; and the window's cursors, logo walk and point list are rebuilt by the
+; repaint that ends one (tk_paint: tk_logo_full, tk_at_resume) before the
+; attract worker can take the gfx lock again - so neither half ever finds the
+; other's bytes where it left its own.
+%assign TK_BSS TK_UNION
+    ZBUF  tk_curfh, TKC_SZ          ; the two gaps and their two tails: one
+    ZBUF  tk_curft, TKC_SZ          ; walk block each, plus where it has got
+    ZBUF  tk_curbh, TKC_SZ          ; to and what it still owes this glyph
+    ZBUF  tk_curbt, TKC_SZ
+    ZBUF  tk_lgwk,  GLS_SZ          ; ...and one more walk block, for the logo
+                                    ; segments drawn WHOLE (SPEC.md 85.10.4):
+                                    ; the cursors above animate, this one just
+                                    ; lays a segment down and is done with it
+    ZBUF  tk_pts, TK_PTMAX * 4      ; the attract cursors' points, stepped into
+                                    ; here and committed in ONE arrival
+                                    ; (SPEC.md 5.12.5). A full list commits
+                                    ; itself, so this is a tuning size and
+                                    ; never a correctness one
+%if TK_BSS > TK_UEND
+  %error "the attract window's walk buffers outgrew the projection table they share"
+%endif
+%assign TK_BSS TK_UEND
+tk_kx equ tk_kxrows - TK_NEARZ * 2  ; the projection table (85.5.3): sclx over
+                                    ; the depth, a row a bucket - for BOTH axes,
+    ZBUF  tk_ypre, TK_NYPRE * 2     ; because every model height is pre-scaled
+                                    ; by scly / sclx here once a bracket
+                                    ; (85.5.3.1)
 
 ; --- the world ----------------------------------------------------------------
     ZWORD tk_px
@@ -1003,7 +1047,6 @@ tk_tpl:
     ZBYTE tk_over                   ; 0 playing, 1 the fly-in, 2 the menu
     ZWORD tk_ovt                    ; ...and the tick the fly-in began at
     ZWORD tk_goq                    ; how much of the journey is left, 0..256
-    ZWORD tk_gok
     ZWORD tk_gdx
     ZWORD tk_gdy
     ZWORD tk_gtx
@@ -1011,24 +1054,23 @@ tk_tpl:
     ZWORD tk_hox                    ; the halo pass's displacement (85.8.1)
     ZWORD tk_hoy
     ZWORD tk_hset                   ; ...where it has got to in the table
-    ZBUF  tk_lsave, 6               ; ...and the drawing trio, while it runs
     ZBYTE tk_gosh                   ; 0 none, 1 shadow, 2 outline
     ZBYTE tk_still                  ; the settled frame is already on the glass
     ZBYTE tk_pquick                 ; ...and only its prompt needs redrawing
     ZBUF  tk_wbuf, 24
 
 ; --- the high scores (SPEC.md 85.9) -------------------------------------------
-    ZBUF  tk_hs, TK_NHS * 4         ; six dwords...
-    ZBUF  tk_hsn, TK_NHS * 3        ; ...and three initials each
-    ZBUF  tk_hsbuf, TK_HSFSZ        ; the file, as it sits on the disk
+    ZBUF  tk_hsbuf, 4               ; THE FILE, as it sits on the disk: the
+    ZBUF  tk_hs, TK_NHS * 4         ; magic, six dwords...
+    ZBUF  tk_hsn, TK_NHS * 3        ; ...and three initials each (tkhs.inc)
+    OS88_ADJACENT tk_hsbuf, tk_hs, 4
+    OS88_ADJACENT tk_hs, tk_hsn, TK_NHS * 4
     ZWORD tk_hsidx                  ; the row this game took, x4; TK_NHS*4 none
     ZBYTE tk_hsload
     ZBYTE tk_ient                   ; the initials prompt is up
     ZBYTE tk_ipos
     ZBUF  tk_ibuf, 4
-    ZWORD tk_dbclus                 ; where we were standing before a save
-    ZBYTE tk_dbdrv
-    ZBUF  tk_dfind, OSAPI_FIND_SZ
+    OS88_ADJACENT tk_ient, tk_ipos, 1   ; tk_ient_begin writes the pair as a word
     ZWORD tk_frames                 ; frames rendered this session; the only
                                     ; instrument in the package, read from
                                     ; outside by tests/bzfps.py
@@ -1110,19 +1152,9 @@ tk_tpl:
     ZWORD tk_due                    ; the tick the worker's next wake is due
     ZBYTE tk_hired
     ZBYTE tk_abon                   ; the About card is up (SPEC.md 20.5.1)
-    ZBUF  tk_curfh, TKC_SZ          ; the two gaps and their two tails: one
-    ZBUF  tk_curft, TKC_SZ          ; walk block each, plus where it has got
-    ZBUF  tk_curbh, TKC_SZ          ; to and what it still owes this glyph
-    ZBUF  tk_curbt, TKC_SZ
-    ZBUF  tk_lgwk,  GLS_SZ          ; ...and one more walk block, for the logo
-                                    ; segments drawn WHOLE (SPEC.md 85.10.4):
-                                    ; the cursors above animate, this one just
-                                    ; lays a segment down and is done with it
-    ZBUF  tk_pts, TK_PTMAX * 4      ; the attract cursors' points, stepped into
-                                    ; here and committed in ONE arrival
-                                    ; (SPEC.md 5.12.5). A full list commits
-                                    ; itself, so this is a tuning size and
-                                    ; never a correctness one
+    ZBYTE tk_atstale                ; a bracket has run since the last paint
+                                    ; (the walk buffers share tk_kx's bytes:
+                                    ; see the geometry block above)
 
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
 %define OS88UI_ABOUT            ; the standard About card, and NOTHING else:

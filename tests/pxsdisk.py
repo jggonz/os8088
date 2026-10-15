@@ -33,6 +33,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, os.path.join(HERE, "unit"))
+import os88build                                                # noqa: E402
 import os88parts                                                # noqa: E402
 import os88pkg                                                  # noqa: E402
 from t_image import Vol                                         # noqa: E402
@@ -49,8 +50,19 @@ def check(ok, what):
         FAIL.append(what)
 
 
+def at(path):
+    """`build/x` in the RUN's tree (CLAUDE.md, WRITING-TESTS 5.4).
+
+    Under a frozen soak the registry's `wants=` builds smallapps360.img into
+    `$OS88_TREE` and not into build/ - so reading build/ asserted about the
+    shared checkout's disk, which is absent ("not built", a FAIL) in a fresh
+    checkout and STALE in an old one, while the tree's own disk sat beside
+    it. The identity function when run by hand."""
+    return os.path.join(ROOT, os88build.at(path))
+
+
 def vol(path):
-    return Vol(open(os.path.join(ROOT, path), "rb").read(), path)
+    return Vol(open(at(path), "rb").read(), path)
 
 
 def has(v):
@@ -70,7 +82,7 @@ def main():
     # hand, a missing one is a FAILURE and not a note - the omission it
     # asserts is exactly the "filter-out matching nothing is silent" shape
     small = "build/smallapps360.img"
-    if os.path.exists(small):
+    if os.path.exists(at(small)):
         check(not has(vol(small)), "smallapps360.img does NOT carry it (24.5, 97.9)")
     else:
         check(False, "%s is not built (`make smallapps`; the registry's wants= does)"
@@ -81,7 +93,7 @@ def main():
     # with this package already dropped - which is a decision for whoever
     # owns the field disk (the Makefile's COMBO_DROP paragraph says the same)
     combo = "build/combo.img"
-    if os.path.exists(combo):
+    if os.path.exists(at(combo)):
         check(not has(vol(combo)), "combo.img does NOT carry it (COMBO_DROP)")
     else:
         print("   (%s not built: `make combo` overflows 354 clusters on main "
@@ -89,8 +101,8 @@ def main():
     # the everything SET (SPEC.md 19.10): the game is on exactly one disk
     # of it, in GAMES/, and build/apps-all.list names the disks
     alllist = "build/apps-all.list"
-    if os.path.exists(alllist):
-        imgs = [l.strip() for l in open(alllist) if l.strip()]
+    if os.path.exists(at(alllist)):
+        imgs = [l.strip() for l in open(at(alllist)) if l.strip()]
         ons = [(i, has(vol(i))) for i in imgs]
         ons = [(i, on) for i, on in ons if on]
         check(len(ons) == 1 and "GAMES" in ons[0][1][0][0].upper(),
@@ -106,7 +118,7 @@ def main():
     # bytes the day it stops declining, where blob[:image] would have been
     # LZ4 payload and "not a parts package" would have pointed at the
     # package instead of at the compression
-    p = os.path.join(ROOT, "build", "pxstein.o88")
+    p = at("build/pxstein.o88")
     raw = open(p, "rb").read()
     check(len(raw) <= MAXZ, "build/pxstein.o88 is %d bytes, <= %d" % (len(raw), MAXZ))
     blob = os88pkg.image_unwrap(raw)

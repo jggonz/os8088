@@ -33,6 +33,11 @@ import os88marty as M
 from os88mouse import Mouse
 
 IMG = sys.argv[1] if len(sys.argv) > 1 else "build/os8088-360.img"
+# ...WITH THE HARD DISK ANSWERED OFF (tests/hdoff.py): SPEC.md 51.3.2 loads
+# HDD.DRV at boot on this machine, and this row's subject is the TICK - "the
+# tick is the mount" - so it starts from the state a user reaches by unticking
+import hdoff                                                # noqa: E402
+IMG = hdoff.image(IMG)
 OUT = sys.argv[2] if len(sys.argv) > 2 else "build/hddcp.bin"
 bad = []                                # what to fail on at the end
 MACHINE = "os8088_xt_hdd"

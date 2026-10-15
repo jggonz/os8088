@@ -58,12 +58,19 @@ hd_mount:
     jnc .have                   ; this one is already mounted - by us...
     mov al, [hd_sel]            ; ...or by the KERNEL, which adopted the
     call hd_kvol                ; partition it booted from before we were
-    jnc .have                   ; loaded at all (SPEC.md 52.10.3). Mounting it
+    jc .mount                   ; loaded at all (SPEC.md 52.10.3). Mounting it
                                 ; again is a second icon on the same sectors.
                                 ; It is hdcom.inc's and takes the DEVICE as an
                                 ; argument, because the installer asks the
                                 ; same question of a device of its own
                                 ; (SPEC.md 52.10.4.1)
+    cmp byte [di+HDD_KIND], HDK_IDE ; ...unless rung 1 TOOK this drive from
+    jne .have                   ; the BIOS (52.1.1) - the one IDE row hd_kvol
+                                ; can say yes about: then the kernel's volume
+                                ; is handed to us as it is, by hd_mount_one,
+                                ; which asks hd_kvol again (DI is the row
+                                ; throughout this loop)
+.mount:
     call hd_mount_one
     jmp short .next
 .have:
@@ -144,17 +151,25 @@ hd_mount_one:
     mov [bx+HDV_SECS], ax       ; the kernel's rule 13 accepts (SPEC.md 18.7.5)
 
     mov cx, ax                  ; = [bx+HDV_SECS]
+    xor dx, dx                  ; DX = 0: a volume ADDED...
+    mov al, [hd_sel]            ; ...unless it is THE KERNEL'S already: only
+    call hd_kvol                ; on a drive rung 1 took (hd_mount skips it
+    jc .add                     ; on any other), and then it is TAKEN -
+    mov dl, al                  ; OSAPI_VOL_ADD with DL = the index hd_kvol
+.add:                           ; answered, never 0 or 1 (SPEC.md 52.1.1)
     mov al, [bx+HDV_VOLH]       ; our own handle IS the row index
-    xor dx, dx                  ; no donated listing claim: the kernel's own
-                                ; buffers, which is every volume now (22.6)
+                                ; (no donated listing claim: the kernel's own
+                                ; buffers, which is every volume now, 22.6)
     xor si, si                  ; no label: the KERNEL derives 'HDD C'..'HDD F'
     call OSAPI_VOL_ADD          ; from the volume index, which is the only
-    jc .novol                   ; place that knows it (SPEC.md 26.1)
-    mov [bx+HDV_VOL], al
+    jc .novol                   ; place that knows it (SPEC.md 26.1); a take
+    mov [bx+HDV_VOL], al        ; reads neither CX nor SI
     mov byte [bx+HDV_USED], 1   ; AL is STILL the volume index - the reload
-    call OSAPI_VOL_MOUNT        ; that was here existed because the movable
-                                ; declaration passed its proc through AX
-    jc .badvol
+    or dx, dx                   ; that was here existed because the movable
+    jnz .counted                ; declaration passed its proc through AX. A
+    call OSAPI_VOL_MOUNT        ; TAKE is mounted already, and listed: it is
+    jc .badvol                  ; not read again (DX survives the slot)
+.counted:
     inc byte [hd_nmnt]
     jmp short .out
 .badvol:

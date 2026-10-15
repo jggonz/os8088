@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PiXEL'S EDITING AGAINST THE REFERENCE, BYTE FOR BYTE (SPEC.md 106.24).
 
-    python3 tests/pxedit.py [--machine os8088_xt_vga_144] [--host-only]
+    python3 tests/pxedit.py [--machine os8088_xt_vga_144] [--host-only | --guest-only]
 
 THE HOST LEG first, when Unicorn is installed (tests/pxpartemu.py; without
 it the leg SKIPS and says so): the EDIT part itself - build/pxedit.bin, the
@@ -534,8 +534,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_xt_vga_144")
     ap.add_argument("--host-only", action="store_true")
+    # THE TWO LEGS ARE TWO ROWS (`pxedit` and `pxedithost`): the host leg needs
+    # Unicorn and skips itself without it, and a row that skipped half its
+    # work used to report `ok` with the other half - a false green nobody
+    # investigates. The suite gives each leg its own capability instead.
+    ap.add_argument("--guest-only", action="store_true")
     a = ap.parse_args()
-    host_leg()
+    if not a.guest_only:
+        host_leg()
     if not a.host_only:
         guest_leg(a.machine)
     print("pxedit: %s" % ("ok" if not FAIL else "%d FAILED" % len(FAIL)))

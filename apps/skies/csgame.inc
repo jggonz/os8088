@@ -21,7 +21,9 @@ cs_cmd_fly:
     je .out                         ; the same predicate the menu greyed on
     mov al, [cs_apnow]              ; ...AND THE WORLD IS IN (SPEC.md 88.10.5).
     call cs_wldpick                 ; Idempotent - it returns having done
-    jc .out                         ; nothing when the overlay already holds
+.picked:                            ; (tests/skiesworlds.py reads the overlay
+    jc .out                         ; here, before a frame can mark it) nothing
+                                    ; when the overlay already holds
                                     ; this location's world, which is every
                                     ; flight after the first. Picking a place
                                     ; is setting the ROW; this is where the row
@@ -127,7 +129,23 @@ cs_fsx_main:
     mov dl, 0x40
     call OSAPI_SND_TONE
 .out:
-    ret
+    xor dx, dx                      ; THE SHADOW GOES WITH THE BRACKET (88.10.9):
+    xchg dx, [cs_shseg]             ; it is 16KB the title page cannot use, and
+    or dx, dx                       ; held from the first flight to the close
+    jz .noshadow                    ; it was a wall in the heap for the whole
+    call OSAPI_MEM_FREE             ; session. FIRST, so the fallback read in
+.noshadow:                          ; cs_artload has the room it frees
+    jmp cs_artload                  ; THE TITLE BANDS BACK, if cs_r_setup built
+                                    ; its tables over them (88.10.7) - HERE and
+                                    ; not after OSAPI_FSX_RUN returns, because
+                                    ; the kernel repaints the title page before
+                                    ; it does (SPEC.md 53.6). A decode of the
+                                    ; copy kept packed in the region
+                                    ; (88.10.7.1), and a read only when there
+                                    ; is none - the file API being legal
+                                    ; mid-bracket (53.1). A bracket refused
+                                    ; before cs_r_setup ran left them where
+                                    ; they were, and this is a compare
 
 ; -----------------------------------------------------------------------------
 ; cs_stick - the two attitude axes into [cs_kpitch] and [cs_kroll]
@@ -253,7 +271,8 @@ cs_clearall:
     ret
 .flat:
     xor di, di
-    mov cx, CS_SHSEG / 2
+    mov cx, [cs_shclr]              ; the backend's shadow, in words: half on
+                                    ; C160, whose claim is half (88.10.9)
     xor ax, ax
     rep stosw
     ret
@@ -304,17 +323,27 @@ cs_input:
     je .reset
     cmp al, 'R'
     je .reset
-    cmp al, 'm'
-    je .mute
+%ifndef CS_NOMAP                     ; (the watchdog has no map: skies.asm)
+    cmp al, 'm'                     ; THE MAP (SPEC.md 88.16): off, near,
+    je .map                         ; far, off
     cmp al, 'M'
+    je .map
+%endif
+    cmp al, 'q'                     ; ...and the sound is Q, which is what
+    je .mute                        ; Microsoft's simulator calls it
+    cmp al, 'Q'
     je .mute
     cmp al, 'b'                     ; THE BRAKE, A LATCH (SPEC.md 88.7.10.1)
     je .brake
     cmp al, 'B'
     je .brake
-    call cs_hotkey                  ; --- the settings, in flight (88.13.5)
-    jnc .keys
-    jmp .keys
+    cmp al, '0'                     ; THE NUMBER ROW IS THE THROTTLE (SPEC.md
+    jb .nodigit                     ; 88.8.3): 0 shut, 9 full, and the lever
+    cmp al, '9'                     ; goes there in one step - the engine
+    jbe .digit                      ; still spools to it (88.7.5) and the
+.nodigit:                           ; note still glides (88.8.2.1)
+    call cs_hotkey                  ; --- the settings, in flight (88.13.5):
+    jmp .keys                       ; taken or not, the next key is next
 .ext:
     ; --- A STICK PRESS, LATCHED (SPEC.md 88.7.5.2). This is Arkanoid's
     ; answer and it is the half Clear Skies did not have: int 16h is an
@@ -344,6 +373,29 @@ cs_input:
 .taproll:
     mov [cs_taproll], bl
     jmp .keys
+.digit:
+    mov bx, [cs_plane]
+    cmp word [bx + CSP_THRUST], 0   ; NOT ON A GLIDER (88.7.6.1): no engine,
+    je .keys                        ; so no lever to set
+    sub al, '0'
+    mov ah, 100
+    mul ah                          ; AX = n x 100...
+    mov bl, 9
+    div bl                          ; ...over 9: 0, 11, 22 ... 88, 100
+    xor ah, ah
+    mov [cs_thr], ax
+    jmp .keys
+%ifndef CS_NOMAP
+.map:
+    inc byte [cs_map]
+    cmp byte [cs_map], 2
+    jbe .mapok
+    mov byte [cs_map], 0
+.mapok:
+    mov cl, 7                       ; ...and the strip says which: MAP: NEAR
+    call cs_toast
+    jmp .keys
+%endif
 .mute:
     xor byte [cs_sound], 1
     jmp .keys
@@ -518,8 +570,8 @@ cs_hotkey:
 ; out: CF = 1 it was one of ours. Clobbers AX, CX
 ;
 ; F-keys and not the digits: a flight simulator's number row is where a
-; player expects to find something else, and these are keys nobody reaches
-; for by accident. They arrive as int 16h EXTENDED codes - AL zero, AH the
+; player expects to find something else - THE THROTTLE, which is what it is
+; now (SPEC.md 88.8.3) - and these are keys nobody reaches for by accident. They arrive as int 16h EXTENDED codes - AL zero, AH the
 ; scan code - so this hangs off cs_input's `.ext` arm beside the arrows and
 ; not off the character one.
 ;
@@ -550,16 +602,16 @@ CSK_F1     equ 0x3B                 ; ...and F2..F5 follow it
 cs_hotkeyx:
     cmp ah, CSK_F1
     jb .no
-    cmp ah, CSK_F1 + 4
+    cmp ah, CSK_F1 + 6              ; (F6 the haze, F7 the texture)
     ja .no
     push bx
     push si
     mov al, ah
-    sub al, CSK_F1                  ; 0..4
+    sub al, CSK_F1                  ; 0..6
     mov cl, al
     xor ch, ch
     cmp al, 3
-    jae .fill                       ; 3 and 4 are the fills
+    jae .fill                       ; 3 and 4 the fills, 5 haze, 6 texture
     ; --- F1 F2 F3: one step up the ladder, and round at the top -----------
     mov bx, cx
     shl bx, 1
@@ -610,7 +662,7 @@ cs_hotkeyx:
     clc
     ret
 
-cs_cycn: db CSBL_HIGH + 1, CSL_ULTRA + 1, CSZ_FULL + 1
+cs_cycn: db CSBL_ULTRA + 1, CSL_ULTRA + 1, CSZ_FULL + 1
 
 ; -----------------------------------------------------------------------------
 ; cs_render - one frame (SPEC.md 88.8)
@@ -636,7 +688,12 @@ cs_render:
     mov si, [cs_plane]
     add ax, [si + CSP_EYE]
     mov [cs_ey], ax
+    call cs_grsync                  ; Ultra's ground, or the plain one
     CSSTAGE 3
+%ifndef CS_NOMAP
+    cmp byte [cs_map], 0            ; THE MAP (SPEC.md 88.16) in its place
+    jne .map
+%endif
     call cs_skyground
     CSSTAGE 4
     call cs_scene
@@ -656,6 +713,11 @@ cs_render:
     pop ax
 %endif
     ret
+%ifndef CS_NOMAP
+.map:
+    call cs_mapview
+    jmp short .whole
+%endif
 
 ; =============================================================================
 ; The panel (SPEC.md 88.9): items keyed on what they show, redrawn on change
@@ -1150,7 +1212,10 @@ cs_toast:
     add di, 2                       ; package (SPEC.md 20), so a store through
                                     ; it lands in the wrong segment entirely
     cmp cl, 3
-    jae .fill                       ; 3 and 4 are the fills
+    jb .set
+    cmp cl, 7
+    jb .fill                        ; 3 and 4 the fills, 5 the haze and 6 the
+.set:                               ; texture - bits - and 7 the map (88.16)
     mov si, [cs_toastset + bx]      ; the setting's byte...
     mov al, [si]
     xor ah, ah
@@ -1166,9 +1231,17 @@ cs_toast:
     mov al, 1
     shl al, cl
     test [cs_setfill], al
+    pushf
     mov si, cs_g_wire               ; a cleared fill bit is WIREFRAME and not
-    jz .val                         ; gone (88.13.3), so the toast says which
-    mov si, cs_g_fill               ; of the two it is
+    mov bx, cs_g_fill               ; gone (88.13.3), so the toast says which
+    cmp al, CSFL_HAZE               ; of the two it is - and a look, the
+    jb .fw                          ; haze or the texture, is On or Off
+    mov si, cs_g_off
+    mov bx, cs_g_on
+.fw:
+    popf
+    jz .val
+    mov si, bx
 .val:
     call cs_strcpyu
     mov byte [di], 0
@@ -1214,8 +1287,13 @@ cs_toaststep:
     ret
 
 cs_toastlbl: dw cs_s_lbld, cs_s_llod, cs_s_lsize, cs_s_terr, cs_s_bld
-cs_toastset: dw cs_setbld, cs_setlod, cs_setsize, 0, 0
-cs_toastval: dw cs_i_bld, cs_i_lod, cs_i_size, 0, 0
+             dw cs_s_haze, cs_s_gtex, cs_g_map
+cs_toastset: dw cs_setbld, cs_setlod, cs_setsize, 0, 0, 0, 0, cs_map
+cs_toastval: dw cs_i_bld, cs_i_lod, cs_i_size, 0, 0, 0, 0, cs_i_map
+cs_i_map:    dw cs_g_off, cs_s_lnear, cs_s_lfar   ; ...and the map's (88.16)
+cs_g_map:    db 'Map', 0
+cs_g_off:    db 'Off', 0
+cs_g_on:     db 'On', 0
 cs_g_fill:   db 'Fill', 0
 cs_g_wire:   db 'Wire', 0
 
@@ -1483,17 +1561,16 @@ cs_s_crash:  db 'CRASHED      ', 0
 ; the air), so one buffer serves them, cs_toastbuf's shape.
 cs_msgtab:   dw cs_g_none, cs_promptb, cs_g_stall, cs_g_landed
              dw cs_g_crash, cs_g_paused, cs_g_edge, cs_promptb
-             dw cs_g_splash, cs_toastbuf
+             dw cs_g_splash, cs_toastbuf, cs_g_landout
 ; ...and the SAME messages in twenty cells, for the one-line strip (88.15.6).
 ; It is a second table and not a shortened first one because a cockpit panel
 ; is forty cells wide and has the room: what the strip cannot hold, every
 ; other backend can, and neither should be cut to the other's width.
 cs_msgtab160: dw cs_g_none, cs_promptc, cs_g_s160, cs_g_landed
              dw cs_g_c160, cs_g_paused, cs_g_e160, cs_promptc
-             dw cs_g_p160, cs_toastbuf
+             dw cs_g_p160, cs_toastbuf, cs_g_landout
 cs_g_s160:   db 'STALL - NOSE DOWN', 0
 cs_g_c160:   db 'CRASHED', 0
-cs_g_e160:   db 'TURN BACK', 0
 cs_g_p160:   db 'DOWN ON WATER', 0
 cs_g_none:   db 0
 ; opening, suffix - a cockpit's, then the one-line strip's (88.15.6.1)
@@ -1508,7 +1585,10 @@ cs_g_kt1:    db ' KT', 0           ; ...so 'ROTATE 54 KT' is twelve cells of
                                     ; the fourteen the strip lends a message
 cs_g_stall:  db 'STALL - NOSE DOWN, POWER ON', 0
 cs_g_landed: db 'LANDED', 0
+cs_g_landout: db 'LANDED OUT', 0  ; a sailplane, off the field (88.7.6.6)
 cs_g_crash:  db 'CRASHED INTO ', 0
 cs_g_paused: db 'PAUSED', 0
-cs_g_edge:   db 'THE EDGE OF THE WORLD - TURN BACK', 0
+cs_g_edge:   db 'THE EDGE OF THE WORLD - '
+cs_g_e160:   db 'TURN BACK', 0      ; ...which is the strip's own (88.15.6): one
+                                    ; tail, two messages
 cs_g_splash: db 'DOWN ON ', 0    ; ...and the water's own name after it

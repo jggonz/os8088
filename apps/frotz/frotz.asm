@@ -237,8 +237,10 @@ zf_entry:
 
     mov si, zf_menus
     call OSAPI_MENU_SET             ; preserves every register AND the flags
-    mov si, zf_about
-    call OSAPI_ABOUT_SET
+    mov si, zf_abouth               ; the HANDLER (SPEC.md 12.2). This passed the
+    call OSAPI_ABOUT_SET            ; string 'Frotz' for as long as the app had
+                                    ; existed, so About Frotz far-called five
+                                    ; letters as code
     mov al, 1
     call OSAPI_WM_SIZABLE           ; re-wrap on drag
     push cx                         ; ...and the floor is DECLARED now (SPEC.md
@@ -384,6 +386,32 @@ zf_copyname:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; zf_pop7 .. zf_pop3 - ONE shared epilogue for the procs that push in the
+; house order (ax, bx, cx, dx, si, di, es) and pop it back: a proc that saved
+; the last N of those ends `jmp zf_popN` instead of N pops and a ret. Forty-odd
+; procs end this way, so the ladder is written once instead of forty times.
+;
+; A JUMP, NOT A CALL: it costs no stack, so no worker's deepest chain gets a
+; byte deeper (SPEC.md 8.7.4), and pops do not touch the flags, so a CF the
+; proc returns survives it. It costs a jump (15 clocks) on the way out, which
+; is why ONLY THE COLD PROCS take it - the dispatch, the memory reads, the
+; text decoder and the per-character output keep their own pops.
+; -----------------------------------------------------------------------------
+zf_pop7:
+    pop es
+zf_pop6:
+    pop di
+zf_pop5:
+    pop si
+zf_pop4:
+    pop dx
+zf_pop3:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; =============================================================================
 ; zf_paint - W_PAINT (SPEC.md 11)
 ; in:  SI = window ptr; the gfx lock is HELD and the content is already white
@@ -395,7 +423,7 @@ zf_copyname:
 ;
 ;   no story        the splash: what this is, and how to open one
 ;   loading         a one-line notice; zi_load owns the screen
-;   running         zw_paint / zw6_paint repaints from the scrollback
+;   running         zw_paint repaints from the scrollback
 ; =============================================================================
 ; -----------------------------------------------------------------------------
 ; zf_onwake - W_ONWAKE: open the story we were launched on (SPEC.md 54.10/74.1)
@@ -456,11 +484,7 @@ zf_paint:
 .done:
     pop si
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 ; -----------------------------------------------------------------------------
 ; zf_hire - make sure this instance owns its worker, and say nothing when it
@@ -518,6 +542,8 @@ zf_onkey:
     push dx
     push di
 
+    call zf_unabout                 ; a key that takes the About card down
+    jc .out                         ; does nothing else
     cmp byte [zf_state], ZFS_RUN
     jne .out
 
@@ -544,11 +570,7 @@ zf_onkey:
     call zw_scrollpage
 .out:
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 ; =============================================================================
 ; zf_onclick - W_ONCLICK
@@ -562,6 +584,8 @@ zf_onclick:
     push bx
     push cx
     push dx
+    call zf_unabout                 ; ...and so does a click
+    jc .out
     cmp byte [zf_state], ZFS_RUN
     jne .out
 %ifdef OS88UI_SBDRAG
@@ -576,11 +600,7 @@ zf_onclick:
 %endif
     call zw_click
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 %ifdef OS88UI_SBDRAG
 ; -----------------------------------------------------------------------------
@@ -626,11 +646,7 @@ zf_onup:
     call OSAPI_WM_TIMER
     call zw_sbcommit                ; the release COMMITS, unconditionally
 zf_sbd_out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 %endif
 
 ; =============================================================================
@@ -753,11 +769,24 @@ zf_abouth:
     jmp .loop
 .done:
     mov byte [zf_showabout], 1      ; the next key or click repaints the story
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    jmp zf_pop5
+
+; -----------------------------------------------------------------------------
+; zf_unabout - take the About card down, if it is up
+; in:  SI = window ptr; gfx lock held (a key or click callback)
+; out: CF = 1 it was up, and this event was spent repainting what it covered;
+;      clobbers AL
+; -----------------------------------------------------------------------------
+zf_unabout:
+    cmp byte [zf_showabout], 0      ; CF = 0 whatever the byte is
+    je .out
+    mov byte [zf_showabout], 0
+    mov al, CWHITE                  ; zf_paint wants the content white, which
+    call OSAPI_SET_COLOR            ; is what the kernel hands a W_PAINT
+    call zw_clear
+    call zf_paint
+    stc
+.out:
     ret
 
 ; =============================================================================
@@ -792,12 +821,7 @@ zf_splash:
     add dx, ZF_LEAD
     jmp .loop
 .done:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop5
 
 ; =============================================================================
 ; Data: the window template, the menu set, the strings
@@ -827,7 +851,6 @@ zf_m_story:  db 'Story', 0
 zf_i_story:  dw zf_it_script
 zf_it_script: db 'Transcript', 0
 
-zf_about:    db 'Frotz', 0
 
 zf_abt_lines:
     dw zf_a1, zf_a2, zf_a3, zf_a4, zf_a5, zf_a6, zf_a7, zf_a8, 0

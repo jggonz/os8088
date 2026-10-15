@@ -43,6 +43,60 @@ An AH88 firmware report may cap at 15/64MB; E820 usable memory excludes
 reserved ranges and is not a physical DIMM count. No destructive RAM probe.
 BIOS ports/date/equipment and OS video/FPU information are read-only.
 
+REDLINE has two tabs across its top: Benchmark (all of the above) and
+Tune, for AT-class boards. Tune fingerprints the BIOS, probes for the
+chipset read-only, names what it found, and times an 8-bit read from the
+screen, a PicoMEM and each option ROM in ns a byte. The drop-down names the
+chipset instead, and your pick wins. An 8088 or 8086 touches no port at
+all: an XT's bus has nothing to tune. Beside Chipset, the Target drop-down
+says what Tune sets the bus to:
+
+  Fastest tested  tries fewer wait states one bus clock at a time, reading
+                  the screen, a slow option ROM, a PicoMEM, the floppy
+                  status and an I/O write back with interrupts off, stops
+                  at the first wrong byte and SETS the fastest that read
+                  right. The default.
+  Mfg spec    the chipset data sheet's value (R4 10 on a WD FE3600,
+              4 waits on a C&T NEAT).
+  Bus clock x2  C&T NEAT only, and an EXPERIMENT: doubles the AT bus
+              clock (6 to 12 MHz on a 12 MHz 286), past the data book's
+              6-8 MHz, with every wait at its longest first and a read of
+              A:'s boot sector to check disk DMA. It may hang the machine;
+              a reset puts everything back. Put a disk in A: first.
+
+The framed field after them says what the bus runs at now: Stock (the
+BIOS's own timing), Tuned: n waits or Mfg spec: n waits. With a ~ it was
+read off the bus rather than set this session: REDLINE times the CPU clock
+and the 8-bit read, and the chipset's data book turns the two into a wait
+count - so it is right after a reboot, or after RLAPPLY, too. The buttons:
+
+  Tune          sets the Target.
+  Save setting  writes SYSTEM\APPDATA\REDLINE.CFG on the BOOT disk.
+  Save report   writes the page to CHIPSET1.TXT, CHIPSET2.TXT...
+  Quit          closes REDLINE.
+
+On a WD FE3600 board (the Packard Bell Victory 286) Tune sets R4, the 8-bit
+wait states; on a C&T NEAT board (the Packard Bell PB286LP) the 8-bit wait
+states, then the 8-bit memory and I/O command delays and the 16-bit wait
+states, one after another. From the data books, not yet run on a real
+board: the C&T CS8230/CS8231 (pick it, on a 386DX), a VLSI SCAMP
+(VL82C310/311), a WD76C10A and an OPTi 82C283 (pick it, on a 386SX) - each
+with its waits and delays where the book has them, and its bus clock under
+Bus clock x2. If you have one, Tune and Save report: that report is what
+makes it supported. What Fastest tested cannot read back - video
+writes, the keyboard controller, the clock chip, serial ports, an 8-bit
+disk card - is why Mfg spec is there: if anything misbehaves, Tune to it,
+or reset, and keep backups before you Save a tuned setting. A chipset the
+probes did not find asks once before the first write, and one nobody has
+run Tune on yet warns once before the first sweep: the worst a sweep
+itself does is hang the machine until a reset. Save report
+writes everything the page measured, and the sweep step by step - send it
+in, and that board is one report from being supported. Nothing is permanent: a
+reset restores the BIOS's own timing - so after each boot, open
+SYSTEM\RLAPPLY.O88 on the system disk. It has no window: it puts the saved
+setting back, refuses on any other board or BIOS, and says what it did on
+the menu bar.
+
 Host: make redline / make redlinedisk / make redline-profile
 Research, measurement definitions and reference provenance:
 docs/REDLINE.md and apps/redline/reference.json in the source tree.

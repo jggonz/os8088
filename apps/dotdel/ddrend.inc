@@ -3237,65 +3237,22 @@ dd_hud_lives:
 ; -----------------------------------------------------------------------------
 DD_NUMW equ 9
 
-dd_dec32:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov di, dd_numbuf + DD_NUMW     ; written backwards from its NUL
-    mov byte [di], 0
-    mov cx, DD_NUMW
-.digit:
-    dec di
-    push cx
-    mov cx, ax                      ; the standard 32-by-16 divide: the high
-    mov ax, dx                      ; word first, its remainder carried into
-    xor dx, dx                      ; the low one
-    div word [dd_ten]
-    mov bx, ax
-    mov ax, cx
-    div word [dd_ten]
-    mov cx, dx                      ; CX = this digit
-    mov dx, bx                      ; DX:AX = what is left
-    add cl, '0'
-    mov [di], cl
-    pop cx
-    mov bx, ax
-    or bx, dx
-    jz .done
-    dec cx
-    jnz .digit
-.done:
-    mov si, di                      ; left-justify...
+dd_dec32:                           ; the digits are apps/os88dec.inc's
+    push di                         ; dec_u32 (SPEC.md 20.5.2)
     mov di, dd_numbuf
-.mv:
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    or al, al
-    jnz .mv
-    dec di                          ; ...and pad the rest with spaces, because
-    mov cx, dd_numbuf + DD_NUMW     ; FONT_RUN is opaque over the cells it
-    sub cx, di                      ; draws and no further: a shorter number
-    jcxz .out                       ; over a longer one leaves a stray digit
+    call dec_u32                    ; DI on its NUL
 .pad:
-    mov byte [di], ' '
-    inc di
-    loop .pad
-    mov byte [di], 0
+    cmp di, dd_numbuf + DD_NUMW     ; ...and spaces to the field's width,
+    jae .out                        ; because FONT_RUN is opaque over the
+    mov word [di], ' '              ; cells it draws and no further: a shorter
+    inc di                          ; number over a longer one leaves a stray
+    jmp short .pad                  ; digit. ' ' and its NUL, a cell a turn
 .out:
     pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
-dd_ten: dw 10
+%define DEC_U32
+%include "os88dec.inc"
 
 ; =============================================================================
 ; THE OVERLAY - one centred line over the board, in the states that want one

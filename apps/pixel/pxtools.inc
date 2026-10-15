@@ -496,11 +496,7 @@ px_selnudge:
     call px_mqshow
     call OSAPI_WM_CLIP_CLEAR
 .x:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp px_ld_4
 
 ; =============================================================================
 ; THE GESTURES
@@ -694,11 +690,7 @@ px_trelease:
     call px_rnorm
     call px_zrect
 .x:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp px_ld_4
 
 ; px_trclick - W_ONRCLICK: the right button on the picture - the Zoom tool
 ; out a step about the point, the Rotate tool the other way. CX, DX, SI
@@ -754,11 +746,7 @@ px_zat:
     call px_zcentre
     dec byte [px_mqhold]
     call px_mqshowc
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp px_ld_4
 
 ; px_zcentre - the master pixel [px_tmx], [px_tmy] to the canvas's centre
 ; (px_panto clamps). Lock held. Preserves all
@@ -849,13 +837,7 @@ px_zrect:
     call px_zcentre
     dec byte [px_mqhold]
     call px_mqshowc
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp px_ld_6
 
 ; px_zfit1 - AX = screen pixels, SI = master pixels: DX:AX = AX 2^16 /
 ; (SI << s), at least 1. Preserves all else
@@ -954,13 +936,7 @@ px_eyeread:
     call px_compose                 ; the fields' own values again
     call px_zfield
 .x:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp px_ld_6
 
 ; px_eyeidx - AL = the index at [px_eyex], [px_eyey]; SI = its palette
 ; entry. Preserves all but AX, SI

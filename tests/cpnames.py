@@ -85,7 +85,11 @@ def find(rows, x0, y0, w, h, want, inverse=False):
 
 def main():
     fails = []
-    with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
+    img = "build/os8088-360.img"
+    if HDD:                     # the tick below is the load (SPEC.md 51.3.2)
+        import hdoff
+        img = hdoff.image(img)
+    with os88marty.launch(img, apps="build/apps360.img",
                           machine=MACHINE) as m:
         os88marty.no_saver(m)
         os88marty.settle(m, gate=os88marty.desktop_up)

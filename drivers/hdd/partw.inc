@@ -642,7 +642,7 @@ hd_mbr_ret:
 ; to live here.
 ; -----------------------------------------------------------------------------
 %ifndef HD_MBRNZ
-%error "HD_MBRNZ/HD_VBREND come from the Makefile's HDBLOBDEF - build with make"
+%error "HD_MBRNZ comes from the Makefile's HDBLOBDEF - build with make"
 %endif
 HD_MBRCODE   equ 446            ; the space in front of the table
 %if HD_MBRNZ > HD_MBRCODE || HD_MBRNZ < 1
@@ -651,35 +651,36 @@ HD_MBRCODE   equ 446            ; the space in front of the table
 hd_bootstub:
     incbin "mbr.bin", 0, HD_MBRNZ
 
-; ...and the VOLUME boot record the installer writes (SPEC.md 52.10.2), the
-; same way and for the same reason: it is real assembly in boot/boothd.asm,
-; incbin'ed rather than transcribed. BOOTHD_KSECS is the ONE word the
-; installer patches - the kernel's length in sectors - and it is pinned at a
-; documented offset in that file precisely so this side can find it without
-; knowing anything else about the sector's layout.
+; ...and the VOLUME boot record the installer writes (SPEC.md 52.10.2) IS NOT
+; CARRIED HERE ANY MORE, and that is the fix rather than a saving (SPEC.md
+; 52.10.16). boot/boothd.asm's sector holds five constants out of the KERNEL
+; it boots - BOOT2_SECS, BLOB_SEG, SPL_FSEG, KZ_RPARA, KZ_HD - so a copy
+; incbin'ed into this image boots exactly one kernel: the one this tool was
+; built beside. That was always true of the BUILD and stopped being true of
+; the INSTALL the day a machine booted from its hard disk ran this tool to
+; put a NEWER system disk's kernel on it: the tool came off C:, the kernel
+; off the floppy, and the sector far-called the old kernel's decoder offset
+; into the new one's blob (docs/plans/completed/HANDOFF-INSTALL-FROM-SOURCE.md).
+;
+; So the sector rides the SYSTEM DISK, as BOOTHD.SYS beside KERNEL.SYS, and
+; hd_ivbr_get (inst.inc) reads the SOURCE's copy into hd_vbrtpl before
+; anything is written. The two patch words stay this side's, pinned at
+; documented offsets precisely so this code can find them without knowing
+; anything else about the sector's layout - and that pin is now an ABI
+; between vintages: a sector that moves them ships under another NAME, so an
+; older installer finds no BOOTHD.SYS and refuses instead of patching the
+; wrong bytes.
 BOOTHD_KSECS equ 508
 BOOTHD_KOFS  equ 504             ; ...and the kernel's start in the data area,
                                 ; a dword (SPEC.md 52.10.15)
-; ...AND THE VBR THE SAME WAY: its three-byte jump, then the code from the
-; end of the BPB (62) to HD_VBREND, the last non-zero byte below the two
-; patched words. The BPB, the zeros above the code and the signature are not
-; carried: hd_vbr_code writes them. HDBLOBDEF refuses a boothd.bin whose BPB
-; or patch words are not zero, or that does not end in 55AAh - the three
-; facts that make the cut lossless.
 HD_VBRCODE   equ 62             ; where the code starts: the end of the BPB
-%if HD_VBREND <= HD_VBRCODE || HD_VBREND > BOOTHD_KOFS
-%error "HD_VBREND is not inside boothd.bin's code region"
-%endif
-hd_bootvbr:
-    incbin "boothd.bin", 0, 3
-    incbin "boothd.bin", HD_VBRCODE, HD_VBREND - HD_VBRCODE
-hd_bootvbr_end:
 
 ; -----------------------------------------------------------------------------
-; hd_vbr_code - our VBR's code into hd_sec0, around whatever BPB is there
-; in:  hd_sec0 = the sector being built (a volume's own, or zeros)
-; out: its jump, code, zeros up to the signature and the signature are ours;
-;      bytes 3..61, the BPB, are untouched. All registers preserved
+; hd_vbr_code - the SOURCE's VBR code into hd_sec0, around whatever BPB is there
+; in:  hd_sec0 = the sector being built (a volume's own, or zeros);
+;      hd_vbrtpl = the source's BOOTHD.SYS, which hd_ivbr_get checked
+; out: its jump, code, zeros, patch words (zero) and signature are the
+;      template's; bytes 3..61, the BPB, are untouched. All registers preserved
 ; -----------------------------------------------------------------------------
 hd_vbr_code:
     call os88_ent
@@ -687,18 +688,15 @@ hd_vbr_code:
     push ds
     pop es
     cld
-    mov si, hd_bootvbr
+    mov si, hd_vbrtpl
     mov di, hd_sec0
     movsw                       ; the jump...
     movsb
+    mov si, hd_vbrtpl + HD_VBRCODE
     mov di, hd_sec0 + HD_VBRCODE
-    mov cx, HD_VBREND - HD_VBRCODE
-    rep movsb                   ; ...the code...
-    mov cx, 510 - HD_VBREND
-    xor al, al
-    rep stosb                   ; ...the zeros, patch words included...
-    mov word [hd_sec0+510], 0xAA55  ; ...and the signature
-    jmp os88_r_es
+    mov cx, (512 - HD_VBRCODE) / 2
+    rep movsw                   ; ...and everything past the BPB, signature
+    jmp os88_r_es               ; included: hd_ivbr_get has seen it
 
 ; --- state this module owns (moved out of hdd.asm's data block) ---
 ; -----------------------------------------------------------------------------

@@ -23,8 +23,10 @@ docs/WRITING-TESTS.md 1: every rule is broken on purpose and must go red.
      build/associco.inc, and every shipped ASSOC.DAT that carries a DOS row
      is version 2 and carries that glyph in the row.
 """
+import atexit
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -86,6 +88,9 @@ def run_pkg(blob, tmp, name, *extra):
 
 def main():
     tmp = tempfile.mkdtemp(prefix="t_docglyph.")
+    atexit.register(shutil.rmtree, tmp, True)   # every `make` runs this row:
+                                                # a kept scratch dir is one per
+                                                # build, for ever
 
     # 1. the validator
     rc, msg, good = run_pkg(package(), tmp, "good")

@@ -87,6 +87,16 @@ MRA_SIZE    equ MRA_NB * MRA_NS * MRA_FACE
 %1 equ os88_image_end + MR_BSS
 %assign MR_BSS MR_BSS + (%2)
 %endmacro
+; ...and the engines' voice state OVERLAID on the synth's output table
+; (SPEC.md 105.5.4): FM, MIDI out and the wavetable each keep theirs inside
+; mry_otab's 2 KB, which only an open synth reads - the wavetable copies it
+; into its own claim at its open, before its first note writes here - and
+; each engine sets what it reads at its own open or note-on
+%assign MR_XBSS 0
+%macro MRX 2
+%1 equ mry_otab + MR_XBSS
+%assign MR_XBSS MR_XBSS + (%2)
+%endmacro
 
 ; --- states, outputs ---------------------------------------------------------
 MR_ST_STOP  equ 0
@@ -213,23 +223,15 @@ mr_entry:
     mov [mr_win], bx
     mov si, mr_prefer               ; a shape for each of the three screens
     call OSAPI_WM_PREFER
-    push ax
-    push bx
-    push si
-    push di
-    push dx
-    mov ax, bx
+    push bx                         ; (btninit keeps every register; the
+    xchg ax, bx                     ; window is all the rest of us reads)
     mov bx, mru_btrec
     mov si, mr_onup
     mov di, mr_ondrag
     mov dx, mr_onclick              ; OUR click work: the library takes the
     call os88ui_btninit             ; press first and chains here
-    pop dx
-    pop di
-    pop si
     pop bx
-    pop ax
-    OS88_REGION_MOVABLE
+    OS88_REGION_MOVABLE mr_nop      ; (a bare ret: nothing points inside us)
     mov si, mr_menus
     call OSAPI_MENU_SET
     mov si, mr_about
@@ -364,10 +366,16 @@ mr_s_notbank:   db 'MIDIRACK.BNK is not a bank this player reads', 0
 %define OS88UI_RAD
 %define OS88UI_SCROLL
 %define OS88UI_ABOUT
+%define OS88UI_ABDONLY              ; painter only: os88ui_about_d is all mrui.inc calls
 %include "os88ui.inc"
 %if OS88UI_CK_SIZE != 12 || OS88UI_RD_SIZE != 18
   %error "mrui.inc sizes its check box and radio records by hand: os88ui.inc moved"
 %endif
+%if MR_XBSS > 2048
+  %error "the engines' overlay has outgrown mry_otab"
+%endif
     OS88_BSS MR_BSS
-    align 16, db 0
+    align 2, db 0                   ; (even, as the 16 it was: every bss word
+                                    ; keeps its parity, and no buffer is ever
+                                    ; made a segment)
     OS88_IMAGE_END

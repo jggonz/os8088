@@ -81,6 +81,14 @@ for surgery no static walk can follow, of which this tree has exactly one:
 `task_yield` FABRICATES an int 08h frame (`pushf` / `push cs` / `call .save`)
 and its `ret` is reached by the scheduler's `iret`, not by `.save` returning.
 
+TWO SDK MACROS ARE EXPANDED, because their labels are built with `%+` and no
+source line spells them: `OS88_POPLADDER` and `OS88_PUSHER` (apps/os88api.inc,
+SPEC.md 20.5). See Unit._expand.
+
+A FINDING NAMES THE JUMP THAT CAUSED IT. A shared epilogue reached by two
+broken jumps is two findings, each naming the exit by which its walk left the
+routine (see walk) - one `ret` with a count of one hid the second jump.
+
   python3 tools/stkbalance.py [file ...]     default: apps/ and kernel/
 """
 import glob
@@ -102,6 +110,13 @@ JMP = re.compile(r"^jmp\s+(?:strict\s+)?(?:short\s+|near\s+|word\s+)?(\S+)", re.
 JCC = re.compile(r"^(j[a-z]{1,3}|loop|loope|loopne|loopz|loopnz)\s+"
                  r"(?:short\s+)?(\S+)$", re.I)
 SPADD = re.compile(r"^(add|sub)\s+sp\s*,\s*(\S+)$", re.I)
+# `lea sp, [bp+N]` - a frame's teardown in ONE instruction, where it was
+# `mov sp, bp` / `add sp, N` (gfx_blit1_x's `.noswap`). The walk has never
+# modelled `mov sp, bp`: it trusts the frame's own `mov bp, sp` and reads the
+# pair as its `add sp, N` half, so this is read exactly the same way - the
+# two spellings must give the same verdict, or a size pass that takes the
+# shorter one reads as a leak.
+LEASP = re.compile(r"^lea\s+sp\s*,\s*\[\s*bp\s*\+\s*([^\]\s]+)\s*\]$", re.I)
 GLOBAL = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):")
 LOCAL = re.compile(r"^(\.[A-Za-z0-9_]+):")
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -114,6 +129,14 @@ IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # which is how an arm that pushed and never popped passed the gate.
 IDENT_DOT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)?")
 LOOPMARK = re.compile(r"STKBALANCE-LOOP\b")
+# apps/os88api.inc's OS88_POPLADDER and OS88_PUSHER (SPEC.md 20.5).  The
+# ladder's rung labels are built with `%+` inside the macro, so no source line
+# ever SPELLS them: read as text, `jmp pk_pop_3` is a tail jump into nothing at
+# depth +3 and every adopter failed this gate.  So an invocation is EXPANDED
+# here, into exactly the lines the macro emits - see Unit.__init__.
+LADDER = re.compile(r"^OS88_POPLADDER\s+(\.?[A-Za-z_][A-Za-z0-9_]*)\s*,\s*(.+)$", re.I)
+PUSHER = re.compile(r"^OS88_PUSHER\s+(\.?[A-Za-z_][A-Za-z0-9_]*)\s*,\s*(.+)$", re.I)
+MACINV = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s+(\S+)\s*$")
 MACDEF = re.compile(r"^%macro\s+([A-Za-z_][A-Za-z0-9_]*)\s+(\d+)", re.I)
 MACEND = re.compile(r"^%endmacro\b", re.I)
 # `jmp %1` / `call %1` inside a macro body: the macro's ARGUMENT is a branch
@@ -123,6 +146,11 @@ MACCALL = re.compile(r"^call\s+%1\s*$", re.I)
 # `jmp short $+2` and friends: a jump to the very next instruction, used all
 # over this tree to let an I/O port settle.  It is not a tail call.
 SETTLE = re.compile(r"^\$\s*\+\s*2$")
+# `jmp 0xFFFF:0x0000`: a far jump to a LITERAL address leaves every routine the
+# walk can see (a reset, a ROM entry), so the path simply ends there - the
+# stack it leaves is never popped by anything in the corpus.  A far jump to a
+# LABEL (`jmp KERNEL_SEG:sched_unhook`) is still a tail call and still walked.
+FARLIT = re.compile(r"^(?:0x[0-9a-f]+|[0-9][0-9a-f]*h?)\s*:\s*(?:0x[0-9a-f]+|[0-9][0-9a-f]*h?)$", re.I)
 # A table is not code.  `dbg_reg` is `dw TAG, handler` pairs and the walk used
 # to fall out of the bottom of it into whatever followed, reporting that
 # routine's `retf`.  Control flow never runs THROUGH a table, so a data
@@ -159,6 +187,14 @@ WALK_MAX = 60000
 
 def strip(line):
     """Drop the comment, keeping quoted semicolons intact."""
+    # The character loop below only matters when a QUOTE comes before the
+    # first `;` - everywhere else the comment starts at that `;` and str.find
+    # is the same answer. It ran on every line of the corpus and was the
+    # largest single cost of the stkapps row.
+    semi = line.find(";")
+    head = line if semi < 0 else line[:semi]
+    if "'" not in head and '"' not in head:
+        return head.strip()
     out, q = [], None
     for ch in line:
         if q:
@@ -188,11 +224,18 @@ class Unit(object):
         self.llab = {}          # ("owner", ".x") -> idx
         self.owner = []         # idx -> owning global name (or None)
         self.gof = {}           # "name" -> [idx of every line it owns]
+        self.lineno = []        # idx -> 1-based SOURCE line (expansions share one)
+        self.rungs = set()      # globals an OS88_POPLADDER emitted
         cur = None
         with open(path, encoding="utf-8", errors="replace") as f:
             lines = f.read().split("\n")
-        for raw in lines:
+        for n, raw in enumerate(lines, 1):
+            self._n = n
             text = strip(raw)
+            m = LADDER.match(text) or PUSHER.match(text)
+            if m:
+                cur = self._expand(m, text, raw, cur)
+                continue
             m = GLOBAL.match(text)
             if m and not text.startswith("."):
                 cur = m.group(1)
@@ -213,6 +256,59 @@ class Unit(object):
         # live in comments, and dropping the line drops the marker with it.
         self.body.append((len(self.body), text, raw))
         self.owner.append(cur)
+        self.lineno.append(self._n)
+
+    def _label(self, name, cur):
+        """Define `name` here the way NASM would; returns the new owner."""
+        if name.startswith("."):
+            if cur is not None:
+                self.llab.setdefault((cur, name), len(self.body))
+            return cur
+        self.glab.setdefault(name, len(self.body))
+        return name
+
+    def _expand(self, m, text, raw, cur):
+        """One OS88_POPLADDER / OS88_PUSHER invocation, as the lines the macro
+        emits (apps/os88api.inc).  Each synthetic line keeps the invocation's
+        source line number and says which rung it is, so a finding names it.
+
+        OS88_POPLADDER name, r1, ..., rN:
+            name_N: pop rN / ... / name_1: pop r1 / name_0: ret
+        Every rung is a global the macro DEFINES whether or not anything jumps
+        to it, so an unreferenced rung must not read as an entry (entered at
+        depth 0 it pops its caller): rungs are recorded, and entries() admits
+        one only when it is called or its address is taken.
+
+        OS88_PUSHER name, r1, ..., rN is a called routine that leaves N words
+        under its own return - the banking shape `; STKBALANCE-NET: +N`
+        declares - so it is emitted as one with that marker, and a `call name`
+        moves the caller's depth by N exactly as the macro does."""
+        name = m.group(1)
+        regs = [r.strip() for r in m.group(2).split(",") if r.strip()]
+        what = text.split(None, 1)[0].upper()
+
+        def note(lab, insn):
+            return "%s    ; [%s: %s]" % (raw.rstrip(), lab, insn)
+
+        if what == "OS88_POPLADDER":
+            for k in range(len(regs), 0, -1):
+                lab = "%s_%d" % (name, k)
+                cur = self._label(lab, cur)
+                if not lab.startswith("."):
+                    self.rungs.add(lab)
+                self._add("pop " + regs[k - 1], note(lab, "pop " + regs[k - 1]), cur)
+            lab = name + "_0"
+            cur = self._label(lab, cur)
+            if not lab.startswith("."):
+                self.rungs.add(lab)
+            self._add("ret", note(lab, "ret"), cur)
+            return cur
+        cur = self._label(name, cur)
+        self._add("", "; STKBALANCE-NET: +%d (OS88_PUSHER)" % len(regs), cur)
+        for r in regs:
+            self._add("push " + r, note(name, "push " + r), cur)
+        self._add("ret", note(name, "ret"), cur)
+        return cur
 
 
 def delta(text):
@@ -221,6 +317,12 @@ def delta(text):
         return 8 if text.lower().startswith("pusha") else 1
     if POP.match(text):
         return -8 if text.lower().startswith("popa") else -1
+    m = LEASP.match(text)
+    if m:
+        try:
+            return -(int(m.group(1), 0) // 2)
+        except ValueError:
+            return None
     m = SPADD.match(text)
     if m:
         try:
@@ -245,7 +347,9 @@ class Corpus(object):
         # 9,786 across apps/ and drivers/), so it is COUNTED and printed rather
         # than left silent - the same treatment as the back edges.
         self.dup = 0
+        self.rungs = set()      # OS88_POPLADDER's rung labels (Unit._expand)
         for u in self.units:
+            self.rungs |= u.rungs
             for name, idx in u.glab.items():
                 if name in self.gindex:
                     self.dup += 1
@@ -261,6 +365,7 @@ class Corpus(object):
         self.tables = {}        # "tab" -> [label, ...] from its dw/dd rows
         self.jumptabs = set()   # tables reached by `jmp [tab + reg]`
         self.macro = {}         # "RAE" -> "jmp" | "call"
+        self._infos = {}        # text -> walk()'s verdicts, see info()
         self._macros()
         self._tables()
         self._scan()
@@ -293,9 +398,34 @@ class Corpus(object):
                 if text:
                     body.append(text)
 
+    def info(self, text):
+        """Every regex verdict walk() asks of one instruction, computed once
+        per distinct TEXT.  walk() runs once per entry - 18,068 of them over
+        apps/ and drivers/ - and each re-asked the same ten patterns of the
+        same lines; they depend on the text alone (and on the macro table,
+        fixed once the corpus is built), so the answer is shared."""
+        got = self._infos.get(text)
+        if got is None:
+            m = JMPTAB.match(text)
+            tab = IDENT.findall(m.group(1)) if m else None
+            m = JMP.match(text)
+            jmp = m.group(1) if m else None
+            kind, mtgt = self._macinvoke(text)
+            m = JCC.match(text)
+            jcc = m.group(2) if m else None
+            m = CALL.match(text)
+            got = self._infos[text] = (
+                bool(DATA.match(text) or SECT.match(text)),
+                bool(RET.match(text)), bool(RETF.match(text)), tab, jmp,
+                jmp is not None and bool(SETTLE.match(jmp)),
+                jmp is not None and bool(FARLIT.match(jmp)),
+                kind, mtgt, jcc, delta(text),
+                m.group(1) if m else None, bool(CALLFAR.match(text)))
+        return got
+
     def _macinvoke(self, text):
         """(kind, target) if this line invokes a branching macro."""
-        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s+(\S+)\s*$", text)
+        m = MACINV.match(text)
         if m and m.group(1) in self.macro:
             return self.macro[m.group(1)], m.group(2)
         return None, None
@@ -317,13 +447,14 @@ class Corpus(object):
     def _scan(self):
         for u in self.units:
             for idx, text, raw in u.body:
-                m = NET.search(raw)
-                if m and u.owner[idx]:
-                    self.nets.setdefault(u.owner[idx], int(m.group(1)))
-                if "STKBALANCE-OK" in raw and u.owner[idx]:
-                    self.skip.add(u.owner[idx])
-                if LOOPMARK.search(raw) and u.owner[idx]:
-                    self.loops.add(u.owner[idx])
+                if "STKBALANCE-" in raw:     # all three markers carry it
+                    m = NET.search(raw)
+                    if m and u.owner[idx]:
+                        self.nets.setdefault(u.owner[idx], int(m.group(1)))
+                    if "STKBALANCE-OK" in raw and u.owner[idx]:
+                        self.skip.add(u.owner[idx])
+                    if LOOPMARK.search(raw) and u.owner[idx]:
+                        self.loops.add(u.owner[idx])
                 if not text:
                     continue
                 if DWORDS.match(text):
@@ -389,6 +520,12 @@ class Corpus(object):
                     continue
                 if name in arms and not self.called.get(name):
                     continue
+                # A rung the ladder macro emitted is a continuation unless
+                # something calls it or takes its address: nothing jumping to
+                # it means only that this package never ends N deep.
+                if name in self.rungs and not (self.called.get(name)
+                                               or self.addressed.get(name)):
+                    continue
                 if (self.called.get(name) or self.addressed.get(name)
                         or not self.jumped.get(name)):
                     out.append(name)
@@ -421,17 +558,36 @@ class Corpus(object):
 
 
 def walk(corp, name):
-    """Propagate depth from one entry.  Returns (findings, suppressed, hit_cap)."""
+    """Propagate depth from one entry.  Returns (findings, suppressed, hit_cap).
+
+    A finding is (path, idx, entry, text, why, exit): `idx` the body line it is
+    AT, and `exit` the (path, idx) of the branch by which this walk first LEFT
+    the entry's own routine to get there (None while it is still inside it).
+
+    WHY THE EXIT IS PART OF THE STATE.  A shared epilogue - `vp_ld7`, a pop
+    ladder - is reached from many routines and from several exits of one.  Two
+    broken jumps into it each end at the SAME `ret` at the same wrong depth, and
+    while the walk pruned a label once seen at a depth and findings were
+    de-duplicated by (file, line text, why), they were ONE finding: Video
+    seeded two broken `jmp vp_ld7`s and this reported one, naming the `ret` and
+    neither jump.  The same keying folded two IDENTICAL broken lines in two
+    routines (`jmp mc_pop_6` is the same text at every site) into one.  So a
+    label is visited once per EXIT, the finding carries the exit, and it is
+    keyed by line NUMBER: N wrong jumps are N findings, each naming its jump.
+    Depth agreement is still checked across exits - two exits arriving at one
+    label at different depths is the cross-jump this gate exists for."""
     u0, i0 = corp.gindex[name]
     findings = []
     suppressed = 0
-    seen = {}                       # (unit_path, idx) -> depth
-    work = [(u0, i0, 0)]
+    seen = {}                       # (unit_path, idx) -> first depth
+    visited = set()                 # (unit_path, idx, exit)
+    work = [(u0, i0, 0, None)]
     seen[(u0.path, i0)] = 0
+    visited.add((u0.path, i0, None))
     steps = 0
     seen_conflict = False
 
-    def push(u, j, d, raw, src=None):
+    def push(u, j, d, src, ex):
         """src = (unit, idx) the edge comes FROM.  A label reached at two
         depths is reported UNLESS the routine that owns it carries
         `; STKBALANCE-LOOP:` - the push-N/pop-N loop whose count lives in a
@@ -441,11 +597,20 @@ def walk(corp, name):
         return address: the loop target dominates the source in both.  A
         tail-merged epilogue one register deep hid behind it too.  So the
         exemption is a name on the routine, and the count of conflicts taken
-        under one is printed."""
+        under one is printed.
+
+        A branch whose target another routine owns is this walk's EXIT the
+        first time one is taken (see walk), and the exit rides on the path."""
         nonlocal suppressed, seen_conflict
+        if j >= len(u.body):
+            return                  # off the end of the file: nothing runs
+        su, si = src
+        if ex is None and u.owner[j] != su.owner[si] and (
+                u is not su or j != si + 1):
+            ex = (su.path, si)
         key = (u.path, j)
-        if key in seen:
-            if seen[key] != d and not seen_conflict:
+        if key in seen and seen[key] != d:
+            if not seen_conflict:
                 if u.owner[j] in corp.loops:
                     suppressed += 1
                 else:
@@ -453,21 +618,26 @@ def walk(corp, name):
                     # entered somewhere else, because that is where a marker
                     # would go: hd_utoa jumps into hd_utoa_body's loop.
                     own = u.owner[j]
-                    findings.append((u.path, name, raw.strip(),
+                    findings.append((su.path, si, name, su.body[si][2].strip(),
                                      "reached at depth %+d and %+d%s"
                                      % (seen[key], d,
                                         "" if own in (None, name)
-                                        else " (label owned by %s)" % own)))
+                                        else " (label owned by %s)" % own),
+                                     None))
                     seen_conflict = True
             return
-        seen[key] = d
-        work.append((u, j, d))
+        vkey = (u.path, j, ex)
+        if vkey in visited:
+            return
+        seen.setdefault(key, d)
+        visited.add(vkey)
+        work.append((u, j, d, ex))
 
     while work:
         if steps > WALK_MAX:
             return findings, suppressed, True
         steps += 1
-        u, i, d = work.pop()
+        u, i, d, ex = work.pop()
         if i >= len(u.body):
             continue
         # An exempted routine is exempt however it is REACHED, not only when it
@@ -478,81 +648,83 @@ def walk(corp, name):
             continue
         _, text, raw = u.body[i]
         if not text:
-            push(u, i + 1, d, raw, (u, i))
+            push(u, i + 1, d, (u, i), ex)
             continue
-        if DATA.match(text) or SECT.match(text):
+        (data, isret, isretf, tab, jmp, settle, farlit, kind, mtgt, jcc,
+         dd, calltgt, callfar) = corp.info(text)
+        if data:
             continue
 
-        if RET.match(text):
+        if isret:
             # `push seg / push off / retf` is a constructed FAR JUMP: the retf
             # eats exactly the two words just pushed, so +2 here is the idiom.
-            if RETF.match(text) and d == 2 and _two_pushes_before(u, i):
+            if isretf and d == 2 and _two_pushes_before(u, i):
                 continue
             if d != 0:
-                findings.append((u.path, name, raw.strip(),
-                                 "ret at depth %+d" % d))
+                findings.append((u.path, i, name, raw.strip(),
+                                 "ret at depth %+d" % d, ex))
             continue
 
-        m = JMPTAB.match(text)
-        if m:
-            hit = [w for w in IDENT.findall(m.group(1)) if w in corp.tables]
+        if tab is not None:
+            hit = [w for w in tab if w in corp.tables]
             if hit:
                 for t in corp.tables[hit[0]]:
                     # a global, or `owner.local` through resolve()'s fallback
                     where = corp.resolve(u, i, t)
                     if where is not None:
-                        push(where[0], where[1], d, raw, (u, i))
+                        push(where[0], where[1], d, (u, i), ex)
                 continue
 
-        m = JMP.match(text)
-        if m:
-            tgt = m.group(1)
-            if SETTLE.match(tgt):           # `jmp short $+2` - an I/O settle
-                push(u, i + 1, d, raw, (u, i))
+        if jmp is not None:
+            tgt = jmp
+            if settle:                      # `jmp short $+2` - an I/O settle
+                push(u, i + 1, d, (u, i), ex)
+                continue
+            if farlit:
+                # `jmp 0xFFFF:0x0000` - the reset vector, or any LITERAL
+                # SEG:OFF.  No routine this walk can see is there, so nothing
+                # will ever pop what is left: the stack is the machine's, and
+                # abandoned with it (disk.inc's dsk_fdd_park_x warm reset)
                 continue
             where = corp.resolve(u, i, tgt)
             if where is None:
                 # a computed jump, or a label we cannot see.  Only a jump that
                 # leaves depth behind is worth saying anything about.
                 if d != 0 and not tgt.startswith((".", "$", "[")):
-                    findings.append((u.path, name, raw.strip(),
-                                     "tail jmp to %s at depth %+d" % (tgt, d)))
+                    findings.append((u.path, i, name, raw.strip(),
+                                     "tail jmp to %s at depth %+d" % (tgt, d),
+                                     ex))
                 continue
-            push(where[0], where[1], d, raw, (u, i))
+            push(where[0], where[1], d, (u, i), ex)
             continue
 
         nxts = [(u, i + 1)]
-        kind, mtgt = corp._macinvoke(text)
         if kind == "jmp":
             # `RAE wvm_aoob` is `jb %%o / jmp wvm_aoob / %%o:` - a branch to
             # the target at this depth, and a fallthrough past it.
             where = corp.resolve(u, i, mtgt)
             if where is not None:
                 nxts.append(where)
-        else:
-            m = JCC.match(text)
-            if m:
-                where = corp.resolve(u, i, m.group(2))
-                if where is not None:
-                    nxts.append(where)
+        elif jcc is not None:
+            where = corp.resolve(u, i, jcc)
+            if where is not None:
+                nxts.append(where)
 
-        dd = delta(text)
         if dd is None:
             dd = 0
-            m2 = CALL.match(text)
             if kind == "call" and mtgt in corp.nets:
                 # `FDENT kentc_di` (fdlg.inc) is `call %1` - a macro call to
                 # a declared banking routine banks exactly what the call does
                 dd = corp.nets[mtgt]
-            elif m2:
-                if m2.group(1) in corp.nets:
-                    dd = corp.nets[m2.group(1)]     # a declared banking pair
-                elif CALLFAR.match(text) and _pushf_before(u, i):
+            elif calltgt is not None:
+                if calltgt in corp.nets:
+                    dd = corp.nets[calltgt]         # a declared banking pair
+                elif callfar and _pushf_before(u, i):
                     # chaining an interrupt: our pushf is the FLAGS the chained
                     # handler's iret pops, so the pair is net zero.
                     dd = -1
-        for k, (uu, j) in enumerate(nxts):
-            push(uu, j, d + dd, raw, (u, i))
+        for uu, j in nxts:
+            push(uu, j, d + dd, (u, i), ex)
     return findings, suppressed, False
 
 
@@ -602,28 +774,47 @@ def main():
                        glob.glob(os.path.join(ROOT, "apps", "*", "*.asm")) +
                        glob.glob(os.path.join(ROOT, "kernel", "*.inc")))
     corp = Corpus(files)
-    all_f, sup, capped = [], 0, 0
-    seen = set()
+    units = {u.path: u for u in corp.units}
+    # (path, idx, why) -> {exit: (entry, text)}, in the order first found.
+    # One LINE reached wrongly by two exits is two findings (see walk); the
+    # same line found again from a second ENTRY by the same exit is one.  And
+    # when a line is wrong from INSIDE the routine that owns it (exit None),
+    # every jump that reaches it is that defect's echo, not a defect of its
+    # own, so only the inside finding is kept.
+    groups, sup, capped = {}, 0, 0
     for name in corp.entries():
         got, n, hit = walk(corp, name)
-        for f in got:
-            key = (f[0], f[2], f[3])
-            if key in seen:
-                continue        # the same defect found from two entries
-            seen.add(key)
-            all_f.append(f)
+        for path, idx, entry, text, why, ex in got:
+            row = groups.setdefault((path, idx, why), {})
+            row.setdefault(ex, (entry, text))
         sup += n
         capped += 1 if hit else 0
-    for path, name, line, why in all_f:
-        print("%s: %s: %s\n    %s"
-              % (os.path.relpath(path, ROOT), name, why, line))
+
+    def where(path, idx):
+        return "%s:%d" % (os.path.relpath(path, ROOT), units[path].lineno[idx])
+
+    total = 0
+    for (path, idx, why), row in groups.items():
+        if None in row:
+            entry, text = row[None]
+            total += 1
+            print("%s: %s: %s\n    %s" % (where(path, idx), entry, why, text))
+            continue
+        exits = list(row.items())
+        total += len(exits)
+        print("%s: %s, by %d exit(s):\n    %s"
+              % (where(path, idx), why, len(exits), exits[0][1][1]))
+        for (epath, eidx), (entry, _) in exits:
+            print("      %s left by %s: %s"
+                  % (entry, where(epath, eidx),
+                     units[epath].body[eidx][2].strip()))
     print("stkbalance: %d unbalanced path(s)"
           "  (%d entries walked, %d declared banking routines,"
           " %d exempted, %d conflicts inside %d STKBALANCE-LOOP routines,"
           " %d walks capped, %d names defined twice)"
-          % (len(all_f), len(corp.entries()), len(corp.nets),
+          % (total, len(corp.entries()), len(corp.nets),
              len(corp.skip), sup, len(corp.loops), capped, corp.dup))
-    return 1 if all_f else 0
+    return 1 if total else 0
 
 
 if __name__ == "__main__":

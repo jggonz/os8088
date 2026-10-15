@@ -28,13 +28,18 @@ SIX ASSERTIONS, and the last two are this package's rather than the C64's:
      are two reads of one fact - and it is at or above A2_ROM_MINSEG, because
      the core fetches ROM through `ES = romseg - ($D000 >> 4)` and that
      arithmetic UNDERFLOWS silently below it;
-  5. THREE WINDOWS OF THE ROM read out of the guest equal
-     `build/apple2-rom/APPLE2.ROM` byte for byte - the first bytes, the
-     CHARGEN block at 0x3000, and the LAST SIXTEEN BYTES OF THE PART, which
-     is why three and not one: a carve one sector short reads perfectly at
-     the front. **And the RESET vector at `$FFFC` reads `$FA62`**, which is
-     the one number that says the file is the AUTOSTART Monitor and not some
-     other Apple II ROM (APPLE2-SPEC 1.4);
+  5. THE CLAIMS ARE THE SIZES APPLE2-SPEC 1.5 AND 3.1 GIVE THEM, read out
+     of the kernel's own `mem_tab`: the parts carve SHRUNK to the head slack
+     plus the 12,288-byte main ROM once the CHARGEN is decoded, and the RAM
+     claim 49KB - `$0000-$C1FF`, the 48K and the core's scratch page. Then
+     TWO WINDOWS OF THE MAIN ROM read out of the guest equal
+     `build/apple2-rom/APPLE2.ROM` byte for byte - the first bytes and the
+     LAST SIXTEEN of the main ROM, because a carve one sector short reads
+     perfectly at the front - and the DECODED CHARGEN equals the file's block
+     $C0 with bit 7 off, which is the one read of the part's tail there will
+     ever be: past it the carve is free heap. **And the RESET vector at
+     `$FFFC` reads `$FA62`**, which is the one number that says the file is
+     the AUTOSTART Monitor and not some other Apple II ROM (APPLE2-SPEC 1.4);
   6. AND BOTH DISPLAY TABLES EXIST AFTER `os88_main` AND BEFORE ANY WAKE -
      the 512-byte decoded character generator and the 128-byte 7-bit reverse
      table. That is the NEGATIVE CONTROL for keeping them off the overlay
@@ -67,6 +72,7 @@ from os88pkg import PKG_FMT
 import os88mouse
 import os88parts
 import os88sym
+import os88geom
 import dispcp
 import os88fixture
 from os88map import Syms                                    # noqa: E402
@@ -81,6 +87,10 @@ ROM_PART = 0
 ROM_LEN = 14848                         # APPLE2-SPEC 1.4's fixed layout
 AM_RAMSEG, AM_ROMSEG, AM_PC = 0, 2, 4   # apps/apple2/a2cpu.inc's record
 A2_ROM_MINSEG = 0x0D00                  # $D000 >> 4 - below it the fetch bias
+A2_ROM_KEEP = 0x3000                    # what of the part os88_main keeps
+A2_RAMKB = 49                           # apple2.c's RAM claim, $0000-$C1FF
+MEM_MAX = os88geom.MEM_MAX
+MC_SIZE = os88geom.MC_SIZE
                                         # underflows (apple2.c)
 A2_ST_RUN, A2_ST_JAM = 1, 2
 fails = []
@@ -196,9 +206,38 @@ def run():
                 "entirely, silently" % (romseg, A2_ROM_MINSEG))
 
         # --- 5. the bytes ARE the ROM ---------------------------------------
+        # THE CARVE IS SHRUNK TO THE MAIN ROM ONCE THE CHARGEN IS DECODED
+        # (APPLE2-SPEC 1.5), so the CHARGEN and the tail are FREE HEAP by the
+        # time this row reads anything and a window there would be reading
+        # memory the package gave back. The front and the main ROM's last
+        # sixteen bytes are what is still the package's; the CHARGEN is
+        # checked through what was DECODED from it, byte for byte, below -
+        # which is the read the short-carve case would corrupt.
+        claims = {}
+        raw = m.read(S("mem_tab"), MEM_MAX * MC_SIZE)
+        for i in range(MEM_MAX):
+            cs, cp = u16(raw, i * MC_SIZE), u16(raw, i * MC_SIZE + 2)
+            if cs:
+                claims[cs] = cp
+        keep = -(-(slack + A2_ROM_KEEP) // 1024) * 64
+        say("claims: carve %04X is %s paragraphs (want %d), RAM %04X is %s "
+            "(want %d)" % (pseg, claims.get(pseg), keep, ramseg,
+                           claims.get(ramseg), A2_RAMKB * 64))
+        if claims.get(pseg) != keep:
+            fails.append(
+                "the parts carve at %04X is %s paragraphs and os88_main "
+                "shrinks it to the head slack plus the main ROM, %d - the "
+                "CHARGEN, the P5 ROM and the pad are dead once a2_chr is "
+                "built (APPLE2-SPEC 1.5)" % (pseg, claims.get(pseg), keep))
+        if claims.get(ramseg) != A2_RAMKB * 64:
+            fails.append(
+                "the RAM claim at %04X is %s paragraphs and APPLE2-SPEC 3.1 "
+                "makes it %dKB: $0000-$C1FF, the 48K and the scratch page"
+                % (ramseg, claims.get(ramseg), A2_RAMKB))
+
         for off, what in ((0x0000, "Applesoft's first bytes at $D000"),
-                          (0x3000, "the character generator's first row"),
-                          (ROM_LEN - 16, "the LAST 16 bytes of the part")):
+                          (A2_ROM_KEEP - 16,
+                           "the LAST 16 bytes of the main ROM")):
             got = bytes(m.read((romseg << 4) + off, 16))
             if got != rom[off:off + 16]:
                 fails.append(
@@ -228,6 +267,17 @@ def run():
         nz = sum(1 for b in chr512 if b)
         say("a2_chr: %d of 512 bytes non-zero; a2_rev[0x01]=%02X "
             "a2_rev[0x40]=%02X" % (nz, rev[0x01], rev[0x40]))
+        want_chr = bytes(b & 0x7F for b in rom[0x3000 + 0xC0 * 8:
+                                              0x3000 + 0xC0 * 8 + 512])
+        if chr512 != want_chr:
+            fails.append(
+                "a2_chr is not block $C0 of %s's character generator with "
+                "bit 7 off (first difference at %d). The CHARGEN is decoded "
+                "out of the carve in os88_main and the carve is shrunk past it "
+                "straight after (APPLE2-SPEC 1.5), so this is the only read of "
+                "those bytes there will ever be" % (
+                    ROM, next(i for i in range(512)
+                              if chr512[i] != want_chr[i])))
         if nz < 256:
             fails.append(
                 "the decoded character generator is %d/512 non-zero bytes, "

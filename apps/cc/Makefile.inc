@@ -86,6 +86,17 @@ CC_RUNTIME  := $(CC_DIR)/os88.h $(CC_DIR)/crt0.asm $(CC_DIR)/os88thunk.asm \
 # SPEC.md 73.8.
 CC_MAXFRAME ?= 96
 
+# CCPEEP is the peephole pass (tools/ccpeep.py, SPEC.md 73.15): cc8086.py runs
+# it over its own lowered output, so every C package gets it through the one
+# compile line below. `make CCPEEP=0` is the A/B - the package exactly as
+# cc8086 lowered it - and the stamp is what makes flipping it rebuild every
+# C package rather than none (a knob with no stamp boots the previous
+# configuration and reads exactly like the change doing nothing).
+# tools/ccverify.py is the pass's differential check, run on demand.
+CCPEEP ?= 1
+CC_PEEPARG := $(if $(filter 1,$(CCPEEP)),,--no-peep)
+CC_PEEPSTAMP := $(BUILD)/.ccpeep-$(if $(CC_PEEPARG),off,on)
+
 # One newline, so that the $(if) in the packaging rule below can expand to two
 # recipe lines rather than one. GNU make has no other spelling of it.
 define CC_NL
@@ -124,8 +135,8 @@ $(BUILD)/$(1).raw.asm: apps/$(2)/$(1).c $(CC_RUNTIME) | $(BUILD) cc-toolchain
 		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) \
 		apps/$(2)/$(1).c -o $$@
 
-$(BUILD)/$(1).gen.asm: $(BUILD)/$(1).raw.asm tools/cc8086.py
-	python3 tools/cc8086.py $$< -o $$@ --max-frame $(CC_MAXFRAME)
+$(BUILD)/$(1).gen.asm: $(BUILD)/$(1).raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $$< -o $$@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
 
 $(BUILD)/$(1).bin: apps/$(2)/$(1).asm $(BUILD)/$(1).gen.asm $(CC_RUNTIME) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $$@ apps/$(2)/$(1).asm
@@ -141,14 +152,60 @@ $(BUILD)/$(1).bin: apps/$(2)/$(1).asm $(BUILD)/$(1).gen.asm $(CC_RUNTIME) | $(BU
 # WHICH rows is the package's own decision - the flag is on the row, in its
 # source - so this only says how, and a package with no such row is unaffected
 # by it entirely.
+#
+# PKGZ REACHES A C PACKAGE TOO (SPEC.md 20.13.5): $(PKGZARG) is the top-level
+# Makefile's `--compress-if=lz4`, the soft form, so the package's RESIDENT
+# image is packed when that pays and is written plain with a line saying why
+# when it does not - a package with PARTS (C64, APPLE2) and one too small to
+# save a sector (ccsmoke) are the plain ones. $(PKGZSTAMP) is the stamp every
+# other package rule carries, so flipping PKGZ rebuilds these too. Both expand
+# to nothing in a Makefile that does not define them, which is the plain
+# package this rule always built.
+#
+# AND THE OVERLAY SHIPS PACKED, from $(CC_OVLZ) (SPEC.md 73.14.1):
+# $(BUILD)/<NAME>.OVL stays exactly what os88ovl.py cut - the plain module the
+# symbol readers and tests/unit/t_ctoolchain.py read - and CC_OVLZ_RULE below
+# writes the copy a DISK carries, $(CC_OVLZ)/<NAME>.OVL, as a 'CZ' file.
+# cc_ovneed needs nothing for it: OSAPI_FILE_READ is transparent (SPEC.md
+# 20.14) and crt0 sizes the claim from the IMAGE's own cc_modc_end, which is
+# the UNPACKED size. A disk recipe names $(CC_OVLZ)/<NAME>.OVL, never
+# $(BUILD)/<NAME>.OVL - tests/unit/t_pkgzrules.py fails the build otherwise.
 CC_PARTZ := --part-compress $(if $(CCPARTZ),$(CCPARTZ),lz4)
-$(BUILD)/$(1).o88: $(BUILD)/$(1).bin tools/os88pkg.py $(if $(3),tools/os88ovl.py) $(4)
-	$(if $(3),python3 tools/os88ovl.py $$< -o $(BUILD)/$(3) --trim $(BUILD)/$(1).trim.bin$(CC_NL)	python3 tools/os88pkg.py $(BUILD)/$(1).trim.bin -o $$@ $(CC_PARTZ) $(addprefix --part ,$(4)),python3 tools/os88pkg.py $$< -o $$@ $(CC_PARTZ) $(addprefix --part ,$(4)))
+$(BUILD)/$(1).o88: $(BUILD)/$(1).bin tools/os88pkg.py $(if $(3),tools/os88ovl.py) $(4) $(PKGZSTAMP)
+	$(if $(3),python3 tools/os88ovl.py $$< -o $(BUILD)/$(3) --trim $(BUILD)/$(1).trim.bin$(CC_NL)	python3 tools/os88pkg.py $(PKGZARG) $(BUILD)/$(1).trim.bin -o $$@ $(CC_PARTZ) $(addprefix --part ,$(4)),python3 tools/os88pkg.py $(PKGZARG) $$< -o $$@ $(CC_PARTZ) $(addprefix --part ,$(4)))
 
 # The overlay is also a direct prerequisite of the all-apps/live images.
 # Declare its producer for fresh builds; recover it if only it was deleted.
 $(if $(3),$(BUILD)/$(3): $(BUILD)/$(1).o88$(CC_NL)	@test -f $$@ || python3 tools/os88ovl.py $(BUILD)/$(1).bin -o $$@ --trim $(BUILD)/$(1).trim.bin)
 
+$(if $(3),$(call CC_OVLZ_RULE,$(3)))
+
+endef
+
+# -----------------------------------------------------------------------------
+# CC_OVLZ_RULE - the copy of an overlay a DISK carries, packed (SPEC.md 73.14.1)
+#   $(eval $(call CC_OVLZ_RULE,<NAME>.OVL))
+# CC_PACKAGE calls it for its own third argument; a package whose rules are
+# open-coded in the top-level Makefile (LOOM, COVL) calls it by hand, after
+# giving $(BUILD)/<NAME>.OVL a rule of its own (the empty `;` one is enough).
+#
+# `PKGZ=` writes a plain copy, which is the A/B the rest of the tree's PKGZ
+# gives, and os88lz.py --wrap itself writes the file UNCHANGED when packing it
+# would make it bigger, so no overlay can grow by this.
+#
+# ONE RISK, AND WHY IT IS ACCEPTED. A 'CZ' file's unpacked size lives in its
+# DIRECTORY ENTRY (SPEC.md 20.14.1), and a host copy can drop it. That used to
+# hand cc_ovneed the packed bytes, which its stamp compare refuses as `Old
+# <NAME>.OVL` - clean, and a regression for an overlay copied off a PC. It
+# cannot happen now: the read SNIFFS a hintless file's own header (SPEC.md
+# 20.14.6) and expands it anyway, on both kernels and on a redirected volume,
+# and the claim it reads into is sized from the image and not from FIND.
+# -----------------------------------------------------------------------------
+CC_OVLZ := $(BUILD)/ovlz
+define CC_OVLZ_RULE
+$(CC_OVLZ)/$(1): $(BUILD)/$(1) tools/os88lz.py $(PKGZSTAMP)
+	@mkdir -p $$(@D)
+	$(if $(PKGZ),python3 tools/os88lz.py --wrap $$@ --fmt $(PKGZ) $$<,cp $$< $$@)
 endef
 
 # -----------------------------------------------------------------------------
@@ -156,6 +213,10 @@ endef
 # The setup script is idempotent and verifies the pinned compiler with a canary.
 # Ordinary assembly-only builds never depend on this target.
 # -----------------------------------------------------------------------------
+$(CC_PEEPSTAMP): | $(BUILD)
+	@rm -f $(BUILD)/.ccpeep-on $(BUILD)/.ccpeep-off
+	@touch $@
+
 .PHONY: cc-toolchain
 cc-toolchain:
 	@if ! test -x "$(CC_SC)/smlrc" || ! test -x "$(CC_SMLRCC)" || ! test -x "$(CC_SC)/smlrpp"; then \

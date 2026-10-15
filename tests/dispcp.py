@@ -65,6 +65,7 @@ AVAIL_HERC_CGA, AVAIL_VGA_HERC = 0x06, 0x07
 # pane, then SPEC.md 31.10.2's row inside it.
 CP_IX, CP_I0Y, CP_IROWH = 6, 6, 14
 CP_RX, CP_PGX = 96, 4
+CP_FW = 320                         # the panel's FRAME width (ctrl.inc)
 CPV_MY, CPV_MSTEP = 106, 74         # SPEC.md 31.10.3 moved this row DOWN, from
                                     # 96 to 106, to put 'Desktop Extension
                                     # Mode:' above it. A stale 96 here is not a
@@ -226,7 +227,11 @@ def close_panel(m, mo, S, settle, card=None):
         return
     wx, wy = w
     owed = _b(m, S, "cp_wdirty")        # ...is a SYSTEM.CFG write owed?
-    mo.click(wx + 10, wy + TITLE_H // 2, settle=0)
+    x, y = wx + 10, wy + TITLE_H // 2
+    if m.read(S("thm_kind"), 1)[0] == 3:    # the Windows theme (SPEC.md
+        x, y = wx + CP_FW - 19 + 8, wy + 2 + 7  # 76.14.3): close is at the
+                                            # RIGHT of the panel's 320 frame
+    mo.click(x, y, settle=0)
     _cpwait(m, lambda: _cp_win(m, S) is None,
             "the Control Panel window to close")
     if owed:

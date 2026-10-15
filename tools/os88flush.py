@@ -117,6 +117,14 @@ class Entry(object):
         return "<Entry %s %s %d>" % (self.path, "dir" if self.is_dir else "file", self.size)
 
 
+def numbered(name, n):
+    """NAME.EXT -> its n'th numbered save, cut to 8.3 the way benchlib's
+    bl_numname cuts it: VIDDISK.TXT, 10 -> VIDDIS10.TXT."""
+    base, dot, ext = name.partition(".")
+    digits = str(n)
+    return base[:8 - len(digits)] + digits + dot + ext
+
+
 class Volume(object):
     """A FAT12/FAT16 volume, read on the HOST out of a flat sector image.
 
@@ -254,6 +262,34 @@ class Volume(object):
     def names(self, path=""):
         """Just the paths, for an `assert 'NOTES.TXT' in ...`."""
         return [e.path for e in self.walk(path)]
+
+    def latest(self, path):
+        """The newest of a NUMBERED report's saves, or None.
+
+        A bench built with BL_NUMBERED (tests/benchlib.inc) writes NAME.EXT as
+        NAME1.EXT, NAME2.EXT ... - the first not on the disk - so a field run
+        of several passes needs no renaming between them. This answers the
+        highest-numbered one, and the plain name when there is none, so a test
+        reads the report it just made whichever way the bench was built.
+        """
+        parts = [p for p in path.replace("\\", "/").split("/") if p]
+        folder = "/".join(parts[:-1])
+        have = {e.name.upper() for e in self.listdir(folder) if not e.is_dir}
+        best = parts[-1].upper() if parts[-1].upper() in have else None
+        for n in range(1, 100):
+            if numbered(parts[-1], n).upper() in have:
+                best = numbered(parts[-1], n)
+        if best is None:
+            return None
+        return "/".join(parts[:-1] + [best])
+
+    def read_latest(self, path):
+        """read() of latest(path) - raises naming the plain name if none."""
+        got = self.latest(path)
+        if got is None:
+            raise FlushError("%s: no file '%s' (nor a numbered save of it)"
+                             % (self.name, path))
+        return self.read(got)
 
     def read(self, path):
         """A file's exact bytes, truncated to the size in its directory entry.

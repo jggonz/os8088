@@ -39,6 +39,7 @@ Tracker must be PLAYING. Either surface works: the numbers come from memory,
 not from pixels.
 """
 import sys, os, re, struct, subprocess, argparse, statistics
+import tempfile
 from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -56,9 +57,9 @@ MP_ST_N, MP_ST_SIZE, MP_SP_ROW = 64, 16, 4
 def symbols(src):
     """Offsets by NAME, out of a fresh NASM listing - so this survives every
     rebuild instead of carrying numbers that rot."""
-    lst = "/tmp/os88avsync.lst"
+    lst = tempfile.gettempdir() + "/os88avsync.lst"
     subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
-                    "-I", "apps/tracker/", "-o", "/tmp/os88avsync.bin",
+                    "-I", "apps/tracker/", "-o", tempfile.gettempdir() + "/os88avsync.bin",
                     "-l", lst, src], cwd=ROOT, check=True)
     lines = open(lst).read().splitlines()
     out = {}

@@ -169,12 +169,8 @@ def main():
         r = vid.Reader(v88)
         g = r.g
         if modex:                       # both halves of the decoder
-            masks = set()
-            for rec, _, _ in r.records():
-                si = 6
-                while rec[si]:
-                    masks.add(rec[si])
-                    si = vid.walk_lists(bytearray(65536), rec, si + 1)
+            masks = {lead for rec, _, _ in r.records()
+                     for lead, s0, s1 in vid.subs_of(rec, r.g)}
             print("   the clip's Map Masks: %s" % sorted(masks))
             if 0x0F not in masks or not masks & {3, 12} or \
                     not masks & {1, 2, 4, 8}:

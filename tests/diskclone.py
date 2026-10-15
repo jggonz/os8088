@@ -23,7 +23,7 @@ twenty:
      check must FIRE, and land on CLS_SAME rather than writing.
 
   3. **Esc.** At a prompt, which is the only place input is required - and the
-     claim and CLONE.DRV must both be gone afterwards (SPEC.md 22.21.2).
+     claim and DISKOPS.DRV must both be gone afterwards (SPEC.md 22.21.2).
 
   4. **`Write Img...`** as far as this machine can take it (SPEC.md 18.99.8).
      The round trip is NOT here: a 360KB disk's image is 720 sectors and a
@@ -61,10 +61,10 @@ APPS = "build/apps360.img"
 # there lands somewhere nothing then reads, or does not land at all.
 OUT = os.path.abspath(os.path.join("build", "clonetest"))
 
-# The File menu's title cell and the item pitch.  SPEC.md 22's own layout -
+# The Disk menu's title cell and the item pitch.  SPEC.md 22.28's layout -
 # titles at x 112/160/208/248, MENU_ITEM_H = 16 in a 19px bar - so item k's
 # centre is 28 + 16k and 'Clone Disk...' is item FM_ICLONE.
-FILE_X, BAR_Y = 120, 8
+DISK_X, BAR_Y = 256, 8
 ITEM0_Y, ITEM_H = 28, 16
 
 
@@ -79,22 +79,22 @@ def equ(path, name):
 FS_EDIT = equ("kernel/files.inc", "FS_EDIT")
 FM_ICLONE = equ("kernel/files.inc", "FM_ICLONE")
 FM_IWIMG = equ("kernel/files.inc", "FM_IWIMG")
-CL_STEP = equ("kernel/clone.inc", "CL_STEP")
-CL_SRC = equ("kernel/clone.inc", "CL_SRC")
-CL_TGT = equ("kernel/clone.inc", "CL_TGT")
-CLS_PICK = equ("kernel/clone.inc", "CLS_PICK")
-CLS_SRC = equ("kernel/clone.inc", "CLS_SRC")
-CLS_TGT = equ("kernel/clone.inc", "CLS_TGT")
-CLS_SAME = equ("kernel/clone.inc", "CLS_SAME")
-CL_CHUNK = equ("kernel/clone.inc", "CL_CHUNK")
-CL_XON = equ("kernel/clone.inc", "CL_XON")
-CL_TOT = equ("kernel/clone.inc", "CL_TOT")
-CLE_IMG = 0xFE          # clone.inc's sentinel; not a decimal equ, so it is
+CL_STEP = equ("kernel/diskops.inc", "CL_STEP")
+CL_SRC = equ("kernel/diskops.inc", "CL_SRC")
+CL_TGT = equ("kernel/diskops.inc", "CL_TGT")
+CLS_PICK = equ("kernel/diskops.inc", "CLS_PICK")
+CLS_SRC = equ("kernel/diskops.inc", "CLS_SRC")
+CLS_TGT = equ("kernel/diskops.inc", "CLS_TGT")
+CLS_SAME = equ("kernel/diskops.inc", "CLS_SAME")
+CL_CHUNK = equ("kernel/diskops.inc", "CL_CHUNK")
+CL_XON = equ("kernel/diskops.inc", "CL_XON")
+CL_TOT = equ("kernel/diskops.inc", "CL_TOT")
+CLE_IMG = 0xFE          # diskops.inc's sentinel; not a decimal equ, so it is
                         # written here and asserted against the source below
-MOD_CLONE = equ("kernel/mod.inc", "MOD_CLONE")
-if not re.search(r"^CLE_IMG\s+equ\s+0x%02X" % CLE_IMG, open("kernel/clone.inc").read(),
+MOD_DISKOPS = equ("kernel/mod.inc", "MOD_DISKOPS")
+if not re.search(r"^CLE_IMG\s+equ\s+0x%02X" % CLE_IMG, open("kernel/diskops.inc").read(),
                  re.M | re.I):
-    sys.exit("tests/diskclone.py: CLE_IMG moved in kernel/clone.inc")
+    sys.exit("tests/diskclone.py: CLE_IMG moved in kernel/diskops.inc")
 MODR_SIZE = equ("kernel/mod.inc", "MODR_SIZE")
 
 
@@ -154,19 +154,19 @@ class Probe:
         return b[0] | (b[1] << 8)
 
     def image(self):
-        """CLONE.DRV's MODR_SEG - 0 when the image is not resident."""
-        return word(self.m, self.mod_tab + MOD_CLONE * MODR_SIZE)
+        """DISKOPS.DRV's MODR_SEG - 0 when the image is not resident."""
+        return word(self.m, self.mod_tab + MOD_DISKOPS * MODR_SIZE)
 
 
 def open_clone(m, mo):
-    """File > Clone Disk..., and settle."""
-    mo.menu(FILE_X, BAR_Y, FILE_X + 30, ITEM0_Y + FM_ICLONE * ITEM_H)
+    """Disk > Clone Disk..., and settle."""
+    mo.menu(DISK_X, BAR_Y, DISK_X + 30, ITEM0_Y + FM_ICLONE * ITEM_H)
     M.settle(m)
 
 
 def open_wimg(m, mo):
-    """File > Write Img..., and settle."""
-    mo.menu(FILE_X, BAR_Y, FILE_X + 30, ITEM0_Y + FM_IWIMG * ITEM_H)
+    """Disk > Write Image..., and settle."""
+    mo.menu(DISK_X, BAR_Y, DISK_X + 30, ITEM0_Y + FM_IWIMG * ITEM_H)
     M.settle(m)
 
 
@@ -201,7 +201,7 @@ with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
     open_clone(m, mo)
     check(p.edit() == 7, "the pick prompt is armed",
           "FS_EDIT 7 is the cloner's one mode (SPEC.md 22.21.1); 0 means "
-          "fm_c_clone refused and 6 means it could not read CLONE.DRV",
+          "fm_c_clone refused and 6 means it could not read DISKOPS.DRV",
           got=p.edit(), want=7)
     check(p.claim() != 0, "...and the job block is claimed",
           "[clo_seg] IS the operation (SPEC.md 18.99.1)")
@@ -220,7 +220,7 @@ with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
     check(p.edit() == 0, "the mode ended", "", got=p.edit(), want=0)
     check(p.claim() == 0, "...the claim went back (SPEC.md 22.21.2)", "",
           got=p.claim(), want=0)
-    check(p.image() == 0, "...and so did CLONE.DRV", "", got=p.image(), want=0)
+    check(p.image() == 0, "...and so did DISKOPS.DRV", "", got=p.image(), want=0)
     disks_agree(m, "cross drive")
 
     # --- 2. same drive, and the disk was never swapped -----------------------
@@ -299,7 +299,7 @@ with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
     M.settle(m)
     check(p.edit() == 0, "Esc ends it where it stands", "", got=p.edit(), want=0)
     check(p.claim() == 0, "...the claim goes back", "", got=p.claim(), want=0)
-    check(p.image() == 0, "...and CLONE.DRV with it",
+    check(p.image() == 0, "...and DISKOPS.DRV with it",
           "fm_edit_end is the one place both happen (SPEC.md 22.21.2)",
           got=p.image(), want=0)
     check(p.claim() == 0 and p.edit() == 0,
@@ -326,7 +326,7 @@ with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
           "would be left with nothing to end it",
           got=p.edit(), want=0)
     check(p.claim() == 0, "...and claims nothing", "", got=p.claim(), want=0)
-    check(p.image() == 0, "...and does not load CLONE.DRV either",
+    check(p.image() == 0, "...and does not load DISKOPS.DRV either",
           "the completion proc loads it, for the same cancel (SPEC.md 22.21.5)",
           got=p.image(), want=0)
 
@@ -345,7 +345,7 @@ with M.launch(SRC, apps=APPS, machine=MACHINE) as m:
           got=word(m, m.sym("fdlg_win")), want=0)
     check(p.edit() == 0, "...leaving no mode armed", "", got=p.edit(), want=0)
     check(p.claim() == 0, "...no claim outstanding", "", got=p.claim(), want=0)
-    check(p.image() == 0, "...and CLONE.DRV not resident",
+    check(p.image() == 0, "...and DISKOPS.DRV not resident",
           "a cancel calls nothing back, so an image loaded before the dialog "
           "would never be dropped (SPEC.md 22.21.5)",
           got=p.image(), want=0)

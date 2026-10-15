@@ -145,7 +145,16 @@
 ; Constants
 ; =============================================================================
 
-CY_MAXV     equ 17                  ; vertices in the widest web (16 + wrap)
+CY_MAXV     equ 16                  ; vertices in the widest web: a closed
+                                    ; one has one a lane and wraps lane 15 onto
+                                    ; vertex 0, an open one has one more than
+                                    ; its lanes - so 16 lanes closed or 15 open,
+                                    ; and CYSHAPE refuses anything wider. 16 is
+                                    ; also what makes a vertex-table row 32
+                                    ; bytes, a shift where it was a multiply
+%if CY_MAXV * 2 != 32
+  %error "cyclone: cy_vert and cy_lanepos shift by 5 for a CY_MAXV*2 row"
+%endif
 CY_PTMAX    equ 96                  ; the point list os88gfx.inc steps into
 CY_MAXLANE  equ 16
 CY_DEPTH    equ 16                  ; depth steps: 0 = the far end, 16 = the rim
@@ -161,7 +170,7 @@ CY_NDEPTH   equ 18                  ; ...plus CY_TOPD above it = 18 table rows
 ; player does ever happens among the spokes. A fully ascended enemy arrives
 ; there too - it has climbed out of the tube and is on the lip with you.
 ;
-; Nothing is ever DRAWN at CY_DEPTH itself (cy_dtab maps it to CY_TOPD), so a
+; Nothing is ever DRAWN at CY_DEPTH itself (cy_dmap maps it to CY_TOPD), so a
 ; mover crossing the rim hops it in a single frame and the rim polygon is
 ; never touched.
 CY_TOPD     equ 17                  ; on the lip: the player, and arrivals
@@ -241,7 +250,7 @@ CY_NOBJ     equ CY_OB_DR + 1       ; repaired by exactly the player's code
 ; 3x3 blob with no notch at all - which is exactly the "movers that are not
 ; there" the quarter-cap lesson in cy_lanecap records.
 CY_DROIDEXT equ 0x0203
-CY_OBSZ     equ 12                  ; bytes of "what is on the glass" per object
+CY_OBSZ     equ 10                  ; bytes of "what is on the glass" per object
 
 ; Pixels of every walk laid per warp frame. 4 puts a 60-pixel spoke on screen
 ; in 15 frames - a little under a second at 18fps - and costs at most
@@ -362,6 +371,9 @@ CY_C_BG     equ CBLACK
 ; =============================================================================
 
 %macro CYSHAPE 2                    ; nlanes, closed
+  %if %1 + (%2 == 0) > CY_MAXV
+    %error "cyclone: a web with more vertices than the tables hold (CY_MAXV)"
+  %endif
     db %1, %2
 %endmacro
 
@@ -524,10 +536,8 @@ cy_shapes:
 ; mono palette for ever.
 ; -----------------------------------------------------------------------------
 cy_pal:
-    push ax
-    push bx
-    push cx
-    push dx
+    ; Preserves nothing: every caller is a spine or a callback that reloads
+    ; what it uses on the next line (SPEC.md 67.5.5).
     mov bx, [cy_win]
     call OSAPI_FSX_CAPS             ; DL = that display's VID_* kind
     mov al, CY_C_ENEMY2
@@ -543,10 +553,6 @@ cy_pal:
     mov [cy_c_es], ah
     mov [cy_ekcol + CYE_TANKER], al
     mov [cy_ekcol + CYE_SPIKER], al
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- the perspective ladder ---------------------------------------------------
@@ -562,17 +568,11 @@ cy_scale:
     dw 256                          ; CY_DEPTH  - the rim polygon
     dw CY_TOPSCALE                  ; CY_TOPD   - the lip, outside it
 
-; The depth a mover is DRAWN at, given the depth it is at. Only CY_DEPTH is
-; remapped: that row is the rim polygon's own, and a mover centred on it would
-; erase the rim. One table read beats a compare at five call sites.
-cy_dtab:
-    db 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, CY_TOPD, CY_TOPD
-
 ; =============================================================================
 ; Strings
 ; =============================================================================
-cy_title        db 'Cyclone 88', 0
-cy_s_name       db 'CYCLONE 88', 0
+cy_title        db 'Cyclone 88', 0  ; the window's title AND the menu's name
+cy_s_name       equ cy_scroll_txt   ; 'CYCLONE 88', the scroll's first line
 cy_s_press      db 'PRESS ENTER TO START', 0
 cy_s_keys       db 'ARROWS MOVE  SPACE FIRE  Z ZAP  J JUMP', 0
 cy_s_hiscore    db 'HIGH SCORES', 0
@@ -731,7 +731,7 @@ cy_hp_end:
 ; kernel then letters whatever lives at that offset: the bar came up as a row
 ; of garbage glyphs with one item's text loose in it, on every adapter, for as
 ; long as this app has had a menu.
-cy_m_name:  db 'Cyclone 88', 0
+cy_m_name   equ cy_title            ; the same 'Cyclone 88' the title bar says
 cy_m_game:  db 'Game', 0
 cy_m_help:  db 'Help', 0
 cy_i_new:   db 'New Game', 0
@@ -977,7 +977,10 @@ cy_pn_off:
     ret
 
 ; cy_pn_dismiss - take the panel down if it is up, and repaint over it.
-; out: CF = 1 the key or click was spent doing it. Preserves everything.
+; out: CF = 1 the key or click was spent doing it. CF = 0 (no panel) preserves
+;      every register; CF = 1 keeps SI here and AX, CX in cy_full_repaint and
+;      promises nothing else - the repaint does not, and both callers are done
+;      with the event by then. (It said "preserves everything", and never did.)
 cy_pn_dismiss:
     call cy_pn_off
     jnc .none
@@ -1014,8 +1017,8 @@ cy_panel_draw:
     shr ax, 1
     mov [cy_pny], ax
 
-    mov al, CY_C_BG                 ; a bed, then a frame, then the lines: the
-    call cy_setcol                  ; run is opaque so there is no second fill
+    call cy_setbg                   ; a bed, then a frame, then the lines: the
+                                    ; run is opaque so there is no second fill
     call cy_pn_rect
     call cy_fillc
     mov al, CY_C_TEXT               ; SOLID, not the web's dither: a 1px frame
@@ -1041,9 +1044,7 @@ cy_panel_draw:
     mov dx, ax
     mov cx, [cy_pnx]
     add cx, 8
-    mov al, CY_C_TEXT
-    mov ah, CY_C_BG
-    call cy_textc
+    call cy_textw
     pop si
     call cy_strskip
     inc byte [cy_pnrow]
@@ -1149,10 +1150,10 @@ cy_onkey:
     ; preference: SPEC.md 11.2.1.1's door is unconditional, which is where
     ; apps/paint and apps/apple2 put theirs - a panel that swallowed it would
     ; be a full screen with no way back and one more step in front of it. And
-    ; cy_pn_dismiss does NOT preserve AH: it ends in cy_pn_off and
-    ; cy_full_repaint, so every test in cy_key_common that reads the SCAN code
-    ; is reading whatever those left behind. The letters below survive because
-    ; they test AL; this chord is ascii 0 and has nothing but the scan code.
+    ; cy_pn_dismiss SPENDS the key when a panel is up (CF=1), and the chord
+    ; must reach .fs whatever is on the glass. (This said the dismiss lost AH
+    ; for cy_key_common; that is reached only on CF=0, which preserves every
+    ; register, and cy_full_repaint keeps AX - the reason above stands alone.)
     cmp ax, KEY_ALTENTER
     je .fs
     call cy_pn_dismiss              ; any key takes a panel down, and is spent
@@ -1458,18 +1459,23 @@ cy_build_verts:
     mov si, [cy_shape]              ; the descriptor
     mov al, [si]
     mov ah, 0
-    cmp ax, CY_MAXLANE              ; CLAMPED, not trusted. The tables are
-    jbe .nl                         ; CY_MAXV wide and cy_build_verts writes
-    mov ax, CY_MAXLANE              ; one entry per vertex per depth; a
-.nl:                                ; descriptor claiming more does not draw
-    or ax, ax                       ; a wrong web, it writes through the end
-    jnz .nl2                        ; of them
-    mov ax, 3
-.nl2:
-    mov [cy_nlane], ax
     mov bl, [si + 1]
     mov bh, 0
     mov [cy_closed], bx
+    mov dx, CY_MAXV                 ; CLAMPED, not trusted. The tables are
+    or bx, bx                       ; CY_MAXV wide and cy_build_verts writes
+    jnz .cap                        ; one entry per vertex per depth; a
+    dec dx                          ; descriptor claiming more does not draw
+.cap:                               ; a wrong web, it writes through the end
+    cmp ax, dx                      ; of them. An OPEN web has a vertex more
+    jbe .nl                         ; than it has lanes, so one lane fewer
+    mov ax, dx
+.nl:
+    or ax, ax
+    jnz .nl2
+    mov ax, 3
+.nl2:
+    mov [cy_nlane], ax
     add si, 2                       ; -> the vertex pairs
 
     mov cx, [cy_nlane]              ; nverts = nlanes (+1 when open)
@@ -1524,10 +1530,9 @@ cy_build_verts:
     shl bx, 1
     mov bp, [cy_scale + bx]         ; the scale for this depth
 
-    mov bx, [cy_dd]                 ; row base = d * CY_MAXV * 2
-    mov ax, CY_MAXV * 2
-    mul bx
-    mov di, ax                      ; DI = byte offset of row d
+    mov di, [cy_dd]                 ; row base = d * CY_MAXV * 2
+    mov cl, 5
+    shl di, cl                      ; DI = byte offset of row d
     mov si, cy_rsx
     mov cx, [cy_nvert]
 .p2v:
@@ -1634,63 +1639,34 @@ cy_lip_build:
 
     ; --- the rim edge this lane is drawn against ---------------------------
     mov ax, CY_DEPTH
-    mov bx, si
-    call cy_vert
-    mov [cy_lptx], cx
-    mov [cy_lpty], dx
-    mov ax, si
-    call cy_web_next
-    mov [cy_lpv2], ax
-    mov bx, ax
-    mov ax, CY_DEPTH
-    call cy_vert
-    mov ax, cx
-    sub ax, [cy_lptx]               ; e = B - A
-    mov [cy_lpex], ax
-    mov ax, dx
-    sub ax, [cy_lpty]
-    mov [cy_lpey], ax
-    add cx, [cy_lptx]               ; ...and the edge's midpoint, which is the
-    sar cx, 1                       ; point on the line the lip is measured
-    mov [cy_lpmx], cx               ; from
-    add dx, [cy_lpty]
-    sar dx, 1
-    mov [cy_lpmy], dx
+    call cy_lp_edge
+    mov [cy_lpex], cx               ; e = B - A
+    mov [cy_lpey], dx
+    mov [cy_lpmx], ax               ; ...and the edge's midpoint, which is the
+    mov [cy_lpmy], bx               ; point on the line the lip is measured from
 
     ; --- where the scaled lip put it, and how wide the lane is there -------
     mov ax, CY_TOPD
-    mov bx, si
-    call cy_vert
-    mov [cy_lptx], cx
-    mov [cy_lpty], dx
-    mov bx, [cy_lpv2]
-    mov ax, CY_TOPD
-    call cy_vert
-    mov ax, cx
-    sub ax, [cy_lptx]
+    call cy_lp_edge
+    mov [cy_lipx + di], ax          ; the scaled position IS the answer until
+    mov [cy_lipy + di], bx          ; something below says otherwise
+    sub ax, [cy_lpmx]               ; d = lip - rim: the lean it already has
+    mov [cy_lpdx], ax
+    sub bx, [cy_lpmy]
+    mov [cy_lpdy], bx
+    or cx, cx
     jns .sx
-    neg ax
+    neg cx
 .sx:
-    mov bx, dx
-    sub bx, [cy_lpty]
+    or dx, dx
     jns .sy
-    neg bx
+    neg dx
 .sy:
-    cmp ax, bx                      ; the dominant span, which is what
+    cmp cx, dx                      ; the dominant span, which is what
     jae .sm                         ; cy_lanecap bounds a mover by
-    mov ax, bx
+    mov cx, dx
 .sm:
-    mov [cy_lspm], ax
-    add cx, [cy_lptx]
-    sar cx, 1
-    mov [cy_lipx + di], cx          ; the scaled position IS the answer until
-    add dx, [cy_lpty]               ; something below says otherwise
-    sar dx, 1
-    mov [cy_lipy + di], dx
-    sub cx, [cy_lpmx]               ; d = lip - rim: the lean it already has
-    mov [cy_lpdx], cx
-    sub dx, [cy_lpmy]
-    mov [cy_lpdy], dx
+    mov [cy_lspm], cx
 
     ; --- |e|, near enough: max + min/2, which is up to 12% LONG ------------
     mov ax, [cy_lpex]
@@ -1812,6 +1788,30 @@ cy_lip_build:
     pop ax
     ret
 
+; cy_lp_edge - lane SI's edge at depth AX, from its vertex A to the next one
+; round, B. out: CX/DX = B - A, AX/BX = the midpoint (A + B) / 2; A is left
+; in cy_lptx/cy_lpty. Preserves SI and DI.
+cy_lp_edge:
+    push ax
+    mov bx, si
+    call cy_vert                    ; A
+    mov [cy_lptx], cx
+    mov [cy_lpty], dx
+    mov ax, si
+    call cy_web_next
+    mov bx, ax
+    pop ax
+    call cy_vert                    ; B
+    mov ax, cx
+    add ax, [cy_lptx]
+    sar ax, 1
+    mov bx, dx
+    add bx, [cy_lpty]
+    sar bx, 1
+    sub cx, [cy_lptx]
+    sub dx, [cy_lpty]
+    ret
+
 ; cy_lp_cross - the perpendicular distance from the lip to the rim edge's
 ; LINE, times |e| so that nothing has to be divided to compare it with
 ; cy_lpn. In 32 bits, because a lip that is miles clear must not wrap into
@@ -1890,14 +1890,12 @@ cy_lp_scale:
 cy_vert:
     push ax
     push bx
-    push si
-    mov si, CY_MAXV * 2
-    mul si                          ; AX = row offset (depth fits a byte, so
-    shl bx, 1                       ; the high word is 0 and DX is scratch)
+    mov cl, 5                       ; (CX is an output)
+    shl ax, cl                      ; AX = row offset, depth * CY_MAXV * 2
+    shl bx, 1
     add bx, ax
     mov cx, [cy_vx + bx]
     mov dx, [cy_vy + bx]
-    pop si
     pop bx
     pop ax
     ret
@@ -1935,17 +1933,15 @@ cy_wrap:
     ret
 
 ; cy_dmap - AH = the depth a mover IS at -> AH = the depth to DRAW it at.
-; Preserves everything else.
+; Only CY_DEPTH is remapped: that row is the rim polygon's own, and a mover
+; centred on it would erase the rim - so it, and anything above it, draws at
+; CY_TOPD. A compare: it was an 18-byte table behind a bounds check, which is
+; longer AND slower than the one test it encodes. Preserves everything else.
 cy_dmap:
-    push bx
-    mov bl, ah
-    mov bh, 0
-    cmp bx, CY_NDEPTH
+    cmp ah, CY_DEPTH
     jb .ok
-    mov bx, CY_TOPD
+    mov ah, CY_TOPD
 .ok:
-    mov ah, [cy_dtab + bx]
-    pop bx
     ret
 
 ; --- cy_lanepos ---------------------------------------------------------------
@@ -1968,9 +1964,10 @@ cy_lanepos:
     mov bh, 0
     mov al, ah                      ; depth
     mov ah, 0
-    mov si, CY_MAXV * 2
-    mul si
-    mov di, ax                      ; DI = row offset
+    mov cl, 5                       ; (CX is an output)
+    shl ax, cl                      ; * CY_MAXV * 2, a shift and not a MUL:
+    mov di, ax                      ; DI = row offset - ~90 clocks a call off
+                                    ; the routine every mover is placed by
 
     mov ax, bx                      ; the far vertex of the lane
     shl ax, 1
@@ -2100,6 +2097,8 @@ cy_org:
 ; kernel had left. On CGA and Hercules that was black often enough to look
 ; right; on VGA it was WHITE, and the whole game drew on a white field.
 ; in: AL = colour. Clobbers nothing.
+cy_setbg:                           ; ...the background, which is most of them
+    mov al, CY_C_BG
 cy_setcol:
     cmp al, [cy_col]
     je .out                         ; the pen is already this: a far call saved
@@ -2222,6 +2221,9 @@ cy_framec:
 ; the pair clips at two different granularities so a clip edge crossing it
 ; blanks the line rather than leaving it stale.
 ; in: CX = x, DX = y (content), SI = string, AL = ink, AH = background
+; cy_textw is the one every caller wants - CY_C_TEXT on CY_C_BG.
+cy_textw:
+    mov ax, CY_C_TEXT | (CY_C_BG << 8)
 cy_textc:
     push cx
     push dx
@@ -2254,8 +2256,7 @@ cy_textc:
 cy_rsub:
     ; Preserves SI/DI and nothing else: it is on the drawing spine
     ; (SPEC.md 67.5.5) and its one caller reloads from cy_snl.. afterwards.
-    mov al, CY_C_BG
-    call cy_setcol
+    call cy_setbg
 
     ; the overlap
     mov ax, [cy_sol]
@@ -2418,9 +2419,10 @@ cy_dsc_run:
 
 CY_WARP_SPOKE equ 0
 CY_WARP_RIM   equ 1
+CY_WARP_FAR   equ 2                 ; the far ring: the rim's walks at depth 0
 
 ; cy_warp_lay - initialise the walks for phase AL, and their pixel counts.
-; in:  AL = CY_WARP_SPOKE or CY_WARP_RIM
+; in:  AL = CY_WARP_SPOKE, CY_WARP_RIM or CY_WARP_FAR
 ; out: [cy_wn] = how many walks are live
 cy_warp_lay:
     push ax
@@ -2428,73 +2430,75 @@ cy_warp_lay:
     push cx
     push dx
     push si
-    push di
     push es
     push ds
     pop es
 
-    mov [cy_wphase], al
     mov word [cy_wn], 0
     cmp word [cy_nlane], 0
     je .out
-
-    cmp al, CY_WARP_RIM
-    je .rim
+    xor si, si                      ; vertex index
+    mov cx, CY_DEPTH                ; the far end of a spoke, or the rim's ring
+    cmp al, CY_WARP_SPOKE
+    jne .ring
 
     ; --- the spokes: far vertex -> rim vertex, one per vertex ---------------
-    mov cx, [cy_nvert]
-    xor si, si                      ; vertex index
 .sp:
-    mov ax, 0                       ; the far end
+    xor ax, ax                      ; from depth 0...
     mov bx, si
-    call cy_vert                    ; CX/DX = x/y  (CX is the loop counter -
-    push cx                         ; save it, cy_vert answers in CX)
-    push dx
-    mov ax, CY_DEPTH
-    mov bx, si
-    call cy_vert
-    mov [cy_wx2], cx
-    mov [cy_wy2], dx
-    pop dx
-    pop cx
-    mov [cy_wx1], cx
-    mov [cy_wy1], dx
-    call cy_walk_one
+    mov dx, si                      ; ...to CY_DEPTH, on the same vertex
+    call cy_web_seg
     inc si
-    mov cx, [cy_nvert]
-    cmp si, cx
+    cmp si, [cy_nvert]
     jb .sp
     jmp short .out
 
-    ; --- the rim: vertex v -> vertex v+1, at depth CY_DEPTH ------------------
-.rim:
-    xor si, si
+    ; --- a ring: vertex v -> vertex v+1, at depth CY_DEPTH or 0 ---------------
+.ring:
+    cmp al, CY_WARP_RIM
+    je .rm
+    xor cx, cx                      ; CY_WARP_FAR
 .rm:
-    mov ax, CY_DEPTH
+    mov ax, si
+    call cy_web_next
+    mov dx, ax                      ; to the next vertex round...
+    mov ax, cx                      ; ...at the same depth
     mov bx, si
-    call cy_vert
-    mov [cy_wx1], cx
-    mov [cy_wy1], dx
-    mov bx, si
-    inc bx
-    cmp word [cy_closed], 0
-    je .norw
-    cmp bx, [cy_nlane]
-    jb .norw
-    xor bx, bx
-.norw:
-    mov ax, CY_DEPTH
-    call cy_vert
-    mov [cy_wx2], cx
-    mov [cy_wy2], dx
-    call cy_walk_one
+    call cy_web_seg
     inc si
     cmp si, [cy_nlane]
     jb .rm
 .out:
     pop es
-    pop di
     pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; cy_web_seg - lay walk [cy_wn] from vertex BX at depth AX to vertex DX at
+; depth CX, the vertices already wrapped. ES = DS (cy_walk_one builds
+; through it). Preserves everything. Every web line is one of these: a spoke
+; is (0, v) -> (CY_DEPTH, v) and a ring edge (d, v) -> (d, v+1), for the warp,
+; the repaint and the repair alike - which is what keeps the three on the
+; same pixels (cy_web_lane).
+cy_web_seg:
+    push ax
+    push bx
+    push cx
+    push dx
+    call cy_vert                    ; the first end
+    mov [cy_wx1], cx
+    mov [cy_wy1], dx
+    pop bx                          ; DX in: the second vertex
+    pop ax                          ; CX in: its depth
+    push ax
+    push bx
+    call cy_vert                    ; ...and the second end
+    mov [cy_wx2], cx
+    mov [cy_wy2], dx
+    call cy_walk_one
     pop dx
     pop cx
     pop bx
@@ -2633,57 +2637,11 @@ cy_warp_step:
 ; erase it.
 cy_web_far:
     push ax
-    push cx
     call cy_setcol
-    call cy_warp_lay_far
+    mov al, CY_WARP_FAR
+    call cy_warp_lay
     mov ax, 0x7FFF                  ; every walk, to its end, in one call
     call cy_warp_step
-    pop cx
-    pop ax
-    ret
-
-; ...the far ring's walks: vertex v -> v+1 at depth 0.
-cy_warp_lay_far:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push es
-    push ds
-    pop es
-    mov word [cy_wn], 0
-    cmp word [cy_nlane], 0
-    je .out
-    xor si, si
-.rm:
-    xor ax, ax
-    mov bx, si
-    call cy_vert
-    mov [cy_wx1], cx
-    mov [cy_wy1], dx
-    mov bx, si
-    inc bx
-    cmp word [cy_closed], 0
-    je .norw
-    cmp bx, [cy_nlane]
-    jb .norw
-    xor bx, bx
-.norw:
-    xor ax, ax
-    call cy_vert
-    mov [cy_wx2], cx
-    mov [cy_wy2], dx
-    call cy_walk_one
-    inc si
-    cmp si, [cy_nlane]
-    jb .rm
-.out:
-    pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
     pop ax
     ret
 
@@ -2695,7 +2653,7 @@ cy_warp_lay_far:
 ; about it is a 10-byte state block: whether it is on the glass and the rect
 ; it is on the glass AS.
 ;
-;   +0 shown  +2 left  +4 top  +6 right  +8 bottom  +10 pen  (+11 spare)
+;   +0 shown (byte)  +1 pen (byte)  +2 left  +4 top  +6 right  +8 bottom
 ;
 ; The pen is in there because of cy_obj_dmg: putting a damaged object back
 ; means drawing it again, and the thing that damaged it has no idea what
@@ -2715,9 +2673,9 @@ cy_warp_lay_far:
 ;      that keep their cursor in SI and reload everything else from the arrays
 ;      on the next line.
 cy_obj_show:
-    mov [di + 10], al               ; the pen, for cy_obj_dmg's repair
+    mov [di + 1], al                ; the pen, for cy_obj_dmg's repair
 
-    cmp word [di], 0
+    cmp byte [di], 0
     je .draw                        ; not on the glass: nothing to compare
     mov ax, [cy_snl]
     cmp ax, [di + 2]
@@ -2734,7 +2692,7 @@ cy_obj_show:
                                     ; most enemies most frames, and it is the
                                     ; single biggest saving in the game loop
 .draw:
-    mov al, [di + 10]               ; THE PEN, BACK OUT OF THE BLOCK. Three of
+    mov al, [di + 1]                ; THE PEN, BACK OUT OF THE BLOCK. Three of
                                     ; the four ways into .draw are the compares
                                     ; above, and every one of them has just
                                     ; loaded a COORDINATE into AX - so AL was
@@ -2748,7 +2706,7 @@ cy_obj_show:
     mov dx, [cy_snb]
     call cy_fillx
 
-    cmp word [di], 0
+    cmp byte [di], 0
     je .store
     mov ax, [di + 2]                ; the old rect, for the subtraction
     mov [cy_sol], ax
@@ -2762,7 +2720,7 @@ cy_obj_show:
     call cy_obj_dmg                 ; ...and put back whatever it cut into,
                                     ; on the spot (SPEC.md 67.5.4)
 .store:
-    mov word [di], 1
+    mov byte [di], 1
     mov ax, [cy_snl]
     mov [di + 2], ax
     mov ax, [cy_snt]
@@ -2783,10 +2741,9 @@ cy_obj_hide:
     push bx
     push cx
     push dx
-    cmp word [di], 0
+    cmp byte [di], 0
     je .out
-    mov al, CY_C_BG
-    call cy_setcol
+    call cy_setbg
     mov ax, [di + 2]
     mov bx, [di + 4]
     mov cx, [di + 6]
@@ -2800,7 +2757,7 @@ cy_obj_hide:
     mov [cy_sor], ax
     mov ax, [di + 8]
     mov [cy_sob], ax
-    mov word [di], 0
+    mov byte [di], 0
     call cy_obj_dmg
 .out:
     pop dx
@@ -2865,7 +2822,7 @@ cy_obj_dmg:
 .each:
     cmp si, di
     je .next                        ; the one that just drew is already right
-    cmp word [si], 0
+    cmp byte [si], 0
     je .next                        ; not on the glass
     mov ax, [si + 6]                ; its right vs the damage's left
     cmp ax, [cy_sol]
@@ -2916,7 +2873,7 @@ cy_obj_put:
     inc word [cy_pf_put]            ; ...and the repairs they actually cause
 %endif
     push cx
-    mov al, [si + 10]
+    mov al, [si + 1] 
     call cy_setcol
     mov ax, [si + 2]
     mov bx, [si + 4]
@@ -2930,8 +2887,7 @@ cy_obj_put:
     cmp ax, CY_OB_DR * CY_OBSZ      ; is repaired by the identical arithmetic -
     jne .out                        ; the insets are absolute, not proportional
 .notch:
-    mov al, CY_C_BG
-    call cy_setcol
+    call cy_setbg
     mov ax, [si + 2]
     add ax, 2
     mov cx, [si + 6]
@@ -2959,29 +2915,13 @@ cy_obj_put:
 ; `mc_draw_all` invalidator: an erase against a stale rect would cut a hole in
 ; whatever the repaint just drew.
 cy_obj_forget:
-    push cx
-    push di
+    ; Preserves nothing: it is on the drawing spine (SPEC.md 67.5.5).
     mov di, cy_ost
     mov cx, CY_NOBJ
 .each:
-    mov word [di], 0
+    mov byte [di], 0
     add di, CY_OBSZ
     loop .each
-    pop di
-    pop cx
-    ret
-
-; cy_obj_ptr - the state block for object index AX.
-; out: DI = the block. Preserves everything else.
-cy_obj_ptr:
-    push ax
-    push dx
-    mov dx, CY_OBSZ
-    mul dx
-    add ax, cy_ost
-    mov di, ax
-    pop dx
-    pop ax
     ret
 
 ; --- cy_setrect ---------------------------------------------------------------
@@ -3220,12 +3160,7 @@ cy_fmt2:
 ; =============================================================================
 
 cy_hud_build:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    ; Preserves nothing: it is on the drawing spine (SPEC.md 67.5.5).
 
     mov di, cy_hudbuf               ; blank the whole strip first, so a field
     mov cx, CY_HUDW                 ; that got SHORTER is erased by its own
@@ -3287,22 +3222,11 @@ cy_hud_build:
     je .done
     mov byte [di], 'J'
 .done:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; cy_hud_emit - compare against the shadow and letter only what moved.
 cy_hud_emit:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    ; Preserves nothing: it is on the drawing spine (SPEC.md 67.5.5).
 
     mov cx, [cy_hudw]               ; how many cells this window can show
     or cx, cx
@@ -3356,26 +3280,16 @@ cy_hud_emit:
     shl cx, 1
     shl cx, 1                       ; cell -> pixels (8086: no shl reg, imm)
     mov dx, 1
-    mov al, CY_C_TEXT
-    mov ah, CY_C_BG
-    call cy_textc
+    call cy_textw
     mov al, [cy_hsav]
     mov [di], al
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; cy_hud_clr - invalidate the shadow with a byte no field can contain, so
 ; every cell reads as changed. Called by every full repaint.
 cy_hud_clr:
-    push ax
-    push cx
-    push di
+    ; Preserves nothing: it is on the drawing spine (SPEC.md 67.5.5).
     mov di, cy_hudsh
     mov cx, CY_HUDW
     mov al, 0xFF
@@ -3384,9 +3298,6 @@ cy_hud_clr:
     pop es
     rep stosb
     pop es
-    pop di
-    pop cx
-    pop ax
     ret
 
 cy_hud_draw:
@@ -3492,9 +3403,7 @@ cy_spk_draw:
 
 ; cy_spk_repair - spend up to CY_SPKREP marks.
 cy_spk_repair:
-    push ax
-    push bx
-    push cx
+    ; Preserves nothing: it is on the drawing spine (SPEC.md 67.5.5).
     mov cx, CY_SPKREP
     xor bx, bx
 .each:
@@ -3502,18 +3411,13 @@ cy_spk_repair:
     jae .out
     cmp byte [cy_spkd + bx], 0
     je .next
-    push bx
-    call cy_spk_draw
-    pop bx
+    call cy_spk_draw                ; (which preserves everything)
     dec cx
     jz .out
 .next:
     inc bx
     jmp short .each
 .out:
-    pop cx
-    pop bx
-    pop ax
     ret
 
 %ifdef CYTRACE
@@ -3636,12 +3540,9 @@ cy_cur_draw:
 .out:
     ret
 
-; cy_cur_xor - invert the marker at content (AX,BX). Preserves everything.
+; cy_cur_xor - invert the marker at content (AX,BX).
 cy_cur_xor:
-    push ax
-    push bx
-    push cx
-    push dx
+    ; Preserves nothing: cy_fsx_main's loop is its only caller and reloads.
     mov cx, ax
     add cx, CY_CURR
     sub ax, CY_CURR
@@ -3656,10 +3557,6 @@ cy_cur_xor:
     add dx, [cy_oy]
     call OSAPI_GFX_XOR_RECT         ; an OUTLINE, not a fill: a solid block
 .out:                               ; hides whatever it is being aimed at
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- cy_bottom_lane -----------------------------------------------------------
@@ -3671,11 +3568,11 @@ cy_cur_xor:
 ; exists yet. It cannot live inside cy_layout: cy_startlevel does not force a
 ; relayout, so the flag would sit unspent until the next resize.
 cy_home_ck:
+    ; Preserves nothing: it is on the drawing spine (SPEC.md 67.5.5).
     cmp byte [cy_phome], 0
     je .out
     cmp word [cy_nlane], 0
     je .out                         ; no web yet - ask again next frame
-    push ax
     mov byte [cy_phome], 0
     call cy_bottom_lane
     mov [cy_plane], ax
@@ -3693,7 +3590,6 @@ cy_home_ck:
                                     ; cy_startlevel for this routine's own
                                     ; stated reason - [cy_nlane] is not the new
                                     ; web's until cy_build_verts has run
-    pop ax
 .out:
     ret
 
@@ -3809,10 +3705,8 @@ cy_sfx:
 ; =============================================================================
 
 cy_newgame:
-    push ax
-    push bx
-    push cx
-    push di
+    ; Preserves nothing: every caller is a spine or a callback that reloads
+    ; what it uses on the next line (SPEC.md 67.5.5).
     mov byte [cy_ient], 0           ; ABANDON a half-typed name. cy_init_key
                                     ; swallows every key while the prompt is
                                     ; up, so the player cannot reach here with
@@ -3834,19 +3728,12 @@ cy_newgame:
 %endif                              ; and it never ships: see the Makefile
     mov byte [cy_pw_jump], 0
     call cy_startlevel
-    pop di
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; cy_startlevel - pick the shape, clear the board, and begin the warp.
 cy_startlevel:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
+    ; Preserves nothing: every caller is a spine or a callback that reloads
+    ; what it uses on the next line (SPEC.md 67.5.5).
 
     mov ax, [cy_level]              ; the shape cycles through the eight
     dec ax
@@ -3869,11 +3756,6 @@ cy_startlevel:
     call cy_zap_recharge            ; SPEC.md 67.23.3: one charge on the house,
                                     ; every level, and the line that says so
     call cy_wavesize
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; cy_wavesize - how many enemies this level owes, and how fast they come.
@@ -3882,9 +3764,8 @@ cy_startlevel:
 ; level to a cap of 40, and the kinds unlock one at a time so the first level
 ; is flippers and nothing else.
 cy_wavesize:
-    push ax
-    push bx
-    push dx
+    ; Preserves nothing: every caller is a spine or a callback that reloads
+    ; what it uses on the next line (SPEC.md 67.5.5).
     mov ax, [cy_level]
     dec ax
     mov bx, 3
@@ -3929,9 +3810,6 @@ cy_wavesize:
     mov ax, 55
 .sc:
     mov [cy_espd], ax
-    pop dx
-    pop bx
-    pop ax
     ret
 
 ; cy_kindspd - AL = kind; out AX = the depth-units a frame that kind climbs.
@@ -3966,45 +3844,27 @@ cy_kindspd:
     ret
 
 cy_clearboard:
-    push ax
-    push cx
-    push di
+    ; Preserves nothing: every caller is a spine or a callback that reloads
+    ; what it uses on the next line (SPEC.md 67.5.5).
     push es
     push ds
     pop es
-    mov di, cy_e_kind               ; every enemy slot free
+    mov di, cy_e_kind               ; every enemy slot free...
     mov cx, CY_MAXENEM
     mov al, 0xFF
     rep stosb
-    mov di, cy_e_rtm                ; ...and its rim walk's phase with it
-    mov cx, CY_MAXENEM
-    xor al, al
-    rep stosb
-    ; ONE PASS PER ARRAY. These are five separate buffers and only the first
-    ; two happen to be adjacent, so the single run this used to be cleared
-    ; cy_s_act and then ran on through cy_s_lane, cy_s_pierce and half of
-    ; cy_s_dp - while enemy shots, powerups and DEBRIS were never cleared at
-    ; all. Debris is what showed: it is drawn by the play pass and moved only
-    ; by the death pass, so the particles from one death sat on the web as
-    ; motionless dots for the rest of the game.
-    xor al, al
-    mov di, cy_s_act
-    mov cx, CY_MAXSHOT
-    rep stosb
-    mov di, cy_x_act
-    mov cx, CY_MAXESHOT
-    rep stosb
-    mov di, cy_u_act
-    mov cx, CY_MAXPU
-    rep stosb
-    mov di, cy_g_t                  ; ...and the grace windows with them, or a
-    mov cx, CY_MAXPU                ; pickup filed on the last level is taken
-    rep stosb                       ; on the first frame of the next one
-    mov di, cy_d_act
-    mov cx, CY_MAXDBR
-    rep stosb
-    mov di, cy_spk
-    mov cx, CY_MAXLANE * 2          ; cy_spk and cy_spkd are adjacent
+    ; ...and then ONE run of zeros, which DI is already at: the rim walks'
+    ; phases, every shot, enemy shot, powerup, grace window, debris particle
+    ; and both spike arrays. They are one CBUF on purpose (.bss), because
+    ; this used to be one pass PER ARRAY - and before that a single run over
+    ; buffers that were not adjacent, which cleared cy_s_act and ran on
+    ; through cy_s_lane, cy_s_pierce and half of cy_s_dp while enemy shots,
+    ; powerups and DEBRIS were never cleared at all. Debris is what showed:
+    ; it is drawn by the play pass and moved only by the death pass, so the
+    ; particles from one death sat on the web as motionless dots for the rest
+    ; of the game. A grace window left open is a pickup filed on the last
+    ; level and taken on the first frame of the next one.
+    mov cl, CY_CLRSZ                ; (CH is 0 out of the run above)
     xor al, al
     rep stosb
     pop es
@@ -4028,9 +3888,6 @@ cy_clearboard:
     ; cy_wave_ck - which needs cy_wleft AND cy_left at zero - could never
     ; fire again. The level simply never ended.
     mov word [cy_left], 0
-    pop di
-    pop cx
-    pop ax
     ret
 
 ; =============================================================================
@@ -4077,8 +3934,6 @@ cy_worker:
 ; Neither takes a lock, so both are legal from here.
 ; -----------------------------------------------------------------------------
 cy_focus_ck:
-    push ax
-    push bx
     cmp byte [cy_inbr], 0
     jne .out                        ; inside a bracket we ARE the machine
     call OSAPI_WM_TOP
@@ -4094,8 +3949,6 @@ cy_focus_ck:
     mov byte [cy_state], CYS_PAUSE  ; sticky: a game that restarts the instant
     mov byte [cy_msgdirty], 1       ; a window is raised is one nobody was
 .out:                               ; watching yet (SPEC.md 44.8)
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -4266,10 +4119,7 @@ cy_state_render:
 ; of them at once.
 ; -----------------------------------------------------------------------------
 cy_track:
-    push ax
-    push bx
-    push cx
-    push dx
+    ; Preserves nothing: it is on the drawing spine (SPEC.md 67.5.5).
     call cy_org                     ; AX/DX = origin, CX/BX = size
     cmp ax, [cy_ox]
     jne .moved
@@ -4288,10 +4138,6 @@ cy_track:
     mov byte [cy_full], 1
     call cy_hudw_calc
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; how many HUD cells this window can actually show
@@ -4320,8 +4166,7 @@ cy_draw_all:
     ; Preserves nothing: it is on the drawing spine (SPEC.md 67.5.5).
     mov byte [cy_full], 0
 
-    mov al, CY_C_BG                 ; the field
-    call cy_setcol
+    call cy_setbg                   ; the field
     xor ax, ax
     xor bx, bx
     mov cx, [cy_cwid]
@@ -4395,32 +4240,23 @@ cy_web_all:
     ret
 
 cy_spk_all:
-    push ax
-    push bx
+    ; Preserves nothing: it is on the drawing spine (SPEC.md 67.5.5).
     xor bx, bx
 .each:
     cmp bx, [cy_nlane]
     jae .out
     cmp byte [cy_spk + bx], 0
     je .next
-    push bx
-    call cy_spk_draw
-    pop bx
+    call cy_spk_draw                ; (which preserves everything)
 .next:
     inc bx
     jmp short .each
 .out:
-    pop bx
-    pop ax
     ret
 
 cy_small_render:
-    push ax
-    push cx
-    push dx
-    push si
-    mov al, CY_C_BG
-    call cy_setcol
+    ; Preserves nothing: it is on the drawing spine (SPEC.md 67.5.5).
+    call cy_setbg
     xor ax, ax
     xor bx, bx
     mov cx, [cy_cwid]
@@ -4431,14 +4267,8 @@ cy_small_render:
     mov si, cy_s_small
     mov cx, 2
     mov dx, 2
-    mov al, CY_C_TEXT
-    mov ah, CY_C_BG
-    call cy_textc
+    call cy_textw
     mov byte [cy_full], 0
-    pop si
-    pop dx
-    pop cx
-    pop ax
     ret
 
 ; cy_full_repaint - a whole repaint from a CALLBACK, where the gfx lock is
@@ -4499,10 +4329,8 @@ cy_play_update:
 ; lock and touches no port, so it is legal from the worker.
 ; -----------------------------------------------------------------------------
 cy_input:
-    push ax
-    push bx
-    push cx                         ; OSAPI_MOUSE answers in CX/DX, so this
-    push dx                         ; preserves what it used to
+    ; Preserves nothing: it is on the worker's update spine (SPEC.md 67.5.5)
+    ; and its one caller reloads everything it uses.
     mov word [cy_dir], 0
     mov al, KSC_LEFT
     call OSAPI_KEY_DOWN
@@ -4580,10 +4408,6 @@ cy_input:
     mov byte [cy_firereq], 1
     call cy_aim_mouse
 .done:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- cy_kbdrain ---------------------------------------------------------------
@@ -4672,10 +4496,8 @@ cy_kbdrain:
 ; sweep is fast - the same shape SPEC.md 9.6.3 uses for the mouseless pointer.
 ; -----------------------------------------------------------------------------
 cy_player_move:
-    push ax
-    push bx
-    push cx
-    push dx
+    ; Preserves nothing: it is on the worker's update spine (SPEC.md 67.5.5)
+    ; and its one caller reloads everything it uses.
 
     cmp word [cy_pjump], 0          ; a jump keeps its lane
     je .ground
@@ -4712,10 +4534,6 @@ cy_player_move:
     mov byte [cy_firereq], 0
     call cy_fire
 .nf:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- cy_aim_mouse -------------------------------------------------------------
@@ -4808,7 +4626,6 @@ cy_fire:
     jne .nope                       ; one gun, one rate, whichever path asked
     push ax
     push bx
-    push cx
     push si
     mov byte [cy_firecd], CY_FIRECD
     xor si, si
@@ -4836,7 +4653,6 @@ cy_fire:
     call cy_sfx
 .out:
     pop si
-    pop cx
     pop bx
     pop ax
 .nope:
@@ -4847,10 +4663,8 @@ cy_fire:
 ; charge is spent. Powerups grant more.
 ; -----------------------------------------------------------------------------
 cy_superzap:
-    push ax
-    push bx
-    push cx
-    push si
+    ; Preserves nothing: every caller is a spine or a callback that reloads
+    ; what it uses on the next line (SPEC.md 67.5.5).
     cmp byte [cy_state], CYS_PLAY
     jne .out
     cmp byte [cy_zap], 0
@@ -4885,10 +4699,6 @@ cy_superzap:
                                     ; one line the game had for both
     call cy_msg_set
 .out:
-    pop si
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- cy_zap_recharge ----------------------------------------------------------
@@ -4898,7 +4708,8 @@ cy_superzap:
 ; the cap is reachable, the powerup granting charges too.
 ; -----------------------------------------------------------------------------
 cy_zap_recharge:
-    push si
+    ; Preserves nothing: every caller is a spine or a callback that reloads
+    ; what it uses on the next line (SPEC.md 67.5.5).
     cmp byte [cy_zap], CY_ZAPMAX
     jae .out
     inc byte [cy_zap]
@@ -4906,7 +4717,6 @@ cy_zap_recharge:
     mov si, cy_s_superzap
     call cy_msg_set
 .out:
-    pop si
     ret
 
 ; --- cy_do_jump ---------------------------------------------------------------
@@ -4922,14 +4732,8 @@ cy_do_jump:
     jne .out
     dec byte [cy_pw_jump]
     mov word [cy_pjump], 12
-    push ax
-    push cx
-    push dx
     mov al, CYSFX_JUMP
     call cy_sfx
-    pop dx
-    pop cx
-    pop ax
     mov byte [cy_huddirty], 1
 .out:
     ret
@@ -4939,10 +4743,8 @@ cy_do_jump:
 ; cy_wavesize's count is the whole difficulty ramp.
 ; -----------------------------------------------------------------------------
 cy_spawn_tick:
-    push ax
-    push bx
-    push cx
-    push dx
+    ; Preserves nothing: it is on the worker's update spine (SPEC.md 67.5.5)
+    ; and its one caller reloads everything it uses.
     cmp word [cy_wleft], 0
     je .out
     inc word [cy_spawnt]
@@ -4959,16 +4761,11 @@ cy_spawn_tick:
     mov word [cy_spawnt], 0
     call cy_spawn_one
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 cy_spawn_one:
     push ax
     push bx
-    push cx
     push dx
     push si
     xor si, si
@@ -5005,18 +4802,14 @@ cy_spawn_one:
 .out:
     pop si
     pop dx
-    pop cx
     pop bx
     pop ax
     ret
 
 ; --- cy_enemies_update --------------------------------------------------------
 cy_enemies_update:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+    ; Preserves nothing: it is on the worker's update spine (SPEC.md 67.5.5)
+    ; and its one caller reloads everything it uses.
     xor si, si
 .each:
     cmp si, CY_MAXENEM
@@ -5055,17 +4848,13 @@ cy_enemies_update:
     jb .atrim
     mov byte [cy_e_tim + si], 0
     call OSAPI_RAND
-    test al, 1
+    test al, 1                      ; a coin: one lane up or one down
+    mov al, [cy_e_lane + si]        ; (`mov` leaves the flags alone)
+    mov ah, 0
     jz .fl
-    mov al, [cy_e_lane + si]
-    mov ah, 0
     inc ax
-    call cy_wrap
-    mov [cy_e_lane + si], al
-    jmp short .atrim
+    inc ax
 .fl:
-    mov al, [cy_e_lane + si]
-    mov ah, 0
     dec ax
     call cy_wrap
     mov [cy_e_lane + si], al
@@ -5132,11 +4921,6 @@ cy_enemies_update:
     inc si
     jmp .each
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- cy_rim_step --------------------------------------------------------------
@@ -5171,10 +4955,8 @@ cy_rim_step:
     cmp bx, dx
     ja .down                        ; the far half: go the other way round
 .up:
+    inc ax                          ; +1 is +2 then the -1 below
     inc ax
-    call cy_wrap
-    mov [cy_e_lane + si], al
-    jmp short .out
 .down:
     dec ax
     call cy_wrap
@@ -5250,12 +5032,7 @@ cy_web_mark:
 
 ; cy_web_repair - spend up to CY_WEBREP marks, round robin so no lane starves.
 cy_web_repair:
-    push ax
-    push bx
-    push cx
-    push dx                     ; ...and NOT SI: this routine never writes it
-                                ; and `cy_web_lane` restores it, so the save
-                                ; was dead - `tools/stkdepth.py` names it
+    ; Preserves nothing: it is on the drawing spine (SPEC.md 67.5.5).
     test word [cy_frame], CY_WEBEVERY - 1
     jnz .out
     mov cx, [cy_nlane]
@@ -5281,10 +5058,6 @@ cy_web_repair:
 .next:
     loop .each
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; cy_web_lane - redraw lane BX's two spokes and the rim edge between them.
@@ -5305,42 +5078,32 @@ cy_web_lane:
     push cx
     push dx
     push si
-    push di
     push es
     push ds
     pop es                          ; cy_walk_one builds through ES
-    mov di, bx                      ; the lane
+    mov si, bx                      ; the lane
     mov al, CY_C_WEB
     call cy_setcol
     mov word [cy_wn], 0
 
-    mov bx, di                      ; the spoke at this lane's own vertex
-    call cy_web_spoke
-    mov ax, di                      ; ...and the next one round
+    xor ax, ax                      ; the spoke at this lane's own vertex
+    mov cx, CY_DEPTH
+    mov dx, bx
+    call cy_web_seg
+    mov ax, si                      ; ...and the next one round
     call cy_web_next
+    mov dx, ax
     mov bx, ax
-    call cy_web_spoke
-
-    mov ax, CY_DEPTH                ; the rim edge between the two
-    mov bx, di
-    call cy_vert
-    mov [cy_wx1], cx
-    mov [cy_wy1], dx
-    mov ax, di
-    call cy_web_next
-    mov bx, ax
-    mov ax, CY_DEPTH
-    call cy_vert
-    mov [cy_wx2], cx
-    mov [cy_wy2], dx
-    call cy_walk_one
-    inc word [cy_wn]
+    xor ax, ax
+    call cy_web_seg
+    mov ax, CY_DEPTH                ; the rim edge between the two (CX and DX
+    mov bx, si                      ; still name its far end)
+    call cy_web_seg
 
     mov ax, 0x7FFF                  ; ...and spend all three at once
     call cy_warp_step
     mov byte [cy_wstarted], 0
     pop es
-    pop di
     pop si
     pop dx
     pop cx
@@ -5359,41 +5122,10 @@ cy_web_next:
 .out:
     ret
 
-; cy_web_spoke - lay the spoke at vertex BX, far end to rim.
-cy_web_spoke:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov si, bx
-    xor ax, ax
-    call cy_vert                    ; the far end
-    mov [cy_wx1], cx
-    mov [cy_wy1], dx
-    mov ax, CY_DEPTH
-    mov bx, si
-    call cy_vert                    ; ...and the rim end
-    mov [cy_wx2], cx
-    mov [cy_wy2], dx
-    call cy_walk_one
-    inc word [cy_wn]
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-
 ; --- cy_shots_update ----------------------------------------------------------
 cy_shots_update:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    ; Preserves nothing: it is on the worker's update spine (SPEC.md 67.5.5)
+    ; and its one caller reloads everything it uses.
     xor si, si
 .each:
     cmp si, CY_MAXSHOT
@@ -5426,12 +5158,6 @@ cy_shots_update:
     inc si
     jmp short .each
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; cy_shot_hit - does shot SI overlap an enemy? Same lane, and within half a
@@ -5501,7 +5227,6 @@ cy_shot_hit:
 cy_score_kind:
     push ax
     push bx
-    push cx
     push dx
     mov bl, al
     mov bh, 0
@@ -5530,7 +5255,6 @@ cy_score_kind:
     call cy_score_add
     mov byte [cy_huddirty], 1
     pop dx
-    pop cx
     pop bx
     pop ax
     ret
@@ -5540,7 +5264,6 @@ cy_tanker_split:
     push bx
     push cx
     push si
-    push di
     mov cx, 2
 .two:
     xor si, si
@@ -5574,7 +5297,6 @@ cy_tanker_split:
     inc word [cy_left]
 .next:
     loop .two
-    pop di
     pop si
     pop cx
     pop bx
@@ -5608,9 +5330,8 @@ cy_eshot_fire:
     ret
 
 cy_eshots_update:
-    push ax
-    push bx
-    push si
+    ; Preserves nothing: it is on the worker's update spine (SPEC.md 67.5.5)
+    ; and its one caller reloads everything it uses.
     xor si, si
 .each:
     cmp si, CY_MAXESHOT
@@ -5637,9 +5358,6 @@ cy_eshots_update:
     inc si
     jmp short .each
 .out:
-    pop si
-    pop bx
-    pop ax
     ret
 
 ; --- powerups (SPEC.md 67.9) --------------------------------------------------
@@ -5688,7 +5406,6 @@ cy_eshots_update:
 cy_maybe_drop:
     push ax
     push bx
-    push cx
     push dx
     push si
     call OSAPI_RAND
@@ -5719,21 +5436,8 @@ cy_maybe_drop:
     mov bh, 0
     xor dx, dx
     div bx
-    ; map 0,1 -> ZAP,JUMP and 2,3 -> LASER,DROID
-    mov al, CYP_ZAP
-    cmp dl, 0
-    je .have
-    mov al, CYP_JUMP
-    cmp dl, 1
-    je .have
-    mov al, CYP_LASER
-    cmp dl, 2
-    je .have
-    mov al, CYP_DROID
-    cmp dl, 3
-    je .have
-    mov al, CYP_LIFE
-.have:
+    mov bx, dx                      ; 0,1 -> ZAP,JUMP, 2 -> LASER, then DROID
+    mov al, [cy_pu_draw + bx]       ; and LIFE: cy_pu_draw
     mov [cy_u_kind + si], al
     mov byte [cy_u_act + si], 1
     mov al, [cy_e_lane + di]
@@ -5749,7 +5453,6 @@ cy_maybe_drop:
 .out:
     pop si
     pop dx
-    pop cx
     pop bx
     pop ax
     ret
@@ -5764,9 +5467,8 @@ cy_maybe_drop:
 ; the motion whatever caused it, and cy_aim_mouse is not the only mover.
 ; -----------------------------------------------------------------------------
 cy_pu_update:
-    push ax
-    push bx
-    push si
+    ; Preserves nothing: it is on the worker's update spine (SPEC.md 67.5.5)
+    ; and its one caller reloads everything it uses.
     call cy_pu_grace                ; SPEC.md 67.24, and BEFORE the drift loop
     xor si, si
 .each:
@@ -5818,9 +5520,6 @@ cy_pu_update:
 .out:
     mov ax, [cy_plane]              ; ...and the arc starts again HERE
     mov [cy_psweep0], ax
-    pop si
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -5929,8 +5628,8 @@ cy_pu_near:
 ; first tested on the next one rather than twice on this one.
 ; -----------------------------------------------------------------------------
 cy_pu_grace:
-    push ax
-    push si
+    ; Preserves nothing: it is on the worker's update spine (SPEC.md 67.5.5)
+    ; and its one caller reloads everything it uses.
     xor si, si
 .each:
     cmp si, CY_MAXPU
@@ -5950,15 +5649,11 @@ cy_pu_grace:
     inc si
     jmp short .each
 .out:
-    pop si
-    pop ax
     ret
 
 cy_pu_take:
     push ax
     push bx
-    push cx
-    push dx
     push si
     mov bl, al
     mov bh, 0
@@ -6013,8 +5708,6 @@ cy_pu_take:
     mov al, CYSFX_PU
     call cy_sfx
     pop si
-    pop dx
-    pop cx
     pop bx
     pop ax
     ret
@@ -6053,9 +5746,10 @@ cy_pu_take:
 ; walk onto the droid and no step-time check would ever see that.
 ; -----------------------------------------------------------------------------
 cy_droid_lane:
+    ; Preserves nothing: it is on the worker's update spine (SPEC.md 67.5.5)
+    ; and its one caller reloads everything it uses.
     cmp word [cy_pw_droid], 0
     je .out                         ; no droid, no lane to keep
-    push ax
     cmp word [cy_ddir], 0           ; ddir out of a zeroed bss is a droid that
     jne .dir                        ; never moves and then parks on top of us,
     mov word [cy_ddir], 1           ; so it is healed HERE rather than trusted
@@ -6088,7 +5782,6 @@ cy_droid_lane:
     jne .done
     call cy_droid_step
 .done:
-    pop ax
 .out:
     ret
 
@@ -6206,8 +5899,8 @@ cy_wrapd:
 
 ; the AI droid: an autonomous second gun on cy_dlane, firing on its own
 cy_droid_tick:
-    push ax
-    push si
+    ; Preserves nothing: it is on the worker's update spine (SPEC.md 67.5.5)
+    ; and its one caller reloads everything it uses.
     cmp word [cy_pw_droid], 0
     je .out
     dec word [cy_pw_droid]
@@ -6238,8 +5931,6 @@ cy_droid_tick:
 .none:
     pop ax
 .out:
-    pop si
-    pop ax
     ret
 
 ; the particle laser's life
@@ -6254,17 +5945,17 @@ cy_laser_tick:
 
 ; --- cy_wave_ck ---------------------------------------------------------------
 cy_wave_ck:
+    ; Preserves nothing: it is on the worker's update spine (SPEC.md 67.5.5)
+    ; and its one caller reloads everything it uses.
     cmp word [cy_wleft], 0
     jne .out
     cmp word [cy_left], 0
     jne .out
     ; the level is clear: fly down the tube
-    push ax
     mov ax, [cy_level]
     mov bx, 100
     mul bx
     call cy_score_add
-    pop ax
     mov byte [cy_state], CYS_WARPOUT
     mov byte [cy_wpha], CY_WARP_RIM
     mov byte [cy_wstarted], 0
@@ -6277,18 +5968,12 @@ cy_wave_ck:
 cy_player_hit:
     cmp byte [cy_state], CYS_PLAY
     jne .out
-    push ax
-    push cx
-    push dx
     mov byte [cy_state], CYS_DIE
     mov word [cy_dietim], 24
     call cy_debris_burst
     mov byte [cy_dieph], 0          ; the sweep is stepped by cy_die_update:
     call cy_die_sfx                 ; a single blip is what a burst of fire
                                     ; walked straight over
-    pop dx
-    pop cx
-    pop ax
 .out:
     ret
 
@@ -6339,7 +6024,8 @@ cy_die_update:
 ; spread over the animation, and the priority in the table is what stops a
 ; fire blip landing between them.
 cy_die_sweep:
-    push ax
+    ; Preserves nothing: it is on the worker's update spine (SPEC.md 67.5.5)
+    ; and its one caller reloads everything it uses.
     mov al, 0
     cmp word [cy_dietim], 16
     ja .have
@@ -6353,7 +6039,6 @@ cy_die_sweep:
     mov [cy_dieph], al
     call cy_die_sfx
 .out:
-    pop ax
     ret
 
 ; cy_die_sfx - play death step [cy_dieph].
@@ -6380,13 +6065,13 @@ cy_play_render:
     call cy_hud_draw
 .en:
     ; --- enemies ---------------------------------------------------------
+    ; DI walks the state blocks beside SI: every routine in these loops
+    ; preserves it, so it is stepped rather than re-derived by a multiply
     xor si, si
+    mov di, cy_ost + CY_OB_E * CY_OBSZ
 .eloop:
     cmp si, CY_MAXENEM
     jae .sh
-    mov ax, si
-    add ax, CY_OB_E
-    call cy_obj_ptr                 ; DI = the state block
     mov al, [cy_e_kind + si]
     cmp al, 0xFF
     je .enext
@@ -6402,21 +6087,16 @@ cy_play_render:
     mov byte [cy_e_kind + si], 0xFF
     jmp short .enext
 .elive:
-    mov bl, al
+    mov bx, si
+    shl bx, 1
+    mov ah, [cy_e_dp + bx + 1]
+    mov bl, al                      ; AL is still the kind
     mov bh, 0
     shl bx, 1
-    mov ax, [cy_ekext + bx]         ; the kind's half-extents
-    mov bx, ax
+    mov bx, [cy_ekext + bx]         ; the kind's half-extents
     mov al, [cy_e_lane + si]
-    mov cx, si
-    shl cx, 1
-    mov di, cx
-    mov ah, [cy_e_dp + di + 1]
     call cy_dmap                    ; the drawing wants the MAPPED depth
     call cy_setrect
-    mov ax, si
-    add ax, CY_OB_E
-    call cy_obj_ptr
     mov bl, [cy_e_kind + si]
     mov bh, 0
     mov al, [cy_ekcol + bx]
@@ -6437,18 +6117,16 @@ cy_play_render:
     mov ah, [cy_e_dp + bx + 1]
     call cy_spk_mark
 .enext:
+    add di, CY_OBSZ
     inc si
     jmp short .eloop
 
     ; --- player shots -----------------------------------------------------
 .sh:
-    xor si, si
+    xor si, si                      ; (DI ran on to CY_OB_S's block)
 .sloop:
     cmp si, CY_MAXSHOT
     jae .xs
-    mov ax, si
-    add ax, CY_OB_S
-    call cy_obj_ptr
     mov al, [cy_s_act + si]
     or al, al
     jz .snext
@@ -6473,12 +6151,10 @@ cy_play_render:
     call cy_dmap
     mov bx, 0x0202                  ; a 2x2 blip
     call cy_setrect
-    mov ax, si
-    add ax, CY_OB_S
-    call cy_obj_ptr
     mov al, CY_C_SHOT
     call cy_obj_show
 .snext:
+    add di, CY_OBSZ
     inc si
     jmp short .sloop
 
@@ -6488,9 +6164,6 @@ cy_play_render:
 .xloop:
     cmp si, CY_MAXESHOT
     jae .pu
-    mov ax, si
-    add ax, CY_OB_ES
-    call cy_obj_ptr
     mov al, [cy_x_act + si]
     or al, al
     jz .xnext
@@ -6515,12 +6188,10 @@ cy_play_render:
     call cy_dmap
     mov bx, 0x0302
     call cy_setrect
-    mov ax, si
-    add ax, CY_OB_ES
-    call cy_obj_ptr
     mov al, [cy_c_es]
     call cy_obj_show
 .xnext:
+    add di, CY_OBSZ
     inc si
     jmp short .xloop
 
@@ -6530,9 +6201,6 @@ cy_play_render:
 .uloop:
     cmp si, CY_MAXPU
     jae .pl
-    mov ax, si
-    add ax, CY_OB_PU
-    call cy_obj_ptr
     mov al, [cy_u_act + si]
     or al, al
     jz .unext
@@ -6561,9 +6229,6 @@ cy_play_render:
     mov bx, 0x0405                  ; frame was going to redraw it anyway
 .usz:
     call cy_setrect
-    mov ax, si
-    add ax, CY_OB_PU
-    call cy_obj_ptr
     mov al, CY_C_PU
     call cy_obj_show
     jc .unext                       ; it did not move: the hole is still there
@@ -6591,8 +6256,7 @@ cy_play_render:
     ; what opens the hole EARLY: an inset of 2 on both axes needs half-extents
     ; of 3, which the depth ramp only reaches at the rim, so the box would have
     ; been solid for the whole climb and hollow only where you grab it.
-    mov al, CY_C_BG
-    call cy_setcol
+    call cy_setbg
     mov ax, [cy_snl]
     add ax, 2
     mov cx, [cy_snr]
@@ -6620,6 +6284,7 @@ cy_play_render:
     mov [cy_sob], ax
     call cy_obj_dmg
 .unext:
+    add di, CY_OBSZ
     inc si
     jmp .uloop                      ; NOT `jmp short`: the hole above put the
                                     ; loop body past 127 bytes
@@ -6631,8 +6296,7 @@ cy_play_render:
     call cy_debris_render
     call cy_spk_repair
     call cy_web_repair
-    call cy_msg_render
-    ret
+    jmp cy_msg_render               ; ...last, and in its own ret
 
 ; --- cy_player_draw -----------------------------------------------------------
 ; The claw is drawn as its whole bounding rect in the player pen and THEN a
@@ -6670,8 +6334,7 @@ cy_player_draw:
     add [cy_snt], ax
     add [cy_snb], ax
 .noj:
-    mov ax, CY_OB_PL
-    call cy_obj_ptr
+    mov di, cy_ost + CY_OB_PL * CY_OBSZ
     mov al, CY_C_PLAYER
     call cy_obj_show
     jc .out                         ; it did not move: the notch is still there
@@ -6680,10 +6343,8 @@ cy_player_draw:
 .out:
     ret
 .hide:
-    mov ax, CY_OB_PL
-    call cy_obj_ptr
-    call cy_obj_hide
-    ret
+    mov di, cy_ost + CY_OB_PL * CY_OBSZ
+    jmp cy_obj_hide
 
 ; --- cy_droid_draw ------------------------------------------------------------
 ; A SMALLER US (SPEC.md 67.9.3). The same bounding-rect-then-notch construction
@@ -6710,8 +6371,7 @@ cy_droid_draw:
     mov bx, CY_DROIDEXT
     call cy_setrect
 
-    mov ax, CY_OB_DR
-    call cy_obj_ptr
+    mov di, cy_ost + CY_OB_DR * CY_OBSZ
     mov al, CY_C_PLAYER
     call cy_obj_show
     jc .out                         ; it did not move: the notch is still there
@@ -6719,10 +6379,8 @@ cy_droid_draw:
 .out:
     ret
 .hide:
-    mov ax, CY_OB_DR
-    call cy_obj_ptr
-    call cy_obj_hide
-    ret
+    mov di, cy_ost + CY_OB_DR * CY_OBSZ
+    jmp cy_obj_hide
 
 ; cy_claw_notch - cut the notch inside the rect still in cy_snl..cy_snb and
 ; report the erase. BOTH claws are this shape (67.9.3), and the insets are
@@ -6734,8 +6392,7 @@ cy_droid_draw:
 ; recursing into the object that just cut it. cy_obj_show preserves DI, so the
 ; caller has it still. Preserves nothing: it is on the drawing spine (67.5.5).
 cy_claw_notch:
-    mov al, CY_C_BG
-    call cy_setcol
+    call cy_setbg
     mov ax, [cy_snl]
     add ax, 2
     mov cx, [cy_snr]
@@ -6781,8 +6438,7 @@ cy_sgn3:
 
 ; cy_warpin_render - the tube extruding into view. One LSTEPV a frame.
 cy_warpin_render:
-    push ax
-    push bx
+    ; Preserves nothing: it is on the drawing spine (SPEC.md 67.5.5).
     cmp byte [cy_wstarted], 0
     jne .step
     mov byte [cy_wstarted], 1
@@ -6810,17 +6466,13 @@ cy_warpin_render:
     mov byte [cy_huddirty], 1       ; on the glass, because drawing it WAS
     call cy_spk_all                 ; the animation
 .out:
-    pop bx
-    pop ax
     ret
 
 ; cy_warpout_render - flying down the tube. The identical walks, replayed in
 ; the background colour, so the erase visits exactly the pixels the draw
 ; visited and no remnant is possible (SPEC.md 5.6.7).
 cy_warpout_render:
-    push ax
-    push bx
-    push di
+    ; Preserves nothing: it is on the drawing spine (SPEC.md 67.5.5).
 
     cmp byte [cy_wstarted], 0
     jne .step
@@ -6830,8 +6482,7 @@ cy_warpout_render:
     mov al, [cy_wpha]
     call cy_warp_lay
 .step:
-    mov al, CY_C_BG
-    call cy_setcol
+    call cy_setbg
     mov ax, CY_WARPK
     call cy_warp_step
     jnc .out
@@ -6846,28 +6497,16 @@ cy_warpout_render:
     inc word [cy_level]
     call cy_startlevel
 .out:
-    pop di
-    pop bx
-    pop ax
     ret
 
 cy_hideall:
-    push ax
-    push cx
-    push di
+    ; Preserves nothing: it is on the drawing spine (SPEC.md 67.5.5).
     mov di, cy_ost
     mov cx, CY_NOBJ
 .each:
-    push cx
-    push di
-    call cy_obj_hide
-    pop di
-    pop cx
+    call cy_obj_hide                ; (which preserves everything)
     add di, CY_OBSZ
     loop .each
-    pop di
-    pop cx
-    pop ax
     ret
 
 ; =============================================================================
@@ -6887,12 +6526,7 @@ cy_msg_set:
     ret
 
 cy_msg_render:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    ; Preserves nothing: it is on the drawing spine (SPEC.md 67.5.5).
 
     cmp word [cy_msgt], 0
     je .none
@@ -6937,43 +6571,11 @@ cy_msg_render:
     rep movsb
     pop es
 .draw:
-    mov cx, [cy_cwid]
-    mov ax, CY_MSGW * 8
-    cmp cx, ax
-    jb .x0
-    sub cx, ax
-    shr cx, 1
-    and cx, 0xFFF8                  ; the run's pen on a multiple of 8, which
-    jmp short .y                    ; is what earns font_run's single-store
-.x0:                                ; path (SPEC.md 6.1)
-    xor cx, cx
-.y:
-    mov dx, [cy_chgt]
-    sub dx, 9
-    jns .go
-    xor dx, dx
-.go:
     mov si, cy_msgbuf
-    mov al, CY_C_TEXT
-    mov ah, CY_C_BG
-    call cy_textc
-    ; An opaque run paints its own background, so it erases everything in its
-    ; band - and the band overlaps the bottom of CY_TOPD's ring, which is
-    ; where the claw and every arrived enemy are.
-    mov ax, cx
-    mov bx, dx
-    mov cx, ax
-    add cx, CY_MSGW * 8 - 1
-    mov dx, bx
-    add dx, 7
-    call cy_dmg_rect
+    mov bx, CY_MSGW
+    mov dx, 9                       ; the foot of the content
+    call cy_band_txt
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; CX = the length of the NUL string at SI. Preserves SI.
@@ -7039,9 +6641,8 @@ cy_debris_burst:
     ret
 
 cy_debris_update:
-    push ax
-    push bx
-    push si
+    ; Preserves nothing: it is on the worker's update spine (SPEC.md 67.5.5)
+    ; and its one caller reloads everything it uses.
     xor si, si
 .each:
     cmp si, CY_MAXDBR
@@ -7070,25 +6671,15 @@ cy_debris_update:
     inc si
     jmp short .each
 .out:
-    pop si
-    pop bx
-    pop ax
     ret
 
 cy_debris_render:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    ; Preserves nothing: it is on the drawing spine (SPEC.md 67.5.5).
     xor si, si
+    mov di, cy_ost + CY_OB_D * CY_OBSZ  ; stepped beside SI, as the play pass
 .each:
     cmp si, CY_MAXDBR
     jae .out
-    mov ax, si
-    add ax, CY_OB_D
-    call cy_obj_ptr
     mov al, [cy_d_act + si]
     or al, al
     jz .next
@@ -7108,21 +6699,13 @@ cy_debris_render:
     mov [cy_snt], ax
     add ax, 2
     mov [cy_snb], ax
-    mov ax, si
-    add ax, CY_OB_D
-    call cy_obj_ptr
     mov al, CY_C_PLAYER
     call cy_obj_show
 .next:
+    add di, CY_OBSZ
     inc si
     jmp short .each
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -7147,8 +6730,7 @@ cy_over_update:
 cy_over_render:
     call cy_debris_render
     call cy_init_render
-    call cy_msg_render
-    ret
+    jmp cy_msg_render
 
 ; --- cy_init_render -----------------------------------------------------------
 ; The initials prompt, one opaque run under the banner (SPEC.md 6.1), redrawn
@@ -7157,16 +6739,11 @@ cy_over_render:
 ; is unambiguous about where the next letter goes.
 ; -----------------------------------------------------------------------------
 cy_init_render:
+    ; Preserves nothing: it is on the drawing spine (SPEC.md 67.5.5).
     cmp byte [cy_ient], 0
     je .out
     cmp byte [cy_msgdirty], 0
     je .out
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     mov di, cy_ibuf2                ; 'NAME: A B C' padded to a fixed span, so
     mov si, cy_s_initp              ; the run erases its own previous width
     call cy_scopy
@@ -7187,41 +6764,40 @@ cy_init_render:
     jmp short .ch
 .pad:
     mov byte [di], 0
-    mov cx, [cy_cwid]               ; centred on a multiple of 8, which is what
-    mov ax, CY_INITW * 8            ; earns font_run's single-store path
-    cmp cx, ax
-    jb .x0
-    sub cx, ax
-    shr cx, 1
-    and cx, 0xFFF8
-    jmp short .y
-.x0:
-    xor cx, cx
-.y:
-    mov dx, [cy_chgt]
-    sub dx, 19                      ; a line above the banner
+    mov si, cy_ibuf2
+    mov bx, CY_INITW
+    mov dx, 19                      ; a line above the banner
+    call cy_band_txt
+.out:
+    ret
+
+; cy_band_txt - letter SI, a fixed span of BX cells, as ONE opaque run
+; centred on a multiple of 8 (which earns font_run's single-store path,
+; SPEC.md 6.1) and DX rows up from the content's foot - and report the band
+; it erased. An opaque run paints its own background, so it erases everything
+; in its band, and both bands - the banner and the initials prompt - overlap
+; the bottom of CY_TOPD's ring, which is where the claw and every arrived
+; enemy are (SPEC.md 67.5). Clobbers AX, BX, CX, DX.
+cy_band_txt:
+    mov cx, bx
+    call cy_centre                  ; CX = the pen
+    neg dx
+    add dx, [cy_chgt]
     jns .go
     xor dx, dx
 .go:
-    mov si, cy_ibuf2
-    mov al, CY_C_TEXT
-    mov ah, CY_C_BG
-    call cy_textc
-    mov ax, cx                      ; an opaque run erases its band, so mark
-    mov bx, dx                      ; what stood in it (SPEC.md 67.5)
-    mov cx, ax
-    add cx, CY_INITW * 8 - 1
-    mov dx, bx
-    add dx, 7
-    call cy_dmg_rect
-    pop di
-    pop si
-    pop dx
-    pop cx
+    push bx
+    call cy_textw                   ; keeps CX/DX, and NOT promised BX
     pop bx
-    pop ax
-.out:
-    ret
+    mov ax, cx                      ; the band: x1...
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    add cx, bx
+    dec cx                          ; ...x2
+    mov bx, dx                      ; y1...
+    add dx, 7                       ; ...y2
+    jmp cy_dmg_rect
 
 ; cy_scopy - copy the NUL-terminated string at SI to DI, leaving DI on the NUL.
 cy_scopy:
@@ -7247,6 +6823,8 @@ cy_hs_init:
     push cx
     push di
     push si
+    mov word [cy_hstab], CY_HSMAG0  ; the file's magic leads the table, so the
+    mov word [cy_hstab + 2], CY_HSMAG1  ; write sends it from where it lives
     xor si, si
     mov cx, CY_NHS
     mov ax, 5000
@@ -7274,12 +6852,8 @@ cy_hs_init:
 ; cy_hs_submit - offer [cy_score] to the table.
 ; out: CF = 0 and AL = the row it took, CF = 1 if it did not make it.
 cy_hs_submit:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    ; Preserves nothing: every caller is a spine or a callback that reloads
+    ; what it uses on the next line (SPEC.md 67.5.5).
     xor si, si
 .find:
     cmp si, CY_NHS
@@ -7335,18 +6909,12 @@ cy_hs_submit:
     add bx, si
     mov word [cy_hsn + bx], '  '
     mov byte [cy_hsn + bx + 2], ' '
-    mov [cy_hsidx], si              ; the row, in bss and not in AX: the pops
-    clc                             ; below restore AX and would eat it. They
-    jmp short .done                 ; do not touch the flags, so CF carries
-.out:                               ; the verdict on its own
+    mov [cy_hsidx], si              ; the row, in bss: cy_init_commit is
+    clc                             ; where it is read, a whole name later
+    jmp short .done
+.out:
     stc
 .done:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -7355,8 +6923,8 @@ cy_hs_submit:
 
 cy_hs_file: db 'CYCLONE.HS', 0
 cy_s_initp: db 'NAME ', 0
-cy_hs_magic: db 'CY8', 1            ; the format, so a stale or foreign file is
-                                    ; refused rather than decoded
+CY_HSMAG0   equ 'CY'                ; the format, so a stale or foreign file is
+CY_HSMAG1   equ '8' | (1 << 8)      ; refused rather than decoded: 'CY8', 1
 
 ; --- SYSTEM\APPDATA (SPEC.md 19.9) -------------------------------------------
 ; The table used to be written wherever this instance was standing, which is
@@ -7364,181 +6932,30 @@ cy_hs_magic: db 'CY8', 1            ; the format, so a stale or foreign file is
 ; is the whole of how a user reaches an application here, so a data file in an
 ; app folder is a misclick waiting to happen and one more row to scroll past.
 ;
-; cy_data_enter stands us in SYSTEM\APPDATA on OUR OWN volume - the disk we
-; were launched from, which is in the drive by definition, where the boot
-; volume may well have been swapped out on a one-floppy machine - and
-; cy_data_leave puts us back. Every path out of a save or a load must call the
-; leave, or the app is left standing somewhere else and its next Save As opens
-; there (SPEC.md 38.10) and every unqualified name it passes the file API
-; afterwards resolves there.
+; apps/os88data.inc stands us in SYSTEM\APPDATA on OUR OWN volume - the disk
+; we were launched from, which is in the drive by definition, where the boot
+; volume may well have been swapped out on a one-floppy machine - and puts us
+; back on every path out, refusals included.
 ;
-; IT IS OSAPI_FILE_GOTO AND NOT ITS QUIET TWIN, and that is the whole of what
-; the first version got wrong. OSAPI_FILE_GOTO_Q moves the GLOBAL cwd and
-; deliberately NOT the instance's - its own contract says so: "this is where
-; the caller is standing to do a job, not where the application now believes
-; it lives" - while OSAPI_FILE_FIND, _READ and _WRITE every one resolve in the
-; INSTANCE's folder through inst_vol_enter. So the quiet move was undone by
-; the very next call: the walk listed GAMES, found no SYSTEM in it, and the
-; save wrote nothing at all. The load path appeared to work, which is worse
-; than failing - it was luck about which folder the globals happened to be
-; standing in, and luck does not repeat.
-;
-; The price is that each step is a REMOUNT: four for a save, four for the load
-; at first paint. That is affordable exactly here - a save is already seconds
-; of floppy and happens once per qualifying game over - and it is NOT cached,
-; because a cached cluster plus a swapped disk is a write into whatever
-; cluster 3 is on somebody else's floppy.
-cy_d_system: db 'SYSTEM', 0
-cy_d_appdat: db 'APPDATA', 0
-
-; cy_data_enter - bank where we are and go to SYSTEM\APPDATA on this volume.
-; out: CF=1 we did not get there and NOTHING was banked or moved - the caller
-;      does its file operation nowhere and must NOT call cy_data_leave.
-;      CF=0 and the banked pair is in [cy_dbdrv]/[cy_dbclus].
-; UI task only. Clobbers nothing the callers keep.
-cy_data_enter:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    push ds
-    pop es
-    call OSAPI_FILE_HERE            ; DX = our cwd cluster, BL = our drive
-    mov [cy_dbclus], dx
-    mov [cy_dbdrv], bl
-    xor dx, dx                      ; the ROOT of that same volume
-    call OSAPI_FILE_GOTO
-    jc .back
-    mov si, cy_d_system
-    call cy_data_dive
-    jc .back
-    mov si, cy_d_appdat
-    call cy_data_dive
-    jc .back
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-.back:
-    ; A DISK WITHOUT THE FOLDER IS NOT AN ERROR - it is a user's own disk, or
-    ; one written by something else. Put the volume back and refuse: the caller
-    ; then does nothing, which is exactly what a refused write already did.
-    call cy_data_home
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
-
-; cy_data_leave / cy_data_home - back to the banked folder. Preserves
-; everything AND the flags: the caller's result is in CF and AX.
-cy_data_leave:
-    pushf
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    call cy_data_home
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    popf
-    ret
-
-cy_data_home:
-    push ax
-    push bx
-    push dx
-    mov dx, [cy_dbclus]
-    mov bl, [cy_dbdrv]
-    call OSAPI_FILE_GOTO
-    pop dx
-    pop bx
-    pop ax
-    ret
-
-; cy_data_dive - step into the folder named at SI, in the current directory.
-; out: CF=1 there is no such folder. ES = DS on entry.
-cy_data_dive:
-    push ax
-    push cx
-    push si
-    push di
-    xor cx, cx                      ; the walk's ordinal, 0 to start
-.each:
-    push ds                         ; ES EVERY TIME, not once: the buffer is
-    pop es                          ; ours and nothing promises ES survives a
-    mov di, cy_dfind                ; far call into the kernel
-    call OSAPI_FILE_FIND
-    jc .none
-    cmp word [cy_dfind + 14], OSAPI_FT_DIR
-    jne .each                       ; only a FOLDER can be dived into, and the
-                                    ; type word is the question to ask: type 1
-                                    ; is a PACKAGE and not "a file"
-    push cx
-    push si
-    mov di, cy_dfind
-    call cy_data_same
-    pop si
-    pop cx
-    jc .each
-    mov dx, [cy_dfind + 16]         ; its first cluster
-    mov bl, [cy_dbdrv]
-    call OSAPI_FILE_GOTO
-    jc .none
-    pop di
-    pop si
-    pop cx
-    pop ax
-    clc
-    ret
-.none:
-    pop di
-    pop si
-    pop cx
-    pop ax
-    stc
-    ret
-
-; cy_data_same - is the NUL name at SI the one at DI? CF=0 yes.
-cy_data_same:
-    push ax
-.n:
-    mov al, [si]
-    cmp al, [di]
-    jne .no
-    or al, al
-    jz .yes
-    inc si
-    inc di
-    jmp short .n
-.yes:
-    pop ax
-    clc
-    ret
-.no:
-    pop ax
-    stc
-    ret
+; This file carried its own walker until then, built out of OSAPI_FILE_GOTO
+; because the quiet twin GOTO_Q is undone by the next file cell. That reason
+; was right and the slot was wrong: GOTO_QM (SPEC.md 74.1) is the quiet move
+; that sticks, and FILE_GOTO was a REMOUNT FOR DISPLAY at every step - four a
+; save, and seconds of floppy (docs/plans/NAV-COST-PLAN.md). The include also
+; banks APPDATA's cluster and rewrites an unchanged-length file in one sector.
+%include "os88data.inc"
+cy_hs_ip: db 0                      ; os88data.inc's in-place stamp, CYCLONE.HS
 
 ; cy_hs_load - read the table, once, from the first paint. Anything wrong with
 ; the file leaves the built-in defaults standing: a high score table is not
 ; worth an error box, and the first run has no file at all.
+;
+; It reads STRAIGHT INTO cy_hstab, which is the file's own layout, and puts
+; the defaults back on any refusal - so a short or foreign file cannot leave a
+; half-read table. The defaults are what was there: this runs on the first
+; paint, before the worker is hired, and nothing has touched the table since
+; cy_hs_init built it. A file longer than the table never reaches it at all
+; (FERR_BIG is decided before any I/O, SPEC.md 18.4).
 ; UI task only (SPEC.md 20.6 rule 7). Preserves everything.
 cy_hs_load:
     cmp byte [cy_hsload], 0
@@ -7549,43 +6966,27 @@ cy_hs_load:
     push cx
     push dx
     push si
-    push di
     push es
     push ds
     pop es
-    call cy_data_enter              ; SPEC.md 19.9: the table lives in
-    jc .done                        ; SYSTEM\APPDATA, not beside the games
-    mov si, cy_hs_file
-    mov bx, cy_hsbuf
+    mov si, cy_hs_file              ; SPEC.md 19.9: the table lives in
+    mov bx, cy_hstab                ; SYSTEM\APPDATA, not beside the games
     mov cx, CY_HSFSZ
     xor dx, dx
-    call OSAPI_FILE_READ
-    call cy_data_leave              ; ...and we stand where we started again,
-    jc .done                        ; whatever the read answered
+    call od_read                    ; ...and we stand where we started again,
+    jc .bad                         ; whatever the read answered
     or dx, dx
-    jnz .done                       ; longer than a word: not ours
+    jnz .bad                        ; longer than a word: not ours
     cmp ax, CY_HSFSZ
-    jne .done
-    mov si, cy_hsbuf                ; the magic, all four bytes of it
-    mov di, cy_hs_magic
-    mov cx, 4
-.mag:
-    mov al, [si]
-    cmp al, [di]
-    jne .done
-    inc si
-    inc di
-    loop .mag
-    mov si, cy_hsbuf + 4            ; scores, then names
-    mov di, cy_hs
-    mov cx, CY_NHS * 4
-    call cy_bcopy
-    mov di, cy_hsn
-    mov cx, CY_NHS * 3
-    call cy_bcopy
+    jne .bad
+    cmp word [cy_hstab], CY_HSMAG0  ; the magic, all four bytes of it
+    jne .bad
+    cmp word [cy_hstab + 2], CY_HSMAG1
+    je .done
+.bad:
+    call cy_hs_init
 .done:
     pop es
-    pop di
     pop si
     pop dx
     pop cx
@@ -7595,13 +6996,13 @@ cy_hs_load:
     ret
 
 ; cy_hs_save - write it back, if anything changed. UI task only.
+; Straight out of cy_hstab, which is 512-aligned for exactly this (.bss).
 cy_hs_save:
     cmp byte [cy_hsdirty], 0
     je .out
     push ax
     push bx
     push cx
-    push dx
     push si
     push di
     push es
@@ -7611,45 +7012,18 @@ cy_hs_save:
                                     ; leave the app trying again on every
                                     ; keystroke, and the table is still right
                                     ; in memory either way
-    mov si, cy_hs_magic
-    mov di, cy_hsbuf
-    mov cx, 4
-    call cy_bcopy
-    mov si, cy_hs
-    mov cx, CY_NHS * 4
-    call cy_bcopy
-    mov si, cy_hsn
-    mov cx, CY_NHS * 3
-    call cy_bcopy
-    call cy_data_enter
-    jc .gone
     mov si, cy_hs_file
-    mov bx, cy_hsbuf
+    mov bx, cy_hstab
     mov cx, CY_HSFSZ
-    xor dx, dx
-    call OSAPI_FILE_WRITE
-    call cy_data_leave
-.gone:
+    mov di, cy_hs_ip
+    call od_write                   ; one sector, after the session's first
     pop es
     pop di
     pop si
-    pop dx
     pop cx
     pop bx
     pop ax
 .out:
-    ret
-
-; cy_bcopy - CX bytes DS:SI -> DS:DI, advancing both. ES = DS by the callers.
-cy_bcopy:
-    push ax
-.each:
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    loop .each
-    pop ax
     ret
 
 ; --- cy_init_begin ------------------------------------------------------------
@@ -7783,29 +7157,23 @@ CY_TP_ERIM  equ 3
 CY_TP_ESPK  equ 4
 
 cy_title_update:
-    push ax
+    ; Preserves nothing: it is on the worker's update spine (SPEC.md 67.5.5)
+    ; and its one caller reloads everything it uses.
     cmp word [cy_holdt], 0
     je .out
     dec word [cy_holdt]
 .out:
-    pop ax
     ret
 
 ; cy_title_static - the parts that do not move. Called by cy_draw_all only.
 cy_title_static:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+    ; Preserves nothing: it is on the drawing spine (SPEC.md 67.5.5).
 
     mov si, cy_s_name               ; the name, across the top strip
     call cy_strlen
     call cy_centre                  ; CX = a pen on a multiple of 8
     mov dx, 1
-    mov al, CY_C_TEXT
-    mov ah, CY_C_BG
-    call cy_textc
+    call cy_textw
 
     mov si, cy_s_press              ; ...and the prompt, just above the band
     call cy_strlen
@@ -7815,27 +7183,19 @@ cy_title_static:
     jns .p
     xor dx, dx
 .p:
-    mov al, CY_C_TEXT
-    mov ah, CY_C_BG
-    call cy_textc
+    call cy_textw
 
     mov byte [cy_tphase], CY_TP_SPOKE
     mov byte [cy_wstarted], 0
     mov word [cy_scrt], 0
     call cy_scroll_reset
 
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; CX = string length in cells -> CX = the x that centres it, on a multiple of
 ; 8 so font_run takes its single-store path (SPEC.md 6.1).
 cy_centre:
     push ax
-    push dx
     mov ax, cx
     shl ax, 1
     shl ax, 1
@@ -7850,7 +7210,6 @@ cy_centre:
 .zero:
     xor cx, cx
 .out:
-    pop dx
     pop ax
     ret
 
@@ -8110,8 +7469,7 @@ cy_scroll_row:
     ; every later scroll carries them along. Two thin fills, on rows the run
     ; will not touch, so no pixel is written twice and there is no
     ; double-draw (PERFORMANCE.md Part 1).
-    mov al, CY_C_BG
-    call cy_setcol
+    call cy_setbg
     mov ax, [cy_tmpn]
     mov cx, [cy_tmpw]               ; width in cells -> pixels
     shl cx, 1
@@ -8134,9 +7492,7 @@ cy_scroll_row:
     mov cx, [cy_tmpn]
     mov dx, [cy_chgt]
     sub dx, CY_SCRROW - 2           ; 2px of leading above the glyphs
-    mov al, CY_C_TEXT
-    mov ah, CY_C_BG
-    call cy_textc
+    call cy_textw
     call cy_scroll_model            ; ...and the picture LAST, over the two
 .out:                               ; cells the opaque run just blanked for it
     pop es
@@ -8192,14 +7548,12 @@ cy_scroll_model:
     ; and cy_tmpx/cy_tmpy are deliberately NOT borrowed: those are cy_setrect's
     ; scratch, and a routine on the drawing spine reaching into another one's
     ; temporaries is how this file's worst bugs have started.
-    mov [cy_scrmk], bx              ; the extents, out of the way of the pen:
-    call cy_setcol                  ; OSAPI_SET_COLOR clobbers freely
+    call cy_setcol                  ; (a store in the kernel: BX survives it)
     mov si, [cy_scrmx]
     add si, CY_SCRMW * 8 / 2        ; SI = centre x
     mov di, [cy_chgt]
     sub di, CY_SCRROW - 2 - 3       ; DI = centre y (the glyphs start 10 up)
 
-    mov bx, [cy_scrmk]
     mov dl, bl                      ; half WIDTH
     mov dh, 0
     mov ax, si
@@ -8219,14 +7573,7 @@ cy_scroll_model:
     ; side, 1px top and bottom. The whole rect was written just above, so this
     ; is the claw's shape here too.
     push ax
-    push bx
-    push cx
-    push dx
-    mov al, CY_C_BG
-    call cy_setcol
-    pop dx
-    pop cx
-    pop bx
+    call cy_setbg                   ; AL is all the pen change touches
     pop ax
     add ax, 2
     sub cx, 2
@@ -8376,9 +7723,8 @@ cy_scr_blank db ' ', 0
 ; lock is already held.
 ; =============================================================================
 cy_go_fsx:
-    push ax
-    push bx
-    push cx
+    ; Preserves nothing: every caller is a spine or a callback that reloads
+    ; what it uses on the next line (SPEC.md 67.5.5).
     cmp byte [cy_fsx], 0
     jne .out
     ; A PANEL MAY NOT CROSS INTO THE BRACKET. Every windowed way to take one
@@ -8421,9 +7767,6 @@ cy_go_fsx:
     mov byte [cy_needlay], 1
     mov byte [cy_full], 1
 .out:
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; The exclusive main. SI = our window, ES = KERNEL_SEG, DS = CS = ours, gfx
@@ -8519,6 +7862,12 @@ cy_fsx_main:
 ; TABLES
 ; =============================================================================
 
+; what a drop's draw (cy_maybe_drop's remainder) turns into: the two that keep
+; you alive first, so the early levels - which draw from the first two only -
+; offer exactly those (SPEC.md 67.9)
+cy_pu_draw:
+    db CYP_ZAP, CYP_JUMP, CYP_LASER, CYP_DROID, CYP_LIFE
+
 ; the points a kill is worth, by kind, before the level multiplier
 cy_kindsc:
     dw 150                          ; flipper
@@ -8558,20 +7907,30 @@ cy_ekcol:
 
 ; =============================================================================
 ; .bss - offsets from os88_image_end, which the loader zeroes for us
+;
+; ONE THING IN HERE HAS TO BE 512-ALIGNED, and it is the high-score table,
+; because int 13h moves it (SPEC.md 2.4, 77.31): od_write's in-place rewrite
+; is OSAPI_FILE_WRITE_AT's INSIDE arm, which hands dsk_write_chain_x a whole
+; SECTOR straight out of our buffer - a sector that straddles a 64KB physical
+; page from an unaligned base is error 09h on a BIOS volume that does not
+; bounce it. So cy_hstab sits at the first 512-byte boundary past the image,
+; and it is the file's own layout - magic, scores, names - so the read lands
+; in it and the write leaves from it with no staging copy either way.
+;
+; THE GAP IN FRONT OF IT IS NOT WASTED: os88api.inc's OS88_BSS_ALIGNED places
+; every variable by an EXPRESSION - in the gap if it ends inside it, after the
+; table otherwise - so the variables fill the gap in list order and what is
+; lost is at most the one that straddles the boundary. The list is small
+; things first and the big tables last for that reason. (This was Cyclone's
+; own CY_PAD/CY_FIT arithmetic until the macro was lifted out of it.)
+;
+; A group of variables that one routine walks as ONE RUN must therefore be
+; ONE CBUF with its members equ'd inside it - the cut can fall between any two
+; CBUFs (cy_spk/cy_spkd and the cy_clearboard run below are the two).
 ; =============================================================================
-%assign CY_BSS 0
-%macro CWORD 1
-%1 equ os88_image_end + CY_BSS
-%assign CY_BSS CY_BSS + 2
-%endmacro
-%macro CBYTE 1
-%1 equ os88_image_end + CY_BSS
-%assign CY_BSS CY_BSS + 1
-%endmacro
-%macro CBUF 2
-%1 equ os88_image_end + CY_BSS
-%assign CY_BSS CY_BSS + (%2)
-%endmacro
+%define CBUF  OS88_ABUF
+%define CWORD OS88_AWORD
+%define CBYTE OS88_ABYTE
 
     CWORD cy_win
     CWORD cy_scrx                   ; the ORIGIN of the rect our bracket owns
@@ -8606,7 +7965,6 @@ cy_ekcol:
     CWORD cy_wy1
     CWORD cy_wx2
     CWORD cy_wy2
-    CBYTE cy_wphase
     CBYTE cy_wpha                   ; the phase the state machine is in
     CBYTE cy_wstarted               ; ...and whether its walks are laid
     CWORD cy_dscn                   ; entries in the LSTEPV batch
@@ -8703,7 +8061,7 @@ CY_TWORDS equ 14
     CWORD cy_msgs
     CWORD cy_msgt
     CWORD cy_msgp                   ; the banner ACTUALLY on the glass
-    CBUF  cy_msgbuf, CY_MSGW + 1
+
 
     ; --- the title screen -------------------------------------------------
     CBYTE cy_tphase
@@ -8715,14 +8073,11 @@ CY_TWORDS equ 14
     CBYTE cy_scrsp                  ; the high-score table has been spliced in
     CBYTE cy_scrmid                 ; this row's model, 0 = none (67.21.2)
     CBYTE cy_scrmh                  ; ...and whether it is cut hollow
-    CWORD cy_scrmk                  ; its extents, banked across the pen change
     CWORD cy_scrmx                  ; where the row's TEXT starts on the glass
-    CBUF  cy_scrbuf, 16
-    CBUF  cy_scrline, CY_SCRMAXC + 1
+    CBUF  cy_scrbuf, 16             ; (cy_scroll_next's line: the INPUT to
+                                    ; cy_scroll_row, so not in cy_txt)
 
     ; --- the HUD ----------------------------------------------------------
-    CBUF  cy_hudbuf, CY_HUDW + 1
-    CBUF  cy_hudsh, CY_HUDW + 1     ; what the strip was last DRAWN with
     CWORD cy_hf0
     CWORD cy_hf1
 
@@ -8738,12 +8093,11 @@ CY_TWORDS equ 14
     CWORD cy_lspy
     CWORD cy_lspm                   ; ...and the dominant of the two
 
-    ; --- the lip (67.5.3.1): where a lane's CY_TOPD movers actually sit ---
-    CBUF  cy_lipx, CY_MAXLANE * 2
-    CBUF  cy_lipy, CY_MAXLANE * 2
-    CWORD cy_lptx                   ; ...and cy_lip_build's own scratch, which
-    CWORD cy_lpty                   ; runs once per window change and so keeps
-    CWORD cy_lpv2                   ; none of it in registers
+    ; --- the lip (67.5.3.1): cy_lip_build's own scratch, which
+    CWORD cy_lptx                   ; (its tables, cy_lipx and cy_lipy, are
+    CWORD cy_lpty                   ; with the middle-sized ones below) runs
+                                    ; once per window change and so keeps none
+                                    ; of it in registers
     CWORD cy_lpex
     CWORD cy_lpey
     CWORD cy_lpmx
@@ -8775,17 +8129,110 @@ CY_TWORDS equ 14
     CWORD cy_ovr
     CWORD cy_ovb
 
-    ; --- the vertex tables (SPEC.md 67.2) ---------------------------------
-    ; The whole perspective, spent once per layout: after these are filled,
-    ; nothing in the drawing path does any 3D arithmetic at all.
-    CBUF  cy_vx, CY_NDEPTH * CY_MAXV * 2
-    CBUF  cy_vy, CY_NDEPTH * CY_MAXV * 2
-    CBUF  cy_rsx, CY_MAXV * 4       ; the rim, scaled to pixels (x,y pairs)
+    ; --- the movers -------------------------------------------------------
+
+    CBUF  cy_e_lane, CY_MAXENEM
+    CBUF  cy_e_tim, CY_MAXENEM
+    CBUF  cy_e_dp, CY_MAXENEM * 2   ; depth in 8.8: the high byte IS the depth
+    CBUF  cy_e_sp, CY_MAXENEM * 2
+
+    CBUF  cy_s_lane, CY_MAXSHOT
+    CBUF  cy_s_pierce, CY_MAXSHOT
+    CBUF  cy_s_dp, CY_MAXSHOT * 2
+
+    CBUF  cy_wdmg, CY_MAXLANE       ; lanes owing a web repair
+    CWORD cy_wnext                  ; ...and the round robin's cursor
+    CBUF  cy_x_lane, CY_MAXESHOT
+    CBUF  cy_x_dp, CY_MAXESHOT * 2
+
+    CBUF  cy_u_kind, CY_MAXPU
+    CBUF  cy_u_lane, CY_MAXPU
+    CBUF  cy_u_dp, CY_MAXPU * 2
+    CBUF  cy_g_lane, CY_MAXPU
+    CBUF  cy_g_kind, CY_MAXPU
+    CWORD cy_psweep0                ; SPEC.md 67.24.4: where the claw was when
+                                    ; pickups were last tested, which with
+                                    ; [cy_plane] is the ARC it swept since
+
+    CBUF  cy_d_x, CY_MAXDBR * 2
+    CBUF  cy_d_y, CY_MAXDBR * 2
+    CBUF  cy_d_vx, CY_MAXDBR * 2
+    CBUF  cy_d_vy, CY_MAXDBR * 2
+
+    ; --- the high-score table ---------------------------------------------
+    ; (cy_hs and cy_hsn are the 512-aligned table at the foot of this list)
+    CWORD cy_hsidx                  ; the row cy_hs_submit just filled
+    CBYTE cy_hsdirty                ; the table has changed since it was read
+    CBYTE cy_hsload                 ; ...and whether it has been read at all
+    CBYTE cy_ient                   ; initials entry is up
+    CBYTE cy_ipos                   ; ...and how many characters are in
+    CBUF  cy_ibuf, 4
+
+    ; --- THE MIDDLE-SIZED ONES, 25 to 78 bytes, after every scalar and small
+    ; array: the bss split (see the head of .bss) lands somewhere in the
+    ; first 511 bytes of this list, and what straddles it is what is lost, so
+    ; everything up to here is 20 bytes or less
+    ; cy_clearboard's ONE RUN: every enemy slot to 0FFh, then everything that
+    ; a new board starts at zero - the rim-walk timers, the four "act" arrays,
+    ; the grace windows and both spike arrays - in one `rep stosb` each. ONE
+    ; CBUF, so the bss split (above) cannot fall inside it
+CY_CLR0     equ CY_MAXENEM          ; ...the zero half starts after cy_e_kind
+CY_CLRSZ    equ CY_MAXENEM + CY_MAXSHOT + CY_MAXESHOT + 2 * CY_MAXPU \
+                + CY_MAXDBR + 2 * CY_MAXLANE
+    CBUF  cy_e_kind, CY_CLR0 + CY_CLRSZ ; 0FFh free, 0FEh dead-awaiting-erase
+cy_e_rtm    equ cy_e_kind + CY_CLR0 ; the rim walk's own timer - NOT cy_e_tim,
+                                    ; which a flipper is already using to change
+                                    ; lane as it climbs
+cy_s_act    equ cy_e_rtm + CY_MAXENEM   ; 0 free, 1 live, 2 spent-awaiting-erase
+cy_x_act    equ cy_s_act + CY_MAXSHOT
+cy_u_act    equ cy_x_act + CY_MAXESHOT
+    ; SPEC.md 67.24: a pickup that reached the lip while the claw was somewhere
+    ; else stays COLLECTABLE for a while. cy_g_* are that window, one record
+    ; per slot - the record is filed under the slot the pickup was leaving,
+    ; which bounds the table for free
+cy_g_t      equ cy_u_act + CY_MAXPU
+cy_d_act    equ cy_g_t + CY_MAXPU
+    ; the spikes: cy_spk_mark/cy_spk_repair index both with the same register
+cy_spk      equ cy_d_act + CY_MAXDBR
+cy_spkd     equ cy_spk + CY_MAXLANE
+%if (cy_spkd + CY_MAXLANE) - (cy_e_kind + CY_CLR0) != CY_CLRSZ
+  %error "cyclone: cy_clearboard's run and its members disagree"
+%endif
+
+    ; --- ONE TEXT LINE, FOUR USERS. The banner, the scroll's row, the HUD
+    ; strip and the initials prompt are each composed here and lettered in
+    ; the SAME call: cy_msg_render, cy_scroll_row, cy_hud_draw and
+    ; cy_init_render. All four draw, so all four run under the gfx lock -
+    ; which serialises them across tasks - and none calls another, so no two
+    ; lines are ever live at once. A routine that composed here and drew
+    ; later, or called one of the others in between, would break that
+    CBUF  cy_txt, CY_SCRMAXC + 1
+cy_msgbuf   equ cy_txt
+cy_scrline  equ cy_txt
+cy_hudbuf   equ cy_txt
+cy_ibuf2    equ cy_txt              ; (cy_hudsh is NOT one of them: it persists)
+%if CY_MSGW + 1 > CY_SCRMAXC + 1 || CY_HUDW + 1 > CY_SCRMAXC + 1 || CY_INITW + 2 > CY_SCRMAXC + 1
+  %error "cyclone: a text line outgrew cy_txt"
+%endif
+
+    CBUF  cy_hudsh, CY_HUDW + 1     ; the HUD as it was last DRAWN
+    CBUF  cy_lipx, CY_MAXLANE * 2   ; the lip: where a lane's CY_TOPD
+    CBUF  cy_lipy, CY_MAXLANE * 2   ; movers actually sit (67.5.3.1)
+
+    ; --- THE BIG TABLES, LAST
 
     ; --- the walks --------------------------------------------------------
-    CBUF  cy_walk, CY_MAXV * GLS_SZ
     CBUF  cy_wrem, CY_MAXV * 2
     CBUF  cy_dsc, CY_MAXV * 4       ; the walk's `dw block, count` array...
+cy_rsx      equ cy_dsc              ; ...and, at another time, the rim scaled
+                                    ; to pixels (x,y pairs). cy_build_verts
+                                    ; fills and spends cy_rsx in one call and
+                                    ; cy_warp_step fills and spends cy_dsc in
+                                    ; one call, neither calls the other, and
+                                    ; both run under the gfx lock (layout and
+                                    ; warp are drawing-time), so the two are
+                                    ; never live together. Same size, too
+    CBUF  cy_walk, CY_MAXV * GLS_SZ
     CBUF  cy_pts, CY_PTMAX * 4      ; ...and the points it steps into, which go
                                     ; up in one OSAPI_GFX_POINTS (SPEC.md
                                     ; 5.12.5). A full list commits itself, so
@@ -8797,83 +8244,11 @@ CY_TWORDS equ 14
     ; --- what is on the glass ---------------------------------------------
     CBUF  cy_ost, CY_NOBJ * CY_OBSZ
 
-    ; --- the spikes. ADJACENT ON PURPOSE: cy_clearboard clears both in one
-    ; pass, and cy_spk_mark/cy_spk_repair index them with the same register
-    CBUF  cy_spk, CY_MAXLANE
-    CBUF  cy_spkd, CY_MAXLANE
-
-    ; --- the movers -------------------------------------------------------
-    CBUF  cy_e_kind, CY_MAXENEM     ; 0FFh free, 0FEh dead-awaiting-erase
-    CBUF  cy_e_lane, CY_MAXENEM
-    CBUF  cy_e_tim, CY_MAXENEM
-    CBUF  cy_e_dp, CY_MAXENEM * 2   ; depth in 8.8: the high byte IS the depth
-    CBUF  cy_e_sp, CY_MAXENEM * 2
-
-    CBUF  cy_s_act, CY_MAXSHOT      ; 0 free, 1 live, 2 spent-awaiting-erase
-    CBUF  cy_s_lane, CY_MAXSHOT
-    CBUF  cy_s_pierce, CY_MAXSHOT
-    CBUF  cy_s_dp, CY_MAXSHOT * 2
-
-    CBUF  cy_wdmg, CY_MAXLANE       ; lanes owing a web repair
-    CWORD cy_wnext                  ; ...and the round robin's cursor
-    CBUF  cy_e_rtm, CY_MAXENEM      ; the rim walk's own timer - NOT cy_e_tim,
-                                    ; which a flipper is already using to change
-                                    ; lane as it climbs
-    CBUF  cy_x_act, CY_MAXESHOT
-    CBUF  cy_x_lane, CY_MAXESHOT
-    CBUF  cy_x_dp, CY_MAXESHOT * 2
-
-    CBUF  cy_u_act, CY_MAXPU
-    CBUF  cy_u_kind, CY_MAXPU
-    CBUF  cy_u_lane, CY_MAXPU
-    CBUF  cy_u_dp, CY_MAXPU * 2
-    ; SPEC.md 67.24: a pickup that reached the lip while the claw was somewhere
-    ; else stays COLLECTABLE for a while. These three are that window, one
-    ; record per slot - the record is filed under the slot the pickup was
-    ; leaving, which bounds the table for free
-    CBUF  cy_g_lane, CY_MAXPU
-    CBUF  cy_g_kind, CY_MAXPU
-    CBUF  cy_g_t, CY_MAXPU
-    CWORD cy_psweep0                ; SPEC.md 67.24.4: where the claw was when
-                                    ; pickups were last tested, which with
-                                    ; [cy_plane] is the ARC it swept since
-
-    CBUF  cy_d_act, CY_MAXDBR
-    CBUF  cy_d_x, CY_MAXDBR * 2
-    CBUF  cy_d_y, CY_MAXDBR * 2
-    CBUF  cy_d_vx, CY_MAXDBR * 2
-    CBUF  cy_d_vy, CY_MAXDBR * 2
-
-    ; --- the high-score table ---------------------------------------------
-    CBUF  cy_hs, CY_NHS * 4
-    CBUF  cy_hsn, CY_NHS * 3        ; three initials per row
-    CWORD cy_hsidx                  ; the row cy_hs_submit just filled
-    CBYTE cy_hsdirty                ; the table has changed since it was read
-    CBYTE cy_hsload                 ; ...and whether it has been read at all
-    CBYTE cy_ient                   ; initials entry is up
-    CBYTE cy_ipos                   ; ...and how many characters are in
-    CBUF  cy_ibuf, 4
-    ; **512-ALIGNED, because int 13h reads it** (SPEC.md 2.4, 77.31). It is a
-    ; few hundred bytes and it still matters: a single sector transferred from
-    ; an unaligned base can straddle a 64KB physical page, dsk_runcap's floor
-    ; hands that one sector to the BIOS anyway, and the DMA controller answers
-    ; a straddle with error 09h. Whether this buffer lands on such a page is
-    ; decided by where the heap put the region, which is not this file's to
-    ; know - so it is aligned rather than hoped for.
-    ;
-    ; The 511 of slack is what the rounding below spends: CY_BSS is a
-    ; PREPROCESSOR count and os88_image_end is not defined until after it, so
-    ; the alignment cannot be done by bumping the count - it is done in the
-    ; label, and the room for it has to be reserved here.
-%assign CY_HSRAWOFF CY_BSS          ; ...and its offset, banked as a NUMBER:
-    CBUF  cy_hsraw, CY_HSFSZ + 511  ; a CBUF label is a forward reference to
-                                    ; os88_image_end and stays non-scalar, so
-                                    ; the rounding past OS88_IMAGE_END cannot
-                                    ; be written in terms of the label
-    CBUF  cy_dfind, OSAPI_FIND_SZ   ; one OSAPI_FILE_FIND record (SPEC.md 19.9)
-    CWORD cy_dbclus                 ; where we were standing before the visit
-    CBYTE cy_dbdrv
-    CBUF  cy_ibuf2, CY_INITW + 2    ; ...and the prompt it is lettered from
+    ; --- the vertex tables (SPEC.md 67.2) ---------------------------------
+    ; The whole perspective, spent once per layout: after these are filled,
+    ; nothing in the drawing path does any 3D arithmetic at all.
+    CBUF  cy_vx, CY_NDEPTH * CY_MAXV * 2
+    CBUF  cy_vy, CY_NDEPTH * CY_MAXV * 2
 
 ; --- the embeddable graphics library (SPEC.md 5.12) ---------------------------
 ; The resumable walk lives HERE now rather than in the kernel: it is pure
@@ -8885,14 +8260,9 @@ CY_TWORDS equ 14
 %include "os88gfx.inc"
 %include "os88alt.inc"              ; SPEC.md 11.2.1.1's edge, for the bracket
 
-    OS88_BSS CY_BSS
-    OS88_IMAGE_END
-
-; ...and the rounding goes HERE, past OS88_IMAGE_END, because os88_image_end
-; has to be defined before `cy_hsraw - $$` is a scalar NASM will let `&` touch.
-CY_HSOFF    equ ((os88_image_end - $$) + CY_HSRAWOFF + 511) & ~511
-cy_hsbuf    equ $$ + CY_HSOFF
-%if (CY_HSOFF & 511) != 0
-  %error "cyclone: cy_hsbuf must be 512-aligned - int 13h reads it (SPEC.md 2.4)"
-%endif
-
+    ; the variables, the table, and whatever the straddler left of the gap -
+    ; this closes the package (OS88_BSS + OS88_IMAGE_END) and asserts both the
+    ; alignment and the fit
+    OS88_BSS_ALIGNED cy_hstab, CY_HSFSZ
+cy_hs       equ cy_hstab + 4        ; CY_NHS dword scores...
+cy_hsn      equ cy_hs + CY_NHS * 4  ; ...then three initials per row

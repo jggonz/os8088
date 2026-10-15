@@ -29,6 +29,7 @@ half-way that leaked a cluster reads back perfectly everywhere else.
 with a part MISSING and a byte damaged, and the row must go red.
 """
 import argparse
+import tempfile
 import os
 import shutil
 import subprocess
@@ -143,7 +144,7 @@ def main():
     files.append("WRG:" + stage(os.path.join(d, "WRG"), "WRG.002", wb[1]))
     files.append("EX:" + stage(os.path.join(d, "EX"), "EX.001", exs[0]))
     files.append("EX:" + stage(os.path.join(d, "EX"), "EX.DAT", exold))
-    img = "/tmp/czjoin-%d%s.img" % (os.getpid(), "b" if a.brk else "")
+    img = tempfile.gettempdir() + "/czjoin-%d%s.img" % (os.getpid(), "b" if a.brk else "")
     disk = os88marty.scratch_disk(img, *files, size=1440)
     say("czjoin: BIG %d bytes in %d parts (%s), LZB %d in 1"
         % (len(big), len(bigp), "/".join(str(len(p)) for p in bigp),
@@ -232,18 +233,14 @@ def main():
             and "CMPRESS~.TMP" not in names("EX"), repr(t))
         ui.open("..")
 
-        chk = "/tmp/czjoin-fsck-%d.img" % os.getpid()
+        chk = tempfile.gettempdir() + "/czjoin-fsck-%d.img" % os.getpid()
         fl.save(1, chk)
     r = subprocess.run([sys.executable,
                         os.path.join(HERE, "..", "tools", "os88disk.py"),
                         "--verify", chk], capture_output=True, text=True)
     leg("fsck", r.returncode == 0,
         (r.stdout + r.stderr).strip().splitlines()[-1:] or "")
-    for f in (img, chk):
-        try:
-            os.remove(f)
-        except OSError:
-            pass
+    os88marty.scratch_drop(img, chk)    # and scratch_disk's sidecar
     shutil.rmtree(d, ignore_errors=True)
     for f in fails:
         say("  FAIL: " + f)

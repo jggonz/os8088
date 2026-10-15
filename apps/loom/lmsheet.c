@@ -34,7 +34,7 @@
 
 /* The RPN buffer wfxc.c emits into (see 2, above). 256 is W_FXCMAX, which
  * that file sets from the widest formula a person can type into the bar. */
-static unsigned char lm_fxbuf[256];
+static unsigned char lm_fxbuf[256];   /* PHASE STORE (loom.h) - the sheet's */
 #define w_fxc_out lm_fxbuf
 
 #include "../weave/wfxc.c"
@@ -271,7 +271,7 @@ notnum:
 }
 
 /* --- the formula source, as a C string for wfxc.c ----------------------- */
-static char lms_fsrc[256];
+static char lms_fsrc[256];          /* PHASE STORE (loom.h) - the sheet's */
 
 static int lms_copysrc(int slot, unsigned off, unsigned len, int line)
 {
@@ -496,7 +496,9 @@ int ovl_sheet(void)
 static int lms_nrow;                /* rows accumulated for the open frame */
 static int lms_cur;                 /* the sprite being read, -1 = none */
 static int lms_nframe;
-static unsigned lms_rowoff[64];     /* each row's offset in the .WSP */
+static unsigned lms_rowoff[64];     /* each row's offset in the .WSP -
+                                     * PHASE STORE (loom.h): the sprite
+                                     * reader's */
 static unsigned lms_spb;            /* the SPRB write cursor */
 
 static int lms_close_frame(int line)

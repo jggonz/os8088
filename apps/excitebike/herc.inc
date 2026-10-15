@@ -439,39 +439,4 @@ xh_xfer:
 .out:
     ret
 
-; wait for the retrace to START, and count the wait as idle (xb_spin), not as work - cga.inc's
-; xc_vr on the Hercules' status port: 3BAh bit 7 is LOW while the vertical sync is active.
-xh_vr:
-    call xb_clk_sample
-    mov ax, [xb_subs]
-    mov [xb_sp0], ax
-    mov ax, XB_SUB
-    sub ax, [xb_pitl]
-    mov [xb_sp1], ax
-    mov dx, 3bah
-.spin:
-    in al, dx
-    test al, 80h
-    jz .done
-    push dx
-    call xb_clk_sample
-    pop dx
-    mov ax, [xb_subs]
-    sub ax, [xb_sp0]                ; the retrace comes every ~1.08 sub-ticks (50.4 Hz against 54.6),
-    cmp ax, 3                       ; so three whole sub-ticks from ENTRY always hold one
-    jb .spin
-    mov byte [xc_to], 1             ; (unreachable in practice) no retrace at all: commit nothing
-    jmp .fin
-.done:
-    mov byte [xc_to], 0
-.fin:
-    call xb_clk_sample
-    mov ax, [xb_subs]
-    sub ax, [xb_sp0]
-    mov bx, XB_SUB
-    sub bx, [xb_pitl]
-    sub bx, [xb_sp1]
-    call xb_span
-    add [xb_spinl], ax
-    adc [xb_spinh], dx
-    ret
+; (the retrace wait is cga.inc's xc_vr, which knows the Hercules' status port)

@@ -97,9 +97,10 @@ def status(m, seg):
     return out
 
 
-TY_FACE_KB = 8                  # apps/os88type.inc; t_mirror does not reach a
-                                # package's own equs, so it is named here with
-                                # the file it comes from
+TY_FACE_KB = 8                  # apps/os88type.inc's CEILING (SPEC.md 6.4.2);
+                                # t_mirror does not reach a package's own
+                                # equs, so it is named here with the file it
+                                # comes from
 
 
 def mem_claims(m):
@@ -164,34 +165,54 @@ with os88ui.boot(a.sys, apps=a.bench, machine=a.machine) as ui:
             "and handed back the slot that was never allocated")
 
     # --- CLAIM ----------------------------------------------------------
-    # The face's own 8KB block, and the two things about it that were assumed
-    # for a year (docs/plans/HEAP-UNPIN-PLAN.md 3.1): that the base needs
-    # rounding to a 512-byte boundary by hand, and that a spare KB has to be
-    # claimed to pay for the rounding. Neither is true - kernel.asm's guard 6b
-    # asserts every claim base is HEAP_SEG + n*MEM_PARA_KB paragraphs and that
-    # MEM_PARA_KB is a multiple of 32 - and a package cannot see that guard,
-    # so os88type.inc ASSERTS the alignment now and this reads the assertion's
-    # answer from outside. If the guard ever stopped holding, the face would
-    # refuse (ft_err = TYE_NOMEM) instead of writing 496 bytes past its claim.
+    # The face's own block and the pre-shift table's, and the three things
+    # about them that were assumed for a year. That the base needs rounding to
+    # a 512-byte boundary by hand, and a spare KB claimed to pay for it
+    # (docs/plans/HEAP-UNPIN-PLAN.md 3.1): kernel.asm's guard 6b asserts every
+    # claim base is HEAP_SEG + n*MEM_PARA_KB paragraphs with MEM_PARA_KB a
+    # multiple of 32, a package cannot see that guard, so os88type.inc ASSERTS
+    # the alignment and this reads the assertion's answer from outside. That a
+    # face needs TY_FACE_KB: it is the FILE's size now (SPEC.md 6.4.2), the
+    # KB OSAPI_FILE_READ answers a read into no buffer with - (U >> 10) + 1,
+    # read back here off the image's own TYH_LEN. And that the table needs the
+    # tallest face's 12KB: it is ceil(rows * 95 / 128) (SPEC.md 6.5.2).
     if st["ft_err"] == 0:
         claims = mem_claims(m)
         cl = [c for c in claims if c[2] == seg]
         say("facetest holds %s"
             % ["%04x/%dKB" % (b, p // 64) for b, p, _ in cl])
-        faces = [c for c in cl if c[1] // 64 == TY_FACE_KB]
-        if not faces:
+        faces = [c for c in cl if m.read(c[0] << 4, 4) == b"F88\x1a"]
+        if len(faces) != 1:
             fails.append(
-                "CLAIM: no %dKB claim owned by FACETEST. It was TY_FACE_KB+1 "
-                "until the hand rounding came out, and the extra KB was never "
-                "consumed by it - one kilobyte per open face, up to three per "
-                "Word or CWORD instance" % TY_FACE_KB)
+                "CLAIM: %d claims owned by FACETEST hold an .F88 image, and "
+                "exactly one face is open" % len(faces))
         for b, p, _ in faces:
+            hdr = m.read(b << 4, 64)
+            rows, flen = hdr[6], hdr[56] | hdr[57] << 8
+            want = (flen >> 10) + 1
+            say("face %04x: %d bytes, %d rows -> %dKB claim, %dKB wanted"
+                % (b, flen, rows, p // 64, want))
+            if p // 64 != want or want > TY_FACE_KB:
+                fails.append(
+                    "CLAIM: the face claim is %dKB for a %d-byte face, where "
+                    "SPEC.md 6.4.2 sizes it (U >> 10) + 1 = %dKB - and %dKB "
+                    "is every face's claim before that, 6KB of heap held for "
+                    "nothing per open face" % (p // 64, flen, want, TY_FACE_KB))
             if b & 0x1F:
                 fails.append(
                     "CLAIM: the face claim at %04x is not a multiple of 32 "
                     "paragraphs, so it is not 512-byte aligned - guard 6b no "
                     "longer holds and os88type.inc's alignment test should "
                     "have refused the face rather than opening it" % b)
+            if st["ft_cached"]:
+                tab = [c for c in cl if c[0] != b]
+                twant = (rows * 95 + 127) // 128
+                if len(tab) != 1 or tab[0][1] // 64 != twant:
+                    fails.append(
+                        "CLAIM: the pre-shift table is %s for a %d-row face, "
+                        "where SPEC.md 6.5.2 sizes it ceil(rows * 95 / 128) = "
+                        "%dKB and not the tallest face's 12"
+                        % (["%dKB" % (c[1] // 64) for c in tab], rows, twant))
 
     # --- ROWS -----------------------------------------------------------
     # facetest draws two header lines and then four specimen rows, the first

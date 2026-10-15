@@ -250,7 +250,10 @@ entry:
     ;
     ; KZ_RPARA is an IMMEDIATE here where [ksecs] is patched, and that is the
     ; same assumption BLOB_SEG and SPL_FSEG already make: this sector ships
-    ; inside HDD.DRV, built from the kernel it will boot.
+    ; as BOOTHD.SYS on the system disk beside the kernel it will boot, and the
+    ; installer writes THAT disk's copy (SPEC.md 52.10.16). It shipped inside
+    ; HDDTOOL.DRV once, which booted the tool's kernel instead - the one on
+    ; C: when a hard-disk-booted machine installed a newer floppy.
     mov ax, [ksecs]
     sub ax, BOOT2_SECS
 %ifdef KZIP

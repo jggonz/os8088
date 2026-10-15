@@ -108,7 +108,8 @@ apd_getb:
 
 ; =============================================================================
 ; apd_pull - produce up to CX PCM8 bytes into apd_out
-; in:  CX = bytes wanted (1..APD_OUTSZ)
+; in:  CX = bytes wanted (1..APD_SRCSZ: a card's half is APD_OUTSZ, a
+;      speaker's step span up to APD_SRCSZ)
 ; out: AX = bytes produced (0..CX). Fewer than CX means the look-ahead ring
 ;      ran dry - the caller decides whether that is a transient underrun or
 ;      real end of stream (ap_src_eof).

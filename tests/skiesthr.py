@@ -23,6 +23,8 @@ frame is whole (docs/WRITING-TESTS.md 13 entry 44):
      shows the NEW value - not one frame's lag, not half the frames;
   2. and with the throttle steady at full the panel does not redraw at all,
      which is the whole of "it only costs when they are changing it".
+  3. the number row sets the lever in one keystroke (SPEC.md 88.8.3): 0 is
+     shut, 9 is full, n is n x 100 / 9.
 
 --clobber-now is the red run (docs/WRITING-TESTS.md 1): it puts the two
 throttle entries of `cs_pnow` back to 0, which is the tree as the field had
@@ -133,6 +135,20 @@ def main(argv):
         check(not redrew,
               "...and a STEADY throttle redraws nothing (%s)"
               % (redrew[:6] if redrew else "0 of %d frames" % len(held)))
+
+        # THE NUMBER ROW (SPEC.md 88.8.3): a digit puts the lever at n/9 of
+        # full in one keystroke - 0 shut, 9 full - and only on an aeroplane
+        # with an engine, which the Cessna this boots into is
+        got = []
+        for ch, want in (("0", 0), ("5", 55), ("1", 11), ("9", 100),
+                         ("4", 44)):
+            m.type_text(ch)
+            m.advance(frames=8)
+            m.run()
+            got.append((ch, want, w("cs_thr")))
+        miss = [g for g in got if g[1] != g[2]]
+        check(not miss, "the digits set the throttle (%s)"
+              % ", ".join("%s->%d" % (c, v) for c, _, v in got))
 
         m.type_text("f")
         m.advance(frames=40)

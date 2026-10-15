@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """VIDEO.O88 plays 16 colours on a SCREEN OF ITS OWN, flipped, in its own
-palette - SPEC.md 98.1.3.2.1, 98.3.8.2.
+palette - SPEC.md 98.1.3.2.1, 98.3.8.2 - and in its own palette on the
+desktop's 640 x 480 too, full screen and unflipped (98.1.3.2.2).
 
     make && python3 tests/vidscreen.py [--screen 640x400 ...] [--machine NAME]
 
@@ -26,9 +27,16 @@ shows. For each screen, booted on MartyPC's VGA XT:
    tests/vidvga8.py), so 320 x 240 is checked on the 200 rows it shows -
    the canvas's 144 are inside them.
 
+640 x 480 (screen 0, mode 12h, the desktop's) has one page, so its clip is
+not flipped, and it is played WITHOUT forcing the full screen: a file in its
+own colours must refuse the window by itself (vp_canwin), and a play in the
+window leaves the glass the desktop's, which fails every hold.
+
 Broken on purpose: with vp_scrset's palette left out the glass is in the
 EGA's colours and every hold FAILS; with vp_show's OUTs skipped the glass
-stays on page 0 and the holds a frame apart differ from it.
+stays on page 0 and the holds a frame apart differ from it; and on 640 x
+480, with vp_canwin's palette test taken out the play goes into the window
+and every hold fails.
 """
 import argparse
 import os
@@ -78,8 +86,8 @@ def clip(tmp, scr):
     pal = bytes(v for c in PAL for v in c) + bytes(vid.PAL_BYTES - 48)
     out = os.path.join(tmp, "SCR%d.V88" % scr)
     vid.encode_canvases(cvs, g, out, FPS, vid.PF_VGA4, pal,
-                        "vidscreen clip", keysecs=2.0, poster=1, flip=True,
-                        screen=scr)
+                        "vidscreen clip", keysecs=2.0, poster=1,
+                        flip=scr != 0, screen=scr)
     vid.verify_v88(out)
     return out
 
@@ -118,10 +126,11 @@ def one(scr, machine, syms, pkg, tmp, bad):
         until(lambda mm: rb("vp_loaded") == 1, "the header", 30.0)
         until(lambda mm: rw("vp_ploads") >= 1, "the poster", 60.0)
         # --- 1
-        want1 = (vid.PF_VGA4, scr, 1, SH * 80,
+        want1 = (vid.PF_VGA4, scr, 1 if scr else 0, SH * 80 if scr else 0,
                  FSXM_VGA0D if SW == 320 else FSXM_VGA12, 0, 1)
         got1 = (rb("vp_pixfmt") + 1, rb("vp_screen"), rb("vp_flip"),
-                rw("vp_page"), rb("vp_mode"), rb("vp_shadow"), rb("vp_ok"))
+                rw("vp_page") if scr else 0, rb("vp_mode"), rb("vp_shadow"),
+                rb("vp_ok"))
         print("   format %d, screen %d, flip %d, page %d, mode %d, shadow "
               "%d, ok %d" % got1)
         if got1 != want1:
@@ -141,8 +150,10 @@ def one(scr, machine, syms, pkg, tmp, bad):
         if d:
             bad.append("%s: the poster differs from the packed key in %d "
                        "bytes" % (name, d))
-        # --- 3: every hold, full screen
-        m.write(base + syms["vp_nowin"], b"\1")
+        # --- 3: every hold, full screen - which 640 x 480 must take by
+        # itself, its colours not being the desktop's (98.1.3.2.2)
+        if scr:
+            m.write(base + syms["vp_nowin"], b"\1")
         ww("vp_stopat", STOPS[0])
         m.write(base + syms["vp_played"], b"\0")
         m.type_text("p")
@@ -188,13 +199,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_xt_vga")
     ap.add_argument("--screen", action="append",
-                    choices=[v[0] for k, v in vid.SCREENS.items() if k])
+                    choices=[v[0] for v in vid.SCREENS.values()])
     a = ap.parse_args()
     os.chdir(ROOT)
     syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
     pkg = os88build.at("build/video.o88")
     bad = []
-    names = a.screen or [v[0] for k, v in vid.SCREENS.items() if k]
+    names = a.screen or [v[0] for v in vid.SCREENS.values()]
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
         for nm in names:
             one(vid.SCREEN_BY_NAME[nm], a.machine, syms, pkg, tmp, bad)

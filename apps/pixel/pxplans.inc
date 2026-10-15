@@ -6,7 +6,7 @@
 ; Then the search's own tables. A PAL palette's plans are that search's,
 ; run by the decoder PART of the picture's kind (apps/pixel/pxplan.inc,
 ; SPEC.md 106.20), which every decoder part includes - this file with it;
-; `pixelsim --selfcheck` (a fast row) fails the build if this file is not
+; `pixelsim --selfcheck` (the `pixelsim` soak row) fails if this file is not
 ; what that search answers. Do not edit it by hand.
 ; =============================================================================
 px_plcube:

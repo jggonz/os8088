@@ -67,7 +67,7 @@ LD_DE_SIZE  equ 20              ; the LOW word of a DWORD size (SPEC.md 19.1
 ; --- .o88 v3 header field offsets (SPEC.md 20.2) ------------------------------
 LD_H_MAGIC  equ 0               ; word: 0x384F ('O','8')
 LD_H_VER    equ 2               ; byte: format version = PKG_FMT
-PKG_FMT     equ 8               ; the package format, and it is the API
+PKG_FMT     equ 10              ; the package format, and it is the API
                                 ; TABLE'S: a renumbering bumps it, and so
                                 ; does a cell re-contracted (SPEC.md
                                 ; 20.2.0, 20.8 rule 4). Mirrored in
@@ -768,6 +768,7 @@ ld_take:
     or dx, dx
     jz .bad                     ; empty file
 .szok:
+%ifdef OS88_REDIR                   ; SPEC.md 62.9.2.3
     cmp byte [dsk_vkind], DVK_FILE  ; ...unless the cluster word is AN OPAQUE
     je .clusok                      ; HANDLE (SPEC.md 62.9.1), in which case
                                     ; the kernel has no opinion about its range
@@ -775,6 +776,7 @@ ld_take:
                                     ; volume's, so the test is not merely wrong
                                     ; here, it is answered by a number
                                     ; belonging to another disk
+%endif
     cmp bx, 2                   ; mount already validated (SPEC.md 21 step 1 -
     jb .bad                     ; this check stands alone if the mount code
     cmp bx, [dsk_maxclus]       ; ever changes)
@@ -789,14 +791,10 @@ ld_take:
                                 ; one, and .peek writes BX on every arm
                                 ; before anything reads it
     ret
-.bad:
-    mov al, LD_EBAD
-    stc
-    ret
-.big:
-    mov al, LD_EBIG
-    stc
-    ret
+.bad:                           ; ld_hdr_size's two refusals ARE these, and
+    jmp ld_hdr_size.bad         ; a near jmp to them is two bytes under a
+.big:                           ; second copy of each (size pass 10); they
+    jmp ld_hdr_size.toobig      ; are out of short reach of the jcc's here
 
 ld_run_body_x:
     ; --- 1. validate the directory entry --------------------------------------
@@ -1088,12 +1086,14 @@ ld_alloc:
     call mem_claim_hi_x ; from the TOP down, away from the data claims
     jc .nomem                   ; growing up from the bottom (SPEC.md 50.3)
     mov [ld_base], dx
+%ifndef KERN_SMALL
     mov word [ld_rehome], 0     ; NO RE-HOME UNTIL ONE IS ASKED FOR, and it is
                                 ; cleared HERE rather than by the arm that
                                 ; consumes it: an entry proc can set this word
                                 ; and then return CF=1, and the arm never runs
                                 ; to clear it. One store on the one path every
                                 ; launch takes (SPEC.md 20.12.10)
+%endif
     shl ax, cl                  ; I_SIZE is bytes, and it is what the region
                                 ; occupies now, not what the file needed.
                                 ; **CL IS STILL 10**, set by mem_bytes_kb_x
@@ -1228,12 +1228,17 @@ ld_start:
     pop word [snd_inst]         ; ...and the stamp comes off, CF untouched
     jc .abort
 
+%ifndef KERN_SMALL
     cmp word [ld_rehome], 0     ; --- 8a. THE RE-HOME (SPEC.md 20.12.10) -----
     jne .rehome                 ; six bytes on the ordinary launch, which falls
                                 ; straight through into step 9 exactly as it
                                 ; always did. The arm itself is out of line,
                                 ; below .reg, because it runs once per re-homing
-                                ; package and never otherwise
+                                ; package and never otherwise. NOT ON
+                                ; kern_small, test or arm: the cell is mod_gone
+                                ; there, so nothing can ever set the word
+                                ; (SPEC.md 20.12.10.7)
+%endif
 
     ; --- 9. register + publish the instance, show the window ---------------------
 .reg:
@@ -1322,6 +1327,53 @@ ld_start:
     mov al, LD_OK
     ret
 
+.abort:                         ; HERE, between step 9 and the re-home, and
+                                ; not below the re-home: step 8's `jc .abort`
+                                ; reaches it short from here, where below the
+                                ; arm it was the five-byte inverted jcc (size
+                                ; pass 10), and the arm's own five refusals
+                                ; reach it short backwards just the same
+    ; SPEC.md 20.2: an aborting entry may have created windows before it
+    ; declared itself broken - the one it returns in BX, and any others.
+    ; Destroy them ALL by the W_SEG creator stamp (wm_destroy_seg) rather
+    ; than by trusting BX: a package that just declared itself broken gets
+    ; nothing believed, and the sweep only ever touches records wm_create
+    ; stamped itself. BEFORE ld_unreserve, so no window outlives the region
+    ; its procs live in - a survivor's repaint would far-call a freed claim.
+    ; The reserved instance record was never published, so it needs nothing.
+    call .sweep
+    ; ...but NOT its toast (SPEC.md 20.12.4). A refusal the entry proc SAID -
+    ; os88parts.inc's four, a C package's - carries the reserved slot as its
+    ; raiser, because step 8's stamp is in force for the whole of the call
+    ; (SPEC.md 19.2.1). Step 10 would toast `Load failed` over it and the
+    ; reason would never reach the glass. So when the toast that is up is
+    ; this instance's, re-home it to the kernel - the slot is about to be
+    ; somebody else's, and their close must not take it down - and tell
+    ; ld_say_status to record the verdict without saying it. A toast raised
+    ; by anybody else during the launch is not ours and is overwritten as
+    ; before.
+    mov di, [ld_rec]            ; BL = the reserved slot's index. ld_slot is
+    call ld_slot                ; that arithmetic, near and `.cold` like this
+                                ; - inst_idx is the same body in `.text` and a
+                                ; shim to it would cost 5 of those; a third
+                                ; inline copy costs 3 bytes more than the call
+                                ; and drifts. BX is dead here (the entry's
+                                ; window, on a launch that is being abandoned)
+                                ; and ld_unreserve banks it anyway; AX and CX
+                                ; survive, ld_slot banking CX itself
+    cmp bl, [toast_inst]
+    jne .unsaid
+    cmp word [toast_on], 0      ; toast_kill's own test: on OR staged
+    je .unsaid
+    mov byte [toast_inst], 0xFF
+    mov byte [ld_said], 1
+.unsaid:
+    call ld_unreserve           ; the region, and anything the entry proc
+                                ; claimed before it declared itself broken
+    mov al, LD_EABORT
+    ret
+
+%ifndef KERN_SMALL
 .rehome:
     ; --- 8a. THE RE-HOME: the loader hands its identity to a PART ------------
     ; SPEC.md 20.12.10. The entry proc that just returned is a LOADER: it read
@@ -1368,11 +1420,30 @@ ld_start:
                                 ; word and nothing else - a silent divergence
                                 ; between two ways of starting the same kind of
                                 ; program, and the wrong direction to diverge in
-    cmp dx, [ld_rehsz]          ; ...and the third bound, which is this arm's
-    ja .abort                   ; alone: the LOADER's word for what it actually
-                                ; put there, where the part's own header cannot
-                                ; be trusted. DX is image + bss, as ld_hdr_size
-                                ; leaves it
+    ; ...and the third bound, which is this arm's alone: the LOADER's word for
+    ; what it actually put there, where the part's own header cannot be
+    ; trusted. DX is image + bss, as ld_hdr_size leaves it. TWO FORMS
+    ; (SPEC.md 20.12.10.5): AX non-zero is BYTES at DX and the carve stays
+    ; whole, which is every loader built before the keep; AX = 0 is the KEEP
+    ; form, CX the paragraphs at DX the program keeps, and that one figure is
+    ; both the bound and where the carve's tail is cut - so a keep that would
+    ; cut into the program's own image + bss is refused here, by the same
+    ; compare, rather than trusted
+    mov ax, [ld_rehsz]
+    mov cx, 0xFFFF              ; CX = the keep: the carve WHOLE...
+    or ax, ax
+    jnz .rhbytes
+    mov ax, dx                  ; ...or the loader's, against the program in
+    add ax, 15                  ; PARAGRAPHS - image + bss is under
+    mov cl, 4                   ; APP_MAX_SIZE by ld_hdr_size, so the
+    shr ax, cl                  ; rounding cannot carry
+    mov cx, [ld_rehkp]
+    cmp ax, cx
+    jmp short .rhbnd
+.rhbytes:
+    cmp dx, ax
+.rhbnd:
+    ja .abort                   ; CX survives to mem_reown_x: ld_slot banks it
     mov [ld_need], dx           ; **I_SIZE, AND IT IS NOT OPTIONAL.** Step 9
                                 ; publishes this word and ld_alloc left the
                                 ; LOADER's region size in it - so without this
@@ -1441,7 +1512,9 @@ ld_start:
     mov bx, [ld_base]           ; ...and BX the one to match: the loader's
     mov ax, [ld_rehome]         ; segment, which every claim it made carries -
     call mem_reown_x            ; and AX where the program RUNS, which is
-                                ; where the carve's base goes (below)
+                                ; where the carve's base goes (below) - and,
+                                ; on kern_big, CX what of it the program
+                                ; KEEPS, which is where its tail goes
 
     ; --- and the LOADER'S OWN REGION, freed ---------------------------------
     xchg bx, dx                 ; ...AND BOTH WORDS ARE ALREADY IN HAND, the
@@ -1472,47 +1545,7 @@ ld_start:
     push ds
     pop es                      ; ES = KERNEL_SEG for that far call: the entry
     jmp .call8                  ; proc's contract does not promise it back
-
-.abort:
-    ; SPEC.md 20.2: an aborting entry may have created windows before it
-    ; declared itself broken - the one it returns in BX, and any others.
-    ; Destroy them ALL by the W_SEG creator stamp (wm_destroy_seg) rather
-    ; than by trusting BX: a package that just declared itself broken gets
-    ; nothing believed, and the sweep only ever touches records wm_create
-    ; stamped itself. BEFORE ld_unreserve, so no window outlives the region
-    ; its procs live in - a survivor's repaint would far-call a freed claim.
-    ; The reserved instance record was never published, so it needs nothing.
-    call .sweep
-    ; ...but NOT its toast (SPEC.md 20.12.4). A refusal the entry proc SAID -
-    ; os88parts.inc's four, a C package's - carries the reserved slot as its
-    ; raiser, because step 8's stamp is in force for the whole of the call
-    ; (SPEC.md 19.2.1). Step 10 would toast `Load failed` over it and the
-    ; reason would never reach the glass. So when the toast that is up is
-    ; this instance's, re-home it to the kernel - the slot is about to be
-    ; somebody else's, and their close must not take it down - and tell
-    ; ld_say_status to record the verdict without saying it. A toast raised
-    ; by anybody else during the launch is not ours and is overwritten as
-    ; before.
-    mov di, [ld_rec]            ; BL = the reserved slot's index. ld_slot is
-    call ld_slot                ; that arithmetic, near and `.cold` like this
-                                ; - inst_idx is the same body in `.text` and a
-                                ; shim to it would cost 5 of those; a third
-                                ; inline copy costs 3 bytes more than the call
-                                ; and drifts. BX is dead here (the entry's
-                                ; window, on a launch that is being abandoned)
-                                ; and ld_unreserve banks it anyway; AX and CX
-                                ; survive, ld_slot banking CX itself
-    cmp bl, [toast_inst]
-    jne .unsaid
-    cmp word [toast_on], 0      ; toast_kill's own test: on OR staged
-    je .unsaid
-    mov byte [toast_inst], 0xFF
-    mov byte [ld_said], 1
-.unsaid:
-    call ld_unreserve           ; the region, and anything the entry proc
-                                ; claimed before it declared itself broken
-    mov al, LD_EABORT
-    ret
+%endif                          ; KERN_SMALL - the arm
 
 .sweep:
     ; Every window whose W_SEG is the region being launched, destroyed - the
@@ -1841,6 +1874,8 @@ ld_fsz:     resw 2              ; file size, BYTES, in 32 bits: a package
                                 ; 20.12). ld_check_hdr is what bounds it, and
                                 ; which test it applies is the flags byte's
                                 ; to say
+%ifndef KERN_SMALL               ; ...the re-home's three words, none of
+                                ; them on kern_small (SPEC.md 20.12.10.7)
 ld_rehome:  resw 1              ; OSAPI_PKG_REHOME's answer: the segment the
                                 ; program lives at, 0 = no re-home this launch
                                 ; (SPEC.md 20.12.10). Cleared by ld_alloc on
@@ -1849,6 +1884,13 @@ ld_rehome:  resw 1              ; OSAPI_PKG_REHOME's answer: the segment the
                                 ; not hand the next launch its leftovers
 ld_rehsz:   resw 1              ; ...and the bytes it says are available there,
                                 ; which is what bounds the part's image + bss
+                                ; - 0 for the KEEP form (SPEC.md 20.12.10.5)
+ld_rehkp:   resw 1              ; ...whose figure is this: the paragraphs at
+                                ; [ld_rehome] the program keeps, the bound and
+                                ; the carve's new length at once. Read only
+                                ; when [ld_rehsz] is 0, which only the cell
+                                ; writes, so it needs no clear of its own
+%endif
 ld_img:     resw 1              ; header: image size
 ld_bss:     resw 1              ; header: bss size
 ld_ent:     resw 1              ; header: image-relative entry
@@ -1900,7 +1942,10 @@ ldf_ld_run_name:        call ld_run_name_x
 ; osapi_pkg_rehome - API slot 0x03FE: "the program is at DX, not at me"
 ;                    (SPEC.md 20.12.10)
 ; in:  DX = the segment the program's image starts at, AX = the bytes
-;      available there, ES = the caller's segment (the X stub's)
+;      available there - or AX = 0, the KEEP form, and then CX = the
+;      paragraphs at DX the program keeps, the carve's tail past them going
+;      back to the heap (SPEC.md 20.12.10.5) - ES = the caller's segment (the
+;      X stub's)
 ; out: CF = 0 recorded; CF = 1 refused
 ; clobbers: flags
 ;
@@ -1928,7 +1973,10 @@ osapi_pkg_rehome_x:
     or dx, dx                   ; a segment of 0 is the heap's own "no claim"
     jz .no                      ; and can never be a part's base
     mov [ld_rehome], dx
-    mov [ld_rehsz], ax
+    mov [ld_rehsz], ax          ; 0 = the KEEP form, and then...
+    mov [ld_rehkp], cx          ; ...this is its figure (SPEC.md 20.12.10.5).
+                                ; Stored either way: step 8a reads it only
+                                ; when the word above says so
     CLC_OR_STC .no              ; CF = 0 recorded, or (.no) CF = 1 refused
     pop bx                      ; `pop` writes no flag, so the answer survives
     retf
@@ -1936,9 +1984,9 @@ osapi_pkg_rehome_x:
 ; No re-homing loader ships on kern_small: the only two callers of the slot -
 ; the DOS box (SPEC.md 18.4.7.4) and Skies ($(SMALLOMIT_GAMES)) - are both off
 ; the small disks, and no small package hands its identity to one of its parts
-; (SPEC.md 20.12.10). ld_alloc zeroes [ld_rehome] on every load (see it above),
-; so ld_start's step 8a never fires without this, and CF=1 is the refusal the
-; body itself gives when it declines. Cell-only, so a bare retf is the whole of
+; (SPEC.md 20.12.10). So step 8a is not assembled here at all - its test, its
+; arm, mem_reown_x and the words they read (SPEC.md 20.12.10.7) - and CF=1 is
+; the refusal the body itself gives when it declines. Cell-only, so a bare retf is the whole of
 ; it (SPEC.md 20.3.2).
 osapi_pkg_rehome_x equ mod_gone ; mod.inc's `stc` / `retf`, the same two
                                 ; bytes in the same section

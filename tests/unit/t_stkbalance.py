@@ -289,6 +289,76 @@ al_out:
     ret
 %endif
 """},
+
+    "a far jump to a LITERAL address leaves the program (disk.inc's warm reset)": {
+        "a.inc": """
+dsk_park:
+    pushf
+    cli
+    in al, dx
+    cmp al, 1
+    jne .park
+    jmp 0xFFFF:0x0000
+.park:
+    popf
+    ret
+"""},
+
+    "`lea sp, [bp+N]` tears a frame down as `mov sp, bp` + `add sp, N` does (gfx_blit1_x)": {
+        "a.inc": """
+blit:
+    push si
+    push di
+    sub sp, 4
+    push ax
+    push bx
+    mov bp, sp
+    or al, al
+    jz .noswap
+    lea sp, [bp+8]
+    jmp short .done
+.noswap:
+    mov sp, bp
+    add sp, 8
+.done:
+    pop di
+    pop si
+    ret
+"""},
+
+    "OS88_POPLADDER's rungs, built with %+, are labels the walk follows (SPEC.md 20.5)": {
+        # No source line SPELLS `pk_pop_2`: the macro builds it with `%+`, so
+        # read as text this was a tail jump into nothing at depth +2 and every
+        # adopter failed `stkapps` (Note Pad, Missile, PiXEL, Telnet and Video
+        # all wrote the ladder out by hand instead).  Rungs 4 and 3 are never
+        # jumped to here, and must not be walked as entries either - entered at
+        # depth 0, an unreferenced rung pops its caller.
+        "a.asm": """
+pk_two:
+    push ax
+    push bx
+    mov ax, 1
+    jmp pk_pop_2
+pk_four:
+    push ax
+    push bx
+    push cx
+    push dx
+    jmp pk_pop_4
+pk_none:
+    jmp pk_pop_0
+    OS88_POPLADDER pk_pop, ax, bx, cx, dx
+"""},
+
+    "OS88_PUSHER banks the whole list beneath its own return (SPEC.md 20.5)": {
+        "a.asm": """
+pk_cold:
+    call pk_save
+    mov ax, 1
+    jmp pk_pop_3
+    OS88_POPLADDER pk_pop, ax, bx, cx
+    OS88_PUSHER pk_save, ax, bx, cx
+"""},
 }
 
 
@@ -296,6 +366,32 @@ al_out:
 # LOUD: defect shapes a size pass produces.  Every one of these must be caught.
 # ---------------------------------------------------------------------------
 LOUD = {
+    "`lea sp, [bp+N]` with the wrong N - one word left on the stack": {
+        "a.inc": """
+blit:
+    push si
+    push di
+    sub sp, 4
+    push ax
+    push bx
+    mov bp, sp
+    lea sp, [bp+6]
+    pop di
+    pop si
+    ret
+"""},
+
+    "a far jump to a LABEL at depth is still a tail call carrying rubbish": {
+        "a.inc": """
+sch_unhook:
+    push ax
+    jmp KSEG:dsk_park
+""",
+        "b.inc": """
+dsk_park:
+    ret
+"""},
+
     "a `push` whose `pop` was deleted - the classic slip": {
         "a.inc": """
 leaky:
@@ -455,6 +551,113 @@ disp:
 disp_tab:
     dw disp.arm0, disp.arm1
 """},
+
+    "a jump to the WRONG rung of OS88_POPLADDER": {
+        "a.asm": """
+pk_three:
+    push ax
+    push bx
+    push cx
+    jmp pk_pop_2
+    OS88_POPLADDER pk_pop, ax, bx, cx, dx
+"""},
+
+    "OS88_PUSHER's routine ending on a rung short of the list": {
+        "a.asm": """
+pk_cold:
+    call pk_save
+    jmp pk_pop_2
+    OS88_POPLADDER pk_pop, ax, bx, cx
+    OS88_PUSHER pk_save, ax, bx, cx
+"""},
+}
+
+
+# ---------------------------------------------------------------------------
+# COUNTED: N broken edges must be N findings, not "> 0".  A LOUD case only
+# asks that the walker said SOMETHING, and that is how this stayed hidden:
+# Video seeded two broken jumps into its shared epilogue and the gate reported
+# one, because both end at the same `ret` at the same wrong depth and the
+# findings were de-duplicated by (file, line text, why).  The second jump was
+# fixed by nobody, because nothing named it.
+# ---------------------------------------------------------------------------
+COUNTED = {
+    "two routines jumping into one shared epilogue a rung wrong (Video's vp_ld7)": (2, {
+        "a.asm": """
+vp_fmt:
+    push ax
+    push bx
+    push cx
+    mov ax, 1
+vp_ld3:
+    pop cx
+    pop bx
+    pop ax
+    ret
+one:
+    push ax
+    push bx
+    jmp vp_ld3
+two:
+    push ax
+    push bx
+    mov ax, 2
+    jmp vp_ld3
+"""}),
+
+    "ONE routine with two exits into the epilogue, both wrong": (2, {
+        "a.asm": """
+fmt:
+    push ax
+    push bx
+    push cx
+ld3:
+    pop cx
+    pop bx
+    pop ax
+    ret
+both:
+    push ax
+    push bx
+    cmp ax, 1
+    je .other
+    jmp ld3
+.other:
+    jmp ld3
+"""}),
+
+    "the same broken TEXT in two routines is two defects, not one": (2, {
+        "a.asm": """
+a_one:
+    push ax
+    push bx
+    jmp pk_pop_1
+a_two:
+    push ax
+    push bx
+    jmp pk_pop_1
+    OS88_POPLADDER pk_pop, ax, bx
+"""}),
+
+    "a tail broken on its OWN is one finding however many jump into it": (1, {
+        # the other half of the keying: when the line is wrong from inside the
+        # routine that owns it, the jumps into it are echoes of that defect
+        "a.asm": """
+user:
+    call tail
+    ret
+tail:
+    push si
+    pop ax
+    pop ax
+    ret
+j_one:
+    push ax
+    pop ax
+    jmp tail
+j_two:
+    jmp tail
+"""}),
 }
 
 
@@ -471,6 +674,12 @@ def main():
                 why="this is a real imbalance of exactly the shape a size "
                     "pass produces; if the walker goes quiet here the gate "
                     "is decorative.\n" + out)
+    for why, (want, files) in sorted(COUNTED.items()):
+        n, out = verdict(files)
+        h.eq(n, want, "COUNTED: %s" % why,
+             why="every broken edge is its own defect and must be named; a "
+                 "count that folds two into one leaves the second unfixed.\n"
+                 + out)
     return h.done("stkbalance walker")
 
 

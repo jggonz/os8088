@@ -34,7 +34,7 @@ rather than a wrong size:
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(__file__))
-import os88marty, os88mouse, os88geom, os88sym, dispcp
+import os88marty, os88mouse, os88geom, os88sym, os88ui, dispcp
 
 MACHINE = "os8088_xt_vga"
 for i, a in enumerate(sys.argv):
@@ -80,6 +80,16 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     wx, wy, _, _ = dispcp.win_rect(m, S, w[-1])
     dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "APPS")
     w = dispcp.win_list(m, S)
+    # THE APPS WINDOW GOES FLUSH RIGHT FIRST, so part of its title bar is
+    # still clear once Note Pad is up - raise_win below needs one point to
+    # click. Note Pad opens at its own place, and since SPEC.md 27.20 that is
+    # 442x260 at (55,60) on VGA, which swallows the whole Disk window where
+    # it opens at (103,80): the row failed "no clear point on window 0's
+    # title bar" on every run from then. Moved with os88ui's checked drag,
+    # which reads the record back rather than trusting the gesture.
+    ui = os88ui.UI(m, mouse=mo, verbose=False)
+    apps = [x for x in ui.windows() if x.i == w[-1]][0]
+    ui.move_window(apps, os88geom.word(m, "vid_w") - apps.w, apps.y)
     wx, wy, _, _ = dispcp.win_rect(m, S, w[-1])
     dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "NOTEPAD.O88")
     os88marty.settle(m)

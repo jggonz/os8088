@@ -35,6 +35,45 @@
 ;    P is WRITE_SEQ PLAIN (committed every call) and H is W again; U, I, K
 ;    and F are the held stream's edge cases, for tests/viddisk.py.
 ; D  deletes STREAM.DAT again, so the disk gets its 12.5 MB back.
+; X  EXTENDED MEMORY (docs/plans/VIDEO-XMS-PLAN.md 3.2): what a stream's read-
+;    ahead BANK in XMS would cost this machine. OSAPI_XMEM_COPY up and down
+;    at 32, 16, 8 and 4 KB a call, PIT-timed with the copy's own interrupts-
+;    off window inside the span (on a 286 the copy is int 15h AH=87h, and the
+;    whole of it is masked) - after a CHECK that a 32 KB round trip comes back
+;    the same bytes, because a copy that times well and moves the wrong ones
+;    is not a measurement. Then, if the stream is there, the bank's FILL: 5 s
+;    of 32 KB READ_SEQ calls with nothing else, and 5 s of the same with each
+;    chunk copied up behind the last, KB/s x 10 - the two rows' ratio is
+;    what banking a byte costs over reading it, and the copy rows say how the
+;    copy's cost splits into a call's fixed part and its bytes. Saves
+;    VDXMS.TXT beside the bench; writes nothing else, and frees the block.
+; E  EXPANDED MEMORY (docs/plans/VIDEO-XMS-PLAN.md 10): a LO-TECH-STYLE EMS
+;    board - four WRITE-ONLY page registers, each mapping a 16 KB page into
+;    one quarter of a 64 KB frame - found where EMS.DRV finds one (frames
+;    E000h, D000h, C000h at bases 260h, 264h, 268h, 26Ch and 288h): MartyPC's
+;    model, 86Box's "Lo-tech EMS Board", and a PicoMEM's EMS at its own
+;    defaults, D000h at 288h. The row after the title says where it answered.
+;    THE PROBE READS FIRST:
+;    an option ROM anywhere in the frame (55h AAh on a 2 KB boundary) is
+;    somebody else's, and E says so and writes NO PORT. Then it maps pages 0
+;    and 1, writes each,
+;    and maps page 0 into both quarters: paging is proven only if the second
+;    quarter then reads page 0's byte. The board is sized by a signature per
+;    page, written from page 127 DOWN (a smaller board aliases, and the lowest
+;    write to a physical page is its own number). Then: four OUTs mapping the
+;    whole frame, 16 KB rep movsw frame -> RAM, RAM -> frame and RAM -> RAM,
+;    and - if the stream is there - 5 s of 32 KB READ_SEQ into RAM against 5 s
+;    of the same STRAIGHT INTO THE FRAME, a new pair of pages each chunk, the
+;    last chunk checked against STREAM.DAT's pattern through the frame. That
+;    last pair is the question VIDEO-XMS-PLAN 10 turns on: whether a disk read
+;    can fill a bank with no copy at all. Saves VDEMS.TXT beside the bench.
+; C  WHAT A READ COSTS THE CPU (docs/plans/DISK-CPU-PLAN.md 7), on a 286
+;    with an IDE disk: sectors read through the task file by the bench
+;    itself, each PIT-timed with interrupts off - the wait for DRQ and the
+;    256 words, with `rep insw` and with the old `in`/`stosw`/`loop` - then
+;    4 MB streamed as 64-sector commands against 4 MB of 32 KB READ_SEQ
+;    calls on the stream: what the second costs over the first is the
+;    kernel's and HDD.DRV's own CPU. Read-only. Saves VDCPU.TXT.
 ;
 ; With a STREAM.DAT, R also CHECKS the data at 12 MB, read by READ_AT and by
 ; READ_SEQ: a stream that times well and reads the wrong bytes is not a
@@ -88,7 +127,7 @@
 
     OS88_HEADER 'VIDDISK', vk_entry
 
-VK_NRES     equ 21
+VK_NRES     equ 23
 VK_BUFKB    equ 40                  ; 32 KB chunks, and a whole track
 VK_CHUNK    equ 32768
 %ifndef VK_WSUB
@@ -159,6 +198,12 @@ vk_onkey:
     je .write                       ; call must abandon the hold, not keep it
     cmp bl, 'd'
     je .del
+    cmp bl, 'x'                     ; X: extended memory (the header's X)
+    je .xms
+    cmp bl, 'e'                     ; E: expanded memory (the header's E)
+    je .ems
+    cmp bl, 'c'                     ; C: what a read costs the CPU
+    je .cpu
     call bl_key
     jc .out
     call bl_paint
@@ -168,6 +213,15 @@ vk_onkey:
     jmp short .paint
 .del:
     call vk_drun
+    jmp short .paint
+.xms:
+    call vk_xmrun
+    jmp short .paint
+.ems:
+    call vk_emrun
+    jmp short .paint
+.cpu:
+    call vk_cprun
     jmp short .paint
 .run:
     call vk_run
@@ -506,6 +560,7 @@ vk_ceilmain:
     call OSAPI_GET_TICKS
     sub ax, [vk_ct0]
     mov [vk_cticks], ax
+.kbs:                               ; (vk_xmfill's too)
     ; tenths of KB/s = bytes / ticks x 18.2065 x 10 / 1,024 - and bytes a
     ; tick x 182 stays inside 32 bits for any disk this side of 23 MB/s
     mov ax, [vk_cbytes]
@@ -1288,6 +1343,730 @@ vk_wrun:
     ret
 
 ; vk_drun - D: STREAM.DAT deleted, from where W wrote it
+
+; =============================================================================
+; vk_xmrun - X: OSAPI_XMEM_COPY on this machine (see the header)
+; =============================================================================
+VK_XMN      equ 8                   ; iterations of a copy row
+VK_XMKB     equ 64                  ; the block: two chunks, so the fill
+                                    ; rows alternate halves as a bank would
+
+vk_xmrun:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov word [vk_err], 0
+    mov word [bl_nrow], 0
+    mov word [vk_xmdone], 0
+    mov si, vk_s_xmtitle
+    call bl_sline
+    call vk_claim
+    jnc .buf
+    mov si, vk_s_fail
+    call bl_sline
+    jmp .save
+.buf:
+    call OSAPI_CPU_INFO             ; AL = the tier, AH = its bits
+    push ax
+    xor ah, ah
+    xor dx, dx
+    mov si, vk_r_xmtier
+    mov cx, 9
+    call bl_kv
+    pop ax
+    mov al, ah
+    xor ah, ah
+    mov si, vk_r_xmbits
+    call bl_kv
+    call OSAPI_XMEM_CAPS            ; AX = KB the pool can hand out (and
+    xor dx, dx                      ; DX:CX its base: the width again)
+    mov cx, 9
+    mov si, vk_r_xmfree
+    call bl_kv
+    cmp ax, VK_XMKB
+    jae .alloc
+    mov si, vk_s_xmnone
+    call bl_sline
+    jmp .save
+.alloc:
+    mov dx, VK_XMKB / 64            ; DX:AX = 64 KB
+    xor ax, ax
+    call OSAPI_XMEM_ALLOC
+    jnc .got
+    mov si, vk_s_xmnoalloc
+    call bl_sline
+    jmp .save
+.got:
+    mov [vk_xmb], ax
+    mov [vk_xmb + 2], dx
+    ; --- THE CHECK: chunk 3's pattern up into the block's second half, the
+    ; buffer overwritten with chunk 0's, and the half copied back down: it
+    ; must be chunk 3's again (vk_fill: high word 1, low words from 32768)
+    mov ax, 3
+    call vk_fill
+    mov word [vk_xmlen], VK_CHUNK
+    mov word [vk_xmhalf], VK_CHUNK
+    call vk_b_xmup
+    xor ax, ax
+    call vk_fill
+    call vk_b_xmdn
+    mov di, vk_s_dok
+    cmp word [vk_err], 0
+    jne .bad
+    push es
+    mov es, [vk_buf]
+    cmp word [es:0], 0x8000
+    jne .badp
+    cmp word [es:2], 1
+    jne .badp
+    cmp word [es:VK_CHUNK - 4], 0xFFFC
+    jne .badp
+    cmp word [es:VK_CHUNK - 2], 1
+    jne .badp
+    cmp word [es:VK_CHUNK / 2], 0xC000
+    jne .badp
+    pop es
+    jmp short .say
+.badp:
+    pop es
+.bad:
+    mov di, vk_s_xmbad
+.say:
+    mov si, vk_r_xmchk
+    call bl_kvs
+    cmp di, vk_s_dok
+    je .rows
+    jmp .free                       ; wrong bytes: nothing worth timing
+    ; --- the copy rows: up and down, at four sizes, into the first half
+.rows:
+    mov si, vk_s_xmhdr
+    call bl_sline
+    mov word [vk_xmhalf], 0
+    mov word [bl_n], VK_XMN
+    mov bx, vk_xmrows
+.row:
+    mov ax, [bx]
+    or ax, ax
+    jz .fill
+    mov [vk_xmlen], ax
+    mov word [bl_body], vk_b_xmup
+    mov si, [bx + 2]
+    xor al, al                      ; method P: PIT-timed, the copy inside
+    call bl_run
+    mov word [bl_body], vk_b_xmdn
+    mov si, [bx + 4]
+    xor al, al
+    call bl_run
+    add bx, 6
+    jmp short .row
+    ; --- the bank's fill: READ_SEQ alone, then READ_SEQ and a copy up
+.fill:
+    call vk_toc
+    jnc .look
+    mov si, vk_s_noc
+    call bl_sline
+    jmp short .free
+.look:
+    call vk_find
+    jnc .stream
+    mov si, vk_s_nostr
+    call bl_sline
+    jmp short .home
+.stream:
+    mov si, vk_s_using
+    mov di, [vk_fname]
+    call bl_kvs
+    mov si, vk_s_xmhdrf
+    call bl_sline
+    mov word [vk_ceilmb], 0
+    mov byte [vk_xmup], 0
+    mov bx, 21                      ; (19 and 20 are vk_mh's)
+    call vk_xmfill
+    mov si, vk_r_xmseq
+    call vk_kv
+    mov byte [vk_xmup], 1
+    mov bx, 22
+    call vk_xmfill
+    mov si, vk_r_xmbank
+    call vk_kv
+.home:
+    call vk_back
+.free:
+    mov ax, [vk_xmb]
+    mov dx, [vk_xmb + 2]
+    call OSAPI_XMEM_FREE
+.save:
+    mov si, vk_r_err
+    mov ax, [vk_err]
+    xor dx, dx
+    mov cx, 9
+    call bl_kv
+    call bl_operator
+    mov si, vk_f_xtxt               ; the report, beside the bench
+    call bl_save
+    inc word [vk_xmdone]            ; for a harness: X has finished
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; the copy bodies: [vk_xmlen] bytes between the buffer and the block at
+; [vk_xmhalf], up (DI = 0) or down (DI = 1)
+vk_b_xmup:
+    xor di, di
+    jmp short vk_xmcopy
+vk_b_xmdn:
+    mov di, 1
+vk_xmcopy:
+    push es
+    mov es, [vk_buf]
+    xor si, si
+    mov ax, [vk_xmb]
+    mov dx, [vk_xmb + 2]
+    add ax, [vk_xmhalf]
+    adc dx, 0
+    mov cx, [vk_xmlen]
+    call OSAPI_XMEM_COPY
+    jnc .ok
+    inc word [vk_err]
+.ok:
+    pop es
+    ret
+
+; vk_xmfill - BX = the result row: 5 s of 32 KB READ_SEQ calls from a fresh
+; 2 MB, each copied up into the block's next half when [vk_xmup] - the bank
+; filling behind the ring. KB/s x 10 into the row, as vk_ceilmain's
+vk_xmfill:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov [vk_ceilrow], bx
+    add word [vk_ceilmb], 1
+    mov dx, [vk_ceilmb]
+    mov cl, 5
+    shl dx, cl                      ; row n starts at 2n MB
+    call vk_seek
+    mov word [vk_cap], VK_CHUNK
+    call vk_b_seq                   ; the seek's walk, outside the timing
+    xor ax, ax
+    mov [vk_cbytes], ax
+    mov [vk_cbytes + 2], ax
+    mov word [vk_xmlen], VK_CHUNK
+    mov word [vk_xmhalf], 0
+    call OSAPI_GET_TICKS
+    mov [vk_ct0], ax
+.l:
+    call vk_b_seq
+    add [vk_cbytes], ax
+    adc word [vk_cbytes + 2], 0
+    or ax, ax
+    jz .done                        ; the end of the stream
+    cmp byte [vk_xmup], 0
+    je .t
+    call vk_b_xmup
+    xor word [vk_xmhalf], VK_CHUNK  ; the other half next
+.t:
+    call OSAPI_GET_TICKS
+    sub ax, [vk_ct0]
+    cmp ax, VK_CEILT
+    jb .l
+.done:
+    call OSAPI_GET_TICKS
+    sub ax, [vk_ct0]
+    mov [vk_cticks], ax
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jmp vk_ceilmain.kbs             ; ...and the arithmetic is the ceiling's
+
+
+; =============================================================================
+; vk_emrun - E: a Lo-tech-style EMS board (see the header)
+; =============================================================================
+VK_EPAGES   equ 128                 ; 2 MB, the most its registers name
+VK_EMN      equ 8                   ; iterations of a timed row
+VK_ECOPY    equ 16384               ; a copy row's bytes: one page, and under
+                                    ; a PIT lap (55 ms) on a 4.77 MHz 8088
+
+vk_emrun:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov word [vk_err], 0
+    mov word [bl_nrow], 0
+    mov word [vk_emdone], 0
+    mov si, vk_s_emtitle
+    call bl_sline
+    call vk_claim
+    jnc .buf
+    mov si, vk_s_fail
+    call bl_sline
+    jmp .save
+.buf:
+    call vk_eprobe                  ; CF=1: no board, DI = why
+    jnc .found
+    mov si, vk_r_emprobe
+    call bl_kvs
+    jmp .save
+.found:
+    mov di, vk_s_emwhere            ; '0288h, frame D000h'
+    mov ax, [vk_eport]
+    call vk_hex4
+    add di, 13
+    mov ax, [vk_efrm]
+    call vk_hex4
+    mov si, vk_s_emat
+    mov di, vk_s_emwhere
+    call bl_kvs
+    mov ax, [vk_epages]
+    xor dx, dx
+    mov cx, 9
+    mov si, vk_r_empages
+    call bl_kv
+    mov si, vk_s_emhdr
+    call bl_sline
+    mov word [bl_n], VK_EMN
+    mov word [bl_body], vk_b_emap
+    mov si, vk_r_emmap
+    xor al, al
+    call bl_run
+    xor ax, ax
+    call vk_emap4                   ; pages 0..3: the frame is 0 to 64 KB
+    mov word [bl_body], vk_b_edn
+    mov si, vk_r_emdn
+    xor al, al
+    call bl_run
+    mov word [bl_body], vk_b_eup
+    mov si, vk_r_emup
+    xor al, al
+    call bl_run
+    mov word [bl_body], vk_b_eram
+    mov si, vk_r_emram
+    xor al, al
+    call bl_run
+    ; --- the disk straight into the frame
+    call vk_toc
+    jnc .look
+    mov si, vk_s_noc
+    call bl_sline
+    jmp short .save
+.look:
+    call vk_find
+    jnc .stream
+    mov si, vk_s_nostr
+    call bl_sline
+    jmp short .home
+.stream:
+    mov si, vk_s_using
+    mov di, [vk_fname]
+    call bl_kvs
+    mov si, vk_s_emhdrf
+    call bl_sline
+    mov word [vk_ceilmb], 0
+    mov byte [vk_eframe], 0
+    mov bx, 21
+    call vk_emfill
+    mov si, vk_r_emseq
+    call vk_kv
+    mov byte [vk_eframe], 1
+    mov bx, 22
+    call vk_emfill
+    mov si, vk_r_emfr
+    call vk_kv
+    mov si, vk_r_emfchk             ; the last chunk, through the frame
+    mov di, vk_s_dok
+    cmp byte [vk_efbad], 0
+    je .fk
+    mov di, vk_s_embad
+.fk:
+    call bl_kvs
+.home:
+    call vk_back
+.save:
+    mov si, vk_r_err
+    mov ax, [vk_err]
+    xor dx, dx
+    mov cx, 9
+    call bl_kv
+    call bl_operator
+    mov si, vk_f_etxt
+    call bl_save
+    inc word [vk_emdone]            ; for a harness: E has finished
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vk_hex4 - AX as four hex digits at DI (DS). Every register kept
+vk_hex4:
+    push ax
+    push bx
+    push cx
+    push di
+    mov bx, ax
+    mov cx, 4
+.d:
+    push cx
+    mov cl, 4
+    rol bx, cl
+    pop cx
+    mov al, bl
+    and al, 0x0F
+    add al, '0'
+    cmp al, '9'
+    jbe .p
+    add al, 'A' - '9' - 1
+.p:
+    mov [di], al
+    inc di
+    loop .d
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vk_eout - AL = a page, DX = its register (the board's registers cannot be
+; read back, so nothing here asks)
+vk_eout:
+    out dx, al
+    ret
+
+; vk_emap4 - AX = a page: AX..AX+3 into the frame's four quarters
+vk_emap4:
+    push ax
+    push cx
+    push dx
+    mov dx, [vk_eport]
+    mov cx, 4
+.l:
+    out dx, al
+    inc ax
+    inc dx
+    loop .l
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; vk_etry - DX = a base, ES = a frame: CF=0 a paging board answers there
+; (EMS.DRV's em_try): pages 0 and 1 hold two bytes, page 0 into quarter 1
+; reads quarter 0's, and a write through one is seen through the other
+vk_etry:
+    push ax
+    push cx
+    mov cl, [es:0]
+    mov ch, [es:0x4000]
+    xor ax, ax                      ; page 0 -> quarter 0, page 1 -> 1
+    call vk_eout
+    inc dx
+    inc ax
+    call vk_eout
+    dec dx
+    mov byte [es:0], 0x5A
+    mov byte [es:0x4000], 0xA5
+    cmp byte [es:0], 0x5A
+    jne .no
+    cmp byte [es:0x4000], 0xA5
+    jne .no
+    inc dx
+    dec ax
+    call vk_eout                    ; page 0 into quarter 1 as well
+    dec dx
+    cmp byte [es:0x4000], 0x5A
+    jne .no
+    mov byte [es:0x4000], 0x3C
+    cmp byte [es:0], 0x3C
+    jne .no
+    pop cx
+    pop ax
+    clc
+    ret
+.no:
+    mov [es:0], cl
+    mov [es:0x4000], ch
+    pop cx
+    pop ax
+    stc
+    ret
+
+; vk_eprobe - CF=0 [vk_epages] = the board's 16 KB pages, [vk_eport] and
+; [vk_efrm] where it answered; CF=1 DI = why not. EMS.DRV's own search
+; (SPEC.md 107.2): frames E000h, D000h, C000h, each at bases 260h, 264h,
+; 268h, 26Ch and 288h - the Lo-tech's defaults, and a PicoMEM's (D000h at
+; 288h is its own default). A frame holding an option ROM is skipped and
+; no port is written for it; the two bytes a base's test writes are put
+; back when nothing pages, since then they may be somebody's RAM
+vk_eprobe:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    mov di, vk_s_emnone
+    mov si, vk_efrms
+.frame:
+    mov ax, [si]
+    add si, 2
+    or ax, ax
+    jz .none
+    mov es, ax
+    xor bx, bx
+.rom:
+    cmp word [es:bx], 0xAA55
+    je .romf
+    add bx, 2048
+    jnz .rom
+    mov bx, vk_ebases
+.base:
+    mov dx, [bx]
+    add bx, 2
+    or dx, dx
+    jz .frame
+    call vk_etry
+    jc .base
+    mov [vk_eport], dx
+    mov [vk_efrm], es
+    jmp short .size
+.romf:
+    mov di, vk_s_emused             ; (a frame was a ROM's: said if no
+    jmp short .frame                ; other one answers)
+.none:
+    jmp .no
+    ; --- size it: a signature per page from the top DOWN, then read up
+.size:
+    mov cx, VK_EPAGES
+.wr:
+    mov ax, cx
+    dec ax
+    call vk_eout
+    mov [es:0], ax
+    not ax
+    mov [es:2], ax
+    loop .wr
+    xor cx, cx
+.rd:
+    mov ax, cx
+    call vk_eout
+    cmp [es:0], ax
+    jne .sized
+    not ax
+    cmp [es:2], ax
+    jne .sized
+    inc cx
+    cmp cx, VK_EPAGES
+    jb .rd
+.sized:
+    mov [vk_epages], cx
+    mov di, vk_s_emnone
+    cmp cx, 4                       ; fewer than a frame's four is no board
+    jb .no
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; the timed bodies
+vk_b_emap:                          ; four OUTs: the whole frame mapped
+    push ax
+    mov ax, 4
+    call vk_emap4
+    pop ax
+    ret
+vk_b_edn:                           ; frame -> RAM
+    push ds
+    push es
+    mov es, [vk_buf]
+    mov ax, [vk_efrm]
+    mov ds, ax
+    jmp short vk_b_ecp
+vk_b_eup:                           ; RAM -> frame
+    push ds
+    push es
+    mov ax, [vk_efrm]
+    mov es, ax
+    mov ds, [vk_buf]
+    jmp short vk_b_ecp
+vk_b_eram:                          ; RAM -> RAM, the same buffer
+    push ds
+    push es
+    mov es, [vk_buf]
+    mov ds, [vk_buf]
+vk_b_ecp:
+    xor si, si
+    xor di, di
+    mov cx, VK_ECOPY / 2
+    cld
+    rep movsw
+    pop es
+    pop ds
+    ret
+
+; vk_emfill - BX = the result row: 5 s of 32 KB READ_SEQ calls from a fresh
+; 2 MB, into the buffer or, with [vk_eframe], STRAIGHT INTO THE FRAME - each
+; chunk into the next two pages, mapped into the frame's half it lands in.
+; KB/s x 10 into the row, vk_ceilmain's arithmetic; the last chunk read into
+; the frame is checked against STREAM.DAT's pattern ([vk_efbad])
+vk_emfill:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov [vk_ceilrow], bx
+    add word [vk_ceilmb], 1
+    mov dx, [vk_ceilmb]
+    mov cl, 5
+    shl dx, cl                      ; row n starts at 2n MB
+    mov [vk_efmb], dx
+    call vk_seek
+    mov word [vk_cap], VK_CHUNK
+    call vk_b_seq                   ; the seek's walk, outside the timing
+    xor ax, ax
+    mov [vk_cbytes], ax
+    mov [vk_cbytes + 2], ax
+    mov [vk_efk], ax                ; chunks read into the frame
+    mov byte [vk_efbad], 0
+    call OSAPI_GET_TICKS
+    mov [vk_ct0], ax
+.l:
+    cmp byte [vk_eframe], 0
+    je .ram
+    call vk_b_efr
+    jmp short .n
+.ram:
+    call vk_b_seq
+.n:
+    add [vk_cbytes], ax
+    adc word [vk_cbytes + 2], 0
+    or ax, ax
+    jz .done                        ; the end of the stream
+    call OSAPI_GET_TICKS
+    sub ax, [vk_ct0]
+    cmp ax, VK_CEILT
+    jb .l
+.done:
+    call OSAPI_GET_TICKS
+    sub ax, [vk_ct0]
+    mov [vk_cticks], ax
+    cmp byte [vk_eframe], 0
+    je .kbs
+    call vk_efchk
+.kbs:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jmp vk_ceilmain.kbs
+
+; vk_b_efr - the next 32 KB READ_SEQ into the frame: chunk k into pages
+; 2k, 2k+1 (mod the board), mapped into the frame's half k & 1
+vk_b_efr:
+    push bx
+    push dx
+    push es
+    mov ax, [vk_efk]
+    shl ax, 1
+    xor dx, dx
+    div word [vk_epages]
+    mov ax, dx                      ; AX = the chunk's first page
+    mov dx, [vk_eport]
+    test byte [vk_efk], 1
+    jz .h
+    add dx, 2                       ; the frame's upper half
+.h:
+    call vk_eout
+    inc ax
+    inc dx
+    call vk_eout
+    mov bx, [vk_efk]
+    and bx, 1
+    mov dl, 15                      ; BX = 0 or 32768
+    xchg cx, dx
+    shl bx, cl
+    xchg cx, dx
+    push ds
+    pop es
+    mov dx, [vk_efrm]               ; DX:BX = the frame
+    mov cx, VK_CHUNK
+    push di
+    push si
+    mov di, vk_cur
+    mov si, [vk_fname]
+    call OSAPI_FILE_READ_SEQ
+    pop si
+    pop di
+    jnc .ok
+    inc word [vk_err]
+    xor ax, ax
+.ok:
+    mov [vk_got], ax
+    inc word [vk_efk]
+    pop es
+    pop dx
+    pop bx
+    ret
+
+; vk_efchk - the last chunk read into the frame is still mapped (its two
+; pages, in its half): is it STREAM.DAT's chunk from where the row started?
+vk_efchk:
+    cmp word [vk_fname], vk_f_names ; only STREAM.DAT has a pattern
+    jne .out
+    mov ax, [vk_efk]
+    or ax, ax
+    jz .out
+    dec ax                          ; AX = that chunk's place in the frame
+    push es
+    mov bx, ax
+    and bx, 1
+    mov cl, 15
+    shl bx, cl                      ; BX = its half
+    inc ax                          ; ...and its place in the row: the seek's
+    mov dx, ax                      ; untimed first read took the row's
+    shr dx, 1                       ; first chunk, so it is one on. Its
+    add dx, [vk_efmb]               ; offsets' high word is the row's 2n MB
+    and ax, 1                       ; plus half that, and AX the first low
+    shl ax, cl                      ; word
+    mov cx, [vk_efrm]
+    mov es, cx
+    cmp [es:bx], ax
+    jne .bad
+    cmp [es:bx + 2], dx
+    jne .bad
+    add ax, VK_CHUNK - 4
+    cmp [es:bx + VK_CHUNK - 4], ax
+    jne .bad
+    cmp [es:bx + VK_CHUNK - 2], dx
+    je .good
+.bad:
+    mov byte [vk_efbad], 1
+.good:
+    pop es
+.out:
+    ret
+
 vk_drun:
     push ax
     push cx
@@ -1747,6 +2526,504 @@ vk_mh:
     pop ax
     ret
 
+
+; =============================================================================
+; vk_cprun - C: WHAT A READ COSTS THE CPU, on a 286 with an IDE disk
+; (docs/plans/DISK-CPU-PLAN.md 7). Three questions, each to a number:
+;
+;   THE TRANSFER: what moving one sector costs the CPU on this bus, taken by
+;     reading sectors through the task file ourselves, PIT-timed with
+;     interrupts off around each sector: the drive's wait for DRQ, and the
+;     256 words with `rep insw` (what HDD.DRV's rung 1 does, SPEC.md 52.1.2)
+;     and again with `in ax, dx` / `stosw` / `loop` (what it did before) -
+;     which is the bus's own floor and the old loop's real price, measured.
+;     The first sector of each command is its own row: the command's latency.
+;   THE STREAM, TWO WAYS: 4 MB of 32 KB OSAPI_FILE_READ_SEQ calls on the
+;     stream, then 4 MB of 64-sector commands with `rep insw`, interrupts on
+;     and nothing timed inside them. Same bytes, same drive: what the first
+;     costs over the second is the kernel's and HDD.DRV's own CPU. The direct
+;     row runs LAST so that the buffer ends holding the 64 sectors before
+;     [vk_cplba] - tests/viddiskcpu.py checks them against the image.
+;
+; READ-ONLY, like R: READ SECTORS (20h) to the primary channel's MASTER at
+; 1F0h, from cylinder VK_CPCYL up - the fixed disk's own geometry off int 13h
+; AH=08h, which is the drive's when HDD.DRV took it (52.1.1 pairs them on it).
+; A machine below CPU_286 (no `rep insw`) or with no drive answering at 1F0h
+; says so and runs only the READ_SEQ row. Saves VDCPU.TXT beside the bench.
+; =============================================================================
+VK_IDE      equ 0x1F0
+VK_CPSEC    equ 64                  ; sectors a command: one 32 KB chunk
+VK_CPCMD    equ 8                   ; commands a timed transfer row
+VK_CPSTRM   equ 128                 ; 32 KB units a stream row: 4 MB
+VK_CPCYL    equ 20                  ; where the direct reads start
+
+vk_cprun:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov word [vk_err], 0
+    mov word [bl_nrow], 0
+    mov word [vk_cpdone], 0
+    mov byte [vk_cpide], 0
+    mov si, vk_s_cptitle
+    call bl_sline
+    call vk_claim
+    jnc .geom
+    jmp .fail
+.geom:
+    mov ah, 8                       ; the fixed disk's geometry, off the ROM
+    mov dl, 0x80
+    push es
+    int 0x13
+    pop es
+    jnc .gok
+    jmp .fail
+.gok:
+    mov al, cl
+    and al, 0x3F
+    mov [vk_spt], al
+    inc dh
+    mov [vk_heads], dh
+    mov si, vk_r_spt
+    mov al, [vk_spt]
+    xor ah, ah
+    xor dx, dx
+    mov cx, 9
+    call bl_kv
+    mov si, vk_r_heads
+    mov al, [vk_heads]
+    xor ah, ah
+    xor dx, dx
+    call bl_kv
+    call OSAPI_CPU_INFO
+    cmp al, CPU_286
+    jae .cpu
+    mov si, vk_s_cp86
+    call bl_sline
+    jmp .stream
+.cpu:
+    call vk_ide_ready
+    jnc .ide
+    mov si, vk_s_cpnoide
+    call bl_sline
+    jmp .stream
+.ide:
+    mov byte [vk_cpide], 1
+    mov al, [vk_heads]              ; the first sector: cylinder VK_CPCYL
+    mul byte [vk_spt]
+    mov cx, VK_CPCYL
+    mul cx
+    mov [vk_cplba], ax
+    ; --- what reading the PIT costs, which every timed span below carries
+    mov si, vk_s_cphdr
+    call bl_sline
+    xor ax, ax
+    mov [vk_cpx], ax
+    mov [vk_cpx + 2], ax
+    mov cx, 64
+.cal:
+    pushf
+    cli
+    call bl_pit
+    mov bx, ax
+    call bl_pit
+    sub bx, ax
+    popf
+    add [vk_cpx], bx
+    adc word [vk_cpx + 2], 0
+    loop .cal
+    mov si, vk_r_cppit
+    mov bx, vk_cpx
+    mov cx, 64
+    call vk_cprep
+    ; --- the transfer, both loops
+    mov byte [vk_cpmode], 0
+.mode:
+    xor ax, ax
+    mov [vk_cpx], ax
+    mov [vk_cpx + 2], ax
+    mov [vk_cpw], ax
+    mov [vk_cpw + 2], ax
+    mov [vk_cpf], ax
+    mov [vk_cpf + 2], ax
+    mov word [vk_cpbad], 0
+    mov bp, VK_CPCMD
+.cmd:
+    call vk_cpcmd
+    dec bp
+    jnz .cmd
+    mov bl, [vk_cpmode]
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    mov si, [vk_cprows + bx]
+    mov bx, vk_cpx
+    mov cx, VK_CPCMD * VK_CPSEC
+    call vk_cprep
+    mov bl, [vk_cpmode]
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    mov si, [vk_cprows + bx + 2]
+    mov bx, vk_cpw
+    mov cx, VK_CPCMD * (VK_CPSEC - 1)
+    call vk_cprep
+    mov si, vk_r_cpfirst
+    mov bx, vk_cpf
+    mov cx, VK_CPCMD
+    call vk_cprep
+    mov si, vk_r_cpbad
+    mov ax, [vk_cpbad]
+    xor dx, dx
+    mov cx, 9
+    call bl_kv
+    inc byte [vk_cpmode]
+    cmp byte [vk_cpmode], 2
+    jb .mode
+    ; --- 4 MB through the kernel, 32 KB READ_SEQ calls; then the same 4 MB
+    ; as the bench's own commands, LAST, so the buffer ends holding the
+    ; sectors just before [vk_cplba] for a harness to check against the disk
+.stream:
+    mov si, vk_s_cphdr2
+    call bl_sline
+    call vk_toc
+    jnc .look
+    mov si, vk_s_noc
+    call bl_sline
+    jmp short .direct
+.look:
+    push word [vk_err]              ; vk_find zeroes it when it finds the
+    call vk_find                    ; stream, and the rows above must not
+    pop ax                          ; lose theirs to that
+    pushf
+    add [vk_err], ax
+    popf
+    jnc .found
+    mov si, vk_s_nostr
+    call bl_sline
+    jmp short .home
+.found:
+    mov si, vk_s_using
+    mov di, [vk_fname]
+    call bl_kvs
+    mov dx, 0x20                    ; from 2 MB
+    call vk_seek
+    mov word [vk_cap], VK_CHUNK
+    mov word [bl_n], VK_CPSTRM
+    mov word [bl_body], vk_b_seq
+    mov si, vk_r_cpseq
+    mov al, 1                       ; method T: whole ticks, interrupts on
+    call bl_run
+.home:
+    call vk_back
+.direct:
+    cmp byte [vk_cpide], 0
+    je .save
+    mov word [bl_n], VK_CPSTRM      ; 4 MB of 64-sector commands, rep insw,
+    mov word [bl_body], vk_b_ide    ; interrupts on, nothing timed inside
+    mov si, vk_r_cpdir
+    mov al, 1
+    call bl_run
+    jmp short .save
+.fail:
+    mov si, vk_s_fail
+    call bl_sline
+.save:
+    mov si, vk_r_err
+    mov ax, [vk_err]
+    xor dx, dx
+    mov cx, 9
+    call bl_kv
+    call bl_operator
+    mov si, vk_f_ctxt               ; the report, beside the bench
+    call bl_save
+    inc word [vk_cpdone]            ; for a harness: C has finished
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vk_cprep - SI = label, BX -> a dword of PIT counts, CX = what it is over:
+; "label  us x 100 each" into the report
+vk_cprep:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [bx]
+    mov dx, [bx + 2]
+    call bl_us100
+    mov cx, 9
+    call bl_kv
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vk_ide_ready - the primary channel's master, selected and ready. CF=1: none
+vk_ide_ready:
+    push ax
+    push dx
+    mov dx, VK_IDE + 6
+    mov al, 0xA0
+    out dx, al
+    call vk_ide_nbsy
+    jc .out
+    mov dx, VK_IDE + 7
+    in al, dx
+    cmp al, 0xFF                    ; a floating bus: nothing there
+    je .no
+    test al, 0x40                   ; DRDY
+    jnz .yes
+.no:
+    stc
+    jmp short .out
+.yes:
+    clc
+.out:
+    pop dx
+    pop ax
+    ret
+
+; vk_ide_nbsy - wait for BSY to clear (vk_ide_drq's bound). CF=1 it did not
+vk_ide_nbsy:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov dx, VK_IDE + 7
+    mov bx, VK_IDEWT
+.o:
+    xor cx, cx
+.p:
+    in al, dx
+    test al, 0x80
+    jz .ok
+    loop .p
+    dec bx
+    jnz .o
+    stc
+    jmp short .out
+.ok:
+    clc
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vk_ide_drq - wait for DRQ, the way hd_ide_drq does. CF=1 ERR or too long:
+; VK_IDEWT x 65536 status reads, seconds on a 286 and spent only by a drive
+; that has failed - a command's first DRQ is a seek and a turn, and QEMU's
+; drive on a loaded host has been seen to take half a million reads
+VK_IDEWT    equ 64
+vk_ide_drq:
+    push bx
+    push cx
+    push dx
+    mov dx, VK_IDE + 7
+    mov bx, VK_IDEWT
+.o:
+    xor cx, cx
+.p:
+    in al, dx
+    test al, 0x80
+    jnz .a
+    test al, 0x01
+    jnz .e
+    test al, 0x08
+    jnz .ok
+.a:
+    loop .p
+    dec bx
+    jnz .o
+.e:
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+.ok:
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+
+; vk_ide_cmd - READ SECTORS, VK_CPSEC of them at [vk_cplba] in the ROM's
+; geometry, to the master. CF=1 the drive would not take it
+vk_ide_cmd:
+    push ax
+    push bx
+    push cx
+    push dx
+    call vk_ide_nbsy
+    jc .out
+    mov ax, [vk_cplba]
+    xor dx, dx
+    mov cl, [vk_spt]
+    xor ch, ch
+    div cx                          ; AX = the track, DX = the sector - 1
+    mov bl, dl
+    inc bl
+    xor dx, dx
+    mov cl, [vk_heads]
+    div cx                          ; AX = the cylinder, DX = the head
+    mov bh, dl
+    mov cx, ax
+    mov dx, VK_IDE + 6
+    mov al, bh
+    and al, 0x0F
+    or al, 0xA0
+    out dx, al
+    call vk_ide_nbsy
+    jc .out
+    mov dx, VK_IDE + 2
+    mov al, VK_CPSEC
+    out dx, al
+    inc dx
+    mov al, bl
+    out dx, al
+    inc dx
+    mov al, cl
+    out dx, al
+    inc dx
+    mov al, ch
+    out dx, al
+    mov dx, VK_IDE + 7
+    mov al, 0x20
+    out dx, al
+    clc
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vk_cpcmd - one timed command: VK_CPSEC sectors into the buffer, each sector
+; PIT-timed with interrupts off, by [vk_cpmode]'s loop
+vk_cpcmd:
+    push si
+    push di
+    push es
+    mov es, [vk_buf]
+    call vk_ide_cmd
+    jc .err
+    mov byte [vk_cpfirst], 1
+    xor di, di
+    mov si, VK_CPSEC
+.s:
+    call vk_ide_sec
+    jc .out
+    dec si
+    jnz .s
+    call vk_ide_nbsy
+    jc .err
+    mov dx, VK_IDE + 7
+    in al, dx
+    test al, 0x01
+    jz .adv
+    inc word [vk_cpbad]
+.adv:
+    add word [vk_cplba], VK_CPSEC
+    jmp short .out
+.err:
+    inc word [vk_err]
+.out:
+    pop es
+    pop di
+    pop si
+    ret
+
+; vk_ide_sec - one sector, ES:DI the buffer (advanced past it): the wait for
+; DRQ and the 256 words, each between two PIT reads with interrupts off.
+; CF=1 the drive said ERR or never asked. Clobbers AX, BX, CX, DX
+vk_ide_sec:
+    pushf
+    cli
+    call bl_pit
+    mov [vk_cpt0], ax
+    call vk_ide_drq
+    jc .err
+    call bl_pit
+    mov bx, [vk_cpt0]
+    sub bx, ax                      ; the wait, in counts (a down-counter)
+    mov [vk_cpt0], ax
+    mov dx, VK_IDE
+    mov cx, 256
+    cld
+    cmp byte [vk_cpmode], 0
+    jne .loop
+    db 0xF3, 0x6D                   ; rep insw (this row runs on CPU_286 up)
+    jmp short .done
+.loop:
+    in ax, dx                       ; HDD.DRV's rung 1 before SPEC.md 52.1.2
+    stosw
+    loop .loop
+.done:
+    call bl_pit
+    mov cx, [vk_cpt0]
+    sub cx, ax                      ; the transfer
+    popf
+    add [vk_cpx], cx
+    adc word [vk_cpx + 2], 0
+    cmp byte [vk_cpfirst], 0
+    je .later
+    mov byte [vk_cpfirst], 0
+    add [vk_cpf], bx
+    adc word [vk_cpf + 2], 0
+    clc
+    ret
+.later:
+    add [vk_cpw], bx
+    adc word [vk_cpw + 2], 0
+    clc
+    ret
+.err:
+    popf
+    inc word [vk_err]
+    stc
+    ret
+
+; vk_b_ide - the stream row's body: one command of VK_CPSEC sectors with
+; `rep insw` and interrupts ON, nothing timed inside it
+vk_b_ide:
+    push es
+    mov es, [vk_buf]
+    call vk_ide_cmd
+    jc .err
+    xor di, di
+    mov si, VK_CPSEC
+    mov dx, VK_IDE
+.s:
+    call vk_ide_drq
+    jc .err
+    mov cx, 256
+    cld
+    db 0xF3, 0x6D
+    dec si
+    jnz .s
+    call vk_ide_nbsy
+    add word [vk_cplba], VK_CPSEC
+    jmp short .out
+.err:
+    inc word [vk_err]
+.out:
+    pop es
+    ret
+
+%define BL_NUMBERED                 ; a field run saves NAME1, NAME2... (benchlib)
 %include "benchlib.inc"
 
 vk_tpl:
@@ -1757,6 +3034,22 @@ vk_ttl:       db 'Video Disk Bench', 0
 vk_f_names:   db 'STREAM.DAT', 0, 'BADAPPLE.V88', 0, 'BAPPLE.V88', 0, 0
 vk_f_txt:     db 'VIDDISK.TXT', 0
 vk_f_wtxt:    db 'VDWRITE.TXT', 0
+vk_s_cptitle: db 'VIDDISK C - what a read costs the CPU (DISK-CPU-PLAN 7)', 0
+vk_s_cp86:    db 'Below a 286: no rep insw here - the READ_SEQ row only', 0
+vk_s_cpnoide: db 'No drive answering at 1F0h master - the READ_SEQ row only', 0
+vk_s_cphdr:   db '-- one sector at a time, PIT-timed, ints off (us x 100) --', 0
+vk_s_cphdr2:  db '-- 4 MB streamed, ints on: the kernel, then direct --', 0
+vk_r_cppit:   db 'a PIT read, itself', 0
+vk_r_cpxi:    db 'rep insw, 256 words', 0
+vk_r_cpwi:    db '...the wait for DRQ', 0
+vk_r_cpxl:    db 'in/stosw/loop, 256 w', 0
+vk_r_cpwl:    db '...the wait for DRQ', 0
+vk_r_cpfirst: db '...a command, 1st DRQ', 0
+vk_r_cpbad:   db '...commands ending ERR', 0
+vk_r_cpdir:   db 'direct 64-sector cmd', 0
+vk_r_cpseq:   db 'READ_SEQ 32K', 0
+vk_cprows:    dw vk_r_cpxi, vk_r_cpwi, vk_r_cpxl, vk_r_cpwl
+vk_f_ctxt:    db 'VDCPU.TXT', 0
 vk_s_title:   db 'VIDDISK - streaming off the fixed disk (VIDEO-PLAN W0 b, W2, W3)', 0
 vk_s_hint:    db 'R (or a click) runs: reads only, saves VIDDISK.TXT. No stream? W.', 0
 vk_r_wpath:   db 'the writer', 0
@@ -1845,6 +3138,64 @@ vk_r_swfh:    db '...head', 0
 vk_r_swfs:    db '...from sector', 0
 vk_r_swfn:    db '...sectors', 0
 
+vk_s_xmtitle: db 'VIDDISK X - extended memory: a stream bank (VIDEO-XMS-PLAN 3.2)', 0
+vk_s_xmnone:  db 'NO EXTENDED MEMORY (64 KB or more): nothing to time', 0
+vk_s_xmnoalloc: db 'OSAPI_XMEM_ALLOC REFUSED 64 KB', 0
+vk_s_xmbad:   db 'BAD - not the bytes copied up', 0
+vk_s_xmhdr:   db '-- OSAPI_XMEM_COPY, a call (us; on a 286 all of it masked) --', 0
+vk_s_xmhdrf:  db '-- the bank filling: 32 KB READ_SEQ for 5 s (KB/s x 10) --', 0
+vk_r_xmtier:  db 'CPU tier (1 286, 2 386)', 0
+vk_r_xmbits:  db 'CPU feature bits', 0
+vk_r_xmfree:  db 'XMS free (KB)', 0
+vk_r_xmchk:   db '32 KB up and back', 0
+vk_r_xmseq:   db 'READ_SEQ alone', 0
+vk_r_xmbank:  db 'READ_SEQ + copy up', 0
+vk_r_xu32:    db 'XMS up 32K', 0
+vk_r_xd32:    db 'XMS down 32K', 0
+vk_r_xu16:    db 'XMS up 16K', 0
+vk_r_xd16:    db 'XMS down 16K', 0
+vk_r_xu8:     db 'XMS up 8K', 0
+vk_r_xd8:     db 'XMS down 8K', 0
+vk_r_xu4:     db 'XMS up 4K', 0
+vk_r_xd4:     db 'XMS down 4K', 0
+vk_f_xtxt:    db 'VDXMS.TXT', 0
+vk_xmrows:    dw 32768, vk_r_xu32, vk_r_xd32, 16384, vk_r_xu16, vk_r_xd16
+              dw 8192, vk_r_xu8, vk_r_xd8, 4096, vk_r_xu4, vk_r_xd4, 0
+vk_xmb:       dw 0, 0           ; the block
+vk_xmlen:     dw 0              ; ...a copy's bytes
+vk_xmhalf:    dw 0              ; ...and where in the block
+vk_xmup:      db 0              ; vk_xmfill: copy each chunk up
+              db 0
+vk_xmdone:    dw 0              ; for a harness: X has finished
+vk_s_emtitle: db 'VIDDISK E - expanded memory: a Lo-tech-style EMS board', 0
+vk_s_emused:  db 'none: a frame held an option ROM', 0
+vk_s_emnone:  db 'no board: E/D/C000h at 260h-26Ch, 288h', 0
+vk_s_emat:    db 'EMS board at', 0
+vk_s_emwhere: db '0000h, frame 0000h', 0
+vk_efrms:     dw 0xE000, 0xD000, 0xC000, 0    ; EMS.DRV's frames, in order
+vk_ebases:    dw 0x260, 0x264, 0x268, 0x26C, 0x288, 0     ; ...and bases
+vk_eport:     dw 0                  ; where the board answered
+vk_efrm:      dw 0
+vk_s_embad:   db 'BAD - not STREAM.DAT', 0
+vk_s_emhdr:   db '-- the board (us a row; 16 KB copies, rep movsw) --', 0
+vk_s_emhdrf:  db '-- 32 KB READ_SEQ for 5 s (KB/s x 10) --', 0
+vk_r_emprobe: db 'EMS probe', 0
+vk_r_empages: db 'EMS pages (16 KB)', 0
+vk_r_emmap:   db 'map 4 pages (4 OUTs)', 0
+vk_r_emdn:    db 'frame -> RAM 16K', 0
+vk_r_emup:    db 'RAM -> frame 16K', 0
+vk_r_emram:   db 'RAM -> RAM 16K', 0
+vk_r_emseq:   db 'READ_SEQ into RAM', 0
+vk_r_emfr:    db 'READ_SEQ into frame', 0
+vk_r_emfchk:  db 'frame holds the file', 0
+vk_f_etxt:    db 'VDEMS.TXT', 0
+vk_epages:    dw 0              ; the board's pages
+vk_eframe:    db 0              ; vk_emfill: into the frame
+vk_efbad:     db 0              ; ...its last chunk was not the file's
+vk_efk:       dw 0              ; ...chunks read into it
+vk_efmb:      dw 0              ; ...the row's first offset's high word
+vk_emdone:    dw 0              ; for a harness: E has finished
+
 vk_win:       dw 0
 vk_buf:       dw 0
 vk_fname:     dw 0
@@ -1898,6 +3249,17 @@ vk_ddone:     dw 0
 vk_wfrom:     dw 0
 vk_fnd:       times OSAPI_FIND_SZ db 0
 vk_cur:       times FSEQ_SIZE db 0
+vk_cplba:     dw 0              ; C: the next sector a direct read takes
+vk_cpmode:    db 0              ; ...0 rep insw, 1 in/stosw/loop
+vk_cpfirst:   db 0              ; ...this sector is its command's first
+vk_cpide:     db 0              ; ...the direct rows ran
+vk_cpt0:      dw 0              ; ...a PIT read
+vk_cpbad:     dw 0              ; ...commands that ended in ERR
+vk_cpdone:    dw 0              ; for a harness: C has finished
+              align 2
+vk_cpx:       dw 0, 0           ; ...PIT counts: the transfers,
+vk_cpw:       dw 0, 0           ; ...the waits after a command's first,
+vk_cpf:       dw 0, 0           ; ...and its first
 vk_res:       times VK_NRES dd 0
 
 VK_BSS_OWN  equ 512

@@ -41,6 +41,7 @@ os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, "tests"); sys.path.insert(0, "tools")
 import os88marty as M
 import os88ui, os88geom, heapmap, os88build
+import pxtmp
 import pixelsim as P
 import pixcorpus as C
 from pxsyms import pkg_syms, u16
@@ -68,8 +69,7 @@ if o88[:syms["op_table"]] != image[:syms["op_table"]]:
 corpus = C.corpus()
 if a.k:
     corpus = [c for c in corpus if a.k.upper() in c[0]]
-tmp = "build/pxcorpus"
-os.makedirs(tmp, exist_ok=True)
+tmp = pxtmp.private("pxcorpus", folder=True)      # in the run's tree, ours
 for name, data, _ in corpus:
     open(os.path.join(tmp, name), "wb").write(data)
 first = "C1.PCX"                    # PiXEL's own association opens it
@@ -79,7 +79,7 @@ open(os.path.join(tmp, first), "wb").write(
 # corpus is more. PA holds C1.PCX and the first fifty, PB the next, and so
 # on; the run moves PiXEL from one to the next by poking the record's
 # folder, which is exactly what File > Revert reads
-DISK = "build/pxdecode.img"
+DISK = pxtmp.private("pxdecode.img")     # dir_cluster reads it on the HOST
 names = sorted(set(n for n, _, _ in corpus) - {first})
 folder = {n: "P" + chr(ord("A") + i // 50) for i, n in enumerate(names)}
 folder[first] = "PA"
@@ -182,8 +182,36 @@ with os88ui.boot(SYSDISK, apps=DISK, machine=a.machine) as ui:
         m.write(base + syms["px_lastref"], b"\0")
         n0 = W("px_ndone")
         m.ctrl("KeyR")
-        M.until(m, lambda _: W("px_ndone") != n0 and idle(),
-                "the open of " + name, poll=0.3, limit=600)
+        # **TWO WAITS, SO A TIMEOUT SAYS WHICH HALF STALLED.** This was one
+        # 600-second wait, and the one soak failure on record (JEXBIG.JPG,
+        # 1,800 guest seconds, passing alone) could not say whether Ctrl+R
+        # never STARTED an open - a keystroke that did not land - or whether
+        # the decode started and never ended, which is PiXEL's. Both waits
+        # are state reads already (not an idle UI, not a fixed pause), so the
+        # wait's shape was not the question; its silence was. An open has
+        # started once the worker holds a job or PiXEL says it is decoding,
+        # or has already ended.
+        try:
+            M.until(m, lambda _: W("px_ndone") != n0 or B("px_busy")
+                    or B("px_job"), "Ctrl+R to start the open of " + name,
+                    poll=0.05, guest=120.0)
+        except M.MartyError as e:
+            raise M.MartyError("%s\n  THE OPEN NEVER STARTED: px_ndone %d "
+                               "(was %d), px_busy %d, px_job %d, ui_idle %s - "
+                               "the Ctrl+R did not reach PiXEL"
+                               % (e, W("px_ndone"), n0, B("px_busy"),
+                                  B("px_job"), M.ui_idle(m)))
+        try:
+            M.until(m, lambda _: W("px_ndone") != n0 and idle(),
+                    "the open of " + name, poll=0.3, limit=600)
+        except M.MartyError as e:
+            st = m.status()
+            raise M.MartyError("%s\n  THE OPEN STARTED AND DID NOT END: "
+                               "px_ndone %d (was %d), px_busy %d, px_job %d, "
+                               "px_wstage %d, px_wres %d, guest at %04X:%04X"
+                               % (e, W("px_ndone"), n0, B("px_busy"),
+                                  B("px_job"), B("px_wstage"), B("px_wres"),
+                                  st.get("cs", 0), st.get("ip", 0)))
         M.ui_done(m, name)
         return rec()
 

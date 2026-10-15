@@ -144,9 +144,9 @@ TRK_VITEM   equ 24                  ; a composed View item: MENU_DIS +
 TRK_TITEM   equ 20                  ; ...and the View menu's SECOND composed
                                     ; item (SPEC.md 45.13.7): MENU_DIS + '* '
                                     ; + 'Text Screen' + ' (Xt)' + NUL = 20
-TRK_RITEM_SH equ 5                  ; ...and the item stride is a SHIFT, so it
-TRK_RITEM   equ 1 << TRK_RITEM_SH   ; is derived from the size rather than
-                                    ; being a second opinion about it. It was
+TRK_RITEM_SH equ 5                  ; ...and the item stride is ONE constant,
+TRK_RITEM   equ 1 << TRK_RITEM_SH   ; which the item walks add, rather than
+                                    ; a second opinion about it. It was
                                     ; two constants and they disagreed: 24
                                     ; bytes declared, `shl di,1` three times =
                                     ; EIGHT written, so item 0 ran into item 1
@@ -468,124 +468,78 @@ trk_arg:
 ; happens in front of a Tracker the user can see and SPEC.md 12.8's widget
 ; steps through it. It takes the lock for the burst SPEC.md 74.1 lets it state:
 ; trk_fdone is the file dialog's own completion proc and it claims, reads,
-; reclaims the grant and repaints, all of which want the lock held.
+; reclaims the grant and repaints, all of which want the lock held. ONE hold:
+; the posted work below and a load are the same burst.
+;
+; Two loads arrive here, and both hand a name to trk_fdone, the dialog's own
+; completion proc, which copies it through ES:DI - so ES points at OUR segment
+; and DI at our buffer, and every refusal, claim and message below it is the
+; path a dialog open already takes:
+;
+; - OUR OWN POSTED COMPACTION HAS RUN (SPEC.md 66.4.3), so this wake is the
+;   SAME load attempt continuing and not a new one - trk_fdone left everything
+;   it found alone and asked for the room. Nothing to look up: the name is
+;   already in OUR segment and the size is already banked, so trk_fdone's own
+;   copy is onto itself and there is no OSAPI_FILE_GOTO_QM to do - the folder
+;   never changed, this wake being one ui_task pass after the post. It
+;   re-asks plain OSAPI_MEM_AVAIL rather than trusting the what-if, because
+;   that is the whole rule: the what-if measured a state the machine has
+;   since left, and the number to claim against is the one the wake reports.
+;   If it STILL does not fit, [trk_cpq] is what stops the next trip posting
+;   again - a second post would be a program spinning. trk_fdone clears it on
+;   its way out, whichever way this goes.
+; - the module we were LAUNCHED on (trk_arg), once. DX:CX = 0 is "no size",
+;   which that path already handles for a typed name.
 ; -----------------------------------------------------------------------------
 trk_onwake:
     call OSAPI_GFX_LOCK             ; a song ENDED while nobody touched us: the
     call trk_sover_ck               ; worker woke us to close it and walk the
     call tpl_run                    ; list (SPEC.md 45.22.1) - or the editor
     call tw_refresh                 ; posted work only WE may do (45.22.3).
-    call OSAPI_GFX_UNLOCK           ; Cheap when it is neither
-    cmp byte [trk_cpq], 0           ; OUR OWN POSTED COMPACTION HAS RUN
-    jne .cpq                        ; (SPEC.md 66.4.3), so this wake is the
-                                    ; SAME load attempt continuing and not a
-                                    ; new one - trk_fdone left everything it
-                                    ; found alone and asked for the room
+                                    ; Cheap when it is neither
+    mov di, trk_fname               ; the compaction's retry: our own banked
+    mov cx, [trk_fsize]             ; name, and DX:CX the size the dialog
+    mov dx, [trk_fsize_hi]          ; gave us
+    cmp byte [trk_cpq], 0
+    jne .load
     cmp byte [trk_argp], 0          ; not the module's wake, or the module is
     je .out                         ; already playing
-    call OSAPI_GFX_LOCK
-    call trk_argload
-    call OSAPI_GFX_UNLOCK
-.out:
-    ret
-.cpq:
-    call OSAPI_GFX_LOCK
-    call trk_cpqload
-    call OSAPI_GFX_UNLOCK
-    ret
-
-; -----------------------------------------------------------------------------
-; trk_cpqload - re-enter the load the compaction was asked for (SPEC.md 66.4.3)
-; in:  the gfx lock HELD; [trk_cpq] = 1, so trk_cpq_try cannot post again
-; out: nothing; preserves all registers
-;
-; trk_argload's shape with nothing to look up: the name is already in OUR
-; segment and the size is already banked, so trk_fdone's own copy is onto
-; itself and there is no OSAPI_FILE_GOTO to do - the folder never changed,
-; this wake being one ui_task pass after the post.
-;
-; It re-asks plain OSAPI_MEM_AVAIL rather than trusting the what-if, because
-; that is the whole rule: the what-if measured a state the machine has since
-; left, and the number to claim against is the one the wake reports. If it
-; STILL does not fit, [trk_cpq] is what stops the next trip posting again -
-; a second post would be a program spinning.
-; -----------------------------------------------------------------------------
-trk_cpqload:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    push ds
-    pop es                          ; ES:DI = our own banked name
-    mov di, trk_fname
-    mov cx, [trk_fsize]             ; ...and DX:CX the size the dialog gave us
-    mov dx, [trk_fsize_hi]
-    xor al, al
-    call trk_fdone                  ; ...which clears [trk_cpq] on its way out,
-    pop es                          ; whichever way this goes
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; trk_argload - spend it, from trk_onwake (SPEC.md 54.10)
-; in:  the gfx lock HELD, the window visible AND DRAWN
-; out: nothing; preserves all registers
-;
-; It hands the name to trk_fdone, the dialog's own completion proc, which
-; copies it through ES:DI - so ES points at OUR segment and DI at our buffer,
-; and every refusal, claim and message below it is the path a dialog open
-; already takes. DX:CX = 0 is "no size", which that path already handles for
-; a typed name.
-; -----------------------------------------------------------------------------
-trk_argload:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
     mov byte [trk_argp], 0          ; once, whatever happens below
     mov dx, [trk_argclus]
     mov bl, [trk_argdrv]
-    call OSAPI_FILE_GOTO            ; the folder it was opened from
-    jc .out
-    push ds
-    pop es
+    call OSAPI_FILE_GOTO_QM         ; the folder it was opened from -
+    jc .out                         ; QUIETLY, and the instance with us, so
+                                    ; trk_fdone's by-name load resolves there.
+                                    ; Nothing here lists the folder, so the
+                                    ; remount's scan, sort and icon harvest
+                                    ; were ~0.5 s of floppy for no reader
+                                    ; (docs/plans/NAV-COST-PLAN.md, SPEC.md
+                                    ; 19.9.1). CF=1 moved NOTHING: the load
+                                    ; would look in Tracker's own folder, so
+                                    ; refuse. Nothing is kept across it (QM's
+                                    ; AX, and a redirected volume's CX, SI and
+                                    ; DI - SPEC.md 62.9.1)
     mov di, trk_argnm
     xor cx, cx
     xor dx, dx                      ; no size: the typed-name path
+.load:
+    push ds
+    pop es                          ; ES:DI = our own name
     xor al, al
     call trk_fdone
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    call OSAPI_GFX_UNLOCK
     ret
 
 ; -----------------------------------------------------------------------------
 ; trk_paint - W_PAINT: layout init (once), worker hire (retried), full redraw
 ; in:  SI = window ptr; caller holds the gfx lock
+; out: nothing; SI kept - the one register wm_draw_win reads back after a
+;      W_PAINT (`mov bx, si`, SPEC.md 73's thunk note) - and the rest
+;      clobbered, which a paint proc may
 ; -----------------------------------------------------------------------------
 trk_paint:
-    push ax
-    push bx
-    push cx
-    push dx
     push si
-    push di
                                     ; NO trk_argload HERE. The first paint
                                     ; used to spend it, and the first paint is
                                     ; INSIDE wm_show's repaint - so the module
@@ -608,12 +562,7 @@ trk_paint:
 .fs:
     call tui_draw_all
 .done:
-    pop di
     pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 ; -----------------------------------------------------------------------------
 ; trk_hire - spawn the worker, once (the ark_hire shape)
@@ -656,24 +605,13 @@ trk_hire:
 
 ; -----------------------------------------------------------------------------
 ; trk_onkey - W_ONKEY (SPEC.md 45): the whole player is drivable from here,
-;             because fullscreen makes the menu bar unreachable.
-;   Enter      play song          Space  stop / play toggle
-;   P          loop this pattern  L      Load... (Standard File dialog)
-;   Left/Right song position      Up/Dn  scroll rows (stopped only)
-;   1..4       channel mutes      F      fullscreen toggle
-;   Esc        exit fullscreen (windowed: ignored)
-; Windowed and never yet fullscreen-ed, ANY key enters fullscreen - the
-; splash's promise - through the same trk_fs_enter every other path uses.
+;             because fullscreen makes the menu bar unreachable. The keys
+;             themselves are trk_key's, which BOTH surfaces share.
 ; in:  AL = ascii, AH = scan, SI = window ptr; gfx lock held
+; out: nothing; clobbers AX..DI and ES like any window callback (SPEC.md
+;      12.2). tpl_run, the one package caller, keeps nothing across it
 ; -----------------------------------------------------------------------------
 trk_onkey:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov bx, ax                      ; BL = ascii, BH = scan
 %ifdef TRKDBG
     inc word [tds_wkeys]            ; bench-only, and the WINDOWED half of
                                     ; tds_keys: one counter per route, because
@@ -684,205 +622,19 @@ trk_onkey:
 %endif
     call trk_reap                   ; F00/watchdog leftovers close first
     call trk_abdismiss              ; any key takes the About panel down and
-    jc .out                         ; is spent doing it
-    cmp ax, KEY_ALTENTER            ; Alt+Enter is the same door as F (SPEC.md
-    je .fstog                       ; 11.2.1.1), and on AX: the ascii half is
-                                    ; 0, which is the keypad arm below
-                                    ; every key drives the player from the
-                                    ; first keystroke - fullscreen is F or a
-                                    ; click, deliberately NOT "any key",
-                                    ; because Load/Play/mute all have to work
-                                    ; on the splash BEFORE ever going
-                                    ; fullscreen (a lesson from the field:
-                                    ; any-key-enters made loading first
-                                    ; impossible)
-    or bl, bl                       ; the keypad trap: '4'/'6' arrive with
-    jnz .ascii                      ; arrow scan codes - ascii==0 first
-    cmp bh, 0x4B                    ; left arrow: previous song position
-    je .prev
-    cmp bh, 0x4D                    ; right arrow: next
-    je .next
-    cmp bh, 0x48                    ; up: scroll rows while stopped
-    je .up
-    cmp bh, 0x50                    ; down
-    je .down
-    cmp bh, 0x47                    ; Home: back to the top and play
-    je .top
-    jmp .out
-.prev:
-    mov al, -1
-    call mp_setpos                  ; the worker's change detection redraws
-    jmp .out
-.next:
-    mov al, 1
-    call mp_setpos
-    jmp .out
-.up:
-    cmp byte [mp_playing], 0
-    jne .out
-    cmp byte [tui_vrow], 0
-    je .out
-    dec byte [tui_vrow]
-    jmp .out
-.down:
-    cmp byte [mp_playing], 0
-    jne .out
-    cmp byte [tui_vrow], 63
-    jae .out
-    inc byte [tui_vrow]
-    jmp .out
-
-.ascii:
-    cmp bl, 27                      ; Esc: leave fullscreen (windowed: no-op)
-    je .esc
-    cmp bl, 13                      ; Enter: play the song
-    je .play
-    cmp bl, ' '                     ; Space: stop / play toggle
-    je .space
-    cmp bl, 'p'
-    je .pat
-    cmp bl, 'P'
-    je .pat
-    cmp bl, 'l'
-    je .load
-    cmp bl, 'L'
-    je .load
-    cmp bl, 'f'
-    je .fstog
-    cmp bl, 'F'
-    je .fstog
-    cmp bl, 'x'
-    je .xt
-    cmp bl, 'X'
-    je .xt
-    cmp bl, 'r'
-    je .rcyc
-    cmp bl, 'R'
-    je .rcyc
-    cmp bl, 'v'                     ; V: the fullscreen SURFACE (SPEC.md
-    je .txtog                       ; 45.13.7). Free in every build - T is
-    cmp bl, 'V'                     ; tlog_clk_key's in a TRKLOG one, and the
-    je .txtog                       ; mnemonic is not worth a silent collision
-%ifdef TRKLOG
-    cmp bl, 'd'
-    je .diag
-    cmp bl, 'D'
-    je .diag
-    cmp bl, 'w'
-    je .wlog
-    cmp bl, 'W'
-    je .wlog
-    cmp bl, 'm'
-    je .mark
-    cmp bl, 'M'
-    je .mark
-    cmp bl, 'y'
-    je .synct
-    cmp bl, 'Y'
-    je .synct
-    cmp bl, 't'
-    je .clkt
-    cmp bl, 'T'
-    je .clkt
-    cmp bl, 'k'
-    je .xrate
-    cmp bl, 'K'
-    je .xrate
-%endif
-    call trk_ukey                   ; N B E O H + - (SPEC.md 45.21.7), both
-    jnc .out                        ; surfaces' keys
-    cmp bl, '1'
-    jb .out
-    cmp bl, '4'
-    ja .out
-    mov al, bl                      ; 1..4: channel mute toggle; the worker's
-    sub al, '1'                     ; scope redraw shows it next frame
-    call mp_mutetog
-    jmp .out
-.esc:
-    cmp byte [trk_fs], 0
-    je .out
-    call trk_fs_exit
-    jmp .out
-.xt:
-    call trk_xt_toggle
-    jmp .out
-.txtog:
-    call trk_txt_toggle             ; no stop, no rebuild - the pick is not
-    jmp .out                        ; something the mixer can see (45.13.7)
-.rcyc:
-    call trk_rcyc
-    jmp .out
-%ifdef TRKLOG
-.diag:
-    call tlog_key                   ; D: the log on/off (tests/trklog.inc)
-    jmp .out
-.wlog:
-    call tlog_save                  ; W: TRKLOG.TXT on the current volume
-    jmp .out
-.mark:
-    call tlog_mark                  ; M: the listener heard something
-    jmp .out
-.synct:
-    call tlog_sync_key              ; Y: SPEC.md 45.15 off, to A/B it
-    jmp .out
-.clkt:
-    call tlog_clk_key               ; T: SPEC.md 45.16 off, likewise
-    jmp .out
-.xrate:
-    call tlog_rate_key              ; K: XT mode's sample rate, WITHOUT
-    jmp .out                        ; leaving XT mode (FIELD-NOTES.md 16)
-%endif
-.play:
-    call trk_play_go
-    jmp .out
-.top:
-    xor al, al                      ; Home: play from the TOP - the restart
-    call trk_play                   ; Enter used to be (SPEC.md 45.17)
-    jmp .out
-.space:
-    cmp byte [mp_playing], 0
-    je .play
-    call trk_play_stop
-    call trk_transport
-    jmp .out
-.pat:
-    mov al, 1
-    call trk_play
-    jmp .out
-.load:
-    mov byte [trk_addpl], 0
-    call trk_do_open
-    jmp .out
-.fstog:
-    cmp byte [trk_fs], 0
-    je .fenter
-    call trk_fs_exit
-    jmp .out
-.fenter:
-    call trk_fs_enter
+    jc .out                         ; is spent doing it (both keep AX)
+    call trk_key
 .out:
-    call tw_refresh                 ; the face follows the key NOW, not at the
-    pop di                          ; worker's next frame (SPEC.md 56.12)
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp tw_refresh                  ; the face follows the key NOW, not at the
+                                    ; worker's next frame (SPEC.md 56.12)
 ; -----------------------------------------------------------------------------
 ; trk_oncmd - AM_ONCMD (SPEC.md 12.2): File > Open..., View > Fullscreen.
 ; Reachable windowed only (fullscreen hides the bar), which is why every
-; command also has a key.
+; command also has a key - and why [trk_fs] is 0 on every path in here.
 ; in:  AL = item, AH = menu, SI = our window, BX = the set; gfx lock held
+; out: nothing; clobbers AX..DI and ES (SPEC.md 12.2 lets it)
 ; -----------------------------------------------------------------------------
 trk_oncmd:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     mov bx, ax                      ; BL = item, BH = menu
     call trk_reap                   ; F00/watchdog leftovers close first
     call trk_abdismiss
@@ -893,23 +645,18 @@ trk_oncmd:
     je .rate
     cmp bh, 1
     jne .out
-    or bl, bl                       ; View > Fullscreen: toggle
+    or bl, bl                       ; View > Fullscreen
     jz .vfull
     cmp bl, 1                       ; View > Text Screen (SPEC.md 45.13.7):
-    jne .out                        ; the surface pick. No belt like .enter's
+    jne .out                        ; the surface pick. No belt like .vfull's
     call trk_txt_toggle             ; below - the row greys because XT mode
-    jmp .out                        ; makes the pick INERT, not unavailable,
+    jmp short .out                  ; makes the pick INERT, not unavailable,
                                     ; and MENU_DIS is not dispatched anyway
 .vfull:
-    cmp byte [trk_fs], 0
-    je .enter
-    call trk_fs_exit
-    jmp .out
-.enter:
     call trk_fs_ok                  ; belt: the row is MENU_DIS while this
     jc .out                         ; refuses and a greyed row is not
     call trk_fs_enter               ; dispatched, so this cannot fire - and
-    jmp .out                        ; the greying and the refusal share one
+    jmp short .out                  ; the greying and the refusal share one
                                     ; predicate (SPEC.md 47 rule 5) rather
                                     ; than being two opinions
 .file:
@@ -923,27 +670,20 @@ trk_oncmd:
     cmp bl, 3                       ; File > XT Mode (the relabeling item)
     jne .out
     call trk_xt_toggle
-    jmp .out
+    jmp short .out
 .fadd:
     inc byte [trk_addpl]
 .fopen:
     call trk_do_open
-    jmp .out
+    jmp short .out
 .fedit:
     call tpl_toggle
-    jmp .out
+    jmp short .out
 .rate:
     mov al, bl                      ; Rate > 11/22/33/44 kHz (SPEC.md 45.10)
     call trk_rate_set
 .out:
-    call tw_refresh                 ; a menu command's effect on the face now
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp tw_refresh                  ; a menu command's effect on the face now
 ; -----------------------------------------------------------------------------
 ; trk_about - the OSAPI_ABOUT_SET handler: the STANDARD About card (os88ui.inc,
 ;             SPEC.md 20.5.1), drawn over the face and remembered in
@@ -1011,7 +751,8 @@ trk_do_open:
 ; trk_trim - give back the part of the blob claim the file did not need
 ;
 ; in:  [trk_modseg] = the claim, [mp_bloblen_hi]:[mp_bloblen_lo] = bytes read
-; out: [trk_modseg] / [trk_capk] updated; preserves every register
+; out: [trk_modseg] / [trk_capk] updated; clobbers AX, CX, DX (its one
+;      caller, trk_fdone, keeps nothing across it)
 ;
 ; This exists for the path where the claim is sized BEFORE the file's size is
 ; known - SPEC.md 38.6 gave the completion proc a size and the ordinary load
@@ -1032,24 +773,16 @@ trk_do_open:
 ; exactly those bytes cannot narrow what it may look at.
 ; -----------------------------------------------------------------------------
 trk_trim:
-    push ax
-    push bx
-    push cx
-    push dx
     mov ax, [mp_bloblen_lo]
     mov dx, [mp_bloblen_hi]
-    add ax, 1023                    ; round UP: the heap's granularity is KB,
-    adc dx, 0                       ; and a truncating divide would hand back
-    mov cl, 10                      ; the tail of the file with the tail of
-    shr ax, cl                      ; the claim
-    mov bx, dx
-    mov cl, 6
-    shl bx, cl                      ; DX:AX >> 10 = (DX << 6) + (AX >> 10).
-    or ax, bx                       ; What was READ cannot exceed the capacity
-                                    ; the claim was made at, and trk_fdone's
-                                    ; ~64MB domain guard bounds that, so the
-                                    ; DX<<6 here fits a word for the same
-                                    ; reason it does there
+    call trk_tokb                   ; round UP: the heap's granularity is KB,
+                                    ; and a truncating divide would hand back
+                                    ; the tail of the file with the tail of
+                                    ; the claim. What was READ cannot exceed
+                                    ; the capacity the claim was made at, and
+                                    ; trk_fdone's ~64MB domain guard bounds
+                                    ; that, so DX<<6 fits a word in there for
+                                    ; the same reason it does at the claim
     jnz .go
     inc ax                          ; 0 KB is a refusal, not a claim
 .go:
@@ -1061,10 +794,39 @@ trk_trim:
     mov [trk_modseg], dx            ; costs heap and breaks nothing
     mov [trk_capk], ax
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    ret
+
+; trk_tokb - DX:AX bytes -> AX = KB, rounded UP; ZF from the answer. DX:AX
+; must be under ~64MB (DX <= 1022), which both callers guarantee. Clobbers CL
+; and DX. DX:AX >> 10 = (DX << 6) + (AX >> 10)
+trk_tokb:
+    add ax, 1023
+    adc dx, 0
+    mov cl, 10
+    shr ax, cl
+    mov cl, 6
+    shl dx, cl
+    or ax, dx
+    ret
+
+; trk_tobytes - AX = KB -> DX:AX bytes (KB * 1024). Clobbers CL
+trk_tobytes:
+    mov dx, ax
+    mov cl, 10
+    shl ax, cl
+    mov cl, 6
+    shr dx, cl
+    ret
+
+; trk_modfree - give the module blob's claim back, if there is one, and
+; forget it. Clobbers DX (OSAPI_MEM_FREE keeps the rest, SPEC.md 50.3)
+trk_modfree:
+    xor dx, dx
+    xchg dx, [trk_modseg]           ; DX, not AX (SPEC.md 50.3)
+    or dx, dx
+    jz .none
+    call OSAPI_MEM_FREE
+.none:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1104,16 +866,15 @@ trk_trim:
 trk_repaint_done:
     cmp byte [trk_fs], 0
     jne .full
-    call tw_refresh                 ; the face: what the load changed, and no
-    ret                             ; more (tw_refresh arms our clip)
+    jmp tw_refresh                 ; the face: what the load changed, and no
+                                    ; more (tw_refresh arms our clip)
 .full:
     cmp byte [trk_tx], 0            ; a playlist advance INSIDE the bracket
     jne .text                       ; (SPEC.md 45.22.2) lands here too, and on
-    call tui_draw_all               ; the text surface no kernel drawing slot
-    ret                             ; may be used (45.13.3)
+    jmp tui_draw_all               ; the text surface no kernel drawing slot
+                                    ; may be used (45.13.3)
 .text:
-    call ttx_draw_all
-    ret
+    jmp ttx_draw_all
 
 ; -----------------------------------------------------------------------------
 ; trk_is_mod - does [trk_fname] end in .MOD? (SPEC.md 38.6)
@@ -1140,27 +901,18 @@ trk_is_mod:
     mov di, si                      ; SI already points past the dot
     jmp short .find
 .end:
-    mov si, di
-    or si, si
+    or di, di
     jz .no                          ; no dot at all
-    cmp byte [si], 'M'
+    cmp word [di], 'MO'
     jne .no
-    cmp byte [si+1], 'O'
-    jne .no
-    cmp byte [si+2], 'D'
-    jne .no
-    cmp byte [si+3], 0
-    jne .no
-    pop di
-    pop si
-    pop ax
-    clc
-    ret
+    cmp word [di+2], 'D'            ; 'D' and its NUL: CF = 0 when equal
+    je .out
 .no:
+    stc
+.out:
     pop di
     pop si
     pop ax
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1168,7 +920,8 @@ trk_is_mod:
 ;
 ; in:  [trk_fname] = a NUL-terminated 8.3 display name
 ; out: CF = 0 and DX:AX = its size in bytes; CF = 1 = no such file here.
-;      Preserves BX, CX, SI, DI, ES.
+;      Clobbers BX, CX, SI, DI and leaves ES = DS: trk_fdone, its one caller,
+;      keeps nothing across it.
 ;
 ; The dialog reports a size (SPEC.md 38.6) and an ASSOCIATION launch does not -
 ; it hands over a name, a cluster and a drive (SPEC.md 54.5) - so a module
@@ -1186,11 +939,6 @@ trk_is_mod:
 ; It costs one directory walk, on a path that is about to read the whole file.
 ; -----------------------------------------------------------------------------
 trk_sizeof:
-    push bx
-    push cx
-    push si
-    push di
-    push es
     push ds
     pop es                          ; ES:DI = our own record buffer
     xor cx, cx                      ; ordinal 0 starts the walk
@@ -1219,20 +967,9 @@ trk_sizeof:
 .no:
     stc
 .out:
-    pop es
-    pop di
-    pop si
-    pop cx
-    pop bx
     ret
 
 trk_fdone:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     mov [trk_fsize], cx             ; DX:CX = the file's size (SPEC.md 38.6),
     mov [trk_fsize+2], dx           ; banked FIRST: the name copy below uses
                                     ; CX as its counter and would eat it
@@ -1286,13 +1023,8 @@ trk_fdone:
                                     ; is where the arithmetic stops being
                                     ; true. Everything under it is the HEAP's
                                     ; question, asked three lines down
-    add ax, 1023                    ; bytes -> KB, rounded up, across 32 bits
-    adc dx, 0                       ; (DX <= 1022 above, so <= 1023 here and
-    mov cl, 10                      ; DX<<6 still fits)
-    shr ax, cl
-    mov cl, 6
-    shl dx, cl
-    or ax, dx                       ; AX = KB needed
+    call trk_tokb                   ; AX = KB needed (DX <= 1022 above, so
+                                    ; <= 1023 in there and DX<<6 still fits)
     mov [trk_needk], ax
     push ax
     call OSAPI_MEM_AVAIL            ; AX = LARGEST contiguous run in KB
@@ -1336,12 +1068,7 @@ trk_fdone:
                                     ; grant past this line ([trk_mixing])
     mov byte [mp_loaded], 0         ; the old blob is about to be freed: no
                                     ; reader may trust it past this line
-    cmp word [trk_modseg], 0
-    je .alloc
-    mov dx, [trk_modseg]            ; DX, not AX (SPEC.md 50.3)
-    call OSAPI_MEM_FREE
-    mov word [trk_modseg], 0
-.alloc:
+    call trk_modfree
     mov ax, [trk_needk]             ; the size the DIALOG reported, rounded to
     or ax, ax                       ; KB: claim what the file needs and not
     jnz .sized                      ; the whole largest run (SPEC.md 38.6).
@@ -1376,11 +1103,7 @@ trk_fdone:
                                     ; it refuses modules that play perfectly
 
     mov ax, [trk_capk]              ; DX:CX = capacity in bytes = KB * 1024
-    mov dx, ax
-    mov cl, 10
-    shl ax, cl
-    mov cl, 6
-    shr dx, cl
+    call trk_tobytes
     mov cx, ax
     mov es, [trk_modseg]
     xor bx, bx                      ; ES:BX = the grant, at its first byte
@@ -1477,15 +1200,10 @@ trk_fdone:
                                     ; that claim is DX and the next answer
                                     ; cannot be more than it
     push dx
-    mov dx, [trk_modseg]            ; the short claim goes back first, so the
-    call OSAPI_MEM_FREE             ; heap test below sees the room it held
-    mov word [trk_modseg], 0
+    call trk_modfree                ; the short claim goes back first, so the
+                                    ; heap test below sees the room it held
     pop ax                          ; AX = KB
-    mov dx, ax
-    mov cl, 10
-    shl ax, cl
-    mov cl, 6
-    shr dx, cl
+    call trk_tobytes
     mov [trk_fsize], ax             ; KB -> bytes, banked where the dialog's
     mov [trk_fsize_hi], dx          ; figure lives - so a compaction this
     jmp .load                       ; retry posts (trk_cpqload) reloads with
@@ -1500,14 +1218,7 @@ trk_fdone:
 .lderr:
     mov si, ax                      ; mp_load's own verdict string
 .failfree:
-    push si
-    mov dx, [trk_modseg]            ; DX, not AX (SPEC.md 50.3)
-    or dx, dx
-    jz .npop
-    call OSAPI_MEM_FREE
-    mov word [trk_modseg], 0
-.npop:
-    pop si
+    call trk_modfree
 .fail:
     call tui_msg
     call trk_repaint_done
@@ -1518,12 +1229,6 @@ trk_fdone:
                                     ; jumps past it: its wake is this same
                                     ; attempt continuing, and the byte is what
                                     ; stops that trip asking twice
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1666,9 +1371,9 @@ trk_fs_enter:
     mov [ttx_shseg], dx             ; [ttx_shseg] is that fall-back - the
     mov byte [ttx_shok], 0          ; graphics bracket. A NEW claim holds
 .noshadow:                          ; nothing, so the shadow is rebuilt
-    call OSAPI_SND_CAPS             ; NO CARD: a RATE bracket, whose door the
-    test ax, SND_CAP_PCM_BG         ; speaker's play opens (SPEC.md 45.25) -
-    jnz .cardfs                     ; its period the text screen's 54.6 Hz
+    call trk_spkq                   ; NO CARD: a RATE bracket, whose door the
+    jnc .cardfs                     ; speaker's play opens (SPEC.md 45.25) -
+                                    ; its period the text screen's 54.6 Hz
     mov ax, trk_fsx_main            ; frame clock, which FSXW_FRAME then is,
     mov bx, [trk_win]               ; and no worker kept: this bracket's own
     mov cx, FSXF_RATE               ; loop mixes (tsp_poll). The caps are
@@ -1693,25 +1398,17 @@ trk_fs_enter:
 .ran:
     call tsp_leave                  ; (the bracket's end shut the door)
     mov byte [trk_fs], 0            ; back to the windowed splash
-    mov dx, [ttx_shseg]             ; ...and the shadow goes back to the heap:
-    or dx, dx                       ; nothing outside a text bracket reads it
+    xor dx, dx                      ; ...and the shadow goes back to the heap:
+    xchg dx, [ttx_shseg]            ; nothing outside a text bracket reads it
+    or dx, dx
     jz .out
     call OSAPI_MEM_FREE
-    mov word [ttx_shseg], 0
 .out:
     pop di
     pop dx
     pop cx
     pop bx
     pop ax
-    ret
-
-; trk_fs_exit - windowed callers still name this (the .esc / Fullscreen-toggle
-; branches), but the bracket now owns the exit: Esc is POLLED inside
-; trk_fsx_main (the event ladder is parked, SPEC.md 53.1), which returns and
-; unwinds trk_fs_enter. So while [trk_fs]=1 the ladder cannot run to call
-; this, and once it is 0 there is nothing to do - a clean guard either way.
-trk_fs_exit:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1724,14 +1421,10 @@ trk_fs_exit:
 ; throughout), input is polled (no events are dispatched in a bracket), the
 ; unlocks, so that flush is the only one a buffered frame gets (SPEC.md
 ; 53.5/45.11). The worker keeps feeding audio and nothing else.
+; out: nothing; clobbers AX..DI - a W_ONKEY's environment (SPEC.md 53.1),
+;      and fsx_run banks all six around it (kent_di)
 ; -----------------------------------------------------------------------------
 trk_fsx_main:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     call trk_txon                   ; the 80x25 TEXT screen (SPEC.md 45.13):
     je .gfx                         ; XT mode forces it, [trk_txw] asks for it
     call ttx_begin                  ; (45.13.7) - see trktxt.inc for the
@@ -1741,25 +1434,38 @@ trk_fsx_main:
     mov byte [trk_tx], 1
     call ttx_draw_all
     call ttx_clkpick                ; the frame clock (SPEC.md 45.16/53.5.1)
-.txloop:
+    jmp short .loop
+.gfx:
+    call tui_draw_all               ; the whole FT2 screen
+.loop:                              ; ONE loop for both surfaces: what differs
+                                    ; is the frame and its clock, asked of
+                                    ; [trk_tx] once a frame
     call tsp_poll                   ; no card: the speaker's producer (45.25)
     call trk_sover_ck               ; F00 / song end: close, walk the list
     call os88alt_edge               ; ...and Alt+Enter, which int 16h below
-    jc .txdone                      ; cannot carry: no XT BIOS enqueues the
+    jc .done                        ; cannot carry: no XT BIOS enqueues the
                                     ; combination (SPEC.md 9.7.1) and a
                                     ; bracket dispatches no events (53.1)
     mov ah, 1
     int 0x16                        ; this IS the UI task (SPEC.md 53.1)
-    jz .txdraw
+    jz .draw
     xor ah, ah
     int 0x16
     cmp al, 27                      ; Esc, and F - the key that GOT you here
-    je .txdone                      ; is the key that leaves (SPEC.md 45.17)
+    je .done                        ; is the key that leaves (SPEC.md 45.17)
     cmp al, 'f'
-    je .txdone
+    je .done
     cmp al, 'F'
-    je .txdone
+    je .done
     call trk_fsx_key
+.draw:
+    cmp byte [trk_tx], 0
+    jne .txdraw
+    call tui_draw_dyn               ; the animated frame (no clip: we own the
+                                    ; screen, nothing is on top)
+    xor al, al                      ; one frame per tick - the worker's pace,
+    call OSAPI_FSX_WAIT             ; the frame clock (SPEC.md 53.5)
+    jmp .loop
 .txdraw:
     call ttx_draw_dyn
     mov al, [ttx_clk]               ; retrace-paced where the adapter can be
@@ -1770,40 +1476,12 @@ trk_fsx_main:
 %ifdef TRKLOG                       ; field gap had both healthy - so the time
     call tlog_wtend                 ; went here or nowhere either task can see
 %endif
-    jmp .txloop                     ; it cannot. The SPEC.md 53.5 present
+    jmp .loop                       ; it cannot. The SPEC.md 53.5 present
                                     ; clause is dead either way by
                                     ; construction: fsx_mode refused a buffer
-.txdone:
-    mov byte [trk_tx], 0            ; before [trk_fs], so a message set on the
-    mov byte [trk_fs], 0            ; way out reaches the windowed splash
-    call trk_legend
-    jmp .out
-.gfx:
-    call tui_draw_all               ; the whole FT2 screen
-.loop:
-    call tsp_poll                   ; no card: the speaker's producer (45.25)
-    call trk_sover_ck               ; F00 / song end: close, walk the list
-    call os88alt_edge               ; ...and Alt+Enter, for .txloop's reason
-    jc .done                        ; one screen along (SPEC.md 11.2.1.1)
-    mov ah, 1                       ; poll the keyboard - this IS the UI task
-    int 0x16                        ; (SPEC.md 53.1), so int 16h is legal
-    jz .draw
-    xor ah, ah
-    int 0x16
-    cmp al, 27                      ; Esc leaves, exactly as it left 11.2 -
-    je .done                        ; and so does F, the key that entered
-    cmp al, 'f'
-    je .done
-    cmp al, 'F'
-    je .done
-    call trk_fsx_key
-.draw:
-    call tui_draw_dyn               ; the animated frame (no clip: we own the
-                                    ; screen, nothing is on top)
-    xor al, al                      ; one frame per tick - the worker's pace,
-    call OSAPI_FSX_WAIT             ; the frame clock (SPEC.md 53.5)
-    jmp .loop
 .done:
+    mov byte [trk_tx], 0            ; before [trk_fs], so a message set on the
+                                    ; way out reaches the windowed splash
     mov byte [trk_fs], 0            ; BEFORE the return: fsx_restore repaints
                                     ; the desktop under the still-held lock
                                     ; (SPEC.md 53.6), and that repaint calls
@@ -1815,30 +1493,34 @@ trk_fsx_main:
                                     ; on our held lock now, harmless - we are
                                     ; leaving; trk_fs_enter's clear covers the
                                     ; fsx_run-refused path where we never ran)
-    call trk_legend                 ; ...and the legend follows the surface
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp trk_legend                  ; ...and the legend follows the surface
 
 ; -----------------------------------------------------------------------------
-; trk_fsx_key - the bracket's keyboard: the fullscreen-relevant subset of
-; trk_onkey, called under the held lock. Load is absent on purpose - the
-; Standard File dialog is unreachable in a bracket (its completion comes
-; through the parked event ladder, SPEC.md 53.7), and Tracker's Open lives in
-; the windowed splash. in: AL = ascii, AH = scan.
+; trk_fsx_key - the bracket's keyboard (SPEC.md 53.1: input is polled, no
+;               event is dispatched), under the held lock. It is trk_key:
+;               the two surfaces share ONE keyboard and every key that means
+;               something different in a bracket asks [trk_fs] or [trk_tx]
+;               itself. Esc and F never arrive here - the bracket's loop
+;               takes them first.
+; trk_key     - the keys of both surfaces (SPEC.md 45, 45.21.7)
+;   Enter      play song (or resume)  Space  pause / play
+;   Home       play from the top      P      loop this pattern
+;   Left/Right song position          Up/Dn  scroll rows (stopped only)
+;   L          Load... (windowed; fullscreen says why)
+;   F, Alt+Enter  fullscreen (trk_fs_enter refuses inside one)
+;   X          XT mode (the text screen says why not)
+;   V          the fullscreen surface (windowed only)    R  the rate
+;   N / B      next / previous in the PlayList (|<< restarts a song with none)
+;   E          the PlayList editor - windowed only: a window cannot open over
+;              a bracket (SPEC.md 53.7), so the key says why, like L does
+;   O          Repeat: Off / Song / List         H   Shuffle
+;   + = -      master volume, a sixteenth of the range a press
+;   1..4       channel mutes
+; Letters are taken in either case.
+; in:  AL = ascii, AH = scan
+; out: nothing; clobbers AX..DI (both callers keep nothing across it)
 ; -----------------------------------------------------------------------------
 trk_fsx_key:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
 %ifdef TRKDBG
     inc word [tds_keys]             ; bench-only (tests/trkscrl.inc): HOW MANY
                                     ; KEYS THE BRACKET ACTUALLY SAW. tests/
@@ -1848,184 +1530,215 @@ trk_fsx_key:
                                     ; one event handled twice, or two events -
                                     ; are indistinguishable from outside.
                                     ; trk_dbg_key cannot answer it: that hook
-                                    ; is on the `.ascii` path and an arrow
+                                    ; is on the ascii path and an arrow
                                     ; never reaches it
+    or al, al                       ; ...and the bench's own keys, AHEAD of
+    jz trk_key                      ; trk_key's: none of g j k n u b c is one
+    cmp al, 'g'                     ; of its main keys, and N/B lowercase were
+    je .grid                        ; the bench's before the list's already
+    cmp al, 'G'
+    je .grid
+    call trk_dbg_key
+    jc trk_key
+    ret
+.grid:
+    call trk_dbg_area
+    jmp tui_draw_pat
 %endif
-    or al, al                       ; the keypad trap again: arrows arrive
-    jnz .ascii                      ; ascii 0 with a scan code
-    cmp ah, 0x4B
+trk_key:
+    mov bx, ax                      ; BL = ascii, kept for the mutes
+    or al, al                       ; the keypad trap: '4'/'6' arrive with
+    jnz .ascii                      ; arrow scan codes - ascii==0 first
+    mov al, ah
+    cmp al, 0x4B                    ; left arrow: previous song position
     je .prev
-    cmp ah, 0x4D
+    cmp al, 0x4D                    ; right arrow: next
     je .next
-    cmp ah, 0x48
+    cmp al, 0x48                    ; up: scroll rows while stopped
     je .up
-    cmp ah, 0x50
+    cmp al, 0x50                    ; down
     je .down
-    cmp ah, 0x47                    ; Home: back to the top and play
+    cmp al, 0x47                    ; Home: back to the top and play
     je .top
-    jmp .out
+    cmp al, KEY_ALTENTER >> 8       ; Alt+Enter is the same door as F (SPEC.md
+    je .fs                          ; 11.2.1.1): ascii 0, so it is a scan here
+    ret
+.prev:
+    mov al, -1
+    jmp short .pos
+.next:
+    mov al, 1
+.pos:
+    jmp mp_setpos                   ; the worker's change detection redraws
+.up:
+    mov ah, -1
+    jmp short .vrow
+.down:
+    mov ah, 1
+.vrow:
+    cmp byte [mp_playing], 0
+    jne .r
+    mov al, [tui_vrow]
+    add al, ah                      ; 0 - 1 and 63 + 1 both land above 63
+    cmp al, 63
+    ja .r
+    mov [tui_vrow], al
+.r:
+    ret
+
 .ascii:
     cmp al, 13                      ; Enter: play the song
     je .play
     cmp al, ' '                     ; Space: stop / play toggle
     je .space
+    cmp al, 'A'
+    jb .sym
+    or al, 20h                      ; the letters, either case
+.sym:
     cmp al, 'p'
     je .pat
-    cmp al, 'P'
-    je .pat
-    cmp al, 'l'                     ; Load cannot happen here - the SPEC.md 38
-    je .load                        ; dialog's answer comes through the parked
-    cmp al, 'L'                     ; event ladder (SPEC.md 53.7) - so the key
-    je .load                        ; says WHY not (SPEC.md 47), not nothing
+    cmp al, 'l'
+    je .load
+    cmp al, 'f'
+    je .fs
     cmp al, 'x'
-    je .xt
-    cmp al, 'X'
     je .xt
     cmp al, 'r'
     je .rcyc
-    cmp al, 'R'
-    je .rcyc
-    cmp al, 'v'                     ; V changes the SURFACE, and fsx_mode is
-    je .txxt                        ; called once at ttx_begin - a bracket
-    cmp al, 'V'                     ; cannot re-enter itself in the other mode
-    je .txxt                        ; (SPEC.md 45.13.3). Say why not (47)
-%ifdef TRKDBG
-    cmp al, 'g'                     ; bench-only (tests/trkscrl.inc): G
-    je .grid                        ; repaints the grid with the view held
-    cmp al, 'G'                     ; still, and j/k/n/u/b/c move the stopped
-    je .grid                        ; view by more than one row in one frame.
-                                    ; NOT `v`: the SURFACE binding above answers
-                                    ; it first, so a jump key bound to `v` here
-                                    ; is dead (tests/trkscrl.inc says how that
-                                    ; read for a week as a scroll defect)
-    call trk_dbg_key
-    jnc .out
-%endif
+    cmp al, 'v'                     ; V: the fullscreen SURFACE (SPEC.md
+    je .txtog                       ; 45.13.7). Free in every build - T is
+                                    ; tlog_clk_key's in a TRKLOG one, and the
+                                    ; mnemonic is not worth a silent collision
+    cmp al, 'n'
+    je .lnext
+    cmp al, 'b'
+    je .lprev
+    cmp al, 'e'
+    je .edit
+    cmp al, 'o'
+    je .rep
+    cmp al, 'h'
+    je .shuf
+    cmp al, '+'
+    je .vup
+    cmp al, '='                     ; + unshifted, on a US keyboard
+    je .vup
+    cmp al, '-'
+    je .vdn
 %ifdef TRKLOG
     cmp al, 'd'
     je .diag
-    cmp al, 'D'
-    je .diag
-    cmp al, 'w'
-    je .wref
-    cmp al, 'W'
-    je .wref
     cmp al, 'm'
     je .mark
-    cmp al, 'M'
-    je .mark
+    cmp al, 'w'
+    je .wlog
+    cmp byte [trk_fs], 0            ; the rest are the windowed keyboard's
+    jne .mute                       ; alone, as they always were
+    cmp al, 'y'
+    je .synct
+    cmp al, 't'
+    je .clkt
+    cmp al, 'k'
+    je .xrate
 %endif
-    mov bx, ax                      ; N B E O H + - (SPEC.md 45.21.7): the
-    call trk_ukey                   ; list plays on in here too (45.22.2)
-    jnc .out
-    cmp al, '1'
-    jb .out
-    cmp al, '4'
-    ja .out
-    sub al, '1'                     ; 1..4: channel mute toggle
-    call mp_mutetog
-    jmp .out
-%ifdef TRKLOG
-.diag:
-    call tlog_key
-    jmp .out
-.mark:
-    call tlog_mark                  ; M: stamp the tick the LISTENER heard
-    jmp .out                        ; something - the one input here that is
-.wref:                              ; not a measurement
-    push si                         ; W is windowed-only for the same reason
-    mov si, tlog_s_fsw              ; L is: the file slots are UI-callback-only
-    call tui_msg                    ; and a bracket owns the machine until it
-    pop si                          ; returns (SPEC.md 53.7). Say why, do not
-    jmp .out                        ; do nothing (SPEC.md 47)
-%endif
-%ifdef TRKDBG
-.grid:
-    call trk_dbg_area
-    call tui_draw_pat
-    jmp .out
-%endif
-.load:
-    push si
-    mov si, trk_s_fsload
-    call tui_msg
-    pop si
-    jmp .out
-.prev:
-    mov al, -1
-    call mp_setpos
-    jmp .out
-.next:
-    mov al, 1
-    call mp_setpos
-    jmp .out
-.up:
-    cmp byte [mp_playing], 0
-    jne .out
-    cmp byte [tui_vrow], 0
-    je .out
-    dec byte [tui_vrow]
-    jmp .out
-.down:
-    cmp byte [mp_playing], 0
-    jne .out
-    cmp byte [tui_vrow], 63
-    jae .out
-    inc byte [tui_vrow]
-    jmp .out
+.mute:
+    mov al, bl                      ; 1..4: channel mute toggle; the worker's
+    sub al, '1'                     ; scope redraw shows it next frame. Any
+    jmp mp_mutetog                  ; other key wraps above 3 and is ignored
+
 .play:
-    call trk_play_go
-    jmp .out
-.top:
-    xor al, al                      ; Home: play from the TOP - the restart
-    call trk_play                   ; Enter used to be (SPEC.md 45.17)
-    jmp .out
+    jmp trk_play_go
 .space:
     cmp byte [mp_playing], 0
     je .play
     call trk_play_stop
-    call trk_transport
-    jmp .out
+    jmp trk_transport
+.top:
+    xor al, al                      ; Home: play from the TOP - the restart
+    jmp short .tplay                ; Enter used to be (SPEC.md 45.17)
 .pat:
     mov al, 1
-    call trk_play
-    jmp .out
+.tplay:
+    jmp trk_play
+.load:
+    cmp byte [trk_fs], 0            ; Load is windowed: the Standard File
+    jne .fsload                     ; dialog is unreachable in a bracket (its
+    mov byte [trk_addpl], 0         ; completion comes through the parked
+    jmp trk_do_open                 ; event ladder, SPEC.md 53.7)
+.fsload:
+    mov si, trk_s_fsload
+    jmp short .say
+.fs:
+    jmp trk_fs_enter
 .xt:
-    cmp byte [trk_tx], 0            ; BOTH directions since SPEC.md 45.13.7:
-    jne .txxt                       ; a picked surface can hold this bracket
-    call trk_xt_toggle              ; with [mp_xt] clear, so X here can mean
-    jmp .out                        ; ON. Either way trk_xt_toggle stops
-                                    ; playback, rebuilds the table, re-sets
-                                    ; the menu and on [trk_fs] calls
-                                    ; tui_draw_all - a kernel drawing slot,
-                                    ; against a framebuffer that is a TEXT
-                                    ; PAGE (45.13.3). So the guard stays keyed
-                                    ; on [trk_tx] and stays BROAD: narrowing
-                                    ; it to "only when [trk_txw] is clear" is
-                                    ; exactly the case that reaches that
-                                    ; repaint. Say why not (47), like L does
-.rcyc:
-    call trk_rcyc                   ; the windowed key's own routine, so the
-    jmp .out                        ; two cannot come to differ
+    cmp byte [trk_tx], 0            ; the text screen IS XT mode's surface
+    jne .txxt
+    jmp trk_xt_toggle
+.txtog:
+    cmp byte [trk_fs], 0            ; no stop, no rebuild - the pick is not
+    jne .txxt                       ; something the mixer can see (45.13.7)
+    jmp trk_txt_toggle
+.edit:
+    cmp byte [trk_fs], 0
+    jne .txxt
+    jmp tpl_toggle
 .txxt:
     mov si, trk_s_txxt
-    call tui_msg
-    jmp short .out
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+.say:
+    jmp tui_msg
+.rcyc:
+    jmp trk_rcyc
+.lnext:
+    jmp tpl_next
+.lprev:
+    jmp tpl_prev
+.rep:
+    jmp trk_rep_cycle
+.shuf:
+    xor byte [trk_shuf], 1
     ret
-
-; =============================================================================
-; Stream plumbing - UI-context only (verbs 0/2 and the first verb-7 alloc
-; stay UI-callback-only under the amended SPEC.md 20.3; the worker gets
-; feed/status/stage).
-; =============================================================================
-
+.vup:
+    mov al, 1
+    jmp short .vol
+.vdn:
+    mov al, -1
+.vol:
+    call trk_spkq                   ; no card: the speaker's level a step
+    jnc .vcard                      ; (45.25.3)
+    jmp tsp_lvstep
+.vcard:
+    shl al, 1                       ; the master a sixteenth of its range:
+    shl al, 1                       ; +-4, and 0..64 + 4 cannot overflow a
+    add al, [mp_master]             ; signed byte, so the sign is the floor
+    jns .vpos
+    xor al, al
+.vpos:
+    cmp al, 64
+    jbe .vset
+    mov al, 64
+.vset:
+    mov [mp_master], al
+    ret
+%ifdef TRKLOG
+.diag:
+    jmp tlog_key                    ; D: the log on/off (tests/trklog.inc)
+.mark:
+    jmp tlog_mark                   ; M: the listener heard something
+.wlog:
+    cmp byte [trk_fs], 0            ; W: TRKLOG.TXT on the current volume -
+    jne .wref                       ; windowed, because a save is a file
+    jmp tlog_save
+.wref:
+    mov si, tlog_s_fsw
+    jmp short .say
+.synct:
+    jmp tlog_sync_key               ; Y: SPEC.md 45.15 off, to A/B it
+.clkt:
+    jmp tlog_clk_key                ; T: SPEC.md 45.16 off, likewise
+.xrate:
+    jmp tlog_rate_key               ; K: XT mode's sample rate, WITHOUT
+                                    ; leaving XT mode (FIELD-NOTES.md 16)
+%endif
 ; -----------------------------------------------------------------------------
 ; trk_ring_set - commit a ring size and everything derived from it
 ; in:  CX = ring bytes (TRK_RING or TRK_RING_SM)
@@ -2141,22 +1854,10 @@ trk_ring_probe:
                                     ; never be refused for the want of one -
                                     ; without this the whole no-Sound-Blaster
                                     ; case stops loading modules at all
-    call trk_ring_pick              ; the policy choice, from what is free now
-    mov cx, [trk_ring]
-.try:
-    mov al, 7
-    mov ah, 0                       ; sub-op 0 = alloc
-    call OSAPI_SND_STREAM           ; out AX = 0 ok, SI = grant offset
-    or ax, ax
-    jz .got
-    cmp cx, TRK_RING_SM
-    jbe .no                         ; even the small ring is unfundable
-    mov cx, TRK_RING_SM
-    jmp short .try
-.got:
-    call trk_ring_set               ; what we ACTUALLY got, not what we asked
-    mov al, 7
-    mov ah, 1                       ; sub-op 1 = free: we only wanted to know
+    call trk_grant_walk             ; the policy choice, from what is free now
+    jc .no                          ; even the small ring is unfundable
+    mov ax, (1 << 8) | 7
+                                    ; sub-op 1 = free: we only wanted to know
     call OSAPI_SND_STREAM
 .none:
     pop si
@@ -2168,6 +1869,65 @@ trk_ring_probe:
     pop si
     pop cx
     pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; trk_restart - a stream at AX Hz starts, the card's (trk_play) or the
+;               speaker's (tsp_start): the replayer from [trk_pmode], and
+;               every counter the face and the stamps run off back to 0.
+;               Clobbers AX and DX
+; -----------------------------------------------------------------------------
+trk_restart:
+    call tw_elscale                 ; a resume at another rate keeps its
+    mov [mp_mixrate], ax            ; clock, in the new rate's bytes
+    mov al, [trk_pmode]
+    call tw_newstream               ; the face's clock: restarted with a song,
+    call mp_start                   ; kept across a resume (AL survives it)
+    xor ax, ax
+    mov [trk_total], ax
+    mov [trk_consumed], ax          ; the stream's byte counters both restart
+    mov [mp_stampbase], ax          ; here, so the stamp history does too -
+    call mp_stclear                 ; seeded with row 0, which mp_start has
+                                    ; already read but nothing has mixed yet
+                                    ; (it keeps AX)
+    mov [tui_play], ax
+    mov [trk_mixed], ax             ; a restart drops a half in progress
+    mov ax, [mp_mixrate]            ; bytes per system tick: rate / 18.2065,
+    mov dx, 3600                    ; and 3600/65536 is that to 0.011% - so
+    mul dx                          ; the product's HIGH word is the answer
+    mov [tui_bpt], dx               ; and no division is needed at all
+    ret
+
+; -----------------------------------------------------------------------------
+; trk_grant_walk - pick a ring (trk_ring_pick) and ask the driver's pool for
+;                  it, dropping to the small ring once on a refusal
+; out: CF = 0 granted: SI = the grant's SND_SEG offset, and trk_ring_set has
+;      been told what we ACTUALLY got, so the mask and pre-roll follow it and
+;      not the pick; CF = 1 even the small ring is unfundable. Clobbers AX, CX
+;
+; The pick was made from what was free when asked, and the heap is free to
+; move between a load and a Play - another app, a Disk window - so a refusal
+; drops a tier and asks again rather than making the user close things and
+; re-load. One retry: below the small ring there is nothing left to try.
+; -----------------------------------------------------------------------------
+trk_grant_walk:
+    call trk_ring_pick
+    mov cx, [trk_ring]
+.try:
+    mov ax, 7                       ; AL = verb 7, AH = sub-op 0 = alloc
+    call OSAPI_SND_STREAM           ; out AX = 0 ok, SI = grant offset
+    or ax, ax
+    jz .got
+    cmp cx, TRK_RING_SM
+    jbe .no
+    mov cx, TRK_RING_SM
+    jmp short .try
+.got:
+    call trk_ring_set
+    clc
+    ret
+.no:
     stc
     ret
 
@@ -2194,8 +1954,7 @@ trk_play_go:
     je .go
     xor al, al
 .go:
-    call trk_play
-    ret
+    jmp trk_play
 
 trk_play:
     push ax
@@ -2221,57 +1980,29 @@ trk_play:
                                     ; while we are stopped (SPEC.md 34.6);
                                     ; teardown still force-frees it (34.3) if
                                     ; a close never ran
-    call trk_ring_pick              ; picked AGAIN: the rate may have moved
-    mov cx, [trk_ring]              ; since the load (R), and the ring is
-.gtry:                              ; sized by it (SPEC.md 45.18.2)
-    mov al, 7
-    mov ah, 0                       ; sub-op 0 = alloc
-    call OSAPI_SND_STREAM           ; out AX = 0 ok, SI = grant offset
-    or ax, ax
-    jz .ggot
-    cmp cx, TRK_RING_SM             ; refused. The pick was made when the
-    jbe .nogrant                    ; module was loaded and the heap has been
-    mov cx, TRK_RING_SM             ; free to move since - another app, a Disk
-    jmp short .gtry                 ; window - so drop a tier and ask again
-                                    ; rather than making the user close things
-                                    ; and re-load. One retry: below the small
-                                    ; ring there is nothing left to try
-.ggot:
-    call trk_ring_set               ; CX is what we ACTUALLY got, so the mask
-    mov [trk_grant], si             ; and pre-roll follow it and not the pick
+    call trk_grant_walk             ; picked AGAIN: the rate may have moved
+    jc .nogrant                     ; since the load (R), and the ring is
+                                    ; sized by it (SPEC.md 45.18.2)
+    mov [trk_grant], si
     mov byte [trk_ghave], 1
 .granted:
     call trk_rate_pick              ; AX = the rate this mode asks for
-    call tw_elscale                 ; a resume at another rate keeps its
-    mov [mp_mixrate], ax            ; clock, in the new rate's bytes
-    mov al, [trk_pmode]
-    call tw_newstream               ; the face's clock: restarted with a song,
-    call mp_start                   ; kept across a resume
+    call trk_restart
 %ifdef TRKLOG
     call tlog_stream                ; a new stream: the log's clocks restart
 %endif
-    mov word [trk_total], 0
-    mov word [trk_consumed], 0      ; the stream's byte counters both restart
-    mov word [mp_stampbase], 0      ; here, so the stamp history does too -
-    call mp_stclear                 ; seeded with row 0, which mp_start has
-                                    ; already read but nothing has mixed yet
     mov byte [tui_noppos], 0        ; ...and tui_playpos asks the card again
-    mov word [tui_play], 0          ; (SPEC.md 45.15.1, 34.5.1)
-    mov ax, [mp_mixrate]            ; bytes per system tick: rate / 18.2065,
-    mov dx, 3600                    ; and 3600/65536 is that to 0.011% - so
-    mul dx                          ; the product's HIGH word is the answer
-    mov [tui_bpt], dx               ; and no division is needed at all
-    mov word [trk_mixed], 0         ; a restart drops a half in progress
+                                    ; (SPEC.md 45.15.1, 34.5.1)
     mov si, trk_s_buffer            ; ...and SAY SO, because the loop below is
     call tui_msg                    ; the longest thing this app ever does with
     call trk_say                    ; the gfx lock held (SPEC.md 45.17.2)
     mov cx, [trk_preroll]           ; stage the cushion before the open, so
 .pre:                               ; the stream starts [trk_preroll] halves
     call trk_mix_stage              ; ahead of the DSP instead of two
-    loop .pre                       ; (trk_mix_stage preserves everything)
+    loop .pre                       ; (trk_mix_stage keeps CX)
 .preok:
-    mov al, 0                       ; verb 0: open-out, ring mode - the flag
-    mov ah, SND_OPENF_RING          ; rides AH (verb 0 carries no handle,
+    mov ax, SND_OPENF_RING << 8     ; verb 0: open-out, ring mode - the flag
+                                    ; rides AH (verb 0 carries no handle,
                                     ; SPEC.md 20.3; DX stays the plain rate)
     mov si, [trk_grant]
     mov cx, [trk_total]             ; initial valid total = the pre-roll
@@ -2286,7 +2017,16 @@ trk_play:
                                     ; pass must never see the new stream
                                     ; through the old session's flags
     call trk_transport              ; the one success path; every exit below
-    jmp .out                        ; is a refusal with its own message
+    jmp short .out                  ; is a refusal with its own message
+.spk:
+    call tsp_play
+    jmp short .out
+.noload:
+    mov si, trk_s_noload
+    jmp short .say
+.nogrant:
+    mov si, trk_s_nomem
+    jmp short .say
 .ofail:
     push ax                         ; mp_stop ZEROES AX, and the test below is
     call mp_stop                    ; the driver's answer: every refusal read
@@ -2301,17 +2041,7 @@ trk_play:
     jne .ofmsg                      ; double buffer, claimed per stream now
     mov si, trk_s_nomem             ; (SPEC.md 34.5.2): a memory answer
 .ofmsg:
-    call tui_msg
-    jmp .out
-.noload:
-    mov si, trk_s_noload
-    call tui_msg
-    jmp .out
-.spk:
-    call tsp_play
-    jmp .out
-.nogrant:
-    mov si, trk_s_nomem
+.say:
     call tui_msg
 .out:
     pop di
@@ -2328,15 +2058,10 @@ trk_play:
 ;                 UI pre-roll above and by the worker's feed loop: 16384 is
 ;                 a multiple of 2048, so a half NEVER crosses the ring seam
 ;                 and the copy needs no split (SPEC.md 34.5 ring rule).
-; preserves all registers
+; keeps CX (trk_play's pre-roll counts in it) and clobbers the rest
 ; -----------------------------------------------------------------------------
 trk_mix_stage:
-    push ax
-    push bx
     push cx
-    push dx
-    push si
-    push di
     mov ax, [trk_total]             ; where mp_outbuf[0] lands in the stream:
     mov [mp_stampbase], ax          ; the replayer stamps each row against it
     mov cx, TRK_HALF                ; (SPEC.md 45.15)
@@ -2344,12 +2069,7 @@ trk_mix_stage:
     call mp_gen                     ; renders into mp_outbuf, advances the
                                     ; replayer; clobbers freely (mp_* rule)
     call trk_stage
-    pop di
-    pop si
-    pop dx
     pop cx
-    pop bx
-    pop ax
     ret
 
 ; trk_stage - stage mp_outbuf, a WHOLE half, at the ring position [trk_total]
@@ -2416,8 +2136,8 @@ trk_stream_close:
     je .nogr
     push si
     mov si, [trk_grant]             ; SI = the grant's offset (sbl_grant_find)
-    mov al, 7
-    mov ah, 1                       ; sub-op 1 = free
+    mov ax, (1 << 8) | 7
+                                    ; sub-op 1 = free
     call OSAPI_SND_STREAM
     pop si
     or ax, ax
@@ -2569,97 +2289,6 @@ trk_endstop_upd:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; trk_ukey - the keys the face and the list added (SPEC.md 45.21.7), shared
-; by both surfaces' keyboards. in: BL = ascii. out: CF = 0 it was one of
-; them and is done, CF = 1 not ours. Preserves every register.
-;
-;   N / B   next / previous in the PlayList (|<< restarts a song with none)
-;   E       the PlayList editor - windowed only: a window cannot open over a
-;           bracket (SPEC.md 53.7), so the key says why, like L does
-;   O       Repeat: Off / Song / List        H   Shuffle
-;   + -     master volume, a sixteenth of the range a press
-; -----------------------------------------------------------------------------
-trk_ukey:
-    push ax
-    push si
-    mov al, bl
-    cmp al, 'A'
-    jb .sym
-    or al, 20h                      ; the letters, either case
-.sym:
-    cmp al, 'n'
-    je .next
-    cmp al, 'b'
-    je .prev
-    cmp al, 'e'
-    je .edit
-    cmp al, 'o'
-    je .rep
-    cmp al, 'h'
-    je .shuf
-    cmp al, '+'
-    je .up
-    cmp al, '='                     ; + unshifted, on a US keyboard
-    je .up
-    cmp al, '-'
-    je .down
-    pop si
-    pop ax
-    stc
-    ret
-.next:
-    call tpl_next
-    jmp short .done
-.prev:
-    call tpl_prev
-    jmp short .done
-.edit:
-    cmp byte [trk_fs], 0
-    jne .win
-    call tpl_toggle
-    jmp short .done
-.win:
-    mov si, trk_s_txxt
-    call tui_msg
-    jmp short .done
-.rep:
-    call trk_rep_cycle
-    jmp short .done
-.shuf:
-    xor byte [trk_shuf], 1
-    jmp short .done
-.up:
-    call trk_spkq                   ; no card: the speaker's level a step
-    jnc .upc                        ; (45.25.3)
-    mov al, 1
-    call tsp_lvstep
-    jmp short .done
-.upc:
-    mov al, [mp_master]
-    add al, 4
-    cmp al, 64
-    jbe .vol
-    mov al, 64
-    jmp short .vol
-.down:
-    call trk_spkq
-    jnc .dnc
-    mov al, -1
-    call tsp_lvstep
-    jmp short .done
-.dnc:
-    mov al, [mp_master]
-    sub al, 4
-    jnc .vol
-    xor al, al
-.vol:
-    mov [mp_master], al
-.done:
-    pop si
-    pop ax
-    clc
-    ret
 
 trk_play_stop:
     call tsp_leave                  ; the speaker's door shut, CONS exact...
@@ -2718,11 +2347,10 @@ trk_play_stop:
 trk_say:
     cmp byte [trk_tx], 0
     jne .tx
-    call tui_msg_draw               ; windowed splash or the graphics FT2 frame
-    ret
+    jmp tui_msg_draw               ; windowed splash or the graphics FT2 frame
 .tx:
-    call ttx_status                 ; the XT text screen owns the adapter, so
-    ret                             ; no kernel drawing slot may be used here
+    jmp ttx_status                 ; the XT text screen owns the adapter, so
+                                    ; no kernel drawing slot may be used here
 
 ; -----------------------------------------------------------------------------
 ; trk_legend - the surface changed under a legend that was chosen FOR a
@@ -2886,18 +2514,12 @@ trk_menus_build:
                                     ; written rather than assembled
     mov [trk_e_rate + AMENU_NITEM], cx
     xor bx, bx                      ; BX = the item index
+    mov di, trk_ritem0              ; ...and DI its item, a TRK_RITEM stride
 .item:
-    mov di, bx
-%rep TRK_RITEM_SH                   ; DI = index*TRK_RITEM. Shifted, not
-    shl di, 1                       ; multiplied: `mul` writes DX, which is
-%endrep                             ; not on this routine's push list - and
-    add di, trk_ritem0              ; %rep is what keeps the count and the
-                                    ; size in step
+    push di                         ; the item's start, for the stride below
     mov al, ' '
-    push bx
-    call trk_rsel_get               ; AH = the live pick for THIS mode
-    cmp bl, ah
-    pop bx
+    call trk_rsel_get               ; AH = the live pick for THIS mode (it
+    cmp bl, ah                      ; reads no BX)
     jne .pad
     mov al, '*'
 .pad:
@@ -2922,6 +2544,8 @@ trk_menus_build:
     call trk_scpy
 .term:
     mov byte [di], 0
+    pop di
+    add di, TRK_RITEM
     inc bx
     cmp bx, cx
     jb .item
@@ -3130,8 +2754,10 @@ trk_spkq:
 ; trk_rstop - a rate change's stop, the card's and the speaker's: a playing
 ; song paused where the listener is, with the renderer told the stop has
 ; been SEEN - or its next frame notices it and repaints `Paused` over the
-; rate's message (SPEC.md 45.10.1). Nothing when stopped. Clobbers AL
-; (trk_play_stop), which neither caller reads after it
+; rate's message (SPEC.md 45.10.1). Nothing when stopped. And then a drained
+; ring left open by the F00/stop paths closes, before the rate or the mode
+; flips (the speaker never has one open). XT mode's toggle is the same stop.
+; Clobbers AL (trk_play_stop), which no caller reads after it
 ; -----------------------------------------------------------------------------
 trk_rstop:
     cmp byte [mp_playing], 0
@@ -3145,21 +2771,20 @@ trk_rstop:
 .seen:                              ; note lives (SPEC.md 45.10.1). A tier-0
     mov byte [tui_lplay], 0         ; FULLSCREEN stop also reshapes the pattern
 .idle:                              ; view, so there the renderer keeps it
+    cmp byte [trk_sopen], 0
+    je .shut
+    call trk_stream_close
+.shut:
     ret
 
 ; -----------------------------------------------------------------------------
 ; trk_spkrate_menu - the Rate menu with NO CARD (SPEC.md 45.25.3): Auto, then
 ; each rung the speaker will step to on this machine, '*' on the pick and,
 ; once the bench has run, each rung's predicted load - so the user picks a
-; rate knowing what it asks of the machine. Called by trk_menus_build.
-; Preserves all.
+; rate knowing what it asks of the machine. Called by trk_menus_build, which
+; banks AX, BX, CX, SI and DI around it: this keeps ES alone.
 ; -----------------------------------------------------------------------------
 trk_spkrate_menu:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
     push es
     push ds
     pop es                          ; tsp_mnum writes at ES:DI
@@ -3168,12 +2793,9 @@ trk_spkrate_menu:
     xor ch, ch
     mov [trk_e_rate + AMENU_NITEM], cx
     xor bx, bx
+    mov di, trk_ritem0
 .item:
-    mov di, bx
-%rep TRK_RITEM_SH
-    shl di, 1
-%endrep
-    add di, trk_ritem0
+    push di
     mov al, ' '
     cmp bl, [tsp_rsel]
     jne .p
@@ -3209,27 +2831,18 @@ trk_spkrate_menu:
     call trk_scpy
 .term:
     mov byte [di], 0
+    pop di
+    add di, TRK_RITEM
     inc bx
     cmp bx, cx
     jb .item
     pop es
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
     ret
 
-; trk_spkrate_say - `Rate: 5512 Hz at the next Play` (or Auto). Preserves all
+; trk_spkrate_say - `Rate: 5512 Hz at the next Play` (or Auto). Keeps ES; trk_rate_set
+; banks the rest
 trk_spkrate_say:
-    push ax
-    push bx
-    push si
-    push di
     push es
-    call tsp_mbeg
-    mov si, trk_s_rspkm
-    call tsp_mcat
     mov si, tsp_s_rauto
     mov bl, [tsp_rsel]
     or bl, bl
@@ -3241,18 +2854,26 @@ trk_spkrate_say:
     mov ax, [si+bx]
     call tsp_rstr
 .n:
-    call tsp_mcat
-    mov si, trk_s_rspkp
-    call tsp_mcat
+    mov bx, trk_s_rspkp
+    call trk_rcomp
     call tsp_mend
     pop es
-    pop di
-    pop si
-    pop bx
-    pop ax
     ret
 
 ; DS:SI (asciiz, terminator dropped) -> [DI], DI left past it. AL, SI spent.
+; trk_rcomp - `Rate: ` + SI + BX, composed at tsp_msg (the speaker's own
+; message buffer and composer, SPEC.md 45.25.3) and NOT terminated: DI is
+; left at the end for the caller's NUL. ES = DS on the way out; clobbers SI
+trk_rcomp:
+    call tsp_mbeg
+    push si
+    mov si, trk_s_rspkm
+    call tsp_mcat
+    pop si
+    call tsp_mcat
+    mov si, bx
+    jmp tsp_mcat
+
 trk_scpy:
     mov al, [si]
     inc si
@@ -3311,11 +2932,7 @@ trk_rate_set:
                                     ; the one thing a bench build may not do.
                                     ; It lived in trk_xrate_tog until that
                                     ; routine folded into this one
-    call trk_rstop
-    cmp byte [trk_sopen], 0         ; a drained ring left open by F00/stop
-    je .menu                        ; paths closes before the rate changes
-    call trk_stream_close
-.menu:
+    call trk_rstop                  ; ...and a drained ring closes
     call trk_menus_build            ; the '*' moves, and in XT mode View >
                                     ; Fullscreen greys or un-greys with it -
                                     ; ONE builder, so they cannot disagree
@@ -3331,12 +2948,20 @@ trk_rate_set:
     mov bl, ah
     xor bh, bh
     shl bx, 1
-    mov si, [trk_rmsg + bx]
+    mov si, [trk_rname + bx]        ; `Rate: <the pick> <what it costs>`,
+    mov ax, [trk_rsfx + bx]         ; composed (trk_rcomp)
     cmp byte [mp_xt], 0
     je .say
-    mov si, [trk_xrmsg + bx]
+    mov si, [trk_xrname + bx]
+    mov ax, [trk_xrsfx + bx]
 .say:
-    call tui_msg
+    xchg ax, bx                     ; BX = the suffix
+    push es
+    call trk_rcomp
+    mov byte [di], 0
+    mov si, tsp_msg
+    call tui_msg                    ; ONE draw (tsp_mend would add trk_say's)
+    pop es
 .done:
     pop di
     pop si
@@ -3358,21 +2983,7 @@ trk_xt_toggle:
     push cx
     push si
     push di
-    cmp byte [mp_playing], 0
-    je .idle
-    call trk_play_stop              ; drains the worker (SPEC.md 45.2)
-    call trk_transport              ; ...and the stop's legend and parked row
-    cmp byte [trk_fs], 0            ; NOW, with the renderer told it has been
-    je .seen                        ; seen - or its next frame notices the stop
-    cmp byte [trk_cpu0], 0          ; and repaints `Paused` over the rate
-    jne .idle                       ; message below, which is where 44 kHz's
-.seen:                              ; note lives (SPEC.md 45.10.1). A tier-0
-    mov byte [tui_lplay], 0         ; FULLSCREEN stop also reshapes the pattern
-.idle:                              ; view, so there the renderer keeps it
-    cmp byte [trk_sopen], 0         ; a drained ring left open by F00/stop
-    je .flip                        ; paths closes now, before the rate flips
-    call trk_stream_close
-.flip:
+    call trk_rstop                  ; a rate change's stop and close
     mov al, [mp_xt]
     xor al, 1
     call mp_setxt                   ; stores the mode + rebuilds the volume
@@ -3553,12 +3164,6 @@ trk_deep:
 ; conservative side.
 ; -----------------------------------------------------------------------------
 trk_feed:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
 %ifdef TRKLOG
     call tlog_wstart                ; this pass's span starts here, and ENDS
 %endif                              ; at .out - a pass that mixes TRK_MAXFEED
@@ -3722,12 +3327,6 @@ trk_feed:
     call tlog_wend                  ; ...and the span closes here
 %endif
     mov byte [trk_mixing], 0        ; the drain gate reopens LAST
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; trk_wake - post our window a wake, from the worker (OSAPI_WM_WAKE is
@@ -3744,40 +3343,38 @@ trk_wake:
 ;              re-check, clip armed, [trk_abon] honoured under the lock so
 ;              the About panel is never painted over, then the dynamic-only
 ;              redraw.
+; out: nothing; clobbers AX..DI (the worker keeps nothing across it)
 ; -----------------------------------------------------------------------------
 trk_render:
     call tw_want                    ; a frame that would draw nothing does not
-    jc .go                          ; take the lock either (tw_want)
-    ret
-.go:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    jnc .none                       ; take the lock either (tw_want)
     call OSAPI_GFX_LOCK
+    call trk_frame
+    call OSAPI_GFX_UNLOCK           ; also clears the clip
+.none:
+    ret
+
+; -----------------------------------------------------------------------------
+; trk_frame - the frame itself, with the gfx lock HELD: the worker's
+;             (trk_render) and the speaker bracket's (tsp_frame). Clobbers
+;             AX..DI: neither caller keeps anything across it
+; -----------------------------------------------------------------------------
+trk_frame:
     mov bx, [trk_win]
-    call OSAPI_WM_GEOM              ; CF=1: hidden - draw nothing
-    jc .book
-    call OSAPI_WM_CLIP_SET          ; CF=1: fully covered - skip the frame
-    jc .book
+    call OSAPI_WM_CLIP_SET          ; CF=1: hidden or fully covered - skip the
+    jc .book                        ; frame. The region asks W_FLAGS itself
+                                    ; (SPEC.md 11.3.1), so a WM_GEOM ahead of
+                                    ; it was a second far call a frame for
+                                    ; the same answer
     cmp byte [trk_abon], 0          ; checked HERE, under the lock, after the
     jne .book                       ; clip: the [ark_abon] rule verbatim
     mov byte [tw_inframe], 1        ; the frame's own clip is armed: a message
     call tui_draw_dyn               ; set inside it is drawn BY it, and nothing
     mov byte [tw_inframe], 0        ; may clear the clip (tw_refresh)
-    jmp short .unlock
+    jmp short .out
 .book:                              ; ...a frame not drawn is still BOOKED:
     call tw_book                    ; the position, the decay, the clock
-.unlock:                            ; (SPEC.md 45.21.9)
-    call OSAPI_GFX_UNLOCK           ; also clears the clip
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+.out:                               ; (SPEC.md 45.21.9)
     ret
 
 ; =============================================================================
@@ -3854,17 +3451,17 @@ trk_m_rate:  db 'Rate', 0
 trk_mi_rate: dw trk_ritem0, trk_ritem1, trk_ritem2, trk_ritem3, trk_ritem4
                                         ; COMPOSED, by
                                         ; trk_rate_menu (SPEC.md 45.17.1)
-trk_s_r11:   db '11 kHz', 0
+trk_s_r11 equ tw_s_voff + 13        ; '11 kHz', the tail of tw_s_voff's bytes
 trk_s_r22:   db '22 kHz', 0
 trk_s_r33:   db '33 kHz', 0
 trk_s_r44:   db '44 kHz', 0
 trk_rname:   dw trk_s_r11, trk_s_r22, trk_s_r33, trk_s_r44
 trk_rates:   dw TRK_RATE, TRK_RATE22, TRK_RATE33, TRK_RATE44
-trk_rmsg:    dw trk_s_m11, trk_s_m22, trk_s_m33, trk_s_m44
-trk_s_m11:   db 'Rate: 11 kHz - Enter plays', 0
-trk_s_m22:   db 'Rate: 22 kHz - Enter plays', 0
-trk_s_m33:   db 'Rate: 33 kHz - Enter plays', 0
-trk_s_m44:   db 'Rate: 44 kHz - smooth at 16 MHz+  Enter plays', 0
+trk_rsfx:    dw trk_s_play, trk_s_play, trk_s_play, trk_s_smooth
+                                      ; each pick's message is `Rate: ` +
+                                      ; its name + this (trk_rcomp)
+trk_s_play equ trk_s_xtmon + 10     ; ' - Enter plays', the tail of trk_s_xtmon's bytes
+trk_s_smooth: db ' - smooth at 16 MHz+  Enter plays', 0
                                       ; SPEC.md 45.10.1: a 12 MHz 286 cannot
                                       ; MIX it, a 16 MHz one can - a fact about
                                       ; the CPU that the tier cannot tell apart
@@ -3874,12 +3471,10 @@ trk_s_m44:   db 'Rate: 44 kHz - smooth at 16 MHz+  Enter plays', 0
 ; three fifths of which is unreachable. `(Windowed)` is rule 7 again - the
 ; trade is the whole feature, so the row that carries it says so.
 trk_s_x55:   db '5.5 kHz', 0
-trk_s_x11:   db '11 kHz', 0
 trk_s_xwin:  db ' (Windowed)', 0
-trk_xrname:  dw trk_s_x55, trk_s_x11
-trk_xrmsg:   dw trk_s_xm55, trk_s_xm11
-trk_s_xm55:  db 'Rate: 5.5 kHz - Enter plays', 0
-trk_s_xm11:  db 'Rate: 11 kHz - windowed only', 0
+trk_xrname:  dw trk_s_x55, trk_s_r11
+trk_xrsfx:   dw trk_s_play, trk_s_xwo
+trk_s_xwo:   db ' - windowed only', 0
 trk_s_rspkm: db 'Rate: ', 0             ; ...and the speaker's, 45.25.3
 trk_s_rspkp: db ' at the next Play', 0
 
@@ -3888,7 +3483,7 @@ trk_ttl:     db 'Tracker 33', 0     ; the listening builds say which they are
 %elif TRK_VSH == 0
 trk_ttl:     db 'Tracker 65', 0
 %else
-trk_ttl:     db 'Tracker', 0
+trk_ttl equ trk_m_name             ; 'Tracker', trk_m_name's own bytes
 %endif
 
 ; --- status-line strings -------------------------------------------------------
@@ -3995,6 +3590,11 @@ trk_s_txxt:   db 'Windowed only: Esc first', 0
 ; that has been freed.
 ; -----------------------------------------------------------------------------
 trk_reloc:
+    cmp bx, [tw_scseg]              ; the scope's band (SPEC.md 45.21.5.1):
+    jne .blob                       ; one word, read only under the gfx lock
+    mov [tw_scseg], dx              ; by a worker that is parked whenever it
+    ret                             ; can move
+.blob:
     push ax
     push cx
     push si

@@ -79,7 +79,7 @@ _a2_rd16:
 ; $BFFF is soft switches, slot space or ROM, and a write to any of it is
 ; DROPPED here - the core's own write ladder calls out to a2io.c for
 ; $C000-$C0FF before it ever reaches this routine. That is also what makes
-; the core's scratch at $CF00 safe with ZERO stated deviations
+; the core's scratch at $C100 safe with ZERO stated deviations
 ; (section 3.3), where the C64 needed two.
 ; -----------------------------------------------------------------------------
 _a2_wr:
@@ -135,6 +135,7 @@ _a2_wr:
     pop bp
     ret
 
+%ifndef A2_SHIP                     ; no caller in the package (apps size pass 1)
 ; -----------------------------------------------------------------------------
 ; void a2_dirty(unsigned a) - mark a's page dirty WITHOUT writing anything.
 ;
@@ -163,6 +164,7 @@ _a2_dirty:
     pop es
     pop bp
     ret
+%endif                              ; A2_SHIP
 
 ; -----------------------------------------------------------------------------
 ; int a2_wrote(void) - has anything been written since the last take?
@@ -283,6 +285,7 @@ _a2_dirty_take:
     pop bp
     ret
 
+%ifndef A2_SHIP                     ; hosttest/a2memtest.asm's subject, no caller in the package
 ; -----------------------------------------------------------------------------
 ; int a2_rom_rd(unsigned off) - one byte out of the ROM PART, by offset in
 ; APPLE2-SPEC section 1.4's layout (0 = $D000, $3000 = CHARGEN, $3800 = P5).
@@ -298,6 +301,7 @@ _a2_rom_rd:
     pop es
     pop bp
     ret
+%endif                              ; A2_SHIP
 
 ; -----------------------------------------------------------------------------
 ; void a2_chargen(void *dst, unsigned seg, unsigned off, unsigned n)
@@ -352,6 +356,7 @@ _a2_chargen:
     pop bp
     ret
 
+%ifndef A2_SHIP                     ; hosttest/a2memtest.asm's subject, no caller in the package
 ; -----------------------------------------------------------------------------
 ; void a2_zfill(unsigned a, int v, unsigned n) - n bytes of v into the Apple's
 ; RAM at a. The POWER-ON PATTERN is a2_zpower's above, not this one; this is
@@ -379,6 +384,7 @@ _a2_zfill:
     pop di
     pop bp
     ret
+%endif                              ; A2_SHIP
 
 ; -----------------------------------------------------------------------------
 ; void a2_zpower(unsigned a, unsigned n) - AppleWin's `FF FF 00 00` POWER-ON
@@ -433,6 +439,7 @@ _a2_zpower:
 ; address as a NUMBER and the package's end as a POINTER, which is the (seg,
 ; off) rule written in the signature.
 ; -----------------------------------------------------------------------------
+%ifndef A2_SHIP                     ; hosttest/a2memtest.asm's subject, no caller in the package
 _a2_zcopy_in:
     push bp
     mov bp, sp
@@ -453,6 +460,7 @@ _a2_zcopy_in:
     pop si
     pop bp
     ret
+%endif                              ; A2_SHIP
 
 _a2_zcopy_out:
     push bp

@@ -1220,7 +1220,7 @@ this tree), `glabios_pc`/`glabios_xt` are bundled with MartyPC.
 | `os8088_5150_sb_128k` / `_sb_256k` | `_sb` at 128 KB and 256 KB: SPEC.md §34.6's two claims are sized against the small one; Tracker cannot run at 128 KB at all, so the 256 KB one decides whether a MOD player's grants fit. IBM ROM, so neither boots in a container |
 | `os8088_5150_cga_128k` | **the 128 KB floor machine** — `kern_small`'s own (`make small && python3 tests/small128.py`). GLaBIOS |
 | `os8088_5150_cga_gla_256k` | 256 KB on GLaBIOS: the Weave family's floor (WEAVE-SPEC §1.4, `tests/weaveone.py`) |
-| `os8088_5150_gla_192k` / `_gla_128k` | GLaBIOS at 192 KB and 128 KB, for SPEC.md §18.95.5's directory-cache width (192 KB picks 7 of 14 slots). `type` is the MOTHERBOARD and not the total — **check `[mem_top]` in the guest rather than the number in the file**: a first cut asked for 144 KB and came up with 192. `_gla_128k` never reaches a desktop with the shipped kernel, and that is the floor: `kern_big`'s `MIN_RAM_KB` is 196 and `kern_small`'s is 128 (docs/KERNEL-MEMORY.md), so 128 KB is `os8088_5150_cga_128k` with `make small` |
+| `os8088_5150_gla_192k` / `_gla_128k` | GLaBIOS at 192 KB and 128 KB, for SPEC.md §18.95.5's directory-cache width (192 KB picks 7 of 14 slots). `type` is the MOTHERBOARD and not the total — **check `[mem_top]` in the guest rather than the number in the file**: a first cut asked for 144 KB and came up with 192. Both kernels' `MIN_RAM_KB` is 128 (docs/KERNEL-MEMORY.md); the 128 KB machines the suite boots are `os8088_5150_cga_128k` (`kern_small`, `tests/small128.py`) and `os8088_xt_vga_128k` (`kern_big`, `tests/kernresident.py`) |
 | `os8088_xt_hdd` | the XT with an **XT-IDE** controller — SPEC.md §52's rung 0 — **and a parallel port**, so it is the one machine where TWO drivers publish a Control Panel page at once (SPEC.md §31.9/§62.7) |
 | `os8088_xt_hdd_sb` | ...and a Sound Blaster too: five volumes and two drivers at once, which is what the per-volume FAT windows (SPEC.md §18.8.1) can be counted on |
 | `os8088_xt_vga_hdd` | the XT-IDE disk behind a **VGA**, the only place the hard-disk boot's VGA-only loading chrome (SPEC.md §15.3, §2.9.9.1) can be looked at. GLaBIOS's boot menu times out to A: before frame 300 here — the VGA BIOS's own init pushes POST out — so press `KeyC` more than once |
@@ -1241,12 +1241,24 @@ page 0, which is what a real card with 3BFh bit 1 clear decodes and what
 `vid_setmode` leaves it at (SPEC.md §39.6). The obvious test — write B0000,
 write B8000, read both back — does not catch it, because they are 32 KB
 apart inside one card's 64 KB; `tests/dualcheck.py` asks the *rasters*
-instead, and is verified to fail with patch 02 reverted. Then SPEC.md
+instead, and is verified to fail with patch 02 reverted.
+`patches/13-hercules-page1-lone-card.patch` gives a LONE Hercules its page 1
+back: B8000 is claimed only where no other card has mapped it, so a CGA wins
+in either block order, and it decodes only while 3BFh bit 1 is set, as the
+card does. That is for the Video Player's page-ahead (SPEC.md §98.3.8.3),
+the one guest here that writes page 1. Then SPEC.md
 §39.1's `vid_detect` reads `int 11h` bits 5:4, which upstream *derives* from
 the card list ("any CGA present → CGA"), so no two-card machine could boot
 mono: `patches/03-video-dip-config.patch` adds an optional `video_dip`
 (`"mda"` / `"cga_lores"` / `"cga_hires"` / `"expansion"`); absent, nothing
 changes.
+
+`patches/12-hercules-lone-page1.patch` restores B8000h page-1 decoding for a
+**single** Hercules, gated by 3BFh bit 1. WireBall now exercises both VRAM
+pages through OSAPI_FSX_PAGE (§109.5). With the enable bit clear reads return
+FFh and writes are ignored, so the kernel's color-card probe cannot mistake
+Hercules page 1 for a second adapter. Two-card configurations retain patch
+02's page-0 aperture, regardless of card order.
 
 **A two-card config lists the card os8088 will drive FIRST.** MartyPC's
 primary is the first `[[machine.video]]` block, and `fbuf` with no `card=`

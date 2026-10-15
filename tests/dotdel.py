@@ -159,9 +159,29 @@ def bss(path="apps/dotdel/dotdel.asm"):
                         "-I", "apps/dotdel/", "-o", binf, asm],
                        cwd=ROOT, check=True)
         d = open(binf, "rb").read()
+        # ...AND THE PACKAGE ITSELF, from the same source, against the one
+        # the disks were built from. The offsets are image-relative, so the
+        # image size is the one number that ties them to the machine - and
+        # it was read off build/dotdel.bin unchecked: a binary older than the
+        # source gave every offset a wrong base, and `ddsmall` reported
+        # `content 0x0`, which reads exactly like a broken package. A binary
+        # that is not what the source assembles to means the floppy is stale
+        # too, so this refuses rather than guessing which to believe.
+        real = os.path.join(td, "dotdel.bin")
+        subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
+                        "-I", "apps/dotdel/", "-o", real,
+                        os.path.join(ROOT, path)], cwd=ROOT, check=True)
+        fresh = open(real, "rb").read()
+    built = os88build.at("build/dotdel.bin")
+    if not os.path.exists(built) or open(built, "rb").read() != fresh:
+        sys.exit("dotdel: %s is %s - it is not what %s assembles to, so the "
+                 "disk under test carries a different package and every bss "
+                 "offset would be read against the wrong image. Run `make` "
+                 "(or the row's own tree build) first."
+                 % (built, "MISSING" if not os.path.exists(built) else "STALE",
+                    path))
     vals = struct.unpack("<%dH" % len(names), d[len(d) - 2 * len(names):])
-    img = struct.unpack("<H", open(os88build.at("build/dotdel.bin"),
-                                   "rb").read()[8:10])[0]
+    img = struct.unpack("<H", fresh[8:10])[0]
     return {n: img + v for n, v in zip(names, vals)}
 
 

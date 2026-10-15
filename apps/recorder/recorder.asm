@@ -136,9 +136,22 @@ RC_BTN_W    equ 52                  ; buttons at x 4 / 58 / 112 / 166
 RC_TIERS    equ 4
 RC_CAP_MAX  equ 40000               ; tier 0: 5 s at 8 kHz
 RC_RATE     equ 8000                ; one rate everywhere (PWM N=149, in range)
-RC_CHUNK    equ 1000                ; demo synth/stage chunk (divides RC_D_LEN/2,
-                                    ; so the sweep turns on a chunk boundary)
-RC_PBUF_SZ  equ 4000                ; read-back buffer: 0.5 s PCM_EXCL chunks
+RC_CHUNK    equ 250                 ; demo synth/stage chunk (divides RC_D_LEN/2,
+                                    ; so the sweep turns on a chunk boundary).
+                                    ; It is most of rc_pbuf: 32 verb-6 calls
+                                    ; stage the 1 s take where 8 did, for 750
+                                    ; bytes of bss. rc_pbuf is 256 whatever
+                                    ; this is, because it is also the speaker
+                                    ; play's rescale table (SPEC.md 34.4), so
+                                    ; 250 - the largest divisor of 4,000 that
+                                    ; fits - costs nothing over a smaller
+                                    ; chunk, and each call it saves is ~2,600
+                                    ; cycles of the demo
+%if RC_CHUNK > 256
+  %error "RC_CHUNK: rc_pbuf is 256 bytes"
+%endif
+RC_PBUF_SZ  equ 4000                ; speaker play: 0.5 s PCM_EXCL chunks, in a
+                                    ; claim held for one play (rc_do_play)
 RC_D_LEN    equ 8000                ; demo take: 1 s at RC_RATE
 RC_INC400   equ 3277                ; phase increment 400*65536/8000 (400 Hz)
 RC_INC800   equ 6554                ; 800*65536/8000 (800 Hz)
@@ -221,26 +234,35 @@ rc_paint:
     push dx
     push si
     push di
+    call rc_org
+    call rc_poll
+    call rc_draw_all
+    cmp byte [rc_abon], 0           ; ...and the About card LAST, over the
+    je rc_pop6                      ; face it is opaque about (SPEC.md 20.5.1)
+    mov si, rc_ablines              ; (SI is the window no longer: the pops
+    call os88ui_about_d             ; put it back. _d: this paint's region is
+    jmp rc_pop6                     ; already armed)
+
+; -----------------------------------------------------------------------------
+; rc_org - stash the window's content origin in [rc_ox]/[rc_oy]
+; in:  SI = window ptr
+; out: BX = SI; clobbers AX - and KEEPS DX, which is the whole point
+;
+; OSAPI_WM_CONTENT answers the top in DX, and three of the six callers hold
+; the POINTER's y in DX across this: W_ONCLICK, W_ONDRAG and W_ONMOUSEUP all
+; hit-test (CX, DX) afterwards. rc_onclick saved it around the call and the
+; other two did not, so the release and the drag tested (x, content top) - a
+; point that is never inside a button - and NO BUTTON EVER FIRED; only the
+; Sound menu worked (tests/recorder.py step 1, red on the old code).
+; -----------------------------------------------------------------------------
+rc_org:
+    push dx
     mov bx, si
     call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
     mov [rc_ox], ax
     mov [rc_oy], dx
-    call rc_poll
-    call rc_draw_all
-    cmp byte [rc_abon], 0           ; ...and the About card LAST, over the
-    je .out                         ; face it is opaque about (SPEC.md 20.5.1)
-    push si
-    mov si, rc_ablines
-    call os88ui_about_d             ; _d: this paint's region is already armed
-    pop si
-.out:
-    pop di
-    pop si
     pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret                             ; near: dispatched (SPEC.md 20.5)
+    ret
 
 ; -----------------------------------------------------------------------------
 ; rc_onclick - W_ONCLICK: poll, hit-test the buttons, act, repaint content
@@ -256,14 +278,7 @@ rc_onclick:
     push di
     call rc_abdismiss               ; the credits are up: this click is spent
     jc .out                         ; taking them down
-    mov bx, si
-    push cx
-    push dx
-    call OSAPI_WM_CONTENT
-    mov [rc_ox], ax
-    mov [rc_oy], dx
-    pop dx
-    pop cx
+    call rc_org
     call rc_layout                  ; the rects follow the window; CX/DX are
     mov ax, 4                       ; already SCREEN coords, which is what
     mov bx, rc_rects                ; os88ui_bfind wants
@@ -274,15 +289,8 @@ rc_onclick:
     jz .out                         ; DRAWS is the pressed state (SPEC.md 13.8)
     call rc_draw_btns               ; ...through the ONE painter, which is what
 .out:                               ; keeps the enable rules in a single place -
-                                    ; four buttons rather than one, and a press
+    jmp rc_pop6                     ; four buttons rather than one, and a press
                                     ; is a human-rate event
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret                             ; near: dispatched (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; rc_ondrag - W_ONDRAG (SPEC.md 13.8.1): the pointer moved, press still down
@@ -304,10 +312,7 @@ rc_ondrag:
     or ax, ax
     jz .out
     mov di, ax
-    mov bx, si
-    call OSAPI_WM_CONTENT           ; the window may have moved since the press
-    mov [rc_ox], ax
-    mov [rc_oy], dx
+    call rc_org                     ; the window may have moved since the press
     call rc_layout
     mov ax, 4
     mov bx, rc_rects
@@ -321,13 +326,7 @@ rc_ondrag:
     mov [rc_down], ax
     call rc_draw_btns
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp rc_pop6
 
 ; -----------------------------------------------------------------------------
 ; rc_onup - W_ONMOUSEUP (SPEC.md 13.7): the button fires HERE
@@ -349,10 +348,7 @@ rc_onup:
     push dx
     push si
     push di
-    mov bx, si
-    call OSAPI_WM_CONTENT           ; the window may have moved since the press
-    mov [rc_ox], ax
-    mov [rc_oy], dx
+    call rc_org                     ; the window may have moved since the press
     call rc_layout
     call os88ui_fire                ; AX = what the press armed, and it is
     or ax, ax                       ; cleared - one release per press, so
@@ -361,8 +357,12 @@ rc_onup:
     cmp word [rc_down], 0           ; ...and the pressed button comes back UP
     je .find                        ; first and unconditionally, whatever the
     mov word [rc_down], 0           ; release turns out to mean. Every path
+    push cx
     call rc_draw_btns               ; below either acts (and repaints) or
-.find:                              ; cancels (and must leave it upright)
+    pop cx                          ; cancels (and must leave it upright). CX
+.find:                              ; is the pointer's x, and the painter's to
+                                    ; lose: its CL is each button's enable, and
+                                    ; this hit-tested (CL = 1, DX = top) too
     mov ax, 4
     mov bx, rc_rects
     call os88ui_bfind               ; AX = the button under the RELEASE
@@ -370,25 +370,15 @@ rc_onup:
     jne .out                        ; a different button, or none: cancelled
     call rc_poll                    ; retire a finished stream first, so the
                                     ; button logic sees the current state
-    dec ax
-    jnz .n1
-    call rc_do_rec
-    jmp short .repaint
-.n1:
-    dec ax
-    jnz .n2
-    call rc_do_stop
-    jmp short .repaint
-.n2:
-    dec ax
-    jnz .n3
-    call rc_do_play
-    jmp short .repaint
-.n3:
-    call rc_do_demo
-.repaint:
-    call rc_repaint
+    dec ax                          ; index+1 -> the RC_CMD_* the menu sends
+    call rc_cmd
 .out:
+                                    ; THE SHARED EPILOGUE, written out by hand
+                                    ; (OS88_POPLADDER's shape: the stkapps gate
+                                    ; could not then see that macro's labels;
+                                    ; it can since SPEC.md 20.5's round 2): the
+                                    ; five routines that save all six end here
+rc_pop6:
     pop di
     pop si
     pop dx
@@ -416,35 +406,39 @@ rc_onup:
 ; -----------------------------------------------------------------------------
 rc_oncmd:
     call rc_abdismiss               ; a menu pick takes the credits down first,
-    mov bx, si                      ; and then does what it says
-    push ax                         ; the selection: wm_content answers in AX
-    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
-    mov [rc_ox], ax
-    mov [rc_oy], dx
+    push ax                         ; and then does what it says. The
+    call rc_org                     ; selection: wm_content answers in AX
     call rc_poll                    ; retire a finished stream first, so the
     pop ax                          ; rc_do_* guards below see the live state
-    cmp al, RC_CMD_REC
-    jne .n1
-    call rc_do_rec
-    jmp .repaint
-.n1:
+                                    ; ...and fall into rc_cmd, which is the
+                                    ; whole of the rest
+
+; -----------------------------------------------------------------------------
+; rc_cmd - run one of the four transitions, then repaint
+; in:  AL = RC_CMD_* (the menu's item index, or the button's index); the
+;      state already polled; [rc_ox]/[rc_oy] stashed; gfx lock held
+; out: nothing; clobbers AX, BX, CX, DX, SI, DI
+;
+; THE ONE DISPATCH both ways of asking share - the button path and the menu
+; path carried a compare ladder each. Record, Play and Demo all need an idle
+; machine, so that refusal is made here once rather than in each of them. A
+; fifth index cannot happen - the pull-down only offers the four items we
+; declared - but the poll may have moved the state, so it still repaints.
+; -----------------------------------------------------------------------------
+rc_cmd:
+    cmp al, RC_CMD_DEMO
+    ja rc_repaint
     cmp al, RC_CMD_STOP
-    jne .n2
-    call rc_do_stop
-    jmp .repaint
-.n2:
-    cmp al, RC_CMD_PLAY
-    jne .n3
-    call rc_do_play
-    jmp .repaint
-.n3:
-    cmp al, RC_CMD_DEMO             ; a fifth index cannot happen - the pull-
-    jne .repaint                    ; down only offers the AMENU_NITEM items
-    call rc_do_demo                 ; we declared - but the poll above may
-                                    ; have moved the state, so repaint anyway
-.repaint:
-    call rc_repaint
-    ret                             ; near: dispatched (SPEC.md 20.5)
+    je .go                          ; Stop is the one that runs while busy
+    cmp byte [rc_st], RC_IDLE
+    je .go
+    mov word [rc_msg], rc_s_busy
+    jmp short rc_repaint
+.go:
+    cbw
+    xchg bx, ax
+    shl bx, 1
+    call [rc_cmdtab+bx]             ; ...and fall into the repaint
 
 ; -----------------------------------------------------------------------------
 ; rc_repaint - white-fill our own content and draw it again
@@ -469,8 +463,7 @@ rc_repaint:
     mov dx, bx
     add dx, RC_CONT_H-1
     call OSAPI_GFX_FILL
-    call rc_draw_all
-    ret
+    jmp rc_draw_all
 
 ; -----------------------------------------------------------------------------
 ; rc_poll - read STREAM verb 3 and retire state changes (SPEC.md 34.3: the
@@ -501,16 +494,16 @@ rc_poll:
     jb .out                         ; the kernel auto-resumes (SPEC.md 34.5)
 .pdone:                             ; consumed == length: data exhausted -
     call rc_close                   ; the owner's cue to close
-    mov word [rc_msg], rc_s_pdonesb
-    jmp .out
+    mov ax, rc_s_pdonesb
+    jmp short .say
 .pwdog:
     call rc_close
-    mov word [rc_msg], rc_s_pwdog
-    jmp .out
+    mov ax, rc_s_pwdog
+    jmp short .say
 .pstale:
     mov byte [rc_st], RC_IDLE       ; stale: torn down under us
-    mov word [rc_msg], rc_s_stopped
-    jmp .out
+    mov ax, rc_s_stopped
+    jmp short .say
 
     ; --- recording (PCM_IN) ---------------------------------------------------
 .rec:
@@ -518,7 +511,7 @@ rc_poll:
     jnz .r1
 .rlive:
     mov [rc_len], dx                ; live captured count
-    jmp .out
+    jmp short .out
 .r1:
     cmp ax, SND_ST_ENDED            ; watchdog: input IRQs stopped arriving
     je .rwdog                       ; (on QEMU they never start - SPEC.md 35)
@@ -528,12 +521,14 @@ rc_poll:
     jb .rlive                       ; track the count, kernel resumes (34.6)
     mov [rc_len], dx                ; consumed == capacity: full - close
     call rc_close
-    mov word [rc_msg], rc_s_rfull
-    jmp .out
+    mov ax, rc_s_rfull
+    jmp short .say
 .rwdog:
     mov [rc_len], dx
     call rc_close
-    mov word [rc_msg], rc_s_rwdog
+    mov ax, rc_s_rwdog
+.say:
+    mov [rc_msg], ax
 .out:
     pop dx
     pop ax
@@ -576,51 +571,47 @@ rc_grant:
     call OSAPI_SND_STREAM           ; out AX = 0 + SI = grant offset
     or ax, ax
     jz .got
+    mov si, rc_s_nodrv
     cmp ax, 4                       ; 4 = no streaming sink at all: no tier
-    je .nodrv                       ; is going to help, and 'NO SOUND MEMORY'
+    je .fail                        ; is going to help, and 'NO SOUND MEMORY'
                                     ; would send the user looking for RAM
-    add bx, 2                       ; anything else: the next tier down
+    inc bx                          ; anything else: the next tier down
+    inc bx
     cmp bx, rc_captab + RC_TIERS*2
     jb .try
-.nodrv:
+    mov si, rc_s_nomem
+.fail:
+    mov [rc_msg], si
     pop bx
-    cmp ax, 4
-    je .nosink
-    jmp short .fail
+    stc
+    ret
 .got:
     mov [rc_goff], si
-    mov cx, [bx]                    ; the size we actually got is the capacity
-    mov [rc_cap], cx
+    mov ax, [bx]                    ; the size we actually got is the capacity
+    mov [rc_cap], ax
     mov byte [rc_have], 1
-    mov ax, cx                      ; ...and line 2 says so, because it is not
-    mov bx, rc_s_line2+6            ; the same number on every machine now
-    call rc_putu5
+    mov bx, rc_s_line2+6            ; ...and line 2 says so, because it is not
+    call rc_putu5                   ; the same number on every machine now
     pop bx
 .ok:
     clc
     ret
-.fail:
-    mov word [rc_msg], rc_s_nomem
-    stc
-    ret
-.nosink:
-    mov word [rc_msg], rc_s_nodrv
-    stc
-    ret
 
 ; the tiers, largest first (RC_TIERS entries). The last MUST be >= RC_D_LEN.
 rc_captab:  dw RC_CAP_MAX, 24000, 16000, RC_D_LEN
+
+; rc_cmd's table, in RC_CMD_* order - the menu's item order (rc_i_sound)
+rc_cmdtab:  dw rc_do_rec, rc_do_stop, rc_do_play, rc_do_demo
 
 ; -----------------------------------------------------------------------------
 ; rc_do_rec - the REC button: verb 4 open-in into the grant
 ; in:  nothing
 ; out: nothing; clobbers AX, CX, DX, SI
 ; The three-layer refusal (SPEC.md 32 idiom): no SND_CAP_PCM_IN means the
-; button was drawn gray AND this click only writes the explanation.
+; button was drawn gray AND this click only writes the explanation. rc_cmd
+; has already refused it while a stream is open.
 ; -----------------------------------------------------------------------------
 rc_do_rec:
-    cmp byte [rc_st], RC_IDLE
-    jne .busy
     test byte [rc_caps], SND_CAP_PCM_IN
     jz .noin
     call rc_grant
@@ -637,9 +628,6 @@ rc_do_rec:
     mov word [rc_len], 0            ; the old take is gone
     mov word [rc_msg], rc_s_rec
 .out:
-    ret
-.busy:
-    mov word [rc_msg], rc_s_busy
     ret
 .noin:
     mov word [rc_msg], rc_s_noin
@@ -684,15 +672,15 @@ rc_do_stop:
 ; out: nothing; clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 rc_do_play:
-    cmp byte [rc_st], RC_IDLE
-    jne .busy
-    cmp word [rc_len], 0
+    cmp word [rc_len], 0            ; (idle already: rc_cmd's refusal)
     je .nodata
     test byte [rc_caps], SND_CAP_PCM_BG
     jz .spk
 
     ; --- SB background stream: the grant is already fully staged ---------------
-    mov ax, 0x0000                  ; verb 0 open-out
+    xor ax, ax                      ; verb 0 open-out, AH = 0 flags (the
+                                    ; byte it saves keeps everything below
+                                    ; at its parity across the table's BX)
     mov si, [rc_goff]
     mov cx, [rc_len]
     mov dx, RC_RATE
@@ -709,12 +697,36 @@ rc_do_play:
     ; PCM_EXCL contract (SPEC.md 34.4); a mouse click aborts mid-chunk,
     ; and BL mirrors the kernel's release-folded baseline across the
     ; chunk gaps so a press landing between chunks aborts too (SPEC.md 35).
+    ;
+    ; THE CHUNK BUFFER IS A CLAIM FOR THE LENGTH OF ONE PLAY (SPEC.md 35.2),
+    ; not 4,000 bytes of every instance's bss: it is the only thing that
+    ; needs it, and a machine with a card - the only one that can stage a
+    ; take at all today - never comes here. The chunk stays 0.5 s because
+    ; every chunk boundary is a gap in the sound (the verb-5 copy and
+    ; os88pcm_play rebuilding its rescale table), so a smaller one would be
+    ; more gaps. Verb 5 copies into the CALLER's segment, which its X stub
+    ; takes from DS - so DS is the claim for that one call, and nothing
+    ; between it and the restore touches our own variables.
 .spk:
     test byte [rc_caps], SND_CAP_PCM_EXCL
     jz .nosink
+    mov ax, (RC_PBUF_SZ+1023)/1024
+    call OSAPI_MEM_CLAIM            ; DX = the play buffer's segment
+    jc .nomem
+    push bp
+    mov bp, dx                      ; BP = it, for the whole play
+    call .play
+    mov dx, bp
+    call OSAPI_MEM_FREE             ; every way out of .play comes back here
+    pop bp
+    ret
+.nomem:
+    mov word [rc_msg], rc_s_nomem
+    ret
+.play:
     call OSAPI_MOUSE                ; BL = abort baseline: buttons already
     mov bl, al                      ; down now never abort until re-pressed
-    mov di, 0                       ; DI = bytes played so far
+    xor di, di                      ; DI = bytes played so far
 .chunk:
     mov cx, [rc_len]
     sub cx, di
@@ -723,25 +735,26 @@ rc_do_play:
     jbe .n
     mov cx, RC_PBUF_SZ              ; 0.5 s chunks (callers chunk <= 2 s)
 .n:
-    push cx
-    mov ax, 0x0005                  ; verb 5 read: grant -> rc_pbuf
+    mov ax, 0x0005                  ; verb 5 read: grant -> the claim at 0
     mov si, [rc_goff]
     add si, di
     push di
-    mov di, rc_pbuf
+    push ds
+    mov ds, bp                      ; the CALLER's segment, for this one call
+    xor di, di
     call OSAPI_SND_STREAM
+    pop ds
     pop di
-    pop cx
     or ax, ax
     jnz .err
-    push es                         ; the clip lives in our own image: ES=DS
-    push cx
-    push ds
-    pop es
-    mov si, rc_pbuf
+    push es                         ; ES:SI = the clip, in the claim
+    mov es, bp
+    xor si, si
     mov dx, RC_RATE
-    call os88pcm_play               ; BLOCKS; out AX = 0 ok / 1..5 err
-    pop cx
+    push bx                         ; (BL is the abort baseline)
+    mov bx, rc_pbuf                 ; the rescale table's 256 bytes: the
+    call os88pcm_play               ; demo's stage buffer, idle while this
+    pop bx                          ; BLOCKS; out AX = 0 ok / 1..5 err
     pop es
     or ax, ax
     jnz .pres
@@ -767,9 +780,6 @@ rc_do_play:
     jne .err
     mov word [rc_msg], rc_s_spkoff
     ret
-.busy:
-    mov word [rc_msg], rc_s_busy
-    ret
 .nodata:
     mov word [rc_msg], rc_s_nodata
     ret
@@ -783,97 +793,88 @@ rc_do_play:
 ; rc_do_demo - the DEMO button: stage the built-in sine sweep as if recorded
 ; (1 s at 8 kHz: 400 Hz rising linearly to 800 Hz over the first half
 ; second, falling back to 400 Hz over the second = 8,000 samples)
-; in:  nothing
+; in:  nothing (idle already: rc_cmd's refusal)
 ; out: nothing; clobbers AX, BX, CX, DX, SI, DI
+;
+; Synthesised RC_CHUNK bytes at a time into rc_pbuf and staged with verb 6
+; (DS:SI -> the grant at DI), so the stage buffer is RC_CHUNK and not the
+; take. Each sample reads the sine at the phase accumulator's top byte; then
+; the increment is Bresenham-stepped by [rc_dstep] - RC_INC800-RC_INC400
+; steps spread evenly over RC_D_LEN/2 samples, one linear octave per half.
+;
+; THE SINE IS A QUARTER WAVE, 65 bytes for 256 (rc_sine below): the index's
+; low 7 bits fold about 64 and bit 7 is the sign, which is EXACT for this
+; table - tests/recorder.py step 2 checks all 8,000 samples against the
+; formula. What pays for the fold is the loop's own state in registers: the
+; Bresenham error is BP and the phase SI, where they were two words of bss
+; read and written every sample, and the store is a stosb.
 ; -----------------------------------------------------------------------------
 rc_do_demo:
-    cmp byte [rc_st], RC_IDLE
-    jne .busy
     call rc_grant
     jc .out
-    mov di, [rc_goff]               ; DI = staging cursor
-    xor bx, bx                      ; BX = phase accumulator
-    mov dx, RC_INC400               ; DX = phase increment (400 Hz)
+    push bp
+    push es
+    push ds
+    pop es                          ; ES:DI = rc_pbuf, for the stosb
     mov word [rc_dstep], 1          ; first half sweeps upward
-    mov word [rc_err], 0
+    mov bx, rc_sine                 ; BX = the quarter wave, for xlatb
+    xor si, si                      ; SI = phase accumulator
+    mov dx, RC_INC400               ; DX = phase increment (400 Hz)
+    mov bp, 0x10000 - RC_D_LEN/2    ; BP = Bresenham error, biased by the
+                                    ; half-length so the carry is the test
+    mov ax, [rc_goff]               ; AX = grant staging cursor
 .chunk:
-    call rc_synth
-    call rc_stage
-    jc .out
-    mov ax, di                      ; AX = bytes staged so far
-    sub ax, [rc_goff]
-    cmp ax, RC_D_LEN/2              ; halfway: the sweep turns around
-    jne .on
-    neg word [rc_dstep]
-.on:
-    cmp ax, RC_D_LEN
-    jb .chunk
-    mov word [rc_len], RC_D_LEN
-    mov word [rc_msg], rc_s_demo
-.out:
-    ret
-.busy:
-    mov word [rc_msg], rc_s_busy
-    ret
-
-; -----------------------------------------------------------------------------
-; rc_stage - verb 6: stage one RC_CHUNK from rc_pbuf into the grant at DI
-; in:  DI = grant staging cursor
-; out: CF=0 with DI advanced, CF=1 refused ([rc_msg] = the error);
-;      clobbers AX, CX, SI
-; -----------------------------------------------------------------------------
-rc_stage:
-    mov ax, 0x0006                  ; verb 6 stage: DS:SI -> grant at DI
-    mov si, rc_pbuf
-    mov cx, RC_CHUNK
-    call OSAPI_SND_STREAM
-    or ax, ax
-    jnz .bad
-    add di, RC_CHUNK
-    clc
-    ret
-.bad:
-    call rc_errmsg
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; rc_synth - fill rc_pbuf's first RC_CHUNK bytes of sweeping sine, 8-bit
-; unsigned (the SPEC.md 34.2 wire format): each sample reads the 256-entry
-; table at the phase accumulator's top byte, then the increment is
-; Bresenham-stepped by [rc_dstep] - RC_INC800-RC_INC400 steps spread
-; evenly over RC_D_LEN/2 samples, one linear octave per demo half
-; in:  BX = phase accumulator, DX = increment; [rc_err]/[rc_dstep] live
-; out: BX, DX, [rc_err] advanced; preserves the other registers
-; -----------------------------------------------------------------------------
-rc_synth:
     push ax
-    push cx
-    push si
-    push di
     mov di, rc_pbuf
     mov cx, RC_CHUNK
 .s:
-    mov al, bh                      ; top phase byte indexes the table
-    mov ah, 0
-    mov si, ax
-    mov al, [rc_sine+si]
-    mov [di], al
-    inc di
-    add bx, dx                      ; phase += increment
-    mov ax, [rc_err]                ; err += span; on overflow past the
-    add ax, RC_INC800-RC_INC400     ; half-length the increment takes
-    cmp ax, RC_D_LEN/2              ; one dstep step
-    jb .keep
-    sub ax, RC_D_LEN/2
+    mov ax, si
+    mov al, ah                      ; AH = AL = i, the phase's top byte
+    test al, 64                     ; the second quarter of either half is
+    jz .q                           ; the first backwards: -i & 127 is 128 - i
+    neg al                          ; there, and on the second half it is
+.q:                                 ; 256 - i = 128 - (i - 128) - the same
+    and al, 127                     ; fold, with nothing to add
+    xlatb                           ; AL = 128 + the quarter wave, 128..216
+    or ah, ah
+    jns .p
+    neg al                          ; the second half: 256 - (128 + q) is
+.p:                                 ; 128 - q, the first half inverted, and
+    stosb                           ; already 8-bit unsigned (SPEC.md 34.2)
+    add si, dx                      ; phase += increment
+    add bp, RC_INC800-RC_INC400     ; err += span; on overflow past the
+    jnc .k                          ; half-length (the bias: a carry out of
+    sub bp, RC_D_LEN/2              ; BP) the increment takes one dstep step
     add dx, [rc_dstep]
-.keep:
-    mov [rc_err], ax
+.k:
     loop .s
-    pop di
+    pop di                          ; DI = the grant cursor
+    push si
+    mov si, rc_pbuf
+    mov cx, RC_CHUNK
+    mov ax, 0x0006                  ; verb 6 stage: DS:SI -> grant at DI
+    call OSAPI_SND_STREAM
     pop si
-    pop cx
-    pop ax
+    or ax, ax
+    jnz .bad
+    lea ax, [di+RC_CHUNK]
+    mov cx, ax
+    sub cx, [rc_goff]               ; CX = bytes staged so far
+    cmp cx, RC_D_LEN/2              ; halfway: the sweep turns around
+    jne .on
+    neg word [rc_dstep]
+.on:
+    cmp cx, RC_D_LEN
+    jb .chunk
+    mov word [rc_len], RC_D_LEN
+    mov word [rc_msg], rc_s_demo
+    jmp short .done
+.bad:
+    call rc_errmsg
+.done:
+    pop es
+    pop bp
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -896,65 +897,33 @@ rc_errmsg:
     ret
 
 ; -----------------------------------------------------------------------------
-; rc_draw_all - waveform strip + status lines + buttons (content is white)
-; in:  [rc_ox]/[rc_oy] stashed; caller holds the gfx lock
-; out: nothing; preserves all registers
-; -----------------------------------------------------------------------------
-rc_draw_all:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call rc_draw_wave
-    call rc_draw_status
-    call rc_draw_btns
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 ; rc_draw_wave - the strip: frame, white field, centerline, then one sample
 ; per column read back through verb 5 (decimated: offset = col*len/208)
 ; in:  [rc_ox]/[rc_oy], [rc_goff]/[rc_len]
 ; out: nothing; clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 rc_draw_wave:
+    mov si, [rc_ox]                 ; every API cell keeps every register but
+    mov di, [rc_oy]                 ; its outputs (os88api.inc), so the rect is
+    lea bx, [di+RC_WAVE_Y1]         ; computed once and walked in by one
+    lea cx, [si+RC_WAVE_X2]
+    lea dx, [di+RC_WAVE_Y2]
     mov al, CBLACK
     call OSAPI_SET_COLOR
-    mov ax, [rc_ox]
-    add ax, RC_WAVE_X1
-    mov bx, [rc_oy]
-    add bx, RC_WAVE_Y1
-    mov cx, [rc_ox]
-    add cx, RC_WAVE_X2
-    mov dx, [rc_oy]
-    add dx, RC_WAVE_Y2
+    lea ax, [si+RC_WAVE_X1]
     call OSAPI_GFX_FRAME
     mov al, CWHITE                  ; the field (click-repaints reuse this
     call OSAPI_SET_COLOR            ; path with stale pixels underneath)
-    mov ax, [rc_ox]
-    add ax, RC_WAVE_X1+1
-    mov bx, [rc_oy]
-    add bx, RC_WAVE_Y1+1
-    mov cx, [rc_ox]
-    add cx, RC_WAVE_X2-1
-    mov dx, [rc_oy]
-    add dx, RC_WAVE_Y2-1
+    lea ax, [si+RC_WAVE_X1+1]
+    inc bx
+    dec cx
+    dec dx
     call OSAPI_GFX_FILL
     mov al, CLGRAY                  ; centerline
     call OSAPI_SET_COLOR
-    mov ax, [rc_ox]
-    add ax, RC_WAVE_X1+1
-    mov bx, [rc_ox]
-    add bx, RC_WAVE_X2-1
-    mov dx, [rc_oy]
-    add dx, RC_WAVE_MID
+    lea ax, [si+RC_WAVE_X1+1]
+    mov bx, cx                      ; x2 = the field's right edge
+    lea dx, [di+RC_WAVE_MID]
     call OSAPI_GFX_HLINE
     cmp word [rc_len], 0
     je .out                         ; nothing captured: centerline only
@@ -1015,14 +984,21 @@ rc_draw_status:
     mov ax, [rc_len]                ; render the byte count into line 2
     mov bx, rc_s_line2
     call rc_putu5
-    mov cx, [rc_ox]
-    add cx, 4
-    mov dx, [rc_oy]
-    add dx, RC_ST2_Y
-    mov si, rc_s_line2
+    add dx, RC_ST2_Y-RC_ST1_Y       ; FONT_RUN kept CX/DX (os88api.inc)
+    mov si, bx
     mov ax, (CWHITE << 8) | CBLACK
     call OSAPI_FONT_RUN
     ret
+
+; -----------------------------------------------------------------------------
+; rc_draw_all - waveform strip + status lines + buttons (content is white)
+; in:  [rc_ox]/[rc_oy] stashed; caller holds the gfx lock
+; out: nothing; clobbers AX, BX, CX, DX, SI, DI - every caller has saved them
+;      or may lose them (rc_paint and rc_abdismiss save all six)
+; -----------------------------------------------------------------------------
+rc_draw_all:
+    call rc_draw_wave
+    call rc_draw_status             ; ...and fall into the buttons
 
 ; -----------------------------------------------------------------------------
 ; rc_draw_btns - the four buttons; disabled ones draw dark gray (layer one
@@ -1032,48 +1008,43 @@ rc_draw_status:
 ; -----------------------------------------------------------------------------
 rc_draw_btns:
     call rc_layout
-    mov cl, 0                       ; REC: needs PCM_IN and idle
+    mov ch, 0                       ; CH = 1 idle - three of the four ask
+    cmp byte [rc_st], RC_IDLE
+    jne .b
+    inc ch
+.b:
+    mov cl, ch                      ; REC: needs PCM_IN and idle
     test byte [rc_caps], SND_CAP_PCM_IN
-    jz .rec
-    cmp byte [rc_st], RC_IDLE
-    jne .rec
-    mov cl, 1
+    jnz .rec
+    mov cl, 0
 .rec:
-    mov ax, 0
+    xor ax, ax
     mov si, rc_l_rec
-    call rc_btn
+    call rc_btn                     ; (keeps every register)
 
-    mov cl, 0                       ; STOP: needs an open stream
-    cmp byte [rc_st], RC_IDLE
-    je .stop
-    mov cl, 1
-.stop:
-    mov ax, 1
+    mov cl, ch                      ; STOP: needs an open stream
+    xor cl, 1
+    inc ax
     mov si, rc_l_stop
     call rc_btn
 
-    mov cl, 0                       ; PLAY: needs a take, idle, and a sink
-    cmp byte [rc_st], RC_IDLE
-    jne .play
+    mov cl, ch                      ; PLAY: needs a take, idle, and a sink
     cmp word [rc_len], 0
-    je .play
+    jne .take
+    mov cl, 0
+.take:
     test byte [rc_caps], SND_CAP_PCM_BG | SND_CAP_PCM_EXCL
-    jz .play
-    mov cl, 1
+    jnz .play
+    mov cl, 0
 .play:
-    mov ax, 2
+    inc ax
     mov si, rc_l_play
     call rc_btn
 
-    mov cl, 0                       ; DEMO: needs idle
-    cmp byte [rc_st], RC_IDLE
-    jne .demo
-    mov cl, 1
-.demo:
-    mov ax, 3
+    mov cl, ch                      ; DEMO: needs idle
+    inc ax
     mov si, rc_l_demo
-    call rc_btn
-    ret
+    jmp rc_btn
 
 ; -----------------------------------------------------------------------------
 ; rc_btn - one button, through the shared control (apps/os88ui.inc)
@@ -1268,29 +1239,25 @@ rc_about:
 ; retired while the credits were up.
 ; -----------------------------------------------------------------------------
 rc_abdismiss:
-    cmp byte [rc_abon], 0
-    je .none
+    cmp byte [rc_abon], 0           ; CF = 0 whatever it holds, so the `je`
+    je .none                        ; lands on a ret that says "not spent"
     push ax
     push bx
+    push cx
     push dx
+    push si
+    push di
     mov byte [rc_abon], 0
-    mov bx, si
-    call OSAPI_WM_CONTENT           ; the window may have been dragged since
-    mov [rc_ox], ax                 ; the card went up
-    mov [rc_oy], dx
-    mov bx, si
+    call rc_org                     ; the window may have been dragged since
+                                    ; the card went up - and BX = SI after it
     call OSAPI_WM_CLIP_SET          ; ...and nothing armed a region for a
     jc .gone                        ; click either (SPEC.md 11.3)
     call rc_poll
     call rc_draw_all
 .gone:
-    pop dx
-    pop bx
-    pop ax
-    stc
-    ret
+    stc                             ; the pops leave CF alone
+    jmp rc_pop6
 .none:
-    clc
     ret
 
 ; --- the About card's lines (SPEC.md 20.5.1) ----------------------------------
@@ -1336,8 +1303,8 @@ rc_s_idle:   db 'READY', 0
 rc_s_rec:    db 'RECORDING...', 0
 rc_s_rwdog:  db 'REC STOPPED (WATCHDOG)', 0
 rc_s_rfull:  db 'REC STOPPED (FULL)', 0
-rc_s_stopped: db 'STOPPED', 0
-rc_s_pstop:  db 'PLAY STOPPED', 0
+rc_s_pstop:  db 'PLAY '            ; ...which runs on into
+rc_s_stopped: db 'STOPPED', 0       ; this one: one NUL, two messages
 rc_s_psb:    db 'PLAYING (SB)', 0
 rc_s_pdonesb: db 'PLAY DONE (SB)', 0
 rc_s_pdonesp: db 'PLAY DONE (SPEAKER)', 0
@@ -1358,25 +1325,17 @@ rc_s_line2:  db '00000/00000 B  IN:--', 0 ; [+0..4] captured, [+6..10] the
                                     ; not 40,000 on every machine any more),
                                     ; [+18..19] the input device
 
-; 256-entry sine table for the demo sweep: 128 + round(88*sin(2*pi*i/256)),
-; range 40..216 - the amplitude the square demo used (0x28/0xD8)
+; THE DEMO'S SINE, A QUARTER WAVE: 128 + round(88*sin(2*pi*i/256)) for
+; i = 0..64, range 128..216. The whole wave - range 40..216, the amplitude
+; the square demo used (0x28/0xD8) - is this folded about i = 64 on each
+; half, and NEGATED on the second (256 - (128 + q) = 128 - q). rc_do_demo
+; does the fold; 191 bytes of the image were the other three quarters
 rc_sine:
     db 128,130,132,134,137,139,141,143,145,147,149,151,154,156,158,160
     db 162,164,166,168,169,171,173,175,177,179,180,182,184,185,187,189
     db 190,192,193,195,196,197,199,200,201,202,203,205,206,207,208,208
     db 209,210,211,212,212,213,213,214,214,215,215,215,216,216,216,216
-    db 216,216,216,216,216,215,215,215,214,214,213,213,212,212,211,210
-    db 209,208,208,207,206,205,203,202,201,200,199,197,196,195,193,192
-    db 190,189,187,185,184,182,180,179,177,175,173,171,169,168,166,164
-    db 162,160,158,156,154,151,149,147,145,143,141,139,137,134,132,130
-    db 128,126,124,122,119,117,115,113,111,109,107,105,102,100, 98, 96
-    db  94, 92, 90, 88, 87, 85, 83, 81, 79, 77, 76, 74, 72, 71, 69, 67
-    db  66, 64, 63, 61, 60, 59, 57, 56, 55, 54, 53, 51, 50, 49, 48, 48
-    db  47, 46, 45, 44, 44, 43, 43, 42, 42, 41, 41, 41, 40, 40, 40, 40
-    db  40, 40, 40, 40, 40, 41, 41, 41, 42, 42, 43, 43, 44, 44, 45, 46
-    db  47, 48, 48, 49, 50, 51, 53, 54, 55, 56, 57, 59, 60, 61, 63, 64
-    db  66, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 85, 87, 88, 90, 92
-    db  94, 96, 98,100,102,105,107,109,111,113,115,117,119,122,124,126
+    db 216
 
 ; --- the shared controls (SPEC.md 47 rule 1 in one place) -------------------
 %define OS88UI_ABOUT            ; ...and the standard About card beside the
@@ -1385,7 +1344,7 @@ rc_sine:
 %include "os88ui.inc"           ; buttons this already drew
 %include "os88pcm.inc"          ; the PWM clip player (SPEC.md 34.4)
 
-    OS88_BSS 4023
+    OS88_BSS 276
     OS88_IMAGE_END
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5) -------------------------------------
@@ -1400,15 +1359,23 @@ rc_msg   equ os88_image_end + 10    ; word: current status string ptr
 rc_hand  equ os88_image_end + 12    ; byte: stream handle
 rc_st    equ os88_image_end + 13    ; byte: RC_IDLE / RC_REC / RC_PLAY
 rc_have  equ os88_image_end + 14    ; byte: the grant exists
-                                    ; +15: pad
-rc_pbuf  equ os88_image_end + 16    ; 4,000 B: synth / read-back / clip buffer
-rc_err   equ os88_image_end + 4016  ; word: demo sweep Bresenham error accum
-rc_dstep equ os88_image_end + 4018  ; word: sweep direction, +1 up / -1 down
-rc_cap   equ os88_image_end + 4020  ; word: the grant size rc_grant actually
+rc_abon  equ os88_image_end + 15    ; byte: the About card is up
+rc_cap   equ os88_image_end + 16    ; word: the grant size rc_grant actually
                                     ; got - a TIER, not RC_CAP_MAX (see the
-                                    ; parameters above). Appended rather than
-                                    ; slotted into the pad at +15, because an
-                                    ; odd-addressed word is legal and slow and
-                                    ; this is read on every poll
-rc_abon  equ os88_image_end + 4022  ; byte: the About card is up
+                                    ; parameters above); read on every poll,
+                                    ; so it stays even-addressed
+rc_dstep equ os88_image_end + 18    ; word: sweep direction, +1 up / -1 down
+rc_pbuf  equ os88_image_end + 20    ; 256 B: the demo's synth/stage buffer
+                                    ; (RC_CHUNK of it), the waveform's
+                                    ; one-sample read-back, and os88pcm_play's
+                                    ; rescale table for the length of a
+                                    ; speaker play (SPEC.md 34.4) - which is
+                                    ; why it is 256 and not RC_CHUNK: the
+                                    ; table was 256 bytes of the IMAGE until
+                                    ; the library took it from its caller.
+                                    ; It was 4,000 B, sized for the speaker
+                                    ; play's chunks, which take a claim of
+                                    ; their own now (rc_do_play) - and the
+                                    ; Bresenham error is BP inside rc_do_demo
+                                    ; total 20 + 256 = 276
                                     ; total 4023

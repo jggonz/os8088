@@ -32,52 +32,30 @@ n_rand:
     pop bx
     ret
 n_new:
-    SAVE
-    mov byte [n_state], 1
-    mov byte [n_paused], 0
-    mov word [n_px], 116
-    mov word [n_py], 204
+    ; Everything n_stageinit sets (position, rolls, grace, actors, pools,
+    ; spawn counters) is left to it: n_campaignnew always ends there.
+    call n_pushall
+    xor ax,ax
+    mov [n_paused],al
+    mov [n_xheld],al
+    mov [n_fire],ax
+    mov [n_scorelo],ax
+    mov [n_scorehi],ax
+    mov [n_scroll],ax
+    mov [n_frames],ax
+    inc ax
+    mov [n_state],al
+    mov [n_weapon],ax
+    mov [n_stage],ax
     mov word [n_lives], 3
-    mov word [n_rolls], 3
-    mov word [n_roll], 0
-    mov word [n_grace], 50
-    mov word [n_fire], 0
-    mov word [n_weapon], 1
-    mov word [n_scorelo], 0
-    mov word [n_scorehi], 0
-    mov word [n_stage], 1
-    mov word [n_scrollstage], 0
-    mov word [n_scroll], 0
-    mov word [n_frames], 0
     mov word [n_islandy], 24
     mov word [n_wavey], 60
-    mov word [n_bank], n_playerart
-    mov word [n_picky], 0ffffh
-    mov word [n_spawned], 0
     mov word [n_spawnwait], 30
-    mov byte [n_bossmade], 0
-    mov byte [n_huddirty], 1
-    mov byte [n_xheld], 0
-    push ds
-    pop es
-    mov di, n_enemies
-    xor ax, ax
-    mov cx, (12*ESIZE)/2
-    rep stosw
-    mov di, n_shots
-    mov ax, 0ffffh
-    mov cx, 16*2+16*4
-    rep stosw
-    mov di, n_blasts
-    xor ax, ax
-    mov cx, 8*3
-    rep stosw
     call n_campaignnew
-    RESTORE
-    ret
+    jmp n_popall
 
 n_refresh:
-    SAVE
+    call n_pushall
     call n_clear
     mov byte [n_huddirty], 1
     cmp byte [n_state], 1
@@ -147,8 +125,7 @@ n_refresh:
     call n_hightext
     call n_scoretext
 .out:
-    RESTORE
-    ret
+    jmp n_popall
 
 n_update:
     cmp word [n_flightphase],0
@@ -273,7 +250,7 @@ n_update:
     ret
 
 n_shot:                              ; CX=x
-    SAVE
+    call n_pushall
     mov si, n_shots
 .find:
     cmp word [si+2], 0ffffh
@@ -288,8 +265,7 @@ n_shot:                              ; CX=x
     sub ax, 4
     mov [si+2], ax
 .out:
-    RESTORE
-    ret
+    jmp n_popall
 n_spawn:
     jmp n_scripts
 n_move_enemies:
@@ -727,7 +703,7 @@ n_move_shots:
     jb .loop
     ret
 n_kill:
-    SAVE
+    call n_pushall
     mov ax,1
     call n_depart
     inc word [n_kills]
@@ -762,8 +738,7 @@ n_kill:
     call n_addscore
     mov ax,19
     call n_effect
-    RESTORE
-    ret
+    jmp n_popall
 n_addscore:
     push ax
     push bx
@@ -807,7 +782,7 @@ n_addscore:
     pop ax
     ret
 n_blast:                            ; CX/DX position
-    SAVE
+    call n_pushall
     mov si, n_blasts
 .find:
     cmp word [si+4], 0
@@ -820,10 +795,9 @@ n_blast:                            ; CX/DX position
     mov [si], cx
     mov [si+2], dx
     mov word [si+4], 8
-    RESTORE
-    ret
+    jmp n_popall
 n_hitplayer:
-    SAVE
+    call n_pushall
     cmp word [n_grace], 0
     jne .out
     cmp word [n_roll], 0
@@ -842,8 +816,7 @@ n_hitplayer:
     call n_effect
     call n_turn
 .out:
-    RESTORE
-    ret
+    jmp n_popall
 n_move_bullets:
     mov si, n_bullets
 .loop:
@@ -1043,7 +1016,7 @@ n_drawactors:
     RESTORE
     ret
 n_scoretext:
-    SAVE
+    call n_pushall
     call n_hudbegin
     mov bx, [n_scorelo]
     mov bp, [n_scorehi]
@@ -1082,5 +1055,4 @@ n_scoretext:
     call n_text
     call n_hudend
     call n_hudcopy
-    RESTORE
-    ret
+    jmp n_popall

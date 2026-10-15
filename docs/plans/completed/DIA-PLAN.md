@@ -1151,6 +1151,10 @@ recommended default in its §7 is what shipped.
    `OSAPI_WM_DESK` (`0x046D`) and `OSAPI_GFX_DESK` (`0x0473`) each move one
    cell when main is merged in, with the ABI lock re-taken and every rung
    re-measured on main's kernels.
+   **Done at the merge of `b47de145`**: `OSAPI_CLK_GET` `0x046D`,
+   `OSAPI_WM_DESK` `0x0473`, `OSAPI_GFX_DESK` `0x0479`, `osapi_table_end`
+   `0x047F`; `PKG_FMT` 10 / `DRV_VER` 11 kept, the lock re-taken on top of
+   main's (cells appended at the end).
 
 ### The rows that hold it
 

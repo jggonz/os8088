@@ -167,7 +167,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     r = m.read(S("wm_wins") + slot * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
     seg = u16(r, 22)
     img_end = u16(m.read(seg * 16, 32), 8)
-    cal = {"nvis": img_end + 8, "open": img_end + 22, "hn": img_end + 27}
+    cal = {"nvis": img_end + 8, "open": img_end + 14, "hn": img_end + 20}
 
     typed(m, "c8x8=")                       # something for the pane to show
     typed(m, "c7+7=")

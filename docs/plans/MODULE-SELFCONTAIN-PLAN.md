@@ -89,7 +89,7 @@ dskf_disk_read:   call disk_read_x     ; 3 bytes
 ```
 
 and every caller is inside an image — `call COLD_SEG:dskf_disk_read` at
-`diskw.inc:4362` and `:4652` (`.modf`), `clone.inc:707` and `:2109` (`.modl`).
+`diskw.inc:4362` and `:4652` (`.modf`), `diskops.inc:707` and `:2109` (`.modl`).
 Two families, split by which segment they land in: **`cw_*` in `.text`**
 (`call KERNEL_SEG:cw_clk_tobcd` from `clockw.inc`, which is `CTRL.DRV`'s image
 on `kern_big`) and **`dskf_` / `drvf_` / `fmf_` / `mmf_` / `memf_` / `hbk_` /
@@ -128,7 +128,7 @@ long as it is loaded:
 |---|---:|---:|---:|
 | `CTRL.DRV` (`kern_big`) | 7,542 | 8,192 | 650 |
 | `FORMAT.DRV` | 1,129 | 2,048 | 919 |
-| `CLONE.DRV` | 5,810 | 6,144 | 334 |
+| `DISKOPS.DRV` | 5,810 | 6,144 | 334 |
 | `HIBER.DRV` | 3,398 | 4,096 | 698 |
 | `CTRL.DRV` (`kern_small`) | 4,709 | 5,120 | 411 |
 | `FILECP.DRV` | 2,161 | 3,072 | 911 |
@@ -658,7 +658,7 @@ wave.
    `[si+DFMT_*]`. Re-opening that means changing the contract of a routine
    with resident callers, which is a bigger change than 56 bytes buys.
    **TAKEN in kernel size pass 8** (SPEC.md 2.8.6.1): the premise had gone -
-   `dskw_fmt_row_x` had no resident caller left, only `CLONE.DRV` reading
+   `dskw_fmt_row_x` had no resident caller left, only `DISKOPS.DRV` reading
    the rows through `DS`, and that now carries its own sixteen bytes.
 3. **The six Control Panel list names.** SPEC.md 2.8.6.1: *"a list name may
    equally be a driver's staged one and `cp_list` draws it through DS."*
@@ -702,6 +702,6 @@ wave.
    **1.2 ms** against a module load that is already one or more `int 13h` at
    ~400 ms each (PERFORMANCE.md). It is noise, but W2 should say the measured
    number rather than this one.
-4. **Is there a module whose slack is about to close?** `CLONE.DRV`'s is 334
+4. **Is there a module whose slack is about to close?** `DISKOPS.DRV`'s is 334
    and it carries the LZB compressor as its second entry (SPEC.md 20.15).
    Check its growth before giving it a bss.

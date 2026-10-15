@@ -221,6 +221,7 @@ MC_PTMAX    equ 96                  ; ...and the point list os88gfx.inc steps
   %error "mc_dsc holds fewer walks than one batch can produce"
 %endif
 MC_EXPFR    equ 27                  ; EXDONE: frames an explosion lasts
+MC_ETN      equ MC_EXPFR + 1        ; [mc_et] runs 0..MC_EXPFR (see mc_rad)
 MC_EXPFR3   equ 15                  ; ...and what the coarse ramp lasts, which
                                     ; is SHORTER on purpose: with no collapse
                                     ; the peak is held instead, so the life is
@@ -380,7 +381,7 @@ mc_entry:
     ; NO worker is the case that moves most easily, and putting it at
     ; the spawn left exactly those runs declaring nothing - measured,
     ; by the row that reads MC_RLOC back out of the kernel's own table.
-    OS88_REGION_MOVABLE
+    OS88_REGION_MOVABLE mc_pop_0    ; no segment word points inside us: a ret
     OS88_ALTENTER_ARM               ; SPEC.md 11.2.1.1: nothing tracks a
                                     ; scancode until something asks, and both
                                     ; halves of the chord ride on that map
@@ -497,11 +498,7 @@ mc_adapter:
     mov dx, mc_s_xcmdn
 .fsxok:
     mov [mc_mi_game+6], dx
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp mc_pop_4
 
 ; -----------------------------------------------------------------------------
 ; mc_onresize - the adapter changed under us (SPEC.md 11.98)
@@ -653,37 +650,19 @@ mc_layout:
     call mc_escale                  ; ...and the explosion radii, which scale
                                     ; with the window like everything else
 
-    xor si, si                      ; the six cities
-.city:
-    mov bl, [mc_cityv + si]
-    mov bh, 0
+    xor si, si                      ; the six cities and then the three
+.city:                              ; bases, as ONE walk: mc_basev follows
+    mov bl, [mc_cityv + si]         ; mc_cityv and mc_basex follows mc_cityx
+    mov bh, 0                       ; (asserted at both)
     call mc_mapx                    ; AX = content x for arcade column BX
     mov di, si
     add di, di
     mov [mc_cityx + di], ax
     inc si
-    cmp si, MC_NCITY
+    cmp si, MC_NCITY + MC_NBASE
     jb .city
 
-    xor si, si                      ; the three bases
-.base:
-    mov bl, [mc_basev + si]
-    mov bh, 0
-    call mc_mapx
-    mov di, si
-    add di, di
-    mov [mc_basex + di], ax
-    inc si
-    cmp si, MC_NBASE
-    jb .base
-
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp mc_pop_6
 
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
@@ -754,14 +733,9 @@ mc_escale:
 .store:
     mov [mc_erad + si], al
     inc si
-    cmp si, 32
+    cmp si, MC_ETN
     jb .ramp
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp mc_pop_5
 
 ; mc_mapx - one arcade column onto this content
 ; in:  BX = 0..255; out: AX = content x. Preserves BX, CX, DX
@@ -805,13 +779,7 @@ mc_paint:
     call mc_track
     call mc_draw_all
     call mc_hire                    ; idempotent: only the first paint spawns
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp mc_pop_6
 
 ; -----------------------------------------------------------------------------
 ; mc_hire - spawn the worker, once
@@ -873,13 +841,7 @@ mc_onclick:
     mov byte [mc_fireb], 0FFh       ; 0FFh = "the nearest base with missiles"
     inc word [mc_fire]
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp mc_pop_6
 
 ; -----------------------------------------------------------------------------
 ; mc_onkey - W_ONKEY
@@ -906,85 +868,38 @@ mc_onkey:
                                     ; 0 and every test below is on the letter
     cmp bl, 27                      ; Esc: leave fullscreen (SPEC.md 11.2 -
     je .esc                         ; the menu bar is unreachable up there)
-    cmp bl, '1'
-    je .b1
-    cmp bl, '2'
-    je .b2
-    cmp bl, '3'
-    je .b3
-    cmp bl, ' '
-    je .bany
-    cmp bl, 'p'
-    je .pause
-    cmp bl, 'P'
-    je .pause
-    cmp bl, 'n'
-    je .new
-    cmp bl, 'N'
-    je .new
-    cmp bl, 'f'
+    mov al, bl                      ; F and M either case: or-ing in 20h folds
+    or al, 20h                      ; exactly the letter's two cases together
+    cmp al, 'f'
     je .fs
-    cmp bl, 'F'
-    je .fs
-    cmp bl, 'm'
-    je .modex
-    cmp bl, 'M'
+    cmp al, 'm'
     je .modex
 %ifdef MC_BENCH
-    cmp bl, 'b'                     ; the deterministic run (mcbench.inc), and
+    cmp al, 'b'                     ; the deterministic run (mcbench.inc), and
     je .bench                       ; a key rather than a menu item because
-    cmp bl, 'B'                     ; nothing about it should reach the shipped
-    je .bench                       ; package's chrome
+                                    ; nothing about it should reach the shipped
+                                    ; package's chrome
 %endif
-    jmp .out
+    mov al, bl                      ; ...and every binding the bracket shares,
+    call mc_fsx_key                 ; which is all of the rest: ONE keyboard
+    jmp short .out
 %ifdef MC_BENCH
 .bench:
     mov word [mc_breq], 1           ; the WORKER runs it; see mc_worker
                                     ; (1 = the next frame, which is what a
                                     ; person pressing the key wants)
-    jmp .out
-%endif
-.b1:
-    mov al, 0
-    jmp short .fire
-.b2:
-    mov al, 1
-    jmp short .fire
-.b3:
-    mov al, 2
-    jmp short .fire
-.bany:
-    mov al, 0FFh
-.fire:
-    mov [mc_fireb], al
-    mov ax, [mc_chx]                ; the crosshair is where the mouse is, and
-    mov [mc_firex], ax              ; the worker has been tracking it all along
-    mov ax, [mc_chy]
-    mov [mc_firey], ax
-    inc word [mc_fire]
     jmp short .out
+%endif
 .esc:
     call mc_fs_exit
     jmp short .out
 .fs:
     call mc_fs_toggle
     jmp short .out
-.pause:
-    call mc_cmd_pause
-    jmp short .out
-.new:
-    call mc_cmd_new
-    jmp short .out
 .modex:
     call mc_cmd_modex
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp mc_pop_6
 
 ; -----------------------------------------------------------------------------
 ; mc_oncmd - AM_ONCMD: a Game menu item (SPEC.md 12.2)
@@ -1072,10 +987,7 @@ mc_cmd_modex:
     xor cx, cx                      ; no flags: our worker freezes with the
     call OSAPI_FSX_RUN              ; rest, and this loop replaces it
 .out:
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp mc_pop_3
 
 ; -----------------------------------------------------------------------------
 ; mc_fsx_main - the exclusive main (SPEC.md 53.1): the arcade at 320x240
@@ -1151,12 +1063,8 @@ mc_fsx_main:
     and ah, al
     test ah, 1
     jz .nofire
-    mov ax, [mc_chx]
-    mov [mc_firex], ax
-    mov ax, [mc_chy]
-    mov [mc_firey], ax
-    mov byte [mc_fireb], 0FFh
-    inc word [mc_fire]
+    mov al, 0FFh
+    call mc_fire_ch
 .nofire:
     call mc_update
     call mc_rbody
@@ -1172,63 +1080,49 @@ mc_fsx_main:
                                     ; one that was never drawn on the desktop
     mov byte [mc_full], 1
 .home:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp mc_pop_7
 
 ; mc_fsx_key - the bracket's keyboard: the windowed bindings minus the ones
 ; that make no sense with no window (F, Esc handled by the caller)
 ; in: AL = ascii
 mc_fsx_key:
     push ax
-    cmp al, '1'
-    je .b1
-    cmp al, '2'
-    je .b2
-    cmp al, '3'
-    je .b3
     cmp al, ' '
     je .bany
-    cmp al, 'p'
-    je .pause
-    cmp al, 'P'
-    je .pause
+    cmp al, '1'                     ; 1/2/3 are bases 0/1/2
+    jb .letter
+    cmp al, '3'
+    ja .letter
+    sub al, '1'
+    jmp short .fire
+.letter:
+    or al, 20h                      ; P and N either case (see mc_onkey); the
+    cmp al, 'p'                     ; digits and Space are tested before the
+    je .pause                       ; fold, which would map ^Q..^S onto them
     cmp al, 'n'
-    je .new
-    cmp al, 'N'
-    je .new
+    jne .out
+    call mc_cmd_new
     jmp short .out
-.b1:
-    mov al, 0
-    jmp short .fire
-.b2:
-    mov al, 1
-    jmp short .fire
-.b3:
-    mov al, 2
-    jmp short .fire
 .bany:
     mov al, 0FFh
 .fire:
+    call mc_fire_ch
+    jmp short .out
+.pause:
+    call mc_cmd_pause
+.out:
+    pop ax
+    ret
+
+; mc_fire_ch - queue a shot from base AL (0FFh = the nearest) at the crosshair,
+; which the worker has been tracking from the mouse all along. Clobbers AX.
+mc_fire_ch:
     mov [mc_fireb], al
     mov ax, [mc_chx]
     mov [mc_firex], ax
     mov ax, [mc_chy]
     mov [mc_firey], ax
     inc word [mc_fire]
-    jmp short .out
-.pause:
-    call mc_cmd_pause
-    jmp short .out
-.new:
-    call mc_cmd_new
-.out:
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1278,10 +1172,7 @@ mc_fs_enter:
     mov bx, [mc_win]
     call OSAPI_FULLSCREEN
 .out:
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp mc_pop_3
 
 mc_fs_exit:
     push ax
@@ -1325,13 +1216,7 @@ mc_about:
 .draw:
     call mc_track
     call mc_draw_all                ; ...which draws the panel last, because
-    pop di                          ; [mc_abon] is set
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp mc_pop_6                    ; [mc_abon] is set
 
 ; -----------------------------------------------------------------------------
 ; mc_abdismiss - take the panel down if it is up
@@ -1370,15 +1255,11 @@ mc_abdraw:
     xor di, di
     mov si, mc_ablines
 .meas:
-    mov bx, [si]
-    or bx, bx
-    jz .done
+    cmp byte [si], 0FFh             ; the block's end
+    je .done
     inc di
-    add si, 2
-    push si
-    mov si, bx
     call OSAPI_FONT_WIDTH
-    pop si
+    call .next
     cmp ax, cx
     jbe .meas
     mov cx, ax
@@ -1421,12 +1302,8 @@ mc_abdraw:
     mov di, [mc_abt]
     add di, 7
 .line:
-    mov bx, [si]
-    or bx, bx
-    jz .out
-    add si, 2
-    push si
-    mov si, bx
+    cmp byte [si], 0FFh
+    je .out
     call OSAPI_FONT_WIDTH
     mov cx, [mc_abw]
     sub cx, ax
@@ -1435,15 +1312,17 @@ mc_abdraw:
     mov dx, di
     mov ah, CWHITE                  ; the panel this routine filled six calls
     call mc_textc                   ; ago; the ink is still mc_setcol's CBLACK
-    pop si
+    call .next
     add di, MC_ABLH
     jmp short .line
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
+    jmp mc_pop_6
+.next:                              ; SI past this line's NUL, onto the next
+    push ax
+.skip:
+    lodsb
+    or al, al
+    jnz .skip
     pop ax
     ret
 .rect:                              ; the panel as (x1,y1)-(x2,y2), inclusive
@@ -1455,6 +1334,35 @@ mc_abdraw:
     mov dx, bx
     add dx, [mc_abh]
     dec dx
+    ret
+
+; mc_pop_N - the shared epilogue (SPEC.md 20.5's OS88_POPLADDER): a routine
+; that pushed the first N of this list, in this order, ends `jmp mc_pop_N`.
+; COLD ROUTINES ONLY - setup, layout, the About panel, keys and clicks, wave
+; starts and the full repaint. A jmp is a cycle cost on every call, so nothing
+; the worker reaches every frame (SPEC.md 48.18) ends here; those keep their
+; own pops and ret.
+;
+; It is OS88_POPLADDER mc_pop, ax, bx, cx, dx, si, di, es WRITTEN OUT, byte for
+; byte: tools/stkbalance.py (the `stkapps` gate) could not then see a label a
+; macro builds with %+ (it can since shared round 2, SPEC.md 20.5), so a `jmp mc_pop_6` into the macro's ladder reads to it as a
+; tail jump into nothing at depth +6. Spelled out, the walk follows every jump
+; into the ladder and checks each pop against the depth it arrives at. Rungs
+; 2 and 1 carry no label because nothing takes them, and an unreferenced label
+; is an ENTRY to that walk - entered at depth 0 and popping its caller.
+mc_pop_7:
+    pop es
+mc_pop_6:
+    pop di
+mc_pop_5:
+    pop si
+mc_pop_4:
+    pop dx
+mc_pop_3:
+    pop cx
+    pop bx
+    pop ax
+mc_pop_0:
     ret
 
 ; =============================================================================
@@ -3070,11 +2978,7 @@ mc_sat_launch:
     mov [mc_satpx], ax              ; drawn" is where it starts
     mov word [mc_satfire], 8
     mov word [mc_satcool], 220
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp mc_pop_4
 
 mc_sat_drop:
     push ax
@@ -3339,20 +3243,21 @@ mc_startwave:
 
     mov bl, [mc_wave]               ; the ICBM budget: ICBWAV, clamped to the
     mov bh, 0                       ; end of the table exactly as the arcade
-    cmp bx, MC_NWAVE                ; clamps it
+    mov si, bx                      ; clamps it - and the same index serves
+    cmp bx, MC_NWAVE                ; all three per-wave tables
     jbe .w1
     mov bx, MC_NWAVE
 .w1:
     dec bx
-    mov al, [mc_icbwav + bx]
     mov ah, 0
+    mov al, [mc_icbwav + bx]
     mov [mc_icbleft], ax
     mov al, [mc_crmwav + bx]        ; ...and the smart bombs: CRMWAV
-    mov ah, 0
     mov [mc_smleft], ax
+    mov al, [mc_spdwav + bx]        ; ...and the speed ladder
+    mov [mc_icbspd], ax
 
-    mov bl, [mc_wave]               ; SMULTI = min(MAXMUL, (wave + 1) / 2)
-    mov bh, 0
+    mov bx, si                      ; SMULTI = min(MAXMUL, (wave + 1) / 2)
     inc bx
     shr bx, 1
     cmp bx, MC_MAXMUL
@@ -3368,20 +3273,8 @@ mc_startwave:
     mul bx
     mov [mc_icbpts], ax
 
-    mov bl, [mc_wave]               ; the speed ladder
-    mov bh, 0
-    cmp bx, MC_NWAVE
-    jbe .s1
-    mov bx, MC_NWAVE
-.s1:
-    dec bx
-    mov al, [mc_spdwav + bx]
-    mov ah, 0
-    mov [mc_icbspd], ax
-
-    mov bl, [mc_wave]               ; the palette: one per two waves, cycled
-    mov bh, 0                       ; (SETCOL)
-    dec bx
+    mov bx, si                      ; the palette: one per two waves, cycled
+    dec bx                          ; (SETCOL)
     shr bx, 1
 .pmod:
     cmp bx, 10
@@ -3391,14 +3284,10 @@ mc_startwave:
 .pok:
     add bx, bx
     add bx, bx
-    mov al, [mc_pal + bx]
-    mov [mc_cgnd], al
-    mov al, [mc_pal + bx + 1]
-    mov [mc_cicbm], al
-    mov al, [mc_pal + bx + 2]
-    mov [mc_ccity], al
-    mov al, [mc_pal + bx + 3]
-    mov [mc_cabm], al
+    mov ax, [mc_pal + bx]           ; the four pens are adjacent in bss and
+    mov [mc_cgnd], ax               ; in mc_pal's row alike, so two words
+    mov ax, [mc_pal + bx + 2]
+    mov [mc_ccity], ax
     cmp byte [mc_mono], 0           ; SPEC.md 48.21: a TRAIL is one pixel
     je .palok                       ; wide, and a dither-class colour keeps
     mov byte [mc_cicbm], CWHITE     ; every other pixel of it. mc_pal puts
@@ -3414,15 +3303,7 @@ mc_startwave:
     ; lost all three launchers to one bad wave would otherwise have nothing to
     ; defend with ever again. Leaving them dead read as a death spiral in
     ; testing: wave 2 opened with no bases and no way to fire.
-    xor si, si
-.base:
-    mov byte [mc_balive + si], 1
-    mov byte [mc_bmis + si], MC_MAXMIS
-    inc si
-    cmp si, MC_NBASE
-    jb .base
-
-    call mc_clear_objects
+    call mc_rearm
     mov word [mc_ltick], 12
     mov word [mc_satcool], 90
     mov byte [mc_mode], M_PLAY
@@ -3440,32 +3321,37 @@ mc_startwave:
     mov ax, 523
     mov cx, 4
     call mc_beep_n
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp mc_pop_5
 
 ; -----------------------------------------------------------------------------
 ; mc_clear_objects - nothing in flight, nothing burning
 ; preserves all registers
 ; -----------------------------------------------------------------------------
+mc_rearm:                           ; every launcher alive and full - and
+    push si                         ; then the objects, below: a new wave and
+    xor si, si                      ; a new game both start from this
+.base:
+    mov byte [mc_balive + si], 1
+    mov byte [mc_bmis + si], MC_MAXMIS
+    inc si
+    cmp si, MC_NBASE
+    jb .base
+    pop si
+    ; fall through
+
 mc_clear_objects:
     push si
     xor si, si
-.i:
-    mov byte [mc_ia + si], 0
+.i:                                 ; one walk for the ICBM and ABM slots,
+    mov byte [mc_ia + si], 0        ; which are the same count (asserted)
     mov byte [mc_imirv + si], 0
+    mov byte [mc_aa + si], 0
     inc si
     cmp si, MC_MAXICBM
     jb .i
-    xor si, si
-.a:
-    mov byte [mc_aa + si], 0
-    inc si
-    cmp si, MC_MAXABM
-    jb .a
+%if MC_MAXICBM != MC_MAXABM
+  %error "mc_clear_objects walks the ICBM and ABM slots as one"
+%endif
     xor si, si
 .e:
     mov byte [mc_ea + si], 0
@@ -3497,14 +3383,7 @@ mc_newgame:
     inc si
     cmp si, MC_NCITY
     jb .city
-    xor si, si
-.base:
-    mov byte [mc_balive + si], 1
-    mov byte [mc_bmis + si], MC_MAXMIS
-    inc si
-    cmp si, MC_NBASE
-    jb .base
-    call mc_clear_objects
+    call mc_rearm
     mov byte [mc_mode], M_READY
     mov word [mc_hold], 16
     mov byte [mc_full], 1
@@ -3788,13 +3667,7 @@ mc_draw_all:
 .noab:
     call mc_cross_on
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp mc_pop_6
 
 ; -----------------------------------------------------------------------------
 ; mc_exp_restore - put back every live burst standing in the armed span
@@ -3881,19 +3754,11 @@ mc_gdmg:
     pop ax
     ret
 
-; mc_gdclear / mc_gdall - forget the damage, or claim all of it
+; mc_gdclear - forget the damage
 ; preserve all registers
 mc_gdclear:
     mov word [mc_gdx1], MC_NODMG
     mov word [mc_gdx2], -1
-    ret
-mc_gdall:
-    push ax
-    mov word [mc_gdx1], 0
-    mov ax, [mc_cw]
-    dec ax
-    mov [mc_gdx2], ax
-    pop ax
     ret
 
 ; mc_bdirty_i / mc_bdirty_at - one launcher owes a redraw, named by index BL
@@ -5158,13 +5023,7 @@ mc_redraw_trails:
     inc si
     cmp si, MC_MAXABM
     jb .abm
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp mc_pop_6
 
 ; -----------------------------------------------------------------------------
 ; mc_wipe_trails - erase the trail of everything that died since the last frame
@@ -7676,19 +7535,18 @@ mc_s_bonus:  db 'BONUS POINTS', 0
 
 ; The credits. Kept short because this window is sized from the live screen and
 ; CGA's 200 rows leave a much smaller content than VGA's 480.
-mc_ablines:
-    dw mc_ab1, mc_ab2, mc_ab3, mc_ab4, mc_ab5, mc_ab6, mc_ab7, mc_ab8
-    dw mc_ab9, mc_ab10, 0
-mc_ab1:      db 'Missile Command for os8088', 0
-mc_ab2:      db 0
-mc_ab3:      db 'After the 6502 arcade game', 0
-mc_ab4:      db 'by Atari, 1980 - waves,', 0
-mc_ab5:      db 'scoring and explosions from', 0
-mc_ab6:      db 'the original W3MAIN source.', 0
-mc_ab7:      db 0
-mc_ab8:      db 'Ported by Jorge Gonzalez', 0
-mc_ab9:      db 0
-mc_ab10:     db 'Click to fire. 1/2/3 pick a base.', 0
+mc_ablines:                         ; the lines back to back, a bare NUL
+             db 'Missile Command for os8088', 0   ; a blank one, and 0FFh
+             db 0                                  ; the end - mc_abdraw
+             db 'After the 6502 arcade game', 0   ; walks them, so there is
+             db 'by Atari, 1980 - waves,', 0      ; no pointer table
+             db 'scoring and explosions from', 0
+             db 'the original W3MAIN source.', 0
+             db 0
+             db 'Ported by Jorge Gonzalez', 0
+             db 0
+             db 'Click to fire. 1/2/3 pick a base.', 0
+             db 0FFh
 
 ; --- the arcade's own tables ----------------------------------------------------
 ; ICBWAV: ICBMs per wave, clamped at the end of the table (W3MAIN).
@@ -7709,11 +7567,19 @@ mc_spdwav:   db 28, 32, 36, 40, 45, 50, 55, 60, 66, 72, 78, 84, 90, 96,100
 ; cities, base, three cities, base - the shape of the board.
 mc_cityv:    db 0x5F, 0xB4, 0x94, 0x2C, 0x47, 0xD0
 mc_basev:    db 0x14, 0x7B, 0xF0
+    OS88_ADJACENT mc_cityv, mc_basev, MC_NCITY  ; mc_layout walks both as one
 
 ; OLDRAD/NEWRAD, verbatim: the radius an explosion has on each of its 27
-; frames. Padded to 32 so an index of MC_EXPFR-1 can never walk off it.
+; frames, plus ONE entry for frame 27 itself. That is the largest [mc_et] can
+; hold: mc_do_exp increments a live burst and retires it the frame it REACHES
+; [mc_expfr] (at most MC_EXPFR), and a resize that drops [mc_expfr] to
+; MC_EXPFR3 under a burst at frame 20 retires it at 21 - so every table
+; indexed by [mc_et] is MC_ETN long, and it was padded to 32 for nothing.
 mc_rad:      db 0, 0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13
-             db 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 0, 0, 0, 0
+             db 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0
+%if $ - mc_rad != MC_ETN
+  %error "mc_rad must be MC_ETN entries"
+%endif
 
 ; The wave palettes: ground, ICBM trail, city, ABM trail - one per two waves,
 ; cycled, which is SETCOL's shape. Every entry is from SPEC.md 39.4's white
@@ -7750,7 +7616,11 @@ mc_expcol:   db CWHITE, CYELLOW, CLRED, CLMAGENTA
 ; how long IS the game (SPEC.md 48.4), and this leaves it alone.
 mc_step3:    db 0, 0                            ; 0..1:  not yet lit, as OLDRAD
              db 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1  ; 2..14: the peak, HELD
-             db 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0  ; padding
+             db 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0  ; to MC_ETN: a resize
+                                ; can leave a coarse burst at any frame < 27
+%if $ - mc_step3 != MC_ETN
+  %error "mc_step3 must be MC_ETN entries"
+%endif
 mc_rad3v:    db 0, 13, 13
 ; ...and one colour per DRAWN state, both from SPEC.md 39.4's WHITE class.
 ; There is no dithered frame on this path: on the two adapters that reach it a
@@ -7853,6 +7723,7 @@ mc_coast:    db 0, 1, 2, 3, 2, 1, 0, 2, 4, 3, 1, 0, 1, 3, 2, 1
     MWORD mc_texty
     MBUF  mc_cityx, MC_NCITY * 2
     MBUF  mc_basex, MC_NBASE * 2
+    OS88_ADJACENT mc_cityx, mc_basex, MC_NCITY * 2 ; mc_layout's one walk
 
 ; --- the game -------------------------------------------------------------------
     MBYTE mc_mode
@@ -8018,6 +7889,8 @@ mc_coast:    db 0, 1, 2, 3, 2, 1, 0, 2, 4, 3, 1, 0, 1, 3, 2, 1
     MBYTE mc_cicbm
     MBYTE mc_ccity
     MBYTE mc_cabm
+    OS88_ADJACENT mc_cgnd, mc_ccity     ; mc_startwave loads the four pens as
+    OS88_ADJACENT mc_ccity, mc_cabm, 1  ; two words, in mc_pal's row order
 
 ; --- drawing state --------------------------------------------------------------
     MBYTE mc_full                   ; the next frame must repaint everything
@@ -8071,7 +7944,7 @@ mc_coast:    db 0, 1, 2, 3, 2, 1, 0, 2, 4, 3, 1, 0, 1, 3, 2, 1
     MWORD mc_rn2
     MWORD mc_rhalf
     MWORD mc_escl                   ; explosion scale, eighths
-    MBUF  mc_erad, 32               ; the ramp scaled onto this window
+    MBUF  mc_erad, MC_ETN               ; the ramp scaled onto this window
     MBYTE mc_ecoarse                ; 1 = SPEC.md 48.8's three-state burst:
                                     ; 1bpp adapter or tier-0 CPU, decided
                                     ; once in mc_entry

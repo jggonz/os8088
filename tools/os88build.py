@@ -589,6 +589,21 @@ def have_pil():
     return True
 
 
+def have_unicorn():
+    """Can THIS interpreter run 16-bit x86 under unicorn?
+
+    `tests/picomem.py` runs the PicoMEM-facing driver code under it against a
+    model of a card no emulator here has (SPEC.md 34.10.1, 72.2). have_pil()'s
+    shape: an import that fails is a skip, never a traceback.
+    """
+    try:
+        from unicorn import Uc, UC_ARCH_X86, UC_MODE_16
+        Uc(UC_ARCH_X86, UC_MODE_16)
+    except Exception:
+        return False
+    return True
+
+
 def have_numpy():
     """Can THIS interpreter import numpy - its C extension, not just the name?
 
@@ -604,6 +619,25 @@ def have_numpy():
     except Exception:
         return False
     return True
+
+
+# THE OWNER'S XDC STREAMS (docs/plans/VIDEO-PLAN.md section 13), named here
+# once: tests/vidbench.py reads them in this order and the suite's probe asks
+# for all four. They are copyrighted and never in the tree.
+XDC_STREAMS = ("BADAPPLE.XDV", "THUNDERC.XDV", "TRONDISC.XDV", "BBBB_BW.XDV")
+
+
+def have_xdc():
+    """Does $OS88_XDC_SAMPLES name a directory holding all four XDC streams?
+
+    `vidbench` decodes them and has nothing else to decode, so without them
+    it printed SKIP and exited 0 - and a soak scored that `ok` in 0.1s against
+    34s declared (docs/plans/HANDOFF-APPS-SHARED.md). A capability makes the
+    RUNNER say SKIP and name the fix instead.
+    """
+    d = os.environ.get("OS88_XDC_SAMPLES")
+    return bool(d) and all(os.path.isfile(os.path.join(d, n))
+                           for n in XDC_STREAMS)
 
 
 def nasm3():

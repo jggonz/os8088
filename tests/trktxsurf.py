@@ -68,7 +68,7 @@ def main():
         found = [None]
 
         def _loaded(_m):
-            found[0] = scan(m)[0]
+            found[0] = scan(m, DISK)[0]
             return bool(found[0]) and m.read(
                 found[0] * 16 + P["@mp_loaded"], 1)[0] == 1
         try:

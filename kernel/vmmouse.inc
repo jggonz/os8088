@@ -242,15 +242,9 @@ vmm_poll:
     jnz .pass
 .out:
     mov byte [vmm_busy], 0
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_es                 ; the eight-register ladder (SPEC.md 15.1.2):
+                                ; kern_emu runs on a 386, where the jump is
+                                ; nothing against the backdoor's own `in`
 
 %endif                          ; KERN_EMU
 
@@ -278,7 +272,7 @@ vmm_poll:
 %endmacro
 
 %ifdef KERN_EMU
-section .cold
+section .boot2
 ; -----------------------------------------------------------------------------
 ; vmm_boot_x - attach the image and settle the contest (SPEC.md 9.11.2)
 ;
@@ -298,21 +292,18 @@ section .cold
 ; failing this compare never reads a sector of. cpu_detect runs from the boot
 ; overlay long before drv_boot_x, so the tier is published.
 ;
-; IN `.cold`, WHICH IS NOT WHERE xm_boot_x IS, and the difference is worth
-; stating. `.ovl` is given back to the heap at spl_finish and would be the
-; better home - boot-only code that costs nothing afterwards - but the blob is
-; full: adding this there trips kernel.asm's `OVL_AT + OVL_SIZE > BOOT2_PAD`
-; assertion, and BOOT2_SECS is a decision about how many sectors stage 1 reads
-; before it jumps, not a build fix. So this takes `.cold` instead, which is
-; resident for the life of the machine and costs the XT about a hundred bytes
-; against the 548 the resident version cost - inside the cold rung's existing
-; headroom, so KERN_BUDGET does not move.
+; IN THE BLOB, beside xm_boot_x, which is the same shape - attach an overlay
+; drv_boot_x has already read, once, and give it back on a refusal. It runs
+; once and is given back to the heap with the rest of `.boot2` at spl_finish.
+; It used to be `.cold`, resident for the life of the machine, because the blob
+; was full when it was written; SPEC.md 2.9.14 made the blob one section and
+; SPEC.md 2.5 folded the old `.ovl` into it, and the room that left is what
+; this spends (SPEC.md 9.11.2.1).
 ;
-; It is also where it wants to be on its own merits: drv_call and drv_release
-; are driver.inc's and driver.inc IS `.cold` (SPEC.md 2.6), so from here they
-; are near calls. Only mou_lockon and the mouse's state bytes are reached
-; across a boundary, and CS is COLD_SEG here rather than KERNEL_SEG - which is
-; why the writes below go through ES.
+; CS IS THE BLOB'S here, not KERNEL_SEG, so every edge out is far: driver.inc's
+; drvf_* entries for drv_call and drv_release (xm_boot_x's), and the
+; ovw_mou_lockon thunk in `.text`. DS is the kernel's (SPEC.md 1's near model)
+; and every store below goes through it.
 ; -----------------------------------------------------------------------------
 vmm_boot_x:
     push ax
@@ -322,60 +313,48 @@ vmm_boot_x:
     push si
     push di
     push bp
-    push es
-    push ds
-    pop  es                     ; ES = KERNEL_SEG for the whole body: this is
-                                ; `.cold`, so CS is COLD_SEG and every kernel
-                                ; byte below - the row, [cpu_tier], the mouse's
-                                ; state - is DS's. DS is already the kernel's
-                                ; (SPEC.md 1's near model); ES is what the
-                                ; `[es:...]` overrides below name, so that the
-                                ; reader can see at a glance which side of the
-                                ; boundary each store is on
-    cmp byte [es:cpu_tier], CPU_386
-    jne .off                    ; an 8086 or a 286: the image is 386 code and
+    push es                     ; the attach is a driver's code: ES too
+    mov bx, vmm_row
+    cmp byte [cpu_tier], CPU_386
+    jne .hw                     ; an 8086 or a 286: the image is 386 code and
                                 ; must not be READ, let alone entered. If a
                                 ; SYSTEM.CFG from a faster machine asked for
                                 ; it, say so in the row rather than obey it
-    mov bx, vmm_row
-    cmp word [es:bx+DRVR_SEG], 0    ; drv_boot_x loads a wanted row; a DRVC_OVL
-    je  .out                        ; one stops after drv_check with the
-                                    ; segment live. Zero = not wanted, or the
-                                    ; load failed and the row already carries
-                                    ; the DRVE_*
-    mov bp, [es:bx+DRVR_ENT]
-    mov al, DRVV_ATTACH
-    mov ah, VMM_ABI_VER         ; ...which the image checks against its own
-    call drv_call
+    cmp word [bx+DRVR_SEG], 0   ; drv_boot_x loads a wanted row; a DRVC_OVL
+    je  .out                    ; one stops after drv_check with the segment
+                                ; live. Zero = not wanted, or the load failed
+                                ; and the row already carries the DRVE_*
+    mov bp, [bx+DRVR_ENT]
+    mov ax, (VMM_ABI_VER << 8) | DRVV_ATTACH    ; AH: the ABI the image
+    call COLD_SEG:drvf_drv_call                 ; checks against its own
     jc  .refuse
 
     ; --- won: settle the contest, as mou_claim / mou_p2_byte do --------------
-    mov byte [es:mou_port],  MOU_VMROW
-    mov byte [es:mou_line],  MOU_P2LINE
-    mov byte [es:mou_seen],  1
-    mov byte [es:mou_ptr],   1     ; the machine HAS a pointer (SPEC.md 9.6.6)
-    mov byte [es:mou_idany], 1     ; ...so mou_hotplug stands down too
+    mov byte [mou_port],  MOU_VMROW
+    mov byte [mou_line],  MOU_P2LINE
+    mov al, 1
+    mov [mou_seen], al
+    mov [mou_ptr], al           ; the machine HAS a pointer (SPEC.md 9.6.6)
+    mov [mou_idany], al         ; ...so mou_hotplug stands down too
     call KERNEL_SEG:ovw_mou_lockon  ; retire both UARTs: IER 0, both lines
-                                    ; masked, and mou_p2_off for the aux side.
-                                    ; FAR - this body is `.cold` and CS is
-                                    ; COLD_SEG here, not KERNEL_SEG
-    mov byte [es:vmm_on], 1        ; LAST, and deliberately so: it is the gate
-    jmp short .out              ; every poll site reads
+                                    ; masked, and mou_p2_off for the aux side
+    mov [vmm_on], al            ; LAST, and deliberately so: it is the gate
+    jmp short .out              ; every poll site reads. AL survives the
+                                ; thunk: mou_lockon preserves every register
 
 .refuse:
     mov bx, vmm_row             ; RE-ESTABLISHED: drv_call's callee may spend
-    mov byte [es:bx+DRVR_ERR], DRVE_HW  ; BX, and xm_boot_x records what reading a
-    call drv_release   ; stale one cost. No backdoor on this
-    jmp short .out                   ; machine: hand the image straight back
-.off:
-    mov bx, vmm_row
-    mov byte [es:bx+DRVR_ERR], DRVE_HW  ; 'No hardware found', and it is the
-                                ; honest answer rather than a spared string: a
-                                ; machine that cannot execute the image has no
-                                ; hardware this driver can drive
-    cmp word [es:bx+DRVR_SEG], 0    ; ...and if drv_boot_x read it anyway - it
-    je  .out                        ; has no tier test of its own - give it back
-    call drv_release
+                                ; BX, and xm_boot_x records what reading a
+                                ; stale one cost. No backdoor on this machine
+.hw:
+    mov byte [bx+DRVR_ERR], DRVE_HW ; 'No hardware found', and it is the
+                                ; honest answer on BOTH paths rather than a
+                                ; spared string: a machine that cannot execute
+                                ; the image has no hardware this driver can
+                                ; drive either
+    cmp word [bx+DRVR_SEG], 0   ; ...and hand the image straight back - on the
+    je  .out                    ; CPU path only if drv_boot_x read it anyway,
+    call COLD_SEG:drvf_drv_release  ; which has no tier test of its own
 .out:
     pop es
     pop bp
@@ -385,9 +364,7 @@ vmm_boot_x:
     pop cx
     pop bx
     pop ax
-    retf                        ; FAR: kmain reaches this as
-                                ; `call COLD_SEG:vmm_boot_x`, drv_notice_x's
-                                ; shape
+    retf                        ; FAR: kmain_o reaches this with BLOBCALL
 
 section .text
 %endif                          ; KERN_EMU

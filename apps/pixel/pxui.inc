@@ -225,13 +225,7 @@ px_layout:
 .gone:
     stc
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp px_ld_6
 
 ; px_display - the display the window is ON (SPEC.md 39.16.4), never
 ; OSAPI_VIDEO's primary: a window dragged onto a second card colours itself
@@ -271,12 +265,7 @@ px_display:
     mov [px_c_canvas], ax           ; canvas, canvas text
     mov ax, [si+6]
     mov [px_c_rule], ax             ; rule, chrome text
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp px_ld_5
 
 ; --- px_lay_panels - which panels are in the column, where, and how tall ------
 ; THERE ARE NO TITLE STRIPS (SPEC.md 106.15): a panel is its body, the
@@ -400,13 +389,7 @@ px_lay_panels:
 .i:
     mov [px_pbhw + 4], ax
 .ret:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp px_ld_6
 
 ; px_pbodyx - out AX..CX = the panels' bodies' columns (every panel has the
 ; column's width). Preserves the rest
@@ -568,13 +551,7 @@ px_lay_buttons:
     call px_ecall
     pop cx
 .nocard:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp px_ld_6
 
 ; px_setrect - SI = a button index, AX/BX/CX/DX its rect. Preserves all
 px_setrect:
@@ -679,12 +656,7 @@ px_lay_bodies:
     mov ax, [px_win]
     mov [px_hdrop + OS88UI_DR_WIN], ax
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp px_ld_5
 
 ; --- px_lay_tb - the toolbar's items, on the 8-pixel grid ----------------------
 ; Every item has a width in whole cells (px_tbdef): its caption is centred in
@@ -778,13 +750,7 @@ px_lay_tb:
     inc bx
     jmp .it
 .done:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp px_ld_6
 
 ; --- px_lay_tbc - the colour face's toolbar (SPEC.md 106.16) ------------------
 ; A face is PXA_TBH rows and pxa_w[button] columns - a multiple of 8, so the
@@ -859,14 +825,32 @@ px_lay_tbc:
     inc bx
     jmp short .it
 .done:
+    jmp px_ld_6
+
+; -----------------------------------------------------------------------------
+; px_ld_N - the shared epilogue: pop the last N of AX BX CX DX SI DI BP ES, in
+; push order, and return. A COLD routine - the layout, the menus' state, a
+; zoom command, a tool's release, a decode's setup - ends in `jmp px_ld_N`
+; instead of its own pops (apps size pass 1, set 5): 2 or 3 bytes where 5 to
+; 9 were. Nothing on the paint, render, decode or animation paths does: the
+; jump is 15 clocks a call. It is OS88_POPLADDER's ladder (SPEC.md 20.5)
+; WRITTEN OUT, as Note Pad's np_ld_N is, because tools/stkbalance.py could not
+; then resolve a macro's labels (it can since shared round 2, SPEC.md 20.5); and only the rungs something jumps to are named,
+; because the walker enters an unreferenced label at depth 0.
+; -----------------------------------------------------------------------------
+px_ld_8:
+    pop es
+    pop bp
+px_ld_6:
     pop di
+px_ld_5:
     pop si
+px_ld_4:
     pop dx
     pop cx
     pop bx
     pop ax
     ret
-
 
 ; =============================================================================
 ; DRAWING HELPERS
@@ -875,6 +859,12 @@ px_lay_tbc:
 ; px_fillc - fill AX/BX/CX/DX (absolute, inclusive) in [px_pc]. An empty rect
 ; (x1 > x2 or y1 > y2) draws nothing, so a caller may hand over a strip that
 ; came out zero-wide. Preserves every register
+px_fchrome:
+    push ax
+    mov al, [px_c_chrome]
+px_fcol:
+    mov [px_pc], al
+    pop ax
 px_fillc:
     cmp ax, cx
     jg .no
@@ -888,14 +878,33 @@ px_fillc:
 .no:
     ret
 
-; PXFILL colour - px_fillc in a colour: an immediate or a byte in memory
-%macro PXFILL 1
+; px_fbody / px_fcanvas / px_fchrome - px_fillc in the face's body, canvas
+; or chrome colour, [px_pc] set to it first as PXFILL always did. They were
+; PXFILL's eleven bytes inline at 62 sites - push, the colour, the store, pop
+; and the call - and are three here (apps size pass 1, set 5). The CHROME
+; entry falls into px_fillc and the BODY one is a whole copy of it, so their
+; 56 sites run exactly the instructions they did; the canvas's six (the empty
+; canvas, never the renderer) pay one short jump. Preserve all
+px_fbody:
     push ax
-    mov al, %1
+    mov al, [px_c_body]
     mov [px_pc], al
     pop ax
-    call px_fillc
-%endmacro
+    cmp ax, cx
+    jg .no
+    cmp bx, dx
+    jg .no
+    push ax
+    mov al, [px_pc]
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_FILL
+.no:
+    ret
+px_fcanvas:
+    push ax
+    mov al, [px_c_canvas]
+    jmp short px_fcol
 
 ; px_vrule - column AX, rows BX..DX, in the rule colour. Preserves all
 px_vrule:
@@ -1105,40 +1114,6 @@ px_tband:
     pop ax
     ret
 
-; px_well - an empty picture well: the frame AX/BX/CX/DX and a grey interior,
-; solid light grey on a colour screen and the 50% dither on a 1bpp one, where
-; a grey would round to black (SPEC.md 39.4). Preserves all
-px_well:
-    push ax
-    push bx
-    push cx
-    push dx
-    push ax
-    mov al, [px_c_rule]
-    call OSAPI_SET_COLOR
-    pop ax
-    call OSAPI_GFX_FRAME
-    inc ax
-    inc bx
-    dec cx
-    dec dx
-    cmp ax, cx
-    jg .out
-    cmp bx, dx
-    jg .out
-    cmp byte [px_bpp], 1
-    ja .col
-    call OSAPI_GFX_FILL_GRAY
-    jmp short .out
-.col:
-    PXFILL CLGRAY
-.out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
 ; px_wellframe - a well's frame alone, AX/BX/CX/DX: its interior is the
 ; caller's (a picture, a graph). Preserves all
 px_wellframe:
@@ -1172,7 +1147,7 @@ px_draw_tb:
     mov cx, [px_xr]
     mov dx, bx
     inc dx
-    PXFILL [px_c_chrome]
+    call px_fchrome
     mov bx, [px_cy0]                ; BX..DX = the button row
     add bx, 2
     mov dx, bx
@@ -1203,7 +1178,7 @@ px_draw_tb:
     dec cx
     push ax
     mov ax, bp
-    PXFILL [px_c_chrome]
+    call px_fchrome
     pop ax
     call px_vrule
     inc ax
@@ -1220,7 +1195,7 @@ px_draw_tb:
     mov ax, bp
     pop dx
     pop bx
-    PXFILL [px_c_chrome]
+    call px_fchrome
     call px_btn
     push bx
     push dx
@@ -1235,7 +1210,7 @@ px_draw_tb:
 .tail:
     mov ax, bp                      ; ground to the right edge
     mov cx, [px_xr]
-    PXFILL [px_c_chrome]
+    call px_fchrome
     ; --- the caption row, ONE run (SPEC.md 106.3) -------------------------
     mov bx, dx
     inc bx                          ; BX = the first row under the buttons
@@ -1243,7 +1218,7 @@ px_draw_tb:
     je .nocap
     mov ax, [px_cx0]
     mov dx, bx
-    PXFILL [px_c_chrome]            ; one row of air
+    call px_fchrome                 ; one row of air
     call px_capline                 ; px_cline = every caption at its cell
     inc bx
     mov dx, bx
@@ -1264,7 +1239,7 @@ px_draw_tb:
     mov cx, [px_xr]
     mov dx, [px_tby2]
     dec dx
-    PXFILL [px_c_chrome]
+    call px_fchrome
     mov dx, [px_tby2]
     mov bx, cx
     call px_hrule
@@ -1352,7 +1327,7 @@ px_draw_tbc:
     mov cx, [px_xr]
     mov dx, bx
     inc dx
-    PXFILL [px_c_chrome]
+    call px_fchrome
     mov bx, [px_cy0]                ; BX..DX = the faces' rows
     add bx, 2
     mov dx, bx
@@ -1371,7 +1346,7 @@ px_draw_tbc:
     dec cx
     push ax
     mov ax, bp
-    PXFILL [px_c_chrome]
+    call px_fchrome
     pop ax
     mov si, di
     shl si, 1
@@ -1382,13 +1357,13 @@ px_draw_tbc:
     jne .button
     mov cx, ax                      ; a separator: ground, the rule, ground
     inc cx
-    PXFILL [px_c_chrome]
+    call px_fchrome
     add ax, 2
     call px_vrule
     inc ax
     mov cx, ax
     add cx, PX_SEPW - 4
-    PXFILL [px_c_chrome]
+    call px_fchrome
     add cx, 1
     mov bp, cx
     jmp short .next
@@ -1407,14 +1382,14 @@ px_draw_tbc:
 .tail:
     mov ax, bp                      ; ground to the right edge
     mov cx, [px_xr]
-    PXFILL [px_c_chrome]
+    call px_fchrome
     mov ax, [px_cx0]                ; the air below, and the rule
     mov bx, dx
     inc bx
     mov cx, [px_xr]
     mov dx, [px_tby2]
     dec dx
-    PXFILL [px_c_chrome]
+    call px_fchrome
     mov dx, [px_tby2]
     mov bx, cx
     call px_hrule
@@ -1444,12 +1419,12 @@ px_draw_tools:
     mov cx, ax
     add cx, PX_TCL - 1
     mov dx, [px_midy2]
-    PXFILL [px_c_chrome]
+    call px_fchrome
     mov ax, [px_cx0]                ; ...and right of them
     add ax, PX_TCL + PX_BTNW
     mov cx, [px_tcx2]
     dec cx
-    PXFILL [px_c_chrome]
+    call px_fchrome
     mov ax, [px_tcx2]               ; the column's rule
     call px_vrule
     mov bp, [px_midy1]              ; BP = the next row not yet drawn
@@ -1461,7 +1436,7 @@ px_draw_tools:
     mov dx, bx                      ; the ground above this button
     dec dx
     mov bx, bp
-    PXFILL [px_c_chrome]
+    call px_fchrome
     call px_btn
     call px_getrect
     inc dx
@@ -1476,7 +1451,7 @@ px_draw_tools:
     add cx, PX_BTNW - 1
     mov bx, bp
     mov dx, [px_midy2]
-    PXFILL [px_c_chrome]
+    call px_fchrome
     pop bp
     pop si
     pop dx
@@ -1501,7 +1476,7 @@ px_draw_toolsc:
     dec cx
     mov dx, bx
     inc dx
-    PXFILL [px_c_chrome]
+    call px_fchrome
     mov ax, [px_tcx2]
     call px_vrule
     mov bp, [px_midy1]              ; BP = the next row not yet drawn
@@ -1522,7 +1497,7 @@ px_draw_toolsc:
     mov cx, [px_tcx2]
     dec cx
     mov dx, [px_midy2]
-    PXFILL [px_c_chrome]
+    call px_fchrome
     cmp bx, dx
     jg .out
     mov ax, [px_tcx2]
@@ -1568,11 +1543,11 @@ px_draw_panels:
     mov cx, [px_rx1]
     sub cx, 2
     mov dx, [px_midy2]
-    PXFILL [px_c_chrome]
+    call px_fchrome
     mov ax, [px_rx2]
     add ax, 2
     mov cx, [px_xr]
-    PXFILL [px_c_chrome]
+    call px_fchrome
 .go:
     mov bp, [px_midy1]              ; BP = the next row not yet drawn
     xor di, di                      ; DI = the panel
@@ -1606,7 +1581,7 @@ px_draw_panels:
     dec dx
     push bx
     mov bx, bp
-    PXFILL [px_c_chrome]
+    call px_fchrome
     pop bx
     cmp bx, [px_midy1]
     je .body
@@ -1623,7 +1598,7 @@ px_draw_panels:
     sub dx, 2
     push bx
     mov bx, bp
-    PXFILL [px_c_chrome]
+    call px_fchrome
     pop bx
     pop dx                          ; ...and its frame
     push dx
@@ -1658,7 +1633,7 @@ px_draw_panels:
 .t:
     mov bx, bp
     mov dx, [px_midy2]
-    PXFILL [px_c_chrome]
+    call px_fchrome
 .out:
     pop bp
     pop di
@@ -1688,17 +1663,17 @@ px_body_nav:
     mov [px_ry2], dx
     mov dx, [px_nwf + 2]            ; the air over the well's rows...
     dec dx
-    PXFILL [px_c_body]
+    call px_fbody
     mov bx, [px_nwf + 6]            ; ...and under them
     inc bx
     mov dx, [px_ry2]
-    PXFILL [px_c_body]
+    call px_fbody
     mov ax, [px_rx1]                ; the margin left of the well
     mov bx, [px_nwf + 2]
     mov cx, [px_nwf]
     dec cx
     mov dx, [px_nwf + 6]
-    PXFILL [px_c_body]
+    call px_fbody
     mov ax, [px_nwf]                ; the well: its frame, and the picture in
     mov cx, [px_nwf + 4]            ; it (px_navsync draws and records it)
     call px_wellframe
@@ -1713,11 +1688,11 @@ px_body_nav:
     dec cx
     mov bx, [px_nwf + 2]
     mov dx, [px_nwf + 6]
-    PXFILL [px_c_body]
+    call px_fbody
     mov ax, [px_bx1]                ; the margin right of the buttons
     add ax, PX_NAVW
     mov cx, [px_rx2]
-    PXFILL [px_c_body]
+    call px_fbody
     mov bp, bx                      ; BP = the next row of the column
     mov si, PX_B_NZIN
 .b:
@@ -1725,7 +1700,7 @@ px_body_nav:
     mov dx, bx
     dec dx
     mov bx, bp
-    PXFILL [px_c_body]              ; the column above this one
+    call px_fbody                   ; the column above this one
     call px_btn
     call px_getrect
     inc dx
@@ -1735,7 +1710,7 @@ px_body_nav:
     jb .b
     mov bx, bp
     mov dx, [px_nwf + 6]
-    PXFILL [px_c_body]
+    call px_fbody
     pop bp
     pop di
     pop si
@@ -1842,17 +1817,17 @@ px_body_hist:
     mov [px_ry2], dx
     mov dx, [px_hwf + 2]
     dec dx
-    PXFILL [px_c_body]              ; air on top
+    call px_fbody                   ; air on top
     mov bx, [px_hwf + 6]
     inc bx
     mov dx, [px_ry2]
-    PXFILL [px_c_body]              ; ...and at the foot
+    call px_fbody                   ; ...and at the foot
     mov ax, [px_rx1]                ; the margin left of the well
     mov bx, [px_hwf + 2]
     mov cx, [px_hwf]
     dec cx
     mov dx, [px_hwf + 6]
-    PXFILL [px_c_body]
+    call px_fbody
     mov ax, [px_hwf]
     mov cx, [px_hwf + 4]
     call px_wellframe               ; the well: its frame, the graph in it
@@ -1860,18 +1835,18 @@ px_body_hist:
     inc ax
     mov cx, [px_hcol]
     dec cx
-    PXFILL [px_c_body]
+    call px_fbody
     mov ax, [px_hdrop + OS88UI_DR_RECT + 4]
     inc ax                          ; the columns right of the drop-down
     mov bx, [px_hdrop + OS88UI_DR_RECT + 2]
     mov cx, [px_rx2]
     mov dx, [px_hdrop + OS88UI_DR_RECT + 6]
-    PXFILL [px_c_body]
+    call px_fbody
     mov ax, [px_hcol]               ; the row of air under the drop-down
     mov bx, dx
     inc bx
     mov dx, bx
-    PXFILL [px_c_body]
+    call px_fbody
     mov word [px_kg], 0xFFFF        ; the graph, the drop-down and the lines
     mov word [px_kd], 0xFFFF        ; through their records - owed, so all
     call px_histsync                ; of them now
@@ -1896,7 +1871,7 @@ px_body_hist:
     jle .air
     mov dx, [px_hwf + 6]
 .air:
-    PXFILL [px_c_body]
+    call px_fbody
     add bp, [px_lp]
     inc di
     jmp short .l
@@ -1905,7 +1880,7 @@ px_body_hist:
     mov cx, [px_rx2]
     mov bx, bp
     mov dx, [px_hwf + 6]
-    PXFILL [px_c_body]
+    call px_fbody
     pop bp
     pop di
     pop si
@@ -2049,7 +2024,7 @@ px_body_info:
     mov [px_ry2], dx
     mov dx, bx
     add dx, 2
-    PXFILL [px_c_body]              ; air on top
+    call px_fbody                   ; air on top
     add bx, 3
     mov bp, bx                      ; BP = the next row
     xor di, di
@@ -2069,7 +2044,7 @@ px_body_info:
     jle .air
     mov dx, [px_ry2]
 .air:
-    PXFILL [px_c_body]
+    call px_fbody
     add bp, [px_lp]
     inc di
     jmp short .l
@@ -2078,7 +2053,7 @@ px_body_info:
     mov cx, [px_rx2]
     mov bx, bp
     mov dx, [px_ry2]
-    PXFILL [px_c_body]
+    call px_fbody
     call px_infosync                ; the lines, owed: all of them
     pop bp
     pop di
@@ -2246,7 +2221,7 @@ px_draw_empty:
     mov dx, bx
     dec dx
     mov bx, [px_midy1]
-    PXFILL [px_c_canvas]
+    call px_fcanvas
     pop bx
     ; the picture's row: ground, picture, ground
     mov ax, [px_cvx2]
@@ -2261,12 +2236,12 @@ px_draw_empty:
     mov dx, bx
     add dx, bp
     dec dx
-    PXFILL [px_c_canvas]
+    call px_fcanvas
     pop ax
     push ax
     add ax, 16
     mov cx, [px_cvx2]
-    PXFILL [px_c_canvas]
+    call px_fcanvas
     pop cx                          ; CX = the picture's left
     mov dx, bx
     mov si, pxi_photo
@@ -2283,7 +2258,7 @@ px_draw_empty:
     mov dx, bx
     add dx, di
     dec dx
-    PXFILL [px_c_canvas]
+    call px_fcanvas
     add bx, di
     mov dx, bx                      ; the first line: how to open one - or,
     mov si, px_s_empty              ; once a file was refused, why it was
@@ -2305,7 +2280,7 @@ px_draw_empty:
     mov dx, bx                      ; the air between the lines
     add dx, [px_lp]
     sub dx, 9
-    PXFILL [px_c_canvas]
+    call px_fcanvas
     add bx, [px_lp]
     sub bx, 8
     mov dx, bx
@@ -2318,7 +2293,7 @@ px_draw_empty:
     add bx, 8
 .rest:
     mov dx, [px_midy2]              ; the ground below
-    PXFILL [px_c_canvas]
+    call px_fcanvas
 .out:
     pop bp
     pop di
@@ -2437,18 +2412,18 @@ px_draw_status:
     inc bx
     mov dx, [px_tyy0]               ; the rows above the text
     dec dx
-    PXFILL [px_c_chrome]
+    call px_fchrome
     mov bx, [px_tyy0]               ; ...and below it
     add bx, 8
     mov dx, [px_yb]
-    PXFILL [px_c_chrome]
+    call px_fchrome
     mov bx, [px_tyy0]               ; BX..DX = the text's rows
     mov dx, bx
     add dx, 7
     mov ax, [px_cx0]                ; a cell of margin
     mov cx, ax
     add cx, 7
-    PXFILL [px_c_chrome]
+    call px_fchrome
     xor si, si                      ; SI = the field
     xor di, di                      ; DI = fields drawn so far
 .f:
@@ -2464,13 +2439,13 @@ px_draw_status:
     sub ax, PX_SEPW
     mov cx, ax
     add cx, 2
-    PXFILL [px_c_chrome]
+    call px_fchrome
     add ax, 3
     call px_vrule
     inc ax
     mov cx, ax
     add cx, 3
-    PXFILL [px_c_chrome]
+    call px_fchrome
 .run:
     mov bx, si
     call px_sfrun                   ; owed: the whole field
@@ -2484,7 +2459,7 @@ px_draw_status:
     add ax, [px_cx0]
     mov cx, [px_sbx]
     sub cx, 3
-    PXFILL [px_c_chrome]
+    call px_fchrome
     ; --- the arrows' part: x arrows - 2 .. the right edge ------------------
     mov si, PX_B_SNEXT
     call px_getrect                 ; CX = their right, BX..DX their rows
@@ -2498,22 +2473,22 @@ px_draw_status:
     mov bx, [px_sty1]
     inc bx
     mov dx, [px_yb]
-    PXFILL [px_c_chrome]
+    call px_fchrome
     mov ax, [px_sbx]                ; above them
     mov cx, [px_bx2]
     mov dx, [px_by1]
     dec dx
-    PXFILL [px_c_chrome]
+    call px_fchrome
     mov bx, [px_by2]                ; below them
     inc bx
     mov dx, [px_yb]
-    PXFILL [px_c_chrome]
+    call px_fchrome
     mov ax, [px_bx2]                ; the grow box's corner, to the edge
     inc ax
     mov cx, [px_xr]
     mov bx, [px_sty1]
     inc bx
-    PXFILL [px_c_chrome]
+    call px_fchrome
     mov si, PX_B_SPREV
     call px_btn
     mov si, PX_B_SNEXT
@@ -3266,7 +3241,7 @@ px_bvcell:
     mov cx, ax
     add cx, PXA_GAP - 1
     mov dx, [px_bv + 6]
-    PXFILL [px_c_chrome]
+    call px_fchrome
     jmp short .out
 .tool:
     mov ax, [px_bv]                 ; the tool column: the face's rows above
@@ -3277,23 +3252,23 @@ px_bvcell:
     add cx, PXA_TLW - 2
     mov dx, [px_bv + 2]
     dec dx
-    PXFILL [px_c_chrome]
+    call px_fchrome
     mov bx, [px_bv + 6]
     inc bx
     mov dx, [px_bv + 2]
     sub dx, PXA_TLY0
     add dx, PXA_TLH - 1
-    PXFILL [px_c_chrome]
+    call px_fchrome
     mov bx, [px_bv + 2]
     mov dx, [px_bv + 6]
     push cx
     mov cx, [px_bv]
     dec cx
-    PXFILL [px_c_chrome]
+    call px_fchrome
     pop cx
     mov ax, [px_bv + 4]
     inc ax
-    PXFILL [px_c_chrome]
+    call px_fchrome
     mov ax, cx
     inc ax
     mov bx, [px_bv + 2]

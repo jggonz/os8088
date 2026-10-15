@@ -64,7 +64,7 @@ tk_tmreset:
     xor ax, ax
     mov [tk_tmlen], ax
     mov di, tk_tmrix
-    mov cx, TK_MAXROW + 1
+    mov cx, TK_SHROWS + 1
     cld
     rep stosw
     ret

@@ -103,16 +103,32 @@ TP_SB_STEP    equ 4             ; ...and an arrow cell steps FOUR rows. One is
                                 ; preview scrolls in the same step, times the
                                 ; 8px a body line occupies there (SPEC.md
                                 ; 13.10.1: the policy is the caller's)
-TP_SRC_KB     equ 8
-TP_SRC_MAX    equ 8190
-TP_EXP_KB     equ 24
-TP_EXP_MAX    equ 24576
+TP_SRC_KB     equ 8             ; the most the source claim ever grows to...
+TP_SRC_MAX    equ 8190          ; ...for a document of at most this
+TP_SRC_KB0    equ 1             ; ...from this at launch (tp_claim_src)
+TP_EXP_STEP   equ 4             ; the export claim grows this many KB at a time
+TP_EXP_MAX    equ 24576         ; ...to this, and a document past it is refused
 TP_MAX_RUNS   equ 480
 TP_MAX_BOXES  equ 64
 TP_MAX_PAGES  equ 16
 TP_TEXT_MAX   equ 5120
-TP_RUN_SZ     equ 10
-TP_BOX_SZ     equ 10
+; A RUN is 7 bytes: +0 its page in the low nibble with TP_RUN_BOLD and
+; TP_RUN_UNDER above it, +1 x, +3 y, +5 size, +6 length. Its text is in tp_text
+; in run order, so it carries no offset: every reader walks the runs from the
+; first and adds each length as it goes. A BOX is 7: +0 page, +1 x, +3 y,
+; +5 w - and no height, every box being one point tall (tp_tab_grid has why;
+; SPEC.md 69.3).
+TP_RUN_SZ     equ 7
+TP_BOX_SZ     equ 7
+%if TP_RUN_SZ != 7 || TP_BOX_SZ != 7
+    %error "tp_put_run_at and tp_emit_box multiply by 8 - 1"
+%endif
+TP_RUN_PAGE   equ 0x0F          ; TP_MAX_PAGES must fit it
+TP_RUN_BOLD   equ 0x10
+TP_RUN_UNDER  equ 0x20
+%if TP_MAX_PAGES > TP_RUN_PAGE + 1
+    %error "a run's page nibble cannot hold TP_MAX_PAGES"
+%endif
 TP_ARG_MAX    equ 180
 TP_LINE_MAX   equ 148
 TP_CLINE_MAX  equ 120
@@ -121,40 +137,33 @@ TP_ENV_MAX    equ 6
 TP_COL_MAX    equ 6
 
 ; -----------------------------------------------------------------------------
-tp_entry:
-    cld
-    push si
+tp_entry:                       ; (an entry proc answers BX = its window and
+    cld                         ; CF, and owes the loader nothing else,
+    push si                     ; SPEC.md 20.2)
     mov si, tp_tpl
     call OSAPI_WM_CREATE
     jc .out
-    push si
     mov si, tp_menus
     call OSAPI_MENU_SET
-    pop si
     mov [tp_win], bx
     ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
     ; exists, and not beside any worker's declaration: a package with
     ; NO worker is the case that moves most easily, and putting it at
     ; the spawn left exactly those runs declaring nothing - measured,
     ; by the row that reads MC_RLOC back out of the kernel's own table.
-    OS88_REGION_MOVABLE
-    push ax                     ; SPEC.md 13.7/13.8.1: the bar's seven fire on
-    mov ax, tp_onup             ; the RELEASE and follow the pointer between
-    call OSAPI_WM_ONMOUSEUP     ; the edges. Not template words, so they are
-    mov ax, tp_ondrag           ; set after wm_create like MENU_SET above
-    call OSAPI_WM_ONDRAG
-%ifdef OS88UI_SBDRAG
-    push ax                     ; 13.10.5.4.2's PAUSE commit. The push is the
-    mov ax, tp_ontimer          ; `sbb al, al` below: it reads OSAPI_WM_ONDRAG's
-    call OSAPI_WM_ONTIMER       ; own CF, so this install may not sit between
-    pop ax                      ; the two - and AX carries the flags out
-%endif
+    ; The proc is a bare `ret` of ours: nothing here holds a segment of
+    ; its own region.
+    OS88_REGION_MOVABLE tp_seg_ok
+    mov ax, tp_onup             ; SPEC.md 13.7/13.8.1: the bar's seven fire on
+    call OSAPI_WM_ONMOUSEUP     ; the RELEASE and follow the pointer between
+    mov ax, tp_ondrag           ; the edges. Not template words, so they are
+    call OSAPI_WM_ONDRAG        ; set after wm_create like MENU_SET above
 %ifdef OS88UI_SBDRAG
     sbb al, al                  ; CF = 1 on kern_small (SPEC.md 13.10.7.1): no
-    mov [tp_nodrag], al         ; tracking edge, so no thumb gesture either
+    mov [tp_nodrag], al         ; tracking edge, so no thumb gesture either -
+    mov ax, tp_ontimer          ; read off OSAPI_WM_ONDRAG's own CF, so nothing
+    call OSAPI_WM_ONTIMER       ; goes between. Then 13.10.5.4.2's PAUSE commit
 %endif
-    pop ax
-    mov byte [tp_bdown], 0
     mov al, 1
     call OSAPI_WM_SIZABLE
     mov al, 1
@@ -182,53 +191,40 @@ tp_entry:
                                 ; skips is source text beside a typeset
                                 ; preview, which is more lettering than any
                                 ; other window has
-    push cx                     ; ...AND A FLOOR UNDER THE GROW BOX (SPEC.md
-    push dx                     ; 11.100.2). Two panes with minimums cannot be
-    mov cx, TP_MIN_W            ; expressed by WMIN_W, which is one number for
-    mov dx, TP_MIN_H            ; the whole machine and is 96
-    call OSAPI_WM_MINSIZE
-    pop dx
-    pop cx
-    push si                     ; ...and the HERCULES is 720 columns wide
-    mov si, tp_pref             ; (SPEC.md 11.100.1). A two-pane editor is the
-    call OSAPI_WM_PREFER        ; one window in the tree with somewhere to put
-    pop si                      ; them: the split stays where it is and every
+    mov cx, TP_MIN_W            ; ...AND A FLOOR UNDER THE GROW BOX (SPEC.md
+    mov dx, TP_MIN_H            ; 11.100.2). Two panes with minimums cannot be
+    call OSAPI_WM_MINSIZE       ; expressed by WMIN_W, which is one number for
+                                ; the whole machine and is 96
+    mov si, tp_pref             ; ...and the HERCULES is 720 columns wide
+    call OSAPI_WM_PREFER        ; (SPEC.md 11.100.1). A two-pane editor is the
+                                ; one window in the tree with somewhere to put
+                                ; them: the split stays where it is and every
                                 ; extra column goes to the page
-    push si
     mov si, tp_onabout
     call OSAPI_ABOUT_SET
-    pop si
     call tp_rgn_all             ; the preview region is bss, and bss is ZERO -
                                 ; which as a region means "nothing is
                                 ; drawable". Every painter sets it, but this
                                 ; is the one that costs nothing to be sure of
-    mov byte [tp_needld], 1
-    mov byte [tp_margin], 1
-    mov byte [tp_pad], 1
-    mov byte [tp_pstyle], 1     ; footer numbers
-    mov byte [tp_psize], 0      ; Letter
-    mov byte [tp_bind], 0       ; single
-    mov byte [tp_gutter], 1     ; 18pt
-    mov byte [tp_units], 0      ; inches
-    mov byte [tp_fsize], 12
+    ; The page options (bss is zero, so Letter, single-sided and inches are
+    ; already set): 18pt gutter, normal padding, normal margins, footer
+    ; numbers, 12pt - three words over tp_gutter's run of adjacent bytes
+    mov word [tp_gutter], 1 | (1 << 8)          ; gutter, pad
+    mov word [tp_margin], 1                     ; margin, units
+    mov word [tp_pstyle], 1 | (12 << 8)         ; pstyle, fsize
     mov word [tp_split], TP_SPLIT0
     call tp_claim_src
     jc .out
     ; RAM seed only when not opened on a .TEX. No floppy, no typeset
-    ; under the loader lock (that froze the desktop).
-    mov byte [tp_needld], 0
+    ; under the loader lock (that froze the desktop). A .TEX's load is
+    ; tp_onwake's, into a document still empty.
     call tp_note_arg
     cmp byte [tp_needld], 0
-    jne .pend
+    jne .ready
     call tp_seed
-    jmp .ready
-.pend:
-    mov word [tp_srclen], 0
-    mov word [tp_cur], 0
 .ready:
     mov byte [tp_needttl], 1
     mov byte [tp_needset], 1
-    mov byte [tp_setok], 0
     mov bx, [tp_win]            ; SPEC.md 54.10: the kernel calls this once our
     mov ax, tp_onwake           ; window is on the glass, and the launch .TEX
     call OSAPI_WM_ONWAKE        ; loads in front of it rather than inside the
@@ -236,6 +232,7 @@ tp_entry:
     clc                         ; entry CF=1 means launch failed
 .out:
     pop si
+tp_seg_ok:                      ; (and the region's relocation proc: a ret)
     ret
 
 ; Copy ARG_FILE name only. Do not READ or typeset here.
@@ -251,22 +248,8 @@ tp_note_arg:
     jc .o
     mov [tp_dir], dx
     mov [tp_drv], bl
-    mov ax, KERNEL_SEG
-    mov es, ax
     mov di, tp_fname
-    mov cx, 13
-.cp:
-    mov al, [es:si]
-    mov [di], al
-    or al, al
-    jz .named
-    inc si
-    inc di
-    loop .cp
-    mov byte [di], 0
-.named:
-    push ds
-    pop es
+    call tp_kname
     call tp_is_tex
     jc .o
     mov byte [tp_needld], 1
@@ -309,12 +292,35 @@ tp_deferred_ld:
     mov byte [tp_needld], 0
     push ax
     push bx
+    push cx
     push dx
-    mov dx, [tp_dir]
-    mov bl, [tp_drv]
-    call OSAPI_FILE_GOTO
+    push si
+    push di
+    mov dx, [tp_dir]                ; the DOCUMENT's folder, stood in QUIETLY
+    mov bl, [tp_drv]                ; and the instance with it, so tp_load's
+    call OSAPI_FILE_GOTO_QM         ; by-name read resolves there. Nothing here
+                                    ; lists the folder, so the remount's scan,
+                                    ; sort and icon harvest were ~0.5 s of
+                                    ; floppy for no reader (docs/plans/
+                                    ; NAV-COST-PLAN.md, SPEC.md 19.9.1). CX, SI
+                                    ; and DI are banked for a redirected
+                                    ; volume's FSV_CHDIR (SPEC.md 62.9.1)
+    jnc .there
+    mov si, tp_s_err                ; CF WAS IGNORED HERE, and with the old
+    call tp_toast                   ; GOTO that was safe by accident: its
+    stc                             ; failure left the root with the write gate
+    jmp short .moved                ; shut and tp_load's read refused. QM's
+                                    ; failure moves NOTHING, so the read would
+                                    ; find tp_fname in TeXPad's own folder - a
+                                    ; same-named stranger loaded as this
+                                    ; document. Refuse in tp_load's own words
+.there:
     call tp_load
+.moved:
+    pop di
+    pop si
     pop dx
+    pop cx
     pop bx
     pop ax
     jnc .set
@@ -334,19 +340,76 @@ tp_deferred_ld:
 .o:
     ret
 
+; THE SOURCE CLAIM IS THE DOCUMENT'S SIZE, NOT THE CEILING'S (SPEC.md 69.4).
+; It is TP_SRC_KB0 at launch, grows a KB at a time as the document does
+; (tp_srcfit, from tp_open_gap - the one door every insert goes through) and
+; is cut back to what a newly loaded or a new document needs (tp_srctrim), so
+; an open TeXPad holds its document's KB and not 8 of them. TP_SRC_MAX is
+; still the document's ceiling and the status strip still says so.
 tp_claim_src:
-    cmp word [tp_srcseg], 0
-    jne .ok
-    mov ax, TP_SRC_KB
+    mov ax, TP_SRC_KB0
     call OSAPI_MEM_CLAIM
     jc .bad
     mov [tp_srcseg], dx
-    mov word [tp_srclen], 0
-.ok:
-    clc
-    ret
+    mov word [tp_srccap], TP_SRC_KB0 * 1024
 .bad:
-    stc
+    ret
+
+; AX = the bytes the document is about to need: CF=0 once the claim holds
+; them, growing it to the KB they round up to (OSAPI_MEM_REGROW, SPEC.md
+; 50.3.1, which brings the bytes with it when it has to move); CF=1 when the
+; heap says no, and the claim is untouched. Preserves every register.
+tp_srcfit:
+    cmp [tp_srccap], ax
+    jae .o                      ; (CF=0)
+    push ax
+    add ax, 1023
+    mov al, ah
+    shr al, 1
+    shr al, 1
+    xor ah, ah                  ; the KB, at most TP_SRC_KB
+    call tp_srckb
+    pop ax
+.o:
+    ret
+
+; The claim cut back to the document it holds - [tp_srclen] rounded up to a
+; KB, and never under one. A shrink is always granted in place. Preserves
+; every register.
+tp_srctrim:
+    push ax
+    mov ax, [tp_srclen]
+    add ax, 1023
+    mov al, ah
+    shr al, 1
+    shr al, 1
+    xor ah, ah
+    or al, al
+    jnz .k
+    inc ax
+.k:
+    call tp_srckb
+    pop ax
+    ret
+
+; AX = KB: the source claim regrown to it, [tp_srcseg] and [tp_srccap]
+; following. CF=1 refused. Preserves every register.
+tp_srckb:
+    push ax
+    push dx
+    mov dx, [tp_srcseg]
+    call OSAPI_MEM_REGROW
+    jc .o
+    mov [tp_srcseg], dx
+    mov ah, al
+    xor al, al
+    shl ax, 1
+    shl ax, 1                   ; KB * 1024
+    mov [tp_srccap], ax
+    clc
+.o:
+    pop dx
+    pop ax
     ret
 
 tp_is_tex:
@@ -398,15 +461,7 @@ tp_paint:
     push dx
     push si
     push di
-    mov bx, si
-    call OSAPI_WM_CONTENT
-    mov [tp_ox], ax
-    mov [tp_oy], dx
-    mov bx, si
-    call OSAPI_WM_GEOM
-    mov [tp_cw], cx
-    mov [tp_ch], dx
-    call tp_clamp_split
+    call tp_wingeo
     ; NO tp_deferred_ld HERE. It was read from the FIRST PAINT between SPEC.md
     ; 69.6 and 54.10 - never from the entry proc, where a floppy read under the
     ; loader lock froze the desktop - and the first paint is itself inside
@@ -434,6 +489,28 @@ tp_paint:
 .out:
     pop di
     pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; SI = the window: where its content is and how big, from the WM - every
+; time, never banked (apps/os88api.inc's rule: a MOVE replays pixels and calls
+; no paint) - and the split clamped to it. Preserves every register.
+tp_wingeo:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, si
+    call OSAPI_WM_CONTENT
+    mov [tp_ox], ax
+    mov [tp_oy], dx
+    call OSAPI_WM_GEOM
+    mov [tp_cw], cx
+    mov [tp_ch], dx
+    call tp_clamp_split
     pop dx
     pop cx
     pop bx
@@ -503,11 +580,13 @@ tp_clamp_split:
     pop ax
     ret
 
+; The bar's seven rects, left to right with 4px between, one width each.
 tp_layout:
     push ax
     push bx
     push cx
     push dx
+    push si
     push di
     mov ax, [tp_ox]
     add ax, 4
@@ -516,168 +595,111 @@ tp_layout:
     mov dx, bx
     add dx, 16
     mov di, tp_r_set
-    mov cx, ax
-    add cx, 60                  ; 'Typeset' is seven cells; the five cyclers
-                                ; after it hold three or six and stay at 32
-    call tp_setrect
+    mov si, tp_bwid
+.l:
+    mov cl, [si]
+    inc si
+    xor ch, ch
+    add cx, ax
+    mov [di], ax
+    mov [di+2], bx
+    mov [di+4], cx
+    mov [di+6], dx
+    add di, 8
     mov ax, cx
     add ax, 4
-    mov di, tp_r_cls
-    mov cx, ax
-    add cx, 32
-    call tp_setrect
-    mov ax, cx
-    add ax, 4
-    mov di, tp_r_mar
-    mov cx, ax
-    add cx, 32
-    call tp_setrect
-    mov ax, cx
-    add ax, 4
-    mov di, tp_r_gut
-    mov cx, ax
-    add cx, 32
-    call tp_setrect
-    mov ax, cx
-    add ax, 4
-    mov di, tp_r_pad
-    mov cx, ax
-    add cx, 32
-    call tp_setrect
-    mov ax, cx
-    add ax, 4
-    mov di, tp_r_prev
-    mov cx, ax
-    add cx, 24
-    call tp_setrect
-    mov ax, cx
-    add ax, 4
-    mov di, tp_r_next
-    mov cx, ax
-    add cx, 24
-    call tp_setrect
+    cmp si, tp_bwid + TP_NBTN
+    jb .l
     pop di
+    pop si
     pop dx
     pop cx
     pop bx
     pop ax
     ret
 
-tp_setrect:
-    mov [di], ax
-    mov [di+2], bx
-    mov [di+4], cx
-    mov [di+6], dx
-    ret
+TP_NBTN     equ 7
+tp_bwid:    db 60               ; 'Typeset' is seven cells; the four cyclers
+            db 32, 32, 32, 32   ; after it hold three or four and stay at 32,
+            db 24, 24           ; and the two page arrows one
 
 ; Paper size in points from tp_psize: Letter / Legal / A4 / A5.
 tp_pagesz:
     push ax
-    mov ax, 612
-    mov word [tp_ph], 792
-    cmp byte [tp_psize], 1
-    je .legal
-    cmp byte [tp_psize], 2
-    je .a4
-    cmp byte [tp_psize], 3
-    je .a5
-    jmp .ok
-.legal:
-    mov word [tp_ph], 1008
-    jmp .ok
-.a4:
-    mov ax, 595
-    mov word [tp_ph], 842
-    jmp .ok
-.a5:
-    mov ax, 420
-    mov word [tp_ph], 595
-.ok:
+    push bx
+    mov bl, [tp_psize]
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    mov ax, [tp_pgtab+bx]
     mov [tp_pw], ax
+    mov ax, [tp_pgtab+2+bx]
+    mov [tp_ph], ax
+    pop bx
     pop ax
     ret
 
+tp_pgtab:   dw 612, 792, 612, 1008, 595, 842, 420, 595
+tp_margtab: db 54, 72, 108      ; the outer margin, narrow / normal / wide
+
+; AL = a page number: NZ when it is a VERSO - the gutter on its right. Facing
+; pages put it inner-left on odd (recto) pages; opposing flips that.
+tp_verso:
+    cmp byte [tp_bind], 2
+    jne .t
+    inc ax
+.t:
+    test al, 1
+    ret
+
 ; Left / right / top / bot / text width for [tp_page].
-; Facing: odd (recto) gutter on the inner left; even (verso) inner right.
-; Opposing flips that. Single keeps equal outer margins.
+; Single keeps equal outer margins; facing or opposing add the gutter on the
+; inner side (tp_verso).
 tp_geom:
     push ax
     push bx
     push cx
     push dx
     call tp_pagesz
-    mov ax, 72
-    cmp byte [tp_margin], 0
-    jne .m1
-    mov ax, 54
-    jmp .ms
-.m1:
-    cmp byte [tp_margin], 2
-    jne .ms
-    mov ax, 108
-.ms:
-    mov cx, ax                  ; outer margin
-    xor bx, bx
-    cmp byte [tp_gutter], 1
-    jne .g2
-    mov bx, 18
-    jmp .gs
-.g2:
-    cmp byte [tp_gutter], 2
-    jne .gs
-    mov bx, 36
-.gs:
+    mov bl, [tp_margin]
+    xor bh, bh
+    mov cl, [tp_margtab+bx]
+    xor ch, ch                  ; CX = the outer margin
+    mov al, [tp_gutter]
+    mov ah, 18
+    mul ah
+    xchg ax, bx                 ; BX = the gutter, 0 / 18 / 36pt
+    mov ax, cx                  ; AX = left
+    mov dx, [tp_pw]
+    sub dx, cx                  ; DX = right
     cmp byte [tp_bind], 0
-    je .single
-    mov dx, [tp_page]
-    and dx, 1
-    cmp byte [tp_bind], 2
-    jne .side
-    xor dx, 1
-.side:
-    or dx, dx
+    je .tw
+    push ax
+    mov al, [tp_page]
+    call tp_verso
+    pop ax
     jnz .verso
-    mov ax, cx
     add ax, bx
+    jmp short .tw
+.verso:
+    sub dx, bx
+.tw:
     mov [tp_left], ax
     mov [tp_tleft], ax
-    mov ax, [tp_pw]
-    sub ax, cx
-    mov [tp_right], ax
-    jmp .tw
-.verso:
-    mov [tp_left], cx
-    mov [tp_tleft], cx
-    mov ax, [tp_pw]
-    sub ax, cx
-    sub ax, bx
-    mov [tp_right], ax
-    jmp .tw
-.single:
-    mov [tp_left], cx
-    mov [tp_tleft], cx
-    mov ax, [tp_pw]
-    sub ax, cx
-    mov [tp_right], ax
-.tw:
-    mov ax, [tp_right]
-    sub ax, [tp_left]
-    mov [tp_tw], ax
+    mov [tp_right], dx
+    sub dx, ax
+    mov [tp_tw], dx
     mov ax, [tp_ph]
     sub ax, cx
-    cmp byte [tp_pstyle], 2
+    cmp byte [tp_pstyle], 2     ; a header takes 14pt off the top...
     jne .th
     sub ax, 14
 .th:
     mov [tp_ttop], ax
     mov ax, cx
     add ax, 18
-    cmp byte [tp_pstyle], 1
-    je .botx
-    cmp byte [tp_pstyle], 3
-    je .botx
-    jmp .tb
-.botx:
+    test byte [tp_pstyle], 1    ; ...and a footer (1, or 3 outer) 8 off the foot
+    jz .tb
     add ax, 8
 .tb:
     mov [tp_tbot], ax
@@ -706,20 +728,11 @@ tp_fit_sheet:
     xor bh, bh
     mov cx, bx                  ; CX = pt size
     mov ax, [tp_pw]
-    mov dx, ax
-    shl ax, 1
-    shl ax, 1
-    shl ax, 1                   ; *8
-    xor dx, dx
-    div cx
-    mov bx, ax                  ; BX = sheet w
+    call .px
+    xchg ax, bx                 ; BX = sheet w
     mov ax, [tp_ph]
-    shl ax, 1
-    shl ax, 1
-    shl ax, 1
-    xor dx, dx
-    div cx
-    mov cx, ax                  ; CX = sheet h
+    call .px
+    xchg ax, cx                 ; CX = sheet h
     ; horizontal: center if it fits, else flush left
     mov ax, [tp_px2]
     sub ax, [tp_px1]
@@ -744,22 +757,23 @@ tp_fit_sheet:
     mov [tp_sy1], ax
     add ax, cx
     mov [tp_sy2], ax
-    mov ax, [tp_left]
-    call tp_mapx
+    mov ax, [tp_left]           ; the text area's top-left, where "F5
+    call tp_mapx                ; typesets" goes on an unset page
     mov [tp_tx1], ax
-    mov ax, [tp_right]
-    call tp_mapx
-    mov [tp_tx2], ax
     mov ax, [tp_ttop]
     call tp_mapy
     mov [tp_ty1], ax
-    mov ax, [tp_tbot]
-    call tp_mapy
-    mov [tp_ty2], ax
     pop dx
     pop cx
     pop bx
     pop ax
+    ret
+.px:                            ; AX points -> AX pixels at CX points a cell
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    xor dx, dx
+    div cx
     ret
 
 ; AX = PDF x -> AX = screen x
@@ -840,16 +854,11 @@ tp_draw_sheet:
     ; gutter
     cmp byte [tp_bind], 0
     je .txt
-    xor ax, ax
-    cmp byte [tp_gutter], 1
-    jne .g2
-    mov ax, 18
-    jmp .gw
-.g2:
-    cmp byte [tp_gutter], 2
-    jne .txt
-    mov ax, 36
-.gw:
+    mov al, [tp_gutter]
+    or al, al
+    jz .txt
+    mov ah, 18
+    mul ah                      ; the gutter, 18 or 36pt
     mov bx, [tp_sx2]
     sub bx, [tp_sx1]
     mul bx
@@ -863,38 +872,23 @@ tp_draw_sheet:
     jae .gok
     mov ax, 4
 .gok:
-    mov cx, ax                  ; gutter px
+    xchg ax, cx                 ; gutter px
     mov al, [tp_ppage]
-    and al, 1
-    cmp byte [tp_bind], 2
-    jne .sd
-    xor al, 1
-.sd:
-    or al, al
+    call tp_verso
     jnz .rg
-    ; left (recto / inner)
-    mov ax, [tp_sx1]
+    mov ax, [tp_sx1]            ; left (recto / inner)
     inc ax
-    mov bx, [tp_sy1]
-    inc bx
-    push cx
     add cx, ax
     dec cx
-    mov dx, [tp_sy2]
-    dec dx
-    call tp_clip_pane
-    jc .lg
-    call OSAPI_GFX_FILL_GRAY
-.lg:
-    pop cx
-    jmp .txt
+    jmp short .gf
 .rg:
-    mov ax, [tp_sx2]
+    mov ax, [tp_sx2]            ; right (verso)
     sub ax, cx
-    mov bx, [tp_sy1]
-    inc bx
     mov cx, [tp_sx2]
     dec cx
+.gf:
+    mov bx, [tp_sy1]
+    inc bx
     mov dx, [tp_sy2]
     dec dx
     call tp_clip_pane
@@ -919,41 +913,48 @@ tp_sheet_edges:
     mov bx, [tp_sy1]
     mov cx, [tp_sx2]
     mov dx, bx
-    call tp_clip_pane
-    jc .bot
-    mov bx, cx                  ; hline: AX=x1, BX=x2, DX=y
-    call OSAPI_GFX_HLINE
-.bot:
-    mov ax, [tp_sx1]
+    call tp_seg
+    mov ax, [tp_sx1]            ; bottom
     mov bx, [tp_sy2]
     mov cx, [tp_sx2]
     mov dx, bx
-    call tp_clip_pane
-    jc .lft
-    mov bx, cx
-    call OSAPI_GFX_HLINE
-.lft:
+    call tp_seg
     mov ax, [tp_sx1]            ; left
     mov bx, [tp_sy1]
     mov cx, ax
     mov dx, [tp_sy2]
-    call tp_clip_pane
-    jc .rgt
-    call OSAPI_GFX_VLINE        ; AX=x, BX=y1, DX=y2, which is what the clip
-                                ; already left behind
-.rgt:
+    call tp_seg
     mov ax, [tp_sx2]            ; right
     mov bx, [tp_sy1]
     mov cx, ax
     mov dx, [tp_sy2]
-    call tp_clip_pane
-    jc .o
-    call OSAPI_GFX_VLINE
-.o:
+    call tp_seg
     pop dx
     pop cx
     pop bx
     pop ax
+    ret
+
+; AX..DX = a rect on the preview, inclusive: clipped to the pane and the
+; region (tp_clip_pane), and drawn in the pen as what it is - a row is a
+; horizontal line, a column a vertical one, anything else a frame. Clobbers
+; AX..DX.
+tp_seg:
+    call tp_clip_pane
+    jc .o
+    cmp bx, dx
+    jne .nh
+    mov bx, cx                  ; hline: AX=x1, BX=x2, DX=y
+    call OSAPI_GFX_HLINE
+    ret
+.nh:
+    cmp ax, cx
+    jne .fr
+    call OSAPI_GFX_VLINE        ; AX=x, BX=y1, DX=y2, which is what the clip
+    ret                         ; already left behind
+.fr:
+    call OSAPI_GFX_FRAME
+.o:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1052,104 +1053,59 @@ tp_clip_pane:
     ret
 
 ; Status: size, margin, bind, gutter, numbers, body size, source used.
+; DI = where to write it (ES is set to DS); out DI = its terminator, and
+; [tp_statcnt] = where the byte count starts, the only part of the line a
+; keystroke moves (tp_stat_touch).
 tp_fmt_stat:
     push ax
     push si
     push es
     push ds
     pop es
-    mov si, tp_s_letter
-    cmp byte [tp_psize], 0
-    je .nm
-    mov si, tp_s_legal
-    cmp byte [tp_psize], 1
-    je .nm
-    mov si, tp_s_a4s
-    cmp byte [tp_psize], 2
-    je .nm
-    mov si, tp_s_a5s
-.nm:
-    call tp_cpat
-    mov al, ' '
-    stosb
-    cmp byte [tp_units], 0
-    jne .mm
-    mov si, tp_s_u075
-    cmp byte [tp_margin], 0
-    je .mu
-    mov si, tp_s_u10
-    cmp byte [tp_margin], 1
-    je .mu
-    mov si, tp_s_u15
-    jmp .mu
-.mm:
-    mov si, tp_s_m19
-    cmp byte [tp_margin], 0
-    je .mu
-    mov si, tp_s_m25
-    cmp byte [tp_margin], 1
-    je .mu
-    mov si, tp_s_m38
-.mu:
-    call tp_cpat
-    mov al, ' '
-    stosb
-    mov si, tp_s_sgl
-    cmp byte [tp_bind], 0
-    je .bd
-    mov si, tp_s_fac
-    cmp byte [tp_bind], 1
-    je .bd
-    mov si, tp_s_opp
-.bd:
-    call tp_cpat
-    mov al, ' '
-    stosb
-    cmp byte [tp_units], 0
-    jne .gm
-    mov si, tp_s_gi0
-    cmp byte [tp_gutter], 0
-    je .gu
-    mov si, tp_s_gi1
-    cmp byte [tp_gutter], 1
-    je .gu
-    mov si, tp_s_gi2
-    jmp .gu
-.gm:
-    mov si, tp_s_gm0
-    cmp byte [tp_gutter], 0
-    je .gu
-    mov si, tp_s_gm1
-    cmp byte [tp_gutter], 1
-    je .gu
-    mov si, tp_s_gm2
-.gu:
-    call tp_cpat
-    mov al, ' '
-    stosb
-    mov si, tp_s_n0
-    cmp byte [tp_pstyle], 0
-    je .ns
-    mov si, tp_s_n1
-    cmp byte [tp_pstyle], 1
-    je .ns
-    mov si, tp_s_n2
-    cmp byte [tp_pstyle], 2
-    je .ns
-    mov si, tp_s_n3
-.ns:
-    call tp_cpat
-    mov al, ' '
-    stosb
+    mov al, [tp_psize]
+    mov si, tp_l_paper
+    call tp_statf
+    mov al, [tp_units]          ; the margin and the gutter come in inches
+    neg al                      ; or in millimetres: units 1 is three strings
+    and al, 3                   ; further on
+    push ax
+    add al, [tp_margin]
+    mov si, tp_l_marg
+    call tp_statf
+    mov al, [tp_bind]
+    mov si, tp_l_bind
+    call tp_statf
+    pop ax
+    add al, [tp_gutter]
+    mov si, tp_l_gut
+    call tp_statf
+    mov al, [tp_pstyle]
+    mov si, tp_l_num
+    call tp_statf
     mov al, [tp_fsize]
     xor ah, ah
     call tp_u16_di
-    mov si, tp_s_pt
+    mov ax, 'pt'
+    stosw
+    mov al, ' '
+    stosb
+    mov [tp_statcnt], di
+    call tp_stat_cnt
+    pop es
+    pop si
+    pop ax
+    ret
+
+; The AL-th of the strings at SI, then a space, at ES:DI.
+tp_statf:
+    call tp_pick
     call tp_cpat
     mov al, ' '
     stosb
-    mov [tp_statcnt], di        ; where the BYTE COUNT starts, which is the
-                                ; only part of this line a keystroke moves
+    ret
+
+; "used/8190" at DI (ES = DS), and its NUL; DI is left ON the NUL.
+tp_stat_cnt:
     mov ax, [tp_srclen]
     call tp_u16_di
     mov al, '/'
@@ -1157,8 +1113,23 @@ tp_fmt_stat:
     mov ax, TP_SRC_MAX
     call tp_u16_di
     mov byte [di], 0
-    pop es
-    pop si
+    ret
+
+; SI = the AL-th of the NUL-terminated strings that start at SI. Preserves
+; every other register. A walk of a few bytes where a table of pointers was.
+tp_pick:
+    push ax
+    push cx
+    mov cl, al
+    xor ch, ch
+    jcxz .o
+.n:
+    lodsb
+    or al, al
+    jnz .n
+    loop .n
+.o:
+    pop cx
     pop ax
     ret
 
@@ -1173,23 +1144,28 @@ tp_fmt_stat:
 ; bar on every press and every slide would re-letter the status line beside it
 ; and is PERFORMANCE.md's double-draw flash.
 tp_bdown:   db 0                ; which of the seven is DRAWN pressed, 0 = none
-tp_btab:    dw tp_r_set, tp_r_cls, tp_r_mar, tp_r_gut, tp_r_pad
-            dw tp_r_prev, tp_r_next
-TP_NBTN     equ 7
-
 
 ; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
-; One button at a time: this package's rects are not one contiguous group,
-; so the record is pointed at whichever rect the caller staged.
+; One button at a time, the record pointed at whichever rect the caller staged
+; - which is how its DOWN look stays this package's own [tp_bdown].
 tp_btlbl: dw 0
 tp_btflg: dw 0
     OS88UI_BTNREC tp_btrec, 0, tp_btlbl, tp_btflg, 1
 
+; AL = 1..7 -> BX = that button's rect. The seven are adjacent in button order.
+tp_brect:
+    mov bl, al
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    add bx, tp_r_set - 8
+    ret
+
+; AL = 1..7: draw that button. Preserves every register.
 tp_btn1:
     push ax
     push bx
-    push cx
-    push dx
     push si
     push di
     mov di, OS88UI_FILL
@@ -1197,67 +1173,22 @@ tp_btn1:
     jne .nodn
     or di, OS88UI_DOWN
 .nodn:
-    dec al
-    xor ah, ah
-    mov bx, ax
-    shl bx, 1
-    mov bx, [tp_btab+bx]        ; BX = this button's rect
-    or al, al
-    jnz .b1
-    mov si, tp_s_set
-    jmp .draw
-.b1:
+    call tp_brect               ; BX = its rect, before AL means anything else
+    mov si, tp_it_set           ; 1: 'Typeset'
     cmp al, 1
-    jne .b2
-    mov si, tp_s_ltr
-    cmp byte [tp_psize], 0
     je .draw
-    mov si, tp_s_leg
-    cmp byte [tp_psize], 1
-    je .draw
-    mov si, tp_s_a4s
-    cmp byte [tp_psize], 2
-    je .draw
-    mov si, tp_s_a5s
-    jmp .draw
-.b2:
-    cmp al, 2
-    jne .b3
-    mov si, tp_s_sgl
-    cmp byte [tp_bind], 0
-    je .draw
-    mov si, tp_s_fac
-    cmp byte [tp_bind], 1
-    je .draw
-    mov si, tp_s_opp
-    jmp .draw
-.b3:
-    cmp al, 3
-    jne .b4
-    mov si, tp_s_g0
-    cmp byte [tp_gutter], 0
-    je .draw
-    mov si, tp_s_g1
-    cmp byte [tp_gutter], 1
-    je .draw
-    mov si, tp_s_g2
-    jmp .draw
-.b4:
-    cmp al, 4
-    jne .b5
-    mov si, tp_s_pc
-    cmp byte [tp_pad], 0
-    je .draw
-    mov si, tp_s_pn
-    cmp byte [tp_pad], 1
-    je .draw
-    mov si, tp_s_pl
-    jmp .draw
-.b5:
-    mov si, tp_s_lt
     cmp al, 5
-    je .arrow
-    mov si, tp_s_gt
+    ja .arrow
+    push bx                     ; 2..5: what the option it cycles is set to,
+    mov bl, al                  ; [tp_psize] onwards in button order
+    xor bh, bh
+    mov si, bx
+    add si, si
+    mov si, [tp_blists-4+si]
+    mov al, [tp_psize-2+bx]
+    pop bx
+    call tp_pick
+    jmp short .draw
 .arrow:
     ; The two page arrows are the only ones here that can have nothing to do,
     ; and on page 1 of 1 that is both of them. SPEC.md 47: grey a FACT - the
@@ -1265,89 +1196,76 @@ tp_btn1:
     ; is not a guess - and let os88ui_btn dither the frame and the label,
     ; which is what makes it read as disabled on the 1bpp adapters too
     ; (SPEC.md 39.4, where grey rounds to black).
-    inc al                      ; back to the 1..7 tp_bdis expects
+    push ax
+    sub al, 6
+    mov si, tp_s_lt
+    call tp_pick
+    pop ax
     call tp_bdis
     jnc .draw
     or di, OS88UI_DIS           ; ...and DISABLED wins over DOWN inside
                                 ; os88ui_btn, so there is nothing to clear
 .draw:
-    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
-    push bx                     ; already holds this button's rect, SI its
-    mov [tp_btlbl], si          ; label and DI its flags, so the record takes
-    mov [tp_btflg], di          ; all three and the picture is identical
+    mov [tp_btlbl], si          ; THE ONE CONTROL (SPEC.md 20.5.1.3): the
+    mov [tp_btflg], di          ; record takes this rect, label and flags
+                                ; and the picture is identical
     mov [tp_btrec+OS88UI_BT_RECTS], bx
     mov bx, tp_btrec
     mov al, 1
     call os88ui_btn
-    pop bx
-    pop ax
     pop di
     pop si
-    pop dx
-    pop cx
     pop bx
     pop ax
     ret
+
+tp_blists:  dw tp_l_bpap, tp_l_bind, tp_l_bgut, tp_l_bpad
 
 ; -----------------------------------------------------------------------------
 ; tp_bdis - is button AL (1..7) DISABLED? CF=1 yes. Preserves every register.
 ;
 ; One description, read by the painter and by the press: a button drawn grey
 ; that still arms and depresses is worse than one that was never greyed, and
-; the two would be separate opinions about tp_ppage otherwise.
+; the two would be separate opinions about tp_ppage otherwise. Back is grey on
+; the first page, and Next on the last - or with nothing typeset at all.
 ; -----------------------------------------------------------------------------
 tp_bdis:
     push ax
-    push bx
     cmp al, 6
+    mov ax, [tp_ppage]
+    jb .no
     je .prev
-    cmp al, 7
-    je .next
+    inc ax
+    cmp ax, [tp_npages]
+    jae .yes
 .no:
-    pop bx
-    pop ax
     clc
+    pop ax
     ret
 .prev:
-    cmp word [tp_ppage], 0
-    jne .no
-.yes:
-    pop bx
+    cmp ax, 1                   ; CF = 1 exactly on page 0
     pop ax
-    stc
     ret
-.next:
-    mov ax, [tp_npages]
-    or ax, ax
-    jz .yes                     ; nothing typeset: there is no page 2
-    dec ax
-    mov bx, [tp_ppage]
-    cmp bx, ax
-    jae .yes
-    jmp short .no
+.yes:
+    stc
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
-; tp_bhit - which of the seven is this SCREEN point in? (0 = none)
+; tp_bhit - which of the seven is this SCREEN point in? AX = 1..7, 0 = none
 ; -----------------------------------------------------------------------------
 tp_bhit:
     push bx
-    push si
-    xor ah, ah                      ; the FULL AX indexes tp_btab below, and
-    mov al, 1                       ; tp_onclick arrives with the content-left
-                                    ; X still in it (SPEC.md 13.8)
+    mov ax, 1
 .next:
-    mov si, ax
-    dec si
-    shl si, 1
-    mov bx, [tp_btab+si]
+    call tp_brect
     call os88ui_bhit
     jnc .out
-    inc al
+    inc ax
     cmp al, TP_NBTN
     jbe .next
-    xor al, al
+    xor ax, ax
 .out:
-    pop si
     pop bx
     ret
 
@@ -1359,14 +1277,12 @@ tp_setdown:
     cmp al, [tp_bdown]
     je .out
     push ax
-    mov al, [tp_bdown]
+    xchg al, [tp_bdown]         ; the new one is DOWN from here...
     or al, al
     jz .take
-    mov byte [tp_bdown], 0
-    call tp_btn1
+    call tp_btn1                ; ...so the old one draws upright
 .take:
     pop ax
-    mov [tp_bdown], al
     or al, al
     jz .out
     call tp_btn1
@@ -1393,8 +1309,7 @@ tp_draw_bar:
     mov dx, [tp_oy]
     add dx, 6
     mov si, tp_status
-    mov al, CBLACK
-    mov ah, CWHITE
+    mov ax, CBLACK | (CWHITE << 8)
     call OSAPI_FONT_RUN
     mov al, CBLACK
     call OSAPI_SET_COLOR
@@ -1492,8 +1407,7 @@ tp_draw_stat:
     mov dx, [tp_oy]
     add dx, [tp_ch]
     sub dx, 11
-    mov al, CBLACK
-    mov ah, CWHITE
+    mov ax, CBLACK | (CWHITE << 8)
     call OSAPI_FONT_RUN
     pop di
     pop si
@@ -1512,43 +1426,23 @@ tp_draw_about:
     add cx, 16
     mov dx, [tp_oy]
     add dx, 16
-    mov si, tp_s_a1
-    call tp_about_line
-    mov si, tp_s_a2
-    call tp_about_line
-    mov si, tp_s_a3
-    call tp_about_line
-    mov si, tp_s_a4
-    call tp_about_line
-    mov si, tp_s_a5
-    call tp_about_line
-    mov si, tp_s_a6
-    call tp_about_line
-    mov si, tp_s_a7
-    call tp_about_line
-    mov si, tp_s_a8
-    call tp_about_line
-    mov si, tp_s_a9
-    call tp_about_line
-    mov si, tp_s_a10
-    call tp_about_line
-    mov si, tp_s_a11
-    call tp_about_line
-    mov si, tp_s_a12
-    call tp_about_line
-    mov si, tp_s_a13
-    call tp_about_line
+    mov si, tp_s_a1             ; thirteen lines, one string after another
+.l:
+    mov ax, CBLACK | (CWHITE << 8)
+    push si
+    call OSAPI_FONT_RUN
+    pop si
+.z:
+    lodsb
+    or al, al
+    jnz .z
+    add dx, 14
+    cmp si, tp_s_aend
+    jb .l
     pop si
     pop dx
     pop cx
     pop ax
-    ret
-
-tp_about_line:
-    mov al, CBLACK
-    mov ah, CWHITE
-    call OSAPI_FONT_RUN
-    add dx, 14
     ret
 
 ; The internal "paint the whole window" entry, as against tp_paint, which is
@@ -1688,9 +1582,6 @@ tp_draw_source:
     call tp_src_metrics
     jc .out
     call tp_ssb_draw
-    mov ax, [tp_srcseg]
-    or ax, ax
-    jz .out
     xor di, di
 .row:
     cmp di, [tp_erows]
@@ -2244,55 +2135,25 @@ tp_ssb_sync:
 
 ; Draw the source bar whole, and remember what it was drawn from.
 tp_ssb_draw:
-    push ax
     push bx
     call tp_ssb_sync
     mov bx, tp_r_ssb
-    call os88ui_sbar
-    call tp_ssb_kept
+    call os88ui_sbupdw
     pop bx
-    pop ax
     ret
 
 ; The thumb ALONE - three drawing calls against the sixteen a whole bar costs
-; (SPEC.md 13.10.3), which is the difference on every arrow key. os88ui_sbmove
-; may only be used when total and fit are what the bar on the glass was drawn
-; from: it derives the old thumb by putting the old POS back, and a total that
-; moved under it would leave a fragment of the old thumb behind. A line added
-; or deleted since the last paint is therefore a whole bar, once.
+; (SPEC.md 13.10.3) - which is the difference on every arrow key, when total
+; and fit are what the bar on the glass was drawn from; a line added or
+; deleted since the last paint is a whole bar, once. os88ui_sbupd makes that
+; choice and keeps what it drew in the three words behind the block
+; (SPEC.md 13.10.3.2).
 tp_ssb_move:
-    push ax
     push bx
     call tp_ssb_sync
-    mov ax, [tp_r_ssb+8]
-    cmp ax, [tp_ssbtot]
-    jne .whole
-    mov ax, [tp_r_ssb+10]
-    cmp ax, [tp_ssbfit]
-    jne .whole
-    mov ax, [tp_ssbpos]
     mov bx, tp_r_ssb
-    call os88ui_sbmove
-    jmp short .kept
-.whole:
-    mov bx, tp_r_ssb
-    call os88ui_sbar
-.kept:
-    call tp_ssb_kept
+    call os88ui_sbupd
     pop bx
-    pop ax
-    ret
-
-; What the bar on the glass is drawn from, for the comparison above.
-tp_ssb_kept:
-    push ax
-    mov ax, [tp_r_ssb+8]
-    mov [tp_ssbtot], ax
-    mov ax, [tp_r_ssb+10]
-    mov [tp_ssbfit], ax
-    mov ax, [tp_r_ssb+12]
-    mov [tp_ssbpos], ax
-    pop ax
     ret
 
 ; DI = visible row. White-fill the 8px band and letter it. Preserves DI.
@@ -2320,10 +2181,7 @@ tp_draw_srow:
     add dx, 7
     call OSAPI_GFX_FILL
     pop dx
-    mov ax, [tp_srcseg]
-    or ax, ax
-    jz .o
-    mov es, ax
+    mov es, [tp_srcseg]
     mov ax, [tp_vscroll]
     add ax, di
     call tp_row_at              ; SI = its start, CX = its length, and a row
@@ -2335,7 +2193,7 @@ tp_draw_srow:
     push cx
     push ds
     pop es
-    mov di, tp_linebuf
+    mov di, tp_cline
     pop cx
     pop si
     push cx
@@ -2350,14 +2208,13 @@ tp_draw_srow:
     pop cx
     pop es
     mov bx, cx
-    mov byte [tp_linebuf+bx], 0
+    mov byte [tp_cline+bx], 0
     pop di
     pop dx
     mov cx, [tp_ex1]
     add cx, 3
-    mov si, tp_linebuf
-    mov al, CBLACK
-    mov ah, CWHITE
+    mov si, tp_cline
+    mov ax, CBLACK | (CWHITE << 8)
     call OSAPI_FONT_RUN
     call tp_draw_mark           ; ...and the wrap mark, if this row continues
 .o:
@@ -2391,8 +2248,7 @@ tp_draw_mark:
     add ax, 3
     mov cx, ax
     mov si, tp_s_wrap
-    mov al, CBLACK
-    mov ah, CWHITE
+    mov ax, CBLACK | (CWHITE << 8)
     call OSAPI_FONT_RUN
     pop si
     pop dx
@@ -2645,50 +2501,18 @@ tp_draw_frames:
     push dx
     call tp_edit_box
     call tp_prev_box
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
     mov ax, [tp_ex1]
     mov bx, [tp_ey1]
     mov cx, [tp_r_ssb+4]
     mov dx, [tp_ey2]
-    call OSAPI_GFX_FRAME
-    dec ax
-    dec bx
-    inc cx
-    inc dx
     cmp byte [tp_focus], 0
-    je .srcf
-    push ax
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    pop ax
-    call OSAPI_GFX_FRAME
-    jmp short .prv
-.srcf:
-    call OSAPI_GFX_FRAME
-.prv:
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
+    call tp_ring
     mov ax, [tp_px1]
     mov bx, [tp_py1]
     mov cx, [tp_px2]
     mov dx, [tp_py2]
-    call OSAPI_GFX_FRAME
-    dec ax
-    dec bx
-    inc cx
-    inc dx
     cmp byte [tp_focus], 1
-    je .prvf
-    push ax
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    pop ax
-    call OSAPI_GFX_FRAME
-    jmp short .o
-.prvf:
-    call OSAPI_GFX_FRAME
-.o:
+    call tp_ring
     ; A FOCUS RING IS DRAWN ONE PIXEL OUTSIDE THE PANE, so the ring that is
     ; ERASED (white, the pane that just lost focus) takes with it whatever
     ; else lives on those four lines: the SPLITTER down the right of the
@@ -2729,6 +2553,29 @@ tp_draw_frames:
     pop cx
     pop bx
     pop ax
+    ret
+
+; AX..DX = a pane's frame: the frame in black, and the focus ring one pixel
+; outside it - black when ZF=1 (this pane has the focus), white when not.
+tp_ring:
+    pushf
+    push ax
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_FRAME
+    dec ax
+    dec bx
+    inc cx
+    inc dx
+    popf
+    je .on
+    push ax
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    pop ax
+.on:
+    call OSAPI_GFX_FRAME
     ret
 
 ; AX = the FIRST visible row the blit may move, SI = signed pixel dy (positive
@@ -3121,7 +2968,11 @@ tp_after_edit:
 ; bar button, and every one of those repaints the window. A keystroke moves
 ; the count and the count only.
 ;
-; So this is ONE font_run of about eleven cells, and deliberately not a fill
+; So this formats the count ALONE, at [tp_statcnt]: everything before it was
+; composed by the last full paint and nothing a keystroke does can move it, so
+; recomposing the five option names on every character was work for nothing.
+;
+; And it is ONE font_run of about eleven cells, and deliberately not a fill
 ; and a run: font_run is erase-and-letter in one decision per cell (SPEC.md
 ; 6.1), so the cells it letters need no clearing first - and the two SPACES
 ; appended below cover the one case that would otherwise leave a stale cell,
@@ -3136,8 +2987,13 @@ tp_stat_touch:
     push dx
     push si
     push di
-    mov di, tp_nbuf
-    call tp_fmt_stat            ; leaves DI on the terminator
+    push es
+    mov di, [tp_statcnt]        ; where the last full paint put the count -
+    or di, di                   ; the rest of the line cannot have moved since
+    jz .bar                     ; (never painted: nothing to touch)
+    push ds
+    pop es
+    call tp_stat_cnt            ; leaves DI on the terminator
     mov word [di], '  '         ; ...and a count that SHRANK pulls the rest of
     mov byte [di+2], 0          ; the field left, so letter two cells of slack
     mov ax, [tp_statcnt]
@@ -3156,8 +3012,7 @@ tp_stat_touch:
     add dx, [tp_ch]
     sub dx, 11
     mov si, [tp_statcnt]
-    mov al, CBLACK
-    mov ah, CWHITE
+    mov ax, CBLACK | (CWHITE << 8)
     call OSAPI_FONT_RUN
 .bar:
     ; The top bar carries the file name, the * and the (edit) marker, and a
@@ -3170,6 +3025,7 @@ tp_stat_touch:
     je .o
     call tp_bar_status          ; ...which re-signs it through tp_fmt_bar
 .o:
+    pop es
     pop di
     pop si
     pop dx
@@ -3219,8 +3075,7 @@ tp_bar_status:
     mov dx, [tp_oy]
     add dx, 6
     mov si, tp_status
-    mov al, CBLACK
-    mov ah, CWHITE
+    mov ax, CBLACK | (CWHITE << 8)
     call OSAPI_FONT_RUN
     pop si
     pop dx
@@ -3453,31 +3308,20 @@ tp_prev_band:
 ; The preview bar's thumb alone, on tp_ssb_move's rule: total and fit here are
 ; the sheet's height and the pane's, and a scroll moves neither.
 tp_psb_move:
-    push ax
     push bx
     call tp_psb_sync
-    mov ax, [tp_r_psb+8]
-    cmp ax, [tp_psbtot]
-    jne .whole
-    mov ax, [tp_r_psb+10]
-    cmp ax, [tp_psbfit]
-    jne .whole
-    mov ax, [tp_psbpos]
     mov bx, tp_r_psb
-    call os88ui_sbmove
-    jmp short .kept
-.whole:
-    mov bx, tp_r_psb
-    call os88ui_sbar
-.kept:
-    mov ax, [tp_r_psb+8]
-    mov [tp_psbtot], ax
-    mov ax, [tp_r_psb+10]
-    mov [tp_psbfit], ax
-    mov ax, [tp_r_psb+12]
-    mov [tp_psbpos], ax
+    call os88ui_sbupd
     pop bx
-    pop ax
+    ret
+
+; ...and the whole bar, as tp_draw_preview draws it
+tp_psb_full:
+    push bx
+    call tp_psb_sync
+    mov bx, tp_r_psb
+    call os88ui_sbupdw
+    pop bx
     ret
 
 tp_draw_preview:
@@ -3513,34 +3357,24 @@ tp_draw_preview:
     call OSAPI_GFX_VLINE
     call tp_fit_sheet
     call tp_draw_sheet
-    call tp_psb_sync
-    mov bx, tp_r_psb
-    call os88ui_sbar
-    mov ax, [tp_r_psb+8]
-    mov [tp_psbtot], ax         ; what the bar on the glass was drawn from,
-    mov ax, [tp_r_psb+10]       ; for tp_psb_move's comparison
-    mov [tp_psbfit], ax
-    mov ax, [tp_r_psb+12]
-    mov [tp_psbpos], ax
-    mov ax, [tp_pscroll]
+    call tp_psb_full            ; ...and what it was drawn from, for
+    mov ax, [tp_pscroll]        ; tp_psb_move's comparison
     mov [tp_oldps], ax
     cmp byte [tp_setok], 0
     je .empty
     call tp_paint_runs
     call tp_paint_boxes
-    call tp_draw_folio
-    jmp .out
+    jmp short .fol
 .empty:
     mov cx, [tp_tx1]
     add cx, 4
     mov dx, [tp_ty1]
     add dx, 8
     mov si, tp_s_noset
-    mov al, CBLACK
-    mov ah, CWHITE
+    mov ax, CBLACK | (CWHITE << 8)
     call OSAPI_FONT_RUN
+.fol:
     call tp_draw_folio
-.out:
     pop di
     pop si
     pop dx
@@ -3549,8 +3383,6 @@ tp_draw_preview:
     pop ax
     ret
 
-; Linear preview: walk the source once, always advance SI, wrap in the pane.
-; Never calls the typesetter. Safe under the paint lock.
 ; Page number on the sheet. Default (style 1) is bottom center.
 tp_draw_folio:
     cmp byte [tp_pstyle], 0
@@ -3568,70 +3400,52 @@ tp_draw_folio:
     inc ax
     call tp_u16_di
     mov byte [di], 0
-    mov si, tp_nbuf
-    xor cx, cx
-.ln:
-    cmp byte [si], 0
-    je .ld
-    inc cx
-    inc si
-    jmp .ln
-.ld:
-    mov ax, cx
+    lea bx, [di-tp_nbuf]        ; its length...
     mov cl, 3
-    shl ax, cl                  ; *8 screen
-    mov bx, ax                  ; number width
+    shl bx, cl                  ; ...and its width on the screen
     ; Y: bottom center (default), or header
     mov dx, [tp_sy2]
     sub dx, 18
-    cmp byte [tp_pstyle], 2
+    mov al, [tp_pstyle]
+    cmp al, 2
     jne .yok
     mov dx, [tp_sy1]
     add dx, 4
 .yok:
-    cmp byte [tp_pstyle], 3
+    cmp al, 3
     je .outer
     ; center on the sheet
     mov ax, [tp_sx1]
     add ax, [tp_sx2]
     sub ax, bx
     sar ax, 1
-    jmp .put
+    jmp short .put
 .outer:
-    mov ax, [tp_ppage]
-    and ax, 1
+    test byte [tp_ppage], 1
     jnz .ol
     mov ax, [tp_sx2]
     sub ax, bx
     sub ax, 6
-    jmp .put
+    jmp short .put
 .ol:
     mov ax, [tp_sx1]
     add ax, 6
 .put:
     cmp dx, [tp_py1]
     jb .done
-    push ax                     ; A CELL IS EIGHT ROWS and this is its TOP: a
-    mov ax, dx                  ; run one row above the pane's bottom frame
-    add ax, 7                   ; letters seven rows THROUGH it, and what is
-    cmp ax, [tp_py2]            ; under it is the status strip. Measured as
-    jae .nope                   ; two rows of page text in the strip, which
-    cmp ax, [tp_rgy1]           ; only ever showed up as a full repaint
-    jb .nope                    ; disagreeing with an incremental one. The
-    cmp dx, [tp_rgy2]           ; region tests are the run painter's
-    ja .nope
-    pop ax
-    jmp short .pen
-.nope:
-    pop ax
-    jmp .done
-.pen:
+    mov cx, dx                  ; A CELL IS EIGHT ROWS and this is its TOP: a
+    add cx, 7                   ; run one row above the pane's bottom frame
+    cmp cx, [tp_py2]            ; letters seven rows THROUGH it, and what is
+    jae .done                   ; under it is the status strip. Measured as
+    cmp cx, [tp_rgy1]           ; two rows of page text in the strip, which
+    jb .done                    ; only ever showed up as a full repaint
+    cmp dx, [tp_rgy2]           ; disagreeing with an incremental one. The
+    ja .done                    ; region tests are the run painter's
     add ax, 7
-    and ax, 0xFFF8
-    mov cx, ax
+    and al, 0xF8
+    xchg ax, cx
     mov si, tp_nbuf
-    mov al, CBLACK
-    mov ah, CWHITE
+    mov ax, CBLACK | (CWHITE << 8)
     call OSAPI_FONT_RUN
 .done:
     pop di
@@ -3641,77 +3455,6 @@ tp_draw_folio:
     pop bx
     pop ax
 .o:
-    ret
-
-tp_scr_cw:
-    ; body char width used for screen mapping
-    push bx
-    mov al, [tp_tsize]
-    xor ah, ah
-    or ax, ax
-    jnz .s
-    mov al, 12
-.s:
-    mov bl, 6
-    mul bl
-    mov bl, 10
-    div bl
-    xor ah, ah
-    cmp al, 4
-    jae .o
-    mov al, 4
-.o:
-    pop bx
-    ret
-
-tp_map_xy_i:
-    ; AX=x BX=y -> CX DX. uses tp_tsize, tp_tlead, tp_tleft, tp_ttop
-    push ax
-    push bx
-    push si
-    push di
-    mov di, ax                  ; di = pdf x
-    call tp_scr_cw
-    mov si, ax                  ; si = cw
-    or si, si
-    jnz .cw
-    mov si, 7
-.cw:
-    mov ax, di
-    sub ax, [tp_tleft]
-    jns .xok
-    xor ax, ax
-.xok:
-    mov cx, 8
-    mul cx                      ; DX:AX = dx*8
-    xor dx, dx
-    div si                      ; AX = cols*8/cw? wait AX = (x-left)*8/cw
-    add ax, [tp_px1]
-    add ax, 6
-    mov cx, ax                  ; sx
-    ; y: (ttop - y) * 8 / lead
-    mov ax, [tp_ttop]
-    sub ax, bx
-    jns .yok
-    xor ax, ax
-.yok:
-    mov si, [tp_tlead]
-    or si, si
-    jnz .ld
-    mov si, 14
-.ld:
-    mov bx, 8
-    mul bx
-    xor dx, dx
-    div si
-    sub ax, [tp_pscroll]
-    add ax, [tp_py1]
-    add ax, 6
-    mov dx, ax
-    pop di
-    pop si
-    pop bx
-    pop ax
     ret
 
 tp_paint_runs:
@@ -3725,34 +3468,33 @@ tp_paint_runs:
     ; Place each run at its typeset (x,y). The sheet is already scaled
     ; so 8px = body point size; packing into a fitted pane made 12pt
     ; look huge and crushed the measure to ~20 characters.
-    xor si, si
+    ;
+    ; The runs are WALKED, BX the record and SI its text, which starts where
+    ; the run before it ended (SPEC.md 69.3) - a running sum in place of the
+    ; multiply per run this used to index with.
+    mov bx, tp_runs
+    mov si, tp_text
+    mov di, [tp_nruns]
 .lp:
-    cmp si, [tp_nruns]
-    jae .o
-    mov ax, si
-    mov cx, TP_RUN_SZ
-    mul cx
-    mov bx, ax
-    add bx, tp_runs
+    or di, di
+    jz .o
     mov al, [bx]
-    xor ah, ah
-    cmp ax, [tp_ppage]
-    jne .n
-    mov al, [bx+7]
-    or al, al
-    jz .n
-    cmp word [bx+4], 40
+    and al, TP_RUN_PAGE
+    cmp al, [tp_ppage]          ; (a page number is a nibble: the word's high
+    jne .n                      ; byte is 0)
+    cmp byte [bx+6], 0
+    je .n
+    cmp word [bx+3], 40
     jb .n
-    mov ax, [bx+2]
+    mov ax, [bx+1]
     call tp_mapx
     mov cx, ax
-    mov ax, [bx+4]
+    mov ax, [bx+3]
     call tp_mapy
     mov dx, ax
     cmp dx, [tp_py1]
     jb .n
-    mov ax, dx                  ; ...the same eight rows as the folio above
-    add ax, 7
+    add ax, 7                   ; ...the same eight rows as the folio above
     cmp ax, [tp_py2]
     jae .n
     cmp ax, [tp_rgy1]           ; does the CELL reach the region at all? A run
@@ -3766,48 +3508,42 @@ tp_paint_runs:
     mov cx, [tp_px1]
     add cx, 2
 .xok:
-    mov [tp_tmp], cx
     push si
-    push bx
+    push di
+    push cx
     push ds
     pop es
-    mov si, [bx+8]
-    add si, tp_text
-    mov di, tp_linebuf
+    mov di, tp_cline
+    mov cl, [bx+6]
     xor ch, ch
-    mov cl, [bx+7]
-    cmp cx, 80
+    cmp cl, 80
     jbe .cp
-    mov cx, 80
+    mov cl, 80
 .cp:
-    jcxz .z
-    push cx
     rep movsb
+    mov [di], ch                ; the NUL: CH is 0
     pop cx
-.z:
-    mov di, tp_linebuf
-    add di, cx
-    mov byte [di], 0
-    mov si, tp_linebuf
-    mov cx, [tp_tmp]
-    mov al, CBLACK
-    mov ah, CWHITE
+    mov si, tp_cline
+    mov ax, CBLACK | (CWHITE << 8)
     call OSAPI_FONT_RUN
-    pop bx
-    test byte [bx+1], 1
+    test byte [bx], TP_RUN_BOLD
     jnz .bd
-    cmp byte [bx+6], 14
+    cmp byte [bx+5], 14
     jb .un
 .bd:
     inc cx
-    mov si, tp_linebuf
-    mov al, CBLACK
-    mov ah, CWHITE
+    mov si, tp_cline
+    mov ax, CBLACK | (CWHITE << 8)
     call OSAPI_FONT_STR_XPARENT
 .un:
+    pop di
     pop si
 .n:
-    inc si
+    mov al, [bx+6]
+    xor ah, ah
+    add si, ax
+    add bx, TP_RUN_SZ
+    dec di
     jmp .lp
 .o:
     pop es
@@ -3828,40 +3564,36 @@ tp_paint_boxes:
     push di
     mov al, CBLACK
     call OSAPI_SET_COLOR
-    xor si, si
+    mov si, tp_boxes
     mov di, [tp_nboxes]
 .lp:
-    cmp si, di
-    jae .o
-    mov ax, si
-    mov cx, TP_BOX_SZ
-    mul cx
-    mov bx, ax
-    add bx, tp_boxes
+    or di, di
+    jz .o
+    mov bx, si
     mov al, [bx]
-    xor ah, ah
-    cmp ax, [tp_ppage]
+    cmp al, [tp_ppage]
     jne .n
     push si
     push di
     ; top-left: (x, y+h)
-    mov ax, [bx+2]
+    mov ax, [bx+1]
     call tp_mapx
-    mov [tp_tmp], ax
-    mov ax, [bx+4]
-    add ax, [bx+8]
+    xchg ax, di
+    mov ax, [bx+3]
+    push ax
+    inc ax                      ; ...a box is one point tall
     call tp_mapy
-    mov [tp_tmp2], ax
+    xchg ax, si
     ; bottom-right: (x+w, y)
-    mov ax, [bx+2]
-    add ax, [bx+6]
+    mov ax, [bx+1]
+    add ax, [bx+5]
     call tp_mapx
-    mov cx, ax
-    mov ax, [bx+4]
+    xchg ax, cx
+    pop ax
     call tp_mapy
-    mov dx, ax
-    mov ax, [tp_tmp]
-    mov bx, [tp_tmp2]
+    xchg ax, dx
+    xchg ax, di
+    mov bx, si
     cmp ax, cx
     jle .xok
     xchg ax, cx
@@ -3870,68 +3602,13 @@ tp_paint_boxes:
     jle .yok
     xchg bx, dx
 .yok:
-    cmp ax, [tp_px2]
-    jg .sk
-    cmp cx, [tp_px1]
-    jl .sk
-    cmp bx, [tp_py2]
-    jg .sk
-    cmp dx, [tp_py1]
-    jl .sk
-    cmp bx, [tp_rgy2]           ; ...and the REGION, so a band redraw draws
-    jg .sk                      ; the part of a rule that is in the band
-    cmp dx, [tp_rgy1]
-    jl .sk
-    cmp ax, [tp_px1]
-    jge .a1
-    mov ax, [tp_px1]
-.a1:
-    cmp bx, [tp_py1]
-    jge .b1
-    mov bx, [tp_py1]
-.b1:
-    cmp bx, [tp_rgy1]
-    jge .b2
-    mov bx, [tp_rgy1]
-.b2:
-    cmp cx, [tp_px2]
-    jle .c1
-    mov cx, [tp_px2]
-.c1:
-    cmp dx, [tp_py2]
-    jle .d1
-    mov dx, [tp_py2]
-.d1:
-    cmp dx, [tp_rgy2]
-    jle .d2
-    mov dx, [tp_rgy2]
-.d2:
-    cmp bx, dx
-    jne .notht
-    ; 1-row box: a horizontal rule
-    push ax
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    pop ax
-    mov bx, cx
-    call OSAPI_GFX_HLINE
-    jmp .sk
-.notht:
-    cmp ax, cx
-    jne .rect
-    push ax
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    pop ax
-    call OSAPI_GFX_VLINE
-    jmp .sk
-.rect:
-    call OSAPI_GFX_FRAME
-.sk:
+    call tp_seg                 ; (the pen is black from the top of the
+.sk:                            ; routine and nothing in the loop moves it)
     pop di
     pop si
 .n:
-    inc si
+    add si, TP_BOX_SZ
+    dec di
     jmp .lp
 .o:
     pop di
@@ -3943,43 +3620,86 @@ tp_paint_boxes:
     ret
 
 ; -----------------------------------------------------------------------------
+; A WINDOW CALLBACK MAY CLOBBER AX, BX, CX, DX, SI, DI AND ES (SPEC.md 12.2,
+; 38.6): ui_bill, which dispatches every one of them, clobbers the first five
+; itself. So the handlers below bank SI at most - W_ONCLICK must give it back
+; (SPEC.md 13.7) - and nothing else.
 tp_onkey:
     call tp_deferred_ld
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov bl, al
-    mov bh, ah
+    mov bx, ax
     cmp byte [tp_abouton], 0
     je .k
     mov byte [tp_abouton], 0
     jmp .draw
 .k:
-    cmp bh, 0x3F
+    cmp bh, 0x3F                ; F5
     je .kset
-    cmp bl, 27
-    je .kesc
-    cmp bl, 19                  ; Ctrl+S
-    je .ksave
-    cmp bl, 15                  ; Ctrl+O
-    je .kopen
-    cmp bl, 14                  ; Ctrl+N
-    je .knew
-    cmp bl, 3                   ; Ctrl+C
-    je .kcopy
-    cmp bl, 22                  ; Ctrl+V
-    je .kpaste
-    cmp bl, 24                  ; Ctrl+X
-    je .kcut
-    cmp bl, '['
-    je .kprev
-    cmp bl, ']'
-    je .knext
+    mov al, bl
     cmp byte [tp_focus], 0
-    je .ed
-    jmp .pv
+    jne .nsrc
+    mov ah, bh                  ; THE KEYPAD FIRST, by scan code - its keys
+    sub ah, 0x47                ; carry a digit in AL with NumLock on and have
+    cmp ah, 0x53 - 0x47         ; always moved the caret here, not typed it.
+    jbe .pad                    ; Off the keypad that is one compare
+.chr:
+    cmp al, 127                 ; A PRINTABLE CHARACTER IS THE HOT PATH: two
+    jae .ned                    ; compares from here and it is an insert
+    cmp al, 32
+    jae .kchar
+.ned:
+    mov si, tp_ked              ; Backspace, Delete, Return, Tab - and the
+    call tp_klook               ; table runs on into the Ctrl keys'
+    jnc .jmp
+    jmp .out
+.pad:
+    ; THE KEYPAD IS A TABLE INDEXED BY SCAN CODE, not a search: a caret key
+    ; is the next hot path after a character, and searching the Ctrl keys'
+    ; table and then the caret keys' cost an arrow ~500 cycles over the
+    ; compare chain it replaced. A 0 entry is a key that types (NumLock).
+    mov al, ah
+    cmp al, 0x53 - 0x47         ; Delete
+    je .kdel
+    cbw
+    mov di, .ecaret             ; a caret key redraws the caret, a page key
+    cmp al, 0x49 - 0x47         ; scrolls
+    je .pg
+    cmp al, 0x51 - 0x47
+    jne .pc
+.pg:
+    mov di, .escroll
+.pc:
+    xchg ax, si
+    shl si, 1
+    mov si, [tp_kpad+si]
+    mov al, bl
+    or si, si
+    jz .chr
+    push di
+    call tp_sel_clear
+    call si
+    pop di
+    jmp di
+.jmp:
+    jmp si
+.nsrc:
+    cmp al, 32
+    jae .pv
+    mov si, tp_kctl             ; Esc and the Ctrl keys, in the preview too
+    call tp_klook
+    jnc .jmp
+.pv:
+    ; '[' AND ']' TURN PAGES ONLY WITH THE PREVIEW FOCUSED. They were tested
+    ; ahead of the focus, so in the SOURCE they turned a page instead of
+    ; going in - and a .TEX file needs them: \documentclass[12pt] could not
+    ; be typed.
+    mov si, tp_kpva
+    call tp_klook
+    jnc .jmp
+    mov al, bh
+    mov si, tp_kpvs
+    call tp_klook
+    jnc .jmp
+    jmp .out
 .kset:
     call tp_typeset
     jmp .draw
@@ -3991,24 +3711,19 @@ tp_onkey:
     call tp_save
     jmp .draw
 .kopen:
-    mov byte [tp_dlgmode], 0
-    mov al, FDLG_OPEN
-    call tp_dlg
+    call tp_open_dlg
     jmp .out
 .knew:
-    call tp_seed
-    call tp_typeset             ; as File > New above
+    call tp_new                 ; as File > New
     jmp .draw
 .kcopy:
     call tp_copy_all
     jmp .draw
 .kpaste:
     call tp_paste
-    mov byte [tp_selon], 0      ; ...and every offset after the caret moved
     jmp .draw
 .kcut:
     call tp_cut_line
-    mov byte [tp_selon], 0
     jmp .draw
 .kprev:
     call tp_prev_page
@@ -4016,37 +3731,7 @@ tp_onkey:
 .knext:
     call tp_next_page
     jmp .draw
-.ed:
-    cmp bl, 8
-    je .kbs
-    cmp bl, 127
-    je .kdel
-    cmp bh, 0x53
-    je .kdel
-    cmp bl, 13
-    je .knl
-    cmp bl, 9
-    je .ktab
-    cmp bh, 0x4B
-    je .kleft
-    cmp bh, 0x4D
-    je .kright
-    cmp bh, 0x48
-    je .kup
-    cmp bh, 0x50
-    je .kdn
-    cmp bh, 0x47
-    je .khome
-    cmp bh, 0x4F
-    je .kend
-    cmp bh, 0x49
-    je .kpgup
-    cmp bh, 0x51
-    je .kpgdn
-    cmp bl, 32
-    jb .out
-    cmp bl, 126
-    ja .out
+.kchar:
     ; A SELECTION THAT WENT IS NOT AN INSERT (edkind 0 = the whole pane).
     ; tp_sel_del leaves edkind 0 and CF=1 when there was nothing selected;
     ; claiming "one character into one line" over the top of it drew the
@@ -4094,41 +3779,8 @@ tp_onkey:
     mov byte [tp_edkind], 1
 .ktab1:
     call tp_ins
-    mov al, ' '
     call tp_ins
     jmp .etype
-.kleft:
-    call tp_sel_clear
-    call tp_go_left
-    jmp .ecaret
-.kright:
-    call tp_sel_clear
-    call tp_go_right
-    jmp .ecaret
-.kup:
-    call tp_sel_clear
-    call tp_up
-    jmp .ecaret
-.kdn:
-    call tp_sel_clear
-    call tp_down
-    jmp .ecaret
-.khome:
-    call tp_sel_clear
-    call tp_home
-    jmp .ecaret
-.kend:
-    call tp_sel_clear
-    call tp_end
-    jmp .ecaret
-.kpgup:
-    call tp_sel_clear
-    call tp_pgup
-    jmp .escroll
-.kpgdn:
-    call tp_sel_clear
-    call tp_pgdn
-    jmp .escroll
 .etype:
     cmp byte [tp_ldfull], 0
     jne .draw
@@ -4143,20 +3795,6 @@ tp_onkey:
     cmp byte [tp_ldfull], 0
     jne .draw
     call tp_src_scroll
-    jmp .out
-.pv:
-    cmp bh, 0x48
-    je .psu
-    cmp bh, 0x50
-    je .psd
-    cmp bh, 0x49
-    je .kprev
-    cmp bh, 0x51
-    je .knext
-    cmp bh, 0x4B
-    je .kprev
-    cmp bh, 0x4D
-    je .knext
     jmp .out
 .psu:
     cmp word [tp_pscroll], 0
@@ -4183,12 +3821,79 @@ tp_onkey:
     cmp byte [tp_ldfull], 0
     jne .draw
 .done:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
+
+; AL = a key, SI = a table of (key, where) - a byte and a word - ending in a
+; 0 key: CF=0 and SI = where, or CF=1. Preserves everything else.
+tp_klook:
+    cmp byte [si], 0
+    je .no
+    cmp al, [si]
+    je .hit
+    add si, 3
+    jmp tp_klook
+.hit:
+    mov si, [si+1]              ; (CF is 0: the compare was equal)
+    ret
+.no:
+    stc
+    ret
+
+; the key tables: ASCII in BL is looked up in some, the scan code in BH in
+; the rest (tp_onkey says which)
+tp_ked:     db 8                    ; (runs on into tp_kctl: the source
+            dw tp_onkey.kbs         ; pane looks the two up as one)
+            db 127
+            dw tp_onkey.kdel
+            db 13
+            dw tp_onkey.knl
+            db 9
+            dw tp_onkey.ktab
+tp_kctl:    db 27
+            dw tp_onkey.kesc
+            db 19                   ; Ctrl+S
+            dw tp_onkey.ksave
+            db 15                   ; Ctrl+O
+            dw tp_onkey.kopen
+            db 14                   ; Ctrl+N
+            dw tp_onkey.knew
+            db 3                    ; Ctrl+C
+            dw tp_onkey.kcopy
+            db 22                   ; Ctrl+V
+            dw tp_onkey.kpaste
+            db 24                   ; Ctrl+X
+            dw tp_onkey.kcut
+            db 0
+tp_kpad:    dw tp_home              ; 47
+            dw tp_up                ; 48
+            dw tp_pgup              ; 49
+            dw 0                    ; 4A -
+            dw tp_go_left           ; 4B
+            dw 0                    ; 4C 5
+            dw tp_go_right          ; 4D
+            dw 0                    ; 4E +
+            dw tp_end               ; 4F
+            dw tp_down              ; 50
+            dw tp_pgdn              ; 51
+            dw 0                    ; 52 Ins
+tp_kpva:    db '['
+            dw tp_onkey.kprev
+            db ']'
+            dw tp_onkey.knext
+            db 0
+tp_kpvs:    db 0x48
+            dw tp_onkey.psu
+            db 0x50
+            dw tp_onkey.psd
+            db 0x49
+            dw tp_onkey.kprev
+            db 0x51
+            dw tp_onkey.knext
+            db 0x4B
+            dw tp_onkey.kprev
+            db 0x4D
+            dw tp_onkey.knext
+            db 0
 
 ; -----------------------------------------------------------------------------
 ; tp_bact - do what bar button AL says (SPEC.md 13.8)
@@ -4201,64 +3906,36 @@ tp_onkey:
 tp_bact:
     cmp al, 1
     je .set
-    cmp al, 2
-    je .sz
-    cmp al, 3
-    je .bd
-    cmp al, 4
-    je .gut
-    cmp al, 5
-    je .pad
     cmp al, 6
     je .prev
-    call tp_next_page
+    ja .next
+    mov bl, al                  ; 2..5 cycle [tp_psize] onwards, in button
+    xor bh, bh                  ; order: four paper sizes, then three of each
+    mov ah, 3                   ; of the others
+    cmp al, 2
+    jne .lim
+    inc ah
+.lim:
+    mov al, [tp_psize-2+bx]
+    inc ax
+    cmp al, ah
+    jb .ok
+    xor al, al
+.ok:
+    mov [tp_psize-2+bx], al
+    mov byte [tp_needset], 1
     stc
     ret
 .set:
     call tp_typeset
     stc
     ret
-.sz:
-    mov al, [tp_psize]
-    inc al
-    cmp al, 4
-    jb .szok
-    xor al, al
-.szok:
-    mov [tp_psize], al
-    jmp short .rely
-.bd:
-    mov al, [tp_bind]
-    inc al
-    cmp al, 3
-    jb .bdok
-    xor al, al
-.bdok:
-    mov [tp_bind], al
-    jmp short .rely
-.gut:
-    mov al, [tp_gutter]
-    inc al
-    cmp al, 3
-    jb .gok
-    xor al, al
-.gok:
-    mov [tp_gutter], al
-    jmp short .rely
-.pad:
-    mov al, [tp_pad]
-    inc al
-    cmp al, 3
-    jb .ps
-    xor al, al
-.ps:
-    mov [tp_pad], al
-.rely:
-    mov byte [tp_needset], 1
-    stc
-    ret
 .prev:
     call tp_prev_page
+    stc
+    ret
+.next:
+    call tp_next_page
     stc
     ret
 ; -----------------------------------------------------------------------------
@@ -4267,34 +3944,19 @@ tp_bact:
 ; -----------------------------------------------------------------------------
 %ifdef OS88UI_SBDRAG
 tp_ontimer:                     ; the thumb has been STILL for TP_SBIDLE ticks
-    push ax                     ; (13.9 disarms before this runs and this does
-    push bx                     ; not re-arm, so a pause is ONE commit)
-    push cx
-    push dx
-    push si
-    push di
-    call tp_sbd_which           ; WHICH bar, same as the other two edges
-    jc .tout
+    push si                     ; (13.9 disarms before this runs and this does
+    call tp_sbd_which           ; not re-arm, so a pause is ONE commit). WHICH
+    jc .tout                    ; bar, same as the other two edges
     call os88ui_sbowed          ; ...and NOT os88ui_sbdrop: a pause is not the
     jc .tout                    ; end of the gesture
     call tp_sbd_commit
 .tout:
-    pop di
     pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 %endif
 
 tp_onup:
-    push ax
-    push bx
-    push cx
-    push dx
     push si
-    push di
     mov byte [tp_seldrag], 0
 %ifdef OS88UI_SBDRAG
     call tp_sbd_which           ; SPEC.md 13.10.5: the release COMMITS, and
@@ -4331,24 +3993,14 @@ tp_onup:
     mov byte [tp_ldfull], 0
     call tp_redraw
 .out:
-    pop di
     pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; tp_ondrag - W_ONDRAG (SPEC.md 13.8.1): the pointer moved, press still down
 ; -----------------------------------------------------------------------------
 tp_ondrag:
-    push ax
-    push bx
-    push cx
-    push dx
     push si
-    push di
     cmp byte [tp_seldrag], 0
     je .bar
     ; extend the source selection to the pointer; XOR only the cells that
@@ -4395,39 +4047,17 @@ tp_ondrag:
 .set:
     call tp_setdown             ; ...which draws only if that CHANGED
 .out:
-    pop di
     pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 tp_onclick:
     call tp_deferred_ld
-    push ax
-    push bx
-    push cx
-    push dx
     push si
-    push di
-    push cx
-    push dx
-    mov bx, si
-    call OSAPI_WM_CONTENT
-    mov [tp_ox], ax
-    mov [tp_oy], dx
-    mov bx, si
-    call OSAPI_WM_GEOM
-    mov [tp_cw], cx
-    mov [tp_ch], dx
-    call tp_clamp_split
+    call tp_wingeo
     call tp_layout
     call tp_edit_box
     call tp_prev_box
-    pop dx
-    pop cx
 %ifdef OS88UI_SBDRAG
     call tp_sbd_which           ; A PRESS CANNOT ARRIVE DURING A LIVE DRAG, so
     jc .nostale                 ; one that does means the release never came
@@ -4483,12 +4113,7 @@ tp_onclick:
 .src:
     cmp byte [tp_ldfull], 0
     jne .draw
-    mov al, [tp_focus]
-    mov byte [tp_focus], 0
-    or al, al
-    jz .sames
-    call tp_draw_frames
-.sames:
+    call tp_focus_src
     call tp_caret_hide
     call tp_sel_hide
     mov byte [tp_selon], 0
@@ -4501,19 +4126,10 @@ tp_onclick:
 .prv:
     cmp byte [tp_ldfull], 0
     jne .draw
-    cmp byte [tp_focus], 1
-    je .done
-    mov byte [tp_focus], 1
-    call tp_caret_hide
-    call tp_draw_frames
+    call tp_focus_prv
     jmp .done
 .ssb:
-    mov al, [tp_focus]
-    mov byte [tp_focus], 0
-    or al, al
-    jz .ssb1
-    call tp_draw_frames
-.ssb1:
+    call tp_focus_src
     cmp byte [tp_ldfull], 0
     jne .draw
     call tp_caret_hide          ; the marks come off at the scroll they were
@@ -4525,12 +4141,7 @@ tp_onclick:
     call tp_src_scroll
     jmp .done
 .psb:
-    cmp byte [tp_focus], 1
-    je .psb1
-    mov byte [tp_focus], 1
-    call tp_caret_hide
-    call tp_draw_frames
-.psb1:
+    call tp_focus_prv
     cmp byte [tp_ldfull], 0
     jne .draw
     call tp_psb_click
@@ -4544,13 +4155,25 @@ tp_onclick:
     cmp byte [tp_ldfull], 0     ; a click on nothing, with a load under it
     jne .draw
 .done:
-    pop di
     pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
+
+; Focus to the source pane, or to the preview: a ring redrawn only when it
+; MOVES, and the caret hidden when it leaves the source.
+tp_focus_src:
+    cmp byte [tp_focus], 0
+    je .o
+    mov byte [tp_focus], 0
+    jmp tp_draw_frames
+.o:
+    ret
+
+tp_focus_prv:
+    cmp byte [tp_focus], 1
+    je tp_focus_src.o
+    mov byte [tp_focus], 1
+    call tp_caret_hide
+    jmp tp_draw_frames
 
 tp_click_caret:
     push ax
@@ -4638,249 +4261,131 @@ tp_next_page:
 ; -----------------------------------------------------------------------------
 tp_oncmd:
     call tp_deferred_ld
-    cmp ah, 0
-    je .file
-    cmp ah, 1
-    je .edit
     cmp ah, 2
+    jb .fe
     je .lay
     cmp ah, 3
     je .page
     cmp ah, 4
-    je .view
-    ret
-.file:
-    cmp al, 0
-    je .new
-    cmp al, 1
-    je .open
+    jne .o
+    ; View
+    or al, al
+    jz .set
     cmp al, 2
-    je .save
-    cmp al, 3
-    je .saveas
+    jb .vp
+    je .vn
     cmp al, 4
-    je .epdf
+    ja .o
+    mov ax, 24                  ; Wider Source / Wider Preview: the split
+    je .wp                      ; (the flags are still cmp al, 4's)
+    add [tp_split], ax
+    jmp short .ws
+.wp:
+    sub [tp_split], ax
+.ws:
+    call tp_clamp_split
+    jmp tp_redraw
+.set:
+    call tp_typeset
+    jmp tp_redraw
+.vp:
+    call tp_prev_page
+    jmp tp_redraw
+.vn:
+    call tp_next_page
+    jmp tp_redraw
+.fe:
+    or ah, ah
+    jnz .edit
+    or al, al                   ; File
+    jz .new
+    cmp al, 2
+    jb tp_open_dlg              ; 1 Open...
+    je .save
     cmp al, 5
-    je .eps
-    ret
+    ja .o
+    sub al, 2                   ; 3 Save As..., 4 Export PDF..., 5 Export
+    mov [tp_dlgmode], al        ; PS... are tp_ondlg's modes 1, 2 and 3
+    mov al, FDLG_SAVE
+    jmp tp_dlg
 .new:
-    call tp_seed
-    call tp_typeset             ; a document that REPLACES this one is set on
-    call tp_redraw              ; arrival - File > Open and a double-clicked
-    ret                         ; .TEX already were, and a blank preview
+    call tp_new                 ; a document that REPLACES this one is set on
+    jmp tp_redraw               ; arrival - File > Open and a double-clicked
+                                ; .TEX already were, and a blank preview
                                 ; beside a fresh document was the odd one out
                                 ; (SPEC.md 69.1)
-.open:
-    mov byte [tp_dlgmode], 0
-    mov al, FDLG_OPEN
-    call tp_dlg
-    ret
 .save:
     call tp_save
-    call tp_redraw
-    ret
-.saveas:
-    mov byte [tp_dlgmode], 1
-    mov al, FDLG_SAVE
-    call tp_dlg
-    ret
-.epdf:
-    mov byte [tp_dlgmode], 2
-    mov al, FDLG_SAVE
-    call tp_dlg
-    ret
-.eps:
-    mov byte [tp_dlgmode], 3
-    mov al, FDLG_SAVE
-    call tp_dlg
-    ret
+    jmp tp_redraw
 .edit:
-    cmp al, 0
-    je .copy
-    cmp al, 1
-    je .paste
+    or al, al
+    jz .copy
     cmp al, 2
-    je .cut
-    ret
+    jb .paste
+    ja .o
+    call tp_cut_line
+    jmp tp_redraw
 .copy:
     call tp_copy_all
-    call tp_redraw
-    ret
+    jmp tp_redraw
 .paste:
     call tp_paste
-    mov byte [tp_selon], 0      ; as Ctrl+V does: the offsets moved under it
-    call tp_redraw
-    ret
-.cut:
-    call tp_cut_line
-    mov byte [tp_selon], 0
-    call tp_redraw
-    ret
+    jmp tp_redraw
 .lay:
-    cmp al, 0
-    je .art
-    cmp al, 1
+    cmp al, 1                   ; Layout: Article, Book, then the codes
+    jb .art
     je .book
-    cmp al, 2
-    je .mn
-    cmp al, 3
-    je .m1
-    cmp al, 4
-    je .mw
-    cmp al, 5
-    je .pc
-    cmp al, 6
-    je .pn
-    cmp al, 7
-    je .pl
-    cmp al, 8
-    je .sgl
-    cmp al, 9
-    je .fac
     cmp al, 10
-    je .opp
-    ret
+    ja .o
+    mov bx, tp_mlay - 2
+    jmp short .code
 .art:
-    mov byte [tp_class], 0
     mov byte [tp_bind], 0
-    jmp .rely
+    jmp short .rely
 .book:
-    mov byte [tp_class], 1
     cmp byte [tp_bind], 2
     je .rely
     mov byte [tp_bind], 1
-    jmp .rely
-.mn:
-    mov byte [tp_margin], 0
-    jmp .rely
-.m1:
-    mov byte [tp_margin], 1
-    jmp .rely
-.mw:
-    mov byte [tp_margin], 2
-    jmp .rely
-.pc:
-    mov byte [tp_pad], 0
-    jmp .rely
-.pn:
-    mov byte [tp_pad], 1
-    jmp .rely
-.pl:
-    mov byte [tp_pad], 2
-    jmp .rely
-.sgl:
-    mov byte [tp_bind], 0
-    jmp .rely
-.fac:
-    mov byte [tp_bind], 1
-    jmp .rely
-.opp:
-    mov byte [tp_bind], 2
-    jmp .rely
+    jmp short .rely
 .page:
-    cmp al, 0
-    je .ltr
-    cmp al, 1
-    je .leg
-    cmp al, 2
-    je .a4
-    cmp al, 3
-    je .a5
-    cmp al, 4
-    je .g0
-    cmp al, 5
-    je .g1
-    cmp al, 6
-    je .g2
-    cmp al, 7
-    je .uin
-    cmp al, 8
-    je .umm
-    cmp al, 9
-    je .n0
-    cmp al, 10
-    je .n1
-    cmp al, 11
-    je .n2
     cmp al, 12
-    je .n3
-    ret
-.ltr:
-    mov byte [tp_psize], 0
-    jmp .rely
-.leg:
-    mov byte [tp_psize], 1
-    jmp .rely
-.a4:
-    mov byte [tp_psize], 2
-    jmp .rely
-.a5:
-    mov byte [tp_psize], 3
-    jmp .rely
-.g0:
-    mov byte [tp_gutter], 0
-    jmp .rely
-.g1:
-    mov byte [tp_gutter], 1
-    jmp .rely
-.g2:
-    mov byte [tp_gutter], 2
-    jmp .rely
-.uin:
-    mov byte [tp_units], 0
-    jmp .rely
-.umm:
-    mov byte [tp_units], 1
-    jmp .rely
-.n0:
-    mov byte [tp_pstyle], 0
-    jmp .rely
-.n1:
-    mov byte [tp_pstyle], 1
-    jmp .rely
-.n2:
-    mov byte [tp_pstyle], 2
-    jmp .rely
-.n3:
-    mov byte [tp_pstyle], 3
+    ja .o
+    mov bx, tp_mpage
+.code:
+    xlatb                       ; AL = (an offset from tp_psize) << 4 | value
+    mov bl, al
+    and al, 0x0F
+    mov cl, 4
+    shr bl, cl
+    xor bh, bh
+    mov [tp_psize+bx], al
 .rely:
     mov byte [tp_needset], 1
-    call tp_redraw
+    jmp tp_redraw
+.o:
     ret
-.view:
-    cmp al, 0
-    je .set
-    cmp al, 1
-    je .vp
-    cmp al, 2
-    je .vn
-    cmp al, 3
-    je .ws
-    cmp al, 4
-    je .wp
-    ret
-.set:
-    call tp_typeset
-    call tp_redraw
-    ret
-.vp:
-    call tp_prev_page
-    call tp_redraw
-    ret
-.vn:
-    call tp_next_page
-    call tp_redraw
-    ret
-.ws:
-    add word [tp_split], 24
-    call tp_clamp_split
-    call tp_redraw
-    ret
-.wp:
-    sub word [tp_split], 24
-    call tp_clamp_split
-    call tp_redraw
-    ret
+
+; Every Layout item after Article and Book, and every Page item, sets ONE of
+; the page options to ONE value: offset from tp_psize in the high nibble, the
+; value in the low (tp_psize's map in the bss has the order)
+tp_mlay:    db 0x40, 0x41, 0x42         ; Narrow, Normal, Wide Margins
+            db 0x30, 0x31, 0x32         ; Compact, Normal, Loose Padding
+            db 0x10, 0x11, 0x12         ; Single, Facing, Opposing Pages
+tp_mpage:   db 0x00, 0x01, 0x02, 0x03   ; Letter, Legal, A4, A5
+            db 0x20, 0x21, 0x22         ; Gutter Off, Narrow, Wide
+            db 0x50, 0x51               ; Inches, Millimetres
+            db 0x60, 0x61, 0x62, 0x63   ; Numbers Off, Bottom, Header, Outer
+
+; File > Open and Ctrl+O
+tp_open_dlg:
+    mov byte [tp_dlgmode], 0
+    mov al, FDLG_OPEN
+    jmp short tp_dlg
+
+; File > New and Ctrl+N: the seed document, set
+tp_new:
+    call tp_seed
+    jmp tp_typeset
 
 tp_dlg:
     push bx
@@ -4903,18 +4408,48 @@ tp_dlg:
     pop bx
     ret
 
-tp_ondlg:
+tp_ondlg:                       ; (the completion proc owes nothing back,
+    mov si, di                  ; SPEC.md 38.6)
+    mov di, tp_dlgname
+    call tp_kname
+    call OSAPI_FILE_HERE
+    mov [tp_dir], dx
+    mov [tp_drv], bl
+    mov al, [tp_dlgmode]
+    mov si, tp_dlgname
+    cmp al, 2
+    jb .file
+    je .pdf
+    cmp al, 3
+    jne .fin
+    call tp_export_ps
+    jmp short .fin
+.pdf:
+    call tp_export_pdf
+    jmp short .fin
+.file:                          ; 0 Open and 1 Save As name the document
+    mov di, tp_fname
+    call tp_cpat
+    mov byte [di], 0
+    or al, al
+    jnz .save
+    call tp_load
+    jc .fin
+    call tp_typeset
+    jmp short .fin
+.save:
+    call tp_save
+.fin:
+    call tp_retitle
+    jmp tp_redraw               ; SI is tp_redraw's own business now
+
+; SI = a name in the KERNEL's segment (an ARG_FILE or a chooser's answer):
+; at most 13 bytes of it to DI, and the NUL. ES is ours after.
+tp_kname:
     push ax
-    push bx
     push cx
-    push dx
-    push si
-    push di
-    push es
     mov ax, KERNEL_SEG
     mov es, ax
-    mov si, di
-    mov di, tp_dlgname
     mov cx, 13
 .cp:
     mov al, [es:si]
@@ -4928,51 +4463,7 @@ tp_ondlg:
 .named:
     push ds
     pop es
-    call OSAPI_FILE_HERE
-    mov [tp_dir], dx
-    mov [tp_drv], bl
-    mov al, [tp_dlgmode]
-    or al, al
-    je .open
-    cmp al, 1
-    je .save
-    cmp al, 2
-    je .pdf
-    cmp al, 3
-    je .ps
-    jmp .fin
-.open:
-    mov si, tp_dlgname
-    mov di, tp_fname
-    call tp_cpat
-    mov byte [di], 0
-    call tp_load
-    jc .fin
-    call tp_typeset
-    jmp .fin
-.save:
-    mov si, tp_dlgname
-    mov di, tp_fname
-    call tp_cpat
-    mov byte [di], 0
-    call tp_save
-    jmp .fin
-.pdf:
-    mov si, tp_dlgname
-    call tp_export_pdf
-    jmp .fin
-.ps:
-    mov si, tp_dlgname
-    call tp_export_ps
-.fin:
-    call tp_retitle
-    call tp_redraw              ; SI is tp_redraw's own business now
-    pop es
-    pop di
-    pop si
-    pop dx
     pop cx
-    pop bx
     pop ax
     ret
 
@@ -4984,11 +4475,30 @@ tp_load:
     push dx
     push si
     push es
-    call tp_claim_src
-    jc .nomem
+    xor bx, bx                  ; THE SIZE PROBE (SPEC.md 18.4.1): a read with
+    xor cx, cx                  ; no room answers FERR_BIG and DX = the KB the
+    xor dx, dx                  ; read needs, off the directory entry and with
+    mov si, tp_fname            ; no data I/O - or CF=0 and nothing for an
+    call OSAPI_FILE_READ        ; empty file
+    jnc .sized
+    cmp ax, FERR_BIG
+    jne .err
+    xchg ax, dx                 ; AX = the KB it needs
+    cmp ax, TP_SRC_KB
+    ja .err                     ; past the ceiling: what the 8190-byte read
+                                ; always answered, in the same words
+    mov cl, 10
+    shl ax, cl
+.sized:
+    call tp_srcfit              ; ONLY EVER A GROW here: the document is still
+    jc .nomem                   ; in the claim and a read that fails leaves it
+    mov cx, [tp_srccap]         ; there. tp_srctrim gives the rest back after
+    cmp cx, TP_SRC_MAX
+    jbe .cap
+    mov cx, TP_SRC_MAX
+.cap:
     mov es, [tp_srcseg]
     xor bx, bx
-    mov cx, TP_SRC_MAX
     xor dx, dx
     mov si, tp_fname
     call OSAPI_FILE_READ
@@ -4999,6 +4509,7 @@ tp_load:
 .ok:
     mov [tp_srclen], ax
     call tp_crlf_fix
+    call tp_srctrim
     call tp_row_inval
     mov word [tp_cur], 0
     mov word [tp_vscroll], 0
@@ -5013,11 +4524,10 @@ tp_load:
     jmp .out
 .nomem:
     mov si, tp_s_nomem
-    call tp_toast
-    stc
-    jmp .out
+    jmp short .say
 .err:
     mov si, tp_s_err
+.say:
     call tp_toast
     stc
 .out:
@@ -5084,8 +4594,6 @@ tp_save:
     call tp_cpat
     mov byte [di], 0
 .nm:
-    call tp_claim_src
-    jc .err
     mov es, [tp_srcseg]
     xor bx, bx
     mov cx, [tp_srclen]
@@ -5120,9 +4628,7 @@ tp_seed:
     push si
     push di
     push es
-    call tp_claim_src
-    jc .o
-    mov es, [tp_srcseg]
+    mov es, [tp_srcseg]         ; the seed is under TP_SRC_KB0, so it fits
     mov si, tp_seed_s
     xor di, di
 .cp:
@@ -5133,7 +4639,8 @@ tp_seed:
     jnz .cp
     dec di
     mov [tp_srclen], di
-    call tp_row_inval
+    call tp_srctrim             ; ...and a document that was bigger gives its
+    call tp_row_inval           ; KB back
     mov word [tp_cur], 0
     mov word [tp_vscroll], 0
     mov byte [tp_selon], 0
@@ -5156,10 +4663,7 @@ tp_copy_all:
     push cx
     push si
     push es
-    mov ax, [tp_srcseg]
-    or ax, ax
-    jz .o
-    mov es, ax
+    mov es, [tp_srcseg]
     xor si, si
     mov cx, [tp_srclen]
     call OSAPI_CLIP_PUT
@@ -5185,19 +4689,11 @@ tp_paste:
     jc .o
     or ax, ax
     jz .o
-    mov cx, ax
-    mov ax, [tp_srclen]
-    add ax, cx
-    cmp ax, TP_SRC_MAX
-    ja .big
-    ; insert CX bytes at cursor: grow then get into a hole
-    ; paste at end of a gap we open
+    mov dx, ax                  ; paste len
     mov bx, [tp_cur]
-    mov dx, cx                  ; paste len
-    ; move tail
-    call tp_open_gap            ; BX=cur DX=len
-    jc .o
-    mov es, [tp_srcseg]
+    call tp_open_gap            ; BX=cur DX=len; CF=1 and SI = why not
+    jc .say
+    mov es, [tp_srcseg]         ; ...re-read: the gap may have grown it
     mov di, [tp_cur]
     mov cx, dx
     call OSAPI_CLIP_GET
@@ -5206,9 +4702,8 @@ tp_paste:
     ; two calls (SPEC.md 20.6), so another program may have replaced it with a
     ; shorter one in between. Advancing by DX would splice that many bytes of
     ; whatever was already in the claim into the document.
-    mov dx, cx
-    add [tp_cur], dx
-    add [tp_srclen], dx
+    add [tp_cur], cx
+    add [tp_srclen], cx
     call tp_crlf_fix
     ; crlf_fix SHRINKS srclen by one byte per CR LF pair it collapses and knows
     ; nothing about the caret, so a paste of CRLF text at the end of the buffer
@@ -5223,11 +4718,11 @@ tp_paste:
     call tp_clamp_cur
     mov byte [tp_dirty], 1
     mov byte [tp_needset], 1
-    jmp .o
-.big:
-    mov si, tp_s_full
+    jmp short .o
+.say:
     call tp_toast
 .o:
+    mov byte [tp_selon], 0      ; every offset after the caret moved
     pop es
     pop di
     pop si
@@ -5250,29 +4745,34 @@ tp_clamp_cur:
     pop ax
     ret
 
-; BX = offset, DX = bytes to open. CF=1 no room
+; BX = offset, DX = bytes to open; the claim grows to hold them first
+; (tp_srcfit). CF=1 no room, and SI = what to say: 'Document full (8K)' past
+; TP_SRC_MAX, 'Need more RAM' when the heap would not grow the claim.
 tp_open_gap:
     push ax
     push cx
-    push si
     push di
     push ds
     push es
     mov ax, [tp_srclen]
-    add ax, dx
-    cmp ax, TP_SRC_MAX
-    ja .bad
     ; BX PAST the end is the caller's bug, and refusing is the only safe answer
     ; to it: the tail length below is srclen - BX, which UNDERFLOWS to ~64KB
     ; when BX is bigger, and the std/rep movsb under it then walks backwards
-    ; over the whole 64KB segment the 8KB claim sits in - the claim heap above
-    ; it included (SPEC.md 50.3). Every caller is checked, but this is the one
+    ; over the whole 64KB segment the claim sits in - the claim heap above it
+    ; included (SPEC.md 50.3). Every caller is checked, but this is the one
     ; place the damage is unbounded, so the check lives here too.
-    cmp bx, [tp_srclen]
-    ja .bad
+    cmp bx, ax
+    ja .full
+    add ax, dx
+    jc .full                    ; (a clipboard bigger than the segment)
+    cmp ax, TP_SRC_MAX
+    ja .full
+    call tp_srcfit
+    jc .ram
     mov cx, [tp_srclen]
     sub cx, bx
     jz .ok
+    push si
     mov si, [tp_srclen]
     dec si
     mov di, si
@@ -5283,23 +4783,23 @@ tp_open_gap:
     std
     rep movsb
     cld
+    pop si
 .ok:
-    pop es
-    pop ds
-    pop di
-    pop si
-    pop cx
-    pop ax
     clc
-    ret
+    jmp short .o
+.ram:
+    mov si, tp_s_nomem
+    jmp short .bad
+.full:
+    mov si, tp_s_full
 .bad:
+    stc
+.o:
     pop es
     pop ds
     pop di
-    pop si
     pop cx
     pop ax
-    stc
     ret
 
 tp_cut_line:
@@ -5398,47 +4898,33 @@ tp_del_range2:
 
 ; AL = char to insert
 tp_ins:
-    push ax
     push bx
-    push cx
     push dx
     push si
     push di
     push es
-    push ds
-    call tp_claim_src
-    jc .o
     call tp_clamp_cur
-    mov bx, [tp_srclen]
-    cmp bx, TP_SRC_MAX
-    jae .full
     mov dx, 1
     mov bx, [tp_cur]
-    mov [tp_tmp5], al
-    call tp_open_gap
-    jc .full
+    call tp_open_gap            ; (keeps AL)
+    jc .no
     mov es, [tp_srcseg]
     mov di, [tp_cur]
-    mov al, [tp_tmp5]
     mov [es:di], al
     inc word [tp_cur]
     inc word [tp_srclen]
     call tp_row_inval
     mov byte [tp_dirty], 1
     mov byte [tp_needset], 1
-    jmp .o
-.full:
-    mov si, tp_s_full
-    call tp_toast
+    jmp short .o
+.no:
+    call tp_toast               ; SI = why
 .o:
-    pop ds
     pop es
     pop di
     pop si
     pop dx
-    pop cx
     pop bx
-    pop ax
     ret
 
 tp_backsp:
@@ -5534,38 +5020,6 @@ tp_go_right:
 .o:
     ret
 
-; SI = start of the line that contains tp_cur
-tp_sol:
-    push ax
-    push bx
-    push es
-    mov es, [tp_srcseg]
-    mov si, [tp_cur]
-    mov bx, [tp_srclen]
-    cmp si, bx
-    jbe .ok
-    mov si, bx
-.ok:
-    or si, si
-    jz .d
-.lp:
-    dec si
-    mov al, [es:si]
-    cmp al, 10
-    je .aft
-    cmp al, 13
-    je .aft
-    or si, si
-    jnz .lp
-    jmp .d
-.aft:
-    inc si
-.d:
-    pop es
-    pop bx
-    pop ax
-    ret
-
 ; A ROW up and a row down, not a line: on a wrapped line the two are not the
 ; same move, and the row is the one the reader is looking at.
 tp_up:
@@ -5628,15 +5082,29 @@ tp_end:
     pop ax
     ret
 
+; AX = the rows a page moves: the pane's, or 8 before it has been laid out
+tp_prows:
+    mov ax, [tp_erows]
+    or ax, ax
+    jnz .o
+    mov al, 8
+.o:
+    ret
+
+; [BX] -= AX, stopping at 0 (the source's and the preview's scrolls)
+tp_subz:
+    sub [bx], ax
+    jnc .o
+    and word [bx], 0
+.o:
+    ret
+
 tp_clamp_vs:
     push ax
     push bx
-    call tp_count_rows
-    mov bx, [tp_erows]
-    or bx, bx
-    jnz .e
-    mov bx, 8
-.e:
+    call tp_prows
+    xchg ax, bx
+    call tp_count_rows          ; (keeps BX)
     sub ax, bx
     jnc .ok
     xor ax, ax
@@ -5650,27 +5118,16 @@ tp_clamp_vs:
     ret
 
 tp_pgup:
-    mov ax, [tp_erows]
-    or ax, ax
-    jnz .s
-    mov ax, 8
-.s:
-    sub [tp_vscroll], ax
-    jnc .g
-    mov word [tp_vscroll], 0
-.g:
+    call tp_prows
+    mov bx, tp_vscroll
+    call tp_subz
     call tp_clamp_vs
     call tp_cur_lc
     mov ax, [tp_vscroll]
-    call tp_goto_lc
-    ret
+    jmp tp_goto_lc
 
 tp_pgdn:
-    mov ax, [tp_erows]
-    or ax, ax
-    jnz .s
-    mov ax, 8
-.s:
+    call tp_prows
     add [tp_vscroll], ax
     call tp_clamp_vs
     call tp_cur_lc
@@ -5680,48 +5137,7 @@ tp_pgdn:
     jns .g
     xor ax, ax
 .g:
-    call tp_goto_lc
-    ret
-
-; AX = distinct body lines on the current typeset page.
-tp_page_nlines:
-    push bx
-    push cx
-    push dx
-    push si
-    xor ax, ax
-    mov dx, 0xFFFF
-    xor si, si
-.lp:
-    cmp si, [tp_nruns]
-    jae .o
-    push ax
-    mov ax, si
-    mov cx, TP_RUN_SZ
-    mul cx
-    mov bx, ax
-    add bx, tp_runs
-    pop ax
-    mov cl, [bx]
-    xor ch, ch
-    cmp cx, [tp_ppage]
-    jne .n
-    cmp word [bx+4], 48
-    jb .n
-    mov cx, [bx+4]
-    cmp cx, dx
-    je .n
-    mov dx, cx
-    inc ax
-.n:
-    inc si
-    jmp .lp
-.o:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp tp_goto_lc
 
 %ifdef OS88UI_SBDRAG
 tp_nodrag:  db 0                ; 0xFF = this kernel has no tracking edge
@@ -5798,6 +5214,7 @@ tp_psb_click:
     call tp_psb_sync
     mov bx, tp_r_psb
     call os88ui_sbhit
+    mov bx, tp_pscroll
     cmp al, OS88UI_SBUP
     je .up
     cmp al, OS88UI_SBDOWN
@@ -5806,33 +5223,24 @@ tp_psb_click:
     je .pu
     cmp al, OS88UI_SBPGDN
     je .pd
-%ifdef OS88UI_SBDRAG
-    cmp al, OS88UI_SBTHUMB      ; SPEC.md 13.10.5: the PREVIEW's thumb, in
-    jne .o                      ; pixels - the element does not care (13.10.7.2)
-    cmp byte [tp_nodrag], 0
-    jne .o
-    mov ax, TP_SBRATE | (TP_SBRATE286 << 8)
-    call os88ui_sbrate          ; the rate THIS machine can afford
-    call os88ui_sbgrab          ; (SPEC.md 13.10.5.4.1)
-%endif
+    mov bx, tp_r_psb            ; (the bar, which the grab takes in BX)
+    call tp_sbthumb
     jmp short .o
 .up:
-    sub word [tp_pscroll], TP_SB_STEP * 8
-    jnc .cl
-    mov word [tp_pscroll], 0
-    jmp short .cl
-.dn:
-    add word [tp_pscroll], TP_SB_STEP * 8
-    jmp short .cl
+    mov ax, TP_SB_STEP * 8
+    jmp short .sub
 .pu:
     mov ax, [tp_r_psb+10]
-    sub [tp_pscroll], ax
-    jnc .cl
-    mov word [tp_pscroll], 0
+.sub:
+    call tp_subz
     jmp short .cl
+.dn:
+    mov ax, TP_SB_STEP * 8
+    jmp short .add
 .pd:
     mov ax, [tp_r_psb+10]
-    add [tp_pscroll], ax
+.add:
+    add [bx], ax
 .cl:
     call tp_clamp_ps
 .o:
@@ -5840,7 +5248,23 @@ tp_psb_click:
     pop ax
     ret
 
-; Arrow cells step a line, the track pages, the thumb is inert (SPEC.md 13.10.1).
+; AL = what the click hit, BX = the bar: the THUMB grabs a drag where this kernel can track
+; one (SPEC.md 13.10.5), anything else is nothing. The element does not care
+; whether the bar counts lines or pixels (13.10.7.2).
+tp_sbthumb:
+%ifdef OS88UI_SBDRAG
+    cmp al, OS88UI_SBTHUMB
+    jne .o
+    cmp byte [tp_nodrag], 0
+    jne .o
+    mov ax, TP_SBRATE | (TP_SBRATE286 << 8)
+    call os88ui_sbrate          ; the rate THIS machine can afford
+    jmp os88ui_sbgrab           ; (SPEC.md 13.10.5.4.1)
+.o:
+%endif
+    ret
+
+; Arrow cells step a line, the track pages, the thumb drags (SPEC.md 13.10.1).
 tp_ssb_click:
     push ax
     push bx
@@ -5848,6 +5272,7 @@ tp_ssb_click:
     call tp_ssb_sync
     mov bx, tp_r_ssb
     call os88ui_sbhit
+    mov bx, tp_vscroll
     cmp al, OS88UI_SBUP
     je .up
     cmp al, OS88UI_SBDOWN
@@ -5856,44 +5281,24 @@ tp_ssb_click:
     je .pu
     cmp al, OS88UI_SBPGDN
     je .pd
-%ifdef OS88UI_SBDRAG
-    cmp al, OS88UI_SBTHUMB      ; ...and the SOURCE's, in lines
-    jne .o
-    cmp byte [tp_nodrag], 0
-    jne .o
-    mov ax, TP_SBRATE | (TP_SBRATE286 << 8)
-    call os88ui_sbrate          ; the rate THIS machine can afford
-    call os88ui_sbgrab          ; (SPEC.md 13.10.5.4.1)
-    jmp short .o
-%endif
+    mov bx, tp_r_ssb            ; (the bar, which the grab takes in BX)
+    call tp_sbthumb
     jmp short .o
 .up:
-    cmp word [tp_vscroll], 0
-    je .o
-    sub word [tp_vscroll], TP_SB_STEP
-    jnc .cl
-    mov word [tp_vscroll], 0
+    mov ax, TP_SB_STEP
+    jmp short .sub
+.pu:
+    call tp_prows
+.sub:
+    call tp_subz
     jmp short .cl
 .dn:
-    add word [tp_vscroll], TP_SB_STEP
-    jmp short .cl
-.pu:
-    mov ax, [tp_erows]
-    or ax, ax
-    jnz .pu2
-    mov ax, 8
-.pu2:
-    sub [tp_vscroll], ax
-    jnc .cl
-    mov word [tp_vscroll], 0
-    jmp short .cl
+    mov ax, TP_SB_STEP
+    jmp short .add
 .pd:
-    mov ax, [tp_erows]
-    or ax, ax
-    jnz .pd2
-    mov ax, 8
-.pd2:
-    add [tp_vscroll], ax
+    call tp_prows
+.add:
+    add [bx], ax
 .cl:
     call tp_clamp_vs
 .o:
@@ -6067,7 +5472,7 @@ tp_u16_di:
 ; -----------------------------------------------------------------------------
 tp_tpl:
     dw 6, 22, TP_WIN_W, TP_WIN_H
-    dw tp_ttl, tp_paint, tp_onkey, tp_onclick
+    dw tp_s_name, tp_paint, tp_onkey, tp_onclick
 
     OS88_MENUSET tp_menus, tp_s_name, tp_oncmd
         OS88_MENU tp_m_file, tp_i_file, 6
@@ -6132,48 +5537,26 @@ tp_it_vn:       db 'Next Page', 0
 tp_it_ws:       db 'Wider Source', 0
 tp_it_wp:       db 'Wider Preview', 0
 
-tp_ttl:         db 'TeXPad', 0
 tp_s_hello:     db 'HELLO.TEX', 0
 tp_s_paper:     db 'PAPER.TEX', 0
 tp_s_untitled:  db 'UNTITLED.TEX', 0
 tp_s_noload:    db '(new)', 0
-tp_s_set:       db 'Typeset', 0
-tp_s_ltr:       db 'Ltr', 0
-tp_s_leg:       db 'Leg', 0
-tp_s_a4s:       db 'A4', 0
-tp_s_a5s:       db 'A5', 0
-tp_s_sgl:       db '1pg', 0
-tp_s_fac:       db 'Fac', 0
-tp_s_opp:       db 'Opp', 0
-tp_s_g0:        db 'G0', 0
-tp_s_g1:        db 'G+', 0
-tp_s_g2:        db 'G++', 0
-tp_s_pc:        db 'Pad-', 0
-tp_s_pn:        db 'Pad', 0
-tp_s_pl:        db 'Pad+', 0
-tp_s_lt:        db '<', 0
-tp_s_gt:        db '>', 0
+tp_s_lt:        db '<', 0           ; the page arrows, in button order
+                db '>', 0
 tp_s_stale:     db '(edit)', 0
 tp_s_wrap:      db TP_WRAP_MARK, 0      ; the last column of a continued row
-tp_s_letter:    db 'Letter', 0
-tp_s_legal:     db 'Legal', 0
-tp_s_pt:        db 'pt', 0
-tp_s_u075:      db '.75in', 0
-tp_s_u10:       db '1in', 0
-tp_s_u15:       db '1.5in', 0
-tp_s_m19:       db '19mm', 0
-tp_s_m25:       db '25mm', 0
-tp_s_m38:       db '38mm', 0
-tp_s_gi0:       db 'G0', 0
-tp_s_gi1:       db 'G.25in', 0
-tp_s_gi2:       db 'G.5in', 0
-tp_s_gm0:       db 'G0', 0
-tp_s_gm1:       db 'G6mm', 0
-tp_s_gm2:       db 'G13mm', 0
-tp_s_n0:        db 'No#', 0
-tp_s_n1:        db 'Ft', 0
-tp_s_n2:        db 'Hd', 0
-tp_s_n3:        db 'Out', 0
+; Each option's names IN ORDER, one string after another, for tp_pick: the
+; status strip's (tp_l_*) and the bar's shorter ones (tp_l_b*)
+tp_l_paper:     db 'Letter', 0, 'Legal', 0, 'A4', 0, 'A5', 0
+tp_l_marg:      db '.75in', 0, '1in', 0, '1.5in', 0         ; units 0
+                db '19mm', 0, '25mm', 0, '38mm', 0          ; units 1
+tp_l_bind:      db '1pg', 0, 'Fac', 0, 'Opp', 0
+tp_l_gut:       db 'G0', 0, 'G.25in', 0, 'G.5in', 0
+                db 'G0', 0, 'G6mm', 0, 'G13mm', 0
+tp_l_num:       db 'No#', 0, 'Ft', 0, 'Hd', 0, 'Out', 0
+tp_l_bpap:      db 'Ltr', 0, 'Leg', 0, 'A4', 0, 'A5', 0
+tp_l_bgut:      db 'G0', 0, 'G+', 0, 'G++', 0
+tp_l_bpad:      db 'Pad-', 0, 'Pad', 0, 'Pad+', 0
 tp_s_noset:     db 'F5 typesets the preview', 0
 tp_s_loaded:    db 'Loaded', 0
 tp_s_saved:     db 'Saved', 0
@@ -6188,19 +5571,20 @@ tp_s_xbig:      db 'Export too large', 0
 ; The About card, in the shape apps/paint and apps/modplug use it: what the
 ; program is, who contributed it, and one honest line about what is NOT in
 ; here. A reader who has met TeX should not be left thinking this is TeX.
-tp_s_a1:        db 'TeXPad for os8088', 0
-tp_s_a2:        db 'a TeX pad for the 8086', 0
-tp_s_a3:        db 0
-tp_s_a4:        db 'contributed by Jason Page', 0
-tp_s_a5:        db 'amfile.org', 0
-tp_s_a6:        db 0
-tp_s_a7:        db 'A paper-oriented SUBSET of the markup, set in', 0
-tp_s_a8:        db 'the kernel 8x8 monofont. No math engine, no', 0
-tp_s_a9:        db 'figures, no colour - see SPEC.md 69.2.', 0
-tp_s_a10:       db 0
-tp_s_a11:       db 'F5 typesets.  File exports PDF 1.4 and PostScript.', 0
-tp_s_a12:       db 0
-tp_s_a13:       db 'Long lines WRAP; a row that continues is marked >', 0
+tp_s_a1:        db 'TeXPad for os8088', 0       ; tp_draw_about walks these
+                db 'a TeX pad for the 8086', 0  ; as a run, one line each
+                db 0
+                db 'contributed by Jason Page', 0
+                db 'amfile.org', 0
+                db 0
+                db 'A paper-oriented SUBSET of the markup, set in', 0
+                db 'the kernel 8x8 monofont. No math engine, no', 0
+                db 'figures, no colour - see SPEC.md 69.2.', 0
+                db 0
+                db 'F5 typesets.  File exports PDF 1.4 and PostScript.', 0
+                db 0
+                db 'Long lines WRAP; a row that continues is marked >', 0
+tp_s_aend:
 
 tp_seed_s:
     db '\documentclass[letterpaper,12pt]{article}', 10
@@ -6217,221 +5601,251 @@ tp_seed_s:
     db 0
 
 %define OS88UI_SCROLL           ; SPEC.md 13.10: the shared scroll bar
+%define OS88UI_SBUPD            ; ...and its whole-or-thumb choice, for both bars (13.10.3.2)
     %define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)
     %define OS88UI_NOGEST           ; presses routed by hand: no gesture install (SPEC.md 20.5.1.3.4)
     %define OS88UI_NOBFIND          ; hit-tests its own rects: no os88ui_bfind (SPEC.md 20.5.1.3.4)
     %include "os88ui.inc"
 
-TP_BSS_TOTAL equ 12288
+; ---- bss --------------------------------------------------------------------
+; EVERY FIELD IS ONE TPB LINE AND ITS OFFSET IS COUNTED, NOT TYPED (SPEC.md
+; 69.4). The map used to be a hand-computed column of `equ`s with nothing
+; checking them against each other, so a field that grew moved everything under
+; it and two fields could OVERLAP without a word from the assembler. Here the
+; next offset is the last one plus its size, so two fields cannot share a byte
+; unless a TPB_UNION says they may - and the block is exactly as big as what is
+; in it: TP_BSS_TOTAL is TPB_AT, not a round number with slack under it.
+;
+; A union is for buffers that are NEVER LIVE AT THE SAME TIME, and the one
+; below is the typesetter's scratch against the exporter's and the top bar's.
+; tp_typeset runs to completion inside one handler; an export calls it first
+; and only then writes; the bar string is composed and drawn in one call.
+%assign TPB_AT 0
+%macro TPB 2
+%1 equ os88_image_end + TPB_AT
+%assign TPB_AT TPB_AT + (%2)
+%endmacro
+%macro TPB_UNION 0
+%assign TPB_U0 TPB_AT
+%assign TPB_UMAX TPB_AT
+%endmacro
+%macro TPB_ARM 0                ; the next arm starts where the union did
+%if TPB_AT > TPB_UMAX
+%assign TPB_UMAX TPB_AT
+%endif
+%assign TPB_AT TPB_U0
+%endmacro
+%macro TPB_UNION_END 0
+%if TPB_AT < TPB_UMAX
+%assign TPB_AT TPB_UMAX
+%endif
+%endmacro
+
+    TPB tp_win,      2
+    TPB tp_ox,       2
+    TPB tp_oy,       2
+    TPB tp_cw,       2
+    TPB tp_ch,       2
+    TPB tp_srcseg,   2
+    TPB tp_srclen,   2
+    TPB tp_srccap,   2          ; the source claim's size in BYTES (tp_srcfit)
+    TPB tp_expseg,   2          ; the export claim, 0 between exports
+    TPB tp_explen,   2
+    TPB tp_expcap,   2          ; ...its size in bytes (tp_xgrow)
+    TPB tp_dir,      2
+    TPB tp_drv,      2
+    TPB tp_cur,      2
+    TPB tp_wantcol,  2
+    TPB tp_vscroll,  2
+    TPB tp_pscroll,  2
+    TPB tp_ppage,    2
+    TPB tp_npages,   2
+    TPB tp_split,    2
+    TPB tp_focus,    1
+    TPB tp_dirty,    1
+    TPB tp_needset,  1
+    TPB tp_setok,    1
+    TPB tp_needld,   1
+    TPB tp_abouton,  1
+    TPB tp_dlgmode,  1
+; THE PAGE OPTIONS, in this order and adjacent: the bar's buttons 2..5 cycle
+; the first four (tp_bact), and every Layout and Page menu item is one byte
+; naming an offset from tp_psize and a value (tp_mcode)
+    TPB tp_psize,    1          ; 0 Letter 1 Legal 2 A4 3 A5
+    TPB tp_bind,     1          ; 0 single 1 facing 2 opposing
+    TPB tp_gutter,   1          ; 0 off 1 18pt 2 36pt
+    TPB tp_pad,      1          ; 0 compact 1 normal 2 loose
+    TPB tp_margin,   1          ; 0 narrow 1 normal 2 wide
+    TPB tp_units,    1          ; 0 in 1 mm
+    TPB tp_pstyle,   1          ; 0 none 1 foot 2 head 3 outer
+    TPB tp_fsize,    1
+    TPB tp_xkind,    1          ; the export being written: 0 PDF, 1 PS
+    TPB tp_xdrop,    1          ; ...and a byte tp_xw_al had no room for
+    TPB tp_xpage,    1          ; ...and the page its writer is on
+    TPB tp_ex1,      2
+    TPB tp_ey1,      2
+    TPB tp_ex2,      2
+    TPB tp_ey2,      2
+    TPB tp_px1,      2
+    TPB tp_py1,      2
+    TPB tp_px2,      2
+    TPB tp_py2,      2
+    TPB tp_erows,    2
+    TPB tp_ecols,    2
+    TPB tp_tline,    2
+    TPB tp_cxp,      2
+    TPB tp_cyp,      2
+    TPB tp_tmp,      2
+    TPB tp_tmp2,     2
+    TPB tp_tmp3,     2
+    TPB tp_tmp4,     2
+    TPB tp_tmp5,     2
+; typesetter
+    TPB tp_page,     2
+    TPB tp_x,        2
+    TPB tp_y,        2
+    TPB tp_left,     2
+    TPB tp_right,    2
+    TPB tp_tleft,    2
+    TPB tp_ttop,     2
+    TPB tp_tbot,     2
+    TPB tp_parind,   2          ; the four tp_padtab sets, in its order
+    TPB tp_parskip,  2
+    TPB tp_tlead,    2
+    TPB tp_tabsep,   2
+    TPB tp_indent,   2
+    TPB tp_tw,       2
+    TPB tp_nruns,    2
+    TPB tp_nboxes,   2
+    TPB tp_tused,    2
+    TPB tp_si,       2
+    TPB tp_se,       2
+    TPB tp_pw,       2
+    TPB tp_ph,       2
+    TPB tp_nobj,     2
+    TPB tp_scanat,   2
+    TPB tp_budget,   2
+    TPB tp_tabtop,   2
+    TPB tp_tabbot,   2
+    TPB tp_tabw,     2
+    TPB tp_tabn,     2
+    TPB tp_rowh,     2
+    TPB tp_tsize,    1
+    TPB tp_csize,    1
+    TPB tp_inpara,   1
+    TPB tp_needind,  1
+    TPB tp_bold,     1
+    TPB tp_under,    1
+    TPB tp_align,    1
+    TPB tp_chno,     1
+    TPB tp_secno,    1
+    TPB tp_subno,    1
+    TPB tp_itemn,    1
+    TPB tp_made,     1
+    TPB tp_sty_n,    1
+    TPB tp_env_n,    1
+    TPB tp_clen,     1
+    TPB tp_onpage,   1
+    TPB tp_cmdn,     1          ; tp_cmd's length (tp_ts_cmd)
+    TPB tp_fname,    14
+    TPB tp_dlgname,  14
+    TPB tp_ttlbuf,   32         ; the window's title: OSAPI_WM_TITLE keeps the
+                                ; pointer and reads it on every repaint
+    TPB tp_nbuf,     48
+    TPB_UNION                   ; ...the typesetter's own scratch
+    TPB tp_cmd,      32
+    TPB tp_arg,      182
+    TPB tp_wbuf,     82
+    TPB tp_cline,    122        ; a centred line, a table's cell - AND the
+                                ; panes' row text at PAINT time, which is never
+                                ; inside tp_typeset (89 columns + NUL at most)
+    TPB tp_title,    80
+    TPB tp_author,   80
+    TPB tp_date,     40
+    TPB tp_sty,      32
+    TPB tp_env,      24
+    TPB tp_colw,     12
+    TPB tp_colk,     6
+    TPB_ARM                     ; ...the exporter's, after tp_typeset is done
+    TPB tp_objoff,   80         ; 4 + 2 * TP_MAX_PAGES objects
+    TPB_ARM                     ; ...and the top bar's string
+    TPB tp_status,   80
+    TPB_UNION_END
+; the bar's seven buttons, IN BUTTON ORDER: rect N is tp_r_set + 8*(N-1)
+    TPB tp_r_set,    8
+    TPB tp_r_cls,    8
+    TPB tp_r_mar,    8
+    TPB tp_r_gut,    8
+    TPB tp_r_pad,    8
+    TPB tp_r_prev,   8
+    TPB tp_r_next,   8
+    TPB tp_sx1,      2
+    TPB tp_sy1,      2
+    TPB tp_sx2,      2
+    TPB tp_sy2,      2
+    TPB tp_tx1,      2
+    TPB tp_ty1,      2
+    TPB tp_r_ssb,    20         ; x1 y1 x2 y2 total fit pos, and the
+    TPB tp_r_psb,    20         ; total fit pos the bar was DRAWN from
+                                ; (os88ui_sbupd, SPEC.md 13.10.3.2)
+    TPB tp_needttl,  1
+    TPB tp_ldfull,   1          ; a deferred load landed: the next handler owes
+                                ; a FULL repaint, not a source-pane one
+                                ; (tp_deferred_ld)
+    TPB tp_selon,    1
+    TPB tp_dselon,   1
+    TPB tp_seldrag,  1
+    TPB tp_caret_on, 1
+    TPB tp_edkind,   1
+    TPB tp_rowcont,  1          ; the row tp_row_ext just measured is
+                                ; CONTINUED by the next one
+    TPB tp_nrowsok,  1
+    TPB tp_sel0,     2
+    TPB tp_sel1,     2
+    TPB tp_anchor,   2
+    TPB tp_dsel0,    2
+    TPB tp_dsel1,    2
+    TPB tp_statcnt,  2          ; where the byte count starts inside tp_nbuf
+                                ; (tp_stat_touch)
+    TPB tp_oldvs,    2
+    TPB tp_oldps,    2
+    TPB tp_barsig_v, 2          ; what the TOP bar's text was
+    TPB tp_rgx1,     2          ; the preview REGION being drawn
+    TPB tp_rgy1,     2
+    TPB tp_rgx2,     2
+    TPB tp_rgy2,     2
+    TPB tp_rc_row,   2          ; the row cache: a row index, where it starts,
+    TPB tp_rc_off,   2          ; and the width both were measured at
+    TPB tp_rc_w,     2
+    TPB tp_rc_want,  2
+    TPB tp_edls,     2          ; the span an edit reaches (tp_edmark)
+    TPB tp_edrf,     2
+    TPB tp_edtail,   2
+    TPB tp_edkb,     2
+    TPB tp_edka,     2
+    TPB tp_edlen,    2
+    TPB tp_nrows,    2          ; the row COUNT cache: how many rows the
+    TPB tp_nrowsw,   2          ; document had, and the width it was counted at
+; the typesetter's OUTPUT (SPEC.md 69.3) - the run record is TP_RUN_SZ bytes,
+; the box TP_BOX_SZ, and the text pool is the runs' text in run order: a run's
+; text starts where the one before it ended, so no run carries an offset
+    TPB tp_runs,     TP_MAX_RUNS * TP_RUN_SZ
+    TPB tp_boxes,    TP_MAX_BOXES * TP_BOX_SZ
+    TPB tp_text,     TP_TEXT_MAX
+
+TP_BSS_TOTAL equ TPB_AT
+; ...and the three places that walk fields as a block (tp_ts_init)
+    OS88_ADJACENT tp_nruns, tp_nboxes
+    OS88_ADJACENT tp_nboxes, tp_tused
+    OS88_ADJACENT tp_parind, tp_parskip
+    OS88_ADJACENT tp_parskip, tp_tlead
+    OS88_ADJACENT tp_tlead, tp_tabsep
+    OS88_ADJACENT tp_psize, tp_bind, 1
+    OS88_ADJACENT tp_bind, tp_gutter, 1
+    OS88_ADJACENT tp_gutter, tp_pad, 1
+    OS88_ADJACENT tp_pad, tp_margin, 1
+    OS88_ADJACENT tp_margin, tp_units, 1
+    OS88_ADJACENT tp_units, tp_pstyle, 1
+    OS88_ADJACENT tp_pstyle, tp_fsize, 1
     OS88_BSS TP_BSS_TOTAL
     OS88_IMAGE_END
-
-; ---- bss --------------------------------------------------------------------
-tp_win      equ os88_image_end + 0
-tp_ox       equ os88_image_end + 2
-tp_oy       equ os88_image_end + 4
-tp_cw       equ os88_image_end + 6
-tp_ch       equ os88_image_end + 8
-tp_srcseg   equ os88_image_end + 10
-tp_srclen   equ os88_image_end + 12
-tp_expseg   equ os88_image_end + 14
-tp_explen   equ os88_image_end + 16
-tp_dir      equ os88_image_end + 18
-tp_drv      equ os88_image_end + 20
-tp_cur      equ os88_image_end + 22
-tp_wantcol  equ os88_image_end + 24
-tp_vscroll  equ os88_image_end + 26
-                                         ; 28 is FREE: it held tp_hscroll,
-                                         ; and there is no horizontal scroll
-                                         ; to hold any more (SPEC.md 69.10)
-tp_pscroll  equ os88_image_end + 30
-tp_ppage    equ os88_image_end + 32
-tp_npages   equ os88_image_end + 34
-tp_split    equ os88_image_end + 36
-tp_focus    equ os88_image_end + 38
-tp_dirty    equ os88_image_end + 39
-tp_needset  equ os88_image_end + 40
-tp_setok    equ os88_image_end + 41
-tp_needld   equ os88_image_end + 42
-tp_abouton  equ os88_image_end + 43
-tp_dlgmode  equ os88_image_end + 44
-tp_class    equ os88_image_end + 45
-tp_margin   equ os88_image_end + 46
-tp_pad      equ os88_image_end + 47
-tp_pstyle   equ os88_image_end + 48
-tp_fsize    equ os88_image_end + 49
-tp_ex1      equ os88_image_end + 50
-tp_ey1      equ os88_image_end + 52
-tp_ex2      equ os88_image_end + 54
-tp_ey2      equ os88_image_end + 56
-tp_px1      equ os88_image_end + 58
-tp_py1      equ os88_image_end + 60
-tp_px2      equ os88_image_end + 62
-tp_py2      equ os88_image_end + 64
-tp_erows    equ os88_image_end + 66
-tp_ecols    equ os88_image_end + 68
-tp_tline    equ os88_image_end + 70
-tp_cxp      equ os88_image_end + 72
-tp_cyp      equ os88_image_end + 74
-tp_tmp      equ os88_image_end + 76
-tp_tmp2     equ os88_image_end + 78
-tp_tmp3     equ os88_image_end + 80
-tp_tmp4     equ os88_image_end + 82
-tp_tmp5     equ os88_image_end + 84
-; typesetter
-tp_page     equ os88_image_end + 86
-tp_x        equ os88_image_end + 88
-tp_y        equ os88_image_end + 90
-tp_left     equ os88_image_end + 92
-tp_right    equ os88_image_end + 94
-tp_tleft    equ os88_image_end + 96
-tp_ttop     equ os88_image_end + 98
-tp_tbot     equ os88_image_end + 100
-tp_tlead    equ os88_image_end + 102
-tp_tsize    equ os88_image_end + 104
-tp_indent   equ os88_image_end + 106
-tp_inpara   equ os88_image_end + 108
-tp_needind  equ os88_image_end + 109
-tp_bold     equ os88_image_end + 110
-tp_under    equ os88_image_end + 111
-tp_align    equ os88_image_end + 112
-tp_csize    equ os88_image_end + 113
-tp_parind   equ os88_image_end + 114
-tp_parskip  equ os88_image_end + 116
-tp_tabsep   equ os88_image_end + 118
-tp_stretch  equ os88_image_end + 120
-tp_tw       equ os88_image_end + 122
-tp_chno     equ os88_image_end + 124
-tp_secno    equ os88_image_end + 126
-tp_subno    equ os88_image_end + 128
-tp_itemn    equ os88_image_end + 130
-tp_made     equ os88_image_end + 132
-tp_nruns    equ os88_image_end + 134
-tp_nboxes   equ os88_image_end + 136
-tp_tused    equ os88_image_end + 138
-tp_si       equ os88_image_end + 140
-tp_se       equ os88_image_end + 142
-tp_sty_n    equ os88_image_end + 144
-tp_env_n    equ os88_image_end + 145
-tp_clen     equ os88_image_end + 146
-tp_pw       equ os88_image_end + 148
-tp_ph       equ os88_image_end + 150
-tp_cmdn     equ os88_image_end + 152
-tp_argn     equ os88_image_end + 154
-tp_exp_i    equ os88_image_end + 156
-tp_nobj     equ os88_image_end + 158
-tp_xkind    equ os88_image_end + 160
-tp_fname    equ os88_image_end + 162          ; 14
-tp_dlgname  equ os88_image_end + 176          ; 14
-tp_ttlbuf   equ os88_image_end + 190          ; 32
-tp_status   equ os88_image_end + 222          ; 80
-tp_nbuf     equ os88_image_end + 302          ; 48
-tp_cmd      equ os88_image_end + 350          ; 32
-tp_arg      equ os88_image_end + 382          ; 182
-tp_wbuf     equ os88_image_end + 564          ; 82
-tp_linebuf  equ os88_image_end + 646          ; 150
-tp_cline    equ os88_image_end + 796          ; 122
-tp_title    equ os88_image_end + 918          ; 80
-tp_author   equ os88_image_end + 998          ; 80
-tp_date     equ os88_image_end + 1078         ; 40
-tp_sty      equ os88_image_end + 1118         ; 32
-tp_env      equ os88_image_end + 1150         ; 24
-tp_envsv    equ os88_image_end + 1174         ; 36
-tp_colw     equ os88_image_end + 1210         ; 12
-tp_colk     equ os88_image_end + 1222         ; 6
-tp_colbar   equ os88_image_end + 1228         ; 8
-tp_objoff   equ os88_image_end + 1236         ; 80
-tp_r_set    equ os88_image_end + 1316
-tp_r_cls    equ os88_image_end + 1324
-tp_r_mar    equ os88_image_end + 1332
-tp_r_pad    equ os88_image_end + 1340
-tp_r_prev   equ os88_image_end + 1348
-tp_r_next   equ os88_image_end + 1356
-tp_runs     equ os88_image_end + 1364         ; 4800
-tp_boxes    equ os88_image_end + 6164         ; 640
-tp_text     equ os88_image_end + 6804         ; 5120  -> 11924
-tp_rx       equ os88_image_end + 11924
-tp_ry       equ os88_image_end + 11926
-tp_fs_ret   equ os88_image_end + 11928
-tp_fs_need  equ os88_image_end + 11930
-tp_needttl  equ os88_image_end + 11932
-tp_scanat   equ os88_image_end + 11934
-tp_budget   equ os88_image_end + 11936
-tp_psize    equ os88_image_end + 11938   ; 0 Letter 1 Legal 2 A4 3 A5
-tp_bind     equ os88_image_end + 11939   ; 0 single 1 facing 2 opposing
-tp_gutter   equ os88_image_end + 11940   ; 0 off 1 18pt 2 36pt
-tp_units    equ os88_image_end + 11941   ; 0 in 1 mm
-tp_r_gut    equ os88_image_end + 11942   ; 8
-tp_sx1      equ os88_image_end + 11950
-tp_sy1      equ os88_image_end + 11952
-tp_sx2      equ os88_image_end + 11954
-tp_sy2      equ os88_image_end + 11956
-tp_tx1      equ os88_image_end + 11958
-tp_ty1      equ os88_image_end + 11960
-tp_tx2      equ os88_image_end + 11962
-tp_ty2      equ os88_image_end + 11964
-tp_r_ssb    equ os88_image_end + 11966   ; 14: x1 y1 x2 y2 total fit pos
-tp_onpage   equ os88_image_end + 11980
-tp_r_psb    equ os88_image_end + 11982   ; 14
-tp_tabtop   equ os88_image_end + 11996
-tp_tabbot   equ os88_image_end + 11998
-tp_tabw     equ os88_image_end + 12000
-tp_tabn     equ os88_image_end + 12002
-tp_rowh     equ os88_image_end + 12004
-tp_ldfull   equ os88_image_end + 12006   ; a deferred load landed: the next
-                                         ; handler owes a FULL repaint, not a
-                                         ; source-pane one (tp_deferred_ld)
-tp_sel0     equ os88_image_end + 12008
-tp_sel1     equ os88_image_end + 12010
-tp_anchor   equ os88_image_end + 12012
-tp_selon    equ os88_image_end + 12014
-tp_dselon   equ os88_image_end + 12015
-tp_seldrag  equ os88_image_end + 12016
-tp_caret_on equ os88_image_end + 12017
-tp_edkind   equ os88_image_end + 12018
-                                         ; 12019 is FREE: tp_edn, the cells an
-                                         ; insert put in front of the caret -
-                                         ; nothing re-letters from the edit's
-                                         ; own column (69.8)
-tp_dsel0    equ os88_image_end + 12020
-tp_dsel1    equ os88_image_end + 12022
-tp_ssbpos   equ os88_image_end + 12024
-tp_statcnt  equ os88_image_end + 12026   ; where the byte count starts inside
-                                         ; tp_nbuf (tp_stat_touch)
-tp_oldvs    equ os88_image_end + 12028
-                                         ; 12030 is FREE: tp_oldhs, the same
-tp_oldps    equ os88_image_end + 12032
-tp_ssbtot   equ os88_image_end + 12034   ; total and fit the source bar on the
-tp_ssbfit   equ os88_image_end + 12036   ; glass was DRAWN from (tp_ssb_move)
-tp_barsig_v equ os88_image_end + 12038   ; ...and what the TOP bar's text was
-tp_rgx1     equ os88_image_end + 12040   ; the preview REGION being drawn
-tp_rgy1     equ os88_image_end + 12042
-tp_rgx2     equ os88_image_end + 12044
-tp_rgy2     equ os88_image_end + 12046
-tp_psbpos   equ os88_image_end + 12048   ; the preview bar's pos, total and fit
-tp_psbtot   equ os88_image_end + 12050   ; as DRAWN (tp_psb_move)
-tp_psbfit   equ os88_image_end + 12052
-tp_rowcont  equ os88_image_end + 12054   ; the row tp_row_ext just measured is
-                                         ; CONTINUED by the next one
-tp_rc_row   equ os88_image_end + 12056   ; the row cache: a row index, where it
-tp_rc_off   equ os88_image_end + 12058   ; starts, and the width both were
-tp_rc_w     equ os88_image_end + 12060   ; measured at
-tp_rc_want  equ os88_image_end + 12062
-tp_edls     equ os88_image_end + 12064   ; the span an edit reaches (tp_edmark)
-tp_edrf     equ os88_image_end + 12066
-tp_edtail   equ os88_image_end + 12068
-tp_edkb     equ os88_image_end + 12070
-tp_edka     equ os88_image_end + 12072
-tp_edlen    equ os88_image_end + 12074
-tp_nrows    equ os88_image_end + 12076   ; the row COUNT cache: how many rows
-tp_nrowsw   equ os88_image_end + 12078   ; the document had, the width it was
-tp_nrowsok  equ os88_image_end + 12080   ; counted at, and whether it stands
-; remainder to 12288. Every name above is a hand-computed offset and nothing
-; checks them against each other, so a new field goes at the END and a field
-; that grows moves everything under it - the assertion below is the only
-; automatic part, and it catches overflowing the block, not overlapping inside
-; it. TP_BSS_LAST is the high-water mark; keep it pointing at the last field.
-TP_BSS_LAST equ 12080 + 1
-%if TP_BSS_LAST > TP_BSS_TOTAL
-    %error "texpad bss map overflows OS88_BSS"
-%endif

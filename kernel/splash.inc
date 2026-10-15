@@ -180,9 +180,9 @@ splf_step:      call spl_step
 ; THE OTHER THREE HAVE NO SHIM ANY MORE (SPEC.md 2.6.1, 15.3.9). spl_stepq,
 ; spl_finish and spl_reset have exactly one `ret` apiece and NO near caller
 ; anywhere in this section, so each body owns its own far return and the four
-; bytes in the middle are deleted. Twelve bytes of `.boot2`, which is the same
-; pool the boot overlay draws from (SPEC.md 2.9.12) - `OVL_AT` moves for
-; nothing, so what the loader gives back the overlay can have.
+; bytes in the middle are deleted. Twelve bytes of `.boot2`, which is the one
+; pool the loader and the boot overlay's blob half share (SPEC.md 2.9.14), so
+; what the loader gives back the overlay can have.
 splf_anim:      call spl_anim
                 retf            ; ...and SPEC.md 15.3.8.2's: sch_isr owns int
                                 ; 08h for the second half of the loading
@@ -488,7 +488,7 @@ spl_reset:
                                 ; the wipe took it and its phase has not moved
     call spl_rechrome
     call spl_paint
-    OVLCALL ovl_spl_redraw      ; ...and SPEC.md 15.6's status line with it.
+    SPLCALL ovl_spl_redraw      ; ...and SPEC.md 15.6's status line with it.
                                 ; spl_paint deliberately does NOT draw it - a
                                 ; per-sector font_run is tens of milliseconds
                                 ; against a ~24 ms sector - so the ONE path
@@ -780,7 +780,7 @@ spl_pct:
 ; -----------------------------------------------------------------------------
 SPL_KCELLS  equ 32              ; the field, in cells - spl_mgeom's
 SPL_KY      equ 288             ; SPL_MSG_CELLS and SPL_MSG_Y, which live in
-                                ; `.ovl` and are %included AFTER this module.
+                                ; `.boot2` and are %included AFTER this module.
                                 ; vidsel.inc asserts the pair rather than
                                 ; trusting the comment: two copies of a
                                 ; geometry that must agree is exactly what a

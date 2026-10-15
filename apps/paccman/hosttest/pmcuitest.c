@@ -1077,10 +1077,12 @@ static void check_tables(void)
 {
     int i, dots = 0, pills = 0, doors = 0;
 
-    for (i = 0; i < 31 * 28; i++) {
-        if (pmc_maze[i] == PMC_TILE_DOT)  dots++;
-        if (pmc_maze[i] == PMC_TILE_PILL) pills++;
-        if (pmc_maze[i] == PMC_TILE_DOOR) doors++;
+    /* pmc_maze is the LEFT HALF; a dot, a pill and the door are their own
+     * mirror images (pmc_init_playfield), so each one counts twice. */
+    for (i = 0; i < 31 * 14; i++) {
+        if (pmc_maze[i] == PMC_TILE_DOT)  dots += 2;
+        if (pmc_maze[i] == PMC_TILE_PILL) pills += 2;
+        if (pmc_maze[i] == PMC_TILE_DOOR) doors += 2;
     }
     if (dots != 240)  fail("the maze does not hold 240 dots");
     if (pills != 4)   fail("the maze does not hold 4 energizer pills");
@@ -1089,9 +1091,10 @@ static void check_tables(void)
     /* The prelude's MELODY is voice 1 of the dump and its bass voice 0, and
      * the two have been the wrong way round once. Assert the melody's first
      * two notes BY NAME so they cannot be swapped back silently. */
-    if (pmc_snd_prelude_hz1[0] != 539 || pmc_snd_prelude_hz1[8] != 1078)
+    if (pmc_snd_prelude_n1[pmc_snd_prelude1[0] >> 4] != 539
+        || pmc_snd_prelude_n1[pmc_snd_prelude1[8] >> 4] != 1078)
         fail("the prelude MELODY is not 539 then 1078 Hz on voice 1");
-    if (pmc_snd_prelude_hz0[0] != 67)
+    if (pmc_snd_prelude_n0[pmc_snd_prelude0[0] >> 4] != 67)
         fail("the prelude BASS is not 67 Hz on voice 0");
 
     /* Pixel 0 of every colour block is the arcade's transparent index and is

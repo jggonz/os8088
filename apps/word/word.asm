@@ -2843,8 +2843,9 @@ wd_tabw:
 ; in:  -
 ; out: the dropdown's items and its count set; preserves all registers
 ;
-; ONCE, and lazily. ty_scan is five remounts and three listings - a couple of
-; seconds on the target - so it runs the first time somebody opens this combo
+; ONCE, and lazily. ty_scan walks the system disk's SYSTEM/FONTS and lists it
+; - quiet stands now (os88type.inc), but still floppy reads of the folder and
+; a header read per face on the target - so it runs the first time somebody opens this combo
 ; and never again. A person who never opens it pays nothing, which is the same
 ; bargain SPEC.md 6.2 strikes with a directory of faces nobody picks from.
 ;
@@ -8747,7 +8748,8 @@ wd_save:
     call wd_stghold             ; ES = the staging claim, or a toast and out
     jc .out
     call wd_goto                ; the folder this document belongs to, if the
-                                ; volume has been moved since (SPEC.md 19.2)
+    jc .err                     ; volume has been moved since (SPEC.md 19.2);
+                                ; CF = we are not there, so write nothing
     call wd_isrtf               ; a .RTF name is the user naming a FORMAT,
     jnc .rtf                    ; and it is the one extension Save honours
     call wd_docimg              ; the whole Word file - FIB, text, FKPs,
@@ -8853,6 +8855,8 @@ wd_load:
     jc .nomem
     mov [wd_stgseg], dx
     call wd_goto                ; the folder dance on the way in
+    jc .err                     ; ...and a refusal, not a read of wd_name in
+                                ; whatever folder we were left standing in
     mov es, [wd_stgseg]
     xor bx, bx                  ; ES:BX = staging, DX:CX its capacity
     mov cx, WD_LSTGKB * 1024
@@ -9034,22 +9038,25 @@ wd_ldscan:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_errmsg - turn a FERR_* code into the toast string
+; wd_errmsg - say a FERR_* code as a toast, in the KERNEL'S words
 ; in:  AX = FERR_* (SPEC.md 18.4)
-; out: nothing - the string is said as a toast; preserves all registers
+; out: nothing; preserves all registers
+;
+; OSAPI_FERR_TEXT (SPEC.md 18.4.11) answers the Disk window's own string at
+; ES:SI, which is OSAPI_TOAST's argument as it stands - so no table here, and
+; an unknown code still reads as a disk problem (the kernel's rule).
 ; -----------------------------------------------------------------------------
 wd_errmsg:
-    push ax
-    push bx
-    cmp ax, FERR_BIG
-    jbe .known
-    mov ax, FERR_IO             ; an unknown code is still a disk problem
-.known:
-    mov bx, ax
-    shl bx, 1
-    mov ax, [bx+wd_errtab]
-    call wd_saymsg
-    jmp wd_rba
+    push cx
+    push si
+    push es
+    call OSAPI_FERR_TEXT
+    xor cx, cx                  ; the default lifetime, about three seconds
+    call OSAPI_TOAST
+    pop es
+    pop si
+    pop cx
+    ret
 
 ; -----------------------------------------------------------------------------
 ; wd_ins - insert AL at the caret, which then sits after it
@@ -11713,48 +11720,62 @@ wd_ondlg:
     call wd_load
     jmp short .draw
 .toobig:
-    mov ax, wd_e_big
-    call wd_saymsg
+    mov ax, FERR_BIG                ; the kernel's own words for it
+    call wd_errmsg                  ; (SPEC.md 18.4.11)
 .draw:
     jmp wd_redraw                   ; tail call; SI is the window ptr
 
 ; -----------------------------------------------------------------------------
 ; wd_goto - put the volume back in this document's folder (SPEC.md 19.2)
-; out: nothing; preserves all registers
+; out: CF=0 and every register preserved; CF=1 = could not stand there, AX =
+;      FERR_* and every other register preserved - NOTHING MOVED, so the
+;      caller must not go on to resolve wd_name (it would find it, or a
+;      stranger of the same name, in the folder we were already in)
 ;
-; **THE KERNEL DOES THIS NOW, and this routine is kept as a no-op that costs
-; two compares** (SPEC.md 19.2.1). A file name used to resolve in the ONE
-; global current directory shared by every Disk window and by the file
-; dialog: right after Save As it still named the folder the user picked -
-; which is why saving into a folder worked - but by the next Save anything
-; that navigated had moved it, and the write landed in the root. Four
-; packages each carried their own copy of the six lines below, which is what
-; eventually said the kernel owed the feature rather than the SDK owing an
-; example. An instance owns its directory now, so OSAPI_FILE_HERE answers
-; this document's folder and the OSAPI_FILE_GOTO below never fires.
+; The kernel keeps an instance in its own folder now (SPEC.md 19.2.1), so
+; once a Save As has committed somewhere OSAPI_FILE_HERE answers that folder
+; and this is two compares. **It is NOT a no-op, though, and this comment
+; once said it was**: an instance is SEEDED at the folder its PACKAGE came
+; out of, while wd_arg copies a launch document's ARG folder into wd_dir. So
+; the first load of a .DOC double-clicked in any other folder is exactly the
+; case where HERE and wd_dir disagree and the move below fires.
 ;
-; It stays because the slots keep their contract (SPEC.md 20.8 rule 4) and
-; because a remount was always skipped when the volume was already there -
-; which is now every time. Deleting it would be correct and would also delete
-; the record of why it was ever needed.
+; It moves with OSAPI_FILE_GOTO_QM, not OSAPI_FILE_GOTO: the next thing done
+; is a by-name read or write, which resolves through the raw directory
+; sectors, and nothing here shows the folder - so the remount's scan, sort and
+; per-file icon harvest were ~0.5 s of floppy bought for no reader
+; (docs/plans/NAV-COST-PLAN.md, SPEC.md 19.9.1). QM moves the instance with
+; it, which is what makes the next file cell resolve there.
+;
+; The two differ on FAILURE and that is why CF is an output now: a failed
+; GOTO left the volume at the root with the write gate shut, so the file call
+; after it refused on its own; a failed QM moves nothing, so the caller has to
+; refuse. CX, SI and DI are banked because on a redirected volume QM reaches
+; the driver's FSV_CHDIR and those three are the driver's (SPEC.md 62.9.1).
 ; -----------------------------------------------------------------------------
 wd_goto:
     push ax
     push bx
+    push cx
     push dx
+    push si
+    push di
     cmp byte [wd_dirok], 0
-    je .out                     ; never saved anywhere in particular
+    je .out                     ; never saved anywhere in particular (CF=0)
     call OSAPI_FILE_HERE
     cmp dx, [wd_dir]
     jne .move
     cmp bl, [wd_drv]
-    je .out
+    je .out                     ; already there (equal: CF=0)
 .move:
     mov dx, [wd_dir]
     mov bl, [wd_drv]
-    call OSAPI_FILE_GOTO        ; CF = it could not be listed; the file call
-.out:                           ; that follows will say so in its own words
-    jmp wd_rdba
+    call OSAPI_FILE_GOTO_QM     ; quiet, and the instance follows
+    jnc .out
+    mov bx, sp                  ; CF=1: the FERR_* replaces the banked AX -
+    mov [ss:bx+10], ax          ; a mov touches no flag, so CF rides out
+.out:
+    jmp wd_rdisdcba
 
 ; -----------------------------------------------------------------------------
 ; wd_arg - BANK the document we were launched to open (SPEC.md 54.5/54.10)
@@ -21102,21 +21123,6 @@ wd_s_nul:     db 0              ; an EMPTY string retires whatever is up
                                 ; (SPEC.md 59.3) - one call, and this app
                                 ; never has to know whether one was
 
-; FERR_* (SPEC.md 18.4) -> string, indexed by the code itself
-wd_errtab:
-    dw wd_e_ok, wd_e_nodisk, wd_e_io, wd_e_name, wd_e_noent, wd_e_exist
-    dw wd_e_full, wd_e_dirfull, wd_e_prot, wd_e_wprot, wd_e_big
-wd_e_ok:      db 'Done', 0
-wd_e_nodisk:  db 'No disk', 0
-wd_e_io:      db 'Disk error', 0
-wd_e_name:    db 'Bad name', 0
-wd_e_noent:   db 'Not found', 0
-wd_e_exist:   db 'Name exists', 0
-wd_e_full:    db 'Disk full', 0
-wd_e_dirfull: db 'Dir full', 0
-wd_e_prot:    db 'Protected', 0
-wd_e_wprot:   db 'Write protected', 0
-wd_e_big:     db 'Too big', 0
 wd_e_nomem:   db 'No memory', 0      ; the staging claim was refused (50.3)
 
 ; --- search and the clipboard (SPEC.md 68.7/55) ------------------------------
@@ -22142,6 +22148,12 @@ wd_sury2  equ wd_mnrec + 46     ; word } way back cannot disagree by a pixel
 %define OS88TY_SLANT            ; SPEC.md 6.5.3: a synthesised italic for the
                                 ; chosen face, so Format Italic means something
                                 ; in one. Without it a slanted run is upright
+%define OS88TY_NOWIDTH          ; SPEC.md 6.5.5: the routines Word never
+%define OS88TY_NOWIDTHN         ; calls - it measures with ty_advof and wraps
+%define OS88TY_NOFIT            ; with its own walk
+%define OS88TY_NOPUT
+%define OS88TY_NOFAMN
+%define OS88TY_NOGETASC
 %include "os88type.inc"         ; SPEC.md 6.5: proportional type, and the band
                                 ; it is composed into. AFTER os88ui.inc for no
                                 ; reason but tidiness - it depends on nothing

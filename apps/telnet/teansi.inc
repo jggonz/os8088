@@ -554,24 +554,19 @@ te_csibyte:                         ; AL = the byte, BL = the state
     push ax
     push bx
     push cx
-    push dx
     mov bl, [te_pn]
     dec bl
     xor bh, bh
     mov cl, al
-    sub cl, '0'
-    mov al, [te_prm + bx]
-    xor ah, ah
-    mov dx, 10
-    mul dx                          ; **MUL WRITES DX** (SPEC.md 1) - and DX is
-    xor ch, ch                      ; pushed, so the ten survives nothing
-    add ax, cx
-    cmp ax, 255
-    jbe .dset
-    mov ax, 255                     ; ...SATURATING, so `ESC[99999;1H` is
+    sub cl, '0'                     ; CL = the digit
+    mov al, 10
+    mul byte [te_prm + bx]          ; AX = the parameter x 10: the BYTE form,
+    add al, cl                      ; which writes no DX and is the cheaper
+    adc ah, 0                       ; multiply on an 8088
+    jz .dset
+    mov al, 255                     ; ...SATURATING, so `ESC[99999;1H` is
 .dset:                              ; `ESC[255;1H` and then clamps to row 25
     mov [te_prm + bx], al
-    pop dx
     pop cx
     pop bx
     pop ax
@@ -675,9 +670,9 @@ te_csidisp:
     jne .out
 .decset:
     mov dl, 0
-    cmp al, 'h'
-    jne .dscan
-    mov dl, 1
+    cmp al, 'l'
+    je .dscan
+    inc dx                          ; `h` shows it: DL = 1
 .dscan:
     mov cl, [te_pn]
     or cl, cl
@@ -859,13 +854,12 @@ te_f_cup:                           ; 1-BASED, both axes, and clamped
 ; an erase's - which is ANSI.SYS's convention and not the VT's, and is what
 ; makes a board's coloured background work: it sets a blue background, clears
 ; the screen, and gets a blue screen (SPEC.md 70.9.3).
-te_f_ed:
-    or cx, cx
-    jz .from
-    cmp cx, 1
-    je .to
-    cmp cx, 2
-    je .all
+te_f_ed:                            ; CX = Pn, counted DOWN to its arm: every
+    jcxz .from                      ; arm below loads CX afresh
+    dec cx
+    jz .to
+    dec cx
+    jz .all
     ret                             ; any other Pn does nothing
 .from:
     call te_here
@@ -885,12 +879,11 @@ te_f_ed:
 
 te_f_el:
     call te_rowbase                 ; AX = the row's first cell
-    or cx, cx
-    jz .from
-    cmp cx, 1
-    je .to
-    cmp cx, 2
-    je .whole
+    jcxz .from                      ; ...and Pn counted down, te_f_ed's way
+    dec cx
+    jz .to
+    dec cx
+    jz .whole
     ret
 .from:
     add ax, [con_cx]
@@ -977,12 +970,12 @@ te_f_dsr:
     stosb
     mov ax, [con_cy]
     inc ax
-    call te_dec
+    call dec_u16                    ; DS = ES here; its NUL is the next stosb's
     mov al, ';'
     stosb
     mov ax, [con_cx]
     inc ax
-    call te_dec
+    call dec_u16                    ; DS = ES here; its NUL is the next stosb's
     mov al, 'R'
     stosb
     pop es
@@ -1007,48 +1000,7 @@ te_f_da:                            ; **ONLY for Pn = 0 and only with NO
 te_s_dsrok: db 0x1B, '[', '0', 'n'
 te_s_da:    db 0x1B, '[', '?', '1', ';', '0', 'c'
 
-; --- te_dec - AX (0..255) as decimal at ES:DI, no leading zeros --------------
-; Three divisions written out rather than a digit stack. The stack form -
-; `push dx` per digit and `loop` them back off - is what every hand-rolled
-; itoa does and `tools/stkbalance.py` cannot pair it: the count lives in a
-; register, so a static walk sees a routine that returns at a depth it was not
-; entered at (SPEC.md 8.7.3's own exemption exists for exactly two routines in
-; the tree, and a number under 256 does not need to be the third).
-te_dec:
-    push ax
-    push bx
-    push cx
-    push dx
-    xor cx, cx                      ; CL = 1 once a digit has been written, so
-    xor dx, dx                      ; a leading zero is suppressed and a bare
-    mov bx, 100                     ; zero still prints
-    div bx                          ; AL = hundreds, DX = the rest
-    or al, al
-    jz .tens
-    add al, '0'
-    stosb
-    mov cl, 1
-.tens:
-    mov ax, dx
-    xor dx, dx
-    mov bx, 10
-    div bx                          ; AL = tens, DL = units
-    or al, al
-    jnz .temit
-    or cl, cl
-    jz .units
-.temit:
-    add al, '0'
-    stosb
-.units:
-    mov al, dl
-    add al, '0'
-    stosb
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+; (the replies' numbers are apps/os88dec.inc's dec_u16, SPEC.md 20.5.2)
 
 ; =============================================================================
 ; SGR IS APPLIED TO LOGICAL STATE, AND THE ATTRIBUTE IS DERIVED (SPEC.md 70.9.4)
@@ -1083,11 +1035,10 @@ te_f_sgr:
     xor bx, bx
 .each:
     mov al, [te_prm + bx]
-    push bx
-    push cx
     call te_sgr1                    ; an unknown code is ignored and the REST
-    pop cx                          ; are still applied: `0;1;44;31` must not
-    pop bx                          ; lose the 31
+                                    ; are still applied: `0;1;44;31` must not
+                                    ; lose the 31. It keeps BX and never
+                                    ; touches CX, so neither is banked here
     inc bx
     dec cl
     jnz .each
@@ -1097,59 +1048,91 @@ te_f_sgr:
     pop bx
     ret
 
-te_sgr1:                            ; AL = one SGR code
-    push bx
-    or al, al
-    jz .reset
-    cmp al, 1
-    je .bold
-    cmp al, 4
-    je .out                         ; underline: consumed, and it reaches the
-    cmp al, 5                       ; glass NOWHERE. A cell is two bytes and
-    je .blink                       ; has nowhere to put a third bit; a third
-    cmp al, 7                       ; byte per cell is 2,000 bytes of package
-    je .rev                         ; bss for something no board sends
+;
+; **RANGE FIRST, AND THE COLOURS FIRST OF ALL.** A board's art is colour codes
+; - 30..37 and 40..47 - and a compare chain in code order reached them on its
+; THIRTEENTH and SEVENTEENTH test. The colour ranges are tested by subtracting
+; down the number line, so 31 is two tests and 44 four; the rare codes below
+; 30 pay one subtraction more. AX is spent - te_f_sgr, the one caller,
+; reloads AL a parameter at a time and reads AH nowhere.
+te_sgr1:                            ; AL = one SGR code; keeps every register
+    push bx                         ; but AX
+    sub al, 30
+    jb .low                         ; 0..29
     cmp al, 8
-    je .con
-    cmp al, 22
-    je .nobold
-    cmp al, 24
-    je .out                         ; underline off: the same nothing
-    cmp al, 25
-    je .noblink
-    cmp al, 27
-    je .norev
-    cmp al, 28
-    je .nocon
-    cmp al, 30
-    jb .out
-    cmp al, 37
-    jbe .fg
-    cmp al, 39
-    je .fgdef
-    cmp al, 40
-    jb .out
-    cmp al, 47
-    jbe .bg
-    cmp al, 49
-    je .bgdef
-    cmp al, 90
-    jb .out
-    cmp al, 97
-    jbe .fgbright
-    cmp al, 100
-    jb .out
-    cmp al, 107
-    jbe .bgbright
+    jb .fg                          ; 30..37
+    sub al, 10                      ; AL = code - 40
+    jb .c39                         ; 38, 39
+    cmp al, 8
+    jb .bg                          ; 40..47
+    cmp al, 9
+    je .bgdef                       ; 49 (48 and 50..89 miss every test below)
+    sub al, 50                      ; AL = code - 90
+    cmp al, 8
+    jb .fgbright                    ; 90..97
+    sub al, 10                      ; AL = code - 100
+    cmp al, 8
+    jb .bgbright                    ; 100..107
 .out:
     pop bx
     ret
+.fg:                                ; 30-37: **the intensity SURVIVES a colour
+    mov bl, [te_lfg]                ; change**
+    and bl, 0x08
+    or al, bl
+    jmp short .setfg
+.c39:
+    inc al
+    jnz .out                        ; 38: nothing this terminal draws
+    mov al, 0x07                    ; 39: the WHOLE nibble, so intensity goes
+.setfg:
+    mov [te_lfg], al
+    jmp short .out
+.fgbright:
+    or al, 0x08
+    jmp short .setfg
+.bgbright:                          ; 100-107 SET THE BLINK BIT and that is not
+    mov byte [te_blk], 1            ; a bug: the attribute has one bit there,
+                                    ; which blinks under hardware blink and is a
+                                    ; bright background under iCE. Its
+                                    ; consequence is that `CSI 25m` also turns a
+                                    ; bright background off
+.bg:
+    mov [te_lbg], al
+    jmp short .out
+.bgdef:
+    xor al, al                      ; 49
+    jmp short .bg
+
+.low:                               ; AL = the code - 30, wrapped
+    add al, 30
+    jz .reset                       ; 0
+    mov bl, 1                       ; BL = what an ON code stores...
+    cmp al, 20
+    jb .on
+    sub al, 20                      ; ...and its OFF code is twenty above it
+    mov bl, 0
+    cmp al, 2
+    je .nobold                      ; 22 is bold's off (21 is NOT, and misses)
+    jmp short .flag
+.on:
+    cmp al, 1
+    je .bold
+.flag:                              ; 5, 7, 8 and their 25, 27, 28: blink,
+    sub al, 5                       ; reverse and conceal, at te_blk + 0, 2, 3
+    cmp al, 3                       ; (telnet.asm's bss asserts the order). 4
+    ja .out                         ; and 24, underline, reach the glass
+    cmp al, 1                       ; NOWHERE: a cell is two bytes and has
+    je .out                         ; nowhere for a third bit, and a third
+    mov ah, bl                      ; byte per cell is 2,000 bytes of bss for
+    mov bl, al                      ; something no board sends. 6 and 26 are
+    xor bh, bh                      ; not ours either, and +1 is te_lbg
+    mov [te_blk + bx], ah
+    jmp short .out
 .reset:
-    mov byte [te_lfg], 0x07
-    mov byte [te_lbg], 0x00
-    mov byte [te_blk], 0
-    mov byte [te_rev], 0
-    mov byte [te_con], 0
+    mov word [te_lfg], 0x0007       ; fg 7 and no blink...
+    mov word [te_lbg], 0            ; ...bg 0 and no reverse...
+    mov byte [te_con], 0            ; ...and nothing concealed
     jmp short .out
 .bold:
     or byte [te_lfg], 0x08
@@ -1157,52 +1140,6 @@ te_sgr1:                            ; AL = one SGR code
 .nobold:
     and byte [te_lfg], 0xF7
     jmp short .out
-.blink:
-    mov byte [te_blk], 1
-    jmp short .out
-.noblink:
-    mov byte [te_blk], 0
-    jmp short .out
-.rev:
-    mov byte [te_rev], 1
-    jmp short .out
-.norev:
-    mov byte [te_rev], 0
-    jmp short .out
-.con:
-    mov byte [te_con], 1
-    jmp short .out
-.nocon:
-    mov byte [te_con], 0
-    jmp short .out
-.fg:                                ; 30-37: **the intensity SURVIVES a colour
-    sub al, 30                      ; change**
-    mov bl, [te_lfg]
-    and bl, 0x08
-    or al, bl
-    mov [te_lfg], al
-    jmp short .out
-.fgdef:                             ; 39: the WHOLE nibble, so intensity goes
-    mov byte [te_lfg], 0x07
-    jmp short .out
-.bg:
-    sub al, 40
-    mov [te_lbg], al
-    jmp short .out
-.bgdef:
-    mov byte [te_lbg], 0
-    jmp short .out
-.fgbright:
-    sub al, 90
-    or al, 0x08
-    mov [te_lfg], al
-    jmp .out
-.bgbright:                          ; 100-107 SET THE BLINK BIT and that is not
-    sub al, 100                     ; a bug: the attribute has one bit there,
-    mov [te_lbg], al                ; which blinks under hardware blink and is a
-    mov byte [te_blk], 1            ; bright background under iCE. Its
-    jmp .out                        ; consequence is that `CSI 25m` also turns a
-                                    ; bright background off
 
 te_derive:
     push ax

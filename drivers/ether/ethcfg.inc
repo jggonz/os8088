@@ -733,6 +733,24 @@ arp_flush:
 ; vocabulary, and for its reason: a file operation resolves in the CURRENT
 ; directory, so going somewhere to read a settings file and not coming back
 ; silently moves whatever the user was working on.
+;
+; **BOTH MOVES ARE OSAPI_FILE_GOTO_Q** (SPEC.md 19.2.2), and so is the
+; kernel's own drv_vol_back: this stands somewhere to read or write 21 bytes
+; BY NAME, never to show a folder. OSAPI_FILE_GOTO was a full remount each
+; way - the boot sector, and the directory cache dropped on the way past
+; (docs/plans/NAV-COST-PLAN.md 1.1) - on EVERY load of this driver at boot
+; and on every dirty panel close. A driver has no instance behind the call,
+; so GOTO_Q and GOTO_QM are the same move here. A refused GOTO_Q has moved
+; NOTHING (where the old one left us at a root with the write gate shut), so
+; ec_vol_bank's CF is the whole fence: every caller tests it and touches no
+; file on CF=1, and a same-named ETHER.CFG in the folder we did not leave is
+; never read or written.
+;
+; CX, SI and DI: on a REDIRECTED volume the slot reaches that driver's
+; FSV_CHDIR and those three are its to spend (os88api.inc, at GOTO_Q).
+; ec_fargs loads all three AFTER ec_vol_bank, and no caller of ec_vol_back
+; holds one across it - eth_cfg_load reloads each before use and both
+; callers leave by ep_bp - so neither banks them.
 ; -----------------------------------------------------------------------------
 ec_vol_bank:
     push ax
@@ -741,7 +759,7 @@ ec_vol_bank:
     mov [ec_bclus], dx
     call OSAPI_VOL_SYS          ; BL = the volume we BOOTED from
     xor dx, dx                  ; ...and its ROOT
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_Q      ; QUIET: CF=1 = nothing moved
     pop ax
     ret
 
@@ -765,7 +783,7 @@ ec_vol_back:
     pushf                       ; the CALLER's result is in CF and a failed
     mov bl, [ec_bdrv]           ; restore must not overwrite it - drv_vol_back's
     mov dx, [ec_bclus]          ; own rule (SPEC.md 51.5.2)
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_Q      ; QUIET, as drv_vol_back's own restore is
     popf
     pop dx
     pop bx
@@ -781,9 +799,9 @@ eth_cfg_load:
     call os88_ent               ; push ax..di, and bp: out by ep_bp
     push es
     call ec_fargs               ; the volume, and the read's arguments
-    jc  .back                   ; the GOTO failed - and dsk_chdir's failure path
-                                ; can move the globals it would be recovered
-                                ; from (SPEC.md 38.10), so come back anyway
+    jc  .back                   ; not there: GOTO_Q moved nothing, so coming
+                                ; back finds us already home - kept so that
+                                ; there is ONE way out whatever happened
                                 ; a version 1 file is SHORTER and the read
                                 ; answers with what it found, which is what
     call OSAPI_FILE_READ        ; tells the two apart below
@@ -838,6 +856,25 @@ eth_cfg_load:
 ; an address to test with - already happened when Ok was pressed. A machine
 ; with the wrong disk in A: loses the memory of the setting and not the
 ; setting.
+;
+; **A SECOND SAVE IN ONE SESSION IS ONE SECTOR** (SPEC.md 18.4.7, the rule
+; apps/os88data.inc states for SYSTEM\APPDATA). OSAPI_FILE_WRITE replaces -
+; frees the chain, allocates one, both FATs and the entry - and the file is
+; always EC_F_SIZE bytes, so once THIS DRIVER has written it in full this
+; session, OSAPI_FILE_WRITE_AT at offset 0 is the INSIDE arm: the data sector
+; and nothing else. [ec_wrote] is that fact, and it is set only by a full
+; write that LANDED, because WRITE_AT is raw and leaves the entry's
+; compression hint alone (20.14.4) - the full write's commit is what made the
+; hint describe our plain bytes. The place is always the same one, the boot
+; volume's root. A disk swapped there since is answered by WRITE_AT itself:
+; no ETHER.CFG is FERR_NOENT, a longer one is refused for a count that is not
+; a sector multiple, and a version 1 file (shorter) takes the 21 bytes as a
+; plain overwrite - the bytes a full write would have left, and only a file
+; something else had stored COMPRESSED could make the hint wrong, which
+; nothing on this machine does to a 21-byte settings file. ANY refusal falls
+; back to the full write, and kern_small's stub (18.4.7.4) is one. So it only
+; ever fires on the second and later dirty closes of a session - the first
+; is a full write - and that is a real case: every Ok marks [ec_dirty].
 ; -----------------------------------------------------------------------------
 eth_cfg_save:
     call os88_ent               ; push ax..di, and bp: out by ep_bp
@@ -854,9 +891,17 @@ eth_cfg_save:
     mov cx, 16
     call mem_copy
     call ec_buf_put
-    call ec_fargs
+    call ec_fargs               ; ...SI, ES:BX, CX = EC_F_SIZE, DX = 0
     jc  .back
-    call OSAPI_FILE_WRITE
+    cmp byte [ec_wrote], 0      ; ONE SECTOR, when this session's own full
+    je  .full                   ; write is what is there (see the header)
+    xor ax, ax                  ; offset DX:AX = 0, DX being ec_fargs' 0
+    call OSAPI_FILE_WRITE_AT    ; INSIDE (18.4.7): no FAT, no entry
+    jnc .back
+.full:                          ; (BX, CX, SI, DX and ES survive a refused
+    call OSAPI_FILE_WRITE       ; WRITE_AT: AX is its only output) DX:CX
+    jc  .back                   ; = the count
+    mov byte [ec_wrote], 1      ; IT LANDED, plain: the next one may be in place
 .back:
     call ec_vol_back
 .out:
@@ -965,6 +1010,8 @@ EC_TLEN     equ 16              ; 15 characters and the NUL
 ec_win:     dw 0
 ec_mode:    db ECM_DHCP         ; what the WINDOW is showing...
 ec_dirty:   db 0
+ec_wrote:   db 0                ; 1 = ETHER.CFG was written IN FULL by us this
+                                ; session, so a rewrite may be in place
 ec_msg:     dw ec_s_ready
 ec_cx:      dw 0
 ec_cy:      dw 0

@@ -96,9 +96,10 @@ FEAT = ("frame", "P1", "P2", "P3", "P4", "P5", "P6", "slice", "slice B",
         "run", "run B", "seg", "abs")
 
 
-def features(rec, planar=False):
+def features(rec, planar=False, g=None):
     """A record's constructs, in FEAT's order (tools/os88vid.py's
-    cycles_of walks the same lists)"""
+    cycles_of walks the same lists); `g` the file's Geom, for SUB2's list
+    maps (98.1.3.2.4)"""
     f = [1.0] + [0.0] * (len(FEAT) - 1)
     mode = [False]
 
@@ -122,7 +123,9 @@ def features(rec, planar=False):
     else:
         si = vid.REC_HDR
         while rec[si]:
-            si = vid.walk_lists(bytearray(65536), rec, si + 1, write, seg)
+            si = (vid.walk_sub(bytearray(65536), rec, si + 1, g, write, seg)
+                  if g is not None else
+                  vid.walk_lists(bytearray(65536), rec, si + 1, write, seg))
     return f
 
 
@@ -134,9 +137,10 @@ def calibrate(r, cyc):
     recs = [rec for rec, at, i in r.records()]
     fr = sorted(i for i in cyc if i < len(recs))
     n = len(fr)
-    X = np.array([features(recs[i], planar) for i in fr])
+    X = np.array([features(recs[i], planar, r.g) for i in fr])
     y = np.array([cyc[i] for i in fr], float)
-    model = np.array([vid.cycles_of(recs[i], planar, r.g.layout)
+    model = np.array([vid.cycles_of(recs[i], planar, r.g.layout,
+                                    sub2=r.g.sub2)
                       for i in fr])
     period = HZ * r.spf / r.rate
     print("calibrated %d frames: measured mean %.0f cycles (%.1f%% of a "

@@ -120,6 +120,30 @@
  * index, which is why Machine can afford exactly one. */
 static const char a2_sep[] = D "-----------------";
 
+/* THE ROWS a2_menu_state REWRITES HAVE ONE SPELLING EACH (apps size pass 1).
+ * A row is `D`, then - on the rows that own one - the two-glyph mark column,
+ * then the label, and every state of it is a POINTER INTO that one string:
+ * live is `s + 1`, greyed is `s`, and the mark is the glyph at s[1], written
+ * in place by a2_mi. It used to be up to four literals a row - `D ON "x"`,
+ * `D OFF "x"`, `ON "x"` and `OFF "x"` - plus a fifth in the table below for
+ * the launch spelling, because SmallerC merges no literal with another. The
+ * label is still spelled exactly once per row, which is the rule this file's
+ * header gives for every string in it. */
+static char a2_s_load[]   = D "Load Program...";
+static char a2_s_save[]   = D "Save Program...";
+static char a2_s_copy[]   = D "Copy";
+static char a2_s_paste[]  = D "Paste";
+static char a2_s_oarst[]  = D "Open-Apple-Control-Reset";
+static char a2_s_rst[]    = D "Control-Reset  Ctrl+F2";
+static char a2_s_power[]  = D "Power On";
+static char a2_s_tint[]   = D OFF "Color NTSC";
+static char a2_s_flash[]  = D ON "Flashing text";
+static char a2_s_mute[]   = D OFF "Mute";
+static char a2_s_normal[] = D ON "Normal: 1MHz";
+static char a2_s_warp[]   = D OFF "Warp";
+static char a2_s_stop[]   = D OFF "Stop";
+static char a2_s_run[]    = D OFF "Running";
+
 /* --- File ---------------------------------------------------------------- */
 /* MII's m_file_menu is `No Drives Installed…` (disabled), `Load & Run
  * Binary…` (disabled, handler commented out) and `Quit`. The first is the
@@ -129,14 +153,14 @@ static const char a2_sep[] = D "-----------------";
  * APPLE2-SPEC section 12's reason: there is no Disk II in this PR, and a
  * listing has to get in somehow. */
 static const char *a2_file_items[] = {
-    D "Load Program...",                    /* OURS (section 12). Greyed off
+    a2_s_load,                              /* OURS (section 12). Greyed off
                                              * a2_have_cmd and not a2_have_cpu
                                              * (section 10.3), because what it
                                              * waited for was the BODY - and
                                              * wave 4 wrote it. The `D` here is
                                              * only the launch spelling;
                                              * a2_menu_state rewrites it */
-    D "Save Program...",                    /* OURS (section 12). a2_have_cmd,
+    a2_s_save,                              /* OURS (section 12). a2_have_cmd,
                                              * for the row above's reason */
     a2_sep,
     "Quit"                                  /* mii_mui_menus.h m_file_menu.
@@ -167,22 +191,22 @@ static const char *a2_file_items[] = {
  * the text page out - and it is here because a machine you can paste INTO and
  * not out of is half a clipboard. */
 static const char *a2_edit_items[] = {
-    D "Copy",                               /* OURS. Greyed off a2_have_cmd
+    a2_s_copy,                              /* OURS. Greyed off a2_have_cmd
                                              * (section 10.3) - the reader that
                                              * walks the text page is wave 4's
                                              * and is written. The `D` is the
                                              * launch spelling only */
-    D "Paste"                               /* interface.cpp:365 */
+    a2_s_paste                              /* interface.cpp:365 */
 };
 
 /* --- Machine ------------------------------------------------------------- */
 static const char *a2_mach_items[] = {
-    D "Open-Apple-Control-Reset",           /* mii_mui_menus.h m_machine_menu:
+    a2_s_oarst,                             /* mii_mui_menus.h m_machine_menu:
                                              * MUI_GLYPH_OAPPLE "-Control-
                                              * Reset", with the glyph spelled
                                              * out. 24 glyphs, exactly
                                              * MENU_MAXCH */
-    D "Control-Reset  Ctrl+F2",             /* m_machine_menu, AND THE ONE ROW
+    a2_s_rst,                               /* m_machine_menu, AND THE ONE ROW
                                              * ON THE BAR THAT CAN CARRY ITS
                                              * CHORD. MII supplies `.kcombo`
                                              * on this row and on three others
@@ -204,7 +228,7 @@ static const char *a2_mach_items[] = {
                                              * arithmetic. The chord itself is
                                              * section 6.3's, LIVE since this
                                              * wave (a2kbd.c) */
-    D "Power On",                           /* AppleWin help/keyboard.html:15,
+    a2_s_power,                             /* AppleWin help/keyboard.html:15,
                                              * `F2 (Power On)` - its own
                                              * user-visible name for the cold
                                              * start, and MII has no such row
@@ -295,7 +319,7 @@ static const char *a2_mach_items[] = {
                                              * own words for the defect, and
                                              * visible in wave 4's own
                                              * evidence. 19 of MENU_MAXCH 24 */
-    D OFF "Color NTSC",                     /* m_video_menu, FOLDING `Color
+    a2_s_tint,                              /* m_video_menu, FOLDING `Color
                                              * NTSC (Alt)`, `Color Mega2`,
                                              * `Green` and `Amber` by rule 3.
                                              *
@@ -340,7 +364,7 @@ static const char *a2_mach_items[] = {
                                              * column stays, because rule 5's
                                              * other half is that every row of
                                              * a marked group owns it */
-    ON "Flashing text",                     /* OURS: the flash phase's own
+    a2_s_flash,                             /* OURS: the flash phase's own
                                              * control (section 7.6). LIVE on
                                              * every tier but one.
                                              * THE FACT, ON THE CPU_8086 TIER
@@ -366,7 +390,7 @@ static const char *a2_mach_items[] = {
                                              * a2_fl_ok alone would grey the
                                              * row for a user who simply
                                              * switched flashing off */
-    D OFF "Mute",                           /* m_audio_menu. THE FACT: There
+    a2_s_mute,                              /* m_audio_menu. THE FACT: There
                                              * is no speaker in this build.
                                              * (section 10.3) - and it is
                                              * a2_have_snd that greys it, so
@@ -420,7 +444,7 @@ static const char *a2_mach_items[] = {
  * 383 % - the contradiction visible in one screendump. a2_menu_state marks it
  * from a2_pct now, on MII's own band. */
 static const char *a2_cpu_items[] = {
-    D ON "Normal: 1MHz",                    /* m_cpu_menu. Its MARK is the
+    a2_s_normal,                            /* m_cpu_menu. Its MARK is the
                                              * measurement (MII's rule above)
                                              * and its GREYING was a2_have_cmd,
                                              * because the row's body - the
@@ -447,7 +471,7 @@ static const char *a2_cpu_items[] = {
                                              * may the removal of one - the
                                              * same test this wave applied to
                                              * `Configure Slots...` */
-    D OFF "Warp",                           /* OURS: the speed control the row
+    a2_s_warp,                              /* OURS: the speed control the row
                                              * above points at, and wave 4's.
                                              * Greyed off a2_have_cmd, and
                                              * rewritten by a2_menu_state - a
@@ -455,13 +479,13 @@ static const char *a2_cpu_items[] = {
                                              * literal and never rewritten is a
                                              * row no later wave can revive */
     a2_sep,
-    D OFF "Stop",                           /* m_cpu_menu, retitled `Stopped`.
+    a2_s_stop,                              /* m_cpu_menu, retitled `Stopped`.
                                              * THE COLUMN IS IN EVERY SPELLING
                                              * (rule 5): MII keeps `mark` a
                                              * field of its own and only fills
                                              * or empties the glyph, so the
                                              * title never moves */
-    D OFF "Running",                        /* m_cpu_menu, retitled `Continue` */
+    a2_s_run,                               /* m_cpu_menu, retitled `Continue` */
     D OFF "Step",                           /* m_cpu_menu. THE FACT: There is
                                              * no debugger in this port.
                                              * THE TWO-GLYPH COLUMN IS RULE 5
@@ -531,14 +555,25 @@ static int a2_running(void)
     return (a2_state == A2_ST_RUN && !a2_pause) ? 1 : 0;
 }
 
+/* a2_mi - one row's spelling: `s + 1` live and `s` greyed, and - on a row
+ * that owns the two-glyph column, which is every row given a mark of 0 or 1 -
+ * the mark glyph written into s[1] first. A mark of -1 is a row with no
+ * column, whose s[1] is the label's first letter and is left alone. */
+static const char *a2_mi(char *s, int live, int mark)
+{
+    if (mark >= 0)
+        s[1] = mark ? '*' : ' ';
+    return live ? s + 1 : s;
+}
+
 static void a2_menu_state(void)
 {
-    a2_file_items[A2_I_LOAD] = a2_have_cmd ? "Load Program..."
-                                           : D "Load Program...";
-    a2_file_items[A2_I_SAVE] = a2_have_cmd ? "Save Program..."
-                                           : D "Save Program...";
-    a2_edit_items[A2_I_COPY] = a2_have_cmd ? "Copy"  : D "Copy";
-    a2_edit_items[A2_I_PASTE] = a2_have_cmd ? "Paste" : D "Paste";
+    int live, m;
+
+    a2_file_items[A2_I_LOAD] = a2_mi(a2_s_load, a2_have_cmd, -1);
+    a2_file_items[A2_I_SAVE] = a2_mi(a2_s_save, a2_have_cmd, -1);
+    a2_edit_items[A2_I_COPY] = a2_mi(a2_s_copy, a2_have_cmd, -1);
+    a2_edit_items[A2_I_PASTE] = a2_mi(a2_s_paste, a2_have_cmd, -1);
     /* THE TWO RESET CHORDS ARE THE ROWS WAVE 2 REVIVES, and they are the only
      * ones: their bodies are section 4.5's reset line, which is this wave's
      * own subject, and neither touches RAM. Power On is the third of the trio
@@ -547,11 +582,9 @@ static void a2_menu_state(void)
      * lost!)`, AppleWin WinFrame.cpp:2002-2012 - which arrives with the rest
      * of the commands in wave 4. A data-loss row shipped without the
      * confirmation the contract gives it is not the item the SPEC describes. */
-    a2_mach_items[A2_I_OARESET] = a2_have_cpu ? "Open-Apple-Control-Reset"
-                                              : D "Open-Apple-Control-Reset";
-    a2_mach_items[A2_I_RESET] = a2_have_cpu ? "Control-Reset  Ctrl+F2"
-                                            : D "Control-Reset  Ctrl+F2";
-    a2_mach_items[A2_I_POWER] = a2_have_cmd ? "Power On" : D "Power On";
+    a2_mach_items[A2_I_OARESET] = a2_mi(a2_s_oarst, a2_have_cpu, -1);
+    a2_mach_items[A2_I_RESET] = a2_mi(a2_s_rst, a2_have_cpu, -1);
+    a2_mach_items[A2_I_POWER] = a2_mi(a2_s_power, a2_have_cmd, -1);
     /* ...AND ON THE CPU_8086 TIER THE ROW IS GREYED WITH ITS MEASURED COST
      * (section 10.3). It is `a2_tier_slow` that greys it and `a2_fl_ok` that
      * marks it, which is two different questions about one row: `you cannot
@@ -559,9 +592,10 @@ static void a2_menu_state(void)
      * the feature is unavailable and leave a tick beside it, so the slow tier
      * clears a2_fl_ok in a2_tier_init and the row is greyed and unmarked
      * together. */
-    a2_mach_items[A2_I_FLASH] = a2_tier_slow
-        ? D OFF "Flashing text"
-        : (a2_fl_ok ? ON "Flashing text" : OFF "Flashing text");
+    if (a2_tier_slow)
+        a2_mach_items[A2_I_FLASH] = a2_mi(a2_s_flash, 0, 0);
+    else
+        a2_mach_items[A2_I_FLASH] = a2_mi(a2_s_flash, 1, a2_fl_ok);
     /* THE THREE THAT USED TO BE GREYED FOR EVER. `D` baked into a literal
      * that a2_menu_state never rewrites is a row no later wave can revive,
      * and a greyed row with no fact is what SPEC.md 47 forbids; both facts
@@ -587,18 +621,19 @@ static void a2_menu_state(void)
      * figure is why; on the 4.77 MHz XT the port targets it will be unmarked
      * the other way. Ticking it unconditionally asserted a speed the same
      * screen refuted. a2_speed_fold calls this routine when a2_pct moves. */
-    a2_cpu_items[A2_I_NORMAL] = (a2_pct >= 90 && a2_pct <= 110)
-        ? (a2_have_cmd ? ON "Normal: 1MHz" : D ON "Normal: 1MHz")
-        : (a2_have_cmd ? OFF "Normal: 1MHz" : D OFF "Normal: 1MHz");
+    m = 0;
+    if (a2_pct >= 90)
+        if (a2_pct <= 110)
+            m = 1;
+    a2_cpu_items[A2_I_NORMAL] = a2_mi(a2_s_normal, a2_have_cmd, m);
     /* WARP IS A CHECK ITEM, on rule 5's two spellings and NOT on MENU_DIS:
      * greying the row that is ON would report the feature as unavailable and
      * make it impossible to turn off. It is one of the three radio partners
      * that own the two-glyph column (`Normal: 1MHz`, `Fast: 3.5MHz`, `Warp`),
      * so both spellings carry it and the label does not jump two cells when
      * the state changes. */
-    a2_cpu_items[A2_I_WARP] = a2_have_cmd
-        ? (a2_warp ? ON "Warp" : OFF "Warp")
-        : D OFF "Warp";
+    a2_cpu_items[A2_I_WARP] = a2_mi(a2_s_warp, a2_have_cmd,
+                                    a2_have_cmd ? a2_warp : 0);
     /* MUTE IS A CHECK ITEM ON A CAPABILITY, which is two questions about one
      * row and not one: `a2_have_snd` says the machine HAS a square voice - the
      * fact that greyed the row for four waves - and `a2_mute` says the user
@@ -612,11 +647,9 @@ static void a2_menu_state(void)
      * desktop (SPEC.md 39.18.2) it is a question about a DISPLAY and a window
      * moves between them; one far call at 46.7 us, on a routine that runs
      * about once a second. */
-    a2_mach_items[A2_I_TINT] = a2_fsx_avail(a2_win)
-        ? OFF "Color NTSC" : D OFF "Color NTSC";
-    a2_mach_items[A2_I_MUTE] = a2_have_snd
-        ? (a2_mute ? ON "Mute" : OFF "Mute")
-        : D OFF "Mute";
+    a2_mach_items[A2_I_TINT] = a2_mi(a2_s_tint, a2_fsx_avail(a2_win), -1);
+    a2_mach_items[A2_I_MUTE] = a2_mi(a2_s_mute, a2_have_snd,
+                                     a2_have_snd ? a2_mute : 0);
     /* ...AND SO DO Stop AND Running, WHICH IS RULE 5 AGAIN. The first version
      * gave the marked spelling the two-glyph prefix and the unmarked one
      * nothing, so each label would have jumped two cells left and right as the
@@ -634,12 +667,21 @@ static void a2_menu_state(void)
      * greyed row and is why these two need no sentence of their own. The
      * launch spelling comes back with the `D`, because `Stopped` / `Continue`
      * would describe a machine that could be continued. */
-    a2_cpu_items[A2_I_STOP] = (a2_have_cmd && a2_state != A2_ST_JAM)
-        ? (a2_running() ? OFF "Stop" : ON "Stopped")
-        : D OFF "Stop";
-    a2_cpu_items[A2_I_RUN] = (a2_have_cmd && a2_state != A2_ST_JAM)
-        ? (a2_running() ? ON "Running" : OFF "Continue")
-        : D OFF "Running";
+    /* `Stopped` and `Continue` are only ever LIVE spellings, so each is a
+     * plain literal and not a row of its own; `Stop`'s mark is never set. */
+    live = a2_have_cmd;
+    if (a2_state == A2_ST_JAM)
+        live = 0;
+    if (!live) {
+        a2_cpu_items[A2_I_STOP] = a2_s_stop;
+        a2_cpu_items[A2_I_RUN] = a2_mi(a2_s_run, 0, 0);
+    } else if (a2_running()) {
+        a2_cpu_items[A2_I_STOP] = a2_s_stop + 1;
+        a2_cpu_items[A2_I_RUN] = a2_mi(a2_s_run, 1, 1);
+    } else {
+        a2_cpu_items[A2_I_STOP] = ON "Stopped";
+        a2_cpu_items[A2_I_RUN] = OFF "Continue";
+    }
 }
 
 /* ==========================================================================
@@ -655,22 +697,26 @@ void os88_oncmd(int item, int menu, void *win)
     if (a2_state == A2_ST_DEAD)
         return;
 
-    if (menu == A2_M_FILE && item == A2_I_QUIT) {
+    /* NESTED TESTS AND NOT `&&` (apps size pass 1): SmallerC turns each
+     * operand of a `&&` into a 0/1 VALUE and then tests that, eleven bytes a
+     * compare, where a nested `if` is the compare and one branch. */
+    if (menu == A2_M_FILE) {
+        if (item == A2_I_QUIT) {
         /* THE ONE COMMAND ANSWERED IN THE RESIDENT HALF, because it is the
          * one that must work on a disk whose APPLE2.OVL is missing. It goes
          * through OSAPI_WM_CLOSE, spent from the WAKE and not from here. */
-        a2_exit_req = 1;
-        a2_kick = 1;
-        os88_wm_wake(win);
-        return;
-    }
-    if (menu == A2_M_MACHINE && item == A2_I_FULLSCR) {
+            a2_exit_req = 1;
+            a2_kickw(win);
+            return;
+        }
+    } else if (menu == A2_M_MACHINE) {
+      if (item == A2_I_FULLSCR) {
         a2_fullscreen_toggle(win);          /* RESIDENT for section 6.3's
                                              * reason: the way BACK has to
                                              * work on a bar that is not there */
         return;
-    }
-    if (menu == A2_M_MACHINE && item == A2_I_TINT) {
+      }
+      if (item == A2_I_TINT) {
         /* Machine > Color NTSC - THE FOREIGN VIDEO MODE (section 13), and it
          * is RESIDENT for a sharper version of Toggle Fullscreen's reason:
          * the bracket's entry proc must be a plain resident function whose
@@ -681,8 +727,8 @@ void os88_oncmd(int item, int menu, void *win)
          * > Quit and Toggle Fullscreen also do. */
         a2_fsx_enter(win);
         return;
-    }
-    if (menu == A2_M_MACHINE && item == A2_I_FLASH) {
+      }
+      if (item == A2_I_FLASH) {
         /* ...AND THE CPU_8086 TIER'S REFUSAL IS NOT UNDOABLE FROM HERE. The
          * row is greyed there, so the kernel does not dispatch it and this
          * arm is unreachable in the ordinary way - but a2_fl_ok is the byte
@@ -692,31 +738,34 @@ void os88_oncmd(int item, int menu, void *win)
         if (a2_tier_slow)
             return;
         a2_fl_ok = !a2_fl_ok;
-        if (!a2_fl_ok && a2_fl_phase) {
+        if (!a2_fl_ok) {
+            if (a2_fl_phase) {
             a2_fl_phase = 0;                /* turning it off leaves the text
                                              * in its NORMAL form, not frozen
                                              * inverse */
             a2_flash_force();
+            }
         }
         /* AND THE HEARTBEAT IS RE-ARMED HERE. os88_ontimer stops re-arming
          * itself while the phase is off, so this is the other half of that
          * sentence: without it the phase comes back on and never flips again
          * on a kernel that HAS the timer. The refusal is tested, as it is at
          * launch (SPEC.md 13.8.2). */
-        if (a2_fl_ok && a2_tmr_ok) {
+        if (a2_fl_ok) {
+            if (a2_tmr_ok) {
             a2_fl_tick = os88_ticks();
             a2_tmr_ok = os88_wm_timer(win, A2_FLASH_TICKS) == 0;
+            }
         }
         a2_menu_state();
-        a2_kick = 1;
-        os88_wm_wake(win);
+        a2_kickw(win);
         return;
+      }
     }
     if (!a2_ovl_ready(win))
         return;
     ovl_a2_cmd(menu, item, win);
-    a2_kick = 1;
-    os88_wm_wake(win);
+    a2_kickw(win);
 }
 
 /* ==========================================================================
@@ -782,9 +831,8 @@ static void a2_fullscreen_toggle(void *win)
         a2_full = !a2_full;                 /* refused: the latch rolls back */
         a2_say("Another window has it.");
         a2_st_dirty = 1;
-        a2_kick = 1;                        /* ...and the REFUSAL owes the
+        a2_kickw(win);                      /* ...and the REFUSAL owes the
                                              * panel's rows a draw, because
                                              * the kernel did nothing at all */
-        os88_wm_wake(win);
     }
 }

@@ -23,6 +23,10 @@ need" is something you check rather than argue yourself into:
    §45.9.1). 86Box covers these too and models the machine rather than the
    CPU — prefer it where the question is about the machine and a person is
    watching.
+   **EXPANDED memory is NOT on this entry**: an EMS board sits in an 8088's
+   slot, and MartyPC models one - `os8088_5150_herc_hdd_sb_ems_gla`, a
+   Lo-tech 2 MB board at 260h / E000h, which `EMS.DRV` (SPEC.md 107) and
+   `tests/ems.py` run on.
 2. **Rung 1 of the hard-disk driver** (SPEC.md §52.1) — the IDE task file
    read directly, gated on `CPU_286` because an 8088's `in ax, dx` is two
    8-bit bus cycles at one port. QEMU has an ATA disk at 1F0h and a CPU that
@@ -224,9 +228,9 @@ make a row slow, it makes it less thorough at the same wall time.
 
 | tier | budget | what it does | when |
 |---|---|---|---|
-| `fast` | **30s** (uses ~9) | Host-side only, 37 rows. Reads what `make` just built and checks what breaks SILENTLY — and only what somebody who did NOT touch the subject can break. | A commit you are going to keep |
+| `fast` | **30s** (uses ~9) | Host-side only, 43 rows. Reads what `make` just built and checks what breaks SILENTLY — and only what somebody who did NOT touch the subject can break. | A commit you are going to keep |
 | `full` | **3 min** (uses ~1¼) | One question: *did you obviously break the OS?* Boots to a desktop on both 1bpp adapters and on VGA, builds and boots `kern_small` on its 128KB floor machine, checks the mouse and keyboard, and builds a C package. 5 rows. | A major round of work reaching the integration branch |
-| `soak` | none | The other 371 gates in `tests/`, one subject each — every per-package and kernel-internal row, the 99-knob build matrix, and everything about the tree or the suite rather than the product. | The rows your change can REACH, scoped with `-k`. The WHOLE tier only when the owner asks for it, in as many words — both runners refuse it otherwise |
+| `soak` | none | The other 907 gates in `tests/`, one subject each — every per-package and kernel-internal row, the 99-knob build matrix, and everything about the tree or the suite rather than the product. | The rows your change can REACH, scoped with `-k`. The WHOLE tier only when the owner asks for it, in as many words — both runners refuse it otherwise |
 
 The runner's own banner — `os88test: fast tier - N rows, Ns declared, budget 30s` — is the live count; the numbers in this table describe the tiers and are not a second source of truth for them.
 
@@ -524,7 +528,7 @@ the arithmetic and the refusal below the floor are unreachable on QEMU by
 configuration. `RAMKB=<n>` assembles the sector to believe a number:
 
 ```sh
-make test RAMKB=196         # where a MIN_RAM_KB machine puts it (196 on kern_big, 128 on kern_small)
+make test RAMKB=128         # where a MIN_RAM_KB machine puts it (128 on both kernels)
 make test RAMKB=64          # below the floor: must print RAM and stop
 python3 tools/qmp.py build/qmp.sock 'xp /4xb 0x600'   # 00 00 00 00 = never loaded
 ```

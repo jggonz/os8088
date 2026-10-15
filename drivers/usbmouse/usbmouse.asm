@@ -137,6 +137,8 @@ um_ok:
 ; out: CF = 0; CF = 1 and AL = DRVE_MEM when no task slot is free
 ; -----------------------------------------------------------------------------
 um_ready:
+    cmp byte [um_pm], 0         ; a PicoMEM's mouse arrives by interrupt: no
+    jne um_ok                   ; chip to poll, so no worker (SPEC.md 9.12.7)
     mov ax, um_worker
     xor dx, dx
     call OSAPI_DRV_TASK
@@ -158,6 +160,8 @@ um_ready:
 ; way: `cmp` with 0 never sets CF, and nothing in um_reset writes a flag.
 ; -----------------------------------------------------------------------------
 um_detach:
+    cmp byte [um_pm], 0
+    jne um_pmdetach
     inc byte [um_stop]          ; 0 -> 1: a driver is detached once
     cmp byte [um_alive], 0
     jne um_ok
@@ -254,8 +258,8 @@ um_attach:
     call ch_rd
     popf
     cmp al, 0xA8                ; ~0x57. An undriven 0x260 floats to 0xFF
-    mov al, DRVE_HW
-    jne um_no
+    jne um_pmattach             ; ...so it is not a CH375: is it a PicoMEM's
+                                ; USB mouse instead? (SPEC.md 9.12.7)
 
     ; --- CAN WE SEE INT#? No transaction is pending, so once any stale
     ; interrupt is consumed (um_drain, [um_intok] being UI_PROBE) bit 7 must
@@ -286,6 +290,184 @@ um_attach:
     mov al, DRVE_BUSY           ; anything else - a flash drive, a keyboard -
     ret                         ; is the BIOS's
 .ok:
+    clc
+    ret
+
+; =============================================================================
+; THE PICOMEM'S USB MOUSE (SPEC.md 9.12.7)
+;
+; A PicoMEM (an ISA card built round a Raspberry Pi Pico) has a USB host of its
+; own: a mouse on a 1.x's OTG adapter or a 2.x's USB-A socket. The card does
+; the USB; what reaches the PC is its BIOS's multiplexed IRQ, whose handler
+; loads one HID report - DX = buttons, BX = dx, CX = dy, both signed - and does
+; `int 33h` with AX = 0060h, a private function its CuteMouse clone (PMMOUSE)
+; answers. So this backend is a vector and not a worker: it answers that one
+; function and chains every other, and turns the card's mouse on with the
+; same PM BIOS call PMMOUSE makes (int 13h AX=6010h). The report then goes
+; through um_report exactly as a CH375's does - halved, carried, fed.
+;
+; THE ORDER OF THE QUESTIONS is the card's safety rule (SPEC.md 34.10, 18.97.6):
+; port 2A3h must COUNT across eight reads before int 13h's PicoMEM functions
+; are asked anything, those being undefined on any other machine. And the
+; card's own IRQ must exist - CH = 0 means no jumper the card could find, and
+; then no report can ever arrive, so attach refuses rather than mounting a
+; mouse that is never going to move.
+;
+; THE VECTOR GOES IN BEFORE THE MOUSE IS TURNED ON, and that order is the
+; difference between a mouse and a frozen machine (docs/FIELD-NOTES.md 66).
+; The card's firmware sets its "a report is waiting" flag on EVERY USB report,
+; enabled or not, and only consults the enable when deciding to raise the
+; IRQ - so a mouse that has moved at all since power-on is a report raised the
+; instant function 10h returns, and its `int 33h` lands on whatever the vector
+; holds. On a 5150 that is 0000:0000: the CPU executes the vector table. A
+; report that arrives between the hook and the enable is harmless - the
+; fence refuses it, this driver not being DRVC_POINT's until attach returns.
+;
+; The card's LINE is opened as SOUND.DRV's pm_init opens it (SPEC.md 34.10.1):
+; function 0 re-hooks the card's vector when something took it but leaves a
+; line it finds still hooked exactly as masked as it found it.
+; -----------------------------------------------------------------------------
+um_pmattach:
+    mov dx, 0x2A3
+    pushf
+    cli                         ; the ramp is stateful: nobody between reads
+    in  al, dx
+    mov ah, al
+    mov cx, 8
+.ramp:
+    in  al, dx
+    inc ah
+    cmp al, ah
+    jne .noramp
+    loop .ramp
+    popf
+    push bx                     ; drv_attach reads the ROW through BX after
+    mov ax, 0x6000              ; this returns (um_entry), and int 13h spends it
+    mov dx, 0x1234              ; PM BIOS function 0: detect, and re-hook the
+    int 0x13                    ; card's IRQ if anything took its vector
+    cmp dx, 0xAA55
+    jne .nobx
+    mov cl, ch                  ; CH = the card's own IRQ
+    dec ch                      ; 0 (no jumper the card found) wraps to FFh,
+    cmp ch, 7                   ; and a line past 7 is not one this vector
+    jae .nobx                   ; arithmetic reaches: neither ever reports
+    push es
+    xor ax, ax
+    mov es, ax
+    mov [um_rx], ax             ; the halving's carries are um_scratch, which
+    mov [um_ry], ax             ; is attach's own code until now: from here
+                                ; on it is the ISR's
+    mov al, cl
+    shl ax, 1
+    shl ax, 1
+    xchg ax, si                 ; SI = 4n: int 8+n's cell is 20h past it
+    pushf
+    cli                         ; ONE window: the line, then int 33h
+    cmp [es:si+0x22], bx        ; still the PM BIOS's multiplexer?
+    jne .hook                   ; ...then its line is open (pm_init's rule)
+    mov ah, 0xFE
+    rol ah, cl                  ; every bit but line n's
+    in  al, 0x21
+    and al, ah
+    out 0x21, al
+.hook:
+    mov ax, um_pm33             ; int 33h: ours, the rest chained - and in
+    xchg ax, [es:0x33*4]        ; place BEFORE the card can call it. Each
+    mov [um_old33], ax          ; word swapped in one instruction, under
+    mov ax, cs                  ; the same cli as the line
+    xchg ax, [es:0x33*4+2]
+    mov [um_old33+2], ax
+    popf
+    pop es
+    mov ax, 0x6010              ; PM BIOS function 10h: enable the mouse,
+    mov dx, 0x1234              ; LAST
+    int 0x13
+    pop bx
+    inc byte [um_pm]
+    clc
+    ret
+.nobx:
+    pop bx
+    jmp short .no
+.noramp:
+    popf
+.no:
+    mov al, DRVE_HW
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; um_pm33 - int 33h. AX = 0060h is the card's report; anything else is not ours
+;
+; Reached from inside the card's IRQ handler, IF = 0 and its EOI already sent,
+; so the feed runs as a CH375 report's does from the worker: OSAPI_MOUSE_FEED
+; puts the cur_move chain on mou_pstack whatever stack this arrived on, and
+; nothing that uses that stack can be running (both mouse ISRs and the feed
+; itself are IF = 0 throughout). DS = ours for the X cell's fence, which asks
+; whether the caller is DRVC_POINT's published driver.
+; -----------------------------------------------------------------------------
+um_pm33:
+    cmp ax, 0x0060
+    je .ours
+    jmp far [cs:um_old33]
+.ours:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push cs
+    pop ds
+    mov [um_buf], dl            ; the boot report's own layout: buttons, dx, dy
+    mov [um_buf+1], bl
+    mov [um_buf+2], cl
+    call um_report
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    iret
+
+; -----------------------------------------------------------------------------
+; um_pmdetach - the card's mouse off, a held button released, int 33h back
+;
+; OFF FIRST (PM BIOS function 11h), so no report can arrive in the window
+; before the vector is restored or after the image is freed. The vector is
+; put back only if it is still ours: a program that hooked over us restores
+; to us later, and with the card's mouse off nothing will ever call it.
+; Cannot fail (SPEC.md 51.6).
+; -----------------------------------------------------------------------------
+um_pmdetach:
+    push bx                     ; ...across int 13h AND um_release, whose first
+    mov ax, 0x6011              ; instruction is `xor bx, bx`: BX is the ROW,
+    mov dx, 0x1234              ; and drv_unload frees through it the
+    int 0x13                    ; instruction after this returns. Popped
+    call um_release             ; before the release, it came back 0, so the
+    pop bx                      ; kernel "freed" offset 0 as a row - zeroed
+                                ; two words of boot code, leaked this image
+                                ; and left the tick on (FIELD-NOTES 66)
+    push es
+    xor ax, ax
+    mov es, ax
+    pushf
+    cli
+    cmp word [es:0x33*4], um_pm33
+    jne .keep
+    mov ax, cs
+    cmp [es:0x33*4+2], ax
+    jne .keep
+    mov ax, [um_old33]
+    mov [es:0x33*4], ax
+    mov ax, [um_old33+2]
+    mov [es:0x33*4+2], ax
+.keep:
+    popf
+    pop es
     clc
     ret
 
@@ -920,6 +1102,8 @@ um_stop     db 0                ; detach raised it: the worker exits
 um_alive    db 0                ; a worker exists (set at spawn)
 um_btn      db 0                ; the buttons the kernel was last told
 um_lrep     dw 0                ; the tick of the last report
+um_pm       db 0                ; 1 = the PicoMEM backend (SPEC.md 9.12.7)
+um_old33    dw 0, 0             ; ...and the int 33h it chains to
                                 ; (the rest of the state is um_scratch, above)
 
 %if um_nenum != um_state + 1

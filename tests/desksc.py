@@ -20,7 +20,7 @@ claim 26.8 makes is asked of the GUEST'S OWN STATE rather than of a picture:
   D  a drag of the shortcut moves it to the nearest free cell under the
      release, and only that.
   E  after a REBOOT the shortcut is back, cell and caption and all - the
-     boot reader in .ovl, through the trailer.
+     boot reader in .boot2, through the trailer.
   F  Delete with the shortcut selected removes it; the claim goes with the
      last one, and SYSTEM.CFG goes back to having no trailer at all.
   G  a FOLDER's shortcut (B:\\MEDIA) is kind 2 and captioned with its name,

@@ -742,7 +742,7 @@ entirely. **`diskw.inc` is resident, and resident is not the same as `.text`**
 
 **So it goes on demand, exactly as the user's instinct said, and the pattern
 already exists**: SPEC.md §2.8's on-demand modules — `CTRL.DRV`, `FORMAT.DRV`,
-`CLONE.DRV`. A module is the **fourth lever on the footprint and the only one
+`DISKOPS.DRV`. A module is the **fourth lever on the footprint and the only one
 that relieves `KERN_BUDGET` without relieving nothing else** (§2.8), so
 `COMPRESS.DRV` costs the resident kernel a `mod_need` call site and nothing
 else.
@@ -965,7 +965,7 @@ Each wave is independently useful and independently revertible.
 | **1 — BUILT** | the decoders + `OSAPI_DECOMP` + `COMPRESS=` knob | 206 bytes of `.cold`, one cell; nothing reads a compressed file yet |
 | **2 — BUILT** | item 4 — the `.o88` image (§7.2) | the biggest single win, and the loader is the best-fenced consumer |
 | **3a — BUILT** | the driver header's `bss` field (§12.6) | **6,672 bytes** with no decoder and no cycles. Moving the interior buffers, which is the other 8 KB, is a per-driver source change and is NOT done |
-| **3b — BUILT for DRIVERS** | item 5 — compressing drivers (§12.6) | **19,697 bytes** over the nine drivers and overlays. MODULES are not done: `CTRL`/`FORMAT`/`CLONE.DRV` are worth only 1,953 between them and go through `mod.inc`, whose two stamps would have to be computed over the uncompressed image |
+| **3b — BUILT for DRIVERS** | item 5 — compressing drivers (§12.6) | **19,697 bytes** over the nine drivers and overlays. MODULES are not done: `CTRL`/`FORMAT`/`DISKOPS.DRV` are worth only 1,953 between them and go through `mod.inc`, whose two stamps would have to be computed over the uncompressed image |
 | **4** | item 3 — `OP_COMP` parts (§12.4) | SDK-only; `apps/c64` is the test case |
 | **5 — BUILT** | item 1 — transparent file reads (§12.2), **and the decoder learning to cross a segment** | **585 bytes, 7 of them resident** (§13.5) against an estimate of 150–200 of `.text` — and it takes `BEVERLY.MOD` from 114 of a 360KB disk's clusters to **42**. The `READ_AT` refusal was reversed: it stays RAW (§13.4) |
 | **6** | item 2 — `COMPRESS.DRV` (§12.3) | needs waves 0 and 1 only; can be done any time after them. **§15.1's dirent hint is already written** — wave 5 put it in `dskw_commit`, derived from the bytes being written (§20.14.4), so the module has only to produce them |
@@ -1062,7 +1062,7 @@ memory and the claim is already wrong. Two claims, the second freed
 immediately, was cheaper than a peek at ~200 ms a driver.
 
 **Modules are left out on their own arithmetic.** `CTRL`, `FORMAT` and
-`CLONE.DRV` are 1,953 bytes between them, they go through `mod.inc` rather
+`DISKOPS.DRV` are 1,953 bytes between them, they go through `mod.inc` rather
 than `driver.inc`, and §12.6's warning applies: a module is *this kernel's own
 code* validated by two stamps, which would have to be computed over the
 uncompressed image. That is a second loader's worth of care for a tenth of
@@ -1559,7 +1559,7 @@ container is simpler than the package one (§20.13.3.1: the header crosses
 verbatim, then a format byte and the stream, and `image` at +8 stays the
 unpacked size). It is that a `.DRV` is read by **four loaders and two of them
 do not expand**: `HDDTOOL.DRV` by `HDD.DRV` through `OSAPI_FILE_READ`
-(§20.13.5.1), and `CTRL`/`FORMAT`/`CLONE.DRV` by `mod_need`, which wants a v5
+(§20.13.5.1), and `CTRL`/`FORMAT`/`DISKOPS.DRV` by `mod_need`, which wants a v5
 module image. Allowing `.DRV` therefore means a name list of four exceptions,
 which is the shape that rots.
 
@@ -2021,7 +2021,7 @@ and no `.bss` where it was 650 and 266.
 | `diskw.inc` | 597 | ~250 | one placement path for plain and compressed (`R = U − P`, and 0 for plain), `dskw_usize` gone (the module reads the hint off `dskw_raw` after `dwf_dskw_stat`), `czexp` loading its pair with one `lds`, the hint re-read after the transfer instead of a flag |
 | `driver.inc` | 219 | ~0 | a compressed `.DRV` is a `'CZ'` file; `drv_find` reads the hint (+14 in `drvvol.inc`) and the transparent read expands it into the claim; `drv_expand` and its two claims are gone |
 | `loader.inc` | 187 | ~170 | the prefix computed off the header the file carries, the format as `(flags >> 3) & 3` |
-| `mod.inc` + `kernel.asm` + `disk.inc` | 122 | ~60 | **the compressor rides in `CLONE.DRV`** (§20.15.3): no `mod_tab` row, no name, no `mod_fp` block — a second entry in an image that had six spare slots |
+| `mod.inc` + `kernel.asm` + `disk.inc` | 122 | ~60 | **the compressor rides in `DISKOPS.DRV`** (§20.15.3): no `mod_tab` row, no name, no `mod_fp` block — a second entry in an image that had six spare slots |
 
 `kernsize` on the tree that took it: **`.text` −84, `.bss` −312, `.cold`
 −1,304, sum −1,700**; the cold rung uncrossed three times, 1,536 bytes of
@@ -2060,7 +2060,7 @@ tree the row passes on, not the one it was first read off:
 - **A no-op Compress on a folder fetches the image** to find out it is a
   no-op: the selection test was 31 resident bytes for a case the context menu
   of a folder does not offer.
-- **Either verb reads `CLONE.DRV` whole**, 5,810 bytes where `COMPRESS.DRV`
+- **Either verb reads `DISKOPS.DRV` whole**, 5,810 bytes where `COMPRESS.DRV`
   was 2,265 — one sector run rather than two, on a verb somebody waits
   seconds for.
 - **The 128KB machine**: nothing resident was added anywhere; the sliding

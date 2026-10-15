@@ -3838,31 +3838,6 @@ pj_cset:
     pop ax
     ret
 
-; pj_bplace - the block (mx H + h, v) of the component pj_cset set: its
-; place in the plane, [JV_PL]. Preserves all
-pj_bplace:
-    push ax
-    push dx
-    mov al, [cs:pj_v]               ; v N rows down
-    mul byte [JV_FR + JL_N]
-    mul word [JV_ST]
-    add ax, [cs:pj_cpl]
-    push ax
-    mov al, [cs:pj_ch]              ; (mx H + h) N across
-    xor ah, ah
-    mul word [JV_MX]
-    add al, [cs:pj_h]
-    adc ah, 0
-    mov dl, [JV_FR + JL_N]
-    xor dh, dh
-    mul dx
-    pop dx
-    add ax, dx
-    mov [JV_PL], ax
-    pop dx
-    pop ax
-    ret
-
 ; =============================================================================
 ; A BAND: MCU row [JV_MY]'s rows of the stored picture, at the scale, out -
 ; to the emitter a master row each (orientations 1-4: 3 and 4 bottom-up, 2
@@ -5275,10 +5250,6 @@ pj_ch:      db 0                    ; ...its H...
 pj_cv:      db 0                    ; ...and V
 pj_h:       db 0                    ; the block within the MCU
 pj_v:       db 0
-pj_soff:    dw 0                    ; the block's offset in its store
-pj_k:       db 0                    ; a progressive scan's k
-pj_r:       db 0                    ; ...its zero run
-pj_nv:      dw 0                    ; ...its new coefficient
 pj_bpl:     dw 0                    ; the output pass's blocks a row
 pj_rbi:     dd 0                    ; a non-interleaved scan's row's first
 pj_vend:    dw 0                    ; the scratch's variable part's end

@@ -127,8 +127,49 @@ def symbols(defines=("TRKLOG",)):
     return out, syms
 
 
-def scan(m):
-    """(tracker segment, [(driver name, segment, image bytes)])."""
+# THE IMAGE, as the floppy carries it: {disk path: (clear prefix, 32 bytes)}.
+_REF = {}
+
+
+def image_ref(apps):
+    """(clear prefix, the 32 IMAGE bytes after it) of the TRACKER package on
+    the floppy `apps`, read off the disk itself rather than off build/ - the
+    bench disks carry TRKLOG.O88 or TRKSCRL.O88, each a different image under
+    the same header name, so the disk is the one statement of which binary is
+    in the machine."""
+    if apps in _REF:
+        return _REF[apps]
+    import os88fat
+    from os88pkg import clear_prefix, image_unwrap
+    v = os88fat.Fat12(apps)
+    for _i, _o, e in v.entries():
+        if e[8:11] != b"O88" or e[11] & 0x18:      # a file, named *.O88
+            continue
+        blob = v.read(v.pretty(e[:11]))
+        if (len(blob) >= 32 and blob[:2] == b"O8" and blob[2] == PKG_FMT
+                and blob[16:32].split(b"\0")[0].strip() == b"TRACKER"):
+            pre = clear_prefix(blob[3])
+            _REF[apps] = (pre, image_unwrap(blob)[pre:pre + 32])
+            return _REF[apps]
+    raise SystemExit("os88rate: no TRACKER package on %s" % apps)
+
+
+def scan(m, apps=None):
+    """(tracker segment, [(driver name, segment, image bytes)]).
+
+    WITH `apps`, A TRACKER HEADER COUNTS ONLY ONCE ITS REGION HOLDS THE IMAGE.
+    A compressed package's FILE is read HIGH - R = roundup512(image - file)
+    bytes above the region - and expanded downwards (SPEC.md 20.13, kernel
+    ld_run_body_x step 6a), so for the length of that read the only TRACKER
+    header in memory is the FILE's, and every offset read through it is the
+    LZ4 stream's: tests/trkclick.py read trk_cpu0 = 12 and mp_xt = 51 the day
+    a size pass moved R. The bytes after the clear prefix are what tell the
+    two apart - the image's are on the floppy (image_ref), the file's are
+    compressed - so a header whose region does not carry them yet is skipped
+    and the scan goes on (a load in progress answers None, which every caller
+    already polls through). Every caller that reads the package's state names
+    its disk; without one any TRACKER header counts, as it always did."""
+    ref = image_ref(apps) if apps else None
     buf = m.read(0x40000, 0xA0000 - 0x40000)
     seg, drv = None, []
     for o in range(0, len(buf) - 32, 16):
@@ -137,7 +178,8 @@ def scan(m):
         ver, sz = buf[o + 2], int.from_bytes(buf[o + 8:o + 10], "little")
         name = buf[o + 16:o + 32].split(b"\0")[0].decode("latin1").strip()
         if ver == PKG_FMT and name == "TRACKER":
-            seg = (0x40000 + o) >> 4
+            if ref is None or buf[o + ref[0]:o + ref[0] + 32] == ref[1]:
+                seg = (0x40000 + o) >> 4          # the LAST, as it always was
         elif ver == DRV_VER:
             drv.append((name, (0x40000 + o) >> 4, sz))
     return seg, drv
@@ -149,7 +191,7 @@ def kernel_syms():
     Needed because "outside the package" is not one thing: on the fullscreen
     surface it is mostly the SCHEDULER, and a run that reports 17% idle while
     the audio starves is saying something completely different from a run that
-    is out of cycles. `.cold`, `.ovl` and `.lowbss` each live somewhere other
+    is out of cycles. `.cold`, `.boot2` and `.lowbss` each live somewhere other
     than KERNEL_SEG, so the segment is asked per symbol.
     """
     out = []
@@ -230,11 +272,11 @@ def main():
         dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "BEVERLY.MOD")
 
         try:
-            os88marty.until(m, lambda mm: scan(mm)[0], "Tracker to load",
-                            poll=2, limit=120)
+            os88marty.until(m, lambda mm: scan(mm, a.apps)[0],
+                            "Tracker to load", poll=2, limit=120)
         except os88marty.MartyError:
             pass
-        seg, drv = scan(m)
+        seg, drv = scan(m, a.apps)
         if not seg:
             print("FAIL: Tracker never loaded"); return 1
         # 116KB of module off a 360KB floppy: its own flag says when, and the
@@ -256,7 +298,7 @@ def main():
         w = lambda n: int.from_bytes(m.read(base + A(n), 2), "little")
         b = lambda n: m.read(base + A(n), 1)[0]
 
-        seg, drv = scan(m)
+        seg, drv = scan(m, a.apps)
         print("TRACKER @%04X, image %d, mp_xt=%d; drivers: %s"
               % (seg, imgend, b("mp_xt"),
                  ", ".join("%s @%04X+%d" % d for d in drv) or "none"))

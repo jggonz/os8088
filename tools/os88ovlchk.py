@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prove no call crosses a segment boundary inside the kernel as a NEAR call.
 
-`.ovl` and `.cold` each have their own `vstart`, so a near call between one
+`.boot2` and `.cold` each have their own `vstart`, so a near call between one
 of them and `.text` assembles
 without complaint and emits a displacement computed between two different
 address spaces.  Nothing catches that: not NASM, not the linker (there isn't
@@ -54,7 +54,8 @@ CCELL = re.compile(r'^\s*OSAPI_(?:RCSLOT|RCXCELL|RNCELL|FCELL)\s+'
 # all, which is how adding JSLOT alone would have bought nothing.
 CELLDEF = re.compile(r'^\s*OSAPI_(?:NSTUB|XSTUB)\s+([A-Za-z_]\w*)\s*,')
 MODS = ('.modc', '.modu', '.modf', '.modl', '.modh', '.modp', '.modd',
-        '.modk', '.modx')  # module images (2.8).
+        '.modk', '.modx', '.modw')  # module images (2.8).
+# `.modw` is winmod.inc's WIN95.DRV (SPEC.md 76.14), kern_big's alone.
 # `.modp` is Cut/Copy/Paste and kern_small's ALONE (SPEC.md 22.3,
 # docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md 9.2): filecp.inc emits its bodies there on
 # that build and into `.cold` on kern_big, which is the first conditional
@@ -75,11 +76,25 @@ MODS = ('.modc', '.modu', '.modf', '.modl', '.modh', '.modp', '.modd',
 # which is how `.modl` shipped once with the near-call check blind to it - the
 # clone module's every `call COLD_SEG:` was correct, and would not have been
 # reported had one been near.
-FAR = ('.boot2', '.ovl', '.ovlw', '.cold') + MODS  # sections with a vstart
-# `.ovlw` is the boot overlay's OTHER half (SPEC.md 2.5.3): the bodies that are
+FAR = ('.boot2', '.blob', '.ovl', '.cold') + MODS  # sections with a vstart
+# `.blob` IS NOT A NASM SECTION. It is this scanner's name for the boot
+# overlay's blob half - every `section .boot2` block OUTSIDE the loader and the
+# splash (LOADER below). SPEC.md 2.9.14 put those bodies in `.boot2` with the
+# loader: one segment, one section, one ceiling. The rules below still have to
+# ask the overlay's questions of them (registered, called in time, through the
+# right macro, never storing CS) and must NOT ask them of stage 2 and the
+# splash, which kernel.asm's own SPLCALLs reach by design and which store CS
+# into the pointer they publish. The near-call check treats the two as the
+# one address space they are.
+# `.ovl` is the boot overlay's OTHER half (SPEC.md 2.5.3): the bodies that are
 # dead at the first mount rather than at spl_finish, landing on FAT_SEG off the
-# kernel's own read.  It has a vstart of its own for `.ovl`'s reason and every
+# kernel's own read.  It has a vstart of its own for `.boot2`'s reason and every
 # rule below that names one names both.
+
+
+# The files whose `.boot2` IS `.boot2`: stage 2 and the loading screen. Every
+# other `.boot2` block is the overlay's blob half and walks as `.blob`.
+LOADER = ('boot/boot2.asm', 'kernel/splash.inc')
 
 
 # A file the kernel %includes from OUTSIDE kernel/, and the section its
@@ -143,9 +158,9 @@ ENDMACRO = re.compile(r'^\s*%endmacro')
 ENDMACRO_B = re.compile(r'^\s*%endmacro\b')
 LABEL = re.compile(r'^([A-Za-z_]\w*):')
 LABEL_DOT = re.compile(r'^[A-Za-z_.]\w*:')
-DRVBOOT = re.compile(r'^\s*(?:OVL(?:GATE1?|CALL)|BLOBCALL)\s+drv_boot_x\b')
-OVWCALL = re.compile(r'\b(?:OVWCALL|OVBCALL)\s+(\w+)')
-# ...and OVBCALL with it (SPEC.md 2.5.3.2): on kern_big it IS an OVWCALL,
+DRVBOOT = re.compile(r'^\s*(?:SPL(?:GATE1?|CALLC?)|BLOBCALL)\s+drv_boot_x\b')
+OVLCALL = re.compile(r'\b(?:OVLCALL|OVBCALL)\s+(\w+)')
+# ...and OVBCALL with it (SPEC.md 2.5.3.2): on kern_big it IS an OVLCALL,
 # so rule 2e's question - is this body still there when the call is made -
 # is exactly as live for it as for the plain form. On kern_small the body
 # is in the blob and outlives the mount, so the rule is merely stricter
@@ -182,6 +197,8 @@ def _walk(path):
                 m = SECT.match(line)
                 if m:
                     cur = m.group(1)
+                    if cur == '.boot2' and path not in LOADER:
+                        cur = '.blob'       # the overlay's half (SPEC.md 2.9.14)
                     continue
             got.append((cur, n, line, raw))
         _WALK[path] = got
@@ -415,6 +432,10 @@ def main():
                 # one-directional check below, not this one.
                 a = '.modc' if a == '.modu' else a
                 b = '.modc' if b == '.modu' else b
+                # ...and `.blob` IS `.boot2` (SPEC.md 2.9.14): the overlay's
+                # blob half and the loader are one section, one segment.
+                a = '.boot2' if a == '.blob' else a
+                b = '.boot2' if b == '.blob' else b
                 if a != b and seg is None:
                     bad.append((f, n, '%s -> %s, near' % (a, b), tgt))
     # --- ...and the core may not name the panel (SPEC.md 2.8.7) -------------
@@ -476,9 +497,9 @@ def main():
     # field stayed 0, which surfaced as "No os8088 disk (A:)" on a good
     # floppy. Name the segment (`mov ax, KERNEL_SEG`) and this stays quiet.
     #
-    # .ovl is deliberately NOT checked: the overlay's data rides WITH it, so
+    # .boot2 is deliberately NOT checked: the overlay's data rides WITH it, so
     # reaching it through CS is the correct idiom there and two places use it
-    # (font.inc's glyph copy does `push cs / pop ds`, drv_snd_sniff uses
+    # (font.inc's glyph copy does `push cs / pop ds`, drv_sniff uses
     # `cs lodsw`).
     #
     # **AND NEITHER ARE THE MODULE SECTIONS, SINCE SPEC.md 2.8.6.** They used
@@ -486,7 +507,7 @@ def main():
     # premise was true the check was exact. A module may now carry its own
     # STRINGS and read them through CS, which is what took the cloner's and
     # the formatter's prompts out of the kernel entirely, so `[cs:si]` in a
-    # `.mod*` section is the correct idiom exactly as it is in `.ovl`. What is
+    # `.mod*` section is the correct idiom exactly as it is in `.boot2`. What is
     # lost with it is the guard against `mov ax, cs` meaning KERNEL_SEG inside
     # a module; that is now a review rule, and the cheap half of it is the
     # `lods` refusal further down.
@@ -516,13 +537,13 @@ def main():
                  "rule 2 (name the segment)" % len(cs_bad))
     print("os88ovlchk: no .cold code assumes CS")
 
-    # --- rule 2b: `.ovl` code may not STORE CS ------------------------------
-    # `.ovl` rides inside the boot blob and is GIVEN BACK TO THE HEAP at
+    # --- rule 2b: `.boot2` code may not STORE CS ------------------------------
+    # `.boot2` rides inside the boot blob and is GIVEN BACK TO THE HEAP at
     # spl_finish (kernel.asm, "It costs no RAM after that at all"). That is the
     # whole reason boot-only code is worth putting there - it stops costing
     # anything the moment the desktop is up - and it is also the trap.
     #
-    # READING through CS in `.ovl` is correct and stays allowed, for the reason
+    # READING through CS in `.boot2` is correct and stays allowed, for the reason
     # the block above gives: the overlay's data rides with it. What can never be
     # right is WRITING CS somewhere - an interrupt vector, a far pointer, a saved
     # segment word. The value stored is the blob's segment, and the blob is
@@ -531,10 +552,10 @@ def main():
     # that now points into somebody's buffer.
     #
     # This is not hypothetical. mouse_init installs the mouse and int 09h
-    # vectors with `mov [es:si+2], cs`, and moving its boot half into `.ovl` is
+    # vectors with `mov [es:si+2], cs`, and moving its boot half into `.boot2` is
     # exactly what SPEC.md 9.4's overlay move does. Three such sites are inside
     # the moved range. Before this rule they were guarded by NOTHING: the CS
-    # check above is scoped to `.cold`, `.ovl` was deliberately exempt from it,
+    # check above is scoped to `.cold`, `.boot2` was deliberately exempt from it,
     # and nasm is happy - so the reviewer's own note that "the gate refuses it"
     # was false, and was demonstrated false by reverting the fix and watching
     # both the stock and the patched gate pass in silence.
@@ -549,33 +570,33 @@ def main():
     ovlcs_bad = []
     for f in kfiles:
         for sect, n, line in sections(f):
-            if sect in ('.ovl', '.ovlw') and OVLCS.search(line):
+            if sect in ('.blob', '.ovl') and OVLCS.search(line):
                 ovlcs_bad.append((f, n, sect, line.strip()[:60]))
     for f, n, sect, src_ in ovlcs_bad:
         print("%s:%d: %s stores CS: %s" % (f, n, sect, src_), file=sys.stderr)
     if ovlcs_bad:
         sys.exit("os88ovlchk: %d CS store(s) in the boot overlay - both halves "
-                 "are given back (.ovl at spl_finish, .ovlw at the first "
+                 "are given back (.boot2 at spl_finish, .ovl at the first "
                  "mount), so the stored segment becomes somebody else's memory "
                  "(name the segment instead)" % len(ovlcs_bad))
     print("os88ovlchk: no boot-overlay code stores CS")
 
-    # --- rule 2c: every reference INTO `.ovl` is registered ------------------
-    # The rule above stops `.ovl` publishing its own segment. This one stops the
+    # --- rule 2c: every reference INTO `.boot2` is registered ------------------
+    # The rule above stops `.boot2` publishing its own segment. This one stops the
     # opposite mistake, which is quieter and which nothing in this tree caught
     # before: somebody adds a call to a body that lives in the overlay, from
     # code that runs AFTER the overlay is gone.
     #
-    # `.ovl` is released at spl_finish. A body there is correct exactly as long
+    # `.boot2` is released at spl_finish. A body there is correct exactly as long
     # as every path that reaches it runs during boot. That is not a property the
     # assembler can check, it is not a property a screenshot shows, and the
     # failure is silent: the call lands in whatever the heap handed out, so the
     # routine "works" until the machine is busy enough for the claim underneath
     # it to be something else.
     #
-    # `dispcold` byte-compares `.cold` and has no `.ovl` counterpart. This is it,
+    # `dispcold` byte-compares `.cold` and has no `.boot2` counterpart. This is it,
     # in the only form that is cheap and exact: a REGISTRY, the way SPEC.md
-    # 6.6's transparent-text sites are a registry. Every reference into `.ovl`
+    # 6.6's transparent-text sites are a registry. Every reference into `.boot2`
     # from outside it is listed in tests/ovlrefs.txt with the reason it is
     # boot-only. A new one fails the build until somebody writes that reason
     # down, and the list can be read in one sitting to audit the whole surface.
@@ -585,22 +606,22 @@ def main():
     # WHAT GUARANTEES THIS RUNS BEFORE spl_finish?
     #
     # ...OR BEFORE THE FIRST MOUNT, which is the other half of it since SPEC.md
-    # 2.5.3 split the overlay by lifetime. `.ovl` rides in the blob and lives to
-    # spl_finish; `.ovlw` lands on FAT_SEG and is forfeit the moment drv_boot
+    # 2.5.3 split the overlay by lifetime. `.boot2` rides in the blob and lives to
+    # spl_finish; `.ovl` lands on FAT_SEG and is forfeit the moment drv_boot
     # mounts a volume, which is EARLIER. So a symbol's deadline depends on which
     # half it is in, and the error below says which - "it looks like boot code"
     # was never an answer and is now not even a well-formed one.
     #
     # THE DIRECTION MATTERS, and it is the new way to get this wrong.
     #
-    #   .ovlw -> .ovl    always safe: the callee outlives the caller.
-    #   .ovl  -> .ovlw   NOT safe by construction. The blob half is still there
+    #   .ovl -> .boot2    always safe: the callee outlives the caller.
+    #   .boot2  -> .ovl   NOT safe by construction. The blob half is still there
     #                    after the mount and the window half is not, so a call
     #                    the other way is exactly the silent failure this rule
     #                    exists for - and it is INSIDE the overlay, which is
     #                    where the old rule stopped looking.
     #
-    # So `.ovlw` is exempt as a SOURCE only when the target is `.ovl`, and every
+    # So `.ovl` is exempt as a SOURCE only when the target is `.boot2`, and every
     # other crossing is registered.
     OVLREG = os.path.join(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__))), 'tests', 'ovlrefs.txt')
@@ -611,18 +632,18 @@ def main():
             if line:
                 registered.add(line.split()[0])
 
-    half = {}                       # label -> '.ovl' | '.ovlw'
+    half = {}                       # label -> '.blob' | '.ovl'
     for f in kfiles:
         for sect, n, line in sections(f):
-            if sect in ('.ovl', '.ovlw'):
+            if sect in ('.blob', '.ovl'):
                 m = LABEL.match(line)
                 if m:
                     half[m.group(1)] = sect
     for lab, (sect, _d, _k) in pasted.items():
-        if sect in ('.ovl', '.ovlw'):
-            half[lab] = sect         # the ovc_ family, pasted into .ovl
+        if sect in ('.blob', '.ovl'):
+            half[lab] = sect         # the ovc_ family, pasted into .boot2
 
-    DEADLINE = {'.ovl': 'spl_finish', '.ovlw': "drv_boot's FIRST MOUNT"}
+    DEADLINE = {'.blob': 'spl_finish', '.ovl': "drv_boot's FIRST MOUNT"}
     ovl_refs, unregistered = set(), []
     if half:
         pat = re.compile(r'\b(' + '|'.join(sorted(map(re.escape, half))) + r')\b')
@@ -634,7 +655,7 @@ def main():
                     tgt = half[sym]
                     if sect == tgt:
                         continue            # within one half: near, and fine
-                    if sect == '.ovlw' and tgt == '.ovl':
+                    if sect == '.ovl' and tgt == '.blob':
                         continue            # the callee outlives the caller
                     ovl_refs.add(sym)
                     if sym not in registered:
@@ -653,9 +674,9 @@ def main():
         sys.exit("os88ovlchk: tests/ovlrefs.txt lists %d reference(s) that no "
                  "longer exist (%s) - the registry may only shrink by deleting "
                  "the row with the code" % (len(stale), ', '.join(stale[:4])))
-    nw = sum(1 for v in half.values() if v == '.ovlw')
+    nw = sum(1 for v in half.values() if v == '.ovl')
     print("os88ovlchk: every reference into the boot overlay is registered "
-          "(%d of %d labels; %d in .ovl to spl_finish, %d in .ovlw to the "
+          "(%d of %d labels; %d in .boot2 to spl_finish, %d in .ovl to the "
           "first mount)" % (len(ovl_refs), len(half), len(half) - nw, nw))
 
     # --- rule 2d: the CALL MACRO has to match the HALF ----------------------
@@ -672,26 +693,25 @@ def main():
     # spin at HEAP_SEG:36D2 with SP 53,482 bytes past task 0's stack, a screen
     # of garbage, and no message from anything.
     #
-    # It is a one-line mistake to make - `dsk_flop_add: OVLGATE1 dsk_flop_add_x`
+    # It is a one-line mistake to make - `dsk_flop_add: SPLGATE1 dsk_flop_add_x`
     # survived the sweep that converted the other twenty-three sites because
     # the macro shared its line with a label - so it is checked rather than
     # reviewed.
     # OVBCALL is the BUILD-CONDITIONAL entry (SPEC.md 2.5.3.2): it expands to
-    # OVLGATE1 on kern_small and to OVWCALL on kern_big, because the body it
-    # names is in `.ovl` on the first and `.ovlw` on the second. It is held to
-    # `.ovl` here for the same reason the conditional `section` blocks write
-    # their `.ovl` arm LAST - this scanner has ONE model and that model is
+    # SPLGATE1 on kern_small and to OVLCALL on kern_big, because the body it
+    # names is in `.boot2` on the first and `.ovl` on the second. It is held to
+    # `.boot2` here for the same reason the conditional `section` blocks write
+    # their `.boot2` arm LAST - this scanner has ONE model and that model is
     # kern_small, which is the build the split exists to protect. What the row
     # buys is both directions: an OVBCALL aimed at a body that did NOT move
     # fails (it would be a blob segment carrying a window offset on the small
-    # build), and an OVWCALL aimed at one that DID fails the other way.
-    MACHALF = {'SPLCALL': '.ovl', 'OVLCALL': '.ovl', 'OVLCALLC': '.ovl',
-               'OVLGATE': '.ovl', 'OVLGATE1': '.ovl', 'SPLSTUB': '.ovl',
-               'SPLGATE': '.ovl', 'SPLGATE1': '.ovl', 'OVWCALL': '.ovlw',
-               'OVBCALL': '.ovl', 'BLOBCALL': '.ovl'}
+    # build), and an OVLCALL aimed at one that DID fails the other way.
+    MACHALF = {'SPLCALL': '.blob', 'SPLCALLC': '.blob',
+               'SPLGATE': '.blob', 'SPLGATE1': '.blob', 'SPLSTUB': '.blob',
+               'OVLCALL': '.ovl', 'OVBCALL': '.blob', 'BLOBCALL': '.blob'}
     MACPAT = re.compile(r'\b(' + '|'.join(MACHALF) + r')\s+(\w+)')
-    REACH = {'.ovl': 'the blob, through [spl_fseg]',
-             '.ovlw': 'the FAT window, by `call FAT_SEG:`'}
+    REACH = {'.blob': 'the blob (.boot2), through [spl_fseg]',
+             '.ovl': 'the FAT window, by `call FAT_SEG:`'}
     macbad = []
     for f in kfiles:
         for sect, n, line in sections(f):
@@ -715,8 +735,8 @@ def main():
     # Rule 2d asks whether a call arrives. This asks whether it arrives IN
     # TIME, for the one ordering the tree actually writes down: `kmain` calls
     # `drv_boot_x`, which mounts a volume, and the mount takes the FAT window
-    # and the buffers above it - so every `.ovlw` byte is gone from that line
-    # onward. Any OVWCALL below it is a call into a FAT table.
+    # and the buffers above it - so every `.ovl` byte is gone from that line
+    # onward. Any OVLCALL below it is a call into a FAT table.
     #
     # THIS IS THE ONE THAT COST A BOOT. `xm_boot_x` is boot-only and was
     # registered as such, correctly, for the deadline the registry used to
@@ -734,18 +754,18 @@ def main():
     kfile = [f for f in kfiles if f.endswith('kernel.asm')]
     late = []
     # ...AND A BLOB BODY THAT ITSELF REACHES THE WINDOW is a window call by
-    # proxy (size pass 4: kmain's pre-mount half is `kmain_o`, in `.ovl`, and
-    # its OVWCALLs are not on kmain's own lines any more). A call to one after
+    # proxy (size pass 4: kmain's pre-mount half is `kmain_o`, in `.boot2`, and
+    # its OVLCALLs are not on kmain's own lines any more). A call to one after
     # the mount is the same defect one level down, so it is refused the same way.
-    WINREF = re.compile(r'\b(?:OVWCALL|OVBCALL)\s+\w+|\bcall\s+FAT_SEG:')
-    BLOBC = re.compile(r'\b(?:OVLGATE1?|OVLCALLC?|BLOBCALL|SPLCALL|SPLGATE1?)\s+(\w+)')
+    WINREF = re.compile(r'\b(?:OVLCALL|OVBCALL)\s+\w+|\bcall\s+FAT_SEG:')
+    BLOBC = re.compile(r'\b(?:SPLGATE1?|SPLCALLC?|BLOBCALL)\s+(\w+)')
     winbody = set()
     for f in kfiles:
         cur = None
         for sect, n, line in sections(f):
             m = LABEL.match(line)
             if m:
-                cur = m.group(1) if sect == '.ovl' else None
+                cur = m.group(1) if sect == '.blob' else None
                 continue
             if cur and WINREF.search(line.split(';', 1)[0]):
                 winbody.add(cur)
@@ -775,32 +795,32 @@ def main():
             found = True
             # ...and STOP at the body's own end, which is the next label in
             # column 0. Scanning to the end of the file instead reads the
-            # resident trampolines below it - `dsk_flop_add: OVWCALL
+            # resident trampolines below it - `dsk_flop_add: OVLCALL
             # dsk_flop_add_x` was one (called from desk_init at MARK 20, long
             # before the mount; desk_init far-calls the body itself now). A rule about ORDER has to stop where
             # the ordered code does.
             for i in range(mount + 1, len(lines)):
                 if LABEL_DOT.match(lines[i]):
                     break
-                m = OVWCALL.search(lines[i].split(';', 1)[0])
+                m = OVLCALL.search(lines[i].split(';', 1)[0])
                 if m:
                     late.append((f, i + 1, m.group(1)))
                 m = BLOBC.search(lines[i].split(';', 1)[0])
                 if m and m.group(1) in winbody:
-                    late.append((f, i + 1, m.group(1) + ' (a blob body that reaches .ovlw)'))
+                    late.append((f, i + 1, m.group(1) + ' (a blob body that reaches .ovl)'))
     if not found:
         sys.exit("os88ovlchk: no `drv_boot_x` call found in kmain or kmain_o - "
                  "rule 2e cannot say what runs after the first mount, so it "
                  "refuses rather than passing (SPEC.md 2.5.3)")
     for f, n, sym in late:
-        print("%s:%d: OVWCALL %s is AFTER drv_boot_x - the first mount has "
+        print("%s:%d: OVLCALL %s is AFTER drv_boot_x - the first mount has "
               "already taken the FAT window those bytes are in"
               % (f, n, sym), file=sys.stderr)
     if late:
-        sys.exit("os88ovlchk: %d call(s) into .ovlw run after the mount - move "
-                 "the body to .ovl, which lives until spl_finish (SPEC.md "
+        sys.exit("os88ovlchk: %d call(s) into .ovl run after the mount - move "
+                 "the body to .boot2, which lives until spl_finish (SPEC.md "
                  "2.5.3)" % len(late))
-    print("os88ovlchk: no .ovlw body is called after the first mount")
+    print("os88ovlchk: no .ovl body is called after the first mount")
 
     # --- rule 1: cold code's DATA lives in .text ----------------------------
     # Same argument as the CS check and the same kind of invariant: DS still
@@ -818,7 +838,7 @@ def main():
     # The comment sitting above those very lines had predicted it: "a zero
     # [desk_pdisk] draws the interrupt vector table as an icon".
     #
-    # .ovl is again exempt, and for the same reason: the overlay's data rides
+    # .boot2 is again exempt, and for the same reason: the overlay's data rides
     # WITH it, so fdd_mbit, drvp_sbbase and ovl_font_bits all belong there.
     DATA = re.compile(r'^\s*(?:[A-Za-z_]\w*:?\s+)?(?:d[bwdq]|times|res[bwdqt])\b',
                       re.I)
@@ -916,7 +936,7 @@ def main():
     # `mov si, cp_s_*` fails the build. It is a construction rule rather than
     # an analysis, which is why it is exact.
     #
-    # **`.modl` (CLONE.DRV) and `.modf` (FORMAT.DRV) are NOT registered**, and
+    # **`.modl` (DISKOPS.DRV) and `.modf` (FORMAT.DRV) are NOT registered**, and
     # so get half 1 only. They predate this and read their strings with a bare
     # `mov si, clo_s_x` / `call clo_cat` in 26 and 10 places, in shapes a
     # next-line rule cannot express (`jmp .tail` reaches the composer four
@@ -1331,28 +1351,28 @@ def main():
     # --- and a BLOB entry ends in retf, whichever macro names it ------------
     # The rule above judges a call it can SEE. The blob's entries are reached
     # by an indirect far call - `mov word [spl_fp], X` / `call far [spl_fp]`,
-    # inside SPLCALL / OVLCALL / OVLCALLC / SPLGATE1 / OVLGATE1 / SPLSTUB - and
+    # inside SPLCALL / SPLCALL / SPLCALLC / SPLGATE1 / SPLGATE1 / SPLSTUB - and
     # the only textual trace of X at the site is an operand of a `mov`. So
     # FARC never matched one, and an entry that kept its near `ret` popped IP,
     # left CS on the stack, and returned into whatever the word above it named.
     #
     # Every entry in the tree happened to be a `call body / retf` trampoline,
     # so the hole was invisible until SPEC.md 2.5.3 started moving BODIES into
-    # `.ovl` and naming them directly - which is the right shape (SPEC.md
+    # `.boot2` and naming them directly - which is the right shape (SPEC.md
     # 2.6.1: the body owns the far return and the thunk in the middle is
     # deleted) and is one keystroke from a wild return. It was written wrong
     # here first, twice, and neither nasm nor any other check in this file said
     # anything.
     #
     # The macro name is the whole signal and that is deliberate: a site says
-    # `OVLGATE1 sched_init` and nothing else in the line is a call, so this is
+    # `SPLGATE1 sched_init` and nothing else in the line is a call, so this is
     # the one place the target can be read at all.
-    # OVWCALL is in here for the same reason as the rest: it is a FAR call, so
+    # OVLCALL is in here for the same reason as the rest: it is a FAR call, so
     # its target owes a `retf` exactly as a blob entry does. Leaving it out was
-    # not hypothetical - the sweep that created `.ovlw` moved 78 bodies and
+    # not hypothetical - the sweep that created `.ovl` moved 78 bodies and
     # this check stopped looking at every one of them.
-    BLOBCALL = re.compile(r'^\s*(?:(?:SPL|OVL)(?:CALL|CALLC|GATE|GATE1|STUB)'
-                          r'|OVWCALL)\s+([A-Za-z_]\w*)\s*$')
+    BLOBCALL = re.compile(r'^\s*(?:SPL(?:CALL|CALLC|GATE|GATE1|STUB)'
+                          r'|OVLCALL)\s+([A-Za-z_]\w*)\s*$')
     b_bad = []
     for f in files:
         for sect, n, line in sections(f):
@@ -1366,7 +1386,7 @@ def main():
               "NEAR ret" % (f, n, lab), file=sys.stderr)
     if b_bad:
         sys.exit("os88ovlchk: %d blob entry(ies) end in a near ret - every "
-                 "SPLCALL/OVLCALL/OVLGATE target is entered with a FAR call, "
+                 "SPLCALL/SPLCALL/SPLGATE target is entered with a FAR call, "
                  "so it ends in retf (SPEC.md 2.5.3, 2.6.1)" % len(b_bad))
     print("os88ovlchk: every blob entry ends in retf")
 

@@ -145,12 +145,22 @@ def build(source,out):
     text=['; Generated from reference/drmario/bank_FF.asm. Do not edit.', 'dm_song_table:']
     for name,_ in SONGS: text.append('    dw '+','.join(f'dm_song_{name}_{ch}' for ch in range(3)))
     text += ['dm_note_hz:', '    dw '+','.join(map(str,hz))]+lists
+    def packed(data):
+        # A note is its pitch index, with bit 7 set and its duration in the
+        # next byte when that differs from the phrase's previous note (and
+        # always for a phrase's first). 7Fh ends the phrase.
+        out=[];last=None
+        for d,i in zip(data[0::2],data[1::2]):
+            if not (1<=d<=255 and 0<=i<0x7f): raise ValueError('note does not pack')
+            out += [i] if d==last else [0x80|i,d]
+            last=d
+        return out+[0x7f]
     for data,p in phrases.items():
-        text += [f'dm_phrase_{p}:', '    db '+','.join(map(str,data))+',0']
+        text += [f'dm_phrase_{p}:', '    db '+','.join(map(str,packed(data)))]
     out.mkdir(parents=True,exist_ok=True)
     (out/'dm-music.inc').write_text('\n'.join(text)+'\n')
     report['source_sha256']=hashlib.sha256(path.read_bytes()).hexdigest()
-    report['phrase_bytes']=sum(len(d)+1 for d in phrases)
+    report['phrase_bytes']=sum(len(packed(d)) for d in phrases)
     (out/'dm-music.json').write_text(json.dumps(report,indent=2)+'\n')
     print('DrMarco music:',len(phrases),'phrases,',report['phrase_bytes'],'phrase bytes,',len(hz),'pitches')
 

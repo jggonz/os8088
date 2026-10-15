@@ -2949,9 +2949,9 @@ class Proxy(object):
         # links on one line, one of them the word `Reddit` - and the field
         # pressed the one that reads like the sign-in and got the front page,
         # which while logged out is a login wall that renders as nothing. The
-        # guest's hit-test is not at fault: `br_hitofs` maps the column
-        # through `br_lmap`, which the PAINTER fills, so a click lands on the
-        # link it is over. The label was the fault.
+        # guest's hit-test is not at fault: `br_hitofs` re-runs the PAINTER's
+        # own line walk (`br_build`) to the clicked cell, so a click lands on
+        # the link it is over. The label was the fault.
 
         stat = ("%d pages served, %s in, %s out, up %s"
                 % (self.served, human(self.bytes_in), human(self.bytes_out),

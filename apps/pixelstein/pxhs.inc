@@ -8,10 +8,10 @@
 ;
 ; The shape is apps/tank's tkhs.inc and apps/dotdel's ddhs.inc, and so are
 ; the two rules that fail QUIETLY when they are got wrong (pxset.inc repeats
-; them and this file reaches the folder through pxset.inc's own px_set_enter
-; / px_set_leave, the sixth copy of those eighty lines not being written):
-; the file lives in SYSTEM\APPDATA on OUR OWN volume, and it is
-; OSAPI_FILE_GOTO, never its quiet twin.
+; them and this file reaches the folder through apps/os88data.inc, which
+; pxset.inc includes): the file lives in SYSTEM\APPDATA on OUR OWN volume,
+; and it is reached with OSAPI_FILE_GOTO_QM, the quiet stand that moves the
+; instance - never the remount OSAPI_FILE_GOTO, and never GOTO_Q.
 ;
 ; WHO TOUCHES THE FILE: the UI task and nobody else (SPEC.md 20.6 rule 7 - a
 ; worker may not touch a file). It is read once in the entry proc and written
@@ -71,14 +71,11 @@ px_hs_load:
     push es
     push ds
     pop es
-    call px_set_enter
-    jc .out
     mov si, px_hs_file
     mov bx, px_hsbuf
     mov cx, PX_HSFSZ
     xor dx, dx
-    call OSAPI_FILE_READ
-    call px_set_leave               ; (flags preserved: the read's carry)
+    call od_read                    ; (we stand where we started again)
     jc .out
     or dx, dx
     jnz .out
@@ -131,14 +128,11 @@ px_hs_save:
     mov si, px_hs
     mov cx, PX_NHS * 2 + PX_NHS * 3
     rep movsb
-    call px_set_enter
-    jc .out                         ; no folder: a user's own disk, not an error
-    mov si, px_hs_file
-    mov bx, px_hsbuf
+    mov si, px_hs_file              ; no folder: a user's own disk, not an
+    mov bx, px_hsbuf                ; error, and od_write says so in CF
     mov cx, PX_HSFSZ
-    xor dx, dx
-    call OSAPI_FILE_WRITE
-    call px_set_leave
+    mov di, px_hs_ip
+    call od_write                   ; one sector, after the session's first
 .out:
     pop es
     pop di

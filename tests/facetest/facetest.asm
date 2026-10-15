@@ -317,6 +317,14 @@ ft_onkey:
 ft_onclick:
     ret
 
+%define OS88TY_NOHIT            ; SPEC.md 6.5.5: the bench draws and does
+%define OS88TY_NOWIDTH          ; not measure
+%define OS88TY_NOWIDTHN
+%define OS88TY_NOFIT
+%define OS88TY_NOADVOF
+%define OS88TY_NOFAMN
+%define OS88TY_NOGETASC
+%define OS88TY_NOGETLEAD
 %include "os88type.inc"
 
 ; --- data --------------------------------------------------------------------

@@ -298,7 +298,20 @@ def main(argv):
             return out
 
         m.type_text("f")
-        m.advance(frames=30)
+        # THE BRACKET MUST BE UP BEFORE THE SCENE IS PINNED. Thirty video
+        # frames was a guess, and on a build whose bracket set-up is slower it
+        # was a wrong one: the pokes below landed before tk_fsx_main reached
+        # tk_startround, which clears [tk_pause] and deals a tank of its own -
+        # so that run priced an UNPAUSED world with two tanks in it against a
+        # paused one with one, and the A/B read the dealer instead of the code
+        # (apps size pass 1, set 6: a base CGA frame of 77 ms that was a 69 ms
+        # frame with a second tank). tk_frames climbing is the bracket drawing.
+        for _ in range(40):
+            m.advance(frames=30)
+            if w("tk_frames") >= 3:
+                break
+        else:
+            sys.exit("tankperf: the bracket never drew a frame")
         back = w("tk_back") & 0xFF
         print("  backend %d, viewport %dx%d, scene %s%s"
               % (back, w("tk_vw"), w("tk_vh"), a.scene,
@@ -351,6 +364,12 @@ def main(argv):
         poke("tk_oz", (900 if a.scene == "heavy" else 3200).to_bytes(2, "little"), TK_NSTAT * 2)
         poke("tk_oa", b"\x80", TK_NSTAT)
         poke("tk_pause", b"\x01")                   # the world stands still
+        poke("tk_sweep", b"\x00")                   # ...and the radar's sweep
+                                                    # starts where it did: it is
+                                                    # the one thing a paused world
+                                                    # still moves, so a build that
+                                                    # reached the pin in fewer
+                                                    # frames priced another angle
 
         def ms():
             v = frames(a.frames)

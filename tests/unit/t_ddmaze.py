@@ -19,6 +19,17 @@ way out of a pocket in dd_lay1 and this goes red naming the count; change one
 character of row 14 in dd_lay2 and it goes red naming the row. Neither is
 visible in a screenshot and neither would stop the game booting - a walled-off
 dot is a level that can never be cleared, which is a game that hangs at 99%.
+
+It also walks dd_home_map's own breadth-first search over each layout and
+checks its FRONTIER against the ring that queue now is (DD_HQN): the queue is
+sized by the most tiles ever waiting at once, not by the board, so a layout
+whose frontier outgrew it would leave eyes with no route home. Set DD_HQN to
+32 and this goes red naming the peak (22 in all three today).
+
+The rows are written with DDROW (ddmaze.inc), which packs each into two bits
+a tile at assembly time and REFUSES a row that is not its own mirror, a door
+outside the shared block, a pellet inside it, or a shared row that differs
+from layout 0's - so a layout that fails here mostly fails `make` first.
 """
 import os
 import re
@@ -31,6 +42,7 @@ SRC = os.path.join(ROOT, "apps", "dotdel", "ddmzdat.inc")
 COLS, ROWS = 28, 31
 SHARED = range(9, 20)                       # SPEC.md 93.2's shared block
 START = (13, 23)                            # Smiles, in (col, row)
+HOME = (13, 14)                             # DD_HOMEC, DD_HOUSER: the walk's root
 PILLS = 4
 
 
@@ -43,7 +55,7 @@ def layouts():
             cur = m.group(1)
             out[cur] = []
             continue
-        m = re.match(r"^\s+db\s+'(.*)'\s*$", line.rstrip("\n"))
+        m = re.match(r"^\s+DDROW\s+'(.*)'\s*$", line.rstrip("\n"))
         if m and cur:
             out[cur].append(m.group(1).replace("''", "'"))
     return out
@@ -64,6 +76,37 @@ def flood(g):
                 seen[nr][nc] = True
                 st.append((nr, nc))
     return seen
+
+
+def home_walk(g):
+    """dd_home_map's breadth-first walk, in its own order, and its PEAK.
+
+    The queue is a ring of DD_HQN entries (ddmaze.inc), sized by the walk's
+    FRONTIER rather than by the board, so the peak number of tiles waiting is
+    the property to check: a layout whose frontier outgrew the ring would
+    leave the tiles past it unmapped. Neighbours go right, down, left, up
+    (dd_dx/dd_dy), the door is passable and the tunnel wraps.
+    """
+    c0, r0 = HOME
+    if g[r0][c0] == '#':
+        return 0
+    seen = {(c0, r0)}
+    q, head, peak = [(c0, r0)], 0, 1
+    while head < len(q):
+        c, r = q[head]
+        head += 1
+        for dc, dr in ((1, 0), (0, 1), (-1, 0), (0, -1)):
+            nc, nr = (c + dc) % COLS, r + dr
+            if 0 <= nr < ROWS and g[nr][nc] != '#' and (nc, nr) not in seen:
+                seen.add((nc, nr))
+                q.append((nc, nr))
+                peak = max(peak, len(q) - head)
+    return peak
+
+
+def hqn():
+    src = open(os.path.join(ROOT, "apps", "dotdel", "ddmaze.inc")).read()
+    return int(re.search(r"^DD_HQN\s+equ\s+(\d+)", src, re.M).group(1))
 
 
 def main():
@@ -135,9 +178,17 @@ def main():
         if not 180 <= dots <= 300:
             fail.append("%s: %d dots, want 180..300 - a board that empties in "
                         "seconds or never is not a level" % (name, dots))
+        # the way-home walk's frontier against its ring, with room to spare
+        peak, ring = home_walk(g), hqn()
+        if peak * 2 > ring:
+            fail.append("%s: dd_home_map's frontier peaks at %d tiles and "
+                        "the ring holds DD_HQN = %d - keep it at least twice "
+                        "the peak, or eyes lose their route home (SPEC.md "
+                        "93.8.5)" % (name, peak, ring))
         if not fail:
-            print("  %-8s ok   %3d dots, %d pellets, all reachable"
-                  % (name, dots, pills))
+            print("  %-8s ok   %3d dots, %d pellets, all reachable, "
+                  "home walk peaks at %d of %d"
+                  % (name, dots, pills, peak, ring))
 
     if fail:
         print("t_ddmaze: %d FAILED" % len(fail))

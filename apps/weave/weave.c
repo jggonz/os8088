@@ -193,7 +193,6 @@ static int      w_gsel_r = 1;           /* 6.9's selection, 1-based */
 static int      w_gsel_c = 1;
 static int      w_gid;                  /* the grid's comp_id, 0 = no grid */
 static int      w_gactive;              /* 6.9.4: was the grid last clicked? */
-static struct os88_place w_savhere2;    /* 19.9's walk, one step at a time */
 
 /* ============================================================================
  * THE FORWARD DECLARATIONS

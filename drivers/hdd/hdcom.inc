@@ -301,11 +301,13 @@ hd_part_ent:
 ; refuses one as an install TARGET (52.10.4.1). One is a duplicate icon and
 ; the other is formatting the volume the machine is running from.
 ;
-; **Only a BIOS row can be it.** The kernel's transport there is int 13h
-; (rung 0), so a device reached through the task file is by definition not
-; the drive the adoption named - and there is no int 13h number to offer for
-; one anyway. An IDE row therefore answers "not the kernel's", which is right
-; for the drive the BIOS does not know.
+; **Only a drive the BIOS knows can be it.** The kernel's transport there is
+; int 13h (rung 0), so a drive reached only through the task file is not the
+; drive the adoption named, and has no int 13h number to offer. HDD_BIOS is
+; that number on every row that has one - a BIOS row, and an IDE row TAKEN
+; from the BIOS (SPEC.md 52.1.1) - so it is asked by that alone: the boot
+; partition of an installed machine stays the kernel's, and is never mounted
+; a second time.
 ; -----------------------------------------------------------------------------
 hd_kvol:
     push bx
@@ -313,25 +315,17 @@ hd_kvol:
     push dx
     push di
     call hd_dev_row
-    cmp byte [di+HDD_KIND], HDK_BIOS
-    jne .no
-    mov dl, [di+HDD_UNIT]       ; the int 13h drive, and the partition base as
-    mov cx, [si+HP_LBA]         ; the kernel keeps it: 32 bits, high word in BX
-    mov bx, [si+HP_LBA+2]
-    call OSAPI_VOL_AT           ; preserves everything but AL
-    jc .no
+    mov dl, [di+HDD_BIOS]       ; the int 13h drive - a BIOS row's, or the one
+    cmp dl, 1                   ; a drive rung 1 TOOK still answers as
+    jc .out                     ; (52.1.1); none (CF = 1 off 0 - 1) is no
+    mov cx, [si+HP_LBA]         ; ...and the partition base as the kernel
+    mov bx, [si+HP_LBA+2]       ; keeps it: 32 bits, high word in BX
+    call OSAPI_VOL_AT           ; CF, AL; preserves everything else
+.out:
     pop di
     pop dx
     pop cx
     pop bx
-    clc
-    ret
-.no:
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    stc
     ret
 
 ; -----------------------------------------------------------------------------

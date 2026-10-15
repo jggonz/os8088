@@ -96,6 +96,7 @@ xb_fullscreen:
     call xb_font_copy
     call xb_race_open              ; back end: dictionaries, sprites (CF: refused)
     jc xb_fsassetfail
+    call xb_gfx_free               ; ...and nothing reads the art file after it (xb_font_copy)
     call xu_start                  ; the sound: FM claim or the speaker (audio.inc)
     cmp byte [xb_noflow], 0
     jne .raw
@@ -127,6 +128,8 @@ xb_fsdone:
     call xu_close
     call xb_spr_free
     call xb_gfx_free
+    mov bx, xb_tseg                 ; the harness's claim, if a harness made one (game.inc)
+    call xb_freeseg
     mov byte [xb_fs], 0
     ret
 
@@ -207,14 +210,14 @@ xb_ld_line:
     je .blank
     xor ah, ah
     push si
-    mov cl, [xb_gshift]
+    mov cl, 3
     shl ax, cl
-    mov si, exb_ld_v
+    add ax, exb_ld_v
+    xchg si, ax
     cmp byte [xb_cga], 0
     je .src
-    mov si, exb_ld_c
+    call xb_ld_wide                 ; CGA and Hercules: the 2-bit cell, made from the 1-bit one
 .src:
-    add si, ax
     call xb_glyph
     pop si
 .blank:
@@ -222,6 +225,42 @@ xb_ld_line:
     jmp .char
 .out:
     RESTORE
+    ret
+
+; DS:SI = a 1-bit loading glyph (8 bytes) -> SI = the same glyph at two bits a pixel, ink 3
+; (a set bit is 11, the leftmost in bits 15-14 of a big-endian word: the compiler's
+; cga_font_glyph), in xb_ldglyph - which is what the CGA and the Hercules both draw, so
+; the package carries the 1-bit set alone.  Preserves everything else.
+xb_ld_wide:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, xb_ldglyph
+    mov ch, 8
+.row:
+    lodsb
+    mov cl, 8
+.bit:
+    shl dx, 1
+    shl dx, 1
+    shl al, 1
+    jnc .z
+    or dl, 3
+.z:
+    dec cl
+    jnz .bit
+    xchg dh, dl
+    mov [bx], dx
+    inc bx
+    inc bx
+    dec ch
+    jnz .row
+    mov si, xb_ldglyph
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; one 8x8 glyph, DS:SI -> ES:DI (8 bytes VGA planar-all / 16 bytes CGA 2bpp);
@@ -405,12 +444,21 @@ xb_gfx_load:
     ret
 
 xb_gfx_free:
+    push bx
+    mov bx, xb_gfxseg
+    call xb_freeseg
+    pop bx
+    ret
+
+; BX = the address of a word holding a claim's segment (0 = none): free it, zero the word.
+; Preserves every register.
+xb_freeseg:
     push dx
-    mov dx, [xb_gfxseg]
+    mov dx, [bx]
     or dx, dx
     jz .out
     call OSAPI_MEM_FREE
-    mov word [xb_gfxseg], 0
+    mov word [bx], 0
 .out:
     pop dx
     ret
@@ -425,7 +473,11 @@ xb_gfxname_c: db 'EXBC.GFX',0
 xb_gfxname_h: db 'EXBH.GFX',0
 
 ; the font record -> xb_font: 64 glyphs, one 8-byte 1-bit row set (VGA) or a
-; 16-byte 2-bit set (CGA), so text is a run of moves with DS = our segment
+; 16-byte 2-bit set (CGA), so text is a run of moves with DS = our segment.  The
+; PAL record follows it there (VGA 244 bytes, CGA and Hercules 38), and [xb_pal]
+; is that copy's offset in OUR segment, so the palette, the banner flash and the
+; loaders read it with DS as it is, and the art claim can be handed back once the back end is built
+; (xb_fullscreen): nothing after xb_race_open reads the art file.
 xb_font_copy:
     SAVE
     push ds
@@ -433,12 +485,20 @@ xb_font_copy:
     mov di, xb_font
     mov si, [xb_recs+EXBR_FONT*2]
     mov cx, 512
+    mov dx, 244
     cmp byte [xb_cga], 0
     je .copy
     mov cx, 1024
+    mov dx, 38
 .copy:
+    mov bx, [xb_recs+EXBR_PAL*2]
+    mov [xb_pal], di
+    add [xb_pal], cx
     push ds
     mov ds, [xb_gfxseg]
+    rep movsb
+    mov si, bx
+    mov cx, dx
     rep movsb
     pop ds
     RESTORE
@@ -467,10 +527,8 @@ xb_palette:
     mov al, [xb_theme]
     mov ah, 48
     mul ah
-    add ax, [xb_recs+EXBR_PAL*2]
+    add ax, [xb_pal]
     mov si, ax
-    push ds
-    mov ds, [xb_gfxseg]
     mov dx, 3c8h
     xor al, al
     out dx, al
@@ -480,7 +538,6 @@ xb_palette:
     lodsb
     out dx, al
     loop .dac
-    pop ds
     mov byte [xb_bfl], 0            ; the DAC is the theme's own again
     jmp .out
 .cga:
@@ -488,11 +545,8 @@ xb_palette:
     jne .out                        ; a Hercules has no palette register (and 3D9h may be a colour card's)
     mov bl, [xb_profile]
     xor bh, bh
-    add bx, [xb_recs+EXBR_PAL*2]
-    push ds
-    mov ds, [xb_gfxseg]
+    add bx, [xb_pal]
     mov al, [bx+32]                 ; the 3D9h value of the profile
-    pop ds
     mov dx, 3d9h
     out dx, al
 .out:
@@ -530,18 +584,16 @@ xb_banner:
     push cx
     push dx
     push si
-    push ds
     mov al, [xb_theme]
     mov cl, 48
     mul cl                          ; AX = theme * 48
-    add ax, [xb_recs+EXBR_PAL*2]
+    add ax, [xb_pal]
     add ax, 13 * 3                  ; normal: the theme's slot 13 ...
     or bl, bl
     jz .rd
     sub ax, 3                       ; ... flashed: its slot 12
 .rd:
     mov si, ax
-    mov ds, [xb_gfxseg]
     lodsb
     mov bl, al
     lodsb
@@ -566,7 +618,6 @@ xb_banner:
     out dx, al
     mov al, cl
     out dx, al
-    pop ds
     pop si
     pop dx
     pop cx

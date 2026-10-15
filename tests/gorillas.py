@@ -21,9 +21,105 @@ import os88build
 import os88geom as G
 import os88marty as M
 import os88ui
+import gorillas_art
+import gorillas_bgm
+import gorillas_music
 
 ARMS = {'vga': 'os8088_xt_vga', 'cga': 'os8088_5150_cga_gla',
         'herc': 'os8088_5150_herc_gla'}
+
+
+def poses():
+    """The raised-arm poses as the GENERATOR states them (SPEC.md 99.5). The
+    guest holds only the left one and mirrors it to draw or convert the right,
+    so a gate compares pixels with these rather than reading the guest back."""
+    left, right = gorillas_art.poses()
+    return {'gr_apeleft': gorillas_art.packed(left), 'gr_aperight': gorillas_art.packed(right)}
+
+
+def surface(p):
+    """The live surface as gr_inktables and gr_frontprepare key it."""
+    return p.b('depth'), p.b('vga'), p.b('cga'), p.w('sx'), p.w('sy')
+
+
+def caches(depth, vga, cga, sx, sy):
+    """What gr_frontprepare must leave in gr_lightcache and gr_apecache for a
+    surface: the generator's marquee masks (two bits a pixel at sx 2 and on
+    CGA, palette 2 there) and its intro sprite form of both poses."""
+    lights = gorillas_art.light_masks()
+    if cga or sx == 2:
+        wide = bytearray()
+        for b in lights:
+            d = sum(3 << (2*bit) for bit in range(8) if b >> bit & 1)
+            mask = 0xAA if cga else 0xFF
+            wide += bytes((d >> 8 & mask, d & mask))
+        lights = bytes(wide)
+    if depth == 4:
+        sprite = gorillas_art.front_sprite('vga' if vga else 'planar', sx, sy)
+    elif depth == 2:
+        sprite = gorillas_art.front_sprite('cga', 1)
+    else:
+        sprite = gorillas_art.front_sprite('mono', sx)
+    return lights, sprite
+
+
+def check_caches(p):
+    lights, sprite = caches(*surface(p))
+    assert p.data('lightcache', len(lights)) == lights, ('marquee masks differ', surface(p))
+    assert p.data('apecache', len(sprite)) == sprite, ('intro sprites differ', surface(p))
+
+
+def check_inkpairs(p):
+    depth, vga, _, sx, _ = surface(p)
+    want = gorillas_art.inkpairs(depth, vga, sx)
+    assert p.data('inkpairs', len(want)) == want, ('ink-pair tables differ', surface(p))
+
+
+def tones(m, p, code, name):
+    """Run the guest's OWN sequencer over gr_music<name>: [(Hz, ticks)] as
+    gr_musictick hands each note to OSAPI_SND_TONE. Paused under the caller's
+    graphics lock; each note is made due, then caught at the kernel's entry.
+    score() reads the bytes; this is what the decode makes of them."""
+    tone, ticks = m.sym('osapi_snd_tone'), m.sym('ticks')
+    regs = ('ax', 'bx', 'cx', 'dx', 'si', 'di', 'bp', 'sp', 'ss', 'ds', 'es', 'flags')
+    out, at = [], code['gr_music' + name]
+    while True:
+        m.write(p.base + p.offsets['gr_musicptr'], struct.pack('<H', at))
+        m.write(p.base + p.offsets['gr_musicdue'], m.read(ticks, 2))
+        saved = m.regs()
+        m.cmd(cmd='park', cs=saved['cs'], ip=code['gr_musictick'])
+        for reg in regs:                # park does not keep them
+            m.setreg(reg, saved[reg])
+        m.setreg('flags', saved['flags'] & ~0x200)  # no ISR's tone in between
+        sp = (saved['sp'] - 2) & 65535
+        m.setreg('sp', sp)
+        m.write((saved['ss'] << 4) + sp, struct.pack('<H', saved['ip']))
+        m.bp_exec(tone)
+        m.run()
+        assert m.wait_stop(30) == 'breakpoint', name + ': no tone requested'
+        r = m.regs()
+        m.bp_exec((saved['cs'] << 4) + saved['ip'])
+        m.run()
+        assert m.wait_stop(30) == 'breakpoint', name + ': gr_musictick never returned'
+        for reg in regs:
+            m.setreg(reg, saved[reg])
+        at = p.w('musicptr')
+        if not at:                      # the terminator: gr_musicstop's silence
+            assert (r['ax'], r['cx']) == (0, 0)
+            return out
+        out.append((r['ax'], r['cx']))
+
+
+def score(m, p, code, name):
+    """gr_music<name> decoded through the guest's own gr_musichz: [(Hz, ticks)]."""
+    table = gorillas_music.frequencies()
+    hz = struct.unpack('<%dH' % len(table), m.read(p.base + code['gr_musichz'], 2*len(table)))
+    out = []
+    for b in m.read(p.base + code['gr_music' + name], 256):
+        if not b:
+            return out
+        out.append((hz[b >> 3], b & 7))
+    raise AssertionError('unterminated score ' + name)
 
 
 def offsets():
@@ -136,12 +232,16 @@ def capture(m, p, path):
         w, h, pixels = m.fbuf(0)
         M.write_png_rgb(str(path), w, h, pixels)
         colors = set(zip(pixels[0::3], pixels[1::3], pixels[2::3]))
-        assert len(colors) >= 4, ('missing color scene', colors)
+        # CGA's bright green is ink 7 alone - a cyan facade, which a random
+        # skyline of n buildings lacks (2/3)^n of the time (8 to 12: 1-4%).
+        # Ask the city, rather than fail one seed in thirty.
+        green = not p.b('cga') or 7 in p.data('colors', p.w('buildings'))
+        assert len(colors) >= 3 + green, ('missing color scene', colors)
         assert any(r < 20 and g < 20 and b > 120 for r, g, b in colors), \
             ('the reference blue sky is missing', colors)
         if p.b('cga'):
-            assert any(r < 120 and g > 200 and b < 120 for r, g, b in colors), \
-                ('CGA warm palette lacks bright green', colors)
+            assert green == any(r < 120 and g > 200 and b < 120 for r, g, b in colors), \
+                ('CGA warm palette and the facades disagree about bright green', colors)
             assert any(r > 200 and g < 120 and b < 120 for r, g, b in colors), \
                 ('CGA warm palette lacks bright red', colors)
             assert not any(r > 200 and g < 120 and b > 200 for r, g, b in colors), \

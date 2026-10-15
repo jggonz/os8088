@@ -84,14 +84,19 @@ def build(out):
         inc.append('n_front_'+tag+':')
         inc.extend(bands)
         png(out/('1942-splash-'+tag+'.png'),pixels,W,height)
-    for name,line in [('one','1 PLAYER'),('two','2 PLAYERS'),('resume','RESUME GAME'),('new','NEW GAME')]:
-        for scale in (1,2):
-            width=192;height=scale*8;pixels=bytearray(width*height)
-            for j,ch in enumerate(line):
-                font=bytes.fromhex(fonts['font%d'%ord(ch)]['pixels'])
-                for y in range(height):
-                    for x in range(8*scale):pixels[y*width+j*8*scale+x]=font[(y//scale)*8+x//scale]
-            emit('n_front_%s%d'%(name,scale),bitmap(pixels,width,height))
+    # Menu labels are rendered at run time (front.inc n_frontlabel) from an
+    # 8x8 subset of the game font: glyph offsets, 0FEh a space, 0FFh the end.
+    # The four strings are emitted back to back, in this order.
+    labels=[('one','1 PLAYER'),('two','2 PLAYERS'),('resume','RESUME GAME'),('new','NEW GAME')]
+    chars=sorted(set(''.join(t for _,t in labels))-{' '})
+    glyphs=bytearray()
+    for ch in chars:
+        font=bytes.fromhex(fonts['font%d'%ord(ch)]['pixels'])
+        glyphs+=bitmap(font,8,8)
+    emit('n_front_font',glyphs)
+    for name,line in labels:
+        assert len(line)*16<=192
+        emit('n_front_%s'%name,[0xfe if ch==' ' else chars.index(ch)*8 for ch in line]+[0xff])
     for scale in (1,2):
         height=12*scale
         pixels=bytes(polygon(source['plane'],x+.5,(y+.5)*2/scale) for y in range(height) for x in range(24))

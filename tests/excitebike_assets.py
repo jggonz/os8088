@@ -245,9 +245,32 @@ def main():
                 m = re.search(r"^exb_t%d_s%d:\n    db ([0-9,]+)" % (ti, lap), trk, re.M)
                 nums = [int(v) for v in m.group(1).split(",")]
                 check(nums[-2:] == [0, 0], "track %d lap %d stream terminates" % (ti, lap))
+                # the stream grammar (world.inc xb_expand), decoded here and not by the
+                # compiler's own stream_decode: an id byte whose top two bits are a run of
+                # 1-3, or 00 and the run in the next byte; a 0 run ends it; in pass 2's
+                # stream id 63 copies the run from pass 1's columns and 62 skips it
                 ids = []
-                for k in range(0, len(nums) - 2, 2):
-                    ids += [nums[k]] * nums[k + 1]
+                k = sp = 0
+                while True:
+                    b = nums[k]
+                    run = b >> 6
+                    k += 1
+                    if not run:
+                        run = nums[k]
+                        k += 1
+                        if not run:
+                            break
+                    if b & 63 == 62 and lap == 2:
+                        sp += run
+                    elif b & 63 == 63 and lap == 2:
+                        ids += lap1[sp:sp + run]
+                        sp += run
+                    else:
+                        check(b & 63 < len(art.col_order), "track %d lap %d: a column id in range" % (ti, lap))
+                        ids += [b & 63] * run
+                check(k == len(nums), "track %d lap %d stream ends at its terminator" % (ti, lap))
+                if lap == 1:
+                    lap1 = ids
                 want = [art.col_ids[c] for c in X.lap_columns(plist, art.pieces_by_name)[0]]
                 check(ids == want, "track %d lap %d stream expands to its pieces" % (ti, lap))
                 # triggers: piece starts derived from the .trk text, read back
@@ -259,9 +282,14 @@ def main():
                     sn = art.pieces_by_name[pn]["script"]
                     if sn != "-":
                         wt += [x, sids[sn]]
-                g = re.search(r"^exb_t%d_g%d:\n    dw ([0-9A-Fh,]+)" % (ti, lap), trk, re.M)
-                gv = [int(v[:-1], 16) if v.endswith("h") else int(v) for v in g.group(1).split(",")]
-                check(gv[-1] == 0xFFFF and gv[:-1] == wt, "track %d lap %d trigger list" % (ti, lap))
+                # (word column, byte script id) records ending in a column of 0FFFFh
+                g = re.search(r"^exb_t%d_g%d:\n    db ([0-9,]+)" % (ti, lap), trk, re.M)
+                gb = [int(v) for v in g.group(1).split(",")]
+                gv = []
+                for k in range(0, len(gb) - 2, 3):
+                    gv += [gb[k] | gb[k + 1] << 8, gb[k + 2]]
+                check(gb[-2:] == [0xFF, 0xFF] and len(gb) % 3 == 2 and gv == wt,
+                      "track %d lap %d trigger list" % (ti, lap))
             hd = re.search(r"^exb_t%d: db (\d+),(\d+)\n    dw (\d+),(\d+),(\d+)\n    dw ([^\n]+)\n"
                            r"exb_t%d_name: db '([^']*)',0" % (ti, ti), trk, re.M)
             check(hd is not None, "track %d header present" % ti)

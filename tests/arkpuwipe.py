@@ -397,8 +397,11 @@ def main():
         freeze(m, p)
         repaint(m, p, a.frames)
 
-        print("window %s content %s  ark_ox=%d ark_spok=%d puband=%s"
-              % (title, box, ox, p.rb("ark_spok"),
+        # ark_spok left the package in size pass 1 (SPEC.md 44.11): the
+        # bands are composed before the window exists, so it was always 1
+        print("window %s content %s  ark_ox=%d ark_spok=%s puband=%s"
+              % (title, box, ox,
+                 p.rb("ark_spok") if "ark_spok" in syms else "-",
                  "yes" if "ark_puband" in syms else "NO (pre-44.10.6.2)"))
         rows = []
         for name, skew, forced in (("aligned", 0, False),

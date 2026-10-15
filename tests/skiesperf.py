@@ -65,6 +65,10 @@ SCENES = {                              # x, y, z (metres), heading (degrees), p
     "climb": (-2689, 40, -2409, 40, 5),  # 300 m down the runway, 40 m up
     "bank": (-2689, 80, -2409, 40, 5, 30),   # ...banked 30 right, for the ADI
     "citybank": (150, 300, -900, 30, -5, 30),  # ...the city frame banked 30 right
+    # --- GROUND, mostly (88.13.1.5.2): over the tower looking down past it,
+    #     so a texture's price is paid on most of the view's rows
+    "ground": (-640, 300, -640, 45, -8),
+    "groundbank": (-640, 300, -640, 45, -8, 25),
     # --- THE WANDERING PAIR (88.5.7.3). Both put a long flat's vertex BESIDE
     #     the eye - 150-200 m abeam, 15 m ahead - so |cx| is over NINE cz and
     #     the projection CLAMPS it: the line through it is the one that bends.
@@ -94,7 +98,7 @@ def sites(lst):
     rx = re.compile(r"\s*\d+\s+([0-9A-F]{8})\s+([0-9A-F\[\]]+)\s+(?:<\d+>\s*)?(.*)$")
     lab = re.compile(r"\s*\d+\s+(?:[0-9A-F]{8}\s+(?:[0-9A-F()\-\[\]]+\s+)?)?(?:<\d+>\s*)?([A-Za-z_][A-Za-z0-9_]*):")
 
-    def find(pat, nth=0, within=None):
+    def find(pat, nth=0, within=None, optional=False):
         hits, scope = [], within is None
         for L in lines:
             if within:
@@ -108,6 +112,8 @@ def sites(lst):
                 b = bytes.fromhex(m.group(2).replace("[", "").replace("]", ""))
                 hits.append((int(m.group(1), 16), b))
         if len(hits) <= nth:
+            if optional:
+                return None
             sys.exit("skiesperf: no site matches %r in the listing" % pat)
         return hits[nth]
 
@@ -115,6 +121,14 @@ def sites(lst):
         return (a, b, b"\x90" * len(b))
     s = {}
     s["skyground"] = nop(*find(r"call cs_skyground$", within="cs_render"))
+    # THE HAZE (SPEC.md 88.4.1.1): its jump NOPped is the plain pass, so this
+    # row is what the bands cost - and nothing at all below --bld 4, where
+    # the gate in front of it has already gone the other way
+    # ...and OPTIONAL, so this instrument prices a tree from before the haze
+    # as well: an A/B across two trees has to be one instrument
+    hz = find(r"jmp cs_hazerows$", within="cs_skyground", optional=True)
+    if hz:
+        s["  haze (in skyground)"] = nop(*hz)
     s["scene"] = nop(*find(r"call cs_scene$", within="cs_render"))
     # THE ENGINE SOUND, per drawn object (SPEC.md 88.8.2.1.2). It is the only
     # stage here that is not drawing, and it is measured for exactly that
@@ -221,6 +235,31 @@ def main(argv):
     ap.add_argument("--apps", default="build/apps360.img")
     ap.add_argument("--scene", default="tower", choices=sorted(SCENES))
     ap.add_argument("--frames", type=int, default=12)
+    ap.add_argument("--bld", type=int, default=None,
+                    help="the Detail Level to pin: 5 is Ultra, where the "
+                         "fields are (88.13.1.5); default, whatever the "
+                         "instance has")
+    ap.add_argument("--ab", metavar="BYTE=VALUE",
+                    help="an A/B in ONE instance: the pinned frame as it is "
+                         "and with this bss byte poked (e.g. cs_setfill=3), "
+                         "in ms and differing pixels. Two instances are NOT "
+                         "an A/B: a launch's timing moves what the cull has "
+                         "filed, and two separate runs of the same scene "
+                         "once filed 7 and 17 objects. Skips the stage table")
+    ap.add_argument("--nostages", action="store_true",
+                    help="the frame time alone: no stage table")
+    ap.add_argument("--work", action="store_true",
+                    help="with --nostages: also cs_render to cs_r_end, the "
+                         "frame's WORK without the page flip's wait for "
+                         "retrace - Mode X frames come in 16.75 ms steps, "
+                         "so a whole-frame A/B there reads 0 or one retrace")
+    ap.add_argument("--warm", type=int, default=3,
+                    help="frames to discard after the pin: the cull files a "
+                         "teleported world over several, and an A/B wants "
+                         "it settled (20 is plenty)")
+    ap.add_argument("--fill", type=int, default=None,
+                    help="the fill bits to pin: 7 is terrain, buildings and "
+                         "the HAZE (88.4.1.1.1), which an 8088 must ask for")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--shot", help="write the pinned scene's picture here")
     ap.add_argument("--trace", action="store_true",
@@ -279,8 +318,24 @@ def main(argv):
             poke("cs_want", b"\x04")           # CSB_C160
             poke("cs_fsxm", b"\x00")           # FSXM_TEXT80
             m.run()
+        # ...AND WAIT FOR cs_reset, which is what puts the aeroplane on the
+        # runway: a pin poked before it is overwritten. On Hercules thirty
+        # frames was enough; on VGA the bracket's mode set and overlay read
+        # are slower, the pin landed first, and every VGA scene priced the
+        # RUNWAY - the same 251 ms and the same picture whatever was asked
+        m.pause()
+        poke("cs_inited", b"\x00")
+        m.run()
         m.type_text("f")
-        m.advance(frames=30)
+        for _ in range(60):
+            m.advance(frames=20)
+            m.run()
+            if (w("cs_back") & 0xFF) and m.readseg(
+                    seg, base + off("cs_inited"), 1)[0]:
+                break
+        else:
+            sys.exit("skiesperf: the flight never initialised")
+        m.advance(frames=10)
         m.run()
         back = w("cs_back") & 0xFF
         print("  backend %d, view %dx%d, scene %s"
@@ -299,6 +354,10 @@ def main(argv):
             poke("cs_roll", ((roll * 65536 // 360) & 0xFFFF).to_bytes(2, "little"))
             poke("cs_state", b"\x01")
         poke("cs_pause", b"\x01")           # the world stands still
+        if a.bld is not None:
+            poke("cs_setbld", bytes([a.bld]))
+        if a.fill is not None:
+            poke("cs_setfill", bytes([a.fill]))
         # ...and every object is looked at again: a poke is a teleport, and
         # the cull's skip counters (SPEC.md 88.5.2) were set where it was
         # THE WORLD IS THE PICKED LOCATION'S since SPEC.md 88.6.4, so the skips
@@ -309,7 +368,7 @@ def main(argv):
         for o in range(objs, objs + nobj * 20, 20):
             m.write(lin + o + 18, b"\x00\x00")
         m.run()
-        frames(3)                           # a warm-up, discarded: the first
+        frames(a.warm)                      # a warm-up, discarded: the first
                                             # frame after a poke redraws the panel
         print("  objects in the frame: %d" % w("cs_nvisn"))
         if a.shot:
@@ -342,6 +401,65 @@ def main(argv):
         base_ms = ms()
         print("  frame: %.2f ms (%.2f fps), mean of %d exact frames, the "
               "tick wait patched out" % (base_ms, 1000 / base_ms, a.frames))
+        if a.nostages and a.work:
+            rend = dispapps._map("skies")["cs_r_end"]
+            m.bp_exec(lin + render, lin + rend)
+            out, t0 = [], None
+            while len(out) < a.frames:
+                m.run()
+                if m.wait_stop(20) is None:
+                    sys.exit("skiesperf: the frame never came")
+                st = m.status()
+                if st["ip"] == render:
+                    t0 = st["cycles"]
+                elif t0 is not None:
+                    out.append((st["cycles"] - t0) / CPS * 1000.0)
+                    t0 = None
+            m.bp_exec()
+            m.run()
+            print("  work: %.2f ms, cs_render to cs_r_end, mean of %d"
+                  % (sum(out) / len(out), len(out)))
+        if a.nostages:
+            print("  setlod %d setbld %d setfill %d setsize %d"
+                  % (m.readseg(seg, base + off("cs_setlod"), 1)[0],
+                     m.readseg(seg, base + off("cs_setbld"), 1)[0],
+                     m.readseg(seg, base + off("cs_setfill"), 1)[0],
+                     m.readseg(seg, base + off("cs_setsize"), 1)[0]))
+            return
+        if a.ab:
+            name, val = a.ab.split("=")
+            val = int(val, 0)
+            def shot():
+                m.pause()
+                wd, hd, data = m.fbuf(0)
+                m.run()
+                return wd, hd, data
+            w0, h0, d0 = shot()
+            m.pause()
+            was = m.readseg(seg, base + off(name), 1)
+            poke(name, bytes([val]))
+            m.run()
+            frames(3)
+            ab_ms = ms()
+            w1, h1, d1 = shot()
+            m.pause()
+            poke(name, was)
+            m.run()
+            frames(3)
+            again = ms()
+            diff = sum(1 for i in range(0, min(len(d0), len(d1)), 3)
+                       if d0[i:i+3] != d1[i:i+3])
+            print("  as it is      %7.2f ms  (%5.2f fps), %s = %d"
+                  % (base_ms, 1000 / base_ms, name, was[0]))
+            print("  %s = %-4d %7.2f ms  (%5.2f fps)   %+.2f ms, %.1f%% of "
+                  "the frame" % (name, val, ab_ms, 1000 / ab_ms,
+                                 ab_ms - base_ms,
+                                 100 * (ab_ms - base_ms) / base_ms))
+            print("  back          %7.2f ms   (repeat of the first arm: "
+                  "%+.2f ms)" % (again, again - base_ms))
+            print("  the two pictures differ in %d pixels of %d"
+                  % (diff, w0 * h0))
+            return
         if a.noside:
             # --- 88.5.7's A/B. The same pinned frame, the side clip on and
             #     off, with the PICTURE compared too: a toggle that costs

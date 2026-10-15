@@ -40,6 +40,7 @@ at_cmd_newdoc:
     mov word [at_utop], 0
     mov word [at_rcnt], 0
     mov word [at_rtop], 0
+    call at_afit                    ; ...and gives its arena back (46.6.3)
     mov si, at_s_defname            ; UNTITLED.MD - what Save As offers
     mov di, at_name
 .name:
@@ -416,6 +417,7 @@ at_load_named:
     mov word [at_utop], 0
     mov word [at_rcnt], 0
     mov word [at_rtop], 0
+    call at_afit                    ; a new history: its arena back (46.6.3)
     call at_dfit                    ; give back what the file did not need
     call at_layout
     clc
@@ -576,7 +578,7 @@ at_onwake:
 ; used to be for when the caller WAS a paint proc; it is kept because
 ; at_ondlg's caller reads it too.
 ;
-; A failure of any kind - unlistable folder, unreadable file, or a
+; A failure of any kind - unreachable folder, unreadable file, or a
 ; fullscreen refused because another window owns the screen - leaves
 ; [at_fs] at 0, and that one test answers all three: the splash already on the
 ; glass is then the honest thing to have shown, over the fresh untitled
@@ -594,8 +596,19 @@ at_argload:
     mov byte [at_argp], 0           ; once, whatever happens below
     mov dx, [at_argclus]
     mov bl, [at_argdrv]
-    call OSAPI_FILE_GOTO            ; the folder it was opened from
-    jc .out
+    call OSAPI_FILE_GOTO_QM         ; the folder it was opened from -
+    jc .out                         ; QUIETLY, and the instance with us, so
+                                    ; at_load_named's by-name read resolves
+                                    ; there. Nothing here lists the folder,
+                                    ; so the remount's scan, sort and icon
+                                    ; harvest were ~0.5 s of floppy for no
+                                    ; reader (docs/plans/NAV-COST-PLAN.md,
+                                    ; SPEC.md 19.9.1). CF=1 moved NOTHING:
+                                    ; the read would find [at_name] in our
+                                    ; own folder, so refuse. Every register
+                                    ; is banked above (QM's AX, and a
+                                    ; redirected volume's CX, SI and DI -
+                                    ; SPEC.md 62.9.1)
     call at_load_named
     jc .out
     call at_fs_enter                ; ...which paints everything itself

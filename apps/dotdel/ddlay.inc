@@ -640,11 +640,18 @@ dd_bdkb_calc:
 ; reserved the ceiling would charge every machine for the largest board any
 ; machine could show - and APP_MAX_SIZE is 60 KB for the image and the bss
 ; together.
+;
+; ...AND IT GIVES THE DIFFERENCE BACK when a re-cut needs less. It used to
+; only grow, so one trip into the bracket held the fullscreen picture for the
+; rest of the session: 11 KB where the window needs 4 on the 128KB machine's
+; CGA, 19 where it needs 8 on a Hercules (SPEC.md 24.5.5). A shrink always
+; succeeds in place (OSAPI_MEM_REGROW), and every caller re-renders the picture
+; at the new layout straight after, so nothing in the tail is ever read again.
 ; -----------------------------------------------------------------------------
 dd_fit_claim:
+    call dd_bdkb_calc
     cmp word [dd_bdseg], 0
     jne .grow
-    call dd_bdkb_calc
     call OSAPI_MEM_CLAIM            ; out DX = the base, AX = KB given
     jc .no
     mov [dd_bdseg], dx
@@ -652,9 +659,8 @@ dd_fit_claim:
     clc
     ret
 .grow:
-    call dd_bdkb_calc
     cmp ax, [dd_bdkb]
-    jbe .fits
+    je .fits
     push ax
     mov dx, [dd_bdseg]
     call OSAPI_MEM_REGROW           ; DX = the claim's base NOW - a regrow may

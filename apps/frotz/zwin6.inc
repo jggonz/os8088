@@ -29,16 +29,29 @@
 ; transparencies" (8.8.3): once printed, text belongs to the SCREEN and not to
 ; any window, and moving a window does not move what was printed under it.
 ; Keeping a per-pixel shadow of the content would cost 640x480/2 = 150KB we do
-; not have. So a repaint cannot reproduce what the story drew, and zw6_paint
-; does the thing the Standard provides for instead (8.8.2): erase, and set bit
-; 2 of 'Flags 2' to ask the story to redraw itself.
+; not have. So a repaint cannot reproduce what the story drew; the thing the
+; Standard provides for instead (8.8.2) is to erase, and set bit 2 of
+; 'Flags 2' to ask the story to redraw itself.
 ;
-; CONTEXT AND THE GFX LOCK. Everything here except zw6_paint and zw6_setup is
-; called from the VM WORKER with the lock free, so it takes the lock itself,
-; in short bursts, around one text run or one fill (SPEC.md 20.6 rule 3).
-; zw6_paint is called from W_PAINT with the lock ALREADY HELD and must not
-; take it - gfx_lock is not reentrant (rule 4) and a second acquire wedges the
-; machine. zw6_setup draws nothing.
+; CONTEXT AND THE GFX LOCK. Everything here is called from the VM WORKER with
+; the lock free, so it takes the lock itself, in short bursts, around one text
+; run or one fill (SPEC.md 20.6 rule 3).
+;
+; WHAT WAS NEVER WIRED, AND IS GONE. The first apps size pass found fifteen
+; procs here that no opcode, callback or other proc had ever called, in any
+; commit: zw6_setup (which builds the eight windows and is the only writer of
+; [zw6_ready], [zw6_sx]/[zw6_sw] and [zw6_mono]), zw6_paint (the W_PAINT
+; half), zw6_geom/zw6_scrrect/zw6_screen behind them, zw6_erasewin,
+; zw6_eraseline, zw6_wipe, zw6_split, zw6_style, zw6_colour, zw6_font,
+; zw6_trans, zw6_sel_get and zw6_mousewin - @erase_window, @erase_line and
+; @split_window reach zwin.inc's versions at every version, and the rest have
+; no opcode pointing at them. They were deleted (about 1,000 bytes of every
+; instance); `git show 0371d27d:apps/frotz/zwin6.inc` has them. THE
+; CONSEQUENCE IS NOT NEW: [zw6_ready] has never been set, so zw6_putc and
+; zw6_newline below return at their first test and a v6 story's TEXT is not
+; drawn - its pictures are (zpic.inc, `make zgfxpic`). Making v6 text work is
+; those procs back plus a `call zw6_setup` in zio.inc's zi_load and a
+; zw6_paint in frotz.asm's zf_paint.
 ;
 ; ES BELONGS TO THE STORY while the VM runs (FROTZ-PLAN 3.1), so every entry
 ; point here that calls into the kernel banks it.
@@ -67,238 +80,23 @@ ZW6_LMAX     equ 96             ; characters a pending run may hold. 96 cells
                                 ; kernel drives, so the cap is a backstop and
                                 ; not a layout limit
 
-; --- our private bss, out of ZWIN6_SLACK (zbss.inc 10; 128 bytes, 122 used) --
+; --- our private bss, out of ZWIN6_SLACK (zbss.inc 10; 116 bytes, all used) --
 ; The eight window records themselves are zbss.inc's zw6_wins/ZW6_* - this is
 ; only the state the record layout did not anticipate.
 %define zw6_sx    (os88_image_end + ZWIN6_SLACK + 0)   ; word: the Z-machine
 %define zw6_sy    (os88_image_end + ZWIN6_SLACK + 2)   ;  screen IS our content
 %define zw6_sw    (os88_image_end + ZWIN6_SLACK + 4)   ;  rect: absolute origin
 %define zw6_sh    (os88_image_end + ZWIN6_SLACK + 6)   ;  and size, in pixels
-%define zw6_mwin  (os88_image_end + ZWIN6_SLACK + 8)   ; word: @mouse_window
-%define zw6_ready (os88_image_end + ZWIN6_SLACK + 10)  ; byte: setup has run
-%define zw6_splt  (os88_image_end + ZWIN6_SLACK + 11)  ; byte: windows 0 and 1
-                                                       ;  are tiled (8.8.4.2)
-%define zw6_mono  (os88_image_end + ZWIN6_SLACK + 12)  ; byte: 1bpp adapter, so
+%define zw6_ready (os88_image_end + ZWIN6_SLACK + 8)   ; byte: setup has run
+%define zw6_mono  (os88_image_end + ZWIN6_SLACK + 9)   ; byte: 1bpp adapter, so
                                                        ;  colour is meaningless
-%define zw6_pap   (os88_image_end + ZWIN6_SLACK + 13)  ; byte: banked paper
-%define zw6_lbn   (os88_image_end + ZWIN6_SLACK + 14)  ; word: chars pending
-%define zw6_lbx   (os88_image_end + ZWIN6_SLACK + 16)  ; word: where they start,
-%define zw6_lby   (os88_image_end + ZWIN6_SLACK + 18)  ;  window-relative px
-%define zw6_lbw   (os88_image_end + ZWIN6_SLACK + 20)  ; byte: whose window
-%define zw6_lbuf  (os88_image_end + ZWIN6_SLACK + 22)  ; ZW6_LMAX+1 bytes
+%define zw6_pap   (os88_image_end + ZWIN6_SLACK + 10)  ; byte: banked paper
+%define zw6_lbn   (os88_image_end + ZWIN6_SLACK + 12)  ; word: chars pending
+%define zw6_lbx   (os88_image_end + ZWIN6_SLACK + 14)  ; word: where they start,
+%define zw6_lby   (os88_image_end + ZWIN6_SLACK + 16)  ;  window-relative px
+%define zw6_lbw   (os88_image_end + ZWIN6_SLACK + 18)  ; byte: whose window
+%define zw6_lbuf  (os88_image_end + ZWIN6_SLACK + 19)  ; ZW6_LMAX+1 bytes
 
-; =============================================================================
-; zw6_setup - build the eight windows from our content rect
-; in:  nothing; UI task, at story-load time. Draws nothing.
-; out: CF=1 refused (there is no window yet); preserves all registers
-;
-; Unlike zw_setup this claims no memory. There is no scrollback in v6: a
-; window that scrolls does so by moving pixels the story owns, and there is no
-; line history to keep because there are no lines - only a screen.
-;
-; Geometry that cannot be read (the window is not on screen yet) leaves the
-; screen size at zero, which makes every cell test below fail and nothing
-; draw, until the first zw6_paint re-derives it. That is deliberate: a story
-; that starts while the window is hidden must not be refused outright.
-; =============================================================================
-zw6_setup:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    push es
-
-    cmp word [zf_win], 0
-    je .no
-
-    ; A 1bpp adapter reduces every colour to black, white or a dither
-    ; (SPEC.md 39.4), so a story that colours by meaning becomes unreadable.
-    ; Decide once, here, and honour it in zw6_pen/zw6_paper.
-    push si                         ; the cell answers the band's top in SI
-    mov bx, [zf_win]                ; DH = bits per pixel, 4 or 1, FOR THE CARD
-    call OSAPI_WM_DISPLAY           ; THIS WINDOW IS ON (SPEC.md 39.16.4)
-    pop si
-    mov byte [zw6_mono], 0
-    cmp dh, 1
-    jne .notmono
-    mov byte [zw6_mono], 1
-.notmono:
-    call zw6_geom
-
-    ; Standard 8.8.3.3: all eight windows begin at (1,1); every one of them
-    ; has buffering on and nothing else. Windows 0 and 1 are then widened.
-    mov bx, zw6_wins
-    mov cx, 8
-.wloop:
-    push cx
-    mov di, bx
-    mov cx, ZW6_REC
-    xor al, al
-.zloop:
-    mov [di], al
-    inc di
-    loop .zloop
-    pop cx
-    mov byte [bx+ZW6_FG], CBLACK
-    mov byte [bx+ZW6_BG], CWHITE
-    mov byte [bx+ZW6_FONT], 1       ; font 1 is the normal font, and the only
-                                    ; one this kernel has (SPEC.md 6)
-    mov word [bx+ZW6_ATTR], ZW6_A_BUF
-    add bx, ZW6_REC
-    loop .wloop
-
-    ; Window 0 is the whole screen and is initially selected. 8.8.3.3 says it
-    ; has "attribute 1 off and 2, 3 and 4 on", numbering from one - which
-    ; contradicts 8.8.3.1.2.2 in the same section ("window 0 has wrapping on
-    ; by default but all other windows have wrapping off"). The second reading
-    ; is the one every interpreter takes and the one a running-text window
-    ; needs, so window 0 gets all four.
-    mov bx, zw6_wins
-    mov ax, [zw6_sw]
-    mov [bx+ZW6_W], ax
-    mov ax, [zw6_sh]
-    mov [bx+ZW6_H], ax
-    mov word [bx+ZW6_ATTR], ZW6_A_WRAP | ZW6_A_SCROLL | ZW6_A_TRANS | ZW6_A_BUF
-    ; the line count is what [MORE] would be paced from (8.8.3.2.6): the
-    ; number of text lines the window holds
-    mov cl, 3
-    shr ax, cl
-    mov [bx+ZW6_CNT], ax
-
-    ; Window 1 is as wide as the screen and has zero height.
-    add bx, ZW6_REC
-    mov ax, [zw6_sw]
-    mov [bx+ZW6_W], ax
-
-    mov byte [zw6_cur], 0
-    mov byte [zw6_splt], 0
-    mov word [zw6_mwin], 1          ; @mouse_window's default (Standard 15)
-    mov word [zw6_lbn], 0
-    mov byte [zw6_ready], 1
-    clc
-    jmp short .out
-.no:
-    stc
-.out:
-    pop es
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; zw6_geom - re-derive the Z-machine screen from the live window record
-; in:  nothing
-; out: [zw6_sx/sy/sw/sh]; preserves all registers
-;
-; Called from setup and from every paint, because the window is sizable and
-; the Z-machine screen IS our content rect. A hidden window answers zero, and
-; zero disables every draw rather than producing a bogus origin.
-; -----------------------------------------------------------------------------
-zw6_geom:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov word [zw6_sw], 0
-    mov word [zw6_sh], 0
-    mov bx, [zf_win]
-    or bx, bx
-    jz .out
-    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
-    mov [zw6_sx], ax
-    mov [zw6_sy], dx
-    call OSAPI_WM_GEOM              ; CX/DX = content size, CF=1 not visible
-    jc .out
-    mov [zw6_sw], cx
-    mov [zw6_sh], dx
-.out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; =============================================================================
-; zw6_screen - the screen size the story should find in its header
-; in:  nothing
-; out: CX = width in pixels, DX = height in pixels; all else preserved
-;
-; Standard 8.4: a v6 story reads the screen in units from the header. It is
-; zmem/zexec that owns the header bytes, so this only answers the question.
-; =============================================================================
-zw6_screen:
-    mov cx, [zw6_sw]
-    mov dx, [zw6_sh]
-    ret
-
-; =============================================================================
-; zw6_paint - repaint, from W_PAINT, with the gfx lock ALREADY HELD
-; in:  nothing
-; out: nothing; preserves all registers
-;
-; There is nothing to repaint FROM (see the banner: no backing store), so this
-; erases to window 0's background and takes the escape the Standard put there
-; for exactly this case - 8.8.2, bit 2 of 'Flags 2': "the game is expected to
-; notice, take action and clear the bit". A v6 story that ignores it comes
-; back blank, which is the same answer every interpreter without a shadow
-; buffer gives, and it is honest rather than stale.
-; =============================================================================
-zw6_paint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push es
-
-    cmp byte [zw6_ready], 0
-    je .out
-    call zw6_geom                   ; the user may have dragged the grow box
-    mov word [zw6_lbn], 0           ; a pending run belongs to the old layout
-
-    mov bx, zw6_wins                ; window 0's background is the screen's
-    call zw6_paper
-    call OSAPI_SET_COLOR
-    call zw6_scrrect                ; AX/BX/CX/DX = the whole content rect
-    jc .out
-    call OSAPI_GFX_FILL
-    call zw6_redraw
-.out:
-    pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; zw6_scrrect - the whole Z-machine screen as an absolute inclusive rect
-; in:  nothing
-; out: AX/BX/CX/DX = x1/y1/x2/y2, CF=1 the screen is empty
-; -----------------------------------------------------------------------------
-zw6_scrrect:
-    mov cx, [zw6_sw]
-    or cx, cx
-    jz .empty
-    mov dx, [zw6_sh]
-    or dx, dx
-    jz .empty
-    mov ax, [zw6_sx]
-    mov bx, [zw6_sy]
-    add cx, ax
-    dec cx
-    add dx, bx
-    dec dx
-    clc
-    ret
-.empty:
-    stc
-    ret
 
 ; -----------------------------------------------------------------------------
 ; zw6_redraw - ask the story to repaint its own screen
@@ -348,17 +146,6 @@ zw6_select:
     pop ax
     ret
 
-; =============================================================================
-; zw6_sel_get - which window is selected
-; in:  nothing
-; out: AL = 0..7; all else preserved
-;
-; So the opcode layer can bank the selection around a windowed operation
-; without reaching into this module's bss (zbss.inc's one rule).
-; =============================================================================
-zw6_sel_get:
-    mov al, [zw6_cur]
-    ret
 
 ; -----------------------------------------------------------------------------
 ; zw6_recof - a window number's record
@@ -564,7 +351,7 @@ zw6_unlock:
 ;
 ; The run is dropped rather than deferred when nothing is drawable. That is
 ; correct for v6 and only for v6: there is no backing store to defer INTO, and
-; an uncover repaints through zw6_paint, which asks the story to redraw.
+; an uncover is the story's to repaint, on the Flags 2 redraw bit.
 ; =============================================================================
 zw6_flush:
     push ax
@@ -999,11 +786,7 @@ zw6_move:
 .x0:
     mov [bx+ZW6_Y], cx
     mov [bx+ZW6_X], dx
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 ; =============================================================================
 ; zw6_size - @window_size
@@ -1025,11 +808,7 @@ zw6_size:
     mov [bx+ZW6_H], cx
     mov [bx+ZW6_W], dx
     call zw6_fixcur
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 ; -----------------------------------------------------------------------------
 ; zw6_fixcur - put a stranded cursor back inside its window
@@ -1097,11 +876,7 @@ zw6_margins:
     mov ax, [bx+ZW6_ML]
     mov [bx+ZW6_CX], ax
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 ; =============================================================================
 ; zw6_setcur - @set_cursor, v6 form
@@ -1133,11 +908,7 @@ zw6_setcur:
     mov [bx+ZW6_CX], dx
     call zw6_fixcur
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
 ; =============================================================================
 ; zw6_getcur - @get_cursor
@@ -1199,31 +970,8 @@ zw6_attr:
 .tog:
     xor [bx+ZW6_ATTR], ax
 .out:
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop3
 
-; =============================================================================
-; zw6_trans - does the selected window copy its text to the transcript?
-; in:  nothing
-; out: CF=1 it does (attribute 2); preserves all registers
-;
-; ztext.inc owns output stream 2; this only answers the question, so the
-; attribute lives in one place.
-; =============================================================================
-zw6_trans:
-    push bx
-    call zw6_recsel
-    test byte [bx+ZW6_ATTR], ZW6_A_TRANS
-    jz .no
-    pop bx
-    stc
-    ret
-.no:
-    pop bx
-    clc
-    ret
 
 ; =============================================================================
 ; zw6_scroll - @scroll_window
@@ -1242,8 +990,7 @@ zw6_trans:
 ;
 ; The fallback cannot be "repaint the band", because there is nothing to
 ; repaint it FROM. It is: erase the window to background and set the redraw
-; bit, which is the same answer zw6_paint gives and the one the Standard put
-; bit 2 of 'Flags 2' there for.
+; bit, which is the answer the Standard put bit 2 of 'Flags 2' there for.
 ; =============================================================================
 zw6_scroll:
     push ax
@@ -1319,12 +1066,7 @@ zw6_scroll:
     call zw6_erase1
 .out:
     pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop5
 
 ; -----------------------------------------------------------------------------
 ; zw6_erase1 - paint one window's visible area in its own background
@@ -1350,301 +1092,8 @@ zw6_erase1:
     call zw6_unlock
 .out:
     pop es
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop4
 
-; =============================================================================
-; zw6_erasewin - @erase_window
-; in:  AX = window number, signed: 0..7, or -1 / -2
-; out: nothing; preserves all registers
-;
-; Standard 8.8.5.3.1: -1 erases the whole screen to WINDOW 0's background,
-; unsplits windows 0 and 1, and selects window 0. 8.8.5.3.2: -2 erases the
-; screen to the CURRENT background and changes nothing else - not a window
-; attribute, not a cursor. A plain window number erases that window only, and
-; leaves its cursor alone, because the Standard says only that the space is
-; painted over.
-; =============================================================================
-zw6_erasewin:
-    push ax
-    push bx
-    push cx
-    push dx
-    push es
-
-    cmp byte [zw6_ready], 0
-    je .out
-    call zw6_flush
-    cmp ax, -1
-    je .all0
-    cmp ax, -2
-    je .allcur
-    cmp ax, 8
-    jae .out                        ; unsigned: any other negative lands here
-    call zw6_recof
-    jc .out
-    call zw6_erase1
-    jmp short .out
-
-.all0:
-    xor ax, ax
-    call zw6_split                  ; 8.8.4.2: an unsplit, if one had happened
-    mov byte [zw6_cur], 0
-    call zw6_recsel
-    call zw6_fixcur
-    call zw6_wipe
-    jmp short .out
-.allcur:
-    call zw6_recsel
-    call zw6_wipe
-.out:
-    pop es
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; zw6_wipe - paint the WHOLE Z-machine screen in a window's background
-; in:  BX = the window whose background to use
-; out: nothing; preserves all registers. Takes the gfx lock itself.
-; -----------------------------------------------------------------------------
-zw6_wipe:
-    push ax
-    push bx
-    push cx
-    push dx
-    push es
-    call zw6_paper
-    call zw6_scrrect
-    jc .out
-    call zw6_lock
-    jc .out
-    push ax
-    mov al, [zw6_pap]
-    call OSAPI_SET_COLOR
-    pop ax
-    call OSAPI_GFX_FILL
-    call zw6_unlock
-.out:
-    pop es
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; =============================================================================
-; zw6_eraseline - @erase_line, v6 form
-; in:  AX = the value the opcode was given
-; out: nothing; preserves all registers
-;
-; Standard 15: 1 erases from the cursor to the end of its line; anything else
-; erases that many pixels MINUS ONE across from the cursor, clipped to stay
-; inside the right margin. The cursor does not move, and the space is painted
-; in background even under reverse video (8.8.5.2).
-; =============================================================================
-zw6_eraseline:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    push es
-
-    cmp ax, 1
-    jl .out
-    mov si, ax                      ; bank the value across the flush
-    call zw6_flush
-    call zw6_recsel
-
-    ; how many pixels are there between the pen and the right margin?
-    mov ax, [bx+ZW6_W]
-    mov cx, [bx+ZW6_MR]
-    cmp ax, cx
-    jbe .out
-    sub ax, cx
-    mov cx, [bx+ZW6_CX]
-    cmp cx, ax
-    jae .out
-    sub ax, cx                      ; AX = pixels available, CX = the pen
-    cmp si, 1
-    je .have
-    dec si                          ; "the given number of pixels minus one"
-    cmp si, ax
-    jae .have
-    mov ax, si
-.have:
-    mov bp, ax                      ; BP = width (a scratch register only - we
-    mov di, cx                      ; never address through it; SS != DS)
-    mov si, [bx+ZW6_CY]
-    call zw6_paper
-    call zw6_rect                   ; AX/BX/CX/DX = the window, clipped
-    jc .out
-
-    add ax, di                      ; x1 = window left + the pen
-    add bx, si                      ; y1 = window top  + the cursor row
-    mov di, ax
-    add di, bp
-    dec di                          ; x2 = x1 + width - 1
-    cmp di, cx
-    jbe .xok
-    mov di, cx
-.xok:
-    mov cx, di
-    mov di, bx
-    add di, CELL_H - 1
-    cmp di, dx
-    jbe .yok
-    mov di, dx
-.yok:
-    mov dx, di
-    cmp ax, cx
-    ja .out
-    cmp bx, dx
-    ja .out
-
-    call zw6_lock
-    jc .out
-    push ax
-    mov al, [zw6_pap]
-    call OSAPI_SET_COLOR
-    pop ax
-    call OSAPI_GFX_FILL
-    call zw6_unlock
-.out:
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; =============================================================================
-; zw6_split - @split_window, v6 form
-; in:  AX = the height of window 1, in PIXELS (Standard 15: "the line count is
-;      in units rather than lines")
-; out: nothing; preserves all registers
-;
-; 8.8.4.1: windows 0 and 1 are TILED to fill the screen - window 1 gets the
-; given height at the top left, window 0 what is left below it, "possibly
-; making it disappear altogether if window 1 occupies the whole screen".
-; Neither window is drawn or cleared: this is a layout change.
-; =============================================================================
-zw6_split:
-    push ax
-    push bx
-    push cx
-    push dx
-    call zw6_flush
-    mov cx, [zw6_sh]
-    cmp ax, cx
-    jbe .fits
-    mov ax, cx                      ; a split taller than the screen is the
-.fits:                              ; whole screen, not a wrap to nothing
-    mov dx, [zw6_sw]
-    mov bx, zw6_wins + ZW6_REC      ; window 1: the top strip
-    mov word [bx+ZW6_X], 0
-    mov word [bx+ZW6_Y], 0
-    mov [bx+ZW6_W], dx
-    mov [bx+ZW6_H], ax
-    call zw6_fixcur
-    mov bx, zw6_wins                ; window 0: everything below it
-    mov word [bx+ZW6_X], 0
-    mov [bx+ZW6_Y], ax
-    mov [bx+ZW6_W], dx
-    sub cx, ax
-    mov [bx+ZW6_H], cx
-    call zw6_fixcur
-    mov byte [zw6_splt], 0
-    or ax, ax
-    jz .out
-    mov byte [zw6_splt], 1
-.out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; =============================================================================
-; zw6_style - @set_text_style for the selected window
-; in:  AL = the style bits (ZW6_ST_*; 0 = roman, which clears every other)
-; out: nothing; preserves all registers
-;
-; Standard 8.8.3.2.3: the property holds the operand of the instruction, so
-; the bits are stored verbatim and interpreted only at draw time (zw6_pen and
-; the two extra passes in zw6_flush).
-; =============================================================================
-zw6_style:
-    push ax
-    push bx
-    call zw6_flush                  ; the run in flight is in the OLD style
-    call zw6_recsel
-    mov [bx+ZW6_STYLE], al
-    pop bx
-    pop ax
-    ret
-
-; =============================================================================
-; zw6_colour - @set_colour for the selected window
-; in:  AL = foreground, AH = background (Z-machine colour numbers already
-;      mapped to EGA indices by the opcode layer)
-; out: nothing; preserves all registers
-; =============================================================================
-zw6_colour:
-    push ax
-    push bx
-    call zw6_flush
-    call zw6_recsel
-    mov [bx+ZW6_FG], al
-    mov [bx+ZW6_BG], ah
-    pop bx
-    pop ax
-    ret
-
-; =============================================================================
-; zw6_font - @set_font for the selected window
-; in:  AL = the font wanted (0 = ask without changing)
-; out: AX = the previous font id, or 0 if the font is unavailable
-;
-; Standard 15: font 1 is normal, 3 is character graphics, 4 is fixed-pitch.
-; This kernel has exactly one 8x8 typeface and it IS fixed-pitch (SPEC.md 6),
-; so 1 and 4 are both available and are the same glyphs; 2 and 3 are not, and
-; the Standard's answer for an unavailable font is 0 with nothing changed.
-; Answering 0 truthfully is what lets a story fall back instead of drawing a
-; character-graphics box-frame out of letters.
-; =============================================================================
-zw6_font:
-    push bx
-    push cx
-    mov cl, al
-    call zw6_recsel
-    mov al, [bx+ZW6_FONT]
-    xor ah, ah
-    or cl, cl
-    jz .out                         ; 0 = "what font is this?"
-    cmp cl, 1
-    je .take
-    cmp cl, 4
-    je .take
-    xor ax, ax                      ; unavailable, and nothing changes
-    jmp short .out
-.take:
-    mov [bx+ZW6_FONT], cl
-.out:
-    pop cx
-    pop bx
-    ret
 
 ; =============================================================================
 ; zw6_getprop - @get_wind_prop
@@ -1759,20 +1208,6 @@ zw6_putprop:
     pop ax
     ret
 
-; =============================================================================
-; zw6_mousewin - @mouse_window
-; in:  AX = the window to hold the pointer in, -1 = no restriction
-; out: nothing; preserves all registers
-;
-; Stored and reported; nothing is constrained. The Standard's own wording is
-; that interpreters are "presumably supposed to hold the arrow there by
-; hardware means if possible", and this one cannot: the pointer belongs to the
-; desktop, not to our window, and a package that confined it would take the
-; mouse away from the menu bar and every other application.
-; =============================================================================
-zw6_mousewin:
-    mov [zw6_mwin], ax
-    ret
 
 ; =============================================================================
 ; zw6_mouse - @read_mouse
@@ -1824,4 +1259,4 @@ zw6_mouse:
 ;  - **True colour (properties 16 and 17) and @buffer_screen.** No true colour
 ;    exists on any adapter this kernel drives; buffer_screen may be ignored by
 ;    contract (8.8.7) and is, so this acts as if it were always 0.
-;  - **Confining the pointer** (@mouse_window) - see zw6_mousewin.
+;  - **Confining the pointer** (@mouse_window). Not done.

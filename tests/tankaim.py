@@ -97,9 +97,18 @@ def sintab():
         line = line.strip()
         if line.startswith("dw"):
             out += [int(x) for x in line[2:].split(",")]
-    if len(out) != 256:
-        sys.exit("tankaim: tksin.inc is %d entries, not 256" % len(out))
-    return out
+    # ONE QUARTER of the wave since apps size pass 1, set 6 (SPEC.md 85.5):
+    # sin(0..64), which tk_sin1 reads backwards and negated for the other
+    # three. Unfolded here exactly as the guest folds it.
+    if len(out) != 65:
+        sys.exit("tankaim: tksin.inc is %d entries, not the 65 of a quarter "
+                 "wave" % len(out))
+    full = []
+    for a in range(256):
+        i = a & 63
+        v = out[64 - i] if a & 64 else out[i]
+        full.append(-v if a & 128 else v)
+    return full
 
 
 class Game:

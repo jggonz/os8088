@@ -10,23 +10,36 @@ one that needed a file to exist before it could be made at all:
     included, except for the compression bits in the flags byte. Comparing the
     WHOLE image is the point: a decoder that got the last run wrong would still
     open a window;
-  * ...and it does that for EITHER FORMAT. CALC and MINES are LZ4 and PIANO
-    is LZB, and the shipped kernel carries both (SPEC.md 20.13.6) - which is
+  * ...and it does that for EITHER FORMAT. CALC and FRACTAL are LZ4 and
+    PIANO is LZB, and the shipped kernel carries both (SPEC.md 20.13.6) - which is
     the only thing in the tree that ever runs LZB's arm on a PACKAGE, nothing
     on a shipped disk being LZB.
 
 **WHICH ONE IS COMPARED WHOLE IS A PROPERTY OF THE PACKAGE, NOT OF THE
-DECODER, AND IT IS MINES.** A package that has OPENED has also RUN, and a
+DECODER, AND IT IS FRACTAL.** A package that has OPENED has also RUN, and a
 running program writes to its own image - so the byte-exact arm only ever
 worked on programs that had not yet got that far, which this file said out
 loud about Piano and then rested on for Calc. SPEC.md 20.5.1.3's button
 record made Calc one of them: a painter stages its rects and labels into the
 record, and `cal_btlbl` at 0x568 is the "first at 1384" this row reported.
 Both formats produced the SAME four bytes, which is the proof it was never
-the decoder. Where a decoder IS proved exactly is `lzmod` - 116,085 bytes of
+the decoder. Fractal keeps its state in bss and a heap claim, and its image
+was MEASURED unchanged after opening - 0 bytes of 3,047 differ, read again
+10, 20 and 30 guest seconds into its render, on CGA and on Hercules - which
+is the property that earns the seat, and it was checked on the machine
+rather than assumed. Where a decoder IS proved exactly is `lzmod` - 116,085 bytes of
 BEVERLY.MOD, a subject that is not also a program. Do not re-add a whole-image
 comparison here for a package with controls in it; add the package to lzmod's
 shape instead.
+
+**MINES HELD THAT SEAT UNTIL THE APPS SIZE PASS**, which took it to image +
+bss 1,849: LZ4's in-place layout then needs 2,096 bytes of a 2,048-byte
+region, and `tools/os88pkg.py --compress` REFUSES rather than make the loader
+claim more (the shipped MINES.O88 goes out plain under `--compress-if`). That
+refusal protects real machines and is not loosened for a fixture, so the
+subject moved: Fractal fits with 254 bytes to spare (3,330 of 3,584). If a
+size pass takes that too, `make lzloadtest` stops at the same refusal and
+names it - pick the next package by measuring it, the way this one was.
 
 `--lz4only` is the other half and a build of its own: a kernel built
 `COMPRESS=lz4`, on which PIANO is REFUSED rather than run. SPEC.md 20.13.3
@@ -117,8 +130,10 @@ def main():
         # On --lz4only the tree has no `calc.o88` at its root at all and the
         # row died on FileNotFoundError, which read as a broken private tree.
         #
-        # **ONLY MINES IS COMPARED, AND CALC IS NOT** - which is the Piano
-        # arm's reason below, arriving at a second package. That comment has
+        # **ONLY FRACTAL IS COMPARED, AND CALC IS NOT** (it was MINES until
+        # the apps size pass made MINES refuse strict lz4 - the docstring
+        # says why) - which is the Piano arm's reason below, arriving at a
+        # second package. That comment has
         # always said a RUNNING package writes to its own image and that
         # "CALC and MINES happen not to have got that far": the check rested
         # on an accident, and it was written down as one. SPEC.md 20.5.1.3's
@@ -134,7 +149,7 @@ def main():
         # of both decoders is `lzmod`, where the subject is not also a
         # program: 116,085 bytes of BEVERLY.MOD, every one compared.
         for name, src in (("CALC.O88", None),
-                          ("MINES.O88", t.img("lzc/mines.o88"))):
+                          ("FRACTAL.O88", t.img("lzc/fractal.o88"))):
             before = dispcp.win_list(m, S)
             dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, name)
             after = dispcp.win_list(m, S)
@@ -205,8 +220,9 @@ def main():
         else:
             # OPENED, AND NOT COMPARED - which is deliberate. A package that
             # is RUNNING writes to its own image, and Piano does: six of its
-            # 4,171 bytes differ from the file by the time this reads them,
-            # while CALC and MINES happen not to have got that far. So the
+            # then 4,171 bytes differed from the file by the time this read
+            # them, where FRACTAL keeps its state in bss and does not write
+            # its image at all (Calc, above, writes its button record). So the
             # assertion here is that the LZB arm produced a RUNNABLE image,
             # and the byte-exact proof of that decoder lives where the
             # subject is not also a program: lzmod compares all 116,085 bytes

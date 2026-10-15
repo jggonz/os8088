@@ -54,8 +54,13 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
 
+import os88geom                                             # noqa: E402
 import os88marty                                            # noqa: E402
 import os88ui                                               # noqa: E402
+from os88map import Syms                                    # noqa: E402
+
+TRACKER = Syms("apps/tracker/tracker.asm", "build/tracker.bin",
+               ["apps", "apps/tracker"])
 
 MACHINE = "os8088_xt_vga"
 NO_BRACKET = 0xFFFF             # [fsx_task] when no SPEC.md 53 bracket is up
@@ -121,6 +126,33 @@ class State:
             time.sleep(0.05)
 
 
+def seed_spent(ui, st):
+    """Wait until Tracker's bracket poll has seen the keys UP once.
+
+    `OS88_ALTENTER_SEED` sets `os88alt_dn` at the top of the bracket - "the
+    press that opened this is still down" - and only a pass of
+    `os88alt_edge` that finds Alt+Enter released clears it. A leaving press
+    that lands BEFORE that pass is read as the same hold, so it never leaves
+    and releasing it then arms nothing. That is a race a finger never runs
+    (a human is far slower than one poll) and a harness under load always
+    can: the busier the box, the fewer guest cycles go by between the row
+    seeing `[fsx_task]` change and pressing again. It read as "the second
+    cycle went in and would not come out" at a soak's lane of four.
+    """
+    w = ui.window("Tracker")
+    at = ui.m.sym("wm_wins") + w.i * os88geom.WIN_SIZE + os88geom.W_SEG
+    off = TRACKER.sym("os88alt_dn")
+
+    def dn():
+        b = ui.m.read(at, 2)            # re-read: the region is movable
+        return ui.m.read(((b[0] | b[1] << 8) << 4) + off, 1)[0]
+    if st.wait(dn, lambda v: v == 0) != 0:
+        return _fail("bracket: the poll never saw Alt+Enter released after "
+                     "the bracket opened - os88alt_dn is still set, so "
+                     "os88alt_edge is not being called in the bracket's loop")
+    return True
+
+
 def leg_latch(ui, st):
     """ArtfulType: SPEC.md 11.2's latch, where one test is both directions."""
     ok = True
@@ -177,6 +209,8 @@ def leg_bracket(ui, st):
                      % got)
     print("  bracket: Alt+Enter -> full screen, [fsx_task]=%04X" % got)
 
+    if not seed_spent(ui, st):
+        return False
     ui.m.alt("Enter", hold=HOLD)
     got = st.wait(st.bracket, lambda v: v == NO_BRACKET)
     if got != NO_BRACKET:
@@ -212,6 +246,8 @@ def leg_bracket(ui, st):
                        "refuses the second (SPEC.md 11.2.1.1)")
         else:
             print("  bracket: ...and a second cycle enters too")
+            if not seed_spent(ui, st):
+                return False
             ui.m.alt("Enter", hold=HOLD)
             if st.wait(st.bracket, lambda v: v == NO_BRACKET) != NO_BRACKET:
                 ok = _fail("bracket: the second cycle went in and would not "

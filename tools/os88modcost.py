@@ -68,7 +68,7 @@ was built on the claim.  It cuts BOTH ways: a macro body written INSIDE a
 module section makes its calls look module-only when they expand somewhere
 else entirely.  `sched_mode_set` read as `.modc`-only and is called by the
 BOOT OVERLAY - `driver.inc:3475` is line 73 of `%macro CFG_BOOT`, expanded at
-`driver.inc:3825` into `.ovl` - so moving it into the image would have put a
+`driver.inc:3825` into `.boot2` - so moving it into the image would have put a
 routine the boot ladder needs out of the boot ladder's reach.
 `tools/os88ovlchk.py` refused the build, which is the only reason that was ten
 wasted minutes rather than a kernel that does not boot.  A row whose module
@@ -113,9 +113,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # `.modh` is HIBER.DRV, which is kern_big's - the 128KB machine has no hard
 # disk to hibernate to (mod.inc) - and so are `.modk` DOCK.DRV and `.modx`
 # EXTD.DRV (SPEC.md 30.5, 39.19.6), which this list missed until the second.
-MODS = {False: ('.modc', '.modf', '.modl', '.modh', '.modk', '.modx'),
+MODS = {False: ('.modc', '.modf', '.modl', '.modh', '.modk', '.modx',
+                '.modw'),         # ...and WIN95.DRV (SPEC.md 76.14)
         True:  ('.modc', '.modf', '.modl', '.modp', '.modd')}
-OVLS = ('.ovl', '.ovlw')
+OVLS = ('.blob', '.ovl')   # `.blob` = the overlay's `.boot2` blocks (SPEC.md 2.9.14)
 RESIDENT = ('.text', '.bss', '.cold')
 
 # The far shims a module leaves the kernel through (SPEC.md 2.6's cw_* and
@@ -177,6 +178,9 @@ def scan_source():
             m = SECT.match(raw)
             if m:
                 sec[0] = m.group(1)
+                if sec[0] == '.boot2' and rel not in ('boot/boot2.asm',
+                                                      'kernel/splash.inc'):
+                    sec[0] = '.blob'    # the overlay's half (SPEC.md 2.9.14)
                 continue
             line = STRIP.sub(' ', raw)
             m = LABEL.match(line)
@@ -266,8 +270,8 @@ def crosscheck(persec, defines):
     # os88ovlchk's sake, so compare the pair rather than the part.
     got_cold = persec['.cold'] + persec['.modp'] + persec['.modd'] + persec['.modh']
     for name, mine in (('text', persec['.text']), ('bss', persec['.bss']),
-                       ('cold', got_cold), ('ovl', persec['.ovl']),
-                       ('ovlw', persec['.ovlw']), ('lowbss', persec['.lowbss'])):
+                       ('cold', got_cold),
+                       ('ovl', persec['.ovl']), ('lowbss', persec['.lowbss'])):
         want = k.get(name, 0)
         if want and mine < want * (1 - TOL):
             bad.append('%-7s attributed %d of kernsize\'s %d (%.1f%% short)'
@@ -392,7 +396,7 @@ def main():
         naming = {x[2] for x in sites}
         # ANY macro-body reference, not all of them: `sched_mode_set` has a
         # real `.modc` caller AND a `%macro CFG_BOOT` one that expands into
-        # `.ovl`, and it is the second that decides whether it can move.
+        # `.boot2`, and it is the second that decides whether it can move.
         inmac = any(x[3] for x in sites)
         if naming and naming <= target:
             rows.append(dict(sz=sizes.get(lab, 0), lab=lab, sec=dsec, macro=inmac,

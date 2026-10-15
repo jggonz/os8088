@@ -2,6 +2,10 @@
 
 Guidance for Claude Code (claude.ai/code) working in this repository.
 
+`CLAUDE.md` and `AGENTS.md` carry the same repository guidance. Update both
+when changing a rule or lesson; only their titles and introductory agent
+descriptions differ.
+
 ## Before designing anything: `docs/INDEX.md`
 
 **Read `docs/INDEX.md` before writing a mechanism of your own.** Every `OSAPI_*`
@@ -51,6 +55,107 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 | **[docs/WEAVE-SPEC.md](docs/WEAVE-SPEC.md)** | touching anything in the Weave family (`apps/weave/` and `apps/loom/`, the `.WAB` bundle, WML/WJS/FX) — the binding contract, outside SPEC.md on the C64 precedent, cited as `WEAVE-SPEC §N`; `tools/weavesim.py` is its reference implementation and `tests/unit/t_wab.py` its independent second reader. **Two packages share one document and a lot of source**: WEAVE runs a bundle, LOOM builds one, and what they share they share as SOURCE (`%include`/`#include`), never as a copy — WEAVE-SPEC §1.2 is the rule and `apps/weave/wfxc.c` is the worked example, being LOOM's FX compiler as well as WEAVE's formula bar's |
 | **[docs/WIRE-PLAN.md](docs/WIRE-PLAN.md)** | anything in The Wire (§92, `apps/thewire/`, the desktop zone and `OSAPI_PKG_RUN`) — the design record: the four facts that decided the shape, the catalog and picture formats as they were pinned, and what was deferred with the arithmetic attached. SPEC.md §92 is the contract and this is why it reads that way; its brand table is **fixed by the user and not to be reworded** |
 | **[docs/plans/completed/WEAVE-PLAN.md](docs/plans/completed/WEAVE-PLAN.md)** | re-opening a Weave design decision — why each fork went the way it did, the judged alternatives, and what was deferred with the arithmetic attached |
+
+## Fast fullscreen VRAM games (SPEC.md §53, §109.5)
+
+Use [WireBall's renderer](apps/wireball/wbvideo.inc) and
+[game loop](apps/wireball/wireball.asm) as worked examples. The contracts are
+§53.4 (mode info), §53.7 (legal calls) and §53.10 (page selection);
+[PERFORMANCE.md Set 160](PERFORMANCE.md#set-160--wireball-local-serial-collisions-and-pixel-movement-on-the-xt-specmd-1095)
+records the measurements. These techniques belong inside an exclusive
+`OSAPI_FSX_RUN` bracket. A windowed game still uses the desktop's clipping,
+damage and drawing APIs.
+
+**Choose by capability, then prove the page is usable.** Ask
+`OSAPI_FSX_CAPS` for your window's current display, set an offered mode with
+`OSAPI_FSX_MODE`, and use its `FSI_*` geometry and framebuffer segment. An
+advertised `FSI_PAGES` count alone does not grant access to a second page:
+check `OSAPI_FSX_PAGE`'s carry flag before writing there. WireBall uses:
+
+| Adapter and mode | VRAM layout in that mode | Presentation |
+| --- | --- | --- |
+| VGA, 320×240 Mode X | two of the three pages, offsets 0 and 19,200 **per plane** | `OSAPI_FSX_PAGE` |
+| Lone Hercules, 720×348 | offsets 0 and 8000h in B000h | `OSAPI_FSX_PAGE` |
+| CGA/EGA, 640×200 mono; Hercules with a color card | one page | `OSAPI_FSX_WAIT`, `FSXW_VSYNC`, then short changed spans |
+
+Those offsets describe these modes, not arbitrary framebuffers. Hercules
+page 1 occupies physical **B8000h**, the color card's aperture on a dual-card
+machine; the page API refuses it there. Keep the single-page path. Select
+page 0 before leaving a flipping bracket; return through FSX so the kernel
+restores the desktop, video configuration and clock. Do not replace these
+APIs with private CRTC flips, BIOS mode sets or PIT channel-0 programming.
+
+**Draw the hidden page, then show it.** Initialize the static court on every
+page and establish which page is displayed before starting the loop. Draw
+the next scene into the other page, call `OSAPI_FSX_PAGE` to show it, then
+switch the drawing target. The API waits for the retrace that latches the
+page; after it returns the other page is safe to modify. An extra VSYNC wait
+before the flip spends another refresh. Flipping changes the display address;
+it does not copy a RAM framebuffer. A single-page retrace wait is only the
+start of a short drawing window, not a promise that unlimited writes fit in
+blanking or that real CGA hardware cannot snow.
+
+**Damage history belongs to each VRAM page.** Keep separate old sprite
+rectangles and HUD caches for each page: its pixels are from the last time
+that page was drawn, not the last displayed frame. Skip unchanged rectangles.
+For a vertically moving solid paddle, retain the overlap, erase only the
+exposed end strip and paint only the newly covered strip; use a full update
+when dimensions change or the rectangles no longer overlap. WireBall's
+black court permits erasing to black. On a patterned background restore the
+background and redraw intersecting sprites in order. Cache the HUD's small
+state signature **before** building strings or comparing glyphs, then draw
+only changed cells. Copy `OSAPI_FONT_GLYPHS` before entering the foreign
+mode, as WireBall does; desktop drawing slots are off-limits in that mode.
+
+**Make the inner loop match the adapter.** In Mode X, up to four adjacent
+pixels share one byte offset in different planes. Group equal-color pixels
+under one sequencer map mask and write once; mixed-color pixels need their
+own plane data. For narrow packed-mono sprites, combine the end masks into
+one byte or word read/modify/write, preserving neighboring bits. Calculate
+the first scanline address once, then advance by additions through the
+2000h banks: two interleaved banks with 80-byte rows on CGA, four with
+90-byte rows on Hercules. Avoid multiplication, port writes and mask
+branches per pixel when their result can be reused across a span. A full
+screen clear belongs at initialization or a scene change, not every frame.
+
+**Physics and presentation have separate clocks.** Catch up fixed motion
+steps, prepare the next page immediately, then let presentation wait for
+retrace. Waiting for a motion deadline before drawing can miss retrace and
+reduce the display rate. WireBall requests `FSXF_RATE` with divisor 2048
+(about 582 Hz), accumulates the hook's elapsed-period count and advances
+motion every eight periods (about 72.8 Hz). OS ticks retain 18.2 Hz sound,
+serve and link deadlines. Keep fractional positions through simulation and
+convert to whole pixels at drawing time; use the same extents and coordinate
+scale in the collision checks and the visible sprites. `kern_small` refuses
+`FSXF_RATE`: handle that refusal with a supported slower/text fallback.
+
+**Retrace waits still owe the hardware service.** An original 8250 has a
+one-byte receive buffer; at 2400 baud 8N1 a byte takes about 4.17 ms, less
+than a refresh. WireBall's short rate hook captures UART bytes/status and
+advances queued TX while the foreground waits. It publishes completed queue
+entries last; parsing, commands, collision work and rendering stay in the
+foreground. Follow §53.2.2's hook restrictions: no kernel calls, at most
+48 bytes of stack, and the documented interrupt/register contract. The hook
+is armed before the entry proc runs: guard device access with a readiness
+flag until initialization is complete. Disable device service
+before restoring borrowed UART/PIC state. See
+[the hook and queue](apps/wireball/wblink.inc). Poll between bounded work
+chunks in a fallback without a rate hook.
+
+**Measure an active rally on the emulated XT.** QEMU checks behavior and
+serial bytes, not 4.77 MHz speed. In the final pass described below, use
+MartyPC's guest cycles with held-key motion, wall/paddle hits and no pause or
+serve countdown; report display frames and physics steps separately.
+WireBall's `wireballvideo` row checks VGA, CGA, lone Hercules and dual-card
+Hercules, page counts, exact sprite occupancy after movement, fractional
+controls and restored desktop/input state. `wireballphysics` checks swept
+contacts and their cycle budget. Include real serial traffic when changing
+the renderer's service budget. Set 160 measured 46–59 display frames/s and
+about 73 motion steps/s, not a guarantee for every game or physical XT.
+Read [Hercules testing](docs/HERCULES-TESTING.md) and
+[MartyPC debugging](docs/MARTYPC-DEBUG.md) before interpreting raster captures
+or changing the emulator's page mapping. Name the relevant rows during
+implementation; run their deduplicated union once after the last batch.
 
 ## Commands
 
@@ -102,23 +207,11 @@ make bootdiag # WHY a BIOS answers `Disk error` and stops (§2.9.10). SIX
               # BOOTDIAG.COM rides on all six for a machine that boots DOS
               # but not this. Nothing here ever writes to a disk
 make test-fast   # THE REGRESSION SUITE (docs/TESTING.md, tools/os88test.py,
-make test-full   #   tests/suite.py). Three tiers, each with an ENFORCED
-make test-soak   #   budget CHARGED IN CPU, not wall clock, so a loaded box
-                 #   cannot fail it — the runner FAILS a tier that
-                 #   overruns, so a row that no longer fits is a decision
-                 #   somebody takes rather than a drift nobody notices.
-                 #   fast ~2s, host-side only, and it already runs as part of
-                 #     `all`: the API table decoded out of kernel.bin and
-                 #     compared with the SDK, a constant mirrored in two files,
-                 #     every shipped floppy walked by an independent FAT12
-                 #     reader, unreachable code, the doc gate, and that every
-                 #     test in tests/ is registered somewhere or says why not
-                 #   full ~50s, THE PRE-MERGE GATE — adds the knob kernels and
-                 #     kern_small (every configuration `all` does NOT build, so
-                 #     the only thing keeping them assembling), the C toolchain
-                 #     and a boot to a desktop on both 1bpp adapters
-                 #   soak no budget — the rest of tests/, one subject each:
-                 #     `python3 tools/os88test.py soak -k 'disp*'`
+make test-full   #   tests/suite.py). fast (host-side, run by every `make`)
+make test-soak   #   and full (did you obviously break the OS?) fail over a
+                 #   CPU-charged budget. soak is the rest, one subject a
+                 #   row, and takes a -k: `os88test.py soak -k 'disp*'`.
+                 #   The knob kernels are `soak -k buildmatrix`
 make zcheck   # play every Z-machine story to a script and diff it against
               # dfrotz (§61.13). `make zh` builds the harness interpreter;
               # `tools/zharness.py <story> --repl` types at one by hand. This
@@ -481,6 +574,7 @@ lands on a floppy:
 | `ADLIB=1` / `SB16=1` | give the sound driver a card to attach to |
 | `HDD=<MB>` | give the hard-disk driver a disk |
 | `TESTAPPS=build/<x>.img` | swap the B: floppy for a scratch image |
+| `TESTHD=build/<x>.img` | boot a HARD-DISK image as C: (IDE 0) instead of the floppy, with both floppies still in A: and B:. A floppy-booted machine has no fixed volume unless a driver mounts one, so a gate about a FIXED disk's behaviour needs this: `tests/ftpkeep.py` (SPEC.md §18.4.9.3's `WSEQF_KEEP`, a hold that only a fixed disk takes) is the row |
 | `VGADIRTY=1` | fill the VGA framebuffer with 0xDB in the one window a machine cannot — after the ROM's `int 10h AX=0012h` and before `vid_setmode`'s own clear (SPEC.md §39.23). **`DIRTYRAM=1`'s shape one device along, and for its reason.** Every BIOS in this tree clears mode 12h properly, so the field's failure — a loading screen drawn over the mode 3 CHARACTER GENERATOR, which lives in plane 2 and is bitmap the instant the card is in 12h — is invisible here; it was reported off 86Box as banded dashes behind the dialog with the title text speckled by them. `tests/vgadirty.py` is the gate, and it fails with 189,952 surviving pixels if the clear is taken out |
 | `DLJUNK=<n>` | overwrite `DL` immediately before SPEC.md §2.9.11's range check, so the boot sector sees the value a BIOS that never set it would leave. **`DLJUNK=0x61` IS the Packard Bell 286** — 86Box `pb286`, which answered `Disk error` from the first commit of this repo until §2.9.11, because stage 1 believed a register the ROM never wrote (docs/FIELD-NOTES.md 36). It is the only way that check is testable here: every BIOS in this tree sets `DL`, and MartyPC cannot run a 286 at all. `tests/dljunk.py` is the row and it is an A/B — `0x61` must reach a desktop and `DLJUNK=1` must **not**, 1 being a legal unit the check has to leave alone |
 | `TRACKRUN=1` | put a transfer run's bound back at the TRACK, not the cylinder (SPEC.md §18.91.1) — 9 sectors an `int 13h` instead of 18, both loops. The pre-§18.91.1 transfer, and the bracket that **MEASURED §18.91.1's win on the 5150 at 2,197 ms** (docs/FIELD-NOTES.md §31): `boot + early init` 7,416 ms cylinder-bound against 9,613 ms track-bound, the second figure identical across two runs. The 2.2 s the emulators predicted, confirmed on iron at last |
@@ -495,6 +589,7 @@ lands on a floppy:
 | `NOFDDPARK=1` | take **SPEC.md 18.100**'s recalibrate off the restart path, so the machine enters `int 19h` with every floppy head where the session left it - which is what shipped before it. `int 19h` resets no hardware and 18.97's probe decides on a **level read of drive B's own TRACK 0 line**, so the next boot inherits that head: the probe's fast path is missed on **every restart after any use of B:** (18.97.5's table: 20 ticks against 1), and a head above cylinder 77 - where copying a full 1.44MB apps disk leaves it - answers the probe's one recalibrate with `ST0 = 71`, the exact **EQUIPMENT CHECK** signature 18.97.4 retires a drive on. The fix is the ROM's own **`int 13h AH=00h`** (RESET DISK SYSTEM = recalibrate to track 0), once per claimed unit, after `sched_unhook` so no task can switch mid-call; the BIOS does the handshake, wait and retry and no result is read. **31 bytes of `.cold` + 5 of `.text`, no rung crossed** - the in-kernel port version was 226 and cost a 512-byte cold rung. Verified to move the head from `ST3=29` to `39` on **both** the field GLaBIOS and the genuine IBM 5150 27-Oct-82 ROM. This knob assembles **byte for byte identical** to the kernel before it; `tests/fddpark.py` is the A/B, breaking on `ui_cmd_reboot`'s own `int 19h` and reading ST3 off the emulated 765 - **39 against 29** from the same dirtied start |
 | `NOMOUPRIV=1` | put BOTH mouse ISRs back on the interrupted TASK's stack, which is what shipped before **SPEC.md 9.10**. The default runs the whole ISR on one shared **128-byte** stack in `.lowbss`, so what it costs the task it interrupted is the six bytes the CPU pushed at the gate and nothing else - **~48 bytes off every slice**, seven times over today and more under a class scheme, against **164 bytes once** (`.text` +34, `.bss` +2, `.lowbss` +128, A/B'd against this knob; no rung crossed). It covers BOTH mouse ISRs - the serial one and `mou_p2_isr`, the PS/2 aux port's (SPEC.md 9.9) - which the first version MISSED and a Packard Bell 286 caught on the glass: "mouse ISR, own stack" read 0 there while the mouse phase still added 16 bytes to a slice. It is the **ADAPTER** that sets the depth and not the mouse - **~54 bytes on VGA, 54 on EGA, 52 on a 286's VGA, 30 on Hercules, 23 on CGA** - because `cur_move`'s 1bpp path is the shallow part, so the size is cut from the planar figure. `mov [cs:x], sp` and `mov sp, imm16` need no register, which is what makes a swap possible at a gate where every register is the interrupted task's. **It needs no re-entrancy guard** and that is a property rather than a hope: `mou_isr` runs IF=0 from the gate to the `iret` and never `sti`s, so it cannot interrupt itself and IRQ3/IRQ4 cannot interrupt each other - where the tick's chain needs a busy flag precisely because a real BIOS `sti`s inside it. This knob is the A/B those numbers come off, it is **arm 2 of `make stkdiag`**, and it is the only thing keeping the un-swapped path assembling |
 | `NOCHAINPRIV=1` | put the ROM's **`int 08h` chain** back on the interrupted TASK's stack, which is what shipped before **SPEC.md 8.5**. That one call is the largest single item in the interrupt floor - 50 bytes plus the 6 of the `pushf` and the far call - and it is charged to whichever slice was interrupted, so **every slice pays it at once**. The default runs it on one shared **128-byte** stack in `.lowbss`, for **169 bytes resident** (`.text` +36, `.bss` +5, `.lowbss` +128; no rung crossed). **Measured on the shipping kernel**: the idle slice reads **32 of 384 on the default against 82 with this knob** - fifty bytes exactly, agreeing to the byte with the A/B that reached the same number by DELETING the call. The chain's own water on `sch_chstack` is **56** (SeaBIOS), which is what sizes `SCH_CHSTK`. **The plan's "central open question" dissolved**: `sch_isr` is IF=0 throughout, so the only window is inside the ROM's own `sti`, where an `int 09h`, a mouse gate frame and the floppy's completion all nest harmlessly - and only a second IRQ0 is a problem, not for stack reasons but because the re-entered ISR runs on to `sch_switch` and would save a PRIVATE SP into a task record. That one skips the chain and carries on down the tick **on the task's own stack, having never swapped**, so no slice carries the ROM on either arm. It costs one BIOS tick increment in a case the machine is already a tick behind for; `[sch_chskip]` counts them and a 90-second QEMU run reads **0**. Arm 3 of `make stkdiag`, and **the arms no longer NEST** - each turns one fix off against the default, so either is measurable without the other |
+| `MSELOFF=1` | compile SPEC.md 22.27's Disk-window MULTI-SELECT out of `kern_big` - no Ctrl/Shift click, Shift+arrows, drag select or operations on a set. It ships ON; this is the A/B its **755 resident bytes** are measured against (kernel size pass 11; 797 before). It assembled byte-identical to the kernel before the feature until pass 11 re-laid code the feature shares (`fm_onkey_x`'s relaxed jumps), so it is now the feature's A/B and no longer a copy of the old kernel - every byte the feature adds is still inside `%ifdef FM_MSEL`. `tests/msel.py` is the row, red against it |
 | `BOOTMARK=1` | one block along the bottom of the screen per call in `kmain` that RETURNED — for a machine that reaches the loading screen and then STOPS. Count the blocks: the freeze is in the call after the last one. Where `BOOTPROF=1` needs a boot that reaches a desktop to print its table on, this needs only the framebuffer the splash already set up |
 | `BOOTHALT=<n>` | with `BOOTMARK=1`: **stop dead** at marker `n` instead of carrying on — for a machine that resets or loops rather than freezing, where the blocks scroll away before they can be read. A boot that still goes round proves marker `n` was never reached |
 | `BOOTSTOP=1\|2` | the same idea one level down, in the **boot sector**: halt one instruction short of the handoff, so "did the LOADER finish?" is answered without kmain being entered at all. `2` also skips the splash, and prints `*` on the text screen the splash never took over |
@@ -503,11 +598,12 @@ lands on a floppy:
 | `NOBLITCUT=1` | put a **straddling** `gfx_blit4` back on the whole-virtual path of SPEC.md §39.14.7 — the destination stays virtual and every coalesced run splits itself through `gfx_fill`'s own `GFXDISP`. `NOPLANE`'s shape and there for the same two reasons. §39.14.7.1's gate is BINARY: a block that fits one display keeps §5.4.1's fast path and a straddling one gives it up **entirely**, on all of its pixels and not only on the ones near the seam. §39.14.7.2 cuts the block at the seam instead — displays are edge to edge, so there is exactly ONE — and runs the routine once per half, each hooked to its own display. What it buys, measured on a VGA+MDA XT with `OS8088.GIF` straddling: **625 ms against 27,859**, **44.6x** (PERFORMANCE.md Set 112, `tests/blitcut.py`). What makes it possible is that the seam is the primary's own width — 640 or 720 — and a window's content origin is a multiple of 8 (§11.94), so the second half's source starts an EVEN number of pixels along and the nibble phase does not move; an odd cut is refused and takes this knob's path anyway. It cost **199 bytes** |
 | `NOSEAMCUT=1` | put the one cell a display SEAM crosses back on SPEC.md 39.14.2's whole-cell **drop** — `font_char` enters on the display holding the cell's top-left, and a cell hanging past that display's edge draws nothing at all. The field reported it as *"drag a window into a straddle and unaligned text like the title bar loses a character"*, and exactly one is right: the seam is the primary's own width and so a multiple of 8, so an ALIGNED pen puts every cell boundary on the seam's own grid and an unaligned one puts **exactly one cell across it**. 39.14.11 cuts that cell instead, and the multiple-of-8 seam is what makes it nearly free — the cell's two byte-columns fall one wholly each side, which is where both renderers already split, so what is cut is the **glyph** (into two scratch cells beside `font_zero`) and neither renderer gains an instruction. **The whole thing hangs off the `ja` that was already there**, so a cell that fits pays nothing on either kernel; this knob assembles **byte for byte identical** to the kernel before it. `tests/dispseam.py` is the A/B and needs it: **0 differing pixels straddling against 18 lost**, on a CGA primary (seam 640) and a Hercules one (seam 720) alike. It is also the row's own guard against a null — §11.94 snaps a window's origin, so a caption's pen phase is fixed by the window's WIDTH and the title's LENGTH and *no drag can change it*: the Disk window's opens ON the grid, nothing straddles, and both kernels draw the identical picture. The gate grows the window by 8 first |
 | `NOUIBLOCK=1` | put `ui_task` back on the **spin** it ran on before SPEC.md §8.1.2 - `.idle` becomes `task_yield` again instead of `task_sleep(1)`. The A/B for the whole idle design, and the only thing keeping the spinning path assembling. What the default buys: an idle desktop goes from **100% `ui_task` to 2.7%, with 96.9% HALTED**, and the loop from 1,134.6 passes a second to 17.7. **The pointer is untouched** - `mou_apply` calls `cur_move` in the ISR, so the arrow is ISR-paced and not pass-paced (112 draws against 113 over the same sweep) - and the scheduler's own share of input latency is **better blocking than spinning on every statistic**: 5.18 ms median against 5.31, worst 5.90 against 6.57, 40 samples each. Only IRQ0 falls into `sch_switch`, so the wake byte alone buys nothing and the idle task's `task_yield` after its `hlt` is what makes a wake immediate; and `sch_uiwake` is the lost-wakeup guard, which the first build did not have and paid for at **one mouse event in fourteen waiting a whole tick** |
-| `SPLSTARS=1` | swap the loading screen's ANIMATION (SPEC.md §15.3.7): the "8088" stands **still** and six **stars** twinkle around it instead — a crossed pair of lines that grows and shrinks, with rings of single-pixel clumps appearing at the peak. A **look** question, so it is a knob until somebody has looked, and the default is the spinner that ships. **Both arms take their time from §15.3.6's wall clock and are drawn by IRQ0** (§15.3.8) — an `int 13h` runs with interrupts enabled, so a frame lands in the gap the machine was going to spend idle, and every phase is drawn on time in both arms. A star is a **table, not a drawing** — five shapes of 22 bytes, blitted opaquely, so the dark one erases the last frame and nothing is written twice (§15.3.7.1). It used to be the one configuration that **grew the blob** — 4,193 bytes of a 4,096-byte blob, over by 97 *wherever* `OVL_AT` fell, so it alone took `BOOT2_SECS_STARS` = 9 and an `OVL_AT` of its own — and **it is not any more** (§15.3.8.5.1) — but the packed kernel took the room back, so it needs `NOKZIP=1` now (§15.3.8.5.2): the twinkle and the decoder are 2,748 bytes of a 2,624-byte `.boot2`, and `make SPLSTARS=1` refuses with that sentence. The splash's size pass took its `.boot2` from 2,768 to **2,568** and the blob to **3,989 of 4,096**, so both arms are 8 sectors at one `OVL_AT` of 2,624, and the second constant, the second split and the Makefile's second `sed` are all deleted. What that bought is not the sector: `KSIG_OFF` had to name a head-crossing sector on four geometries **and both blob lengths**, an intersection four sectors wide at the very top of `.text`, which is why §18.93.1's canary had 431 bytes of headroom and a Makefile comment in capitals forbidding `.text` to fall below 50,178. One blob length widens the band to memory 6,656 and the floor to **6,658**. |
+| `SPLSTARS=1` | swap the loading screen's ANIMATION (SPEC.md §15.3.7): the "8088" stands **still** and six **stars** twinkle around it instead — a crossed pair of lines that grows and shrinks, with rings of single-pixel clumps appearing at the peak. A **look** question, so it is a knob until somebody has looked, and the default is the spinner that ships. **Both arms take their time from §15.3.6's wall clock and are drawn by IRQ0** (§15.3.8) — an `int 13h` runs with interrupts enabled, so a frame lands in the gap the machine was going to spend idle, and every phase is drawn on time in both arms. A star is a **table, not a drawing** — five shapes of 22 bytes, blitted opaquely, so the dark one erases the last frame and nothing is written twice (§15.3.7.1). It used to be the one configuration that **grew the blob** — 4,193 bytes of a 4,096-byte blob, over by 97 *wherever* `OVL_AT` fell, so it alone took `BOOT2_SECS_STARS` = 9 and an `OVL_AT` of its own — and **it is not any more** (§15.3.8.5.1) — but the packed kernel took the room back, so it needed `NOKZIP=1` for a while (§15.3.8.5.2) - the twinkle and the decoder were 2,748 bytes of a 2,624-byte loader share - until §2.9.14 made the blob one section, and a knob's 11-sector blob holds the lot. The splash's size pass took its `.boot2` from 2,768 to **2,568** and the blob to **3,989 of 4,096**, so both arms are 8 sectors at one `OVL_AT` of 2,624, and the second constant, the second split and the Makefile's second `sed` are all deleted. What that bought is not the sector: `KSIG_OFF` had to name a head-crossing sector on four geometries **and both blob lengths**, an intersection four sectors wide at the very top of `.text`, which is why §18.93.1's canary had 431 bytes of headroom and a Makefile comment in capitals forbidding `.text` to fall below 50,178. One blob length widens the band to memory 6,656 and the floor to **6,658**. |
 | `NOHEDGE=1` | put sea life back on the **whole screen width** on Hercules — the saver before SPEC.md §79.5.10, and the A/B for it. The field reported a swimmer at the right edge lighting a pixel at column 0; §79.5.9 places that in **86Box's plain `hercules` renderer and not in this kernel**, because the mark is **one row DOWN** from the source and no write here can reach row *y+1* column 0 from row *y* — the byte after row *y*'s last is row *y+4*'s first. So the default reserves `SV_HEDGE` = **8 pixels** at the right and never lights them, leaving the copy nothing to carry, and the reporter confirms it clean on 86Box **and on the 5150**. What it costs the picture is eight columns of 720 the sea is already black in; what it costs the machine is **nothing measurable** — the pass is 54.93 ms median either way, exactly one tick, on both 1bpp adapters. Eight rather than one is not a performance trade in the other direction either: a **byte** column is a width cut where a single column would need a per-row bit mask. It is a knob because it is a **look question with a workaround in it** — the artifact is one emulator's, and possibly one class of monitor's, so a fork that would rather draw the whole screen than hide someone else's defect flips this and loses nothing. `tests/fishedge.py` is the behaviour gate and pokes `[sv_hlim]` at runtime rather than rebuilding; this knob is what keeps the unreserved arm **assembling**, and it is the first knob here that reaches a driver rather than the kernel, so it has the saver's own stamp and rebuilds two files |
 | `NOLIVESND=1` | build the Video Player WITHOUT Live's sound (SPEC.md 98.3.10.1): a Live play on the desktop is silent again, as it first shipped, where the default feeds a Sound Blaster from the player's worker with the card as the clock - the resident Live file's frame sound is already in the audio block, so the worker copies it into the ring and touches no file, and `vp_adue` is the one clock routine for Live and the bracket both. It is the A/B, and the way to ship without it should its bytes ever be wanted back: **231 bytes of `video.o88` and no kernel byte**. `NOHEDGE`'s shape one package along - the player's own stamp (`$(BUILD)/.vplayer-*`), so flipping it rebuilds `video.bin` and `video.o88` and nothing else. `tests/vidsound.py` is the gate that needs it: with the knob the play is silent and the row FAILS on the card never being opened |
-| `VPDIAG=1` | build the Video Player WITH the info card's field diagnostic (SPEC.md 98.3): four lines after a play that a shipped player does not carry - the heap as Play found it (`Heap 474K run, 474K free at Play`), what the ring was sized from and took (`Ring 10/8 of 379K; keep 75 snd 17`), the reader's least lead over the picture and the hook's longest gap (`Lead 1 at f470; hook gap 3`), and the card's pauses that were the stream's of all of them, with the longest (`Dry 9/11 stream; most 6t f480`). It is how a dry STREAM is told from a dry CARD on a machine with no debugger: with a card a stream that runs out is a pause and not a stall, the card being the clock. **608 bytes of image and 144 of bss of `video.o88`, no kernel byte**; `NOLIVESND`'s shape - the player's own stamp, so flipping it rebuilds `video.bin` and `video.o88` alone. `tests/unit/t_buildmatrix.py`'s `vpdiag` row is the only thing that assembles it |
-| `NOKZIP=1` | ship the kernel UNCOMPRESSED — `KERNEL.SYS` as the assembler left it, 204 sectors instead of 164 (SPEC.md 2.9.13). The packed kernel is the DEFAULT on every geometry, on `kern_small` and on the hard disk, so this is the A/B and the only thing that ever runs the unpacked arm of either loader — `tests/kzboot.py --nokzip`. What the default buys, measured on a 4.77MHz 8088 booting the 360KB disk: **599 ms** and 40 sectors, the read falling 7,098 → 5,820 ms against a decode of 799, at 39.9 cycles an output byte. What it costs is **180 bytes of the BLOB and nothing resident** — `mem_unblob` gives it all back at the end of `kmain`. Its decoder is **unbounded**, which is legitimate exactly once: this is the only stream on the machine that nothing but `make` ever writes, and §18.93.1's canary has verified the transfer before a byte is expanded. `SPLSTARS=1` requires this knob — the twinkle and the decoder are 2,748 bytes of a 2,624-byte `.boot2` |
+| `NOPICOMEM=1` | build `SOUND.DRV` WITHOUT the PicoMEM tier (SPEC.md §34.10), which ships in it by default. A PicoMEM's AdLib and Sound Blaster 2.0 answer nothing until something tells the card to install them - `PMINIT.EXE` on DOS - so the tier does that at attach, ahead of the probe that has to find them. It was `PICOMEM=1` until it had worked on both card generations, and it touches the DRIVER only: the kernel is byte-identical either way, so it has the sound driver's own stamp (`SNDSTAMP`) and is exempt from `-DKERN_KNOB`, `NOHEDGE`'s shape. What it costs a machine with no card is two reads of port 2A3h at attach and, since the port pin (§51.9.2) joined it, **one KB of heap**: `SOUND.DRV` is 7,213 bytes with the tier, an 8 KB claim, and 6,737 without, a 7 KB one. The PicoMEM gate disks refuse it, having nothing to test without the tier |
+| `VPDIAG=1` | build the Video Player WITH the info card's field diagnostic (SPEC.md 98.3): four lines after a play that a shipped player does not carry - the heap as Play found it (`Heap 474K run, 474K free at Play`), what the ring was sized from and took (`Ring 10/8 of 379K; keep 75 snd 17`), the reader's least lead over the picture and the hook's longest gap (`Lead 1 at f470; hook gap 3`), and the card's pauses that were the stream's of all of them, with the longest (`Dry 9/11 stream; most 6t f480`). It is how a dry STREAM is told from a dry CARD on a machine with no debugger: with a card a stream that runs out is a pause and not a stall, the card being the clock. **828 bytes of image and 180 of bss of `video.o88` (measured at apps size pass 1, set 6), no kernel byte**; `NOLIVESND`'s shape - the player's own stamp, so flipping it rebuilds `video.bin` and `video.o88` alone. `tests/unit/t_buildmatrix.py`'s `vpdiag` row is the only thing that assembles it |
+| `NOKZIP=1` | ship the kernel UNCOMPRESSED — `KERNEL.SYS` as the assembler left it, 204 sectors instead of 164 (SPEC.md 2.9.13). The packed kernel is the DEFAULT on every geometry, on `kern_small` and on the hard disk, so this is the A/B and the only thing that ever runs the unpacked arm of either loader — `tests/kzboot.py --nokzip`. What the default buys, measured on a 4.77MHz 8088 booting the 360KB disk: **599 ms** and 40 sectors, the read falling 7,098 → 5,820 ms against a decode of 799, at 39.9 cycles an output byte. What it costs is **180 bytes of the BLOB and nothing resident** — `mem_unblob` gives it all back at the end of `kmain`. Its decoder is **unbounded**, which is legitimate exactly once: this is the only stream on the machine that nothing but `make` ever writes, and §18.93.1's canary has verified the transfer before a byte is expanded. `SPLSTARS=1` no longer requires it (§2.9.14 made the blob one section) |
 | `TITLESNAP=1` | centre a window title on the nearest 8px **cell** instead of the exact pixel (docs/plans/completed/TEXT-PLAN.md §6.1). A title moves ≤4px and `wm_draw_title` reaches §6.1's fast path. A **look** question, so it is a knob until somebody has looked — and **a plain build is where to look**: §5.9.6 sent the composed title bar back to a knob, so the fifteen-call path is what every shipped kernel draws and the snap is reached on every title. It is `BAND=1` that hides it — the composer centres its own caption, and the snap then sits in the FALLBACK below `wm_title_band`'s `jnc .sep`, assembled and never reached. Measured, plain against `TITLESNAP=1`: **0 differing pixels of 307,200** |
 | `FONTSLOW=1` | force `font_init`'s COPY verdict (SPEC.md 6.0.1): the 8x8 glyph table goes into a 1KB `MEM_K_FONT` heap claim on every machine, where the default copies it only when the timed pick finds even the chosen ROM table a quarter slower than RAM - an unshadowed 8-bit option ROM, the owner's 5150 with a Paradise PVGA1A. The default reads the glyphs IN THE ROM (768 resident bytes of `.lowbss` back on both kernels), choosing by PIT between the BIOS's answer and the planar set at F000:FA6E when the two are byte-identical. **MartyPC prices every ROM read as a RAM read**, so without this knob the copy path would never run where a row can see it. `tests/fontpick.py` is the A/B, and `tests/romfont` is the field instrument that prints what a real machine decided |
 | `DPTROM=1` | leave `int 1Eh` **pointing at the ROM's own diskette parameter table** — in stage 1, in stage 2 and in the kernel — so a BIOS that swaps tables per MEDIA keeps doing so. SPEC.md §18.92 takes that vector for ONE byte, EOT, because the IBM PC and XT ROMs ship 8; this is the A/B for what that costs the other kind of machine (docs/FIELD-NOTES.md 32, candidate 1). **It is a DIAGNOSTIC and not an arm**: on a ROM whose EOT really is 8 this build reads nine sectors where the table allows eight, which is exactly the defect §18.92 exists to fix. Point it at an AT-class machine — the case is 720KB media in a 1.44MB drive, where the boot media's parameters are not the mounted media's — and nowhere else |
@@ -546,7 +642,8 @@ controller, so no XT profile can host one),
 `386-runcpm`, `xt-c64`,
 `286-c64`, `386-c64`, `xt-apple2`, `286-apple2`, `386-apple2`,
 `xt-weave`, `386-weave`, `xt-weave-256`, `xt-pixelstein`, `xt-pixelstein-herc`,
-`xt-pixel`, `386-pixel`;
+`xt-pixel`, `386-pixel`, `xt-isotron`, `xt-isotron-cga`, `xt-isotron-herc`,
+`xt-isotron-ega`;
 plus `marty` (MartyPC). **`386-ps2` is the only machine here with a PS/2
 mouse** — every other config is `mouse_type = msserial`, which is why §9.9
 shipped and went untested on anything but QEMU for months; it is a Packard
@@ -587,8 +684,11 @@ section 4.3.1 made the wall slice a duty-cycle controller), and
 `xt-weave`/`386-weave`/`xt-weave-256` the Weave family's
 (WEAVE-SPEC §13.1), `xt-pixelstein`/`xt-pixelstein-herc` PIXELSTEIN 3D's
 (§97.15), and `xt-pixel`/`386-pixel` PiXEL's (§106.26: `vm/xt-weave`'s
-640KB VGA XT with `pixel360.img`, `vm/386dx` with `pixel.img`) — the
-twenty-two that put a dedicated floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave
+640KB VGA XT with `pixel360.img`, `vm/386dx` with `pixel.img`), and
+`xt-isotron`/`-cga`/`-herc`/`-ega` isoTron's (§108.15: copies of
+`xt-excitebike`, `xt-pixelstein`, `xt-pixelstein-herc` and `xt-ega` with
+`isotron360.img`; the EGA one is the only place its same-mode EGA bracket
+meets a real EGA) — the twenty-six that put a dedicated floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave
 disk rather than a 3.5" one — it fits in 209 of 354 clusters, the whole
 family on one floppy — so it is where that geometry of it is booted at all,
 and **`xt-weave-256` is the same 4.77MHz XT with 256KB** rather than 640,
@@ -692,7 +792,7 @@ whose `LESSONS.md` is what MIDIRack's (SPEC.md §105.9.4, §105.9.5) learned.
   one pass. Transparent text is a **closed list of six cases** (§6.6.2) and
   `tests/textsites.txt` is the ratchet: a new call site fails the build until it
   is registered with a reason, and the count can only go down. **The sweep is
-  finished** (§6.6.5): the registry stands at 59 sites in 20 files, every one
+  finished** (§6.6.5): the registry stands at 56 sites in 20 files, every one
   with a reason, so a new transparent call is now an argument to win rather
   than a queue to join.
 - **Three adapters, one binary (§39).** `SCREEN_W`/`SCREEN_H`/`ROW_BYTES` are
@@ -705,15 +805,17 @@ whose `LESSONS.md` is what MIDIRack's (SPEC.md §105.9.4, §105.9.5) learned.
 - **Every disk-visible base is 512-byte aligned.** int 13h answers a transfer
   straddling a 64KB physical boundary with error 09h, and only starting
   512-aligned prevents it. The symptom is "Disk error" on a large save.
-- **Memory is two guards, not one** (docs/KERNEL-MEMORY.md): `KERN_BUDGET` is
-  the kernel's whole RAM footprint, `KERN_CODE_MAX` is `.text` + `.bss` inside
-  one 64KB window because offsets are 16 bits. They are relieved by different
-  mechanisms. **Raising either is a decision to take with whoever asked for the
-  feature, not a build fix.**
+- **Memory is two guards: `kern_big` resides in 100KB, `kern_small` in 64KB**
+  (`KERN_BUDGET`, docs/KERNEL-MEMORY.md). Both boot on 128KB, and `.text` +
+  `.bss` stay inside one 64KB window (`KERN_CODE_MAX`). Development may run 2KB
+  over a budget (`KERN_GRACE`); `make budget-check` holds it exactly before a
+  PR or release. **Raising any of them is a decision to take with whoever asked
+  for the feature, not a build fix.**
 - **Before spending a resident byte, ask whether the feature is an ON-DEMAND
   MODULE** (§2.8, `kernel/mod.inc`, docs/plans/completed/ONDEMAND-PLAN.md §1's
   test): kernel code that ships as a file (`CTRL.DRV`, `FORMAT.DRV`,
-  `CLONE.DRV`, `HIBER.DRV`, on kern_big `DOCK.DRV` and `EXTD.DRV`, and on
+  `DISKOPS.DRV`, `HIBER.DRV`, on kern_big `DOCK.DRV`, `EXTD.DRV` and
+  `WIN95.DRV`, and on
   kern_small `FILECP.DRV` and `FDLG.DRV`) and
   is read into a heap claim when the feature is asked for, freed when it is
   done. A feature qualifies when the system disk is already required to use
@@ -828,10 +930,9 @@ The rules that fall out:
 7. **Degrade by tier.** `OSAPI_CPU_INFO` answers `CPU_8086` for the target
    machine, which is a fact the code can test rather than a guess about speed.
 
-Three defects are **invisible in an emulator** and cost this project bug after
-bug: a **visible redraw** (seconds on real hardware), a **double-draw flash**
-(anything drawn twice), and **input overrun**. None showed in a screendump;
-every one was found on hardware or by counting.
+Three defects cost this project bug after bug: a **visible redraw**, a
+**double-draw flash** and **input overrun**. A screendump shows none of them;
+MartyPC's `flicker()`/`pace()` measure them (PERFORMANCE.md Part 3.1/3.2).
 
 That is the whole of it that applies to every change. Open PERFORMANCE.md
 itself for one of four reasons — it is 6,553 lines and over half is a log of
@@ -858,6 +959,45 @@ the pre-merge gate**. There are still no unit tests in the usual sense: the
 rows are host-side invariant checks over what `make` just built, the build
 configurations `all` never builds, and whole scripted sessions driven through
 an emulator.
+
+**Soak and `test-full` run ONCE, after the last batch** (the owner's rule).
+When a change lands as batches or waves — review-fork-pr's `fix.js`,
+port-to-os8088 and native-game-port waves, refresh-stale-pr fixes, any agent
+fix series — no batch runs a soak row or `test-full`. A batch verifies on the
+host (`make`, which runs the fast tier; `make KERN_SMALL=1`;
+`tools/kernsize.py` on both kernels; pure host checks) and NAMES the
+`tests/suite.py` rows covering what it changed. After the last batch, one
+`os88test.py soak -k … -k …` call runs the deduplicated union — any A/B leg
+against the starting commit in that same pass — then `test-full` once. A soak
+row is minutes, and a per-batch rerun buys no new information.
+
+What counts, because isoTron's six waves spent **about eight of their
+nineteen hours** on emulator rows while obeying the letter of a narrower rule:
+
+- **A row is a row however it is started.** `python3 tests/<row>.py` run by
+  hand, a row launched in the background and polled with `until … sleep`, a
+  shell loop over row names and a scratch MartyPC script that measures what a
+  row measures are all soak runs. 531 direct script calls and 285 minutes of
+  polling were the larger share of those hours, and neither said `soak`.
+- **Every role in a batch is the batch.** Implementer, fixer, reviewer,
+  verifier and repairer alike: an independent verifier checks a wave on the
+  host and by LOOKING (one boot, screenshots cropped and zoomed). A boot to
+  look at the picture is not a row; re-running the rows is.
+- **A measurement is taken in the final pass, not per wave.** A wave whose
+  acceptance is a MartyPC number names the row that produces it, and the
+  final pass produces it. The one exception is a number that DECIDES a
+  design (which renderer, which table size): the agent choosing takes it
+  once, writes it in its report, and nobody re-takes it to confirm.
+- **Never wait for host load before a cycle measurement.** MartyPC's cycle
+  counter is emulated and host load cannot move it; only the rows with a
+  wall-clock budget care, and those run in the final pass anyway. isoTron's
+  agents sat in `loadavg` loops for up to eight minutes at a time.
+- **A failing final pass re-runs only what failed.** Fix, re-run the failing
+  rows, and run `test-full` again only if the fix touched code outside them.
+- **A brief does not override this.** A workflow prompt that says "run the
+  wave's tests" means the host checks and naming the rows. The workflow
+  scripts under `.claude/skills/` are written to this rule; a new one must
+  be too.
 
 Everything else is still boot `make test`, then drive it over QMP.
 

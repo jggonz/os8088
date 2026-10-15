@@ -60,7 +60,9 @@ NET_ROW = 4                        # ...last since the reorder (SPEC.md 31.1)
 DRVR_SZ, DRVR_SEG = 16, 2
 CP_I0Y, CP_IROWH, CP_IDRV = 6, 14, 2
 CP_RX, CP_DBY1, CP_DROWH = 96, 20, 26
-PORT = 8089
+PORT = 0        # an EPHEMERAL port, read back off the socket: a fixed 8089
+                # collided with tests/brrace.py's server on a shared box and
+                # the row died on bind before booting anything
 PATH = "/net.htm"
 
 PAGE = (b"<html><head><title>Over the wire</title></head><body>\r\n"
@@ -87,6 +89,7 @@ class Server(threading.Thread):
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.s.bind(("127.0.0.1", PORT))
+        self.port = self.s.getsockname()[1]
         self.s.listen(2)
         self.request = None
 
@@ -129,7 +132,7 @@ def main():
                  "binary and blamed the browser)")
     srv = Server()
     srv.start()
-    url = "http://127.0.0.1:%d%s" % (PORT, PATH)
+    url = "http://127.0.0.1:%d%s" % (srv.port, PATH)
     say("http server on %s, %d byte page" % (url, len(PAGE)))
 
     box = P.SocketBox()

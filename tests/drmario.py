@@ -151,7 +151,10 @@ def check_pixels(p,tag,raw):
                 expected=(0,3,2,1)[v]
                 assert px[(52 if tag=='vga' else 40)+y][240+half*16+x]==expected,('preview',tag,x,y)
     footer=p.data('footer',64).split(b'\0')[0]
-    glyphs=p.data('glyphs',768)
+    # The kernel's own 8x8 table (what OSAPI_FONT_GLYPHS answers), not the
+    # package's staged copy, which lives in the render queue at mode entry.
+    m=p.m;base,seg=struct.unpack('<HH',m.read(m.sym('font_base'),2)+m.read(m.sym('font_seg'),2))
+    glyphs=m.read((seg<<4)+base,768)
     for i,ch in enumerate(footer):
         for y in range(8):
             bits=glyphs[(ch-32)*8+y]

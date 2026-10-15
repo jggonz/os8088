@@ -21,6 +21,7 @@ the vga side" is a statement about one card being stale, which a screenshot
 of the other cannot answer.
 """
 import sys
+import tempfile
 
 import os
 # THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
@@ -59,7 +60,7 @@ def lit(m, card):
 
 def shot(m, card, name):
     w, h, d = m.fbuf(card=card)
-    os88marty.write_png_rgb("/tmp/mcfs-%s.png" % name, w, h, d)
+    os88marty.write_png_rgb(tempfile.gettempdir() + "/mcfs-%s.png" % name, w, h, d)
     return w, h, d
 
 

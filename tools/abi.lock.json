@@ -1,11 +1,11 @@
 {
  "DRV_VER": {
-  "fingerprint": "1a207a1f8a03967a91888b8c172d649e85b48579078362773d2a1121b676edf8",
-  "version": 9
+  "fingerprint": "df5f981f0d263863eb80f1acda24a8a9ce86941079aa4ae4bb7c12d849990b96",
+  "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "5c330367b2613d78392bcf5e7460d1da2d46ef6df93935837819d39c101e7016",
-  "version": 8
+  "fingerprint": "9a5d33180cf627fd4dcd3dd5aa79d2aac97eb2fb8a4f7d72210bcd996cb4d56d",
+  "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
  "history": [
@@ -38,88 +38,46 @@
    "to": 9
   },
   {
-   "fingerprint": "29974c7cda4f5a83617babf4e1320bcb476ba23a92d9d77c2df2cd23ac8093f1",
+   "fingerprint": "a2bee65027656e83a58bf15dfe7f26bb38dbfa83ae59f54904e877f89414fe13",
    "from": 8,
    "guard": "PKG_FMT",
-   "reason": "OSAPI_CLK_GET appended at 0x0467 (SPEC.md 37.96); OSAPI_DESK_ITEM's record gains the DIA mark at +3 and the remove AH = 0xFF by name (SPEC.md 110.2) - both only add meaning to inputs no earlier package passed, so nothing built before stops running: no bump. Re-recorded on the merge of main's port pins (#248)",
+   "reason": "elendilon's round since #241, squashed onto main (the lock predates it on that branch). Every change still runs what was built before: OSAPI_FERR_TEXT is a NEW cell at a free slot (0x0467); DRVC_EMS/DRVC_FILE2, EMSV_*/EMSE_*, DRVE_NOVOL, MEM_K_IMG, MEM_P_FLIST, ICON_SOLID, WSEQF_* and the OS88_* macros are additions; OSAPI_PKG_REHOME's AX = 0 keep form was a refusal before (no room); OSAPI_VOL_ADD's DX != 0 take reads a register every driver built on main zeroes (22.6 retired the donated listing claim - HDD, NET and RAMDISK all pass 0); the rest are contracts clarified (DRV_CFG's DS, the file read's size probe, registers preserved). No number moves.",
    "to": 8
   },
   {
-   "fingerprint": "395279e0170b1cbddde17153f7960c49caec21793dd35b0702b7fc92ebd35ee9",
+   "fingerprint": "acbc5cdf8628e40b6dd72ad8a9e3e9a8bf0aff2464e7294cac97e0ce311210cd",
    "from": 9,
    "guard": "DRV_VER",
-   "reason": "OSAPI_CLK_GET appended at 0x0467 (SPEC.md 37.96); OSAPI_DESK_ITEM's record gains the DIA mark at +3 and the remove AH = 0xFF by name (SPEC.md 110.2) - both only add meaning to inputs no earlier package passed, so nothing built before stops running: no bump. Re-recorded on the merge of main's port pins (#248)",
+   "reason": "elendilon's round since #241, squashed onto main (the lock predates it on that branch). Every change still runs what was built before: OSAPI_FERR_TEXT is a NEW cell at a free slot (0x0467); DRVC_EMS/DRVC_FILE2, EMSV_*/EMSE_*, DRVE_NOVOL, MEM_K_IMG, MEM_P_FLIST, ICON_SOLID, WSEQF_* and the OS88_* macros are additions; OSAPI_PKG_REHOME's AX = 0 keep form was a refusal before (no room); OSAPI_VOL_ADD's DX != 0 take reads a register every driver built on main zeroes (22.6 retired the donated listing claim - HDD, NET and RAMDISK all pass 0); the rest are contracts clarified (DRV_CFG's DS, the file read's size probe, registers preserved). No number moves.",
    "to": 9
   },
   {
-   "fingerprint": "ae1be140fc64a540924e5dc2f3a0b1a7bda46c008feafedfc471861af708f06b",
+   "fingerprint": "a2bee65027656e83a58bf15dfe7f26bb38dbfa83ae59f54904e877f89414fe13",
    "from": 8,
    "guard": "PKG_FMT",
-   "reason": "OSAPI_WM_DESK 0x046D + OSAPI_GFX_DESK 0x0473 appended; header flag bit 6 OS88_F_DESK; WF_DESK/WF_HOVER/IF_DESK mirrors (SPEC.md 11.103) - cells added at the end and a reserved bit given a meaning, so no PKG_FMT or DRV_VER bump (SPEC.md 20.2.0.1)",
-   "to": 8
+   "reason": "PKG_FMT 8 -> 10 and DRV_VER 9 -> 11 (SPEC.md 20.2.0): the RAM disk's class moved 5 -> 8 (DRVC_FILE -> DRVC_FILE2, SPEC.md 62.9.19), which the round's entry above recorded as an addition. It is not: RAMDISK.DRV's header class and RD_CLASS (drivers/ramdisk/rdpkg.inc, outside the locked surface) both name 8 now and drv_tab row 3 expects it, so an old RAMDISK.DRV would have been refused by drv_check as a bad driver, and an old package reaching the RAM disk through RD_CLASS - THEWIRE.O88's archive path - would have called class 5, NET.DRV's slot, and been told there is no RAM disk. At the new numbers that package is Wrong os8088 version (LD_EVER) at load and that driver fails on its version byte. 10 and 11 collide with no number ever used (module 5, package 3/6/8, driver 4/7/9) nor with each other.",
+   "to": 10
   },
   {
-   "fingerprint": "cc62522a1e63c0bb3a356b6ae6c2297c64e4ff2c34de1334dcfdb2a544585f20",
+   "fingerprint": "f313c179bb120bd6508c57bf54a87ccd8e31ad8329f9515c8ac8dd6d037e88ea",
    "from": 9,
    "guard": "DRV_VER",
-   "reason": "OSAPI_WM_DESK 0x046D + OSAPI_GFX_DESK 0x0473 appended; header flag bit 6 OS88_F_DESK; WF_DESK/WF_HOVER/IF_DESK mirrors (SPEC.md 11.103) - cells added at the end and a reserved bit given a meaning, so no PKG_FMT or DRV_VER bump (SPEC.md 20.2.0.1)",
-   "to": 9
+   "reason": "PKG_FMT 8 -> 10 and DRV_VER 9 -> 11 (SPEC.md 20.2.0): the RAM disk's class moved 5 -> 8 (DRVC_FILE -> DRVC_FILE2, SPEC.md 62.9.19), which the round's entry above recorded as an addition. It is not: RAMDISK.DRV's header class and RD_CLASS (drivers/ramdisk/rdpkg.inc, outside the locked surface) both name 8 now and drv_tab row 3 expects it, so an old RAMDISK.DRV would have been refused by drv_check as a bad driver, and an old package reaching the RAM disk through RD_CLASS - THEWIRE.O88's archive path - would have called class 5, NET.DRV's slot, and been told there is no RAM disk. At the new numbers that package is Wrong os8088 version (LD_EVER) at load and that driver fails on its version byte. 10 and 11 collide with no number ever used (module 5, package 3/6/8, driver 4/7/9) nor with each other.",
+   "to": 11
   },
   {
-   "fingerprint": "e32004ffdbdc4efdf03b202f1409026353f5732baa255e34b063e54ba9c01564",
-   "from": 8,
+   "fingerprint": "9a5d33180cf627fd4dcd3dd5aa79d2aac97eb2fb8a4f7d72210bcd996cb4d56d",
+   "from": 10,
    "guard": "PKG_FMT",
-   "reason": "OSAPI_WM_DESK's MAKE contract: refused for another package's window or outside a load, IF_DESK only when the returned window is the desk one (SPEC.md 11.103.9); no cell moved, no bump",
-   "to": 8
+   "reason": "feature/dia merged onto main b47de145 (PKG_FMT 10 / DRV_VER 11 kept): the DIA cells move to the END of main's table, after main's OSAPI_FERR_TEXT at 0x0467 - OSAPI_CLK_GET 0x046D (SPEC.md 37.96), OSAPI_WM_DESK 0x0473 and OSAPI_GFX_DESK 0x0479 (SPEC.md 11.103.9); header flag bit 6 OS88_F_DESK, WF_DESK/WF_HOVER/IF_DESK, OSAPI_WM_TOP never answering a desk window and OSAPI_DESK_ITEM's DIA mark at +3 (SPEC.md 110.2) as the branch recorded them. Cells appended and contracts filled in on inputs no earlier package passed: everything built against main's SDK still runs, so no bump",
+   "to": 10
   },
   {
-   "fingerprint": "8b2f90cf713db93c1009a9d5a82da22913d5d6bd18c6a265b38872e9f84820e6",
-   "from": 9,
+   "fingerprint": "df5f981f0d263863eb80f1acda24a8a9ce86941079aa4ae4bb7c12d849990b96",
+   "from": 11,
    "guard": "DRV_VER",
-   "reason": "OSAPI_WM_DESK's MAKE contract: refused for another package's window or outside a load, IF_DESK only when the returned window is the desk one (SPEC.md 11.103.9); no cell moved, no bump",
-   "to": 9
-  },
-  {
-   "fingerprint": "7d5d321c36fdc50e453655b327b578ed7a4cad695110eab2c2a0a843e19768f0",
-   "from": 8,
-   "guard": "PKG_FMT",
-   "reason": "OSAPI_WM_DESK verb 2 DRAG defined (was refused; no package called it) and WF_HOVER now set by the hover edge - a contract filled in, nothing built before stops running (SPEC.md 11.103.6-7)",
-   "to": 8
-  },
-  {
-   "fingerprint": "3e0bdcb0b221b188fb1bed371a0b432682e641ce95f5eccf5b09be3942a63727",
-   "from": 9,
-   "guard": "DRV_VER",
-   "reason": "OSAPI_WM_DESK verb 2 DRAG defined (was refused; no package called it) and WF_HOVER now set by the hover edge - a contract filled in, nothing built before stops running (SPEC.md 11.103.6-7)",
-   "to": 9
-  },
-  {
-   "fingerprint": "e8a2734d75cfb47c465f4b9811936289dda3616c5de6918c2092950d4fe0e7e5",
-   "from": 8,
-   "guard": "PKG_FMT",
-   "reason": "OSAPI_WM_DESK DRAG reads BX now (your desk window) and WF_HOVER's chooser/dock caveats are written down: a contract clarified, no cell moved, so no PKG_FMT bump",
-   "to": 8
-  },
-  {
-   "fingerprint": "e3f079124479e7e9f01fcd00b82288eaf7b61a0a47b6505a1b1919ea75720ae9",
-   "from": 9,
-   "guard": "DRV_VER",
-   "reason": "OSAPI_WM_DESK DRAG reads BX now (your desk window) and WF_HOVER's chooser/dock caveats are written down: a contract clarified, no cell moved, so no PKG_FMT bump",
-   "to": 9
-  },
-  {
-   "fingerprint": "5c330367b2613d78392bcf5e7460d1da2d46ef6df93935837819d39c101e7016",
-   "from": 8,
-   "guard": "PKG_FMT",
-   "reason": "comments only: SPEC.md 107 renumbered 110 (the DIA section; main took 107 for EMS.DRV) - no cell, register or record changed",
-   "to": 8
-  },
-  {
-   "fingerprint": "1a207a1f8a03967a91888b8c172d649e85b48579078362773d2a1121b676edf8",
-   "from": 9,
-   "guard": "DRV_VER",
-   "reason": "comments only: SPEC.md 107 renumbered 110 (the DIA section; main took 107 for EMS.DRV) - no cell, register or record changed",
-   "to": 9
+   "reason": "feature/dia merged onto main b47de145 (PKG_FMT 10 / DRV_VER 11 kept): the DIA cells move to the END of main's table, after main's OSAPI_FERR_TEXT at 0x0467 - OSAPI_CLK_GET 0x046D (SPEC.md 37.96), OSAPI_WM_DESK 0x0473 and OSAPI_GFX_DESK 0x0479 (SPEC.md 11.103.9); header flag bit 6 OS88_F_DESK, WF_DESK/WF_HOVER/IF_DESK, OSAPI_WM_TOP never answering a desk window and OSAPI_DESK_ITEM's DIA mark at +3 (SPEC.md 110.2) as the branch recorded them. Cells appended and contracts filled in on inputs no earlier package passed: everything built against main's SDK still runs, so no bump",
+   "to": 11
   }
  ]
 }

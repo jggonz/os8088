@@ -338,6 +338,14 @@ def main():
                     return show(m, "fm_layout ENTERED WITH DS != KERNEL_SEG")
                 hit = [n for n, a in watch.items()
                        if st["cs"] == KSEG and abs(st["ip"] - (a - 0x600)) <= 4]
+                # ui_cmd with AX = 0 is "nothing", by its own first compare:
+                # since kernel size pass 10 ui_task's posted-command step
+                # calls it WITHOUT a `jz` in front (ui.inc .chk_pcmd), so an
+                # entry with AX = 0 is that step being told no and not a
+                # command - the reboot's is CMD_REBOOT, never 0
+                if hit == ["ui_cmd"] and m.cmd(cmd="regs")["ax"] == 0:
+                    m.run()
+                    continue
                 if hit:
                     return show(m, "REACHED %s" % hit[0])
                 state["benign"] += 1
@@ -390,18 +398,23 @@ def main():
         # agree on. (docs/WRITING-TESTS.md 7.2: pick a signal that means what
         # you think it means. `je`'s displacement means "past step 0"; a byte
         # count means "past the step 0 I happened to assemble".)
-        HEAD = 15
+        # **AND IT SHRANK** (kernel size pass 10): the compare, the read and
+        # the clear are ONE `xchg`, so the head is `xor al, al / xchg al, [q]
+        # / or al, al / jz .keys`, ten bytes where fifteen were. The patches
+        # below keep their meaning on it: AL is the byte read and the flag is
+        # never cleared.
+        HEAD = 10
         step0 = m.read(S("ui_task"), HEAD)
-        want = bytes([0x80, 0x3E, SY["ui_rebootq"] & 0xFF, SY["ui_rebootq"] >> 8, 0x00,          # cmp [q], 0
-                      0x74, step0[6],                        # je .keys
-                      0xA0, SY["ui_rebootq"] & 0xFF, SY["ui_rebootq"] >> 8,                      # mov al, [q]
-                      0xC6, 0x06, SY["ui_rebootq"] & 0xFF, SY["ui_rebootq"] >> 8, 0x00])         # mov byte [q], 0
+        want = bytes([0x30, 0xC0,                                              # xor al, al
+                      0x86, 0x06, SY["ui_rebootq"] & 0xFF, SY["ui_rebootq"] >> 8,  # xchg al, [q]
+                      0x08, 0xC0,                                              # or al, al
+                      0x74, step0[9]])                                         # jz .keys
         if step0 != want:
             sys.exit("ui_task step 0 is not the expected %d-byte head: %s"
                      % (HEAD, hexd(step0)))
-        KEYS = 7 + step0[6]                     # the `je`'s own target
+        KEYS = 10 + step0[9]                    # the `jz`'s own target
         print("ui_task step 0 is %d bytes (je .keys hops 0x%02X)"
-              % (KEYS, step0[6]))
+              % (KEYS, step0[9]))
         if NOP:
             # TO `.keys`, not a typed count: NOPping 20 bytes of a 31-byte
             # step 0 lands in the middle of the far call to hbf_perform.
@@ -409,30 +422,26 @@ def main():
             print("ui_task step 0 NOPped: the flag is now sticky and the "
                   "reboot cannot fire")
         else:
-            # THE DISCRIMINATOR, and it fits in the same five bytes.
-            #   80 3E B2 CD 00   cmp byte [ui_rebootq], 0
-            # becomes
-            #   A0 B2 CD         mov al, [ui_rebootq]
-            #   3C 00            cmp al, 0
-            # which is the identical test with the byte it read LEFT IN AL -
-            # and AL is dead here, the next use being int 16h AH=01h's own
-            # return. Nothing between +5 and +12 touches AL, so AL at the
-            # ui_cmd_reboot catch IS what the compare saw. AL non-zero means
-            # the flag really was set; AL ZERO means `cmp al,0` set ZF and the
-            # `je` was taken, so control cannot have come through this pair at
-            # all and the entry is from somewhere else.
-            # ...and `74 xx` (je .keys) becomes `EB xx` (jmp .keys), so the
-            # branch is ALWAYS taken: everything from +7 to `.keys` is
-            # unreachable - the read, the clear, the hibernate arm and the
-            # call alike - the flag STICKS once written, and the reboot
-            # cannot fire. Two bytes for two bytes and the same instruction
-            # count, which is why this is the patch to use rather than a
-            # field of NOPs - those change what the loop does, and six clicks
-            # under them produced no write at all. **The displacement is the
-            # kernel's own**, so this holds whatever is inside step 0.
+            # THE DISCRIMINATOR. The head's first five bytes
+            #   30 C0 86 06 lo hi    xor al, al / xchg al, [ui_rebootq]
+            # read AND CLEAR; they become
+            #   A0 lo hi             mov al, [ui_rebootq]
+            #   3C 00                cmp al, 0
+            # which reads the same byte into AL and LEAVES IT SET - and AL is
+            # dead here, the next use being int 16h AH=01h's own return, so
+            # AL at the ui_cmd_reboot catch IS what was read. AL non-zero
+            # means the flag really was set; AL ZERO means the branch below
+            # was taken, so control cannot have come through here at all and
+            # the entry is from somewhere else.
+            # ...and the next two bytes are `EB` (jmp) hopping to `.keys`,
+            # whose displacement is the `jz`'s plus the three bytes it starts
+            # ahead of it - so the branch is ALWAYS taken: the rest of step 0
+            # is unreachable, the flag STICKS once written, and the reboot
+            # cannot fire. **The displacement is the kernel's own**, so this
+            # holds whatever is inside step 0.
             m.write(S("ui_task"), bytes([0xA0, SY["ui_rebootq"] & 0xFF,
                                          SY["ui_rebootq"] >> 8, 0x3C, 0x00,
-                                         0xEB, step0[6]]))
+                                         0xEB, step0[9] + 3]))
             print("ui_task step 0 patched: AL carries the byte read, and the "
                   "branch is unconditional so the flag sticks")
 

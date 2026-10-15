@@ -1,0 +1,32 @@
+FTPSPEED - the STOR commit A/B (SPEC.md 77.50)
+
+Three FTP servers, the same code in three builds. Run ONE at a time
+(they all listen on port 21) and upload the SAME large file to each.
+
+  FTPDK8.O88   the new stream: data held, FAT and directory written
+               every 256 KB and at the end. 8 KB stage. What ships.
+  FTPDK32.O88  the same, with a 32 KB stage.
+  FTPDP8.O88   the OLD way: FAT and directory written after EVERY
+               8 KB chunk. What the 41 KB/s and the clicking came off.
+
+BOOT THE SYSTEM DISK BUILT WITH THIS ONE. The new stream needs a
+kernel flag (WSEQF_KEEP); an older kernel ignores it and commits
+every chunk, so all three arms would read the same.
+
+A server serves the folder it was launched from, and only on a FIXED
+disk does the hold outlive a chunk - so for the hard-disk reading copy
+the three .O88 files to a folder on C: and launch them from there.
+Launched from this floppy, all three commit per chunk by design.
+
+After each transfer the log shows the rate and four split lines:
+
+  Got 13107200 in 64s 204800B/s gap 0s
+  disk N net N draw N           ms in the file calls / the socket
+  wait N wake N idle N pass N   idle = the wire had nothing for us
+  dfree N glass N wk N
+  stage 8192 cm N max N ck N    stage size, commits made, the LONGEST
+                                one in ms, checkpoints + the close
+
+A photo of the log after each arm is the whole reading. Listening
+for the drive is the other half: FTPDP8 should click once per 8 KB,
+FTPDK8 once per 256 KB.

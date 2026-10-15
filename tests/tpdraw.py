@@ -228,6 +228,16 @@ def main(argv):
         os88marty.settle(m)
         agrees(m, mo, "Backspace joins two lines")
 
+        # ...and enough Returns that the bar's TOTAL moves its thumb's HEIGHT
+        # and not only its place: one line in a long document resizes it by
+        # no pixel, so the two legs above cannot tell os88ui_sbupd taking the
+        # thumb-only path (SPEC.md 13.10.3.2) from taking the whole bar. Here
+        # a thumb-only redraw leaves the old thumb's tail behind on the track
+        for _ in range(24):
+            m.key("Enter")
+        os88marty.settle(m)
+        agrees(m, mo, "Returns that resize the thumb")
+
         for k in ("ArrowDown", "ArrowDown", "ArrowUp", "ArrowRight",
                   "ArrowLeft", "Home", "End"):
             m.key(k)

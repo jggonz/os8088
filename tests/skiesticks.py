@@ -79,13 +79,25 @@ def fly(m, r):
 
 
 def land(m, r):
-    """...and back out to the launcher."""
+    """...and back out to the launcher - which means the KERNEL's bracket is
+    down, not merely that cs_quit is latched. cs_quit is set at the top of
+    the way out, and the way out reads the title art back off the disk
+    (SPEC.md 88.10.7) before fsx_restore drains the key buffer (53.6 step 2),
+    so the next leg's `f` typed inside that window is thrown away and reads
+    as "Fly did nothing" - skiesset's bracket_gone(), for the same reason.
+    [fsx_task] is 0xFF once the bracket has disarmed."""
     m.type_text("f")
     for _ in range(40):
         m.advance(frames=20)
         m.run()
         if r.byte("cs_quit"):
             break
+    fsx_task = m.sym("fsx_task")
+    for _ in range(60):
+        if m.read(fsx_task, 1)[0] == 0xFF:
+            break
+        m.advance(frames=20)
+        m.run()
     m.advance(frames=60)
     m.run()
 
@@ -113,6 +125,13 @@ def main():
                           boot=False) as m:
         m.run()
         os88marty.settle(m, gate=os88marty.desktop_up)
+        # THE SAVER GOES OFF: this row moves the BIOS tick count by half an
+        # hour (leg B), and the saver's idle test is ticks since the last
+        # input - so the jump can raise it between the poke and the `f`, the
+        # `f` wakes it and is swallowed, and the leg reads "Fly did nothing".
+        # One soak lane in nine did exactly that, in 17.9s against ~33.
+        # os88ui.boot does this by default; this row boots by hand
+        os88marty.no_saver(m)
         slot, seg, base = open_game(m)
         r = Bss(m, seg, base)
         if r.byte("cs_want") == 0:      # CSB_NONE - the Fly button is greyed

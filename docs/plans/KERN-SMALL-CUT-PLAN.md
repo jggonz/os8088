@@ -556,7 +556,7 @@ else"*. On this build it already carries five modules cut out of the binary
 and read into a heap claim when the feature is asked for:
 
 ```
-ctrl.drv    4,580   format.drv  1,129   clone.drv   5,810
+ctrl.drv    4,580   format.drv  1,129   diskops.drv   5,810
 filecp.drv  2,161   fdlg.drv    3,243              = 16,923 bytes NOT in the footprint
 ```
 
@@ -568,7 +568,7 @@ are refused by the mechanism itself:
 | module | verdict |
 |---|---|
 | `assoc.inc` | **refused**: `mod_need → drv_mounted → dsk_chdir_q_x → dsk_chdir_x → disk_mount_x → asc_lookup_x`. Loading any module can mount, and a mount calls associations. Gated instead (SPEC.md 54.0) |
-| `diskw.inc` | **refused**: it is the by-name file I/O layer, not the write path. `mod.inc` calls `dskw_read_x` *to load a module*; `driver.inc` and `loader.inc` call it to load a driver and a package; CTRL.DRV and CLONE.DRV far-call `dwf_dskw_*` from inside their own images. 33 entry points against `MOD_NENT`'s 8 |
+| `diskw.inc` | **refused**: it is the by-name file I/O layer, not the write path. `mod.inc` calls `dskw_read_x` *to load a module*; `driver.inc` and `loader.inc` call it to load a driver and a package; CTRL.DRV and DISKOPS.DRV far-call `dwf_dskw_*` from inside their own images. 33 entry points against `MOD_NENT`'s 8 |
 
 **So C1 can be deleted and cannot be moved**, and that is the whole of why §8's
 last tier is the only one that reaches 67 KB.

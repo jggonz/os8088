@@ -791,60 +791,26 @@ mr_set_ok:
 ; at the close when a check box moved. A file that is not ours (the magic) is
 ; ignored and one that is is CLAMPED, never refused (apps/pixelstein's
 ; pxset.inc, whose shape this is). A disk without the folder simply keeps
-; nothing, which is a user's own disk and not an error
+; nothing, which is a user's own disk and not an error.
+;
+; THE FOLDER IS REACHED THROUGH apps/os88data.inc (docs/plans/NAV-COST-PLAN.md),
+; which is what SPEC.md 19.9.1's other settings files use: od_read / od_write
+; walk root -> SYSTEM -> APPDATA once with OSAPI_FILE_GOTO_QM, BANK the
+; folder's cluster so every later visit is one GOTO_QM, and stand us back
+; where we were on every answer. This file carried its own walk until then
+; (mrl_root + mrl_enter twice, then home), which was quiet already but walked
+; the whole way on every save - and a Settings commit saves. MIDIRACK.CFG is
+; always MR_CFGN bytes, so after the first full write of a session od_write
+; rewrites it IN PLACE (OSAPI_FILE_WRITE_AT, one data sector) on kern_big;
+; [mr_cfg_ip] is the per-file stamp that tells it when that is safe
 ; =============================================================================
 MR_CFGN     equ 4 + 5
 mr_cfg_file:  db 'MIDIRACK.CFG', 0
 mr_cfg_magic: db 'MRC', 1
-mr_s_system:  db 'SYSTEM', 0
-mr_s_appdat:  db 'APPDATA', 0
     MRBUF mr_cfgbuf, 16
-    MRW mr_cfghd                    ; where we were standing
-    MRB mr_cfghv
+    MRB mr_cfg_ip                   ; os88data.inc's in-place stamp (0 at load)
 
-; mr_cfg_enter - into SYSTEM\APPDATA on our volume; CF = 1 there is none
-mr_cfg_enter:
-    push bx
-    push dx
-    push si
-    call OSAPI_FILE_HERE
-    mov [mr_cfghd], dx
-    mov [mr_cfghv], bl
-    call mrl_root
-    mov si, mr_s_system
-    call mrl_enter
-    jc .back
-    mov si, mr_s_appdat
-    call mrl_enter
-    jc .back
-    pop si
-    pop dx
-    pop bx
-    clc
-    ret
-.back:
-    call mr_cfg_leave
-    pop si
-    pop dx
-    pop bx
-    stc
-    ret
-
-; mr_cfg_leave - back where mr_cfg_enter found us. Preserves every register
-; and the flags
-mr_cfg_leave:
-    pushf
-    push ax                         ; (GOTO_QM answers in AX, and the read's
-    push bx                         ; size is still in it)
-    push dx
-    mov dx, [mr_cfghd]
-    mov bl, [mr_cfghv]
-    call OSAPI_FILE_GOTO_QM
-    pop dx
-    pop bx
-    pop ax
-    popf
-    ret
+%include "os88data.inc"
 
 ; mr_cfg_load - the kept settings, if there are any
 mr_cfg_load:
@@ -854,17 +820,14 @@ mr_cfg_load:
     push dx
     push si
     push es
-    call mr_cfg_enter
-    jc .out
     push ds
     pop es
     mov si, mr_cfg_file
     mov bx, mr_cfgbuf
     mov cx, 16
     xor dx, dx
-    call OSAPI_FILE_READ            ; DX:AX = its size
-    call mr_cfg_leave
-    jc .out
+    call od_read                    ; DX:AX = its size; we stand where we
+    jc .out                         ; were, whatever it answered
     or dx, dx
     jnz .out
     cmp ax, MR_CFGN
@@ -913,6 +876,7 @@ mr_cfg_save:
     push cx
     push dx
     push si
+    push di
     push es
     mov byte [mr_cfgdirty], 1
     mov ax, [mr_cfg_magic]
@@ -929,20 +893,18 @@ mr_cfg_save:
     mov [mr_cfgbuf+7], al
     mov al, [mr_levels]
     mov [mr_cfgbuf+8], al
-    call mr_cfg_enter
-    jc .out
     push ds
     pop es
     mov si, mr_cfg_file
     mov bx, mr_cfgbuf
     mov cx, MR_CFGN
-    xor dx, dx
-    call OSAPI_FILE_WRITE
-    call mr_cfg_leave
+    mov di, mr_cfg_ip
+    call od_write                   ; in place once a full write has landed
     jc .out
     mov byte [mr_cfgdirty], 0
 .out:
     pop es
+    pop di
     pop si
     pop dx
     pop cx
@@ -1001,6 +963,11 @@ mr_onwake:
     mov dx, [mr_arg_dir]
     mov bl, [mr_arg_vol]
     call OSAPI_FILE_GOTO_QM         ; its folder: the rest of it too
+    jc .auto                        ; REFUSED: nothing moved, so the folder
+                                    ; we stand in is not the document's -
+                                    ; listing it and hunting the name there
+                                    ; would play a stranger's song. The
+                                    ; shipped songs instead, as with no arg
     call mrl_adddir
     call mr_select_name             ; ...and the one double-clicked, played
     call mru_update

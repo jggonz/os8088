@@ -24,6 +24,7 @@ wide, reading into the next), and no `cld` in a routine built out of `lodsb`,
 `stosb` and `rep movsb`.
 """
 import argparse
+import tempfile
 import os
 import sys
 
@@ -44,11 +45,11 @@ def u16(b, i=0):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/blitp.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/blitp.img")
     ap.add_argument("--machine", default="os8088_xt_vga")
     a = ap.parse_args()
 
-    if a.apps == "/tmp/blitp.img":
+    if a.apps == tempfile.gettempdir() + "/blitp.img":
         os88marty.scratch_disk(a.apps, "APPS:build/gfxbench.o88")
 
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,

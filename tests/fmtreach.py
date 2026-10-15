@@ -106,7 +106,7 @@ def arm(wrong, tmp):
         except os88ui.UIError:          # WINDOW is what counts
             pass
         M.settle(m)
-        ui.menu_pick("File", "Format Disk...")
+        ui.menu_pick("Disk", "Format Disk...")
         M.until(m, lambda mm: edit(mm) == 5, "the format confirmation",
                 poll=0.2, guest=60.0)
         row = m.read(m.sym("fm_fmtrow"), 1)[0]

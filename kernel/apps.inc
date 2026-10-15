@@ -517,7 +517,7 @@ app_tmr_onclick_x:
     ; itself down, and os88ui_btn's DIS outranks DOWN so it says "pressed"
     ; about nothing. The refusal stays at the release, where it always was.
     inc al                      ; 1-based, so 0 can mean "nothing is down"
-    xor ah, ah
+    cbw                         ; (1..3: AH = 0, a byte under the xor)
     call os88ui_arm  ; apps.inc is .text and the arm is .cold
     call app_tmr_setdown
 %else
@@ -566,12 +566,11 @@ app_tmr_track:
     call app_tmr_hit            ; is the pointer STILL on it?
     jc .off
     inc al                      ; 1-based, to compare against the arm
-    xor ah, ah
+    cbw                         ; (1..3: AH = 0)
     cmp ax, bp
-    jne .off
-    dec al                      ; ...and back to 0-based for the caller
-    pop bp
-    clc
+    jne .off                    ; (falling out is EQUAL: CF = 0, and neither
+    dec al                      ; `dec` nor `pop` writes it) ...and back to
+    pop bp                      ; 0-based for the caller
     ret
 .off:
     xor al, al                  ; a different button, or none: CANCELLED
@@ -745,7 +744,7 @@ app_tmr_btn:
 
 
 
-    xor ah, ah
+    cbw                         ; AH = 0: the index is 0..2
     mov bp, ax                  ; BP = the index for the whole routine, and a
                                 ; VALUE rather than an address (SS is not DS,
                                 ; SPEC.md 1 rule 3) - AX, BX, CX and DX are
@@ -763,8 +762,11 @@ app_tmr_btn:
     add dx, APP_TMR_BH - 1
     call ct_cw_wm_clip_test
     jc .out
-    call ui_krect4              ; the rect, staged whole - fdlg.inc's, `.cold`
-                                ; like this, so the call is near
+    mov [os88ui_krect+0], ax    ; the rect, staged whole into the kernel's
+    mov [os88ui_krect+2], bx    ; ONE button rect (os88ui.inc's .bss, every
+    mov [os88ui_krect+4], cx    ; writer on the UI task under the gfx lock -
+    mov [os88ui_krect+6], dx    ; SPEC.md 13). This was fdlg.inc's ui_krect4,
+                                ; whose only caller this was (size pass 10)
 
     mov si, bp                  ; the label for this index
     shl si, 1
@@ -1083,8 +1085,7 @@ app_bounce_task_x:
     mov cx, [ss:si+BAL_X]       ; bank where the square is ON THE GLASS
     mov dx, [ss:si+BAL_Y]
     call app_ball_step
-    mov byte [gfx_color], CBLACK
-    call app_ball_fill          ; the NEW square FIRST (SPEC.md 14.5)...
+    call app_ball_fill          ; the NEW square FIRST (SPEC.md 14.5), black...
     mov byte [gfx_color], CWHITE
     call app_ball_wipe          ; ...then the part of the old one it does not
     jmp short .skip             ; cover. Erase-then-draw wrote every pixel the
@@ -1235,13 +1236,13 @@ app_ball_step:
     add ax, [ss:bx+si+4]        ; ...and the velocity is +4 from it
     jns .high
     xor ax, ax                  ; hit the low wall
-    neg word [ss:bx+si+4]
-    jmp short .done
+    jmp short .wall
 .high:
     cmp ax, dx
     jle .done
     mov ax, dx                  ; hit the high wall
-    neg word [ss:bx+si+4]
+.wall:                          ; ...and either wall turns it round, in one
+    neg word [ss:bx+si+4]       ; copy of the store (size pass 10)
 .done:
     mov [ss:bx+si], ax
     ret
@@ -1258,8 +1259,7 @@ app_bounce_paint_x:
 
     call app_state_of           ; BX = window, DI = ball state
     jc .done
-    mov byte [gfx_color], CBLACK
-    call app_ball_fill
+    call app_ball_fill          ; (black: the fill sets it)
 
 .done:
     pop di
@@ -1268,8 +1268,10 @@ app_bounce_paint_x:
 
 ; -----------------------------------------------------------------------------
 ; app_ball_fill - fill the 8x8 square at an instance's ball position
-; in:  BX = window ptr, DI = ball state ptr; color from [gfx_color]
-; out: nothing
+; in:  BX = window ptr, DI = ball state ptr
+; out: nothing - and [gfx_color] = CBLACK, which it SETS: both callers drew
+;      the square black and wrote the store out ahead of the call until size
+;      pass 10
 ; clobbers: nothing (flags only; internal helper)
 ; -----------------------------------------------------------------------------
 app_ball_fill:
@@ -1277,6 +1279,7 @@ app_ball_fill:
     push bx
     push cx
     push dx
+    mov byte [gfx_color], CBLACK
 
     call ct_cw_wm_content                     ; AX = content left, DX = content top
     add ax, [ss:di+BAL_X]          ; AX = x1

@@ -136,7 +136,6 @@ tsp_rat:    dw 22050, 16000, 11025, 8000, 0
     TRKBUF tsp_save, 3              ; mp_playing, mp_tickrem across the bench
     TRKBUF tsp_chsave, MP_CHSZ * 4  ; ...and the channel records
     TRKBUF tsp_msg, 64              ; the refusal, with its figure (<= 55)
-    TRKBUF tsp_fam, SPKFX_NLEV * 256    ; the shaper's level family
 
 tsp_hook:                           ; FSXF_RATE's hook: a period, counted
     inc word [tsp_hk]
@@ -182,7 +181,8 @@ tsp_ring:
     jne .ok
     push ax
     push dx
-    mov ax, (TSP_RL + 272 + 1023) / 1024
+    mov ax, (TSP_RL + SPKFX_RINGEND + 1023) / 1024 ; the ring, its table
+                                    ; and the shaper's family (34.11.9)
     call OSAPI_MEM_CLAIM
     jc .no
     mov [tsp_rseg], dx
@@ -258,9 +258,12 @@ tsp_tables:
     mov [tsp_slev], al
     mov byte [tsp_lvok], 1
 %endif
-    mov di, tsp_fam
+    push es
+    mov es, [tsp_rseg]              ; the family: in the ring's claim, so a
+    mov di, TSP_RL + SPKFX_RINGX    ; card machine never holds it (34.11.9)
     mov ax, 0x0100 | SPKFX_PRE_NONE ; the samples were filtered at load
     call os88spkfx_init
+    pop es
 %if TSP_RATCHET
     mov al, [tsp_slev]
     call os88spkfx_ratchet
@@ -286,12 +289,6 @@ tsp_tables:
 ; where it was. ~0.7 s, once a session
 ; -----------------------------------------------------------------------------
 tsp_calib:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     push es
     call tsp_rates
     mov ax, [si]
@@ -403,12 +400,6 @@ tsp_calib:
     mov [mp_tickrem], ax
     mov byte [tsp_cal], 1
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; tsp_edge - wait for a tick to begin. out: AX = it
@@ -758,8 +749,7 @@ tsp_mend:                           ; the NUL, and the line said
     stosb
     mov si, tsp_msg
     call tui_msg
-    call trk_say
-    ret
+    jmp trk_say
 
 ; -----------------------------------------------------------------------------
 ; tsp_start - the play set up at the rung's rate, from where trk_play's mode
@@ -767,12 +757,6 @@ tsp_mend:                           ; the NUL, and the line said
 ; out: CF = 1 refused (said)
 ; -----------------------------------------------------------------------------
 tsp_start:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     push es
     call tsp_halt                   ; nothing of a last play left open
     call tsp_rates
@@ -786,25 +770,11 @@ tsp_start:
     xor ax, ax
     mov [es:TSP_RL], ax             ; TOTAL
     mov [es:TSP_RL+2], ax           ; CONS
-    mov ax, [tsp_rate]
-    call tw_elscale                 ; a RESUME at another rate keeps its clock
-    mov [mp_mixrate], ax            ; (R, paused, then Play): its bytes in
-    mov al, [trk_pmode]             ; the new rate's, or it jumps
-    call tw_newstream               ; the face's clock, as trk_play's
-    mov al, [trk_pmode]
-    call mp_start
-    xor ax, ax
-    mov [trk_total], ax             ; the stream's counters ARE the ring's
-    mov [trk_consumed], ax
-    mov [mp_stampbase], ax
-    call mp_stclear
+    mov ax, [tsp_rate]              ; a RESUME at another rate keeps its clock
+    call trk_restart                ; (R, paused, then Play): its bytes in the
+                                    ; new rate's, or it jumps. The stream's
+                                    ; counters ARE the ring's
     mov byte [tui_noppos], 1        ; no card to ask: CONS is the position
-    mov word [tui_play], 0
-    mov ax, [tsp_rate]              ; bytes a tick, trk_play's arithmetic
-    mov dx, 3600
-    mul dx
-    mov [tui_bpt], dx
-    mov word [trk_mixed], 0
     mov byte [trk_ended], 0
     mov byte [trk_pause], 0
     mov byte [tsp_open], 0
@@ -823,12 +793,6 @@ tsp_start:
     stc
 .out:
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; tsp_halt - the door shut and the play over (preserves all)
@@ -1040,11 +1004,6 @@ tsp_behind:
 ; again after the full screen hands it back, until it pauses, stops or ends
 ; -----------------------------------------------------------------------------
 tsp_window:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
 .again:
     mov byte [tsp_exit], TSPX_ERR
     mov bx, [trk_win]
@@ -1090,11 +1049,6 @@ tsp_window:
     jne .out
     call trk_wake                   ; the song over: the wake walks the list
 .out:
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; tsp_wmain - the imposter's body. DS = CS, SI = our window
@@ -1197,34 +1151,10 @@ tsp_wmain:
 
 ; tsp_frame - trk_render's frame with the lock already held (the bracket's)
 tsp_frame:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     call tw_want
-    jnc .out
-    mov bx, [trk_win]
-    call OSAPI_WM_GEOM
-    jc .book
-    call OSAPI_WM_CLIP_SET
-    jc .book
-    cmp byte [trk_abon], 0
-    jne .book
-    mov byte [tw_inframe], 1
-    call tui_draw_dyn
-    mov byte [tw_inframe], 0
-    jmp short .out
-.book:
-    call tw_book
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    jnc .none
+    jmp trk_frame
+.none:
     ret
 
 %ifndef TSP_NOBASS
@@ -1307,12 +1237,10 @@ tsp_bsum:
 
 ; tsp_bpick - DS:SI, CX: the filtered sample. Picked when 7 sum |y| is under
 ; 2 sum |x| (one byte in 8 each, [cs:tsp_bsx] the |x| one): the load filter
-; took more than ~5/7 of it. Then tsp_bass. Preserves all
+; took more than ~5/7 of it. Then tsp_bass. Keeps BX (tsp_natural's
+; sample table walk) and clobbers the rest
 tsp_bpick:
-    push ax
     push bx
-    push dx
-    push di
     jcxz .no
     call tsp_bsum                   ; DX:AX = sum |y|
     mov bx, ax                      ; DI:BX = 7 sum |y| = 8 s - s
@@ -1337,22 +1265,13 @@ tsp_bpick:
 .yes:
     call tsp_bass
 .no:
-    pop di
-    pop dx
     pop bx
-    pop ax
     ret
 
 ; tsp_bass - DS:SI, CX: a filtered sample the sum picked (above): its peak
-; and zero crossings, then the bass's route or the drum's. Preserves all
+; and zero crossings, then the bass's route or the drum's. Clobbers all but
+; DS and ES (tsp_bpick keeps what tsp_natural walks with)
 tsp_bass:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
     cld
     push si
     push cx
@@ -1396,26 +1315,7 @@ tsp_bass:
     mov bp, 127
 .klim:
     TSP_SQ TSP_BKICK
-    xor di, di
-    xor bp, bp
-.b:
-    mov ah, [si]
-    xor al, al
-    sar ax, 1
-    mov dx, ax
-    sub ax, bp
-    mov bp, dx
-    mov dx, di
-    sar dx, 1
-    sar dx, 1
-    sar dx, 1
-    sub di, dx
-    add di, ax
-    mov ax, di
-    mov [si], ah
-    inc si
-    loop .b
-    jmp .out
+    jmp tsp_hpf                     ; ...and the load filter over that
 .isbass:
     mov bp, 127                     ; the BASS: the whole stored range...
     TSP_SQ TSP_BSHIFT
@@ -1453,16 +1353,39 @@ tsp_bass:
     dec bx
     jnz .fp
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 tsp_bsx:    dw 0, 0                 ; sum |x|, one byte in 8
 %endif
+
+; -----------------------------------------------------------------------------
+; tsp_hpf - the load filter (SPEC.md 45.25): CX bytes at DS:SI through
+;           y[n] = y[n-1] - y[n-1]/8 + (x[n] - x[n-1])/2, in place, from rest -
+;           what the speaker cannot play taken out once rather than per
+;           output sample. tsp_natural runs it over every sample and tsp_bass
+;           again over a kicked drum. SI ends past the run, CX at 0; clobbers
+;           AX, DX, DI and BP
+; -----------------------------------------------------------------------------
+tsp_hpf:
+    xor di, di                      ; DI = Y = 128 y, from rest
+    xor bp, bp                      ; BP = 128 x_prev
+.b:
+    mov ah, [si]                    ; 128 x: x in the high byte, halved
+    xor al, al
+    sar ax, 1
+    mov dx, ax
+    sub ax, bp                      ; 128 (x - x_prev)
+    mov bp, dx
+    mov dx, di
+    sar dx, 1                       ; Y - Y/8
+    sar dx, 1
+    sar dx, 1
+    sub di, dx
+    add di, ax                      ; ...+ 128 (x - x_prev)
+    mov ax, di
+    mov [si], ah                    ; y / 2
+    inc si
+    loop .b
+    ret
 
 ; -----------------------------------------------------------------------------
 ; tsp_natural - the loaded module's SAMPLES through the NATURAL style's high-
@@ -1486,14 +1409,6 @@ TSP_NSAY    equ 28672               ; sample bytes past which an 8088 is told:
                                     ; 81,200 bytes are 2.8 s, MEASURED)
 tsp_natural:
     mov byte [tsp_lvok], 0          ; a new song: a new level (TSP_RATCHET)
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    push ds
     call OSAPI_CPU_INFO             ; AN 8088 WITH A BIG MODULE: say what the
     cmp al, CPU_8086                ; next seconds are for
     jne .go
@@ -1533,25 +1448,7 @@ tsp_natural:
     push si
     push cx
 %endif
-    xor di, di                      ; DI = Y = 128 y, from rest
-    xor bp, bp                      ; BP = 128 x_prev
-.b:
-    mov ah, [si]                    ; 128 x: x in the high byte, halved
-    xor al, al
-    sar ax, 1
-    mov dx, ax
-    sub ax, bp                      ; 128 (x - x_prev)
-    mov bp, dx
-    mov dx, di
-    sar dx, 1                       ; Y - Y/8
-    sar dx, 1
-    sar dx, 1
-    sub di, dx
-    add di, ax                      ; ...+ 128 (x - x_prev)
-    mov ax, di
-    mov [si], ah                    ; y / 2
-    inc si
-    loop .b
+    call tsp_hpf
 %ifndef TSP_NOBASS
     pop cx
     pop si
@@ -1563,14 +1460,7 @@ tsp_natural:
     add bx, MS_SZ
     dec bp
     jnz .s
-    pop ds
 .done:
     mov byte [tsp_pre], 1           ; (tests/lzmod.py reads it: the bytes in
-    pop bp                          ; memory are no longer the file's)
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+                                    ; memory are no longer the file's)
     ret

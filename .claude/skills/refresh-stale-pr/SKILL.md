@@ -153,8 +153,13 @@ Cheapest first, and every one on the MERGED tree:
 ```sh
 python3 -m unittest tests/unit/<the PR's tests>.py
 make -j8 > /tmp/pr<N>-make.log 2>&1; echo "exit $?"      # the fast tier rides it
+python3 tools/os88test.py soak -k <row> -k <row> ... > /tmp/pr<N>-soak.log 2>&1  # ONE call
 make test-full > /tmp/pr<N>-full.log 2>&1; echo "exit $?" # the pre-merge gate
 ```
+
+The soak call and `test-full` run **once, after the last fix commit**
+(CLAUDE.md, Testing): each fix is checked on the host and names the rows it
+touches, and the soak call is their deduplicated union.
 
 Read the exit code and the `os88test:` summary line, not a wrapper's tail -
 `make` failing after a green-looking last line is a known trap. A `SKIP

@@ -20,7 +20,10 @@
 ; walk skips every chunk it does not recognise, honours the RIFF odd-length
 ; pad byte, and slides a fresh cluster window forward when a skipped chunk
 ; runs past the one it holds (up to APW_WINDOWS windows). A header larger
-; than that is refused, not mis-read.
+; than that is refused, not mis-read. THE WINDOW IS THE LOOK-AHEAD RING
+; (ES = [ap_la_seg], offset 0): a parse happens only before a track's ring
+; is primed, so the ring is free, and it is the int 13h target the refill
+; reads into anyway (SPEC.md 86.5.2) - no 16 KB of bss for a header.
 ;
 ; Output (module bss, prefix apw_):
 ;   apw_ok      1 = the record is valid
@@ -63,10 +66,12 @@ apw_rates:    dw 8000, 11025, 16000, 22050, 24000, 32000, 44100, 0
 ;      DX:AX = the file's total size in bytes
 ; out: apw_ok = 1 and the record filled, or apw_ok = 0 with apw_err set.
 ;      CF = 1 when rejected.
-; clobbers: AX..DI  (top-level call from a UI callback)
+; clobbers: AX..DI  (top-level call from a UI callback, after ap_ensure_bufs)
 ; =============================================================================
 apw_parse:
     APCNT apc_parse
+    push es                         ; (a callback's ES is the kernel's)
+    mov es, [ap_la_seg]             ; ES = the window, for the whole walk
     mov [apw_name], si
     mov [apw_flen], ax
     mov [apw_flen+2], dx
@@ -81,7 +86,7 @@ apw_parse:
     mov cl, 9
     shl ax, cl                     ; * 512
     mov [apw_clu], ax
-    cmp ax, AP_HDRBUF_SZ            ; a cluster the 16 KB bounce cannot hold
+    cmp ax, AP_RD_CHUNK             ; a cluster a 16 KB gulp cannot hold
     ja .eclu                        ; (FAT16's 32 KB): the reason, not "Cannot
     mov [apw_rdcap], ax             ; read the file" on a readable disk
 
@@ -95,11 +100,11 @@ apw_parse:
     cmp word [apw_winlen], 44
     jb .eshort
 
-    mov si, apw_hdrbuf
+    xor si, si
     mov di, apw_s_riff
     call apw_cmp4
     jne .eriff
-    mov si, apw_hdrbuf + 8
+    mov si, 8
     mov di, apw_s_wave
     call apw_cmp4
     jne .eriff
@@ -118,11 +123,10 @@ apw_parse:
     jc .slidefail
     jmp .walk
 .havehdr:
-    mov bx, apw_hdrbuf
-    add bx, [apw_pos]
+    mov bx, [apw_pos]
     mov [apw_ckid], bx
-    mov ax, [bx+4]
-    mov dx, [bx+6]
+    mov ax, [es:bx+4]
+    mov dx, [es:bx+6]
     mov [apw_cksz], ax
     mov [apw_cksz+2], dx
 
@@ -141,7 +145,7 @@ apw_parse:
     cmp word [apw_cksz], 4          ; 'o8sp' (SPEC.md 86.21): shaped for the
     jb .skip                        ; speaker on the host - kind 1 samples,
     mov bx, [apw_ckid]              ; kind 2 the counts themselves. A chunk
-    mov al, [bx+8]                  ; cut short is ignored, not trusted
+    mov al, [es:bx+8]               ; cut short is ignored, not trusted
     cmp al, 2
     ja .skip
     mov [apw_spk], al
@@ -158,29 +162,27 @@ apw_parse:
     jc .ebig                        ; ...a size that wrapped the word is too big
     cmp bx, [apw_winlen]
     ja .ebig                        ; a fmt we cannot fully see
-    mov bx, apw_hdrbuf
-    add bx, [apw_pos]
-    add bx, 8                       ; -> fmt body
-    mov ax, [bx+0]
+    mov bx, [apw_pos]               ; -> fmt body, at +8
+    mov ax, [es:bx+8+0]
     mov [apw_tag], ax
-    mov ax, [bx+2]
+    mov ax, [es:bx+8+2]
     cmp ax, 1
     jne .echan
-    mov ax, [bx+6]                  ; nSamplesPerSec high word
+    mov ax, [es:bx+8+6]             ; nSamplesPerSec high word
     or ax, ax
     jnz .erate
-    mov ax, [bx+4]
+    mov ax, [es:bx+8+4]
     mov [apw_rate], ax
-    mov ax, [bx+12]
+    mov ax, [es:bx+8+12]
     mov [apw_balign], ax
-    mov ax, [bx+14]
+    mov ax, [es:bx+8+14]
     mov [apw_bits], ax
     mov word [apw_spb], 1
     cmp word [apw_tag], 0x0011
     jne .fmtdone
     cmp word [apw_cksz], 20
     jb .espb
-    mov ax, [bx+18]
+    mov ax, [es:bx+8+18]
     mov [apw_spb], ax
 .fmtdone:
     mov byte [apw_gotfmt], 1
@@ -278,6 +280,7 @@ apw_parse:
     mov word [apw_err], apw_e_io
     jmp .out
 .out:
+    pop es
     mov al, [apw_ok]
     or al, al
     jnz .ret_ok
@@ -377,8 +380,8 @@ apw_validate:
     ret
 
 ; =============================================================================
-; apw_readwin - read apw_rdcap bytes at apw_winb (cluster-aligned) into
-;               apw_hdrbuf.  Sets apw_winlen.  CF on I/O error.
+; apw_readwin - read apw_rdcap bytes at apw_winb (cluster-aligned) into the
+;               window, ES:0.  Sets apw_winlen.  CF on I/O error.
 ; =============================================================================
 apw_readwin:
     push ax
@@ -389,9 +392,7 @@ apw_readwin:
     push di
     push es
     mov si, [apw_name]
-    push ds
-    pop es
-    mov bx, apw_hdrbuf
+    xor bx, bx
     mov cx, [apw_rdcap]
     mov ax, [apw_winb]
     mov dx, [apw_winb+2]
@@ -399,10 +400,10 @@ apw_readwin:
     APCNT apc_readat
     jc .err
     APADD apc_rbytes, ax
-    ; DX:AX bytes; cap fits a word (<= AP_HDRBUF_SZ)
+    ; DX:AX bytes; cap fits a word (<= AP_RD_CHUNK)
     or dx, dx
     jz .stlen
-    mov ax, AP_HDRBUF_SZ
+    mov ax, AP_RD_CHUNK
 .stlen:
     mov [apw_winlen], ax
     clc
@@ -412,13 +413,7 @@ apw_readwin:
     stc
 .out:
     pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ap_ret6
 
 ; =============================================================================
 ; apw_slide - move the window so apw_lpos is visible; set apw_pos.
@@ -462,8 +457,8 @@ apw_slide:
     ret
 
 ; =============================================================================
-; apw_cmp4 - compare 4 bytes at DS:SI with DS:DI.  ZF = 1 when equal.
-;            preserves every register except flags.
+; apw_cmp4 - compare 4 bytes of the window at ES:SI with DS:DI.  ZF = 1
+;            when equal.  preserves every register except flags.
 ; =============================================================================
 apw_cmp4:
     push ax
@@ -472,7 +467,7 @@ apw_cmp4:
     push cx
     mov cx, 4
 .l:
-    mov al, [si]
+    mov al, [es:si]
     cmp al, [di]
     jne .done
     inc si

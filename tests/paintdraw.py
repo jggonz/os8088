@@ -31,6 +31,7 @@ memory. The first says the tools drew what they were asked for; the second
 says the canvas AGREES - which is the half a `gfx_fill` to the screen hides.
 """
 import argparse
+import tempfile
 import os
 import sys
 import time
@@ -63,7 +64,7 @@ def split(fb, fw, ox, oy, iw, ih, px, box):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/paintdraw.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/paintdraw.img")
     ap.add_argument("--machine", default="os8088_xt_vga")
     ap.add_argument("--gif", default=None,
                     help="the picture to open (default: a COLOUR "
@@ -80,7 +81,7 @@ def main():
     if a.gif is None:
         a.gif = dispapps.colour_gif()
 
-    if a.apps == "/tmp/paintdraw.img":
+    if a.apps == tempfile.gettempdir() + "/paintdraw.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:" + a.gif)
 

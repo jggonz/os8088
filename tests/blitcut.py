@@ -34,6 +34,7 @@ leave by the same `ret`. SP is what tells them apart, the halves' frames
 sitting one return address deeper than the outer's.
 """
 import argparse
+import tempfile
 import os
 import subprocess
 import sys
@@ -310,7 +311,7 @@ def run(image, apps, machine, defines, tree=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/blitcut.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/blitcut.img")
     ap.add_argument("--machine", default="os8088_xt_vga_mda")
     a = ap.parse_args()
 
@@ -322,7 +323,7 @@ def main():
     # pixel, so every oracle below is the one it always was.
     gif = gifpath()
 
-    if a.apps == "/tmp/blitcut.img":
+    if a.apps == tempfile.gettempdir() + "/blitcut.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:" + gif)
 
@@ -358,9 +359,10 @@ def main():
               % (i, d, mine[0] * mine[1], "" if not d else " - box %r" % (box,)))
         if d:                       # ...and the two images, so a failure can
             for tag, im in (("cut", mine), ("nocut", theirs)):   # be looked at
-                open("/tmp/blitcut-%s-%d.pgm" % (tag, i), "wb").write(
+                open(tempfile.gettempdir() + "/blitcut-%s-%d.pgm" % (tag, i), "wb").write(
                     b"P5\n%d %d\n1\n" % (im[0], im[1]) + im[2])
-            print("      -> /tmp/blitcut-{cut,nocut}-%d.pgm" % i)
+            print("      -> %s/blitcut-{cut,nocut}-%d.pgm"
+                  % (tempfile.gettempdir(), i))
         bad += d
     gain = rcyc / float(cyc)
     print("   the straddled canvas blit: %d cycles against %d - %.2fx"

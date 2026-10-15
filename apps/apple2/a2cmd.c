@@ -101,16 +101,16 @@ static int ovl_a2_cmd(int menu, int item, void *win)
              * name seeds it, which is what the slot is for. cwcmd.c:292 and
              * weave.c:699 both pass 0; c64cmd.c:251's "*.PRG" is the same
              * defect one package along and is that package's to fix. */
-            if (os88_file_dlg(OS88_FDLG_OPEN, win, 0) < 0)
-                a2_say("A file dialog is open.");
-            return 1;
-        }
-        if (item == A2_I_SAVE) {
-            if (os88_file_dlg(OS88_FDLG_SAVE, win, "PROGRAM.BAS") < 0)
-                a2_say("A file dialog is open.");
-            return 1;
-        }
-        return 0;
+            item = os88_file_dlg(OS88_FDLG_OPEN, win, 0);
+        } else if (item == A2_I_SAVE) {
+            item = os88_file_dlg(OS88_FDLG_SAVE, win, "PROGRAM.BAS");
+        } else
+            return 0;
+        /* ONE refusal for both, and ONE copy of its literal (apps size pass
+         * 1): `item` is the picker's answer from here. */
+        if (item < 0)
+            a2_say("A file dialog is open.");
+        return 1;
     }
 
     if (menu == A2_M_EDIT) {
@@ -233,7 +233,11 @@ static int ovl_a2_cmd(int menu, int item, void *win)
              * being built and the pick landing. */
             if (a2_state != A2_ST_RUN)
                 return 1;                   /* the JAM line stands */
-            a2_pause = (item == A2_I_STOP) ? 1 : 0;
+            a2_pause = 0;                   /* an `if` and not `? 1 : 0`,
+                                             * which SmallerC spells as a
+                                             * compare made into a value */
+            if (item == A2_I_STOP)
+                a2_pause = 1;
             a2_menu_state();
             /* TWO CALLS AND NOT A TERNARY, and that is the message-length
              * gate rather than style: build.sh walks the sources for a call

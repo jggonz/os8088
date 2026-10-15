@@ -29,6 +29,7 @@
   "runtime_machines_sha256": "62f6af8f832cf5ab75db4027a21a9344daf0b87b470a368b63087447efeb2217",
   "guest_cycles_including_inventory_ui": 1108639995,
   "workload_code_sha256": "2f93e37f97488111fb693f83040e8f165ba2318ade3b8362d9ca5614e8a4f805",
+  "workload_shape_sha256": "ce07df913f5e53dd92dab78558ea456239210eb1075622537d4c691c5a34c81a",
   "workloads": [
     {
       "label": "rl_label_alu",

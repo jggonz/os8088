@@ -25,10 +25,10 @@ MRF_BUFN    equ 112                 ; register pairs a batch holds
     MRB mrf_up                      ; 1 = the chip is ours
     MRW mrf_n                       ; pairs in the batch
     MRB mrf_bank                    ; the bank the batch is writing
-    MRBUF mrf_buf, MRF_BUFN * 2
-    MRBUF mrf_b0, MR_MAXV           ; per voice: its B0h as last written
-    MRBUF mrf_note, MR_MAXV         ; ...the note it sounds (transposed/fixed)
-    MRBUF mrf_ptr, MR_MAXV * 2      ; ...its patch, for a level rewrite
+    MRX mrf_buf, MRF_BUFN * 2
+    MRX mrf_b0, MR_MAXV           ; per voice: its B0h as last written
+    MRX mrf_note, MR_MAXV         ; ...the note it sounds (transposed/fixed)
+    MRX mrf_ptr, MR_MAXV * 2      ; ...its patch, for a level rewrite
 
 mrf_slot:   db 0x00, 0x01, 0x02, 0x08, 0x09, 0x0A, 0x10, 0x11, 0x12
 

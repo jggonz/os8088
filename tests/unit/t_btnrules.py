@@ -45,7 +45,7 @@ REGISTRY = os.path.join(ROOT, "tests", "btnsites.txt")
 # Standard File dialog. A wrapper is how a caller hides from a grep; this
 # matches the VERB rather than the instruction.
 # ...and it matches ANY uppercase wrapper, not FDX by name: this tree has
-# six more of the same shape (FCPX/FCPXF for FILECP.DRV, OVWCALL, DKXPAD,
+# six more of the same shape (FCPX/FCPXF for FILECP.DRV, OVLCALL, DKXPAD,
 # OSAPI_CSLOT, OSAPI_FARCELL), every one of which could reach the control
 # tomorrow and hide it again. `<MACRO> os88ui_btn` is the whole pattern, so
 # the rule is "the symbol appears as the first operand of a statement",

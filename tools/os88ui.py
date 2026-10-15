@@ -421,6 +421,9 @@ class UI:
         # its centre where a stray pixel of a neighbour cannot matter.
         lo = w.x + geom.WM_BOX_X0 + geom.WM_BOX_W + 4
         hi = w.x + w.w - 1 - geom.WM_BOX_X0 - geom.WM_BOX_W - 4
+        if geom.win95(self.m, self.sym):    # SPEC.md 76.14: all three buttons
+            hi = w.x + w.w - geom.WN_MIN - 4    # are at the RIGHT, and live
+                                                # on every window
         if w.visible and hi > lo:
             mid = (lo + hi) // 2
             span = [mid]
@@ -469,7 +472,7 @@ class UI:
         # with the retry below firing and the second click missing for the
         # same reason as the first.
         w = self._refresh(w)
-        x, y = geom.close_xy(w.x, w.y)
+        x, y = geom.close_xy(w.x, w.y, w.w, self.m, self.sym)
         gone = lambda: all(o.i != w.i for o in self.windows())    # noqa: E731
         for attempt in (1, 2):
             self.mo.click(x, y, settle=0)
@@ -482,7 +485,16 @@ class UI:
                               % w.title)
                 return
             except UIError:
-                if attempt == 2 or gone():
+                # GONE AFTER ALL is the success it looks like: the close
+                # landed between the short wait's last poll and this read.
+                # Raising here - which this did - reported a window that HAD
+                # closed as one that would not, and a soak caught it: "window
+                # 'GAMES' to close did not happen ... what the guest shows:
+                # []". What `gone()` forbids is the second CLICK, which would
+                # land on whatever is underneath, not the return.
+                if gone():
+                    return
+                if attempt == 2:
                     raise
 
     def move_window(self, w, x, y, limit=T_MOVE):

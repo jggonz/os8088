@@ -132,8 +132,8 @@ defaults, so a bare launch with edited DEFAULTS also works. Phases (`skipScout: 
 |---|---|---|
 | Scout | 5 parallel: game logic, graphics, audio, perf techniques, integration checklist | `<reports>/scout-*.md` |
 | Plan | 1 architect | `docs/plans/<NAME>-PLAN.md` and a wave list (4-7 waves, acceptance = a command or a measurement) |
-| Waves | per wave: implement -> 3 lenses (8086/memory, XT performance, fidelity) -> fix -> independent verify -> one repair + re-verify | `wave-N-impl/fix/repair.md`, screenshots |
-| Close | completeness critic (fixes mechanical gaps, runs `make` + `test-full`), perf audit (writes a PERFORMANCE.md Set) | `close-*.md` |
+| Waves | per wave: implement -> 3 lenses (8086/memory, XT performance, fidelity) -> fix -> independent verify -> one repair + re-verify. Host checks and screenshots only; every agent appends the rows it touched to `soak-rows.txt` | `wave-N-impl/fix/repair.md`, screenshots |
+| Close | completeness critic (fixes mechanical gaps, host only) -> final gate (the run's ONE soak call over `soak-rows.txt`, then `test-full` once) -> perf audit (reads the gate's numbers, writes a PERFORMANCE.md Set) | `close-*.md` |
 
 Sequential waves are deliberate: each builds on the last and there is one
 writer. Parallelism is inside a wave (the lenses) and in scouting.

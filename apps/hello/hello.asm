@@ -5,7 +5,7 @@
 ; proves the SDK surface (header macro, wm_create template, paint via the
 ; API table) and the no-icon fallback - no flags bit 0, so the Disk window
 ; shows the built-in ico_app16 for it. One window, two centred lines of
-; text, no onkey, no onclick.
+; text, no onkey, and a click handler only to take the About card down.
 ;
 ; It is also the worked example for app menus (SPEC.md 12.2): while its
 ; window is frontmost the bar reads chip / "Hello" / "File", and File's two
@@ -89,10 +89,9 @@ hl_entry:
 ; stored the new page and asked for a repaint.
 ; -----------------------------------------------------------------------------
 hl_paint:
-    push ax
-    push bx
-    push cx
-    push dx
+    push ax                         ; (CX is not here because nothing below
+    push bx                         ; writes it: OSAPI_WM_CONTENT answers in
+    push dx                         ; AX/DX and hl_line keeps its own)
     push si
     mov bx, si
     call OSAPI_WM_CONTENT            ; AX = content left, DX = content top
@@ -100,7 +99,7 @@ hl_paint:
                                     ; ...and no pen: hl_line is an OPAQUE run
                                     ; now and nothing else here draws
     mov al, [hl_page]               ; 0 or 1: hl_oncmd is its only writer
-    xor ah, ah
+    cbw                             ; ...so AH = 0
     shl ax, 1
     shl ax, 1                       ; 4 bytes per page: two string pointers
     add ax, hl_pages                ; whole-word package address (SPEC.md 20.2)
@@ -123,7 +122,6 @@ hl_paint:
     pop si
 .out:
     pop dx
-    pop cx
     pop bx
     pop ax
     ret
@@ -158,11 +156,18 @@ hl_line:
 ; the two items are declared in hl_pages' order, which is the smallest
 ; honest wiring an app can have. The kernel does not repaint after a
 ; command returns, so the redraw is ours.
+;
+; A pick also takes the About card down, and that is ONE repaint and not
+; two: the page is stored FIRST, so the repaint that takes the card down
+; already draws the new page, and only a pick with no card up repaints here.
+; Taking the card down and then repainting again would fill and letter the
+; content twice for one click - the double draw PERFORMANCE.md's rule 2 is
+; about. The `jnc` is a tail call: hl_repaint's `ret` is this handler's.
 ; -----------------------------------------------------------------------------
 hl_oncmd:
-    call hl_abdismiss               ; a menu pick takes the credits down first,
-    mov [hl_page], al               ; and then does what it says
-    call hl_repaint
+    mov [hl_page], al               ; do what it says...
+    call hl_abdismiss               ; ...CF = 1: the card came down, and that
+    jnc hl_repaint                  ; repaint drew the new page already
     ret
 
 ; =============================================================================
@@ -175,51 +180,34 @@ hl_oncmd:
 ; -----------------------------------------------------------------------------
 ; hl_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
-; out: nothing; preserves all registers
+; out: nothing; clobbers BX/SI, which any window callback may (SPEC.md 12.2:
+;      the kernel dispatches it exactly like W_ONCLICK)
 ; -----------------------------------------------------------------------------
 hl_about:
-    push bx
-    push si
     mov byte [hl_abon], 1
     mov bx, si
     mov si, hl_ablines
-    call os88ui_about               ; arms the clip itself: a menu dispatch
-    pop si                          ; arrives without one (SPEC.md 11.3)
-    pop bx
-    ret
+    jmp os88ui_about                ; arms the clip itself: a menu dispatch
+                                    ; arrives without one (SPEC.md 11.3). A
+                                    ; tail call - the card's `ret` is ours
 
 ; -----------------------------------------------------------------------------
-; hl_abdismiss - take the card down if it is up
-; in:  SI = our window ptr; gfx lock held
-; out: CF = 1 the click or menu pick was spent doing it; every register kept
+; hl_abdismiss - take the card down if it is up. It is ALSO the window's
+;                W_ONCLICK, named straight in hl_tpl: a card the user cannot
+;                click away is not a card, and this app has no other use for
+;                the mouse, so the click handler IS the dismissal - a
+;                one-line wrapper around it would be four bytes saying so.
+;                (A click's CF, like its CX/DX, goes unread.)
+; in:  SI = our window ptr; gfx lock held (CX/DX = the click, unused)
+; out: CF = 1 the click or menu pick was spent doing it; clobbers AX and BX,
+;      which both of its callers - a W_ONCLICK and hl_oncmd, after it has
+;      banked AL - may
 ; -----------------------------------------------------------------------------
 hl_abdismiss:
-    cmp byte [hl_abon], 0
-    je .none
-    push bx
-    mov byte [hl_abon], 0
-    mov bx, si
-    call OSAPI_WM_CLIP_SET          ; nothing has armed a region for a click
-    jc .gone                        ; or a menu pick (SPEC.md 11.3)
-    call hl_repaint                 ; ...which fills white and draws the page
-.gone:
-    pop bx
-    stc
-    ret
-.none:
-    clc
-    ret
-
-; -----------------------------------------------------------------------------
-; hl_onclick - W_ONCLICK, and it exists for ONE reason: a card the user cannot
-;              click away is not a card. This app has no other use for the
-;              mouse, so the handler is the dismissal and nothing else.
-; in:  CX = x, DX = y, SI = window ptr; gfx lock held
-; out: nothing; preserves all registers
-; -----------------------------------------------------------------------------
-hl_onclick:
-    call hl_abdismiss
-    ret
+    mov bx, hl_abon
+    mov ax, hl_repaint              ; ...which fills white and draws the page
+    jmp os88ui_abdismiss            ; cmp/clear/clip/repaint/answer: the
+                                    ; library's (os88ui.inc), and CF is its
 
 ; -----------------------------------------------------------------------------
 ; hl_repaint - erase the content and draw it again
@@ -256,15 +244,18 @@ hl_repaint:
 ; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
 hl_tpl:
     dw 200, 150, 240, 90            ; x, y, w, h -> content 238 x 71
-    dw hl_ttl, hl_paint, 0, hl_onclick  ; no onkey; the click is the About
-                                        ; card's dismissal and nothing else
+    dw hl_ttl, hl_paint, 0, hl_abdismiss  ; no onkey; the click is the
+                                          ; About card's dismissal and
+                                          ; nothing else
 
 ; --- the app menu set (SPEC.md 12.2) -------------------------------------------
     OS88_MENUSET hl_menus, hl_name, hl_oncmd
         OS88_MENU hl_m_file, hl_i_file, 2
     OS88_MENUSET_END hl_menus
 
-hl_name:    db 'Hello', 0           ; the bar label, right of the chip menu
+hl_name:                            ; the bar label, right of the chip menu,
+hl_ttl:     db 'Hello', 0           ; and the window title: ONE string, named
+                                    ; twice for the two things that read it
 hl_m_file:  db 'File', 0
 hl_i_file:  dw hl_it_greet, hl_it_about
 hl_it_greet: db 'Greeting', 0
@@ -275,7 +266,6 @@ hl_pages:
     dw hl_s_line1, hl_s_line2       ; 0: Greeting
     dw hl_s_abt1,  hl_s_abt2        ; 1: About
 
-hl_ttl:     db 'Hello', 0
 hl_s_line1: db 'Hello from a', 0
 hl_s_line2: db '.o88 package!', 0
 hl_s_abt1:  db 'HELLO - the smallest', 0
@@ -296,6 +286,7 @@ hl_ab4:     db 'Jorge Gonzalez', 0
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
 %define OS88UI_ABOUT            ; the standard About card, and NOTHING else -
 %define OS88UI_NOBTN            ; this package draws no button at all
+%define OS88UI_ABDISMISS        ; ...and takes the card down with os88ui_abdismiss
 %include "os88ui.inc"
 
     OS88_BSS 2

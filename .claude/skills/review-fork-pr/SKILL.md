@@ -259,8 +259,10 @@ Workflow({ scriptPath: "<abs repo>/.claude/skills/review-fork-pr/workflows/fix.j
 ```
 
 Batches run **sequentially** — they share one worktree, and two agents editing
-one tree do not merge. Each fixer builds, runs its own verification, and
-commits only its own batch. Never let a fixer push.
+one tree do not merge. Each fixer builds, runs its own host-side verification,
+names the suite rows its batch touches, and commits only its own batch. Never
+let a fixer push, and never put a soak row or `make test-full` in a batch's
+`extra`: they run once, in step 8 (CLAUDE.md, Testing).
 
 ## 8. Verify
 
@@ -274,6 +276,8 @@ python3 tools/kernsize.py --build build          # and --build build/smallk -DKE
 python3 tools/os88disk.py --verify build/*.img   # structural fsck, all three geometries
 make test                              # boot; screendump the desktop
 make test VIDEO=cga                    # the 1bpp look at anything that draws or greys
+python3 tools/os88test.py soak -k <row> -k <row> ...   # ONE call: the union every batch named
+make test-full                         # once, after the soak pass
 ```
 
 Plus, driven over QMP (`tools/mouse.py`, `tools/shot.py`), **the feature the

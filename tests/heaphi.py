@@ -121,7 +121,11 @@ def main():
            for n in ("mem_base", "mem_top", "spl_live", "mem_tab")}
     bad = []
 
-    with M.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    # THE HARD DISK ANSWERED OFF (tests/hdoff.py): SPEC.md 51.3.2 loads
+    # HDD.DRV at boot here, and the user's sequence this row replays starts
+    # by ticking it
+    import hdoff
+    with M.launch(hdoff.image(a.image), apps=a.apps, machine=a.machine) as m:
         M.settle(m)
         q, mo = Q(m), Mouse(marty=m)
 

@@ -32,6 +32,7 @@ wrong rather than merely absent:
             else here would see it.
 """
 import argparse
+import tempfile
 import os
 import sys
 
@@ -137,7 +138,7 @@ def main(argv):
         before = _grab(m, cx0 + 2, cy0 + 2, v0[0], v0[1])
         if os.environ.get("SHOTS"):
             fw, fh, fb = m.fbuf(card=0)
-            os88marty.write_png_rgb("/tmp/anchor-before.png", fw, fh, fb)
+            os88marty.write_png_rgb(tempfile.gettempdir() + "/anchor-before.png", fw, fh, fb)
 
         wr = dispcp.win_rect(m, S, pw)
         gx, gy = wr[0] + wr[2] - 8, wr[1] + wr[3] - 8
@@ -173,7 +174,7 @@ def main(argv):
         after = _grab(m, cx0 + 2, cy0 + 2, v1[0], v1[1])
         if os.environ.get("SHOTS"):
             fw, fh, fb = m.fbuf(card=0)
-            os88marty.write_png_rgb("/tmp/anchor-after.png", fw, fh, fb)
+            os88marty.write_png_rgb(tempfile.gettempdir() + "/anchor-after.png", fw, fh, fb)
         vac = (_grab(m, cx0 + v1[0] + 8, cy0 + 2, 8, v1[1])
                if v1[0] < v0[0] else None)
         wr1 = dispcp.win_rect(m, S, pw)

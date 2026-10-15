@@ -114,15 +114,19 @@ if o88[:syms["op_table"]] != image[:syms["op_table"]]:   # the table's rows
 LINES = help_lines()
 print("== PiXEL: the part boundary (SPEC.md 106.5) ==")
 print("   op_table at +%04X, the card %d lines" % (syms["op_table"], len(LINES)))
-DISK = "build/pxpartsgate.img"
 sys.path.insert(0, "tools")
+sys.path.insert(0, "tests")
 import pixcorpus
+import pxtmp
+# THE ROW'S OWN, in the run's tree (tests/pxtmp.py): a plain "build/pxparts"
+# was written into the checkout while scratch_disk read the frozen tree's
+DISK = pxtmp.private("pxpartsgate.img")      # dir_cluster reads it on the HOST
 _fx = dict((n, d) for n, d, v in pixcorpus.corpus())
-os.makedirs("build/pxparts", exist_ok=True)
+_dir = pxtmp.private("pxparts", folder=True)
 for _n in ("P2_8.PNG", "C8.PCX"):
-    open("build/pxparts/" + _n, "wb").write(_fx[_n])
-M.scratch_disk(DISK, "build/pixel.o88", "P:build/pxparts/P2_8.PNG",
-               "P:build/pxparts/C8.PCX")
+    open(os.path.join(_dir, _n), "wb").write(_fx[_n])
+M.scratch_disk(DISK, "build/pixel.o88", "P:" + os.path.join(_dir, "P2_8.PNG"),
+               "P:" + os.path.join(_dir, "C8.PCX"))
 
 
 def dir_cluster(img, name):

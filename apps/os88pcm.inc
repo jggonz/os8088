@@ -13,7 +13,10 @@
 ;
 ;   os88pcm_play  ES:SI = 8-bit unsigned mono samples, CX = count (<= 65535),
 ;                 DX = the rate, 4,679..16,124 Hz (N = 1,193,182 / rate must
-;                 land in 74..255). out AX = 0 played / 1 busy (a clip, or a
+;                 land in 74..255), BX = 256 bytes of SCRATCH in your own
+;                 segment (CS = DS) for the rescale table - anything idle for
+;                 the length of the call, since nothing else of yours runs
+;                 while it blocks. out AX = 0 played / 1 busy (a clip, or a
 ;                 PCM_BG stream open, 34.9) / 2 the rate / 3 disabled by the
 ;                 user / 4 nothing can sound / 5 a click skipped it; CF
 ;                 mirrors AX != 0. UI TASK ONLY - a window callback - and it
@@ -24,9 +27,13 @@
 ; caller swaps `call OSAPI_SND_PLAY` for `call os88pcm_play` and nothing else.
 ; A rate outside the range is ERR 2, NEVER A SILENT CLAMP (SPEC.md 34.4).
 ;
-; WHAT IT COSTS: 256 bytes of the including package's image for the rescale
-; table (zeros on the disk, which compress to nothing) and ~180 of code. The
-; labels are os88pcm_; the state is in the package's own image, through CS.
+; WHAT IT COSTS: ~180 bytes of code and one byte of state. The rescale table
+; is the CALLER'S 256 bytes (BX), not the library's: it is rebuilt every clip
+; and dead between clips, so it belongs in a buffer the caller already has
+; idle while the desktop is frozen - Recorder's is its demo stage buffer. It
+; was a `times 256 db 0` here, 256 bytes of every includer's image (SPEC.md
+; 34.4). The labels are os88pcm_; the state is in the package's own image,
+; through CS.
 ; =============================================================================
 
 os88pcm_play:
@@ -43,16 +50,17 @@ os88pcm_play:
     jb .err                         ; guard (a tiny rate would overflow it)
     cmp dx, 16124
     ja .err
-    mov bx, dx
+    mov di, dx                      ; (DI, not BX: BX is the caller's table)
     mov dx, 0x0012
     mov ax, 0x34DE
-    div bx                          ; AX = N
+    div di                          ; AX = N
     mov bp, ax                      ; BP = N, PIT counts a sample
     push cx                         ; THE RESCALE TABLE: t[s] = 1 + s(N-2)/255
     sub al, 2                       ; - never 0 (a count of 0 is 65536) and
     mov dl, al                      ; never N (the pulse ends inside its
-    mov bx, os88pcm_tab             ; period). Non-destructive: the clip is
-    mov cl, 255                     ; never modified, so replay and re-rate
+                                    ; period). BX = the caller's table. Non-
+    mov cl, 255                     ; destructive: the clip is never
+                                    ; modified, so replay and re-rate
     mov di, 255                     ; work (SPEC.md 34.4)
 .tab:
     mov ax, di
@@ -63,10 +71,12 @@ os88pcm_play:
     dec di
     jns .tab
     pop cx
+    push bx                         ; the table, across the grant: the door
 .grant:                             ; (tests/sndplay.py marks the clip here)
     xor al, al                      ; THE GRANT: channel 2 is ours as the PWM,
     call OSAPI_SND_PLAY             ; the scheduler locked, the sub-tick
-    jc .out                         ; parked; CF = 1 AX = its refusal
+    pop di                          ; answers BX (DI is free until the
+    jc .out                         ; deadline); CF = 1 AX = its refusal
     mov [cs:.mbd], bx               ; the mouse button byte, KERNEL_SEG:BX -
     push es                         ; into the abort check's own displacement
     pop ds                          ; DS:SI = the samples
@@ -74,7 +84,7 @@ os88pcm_play:
     mov es, ax
     mov al, [es:bx]                 ; THE CLICK-ABORT BASELINE (34.4): a
     mov [cs:os88pcm_b0], al         ; button already down never aborts
-    mov bx, os88pcm_tab             ; BX = the table, for xlat through CS
+    mov bx, di                      ; BX = the table, for xlat through CS
     cld
     pushf                           ; prime the deadline: one atomic channel 0
     cli                             ; latch-and-read (SPEC.md 34.1, binding),
@@ -142,4 +152,3 @@ os88pcm_play:
     ret
 
 os88pcm_b0:     db 0                ; the click-abort baseline
-os88pcm_tab:    times 256 db 0      ; the rescale table, rebuilt every clip

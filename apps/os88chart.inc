@@ -59,6 +59,10 @@
 ;   ch_e10, ch_sc_seg, ch_sc_src, ch_sc_dst, ch_sc_cnt   (5 words)
 ;   ch_dbl, ch_dmax, ch_dtmp                             (3 x 8 bytes)
 ;
+; Define CH_NO_BMPWRITE before the %include and ch_bmp_write (92 bytes) is not
+; assembled: a package that writes its BMP without a 19KB staging segment -
+; Chart flips its buffer in place around one write - has no use for it.
+;
 ; --- IN A PACKAGE ------------------------------------------------------------
 ; `%include "os88chart.inc"` AT THE END OF YOUR CODE, just before OS88_BSS -
 ; not up beside os88api.inc, for the same fixed-offset reason os88ui.inc's
@@ -1786,46 +1790,18 @@ ch_glyph:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; ch_itoa_t - AX signed -> the NUL string at ch_tnum. Labels need numbers and
-; this file had no formatter of its own; Sheet's lives in Sheet.
-; -----------------------------------------------------------------------------
-ch_itoa_t:
-    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    mov di, ch_tnum
-    or ax, ax
-    jns .pos
-    mov byte [di], '-'
-    inc di
-    neg ax
-.pos:
-    mov bx, 10
-    xor cx, cx
-.split:
-    xor dx, dx
-    div bx
-    push dx
-    inc cx
-    or ax, ax
-    jnz .split
-.emit:
-    pop dx
-    add dl, '0'
-    mov [di], dl
-    inc di
-    loop .emit
-    mov byte [di], 0
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+; The labels' numbers are apps/os88dec.inc's (SPEC.md 20.5.2): dec_s16 for a
+; plain one and dec_u16 for a whole part, each leaving DI on its NUL so the
+; point and the decimals append. This file had a signed itoa of its own, and
+; Sheet carried a second one beside it.
+%ifdef OS88DEC_INC
+  %ifndef DEC_S16
+    %error "os88chart.inc needs dec_s16: %define DEC_S16 before os88dec.inc"
+  %endif
+%else
+  %define DEC_S16
+  %include "os88dec.inc"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; ch_num_t (stage 4.6) - AX = one of the scaled words, [ch_e10] = the series'
@@ -1844,6 +1820,7 @@ ch_num_t:
     push cx
     push dx
     push di
+    mov di, ch_tnum
     mov cx, [ch_e10]
     or cx, cx
     jz .plain
@@ -1862,32 +1839,15 @@ ch_num_t:
     dec cx
     jmp .fpow
 .fhave:
-    push bx                           ; the divisor, wanted again below
-    mov cx, 0                         ; CX = 1 once a '-' has been emitted
-    or ax, ax
-    jns .fpos
+    or ax, ax                         ; the sign FIRST, by hand: a whole part
+    jns .fpos                         ; of 0 (-0.5) has none of its own
+    mov byte [di], '-'
+    inc di
     neg ax
-    mov cx, 1
 .fpos:
     xor dx, dx
     div bx                            ; AX = whole part, DX = the remainder
-    push dx
-    push cx
-    call ch_itoa_t                    ; the whole part, from the START of
-    pop cx                            ; ch_tnum - which is why the sign is
-    pop dx                            ; re-applied afterwards rather than
-    pop bx                            ; written first and overwritten
-    or cx, cx
-    jz .fnosign
-    call ch_tnum_neg                  ; shuffle a '-' in at the front
-.fnosign:
-    mov di, ch_tnum
-.fend:
-    cmp byte [di], 0
-    je .fpoint
-    inc di
-    jmp .fend
-.fpoint:
+    call dec_u16                      ; ...and DI on its NUL
     mov byte [di], '.'
     inc di
 .floop:
@@ -1907,22 +1867,22 @@ ch_num_t:
     mov [di], al
     inc di
     jmp .floop
-.fdone:
-    mov byte [di], 0
-    call ch_tnum_trim                 ; 44.10 is what the SCALE happens to be
-    jmp .out                          ; in; 44.1 is the number
+.fdone:                               ; the trailing zeros come off, and then
+    dec di                            ; the point if nothing is left after it:
+    cmp byte [di], '0'                ; 44.10 is what the SCALE happens to be
+    je .fdone                         ; in, 44.1 is the number - and the scale
+    cmp byte [di], '.'                ; is chosen for the series' largest
+    je .fcut                          ; value, so every other label would wear
+    inc di                            ; its decimals (0.00 rather than 0). The
+.fcut:                                ; walk stops at the point at the latest:
+    mov byte [di], 0                  ; it is behind every digit it can see
+    jmp .out
     ; --- E < 0: the mantissa, then |E| zeros -------------------------------
 .zeros:
     or ax, ax                         ; ...but zero is zero at every scale,
     jz .plain                         ; and "0000" is not how anyone writes it
-    call ch_itoa_t
+    call dec_s16                      ; DI on its NUL
     neg cx
-    mov di, ch_tnum
-.zend:
-    cmp byte [di], 0
-    je .zput
-    inc di
-    jmp .zend
 .zput:
     cmp cx, 0
     jle .zdone
@@ -1938,87 +1898,12 @@ ch_num_t:
     mov byte [di], 0
     jmp .out
 .plain:
-    call ch_itoa_t
+    call dec_s16
 .out:
     pop di
     pop dx
     pop cx
     pop bx
-    pop ax
-    ret
-
-; ch_tnum_trim - drop trailing zeros from a fractional ch_tnum, and then the
-; point if nothing is left after it. The scale is chosen for the largest value
-; in the series, so every OTHER label wears its decimals whether it needs them
-; or not - 44.10 rather than 44.1, and 0.00 rather than 0.
-ch_tnum_trim:
-    push ax
-    push si
-    push di
-    mov di, ch_tnum
-    xor ax, ax                        ; AL = 1 once a '.' has been seen
-.scan:
-    cmp byte [di], 0
-    je .atend
-    cmp byte [di], '.'
-    jne .nodot
-    mov al, 1
-.nodot:
-    inc di
-    jmp .scan
-.atend:
-    or al, al
-    jz .out                           ; no point: nothing to trim
-.back:
-    dec di
-    cmp byte [di], '0'
-    jne .maybedot
-    mov byte [di], 0
-    jmp .back
-.maybedot:
-    cmp byte [di], '.'
-    jne .out
-    mov byte [di], 0
-.out:
-    pop di
-    pop si
-    pop ax
-    ret
-
-; ch_tnum_neg - put a '-' in front of what is already in ch_tnum, shuffling
-; the rest along. Used by ch_num_t, whose whole part is formatted unsigned.
-ch_tnum_neg:
-    push ax
-    push cx
-    push si
-    push di
-    mov di, ch_tnum
-    xor cx, cx
-.len:
-    cmp byte [di], 0
-    je .have
-    inc di
-    inc cx
-    jmp .len
-.have:
-    cmp cx, CH_TNUM_MAX - 1
-    jae .out
-    mov si, di                        ; DI is the NUL; move everything up one,
-    inc di                            ; right to left, the NUL included
-.shift:
-    mov al, [si]
-    mov [di], al
-    cmp si, ch_tnum
-    je .signit
-    dec si
-    dec di
-    jmp .shift
-.signit:
-    mov byte [ch_tnum], '-'
-.out:
-    pop di
-    pop si
-    pop cx
     pop ax
     ret
 
@@ -2682,6 +2567,8 @@ ch_pie_draw:
 .nodata:
     ret
 
+%ifndef CH_NO_BMPWRITE                 ; Chart writes its export in place
+                                        ; (ct_flip) and calls none of this
 ; -----------------------------------------------------------------------------
 ; ch_bmp_write - in: ES=source chart buffer segment (header/palette/pixels
 ; already in place, top-down), BX=a SEPARATE scratch segment of at least
@@ -2769,3 +2656,4 @@ ch_bmp_write:
     pop bx
     pop ax
     ret
+%endif ; CH_NO_BMPWRITE

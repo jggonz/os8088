@@ -1286,12 +1286,8 @@ dd_spct:     dw DD_PCTPAC, DD_PCTGH, DD_PCTFRI, DD_PCTEYE, DD_PCTTUN
     DWORDV dd_ndots
     DBYTEV dd_rmin                  ; rows above this are wall (the demo slice)
     DBUFV  dd_rowoff, DD_ROWS * 2   ; row * DD_COLS, so dd_tile has no MUL
-    DBUFV  dd_hdir, DD_COLS * DD_ROWS   ; the way home from every tile, walked
-    DBUFV  dd_hq, DD_COLS * DD_ROWS * 2 ; once a board (SPEC.md 93.8.5)
-    DWORDV dd_hqh
-    DWORDV dd_hqt
-    DBYTEV dd_hpc
-    DBYTEV dd_hpr
+    DBUFV  dd_hdir, DD_HDB          ; the way home from every tile, walked
+    DBUFV  dd_hq, DD_HQN * 2        ; once a board (SPEC.md 93.8.5)
     DBUFV  dd_pilc, DD_NPILL        ; where the pellets are, so the blink
     DBUFV  dd_pilr, DD_NPILL        ; does not have to go and look
     DWORDV dd_piln
@@ -1310,10 +1306,6 @@ dd_spct:     dw DD_PCTPAC, DD_PCTGH, DD_PCTFRI, DD_PCTEYE, DD_PCTTUN
     DBUFV  dd_rmap, DD_THMAX
     DBUFV  dd_cmap, DD_TWMAX       ; ...and its column twin (SPEC.md 93.3.3)
     DBUFV  dd_spr, DD_NSPR * DD_SPRSZ
-    DBUFV  dd_w0, DD_MSZ            ; three 16x16 scratch masters, plus one the
-    DBUFV  dd_w1, DD_MSZ            ; row shifters build into
-    DBUFV  dd_w2, DD_MSZ
-    DBUFV  dd_w3, DD_MSZ
     DBYTEV dd_rotd
     DBYTEV dd_ph
 
@@ -1322,6 +1314,25 @@ dd_spct:     dw DD_PCTPAC, DD_PCTGH, DD_PCTFRI, DD_PCTEYE, DD_PCTTUN
     DBUFV  dd_pb, 4 * DD_PBMAX      ; the planar band's four planes, plane 3
                                     ; holding the GROUND until it is composed
                                     ; (SPEC.md 93.5.19)
+; --- ...AND WHAT SHARES THOSE TWO, because none of it outlives one call ------
+; dd_band and dd_pb are 1,056 contiguous bytes that only a DRAW touches, and a
+; draw holds the gfx lock windowed and is the only task in a bracket. Two other
+; scratches are the same shape: the title's and the lives' band (dd_title_draw,
+; dd_hud_lives) is composed and blitted inside one call, never across one that
+; composes an actor; and the sprite cutter's four masters live only inside
+; dd_spr_build, which is a UI-task recut under the lock (93.3.4.3). So they are
+; THE SAME BYTES rather than 1,088 of their own.
+dd_tband equ dd_band
+%if DD_TBANDSZ > DD_BANDSZ + 4 * DD_PBMAX
+    %error "dd_tband no longer fits over dd_band and dd_pb"
+%endif
+dd_w0    equ dd_band                ; three 16x16 scratch masters, plus one the
+dd_w1    equ dd_band + DD_MSZ       ; row shifters build into
+dd_w2    equ dd_band + DD_MSZ * 2
+dd_w3    equ dd_band + DD_MSZ * 3
+%if DD_MSZ * 4 > DD_BANDSZ + 4 * DD_PBMAX
+    %error "the sprite masters no longer fit over dd_band and dd_pb"
+%endif
     DWORDV dd_pn                    ; ...one plane's bytes, which is the step
     DBYTEV dd_pok                   ; 1 = gfx_blitp may be asked this frame
     DBYTEV dd_bgnd                  ; the band's ground: 0 none, 1 in plane 3,
@@ -1515,7 +1526,6 @@ dd_spct:     dw DD_PCTPAC, DD_PCTGH, DD_PCTFRI, DD_PCTEYE, DD_PCTTUN
     DWORDV dd_grow
     DWORDV dd_gcol
     DBYTEV dd_grbits                ; the title cells of one glyph row
-    DBUFV  dd_tband, DD_TBANDSZ
     DBUFV  dd_rowbuf, 24
 
 ; --- the table ---------------------------------------------------------------------
@@ -1533,9 +1543,6 @@ dd_spct:     dw DD_PCTPAC, DD_PCTGH, DD_PCTFRI, DD_PCTEYE, DD_PCTTUN
     DWORDV dd_boxlx                 ; ...and where the PROMPT LINE went, so the
     DWORDV dd_boxly                 ; initials can be redrawn without the panel
     DWORDV dd_inioff                ; where they start inside dd_promptb
-    DWORDV dd_dbclus
-    DBYTEV dd_dbdrv
-    DBUFV  dd_dfind, OSAPI_FIND_SZ
 
     OS88_BSS DD_BSS
     OS88_IMAGE_END

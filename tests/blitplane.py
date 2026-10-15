@@ -50,6 +50,7 @@ it, and the association (SPEC.md 54) launches Paint with the picture already
 decoded, so not one navigation click is inside the measurement.
 """
 import argparse
+import tempfile
 import os
 import subprocess
 import sys
@@ -292,7 +293,7 @@ def canvas_diff(a, b, geom, w=640):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/blitplane.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/blitplane.img")
     ap.add_argument("--machine", default="os8088_xt_vga")
     a = ap.parse_args()
 
@@ -304,7 +305,7 @@ def main():
     # pixel, so every oracle below is the one it always was.
     gif = gifpath()
 
-    if a.apps == "/tmp/blitplane.img":
+    if a.apps == tempfile.gettempdir() + "/blitplane.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:" + gif)
 

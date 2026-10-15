@@ -157,6 +157,7 @@ TW_TKMAX    equ 8                   ; the most ticks one frame decays by
 TW_SCW      equ 232                 ; the scope band: 29 bytes a row
 TW_SCSTR    equ TW_SCW / 8
 TW_SCMAX    equ 64                  ; ...and at most this many rows
+TW_SCKB     equ (TW_SCSTR * TW_SCMAX + 2 + 1023) / 1024 ; the band's claim
 
 tw_lay_full:
     dw 4, 4, 411, 49, 4
@@ -665,13 +666,9 @@ tw_vizxhi:
 ; -----------------------------------------------------------------------------
 ; tw_buttons - draw every button whose flags or label moved since it was last
 ; drawn. A full paint sets every tw_lastf to 0FFFFh first, which no real flag
-; word is. preserves all
+; word is. tw_update banks every register round it
 ; -----------------------------------------------------------------------------
 tw_buttons:
-    push ax
-    push bx
-    push cx
-    push si
     call tw_bstate
     xor cx, cx
 .b:
@@ -696,10 +693,6 @@ tw_buttons:
     inc cx
     jmp short .b
 .out:
-    pop si
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -831,10 +824,6 @@ tw_ldiff:
 ; tw_lcd_line - compose LCD line kind AL into tw_line
 ; -----------------------------------------------------------------------------
 tw_lcd_line:
-    push bx
-    push cx
-    push dx
-    push si
     push di
     mov di, tw_line
     cmp al, 1
@@ -1003,10 +992,6 @@ tw_lcd_line:
 .done:
     call tw_pad
     pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     ret
 
 ; tw_elscale - AX = the new rate: [tw_el], the stream bytes HEARD this song
@@ -1210,15 +1195,9 @@ tw_spkq:
 ; tw_lcd - every LCD cell that moved. With [tw_full] set, also the
 ; well's bevel and the black strips between the lines - which is the whole
 ; of the well's ground: the lines are opaque and cover the rest (rule 1).
-; preserves all
+; tw_update banks every register round it
 ; -----------------------------------------------------------------------------
 tw_lcd:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     cmp byte [tw_full], 0
     je .lines
     mov ax, [tw_lay + TWL_LX1]      ; the bevel
@@ -1290,24 +1269,12 @@ tw_lcd:
     inc di
     jmp short .l
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; tw_status - the status line: [tui_msgp], or the key legend. preserves all
+; tw_status - the status line: [tui_msgp], or the key legend. tw_update banks every register round it
 ; -----------------------------------------------------------------------------
 tw_status:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     mov al, TWK_STAT
     mov bx, TW_SHLN
     call tw_lkey
@@ -1326,12 +1293,6 @@ tw_status:
     mov ah, [tw_body]
     call tw_ldiff
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -1534,12 +1495,8 @@ tw_pen_si:
     pop ax
     ret
 
-; tw_sliders - both thumbs where the state says; preserves all
+; tw_sliders - both thumbs where the state says; tw_update banks every register round it
 tw_sliders:
-    push ax
-    push cx
-    push si
-    push di
     mov si, TWL_VX1
     mov al, [mp_master]
     mov cx, 64
@@ -1569,10 +1526,6 @@ tw_sliders:
     call tw_slx
     mov di, tw_sthx
     call tw_slider
-    pop di
-    pop si
-    pop cx
-    pop ax
     ret
 
 ; =============================================================================
@@ -1625,15 +1578,8 @@ tw_vubh:
     pop bx
     ret
 
-; tw_vizdraw - the pane: whole when [tw_vfull], else the difference. preserves all
+; tw_vizdraw - the pane: whole when [tw_vfull], else the difference. tw_update banks every register round it
 tw_vizdraw:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
     cmp byte [tw_vfull], 0
     je .mode
     mov ax, [tw_lay + TWL_ZX1]
@@ -1666,13 +1612,6 @@ tw_vizdraw:
 %endif
 .out:
     mov byte [tw_vfull], 0
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1862,12 +1801,9 @@ tw_zin_x:
 ; tw_bar - one needle row to length SI, drawing only the difference
 ; in:  AX..CX = the row's x span, BX..DX its rows, SI = the new length,
 ;      [tw_t2] = the channel * 2 (into tw_vw); [tw_vfull] = draw it whole
-; preserves all
+; keeps DI and BP, which tw_vu walks the needles with
 ; -----------------------------------------------------------------------------
 tw_bar:
-    push ax
-    push cx
-    push si
     push di
     push bp
     mov bp, ax                      ; BP = x1, [tw_t3] = x2
@@ -1916,9 +1852,6 @@ tw_bar:
 .out:
     pop bp
     pop di
-    pop si
-    pop cx
-    pop ax
     ret
 
 %ifdef TRKLOG
@@ -2002,7 +1935,8 @@ tw_spec:
 
 ; -----------------------------------------------------------------------------
 ; tw_scol - band DI at x AX: a bar SI rows high and its peak marker at BP,
-;           both drawn up from [tw_t3]. Preserves all.
+;           both drawn up from [tw_t3]. Keeps AX and DI
+;           (tw_spec's x and band) and clobbers the rest.
 ;
 ; ONE PASS OVER THE COLUMN, NOTHING WRITTEN TWICE (PERFORMANCE.md rule 2). A
 ; marker is a second shape in the column, and the obvious order - the bar's
@@ -2019,13 +1953,8 @@ tw_spec:
 ; is where a fresh peak sits until the bar falls away from it (SPEC.md 45.24).
 ; -----------------------------------------------------------------------------
 tw_scol:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    push ax                         ; tw_spec's loop keeps its x in AX and its
+    push di                         ; band in DI across this; nothing else
     mov [tw_scx], ax
     cmp bp, si                      ; a marker the bar covers is not one
     ja .pv
@@ -2171,12 +2100,7 @@ tw_scol:
 .done:
     call .flush
 .out:
-    pop bp
     pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     pop ax
     ret
 .put:                               ; [DI] = AX, DI += 2
@@ -2389,6 +2313,8 @@ tw_scope:
     mov ax, TW_TX + TW_SCW
     call tw_fills
 .trace:
+    cmp word [tw_scseg], 0          ; belt: Scope is never the pick without
+    je .out                         ; its band (tw_scmem)
     cmp byte [trk_sopen], 0
     jne .tron
     cmp byte [tsp_run], 0           ; the speaker's play (45.25)
@@ -2403,17 +2329,14 @@ tw_scope:
     cmp byte [tw_scflat], 0         ; once: a stopped trace does not move
     jne .out
     mov byte [tw_scflat], 1
-    call tw_scclr
+    call tw_scclr                   ; (ES = the band from here)
     mov ax, [tw_scr]                ; one line across the middle
     shr ax, 1
     mov bx, TW_SCSTR
     mul bx
     mov di, ax
-    add di, tw_scb
     mov cx, TW_SCSTR
     mov al, 0FFh
-    push ds
-    pop es
     rep stosb
 .blit:
     push es
@@ -2421,9 +2344,8 @@ tw_scope:
     mov al, [tw_ink]
     mov ah, CBLACK
     call OSAPI_GFX_BLIT1_PEN
-    push ds
-    pop es
-    mov si, tw_scb
+    mov es, [tw_scseg]              ; ES:0 = the band
+    xor si, si
     mov bp, TW_SCSTR
     mov ax, TW_TX
     add ax, [tw_ox]
@@ -2437,17 +2359,16 @@ tw_scope:
 .out:
     ret
 
-; tw_scclr - clear the band. clobbers AX, CX, DI; ES = DS
+; tw_scclr - clear the band. clobbers AX, CX, DI; ES = the band's segment
 tw_scclr:
-    push ds
-    pop es
+    mov es, [tw_scseg]
     mov ax, [tw_scr]
     mov cx, TW_SCSTR
     mul cx
     mov cx, ax
     shr cx, 1                       ; TW_SCSTR is odd, so round up a word
     inc cx
-    mov di, tw_scb
+    xor di, di
     xor ax, ax
     cld
     rep stosw
@@ -2455,66 +2376,77 @@ tw_scclr:
 
 ; tw_sccomp - one trace: TW_SCW columns, every 8th sample of mp_outbuf, each
 ; joined to the last by a vertical run so a steep edge is a line and not dots
+;
+; THE BAND IS A CLAIM (SPEC.md 45.21.5.1), so the run's stores take an ES
+; prefix - two cycles a pixel - and the column arithmetic is what pays for
+; it, several times over: the rows live in CH and the last column's row in
+; DH, so the column does its two multiplies on BYTES (`mul ch`, `mul dl`:
+; neither writes DX) and reads no memory but its sample. It was a 16-bit
+; `mul word [tw_scr]`, three more reads of [tw_scr] and two of [tw_t1] a
+; column - ~200 cycles of a 4.77 MHz 8088 more than this, so a column's run
+; would have to be ~100 rows long, on a band at most TW_SCMAX = 64 tall, for
+; the prefix to cost what that saved. The measurement is SPEC.md's.
 tw_sccomp:
-    call tw_scclr                   ; (ES = DS from here)
+    call tw_scclr                   ; (ES = the band from here)
     mov si, mp_outbuf
-    xor cx, cx                      ; CX = the column
+    mov ch, [tw_scr]                ; CH = the rows, <= TW_SCMAX: a byte
+    xor cl, cl                      ; CL = the column, < TW_SCW: a byte
 .c:
     mov al, [si]
     add si, 8
     not al                          ; a high sample is a HIGH row: 255 - s
-    xor ah, ah
-    mul word [tw_scr]               ; ...times the rows, over 256
+    mul ch                          ; ...times the rows, over 256
     mov bl, ah
     xor bh, bh                      ; BX = this column's row, at unit gain -
     shl bx, 1                       ; and then TWICE it about the middle: four
-    mov ax, [tw_scr]                ; channels summed and shifted down fill
-    shr ax, 1                       ; the middle third of the pane, and a
-    sub bx, ax                      ; trace that small reads as a flat line
-    jns .g0                         ; on a 1bpp adapter
+    mov al, ch                      ; channels summed and shifted down fill
+    shr al, 1                       ; the middle third of the pane, and a
+    xor ah, ah                      ; trace that small reads as a flat line
+    sub bx, ax                      ; on a 1bpp adapter
+    jns .g0
     xor bx, bx
 .g0:
-    cmp bx, [tw_scr]
+    mov al, ch                      ; (AH is 0 on both paths here)
+    cmp bx, ax
     jb .g1
-    mov bx, [tw_scr]
+    mov bx, ax
     dec bx
 .g1:
-    or cx, cx
+    or cl, cl
     jnz .j
-    mov [tw_t1], bx                 ; the first column joins to itself
+    mov dh, bl                      ; the first column joins to itself
 .j:
-    mov di, [tw_t1]                 ; DI = the last column's row
-    mov [tw_t1], bx
+    mov al, dh                      ; DI = the last column's row (AH still 0)
+    mov dh, bl
+    mov di, ax
     cmp di, bx
     jbe .lo
     xchg di, bx                     ; DI = the run's top, BX its bottom
 .lo:
     push cx
-    push si
-    mov ax, cx
+    sub bx, di                      ; BX = the run's rows, less one
+    mov ax, di
+    mov dl, TW_SCSTR
+    mul dl                          ; AX = the top row's offset (a byte mul)
+    mov di, ax
+    mov al, cl
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    xor ah, ah                      ; ...plus the column's byte in it
+    add di, ax
     and cl, 7
     mov dl, 80h
     shr dl, cl                      ; DL = the column's bit
-    mov cl, 3
-    shr ax, cl
-    mov si, ax                      ; SI = its byte in a row
-    mov ax, di
-    mov cl, TW_SCSTR
-    mul cl                          ; (a byte multiply: DL survives it)
-    add ax, si
-    add ax, tw_scb
     mov cx, bx
-    sub cx, di
     inc cx                          ; CX = the run's rows
-    mov di, ax
 .set:
-    or [di], dl
+    or [es:di], dl
     add di, TW_SCSTR
     loop .set
-    pop si
     pop cx
-    inc cx
-    cmp cx, TW_SCW
+    inc cl
+    cmp cl, TW_SCW
     jb .c
     ret
 
@@ -2611,14 +2543,8 @@ tw_vstep:
 
 ; tw_body - the body tiles, in the body colour: exactly the pixels no element
 ; owns (tools/trkface.py checks that the tiles and the elements cover the
-; content once). preserves all
+; content once). tw_update banks every register round it
 tw_bodyfill:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     mov al, [tw_body]
     call tw_pen
     mov si, [tw_lay + TWL_TIL]
@@ -2644,21 +2570,18 @@ tw_bodyfill:
     call tw_fill
     dec di
     jnz .t
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; tw_update - the face as the state says, drawing what moved; everything when
 ; TWI_BODY is owed. Lock held and a clip armed by the caller. preserves all
 tw_update:
-    push ax
-    push bx
-    push cx
+    push ax                         ; EVERY register, here and once: the six
+    push bx                         ; elements below are this routine's alone
+    push cx                         ; and bank nothing of their own
+    push dx
+    push si
     push di
+    push bp
     push es
     call tw_track
     mov al, [tw_viz]                ; the visualiser this frame draws
@@ -2693,8 +2616,8 @@ tw_update:
 .vs:
     test byte [tw_dirty], TWI_BODY
     jz .viz
-    mov byte [tw_full], 1           ; EVERY element's record describes pixels
-    mov byte [tw_vfull], 1          ; that are about to be replaced: forget
+    mov word [tw_full], 0101h       ; EVERY element's record describes pixels
+                                    ; that are about to be replaced: forget
     push ds                         ; them all here, the one "pixels died"
     pop es                          ; site (SPEC.md 56.12 rule 2)
     mov di, tw_shad
@@ -2723,7 +2646,10 @@ tw_update:
     call tw_vizdraw
     mov byte [tw_full], 0
     pop es
+    pop bp
     pop di
+    pop si
+    pop dx
     pop cx
     pop bx
     pop ax
@@ -2885,10 +2811,9 @@ tw_refresh:
     push cx
     push dx
     mov bx, [trk_win]
-    call OSAPI_WM_GEOM              ; CF = 1: hidden
-    jc .pop
-    call OSAPI_WM_CLIP_SET          ; CF = 1: wholly covered
-    jc .pop
+    call OSAPI_WM_CLIP_SET          ; CF = 1: hidden or wholly covered (the
+    jc .pop                         ; region asks W_FLAGS itself, SPEC.md
+                                    ; 11.3.1, so no WM_GEOM is asked first)
     call tw_update
     call OSAPI_WM_CLIP_CLEAR
 .pop:
@@ -2902,15 +2827,8 @@ tw_refresh:
 ; button library draw; CF ignored (a covered window draws nothing either way)
 tw_clip:
     push bx
-    push cx
-    push dx
     mov bx, [trk_win]
-    call OSAPI_WM_GEOM
-    jc .out
-    call OSAPI_WM_CLIP_SET
-.out:
-    pop dx
-    pop cx
+    call OSAPI_WM_CLIP_SET          ; hidden is CF = 1 too (SPEC.md 11.3.1)
     pop bx
     ret
 
@@ -3297,8 +3215,43 @@ tw_a_viz:
 .xs:
     mov al, ah
 .set:
+    call tw_scmem                   ; Scope's band follows the PICK
     mov [tw_viz], al
 .out:
+    ret
+
+; tw_scmem - the scope's band, claimed when AL = the new pick is Scope and
+; given back when it is anything else (SPEC.md 45.21.5.1). The UI task, lock
+; held: a button's action. A refused claim moves the pick ON - Scope is
+; skipped, AL = TWV_OFF - rather than offering a mode with nothing to draw
+; it in. Keeps every register but AL
+tw_scmem:
+    push dx
+    cmp al, TWV_SCOPE
+    jne .give
+    cmp word [tw_scseg], 0
+    jne .out                        ; (already held)
+    push ax
+    mov ax, TW_SCKB
+    call OSAPI_MEM_CLAIM            ; DX = the band
+    jc .none
+    mov [tw_scseg], dx
+    mov ax, trk_reloc               ; movable: trk_reloc knows this word too
+    call OSAPI_MEM_MOVABLE
+    pop ax
+    jmp short .out
+.none:
+    pop ax
+    inc ax                          ; Scope + 1 = Off
+    jmp short .out
+.give:
+    xor dx, dx
+    xchg dx, [tw_scseg]
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_FREE
+.out:
+    pop dx
     ret
 tw_a_full:
     call trk_fs_ok
@@ -3329,7 +3282,7 @@ tw_s_rep0:  db 'No Repeat', 0
 tw_s_rep1:  db 'Rpt Song', 0
 tw_s_rep2:  db 'Rpt List', 0
 tw_s_shuf:  db 'Shuffle', 0
-tw_s_list:  db 'PlayList', 0
+tw_s_list equ tpl_s_added + 13      ; 'PlayList', the tail of tpl_s_added's bytes
 tw_s_xt:    db 'XT Mode', 0
 tw_s_vizs:  dw tw_s_vu, tw_s_spec, tw_s_scope, tw_s_vnone, tw_s_vu
 tw_s_vnone: db 'Meter Off', 0
@@ -3399,8 +3352,7 @@ tw_i_open:
     ;  ..############..
     ;  ..############..
     ;  ................
-    db 1, 10
-    times 10 dw 0FFFFh
+    db ICON_SOLID, 10
     dw 00180h
     dw 003C0h
     dw 007E0h
@@ -3422,8 +3374,7 @@ tw_i_prev:
     ;  ..##..###..###..
     ;  ..##...##...##..
     ;  ..##....#....#..
-    db 1, 10
-    times 10 dw 0FFFFh
+    db ICON_SOLID, 10
     dw 03084h
     dw 0318Ch
     dw 0339Ch
@@ -3445,8 +3396,7 @@ tw_i_rew:
     ;  .....###..###...
     ;  ......##...##...
     ;  .......#....#...
-    db 1, 10
-    times 10 dw 0FFFFh
+    db ICON_SOLID, 10
     dw 00108h
     dw 00318h
     dw 00738h
@@ -3468,8 +3418,7 @@ tw_i_play:
     ;  ....######......
     ;  ....####........
     ;  ....##..........
-    db 1, 10
-    times 10 dw 0FFFFh
+    db ICON_SOLID, 10
     dw 00C00h
     dw 00F00h
     dw 00FC0h
@@ -3491,8 +3440,7 @@ tw_i_pause:
     ;  ....###..###....
     ;  ....###..###....
     ;  ....###..###....
-    db 1, 10
-    times 10 dw 0FFFFh
+    db ICON_SOLID, 10
     dw 00E70h
     dw 00E70h
     dw 00E70h
@@ -3514,8 +3462,7 @@ tw_i_stop:
     ;  ....########....
     ;  ....########....
     ;  ................
-    db 1, 10
-    times 10 dw 0FFFFh
+    db ICON_SOLID, 10
     dw 00000h
     dw 00FF0h
     dw 00FF0h
@@ -3537,8 +3484,7 @@ tw_i_fwd:
     ;  ...###..###.....
     ;  ...##...##......
     ;  ...#....#.......
-    db 1, 10
-    times 10 dw 0FFFFh
+    db ICON_SOLID, 10
     dw 01080h
     dw 018C0h
     dw 01CE0h
@@ -3560,8 +3506,7 @@ tw_i_next:
     ;  ..###..###..##..
     ;  ..##...##...##..
     ;  ..#....#....##..
-    db 1, 10
-    times 10 dw 0FFFFh
+    db ICON_SOLID, 10
     dw 0210Ch
     dw 0318Ch
     dw 039CCh
@@ -3671,6 +3616,9 @@ TW_NT_COMP equ 36
     TRKB tw_dirty                   ; TWI_* owed
     TRKB tw_full                    ; this update draws the whole face
     TRKB tw_vfull                   ; ...or the whole visualiser pane
+%if tw_vfull != tw_full + 1
+  %error "tw_vfull must follow tw_full: tw_update sets the pair in one word"
+%endif
     TRKB tw_inframe                 ; the worker's frame is drawing
     TRKW tw_e1                      ; tw_well's banked rect
     TRKW tw_e2
@@ -3744,10 +3692,13 @@ tw_line     equ tui_rbuf            ; one composed LCD, status or list line:
     TRKB tw_scflat                  ; the flat trace is on the glass
     TRKW tw_scr                     ; the scope band's rows...
     TRKW tw_scy                     ; ...and its y
-    TRKBUF tw_scb, TW_SCSTR * TW_SCMAX + 2  ; the band itself. It BORROWED
-                                    ; the text screen's pattern shadow until
-                                    ; that became a claim held only inside a
-                                    ; text bracket (SPEC.md 45.13.8)
+    TRKW tw_scseg                   ; the band itself: a CLAIM of TW_SCKB,
+                                    ; held while Scope is the PICK and 0
+                                    ; otherwise (SPEC.md 45.21.5.1). It was
+                                    ; 1,858 bytes of bss in every instance -
+                                    ; the largest single item in the region
+                                    ; after the mixer's own tables - for a
+                                    ; mode no default ever picks
     TRKW tw_el                      ; stream bytes HEARD this song (32-bit)
     TRKW tw_el_hi
     TRKW tw_lplay                   ; [tui_play] as the last frame saw it

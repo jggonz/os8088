@@ -54,7 +54,7 @@ DSL_PIN, DSL_GONE, DSL_SLOT = 0x40, 0x80, 0x3F
 CFG_SIG = b"O88CFG\0\0"
 CFG_GEN_V = 3
 CFG_REC0 = 10
-CFG_FBUF = 141                  # SPEC.md 2.8.7: a file this size or less
+CFG_FBUF = 152                  # SPEC.md 2.8.7: a file this size or less
                                 # carries no trailer the boot will read.
                                 # kern_big's - the only kernel that reads a
                                 # trailer - and DERIVED there (driver.inc), so

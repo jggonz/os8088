@@ -372,6 +372,12 @@ static unsigned char c64_ring_a[C64K_RING];
 static unsigned char c64_ring_s[C64K_RING];
 static int c64_ring_h, c64_ring_t;
 
+/* c64_kbd_init - the HARNESS's reset between its cases, and nothing else's.
+ * The shipping image does not carry it: every field below is bss, which the
+ * loader zeroes once per launch (SPEC.md 20.1), and os88_main used to call
+ * this before anything had touched one of them - 113 bytes of code that
+ * stored zero over zero (apps size pass 1). */
+#ifdef C64_HOST
 static void c64_kbd_init(void)
 {
     int i;
@@ -392,16 +398,23 @@ static void c64_kbd_init(void)
     c64_arrow_held = 0;
     c64_slock_said = 0;
 }
+#endif
 
 static void c64_key_push(int ascii, int scan)
 {
     int n = (c64_ring_t + 1) & (C64K_RING - 1);
-    if (scan == KSC_UP || scan == KSC_DOWN
-        || scan == KSC_LEFT || scan == KSC_RIGHT)
+    switch (scan) {                         /* a switch is a cmp/je a case;
+                                             * an `||` chain is a 0/1 value
+                                             * per operand (apps size pass 1) */
+    case KSC_UP:
+    case KSC_DOWN:
+    case KSC_LEFT:
+    case KSC_RIGHT:
         c64_arrow_typed = 1;                /* the kernel's keyboard mouse is
                                              * not taking these (7.6) - and it
                                              * cannot start to, so this latch
                                              * is one way */
+    }
     if (n == c64_ring_h)
         return;                             /* the ring is full: the key is
                                              * dropped, not written past it */
@@ -415,7 +428,7 @@ static void c64_key_push(int ascii, int scan)
  * into its table, or -1. */
 static int c64_kmap_asc(int ch)
 {
-    if (ch < 32 || ch > 126)
+    if ((unsigned)(ch - 32) > (unsigned)(126 - 32))   /* ch < 32 || ch > 126 */
         return -1;
     if (c64_kasc[(ch - 32) * 4] == C64K_NONE)
         return -1;
@@ -445,13 +458,23 @@ static int c64_kmap_scan(int scan)
  * ========================================================================*/
 static int c64_scan_is_ctrl(int ascii, int scan)
 {
-    if (ascii == 8 && scan == KSC_CTRLH)
-        return 'H';
-    if (ascii == 9 && scan == KSC_CTRLI)
-        return 'I';
-    if (ascii == 13 && scan == KSC_CTRLM)
-        return 'M';
-    if (ascii >= 1 && ascii <= 26 && ascii != 8 && ascii != 9 && ascii != 13)
+    /* NESTED and SWITCHED rather than `&&` chains, which SmallerC turns into
+     * a 0/1 value per operand (apps size pass 1) - same answers */
+    switch (ascii) {
+    case 8:
+        if (scan == KSC_CTRLH)
+            return 'H';
+        return 0;
+    case 9:
+        if (scan == KSC_CTRLI)
+            return 'I';
+        return 0;
+    case 13:
+        if (scan == KSC_CTRLM)
+            return 'M';
+        return 0;
+    }
+    if ((unsigned)(ascii - 1) <= (unsigned)(26 - 1))  /* 1..26, less 8 9 13 */
         return ascii + 64;
     return 0;
 }
@@ -518,9 +541,9 @@ static int c64_kbd_deshift;
 
 static void c64_kbd_set(int row, int col, int flags)
 {
-    if (row == C64K_RESTORE)
-        return;                             /* not a matrix position (7.4) */
-    if (row < 0 || row > 7)
+    if ((unsigned)row > 7)                  /* row < 0 || row > 7, and
+                                             * C64K_RESTORE (0xFE) is not a
+                                             * matrix position either (7.4) */
         return;
     c64_matrix[row] |= (unsigned char)(1 << col);
     if ((flags & C64K_SH) != 0)
@@ -537,8 +560,7 @@ static void c64_kbd_build(void)
 {
     int i, e, ch, wantsh;
 
-    for (i = 0; i < 8; i++)
-        c64_matrix[i] = 0;
+    os88_memset(c64_matrix, 0, 8);
     c64_kbd_deshift = 0;
     wantsh = 0;
 
@@ -566,8 +588,9 @@ static void c64_kbd_build(void)
         if (e < 0)
             continue;
         c64_kbd_set(c64_kasc[e], c64_kasc[e + 1], c64_kasc[e + 2]);
-        if ((c64_kasc[e + 2] & C64K_OPT) != 0 && c64_shift_down)
-            wantsh = 1;                     /* an OPTionally shifted key takes
+        if ((c64_kasc[e + 2] & C64K_OPT) != 0)
+            if (c64_shift_down)
+                wantsh = 1;                     /* an OPTionally shifted key takes
                                              * the HOST's shift, which is what
                                              * makes SHIFT+letter the graphic
                                              * character it is on the machine */
@@ -597,10 +620,10 @@ static void c64_kbd_build(void)
      * all, and holding Shift before pressing a key put nothing in the matrix.
      * The DESHIFT suppression below still wins, which is VICE's
      * `!virtual_deshift`. */
-    if ((wantsh || c64_shift_down) && c64_kbd_deshift == 0)
-        c64_matrix[C64K_LSHIFT_R] |= (unsigned char)(1 << C64K_LSHIFT_C);
     if (c64_kbd_deshift != 0)
         c64_matrix[C64K_LSHIFT_R] &= (unsigned char)~(1 << C64K_LSHIFT_C);
+    else if (wantsh | c64_shift_down)       /* both are 0 or 1 */
+        c64_matrix[C64K_LSHIFT_R] |= (unsigned char)(1 << C64K_LSHIFT_C);
     if (c64_ctrl_down)
         c64_matrix[C64K_LCTRL_R] |= (unsigned char)(1 << C64K_LCTRL_C);
 }
@@ -677,8 +700,9 @@ static void c64_kbd_poll(void)
                                              * scanned it; from here the host
                                              * key state decides */
         }
-        if (c64_dage[i] == C64K_AGE_OLD && !os88_key_down(c64_down[i]))
-            continue;
+        if (c64_dage[i] == C64K_AGE_OLD)
+            if (!os88_key_down(c64_down[i]))
+                continue;
         c64_down[n] = c64_down[i];
         c64_dasc[n] = c64_dasc[i];
         c64_dage[n] = c64_dage[i];
@@ -688,16 +712,18 @@ static void c64_kbd_poll(void)
     c64_ndown = n;
 
     /* --- the modifiers and the joystick, from the same pass */
-    c64_shift_down = (os88_key_down(KSC_LSHIFT) || os88_key_down(KSC_RSHIFT))
-                     ? 1 : 0;
-    c64_ctrl_down = os88_key_down(KSC_CTRL) ? 1 : 0;
-    for (i = 0; i < 10; i++)
-        c64_kdig_down[i] = 0;
+    /* os88_key_down answers 0 or 1 (os88.h), so its answer IS the flag;
+     * and the right Shift is asked only when the left is up, which is the
+     * same calls the `||` made (apps size pass 1) */
+    c64_shift_down = os88_key_down(KSC_LSHIFT);
+    if (!c64_shift_down)
+        c64_shift_down = os88_key_down(KSC_RSHIFT);
+    c64_ctrl_down = os88_key_down(KSC_CTRL);
     if (c64_ctrl_down) {
         for (i = 0; i < 10; i++)
-            c64_kdig_down[i] = (unsigned char)(os88_key_down(c64_kdigsc[i])
-                                               ? 1 : 0);
-    }
+            c64_kdig_down[i] = (unsigned char)os88_key_down(c64_kdigsc[i]);
+    } else
+        os88_memset(c64_kdig_down, 0, 10);
     j = 0;
     if (c64_keyset) {                       /* joykeys_enable: with the keyset
                                              * off there is no stick and the
@@ -717,11 +743,13 @@ static void c64_kbd_poll(void)
      * after it has been said. */
     if ((j & 0x0F) == 0) {
         c64_arrow_held = 0;
-    } else if (!c64_slock_said && !c64_arrow_typed) {
-        c64_arrow_held++;
-        if (c64_arrow_held >= 3) {
-            c64_slock_said = 1;
-            c64_say("ScrollLock for joystick");
+    } else if (!c64_slock_said) {
+        if (!c64_arrow_typed) {
+            c64_arrow_held++;
+            if (c64_arrow_held >= 3) {
+                c64_slock_said = 1;
+                c64_say("ScrollLock for joystick");
+            }
         }
     }
 
@@ -824,7 +852,7 @@ static int c64_kbd_pb(void)
  *
  * So the command is a LATCH in the module and the work is resident. A Copy is
  * ONE bridge crossing now - os88_oncmd -> ovl_cmd, the runtime's far entry,
- * and back - and a Paste is one, because c64_clip_service and the feeder are
+ * and back - and a Paste is one, because ovl_clip_service and the feeder are
  * both this side of the boundary and the clipboard calls are theirs. The
  * enumeration matters because the next ovl_* that loops gets priced from it:
  * the previous shape crossed FOUR times a command (os88_oncmd -> ovl_cmd,
@@ -944,7 +972,7 @@ static unsigned char c64_pettab[256];       /* host byte -> PETSCII */
  *
  * COST, AND IT IS NO LONGER HELD-LOCK TIME: 50 calls for the screen - one
  * c64_zcopy_out and one c64_copy_row a row - and it runs from os88_onwake
- * with NO lock held (c64_clip_service below). Nothing is drawn. The C here
+ * with NO lock held (ovl_clip_service below). Nothing is drawn. The C here
  * is a 25-iteration loop and NOT a per-cell one: the table index, the
  * last_non_whitespace test, the trim and the store into the claim are all
  * inside c64_copy_row (c64mem.inc), which is the toolchain's own rule -
@@ -962,7 +990,7 @@ static int c64_copy_screen(unsigned seg, unsigned base)
     return n;
 }
 
-/* c64_clip_service - EDIT > COPY AND EDIT > PASTE, RUN FROM THE WAKE.
+/* ovl_clip_service - EDIT > COPY AND EDIT > PASTE, RUN FROM THE WAKE.
  *
  * WHY NEITHER RUNS IN ITS MENU COMMAND. os88_oncmd is dispatched under the
  * kernel's gfx lock (os88.h) - "you may draw, you must not take the lock" -
@@ -990,8 +1018,14 @@ static int c64_copy_screen(unsigned seg, unsigned base)
  * c64_mbase is declared in c64scr.c, which this file precedes.
  *
  * Both latches are spent whatever the machine's state, so a paused or jammed
- * machine still services the Copy that is on the glass in front of it. */
-static void c64_clip_service(unsigned base)
+ * machine still services the Copy that is on the glass in front of it.
+ *
+ * AND IT IS IN C64.OVL (apps size pass 1), because it runs once per pick and
+ * its only callers are the two latches ovl_cmd sets - so the module is in
+ * memory whenever one is up, and the wake's call loads nothing. The per-ROW
+ * and per-byte work stays resident: c64_copy_screen and c64_copy_row, and
+ * c64_paste_feed, which is the per-wake feeder. */
+static void ovl_clip_service(unsigned base)
 {
     unsigned seg;
     int n, got;
@@ -1107,7 +1141,9 @@ static void c64_paste_feed(void)
                                                (unsigned)(c64_paste_i + k));
     n = 0;
     k = 0;
-    while (n < C64_KB_SIZE && k < m) {
+    while (n < C64_KB_SIZE) {
+        if (k >= m)
+            break;
         c = (int)c64_pbuf[k];
         k++;
         /* A NUL ENDS THE PASTE, because it ends the STRING VICE converts:

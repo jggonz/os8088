@@ -159,7 +159,7 @@ ZP_MG_EMIN  equ 11                  ; smallest legal .mg1 directory entry
 ZP_MG_EMAX  equ 64
 ZP_MG_MAXI  equ 2048                ; sanity bound on its image count
 
-; --- our slack in apps/frotz/zbss.inc (ZPIC_SLACK, 128 bytes; 66 used) -------
+; --- our range in apps/frotz/zbss.inc (ZPIC_SLACK, 68 bytes, all used) -------
 %define zp_rel        (os88_image_end + ZPIC_SLACK + 0)   ; word: .PIX release
 %define zp_src        (os88_image_end + ZPIC_SLACK + 2)   ; byte: ZP_SRC_*
 %define zp_mgn        (os88_image_end + ZPIC_SLACK + 4)   ; word: .mg1 images
@@ -199,9 +199,13 @@ zp_load:
     push es
 
     call zp_free                    ; a second story replaces the first
-    mov byte [zp_src], ZP_SRC_NONE
-    mov word [zp_mgn], 0
-    mov word [zp_mgrel], 0
+%if ZP_SRC_NONE != 0
+  %error "zp_load stores AX = 0 as ZP_SRC_NONE"
+%endif
+    xor ax, ax
+    mov [zp_src], al                ; ZP_SRC_NONE
+    mov [zp_mgn], ax
+    mov [zp_mgrel], ax
 
     ; v6 ONLY, AND THE REASON IS THE CLOCK. @draw_picture and @picture_data are
     ; v6 opcodes (Standard 15), so art beside a v3 or v5 story is art no story
@@ -237,14 +241,13 @@ zp_load:
 .yes:
     clc
 .out:
-    pop es
-    pop di
-    pop si                          ; SI. The prologue pushes seven registers
-    pop dx                          ; and this popped six, so zp_load returned
-    pop cx                          ; to whatever the caller's SI happened to
-    pop bx                          ; be. It survived review because NOTHING
-    pop ax                          ; CALLED IT: zi_load filled [zi_story] and
-    ret                             ; never asked for the art, so every story
+    jmp zf_pop7
+    ; SI. The prologue pushes seven registers
+    ; and this popped six, so zp_load returned
+    ; to whatever the caller's SI happened to
+    ; be. It survived review because NOTHING
+    ; CALLED IT: zi_load filled [zi_story] and
+    ; never asked for the art, so every story
                                     ; ran with @picture_data answering "none"
                                     ; and the imbalance was unreachable. Two
                                     ; defects holding each other up - the gate
@@ -424,13 +427,7 @@ zp_draw:
 .out:
     pop es                          ; the story segment back, before the VM
     pop bp                          ; touches ES:SI again (FROTZ-PLAN 3.1)
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop6
 
 ; =============================================================================
 ; zp_reason - what to tell the reader about this story's pictures
@@ -547,14 +544,7 @@ zp_find:
 .no:
     stc
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop7
 
 ; -----------------------------------------------------------------------------
 ; zp_mkname - derive "<story base>.<ext>" into [zp_name]
@@ -661,14 +651,11 @@ zp_findfile:
 .no:
     stc
 .out:
-    pop es
-    pop di
-    pop si                          ; ...and the same missing pop as zp_load,
-    pop dx                          ; for the same reason: unreachable code is
-    pop cx                          ; unreviewed code. Both are now on a path
-    pop bx                          ; tests/frotz/zpictest.inf walks every run
-    pop ax
-    ret
+    jmp zf_pop7
+    ; ...and the same missing pop as zp_load,
+    ; for the same reason: unreachable code is
+    ; unreviewed code. Both are now on a path
+    ; tests/frotz/zpictest.inf walks every run
 
 ; -----------------------------------------------------------------------------
 ; zp_streq - compare two NUL 8.3 names in our segment
@@ -807,16 +794,17 @@ zp_check_pix:
 zp_free:
     push ax
     push dx
-    cmp word [zp_seg], 0
+    xor ax, ax                      ; every slot preserves it
+    cmp [zp_seg], ax
     je .out
     mov dx, [zp_seg]                ; DX, not AX (SPEC.md 50.3)
     call OSAPI_MEM_FREE
-    mov word [zp_seg], 0
-    mov word [zp_kb], 0
+    mov [zp_seg], ax
+    mov [zp_kb], ax
 .out:
-    mov word [zp_count], 0          ; cleared unconditionally: "no drawable
-    mov word [zp_dirlen], 0         ; pictures" is the state every failure
-    mov word [zp_rel], 0            ; path has to land in
+    mov [zp_count], ax              ; cleared unconditionally: "no drawable
+    mov [zp_dirlen], ax             ; pictures" is the state every failure
+    mov [zp_rel], ax                ; path has to land in
     pop dx
     pop ax
     ret

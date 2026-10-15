@@ -42,6 +42,7 @@ a background window's title does not raise it from here, and a drag leaves the
 pointer clamped so every click after it lands somewhere else.
 """
 import argparse
+import tempfile
 import os
 import sys
 
@@ -77,12 +78,12 @@ def idle(m):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/paintsu.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/paintsu.img")
     ap.add_argument("--machine", default="os8088_5150_cga_gla")
     ap.add_argument("--gif", default="build/OS8088.GIF")
     a = ap.parse_args()
 
-    if a.apps == "/tmp/paintsu.img":
+    if a.apps == tempfile.gettempdir() + "/paintsu.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:" + a.gif)
 

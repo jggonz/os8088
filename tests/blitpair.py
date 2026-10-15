@@ -33,6 +33,7 @@ the VRAM route rather than the rendered one, and would be answering a
 different question (39.3's banking) at the same time.
 """
 import argparse
+import tempfile
 import os
 import struct
 import sys
@@ -174,7 +175,7 @@ def gif_pixels(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/blitpair.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/blitpair.img")
     ap.add_argument("--machine", default="os8088_5150_cga_gla")
     ap.add_argument("--gif", default=None,
                     help="the picture to open (default: SPEC.md 42.23.6's "
@@ -208,7 +209,7 @@ def main():
     if a.gif is None:
         a.gif = os.path.join(HERE, "..", "build", "OS8088.GIF")
 
-    if a.apps == "/tmp/blitpair.img":
+    if a.apps == tempfile.gettempdir() + "/blitpair.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:" + a.gif)
 

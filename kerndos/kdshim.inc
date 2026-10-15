@@ -37,8 +37,9 @@
 ; progress call the mount makes compiles away.
 %macro SPLCALL 1
 %endmacro
-%macro OVLCALL 1
-%endmacro
+; (There was an empty OVLCALL here too, for the blob entry's second name. That
+; name is the WINDOW half's entry since SPEC.md 2.9.14 and nothing in the disk
+; layer uses it, so a stub would only turn a future window call into nothing.)
 
 ; --- 1: the constants -------------------------------------------------------
 ; Each is a number kernel/memory.inc, mod.inc or files.inc defines and the

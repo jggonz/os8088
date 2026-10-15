@@ -104,6 +104,7 @@ design is a stage-and-commit loop (SPEC.md 77.1) and a file that fits in one
 chunk never exercises OSAPI_FILE_APPEND's cluster precondition at all.
 """
 import argparse
+import tempfile
 import ftplib
 import io
 import os
@@ -470,11 +471,11 @@ def restart(m, mo):
 
 # [fd_st], read out of the package's own bss. The o88 header carries the image
 # length at +8, and the bss follows it - dispcp gives the window's segment.
-FD_ST_OFF = 48          # fd_st equ os88_image_end + 48
+FD_ST_OFF = 42          # fd_st equ os88_image_end + 42
 STATES = {0: "off", 1: "listening", 2: "serving", 3: "err"}
 
 
-FD_PAGE_OFF = 68        # fd_page equ os88_image_end + 68
+FD_PAGE_OFF = 62        # fd_page equ os88_image_end + 62
 PAGES = {0: "log", 1: "setup", 2: "about"}
 
 
@@ -1322,7 +1323,7 @@ def run_gate(m, mo, fails):
         dx, dy, dw, dh = disk
         # the overlap: the Disk window's own area, which the FTP log sits under
         crop = "%d,%d,%d,%d" % (dx + 2, dy + 20, dw - 8, dh - 40)
-        _sp.run(["python3", "tools/shot.py", SOCK, "/tmp/ftpclip_0.png",
+        _sp.run(["python3", "tools/shot.py", SOCK, tempfile.gettempdir() + "/ftpclip_0.png",
                  "--crop", crop], capture_output=True)
         # **NOT ITS TITLE BAR** - the Disk window is at (103,80,320,200) and
         # the FTP window at (40,40,400,176), so that title is UNDERNEATH the
@@ -1331,15 +1332,15 @@ def run_gate(m, mo, fails):
         # bottom edge; anywhere in a window raises it.
         mo.click(dx + dw // 2, dy + dh - 30)
         time.sleep(1.5)
-        _sp.run(["python3", "tools/shot.py", SOCK, "/tmp/ftpclip_a.png",
+        _sp.run(["python3", "tools/shot.py", SOCK, tempfile.gettempdir() + "/ftpclip_a.png",
                  "--crop", crop], capture_output=True)
         # **THE SETUP CHECKS ITSELF.** The first version of this clicked four
         # pixels too high, never raised anything, and cropped the FTP log -
         # which changes on every line by design, so it reported the bug it was
         # written to detect on a build that had just been fixed. A gate whose
         # premise is unverified is a gate that lies in the expensive direction.
-        if open("/tmp/ftpclip_0.png", "rb").read() == \
-                open("/tmp/ftpclip_a.png", "rb").read():
+        if open(tempfile.gettempdir() + "/ftpclip_0.png", "rb").read() == \
+                open(tempfile.gettempdir() + "/ftpclip_a.png", "rb").read():
             fails.append("clicking the Disk window's title bar changed "
                          "nothing - it never came to the front, so this "
                          "assertion has no window on top to protect")
@@ -1358,15 +1359,15 @@ def run_gate(m, mo, fails):
                 say("   (connect %d: %s)" % (_try, str(e).strip()[:40]))
                 time.sleep(4.0)
         time.sleep(2.5)
-        _sp.run(["python3", "tools/shot.py", SOCK, "/tmp/ftpclip_b.png",
+        _sp.run(["python3", "tools/shot.py", SOCK, tempfile.gettempdir() + "/ftpclip_b.png",
                  "--crop", crop], capture_output=True)
-        a = open("/tmp/ftpclip_a.png", "rb").read()
-        b = open("/tmp/ftpclip_b.png", "rb").read()
+        a = open(tempfile.gettempdir() + "/ftpclip_a.png", "rb").read()
+        b = open(tempfile.gettempdir() + "/ftpclip_b.png", "rb").read()
         if a != b:
             fails.append("the Disk window's pixels CHANGED while the FTP "
                          "server logged underneath it - the log is painting "
                          "over the window on top (SPEC.md 77.33). See "
-                         "/tmp/ftpclip_a.png and _b.png")
+                         "%s/ftpclip_a.png and _b.png" % tempfile.gettempdir())
         else:
             say("the window on top is untouched while the log scrolls under it")
 

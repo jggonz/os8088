@@ -98,7 +98,7 @@ CMZ_XTOAST  equ apic_toast_show          ; OSAPI_TOAST, and it is what lets this
 CMZ_WMAX    equ 16384           ; the compressor's window, largest first: 2
 CMZ_WMIN    equ 1024            ; bytes of prev[] each (SPEC.md 20.15.1)
 CMZFP       equ CLFP + 4        ; the cloner's SECOND entry (SPEC.md 20.15.3):
-                                ; this whole file is part of CLONE.DRV's
+                                ; this whole file is part of DISKOPS.DRV's
                                 ; image, so it costs no mod_tab row, no file
                                 ; name and no mod_fp block of its own - one
                                 ; far-pointer slot, in a block that had six
@@ -137,7 +137,7 @@ CMZFP       equ CLFP + 4        ; the cloner's SECOND entry (SPEC.md 20.15.3):
 %endmacro
 
 section .modl                   ; the cloner's image (SPEC.md 2.8, 18.99) -
-                                ; clone.inc has already laid the header, and
+                                ; diskops.inc has already laid the header, and
                                 ; kernel.asm's modl_end comes after this
 
 %ifndef NOCURDISK
@@ -1375,10 +1375,12 @@ cmz_verb:
 ; routine it replaced: the entry is already in hand.
 ; -----------------------------------------------------------------------------
 cmz_sizes:
+%ifdef OS88_REDIR               ; SPEC.md 62.9.2.3
     cmp byte [dsk_vkind], DVK_FILE
     je .nofs                    ; a REDIRECTED volume (SPEC.md 62.9): no entry
                                 ; to read a hint out of, and nothing on it is
                                 ; compressed
+%endif
     mov si, fm_onam
     call COLD_SEG:dwf_dskw_stat ; AL = attribute, BX = cluster, DX:CX = size
     jc .out
@@ -1400,10 +1402,12 @@ cmz_sizes:
     ret                         ; above is taken with CF SET for an LZ4 mark,
                                 ; and a `mov` carries it out - so an LZ4 file
                                 ; answered a FERR whose number was its own size
+%ifdef OS88_REDIR
 .nofs:
     mov ax, FERR_PROT
     stc
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; cmz_compress - File > Compress (SPEC.md 22.22)
@@ -2873,7 +2877,7 @@ cmz_jmsg:
 ; Uncompress To... (SPEC.md 22.23.6) - kern_big's alone
 ; =============================================================================
 ; cmz_gosrc / cmz_godst - stand in the source's folder or the target's, through
-; the far door CLONE.DRV already uses (fcp_goto, SPEC.md 18.99.8). Free inside
+; the far door DISKOPS.DRV already uses (fcp_goto, SPEC.md 18.99.8). Free inside
 ; the run's batch bracket (SPEC.md 18.9.3), and a word when the two are one
 ; folder. A failure never returns (cmz_jerr). clobbers: flags
 cmz_gosrc:
@@ -3030,6 +3034,27 @@ cmz_jdisp:
     jne .notline
     jmp cmz_jline
 .notline:
+    cmp dl, CLV_KEY
+    je .run
+    push ax                     ; CLV_FREE KEEPS clo_free's CONTRACT: every
+    push bx                     ; register preserved (SPEC.md 22.23.6.3).
+    push cx                     ; fm_edit_end sends it from INSIDE its walk
+    push dx                     ; over the window pool, CX the loop's count
+    push si                     ; and DI the block - and this arm left CX =
+    push di                     ; [clo_seg], so the walk zeroed a byte every
+    push bp                     ; FS_SIZE through the whole kernel segment,
+    push es                     ; tens of thousands of times. Pushed BEFORE
+    call .run                   ; .run banks [cmz_jsp], so cmz_jerr's unwind
+    pop es                      ; returns here too
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.run:
     cld
     call cmz_jload              ; the paused state - clobbers CX SI DI
     mov cx, [clo_seg]
@@ -3072,8 +3097,31 @@ cmz_jdisp:
     pop ds
     dec word [cs:cmz_jk]        ; .part moves on to the one that was missing
     call COLD_SEG:dkf_dsk_batch_begin
+    call cmz_jfresh             ; ...and it may be the SAME disk, changed
     call cmz_rearm
     jmp cmz_jloop
+
+; cmz_jfresh - Enter at the prompt: forget what the machine knew of the
+; source drive's medium (SPEC.md 22.23.6.2). A floppy written elsewhere and
+; put back signs the same (18.8.2) - its boot sector never changed - so the
+; hop back would keep its FAT window and be served the OLD root out of the
+; cache, and the part just copied onto it would be `Missing`. A failed hop
+; never returns (cmz_jerr). clobbers: BX CX, flags
+cmz_jfresh:
+    CMZ_GO dst                  ; OFF the source first: the hop back is then a
+                                ; mount however recently the motor ran, and
+                                ; this one has banked its window by now
+    mov bl, [cs:cmz_jsrcd]
+    xor bh, bh                  ; a volume this join mounted: < DVOL_MAX
+    shl bx, 1
+    mov word [dsk_fatwsig+bx], 0    ; 0 = nothing banked: dsk_fatw_pick loads
+    mov bx, dsk_rah_tab         ; ...and every cached chunk goes, which is
+    mov cx, DSK_RAH_RUNS        ; dsk_rah_flush's loop: it is .text, and this
+.chunk:                         ; is an image (DS is the kernel's)
+    and word [bx+RAH_N], 0
+    add bx, RAH_REC
+    loop .chunk
+    ret
 
 ; cmz_jline - CLV_LINE: 'Put FILEA.002 in A:' over 'Enter=ready  Esc=stop'
 ; in:  AL = 0 / 1, DI = the kernel buffer. out: DI on the NUL, CF = 0

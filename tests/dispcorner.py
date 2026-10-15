@@ -55,6 +55,7 @@ whether the two captures agree - it asks which KIND of difference it is, and
 all, including the two cases that would make it a way of not looking.
 """
 import argparse
+import tempfile
 import sys
 import time
 
@@ -479,9 +480,9 @@ def probe(m, mo, pri, pw, ph, label, bad, prev, corner=None, tag="A",
                    % (tag, label, corner))
     classify(inc, full, d, pw, ph, tag, label, bad, allow_dither)
     if d:
-        crop_png("/tmp/corner%s-%s-inc.png" % (tag, label), inc, pw, ph,
+        crop_png(tempfile.gettempdir() + "/corner%s-%s-inc.png" % (tag, label), inc, pw, ph,
                  bbox(d))
-        crop_png("/tmp/corner%s-%s-full.png" % (tag, label), full, pw, ph,
+        crop_png(tempfile.gettempdir() + "/corner%s-%s-full.png" % (tag, label), full, pw, ph,
                  bbox(d))
     return d
 
@@ -697,9 +698,9 @@ def main():
                 classify(inc, full, d, pw, ph, "A", label, bad,
                          dither_ok[0])
                 if d:
-                    crop_png("/tmp/cornerA-%s-inc.png" % label,
+                    crop_png(tempfile.gettempdir() + "/cornerA-%s-inc.png" % label,
                              inc, pw, ph, bbox(d))
-                    crop_png("/tmp/cornerA-%s-full.png" % label,
+                    crop_png(tempfile.gettempdir() + "/cornerA-%s-full.png" % label,
                              full, pw, ph, bbox(d))
 
             check("launch")                 # wm_show: reveals nothing (11.90)
@@ -968,10 +969,10 @@ def main():
                          dshift)
                 if dd:
                     for tg, cap in (("inc", inc[c][2]), ("full", full[c][2])):
-                        box = crop_png("/tmp/cornerD-%s-%s.png" % (nm, tg),
+                        box = crop_png(tempfile.gettempdir() + "/cornerD-%s-%s.png" % (nm, tg),
                                        cap, w0, h0, bbox(dd))
-                    print("     crops in /tmp/cornerD-%s-{inc,full}.png  %r"
-                          % (nm, box))
+                    print("     crops in %s/cornerD-%s-{inc,full}.png  %r"
+                          % (tempfile.gettempdir(), nm, box))
 
         # --- B: a drag that uncovers ---------------------------------------
         if a.only not in ("a", "c", "d"):
@@ -1061,10 +1062,10 @@ def main():
                 # name". Both captures are cropped identically so they can be
                 # looked at side by side.
                 for tag, cap in (("inc", inc[c][2]), ("full", full[c][2])):
-                    box = crop_png("/tmp/corner-%s-%s.png" % (nm, tag),
+                    box = crop_png(tempfile.gettempdir() + "/corner-%s-%s.png" % (nm, tag),
                                    cap, w0, h0, bbox(dd))
-                print("     crops in /tmp/corner-%s-{inc,full}.png  %r"
-                      % (nm, box))
+                print("     crops in %s/corner-%s-{inc,full}.png  %r"
+                      % (tempfile.gettempdir(), nm, box))
 
         print()
         print(("FAIL: " + "; ".join(bad)) if bad else

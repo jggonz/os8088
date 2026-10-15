@@ -58,7 +58,7 @@ GROUPS = [
      ["KEY_", "MOUSE", "EVQ_", "CUR_"]),
     ("Files and volumes", ["18", "19", "22", "38", "54", "20.13"],
      ["FILE_", "VOL_", "FS_", "ASSOC", "ARG_FILE", "BATCH_", "DECOMP",
-      "DSK_"]),
+      "DSK_", "FERR_"]),
     ("Memory", ["2", "41", "50", "66"],
      ["MEM_", "XMEM_", "CLAIM_SNAPSHOT", "SYS_KB"]),
     ("Tasks, timing and the clock", ["7", "8", "37"],
@@ -188,7 +188,7 @@ INCLUDES = [
      "or 1..5, the contract OSAPI_SND_PLAY had before it became this "
      "player's door (grant, release, the scheduler lock and the click's "
      "drain). It FREEZES the desktop for the clip; a click skips it. UI task "
-     "only. 256 bytes of your image are its rescale table."),
+     "only. BX names 256 bytes of YOUR scratch for its rescale table."),
     ("os88sock.inc", "20.11, 62.11, 72",
      "Finding the socket driver: `net_find` answers CF=1 when neither "
      "ETHER.DRV nor NET.DRV is loaded and sets `NET_CLASS` otherwise, so every "
@@ -209,6 +209,18 @@ INCLUDES = [
      "fill, and `%define GFXE_BITS` a 16-wide bit record (a tick, a bell): "
      "a whole card composed and put down in one BLIT1, nothing drawn twice "
      "(§5.12.8)."),
+    ("os88dec.inc", "20.5.2",
+     "Number -> decimal text, 0 resident: `dec_u16`/`dec_s16`/`dec_u32` at "
+     "DS:DI, NUL-ended with DI left on the NUL so the next piece appends, "
+     "`dec_fld` as a right-aligned space-padded FIELD for one opaque "
+     "`font_run`, and `DEC_SEP` for `16,384`. Each arm a `%define`; every "
+     "register but DI kept. Reach for it before writing a `div 10` loop."),
+    ("os88m83.inc", "77.20.1",
+     "The 8.3 name mangle: `m83_mangle` turns a sender's pathname into the "
+     "name this machine stores it under (`banana split.mod` -> "
+     "`BANANA~1.MOD`, a legal name left alone, always `~1`). ONE copy, so "
+     "FTPD's uploads and Telnet's Zmodem downloads land on the same name by "
+     "construction; `tools/os88bbs.py`'s `mangle83` is its reference."),
     ("os88rseq.inc", "18.4.8.1",
      "`os88_rseq`: `OSAPI_FILE_READ_AT`'s registers plus a 16-byte cursor at "
      "`DS:DI`, served by `OSAPI_FILE_READ_SEQ` - one FAT link a chunk where "
@@ -216,6 +228,12 @@ INCLUDES = [
      "yours and a cursor whose offset differs is re-seeded, so a seek needs "
      "nothing; the small kernel's `FERR_NAME` is retried as `READ_AT`. Zero "
      "the cursor with `os88_rseq_new` whenever the FILE changes."),
+    ("os88data.inc", "19.9.1",
+     "SYSTEM\\APPDATA on your own volume: `od_read` and `od_write`, which walk "
+     "there with `OSAPI_FILE_GOTO_QM` (never the display remount), bank the "
+     "folder's cluster, rewrite a file of unchanged length in ONE sector with "
+     "`OSAPI_FILE_WRITE_AT`, and put the instance back on every path out. For "
+     "a high-score table or a settings file; five packages carry it."),
     ("os88pit.inc", "72.15.1",
      "`pit_now`: a 32-bit clock in 838ns units off the 8253 and the BIOS tick, "
      "good for an hour before it wraps. Sub-tick timing for a profiler."),

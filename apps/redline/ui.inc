@@ -2,9 +2,10 @@
 ; in benchlib. Geometry and button hit boxes share the live content origin.
 
 ru_indices:
-    mov word [ru_sum], 0
-    mov word [ru_sum+2], 0
-    mov word [ru_sum+4], 0
+    xor ax, ax
+    mov [ru_sum], ax
+    mov [ru_sum+2], ax
+    mov [ru_sum+4], ax
     mov byte [ru_valid], 1
     xor di, di
 .row:
@@ -69,8 +70,7 @@ ru_indices:
     inc bx
     cmp bx, 3
     jb .group
-    call ru_scale_compute
-    ret
+    jmp ru_scale_compute
 
 ; BL = first workload, CX = count -> DX:AX = their mean index. A bucket with
 ; any unresolved or unreferenced row has no mean (0, shown as n/a) rather
@@ -83,9 +83,10 @@ ru_gmean:
     mov si, bx
     shl si, 1
     shl si, 1
-    mov word [bl_m], 0
-    mov word [bl_m+2], 0
-    mov word [bl_m+4], 0
+    xor ax, ax
+    mov [bl_m], ax
+    mov [bl_m+2], ax
+    mov [bl_m+4], ax
     push cx
 .add:
     mov ax, [ru_scores+si]
@@ -115,8 +116,9 @@ ru_gmean:
 
 ; One common scale: round the highest score up to whole x, then add 5x.
 ru_scale_compute:
-    mov word [ru_scale], 0
-    mov word [ru_scale+2], 0
+    xor ax, ax
+    mov [ru_scale], ax
+    mov [ru_scale+2], ax
     xor di, di
 .row:
     mov dx, [ru_scores+di+2]
@@ -155,47 +157,6 @@ ru_scale_compute:
 .saturate:
     mov word [ru_scale], 0xFFFF
     mov word [ru_scale+2], 0xFFFF
-    ret
-
-ru_clock:
-    mov word [ru_clocklabel], ru_mhzest
-    mov word [ru_clockvalue], 0
-    mov word [ru_clockvalue+2], 0
-    mov ax, [rl_nominal]
-    or ax, ax
-    jz .tsc
-    mov cx, 100
-    mul cx
-    mov word [ru_clocklabel], ru_mhznom
-    jmp .store
-.tsc:
-    mov ax, [rl_tscmhz]
-    mov dx, [rl_tscmhz+2]
-    mov cx, ax
-    or cx, dx
-    jz .book
-    mov word [ru_clocklabel], ru_mhztsc
-    jmp .store
-.book:
-    cmp byte [rl_ran], 0
-    je .out
-    xor bx, bx
-    cmp byte [rl_early], 1
-    jbe .estimate
-    mov bx, 2
-    cmp word [rl_cpuname], rl_cpu286
-    je .estimate
-    mov bx, 4
-    cmp word [rl_cpuname], rl_cpu386
-    jne .out
-.estimate:
-    mov ax, [rl_mulbook+bx]
-    mov di, 8
-    call rl_estimate
-.store:
-    mov [ru_clockvalue], ax
-    mov [ru_clockvalue+2], dx
-.out:
     ret
 
 ru_geometry:
@@ -237,6 +198,7 @@ ru_geometry:
     sub ax, [ru_lower]
     sub ax, [ru_offset]
     sub ax, 4
+    mov di, ax                      ; the pane's height, again below
     xor dx, dx
     mov cx, RU_LINES
     div cx
@@ -249,12 +211,9 @@ ru_geometry:
     mov ax, 18
 .pitch:
     mov [ru_pitch], ax
-    mov ax, [ru_foot]
-    sub ax, [ru_lower]
-    sub ax, [ru_offset]
-    sub ax, 4
+    xchg ax, di
     xor dx, dx
-    div word [ru_pitch]
+    div di
     cmp ax, RU_LINES
     jbe .rows
     mov ax, RU_LINES
@@ -285,6 +244,27 @@ ru_geometry:
     add di, 8
     add ax, 72
     loop .button
+    mov ax, [ru_x]                  ; the TABS, across the top (103.6)
+    add ax, 8
+    mov bx, [ru_y]
+    add bx, 3
+    mov cx, 2
+.tab:
+    mov [di], ax
+    mov [di+2], bx
+    mov dx, ax
+    add dx, 95
+    mov [di+4], dx
+    mov dx, bx
+    add dx, 15
+    mov [di+6], dx
+    add di, 8
+    add ax, 100
+    loop .tab
+    cmp byte [cs_tab], 0
+    je .bench
+    call cs_geom                    ; the Tune tab lays its own foot out
+.bench:
     ; The results pane: Summary's lower-left box or Compare's whole width.
     mov ax, [ru_lower]
     mov [ru_restop], ax
@@ -385,15 +365,16 @@ ru_paint:
     call ru_geometry
     cmp byte [rl_busy], 0
     jne .running
+    cmp byte [cs_tab], 0
+    je .benchtab
+    call cs_tabpaint                ; the Tune tab: its pane and its foot
+    jmp .buttons
+.benchtab:
     cmp byte [ru_view], 1
     jne .dashboard
     call bl_paint
     jmp .buttons
 .dashboard:
-    mov cx, 12
-    mov dx, 8
-    mov si, ru_heading
-    call ru_text
     cmp byte [ru_view], 2
     je .compare
     cmp byte [rl_ran], 0
@@ -414,8 +395,12 @@ ru_paint:
 .buttons:
     call ru_buttons_paint
 .out:
+; The epilogue of every handler that saves all eight (rl_key, ru_navigation,
+; ru_paint, ru_facts): one copy, reached by a jmp.
+ru_pop8:
     pop es
     pop bp
+ru_pop6:                            ; ...and of those that save the first six
     pop di
     pop si
     pop dx
@@ -438,20 +423,47 @@ ru_buttons_paint:
     mov dx, [ru_h]
     sub dx, 2
     call ru_frame
+    ; THE TABS (103.6): the one in use LATCHED, the press look held, as the
+    ; view buttons are. The foot is each tab's own: Tune greys its writes
+    mov word [ru_buttonflags+12], 0
+    mov word [ru_buttonflags+14], 0
+    xor bx, bx
+    mov bl, [cs_tab]
+    shl bx, 1
+    mov word [ru_buttonflags+12+bx], OS88UI_LATCH
+    or bx, bx
+    jz .bench
+    call cs_flags
+    jmp short .draw
+.bench:
     mov word [ru_buttonflags], 0
     mov word [ru_buttonflags+2], 0
     mov word [ru_buttonflags+4], 0
-    xor bx, bx
     mov bl, [ru_view]
     shl bx, 1
     mov word [ru_buttonflags+bx], OS88UI_LATCH
+.draw:
     mov bx, ru_buttons
     mov ax, 1
 .button:
+    cmp ax, CS_NBTN + 1             ; the Tune foot has CS_NBTN: the rest of
+    jb .one                         ; the six are parked where nothing reaches
+    cmp ax, 7                       ; them (chipset.inc, cs_geom)
+    jae .one
+    cmp byte [cs_tab], 0
+    jne .next
+.one:
     call os88ui_btn
+.next:
     inc ax
-    cmp ax, 7
+    cmp ax, 9
     jb .button
+    call ru_heading_paint
+    cmp byte [cs_tab], 0
+    je .hint
+    call cs_droppaint               ; last: an open list lies over the foot
+    jmp ru_pop6
+.hint:
     cmp word [ru_w], 600
     jb .nohint
     mov cx, 448
@@ -464,13 +476,7 @@ ru_buttons_paint:
 .status:
     call ru_text
 .nohint:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ru_pop6
 
 ru_headline:
     mov ax, 8
@@ -498,8 +504,7 @@ ru_headline:
 .message:
     mov cx, 24
     mov dx, 48
-    call ru_text
-    ret
+    jmp ru_text
 .value:
     mov cx, 80
     mov dx, 44
@@ -634,13 +639,7 @@ ru_gpaint:
     inc bx
     cmp bx, 3
     jb .group
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ru_pop6
 
 ; SI = a NUL string -> SI = ru_pad, the same text space-padded to ten cells,
 ; so an opaque run covers whatever longer value was drawn there before.
@@ -743,6 +742,39 @@ ru_ratio:
     mov si, bl_lscr
 .out:
     pop dx
+    pop ax
+    ret
+
+; DX:AX = hundredths -> 'whole.hh' in bl_lscr: the whole part right-aligned
+; in CX cells at column DI, then the point and two digits. Preserves every
+; register. The report's MHz lines and the pane's clock; ru_ratio keeps its
+; own copy, being on the animation's per-line path (SPEC.md 103.4.3).
+ru_cents:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push cx
+    mov cx, 100
+    call bl_div32                   ; DX:AX = whole, BX = hundredths
+    pop cx
+    call bl_dec
+    add di, cx
+    mov byte [bl_lscr+di], '.'
+    inc di
+    xchg ax, bx
+    cwd                             ; (under 100)
+    mov cx, 2
+    call bl_dec
+    cmp byte [bl_lscr+di], ' '
+    jne .out
+    mov byte [bl_lscr+di], '0'
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -858,6 +890,8 @@ ru_bar:
 ru_big:
     mov [ru_bigx], cx
     mov [ru_bigy], dx
+    mov al, CBLACK                  ; once: every block below is black
+    call OSAPI_SET_COLOR
     mov bp, si
     mov al, [ds:bp]
     or al, al
@@ -908,10 +942,6 @@ ru_big:
     add cx, 2
     mov dx, bx
     add dx, 2
-    push ax
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    pop ax
     call OSAPI_GFX_FILL
     pop bp
     pop di
@@ -1229,6 +1259,7 @@ ru_facts:
     push dx
     push si
     push di
+    push bp                         ; (only so ru_pop8 can close it)
     push es
     push ds
     pop es                          ; ru_fcopy's movsb is within the package
@@ -1297,7 +1328,10 @@ ru_facts:
     call ru_fnum
     xor bx, bx
 .port:
-    mov si, [ru_portlabels+bx]
+    mov si, [rl_portlabels+bx]      ; 'BDA COM1 base (dec)' -> 'COM1 base
+    add si, 4                       ; (dec)': ru_kvs puts the 8-cell value at
+                                    ; cell 10, over '(dec)', so the pane reads
+                                    ; 'COM1 base' exactly as it did
     push es
     mov ax, 0x40
     mov es, ax
@@ -1317,14 +1351,7 @@ ru_facts:
     mov si, ru_largestkb
     mov ax, [rl_largest]
     call ru_fnum
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ru_pop8
 
 ; DI = the next ru_ftab slot. ru_fstr: SI label, AX value string. ru_fnum: SI
 ; label, AX a number, right-aligned in eight cells. ru_fcopy: SI label, the
@@ -1354,9 +1381,10 @@ ru_fcopy:
     push si
     mov ax, di
     sub ax, ru_ftab
-    mov bx, ax
+    mov bx, ax                      ; AX = slot * 4
     shl ax, 1
-    add ax, bx                      ; slot * 12: this slot's own buffer
+    shr bx, 1
+    add ax, bx                      ; slot * 10: this slot's own buffer
     add ax, ru_fbuf
     push di
     mov di, ax
@@ -1382,27 +1410,12 @@ ru_fclock:
     mov ax, ru_na
     jmp ru_fstr
 .value:
-    mov cx, 100
-    call bl_div32                   ; DX:AX = whole MHz, BX = hundredths
-    push bx
     call bl_lclr
     push di
     xor di, di
     mov cx, 6
-    call bl_dec
-    mov byte [bl_lscr+6], '.'
+    call ru_cents                   ; NNNNNN.NN
     pop di
-    pop ax
-    push di
-    xor dx, dx
-    mov di, 7
-    mov cx, 2
-    call bl_dec
-    pop di
-    cmp byte [bl_lscr+7], ' '
-    jne .decimal
-    mov byte [bl_lscr+7], '0'
-.decimal:
     mov byte [bl_lscr+9], 0
     jmp ru_fcopy
 
@@ -1423,13 +1436,11 @@ ru_snapshot:
     jne .facts
     mov si, ru_query
     add dx, 14
-    call ru_text
-    ret
+    jmp ru_text
 .facts:
     mov bx, ru_psnap
     call ru_factpaint
-    call ru_spbar
-    ret
+    jmp ru_spbar
 
 ru_hardware:
     mov ax, [ru_split]
@@ -1477,13 +1488,11 @@ ru_results:
     mov cx, 16
     add dx, 14
     mov si, ru_ready
-    call ru_text
-    ret
+    jmp ru_text
 .start:
     call ru_rowspaint
     mov bx, ru_pres
-    call ru_spbar
-    ret
+    jmp ru_spbar
 
 ; The results pane's painter: its visible lines from [ru_page] down.
 ru_rowspaint:
@@ -1685,8 +1694,7 @@ ru_progress_update:
     call OSAPI_SET_COLOR
     pop ax
     call OSAPI_GFX_FILL
-    call ru_running_paint
-    ret
+                                    ; ...and falls into the text
 ru_running_paint:
     mov cx, 16
     mov dx, 8
@@ -1734,16 +1742,14 @@ ru_running_paint:
     mov cx, RL_ROWS
     mul cx
     add ax, [rl_active_row]
-    inc ax
-    xor dx, dx
-    mov cx, 1000
-    call bl_mul48
+    inc ax                          ; rows done, 1..75: x1000 fits 32 bits
+    mov cx, 1000                    ; and /75 fits 16, so DX ends 0
+    mul cx
     mov cx, RL_ROWS*RL_RUNS
-    call bl_div48
-    mov ax, [bl_m]
-    mov dx, [bl_m+2]
+    div cx
+    cwd
     mov word [ru_scale], 1000
-    mov word [ru_scale+2], 0
+    mov [ru_scale+2], dx
     mov word [ru_anim], RU_ANIM_STEPS
     mov byte [ru_ink], CBLUE
     mov cx, 316
@@ -1751,8 +1757,7 @@ ru_running_paint:
     mov di, [ru_w]
     sub di, 332
     mov bp, 12
-    call ru_bar
-    ret
+    jmp ru_bar
 ru_runningtitle: db 'Benchmark in progress - 3 runs averaged', 0
 ru_runlabel: db 'Run ', 0
 ru_runsuffix: db '/3  // fixed workloads', 0
@@ -1769,6 +1774,7 @@ ru_navigation:
     push bp
     push es
     mov [rl_win], si
+.saved:                             ; rl_key arrives here, its eight pushed
     cmp al, 9
     je .tab
     cmp ah, 0x3B
@@ -1776,6 +1782,8 @@ ru_navigation:
     cmp byte [ru_view], 1
     jne .page
     call bl_key
+    jc .out
+    call ru_clip
     jc .out
     call rl_paint                 ; opaque report rows replace old rows
     jmp .out
@@ -1834,26 +1842,32 @@ ru_navigation:
 .draw:
     call rl_repaint
 .out:
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ru_pop8
 
 ru_press:
     call ru_geometry
+    cmp byte [cs_tab], 0
+    je .bench
+    call cs_press                   ; the drop-down and the pane's bar first
+    jc .done
+    jmp short .sdk
+.bench:
     call ru_panehit                 ; a pane's scroll bar, or else...
     jc .done
+.sdk:
     jmp os88ui_btnclick             ; SDK owns every other press
 .done:
     ret
 ru_drag:
     push bx
     call ru_geometry
+    cmp byte [cs_tab], 0
+    je .btn
+    mov bx, cs_drop
+    call os88ui_drdrag
+    mov bx, cs_tgt
+    call os88ui_drdrag
+.btn:
     mov bx, ru_buttons
     call os88ui_btndrag
     pop bx
@@ -1862,6 +1876,11 @@ ru_mouseup:
     push ax
     push bx
     call ru_geometry
+    cmp byte [cs_tab], 0
+    je .btn
+    call cs_release                 ; CF = 1: the drop-down took it
+    jc .out
+.btn:
     mov bx, ru_buttons
     call os88ui_btnup
     or ax, ax
@@ -1869,11 +1888,30 @@ ru_mouseup:
     mov bx, ax
     dec bx
     mov al, [ru_actions+bx]
+    cmp byte [cs_tab], 0
+    je .key
+    mov al, [cs_actions+bx]         ; the Tune tab's foot means other things
+.key:
     xor ah, ah
     call rl_key
 .out:
     pop bx
     pop ax
+    ret
+
+; The version, right of the tabs, on both (SPEC.md 103.6)
+ru_heading_paint:
+    push cx
+    push dx
+    push si
+    mov cx, [ru_w]
+    sub cx, 11 * 8 + 12
+    mov dx, 8
+    mov si, ru_heading
+    call ru_text
+    pop si
+    pop dx
+    pop cx
     ret
 
 SP_TOP   equ 0                   ; scroll pane record: first visible line
@@ -1901,12 +1939,6 @@ ru_pdet:                         ; Details
     dw 0, 0, 12, ru_factpaint
     times 7 dw 0
     dw 8, 0, 0, 0
-ru_cur: dw 0
-ru_kvcols: dw 0
-ru_hdr: db 0
-ru_pad: times 11 db 0
-ru_ftab: times RU_FACTS*2 dw 0
-ru_fbuf: times RU_FACTS*12 db 0
 ; Display lines: 0x80+n is bucket n's header, else a workload row.
 ru_lines:
     db 0x80, 0, 1, 2, 3
@@ -1919,7 +1951,6 @@ ru_lines:
 %endrep
 ru_gfirst: db 0, 4, 6
 ru_gcount: db 4, 2, RL_ROWS - 6
-ru_gscores: times 3 dd 0
 ru_glabels: dw ru_gcpu, ru_gram, ru_ggfx
 ru_gshort: dw ru_cpu, ru_gramshort, ru_gfxshort
 ru_gcpu: db 'CPU average', 0
@@ -1928,54 +1959,27 @@ ru_ggfx: db 'Graphics average', 0
 ru_gnoref: db 'Graphics: no ref', 0
 ru_gramshort: db 'RAM', 0
 ru_gfxshort: db 'Graphics', 0
-ru_view: db 0                    ; 0 Summary, 1 Detailed, 2 Compare
-ru_small: db 0
-ru_valid: db 0
-ru_bits: db 0
-ru_row: dw 0
-ru_x: dw 0
-ru_y: dw 0
-ru_w: dw 0
-ru_h: dw 0
-ru_split: dw 0
-ru_lower: dw 0
-ru_foot: dw 0
-ru_pitch: dw 0
-ru_offset: dw 0
-ru_port: dw 0
-ru_resw: dw 0
-ru_restop: dw 0
-ru_resulty: dw 0
-ru_barx: dw 0
-ru_bary: dw 0
-ru_barw: dw 0
-ru_fillw: dw 0
-ru_barvalue: dw 0
 RU_ANIM_STEPS equ 12
 ru_anim: dw RU_ANIM_STEPS
 ru_ink: db CRED
 ru_scale: dd 5000
-ru_bigx: dw 0
-ru_bigy: dw 0
-ru_gx: dw 0
-ru_gy: dw 0
-ru_value: times 16 db 0
-ru_sum: times 3 dw 0
-ru_overall: dd 0
-ru_clockvalue: dd 0
 ru_clocklabel: dw ru_mhzest
-ru_scores: times RL_ROWS dd 0
-ru_rects: times 24 dw 0
-ru_buttonflags: times 6 dw 0
-OS88UI_BTNREC ru_buttons, ru_rects, ru_buttonlabels, ru_buttonflags, 6
+; EIGHT BUTTONS: the six along the foot and the two TABS across the top
+; (SPEC.md 103.6). The Tune tab relabels the foot (chipset.inc, cs_settab)
+OS88UI_BTNREC ru_buttons, ru_rects, ru_buttonlabels, ru_buttonflags, 8
 ru_buttonlabels: dw ru_summary, ru_detailed, ru_compare, rl_runitem, ru_save, ru_quit
-ru_actions: db 'udcrsq'
+                 dw ru_tbench, ru_ttune
+ru_benchlabels: dw ru_summary, ru_detailed, ru_compare, rl_runitem, ru_save, ru_quit
+rl_cmdkeys: db 'rsudch'             ; the Bench menu's six, in its order
+ru_actions: db 'udcrsqbh'           ; the buttons' keys: six, then the tabs
+ru_tbench: db 'Benchmark', 0
+ru_ttune: db 'Tune', 0
 ru_summary: db 'Summary', 0
 ru_detailed: db 'Detailed', 0
 ru_compare: db 'Compare', 0
 ru_save: db 'Save...', 0
 ru_quit: db 'Quit', 0
-ru_heading: db 'PC Performance Benchmark                       REDLINE 1.0', 0
+ru_heading: db 'REDLINE 1.0', 0      ; right of the tabs, on both
 ru_headtitle: db 'CPU + RAM Performance', 0
 ru_relative: db '(relative to the 4.77 MHz PC)', 0
 ru_system: db 'System Snapshot', 0
@@ -2005,14 +2009,6 @@ ru_xfreekb: db 'OS ext KB', 0
 ru_largestkb: db 'LargestKB', 0
 ru_bios: db 'BIOS date', 0
 ru_model: db 'ROM model', 0
-ru_portlabels: dw ru_com1, ru_com2, ru_com3, ru_com4, ru_lpt1, ru_lpt2, ru_lpt3
-ru_com1: db 'COM1 base', 0
-ru_com2: db 'COM2 base', 0
-ru_com3: db 'COM3 base', 0
-ru_com4: db 'COM4 base', 0
-ru_lpt1: db 'LPT1 base', 0
-ru_lpt2: db 'LPT2 base', 0
-ru_lpt3: db 'LPT3 base', 0
 ru_adapters: dw ru_vga, ru_herc, ru_cga, ru_ega   ; VID_* order: EGA is 3
 ru_vga: db 'VGA', 0
 ru_ega: db 'EGA', 0

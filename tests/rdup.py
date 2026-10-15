@@ -71,7 +71,7 @@ RD_ROW = 3                      # drv_tab row 3 is the RAM disk since
 # `- 1` read off the end of the table and reported both cells as 0 again. The
 # rule is mirrored from the kernel below rather than restated.
 _EQ = os88sym.equates()
-DRVC_FILE = _EQ["DRVC_FILE"]
+DRVC_FILE = _EQ["DRVC_FILE2"]   # RAMDISK.DRV's class since SPEC.md 62.9.19
 DRVC_RETIRED3 = _EQ["DRVC_RETIRED3"]
 DSV_SIZE = _EQ["DSV_SIZE"]
 DSV_CPUP, DSV_CPDRAG = _EQ["DSV_CPUP"], _EQ["DSV_CPDRAG"]
@@ -80,6 +80,8 @@ DSV_CPUP, DSV_CPDRAG = _EQ["DSV_CPUP"], _EQ["DSV_CPDRAG"]
 def _svc_slot(cls):
     """drv_cls_svc_x's own arithmetic: index = class - 1, less one more for
     every published class the retired one used to sit in front of."""
+    if cls == _EQ["DRVC_FILE2"]:    # ...and class 8 steps back over 6 and 7,
+        cls -= 2                    # the two classes with no copy (62.9.19)
     return cls - 1 - (1 if cls > DRVC_RETIRED3 else 0)
 TITLE_H = 18
 

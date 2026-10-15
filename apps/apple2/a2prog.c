@@ -153,6 +153,17 @@ static int ovl_a2_wr16(unsigned a, unsigned v)
     return 1;
 }
 
+/* ovl_a2_peek16 - the little-endian word at seg:off of the transient claim.
+ * Three sites read one (the length hint, and the walk's link and line
+ * number), and each spelled out was two far peeks and an eight-shift - the
+ * lowering has no `shl ax, 8`, so it is eight `shl ax, 1` - where this is one
+ * call (apps size pass 1). `ovl_` for ovl_a2_wr16's reason. */
+static unsigned ovl_a2_peek16(unsigned seg, unsigned off)
+{
+    return (unsigned)os88_peek(seg, off)
+         | ((unsigned)os88_peek(seg, off + 1) << 8);
+}
+
 /* ovl_a2_named - "<verb> <name>" on the status row (26 cells; a FAT12 name is
  * at most 12, and `Loaded ` is 7). `ovl_` for ovl_a2_wr16's reason.
  *
@@ -197,8 +208,7 @@ static unsigned ovl_a2_walk(unsigned seg, unsigned base, unsigned end, int fix)
     for (;;) {
         if (p + 2 > end)
             break;                          /* no terminator inside the image */
-        next = (unsigned)os88_peek(seg, p)
-             | ((unsigned)os88_peek(seg, p + 1) << 8);
+        next = ovl_a2_peek16(seg, p);
         if (next == 0) {                    /* THE END OF THE PROGRAM, and the
                                              * two zero bytes are part of it:
                                              * VARTAB points past them */
@@ -207,9 +217,10 @@ static unsigned ovl_a2_walk(unsigned seg, unsigned base, unsigned end, int fix)
         }
         if (p + 4 > end)
             break;
-        ln = (unsigned)os88_peek(seg, p + 2)
-           | ((unsigned)os88_peek(seg, p + 3) << 8);
-        if (ln > (unsigned)A2_LNMAX || ln < prev)
+        ln = ovl_a2_peek16(seg, p + 2);
+        if (ln > (unsigned)A2_LNMAX)
+            break;
+        if (ln < prev)
             break;
         prev = ln;
         z = a2_scan0(seg, p + 4, end - (p + 4));
@@ -217,7 +228,9 @@ static unsigned ovl_a2_walk(unsigned seg, unsigned base, unsigned end, int fix)
             break;                          /* the line never terminates */
         q = z + 1;                          /* one past the line's own $00 */
         next = addr + (q - p);              /* FIX.LINKS: where it LANDED */
-        if (next <= addr || next >= (unsigned)A2_PROGTOP)
+        if (next <= addr)
+            break;
+        if (next >= (unsigned)A2_PROGTOP)
             break;
         if (fix) {
             os88_poke(seg, p, (int)(next & 0xFF));
@@ -320,31 +333,43 @@ static int ovl_a2_load(const char *name, unsigned size_lo)
         return 1;
     }
     got = os88_file_read_seg(name, seg, cap);
-    if (got == 0 && os88_ferr() == OS88_FERR_BIG) {
-        /* THE FILE IS LARGER THAN THE CLAIM AND THE KERNEL READ NOTHING. Two
-         * different things to be told and the user can act on the second:
-         * `cap` is A2_PRGMAX exactly when the claim reached the machine's own
-         * ceiling, and anything less means the HEAP is what bound it. TWO
-         * CALLS AND NOT A TERNARY, on a2cmd.c's reason: a literal behind a
-         * `?` is one build.sh's gate never sees. */
-        os88_mem_free(seg);
-        if (cap >= (unsigned)A2_PRGMAX)
-            a2_say("Too large for a 48K Apple.");
-        else
-            a2_say("Too large for free memory.");
-        return 1;
+    /* NESTED TESTS AND NOT `&&` OR `?:` FROM HERE DOWN (apps size pass 1):
+     * SmallerC materialises each operand of either as a 0/1 value and tests
+     * that, where a nested `if` is the compare and one branch. */
+    if (got == 0) {
+        if (os88_ferr() == OS88_FERR_BIG) {
+            /* THE FILE IS LARGER THAN THE CLAIM AND THE KERNEL READ NOTHING.
+             * Two different things to be told and the user can act on the
+             * second: `cap` is A2_PRGMAX exactly when the claim reached the
+             * machine's own ceiling, and anything less means the HEAP is what
+             * bound it. TWO CALLS AND NOT A TERNARY, on a2cmd.c's reason: a
+             * literal behind a `?` is one build.sh's gate never sees. */
+            os88_mem_free(seg);
+            if (cap >= (unsigned)A2_PRGMAX)
+                a2_say("Too large for a 48K Apple.");
+            else
+                a2_say("Too large for free memory.");
+            return 1;
+        }
     }
-    if (size_lo != 0 ? (got != size_lo) : (got < 4)) {
+    /* ...and the read has to be the size it was said to be or, with no size,
+     * at least a link and a line number. `size_lo` is the accepted length
+     * after this, or 0 for the refusal. */
+    if (size_lo != 0) {
+        if (got != size_lo)
+            size_lo = 0;                    /* ...the refusal below */
+    } else if (got >= 4)
+        size_lo = got;
+    if (size_lo == 0) {
         os88_mem_free(seg);
         a2_say("Cannot read the file.");
         return 1;
     }
-    size_lo = got;
 
     /* the HINT: a 2-byte little-endian length prefix in front of the program */
     base = 0;
     end = size_lo;
-    next = (unsigned)os88_peek(seg, 0) | ((unsigned)os88_peek(seg, 1) << 8);
+    next = ovl_a2_peek16(seg, 0);
     if (next == size_lo - 2)
         base = 2;
 
@@ -355,9 +380,11 @@ static int ovl_a2_load(const char *name, unsigned size_lo)
      * is a hint, and a headerless file whose lines after the first total
      * 2,051 bytes trips it. */
     plen = ovl_a2_walk(seg, base, end, 0);
-    if (plen == 0 && base != 0) {
-        base = 0;
-        plen = ovl_a2_walk(seg, base, end, 0);
+    if (plen == 0) {
+        if (base != 0) {
+            base = 0;
+            plen = ovl_a2_walk(seg, base, end, 0);
+        }
     }
     if (plen == 0) {
         os88_mem_free(seg);
@@ -371,11 +398,14 @@ static int ovl_a2_load(const char *name, unsigned size_lo)
     /* ...AND ONLY NOW DOES THE MACHINE'S MEMORY MOVE (section 12). */
     a2_zzcopy_in((unsigned)A2_PROG, seg, base, plen);
     os88_mem_free(seg);
+    /* TXTTAB, then the four that all point PAST the program: VARTAB,
+     * ARYTAB and STREND are consecutive words of zero page and PRGEND is not,
+     * so it is the loop's last step taken by hand. */
     ovl_a2_wr16(A2_TXTTAB, (unsigned)A2_PROG);
-    ovl_a2_wr16(A2_VARTAB, (unsigned)A2_PROG + plen);
-    ovl_a2_wr16(A2_ARYTAB, (unsigned)A2_PROG + plen);
-    ovl_a2_wr16(A2_STREND, (unsigned)A2_PROG + plen);
-    ovl_a2_wr16(A2_PRGEND, (unsigned)A2_PROG + plen);
+    next = (unsigned)A2_PROG + plen;
+    for (base = A2_VARTAB; base <= A2_STREND; base += 2)
+        ovl_a2_wr16(base, next);
+    ovl_a2_wr16(A2_PRGEND, next);
     /* the block move set no dirty bits - the core's own write path sets them
      * one at a time and this went round it (section 7.5) - so the rows the
      * move ACTUALLY REACHED are marked by hand, and no others. It was
@@ -397,10 +427,12 @@ static int ovl_a2_save(const char *name)
 {
     unsigned seg, kb, vartab, len;
 
-    vartab = (unsigned)a2_rd(A2_VARTAB)
-           | ((unsigned)a2_rd(A2_VARTAB + 1) << 8);
-    if (vartab <= (unsigned)A2_PROG
-        || vartab > (unsigned)A2_PROGTOP) {
+    vartab = (unsigned)a2_rd16(A2_VARTAB);
+    if (vartab > (unsigned)A2_PROGTOP)
+        vartab = 0;                         /* ...the refusal below: one
+                                             * compare and one literal, not
+                                             * an `||` made into a value */
+    if (vartab <= (unsigned)A2_PROG) {
         a2_say("Bad program pointers.");
         return 1;
     }

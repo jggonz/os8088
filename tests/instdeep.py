@@ -267,8 +267,14 @@ def open_installer(m):
         sys.exit("no Control Panel")
     x0, y0 = content(cp[0])
     mo.click(x0 + 40, y0 + CP_I0Y + CP_IDRV * CP_IROWH + 7)     # Drivers
-    mo.click(x0 + CP_RX + 40, y0 + CP_DBY1 + CP_DROWH + CP_DROWH // 2,
-             settle=8.0)                        # tick Hard Drive (row 1)
+    if not int.from_bytes(m.read(m.sym("drv_tab") + 16 + 2, 2), "little"):
+        mo.click(x0 + CP_RX + 40, y0 + CP_DBY1 + CP_DROWH + CP_DROWH // 2,
+                 settle=8.0)                    # tick Hard Drive (row 1) -
+                                                # ONLY if it is not up: SPEC.md
+                                                # 51.3.2 loads it at boot on a
+                                                # machine whose BIOS knows a
+                                                # disk, and a click on a loaded
+                                                # row UNLOADS it
     nst = m.read(m.sym("cp_nst"), 1)[0]         # SPEC.md 31.9: the driver's
     mo.click(x0 + 40, y0 + CP_I0Y + nst * CP_IROWH + 7, settle=3.0)  # own page
     known = {w[0] for w in wins(m)}

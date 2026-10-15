@@ -319,6 +319,11 @@ def rungs():
     return _RUNGS
 
 
+# Every first word PUSH, POP, RUNGJMP, RET and GAPOK can accept.
+_CPFIRST = frozenset(("push", "pop", "jmp", "ret", "retf", "clc", "stc", "cmc",
+                      "cld", "std", "sti", "cli", "nop"))
+
+
 def crossed_pops(path):
     """[(line, routine, prologue, epilogue)] - a restore in the wrong order."""
     out = []
@@ -327,6 +332,17 @@ def crossed_pops(path):
     routine, pro, inpro = None, [], False
     poprun, start = [], 0
     for n, raw in enumerate(lines, 1):
+        # THE COMMON LINE, decided without a regex. A blank or comment-only
+        # line matches none of the patterns below and reaches nothing; an
+        # INDENTED line (so not a label) whose first word none of them accepts
+        # reaches the final clause and ends the run. Both are exactly what the
+        # chain below does with them - this only skips asking.
+        st = raw.strip()
+        if not st or st[0] == ";":
+            continue
+        if raw[0] in " \t" and st.split(None, 1)[0].lower() not in _CPFIRST:
+            inpro, poprun = False, []
+            continue
         if TOPLBL.match(raw):
             routine, pro, inpro, poprun = TOPLBL.match(raw).group(1), [], True, []
             continue
@@ -425,6 +441,8 @@ def _mentions(body, name):
     n = re.escape(name)
     total = 0
     for ln in body:
+        if name not in ln:
+            continue                # no mention can match without the text
         code = ln.split(";", 1)[0]
         if re.match(r"^\s*%s:" % n, code):
             continue
@@ -436,7 +454,19 @@ def _mentions(body, name):
 def _qualified(owner, local):
     """`jmp owner.local` from anywhere else in the kernel - see the header."""
     needle = owner + local
-    return sum(1 for ln in kernel_code_lines() if needle in ln)
+    # "some line contains it" is "the joined text contains it": the needle has
+    # no newline, so it cannot span two lines. One scan, not one per line.
+    return 1 if needle in _ktext() else 0
+
+
+_KTEXT = None
+
+
+def _ktext():
+    global _KTEXT
+    if _KTEXT is None:
+        _KTEXT = "\n".join(kernel_code_lines())
+    return _KTEXT
 
 
 def orphan_locals(path):

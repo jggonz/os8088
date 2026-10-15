@@ -267,7 +267,7 @@ static void c64_lum_update(void)
  * ========================================================================*/
 static void c64_row_dirty(int row)
 {
-    if (row >= 0 && row < C64_ROWS) {
+    if ((unsigned)row < C64_ROWS) {         /* 0 <= row < 25, one compare */
         if (c64_rowd[row] == 0)
             c64_rowd[row] = 1;              /* a span; 2 is not narrowed to 1 */
         c64_dirty_any = 1;
@@ -375,24 +375,29 @@ static void c64_dirty_scan(void)
      * core's write and this read (9.2) - and the matrix pass below asks the
      * package's copy per row, at no call at all. */
     c64_dirty_take(c64_dpg);
-    c64_wlo = (unsigned)c64_dpg[32] | ((unsigned)c64_dpg[33] << 8);
-    c64_whi = (unsigned)c64_dpg[34] | ((unsigned)c64_dpg[35] << 8);
+    c64_wlo = C64_W(c64_dpg + 32);          /* two little-endian words */
+    c64_whi = C64_W(c64_dpg + 34);
 
     /* the matrix: the window's row range AND the row's own pages */
-    if (c64_whi >= c64_wlo && c64_whi >= c64_mbase
-                           && c64_wlo < c64_mbase + C64_CELLS) {
-        unsigned f = (c64_wlo > c64_mbase) ? (c64_wlo - c64_mbase) : 0;
-        unsigned l = c64_whi - c64_mbase;
-        if (l >= C64_CELLS)
-            l = C64_CELLS - 1;
-        for (i = (int)(f / C64_COLS); i <= (int)(l / C64_COLS); i++) {
-            a0 = c64_mbase + C64_X40(i);
-            a1 = a0 + C64_COLS - 1;
-            if (c64_pg_dirty(a0 >> 8)
-                || ((a1 >> 8) != (a0 >> 8) && c64_pg_dirty(a1 >> 8)))
-                c64_row_dirty(i);
-        }
-    }
+    /* (nested `if`s, not `&&`/`||` chains, which SmallerC makes a 0/1
+     * value per operand - apps size pass 1) */
+    if (c64_whi >= c64_wlo)
+        if (c64_whi >= c64_mbase)
+            if (c64_wlo < c64_mbase + C64_CELLS) {
+                unsigned f = (c64_wlo > c64_mbase) ? (c64_wlo - c64_mbase) : 0;
+                unsigned l = c64_whi - c64_mbase;
+                if (l >= C64_CELLS)
+                    l = C64_CELLS - 1;
+                for (i = (int)(f / C64_COLS); i <= (int)(l / C64_COLS); i++) {
+                    a0 = c64_mbase + C64_X40(i);
+                    a1 = a0 + C64_COLS - 1;
+                    if (c64_pg_dirty(a0 >> 8))
+                        c64_row_dirty(i);
+                    else if (((a1 ^ a0) & 0xFF00) != 0)  /* two pages */
+                        if (c64_pg_dirty(a1 >> 8))
+                            c64_row_dirty(i);
+                }
+            }
 
     for (b = 0; b < 32; b++) {
         v = (unsigned)c64_dpg[b];
@@ -408,8 +413,10 @@ static void c64_dirty_scan(void)
             a0 = (unsigned)page << 8;
             a1 = a0 + 255;
             /* a RAM character set: a glyph can be anywhere, so every row */
-            if (c64_chr_isram && a1 >= c64_chr_lo && a0 <= c64_chr_hi)
-                c64_dirty_all();
+            if (c64_chr_isram)
+                if (a1 >= c64_chr_lo)
+                    if (a0 <= c64_chr_hi)
+                        c64_dirty_all();
         }
     }
 }
@@ -432,7 +439,11 @@ static void c64_frame_regs(void)
     cb = ((unsigned)((c64_vic[0x18] >> 1) & 7) << 11);
     co = cb;
     cb += bank;
-    if ((bank == 0x0000 || bank == 0x8000) && co >= 0x1000 && co < 0x2000) {
+    /* the CHARGEN is seen in banks 0 and 2 (bank bit 14 clear) at $1000 and
+     * $1800 (co & $3000 == $1000) - one compare for the four-term test
+     * `(bank == 0 || bank == $8000) && co >= $1000 && co < $2000`, since
+     * bank is only ever bits 14-15 and co a multiple of $800 below $4000 */
+    if (((bank & 0x4000) | (co & 0x3000)) == 0x1000) {
         c64_chr_isram = 0;
         c64_chr_seg = c64_m.romseg;
         c64_chr_off = C64_ROM_CHARGEN + (co - 0x1000);
@@ -448,8 +459,7 @@ static void c64_frame_regs(void)
     /* $D011 bit 5 = BMM, bit 6 = ECM; $D016 bit 4 = MCM. Wave 1 composes
      * mode 0 and c64band.inc fills the rest with the background until wave 4
      * writes them (docs/plans/completed/C64-PORT-PLAN.md wave 4). */
-    c64_mode = (((c64_vic[0x11] >> 6) & 1) << 2)
-             | (((c64_vic[0x11] >> 5) & 1) << 1)
+    c64_mode = ((c64_vic[0x11] >> 4) & 6)  /* ECM, BMM -> bits 2, 1 */
              | ((c64_vic[0x16] >> 4) & 1);
     c64_watch_set();
 }
@@ -462,7 +472,7 @@ static void c64_watch_set(void)
 {
     unsigned hi = c64_mbase + C64_CELLS - 1;
     c64_scr_wr(C64_SCR_WATLO, (int)(c64_mbase & 0xFF));
-    c64_scr_wr(C64_SCR_WATLO + 1, (int)((c64_mbase >> 8) & 0xFF));
+    c64_scr_wr(C64_SCR_WATLO + 1, C64_HIB(c64_mbase));
     c64_scr_wr(C64_SCR_WATHI, (int)(hi & 0xFF));
     c64_scr_wr(C64_SCR_WATHI + 1, (int)((hi >> 8) & 0xFF));
 }
@@ -815,8 +825,7 @@ static void c64_st_num(char *dst, int width, int v, int tenths)
 {
     int i, d;
 
-    for (i = 0; i < width; i++)
-        dst[i] = ' ';
+    os88_memset(dst, ' ', width);
     if (v < 0)
         v = 0;
     i = width - 1;
@@ -831,7 +840,9 @@ static void c64_st_num(char *dst, int width, int v, int tenths)
     for (;;) {
         dst[i] = (char)('0' + (v % 10));
         v = v / 10;
-        if (v == 0 || i == 0)
+        if (v == 0)
+            break;
+        if (i == 0)
             break;
         i--;
     }
@@ -923,8 +934,11 @@ static void c64_st_lamps(int ox, int y, int flags)
 static int c64_slen(const char *s, int cap)
 {
     int n = 0;
-    while (n <= cap && s[n] != 0)
+    while (n <= cap) {
+        if (s[n] == 0)
+            break;
         n++;
+    }
     return n;
 }
 
@@ -944,7 +958,7 @@ static int c64_slen(const char *s, int cap)
 static void c64_status(int ox, int y, int w)
 {
     const char *t;
-    int msg, joy1, joy2, flags, sp, mshort, lfull, rfull, wide, wchg, x2;
+    int msg, joy1, joy2, flags, sp, mshort, mlong, lfull, rfull, wchg, x2;
 
     /* THREE PERMANENT ROW STATES, NOT ONE. A message expires after five
      * seconds; `C64.ROM missing` and a JAMMED CPU do not, because neither is
@@ -953,40 +967,77 @@ static void c64_status(int ox, int y, int w)
      * idle one identically - the ordinary widget row, `0% cpu  0.0 fps`, with
      * nothing saying the CPU had stopped (build/port-shots/wave2-05-jam.png).
      * The message still goes up first: it is how the jam ARRIVES. */
-    msg = (c64_msg[0] != 0) ? 1
-        : (c64_state == C64_ST_JAM) ? 3
-        : 0;                                /* ...and `C64.ROM missing - see
+    /* THE DECISIONS BELOW ARE THE SAME ONES IT ALWAYS MADE, written in the
+     * shapes SmallerC compiles to a compare and a branch: an `&&`/`||` chain
+     * or a `? 1 : 0` was a 0/1 value per operand tested again, ~10 bytes
+     * each and twenty-odd of them in this function. So a 0/1 latch is OR'd
+     * rather than tested, "changed" is a non-zero DIFFERENCE (zero exactly
+     * where the two figures agree), and `mlong` - a long message standing -
+     * is computed once instead of as `msg != 0 && !mshort` four times
+     * (apps size pass 1). */
+    msg = 0;
+    t = c64_jamline;
+    if (c64_msg[0] != 0) {
+        msg = 1;
+        t = c64_msg;
+    } else if (c64_state == C64_ST_JAM)
+        msg = 3;                            /* ...and `C64.ROM missing - see
                                              * README.TXT` was msg == 2, until
                                              * the ROM became a PART and
                                              * stopped being a thing that can
                                              * go missing (1.4) */
-    t = (msg == 1) ? c64_msg : c64_jamline;
-    mshort = (msg != 0 && c64_slen(t, C64_MSGSHORT) <= C64_MSGSHORT) ? 1 : 0;
-    joy1 = c64_joyswap ? c64_joy2 : c64_joy1;
-    joy2 = c64_joyswap ? c64_joy1 : c64_joy2;
-    flags = (c64_warp ? 1 : 0) | (c64_pause ? 2 : 0);
+    mshort = 0;
+    mlong = 0;
+    if (msg != 0) {
+        if (c64_slen(t, C64_MSGSHORT) <= C64_MSGSHORT)
+            mshort = 1;
+        else
+            mlong = 1;
+    }
+    if (c64_joyswap) {
+        joy1 = c64_joy2;
+        joy2 = c64_joy1;
+    } else {
+        joy1 = c64_joy1;
+        joy2 = c64_joy2;
+    }
+    flags = c64_warp | (c64_pause << 1);   /* both latches are 0 or 1 */
 
-    sp = (c64_pct != c64_st_pct || c64_fps10 != c64_st_fps) ? 1 : 0;
-    wchg = (joy1 != c64_st_joy1 || joy2 != c64_st_joy2
-            || flags != c64_st_flags) ? 1 : 0;
+    sp = (c64_pct - c64_st_pct) | (c64_fps10 - c64_st_fps);
+    wchg = (joy1 - c64_st_joy1) | (joy2 - c64_st_joy2)
+         | (flags - c64_st_flags);
 
     /* THE RIGHT HALF IS REBUILT for one of two reasons: the row's pixels are
      * not ours at all, or a LONG message was standing where the widgets go
      * and is not standing there any more. The LEFT half is rebuilt for those,
      * for a new message, and for a message going up or coming down. */
-    rfull = (!c64_st_ok || (c64_st_blank && !(msg != 0 && !mshort))) ? 1 : 0;
-    lfull = (rfull || !c64_st_lok || msg != c64_st_shown) ? 1 : 0;
+    rfull = 0;
+    if (!c64_st_ok)
+        rfull = 1;
+    else if (c64_st_blank)
+        if (!mlong)
+            rfull = 1;
+    lfull = 1;
+    if (!rfull)
+        if (c64_st_lok)
+            if (msg == c64_st_shown)
+                lfull = 0;
 
-    if (!lfull && !rfull) {
+    if (!lfull) {                           /* ...and so !rfull: rfull implies
+                                             * lfull */
         /* nothing on the row moved: the flush calls this every time and THIS
          * is what makes that free. Under a LONG message nothing else is on
          * the glass to move; under a SHORT one the widgets are still there
          * and still delta-draw, and only the speed fields - which the message
          * is standing on - are held. */
-        if (msg != 0 && !mshort)
+        if (mlong)
             return;
-        if (!wchg && (msg != 0 || !sp))
-            return;
+        if (!wchg) {
+            if (msg != 0)
+                return;
+            if (!sp)
+                return;
+        }
     }
 
     if (lfull) {
@@ -1004,8 +1055,9 @@ static void c64_status(int ox, int y, int w)
          * joystick` FROM JOYSTICK USE (c64kbd.c), so the first deflection of
          * the stick used to blank the two indicators that report the stick,
          * and the permanent JAM line blanked them for the session. */
-        wide = (rfull || (msg != 0 && !mshort)) ? 1 : 0;
-        x2 = wide ? (ox + w - 1) : (ox + C64_MSGSHORT * 8 - 1);
+        x2 = ox + C64_MSGSHORT * 8 - 1;
+        if (rfull | mlong)                  /* the WIDE erase */
+            x2 = ox + w - 1;
         if (x2 > ox + w - 1)
             x2 = ox + w - 1;                /* a content box narrower than the
                                              * widget: §9.8's clamp reaches
@@ -1048,33 +1100,34 @@ static void c64_status(int ox, int y, int w)
         /* a SHORT message falls through: the widgets right of it are live */
     }
 
-    if (msg == 0 && (lfull || sp)) {
-        /* THE SPEED WIDGET'S TWO STRINGS, folded onto this one row and
-         * LEFTMOST, as uistatusbar.c appends them - and they are REAL:
-         * `% cpu` is emulated cycles over 985,248 and `fps` is emulated VIC
-         * FRAMES, so at 100 %% it reads 50.1 (10.2). They delta-draw against
-         * what was last on the glass, so a machine holding one speed costs
-         * nothing a second. Under a message they are not drawn at all - the
-         * message is standing on them, and it is `lfull` that puts them back
-         * when it comes down. */
-        c64_st_num(c64_st_cpu, 7, c64_pct, 0);
-        c64_st_num(c64_st_fpsb, 8, c64_fps10, 1);
-        c64_st_field(ox + C64_ST_CPUX, y + 1, c64_st_cpu, c64_st_cpup, 7,
-                     lfull);
-        c64_st_field(ox + C64_ST_FPSX, y + 1, c64_st_fpsb, c64_st_fpsp, 8,
-                     lfull);
-        if (lfull) {
-            /* the two literal tails, drawn ONCE with the row: they are 9 of
-             * the 24 cells this used to repaint every second and not one of
-             * them has ever changed */
-            os88_font_run(ox + C64_ST_CPUX + 7 * 8, y + 1, "% cpu",
-                          OS88_WHITE, OS88_BLACK);
-            os88_font_run(ox + C64_ST_FPSX + 8 * 8, y + 1, " fps",
-                          OS88_WHITE, OS88_BLACK);
+    if (msg == 0)
+        if (lfull | sp) {
+            /* THE SPEED WIDGET'S TWO STRINGS, folded onto this one row and
+             * LEFTMOST, as uistatusbar.c appends them - and they are REAL:
+             * `% cpu` is emulated cycles over 985,248 and `fps` is emulated VIC
+             * FRAMES, so at 100 %% it reads 50.1 (10.2). They delta-draw against
+             * what was last on the glass, so a machine holding one speed costs
+             * nothing a second. Under a message they are not drawn at all - the
+             * message is standing on them, and it is `lfull` that puts them back
+             * when it comes down. */
+            c64_st_num(c64_st_cpu, 7, c64_pct, 0);
+            c64_st_num(c64_st_fpsb, 8, c64_fps10, 1);
+            c64_st_field(ox + C64_ST_CPUX, y + 1, c64_st_cpu, c64_st_cpup, 7,
+                         lfull);
+            c64_st_field(ox + C64_ST_FPSX, y + 1, c64_st_fpsb, c64_st_fpsp, 8,
+                         lfull);
+            if (lfull) {
+                /* the two literal tails, drawn ONCE with the row: they are 9 of
+                 * the 24 cells this used to repaint every second and not one of
+                 * them has ever changed */
+                os88_font_run(ox + C64_ST_CPUX + 7 * 8, y + 1, "% cpu",
+                              OS88_WHITE, OS88_BLACK);
+                os88_font_run(ox + C64_ST_FPSX + 8 * 8, y + 1, " fps",
+                              OS88_WHITE, OS88_BLACK);
+            }
+            c64_st_pct = c64_pct;
+            c64_st_fps = c64_fps10;
         }
-        c64_st_pct = c64_pct;
-        c64_st_fps = c64_fps10;
-    }
     if (rfull) {
         os88_font_run(ox + C64_ST_JOYX, y + 1, "Joysticks:",
                       OS88_WHITE, OS88_BLACK);      /* uistatusbar.c:1763 */
@@ -1098,11 +1151,11 @@ static void c64_status(int ox, int y, int w)
         os88_font_run(ox + C64_ST_DRVX, y + 1, "8", OS88_WHITE, OS88_BLACK);
     }
 
-    if (rfull || joy1 != c64_st_joy1)
+    if (rfull | (joy1 - c64_st_joy1))
         c64_st_band(joy1, ox + C64_ST_J1X, y + 3, 2);
-    if (rfull || joy2 != c64_st_joy2)
+    if (rfull | (joy2 - c64_st_joy2))
         c64_st_band(joy2, ox + C64_ST_J2X, y + 3, 2);
-    if (rfull || flags != c64_st_flags)
+    if (rfull | (flags - c64_st_flags))
         c64_st_lamps(ox, y, flags);
     c64_st_joy1 = joy1;
     c64_st_joy2 = joy2;
@@ -1182,13 +1235,15 @@ static int c64_geom(void *win)
      * picture the RIGHT SHAPE there - it is not half a job. */
     c64_scw = 8;
     c64_sch = 8;
-    if (c64_full && c64_can2x && !c64_no2x) {
-        if (sz.w >= C64_COLS * 16)
-            c64_scw = 16;
-        if (c64_scw == 16
-            && c64_gsty - org.y >= C64_ROWS * 16 + C64_BORDER * 2)
-            c64_sch = 16;
-    }
+    /* (nested `if`s, not `&&` chains: apps size pass 1) */
+    if (c64_full)
+        if (c64_can2x)
+            if (!c64_no2x)
+                if (sz.w >= C64_COLS * 16) {
+                    c64_scw = 16;
+                    if (c64_gsty - org.y >= C64_ROWS * 16 + C64_BORDER * 2)
+                        c64_sch = 16;
+                }
 
     /* THE BORDER FLOOR IS A 1:1 THING AND MUST NOT SURVIVE INTO 2x. At 1:1
      * the framed window is 336 wide and (336 - 320) / 2 IS C64_BORDER, so the
@@ -1216,9 +1271,10 @@ static int c64_geom(void *win)
     n = (c64_gsty - c64_gsy) / c64_sch;
     if (n > C64_ROWS)
         n = C64_ROWS;
-    if (n > 0 && c64_gsy + n * c64_sch > c64_gsty - C64_BORDER)
-        n = (c64_gsty - C64_BORDER - c64_gsy) / c64_sch; /* keep the bottom
-                                                          * border */
+    if (n > 0)
+        if (c64_gsy + n * c64_sch > c64_gsty - C64_BORDER)
+            n = (c64_gsty - C64_BORDER - c64_gsy) / c64_sch;  /* keep the
+                                                           * bottom border */
     if (n < 0)
         n = 0;
     c64_gnrows = n;
@@ -1329,8 +1385,11 @@ static void c64_row_font(int i, int f, int l, int sx, int y)
 {
     int c, n = 0;
 
-    for (c = f; c <= l && n < C64_COLS; c++)
+    for (c = f; c <= l; c++) {
+        if (n >= C64_COLS)
+            break;
         c64_fbuf[n++] = (char)c64_ascii_of(c64_rd(c64_mbase + C64_X40(i) + c));
+    }
     c64_fbuf[n] = 0;
     os88_font_run(sx + f * 8, y, c64_fbuf, OS88_WHITE, OS88_BLACK);
 }
@@ -1400,20 +1459,24 @@ static int c64_span_of(int i)
 
     r0 = c64_mbase + C64_X40(i);
     r1 = r0 + C64_COLS - 1;
-    if (c64_whi >= c64_wlo && c64_whi >= r0 && c64_wlo <= r1) {
-        mf = (c64_wlo > r0) ? (int)(c64_wlo - r0) : 0;
-        ml = (c64_whi < r1) ? (int)(c64_whi - r0) : C64_COLS - 1;
-    }
+    if (c64_whi >= c64_wlo)
+        if (c64_whi >= r0)
+            if (c64_wlo <= r1) {
+                mf = (c64_wlo > r0) ? (int)(c64_wlo - r0) : 0;
+                ml = (c64_whi < r1) ? (int)(c64_whi - r0) : C64_COLS - 1;
+            }
     r0 = C64_X40(i);
     r1 = r0 + C64_COLS - 1;
-    if (c64_chi >= c64_clo && c64_chi >= r0 && c64_clo <= r1) {
-        int cf = (c64_clo > r0) ? (int)(c64_clo - r0) : 0;
-        int cl = (c64_chi < r1) ? (int)(c64_chi - r0) : C64_COLS - 1;
-        if (cf < mf)
-            mf = cf;
-        if (cl > ml)
-            ml = cl;
-    }
+    if (c64_chi >= c64_clo)
+        if (c64_chi >= r0)
+            if (c64_clo <= r1) {
+                int cf = (c64_clo > r0) ? (int)(c64_clo - r0) : 0;
+                int cl = (c64_chi < r1) ? (int)(c64_chi - r0) : C64_COLS - 1;
+                if (cf < mf)
+                    mf = cf;
+                if (cl > ml)
+                    ml = cl;
+            }
     if (ml < 0)
         return 0;
     c64_cspf = mf;
@@ -1451,9 +1514,9 @@ static void c64_flush(void *win)
      * (os88.h:612), so `ticks > until` takes a message down AT ONCE when it
      * was raised in the last five seconds before the wrap - the difference is
      * compared, as c64.c's flush gate compares it. */
-    if (c64_msg[0] != 0
-        && (unsigned)(os88_ticks() - c64_msg_until) < 0x8000u)
-        c64_msg[0] = 0;                     /* and `msg != c64_st_shown` in
+    if (c64_msg[0] != 0)
+        if ((unsigned)(os88_ticks() - c64_msg_until) < 0x8000u)
+            c64_msg[0] = 0;                     /* and `msg != c64_st_shown` in
                                              * c64_status is what redraws the
                                              * widgets under it */
 
@@ -1471,7 +1534,7 @@ static void c64_flush(void *win)
     c64_frame_regs();
     c64_dirty_scan();
 
-    if (c64_border_dirty || !c64_sh_ok) {
+    if (c64_border_dirty | (c64_sh_ok ^ 1)) {     /* both 0 or 1 */
         c64_border(ox, oy, w, sy + nrows * c64_sch, sty);
         c64_border_dirty = 0;
     }
@@ -1482,26 +1545,29 @@ static void c64_flush(void *win)
      * would cost more than the draw it saves - and only in the mode whose
      * signature means anything. */
     k = 0;
-    if (c64_sh_ok && c64_mode == 0 && c64_hold_r0 > c64_hold_r1 && nrows > 1) {
-        int nd = 0;
-        for (i = 0; i < nrows; i++)
-            if (c64_rowd[i])
-                nd++;
-        /* FOUR FIFTHS OF THE ROWS ON THE GLASS - 20 of 25 - and it is a
-         * measured constant, not a taste. A
-         * scroll dirties the WHOLE matrix by definition - the KERNAL moves
-         * 960 bytes and clears 40 - so every row is dirty and 25 >= 20. A
-         * one-row change dirties the rows of the two 256-byte pages it
-         * touches, which is 14 of them, and at a threshold of 8 the signature
-         * test would run, find a spurious match on a screen with several
-         * blank rows, and emit a scroll that the span compare then had to
-         * undo: 1 scroll + 24 blits where 1 blit was the answer. Correctness
-         * survived that (9.4: the scroll is a hint and the compare is the
-         * truth) and the COST did not, which is the failure mode this
-         * threshold exists to stop. */
-        if (nd * C64_SHIFT_DEN >= nrows * C64_SHIFT_NUM)
-            k = c64_shift_test(nrows);
-    }
+    if (c64_sh_ok)
+        if (c64_mode == 0)
+            if (c64_hold_r0 > c64_hold_r1)
+                if (nrows > 1) {
+                    int nd = 0;
+                    for (i = 0; i < nrows; i++)
+                        if (c64_rowd[i])
+                            nd++;
+                    /* FOUR FIFTHS OF THE ROWS ON THE GLASS - 20 of 25 - and it is a
+                     * measured constant, not a taste. A
+                     * scroll dirties the WHOLE matrix by definition - the KERNAL moves
+                     * 960 bytes and clears 40 - so every row is dirty and 25 >= 20. A
+                     * one-row change dirties the rows of the two 256-byte pages it
+                     * touches, which is 14 of them, and at a threshold of 8 the signature
+                     * test would run, find a spurious match on a screen with several
+                     * blank rows, and emit a scroll that the span compare then had to
+                     * undo: 1 scroll + 24 blits where 1 blit was the answer. Correctness
+                     * survived that (9.4: the scroll is a hint and the compare is the
+                     * truth) and the COST did not, which is the failure mode this
+                     * threshold exists to stop. */
+                    if (nd * C64_SHIFT_DEN >= nrows * C64_SHIFT_NUM)
+                        k = c64_shift_test(nrows);
+                }
     if (k) {
         /* POSITIVE dy MOVES THE CONTENT UP, and the whole of this block is
          * written for content-up: c64_shift_test matched `c64_sig[i] ==
@@ -1575,14 +1641,16 @@ static void c64_flush(void *win)
 
     /* --- compose, compare, draw ----------------------------------------- */
     for (i = 0; i < nrows; i++) {
-        if (i >= c64_hold_r0 && i <= c64_hold_r1)
-            continue;                       /* an About panel owns these rows:
+        if (i >= c64_hold_r0)
+            if (i <= c64_hold_r1)
+                continue;                   /* an About panel owns these rows:
                                              * drawing them would be drawing
                                              * under something opaque, and the
                                              * click that closes it forces
                                              * exactly them (c64.c) */
-        if (!c64_rowd[i] && !c64_force[i] && c64_sh_ok)
-            continue;
+        if ((c64_rowd[i] | c64_force[i]) == 0)
+            if (c64_sh_ok)
+                continue;
 
         /* THE COMPOSE SPAN, and whether the shadow may be trusted for it.
          *   the shadow is invalid            -> the whole row, drawn
@@ -1592,20 +1660,30 @@ static void c64_flush(void *win)
          *                                       nothing at all
          *   the sources changed in a span    -> that span, compared
          *   the glass is unknown over cells  -> union that in, and draw it */
-        trust = c64_sh_ok && !c64_force[i];
-        if (!c64_sh_ok || c64_rowd[i] == 2) {
-            f = 0;
-            l = C64_COLS - 1;
-        } else if (c64_rowd[i] == 1 && c64_span_of(i)) {
-            f = c64_cspf;
-            l = c64_cspl;
-        } else if (c64_force[i]) {
-            f = c64_fc0[i];
-            l = c64_fc1[i];
-        } else {
-            continue;                       /* the row was marked but nothing
-                                             * in it moved */
-        }
+        trust = c64_sh_ok;
+        if (c64_force[i])
+            trust = 0;
+        /* (the whole row unless the shadow is good and the row is not
+         * marked whole; nested `if`s rather than `||`/`&&` chains, apps
+         * size pass 1 - `sp` is free here and is the span's answer) */
+        f = 0;
+        l = C64_COLS - 1;
+        if (c64_sh_ok)
+            if (c64_rowd[i] != 2) {
+                sp = 0;
+                if (c64_rowd[i] == 1)
+                    sp = c64_span_of(i);
+                if (sp) {
+                    f = c64_cspf;
+                    l = c64_cspl;
+                } else if (c64_force[i]) {
+                    f = c64_fc0[i];
+                    l = c64_fc1[i];
+                } else {
+                    continue;               /* the row was marked but
+                                             * nothing in it moved */
+                }
+            }
         if (c64_force[i]) {                 /* the unknown cells are drawn
                                              * whatever else this row wanted */
             if ((int)c64_fc0[i] < f)
@@ -1720,8 +1798,9 @@ static void c64_flush(void *win)
     }
 
     for (i = 0; i < C64_ROWS; i++) {
-        if (i >= c64_hold_r0 && i <= c64_hold_r1)
-            continue;                       /* still owed a draw when the
+        if (i >= c64_hold_r0)
+            if (i <= c64_hold_r1)
+                continue;                   /* still owed a draw when the
                                              * panel goes: keep both flags */
         c64_rowd[i] = 0;
         c64_force[i] = 0;
@@ -1784,15 +1863,24 @@ static void c64_blank_rect(void *win, int x1, int y1, int x2, int y2)
     /* THE ROM-LESS SURFACE'S EXPOSE REPAIR WAS HERE, and it went with the
      * banner it repaired (1.4): a machine with no ROM cannot exist now the
      * ROM is a part of the package. */
-    if (y1 < sy || x1 < sx || x2 >= sx + C64_COLS * c64_scw
-        || y2 >= sty - C64_BORDER)
-        c64_border_dirty = 1;               /* the rect reaches the border */
+    /* the rect reaches the border on any of four sides - one `if` a side,
+     * as an `||` chain is a 0/1 value per operand here (apps size pass 1) */
+    if (y1 < sy)
+        c64_border_dirty = 1;
+    if (x1 < sx)
+        c64_border_dirty = 1;
+    if (x2 >= sx + C64_COLS * c64_scw)
+        c64_border_dirty = 1;
+    if (y2 >= sty - C64_BORDER)
+        c64_border_dirty = 1;
     if (y2 >= sty)
         c64_st_ok = 0;                      /* ...and the status row's pixels
                                              * are no longer ours */
 
-    if (y2 < sy || x2 < sx)
+    if (y2 < sy)
         return;                             /* the rect misses the screen */
+    if (x2 < sx)
+        return;
     /* ...ON THE CELL GRID, WHICH IS 8 OR 16 PIXELS A SIDE (9.8). */
     r0 = (y1 - sy) / c64_sch;
     r1 = (y2 - sy) / c64_sch;
@@ -1807,7 +1895,9 @@ static void c64_blank_rect(void *win, int x1, int y1, int x2, int y2)
         r1 = C64_ROWS - 1;
     if (c1 >= C64_COLS)
         c1 = C64_COLS - 1;
-    if (r1 < r0 || c1 < c0)
+    if (r1 < r0)
+        return;
+    if (c1 < c0)
         return;
     c64_force_rows(r0, r1, c0, c1);
 }

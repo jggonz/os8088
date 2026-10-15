@@ -21,8 +21,8 @@ SPEC.md 6.0.1's two verdicts, off the guest's own memory and the glass:
      kernel must have ONE 1KB MEM_K_FONT claim, pinned at the arena's CEILING
      (its last paragraph is [mem_top] - 1, the top-down placement that makes
      it no barrier), the pointer must be that claim at offset 0, its 760 bytes
-     must equal the ROM's, and the desktop with a Disk window open must be
-     the SAME PICTURE as arm A's - pixel for pixel, the menu bar's clock
+     must equal the ROM's, and the desktop with B:'s Disk window open must
+     be the SAME PICTURE as arm A's - pixel for pixel, the menu bar's clock
      masked, since the two boots are not the same instant.
 
 Broken on purpose and watched go red (both at once): FONT_PICK's `jne` made
@@ -77,8 +77,12 @@ def leg(tree, machine, say):
         glyphs = bytes(m.read(seg * 16 + off, FONT_BYTES))
         ica = bytes(m.read(0x4F8, 8))
         rom = bytes(m.read(PLANAR[0] * 16 + PLANAR[1], FONT_BYTES))
-        ui.open_drive("A")
-        ui.settle()
+        ui.open_drive("B")              # the APPS disk, byte-identical in
+        ui.settle()                     # both trees - A: is the system disk,
+                                        # whose KERNEL.SYS is the knob's, and
+                                        # its status line's free KB then
+                                        # differs by a cluster (2026-10-14:
+                                        # 'Free 34.00K' against '33.00K')
         v = m.video()
         if v["type"] == "vga":
             w, h, data = m.fbuf(None)

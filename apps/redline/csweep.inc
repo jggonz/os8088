@@ -1,0 +1,798 @@
+; =============================================================================
+; apps/redline/csweep.inc - THE VERIFIED SWEEP, for every row that can write
+; (SPEC.md 103.6.3)
+;
+; REDLINE's alone (RLAPPLY never sweeps). A row is a DESCRIPTOR - its book
+; value, its floor, its step, its knob, a proc that sets a value and one that
+; reads it back (0 for a write-only chipset) - so the FE3600 and the NEAT run
+; the same code, and a third row is a descriptor rather than a sweep.
+;
+; cs_sw_try sets a candidate only after reading what it can reach back right
+; at it, with interrupts off from the references to the verdict: an
+; interrupt could run a card's own BIOS code out of its ROM at whatever speed
+; is set. Taken at HOME - the setting the board was running when Tune was
+; pressed, which it demonstrably runs - then compared at the candidate. Not
+; at the book's value: the book's 10 is FASTER than the Victory's BIOS's 14,
+; and references read at a setting the board cannot run are wrong in the
+; same way the candidate is, so they agree with it and nothing is caught:
+;   - 512 bytes of an option ROM on the 8-bit bus and of the screen, four
+;     times over (cs_sw_refs names them);
+;   - a PicoMEM's disk buffer, a pattern written at the book's value and read
+;     at the candidate, another written at the candidate and read at the
+;     book's, and its 2A3h counter ramp;
+;   - the floppy controller's main status (3F4h), when it read the same
+;     sixteen times at the book's value: the device on the board most likely
+;     to fail first, and its read has no side effect;
+;   - an I/O WRITE, read back: DMA page register 85h, which no channel uses
+;     on an AT, takes four patterns at the candidate and is put back as it
+;     was. A kept setting applies to every 8-bit WRITE after it, and writes
+;     are where a too-short cycle does harm, so the sweep tries one;
+;   - the knob itself, read back, on a chipset that can (the NEAT).
+; Any wrong byte puts HOME back before interrupts return. A
+; candidate that passed is TIMED where it stands (cs_sw_measure, the
+; includer's), and every step is LOGGED with what failed, for the report:
+; one field run is meant to carry everything the next design needs.
+; =============================================================================
+
+CSD_BOOK    equ 0                   ; db the data book's value (Mfg spec)
+CSD_FLOOR   equ 1                   ; db never below
+CSD_STEP    equ 2                   ; db one bus clock, in the knob's units
+CSD_KNOB    equ 3                   ; db REDLINE.CFG's knob number
+CSD_SET     equ 4                   ; dw proc: AL = value, every reg kept
+CSD_GET     equ 6                   ; dw proc: AL = value read, or 0
+CSD_PRE     equ 8                   ; dw the value's words, before it ('R4 ')
+CSD_SUF     equ 10                  ; dw ...and after it (' waits')
+CSD_VER     equ 12                  ; db CSS_VERIFIED, or CSS_DATASHEET: this
+                                    ; KNOB's own status, which a row's newer
+                                    ; knobs do not share with its first
+CSD_GOV     equ 13                  ; db what it TIMES, cs_sw_ns's order: 1
+                                    ; screen, 2 PicoMEM, 4 ROM, 8 I/O read
+CSD_FLAGS   equ 14                  ; db CSF_*
+CSF_X       equ 1                   ; an EXPERIMENT's knob: Fastest tested
+                                    ; leaves it alone ([cs_sw_xmode] = 0)
+CSF_DMA     equ 2                   ; a step that read right must also pass
+                                    ; the includer's cs_sw_dma
+
+CS_SWMAX    equ 20                  ; steps logged, every knob's (Bus
+                                    ; clock x2 takes 2 + 4 x 4 at most)
+CSL_DESC    equ 0                   ; dw the knob's descriptor
+CSL_VAL     equ 2                   ; db the candidate
+CSL_WHY     equ 3                   ; db what went wrong (CSW_*), 0 = passed
+CSL_BAD     equ 4                   ; dw wrong reads
+CSL_HOME    equ 6                   ; db where that knob's sweep started
+CSL_NOTE    equ 7                   ; db 0, or CSN_*
+CSL_NS      equ 8                   ; 4 dw: screen, PicoMEM, ROM, I/O (ns)
+CSL_SIZE    equ 16
+CSW_SCR     equ 1                   ; the screen read wrong
+CSW_FDC     equ 2                   ; the floppy status changed
+CSW_PAGE    equ 4                   ; the I/O write did not read back
+CSW_RB      equ 8                   ; the knob did not read back
+CSW_ROM     equ 16                  ; the option ROM read wrong
+CSW_PM      equ 32                  ; a PicoMEM pattern read wrong
+CSW_RAMP    equ 64                  ; the PicoMEM's 2A3h count skipped
+CSW_DMA     equ 128                 ; the DMA read (cs_sw_dma) came back wrong
+                                    ; (one flag a reference: the Victory's
+                                    ; first report said "memory" and could
+                                    ; not say which of three it was)
+CSN_NOGAIN  equ 1                   ; read right, and no faster: not kept
+CSN_NOREF   equ 2                   ; not swept: nothing it times reads here
+CS_SW_GAIN  equ 20                  ; ns a step must buy - or 1/32 of the
+                                    ; reading, if that is more (the screen
+                                    ; wanders 60 ns run to run)
+CS_SW_PBUF  equ 0x5000              ; a PicoMEM's disk transfer buffer
+CS_SW_PAGE  equ 0x85                ; an unused DMA page register
+
+; A row's knobs, swept in this order: each starts from where the knobs
+; before it were left
+cs_klist_fe: dw cs_desc_fe, 0
+cs_klist_ne: dw cs_desc_ne, cs_desc_nec8, cs_desc_neio, cs_desc_ne16
+            dw cs_desc_nebc, 0      ; (the bus clock: Bus clock x2 only)
+; Bus clock x2 (SPEC.md 103.6.3.3): the clock first, with every wait and
+; delay at its LONGEST, then each of them back down from there
+cs_klist_nex: dw cs_desc_nebc, cs_desc_xw8, cs_desc_xc8, cs_desc_xio
+            dw cs_desc_x16, 0
+
+cs_desc_fe: db CS_FE_BOOK, CS_FE_FLOOR, 2, CS_FE_R4
+            dw cs_fe_set, 0, cs_k_r4, cs_k_none
+            db CSS_VERIFIED, 0x0E, 0 ; 8-bit memory and I/O
+cs_desc_ne: db CS_NE_BOOK, CS_NE_FLOOR, 1, CS_NE_W8
+            dw cs_ne_set, cs_ne_getw8, cs_k_8b, cs_k_waits
+            db CSS_VERIFIED, 0x0E, 0 ; the PB286LP, 2026-10-14
+cs_desc_nec8: db 1, 0, 1, CS_NE_C8
+            dw cs_ne_setc8, cs_ne_getc8, cs_k_8bd, cs_k_none
+            db CSS_DATASHEET, 0x06, 0 ; 8-bit MEMORY: a ROM or a PicoMEM
+cs_desc_neio: db 1, 0, 1, CS_NE_CIO
+            dw cs_ne_setcio, cs_ne_getcio, cs_k_iod, cs_k_none
+            db CSS_DATASHEET, 0x08, 0 ; the I/O read
+cs_desc_ne16: db 1, 0, 1, CS_NE_W16
+            dw cs_ne_setw16, cs_ne_getw16, cs_k_16b, cs_k_waits
+            db CSS_DATASHEET, 0x01, 0 ; the screen, a 16-bit card on an AT
+; the bus clock, as its divider (csknob.inc): 2 = CLK2IN/2, Mfg spec, and a
+; SYSCLK of CLK2IN/4 - 6 MHz on the PB286LP, the bottom of the book's 6-8
+; MHz AT range [NEAT p5]; 1 = CLK2IN, twice that. It times everything
+cs_desc_nebc: db 2, 1, 1, CS_NE_BCLK
+            dw cs_ne_setbclk, cs_ne_getbclk, cs_k_bclk, cs_k_none
+            db CSS_DATASHEET, 0x0F, CSF_X | CSF_DMA
+; ...and the four knobs as Bus clock x2 sweeps them: from their LONGEST
+cs_desc_xw8: db CS_NE_MAXW, CS_NE_FLOOR, 1, CS_NE_W8
+            dw cs_ne_set, cs_ne_getw8, cs_k_8b, cs_k_waits
+            db CSS_DATASHEET, 0x0E, 0
+cs_desc_xc8: db 3, 0, 1, CS_NE_C8
+            dw cs_ne_setc8, cs_ne_getc8, cs_k_8bd, cs_k_none
+            db CSS_DATASHEET, 0x06, 0
+cs_desc_xio: db 3, 0, 1, CS_NE_CIO
+            dw cs_ne_setcio, cs_ne_getcio, cs_k_iod, cs_k_none
+            db CSS_DATASHEET, 0x08, 0
+cs_desc_x16: db 3, 0, 1, CS_NE_W16
+            dw cs_ne_setw16, cs_ne_getw16, cs_k_16b, cs_k_waits
+            db CSS_DATASHEET, 0x01, 0
+; --- the four rows added for the first field round (SPEC.md 103.6.2): each
+; DATASHEET, its normal list's books the register defaults the data book
+; prints, its experiment's knobs from their LONGEST. GOV as the NEAT's
+%macro CS_DESC 10                   ; book floor step knob set get pre suf
+    db %1, %2, %3, %4               ;   ver gov+flags packed as two args
+    dw %5, %6, %7, %8
+    db CSS_DATASHEET, %9, %10
+%endmacro
+; C&T CS8230/CS8231 - waits inverted (00 = 5 and 3), the clock /3 or /2
+cs_klist_ca: dw cs_d_ca1, cs_d_ca2, cs_d_ca3, cs_d_ca4, cs_d_ca5, 0
+cs_klist_cax: dw cs_d_ca5, cs_d_cax1, cs_d_cax2, cs_d_cax3, cs_d_cax4, 0
+cs_d_ca1:   CS_DESC 5, 2, 1, 1, cs_ca_set1, cs_ca_get1, cs_k_8b, cs_k_waits, 0x0E, 0
+cs_d_ca2:   CS_DESC 1, 0, 1, 2, cs_ca_set2, cs_ca_get2, cs_k_8bd, cs_k_none, 0x06, 0
+cs_d_ca3:   CS_DESC 1, 0, 1, 3, cs_ca_set3, cs_ca_get3, cs_k_iod, cs_k_none, 0x08, 0
+cs_d_ca4:   CS_DESC 3, 0, 1, 4, cs_ca_set4, cs_ca_get4, cs_k_16b, cs_k_waits, 0x01, 0
+cs_d_ca5:   CS_DESC 3, 2, 1, 5, cs_ca_set5, cs_ca_get5, cs_k_proc, cs_k_none, 0x0F, CSF_X | CSF_DMA
+cs_d_cax1:  CS_DESC 5, 2, 1, 1, cs_ca_set1, cs_ca_get1, cs_k_8b, cs_k_waits, 0x0E, 0
+cs_d_cax2:  CS_DESC 3, 0, 1, 2, cs_ca_set2, cs_ca_get2, cs_k_8bd, cs_k_none, 0x06, 0
+cs_d_cax3:  CS_DESC 3, 0, 1, 3, cs_ca_set3, cs_ca_get3, cs_k_iod, cs_k_none, 0x08, 0
+cs_d_cax4:  CS_DESC 3, 0, 1, 4, cs_ca_set4, cs_ca_get4, cs_k_16b, cs_k_waits, 0x01, 0
+; VLSI SCAMP I - BUSCTL's PC/AT values are both the book and the floor, so
+; Fastest tested can only put back what a BIOS made slower; the SYSCLK
+; divider is the experiment (2 = /4, the book's default, then 1 = /2)
+cs_klist_sm: dw cs_d_sm1, cs_d_sm2, cs_d_sm3, cs_d_sm4, cs_d_sm5, 0
+cs_klist_smx: dw cs_d_sm5, cs_d_smx1, cs_d_smx2, cs_d_smx3, cs_d_smx4, 0
+cs_d_sm1:   CS_DESC 4, 4, 1, 1, cs_sm_set1, cs_sm_get1, cs_k_8b, cs_k_waits, 0x0E, 0
+cs_d_sm2:   CS_DESC 0, 0, 1, 2, cs_sm_set2, cs_sm_get2, cs_k_cmd, cs_k_none, 0x0E, 0
+cs_d_sm3:   CS_DESC 0, 0, 1, 3, cs_sm_set3, cs_sm_get3, cs_k_16d, cs_k_none, 0x01, 0
+cs_d_sm4:   CS_DESC 0, 0, 1, 4, cs_sm_set4, cs_sm_get4, cs_k_16b, cs_k_waits, 0x01, 0
+cs_d_sm5:   CS_DESC 2, 1, 1, 5, cs_sm_set5, cs_sm_get5, cs_k_sclk, cs_k_none, 0x0F, CSF_X | CSF_DMA
+cs_d_smx1:  CS_DESC 5, 4, 1, 1, cs_sm_set1, cs_sm_get1, cs_k_8b, cs_k_waits, 0x0E, 0
+cs_d_smx2:  CS_DESC 1, 0, 1, 2, cs_sm_set2, cs_sm_get2, cs_k_cmd, cs_k_none, 0x0E, 0
+cs_d_smx3:  CS_DESC 1, 0, 1, 3, cs_sm_set3, cs_sm_get3, cs_k_16d, cs_k_none, 0x01, 0
+cs_d_smx4:  CS_DESC 1, 0, 1, 4, cs_sm_set4, cs_sm_get4, cs_k_16b, cs_k_waits, 0x01, 0
+; WD76C10 - 8-bit memory and I/O waits 2-5 (book 4), 16-bit memory and I/O
+; 1-2 (book 1, also the floor), BUS_MOD's divide-by bit the experiment
+cs_klist_w7: dw cs_d_w71, cs_d_w72, cs_d_w73, cs_d_w74, cs_d_w75, 0
+cs_klist_w7x: dw cs_d_w75, cs_d_w7x1, cs_d_w7x2, cs_d_w7x3, cs_d_w7x4, 0
+cs_d_w71:   CS_DESC 4, 2, 1, 1, cs_w7_set1, cs_w7_get1, cs_k_m8, cs_k_waits, 0x06, 0
+cs_d_w72:   CS_DESC 4, 2, 1, 2, cs_w7_set2, cs_w7_get2, cs_k_i8, cs_k_waits, 0x08, 0
+cs_d_w73:   CS_DESC 1, 1, 1, 3, cs_w7_set3, cs_w7_get3, cs_k_m16, cs_k_waits, 0x01, 0
+cs_d_w74:   CS_DESC 1, 1, 1, 4, cs_w7_set4, cs_w7_get4, cs_k_i16, cs_k_waits, 0x00, 0
+cs_d_w75:   CS_DESC 2, 1, 1, 5, cs_w7_set5, cs_w7_get5, cs_k_bmod, cs_k_none, 0x0F, CSF_X | CSF_DMA
+cs_d_w7x1:  CS_DESC 5, 2, 1, 1, cs_w7_set1, cs_w7_get1, cs_k_m8, cs_k_waits, 0x06, 0
+cs_d_w7x2:  CS_DESC 5, 2, 1, 2, cs_w7_set2, cs_w7_get2, cs_k_i8, cs_k_waits, 0x08, 0
+cs_d_w7x3:  CS_DESC 2, 1, 1, 3, cs_w7_set3, cs_w7_get3, cs_k_m16, cs_k_waits, 0x01, 0
+cs_d_w7x4:  CS_DESC 2, 1, 1, 4, cs_w7_set4, cs_w7_get4, cs_k_i16, cs_k_waits, 0x00, 0
+; OPTi 82C283 - only the AT clock, CPUCLK2/6 or /4 (3 or 2)
+cs_klist_o3: dw cs_d_o31, 0
+cs_d_o31:   CS_DESC 3, 2, 1, 1, cs_o3_set1, cs_o3_get1, cs_k_atck, cs_k_none, 0x0F, CSF_X | CSF_DMA
+cs_k_proc:  db 'BCLK=PROC/', 0
+cs_k_cmd:   db 'cmd delay ', 0
+cs_k_16d:   db '16b delay ', 0
+cs_k_sclk:  db 'SYSCLK=CLK/2x', 0
+cs_k_m8:    db 'mem8 ', 0
+cs_k_i8:    db 'io8 ', 0
+cs_k_m16:   db 'mem16 ', 0
+cs_k_i16:   db 'io16 ', 0
+cs_k_bmod:  db 'BUS_MOD /', 0
+cs_k_atck:  db 'ATCLK=CLK2/2x', 0
+cs_k_r4:    db 'R4 '
+cs_k_none:  db 0
+cs_k_waits: db ' waits', 0
+cs_k_8b:    db '8-bit ', 0
+cs_k_16b:   db '16-bit ', 0
+cs_k_8bd:   db 'mem delay ', 0
+cs_k_iod:   db 'I/O delay ', 0
+cs_k_bclk:  db 'BCLK=CLK2IN/', 0
+
+cs_sw_desc: dw 0
+cs_sw_home: db 0                    ; the setting the sweep started from
+cs_sw_rseg: dw 0
+cs_sw_sseg: dw 0xA000
+cs_sw_pseg: dw 0
+cs_sw_cand: db 0
+cs_sw_why:  db 0
+cs_sw_bad:  dw 0
+cs_sw_fail: db 0                    ; the first candidate that failed, or 0
+cs_sw_fdc:  db 0                    ; 3F4h at the book's value; 0FFh unusable
+cs_sw_pg:   db 0                    ; 1: 85h reads back at the book's value
+cs_sw_pg0:  db 0                    ; ...and what it held
+cs_sw_n:    db 0                    ; steps logged
+cs_sw_ns:   times 4 dw 0            ; cs_sw_measure's answer
+cs_sw_kns:  times 4 dw 0            ; ...at the last step KEPT
+cs_sw_last: dw 0                    ; the log step cs_sw_logit wrote, or 0
+cs_sw_xmode: db 0                   ; 1: an experiment's knobs are swept too
+cs_sw_log:  times CS_SWMAX * CSL_SIZE db 0
+
+; cs_sw_refs - AX = the screen's segment, BX = a PicoMEM's or 0, CX = an
+; option ROM's on the 8-bit bus or 0 (THE CALLER CHOOSES: a shadowed ROM is
+; RAM and tests nothing - chipset.inc, cs_romref)
+cs_sw_refs:
+    mov [cs_sw_sseg], ax
+    mov [cs_sw_pseg], bx
+    mov [cs_sw_rseg], cx
+    ret
+
+; cs_sw_set - AL = a value, through the descriptor. Every register kept
+cs_sw_set:
+    push bx
+    mov bx, [cs_sw_desc]
+    call [bx + CSD_SET]
+    pop bx
+    ret
+
+; cs_sw_grab - AX = a segment: its first 512 bytes into ES:DI (DS's)
+cs_sw_grab:
+    push cx
+    push si
+    push ds
+    mov ds, ax
+    xor si, si
+    mov cx, 256
+    rep movsw
+    pop ds
+    pop si
+    pop cx
+    ret
+
+; cs_sw_cmp - AX = a segment, SI = its reference here, DL = its CSW_ flag:
+; wrong bytes counted
+cs_sw_cmp:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    mov es, ax
+    xor di, di
+    mov cx, 512
+.c:
+    lodsb
+    cmp al, [es:di]
+    je .ok
+    inc word [cs_sw_bad]
+    or [cs_sw_why], dl
+.ok:
+    inc di
+    loop .c
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; cs_sw_pat - ES:DI = 512 bytes, AL = the seed, AH = the step: write it
+cs_sw_pat:
+    push cx
+    push di
+    mov cx, 512
+.w:
+    stosb
+    add al, ah
+    loop .w
+    pop di
+    pop cx
+    ret
+
+; cs_sw_chk - ES:DI = 512 bytes, AL = the seed, AH = the step: count misses
+cs_sw_chk:
+    push cx
+    push di
+    mov cx, 512
+.r:
+    cmp [es:di], al
+    je .ok
+    inc word [cs_sw_bad]
+    or byte [cs_sw_why], CSW_PM
+.ok:
+    inc di
+    add al, ah
+    loop .r
+    pop di
+    pop cx
+    ret
+
+; cs_sw_io - the two I/O checks at the current setting: 3F4h against its
+; reference, sixteen reads; 85h written four ways and read back
+cs_sw_io:
+    push ax
+    push cx
+    push dx
+    push si
+    cmp byte [cs_sw_fdc], 0FFh
+    je .page
+    mov dx, 0x3F4
+    mov cx, 16
+.fdc:
+    in al, dx
+    cmp al, [cs_sw_fdc]
+    je .fok
+    inc word [cs_sw_bad]
+    or byte [cs_sw_why], CSW_FDC
+.fok:
+    loop .fdc
+.page:
+    cmp byte [cs_sw_pg], 0
+    je .out
+    mov si, cs_sw_pats
+    mov cx, 4
+.pat:
+    mov al, [si]
+    out CS_SW_PAGE, al
+    in al, CS_SW_PAGE
+    cmp al, [si]
+    je .pok
+    inc word [cs_sw_bad]
+    or byte [cs_sw_why], CSW_PAGE
+.pok:
+    inc si
+    loop .pat
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+cs_sw_pats: db 0x55, 0xAA, 0x0F, 0xF0
+
+; -----------------------------------------------------------------------------
+; cs_sw_try - AL = the candidate. CF = 0: every reference read right, it is
+; SET, timed (cs_sw_ns) and logged; CF = 1: [cs_sw_bad] wrong reads and
+; [cs_sw_why] what they were, and HOME is back. Every other
+; register preserved.
+; -----------------------------------------------------------------------------
+cs_sw_try:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov [cs_sw_cand], al
+    mov word [cs_sw_bad], 0
+    mov byte [cs_sw_why], 0
+    call cs_sw_nsclr                ; untimed until it passes
+    pushf
+    cli
+    cld
+    mov al, [cs_sw_home]            ; the references, at home
+    call cs_sw_set
+    push ds
+    pop es
+    mov di, cs_sw_ref
+    mov ax, [cs_sw_sseg]
+    call cs_sw_grab                 ; the screen, cs_sw_ref + 0
+    mov ax, [cs_sw_rseg]
+    or ax, ax
+    jz .noref
+    call cs_sw_grab                 ; the ROM, cs_sw_ref + 512
+.noref:
+    mov ax, [cs_sw_pseg]            ; pattern A into the card, at the book's
+    or ax, ax
+    jz .fdcref
+    mov es, ax
+    mov di, CS_SW_PBUF
+    mov al, [cs_sw_cand]
+    mov ah, 7
+    call cs_sw_pat
+.fdcref:
+    mov dx, 0x3F4                   ; 3F4h: sixteen reads, all alike, or
+    in al, dx                       ; it is not a reference
+    mov ah, al
+    mov cx, 15
+.fr:
+    in al, dx
+    cmp al, ah
+    jne .fdcno
+    loop .fr
+    mov [cs_sw_fdc], ah
+    jmp short .pgref
+.fdcno:
+    mov byte [cs_sw_fdc], 0FFh
+.pgref:
+    in al, CS_SW_PAGE               ; 85h: kept, and it must read back here
+    mov [cs_sw_pg0], al
+    mov byte [cs_sw_pg], 0
+    mov al, 0x55
+    out CS_SW_PAGE, al
+    in al, CS_SW_PAGE
+    cmp al, 0x55
+    jne .pgdone
+    mov al, 0xAA
+    out CS_SW_PAGE, al
+    in al, CS_SW_PAGE
+    cmp al, 0xAA
+    jne .pgdone
+    mov byte [cs_sw_pg], 1
+.pgdone:
+    mov al, [cs_sw_pg0]
+    out CS_SW_PAGE, al
+    mov al, [cs_sw_cand]            ; the candidate
+    call cs_sw_set
+    mov bx, [cs_sw_desc]            ; ...read back, where the chip can say
+    mov bx, [bx + CSD_GET]
+    or bx, bx
+    jz .pass0
+    call bx
+    cmp al, [cs_sw_cand]
+    je .pass0
+    inc word [cs_sw_bad]
+    or byte [cs_sw_why], CSW_RB
+.pass0:
+    mov bx, 4                       ; every reference, four times over
+.pass:
+    mov ax, [cs_sw_sseg]
+    mov si, cs_sw_ref
+    mov dl, CSW_SCR
+    call cs_sw_cmp
+    mov ax, [cs_sw_rseg]
+    or ax, ax
+    jz .nor
+    mov si, cs_sw_ref + 512
+    mov dl, CSW_ROM
+    call cs_sw_cmp
+.nor:
+    call cs_sw_io
+    mov ax, [cs_sw_pseg]
+    or ax, ax
+    jz .next
+    mov es, ax
+    mov di, CS_SW_PBUF
+    mov al, [cs_sw_cand]
+    mov ah, 7
+    call cs_sw_chk                  ; pattern A back
+    mov dx, 0x2A3                   ; the card's counter: one more a read
+    in al, dx
+    mov ah, al
+    mov cx, 255
+.ramp:
+    in al, dx
+    inc ah
+    cmp al, ah
+    je .rok
+    inc word [cs_sw_bad]
+    or byte [cs_sw_why], CSW_RAMP
+    mov ah, al
+.rok:
+    loop .ramp
+.next:
+    dec bx
+    jnz .pass
+    mov ax, [cs_sw_pseg]            ; pattern B written AT the candidate...
+    or ax, ax
+    jz .timed
+    mov es, ax
+    mov di, CS_SW_PBUF + 512
+    mov al, [cs_sw_cand]
+    not al
+    mov ah, 13
+    call cs_sw_pat
+    mov al, [cs_sw_home]            ; ...and read back at home
+    call cs_sw_set
+    mov al, [cs_sw_cand]
+    not al
+    mov ah, 13
+    call cs_sw_chk
+    mov al, [cs_sw_cand]            ; the candidate again, to be timed
+    call cs_sw_set
+.timed:
+    cmp word [cs_sw_bad], 0
+    jne .verdict
+    call cs_sw_measure              ; where it stands, interrupts still off
+.verdict:
+    mov al, [cs_sw_home]
+    cmp word [cs_sw_bad], 0
+    jne .set
+    mov al, [cs_sw_cand]
+.set:
+    call cs_sw_set                  ; BEFORE interrupts come back
+    cmp byte [cs_sw_pg], 0          ; 85h as it was
+    je .pgk
+    mov al, [cs_sw_pg0]
+    out CS_SW_PAGE, al
+.pgk:
+    popf
+    call cs_sw_logit
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    cmp word [cs_sw_bad], 1         ; CF = 1 when bad < 1, so flip it:
+    cmc                             ; CF = 1 when there was a wrong read
+    ret
+
+; cs_sw_logit - this step into cs_sw_log, while there is room
+cs_sw_logit:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    mov word [cs_sw_last], 0
+    mov al, [cs_sw_n]
+    cmp al, CS_SWMAX
+    jae .out
+    inc byte [cs_sw_n]
+    mov ah, CSL_SIZE
+    mul ah
+    add ax, cs_sw_log
+    mov di, ax
+    push ds
+    pop es
+    cld
+    mov ax, [cs_sw_desc]
+    stosw
+    mov al, [cs_sw_cand]
+    stosb
+    mov al, [cs_sw_why]
+    stosb
+    mov ax, [cs_sw_bad]
+    stosw
+    mov al, [cs_sw_home]
+    stosb
+    mov byte [di], 0                ; CSL_NOTE
+    lea ax, [di - CSL_NOTE]
+    mov [cs_sw_last], ax
+    inc di
+    mov si, cs_sw_ns
+    mov cx, 4
+    rep movsw
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cs_sw_sweep - BX = a knob's descriptor, AL = HOME (what the board runs
+; now: read off a chipset that can say, measured off one that cannot). The
+; book's value, then one bus clock less at a time to the floor, stopping at
+; the first wrong read - and at the first step that read right and bought
+; NOTHING it times (CS_SW_GAIN): a faster setting that is not measurably
+; faster is risk with no return, so the one before it is kept. The PB286LP
+; is why: both its command delays passed at 0 and the I/O read moved 2 ns.
+; A knob none of whose timings can be read here is not swept at all - on
+; that board with shadowing on, the 8-bit MEMORY delay had no 8-bit memory
+; to read, so "passed" meant only that I/O, which it does not govern, did.
+; out AL = the fastest KEPT, and it is SET (HOME when not even the book's
+; read right, or nothing was swept); [cs_sw_fail] = the first that failed
+; or 0; every step appended to cs_sw_log, a skipped knob as one CSN_NOREF.
+; -----------------------------------------------------------------------------
+cs_sw_sweep:
+    push bx
+    push cx
+    mov [cs_sw_desc], bx
+    mov [cs_sw_home], al
+    mov byte [cs_sw_fail], 0
+    mov cl, al                      ; CL = the last kept: home
+    call cs_sw_avail                ; anything it times, readable here?
+    test al, [bx + CSD_GOV]
+    jnz .go
+    mov al, cl                      ; no: log it and leave it where it is
+    mov [cs_sw_cand], al
+    mov byte [cs_sw_why], 0
+    mov word [cs_sw_bad], 0
+    call cs_sw_nsclr
+    call cs_sw_logit
+    mov al, CSN_NOREF
+    call cs_sw_note
+    jmp short .done
+.go:
+    xor ch, ch                      ; CH = 0: nothing kept by this sweep yet
+    mov al, [bx + CSD_BOOK]
+.step:
+    call cs_sw_try
+    jc .bad
+    or ch, ch                       ; the book's value is the baseline: the
+    jz .keep                        ; data sheet's own, kept as it reads
+    test byte [bx + CSD_FLAGS], CSF_DMA
+    jz .gain
+    call cs_sw_dma                  ; the includer's: DMA, interrupts ON
+    jnc .gain
+    push bx
+    mov bx, [cs_sw_last]            ; onto the step it failed
+    or bx, bx
+    jz .dmab
+    or byte [bx + CSL_WHY], CSW_DMA
+    inc word [bx + CSL_BAD]
+.dmab:
+    pop bx
+    jmp short .bad
+.gain:
+    call cs_sw_faster
+    jnc .keep
+    push ax
+    mov al, CSN_NOGAIN              ; read right, bought nothing: not kept
+    call cs_sw_note
+    pop ax
+    jmp short .back
+.keep:
+    mov cl, al
+    mov ch, 1
+    call cs_sw_keepns
+    sub al, [bx + CSD_STEP]
+    jc .done
+    cmp al, [bx + CSD_FLOOR]
+    jae .step
+    jmp short .done
+.bad:
+    mov [cs_sw_fail], al
+.back:
+    mov al, cl
+    call cs_sw_set                  ; the last kept
+.done:
+    mov al, cl
+    pop cx
+    pop bx
+    ret
+
+; cs_sw_avail - AL = the timings that can be read here, CSD_GOV's bits: the
+; screen and the I/O read always, a PicoMEM and a ROM when there is one
+cs_sw_avail:
+    mov al, 0x09
+    cmp word [cs_sw_pseg], 0
+    je .rom
+    or al, 0x02
+.rom:
+    cmp word [cs_sw_rseg], 0
+    je .out
+    or al, 0x04
+.out:
+    ret
+
+; cs_sw_nsclr - cs_sw_ns all untimed
+cs_sw_nsclr:
+    push cx
+    push si
+    mov si, cs_sw_ns
+    mov cx, 4
+.c:
+    mov word [si], 0xFFFF
+    add si, 2
+    loop .c
+    pop si
+    pop cx
+    ret
+
+; cs_sw_keepns - this step's times become the ones the next must beat
+cs_sw_keepns:
+    push ax
+    push bx
+    xor bx, bx
+.k:
+    mov ax, [cs_sw_ns + bx]
+    mov [cs_sw_kns + bx], ax
+    add bx, 2
+    cmp bx, 8
+    jb .k
+    pop bx
+    pop ax
+    ret
+
+; cs_sw_note - AL = a CSN_*, onto the step cs_sw_logit last wrote (if any)
+cs_sw_note:
+    push bx
+    mov bx, [cs_sw_last]
+    or bx, bx
+    jz .out
+    mov [bx + CSL_NOTE], al
+.out:
+    pop bx
+    ret
+
+; cs_sw_faster - CF = 0 when this step is MEASURABLY faster than the last
+; kept on something the knob times: by CS_SW_GAIN ns, or by 1/32 of the
+; reading where that is more. A timing either step lacks says nothing.
+; Every register preserved
+cs_sw_faster:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, [cs_sw_desc]
+    mov dl, [bx + CSD_GOV]
+    xor si, si
+    mov cx, 4
+.t:
+    shr dl, 1
+    jnc .nx
+    mov ax, [cs_sw_kns + si]
+    cmp ax, 0xFFFF
+    je .nx
+    mov bx, [cs_sw_ns + si]
+    cmp bx, 0xFFFF
+    je .nx
+    mov di, ax                      ; DI = the margin: kept / 32, at least
+    shr di, 1                       ; CS_SW_GAIN
+    shr di, 1
+    shr di, 1
+    shr di, 1
+    shr di, 1
+    cmp di, CS_SW_GAIN
+    jae .m
+    mov di, CS_SW_GAIN
+.m:
+    sub ax, bx                      ; what the step bought
+    jb .nx
+    cmp ax, di
+    jae .yes
+.nx:
+    add si, 2
+    loop .t
+    stc
+    jmp short .out
+.yes:
+    clc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cs_sw_tune - SI = a row's knob list (cs_klist_*), AL = HOME for a knob
+; that cannot be read back (the FE3600's R4, measured by the caller). Every
+; knob in turn, each from where it reads now; the log starts empty. out AL =
+; the FIRST knob's fastest. Every other register preserved
+; -----------------------------------------------------------------------------
+cs_sw_tune:
+    push bx
+    push cx
+    push dx
+    push si
+    mov byte [cs_sw_n], 0
+    mov dl, al
+    xor cx, cx                      ; CL = the first knob's answer, CH = had it
+.k:
+    mov bx, [si]
+    or bx, bx
+    jz .out
+    test byte [bx + CSD_FLAGS], CSF_X
+    jz .sw
+    cmp byte [cs_sw_xmode], 0       ; an experiment's knob, outside it
+    je .next
+.sw:
+    mov al, dl
+    mov ax, [bx + CSD_GET]
+    or ax, ax
+    mov al, dl
+    jz .home
+    call [bx + CSD_GET]             ; its own answer, in AL
+.home:
+    call cs_sw_sweep
+    or ch, ch
+    jnz .next
+    mov cl, al
+    inc ch
+.next:
+    add si, 2
+    jmp short .k
+.out:
+    mov al, cl
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret

@@ -55,6 +55,7 @@ import stkwater
 import dispcp
 import dispapps
 import os88build
+import os88pkg
 
 # The static chain tools/stkdepth.py composes for cc_worker is 160 bytes
 # (SPEC.md 91). The interrupt floor on top of it is 32-38 measured here and 64
@@ -482,16 +483,28 @@ def main():
         #                   "never drawn" needs a third value and a non-zero
         #                   initialiser is what puts it in .data. Both arms see
         #                   this one, because -1 is not a phase.
+        #   _pmc_rndstate   the xorshift state pmc_time.c draws from, seeded
+        #                   0x1234 and re-seeded at each round's start. A
+        #                   frightened ghost picks its turns from it, so
+        #                   whether it has moved when this reads depends on
+        #                   whether a ghost turned yet - which is why the row
+        #                   failed 2 runs in 6 at every commit it was rated at.
         #
         # Everything else - 37KB of code and arcade ROM tables - must be byte
         # for byte the file.
-        disk = Path(os88build.at('build/paccman.o88')).read_bytes()
+        # THE FILE IS NOT THE IMAGE once PKGZ packs it (SPEC.md 20.13.5):
+        # the comparison is against what the loader expanded.
+        disk = os88pkg.image_unwrap(
+            Path(os88build.at('build/paccman.o88')).read_bytes())
         live = m.read(base, len(disk))
-        allow = []
+        allow = [(3, 4)]                # the flags byte: image_unwrap clears
+                                        # the packed bits the loaded header
+                                        # may still carry
         for name, span in (('_pmc_items', 8), ('_pmc_mset', 64),
                            ('cc_tpl', 10),
                            ('_pmc_step', 2), ('_pmc_rows', 2),
-                           ('_pmc_rsh', 2), ('_pmc_promptph', 2)):
+                           ('_pmc_rsh', 2), ('_pmc_promptph', 2),
+                           ('_pmc_rndstate', 2)):
             if name in symbols:
                 allow.append((symbols[name], symbols[name] + span))
         bad = [(i, a, b) for i, (a, b) in enumerate(zip(live, disk))

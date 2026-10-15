@@ -50,6 +50,7 @@ trip held the VGA's. It is only a defect when the SAME display is current at
 both ends and the geometry moved anyway, and that is what is tested.
 """
 import argparse
+import tempfile
 import subprocess
 import sys
 
@@ -158,7 +159,7 @@ def main():
     o88, pkg, fskey = APPS[a.app]
     apps = a.apps
     if apps is None:
-        apps = "/tmp/fsx-%s.img" % a.app
+        apps = tempfile.gettempdir() + "/fsx-%s.img" % a.app
         subprocess.run([sys.executable, "tools/os88disk.py", "-o", apps,
                         "--size", "360", o88], check=True,
                        stdout=subprocess.DEVNULL)
@@ -307,7 +308,7 @@ def main():
         full = state(m, "fullscreen", both, t)
         for c in both:
             w, h, d = m.fbuf(card=c)
-            os88marty.write_png_rgb("/tmp/fsx-2-full-card%d.png" % c,
+            os88marty.write_png_rgb(tempfile.gettempdir() + "/fsx-2-full-card%d.png" % c,
                                     w, h, d)
 
         # --- and out --------------------------------------------------------
@@ -322,7 +323,7 @@ def main():
         after = state(m, "back to windowed", both, t)
         for c in both:
             w, h, d = m.fbuf(card=c)
-            os88marty.write_png_rgb("/tmp/fsx-3-after-card%d.png" % c,
+            os88marty.write_png_rgb(tempfile.gettempdir() + "/fsx-3-after-card%d.png" % c,
                                     w, h, d)
 
         # --- the discriminator: a repaint nothing here asked for ------------
@@ -333,7 +334,7 @@ def main():
         forced = state(m, "after a forced repaint", both, t)
         for c in both:
             w, h, d = m.fbuf(card=c)
-            os88marty.write_png_rgb("/tmp/fsx-4-forced-card%d.png" % c,
+            os88marty.write_png_rgb(tempfile.gettempdir() + "/fsx-4-forced-card%d.png" % c,
                                     w, h, d)
 
         print()
@@ -409,7 +410,7 @@ def main():
                   % (name, n, "ok" if not n else "*** CORRUPT ***", b))
             if n:
                 bad.append("%s differs from a fresh repaint" % name)
-        print("   PNGs in /tmp/fsx-*.png")
+        print("   PNGs in %s/fsx-*.png" % tempfile.gettempdir())
         print()
         print("FAIL: %s" % "; ".join(bad) if bad else
               "PASS: both cards match a fresh repaint after the round trip")

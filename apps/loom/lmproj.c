@@ -284,8 +284,14 @@ static int lm_save(int slot)
 
     if (!lm_shave[slot] || !lm_smod[slot])
         return 0;
-    if (lm_projhave && os88_file_goto(&lm_projplace) != 0) {
-        lm_say("The project's folder is not listable - was the disk swapped?");
+    /* GOTO_QM and not os88_file_goto(): this is a by-name write, not a
+     * listing, and the display remount was ~0.5 s of motor per modified slot
+     * (docs/plans/NAV-COST-PLAN.md). A refusal moves NOTHING, so returning
+     * here is not optional - falling through would write a same-named file
+     * into whatever folder we happen to stand in. */
+    if (lm_projhave
+        && os88_file_goto_q_mark(lm_projplace.clus, lm_projplace.vol) != 0) {
+        lm_say("The project's folder is unreachable - was the disk swapped?");
         return -1;
     }
     if (os88_file_write_seg(lm_fname(slot), lm_sbase(slot),
@@ -372,14 +378,17 @@ static int lm_nextslot(void)
 /* ============================================================================
  * SPEC.md 19.9's PREFERENCES - `SYSTEM/APPDATA/LOOM.CFG`
  *
- * The bank / GOTO / act / GOTO-back idiom, TOLERATING ABSENCE at every step.
+ * The bank / GOTO_QM / act / GOTO_QM-back idiom, TOLERATING ABSENCE at every
+ * step.
  * A disk without the folder is not an error: it is a user's own disk, or one
  * written by something else, and the volume goes back where it was.
  * apps/weave/wstate.c is the shape and its header carries the doctrine -
  * including the one that is easy to get wrong, that SYSTEM/ is FOUND BY
- * WALKING rather than assumed, and that it is os88_file_goto() and never the
- * quiet twin (which moves the global cwd and deliberately not the instance's,
- * so the quiet move is undone by the very next write).
+ * WALKING rather than assumed, and that every step is os88_file_goto_q_mark()
+ * - the quiet stand that moves the instance too, a word inside our own volume
+ * - and neither os88_file_goto(), a remount for DISPLAY at every step, nor
+ * GOTO_Q, which moves the global cwd only and is undone by the next write
+ * (docs/plans/NAV-COST-PLAN.md).
  *
  * NEVER FAIL A LAUNCH BECAUSE IT IS MISSING. The file holds the last
  * project's folder and the last slot, and both are conveniences: without them
@@ -394,7 +403,6 @@ static int lm_nextslot(void)
 #define LM_CFG_LEN    8
 
 static struct os88_place lm_here;
-static struct os88_place lm_there;
 static struct os88_find  lm_find;
 static unsigned char     lm_cfg[LM_CFG_LEN];
 
@@ -413,9 +421,7 @@ static int lm_dive(const char *name)
             continue;
         if (!lm_samename(lm_find.name, name))
             continue;
-        lm_there.clus = lm_find.clus;
-        lm_there.vol = lm_here.vol;
-        return os88_file_goto(&lm_there) == 0;
+        return os88_file_goto_q_mark(lm_find.clus, lm_here.vol) == 0;
     }
     return 0;
 }
@@ -423,12 +429,10 @@ static int lm_dive(const char *name)
 static int lm_data_enter(void)
 {
     os88_file_here(&lm_here);
-    lm_there.clus = 0;                  /* the ROOT of that same volume */
-    lm_there.vol = lm_here.vol;
-    if (os88_file_goto(&lm_there) != 0)
+    if (os88_file_goto_q_mark(0, lm_here.vol) != 0)    /* the ROOT of it */
         return 0;
     if (!lm_dive("SYSTEM") || !lm_dive("APPDATA")) {
-        os88_file_goto(&lm_here);
+        os88_file_goto_q_mark(lm_here.clus, lm_here.vol);
         return 0;
     }
     return 1;
@@ -436,7 +440,8 @@ static int lm_data_enter(void)
 
 static void lm_data_leave(void)
 {
-    os88_file_goto(&lm_here);           /* leaving the instance elsewhere would
+    os88_file_goto_q_mark(lm_here.clus, lm_here.vol);
+                                        /* leaving the instance elsewhere would
                                          * move where every unqualified name it
                                          * passes the file API resolves, and
                                          * where its next dialog opens (19.9) */
@@ -647,11 +652,14 @@ static int ovl_openproj(void *win, const char *name)
 /* lm_open_pend - spend the banked launch document (SPEC.md 54.5, 54.8).
  * Called from the FIRST W_PAINT and exactly once.
  *
- * THE GOTO GOES FIRST. It is a REMOUNT - real floppy I/O - and a failure is
- * the folder no longer being listable, a disk swapped between the
- * double-click and this first paint. Searching the wrong directory would
- * report the wrong reason, so a refused GOTO takes the not-found exit rather
- * than falling through to a search where we happen to stand.
+ * THE GOTO GOES FIRST, and it is os88_file_goto_q_mark(): the open reads by
+ * name and never asks the kernel to list the folder, so the display remount
+ * os88_file_goto() would do is motor time bought for nothing
+ * (docs/plans/NAV-COST-PLAN.md). A failure is the folder no longer being
+ * reachable, a disk swapped between the double-click and this first paint,
+ * and a refused GOTO_QM MOVES NOTHING - so it takes the not-found exit rather
+ * than falling through to a search (and an open of a same-named file) where
+ * we happen to stand.
  *
  * Only when a locator actually came with the name: 0,0 is a REAL locator -
  * the root of volume A: - so lm_arghave is what says whether there was one.
@@ -671,10 +679,10 @@ static void lm_open_pend(void *win)
         lm_menusync();
         return;
     }
-    if (os88_file_goto(&lm_argplace) != 0) {
+    if (os88_file_goto_q_mark(lm_argplace.clus, lm_argplace.vol) != 0) {
         lm_l0();
         lm_ls(lm_argname);
-        lm_ls(" missing - the folder is not listable.");
+        lm_ls(" missing - the folder cannot be reached.");
         lm_say(lm_line);
         return;
     }
@@ -855,11 +863,16 @@ static void lm_pack(void)
 
     lm_packlen = lm_outlen();
     written = -1;
-    if (lm_projhave && os88_file_goto(&lm_projplace) == 0) {
-        lm_mkname(lm_stem, "WAB");
-        os88_strcpy(lm_amsg, lm_line, sizeof(lm_amsg));
+    lm_mkname(lm_stem, "WAB");          /* named BEFORE the stand, so a
+                                         * refusal below reports this file
+                                         * and not the last message's */
+    os88_strcpy(lm_amsg, lm_line, sizeof(lm_amsg));
+    /* GOTO_QM: a by-name write, so no display remount (NAV-COST-PLAN). A
+     * refused stand moves nothing and leaves `written` at -1 - the bundle is
+     * never written into the folder we merely happen to be in. */
+    if (lm_projhave
+        && os88_file_goto_q_mark(lm_projplace.clus, lm_projplace.vol) == 0)
         written = os88_file_write_seg(lm_amsg, lm_outseg, lm_packlen);
-    }
     lm_pack_free();                     /* 11.4: transient, and given back
                                          * BEFORE the report is drawn */
 

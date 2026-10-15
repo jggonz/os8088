@@ -52,7 +52,7 @@ whole develop–run cycle lives on the target with zero new kernel bytes.
 | **`WEAVE.O88`** | the runtime. A C package (`CC_PACKAGE(weave,weave,WEAVE.OVL)`, SPEC.md §73) with hand-written 8086 cores for the hot loops. Opens one `.WAB` per instance. Measured on this tree: image 51,688 + bss 9,214 = **60,902 resident** against SPEC.md §20.1's 61,440-byte ceiling (`APP_MAX_SIZE`); `os88pkg.py` prints the count on every build. 55,000 bytes is the overlay-split trigger (SPEC.md §73.14) |
 | **`WEAVE.OVL`** | the runtime's one overlay (21,217 bytes): refusable, UI-task-only paths — the tenant list is §1.2.1. Nothing an event handler needs mid-run lives here, with the one stated exception |
 | **`WEAVE.WSM`** | the runtime's **canvas core** (§1.2.2): a second, RESIDENT segment (5,087 bytes), read ONCE at open and only when the bundle declares a `<canvas>`, far-called from the worker as well as from the UI task. Not an overlay, and not `.OVL`: an overlay is refusable and on-demand, this is neither — `cc_ovneed` refuses a worker outright (SPEC.md §73.14), and every byte in here runs per frame on one |
-| **`LOOM.O88`** | the IDE. A separate native package (the WORD/CWORD precedent: two things may not answer to one name). Note Pad's editor engine with prefix `lm_`, taken from `apps/cword`'s C realisation of it and not from `notepad.asm` (§1.2.3), a file-list sidebar, one editor pane. Measured: 54,978 + 6,216 = **61,194 resident**, 246 under the ceiling |
+| **`LOOM.O88`** | the IDE. A separate native package (the WORD/CWORD precedent: two things may not answer to one name). Note Pad's editor engine with prefix `lm_`, taken from `apps/cword`'s C realisation of it and not from `notepad.asm` (§1.2.3), a file-list sidebar, one editor pane. Measured: 42,812 + 4,934 = **47,746 resident**, 13,694 under the ceiling (61,194 when it landed; the C SDK passes and the first apps size pass took the rest) |
 | **`LOOM.OVL`** | Loom's one overlay (43,702 bytes): the WML compiler, the WJS compiler, the FX pre-compiler, the atom interner, the bundle writer, About, New/Open Project. Pack is a menu command and menu commands may refuse — the canonical overlay tenant |
 | **`LOOM.WPV`** | Loom's **preview module** (§1.2.4): a second, RESIDENT segment carrying WEAVE's flow walk and component painter, compiled a second time out of the same source, read once the first time Preview is opened. `WEAVE.WSM`'s lifecycle; the difference is that this one is compiled C, so its header carries a `.bss` word and it zeroes that region itself on first entry |
 | **`apps/weave/*` shared source** | what LOOM compiles out of WEAVE's tree, as SOURCE and never as a copy (SPEC.md §20.5.1 — this platform's only code-sharing mechanism): `wflow.c` and `wpaint.c` (the flow walk and the painter, into `LOOM.WPV`), `wdraw.inc` (the paint and hit-test cores, assembly because they run under the gfx lock once per callback), `wblob.inc` (the claim accessors), `wnum.inc` (§5.1's conversion), `watom.c` (§2.7's atom accessors), `weave.h`, `wpvabi.inc`/`wpvabi.h`, and `wfxc.c`, which is LOOM's whole FX pre-compiler. One description of the picture, two copies of the object code; **never a second copy of the text**, because two layouts that must agree cell for cell (§12) is the failure §11's byte-identity rule exists to prevent, said about code |
@@ -345,10 +345,25 @@ SPEC.md §73.14 writes about its own two words.
 one folder for exactly this reason, and SPEC.md §19.10's `LOOM/` folder is the
 same rule on the everything disk.
 
-**What it costs, counted.** **16,216 bytes of image + 5,268 of bss =
-21,484, one 21KB claim**, taken the first time the pane is opened and held
+**What it costs, counted.** **11,856 bytes of image + 5,234 of bss =
+17,090, one 17KB claim** (measured at the first apps size pass; it was 21KB
+when the module landed), taken the first time the pane is opened and held
 until the instance closes. LOOM's resident image pays only for the seam, the
 loader and the three sentences (~228 bytes).
+
+**The bridge is GATED, as a package's is.** `apps/cc/os88thunk.asm` is
+included AFTER the compiled C with `CC_THUNK_GATED` defined (SPEC.md §73.9.1),
+so the module assembles only the thunks its C names. Included before the C,
+as it first was, every gate opened: the whole bridge plus thirty bytes of
+window, file and worker state the module can never reach - 2,060 bytes of
+image and the claim's two KB.
+
+**The disks carry it PACKED** - `$(CC_OVLZ)/LOOM.WPV`, a `'CZ'` file written
+by the overlay's own rule (SPEC.md §73.14.1), 7,996 bytes on disk. Nothing on
+the reading side knows: `lm_pv_need` reads it through `OSAPI_FILE_READ`,
+which is transparent (SPEC.md §20.14), into a claim sized from the unpacked
+header words the package was assembled against, and a hintless copy is
+sniffed and expanded anyway.
 
 ---
 
@@ -401,15 +416,15 @@ size.
 
 **LOOM's own ladder is separate and shorter.** The IDE holds the sources
 claim, `LOOM.OVL`'s (SPEC.md §73.14) and — from the first time Preview is
-opened — `LOOM.WPV`'s 21KB (§1.2.4). Pack adds §11.4's two transients, the
+opened — `LOOM.WPV`'s 17KB (§1.2.4). Pack adds §11.4's two transients, the
 62KB output claim and the 50KB scratch, and Preview keeps the first of those
 while the pane is up. Five claim records at peak against the eight:
 
 | piece | KB |
 |---|---|
-| LOOM package region (image+bss, §1.2: 61,194 bytes) | ~60 |
-| `LOOM.OVL` (on demand) | ~43 |
-| `LOOM.WPV` (§1.2.4; only once Preview has been opened) | 0–21 |
+| LOOM package region (image+bss, §1.2: 47,746 bytes) | ~47 |
+| `LOOM.OVL` (on demand) | ~35 |
+| `LOOM.WPV` (§1.2.4; only once Preview has been opened) | 0–17 |
 | the sources claim (`LM_CLAIMKB`, `apps/loom/loom.c`) | 29 |
 | Pack's two transients (§11.4), while Pack or Preview runs | 0–112 |
 
@@ -549,7 +564,7 @@ diffs the pane against it.
 §14 prices one: ~1.26 s fully lettered on CGA, ~2.62 s on VGA, ~2.88 s on
 Hercules. It happens once per toggle, because Preview is a MENU COMMAND —
 the pane is not the editor and nothing repaints it per keystroke. On the
-first toggle of an instance it also costs one 21KB claim and one floppy read
+first toggle of an instance it also costs one 17KB claim and one floppy read
 for the module, ~400 ms of `int 13h` on the target, spent on the UI task and
 deliberately outside the gfx lock.
 

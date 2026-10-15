@@ -73,6 +73,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--layout", choices=("herc", "cga"), default="herc")
     ap.add_argument("--machine", default="os8088_5150_herc_gla")
+    ap.add_argument("--kpart", type=int, default=vid.KEY_PART,
+                    help="PLAIN.V88's keys IN PARTS (98.1.3.8), a read of "
+                    "this many bytes each: its lap cannot join through key 0 "
+                    "inside the hook, and goes on from the stream's start")
     a = ap.parse_args()
     shadow = a.layout != "herc"
     os.chdir(ROOT)
@@ -86,7 +90,13 @@ def main():
         pl = os.path.join(tmp, "PLAIN.V88")
         vid.encode_canvases(cvs, g, lp, FPS, title="loop", loop=L,
                             repeat=True)
-        vid.encode_canvases(cvs, g, pl, FPS, title="plain")
+        vid.encode_canvases(cvs, g, pl, FPS, title="plain", kpart=a.kpart)
+        if a.kpart < vid.KEY_PART:
+            rk = vid.Reader(pl)
+            np_ = len(vid.key_reads(rk.key(0)[1]))
+            print("   PLAIN.V88's key 0 in %d parts" % np_)
+            if np_ < 2:
+                sys.exit("vidrepeat: --kpart made key 0 one record")
         for p in (lp, pl):
             vid.verify_v88(p)
         rl, rp = vid.Reader(lp), vid.Reader(pl)

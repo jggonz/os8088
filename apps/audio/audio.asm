@@ -59,7 +59,6 @@
 AP_FMT_PCM8    equ 0
 AP_FMT_ADPCM   equ 1
 
-AP_HDRBUF_SZ   equ 16384           ; header window / streaming read bounce (shared)
 AP_RD_CHUNK    equ 16384           ; bytes one ap_refill_chunk read pulls (SPEC.md
                                    ; 86.5.2): cost disk work in int-13h CALLS,
                                    ; not sectors - a 4.77 MHz XT pays ~1-2 disk
@@ -67,7 +66,17 @@ AP_RD_CHUNK    equ 16384           ; bytes one ap_refill_chunk read pulls (SPEC.
                                    ; the read holds sch_lock (SPEC.md 34.5), so a
                                    ; 2 KB-per-call refill froze the machine ~5x a
                                    ; second. One big gulp every few seconds instead.
+                                   ; It lands STRAIGHT IN THE LOOK-AHEAD RING
+                                   ; (SPEC.md 86.5.2): no bounce, no copy.
 APD_OUTSZ      equ 2048            ; decoder scratch = one stage half
+APD_SRCSZ      equ 2368            ; ...and what apd_out really holds: on the
+                                   ; speaker it is a STEP's span of inputs too
+                                   ; (aps_source, SPEC.md 86.21) - span x step
+                                   ; + the carry + the position carried, which
+                                   ; for 44.1 kHz to an 8088's 4,800 Hz is 255 x
+                                   ; 9.1875 + 1 + 1 + 9 = 2,354. At 2,048 that
+                                   ; ran 306 bytes past, into the parser's state
+                                   ; (the playing track's folder among it)
 APD_BLKMAX     equ 2048            ; sanity cap on nBlockAlign
 APD_INBUF      equ 512             ; ADPCM input bounce: one ap_la_get feeds many
                                    ; nibbles, instead of ap_la_get per byte (the
@@ -209,18 +218,16 @@ AP_B_NONE  equ 0xFF
     APB  ap_arg_vol
     APW  ap_elapsed_s              ; seconds played of the current track
     APW  ap_total_s               ; track duration in seconds (0 = unknown)
-    APW  ap_bpt_lo                 ; bytes of PCM8 per system tick (rate/18.2)
-    APW  ap_bpt_hi
-    APW  ap_sub                    ; sub-tick byte remainder for the clock
-    APW  ap_t0                     ; OSAPI_GET_TICKS at play start (unused net)
     APB  ap_diag                   ; 1 = the window shows the Diagnostics view
     APW  ap_last_s                 ; last elapsed second the dynamic redraw drew
     APW  ap_last_bar               ; last progress-bar fill (px) it drew
     APW  ap_last_draw_t            ; OSAPI_GET_TICKS at that redraw (throttle)
     APW  ap_reap_kick_t            ; ...and at the last end-of-track UI kick
+%ifdef AP_HANDOFF                  ; the handoff's alone (SPEC.md 86.11.1)
     APW  ap_que_t                  ; ...and at the last APQUEUE.DAT poll
     APBUF ap_snap, SYS_SNAPSHOT_SIZE   ; single-instance probe buffer (entry only)
     APBUF ap_querec, 128           ; APQUEUE.DAT records, staged for a poll
+%endif
 
 ; --- look-ahead ring ---------------------------------------------------
     APW ap_la_seg
@@ -253,7 +260,6 @@ AP_B_NONE  equ 0xFF
     APW ap_consumed
     APW ap_rate
     APB ap_req
-    APB ap_pcmbits                 ; 8 for PCM8, effective 8 after ADPCM decode
     APB ap_first_paint             ; 1 until ap_onwake does the settled repaint
 
 ; --- decoder state (apdec.inc) --------------------------------------
@@ -266,12 +272,10 @@ AP_B_NONE  equ 0xFF
     APB apd_hasbyte
     APB apd_hinib
     APB apd_curbyte
-    APBUF apd_hdr, 4
-    APBUF apd_tmp, 2
     APW   apd_inlen                ; bytes currently in apd_inbuf
     APW   apd_inpos                ; read cursor into apd_inbuf
     APBUF apd_inbuf, APD_INBUF
-    APBUF apd_out, APD_OUTSZ
+    APBUF apd_out, APD_SRCSZ
 
 ; --- WAV parser state (apwav.inc) ---------------------------------
     APW apw_name
@@ -299,18 +303,17 @@ AP_B_NONE  equ 0xFF
     APD apw_datlen
     APW apw_err
     APB apw_spk                    ; 'o8sp': 1 shaped, 2 counts (SPEC.md 86.21)
-    APBUF ap_cinv, 256             ; ...counts back to samples, on a card (86.21.1)
+ap_cinv equ aps_dbuf               ; ...counts back to samples, on a card or a
+                                   ; Covox (86.21.1): 256 bytes of the box's
+                                   ; table (apspk.inc), because a file of counts
+                                   ; plays 1:1 or not at all - never boxed - and
+                                   ; each is rebuilt by its own track's open
 
-; --- shared header window / cluster bounce -----------------------
-; THE int 13h TARGET, so 512-ALIGNED (CLAUDE.md, SPEC.md 2.4): the loader's
-; claim is whole KB, so the OFFSET decides - align the accumulator here and
-; pad the image end to 512 below. A base that is not answers 09h on the one
-; transfer in four that straddles a 64 KB page, and the refill takes that CF
-; as end of data: the song stops a few seconds in, on the machine whose heap
-; happened to put the package there.
-%assign AP_BSS ((AP_BSS + 511) / 512) * 512
-    APBUF ap_scratch, AP_HDRBUF_SZ
-apw_hdrbuf equ ap_scratch
+; (NO int 13h TARGET HERE. The parser's header window and every refill read
+; land in the look-ahead ring, a heap claim - whose base is 512-aligned by the
+; kernel's own construction (guard 6b: HEAP_SEG + n * MEM_PARA_KB, a multiple
+; of 32 paragraphs), which is SPEC.md 2.1.1's rule kept without a 16 KB bounce
+; in every instance's bss and a 16 KB copy a gulp (SPEC.md 86.5.2).)
 
 ; --- playlist (aplist.inc) --------------------------------------
     APBUF apl_ent, AP_MAXTRK * AP_ENTSZ
@@ -407,7 +410,8 @@ ap_entry:
     ; moves most easily, and putting this at the spawn left exactly
     ; those runs declaring nothing - measured, by the row that reads
     ; MC_RLOC back out of the kernel's own table.
-    OS88_REGION_MOVABLE
+    OS88_REGION_MOVABLE_NOKEEP      ; nothing kept: this proc preserves no
+                                    ; register, and its CF is the `clc` below
 
     mov si, ap_menus
     call OSAPI_MENU_SET
@@ -527,15 +531,16 @@ ap_s_notask:  db 'No free task - close an app and retry', 0
 ap_s_hirate:  db 'Rate needs a Sound Blaster Pro', 0
 ap_s_opening: db 'Opening...', 0
 ap_s_endlist: db 'End of playlist', 0
-ap_s_queued:  db 'Sent to Audio Player', 0
 ap_s_added:   db 'Added to playlist', 0
 ap_s_notwav:  db 'Not a .WAV file', 0
 ap_s_full:    db 'Playlist is full', 0
 ap_s_dup:     db 'Already in the playlist', 0
+%ifdef AP_HANDOFF
+ap_s_queued:  db 'Sent to Audio Player', 0
 ap_qfile:     db 'APQUEUE.DAT', 0
+%endif
 
 %define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)
 %include "os88ui.inc"
     OS88_BSS AP_BSS
-    align 512, db 0                ; os88_image_end on a 512 boundary, so the
-    OS88_IMAGE_END                 ; aligned AP_BSS offset above is physical
+    OS88_IMAGE_END

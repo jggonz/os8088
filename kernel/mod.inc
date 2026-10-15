@@ -44,8 +44,9 @@ MOD_NIMG    equ 5               ; SMALL: file operations, no hibernate, and
 %else
 MOD_DOCK    equ 4
 MOD_EXT     equ 5               ; ...and the extended desktop (SPEC.md 39.19.6)
-MOD_NIMG    equ 6               ; BIG: hibernate, resident file operations,
-                                ; the optional Dock and EXTD.DRV
+MOD_WIN     equ 6               ; ...and the Windows theme's chrome (76.14)
+MOD_NIMG    equ 7               ; BIG: hibernate, resident file operations,
+                                ; the optional Dock, EXTD.DRV and WIN95.DRV
 %endif
 ; MOD_NIMG is the IMAGES os88mod.py cuts out; MOD_MAX the ROWS. They differ by
 ; one row that is not an image of its own: MOD_SETS, CTRL.DRV's first
@@ -59,7 +60,8 @@ MOD_MAX     equ MOD_NIMG
 %endif
 MOD_CTRL    equ 0               ; the Control Panel (SPEC.md 31)
 MOD_FMT     equ 1               ; the floppy formatter (SPEC.md 18.96)
-MOD_CLONE   equ 2               ; the disk cloner (SPEC.md 18.99)
+MOD_DISKOPS equ 2               ; DISKOPS.DRV: the cloner, Write Img and
+                                ; the compressor (SPEC.md 18.99)
 %ifdef KERN_BIG
 MOD_HIBER   equ 3               ; hibernate and resume (SPEC.md 87) - kern_big
 %endif                          ; alone: the 128KB machine has no hard disk to
@@ -155,10 +157,12 @@ mod_f_dock: db 'DOCK.DRV', 0
 %endif
 %ifdef KERN_BIG
 mod_f_ext:  db 'EXTD.DRV', 0
+mod_f_win:  db 'WIN95.DRV', 0
 %endif
 mod_f_ctrl: db 'CTRL.DRV', 0    ; .DRV for the attributes and nothing else
 mod_f_fmt:  db 'FORMAT.DRV', 0  ; (SPEC.md 19.6): os88disk.py stamps anything
-mod_f_clon: db 'CLONE.DRV', 0   ; ...and a third of them (SPEC.md 18.99)
+mod_f_dops: db 'DISKOPS.DRV', 0 ; ...and a third (SPEC.md 18.99; CLONE.DRV
+                                ; until it held more than the cloner)
 %ifdef KERN_BIG
 mod_f_hib:  db 'HIBER.DRV', 0   ; ...and a fourth: hibernate (SPEC.md 87),
                                 ; which qualifies twice - the user is leaving
@@ -192,7 +196,7 @@ mod_hdrt:   dw 0x384F           ; MOD_H_MAGIC
 mod_tab:
     dw 0, mod_f_ctrl            ; MOD_CTRL
     dw 0, mod_f_fmt             ; MOD_FMT
-    dw 0, mod_f_clon            ; MOD_CLONE
+    dw 0, mod_f_dops            ; MOD_DISKOPS
 %ifdef KERN_BIG
     dw 0, mod_f_hib             ; MOD_HIBER
 %endif
@@ -218,6 +222,7 @@ mod_r_dock:
 %endif
 %ifdef KERN_BIG
     dw 0, mod_f_ext             ; MOD_EXT, kern_big's alone (SPEC.md 39.19.6)
+    dw 0, mod_f_win             ; MOD_WIN, kern_big's alone (SPEC.md 76.14)
 %endif
 %ifdef OS88_SHORTCUTS
     dw 0, mod_f_ctrl            ; MOD_SETS: the SAME file, cut short (2.8.7)

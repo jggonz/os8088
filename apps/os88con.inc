@@ -84,16 +84,24 @@ CON_ROWS     equ 25
 CON_CELLS    equ CON_COLS * CON_ROWS        ; 2,000 cells...
 CON_SCRSZ    equ CON_CELLS * 2              ; ...of a character and an attribute
 CON_BAND     equ CON_COLS * 8               ; one composed row, 1bpp, 640 bytes
-CON_GLYF     equ 256 * 8                    ; ...and the CP437 face (70.8.6)
+CON_GLYF     equ 256 * 8                    ; ...and the CP437 face (70.8.6),
+                                            ; which is IMAGE now (70.8.6.1)
 
 %if CON_ROWS > 32
   %error "con_drb is four bytes: CON_ROWS must fit twenty-five bits and no more"
 %endif
 
-; THE FACE IS OURS, not the carrier's. con_font builds [con_glyf] out of it at
-; launch and nothing else in apps/ reads it, so a carrier that had to include
-; it too would be a carrier that can forget to (SPEC.md 70.8.6).
+; THE FACE IS OURS, not the carrier's, and it IS [con_glyf] (SPEC.md
+; 70.8.6.1): 0..31 and 128..255 assembled in place, 32..127 a hole con_font
+; fills off the ROM at launch. It was 1,280 bytes of image copied into 2,048
+; of bss; in place it is 2,048 of image and nothing else, and con_compose's
+; `add bx, con_glyf` is the same instruction with a different immediate - the
+; cell draw does not change by a cycle. Nothing else in apps/ reads it, so a
+; carrier that had to include it too would be a carrier that can forget to.
 %include "os88cp437.inc"
+%if $ - con_glyf != CON_GLYF
+  %error "os88cp437.inc must lay out all 256 glyphs, the ROM's hole included"
+%endif
 
 ; WHERE THE BSS LIVES - os88parts.inc's chain, and for its reason: a carrier
 ; already has its own bss laid out from os88_image_end, so this one is based
@@ -928,15 +936,8 @@ con_font:
     push di                         ; character, so this proc came back with DX
     push es                         ; changed and said nothing (CLAUDE.md's
                                     ; register discipline)
-    ; --- the shipped half first, so the ROM half can simply overwrite it ----
-    mov si, con_cp437
-    mov di, con_glyf
-    mov cx, 32 * 8                  ; 0..31
-    call .blk
-    mov di, con_glyf + 128 * 8
-    mov cx, 128 * 8                 ; ...and 128..255, SI walking straight on
-    call .blk
-    ; --- then the machine's, if it has one ---------------------------------
+    ; --- the shipped half is already in place (70.8.6.1), so the machine's
+    ; simply overwrites what it covers --------------------------------------
     push bp
     xor bp, bp
     mov es, bp
@@ -972,13 +973,6 @@ con_font:
     pop cx
     pop bx
     pop ax
-    ret
-.blk:                               ; CX bytes DS:SI -> DS:DI
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    loop .blk
     ret
 .far:                               ; CX bytes ES:SI -> DS:DI
     mov al, [es:si]
@@ -1438,9 +1432,10 @@ con_say:
 ; con_clear - an erase takes the CURRENT attribute and may not invent one
 ; (SPEC.md 70.9.3).
 ;
-; **AND THE FACE, WHICH IS THE ONE THAT LOOKS LIKE NOTHING IS WRONG.** A zeroed
-; [con_glyf] is 256 blank glyphs, so a console whose carrier forgot con_font
-; holds all the right characters and draws a black rectangle - the buffer reads
+; **AND THE FACE, WHICH IS THE ONE THAT LOOKS LIKE NOTHING IS WRONG.** Until
+; con_font runs, [con_glyf]'s ASCII 32..127 is a blank hole (70.8.6.1), so a
+; console whose carrier forgot it holds all the right characters and draws
+; every letter and digit as nothing - the buffer reads
 ; perfectly and the screen is empty, which is the worst shape a defect can
 ; have. Telnet calls it itself because it has a launch path of its own; a
 ; carrier that calls con_open gets it for free and cannot forget.
@@ -1818,8 +1813,9 @@ con_tx_hint:
 con_scr     equ CON_BSS_AT + 0          ; CON_SCRSZ: the cells, character then
                                         ; attribute - text VRAM's own layout
 con_band    equ con_scr + CON_SCRSZ     ; CON_BAND: one composed screen row
-con_glyf    equ con_band + CON_BAND     ; CON_GLYF: the 256 CP437 glyphs
-con_run     equ con_glyf + CON_GLYF     ; CON_COLS+1: con_rowfont's NUL run.
+                                        ; (con_glyf was here, 2,048 bytes: it
+                                        ; is the image's now, 70.8.6.1)
+con_run     equ con_band + CON_BAND     ; CON_COLS+1: con_rowfont's NUL run.
                                         ; ITS OWN, where telnet lent it the
                                         ; status line's buffer on the argument
                                         ; that the two could not overlap in

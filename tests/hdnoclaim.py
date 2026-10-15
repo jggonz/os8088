@@ -124,7 +124,10 @@ def main():
     def S(name):
         return os88sym.linear(name)
 
-    with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
+    # THE HARD DISK ANSWERED OFF (tests/hdoff.py): SPEC.md 51.3.2 loads
+    # HDD.DRV at boot here, and this row ticks it in itself
+    import hdoff
+    with os88marty.launch(hdoff.image(), apps="build/apps360.img",
                           machine=a.machine, boot=False) as m:
         m.run()
         os88marty.settle(m, gate=os88marty.desktop_up)

@@ -57,6 +57,10 @@ at_geom_init:
     mov [at_vbpp], dh
     sub ax, 128                     ; MARGIN_H = 64 each side - ArtfulType's
     and ax, 0FFF8h                  ; own margins; byte-aligned for the blits
+    cmp ax, AT_S1ST*8               ; ...and no wider than the strip, which
+    jbe .twok                       ; also bounds a line's characters to
+    mov ax, AT_S1ST*8               ; AT_LBUFCAP (SPEC.md 46.4.12). Hercules'
+.twok:                              ; 592 is the widest any card asks for
     mov [at_tw], ax
     mov word [at_tx0], 64
     mov ax, 64
@@ -1058,6 +1062,7 @@ at_ruleat:
     pop ax
     ret
 
+%ifdef NOATBLIT1
 ; -----------------------------------------------------------------------------
 ; at_expand - widen at_strip1 (1bpp) into at_strip4 (packed 4bpp)
 ; in:  [at_prh] rows; at_cellbg picks white or gray background per column
@@ -1124,6 +1129,7 @@ at_expand:
     pop bx
     pop ax
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; at_draw_line - parse, compose and blit one visual line
@@ -1185,32 +1191,74 @@ at_draw_line:
     mov ax, [at_pcb1]               ; a colour adapter keeps CLGRAY, so only a
     cmp [at_pcb0], ax               ; line with NO code span is two colours -
     ja .band                        ; at_codebg's own compare, reused
-    jmp short .wide
+    ; --- a colour line WITH a code span (SPEC.md 46.4.12) ------------------
+    ; Three colours, but never more than two in one 8px column: at_cellbg is
+    ; per strip byte, so the line is a few RUNS of equal flag, and each run is
+    ; one band in its own pen - CWHITE paper for text, CLGRAY for code, CBLACK
+    ; ink on both. Every pixel is written once, exactly as the expander's one
+    ; OSAPI_GFX_BLIT4 wrote it, and this is what lets the expander, its two
+    ; 1 KB tables and the 9,120-byte 4bpp strip leave the package.
+    push ds
+    pop es
+    push bx
+    mov bp, AT_S1ST
+    mov di, [at_tw]
+    mov cl, 3
+    shr di, cl                      ; DI = columns on the line
+    xor si, si                      ; SI = this run's first column
+.run:
+    mov bx, si
+    mov al, [bx+at_cellbg]
+.ext:
+    inc bx
+    cmp bx, di
+    jae .emit
+    cmp [bx+at_cellbg], al
+    je .ext
+.emit:                              ; the run is [SI, BX)
+    cmp al, 1                       ; CF = 1: a text run (flag 0)
+    mov ax, (CBLACK << 8) | CLGRAY
+    jnc .pen
+    mov al, CWHITE
+.pen:
+    call OSAPI_GFX_BLIT1_PEN        ; clobbers nothing
+    mov cx, bx
+    sub cx, si
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1                       ; CX = the run's width in px
+    mov ax, si
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    add ax, [at_tx0]                ; AX = its x
+    push bx
+    add si, at_strip1
+    mov bx, [at_dly]
+    call OSAPI_GFX_BLIT1            ; DX = the clamped rows, preserved
+    pop si                          ; SI = the next run's first column
+    cmp si, di
+    jb .run
+    mov ax, (CBLACK << 8) | CWHITE  ; the default pen back: the next line's
+    call OSAPI_GFX_BLIT1_PEN        ; band arm draws inside this same hold
+    pop bx
+    jmp short .sel
 .band:
     push ds
     pop es
     push bx
-    push dx
     mov si, at_strip1
     mov bp, AT_S1ST
     mov ax, [at_tx0]
     mov bx, [at_dly]
     mov cx, [at_tw]
-    call OSAPI_GFX_BLIT1
-    pop dx                          ; pop leaves the flags, so CF still speaks
+    call OSAPI_GFX_BLIT1            ; every register preserved
     pop bx
-    jnc .sel                        ; CF = 1 is a REFUSAL and nothing drawn -
-                                    ; kern_small carries the slot and not the
-                                    ; body (SPEC.md 5.4.2.5) - so fall into
-                                    ; the expander, which is that build's only
-                                    ; path and draws the identical picture
-.wide:
-    ; ...and on the band path the expansion happens HERE, below the clamp, so
-    ; a line the clamp threw away never pays for it either.
-    mov ax, [at_tw]
-    mov [at_xw], ax
-    call at_expand
-%endif
+    ; CF = 1 is a refusal, and none of the three applies: x is 64 (a multiple
+    ; of 8, kern_small's rule), CX = [at_tw] > 0, and DX is 1..AT_SROWS by the
+    ; clamp above. The body ships on both builds since SPEC.md 5.4.2.5.1, so
+    ; the 4bpp expander this used to fall into is gone (SPEC.md 46.4.12).
+%else
     push ds
     pop es
     push bx
@@ -1221,6 +1269,7 @@ at_draw_line:
     mov cx, [at_tw]
     call OSAPI_GFX_BLIT4
     pop bx
+%endif
 .sel:
     call at_selxor
 .out:

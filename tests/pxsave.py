@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PiXEL'S SAVE AS, BYTE FOR BYTE AGAINST THE REFERENCE (SPEC.md 106.24).
 
-    python3 tests/pxsave.py [--machine os8088_xt_vga_144] [--host-only]
+    python3 tests/pxsave.py [--machine os8088_xt_vga_144] [--host-only | --guest-only]
 
 THE HOST LEG first, when Unicorn is installed (tests/pxpartemu.py; without
 it the leg SKIPS and says so): the WRITE part - build/pxwrite.bin, the bytes
@@ -69,6 +69,12 @@ def first_diff(a, b):
 # =============================================================================
 # THE HOST LEG
 # =============================================================================
+# the scratch's KB a format, as pxwrite.asm's pw_skb claims it: PNG the
+# deflate's 42,240 bytes, GIF LZW_EKB, PCX a line of PX_DIMMAX + 1, PIX the
+# 256 nearest, the BMPs none
+SCR_KB = dict(PNG=42, GIF=25, BMP=0, PCX=9, PIX=1, BMP24=0)
+
+
 def save(fmt, m, w, h, pal, mode, chunk=8192, nslot=2):
     """The WRITE part's file, drained slot by slot as the UI task would."""
     p = pxpartemu.PxPart("build/pxwrite.bin")
@@ -80,6 +86,17 @@ def save(fmt, m, w, h, pal, mode, chunk=8192, nslot=2):
         p.w16("px_sseg", s, 2 * k)
     p.w16("px_chunk", chunk)
     p.w8("px_nslot", nslot)
+    # THE SCRATCH (SPEC.md 106.24): a claim of its own, the format's KB as
+    # pu_start claims it (pxwrite.asm's pw_skb), into [px_ewseg] - with a
+    # FENCE after it, so a writer that outgrows its format's claim fails
+    # here rather than writing a stranger's heap on the machine
+    kb = SCR_KB[fmt]
+    fence = b"PXFENCE!" * 2
+    scr = 0
+    if kb:
+        scr = p.claim(kb * 1024 + len(fence))
+        p.seg_write(scr, fence, kb * 1024)
+    p.w16("px_ewseg", scr)
     out = bytearray()
     st = {"k": 0}
 
@@ -95,6 +112,8 @@ def save(fmt, m, w, h, pal, mode, chunk=8192, nslot=2):
         return None
     ax, cf = p.decode(WF[fmt])
     drain(p)
+    if kb and p.seg_read(scr, len(fence), kb * 1024) != fence:
+        return b"written past its scratch"
     return bytes(out)
 
 
@@ -483,13 +502,20 @@ def full_leg(machine):
     syms, image = pkg_syms()
     big = machine.endswith("_144")
     cap = 1440 * 1024 - 33 * 512 if big else 354 * 1024
-    ins = ["build/pixel.o88", "build/PIXEL.GFX", "apps/pixel/samples/CITY.PCX"]
+    import os88build
+    import pxtmp
+    # SIZED AND WRITTEN IN THE RUN'S TREE (tests/pxtmp.py): the inputs are
+    # measured where scratch_disk will read them, and the filler is this
+    # process's own - a plain "build/pxfill.bin" was written into the
+    # checkout and then looked for in the frozen tree, which had none.
+    ins = [os88build.at(f) for f in
+           ("build/pixel.o88", "build/PIXEL.GFX")] + \
+        ["apps/pixel/samples/CITY.PCX"]
     used = sum((os.path.getsize(f) + 1023) // 1024 for f in ins) * 1024
-    fill = "build/pxfill.bin"
+    fill = os.path.join(pxtmp.private("pxfill", folder=True), "PXFILL.BIN")
     n = max(cap - used - 20 * 1024 - (512 if big else 1024) * 4, 0)
-    if not os.path.exists(fill) or os.path.getsize(fill) != n:
-        open(fill, "wb").write(bytes(n))
-    DISK = M.scratch_disk("build/pxfull.img", *(ins + [fill]),
+    open(fill, "wb").write(bytes(n))
+    DISK = M.scratch_disk(pxtmp.private("pxfull.img"), *(ins + [fill]),
                           size=1440 if big else 360)
     sysdisk = "build/os8088.img" if big else "build/os8088-360.img"
     print("== a save that does not fit (SPEC.md 106.24) ==")
@@ -541,8 +567,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_xt_vga_144")
     ap.add_argument("--host-only", action="store_true")
+    # THE TWO LEGS ARE TWO ROWS (`pxsave` and `pxsavehost`): the host leg needs
+    # Unicorn and skips itself without it, and a row that skipped half its
+    # work used to report `ok` with the other half - a false green nobody
+    # investigates. The suite gives each leg its own capability instead.
+    ap.add_argument("--guest-only", action="store_true")
     a = ap.parse_args()
-    host_leg()
+    if not a.guest_only:
+        host_leg()
     if not a.host_only:
         guest_leg(a.machine)
         full_leg(a.machine)

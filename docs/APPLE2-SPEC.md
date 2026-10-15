@@ -27,7 +27,7 @@ without it has been measured, and the wave that measured it is named.
 ### 1.1 The port
 
 `apps/apple2/`, package name **`APPLE2`**, is a **windowed 48K Apple II
-Plus**: a 6502 running in a 64KB heap claim, Applesoft BASIC and the Autostart
+Plus**: a 6502 running in a 49KB heap claim, Applesoft BASIC and the Autostart
 Monitor read from a ROM **part** inside `APPLE2.O88`, the four II+
 soft-switch display modes composed into 1bpp bands and blitted with
 `OSAPI_GFX_BLIT1`, and a **foreign video mode** at full screen
@@ -158,6 +158,22 @@ on disk is image + 14,848.
 character generator and build the 7-bit reverse table there - which is what
 keeps the display path off the overlay (section 7.3).
 
+**AND THEN THE CARVE IS SHRUNK TO THE MAIN ROM** (apps size pass 1). Once
+`a2_chr` holds the decoded block, nothing a running machine does reads past
+`$3000` of the part: every composer reads `a2_chr`, the P5 ROM at `$3800` is
+mapped by no slot until the Disk II follow-up (section 14), and the pad is a
+pad. So `os88_main` calls `os88_mem_regrow` on the carve straight after the
+decode and keeps `A2_ROM_KEEP` = `$3000` bytes past the run's head slack -
+SPEC.md 50.3.1's path 1, a shrink in place that cannot move the base. The
+claim's base is the CARVE's (`op_base`, aliased `_a2_opbase` in the shim) and
+not the part's, because a run starts on a cluster boundary and the part sits
+the head slack above it (SPEC.md 20.12.2). **15KB becomes 12KB** (13 when the
+run starts half a cluster up), and `tests/apple2part.py` reads the claim's
+record out of `mem_tab` to say so. **The Disk II follow-up moves
+`A2_ROM_KEEP` to `$3900`**: the P5 ROM is then the one tail byte a running
+machine reads again, and that wave owns the 256 bytes and the KB they round
+to.
+
 ---
 
 ## 2. Where the behaviour comes from - the authority table
@@ -214,8 +230,22 @@ unconditionally.
 
 | claim | size | contents |
 |---|---|---|
-| RAM | `os88_mem_claim(64)` - 65,536 bytes | the Apple's address space, `$0000-$FFFF`, flat, one segment. Only `$0000-$BFFF` is ever RAM to the emulated machine |
-| ROM | `op_load`'s carve - 14,848 bytes | the ROM PART, section 1.4's layout, claimed and read before `os88_main` runs; `os88_part_seg(0)` is its base |
+| RAM | `os88_mem_claim(A2_RAMKB)` - **49KB**, 50,176 bytes | the Apple's address space biased at offset 0, flat, one segment, ending at the scratch page's last byte (`$C1FF`). Only `$0000-$BFFF` is ever RAM to the emulated machine |
+| ROM | `op_load`'s carve - 14,848 bytes, **shrunk to 12,288** once `os88_main` has decoded the CHARGEN (section 1.5) | the ROM PART, section 1.4's layout, claimed and read before `os88_main` runs; `os88_part_seg(0)` is its base |
+
+**THE RAM CLAIM STOPS AT `$C1FF` AND THAT IS ARITHMETIC** (apps size pass 1;
+it was `os88_mem_claim(64)` until then). The RAM segment is addressed in two
+stretches and no others: the 48K at `$0000-$BFFF`, and the core's scratch page
+at `$C100` (section 3.3). Every read at or above `$C000` goes to the soft
+switches, the slot space's `$FF` or the ROM part (`a2_rd_bx`); every write
+there is called out or dropped (`a2_wr_bx`, `a2_wr`); the fetch is bounded at
+`$C000` and re-biases onto the ROM part above `$CFFF` (`a2_rebias_go`); and
+every C-side mover is bounded below `$C000` (`A2_PROGTOP`, the text and hi-res
+pages). So `$C200-$FFFF` of a 64KB claim was **15,872 bytes of heap nothing
+ever touched**: the claim is `A2_RAMKB` = 49, the KB that holds `$C1FF`. `hosttest/a2uitest.c` now refuses a C-side access at or above
+`$C000` rather than answering it out of a 64KB array, and `tests/apple2part.py`
+reads the claim's size out of `mem_tab`. The refusal toast says
+`APPLE2: 49K, 384K free`.
 
 Launch is **defined by the claims succeeding**. The refusal sentence quotes
 what was asked and `os88_mem_largest_kb()`.
@@ -246,7 +276,8 @@ test first. The write fence moves from the C64's `$D000` down to `$C000`.
 
 ### 3.3 The core's scratch - in the emulated machine, never in bss
 
-The core's hot scratch is **256 bytes at `$CF00-$CFFF` of the 64KB claim**,
+The core's hot scratch is **256 bytes at `$C100-$C1FF` of the RAM claim** -
+its last page, which is where the 49KB claim ends (section 3.1) -
 on `C64-SPEC §3.5`'s mechanism and for its reason.
 
 **It has ZERO stated deviations**, which is strictly cleaner than the C64's
@@ -259,7 +290,7 @@ harness cases are deleted rather than transcribed.
 `a2_rebias_go` never biases `$C000-$CFFF` to RAM: PC in that range leaves the
 region marked "always re-bias" and every byte comes back through `a2_rd_bx`, so
 a fetch at `$C030` clicks the speaker exactly as a read there does, a fetch at
-`$C100` gets `$FF`, and **`JMP $CF00` finds `$FF` and not the countdown**. A
+`$C100` gets `$FF`, and **`JMP $C110` finds `$FF` and not the countdown**. A
 core that biased the region to RAM for the fetch alone would make the whole
 page executable, and that is `a2cputest` row 7 with its negative control -
 which is the shipping text's own `$C000` compare moved to `$D000` at runtime
@@ -268,9 +299,21 @@ poke at the scratch would not survive to the first fetch.
 
 **The condition that makes this safe is stated here because it is the thing
 that can stop being true.** It holds only while nothing models a **Language
-Card** and no card claims `$C800-$CFFF` expansion ROM. Both are refused by
-this port (section 10.4). A future wave that adds either **must move the
-scratch first**.
+Card**, no card claims **slot 1's ROM at `$C100-$C1FF`** and none claims
+`$C800-$CFFF` expansion ROM. All are refused by this port (section 10.4). A
+future wave that adds one **must move the scratch first** - and the claim
+moves with it, since it ends at the scratch page's last byte.
+
+**`$C100` AND NOT `$CF00` SINCE APPS SIZE PASS 1.** Both pages are slot space
+to the emulated machine - read as `$FF`, written nowhere, fetched through
+`a2_rd_bx` - so the move changes no answer a program can get; it moves the
+claim's last byte from `$CFFF` to `$C1FF`, which is 52KB to 49KB. Every core
+access to the page is a 16-bit displacement either way, so no instruction
+changed length: the shipping image differs from the `$CF00` one in exactly 91
+displacement high bytes (`$CF` to `$C1`) and the three characters of the
+refusal's figure. `make a2cputest` rows 3, 4 and 7 probe `$C130` (the page's
+"wrote" byte, which the run itself sets), `$C1F0` (its spare tail) and
+`$C110`/`$C124` (code planted in it, and the countdown).
 
 **NASM gotcha, carried over:** `[bx + 0xCF00]` is refused under `-w+error`, so
 `A2_SCR_DISP equ A2_SCR_BASE - 0x10000` exists and is what the core
@@ -3950,7 +3993,7 @@ the NUMBER, which is the whole message, in the cut half - and
 
 **AND THE FIRST RECOMPOSITION CUT THE WRONG WORD.** `APPLE2 needs 64K, 384K`
 fits and reads as **two requirements**: the word that made the second figure
-mean anything was `free`. It says **`APPLE2: 64K, 384K free`** - 13 + a
+mean anything was `free`. It says **`APPLE2: 64K, 384K free`** (`52K` since the claim stopped at `$CFFF`, section 3.1) - 13 + a
 three-digit figure + 6, so 22 of the 24 - with the label and both halves of
 the arithmetic intact; the ROM row is `APPLE2: ROM too low`.
 
@@ -4374,7 +4417,7 @@ GUI emulator cannot assert a boot.
 | `apps/apple2/hosttest/a2memtest.asm` + `.sh` | `a2mem.inc`'s and `a2band.inc`'s string loops on a real x86 with SS != DS and an ES sentinel, in raw QEMU, with **four negative controls** - one each for ES, DF, BP and DS. **All THREE composers from wave 3**, each against hand-computed packed bytes: it is the only gate that runs the SHIPPING ASSEMBLY rather than a second transcription of it, which is what `a2uitest` and `a2ref.py` between them cannot be. In `build.sh`, because it takes seconds. From the Disk II wave it also covers the segment arithmetic that reaches a track inside a claim larger than 64KB |
 | `apps/apple2/hosttest/a2cputest.asm` + `.sh` | section 4.4's twelve rows. `make a2cputest`, minutes, **not** in `build.sh` |
 | `tests/a2band/a2bandbench.asm` | the composers' icount bench on `tests/benchlib.inc`, `make a2bandbench`. **Driven under plain `-icount shift=3` and NOT `sleep=off`** (section 7.9). Per CELL, per SOURCE BYTE and per CALL in microseconds for all three composers plus `rowspan`/`rowcopy`/`rowsig`/`band_x2` - and, from wave 5, **per foreign FRAME for each FSX writer against the windowed flush on the same change set**. **The tier table and the cost table are written from these numbers.** It arms the clip on its rerun callbacks, saves ES around every blit, and preflights `OSAPI_GFX_BLIT1` |
-| `tests/apple2part.py` | registered in `tests/suite.py`'s **soak** tier, or the fast tier's own registration row fails the build. `c64part.py`'s shape: `APPLE2.ROM` is NOT a file on the disk; the package file is image + 14,848; `os88_part_seg(0)` is the segment the C put in the machine record; three windows of the ROM read out of the guest equal `build/apple2-rom/APPLE2.ROM` byte for byte; the RESET vector at `$FFFC` reads `$FA62`; **and the CHARGEN table and the reverse table exist after `os88_main` and BEFORE any wake** - the negative control for keeping them off the overlay |
+| `tests/apple2part.py` | registered in `tests/suite.py`'s **soak** tier, or the fast tier's own registration row fails the build. `c64part.py`'s shape: `APPLE2.ROM` is NOT a file on the disk; the package file is image + 14,848; `os88_part_seg(0)` is the segment the C put in the machine record; the carve is shrunk to the main ROM and the RAM claim is 52KB, both read out of `mem_tab`; two windows of the main ROM read out of the guest and the decoded CHARGEN block equal `build/apple2-rom/APPLE2.ROM` byte for byte; the RESET vector at `$FFFC` reads `$FA62`; **and the CHARGEN table and the reverse table exist after `os88_main` and BEFORE any wake** - the negative control for keeping them off the overlay |
 | `tools/a2bas.py --selfcheck` | the welcome listing tokenised against the PINNED ROM's own token table and LISTed back through it, in the recipe that writes `build/WELCOME.BAS` (section 16.2). A tokeniser's output looks fine and runs wrong |
 | the SDK-toast row in `tests/unit/t_mirror.py` | the SDK's three overlay refusals in `apps/cc/crt0.asm` against `TOAST_MAX` read out of `kernel/toast.inc`, for a **full-length** `CC_PKG_NAME` (the cap read out of `crt0.asm`'s own `%fatal`) and for **every** `%define CC_PKG_NAME` in the tree (section 17.3). This wave found them truncating and wrote the check in `build.sh`, which was the wrong home: that script runs only for `make apple2`, so the edit the gate exists to catch would not have run it. `t_mirror` is a FAST-tier row and runs on every `make` |
 | QEMU + QMP | `make test TESTAPPS=build/apple2.img`, `tools/mouse.py`, `tools/qmp.py sendkey`, `tools/shot.py --crop --zoom`. Every screendump assertion lives here |

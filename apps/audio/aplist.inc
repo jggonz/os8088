@@ -370,10 +370,4 @@ apl_shuffle_build:
 .set:
     mov [apl_opos], bl
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ap_ret6

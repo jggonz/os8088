@@ -193,7 +193,7 @@ NP_MAXKB     equ 16             ; ...and its ceiling, which is now a real
                                 ; and counts it with a 16-bit BX. At 16KB the
                                 ; worst case is 32,768 and both hold; at 32KB
                                 ; it is 65,536 and both wrap to zero, and so
-                                ; does np_stghold's own 2 x [np_len]. So the
+                                ; does a note of nothing but newlines. So the
                                 ; SAVE is what bounds the note, not the
                                 ; window and not the heap - going further
                                 ; means teaching that loop to cross a segment
@@ -514,6 +514,10 @@ np_entry:
                                     ; gfx_fill_gray - a 50% dither of 15 and 0
                                     ; rather than a grey. Minesweeper, Piano
                                     ; and Solitaire all draw in real colours
+    push si                         ; ...and LARGER where the screen has the
+    mov si, np_pref                 ; room (SPEC.md 11.100.1): VGA/EGA and the
+    call OSAPI_WM_PREFER            ; Hercules open wider and a little taller,
+    pop si                          ; CGA keeps the template. Flags preserved
     mov al, 1
     call OSAPI_WM_SNAP              ; ...and snapped (SPEC.md 11.94), because
     pop ax                          ; every keystroke redraws a row of text and
@@ -1129,11 +1133,7 @@ np_sbd_go:                      ; FLAT labels and not `.go`/`.out`: the two
     call np_redraw
 %endif                          ; OS88UI_SBDRAG
 np_sbd_out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp np_ld_4
 %endif                          ; NPF_FIND
 
 ; =============================================================================
@@ -4550,20 +4550,35 @@ np_room:
 ; out: CF=0 with [np_stgseg] set and ES = it, or CF=1 (the toast is already
 ;      set); preserves every other register
 ;
-; Sized from the note, not fixed: every character may become CR LF, so the
-; worst case is 2 x [np_len]. It is a SECOND claim and it is transient - held
-; only across the write - because the expansion grows and the document claim
-; is sized for the document. A refusal is an ordinary path: the note is still
-; there and still editable, it just cannot reach the disk until something
-; gives memory back.
+; Sized from the note, not fixed, and EXACT: the note's bytes plus one for
+; each 13, because each 13 and only a 13 becomes two (SPEC.md 27.6). It was
+; 2 x [np_len], the worst case of a note made of nothing but newlines - 32KB
+; of transient heap to save a full 16KB note that needs ~17. It is a SECOND
+; claim and it is transient - held only across the write - because the
+; expansion grows and the document claim is sized for the document. A
+; refusal is an ordinary path: the note is still there and still editable,
+; it just cannot reach the disk until something gives memory back.
+; Clobbers CX and DI as well; np_save, the one caller, sets both after.
 ; -----------------------------------------------------------------------------
 np_stghold:
     push ax
     push dx
-    mov ax, [np_len]
-    add ax, [np_len]                ; 2 x len, which cannot carry: [np_len] is
-    add ax, 1023                    ; bounded by NP_MAXKB * 1024, and NP_MAXKB
-                                    ; is 16 for exactly this sum's sake
+    mov cx, [np_len]
+    mov dx, cx                      ; DX = the bytes, plus one a newline
+    mov es, [np_dseg]
+    xor di, di
+    mov al, 13
+.cr:
+    jcxz .counted                   ; a 13 that was the last byte leaves CX 0
+    repne scasb                     ; DF=0 per SPEC.md 1
+    jne .counted
+    inc dx
+    jmp short .cr
+.counted:
+    xchg ax, dx                     ; <= 2 x len, which cannot carry: [np_len]
+    add ax, 1023                    ; is bounded by NP_MAXKB * 1024, and
+                                    ; NP_MAXKB is 16 for exactly this sum's
+                                    ; sake
     mov cl, 10
     shr ax, cl                      ; ...as whole kilobytes, rounded up
     cmp ax, NP_STGMIN
@@ -4572,12 +4587,10 @@ np_stghold:
 .kb:                                ; put its zero bytes
     call OSAPI_MEM_CLAIM            ; out CF=0 and DX = the base segment
     jc .no
-    mov [np_stgseg], dx
-    mov es, dx
-    clc
-    jmp short .out
-.no:
-    mov word [np_stgseg], 0
+    mov [np_stgseg], dx             ; [np_stgseg] is 0 whenever nothing is
+    mov es, dx                      ; held (np_stgdrop zeroes it), so the
+    jmp short .out                  ; refusal has nothing to clear. CF = 0
+.no:                                ; is still the claim's
     mov ax, np_e_nomem
     call np_saymsg
     stc
@@ -4616,8 +4629,8 @@ np_stgdrop:
 ; exists to protect. Every older caller ignores it.
 ;
 ; The note's bare 13s become CR LF on the way out, through the staging claim -
-; which is sized for the worst case (every character a newline), so the
-; staging pass needs no bounds test of its own.
+; which np_stghold sizes by counting those 13s, so the staging pass needs no
+; bounds test of its own.
 ; -----------------------------------------------------------------------------
 np_save:
     push ax
@@ -4631,7 +4644,9 @@ np_save:
     call np_stghold             ; ES = the staging claim, or a toast and out
     jc .out
     call np_goto                ; the folder this document belongs to, if the
-    mov ds, [np_dseg]           ; volume has been moved since (SPEC.md 19.2)
+    jc .err                     ; volume has been moved since (SPEC.md 19.2);
+                                ; CF = we are not there, so write nothing
+    mov ds, [np_dseg]
     xor si, si                  ; DS:SI = the note, ES:DI the expansion. NO
     xor di, di                  ; kernel variable is readable while DS is the
     mov cx, [cs:np_len]         ; document - through CS is how the counts are
@@ -4700,19 +4715,37 @@ np_load:
     push si
     push di
     push es
-    mov ax, NP_MAXKB            ; open the claim to its ceiling for the read:
-    call np_resize              ; nothing here knows the file's size until the
-                                ; read reports it, and the fold below only ever
-                                ; SHRINKS what arrived - so the file lands in
-                                ; the document buffer itself and folds in
-                                ; place, and there is no load staging at all.
+    call np_goto                ; the same folder dance as a save - and a
+    jc .say                     ; refusal in ITS words (AX = FERR_*) rather
+                                ; than a read of np_name in whatever folder we
+                                ; were left standing in
+    xor bx, bx                  ; THE SIZE PROBE (SPEC.md 18.4.1, 27.6): a
+    xor cx, cx                  ; read with NO ROOM answers FERR_BIG and DX =
+    xor dx, dx                  ; the KB the read needs, off the directory
+    mov si, np_name             ; entry and with no data I/O, or CF = 0 and
+    call OSAPI_FILE_READ        ; DX:AX = 0 for an empty file. BX = 0 because
+    jnc .sized                  ; a packed file refuses an unaligned buffer.
+    cmp ax, FERR_BIG            ; The claim used to be opened to NP_MAXKB
+    jne .say                    ; here whatever the file was - 16KB of peak
+    cmp dx, NP_MAXKB            ; heap for a note of one line, and a load
+    ja .say                     ; refused "No memory" where 2KB was free.
+    xchg ax, dx                 ; Past the ceiling it is "Too big" (AX is
+.sized:                         ; still FERR_BIG) with nothing claimed
+    cmp ax, [np_capkb]          ; ONLY EVER A GROW: the note is still in this
+    jbe .fits                   ; claim and a read that fails leaves it there,
+    call np_resize              ; so a shrink here would cut it off under its
+.fits:                          ; own [np_len]. AX KB, clamped to NP_MAXKB;
+                                ; np_fitclaim sizes it afterwards. The file
+                                ; lands in the document buffer itself and the
+                                ; fold below only ever SHRINKS what arrived,
+                                ; so it folds in place and there is no load
+                                ; staging at all.
                                 ;
                                 ; THE CF IS NOT READ HERE ON PURPOSE, and
                                 ; .err is where it is answered instead
                                 ; (SPEC.md 27.6.1): the claim may already be
                                 ; big enough for this file, so a refusal is
                                 ; only news if the read then does not fit
-    call np_goto                ; ...and the same folder dance on the way in
     xor ax, ax                  ; PIN it across the read (SPEC.md 66.5.7.1):
     call np_dmov                ; ES:BX below is a pointer INTO this claim and
                                 ; OSAPI_FILE_READ holds it across the sector
@@ -4723,11 +4756,9 @@ np_load:
                                 ; escapes this by declaring only after the
                                 ; read, which an editor that loads repeatedly
                                 ; cannot do
-    mov es, [np_dseg]
-    xor bx, bx                  ; ES:BX = the document, DX:CX its capacity
-    mov cx, [np_cap]
-    xor dx, dx
-    mov si, np_name
+    mov es, [np_dseg]           ; ES:BX = the document, DX:CX its capacity;
+    mov cx, [np_cap]            ; BX = 0 and SI = np_name are still the
+    xor dx, dx                  ; probe's, which a read keeps (SPEC.md 20.3)
     call OSAPI_FILE_READ        ; DX:AX = bytes read, and DX is 0 - a longer
     push ax                     ; movable again, and on BOTH paths out: the
     mov ax, np_reloc            ; error one returns through .err
@@ -4808,9 +4839,25 @@ np_load:
     call np_fitclaim            ; both paths: give back what the file did not
 .out:                           ; need, including the whole of a read that
                                 ; failed and left the note as it was
+    jmp np_ld_7
+
+; -----------------------------------------------------------------------------
+; np_ld_N - the shared epilogue: pop the last N of AX BX CX DX SI DI ES, in
+; push order, and return. A COLD routine ends in `jmp np_ld_N` instead of its
+; own pops - 3 bytes where 5 to 8 were. The typing, walk and scroll paths keep
+; their own: the jump is 15 clocks a call. It is OS88_POPLADDER's ladder
+; (SPEC.md 20.5) WRITTEN OUT rather than expanded, because tools/stkbalance.py
+; could not then resolve a macro's labels (it can since shared round 2) and reported every tail jmp to one as a
+; leak instead of walking the pops and proving each site's depth. Only the
+; rungs something jumps to are named, for the same reason: the walker enters
+; an unreferenced label at depth 0.
+; -----------------------------------------------------------------------------
+np_ld_7:
     pop es
+np_ld_6:
     pop di
     pop si
+np_ld_4:
     pop dx
     pop cx
     pop bx
@@ -4818,23 +4865,25 @@ np_load:
     ret
 
 ; -----------------------------------------------------------------------------
-; np_errmsg - turn a FERR_* code into the toast string
+; np_errmsg - say a FERR_* code as a toast, in the KERNEL'S words
 ; in:  AX = FERR_* (SPEC.md 18.4)
-; out: nothing - the string is said as a toast; preserves all registers
+; out: nothing; preserves all registers
+;
+; OSAPI_FERR_TEXT (SPEC.md 18.4.11) hands back the Disk window's own string
+; for the code at ES:SI - which is OSAPI_TOAST's argument as it stands - so
+; this carries no table of its own and an unknown code still reads as a disk
+; problem, the kernel's rule now and this file's before it.
 ; -----------------------------------------------------------------------------
 np_errmsg:
-    push ax
-    push bx
-    cmp ax, FERR_BIG
-    jbe .known
-    mov ax, FERR_IO             ; an unknown code is still a disk problem
-.known:
-    mov bx, ax
-    shl bx, 1
-    mov ax, [bx+np_errtab]
-    call np_saymsg
-    pop bx
-    pop ax
+    push cx
+    push si
+    push es
+    call OSAPI_FERR_TEXT
+    xor cx, cx                  ; the default lifetime, about three seconds
+    call OSAPI_TOAST
+    pop es
+    pop si
+    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -5629,10 +5678,25 @@ np_onkey:
     call np_fpaint
     jmp .out
 %endif
+; Ctrl-C, Ctrl-A, Ctrl-S and Ctrl-O are their menu items exactly - the
+; same np_uclose, the same call and the same repaint (or none, for Open) - so
+; they ARE the menu item: AH:AL is what the kernel would hand np_oncmd for the
+; pick, and one copy of each body serves both doors (SPEC.md 27.1, 12.2).
+; Cut, Paste and Undo are not: a key restarts the settle clock (.kstamp).
 .kcopy:
-    call np_uclose
-    call np_copy
-    jmp .redraw
+    mov ax, 0x0100 | NP_MI_COPY
+    jmp short .kcmd
+.kselall:
+    mov ax, 0x0100 | NP_MI_SELALL
+    jmp short .kcmd
+.ksave:
+    mov ax, NP_MI_SAVE
+    jmp short .kcmd
+.kopen:
+    mov ax, NP_MI_OPEN
+.kcmd:
+    call np_oncmd                   ; SI = the window, as a pick's is
+    jmp .out
 .kcut:
     call np_uclose
     call np_cut
@@ -5648,23 +5712,6 @@ np_onkey:
     call np_saymsg
     jmp .redraw
 %endif
-.kselall:
-    call np_uclose
-    xor ax, ax
-    mov dx, [np_len]
-    call np_selset
-    mov [np_cur], dx
-    mov byte [np_ckok], 0
-    jmp .redraw
-.ksave:
-    call np_uclose
-    call np_save
-    jmp .redraw
-.kopen:
-    call np_uclose
-    mov al, FDLG_OPEN
-    call np_dlgopen
-    jmp .out                        ; no repaint: the dialog is on top of us
 .kenter:
 %ifdef NPF_FIND
     call np_donext                  ; Enter in a find box is Find Next
@@ -6769,44 +6816,55 @@ np_ondlg:
 
 ; -----------------------------------------------------------------------------
 ; np_goto - put the volume back in this document's folder (SPEC.md 19.2)
-; out: nothing; preserves all registers
+; out: CF=0 and every register preserved; CF=1 = could not stand there, AX =
+;      FERR_* and every other register preserved - NOTHING MOVED, so the
+;      caller must not go on to resolve np_name (it would find it, or a
+;      stranger of the same name, in the folder we were already in)
 ;
-; **THE KERNEL DOES THIS NOW, and this routine is kept as a no-op that costs
-; two compares** (SPEC.md 19.2.1). A file name used to resolve in the ONE
-; global current directory shared by every Disk window and by the file
-; dialog: right after Save As it still named the folder the user picked -
-; which is why saving into a folder worked - but by the next Save anything
-; that navigated had moved it, and the write landed in the root. Four
-; packages each carried their own copy of the six lines below, which is what
-; eventually said the kernel owed the feature rather than the SDK owing an
-; example. An instance owns its directory now, so OSAPI_FILE_HERE answers
-; this document's folder and the OSAPI_FILE_GOTO below never fires.
+; The kernel keeps an instance in its own folder now (SPEC.md 19.2.1), so
+; once a Save As has committed somewhere OSAPI_FILE_HERE answers that folder
+; and this is two compares. **It is NOT a no-op, though, and this comment
+; once said it was**: an instance is SEEDED at the folder its PACKAGE came
+; out of, while np_arg copies a launch document's ARG folder into np_dir. So
+; the first load of a .TXT double-clicked in any other folder is exactly the
+; case where HERE and np_dir disagree and the move below fires.
 ;
-; It stays because the slots keep their contract (SPEC.md 20.8 rule 4) and
-; because a remount was always skipped when the volume was already there -
-; which is now every time. Deleting it would be correct and would also delete
-; the record of why it was ever needed.
+; It moves with OSAPI_FILE_GOTO_QM, not OSAPI_FILE_GOTO: the next thing done
+; is a by-name read or write, which resolves through the raw directory
+; sectors, and nothing here shows the folder - so the remount's scan, sort and
+; per-file icon harvest were ~0.5 s of floppy bought for no reader
+; (docs/plans/NAV-COST-PLAN.md, SPEC.md 19.9.1). QM moves the instance with
+; it, which is what makes the next file cell resolve there.
+;
+; The two differ on FAILURE and that is why CF is an output now: a failed
+; GOTO left the volume at the root with the write gate shut, so the file call
+; after it refused on its own; a failed QM moves nothing, so the caller has to
+; refuse. CX, SI and DI are banked because on a redirected volume QM reaches
+; the driver's FSV_CHDIR and those three are the driver's (SPEC.md 62.9.1).
 ; -----------------------------------------------------------------------------
 np_goto:
     push ax
     push bx
+    push cx
     push dx
+    push si
+    push di
     cmp byte [np_dirok], 0
-    je .out                     ; never saved anywhere in particular
+    je .out                     ; never saved anywhere in particular (CF=0)
     call OSAPI_FILE_HERE
     cmp dx, [np_dir]
     jne .move
     cmp bl, [np_drv]
-    je .out
+    je .out                     ; already there (equal: CF=0)
 .move:
     mov dx, [np_dir]
     mov bl, [np_drv]
-    call OSAPI_FILE_GOTO        ; CF = it could not be listed; the file call
-.out:                           ; that follows will say so in its own words
-    pop dx
-    pop bx
-    pop ax
-    ret
+    call OSAPI_FILE_GOTO_QM     ; quiet, and the instance follows
+    jnc .out
+    mov bx, sp                  ; CF=1: the FERR_* replaces the banked AX -
+    mov [ss:bx+10], ax          ; a mov touches no flag, so CF rides out
+.out:
+    jmp np_ld_6
 
 ; -----------------------------------------------------------------------------
 ; np_arg - BANK the document we were launched to open (SPEC.md 54.5/54.10)
@@ -7365,14 +7423,7 @@ np_gaproom:
 .no:
     stc
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp np_ld_7
 
 ; -----------------------------------------------------------------------------
 ; np_editinv - the layout state is all indices into a buffer that just moved
@@ -7567,14 +7618,7 @@ np_paste:
 .none:
     stc
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp np_ld_7
 
 ; =============================================================================
 ; UNDO, five edits deep (SPEC.md 27.9)
@@ -8167,6 +8211,9 @@ np_undo:
     sub ax, dx
     mov [np_utop], ax           ; the blob is the arena's last, so this is all
     dec byte [np_un]            ; there is to giving it back
+    jnz .kept                   ; ...and the LAST record undone gives back the
+    call np_uclear              ; whole arena: a Replace All's 16KB blob used
+.kept:                          ; to stay claimed until a load or a New
     mov byte [np_uopen], 0
     mov byte [np_unolog], 0
     call np_editinv
@@ -8181,14 +8228,7 @@ np_undo:
 .no:
     stc
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp np_ld_7
 
 %else
 ; -----------------------------------------------------------------------------
@@ -8840,11 +8880,7 @@ np_fcount_do:
     jmp short .l
 .done:
     mov [np_fcount], cx
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp np_ld_4
 
 ; -----------------------------------------------------------------------------
 ; np_showmatch - select [AX, DX) and make sure it is on screen
@@ -8979,11 +9015,7 @@ np_dorepl:
 .miss:
     call np_fmiss
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp np_ld_4
 
 ; -----------------------------------------------------------------------------
 ; np_replat - swap the CX bytes at AX for the replacement text
@@ -9399,11 +9431,7 @@ np_dmark_on:
     mov [np_dmark], ax
     mov [np_dmy], bx
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp np_ld_4
 
 np_dmark_off:
     push ax
@@ -9420,11 +9448,7 @@ np_dmark_off:
     call OSAPI_GFX_XOR_FILL
     mov word [np_dmark], 0xFFFF
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp np_ld_4
 
 ; -----------------------------------------------------------------------------
 ; np_movesel - move the selected text to [np_dpos]
@@ -9507,11 +9531,7 @@ np_movesel:
     mov byte [np_follow], 1
     mov byte [np_ckok], 0
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp np_ld_4
 
 ; np_urec_bulkend_span - close a bulk record whose span did not change length
 ; (a move rearranges bytes, it does not add or remove any). Preserves all.
@@ -9599,11 +9619,7 @@ np_dragmove:
     call np_redraw
 .out:
     mov word [np_dpos], 0xFFFF
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp np_ld_4
 
 ; np_absw - AX = |AX|, treating it as signed. Preserves all other registers.
 np_absw:
@@ -10081,13 +10097,7 @@ np_pdrawn:
     mov ah, CWHITE
     call OSAPI_FONT_RUN
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp np_ld_6
 
 ; -----------------------------------------------------------------------------
 ; np_pbutton - draw button BX with label SI
@@ -10161,13 +10171,7 @@ np_pbutton:
     mov [bx+4], ax
     mov [bx+6], ax
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp np_ld_6
 
 np_brects:  dw 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0   ; THE GROUP (SPEC.md
                                 ; 20.5.1.3): four rects, contiguous, in screen
@@ -10262,13 +10266,7 @@ np_fpaint:
     mov si, [np_win]            ; np_pdrawn re-derives the geometry from the
     call np_pdrawn              ; window, and SI has been label strings since
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp np_ld_6
 
 ; -----------------------------------------------------------------------------
 ; np_fopen - put the panel up (AL = NP_FPAN_FIND or NP_FPAN_REPL)
@@ -10321,14 +10319,7 @@ np_fopen:
     mov byte [np_fcok], 0
     mov byte [np_fcdirty], 1
     call np_hire                ; the count is the worker's to pay
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp np_ld_7
 
 ; np_fclose - take the panel down. Preserves all registers.
 np_fclose:
@@ -10878,11 +10869,7 @@ np_utoa:
     inc di
     loop .emit
     mov byte [di], 0
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp np_ld_4
 
 ; np_saycnt - "<AX> replaced" as the toast. Preserves all registers.
 np_saycnt:
@@ -11004,6 +10991,15 @@ np_tpl:
     dw 60, 60, 260, 180
     dw np_ttl, np_paint, np_onkey, np_onclick
 
+; --- the opening size per adapter (SPEC.md 11.100.1) ---------------------------
+; The template above is CGA's, whose 640x200 has no room to spare - and it is
+; the width tools/checkreadme.py lays the manual's tables out against. VGA/EGA
+; and the Hercules open 52 and 57 text cells wide where the template gives 29,
+; and the height is clamped to the desktop band like any template's.
+; OSAPI_WM_SNAP then rounds the content to the cell grid, so the frames land
+; at 442 and 482 (measured on MartyPC).
+    OS88_PREFER np_pref, 440, 260,  480, 240,  0, 0
+
 np_ttl: db 'Note Pad', 0
 
 ; --- the app menu set (SPEC.md 12.2) -------------------------------------------
@@ -11094,21 +11090,11 @@ np_s_nul:     db 0              ; an EMPTY string retires whatever is up
                                 ; (SPEC.md 59.3) - one call, and this app
                                 ; never has to know whether one was
 
-; FERR_* (SPEC.md 18.4) -> string, indexed by the code itself
-np_errtab:
-    dw np_e_ok, np_e_nodisk, np_e_io, np_e_name, np_e_noent, np_e_exist
-    dw np_e_full, np_e_dirfull, np_e_prot, np_e_wprot, np_e_big
-np_e_ok:      db 'Done', 0
-np_e_nodisk:  db 'No disk', 0
-np_e_io:      db 'Disk error', 0
-np_e_name:    db 'Bad name', 0
-np_e_noent:   db 'Not found', 0
-np_e_exist:   db 'Name exists', 0
-np_e_full:    db 'Disk full', 0
-np_e_dirfull: db 'Dir full', 0
-np_e_prot:    db 'Protected', 0
-np_e_wprot:   db 'Write protected', 0
-np_e_big:     db 'Too big', 0
+%ifdef NPF_FIND
+np_e_noent:   db 'Not found', 0      ; Find's miss (np_fmiss); a FILE's
+                                     ; refusal is the kernel's words now
+                                     ; (np_errmsg, SPEC.md 18.4.11)
+%endif
 np_e_nomem:   db 'No memory', 0      ; the staging claim was refused (50.3)
 
 ; --- the find panel and the clipboard (SPEC.md 27.8/27.10/55) ----------------

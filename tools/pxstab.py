@@ -178,11 +178,20 @@ def generate():
     w("; --- px_fanN: column c's angle from the heading, signed, left negative -----")
     w("; A flat plane PX_FOCAL pixels away; column c of W at k pixels a column sits")
     w("; (c + 0.5) * k - W * k / 2 pixels from the axis.")
+    w("; A fan with the SAME k as a wider one sits on its lattice, so it is that")
+    w("; fan's centred slice and is not written twice: an equ into the wider one,")
+    w("; which the cast reads exactly as it read the copy (asserted equal here).")
     for cols, k in FANS:
         f = fan_table(cols, k)
         span = f[-1] - f[0] + (f[1] - f[0])
-        w("px_fan%d:                          ; %d columns at %d px: %.1f degrees"
-          % (cols, cols, k, span * 360.0 / ANG))
+        what = "; %d columns at %d px: %.1f degrees" % (cols, k, span * 360.0 / ANG)
+        wide = max(c for c, kk in FANS if kk == k)
+        if wide != cols and (wide - cols) % 2 == 0:
+            o = (wide - cols) // 2
+            assert fan_table(wide, k)[o:o + cols] == f, (cols, wide)
+            w("px_fan%-4d equ px_fan%d + %d %s" % (cols, wide, 2 * o, what))
+            continue
+        w("px_fan%d:                          %s" % (cols, what))
         L += rows(f, fmt="%d")
     w("")
     w("PX_FAN_RUNGS equ %d" % len(FANS))

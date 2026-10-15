@@ -46,16 +46,61 @@
 %endmacro
 
 
-; --- per-backend geometry, indexed by CSB_* - 1 -------------------------------
-; The nine words land on nine contiguous bss words in this order.
+; --- THE BACKEND'S RECORD, one row a backend indexed by CSB_* - 1 (SPEC.md
+;     88.3.7): cs_r_setup copies a row onto the contiguous bss from cs_vx to
+;     cs_pbg8 in one `rep movsw`. It was the nine words of geometry and then
+;     some 300 bytes of `mov word [x], y` choosing the procs, the inks and the
+;     panel's shape backend by backend - a pointer only some arms filled is how
+;     `call [cs_lrunproc]` once reached package offset 0 on Mode X, and a row
+;     has no arm to forget.
 ;      vx,  vy,  vw,  vh,  wx0,  ww,  wh, sclx, scly
+;      panrows, pasp, plblp, plabw, msgtabp, msgx0
+;      inktab, hrunproc, lrunproc, rowsproc, rowsprocc, glyphproc
+;      lsh, lst, lvt (the line walk trio), shkb, shclr
+;      conebase, gcellb, kshift, pbg8
+%macro CS_BEROW 30
+    dw %1, %2, %3, %4, %5, %6, %7, %8, %9
+    dw %10, %11, %12, %13, %14, %15
+    dw %16, %17, %18, %19, %20, %21
+    dw %22, %23, %24, %25, %26
+    db %27, %28, %29, %30
+%endmacro
 cs_vptab:
-    dw   0,   0, 320, 240,   40, 240, 108,  277,  277   ; MODEX: square pixels
-    dw   0,   0, 320, 200,   40, 240,  84,  277,  231   ; CGA:   4:3 in 320x200
-    dw  40,  74, 640, 200,  120, 400, 112,  443,  285   ; HERC:  a 400-wide view
-                                                        ; in a 640x200 box
-    dw   0,   0, 160, 100,   16, 128,  66,  138,  115   ; C160:  the 16-colour
-                                                        ; text hack (88.15)
+    CS_BEROW   0,   0, 320, 240,   40, 240, 108,  277,  277, \
+               CS_PANROWS, 256, cs_plbl, 4, cs_msgtab, 0, \
+               cs_inkmodex, cs_hrun_modex, cs_hrun_modex, \
+               cs_polyrows, cs_polyrows, cs_glyph_modex, \
+               cs_line_modex_sh, cs_line_modex_st, cs_line_modex_vt, 0, 0, \
+               1, 2, 2, CSI_PBG          ; MODEX: square pixels, two VRAM pages
+    CS_BEROW   0,   0, 320, 200,   40, 240,  84,  277,  231, \
+               CS_PANROWS, 213, cs_plbl, 4, cs_msgtab, 0, \
+               cs_inkcga, cs_hrun_cga, cs_hrun_cga, \
+               cs_polyrows, cs_polyrows, cs_glyph_cga, \
+               cs_line_cga_sh, cs_line_cga_st, cs_line_cga_vt, \
+               CS_SHKB, CS_SHSEG / 2, \
+               1, 2, 2, 0xFF             ; CGA: 4:3 in 320x200, and four
+                                         ; pixels of CGA brown for a ground
+    CS_BEROW  40,  74, 640, 200,  120, 400, 112,  443,  285, \
+               CS_PANROWS, 330, cs_plbl, 4, cs_msgtab, 0, \
+               cs_inkherc, cs_hrun_herc, cs_lrun_herc, \
+               cs_polyrows_herc, cs_polyrows_herc_c, cs_glyph_herc, \
+               cs_line_herc_sh, cs_line_herc_st, cs_line_herc_vt, \
+               CS_SHKB, CS_SHSEG / 2, \
+               0, 1, 3, 0                ; HERC: a 400-wide view in a 640x200
+                                         ; box, a Hercules pair 1.29 tall, and
+                                         ; 0.5 for the narrower field
+    CS_BEROW   0,   0, 160, 100,   16, 128,  66,  138,  115, \
+               CS_STRIPROWS, 213, cs_plbl160, 2, cs_msgtab160, CS_STRIPMX, \
+               cs_inkc160, cs_hrun_c160, cs_hrun_c160, \
+               cs_polyrows, cs_polyrows, cs_glyph_c160, \
+               cs_line_c160_sh, cs_line_c160_st, cs_line_c160_vt, \
+               CS_SHKB / 2, CS_SHSEG / 4, \
+               1, 4, 1, 0                ; C160: the 16-colour text hack
+                                         ; (88.15) - two pixels a byte, a cell
+                                         ; four of them, the ONE-LINE strip's
+                                         ; panel (88.15.5) and a HUNDRED rows
+                                         ; of shadow, 8,000 bytes (88.10.9)
+cs_vptab_end:
 ; THE TABLE IS THE **MODERATE** SIZE (SPEC.md 88.13.4), which is what the
 ; Hercules row always was - 400 of its 640 - and is now three quarters of the
 ; box on the other two as well. Full and Small are computed from it by
@@ -164,22 +209,16 @@ cs_r_size:
 cs_r_setup:
     mov al, [cs_back]
     dec al
-    mov ah, 18
+    mov ah, CS_BEREC
     mul ah
     mov si, cs_vptab
     add si, ax
     mov di, cs_vx
     push ds
     pop es
-    mov cx, 9
-    cld
+    mov cx, CS_BEREC / 2            ; THE WHOLE RECORD (88.3.7): the geometry,
+    cld                             ; the panel's shape, the procs, the inks
     rep movsw
-    mov ax, CS_PANROWS              ; how many rows the panel wants, which the
-    cmp byte [cs_back], CSB_C160    ; view's height is bounded by
-    jne .pr
-    mov ax, CS_STRIPROWS
-.pr:
-    mov [cs_panrows], ax
     call cs_r_size                  ; ...and the player's Size over it, before
                                     ; anything below derives from it (88.13.4)
     mov ax, [cs_wx0]
@@ -201,82 +240,7 @@ cs_r_setup:
 .py:                                ; rather than dragging it up the screen
     mov [cs_pany], ax               ; the panel's first row
 
-    ; --- the backend's own procs ------------------------------------------
     mov byte [cs_ink], 0xFF         ; no ink set yet (cs_setink's cache)
-    mov byte [cs_conebase], 1       ; the cull's cone: 0.75 of the depth...
-    mov word [cs_pasp], 256         ; rows per logical x unit (88.9.2): Mode
-    cmp byte [cs_back], CSB_MODEX   ; X's pixels are square...
-    je .cb
-    mov word [cs_pasp], 213         ; ...CGA's 0.83 wide for their height...
-    cmp byte [cs_back], CSB_HERC
-    jne .cb
-    mov word [cs_pasp], 330         ; ...and a Hercules pair is 1.29
-    mov byte [cs_conebase], 0       ; (and 0.5 for the narrower Hercules field)
-.cb:
-    mov word [cs_plblp], cs_plbl    ; the cockpit panel's labels, its four-cell
-    mov word [cs_plabw], 4          ; gap and its full-length messages, which
-    mov word [cs_msgtabp], cs_msgtab ; the strip below replaces (88.15.5)
-    mov word [cs_msgx0], 0          ; a cockpit's message strip is full width
-    mov byte [cs_gcellb], 2         ; the bytes an 8-pixel glyph cell covers
-    mov byte [cs_kshift], 2
-    mov byte [cs_pbg8], CSI_PBG     ; the panel's ground, as the glyph stores
-    mov word [cs_inktab], cs_inkmodex ; want it (a Mode X index...)
-    mov word [cs_hrunproc], cs_hrun_modex
-    mov word [cs_lrunproc], cs_hrun_modex   ; ...AND THIS ONE, which the Mode
-                                    ; X arm did not set at all: it is a ZWORD,
-                                    ; so `call [cs_lrunproc]` in a Mode X
-                                    ; bracket went to package offset 0. The
-                                    ; other two arms set it and that is what
-                                    ; hid it - a pointer only some arms fill
-                                    ; is the shape to look for
-    mov word [cs_rowsproc], cs_polyrows
-    mov word [cs_rowsprocc], cs_polyrows
-    mov word [cs_glyphproc], cs_glyph_modex
-    mov si, cs_lp_modex
-    cmp byte [cs_back], CSB_MODEX
-    je .procs
-    mov byte [cs_pbg8], 0xFF        ; ...four pixels of CGA brown...
-    mov word [cs_inktab], cs_inkcga
-    mov word [cs_hrunproc], cs_hrun_cga
-    mov word [cs_lrunproc], cs_hrun_cga
-    mov word [cs_glyphproc], cs_glyph_cga
-    mov si, cs_lp_cga
-    cmp byte [cs_back], CSB_CGA
-    je .procs
-    cmp byte [cs_back], CSB_C160
-    jne .h
-    mov byte [cs_gcellb], 4         ; --- the 16-colour text hack (88.15): two
-    mov byte [cs_kshift], 1         ;     pixels a byte, so a cell is four of
-    mov byte [cs_pbg8], 0           ;     them and a row is EIGHTY, which is
-    mov word [cs_inktab], cs_inkc160 ;    the stride every other backend has
-    mov word [cs_hrunproc], cs_hrun_c160
-    mov word [cs_lrunproc], cs_hrun_c160
-    mov word [cs_glyphproc], cs_glyph_c160
-    mov word [cs_plblp], cs_plbl160 ; ...and the ONE-LINE strip's panel with
-    mov word [cs_plabw], 2          ; it: one-letter labels, the number two
-    mov word [cs_msgtabp], cs_msgtab160 ; cells along, messages that fit in
-    mov word [cs_msgx0], CS_STRIPMX ; fourteen, and a message that starts at
-    mov si, cs_lp_c160              ; cell 6 so the SPEED is never covered
-                                    ; (88.15.5, 88.15.6)
-    jmp short .procs
-.h:
-    mov byte [cs_gcellb], 1
-    mov byte [cs_pbg8], 0           ; ...or nothing at all)
-    mov byte [cs_kshift], 3
-    mov word [cs_inktab], cs_inkherc
-    mov word [cs_hrunproc], cs_hrun_herc
-    mov word [cs_rowsproc], cs_polyrows_herc
-    mov word [cs_rowsprocc], cs_polyrows_herc_c
-    mov word [cs_lrunproc], cs_lrun_herc
-    mov word [cs_glyphproc], cs_glyph_herc
-    mov si, cs_lp_herc
-.procs:
-    mov ax, [si]
-    mov [cs_lsh], ax
-    mov ax, [si+2]
-    mov [cs_lst], ax
-    mov ax, [si+4]
-    mov [cs_lvt], ax
 
     mov ax, [cs_wx0]                ; the view's bytes: first, and how many
     mov cl, [cs_kshift]
@@ -287,6 +251,10 @@ cs_r_setup:
     mov [cs_wbn], ax
 
     call cs_devrows
+    mov byte [cs_artok], 0          ; THE TITLE BANDS GO: the four tables below
+                                    ; are built over them, in the union they
+                                    ; share (88.10.7), and cs_fsx_main reads
+                                    ; them back on its way out
     call cs_ktabs                   ; the projection tables for these scales
     call cs_endtab                  ; ...and the row loop's end tables (88.4.5.5)
     call cs_mktabs                  ; ...and the stepped mark's widen-and-clamp
@@ -307,10 +275,13 @@ cs_r_setup:
     jne .sh1                        ; the plain 80x25 the kernel set (88.15.2)
     call cs_c160_mode
 .sh1:
-    mov dx, [cs_shseg]              ; ONCE FOR THE INSTANCE, not once a
-    or dx, dx                       ; bracket (SPEC.md 85.3's lesson): the
-    jnz .haveshadow                 ; claim is freed with the instance
-    mov ax, CS_SHKB
+    mov dx, [cs_shseg]              ; ONCE FOR THE BRACKET: this runs again on
+    or dx, dx                       ; a Size hotkey (88.13.5), and a second
+    jnz .haveshadow                 ; claim would be SPEC.md 85.3's leak.
+                                    ; cs_fsx_main FREES it on the way out
+                                    ; (88.10.9), so the title page never holds
+                                    ; 16KB that only a flight can use
+    mov ax, [cs_shkb]               ; the backend's own size: 8KB on C160
     call OSAPI_MEM_CLAIM
     jc .noshadow
     mov [cs_shseg], dx
@@ -502,6 +473,22 @@ cs_dactab:                          ; 6-bit DAC values, indexed by CSI_*
     db 24, 44, 62                   ; 15 a river reduced to a LINE (88.6.5) -
                                     ;    the river's blue, lifted so a one
                                     ;    pixel stroke reads against the ground
+    db 11, 32, 12                   ; 16 a hill's other sides (88.4.4.1)
+    db 23, 47, 20                   ; 17 ...and its cap: a shade UP, and only
+                                    ;    a shade - a bright cap made every
+                                    ;    face that flickers in at range a
+                                    ;    flash (88.4.4.1)
+    db 30, 42, 60                   ; 18 the sky's outer haze (88.4.1.1)
+    db 40, 48, 60                   ; 19 ...its inner, at the horizon
+    db 24, 41, 28                   ; 20 the ground's ONE band (88.4.1.1.1)
+    db  8, 26,  8                   ; 21 a field (88.13.1.5): dark green
+    db 30, 36, 12                   ; 22 ...and the other kind: stubble
+    db 10, 31, 10                   ; 23 the ground's second green, Mode X's
+                                    ;    checker (88.13.1.5.2)
+    db 20, 34, 24                   ; 24 ...and the haze band's, the same step
+                                    ;    down from its own
+    db 60, 60, 60                   ; 25 a road's line: the marks' (88.13.1.5.3)
+    db 63, 54, 22                   ; 26 lift on the map (88.16.1): warm air
 
 ; ...and what each MEANING is worth as FOUR ROW PATTERNS on the three
 ; adapters (SPEC.md 88.4.4). Indexed by CSI_* x 4.
@@ -530,6 +517,23 @@ cs_inkherc:
                                     ; river's own ink here is stripes, and a
                                     ; line drawn in stripes is half a line
                                     ; (88.6.5)
+    db 0x88, 0x22, 0x88, 0x22       ; a hill's other sides: 25%, against the
+                                    ; near ones' 50% (88.4.4.1)
+    db 0xDD, 0x55, 0x77, 0x55       ; ...and its cap: 62.5%, between them
+    db 0x00, 0x00, 0x08, 0x00       ; THE HAZE (88.4.1.1): the black sky
+    db 0x80, 0x00, 0x08, 0x00       ; dusted toward the horizon...
+    db 0x88, 0x00, 0xAA, 0x00       ; ...and the ground PALER there: 19%
+                                    ; against its own 12.5%
+    db 0x80, 0x00, 0x08, 0x00       ; a field (88.13.1.5): DARK, 6%...
+    db 0xFF, 0x00, 0x00, 0x00       ; ...and stubble, in furrows
+    db 0x88, 0x00, 0x22, 0x00       ; the ground's second green: the ground
+    db 0x88, 0x00, 0xAA, 0x00       ; ...and the band's: the band
+    db 0xFF, 0xFF, 0xFF, 0xFF       ; a road's line: the marks' white
+    db 0xF0, 0x00, 0x0F, 0x00       ; lift on the map (88.16.1): a rough
+                                    ; checker of 4-pixel dashes, coarser than
+                                    ; anything else here - the ground's 12.5%
+                                    ; and fine 25% dots read as one grey. Only
+                                    ; rows 0 and 2 are ever laid (cs_maptile)
 cs_inkcga:                          ; palette 0: 0 light blue, 1 green,
     db 0x00, 0x00, 0x00, 0x00       ;   2 red, 3 brown
     db 0x55, 0x55, 0x55, 0x55       ; ground: green
@@ -549,6 +553,23 @@ cs_inkcga:                          ; palette 0: 0 light blue, 1 green,
     db 0x00, 0x00, 0x00, 0x00       ; a river as a line: colour 0, the light
                                     ; blue this palette's river is - drawn
                                     ; over GROUND, which is green (88.6.5)
+    db 0xEE, 0xBB, 0xEE, 0xBB       ; a hill's other sides: brown and red,
+                                    ; dithered - the shade a 4-colour card
+                                    ; has (88.4.4.1)
+    db 0xFD, 0xFF, 0xDF, 0xFF       ; ...and its cap: brown with a little
+                                    ; green in it
+    db 0x00, 0x00, 0x00, 0x00       ; THE HAZE (88.4.1.1): palette 0 has
+    db 0x00, 0x00, 0x00, 0x00       ; nothing paler than its sky, so the
+    db 0x44, 0x11, 0x44, 0x11       ; GROUND fades into the sky's blue
+    db 0x5F, 0xF5, 0x5F, 0xF5       ; a field (88.13.1.5): brown and green,
+                                    ; not solid brown - that is a hill's...
+    db 0x66, 0x99, 0x66, 0x99       ; ...and red and green
+    db 0x55, 0x55, 0x55, 0x55       ; the ground's second green: green
+    db 0x44, 0x11, 0x44, 0x11       ; ...and the band's: the band
+    db 0xFF, 0xFF, 0xFF, 0xFF       ; a road's line: BROWN, where the marks'
+                                    ; green is the ground's (88.13.1.5.3)
+    db 0x44, 0x55, 0x11, 0x55       ; lift on the map (88.16.1): the sky's
+                                    ; blue in a quarter of the green
 
 ; --- the SIXTEEN-COLOUR text hack's inks (SPEC.md 88.15.3) --------------------
 ; A pattern byte is two pixels, high nibble LEFT, and every one of the four
@@ -591,6 +612,21 @@ cs_inkc160:
                                     ; (88.6.5) - the one backend where a line
                                     ; can be the colour of the thing it stands
                                     ; for with nothing given up
+    CS_C16 4                        ; a hill's other sides: the brown's shade
+                                    ; down, which on RGBI is red (88.4.4.1)
+    db 0x67, 0x76, 0x67, 0x76       ; ...and its cap: brown and grey
+    CS_C16 9                        ; THE HAZE (88.4.1.1): the sky's outer
+    CS_C16 11                       ; band is the sky, its inner light cyan,
+    CS_C16 10                       ; and the ground goes light green to meet
+                                    ; it
+    db 0x62, 0x26, 0x62, 0x26       ; a field (88.13.1.5): brown and green,
+                                    ; not the haze band's light green...
+    db 0xAE, 0xEA, 0xAE, 0xEA       ; ...and light green and yellow
+    CS_C16 2                        ; the ground's second green: green
+    CS_C16 10                       ; ...and the band's: the band
+    CS_C16 15                       ; a road's line: the marks' white
+    db 0xE2, 0x22, 0x2E, 0x22       ; lift on the map (88.16.1): yellow dots
+                                    ; in a quarter of the green
 cs_inkmodex:                        ; the DAC above, one for one
     db 0, 0, 0, 0
     db 1, 1, 1, 1
@@ -608,17 +644,35 @@ cs_inkmodex:                        ; the DAC above, one for one
     db 13, 13, 13, 13
     db 14, 14, 14, 14               ; nothing: black (88.13.3)
     db 15, 15, 15, 15               ; a river as a line (88.6.5)
+    db 16, 16, 16, 16               ; a hill's other sides (88.4.4.1)
+    db 17, 17, 17, 17               ; ...and its cap
+    db 18, 18, 18, 18               ; the haze (88.4.1.1)
+    db 19, 19, 19, 19
+    db 20, 20, 20, 20
+    db 21, 21, 21, 21               ; the fields (88.13.1.5)
+    db 22, 22, 22, 22
+    db 23, 23, 23, 23               ; the ground's second green
+    db 24, 24, 24, 24               ; ...and the haze band's
+    db 25, 25, 25, 25               ; a road's line
+    db CS_MXSTIP + 5, CS_MXSTIP, CS_MXSTIP + 10, CS_MXSTIP
+                                    ; lift on the map (88.16.1): DAC 26
+                                    ; through half the planes of every other
+                                    ; row, cs_hrun_modex's .stip
 
 ; The pixel value of an ink on the two colour adapters, for the WALKS and the
 ; glyphs: the 2-bit colour on CGA and the index on Mode X. Hercules is the one
 ; bit.
-cs_inkval_cga:   db 0, 1, 3, 0, 3, 2, 2, 3, 2, 1, 3, 1, 2, 2, 0, 0
+cs_inkval_cga:   db 0, 1, 3, 0, 3, 2, 2, 3, 2, 1, 3, 1, 2, 2, 0, 0, 3, 3
+                 db 0, 0, 1, 3, 2, 1, 1, 3, 0
 cs_inkval_modex: db 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+                 db 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26
 ; ...and C160's is the colour in BOTH NIBBLES, which is what its walk and its
 ; glyph both want: a mask picks the half, and `ink8 & mask` is then the ink at
 ; whichever pixel the mask names, with no shift at all.
 cs_inkval_c160:  db 0x99, 0x22, 0x88, 0x11, 0x77, 0x88, 0x44, 0x66
                  db 0xFF, 0xFF, 0x00, 0xAA, 0xCC, 0x88, 0x00, 0x11
+                 db 0x44, 0x77, 0x99, 0xBB, 0xAA, 0x66, 0xEE, 0x22, 0xAA, 0xFF
+                 db 0xEE
 
 ; -----------------------------------------------------------------------------
 ; cs_hznone - the horizon band with the TERRAIN fill off (SPEC.md 88.13.3):
@@ -979,6 +1033,7 @@ cs_skyground:
     rep stosw
     mov word [cs_hzy0], 0x7FFF      ; the rows the line runs between
     mov word [cs_hzy1], -1
+    mov byte [cs_hzform], 0         ; ...and which form it took (88.4.1.1)
     mov byte [cs_hzhave], 0         ; ...and no horizon SEGMENT yet (88.13.3)
 
     mov ax, [cs_nx]                 ; the up vector, quartered: keeps every
@@ -1034,6 +1089,8 @@ cs_skyground:
     add ax, [cs_hzx0]
     add ax, [cs_vcx]
     mov cx, ax
+    mov [cs_hzxb], ax               ; the two ends, for the haze's parallels
+    mov byte [cs_hzform], 1
     mov dx, [cs_wh]
     dec dx
     mov ax, [cs_hzxa]
@@ -1079,6 +1136,7 @@ cs_skyground:
     add ax, [cs_hzx0]
     add ax, [cs_vcy]
     mov [cs_hzyb], ax               ; ...and the right edge
+    mov byte [cs_hzform], 2
     mov bx, [cs_hzya]
     mov dx, ax
     cmp bx, dx
@@ -1134,6 +1192,17 @@ cs_skyground:
     ; carries the union (SPEC.md 88.3). That is most of the view in level
     ; flight, at a compare a row.
 .rows:
+    test byte [cs_setfill], CSFL_HAZE ; --- THE HAZE (SPEC.md 88.4.1.1): when
+    jz .nohz                        ; it is on (F6), over a ground that is
+    cmp byte [cs_hzform], 0         ; drawn and a horizon that is somewhere,
+    je .nohz                        ; the rows it reaches are its own pass
+    test byte [cs_setfill], CSFL_TERRAIN
+    jz .nohz
+%ifndef CSPROBE                     ; (the instrument has no haze: skies.asm)
+    jmp cs_hazerows
+%endif
+.nohz:
+    mov byte [cs_hzlast], 0         ; (the haze knows its rows are not its)
     test byte [cs_setfill], CSFL_TERRAIN   ; --- THE GROUND, if it is wanted
     jnz .ink                        ; (88.13.3): with it off the ground's
     call cs_hznone                  ; rows go BLACK and the sky stays sky
@@ -1316,8 +1385,9 @@ cs_skyground:
     pop bx
     pop cx
     cmp byte [cs_back], CSB_MODEX
-    je .b                           ; Mode X keeps the per-row call: its own
-                                    ; filler selects planes as it goes
+    jne .fused                      ; Mode X keeps the per-row call: its own
+    jmp .bmx                        ; filler selects planes as it goes
+.fused:
     ; ===== THE BAND, FUSED (SPEC.md 88.3.1.3) =============================
     ; The row used to be a CALL, and both sides of it paid for that. The loop
     ; banked three registers, re-derived the row's ink pair through two
@@ -1403,7 +1473,55 @@ cs_skyground:
     sub bx, cs_xl                   ; which is what .below counts from
     shr bx, 1
     jmp .below
-.b:
+    ; --- MODE X's BAND, THROUGH THE LATCHES (88.13.1.5.2.1): with the
+    ;     textured ground on one side of the horizon every band row is a
+    ;     ground run and a sky run, and the old row filler asked cs_mxlon and
+    ;     cs_mxloff about both: four calls a row, ~480 cycles of an 8088 for a
+    ;     test whose answer is the BAND's - 24 ms of a 266 ms banked frame.
+    ;     So EVERY Mode X band is laid by cs_hzrow_mxl in WRITE MODE 1: a
+    ;     plain side is a latch byte too (its colour in all four planes at
+    ;     CS_MXPAT + 8 or + 9, written once here - which writes exactly the
+    ;     pixels the colour byte did), each side's latch byte per row phase
+    ;     is worked out once here, and a row is two latch reads and its
+    ;     stores, with no call and no test in it - and the old filler and
+    ;     cs_hzwhole, whose only caller it was, are gone.
+    ;     (Two passes - every row's sky, then every row's ground - were built
+    ;     first and measured WORSE, 265.6 -> 320.1 ms, a split row's own
+    ;     setup being the bigger cost and they paid it twice; and keeping the
+    ;     mode armed across the band with the calls left in measured 265.67,
+    ;     no gain at all: the calls were the cost, not the OUTs)
+.bmx:
+    push bx
+    push cx
+    push dx
+    push di
+    call cs_mxloff                  ; (write mode 0 to lay the latch bytes)
+    push es
+    mov es, [cs_tseg]
+    mov dx, 0x3C4                   ; every plane
+    mov ax, 0x0F02
+    out dx, ax
+    mov si, [cs_hzlt]               ; each side's colour, for a side that
+    mov al, [si]                    ; is PLAIN - a latch byte of one colour
+    mov [es:CS_MXPAT + 8], al       ; in all four planes is that colour
+    mov si, [cs_hzrt]
+    mov al, [si]
+    mov [es:CS_MXPAT + 9], al
+    pop es
+    mov si, [cs_hzlt]               ; ...and each side's latch byte a phase
+    mov di, cs_mxla4
+    mov dx, CS_MXPAT + 8
+    call cs_mxadr4
+    mov si, [cs_hzrt]
+    mov di, cs_mxra4
+    mov dx, CS_MXPAT + 9
+    call cs_mxadr4
+    call cs_mxarm
+    pop di
+    pop dx
+    pop cx
+    pop bx
+.blx:
     push cx
     push bx
     push di
@@ -1411,36 +1529,26 @@ cs_skyground:
     shl si, 1
     mov cx, [cs_xl + si]
     cmp cx, 0x7FFF
-    jne .split
-    mov cx, [cs_wx1]                ; untouched inside the band: the crossing
-    inc cx                          ; is off the right, so the row is the
-                                    ; left side's
-.split:
+    jne .sx
+    mov cx, [cs_wx1]                ; untouched inside the band: the left
+    inc cx                          ; side's whole row
+.sx:
 %ifdef CSHZPROBE
     call cs_probe_hz                ; what an incremental refill would cost
 %endif
-    ; --- AND THE PHASE IS SCRATCHED IN DX, NOT DI (SPEC.md 88.3.1.2) -------
-    ; DI is the ROW now - the filler takes it and walks it - so the two
-    ; instructions that used to borrow DI for the pattern index write over the
-    ; pointer they are about to pass. It cost a whole view: every split row
-    ; laid itself at the top of the shadow, which a ONE-row band (level, or
-    ; rolled 180) hides completely and a full one fails at 867 byte-groups.
-    mov dx, bx                      ; (the row's kind and span are the span
-                                    ;  pass's, above - 88.3.1.1)
-    and dx, 3                       ; DX = the row's phase in the pattern
-    mov si, [cs_hzlt]
-    add si, dx
-    mov al, [si]
-    mov si, [cs_hzrt]
-    add si, dx
-    mov ah, [si]
-    call cs_hzrow_modex             ; the row split at CX: AL left, AH right
+    and si, 6                       ; the row's phase, x 2
+    mov ax, [cs_mxla4 + si]
+    mov [cs_mxla], ax
+    mov ax, [cs_mxra4 + si]
+    mov [cs_mxra], ax
+    call cs_hzrow_mxl
     pop di
     pop bx
     pop cx
     add di, 80
     inc bx
-    loop .b
+    loop .blx
+    call cs_mxloff                  ; ...and write mode 0 again, once
 .below:
     mov cx, [cs_wh]                 ; ...and the rows below it
     sub cx, bx
@@ -1559,6 +1667,15 @@ cs_hzrows:
     mov dl, al                      ; DL = the kind (cs_inkpat zeroes AH: the
     call cs_inkpat                  ; first build kept it there and every row
     mov [cs_hzkt], si               ; was recorded as kind 0, so a row that
+    mov dh, 0                       ; ...and is it a LATCHED pattern (Mode X's
+    cmp byte [cs_back], CSB_MODEX   ; textured ground, 88.13.1.5.2)? Asked
+    jne .nl                         ; once a call, so a row on every other
+    cmp byte [si], CS_MXLAT         ; backend pays one compare and no more
+    jb .nl
+    inc dh
+    call cs_mxarm                   ; ...and write mode 1, once for the call
+.nl:
+    mov [cs_hzlat], dh
     mov al, dl                      ; went from ground to sky was "as it was"
     mov si, bx                      ; and never refilled - 88.3.1)
     shl si, 1
@@ -1619,6 +1736,8 @@ cs_hzrows:
     add si, [cs_hzkt]
     mov al, [si]
     pop si
+    cmp byte [cs_hzlat], 0
+    jne .lat
     mov ah, al
     shr cx, 1                       ; the 8088's bus is a byte wide: an odd
     rep stosw                       ; address costs a word store nothing
@@ -1635,7 +1754,18 @@ cs_hzrows:
     inc si
     LOOPF .r
 .out:
-    ret
+    jmp cs_mxloff                   ; (a latched run's mode, if one was armed)
+.lat:                               ; the same row through the LATCHES: the
+    push si                         ; data byte is ignored and each store
+    mov si, ax                      ; writes the row phase's four pixels.
+    and si, 7                       ; Inline, with the mode armed once at the
+    mov al, [es:CS_MXPAT + si]      ; top: a call to cs_mxlon a row was ~200
+    pop si                          ; cycles of an 8088 a ground row
+    shr cx, 1
+    rep stosw
+    jnc .even                       ; (write mode 1 stays armed for the next
+    stosb                           ; row: cs_hzrows' exit disarms it)
+    jmp short .even
 
 ; -----------------------------------------------------------------------------
 ; cs_markrows - rows SI..DI of the view had bytes [cs_mklo]..[cs_mkhi] drawn
@@ -2007,26 +2137,77 @@ cs_abs32:
 
 
 ; -----------------------------------------------------------------------------
-; cs_hzwhole - one whole view row of one pattern
-; in:  DI = the row's first VIEW byte, AL = AH = the pattern - the band loop
-;      already has that pointer and walks it, so recomputing it out of
-;      cs_rowoff was 51 cycles a row of nothing (SPEC.md 88.3.1.2)
-; clobbers CX, DX, DI, ES
-; -----------------------------------------------------------------------------
-cs_hzwhole:
-    mov cx, [cs_wbn]
-    shr cx, 1
-    mov es, [cs_tseg]
-    cld
-    cmp byte [cs_back], CSB_MODEX
-    jne .go
+; cs_mxlon / cs_mxloff - MODE X'S TEXTURED GROUND (SPEC.md 88.13.1.5.2).
+;
+; A Mode X byte is four pixels, one a plane, and a fill stores ONE byte into
+; every plane - so a row is one colour across, and the only dither it could
+; carry was a row of a second colour, which is the lines the field found "not
+; quite right". The VGA has the answer in hardware: in WRITE MODE 1 a store
+; copies the four LATCHES into the enabled planes and ignores the CPU's byte,
+; and any read loads the latches. So cs_grsync keeps eight bytes past the
+; two pages at CS_MXPAT, one a row phase of two 4x4 tiles - the haze's ground
+; band's and the ground's - each holding a row across its four planes, and a
+; latched run is: arm write mode 1, read the phase's byte, store exactly as
+; before. A checker costs nothing at all per byte.
+;
+; The pattern byte says which: a latched row's bytes are CS_MXLAT + the byte
+; index (0xF8..0xFB the band, 0xFC..0xFF the ground: DAC indices nothing else
+; names), so a site that
+; already has the byte in hand tests one compare. cs_mxlon takes it in AL and
+; does nothing for any other byte; ES = the VGA. Both preserve every register.
+;
+; THE PORT IS THE PRICE, so it is touched as little as it can be: the mode
+; register's other bits are read ONCE a frame (cs_mxtile, into [cs_mxgc5]),
+; a change of mode is one word OUT, and [cs_mxon] keeps write mode 1 armed
+; across a run of ground rows, so a row after the first costs the latch READ
+; alone. The first build read-modified-wrote the register twice a run and
+; was 16.75 ms of a 402 ms banked frame on a 4.77 MHz VGA XT
+; ----------------------------------------------------------------------------
+cs_mxlon:
+    cmp al, CS_MXLAT
+    jb .no
     push ax
-    mov dx, 0x3C4                   ; every plane
-    mov ax, 0x0F02
-    out dx, ax
+    push si
+    call cs_mxarm
+    and ax, 7                       ; (0..3 the haze band's, 4..7 the ground's)
+    add ax, CS_MXPAT
+    mov si, ax
+    mov al, [es:si]                 ; a READ: the latches take the phase's
+    pop si                          ; four pixels
     pop ax
-.go:
-    rep stosw
+.no:
+    ret
+
+; cs_mxarm - write mode 1, if it is not already. Preserves every register
+cs_mxarm:
+    cmp byte [cs_mxon], 0
+    jne .out
+    push ax
+    push dx
+    mov dx, 0x3CE                   ; Graphics Mode: write mode 1, the rest
+    mov ah, [cs_mxgc5]              ; (256-colour shift) as it is
+    or ah, 1
+    mov al, 5
+    out dx, ax
+    mov byte [cs_mxon], 1
+    pop dx
+    pop ax
+.out:
+    ret
+
+cs_mxloff:
+    cmp byte [cs_mxon], 0
+    je .no
+    push ax
+    push dx
+    mov dx, 0x3CE
+    mov ah, [cs_mxgc5]              ; write mode 0
+    mov al, 5
+    out dx, ax
+    mov byte [cs_mxon], 0
+    pop dx
+    pop ax
+.no:
     ret
 
 ; cs_fillrun - CX bytes of AL (= AH) at ES:DI, words where it can. Advances
@@ -2037,55 +2218,68 @@ cs_fillrun:
     ret
 
 ; -----------------------------------------------------------------------------
-; cs_hzrow_modex - the same on Mode X: a byte is four pixels across planes
+; cs_hzrow_mxl - a band row, Mode X (SPEC.md 88.13.1.5.2.1), with write mode
+;   1 armed by the band and no call or test in it. In: BX = the row, CX = the crossing x, DI = the row's first view
+;   byte, [cs_mxla]/[cs_mxra] the left and right sides' latch bytes. A read
+;   loads the latches and every store after it writes them, the CPU's byte
+;   ignored - so the runs and the crossing byte are the old row filler's, and
+;   the pattern bytes they used to carry are two reads. Clobbers everything
+;   but BP
 ; -----------------------------------------------------------------------------
-cs_hzrow_modex:
+cs_hzrow_mxl:
+    mov es, [cs_tseg]
     cmp cx, [cs_wx0]
     jg .l1
-    mov al, ah
-    jmp cs_hzwhole
+    mov si, [cs_mxra]               ; the crossing off the left: the right
+    jmp short .whole                ; side's whole row
 .l1:
     cmp cx, [cs_wx1]
     jle .split
-    mov ah, al
-    jmp cs_hzwhole
+    mov si, [cs_mxla]               ; ...off the right: the left side's
+.whole:
+    mov al, [es:si]                 ; the latches
+    mov dx, 0x3C4
+    mov ax, 0x0F02                  ; every plane
+    out dx, ax
+    mov cx, [cs_wbn]
+    shr cx, 1
+    cld
+    rep stosw
+    ret
 .split:
-    mov [cs_hzpat], ax              ; the two patterns
     shl bx, 1
     mov di, [cs_rowoff + bx]
     add di, [cs_tbase]
-    mov es, [cs_tseg]
     mov bx, cx
     shr bx, 1
     shr bx, 1                       ; BX = the crossing byte
-    mov si, bx
-    sub si, [cs_wb0]
-    mov ax, 0x0F02
     mov dx, 0x3C4
+    mov ax, 0x0F02
     out dx, ax                      ; every plane for the runs
-    push di
-    add di, [cs_wb0]
-    mov al, [cs_hzpat]
-    mov ah, al
+    mov si, [cs_mxla]
+    mov al, [es:si]                 ; the LEFT side's latches
     push cx
-    mov cx, si
-    call cs_fillrun
-    pop cx
+    push di
+    mov cx, bx
+    sub cx, [cs_wb0]
+    add di, [cs_wb0]
+    call cs_fillrun                 ; ...its run
     pop di
+    pop cx
     and cx, 3
     jz .noleft
     mov si, cx
-    mov ah, [cs_pmr + si - 1]       ; planes 0..i-1: the left pattern
-    mov al, 2
+    mov ah, [cs_pmr + si - 1]       ; planes 0..i-1: the left side's share
+    mov al, 2                       ; of the crossing byte
     out dx, ax
-    mov al, [cs_hzpat]
     mov [es:di+bx], al
 .noleft:
     mov si, cx
-    mov ah, [cs_pml + si]           ; planes i..3: the right pattern
+    mov ah, [cs_pml + si]           ; planes i..3: the right side's
     mov al, 2
     out dx, ax
-    mov al, [cs_hzpat+1]
+    mov si, [cs_mxra]
+    mov al, [es:si]                 ; the RIGHT side's latches
     mov [es:di+bx], al
     mov ax, 0x0F02
     out dx, ax
@@ -2095,9 +2289,27 @@ cs_hzrow_modex:
     dec cx
     add di, bx
     inc di
-    mov al, [cs_hzpat+1]
-    mov ah, al
-    call cs_fillrun
+    jmp cs_fillrun                  ; ...and its run
+
+; cs_mxadr4 - SI = a side's four pattern bytes, DI = four words: each phase's
+;             latch byte, CS_MXPAT + its index for a latched byte and DX -
+;             the side's own plain latch byte - for any other. Clobbers AX,
+;             CX, SI, DI
+cs_mxadr4:
+    mov cx, 4
+.p:
+    lodsb
+    cmp al, CS_MXLAT
+    mov ax, dx
+    jb .w
+    mov al, [si - 1]
+    and ax, 7
+    add ax, CS_MXPAT
+.w:
+    mov [di], ax
+    inc di
+    inc di
+    loop .p
     ret
 
 ; =============================================================================
@@ -2904,6 +3116,9 @@ cs_hrun_c160:
 ; Mode X's "mask" is a set of PLANES: the two end bytes are a map-mask write
 ; and a store, the middle is 0x0F and a run.
 cs_hrun_modex:
+    cmp dl, CS_MXSTIP               ; a stipple or a latch: not the plain run
+    jae .lat
+.go:
     mov di, si
     shr di, 1
     shr di, 1                       ; DI = the last byte
@@ -2950,6 +3165,68 @@ cs_hrun_modex:
     call cs_fillrun
 .done:
     ret
+.lat:
+    cmp dl, CS_MXLAT                ; Mode X's textured ground: the same run
+    jb .stip                        ; through the latches (cs_mxlon)
+    mov al, dl
+    call cs_mxlon
+    call .go
+    jmp cs_mxloff
+.stip:
+    ; --- THE MAP'S LIFT (88.16.1): CSI_LIFT through the planes DL's low
+    ;     nibble names and no others, so a row lays one pixel in two of its
+    ;     run and leaves the ground showing in the rest. .go's shape with
+    ;     every mask ANDed by DH, and its own copy because .go is every
+    ;     face's run and a stipple is drawn only on the map
+    mov dh, dl
+    and dh, 0x0F
+    jz .sdone                       ; a row with no planes is no write
+    mov dl, CSI_LIFT
+    mov di, si
+    shr di, 1
+    shr di, 1                       ; DI = the last byte
+    mov cx, bp
+    shr cx, 1
+    shr cx, 1                       ; CX = the first byte
+    and si, 3
+    mov ah, [cs_pmr + si]
+    and ah, dh
+    mov si, bp
+    and si, 3
+    mov al, [cs_pml + si]
+    and al, dh
+    cmp cx, di
+    jne .smulti
+    and al, ah
+    call cs_mxmask
+    mov si, bx
+    add si, cx
+    mov [es:si], dl
+.sdone:
+    ret
+.smulti:
+    call cs_mxmask
+    mov si, bx
+    add si, cx
+    mov [es:si], dl
+    mov al, ah
+    call cs_mxmask
+    mov si, bx
+    add si, di
+    mov [es:si], dl
+    sub di, cx
+    dec di
+    jz .sdone
+    mov al, dh
+    call cs_mxmask
+    push di
+    mov di, bx
+    add di, cx
+    inc di
+    pop cx
+    mov al, dl
+    mov ah, dl
+    jmp cs_fillrun
 
 ; cs_mxmask - AL = the plane mask to arm. Preserves everything but flags.
 cs_mxmask:
@@ -3986,10 +4263,7 @@ CS_WALKS 2, cs_line_cga
 CS_WALKS 3, cs_line_modex
 CS_WALKS 4, cs_line_c160
 
-cs_lp_herc:  dw cs_line_herc_sh, cs_line_herc_st, cs_line_herc_vt
-cs_lp_cga:   dw cs_line_cga_sh, cs_line_cga_st, cs_line_cga_vt
-cs_lp_modex: dw cs_line_modex_sh, cs_line_modex_st, cs_line_modex_vt
-cs_lp_c160:  dw cs_line_c160_sh, cs_line_c160_st, cs_line_c160_vt
+; (the four walk trios are in cs_vptab's rows now, SPEC.md 88.3.7)
 
 ; =============================================================================
 ; Text in a foreign mode (SPEC.md 85.7, taken as is): the kernel's 8x8 face

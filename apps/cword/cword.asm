@@ -64,6 +64,8 @@
                                     ; overlay runtime and the whole API bridge
 
 %include "cword.gen.asm"            ; the compiled C, found through -I build/
+                                    ; (tools/cc8086.py's output, after its
+                                    ; peephole pass - SPEC.md 73.15)
 
 ; The one hand-written routine (SPEC.md 73.11's rule that the inner loop is
 ; assembly): a byte move that handles both directions. C cannot write one -

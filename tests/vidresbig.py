@@ -200,7 +200,12 @@ def main():
             v88 = os.path.join(tmp, "HUGE.V88")
             st = clip(v88, 175, 2)
             (ulen, plen), = st["blocks"]
-            kb = (ulen + 2 * 2048 + 1023) // 1024
+            # the claim is the block plus a READ GRANULE either side
+            # (vp_bkkb): C:'s 2 KB clusters made that 2 * 2048 until
+            # SPEC.md 98.1.7.6 had kern_big read in SECTORS on any volume
+            # whose cluster is over 1 KB - so 2 * 512 now, and the old
+            # figure asked for 3 KB the player no longer claims
+            kb = (ulen + 2 * 512 + 1023) // 1024
             print("   2: the file: a %d-byte stored block, a %d KB claim"
                   % (ulen, kb))
             import os88vencgui as G

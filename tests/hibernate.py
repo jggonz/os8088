@@ -170,7 +170,7 @@ def floppy():
          "--boot", _B.at("build/boot360.bin"), "--kernel", _B.at(KERNEL),
          _B.at("build/hdd.drv"), _B.at("build/hiber.drv"),
          _B.at("build/ctrl.drv"), _B.at("build/format.drv"),
-         _B.at("build/clone.drv"), cfg])
+         _B.at("build/diskops.drv"), cfg])
 
 
 # A segment that is plausible and is nobody's: the wake must not care what it
