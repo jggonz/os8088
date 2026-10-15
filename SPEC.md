@@ -171439,13 +171439,25 @@ no alert.
     a Disk window off the cards, 10 / 11 calls.
   - **The three kernels are blessed** (`tools/kernsize.py --bless`): v2 is
     big/emu `.text` +183 `.cold` +225, small `.text` +12, no rung crossed.
-  - **The PR set is v2's** (`docs/dia/*.png`): the mockup's scene and data on
-    the VGA XT - at rest beside a Disk window, the handle, the bar taken by a
-    press with the Disk window still striped, the widget under a Disk window
-    that a press does not raise, dragged by its tag, relaunched at boot where
-    it was left - CGA and Hercules at rest and hovered, and kern_small's
-    titled fallback. v1's titled pictures are gone from the tree (the PR
-    body's links are pinned to a commit and still resolve).
+  - **The PR set is v2's** (`docs/dia/*.png`, eighteen pictures, all taken
+    on MartyPC with the mockup's data): on the VGA XT `full-vga` / `vga`
+    (the mockup's scene - a Disk window in front at the upper left, the
+    widget at rest at the right, the bar the Disk window's), `vga-hover`
+    (the handle and its close box, with a 4x crop of the tag row),
+    `vga-focus` (the bar taken by a press, the Disk window still striped),
+    `vga-covered` (a Disk window over the widget's left half: the widget
+    stays behind, its handle clipped), `vga-editing` (`+`), `vga-task-checked`
+    (one click on a box, before and after), `vga-reminder` (a reminder FIRING
+    live: card 3 ringing with `Snooze - Dismiss`, the toast on the bar, no
+    alert window), `vga-moved`, `vga-restored-boot` / `vga-restored` (a warm
+    reset with no clock poke: relaunched where it was dragged, on JULY),
+    `vga-notfound` and `vga-dia-folder`; `cga-compact` / `cga-hover`, `herc`
+    (the whole 720x348) / `herc-hover`; and `smallk-cga` (kern_small's titled
+    fallback). The design's W5 list also named `vga-dark`, `vga-color`,
+    `ega-rest` and `cga-page1..3`: those are asserted on the framebuffer by
+    `deskground`, `deskfit` and `deskcal1bpp` and were not photographed. v1's
+    titled pictures are gone from the tree (the PR body's links are pinned
+    to a commit and still resolve).
   - **The mockup's own data does not fit card 2** (open decision 2's default,
     two agenda lines): with 09:00, 14:30 and the 21:00 reminder all today it
     reads `09:00 Team sync` / `+2 more` where the mockup shows two lines -
