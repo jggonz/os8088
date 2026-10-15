@@ -170539,6 +170539,12 @@ KB system disk **332 of 354** (22 left; 323 before) and the small one 280 of
 354. A cold boot with the calendar's row reaches the paint at 15.38 s and
 `ui_task` at 19.22 s (7 reads, 50 sectors after the paint) against 14.85 s
 with none - the package's five more clusters are +0.2 s against v1's 19.02.
+**The uncover** (measured in v2's completeness pass, `deskcalperf`'s last
+gesture): a Disk window over the left 154 of the frame's 178 columns dragged
+clear is **10 calls, 191 ms** on TALL (8 slabs, 2 grounds) and **11, 158 ms**
+on COMPACT, where it covered nearly the whole face - the widget's own
+`W_PAINT` over the slabs `OSAPI_WM_DAMAGE` names, since a desk window has no
+drag cache (§11.103.6).
 
 **Two regressions, FOR THE OWNER** (v4 review). The calls fell and the TIME
 did not: the full paint is **265 ms against v1's 177** (the design priced
@@ -171426,6 +171432,25 @@ no alert.
     default y - to `DESKCAL_GEO`, not only `dc_geos`' 41 fields.
   - **The design record is in the tree**: `docs/plans/completed/DIA-LAYER-PLAN.md`.
 
+**v2, the completeness pass** (W5's part of it; `docs/plans/completed/DIA-PLAN.md`
+"v2: what was built and why" is the account of the whole):
+
+  - **The uncover is measured** (§110.6): `deskcalperf`'s last gesture drags
+    a Disk window off the cards, 10 / 11 calls.
+  - **The three kernels are blessed** (`tools/kernsize.py --bless`): v2 is
+    big/emu `.text` +183 `.cold` +225, small `.text` +12, no rung crossed.
+  - **The PR set is v2's** (`docs/dia/*.png`): the mockup's scene and data on
+    the VGA XT - at rest beside a Disk window, the handle, the bar taken by a
+    press with the Disk window still striped, the widget under a Disk window
+    that a press does not raise, dragged by its tag, relaunched at boot where
+    it was left - CGA and Hercules at rest and hovered, and kern_small's
+    titled fallback. v1's titled pictures are gone from the tree (the PR
+    body's links are pinned to a commit and still resolve).
+  - **The mockup's own data does not fit card 2** (open decision 2's default,
+    two agenda lines): with 09:00, 14:30 and the 21:00 reminder all today it
+    reads `09:00 Team sync` / `+2 more` where the mockup shows two lines -
+    the pager working as designed, and the owner's to weigh against 3 + 3.
+
 ### 110.10 How it was built, and its gates
 
 | wave | what | gates |
@@ -171445,7 +171470,7 @@ and every §7 default of the design record was taken):
 | W2 | the DRAG verb (`[ui_dragy]` = the caller's window), its pick-up and desk test, the desk `.nocache` and the drag's `[wm_dmg_npro]`; the hover edge (`[cur_hovw]`, `cur_hov_x`, `WF_HOVER`); `tests/diaprobe`'s tag row, handle and close box | `deskdrag`, `deskhover`, `deskhovercga`, `deskhoverherc`, `deskclose` (each broken on purpose and failing, §110.9); kernsize on all three kernels - measured +46 / +54, no rung crossed, kern_big image 5 and kern_emu cold 1 left; the review fixes +5 / -1, kern_big image **0** and kern_emu cold 2 left; `deskz`, `deskdock`, `deskkeys`, `desksmall` again |
 | W3 | `apps/os88gfx.inc` `GFXE_TEXT` / `GFXE_BITS` (§5.12.8); `os88dia.inc`'s `DIA_WIDGET` (§110.11): the geometry, the paint, the prefilters, the hover and focus states, `dia_quit`, the face-origin header, the titled fallback; `tests/diaprobe`'s desk build onto it; `tools/os88dia.py` (`DIA_HF_CONT`, `widget_off`) and `t_dia` W | `deskground`, `deskfit` (new); every wave 1 and 2 row re-gated on the include - the tag row pixel for pixel against the guest's font, the dwell and linger to the tick, 1 / 3 calls an edge, the re-fit; kernsize unchanged on all three kernels |
 | W4 | the Desk Calendar as three cards (§110.3): header flag bit 6, the three layouts by height and their `dc_geos`, the slab composers, the Monday-first grid with dots, today's box and the outline, card 2's lists with real ticks and `+N more`, card 3's RINGING / NEXT / NONE, COMPACT's paging slot, the controls and keys, `DCA_SNOOZED` / `DCA_DUE` and the snooze slot, the alert-on-fire removed, the menus kept; `os88dia.inc`'s `dia_redraw`; `tools/os88dia.py`'s bits, slot and `DESKCAL_GEO`; `tools/os88ui.py`'s `widget_*` | `deskcaledit`, `deskcaltask`, `deskcalgrid`, `deskcalremind`, `deskcal1bpp`, `deskcalperf`, `diaregister`, `diamove`, `diamovecga`, `diaanchor`, `diasmall` updated; `deskcalcards`, `deskcalsnooze`, `deskmodal` new; `t_dia` holds `dc_geos` to the host's mirror and the header's `OS88_F_DESK` |
-| W5 | look on 1bpp, EGA, Dark and Color; measure on MartyPC's 5150; `kernsize --bless`; `docs/dia/` retaken | `deskcalperf`'s new budgets, test-full alone, the soak |
+| W5 | look on 1bpp, EGA, Dark and Color; measure on MartyPC's 5150; `kernsize --bless`; `docs/dia/` retaken. **Done in the completeness pass**: the uncover measured (§110.6), the three kernels blessed, the PR set retaken as v2's widget (VGA, CGA, Hercules, kern_small), `docs/plans/completed/DIA-PLAN.md` given its v2 account. EGA, Dark and Color are asserted by `deskfit` and `deskground` on the framebuffer and were not photographed; 86Box's `xt-multimon` and `xt-hercules` were not looked at (86Box cannot be driven from this host) | `deskcalperf`'s new budgets and its uncover, test-full alone, the soak |
 
 **If W1 or W2 measures a crossed rung**, the cut order is: move
 `wm_show_b`'s desk arm behind a far call into `.cold` (−17 `.text`, +22

@@ -251,7 +251,7 @@ had added.
     "bss": 5135,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 38049,
+    "cold": 38274,
     "coldpara": 2400,
     "fatpara": 288,
     "imgpara": 3104,
@@ -264,7 +264,7 @@ had added.
     "ovl": 2490,
     "ovlw": 5011,
     "stk0": 512,
-    "text": 44346,
+    "text": 44529,
     "vgabuf": 336,
     "vgabufpara": 32
   },
@@ -274,7 +274,7 @@ had added.
     "bss": 5135,
     "budget": 129536,
     "codemax": 65536,
-    "cold": 38173,
+    "cold": 38398,
     "coldpara": 2400,
     "fatpara": 288,
     "imgpara": 3136,
@@ -287,7 +287,7 @@ had added.
     "ovl": 2496,
     "ovlw": 5011,
     "stk0": 512,
-    "text": 44611,
+    "text": 44794,
     "vgabuf": 336,
     "vgabufpara": 32
   },
@@ -310,7 +310,7 @@ had added.
     "ovl": 2086,
     "ovlw": 1480,
     "stk0": 512,
-    "text": 32933,
+    "text": 32945,
     "vgabuf": 0,
     "vgabufpara": 0
   }
@@ -681,41 +681,41 @@ there and nowhere else.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 28,988 | 35.2% |
-| the window system and its furniture | 22,938 | 27.8% |
-| drawing: adapters, primitives, glyphs, icons | 13,225 | 16.1% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 8,167 | 9.9% |
-| the kernel proper: API table, heap, scheduler, events | 7,273 | 8.8% |
-| the three built-in kinds | 1,443 | 1.8% |
+| the file system, end to end | 29,041 | 35.1% |
+| the window system and its furniture | 23,264 | 28.1% |
+| drawing: adapters, primitives, glyphs, icons | 13,225 | 16.0% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 8,184 | 9.9% |
+| the kernel proper: API table, heap, scheduler, events | 7,285 | 8.8% |
+| the three built-in kinds | 1,443 | 1.7% |
 | the Control Panel | 361 | 0.4% |
-| **total** | **82,395** | |
+| **total** | **82,803** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` | `.boot2` |
 |---|---:|---:|---:|---:|---:|---:|
-| `wm.inc` — the window manager (§11) | 9,346 | 140 | **9,486** | 1,132 | — | — |
+| `wm.inc` — the window manager (§11) | 9,445 | 312 | **9,757** | 1,132 | — | — |
 | `files.inc` — the Disk window (§22) | 1,117 | 7,842 | **8,959** | 542 | — | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 371 | 6,197 | **6,568** | 415 | — | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 5,391 | 1,097 | **6,488** | 40 | 526 | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 24 | 5,057 | **5,081** | 178 | — | — |
-| `mouse.inc` — serial mouse and the cursor (§9) | 3,934 | — | **3,934** | 107 | 128 | — |
+| `mouse.inc` — serial mouse and the cursor (§9) | 3,951 | — | **3,951** | 107 | 128 | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,700 | 176 | **2,876** | 197 | 84 | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 2,857 | 9 | **2,866** | 56 | — | — |
 | `memory.inc` — the claim heap (§50) | 215 | 2,647 | **2,862** | 24 | 324 | — |
-| `ui.inc` — the UI task and the event ladder (§13) | 2,817 | 9 | **2,826** | 56 | — | — |
-| `fdlg.inc` — the Standard File dialog (§38) | 35 | 2,370 | **2,405** | 86 | — | — |
+| `fdlg.inc` — the Standard File dialog (§38) | 35 | 2,386 | **2,421** | 86 | — | — |
 | `assoc.inc` — file type associations (§54) | 419 | 1,941 | **2,360** | 31 | — | — |
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 385 | 1,890 | **2,275** | 259 | — | — |
 | `font.inc` — the 8×8 glyph renderer (§6) | 2,262 | — | **2,262** | 22 | 16 | — |
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 23 | 2,045 | **2,068** | 91 | — | — |
-| `instance.inc` — instances and the built-in kinds (§29) | 1,862 | 131 | **1,993** | 722 | — | — |
+| `instance.inc` — instances and the built-in kinds (§29) | 1,865 | 131 | **1,996** | 722 | — | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 1,881 | **1,881** | 148 | — | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,445 | — | **1,445** | 212 | 2,944 | — |
 | `apps.inc` — the three built-in kinds (§14) | 282 | 1,161 | **1,443** | 11 | 240 | — |
+| `loader.inc` — the package loader (§21) | 4 | 1,269 | **1,273** | 46 | — | — |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,267 | — | **1,267** | 20 | — | — |
-| `loader.inc` — the package loader (§21) | 4 | 1,232 | **1,236** | 46 | — | — |
 | `icons.inc` — the icon renderer (§10) | 1,113 | — | **1,113** | 288 | — | — |
-| `dock.inc` — the dock strip (§30) | 928 | 45 | **973** | 59 | — | — |
+| `dock.inc` — the dock strip (§30) | 940 | 45 | **985** | 59 | — | — |
 | `fsx.inc` — fullscreen exclusive (§53) | 961 | — | **961** | 9 | — | — |
 | `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 878 | — | **878** | 74 | — | — |
 | `snd.inc` — the sound layer (§34) | 831 | — | **831** | 37 | — | — |
@@ -746,8 +746,8 @@ there and nowhere else.
 | `moudiag.inc` — what the identify window saw (§9.4.6), `MOUDIAG=1` | — | — | **0** | — | — | — |
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,223 | 171 | **2,394** | — | — | 434 |
-| **total** | **44,346** | **38,049** | **82,395** | **5,135** | **5,598** | **2,265** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,235 | 171 | **2,406** | — | — | 434 |
+| **total** | **44,529** | **38,274** | **82,803** | **5,135** | **5,598** | **2,265** |
 <!-- END generated table -->
 
 ### Reading it
@@ -1081,6 +1081,7 @@ answer for anything a single driver consumes.
 | DIA v2's desk layer, wave 2's review fixes (SPEC.md 11.103.6, 110.9): the DRAG post names its window and the pick-up honours a desk one only - big/emu `.text` +5 `.cold` -1, small 0 (`.grow_box` moved above `.mdown` to keep `je short .title_bar` in reach, for nothing); no rung crossed - kern_big image **0** / cold 126 left, kern_emu image 247 / cold **2**. `CTRL.DRV` is padded past a KB boundary when its bss would not fit its claim (SPEC.md 2.8): no resident byte, every fitting build byte-identical | unchanged | unchanged |
 | DIA v2's widget treatment, wave 3 (SPEC.md 110.11, 5.12.8): `os88dia.inc`'s `DIA_WIDGET` and `os88gfx.inc`'s `GFXE_TEXT` / `GFXE_BITS` - package source, **0 resident bytes**: `tools/kernsize.py` byte for byte unchanged on kern_big, kern_emu and kern_small (kern_big image **0** / cold 126 left, kern_emu image 247 / cold **2**, kern_small image 303 / cold 65). What it costs a DIA is ~2.8 KB of its own image (SPEC.md 110.6) | unchanged | unchanged |
 | DIA v2's Desk Calendar, wave 4 (SPEC.md 110.3, 110.9): the calendar as three cards on the include, `os88dia.inc`'s `dia_redraw` - package source, **0 resident bytes**: `tools/kernsize.py` byte for byte unchanged on kern_big, kern_emu and kern_small (kern_big image **0** / cold 126 left, kern_emu image 247 / cold **2**, kern_small image 303 / cold 65). `DESKCAL.O88` 13,168 -> 18,336 bytes of image, 16 clusters on the 360 KB system disk (11) | unchanged | unchanged |
+| DIA v2, blessed at the completeness pass (SPEC.md 110.10's W5): the whole of v2 against the v1 baseline is big/emu `.text` **+183** `.cold` **+225** `.bss` 0 and small `.text` **+12**, no rung crossed on any kernel - kern_big image **0** / cold 126 left, kern_emu image 247 / cold **2**, kern_small image 303 / cold 65; `tools/kernsize.py --bless` run on all three. `DESKCAL.O88` 18,912 bytes of image after the v4 review, 16,117 on disk | unchanged | unchanged |
 
 **The 35-move ledger of `KERN_BUDGET` lives in `kernel/kernel.asm`**, in the
 constant's own comment, per move: what was asked for, what was granted, what

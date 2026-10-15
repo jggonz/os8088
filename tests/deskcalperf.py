@@ -37,6 +37,10 @@ and three tasks, the clock at Wed 14 Oct 2026 09:58, v2's budgets (SPEC.md
                 FIRED and DUE owe, counted at the drive
   missed        the save the missed Standup's marks owe, the one write a
                 launch makes by itself
+  uncover       a Disk window over the left half of the cards dragged clear:
+                the widget's W_PAINT over what it vacated, the slabs that
+                meet OSAPI_WM_DAMAGE - more than 0 and no more than the
+                first paint (PERFORMANCE.md Part 5's last DIA row)
 
 and on the VGA XT, two cold boots of the shipped 360KB disk - with no
 SYSTEM.CFG, and with one whose trailer holds the calendar's DIA row - timed
@@ -330,6 +334,28 @@ def ui_leg(tmp, machine, label, results):
               % (label, d["writes"]))
         r["reminder"] = dict(rem.row(), save_reads=d["reads"],
                              save_writes=d["writes"])
+
+        # THE UNCOVER (PERFORMANCE.md Part 5's last DIA row, SPEC.md 11.103.6
+        # risk 3): a widget is the BACKMOST window and has no drag cache, so
+        # an application window moved off it repaints what it vacated through
+        # the widget's own W_PAINT, which recomposes only the slabs that meet
+        # OSAPI_WM_DAMAGE. A Disk window over the left half of the cards,
+        # then dragged clear: the calendar's calls in that drag are the bill.
+        print("%s: a Disk window over the widget, dragged clear" % label)
+        dw = ui.open_drive("A")
+        wv = c.win()
+        ui.move_window(dw, wv.x - dw.w // 2, wv.y + 20)
+        os88marty.guest_sleep(m, 1.0)
+        dw = ui._refresh(dw)
+        check(dw.x + dw.w > wv.x and dw.x < wv.x + wv.w,
+              "%s: the Disk window overlaps the widget (%d..%d over %d..%d)"
+              % (label, dw.x, dw.x + dw.w, wv.x, wv.x + wv.w))
+        unc = gesture(lambda: ui.move_window(dw, 16, dw.y), 2.0)
+        print("%s: uncover          %s" % (label, unc))
+        r["uncover"] = unc.row()
+        check(0 < unc.n <= first.n, "%s: the uncover repaints the widget "
+              "through its slabs, no more calls than the first paint (%d "
+              "against %d: %r)" % (label, unc.n, first.n, unc.by))
     results[label] = r
 
 

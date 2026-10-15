@@ -2,8 +2,14 @@
 
 **Status: BUILT** - waves 0 to 4 on `feature/dia` (SPEC.md §110 is the
 contract; this file is the design record it was built from). Wave 5, the
-desk LAYER, was owner decision D1 and is NOT built (§110.8). "§" means
-SPEC.md throughout.
+desk LAYER, was owner decision D1 and was deferred for v1 (§110.8); **the
+owner then asked for it, and v2 built it** - the desk layer, the widget
+treatment and the Desk Calendar as three cards. v2's own design record is
+[DIA-LAYER-PLAN.md](DIA-LAYER-PLAN.md), and the last section of this file,
+"v2: what was built and why", is the account of it. "§" means SPEC.md
+throughout; the section was §107 when this was written and is §110 since
+main took 107-109 (EMS.DRV, isoTron, WireBall), and the citations here are
+renumbered.
 
 This is the judged and synthesized design exactly as it was taken into the
 build - three candidate designs scored, one corrected, four ideas taken from
@@ -119,7 +125,7 @@ Zero-kernel registers only when the DAT says `OPEN = 0`. Here is the failure seq
 | Content click on a background window | **Confirmed**. It is raised and the click is swallowed (`ui.inc:456-462`). |
 | Hibernate question posted before ui_task | **Confirmed**. `hb_probe_x` posts `UI_RBQ_ASK` (`hiber.inc:341`) and step 0 of ui_task spends it (`ui.inc:85-98`). `hiber.inc:420` can also post `UI_RBQ_DOSRUN`. "`[ui_rebootq]` ≠ 0 → stand down" covers both. |
 | Discard runs with the gfx lock **held** | **Confirmed** (`hiber.inc:1113-1150`, `hbm_act`). So user-first is right: a Discard re-launch has to be **posted** (`CMD_DIA`), not called. |
-| Section numbering | §106 is the highest used top-level section and §104 was never used. **Take §110.** No section registry exists under docs/. |
+| Section numbering | §106 is the highest used top-level section and §104 was never used. **Take §107** (renumbered §110 when main took 107 first - the hazard the renumber check below names). No section registry exists under docs/. |
 | Rung headroom [measured, `tools/kernsize.py`] | kern_big image rung **200 B left**, cold rung **462 left**, low 34, footprint 59 steps spare. kern_small was not measured (no `build/smallk` in this worktree). |
 | `OSAPI_WM_OWNSEG` (0x03BF) | **Exists**. It answers DX = the segment owning window slot AL, so a package-side singleton is possible. |
 | `TESTIMG` | **Exists** (`Makefile:13667`). `make test TESTIMG=<img>` boots a chosen A: disk. That is what the screenshots use. |
@@ -569,7 +575,7 @@ Reminders fire only while the widget runs, including while minimized (§13.9). A
   - §19.9: `DESKCAL.DAT`.
   - §24.5.1: the small system disk carries `SYSTEM\DIA`.
 - Also: docs/KERNEL-MEMORY.md (ledger), PERFORMANCE.md Part 5 (a row in W4), docs/INDEX.md (regenerated), and a root `readme.txt` section (`tools/checkreadme.py`).
-- **Renumber check before merge:** another branch could take §110 first (the port-workflow lesson).
+- **Renumber check before merge:** another branch could take §107 first (the port-workflow lesson). One did: main took 107 for EMS.DRV in #252, and the section is §110.
 
 ---
 
@@ -1069,3 +1075,91 @@ prose.
     the silent autostart, and the live CD's unhandled refusal (§80.3).
 76. The live media's getruncpm `--reserve` list prices DESKCAL's clusters
     ($(DIAAPPS)).
+
+---
+
+## v2: what was built and why
+
+v1 shipped the Desk Calendar as an ordinary titled window and deferred the
+desk layer (D1). Looking at it, the owner asked for the rest: *"I think we do
+need the always behind layer, and we should give widgets a different window
+treatment than regular apps to differentiate them. Make them draggable and
+closeable by auto-hiding UI elements"* - and then picked a second mockup,
+*"it's even more of a widget"*: three white cards in a column with the
+desktop showing between them and a name tag under them, no chrome, no dock
+tile, the menu bar the front application's. v2 is that. Its design record is
+[DIA-LAYER-PLAN.md](DIA-LAYER-PLAN.md) (three candidates scored, the
+"risk-first" one taken with five grafts); SPEC.md §11.103 and §110.11 are the
+contract, and §110.9's v2 blocks list every place the code proved the design
+wrong. The owner answered none of the design's open decisions, so every
+recommended default in its §7 is what shipped.
+
+### The shape, and why it is that shape
+
+| layer | what | why there |
+|---|---|---|
+| kernel (`kern_big`, `kern_emu`) | `WF_DESK`: a desk window lives in `wm_zord[0..k-1]` under every application window; `wm_top` means "the front ORDINARY window"; `wm_lift` never moves one; it is shown by the damage pass, activated without a raise, takes the bar and the keys only while it is the last thing pressed, has no chrome at any of the `WF_FULL` sites the `t_chromesites` ratchet classifies, no drag cache and no dock tile (`IF_DESK`, header flag bit 6, the top-down instance slot). `OSAPI_WM_DESK` (QUERY / MAKE / DRAG / RELEASE) and `OSAPI_GFX_DESK` (the desktop's own ground in any rect). `WF_HOVER` and `[cur_hovw]`: a one-compare hover EDGE in the mouse path that wakes the package | z-order, activation and hover are the window manager's facts and nothing else can know them; everything a pixel needs is left to the package, so the kernel draws no widget chrome and keeps no FACE record, no module and no hover timer |
+| `apps/os88dia.inc` (`%define DIA_WIDGET`) | the widget TREATMENT as shared source: the geometry (a face of cards and gaps plus a tag row, one ground column each side), every non-card pixel (the gaps and sides by `OSAPI_GFX_DESK`, the tag's plate / inverse plate / handle in one BLIT1), the press prefilter (tag, gaps and sides drag; the revealed x closes; a card is the package's), the hover and focus states (dwell 5 ticks, linger 14 - the dock's), the face-origin header, the re-fit, and the titled fallback where QUERY refuses | a second DIA gets the look and the gestures by including it, and the kernel pays nothing for them |
+| `apps/os88gfx.inc` (`GFXE_TEXT`, `GFXE_BITS`) | the kernel's 8x8 glyphs at any x, x1/x2/x3, bold and inverse, a rect fill and 16-wide bit records, composed into the package's own 704-byte band, one 32-row slab at a time | a card is one `BLIT1` a slab, every pixel written once - no `font_run` over a fill, nothing drawn twice |
+| `apps/deskcal/` | the calendar as the mockup: the day number x3 beside the weekday and month; a bare `< August 2026 >`; an unruled Monday-first grid with a dot under every busy day, today inverse and the selection a 1-px box; card 2's agenda, rule and ticked tasks with `+N more`; card 3's ringing reminder with Snooze and Dismiss, which replaced v1's modal alert; three layouts chosen by the screen's HEIGHT (TALL VGA, MID Hercules and EGA, COMPACT CGA, whose second slot pages) | the package owns its own look, and the mockup is a VGA picture that the two 1bpp heights have to be designed into |
+| `kern_small` | the two cells and nothing else (+12 bytes): QUERY refuses and the same `DESKCAL.O88` draws v2's face in a titled window with a dock tile, the gaps white with a 1-px rule | its 65-byte cold rung and its missing WM timer rule the layer out, and one package on both kernels is worth more than a widget on the floor machine |
+
+### As built, where it differs from the design
+
+| the design said | what shipped | where |
+|---|---|---|
+| key target in the `fdlg_top_x` stub | in kern_big's `fdlg_top_x` BODY - the stub is FDLG.DRV's resident half, kern_small only | §110.9 v2 W1 |
+| MAKE checks the caller owns the window | MAKE is entry-proc-only and fenced by the load (`[ld_base]`, `W_SEG`); `IF_DESK` is set at loader step 9 on the window the entry proc RETURNS | §110.9 v2 W1 fixes |
+| a 177-wide frame | 178 (`wm_snap_w` puts `W_W` at 8k+2), a ground column on both sides | §110.11 |
+| the drop costs one `W_PAINT` | the drop also redraws every ordinary window over the old or new rect whole (the drop was written for a FRONT window); priced, not cured - 10-16 resident bytes kern_big does not have | §11.103.6, PERFORMANCE.md Part 5 |
+| `[ui_dragq]`, a cold pick-up and a shim | the post is `[ui_dragy]` = the window, which the next press's seed wipes, so "legal only inside W_ONCLICK" holds by construction; 9 bytes of `.cold` | §110.9 v2 W2 |
+| never revealed under a chooser | the kernel does not clear a standing hover when a chooser opens, nor treat an open auto-hide dock as a cover; ~8 bytes of `.cold` each, which kern_emu does not have | §11.103.7 |
+| the composer at 0.1-0.2 ms a glyph, a full paint ~90-110 ms | 0.49 ms a x1 glyph after the review's straight path; the full paint **263 / 161 ms** against v1's 177 / 117 and a day select **60 / 48 ms** against 21 / 24 - fewer calls, more time, raised for the owner | §110.6, PERFORMANCE.md Part 5 |
+| ~14.0-14.5 KB of image, at most one more cluster | **18,912** bytes, 16 clusters, five more on the 360 KB system disk (332 of 354) - raised for the owner | §110.6 |
+| `OSAPI_WM_PREFER` pairs per adapter | the layout picked once by height in `dia_load` - a PREFER pair is keyed by adapter KIND, which is the EGA bug | §110.9 v2 W4 |
+| x1 bold for the weekday and the time | regular at x1 - an OR one pixel right fuses the 2-px-stroke font | §110.9 v4 review |
+| the day box r-1..r+8 on COMPACT | r..r+7, the dot under it; the box's top touches its digits - the owner's call | §110.9 v4 review |
+
+### What it cost, measured
+
+- **Kernel**: big and emu `.text` +183, `.cold` +225, `.bss` 0; small `.text`
+  +12. No rung crossed on any kernel and the three baselines are blessed - but
+  kern_big's image rung has **0** bytes left and kern_emu's cold rung **2**,
+  so the next resident byte on either crosses one. Every review's later fix
+  was paid out of slack the waves before had left.
+- **The widget**: a full paint 19 calls on TALL (12 `BLIT1` + 7 grounds), 12
+  on COMPACT; a select 4 / 3, a month <= 8, a tick 1, a reveal 1 and a hide
+  3, a firing 2, idle 0; an application window dragged off it 10 / 11 calls,
+  191 / 158 ms (`deskcalperf`).
+- **The package**: `DESKCAL.O88` 13,168 -> 18,912 bytes of image; the
+  include ~2.2 KB and the composer ~0.6 KB of it.
+
+### What is left for the owner
+
+1. The time regressions against v1 (the full paint and a select).
+2. The package's ledger overrun (five more clusters on the 360 KB disk).
+3. The drop's whole-window redraws of the ordinary windows over a widget.
+4. The two hover refusals not made (a chooser opening under a standing
+   hover; an open auto-hide dock).
+5. COMPACT's today box touching its digits.
+6. Card 2 holds two appointments and two tasks (open decision 2's default):
+   with the mockup's own data - 09:00, 14:30 and the 21:00 reminder all
+   today - card 2 reads `09:00 Team sync` / `+2 more`, not the mockup's two
+   lines. The alternative is 3 + 3 (+29 rows on TALL).
+7. **Before the merge**: main's #252 took `0x0467` (`OSAPI_FERR_TEXT`) and is
+   at `PKG_FMT` 10 / `DRV_VER` 11, so `OSAPI_CLK_GET` (v1's, `0x0467`),
+   `OSAPI_WM_DESK` (`0x046D`) and `OSAPI_GFX_DESK` (`0x0473`) each move one
+   cell when main is merged in, with the ABI lock re-taken and every rung
+   re-measured on main's kernels.
+
+### The rows that hold it
+
+Fast: `t_chromesites`, `t_dia` (the header bit, `DIA_HF_CONT`, the snooze
+slot, `DESKCAL_GEO` against the assembled tables), `t_api_abi`, `t_mirror`,
+`t_pkg`, the ABI lock. Soak: `deskz`, `deskdock`, `deskkeys`, `desksmall`,
+`deskdrag`, `deskhover`, `deskhovercga`, `deskhoverherc`, `deskclose`,
+`deskground`, `deskfit`, `deskcalcards`, `deskcalsnooze`, `deskmodal`, and
+every v1 `dia*` / `deskcal*` row re-gated on the widget. The PR's pictures
+are `docs/dia/*.png`, retaken as v2 on MartyPC (VGA rest, hover, focus, under
+a Disk window, moved, restored at boot; CGA and Hercules rest and hover;
+kern_small's titled fallback).

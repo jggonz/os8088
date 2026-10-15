@@ -9153,6 +9153,9 @@ SOAK = [
         "and a minute boundary that must draw ZERO, and a reminder going off "
         "(card 3's slabs, 2 calls; COMPACT the slot it takes) - and, counted "
         "at the drive, the save a missed launch and a firing each owe; "
+        "the UNCOVER - a Disk window over the cards dragged clear repaints "
+        "through the slabs it vacated, more than 0 and no more than the "
+        "first paint's calls; "
         "then two cold boots - no SYSTEM.CFG, and a "
         "DIA row - timed to dia_boot and to ui_task with the drive's "
         "counters: a boot with no row makes no disk call after its paint.",
