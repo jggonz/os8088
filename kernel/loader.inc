@@ -1062,6 +1062,9 @@ ld_alloc:
 %ifdef KERN_BIG
     test byte [ld_cfmt], LD_F_DESK >> 3
     jz .rec                     ; OS88_F_DESK (SPEC.md 11.103.9, 30): the LAST
+    call desk_need              ; (DESK.DRV first, ABOVE the region claimed
+                                ; below - SPEC.md 11.103.10; CF is not ours:
+                                ; a refusal is the entry proc's QUERY's)
     mov di, inst_tab + INST_MAX * I_RECSZ ; free record, scanning down, so
 .dscan:                         ; the widget's empty tile position is at the
     sub di, I_RECSZ             ; far end of the strip. None free: inst_alloc

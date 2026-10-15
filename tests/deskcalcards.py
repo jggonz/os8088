@@ -19,7 +19,9 @@ the package's own dc_geos); every pixel is read off the framebuffer.
      desktop 180 columns to the left (the same dither phase).
   C  TODAY, the 24th: its box's four corners INK (the inverse box), and
      white digit pixels inside it.
-  D  the DOT under the 6th: its 2 px x DOTH rows ink, the row under it paper.
+  D  the DOT of the 6th: its 2 px x DOTH rows ink, the row under it paper -
+     under the number on TALL and MID, BESIDE it on COMPACT, whose row under
+     the number is paper too (a 9-row pitch: r + 8 touched the next week).
   E  the BELL: card 3's (the CGA slot's reminder page, which a DUE reminder
      took), pixel for pixel the layout's bit record.
   F  the TICK: Read mail's box is pixel for pixel the TICKED record, Fix
@@ -168,17 +170,22 @@ def run(leg):
 
             grid = list(c.bss(B.DESKCAL_BSS_GRID, 42))
 
-            def box(day):
+            def field(day):
                 i = grid.index(day)
-                r = fy + G["W0"] + G["WP"] * (i // 7)
-                x0 = fx + 4 + 24 * (i % 7) + 2
-                return x0, r - G["BOXT"], r
+                return (fx + 4 + 24 * (i % 7),
+                        fy + G["W0"] + G["WP"] * (i // 7))
+
+            def box(day):
+                f, r = field(day)
+                return os88dia.deskcal_box(G, f)[0], r - G["BOXT"], r
+
+            bw = os88dia.deskcal_box(G, 0)[1]
 
             print("C: today, inverse")
             x0, y0, r = box(24)
             hb = G["BOXH"]
-            corners = [(x0, y0), (x0 + 19, y0), (x0, y0 + hb - 1),
-                       (x0 + 19, y0 + hb - 1)]
+            corners = [(x0, y0), (x0 + bw - 1, y0), (x0, y0 + hb - 1),
+                       (x0 + bw - 1, y0 + hb - 1)]
             check(all(gl.ink(*p) for p in corners),
                   "the 24th's box corners are ink: the inverse box")
             white = sum(1 for xx in range(x0 + 2, x0 + 18)
@@ -186,15 +193,19 @@ def run(leg):
             check(white > 10, "...with white digits inside it (%d paper "
                   "pixels)" % white)
 
-            print("D: the dot under the 6th")
-            x0, y0, r = box(6)
-            dy = r + G["DOTY"]
-            dot = [(x0 + 9 + i, dy + j) for i in (0, 1)
-                   for j in range(G["DOTH"])]
-            check(all(gl.ink(*p) for p in dot), "its 2 x %d dot is ink at "
-                  "row + %d" % (G["DOTH"], G["DOTY"]))
-            check(not any(gl.ink(x0 + 9 + i, dy + G["DOTH"]) for i in (0, 1)),
+            print("D: the dot of the 6th")
+            f6, r = field(6)
+            ddx, ddy, ddw, ddh = os88dia.deskcal_dot(G, f6, 6)
+            dy = r + ddy
+            dot = [(ddx + i, dy + j) for i in range(ddw) for j in range(ddh)]
+            check(all(gl.ink(*p) for p in dot), "its %d x %d dot is ink at "
+                  "x + %d, row + %d" % (ddw, ddh, ddx - f6, ddy))
+            check(not any(gl.ink(ddx + i, dy + ddh) for i in range(ddw)),
                   "...and the row under it is paper")
+            if G["DOTY"] & os88dia.DESKCAL_DOTBY:
+                check(not any(gl.ink(f6 + i, r + 8) for i in range(24)),
+                      "...and so is the row under the 6th's number: no mark "
+                      "reaches the next week (COMPACT)")
 
             print("E: the bell")
             bw, brec = BELL[li]
@@ -231,10 +242,10 @@ def run(leg):
             park(ui)
             gl = Glass(m)
             x0, y0, r = box(20)
-            corners = [(x0, y0), (x0 + 19, y0), (x0, y0 + hb - 1),
-                       (x0 + 19, y0 + hb - 1)]
-            inner = [(x0 + 1, y0 + 1), (x0 + 18, y0 + 1),
-                     (x0 + 1, y0 + hb - 2), (x0 + 18, y0 + hb - 2)]
+            corners = [(x0, y0), (x0 + bw - 1, y0), (x0, y0 + hb - 1),
+                       (x0 + bw - 1, y0 + hb - 1)]
+            inner = [(x0 + 1, y0 + 1), (x0 + bw - 2, y0 + 1),
+                     (x0 + 1, y0 + hb - 2), (x0 + bw - 2, y0 + hb - 2)]
             check(all(gl.ink(*p) for p in corners)
                   and not any(gl.ink(*p) for p in inner),
                   "its box is a 1-px outline: corners ink, inside paper")

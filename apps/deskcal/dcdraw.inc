@@ -35,7 +35,8 @@ DCG_HDRB    equ 9               ; db the header block's last row
 DCG_WKY     equ 10              ; db the weekday letters' row
 DCG_W0      equ 11              ; db the first week row
 DCG_WP      equ 12              ; db ...the pitch
-DCG_DOTY    equ 13              ; db the dot: rows below the number
+DCG_DOTY    equ 13              ; db the dot: rows below the number - or,
+                                ; with DCG_DOTBY, BESIDE it at that row
 DCG_DOTH    equ 14              ; db ...its rows
 DCG_BOXT    equ 15              ; db the day's box: rows above the number
 DCG_BOXH    equ 16              ; db ...its rows
@@ -74,6 +75,11 @@ DC_LINKS    equ 72              ; Dismiss after Snooze
 DC_FLD0     equ 4               ; the first day field's x
 DC_FLDW     equ 24              ; a day field's width
 DC_BOXW     equ 20              ; today's box / the selection's outline
+DCG_DOTBY   equ 80h             ; DCG_DOTY's flag: the dot BESIDE the number,
+                                ; 2 x 1 one pixel past its cell, and the box
+                                ; DC_BOXW + 2 wide round both (COMPACT: a
+                                ; 9-row pitch has no row under a number that
+                                ; does not touch the next week's digits)
 DC_FX1      equ 4               ; the entry field: face x 4..155, so the `+`
 DC_FX2      equ 155             ; is not under it
 
@@ -107,10 +113,11 @@ dc_geos:
     db   4                      ; BELLX: `21:00 Back up files` on one line
 .comp:
     db GFXE_X2 | GFXE_BOLD,   2,  48,   2, 0FFh, 10,  48, 136,  64,  19
-    db  20, 30,  9,  8,   1,   0,   8  ; the box r..r+7 and the dot r+8
-                                        ; under it: at r-1 the box took the
-                                        ; dot row of the day above, and to
-                                        ; r+8 it ate its own (SPEC.md 110.9)
+    db  20, 30,  9, DCG_DOTBY | 3, 1, 1, 9 ; the dot BESIDE the number at
+                                        ; r+3, so r+8 is blank and the box is
+                                        ; r-1..r+7: a paper row under the
+                                        ; digits above, an ink row over its
+                                        ; own (SPEC.md 110.9)
     db  3, 14, 10, 3,   0, 14, 10, 3, 24, 0,   8,  1,  10,  14, 18
     db  14,  24, 14,  24, 24,  18, 34,  24, 24
     dw dc_bell8, dc_box8
@@ -847,6 +854,12 @@ dc_cday1:
     mov byte [dc_wink], 0       ; black on white...
     mov ax, [dc_wfx]
     add ax, 2
+    mov bp, DC_BOXW             ; BP = the box's width, to the outline
+    test byte [di + DCG_DOTY], DCG_DOTBY
+    jz .bx
+    inc bp                      ; COMPACT: 22, round the number AND its dot
+    inc bp                      ; with a paper column before the edge
+.bx:
     mov si, bx                  ; SI = the index, for the compares
     mov bx, [dc_wr]
     mov cl, [di + DCG_BOXT]
@@ -858,7 +871,7 @@ dc_cday1:
     cmp cl, [dc_tix]
     jne .sel
     mov byte [gfxe_tsty], 0     ; TODAY: the box black, the number white
-    mov cx, DC_BOXW
+    mov cx, bp
     call dc_cfill
     mov byte [dc_wink], GFXE_INV
     jmp short .num
@@ -867,7 +880,7 @@ dc_cday1:
     jne .num
     mov byte [gfxe_tsty], 0     ; the SELECTED day: the box's outline
     push dx
-    mov cx, DC_BOXW
+    mov cx, bp
     mov dx, 1
     call dc_cfill               ; top...
     pop dx
@@ -881,7 +894,8 @@ dc_cday1:
     pop bx
     mov cx, 1
     call dc_cfill               ; ...left...
-    add ax, DC_BOXW - 1
+    add ax, bp
+    dec ax
     call dc_cfill               ; ...right
 .num:
     call dc_ln0
@@ -904,10 +918,18 @@ dc_cday1:
     mov [gfxe_tsty], al
     mov di, [dc_geo]
     mov ax, [dc_wfx]
-    add ax, 11
+    add ax, 11                  ; UNDER: centred in the field
     mov bx, [dc_wr]
     mov cl, [di + DCG_DOTY]
     xor ch, ch
+    test cl, DCG_DOTBY
+    jz .under
+    and cl, ~DCG_DOTBY & 0FFh   ; BESIDE: one pixel past the number's cell,
+    add ax, 16 - 11             ; whose 8th column is the font's blank one -
+    cmp byte [dc_wday], 10      ; field + 16 past one digit...
+    jb .under
+    add ax, 4                   ; ...+ 20 past two
+.under:
     add bx, cx
     mov dl, [di + DCG_DOTH]
     xor dh, dh
@@ -983,7 +1005,9 @@ dc_chead:
 .r:
     ret
 
-; dc_casec - the agenda's lines; the last one `+N more` while it pages
+; dc_casec - the agenda's lines; the last one `+N more` while it pages, and
+; `No appointments` on line 0 when the day has none - card 3's `No reminders
+; today` again, so an empty day does not read as a paint that stopped
 dc_casec:
     mov byte [dc_lsec], 0
     mov byte [dc_li], 0
@@ -1008,7 +1032,7 @@ dc_casec:
     call dc_aslot               ; CF = 0 AL = the item; CF = 1 AH = 1 pager
     jnc .item
     or ah, ah
-    jz .n
+    jz .none
     mov cx, 8
     mov ah, [dc_acnt]
     call dc_cmore
@@ -1019,6 +1043,14 @@ dc_casec:
 .n:
     inc byte [dc_li]
     jmp short .l
+.none:                          ; a BLANK line: on line 0 that is no items
+    cmp byte [dc_li], 0
+    jne .n
+    mov si, dc_s_noapp
+    mov cx, 8                   ; at the times' x, regular, as card 3's is
+    xor bl, bl
+    call dc_ctext
+    jmp short .n
 .r:
     ret
 
@@ -2146,6 +2178,7 @@ dc_s_tasksh: db 'Tasks', 0
 dc_s_remh:  db 'Reminder', 0
 dc_s_allday: db '--:--', 0
 dc_s_norem: db 'No reminders today', 0
+dc_s_noapp: db 'No appointments', 0
 dc_s_snooze: db 'Snooze', 0
 dc_s_dismiss: db 'Dismiss', 0
 dc_dlong:   dw dc_d0, dc_d1, dc_d2, dc_d3, dc_d4, dc_d5, dc_d6

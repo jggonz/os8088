@@ -134,6 +134,26 @@ DESKCAL_GEO_FIELDS = ("BIGS", "BIGY", "DOWX", "DOWY", "MONY", "NAVY", "NAVL",
                       "T0", "TP", "TN", "TX", "TTY", "BOX", "BAR", "BARH",
                       "ATN", "TTN", "BELLY", "RX", "R1Y", "R2X", "R2Y", "R2N",
                       "LKY", "LKX", "NONEX")     # then dw BELL, dw BOXR, BELLX
+DESKCAL_DOTBY = 0x80            # DOTY's flag: the dot BESIDE the number, 2 x 1
+                                # one pixel past its cell, and the box 22 wide
+                                # round both (dcdraw.inc's DCG_DOTBY)
+
+
+def deskcal_box(G, field_x):
+    """(x, width) of a day's box - today's inverse one, the selection's
+    outline - in a field at `field_x`: dcdraw.inc's dc_cday1."""
+    return field_x + 2, 22 if G["DOTY"] & DESKCAL_DOTBY else 20
+
+
+def deskcal_dot(G, field_x, day):
+    """(x, rows below the number's row, w, h) of day `day`'s dot in a field
+    at `field_x`: dcdraw.inc's dc_cday1."""
+    if G["DOTY"] & DESKCAL_DOTBY:
+        return (field_x + (16 if day < 10 else 20), G["DOTY"] & 0x7F, 2,
+                G["DOTH"])
+    return field_x + 11, G["DOTY"], 2, G["DOTH"]
+
+
 DESKCAL_GEO = {
     0: dict(zip(DESKCAL_GEO_FIELDS, (
         0x0A, 7, 64, 9, 22, 44, 8, 160, 0, 40, 60, 78, 16, 9, 2, 4, 16,
@@ -148,7 +168,8 @@ DESKCAL_GEO = {
         cards=((122, 4), (67, 4), (30, 4)), tag=11, face=(176, 242),
         fy=24),
     2: dict(zip(DESKCAL_GEO_FIELDS, (
-        0x06, 2, 48, 2, 0xFF, 10, 48, 136, 64, 19, 20, 30, 9, 8, 1, 0, 8,
+        0x06, 2, 48, 2, 0xFF, 10, 48, 136, 64, 19, 20, 30, 9,
+        DESKCAL_DOTBY | 3, 1, 1, 9,
         3, 14, 10, 3, 0, 14, 10, 3, 24, 0, 8, 1, 10, 14, 18,
         14, 24, 14, 24, 24, 18, 34, 24, 24)), BELLX=8,
         cards=((85, 3), (44, 3)), tag=11, face=(176, 146), fy=22),

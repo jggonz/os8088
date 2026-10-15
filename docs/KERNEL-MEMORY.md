@@ -270,7 +270,7 @@ had added.
     "bss": 5230,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 38581,
+    "cold": 38604,
     "coldpara": 2432,
     "fatpara": 288,
     "grace": 2048,
@@ -293,7 +293,7 @@ had added.
     "bss": 5230,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 38581,
+    "cold": 38604,
     "coldpara": 2432,
     "fatpara": 288,
     "grace": 2048,
@@ -702,14 +702,14 @@ there and nowhere else.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,741 | 36.1% |
-| the window system and its furniture | 22,567 | 27.4% |
+| the file system, end to end | 29,744 | 36.0% |
+| the window system and its furniture | 22,587 | 27.4% |
 | drawing: adapters, primitives, glyphs, icons | 13,064 | 15.8% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 8,149 | 9.9% |
 | the kernel proper: API table, heap, scheduler, events | 7,178 | 8.7% |
 | the three built-in kinds | 1,442 | 1.7% |
 | the Control Panel | 353 | 0.4% |
-| **total** | **82,494** | |
+| **total** | **82,517** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -733,7 +733,7 @@ there and nowhere else.
 | `instance.inc` — instances and the built-in kinds (§29) | 1,821 | 126 | **1,947** | 722 | — | — |
 | `apps.inc` — the three built-in kinds (§14) | 282 | 1,160 | **1,442** | 11 | 240 | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,380 | — | **1,380** | 212 | 2,944 | — |
-| `loader.inc` — the package loader (§21) | 4 | 1,296 | **1,300** | 48 | — | — |
+| `loader.inc` — the package loader (§21) | 4 | 1,299 | **1,303** | 48 | — | — |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,260 | — | **1,260** | 20 | — | — |
 | `icons.inc` — the icon renderer (§10) | 1,081 | — | **1,081** | 288 | — | — |
 | `dock.inc` — the dock strip (§30) | 937 | 45 | **982** | 59 | — | 75 |
@@ -756,7 +756,7 @@ there and nowhere else.
 | `winmod.inc` — `WIN95.DRV`, the Windows theme's five chrome doors (§76.14), an on-demand module on `kern_big` | 36 | 32 | **68** | — | — | — |
 | `extmod.inc` — `EXTD.DRV`, the extended desktop's placement policy (§39.19.6), an on-demand module on `kern_big` | — | 46 | **46** | — | — | — |
 | `diskops.inc` — DISKOPS.DRV, the disk operations (§18.99) | 15 | 27 | **42** | — | — | — |
-| `deskmod.inc` — `DESK.DRV`, the desk layer's verbs, hover edge, show and key arms (§11.103.10), an on-demand module on `kern_big`; resident is `osapi_wm_desk_x`'s QUERY thunk | — | 16 | **16** | — | — | — |
+| `deskmod.inc` — `DESK.DRV`, the desk layer's verbs, hover edge, show and key arms (§11.103.10), an on-demand module on `kern_big`; resident is `osapi_wm_desk_x`'s QUERY thunk and `desk_need`, the load inside an open `drv_vol` bracket | — | 36 | **36** | — | — | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 2 | — | **2** | — | — | — |
 | `splash.inc` — the boot splash (§15) | — | — | **0** | — | — | 1,828 |
 | `dskwin.inc` — the mount-owned window at the bottom of `.lowbss` (§2.1.2) | — | — | **0** | — | 512 | — |
@@ -770,7 +770,7 @@ there and nowhere else.
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,221 | 171 | **2,392** | — | — | 605 |
-| **total** | **43,913** | **38,581** | **82,494** | **5,230** | **5,598** | **4,857** |
+| **total** | **43,913** | **38,604** | **82,517** | **5,230** | **5,598** | **4,857** |
 <!-- END generated table -->
 
 ### Reading it
@@ -1110,6 +1110,7 @@ answer for anything a single driver consumes.
 | DIA v2, blessed at the completeness pass (SPEC.md 110.10's W5): the whole of v2 against the v1 baseline is big/emu `.text` **+183** `.cold` **+225** `.bss` 0 and small `.text` **+12**, no rung crossed on any kernel - kern_big image **0** / cold 126 left, kern_emu image 247 / cold **2**, kern_small image 303 / cold 65; `tools/kernsize.py --bless` run on all three. `DESKCAL.O88` 18,912 bytes of image after the v4 review, 16,117 on disk | unchanged | unchanged |
 | feature/dia merged onto main `b47de145` (SPEC.md 110, 11.103), NOT blessed: the whole DIA kernel half against main's baseline is big/emu `.text` **+190** `.cold` **+344** `.bss` 0 and small `.text` **+18** `.cold` **+32** - main's size pass had left kern_big and kern_emu with **0** bytes of cold rung, so both CROSS it (75 -> 76 steps, footprint +512: big 98,816 -> 99,328 of 100,864, emu 99,328 -> 99,840); kern_big image 22 left, kern_emu image 275 left; kern_small no rung crossed (image 382 / cold 54 left). An owner's decision, not a build fix | unchanged | +512 (big, emu) |
 | **the owner ACCEPTED one 512-byte `.cold` step on kern_big and kern_emu (2026-10-15)**, with `DESK.DRV`, the desk layer's code as an on-demand module (SPEC.md 11.103.10): `osapi_wm_desk_x`'s MAKE/DRAG/RELEASE, the hover edge's body, `wm_show_desk` and `fdlg_top_x`'s desk arm into the image (`MOD_DESK` 7, 4 slots, 235 bytes, a 1 KB claim held from the first QUERY until restart); `dia_boot` stays resident (SPEC.md 110.4, 110.9). Against the merge: big/emu `.text` **-3** `.cold` **-163** `.bss` **+16**. Against main `b47de145`: big/emu `.text` +187 `.cold` +181 `.bss` +16, small `.text` +18 `.cold` +32 (unchanged by the cut). Cold rung 75 -> 76 steps on big and emu, **331** bytes left in it; kern_big image **9** left (212 on main), kern_emu image 262; kern_small no rung crossed (image 382 / cold 54). Footprint big 98,816 -> **99,328** of 100,864 (3 steps spare), emu 99,328 -> **99,840** (2 spare). No second step, no image rung, `KERN_BUDGET`/`KERN_CODE_MAX` untouched. Blessed on all three. The 360 KB system disk: 343 of 354 clusters, 11 left (12 before) | unchanged | +512 (big, emu), accepted |
+| DIA module-cut review fixes, INSIDE the accepted step (SPEC.md 11.103.10): `desk_need` saves and restores `drv_vol_cwd`/`drv_vol_drv` round `mod_need MOD_DESK`, because the load's bracket nests inside `sc_open`'s and the pair is one static (a relaunched widget left the machine in `SYSTEM\DIA`, or mounted on B:); the loader's step 5 calls it for an `OS88_F_DESK` package BEFORE the region claim, so the pinned 1 KB lands above the widget, not under it; QUERY's thunk calls it. big/emu `.cold` **+23** (desk_need 24, the step-5 call 3, the thunk -4), `.text`/`.bss` 0; cold **308** left in the accepted 76th step on both; kern_big image **9** left, unchanged; kern_small byte for byte unchanged. No rung crossed on any kernel. Blessed on all three | unchanged | unchanged |
 
 **The 35-move ledger of the old `KERN_BUDGET` figures is
 docs/history/KERN-BUDGET-LEDGER.md** - per move, what was asked for, what was

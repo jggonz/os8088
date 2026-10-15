@@ -21,7 +21,8 @@ Coordinates are the layout's (tools/os88dia.py's DESKCAL_GEO).
   C  THE SELECTED DAY'S OUTLINE: a press on the 20th puts an unbroken 1-px
      ink rectangle round its box with ground inside it, and today's box
      stays inverse.
-  D  THE 20th's DOT: ink under its number; the 13th has none.
+  D  THE 20th's DOT: ink under its number (COMPACT: BESIDE it, touching
+     nothing, with the row under the number paper); the 13th has none.
   E  THE GAPS ARE THE DESKTOP: every gap row between the cards is the
      desktop's dither, pixel for pixel the desktop 180 columns left.
   F  A GREYED ITEM IS LEGIBLE: the widget owns the bar, nothing selected -
@@ -89,10 +90,20 @@ def leg(tmp, machine, kind, shots):
         fx0, fy0 = c.face()
         grid = list(c.bss(os88dia.DESKCAL_BSS_GRID, 42))
 
-        def box(day):
+        def field(day):
             i = grid.index(day)
-            r = fy0 + G["W0"] + G["WP"] * (i // 7)
-            return fx0 + 4 + 24 * (i % 7) + 2, r - G["BOXT"], r
+            return fx0 + 4 + 24 * (i % 7), fy0 + G["W0"] + G["WP"] * (i // 7)
+
+        def box(day):
+            fx, r = field(day)
+            return os88dia.deskcal_box(G, fx)[0], r - G["BOXT"], r
+
+        def dot(day):
+            fx, r = field(day)
+            x, dy, dw, dh = os88dia.deskcal_dot(G, fx, day)
+            return x, r + dy, dw, dh
+
+        bw = os88dia.deskcal_box(G, 0)[1]
 
         print("A: the layout by the screen's height")
         want = (178, 242) if kind == "herc" else (178, 146)
@@ -113,8 +124,8 @@ def leg(tmp, machine, kind, shots):
         print("B: today inverse")
         tx, ty, _ = box(14)
         px, py, _ = box(13)
-        t_ink = ink(rows, tx, ty, 20, hb) / (20.0 * hb)
-        p_ink = ink(rows, px, py, 20, hb) / (20.0 * hb)
+        t_ink = ink(rows, tx, ty, bw, hb) / (float(bw) * hb)
+        p_ink = ink(rows, px, py, bw, hb) / (float(bw) * hb)
         check(t_ink > 0.6, "%s: the 14th's box is mostly INK (%.0f%%)"
               % (kind, 100 * t_ink))
         check(p_ink < 0.3, "%s: the 13th's is mostly ground (%.0f%%)"
@@ -128,30 +139,45 @@ def leg(tmp, machine, kind, shots):
         rows = frame()
         sx, sy, sr = box(20)
         per = set()
-        for x in range(sx, sx + 20):
+        for x in range(sx, sx + bw):
             per.add((x, sy))
             per.add((x, sy + hb - 1))
         for y in range(sy, sy + hb):
             per.add((sx, y))
-            per.add((sx + 19, y))
+            per.add((sx + bw - 1, y))
         lit = [p for p in per if rows[p[1]][p[0]]]
         check(not lit, "%s: an unbroken ink outline round the 20th (%d of "
               "%d perimeter pixels are ground)" % (kind, len(lit), len(per)))
-        inside = [(sx + 1, sy + 1), (sx + 18, sy + 1), (sx + 1, sy + hb - 2),
-                  (sx + 18, sy + hb - 2)]
+        inside = [(sx + 1, sy + 1), (sx + bw - 2, sy + 1),
+                  (sx + 1, sy + hb - 2), (sx + bw - 2, sy + hb - 2)]
         check(all(rows[y][x] for x, y in inside),
               "%s: ...one pixel wide: ground inside its corners" % kind)
-        t_ink = ink(rows, tx, ty, 20, hb) / (20.0 * hb)
+        t_ink = ink(rows, tx, ty, bw, hb) / (float(bw) * hb)
         check(t_ink > 0.6, "%s: today's box is still inverse (%.0f%%)"
               % (kind, 100 * t_ink))
 
         print("D: the 20th's dot")
-        dy = sr + G["DOTY"]
-        check(ink(rows, sx + 9, dy, 2, G["DOTH"]) == 2 * G["DOTH"],
+        dx, dy, dw, dh = dot(20)
+        check(ink(rows, dx, dy, dw, dh) == dw * dh,
               "%s: the 20th's dot is ink" % kind)
-        _, _, pr = box(13)
-        check(ink(rows, px + 9, pr + G["DOTY"], 2, G["DOTH"]) == 0,
+        dx, dy, dw, dh = dot(13)
+        check(ink(rows, dx, dy, dw, dh) == 0,
               "%s: the 13th has none" % kind)
+        if G["DOTY"] & os88dia.DESKCAL_DOTBY:
+            # COMPACT: the dot BESIDE the number touches nothing - its
+            # ring of pixels is paper, and the row under every week
+            # (r + 8) is paper too, so no mark reaches the next week
+            dx, dy, dw, dh = dot(20)
+            ring = [(x, y) for x in range(dx - 1, dx + dw + 1)
+                    for y in range(dy - 1, dy + dh + 1)
+                    if not (dx <= x < dx + dw and dy <= y < dy + dh)]
+            check(all(rows[y][x] for x, y in ring),
+                  "%s: nothing touches the 20th's dot (%d of %d ring "
+                  "pixels ink)" % (kind, sum(1 for x, y in ring
+                                             if not rows[y][x]), len(ring)))
+            fx20, r20 = field(20)
+            check(ink(rows, fx20, r20 + 8, 24, 1) == 0,
+                  "%s: the row under the 20th's number is paper" % kind)
 
         print("E: the gaps are the desktop's ground")
         y, bad = fy0, []

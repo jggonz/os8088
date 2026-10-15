@@ -46,22 +46,57 @@ section .cold
 ; far, DS = KERNEL_SEG (api_rsc). in: AL = the verb, BX = the window for 1-3.
 ; out: CF = 0 done / CF = 1 refused; every register preserved.
 ;
-; QUERY IS THE LOAD (SPEC.md 11.103.10): AL = 0 is mod_need's answer - CF = 0
-; the layer is resident from here until restart, CF = 1 it is not (no
+; QUERY IS THE LOAD (SPEC.md 11.103.10): AL = 0 is desk_need's answer - CF =
+; 0 the layer is resident from here until restart, CF = 1 it is not (no
 ; DESK.DRV on the system disk, no heap, a stale stamp), and the DIA takes the
 ; titled path as on kern_small. Every other verb is the image's dkd_verb, and
-; with no image the slot is mod_gone's refusal.
+; with no image the slot is mod_gone's refusal. A package carrying
+; OS88_F_DESK has normally been given the image already, by the loader's
+; step 5 (desk_need's banner says why there), so its QUERY is mod_need's
+; `.already` and touches no disk.
 ; -----------------------------------------------------------------------------
 osapi_wm_desk_x:
     or al, al
     jnz .v
-    push ax
-    mov al, MOD_DESK
-    call mod_need               ; preserves every register; CF is the answer
-    pop ax                      ; (pop writes no flag)
+    call desk_need              ; preserves every register; CF is the answer
     retf
 .v:
     jmp far [DKDFP + DKD_VERB]  ; MAKE / DRAG / RELEASE: the image's
+
+; -----------------------------------------------------------------------------
+; desk_need - mod_need MOD_DESK, INSIDE whatever drv_vol bracket is open
+;             (SPEC.md 11.103.10), near, resident .cold
+; in:  nothing. out: CF = mod_need's answer; every register preserved
+;
+; TWO CALLERS: QUERY above, and the loader's step 5 for a package whose header
+; carries OS88_F_DESK - BEFORE the package's region is claimed, so the 1 KB
+; pinned claim lands ABOVE the widget's region and not under it. Loaded from
+; the entry proc instead, the image sat directly under the widget, and a
+; closed widget's region stayed stranded above a pin for the rest of the
+; session (24 KB of contiguous heap on the measured boot, SPEC.md 11.103.10).
+;
+; THE PAIR IS SAVED BECAUSE THE BRACKET NESTS HERE. drv_vol_bank keeps ONE
+; static pair (drv_vol_cwd / drv_vol_drv) on the rule that no two brackets
+; ever nest - and both callers run inside one: a desktop shortcut's or
+; dia_boot's launch is under sc_open's, and a widget's entry proc is reached
+; from it. mod_need's own bracket would overwrite the outer pair with the
+; widget's FOLDER, and sc_open's restore would then leave the machine there
+; instead of where the user was. The pair is two adjacent words' worth of
+; bytes (a dw and a db), so it goes on the stack as a word and a byte - never
+; `push word [drv_vol_drv]`, whose high byte is unrelated .text.
+; -----------------------------------------------------------------------------
+desk_need:
+    push ax
+    push word [drv_vol_cwd]     ; the OUTER bracket's pair...
+    mov al, [drv_vol_drv]
+    push ax
+    mov al, MOD_DESK
+    call mod_need               ; preserves every register; CF is the answer
+    pop ax                      ; ...put back for its restore (neither `pop`
+    mov [drv_vol_drv], al       ; nor `mov` writes a flag)
+    pop word [drv_vol_cwd]
+    pop ax
+    ret
 
 ; =============================================================================
 ; DESK.DRV - the module image

@@ -9948,15 +9948,20 @@ SOAK = [
         "same downgrade, nothing launched. SYSTEM.CFG unwritten by either.",
         needs=("marty",), timeout=900,
         wants=("build/diaghost360.img", "build/diabvol360.img")),
-    Row("dianodesk", "soak", py("tests/dianodesk.py"), 21.0,
-        "SPEC.md 11.103.10: DESK.DRV is the desk layer's code, loaded by a "
-        "DIA's QUERY. absent: the shipped 360KB system disk with a DIA row "
+    Row("dianodesk", "soak", py("tests/dianodesk.py"), 32.0,
+        "SPEC.md 11.103.10: DESK.DRV is the desk layer's code, loaded by the "
+        "loader's step 5 for an OS88_F_DESK package and by a DIA's QUERY. "
+        "absent: the shipped 360KB system disk with a DIA row "
         "to DESKCAL.O88 and DESK.DRV mdel'd (asserted gone on the host) - "
         "the boot still relaunches the calendar (dia_boot is resident), it "
         "comes up TITLED (no WF_DESK, a title bar), mod_tab's MOD_DESK row "
         "is 0 and every DKDFP slot mod_gone, and the row is kept, marked and "
         "cell-less. present, the control: the same disk with the module - a "
-        "desk window, the module held, the row kept.",
+        "desk window, the module held, the row kept, and the module's claim "
+        "ABOVE the calendar's region. bdrive: present with the row on B:. "
+        "Every leg: the boot ends at the boot volume's root (dsk_cwd 0, "
+        "disk_drive = dsk_bootvol) - the load's drv_vol bracket nests inside "
+        "sc_open's and desk_need keeps the outer pair.",
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
     Row("diashort", "soak", py("tests/diashort.py"), 15.0,

@@ -356,7 +356,17 @@ ICON_SOLID  equ 0                ; the record's first byte for a picture whose
 ; that calls either ships beside its own kernel (SPEC.md 110.8).
 %define OSAPI_WM_DESK       KERNEL_SEG:0x0473   ; AL = 0 QUERY: CF=0 this
                                  ; kernel has the layer (kern_small: CF=1, and
-                                 ; every verb refuses there). AL = 1 MAKE, BX
+                                 ; every verb refuses there). QUERY IS NOT
+                                 ; FREE: it LOADS DESK.DRV off the system disk
+                                 ; (a find and a read) and holds a 1 KB claim
+                                 ; until restart, unless the loader already
+                                 ; did for a package with OS88_F_DESK - so ask
+                                 ; it ONCE, in your ENTRY PROC on the UI task,
+                                 ; never from a worker (SPEC.md 20.6 rule 7)
+                                 ; and never per paint. CF=1 on kern_big means
+                                 ; DESK.DRV is missing or there is no heap:
+                                 ; take the titled path (SPEC.md 11.103.10).
+                                 ; AL = 1 MAKE, BX
                                  ; = your window, HIDDEN, not fullscreen, not
                                  ; sizable - and ONLY in your entry proc,
                                  ; between OSAPI_WM_CREATE and its return

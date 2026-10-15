@@ -2,7 +2,7 @@
 """SPEC.md 11.103.10: with NO DESK.DRV on the system disk, a DIA row still
 comes up at boot - as a TITLED widget - and its row is kept.
 
-    make && python3 tests/dianodesk.py [--only absent|present]
+    make && python3 tests/dianodesk.py [--only absent|present|bdrive]
 
 diamiss's shape, one boot per leg on MartyPC's VGA XT. Each leg is the
 SHIPPED 360KB system disk copied to a scratch file, with a SYSTEM.CFG that
@@ -19,15 +19,30 @@ so a fixture that never had the module cannot pass for one that lost it.
     C  the module is NOT held: mod_tab's MOD_DESK row is 0 and every DKDFP
        slot still names mod_gone;
     D  its row is KEPT: still the DIA row (+3 = 'D'), with no desktop cell -
-       a refused QUERY is not a missing target, and nothing downgrades it.
+       a refused QUERY is not a missing target, and nothing downgrades it;
+    E  THE VOLUME IS PUT BACK: the open bracket's pair (drv_vol_cwd /
+       drv_vol_drv) is the boot root the moment the window is up, and the
+       machine gets there - [dsk_cwd] = 0 and [disk_drive] = [dsk_bootvol],
+       waited for, sc_open's restore running after the load's paint. The load (twice: the loader's
+       step 5 and the QUERY) ran a drv_vol bracket INSIDE sc_open's, which
+       keeps one static pair, and without desk_need's save the outer
+       restore left the machine in SYSTEM\DIA (cluster 89 on this disk).
   present the same disk with DESK.DRV left on it - the control:
     A  the calendar is up, B a DESK window (WF_DESK, no title bar), C the
        module HELD (the row's segment non-zero, the hover slot not mod_gone),
-       D the row kept the same way.
+       D the row kept the same way, E the volume put back the same way, and
+    F  the module's 1 KB claim is ABOVE the calendar's region: the loader's
+       step 5 took it for an OS88_F_DESK package BEFORE the region, so a
+       closed widget's region is not stranded above a pinned island
+       (SPEC.md 11.103.10).
+  bdrive  `present` with the row on B: (a second copy of the shipped disk in
+       the B: drive) - every claim again, and E is the DRIVE half of the
+       pair: the boot ends on A:, where it was, and not mounted on B:.
 
 **BREAK IT ON PURPOSE** (docs/WRITING-TESTS.md 1): move dia_boot's loop into
 DESK.DRV (the cut design's first draft) and `absent` A fails - no window at
-all; make osapi_wm_desk_x's QUERY answer CF = 0 without mod_need and
+all; drop desk_need's save of drv_vol_cwd / drv_vol_drv and E fails on both
+legs; take the loader's step-5 `call desk_need` out and `present` F fails; make osapi_wm_desk_x's QUERY answer CF = 0 without mod_need and
 `absent` B fails (MAKE then refuses into a desk-sized titled frame, and
 `present` C fails: nothing loads the image).
 """
@@ -78,9 +93,10 @@ def fixture(tmp, leg):
     img = os.path.join(tmp, "nodesk-%s.img" % leg)
     shutil.copy(os.path.join(BDIR, "os8088-360.img"), img)
     cfg = os.path.join(tmp, "SYSTEM.CFG")
+    vol = "B" if leg == "bdrive" else "A"
     subprocess.run([sys.executable, os.path.join(ROOT, "tools", "os88dia.py"),
                     "cfg", "-o", cfg, "--dia",
-                    "A:SYSTEM/DIA/DESKCAL.O88=Calendar"], check=True,
+                    "%s:SYSTEM/DIA/DESKCAL.O88=Calendar" % vol], check=True,
                    stdout=subprocess.DEVNULL)
     subprocess.run(["mcopy", "-o", "-i", img, cfg, "::/SYSTEM.CFG"],
                    check=True, stdout=subprocess.DEVNULL, env=MTENV)
@@ -97,8 +113,12 @@ def fixture(tmp, leg):
 def leg(name, tmp):
     img = fixture(tmp, name)
     absent = name == "absent"
+    bimg = None
+    if name == "bdrive":        # B: is the shipped system disk again, so its
+        bimg = os.path.join(tmp, "nodesk-b.img")    # SYSTEM\DIA\ holds
+        shutil.copy(os.path.join(BDIR, "os8088-360.img"), bimg)  # DESKCAL
     print("%s:" % name)
-    with os88ui.boot(img, machine="os8088_xt_vga") as ui:
+    with os88ui.boot(img, apps=bimg, machine="os8088_xt_vga") as ui:
         m = ui.m
         print(" A: the boot relaunched the calendar")
         w = ui.wait_window(TITLE, limit=120)
@@ -138,6 +158,38 @@ def leg(name, tmp):
         check(r["dia"] and r["kind"] == 1 and zb == 0xFF,
               "still the DIA row (+3 = %#x), with no cell (%#x)"
               % (r["mark"], zb))
+        print(" E: the volume is put back")
+        # THE PAIR FIRST, and at once: desk_need restores it before the
+        # loader's step 9 shows the window, so it is settled the moment the
+        # window is up - and it is the outer bracket's, the boot root, or
+        # sc_open's restore cannot get back there
+        boot = ui._byte("dsk_bootvol")
+        pcwd, pdrv = ui._word("drv_vol_cwd"), ui._byte("drv_vol_drv")
+        check(pcwd == 0 and pdrv == boot,
+              "the open bracket's pair is the boot root: drv_vol_cwd %#x, "
+              "drv_vol_drv %d (boot %d)" % (pcwd, pdrv, boot))
+        # ...and the machine gets back there - which is sc_open's restore,
+        # AFTER the window shows and the load's paint, so it is WAITED for:
+        # read at the window's first sight it is still the widget's folder
+        # on any build (a 4.77 MHz paint is long), which is a race and not
+        # the defect
+        def home():
+            return (ui._word("dsk_cwd") == 0
+                    and ui._byte("disk_drive") == boot)
+        try:
+            ui._wait(home, "the boot volume's root", 30)
+        except os88ui.UIError:
+            pass
+        cwd, drv = ui._word("dsk_cwd"), ui._byte("disk_drive")
+        check(cwd == 0 and drv == boot,
+              "the boot volume's root: dsk_cwd %#x, disk_drive %d (boot %d)"
+              % (cwd, drv, boot))
+        if not absent:
+            print(" F: DESK.DRV sits above the widget's region")
+            rec = ui._S("wm_wins") + w.i * geom.WIN_SIZE
+            wseg = struct.unpack("<H", bytes(m.read(rec + geom.W_SEG, 2)))[0]
+            check(seg > wseg, "the module at %#06x, the calendar's region at "
+                  "%#06x" % (seg, wseg))
 
 
 def main():
@@ -146,7 +198,7 @@ def main():
         only = sys.argv[sys.argv.index("--only") + 1]
     tmp = tempfile.mkdtemp(prefix="dianodesk-")
     try:
-        for name in ("absent", "present"):
+        for name in ("absent", "present", "bdrive"):
             if only in (None, name):
                 leg(name, tmp)
     finally:
