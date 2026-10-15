@@ -5506,25 +5506,19 @@ FSIF_BANKED equ 4
     times 8 - %%slen db ' '
 %endmacro
 
-; --- THE THEME (SPEC.md 76, 76.14) ------------------------------------------
+; --- THE THEME (SPEC.md 76, 76.14.14) --------------------------------------
 %define OSAPI_THM_SET        KERNEL_SEG:0x046D   ; AL = THM_BRIGHT(0)/DARK(1)/
-                                 ; COLOR(2): adopts it as the system theme
-                                 ; and repaints the desktop's chrome. An
-                                 ; unknown value, or COLOR on an adapter with
-                                 ; no colour in it, falls back to Bright.
-                                 ; kern_small has no theme to set at all and
-                                 ; this call does nothing there (SPEC.md 76.13)
-%define OSAPI_THM_SET_PRESET KERNEL_SEG:0x0475   ; AL = 0..7, one of Color's
-                                 ; eight presets (SPEC.md 76.14) - 0 is Classic
-                                 ; 8088, the preset Color always had. Only
-                                 ; reaches the screen while Color is already
-                                 ; the live theme; otherwise it is a store
-                                 ; for whenever the machine switches to
-                                 ; Color. An out-of-range value falls back
-                                 ; to 0. kern_small again does nothing
-
-%define OSAPI_THM_SET_STRIPES KERNEL_SEG:0x047D ; AL = 0 off / 1 on: Color
-                                 ; active-title pinstripes; Bright and Dark
-                                 ; are unchanged. Stored across preset changes
-                                 ; and saved with Control Panel settings.
-                                 ; kern_small does nothing (SPEC.md 76.14.5).
+                                 ; COLOR(2)/WIN(3): adopts it as the system
+                                 ; theme, repaints the desktop's chrome and
+                                 ; owes SYSTEM.CFG the change. An unknown
+                                 ; value, or COLOR on an adapter with no
+                                 ; colour in it, is Bright. WIN reads
+                                 ; WIN95.DRV off the system disk: out CF = 1
+                                 ; when it could not, and Color (or Bright on
+                                 ; 1bpp) stands instead. It may read a disk,
+                                 ; so call it from the UI task, never a worker
+                                 ; (SPEC.md 20.6). Which of Color's presets
+                                 ; shows, and its title style, are the user's,
+                                 ; in the Control Panel - there is no call for
+                                 ; either. kern_small has no theme to set and
+                                 ; does nothing

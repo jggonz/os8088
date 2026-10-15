@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "fcc4cc6a5ff92fb80f83388d88603e5c85a65373efa0abf4403899f85b3c1dfe",
+  "fingerprint": "b1f91147886e07beb2016963005e30d6be8487966b32cb8d5c7e01c05a8aa5b6",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "16b2fbfe6285c623f7411c01794bed407ebb40674797c457162a0181235d4b5d",
+  "fingerprint": "432329e4aff92c47b0957e27a5d8ce8886fb01fe0cecc86ed823873fcab1758a",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -77,6 +77,20 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "Append the Color theme mode, preset, and style API cells at free slots 0x046D, 0x0475 and 0x047D. Existing binaries never called these cells; the style cell preserves its 0/1 meanings and adds bit 1 for the Windows Classic button layout, so PKG_FMT and DRV_VER remain unchanged.",
+   "to": 11
+  },
+  {
+   "fingerprint": "432329e4aff92c47b0957e27a5d8ce8886fb01fe0cecc86ed823873fcab1758a",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "PR #249 (Color presets) after the zero-resident redesign: OSAPI_THM_SET is ONE new cell appended at 0x046D, after OSAPI_FERR_TEXT; the PR's _SET_PRESET/_SET_STRIPES cells never shipped and are gone. Every existing cell keeps its address and contract, so nothing built before stops running",
+   "to": 10
+  },
+  {
+   "fingerprint": "b1f91147886e07beb2016963005e30d6be8487966b32cb8d5c7e01c05a8aa5b6",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "PR #249 (Color presets) after the zero-resident redesign: OSAPI_THM_SET is ONE new cell appended at 0x046D, after OSAPI_FERR_TEXT; the PR's _SET_PRESET/_SET_STRIPES cells never shipped and are gone. Every existing cell keeps its address and contract, so nothing built before stops running",
    "to": 11
   }
  ]

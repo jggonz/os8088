@@ -2101,7 +2101,8 @@ KERNEL_SRC := kernel/kernel.asm
 # stale. Caught once already - a fix to the 286 head-cross gate assembled
 # perfectly, never reached the disk, and the only symptom was os88sym refusing
 # a map that described "a DIFFERENT kernel".
-KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
+KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm \
+              drivers/thmpal/thmrows.inc
 
 .PHONY: stkdiag kbddiag small emu kernsplit all run run-640 run-720 run-120 debug test test-snd xt xt-640 pc5150 xt-mfm xt-cga \
         xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 xt-midirack 386-midirack xt-covox xt-wire \
@@ -3807,7 +3808,8 @@ $(BUILD)/saver.drv: $(BUILD)/saver.bin tools/os88drv.py $(PKGZSTAMP)
 # its owner is the kernel - kernel/vga12.inc's thmv_open_x reads it when the
 # Theme page's Customize... button is pressed and frees it again when the
 # Control Panel closes (kernel/ctrl.inc's cp_flush_close_x).
-$(BUILD)/thmpal.bin: drivers/thmpal/thmpal.asm drivers/os88drv.inc \
+$(BUILD)/thmpal.bin: drivers/thmpal/thmpal.asm drivers/thmpal/thmrows.inc \
+                     drivers/os88drv.inc \
                      apps/os88api.inc apps/os88ui.inc \
                      | $(BUILD)
 	$(NASM) -f bin -w+error -I drivers/ -I apps/ -o $@ drivers/thmpal/thmpal.asm

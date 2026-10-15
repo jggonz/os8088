@@ -2086,6 +2086,10 @@ menu_drop:
 
     ; --- follow the mouse while the button is down ----------------------------
     mov word [menu_sel], 0xFFFF ; nothing highlighted yet
+%ifdef OS88_THEME
+    mov al, [thm_xorm]          ; the bar's XOR mask, ONCE per menu (SPEC.md
+    mov [menu_xorm], al         ; 76.14.14): a theme change while it is down
+%endif                          ; cannot make the off XOR disagree with the on
     mov byte [menu_dropd], 1    ; ...and while this is up, the keyboard mouse
                                 ; steps by ITEM rather than by KBM_MIN pixels
                                 ; (SPEC.md 9.6.3). Set HERE and not in either
@@ -2098,16 +2102,16 @@ menu_drop:
     call menu_hover             ; AX = hovered item, 0xFFFF if outside
     cmp ax, [menu_sel]
     je .same
-    push ax                     ; highlight moved: erase old, draw new
-    mov ax, [menu_sel]
-    cmp ax, 0xFFFF
-    je .no_old
-    call menu_item_unselect
-.no_old:
-    pop ax
-    mov [menu_sel], ax
-    cmp ax, 0xFFFF
-    je .same
+    xchg ax, [menu_sel]         ; highlight moved: erase old, draw new - the
+    inc ax                      ; new one stored and the old one taken in ONE
+    jz .no_old                  ; exchange, and 0FFFFh ("none") asked as `inc
+    dec ax                      ; / jz` with the `dec` only where it is not
+    call menu_item_xor          ; (kernel size pass 10: 3 bytes). Nothing reads
+.no_old:                        ; [menu_sel] before the second test below, and
+    mov ax, [menu_sel]          ; menu_item_xor preserves every register
+    inc ax
+    jz .same
+    dec ax
     call menu_item_xor
 .same:
                                 ; no flush: the highlights are VRAM-direct and
@@ -2419,38 +2423,12 @@ menu_item_dis:
     ret
 
 ; -----------------------------------------------------------------------------
-; menu_item_xor - highlight one item; legacy modes use self-inverting XOR
+; menu_item_xor - toggle the highlight on one item cell (xor is its own undo)
 ; in:  AX = item index; [menu_x1]/[menu_x2]/[menu_y1] set up as above
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
-; Preserve XOR exactly for Bright, Dark, Classic and 1bpp displays.
-; Other Color presets repaint only the semantic menu cell, never palette RAM.
-%ifdef KERN_BIG
-menu_item_unselect:
-    call menu_item_color_ok
-    jnc menu_item_xor.legacy
-    push bx
-    mov bx, [thm_bgc]
-    xchg bl, bh                 ; BL = ink, BH = paper
-    jmp menu_item_xor.paint
-%else
-menu_item_unselect equ menu_item_xor
-%endif
-
 menu_item_xor:
-%ifdef KERN_BIG
-    call menu_item_color_ok
-    jnc .legacy
-    push bx
-    mov bh, [thm_sbgc]
-    mov bl, CWHITE
-.paint:
-    call menu_item_paint
-    pop bx
-    ret
-.legacy:
-%endif
     push ax
     push bx
     push cx
@@ -2468,67 +2446,6 @@ menu_item_xor:
     dec cx
     call vga_xor_fill_vram      ; VRAM-direct transient overlay (SPEC.md 32)
     jmp kret_dx
-
-%ifdef KERN_BIG
-menu_item_color_ok:
-    cmp byte [thm_sbgc], 0
-    je .no                       ; zero means legacy XOR (including 1bpp)
-    stc
-    ret
-.no:
-    clc
-    ret
-
-; AX = enabled item index, BL/BH = ink/paper. No allocations; lock held.
-; The normal menu painter already owns this cell, so content stays untouched.
-menu_item_paint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push es
-    push bp
-    mov bp, bx                  ; keep pair across geometry/string staging
-    mov si, ax
-    shl si, 1                   ; word index into the menu's item pointers
-    mov cl, 4
-    shl ax, cl
-    add ax, [menu_y1]
-    inc ax
-    mov bx, ax
-    mov dx, ax
-    add dx, MENU_ITEM_H - 1
-    mov ax, [menu_x1]
-    inc ax
-    mov cx, [menu_x2]
-    dec cx
-    call gfx_pen_live
-    xchg ax, bp                 ; borrow the pair without a stack round trip
-    mov [gfx_color], ah
-    xchg ax, bp
-    call gfx_fill
-    mov dx, bx
-    add dx, 4
-    mov bx, [menu_iptr]
-    add bx, si
-    call menu_des
-    mov si, [es:bx]
-    call menu_trunc
-    mov cx, [menu_x1]
-    add cx, 8
-    mov ax, bp
-    call font_run_x
-    call gfx_pen_live            ; restore the normal black content pen
-    pop bp
-    pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-%endif
 
 ; -----------------------------------------------------------------------------
 ; menu_title_xor - toggle the highlight on the tracked menu's title cell
@@ -2861,6 +2778,9 @@ menu_iptr:  resw 1              ; its array of near item-string pointers
 menu_btn:   resb 1              ; mouse_btn mask that keeps it open: 1 = the
                                 ; bar's left button, 2 = a popup's right one
 menu_sel:   resw 1              ; highlighted item, 0xFFFF = none
+%ifdef OS88_THEME
+menu_xorm:  resb 1              ; [thm_xorm] as the menu dropped (76.14.14)
+%endif
 menu_seg:   resw 1              ; the segment [menu_set] and the app's own
                                 ; strings live in; 0 = the kernel's own
                                 ; (Locator, and any built-in window)

@@ -2842,6 +2842,11 @@ mem_rr_tab:
     MEM_RR_ONE xm_row + DRVR_SEG    ; XMEM.DRV (kernel/xmem.inc)
     MEM_RR_ONE drv_blkseg           ; the block-verb far pointer's segment half
 %endif
+%ifdef KERN_BIG
+    MEM_RR_ONE thmv_row + DRVR_SEG  ; THMPAL.DRV (kernel/vga12.inc, SPEC.md
+                                    ; 76.14.14): cached while the panel is open,
+                                    ; so a compaction can move it under us
+%endif
     dw 0
     ; --- ES = LOW_SEG (SPEC.md 2.6) --------------------------------------
     MEM_RR_ROW menu_bar + MB_SEG, MENU_BARMAX, MB_ENTSZ  ; .lowbss (SPEC.md 12.2)

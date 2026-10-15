@@ -8,16 +8,14 @@
 ; three-byte dispatcher and a driver's one-claim load, class DRVC_OVL, which
 ; the kernel deliberately does not know - no row in drv_tab, no publication
 ; slot, no Drivers page tick, no SYSTEM.CFG bit of its own and no Control
-; Panel page. OUR OWNER IS THE KERNEL, same as SAVER.DRV's: kernel/vga12.inc's
-; thmv_open_x loads it and asks it to open; thmv_reap_x frees it, called once
-; from kernel/ctrl.inc's cp_flush_close_x (the Control Panel's own teardown,
-; the latest point this window can still be open at, since opening it is
-; only reachable from the Theme page).
+; Panel page. OUR OWNER IS THE CONTROL PANEL: kernel/ctrl.inc's cp_thmv_open,
+; in CTRL.DRV's own image, loads it and asks it to open, and the resident
+; thmv_reap_x frees it on every close of the panel (kernel/instance.inc).
 ;
 ; WHY AN OVERLAY AND NOT AN ON-DEMAND MODULE (SPEC.md 2.8) - SAVER.DRV's own
-; header gives the reason word for word: the eight preset names and the two
-; button captions are DATA a Control Panel page cannot afford, and an
-; overlay owns a segment, so every byte of it is on the floppy and none of
+; header gives the reason word for word: the eight preset rows, their names
+; and the two button captions are DATA a Control Panel page cannot afford, and
+; an overlay owns a segment, so every byte of it is on the floppy and none of
 ; it is in the kernel.
 ;
 ; OPEN creates or raises the window; BUSY queries its lifetime; CLOSE
@@ -25,9 +23,12 @@
 ; window's W_PAINT is a near pointer into this segment, and freeing the
 ; image under it is a paint into whatever the heap hands out next.
 ;
-; LIVE PREVIEW IS thm_set / thm_set_preset (kernel/vga12.inc), called
-; exactly as a Color radio click calls them - SPEC.md 76.14 says why. This
-; file owns no palette data of its own: it lists eight names; list rows are the contiguous preset IDs.
+; LIVE PREVIEW IS AN INSTALL AND OSAPI_THM_SET (SPEC.md 76.14.14): a change
+; copies its row of thmrows.inc over the kernel's ONE Color row, writes the
+; preset's number into 'TP' and the style bits into [thm_cstrp], all at
+; addresses OPEN was handed, and then asks the kernel to resolve Color - which
+; it promotes to Windows when the style bit says so. The kernel keeps no
+; preset table; this file and SYSTEM.CFG's 'TP' record are the only holders.
 ;
 ; REGISTERS: tv_entry preserves everything but AX and the flags (sv_entry's
 ; own contract, SPEC.md 79.3).
@@ -35,18 +36,20 @@
 
 %include "os88drv.inc"
 
-TV_ABI_VER  equ 3                ; MIRRORED in kernel/vga12.inc's thmv_* - the
+THMV_ABI_VER  equ 4              ; MIRRORED in kernel/vga12.inc's thmv_* - the
                                   ; private interface those routines were
                                   ; built against
 
-    OS88_OVERLAY 'THMPAL', TV_ABI_VER, tv_entry
+    OS88_OVERLAY 'THMPAL', THMV_ABI_VER, tv_entry
 
 ; --- the verbs, MIRRORED IN kernel/vga12.inc ---------------------------------
 THMV_OPEN   equ 0
 THMV_BUSY   equ 1
 THMV_CLOSE  equ 2
 
-TV_NPRESET  equ 8                ; selectable rows, matching kernel preset IDs
+%include "thmpal/thmrows.inc"   ; Color's eight rows (SPEC.md 76.14.14) -
+                                  ; the table the kernel does NOT carry
+TV_NPRESET  equ THM_PRESET_N     ; selectable rows: the preset IDs
 THM_COLOR   equ 2                ; MIRRORED from kernel/vga12.inc's THM_COLOR -
                                   ; this file never touches [thm_kind] itself,
                                   ; only passes this one constant to cw_thm_set
@@ -150,18 +153,28 @@ tv_do_busy:
 ; -----------------------------------------------------------------------------
 ; tv_do_open - open the window, or bring it to the front if it is already up
 ; in:  the gfx lock is HELD - this is a Control Panel click (SPEC.md 31.1);
-;      DL = persisted title-style bits; CH/CL = the CURRENT [thm_kind]/[thm_preset] - this file has no symbol
-;      for either address (kernel/vga12.inc's thmv_open_x is the one caller
-;      and the one reader, SPEC.md 76.14)
+;      ES = KERNEL_SEG; SI = the kernel's Color row, DI = drv_cfg's 'TP'
+;      record (its byte 0 is the preset's number), DX = [thm_cstrp]'s
+;      address, CH = [thm_kind] - this file has no symbol for any of them
+;      (kernel/ctrl.inc's cp_thmv_open is the one caller, SPEC.md 76.14.14)
 ; out: CF = 0 the window is up; CF = 1 it could not be created
 ;
-; THE ORIGINAL (kind, preset) IS BANKED EVERY TIME, even if the window is
-; already open - sv_do_cfg's own rule ("seeded from the live settings every
-; time") applied to a re-click rather than only to a reopen. Opening this
-; window only reads the current settings; it never changes the active theme.
+; THE OPENING STATE IS BANKED ON A FRESH OPEN ONLY: a second press of
+; Customize while the window is up raises it, and banking again there would
+; make a preview the thing Cancel goes back to. Opening changes nothing on
+; screen: Customize is only live under Color or Windows (cp_thm_custok).
 ; -----------------------------------------------------------------------------
 tv_do_open:
-    mov al, dl
+    mov bx, [tv_win]
+    or bx, bx
+    jnz .show
+    mov [tv_row], si
+    mov [tv_cfg], di
+    mov [tv_cbits], dx
+    mov [tv_okind], ch
+    mov byte [tv_chg], 0
+    mov bx, dx
+    mov al, [es:bx]
     and al, 7
     mov [tv_ostripes], al
     mov ah, al
@@ -169,30 +182,24 @@ tv_do_open:
     mov [tv_stripes], al
     mov al, ah
     shr al, 1
+    and al, 1
     mov [tv_classic], al
     mov [tv_classic_box+OS88UI_CK_ON], al
-    cmp dh, 0                   ; kernel marks an already-live Windows theme
-    je .colorstyle
+    mov al, [tv_stripes]        ; the style radio: Windows when it is live,
+    cmp ch, THM_WIN             ; else Solid or Stripes off bit 0
+    jne .style_ready
     mov al, TV_STY_WIN
-    jmp short .style_ready
-.colorstyle:
-    mov al, [tv_stripes]
 .style_ready:
     mov [tv_live_style], al
     xor ah, ah
     mov [tv_styles+OS88UI_RD_SEL], ax
-    mov al, ch
-    mov [tv_okind], al
-    mov al, cl
-    mov [tv_opreset], al
+    mov al, [es:di]
     cmp al, TV_NPRESET
     jb .selected
     xor al, al                  ; an unknown preset displays Classic
 .selected:
     mov [tv_sel], al
-    mov bx, [tv_win]
-    or bx, bx
-    jnz .show
+    mov [tv_opreset], al
     mov si, tv_tpl
     call OSAPI_WM_CREATE
     jc .no
@@ -211,7 +218,7 @@ tv_do_open:
     clc
     ret
 .no:
-    stc
+    stc                          ; nothing was changed yet: nothing to undo
     ret
 
 ; -----------------------------------------------------------------------------
@@ -232,44 +239,111 @@ tv_kill:
     ret
 
 ; -----------------------------------------------------------------------------
-; tv_cancel - restore the (kind, preset) that was live when the window opened
-; out: nothing (all registers preserved, beyond what the two calls document)
-;
-; Restoring Windows needs style bits first so it installs matching callbacks.
-; Bright/Dark restore kind first so the previewed Color row is resolved once.
+; tv_install - AL = a preset, AH = the style bits: the preset's row over the
+; kernel's Color row, its number into 'TP' and the bits into [thm_cstrp].
+; NOT a repaint - the caller asks OSAPI_THM_SET for that.
+; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
-tv_cancel:
+tv_install:
     push ax
-    cmp byte [tv_okind], THM_WIN
-    je .style_first
-    cmp byte [tv_okind], THM_COLOR
-    jne .kind_first
-    cmp byte [tv_live_style], TV_STY_WIN
-    je .style_first             ; clear the Windows preference before Color
-.kind_first:
-    mov al, [tv_okind]
-    call OSAPI_THM_SET
-    mov al, [tv_ostripes]
-    call OSAPI_THM_SET_STRIPES
-    jmp short .preset
-.style_first:
-    mov al, [tv_ostripes]
-    call OSAPI_THM_SET_STRIPES
-    mov al, [tv_okind]
-    call OSAPI_THM_SET
-.preset:
-    mov al, [tv_opreset]
-    call OSAPI_THM_SET_PRESET
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    mov bx, KERNEL_SEG
+    mov es, bx
+    mov bx, [tv_cbits]
+    mov [es:bx], ah             ; [thm_cstrp]
+    mov di, [tv_cfg]
+    mov [es:di], al             ; 'TP' byte 0
+    mov ah, THM_PRESET_ROWB
+    mul ah
+    add ax, tv_rows
+    xchg ax, si
+    mov di, [tv_row]
+    mov cx, THM_PRESET_ROWB
+    cld
+    rep movsb                   ; DS = ours, ES = the kernel's: no override
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; tv_close - W_ONCLOSE: DESTROYS the window itself and refuses (sc_close's
-; shape, SPEC.md 79.7's own reason): a hidden window holding a W_PAINT that
-; names this segment is a paint into whatever the heap hands out next once
+; tv_apply - show what the window says: [tv_sel], the style radio, the 95 box.
+; ONE install and ONE OSAPI_THM_SET for every change (SPEC.md 76.14.14): the
+; kernel promotes Color to Windows when the style bit says so, and falls back
+; to Color - clearing the bit - when WIN95.DRV cannot be read, which is the
+; refusal this answers by putting the radio back.
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+tv_apply:
+    push ax
+    call tv_stylebits_get
+    mov ah, al
+    mov al, [tv_sel]
+    call tv_install
+    mov byte [tv_chg], 1
+    mov al, THM_COLOR
+    call OSAPI_THM_SET
+    jnc .live
+    mov al, [tv_stripes]        ; Windows refused: the kernel fell back to
+    xor ah, ah                  ; Color and cleared the style bit
+    mov [tv_styles+OS88UI_RD_SEL], ax
+.live:
+    mov ax, [tv_styles+OS88UI_RD_SEL]
+    mov [tv_live_style], al
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tv_cancel - put back what was live when the window opened
+; out: nothing (all registers preserved)
+;
+; Nothing is re-set that did not change (SPEC.md 76.14.14): each OSAPI_THM_SET
+; is a whole-screen repaint and a settings write owed. A refusal - Windows
+; whose WIN95.DRV has gone since - is said out loud, because what stands
+; instead (Color) is not what the user went back to.
+; -----------------------------------------------------------------------------
+tv_cancel:
+    push ax
+    push cx
+    push si
+    push es
+    cmp byte [tv_chg], 0
+    je .out
+    mov byte [tv_chg], 0
+    mov al, [tv_opreset]
+    mov ah, [tv_ostripes]
+    call tv_install
+    mov al, [tv_okind]
+    call OSAPI_THM_SET
+    jnc .out
+    push ds
+    pop es
+    mov si, tv_s_nowin
+    xor cx, cx
+    call OSAPI_TOAST
+.out:
+    pop es
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tv_close - W_ONCLOSE: the close box is CANCEL (SPEC.md 76.14.14, SAVER's
+; own reading of it, 79.7), and then the window DESTROYS itself and refuses
+; (sc_close's shape): a hidden window holding a W_PAINT that names this
+; segment is a paint into whatever the heap hands out next once
 ; thmv_reap_x frees it, so wm_hide is exactly wrong here.
 ; -----------------------------------------------------------------------------
 tv_close:
+    call tv_cancel
     call tv_kill
     stc
     ret
@@ -464,45 +538,13 @@ tv_click:
     jnz .out                      ; same/disabled style: no appearance change
     mov ax, [tv_styles+OS88UI_RD_SEL]
     cmp al, TV_STY_WIN
-    je .set_windows
+    je .apply                     ; Windows keeps the stripes choice it had
     mov [tv_stripes], al
-    cmp byte [tv_live_style], TV_STY_WIN
-    jne .set_stripes              ; already in Color: one setter, one repaint
-    call tv_stylebits_get         ; stage both settings while Windows
-    call OSAPI_THM_SET_STRIPES    ; is visible, then resolve once on the switch
-    mov al, [tv_sel]
-    call OSAPI_THM_SET_PRESET
-    mov al, THM_COLOR
-    call OSAPI_THM_SET
-    mov al, [tv_stripes]
-    mov [tv_live_style], al
-    jmp .out
-.set_stripes:
-    call tv_stylebits_get
-    call OSAPI_THM_SET_STRIPES
-    mov al, [tv_styles+OS88UI_RD_SEL]
-    mov [tv_live_style], al
-    jmp .out
-.set_windows:
-    call tv_stylebits_get
-    call OSAPI_THM_SET_STRIPES ; bit 2 promotes Color to Windows in one resolve
-    jc .windows_refused
-    jmp short .windows_live
-.windows_refused:
-    mov al, [tv_stripes]          ; the mode setter fell back to Color
-    mov [tv_live_style], al
-    xor ah, ah
-    mov [tv_styles+OS88UI_RD_SEL], ax
-    jmp .out
-.windows_live:
-    mov byte [tv_live_style], TV_STY_WIN
-    jmp .out
+    jmp short .apply
 .classic_toggle:
     mov al, [tv_classic_box+OS88UI_CK_ON]
     mov [tv_classic], al
-    call tv_stylebits_get
-    call OSAPI_THM_SET_STRIPES
-    jmp .out
+    jmp short .apply
 .list:
     mov ax, dx
     sub ax, bp
@@ -515,27 +557,11 @@ tv_click:
                                    ; whole row selects, like the Theme page's
                                    ; own radio bands)
     cmp al, [tv_sel]
-    jne .new_preset
-    cmp byte [tv_live_style], TV_STY_WIN
-    jne .out                      ; same row and already Color
-.new_preset:
+    je .out                       ; already selected: nothing to do
     mov [tv_sel], al
-    cmp byte [tv_live_style], TV_STY_WIN
-    jne .color_preset
-    mov al, [tv_sel]
-    call OSAPI_THM_SET_PRESET   ; stage the new row without resolving old colors
-    call tv_stylebits_get        ; persist Windows, then resolve the new row once
-    call OSAPI_THM_SET_STRIPES
-    jnc .out
-    mov al, [tv_stripes]         ; unavailable module: the kernel fell back
-    mov [tv_live_style], al      ; to Color and cleared the Windows style bit
-    xor ah, ah
-    mov [tv_styles+OS88UI_RD_SEL], ax
-    jmp short .out
-.color_preset:
-    mov al, [tv_sel]
-    call OSAPI_THM_SET_PRESET
-    ; The setter posts one complete repaint in the same UI pass. Painting
+.apply:
+    call tv_apply
+    ; OSAPI_THM_SET posts one complete repaint in the same UI pass. Painting
     ; all rows here duplicates that work and leaves old highlight tails.
     jmp short .out
 
@@ -775,7 +801,8 @@ tv_s_classic: db '95', 0
 TV_CLASSIC_X equ 91
 TV_CLASSIC_W equ 83
 tv_classic_box: dw 0, 0, 0, 0, tv_s_classic, 0
-tv_ostripes: db 0             ; persisted style byte: bit 0 stripes, bit 1 Classic buttons
+tv_ostripes: db 0             ; [thm_cstrp] when the window opened (bits 0-2)
+tv_s_nowin: db 'Could not load WIN95.DRV', 0
 tv_stripes: db 0
 tv_classic: db 0
 tv_live_style: db 0
@@ -798,6 +825,7 @@ tv_s_p5:    db 'Amber', 0
 tv_s_p6:    db 'Midnight', 0
 tv_s_p7:    db 'Desert', 0
 
+tv_rows:    THM_PRESET_ROWS     ; drivers/thmpal/thmrows.inc, the boot's too
 tv_names:   dw tv_s_p0, tv_s_p1, tv_s_p2, tv_s_p3
             dw tv_s_p4, tv_s_p5, tv_s_p6, tv_s_p7
 %if ($ - tv_names) / 2 != TV_NPRESET
@@ -812,7 +840,11 @@ tv_down:    db 0                ; which button is drawn pressed, 0 = none -
                                  ; own convention
 tv_sel:     db 0                ; the row highlighted right now
 tv_okind:   db 0                ; [thm_kind] when the window opened
-tv_opreset: db 0                ; [thm_preset] when the window opened
+tv_opreset: db 0                ; 'TP' byte 0 when the window opened
+tv_chg:     db 0                ; 1 = something was installed since the open
+tv_row:     dw 0                ; the kernel's Color row (OPEN's SI)
+tv_cfg:     dw 0                ; drv_cfg's 'TP' record (OPEN's DI)
+tv_cbits:   dw 0                ; [thm_cstrp]'s address (OPEN's DX)
 tv_armed:   db 0                ; banked across tv_layout in tv_up (SPEC.md
                                  ; 76.14): os88ui_fire's answer, which BL would
                                  ; otherwise have to survive OSAPI_WM_CONTENT

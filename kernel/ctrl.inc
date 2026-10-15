@@ -2812,6 +2812,63 @@ cp_thm_cust_btn:
     jmp kretm_bp
 %endif
 
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; cp_thmv_open - load THMPAL.DRV and ask it to open the Customize window
+;                (SPEC.md 76.14.14)
+; in:  the gfx lock is HELD - a Control Panel click (SPEC.md 31.1)
+; out: CF = 0 the window is up; CF = 1 not, [thmv_row+DRVR_ERR] says why
+;
+; HERE IN THE PANEL'S IMAGE, NOT IN .cold: the button that calls it is this
+; image's, so the loader costs the kernel nothing. What stays resident is the
+; row (kernel/driver.inc), drv_call's range test and the reap that every panel
+; close runs (thmv_reap_x). The window is handed the three addresses it edits -
+; the Color row, the struct's 'TP' record and [thm_cstrp] - so it needs no
+; symbol and the kernel needs no preset table and no call to set one.
+; -----------------------------------------------------------------------------
+cp_thmv_open:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov bx, thmv_row
+    call COLD_SEG:drvf_drv_load_at  ; CF = 0 immediately once it is already live
+    jc .no
+    push es
+    mov es, [bx+DRVR_SEG]
+    cmp word [es:10], THMV_ABI_VER
+    pop es
+    je .ok
+    call COLD_SEG:drvf_drv_release  ; never call an incompatible private overlay
+    mov byte [bx+DRVR_ERR], DRVE_BAD
+    jmp short .no
+.ok:
+    mov si, THM_CROW
+    mov di, drv_cfg + CFG_THMP
+    mov dx, thm_cstrp
+    mov ch, [thm_kind]
+    mov bp, [bx+DRVR_ENT]
+    mov al, THMV_OPEN
+    call COLD_SEG:drvf_drv_call
+    jnc .out
+    mov bp, [bx+DRVR_ENT]       ; it loaded and then refused: give it back,
+    mov al, THMV_CLOSE          ; thmv_reap_x's two steps
+    call COLD_SEG:drvf_drv_call
+    call COLD_SEG:drvf_drv_release
+.no:
+    stc
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+%endif
+
 ; cp_thm_colpen - the pen for the Color row: greyed unless this machine has
 ;                 an adapter that can show it (SPEC.md 76.12.1)
 ; out: CF = 1 when greyed - which is os88ui_glyph's argument too, so ONE
@@ -2937,7 +2994,7 @@ cp_thm_click:
     call cp_ctl                  ; ...and it FIRES ON THE RELEASE (13.8.3),
     jc .donej                    ; ssf_cfg's own reason: opening a window is
                                   ; not a safe prefix action
-    call KERNEL_SEG:cw_thmv_open ; the overlay, and then its window (76.14)
+    call cp_thmv_open            ; the overlay, and then its window (76.14.14)
     jnc .donej
     mov al, [thmv_row+DRVR_ERR]  ; the one refusal on THIS row the user is
     or al, al                    ; standing in front of, said out loud rather
@@ -5349,12 +5406,6 @@ cp_flush_close_x:
     mov byte [clk_dirty], 0     ; SPEC.md 37.0.1: no chip to write the setting
                                 ; to, so the edit is the SESSION's and the
                                 ; flag is cleared rather than acted on
-%endif
-%ifdef KERN_BIG
-    call KERNEL_SEG:cw_thmv_reap ; SPEC.md 76.14: the Customize window's image
-                                 ; goes back here if it is still loaded - the
-                                 ; latest point it can still be open at, since
-                                 ; opening it is only reachable from this page
 %endif
     jmp cp_flush_cfg            ; ...and the settings, in the core
 

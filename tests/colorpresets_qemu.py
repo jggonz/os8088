@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Pixel checks for Color presets on QEMU's BIOS mode 10h/12h renderer.
 
-Build the image first; --ega requires make VIDEO=ega. This is not an EGA
-hardware emulation: QEMU's standard VGA runs the actual EGA BIOS mode 10h.
+Build the image first. --ega and --mono-smoke want a knob kernel, built into
+a PRIVATE tree so build/ stays the shipping one (CLAUDE.md's knob trap):
+  make BUILD=build-ega VIDEO=ega
+  OS88_TREE=$PWD/build-ega OS88_BUILD=$PWD/build-ega \
+      python3 tests/colorpresets_qemu.py --ega --image build-ega/os8088-360.img
+and the same with `KERN_SMALL=1 VIDEO=cga` and --mono-smoke. This is not an
+EGA hardware emulation: QEMU's standard VGA runs the actual EGA BIOS mode 10h.
 The debugger calls the existing guest functions and restores CPU state and
 the temporary trampoline after each call. No instrumentation ships in the OS.
 """
@@ -33,10 +38,25 @@ PALETTE = [(0,0,0),(0,0,170),(0,170,0),(0,170,170),(170,0,0),
 # component quantization without changing any production palette or index.
 def matches(pixel, index):
     return all(abs(a-b) <= 3 for a,b in zip(pixel, PALETTE[index]))
-# ID, desktop, active title, inactive title, selection, inactive ink.
-PRESETS = [(0,3,1,7,0,0),(1,9,1,8,1,15),(2,7,3,8,3,15),
-           (3,10,2,8,2,15),(4,13,5,8,5,15),(5,14,6,8,6,15),
-           (6,1,8,7,1,0),(7,6,4,8,4,15)]
+def index(pixel):
+    return min(range(16), key=lambda i: sum((a-b)**2 for a,b in zip(pixel, PALETTE[i])))
+# Color's eight rows, read from the one table the boot reader and THMPAL.DRV
+# both assemble (drivers/thmpal/thmrows.inc, SPEC.md 76.14.14) - so this test
+# cannot disagree with them about a colour.
+def _rows():
+    import re
+    src = (ROOT/'drivers'/'thmpal'/'thmrows.inc').read_text()
+    body = src[src.index('%macro THM_PRESET_ROWS'):src.index('%endmacro')]
+    rows = []
+    for line in body.splitlines():
+        m = re.match(r'\s*db\s+([^;]+)', line)
+        if m:
+            rows.append([int(v.strip(), 0) for v in m.group(1).split(',')])
+    assert len(rows) == 8 and all(len(r) == 10 for r in rows), rows
+    return rows
+ROWS = _rows()
+# ID, desktop, active title, inactive title, menu XOR mask, inactive ink.
+PRESETS = [(i, r[5], r[3], r[7], r[9], r[8]) for i, r in enumerate(ROWS)]
 # Customize has three radio rows after the eight preset rows: Solid, Stripes,
 # Windows. The 95 checkbox sits beside the Windows row.
 STYLE_Y = 3 + len(PRESETS)*11 + 8 + 10
@@ -51,7 +71,8 @@ def port():
 class Guest:
     def __init__(self, args):
         qp, gp = port(), port()
-        self.pidfile = str(Path(args.image).resolve().with_suffix(f'.{qp}.pid'))
+        # build/*.pid, so os88test's sweep finds it after a timed-out row
+        self.pidfile = str(Path(os88build.at('build')).resolve()/f'colorpresets-{qp}.pid')
         os88qemu.own(pidfile=self.pidfile,sock=None)
         self.proc = subprocess.Popen([args.qemu, '-machine', 'pc,vmport=off',
             '-m', '640', '-vga', 'std', '-display', 'none', '-S',
@@ -137,7 +158,7 @@ class Guest:
     def write(self, address, data):
         assert self.rsp(f'M{address:x},{len(data):x}:{data.hex()}') == 'OK'
 
-    def call(self, name=None, api=None, ax=0, bx=None, si=None, bp=None, cx=None, dx=None, near=False, count=None):
+    def call(self, name=None, api=None, ax=0, bx=None, si=None, bp=None, cx=None, dx=None, di=None, near=False, count=None):
         """Call a guest entry on its real stack, retaining interrupt state.
 
         Slot 0010 is restored before normal execution. Far/cold entries use
@@ -162,7 +183,7 @@ class Guest:
             struct.pack_into('<I', regs, 3*4, bx)
         if si is not None:
             struct.pack_into('<I', regs, 6*4, si)
-        for index,value in [(5,bp),(1,cx),(2,dx)]:
+        for index,value in [(5,bp),(1,cx),(2,dx),(7,di)]:
             if value is not None:
                 struct.pack_into('<I',regs,index*4,value)
         flags = struct.unpack_from('<I', regs, 9*4)[0]
@@ -216,6 +237,9 @@ class Guest:
         finally:
             assert self.rsp(f'z0,{entry:x},1') == 'OK'
 
+THM_SET = 0x046D                 # OSAPI_THM_SET (apps/os88api.inc)
+THM_COLOR = 2
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--qemu', default='qemu-system-i386')
@@ -232,6 +256,7 @@ def main():
     source = Path(args.image)
     args.image = str(out/'test.img')
     shutil.copyfile(source,args.image)  # all guest writes stay in this copy
+    lin = os88sym.linear
     g = Guest(args)
     try:
         mode = g.read(0x449, 1)[0]
@@ -239,24 +264,44 @@ def main():
             assert mode == 6
             g.call('fmf_files_open')
             before = g.frame(out/'before.ppm')
-            g.call(api=0x046D,ax=2)
-            g.call(api=0x0475,ax=2)
+            g.call(api=THM_SET,ax=THM_COLOR)
             after = g.frame(out/'after.ppm')
             assert before.tobytes() == after.tobytes()
-            assert g.read(os88sym.linear('thm_kind'),1) == b'\0'
-            assert set(after.get_flattened_data()) <= {(0,0,0),(255,255,255)}
+            assert g.read(lin('thm_kind'),1) == b'\0'
+            assert set(after.getdata()) <= {(0,0,0),(255,255,255)}
             print('PASS kern_small CGA mode 06: File Manager boots; Color API no-ops; monochrome pixels unchanged')
             return
+        eq = os88sym.equates()
+        crow = lin('thm_tab') + THM_COLOR*10       # the Color row (THM_CROW)
+        cfg = lin('drv_cfg') + eq['CFG_THMP']      # 'TP': id, style, colours
+        bits = lin('thm_cstrp')                    # stripes / 95 / Windows
+
+        def install(pid, style=None):
+            """THMPAL.DRV's tv_install: the row over the Color row, the id in
+            TP and the style bits into [thm_cstrp]."""
+            g.write(crow, bytes(ROWS[pid]))
+            g.write(cfg, bytes([pid]))
+            if style is not None:
+                g.write(bits, bytes([style]))
+
+        def set_preset(pid, style=None):
+            install(pid, style)
+            g.call(api=THM_SET, ax=THM_COLOR)
+
+        def top_window():
+            slot = g.read(lin('wm_zord')+g.read(lin('wm_zn'),1)[0]-1,1)[0]
+            ptr = symbols['wm_wins']+slot*eq['WIN_SIZE']
+            raw = g.read(0x600+ptr,eq['WIN_SIZE'])
+            return ptr, raw, struct.unpack_from('<HHHH',raw,2)
+
         assert mode == (0x10 if args.ega else 0x12), f'BIOS video mode {mode:02x}'
-        assert g.read(os88sym.linear('vid_kind'),1)[0] == (3 if args.ega else 0)
-        g.call(api=0x046D, ax=2)
-        g.call(api=0x047D, ax=0)  # isolate solid-preset checks from saved preferences
+        assert g.read(lin('vid_kind'),1)[0] == (3 if args.ega else 0)
+        set_preset(0, 0)  # isolate solid-preset checks from saved preferences
         g.call('fmf_files_open')
         g.call('cpf_cp_open')
         # Inspect the real window table, not theme table values alone.
-        eq = os88sym.equates()
         windows = []
-        base = os88sym.linear('wm_wins')
+        base = lin('wm_wins')
         for slot in range(eq['MAX_WIN']):
             raw = g.read(base+slot*eq['WIN_SIZE'], eq['WIN_SIZE'])
             if int.from_bytes(raw[:2],'little') & 3 == 3:
@@ -267,9 +312,8 @@ def main():
         fm, cp = windows[:2]
         g.write(base+(cp[0]-symbols['wm_wins'])+2, struct.pack('<HH',350,100))
         g.call('wm_raise', bx=fm[0])
-        for pid, desk, title, inactive, selection, iink in PRESETS:
-            g.call(api=0x0475, ax=pid)
-            g.call(api=0x046D, ax=2)
+        for pid, desk, title, inactive, xorm, iink in PRESETS:
+            set_preset(pid)
             g.ui_pass()
             image = g.frame(out/f'preset-{pid}.ppm')
             w,h = image.size
@@ -280,314 +324,241 @@ def main():
             assert matches(image.getpixel((fx+fw-40,fy+2)),title), (pid,'active title')
             assert matches(image.getpixel((450,102)),inactive), (pid,'inactive title')
             assert matches(image.getpixel((w-40,3)),7), (pid,'menu paper')
-            assert matches(image.getpixel((630,240)),15), (pid,'Control Panel paper')
-            # Render the real menu's enabled first cell, then restore it.
-            if pid:
-                for label,value in [('menu_x1',450),('menu_y1',30),
-                        ('menu_x2',620),('menu_y2',48),
-                        ('menu_iptr',symbols['menu_items_logo']),('menu_dseg',0)]:
-                    g.write(os88sym.linear(label),struct.pack('<H',value))
-                g.call('menu_item_xor',ax=0)
-                selected = g.frame(out/f'selection-{pid}.ppm')
-                assert matches(selected.getpixel((615,32)),selection), (pid,'selection paper')
-                pixels = list(selected.crop((458,35,600,43)).get_flattened_data())
-                assert any(matches(p,15) for p in pixels), (pid,'selection ink')
-                g.call('menu_item_unselect',ax=0)
-                restored = g.frame(out/f'restored-{pid}.ppm')
-                assert matches(restored.getpixel((615,32)),7), (pid,'restored menu paper')
-            assert g.read(os88sym.linear('thm_preset'),1)[0] == pid
+            assert g.read(lin('thm_xorm'),1)[0] == xorm, (pid,'live XOR mask')
+            # The real menu's first item, XORed with the mask menu_drop takes,
+            # and XORed again: SPEC.md 76.14.14's bar is its own undo.
+            for label,value in [('menu_x1',450),('menu_y1',30),
+                    ('menu_x2',620),('menu_y2',48),
+                    ('menu_iptr',symbols['menu_items_logo']),('menu_dseg',0)]:
+                g.write(lin(label),struct.pack('<H',value))
+            g.write(lin('menu_xorm'), g.read(lin('thm_xorm'),1))
+            g.call('menu_item_xor',ax=0)
+            selected = g.frame(out/f'selection-{pid}.ppm')
+            for px in range(452, 619, 7):       # the cell: x1+1..x2-1, y1+1..+16
+                for py in range(31, 47, 3):
+                    want = index(image.getpixel((px,py))) ^ xorm
+                    assert matches(selected.getpixel((px,py)),want), (pid,'XOR mask',px,py)
+            g.call('menu_item_xor',ax=0)
+            restored = g.frame(out/f'restored-{pid}.ppm')
+            assert restored.tobytes() == image.tobytes(), (pid,'XOR left a mark')
             image.save(out/f'preset-{pid}.png')
-            print(f'PASS mode {mode:02x}, preset {pid}: desktop, titles, white File Manager/Control Panel, menus/selection',flush=True)
-        # Windows changes title/button drawing, not the selected preset's
-        # semantic color roles. Check the actual title and minimize-button face.
+            print(f'PASS mode {mode:02x}, preset {pid}: desktop, titles, white File Manager, menu XOR bar on and off',flush=True)
+        # Windows wears the selected preset (76.14.13): its title pair and its
+        # buttons take the Color row. Check the bar and the minimize face.
         fx,fy,fw,fh = fm[1:]
         for pid, desk, title, *_ in PRESETS:
-            g.call(api=0x0475,ax=pid)
-            g.call(api=0x046D,ax=3)
-            assert g.read(os88sym.linear('thm_preset'),1) == bytes([pid])
-            assert g.read(os88sym.linear('thm_tbgc'),1) == bytes([title]), ('Windows active title role',pid)
+            set_preset(pid, 4)
+            assert g.read(lin('thm_kind'),1) == b'\3', ('Windows style not live',pid)
+            assert g.read(lin('thm_tbgc'),1) == bytes([title]), ('Windows active title role',pid)
             g.call('wm_paint_all')
             image = g.frame(out/f'windows-preset-{pid}.ppm')
             assert matches(image.getpixel((image.width-10,image.height-45)),desk), ('Windows desktop color',pid)
             assert matches(image.getpixel((fx+100,fy+5)),title), ('Windows title bar color',pid)
             assert matches(image.getpixel((fx+fw-46,fy+4)),title), ('Windows minimize button color',pid)
-        g.call(api=0x046D,ax=2)
+        set_preset(0, 0)
+        assert g.read(lin('thm_kind'),1) == b'\2'
         print('PASS Windows title style: selected preset colors reach active bars and button faces',flush=True)
+
+        # --- THE CHOOSER, through the panel's own Customize button ----------
+        def press_customize():
+            """cpf_cp_onclick then cpf_cp_onup on Customize (control id 8): the
+            path a mouse click takes, so cp_thmv_open in CTRL.DRV is what runs."""
+            g.write(lin('cp_sel'), bytes([eq['CP_ITHM']]))
+            raw = g.read(0x600+cp[0],eq['WIN_SIZE'])
+            wx,wy = struct.unpack_from('<HH',raw,2)
+            bx_ = wx + 1 + eq['CP_RX'] + eq['CPH_CZX'] + 20
+            by_ = wy + eq['TITLE_H'] + eq['CPH_CZY'] + 8
+            g.call('cpf_cp_onclick', near=True, si=cp[0], cx=bx_, dx=by_)
+            g.call('cpf_cp_onup', near=True, si=cp[0], cx=bx_, dx=by_)
+
+        def chooser():
+            ptr,raw,(xx,yy,www,hhh) = top_window()
+            return (ptr, xx, yy,
+                    struct.unpack_from('<H',raw,eq['W_ONCLICK'])[0],
+                    struct.unpack_from('<H',raw,eq['W_ONKEY'])[0])
+
+        row = lin('thmv_row')
+
         # Open the actual APPS folder using its FAT12 directory cluster.
         disk = source.read_bytes()
         root = (struct.unpack_from('<H',disk,14)[0] + disk[16]*struct.unpack_from('<H',disk,22)[0])*512
         entries = [disk[i:i+32] for i in range(root,root+struct.unpack_from('<H',disk,17)[0]*32,32)]
         apps = next(e for e in entries if e[:11] == b'APPS       ')
-        g.write(os88sym.linear('dsk_cwd'),apps[26:28])
+        g.write(lin('dsk_cwd'),apps[26:28])
         g.call('fmf_files_open')
         for pid,*_ in PRESETS:
-            g.call(api=0x0475,ax=pid)
+            set_preset(pid)
             g.call('wm_paint_all')
             raw = g.read(0x600+fm[0],eq['WIN_SIZE'])
             x,y,ww,hh = struct.unpack_from('<HHHH',raw,2)
             frame = g.frame(out/f'folder-{pid}.ppm')
             assert matches(frame.getpixel((x+ww-25,y+hh-45)),15), (pid,'folder paper')
         # Launch existing Paint, then compare every pixel of its content.
-        g.write(os88sym.linear('ld_lname'),b'PAINT.O88\0')
+        g.write(lin('ld_lname'),b'PAINT.O88\0')
         result = g.call('ld_run_name_x',near=True,si=symbols['ld_lname'])
         assert result & 255 == 0, ('Paint launch',result)
-        slot = g.read(os88sym.linear('wm_zord')+g.read(os88sym.linear('wm_zn'),1)[0]-1,1)[0]
-        raw = g.read(base+slot*eq['WIN_SIZE'],eq['WIN_SIZE'])
-        x,y,ww,hh = struct.unpack_from('<HHHH',raw,2)
+        paint_win,raw,(x,y,ww,hh) = top_window()
         # Exclude the WM-owned resize grip at bottom right, which is chrome.
         rect = (x+1,y+19,x+ww-17,y+hh-1)
         g.call('wm_paint_all')
         expected = g.frame(out/'paint-original.ppm').crop(rect).tobytes()
         for pid,*_ in PRESETS:
-            g.call(api=0x0475,ax=pid)
+            set_preset(pid)
             g.call('wm_paint_all')
             frame = g.frame(out/f'paint-{pid}.ppm')
             assert frame.crop(rect).tobytes() == expected, (pid,'Paint content/palette changed')
         print('PASS all presets: APPS folder white; existing Paint content/palette pixel-identical',flush=True)
-        g.call(api=0x0475,ax=2)
-        g.call(api=symbols['cw_thmv_open'])
-        slot = g.read(os88sym.linear('wm_zord')+g.read(os88sym.linear('wm_zn'),1)[0]-1,1)[0]
-        chooser = symbols['wm_wins']+slot*eq['WIN_SIZE']
-        raw = g.read(0x600+chooser,eq['WIN_SIZE'])
-        xx,yy,www,hhh = struct.unpack_from('<HHHH',raw,2)
+
+        def style(n):
+            """Click the Title bar style group's row n: Solid, Stripes, Windows."""
+            g.call('wm_pkgcall',bp=onclick,si=ch,cx=xx+15,dx=yy+19+STYLE_Y+n*STYLE_PITCH+8,
+                   count='thm_set')
+
+        def box95():
+            g.call('wm_pkgcall',bp=onclick,si=ch,cx=xx+1+CLASSIC_X+5,
+                   dx=yy+19+STYLE_Y+2*STYLE_PITCH+8)
+
+        set_preset(2, 0)                       # Color, Light, Solid
+        press_customize()
+        assert struct.unpack('<H',g.read(row+2,2))[0], 'Customize did not load THMPAL.DRV'
+        ch, xx, yy, onclick, onkey = chooser()
         frame = g.frame(out/'customize.ppm')
-        assert matches(frame.getpixel((xx+www-12,yy+25)),15), 'Customize white paper'
         overlay = Path(os88build.at('build/thmpal.bin')).read_bytes()
-        assert b'Light\0' in overlay and b'Classic\0' in overlay and b'95\0' in overlay
-        assert b'Color Theme\0' in overlay and b'Customize Color Theme\0' not in overlay
-        assert b'Amber\0' in overlay and b'Amber Terminal\0' not in overlay
-        assert b'Windows\0' in overlay and b'Ocean\0' not in overlay
-        onclick = struct.unpack_from('<H',raw,eq['W_ONCLICK'])[0]
-        onkey = struct.unpack_from('<H',raw,eq['W_ONKEY'])[0]
-        # Click the reordered visible list; IDs now match the row order.
-        for row,(pid,*_) in enumerate(PRESETS):
-            g.call('wm_pkgcall',bp=onclick,si=chooser,cx=xx+25,dx=yy+19+3+row*11+5,count='font_run_x')
-            assert g.last_count == 0, ('row callback duplicated text drawing',row,g.last_count)
-            assert g.read(os88sym.linear('thm_preset'),1) == bytes([pid]), ('list order',row,pid)
+        assert b'Light\0' in overlay and b'Classic\0' in overlay and b'Color Theme\0' in overlay
+        assert b'95\0' in overlay and b'Ocean\0' not in overlay
+        # Click every visible row: its row lands in the Color row, its id in TP.
+        for r,(pid,*_) in enumerate(PRESETS):
+            g.call('wm_pkgcall',bp=onclick,si=ch,cx=xx+25,dx=yy+19+3+r*11+5,count='font_run_x')
+            assert g.last_count == 0, ('row callback drew text itself',r,g.last_count)
+            assert g.read(cfg,1) == bytes([pid]), ('list order',r,pid)
+            assert list(g.read(crow,10)) == ROWS[pid], ('row not installed',pid)
             g.ui_pass()
             preview = g.frame(out/f'list-preview-{pid}.ppm')
             assert matches(preview.getpixel((preview.width-10,preview.height-45)),PRESETS[pid][1]), ('posted preview',pid)
-        g.call(api=0x0475,ax=2)
-        g.call(api=symbols['cw_thmv_open'])  # reseed the selected row and Cancel state
-        # Actual Stripes radio callback, then Cancel/Escape restores the opening state.
-        g.call('wm_pkgcall',bp=onclick,si=chooser,cx=xx+15,dx=yy+19+STYLE_Y+STYLE_PITCH+8)
-        assert g.read(os88sym.linear('thm_cstrp'),1) == b'\1'
-        assert g.read(os88sym.linear('thm_strp'),1) == b'\1', 'Stripes did not reach live title role'
+        # Escape is Cancel: the row, the id, the style and the kind come back.
+        g.call('wm_pkgcall',bp=onkey,si=ch,ax=27)
+        assert g.read(cfg,1) == b'\2' and list(g.read(crow,10)) == ROWS[2], 'Cancel did not restore the row'
+        assert g.read(lin('thm_kind'),1) == b'\2' and g.read(bits,1) == b'\0'
+        print('PASS chooser: opens through the panel, every row installs, Escape restores',flush=True)
+
+        # The Title bar style group and 95 (76.14.13), ONE resolve per click.
+        press_customize()
+        ch, xx, yy, onclick, onkey = chooser()
+        style(1)                               # Stripes
+        assert g.last_count == 1, ('Stripes resolved more than once',g.last_count)
+        assert g.read(bits,1) == b'\1' and g.read(lin('thm_strp'),1) == b'\1'
         g.call('wm_paint_all')
         preview = g.frame(out/'color-theme-stripes.ppm')
         assert matches(preview.getpixel((xx+35,yy+3)),15), 'Color Theme stripe ink'
-        assert matches(preview.getpixel((xx+35,yy+4)),3), 'Color Theme stripe ground'
-        # All three style choices must drive the live appearance, then return
-        # to the opening state when Cancel is pressed.
-        g.call('wm_pkgcall',bp=onclick,si=chooser,cx=xx+15,dx=yy+19+STYLE_Y+8)
-        assert g.read(os88sym.linear('thm_cstrp'),1) == b'\0', 'Solid did not clear stripes'
-        assert g.read(os88sym.linear('thm_strp'),1) == b'\0', 'Solid did not reach live title role'
-        g.call('wm_pkgcall',bp=onclick,si=chooser,cx=xx+15,dx=yy+19+STYLE_Y+2*STYLE_PITCH+8)
-        assert g.read(os88sym.linear('thm_kind'),1) == b'\3', 'Windows style was not applied'
-        g.call('wm_pkgcall',bp=onclick,si=chooser,cx=xx+15,dx=yy+19+STYLE_Y+8)
-        assert g.read(os88sym.linear('thm_kind'),1) == b'\2', 'Solid did not leave Windows style'
-        assert g.read(os88sym.linear('thm_strp'),1) == b'\0', 'Solid after Windows retained stripes'
-        g.call('wm_pkgcall',bp=onclick,si=chooser,cx=xx+15,dx=yy+19+STYLE_Y+STYLE_PITCH+8)
-        assert g.read(os88sym.linear('thm_cstrp'),1) == b'\1'
-        g.call('wm_pkgcall',bp=onkey,si=chooser,ax=27)
-        assert g.read(os88sym.linear('thm_cstrp'),1) == b'\0'
-        g.call(api=symbols['cw_thmv_open'])
-        slot = g.read(os88sym.linear('wm_zord')+g.read(os88sym.linear('wm_zn'),1)[0]-1,1)[0]
-        chooser = symbols['wm_wins']+slot*eq['WIN_SIZE']
-        raw = g.read(0x600+chooser,eq['WIN_SIZE'])
-        xx,yy,www,hhh = struct.unpack_from('<HHHH',raw,2)
-        onclick = struct.unpack_from('<H',raw,eq['W_ONCLICK'])[0]
-        onkey = struct.unpack_from('<H',raw,eq['W_ONKEY'])[0]
-        g.call('wm_pkgcall',bp=onclick,si=chooser,cx=xx+15,dx=yy+19+STYLE_Y+STYLE_PITCH+8)
-        g.call('wm_pkgcall',bp=onkey,si=chooser,ax=13)  # Apply/Return keeps it
-        assert g.read(os88sym.linear('thm_cstrp'),1) == b'\1'
-        # Reopening must seed the Stripes radio from the saved preference too.
-        g.call(api=symbols['cw_thmv_open'])
-        slot = g.read(os88sym.linear('wm_zord')+g.read(os88sym.linear('wm_zn'),1)[0]-1,1)[0]
-        chooser = symbols['wm_wins']+slot*eq['WIN_SIZE']
-        raw = g.read(0x600+chooser,eq['WIN_SIZE'])
-        xx,yy,www,hhh = struct.unpack_from('<HHHH',raw,2)
-        onclick = struct.unpack_from('<H',raw,eq['W_ONCLICK'])[0]
-        onkey = struct.unpack_from('<H',raw,eq['W_ONKEY'])[0]
-        g.call('wm_pkgcall',bp=onclick,si=chooser,cx=xx+15,dx=yy+19+STYLE_Y+8)
-        assert g.read(os88sym.linear('thm_cstrp'),1) == b'\0', 'Solid did not switch off the seeded Stripes style'
-        g.call('wm_pkgcall',bp=onkey,si=chooser,ax=27)
-        assert g.read(os88sym.linear('thm_cstrp'),1) == b'\1', 'Cancel did not restore stripes'
-        g.call('wm_paint_all')
-        stripes = g.frame(out/'stripes-on.ppm')
-        assert matches(stripes.getpixel((x+40,y+3)),15), 'stripe ink'
-        assert matches(stripes.getpixel((x+40,y+4)),3), 'stripe ground'
-        g.call(api=0x0475,ax=99)  # unknown ID falls back without losing stripes
-        assert g.read(os88sym.linear('thm_preset'),1) == b'\0'
-        assert g.read(os88sym.linear('thm_strp'),1) == b'\1', 'preset lost stripes'
-        g.call(api=0x047D,ax=0)
-        g.call('wm_paint_all')
-        solid = g.frame(out/'stripes-off.ppm')
-        assert matches(solid.getpixel((x+40,y+3)),1), 'solid title'
-        assert matches(solid.getpixel((x+40,y+4)),1), 'solid title'
-        g.call(api=symbols['cw_thmv_reap'])
-        # Windows can use either the new module buttons or the kernel's
-        # original controls. The checkbox is only active on the Windows row;
-        # both layouts keep the selected preset's title colors.
-        g.call(api=0x0475,ax=2)
-        g.call(api=0x046D,ax=2)
-        g.call(api=symbols['cw_thmv_open'])
-        slot = g.read(os88sym.linear('wm_zord')+g.read(os88sym.linear('wm_zn'),1)[0]-1,1)[0]
-        chooser = symbols['wm_wins']+slot*eq['WIN_SIZE']
-        raw = g.read(0x600+chooser,eq['WIN_SIZE'])
-        xx,yy,www,hhh = struct.unpack_from('<HHHH',raw,2)
-        onclick = struct.unpack_from('<H',raw,eq['W_ONCLICK'])[0]
-        onkey = struct.unpack_from('<H',raw,eq['W_ONKEY'])[0]
-        g.call('wm_pkgcall',bp=onclick,si=chooser,cx=xx+15,
-               dx=yy+19+STYLE_Y+2*STYLE_PITCH+8,count='thm_set')  # Windows
-        assert g.last_count == 1, ('Windows selection resolved the theme more than once',g.last_count)
-        assert g.read(os88sym.linear('thm_kind'),1) == b'\3'
+        assert matches(preview.getpixel((xx+35,yy+4)),PRESETS[2][2]), 'Color Theme stripe ground'
+        style(2)                               # Windows
+        assert g.last_count == 1, ('Windows resolved more than once',g.last_count)
+        assert g.read(lin('thm_kind'),1) == b'\3', 'Windows style was not applied'
+        assert g.read(bits,1)[0] & 4
         light_title = PRESETS[2][2]
-        assert g.read(os88sym.linear('thm_tbgc'),1) == bytes([light_title])
-        g.call('wm_pkgcall',bp=onclick,si=chooser,cx=xx+1+CLASSIC_X+5,
-               dx=yy+19+STYLE_Y+2*STYLE_PITCH+8)
-        assert g.read(os88sym.linear('thm_cstrp'),1) == b'\6', '95 buttons bit was not stored with Windows style'
-        assert g.read(os88sym.linear('thm_kind'),1) == b'\3', 'Classic checkbox deselected Windows'
-        assert g.read(os88sym.linear('thm_tbgc'),1) == bytes([light_title]), 'Classic changed the preset title color'
-        button_face = g.read(os88sym.linear('thm_bgc'),1)[0]
+        assert g.read(lin('thm_tbgc'),1) == bytes([light_title])
+        box95()
+        assert g.read(bits,1)[0] & 6 == 6, '95 was not stored with the Windows style'
+        assert g.read(lin('thm_kind'),1) == b'\3', '95 deselected Windows'
+        button_face = g.read(lin('thm_bgc'),1)[0]
         g.call('wm_paint_all')
-        classic = g.frame(out/'windows-classic-buttons.png')
-        assert matches(classic.getpixel((xx+www-65,yy+3)),light_title), 'Classic title bar lost its theme color'
-        assert matches(classic.getpixel((xx+www-46,yy+4)),button_face), 'Classic did not restore main Windows button colors'
-        g.call('wm_pkgcall',bp=onclick,si=chooser,cx=xx+1+CLASSIC_X+5,
-               dx=yy+19+STYLE_Y+2*STYLE_PITCH+8)
-        assert g.read(os88sym.linear('thm_cstrp'),1) == b'\4', '95 checkbox did not turn off'
+        www = struct.unpack_from('<H', g.read(0x600+ch, eq['WIN_SIZE']), 6)[0]
+        classic = g.frame(out/'windows-95-buttons.ppm')
+        assert matches(classic.getpixel((xx+www-65,yy+3)),light_title), '95 lost the preset title colour'
+        assert matches(classic.getpixel((xx+www-46,yy+4)),button_face), '95 did not restore main button colours'
+        box95()
+        assert g.read(bits,1)[0] & 2 == 0, '95 did not turn off'
         g.call('wm_paint_all')
-        modern = g.frame(out/'windows-theme-buttons.png')
-        assert matches(modern.getpixel((xx+www-46,yy+4)),light_title), 'Theme-colored Windows button style did not return'
-        # Choosing another preset while Windows is active must update the
-        # palette without resetting the Windows radio or the 95 button mode.
-        g.call('wm_pkgcall',bp=onclick,si=chooser,cx=xx+1+CLASSIC_X+5,
-               dx=yy+19+STYLE_Y+2*STYLE_PITCH+8)
-        g.call('wm_pkgcall',bp=onclick,si=chooser,cx=xx+15,
-               dx=yy+19+3+3*11+5,count='thm_set')  # Forest
-        assert g.last_count == 1, ('Windows preset selection resolved the theme more than once',g.last_count)
-        assert g.read(os88sym.linear('thm_kind'),1) == b'\3', 'preset selection left Windows mode'
-        assert g.read(os88sym.linear('thm_cstrp'),1) == b'\6', 'preset selection reset the Windows/95 style'
-        forest_title = PRESETS[3][2]
-        assert g.read(os88sym.linear('thm_tbgc'),1) == bytes([forest_title]), 'Windows did not adopt the new preset colors'
-        g.call('wm_paint_all')
-        forest = g.frame(out/'windows-forest-buttons.png')
-        assert matches(forest.getpixel((xx+www-65,yy+3)),forest_title), 'Windows title bar did not follow the selected preset'
-        assert matches(forest.getpixel((xx+www-46,yy+4)),g.read(os88sym.linear('thm_bgc'),1)[0]), 'Windows button palette did not follow the selected preset'
-        g.call('wm_pkgcall',bp=onclick,si=chooser,cx=xx+1+CLASSIC_X+5,
-               dx=yy+19+STYLE_Y+2*STYLE_PITCH+8)
-        assert g.read(os88sym.linear('thm_cstrp'),1) == b'\4'
-        g.call('wm_pkgcall',bp=onkey,si=chooser,ax=27)
-        assert g.read(os88sym.linear('thm_kind'),1) == b'\2', 'Cancel did not restore Color mode'
-        assert g.read(os88sym.linear('thm_cstrp'),1) == b'\0', 'Cancel did not restore style bits'
-        g.call(api=symbols['cw_thmv_reap'])
-        # Apply a different preset with Windows/95 selected, then reopen:
-        # both independent choices must remain live and seed the controls.
-        g.call(api=symbols['cw_thmv_open'])
-        slot = g.read(os88sym.linear('wm_zord')+g.read(os88sym.linear('wm_zn'),1)[0]-1,1)[0]
-        chooser = symbols['wm_wins']+slot*eq['WIN_SIZE']
-        raw = g.read(0x600+chooser,eq['WIN_SIZE'])
-        xx,yy = struct.unpack_from('<HH',raw,2)
-        onclick = struct.unpack_from('<H',raw,eq['W_ONCLICK'])[0]
-        onkey = struct.unpack_from('<H',raw,eq['W_ONKEY'])[0]
-        g.call('wm_pkgcall',bp=onclick,si=chooser,cx=xx+15,
-               dx=yy+19+STYLE_Y+2*STYLE_PITCH+8)
-        g.call('wm_pkgcall',bp=onclick,si=chooser,cx=xx+1+CLASSIC_X+5,
-               dx=yy+19+STYLE_Y+2*STYLE_PITCH+8)
-        g.call('wm_pkgcall',bp=onclick,si=chooser,cx=xx+15,
-               dx=yy+19+3+3*11+5)  # Forest
-        g.call('wm_pkgcall',bp=onkey,si=chooser,ax=13)
-        assert g.read(os88sym.linear('thm_kind'),1) == b'\3'
-        assert g.read(os88sym.linear('thm_preset'),1) == b'\3'
-        assert g.read(os88sym.linear('thm_cstrp'),1) == b'\6'
-        g.call(api=symbols['cw_thmv_open'])
-        assert g.read(os88sym.linear('thm_kind'),1) == b'\3'
-        assert g.read(os88sym.linear('thm_preset'),1) == b'\3'
-        assert g.read(os88sym.linear('thm_cstrp'),1) == b'\6'
-        g.call(api=symbols['cw_thmv_reap'])
-        print('PASS Apply/reopen: selected preset and Windows/95 style remain selected',flush=True)
-        print('PASS Windows 95 option: main button colors and theme-colored buttons toggle; bar color and Cancel persist',flush=True)
-        print('PASS title styles: Solid, Stripes and Windows preview; Cancel, Apply and preset changes',flush=True)
-        print('PASS Customize opens with Windows style available',flush=True)
+        modern = g.frame(out/'windows-preset-buttons.ppm')
+        assert matches(modern.getpixel((xx+www-46,yy+4)),light_title), 'preset-coloured buttons did not return'
+        box95()
+        g.call('wm_pkgcall',bp=onclick,si=ch,cx=xx+25,dx=yy+19+3+3*11+5,count='thm_set')  # Forest
+        assert g.last_count == 1, ('a preset under Windows resolved more than once',g.last_count)
+        assert g.read(lin('thm_kind'),1) == b'\3', 'a preset choice left Windows'
+        assert g.read(bits,1)[0] & 6 == 6, 'a preset choice reset Windows/95'
+        assert g.read(lin('thm_tbgc'),1) == bytes([PRESETS[3][2]]), 'Windows did not take the new preset'
+        style(0)                               # Solid
+        assert g.read(lin('thm_kind'),1) == b'\2', 'Solid did not leave Windows'
+        assert g.read(lin('thm_strp'),1) == b'\0' and g.read(bits,1)[0] & 5 == 0
+        g.call('wm_pkgcall',bp=onkey,si=ch,ax=27)
+        assert g.read(lin('thm_kind'),1) == b'\2' and g.read(bits,1) == b'\0' and g.read(cfg,1) == b'\2', \
+            'Cancel did not restore Light, Solid'
+        print('PASS title styles: Solid, Stripes, Windows and 95 preview once each; Cancel restores',flush=True)
+
+        # Apply under Windows/95, reopen: the state stands and a no-op Cancel
+        # sets nothing; a second Customize press does not re-bank a preview.
+        press_customize()
+        ch, xx, yy, onclick, onkey = chooser()
+        style(2); box95()
+        g.call('wm_pkgcall',bp=onclick,si=ch,cx=xx+25,dx=yy+19+3+3*11+5)  # Forest
+        g.call('wm_pkgcall',bp=onkey,si=ch,ax=13)  # Return is Apply
+        assert g.read(lin('thm_kind'),1) == b'\3' and g.read(cfg,1) == b'\3' and g.read(bits,1)[0] & 6 == 6
+        press_customize()
+        ch, xx, yy, onclick, onkey = chooser()
+        g.call('wm_pkgcall',bp=onkey,si=ch,ax=27,count='thm_set')
+        assert g.last_count == 0, ('a no-op Cancel re-set the theme',g.last_count)
+        assert g.read(lin('thm_kind'),1) == b'\3' and g.read(cfg,1) == b'\3'
+        press_customize()
+        ch, xx, yy, onclick, onkey = chooser()
+        g.call('wm_pkgcall',bp=onclick,si=ch,cx=xx+25,dx=yy+19+3+6*11+5)  # Midnight
+        press_customize()
+        g.call('wm_pkgcall',bp=onkey,si=ch,ax=27)
+        assert g.read(cfg,1) == b'\3', 'a second Customize press re-banked the preview'
+        set_preset(4, 0)
+        print('PASS Apply/reopen keeps Windows/95 and the preset; no-op Cancel; no re-bank',flush=True)
         for kind,paper in [(0,15),(1,0)]:
-            g.write(os88sym.linear('cp_dirty'),b'\0\0')
-            g.call(api=0x046D,ax=kind)
-            assert g.read(os88sym.linear('cp_dirty'),2) == b'\1\1', 'mode API did not post repaint/save'
-            assert g.read(os88sym.linear('thm_strp'),1) == b'\1', 'Bright/Dark stripe regression'
+            g.write(lin('cp_dirty'),b'\0\0')
+            g.call(api=THM_SET,ax=kind)
+            assert g.read(lin('cp_dirty'),2) == b'\1\1', 'mode API did not post repaint/save'
+            assert g.read(lin('thm_strp'),1) == b'\1', 'Bright/Dark stripe regression'
             g.ui_pass()
             frame = g.frame(out/f'mode-{kind}.ppm')
             assert matches(frame.getpixel((frame.width-40,3)),paper), ('Bright/Dark menu',kind)
             assert frame.crop(rect).tobytes() == expected, ('Bright/Dark Paint content',kind)
         print('PASS Bright/Dark: existing menu behavior and unchanged Paint content',flush=True)
-        for kind in (0,1):
-            g.call(api=0x046D,ax=kind)
-            g.call(api=symbols['cw_thmv_open'])
-            assert g.read(os88sym.linear('thm_kind'),1) == bytes([kind]), ('opening Customize changed the active theme',kind)
-            slot = g.read(os88sym.linear('wm_zord')+g.read(os88sym.linear('wm_zn'),1)[0]-1,1)[0]
-            chooser = symbols['wm_wins']+slot*eq['WIN_SIZE']
-            raw = g.read(0x600+chooser,eq['WIN_SIZE'])
-            onkey = struct.unpack_from('<H',raw,eq['W_ONKEY'])[0]
-            g.call('wm_pkgcall',bp=onkey,si=chooser,ax=27,count='thm_set')
-            assert g.last_count == 1, ('Cancel resolved hidden Color rows',kind,g.last_count)
-            assert g.read(os88sym.linear('thm_kind'),1) == bytes([kind])
-        print('PASS work counts: row callbacks draw no duplicate text; Bright/Dark Cancel resolves once',flush=True)
-        g.call(api=0x046D,ax=2)
-        g.write(os88sym.linear('ld_lname'),b'NOTEPAD.O88\0')
+        # An untouched Customize on Color repaints and owes nothing (76.14.14).
+        g.call(api=THM_SET,ax=THM_COLOR)
+        g.write(lin('cp_dirty'),b'\0\0')
+        press_customize()
+        ch, xx, yy, onclick, onkey = chooser()
+        g.call('wm_pkgcall',bp=onkey,si=ch,ax=27,count='thm_set')
+        assert g.last_count == 0, ('a no-op Cancel re-set the theme',g.last_count)
+        assert g.read(lin('cp_dirty'),2) == b'\0\0', 'a no-op Customize owed a repaint'
+        print('PASS work counts: row callbacks draw no text; a no-op Customize sets nothing',flush=True)
+        g.write(lin('ld_lname'),b'NOTEPAD.O88\0')
         assert g.call('ld_run_name_x',near=True,si=symbols['ld_lname']) & 255 == 0
-        slot = g.read(os88sym.linear('wm_zord')+g.read(os88sym.linear('wm_zn'),1)[0]-1,1)[0]
-        raw = g.read(base+slot*eq['WIN_SIZE'],eq['WIN_SIZE'])
-        x,y,ww,hh = struct.unpack_from('<HHHH',raw,2)
+        _,raw,(x,y,ww,hh) = top_window()
         rect = (x+1,y+19,x+ww-17,y+hh-1)
         g.call('wm_paint_all')
         expected = g.frame(out/'document-original.ppm').crop(rect).tobytes()
         for pid,*_ in PRESETS:
-            g.call(api=0x0475,ax=pid)
+            set_preset(pid)
             g.call('wm_paint_all')
             frame = g.frame(out/f'document-{pid}.ppm')
             assert matches(frame.getpixel((x+ww-25,y+40)),15), (pid,'document paper')
             assert frame.crop(rect).tobytes() == expected, (pid,'document content changed')
         print('PASS all presets: existing Notepad document white and pixel-identical',flush=True)
+        # Closing the panel reaps the chooser - with nothing owed to SYSTEM.CFG.
+        press_customize()
+        assert struct.unpack('<H',g.read(row+2,2))[0]
+        count = g.read(lin('wm_zn'),1)[0]
+        g.write(lin('cp_wdirty'),b'\0')
+        g.call('app_close_win', bx=cp[0])
+        assert g.read(row+2,2) == b'\0\0', 'panel close retained THMPAL.DRV'
+        assert g.read(lin('wm_zn'),1)[0] < count - 1, 'panel close retained the chooser'
+        # A loaded image with a mismatched private ABI is refused and freed.
         g.call('cpf_cp_open')
-        g.call(api=symbols['cw_thmv_open'])
-        row = os88sym.linear('thmv_row')
-        segment = struct.unpack('<H',g.read(row+2,2))[0]
-        assert segment
-        count = g.read(os88sym.linear('wm_zn'),1)[0]
-        g.call('cpf_cp_flush_close')
-        assert g.read(row+2,2) == b'\0\0', 'parent close retained overlay'
-        assert g.read(os88sym.linear('wm_zn'),1)[0] < count, 'parent close retained child'
-        # A resident, valid module with a mismatched private ABI must be
-        # refused and freed before its callback is executed.
-        g.call('cpf_cp_open')
-        g.call(api=symbols['cw_thmv_open'])
+        _,raw,_ = top_window()
+        cp = (top_window()[0],) + struct.unpack_from('<HHHH',raw,2)
+        press_customize()
         segment = struct.unpack('<H',g.read(row+2,2))[0]
         g.write(segment*16+10,b'\xff\xff')
-        # Destroy the child first, avoiding stale callbacks in this deliberate
-        # test corruption; the next open exercises the compatibility gate.
-        slot = g.read(os88sym.linear('wm_zord')+g.read(os88sym.linear('wm_zn'),1)[0]-1,1)[0]
-        chooser = symbols['wm_wins']+slot*eq['WIN_SIZE']
-        raw = g.read(0x600+chooser,eq['WIN_SIZE'])
-        onkey = struct.unpack_from('<H',raw,eq['W_ONKEY'])[0]
-        g.call('wm_pkgcall',bp=onkey,si=chooser,ax=13)
-        g.call(api=symbols['cw_thmv_open'])
+        ch, xx, yy, onclick, onkey = chooser()
+        g.call('wm_pkgcall',bp=onkey,si=ch,ax=13)
+        press_customize()
         assert g.read(row+2,2) == b'\0\0', 'incompatible overlay retained'
         assert g.read(row+14,1) == b'\3', 'incompatible overlay error missing'
-        g.call(api=0x046D,ax=0)
-        flags = [(base+slot*eq['WIN_SIZE'],g.read(base+slot*eq['WIN_SIZE'],2))
-                 for slot in range(eq['MAX_WIN'])]
-        # Fault injection: temporarily exhaust the fixed window table.
-        # No normal UI pass runs while these synthetic used bits are set.
-        try:
-            for address,old in flags:
-                g.write(address,struct.pack('<H',int.from_bytes(old,'little') | 1))
-            g.call(api=symbols['cw_thmv_open'])
-            assert g.read(row+2,2) == b'\0\0', 'failed creation retained overlay'
-            assert g.read(os88sym.linear('thm_kind'),1) == b'\0', 'failed creation changed appearance'
-        finally:
-            for address,old in flags:
-                g.write(address,old)
-        print('PASS overlay: parent teardown, private ABI rejection and failed-create rollback',flush=True)
+        print('PASS overlay: reaped on panel close, private ABI rejected and freed',flush=True)
     finally:
         g.close()
     if args.visual_only:
@@ -597,62 +568,37 @@ def main():
         shutil.copyfile(source,args.image)
         g = Guest(args)
         try:
+            eq = os88sym.equates()
+            crow = lin('thm_tab') + THM_COLOR*10
+            cfg = lin('drv_cfg') + eq['CFG_THMP']
             g.call('cpf_cp_open')
-            g.call(api=0x0475,ax=pid)
-            g.call(api=0x046D,ax=2)
-            g.call(api=0x047D,ax=pid & 1)
+            # Coexist with upstream's independent version-1 port-pin keys.
+            g.write(lin('drv_cfg')+eq['CFG_SPIN'],b'\x98')
+            g.write(lin('drv_cfg')+eq['CFG_EPIN'],b'\x50')
+            style_bits = [0, 1, 4, 6, 1, 5, 0, 7][pid]   # Solid/Stripes/Windows/95
+            g.write(crow, bytes(ROWS[pid]))
+            g.write(cfg, bytes([pid]))
+            g.write(bits, bytes([style_bits]))
+            g.call(api=THM_SET, ax=THM_COLOR)
             g.call('cpf_cp_flush_close')
-            assert g.read(os88sym.linear('cp_wdirty'),1) == b'\0'
+            assert g.read(lin('cp_wdirty'),1) == b'\0'
+            assert g.read(lin('drv_cfg')+eq['CFG_THM'],1) == b'\2', 'Windows style overwrote the saved Color'
         finally:
             g.close()
         g = Guest(args)
         try:
-            assert g.read(os88sym.linear('thm_kind'),1) == b'\2'
-            assert g.read(os88sym.linear('thm_preset'),1) == bytes([pid])
-            assert g.read(os88sym.linear('thm_cstrp'),1) == bytes([pid & 1])
-            assert g.read(os88sym.linear('thm_strp'),1) == bytes([pid & 1])
-            print(f'PASS preset {pid}: SYSTEM.CFG mode/preset/stripes save and reboot',flush=True)
+            assert g.read(lin('thm_kind'),1) == (b'\3' if style_bits & 4 else b'\2')
+            assert g.read(cfg,1) == bytes([pid])
+            assert g.read(bits,1) == bytes([style_bits]), (pid,'style bits')
+            assert g.read(crow,10) == bytes(ROWS[pid]), (pid,'boot did not restore the row')
+            if not style_bits & 4:
+                assert g.read(lin('thm_strp'),1) == bytes([style_bits & 1])
+            assert g.read(lin('thm_xorm'),1) == bytes([ROWS[pid][9]])
+            assert g.read(lin('drv_cfg')+eq['CFG_SPIN'],1) == b'\x98'
+            assert g.read(lin('drv_cfg')+eq['CFG_EPIN'],1) == b'\x50'
+            print(f'PASS preset {pid}: SYSTEM.CFG row, style {style_bits} and SP/EP save/reboot',flush=True)
         finally:
             g.close()
-    # Windows is a title style of the selected Color preset. Persist the theme
-    # kind as Color and the Windows style in the independent style byte.
-    shutil.copyfile(source,args.image)
-    g = Guest(args)
-    try:
-        g.call('cpf_cp_open')
-        g.call(api=0x046D,ax=2)
-        g.call(api=0x047D,ax=4)
-        assert g.read(os88sym.linear('thm_kind'),1) == b'\3'
-        g.call('cpf_cp_flush_close')
-        assert g.read(os88sym.linear('drv_cfg')+9,1) == b'\2', 'Windows style overwrote the selected Color theme'
-    finally:
-        g.close()
-    g = Guest(args)
-    try:
-        assert g.read(os88sym.linear('thm_kind'),1) == b'\3', 'Windows title style was not restored'
-        assert g.read(os88sym.linear('thm_cstrp'),1) == b'\4', 'Windows title style preference was not saved'
-        print('PASS Windows style: Color theme ID and independent style save and reboot',flush=True)
-    finally:
-        g.close()
-    # The Windows and 95 bits share the pre-existing style byte and survive the same
-    # configuration path without a new record or allocation.
-    shutil.copyfile(source,args.image)
-    g = Guest(args)
-    try:
-        g.call('cpf_cp_open')
-        g.call(api=0x046D,ax=2)
-        g.call(api=0x047D,ax=6)
-        g.call('cpf_cp_flush_close')
-        assert g.read(os88sym.linear('drv_cfg')+9,1) == b'\2', '95 style overwrote the selected Color theme'
-    finally:
-        g.close()
-    g = Guest(args)
-    try:
-        assert g.read(os88sym.linear('thm_kind'),1) == b'\3'
-        assert g.read(os88sym.linear('thm_cstrp'),1) == b'\6', 'Windows/95 style preferences were not saved'
-        print('PASS Windows 95 option: existing SYSTEM.CFG style byte save and reboot',flush=True)
-    finally:
-        g.close()
 
 if __name__ == '__main__':
     main()

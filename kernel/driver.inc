@@ -737,15 +737,28 @@ CFG_EPIN    equ CFG_SPIN + DRV_PBLOB_SZ     ; ...and the Ethernet row's -
                                 ; where its card is. Both edited by the
                                 ; Drivers page's Ports view, read by the
                                 ; drivers AT ATTACH, before they probe
-CFG_THMP    equ CFG_EPIN + DRV_PBLOB_SZ ; appended Color preset (76.14)
-CFG_THMS    equ CFG_THMP + 1    ; appended Color title stripes
-CFG_NB      equ CFG_THMS + 1    ; ...the struct's size
+CFG_THMP    equ CFG_EPIN + DRV_PBLOB_SZ     ; db: Color's preset, 0..7 (SPEC.md
+                                ; 76.14.14). CFG_FDD's shape - not a plain store
+                                ; and not in _map: NO KERNEL BYTE HOLDS IT.
+                                ; The boot reader installs its row into the
+                                ; Color row once and THMPAL.DRV edits it here
+CFG_THMS    equ CFG_THMP + 1    ; db: Color's title style, [thm_cstrp] - in
+                                ; _map (76.14.13)
+CFG_THMC    equ CFG_THMS + 1    ; 5 bytes: the Color row's colours a preset
+                                ; varies - active title, desktop, inactive
+                                ; pair, menu XOR mask (SPEC.md 76.14.14). In
+                                ; _map byte by byte ONTO THE ROW, so the boot
+                                ; restores a preset with the loop that restores
+                                ; everything else and no table of presets
+CFG_NB      equ CFG_THMC + 5    ; ...the struct's size
 %else
-CFG_THMP    equ CFG_DBLOB + DRV_BLOB_SZ     ; db: [thm_preset] - same field,
-                                ; same reason, appended last on this struct
-                                ; too (SPEC.md 76.14)
+CFG_THMP    equ CFG_DBLOB + DRV_BLOB_SZ     ; db: Color's preset - same field,
+                                ; appended last on this struct too, and only
+                                ; CARRIED here: kern_small has no Color
+                                ; (SPEC.md 76.13, 76.14.14)
 CFG_THMS    equ CFG_THMP + 1    ; Color title stripes, appended without moving TP
-CFG_NB      equ CFG_THMS + 1    ; no RAM disk here, so no second
+CFG_THMC    equ CFG_THMS + 1    ; ...and its five colours, carried the same way
+CFG_NB      equ CFG_THMC + 5    ; no RAM disk here, so no second
 %endif                          ; blob and 24 fewer bytes of settings struct
                                 ; carried on the machine that has least of it
                                 ; (SPEC.md 62.9.15)
@@ -765,6 +778,56 @@ CFG_NB      equ CFG_THMS + 1    ; no RAM disk here, so no second
 ; collide, read `cs:` in both, and edited ONCE here - which is the property
 ; the paragraph above claims for it and the one thing a hand-copied second
 ; table would destroy.
+%macro CFG_MAP 1
+; The plain scalar settings, as (struct offset, kernel byte) pairs: one loop
+; packs and another unpacks, so a new setting is three bytes of table rather than
+; two more hand-written copies that can drift apart. The scheduler and the
+; adapter is NOT here - it is not a plain store (SPEC.md 8.2/39.11.3).
+;
+; The ADDRESSES are the kernel's and stay the kernel's: both images run with
+; DS = KERNEL_SEG (SPEC.md 2.5/2.8), so `mov di, [cs:si+1]` then `mov [di], al`
+; is the same pair of stores it always was. Only the TABLE moved.
+%1 %+ _map:
+    db CFG_RT
+    dw snd_route
+    db CFG_H12
+    dw clk_h12
+    db CFG_SEC
+    dw clk_secs
+    db CFG_THM
+    dw thm_kind
+    db CFG_ANIM
+    dw wm_animon
+    db CFG_SSM
+    dw ss_modes
+    db CFG_SSS
+    dw ss_secs
+    db CFG_SSN
+    dw ss_mins
+%ifdef KERN_BIG
+    db CFG_THMS                 ; Color's title style - stripes, 95, Windows
+    dw thm_cstrp                ; (76.14.13) - and then its PRESET, byte by
+    db CFG_THMC                 ; byte onto the Color row: the five colours
+    dw THM_CROW + 3             ; that differ between presets. The pack loop
+    db CFG_THMC + 1             ; reads them back, so THMPAL.DRV writes the
+    dw THM_CROW + 5             ; ROW and the file follows; the preset's
+    db CFG_THMC + 2             ; NUMBER ('TP' byte 0) is not mapped - no
+    dw THM_CROW + 7             ; kernel byte holds it (76.14.14)
+    db CFG_THMC + 3
+    dw THM_CROW + 8
+    db CFG_THMC + 4
+    dw THM_CROW + 9
+%endif
+%ifdef DOCK_OPT
+    db CFG_DOCK
+    dw dock_cfg
+DRV_CFG_MAPN equ 15
+%else
+DRV_CFG_MAPN equ 8
+%endif
+
+%endmacro
+
 %macro CFG_DATA 1
 %1 %+ _keys:
     dw 'DW'                     ; Driver Wanted, the row bitmap
@@ -829,23 +892,21 @@ CFG_NB      equ CFG_THMS + 1    ; no RAM disk here, so no second
     db 1, DRV_PBLOB_SZ, CFG_SPIN    ; pins (51.9.2), a key each because a blob
     dw 'EP'                     ; belongs to a ROW (51.9.1)
     db 1, DRV_PBLOB_SZ, CFG_EPIN
-    dw 'TP'                     ; Theme Preset - which of Color's eight
-    db 1, 1, CFG_THMP           ; (SPEC.md 76.14). Its OWN key rather than a
-                                ; sixth byte on 'TH': growing THAT record
+    dw 'TP'                     ; Theme Preset - which of Color's eight, its
+    db 1, 7, CFG_THMP           ; stripes and the five colours it puts in the
+                                ; Color row (SPEC.md 76.14.14): ONE record, so
+                                ; the three cost one header. Its OWN key rather
+                                ; than bytes on 'TH': growing THAT record
                                 ; bumps its version and resets the theme and
                                 ; the screen saver's three settings once, for
                                 ; a feature that touches neither (76.11's own
                                 ; 'DK' precedent, word for word)
-    dw 'TS'                     ; Theme Stripes: separate version-1 byte
-    db 1, 1, CFG_THMS
-CFG_NKEY    equ 17              ; ...and 'DK' (DOCK_OPT is kern_big's)
+CFG_NKEY    equ 16              ; ...and 'DK' (DOCK_OPT is kern_big's)
 %else
     dw 'TP'                     ; same key, same reason, on kern_small too -
-    db 1, 1, CFG_THMP           ; [thm_preset] round-trips there even though
-                                ; this kernel never reads it (SPEC.md 76.14)
-    dw 'TS'                     ; round-trips through kern_small too
-    db 1, 1, CFG_THMS
-CFG_NKEY    equ 10               ; no 'RD' key: kern_small has no RAM disk, and
+    db 1, 7, CFG_THMP           ; the preset round-trips there even though
+                                ; this kernel never reads it (SPEC.md 76.14.14)
+CFG_NKEY    equ 9               ; no 'RD' key: kern_small has no RAM disk, and
 %endif                          ; an unknown key is DROPPED rather than carried
                                 ; (SPEC.md 51.5 rule 1), which is the honest
                                 ; answer for a build with nothing to give it to
@@ -860,45 +921,6 @@ CFG_KESZ    equ 5               ; bytes per table entry
 ; expression anyone can evaluate is just .bss nothing can use - which, with
 ; KERN_CODE_MAX as tight as it now is, is memory somebody else needs.
 CFG_FBUF    equ CFG_REC0 + CFG_NKEY * CFR_HDR + CFG_NB + 2
-
-; The three plain bytes, as (struct offset, kernel byte) pairs: one loop packs
-; and another unpacks, so a new setting is three bytes of table rather than
-; two more hand-written copies that can drift apart. The scheduler and the
-; adapter is NOT here - it is not a plain store (SPEC.md 8.2/39.11.3).
-;
-; The ADDRESSES are the kernel's and stay the kernel's: both images run with
-; DS = KERNEL_SEG (SPEC.md 2.5/2.8), so `mov di, [cs:si+1]` then `mov [di], al`
-; is the same pair of stores it always was. Only the TABLE moved.
-%1 %+ _map:
-    db CFG_RT
-    dw snd_route
-    db CFG_H12
-    dw clk_h12
-    db CFG_SEC
-    dw clk_secs
-    db CFG_THM
-    dw thm_kind
-    db CFG_ANIM
-    dw wm_animon
-    db CFG_SSM
-    dw ss_modes
-    db CFG_SSS
-    dw ss_secs
-    db CFG_SSN
-    dw ss_mins
-    db CFG_THMP                 ; SPEC.md 76.14: a plain store like CFG_THM
-    dw thm_preset                ; beside it - thm_set's own re-resolve (the
-                                 ; cw_thm_set call below this loop) picks it
-                                 ; up because this loop runs first
-    db CFG_THMS
-    dw thm_cstrp
-%ifdef DOCK_OPT
-    db CFG_DOCK
-    dw dock_cfg
-DRV_CFG_MAPN equ 11
-%else
-DRV_CFG_MAPN equ 10
-%endif
 
 ; --- whose blob is whose (SPEC.md 51.9.1) ------------------------------------
 ; row index, size, offset into the struct. The ROW and not the class, for the
@@ -945,18 +967,7 @@ DRV_CFG_MAPN equ 10
                                 ; the long kind for exactly as long as the
                                 ; absolute mouse's row was kern_big's
 %1 %+ _sig:  db 'O88CFG', 0, 0  ; 8 bytes, byte for byte the file's head
-%ifnidn %1, cpc                 ; (CTRL.DRV's copy is its module BSS: below,
-                                ; at CFG_DATA cpc's expansion)
-%1 %+ _buf:  times CFG_FBUF db 0   ; ...AND THE FILE ITSELF (SPEC.md 51.5.3).
-                                ; It was 120 bytes of .bss doing nothing
-                                ; between a boot and a Control Panel click,
-                                ; and it is the half of a setting's cost that
-                                ; grows fastest: CFG_FBUF is derived, so every
-                                ; new key takes CFR_HDR + its payload. In the
-                                ; image it is `times` and not `resb` because
-                                ; an overlay is FILE bytes - there is no .bss
-                                ; in it. The module has one now (above)
-%endif
+
 %endmacro
 
 ; =============================================================================
@@ -1292,6 +1303,26 @@ usbm_row:                       ; ...a label for tests/usbmouse.py, which finds
                                 ; ports, and 260h is the CH375's on a Book8088
     db DRVE_OK
     db 0
+%if $ - drv_tab != DRV_MAX * DRVR_SIZE
+  %error "driver: thmv_row must follow drv_tab's last row (drv_call's bound)"
+%endif
+; ...and ONE ROW PAST THE TABLE, not in it: THMPAL.DRV's (SPEC.md 76.14.14), the
+; Customize window. DRV_MAX does not count it, so nothing that walks the rows
+; meets it - no Drivers tick, no publication slot, no SYSTEM.CFG bit. It sits
+; HERE so drv_call's one range test reaches it (DRV_CALLMAX below): xm_row and
+; ss_row each cost a compare in .cold, and .cold has no byte to give
+thmv_row:
+    dw PKG_DISP, 0               ; DRVR_DISP, DRVR_SEG
+    dw thmv_fname, thmv_fname    ; DRVR_FILE, DRVR_TITLE - kernel/vga12.inc's
+    dw 0, 0                      ; DRVR_KB, DRVR_ENT
+    db DRVC_OVL                  ; DRVR_CLASS - not a class the kernel loads,
+                                  ; so this can never take a publication slot
+    db 0                         ; DRVR_WANT - no settings bit can reach it
+    db DRVE_OK                   ; DRVR_ERR
+    db 0                         ; DRVR_PAD: a whole row, for the bound
+DRV_CALLMAX equ DRV_MAX + 1      ; rows drv_call accepts on kern_big
+%else
+DRV_CALLMAX equ DRV_MAX
 %endif
 
 
@@ -1884,7 +1915,7 @@ drv_call_ent:                   ; ...and the same thing for a caller that has
 drv_call:
     cmp bx, drv_tab             ; ...AND BX MUST BE A ROW AT ALL. This one is
     jb .stray                   ; checked FIRST and on BX itself, because it is
-    cmp bx, drv_tab + DRV_MAX * DRVR_SIZE   ; the only test here that does not
+    cmp bx, drv_tab + DRV_CALLMAX * DRVR_SIZE   ; the only test here that does not
     jb .row                     ; go through DS - and DS is exactly what cannot
                                 ; be trusted when this fires. Measured in the
                                 ; field chase: drv_call entered with BX = 0x157D
@@ -1903,9 +1934,10 @@ drv_call:
     je .row                     ; LEGITIMATE ROWS** (SPEC.md 41.12.5). xm_row
     cmp bx, ss_row              ; ...and ss_row is the SECOND (SPEC.md 79.2),
     je .row                     ; which is why this is a list and not a pair of
-    cmp bx, thmv_row            ; ...and thmv_row is the THIRD (SPEC.md 76.14)
-    je .row                     ; - the Customize window's, same species
 %endif                          ; compares somebody has to remember to widen.
+                                ; (THMPAL.DRV's thmv_row, the third, sits one
+                                ; row past drv_tab instead, inside the range
+                                ; test above - SPEC.md 76.14.14)
                                 ; xm_row is a DRVR_-shaped record with no drv_tab
                                 ; entry by design - no Drivers tick, no
                                 ; publication slot, drv_load_at's whole reason
@@ -3862,12 +3894,15 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     mov al, [vid_dlay]
     mov [drv_cfg+CFG_VDL], al
 %ifdef OS88_THEME
+%ifidn %1, cpc                  ; the WRITER's alone: the boot's pack only seeds
+                                ; the struct before the file is read
     cmp byte [thm_kind], THM_WIN ; persist the selected Color preset as the
     jne %%theme_kind_saved      ; theme; Windows is a title-bar style only
     test byte [thm_cstrp], 4    ; old settings remain compatible until edited
     jz %%theme_kind_saved
     mov byte [drv_cfg+CFG_THM], THM_COLOR
 %%theme_kind_saved:
+%endif
 %endif
 %endif
     pop di
@@ -4418,7 +4453,9 @@ DRVP_OPL    equ 0x388           ; the OPL2's address/status port; +1 is data
 ; drv_cfg_load needs. 431 bytes of code and 202 of tables and buffer that no
 ; longer sit in the kernel's own segment, and thirteen of the fourteen bytes a
 ; new setting used to cost.
+CFG_MAP    ovc
 CFG_DATA   ovc
+ovc_buf: times CFG_FBUF db 0    ; boot-only scratch; not retained at desktop
 CFG_SHARED ovc
 CFG_BOOT   ovc
 
@@ -5205,6 +5242,7 @@ section .modc                   ; CTRL.DRV's image (SPEC.md 2.8)
 ; the whole of 51.5.3 makes: two copies in two files, both emitted from the one
 ; macro above, against one copy in a segment every machine pays for.
 CFG_DATA   cpc
+CFG_MAP    cpc
 CFG_SHARED cpc
 CFG_SAVE   cpc
 %ifdef KERN_BIG
