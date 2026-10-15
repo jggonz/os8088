@@ -1647,8 +1647,10 @@ far-called through a table of entry pointers, and freed when the feature is
 finished. Both builds carry `CTRL.DRV`, the Control Panel (§31),
 `FORMAT.DRV`, the floppy formatter (§18.96), and `DISKOPS.DRV`, the disk cloner
 (§18.99). `kern_big` also carries `HIBER.DRV` (§87), the optional
-`DOCK.DRV`, advanced Dock behavior (§30.5), and `EXTD.DRV`, the extended
-desktop's placement policy (§39.19.6); `kern_small` instead carries
+`DOCK.DRV`, advanced Dock behavior (§30.5), `EXTD.DRV`, the extended
+desktop's placement policy (§39.19.6), `WIN95.DRV`, the Windows theme's
+chrome (§76.14), and `DESK.DRV`, the desk layer's verbs, hover edge, show
+and key arms (§11.103.10); `kern_small` instead carries
 `FILECP.DRV` and `FDLG.DRV` (§22.3, §38.0), bodies `kern_big` keeps resident.
 **On the disk every one is a `'CZ'` container** (§20.13.5): `os88mod.py`
 checks each image the way `mod_check` will and then wraps it, `mod_need`
@@ -1743,9 +1745,10 @@ in the tree.
   bytes) allocated and never armed on each kernel, made an eighth entry a hard
   NASM error in whichever module grew, and could not be per-build because the
   host tool scraped it with a regex. Removing it was −36 bytes on `kern_big`
-  and −38 on `kern_small`. `MOD_MAX` is 6 on `kern_big` and 5 on
-  `kern_small`. BIG has `MOD_HIBER` 3, `MOD_DOCK` 4 and `MOD_EXT` 5; SMALL has
-  `MOD_FCP` 3 and `MOD_FDLG` 4.
+  and −38 on `kern_small`. `MOD_MAX` is 9 on `kern_big` (eight images and
+  `MOD_SETS`, §2.8.7) and 5 on `kern_small`. BIG has `MOD_HIBER` 3,
+  `MOD_DOCK` 4, `MOD_EXT` 5, `MOD_WIN` 6, `MOD_DESK` 7 (`DKD_NENT` 4,
+  §11.103.10) and `MOD_SETS` 8; SMALL has `MOD_FCP` 3 and `MOD_FDLG` 4.
 - **`mod_fpr` indexes by `MOD_TAB_OFF` and not `mod_tab`, and that is an
   ASSEMBLER constraint rather than a taste.** An expression like
   `mod_fpt - mod_tab/2` is label arithmetic nasm 3 refuses outright
@@ -3474,6 +3477,7 @@ VIEW_KB       equ 3          ; each window's cache, claimed when it opens
 | `kernel/dockmod.inc` | optional DOCK.DRV: placement, auto-hide, advanced painting and input (§30.5–30.6) |
 | `kernel/extmod.inc` | EXTD.DRV, `kern_big` only: the extended desktop's placement policy — bringing display 1 up, landing and the straddle fit, which display a window is on, the fsx bracket's collapse, and the second display's arms that run on a user's action (its ground, the zoom and fullscreen boxes, a drag's floor, fsx caps) — prefix `ext_`/`exk_`; the resident half is `exf_sync` in **`.cold`** and the `EXTCALL` sites (§39.19.6) |
 | `kernel/winmod.inc` | WIN95.DRV, `kern_big` only: the Windows theme's chrome — the title bar with its three buttons on the right, which button a point is on, a held button's rect, the size grip and the pull-down that stays open on a click — prefix `wn_`/`wnx_`/`wnk_`; the resident half is `thv`, its five `jmp far` doors and `thf_apply` in **`.cold`** (§76.14) |
+| `kernel/deskmod.inc` | DESK.DRV, `kern_big` only: the desk layer's code that runs only where a widget exists — `OSAPI_WM_DESK`'s MAKE, DRAG and RELEASE, the hover edge's body, a desk window's show and the widget's key arm — prefix `dkd_`; the resident half is `osapi_wm_desk_x`'s QUERY thunk in **`.cold`** (which loads it) and the slot calls in `cur_shape_pass`, `wm_show_b` and `fdlg_top_x` (§11.103.10) |
 | `kernel/ctrl.inc`   | Control Panel window: two-pane item list + settings pages (§31), prefix `cp_`. **`.cold`** (§2.6) |
 | `kernel/snd.inc`    | sound core (§34): driver table + router, tone tier, speaker driver (tone + PWM clips), `snd_tick`, the five API slot targets, `snd_release_inst`/`snd_unhook` — prefix `snd_`, lands Phases 1–2 |
 | `kernel/fsx.inc`    | fullscreen exclusive (§53): the bracket, the scheduler freeze arming, foreign mode set + info block, and the frame clock/present — prefix `fsx_` |
@@ -20357,7 +20361,9 @@ one: "do I own the bar").
 
 #### 11.103.3 A desk window is SHOWN by the damage pass, and why not by the cull
 
-`wm_show_b` takes a desk arm before `wm_top` and the precover: the visible bit
+`wm_show_b` takes a desk arm before `wm_top` and the precover - since
+§11.103.10 a five-byte door, `call far [DKDFP+8]` / `ret`, into `DESK.DRV`'s
+`dkd_show`: the visible bit
 goes on, `wm_win_rect` is the damage, and **`wm_paint_dmg`** draws it - the
 drag-release pattern (`ui.inc`'s `wm_dmg_vacate` / `wm_paint_dmg`), under the
 lock `wm_show` already holds. `[wm_dmg_stwin]` is 0 (it is a one-shot), so
@@ -20416,7 +20422,10 @@ the same store, for every window (§11.103.6).
   File chooser is tested first and still takes every key (§38.2); a chooser
   gone and not yet reaped still sends the key nowhere. `desk_key_x` is already
   gated on `[menu_win]` = 0 (§26.8.5), so a widget typing never selects a
-  desktop icon. 16 bytes of `.cold`, which this tree counts as resident.
+  desktop icon. 16 bytes of `.cold`, which this tree counts as resident -
+  until §11.103.10 put the test in `DESK.DRV` (`dkd_key`, slot 3): the
+  resident arm is a far call and its answer, 8 bytes of `.cold` above
+  kern_small's, and with no image the slot's `mod_gone` is "stand".
 - **The keys and the bar go back** on any press elsewhere (`ui.inc`'s
   `menu_activate` on every window hit and on the bare desktop), on any raise
   (`wm_raise`'s `menu_activate`), when the widget closes (`menu_check`, which
@@ -20591,12 +20600,16 @@ holds the post - `deskdrag` reads one on a broken build.
 `cur_shape_pass` already asks `wm_hit` which window is under the pointer on
 every move and every z change (§7.2.1). After that call, ONE compare of `BX`
 against `[cur_hovw]` (an initialised `.text` word, kern_big's); only a CHANGE of window
-banks `BX`, sets `CL` = 0 and far-calls `cur_hov_x` (`.cold`). The body:
+banks `BX`, `xchg`es it into `[cur_hovw]` and far-calls `DESK.DRV`'s
+`dkd_hover` through its slot (§11.103.10; it was `cur_hov_x` in `.cold`
+until the module cut, and with no image the slot is `mod_gone`). The body:
 
 - a Standard File chooser up (`[fdlg_win]` non-zero) makes the new window
   NOTHING - the `dkx_pass` precedent (§30.6): presses outside a chooser are
   swallowed (§38.2), so a revealed handle there would be dead;
-- the new window is `xchg`ed into `[cur_hovw]`, which gives up the old one;
+- the new window is `xchg`ed into `[cur_hovw]` by the CALLER, which hands
+  the body the old one in `BX` - so `[cur_hovw]` is current even when no
+  image is loaded - and a chooser up stores 0 over it;
 - one loop of two passes - `CL` = 0 for the OLD window, `WF_HOVER >> 8` for
   the NEW - does, for each that is a `WF_DESK` window, `and` off `WF_HOVER`,
   `or` in `CL`, and post `wm_wake` to it (through `apic_wm_wake`: the cell is
@@ -20648,7 +20661,8 @@ dragged off and back.
 Idle cost zero; per mouse packet one 6-byte compare; per change of window
 one far call and up to two wakes. **15** bytes of `.text`, `[cur_hovw]`'s
 **2** (an initialised word beside `[cur_shchk]`, so a warm boot's reload
-zeroes it) and **45** of `.cold`.
+zeroes it) and **45** of `.cold` - which §11.103.10's cut moved into
+`DESK.DRV`'s image for one more byte of `.text` at the caller.
 
 #### 11.103.8 What a DIA must not do with its widget
 
@@ -20666,13 +20680,14 @@ zeroes it) and **45** of `.cold`.
 
 #### 11.103.9 The two cells: `OSAPI_WM_DESK` (0x0473) and `OSAPI_GFX_DESK` (0x0479)
 
-**`OSAPI_WM_DESK`**, a rare cell (`OSAPI_RCSLOT`) whose body is `.cold`.
+**`OSAPI_WM_DESK`**, a rare cell (`OSAPI_RCSLOT`) whose body is a `.cold`
+QUERY thunk in front of `DESK.DRV`'s `dkd_verb` (§11.103.10).
 `AL` = the verb; every register but the documented outputs is preserved, and
 CF answers.
 
 | AL | verb | in | what |
 |---|---|---|---|
-| 0 | QUERY | - | CF = 0: this kernel has the desk layer. kern_small answers CF = 1, and so does every verb |
+| 0 | QUERY | - | CF = 0: this kernel has the desk layer, **and `DESK.DRV` is now loaded and held until restart** (§11.103.10) - QUERY is the module's load point, so ask it in your ENTRY PROC, where the system disk is already required. CF = 1: no layer - kern_small (whose every verb refuses), or `DESK.DRV` missing, no heap for its 1 KB claim, or a stale stamp; take the titled path, as on kern_small |
 | 1 | MAKE | BX = your window | make it a desk window - **in your ENTRY PROC only**, between `OSAPI_WM_CREATE` and its return. **Refused (CF = 1)** for a window not in use, VISIBLE, `WF_FULL` or `WF_SIZABLE`, for a window that already HAS an owner, with no load in progress, and for a window the loading package did not make. That is how MAKE knows its caller for nothing: `wm_owner` is published only at the loader's step 9, AFTER the entry proc returns (§21), so the window being set up is the one nobody owns yet; `[ld_base]` is the loading package's segment from step 5 until step 9's show and 0 otherwise, so `W_SEG` = `[ld_base]` (non-zero) says the window is ITS, made in this load; and the loader's `[ld_rec]` is still unpublished (`I_STATE` = 0), which a callback that step 9's own repaint reaches is not (§110.9). Effect: `WF_DESK \| WF_NOANIM \| WF_OWNBG` on, `WF_SAVEU \| WF_1BPP` off, and the z entry ROTATED to `[0]` (each entry below it moves up one, in order). **`IF_DESK` is step 9's, not MAKE's**: the loader sets it on the record when the window the entry proc RETURNS is `WF_DESK`, so an instance is tile-less exactly when its own window is a widget - a DIA that also opens an ordinary window and returns that one keeps its tile, and the window it can be minimized by |
 | 2 | DRAG | BX = your DESK window | post the kernel's outline drag of BX (§11.103.6): `[ui_dragy]` = BX, which the content press compares with the window PRESSED once its `W_ONCLICK` has returned, and honours only for a `WF_DESK` one - so it is for your desk window's own `W_ONCLICK`, on the UI task, and never for a fullscreen window. Posted before a press, the press's seed wipes it; naming another window it does not match; from a worker it is a race. Anywhere else it moves nothing, but an ARMED press is handed one `W_ONDRAG` at an unmoved point. CF = 0. The drag eats the release: no `W_ONMOUSEUP` follows (nor after a refused post, which skipped the arm) |
 | 3 | RELEASE | BX = your window | if `[menu_win]` is BX, the bar - and with it the keys - goes to `wm_top` (the front application window, or Locator) and is redrawn. From a callback, under the lock (a widget's `W_ONKEY` on Esc). CF = 0 |
@@ -20701,6 +20716,89 @@ kern_small's loader ignores it.
 Both cells are appended at the table's end, so the ABI lock moves without a
 `PKG_FMT` bump (§20.2.0.1). A package that calls either ships beside its own
 kernel - §110.8's "not on The Wire" already applies to every DIA.
+
+#### 11.103.10 `DESK.DRV`: the desk layer's code is an on-demand module
+
+**The owner's decision (2026-10-15).** Main's size pass left kern_big's and
+kern_emu's `.cold` at exactly a rung boundary (38,400 = 75 x 512, 0 spare),
+and the DIA kernel half needs +344 cold bytes, so ANY cold byte crosses that
+rung. A measured design showed that no module cut can reach main's rung: the
+most the DIA code can give up is ~201 bytes, because 143 of the 344 are code
+that must run when no widget exists (the loader's top-down record scan and
+its `IF_DESK` store, `desk_live`'s mark test, `sc_open`'s carry contract,
+`OSAPI_CLK_GET`). The owner therefore **accepted exactly ONE 512-byte `.cold`
+step on kern_big and kern_emu** (cold rung 75 -> 76 steps, footprint +512
+each: kern_big 98,816 -> 99,328, kern_emu 99,328 -> 99,840, both inside
+`KERN_BUDGET`) **and** the module cut below, so that the new step is not
+spent at once. Any second step, any image rung, and any kern_small rung stay
+stops. docs/KERNEL-MEMORY.md's History row records it.
+
+**`DESK.DRV` is `MOD_DESK` = 7** (kern_big and kern_emu; kern_small has no
+row, and its `OSAPI_WM_DESK` cell is still `mod_gone`). `MOD_SETS`, the row
+that is not an image (§2.8.7), moves to 8, last as before. The image is
+`kernel/deskmod.inc`'s section `.modj`, assembled with the kernel like every
+module (§2.8), and its slot block `DKDFP` has `DKD_NENT` = 4 entries:
+
+| slot | entry | what it is | reached from | with no image (`mod_gone`: CF = 1, registers kept) |
+|---|---|---|---|---|
+| 0 | `dkd_verb` | MAKE, DRAG and RELEASE (§11.103.9), the verb in AL; anything else is refused | `osapi_wm_desk_x`'s `jmp far [DKDFP]` | MAKE refused, so the DIA paints titled. DRAG and RELEASE only follow a MAKE that succeeded, so the image is there |
+| 1 | `dkd_hover` | the hover edge's body (§11.103.7). In: BX = the OLD window, `[cur_hovw]` = the new one, already exchanged by the caller | `cur_shape_pass`, on a change of window only | nothing is hovered: with no image there is no desk window, which is the right answer. **No disk read on the hover path, ever** |
+| 2 | `dkd_show` | `wm_show_b`'s desk arm (§11.103.3): the visible bit, `wm_win_rect` and `wm_paint_dmg` through their resident far shims | `wm_show_b`, for a `WF_DESK` window | unreachable: only MAKE, in the image, sets `WF_DESK` |
+| 3 | `dkd_key` | `fdlg_top_x`'s desk arm (§11.103.4): CF = 0 and BX = `[menu_win]` when it is a desk window, CF = 1 "stand" (`wm_top`'s answer) otherwise | `fdlg_top_x`, with no chooser up | CF = 1, stand: wm_top's answer, exactly right with no widget |
+
+**QUERY is the load point.** The resident half of `osapi_wm_desk_x` is a
+16-byte `.cold` thunk: AL = 0 calls `mod_need` with `MOD_DESK` and returns
+its CF; every other verb is `jmp far [DKDFP]`. Three reasons make QUERY the
+place:
+
+- every DIA asks it first, inside its entry proc (`os88dia.inc`'s
+  `dia_wsize`), where it reads its own state file, so the system disk is
+  already required - ONDEMAND-PLAN §1's test is met without asking anything
+  new of the user;
+- `DIAPROBE.O88` has no `OS88_F_DESK` header bit and still works;
+- a refusal comes BEFORE the window is sized, so the titled fallback is sized
+  as titled. Loading at MAKE would put every missing file on `dia_wmade`'s
+  "refused after a QUERY that succeeded" path, which paints a titled widget
+  in a desk-sized frame.
+
+**The lifetime: held from the first QUERY that loads it until restart.**
+Widgets are session-long and are normally relaunched at boot (§110.4), so a
+drop rule would buy back a 1 KB claim on a machine that has run a DIA, at
+~43 more resident cold bytes (a drop check at the instance reap and after an
+`OS88_F_DESK` entry proc). No entry calls anything that can destroy a window,
+so the image is never freed under its own code - and it is never freed at
+all. A hibernate image carries the claim and the slots together (an ordinary
+`MEM_K_MOD` claim, its slots in `.bss`), exactly as `DOCK.DRV` and
+`WIN95.DRV` survive one; the stamp is not re-checked on resume and need not
+be, the kernel in the image being the one that loaded it.
+
+**The failure path** - `DESK.DRV` missing from the system disk, no heap for
+its 1 KB claim, or a stale stamp (§2.8.2): QUERY answers CF = 1, which is
+`mod_need`'s refusal, and the DIA takes `dia_wsize`'s titled sizing and
+`dia_wmade`'s titled arm - kern_small's path exactly, a working titled widget
+with nothing half-done. **It says nothing**: the widget works, so there is
+no refusal for the user to act on (§47 rule 3). The boot relaunch is
+unaffected - `dia_boot` stays resident (§110.4, §110.9's module-cut entry) -
+so a DIA row still launches at boot and comes up titled, and its row is kept.
+Each launch pays one more `drv_find` of `SYSTEM\` for the file that is not
+there. `tests/dianodesk.py` is the row.
+
+**The hover latency is unchanged.** One `cmp bx, [cur_hovw]` per pass and a
+far call only on a change, as before; the caller is `push bx / xchg bx,
+[cur_hovw] / call far [DKDFP+4] / pop bx` (10 bytes against 9), so
+`[cur_hovw]` is current even with no image and the next pass is one compare
+again; with the image held it is one far indirect call, about the cost of
+the `call COLD_SEG:` it replaced; and no `mod_need` is ever on the path.
+
+**What it measures** (kern_big; kern_emu is identical in `.cold`), against
+the merge before the cut: `.cold` **-163** (`osapi_wm_desk_x` 126 -> 16,
+`cur_hov_x` 45 -> 0, `fdlg_top_x`'s desk arm 20 -> 12), `.text` **-3** (the
+hover caller +1, `wm_show_desk` out for a 5-byte door, the module's name, row
+and `mod_fpt` word +15) and `.bss` **+16** (four slots). The figures the
+build measured are §110.6's last table: kern_big image rung **9** left,
+cold **331** left in its 76th step. The image is **235 bytes** (stored
+plain - lz4 would not shrink it), a 1 KB claim, and one cluster on every kern_big system disk in all four geometries,
+the emu disk and the live media (`$(BIGMODS)`, which `$(DRIVERS)` carries).
 
 ## 12. menu.inc
 
@@ -183157,8 +183255,19 @@ dia_boot:       [ui_rebootq] != 0  -> nothing (a resume or DOS question is up)
 | launched from B:, booted with no disk in B: | the same, naming `(B:)` | the same |
 | a hard-disk install: a row recorded against A: | the same — a row's VOL is a volume index, which is existing shortcut semantics (§26.8.1) | the same |
 | load refused (memory, version) | `ld_say_status`'s sentence | KEPT |
+| `DESK.DRV` missing from the system disk, or no heap for its 1 KB claim (§11.103.10) | the widget comes up TITLED - its QUERY refused, kern_small's path - and nothing is said | KEPT |
 | state file missing / damaged / position off this screen | the package's own answers (§110.5) | — |
 | hibernate or DOS question pending | nothing is launched | — |
+
+**`dia_boot` stays resident** after §11.103.10's module cut, and that is a
+measured choice (§110.9's module-cut entry): the loop is what relaunches a
+widget when `DESK.DRV` is NOT there, so in the module it would turn the
+titled fallback into no widget at all; and the bytes favour it where they
+are scarce - the move would save 38 bytes of `.cold`, which the accepted
+step has room for, and cost five of the IMAGE rung (a `.bss` count of DIA
+rows and a fifth 4-byte slot), which on kern_big has almost none, plus six
+of `.boot2`. The relaunched DIA's own QUERY is what loads the image
+(§11.103.9).
 
 **The boot always reaches the desktop.** Nothing on this path can stop it:
 every refusal is a toast or a downgrade.
@@ -183576,6 +183685,24 @@ bytes by module: `wm.inc` +172 (`osapi_wm_desk_x` and `cur_hov_x`),
 `desksc.inc` +70, `loader.inc` +40, `clock.inc` +32 (`osapi_clk_get_x`),
 `fdlg.inc` +16, `desk.inc` +11, `driver.inc` +3. Both footprints stay inside
 `KERN_BUDGET` (big 1,536 spare, emu 1,024).
+
+**The owner ACCEPTED the step (2026-10-15)** - one 512-byte `.cold` step on
+kern_big and kern_emu and no other - together with §11.103.10's `DESK.DRV`
+cut, so that the new rung is not spent at once. MEASURED after the cut, against
+main's kernels (`tools/kernsize.py`, then `--bless` on all three):
+
+| | `.text` | `.cold` | `.bss` | rungs left after (main's) | footprint |
+|---|---:|---:|---:|---|---|
+| kern_big | **+187** | **+181** | **+16** | image **9** (212), cold **331** (0) in rung 76 | 98,816 -> **99,328** of 100,864, 3 steps spare - the accepted step |
+| kern_emu | +187 | +181 | +16 | image 262 (465), cold **331** (0) in rung 76 | 99,328 -> **99,840**, 2 steps spare - the accepted step |
+| kern_small | +18 | +32 | 0 | image 382 (400), cold 54 (86) - none crossed, unchanged by the cut | 62,464, unchanged |
+| `DESK.DRV` (on demand, kern_big and kern_emu) | | | | 235 bytes (stored plain: lz4 would not shrink it), 4 entries | a 1 KB claim from a DIA's first QUERY until restart |
+
+Against the merge the cut is `.text` **-3**, `.cold` **-163** and `.bss`
+**+16** on both big kernels, as §11.103.10 priced it; the design's further
+-38 of `.cold` (`dia_boot`'s loop) was not taken, for §110.4's reason. The
+360 KB system disk is **343 of 354 clusters, 11 left** (12 before): one for
+`DESK.DRV`.
 
 **The disks.** `SYSTEM\DIA\` costs a folder's cluster and `DESKCAL.O88` five
 more. Measured with `os88disk.py --verify`: the 360 KB system disk went from
@@ -184383,6 +184510,38 @@ no alert.
     reads `09:00 Team sync` / `+2 more` where the mockup shows two lines -
     the pager working as designed, and the owner's to weigh against 3 + 3.
 
+**v2, the module cut** (§11.103.10, after the merge onto main's size pass;
+the owner accepted one cold step and asked for the cut with it):
+
+  - **No module cut reaches main's cold rung**, which was measured before it
+    was built: of the 344 cold bytes, 143 run where no widget exists (the
+    loader's top-down scan and `IF_DESK`, `desk_live`'s mark test, `sc_open`'s
+    carry, `OSAPI_CLK_GET`, `drv_notice_x`'s call), so the most a cut can take
+    is ~201. Serving `OSAPI_CLK_GET` from the module would have been a clock
+    API with a precondition no other clock call has; it stays resident.
+  - **`dia_boot` STAYS RESIDENT**, against the cut design, which moved its
+    loop into the image behind a 28-byte pre-test and a `.bss` count of DIA
+    rows. In the image the loop would not run when `DESK.DRV` is missing, so
+    the titled fallback would have been no widget at all at boot - the design
+    said both, and the two cannot hold together. Kept resident it costs 38
+    more cold bytes (which the accepted step has room for) and saves five
+    IMAGE bytes (the count and a fifth slot) and six of `.boot2`: kern_big's
+    image rung is 9 left instead of the design's 4. `diaboot`'s, `diahiber`'s
+    and `deskcalperf`'s breakpoints on `dia_boot` keep a kernel symbol.
+  - **No EXK device in the image**: `wm_win_rect` and `wm_paint_dmg` have
+    resident far shims already (`cw_wm_win_rect`, `cw_wm_paint_dmg`, which
+    DOCK.DRV uses), so `dkd_show` far-calls them and the ~22-byte `exk_go`
+    the design priced is not there. `DESK.DRV` is 235 bytes against ~355.
+  - **The slot block is `DKDFP` and the count `DKD_NENT`**, not the design's
+    `DSKFP` / `DSK_NENT`: `DSK_NENT` is the Disk window's directory count
+    (`files.inc`), and DOCK.DRV's block is `DKFP`.
+  - **The hover trace breaks on the module's entry**: `tests/desklayer.py`'s
+    `edge_trace` named `cur_hov_x`, a kernel symbol that is gone; it reads
+    `DKDFP`'s hover slot (a far pointer the widget's QUERY armed) and breaks
+    on that flat address, refusing loudly when the slot is still `mod_gone`.
+  - **`t_chromesites`' MAKE site moved files** (`kernel/deskmod.inc`
+    `dkd_verb`), the same FULLONLY test.
+
 ### 110.10 How it was built, and its gates
 
 | wave | what | gates |
@@ -184403,6 +184562,7 @@ and every §7 default of the design record was taken):
 | W3 | `apps/os88gfx.inc` `GFXE_TEXT` / `GFXE_BITS` (§5.12.8); `os88dia.inc`'s `DIA_WIDGET` (§110.11): the geometry, the paint, the prefilters, the hover and focus states, `dia_quit`, the face-origin header, the titled fallback; `tests/diaprobe`'s desk build onto it; `tools/os88dia.py` (`DIA_HF_CONT`, `widget_off`) and `t_dia` W | `deskground`, `deskfit` (new); every wave 1 and 2 row re-gated on the include - the tag row pixel for pixel against the guest's font, the dwell and linger to the tick, 1 / 3 calls an edge, the re-fit; kernsize unchanged on all three kernels |
 | W4 | the Desk Calendar as three cards (§110.3): header flag bit 6, the three layouts by height and their `dc_geos`, the slab composers, the Monday-first grid with dots, today's box and the outline, card 2's lists with real ticks and `+N more`, card 3's RINGING / NEXT / NONE, COMPACT's paging slot, the controls and keys, `DCA_SNOOZED` / `DCA_DUE` and the snooze slot, the alert-on-fire removed, the menus kept; `os88dia.inc`'s `dia_redraw`; `tools/os88dia.py`'s bits, slot and `DESKCAL_GEO`; `tools/os88ui.py`'s `widget_*` | `deskcaledit`, `deskcaltask`, `deskcalgrid`, `deskcalremind`, `deskcal1bpp`, `deskcalperf`, `diaregister`, `diamove`, `diamovecga`, `diaanchor`, `diasmall` updated; `deskcalcards`, `deskcalsnooze`, `deskmodal` new; `t_dia` holds `dc_geos` to the host's mirror and the header's `OS88_F_DESK` |
 | W5 | look on 1bpp, EGA, Dark and Color; measure on MartyPC's 5150; `kernsize --bless`; `docs/dia/` retaken. **Done in the completeness pass**: the uncover measured (§110.6), the three kernels blessed, the PR set retaken as v2's widget (VGA, CGA, Hercules, kern_small), `docs/plans/completed/DIA-PLAN.md` given its v2 account. EGA, Dark and Color are asserted by `deskfit` and `deskground` on the framebuffer and were not photographed; 86Box's `xt-multimon` and `xt-hercules` were not looked at (86Box cannot be driven from this host) | `deskcalperf`'s new budgets and its uncover, test-full alone, the soak |
+| cut | the owner's one accepted `.cold` step and `DESK.DRV` (§11.103.10): `osapi_wm_desk_x`'s QUERY thunk resident, MAKE / DRAG / RELEASE, the hover body, the desk show and the key arm in the image; `dia_boot` resident (§110.9's module-cut entry) | `dianodesk` (new: DESK.DRV deleted from a scratch system disk - the calendar relaunched TITLED, nothing held, the row kept; and the control with it); every `dia*`, `desk*` and `deskcal*` row again; kernsize on all three kernels (only the accepted step), `os88sym --all`, `t_chromesites`, `livefull`, test-full alone |
 
 **If W1 or W2 measures a crossed rung**, the cut order is: move
 `wm_show_b`'s desk arm behind a far call into `.cold` (−17 `.text`, +22

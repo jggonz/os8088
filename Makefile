@@ -2018,7 +2018,7 @@ $(shell mkdir -p $(BUILD); \
                                       $(BUILD)/ctrl.drv $(BUILD)/format.drv \
                                       $(BUILD)/diskops.drv $(BUILD)/hiber.drv \
                                       $(BUILD)/dock.drv $(BUILD)/extd.drv \
-                                      $(BUILD)/win95.drv \
+                                      $(BUILD)/win95.drv $(BUILD)/desk.drv \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin \
                                       $(BUILD)/boot120.bin \
                                       $(BUILD)/hdd.bin $(BUILD)/hdd.drv \
@@ -2408,12 +2408,14 @@ KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/diskops.drv
 # no Dock placement or auto-hide, so no MOD_DOCK row and no file to cut. So is
 # EXTD.DRV (SPEC.md 39.19.6): kern_small has no second display at all. Being
 # in $(DRIVERS) through here is what puts it on every kern_big system disk in
-# all four geometries, the emu disk and the live media, beside CTRL.DRV.
+# all four geometries, the emu disk and the live media, beside CTRL.DRV. And
+# so is DESK.DRV (SPEC.md 11.103.10), the desk layer's code, which a DIA's
+# OSAPI_WM_DESK QUERY loads: kern_small has no desk layer at all.
 ifneq ($(KERN_SMALL),)
 BIGMODS =
 else
 BIGMODS = $(KMODDIR)/hiber.drv $(KMODDIR)/dock.drv $(KMODDIR)/extd.drv \
-          $(KMODDIR)/win95.drv
+          $(KMODDIR)/win95.drv $(KMODDIR)/desk.drv
 endif
 KMODARGS = -m 0=$(BUILD)/ctrl.drv -m 1=$(BUILD)/format.drv \
            -m 2=$(BUILD)/diskops.drv
@@ -2434,7 +2436,7 @@ KMODARGS += -m 3=$(BUILD)/filecp.drv
 KMODARGS += -m 4=$(BUILD)/fdlg.drv
 else
 KMODARGS += -m 3=$(BUILD)/hiber.drv -m 4=$(BUILD)/dock.drv -m 5=$(BUILD)/extd.drv \
-            -m 6=$(BUILD)/win95.drv
+            -m 6=$(BUILD)/win95.drv -m 7=$(BUILD)/desk.drv
 endif
 # ...AND THE MODULES ARE 'CZ' FILES ON THE DISK (SPEC.md 2.8, 20.13.5), by
 # the route a driver took: mod_need sizes its claim from the directory hint

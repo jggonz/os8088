@@ -703,12 +703,11 @@ FDBODY fdlg_top_x
     jnc .out
 %ifdef KERN_BIG
     jnz .gone                   ; ZF=0: gone or answered (SPEC.md 38.2)
-    mov bx, [menu_win]          ; ZF=1: there is none - so does a WIDGET own
-    or bx, bx                   ; the bar? Never a HIDDEN one: every hide
-    jz .stand                   ; repaints through menu_draw_bar, whose
-    test byte [bx+W_FLAGS+1], WF_DESK >> 8 ; menu_check takes the bar off
-    jnz .out                    ; a window that is not visible. Yes: BX = it
-    jmp short .stand
+    call far [DKDFP + DKD_KEY]  ; ZF=1: there is none - so does a WIDGET own
+    jnc .out                    ; the bar? DESK.DRV's dkd_key asks (SPEC.md
+    jmp short .stand            ; 11.103.10): CF = 0 and BX = it, or CF = 1,
+                                ; stand - which is also mod_gone's answer with
+                                ; no image, when no desk window can exist
 .gone:
     xor ax, ax
 %else

@@ -91,7 +91,7 @@ SECTION_SEG = {".text": "KERNEL_SEG", ".bss": "KERNEL_SEG",
                # exactly that for XMEM.DRV, SPEC.md 41.12).
                ".modc": None, ".modf": None, ".modl": None, ".modh": None,
                ".modp": None, ".modd": None, ".modk": None, ".modx": None,
-               ".modw": None,
+               ".modw": None, ".modj": None,
                ".modmap": None,
                # ...and the module halves and bss sections that grew after
                # the list was written (CTRL.DRV's panel half and buffer,

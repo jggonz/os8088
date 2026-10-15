@@ -111,7 +111,7 @@ ui_arm_trk finds [ui_dragy] holding the post); turn the pick-up's
 `.nocache` test out and A
 fails on wm_dc_take; take the `[wm_dmg_npro]` store out and D fails on a
 title bar drawn; take the hover edge's compare out of cur_shape_pass and
-`hover` fails at B; take cur_hov_x's chooser test out and F fails.
+`hover` fails at B; take dkd_hover's chooser test out and F fails.
 
 **BREAK IT ON PURPOSE** (each run, SPEC.md 110.9): take wm_lift's desk test
 out and `z` fails on wm_zcut firing under the right press; take the
@@ -970,18 +970,37 @@ def bios_ticks(m):
     return struct.unpack("<H", bytes(m.read(0x46C, 2)))[0]
 
 
+def hover_entry(m):
+    """DESK.DRV's dkd_hover, as a flat address (SPEC.md 11.103.10): the hover
+    edge's body is the MODULE's since the cut, so there is no kernel symbol
+    to break on - its far pointer is slot 1 of the DKDFP block, which the
+    widget's QUERY armed. A slot still naming mod_gone means the image never
+    loaded, and the row says so rather than tracing nothing."""
+    off, seg = struct.unpack("<HH", bytes(m.read(m.sym("DKDFP") + 4, 4)))
+    flat = (seg << 4) + off
+    if flat == m.sym("mod_gone"):
+        raise SystemExit("desklayer: DESK.DRV is not loaded (DKDFP's hover "
+                         "slot is mod_gone) - SPEC.md 11.103.10")
+    return flat
+
+
+EDGE = []                       # the hover entry's trace name, per trace
+
+
 def edge_trace(m):
-    """The hover edge (cur_hov_x, the kernel's) and every BLIT1 and desktop
+    """The hover edge (DESK.DRV's dkd_hover) and every BLIT1 and desktop
     ground the include lays after it, each stamped with the BIOS tick."""
-    return os88marty.bp_trace(m, "cur_hov_x", "gfx_blit1", "thm_desk",
+    hov = hover_entry(m)
+    EDGE[:] = ["%05X" % hov]
+    return os88marty.bp_trace(m, hov, "gfx_blit1", "thm_desk",
                               on_hit=lambda mm, r: bios_ticks(mm))
 
 
 def edge_check(tr, what, blits, grounds, ticks, why):
     """SPEC.md 110.11's price of an edge: `blits` BLIT1s and `grounds`
     OSAPI_GFX_DESKs, `ticks` (to 2 more) after the kernel's edge."""
-    edges = [h for h in tr.hits if h["name"] == "cur_hov_x"]
-    after = [h for h in tr.hits if h["name"] != "cur_hov_x"]
+    edges = [h for h in tr.hits if h["name"] == EDGE[0]]
+    after = [h for h in tr.hits if h["name"] != EDGE[0]]
     if not check(edges and after, "%s: the edge, then the draw (%r)"
                  % (what, tr.names())):
         return

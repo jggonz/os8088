@@ -9948,6 +9948,17 @@ SOAK = [
         "same downgrade, nothing launched. SYSTEM.CFG unwritten by either.",
         needs=("marty",), timeout=900,
         wants=("build/diaghost360.img", "build/diabvol360.img")),
+    Row("dianodesk", "soak", py("tests/dianodesk.py"), 21.0,
+        "SPEC.md 11.103.10: DESK.DRV is the desk layer's code, loaded by a "
+        "DIA's QUERY. absent: the shipped 360KB system disk with a DIA row "
+        "to DESKCAL.O88 and DESK.DRV mdel'd (asserted gone on the host) - "
+        "the boot still relaunches the calendar (dia_boot is resident), it "
+        "comes up TITLED (no WF_DESK, a title bar), mod_tab's MOD_DESK row "
+        "is 0 and every DKDFP slot mod_gone, and the row is kept, marked and "
+        "cell-less. present, the control: the same disk with the module - a "
+        "desk window, the module held, the row kept.",
+        needs=("marty", "mtools"), timeout=900,
+        wants=("build/os8088-360.img",)),
     Row("diashort", "soak", py("tests/diashort.py"), 15.0,
         "SPEC.md 26.8.1/110.2, the regression for +3: SPEC.md called the "
         "byte spare and every drag-made shortcut carries `\\` there. Three "

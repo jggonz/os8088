@@ -45,8 +45,10 @@ MOD_NIMG    equ 5               ; SMALL: file operations, no hibernate, and
 MOD_DOCK    equ 4
 MOD_EXT     equ 5               ; ...and the extended desktop (SPEC.md 39.19.6)
 MOD_WIN     equ 6               ; ...and the Windows theme's chrome (76.14)
-MOD_NIMG    equ 7               ; BIG: hibernate, resident file operations,
-                                ; the optional Dock, EXTD.DRV and WIN95.DRV
+MOD_DESK    equ 7               ; ...and the desk layer's verbs (11.103.10)
+MOD_NIMG    equ 8               ; BIG: hibernate, resident file operations,
+                                ; the optional Dock, EXTD.DRV, WIN95.DRV and
+                                ; DESK.DRV
 %endif
 ; MOD_NIMG is the IMAGES os88mod.py cuts out; MOD_MAX the ROWS. They differ by
 ; one row that is not an image of its own: MOD_SETS, CTRL.DRV's first
@@ -158,6 +160,7 @@ mod_f_dock: db 'DOCK.DRV', 0
 %ifdef KERN_BIG
 mod_f_ext:  db 'EXTD.DRV', 0
 mod_f_win:  db 'WIN95.DRV', 0
+mod_f_desk: db 'DESK.DRV', 0    ; SPEC.md 11.103.10: QUERY loads it
 %endif
 mod_f_ctrl: db 'CTRL.DRV', 0    ; .DRV for the attributes and nothing else
 mod_f_fmt:  db 'FORMAT.DRV', 0  ; (SPEC.md 19.6): os88disk.py stamps anything
@@ -223,6 +226,7 @@ mod_r_dock:
 %ifdef KERN_BIG
     dw 0, mod_f_ext             ; MOD_EXT, kern_big's alone (SPEC.md 39.19.6)
     dw 0, mod_f_win             ; MOD_WIN, kern_big's alone (SPEC.md 76.14)
+    dw 0, mod_f_desk            ; MOD_DESK, kern_big's alone (SPEC.md 11.103.10)
 %endif
 %ifdef OS88_SHORTCUTS
     dw 0, mod_f_ctrl            ; MOD_SETS: the SAME file, cut short (2.8.7)

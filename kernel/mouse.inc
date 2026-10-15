@@ -4863,10 +4863,14 @@ cur_shape_pass:
     cmp bx, [cur_hovw]          ; THE HOVER EDGE (SPEC.md 11.103.7): the same
     je .hov                     ; answer, asked whether it CHANGED - one
     push bx                     ; compare per pass, and only a change pays the
-    xor cx, cx                  ; far call: WF_HOVER off the old window and on
-    call COLD_SEG:cur_hov_x     ; the new, each a desk window's, and a wake to
-    pop bx                      ; each. CL = 0 is the body's first pass (the
-.hov:                           ; clear); CX is spent, AX is kept
+    xchg bx, [cur_hovw]         ; far call: [cur_hovw] = the new window HERE,
+    call far [DKDFP + DKD_HOVER] ; so it is current with no image too, and
+    pop bx                      ; DESK.DRV's dkd_hover (SPEC.md 11.103.10)
+.hov:                           ; takes WF_HOVER off the OLD one (BX) and on
+                                ; the new, each a desk window's, with a wake to
+                                ; each. With no image the slot is mod_gone:
+                                ; no desk window exists, so nothing is hovered.
+                                ; CX is spent, AX is kept
 %endif
     mov ah, CUR_ARROWSH
     or bx, bx
@@ -5596,7 +5600,7 @@ cur_shchk   db 0                ; "the window under the pointer may have
 cur_hovw    dw 0                ; the window the HOVER EDGE last answered
                                 ; (SPEC.md 11.103.7), 0 = none or a chooser
                                 ; up. Only ever compared and passed through
-                                ; cur_hov_x's tests, never trusted, so a
+                                ; dkd_hover's tests, never trusted, so a
                                 ; record that died since is harmless
 %endif
 %ifndef NOCURDISK

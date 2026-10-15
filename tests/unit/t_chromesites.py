@@ -76,7 +76,7 @@ REG = {
     ("kernel/wm.inc", "wm_draw_win", 0): (FULLONLY, "the FULL arm fills white; the desk arm is its own test ahead of it"),
     ("kernel/wm.inc", "wm_grow_erase", 0): (FULLONLY, "MAKE refuses a sizable window"),
     ("kernel/wm.inc", "wm_grow_paint", 0): (FULLONLY, "MAKE refuses a sizable window"),
-    ("kernel/wm.inc", "osapi_wm_desk_x", 0): (FULLONLY, "MAKE refuses a fullscreen window (SPEC.md 11.103.9)"),
+    ("kernel/deskmod.inc", "dkd_verb", 0): (FULLONLY, "MAKE refuses a fullscreen window (SPEC.md 11.103.9; DESK.DRV, 11.103.10)"),
     ("kernel/instance.inc", "inst_minimize", 0): (FULLONLY, "IF_FSMIN; a DIA never minimizes its widget (SPEC.md 11.103.8)"),
     # WIN95.DRV (SPEC.md 76.14), main's Windows theme: its title door stands
     # IN FRONT of wm_draw_title_b's own test, so under that theme it is the

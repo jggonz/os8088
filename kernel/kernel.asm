@@ -1143,6 +1143,7 @@ section .modk    start=MODK_START vstart=0
 %ifdef KERN_BIG
 section .modx    start=MODX_START vstart=0
 section .modw    start=MODW_START vstart=0
+section .modj    start=MODJ_START vstart=0  ; DESK.DRV (SPEC.md 11.103.10)
 %endif
 section .modmap  start=MODMAP_START vstart=0
 section .text
@@ -5024,6 +5025,7 @@ EXT_YLOW    equ 11              ; ui_ylow's arm, behind its caller's gate
 %include "dockmod.inc"            ; empty unless DOCK_OPT (kern_big)
 %include "extmod.inc"             ; EXTD.DRV, the extended desktop
 %include "winmod.inc"             ; WIN95.DRV, the Windows theme (SPEC.md 76.14)
+%include "deskmod.inc"            ; DESK.DRV, the desk layer (SPEC.md 11.103.10)
                                   ; (SPEC.md 39.19.6) - kern_big only
 %include "ctrl.inc"
 %include "desksc.inc"           ; desktop shortcuts (SPEC.md 26.8): empty
@@ -5076,6 +5078,7 @@ mod_fpt:
 %ifdef KERN_BIG
     MODFP EXFP, MOD_EXT, EXT_NENT
     MODFP WNFP, MOD_WIN, WN_NENT
+    MODFP DKDFP, MOD_DESK, DKD_NENT
 %endif
 %ifdef OS88_SHORTCUTS
     MODFP SETFP, MOD_SETS, 1    ; the settings core's ONE slot, CPE_SC (2.8.7)
@@ -6517,9 +6520,10 @@ MODMAP_START equ MODD_START + MODD_SIZE   ; no Dock module (SPEC.md 30.5)
                                           ; (SPEC.md 20.15.3)
 
 %ifdef DOCK_OPT                           ; DOCK_OPT is KERN_BIG, so
-MODX_START   equ MODK_START + MODK_SIZE   ; EXTD.DRV (SPEC.md 39.19.6) and
-MODW_START   equ MODX_START + MODX_SIZE   ; WIN95.DRV (SPEC.md 76.14) are
-MODMAP_START equ MODW_START + MODW_SIZE   ; always the last two images there
+MODX_START   equ MODK_START + MODK_SIZE   ; EXTD.DRV (SPEC.md 39.19.6),
+MODW_START   equ MODX_START + MODX_SIZE   ; WIN95.DRV (SPEC.md 76.14) and
+MODJ_START   equ MODW_START + MODW_SIZE   ; DESK.DRV (SPEC.md 11.103.10) are
+MODMAP_START equ MODJ_START + MODJ_SIZE   ; always the last three images there
 %endif
 
 %ifdef KERN_BIG
@@ -6531,6 +6535,12 @@ modw_end:
 MODW_SIZE equ modw_end - $$
 %if MODW_SIZE > MOD_MAX_KB*1024
   %error "WIN95.DRV exceeds its maximum claim"
+%endif
+section .modj
+modj_end:
+MODJ_SIZE equ modj_end - $$
+%if MODJ_SIZE > MOD_MAX_KB*1024
+  %error "DESK.DRV exceeds its maximum claim"
 %endif
 %endif
 %ifdef DOCK_OPT
@@ -6714,6 +6724,8 @@ mod_map:
     dw EXT_NENT
     dd MODW_START, MODW_SIZE    ; the Windows theme's chrome (SPEC.md 76.14)
     dw WN_NENT
+    dd MODJ_START, MODJ_SIZE    ; the desk layer (SPEC.md 11.103.10)
+    dw DKD_NENT
 %endif
     dd MODMAP_START             ; ...where the table began, and
     dw 0x384F                   ; the last two bytes of the file
@@ -7243,6 +7255,10 @@ section .modk
 section .modw
 %if $ != modw_end
   %error "something landed in .modw after modw_end"
+%endif
+section .modj
+%if $ != modj_end
+  %error "something landed in .modj after modj_end"
 %endif
 %endif
 section .modmap
