@@ -130,6 +130,11 @@ ASM = ["boot/boot.asm", "boot/boothd.asm",
        # two entries, and the kernel's answer to every xmem failure is to
        # carry on with no store and tell nobody.
        "drivers/xmem/xmem.asm",
+       # THMPAL.DRV's private ABI (SPEC.md 76.14.14): THMV_ABI_VER, the three
+       # verbs and THM_COLOR, typed out in kernel/vga12.inc AND in the overlay
+       # for drivers/saver's reason. A drifted version word is a chooser the
+       # kernel refuses as DRVE_BAD; a drifted verb is the wrong one called.
+       "drivers/thmpal/thmpal.asm",
        # ASSOC.DAT's format (SPEC.md 54.7), which kernel/assoc.inc READS and
        # the hard-disk installer WRITES: an installed volume gets its own
        # cache built from its own packages (SPEC.md 52.10.14), so the row

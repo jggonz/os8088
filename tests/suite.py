@@ -13530,6 +13530,22 @@ SOAK = [
     Row("xorrect", "soak", py("tests/xorrect.py"), 20.0,
         "gfx_xor_rect draws the same pixels it always did (SPEC.md 39.14.10)",
         needs=("marty",), serial=True),
+    Row("buildlock", "soak", py("tests/unit/t_build_lock.py"), 0.7,
+        "private-tree build/read locks survive context exit and same-process "
+        "reentry; another process waits until the holder exits. Covers both "
+        "POSIX flock and the Windows byte-lock fallback without building.",
+        needs=()),
+    Row("colorpresets", "soak", py("tests/colorpresets_qemu.py"), 72.0,
+        "all eight EGA-index presets retain white application interiors and "
+        "unchanged graphical content, and XOR the menu bar with their mask and "
+        "back; the Windows style wears the preset; the chooser opened through "
+        "the panel's own Customize button - rows install, Solid/Stripes/"
+        "Windows/95 resolve once each, Cancel/Apply, no re-bank, a no-op that "
+        "sets nothing - reaped on panel close, its ABI refused, and the Color "
+        "row and style surviving a SYSTEM.CFG save and reboot (SPEC.md "
+        "76.14.13, 76.14.14). Forced EGA/CGA variants remain available through "
+        "script options.",
+        needs=("qemu", "nasm", "pil"), serial=True),
 ]
 
 

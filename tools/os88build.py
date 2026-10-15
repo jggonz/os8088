@@ -66,7 +66,11 @@ twenty minutes before it was written down, so `defines` comes out of `make -n`
 on the kernel target and nobody has to know the mapping.
 """
 import errno
-import fcntl
+try:
+    import fcntl                # POSIX only - see _flock below
+except ImportError:
+    fcntl = None
+    import msvcrt
 import hashlib
 import os
 import re
@@ -74,6 +78,7 @@ import shutil
 import subprocess
 import tempfile
 import sys
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -364,6 +369,9 @@ _HELD = {}
 class _Lock(object):
     """flock on one tree's own lock file: EXCLUSIVE to build, SHARED to read.
 
+    On Windows a retained msvcrt byte lock stays exclusive while reading;
+    same-tree processes serialize, while different trees remain independent.
+
     Per TREE and not global: two rows with different knobs never meet here,
     and two with the same knob meet for the length of one `make`.
 
@@ -430,8 +438,22 @@ class _Lock(object):
         self.fh = _HELD.get(self.path)
         self.reused = self.fh is not None
         if self.fh is None:
-            self.fh = open(self.path, "w")
-        fcntl.flock(self.fh, fcntl.LOCK_EX)
+            self.fh = open(self.path, "a+b")
+        if fcntl:
+            fcntl.flock(self.fh, fcntl.LOCK_EX)
+        elif not self.reused:
+            # Windows has no shared flock: retain an exclusive byte lock
+            # for the reader's lifetime, rather than allow a build race.
+            while True:
+                self.fh.seek(0)
+                try:
+                    msvcrt.locking(self.fh.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError as e:
+                    if e.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                        self.fh.close()
+                        raise
+                    time.sleep(.05)
         return self
 
     def __exit__(self, *a):
@@ -441,6 +463,10 @@ class _Lock(object):
         releases an flock: a Tree that went out of scope would drop the hold
         silently and put the race back with nothing to show for it.
         """
+        if not fcntl:
+            _HELD[self.path] = self.fh
+            self.fh = None
+            return
         try:
             fcntl.flock(self.fh, fcntl.LOCK_SH)
             _HELD[self.path] = self.fh

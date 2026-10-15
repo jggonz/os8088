@@ -86,6 +86,8 @@
 1 drivers/net/netui.inc
 1 drivers/ramdisk/page.inc
 1 drivers/saver/svcfg.inc
+1 drivers/thmpal/thmpal.asm        # the Color Theme window (SPEC.md 76.14.14) -
+                                   # svcfg.inc's arm/fire shape
 
 # --- the kernel: its own arm (SPEC.md 13.8.3), through os88ui_kbtn ----------
 1 kernel/apps.inc                  # the Timer's Start/Stop (SPEC.md 13.8.5)

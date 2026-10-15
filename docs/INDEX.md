@@ -105,6 +105,7 @@ Read first: [§5 vga12.inc](../SPEC.md#5-vga12inc); [§25 icons.inc — icon for
 | `0x0222` | `OSAPI_GFX_FILL_PAT` | AX/BX/CX/DX = the rect, SI = 8 pattern bytes in YOUR segment: row y takes byte [SI + (y & 7)], a set bit is WHITE and bit 7 is the leftmost pixel of... |
 | `0x0404` | `OSAPI_GFX_POINTS` | ES:SI = CX records of two words each, x then y (screen px); CX = how many, 0 legal and does nothing. [gfx_color] is the ink; hold the lock... |
 | `0x0260` | `OSAPI_GFX_PEN` | CF = 0 live (CBLACK, flag clear) / CF = 1 disabled (CDGRAY, flag set). Preserves every register. |
+| `0x046D` | `OSAPI_THM_SET` | AL = THM_BRIGHT(0)/DARK(1)/ COLOR(2)/WIN(3): adopts it as the system theme, repaints the desktop's chrome and owes SYSTEM.CFG the change... |
 
 ### Text and fonts
 

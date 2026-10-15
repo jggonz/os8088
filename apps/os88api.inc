@@ -5505,3 +5505,20 @@ FSIF_BANKED equ 4
     db %2
     times 8 - %%slen db ' '
 %endmacro
+
+; --- THE THEME (SPEC.md 76, 76.14.14) --------------------------------------
+%define OSAPI_THM_SET        KERNEL_SEG:0x046D   ; AL = THM_BRIGHT(0)/DARK(1)/
+                                 ; COLOR(2)/WIN(3): adopts it as the system
+                                 ; theme, repaints the desktop's chrome and
+                                 ; owes SYSTEM.CFG the change. An unknown
+                                 ; value, or COLOR on an adapter with no
+                                 ; colour in it, is Bright. WIN reads
+                                 ; WIN95.DRV off the system disk: out CF = 1
+                                 ; when it could not, and Color (or Bright on
+                                 ; 1bpp) stands instead. It may read a disk,
+                                 ; so call it from the UI task, never a worker
+                                 ; (SPEC.md 20.6). Which of Color's presets
+                                 ; shows, and its title style, are the user's,
+                                 ; in the Control Panel - there is no call for
+                                 ; either. kern_small has no theme to set and
+                                 ; does nothing

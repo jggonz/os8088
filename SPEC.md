@@ -2066,7 +2066,7 @@ first.**
 |---|---|---:|
 | `.modc` | the header and the SETTINGS CORE: `modc_e_sc` and the `sc_m_*` gestures (§26.8.7), the SYSTEM.CFG writer (`CFG_DATA`/`CFG_SAVE cpc`, `cp_cfg_save`), `cp_flush_x`, `cp_flush_cfg`, `cp_toast`/`sc_m_say`, and the image's epilogue ladder | `MODS_SIZE` = 2,447 bytes, 5 sectors |
 | `.modu` | the panel: every page, `cp_flush_close_x`'s RTC half, `clockw.inc` and shutdown (§12.3.2) | the rest, 11,119 in all |
-| `.modcb` | the writer's file buffer, `cpc_buf` (`CFG_FBUF`, 131 bytes): BSS, in the claim's KB rounding and not in the file | — |
+| `.modcb` | the writer's file buffer, `cpc_buf` (`CFG_FBUF`, 163 bytes): BSS, in the claim's KB rounding and not in the file | — |
 
 `.modu` is `follows=.modc vfollows=.modc align=1`, so the two halves are
 one image at one set of offsets, and the panel reaches the core with a near
@@ -89320,7 +89320,9 @@ the wrong settings. Every value now travels with a key that says what it is.
 the boot overlay and read by nothing resident. `FD` is §31.14's Floppy page, two bytes at ver 1 on `kern_big` — the four
 drives' overrides and the read bound, one record so the page costs one key
 entry and one header. `DK` is the dock's one byte (§30.5), a key of its own at ver 1, on `kern_big`
-only. Seven keys at the time this paragraph was written, 81 bytes: `DW` driver-wanted bitmap, `SR` sound route, `CH`
+only. `TP` is §76.14.14's Color preset, seven bytes at ver 1 on both kernels -
+the preset's number, `[thm_cstrp]`'s title style and the five colours it puts
+in the Color row - one record so all three cost one header. Seven keys at the time this paragraph was written, 81 bytes: `DW` driver-wanted bitmap, `SR` sound route, `CH`
 clock 12/24, `CS` clock seconds, `SM` scheduler mode, and
 `HD` — a **driver's** own settings, whose contents the kernel does not know
 (§51.9). They are ASCII so a hex dump of the file reads as the list of
@@ -119139,15 +119141,15 @@ back stale pixels.
 
 #### 76.14.10 The Theme page
 
-A fourth radio, **Windows**, under Color at pane y 66; the animation group
-moves down 16; and the **Screen Saver** button moves to the right-hand column
-beside the animation radios, whose labels are short. Its rows are the Off
-radio's rows too, so `cp_thm_click` claims the button only INSIDE its
-rectangle and sends any other press to the groups. The control ids are 1-4
-the theme rows, 5-6 the animation pair, 7 the button. Windows is never
-greyed on kern_big: whether `WIN95.DRV` can be read is a mount and a search,
-and §47 rule 3's only honest test is doing it — so a refusal is a toast and
-the radios redraw to what is live.
+Three theme radios - **Bright**, **Dark**, **Color** - with **Customize...**
+on the Color row (76.14.14), then the animation pair, and the **Screen
+Saver** button centred under them at pane y 110. **Windows is not a radio**:
+it is a title style of Color, chosen in Customize (76.14.13), so its row went
+and the animation group moved up to pane y 80. The control ids are 1-3 the
+theme rows, 4-5 the animation pair, 6 the Screen Saver button and 7
+Customize. Customize is live only while Color or Windows is (and Color is
+offered at all, 76.12.1); a Windows that `WIN95.DRV` cannot be read for is
+refused at the click that asked for it, with a toast.
 
 #### 76.14.11 Measured
 
@@ -119218,6 +119220,117 @@ re-deriving it:
   between pull-downs (§76.14.8 handles Esc, Up, Down and Enter only).
 - **Phase 1's own leftovers** - a bold caption, an ellipsis on a cut caption,
   a 3D window frame, and a bevelled pull-down with etched separators.
+
+#### 76.14.13 Title styles: Solid, Stripes, Windows, and 95
+
+Customize has a **Title bar style** group under the presets - **Solid**,
+**Stripes**, **Windows** - and a **95** box beside Windows. Solid and Stripes
+are the existing `wm_draw_title` bar without or with its pinstripes; no
+second renderer, framebuffer or palette change. **Windows is §76.14's chrome
+wearing the selected preset's colours**: its title pair and its buttons take
+the Color row (76.14.14), and 95 puts back main's original button face and
+bevel (`thm_bgc` face, black glyphs, white lit edge) while keeping the
+preset's bar. 95 is disabled unless Windows is chosen. Bright and Dark keep
+their striped rows whatever this says; inactive bars stay solid.
+
+`[thm_cstrp]` is the one resident byte: bit 0 stripes, bit 1 95, bit 2 the
+Windows style. `thm_set` promotes Color to Windows when bit 2 is set - so the
+saved theme stays Color and the style rides beside it - and clears bit 2
+when `WIN95.DRV` cannot be read, so an unavailable style is never saved. The
+settings writer saves a Windows reached through the style as Color for the
+same reason. A preset change keeps every bit. The byte persists as byte 1 of
+the `TP` record (76.14.14); there is no API cell for it.
+
+Apply keeps the live preview; Cancel, Escape and the close box restore the
+opening preset, style and kind. The window stays within EGA's 640x350
+desktop.
+
+#### 76.14.14 Color presets: one Color row, no preset table
+
+Eight presets on the fixed EGA palette: no DAC or attribute register is
+touched, every value is a standard index, and Color - so every preset - needs
+a four-plane primary, VGA (mode 12h) or EGA (mode 10h). On CGA and Hercules
+Color is refused and Customize greys with it (76.12.1). Bright, Dark and the
+original Color appearance (Classic, preset 0) are unchanged.
+
+**IT COSTS NO RESIDENT RUNG.** The kernel carries ONE Color row - the one it
+always had - and no preset table, no preset byte and no setter. A preset is a
+row of `drivers/thmpal/thmrows.inc` copied over that Color row, and what
+persists it is the row itself. Measured against `main` before it: kern_big's
+`.text`/`.bss` grow inside the image rung's standing slack, `.cold` by
+nothing, KERN_SIZE unchanged; kern_small unchanged.
+
+| ID | Name | Desktop | Active title | Inactive title | Inactive ink | Menu XOR | Menu highlight |
+|---|---|---|---|---|---|---|---|
+| 0 | Classic | 3 | 1 | 7 | 0 | 0Fh | dark grey bar, white text |
+| 1 | Workbench | 9 | 1 | 8 | 15 | 0Eh | light blue bar, yellow text |
+| 2 | Light | 7 | 3 | 8 | 15 | 08h | white bar, dark grey text |
+| 3 | Forest | 10 | 2 | 8 | 15 | 0Fh | dark grey bar, white text |
+| 4 | Amethyst | 13 | 5 | 8 | 15 | 0Fh | dark grey bar, white text |
+| 5 | Amber | 14 | 6 | 8 | 15 | 09h | yellow bar, light blue text |
+| 6 | Midnight | 1 | 8 | 7 | 0 | 07h | black bar, light grey text |
+| 7 | Desert | 6 | 4 | 8 | 15 | 0Fh | dark grey bar, white text |
+
+All presets use menu background 7, ink 0, disabled ink 8 and active title
+ink 15. **Window content is not themeable**: white paper and black text in
+every window the kernel draws, and an application's own colours untouched.
+
+**The row.** The live block and every `thm_tab` row are ten bytes: menu bg,
+ink, disabled ink, active title bg and ink, desktop, stripes, inactive title
+bg and ink, and the menu XOR mask. `thm_tab` has four rows - Bright, Dark,
+Color (`THM_CROW`, the one a preset lands in) and Windows-on-1bpp; Windows
+on a colour adapter wears the Color row (76.14.13).
+
+**The open menu's highlight is still one XOR.** `vga_xor_fill_vram` XORs the
+item's cell with the row's mask through the Graphics Controller's Set/Reset:
+one call per move, its own undo, never a second write. On grey (7) paper and
+black (0) ink a mask `m` gives a `7 xor m` bar with `m`-coloured text, so the
+bar and its text cannot be chosen apart - which is why Forest, Amethyst and
+Desert keep the dark-grey bar. `menu_drop` takes the mask once per menu
+(`[menu_xorm]`) so a theme change while a menu is down cannot make the
+off-XOR disagree with the on. 1bpp adapters invert as before, and every other
+XOR fill keeps 0Fh.
+
+**The chooser.** `THMPAL.DRV` (79.2's species) holds the rows and names.
+`CTRL.DRV` loads it - `cp_thmv_open`, in the panel's own image, so nothing
+of the loader is resident - and checks the private ABI word at header +10,
+now 4. OPEN is handed `SI` = the Color row, `DI` = `drv_cfg+CFG_THMP`, `DX` =
+`thm_cstrp`'s address and `CH` = `[thm_kind]`. Every change installs the row,
+the preset's number and the style bits, and makes ONE `OSAPI_THM_SET` with
+Color. The opening state is banked on a fresh open only; Cancel puts it back
+and sets nothing that did not change, and a kind that cannot come back
+(Windows whose `WIN95.DRV` has gone) is toasted.
+
+`OSAPI_THM_SET` (0x046D, after `OSAPI_FERR_TEXT`) is the one public cell:
+AL = 0..3 adopts a kind, posts the repaint and owes `SYSTEM.CFG` a write; CF
+= 1 when Windows was refused. It may read a disk, so it is for the UI task.
+**A change of kind through it drops every window's bank** (`wm_su_drop_all`):
+the Theme page draws its radios from `[thm_kind]`, and a panel behind the
+chooser is repainted from its bank (11.96.4) rather than its `W_PAINT` - so
+the bank would show the kind before the change, which is §11.96.1's promise
+broken from outside the window. A preview within one kind keeps every bank.
+
+**Persistence is the row.** One version-1 `TP` record of seven bytes,
+appended after `EP`: the preset's number, `[thm_cstrp]`, and the five colours
+a preset varies (active title, desktop, inactive pair, XOR mask). The number
+is read only by `THMPAL.DRV`. The other six are in `_map`, byte for byte onto
+`[thm_cstrp]` and the Color row, so the boot restores a preset with the loop
+that restores every other setting and needs no table - which is also what the
+boot blob had room for (2.9.14). kern_small carries the record untouched.
+
+**Lifetime.** `THMPAL.DRV` stays cached while the Control Panel is open. Its
+row (`thmv_row`) sits one row past `drv_tab`, outside `DRV_MAX`, so
+`drv_call`'s one range test reaches it with no compare in `.cold`, and
+`mem_rr_tab` names its segment so a compaction can move it (66.6.3). The
+panel's close branch in `instance.inc` calls the resident `thmv_reap_x` on
+EVERY close, before and independent of the settings write: the window goes
+first, then the image.
+
+**Verification.** `tests/colorpresets_qemu.py` drives each preset through the
+chooser's own click handler and asserts the desktop, both title pairs and the
+menu bar's XOR on and off, white content, Cancel, the style group, the
+private ABI refusal, the reap on panel close and a `SYSTEM.CFG` round trip
+across a reboot.
 
 ---
 

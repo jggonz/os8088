@@ -2086,6 +2086,10 @@ menu_drop:
 
     ; --- follow the mouse while the button is down ----------------------------
     mov word [menu_sel], 0xFFFF ; nothing highlighted yet
+%ifdef OS88_THEME
+    mov al, [thm_xorm]          ; the bar's XOR mask, ONCE per menu (SPEC.md
+    mov [menu_xorm], al         ; 76.14.14): a theme change while it is down
+%endif                          ; cannot make the off XOR disagree with the on
     mov byte [menu_dropd], 1    ; ...and while this is up, the keyboard mouse
                                 ; steps by ITEM rather than by KBM_MIN pixels
                                 ; (SPEC.md 9.6.3). Set HERE and not in either
@@ -2774,6 +2778,9 @@ menu_iptr:  resw 1              ; its array of near item-string pointers
 menu_btn:   resb 1              ; mouse_btn mask that keeps it open: 1 = the
                                 ; bar's left button, 2 = a popup's right one
 menu_sel:   resw 1              ; highlighted item, 0xFFFF = none
+%ifdef OS88_THEME
+menu_xorm:  resb 1              ; [thm_xorm] as the menu dropped (76.14.14)
+%endif
 menu_seg:   resw 1              ; the segment [menu_set] and the app's own
                                 ; strings live in; 0 = the kernel's own
                                 ; (Locator, and any built-in window)
