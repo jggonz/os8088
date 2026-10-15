@@ -1409,7 +1409,7 @@ br_status:
 
 br_s_get:    db 'GET ', 0
 br_s_http:   db ' HTTP/1.0', 13, 10, 'Host: ', 0
-br_s_tail:   db 13, 10, 'User-Agent: os8088 Browser 1.2b', 13, 10
+br_s_tail:   db 13, 10, 'User-Agent: os8088 Browser 1.3', 13, 10
              db 'Connection: close', 13, 10, 13, 10, 0
 
 br_nnames:   dw br_s_ready, br_s_look, br_s_conn, br_s_asking

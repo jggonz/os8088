@@ -113741,13 +113741,41 @@ saves only the link arena's difference, its other three sizes being unchanged.
 
 ### 71.15 Bounded compatibility for retro pages
 
-The Browser identifies itself as **os8088 Browser 1.2b**. Its compatibility
+The Browser identifies itself as **os8088 Browser 1.3**. Its compatibility
 work stays within the existing page and link claims. HTTP redirects are limited
 to three hops; forms retain a fixed maximum of four forms and twelve controls;
 images contribute only their alternate text; and framesets fetch child pages
 sequentially into the existing page buffer. URL, host, path, page, and link
 storage remain bounded. When a bound is reached, the Browser truncates or
 refuses the affected operation visibly rather than allocating without limit.
+
+### 71.16 Browser 1.3 — text formatting on the cell font
+
+The 1.3 renderer stays on the existing 8×8 cell font and linear document
+stream. `<b>`/`<strong>` use a one-pixel double-strike; `<i>`/`<em>` shear the
+existing glyph bitmap by at most two pixels; and `<u>` uses the existing row
+ink pass. Styled rows are composed from `OSAPI_FONT_GLYPHS` through one fixed
+`BR_MAXCOL`-byte scanline buffer and eight one-row `OSAPI_GFX_BLIT1` calls.
+Layout reserves the scroll bar plus two blank cells at the right edge, so the
+last glyph stays clear of the bar even at the content area's inclusive edge.
+Wrapping also subtracts each
+line's active heading, list, or quote indent before measuring its text.
+Unstyled rows retain the single opaque `OSAPI_FONT_RUN` path. This adds no font
+resource, framebuffer, dynamic allocation, or per-character drawing call. If
+the blit is refused by a small-kernel configuration, the row falls back to the
+normal cell font. Formatting markers are zero-width document controls, so
+wrapping, scrolling, links, and hit-testing continue to use the same bounded
+path.
+
+Headings remain block elements, gain a level-dependent left indent, and are
+underlined through the Browser's existing per-row ink pass. Unordered and
+ordered list items use the same compact `*` bullet and hanging indent. A
+blockquote receives a two-cell indent, including wrapped lines. `<pre>` keeps
+its existing literal spaces and line breaks and does not wrap. Paragraphs
+retain one blank line between nonempty blocks; duplicate empty breaks are
+coalesced. Unsupported styling such as CSS, colors, and font sizes remains
+ignored, and application content is never rewritten outside the Browser's
+own document buffer.
 
 ### 72.1 What the packages did have to change, which is one question
 

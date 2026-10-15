@@ -342,13 +342,21 @@ def parse(raw):
             pre = 0 if closing else 1
             emit(("PARA",))
         elif tag in HEADING:
-            emit(("PARA",) if closing else ("HEAD", HEADING[tag]))
+            emit(("PARA",))
+            if closing:
+                emit(("HEAD", 0))
+            else:
+                emit(("HEAD", HEADING[tag]))
+        elif tag == "blockquote":
+            emit(("PARA",))
+            emit(("QUOTE", not closing))
         elif tag == "br":
             emit(("BR",))
         elif tag == "hr":
             emit(("HR",))
-        elif tag == "li" and not closing:
-            emit(("LI", 1))
+        elif tag == "li":
+            if not closing:
+                emit(("LI", 1))
         elif tag == "center":
             emit(("CENTRE", not closing))
         elif tag == "img" and not closing:
@@ -384,6 +392,8 @@ def parse(raw):
             style["b"] += -1 if closing else 1
         elif tag in ("i", "em", "cite", "var"):
             style["i"] += -1 if closing else 1
+        elif tag == "u":
+            pass                             # ink style; never literal delimiters
         elif tag in BLOCK:
             emit(("PARA",))
         # font, small, tt, span, big, style=, color=, bgcolor= : 2.2.1, dropped
@@ -517,7 +527,7 @@ def layout_table(t, width, out):
 
 def layout(ops, width):
     """-> the line table. One entry per display line (2.3)."""
-    out, pending, centre, indent = [], [], 0, 0
+    out, pending, centre, indent, heading, quote = [], [], 0, 0, 0, 0
 
     def flush():
         nonlocal pending
@@ -527,11 +537,14 @@ def layout(ops, width):
         pending = []
         if not words:
             return
-        for ln in wrap(words, width - indent):
-            s = " " * indent + ln
+        left = indent + (min(4, quote) * 2)
+        if heading and not quote:
+            left = max(left, min(5, heading - 1))
+        for ln in wrap(words, max(1, width - left)):
+            s = " " * left + ln
             if centre and len(s) < width:
                 s = " " * ((width - len(ln)) // 2) + ln
-            out.append(Line(s))
+            out.append(Line(s, left, "heading" if heading else "text"))
 
     for op in ops:
         k = op[0]
@@ -548,14 +561,16 @@ def layout(ops, width):
                 out.append(Line("", 0, "blank"))
         elif k == "HEAD":
             flush()
-            if out:
-                out.append(Line("", 0, "blank"))
+            heading = op[1]
         elif k == "HR":
             flush()
             out.append(Line("-" * width, 0, "rule"))
         elif k == "LI":
             flush()
             pending.append(" * ")
+        elif k == "QUOTE":
+            flush()
+            quote = min(4, quote + (1 if op[1] else -1))
         elif k == "CENTRE":
             flush()
             centre = op[1]

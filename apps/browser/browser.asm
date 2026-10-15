@@ -173,6 +173,14 @@ D_LNK1       equ 14                 ; a link opens, and the TWO BYTES after it
                                     ; byte from a marker and answer "which link
                                     ; is this offset inside" without a table
 D_LNK0       equ 15                 ; ...and closes
+D_Q1         equ 16                 ; quote indent starts; D_LNK1 consumes its
+D_Q0         equ 17                 ; ...paired payload bytes before layout sees them
+D_B1         equ 18                 ; bold starts (zero-width, paired controls)
+D_B0         equ 19
+D_I1         equ 20                 ; italic starts
+D_I0         equ 21
+D_U1         equ 22                 ; underline starts
+D_U0         equ 23
 
 D_NBSP       equ 0x7F               ; A NO-BREAK SPACE, and it is 0x7F rather
                                     ; than a marker because it is TEXT: it
@@ -242,6 +250,17 @@ LNF_LNK      equ 4                  ; this line BEGINS inside a link, so its
                                     ; br_emitline from the layout's running
                                     ; state, which is O(1) - the alternative is
                                     ; a backward scan per line per paint
+LNF_HEAD     equ 8                  ; heading underline, using the link ink pass
+LNF_LIST     equ 16                 ; a bullet lives in the hanging indent
+LNF_BOLD     equ 32                 ; formatting active at this line's first cell
+LNF_ITALIC   equ 64
+LNF_UNDER    equ 128
+
+LM_LINK      equ 1                  ; per-cell style marks in br_lmark
+LM_HEAD      equ 2
+LM_BOLD      equ LNF_BOLD
+LM_ITALIC    equ LNF_ITALIC
+LM_UNDER     equ LNF_UNDER
 
 ; --- geometry -----------------------------------------------------------------
 BR_SBW       equ 14                 ; scroll bar width, the Disk window's
@@ -445,7 +464,7 @@ br_size:
     mov [br_tpl+6], bx              ; own reasoning, and its WF_KEEPH clamp)
     mov word [br_tpl+2], MBAR_H
 .out:
-    jmp br_pop4
+    jmp br_pop5
 
 ; --- br_keeph - a CGA window may hang over the dock (SPEC.md 11.93) ----------
 ; in:  BX = the window; out: nothing, FLAGS PRESERVED - the CF wm_create left
@@ -650,7 +669,40 @@ br_show:
     mov si, [br_win]
     call br_measure                 ; [br_cols] = 0, so this IS the layout
     call br_paint_band
-    jmp br_sbar
+    call br_sbar
+    mov bx, [br_win]
+    cmp byte [br_ptitle], 0         ; the page title is metadata, so put it in
+    je .default                     ; the frame caption rather than the body
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    mov si, br_ptitle
+    mov di, br_wtitle
+    mov cx, BR_TITMAX - 1
+.copytitle:
+    lodsb
+    or al, al
+    jz .suffix
+    stosb
+    loop .copytitle
+.suffix:
+    mov si, br_s_titlesfx
+    mov cx, br_s_titlesfx_end - br_s_titlesfx
+    rep movsb
+    pop es
+    pop di
+    pop si
+    pop cx
+    mov ax, br_wtitle
+    jmp .title
+.default:
+    mov ax, br_s_webbrowser         ; untitled pages use the full product name
+.title:
+    call OSAPI_WM_TITLE             ; event-driven; redraws only the title strip
+    ret
 
 ; -----------------------------------------------------------------------------
 ; br_paint - W_PAINT: the whole content
@@ -722,7 +774,7 @@ br_measure:
 .rok:
     mov [br_rows], ax               ; whole 8px rows that fit
     mov ax, [br_cw]
-    sub ax, BR_SBW                  ; the bar owns the right edge
+    sub ax, BR_SBW + (BR_CELL * 2)  ; bar plus two clear cells before its edge
     jns .wok
     xor ax, ax
 .wok:
@@ -947,8 +999,14 @@ br_paint_line:
     mov si, br_lbuf
     push cx
     push dx
+    cmp byte [br_drawbitmap], 0
+    je .font
+    call br_paintstyled
+    jnc .painted
+.font:
     mov ax, (CWHITE << 8) | CBLACK
     call OSAPI_FONT_RUN
+.painted:
     pop dx
     pop cx
     call br_underline               ; ...and the link runs under it, from the
@@ -990,8 +1048,8 @@ br_underline:
                                     ; task holds it for its whole life
                                     ; (SPEC.md 7.1.4.1) and this runs under
                                     ; the same lock they draw through
-    cmp word [br_lnkn], 0
-    je .out                         ; no links on this page: nothing to scan
+    cmp byte [br_undraw], 0
+    je .out                         ; no link or heading ink on this line
     mov si, cx                      ; SI = the row's pen x, DI = its pen y,
     mov bp, dx                      ; banked - CX and DX are the fill's
     mov bx, br_lmark                ; **BX AND NOT SI**: only BX or BP may be
@@ -1000,15 +1058,15 @@ br_underline:
 .scan:
     cmp di, [br_cols]
     jae .out
-    cmp byte [bx+di], 0
-    je .step
+    test byte [bx+di], LM_LINK | LM_HEAD | LM_UNDER
+    jz .step
     mov cx, di                      ; CX = the run's first column
 .run:
     inc di
     cmp di, [br_cols]
     jae .emit
-    cmp byte [bx+di], 0
-    jne .run
+    test byte [bx+di], LM_LINK | LM_HEAD | LM_UNDER
+    jnz .run
 .emit:
     push bx
     push di
@@ -1047,6 +1105,148 @@ br_underline:
     ret
 
 ; -----------------------------------------------------------------------------
+; br_paintstyled - compose one formatted cell-font row a scanline at a time
+; in: CX/DX = the row's pen; br_lbuf/br_lmark are current
+; out: CF=1 if BLIT1 refused (caller redraws with FONT_RUN), all registers kept
+;
+; The 8x8 system glyphs are the only font. Bold thickens each set row by one
+; pixel; italic shears its upper rows right by at most two pixels. One
+; BR_MAXCOL-byte scratch row is reused for each raster row, so this costs no
+; framebuffer and only eight BLIT1 calls on a line that actually has styling.
+; -----------------------------------------------------------------------------
+br_paintstyled:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov [br_bmpx], cx
+    mov [br_bmpy], dx
+    call OSAPI_FONT_GLYPHS
+    mov [br_glyphseg], dx
+    mov [br_glyphofs], si
+    mov [br_glyphfirst], al
+    mov ax, (CWHITE << 8) | CBLACK ; set pixels = ink; clear pixels = paper
+    call OSAPI_GFX_BLIT1_PEN
+    mov byte [br_bmrow], 0
+.row:
+    push ds
+    pop es
+    mov di, br_stylebuf
+    xor ax, ax
+    mov cx, [br_cols]
+    cld
+    rep stosb
+    xor bx, bx                      ; cell index, also the scratch byte offset
+.cell:
+    cmp bx, [br_cols]
+    jae .blit
+    mov al, [br_lbuf+bx]
+    sub al, [br_glyphfirst]
+    xor ah, ah
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1                       ; eight bytes per ROM glyph
+    add ax, [br_glyphofs]
+    mov si, ax
+    mov ax, [br_glyphseg]
+    mov es, ax
+    xor ax, ax
+    mov al, [br_bmrow]
+    add si, ax
+    mov al, [es:si]
+    mov [br_bmglyph], al
+    mov al, [br_lmark+bx]
+    mov [br_bmmark], al
+    test al, LM_BOLD
+    jz .italic
+    mov al, [br_bmglyph]
+    mov ah, al
+    shr ah, 1
+    or al, ah                       ; one-pixel double-strike
+    mov [br_bmglyph], al
+.italic:
+    mov byte [br_bmshift], 0
+    test byte [br_bmmark], LM_ITALIC
+    jz .deposit
+    mov al, 7
+    sub al, [br_bmrow]
+    shr al, 1
+    cmp al, 2
+    jbe .shear
+    mov al, 2
+.shear:
+    mov [br_bmshift], al
+.deposit:
+    mov cl, [br_bmshift]
+    or cl, cl
+    jz .direct
+    mov al, [br_bmglyph]
+    mov ah, al
+    shr al, cl
+    or [br_stylebuf+bx], al
+    mov cl, 8
+    sub cl, [br_bmshift]
+    mov al, ah
+    shl al, cl
+    ; The last cell's shear spills beyond the visible band; discard it.
+    ; (The branch uses the next byte's column, not the current one.)
+    inc bx
+    cmp bx, [br_cols]
+    jae .spilldone
+    or [br_stylebuf+bx], al
+.spilldone:
+    dec bx
+    jmp .nextcell
+.direct:
+    mov al, [br_bmglyph]
+    or [br_stylebuf+bx], al
+.nextcell:
+    inc bx
+    jmp .cell
+.blit:
+    push ds
+    pop es
+    mov si, br_stylebuf
+    mov bp, [br_cols]               ; one byte per eight-pixel cell
+    mov bx, [br_bmpy]
+    xor dx, dx
+    mov dl, [br_bmrow]
+    add bx, dx
+    mov ax, [br_cols]
+    mov cl, 3
+    shl ax, cl
+    mov cx, ax                      ; width is exactly cells * eight pixels
+    mov ax, [br_bmpx]               ; load destination after width calculation
+    mov dx, 1
+    call OSAPI_GFX_BLIT1
+    jc .failed
+    inc byte [br_bmrow]
+    cmp byte [br_bmrow], 8
+    jb .row
+    mov ax, (CBLACK << 8) | CWHITE ; restore the lock's default pen
+    call OSAPI_GFX_BLIT1_PEN
+    clc
+    jmp .out
+.failed:
+    mov ax, (CBLACK << 8) | CWHITE
+    call OSAPI_GFX_BLIT1_PEN
+    stc
+.out:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; br_build - render one line index into br_lbuf, space-padded to the band
 ; in:  AX = line index
 ; out: br_lbuf holds [cols] chars + NUL
@@ -1059,6 +1259,8 @@ br_build:
     push si
     push di
     push es
+    mov byte [br_undraw], 0
+    mov byte [br_drawbitmap], 0
     push ax                         ; THE LINE INDEX. `mov al, ' '` below is a
                                     ; write to the bottom half of it, so
                                     ; without this every row draws line
@@ -1092,15 +1294,31 @@ br_build:
     mov di, [es:si+LN_OFS]
     mov cx, [es:si+LN_END]
     mov al, [es:si+LN_X]
+    xor ah, ah
+    mov dx, ax                      ; preserve the line's actual starting column
     mov ah, [es:si+LN_FL]
     mov bh, ah                      ; BH = flags
+    mov [br_lflags], ah
     and ah, LNF_LNK                 ; ...and the LINK STATE this line inherits
     mov [br_lnkcell], ah            ; (LNF_LNK, set by br_emitline)
-    xor ah, ah
-    mov dx, ax                      ; the start column. NOT in BP: that
+    mov al, [br_lflags]
+    and al, LNF_BOLD | LNF_ITALIC
+    mov [br_lfmt], al
+    mov byte [br_drawbitmap], 0
+    or al, al
+    jz .plainstart
+    mov byte [br_drawbitmap], 1
+.plainstart:
+    mov byte [br_undraw], 0
+    mov al, [br_lflags]
+    test al, LNF_HEAD | LNF_LNK | LNF_UNDER
+    jz .markready
+    mov byte [br_undraw], 1
+.markready:
+                                    ; DX is the start column. NOT in BP: that
                                     ; addresses SS here (SPEC.md 1) and the
                                     ; kernel's frame is under it
-    test bh, LNF_RULE
+    test byte [br_lflags], LNF_RULE
     jz .text
                                     ; a rule: the band, filled with '-'
     mov di, br_lbuf
@@ -1114,6 +1332,11 @@ br_build:
 .text:
     mov es, [br_docseg]
     mov si, di                      ; SI = doc offset
+    test byte [br_lflags], LNF_LIST
+    jz .nobullet
+    mov byte [br_lbuf], '*'
+    mov byte [br_lbuf+1], ' '
+.nobullet:
     mov di, br_lbuf
     add di, dx                      ; ...plus the line's start column
     mov bx, [br_cols]
@@ -1132,9 +1355,42 @@ br_build:
     jmp .copy
 .nl1:
     cmp al, D_LNK0
-    jne .copy
+    jne .style1
     mov byte [br_lnkcell], 0
     jmp .copy                       ; every other marker: not a cell
+.style1:
+    cmp al, D_B1
+    jne .style2
+    or byte [br_lfmt], LNF_BOLD
+    mov byte [br_drawbitmap], 1
+    jmp .copy
+.style2:
+    cmp al, D_B0
+    jne .style3
+    and byte [br_lfmt], 0FFh-LNF_BOLD
+    jmp .copy
+.style3:
+    cmp al, D_I1
+    jne .style4
+    or byte [br_lfmt], LNF_ITALIC
+    mov byte [br_drawbitmap], 1
+    jmp .copy
+.style4:
+    cmp al, D_I0
+    jne .style5
+    and byte [br_lfmt], 0FFh-LNF_ITALIC
+    jmp .copy
+.style5:
+    cmp al, D_U1
+    jne .style6
+    or byte [br_lfmt], LNF_UNDER
+    mov byte [br_undraw], 1
+    jmp .copy
+.style6:
+    cmp al, D_U0
+    jne .copy
+    and byte [br_lfmt], 0FFh-LNF_UNDER
+    jmp .copy
 .cell:
     cmp al, D_NBSP                  ; ...a no-break space is a SPACE on screen
     jne .cell2                      ; and only the layout knows the difference
@@ -1153,7 +1409,16 @@ br_build:
                                     ; map, a word per cell filled on EVERY
                                     ; painted line for the one line a click
                                     ; ever reads (br_hitofs)
-    mov al, [br_lnkcell]            ; ...and whether it is inside a link, which
+    mov al, [br_lnkcell]            ; per-cell link and semantic style marks
+    test byte [br_lflags], LNF_HEAD
+    jz .markfmt
+    or al, LM_HEAD
+.markfmt:
+    or al, [br_lfmt]
+    test al, LM_UNDER
+    jz .markstore
+    mov byte [br_undraw], 1
+.markstore:
     mov [di + (br_lmark - br_lbuf)], al ; is what the underline is drawn from
     inc di
     jmp .copy
@@ -3052,7 +3317,7 @@ br_selcycle:
 br_ablines:                         ; os88ui_about's line table (SPEC.md
                                     ; 20.5.1.1): near pointers, 0 ends it
     dw br_ab1, br_ab2, br_ab3, br_ab4, 0
-br_ab1:      db 'os8088 Browser 1.2b', 0
+br_ab1:      db 'os8088 Browser 1.3', 0
 br_ab2:      db 'HTTP, HTML and tables', 0
 br_ab3:      db 0                   ; a blank line is a line with no glyphs
 br_ab4:      db 'Contributed by Elendilon', 0
@@ -4270,13 +4535,15 @@ br_act:
     cmp byte [br_tname+2], 0
     jne .table
     call br_break                   ; open or close, a heading is a block
-    cmp byte [br_close], 0
-    jne .out
     push ax
     mov al, D_HEAD
     call br_put
     pop ax
     sub al, '0'
+    cmp byte [br_close], 0
+    je .rank
+    xor al, al                      ; closing heading clears the active style
+.rank:
     call br_put
     jmp .out
 .table:
@@ -4333,6 +4600,10 @@ TA_FRAME equ 18
 TA_DROP  equ 5
 TA_FORM  equ 6
 TA_INPUT equ 7
+TA_BOLD  equ 8
+TA_ITALIC equ 9
+TA_UNDER equ 10
+TA_QUOTE equ 11
 TA_MARK  equ 40h
 TA_OPEN  equ 20h
 TA_PAIR  equ 10h
@@ -4366,9 +4637,19 @@ br_do:
     ret
 .select:
     cmp al, TA_SELECT
-    jne .anchorlink
+    jne .format
     call br_select
     ret
+.format:
+    cmp al, TA_BOLD
+    jb .anchorlink
+    cmp al, TA_QUOTE
+    ja .anchorlink
+    sub al, TA_BOLD
+    shl al, 1
+    xor ah, ah
+    mov bx, ax
+    jmp [bx + br_fmttab]
 .anchorlink:
     test al, TA_MARK
     jnz .mark
@@ -4382,7 +4663,14 @@ br_do:
     cmp byte [br_close], 0
     jne .no
 .any:
+    cmp al, TA_LI
+    je .list
     call br_break
+    jmp .marker
+.list:
+    mov byte [br_any], 0           ; the next item starts a fresh line, not a
+    mov byte [br_wsp], 0           ; paragraph-sized blank gap
+.marker:
     mov ah, al
     and al, 0Fh
     test ah, TA_PAIR                ; paired: the close tag's marker is next
@@ -4422,6 +4710,35 @@ br_do:
 .input:
     call br_input
     ret
+br_fmttab:
+    dw br_fmtbold, br_fmtitalic, br_fmtunder, br_fmtquote
+br_fmtbold:
+    mov al, D_B1
+    cmp byte [br_close], 0
+    je br_fmtemit
+    mov al, D_B0
+    jmp br_fmtemit
+br_fmtitalic:
+    mov al, D_I1
+    cmp byte [br_close], 0
+    je br_fmtemit
+    mov al, D_I0
+    jmp br_fmtemit
+br_fmtunder:
+    mov al, D_U1
+    cmp byte [br_close], 0
+    je br_fmtemit
+    mov al, D_U0
+br_fmtemit:
+    jmp br_put
+br_fmtquote:
+    call br_break
+    mov al, D_Q1
+    cmp byte [br_close], 0
+    je .put
+    mov al, D_Q0
+.put:
+    jmp br_put
 br_dotab:
     dw br_anchor, br_break, br_do.br, br_do.title, br_do.drop, br_do.form
     dw br_input
@@ -4900,6 +5217,10 @@ br_captitle:
     cmp al, '<'
     je .done
     inc si
+    cmp al, '&'
+    jne .space
+    call br_tentity                ; decode once for both the caption and History
+.space:
     cmp al, ' '
     ja .put
     mov al, ' '                     ; a newline, a tab and every other control
@@ -4928,6 +5249,78 @@ br_captitle:
     pop si
     pop cx
     pop ax
+    ret
+
+; --- br_tentity - decode one title entity; unknown ones stay literal ---------
+; in: ES:SI just after '&'; out: AL = folded byte, SI after ';'; CF=1 literal
+; The renderer already owns the named table and numeric decoder. Reusing them
+; here keeps <title> and History labels consistent with the page body without
+; another table or any extra per-page storage.
+br_tentity:
+    push bx
+    push cx
+    push dx
+    push di
+    mov dx, si                      ; rewind to the first byte on malformed input
+    xor cx, cx
+    mov bx, br_ebuf
+.gather:
+    cmp cx, 10
+    jae .literal
+    cmp si, [br_srclen]
+    jae .literal
+    mov al, [es:si]
+    inc si
+    cmp al, ';'
+    je .have
+    mov [bx], al
+    inc bx
+    inc cx
+    jmp .gather
+.have:
+    or cx, cx
+    jz .literal
+    mov byte [bx], 0
+    cmp byte [br_ebuf], '#'
+    je .numeric
+    call br_named
+    jc .literal
+    jmp short .known
+.numeric:
+    call br_ednum
+    jc .literal
+    cmp ax, 0x100
+    jae .wide
+    cmp al, 0x20
+    jb .space
+    cmp al, 0x7E
+    jbe .known
+    mov bl, al
+    sub bl, 0x80
+    xor bh, bh
+    mov al, [bx+br_l1tab]
+    or al, al
+    jnz .known
+    mov al, '?'
+    jmp short .known
+.wide:
+    call br_foldwide
+.known:
+    clc
+    jmp short .out
+.space:
+    mov al, ' '
+    clc
+    jmp short .out
+.literal:
+    mov si, dx
+    mov al, '&'
+    stc
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; --- br_break - end the current block ----------------------------------------
@@ -5025,6 +5418,12 @@ br_layout:
     mov [br_bch], ax
     mov [br_lcen], al
     mov [br_lpre], ax               ; br_lpre and br_lind, one word
+    mov byte [br_lhead], 0
+    mov byte [br_lquote], 0
+    mov byte [br_litem], 0
+    mov byte [br_lfmt], 0
+    mov ax, [br_cols]
+    mov [br_effcols], ax
     dec ax
     mov [br_lnkopen], ax            ; the LAYOUT's copy of the link state, which
     mov [br_lnkst], ax              ; is a different walk from the parse's
@@ -5057,7 +5456,7 @@ br_layout:
     mov [br_bch], ax
 .over:
     mov ax, [br_nch]
-    cmp ax, [br_cols]
+    cmp ax, [br_effcols]
     jbe .loop
     cmp byte [br_lpre], 0
     jne .loop                       ; PRE never wraps: it runs off the band
@@ -5070,6 +5469,7 @@ br_layout:
     mov bx, ax
     dec bx                          ; end = just before the space
     call br_emitline
+    call br_seteff                  ; emitline consumed the one-line indent
     mov ax, [br_bpos]
     mov [br_lstart], ax
     mov cx, [br_nch]
@@ -5080,8 +5480,9 @@ br_layout:
 .hard:
     mov bx, si                      ; a word longer than the band: split it
     dec bx
-    mov cx, [br_cols]
+    mov cx, [br_effcols]
     call br_emitline
+    call br_seteff
     mov [br_lstart], bx
     mov word [br_nch], 1
     mov word [br_bpos], 0
@@ -5091,6 +5492,22 @@ br_layout:
     je .mlnk1                       ; END NO LINE.** Every other marker in this
     cmp al, D_LNK0                  ; format is a break and the emitline below
     je .mlnk0                       ; is why; a link is a run of ordinary text
+    cmp al, D_B1
+    je .mbold1
+    cmp al, D_B0
+    je .mbold0
+    cmp al, D_I1
+    je .mitalic1
+    cmp al, D_I0
+    je .mitalic0
+    cmp al, D_U1
+    je .munder1
+    cmp al, D_U0
+    je .munder0
+    cmp al, D_Q1
+    je .mquote1
+    cmp al, D_Q0
+    je .mquote0
     cmp al, D_END                   ; **AND D_END COMES BEFORE THE EMIT, NOT
     je .fin                         ; AFTER IT**: .fin emits the pending line
                                     ; itself, so testing it below meant a
@@ -5139,21 +5556,67 @@ br_layout:
     inc si
     mov word [br_lnkopen], 0FFFFh
     jmp .loop
+.mbold1:
+    inc si
+    or byte [br_lfmt], LNF_BOLD
+    jmp .loop
+.mbold0:
+    inc si
+    and byte [br_lfmt], 0FFh-LNF_BOLD
+    jmp .loop
+.mitalic1:
+    inc si
+    or byte [br_lfmt], LNF_ITALIC
+    jmp .loop
+.mitalic0:
+    inc si
+    and byte [br_lfmt], 0FFh-LNF_ITALIC
+    jmp .loop
+.munder1:
+    inc si
+    or byte [br_lfmt], LNF_UNDER
+    jmp .loop
+.munder0:
+    inc si
+    and byte [br_lfmt], 0FFh-LNF_UNDER
+    jmp .loop
 .mtab:
     call br_table                   ; SI = the body. CF=1 = inline it, and
     jmp .mrst                       ; either way the walk resumes at SI
 .mpara:
     call br_blank
+    mov byte [br_lhead], 0
+    call br_seteff
     jmp .mrst
 .mhead:
+    mov al, [es:si]                 ; keep the rank for the heading line's
+    mov [br_lhead], al              ; hanging indent and underline
     inc si                          ; the level byte
-    call br_blank
+    call br_seteff
     jmp .mrst
 .mhr:
     call br_emitrule
     jmp .mrst
 .mli:
     mov byte [br_lind], 2
+    mov byte [br_litem], 1
+    call br_seteff
+    jmp .mrst
+.mquote1:
+    inc si                          ; consume D_Q1 before restarting the walk
+    inc byte [br_lquote]
+    cmp byte [br_lquote], 4
+    jbe .quoteindent
+    mov byte [br_lquote], 4
+.quoteindent:
+    call br_seteff
+    jmp .mrst
+.mquote0:
+    inc si                          ; consume D_Q0 before restarting the walk
+    cmp byte [br_lquote], 0
+    je .mrst
+    dec byte [br_lquote]
+    call br_seteff
     jmp .mrst
 .mcen1:
     mov byte [br_lcen], 1
@@ -5186,6 +5649,49 @@ br_layout:
     pop ax
     ret
 
+; --- br_seteff - wrap width after the active line's left indent --------------
+; br_cols already excludes the scroll bar and its clear one-cell gutter.
+; Quote, list and heading indents are also physical cells, so they must reduce
+; the line length before br_build starts copying at LN_X. Centered text is
+; intentionally excluded: br_emitline centers its measured length afterward.
+br_seteff:
+    push ax
+    push bx
+    xor bx, bx
+    mov al, [br_lquote]
+    xor ah, ah
+    shl ax, 1
+    mov bx, ax                      ; two cells per quote level
+    cmp byte [br_lquote], 0
+    jne .head_done
+    mov al, [br_lhead]
+    or al, al
+    jz .head_done
+    dec al                          ; h1 indent 0, h6 indent 5
+    cmp al, 5
+    jbe .head_add
+    mov al, 5
+.head_add:
+    xor ah, ah
+    add bx, ax
+.head_done:
+    xor ax, ax
+    mov al, [br_lind]
+    add bx, ax
+    mov ax, [br_cols]
+    sub ax, bx
+    jnc .store
+    xor ax, ax
+.store:
+    cmp ax, 1
+    jae .save
+    mov ax, 1
+.save:
+    mov [br_effcols], ax
+    pop bx
+    pop ax
+    ret
+
 ; --- br_emitline - record [br_lstart, BX) as one display line ----------------
 ; in: BX = end offset, CX = cells of text on it
 br_emitline:
@@ -5214,10 +5720,33 @@ br_emitline:
     jmp .setx
 .ind:
     mov al, [br_lind]
+    mov ah, [br_lquote]
+    shl ah, 1
+    add al, ah                      ; quotes indent every visual line
+    cmp byte [br_lhead], 0
+    je .setx
+    cmp byte [br_lquote], 0
+    jne .setx
+    mov al, [br_lhead]
+    dec al                          ; h1 at column 0, h6 at column 5
+    cmp al, 5
+    jbe .setx
+    mov al, 5
     xor ah, ah
 .setx:
     mov [es:di+LN_X], al
     mov byte [es:di+LN_FL], 0
+    mov al, [br_lfmt]
+    or [es:di+LN_FL], al            ; style active at the line's first cell
+    cmp byte [br_lhead], 0
+    je .nothead
+    or byte [es:di+LN_FL], LNF_HEAD
+.nothead:
+    cmp byte [br_litem], 0
+    je .notitem
+    or byte [es:di+LN_FL], LNF_LIST
+    mov byte [br_litem], 0
+.notitem:
     cmp word [br_lnkst], 0FFFFh     ; ...DID THIS LINE BEGIN INSIDE A LINK?
     je .nolnk                       ; The underline needs it and the line's own
     or byte [es:di+LN_FL], LNF_LNK  ; span may hold no D_LNK1 at all, the
@@ -5241,10 +5770,24 @@ br_emitline:
 ; --- br_blank / br_emitrule - the two lines with no text in them -------------
 br_blank:
     push ax
+    push bx
     push di
     push es
     cmp word [br_nlines], 0
     je .out                         ; never lead the document with a blank
+    mov ax, [br_nlines]
+    dec ax
+    mov bx, LN_SIZE
+    mul bx
+    mov di, ax
+    mov es, [br_lseg]
+    cmp word [es:di+LN_OFS], 0
+    jne .add
+    cmp word [es:di+LN_END], 0
+    jne .add
+    cmp byte [es:di+LN_FL], 0
+    je .out                         ; coalesce adjacent paragraph breaks
+.add:
     call br_lslot
     jc .out
     mov word [es:di+LN_OFS], 0
@@ -5255,6 +5798,7 @@ br_blank:
 .out:
     pop es
     pop di
+    pop bx
     pop ax
     ret
 
@@ -5955,8 +6499,12 @@ br_twrap:
     jmp .eput                       ; for equal - separates them from every
 .em0:                               ; other marker, which is still dropped.
     cmp al, D_LNK0                  ; A LINK COSTS NO WIDTH: it is copied
-    jne .eput                       ; without touching DX, so a cell keeps the
+    jne .emx                        ; without touching DX, so a cell keeps the
     mov word [br_wlnk], 0FFFFh      ; columns br_tmeas measured
+    jmp .eput
+.emx:
+    cmp al, 0x20                    ; layout markers carry no cell width
+    jb .e2
 .eput:
     call br_cput
     jmp .e2
@@ -6136,7 +6684,7 @@ br_tskip:
 ; =============================================================================
 ; FORMS (BROWSER-PLAN 7)
 ; =============================================================================
-; Browser 1.2b keeps four bounded form owners and twelve visible controls.
+; Browser 1.3 keeps four bounded form owners and twelve visible controls.
 ; Controls remain document spans, so richer forms do not add a painter.
 ;
 ; A FIELD IS A FIXED SPAN OF THE DOCUMENT. The parse emits '[', W spaces and
@@ -7658,7 +8206,7 @@ br_enttab:
 ; --- tags -----------------------------------------------------------------------
 ; name, then TA_* with bit 7 set as the terminator (br_enttab's shape).
 ; Everything not here is IGNORED and its text kept, which is
-; what makes an unknown tag harmless: <font>, <span>, <tt>, <small>, <b>, <i>
+; what makes an unknown tag harmless: <font>, <span>, <tt>, <small>
 ; and every colour attribute in the file are dropped exactly this way
 ; (BROWSER-PLAN 2.2.1 - colour goes in BOTH directions or text goes invisible).
 br_tagtab:
@@ -7686,7 +8234,12 @@ br_tagtab:
     db 'td', 80h | TA_CELL
     db 'th', 80h | TA_CELL
     db 'caption', 80h | TA_PARA
-    db 'blockquote', 80h | TA_PARA
+    db 'blockquote', 80h | TA_QUOTE
+    db 'b', 80h | TA_BOLD
+    db 'strong', 80h | TA_BOLD
+    db 'i', 80h | TA_ITALIC
+    db 'em', 80h | TA_ITALIC
+    db 'u', 80h | TA_UNDER
     db 'a', 80h | TA_LINK
     db 'form', 80h | TA_FORM
     db 'input', 80h | TA_INPUT
@@ -7706,7 +8259,7 @@ br_tagtab:
 ; --- window template (SPEC.md 11) ----------------------------------------------
 br_tpl:
     dw 40, 30, 496, 150
-    dw br_name_s, br_paint, br_onkey, 0    ; W_ONCLICK is installed by
+    dw br_s_webbrowser, br_paint, br_onkey, 0 ; W_ONCLICK is installed by
                                         ; os88ui_btninit (20.5.1.3.3)
 
 ; --- the app menu set (SPEC.md 12.2) -------------------------------------------
@@ -7787,6 +8340,9 @@ br_s_nopage:  db 'Nothing loaded to save', 0
 br_s_saved:   db 'Saved', 0
 br_s_wfail:   db 'Save failed', 0
 br_s_unsup:   db '[unsupported]', 0
+br_s_webbrowser: db 'os8088 Web Browser', 0
+br_s_titlesfx: db ' - os8088 Web Browser', 0
+br_s_titlesfx_end:
 
 br_s_big:   db 'Page too large', 0
 br_s_bad:   db 'Cannot open page', 0
@@ -8110,7 +8666,26 @@ br_factions   equ br_flds + BR_FMAX*BR_FLDSZ
 br_hids       equ br_factions + BR_FORMMAX*BR_ACTMAX
 br_hnws       equ br_hids + BR_FORMMAX*BR_HIDMAX
 br_subs       equ br_hnws + BR_FORMMAX*2
-BR_BSS      equ (br_subs + BR_SUBMAX*BR_SUBSZ - os88_image_end)
+br_lhead      equ br_subs + BR_SUBMAX*BR_SUBSZ
+br_lquote     equ br_lhead + 1
+br_litem      equ br_lquote + 1
+br_effcols    equ br_litem + 1
+br_undraw     equ br_effcols + 2
+br_lfmt       equ br_undraw + 1
+br_drawbitmap equ br_lfmt + 1
+br_lflags     equ br_drawbitmap + 1
+br_bmpx       equ br_lflags + 1
+br_bmpy       equ br_bmpx + 2
+br_glyphseg   equ br_bmpy + 2
+br_glyphofs   equ br_glyphseg + 2
+br_glyphfirst equ br_glyphofs + 2
+br_bmrow      equ br_glyphfirst + 1
+br_bmglyph    equ br_bmrow + 1
+br_bmmark     equ br_bmglyph + 1
+br_bmshift    equ br_bmmark + 1
+br_stylebuf   equ br_bmshift + 1
+br_wtitle     equ br_stylebuf + BR_MAXCOL ; title and the Browser's IE-style suffix
+BR_BSS      equ (br_wtitle + BR_TITMAX + 21 - os88_image_end)
 
 ; --- what the code assumes about the layout above ----------------------------
 %if br_wsp != br_on + 1 || br_pre != br_any + 1

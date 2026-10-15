@@ -11050,7 +11050,7 @@ $(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
 
 # --- the BROWSER's test disk (docs/plans/completed/BROWSER-PLAN.md 10 step 1) -----------------
 # The renderer with no network in the machine: the package plus tests/htm/'s
-# fixtures, so a scripted session can open demo.htm, torture.htm, the
+# fixtures, so a scripted session can open demo.htm, formatting.htm, torture.htm, the
 # FrogFind capture and the frameset fixture off a floppy and diff the
 # framebuffer. On demand only -
 # `all` builds none of it and nothing here ships.
@@ -11061,6 +11061,8 @@ $(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
 #   python3 tests/brtest.py --page BROWSER.HTM
 #                                         # ...and on the page that SHIPS
 #                                         # (SPEC.md 71.12)
+#   python3 tests/brtest.py --page FORMAT.HTM
+#                                         # ...and on Browser 1.3 formatting
 #   python3 tests/brclick.py              # ...and the PAGE-CLICK one: links,
 #                                         # a form field and the submit button
 #                                         # (BROWSER-PLAN 5.1/7.4). Both use
@@ -11108,6 +11110,7 @@ $(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
 # every shipped apps image then fails a freshness check about a disk that is
 # perfectly fresh. Renaming is a reason for a copy; having one is not.
 BRFILES := $(BUILD)/browser.o88 apps/browser/browser.htm $(BUILD)/DEMO.HTM \
+           $(BUILD)/FORMAT.HTM \
            $(BUILD)/TORTURE.HTM \
            $(BUILD)/UTF8.HTM $(BUILD)/FROGFIND.HTM $(BUILD)/FFHOME.HTM \
            $(BUILD)/LINKS.HTM $(BUILD)/PUBZONE.HTM $(BUILD)/FRAMESET.HTM
@@ -11115,6 +11118,8 @@ BRFILES := $(BUILD)/browser.o88 apps/browser/browser.htm $(BUILD)/DEMO.HTM \
 browsertest: $(BUILD)/brtest.img $(BUILD)/brtest360.img
 
 $(BUILD)/DEMO.HTM: tests/htm/demo.htm | $(BUILD)
+	cp $< $@
+$(BUILD)/FORMAT.HTM: tests/htm/formatting.htm | $(BUILD)
 	cp $< $@
 $(BUILD)/TORTURE.HTM: tests/htm/torture.htm | $(BUILD)
 	cp $< $@
