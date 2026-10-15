@@ -191,7 +191,8 @@ def callsites(defines=("KERN_BIG",), build="build"):
                 name = text[5:].strip().split(":")[-1]  # `FAT_SEG:ovl_clk_init`
             # ...and a FAR SHIM is named for what it forwards to: kmain_o
             # reaches `.text` through `cw_`/`ovw_` cells (`call
-            # KERNEL_SEG:cw_thm_set`), and the phase is still thm_set's.
+            # KERNEL_SEG:cw_vid_disp_init`), and the phase is still
+            # vid_disp_init's.
             name = re.sub(r"^(?:cw|ovw|spw)_", "", name)
             out.append((base(emit[i + 1][0]), name))
         return out

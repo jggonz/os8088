@@ -52,7 +52,7 @@ THMV_CLOSE  equ 2
 TV_NPRESET  equ THM_PRESET_N     ; selectable rows: the preset IDs
 THM_COLOR   equ 2                ; MIRRORED from kernel/vga12.inc's THM_COLOR -
                                   ; this file never touches [thm_kind] itself,
-                                  ; only passes this one constant to cw_thm_set
+                                  ; only passes this one constant to OSAPI_THM_SET
 THM_WIN     equ 3
 TV_STY_SOLID   equ 0
 TV_STY_STRIPES equ 1
