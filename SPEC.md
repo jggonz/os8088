@@ -113751,10 +113751,37 @@ still at its ceiling and nothing else has been claimed, so a hop leaks nothing,
 the target is not drained into a buffer cut to the redirect body's size, and a
 redirect with an empty body is followed rather than reported as an empty
 reply; forms retain a fixed maximum of four forms and twelve controls;
-images contribute only their alternate text; and framesets fetch child pages
-sequentially into the existing page buffer. URL, host, path, page, and link
+images contribute only their alternate text; and a frameset is fetched child
+by child and appended into one page. URL, host, path, page, and link
 storage remain bounded. When a bound is reached, the Browser truncates or
 refuses the affected operation visibly rather than allocating without limit.
+
+**A frameset's children are drained into page buffers RE-CLAIMED AT THE
+CEILING.** The frameset page is parsed like any other and its `<frame src>`s
+are queued in the link arena; but 71.14's hand-over cut the source to the
+frameset's own size and claimed the document from it, and a child drained into
+those was cut at a kilobyte. So instead of fetching the first child the worker
+posts `[br_fin]` = 4 and a wake, and the UI task re-claims (`br_frameclaim`):
+the document and the line table are freed, the source is regrown to
+`BR_MAXKB` (or, when the heap cannot grow it where it stands, freed and
+claimed again at the ceiling - the frameset's source is parsed and not needed
+again), the two are claimed again from the ceiling (`br_claimpage`, the head
+of `br_claimrest`), and **the link arena is kept**, because the queued srcs and
+each child's base URL live in it. The UI task answers `[br_fin]` = 5 and the
+worker fetches the first child; a refusal is `Out of memory`. The hand-over
+byte's values are therefore 0 draining, 1 the page is in and the UI task owes
+its claims, 2 claimed, 3 parsing, 4 the UI task owes a frameset's re-claim, 5
+re-claimed. A frameset costs what the largest page costs - 32 KB of source,
+the document claim sized from `BR_MAXKB` through `BR_DOCMUL`/`BR_DOCSLK` and
+capped at `BR_DOCMAX` (63 KB), `BR_LINEKB` (8 KB) of lines - plus the frameset
+page's own link arena, min(frameset KB, `BR_LINKKB` = 6) KB, which bounds the
+children's links together: `Links limited` is the visible refusal. Each child
+resolves into the location bar and `br_host`/`br_path`; when the last child is
+in, or one is refused, the document is ended (an open frame table closed) and
+the frameset's own title, host, path and bar text are restored
+(`br_frameclose`), so Reload re-fetches the frameset and a top-level relative
+link resolves against it. File > Save As after a frameset writes the source
+claim, which holds the LAST child's bytes.
 
 ### 71.16 Browser 1.3 — text formatting on the cell font
 

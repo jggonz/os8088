@@ -84,6 +84,39 @@ PAGE_POST303 = PAGE_POST.replace(b"/posted", b"/posted303")
 # is nginx's `return 302` and every add-the-slash redirect (SPEC.md 71.15)
 PAGE_R301 = (b"<html><head><title>301 Moved</title></head><body>"
              b"<p>Moved <a href=\"/a.htm\">here</a>.</p></body></html>\r\n")
+# A two-frame frameset whose children are each MORE than 2,000 bytes of
+# distinct text: the frameset page itself is a few hundred bytes, and before
+# the re-claim (SPEC.md 71.15) the children were drained into a source cut to
+# ITS size - 1 KB - so the page was the first child's first kilobyte and `Page
+# truncated`. The marker words are in no other fixture; f1 carries a link and
+# f2 a text form, which must be live when the page is done.
+URL_FS = "http://10.0.2.2:%d/fs.htm" % PORT
+PAGE_FS = (b"<html><head><title>Frame Set</title></head>\r\n"
+           b"<frameset rows=\"50%,*\"><frame src=\"/f1.htm\">"
+           b"<frame src=\"/f2.htm\"></frameset></html>\r\n")
+
+
+def _frame_page(title, marker, extra):
+    body = b"<html><head><title>%s</title></head><body><h1>%s</h1>\r\n" \
+        % (title, title)
+    body += b"<p>The marker word is %s and it occurs in this frame only.</p>\r\n" \
+        % marker
+    body += extra
+    for i in range(16):
+        body += (b"<p>Paragraph %d of %s: the quick brown fox number %d jumps "
+                 b"over the lazy dog, and this frame runs on well past a "
+                 b"kilobyte so that a source cut to the frameset's own size "
+                 b"would have lost it.</p>\r\n" % (i, title, i))
+    return body + b"</body></html>\r\n"
+
+
+PAGE_F1 = _frame_page(b"Frame One", b"Hesperus",
+                      b"<p><a href=\"/a.htm\">Page Alpha</a></p>\r\n")
+PAGE_F2 = _frame_page(b"Frame Two", b"Phosphorus",
+                      b"<form action=\"/posted\" method=post>"
+                      b"<input type=text name=q size=12>"
+                      b"<input type=submit value=Send></form>\r\n")
+assert len(PAGE_F1) > 2000 and len(PAGE_F2) > 2000
 
 
 class TwoPages(threading.Thread):
@@ -154,6 +187,12 @@ class TwoPages(threading.Thread):
                     status, extra, body = b"301 Moved Permanently", b"Location: /a.htm\r\n", PAGE_R301
                 elif b"/r302.htm" in first:
                     status, extra, body = b"302 Found", b"Location: /b.htm\r\n", b""
+                elif b"/fs.htm" in first:
+                    body = PAGE_FS
+                elif b"/f1.htm" in first:
+                    body = PAGE_F1
+                elif b"/f2.htm" in first:
+                    body = PAGE_F2
                 elif b"/f.htm" in first or first.startswith(b"GET /?"):
                     body = PAGE_F
                 elif b"/b.htm" in first:
@@ -744,6 +783,56 @@ def main():
                                  "%d, title %r)" % (st, title()))
     else:
         fails.append("POST 303 form page produced no editable text field")
+
+    # --- 7c: a FRAMESET, its children fetched into buffers RE-CLAIMED AT THE
+    # CEILING (SPEC.md 71.15). The frameset page is a few hundred bytes and
+    # 71.14's hand-over cut the source to that; the children used to be
+    # drained into it, so the page was the first child's first kilobyte and
+    # `Page truncated`. Both children are over 2,000 bytes, so the document
+    # holding BOTH markers is the re-claim working; the bar reading the
+    # frameset's own URL (with LN_LEN following) is br_frameclose putting it
+    # back; the form count is the last child's form being live; and the fetch
+    # after it is the lock having been released.
+    before = len(srv.log)
+    fetch(URL_FS)
+    st = wait_done("the frameset")
+    doc = bytes(m.readseg(rw("br_docseg"), 0, rw("br_doclen")))
+    ln_len = u16(m.readseg(pseg, sy["br_loc"] + 12, 2))
+    print("after fs: state %d, msg %04X, doclen %d, title %r, bar %r (LN_LEN "
+          "%d), %d form(s), requests %r"
+          % (st, rw("br_nmsg"), len(doc), title(), bar_text(), ln_len,
+             rb("br_fn"), srv.log[before:]))
+    if st != 6:
+        fails.append("the frameset did not finish: state %d" % st)
+    if rw("br_nmsg") != 0:
+        fails.append("the frameset finished with a message (br_nmsg %04X) - "
+                     "`Page truncated` is the children being drained into a "
+                     "source cut to the frameset's own size" % rw("br_nmsg"))
+    for mark in (b"Hesperus", b"Phosphorus"):
+        if mark not in doc:
+            fails.append("the frameset's document lacks %r - the child that "
+                         "carries it was never appended whole" % mark)
+    if bar_text() != URL_FS:
+        fails.append("after the frameset the location bar holds %r, not the "
+                     "frameset's own %r - Reload would re-fetch the last "
+                     "child alone" % (bar_text(), URL_FS))
+    if ln_len != len(URL_FS):
+        fails.append("the bar's LN_LEN is %d for a %d-byte URL after the "
+                     "frameset" % (ln_len, len(URL_FS)))
+    if title() != "Frame Set":
+        fails.append("the caption is %r, not the frameset's own title"
+                     % title())
+    if rb("br_fn") < 1:
+        fails.append("the form in the last frame is not live (%d forms)"
+                     % rb("br_fn"))
+    seen = [r.split(" ")[1] for r in srv.log[before:] if " " in r]
+    if seen != ["/fs.htm", "/f1.htm", "/f2.htm"]:
+        fails.append("the frameset's requests were %r, not the frameset and "
+                     "then each child once" % seen)
+    fetch(URL_A)
+    if wait_done("page A after the frameset") != 6:
+        fails.append("a fetch after the frameset never completed - the gfx "
+                     "lock or the hand-over was not released")
 
     # --- 8: Save As ---------------------------------------------------------
     if not rw("br_srcseg"):

@@ -636,6 +636,12 @@ br_arg:
 ; nothing but where the name came from.
 ; -----------------------------------------------------------------------------
 br_onwake:
+    cmp byte [br_fin], 4            ; A FRAMESET'S RE-CLAIM (SPEC.md 71.15):
+    jne .net                        ; the worker has parsed the frameset and
+    cmp byte [br_nstate], BN_BODY   ; its children need the page buffers at
+    jne .net                        ; the ceiling, which it may not claim
+    call br_frameclaim
+.net:
     cmp byte [br_fin], 1            ; ...AND THE FETCH'S HAND-OVER (SPEC.md
     jne .arg                        ; 71.14): a worker that has drained a page
     cmp byte [br_nstate], BN_BODY   ; posts this, and the claims it may not
@@ -3549,8 +3555,12 @@ br_srcclaim:
 ; [br_lnkseg] and renders anchors as ordinary text when there is none, so a
 ; machine too small for it reads the page and cannot follow it - a great deal
 ; better than refusing it.
+;
+; **THE DOCUMENT AND THE LINE TABLE ARE A ROUTINE OF THEIR OWN** (br_claimpage)
+; because a frameset claims them a second time WITHOUT the arena: the queued
+; frame srcs live in it (br_frameclaim, SPEC.md 71.15).
 ; -----------------------------------------------------------------------------
-br_claimrest:
+br_claimpage:
     push ax
     push bx
     push dx
@@ -3570,6 +3580,23 @@ br_claimrest:
     call OSAPI_MEM_CLAIM
     jc .fail
     mov [br_lseg], dx
+    clc
+    jmp short .out
+.fail:
+    call br_free_all
+    stc
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+br_claimrest:
+    call br_claimpage               ; the document and the line table...
+    jc .out
+    push ax
+    push bx
+    push dx
     mov ax, [br_srckb]              ; ...and the hrefs (BROWSER-PLAN 6)
     cmp ax, BR_LINKKB
     jbe .lk
@@ -3593,13 +3620,61 @@ br_claimrest:
     mov [br_linkcap], ax
 .nolinkcap:
     clc
-    jmp short .out
-.fail:
-    call br_free_all
-    stc
-.out:
     pop dx
     pop bx
+    pop ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; br_frameclaim - the UI task's half of a FRAMESET's hand-over (SPEC.md 71.15)
+; Called from br_onwake when the worker has parsed a frameset page and set
+; [br_fin] = 4. br_netclaim cut the source to the FRAMESET's own size and
+; claimed the document from it, and the children are drained into those - so
+; the first child was cut at a kilobyte. The document and the line table are
+; given back, the source regrown to BR_MAXKB (or, if the heap cannot grow it
+; where it stands, freed and claimed again at the ceiling: the frameset's
+; source is parsed and no longer needed), and the two claimed again from the
+; ceiling. **THE LINK ARENA IS KEPT**: the queued frame srcs and base URLs
+; live there. Hands back with [br_fin] = 5. A refusal is the `Out of memory`
+; br_netclaim gives, said here - the lock is not held. All registers preserved.
+; -----------------------------------------------------------------------------
+br_frameclaim:
+    push ax
+    push dx
+    push si
+    mov si, br_docseg               ; the document and the line table, two
+    call br_free_all.one            ; words in a row (br_free_all's shape)
+    call br_free_all.one
+    mov word [br_nlines], 0
+    mov ax, BR_MAXKB
+    mov dx, [br_srcseg]
+    call OSAPI_MEM_REGROW           ; a GROW may move - fine, nothing holds
+    jnc .grown                      ; the old base - or fail where it stands
+    mov si, br_srcseg
+    call br_free_all.one
+    mov ax, BR_MAXKB
+    call br_srcclaim
+    jc .nomem
+    jmp short .page
+.grown:
+    mov [br_srcseg], dx
+    mov [br_srckb], ax
+.page:
+    call br_claimpage               ; sized from [br_srckb] = BR_MAXKB
+    jc .nomem
+    mov byte [br_fin], 5            ; the worker starts the first child
+    jmp short .out
+.nomem:
+    call br_free_all                ; whatever of the four is still held
+    mov word [br_nmsg], br_s_nomem
+    mov byte [br_nstate], BN_ERR    ; BEFORE [br_fin] goes back to 0: the
+    mov byte [br_frameappend], 0    ; handle is closed, and a worker pass
+    mov byte [br_fin], 0            ; finding BN_BODY and 0 would drain it
+    call br_nshow
+.out:
+    pop si
+    pop dx
     pop ax
     ret
 
@@ -8908,7 +8983,10 @@ br_fin      equ os88_image_end + 944  ; byte: the fetch's hand-over (SPEC.md
                                       ; 71.14) - 0 draining, 1 the page is in
                                       ; and the UI task owes its claims, 2
                                       ; claimed, 3 the worker IS parsing -
-                                      ; br_abort waits that one out
+                                      ; br_abort waits that one out; 4 the UI
+                                      ; task owes a FRAMESET's re-claim, 5
+                                      ; re-claimed - the worker starts the
+                                      ; first child (SPEC.md 71.15)
                                       ; (945 is free; br_nstate is at 946 and
                                       ; tests/ethernet.py and tests/brfetch.py
                                       ; read it there by number)
@@ -9142,7 +9220,10 @@ br_tpad       equ br_tlogical + 1         ; alignment spaces in current fragment
 br_reqpost    equ br_tpad + 1             ; request worker's method flag
 br_bpp        equ br_reqpost + 1          ; OSAPI_VIDEO's DH: 1 on a 1bpp adapter
 br_glyphlast  equ br_bpp + 1              ; OSAPI_FONT_GLYPHS' AH, the last code
-BR_BSS      equ (br_glyphlast + 1 - os88_image_end)
+br_frameurl   equ br_glyphlast + 1        ; BR_UBUF: the frameset's own URL,
+                                          ; banked while its children own the
+                                          ; bar (br_frameclose puts it back)
+BR_BSS      equ (br_frameurl + BR_UBUF - os88_image_end)
 
 ; --- what the code assumes about the layout above ----------------------------
 %if br_wsp != br_on + 1 || br_pre != br_any + 1

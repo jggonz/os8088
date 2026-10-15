@@ -20,6 +20,16 @@
 ;                buffers from its size (br_netclaim, SPEC.md 71.14)
 ;   the worker   parses and repaints under the lock
 ;
+; ...and a FRAMESET goes round once more (SPEC.md 71.15): its children are
+; drained into the page's own buffers, which were cut to the frameset's size,
+; so the worker posts [br_fin] = 4 instead of fetching the first child, the UI
+; task frees the document and line table, regrows the source to BR_MAXKB and
+; claims the two again from it (br_frameclaim - the link arena is KEPT, the
+; queued frame srcs live there), and answers 5, on which br_nstep starts the
+; first child. [br_fin] is 0 draining, 1 the page is in and the UI task owes
+; its claims, 2 claimed - parse, 3 parsing (br_abort waits that one out), 4
+; the UI task owes a frameset's re-claim, 5 re-claimed - start the first child.
+;
 ; **THE SOURCE CLAIM IS KEPT UNTIL THE NEXT LOAD**, as a file load keeps it:
 ; File > Save As writes it. It is claimed at BR_MAXKB and cut to the page's own
 ; size by br_netclaim, and given back by br_free_all at the start of whatever
@@ -455,7 +465,11 @@ br_nstep:
     jne .out
     mov al, [br_fin]                ; ...past the drain (SPEC.md 71.14):
     or al, al                       ; 0 still draining, 1 waiting for the UI
-    jz .drain                       ; task's claims, 2 claimed - parse
+    jz .drain                       ; task's claims, 2 claimed - parse; 4
+    cmp al, 4                       ; waiting for the UI task's frameset
+    je .kick                        ; re-claim, 5 re-claimed - start the first
+    cmp al, 5                       ; child (SPEC.md 71.15)
+    je .framestart
     dec al
     jz .kick                        ; the wake was refused or not yet served
     call br_finish
@@ -590,6 +604,15 @@ br_nstep:
     mov [br_nmsg], si
     mov byte [br_nstate], BN_ERR
     call br_hclose
+.failchild:                         ; ...and a CHILD that failed closes the
+    cmp byte [br_frameappend], 0    ; page whole - the table it was a row of,
+    je .redraw                      ; D_END, the frameset's title, bar and
+    call OSAPI_GFX_LOCK             ; base back (br_frameclose) - under the
+    call br_gchk                    ; lock br_go runs under, so a navigation
+    jc .failun                      ; in the gap cannot have freed beneath it
+    call br_frameclose
+.failun:
+    call OSAPI_GFX_UNLOCK
 .redraw:
     call br_nshow
 .out:
@@ -633,7 +656,7 @@ br_nstep:
 .redirrefused:                      ; https: and too-long said why themselves
     call OSAPI_GFX_UNLOCK           ; and stored BN_ERR; a `#frag` refuses
     cmp byte [br_nstate], BN_ERR    ; silently, and left in BN_BODY it would
-    je .redraw                      ; drain the closed handle and say `Link
+    je .failchild                   ; drain the closed handle and say `Link
     mov si, br_s_redirbad           ; lost` about a redirect it declined
     jmp .fail
 .redirunbad:
@@ -644,6 +667,21 @@ br_nstep:
 .redirmany:
     mov si, br_s_redirect
     jmp .fail
+
+.framestart:                        ; [br_fin] = 5: the UI task has re-claimed
+    call OSAPI_GFX_LOCK             ; the page buffers at the ceiling
+    call br_gchk                    ; (br_frameclaim, SPEC.md 71.15), and the
+    jc .frameun                     ; first child starts the way br_finish
+    call br_framefetch              ; starts the others - under the lock br_go
+    mov byte [br_fin], 0            ; runs under, so a navigation in the gap
+    cmp byte [br_nstate], BN_ERR    ; cannot free beneath it; 0 for the
+    jne .frameun                    ; child's own drain
+    call br_frameclose              ; a refused first child closes the page
+.frameun:                           ; whole, as a refused later one does
+    call OSAPI_GFX_UNLOCK
+    cmp byte [br_nstate], BN_ERR
+    jne .out
+    jmp .redraw
 
 ; --- br_qstat - NETV_STATUS on our handle. out AH = state, CX = readable ----
 br_qstat:
@@ -1074,6 +1112,10 @@ br_finish:
     mov di, br_frametitle
     mov cx, BR_TITMAX
     rep movsb
+    mov si, br_ubuf                 ; ...and the frameset's own URL, which the
+    mov di, br_frameurl             ; children overwrite in the bar and
+    mov cx, BR_UBUF                 ; br_frameclose puts back
+    rep movsb
     pop es
     pop di
     pop si
@@ -1082,8 +1124,20 @@ br_finish:
     mov byte [br_factive], 0
     mov byte [br_frameappend], 1
     mov byte [br_frameidx], 0
-    call br_framefetch
+    mov byte [br_fin], 4            ; **THE CHILDREN NEED THE PAGE BUFFERS AT
+    call OSAPI_GFX_UNLOCK           ; THE CEILING** (SPEC.md 71.15): the source
+    mov bx, [br_win]                ; was cut to the frameset's own size and
+    call OSAPI_WM_WAKE              ; the document claimed from it, so the
+    jmp .out                        ; first child was cut at a kilobyte - and a
+                                    ; worker may not claim. The UI task
+                                    ; re-claims on this wake (br_frameclaim)
+                                    ; and answers 5; br_nstep .framestart
+                                    ; fetches the first child
 .frameleave:
+    cmp byte [br_nstate], BN_ERR
+    jne .frameun
+    call br_frameclose              ; a refused child closes the page whole
+.frameun:
     call OSAPI_GFX_UNLOCK           ; **THE HOLD TAKEN AT .page COMES OFF
     cmp byte [br_nstate], BN_ERR    ; HERE**: both frame legs left through
     jne .out                        ; .out with it held, and the next lock on
@@ -1108,30 +1162,7 @@ br_finish:
     call br_framefetch
     jmp .frameleave
 .framedone:
-    cmp byte [br_factive], 0
-    je .frameend
-    mov al, D_TAB0
-    call br_put
-    mov byte [br_factive], 0
-.frameend:
-    mov al, D_END
-    call br_put
-    call br_flushbuf
-    mov byte [br_frameappend], 0
-    push cx
-    push si
-    push di
-    push es
-    push ds
-    pop es
-    mov si, br_frametitle
-    mov di, br_ptitle
-    mov cx, BR_TITMAX
-    rep movsb
-    pop es
-    pop di
-    pop si
-    pop cx
+    call br_frameclose
 .parsed:
     cmp byte [br_framecut], 0
     je .linkwarn
@@ -1358,6 +1389,65 @@ br_framefetch:
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; br_frameclose - the last child is in (or one was refused): close the page
+; in:  the worker, gfx lock held, [br_frameappend] = 1
+; out: the document ended, the frameset's title, host, path and bar back,
+;      [br_frameappend] = 0; all registers preserved
+;
+; ONE TAIL FOR BOTH ENDINGS. The children resolve into br_ubuf - the bar's own
+; LN_BUF - and br_split writes br_host/br_path from it, so after the last one
+; all three described the LAST CHILD: Reload re-fetched that child alone with
+; the frameset gone, a top-level relative link resolved against its directory,
+; and the bar's LN_LEN was the length of whatever text came before. And a child
+; that FAILED left the table it was a row of open and its own title in the
+; caption. The frameset's own four are banked at .page's frameset entry and
+; put back here, whichever way the children ended.
+; -----------------------------------------------------------------------------
+br_frameclose:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    cmp byte [br_factive], 0
+    je .end
+    mov al, D_TAB0
+    call br_put
+    mov byte [br_factive], 0
+.end:
+    mov al, D_END
+    call br_put
+    call br_flushbuf
+    mov byte [br_frameappend], 0
+    push ds
+    pop es
+    cld
+    mov si, br_frametitle
+    mov di, br_ptitle
+    mov cx, BR_TITMAX
+    rep movsb
+    mov si, br_framehost
+    mov di, br_host
+    mov cx, BR_HOSTMAX
+    rep movsb
+    mov si, br_framepath
+    mov di, br_path
+    mov cx, BR_PATHMAX
+    rep movsb
+    mov si, br_frameurl
+    mov di, br_ubuf
+    mov cx, BR_UBUF
+    rep movsb
+    mov si, br_loc                  ; br_ubuf IS the bar's LN_BUF, so its
+    call os88line_resync            ; LN_LEN and LN_CAR follow the text
+    pop es
+    pop di
+    pop si
+    pop cx
     pop ax
     ret
 
