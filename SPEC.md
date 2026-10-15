@@ -113758,8 +113758,10 @@ stream. `<b>`/`<strong>` use a one-pixel double-strike; `<i>`/`<em>` shear the
 existing glyph bitmap by at most two pixels; and `<u>` uses the existing row
 ink pass. Styled rows are composed from `OSAPI_FONT_GLYPHS` through one fixed
 `BR_MAXCOL`-byte scanline buffer and eight one-row `OSAPI_GFX_BLIT1` calls.
-Layout reserves the scroll bar plus two blank cells at the right edge, so the
-last glyph stays clear of the bar even at the content area's inclusive edge.
+The band is composed with a set bit as ink and handed over under an ink/paper
+pen; on a 1bpp adapter the pen is not read (SPEC.md 5.4.2.2) and a set bit is
+a lit pixel, so there the band is complemented before each blit. Layout
+reserves the scroll bar plus a two-cell margin at the right edge.
 Wrapping also subtracts each
 line's active heading, list, or quote indent before measuring its text.
 Unstyled rows retain the single opaque `OSAPI_FONT_RUN` path. This adds no font

@@ -168,10 +168,18 @@ D_LNK1       equ 14                 ; a link opens, and the TWO BYTES after it
                                     ; walker in this file already skips a byte
                                     ; below 0x20 as "a marker, not a cell", so
                                     ; the payload costs not one of them a line
-                                    ; of change; and no real marker is above
-                                    ; 15, so a BACKWARD scan can tell a payload
-                                    ; byte from a marker and answer "which link
-                                    ; is this offset inside" without a table
+                                    ; of change; and the markers above 15 -
+                                    ; D_Q1..D_CMETA, 16..24 - are all ones a
+                                    ; BACKWARD scan may step over as if they
+                                    ; were payload, so it can still tell a
+                                    ; payload byte from D_LNK1/D_LNK0 and
+                                    ; answer "which link is this offset
+                                    ; inside" without a table. The one byte
+                                    ; that is NEITHER is D_CMETA's own payload
+                                    ; (0..23, which can read as any marker),
+                                    ; so every walker consumes the pair and
+                                    ; br_linkat refuses a D_LNK1 found straight
+                                    ; after a D_CMETA
 D_LNK0       equ 15                 ; ...and closes
 D_Q1         equ 16                 ; quote indent starts; D_LNK1 consumes its
 D_Q0         equ 17                 ; ...paired payload bytes before layout sees them
@@ -445,6 +453,8 @@ br_size:
     push dx
     push si
     call OSAPI_VIDEO                ; AX = w, BX = h, CX = the dock's first row
+    mov [br_bpp], dh                ; ...and DH = bits per pixel, which is the
+                                    ; polarity br_paintstyled hands its band in
     cmp dl, VID_CGA
     je .cga
     sub cx, MBAR_H                  ; CX = the desktop band
@@ -668,6 +678,8 @@ br_onwake:
 ; out again for nothing. [br_top] and [br_ptop] are br_free_all's zeroes too.
 ; -----------------------------------------------------------------------------
 br_show:
+    push ax
+    push bx
     mov si, [br_win]
     call br_measure                 ; [br_cols] = 0, so this IS the layout
     call br_paint_band
@@ -704,6 +716,8 @@ br_show:
     mov ax, br_s_webbrowser         ; untitled pages use the full product name
 .title:
     call OSAPI_WM_TITLE             ; event-driven; redraws only the title strip
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1131,6 +1145,7 @@ br_paintstyled:
     mov [br_glyphseg], dx
     mov [br_glyphofs], si
     mov [br_glyphfirst], al
+    mov [br_glyphlast], ah
     mov ax, (CWHITE << 8) | CBLACK ; set pixels = ink; clear pixels = paper
     call OSAPI_GFX_BLIT1_PEN
     mov byte [br_bmrow], 0
@@ -1147,7 +1162,13 @@ br_paintstyled:
     cmp bx, [br_cols]
     jae .blit
     mov al, [br_lbuf+bx]
-    sub al, [br_glyphfirst]
+    cmp al, [br_glyphlast]          ; the table covers first..last (32..126):
+    ja .blankglyph                  ; a byte outside it draws as the table's
+    sub al, [br_glyphfirst]         ; first glyph, the space, rather than
+    jnc .index                      ; reading up to a KB past the table
+.blankglyph:
+    xor al, al
+.index:
     xor ah, ah
     shl ax, 1
     shl ax, 1
@@ -1213,6 +1234,15 @@ br_paintstyled:
     push ds
     pop es
     mov si, br_stylebuf
+    cmp byte [br_bpp], 1            ; THE PEN IS NOT READ ON A 1bpp ADAPTER
+    jne .polar                      ; (SPEC.md 5.4.2.2): a set bit is a LIT
+    mov cx, [br_cols]               ; pixel there, so the band - composed with
+.invert:                            ; 1 = ink - goes over complemented, in
+    not byte [si]                   ; screen polarity. [br_cols] is at least 8
+    inc si
+    loop .invert
+    mov si, br_stylebuf
+.polar:
     mov bp, [br_cols]               ; one byte per eight-pixel cell
     mov bx, [br_bmpy]
     xor dx, dx
@@ -1357,9 +1387,14 @@ br_build:
     jmp .copy
 .nl1:
     cmp al, D_LNK0
-    jne .style1
+    jne .meta
     mov byte [br_lnkcell], 0
     jmp .copy                       ; every other marker: not a cell
+.meta:
+    cmp al, D_CMETA                 ; ...and a cell hint's payload byte is not
+    jne .style1                     ; a marker either: step it, as br_layout's
+    inc si                          ; .mcellmeta does
+    jmp .copy
 .style1:
     cmp al, D_B1
     jne .style2
@@ -2589,6 +2624,11 @@ br_linkat:
     loop .back                      ; above already stepped over it
     jmp short .no
 .in:
+    or si, si                       ; a D_LNK1 straight after a D_CMETA is that
+    jz .real                        ; hint's PAYLOAD (0..23), not a marker:
+    cmp byte [es:si-1], D_CMETA     ; br_tcelltag writes the pair with no call
+    je .no                          ; between, so the test is exact
+.real:
     mov al, [es:si+1]               ; the two payload bytes, low nibble first
     mov ah, [es:si+2]
     and al, 15
@@ -5640,8 +5680,10 @@ br_layout:
     mov word [br_lnkopen], 0FFFFh
     jmp .loop
 .mcellmeta:
-    add si, 2                       ; cell hint plus its packed value
-    jmp .loop
+    add si, 2                       ; cell hint plus its packed value - and
+    jmp .mrst                       ; the line starts AFTER them, not at the
+                                    ; hint (nch and bpos are D_CELL's zeroes
+                                    ; still, so .mrst only moves br_lstart)
 .mbold1:
     inc si
     or byte [br_lfmt], LNF_BOLD
@@ -5736,7 +5778,7 @@ br_layout:
     ret
 
 ; --- br_seteff - wrap width after the active line's left indent --------------
-; br_cols already excludes the scroll bar and its clear one-cell gutter.
+; br_cols already excludes the scroll bar and its two-cell margin.
 ; Quote, list and heading indents are also physical cells, so they must reduce
 ; the line length before br_build starts copying at LN_X. Centered text is
 ; intentionally excluded: br_emitline centers its measured length afterward.
@@ -5857,6 +5899,7 @@ br_emitline:
 br_blank:
     push ax
     push bx
+    push dx
     push di
     push es
     cmp word [br_nlines], 0
@@ -5864,7 +5907,7 @@ br_blank:
     mov ax, [br_nlines]
     dec ax
     mov bx, LN_SIZE
-    mul bx
+    mul bx                          ; **MUL WRITES DX** (SPEC.md 1)
     mov di, ax
     mov es, [br_lseg]
     cmp word [es:di+LN_OFS], 0
@@ -5884,6 +5927,7 @@ br_blank:
 .out:
     pop es
     pop di
+    pop dx
     pop bx
     pop ax
     ret
@@ -6144,10 +6188,9 @@ br_tcellend:
 .width:
     mov al, [br_tcol]
     mov ah, [br_tspan]
-    dec ah
-    add al, ah
-    cmp al, BR_TCOLS
-    jbe .ncap
+    add al, ah                      ; the COUNT through this cell - [br_tn] is
+    cmp al, BR_TCOLS                ; a column count everywhere it is read,
+    jbe .ncap                       ; not the last logical index
     mov al, BR_TCOLS
 .ncap:
     cmp al, [br_tn]
@@ -6367,6 +6410,11 @@ br_tcells_of:
     cmp si, [br_doclen]
     jae .done
     mov al, [es:si]
+    cmp al, D_CMETA                 ; a cell hint's payload (0..23) is not a
+    jne .t1                         ; marker: a 9th cell's, or a nested
+    add si, 2                       ; table's, reaches here and would count
+    jmp .loop                       ; as a D_TAB1/D_TAB0
+.t1:
     cmp al, D_TAB1
     jne .t0
     inc cx
@@ -6408,14 +6456,13 @@ br_tcells_of:
     shr bx, 1
     mov [br_tspanarr+bx], al
     mov al, [es:si]
-    mov bl, al
-    shr bl, 1
-    shr bl, 1
-    shr bl, 1
-    and bl, 3
-    mov bx, di
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    and al, 3                       ; the alignment, built in AL - BX is the
+    mov bx, di                      ; index and was overwriting it
     shr bx, 1
-    mov [br_talignarr+bx], bl
+    mov [br_talignarr+bx], al
     inc si
 .cellstart:
     mov [di+br_cs], si
@@ -6688,6 +6735,10 @@ br_twrap:
     jae .full
     push ax
     mov al, [es:si]
+    cmp al, D_CMETA
+    jne .sc1
+    inc si                          ; a cell hint's payload is not a marker
+.sc1:
     cmp al, 0x20
     jb .adv                         ; a marker inside a cell is not a cell
     inc cx
@@ -6741,20 +6792,26 @@ br_twrap:
     cmp al, 0x20                    ; on the count alone left it behind - the
     jae .etxt                       ; anchor stayed open across the cell wall
     cmp al, D_LNK1                  ; and the rest of the row read as part of
-    jb .e2                          ; it. D_LNK1, D_LNK0 and D_LNK1's two
-    jne .em0                        ; payload bytes are the whole of 14..31, so
-    mov [br_wlnk], si               ; ONE compare - read twice, for below and
-    jmp .eput                       ; for equal - separates them from every
-.em0:                               ; other marker, which is still dropped.
-    cmp al, D_LNK0                  ; A LINK COSTS NO WIDTH: it is copied
-    jne .emx                        ; without touching DX, so a cell keeps the
-    mov word [br_wlnk], 0FFFFh      ; columns br_tmeas measured
-    jmp .eput
-.emx:
-    cmp al, 0x20                    ; layout markers carry no cell width
-    jb .e2
-.eput:
+    jb .e2                          ; it. D_LNK1 goes over WITH ITS TWO PAYLOAD
+    jne .em0                        ; BYTES, as a unit: br_build and br_linkat
+    mov [br_wlnk], si               ; read the index out of the two bytes after
+    call br_cput                    ; the marker, so dropping them with the
+    mov al, [es:si+1]               ; other markers below 0x20 made two cells
+    call br_cput                    ; of the link's own text the index. A LINK
+    mov al, [es:si+2]               ; COSTS NO WIDTH: it is copied without
+    call br_cput                    ; touching DX, so a cell keeps the columns
+    add si, 2                       ; br_tmeas measured
+    jmp .e2
+.em0:
+    cmp al, D_LNK0
+    jne .emx
+    mov word [br_wlnk], 0FFFFh
     call br_cput
+    jmp .e2
+.emx:
+    cmp al, D_CMETA                 ; every other marker carries no cell width
+    jne .e2                         ; and is dropped - a cell hint with the
+    inc si                          ; payload byte after it
     jmp .e2
 .etxt:
     cmp dx, cx
@@ -6917,6 +6974,11 @@ br_tskip:
     jae .out
     mov al, [es:si]
     inc si
+    cmp al, D_CMETA
+    jne .t1
+    inc si                          ; a cell hint's payload is not a marker
+    jmp .loop
+.t1:
     cmp al, D_TAB1
     jne .t0
     inc cx
@@ -9013,7 +9075,9 @@ br_tcw        equ br_talign + 1           ; current composed cell width
 br_tlogical   equ br_tcw + 1              ; logical column at current cell
 br_tpad       equ br_tlogical + 1         ; alignment spaces in current fragment
 br_reqpost    equ br_tpad + 1             ; request worker's method flag
-BR_BSS      equ (br_reqpost + 1 - os88_image_end)
+br_bpp        equ br_reqpost + 1          ; OSAPI_VIDEO's DH: 1 on a 1bpp adapter
+br_glyphlast  equ br_bpp + 1              ; OSAPI_FONT_GLYPHS' AH, the last code
+BR_BSS      equ (br_glyphlast + 1 - os88_image_end)
 
 ; --- what the code assumes about the layout above ----------------------------
 %if br_wsp != br_on + 1 || br_pre != br_any + 1

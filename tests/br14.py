@@ -76,20 +76,32 @@ def main():
         if not aligned:
             fails.append("the aligned table row was not composed")
         else:
+            # br_tcompose opens EVERY cell with one separator space, whatever
+            # its alignment, so strip exactly that one before measuring: with
+            # it counted, "right" always had a leading space and the check was
+            # a null. The fixture's wide-middle-cell / right-column row is what
+            # gives columns 2 and 3 spare cells to align in - "center" and
+            # "right edge" used to be their own columns' widest cells
             cells = aligned.split("|")
-            center = cells[2] if len(cells) == 5 else ""
+            center = cells[2][1:] if len(cells) == 5 else ""
             left = len(center) - len(center.lstrip())
             right = len(center) - len(center.rstrip())
             if (not center.strip().startswith("center") or left == 0 or
                     abs(left - right) > 1):
                 fails.append("middle cell was not centered: %r" % aligned)
-            if len(cells) != 5 or not cells[3].lstrip().startswith("right") or \
-                    len(cells[3]) == len(cells[3].lstrip()):
+            rcell = cells[3][1:] if len(cells) == 5 else ""
+            if (len(cells) != 5 or not rcell.lstrip().startswith("right") or
+                    rcell == rcell.lstrip() or rcell != rcell.rstrip()):
                 fails.append("right cell was not right-aligned: %r" % aligned)
         span = next((line for line in rendered
                      if "two columns" in line and "right edge" in line), "")
         if not span or len(span.split("|")) != 4:
             fails.append("colspan row did not compose two cells: %r" % span)
+        else:
+            edge = span.split("|")[2][1:]       # flush right: led by its spare,
+            if edge == edge.lstrip() or edge != edge.rstrip():   # no trailing
+                fails.append("colspan row's right cell was not right-aligned: "
+                             "%r" % span)
         if not any("[unsupported]" in line for line in rendered):
             fails.append("password/file/textarea controls were not visible")
         if any("secret" in line or "private text" in line for line in rendered):

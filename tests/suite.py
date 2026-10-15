@@ -6855,6 +6855,14 @@ SOAK = [
         "faults",
         needs=("marty",), serial=True,
         wants=("build/brtest360.img",)),
+    Row("br14", "soak", py("tests/br14.py"), 200.0,
+        "SPEC.md 71.17: a <td colspan> spans its columns in the composed row, "
+        "align=center/middle/right move the cell's text, and password, file "
+        "and textarea controls read `[unsupported]` with their contents kept "
+        "off the page - read out of the document and the line table on "
+        "TORTURE.HTM, the way brtable reads its rows",
+        needs=("marty",), serial=True,
+        wants=("build/brtest360.img",)),
     Row("brtoolbar", "soak", py("tests/brtoolbar.py"), 145.0,
         "BROWSER-PLAN 14.4: the toolbar's buttons keep their right edge - "
         "br_status's floored pen must not paint over Reload's right stroke",
