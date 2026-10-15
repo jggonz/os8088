@@ -1710,7 +1710,7 @@ app_close_win:
                                 ; be written rather than the one after
 %endif
 %ifdef KERN_BIG
-    call thmv_reap_x            ; ...and the Customize window, BEFORE the
+    call COLD_SEG:thmv_reap_x   ; ...and the Customize window, BEFORE the
                                 ; write and ungated by it: a close with nothing
                                 ; to save is still a close (SPEC.md 76.14.14)
 %endif

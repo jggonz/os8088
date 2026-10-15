@@ -4499,191 +4499,25 @@ thm_desk:
     jmp gfx_fill_gray
 %endif
 
-; thm_set - adopt AL as the theme and resolve the pens
-; in:  AL = a THM_* kind (anything out of range is Bright)
-; out: CF = 0 adopted as asked; CF = 1 it was REFUSED and something else stood
-;      instead - Windows whose WIN95.DRV could not be mounted (SPEC.md
-;      76.14.1). [thm_kind] always says what is live. kern_small: CF = 0
-; clobbers: nothing else
 %ifdef OS88_THEME
-thm_set:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
-    push es
-    cmp al, THM_NKIND           ; a byte from a future version, or from a
-    jb .known                   ; settings disk this kernel does not know
-    xor al, al
-.known:
-%ifdef KERN_BIG
-    cmp al, THM_COLOR
-    jne .kind_ready
-    test byte [thm_cstrp], 4  ; restore the selected Color title-bar style
-    jz .kind_ready
-    mov al, THM_WIN
-.kind_ready:
-%endif
-%ifdef KERN_BIG
-    mov bl, al                  ; BL = the ROW, which is the kind until the
-    cmp al, THM_COLOR           ; adapter says otherwise
-    jb .apply
-    mov ah, [vid_kind]          ; COLOUR IS A FACT ABOUT THE ADAPTER, and it is
-    dec ah                      ; refused HERE rather than at the two callers
-    cmp ah, 2                   ; (SPEC.md 76.12.1). The test is the DEPTH of
-    jae .apply                  ; the PRIMARY: VID_VGA and VID_EGA are the two
-                                ; 4-plane kinds, HERC and CGA are 1bpp - and
-                                ; `dec` maps VGA -> FF, HERC -> 0, CGA -> 1,
-                                ; EGA -> 2, so ONE unsigned compare answers
-                                ; both. It is NOT [vid_mono]: on a two-card
-                                ; desktop that byte names the display LAST
-                                ; DRAWN ON (SPEC.md 39.14.3, 5.4.2.4)
-    mov bl, THM_WINMONO         ; WINDOWS IS NOT REFUSED THERE (SPEC.md
-    cmp al, THM_WIN             ; 76.14.6): the buttons, the X and the menus
-    je .apply                   ; mean the same thing on a Hercules, so it
-    xor ax, ax                  ; takes its own black-and-white row. Color is
-    xor bl, bl                  ; refused, and falls back to Bright
-.apply:
-    call COLD_SEG:thf_apply     ; AL = the kind: WIN95.DRV mounted and hooked
-    jnc .live                   ; for THM_WIN, unhooked and dropped otherwise
-    mov al, THM_COLOR           ; REFUSED (SPEC.md 76.14.1): the chrome stays
-    mov bl, al                  ; the kernel's, so the nearest palette that
-    mov ah, [vid_kind]          ; needs no module stands - Color on a colour
-    dec ah                      ; adapter, Bright on 1bpp - and [thm_kind]
-    cmp ah, 2                   ; says so, which is what the Control Panel's
-    jae .refused                ; radios read back
-    xor ax, ax
-    xor bl, bl
-.refused:
-%ifdef KERN_BIG
-    and byte [thm_cstrp], 0FBh ; unavailable Windows style must not be saved
-%endif
-    stc
-.live:
-    pushf                       ; ...the caller's answer, kept past the copy
-%else
-    mov bl, al
-%endif
-    mov [thm_kind], al
-%ifdef KERN_BIG
-    mov bl, al                  ; BL = the TABLE ROW, which is the kind - but
-    cmp al, THM_WIN             ; Windows wears the Color row and its preset
-    jne .rowset                 ; (76.14.13), or its own row on a 1bpp primary
-    mov bl, THM_COLOR
-    mov ah, [vid_kind]          ; .apply's depth test again: VGA -> FF, HERC
-    dec ah                      ; -> 0, CGA -> 1, EGA -> 2
-    cmp ah, 2
-    jae .rowset
-    mov bl, THM_WINMONO
-.rowset:
-%endif
-    mov al, bl
-    mov ah, THM_ROW_BYTES       ; byte MUL: AX only
-    mul ah
-    add ax, thm_tab
-    xchg ax, si
-    push ds                     ; ONE copy, so the live block cannot fall out
-    pop es                      ; of step with the table field by field
-    mov di, thm_bgc
-    mov cx, THM_ROW_BYTES / 2   ; one copy of the semantic role block
-    cld
-    rep movsw
-%ifdef KERN_BIG
-    cmp byte [thm_kind], THM_COLOR
-    jne .stripes_done
-    mov al, [thm_cstrp]
-    and al, 1
-    mov [thm_strp], al           ; Color only; Bright/Dark retain their rows
-.stripes_done:
-%endif
-    call menu_force             ; THE TWO DIFFING PAINTERS CANNOT SEE THIS
-    call dock_force             ; (SPEC.md 76.7). menu_bcell is a record of
-                                ; CHARACTERS and a dock tile's key is its icon
-                                ; plus its marks - a theme change moves
-                                ; NEITHER, so composing IS the diff finds no
-                                ; difference and the bar and the strip keep
-                                ; the colours they had. wm_paint_all does not
-                                ; cover it: it calls both painters and both
-                                ; are gated
-%ifdef KERN_BIG
-    popf                        ; CF: what .apply decided. pop writes no flag
-%else
-    clc
-%endif
-    pop es
-    pop di
-    pop si
-    jmp kret_cx
+; thm_set, api_thm_set_x and thmv_reap_x are .cold (SPEC.md 76.14.14.1), and
+; textually AFTER gfx_blit1's cold block below, because gfx_blit1_x must stay
+; the segment's first byte
 
-; api_thm_set - OSAPI_THM_SET's body (SPEC.md 76.14.14): thm_set, and then
-; the repaint and the settings write a Control Panel click would have owed.
-; thm_set alone is what boot and the panel call - they post for themselves
+; api_thm_set - the near entry OSAPI_THM_SET's SLOT cell calls, and all that
+; is left of it in .text: the cell's shape is ABI (8 bytes, SPEC.md 20.3) and
+; a SLOT names a .text routine, so it cannot name the cold body itself
 api_thm_set:
-    push ax
-    push bx
-    mov bl, [thm_kind]
-    call thm_set
-    pushf                        ; ...its CF is the caller's answer (Windows
-    cmp bl, [thm_kind]           ; whose module could not be mounted)
-    je .same
-    call wm_su_drop_all          ; A NEW KIND, SET FROM OUTSIDE THE PANEL: the
-.same:                           ; Control Panel's Theme page draws from
-                                 ; [thm_kind], and a panel behind another
-                                 ; window is repainted from its bank, not its
-                                 ; W_PAINT (SPEC.md 11.96.4) - so the bank
-                                 ; would show the old kind. Only on a CHANGE of
-                                 ; kind: a preset preview keeps every bank
-    mov word [cp_dirty], 0x0101  ; cp_repost's own two bytes (kernel/ctrl.inc),
-    inc byte [ui_post]           ; poked directly rather than called: this may
-                                 ; run with CTRL.DRV not loaded at all, which is
-                                 ; blank.inc's ss_post_x's own precedent for the
-                                 ; identical store - a call into ctrl.inc's own
-                                 ; code would not be safe here, a write to its
-                                 ; two RESIDENT bytes is
-    popf
-    pop bx
-    pop ax
+    call COLD_SEG:api_thm_set_x
     ret
 
-; --- the Customize window: a window with no instance behind it (SPEC.md
-; 76.14), blank.inc's ss_row/ss_open/ss_reap_x pattern one more time, for
-; THMPAL.DRV instead of SAVER.DRV ---------------------------------------
 %ifdef KERN_BIG
-THMV_OPEN    equ 0               ; SI = Color row, DI = 'TP', DX = thm_cstrp
-THMV_BUSY    equ 1               ; CF = window still owns callbacks
-THMV_CLOSE   equ 2               ; destroy child before parent frees image
-THMV_ABI_VER equ 4               ; private header word +10, checked on open
-
 thmv_fname: db 'THMPAL.DRV', 0   ; DRVR_TITLE points at this too - no row on
                                   ; the Drivers page and no caption, so nothing
                                   ; else ever reads it (ss_fname's reason)
                                   ; (thmv_row itself is kernel/driver.inc's,
-                                  ; one row past drv_tab - drv_call's bound)
-
-; thmv_reap_x - the Control Panel is closing: destroy the Customize window and
-; give THMPAL.DRV's image back (SPEC.md 76.14.14). RESIDENT, and called from
-; instance.inc's panel-close branch, because that is the one place EVERY close
-; of the panel passes with the gfx lock held - the settings write after it is
-; gated on there being something to write. The opener is CTRL.DRV's
-; (kernel/ctrl.inc, cp_thmv_open), so nothing of the loader is resident.
-; out: nothing (all registers preserved)
-thmv_reap_x:
-    cmp word [thmv_row+DRVR_SEG], 0
-    je .out                      ; never loaded, or already given back
-    push ax
-    push bx
-    push bp
-    mov bx, thmv_row
-    mov bp, [bx+DRVR_ENT]
-    mov al, THMV_CLOSE           ; the child first: its W_PAINT names the image
-    call COLD_SEG:drvf_drv_call
-    call COLD_SEG:drvf_drv_release
-    pop bp
-    pop bx
-    pop ax
-.out:
-    ret
+                                  ; one row past drv_tab - drv_call's bound).
+                                  ; DATA, so .text: DS reads it (SPEC.md 2.6)
 %endif
 
 %endif
@@ -6450,6 +6284,211 @@ gfx_bppiece:
 %endif
 %endif
                                 ; (the body's %ifdef KERN_BIG is gone: SPEC.md 5.4.2.5)
+
+; --- the theme's set path (SPEC.md 76.14.14.1): .cold, and after gfx_blit1_x,
+; so the fragment walk's zero offset stays the segment's first byte ---------
+%ifdef OS88_THEME
+section .cold
+; thm_set - adopt AL as the theme and resolve the pens
+; in:  AL = a THM_* kind (anything out of range is Bright)
+; out: CF = 0 adopted as asked; CF = 1 it was REFUSED and something else stood
+;      instead - Windows whose WIN95.DRV could not be mounted (SPEC.md
+;      76.14.1). [thm_kind] always says what is live. kern_small: CF = 0
+; clobbers: nothing else
+;
+; ALL OF IT IS `.cold` (SPEC.md 76.14.14.1), with api_thm_set_x and
+; thmv_reap_x below: a theme change, a preset, a panel close and a boot are
+; human cadence, and the three were 223 bytes of `.text` that kern_big's image
+; rung could not hold beside DIA v2's desk layer. A FAR body: every caller
+; far-calls COLD_SEG:thm_set - kmain_o, the settings reader, CTRL.DRV,
+; vid_switch and api_thm_set_x - so it ends in `retf` and the 4-byte cw_thm_set
+; shim went with the move. It keeps its NAME, not an `_x`, because the boot
+; ladder (tools/os88ladder.py) and tests/colorpresets_qemu.py both name it
+thm_set:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    cmp al, THM_NKIND           ; a byte from a future version, or from a
+    jb .known                   ; settings disk this kernel does not know
+    xor al, al
+.known:
+%ifdef KERN_BIG
+    cmp al, THM_COLOR
+    jne .kind_ready
+    test byte [thm_cstrp], 4  ; restore the selected Color title-bar style
+    jz .kind_ready
+    mov al, THM_WIN
+.kind_ready:
+%endif
+%ifdef KERN_BIG
+    mov bl, al                  ; BL = the ROW, which is the kind until the
+    cmp al, THM_COLOR           ; adapter says otherwise
+    jb .apply
+    mov ah, [vid_kind]          ; COLOUR IS A FACT ABOUT THE ADAPTER, and it is
+    dec ah                      ; refused HERE rather than at the two callers
+    cmp ah, 2                   ; (SPEC.md 76.12.1). The test is the DEPTH of
+    jae .apply                  ; the PRIMARY: VID_VGA and VID_EGA are the two
+                                ; 4-plane kinds, HERC and CGA are 1bpp - and
+                                ; `dec` maps VGA -> FF, HERC -> 0, CGA -> 1,
+                                ; EGA -> 2, so ONE unsigned compare answers
+                                ; both. It is NOT [vid_mono]: on a two-card
+                                ; desktop that byte names the display LAST
+                                ; DRAWN ON (SPEC.md 39.14.3, 5.4.2.4)
+    mov bl, THM_WINMONO         ; WINDOWS IS NOT REFUSED THERE (SPEC.md
+    cmp al, THM_WIN             ; 76.14.6): the buttons, the X and the menus
+    je .apply                   ; mean the same thing on a Hercules, so it
+    xor ax, ax                  ; takes its own black-and-white row. Color is
+    xor bl, bl                  ; refused, and falls back to Bright
+.apply:
+    call COLD_SEG:thf_apply     ; AL = the kind: WIN95.DRV mounted and hooked
+    jnc .live                   ; for THM_WIN, unhooked and dropped otherwise
+    mov al, THM_COLOR           ; REFUSED (SPEC.md 76.14.1): the chrome stays
+    mov bl, al                  ; the kernel's, so the nearest palette that
+    mov ah, [vid_kind]          ; needs no module stands - Color on a colour
+    dec ah                      ; adapter, Bright on 1bpp - and [thm_kind]
+    cmp ah, 2                   ; says so, which is what the Control Panel's
+    jae .refused                ; radios read back
+    xor ax, ax
+    xor bl, bl
+.refused:
+%ifdef KERN_BIG
+    and byte [thm_cstrp], 0FBh ; unavailable Windows style must not be saved
+%endif
+    stc
+.live:
+    pushf                       ; ...the caller's answer, kept past the copy
+%else
+    mov bl, al
+%endif
+    mov [thm_kind], al
+%ifdef KERN_BIG
+    mov bl, al                  ; BL = the TABLE ROW, which is the kind - but
+    cmp al, THM_WIN             ; Windows wears the Color row and its preset
+    jne .rowset                 ; (76.14.13), or its own row on a 1bpp primary
+    mov bl, THM_COLOR
+    mov ah, [vid_kind]          ; .apply's depth test again: VGA -> FF, HERC
+    dec ah                      ; -> 0, CGA -> 1, EGA -> 2
+    cmp ah, 2
+    jae .rowset
+    mov bl, THM_WINMONO
+.rowset:
+%endif
+    mov al, bl
+    mov ah, THM_ROW_BYTES       ; byte MUL: AX only
+    mul ah
+    add ax, thm_tab
+    xchg ax, si
+    push ds                     ; ONE copy, so the live block cannot fall out
+    pop es                      ; of step with the table field by field
+    mov di, thm_bgc
+    mov cx, THM_ROW_BYTES / 2   ; one copy of the semantic role block
+    cld
+    rep movsw
+%ifdef KERN_BIG
+    cmp byte [thm_kind], THM_COLOR
+    jne .stripes_done
+    mov al, [thm_cstrp]
+    and al, 1
+    mov [thm_strp], al           ; Color only; Bright/Dark retain their rows
+.stripes_done:
+%endif
+    mov word [menu_bdirty], 0x0101  ; THE TWO DIFFING PAINTERS CANNOT SEE
+                                ; THIS (SPEC.md 76.7): menu_force's own answer,
+                                ; written here rather than far-called for -
+                                ; dock_init's precedent - and [menu_bovr] with
+                                ; it, the adjacent byte menu_force asserts
+    call KERNEL_SEG:cw_dock_force ; menu_bcell is a record of
+                                ; CHARACTERS and a dock tile's key is its icon
+                                ; plus its marks - a theme change moves
+                                ; NEITHER, so composing IS the diff finds no
+                                ; difference and the bar and the strip keep
+                                ; the colours they had. wm_paint_all does not
+                                ; cover it: it calls both painters and both
+                                ; are gated
+%ifdef KERN_BIG
+    popf                        ; CF: what .apply decided. pop writes no flag
+%else
+    clc
+%endif
+    pop es
+    pop di
+    pop si
+    pop cx                      ; kret_cx's three, inline: the ladder is near
+    pop bx                      ; and in .text, and kretfc_* banks DX, which
+    pop ax                      ; this never pushed
+    retf
+
+; api_thm_set_x - OSAPI_THM_SET's body (SPEC.md 76.14.14): thm_set, and then
+; the repaint and the settings write a Control Panel click would have owed.
+; thm_set alone is what boot and the panel call - they post for themselves.
+; FAR, reached from the resident api_thm_set the SLOT cell near-calls
+api_thm_set_x:
+    push ax
+    push bx
+    mov bl, [thm_kind]
+    call COLD_SEG:thm_set
+    pushf                        ; ...its CF is the caller's answer (Windows
+    cmp bl, [thm_kind]           ; whose module could not be mounted)
+    je .same
+    call KERNEL_SEG:cw_wm_su_drop_all ; A NEW KIND, SET FROM OUTSIDE THE PANEL: the
+.same:                           ; Control Panel's Theme page draws from
+                                 ; [thm_kind], and a panel behind another
+                                 ; window is repainted from its bank, not its
+                                 ; W_PAINT (SPEC.md 11.96.4) - so the bank
+                                 ; would show the old kind. Only on a CHANGE of
+                                 ; kind: a preset preview keeps every bank
+    mov word [cp_dirty], 0x0101  ; cp_repost's own two bytes (kernel/ctrl.inc),
+    inc byte [ui_post]           ; poked directly rather than called: this may
+                                 ; run with CTRL.DRV not loaded at all, which is
+                                 ; blank.inc's ss_post_x's own precedent for the
+                                 ; identical store - a call into ctrl.inc's own
+                                 ; code would not be safe here, a write to its
+                                 ; two RESIDENT bytes is
+    popf
+    pop bx
+    pop ax
+    retf
+
+; --- the Customize window: a window with no instance behind it (SPEC.md
+; 76.14), blank.inc's ss_row/ss_open/ss_reap_x pattern one more time, for
+; THMPAL.DRV instead of SAVER.DRV ---------------------------------------
+%ifdef KERN_BIG
+THMV_OPEN    equ 0               ; SI = Color row, DI = 'TP', DX = thm_cstrp
+THMV_BUSY    equ 1               ; CF = window still owns callbacks
+THMV_CLOSE   equ 2               ; destroy child before parent frees image
+THMV_ABI_VER equ 4               ; private header word +10, checked on open
+
+; thmv_reap_x - the Control Panel is closing: destroy the Customize window and
+; give THMPAL.DRV's image back (SPEC.md 76.14.14). RESIDENT - `.cold` is
+; resident, and on-demand would be wrong here - and far-called from
+; instance.inc's panel-close branch, because that is the one place EVERY close
+; of the panel passes with the gfx lock held - the settings write after it is
+; gated on there being something to write. The opener is CTRL.DRV's
+; (kernel/ctrl.inc, cp_thmv_open), so nothing of the loader is resident.
+; drv_call and drv_release are driver.inc's cold bodies, so they are NEAR
+; from here and drvf_*'s far entries are not needed.
+; out: nothing (all registers preserved)
+thmv_reap_x:
+    cmp word [thmv_row+DRVR_SEG], 0
+    je .out                      ; never loaded, or already given back
+    push ax
+    push bx
+    push bp
+    mov bx, thmv_row
+    mov bp, [bx+DRVR_ENT]
+    mov al, THMV_CLOSE           ; the child first: its W_PAINT names the image
+    call drv_call
+    call drv_release
+    pop bp
+    pop bx
+    pop ax
+.out:
+    retf
+%endif
+%endif
 
 section .lowbss                 ; LOW_SEG (SPEC.md 2.1), and not .bss for
                                 ; vid_rowtab's reason: 848 bytes in the image

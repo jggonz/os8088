@@ -3040,7 +3040,7 @@ cp_thm_click:
 %endif
     cmp al, [thm_kind]
     je .done                    ; already live: change nothing
-    call KERNEL_SEG:cw_thm_set
+    call COLD_SEG:thm_set
     call cp_repost              ; remembered on close (SPEC.md 31.8)
                                 ; ui_task repaints the world (SPEC.md 13)
                                 ; ...and SAY SO once (SPEC.md 13.13)

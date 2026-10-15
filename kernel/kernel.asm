@@ -4332,7 +4332,7 @@ kmain_o:
 
 %ifdef OS88_THEME
     mov al, [thm_kind]          ; RESOLVE THE PALETTE FROM THE KIND, once, before
-    call KERNEL_SEG:cw_thm_set ; anything is drawn (SPEC.md 76.12.1). Two
+    call COLD_SEG:thm_set       ; anything is drawn (SPEC.md 76.12.1). Two
                                 ; things need it and only one of them has run:
                                 ; drv_cfg_unpack calls thm_set when SYSTEM.CFG
                                 ; carried a theme, and a machine with no
@@ -5639,8 +5639,10 @@ cw_gfx_fill_pat:        call gfx_fill_pat
 %ifdef OS88_THEME              ; (kern_small: vga12.inc aliases it)
 cw_thm_desk:            call thm_desk
                     retf
-cw_thm_set:             call thm_set
-                    retf
+cw_dock_force:          call dock_force     ; thm_set's way out, and the
+                    retf                    ; next one api_thm_set_x's: both
+cw_wm_su_drop_all:      call wm_su_drop_all ; are .cold now, and cw_thm_set
+                    retf                    ; went (SPEC.md 76.14.14.1)
 %endif
 %ifdef DOCK_OPT
 cw_dock_band:           call dock_band

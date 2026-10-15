@@ -267,37 +267,14 @@ had added.
   "big": {
     "boot2": 4891,
     "bootmax": 121856,
-    "bss": 5222,
+    "bss": 5238,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 38400,
-    "coldpara": 2400,
+    "cold": 38833,
+    "coldpara": 2432,
     "fatpara": 288,
     "grace": 2048,
     "imgpara": 3072,
-    "kend": 6272,
-    "kseg": 96,
-    "ksize": 98816,
-    "lowbss": 5598,
-    "lowpara": 384,
-    "minramkb": 128,
-    "ovl": 5097,
-    "stk0": 512,
-    "text": 43921,
-    "vgabuf": 336,
-    "vgabufpara": 32
-  },
-  "emu": {
-    "boot2": 4991,
-    "bootmax": 121344,
-    "bss": 5222,
-    "budget": 100864,
-    "codemax": 65536,
-    "cold": 38400,
-    "coldpara": 2400,
-    "fatpara": 288,
-    "grace": 2048,
-    "imgpara": 3104,
     "kend": 6304,
     "kseg": 96,
     "ksize": 99328,
@@ -306,7 +283,30 @@ had added.
     "minramkb": 128,
     "ovl": 5097,
     "stk0": 512,
-    "text": 44180,
+    "text": 43899,
+    "vgabuf": 336,
+    "vgabufpara": 32
+  },
+  "emu": {
+    "boot2": 4991,
+    "bootmax": 121344,
+    "bss": 5238,
+    "budget": 100864,
+    "codemax": 65536,
+    "cold": 38833,
+    "coldpara": 2432,
+    "fatpara": 288,
+    "grace": 2048,
+    "imgpara": 3104,
+    "kend": 6336,
+    "kseg": 96,
+    "ksize": 99840,
+    "lowbss": 5598,
+    "lowpara": 384,
+    "minramkb": 128,
+    "ovl": 5097,
+    "stk0": 512,
+    "text": 44158,
     "vgabuf": 336,
     "vgabufpara": 32
   },
@@ -316,7 +316,7 @@ had added.
     "bss": 3063,
     "budget": 64000,
     "codemax": 65536,
-    "cold": 22442,
+    "cold": 22474,
     "coldpara": 1408,
     "fatpara": 64,
     "grace": 2048,
@@ -329,7 +329,7 @@ had added.
     "minramkb": 128,
     "ovl": 1480,
     "stk0": 512,
-    "text": 31874,
+    "text": 31892,
     "vgabuf": 0,
     "vgabufpara": 0
   }
@@ -702,60 +702,61 @@ there and nowhere else.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,693 | 36.1% |
-| the window system and its furniture | 22,342 | 27.1% |
-| drawing: adapters, primitives, glyphs, icons | 13,222 | 16.1% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 8,110 | 9.9% |
-| the kernel proper: API table, heap, scheduler, events | 7,159 | 8.7% |
-| the three built-in kinds | 1,442 | 1.8% |
+| the file system, end to end | 29,744 | 36.0% |
+| the window system and its furniture | 22,598 | 27.3% |
+| drawing: adapters, primitives, glyphs, icons | 13,236 | 16.0% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 8,165 | 9.9% |
+| the kernel proper: API table, heap, scheduler, events | 7,194 | 8.7% |
+| the three built-in kinds | 1,442 | 1.7% |
 | the Control Panel | 353 | 0.4% |
-| **total** | **82,321** | |
+| **total** | **82,732** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` | `.boot2` |
 |---|---:|---:|---:|---:|---:|---:|
+| `wm.inc` — the window manager (§11) | 9,228 | 141 | **9,369** | 1,132 | — | — |
 | `files.inc` — the Disk window (§22) | 1,173 | 8,149 | **9,322** | 583 | — | — |
-| `wm.inc` — the window manager (§11) | 9,148 | 140 | **9,288** | 1,132 | — | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 460 | 6,410 | **6,870** | 418 | — | — |
-| `vga12.inc` — the VGA planar primitives (§5) | 5,447 | 1,146 | **6,593** | 40 | 526 | — |
+| `vga12.inc` — the VGA planar primitives (§5) | 5,230 | 1,375 | **6,605** | 40 | 526 | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 24 | 4,975 | **4,999** | 180 | — | — |
-| `mouse.inc` — serial mouse and the cursor (§9) | 3,845 | — | **3,845** | 107 | 128 | — |
+| `mouse.inc` — serial mouse and the cursor (§9) | 3,863 | — | **3,863** | 107 | 128 | — |
 | `memory.inc` — the claim heap (§50) | 276 | 2,538 | **2,814** | 24 | 324 | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 2,750 | 9 | **2,759** | 56 | — | — |
 | `menu.inc` — the menu bar and pull-downs (§12) | 2,554 | 165 | **2,719** | 173 | 84 | — |
-| `ui.inc` — the UI task and the event ladder (§13) | 2,709 | 9 | **2,718** | 56 | — | — |
-| `fdlg.inc` — the Standard File dialog (§38) | 35 | 2,340 | **2,375** | 86 | — | — |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 446 | 1,928 | **2,374** | 313 | — | 1,167 |
+| `fdlg.inc` — the Standard File dialog (§38) | 35 | 2,348 | **2,383** | 86 | — | — |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 446 | 1,931 | **2,377** | 313 | — | 1,167 |
 | `assoc.inc` — file type associations (§54) | 419 | 1,925 | **2,344** | 31 | — | — |
 | `font.inc` — the 8×8 glyph renderer (§6) | 2,224 | — | **2,224** | 22 | 16 | 236 |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | 40 | 1,985 | **2,025** | 152 | — | — |
-| `desk.inc` — the desktop and volume zones (§14/§26.1) | 23 | 1,940 | **1,963** | 91 | — | — |
-| `instance.inc` — instances and the built-in kinds (§29) | 1,821 | 126 | **1,947** | 722 | — | — |
+| `desk.inc` — the desktop and volume zones (§14/§26.1) | 23 | 1,951 | **1,974** | 91 | — | — |
+| `instance.inc` — instances and the built-in kinds (§29) | 1,826 | 126 | **1,952** | 722 | — | — |
 | `apps.inc` — the three built-in kinds (§14) | 282 | 1,160 | **1,442** | 11 | 240 | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,380 | — | **1,380** | 212 | 2,944 | — |
+| `loader.inc` — the package loader (§21) | 4 | 1,299 | **1,303** | 48 | — | — |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,260 | — | **1,260** | 20 | — | — |
-| `loader.inc` — the package loader (§21) | 4 | 1,256 | **1,260** | 48 | — | — |
 | `icons.inc` — the icon renderer (§10) | 1,081 | — | **1,081** | 288 | — | — |
-| `dock.inc` — the dock strip (§30) | 925 | 45 | **970** | 59 | — | 75 |
+| `dock.inc` — the dock strip (§30) | 937 | 45 | **982** | 59 | — | 75 |
 | `fsx.inc` — fullscreen exclusive (§53) | 935 | — | **935** | 9 | — | — |
-| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 868 | — | **868** | 74 | — | 422 |
+| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 870 | — | **870** | 74 | — | 422 |
 | `snd.inc` — the sound layer (§34) | 800 | — | **800** | 35 | — | — |
 | `viddet.inc` — adapter detection and geometry (§39) | 770 | — | **770** | — | 696 | 97 |
 | `fprog.inc` — the file-operation progress widget (§12.8) | 642 | — | **642** | — | — | — |
-| `clock.inc` — the clock ladder (§37) | 490 | — | **490** | 59 | — | — |
-| `desksc.inc` — desktop shortcuts: the record table, the open by name, the keys and the popup (§26.8), `kern_big` only | 90 | 372 | **462** | 3 | — | 286 |
+| `desksc.inc` — desktop shortcuts: the record table, the open by name, the keys and the popup (§26.8), `kern_big` only | 90 | 442 | **532** | 3 | — | 286 |
+| `clock.inc` — the clock ladder (§37) | 490 | 32 | **522** | 59 | — | — |
 | `lz.inc` — the LZ decoder for packages, drivers, files and the kernel itself (§20.13) | — | 456 | **456** | — | — | — |
-| `mod.inc` — on-demand kernel modules (§2.8) | 110 | 324 | **434** | — | — | — |
+| `mod.inc` — on-demand kernel modules (§2.8) | 123 | 324 | **447** | — | — | — |
 | `blank.inc` — the idle screen blanker (§64) | 200 | 226 | **426** | — | — | — |
 | `toast.inc` — the menu bar's transient message (§59) | 417 | — | **417** | 25 | — | — |
+| `hiber.inc` — hibernate, the resident half of `HIBER.DRV` (§87) | 65 | 289 | **354** | 207 | — | 73 |
 | `ctrl.inc` — the Control Panel (§31) | 133 | 220 | **353** | 28 | — | — |
-| `hiber.inc` — hibernate, the resident half of `HIBER.DRV` (§87) | 63 | 289 | **352** | 191 | — | 73 |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 247 | — | **247** | 22 | — | 102 |
 | `clip.inc` — the system clipboard (§55) | 167 | — | **167** | 5 | — | — |
 | `events.inc` — the event ring (§10) | 149 | — | **149** | 3 | 128 | — |
 | `winmod.inc` — `WIN95.DRV`, the Windows theme's five chrome doors (§76.14), an on-demand module on `kern_big` | 36 | 32 | **68** | — | — | — |
 | `extmod.inc` — `EXTD.DRV`, the extended desktop's placement policy (§39.19.6), an on-demand module on `kern_big` | — | 46 | **46** | — | — | — |
 | `diskops.inc` — DISKOPS.DRV, the disk operations (§18.99) | 15 | 27 | **42** | — | — | — |
+| `deskmod.inc` — **(undescribed)** | — | 36 | **36** | — | — | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 2 | — | **2** | — | — | — |
 | `splash.inc` — the boot splash (§15) | — | — | **0** | — | — | 1,828 |
 | `dskwin.inc` — the mount-owned window at the bottom of `.lowbss` (§2.1.2) | — | — | **0** | — | 512 | — |
@@ -768,8 +769,8 @@ there and nowhere else.
 | `moudiag.inc` — what the identify window saw (§9.4.6), `MOUDIAG=1` | — | — | **0** | — | — | — |
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,211 | 171 | **2,382** | — | — | 605 |
-| **total** | **43,921** | **38,400** | **82,321** | **5,222** | **5,598** | **4,891** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,233 | 171 | **2,404** | — | — | 605 |
+| **total** | **43,899** | **38,833** | **82,732** | **5,238** | **5,598** | **4,891** |
 <!-- END generated table -->
 
 ### Reading it
@@ -1111,6 +1112,7 @@ answer for anything a single driver consumes.
 | **the owner ACCEPTED one 512-byte `.cold` step on kern_big and kern_emu (2026-10-15)**, with `DESK.DRV`, the desk layer's code as an on-demand module (SPEC.md 11.103.10): `osapi_wm_desk_x`'s MAKE/DRAG/RELEASE, the hover edge's body, `wm_show_desk` and `fdlg_top_x`'s desk arm into the image (`MOD_DESK` 7, 4 slots, 235 bytes, a 1 KB claim held from the first QUERY until restart); `dia_boot` stays resident (SPEC.md 110.4, 110.9). Against the merge: big/emu `.text` **-3** `.cold` **-163** `.bss` **+16**. Against main `b47de145`: big/emu `.text` +187 `.cold` +181 `.bss` +16, small `.text` +18 `.cold` +32 (unchanged by the cut). Cold rung 75 -> 76 steps on big and emu, **331** bytes left in it; kern_big image **9** left (212 on main), kern_emu image 262; kern_small no rung crossed (image 382 / cold 54). Footprint big 98,816 -> **99,328** of 100,864 (3 steps spare), emu 99,328 -> **99,840** (2 spare). No second step, no image rung, `KERN_BUDGET`/`KERN_CODE_MAX` untouched. Blessed on all three. The 360 KB system disk: 343 of 354 clusters, 11 left (12 before) | unchanged | +512 (big, emu), accepted |
 | DIA module-cut review fixes, INSIDE the accepted step (SPEC.md 11.103.10): `desk_need` saves and restores `drv_vol_cwd`/`drv_vol_drv` round `mod_need MOD_DESK`, because the load's bracket nests inside `sc_open`'s and the pair is one static (a relaunched widget left the machine in `SYSTEM\DIA`, or mounted on B:); the loader's step 5 calls it for an `OS88_F_DESK` package BEFORE the region claim, so the pinned 1 KB lands above the widget, not under it; QUERY's thunk calls it. big/emu `.cold` **+23** (desk_need 24, the step-5 call 3, the thunk -4), `.text`/`.bss` 0; cold **308** left in the accepted 76th step on both; kern_big image **9** left, unchanged; kern_small byte for byte unchanged. No rung crossed on any kernel. Blessed on all three | unchanged | unchanged |
 | feature/dia merged onto main `70df8a99` (#249's `OSAPI_THM_SET` at `0x046D`; the DIA cells move to `0x0475`/`0x047B`/`0x0481`, SPEC.md 20.3), NOT blessed: against main's own baseline the DIA kernel half is big/emu `.text` **+187** `.cold` **+204** `.bss` **+16**, small `.text` **+18** `.cold` **+32**. Main's #249 had left kern_big's IMAGE rung at **9** bytes (49,143 of 49,152), so kern_big CROSSES it, 96 -> 97 steps (49,346, 318 left), ON TOP of the accepted cold step (75 -> 76, 308 left): footprint 98,816 -> **99,840**, +1,024, 2 steps spare. kern_emu crosses only the accepted cold step (image 262 -> 59 left; footprint 99,328 -> 99,840). kern_small crosses nothing (image 391 -> 373, cold 86 -> 54). **The image step is the owner's decision**: 194 bytes of `.text`+`.bss` off kern_big un-cross it | unchanged | +1,024 (big), +512 (emu) |
+| **the owner decided "cut first, else accept" for that image step (2026-10-15), and the cut reached it: the step was NOT taken.** SPEC.md 76.14.14.1 moves #249's theme set path - `thm_set` (158 B), `api_thm_set_x` (33) and `thmv_reap_x` (32) - into `.cold`, leaving the 6-byte `api_thm_set` thunk the 8-byte SLOT cell needs, two new 4-byte shims (`cw_dock_force`, `cw_wm_su_drop_all`) and deleting `cw_thm_set`; `menu_force`'s one store is written inline. Against the merge: big/emu `.text` **-209** `.cold` **+229**, kern_small byte for byte unchanged (no theme). Against main `70df8a99`: big/emu `.text` **-22** `.cold` **+433** `.bss` **+16**, small `.text` +18 `.cold` +32. kern_big image **15** left (main 9) - no image step; cold **79** left in the accepted 76th step on big and emu - no second cold step; kern_emu image 268; kern_small image 373 / cold 54. Footprint big 98,816 -> **99,328** (3 steps spare), emu 99,328 -> **99,840** (2 spare): the accepted cold step and nothing else. `KERN_BUDGET`/`KERN_CODE_MAX` untouched. Blessed on all three | unchanged | +512 (big, emu), accepted |
 
 **The 35-move ledger of the old `KERN_BUDGET` figures is
 docs/history/KERN-BUDGET-LEDGER.md** - per move, what was asked for, what was

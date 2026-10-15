@@ -1082,7 +1082,7 @@ vid_switch:
 %ifdef KERN_BIG
     push ax                     ; ...and the THEME, which can be a fact about
     mov al, [thm_kind]          ; the adapter: SPEC.md 76.12's Color theme is
-    call thm_set                ; VGA's alone, and this page can move a running
+    call COLD_SEG:thm_set       ; VGA's alone, and this page can move a running
     pop ax                      ; machine onto a card with no colour in it.
                                 ; thm_set owns the refusal, so re-asserting the
                                 ; kind is the whole of it - Bright and Dark

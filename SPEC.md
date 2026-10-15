@@ -120218,15 +120218,47 @@ boot blob had room for (2.9.14). kern_small carries the record untouched.
 row (`thmv_row`) sits one row past `drv_tab`, outside `DRV_MAX`, so
 `drv_call`'s one range test reaches it with no compare in `.cold`, and
 `mem_rr_tab` names its segment so a compaction can move it (66.6.3). The
-panel's close branch in `instance.inc` calls the resident `thmv_reap_x` on
-EVERY close, before and independent of the settings write: the window goes
-first, then the image.
+panel's close branch in `instance.inc` far-calls the resident `thmv_reap_x`
+(`.cold`, §76.14.14.1) on EVERY close, before and independent of the settings
+write: the window goes first, then the image.
 
 **Verification.** `tests/colorpresets_qemu.py` drives each preset through the
 chooser's own click handler and asserts the desktop, both title pairs and the
 menu bar's XOR on and off, white content, Cancel, the style group, the
 private ABI refusal, the reap on panel close and a `SYSTEM.CFG` round trip
 across a reboot.
+
+##### 76.14.14.1 The theme's set path is `.cold`
+
+`thm_set`, `api_thm_set_x` (`OSAPI_THM_SET`'s body) and `thmv_reap_x` live
+in `.cold` on kern_big and kern_emu (§2.6) — they are still resident. Each
+runs at human cadence: a theme or preset change, a display switch, the
+boot's one palette resolve and a Control Panel close. None of them runs from
+an ISR or from the loading screen's IRQ0 path, and the cold segment is up
+before `kmain_o` reaches its palette resolve. They moved at the DIA merge
+onto #249 (§110.6), because that merge took kern_big's `.text` + `.bss` over
+its image rung. The move took **209** bytes off `.text` and added **229** to
+`.cold`, inside the 512-byte cold step the owner had already accepted for the
+DIA, so no rung was crossed.
+
+The shape:
+
+- **`thm_set` is a FAR body ending in `retf`.** It keeps its name, because
+  the boot ladder (`tools/os88ladder.py`) and `tests/colorpresets_qemu.py`
+  both name it. Every caller far-calls `COLD_SEG:thm_set`: `kmain_o`, the
+  settings reader, `CTRL.DRV`, `vid_switch` and `api_thm_set_x`. The 4-byte
+  `cw_thm_set` shim is gone.
+- **Its two calls back into `.text` cost one new shim.** `menu_force` is one
+  store, so `thm_set` writes `[menu_bdirty]` itself, the way `dock_init`
+  writes `dock_force`'s answer. `dock_force` goes through the new
+  `cw_dock_force`.
+- **`api_thm_set` stays in `.text` as a 6-byte thunk.** The cell is ABI: an
+  8-byte SLOT at 0x046D (§20.3) that near-calls a `.text` routine, so it
+  cannot name the cold body. `api_thm_set_x` reaches `wm_su_drop_all` through
+  the new `cw_wm_su_drop_all`.
+- **`thmv_reap_x` is far-called from `app_close_win` and ends in `retf`.** It
+  near-calls `drv_call` and `drv_release` directly, since both are cold
+  bodies. `thmv_fname` is data, so it stays in `.text` (§2.6's rule 1).
 
 ---
 
@@ -184021,6 +184053,27 @@ bytes, so the DIA's resident `.text` + `.bss` (+203) crosses it: a second
 step beyond the accepted one, and the owner's decision. 194 bytes off kern_big's
 `.text` + `.bss` un-cross it. The 360 KB system disk is 346 of 354 clusters
 (main's alone: 325).
+
+**The owner decided: cut first, else accept the image step.** The cut was
+enough, so the step was NOT taken. §76.14.14.1 moved #249's theme set path
+(`thm_set`, `api_thm_set_x` and `thmv_reap_x`) into `.cold`. That is 223 bytes
+of code, and it leaves a 6-byte `api_thm_set` thunk and two 4-byte shims
+(`cw_dock_force`, `cw_wm_su_drop_all`) in `.text`; `cw_thm_set` is deleted.
+Against the merge it is `.text` **-209** and `.cold` **+229** on kern_big and
+kern_emu. kern_small has no theme, so it is byte for byte unchanged. Measured
+against main's kernels, then `--bless` on all three:
+
+| | `.text` | `.cold` | `.bss` | rungs left after (main's) | footprint |
+|---|---:|---:|---:|---|---|
+| kern_big | **-22** | **+433** | **+16** | image **15** (9) - none crossed; cold **79** (0) in rung 76 - the accepted step | 98,816 -> **99,328**, +512, 3 steps spare |
+| kern_emu | -22 | +433 | +16 | image 268 (262); cold **79** (0) - the accepted step | 99,328 -> 99,840, +512, 2 steps spare |
+| kern_small | +18 | +32 | 0 | image 373 (391), cold 54 (86) - none crossed | 62,464, unchanged |
+
+The DIA's own candidates were measured and are not cuts. `wm_show_dk`
+(§11.103.10) is a 5-byte `call far [DKDFP+DKD_SHOW]` / `ret`, and it is the
+target of `wm_show_b`'s near `jnz`, so it cannot leave `.text`. `mod_f_desk`, the
+`DESK.DRV` name, is data: §2.6's rule 1 keeps it in `.text`, because DS
+reads it.
 
 **The disks.** `SYSTEM\DIA\` costs a folder's cluster and `DESKCAL.O88` five
 more. Measured with `os88disk.py --verify`: the 360 KB system disk went from
