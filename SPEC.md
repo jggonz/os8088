@@ -184560,8 +184560,9 @@ no alert.
     a Disk window off the cards, 10 / 11 calls.
   - **The three kernels are blessed** (`tools/kernsize.py --bless`): v2 is
     big/emu `.text` +183 `.cold` +225, small `.text` +12, no rung crossed.
-  - **The PR set is v2's** (`docs/dia/*.png`, eighteen pictures, all taken
-    on MartyPC with the mockup's data): on the VGA XT `full-vga` / `vga`
+  - **The PR set is v2's** (`docs/dia/*.png`, nineteen pictures, all taken
+    on MartyPC with the mockup's data, retaken after the merge onto main's
+    size pass and the module cut): on the VGA XT `full-vga` / `vga`
     (the mockup's scene - a Disk window in front at the upper left, the
     widget at rest at the right, the bar the Disk window's), `vga-hover`
     (the handle and its close box, with a 4x crop of the tag row),
@@ -184570,9 +184571,15 @@ no alert.
     stays behind, its handle clipped), `vga-editing` (`+`), `vga-task-checked`
     (one click on a box, before and after), `vga-reminder` (a reminder FIRING
     live: card 3 ringing with `Snooze - Dismiss`, the toast on the bar, no
-    alert window), `vga-moved`, `vga-restored-boot` / `vga-restored` (a warm
-    reset with no clock poke: relaunched where it was dragged, on JULY),
-    `vga-notfound` and `vga-dia-folder`; `cga-compact` / `cga-hover`, `herc`
+    alert window, grabbed after the fire's save has finished so the arrow
+    is back and the file-activity widget is off the bar), `vga-moved`,
+    `vga-restored-boot` / `vga-restored` (a warm reset with no clock poke:
+    relaunched where it was dragged, on JULY, card 2 saying `No
+    appointments`), `vga-notfound`, `vga-dia-folder` and `vga-win95` (§76.14's
+    Windows theme picked on the Theme page, beside a Disk window in the
+    Windows chrome: the widget's ink is pixel-identical to `full-vga`'s and
+    only the desktop ground in its gaps differs, so the widget keeps its own
+    treatment); `cga-compact` / `cga-hover`, `herc`
     (the whole 720x348) / `herc-hover`; and `smallk-cga` (kern_small's titled
     fallback). The design's W5 list also named `vga-dark`, `vga-color`,
     `ega-rest` and `cga-page1..3`: those are asserted on the framebuffer by
@@ -184659,8 +184666,8 @@ the owner accepted one cold step and asked for the cut with it):
   - **An empty day says so**: `No appointments` on card 2's first agenda
     line, as card 3 says `No reminders today` - composed into the band like
     every line, so no primitive call is added (`deskcalperf`'s counts).
-    `docs/dia/vga-restored.png` predates it and still shows the two blank
-    lines; the CGA pictures predate the beside dot.
+    `docs/dia/vga-restored.png` shows it, and the CGA pictures show the
+    beside dot (both retaken after this pass).
 
 ### 110.10 How it was built, and its gates
 

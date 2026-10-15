@@ -1164,9 +1164,10 @@ slot, `DESKCAL_GEO` against the assembled tables), `t_api_abi`, `t_mirror`,
 `deskdrag`, `deskhover`, `deskhovercga`, `deskhoverherc`, `deskclose`,
 `deskground`, `deskfit`, `deskcalcards`, `deskcalsnooze`, `deskmodal`, and
 every v1 `dia*` / `deskcal*` row re-gated on the widget. The PR's pictures
-are `docs/dia/*.png`, eighteen of them retaken as v2 on MartyPC with the
+are `docs/dia/*.png`, nineteen of them retaken as v2 on MartyPC with the
 mockup's data (SPEC.md §110.9 lists them): the VGA mockup scene and its crop,
 the handle with a 4x tag row, focus, covered, `+`, a task ticked, a reminder
 firing with no alert, moved, a warm reset restoring it, the not-found
-downgrade and the DIA folder; CGA's COMPACT and Hercules' whole screen, each
+downgrade, the DIA folder and the widget under main's Windows theme beside a
+Windows-chromed Disk window; CGA's COMPACT and Hercules' whole screen, each
 at rest and hovered; kern_small's titled fallback.
