@@ -814,8 +814,8 @@ whose `LESSONS.md` is what MIDIRack's (SPEC.md §105.9.4, §105.9.5) learned.
 - **Before spending a resident byte, ask whether the feature is an ON-DEMAND
   MODULE** (§2.8, `kernel/mod.inc`, docs/plans/completed/ONDEMAND-PLAN.md §1's
   test): kernel code that ships as a file (`CTRL.DRV`, `FORMAT.DRV`,
-  `DISKOPS.DRV`, `HIBER.DRV`, on kern_big `DOCK.DRV`, `EXTD.DRV` and
-  `WIN95.DRV`, and on
+  `DISKOPS.DRV`, `HIBER.DRV`, on kern_big `DOCK.DRV`, `EXTD.DRV`,
+  `WIN95.DRV` and `DESK.DRV`, and on
   kern_small `FILECP.DRV` and `FDLG.DRV`) and
   is read into a heap claim when the feature is asked for, freed when it is
   done. A feature qualifies when the system disk is already required to use
