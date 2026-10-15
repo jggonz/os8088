@@ -11084,6 +11084,9 @@ $(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
 #                                         # three - an anchor inside a cell,
 #                                         # the doubled last line and a `..`
 #                                         # in a relative link
+#   python3 tests/br14.py                 # ...and Browser 1.4's cell spans,
+#                                         # per-cell alignment and refused
+#                                         # password/file/textarea controls
 #   python3 tests/brnav.py                # Back/Forward/Reload and Save As
 #                                         # (BROWSER-PLAN 5/5.2/5.3). It needs
 #                                         # `make ethertest` too and boots

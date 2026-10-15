@@ -113777,6 +113777,37 @@ coalesced. Unsupported styling such as CSS, colors, and font sizes remains
 ignored, and application content is never rewritten outside the Browser's
 own document buffer.
 
+### 71.17 Browser 1.4 — table spans, cell alignment and form POST
+
+The table renderer extends its bounded ASCII compositor. A `<td>` or `<th>`
+may span one through eight logical columns with `colspan`. Missing, malformed,
+zero or over-limit values fall back to one column. The cell's measured width is
+the sum of the spanned columns plus the existing separators. `align=left`,
+`align=center`, `align=middle` and `align=right` affect text in that cell; left
+is the default and `middle` aliases `center`. The eight-column limit,
+wrapping, link hit-testing and row bounds remain unchanged. Width, colors, CSS,
+borders and spacing remain ignored presentation hints.
+
+Forms retain their fixed limits and successful-control rules. `GET` remains
+the default; `method=post` sends the existing bounded, percent-encoded pairs
+as an `application/x-www-form-urlencoded` request body. The resolved `action`
+is the request target; submitted pairs are not appended to its URL. The
+request includes an exact `Content-Length` and uses the existing HTTP/1.0
+close-delimited flow. The encoded body is limited to 159 bytes and appended
+to the existing 512-byte request staging area; no second body buffer, dynamic
+allocation, framebuffer or kernel API is introduced. Oversized bodies are
+refused visibly, never truncated. Unchecked controls are omitted; checked choices and selected
+options remain successful controls.
+
+Password and file controls remain visibly unsupported. With no TLS, the
+browser must not show a password control that could be submitted in plaintext.
+`<textarea>` remains outside the single-line control model and is shown as
+unsupported, while its source contents are skipped as control content rather
+than rendered as page text. The reference renderer and guest share fixtures
+for spans, alignment and unsupported controls; a local HTTP test checks the
+POST request line, headers, exact length and body. Existing GET, formatting
+and frame-navigation behavior remains covered.
+
 ### 72.1 What the packages did have to change, which is one question
 
 The claim "without one byte changing" is not quite true and the exact shortfall

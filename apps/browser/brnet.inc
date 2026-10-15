@@ -59,17 +59,10 @@ BN_ERR      equ 7                   ; finished, and it did not work
 
 BR_HOSTMAX  equ 64                  ; matches netpkg.inc's NET_HOSTMAX field
 BR_PATHMAX  equ 96
-BR_REQMAX   equ 76 + BR_PATHMAX + BR_HOSTMAX
-                                    ; **DERIVED FROM THE PIECES**, br_nsline's
-                                    ; reason one buffer along: it was a literal
-                                    ; 200 against a request that composes 4 +
-                                    ; path + 17 + host + 55 = 234 at the limits
-                                    ; br_split already enforces, so a long path
-                                    ; on a long host ran 34 bytes into
-                                    ; br_nsline - which br_status then rewrote
-                                    ; with the state, cutting the request's own
-                                    ; tail off before .send ever put it on the
-                                    ; wire
+BR_REQMAX   equ BR_PATHMAX + BR_HOSTMAX + BR_URLMAX + 180
+                                    ; path + host + the 159-byte POST body and
+                                    ; 180 bytes for the longest request line and
+                                    ; headers; both request forms share br_rxb.
 BR_CHUNK    equ 512                 ; one NETV_RECV, well under NET_SKMAX
 
 ; -----------------------------------------------------------------------------
@@ -191,6 +184,9 @@ br_go:
 .abort:
     call br_abort
 .free:
+    mov al, [br_post]
+    mov [br_reqpost], al
+    mov byte [br_post], 0
     mov word [br_nmsg], 0
     call br_split                   ; the URL into host, port and path
     jc .badurl
@@ -508,7 +504,7 @@ br_nstep:
 .up:
     call br_gchk
     jc .out
-    call br_req                     ; compose GET ... into br_reqb
+    call br_req                     ; compose the bounded request into br_reqb
     mov word [br_sent], 0
     mov byte [br_nstate], BN_SEND
     jmp .redraw
@@ -660,7 +656,7 @@ br_hclose:
     ret
 
 ; -----------------------------------------------------------------------------
-; br_req - compose the request into br_reqb, and set br_reqn
+; br_req - compose GET or POST into br_reqb, and set br_reqn
 ;
 ; HTTP/1.0 and `Connection: close`, which together are the whole reason this
 ; needs no chunked decoder: a 1.0 server ends a response by closing, and
@@ -673,24 +669,72 @@ br_req:
     push di
     mov di, br_reqb
     mov bx, br_reqb + BR_REQMAX - 1 ; the last byte br_rputs may write, set
-                                    ; ONCE for all five pieces: the size above
+                                    ; ONCE for every piece: the size above
                                     ; is derived and correct, and this is what
                                     ; keeps a longer User-Agent from quietly
                                     ; making it wrong again
+    cmp byte [br_reqpost], 0
+    je .get
+    mov si, br_r_post
+    call br_rputs
+    jmp short .line
+.get:
     mov si, br_s_get
     call br_rputs
+.line:
     mov si, br_path
     call br_rputs
     mov si, br_s_http
     call br_rputs
     mov si, br_host
     call br_rputs
+    cmp byte [br_reqpost], 0
+    je .gettail
+    mov si, br_r_posttail
+    call br_rputs
+    mov ax, [br_un]
+    call br_rputdec
+    mov si, br_r_endbody
+    call br_rputs
+    mov si, br_url
+    call br_rputs
+    jmp short .finish
+.gettail:
     mov si, br_s_tail
     call br_rputs
+.finish:
     sub di, br_reqb
     mov [br_reqn], di
     pop di
     pop si
+    pop bx
+    pop ax
+    ret
+
+; The body is at most 159 bytes, so three decimal digits cover its exact length.
+; The request bound above includes this field and the existing body staging.
+br_rputdec:
+    push ax
+    push bx
+    push cx
+    push dx
+    xor cx, cx
+    mov bx, 10
+.digits:
+    xor dx, dx
+    div bx
+    push dx
+    inc cx
+    or ax, ax
+    jnz .digits
+.emit:
+    pop dx
+    add dl, '0'
+    mov [di], dl
+    inc di
+    loop .emit
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -1408,9 +1452,15 @@ br_status:
     jmp br_pop7
 
 br_s_get:    db 'GET ', 0
+br_r_post:   db 'POST ', 0
 br_s_http:   db ' HTTP/1.0', 13, 10, 'Host: ', 0
-br_s_tail:   db 13, 10, 'User-Agent: os8088 Browser 1.3', 13, 10
+br_s_tail:   db 13, 10, 'User-Agent: os8088 Browser 1.4', 13, 10
              db 'Connection: close', 13, 10, 13, 10, 0
+br_r_posttail: db 13, 10, 'User-Agent: os8088 Browser 1.4', 13, 10
+               db 'Connection: close', 13, 10
+               db 'Content-Type: application/x-www-form-urlencoded', 13, 10
+               db 'Content-Length: ', 0
+br_r_endbody: db 13, 10, 13, 10, 0
 
 br_nnames:   dw br_s_ready, br_s_look, br_s_conn, br_s_asking
              dw br_s_read, br_s_read, br_s_ready, br_s_fail

@@ -200,8 +200,8 @@ def unescape(text):
 
 
 class Cell:
-    def __init__(self, colspan=1, header=False):
-        self.ops, self.colspan, self.header = [], colspan, header
+    def __init__(self, colspan=1, header=False, align="left"):
+        self.ops, self.colspan, self.header, self.align = [], colspan, header, align
 
     def text_len(self):
         return sum(len(o[1]) for o in self.ops if o[0] == "RUN")
@@ -293,6 +293,8 @@ def parse(raw):
 
         if tag in DROP_CONTENT:
             if not closing:
+                if tag == "textarea":
+                    add_text("[unsupported]")
                 end = re.search(r"</\s*%s\s*>" % tag, text[pos:], re.I)
                 st["dropped"].add(tag)
                 pos = n if not end else pos + end.end()
@@ -334,10 +336,17 @@ def parse(raw):
                 if not stack[-1].rows:
                     stack[-1].rows.append([])
                 try:
-                    cs = max(1, min(16, int(a.get("colspan", "1"))))
+                    cs = int(a.get("colspan", "1"))
+                    if not 1 <= cs <= 8:
+                        cs = 1
                 except ValueError:
                     cs = 1
-                stack[-1].rows[-1].append(Cell(cs, tag == "th"))
+                align = a.get("align", "left").lower()
+                if align == "middle":
+                    align = "center"
+                if align not in ("left", "center", "right"):
+                    align = "left"
+                stack[-1].rows[-1].append(Cell(cs, tag == "th", align))
         elif tag == "pre":
             pre = 0 if closing else 1
             emit(("PARA",))
@@ -374,6 +383,8 @@ def parse(raw):
                 add_text("[x]" if re.search(r"\bchecked\b", attrs, re.I) else "[ ]")
             elif typ == "radio":
                 add_text("(*)" if re.search(r"\bchecked\b", attrs, re.I) else "( )")
+            elif typ in ("password", "file", "image"):
+                add_text("[unsupported]")
             elif typ != "image":
                 try:
                     width = max(1, min(40, int(a.get("size", "20"))))
@@ -470,16 +481,18 @@ def cell_text(ops):
 def layout_table(t, width, out):
     """A table is the ATOMIC unit of layout (3.2): one measuring pass over the
     parsed cells, integer arithmetic and not one glyph, then rows."""
-    ncols = min(t.ncols(), 16)
+    ncols = min(t.ncols(), 8)
     if not ncols:
         return
     want = [0] * ncols
     for r in t.rows:
         col = 0
         for c in r:
-            if col < ncols and c.colspan == 1:
-                want[col] = max(want[col], min(len(cell_text(c.ops)), width))
-            col += c.colspan
+            span = min(c.colspan, max(1, ncols - col))
+            if col < ncols:
+                need = max(1, len(cell_text(c.ops)) - 2 * (span - 1))
+                want[col] = max(want[col], min(need, width))
+            col += span
     # The DRAWN width is sum(w) + 2*ncols + 1 - a '|' and a space either side
     # of every column and a '+' at each edge - so that is what has to fit, not
     # the sum alone. The first version subtracted ncols+1 and could overflow
@@ -493,10 +506,11 @@ def layout_table(t, width, out):
     for r in t.rows:
         col = 0
         for c in r:
-            if col < ncols and c.colspan == 1:
+            span = min(c.colspan, max(1, ncols - col))
+            if col < ncols:
                 for w in cell_text(c.ops).split():
                     floor[col] = max(floor[col], min(len(w), 14))
-            col += c.colspan
+            col += span
     total = sum(want) or 1
     if total > avail:                            # squeeze proportionally...
         want = [max(1, w * avail // total) for w in want]
@@ -512,15 +526,20 @@ def layout_table(t, width, out):
     for r in t.rows:
         wrapped, col = [], 0
         for c in r:
-            span = sum(want[col:col + c.colspan]) + (c.colspan - 1) * 2
-            wrapped.append(wrap(cell_text(c.ops).split(), max(1, span)) or [""])
-            col += c.colspan
+            spancols = min(c.colspan, max(1, ncols - col))
+            cellw = sum(want[col:col + spancols]) + (spancols - 1) * 2
+            wrapped.append((wrap(cell_text(c.ops).split(), max(1, cellw)) or [""], cellw))
+            col += spancols
         for k in range(max(len(w) for w in wrapped)):
             col, parts = 0, []
             for ci, c in enumerate(r):
-                span = sum(want[col:col + c.colspan]) + (c.colspan - 1) * 2
-                parts.append((wrapped[ci][k] if k < len(wrapped[ci]) else "").ljust(span))
-                col += c.colspan
+                spancols = min(c.colspan, max(1, ncols - col))
+                cellw = wrapped[ci][1]
+                line = wrapped[ci][0][k] if k < len(wrapped[ci][0]) else ""
+                spare = max(0, cellw - len(line))
+                left = spare if c.align == "right" else spare // 2 if c.align == "center" else 0
+                parts.append(" " * left + line + " " * (spare - left))
+                col += spancols
             out.append(Line("|" + "|".join(" " + p for p in parts) + "|", 0, "row"))
         out.append(Line(rule, 0, "rule"))
 
@@ -660,6 +679,22 @@ def self_check():
         print("selfcheck %s  78-cell row: model %.1f ms vs measured %.1f ms  (%.1f%%) %s"
               % (flag, got / 1000.0, measured / 1000.0, 100 * err, ad))
         ok = ok and err < 0.02
+    sample = (b"<table><tr><td>aaa</td><td align=center>mid</td>"
+              b"<td align=right>r</td></tr><tr><td colspan=2>two</td>"
+              b"<td>end</td></tr></table><input type=password value=secret>"
+              b"<textarea>private</textarea>")
+    ops, _ = parse(sample)
+    ops, _, _, _ = simplify(ops)
+    lines = layout(ops, 40)
+    rows = [line.cells for line in lines if line.kind == "row"]
+    checks = ("| aaa| mid|   r|" in rows and
+              "| two     | end|" in rows and
+              any("[unsupported]" in line.cells for line in lines) and
+              not any("secret" in line.cells or "private" in line.cells
+                      for line in lines))
+    print("selfcheck %s  1.4 colspan/alignment and unsupported controls"
+          % ("ok " if checks else "OFF"))
+    ok = ok and checks
     return ok
 
 

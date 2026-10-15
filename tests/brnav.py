@@ -67,7 +67,12 @@ PAGE_F = open("tests/htm/frogfind-home.htm", "rb").read()
 URL_A = "http://10.0.2.2:%d/a.htm" % PORT
 URL_SLOW = "http://10.0.2.2:%d/slow.htm" % PORT
 URL_B = "http://10.0.2.2:%d/b.htm" % PORT
+URL_POST = "http://10.0.2.2:%d/postform.htm" % PORT
 SAVED = "SAVED.HTM"
+PAGE_POST = (b"<html><body><form action=\"/posted\" method=post>"
+             b"<input type=text name=q size=12>"
+             b"<input type=hidden name=token value=\"a b\">"
+             b"<input type=submit value=Send></form></body></html>")
 
 
 class TwoPages(threading.Thread):
@@ -81,6 +86,7 @@ class TwoPages(threading.Thread):
         self.s.listen(4)
         self.log = []
         self.heads = []
+        self.posts = []
 
     def run(self):
         while True:
@@ -92,6 +98,18 @@ class TwoPages(threading.Thread):
             try:
                 req = b""
                 while b"\r\n\r\n" not in req and len(req) < 4096:
+                    b = c.recv(1024)
+                    if not b:
+                        break
+                    req += b
+                header_end = req.find(b"\r\n\r\n") + 4
+                content_length = 0
+                if header_end >= 4:
+                    for line in req[:header_end].split(b"\r\n"):
+                        if line.lower().startswith(b"content-length:"):
+                            content_length = int(line.split(b":", 1)[1])
+                            break
+                while len(req) < header_end + content_length:
                     b = c.recv(1024)
                     if not b:
                         break
@@ -109,7 +127,12 @@ class TwoPages(threading.Thread):
                                      daemon=True).start()
                     c = None                    # ...the thread owns it now
                     continue
-                if b"/f.htm" in first or first.startswith(b"GET /?"):
+                if first.startswith(b"POST /posted "):
+                    self.posts.append(req.decode("latin-1", "replace"))
+                    body = PAGE_A
+                elif b"/postform.htm" in first:
+                    body = PAGE_POST
+                elif b"/f.htm" in first or first.startswith(b"GET /?"):
                     body = PAGE_F
                 elif b"/b.htm" in first:
                     body = PAGE_B
@@ -481,7 +504,7 @@ def main():
             if ln.startswith("User-Agent:"):
                 line = ln
     print("the server saw %r" % line)
-    if line != "User-Agent: os8088 Browser 1.0":
+    if line != "User-Agent: os8088 Browser 1.4":
         fails.append("the User-Agent is %r" % line)
 
     # --- 5: BACK DURING A FETCH DROPS IT (SPEC.md 71.8) --------------------
@@ -582,6 +605,39 @@ def main():
                 if not got or "q=os8088" not in got:
                     fails.append("submitting a form whose action is `/` did "
                                  "not reach the server: %r" % got)
+
+    # --- 6: POST keeps values in the body, with an exact bounded length -----
+    fetch(URL_POST)
+    wait_done("POST form page")
+    if rb("br_fn"):
+        fofs = u16(m.readseg(pseg, sy["br_flds"], 2))
+        err = click_offset(fofs)
+        if err:
+            fails.append("POST form field: " + err)
+        else:
+            m_type("os8088")
+            sub0 = rw("br_subs")
+            err = click_offset(sub0 + 2)
+            if err:
+                fails.append("POST form submit: " + err)
+            else:
+                wait_done("POST form submission")
+                post = srv.posts[-1] if srv.posts else ""
+                head, _, body = post.partition("\r\n\r\n")
+                print("  POST request: %r body=%r" %
+                      (head.split("\r\n", 1)[0], body))
+                if not head.startswith("POST /posted HTTP/1.0\r\n"):
+                    fails.append("form method/action produced a wrong request "
+                                 "line: %r" % (head.split("\r\n", 1)[0],))
+                if "Content-Type: application/x-www-form-urlencoded" not in head:
+                    fails.append("POST is missing its form content type")
+                if "Content-Length: %d" % len(body) not in head:
+                    fails.append("POST Content-Length does not match %d bytes" %
+                                 len(body))
+                if body != "q=os8088&token=a+b":
+                    fails.append("POST body %r != expected encoded controls" % body)
+    else:
+        fails.append("POST form page produced no editable text field")
 
     # --- 4: Save As ---------------------------------------------------------
     if not rw("br_srcseg"):
