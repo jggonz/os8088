@@ -1393,8 +1393,9 @@ br_build:
     cmp al, D_LNK1                  ; the two inline markers are the only ones
     jne .nl1                        ; this walk has to UNDERSTAND rather than
     mov byte [br_lnkcell], 1        ; skip: they say which cells are a link
-    add si, 2                       ; ...past the two payload bytes
-    jmp .copy
+    mov byte [br_undraw], 1         ; ...and the underline pass is owed: a
+    add si, 2                       ; ...past the two payload bytes - a line
+    jmp .copy                       ; that OPENS a link had no rule under it
 .nl1:
     cmp al, D_LNK0
     jne .meta
@@ -7202,18 +7203,16 @@ br_anchor:
     pop ds
     ; Mark links from a child document so br_follow resolves them against
     ; that frame's saved absolute URL. Zero means the top-level page.
-    mov ax, [br_lnkn]
-    xor bx, bx
-    mov bl, [br_framecurrent]
-    cmp byte [br_frameappend], 0
-    je .ownerroot
-    inc bl
+    mov bx, [br_lnkn]
+    mov al, [br_framecurrent]       ; the owner, built in AL - BX is the
+    cmp byte [br_frameappend], 0    ; index and was overwriting it, so every
+    je .ownerroot                   ; link but the first was tagged as a
+    inc al                          ; frame's and resolved against no base
     jmp .ownerstore
 .ownerroot:
-    xor bl, bl
+    xor al, al
 .ownerstore:
-    mov bx, ax
-    mov [br_lnkfrm+bx], bl
+    mov [br_lnkfrm+bx], al
     mov [br_lnkw], di
     mov es, [br_srcseg]             ; ...and ES back to what br_act passes round
     mov ax, [br_lnkn]
