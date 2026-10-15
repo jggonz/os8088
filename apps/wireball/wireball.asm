@@ -1,5 +1,5 @@
 ; WireBall (SPEC.md 107): one court, two computers, a null modem.
-; The serial lifetime is wholly inside FSX; no ISR or resident kernel bytes.
+; The serial lifetime and UART rate callback are wholly inside FSX.
 %include "os88api.inc"
     OS88_HEADER 'WIREBALL', wb_entry, 1
     OS88_ICON16
@@ -11,11 +11,11 @@
 
 WB_ROWS equ 20
 WB_PH equ 4
-WB_PMAX equ WB_ROWS-WB_PH
-WB_YMAX equ (WB_ROWS-1)*4
+WB_PMAX equ (WB_ROWS-WB_PH)*4
+WB_YMAX equ WB_ROWS*4-2
 WB_TIMEOUT equ 55
-WB_FRAME equ 26
-WB_PROTOCOL equ 2
+WB_FRAME equ 30
+WB_PROTOCOL equ 3
 WB_SPEED_MIN equ 8
 WB_SPEED_MAX equ 16
 WB_HELLO equ 0
@@ -35,7 +35,11 @@ WP_RLEN equ 9
 WP_ESC equ 10
 WP_TX equ 11
 WP_RX equ WP_TX+WB_FRAME*2+2
-WP_SIZE equ WP_RX+WB_FRAME
+WP_QHEAD equ WP_RX+WB_FRAME
+WP_QTAIL equ WP_QHEAD+1
+WP_QERR equ WP_QTAIL+1
+WP_QUEUE equ WP_QERR+1
+WP_SIZE equ WP_QUEUE+128
 
 wb_entry:
     mov si, wb_tpl
@@ -72,18 +76,29 @@ wb_oncmd:
 wb_launch:
     mov [wb_practice], al
     mov byte [wb_abon], 0
+    call wv_fontload
+    mov byte [wv_fast], 1
+    mov word [wv_clock], 0
+    mov byte [wb_async], 0
+    mov ax, wb_main
+    mov bx, [wb_win]
+    mov cx, FSXF_RATE
+    mov dx, 2048
+    mov di, wb_ratehook
+    call OSAPI_FSX_RUN
+    jnc .out
+    mov byte [wv_fast], 0
     mov ax, wb_main
     mov bx, [wb_win]
     xor cx, cx
     call OSAPI_FSX_RUN
+.out:
     ret
 
 wb_main:
     push ds
     pop es
-    mov di, wb_fsi
-    mov al, FSXM_TEXT80
-    call OSAPI_FSX_MODE
+    call wv_mode
     jc .out
     mov ax, [wb_fsi+FSI_SEG]
     mov [wb_vseg], ax
@@ -95,6 +110,11 @@ wb_main:
     mov byte [wb_command], 0
     mov byte [wb_ack], 0
     mov byte [wb_cmdtype], 0
+    mov byte [wb_peerack], 0
+    mov byte [wb_owner], 0
+    mov word [wb_generation], 0
+    mov byte [wb_pending], 0
+    mov byte [wb_urgent], 0
     mov word [wb_peer], 0
     mov word [wb_peer+2], 0
     mov word [wb_port], 0
@@ -111,6 +131,8 @@ wb_main:
     mov word [wb_width], 156*4
     call wb_openports
 .clock:
+    mov ax, [wv_clock]
+    mov [wv_last], ax
     call OSAPI_GET_TICKS
     mov [wb_last], ax
     mov [wb_seen], ax
@@ -120,16 +142,47 @@ wb_main:
     cmp byte [wb_practice], 0
     jne .keys
     call wb_service
+    call wb_schedule
 .keys:
     call wb_keys
     cmp byte [wb_quit], 0
     jne .leave
     call OSAPI_GET_TICKS
     cmp ax, [wb_last]
-    je .loop
+    je .frames
     mov [wb_last], ax
     inc word [wb_ticksim]
     call wb_tick
+.frames:
+    cmp byte [wv_fast], 0
+    je .legacy
+    mov ax, [wv_clock]
+    sub ax, [wv_last]
+    cmp ax, 8
+    jb .present                ; draw ahead of retrace; motion keeps its own clock
+.advance:
+    add word [wv_last], 8
+    call wb_frame
+    mov ax, [wv_clock]
+    sub ax, [wv_last]
+    cmp ax, 8
+    jae .advance
+    jmp .present
+.legacy:
+    ; A small kernel refuses FSXF_RATE; keep its nonblocking text court.
+    cmp byte [wv_legacytick], 0
+    je .loop
+    mov byte [wv_legacytick], 0
+    mov byte [wv_legacyframes], 4
+.legacy_step:
+    call wb_frame
+    cmp byte [wb_practice], 0
+    jne .legacy_next
+    call wb_service
+.legacy_next:
+    dec byte [wv_legacyframes]
+    jnz .legacy_step
+.present:
     call wb_draw
     cmp byte [wb_practice], 0
     jne .loop
@@ -162,6 +215,7 @@ wb_main:
 .close:
     call wb_closeports
 .out:
+    call wv_leave
     call wb_sound_quiet           ; a final receive during BYE cannot leave a cue sounding
     ret
 
@@ -180,7 +234,7 @@ wb_ablines: dw wb_a1,wb_a2,wb_a3,wb_a4,0
 wb_a1: db 'WireBall for os8088',0
 wb_a2: db 'Pong over a null modem',0
 wb_a3: db 'COM1/COM2 - 2400 baud, 8N1',0
-wb_a4: db 'Serial protocol version 1',0
+wb_a4: db 'Serial protocol version 3',0
 %define OS88UI_ABOUT
 %define OS88UI_ARM
 %include "os88ui.inc"
@@ -189,6 +243,7 @@ wb_a4: db 'Serial protocol version 1',0
 %include "wireball/wblink.inc"
 %include "wireball/wbgame.inc"
 %include "wireball/wbsound.inc"
+%include "wireball/wbvideo.inc"
 
 ; No worker, no absolute segment into our own region, no IRQ vector.
 %assign WB_BSS 0
@@ -215,7 +270,7 @@ WB_VAR wb_practice,1
 WB_VAR wb_quit,1
 WB_VAR wb_latch,1
 WB_VAR wb_phase,1             ; 0 searching, 1 echo handshake, 2 playing
-WB_VAR wb_side,1              ; 0 left/authority, 1 right
+WB_VAR wb_side,1              ; 0 left, 1 right; each judges its local paddle
 WB_VAR wb_bound,1
 WB_VAR wb_pic,1
 WB_VAR wb_identity_value,4
@@ -244,16 +299,38 @@ WB_VAR wb_cmdtype,1
 WB_VAR wb_drawold,6           ; three previous sprite VRAM offsets (ffff = absent)
 WB_VAR wb_hudold,80           ; last displayed HUD, only changed cells written
 WB_VAR wb_hud,80
-WB_VAR wb_crossings,2         ; diagnostic: authoritative trips across the seam
+WB_VAR wb_crossings,2         ; diagnostic: left player crossings through the seam
 WB_VAR wb_frames,2
 WB_VAR wb_fracx,1            ; quarter-tick remainders, 0..3
 WB_VAR wb_fracy,1
-WB_VAR wb_steps,1
 WB_VAR wb_returns,1          ; saturates at 16 returns
 WB_VAR wb_padold,1
 WB_VAR wb_lspin,1
 WB_VAR wb_rspin,1
 WB_VAR wb_spinage,1
+WB_VAR wb_owner,1
+WB_VAR wb_generation,2
+WB_VAR wb_pending,1
+WB_VAR wb_urgent,1
+WB_VAR wb_peerack,1
+WB_VAR wb_async,1
+WB_VAR wb_subtick,2
+WB_VAR wb_prevx,2
+WB_VAR wb_prevy,2
+WB_VAR wb_stepvx,2
+WB_VAR wb_stepvy,2
+WB_VAR wb_plane,2
+WB_VAR wb_gap,2
+WB_VAR wb_impact,2
+WB_VAR wb_remainder,2
+WB_VAR wb_contactpad,1
+WB_VAR wb_contactspin,1
+WB_VAR wv_fast,1
+WB_VAR wv_clock,2
+WB_VAR wv_last,2
+WB_VAR wv_legacytick,1
+WB_VAR wv_legacyframes,1
+WV_BSS
 WB_VAR wb_marked,1
 WB_VAR wb_muted,1
 WB_VAR wb_soundseq,2

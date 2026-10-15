@@ -11,6 +11,7 @@ Registered in the soak tier; make wireballtest is the standalone spelling.
 """
 import atexit
 import argparse
+import json
 from pathlib import Path
 import selectors
 import shutil
@@ -141,7 +142,7 @@ class Machine(Qemu):
                 [('phase', 1), ('side', 1), ('left', 1), ('right', 1),
                  ('ballx', 2), ('bally', 2), ('flags', 1), ('count', 1),
                  ('scorel', 1), ('scorer', 1), ('command', 1), ('ack', 1),
-                 ('frames', 2), ('crossings', 2)]}
+                 ('frames', 2), ('crossings', 2), ('owner', 1), ('generation', 2)]}
 
     def put(self, values):
         """Install a fixture while stopped; use the shipped binary's own map."""
@@ -166,6 +167,49 @@ class Machine(Qemu):
     def wait(self, condition, what, secs=8):
         assert os88qemu.acted(self, lambda: condition(self.game()), secs=secs,
                              what=what), f'{what}: {self.game()}, latch={self.value("wb_latch")}, keyboard={self.read(S("kbd_dnmap"), 16).hex()}'
+
+    def key_state(self, name, down):
+        """Hold/release explicitly; HMP's timed sendkey uses the host clock."""
+        with socket.socket(socket.AF_UNIX) as sock:
+            sock.connect(self.path)
+            with sock.makefile('rw') as stream:
+                json.loads(stream.readline())
+                for command in ({'execute':'qmp_capabilities'},
+                                {'execute':'input-send-event','arguments':{'events':[
+                                    {'type':'key','data':{'down':down,'key':{'type':'qcode','data':name}}}]}}):
+                    stream.write(json.dumps(command)+'\n')
+                    stream.flush()
+                    while True:
+                        reply=json.loads(stream.readline())
+                        if 'event' not in reply:
+                            break
+                    assert 'return' in reply, reply
+
+    def frame_boundary(self):
+        """Pause after a complete page has been drawn, for raster assertions."""
+        self.hmp('stop')
+        address=(self.seg << 4)+self.sy['wb_main.loop']
+        with socket.socket(socket.AF_UNIX) as sock:
+            sock.settimeout(10)
+            sock.connect(self.gdbpath)
+            def request(command):
+                data=command.encode()
+                sock.sendall(b'$'+data+b'#'+f'{sum(data)&255:02x}'.encode())
+                while sock.recv(1) != b'$':
+                    pass
+                reply=b''
+                while True:
+                    byte=sock.recv(1)
+                    if byte == b'#':
+                        break
+                    reply+=byte
+                sock.recv(2)
+                sock.sendall(b'+')
+                return reply
+            assert request(f'Z0,{address:x},1') == b'OK'
+            assert request('c').startswith((b'T05',b'S05'))
+            assert request(f'z0,{address:x},1') == b'OK'
+        self.hmp('stop')
 
 
 class Cable:
@@ -204,10 +248,11 @@ class Cable:
             s.close()
 
 
-def frame(sender, recipient, x=310, checksum=True, version=2, vx=8, vy=2):
+def frame(sender, recipient, x=310, checksum=True, version=3, vx=8, vy=2, owner=0, generation=2):
     b = bytearray(b'WB' + bytes([version, 1]) + struct.pack('<II', sender, recipient))
     b += bytes([8, 8]) + struct.pack('<HH', x, 40)
     b += bytes([vx & 255, vy & 255, 11, 0, 2, 0, 0])
+    b += bytes([owner]) + struct.pack('<H', generation) + bytes([0])
     crc = 0
     for v in b:
         crc ^= v
@@ -244,38 +289,91 @@ def main():
             check(sorted(g['side'] for g in games) == [0, 1], 'automatic, complementary player sides')
             host = next(m for m in machines if m.game()['side'] == 0)
             client = next(m for m in machines if m is not host)
+            host.key('p')
+            host.wait(lambda g: g['flags'] & 1, 'pause before delayed handoff command')
+            client.wait(lambda g: g['flags'] & 1, 'initial pause reaches right PC')
+            cable.enabled=False
+            client.key('p')
+            client.wait(lambda g: g['command'] != g['ack'], 'right command waits on the delayed wire')
             # Make the crossing independent of randomized serves or an idle opponent.
             host.put([('ballx', 78*4-4, 2), ('bally', 40, 2), ('vx', 8, 1),
                       ('vy', 1, 1), ('count', 0, 1), ('flags', 0, 1)])
             host.wait(lambda g: g['crossings'] >= 1, 'ball traverses the screen seam', secs=12)
+            cable.enabled=True
+            client.wait(lambda g: g['owner'] == 1 and g['generation'] == 1, 'right PC receives ball ownership')
+            client.wait(lambda g: g['flags'] & 1 and g['command'] == g['ack'],
+                        'new owner completes its pending pause command')
+            check(True,'ownership handoff applies an in-flight command once and cancels its wire replay')
             # Hold an unambiguous position and compare state to the actual other screen's cell.
-            host.key('p')
-            host.wait(lambda g: g['flags'] & 1, 'host pause')
             client.wait(lambda g: g['flags'] & 1, 'pause reaches remote machine')
-            host.put([('ballx', 100*4, 2), ('bally', 7*4, 2), ('vx', 12, 1), ('vy', 7, 1)])
-            client.wait(lambda g: g['ballx'] == 400 and g['bally'] == 28, 'authoritative ball state')
+            host.wait(lambda g: g['flags'] & 1, 'owner pause reaches left PC')
+            client.put([('ballx', 100*4, 2), ('bally', 7*4, 2), ('vx', 12, 1), ('vy', 7, 1)])
+            host.wait(lambda g: g['ballx'] == 400 and g['bally'] == 28, 'right-owned ball state reaches left')
             os88qemu.pace(client, 0.2)
-            vrams = [m.read(m.value('wb_vseg', 2) << 4, 4000)[::2] for m in [host, client]]
-            check(0xfe not in vrams[0][3*80:23*80] and vrams[1][10*80+23] == 0xfe,
+            from PIL import Image
+            pictures=[]
+            rects=[]
+            for i,m in enumerate((host,client)):
+                m.frame_boundary()
+                path=artifact('wireball-link-pixel-%d.ppm' % i)
+                m.hmp('screendump "' + path + '"')
+                pictures.append(Image.open(path).convert('RGB'))
+                rects.append(struct.unpack('<4H',m.readseg(m.seg,m.sy['wv_new']+16,8)))
+            x,y,rw,rh=rects[1]
+            scale=pictures[1].width//320
+            check(rects[0][2] == 0 and rw > 0 and rh > 0
+                  and max(pictures[1].getpixel(((x+rw//2)*scale,(y+rh//2)*scale))) > 100,
                   'ball leaves the left monitor and appears on the right monitor')
-            check(client.value('wb_vx') == 12 and client.value('wb_vy') == 7,
+            for m in (host,client):
+                m.hmp('cont')
+            check(host.value('wb_vx') == 12 and host.value('wb_vy') == 7,
                   'variable-speed velocity crosses the serial link')
-            client.hmp('sendkey down 500')
-            client.wait(lambda g: g['right'] >= 14, 'held-key movement')
-            host.wait(lambda g: g['right'] >= 14, 'paddle input crosses the cable')
+            client.key_state('down', True)
+            try:
+                client.wait(lambda g: g['right'] >= 56, 'held-key movement')
+            finally:
+                client.key_state('down', False)
+            host.wait(lambda g: g['right'] >= 56, 'paddle input crosses the cable')
             os88qemu.pace(client, 0.7)
             check(client.game()['right'] == host.game()['right'], 'remote echoes preserve local paddle input')
-            client.key('p')
-            host.wait(lambda g: not g['flags'] & 1, 'remote pause request resumes host')
-            client.wait(lambda g: g['command'] == g['ack'], 'command acknowledged')
+            host.key('p')
+            client.wait(lambda g: not g['flags'] & 1, 'non-owner pause request resumes right PC')
+            host.wait(lambda g: g['command'] == g['ack'], 'command acknowledged')
             check(True, 'either player can pause and commands are acknowledged')
+            client.key('p')
+            client.wait(lambda g: g['flags'] & 1, 'pause for delayed-paddle regression')
+            host.wait(lambda g: g['flags'] & 1, 'pause reaches non-owner')
+            cable.enabled = False
+            host.put([('right', 32, 1)])
+            client.put([('right', 48, 1), ('ballx', 608, 2), ('bally', 56, 2),
+                        ('vx', 16, 1), ('vy', 0, 1), ('count', 0, 1), ('flags', 0, 1),
+                        ('scorel', 0, 1), ('scorer', 0, 1), ('returns', 16, 1)])
+            client.wait(lambda g: client.value('wb_vx') > 127, 'right PC judges a late local paddle save', secs=1)
+            client.put([('flags', 1, 1)])
+            check(client.game()['scorel'] == 0 and client.game()['scorer'] == 0
+                  and host.game()['right'] == 32,
+                  'right paddle saves the ball even while its copy on the left PC is stale')
+            before = client.game()['ballx']
+            cable.inject(machines.index(client), frame(host.value('wb_identity_value',4),
+                         client.value('wb_identity_value',4),x=314,owner=1,generation=1))
+            os88qemu.pace(client, 0.2)
+            check(client.game()['ballx'] == before and client.game()['scorel'] == 0,
+                  'duplicate ownership grant cannot rewind the ball or award another point')
+            cable.enabled = True
+            host.wait(lambda g: g['flags'] & 1 and g['ballx'] == before,
+                      'local save is replicated after delayed cable resumes')
+            client.put([('ballx', 316, 2), ('vx', 248, 1), ('vy', 0, 1), ('flags', 0, 1)])
+            host.wait(lambda g: g['owner'] == 0 and g['generation'] == 2, 'ball ownership returns to left PC')
+            host.key('p')
+            host.wait(lambda g: g['flags'] & 1, 'pause after return handoff')
+            client.wait(lambda g: g['flags'] & 1, 'left pause reaches right')
             # Physics fixtures run the actual assembler's collisions and scoring.
             host.put([('left', 0, 1), ('ballx', 12, 2), ('bally', 2, 2),
                       ('vx', 248, 1), ('vy', 0, 1), ('count', 0, 1), ('flags', 0, 1),
                       ('scorel', 0, 1), ('scorer', 0, 1), ('returns', 0, 1)])
             host.wait(lambda g: g['ballx'] > 12 and g['scorel'] == 0 and g['scorer'] == 0,
                       'top paddle bounce', secs=1)
-            host.put([('left', 16, 1), ('ballx', 12, 2), ('bally', 74, 2),
+            host.put([('left', 64, 1), ('ballx', 12, 2), ('bally', 74, 2),
                       ('vx', 248, 1), ('vy', 0, 1), ('count', 0, 1)])
             host.wait(lambda g: g['ballx'] > 12 and g['scorer'] == 0, 'bottom paddle bounce', secs=1)
             host.put([('left', 0, 1), ('ballx', 12, 2), ('bally', 60, 2),
@@ -301,7 +399,7 @@ def main():
             ci = client.value('wb_identity_value', 4)
             bad = (frame(hi, ci, x=65000) + frame(hi, ci, checksum=False)
                    + frame(hi ^ 1, ci) + frame(hi, ci ^ 1)
-                   + frame(hi, ci, version=1) + frame(hi, ci, vx=0)
+                   + frame(hi, ci, version=2) + frame(hi, ci, vx=0)
                    + frame(hi, ci, vx=17) + frame(hi, ci, vy=9)
                    + b'\x7e' + b'x'*60 + b'\x7eWB\x7d\x7e')
             cable.inject(machines.index(client), bad)
@@ -367,11 +465,15 @@ def main():
                   'player %d capture contains paddle and victory pitches' % (i+1))
 
 
-def mono():
+def mono(adapters=('cga', 'herc')):
     import os88marty as M
     import os88ui
-    for adapter, machine, video in [('cga', 'os8088_5150_cga_gla', 0xb800),
-                                    ('herc', 'os8088_5150_herc_gla', 0xb000)]:
+    for adapter, machine, video in [('vga', 'os8088_xt_vga', 0xa000),
+                                    ('cga', 'os8088_5150_cga_gla', 0xb800),
+                                    ('herc', 'os8088_5150_herc_gla', 0xb000),
+                                    ('herc-dual', 'os8088_5150_both_gla_mono', 0xb000)]:
+        if adapter not in adapters:
+            continue
         with os88ui.boot(artifact('os8088-360.img'), apps=DISK_OVERRIDE or artifact('wireball360.img'),
                         machine=machine) as ui:
             ui.path('B:/WIREBALL.O88')
@@ -380,11 +482,16 @@ def mono():
             seg = dispapps.pkg_seg(m, 0)[1]
             sy = dispapps._map('wireball')
             def val(name, n=1):
-                return int.from_bytes(m.readseg(seg, sy['wb_' + name], n), 'little')
+                return int.from_bytes(m.readseg(seg, sy[name if name.startswith('wv_') else 'wb_' + name], n), 'little')
             def key(name):
                 m.key(name, up=False)
                 M.pace(m, 0.15)
                 m.key(name, down=False)
+                scans={'KeyS':0x1f,'KeyL':0x26,'KeyP':0x19,'Escape':1,
+                       'ArrowUp':0x48,'ArrowDown':0x50}
+                scan=scans[name]
+                M.until(m,lambda _:not m.read(m.sym('kbd_dnmap')+scan//8,1)[0] & (1 << (scan & 7)),
+                        name+' release reaches the guest',guest=3,poll=0.01)
                 M.pace(m, 0.15)
             def uart(base):
                 # Stop the CPU around DLAB changes so the mouse ISR cannot race.
@@ -429,17 +536,125 @@ def mono():
             m.run()
             key('KeyL')
             M.until(m, lambda _: val('phase') == 2, 'practice opens on ' + adapter, guest=5, poll=0.03)
-            check(val('vseg', 2) == video, adapter + ' uses its native text framebuffer')
+            check(val('vseg', 2) == video, adapter + ' uses its native framebuffer')
+            if adapter == 'herc-dual':
+                m.pause()
+                # The color adapter's aperture belongs to the extended desktop,
+                # never to Hercules page 1. Check it across repeated frames.
+                secondary = m.read(0xb8000, 0x4000)
+                m.run()
             start = val('ballx', 2)
-            M.until(m, lambda _: val('ballx', 2) != start, 'practice ball moves', guest=5, poll=0.03)
+            try:
+                M.until(m, lambda _: val('ballx', 2) != start, 'practice ball moves', guest=5, poll=0.03)
+            except M.MartyError:
+                print('Practice diagnostics', {name:val(name,size) for name,size in
+                      [('phase',1),('flags',1),('count',1),('quit',1),('frames',2),
+                       ('subtick',2),('wv_clock',2),('wv_last',2),('wv_frames',2)]},
+                      'FSX',m.read(m.sym('fsx_task'),1).hex(),
+                      'keys',m.read(m.sym('kbd_dnmap'),16).hex(),flush=True)
+                raise
             key('KeyP')
             M.until(m, lambda _: val('flags') & 1, 'practice pause', guest=3, poll=0.03)
-            cells = m.read(video << 4, 4000)[::2]
-            check(0xfe in cells[3*80:23*80] and cells.count(0xdb) == 8,
-                  adapter + ' shows the ball and both four-cell paddles')
+            check(val('wv_graphics') == 1 and val('wv_modeid') == {'vga':8,'cga':3,'herc':4,'herc-dual':4}[adapter],
+                  adapter + ' uses a pixel graphics court')
+            check(val('wv_pages') == (1 if adapter in ('cga','herc-dual') else 2),
+                  adapter + ' uses the available VRAM pages')
+            key('KeyP')
+            M.until(m, lambda _: not val('flags') & 1, 'live physics before timing', guest=3, poll=0.03)
+            m.pause()
+            m.bp_exec((seg << 4) + sy['wb_main.loop'])
+            m.run()
+            assert m.wait_stop(5) == 'breakpoint'
+            m.bp_exec()
+            # Start a repeatable live rally far enough from the local paddle
+            # to exclude score/serve delays from this two-second motion price.
+            for name,value,size in [('ballx',156,2),('bally',39,2),('vx',8,1),('vy',2,1),
+                                    ('fracx',0,1),('fracy',0,1),('count',0,1),('returns',0,1),
+                                    ('left',32,1),('right',32,1)]:
+                m.write((seg << 4) + sy['wb_'+name],value.to_bytes(size,'little'))
+            first, subs = val('wv_frames',2), val('subtick',2)
+            begin=m.status()['cycles']
+            # Price moving sprites and live collisions, not a paused court.
+            # Exact bounded advances keep input/RPC overhead out of the rally
+            # duration and make the held-key trajectory repeatable.
+            for direction in ('ArrowDown','ArrowUp','ArrowDown','ArrowUp'):
+                m.key(direction,up=False)
+                m.advance(cycles=round(M.GUEST_HZ/2))
+                m.key(direction,down=False)
+                # The XT keyboard has a one-byte latch. Deliver its break
+                # before queuing the opposite make, which would overwrite it.
+                m.advance(cycles=50000)
+            duration=(m.status()['cycles']-begin)/M.GUEST_HZ
+            check(not val('flags') & 1 and val('count') == 0,
+                  adapter + ' timing includes an active rally without serve delays')
+            if adapter == 'herc-dual':
+                check(m.read(0xb8000,0x4000) == secondary,
+                      'dual-card Hercules keeps the color adapter VRAM intact')
+            frames = (val('wv_frames',2)-first) & 65535
+            steps = (val('subtick',2)-subs) & 65535
+            check(frames/duration >= 45 and steps/duration >= 68,
+                  adapter + ' runs smoothly on the 8088: %.1f display fps, %.1f physics steps/s' % (frames/duration,steps/duration))
+            m.run()
+            key('KeyP')
+            M.until(m, lambda _: val('flags') & 1, 'pause after timing', guest=3, poll=0.03)
+            m.pause()
+            # Stop between complete frames, rather than halfway through clearing
+            # the temporary sprite array or drawing the hidden page.
+            m.bp_exec((seg << 4) + sy['wb_main.loop'])
+            # Let both hidden pages catch up and the complete raster refresh
+            # after the pause HUD changed.
+            for _ in range(3):
+                m.run()
+                assert m.wait_stop(5) == 'breakpoint'
+            m.bp_exec()
+            w,h,rgb=m.fbuf()
+            M.write_png_rgb(artifact('wireball-' + adapter + '-pixel.png'),w,h,rgb)
+            print('Raster dimensions',adapter,w,h,flush=True)
+            rects=struct.unpack('<12H',m.readseg(seg,sy['wv_new'],24))
+            print('Sprite rectangles',rects,flush=True)
+            scale = 2 if adapter == 'vga' else 1
+            def ink(x,y):
+                x, y = x*scale, y*scale
+                if adapter.startswith('herc'):
+                    x, y = x-16, y+2  # the emulator raster's documented porch
+                return max(rgb[3*(y*w+x):3*(y*w+x)+3]) > 100
+            for index in (0,1,2):
+                x,y,rw,rh=rects[index*4:index*4+4]
+                check(rw > 0 and rh > 0 and ink(x+rw//2,y+rh//2),
+                      adapter + ' renders sprite %d at its collision coordinates' % index)
+            expected=set()
+            for index in (0,1,2):
+                x,y,rw,rh=rects[index*4:index*4+4]
+                expected.update((xx,yy) for yy in range(y,y+rh) for xx in range(x,x+rw))
+            origin,top=val('wv_origin',2),val('wv_top',2)
+            # CGA's subcycle status-port catch-up draws red diagnostic marks
+            # in the emulator raster. Its banked VRAM is the exact sprite mask.
+            cga_rows=m.vram('cga')[2] if adapter == 'cga' else None
+            actual={(x,y) for y in range(top,top+80*val('wv_yunit',2))
+                    for x in range(origin,origin+320*val('wv_xunit',2))
+                    if (cga_rows[y][x] if cga_rows is not None else ink(x,y))}
+            check(actual == expected,
+                  adapter + ' moving paddle strips leave complete sprites without trails')
             before = val('left')
-            key('ArrowDown')
-            check(val('left') > before, adapter + ' held-key paddle control works')
+            direction='ArrowUp' if before >= 32 else 'ArrowDown'
+            m.bp_exec((seg << 4) + sy['wb_controls.ball'])
+            m.key(direction,up=False)
+            for _ in range(10):
+                m.run()
+                assert m.wait_stop(5) == 'breakpoint'
+                if val('left') != before:
+                    break
+            m.key(direction,down=False)
+            m.bp_exec()
+            check(val('left')-before == (-1 if direction == 'ArrowUp' else 1),
+                  adapter + ' paddle moves in sub-character increments')
+            m.run()
+            before = val('left')
+            direction='ArrowUp' if before >= 32 else 'ArrowDown'
+            key(direction)
+            delta=val('left')-before
+            check(delta < 0 if direction == 'ArrowUp' else delta > 0,
+                  adapter + ' held-key paddle control works')
             w, h, rgb = m.fbuf()
             M.write_png_rgb(artifact('wireball-' + adapter + '.png'), w, h, rgb)
             check(any(rgb), adapter + ' raster displays the court')
@@ -467,7 +682,7 @@ def front():
             seg = dispapps.pkg_seg(m, 0)[1]
             sy = dispapps._map('wireball')
             def val(name, n=1):
-                return int.from_bytes(m.readseg(seg, sy['wb_' + name], n), 'little')
+                return int.from_bytes(m.readseg(seg, sy[name if name.startswith('wv_') else 'wb_' + name], n), 'little')
             def key(name):
                 m.key(name, up=False)
                 M.guest_sleep(m, 0.08, poll=0.005)
@@ -540,6 +755,8 @@ def physics():
         def val(name, n=1, signed=False):
             return int.from_bytes(m.readseg(seg, sy['wb_' + name], n), 'little', signed=signed)
         def call(name):
+            if name == 'integrate':
+                return sum(call('frame') for _ in range(4))
             saved = m.regs()
             regs = ('ax','bx','cx','dx','si','di','bp','sp','ss','ds','es','flags')
             sp = (saved['sp'] - 2) & 0xffff
@@ -565,12 +782,13 @@ def physics():
                 m.setreg(reg, saved[reg])
             m.write(address, old)
             return cycles
-        def fixture(x=8, y=38, vx=-8, vy=0, side=0, returns=0, spin=0):
+        def fixture(x=8, y=39, vx=-8, vy=0, side=0, returns=0, spin=0):
             for name, value, n in [('ballx',x,2), ('bally',y,2), ('vx',vx,1), ('vy',vy,1),
-                                   ('side',side,1), ('width',624,2), ('left',8,1), ('right',8,1),
-                                   ('phase',2,1), ('practice',1,1), ('count',0,1), ('flags',0,1),
+                                   ('side',side,1), ('width',624,2), ('left',32,1), ('right',32,1),
+                                   ('phase',2,1), ('practice',0,1), ('owner',side,1), ('count',0,1), ('flags',0,1),
                                    ('scorel',0,1), ('scorer',0,1), ('returns',returns,1),
                                    ('lspin',spin,1), ('rspin',spin,1), ('fracx',0,1), ('fracy',0,1),
+                                   ('prevx',x*4,2), ('prevy',y*4,2), ('stepvx',vx,2), ('stepvy',vy,2),
                                    ('muted',1,1)]:
                 put(name, value, n)
         fixture()
@@ -578,8 +796,8 @@ def physics():
         check(val('vx', signed=True) == 8 and val('vy', signed=True) == 0,
               'center contact produces a flat, playable return')
         shots = []
-        for offset in (-10,-8,-4,0,4,8,10):
-            fixture(y=38+offset)
+        for offset in (-9,-8,-4,0,4,8,9):
+            fixture(y=39+offset)
             call('collide')
             shots.append((val('vx', signed=True), val('vy', signed=True)))
         check(all(shot[0] > 0 for shot in shots) and [v for _,v in shots] == sorted(v for _,v in shots)
@@ -597,9 +815,15 @@ def physics():
         call('collide')
         check(val('scorer') == 1 and val('count') == 36 and val('returns') == 0
               and abs(val('vx', signed=True)) == 8, 'a clean miss scores once and resets rally speed')
-        fixture(x=612, y=38, vx=16, returns=16)
+        fixture(x=612, y=39, vx=16, side=1, returns=16)
         call('collide')
         check(val('vx', signed=True) == -16, 'right paddle returns toward the other screen')
+        for side,x,vx,y,vy in [(1,611,16,47,8),(1,611,16,31,-8),
+                               (0,9,-16,47,8),(0,9,-16,31,-8)]:
+            fixture(x=x,y=y,vx=vx,vy=vy,side=side,returns=16)
+            call('frame')
+            check(val('vx',signed=True)*vx < 0 and val('scorel') == val('scorer') == 0,
+                  'swept contact saves paddle %d at its %s end before the ball passes vertically' % (side,'lower' if vy>0 else 'upper'))
         speeds = []
         for count in (0,1,7,15,16):
             fixture(returns=count)
@@ -607,11 +831,11 @@ def physics():
             speeds.append(val('vx'))
         check(speeds == [8,9,12,16,16], 'rallies accelerate every two returns and stop at the speed cap')
         for vx, vy in [(9,3),(-9,-3),(16,8),(-16,-8)]:
-            fixture(x=100, y=38, vx=vx, vy=vy)
+            fixture(x=100, y=39, vx=vx, vy=vy)
             call('integrate')
-            check(val('ballx',2) == 100+vx and val('bally',2) == 38+vy,
+            check(val('ballx',2) == 100+vx and val('bally',2) == 39+vy,
                   'substeps preserve full-tick displacement for velocity %d/%d' % (vx,vy))
-        for y,vy,expected in [(1,-8,7),(75,8,69),(0,-1,1)]:
+        for y,vy,expected in [(1,-8,7),(77,8,71),(0,-1,1)]:
             fixture(x=100, y=y, vy=vy)
             call('integrate')
             check(val('bally',2) == expected and val('vy',signed=True) == -vy,
@@ -621,25 +845,29 @@ def physics():
         check(val('vx',signed=True) > 0 and val('ballx',2) > 8 and val('scorer') == 0,
               'maximum-speed shot hits once and continues moving after contact')
         check(cycles < 19000, 'four collision steps fit within one 2400-baud byte on a 4.77MHz 8088 (%d cycles)' % cycles)
-        for y, vy, paddle in [(0,-8,0),(76,8,16)]:
+        for y, vy, paddle in [(0,-8,0),(78,8,64)]:
             fixture(x=10,y=y,vx=-16,vy=vy,returns=16)
             put('left',paddle)
             call('integrate')
-            check(0 <= val('bally',2) <= 76 and val('vx',signed=True) > 0 and val('scorer') == 0,
+            check(0 <= val('bally',2) <= 78 and val('vx',signed=True) > 0 and val('scorer') == 0,
                   'fast wall/paddle corner contact remains in bounds at row %d' % y)
-        fixture(x=100,y=38,vx=16,vy=8,side=1)
+        fixture(x=400,y=39,vx=16,vy=8,side=1)
         call('integrate')
-        check(val('ballx',2) == 116 and val('bally',2) == 46,
-              'remote prediction uses all four substeps at variable speeds')
+        check(val('ballx',2) == 416 and val('bally',2) == 47,
+              'right owner advances its own physics at variable speeds')
+        cycles=call('hudmake')
+        check(cycles < 19000,
+              'text fallback HUD construction fits between UART polls (%d cycles)' % cycles)
         m.run()
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--video', action='store_true', help='pixel court, VRAM pages and frame rates on all three 8088 adapters')
     parser.add_argument('--mono', action='store_true', help='CGA/Hercules practice on a cycle-accurate 8088')
     parser.add_argument('--front', action='store_true', help='illustrated splash and release-fired controls on all adapters')
     parser.add_argument('--physics', action='store_true', help='integer contact, spin, speed and substep regression on an 8088')
     parser.add_argument('--disk', help='test a staged application disk instead of the standard build image')
     args = parser.parse_args()
     DISK_OVERRIDE = str(Path(args.disk).resolve()) if args.disk else None
-    physics() if args.physics else front() if args.front else mono() if args.mono else main()
+    mono(('vga','cga','herc','herc-dual')) if args.video else physics() if args.physics else front() if args.front else mono() if args.mono else main()

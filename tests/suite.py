@@ -282,6 +282,18 @@ FAST = [
         "Makefile block reads no reference directory. FAST because a "
         "provenance rule belongs in front of the next make, and it costs a "
         "directory walk"),
+    Row("isotronclean", "fast", py("tests/unit/t_isotron_clean.py"), 0.2,
+        "isoTron carries nothing from the game it remakes (SPEC.md 108.1, "
+        "docs/plans/ISOTRON-PLAN.md section 0). It is a remake from OBSERVED "
+        "RULES and the reference footage and the original executable live "
+        "outside the tree; this walks every file the game owns "
+        "(apps/isotron/, the tools and tests named for it, the Makefile's "
+        "isoTron block) for the reference folder's and the executable's "
+        "names, holds the shipped package to no original name, publisher or "
+        "copyright line, keeps apps/isotron text-only and the tools on the "
+        "standard library. `--selftest` is its negative control (an injected "
+        "token must fail). FAST because a provenance rule belongs in front of "
+        "the next make, and it costs a directory walk"),
     Row("excitebikeaudiohost", "fast", py("tests/excitebike_audio.py", "--host"), 1.0,
         "EXCITEBIKE EXB.SND (SPEC.md 102.5) read back by a decoder that shares nothing with "
         "tools/excitebike_audio.py: <= 3,072 bytes, every voice of every song summing to the steps "
@@ -1659,23 +1671,28 @@ FULL = [
 SOAK = [
     Row("wireballphysics", "soak", py("tests/wireball.py", "--physics"), 65.0,
         "WireBall 8088 physics: center/end contact, paddle motion, ball extent, "
-        "rally acceleration, bounded substeps and remote prediction (SPEC.md 107)",
+        "rally acceleration, swept end contact and remaining substep motion (SPEC.md 107)",
         needs=("marty", "nasm"),
         wants=("build/wireball360.img", "build/os8088-360.img")),
     Row("wireball", "soak", py("tests/wireball.py"), 65.0,
         "WireBall: two OS instances over a serial null modem, discovery, "
-        "cross-screen pixels, remote paddle/commands, collision, scoring, "
+        "cross-screen pixels, local collision ownership, duplicate grants, commands, scoring, "
         "bad frames, unplug/reconnect and serial mouse restoration (SPEC.md 107)",
-        needs=("qemu", "nasm"),
+        needs=("qemu", "nasm", "pil"),
         wants=("build/wireball.img", "build/os8088.img"), timeout=240),
     Row("wireballfront", "soak", py("tests/wireball.py", "--front"), 75.0,
         "WireBall illustrated splash on VGA/CGA/Hercules: fitted art, "
         "release/cancel buttons, controls, sound toggle, Practice launch and return (SPEC.md 107.4)",
         needs=("marty", "nasm", "pil"),
         wants=("build/wireball360.img", "build/os8088-360.img")),
+    Row("wireballvideo", "soak", py("tests/wireball.py", "--video"), 100.0,
+        "WireBall native pixels, VRAM page counts, sub-character controls and "
+        "display/physics frame rates on VGA/CGA/Hercules 4.77MHz 8088s (SPEC.md 107.5)",
+        needs=("marty", "nasm"),
+        wants=("build/wireball360.img", "build/os8088-360.img"), timeout=240),
     Row("wireballmono", "soak", py("tests/wireball.py", "--mono"), 80.0,
         "WireBall original-8250 discovery/register restoration and practice on "
-        "CGA and Hercules 8088s: native text framebuffer, "
+        "CGA and Hercules 8088s: native pixel framebuffer, "
         "ball/paddles, controls, visible raster and desktop restoration (SPEC.md 107)",
         needs=("marty", "nasm"),
         wants=("build/wireball360.img", "build/os8088-360.img")),
@@ -2791,6 +2808,305 @@ SOAK = [
         "sentence is VGA, CGA OR HERC ONLY since wave 6). "
         "Splash and help pixel-identical, Enter refused, heap back",
         needs=("marty", "nasm"), wants=("build/excitebike360.img",)),
+    Row("isotronsim", "soak", py("tools/isotronsim.py", "--selfcheck"), 11.0,
+        "isoTron's host reference model (tools/isotronsim.py, SPEC.md 108.3 - "
+        "108.11), which is NORMATIVE for the rules, the computer, the pace and "
+        "the picture: six stored seeded bot games (two a tier, each covering a "
+        "tower 1-2-3-4-1 and ending in three losses) replayed by hash, the "
+        "Rookie rate table of 108.4.1, the RNG's first bytes, the tower rule "
+        "re-derived from the winners; THE CANVAS - the k* = 1, 22 and 23 "
+        "fixtures, and 30 rounds (64,000+ steps) held to an independent full "
+        "repaint after EVERY step (back-to-front walls cut only at the ring, "
+        "sharing no code with the probe); the windowed presenters' look-up "
+        "tables built the guest's way against a per-pixel rendering of each "
+        "look at Hc 136, 284, 286 and 400; the FULL-SCREEN presenters (wave 3: "
+        "cga320's 16 KB, herc's 32 KB at 2x by 1.5, vga0d's c2p tables and ega at "
+        "Hc 350, the last two in both looks) built the guest's way against their "
+        "per-pixel ones, and the Hercules row map's 1.5 rows a row; the guest's "
+        "own look tables (it_mono, it_col, it_cgaink, it_colc) and lettering "
+        "read out of its source and compared. FIVE NEGATIVE CONTROLS "
+        "must each fail: 'every win raises', the LCG multiplier 25175, the "
+        "computer moving before the player, a probe that stops at 21 and a "
+        "span that is not clipped. Measured 7.5 s alone (wave 3). No emulator"),
+    Row("isotronrules", "soak", py("tests/isotron.py", "--rules"), 45.0,
+        "isoTron's rules on the 8088 (SPEC.md 108.3 - 108.7): MartyPC's 5150 "
+        "with a CGA plays the first stored game of each tier with the harness "
+        "flags FAST | BOT | NOFLOW | HOLD, and after EVERY round the guest's "
+        "height, winner, iterations, scores, tower, losses in a row, RNG "
+        "state, placement checksum and head-steps must equal the model's - one "
+        "decision, one cell or one RNG byte apart fails the round it happened "
+        "in. Each game covers a tower 1-2-3-4-1 and ends in three losses and "
+        "the title; the model with the brief's 'every win raises' must "
+        "disagree with what the guest played (the row's negative control). "
+        "Then a scripted game posted through the UI task's mailbox, and LAST "
+        "real keystrokes through it_key: the FIFO's depth and drop, F10/F9, "
+        "a double-tap U-turn, P, Space kept during CRASH, Esc, GAME OVER",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotronbound", "soak", py("tests/isotron.py", "--bound"), 40.0,
+        "isoTron's occlusion bound on the 8088 (SPEC.md 108.10): MartyPC's 5150 "
+        "CGA plays two stored games (Rookie 2425, Lunatic 702: 17 rounds, every "
+        "tower height) FAST | BOT | NOFLOW | HOLD and after EVERY round reads "
+        "the guest's bound counters and its whole 64,000-byte canvas claim: "
+        "the most canvas bytes a step's k* scan examined <= 22 and the most "
+        "rows it wrote <= 23, both COUNTED in it_span and both equal to the "
+        "model's count of the same thing, with the model's probe limit of 21 "
+        "required to count differently (the negative control), and the "
+        "PACKAGE assembled with -DIT_SCAN21 (the scan one row short, two "
+        "bytes of the image) booted from a scratch floppy and refused by the "
+        "same comparison (the guest's); and the canvas "
+        "byte for byte the model's. The "
+        "guest finds k* by scanning its canvas COLUMN for the first TOP pixel "
+        "(Lemma 3) and the model by probing the GRID's front diagonal (Lemma "
+        "2), so the equality holds two derivations to each other; the title's "
+        "canvas is compared first",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotronwin", "soak", py("tests/isotron.py", "--win", "all"), 60.0,
+        "isoTron's windowed picture on the GLASS (SPEC.md 108.11), on MartyPC's "
+        "5150 CGA, 5150 Hercules and XT-VGA: the title and four rounds of a "
+        "seeded game (h1, h1, h2, h3), each read off the card - the CGA and "
+        "Hercules framebuffers, the VGA's own rendering - and compared PIXEL "
+        "FOR PIXEL with the model's presenter (win1 on the 1bpp cards, win4 in "
+        "16 colours) of the model's canvas, outside the overlay text rects; "
+        "the content around the picture black; the overlays' text present; "
+        "and the guest's canvas equal to the model's at each. It holds the "
+        "whole present, the per-step boxes, their merging and the box-minus-"
+        "overlays cut together",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotronega", "soak", py("tests/isotron.py", "--win", "ega"), 110.0,
+        "isoTron on an EGA desktop (SPEC.md 39.24, 108.11, 108.12), BOTH halves: "
+        "a private VIDEO=ega kernel tree (tools/os88build.py) on MartyPC's "
+        "XT-VGA - the 640 x 350 x 16 geometry, as excitebike_front's ega arm "
+        "does. WINDOWED: the same title-and-four-rounds comparison as isotronwin "
+        "against the model's 16-colour presenter at the EGA's Hc. FULL SCREEN "
+        "(wave 3): F enters the SAME-MODE bracket (no fsx_mode: the desktop's own "
+        "640 x 350 x 16, drawn through the kernel's gfx_blitp at 2x by 1.75 at "
+        "OSAPI_FSX_SURF's origin), and the card's rendering is the model's ega "
+        "presenter pixel for pixel outside the overlays at the title and after "
+        "three rounds; C gives Classic and back; Esc ends the game, then leaves. "
+        "Measured ~95 s with the tree built (wave 3)",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img",)),
+    Row("isotronfs", "soak", py("tests/isotron.py", "--fs", "all"), 150.0,
+        "isoTron's FULL SCREEN on the glass (SPEC.md 108.12), MartyPC's 5150 CGA, "
+        "5150 Hercules and XT-VGA: F at the title enters the bracket for the "
+        "window's display - FSXM_CGA320 at palette 1 LOW intensity, FSXM_HERC at "
+        "2x by 1.5 centred at card (40, 24), FSXM_VGA0D in 16 colours - and at "
+        "the title and after each of three rounds of a seeded game the guest's "
+        "canvas is the model's and the card is the model's presenter of it: the "
+        "CGA's 16 KB and the Hercules' 32 KB of VIDEO MEMORY byte for byte, the "
+        "VGA's rendering pixel for pixel - WITH THE TEXT: the guest's overlay "
+        "records must be the ones the model's state shows (fs_want, SPEC.md "
+        "108.12.5's places) and their cells the guest glyph table's bytes, so "
+        "nothing is skipped - and the CGA's rendering holding exactly palette "
+        "1's four low-intensity inks; NEGATIVE CONTROLS: the same check against "
+        "the previous round's canvas, and with a score one off, must fail. "
+        "C: high intensity on the CGA (no present), Classic "
+        "on the VGA (a whole present), and back; Esc in a game ends it and stays "
+        "full screen, Esc at the title leaves and the window's picture is the "
+        "title. Measured ~120 s for the three machines (wave 3)",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotrontoggle", "soak", py("tests/isotron.py", "--toggle", "all"), 180.0,
+        "isoTron's WINDOWED <-> FULL SCREEN TOGGLE (SPEC.md 108.12.6), MartyPC's "
+        "5150 CGA and XT-VGA: a paced seeded round frozen mid-way by the harness "
+        "(it_tpause: no iteration, no message), then F, Alt+Enter and Game > "
+        "Full Screen in and F, Alt+Enter out, twice over - twelve toggles - and "
+        "after every one the iteration, the RNG, the checksum, the scores, the "
+        "21,917-byte grid and the 64,000-byte canvas the SAME bytes, and the "
+        "glass the model's presenter of that canvas on whichever side it is. "
+        "Released, the round must end exactly as the model's; a second round is "
+        "toggled WHILE IT RUNS and must too - and coming home from it, the "
+        "worker's first wake that iterates may run no more than a paced wake's "
+        "median (V = now AFTER the way back, SPEC.md 108.12.4: a sync inside "
+        "the bracket ran DEBT_CAP, 7 against 3). Negative control: snap() must "
+        "see a released round move. Esc: nothing at the windowed title, "
+        "ends a windowed game, ends a full-screen game staying full screen, "
+        "leaves at the full-screen title. Measured ~150 s (wave 3)",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotrontwodisp", "soak", py("tests/isotron.py", "--twodisp"), 90.0,
+        "isoTron on TWO DISPLAYS (SPEC.md 39.18, 53.7.1, 108.12.1), MartyPC's "
+        "os8088_xt_vga_herc with the desktop extended right: the window on the "
+        "VGA is colour; dragged across the seam (the kernel refits it, 722 x 300) "
+        "it is the restrictive card's, mono, after EXACTLY ONE whole present; F "
+        "there asks OSAPI_FSX_CAPS for the WINDOW'S display and enters the "
+        "FSXM_HERC bracket, whose 32 KB is the model's, while the VGA keeps its "
+        "640 x 480 raster and its memory below the menu bar unwritten (plane 0, "
+        "38,400 bytes) and is dark as SPEC.md 39.18 makes the other display; Esc "
+        "comes home with the VGA lit again. Measured ~60 s (wave 3)",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotronflow", "soak", py("tests/isotron.py", "--flow", "all"), 90.0,
+        "isoTron's FLOW driven through its UI (SPEC.md 108.13.6), MartyPC's "
+        "XT-VGA: the title's own lines over the void and the block-letter word "
+        "the model's; `1` - a real key - starts a STORED game (it_tflags SEED, "
+        "BOT, FAST, HOLD) and EVERY round's arena is SWEPT in: at its first "
+        "iteration the canvas is the model's for that height byte for byte and "
+        "the glass the model's presenter of it, outline and all; after every "
+        "round the state is the model's, the score is NOT yet on the HUD at "
+        "the crash (it is owed 0.27 s into CRASH), WAIT shows it with the "
+        "result line, and Space - a real key - continues; the tower 1, 2, 3, "
+        "4, 1 is seen on the glass (ISOTRON_SHOTS keeps the series beside the "
+        "model's pictures); the third loss is CRASH then GAME OVER with its "
+        "line on the glass, then the title, its picture the model's again; "
+        "About from the app menu opens the card and a key takes it down. "
+        "Measured ~56 s for both machines (wave 4)",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotronsound", "soak", py("tests/isotronlive.py", "--sound"), 90.0,
+        "isoTron's SOUND on the 8088 (SPEC.md 108.14.1), MartyPC's 5150 CGA "
+        "with the speaker CAPTURED (MARTYPC_WAV) and every OSAPI_SND_TONE traced "
+        "at the package's one call site (AX, CX, DL, and the driver's CF - a "
+        "refused call fails): `1` - a real key - starts a seeded game nobody "
+        "steers; READY's 440, 440, 880 Hz at 50h on ticks 0, 3, 6, offs at 60h "
+        "on 2, 5, 8; the wall ticks 110 Hz at 40h with a one-tick lease, 165 Hz "
+        "once F10 boosts, one every 4th player cell (+-1) and never two in a "
+        "wake; the crash's 15 entries falling x15/16 from 1,400 Hz a tick apart "
+        "at 60h, then its off. M mutes a whole round (sweep, READY, play, crash: "
+        "no call) and unmutes; `A`, a SILENT tier, makes no call through a "
+        "round. A stored game played FAST by the bot through the real title: "
+        "every raise has its chime 523, 659, 784 Hz on ticks 0, 3, 6 and a reset "
+        "or the same height none, and GAME OVER its four notes on 0, 4, 8, 12. "
+        "THE GATE: port 61h & 3 = 0 and no call for a guest second after P "
+        "pauses a round with the wall ticking, and after Esc, F into full "
+        "screen and F out of it, each pressed in the middle of a crash's sweep "
+        "with eleven or more entries left - at most eight more, ONE off at 60h, "
+        "then silence; in full screen a wall tick is followed by its explicit "
+        "off a frame on. THE CAPTURE: READY's 880 Hz where the trace asked for "
+        "it (the capture's clock is the guest's), the crash's dominant frequency "
+        "tick by tick (Goertzel, tools/sndcheck.py) within 3% of the table and "
+        "FALLING (one silent window tolerated and named, every call having been "
+        "granted), silence after its off and through the muted and silent "
+        "rounds. Then the cost: one call's cycles on and off, a bracket frame's "
+        "sound with and without one (PERFORMANCE.md Set 157). Measured ~52 s "
+        "alone in a soak lane (wave 5)",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotroninput", "soak", py("tests/isotronlive.py", "--input"), 45.0,
+        "isoTron's KEYS on the 8088 (SPEC.md 108.14.2), MartyPC's 5150 CGA, every "
+        "key a real one through the 8255 and int 09h: F10 HELD ramps the speed - "
+        "sampled at every wake, p climbs 2 -> 9 through at least six values on "
+        "its typematic repeats; Del held 1.5 s with the game held still posts "
+        "exactly ONE turn and the filter counts at least five repeats dropped "
+        "(the control: the keyboard really repeated); NumLock on, keypad Ins "
+        "(AL '0', AH 52h) turns left; a DOUBLE TAP of Ins is two turns, a "
+        "U-turn; Up x3 posts three boosts (p 5) and Down F9's normal (p 2); a "
+        "toggle forgets the tracked turn key, both ways. The COUNTED taps - "
+        "NumLock, keypad Ins, Ins x2, Up x3, Down, Del either side of a toggle "
+        "- are GUEST-EXACT (tap_exact: paused, the press, 40 ms of cycles "
+        "advanced, the release - wave 6; the game-start 1 stays host-timed): "
+        "a host-timed '40 ms' tap held the key "
+        "0.40-0.55 guest s, across the ~0.5 s typematic delay, and one Up in "
+        "three or four rightly posted a repeat as a fourth boost. Measured ~18 s "
+        "(wave 5)",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotronpace", "soak", py("tests/isotronlive.py", "--pace"), 75.0,
+        "isoTron's PACE on the 8088 (SPEC.md 108.4, 108.14.3), MartyPC's 5150 "
+        "CGA, the machine the pace is fitted to: a seeded harness round (NOFLOW, "
+        "paced, nobody steering, p = 2; a seed whose every head lives through "
+        "each window, the model says) at Rookie h1, Rookie h2 and Lunatic h1, "
+        "windowed and then in full screen - iterations per GUEST second between "
+        "two wake ends (it_wake1, it_fs_frame: the debt in (-cost, 0], so good to "
+        "one iteration) within 2% of 108.4.1's model, every head alive and p = "
+        "2 throughout; the governor's credit over the window (its iterations' "
+        "costs plus the debt's change) 768 u a BIOS tick, plus 256 a phase in "
+        "full screen, to within a tick. THE STALL: it_tstall makes one paced "
+        "wake or frame wait 10 real ticks, and it credits EXACTLY 1,536 u less "
+        "the phase the last frame had paid - its own tick and one owed, never "
+        "the ten. V = NOW after a resume (P, a guest second, P: the first wake "
+        "back credits at most a tick) and on both sides of a toggle mid-round. "
+        "Measured ~32 s (wave 5)",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotronload", "soak", py("tests/isotronload.py"), 600.0,
+        "isoTron's LAUNCH TO PLAY and its RATE on the XT (PERFORMANCE.md Set "
+        "159), MartyPC's cycle counter on the 5150 CGA, 5150 Hercules and "
+        "XT-VGA. The launch: the double-clicked ISOTRON.O88 walked by "
+        "breakpoints (the loader's entry, ld_start, the entry proc and its "
+        "builds, the title's whole present out) and then, from the `1` key's "
+        "arrival, the arena build, the sweep, READY and the first wall moving "
+        "- no harness flag set. The rate: a BOT round at Rookie h1 and at "
+        "Lunatic h1 with p poked to 9 (the worst rate, SPEC.md 108.4.1), "
+        "windowed and in the full-screen bracket - every head-step counted "
+        "between two frame ends over two guest seconds, each step's own "
+        "price, and the share of the machine the game's frames hold. Asserts "
+        "the title and the round come up and every rate is within 3% of the "
+        "model; the figures are the record. `--profile win|fs` is the "
+        "sampling instrument the audit used, not a row",
+        needs=("marty", "nasm"),
+        wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotronperf", "soak", py("tests/isotron.py", "--perf", "all"), 900.0,
+        "isoTron's windowed price on the XT (SPEC.md 108.10.3, 108.11.7; "
+        "ISOTRON-PLAN section 16), MartyPC's cycle counter on the 5150 CGA, "
+        "5150 Hercules and XT-VGA: a computer HEAD-STEP whole - its RNG byte, "
+        "its decision, its move and its picture - as the median over EVERY "
+        "computer head-step of two whole rounds of a seeded FAST game at "
+        "Rookie and at Lunatic (1,049 and 3,177, each round's count held to "
+        "the model's, so the sample is the same on every run), against 3,000 "
+        "cycles; a paced WAKE (the lock, the steps and the "
+        "present) at Rookie h1 against 22 ms on 1bpp and 30 on VGA, and at "
+        "Lunatic h4 at full boost against 35 / 50 ms, AUDIBLE (wave 5 fix, "
+        "SPEC.md 108.14.4: it_snd poked on, at least 20 OSAPI_SND_TONE calls "
+        "over the trace or the line fails, since the wake's sound is inside "
+        "its hold and a NOFLOW game is silent) - and when such a wake "
+        "passes 45 ms, the presentation governor must have engaged after it. "
+        "Then a ROUND'S START at h1 and h4: the rebuild, its wake's hold, and "
+        "the whole present going out in bands - every band's hold under 50 ms "
+        "- with the span from the rebuild to the last band reported, each "
+        "round started by ONE byte written inside the trace (no pause there, "
+        "which could resume past a stop the pump had not recorded). "
+        "AND FULL SCREEN (wave 3, SPEC.md 108.12.7), a boot of its own a machine: "
+        "F's whole present at the title AND in a round against 1.5 s, its "
+        "rects - read at the presenters' entries - tiling the 200 x 40 cells "
+        "exactly once outside the text (a VGA presenter that returned BP = 0 "
+        "presented the picture twice in a round); the head-step WITH its span "
+        "hook (the column written into video memory) over every computer "
+        "head-step of the same two whole rounds, median against 4,500 cycles "
+        "on the CGA, 5,000 on the Hercules and 4,000 on VGA 0Dh (ISOTRON-PLAN "
+        "section 16); and the WAY BACK, at the title and in a round: first "
+        "light (the bracket's last frame to OSAPI_FSX_RUN's return) against "
+        "1.5 s and every band hold after it against 50 ms. EGA (the VIDEO=ega "
+        "tree on the XT-VGA) adds its presents and way back - its whole "
+        "present reported, not gated - and a Lunatic h4 frame with the "
+        "bracket's presentation governor. AND THE SWEEP (wave 4, SPEC.md "
+        "108.13.4), a boot of its own a machine: MartyPC's cycle counter from "
+        "it_sw0 (Space's own wake, before anything of the sweep) to it_sw1 "
+        "(the outline out) for the title to h1, a raise 3 -> 4, a reset 4 -> 1 "
+        "and a round at the same h1 windowed, then F and the raise, the reset "
+        "and the same height in full screen - every one against 2.2 s, ~1.5 s "
+        "reported where the surface keeps the pace. WAVE 6 PINNED EVERY GATED "
+        "LINE (SPEC.md 108.15.1, PINNED in tests/isotron.py): each also fails "
+        "over 1.25 x its own wave-6 value, whichever of that and its ceiling "
+        "is lower - the head-steps, the wakes, the band holds, F's presents "
+        "title and round apart, first light, every sweep case, the sweep and "
+        "CRASH -> WAIT holds - and the row fails if it_gskip (the windowed "
+        "presentation governor) is ever set in the Rookie h1 trace. EGA adds "
+        "its WINDOWED wakes and round start (no head-steps: the canvas's price "
+        "is no adapter's), its own pins under VGA's ceilings. Measured ~700 s "
+        "for the four machines in a soak lane (wave 3 fix); 574 s with the "
+        "sweep's four boots, alone in a lane (wave 4); 641 s (wave 6), plus "
+        "EGA's windowed boot",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/isotron360.img", "build/os8088-360.img")),
+    Row("isotronsmall", "soak", py("tests/isotronsmall.py"), 40.0,
+        "isoTron on kern_small's 128KB floor machine (SPEC.md 108.15.4, 24.5): "
+        "the package is ON smallapps360.img (APPS_GAMES, not SMALLOMIT_GAMES), "
+        "and that rests on this measurement - the LOADER places its ~25 KB of "
+        "image and bss on os8088_5150_cga_128k, and the entry proc, having ASKED "
+        "OSAPI_MEM_AVAIL before claiming, refuses ITSELF: it_nomem = 1 with "
+        "neither the 63 KB canvas nor the 30 KB work claim held, its sentence "
+        "'isoTron needs 63 KB and 30 KB of free memory; this machine has N KB.' "
+        "with N under 63, that sentence's ink on the CGA's glass, no worker, "
+        "and `1` at the title starting nothing. A window that never opened "
+        "would mean `Load failed` - DrMarco's ground for SMALLOMIT_GAMES. "
+        "Measured ~30 s; SOAK for ddsmall's reason (one package, one build)",
+        needs=("marty",),
+        wants=("build/smallapps360.img", "build/small360.img"),
+        serial=True),
     Row("excitebikesim", "soak", py("tools/exbsim.py", "--selfcheck"), 3.0,
         "the reference model's own gate (tools/exbsim.py, SPEC.md 102.3, 102.6): "
         "the reference rider finishes both courses at turbo and each committed par "

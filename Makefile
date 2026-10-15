@@ -2095,6 +2095,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         cc-note chello covl pkgrun pkgbig pkgfmt cword cworddisk 386-c-word runcpm runcpmdisk \
         paccman paccmandisk pmcbandbench xt-paccman 386-paccman \
         xt-pixelstein xt-pixelstein-herc xt-pixel 386-pixel \
+        xt-isotron xt-isotron-cga xt-isotron-herc xt-isotron-ega \
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
         allapps usb usb-emu iso live burn rcbandbench \
@@ -12043,7 +12044,7 @@ APPS_GAMES := $(BUILD)/wireball.o88 $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BU
               $(BUILD)/mines.o88 $(BUILD)/skies.o88 $(BUILD)/dotdel.o88 \
               $(BUILD)/missile.o88 $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88 \
               $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88 \
-              $(DM_SHIP)
+              $(DM_SHIP) $(BUILD)/isotron.o88
 
 # PIXELSTEIN 3D IS NOT ON apps360.img (SPEC.md 97.9, 24.6.1's dated
 # decision, taken 2026-09-13): that geometry sat at 313 of 354 clusters and
@@ -12076,8 +12077,13 @@ APPS_GAMES := $(BUILD)/wireball.o88 $(BUILD)/arkanoid.o88 $(BUILD)/tank.o88 $(BU
 # (2026-09-30): that disk was 354 of 354 clusters when DrMarco stopped being a
 # `local` package, and DrMarco is ~68 of them with its three front screens.
 # games360.img carries it, which is where a 360KB machine finds every game.
+#
+# ISOTRON IS NOT ON apps360.img EITHER (SPEC.md 108.8, 24.6.1's rule, dated
+# 2026-10-13): that disk had 29 of its 354 clusters free when isoTron arrived,
+# and the curation is remade every time this geometry runs out - games360.img
+# carries every game, isoTron among them, and is where a 360KB machine finds it.
 APPS_GAMES_360 := $(filter-out $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88 \
-                    $(BUILD)/dotdel.o88 $(DM_SHIP),$(APPS_GAMES))
+                    $(BUILD)/dotdel.o88 $(DM_SHIP) $(BUILD)/isotron.o88,$(APPS_GAMES))
 
 # The CORE PACKAGES (SPEC.md 24.3) are a SECOND copy on the system disk and
 # never a move, so the two lists above are unchanged and still carry every
@@ -13373,10 +13379,13 @@ imager:
 # DRMARCO (SPEC.md 100) goes on PIXELSTEIN's ground, with its three front
 # screens: ~68 clusters at 360 KB, a game and not a calibration instrument,
 # added 2026-09-30 when it stopped being a `local` package.
+#
+# ISOTRON (SPEC.md 108) goes on the same ground, added 2026-10-13: a game, not
+# a calibration instrument, and games360.img carries it at this geometry.
 COMBO_DROP := $(BUILD)/artful.o88 $(BUILD)/texpad.o88 \
               $(BUILD)/tracker.o88 \
               $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
-              $(BUILD)/pxstein.o88 $(DM_SHIP)
+              $(BUILD)/pxstein.o88 $(DM_SHIP) $(BUILD)/isotron.o88
 COMBO_TOOLS := $(filter-out $(COMBO_DROP),$(APPS_TOOLS))
 COMBO_GAMES := $(filter-out $(COMBO_DROP),$(APPS_GAMES))
 
@@ -14729,6 +14738,94 @@ xt-excitebike: $(IMG360) $(BUILD)/excitebike360.img
 excitebikeload: excitebikedisk $(BUILD)/os8088-360.img
 	python3 tests/excitebike_load.py
 
+# isoTron (SPEC.md 108): a light-wall duel on a raised slab, a remake from
+# OBSERVED RULES. Every surface is drawn by code and nothing outside the tree
+# is read, at build time or at run time (tests/unit/t_isotron_clean.py holds
+# the tree to that), so this block needs NASM and nothing else. The package
+# SHIPS through APPS_GAMES; `isotrondisk` is its own floppy in all four
+# geometries, carrying the package and its README.
+.PHONY: isotron isotrondisk isotrontest
+$(BUILD)/isotron.bin: apps/isotron/isotron.asm apps/isotron/itrules.inc apps/isotron/itai.inc apps/isotron/itinput.inc apps/isotron/ittest.inc apps/isotron/itcanvas.inc apps/isotron/itwin.inc apps/isotron/itfs.inc apps/isotron/itsweep.inc apps/isotron/itsnd.inc apps/os88api.inc apps/os88ui.inc apps/os88alt.inc apps/os88pit.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/isotron/ -l $(BUILD)/isotron.lst -o $@ $<
+
+$(BUILD)/isotron.o88: $(BUILD)/isotron.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+
+isotron: $(BUILD)/isotron.o88
+
+ISO_DISKFILES := $(BUILD)/isotron.o88 apps/isotron/README.md
+$(BUILD)/isotron.img: $(ISO_DISKFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(ISO_DISKFILES)
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/isotron720.img: $(ISO_DISKFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(ISO_DISKFILES)
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/isotron120.img: $(ISO_DISKFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(ISO_DISKFILES)
+	python3 tools/os88disk.py --verify $@
+$(BUILD)/isotron360.img: $(ISO_DISKFILES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(ISO_DISKFILES)
+	python3 tools/os88disk.py --verify $@
+isotrondisk: $(BUILD)/isotron.img $(BUILD)/isotron720.img $(BUILD)/isotron120.img $(BUILD)/isotron360.img
+# The gates by hand (the isotronsim, isotronrules, isotronbound, isotronwin,
+# isotronega, isotronfs, isotrontoggle, isotrontwodisp, isotronflow,
+# isotronsound, isotroninput and isotronpace soak rows): the host
+# model's selfcheck, then on MartyPC seeded bot games round for round against
+# the model, the canvas byte for byte after every round, the windowed picture
+# pixel for pixel on CGA, Hercules, VGA and an EGA kernel, the full-screen
+# video memory and rendering on all four, the toggle leaving the game's bytes
+# alone, the Hercules bracket of a two-display desktop, the flow through the
+# real keys, and (wave 5, tests/isotronlive.py) the speaker captured, the
+# typematic filter and the pace in guest seconds. The price
+# (isotronperf) is `python3 tests/isotron.py --perf all`: minutes, so not here,
+# and the kern_small refusal (isotronsmall, SPEC.md 108.15.4) needs the small
+# disks: `make small smallapps && python3 tests/isotronsmall.py`.
+isotrontest: isotrondisk $(BUILD)/os8088-360.img
+	python3 tools/isotronsim.py --selfcheck
+	python3 tests/isotron.py --rules
+	python3 tests/isotron.py --bound
+	python3 tests/isotron.py --win all
+	python3 tests/isotron.py --win ega
+	python3 tests/isotron.py --fs all
+	python3 tests/isotron.py --toggle all
+	python3 tests/isotron.py --twodisp
+	python3 tests/isotron.py --flow all
+	python3 tests/isotronlive.py --sound
+	python3 tests/isotronlive.py --input
+	python3 tests/isotronlive.py --pace
+
+# isoTron on period hardware (SPEC.md 108.15): four 4.77MHz XTs with the 360KB
+# system floppy in A: and build/isotron360.img in B:, each a copy of an existing
+# machine with the uuid and fdd_02_fn changed and NOTHING else, for the
+# standing reason (86Box rewrites an unrecognised key): `xt-isotron` is
+# vm/xt-excitebike's 640KB OTI-067 VGA XT (windowed 16 colours, F the 0Dh
+# bracket), `xt-isotron-cga` vm/xt-pixelstein's 640KB CGA XT (windowed 1bpp, F
+# the 320x200x4 palette-1 bracket), `xt-isotron-herc` vm/xt-pixelstein-herc's
+# Hercules (F the 720x348 bracket at 2x by 1.5), and `xt-isotron-ega`
+# vm/xt-ega's 256KB IBM XT with a real EGA - the ONLY place the EGA same-mode
+# bracket runs on a period BIOS and the real mode 10h; isoTron's two claims and
+# image are ~118KB, which a 256KB kern_big machine holds (SPEC.md 108.15
+# measured it on MartyPC's 256KB 5150). 86Box cannot ASSERT anything
+# (docs/TESTING.md): every number is MartyPC's (isotronperf), and these are
+# where a human LOOKS - the slab, the walls' patterns, the sweep, the tower -
+# and double-clicks ISOTRON.O88 in B:. $(UNPROTECT) for the standing reason.
+VMXTISO     := $(CURDIR)/vm/xt-isotron
+VMXTISOCGA  := $(CURDIR)/vm/xt-isotron-cga
+VMXTISOHERC := $(CURDIR)/vm/xt-isotron-herc
+VMXTISOEGA  := $(CURDIR)/vm/xt-isotron-ega
+xt-isotron: $(IMG360) $(BUILD)/isotron360.img
+	@$(UNPROTECT) $(VMXTISO)/86box.cfg
+	$(BOX) -P $(VMXTISO) -N
+xt-isotron-cga: $(IMG360) $(BUILD)/isotron360.img
+	@$(UNPROTECT) $(VMXTISOCGA)/86box.cfg
+	$(BOX) -P $(VMXTISOCGA) -N
+xt-isotron-herc: $(IMG360) $(BUILD)/isotron360.img
+	@$(UNPROTECT) $(VMXTISOHERC)/86box.cfg
+	$(BOX) -P $(VMXTISOHERC) -N
+xt-isotron-ega: $(IMG360) $(BUILD)/isotron360.img
+	@$(UNPROTECT) $(VMXTISOEGA)/86box.cfg
+	$(BOX) -P $(VMXTISOEGA) -N
+
 # REDLINE native CPU/graphics performance lab (SPEC.md 103).
 .PHONY: redline redlinedisk redline-profile
 redline: $(BUILD)/redline.o88
@@ -14906,7 +15003,7 @@ xt-pixel: $(IMG360) $(BUILD)/pixel360.img
 wireball-pair:
 	python3 tools/wireball-pair.py
 wireball: $(BUILD)/wireball.o88
-$(BUILD)/wireball.bin: apps/wireball/wireball.asm apps/wireball/wblink.inc apps/wireball/wbgame.inc apps/wireball/wbsound.inc apps/wireball/wbfront.inc apps/wireball/art/wbfront.inc apps/os88api.inc apps/os88ui.inc | $(BUILD)
+$(BUILD)/wireball.bin: apps/wireball/wireball.asm apps/wireball/wblink.inc apps/wireball/wbgame.inc apps/wireball/wbsound.inc apps/wireball/wbvideo.inc apps/wireball/wbfront.inc apps/wireball/art/wbfront.inc apps/os88api.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/wireball.lst -o $@ $<
 $(BUILD)/wireball.o88: $(BUILD)/wireball.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $< -o $@
