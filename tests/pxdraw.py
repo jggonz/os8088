@@ -39,6 +39,7 @@ import argparse
 import functools
 import json
 import os
+import re
 import sys
 
 print = functools.partial(print, flush=True)
@@ -163,19 +164,24 @@ def main():
         b = bytes(m.read(ss * 16 + sp, 4))
         return (b[0] | b[1] << 8, b[2] | b[3] << 8)
 
-    disk = "build/pxdraw.img"
-    if a.ab:                            # (os88disk names the file by its
-        os.makedirs("build/pxdraw-ab", exist_ok=True)       # own name)
-        o88path = "build/pxdraw-ab/PIXEL.O88"
-        open(o88path, "wb").write(o88)
     sys.path.insert(0, "tools")
+    sys.path.insert(0, "tests")
     import pixcorpus as C
+    import pxtmp
+    # THE ROW'S OWN, in the run's tree (tests/pxtmp.py): pxdraw and pxdrawvga
+    # wrote one "build/pxdrawf" in the CHECKOUT while scratch_disk read the
+    # frozen tree's, and would have rewritten each other's fixtures besides
+    disk = pxtmp.private("pxdraw.img")      # dir_cluster reads it on the HOST
+    if a.ab:                            # (os88disk names the file by its
+        o88path = os.path.join(pxtmp.private("pxdraw-ab", folder=True),
+                               "PIXEL.O88")         # own name)
+        open(o88path, "wb").write(o88)
     cor = {n: d for n, d, v in C.corpus()}
-    os.makedirs("build/pxdrawf", exist_ok=True)
+    fdir = pxtmp.private("pxdrawf", folder=True)
     extra = []
     for n in FOLDER:
-        open(os.path.join("build/pxdrawf", n), "wb").write(cor[n])
-        extra.append(os.path.join("build/pxdrawf", n))
+        open(os.path.join(fdir, n), "wb").write(cor[n])
+        extra.append(os.path.join(fdir, n))
     M.scratch_disk(disk, o88path, "build/PIXEL.GFX",
                    "apps/pixel/samples/CITY.PCX", *extra,
                    "ANIM:apps/pixel/samples/BOUNCE.GIF")
@@ -468,7 +474,19 @@ def main():
         M.until(m, lambda _: B("px_anon") == 1 and B("px_anjob") == 1,
                 "playing again", poll=0.1, limit=120)
         key("KeyR")
-        M.ui_done(m, "the Rotate tool")
+        # THE STATE THE KEY PRODUCES, and not ui_done: with the GIF playing
+        # the frame job's UI half wakes ui_task tick after tick, so the UI
+        # is idle for whole ticks only by luck - measured on the VGA XT, the
+        # key latched the tool 0.07 guest seconds after it was typed, and
+        # ui_idle then read true on 88 of 253 polls over 20 guest seconds
+        # with no run longer than 3. Waiting for it to HOLD a tick was the
+        # row's flake (3 in 4 on b13cfe60), and the frame job below is what
+        # the click is about anyway
+        rot = int(re.search(r"^PX_TOOL_ROT\s+equ\s+(\d+)",
+                            open("apps/pixel/pxtools.inc").read(),
+                            re.M).group(1))
+        M.until(m, lambda _: B("px_tool") == rot, "the Rotate tool",
+                poll=0.05, limit=60)
         M.until(m, lambda _: B("px_anjob") == 1, "a frame job running",
                 poll=0.05, limit=120)
         v = bytes(m.read(base + syms["px_vcan"], 16))

@@ -2780,7 +2780,6 @@ pz_ftwant:  db 0
 pz_ft:      db 0
 pz_badf:    db 0
 pz_step:    dw 0
-pz_tmp:     dw 0
 pz_gs:      db 0
 pz_cb:      db 0
 pz_al:      db 0

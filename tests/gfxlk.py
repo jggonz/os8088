@@ -52,6 +52,7 @@ It builds its own kernel and puts a plain one back afterwards, because the
 knob moves every symbol and the rest of the suite reads build/.
 """
 import os
+import tempfile
 import subprocess
 import sys
 
@@ -285,9 +286,10 @@ def main():
         if n and os.environ.get("GFXLK_DUMP"):
             w = rect[2] - rect[0]
             for nm, buf in (("before", before), ("after", after)):
-                os88marty.write_png_rgb("/tmp/gfxlk-%s.png" % nm, w,
+                os88marty.write_png_rgb(tempfile.gettempdir() + "/gfxlk-%s.png" % nm, w,
                                         len(buf) // (3 * w), buf)
-            print("  dumped /tmp/gfxlk-before.png and -after.png")
+            print("  dumped %s/gfxlk-before.png and -after.png"
+                  % tempfile.gettempdir())
         check("the list survived a window opening over the pointer", n == 0,
               "%d pixels the list has that a repaint of it does not" % n)
         check("...and no bank saw the arrow", word(m, "gfx_aud_bank") == 0,

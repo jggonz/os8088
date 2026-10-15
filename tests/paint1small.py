@@ -35,6 +35,7 @@ BREAK IT ON PURPOSE: put `stc / ret` back over kern_small's `gfx_blit1` thunk
 and this goes red, which is the state the kernel shipped in until wave 1.
 """
 import os
+import tempfile
 import sys
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -65,7 +66,7 @@ def main(argv):
     os.chdir(ROOT)
     fails = []
 
-    apps = os88marty.scratch_disk("/tmp/p1small.img", "APPS:build/paint.o88")
+    apps = os88marty.scratch_disk(tempfile.gettempdir() + "/p1small.img", "APPS:build/paint.o88")
     with os88ui.boot("build/small360.img", apps=apps, machine=machine) as ui:
         m = ui.m
         ui.path("B:/APPS/PAINT.O88")

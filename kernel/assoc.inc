@@ -91,6 +91,9 @@ assoc_stem:
 assoc_glyph:
 %include "associco.inc"
     times (ASSOC_NAPP - 5) * 8 db 0
+%if assoc_glyph - assoc_stem != ASSOC_NAPP * 8
+  %error "assoc_locate finds a stem as assoc_glyph_di's answer less a fixed distance: both tables are 8 bytes a slot"
+%endif
 
 ; --- the extension slots ---------------------------------------------------
 assoc_ext:
@@ -208,18 +211,15 @@ asc_inkck:
 ; -----------------------------------------------------------------------------
 ; assoc_glyph_di - where an app slot's 8x8 glyph lives (SPEC.md 54.3)
 ; in:  BL = the app slot (BH is zeroed here, so BL alone is enough)
-; out: DI -> its eight glyph bytes. BX and CX preserved; flags are not
+; out: DI -> its eight glyph bytes. AX, BX and CX preserved; flags are not
 ; -----------------------------------------------------------------------------
 assoc_glyph_di:
-    push bx
-    push cx
-    xor bh, bh
-    mov cl, 3
-    shl bx, cl                  ; slot * 8
-    mov di, assoc_glyph
-    add di, bx
-    pop cx
-    pop bx
+    push ax
+    mov al, 8                   ; slot * 8 by the BYTE multiply, which reads
+    mul bl                      ; BL alone and writes AX alone - no BH to zero
+    add ax, assoc_glyph         ; and no shift count to bank (kernel size
+    xchg di, ax                 ; pass 10, -5)
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -388,18 +388,15 @@ assoc_scan:
     je .next                    ; a free slot never matches
     push cx
     push si
+    push es
+    push ds
+    pop es                      ; the key and the row are both the kernel's
     mov di, bx
     xor ch, ch
-.cmp:
-    mov ah, [si]
-    cmp ah, [di]
-    jne .ne
-    inc si
-    inc di
-    loop .cmp
-    cmp ax, ax                  ; all CL matched: ZF=1, CF=0 (the `inc`s above
-.ne:                            ; left ZF as they found it)
-    pop si
+    cld
+    repe cmpsb                  ; CL >= 1 bytes, so ZF = 1 and CF = 0 exactly
+    pop es                      ; when all CL matched (kernel size pass 10,
+    pop si                      ; -5); `pop` writes no flag
     pop cx
     je .out
 .next:
@@ -484,25 +481,21 @@ assoc_reduce:
 .row:
     mov ax, [es:si]             ; the two source rows this one reduces
     mov dx, [es:si+2]
-    xor bl, bl                  ; the output byte, built MSB first
-    mov cl, 8                   ; output columns left
-.col:
-    shl bl, 1
-    xor bh, bh                  ; how many of the four are ink
-    shl ax, 1
-    adc bh, 0
+    mov cl, 8                   ; output columns left; BL, the output byte,
+.col:                           ; is built MSB first by the rcl below and all
+    mov bh, -2                  ; eight bits are ours by the end, so it starts
+    shl ax, 1                   ; as anything. BH = how many of the four are
+    adc bh, 0                   ; ink, LESS TWO...
     shl ax, 1
     adc bh, 0
     shl dx, 1
     adc bh, 0
     shl dx, 1
     adc bh, 0
-    cmp bh, 2
-    jb .dark
-    or bl, 1
-.dark:
-    dec cl
-    jnz .col
+    cmp bh, 0x80                ; ...so it is 0..2 (CF = 1, lit) for two or
+    rcl bl, 1                   ; more and 0xFE/0xFF (CF = 0) for fewer, and
+    dec cl                      ; the carry IS the bit (kernel size pass 10,
+    jnz .col                    ; -7)
     mov [di], bl
     inc di
     add si, 4                   ; two source rows per output row
@@ -1114,7 +1107,13 @@ assoc_sweep:
 %ifdef OS88_REDIR
     cmp ah, DVK_FILE
     jne .kind
-    test byte [drv_svc + (DRVC_FILE-2)*DSV_SIZE + DSV_CAPS], FSCAP_LOCAL
+    push ax                     ; THIS ROW's class (SPEC.md 62.9.19): two
+    push di                     ; file classes, and only one of them is
+    mov al, [bx+DV_CLASS]       ; memory
+    call drv_cls_svc_x          ; CLSCF: a DVK_FILE row's class is a copied one - dsk_vol_add derives the kind FROM the class, 5 or 8
+    test byte [di+DSV_CAPS], FSCAP_LOCAL
+    pop di
+    pop ax                      ; (pop writes no flag)
     jnz .kind                   ; ...a redirected one whose reads are MEMORY
     mov al, 0                   ; (62.9.2.2) too, and any other is the cable
 %endif
@@ -1153,11 +1152,11 @@ assoc_locate:
     push di
     mov bl, al                  ; assoc_fname, inlined: assoc_fnb =
     xor bh, bh                  ; '<STEM>.O88', the stem space-padded to 8 so
-    mov si, bx                  ; the copy stops at the first space
-    mov cl, 3
-    shl si, cl
-    add si, assoc_stem
-    mov di, assoc_fnb
+    call assoc_glyph_di         ; the copy stops at the first space. The stem
+    lea si, [di + assoc_stem - assoc_glyph] ; table has the glyph table's
+    mov di, assoc_fnb           ; stride, 8 a slot, so the glyph's address is
+                                ; the stem's at a fixed distance (kernel size
+                                ; pass 10, -3)
     mov cx, 8
 .fnl:
     mov ah, [si]
@@ -1658,8 +1657,8 @@ assoc_app_new:
     mov bl, al                  ; preserves every register - CX is still 8
     call assoc_glyph_di         ; for the glyph below
 .zap:
-    mov byte [di], 0
-    inc di
+    mov [di], ah                ; AH is 0: AL counted the slots up from
+    inc di                      ; `xor ax, ax`, and assoc_glyph_di keeps AX
     loop .zap
     clc
 .out:
@@ -1853,9 +1852,8 @@ asc_use_x:
     mov dx, [es:di+28]          ; size low word -> sectors
     add dx, 511
     mov cl, 9
-    shr dx, cl
-    or dx, dx
-    jnz .rffound
+    shr dx, cl                  ; a shift by a non-zero CL sets ZF on its
+    jnz .rffound                ; result, so it IS the `or dx, dx` (-2)
 .rfno:                          ; (a trampoline too: .out is out of short
     jmp short .out              ; reach of the two refusals above)
 .rfnext:

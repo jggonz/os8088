@@ -1,8 +1,10 @@
 ; Native cartridge note arrangements. Two FM voices on AdLib / Sound Blaster,
 ; Recorded one-shot effects on Sound Blaster; no mixer or per-sample work.
 ; Stream records: pointer, wait (BIOS ticks), held Hz, last emitted FM Hz.
+; A note is one byte, an index into the (n_notehz, n_noteticks) pairs; 254
+; is a literal Hz word and tick byte; 255 then a loop/end word.
 n_audio_open:
-    SAVE
+    call n_pushall
     mov byte [n_audiofm],0
     mov word [n_musicsent],0
     mov word [n_effectsent],0
@@ -30,21 +32,19 @@ n_audio_open:
     call OSAPI_SND_FM
 .out:
     call n_pcm_open
-    RESTORE
-    ret
+    jmp n_popall
 
 n_audio_close:
     call n_audio_quiet
     call n_pcm_close
-    SAVE
+    call n_pushall
     cmp byte [n_audiofm],0
     je .out
     mov al,3
     call OSAPI_SND_FM
     mov byte [n_audiofm],0
 .out:
-    RESTORE
-    ret
+    jmp n_popall
 
 ; Silence without losing held notes or freeing patches; resume re-emits them.
 n_audio_quiet:
@@ -68,16 +68,15 @@ n_audio_quiet:
     ret
 
 n_music:
-    SAVE
+    call n_pushall
     shl ax,1
     mov bx,ax
     mov ax,[n_soundtab+bx]
     mov [n_musicptr],ax
     mov word [n_musicwait],0
-    RESTORE
-    ret
+    jmp n_popall
 n_effect:
-    SAVE
+    call n_pushall
     cmp ax,18
     jb .notes
     cmp ax,20
@@ -113,8 +112,7 @@ n_effect:
     mov [n_effectptr],ax
     mov word [n_effectwait],0
 .out:
-    RESTORE
-    ret
+    jmp n_popall
 
 n_audio:
     SAVE
@@ -157,7 +155,8 @@ n_audio:
     RESTORE
     ret
 
-; BX=record. Bounded to one event per call, even after a long frame/load.
+; BX=record; clobbers SI, DI. Bounded to one event per call, even after a
+; long frame/load.
 n_audio_step:
     cmp word [bx],0
     je .ended
@@ -168,8 +167,8 @@ n_audio_step:
     ret
 .note:
     mov si,[bx]
-    lodsw
-    cmp ax,65535
+    lodsb
+    cmp al,255
     jne .play
     lodsw
     cmp bx,n_effectptr             ; effects are one-shot, even NES loops
@@ -178,10 +177,23 @@ n_audio_step:
     or ax,ax
     jz .ended
     mov si,ax                     ; generated loop targets begin with a note
-    lodsw
+    lodsb
 .play:
+    cmp al,254
+    jne .pair
+    lodsw                          ; literal: Hz word, tick byte
     mov [bx+4],ax
-    lodsw
+    lodsb
+    jmp .ticks
+.pair:
+    xor ah,ah                      ; AL = index into the pair table
+    mov di,ax
+    mov al,[n_noteticks+di]
+    shl di,1
+    mov di,[n_notehz+di]
+    mov [bx+4],di
+.ticks:
+    xor ah,ah
     mov [bx+2],ax
     mov [bx],si
     mov word [bx+6],65535          ; retrigger repeated FM notes, too
@@ -243,9 +255,4 @@ n_tone:
 ; Five modulator registers, five carrier registers, feedback/connection.
 n_musicpatch:  db 21h,24h,0e2h,07h,00h,21h,0ch,0e2h,07h,00h,04h
 n_effectpatch: db 0fh,00h,0f8h,0fh,00h,01h,08h,0f8h,0fh,00h,0eh
-n_combatfx: dw n_gunfx,n_boomfx,n_lossfx,n_rollfx
-n_gunfx:  dw 180,1,90,1,0,1,65535,0
-n_boomfx: dw 80,2,40,2,0,1,65535,0
-n_lossfx: dw 60,3,30,3,0,1,65535,0
-n_rollfx: dw 120,1,90,1,60,1,0,1,65535,0
 %include "pcm.inc"

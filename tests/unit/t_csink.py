@@ -12,6 +12,10 @@ adapter or one setting, long after the row that was forgotten.
     new ink added to some of them draws in whatever byte follows the table on
     the rest - and a new BACKEND arrives with two more tables to forget, which
     is how this row earned its keep on the merge it was written for.
+  - **a hill's SHADES** (88.4.4.1): the hill face tables use CSI_HILL2 on
+    their +-x sides and CSI_HILLTOP on the cap, and every ink from CSI_HILL2
+    up is terrain - the shades, the haze (88.4.1.1) and Ultra's fields
+    (88.13.1.5) - which is what cs_fillon's one `jae` counts it as.
   - **the river's LINE.** §88.6.5 gives a river reduced to its far model the
     river's own blue rather than the runway's white, so every `*_f` model
     whose full model is `CSI_RIVER` must carry `CSI_RIVLINE`. One left behind
@@ -23,10 +27,12 @@ adapter or one setting, long after the row that was forgotten.
     model's 324 and popped 24 m at the switch; every other pair in every world
     already agreed, which is what makes this a rule rather than a preference.
 
-  - **the settings.** `cs_set_at`, `cs_set_max` and `cs_set_best` are three
-    rows of `CS_SETN` each, and §88.13.9.1's trap is that `best` is NOT
-    `max`: the Mode byte's ceiling is CGA, so a 286 handed the best of
-    everything off the wrong table gets the worse of two displays.
+  - **the settings.** `cs_set_tab` is one row a setting - where it lives,
+    its ceiling, its best - so the three can no longer drift apart in length
+    the way the three parallel tables it replaced could; what is left to
+    hold is the row's SHAPE (a `dw` and two `db`s) and §88.13.9.1's trap,
+    that `best` is NOT `max`: the Mode byte's ceiling is CGA, so a 286 handed
+    the best of everything off the ceiling gets the worse of two displays.
 """
 import os
 import re
@@ -106,6 +112,37 @@ def main():
         check(len(got) == n,
               "%s has CSI_NINK = %d entries (%d)" % (label, n, len(got)))
 
+    # --- A HILL IS TWO-TONE (88.4.4.1): every face table a hill model uses
+    #     gives its +-x sides CSI_HILL2 and its cap CSI_HILLTOP, and no hill
+    #     face is left in the one flat ink. The shades are TERRAIN to
+    #     cs_fillon because they are the last inks there are, so they must be
+    h2, ht = equ(asm, "CSI_HILL2"), equ(asm, "CSI_HILLTOP")
+    tail = sorted((int(v), k) for k, v in re.findall(
+        r"^(CSI_\w+)\s+equ\s+(\d+)", open(asm).read(), re.M)
+        if k != "CSI_NINK" and int(v) >= h2)
+    terrain = ("CSI_HILL2", "CSI_HILLTOP", "CSI_HZS2", "CSI_HZS1",
+               "CSI_HZG1", "CSI_FIELD", "CSI_FIELD2", "CSI_GRALT",
+               "CSI_HZGALT", "CSI_ROAD", "CSI_LIFT")
+    check(ht == h2 + 1 and [k for _, k in tail] and
+          all(k in terrain for _, k in tail) and tail[-1][0] == n - 1,
+          "every ink from CSI_HILL2 (%d) up is TERRAIN - a hill's shade, the "
+          "haze or a field - which is what cs_fillon's one `jae` counts it "
+          "as (%s)" % (h2, ", ".join(k for _, k in tail)))
+    hills = []
+    for f in ["csvocab.inc"] + sorted(x for x in os.listdir(APP)
+                                      if x.startswith("csw_")):
+        s = open(os.path.join(APP, f)).read()
+        for name, body in re.findall(r"^(cs_f_\w+):[^\n]*\n((?:\s+CS_\w+ .*\n)+)",
+                                     s, re.M):
+            if "CSI_HILL" in body:
+                hills.append((f, name, body))
+    flat = [n_ for f, n_, b in hills
+            if re.search(r"CS_SIDES \d+, CSI_HILL, CSI_HILL\s", b)
+            or re.search(r"CS_TOP \d+, CSI_HILL\s", b)]
+    check(len(hills) >= 2 and not flat,
+          "every hill face table is two-tone with a lit cap (%d tables%s)"
+          % (len(hills), "; flat: %s" % flat if flat else ""))
+
     # --- the river's line, in every world -----------------------------------
     rl = equ(asm, "CSI_RIVLINE")
     check(rl == n - 1 or rl < n,
@@ -171,13 +208,22 @@ def main():
 
     # --- the settings' three rows -------------------------------------------
     st = open(os.path.join(APP, "csset.inc")).read()
-    setn = equ(os.path.join(APP, "csset.inc"), "CS_SETN")
-    at = re.search(r"^cs_set_at:\s+dw (.+)$", st, re.M).group(1).split(",")
-    mx = rows(st, "cs_set_max", 1)
-    bs = rows(st, "cs_set_best", 1)
-    check(len(at) == setn and len(mx) == setn and len(bs) == setn,
-          "cs_set_at / _max / _best are all CS_SETN = %d (%d, %d, %d)"
-          % (setn, len(at), len(mx), len(bs)))
+    tab = st[st.index("cs_set_tab:"):st.index("cs_set_end:")]
+    tab = re.sub(r";[^\n]*", "", tab.replace("cs_set_tab:", ""))
+    lines = [l.split(None, 1) for l in tab.splitlines() if l.strip()]
+    sets = []
+    for i in range(0, len(lines) - 1, 2):
+        if lines[i][0] == "dw" and lines[i + 1][0] == "db":
+            sets.append((lines[i][1].strip(),
+                         [v.strip() for v in lines[i + 1][1].split(",")]))
+    check(len(lines) == 2 * len(sets) and len(sets) == 5
+          and all(len(v) == 2 for _, v in sets),
+          "cs_set_tab is five rows of `dw where` + `db ceiling, best` "
+          "(%d lines, %d rows)" % (len(lines), len(sets)))
+    mode = [v for w, v in sets if w == "cs_modepref"]
+    check(mode and mode[0] == ["1", "0"],
+          "...and the Mode row's BEST is 0 where its ceiling is 1 - Mode X "
+          "and not CGA for a 286 with no file (%s)" % mode)
     print("  %s" % ("ok" if not bad else "FAILED: %d" % len(bad)))
     return 1 if bad else 0
 

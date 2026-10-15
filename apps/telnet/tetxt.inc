@@ -144,14 +144,7 @@ te_fsx_main:
 .done:
     mov byte [te_txm], 0            ; ...INSIDE the bracket, so fsx_restore's
     call con_markall                 ; repaint finds the app windowed and the
-    pop es                          ; whole screen owed
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp te_pop7                     ; whole screen owed
 
 ; -----------------------------------------------------------------------------
 ; te_tx_keys - the keyboard, polled. CF=1 = leave the bracket

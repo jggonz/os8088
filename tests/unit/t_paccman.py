@@ -87,7 +87,7 @@ def main():
                        ("pmc_pal", 32 * 4), ("pmc_pairs", 32 * 16),
                        ("pmc_mono", 16), ("pmc_mono2", 2 * 256),
                        ("pmc_planar", 256), ("pmc_zmask", 256),
-                       ("pmc_maze", ROWS * COLS),
+                       ("pmc_maze", ROWS * COLS // 2),
                        ("pmc_lvl_fruit", 21), ("pmc_lvl_bonus", 21),
                        ("pmc_lvl_fright", 21)):
         eq(len(a.get(name, [])), want, "%s is %d entries" % (name, want),
@@ -112,7 +112,18 @@ def main():
                "merge back into the sample, and both draw a picture")
 
     # --- the maze ----------------------------------------------------------
-    maze = a.get("pmc_maze", [])
+    # pmc_maze is the LEFT 14 columns; column 27-x is mirror(column x), the
+    # predicate pmc_vid.c's pmc_init_playfield applies (SPEC.md 91).
+    half = a.get("pmc_maze", [])
+    maze = []
+
+    def mirror(t):
+        return t if t < 0xD0 or t in (0xDB, 0xDC, 0xDD, 0xDE, 0xDF, 0xE5) \
+            else t ^ 1
+    if check(len(half) == ROWS * COLS // 2, "the maze is 31 rows of 14"):
+        for r in range(ROWS):
+            row = half[r * 14:(r + 1) * 14]
+            maze += row + [mirror(t) for t in reversed(row)]
     if check(len(maze) == ROWS * COLS, "the maze is 31 rows of 28"):
         eq(maze.count(TILE_DOT), 240, "the maze holds 240 dots",
            why="240 + 4 pills = the arcade's 244, which every dot counter and "
@@ -139,8 +150,11 @@ def main():
            why="the reference decides 'wall' as tile >= 0xC0 (pacman.c 1260+)")
 
     # --- the prelude's two voices ------------------------------------------
-    mel = a.get("pmc_snd_prelude_hz1", [])
-    bass = a.get("pmc_snd_prelude_hz0", [])
+    # One byte a tick a voice: note index << 4 | volume (SPEC.md 91).
+    mel = [a.get("pmc_snd_prelude_n1", [0] * 16)[b >> 4]
+           for b in a.get("pmc_snd_prelude1", [])]
+    bass = [a.get("pmc_snd_prelude_n0", [0] * 16)[b >> 4]
+            for b in a.get("pmc_snd_prelude0", [])]
     if check(len(mel) == 245 and len(bass) == 245,
              "both prelude voices are 245 ticks"):
         eq(mel[0], 539, "the prelude MELODY starts at 539 Hz on voice 1",

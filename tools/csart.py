@@ -635,11 +635,12 @@ def emit(path, title, planes):
 
     The six bands are 10,480 bytes of a 60KB segment and they are the largest
     block in the package that no frame ever reads - the title page draws them
-    and the fsx bracket never does. So they are a PART, OP_COMP | OP_LAZY:
-    os88pkg.py packs them and op_fetch expands them, once, at launch, into a
-    claim of their own. This script used to pack them itself and csload.asm
-    to expand them itself, and the two had to agree about the format for
-    ever; ONE COMPRESSOR now, the standard's.
+    and the fsx bracket never does. So they are the last STREAM of csw.z:
+    tools/csworlds.py packs them beside the worlds with the same LZ4 the
+    kernel's OSAPI_DECOMP reads, and the program expands them into the bss
+    union it shares with the bracket's own tables (SPEC.md 88.10.7). This
+    script used to pack them itself and csload.asm to expand them itself,
+    and the two had to agree about the format for ever; ONE COMPRESSOR now.
     A band is a bitmap and holds no pointer, so nothing needs relocating: what
     was a label is an offset into the blob, and `dw cs_art_c172` in a plane
     record goes on assembling because an equ is a constant like any other.
@@ -656,15 +657,17 @@ def emit(path, title, planes):
              "; The aircraft bands share ONE frame and a plane record names",
              "; the one it is drawn from in CSP_ART (SPEC.md 88.10.1).",
              ";",
-             "; THE BANDS ARE NOT IN THIS FILE (SPEC.md 88.10.3). They are a PART",
-             "; of SKIES.O88 - the raw bands this same script writes with --raw,",
-             "; which os88pkg.py packs into an OP_COMP | OP_LAZY row - so the",
-             "; program's image carries the offsets and nothing else.",
-             "; apps/skies/csload.asm op_fetches that part, which expands it into",
-             "; a claim of its own, and hands the segment over; every blit reads",
-             "; [cs_artseg]:offset exactly as it did when the bands were in the",
-             "; image. The names below are OFFSETS INTO THAT BLOB and not labels",
-             "; in this segment.",
+             "; THE BANDS ARE NOT IN THIS FILE (SPEC.md 88.10.3). They are the",
+             "; LAST stream of csw.z - the raw bands this same script writes with",
+             "; --raw, which tools/csworlds.py packs band by band beside the",
+             "; worlds (88.10.7, 88.10.7.1) - so the program's image carries the",
+             "; offsets and nothing else. The program keeps that stream packed",
+             "; and expands each band into the bss UNION it shares with the",
+             "; bracket's own tables when it is first drawn, and every blit",
+             "; reads ES:offset with ES out of cs_artes exactly as it did when",
+             "; the bands were in the image. The names below are OFFSETS INTO",
+             "; THAT BLOB and not labels in this segment - and csworlds.py reads",
+             "; them as the band boundaries, so each must be a paragraph.",
              ""]
 
     bands = [title] + list(planes)
@@ -689,10 +692,10 @@ def emit(path, title, planes):
     for name, off in offs:
         lines.append("%-16s equ %d" % (name, off))
     lines.append("")
-    lines.append("CS_ART_SIZE equ %d        ; the bands, UNPACKED - part 1's"
+    lines.append("CS_ART_SIZE equ %d        ; the bands, UNPACKED - what the"
                  % len(blob))
-    lines.append("                             ; whole length once op_fetch has")
-    lines.append("                             ; expanded it")
+    lines.append("                             ; union must hold (skies.asm")
+    lines.append("                             ; asserts it)")
     lines.append("")
     open(path, "w").write("\n".join(lines))
     return blob
@@ -704,8 +707,8 @@ def main(argv):
     ap.add_argument("--preview", help="write PNG previews into this directory")
     ap.add_argument("--zoom", type=int, default=4)
     ap.add_argument("--raw", help="write the RAW bands here - the bytes "
-                                  "os88pkg.py packs into SKIES.O88's OP_COMP "
-                                  "| OP_LAZY art part (SPEC.md 88.10.4.1)")
+                                  "tools/csworlds.py packs as csw.z's last "
+                                  "stream (SPEC.md 88.10.7)")
     a = ap.parse_args(argv)
     title = ("cs_art_title", title_art())
     planes = [("cs_art_c172", plane_art(art_c172)),      # in cs_planes' order,
@@ -720,9 +723,9 @@ def main(argv):
             canvas.png(os.path.join(a.preview, name + ".png"), a.zoom)
     blob = emit(a.out, title, planes)
     if a.raw:
-        # THE PART'S OWN BYTES, unpacked: os88pkg.py compresses the OP_COMP
-        # row, and refuses a row that does not pay, which is the check this
-        # script used to make on a stream of its own
+        # THE STREAM'S OWN BYTES, unpacked: tools/csworlds.py packs them and
+        # checks the round trip, which is the check this script used to make
+        # on a stream of its own
         with open(a.raw, "wb") as f:
             f.write(blob)
     print("csart: %s (%s)" % (a.out, ", ".join("%s %dx%d" % (n, c.w, c.h) for n, c in bands)))

@@ -41,11 +41,11 @@
 ; port helpers both halves share. They were resident for that, far-called from
 ; both address spaces - 110 bytes of every machine's RAM, for code that runs at
 ; boot and while the Control Panel closes. They are a copy in each image now:
-; `clk_*` below in `.ovlw`, `clkw_*` in clockw.inc, near-called in both (kernel
+; `clk_*` below in `.ovl`, `clkw_*` in clockw.inc, near-called in both (kernel
 ; size pass 9; LAST-DROP-BYTES 7.7.3, which priced it). The BODIES are these
 ; macros and only the bodies: each copy writes its own LABEL in its own file,
 ; so tools/os88ovlchk.py's label map sees both, and its near/far checks cover
-; them as they cover any other `.ovlw` or `.modu` routine.
+; them as they cover any other `.ovl` or `.modu` routine.
 ;
 ; clk_at_get: AL = CMOS index 00h..3Fh, IF = 0 already -> AL = the byte; every
 ;   other register preserved. Index write and data read back to back, bit 7 set
@@ -174,7 +174,7 @@ CLK_AT_DAT  equ 0x71            ; data. Both are below 100h, so every access
                                 ; never spent on either (this constant had no
                                 ; reader at all while the code said
                                 ; `mov dx, CLK_AT_IDX / inc dx`)
-; OVLMARK - SPEC.md 15.5's boot marker, from inside the boot overlay (37.95)
+; BLOBMARK - SPEC.md 15.5's boot marker, from inside the boot overlay (37.95)
 ;
 ; The RTC LADDER IS THE ONE THING NO EMULATOR IN THIS TREE CAN EXERCISE
 ; (CLAUDE.md's testing list): a 5150 has no real-time clock, MartyPC models no
@@ -214,7 +214,7 @@ CLK_RETRY   equ 10              ; bounded coherent-read retries
 %define CLK_TRY(n) 0            ; SPEC.md 37.0.1: no rung is reachable on this
 %endif                          ; build, so clk_probe walks nothing and every
                                 ; rung's body is out of the assembly too
-section .ovlw                  ; boot overlay (SPEC.md 2.5)
+section .ovl                  ; boot overlay (SPEC.md 2.5)
 
 
 ; -----------------------------------------------------------------------------
@@ -251,14 +251,14 @@ clk_init:
     jc .out
     mov byte [clk_rtc], 1
 .out:
-    OVLMARK 48                  ; 48: ...and the ladder is behind us either
+    BLOBMARK 48                  ; 48: ...and the ladder is behind us either
                                 ; way. NOT 40 - mouse.inc owns 40..47, and two
                                 ; marks in one column is a row nobody can read
     pop ax
     retf                        ; FAR, and the shim that used to own this
                                 ; return is deleted (SPEC.md 2.6.1, 2.5.2):
                                 ; kmain names this body directly through
-                                ; OVLGATE1 and nothing near-calls it
+                                ; SPLGATE1 and nothing near-calls it
 
 ; -----------------------------------------------------------------------------
 ; clk_probe - walk the RTC ladder, and seed the clock from whatever answers
@@ -298,7 +298,7 @@ clk_init:
 ;      and there is no way to find out from here.
 ; -----------------------------------------------------------------------------
 clk_probe:
-    OVLMARK 33                  ; ...and SPEC.md 37.95's trace through it
+    BLOBMARK 33                  ; ...and SPEC.md 37.95's trace through it
     push ax
     mov byte [clk_tier], CLK_T_NONE
     mov byte [clk_cent], 0
@@ -315,7 +315,7 @@ clk_probe:
 %endif
 
 %ifdef OS88_RTC                 ; SPEC.md 37.0.1: the REFERENCE read is int 1Ah,
-    OVLMARK 34                  ; 34: the AT rung is behind us
+    BLOBMARK 34                  ; 34: the AT rung is behind us
     call clk_bios_read          ; the reference, and WALK step 5's own answer
     jc .no_bios
     mov byte [clk_ref], 1
@@ -329,7 +329,7 @@ clk_probe:
     mov ax, [clk_tb_y]
     mov [clk_rf_y], ax
 .no_bios:
-    OVLMARK 35                  ; 35: int 1Ah answered or refused, and did not
+    BLOBMARK 35                  ; 35: int 1Ah answered or refused, and did not
                                 ; take the machine with it
 
 %endif
@@ -337,10 +337,10 @@ clk_probe:
 %if CLK_TRY(CLK_T_RP)
     cmp byte [clk_ref], 0
     je .no_rp                   ; nothing to check the chip against, and an
-    OVLMARK 36                  ; 36: ...and it answered, so rung 3 RUNS
+    BLOBMARK 36                  ; 36: ...and it answered, so rung 3 RUNS
     call clk_rp_probe           ; unidentified chip is not one we may write
     jc .no_rp
-    OVLMARK 37                  ; 37: rung 3 CLAIMED the chip at 2C0h
+    BLOBMARK 37                  ; 37: rung 3 CLAIMED the chip at 2C0h
     call clk_bios_read          ; the two agreed, so either source will do
     jc .no_rp
     mov al, CLK_T_RP
@@ -349,7 +349,7 @@ clk_probe:
 %endif
 
 %if CLK_TRY(CLK_T_NS)
-    OVLMARK 38                  ; 38: WALK step 4 runs (CLK_T_NS)
+    BLOBMARK 38                  ; 38: WALK step 4 runs (CLK_T_NS)
     call clk_ns_probe
     jc .no_ns
     call clk_ns_read
@@ -362,7 +362,7 @@ clk_probe:
 %if CLK_TRY(CLK_T_BIOS)
     cmp byte [clk_ref], 0
     je .none
-    OVLMARK 49                  ; 49: WALK step 5 RAN - which is what tells NS
+    BLOBMARK 49                  ; 49: WALK step 5 RAN - which is what tells NS
     call clk_bios_read          ; apart from BIOS when block 39 lights
     jc .none
     mov al, CLK_T_BIOS
@@ -373,7 +373,7 @@ clk_probe:
     stc
     ret
 .found:
-    OVLMARK 39                  ; 39: SOME rung claimed a clock, and AL says
+    BLOBMARK 39                  ; 39: SOME rung claimed a clock, and AL says
     mov [clk_tier], al          ; which - four `mov byte [abs], imm8` at 5
     call clk_commit             ; bytes each became four `mov al, imm8` at 2,
     mov [clk_dbg_tier], al      ; and this one store. clk_commit banks AX, so
@@ -442,7 +442,7 @@ section .text
 ; burst by parking the index at 0Dh - read-only, so a stray later write to
 ; 71h cannot corrupt anything - with the NMI bit CLEAR, which is the state
 ; the BIOS leaves after POST.
-section .ovlw                  ; boot overlay (SPEC.md 2.5)
+section .ovl                  ; boot overlay (SPEC.md 2.5)
 clk_at_get:                     ; the overlay's copy (CLK_AT_GET_BODY above)
     CLK_AT_GET_BODY
 
@@ -531,7 +531,7 @@ clk_at_regs: db 0x02, 0x04, 0x07, 0x08, 0x09, 0x32
                                 ; the six CMOS registers the burst below reads
                                 ; back to back, in order, into clk_rr+1..+6:
                                 ; minute, hour, day, month, year, century. IT
-                                ; IS .ovlw DATA, so it is read CS-RELATIVE -
+                                ; IS .ovl DATA, so it is read CS-RELATIVE -
                                 ; the overlay lands on FAT_SEG and DS is
                                 ; KERNEL_SEG, so `[si]` would read six bytes of
                                 ; the kernel image instead (SPEC.md 2.5, and
@@ -623,7 +623,7 @@ clk_at_num:
     cmp byte [clk_rbin], 0
     jne .bin
     jmp clk_bcd                 ; packed BCD, and it validates both nibbles -
-                                ; a tail call, and clk_bcd is `.ovlw` like this
+                                ; a tail call, and clk_bcd is `.ovl` like this
 .bin:
     clc
     ret
@@ -829,7 +829,7 @@ CLK_NS_SIG  equ 0x0D            ; RAM: no HIGH nibble - the first signature
 CLK_NS_YRB  equ 0x0E            ; RAM: year - 1980, what 86Box's cards use
 CLK_NS_STAT equ 0x14            ; D0 = a counter rolled during the read
 CLK_NS_MAGIC equ 222
-section .ovlw                  ; boot overlay (SPEC.md 2.5)
+section .ovl                  ; boot overlay (SPEC.md 2.5)
 
 
 ; -----------------------------------------------------------------------------
@@ -884,7 +884,7 @@ clk_ns_put:                     ; the overlay's copy (CLK_NS_PUT_BODY above)
 ; textually first failure" to "the table's order", which is the same order,
 ; and the observable answer (CF = 1, nothing usable) is identical either way.
 ;
-; THE TABLE IS .ovlw DATA AND IS READ CS-RELATIVE. The overlay lands on
+; THE TABLE IS .ovl DATA AND IS READ CS-RELATIVE. The overlay lands on
 ; FAT_SEG while DS is KERNEL_SEG, so a plain `[si]` would read six rows out of
 ; the kernel image instead - the trap SPEC.md 2.5 names and drvp_sbbase's own
 ; comment repeats. NASM will not warn about it.
@@ -1654,7 +1654,10 @@ section .text
 ; clk_tick - advance the clock from the PIT tick counter
 ; in:  nothing (UI task only)
 ; out: AL = change mask (SPEC.md 37): bit0 = a second was added,
-;      bit1 = the MENU BAR'S TEXT changed and may be redrawn
+;      bit1 = the MENU BAR'S TEXT changed and may be redrawn - and ZF = 1
+;      exactly when AL = 0, which ui_task's one call reads instead of an
+;      `or al, al`: the `or al, ah` at .pend is the last flag-writer, and
+;      nothing that writes a flag may be put between it and the `ret`
 ; clobbers: AX only
 ;
 ; The SPEC.md 14 accumulator idiom verbatim, which is what makes 18.2 Hz add
@@ -1936,9 +1939,9 @@ clk_fmt:
     inc bx
     mov al, [clk_sn_hour]
     call clk_ampm               ; AL = 'A' or 'P'
-    mov [bx], al
-    inc bx
-    mov byte [bx], 'M'
+    mov ah, 'M'                 ; ...and the 'M' beside it in ONE word store:
+    mov [bx], ax                ; AH's [clk_h12] has been read for the last
+    inc bx                      ; time two lines up (-1)
     inc bx
 .end:
     mov byte [bx], 0
@@ -2092,7 +2095,7 @@ clk_put4:
     pop cx
     pop ax
     ret
-section .ovlw                  ; boot overlay (SPEC.md 2.5)
+section .ovl                  ; boot overlay (SPEC.md 2.5)
 
 
 ; -----------------------------------------------------------------------------
@@ -2275,13 +2278,13 @@ clk_fbuf:   resb 5              ; one field's text, same ownership. The widest
 ; (a) NOTHING WRITES clk_str BEFORE THE PROBE HAS RETURNED. clk_str is named
 ;     at exactly two places in the tree, both inside clk_fmt (.text), and
 ;     clk_fmt at exactly two, menu.inc's menu_draw_clock and toast.inc's
-;     toast_gapend. kmain is a straight line: OVWCALL clk_init is at MARK 6,
+;     toast_gapend. kmain is a straight line: OVLCALL clk_init is at MARK 6,
 ;     menu_init a hundred lines later, and the first wm_paint_all after MARK
 ;     32. The loading screen is splash.inc's and names no clk_ symbol.
 ;
 ; (b) NOTHING READS THE PROBE BLOCK AFTER IT. Every reference to every name
-;     below is in this file's .ovlw - checked by section, not by eye - and
-;     .ovlw is dead at drv_boot's first mount, itself before MARK 32. No host
+;     below is in this file's .ovl - checked by section, not by eye - and
+;     .ovl is dead at drv_boot's first mount, itself before MARK 32. No host
 ;     tool names one either: tests/ reads clk_dirty, clk_tier, clk_h12,
 ;     clk_fbuf and clk_sn_sec by symbol and nothing else here.
 ;

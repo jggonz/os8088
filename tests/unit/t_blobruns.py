@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""How many int 13h calls does stage 1 spend on the blob? (SPEC.md 15.3.8.5)
+"""How many int 13h calls does stage 1 spend on the blob - and stage 2 on the
+kernel behind it? (SPEC.md 15.3.8.5, 2.9.14)
 
     python3 tests/unit/t_blobruns.py [--sectors N]
 
 `--sectors N` prices a blob this file's kernel does not have, which is what
 somebody about to spend a byte of `.boot2` wants to know: `--sectors 14` is
 SPLSTARS' blob and shows the 720KB disk taking a third call for one sector.
+It prices BOTH reads, because a longer blob moves every kernel sector behind
+it and stage 2's read is cylinder-bounded: `--sectors 12` is free for stage 1
+on every geometry and costs stage 2 a call on 720KB.
 
 PERFORMANCE.md's rule is that disk work is priced in CALLS and not in sectors -
 one int 13h is 1-2 disk revolutions whatever it moves, near enough 400 ms on
@@ -133,7 +137,68 @@ def runs(path, nsec):
         out.append((cyl, head, sec + 1, run))
         lba += run
         left -= run
-    return spt, out
+    return spt, out, (start, heads)
+
+
+# --- STAGE 2's READ, which the blob's length MOVES (SPEC.md 2.9.14) ----------
+# A longer blob pushes every kernel sector after it one sector along, and
+# stage 2's read of the kernel is bounded at the CYLINDER (SPEC.md 18.91.1) -
+# so a sector of blob that costs stage 1 nothing can still cost stage 2 a call,
+# at the far end of the read where nobody looks. This walks the read exactly as
+# boot/boot2.asm's read_run does: on an 8088 the run ends at the first of the
+# cylinder's end, the sectors still wanted and the 64KB DMA page of the
+# DESTINATION, and the destination starts at KERNEL_SEG and advances 32
+# paragraphs a sector - with the packed kernel (SPEC.md 2.9.13) the plain head
+# is read first and the packed tail lands KZ_RPARA paragraphs further up.
+KERNEL_SEG = 0x0060
+
+
+def kz():
+    path = os.path.join(ROOT, "build", "kernel.kz.json")
+    if not os.path.exists(path):
+        return None                         # NOKZIP: the plain read
+    import json
+    return json.load(open(path))
+
+
+def stage2_calls(start, spt, heads, nsec_blob, k):
+    runmax = spt * heads                    # an 8088's bound: the cylinder
+    lba = start + nsec_blob
+    dest = KERNEL_SEG
+    if k:
+        parts = [(k["headsecs"], 0), (k["ksecs"] - k["headsecs"], k["rpara"])]
+    else:
+        return None
+    calls = 0
+    for left, rpara in parts:
+        dest += rpara
+        while left:
+            run = min(left, runmax - lba % runmax)
+            page = (-((dest << 4) & 0xFFFF)) & 0xFFFF
+            if page:
+                run = min(run, page >> 9)
+            calls += 1
+            lba += run
+            left -= run
+            dest += run * 32
+    return calls
+
+
+# ...AND THE RATCHET FOR IT IS PER GEOMETRY TOO, for the blob's own reason.
+# The counts are the shipped build's at SPEC.md 2.9.14 (BOOT2_SECS 10, a
+# 155-sector packed kernel read as a 9-sector plain head and a tail), and the
+# model was checked against MartyPC's FDC rather than trusted: os88boot on the
+# 360KB disk reads 165 sectors in 13 READ commands, which is the blob's 2 and
+# these 11. The plain head costs a call of its own and the DMA pages one more,
+# which is why it is not the cylinder count alone. 720KB is the tight one: an
+# eleventh blob sector is free on every geometry and a twelfth costs 720KB a
+# call (`--sectors 12`).
+STAGE2 = {
+    "os8088-360.img": 11,
+    "os8088-720.img": 11,
+    "os8088-120.img": 8,
+    "os8088.img": 7,
+}
 
 
 def main():
@@ -156,7 +221,7 @@ def main():
                         "this geometry (%s) cannot be read off a disk that "
                         "is not there" % (img, why))
             continue
-        spt, r = runs(path, nsec)
+        spt, r, (start, heads) = runs(path, nsec)
         seen.append(len(r))
         print("  %-16s SPT=%-2d  %d call(s) of %d: %s"
               % (img, spt, len(r), cap,
@@ -170,6 +235,22 @@ def main():
                         "geometry's row moves with a reason beside it "
                         "(SPEC.md 15.3.8.5, 2.9.12)"
                         % (img, len(r), cap, why, r[-1][3]))
+
+        k = kz()
+        n2 = stage2_calls(start, spt, heads, nsec, k)
+        if n2 is not None:
+            cap2 = STAGE2[img]
+            print("  %-16s stage 2 reads the kernel in %d call(s) of %d"
+                  % ("", n2, cap2))
+            if n2 > cap2:
+                fail.append("%s: stage 2's kernel read takes %d int 13h calls "
+                            "and this geometry's ratchet is %d. The blob's "
+                            "length moves every kernel sector after it, and "
+                            "the read is cylinder-bounded (SPEC.md 18.91.1, "
+                            "2.9.14) - so either the kernel or the blob grew "
+                            "past a cylinder, and that is a decision with a "
+                            "reason beside this row, not a drift"
+                            % (img, n2, cap2))
 
     for f in fail:
         print("FAIL: %s" % f)

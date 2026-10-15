@@ -1,0 +1,62 @@
+VIDEO PLAYER - PICOMEM PROFILE BENCHES
+======================================
+
+Five files that turn a machine with a PicoMEM into a
+video encoder profile (tools/os88venc.py): one for
+the 286 with a PicoMEM 1.x, one for the 5150 with a
+PicoMEM 2.x. The 5150's "5150-picomem2" was guessed;
+this is the run that replaces the guess.
+
+  VIDBENCH.O88  how fast THIS CPU and card decode a
+  VIDBENCH.DAT  frame (the DAT must sit beside it)
+  VIDDISK.O88   how fast THIS disk streams a file
+  VIDSND.O88    whether the card's Sound Blaster
+                gives one interrupt a frame
+  README.TXT    this file
+
+PUT ALL FIVE ON THE PICOMEM'S DISK, in one folder.
+VIDDISK measures the disk it runs FROM. If the
+PicoMEM's disk is not C:, copy them there with the
+Disk window. Each bench saves its report as a .TXT
+beside itself, so the disk must be writable.
+Saves NUMBER THEMSELVES: VIDDISK.TXT below is
+written as VIDDISK1.TXT, then VIDDISK2.TXT on the
+next run - the first number not already on the
+disk - so passes never overwrite each other. The
+status line names the file each save went to.
+
+PLEASE NOTE THE MACHINE: CPU and clock, video card
+and bus, which drive letter is the PicoMEM's, the
+PicoMEM firmware version, and the SD card.
+
+HOW - close each window before opening the next
+---
+1. VIDBENCH.O88, R. Screen garbage while it runs
+   is the frames being drawn. -> VIDBENCH.TXT
+2. VIDDISK.O88, W. Writes STREAM.DAT, 12.5 MB, beside
+   itself (minutes). -> VDWRITE.TXT
+   Then R (about a minute). -> VIDDISK.TXT
+   Then X (286 only: extended memory). -> VDXMS.TXT
+   Then E (the PicoMEM's EMS). -> VDEMS.TXT
+   Then D deletes STREAM.DAT again.
+3. OPTIONAL: VIDSND.O88, R (about a minute; expect
+   silence - the count of interrupts is the answer).
+   -> VIDSND.TXT. On the 286's PicoMEM 1.x it ended
+   in STACK OVERFLOW; if it does that here, skip it.
+
+Bring the .TXT files back. FTP them off, or
+photograph every page: Space / PgDn / PgUp page.
+
+WHAT EACH ONE SETS
+------------------
+  VIDBENCH   the decode cost and the latch copy
+  VIDDISK R  the disk rate and its curve as the
+             decode takes 0/25/50/75% of a frame
+  VIDDISK X  what banking video in XMS costs
+  VIDDISK E  the same for the PicoMEM's EMS
+  VIDSND     the sound the profile may ask for
+             (PCM 22 kHz, 8 kHz, 4-bit ADPCM)
+
+On the 286, VIDSND's 25/50/75% rows are timed for an
+8088 and mean less there; its interrupt counts and
+the ADPCM row are what matter.

@@ -120,7 +120,8 @@ static unsigned pmc_snd_last;
  * whole range the six effects use and cannot overflow below f = 0x5800.
  *
  * The DUMPS do not come through here - pmc_rom.c holds their frequencies in Hz
- * already, converted on the host in full precision - so the only values this
+ * already (as note tables a byte a tick indexes), converted on the host in full
+ * precision - so the only values this
  * rounds are the ones the effects compute. */
 static unsigned pmc_hz_of(unsigned f)
 {
@@ -184,7 +185,7 @@ static void pmc_snd_clear(void)
 static void pmc_snd_tick(void)
 {
     int s;
-    unsigned t;
+    unsigned t, b;
 
     for (s = 0; s < 3; s++) {
         t = pmc_sct[s];
@@ -197,10 +198,13 @@ static void pmc_snd_tick(void)
                 pmc_snd_stop(s);
                 continue;
             }
-            pmc_v_hz[0]  = pmc_snd_prelude_hz0[t];
-            pmc_v_vol[0] = pmc_snd_prelude_vol0[t];
-            pmc_v_hz[1]  = pmc_snd_prelude_hz1[t];
-            pmc_v_vol[1] = pmc_snd_prelude_vol1[t];
+            /* one byte a tick a voice: note index << 4 | volume (pmc_rom.c) */
+            b = pmc_snd_prelude0[t];
+            pmc_v_hz[0]  = pmc_snd_prelude_n0[b >> 4];
+            pmc_v_vol[0] = b & 15;
+            b = pmc_snd_prelude1[t];
+            pmc_v_hz[1]  = pmc_snd_prelude_n1[b >> 4];
+            pmc_v_vol[1] = b & 15;
             break;
 
         case PMC_SK_DEAD:
@@ -208,8 +212,10 @@ static void pmc_snd_tick(void)
                 pmc_snd_stop(s);
                 continue;
             }
-            pmc_v_hz[2]  = pmc_snd_dead_hz[t];
-            pmc_v_vol[2] = pmc_snd_dead_vol[t];
+            /* volume index << 5 | note index (pmc_rom.c) */
+            b = pmc_snd_dead[t];
+            pmc_v_hz[2]  = pmc_snd_dead_n[b & 31];
+            pmc_v_vol[2] = pmc_snd_dead_v[b >> 5];
             break;
 
         case PMC_SK_EATDOT1:            /* pacman.c 3277-3291 */

@@ -102,6 +102,9 @@ static void con_clear(void) { conn = 0; con[0] = 0; }
 static int rc_full;                                /* runcpm.c's fullscreen latch */
 static void *rc_win;                               /* ...and its window */
 static void rc_flush(void *w);
+static unsigned char rc_bandbuf[80 * 8];          /* rcterm.c's band scratch:
+                                                   * ovl_patch_cpm composes
+                                                   * the BIOS pages in it */
 
 #include "../rccpm.c"
 #include "../rcfs.c"
@@ -780,7 +783,7 @@ int main(void)
     memcpy(zram + FCB + 17, "SEQ2    DAT", 11);
     checkeq(bdos(23, FCB), 0, "renaming an open modified file");
     hostfile("A/0", "SEQ2.DAT", &sz, &dat); check(sz == 130 * 128 && dat[0] == 35, "...flushed it under the old name first, then renamed");
-    check(rc_oft_find(0, 0, "SEQ2    DAT") >= 0 && rc_oft_find(0, 0, "SEQ     DAT") < 0, "...and the held bytes follow the new name");
+    check(rc_oft_find(0, 0, "SEQ2    DAT") != 0 && rc_oft_find(0, 0, "SEQ     DAT") == 0, "...and the held bytes follow the new name");
     rc_fs_flush_all();
 
     /* --- the capture files: PUN.TXT ------------------------------------- */
@@ -909,6 +912,21 @@ int main(void)
     check_order("...check_order agrees");
     fcb_set(FCB, 0, "A-A     TXT"); bdos(22, FCB); bdos(16, FCB);
     check(memcmp(rc_dcc->e[1].name, "A-A     TXT", 11) == 0, "a MAKE inserts in host order too (A-A.TXT after A, before A-B.TXT)");
+    /* SPEC.md 74.3: a directory row keeps 24 bits of the size, so a file of
+     * 16MB or more (a hard disk's; CP/M 2.2 addresses 8MB) is held as 16MB
+     * - 1: F_SIZE of a 20MB file answers what a 16,777,215-byte one does,
+     * 131,072 records - where a size cut to its low 24 bits would answer
+     * 4MB, and an uncapped one 163,840 */
+    { struct ffold *a7 = mkfold(a->clus, "7");
+      fput(a7, "EDGE.BIN", "x", 1)->size = 0xFFFFFFUL;
+      fput(a7, "HUGE.BIN", "x", 1)->size = 0x1400000UL; }
+    bdos(32, 0x0007);
+    fcb_set(FCB, 0, "EDGE    BIN");
+    checkeq(bdos(35, FCB), 0, "F_SIZE of a 16MB - 1 file");
+    checkeq((unsigned long)(zram[FCB + 33] | (zram[FCB + 34] << 8) | ((unsigned long)zram[FCB + 35] << 16)), 0x20000, "...131,072 records");
+    fcb_set(FCB, 0, "HUGE    BIN");
+    checkeq(bdos(35, FCB), 0, "F_SIZE of a 20MB file");
+    checkeq((unsigned long)(zram[FCB + 33] | (zram[FCB + 34] << 8) | ((unsigned long)zram[FCB + 35] << 16)), 0x20000, "...held as 16MB - 1: 131,072 records, the cap");
     bdos(32, 0x0000);
     rc_fs_flush_all();
 

@@ -41,11 +41,11 @@
 10 apps/sheet/sheet.asm            # five dialog pairs, a record each
 4 apps/dos/dos.asm                 # the bar's two and the Setup page's two,
                                    # one record repointed per page
-3 apps/ftpd/ftpd.asm               # Stop, Setup, Done
+1 apps/ftpd/ftpd.asm               # Start/Stop, Setup, Done - one shared body (fd_btn_draw)
 2 apps/word/word.asm               # staged N=1: entries in its own WDD list
 2 apps/scribe/scribe.asm           # Word's shape, same lineage
 1 apps/thewire/thewire.asm         # Load Program and Add to Disk, one loop
-2 apps/skies/skies.asm             # Fly, Done
+1 apps/skies/skies.asm             # Fly and Done, ONE call: cs_donebtn joins cs_flybtn.draw
 1 apps/browser/browser.asm         # one call, three toolbar buttons
 1 apps/telnet/telnet.asm           # Connect, with a dynamic caption
 1 apps/notepad/notepad.asm         # the find panel's four
@@ -115,6 +115,7 @@
 # live count out of a rectangle's coordinates and Date/Time went white.
 1 kernel/ctrl.inc                  # every Control Panel page's buttons
 1 kernel/hiber.inc                 # the hibernate prompt's
-1 apps/redline/ui.inc              # dashboard/view controls; SDK arm/track/release
+1 apps/redline/ui.inc              # both tabs' foot and the tabs themselves; SDK arm/track/release
 1 apps/pixel/pxui.inc              # every PiXEL control, through px_btn; SDK arm/track/release
 1 kernel/shutdown.inc              # modal confirmation; release inside the armed control
+5 apps/wireball/wbfront.inc        # splash play/help/sound controls; SDK init installs press/drag/release, launch only on release

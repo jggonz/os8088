@@ -119,12 +119,12 @@ def callsites(defines=("KERN_BIG",), build="build"):
     # Every line that emitted a byte, in address order, with its source text.
     #
     # MOST OF kmain IS MACROS, and a nasm listing prints the macro's BODY
-    # rather than the argument it was given: `OVWCALL clk_init` lists as
+    # rather than the argument it was given: `OVLCALL clk_init` lists as
     # `<1>  call FAT_SEG:%1`, tagged with the expansion depth. So a row is
     # named from the INVOCATION line - which carries the name and emits no
     # bytes - and the expansion only says where the call landed.
     #
-    # WITHOUT THAT, TWO THIRDS OF kmain IS INVISIBLE. Every OVWCALL, OVLGATE
+    # WITHOUT THAT, TWO THIRDS OF kmain IS INVISIBLE. Every OVLCALL, SPLGATE
     # and SPLGATE site is dropped, the phases either side of a run of them
     # merge, and the whole run is charged to whichever plain `call` happens to
     # close it. Measured on the tree this was fixed against: eleven rows where
@@ -182,7 +182,7 @@ def callsites(defines=("KERN_BIG",), build="build"):
             if i + 1 >= len(emit):
                 break
             # THE MACRO'S OWN ARGUMENT BEATS THE BODY'S TEXT. SPLGATE1 and
-            # OVLGATE1 both end in a bare `call spl_gate`, so the body cannot
+            # SPLGATE1 both end in a bare `call spl_gate`, so the body cannot
             # tell drv_boot_x from xm_boot_x and the invocation can. A numeric
             # argument is not a name - MARK and BPMARK take an index - so
             # those fall back.

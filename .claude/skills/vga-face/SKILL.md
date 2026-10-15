@@ -82,7 +82,8 @@ The pattern (§105.9.4), one cache per kind of thing on the glass:
   run of gestures, capture the content, force a full repaint (a card up and
   down), capture again - identical to the pixel. Put it in the draw test
   with per-gesture CEILINGS a repaint would blow through, register it as a
-  soak row, and run it on Hercules AND VGA.
+  soak row on Hercules AND VGA, and run it in Step 7's single pass, not per
+  step (CLAUDE.md, Testing).
 - Then re-measure. MIDIRack: 1,177 calls across the gestures became 86.
 
 ## Step 3 - when to draw the colour face
@@ -167,8 +168,8 @@ pixel you then own is yours on every expose). Spend colour on meaning:
 
 ## Step 7 - verify, on every face
 
-- The draw test's ceilings and identity on Hercules and VGA; the package's
-  existing soak rows; `make` (fast) and `make test-full`.
+- `make` (fast), then ONE soak call over the draw test's rows (Hercules and
+  VGA) and the package's existing rows, then `make test-full` once.
 - **Look**: VGA, Hercules and CGA screenshots through MartyPC's `fbuf` -
   compare the mono ones with Step 0's; on VGA crop and zoom the buttons in
   every state (latched, pressed, greyed). Scroll every dialog on CGA: a

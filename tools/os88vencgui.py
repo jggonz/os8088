@@ -93,19 +93,19 @@ TARGETS = [
      "herc-spk", "mono", "5150-st225"),
     ("IBM 5150/XT, a floppy - small and slow", "cga-small", "mono",
      "floppy"),
-    ("286, VGA - 16 colours in the window", "vga4", "vga4", "286-vga"),
-    ("286, VGA - 256 colours, full screen", "vga8", "vga8", "286-vga"),
+    ("286, VGA - 16 colours in the window", "vga4", "vga4", "286-fast"),
+    ("286, VGA - 256 colours, full screen", "vga8", "vga8", "286-fast"),
     ("286, VGA - Mode X, 256 colours, square pixels", "modex", None,
-     "286-vga"),
-    ("486, VGA - 16 colours in the window", "vga4-mid", "vga4", "486"),
+     "286-fast"),
+    ("486, VGA - 16 colours in the window", "vga4-mid", "vga4", "486-dx2-66"),
     ("486, VGA - Mode X, 256 colours, square pixels", "modex", None,
-     "486"),
+     "486-dx2-66"),
     ("Live on a CGA desktop - short, black and white, read whole", None,
      None, "5150-st225", {"live": "cga"}),
     ("Live on a Hercules desktop - short, black and white", None, None,
      "5150-st225", {"live": "herc"}),
     ("Live on a VGA desktop - short, black and white", None, None,
-     "286-vga", {"live": "vga"}),
+     "286-fast", {"live": "vga"}),
 ]
 TARGETS = [t + ({},) if len(t) == 4 else t for t in TARGETS]
 
@@ -206,6 +206,72 @@ WAV_WHY = ("This file is a speaker WAV for Audio - the sound alone, shaped "
            "Save as a .V88 to use these.")
 # (tab, header, options, rule): a rule is None where the group applies,
 # else the reason it does not - the group's tooltip while it is greyed
+def _bank(c):
+    """The bank is a STREAM's, read off a disk: not a resident or Live
+    file's, and not a lossless profile's, which has no disk to budget"""
+    if c["resident"] or c["live"]:
+        return ("A bank reads a stream ahead off the disk, and this file is "
+                "%s." % ("Live" if c["live"] else "held whole in memory"))
+    if c["profile"] == "lossless":
+        return "The lossless profile has no disk budget for a bank to deepen."
+    return _nospk(c)
+
+
+def _nospk(c):
+    """NOTHING IN XMS UNDER THE SPEAKER (98.3.18.5): the bank, the layer and
+    Live from XMS all ride XMS copies, and the player makes none while the
+    speaker's interrupts are its clock"""
+    if c["audio"] == "speaker":
+        return ("The sound is the PC speaker, whose clock is one interrupt a "
+                "sample - and an XMS copy holds interrupts off, so the "
+                "player reads the disk instead and makes none.")
+    return None
+
+
+def _pages(c):
+    """The screens with a SECOND PAGE (98.3.8): Mode X, 16 colours on a
+    screen of their own, and a Hercules (page-ahead only, 98.3.8.3)"""
+    if c["layout"] in ("modex", "herc") or (
+            c["pixfmt"] == "vga4" and c["screen"] not in ("", "640x480")):
+        return None
+    return ("Two pages are Mode X's, a Hercules's, or 16 colours' on a "
+            "Screen of their own (320x200, 320x240, 640x350, 640x400) - and "
+            "%s has one page." % (
+                "mode 12h's 640 x 480" if c["pixfmt"] == "vga4" else
+                "mode 13h" if c["pixfmt"] == "vga8" else
+                "this %s file" % c["pixfmt"]))
+
+
+def _scenes(c):
+    """None when a palette a scene APPLIES and is chosen - what the options
+    that act on its scenes need. On the checkbox alone the window wrote
+    --step-down and --scene-hold under a scene choice the encoder could not
+    take, and the encoder refused them (the options audit, 2026-10-14)"""
+    if FIELD_WHEN["scene_palettes"](c) is None and c["scene_palettes"]:
+        return None
+    return "Only a palette a scene has scenes."
+
+
+def _knoll_hold(c):
+    """The pattern dither's HOLD: CGA's four, C160 and 16 colours - not
+    composite's 512, and not a 16-colour ramp of greys"""
+    if c["pixfmt"] == "c512":
+        return "Composite's 512 colours are dithered their own way."
+    if c["pixfmt"] == "vga4" and c["palette"].startswith("grey"):
+        return "A ramp of greys is dithered level by level: no pattern."
+    return None
+
+
+def _knoll_own(c):
+    """The pattern's cap and the sparse rule: a 16-colour file's OWN
+    colours (Palette colourN or clipN)"""
+    if c["pixfmt"] == "vga4" and (c["palette"].startswith("colour") or
+                                  c["palette"].startswith("clip")):
+        return None
+    return ("These shape the pattern over a clip's own colours (Palette "
+            "colourN or clipN on 16 colours).")
+
+
 GROUPS = [
     ("Basic", "Made for", ("preset", "pixfmt", "profile", "aim"), ALWAYS),
     ("Basic", "The clip", ("title", "credits", "start", "end", "fps"),
@@ -232,7 +298,10 @@ GROUPS = [
     ("Colour", "CGA composite", ("comp_dither", "comp_stable", "comp_quick",
                                  "mix", "levels_mix"),
      _for(("cgacomp",), PF_WORDS["cgacomp"])),
-    ("Colour", "4 and 16 colours", ("vga4_stable",),
+    ("Colour", "4 and 16 colours", ("vga4_stable", "vga4_hold",
+                                    "vga4_hold_score", "vga4_plan_cap",
+                                    "vga4_sparse", "vga4_order",
+                                    "vga4_wm3"),
      _for(("cga4", "c160", "c512", "vga4"),
           "CGA 4 colours, CGA 16 colours at 160 x 100, CGA composite 512 "
           "colours or 16 colours on a VGA")),
@@ -244,9 +313,18 @@ GROUPS = [
      _for(("vga8",), PF_WORDS["vga8"])),
     # (Bands rode a group of its own, and the header that cost was what
     # pushed the tab's right-hand column past the window's default height)
-    ("Colour", "VGA: palette, screen and pages", ("palette", "screen",
-                                                  "flip", "bands"),
+    ("Colour", "VGA: palette, screen and pages", ("palette",
+                                                  "scene_palettes",
+                                                  "scene_cover", "scene_min",
+                                                  "step_down", "step_min",
+                                                  "scene_hold", "coarse_cut",
+                                                  "screen", "bands"),
      _for(("vga8", "vga4"), "256 or 16 colours on a VGA")),
+    # (a Hercules has a second page too, so page-ahead is not VGA's alone:
+    # under the VGA group it was greyed on the one screen that needs it
+    # asked for by name - the options audit, 2026-10-14)
+    ("Colour", "A second page: flip or page-ahead", ("flip", "page_ahead",
+                                                    "page_prune"), _pages),
     ("Sound", "Sound", ("audio", "rate", "volume"), ALWAYS),
     ("Sound", "Buffer sound ahead", ("buffer_sound_ahead", "ahead_frames"),
      _ahead),
@@ -258,6 +336,15 @@ GROUPS = [
       "spk_drive", "spk_idle"), _shaping),
     ("Budget", "The machine's budget", ("disk", "avg", "peak", "owe",
                                         "reserve", "memory"), ALWAYS),
+    ("Budget", "XMS bank (a 286 or better)", ("bank", "prefill", "pool"),
+     _bank),
+    # (a layer IS made beside a bank: 98.1.9's banked-and-layered file, and
+    # the pool split for whichever machine plays it, 98.1.9.2)
+    ("Budget", "Layer: for a faster disk too",
+     ("layer_profile", "layer_disk", "layer_memory", "layer_bank",
+      "layer_pool", "layer_prefill", "layer_seek", "layer_passes"),
+     lambda c: _bank(c) or (
+         "A layer is played unflipped." if c.get("flip") else None)),
     ("Budget", "When a frame is cut", ("lookahead", "error", "cut",
                                        "frame_cap"), ALWAYS),
     ("Budget", "Aim: size", ("worth",),
@@ -275,17 +362,77 @@ GROUPS = [
 FIELD_WHEN = {
     "text_prefer_colour": lambda c: None if c["text_colour"] == "colour"
     else "This keeps a cell's hue, and the text is mono: it has none.",
-    "bands": lambda c: None if c["layout"] == "modex" or
+    "bands": lambda c: ("Bands are a stream's drawn full screen, and a Live "
+                        "file draws a pass a tick on the desktop."
+                        if c["live"] else None) if c["layout"] == "modex" or
     c["pixfmt"] == "vga4" else "Bands are for a picture drawn a plane at a "
     "time - Mode X, or 16 colours - and mode 13h is one plane.",
-    "flip": lambda c: None if c["layout"] == "modex" or (
+    "flip": lambda c: ("A Hercules's second page is page-ahead's: flipping "
+                       "every frame is a VGA's (its latches copy the page)."
+                       if c["layout"] == "herc" else
+                       "Flipping is a stream's played full screen: not Live "
+                       "or resident." if c["live"] or c["resident"] else
+                       None) if c["layout"] in ("modex", "herc") or (
         c["pixfmt"] == "vga4" and c["screen"] not in ("", "640x480")) else
     "Two pages are Mode X's, or 16 colours' on a Screen of their own "
     "(320x200, 320x240, 640x350, 640x400) - and %s has one page."
     % ("mode 12h's 640 x 480" if c["pixfmt"] == "vga4" else
        "mode 13h" if c["pixfmt"] == "vga8" else
        "this %s file" % c["pixfmt"]),
-    "screen": lambda c: None if c["pixfmt"] == "vga4" else
+    "page_ahead": lambda c: (
+        "Page-ahead is a full-screen stream's: not Live, resident or "
+        "looped." if c.get("live") or c.get("resident") or
+        c.get("loop_from") else
+        "Page-ahead uses the second page that --flip spends on every "
+        "frame: one or the other." if c.get("flip") else None)
+    if c["layout"] in ("modex", "herc") or (
+        c["pixfmt"] == "vga4" and c["screen"] not in ("", "640x480")) else
+    "Two pages are Mode X's, a Hercules's, or 16 colours' on a Screen of "
+    "their own (320x200, 320x240, 640x350, 640x400) - and %s has one page."
+    % ("mode 12h's 640 x 480" if c["pixfmt"] == "vga4" else
+       "mode 13h" if c["pixfmt"] == "vga8" else
+       "this %s file" % c["pixfmt"]),
+    "page_prune": lambda c: FIELD_WHEN["page_ahead"](c) or (
+        "Pruning is page-ahead's: Page ahead is off." if
+        c.get("page_ahead") == "off" else
+        "A Hercules's second page is lost to a colour card in the same "
+        "machine, so auto leaves page-ahead off here: choose on for a lone "
+        "Hercules." if c["layout"] == "herc" and
+        c.get("page_ahead") == "auto" else None),
+    "scene_palettes": lambda c: None if c["pixfmt"] == "vga4" and
+    c["palette"].startswith("colour") and not (c["live"] or
+                                               c["resident"]) else
+    "A palette a scene is a full-screen 16-colour file's, with a Palette "
+    "colour8, colour12 or colour16.",
+    "scene_cover": _scenes,
+    "scene_min": _scenes,
+    "step_down": _scenes,
+    "step_min": lambda c: _scenes(c) or (
+        None if c["step_down"] == "on" else
+        "The fewest colours the ladder steps to: it needs the ladder on."),
+    "coarse_cut": _scenes,
+    "scene_hold": _scenes,
+    # (the options audit, 2026-10-14: what each of the group's knobs
+    # reaches - composite's dither holds nothing, a ramp of greys is
+    # GreyDitherer's, and the pattern's cap and the sparse rule are the
+    # clip's own colours')
+    "vga4_hold": lambda c: _knoll_hold(c),
+    "vga4_hold_score": lambda c: _knoll_hold(c),
+    "vga4_plan_cap": lambda c: _knoll_own(c),
+    "vga4_sparse": lambda c: _knoll_own(c),
+    "vga4_order": lambda c: None if c["pixfmt"] == "vga4" and
+    c["palette"] in ("colour16", "clip16") and not (c["live"] or
+                                                   c["resident"]) else
+    "Only a 16-colour file's own sixteen (Palette colour16 or clip16) "
+    "take an order.",
+    "palette": lambda c: None if c["pixfmt"] != "vga4" or not (
+        c["live"] or c["resident"]) else "A 16-colour file's own palette "
+    "plays full screen, and a Live or resident file plays on the desktop, "
+    "in the desktop's sixteen.",
+    "screen": lambda c: ("A screen of its own is played full screen, and a "
+                         "Live or resident file plays on the desktop."
+                         if c["live"] or c["resident"] else None)
+    if c["pixfmt"] == "vga4" else
     "A screen of its own is 16 colours' (Pixfmt vga4): Mode X and 13h are "
     "screens already.",
     "comp_stable": lambda c: None if c["comp_dither"] == "diffuse" else
@@ -296,7 +443,7 @@ FIELD_WHEN = {
     "This is the pattern dither's, and Comp dither is diffuse.",
     "levels_mix": lambda c: None if c["comp_dither"] == "pattern" else
     "This is the pattern dither's, and Comp dither is diffuse.",
-    "xms": lambda c: None if c["live"] else
+    "xms": lambda c: _nospk(c) if c["live"] else
     "This makes a LIVE file streamed from XMS, and Live is not chosen.",
     "rate": lambda c: None if c["audio"] != "none" else
     "The file has no sound.",
@@ -311,7 +458,9 @@ TAB_OF = {d: g[0] for d, g in GROUP_OF.items()}
 # the fields a group's rule reads: a change to one re-judges every group
 CONTEXT_FIELDS = ("preset", "pixfmt", "profile", "live", "layout", "audio",
                   "text_colour", "comp_dither", "spk_shape", "aim",
-                  "resident", "buffer_sound_ahead", "screen")
+                  "resident", "buffer_sound_ahead", "screen", "palette",
+                  "scene_palettes", "flip", "loop_from", "repeat",
+                  "layer_disk", "layer_profile", "page_ahead", "step_down")
 # the choices that IMPLY others (os88venc.implied): changing one refills them
 IMPLYING = ("preset", "pixfmt", "profile", "live")
 # a free-text option's COMMON values, offered in an editable list: the sound
@@ -319,9 +468,26 @@ IMPLYING = ("preset", "pixfmt", "profile", "live")
 # memory (98.1.7.2) - any other rate can still be typed. Owed time's 0 is
 # OFF, the fixed per-frame ceiling (98.2.1.1)
 SUGGEST = {"rate": ["", "22050", "11025", "8000", "5512"],
+           # AUTO and the profile's own share: avg_list() fills the second
+           # in as the profile changes
+           "avg": ["auto"],
            "owe": ["", "0", "1.6"],
            # FREE MEMORY TO PLAY (98.2.1.3.1): rings of 8, 10 and 12 slots
-           "memory": ["", "309", "373", "437"]}
+           "memory": ["", "309", "373", "437"],
+           # THE XMS BANK (98.3.18.2): 128 KB under a pool of 1, 3, 7 and
+           # 15 MB - the player takes the WHOLE pool (98.3.18.2.1), and a
+           # 4 MB board is ~3 MB of XMS once 640 KB of base memory, the
+           # HMA and a shadowed BIOS are off it, so 1 and 3 MB are a 286's
+           # common pools; the prefill in seconds of the disk, or the whole
+           # bank
+           "bank": ["", "auto", "896", "2944", "7040", "15232"],
+           # ...the layer's the same - AUTO the pool its machine has left
+           # once it keeps the base's bank it needs (98.2.1.3.3) - and the
+           # pools those are 128 KB under
+           "layer_bank": ["", "auto", "896", "2944", "7040", "15232"],
+           "pool": ["896", "2944", "7040", "15232"],
+           "layer_pool": ["", "896", "2944", "7040", "15232"],
+           "prefill": ["", "5", "10", "30", "all"]}
 # a free-text option that NAMES A FILE the encode writes: a Browse... beside
 # it, a Save dialog of that type, started beside the .V88 under its name
 SAVE_FILE = {"spk_preview": ("The speaker preview", ".wav",
@@ -384,6 +550,26 @@ def form_start():
     vals = {f["dest"]: f["default"] for f in fields()}
     vals.update(style_values(vals.get("spk_style")))
     return vals
+
+
+def avg_choices(share):
+    """--avg's list for a profile whose old fixed share was SHARE ("" for
+    one with no budget): AUTO first, the default, then that share"""
+    return ["auto"] + ([share] if share else [])
+
+
+def layer_disk_of(lprof):
+    """--layer-disk as a chosen --layer-profile fills it: that machine's own
+    disk, the bytes a second the encode budgets the layer for when the field
+    is left empty (98.1.9) - so the field shows the number that will be used
+    and can be changed from it. "" for no profile, or one with no disk"""
+    lprof = (lprof or "").strip()
+    if not lprof:
+        return ""
+    d = V.PROFILES.get(V.profile_name(lprof), {}).get("disk")
+    if d is None:
+        return ""
+    return "%d" % d if float(d).is_integer() else "%g" % d
 
 
 def choice_lines(f, current=""):
@@ -465,7 +651,17 @@ def form_context(values):
                 live=g("live"), resident=g("resident") not in ("", "0",
                                                               "False"),
                 ahead=g("buffer_sound_ahead") or "auto",
-                screen=g("screen"))
+                screen=g("screen"), profile=g("profile"),
+                palette=g("palette") or "auto",
+                scene_palettes=g("scene_palettes") not in ("", "0", "False"),
+                # (what the narrower rules - flip's, page-ahead's, the
+                # layer's - read: never here, so they never greyed a thing)
+                flip=g("flip") not in ("", "0", "False"),
+                repeat=g("repeat") not in ("", "0", "False"),
+                loop_from=g("loop_from"), layer_disk=g("layer_disk"),
+                layer_profile=g("layer_profile"),
+                page_ahead=g("page_ahead") or "auto",
+                step_down=g("step_down") or "on")
 
 
 def group_state(values):
@@ -561,6 +757,14 @@ def form_from_file(r):
     for f in fields():
         if f["dest"] in o:
             vals[f["dest"]] = form_value(f, o[f["dest"]], imp)
+    # ...and an option given as AUTO asks for AUTO again (98.2.17.1), not
+    # for the number it came to. A record from before this holds no list
+    # and loads its numbers; a list off a file is hostile, so only the
+    # names this encoder knows take it
+    au = doc.get("auto")
+    for d in au if isinstance(au, list) else ():
+        if isinstance(d, str) and d in V.AUTO_OPTS and d in vals:
+            vals[d] = "auto"
     vals["title"], vals["credits"] = r.title, r.credits
     return vals, target_for(vals), notes, str(doc.get("src") or "")
 
@@ -604,9 +808,11 @@ def _rgb16():
         16, 3) * 255 // 63
 
 
-def render(r, surf):
+def render(r, surf, f=None):
     """Frame `surf` of Reader `r` as an RGB PIL image, at the proportions
-    the screen shows it (the file's pixel aspect, 98.1.1)"""
+    the screen shows it (the file's pixel aspect, 98.1.1). `f`, the frame
+    it is the screen after: a file with a palette a scene (98.1.3.2.3) is
+    shown in that scene's sixteen, as the player shows it"""
     import numpy as np
     from PIL import Image
     g = r.g
@@ -638,8 +844,9 @@ def render(r, surf):
                           Image.BOX)
     else:                               # a pixel a byte: VGA8, VGA4, Mode X
         cv = np.frombuffer(g.canvas(surf), np.uint8).reshape(g.h, g.w)
-        pal = _rgb16() if pf == vid.PF_VGA4 and not r.palette else \
-            np.frombuffer(r.palette, np.uint8).astype(np.uint16).reshape(
+        p = vid.palette_at(r, f) if f is not None and r.pev else r.palette
+        pal = _rgb16() if pf == vid.PF_VGA4 and not p else \
+            np.frombuffer(p, np.uint8).astype(np.uint16).reshape(
                 -1, 3) * 255 // 63
         rgb = pal[cv].astype(np.uint8)
     if r.rowscale > 1:
@@ -771,8 +978,9 @@ def palette_view(values):
         out.append(("%d %s, its own" % (min(pn, 16), "greys" if pk == "grey"
                                          else "colours"),
                     [("loaded into the VGA's DAC", sw)] if sw else [],
-                    "A full-screen file's own palette, on a screen of its "
-                    "own (Screen): each colour's bits on a group of planes, "
+                    "A full-screen file's own palette, on any Screen - the "
+                    "file then plays full screen, never in a window: each "
+                    "colour's bits on a group of planes, "
                     "so %d colours store %d bit(s) a pixel.%s" % (
                         min(pn, 16), max(1, (min(pn, 16) - 1).bit_length()),
                         "" if sw else " Chosen from the clip when it is "
@@ -905,21 +1113,35 @@ def preview_frames(path, most=2000, tick=None):
         if tick:
             tick(f, r.frames)
         if f >= f0 and (f - f0) % step == 0:
-            out.append((f, render(r, surf)))
+            out.append((f, render(r, surf, f)))
     return r, out
 
 
 # THE PROGRESS (98.2.11): os88venc's steps, each a share of one bar, and
 # then the window's own - the floppy and reading the file back to preview
-STEP_TEXT = {"prepare": "Getting ready", "read": "Reading and dithering",
+STEP_TEXT = {"first": "First pass",
+             "again": "Once more",
+             "prepare": "Getting ready", "read": "Reading and dithering",
              "sound": "Encoding the sound", "encode": "Encoding",
              "write": "Writing the file", "disk": "Making the disk",
              "preview": "Loading the preview"}
 ENCODE_SHARE = 0.9                  # the rest is the disk and the preview
 
 
-def overall(step, done, total):
-    """How far along the whole job is, 0.0 to 1.0"""
+FIRST_SHARE = 0.4                   # TWO PASSES (98.2.1.3.3): the first's share
+
+
+def overall(step, done, total, two=False):
+    """How far along the whole job is, 0.0 to 1.0 - `two` once a first
+    pass has been seen, which then has FIRST_SHARE of the encode's part"""
+    if step == "first":
+        return FIRST_SHARE * ENCODE_SHARE * (min(done, total) / total
+                                             if total else 0.0)
+    if step == "again":                 # (the real pass begins again)
+        return FIRST_SHARE * ENCODE_SHARE
+    if two and step in dict(V.STEPS):
+        return FIRST_SHARE * ENCODE_SHARE + (1 - FIRST_SHARE) * \
+            overall(step, done, total)
     if step == "disk":
         return ENCODE_SHARE
     if step == "preview":
@@ -936,7 +1158,9 @@ def overall(step, done, total):
 
 def step_text(step, done, total):
     t = STEP_TEXT.get(step, step)
-    if total:
+    if step == "first" and total:       # (thousandths of the first pass)
+        t += ": %d%%" % (100 * min(done, total) // total)
+    elif total:
         t += ": frame %d of %d" % (min(done, total), total)
     return t + "..."
 
@@ -965,10 +1189,16 @@ def file_facts(r, path=None):
     else:
         out.append("no keyframes: no poster, and a play starts at the top")
     size = os.path.getsize(path) if path else len(r.d)
-    out.append("%s bytes = %.1f KB/s%s" % (
-        "{:,}".format(size), size / 1024.0 / secs,
+    out.append("%s bytes%s" % (                 # (no rate: the front
+        "{:,}".format(size),                    # matter is read once)
         ", resident, %d rendition%s" % (r.nrend, "s" if r.nrend > 1 else "")
         if r.resident else ""))
+    if not r.resident:                  # BY WHAT READS IT: the base's
+        lyb = len(r.d) - r.lsp0 if r.lsp0 else 0    # stream every machine
+        out.append("the base stream %.1f KB/s%s" % (    # plays, the layer
+            r.slen / 1024.0 / secs,                     # only the better
+            "; the layer %.1f KB/s, read only by a machine that plays it"
+            % (lyb / 1024.0 / secs) if lyb else ""))    # one (98.1.9)
     if r.loop:
         out.append("repeats from frame %d" % r.loop[0])
     return out
@@ -987,9 +1217,12 @@ def key_view(r, f):
 def key_picture(r, i):
     """(its frame, its picture): keyframe `i` drawn from itself alone"""
     k, rec, spo, spn, idx = r.key(i)
-    surf = r.g.surface()
-    r.apply(surf, rec, key=True)
-    return k, render(r, surf)
+    if r.page:      # (98.1.3.7: the shown page's, the hidden record after
+        surf = r.key_pages(rec)[0][0]   # its lists - which a plain decode
+    else:                               # refuses, and the picture was black)
+        surf = r.g.surface()
+        r.apply(surf, rec, key=True)
+    return k, render(r, surf, k)
 
 
 def poster_view(r):
@@ -1031,7 +1264,9 @@ DISKS = [
 DISK_LABELS = [d[0] for d in DISKS]
 # the disk a storage profile implies, until the person picks another
 DISK_OF_PROFILE = {"5150-st225": 4, "5150-picomem2": 4, "floppy": 0,
-                   "286": 6, "286-vga": 6, "486": 6, "lossless": 6}
+                   "286-slow": 6, "286-fast": 6, "286-picomem1": 6,
+                   "286-speeddemon": 6,
+                   "486-dx2-66": 6, "lossless": 6}
 # what a hard disk needs out of build/ to BOOT - the kernel, its boot records
 # and HDD.DRV - and what a booting one takes besides when build/ has it.
 # Without HD_BOOT (the encoder shipped to people with no os8088 tree) the disk
@@ -1360,6 +1595,8 @@ class App(object):
                 self.apply_audio()
             elif f["dest"] == "spk_style":
                 self.apply_style()
+            elif f["dest"] == "layer_profile":
+                self.apply_layer()
             top.destroy()
         for i, (c, what, on) in enumerate(choice_lines(f, v.get()), 1):
             b = ttk.Button(fr, text=c, width=14,
@@ -1405,6 +1642,7 @@ class App(object):
         self.mkdisk = tk.BooleanVar(value=False)
         self.disksize = tk.StringVar(value=DISK_LABELS[0])
         self.diskpicked = False         # ...a person's choice, kept
+        self.layerfill = ""             # what apply_layer last filled in
         self._build()
         self.apply_target()
         self.update_groups()
@@ -1537,6 +1775,12 @@ class App(object):
                                        lambda *a: self.groups_dirty())
         self.out.trace_add("write", lambda *a: self.groups_dirty())
         self.out.trace_add("write", lambda *a: self.sync_outtype())
+        # --avg's list follows the machine: AUTO, and the share the profile
+        # (or a Live file) used to fix (98.2.1.5)
+        for d in ("profile", "live"):
+            if d in self.vars:
+                self.vars[d].trace_add("write", lambda *a: self.avg_list())
+        self.avg_list()
         # --- the palette the Colour tab's choices give, redrawn as they
         # change: under the tab's fields - what the file WILL be, where the
         # preview's column is the file that IS (the owner). The VGA groups
@@ -1835,6 +2079,23 @@ class App(object):
             self.vars[k].set(v)
         self.imply_disk()
 
+    def apply_layer(self):
+        """The layer's profile changed by hand: its disk is filled into
+        Layer disk (layer_disk_of), which is what the encode would use for an
+        empty one anyway. A number typed there by hand is replaced, as the
+        base's Disk is when the profile changes; clearing the profile clears
+        the field only while it still holds what a profile filled, since a
+        Layer disk alone is a layer on THIS machine with a faster disk"""
+        ld = self.vars.get("layer_disk")
+        if ld is None:
+            return
+        new = layer_disk_of(self.vars["layer_profile"].get())
+        if new:
+            ld.set(new)
+        elif ld.get().strip() == self.layerfill:
+            ld.set("")
+        self.layerfill = new
+
     def apply_audio(self):
         """The sound changed by hand: the SPEAKER plays at 5,512 Hz
         (os88venc.SPK_RATE), so choosing it sets the rate to that, and
@@ -1886,6 +2147,9 @@ class App(object):
             elif f["dest"] == "audio":
                 w.bind("<<ComboboxSelected>>",
                        lambda e: self.apply_audio())
+            elif f["dest"] == "layer_profile":
+                w.bind("<<ComboboxSelected>>",
+                       lambda e: self.apply_layer())
             elif f["dest"] == "spk_style":
                 w.bind("<<ComboboxSelected>>",
                        lambda e: self.apply_style())
@@ -1917,6 +2181,22 @@ class App(object):
                 ws.append(hb)
             self.vars[f["dest"]] = v
             self.fwidgets[f["dest"]] = ws
+
+    def avg_list(self):
+        """--avg's dropdown: AUTO, the default, and the fixed share the
+        chosen profile carried before it was (os88venc.profile_avg) - so the
+        old behaviour is one pick away, under the machine it belongs to"""
+        ws = self.fwidgets.get("avg")
+        if not ws:
+            return
+        prof = self.vars["profile"].get().strip() or "5150-st225"
+        live = self.vars["live"].get().strip() if "live" in self.vars \
+            else ""
+        try:
+            n = V.profile_avg(prof, live or None)
+        except KeyError:
+            n = ""
+        ws[1].configure(values=avg_choices(n))
 
     def groups_dirty(self):
         """A field a group's rule reads changed: judge them again once,
@@ -2070,6 +2350,7 @@ class App(object):
         self.busy = True
         self.cancel = threading.Event()
         self.prog = ("prepare", 0, 0)
+        self.two = self.again = False
         self.gobtn.config(state="disabled")
         self.posterbtn.config(state="disabled")
         self.title_state()
@@ -2149,8 +2430,13 @@ class App(object):
     def _pump(self):
         prog = self.prog
         if self.busy and prog:
-            self.bar.config(value=1000 * overall(*prog))
-            self.status.set(step_text(*prog))
+            self.two = getattr(self, "two", False) or prog[0] == "first"
+            self.again = getattr(self, "again", False) or \
+                prog[0] == "again"
+            self.bar.config(value=1000 * overall(*prog, two=self.two))
+            self.status.set(("Once more - "
+                             if self.again and prog[0] != "again" else "") +
+                            step_text(*prog))
         try:
             while True:
                 kind, val, job = self.q.get_nowait()
@@ -2273,6 +2559,13 @@ class App(object):
                       src or "its source"))
         for n in notes:
             self.write("   %s\n" % n)
+        doc = r.options() or {}
+        came = ["--%s auto (it came to %s)" % (
+            d.replace("_", "-"), "%g" % o if isinstance(o, (int, float))
+            else o) for d in V.AUTO_OPTS if vals.get(d) == "auto"
+            for o in [(doc.get("o") or {}).get(d)] if o is not None]
+        if came:
+            self.write("   %s\n" % "; ".join(came))
 
     def show_poster(self):
         """The poster panel: the file's poster keyframe, drawn once per

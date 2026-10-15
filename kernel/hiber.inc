@@ -302,7 +302,7 @@ section .cold
 ; machine pays eight compares and no I/O; a machine with a hard disk pays
 ; one quiet mount of its root.
 ; -----------------------------------------------------------------------------
-section .ovl                    ; IN THE BLOB (SPEC.md 2.5.3.3): kmain_o is its
+section .boot2                    ; IN THE BLOB (SPEC.md 2.5.3.3): kmain_o is its
                                 ; one caller, after drv_boot and before its own
                                 ; BLOBCALL spl_finish
 hb_probe_x:
@@ -505,21 +505,14 @@ hb_ok_x:
     push cx                     ; ...and these two, for the reason above
     push dx
     call COLD_SEG:hb_pick_x     ; the volume a hibernate would go to
-    mov al, 1
-    jc .no
+    mov bx, menu_s_hibernh      ; ...none: '(no disk)'. A `mov` writes no
+    jc .set                     ; flag, so the string can be chosen first
     call KERNEL_SEG:HB_API_XCAPS    ; BL = free block-table entries; on a
     cmp bl, XM_MAX_BLKS         ; machine with no store, all of them
-    jb .xms
     mov bx, menu_s_hiber        ; ...and the STRING, because ui_loc_gate is
-    jmp short .set              ; the only reader this answer has ever had
-.xms:
-    mov al, 2
-.no:
-    mov bx, menu_s_hibernh      ; BX for the string, because AL IS the reason
-    cmp al, 1                   ; and a `mov ax` here read '(XMS)' on a
-    je .set                     ; floppy-only machine
-    mov bx, menu_s_hiberxm
-.set:
+    jae .set                    ; the only reader this answer has ever had
+    mov bx, menu_s_hiberxm      ; (size pass 10: the reason no longer goes
+.set:                           ; through AL and back, -10)
     mov [menu_items_logo + 8], bx   ; item 4 of the System menu
     pop dx
     pop cx
@@ -1612,6 +1605,7 @@ hbm_tty:
 ; THE SKIP LIST: DRVC_DISK is memory and the ROM's int 13h, DRVC_FILE is the
 ; RAM disk, and both are things a DOS program WANTS rather than fights -
 ; neither owns a chip anyone is about to take. The caller's third is 96.23.6.
+; DRVC_EMS is a board's memory with packages holding pages of it (107.6).
 ;
 ; ...AND THE CALLER MAY HAVE ASKED FOR ONE OF THEM ANYWAY (SPEC.md 51.11.4).
 ; [cs:hbm_spm] is the slot's BL, bit 1<<class: a set bit does not ADD a class
@@ -1632,7 +1626,14 @@ hbm_sweep:
     cmp al, DRVC_DISK
     je .asked                   ; memory and the ROM's int 13h: it stays...
     cmp al, DRVC_FILE
-    je .asked                   ; the RAM disk: memory, and it stays...
+    je .asked                   ; the cable: asked, and it stays...
+    cmp al, DRVC_FILE2
+    je .asked                   ; the RAM disk: memory, and it stays - and
+                                ; 1 << 8 is 0 in CH, so no caller can name it
+    cmp al, DRVC_EMS
+    je .asked                   ; the EMS board: memory with holders, and a
+                                ; fresh attach would sign every page and remap
+                                ; the quarters under them (SPEC.md 107.6)
     cmp al, dl
     jne .take                   ; ...and the caller's own
 .asked:                         ; ...unless this call named it (51.11.4)
@@ -2949,7 +2950,7 @@ hbm_wake:
     ; `kd_mou_stop` gives the port back quiet on the way out - IER = 0 and the
     ; line masked - and justifies restoring nothing on the ground that *"the
     ; live restore['s] os8088 runs `mouse_init` again on the way up"*. **IT
-    ; DOES NOT.** `mouse_init` is in `.ovlw`, which `mem_unblob` handed back at
+    ; DOES NOT.** `mouse_init` is in `.ovl`, which `mem_unblob` handed back at
     ; the end of `kmain`, and a live resume re-enters HERE rather than at a
     ; boot - so the one place in this tree that ever writes IER = 1 cannot run.
     ;
@@ -3004,7 +3005,7 @@ hbm_wake:
     ; calls `mou_p2_off`, which masks IRQ12 at the slave, sends 0xA7 so the
     ; auxiliary interface is not even CLOCKED, and puts the BIOS's command
     ; byte back - IRQ12 bit and all. `mou_p2_init` is the only thing that
-    ; undoes any of it and is in `.ovlw` beside `mouse_init`, so a PS/2
+    ; undoes any of it and is in `.ovl` beside `mouse_init`, so a PS/2
     ; pointer came home exactly as dead and for exactly the same reason.
     ;
     ; **`[mou_p2]` IS THE RIGHT GUARD AND IT SURVIVES**: `hbm_wrimg` takes the

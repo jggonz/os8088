@@ -32,7 +32,7 @@
 # --- KEPT: one of SPEC.md 6.6.2's six cases ----------------------------------
 4 apps/mines/mines.asm  # 6.6.2 case 2 - a revealed cell's digit, over a face already down; and 11.94.4 protects the centring
 2 apps/piano/piano.asm  # 6.6.2 case 3 - key_x + 5 off a keyboard pn_metrics scales at run time (11.98.1); no constant aligns it
-4 apps/solitaire/solitaire.asm  # 6.6.2 case 2 - a card's rank over a card face put down by the previous operation
+3 apps/solitaire/solitaire.asm  # 6.6.2 case 2 - a card's rank over a card face put down by the previous operation, and sol_panel's lines (the win plaque and the About card are one routine now) over the card it has just put down
 4 tests/fontbench/fontbench.asm  # 6.6.2 case 5 - prices FONT_CHAR per cell
 4 tests/gfxbench/gfxbench.asm  # 6.6.2 case 5 - the harness PRICES the pair; it is the measurement (PERFORMANCE.md Set 76, and Set 121's PAIR 10 coloured, which is the fall-back font_run itself takes for a non-subset pen on VGA - SPEC.md 6.1.10.1)
 2 tests/typebench/typebench.asm  # 6.6.2 case 5 - measures the erase-and-letter pair against one font_run
@@ -83,4 +83,4 @@
 # `gfx_fill` three instructions above a `font_str_x` is the pair, in the same
 # pass, and is not.
 17 apps/sheet/sheet.asm  # MIXED, one line per file. 6.6.2 case 1 is sh_drawcell's label over a SHADED cell (GFX_FILL_GRAY, so the ground is a dither); case 6 is the bold overstrike a line below it, the same 1px-right double strike texpad does; case 2 is the dialog prompts, drawn once onto a body the WM painted. backlog: the formula bar, the status bar and three dialog titles fill and then letter in the SAME pass - TEXT-PLAN 4's shape, in a package the branch that wrote the rule could not see
-4 apps/fptest/fptest.asm  # 6.6.2 case 2 - fpt_row's per-case rows land on a panel ground filled once for the whole run, and the pass that does not draw does not letter either. backlog: fpt_paint's header is a fill and then a letter in one pass
+2 apps/fptest/fptest.asm  # 6.6.2 case 2 - fpt_row's per-case rows land on a panel ground filled once for the whole run, and the pass that does not draw does not letter either. backlog: fpt_paint's header - one string since the first apps size pass, which took this file 4 -> 2 - is a fill and then a letter

@@ -63,9 +63,9 @@ KD_S_TEXT equ kd_e_text - $$
 section .cold
 kd_e_cold:
 KD_S_COLD equ kd_e_cold - $$
-section .ovlw
-kd_e_ovlw:
-KD_S_OVLW equ kd_e_ovlw - $$
+section .ovl
+kd_e_ovl:
+KD_S_OVL equ kd_e_ovl - $$
 section .modf
 modf_end:                       ; diskw.inc writes this into a module header
 kd_e_modf:                      ; it will never build one of (SPEC.md 2.8)
@@ -84,7 +84,7 @@ kd_text_end:
 ; rung short by a kilobyte puts the FAT snapshot INSIDE the code: measuring
 ; `.text` alone passed at 40KB on a 45KB image, and the mount then overwrote
 ; the routine that called it.
-KTEXT_SIZE equ KD_S_TEXT + KD_S_COLD + KD_S_OVLW + KD_S_MODF
+KTEXT_SIZE equ KD_S_TEXT + KD_S_COLD + KD_S_OVL + KD_S_MODF
 ; **AND THE BSS, WHICH `-f bin` PUTS ABOVE THE IMAGE** and which read `equ 0`
 ; here while it was thousands of bytes. It is the SAME hazard as the one the
 ; paragraph above records, one section along: `.bss` is nobits so it costs no

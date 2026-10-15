@@ -89,9 +89,11 @@
     OS88_HEADER 'ARKANOID', ark_entry, 1, OS88_STACK_192
                                 ; THE WORKER'S STACK, declared
                                 ; rather than defaulted (SPEC.md 8.7):
-                                ; static 76 for ark_worker
+                                ; static 64 for ark_worker
                                 ; over the 64-byte interrupt floor
-                                ; that is 140, and 192 gives 1.37x
+                                ; that is 128, and 192 gives 1.5x
+                                ; (76 and 1.37x before size pass 1:
+                                ; ark_update banks nothing now)
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
 ; A brick wall over a ball over the paddle - the whole game in three objects.
@@ -367,7 +369,10 @@ ARK_SPTOP   equ 8                   ; blank rows ABOVE the capsule, which is
                                     ; ARK_SPTOP-d for ARK_PUH+d rows, and the
                                     ; first d of them are background
 ARK_SPH     equ ARK_SPTOP + ARK_PUH ; rows in one sprite
-ARK_SPN     equ PU_KINDS + 1        ; ...and one sprite per kind, PU_NONE spare
+ARK_SPN     equ PU_KINDS + 1        ; ...and one sprite per kind: kinds 1..
+                                    ; PU_KINDS, so this is the loop's BOUND -
+                                    ; PU_NONE has no sprite and the band starts
+                                    ; at kind 1 (ARK_SPBASE, by the bss)
 
 ARK_PUW     equ 12                  ; capsule size. The height must CONTAIN the
 ARK_PUH     equ 10                  ; 8px glyph drawn one row in, or the letter
@@ -426,8 +431,8 @@ ark_entry:
                                 ; it implies (SPEC.md 11.98 re-runs this)
 
     mov ax, [ark_bw]                ; content width = the wall plus both rails
-    mov bx, ARK_COLS
-    mul bx
+    mov bl, ARK_COLS
+    mul bl
     add ax, [ark_rail]
     add ax, [ark_rail]
     mov [ark_cwid], ax
@@ -467,9 +472,9 @@ ark_entry:
     jns .yok
     xor ax, ax
 .yok:
-    xor dx, dx
-    mov bx, 3
-    div bx
+    mov bl, 3                       ; a third of the slack above (a BYTE divide:
+    div bl                          ; the band is under 768 rows)
+    mov ah, 0
     add ax, MBAR_H
     mov [ark_tpl + WT_Y], ax
 
@@ -568,14 +573,14 @@ ark_scale_vel:
     push si
     push di
     mov si, ark_vel_src             ; the BIG-metric values, in order...
-    mov di, ark_vxmax               ; ...into the bss words that shadow them
-.each:
-    mov ax, [si]
-    call ark_scale_one
-    mov [di], ax
-    add si, 2
-    add di, 2
-    cmp di, ark_pufall
+    mov di, ark_vxmax               ; ...into the bss words that shadow them -
+.each:                              ; and the five paddle zones straight after
+    lodsw                           ; them, into ark_zbq: a zone's contribution
+    call ark_scale                  ; is a vx like ark_english's, so it scales
+    mov [di], ax                    ; for the same reason - unscaled, an edge
+    inc di                          ; hit adds 8 quarters against CGA's ceiling
+    inc di                          ; of 9 and saturates the angle, where on
+    cmp di, ark_zbq + (ARK_NZONE - 1) * 2   ; VGA the same 8 is a third of 24
     jbe .each
 
     mov ax, [ark_vxmax]             ; a serve may ASK for the ceiling and no
@@ -598,17 +603,6 @@ ark_scale_vel:
     jae .zb
     mov [ark_vytop], ax
 .zb:
-    mov si, ark_zbias               ; where along the paddle the ball landed is
-    mov di, ark_zbq                 ; a vx contribution like ark_english's, so
-.zeach:                             ; it scales for the same reason: unscaled,
-    mov ax, [si]                    ; an edge hit adds 8 quarters against CGA's
-    call ark_scale_signed           ; ceiling of 9 and saturates the angle,
-    mov [di], ax                    ; where on VGA the same 8 is a third of 24
-    add si, 2
-    add di, 2
-    cmp di, ark_zbq + (ARK_NZONE - 1) * 2
-    jbe .zeach
-
     pop di
     pop si
     pop ax
@@ -622,49 +616,47 @@ ark_vel_src:
     dw ARK_VXMAX, ARK_VXMIN, ARK_VYBASE, ARK_VYSTEP, ARK_VYMAX
     dw ARK_VYFLOOR, ARK_VYSLOW, ARK_THRTAP, ARK_THRHOLD, ARK_PUFALL
 
-; -----------------------------------------------------------------------------
-; ark_scale_signed - ark_scale_one for a figure that carries a sign
-; in:  AX = signed value; out: AX = scaled, sign kept, zero kept
-; preserves all other registers
-; -----------------------------------------------------------------------------
-ark_scale_signed:
-    push bx
-    mov bx, ax                      ; bank the sign: ark_scale_one is unsigned
-    or ax, ax                       ; because mul is, so it goes round the call
-    jge .pos
-    neg ax
-.pos:
-    call ark_scale_one
-    or bx, bx
-    jge .out
-    neg ax
-.out:
-    pop bx
-    ret
+; What each fifth of the paddle ADDS to the ball's existing vx. Not a velocity
+; to replace it with: replacing is what made the bounce feel arbitrary, because
+; a ball arriving steeply from the left and one drifting in from the right left
+; the paddle identically if they landed in the same zone.
+; The five paddle zones' vx contribution, BIG-metric. ark_scale_vel copies it
+; into ark_zbq scaled for the adapter, and the bounce reads that copy - this
+; table is never read at play time. It must FOLLOW ark_vel_src, as ark_zbq
+; follows ark_pufall: the one loop walks both pairs as fifteen words.
+ark_zbias:   dw -2*ARK_VQ, -1*ARK_VQ, 0, 1*ARK_VQ, 2*ARK_VQ
 
 ; -----------------------------------------------------------------------------
-; ark_scale_one - one tuning figure, scaled by [ark_vscale] per cent
-; in:  AX = the BIG-metric value (>= 0); out: AX = scaled, rounded to nearest
-;      and never rounded away to zero unless the input was zero
+; ark_scale - one tuning figure, scaled by [ark_vscale] per cent
+; in:  AX = the BIG-metric value, signed; out: AX = scaled, rounded to nearest,
+;      its sign kept, and never rounded away to zero unless it was zero
 ; preserves all other registers
 ;
 ; The min-of-one matters more than the rounding: ark_pufall scales to 0.74 on
-; CGA, and a capsule falling zero pixels a frame hangs in the air forever.
+; CGA, and a capsule falling zero pixels a frame hangs in the air forever. The
+; magnitude goes through the multiply because mul is unsigned; the sign goes
+; round it on the stack.
 ; -----------------------------------------------------------------------------
-ark_scale_one:
+ark_scale:
     push bx
     push dx
-    or ax, ax
-    jz .out                         ; zero scales to zero, not to one
+    cwd                             ; DX = 0 or -1: the sign...
+    push dx
+    xor ax, dx                      ; ...and AX = |v|
+    sub ax, dx
+    jz .sign                        ; zero scales to zero, not to one
     mul word [ark_vscale]           ; DX:AX = v * per-cent; both are small
     add ax, 50                      ; round to nearest rather than truncate
     adc dx, 0
     mov bx, 100
     div bx
     or ax, ax
-    jnz .out
-    mov ax, 1                       ; ...but never all the way to nothing
-.out:
+    jnz .sign
+    inc ax                          ; ...but never all the way to nothing
+.sign:
+    pop dx                          ; the sign back on
+    xor ax, dx
+    sub ax, dx
     pop dx
     pop bx
     ret
@@ -688,10 +680,10 @@ ark_metrics:
     mov di, ark_bw                  ; copied wholesale: the bss words below
     mov cx, ARK_NMET                ; must stay in the record's order
 .mcopy:
-    mov ax, [si]
+    lodsw
     mov [di], ax
-    add si, 2
-    add di, 2
+    inc di
+    inc di
     loop .mcopy
 
     call ark_scale_vel              ; ...and the speeds that record implies
@@ -699,25 +691,6 @@ ark_metrics:
     mov ax, [ark_pw0]               ; the widest an Expand can make it
     add ax, 24
     mov [ark_pwmax], ax
-    ret
-
-; -----------------------------------------------------------------------------
-; ark_lvx - the level field's pen: the right end of the strip, rounded DOWN to
-;           a multiple of 8 (SPEC.md 44.10.5)
-; out: AX; preserves every other register
-;
-; DERIVED at the point of use rather than kept, because [ark_cwid] is computed
-; by ark_entry AFTER ark_metrics and again on every resize - a copy taken in
-; the metrics reads a width that does not exist yet, comes out 0, and puts the
-; level field on top of the score.
-; -----------------------------------------------------------------------------
-ark_lvx:
-    mov ax, [ark_cwid]
-    sub ax, ARK_LFW * 8
-    and ax, ~7
-    jns .out
-    xor ax, ax                      ; a screen too narrow for the field: the
-.out:                               ; left edge, and the padding still erases
     ret
 
 ; -----------------------------------------------------------------------------
@@ -789,12 +762,12 @@ ark_layout:
     mov ax, [ark_status]            ; the wall starts under the status strip
     add ax, [ark_gap]
     mov [ark_bricky], ax
-    mov ax, [ark_chgt]              ; the paddle rides just off the bottom
-    sub ax, [ark_pado]
-    mov [ark_pady], ax
-    mov ax, [ark_chgt]              ; ...and the ball dies below it
+    mov ax, [ark_chgt]              ; the ball dies below the last row...
     dec ax
     mov [ark_floor], ax
+    inc ax                          ; ...and the paddle rides just off the
+    sub ax, [ark_pado]              ; bottom
+    mov [ark_pady], ax
     pop ax
     ret
 
@@ -813,26 +786,10 @@ ark_layout:
 ; time - most visibly on the launch, where ark_newgame raises [ark_full] and
 ; the first paint therefore rendered twice in a row.
 ; -----------------------------------------------------------------------------
-ark_paint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call ark_track
-    call ark_draw_all
-    mov byte [ark_full], 0
-    mov byte [ark_msg], 0
-    mov byte [ark_stat], 0
-    call ark_hire                   ; idempotent: only the first paint spawns
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+ark_paint:                          ; (no registers banked here: every
+    call ark_track                  ; routine it calls keeps them all)
+    call ark_draw_full
+    jmp ark_hire                    ; idempotent: only the first paint spawns
 
 ; -----------------------------------------------------------------------------
 ; ark_hire - spawn the worker, once
@@ -883,12 +840,8 @@ ark_hire:
 ; paddle (the same trap apps/notepad documents).
 ; -----------------------------------------------------------------------------
 ark_onkey:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    push ax                         ; the two this touches: every routine it
+    push bx                         ; calls keeps all the others
     mov bx, ax                      ; keep the key; ark_track needs AX
     call ark_track
     call ark_abdismiss              ; any key takes the credits down, and is
@@ -896,16 +849,12 @@ ark_onkey:
     or bl, bl
     jnz .ascii
 
-    cmp bh, 0x4B                    ; left arrow
-    je .left
-    cmp bh, 0x4D                    ; right arrow
-    je .right
-    jmp .out
-.left:
     mov al, -1
-    jmp .steer
-.right:
+    cmp bh, 0x4B                    ; left arrow
+    je .steer
     mov al, 1
+    cmp bh, 0x4D                    ; right arrow
+    jne .out
 .steer:
     cmp al, [ark_pdir]              ; the other arrow is always a fresh tap
     jne .fresh
@@ -919,41 +868,33 @@ ark_onkey:
 .fresh:
     mov [ark_pdir], al
     mov word [ark_pspd], ARK_PSTEP
-    mov word [ark_pacc], 0          ; a new press owes no sub-pixel: the first
     mov word [ark_pkeep], ARK_PTAP  ; tick of a nudge must always move
-    mov word [ark_pdn], 0           ; ...and it has been held for no ticks yet
+    xor ax, ax
+    mov [ark_pacc], ax              ; a new press owes no sub-pixel: the first
+    mov [ark_pdn], ax               ; ...and it has been held for no ticks yet
     jmp .out
 
 .ascii:
-    cmp bl, ' '
-    je .space
+    or bl, 0x20                     ; fold the case: 'P' is 'p', 'N' is 'n',
+    cmp bl, ' '                     ; and only a NUL - handled above - or a
+    je .space                       ; space itself reads as a space after it
     cmp bl, 'p'
-    je .pause
-    cmp bl, 'P'
     je .pause
     cmp bl, 'n'
     je .new
-    cmp bl, 'N'
-    je .new
-    jmp .out
+    jmp short .out
 .space:
     cmp byte [ark_mode], M_PAUSE    ; paused? then Space is the RESUME, and
-    je .resume                      ; nothing else - see ark_cmd_pause
-    mov byte [ark_launch], 1        ; otherwise the worker decides what it
-    jmp .out                        ; means: serve, or fire the laser
-.resume:
-    call ark_cmd_pause              ; on M_PAUSE that is the resume half
-    jmp .out
+    je .pause                       ; nothing else - see ark_cmd_pause, whose
+    mov byte [ark_launch], 1        ; M_PAUSE half that is. Otherwise the
+    jmp short .out                  ; worker decides what it means: serve, or
+                                    ; fire the laser
 .pause:
     call ark_cmd_pause
     jmp .out
 .new:
     call ark_cmd_new
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
     pop bx
     pop ax
     ret
@@ -964,25 +905,15 @@ ark_onkey:
 ; out: nothing; clobbers AX, BX, CX, DX like any window callback
 ; -----------------------------------------------------------------------------
 ark_oncmd:
-    push si
-    push di
-    mov bl, al
+    mov bl, al                      ; (AM_ONCMD may clobber, SPEC.md 12.2)
     call ark_track
     call ark_abdismiss              ; a menu pick takes the credits down first,
     jc .out                         ; and is spent doing it
-    or bl, bl
-    jz .new
+    or bl, bl                       ; the two commands are tail calls
+    jz ark_cmd_new
     cmp bl, 1
-    je .pause
-    jmp .out
-.new:
-    call ark_cmd_new
-    jmp .out
-.pause:
-    call ark_cmd_pause
+    je ark_cmd_pause
 .out:
-    pop di
-    pop si
     ret
 
 ; -----------------------------------------------------------------------------
@@ -994,21 +925,8 @@ ark_oncmd:
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
 ark_onclick:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call ark_track
-    call ark_abdismiss
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    call ark_track                  ; both keep every register, so nothing is
+    jmp ark_abdismiss               ; banked here and the tail is a jump
 
 ; -----------------------------------------------------------------------------
 ; ark_cmd_new / ark_cmd_pause - the two commands, shared by keys and menu
@@ -1031,32 +949,28 @@ ark_onclick:
 ; -----------------------------------------------------------------------------
 ark_cmd_new:
     call ark_newgame
-    call ark_draw_all
-    ret
+    jmp ark_draw_all
 
 ark_cmd_pause:
     push ax
-    push bx
     mov al, [ark_mode]
     cmp al, M_PAUSE
     je .resume
     cmp al, M_PLAY
     je .halt
     cmp al, M_READY
-    je .halt
-    jmp .out
+    jne .out
 .halt:
     mov [ark_wasmode], al
-    mov byte [ark_mode], M_PAUSE
-    call ark_draw_msgband           ; the banner's band, not the content
-    jmp .out
+    mov al, M_PAUSE
+    jmp short .set
 .resume:
     call ark_refocus                ; BEFORE the mode goes live, or the very
     mov al, [ark_wasmode]           ; next worker frame pauses it again
+.set:
     mov [ark_mode], al
-    call ark_draw_msgband
+    call ark_draw_msgband           ; the banner's band, not the content
 .out:
-    pop bx
     pop ax
     ret
 
@@ -1123,12 +1037,7 @@ ark_refocus:
 ; in:  SI = our window ptr; caller holds the gfx lock
 ; -----------------------------------------------------------------------------
 ark_about:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    push ax                         ; the one register this touches
     mov byte [ark_abon], 1
     mov al, [ark_mode]              ; a LIVE ball is frozen underneath, because
     cmp al, M_PLAY                  ; a dropped frame does not stop it and a
@@ -1137,13 +1046,31 @@ ark_about:
     mov byte [ark_mode], M_PAUSE    ; is left alone and the banner it was
 .draw:                              ; showing comes back untouched
     call ark_track
-    call ark_draw_all               ; ...which draws the panel last, because
-    pop di                          ; [ark_abon] is set
-    pop si
-    pop dx
-    pop cx
+    call ark_clipdraw               ; ...which draws the panel last, because
+    pop ax                          ; [ark_abon] is set
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_clipdraw - ark_draw_full under our own clip region
+; in:  the origin tracked; gfx lock held. Preserves every register
+;
+; The two UI-task paths that draw outside W_PAINT - the credits going up and
+; coming down - drew with NO clip armed, so a window over ours took the board
+; across its content (SPEC.md 11.3, the rule ark_render already keeps). Not one
+; pixel visible draws nothing and leaves the whole frame owed.
+; -----------------------------------------------------------------------------
+ark_clipdraw:
+    push bx
+    mov bx, [ark_win]
+    call OSAPI_WM_CLIP_SET
+    jc .hid
+    call ark_draw_full
+    call OSAPI_WM_CLIP_CLEAR        ; the hold is the caller's: whatever it
+    pop bx                          ; draws after us is not ours to clip
+    ret
+.hid:
+    mov byte [ark_full], 1
     pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1156,139 +1083,14 @@ ark_abdismiss:
     cmp byte [ark_abon], 0
     je .none
     mov byte [ark_abon], 0
-    call ark_draw_all               ; the game stays paused: the key that took
-    mov byte [ark_full], 0          ; the credits down is not also a resume.
-    mov byte [ark_msg], 0           ; This IS the whole repaint every skipped
-    mov byte [ark_stat], 0          ; frame under the panel asked for, so it
+    call ark_clipdraw               ; the game stays paused: the key that took
+                                    ; the credits down is not also a resume.
+                                    ; This IS the whole repaint every skipped
+                                    ; frame under the panel asked for, so it
     stc                             ; settles the debt rather than leaving the
     ret                             ; worker to draw the board a second time
 .none:
     clc
-    ret
-
-; -----------------------------------------------------------------------------
-; ark_abmeas - size and centre the panel from the strings themselves
-; out: [ark_abw]/[ark_abh]/[ark_abl]/[ark_abt], content coords
-; preserves every register
-;
-; Measured rather than pinned because the two metric sets give two different
-; content widths (SPEC.md 44.6) and CGA's is the narrower - a hard-coded box
-; sized for VGA would hang out of it.
-; -----------------------------------------------------------------------------
-ark_abmeas:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    xor cx, cx                      ; CX = widest line, DI = line count
-    xor di, di
-    mov si, ark_ablines
-.next:
-    mov bx, [si]
-    or bx, bx
-    jz .done
-    inc di
-    add si, 2
-    push si
-    mov si, bx
-    call OSAPI_FONT_WIDTH           ; AX = pixel width
-    pop si
-    cmp ax, cx
-    jbe .next
-    mov cx, ax
-    jmp .next
-.done:
-    add cx, 16                      ; 8px of margin either side
-    cmp cx, [ark_cwid]
-    jbe .wok
-    mov cx, [ark_cwid]
-.wok:
-    mov [ark_abw], cx
-    mov ax, di                      ; height = lines * ARK_ABLH + margins
-    mov bx, ARK_ABLH
-    mul bx
-    add ax, 14
-    cmp ax, [ark_chgt]
-    jbe .hok
-    mov ax, [ark_chgt]
-.hok:
-    mov [ark_abh], ax
-    mov ax, [ark_cwid]
-    sub ax, [ark_abw]
-    shr ax, 1
-    mov [ark_abl], ax
-    mov ax, [ark_chgt]
-    sub ax, [ark_abh]
-    shr ax, 1
-    mov [ark_abt], ax
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; ark_abdraw - the panel itself, last of everything
-; in:  gfx lock held, origin tracked; preserves every register
-; -----------------------------------------------------------------------------
-ark_abdraw:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call ark_abmeas
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    call .rect
-    call ark_fillc
-    mov al, CBLACK                  ; a black frame and black text on the white
-    call OSAPI_SET_COLOR            ; panel: the one pairing that survives
-    call .rect                      ; SPEC.md 39.4 on every adapter
-    call ark_framec
-
-    mov si, ark_ablines
-    mov di, [ark_abt]
-    add di, 7                       ; the first baseline, inside the frame
-.line:
-    mov bx, [si]
-    or bx, bx
-    jz .out
-    add si, 2
-    push si
-    mov si, bx
-    call OSAPI_FONT_WIDTH           ; AX = this line's width
-    mov cx, [ark_abw]
-    sub cx, ax
-    shr cx, 1
-    add cx, [ark_abl]
-    mov dx, di
-    call ark_textc                  ; content coords; ark_textc adds the origin
-    pop si
-    add di, ARK_ABLH
-    jmp .line
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-.rect:                              ; the panel as (x1,y1)-(x2,y2), inclusive
-    mov ax, [ark_abl]
-    mov bx, [ark_abt]
-    mov cx, ax
-    add cx, [ark_abw]
-    dec cx
-    mov dx, bx
-    add dx, [ark_abh]
-    dec dx
     ret
 
 ; =============================================================================
@@ -1347,16 +1149,10 @@ ark_worker:
 
 ; -----------------------------------------------------------------------------
 ; ark_update - advance one frame. NO lock held, nothing drawn.
-; preserves all registers
+; clobbers AX..DI: its one caller, ark_worker, holds nothing across it
 ; -----------------------------------------------------------------------------
-ark_update:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call ark_do_paddle              ; the paddle moves even while parked
+ark_update:                         ; (ark_worker reloads everything it uses,
+    call ark_do_paddle              ; so nothing is banked here)              ; the paddle moves even while parked
     call ark_focuschk               ; ...and a rally stops if we lost focus
     mov al, [ark_mode]
     cmp al, M_PAUSE
@@ -1374,7 +1170,6 @@ ark_update:
     jmp .out
 .wait:
     dec word [ark_hold]             ; the pause after a death or a clear
-    cmp word [ark_hold], 0
     jg .out
     cmp byte [ark_mode], M_CLEAR
     je .next
@@ -1383,12 +1178,6 @@ ark_update:
 .next:
     call ark_nextwall
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1425,7 +1214,6 @@ ark_update:
 ; lock, where drawing belongs.
 ; -----------------------------------------------------------------------------
 ark_focuschk:
-    push ax
     push bx
     cmp byte [ark_mode], M_PLAY
     jne .out
@@ -1436,13 +1224,11 @@ ark_focuschk:
     cmp bx, [ark_win]
     je .out
 .lost:
-    mov al, M_PLAY
-    mov [ark_wasmode], al
+    mov byte [ark_wasmode], M_PLAY
     mov byte [ark_mode], M_PAUSE
     mov byte [ark_full], 1          ; the banner, on the next frame that draws
 .out:
     pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1511,8 +1297,9 @@ ark_do_paddle:
 .aged:
     cmp word [ark_pkeep], 0
     jg .live
-    mov word [ark_pspd], 0          ; stopped, the third speed - and what tells
-    mov word [ark_pdn], 0           ; ark_onkey that this arrow is free again
+    xor ax, ax
+    mov [ark_pspd], ax              ; stopped, the third speed - and what tells
+    mov [ark_pdn], ax               ; ark_onkey that this arrow is free again
     jmp .out
 .live:
     dec word [ark_pkeep]
@@ -1522,8 +1309,8 @@ ark_do_paddle:
     mov ax, ARK_PFAST
 .spd:
     mov [ark_pspd], ax
-    mov ax, [ark_pacc]              ; the quarter pixels owed, plus this tick's
-    add ax, [ark_pspd]              ; worth...
+    add ax, [ark_pacc]              ; the quarter pixels owed, plus this tick's
+                                    ; worth...
     xor dx, dx
     mov bx, ARK_VQ
     div bx                          ; ...is AX whole pixels and DX still owed
@@ -1631,11 +1418,10 @@ ark_pkey:
 ; -----------------------------------------------------------------------------
 ark_english:
     push bx
-    push dx
-    mov ax, [ark_pvel]
-    cwd
-    mov bx, 4
-    idiv bx
+    mov ax, [ark_pvel]              ; a few pixels either way, so a BYTE divide:
+    mov bl, 4                       ; AL = pvel / 4, toward zero as the word
+    idiv bl                         ; one was
+    cbw
     cmp ax, 2
     jle .lo
     mov ax, 2
@@ -1644,11 +1430,11 @@ ark_english:
     jge .out
     mov ax, -2
 .out:
-    mov bx, ARK_VQ                  ; pixels -> quarter units, once, here...
-    imul bx
-    call ark_scale_signed           ; ...and then SCALED like everything else,
-    pop dx                          ; so the spin a paddle imparts stays the
-    pop bx                          ; same fraction of ark_vxmax on every
+    shl ax, 1                       ; pixels -> quarter units (ARK_VQ), once,
+    shl ax, 1                       ; here...
+    call ark_scale                  ; ...and then SCALED like everything else,
+    pop bx                          ; so the spin a paddle imparts stays the
+                                    ; same fraction of ark_vxmax on every
     ret                             ; adapter (SPEC.md 44.3.3). It is the
                                     ; RESULT that is scaled and not the unit:
                                     ; scaling ARK_VQ itself rounds 1.48 to 1
@@ -1718,7 +1504,6 @@ ark_throw:
 ; -----------------------------------------------------------------------------
 ark_setspeed:
     push ax
-    push bx
     push dx                         ; mul writes DX, and this routine promises
                                     ; not to. It used to be an add
     mov al, [ark_level]
@@ -1727,8 +1512,7 @@ ark_setspeed:
     jz .base                        ; happens, but the multiply must not
     dec ax                          ; underflow if it ever does
 .base:
-    mov bx, [ark_vystep]
-    mul bx                          ; AX = (level-1) * step, both small
+    mul word [ark_vystep]           ; AX = (level-1) * step, both small
     add ax, [ark_vybase]
     cmp ax, [ark_vytop]
     jbe .set
@@ -1736,7 +1520,6 @@ ark_setspeed:
 .set:
     mov [ark_vymag], ax
     pop dx
-    pop bx
     pop ax
     ret
 
@@ -1810,75 +1593,61 @@ ark_do_ball:
     mov bx, ax
     sar bx, 1
     sar bx, 1                       ; BX = whole pixels this frame
-    mov cx, bx
-    shl cx, 1
-    shl cx, 1
-    sub ax, cx
-    mov [ark_accx], ax              ; ...and 0..3 quarters left over
-    mov ax, bx
-
-    mov word [ark_sx], 1            ; |dx|, sign in [ark_sx]
-    or ax, ax
-    jns .dxok
-    neg ax
-    mov word [ark_sx], -1
-.dxok:
-    mov [ark_adx], ax
+    and ax, 3                       ; ...and 0..3 quarters left over, which is
+    mov [ark_accx], ax              ; v - 4*floor(v/4) in two's complement
+    xchg ax, bx
+    cwd                             ; |dx| in AX, its sign in [ark_sx]: DX is
+    xor ax, dx                      ; 0 or -1, so this is a branch-free abs,
+    sub ax, dx                      ; and DX OR 1 is +1 or -1
+    or dx, 1
+    mov [ark_sx], dx
+    mov si, ax                      ; SI = |dx|
 
     mov ax, [ark_accy]
     add ax, [ark_bvy]
     mov bx, ax
     sar bx, 1
     sar bx, 1
-    mov cx, bx
-    shl cx, 1
-    shl cx, 1
-    sub ax, cx
+    and ax, 3
     mov [ark_accy], ax
-    mov ax, bx
+    xchg ax, bx
+    cwd
+    xor ax, dx
+    sub ax, dx
+    or dx, 1
+    mov [ark_sy], dx
+    mov di, ax                      ; DI = |dy|
 
-    mov word [ark_sy], 1
-    or ax, ax
-    jns .dyok
-    neg ax
-    mov word [ark_sy], -1
-.dyok:
-    mov [ark_ady], ax
-    mov ax, [ark_adx]               ; steps along the major axis
-    cmp ax, [ark_ady]
+    ; THE WALK LIVES IN REGISTERS: ark_move1 preserves every one of them, so
+    ; CX = the steps left, DX = the error term, SI = |dx| and DI = |dy| ride
+    ; through it and nothing is read back out of memory per pixel
+    mov cx, si                      ; steps along the major axis
+    cmp cx, di
     jge .n1
-    mov ax, [ark_ady]
+    mov cx, di
 .n1:
-    mov [ark_nstep], ax
-    mov ax, [ark_adx]
-    sub ax, [ark_ady]
-    mov [ark_err], ax
+    mov dx, si
+    sub dx, di                      ; err = |dx| - |dy|
 .walk:
-    cmp word [ark_nstep], 0
-    jle .out
-    dec word [ark_nstep]
-    mov ax, [ark_err]
+    dec cx                          ; none left (it was 0): done
+    js .out
+    mov ax, dx
     add ax, ax                      ; e2 = 2*err
-    mov si, ax
-    mov ax, [ark_ady]
-    neg ax
-    cmp si, ax
+    mov bx, di
+    neg bx
+    cmp ax, bx
     jle .nox
-    mov ax, [ark_err]
-    sub ax, [ark_ady]
-    mov [ark_err], ax
+    sub dx, di
     mov ax, [ark_sx]
     xor bx, bx
     call ark_move1                  ; one pixel in x
     jc .out                         ; something reflected: the rest is stale
 .nox:
-    mov ax, [ark_err]
-    add ax, ax
-    cmp ax, [ark_adx]
+    mov ax, dx                      ; 2*err AGAIN, off the err the x step just
+    add ax, ax                      ; moved - the walk has always read it so
+    cmp ax, si
     jge .walk
-    mov ax, [ark_err]
-    add ax, [ark_adx]
-    mov [ark_err], ax
+    add dx, si
     xor ax, ax
     mov bx, [ark_sy]
     call ark_move1                  ; ...and one in y
@@ -1906,20 +1675,17 @@ ark_move1:
     mov cx, [ark_bx]
     add cx, ax
     mov dx, [ark_by]
-    add dx, bx
-    mov [ark_nx], cx
-    mov [ark_ny], dx
+    add dx, bx                      ; CX/DX = the candidate position, which
+                                    ; everything below takes in registers
 
-    mov ax, [ark_rail]              ; --- the rails and the ceiling ---
-    cmp cx, ax
+    cmp cx, [ark_rail]              ; --- the rails and the ceiling ---
     jl .bouncex
     mov ax, [ark_cwid]
     sub ax, [ark_rail]
     sub ax, [ark_bsz]
     cmp cx, ax
     jg .bouncex
-    mov ax, [ark_status]
-    cmp dx, ax
+    cmp dx, [ark_status]
     jl .bouncey
 
     call ark_hit_brick              ; --- the wall ---
@@ -1941,14 +1707,13 @@ ark_move1:
 
 .bouncex:
     neg word [ark_bvx]
-    mov ax, 1200
-    call ark_beep
-    jmp .hit
+    jmp short .wall
 .bouncey:
     neg word [ark_bvy]
+.wall:
     mov ax, 1200
     call ark_beep
-    jmp .hit
+    jmp short .hit
 .brick:
     call ark_reflect
     jmp .hit
@@ -1967,57 +1732,50 @@ ark_move1:
 
 ; -----------------------------------------------------------------------------
 ; ark_reflect - which way to bounce off a brick
-; in:  [ark_nx] = the blocked position; preserves all registers
+; in:  CX = the blocked position's x; preserves all registers
 ;
 ; The step that was blocked names the axis: this is only ever reached from a
 ; single-pixel move, so exactly one coordinate changed and that is the one to
 ; reverse. No geometry, no corner cases.
 ; -----------------------------------------------------------------------------
 ark_reflect:
-    push ax
-    mov ax, [ark_nx]
-    cmp ax, [ark_bx]
+    cmp cx, [ark_bx]
     je .yaxis
     neg word [ark_bvx]
-    jmp .out
+    ret
 .yaxis:
     neg word [ark_bvy]
-.out:
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; ark_hit_paddle - is the candidate rect over the paddle?
-; in:  [ark_nx]/[ark_ny]; out: CF = 1 hit; preserves all registers
+; in:  CX/DX = the candidate position, from ark_move1;
+; out: CF = 1 hit; preserves all registers
 ; -----------------------------------------------------------------------------
 ark_hit_paddle:
     push ax
     push bx
     cmp word [ark_bvy], 0           ; only ever on the way DOWN, or a ball
     jle .no                         ; clipping the side would stick to it
-    mov ax, [ark_ny]
+    mov ax, dx
     add ax, [ark_bsz]
     dec ax
     cmp ax, [ark_pady]
     jl .no
-    mov ax, [ark_ny]
     mov bx, [ark_pady]
     add bx, [ark_ph]
-    cmp ax, bx
+    cmp dx, bx
     jge .no
-    mov ax, [ark_nx]
+    mov ax, cx
     add ax, [ark_bsz]
     dec ax
     cmp ax, [ark_px]
     jl .no
-    mov ax, [ark_nx]
     mov bx, [ark_px]
     add bx, [ark_pw]
-    cmp ax, bx
-    jge .no
-    pop bx
-    pop ax
-    stc
+    cmp cx, bx                      ; CF = 1 is the last test passing - a hit.
+    pop bx                          ; Unsigned, where the others are signed:
+    pop ax                          ; both sides are on-screen x, positive
     ret
 .no:
     pop bx
@@ -2041,12 +1799,12 @@ ark_padbounce:
     cmp byte [ark_catch], 0
     je .bounce
     mov byte [ark_stuck], 1
-    mov word [ark_bvy], 0
-    mov word [ark_bvx], 0
+    xor ax, ax
+    mov [ark_bvy], ax
+    mov [ark_bvx], ax
     mov byte [ark_msg], 1
     mov ax, 520
-    call ark_beep
-    jmp .out
+    jmp .beep
 .bounce:
     mov ax, [ark_vymag]             ; up again at the rally's speed: the
     neg ax                          ; bounce CONTINUES, it does not restart
@@ -2117,17 +1875,17 @@ ark_padbounce:
     mov ax, [ark_zlast]             ; ...then which half of the paddle it hit,
     cmp ax, 2                       ; which is never a tie: zone 2 is the
     jl .minus                       ; middle, so <2 is the left half
-.plus:
-    mov ax, [ark_vxmin]
+.plus:                              ; (BX is -vxmin from the test above)
+    mov ax, bx
+    neg ax
     jmp short .setvx
 .minus:
-    mov ax, [ark_vxmin]
-    neg ax
+    mov ax, bx
 .setvx:
     mov [ark_bvx], ax
     mov ax, 880
+.beep:
     call ark_beep
-.out:
     pop dx
     pop cx
     pop bx
@@ -2136,7 +1894,8 @@ ark_padbounce:
 
 ; -----------------------------------------------------------------------------
 ; ark_hit_brick - is the candidate rect over a live brick? If so, break it
-; in:  [ark_nx]/[ark_ny]; out: CF = 1 hit; preserves all registers
+; in:  CX/DX = the candidate position, as ark_hit_paddle;
+; out: CF = 1 hit; preserves all registers
 ;
 ; Four corners rather than a cell-range walk: the ball is smaller than a brick
 ; in both axes, so the corners are the only cells it can be in.
@@ -2146,44 +1905,31 @@ ark_hit_brick:
     push bx
     push cx
     push dx
-    mov cx, [ark_nx]
-    mov dx, [ark_ny]
+    mov bx, [ark_bsz]               ; BX = the ball's far edge, as an offset:
+    dec bx                          ; ark_cell keeps CX and DX, so the four
+                                    ; corners are walked by adding and taking it
+                                    ; back rather than by re-reading all three
+    call ark_cell                   ; (nx, ny)...
+    jnc .got
+    add cx, bx                      ; (nx+s-1, ny)...
     call ark_cell
     jnc .got
-    mov cx, [ark_nx]
-    add cx, [ark_bsz]
-    dec cx
-    mov dx, [ark_ny]
+    sub cx, bx
+    add dx, bx                      ; (nx, ny+s-1)...
     call ark_cell
     jnc .got
-    mov cx, [ark_nx]
-    mov dx, [ark_ny]
-    add dx, [ark_bsz]
-    dec dx
+    add cx, bx                      ; ...(nx+s-1, ny+s-1)
     call ark_cell
-    jnc .got
-    mov cx, [ark_nx]
-    add cx, [ark_bsz]
-    dec cx
-    mov dx, [ark_ny]
-    add dx, [ark_bsz]
-    dec dx
-    call ark_cell
-    jc .none
+    cmc                             ; CF = 1 is the ANSWER here: hit
+    jnc .out
 .got:
     call ark_break                  ; AX = the cell
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     stc
-    ret
-.none:
+.out:
     pop dx
     pop cx
     pop bx
     pop ax
-    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2212,20 +1958,18 @@ ark_cell:
     div word [ark_bh]               ; AX = row
     cmp ax, [ark_rows]
     jae .none
-    mov bx, ARK_COLS
-    mul bx                          ; AX = row * COLS
+    mov bl, ARK_COLS
+    mul bl                          ; AX = row * COLS: a row is a byte
     add ax, cx
     mov bx, ax
-    cmp byte [ark_grid+bx], 0
-    je .none
+    cmp byte [ark_grid+bx], 1       ; CF = 1 exactly when there is no brick
     pop dx
     pop cx
     pop bx
-    clc
     ret
-.none:
-    pop dx
-    pop cx
+.none:                              ; its own tail and not a jump to the one
+    pop dx                          ; above: this is the COMMON exit, every
+    pop cx                          ; corner of a ball below the wall
     pop bx
     stc
     ret
@@ -2241,18 +1985,24 @@ ark_break:
     push dx
     mov bx, ax
     dec byte [ark_grid+bx]
-    mov byte [ark_dirty+bx], 1
+    mov cl, al                      ; ...and its bit in the dirty map: cell n is
+    and cl, 7                       ; bit (n AND 7) of byte (n / 8)
+    mov dl, 1
+    shl dl, cl
+    mov cl, 3
+    shr bx, cl
+    or [ark_dirty+bx], dl
+    mov bx, ax
     mov byte [ark_stat], 1
     mov ax, 1500                    ; a chipped brick sounds different from a
     cmp byte [ark_grid+bx], 0       ; broken one
     jne .chip
     mov ax, 1900
     call ark_beep
-    dec word [ark_left]
     add word [ark_score], 10
     call ark_maybe_pu
-    cmp word [ark_left], 0
-    jne .out
+    dec word [ark_left]             ; last, so its own flags say "the last one"
+    jnz .out
     call ark_cleared
     jmp .out
 .chip:
@@ -2278,11 +2028,8 @@ ark_maybe_pu:
     push di
     mov di, bx                      ; DI = the cell
     call OSAPI_RAND
-    xor dx, dx
-    mov cx, ARK_PUCHANCE
-    div cx
-    or dx, dx
-    jnz .out
+    test al, ARK_PUCHANCE - 1       ; one in ARK_PUCHANCE: a power of two, so
+    jnz .out                        ; the remainder is the low bits
     xor si, si                      ; a free slot?
 .slot:
     cmp byte [ark_pukind+si], PU_NONE
@@ -2298,25 +2045,25 @@ ark_maybe_pu:
     div cx
     inc dx
     mov [ark_pukind+si], dl
-    mov ax, di                      ; the cell's own position
-    xor dx, dx
-    mov cx, ARK_COLS
-    div cx                          ; AX = row, DX = column
+    mov ax, di                      ; the cell's own position, by a BYTE
+    mov cl, ARK_COLS                ; divide (a cell is under 256): AL = row,
+    div cl                          ; AH = column
+    mov dl, ah
+    mov dh, 0                       ; DX = column
+    mov ah, 0                       ; AX = row
     mov bx, si
     add bx, bx
     push ax
     mov ax, dx
     mul word [ark_bw]
     add ax, [ark_rail]
-    push bx
-    mov bx, [ark_bw]
-    shr bx, 1
-    add ax, bx
-    pop bx
-    sub ax, ARK_PUW / 2
-    add ax, [ark_ox]                ; SPEC.md 44.10.6: gfx_blit1 wants an x on
-    add ax, 4                       ; the BYTE grid, so snap the capsule's -
-    and ax, 0FFF8h                  ; once, at spawn, since it falls straight
+    mov cx, [ark_bw]
+    shr cx, 1
+    add ax, cx                      ; the brick's middle, less half a capsule,
+    add ax, [ark_ox]                ; rounded to the nearest (+4)... SPEC.md
+    sub ax, ARK_PUW / 2 - 4         ; 44.10.6: gfx_blit1 wants an x on the
+    and ax, 0FFF8h                  ; BYTE grid, so snap the capsule's -
+                                    ; once, at spawn, since it falls straight
     sub ax, [ark_ox]                ; down and its x never changes again. At
                                     ; most 4px, on a 12px capsule dropped from
                                     ; a brick 20-odd wide, and the alternative
@@ -2376,12 +2123,11 @@ ark_do_pu:
     jg .next
     mov al, [ark_pukind+si]
     call ark_apply
-    mov byte [ark_pukind+si], PU_NONE
-    mov byte [ark_puwipe+si], 1
-    jmp .next
+    jmp short .gone
 .floor:
     cmp ax, [ark_floor]
     jl .next
+.gone:                              ; caught or lost, one last whole erase
     mov byte [ark_pukind+si], PU_NONE
     mov byte [ark_puwipe+si], 1
 .next:
@@ -2413,8 +2159,9 @@ ark_apply:
     cmp al, PU_SLOW
     je .slow
     cmp al, PU_LIFE
-    je .life
-    jmp .done
+    jne .done
+    inc byte [ark_lives]            ; the heart
+    jmp short .done
 .expand:
     mov ax, [ark_pw]
     add ax, 12
@@ -2441,9 +2188,6 @@ ark_apply:
     jmp .done
 .slow:
     call ark_slower
-    jmp .done
-.life:
-    inc byte [ark_lives]
 .done:
     mov ax, 1046                    ; the catch chime
     call ark_beep
@@ -2467,17 +2211,15 @@ ark_apply:
 ; -----------------------------------------------------------------------------
 ark_slower:
     push ax
-    mov ax, [ark_vyfloor]
-    cmp [ark_vymag], ax
+    mov ax, [ark_vymag]
+    cmp ax, [ark_vyfloor]
     jle .out
-    mov ax, [ark_vyslow]
-    sub [ark_vymag], ax
-    mov ax, [ark_vyfloor]
-    cmp [ark_vymag], ax
+    sub ax, [ark_vyslow]
+    cmp ax, [ark_vyfloor]
     jge .live
-    mov [ark_vymag], ax
+    mov ax, [ark_vyfloor]
 .live:
-    mov ax, [ark_vymag]             ; ...and take the live ball with it, in
+    mov [ark_vymag], ax             ; ...and take the live ball with it, in
     cmp word [ark_bvy], 0           ; whichever direction it is already going
     jge .set
     neg ax
@@ -2538,10 +2280,10 @@ ark_fire:
     mov bx, cx                      ; the left muzzle
     mov ax, [ark_px]
     call ark_bolt
-    mov bx, si                      ; ...and the right
-    mov ax, [ark_px]
+    mov bx, si                      ; ...and the right (ark_bolt kept AX)
     add ax, [ark_pw]
-    sub ax, 2
+    dec ax
+    dec ax
     call ark_bolt
     mov ax, 2200                    ; one beep for the volley, not one each
     call ark_beep
@@ -2612,17 +2354,15 @@ ark_die:
     mov ax, 160                     ; the long low one
     mov cx, 6
     call ark_beep_n
-    dec byte [ark_lives]
+    dec byte [ark_lives]            ; (the MOVs below keep its flags)
     mov byte [ark_stat], 1
     mov word [ark_hold], 12
-    cmp byte [ark_lives], 0
-    jg .again
-    mov byte [ark_mode], M_OVER
+    mov al, M_DEAD
+    jg .set
+    mov al, M_OVER
     mov byte [ark_full], 1
-    jmp .out
-.again:
-    mov byte [ark_mode], M_DEAD
-.out:
+.set:
+    mov [ark_mode], al
     pop cx
     pop ax
     ret
@@ -2632,15 +2372,18 @@ ark_die:
 ; preserves all registers
 ; -----------------------------------------------------------------------------
 ark_respawn:
-    push ax
     call ark_setspeed
-    mov byte [ark_stuck], 1
-    mov byte [ark_catch], 0
-    mov byte [ark_laser], 0
+    call ark_rearm
+    jmp short ark_ready
+
+; ark_rearm - a fresh bat with the ball stuck to it and no power-up live
+; (respawn, the next wall and a level start all begin here); preserves all
+ark_rearm:
+    push ax
+    mov word [ark_stuck], 1         ; [ark_stuck] = 1 and [ark_catch] = 0: the
+    mov byte [ark_laser], 0         ; two bytes are adjacent (see the bss)
     mov ax, [ark_pw0]
     mov [ark_pw], ax
-    mov byte [ark_mode], M_READY
-    mov byte [ark_full], 1
     pop ax
     ret
 
@@ -2659,15 +2402,10 @@ ark_cleared:
     ret
 
 ark_nextwall:
-    push ax
     inc byte [ark_level]
     call ark_setspeed
     call ark_build
-    mov byte [ark_stuck], 1
-    mov byte [ark_catch], 0
-    mov byte [ark_laser], 0
-    mov ax, [ark_pw0]
-    mov [ark_pw], ax
+    call ark_rearm
     call ark_park                   ; PARK THE BALL BEFORE THE WALL IS DRAWN.
                                     ; The wall was cleared by a hit up among
                                     ; the bricks, so that is where the ball
@@ -2678,9 +2416,9 @@ ark_nextwall:
                                     ; the old rect to BACKGROUND, which is a
                                     ; ball-sized hole in a brand new board
                                     ; (SPEC.md 44.10.2)
+ark_ready:                          ; ...and the respawn's tail as well
     mov byte [ark_mode], M_READY
     mov byte [ark_full], 1
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2719,13 +2457,9 @@ ark_beep_n:
 ; both preserve every register and draw nothing
 ; -----------------------------------------------------------------------------
 ark_newgame:
-    push ax
     mov word [ark_score], 0
     mov byte [ark_lives], ARK_LIVES
-    mov byte [ark_level], 1
-    call ark_startlevel
-    pop ax
-    ret
+    mov byte [ark_level], 1         ; ...and on into ark_startlevel
 
 ; ark_startlevel - lay this level out and park the ball (all regs preserved)
 ark_startlevel:
@@ -2738,19 +2472,16 @@ ark_startlevel:
                                     ; start is the one place that is certain to
                                     ; run after every metrics change
     call ark_setspeed               ; AFTER the level is 1: it reads it
-    mov ax, [ark_pw0]
-    mov [ark_pw], ax
+    call ark_rearm
     mov ax, [ark_cwid]              ; the paddle starts centred
     sub ax, [ark_pw]
     shr ax, 1
     mov [ark_px], ax
-    mov byte [ark_catch], 0
-    mov byte [ark_laser], 0
-    mov byte [ark_stuck], 1
     mov byte [ark_mode], M_READY
-    mov word [ark_pkeep], 0
-    mov word [ark_pdn], 0
-    mov word [ark_pspd], 0          ; stopped, before the worker's next tick
+    xor ax, ax
+    mov [ark_pkeep], ax
+    mov [ark_pdn], ax
+    mov [ark_pspd], ax              ; stopped, before the worker's next tick
                                     ; can say so - a key arriving in between
                                     ; would otherwise read as a live hold
     call ark_build
@@ -2761,50 +2492,37 @@ ark_build:
     push ax
     push bx
     push cx
-    push dx
-    xor bx, bx
-    xor cx, cx                      ; CX = live bricks
-.cell:
-    mov ax, bx
-    xor dx, dx
-    push cx
+    push di
+    push es
+    push ds                         ; ES = DS: everything below is a store into
+    pop es                          ; our own bss (DF = 0, SPEC.md 1)
+    mov di, ark_grid
+    xor bx, bx                      ; BX = row
+.row:
+    mov al, 2                       ; the top two rows take two hits...
+    cmp bx, 1
+    jbe .hits
+    mov al, 1                       ; ...the rest one...
+.hits:
+    cmp bx, [ark_rows]
+    jb .fill
+    mov al, 0                       ; ...and a row past this set's count none
+.fill:
     mov cx, ARK_COLS
-    div cx                          ; AX = row
-    pop cx
-    cmp ax, [ark_rows]
-    jae .empty
-    mov dl, 1
-    cmp ax, 1                       ; the top two rows take two hits
-    jg .soft
-    mov dl, 2
-.soft:
-    mov [ark_grid+bx], dl
-    inc cx
-    jmp .step
-.empty:
-    mov byte [ark_grid+bx], 0
-.step:
-    mov byte [ark_dirty+bx], 0
+    rep stosb
     inc bx
-    cmp bx, ARK_CELLS
-    jb .cell
-    mov [ark_left], cx
-    xor bx, bx                      ; nothing in flight
-.clr:
-    mov byte [ark_pukind+bx], PU_NONE
-    mov byte [ark_puwipe+bx], 0
-    inc bx
-    cmp bx, ARK_MAXPU
-    jb .clr
-    xor bx, bx
-.clr2:
-    mov byte [ark_shot+bx], 0
-    mov byte [ark_shwipe+bx], 0
-    inc bx
-    cmp bx, ARK_MAXSHOT
-    jb .clr2
+    cmp bx, ARK_MAXROW
+    jb .row
+    mov ax, [ark_rows]              ; every cell of the live rows is a brick
+    mov cl, ARK_COLS
+    mul cl
+    mov [ark_left], ax
+    mov cx, ARK_CLRUN               ; DI = ark_dirty: the dirty map and nothing
+    xor al, al                      ; in flight, one run (PU_NONE is 0)
+    rep stosb
     mov byte [ark_full], 1
-    pop dx
+    pop es
+    pop di
     pop cx
     pop bx
     pop ax
@@ -2849,11 +2567,8 @@ ark_render:
                                     ; down, and the game is paused underneath
     cmp byte [ark_full], 0
     je .parts
-    mov byte [ark_full], 0
-    mov byte [ark_msg], 0
-    mov byte [ark_stat], 0
-    call ark_draw_all
-    jmp .unlock
+    call ark_draw_full
+    jmp short .unlock
 .parts:
     call ark_wipe_pu
     call ark_wipe_shots
@@ -2902,36 +2617,43 @@ ark_render:
 ; ark_draw_all - the whole content
 ; in:  gfx lock held, origin tracked; preserves all registers
 ; -----------------------------------------------------------------------------
+; ark_draw_full - ark_draw_all, settling every debt a partial frame would
+; have paid: the flags are cleared FIRST, so one the worker raises while the
+; board is being drawn is still standing for the next frame
+ark_draw_full:
+    mov byte [ark_full], 0
+    mov word [ark_stat], 0          ; [ark_stat] and [ark_msg], adjacent bytes
+                                    ; ...and on into ark_draw_all
 ark_draw_all:
     push ax
     push bx
     push cx
     push dx
-    mov al, ARK_BG
-    call OSAPI_SET_COLOR
-    xor ax, ax
-    xor bx, bx
-    mov cx, [ark_cwid]
-    dec cx
-    mov dx, [ark_chgt]
+    mov al, ARK_BG                  ; THE GROUND AROUND THE RAILS AND NOT
+    call OSAPI_SET_COLOR            ; UNDER THEM: it was one fill of the whole
+    xor ax, ax                      ; content and the rails drawn over it,
+    xor bx, bx                      ; every rail pixel written twice
+    mov cx, [ark_cwid]              ; (PERFORMANCE.md rule 2). The status
+    dec cx                          ; strip edge to edge...
+    mov dx, [ark_status]
     dec dx
     call ark_fillc
-    mov al, ARK_RAILCOL             ; the two side rails
-    call OSAPI_SET_COLOR
-    xor ax, ax
-    mov bx, [ark_status]
+    mov bx, [ark_status]            ; ...then the field between the rails,
+    mov dx, [ark_chgt]              ; whose bottom the rails share
+    dec dx
+    mov ax, [ark_rail]
+    sub cx, ax                      ; the last column left of the right rail
+    call ark_fillc
+    mov al, ARK_RAILCOL             ; the two side rails, under the status
+    call OSAPI_SET_COLOR            ; strip and down to the same bottom row
+    xor ax, ax                      ; (BX, DX: ark_fillc keeps all four)
     mov cx, [ark_rail]
     dec cx
-    mov dx, [ark_chgt]
-    dec dx
     call ark_fillc
     mov ax, [ark_cwid]
     sub ax, [ark_rail]
-    mov bx, [ark_status]
     mov cx, [ark_cwid]
     dec cx
-    mov dx, [ark_chgt]
-    dec dx
     call ark_fillc
     call ark_draw_wall
     call ark_draw_paddle
@@ -2953,8 +2675,12 @@ ark_draw_all:
     mov al, [ark_laser]
     mov [ark_olaser], al
     cmp byte [ark_abon], 0          ; the credits sit on top of everything, and
-    je .noab                        ; every full repaint puts them back
-    call ark_abdraw
+    je .noab                        ; every full repaint puts them back - the
+    push si                         ; STANDARD card (SPEC.md 20.5.1), measured
+    mov bx, [ark_win]               ; from the lines and clamped to the content
+    mov si, ark_ablines             ; box, so CGA's narrow field still holds it
+    call os88ui_about_d
+    pop si
 .noab:
     pop dx
     pop cx
@@ -2968,29 +2694,51 @@ ark_draw_all:
 ; -----------------------------------------------------------------------------
 ark_draw_wall:
     push bx
-    xor bx, bx
+    mov bx, ARK_DIRTYB              ; the map is cleared FIRST: the worker breaks
+.clr:                               ; bricks outside the lock, so one broken
+    dec bx                          ; while the wall below is being drawn marks
+    mov byte [ark_dirty+bx], 0      ; itself again and the next frame redraws it
+    jnz .clr                        ; (`mov` writes no flags: the dec's ZF)
 .cell:
-    call ark_draw_brick
-    mov byte [ark_dirty+bx], 0
+    call ark_draw_brick             ; BX = 0 here
     inc bx
     cmp bx, ARK_CELLS
     jb .cell
     pop bx
     ret
 
+; The dirty map is a BIT a cell (ark_break sets them), so a frame with nothing
+; broken reads ARK_DIRTYB bytes and draws nothing, where a byte a cell was
+; sixty compares a frame
 ark_draw_bricks_dirty:
+    push ax
     push bx
-    xor bx, bx
-.cell:
-    cmp byte [ark_dirty+bx], 0
-    je .next
-    mov byte [ark_dirty+bx], 0
+    push si
+    xor si, si
+.byte:
+    mov al, [ark_dirty+si]
+    or al, al
+    jz .next
+    mov byte [ark_dirty+si], 0
+    mov bx, si                      ; BX = this byte's first cell
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+.bit:
+    shr al, 1
+    jnc .skip
     call ark_draw_brick
-.next:
+.skip:
     inc bx
-    cmp bx, ARK_CELLS
-    jb .cell
+    or al, al
+    jnz .bit
+.next:
+    inc si
+    cmp si, ARK_DIRTYB
+    jb .byte
+    pop si
     pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3007,52 +2755,54 @@ ark_draw_brick:
     push cx
     push dx
     push si
+    push di
     mov si, bx
-    mov ax, bx                      ; row and column
-    xor dx, dx
-    mov cx, ARK_COLS
-    div cx
-    mov [ark_dcol], dx
-    mov [ark_drow], ax
+    mov ax, bx                      ; row and column, by a BYTE divide: a cell
+    mov cl, ARK_COLS                ; is under 256, so AL = row and AH = column
+    div cl
+    mov cl, ah
+    mov ch, 0                       ; CX = column
+    mov ah, 0                       ; AX = row
     cmp ax, [ark_rows]
     jae .out
-    mov ax, [ark_dcol]
-    mul word [ark_bw]
-    add ax, [ark_rail]
-    mov [ark_dx], ax
-    mov ax, [ark_drow]
+    mov di, ax                      ; DI = row, for the colour
     mul word [ark_bh]
     add ax, [ark_bricky]
-    mov [ark_dy], ax
+    xchg ax, cx                     ; CX = the brick's top, AX = column
+    mul word [ark_bw]
+    add ax, [ark_rail]              ; AX = its left
+    mov bx, cx                      ; BX = its top
+    push ax
     mov al, ARK_BG                  ; gone: back to background
     cmp byte [ark_grid+si], 0
     je .paint
-    mov bx, [ark_drow]
-    and bx, 7
-    mov al, [ark_rowcol+bx]
+    and di, 7
+    mov al, [ark_rowcol+di]
 .paint:
     call OSAPI_SET_COLOR
-    mov ax, [ark_dx]
-    mov bx, [ark_dy]
+    pop ax
     mov cx, ax
     add cx, [ark_bw]
-    sub cx, 2                       ; 1px of mortar on the right and bottom
+    dec cx                          ; 1px of mortar on the right and bottom
+    dec cx
     mov dx, bx
     add dx, [ark_bh]
-    sub dx, 2
+    dec dx
+    dec dx
     call ark_fillc
     cmp byte [ark_grid+si], 2
     jb .out
+    push ax
     mov al, CWHITE                  ; the "needs another hit" notch
     call OSAPI_SET_COLOR
-    mov ax, [ark_dx]
-    mov bx, [ark_dy]
+    pop ax
     mov cx, ax
-    add cx, 2
-    mov dx, bx
-    inc dx
+    inc cx
+    inc cx
+    lea dx, [bx + 1]
     call ark_fillc
 .out:
+    pop di
     pop si
     pop dx
     pop cx
@@ -3099,6 +2849,8 @@ ark_rsub:
     push bx
     push cx
     push dx
+    push si
+    push di
     mov al, ARK_BG
     call OSAPI_SET_COLOR
     mov ax, [ark_sol]               ; the overlap, or the whole-rect exit
@@ -3125,45 +2877,38 @@ ark_rsub:
 .ovb:
     cmp bx, dx
     jg .whole
-    mov [ark_ovl], ax
-    mov [ark_ovr], cx
-    mov [ark_ovt], bx
-    mov [ark_ovb], dx
-    mov ax, [ark_sol]               ; left of the overlap, full height
-    mov cx, [ark_ovl]
-    dec cx
-    cmp ax, cx
-    jg .right
-    mov bx, [ark_sot]
-    mov dx, [ark_sob]
-    call ark_fillc
-.right:
-    mov ax, [ark_ovr]               ; right of it, full height
-    inc ax
-    mov cx, [ark_sor]
-    cmp ax, cx
-    jg .above
-    mov bx, [ark_sot]
-    mov dx, [ark_sob]
-    call ark_fillc
-.above:
-    mov bx, [ark_sot]               ; above it, between the two
-    mov dx, [ark_ovt]
-    dec dx
-    cmp bx, dx
-    jg .below
-    mov ax, [ark_ovl]
-    mov cx, [ark_ovr]
-    call ark_fillc
-.below:
-    mov bx, [ark_ovb]               ; ...and below it
+    mov si, ax                      ; THE OVERLAP STAYS IN REGISTERS: SI/DI its
+    mov di, cx                      ; left and right, AX/CX the same until a
+    push bx                         ; strip below needs them, its top on the
+                                    ; stack. The four strips are disjoint and
+                                    ; all background, so their order is free:
+    mov bx, dx                      ; below it first, while its bottom is in DX
     inc bx
     mov dx, [ark_sob]
     cmp bx, dx
-    jg .out
-    mov ax, [ark_ovl]
-    mov cx, [ark_ovr]
+    jg .above
+    call ark_fillc                  ; AX/CX = the overlap's columns
+.above:
+    pop dx                          ; ...above it, between the two
+    dec dx
+    mov bx, [ark_sot]
+    cmp bx, dx
+    jg .left
     call ark_fillc
+.left:
+    mov ax, [ark_sol]               ; left of the overlap, full height
+    lea cx, [si - 1]
+    mov bx, [ark_sot]
+    mov dx, [ark_sob]
+    cmp ax, cx
+    jg .right
+    call ark_fillc
+.right:
+    lea ax, [di + 1]                ; right of it, full height
+    mov cx, [ark_sor]
+    cmp ax, cx
+    jg .out
+    call ark_fillc                  ; BX/DX are still the old rect's rows
     jmp short .out
 .whole:
     mov ax, [ark_sol]
@@ -3172,6 +2917,8 @@ ark_rsub:
     mov dx, [ark_sob]
     call ark_fillc
 .out:
+    pop di
+    pop si
     pop dx
     pop cx
     pop bx
@@ -3194,7 +2941,8 @@ ark_muzsub:
     inc bx
     mov [ark_snr], bx
     mov ax, [ark_pady]
-    sub ax, 2
+    dec ax
+    dec ax
     mov [ark_sot], ax
     mov [ark_snt], ax
     inc ax
@@ -3229,23 +2977,19 @@ ark_draw_paddle:
     je .out
     mov al, CLRED                   ; two muzzles: a SHAPE, so an armed paddle
     call OSAPI_SET_COLOR            ; still reads where 12 reduces to white
-    mov ax, [ark_px]
-    mov bx, [ark_pady]
-    sub bx, 2
+    mov bx, [ark_pady]              ; both are the two rows above the bat...
+    lea dx, [bx - 1]
+    dec bx
+    dec bx
+    mov ax, [ark_px]                ; ...two pixels wide at its left end...
     mov cx, ax
     inc cx
-    mov dx, [ark_pady]
-    dec dx
     call ark_fillc
-    mov ax, [ark_px]
-    add ax, [ark_pw]
-    sub ax, 2
-    mov bx, [ark_pady]
-    sub bx, 2
+    add ax, [ark_pw]                ; ...and at its right
+    dec ax
+    dec ax
     mov cx, ax
     inc cx
-    mov dx, [ark_pady]
-    dec dx
     call ark_fillc
 .out:
     pop dx
@@ -3272,15 +3016,15 @@ ark_move_paddle:
     cmp ax, [ark_opx]               ; only the part of the old one it does not
     je .drawn                       ; cover (SPEC.md 44.10)
     call ark_draw_paddle
+    mov cx, [ark_pw]                ; one width for both: a WIDTH change took
+    dec cx                          ; the lane path above
     mov ax, [ark_opx]
     mov [ark_sol], ax
-    add ax, [ark_opw]
-    dec ax
+    add ax, cx
     mov [ark_sor], ax
     mov ax, [ark_px]
     mov [ark_snl], ax
-    add ax, [ark_pw]
-    dec ax
+    add ax, cx
     mov [ark_snr], ax
     mov ax, [ark_pady]              ; the bat's own rows; the muzzles stand
     mov [ark_sot], ax               ; two rows ABOVE them and are their own
@@ -3295,12 +3039,11 @@ ark_move_paddle:
     mov ax, [ark_opx]               ; the body rect covers the muzzle rows at
     mov bx, [ark_px]                ; no x at all, so subtracting them there
     call ark_muzsub                 ; would leave every stale muzzle pixel the
-    mov ax, [ark_opx]               ; move uncovered (SPEC.md 44.10.3)
-    mov bx, [ark_px]
-    add ax, [ark_pw]
-    add bx, [ark_pw]
-    sub ax, 2
-    sub bx, 2
+    dec cx                          ; move uncovered (SPEC.md 44.10.3). CX is
+                                    ; still pw-1 (ark_rsub keeps it), so both
+                                    ; right muzzles are pw-2 along, and
+    add ax, cx                      ; ark_muzsub kept AX and BX
+    add bx, cx
     call ark_muzsub
     jmp short .drawn
 .lane:
@@ -3382,25 +3125,23 @@ ark_move_ball:
                                     ; erasing first writes that overlap
                                     ; background-then-white where the glass can
                                     ; catch it (SPEC.md 44.10)
+    mov cx, [ark_bsz]               ; CX = the far edge's offset, once
+    dec cx
     mov ax, [ark_obx]
     mov [ark_sol], ax
-    add ax, [ark_bsz]
-    dec ax
+    add ax, cx
     mov [ark_sor], ax
     mov ax, [ark_oby]
     mov [ark_sot], ax
-    add ax, [ark_bsz]
-    dec ax
+    add ax, cx
     mov [ark_sob], ax
     mov ax, [ark_bx]
     mov [ark_snl], ax
-    add ax, [ark_bsz]
-    dec ax
+    add ax, cx
     mov [ark_snr], ax
     mov ax, [ark_by]
     mov [ark_snt], ax
-    add ax, [ark_bsz]
-    dec ax
+    add ax, cx
     mov [ark_snb], ax
     call ark_rsub
     mov ax, [ark_oby]               ; did the erase reach the paddle's lane?
@@ -3443,20 +3184,23 @@ ark_draw_pu:
     mov al, [ark_pukind+si]
     cmp al, PU_NONE
     je .next
-    cmp byte [ark_spok], 0          ; SPEC.md 44.10.6: one blit, if the kernel
-    je .slow                        ; carries one (kern_small refuses gfx_blit1
-    call ark_blit_pu                ; outright, SPEC.md 5.4.2)
-    jnc .next                       ; ...and CF=1 means it would not take THIS
-                                    ; band, so fall through and draw it the way
+    call ark_blit_pu                ; SPEC.md 44.10.6: one blit, if the kernel
+    jnc .next                       ; takes it - and CF=1 means it would not
+                                    ; take THIS band, so fall through and draw
+                                    ; it the way
 .slow:                              ; this always did rather than losing it
     mov byte [ark_puband+si], 0     ; ...and SAY SO: this draw lays no vacated
                                     ; strip, so the next frame's ark_wipe_pu
                                     ; owns the erase again (SPEC.md 44.10.6.2)
-    mov al, [ark_pukind+si]
-    mov ah, 0
-    mov di, ax                      ; DI = kind, for the colour/letter tables
+    push bp
     mov bx, si
     add bx, bx                      ; BX = the word-indexed slot
+    mov bp, [ark_pux+bx]            ; BP = x, a VALUE (SS is not DS, SPEC.md 1)
+    mov di, [ark_puy+bx]            ; DI = y
+    mov [ark_puold+bx], di          ; ...and THIS is where it now sits, which
+                                    ; is the only honest thing to erase from
+    mov bl, [ark_pukind+si]         ; BX = kind, for the colour/letter tables
+                                    ; (BH is 0: a slot is a byte)
 
     ; THE BODY FIRST, THEN THE EDGE AS FOUR STRIPS (SPEC.md 44.10.4). This was
     ; a solid black rect over the whole capsule with the body inset into it -
@@ -3466,67 +3210,39 @@ ark_draw_pu:
     ; double-draw flash 44.10 is about; the letter went with it, since the body
     ; fill erased the glyph the frame before had drawn. Five fills, no pixel
     ; written twice, and the letter now lands on a body that is already the
-    ; right colour.
-    mov al, [ark_pucol+di]
+    ; right colour. LEA only does the arithmetic - it touches no memory, so BP
+    ; in it addresses nothing
+    mov al, [ark_pucol+bx]
     call OSAPI_SET_COLOR
-    mov bx, si
-    add bx, bx
-    mov ax, [ark_pux+bx]
-    inc ax
-    mov bx, [ark_puy+bx]
-    inc bx
-    mov cx, ax
-    add cx, ARK_PUW - 3             ; x+1 .. x+PUW-2, y+1 .. y+PUH-2
-    mov dx, bx
-    add dx, ARK_PUH - 3
+    lea ax, [bp + 1]                ; x+1 .. x+PUW-2, y+1 .. y+PUH-2
+    lea bx, [di + 1]
+    lea cx, [bp + ARK_PUW - 2]
+    lea dx, [di + ARK_PUH - 2]
     call ark_fillc
 
     mov al, CBLACK                  ; ...and the 1px edge around it, which a
     call OSAPI_SET_COLOR            ; capsule needs against the background when
-    mov bx, si                      ; its own colour is a light one
-    add bx, bx
-    mov ax, [ark_pux+bx]
-    mov bx, [ark_puy+bx]
-    mov cx, ax
-    add cx, ARK_PUW - 1
-    mov dx, bx                      ; the top row, full width
+    mov ax, bp                      ; its own colour is a light one - and the
+    mov bx, di                      ; mark below is black on the body too, so
+    lea cx, [bp + ARK_PUW - 1]      ; this is the last pen it needs
+    mov dx, di                      ; the top row, full width
     call ark_fillc
-    mov bx, si
-    add bx, bx
-    mov ax, [ark_pux+bx]
-    mov bx, [ark_puy+bx]
-    add bx, ARK_PUH - 1
+    lea bx, [di + ARK_PUH - 1]
+    mov dx, bx                      ; the bottom row, full width (ark_fillc
+    call ark_fillc                  ; keeps AX and CX)
     mov cx, ax
-    add cx, ARK_PUW - 1
-    mov dx, bx                      ; the bottom row, full width
+    lea bx, [di + 1]
+    lea dx, [di + ARK_PUH - 2]      ; the left column, between the two
     call ark_fillc
-    mov bx, si
-    add bx, bx
-    mov ax, [ark_pux+bx]
-    mov bx, [ark_puy+bx]
-    inc bx
-    mov cx, ax
-    mov dx, bx
-    add dx, ARK_PUH - 3             ; the left column, between the two
-    call ark_fillc
-    mov bx, si
-    add bx, bx
-    mov ax, [ark_pux+bx]
-    add ax, ARK_PUW - 1
-    mov bx, [ark_puy+bx]
-    inc bx
-    mov cx, ax
-    mov dx, bx
-    add dx, ARK_PUH - 3             ; ...and the right column
+    lea ax, [bp + ARK_PUW - 1]
+    mov cx, ax                      ; ...and the right column
     call ark_fillc
 
-    mov al, CBLACK                  ; the mark is black on the body, and the
-    call OSAPI_SET_COLOR            ; body fill above left the pen its colour
-    mov bx, si
-    add bx, bx
-    mov cx, [ark_pux+bx]
-    mov dx, [ark_puy+bx]
-    mov al, [ark_puletter+di]
+    mov cx, bp
+    mov dx, di
+    mov bl, [ark_pukind+si]
+    mov bh, 0                       ; BX held a y a moment ago
+    mov al, [ark_puletter+bx]
     or al, al
     jnz .letter
     add cx, (ARK_PUW - ARK_HEARTW) / 2      ; the heart, centred in the body
@@ -3538,11 +3254,7 @@ ark_draw_pu:
     inc dx
     call ark_charc
 .marked:
-
-    mov bx, si                      ; ...and THIS is where it now sits, which
-    add bx, bx                      ; is the only honest thing to erase from
-    mov ax, [ark_puy+bx]
-    mov [ark_puold+bx], ax
+    pop bp
 .next:
     inc si
     cmp si, ARK_MAXPU
@@ -3575,11 +3287,12 @@ ark_blit_pu:
     push bx
     push cx
     push dx
-    push si                         ; the SLOT, and the band pointer spends SI
+    push si
     push di
     push bp
     push es
 
+    mov di, si                      ; DI = the SLOT: the band pointer is SI's
     mov bx, si
     add bx, bx
     mov ax, [ark_puy+bx]            ; DX = rows fallen since it was last drawn
@@ -3589,21 +3302,16 @@ ark_blit_pu:
     ja .no
     mov dx, ax
 
-    mov al, [ark_pukind+si]         ; DI = this kind's band, backed up by the
-    mov ah, 0                       ; rows the erase needs
-    push dx
-    mov cx, ARK_SPH * ARK_SPW
-    mul cx
-    mov di, ax
-    pop dx
-    add di, ark_sprite
-    push dx
-    mov ax, ARK_SPTOP
-    sub ax, dx
-    mov cx, ARK_SPW
-    mul cx
-    add di, ax
-    pop dx
+    mov al, [ark_pukind+di]         ; SI = this kind's band, backed up by the
+    mov cl, ARK_SPH * ARK_SPW       ; rows the erase needs: kind * 36, a BYTE
+    mul cl                          ; multiply, which leaves DX alone...
+    mov si, ax
+    sub si, dx                      ; ...less ARK_SPW (2) bytes a row fallen
+    sub si, dx
+    add si, ARK_SPBASE + ARK_SPTOP * ARK_SPW
+%if ARK_SPW != 2 || ARK_SPH * ARK_SPW > 255
+  %error "ark_blit_pu's band arithmetic assumes a 2-byte stride and a byte-sized sprite"
+%endif
 
     mov ax, [ark_pux+bx]            ; where: the vacated strip's top-left, in
     add ax, [ark_ox]                ; ABSOLUTE coordinates - gfx_blit1 takes no
@@ -3614,7 +3322,7 @@ ark_blit_pu:
     jbe .pen_done                   ; 1bpp adapter - a band there already means
     push ax                         ; lit and unlit - so this is the VGA half
     push bx                         ; only, and mono gets white on black, which
-    mov bl, [ark_pukind+si]         ; is what the reduction gave it anyway
+    mov bl, [ark_pukind+di]         ; is what the reduction gave it anyway
     mov bh, 0
     mov al, [ark_pucol+bx]          ; ink = the capsule's colour...
     mov ah, ARK_BG                  ; ...on background paper, which is CBLACK -
@@ -3626,44 +3334,35 @@ ark_blit_pu:
     add dx, ARK_PUH                 ; DX = rows: the capsule plus the strip
     mov cx, ARK_SPW * 8             ; CX = width, 16 px
     mov bp, ARK_SPW
-    mov si, di
     push ds                         ; ES:SI is the band, and it is OURS: the
     pop es                          ; slot is not an X stub, so nothing puts
                                     ; our segment in ES for us (SPEC.md 20.1)
     call OSAPI_GFX_BLIT1
     jc .no
 
-    pop es                          ; drawn: and THIS is where it now sits,
-    pop bp                          ; which is the only honest thing the next
-    pop di                          ; frame can erase from
-    pop si                          ; SI BEFORE DX - they were pushed dx-then-si
-    pop dx                          ; and the pair was swapped here (SPEC.md
-                                    ; 44.10.6.1): SI came back holding the
-                                    ; caller's DX, so the slot below was junk
-    mov bx, si
-    add bx, bx
-    mov ax, [ark_puy+bx]
-    mov [ark_puold+bx], ax
-    mov byte [ark_puband+si], 1     ; ...and the band it laid carries the erase
+    mov bx, di                      ; drawn: and THIS is where it now sits,
+    add bx, bx                      ; which is the only honest thing the next
+    mov ax, [ark_puy+bx]            ; frame can erase from (the slot rides in
+    mov [ark_puold+bx], ax          ; DI, so it cannot come back swapped with
+                                    ; the caller's DX - SPEC.md 44.10.6.1)
+    mov byte [ark_puband+di], 1     ; ...and the band it laid carries the erase
                                     ; for the strip below it, which is the one
                                     ; thing ark_wipe_pu must not repeat
                                     ; (SPEC.md 44.10.6.2)
-    pop cx
-    pop bx
-    pop ax
     clc
-    ret
-.no:
+.out:
     pop es
     pop bp
     pop di
-    pop si                          ; SI before DX, as above
+    pop si
     pop dx
     pop cx
     pop bx
     pop ax
-    stc
     ret
+.no:                                ; refused, here or by the kernel: the
+    stc                             ; caller draws it the old way
+    jmp short .out
 
 ; -----------------------------------------------------------------------------
 ; ark_pu_compose - build one 1bpp sprite per capsule kind (SPEC.md 44.10.6)
@@ -3695,30 +3394,25 @@ ark_pu_compose:
     push es
     push bp
 
-    mov di, ark_sprite              ; every byte starts as paper
-    mov cx, ARK_SPN * ARK_SPH * ARK_SPW
-    xor al, al
-.zero:
-    mov [di], al
-    inc di
-    loop .zero
+    push ds                         ; every byte starts as paper, and the band
+    pop es                          ; is ours: ES = DS for the store (DF = 0,
+    mov di, ark_sprite              ; SPEC.md 1)
+    mov cx, PU_KINDS * ARK_SPH * ARK_SPW / 2
+    xor ax, ax
+    rep stosw
 
-    mov bp, 1                       ; BP = kind, 1..PU_KINDS
-.kind:
-    mov ax, bp                      ; DI = this kind's first band byte
-    mov bx, ARK_SPH * ARK_SPW
-    mul bx
-    mov di, ax
-    add di, ark_sprite
-    add di, ARK_SPTOP * ARK_SPW     ; ...past the blank rows, at capsule row 0
-
+    mov bp, 1                       ; BP = kind, 1..PU_KINDS, and DI = its
+    mov di, ark_sprite + ARK_SPTOP * ARK_SPW    ; capsule row 0, past the
+.kind:                              ; blank rows - kind 1 is the band's FIRST
+    push di                         ; sprite, PU_NONE having none (ARK_SPBASE)
     mov cx, ARK_PUH - 2             ; the BODY: rows 1..PUH-2, columns 1..10.
-    add di, ARK_SPW                 ; Row 0 and row PUH-1 are the edge and stay
-.body:                              ; paper, as do columns 0 and 11
+.body:                              ; Row 0 and row PUH-1 are the edge and stay
+    add di, ARK_SPW                 ; paper, as do columns 0 and 11
     mov word [di], 0xE07F           ; little-endian: byte 0 = 7Fh (x1..x7),
-    add di, ARK_SPW                 ; byte 1 = E0h (x8..x10)
-    loop .body
+    loop .body                      ; byte 1 = E0h (x8..x10)
+    pop di
 
+    push di
     mov bx, bp                      ; the MARK: a letter, or the heart
     mov al, [ark_puletter+bx]
     or al, al
@@ -3728,11 +3422,12 @@ ark_pu_compose:
 .heart:
     call ark_pu_heart
 .knext:
+    pop di
+    add di, ARK_SPH * ARK_SPW       ; ...and the next kind's row 0
     inc bp
     cmp bp, ARK_SPN
     jb .kind
 
-    mov byte [ark_spok], 1
     pop bp
     pop es
     pop di
@@ -3744,21 +3439,16 @@ ark_pu_compose:
     ret
 
 ; -----------------------------------------------------------------------------
-; ark_pu_letter - clear the letter's pixels out of kind BP's body
-; in:  AL = the character, BP = kind; preserves all registers
+; ark_pu_letter - clear the letter's pixels out of one kind's body
+; in:  AL = the character, DI = that kind's capsule row 0
+; clobbers AX/BX/CX/DX/SI/DI/ES: ark_pu_compose is its only caller, and it
+; banks all of them
 ;
 ; The glyph comes from OSAPI_FONT_GLYPHS - the SAME table OSAPI_FONT_CHAR draws
 ; from, which is the point: no second typeface, and it works on all three
 ; adapters. It answers ES = DX, and the table is NOT in KERNEL_SEG.
 ; -----------------------------------------------------------------------------
 ark_pu_letter:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
     mov bl, al                      ; bank the character: FONT_GLYPHS returns
     call OSAPI_FONT_GLYPHS          ; the range in AL/AH and the table in DX:SI
     cmp bl, al
@@ -3776,91 +3466,51 @@ ark_pu_letter:
     mul bx
     add si, ax                      ; SI = this glyph's first row
 
-    mov ax, bp                      ; DI = kind BP's capsule row 1
-    mov bx, ARK_SPH * ARK_SPW
-    mul bx
-    mov di, ax
-    add di, ark_sprite
-    add di, (ARK_SPTOP + 1) * ARK_SPW
-
-    mov cx, 8                       ; eight glyph rows onto body rows 1..8
-.row:
-    mov al, [es:si]                 ; the glyph row, bit 7 leftmost
-    inc si
-    mov ah, 0
-    push cx
+    add di, ARK_SPW                 ; DI = capsule row 1
+    mov dx, 8                       ; eight glyph rows onto body rows 1..8
     mov cl, 6                       ; column c sits at capsule x = 2+c, and a
-    shl ax, cl                      ; word here has x0 in bit 15 - so bit
-    pop cx                          ; (7-c) has to reach bit (13-c): shift 6
+.row:                               ; word here has x0 in bit 15 - so bit
+    es lodsb                        ; (7-c) has to reach bit (13-c): shift 6
+    mov ah, 0
+    shl ax, cl
     xchg al, ah                     ; ...and the band is little-endian bytes
     not ax
     and [di], ax                    ; the mark CLEARS body bits
     add di, ARK_SPW
-    loop .row
+    dec dx
+    jnz .row
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; ark_pu_heart - the same, from ark_heartrun's horizontal runs
-; in:  BP = kind; preserves all registers
+; in:  DI = the kind's capsule row 0; clobbers AX/BX/CX/SI/DI, as above
 ; -----------------------------------------------------------------------------
 ark_pu_heart:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov ax, bp
-    mov bx, ARK_SPH * ARK_SPW
-    mul bx
-    mov di, ax
-    add di, ark_sprite              ; ...at the row the heart is centred on
-    add di, (ARK_SPTOP + (ARK_PUH - ARK_HEARTH) / 2) * ARK_SPW
+    add di, ((ARK_PUH - ARK_HEARTH) / 2) * ARK_SPW  ; the row it is centred on
     mov si, ark_heartrun
-    mov dx, ARK_HEARTH
 .row:
-    mov cx, 2                       ; two run slots a row; 0xFF ends them
+    mov ch, 2                       ; two run slots a row; 0xFF ends them
 .run:
-    mov al, [si]
+    lodsw                           ; AL..AH inclusive, in heart columns
     cmp al, 0xFF
     je .rend
-    mov ah, [si+1]                  ; AL..AH inclusive, in heart columns
 .px:
-    push cx
-    push ax
-    mov bl, al
-    add bl, (ARK_PUW - ARK_HEARTW) / 2  ; ...into capsule columns
-    mov cl, bl
-    mov ax, 0x8000                  ; x0 is bit 15
-    shr ax, cl
-    xchg al, ah                     ; ...and the band is little-endian bytes
-    not ax
-    and [di], ax
-    pop ax
-    pop cx
+    mov cl, al
+    add cl, (ARK_PUW - ARK_HEARTW) / 2  ; ...into capsule columns
+    mov bx, 0x7FFF                  ; x0 is bit 15, and this is its COMPLEMENT
+    ror bx, cl                      ; rotated, so the hole travels alone
+    xchg bl, bh                     ; ...and the band is little-endian bytes
+    and [di], bx
     inc al
     cmp al, ah
     jbe .px
 .rend:
-    add si, 2
-    loop .run
+    dec ch
+    jnz .run
     add di, ARK_SPW
-    dec dx
-    jnz .row
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    cmp si, ark_heartend
+    jb .row
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3891,8 +3541,9 @@ ark_wipe_pu:
                                     ; band was built to remove, moved one
                                     ; routine over.
                                     ; PER SLOT AND SET BY THE DRAW THAT
-                                    ; HAPPENED, never by ark_spok: that byte
-                                    ; only says a band is worth offering, and a
+                                    ; HAPPENED, never by a "bands composed"
+                                    ; byte (ark_spok, until size pass 1): that
+                                    ; only said a band was worth offering, and a
                                     ; kernel that refuses every one of them
                                     ; (kern_small has no gfx_blit1 at all) left
                                     ; this erase to nobody and streaked two rows
@@ -3948,17 +3599,14 @@ ark_draw_shots:
     je .next
     mov bx, si
     add bx, bx
+    mov ax, [ark_shy+bx]            ; where it now sits, for the erase
+    mov [ark_shold+bx], ax
     mov ax, [ark_shx+bx]
     mov bx, [ark_shy+bx]
     mov cx, ax
     inc cx
-    mov dx, bx
-    add dx, 5
+    lea dx, [bx + 5]
     call ark_fillc
-    mov bx, si                      ; where it now sits, for the erase
-    add bx, bx
-    mov ax, [ark_shy+bx]
-    mov [ark_shold+bx], ax
 .next:
     inc si
     cmp si, ARK_MAXSHOT
@@ -3992,8 +3640,7 @@ ark_wipe_shots:
     mov bx, [ark_shold+bx]
     mov cx, ax
     inc cx
-    mov dx, bx
-    add dx, 5
+    lea dx, [bx + 5]
     call ark_fillc
 .next:
     inc si
@@ -4036,14 +3683,10 @@ ARK_SFW     equ 8                   ; the score field, in CELLS: 8 digits is
 ARK_LFW     equ 6                   ; ...and the level field, 'LV' + 4
 
 ark_status_all:
-    push ax
     mov word [ark_oscore], 0xFFFF   ; nothing on the glass matches these, so
-    mov byte [ark_olevel], 0xFF     ; every field below redraws
-    mov byte [ark_olives], 0xFF
-    call ark_draw_status
-    pop ax
-    ret
-
+    mov word [ark_olevel], 0xFFFF   ; every field below redraws (ark_olevel and
+                                    ; ark_olives are adjacent bytes) - and on
+                                    ; into ark_draw_status itself
 ark_draw_status:
     push ax
     push bx
@@ -4051,28 +3694,29 @@ ark_draw_status:
     push dx
     push si
     push di
+    push bp
 
-    mov ax, [ark_status]            ; the text baseline, centred in the strip
-    sub ax, 8
-    shr ax, 1
-    mov [ark_texty], ax
+    mov bp, [ark_status]            ; BP = the text baseline, centred in the
+    sub bp, 8                       ; strip: a VALUE, for LEA (SPEC.md 1)
+    shr bp, 1
 
     mov ax, [ark_score]             ; --- the score, left, in ARK_SFW cells ---
     cmp ax, [ark_oscore]
     je .lives
     mov [ark_oscore], ax
-    call ark_num2str
-    mov si, [ark_numptr]
-    mov di, ark_sbuf
+    mov di, ark_sbuf + ARK_SFW      ; the digits at the field's END, then
+    call ark_num2str                ; slid to its start by ark_padl - a copy
+    mov si, di                      ; forward with the source ahead of the
+    mov di, ark_sbuf                ; destination, so nothing is read after
+                                    ; it is written
     mov cx, ARK_SFW
     call ark_padl                   ; left in the field, spaces after
     mov si, ark_sbuf
     mov cx, 8                       ; a multiple of 8, because the window's own
-    mov dx, [ark_texty]             ; origin is (WF_SNAP is the default) - and
+    mov dx, bp                      ; origin is (WF_SNAP is the default) - and
                                     ; 8 rather than 0, which is legal and sits
                                     ; flush against the frame
-    mov al, CWHITE
-    mov ah, ARK_BG
+    mov ax, CWHITE | (ARK_BG << 8)
     call ark_runc
 
 .lives:
@@ -4088,38 +3732,31 @@ ark_draw_status:
 .livesn:
     mov al, CLGREEN
     call OSAPI_SET_COLOR
-    xor si, si
-    jcxz .livesx
+    mov ax, [ark_cwid]              ; AX = slot 0's left x, the slots 8px
+    shr ax, 1                       ; apart from there
+    sub ax, 16
+    lea bx, [bp + 3]                ; ...and every slot is these two rows
+    lea dx, [bp + 4]
 .life:
-    call ark_lifex                  ; SI -> AX = that slot's left x
-    mov bx, [ark_texty]
-    add bx, 3
+    jcxz .livesx
     push cx
     mov cx, ax
     add cx, 5
-    mov dx, bx
-    add dx, 1
     call ark_fillc
     pop cx
-    inc si
-    cmp si, cx
-    jb .life
+    add ax, 8
+    dec cx
+    jmp short .life
 .livesx:
-    cmp si, ARK_LIVEMAX             ; ...and the slots that are no longer used,
-    jae .level                      ; erased in ONE fill from the first free
-    mov al, ARK_BG                  ; one to the end: drawing the live ones and
-    call OSAPI_SET_COLOR            ; then erasing past them writes no pixel
-    call ark_lifex                  ; twice, where blanking the band first
-    mov bx, [ark_texty]             ; would have flashed the ones that stayed
-    add bx, 3
-    push ax
-    mov si, ARK_LIVEMAX - 1
-    call ark_lifex
-    mov cx, ax
-    add cx, 5
+    mov cx, [ark_cwid]              ; ...and the slots that are no longer used,
+    shr cx, 1                       ; erased in ONE fill from the first free
+    add cx, 8 * (ARK_LIVEMAX - 1) + 5 - 16  ; one to the end of the last: none
+    cmp ax, cx                      ; left when every slot is lit. Drawing the
+    jg .level                       ; live ones and then erasing past them
+    push ax                         ; writes no pixel twice, where blanking the
+    mov al, ARK_BG                  ; band first would have flashed the ones
+    call OSAPI_SET_COLOR            ; that stayed
     pop ax
-    mov dx, bx
-    add dx, 1
     call ark_fillc
 
 .level:
@@ -4128,25 +3765,26 @@ ark_draw_status:
     je .out
     mov [ark_olevel], al
     mov ah, 0
+    mov di, ark_lbuf                ; 'LV' then the number, right-aligned in
+    mov cx, ARK_LFW                 ; the field so the digits sit at its end:
+.lsp:                               ; spaces, the digits written backwards from
+    mov byte [di], ' '              ; the field's end, and 'LV' in front of the
+    inc di                          ; first one. A level is a byte, so three
+    loop .lsp                       ; digits and the two letters always fit
     call ark_num2str
-    mov si, ark_s_lv                ; 'LV' then the number, right-aligned in
-    mov di, ark_lbuf                ; the field so the digits sit at its end
-    call ark_strcpy
-    mov si, [ark_numptr]
-    call ark_strcpy
-    mov byte [di], 0
+    mov word [di - 2], 'LV'
     mov si, ark_lbuf
-    mov di, ark_lbuf2
-    mov cx, ARK_LFW
-    call ark_padr
-    mov si, ark_lbuf2
-    call ark_lvx
-    mov cx, ax
-    mov dx, [ark_texty]
-    mov al, CWHITE
-    mov ah, ARK_BG
-    call ark_runc
+    mov cx, [ark_cwid]              ; the pen: the right end of the strip,
+    sub cx, ARK_LFW * 8             ; rounded DOWN to a multiple of 8 (SPEC.md
+    and cx, ~7                      ; 44.10.5), DERIVED here rather than kept:
+    jns .lvx                        ; [ark_cwid] is computed by ark_entry
+    xor cx, cx                      ; AFTER ark_metrics and again on every
+.lvx:                               ; resize, so a copy taken in the metrics
+    mov dx, bp                      ; reads a width that does not exist yet.
+    mov ax, CWHITE | (ARK_BG << 8)  ; A screen too narrow for the field gets
+    call ark_runc                   ; the left edge, and the padding still erases
 .out:
+    pop bp
     pop di
     pop si
     pop dx
@@ -4156,112 +3794,32 @@ ark_draw_status:
     ret
 
 ; -----------------------------------------------------------------------------
-; ark_lifex - the left x of life slot SI
-; out: AX; preserves every other register
-; -----------------------------------------------------------------------------
-ark_lifex:
-    push bx
-    mov ax, [ark_cwid]
-    shr ax, 1
-    sub ax, 16
-    mov bx, si
-    add bx, bx
-    add bx, bx
-    add bx, bx                      ; 8px apart
-    add ax, bx
-    pop bx
-    ret
-
-; -----------------------------------------------------------------------------
-; ark_strcpy - append the NUL string at SI to DI, leaving DI on its NUL
-; ark_padl   - copy SI into DI left-aligned in a CX-cell field, space padded
-; ark_padr   - ...and right-aligned. Both NUL-terminate.
-; all preserve every register but DI, which ark_strcpy advances
+; ark_padl - copy SI into DI left-aligned in a CX-cell field, space padded and
+;            NUL-terminated; the string must fit. Preserves every register.
 ;
 ; The padding is what makes the field opaque: a space paints background on
 ; OSAPI_FONT_RUN's fast path, so a field that got SHORTER erases the cells it
 ; gave up in the same pass that letters the rest, and never blanks.
 ; -----------------------------------------------------------------------------
-ark_strcpy:
-    push ax
-.c:
-    mov al, [si]
-    or al, al
-    jz .done
-    mov [di], al
-    inc si
-    inc di
-    jmp short .c
-.done:
-    mov byte [di], 0
-    pop ax
-    ret
-
 ark_padl:
     push ax
     push cx
     push si
     push di
 .c:
-    mov al, [si]
+    lodsb
     or al, al
-    jz .pad
+    jnz .put
+    dec si                          ; parked on the NUL: every cell after it
+    mov al, ' '                     ; reads the NUL again and pads
+.put:
     mov [di], al
-    inc si
     inc di
-    dec cx
-    jnz .c
-    jmp short .end
-.pad:
-    mov byte [di], ' '
-    inc di
-    dec cx
-    jnz .pad
-.end:
+    loop .c
     mov byte [di], 0
     pop di
     pop si
     pop cx
-    pop ax
-    ret
-
-ark_padr:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
-    push si                         ; how long is it?
-    xor bx, bx
-.len:
-    cmp byte [si], 0
-    je .lend
-    inc si
-    inc bx
-    jmp short .len
-.lend:
-    pop si
-    sub cx, bx                      ; that many spaces in front of it
-    jbe .copy
-.pad:
-    mov byte [di], ' '
-    inc di
-    dec cx
-    jnz .pad
-.copy:
-    mov al, [si]
-    or al, al
-    jz .end
-    mov [di], al
-    inc si
-    inc di
-    jmp short .copy
-.end:
-    mov byte [di], 0
-    pop di
-    pop si
-    pop cx
-    pop bx
     pop ax
     ret
 
@@ -4290,21 +3848,18 @@ ark_msgh:
 ; out: AX = content y; preserves all other registers
 ; -----------------------------------------------------------------------------
 ark_msgy:
-    push bx
     push dx
     mov ax, [ark_rows]
     mul word [ark_bh]
     add ax, [ark_bricky]
-    mov bx, [ark_pady]
-    add ax, bx
+    add ax, [ark_pady]
     shr ax, 1                       ; the middle of the open play area...
     mov dx, ax
     call ark_msgh                   ; ...less half of what is about to sit on it
     shr ax, 1
     sub dx, ax
-    mov ax, dx
+    xchg ax, dx
     pop dx
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -4340,21 +3895,12 @@ ark_draw_msg:
     push cx
     push dx
     push si
-    mov si, ark_s_ready
-    mov al, [ark_mode]
-    cmp al, M_READY
-    je .have
-    mov si, ark_s_pause
-    cmp al, M_PAUSE
-    je .have
-    mov si, ark_s_over
-    cmp al, M_OVER
-    je .have
-    mov si, ark_s_clear
-    cmp al, M_CLEAR
-    je .have
-    jmp .out
-.have:
+    mov bl, [ark_mode]              ; the banner each mode shows, 0 for none
+    mov bh, 0
+    add bx, bx
+    mov si, [ark_msgtab+bx]
+    or si, si
+    jz .out
     mov al, CYELLOW
     call OSAPI_SET_COLOR
     call ark_msgy
@@ -4431,16 +3977,14 @@ ark_draw_msgband:
     ret
 
 ; -----------------------------------------------------------------------------
-; ark_num2str - an unsigned word as decimal, NUL-terminated
-; in:  AX = value; out: [ark_numptr] -> the first digit; preserves all
-;      registers
+; ark_num2str - an unsigned word as decimal, NUL-terminated, written BACKWARDS
+; in:  AX = value, DI = where the NUL goes; out: DI = the first digit;
+;      preserves every other register
 ; -----------------------------------------------------------------------------
 ark_num2str:
     push ax
     push bx
     push dx
-    push di
-    mov di, ark_numbuf + 7
     mov byte [di], 0
     mov bx, 10
 .dig:
@@ -4451,18 +3995,16 @@ ark_num2str:
     mov [di], dl
     or ax, ax
     jnz .dig
-    mov [ark_numptr], di
-    pop di
     pop dx
     pop bx
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; ark_fillc / ark_framec / ark_textc / ark_charc - the four primitives, in
-; CONTENT coordinates. Everything above measures from the content origin; only
-; these four add it.
-; ark_fillc/framec: AX = x1, BX = y1, CX = x2, DX = y2 (inclusive)
+; ark_fillc / ark_textc / ark_charc / ark_runc - the primitives, in CONTENT
+; coordinates. Everything above measures from the content origin; only these
+; add it.
+; ark_fillc:        AX = x1, BX = y1, CX = x2, DX = y2 (inclusive)
 ; ark_textc:        SI = string, CX = x, DX = y
 ; ark_charc:        AL = char,   CX = x, DX = y
 ; all preserve every register
@@ -4499,65 +4041,28 @@ ark_heart:
     push dx
     push si
     push di
-    push bp
     mov di, cx                      ; DI = left x
-    mov bp, dx                      ; BP = this row's y. A VALUE and never an
-                                    ; address: SS is not DS (SPEC.md 1)
+    mov bx, dx                      ; BX = this row's y
     mov si, ark_heartrun
-.row:
-    call ark_hrun                   ; a row is two runs, the second optional
-    inc si
-    inc si
-    call ark_hrun
-    inc si
-    inc si
-    inc bp
-    cmp si, ark_heartend
-    jb .row
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; one run of the heart: SI -> x1,x2 (x1 = 0xFF means there is none),
-; DI = left x, BP = the row's y; preserves all registers
-ark_hrun:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov al, [si]
+.run:
+    lodsw                           ; AL = x1, AH = x2 (x1 = 0xFF: no run)
     cmp al, 0xFF
-    je .out
-    mov ah, 0
-    add ax, di                      ; AX = x1
-    mov cl, [si+1]
+    je .skip
+    mov cl, ah
     mov ch, 0
     add cx, di                      ; CX = x2
-    mov bx, bp                      ; BX = y1, DX = y2: one row tall
-    mov dx, bp
+    mov ah, 0
+    add ax, di                      ; AX = x1
+    mov dx, bx                      ; one row tall
     call ark_fillc
-.out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-ark_framec:
-    push ax
-    push bx
-    push cx
-    push dx
-    add ax, [ark_ox]
-    add cx, [ark_ox]
-    add bx, [ark_oy]
-    add dx, [ark_oy]
-    call OSAPI_GFX_FRAME
+.skip:
+    test si, 2                      ; a row is TWO runs, four bytes, and the
+    jnz .run                        ; table is aligned to them - so SI is on a
+    inc bx                          ; multiple of 4 exactly at a row's end
+    cmp si, ark_heartend
+    jb .run
+    pop di
+    pop si
     pop dx
     pop cx
     pop bx
@@ -4620,7 +4125,7 @@ ark_mi_game: dw ark_s_new, ark_s_pcmd
 ark_s_new:   db 'New Game', 0
 ark_s_pcmd:  db 'Pause', 0
 
-ark_ttl:     db 'Arkanoid', 0
+ark_ttl     equ ark_m_name          ; the title IS the menu's name: one string
 ark_s_ready: db 'SPACE TO SERVE', 0
 ark_s_pause: db 'PAUSED', 0
 ark_s_over:  db 'GAME OVER', 0
@@ -4631,11 +4136,19 @@ ark_s_overn: db 'N - NEW GAME', 0   ; the second line of the game-over banner,
                                     ; been cut off rather than for the key that
                                     ; starts the next game
 ark_s_clear: db 'WALL CLEARED', 0
-ark_s_lv:    db 'LV', 0
+ark_msgtab:                         ; ark_draw_msg's, indexed by M_*
+    dw ark_s_ready                  ; M_READY
+    dw 0                            ; M_PLAY
+    dw 0                            ; M_DEAD
+    dw ark_s_over                   ; M_OVER
+    dw ark_s_pause                  ; M_PAUSE
+    dw ark_s_clear                  ; M_CLEAR
+%if M_READY != 0 || M_PLAY != 1 || M_DEAD != 2 || M_OVER != 3 || M_PAUSE != 4 || M_CLEAR != 5
+  %error "ark_msgtab is indexed by the M_* values in this order"
+%endif
 
 ; The credits. Kept to 21 characters a line because CGA's metric set gives a
 ; 206px content (SPEC.md 44.6) and 21 glyphs plus the margins is what fits it.
-ARK_ABLH equ 10                     ; line pitch, px (8px glyphs + 2 of air)
 ark_ablines:
     dw ark_ab1, ark_ab2, ark_ab3, ark_ab4, ark_ab5, 0
 ark_ab1:     db 'Arkanoid for os8088', 0
@@ -4645,14 +4158,6 @@ ark_ab4:     db 'Contributed by', 0  ; two lines rather than one because the
 ark_ab5:     db 'Elendilon', 0       ; whole credit is 24 glyphs and this
                                      ; window's CGA content holds 21
 
-; What each fifth of the paddle ADDS to the ball's existing vx. Not a velocity
-; to replace it with: replacing is what made the bounce feel arbitrary, because
-; a ball arriving steeply from the left and one drifting in from the right left
-; the paddle identically if they landed in the same zone.
-; The five paddle zones' vx contribution, BIG-metric. ark_scale_vel copies it
-; into ark_zbq scaled for the adapter, and the bounce reads that copy - this
-; table is never read at play time.
-ark_zbias:   dw -2*ARK_VQ, -1*ARK_VQ, 0, 1*ARK_VQ, 2*ARK_VQ
 
 ; Brick colours by row. Not free choices: every one is drawn on the BLACK
 ; background, so none of them may fall in SPEC.md 39.4's black class (0..6) or
@@ -4673,7 +4178,8 @@ ark_puletter: db 0, 'E', 'C', 'L', 'S', 0   ; 0 = not a letter (the heart)
 ; round. Runs and not a bitmap walk because ark_fillc is what this module
 ; already has, and six fills is cheaper than 42 pixel calls on a 4.77MHz
 ; machine.
-ark_heartrun:
+    align 4, db 0                   ; ark_heart reads a row's end off SI's
+ark_heartrun:                       ; low bits
     db 1,2,  4,5                    ; .##.##.
     db 0,6,  0xFF, 0                ; #######
     db 0,6,  0xFF, 0                ; #######
@@ -4698,6 +4204,12 @@ ark_met_big:                        ; VGA 640x480 and Hercules 720x348
     dw ARK_BW_BIG, 10, 6, ARK_RAIL_BIG, 14, 10, 44, 6, 4, 18, ARK_CHW_BIG, 100
 ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
     dw ARK_BW_SML,  7, 5, ARK_RAIL_SML, 11,  5, 34, 4, 3, 13, ARK_CHW_SML,  37
+
+; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
+%define OS88UI_ABOUT            ; the standard About card, and NOTHING else: a
+%define OS88UI_NOBTN            ; brick-breaker draws no standard button
+%define OS88UI_ABDONLY          ; painter only: ark_clipdraw calls os88ui_about_d
+%include "os88ui.inc"
 
 ; =============================================================================
 ; .bss (SPEC.md 20.5: the loader zeroes ARK_BSS bytes after the image, and
@@ -4762,7 +4274,6 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
     AWORD ark_dock
     AWORD ark_ox
     AWORD ark_oy
-    AWORD ark_texty
 
 ; --- the game -----------------------------------------------------------------
     AWORD ark_win
@@ -4792,19 +4303,16 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
     ABYTE ark_wasmode               ; what Pause interrupted
     ABYTE ark_lives
     ABYTE ark_level
-    ABYTE ark_stuck                 ; the ball is parked on the paddle
-    ABYTE ark_catch
+    ABYTE ark_stuck                 ; the ball is parked on the paddle - and
+    ABYTE ark_catch                 ; ark_rearm sets these two as ONE word
     ABYTE ark_laser
     ABYTE ark_launch                ; Space, set by the UI task
     ABYTE ark_hired                 ; the worker exists
     ABYTE ark_full                  ; the next frame must repaint everything
     ABYTE ark_abon                  ; 1 = it is up, and the worker draws nothing
-    AWORD ark_abw                   ; the credit panel's measured width, height,
-    AWORD ark_abh                   ; left and top - content coords, all four
-    AWORD ark_abl                   ; settled by ark_abmeas before a pixel of
-    AWORD ark_abt                   ; it is drawn
     ABYTE ark_stat                  ; ...or at least the status strip
-    ABYTE ark_msg                   ; ...or at least the banner
+    ABYTE ark_msg                   ; ...or at least the banner (ark_draw_full
+                                    ; clears these two as ONE word)
     ABYTE ark_padwipe
     ABYTE ark_olaser                ; whether the bat on the glass has muzzles
 
@@ -4826,43 +4334,32 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
     AWORD ark_snt
     AWORD ark_snr
     AWORD ark_snb
-    AWORD ark_ovl                   ; ...and their overlap, which is the only
-    AWORD ark_ovt                   ; part of the old rect that must NOT be
-    AWORD ark_ovr                   ; erased
-    AWORD ark_ovb
-    AWORD ark_nx                    ; the candidate position ark_move1 tests
-    AWORD ark_ny
-    AWORD ark_adx                   ; the Bresenham walk
-    AWORD ark_ady
-    AWORD ark_sx
-    AWORD ark_sy
-    AWORD ark_err
-    AWORD ark_nstep
+    AWORD ark_sx                    ; the Bresenham walk's two signs (the
+    AWORD ark_sy                    ; rest of it is in registers)
 
 ; --- the worker's frame clock -------------------------------------------------
     AWORD ark_due                   ; [ticks] the next frame is due at
 
 ; --- drawing scratch ----------------------------------------------------------
-    AWORD ark_dx
-    AWORD ark_dy
-    AWORD ark_drow
-    AWORD ark_dcol
-    AWORD ark_tmpa
-    AWORD ark_tmpb
-    AWORD ark_numptr
-    ABUF  ark_numbuf, 8
     AWORD ark_oscore                ; the three status fields as they are ON
     ABYTE ark_olevel                ; THE GLASS, so a frame that changed none
     ABYTE ark_olives                ; of them draws nothing (SPEC.md 44.10.5)
     ABUF  ark_sbuf, ARK_SFW + 1     ; the padded score...
-    ABUF  ark_lbuf, ARK_LFW + 1     ; ...and the level, composed then padded
-    ABUF  ark_lbuf2, ARK_LFW + 1
+    ABUF  ark_lbuf, ARK_LFW + 1     ; ...and the level, composed in place
 
 ; --- the board and everything in flight ---------------------------------------
     ABUF  ark_grid,  ARK_CELLS      ; hits left in each brick, 0 = gone
-    ABUF  ark_dirty, ARK_CELLS      ; ...and which ones need redrawing
+ARK_DIRTYB equ (ARK_CELLS + 7) / 8
+    ABUF  ark_dirty, ARK_DIRTYB     ; ...and which ones need redrawing, a BIT
+                                    ; a cell. The grid must stay right before
+                                    ; it and the five below must follow it:
+                                    ; ark_build fills the grid and then clears
+                                    ; ARK_CLRUN bytes from here with one run
     ABUF  ark_pukind, ARK_MAXPU
     ABUF  ark_puwipe, ARK_MAXPU
+    ABUF  ark_shot, ARK_MAXSHOT
+    ABUF  ark_shwipe, ARK_MAXSHOT
+ARK_CLRUN equ ARK_DIRTYB + 2 * ARK_MAXPU + 2 * ARK_MAXSHOT
     ABUF  ark_puband, ARK_MAXPU     ; 1 = THIS SLOT'S LAST DRAW WAS A BAND, so
                                     ; the strip it vacated is already erased and
                                     ; ark_wipe_pu must not erase it again
@@ -4870,30 +4367,12 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
                                     ; that HAPPENED - set by ark_blit_pu's
                                     ; success path, cleared by ark_draw_pu's
                                     ; .slow - and never by the offer that was
-                                    ; made, which is the whole distinction
-                                    ; ark_spok could not carry
+                                    ; made
     ABUF  ark_pux, ARK_MAXPU*2
     ABUF  ark_puy, ARK_MAXPU*2
     ABUF  ark_puold, ARK_MAXPU*2
-    ABUF  ark_sprite, ARK_SPN * ARK_SPH * ARK_SPW   ; SPEC.md 44.10.6
-    ABYTE ark_spok                  ; 1 = the sprites are composed, so a band is
-                                    ; worth OFFERING. ark_draw_pu reads this and
-                                    ; NOTHING ELSE DOES: it does not say the
-                                    ; kernel will TAKE the band - a kern_small
-                                    ; kernel refuses gfx_blit1 outright
-                                    ; (SPEC.md 5.4.2) - so the wipe cannot be
-                                    ; driven from it, and ark_puband above is
-                                    ; what the wipe reads instead
-                                    ; (SPEC.md 44.10.6.2).
-                                    ; It is not latched off on a refusal,
-                                    ; because the other two refusals are
-                                    ; per-frame and latching would strand the
-                                    ; capsule on the slow path for the rest of
-                                    ; the level. A refused blit costs one far
-                                    ; call, which is nothing against the six
-                                    ; fills behind it
-    ABUF  ark_shot, ARK_MAXSHOT
-    ABUF  ark_shwipe, ARK_MAXSHOT
+    ABUF  ark_sprite, PU_KINDS * ARK_SPH * ARK_SPW  ; SPEC.md 44.10.6
+ARK_SPBASE equ ark_sprite - ARK_SPH * ARK_SPW   ; ...indexed by KIND, 1 first
     ABUF  ark_shx, ARK_MAXSHOT*2
     ABUF  ark_shy, ARK_MAXSHOT*2
     ABUF  ark_shold, ARK_MAXSHOT*2

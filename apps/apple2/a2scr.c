@@ -390,24 +390,31 @@ static void a2_dirty_split(void)
 static int ovl_a2_dirty_range(unsigned lo, unsigned hi)
 {
     int r, s, any;
-    unsigned b, l;
+    unsigned b;
 
+    /* NESTED TESTS AND A RUNNING LINE ADDRESS (apps size pass 1): `&&` is
+     * two compares made into values and tested, and `s << 10` is ten
+     * `shl ax, 1` in this lowering, where `b += $400` is one add. */
     any = 0;
     for (r = 0; r < A2_ROWS; r++) {
         b = a2_row_base(r);
         if (a2_row_mode(r) == A2_MODE_HIRES) {
             for (s = 0; s < 8; s++) {
-                l = b + ((unsigned)s << 10);
-                if (l <= hi && l + (A2_COLS - 1) >= lo) {
-                    a2_line_dirty((int)A2_X8(r) + s);
-                    a2_rowwide[r] = 1;
-                    any = 1;
-                }
+                if (b <= hi)
+                    if (b + (A2_COLS - 1) >= lo) {
+                        a2_line_dirty((int)A2_X8(r) + s);
+                        a2_rowwide[r] = 1;
+                        any = 1;
+                    }
+                b += 0x400;                 /* the next scan line of the
+                                             * row, $400 on (section 7.2) */
             }
-        } else if (b <= hi && b + (A2_COLS - 1) >= lo) {
-            a2_row_dirty(r);
-            a2_rowwide[r] = 1;
-            any = 1;
+        } else if (b <= hi) {
+            if (b + (A2_COLS - 1) >= lo) {
+                a2_row_dirty(r);
+                a2_rowwide[r] = 1;
+                any = 1;
+            }
         }
     }
     if (any)
@@ -722,15 +729,19 @@ static int a2_geom(void *win)
     avail = a2_gsty - org.y - A2_BORDER * 2;
     if (avail < 0)
         avail = 0;
+    /* NESTED TESTS, NOT `&&` OR A COMPARE BEHIND `?:` (apps size pass 1):
+     * SmallerC makes each such compare a 0/1 value and tests it. */
     a2_scw = 1;
     a2_sch = 1;
-    if (a2_full && !a2_tier_slow) {
-        if (sz.w >= A2_BANDW * 2)
-            a2_scw = 2;
-        if (a2_scw == 2 && avail >= A2_SCRH * 2)
-            a2_sch = 2;
-    }
-    a2_gbw = (a2_scw == 2) ? A2_BANDW * 2 : A2_BANDW;
+    a2_gbw = A2_BANDW;
+    if (a2_full)
+        if (!a2_tier_slow)
+            if (sz.w >= A2_BANDW * 2) {
+                a2_scw = 2;
+                a2_gbw = A2_BANDW * 2;
+                if (avail >= A2_SCRH * 2)
+                    a2_sch = 2;
+            }
 
     /* THE BORDER FLOOR IS A 1:1 THING AND MUST NOT SURVIVE INTO 2x
      * (apps/c64/c64scr.c's own note). At 1:1 the framed window is 336 wide
@@ -747,7 +758,9 @@ static int a2_geom(void *win)
     }
     a2_gsx = org.x + (d & ~7);
 
-    a2_gnl = (a2_sch == 2) ? (avail >> 1) : avail;
+    a2_gnl = avail;
+    if (a2_sch == 2)
+        a2_gnl = avail >> 1;
     if (a2_gnl > A2_SCRH)
         a2_gnl = A2_SCRH;
 
@@ -776,7 +789,9 @@ static int a2_geom(void *win)
              * move hid the banner one row up while showing thirteen blank
              * rows below - and the clamp turns the same arithmetic into
              * "line 0, show everything" for free. */
-            if (cl0 < ngl0 || cl0 + 8 > ngl0 + a2_gnl)
+            if (cl0 < ngl0)
+                ngl0 = cl0 + 8 - a2_gnl;
+            else if (cl0 + 8 > ngl0 + a2_gnl)
                 ngl0 = cl0 + 8 - a2_gnl;
             if (ngl0 > lim)
                 ngl0 = lim;
@@ -794,7 +809,9 @@ static int a2_geom(void *win)
                                              * different Apple line: a2_flush
                                              * turns this into a2_sh_inval */
     }
-    a2_gbh = (a2_sch == 2) ? (a2_gnl << 1) : a2_gnl;
+    a2_gbh = a2_gnl;
+    if (a2_sch == 2)
+        a2_gbh = a2_gnl << 1;
     a2_gsy = org.y + A2_BORDER + (avail - a2_gbh) / 2;
     return 0;
 }
@@ -806,16 +823,17 @@ static int a2_geom(void *win)
 static void a2_border_fill(void)
 {
     int sbot = a2_gsy + a2_gbh;
+    int xr = a2_gox + a2_gw - 1;            /* the content's right edge, once */
 
     os88_set_color(OS88_BLACK);
     if (a2_gsy > a2_goy) {
-        os88_gfx_fill(a2_gox, a2_goy, a2_gox + a2_gw - 1, a2_gsy - 1);
+        os88_gfx_fill(a2_gox, a2_goy, xr, a2_gsy - 1);
 #ifdef A2_HOST
         a2_n_fill++;
 #endif
     }
     if (sbot <= a2_gsty - 1) {
-        os88_gfx_fill(a2_gox, sbot, a2_gox + a2_gw - 1, a2_gsty - 1);
+        os88_gfx_fill(a2_gox, sbot, xr, a2_gsty - 1);
 #ifdef A2_HOST
         a2_n_fill++;
 #endif
@@ -827,9 +845,8 @@ static void a2_border_fill(void)
             a2_n_fill++;
 #endif
         }
-        if (a2_gsx + a2_gbw < a2_gox + a2_gw) {
-            os88_gfx_fill(a2_gsx + a2_gbw, a2_gsy,
-                          a2_gox + a2_gw - 1, sbot - 1);
+        if (a2_gsx + a2_gbw <= xr) {
+            os88_gfx_fill(a2_gsx + a2_gbw, a2_gsy, xr, sbot - 1);
 #ifdef A2_HOST
             a2_n_fill++;
 #endif
@@ -860,21 +877,35 @@ static void a2_border_fill(void)
  * The rect is in SCREEN coordinates, as the kernel gives it. */
 static void a2_blank_rect(int x1, int y1, int x2, int y2)
 {
-    int l0, l1, l, sbot, c0, c1, d;
+    int l0, l1, l, sbot, c0, c1, d, rb;
 
     sbot = a2_gsy + a2_gbh;                 /* one past the band's last line */
 
     /* the border strips, and only when the rect actually reaches one */
-    if (y1 < a2_gsy || y2 >= sbot
-        || x1 < a2_gsx || x2 >= a2_gsx + a2_gbw)
+    /* ONE TEST AN EDGE AND NOT `||` CHAINS, which SmallerC spells as four
+     * compares made into values (apps size pass 1). `rb` is one past the
+     * band's right edge. */
+    rb = a2_gsx + a2_gbw;
+    if (y1 < a2_gsy)
+        a2_border_dirty = 1;
+    else if (y2 >= sbot)
+        a2_border_dirty = 1;
+    else if (x1 < a2_gsx)
+        a2_border_dirty = 1;
+    else if (x2 >= rb)
         a2_border_dirty = 1;
     if (y2 >= a2_gsty)
         a2_st_ok = 0;                       /* the status row's pixels are no
                                              * longer ours */
 
-    if (y2 < a2_gsy || y1 >= sbot
-        || x2 < a2_gsx || x1 >= a2_gsx + a2_gbw)
+    if (y2 < a2_gsy)
         return;                             /* the rect misses the band */
+    if (y1 >= sbot)
+        return;
+    if (x2 < a2_gsx)
+        return;
+    if (x1 >= rb)
+        return;
 
     /* THE COLUMNS, IN BAND BYTES, UNIONED WITH ANY EARLIER RECT THIS FLUSH.
      * The letterbox is redrawn wherever the range reaches it, because the
@@ -1025,18 +1056,27 @@ static void a2_row_blank(int x, int y, int w, int rows)
  * ========================================================================*/
 static void a2_st_put(int col, const char *s)
 {
-    int i;
+    char *d;
 
-    for (i = 0; s[i] && col + i < A2_STCELLS; i++)
-        a2_st_now[col + i] = s[i];
+    /* A POINTER PAIR AND TWO TESTS, NOT `s[i] && col + i < A2_STCELLS`, which
+     * SmallerC spells as two compares made into values and an index add each
+     * (apps size pass 1). */
+    for (d = a2_st_now + col; d < a2_st_now + A2_STCELLS; d++) {
+        if (*s == 0)
+            break;
+        *d = *s++;
+    }
 }
 
 static void a2_status(void)
 {
     int i, f, l;
 
-    for (i = 0; i < A2_STCELLS; i++)
-        a2_st_now[i] = ' ';
+    /* THE THREE BYTE LOOPS IN THIS ROUTINE ARE THE SDK'S MOVERS (apps size
+     * pass 1): os88_memset and os88_memcpy are already in the image for other
+     * callers, and each is a `loop` where the C was ten instructions a cell -
+     * so the row is smaller AND cheaper on every flush that reaches it. */
+    os88_memset(a2_st_now, ' ', A2_STCELLS);
     a2_st_now[A2_STCELLS] = 0;
 
     /* the video mode, which is the live one and not a guess */
@@ -1157,17 +1197,14 @@ static void a2_status(void)
         f = 0;
         l = A2_STCELLS - 1;
     }
-    for (i = f; i <= l; i++)
-        a2_st_tmp[i - f] = a2_st_now[i];
+    os88_memcpy(a2_st_tmp, a2_st_now + f, (unsigned)(l - f + 1));
     a2_st_tmp[l - f + 1] = 0;
     os88_font_run(a2_gox + f * 8, a2_gsty, a2_st_tmp, OS88_WHITE, OS88_BLACK);
 #ifdef A2_HOST
     a2_n_run++;
     a2_n_cell += (unsigned)(l - f + 1);
 #endif
-    for (i = 0; i < A2_STCELLS; i++)
-        a2_st_glass[i] = a2_st_now[i];
-    a2_st_glass[A2_STCELLS] = 0;
+    os88_memcpy(a2_st_glass, a2_st_now, A2_STCELLS + 1);   /* ...and its 0 */
     a2_st_ok = 1;
     a2_st_dirty = 0;
 }
@@ -1434,9 +1471,17 @@ static void a2_flush(void *win)
 {
     unsigned base;
     int r, s, line, g0, g1, b0, b1, sp, df, dl;
-    int i, k, nd, nf, nb, trust, drew, rowf, ux0, ux1, r0, nvis;
-    int rmode, mkey, ls0, ls1;
+    int i, k, nd, nf, nb, trust, rowf, ux0, ux1, r0, nvis;
+    int rmode, mkey, ls0, ls1, vis, bit, want;
 
+    /* THROUGHOUT THIS ROUTINE (apps size pass 1): no `&&`, no `||` and no
+     * compare behind `?:`. SmallerC makes each operand of those a 0/1 value
+     * and then tests it - about eleven bytes and five instructions a compare
+     * - where a nested `if` is the compare and one branch, so every rewrite
+     * below is smaller AND does strictly less on every path. A line's dirty
+     * and forced bits are read as BYTE r, BIT `bit` rather than through
+     * a2_line_is: line 8r+s IS bit 0x80 >> s of byte r (A2_LBIT), and the
+     * per-row loop is in r and s already. */
     if (a2_geom(win) < 0)
         return;
     /* THE ANCHOR MOVED, so the shadow describes NOTHING on the glass: it is
@@ -1455,15 +1500,18 @@ static void a2_flush(void *win)
     /* --- THE MESSAGE DEADLINE, AT THE TOP, BEFORE ANY BRANCH CAN RETURN.
      * os88_ticks() is a 16-bit 18.2 Hz counter that wraps about once an hour,
      * so the DIFFERENCE is compared and not the values. */
-    if (a2_msg[0] != 0
-        && (unsigned)(os88_ticks() - a2_msg_until) < 0x8000u) {
-        a2_msg[0] = 0;
-        a2_st_dirty = 1;
-    }
+    if (a2_msg[0] != 0)
+        if ((unsigned)(os88_ticks() - a2_msg_until) < 0x8000u) {
+            a2_msg[0] = 0;
+            a2_st_dirty = 1;
+        }
 
     a2_dirty_scan();
 
-    if (a2_border_dirty || !a2_sh_ok) {
+    if (!a2_sh_ok)
+        a2_border_dirty = 1;                /* ...the unknown glass is the
+                                             * border's too */
+    if (a2_border_dirty) {
         a2_border_fill();
         a2_border_dirty = 0;
     }
@@ -1525,8 +1573,12 @@ static void a2_flush(void *win)
      * of one os88_gfx_scroll at ~100. This is EXACT and not a loosening -
      * every transition that makes MIXED visible also moves a2_mode_of(),
      * which is in the key already and takes the a2_dirty_all arm anyway. */
-    mkey = a2_mode_of() | ((!a2_v_text && a2_v_mixed) ? 0x10 : 0)
-         | (a2_v_page2 ? 0x20 : 0);
+    mkey = a2_mode_of();
+    if (!a2_v_text)
+        if (a2_v_mixed)
+            mkey |= 0x10;
+    if (a2_v_page2)
+        mkey |= 0x20;
     /* ...AND THE SHIFT TEST IS A TEXT-MODE TEST, which is `a2_v_text` and not
      * `!a2_v_hires`: a LO-RES screen has forty source bytes a row too and
      * they scroll like anything else, but they are composed by a different
@@ -1535,8 +1587,14 @@ static void a2_flush(void *win)
      * pixels the other composer drew - and that flush is by construction the
      * one a2_dirty_all marked every row of, so every row of a2_shsrc is
      * rewritten inside it and the flush after is exact again. */
-    if (a2_sh_ok && a2_v_text && mkey == a2_sh_mkey && !a2_abt_up
-        && nvis > 0) {
+    want = 0;
+    if (a2_sh_ok)
+        if (a2_v_text)
+            if (mkey == a2_sh_mkey)
+                if (!a2_abt_up)
+                    if (nvis > 0)
+                        want = 1;
+    if (want) {
         nd = 0;
         for (r = r0; r < A2_ROWS; r++)
             if (a2_line_is(a2_lnd, (int)A2_X8(r)))
@@ -1565,10 +1623,12 @@ static void a2_flush(void *win)
         }
     }
     if (k) {
+        sp = (int)A2_X8(k);                 /* the scroll in SCREEN lines */
+        if (a2_sch == 2)
+            sp = sp << 1;
         if (os88_gfx_scroll(a2_gsx, a2_gsy,
                             a2_gsx + a2_gbw - 1, a2_gsy + a2_gbh - 1,
-                            (a2_sch == 2) ? ((int)A2_X8(k) << 1)
-                                          : (int)A2_X8(k)) == 0) {
+                            sp) == 0) {
 #ifdef A2_HOST
             a2_n_scroll++;
 #endif
@@ -1650,7 +1710,11 @@ static void a2_flush(void *win)
                  * flashing text that has scrolled stops flashing and a row
                  * that no longer flashes is force-composed on every flip. */
                 a2_flrow[i] = a2_flrow[i + k];
-                if (a2_flrow[i] && a2_sh_phase != a2_fl_phase) {
+                want = 0;
+                if (a2_flrow[i])
+                    if (a2_sh_phase != a2_fl_phase)
+                        want = 1;
+                if (want) {
                     /* --- AND A ROW WHOSE CONTENT FLASHES IS RECOMPOSED,
                      * NEVER MARKED CLEAN, WHEN THE PHASE HAS MOVED UNDER IT.
                      * THE SOURCE SHADOW IS ONLY A PROOF WHILE THE PHASE IS
@@ -1747,42 +1811,45 @@ static void a2_flush(void *win)
     a2_sh_phase = a2_fl_phase;
     a2_run_n = 0;
     for (r = 0; r < A2_ROWS; r++) {
-        drew = 0;
-        rowf = 0;
         /* ...AND THE SCAN-LINE RANGE, in the same pass, because a2_band_hires
-         * takes one (section 7.4). `drew` is exactly "this line will be read
+         * takes one (section 7.4). `want` is exactly "this line will be read
          * out of the band below" - dirty, or forced, or the shadow is not
          * trusted at all - so the union of the lines that set it is the
          * union the composer owes, FORCED LINES INCLUDED: the !trust arm
          * below draws b0..b1 straight out of the band with no compare, and a
-         * band row this flush never wrote would be last flush's pixels. */
-        ls0 = 8;
-        ls1 = -1;
-        for (s = 0; s < 8; s++) {
-            line = (int)A2_X8(r) + s;
-            if (line < a2_gl0)
-                continue;                   /* the anchor: this line is not
-                                             * on the glass */
-            if (a2_line_is(a2_lnf, line))
-                rowf = 1;
-            if (a2_line_is(a2_lnd, line) || a2_line_is(a2_lnf, line)
-                || !a2_sh_ok) {
-                drew = 1;
-                if (s < ls0)
-                    ls0 = s;
-                ls1 = s;
-            }
+         * band row this flush never wrote would be last flush's pixels.
+         *
+         * THE ROW'S EIGHT LINES ARE ONE BYTE OF EACH BITMAP, so the question
+         * is asked a byte at a time (apps size pass 1): `vis` is the lines of
+         * the row on the glass - those at or below the anchor - and the rest
+         * is two ANDs. It was eight passes of up to three a2_line_is calls,
+         * 192 lines a flush whether anything was dirty or not. */
+        vis = 0xFF;
+        s = a2_gl0 - (int)A2_X8(r);         /* the row's lines above the
+                                             * anchor, which are not on the
+                                             * glass */
+        if (s > 0) {
+            vis = 0;
+            if (s < 8)
+                vis = 0xFF >> s;
         }
-        if (!drew) {
+        rowf = a2_lnf[r] & vis;
+        want = vis;
+        if (a2_sh_ok)
+            want = (a2_lnd[r] | a2_lnf[r]) & vis;
+        if (!want) {
             /* nothing of this row is both dirty and visible: clear whatever
              * marks it has, so the wake can go idle */
-            for (s = 0; s < 8; s++) {
-                line = (int)A2_X8(r) + s;
-                a2_lnd[line >> 3] &= (unsigned char)~A2_LBIT(line);
-                a2_lnf[line >> 3] &= (unsigned char)~A2_LBIT(line);
-            }
+            a2_lnd[r] = 0;
+            a2_lnf[r] = 0;
             continue;
         }
+        ls0 = 0;                            /* the first and last wanted */
+        for (bit = 0x80; !(want & bit); bit >>= 1)
+            ls0++;
+        ls1 = 7;
+        for (bit = 1; !(want & bit); bit <<= 1)
+            ls1--;
 
         /* A PANEL OWNS THIS WHOLE ROW: skip it BEFORE composing it. The test
          * used to live in the per-scan-line loop below, which is after
@@ -1795,9 +1862,10 @@ static void a2_flush(void *win)
          * BOTH FLAGS STAY SET. The row is still owed a draw when the panel
          * goes, and a2_about_close forces exactly these lines. A row the
          * panel covers only PARTLY keeps the per-line path below. */
-        if (a2_abt_up && (int)A2_X8(r) >= a2_hold_l0
-            && (int)A2_X8(r) + 7 <= a2_hold_l1)
-            continue;
+        if (a2_abt_up)
+            if ((int)A2_X8(r) >= a2_hold_l0)
+                if ((int)A2_X8(r) + 7 <= a2_hold_l1)
+                    continue;
 
         rmode = a2_row_mode(r);
         base = a2_row_base(r);
@@ -1814,8 +1882,13 @@ static void a2_flush(void *win)
          * is the precedent and clamps. */
         g0 = 0;
         g1 = A2_GROUPS - 1;
-        if (a2_sh_ok && !a2_rowwide[r] && a2_wlo <= a2_whi
-            && a2_row_watched(r)) {
+        want = 0;
+        if (a2_sh_ok)
+            if (!a2_rowwide[r])
+                if (a2_wlo <= a2_whi)
+                    if (a2_row_watched(r))
+                        want = 1;
+        if (want) {
             /* IN HI-RES THE ROW IS EIGHT SEPARATE RANGES and the span is the
              * UNION of what the window reaches in each: the composer takes
              * one group span for the whole row group, so a write on line 3
@@ -1837,7 +1910,9 @@ static void a2_flush(void *win)
         }
         b0 = A2_LBOXB + (int)A2_X7(g0);
         b1 = A2_LBOXB + (int)A2_X7(g1) + A2_GBYTES - 1;
-        if (!a2_sh_ok || rowf) {
+        if (!a2_sh_ok)
+            rowf = 1;
+        if (rowf) {
             /* THE GLASS IS UNKNOWN OVER THIS ROW, SO THE LETTERBOX IS UNKNOWN
              * TOO AND GOES DOWN WITH THE BAND. Found on the glass and nowhere
              * else: the About panel is exactly the BAND's width, so closing
@@ -1914,9 +1989,10 @@ static void a2_flush(void *win)
          * colour blocks and a hi-res byte of $60 is three pixels; asking
          * a2_rowflash about either would force-compose the row 3.6 times a
          * second for a phase that changes not one pixel of it. */
-        a2_flrow[r] = (rmode == A2_MODE_TEXT)
-                    ? (unsigned char)a2_rowflash(a2_m.ramseg, base, A2_COLS)
-                    : (unsigned char)0;
+        a2_flrow[r] = 0;
+        if (rmode == A2_MODE_TEXT)
+            a2_flrow[r] = (unsigned char)a2_rowflash(a2_m.ramseg, base,
+                                                     A2_COLS);
         /* ...and the DOUBLED copy is NOT taken here. It is a2_emit's, on the
          * DRAW side and PER RUN: a row that composes and draws nothing owes
          * no doubling at all, and a row that draws seven bytes of one scan
@@ -1938,7 +2014,11 @@ static void a2_flush(void *win)
          * a proof nothing is allowed to use. A mode change is what makes them
          * true again, through the mkey refusal above. */
         if (rmode == A2_MODE_TEXT) {
-            if (a2_sig_ok && r >= a2_src_r0) {
+            want = 0;
+            if (a2_sig_ok)
+                if (r >= a2_src_r0)
+                    want = 1;
+            if (want) {
                 a2_rowcopy(a2_shsrc + A2_X40(r), a2_src + A2_X40(r), A2_COLS);
             } else {
                 a2_zcopy_out(a2_shsrc + A2_X40(r), base, A2_COLS);
@@ -1949,20 +2029,26 @@ static void a2_flush(void *win)
         }
 
         a2_run_row = r;
-        for (s = 0; s < 8; s++) {
+        for (s = 0, bit = 0x80; s < 8; s++, bit >>= 1) {
+            if (!(vis & bit))
+                continue;                   /* above the anchor */
             line = (int)A2_X8(r) + s;
-            if (line < a2_gl0)
-                continue;
-            if (a2_abt_up && line >= a2_hold_l0 && line <= a2_hold_l1) {
+            if (a2_abt_up)
+                if (line >= a2_hold_l0)
+                    if (line <= a2_hold_l1) {
                 /* a panel owns these lines: drawing them would be drawing
                  * under something opaque, and the click that closes it
                  * forces exactly them */
-                a2_emit();
-                continue;
-            }
-            trust = a2_sh_ok && !a2_line_is(a2_lnf, line);
-            if (!a2_line_is(a2_lnd, line) && trust)
-                continue;
+                        a2_emit();
+                        continue;
+                    }
+            trust = 0;
+            if (a2_sh_ok)
+                if (!(a2_lnf[r] & bit))
+                    trust = 1;
+            if (trust)
+                if (!(a2_lnd[r] & bit))
+                    continue;
             if (!trust) {
                 df = b0;
                 dl = b1;
@@ -1981,15 +2067,15 @@ static void a2_flush(void *win)
                      * every later wake, and the only symptom was a cost row
                      * reading ten groups where the window had narrowed the
                      * work to five. */
-                    a2_lnd[line >> 3] &= (unsigned char)~A2_LBIT(line);
+                    a2_lnd[r] &= (unsigned char)~bit;
                     a2_emit();              /* a clean line breaks the run */
                     continue;
                 }
                 df = b0 + ((sp >> 8) & 0xFF);
                 dl = b0 + (sp & 0xFF);
             }
-            a2_lnd[line >> 3] &= (unsigned char)~A2_LBIT(line);
-            a2_lnf[line >> 3] &= (unsigned char)~A2_LBIT(line);
+            a2_lnd[r] &= (unsigned char)~bit;
+            a2_lnf[r] &= (unsigned char)~bit;
 
             /* THE RUN MERGE. A blit is 756 us of floor whatever it covers, so
              * consecutive lines go down in ONE call - and the rule for
@@ -1997,9 +2083,17 @@ static void a2_flush(void *win)
              * separate blits would: `union <= this + next`. A full repaint is
              * then one blit per character row rather than one per scan line,
              * which is 24 calls against 192. */
-            if (a2_run_n > 0 && line == a2_run_l0 + a2_run_n) {
-                ux0 = (df < a2_run_x0) ? df : a2_run_x0;
-                ux1 = (dl > a2_run_x1) ? dl : a2_run_x1;
+            want = 0;
+            if (a2_run_n > 0)
+                if (line == a2_run_l0 + a2_run_n)
+                    want = 1;
+            if (want) {
+                ux0 = a2_run_x0;
+                if (df < ux0)
+                    ux0 = df;
+                ux1 = a2_run_x1;
+                if (dl > ux1)
+                    ux1 = dl;
                 if (ux1 - ux0 + 1
                     <= (a2_run_x1 - a2_run_x0 + 1) + (dl - df + 1)) {
                     a2_run_x0 = ux0;
@@ -2120,12 +2214,19 @@ static int a2_fsx_stride;
 static void *a2_fsx_win;
 static int a2_fsx_told;                     /* the CPU_8086 tier's price, said
                                              * once a run (a2_fsx_enter) */
-static unsigned char a2_fsxbuf[A2_FSXW];    /* the composed scan line, which
-                                             * is the compare's left side.
-                                             * bss and not a claim because it
-                                             * is one line and is spent inside
-                                             * one call; the SHADOW is 53,760
-                                             * bytes that outlive the frame */
+/* a2_fsxbuf - the composed scan line, which is the compare's left side. Not
+ * a claim because it is one line and is spent inside one call; the SHADOW is
+ * 53,760 bytes that outlive the frame.
+ *
+ * AND NOT ITS OWN 280 BYTES OF bss EITHER (apps size pass 1): it is spent
+ * only inside the bracket, and a2_x2b - the doubled band - only inside the
+ * WINDOWED flush, which the bracket excludes. So it IS the doubled band's
+ * first A2_FSXW bytes, and a2fsx.inc's a2_hitab borrows the band's LAST 128
+ * (apple2.asm's A2_HITAB_AT, `_a2_x2b + 1152`); the typedef below refuses a
+ * build where the two would overlap. */
+#define a2_fsxbuf a2_x2b
+typedef char a2_fsxbuf_fits[(A2_FSXW <= 1152 && A2_X2STRIDE * 16 == 1280)
+                            ? 1 : -1];
 
 /* a2_fsx_avail - IS THERE A FOREIGN COLOUR MODE ON THE DISPLAY THIS WINDOW IS
  * ON? A FACT and not a guess (SPEC.md 47): os88_fsx_caps answers the bitmask
@@ -2688,6 +2789,5 @@ static void a2_fsx_enter(void *win)
      * API call, no pixels. A window that was COVERED at step 4 got no paint,
      * a2_sh_ok is still 0 from the entry, and the first W_PAINT after it
      * uncovers does the repaint then. */
-    a2_kick = 1;
-    os88_wm_wake(win);
+    a2_kickw(win);
 }

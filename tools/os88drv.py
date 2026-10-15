@@ -45,13 +45,13 @@ HDR = 32
 # has read the header, so raising it costs every driver load on every machine.
 BSS_MAX_PARA = 255
 MAGIC = 0x384F                  # 'O','8'
-DRV_VER = 9   # 4 until the API table moved, 7 until 34.11 (SPEC.md 20.2.0)
+DRV_VER = 11  # 4 until the API table moved, 7 until 34.11, 9 until 62.9.19 (SPEC.md 20.2.0)
 MAX_SIZE = 40 * 1024            # DRV_MAX_KB in kernel/driver.inc
 # 0x40 is NOT a kernel driver class: it is a driver's own loadable half
 # (OS88_OVERLAY, SPEC.md 52.11), stamped by this tool because the header, the
 # dispatcher and the one-claim load discipline are identical. The kernel never
 # loads one - its OWNER does - so drv_check never sees it and would refuse it.
-CLASSES = {1: "sound", 2: "disk", 3: "debug", 4: "net", 5: "file", 6: "point",
+CLASSES = {1: "sound", 2: "disk", 3: "debug", 4: "net", 5: "file", 6: "point", 7: "ems", 8: "file2",
            0x40: "overlay"}
 
 

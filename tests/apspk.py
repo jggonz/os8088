@@ -37,6 +37,11 @@ are THE FILE'S OWN SAMPLES, in order, one for one - no model needed - and
 not one byte goes to 42h. Broken on purpose - aps_plan's Covox copy taken
 out, so the leveller runs - it FAILS on the first sample the gain moves.
 
+--card also holds the STATUS LINE: the data's normal end is not an error, so
+[ap_msg] must never be `apw_e_io` ("Cannot read the file") on the way to the
+list's end. Broken on purpose - ap_refill_chunk's end-of-data test falling
+into .ioerr, as it shipped until the apps size pass - it FAILS.
+
 --pause also reads the menu bar once the bracket is up: the progress
 widget the file's read armed must be gone from it (SPEC.md 86.21.2). Broken
 on purpose - apu_repaint's OSAPI_WM_CLIP_CLEAR taken out - it FAILS on the
@@ -65,8 +70,25 @@ from cycweb import pkg_syms                          # noqa: E402
 
 PULSES = 800
 LOSS = 0.04
-DRYMAX = 40         # dry grants the list's end may take: its last span
-                    # played out, then the bracket's next pass sees it
+# KEEPING TIME, AND THE LIST'S END, ARE TWO DIFFERENT DRY RUNS. A producer
+# behind the pulses runs the ring dry and then catches up, over and over - dry
+# grants with GRANTED ones between them. The list's end drains it ONCE: from
+# its last span until the bracket's next pass notices, every grant is dry, one
+# a grant period apart (~2 ms here) up to the door's close. This used to be a
+# single COUNT, DRYMAX = 40, over both - and the drain alone measured 27 for
+# pcm8 and 40 for step on the same build, 41 in a soak, because how long the
+# bracket takes to notice depends on where in its pass the ring empties and
+# step's passes are longer. The count was at its limit with nothing wrong.
+#
+# So: dry grants OUTSIDE the trailing run must be NONE, and the trailing run
+# is bounded in TIME by the bracket's notice latency rather than in grants.
+DRYGAP_MS = 10      # consecutive dries closer than this are one run: the
+                    # grant period is 2 ms at 8 kHz and 3.6 ms at rung 2's
+                    # 5.5 kHz, so a run of dries never has a 10 ms hole
+DRAIN_MS = 165      # the trailing run's longest: three ticks for the
+                    # bracket's next pass to see the list is done. Measured
+                    # 56-82 ms; a producer behind the pulses across the whole
+                    # play reads as SECONDS, which is what this still catches
 MBAR_H = 20         # kernel.asm: the menu bar's height
 FPG_W = 80          # fprog.inc: the progress widget's width
 MACHINE = "os8088_5150_herc_hdd_gla"
@@ -346,14 +368,22 @@ def card(a):
                 base = (rec[geom.W_SEG] | rec[geom.W_SEG + 1] << 8) << 4
                 rw = lambda n_: (lambda b: b[0] | b[1] << 8)(
                     m.read(base + syms[n_], 2))
-                tr.until(lambda: rw("ap_msg") == syms["ap_s_endlist"],
-                         "the list's end", limit=600.0)
+                said = set()
+
+                def ended():
+                    msg = rw("ap_msg")
+                    said.add(msg)
+                    return msg == syms["ap_s_endlist"]
+                tr.until(ended, "the list's end", limit=600.0)
             print("   card: the stream opened %d time%s, the speaker's door "
                   "%d; it ended on the list's end" % (
                       ev["stream"], "" if ev["stream"] == 1 else "s",
                       ev["spk"]))
             if ev["stream"] != 1 or ev["spk"]:
                 bad.append("the play was not the card's")
+            if syms["apw_e_io"] in said:
+                bad.append("the status line said 'Cannot read the file' on "
+                           "a file that read to its end")
         finally:
             m.close()
     for b in bad:
@@ -636,13 +666,14 @@ def main():
             io42 = {"type": "io", "addr": 0x42}
             ex_d = {"type": "exec", "addr": -1}
             for i, name in enumerate(legs):
-                ev = {"open": [], "close": [], "w": [], "dry": 0}
+                ev = {"open": [], "close": [], "w": [], "dry": 0, "dc": []}
 
                 def hit(mm, rec):
                     r_ = mm.regs()
                     if rec.get("addr") == k_open and r_["ax"] & 0xFF == 0:
                         ev["open"].append(rec["cycles"])
                         ev["dry"] = 0           # counted from the LAST open
+                        ev["dc"] = []
                         if len(ev["open"]) == 1:
                             f = mm.read((r_["ss"] << 4) + r_["sp"], 4)
                             ex_d["addr"] = ((f[2] | f[3] << 8) << 4) + \
@@ -650,6 +681,7 @@ def main():
                             mm.breakpoints([ex_o, ex_c, ex_d, io42])
                     elif rec.get("addr") == ex_d["addr"]:
                         ev["dry"] += 1
+                        ev["dc"].append(rec["cycles"])
                     elif rec.get("addr") == k_off:
                         if ev["open"]:
                             ev["close"].append(rec["cycles"])
@@ -712,8 +744,19 @@ def main():
                 # 3: KEEPING TIME is the ring never running dry once the
                 # ladder has found the rung - a producer behind the pulses
                 # runs it dry over and over; the list's end drains it once
+                # the trailing run: walk back from the last dry while the
+                # gaps stay under DRYGAP_MS; everything before it is mid-play
+                ms_ = 4772.727
+                dc = ev["dc"]
+                k = max(0, len(dc) - 1)     # the last dry starts the run...
+                while k > 0 and (dc[k] - dc[k - 1]) / ms_ < DRYGAP_MS:
+                    k -= 1                  # ...and each close one joins it
+                mid, drain = dc[:k], dc[k:]
+                drain_ms = (drain[-1] - drain[0]) / ms_ if drain else 0.0
                 print("      the ring ran dry %d time%s after the last door "
-                      "opened" % (ev["dry"], "" if ev["dry"] == 1 else "s"))
+                      "opened: %d at the list's end (%.0f ms), %d before it"
+                      % (ev["dry"], "" if ev["dry"] == 1 else "s",
+                         len(drain), drain_ms, len(mid)))
                 msg = m.read(base + syms["ap_msg"], 2)
                 msg = [k_ for k_, v in syms.items() if v == (msg[0] | msg[1] << 8)
                        and k_.startswith("ap_s_")]
@@ -721,9 +764,17 @@ def main():
                 if msg != ["ap_s_endlist"]:
                     bad.append("3: %s ended on %s, not the list's end"
                                % (name, msg))
-                if ev["dry"] > DRYMAX and name not in LAGS:
-                    bad.append("3: %s: the ring ran dry %d times" % (
-                        name, ev["dry"]))
+                if mid and name not in LAGS:
+                    bad.append("3: %s: the ring ran dry %d times BEFORE the "
+                               "list's end (first %.0f ms after the open) - "
+                               "the producer fell behind the pulses" % (
+                                   name, len(mid),
+                                   (mid[0] - ev["open"][-1]) / ms_))
+                if drain_ms > DRAIN_MS and name not in LAGS:
+                    bad.append("3: %s: the list's end drained dry for %.0f ms "
+                               "- longer than the bracket's next pass can "
+                               "take to notice (%d ms)" % (name, drain_ms,
+                                                            DRAIN_MS))
                 if not falls and abs(secs - want_s) > 0.05 * want_s + 0.3:
                     bad.append("3: %s played %.2f s for %.2f" % (name, secs,
                                                                  want_s))

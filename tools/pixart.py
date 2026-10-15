@@ -109,8 +109,8 @@ def load_icons():
     """{name: [16 row words]} from pxicons.inc's DATA rows."""
     src = open(ICONS_INC).read()
     out = {}
-    for m in re.finditer(r'^pxi_(\w+):\s*\n\s*db 1, 16\s*\n\s*times 16 dw '
-                         r'0xFFFF\s*\n((?:\s*dw 0x[0-9A-Fa-f]{4}.*\n){16})',
+    for m in re.finditer(r'^pxi_(\w+):\s*\n\s*db ICON_SOLID, 16\s*\n'
+                         r'((?:\s*dw 0x[0-9A-Fa-f]{4}.*\n){16})',
                          src, re.M):
         out[m.group(1)] = [int(w, 16) for w in
                            re.findall(r'dw 0x([0-9A-Fa-f]{4})', m.group(2))]

@@ -683,13 +683,7 @@ px_fitz:
 .st:
     mov [px_vz], ax
     mov [px_vz + 2], dx
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp px_ld_6
 
 ; px_vcalc - THE CANVAS'S VIEW, from the layout: called by px_layout once
 ; the canvas is placed. Zoom (Fit or the user's), steps, the picture's size,
@@ -1609,12 +1603,7 @@ px_zoomto:
                                     ; not the view's: only the frame moves)
     call px_zfiner                  ; past what fast open decoded: finer
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp px_ld_5
 
 ; px_zfiner - after a zoom: a JPEG that FAST OPEN held to scale s, zoomed
 ; past 2^-s, is decoded again at the coarsest scale that covers the zoom -

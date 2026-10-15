@@ -516,6 +516,34 @@ overlays = [
     type = "VGA"
     clock_mode = "Default"
 
+# ...and the VGA XT at the 128KB FLOOR: os8088_xt_vga with 0x20000 of RAM and
+# nothing else. tests/kernresident.py's machine, because it answers two of
+# docs/KERNEL-MEMORY.md's rules in ONE boot: kern_big BOOTS on 128KB (guard 5,
+# asserted by booting rather than by arithmetic - overlays and boot order are
+# what broke 128KB boots, never the resident size) and kern_big RESIDES in
+# 100KB at the desktop, on VGA, the adapter that does not drop a rung of its
+# own. os8088_5150_cga_128k is kern_small's floor machine and stays CGA.
+[[machine]]
+name = "os8088_xt_vga_128k"
+type = "Ibm5160"
+rom_set = "glabios_xt"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0x20000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "VGA"
+    clock_mode = "Default"
+
 # ...and the VGA XT with an 80-CYLINDER 720KB B:, os8088_5150_cga_720b_gla's
 # drive pair on the VGA XT. tests/pxbench.py's BIG.BMP disk is why: a 308 KB
 # picture beside PiXEL's package outgrew a 360 KB volume when wave 4's parts
@@ -967,6 +995,110 @@ overlays = [
     [machine.memory]
     conventional.size = 0xA0000
     conventional.wait_states = 0
+
+    [machine.hdc]
+    bus_type = "ISA"
+    type = "XtIde"
+
+        [[machine.hdc.drive]]
+        format = "Mfm"
+        vhd = "default_xtide.vhd"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+    [[machine.sound]]
+    type = "AdLib"
+    io_base = 0x388
+
+    [[machine.sound]]
+    type = "SoundBlaster"
+    io_base = 0x220
+    irq = 7
+    dsp_version = [2, 1]
+
+# os8088_5150_herc_hdd_sb_ems_gla - `herc_hdd_sb_gla` plus a LO-TECH 2MB EMS
+# BOARD at its own defaults (registers 260h-263h, frame E000h), and nothing
+# else changed. It is the expanded-memory half of docs/plans/VIDEO-XMS-PLAN.md
+# 10: the board an 8088 can have (the owner's PicoMEM answers through the
+# Lo-tech driver), so EMS is the one store above 640 KB that THIS machine
+# class can reach - and VIDDISK's E row is what reads it. MartyPC prices the
+# board's memory as RAM (no wait states), which a real ISA card is not.
+[[machine]]
+name = "os8088_5150_herc_hdd_sb_ems_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.ems]
+    ems_type = "LoTech2MB"
+    window = 0xE000
+    io_base = 0x260
+    size = 0x200000
+
+    [machine.hdc]
+    bus_type = "ISA"
+    type = "XtIde"
+
+        [[machine.hdc.drive]]
+        format = "Mfm"
+        vhd = "default_xtide.vhd"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+    [[machine.sound]]
+    type = "AdLib"
+    io_base = 0x388
+
+    [[machine.sound]]
+    type = "SoundBlaster"
+    io_base = 0x220
+    irq = 7
+    dsp_version = [2, 1]
+
+# ...and the same machine on the period ROM, for a box that has it staged.
+
+# ...the same board where the owner's PICOMEM puts its EMS by default:
+# registers at 288h, the frame at D000h (EMS.DRV's probe, SPEC.md 107.2,
+# answered No hardware found there until 288h was on its list)
+[[machine]]
+name = "os8088_5150_herc_hdd_sb_ems288_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.ems]
+    ems_type = "LoTech2MB"
+    window = 0xD000
+    io_base = 0x288
+    size = 0x200000
 
     [machine.hdc]
     bus_type = "ISA"

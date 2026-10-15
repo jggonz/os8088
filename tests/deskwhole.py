@@ -71,7 +71,7 @@ committed:
     red twice - none of the six parked windows is redrawn, and the dither
     `.whole` laid over them stays: 30,907 px on Hercules, 31,135 on VGA.
     (The restore arms no vacated rect, so its leg stays green.)
-  * `.whole`'s re-seed (`call wm_dmg_bands` after its pops) taken out: the
+  * `.whole`'s re-seed (`call wm_dmg_rebands`) taken out: the
     fill is clipped to the sixteen fragments the overflow left, and the
     RESTORE leg goes red - the zoomed window's picture survives in a strip
     beside the restored mover, 1,214 px on Hercules and 220 on VGA. (The

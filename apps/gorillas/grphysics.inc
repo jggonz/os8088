@@ -197,12 +197,28 @@ gr_gravity:
 %define GM_XREM 14
 %define GM_YREM 16
 
-; AX=whole degrees -> AX=sin(angle)*16384. Other registers preserved.
+; AX=whole degrees 0..360 -> AX=sin(angle)*16384. Other registers preserved.
+; The table holds one quadrant: sin(180+a) = -sin(a), sin(180-a) = sin(a).
+; Called twice per throw/candidate, never per step.
 gr_sine:
     push bx
-    shl ax, 1
     mov bx, ax
-    mov ax, [gr_sin+bx]
+    cmp bx, 180
+    jbe .half
+    sub bx, 180
+.half:
+    cmp bx, 90
+    jbe .quarter
+    neg bx
+    add bx, 180
+.quarter:
+    shl bx, 1
+    mov bx, [gr_sin+bx]
+    cmp ax, 180
+    jbe .out
+    neg bx
+.out:
+    xchg ax, bx
     pop bx
     ret
 

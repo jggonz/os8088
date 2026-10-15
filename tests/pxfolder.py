@@ -67,8 +67,8 @@ def check(what, ok, detail=""):
 
 
 # --- the disk ------------------------------------------------------------------
-tmp = "build/pxfolder"
-os.makedirs(tmp, exist_ok=True)
+import pxtmp                    # THE ROW'S OWN, in the run's tree (pxtmp.py)
+tmp = pxtmp.private("pxfolder", folder=True)
 cor = {n: d for n, d, v in C.corpus()}
 PICS = {}
 for n in ("BIG24.BMP", "GBIG.GIF", "C8.PCX", "BIG8.BMP", "G8.GIF"):
@@ -79,7 +79,7 @@ files = []
 for n, d in sorted(PICS.items()):
     open(os.path.join(tmp, n), "wb").write(d)
     files.append("PICS:" + os.path.join(tmp, n))
-DISK = M.scratch_disk("build/pxfolder.img", "build/pixel.o88",
+DISK = M.scratch_disk(pxtmp.private("pxfolder.img"), "build/pixel.o88",
                       "build/PIXEL.GFX", *files, "--folder", "SYSTEM/APPDATA",
                       size=720)
 NAMES = sorted(PICS)

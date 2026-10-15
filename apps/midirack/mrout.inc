@@ -58,13 +58,18 @@ MRW_TAIL    equ 18                  ; ticks a finished song rings on (~1 s)
     MRB mrk_btn                     ; the mouse as last seen
     MRW mrk_hk                      ; rate periods (the hook)
     MRW mrk_drawt
-    MRBUF mrk_map, 256              ; the PWM table, for the synth's
     MRB mrk_pol                     ; the session is a POLLED Covox's
                                     ; (SPEC.md 34.14.3): os88spk_pgo's, with
                                     ; its ring in mrk_pring, not mrk_seg's
     MRB mrk_nopoll                  ; this machine refused a polled play:
                                     ; the next one takes the ISR
+; ONE 2 KB PAGE, THREE TENANTS (SPEC.md 105.8.4): only one output is ever
+; open, and each tenant is written whole before it is read at its own
+; session's start - the polled Covox's ring, the speaker's PWM table (read
+; once, by mry_open, as it builds mry_otab), and the Sound Blaster grant
+; ring's staging half (mrb_half, below)
     MRBUF mrk_pring, OS88SPK_PRL    ; the polled ring, in our own segment
+mrk_map     equ mrk_pring           ; the PWM table, for the synth's
     MRW mr_pblo                     ; FM/tone: the PIT the song started at
     MRW mr_pbhi
     MRW mr_pplo                     ; ...and the PIT a pause stood at
@@ -708,7 +713,10 @@ mrw_sb:
     MRW mrb_grl                     ; ...its length
     MRW mrb_gtot                    ; ...TOTAL and CONS, ours to keep
     MRW mrb_gcons
-    MRBUF mrb_half, MRB_HALF        ; ...and the half it is staged from
+mrb_half    equ mrk_pring           ; ...and the half it is staged from
+%if MRB_HALF > OS88SPK_PRL
+  %error "mrb_half is staged in mrk_pring's page: it must fit"
+%endif
 
     MRW mrb_spanfn                  ; the span maker: mry_span / mwt_span
 

@@ -21,7 +21,7 @@
 ;                       is the rung's first bytes, and the %if below holds it
 ;
 ; That is what the boot overlay is meant to land in and spill through
-; (docs/plans/completed/BOOT-LADDER-PLAN.md stage B): `.ovlw`, the window half of the
+; (docs/plans/completed/BOOT-LADDER-PLAN.md stage B): `.ovl`, the window half of the
 ; overlay (SPEC.md 2.5.3), is ~5,000 bytes and the FAT window alone is 4,608,
 ; so the window alone stopped being enough when SPEC.md 2.9.12's register
 ; moved twenty bodies into the overlay.
@@ -73,7 +73,7 @@ DSK_ICO_SIZE equ 64              ; harvested icon slot stride (SPEC.md 19)
 ; a listing owns a reference byte per entry and nothing else. DSK_ICO_SIZE is
 ; still the width of one body, in the store.
 %ifdef KERN_KNOB
-DSK_OVLPAD   equ 1024           ; **AND THE NEXT THING HAS JOINED `.ovlw`: A
+DSK_OVLPAD   equ 1024           ; **AND THE NEXT THING HAS JOINED `.ovl`: A
                                  ; DIAGNOSTIC KNOB.**
                                  ;
                                  ; This is the case the paragraph below says
@@ -82,7 +82,7 @@ DSK_OVLPAD   equ 1024           ; **AND THE NEXT THING HAS JOINED `.ovlw`: A
                                  ; abolished the floor listing, which took
                                  ; 1,600 bytes off kern_big's window and its
                                  ; region with them - 6,720 to 5,120 - and the
-                                 ; shipped `.ovlw` is 4,979, which rounds to
+                                 ; shipped `.ovl` is 4,979, which rounds to
                                  ; 5,120 and fits with NOTHING to spare.  A
                                  ; diagnostic that adds so much as one byte
                                  ; then costs a whole 512 at the rounding, and
@@ -97,7 +97,7 @@ DSK_OVLPAD   equ 1024           ; **AND THE NEXT THING HAS JOINED `.ovlw`: A
                                  ; TWO RUNGS AND NOT ONE, because the worst
                                  ; arm is not the obvious one: `FONT=<name>`
                                  ; bakes a face into the overlay and takes
-                                 ; `.ovlw` to 5,701, where BOOTMARK - the arm
+                                 ; `.ovl` to 5,701, where BOOTMARK - the arm
                                  ; that FAILED first and the one it is
                                  ; tempting to size this against - takes it to
                                  ; 5,142. One rung fixes five of the six and
@@ -120,7 +120,7 @@ DSK_OVLPAD   equ 1024           ; **AND THE NEXT THING HAS JOINED `.ovlw`: A
                                  ; (kernel.asm guard 1 already excuses it from
                                  ; KERN_BUDGET for exactly this reason).
                                  ;
-                                 ; SHRINKING `.ovlw` was the other way out and
+                                 ; SHRINKING `.ovl` was the other way out and
                                  ; is refused HERE rather than left unsaid: it
                                  ; is the OVBCALL move below, it would reach
                                  ; every shipped kernel, and it would be spent
@@ -133,7 +133,7 @@ DSK_OVLPAD   equ 0              ; **AND IT IS ZERO AGAIN.**
                                  ; docs/plans/LISTING-HOME-PLAN.md 13 took the
                                  ; ENTRIES and their reference index out of
                                  ; `.lowbss` entirely - 800 bytes here - and
-                                 ; `.ovlw` is read onto this region (SPEC.md
+                                 ; `.ovl` is read onto this region (SPEC.md
                                  ; 2.5.3), so for one commit 512 of those 800
                                  ; were held back here rather than given to
                                  ; the heap: the overlay had nowhere else to
@@ -142,16 +142,16 @@ DSK_OVLPAD   equ 0              ; **AND IT IS ZERO AGAIN.**
                                  ; mem_init, font_init, wm_init, files_init
                                  ; and snd_init, through the OVBCALL set that
                                  ; SPEC.md 2.5.3.2 built for exactly this -
-                                 ; and `.ovlw` fell 1,900 to 1,342, which
+                                 ; and `.ovl` fell 1,900 to 1,342, which
                                  ; rounds to 1,536 and fits the region with
                                  ; the pad at nothing.
                                  ;
                                  ; So this build takes the whole 800 after
                                  ; all, and the label is kept for the third
                                  ; time for the reason it was kept the first:
-                                 ; the NEXT thing that joins `.ovlw` needs
+                                 ; the NEXT thing that joins `.ovl` needs
                                  ; somewhere to be told about. kernel.asm's
-                                 ; `.ovlw` %if is the guard that says whether
+                                 ; `.ovl` %if is the guard that says whether
                                  ; you are in that case
 %else
 DSK_OVLPAD   equ 0              ; a plain kern_big: the region is 5,120 and
@@ -198,11 +198,11 @@ DSK_ICOIX_N  equ DSK_NENT        ; one REFERENCE byte per entry, and DSK_NENT
 ; kernel and its bottom 2,112 bytes are what the boot overlay's window half
 ; spills through.
 ;
-; **IT DOES NOT MOVE ALONE.** `.ovlw` is loaded ONTO this region (SPEC.md
-; 2.5.3) and kernel.asm's guard is `roundup(OVLW_SIZE, 512) <= FAT_PARA*16 +
-; DSK_WIN_BYTES`: at 32 entries that ceiling is 2,336, so `.ovlw` has to be
+; **IT DOES NOT MOVE ALONE.** `.ovl` is loaded ONTO this region (SPEC.md
+; 2.5.3) and kernel.asm's guard is `roundup(OVL_SIZE, 512) <= FAT_PARA*16 +
+; DSK_WIN_BYTES`: at 32 entries that ceiling is 2,336, so `.ovl` has to be
 ; 2,048 or less first. SPEC.md 2.5.3.2 is what makes it so - the serial mouse
-; probe and the adapter probe go in `.ovl` on this kernel, out of blob stage 1
+; probe and the adapter probe go in `.boot2` on this kernel, out of blob stage 1
 ; already reads. Cutting this number on its own is a `%error`, and moving those
 ; bodies on their own moves HEAP_SEG by NOTHING. The pair is the change.
 ;
@@ -285,7 +285,7 @@ dsk_secbuf: resb 512            ; sector scratch: BPB read, root-dir scan,
                                 ; wrong question
 dsk_ovlpad: resb DSK_OVLPAD     ; ...AND THE BOOT OVERLAY'S LANDING GROUND,
                                 ; which the icon array was doing as a SECOND
-                                ; JOB nobody had written down. `.ovlw` is read
+                                ; JOB nobody had written down. `.ovl` is read
                                 ; onto the FAT window and the mount buffers
                                 ; (SPEC.md 2.5.3) and a byte past them is
                                 ; vid_rowtab, live since MARK 7 - so those
@@ -300,7 +300,7 @@ dsk_ovlpad: resb DSK_OVLPAD     ; ...AND THE BOOT OVERLAY'S LANDING GROUND,
                                 ; not its listing, is what sizes this region.
                                 ; The %if in kernel.asm is what says whether
                                 ; the figure is still right, and shrinking
-                                ; `.ovlw` is what gives these bytes back -
+                                ; `.ovl` is what gives these bytes back -
                                 ; WHICH HAS NOW BEEN DONE (SPEC.md 2.5.3.2),
                                 ; and the bytes went to the LISTING's own cut
                                 ; rather than to this label: DSK_NENT 64 -> 32
@@ -308,7 +308,7 @@ dsk_ovlpad: resb DSK_OVLPAD     ; ...AND THE BOOT OVERLAY'S LANDING GROUND,
                                 ; the region fell 3,136 -> 2,336 and HEAP_SEG
                                 ; with it. This label emits nothing today and
                                 ; is kept because the NEXT thing that joins
-                                ; `.ovlw` needs somewhere to be told about
+                                ; `.ovl` needs somewhere to be told about
 %endif
 dsk_win_end:
 DSK_WIN_BYTES equ dsk_win_end - dsk_win_base

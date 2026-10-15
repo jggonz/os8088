@@ -40,6 +40,7 @@ TWO THINGS IT DELIBERATELY DOES NOT DO.
     reported, not silently skipped.  A skip that nobody sees is how a gate
     stops being one.
 """
+import concurrent.futures
 import glob
 import os
 import re
@@ -187,7 +188,48 @@ def declared(built):
     return CLASS_BYTES.get(hdr[H_CLASS], 384)
 
 
-def depth(asm, root):
+def listing_of(built):
+    """The listing and map the BUILD kept beside this image, or None.
+
+    The Makefile's STKLST writes build/<stem>.lst and .map in the same nasm
+    run as build/<stem>.bin, so walking them walks exactly the assembly that
+    ships - with its own -D flags, which a second assembly here did not have -
+    and costs no assembly at all. They must be from THAT run: a .bin rebuilt by
+    a rule without STKLST leaves an older listing behind, and a listing more
+    than a second older than its .bin is not used.
+    """
+    stem = os.path.join(BUILD, os.path.splitext(os.path.basename(built))[0])
+    binf = stem + ".bin"
+    lst, mp = stem + ".lst", stem + ".map"
+    try:
+        tb = os.path.getmtime(binf)
+        if min(os.path.getmtime(lst), os.path.getmtime(mp)) < tb - 1.0:
+            return None
+    except OSError:
+        return None
+    return stem
+
+
+def walk_listing(prefix, root):
+    """depth()'s answer off the BUILD's listing, in this process.
+
+    The same three calls tools/stkdepth.py's main() makes - symbols, routines,
+    deepest - without the interpreter launch per package and without the
+    report of pushes a chain did not need, which main() prints for a person
+    and this gate never read. A root the listing does not carry is the same
+    refusal main() makes, so a worker found in the wrong image still fails.
+    """
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import stkdepth
+    rout = stkdepth.routines(prefix + ".lst",
+                             stkdepth.symbols(prefix + ".map"))[0]
+    if root not in rout:
+        return None, ("%s.lst does not assemble a routine named %s"
+                      % (prefix, root))
+    return stkdepth.deepest(rout, root, (), ())[0], None
+
+
+def depth(asm, root, prefix=None):
     """stkdepth.py's deepest chain from `root`, in bytes."""
     # drivers/net is on the path for ftpd and Telnet: netpkg.inc is the socket
     # ABI they include from the DRIVER's tree (SPEC.md 72), so a package's own
@@ -206,7 +248,8 @@ def depth(asm, root):
                         "-I", os.path.join(ROOT, "drivers", "net"),
                         "-I", os.path.join(ROOT, "drivers", "ramdisk"),
                         "-I", os.path.join(ROOT, "drivers", "sound"),
-                        "--from", root],
+                        "--from", root]
+                       + (["--listing", prefix] if prefix else []),
                        capture_output=True, text=True, cwd=ROOT, timeout=900)
     m = re.search(r"^== %s: (\d+) bytes ==" % re.escape(root), r.stdout, re.M)
     if not m:
@@ -214,8 +257,17 @@ def depth(asm, root):
     return int(m.group(1)), None
 
 
+# The row's registry entry declares this many (tests/suite.py, Row.cpus): the
+# budget charges a row its CPU divided by its declared width, so the two must
+# move together. Each walk is a whole nasm assembly of one package plus the
+# walker over its listing - ~0.9s apiece, twenty-four of them - and every one
+# is independent of the others.
+JOBS = 4
+
+
 def main():
     rows, unfound, unbuilt, cpkgs = [], [], [], []
+    todo = []
     for asm in sorted(glob.glob(os.path.join(ROOT, "apps", "*", "*.asm"))):
         app = os.path.basename(os.path.dirname(asm))
         root = worker_of(asm)
@@ -229,8 +281,16 @@ def main():
         if o88 is None:
             unbuilt.append(app)
             continue
-        cls = declared(o88)
-        got, why = depth(asm, root)
+        todo.append((app, asm, root, declared(o88), listing_of(o88)))
+    # The build's listing where there is one (walked in-process, in worker
+    # PROCESSES because the walk is Python and a thread pool would hold the
+    # GIL), and a second assembly where there is not.
+    with concurrent.futures.ProcessPoolExecutor(max_workers=JOBS) as ex:
+        futs = [ex.submit(walk_listing, t[4], t[2]) if t[4]
+                else ex.submit(depth, t[1], t[2]) for t in todo]
+        walked = [f.result() for f in futs]
+    assembled = [t[0] for t in todo if not t[4]]
+    for (app, asm, root, cls, _), (got, why) in zip(todo, walked):
         if got is None:
             unfound.append("%s (%s): %s" % (app, root, why))
             continue
@@ -260,6 +320,10 @@ def main():
         print("t_stkclass: %d C package(s) declare a worker and are sized by "
               "their own measured water mark, not here: %s"
               % (len(cpkgs), ", ".join(cpkgs)))
+    if assembled:
+        print("t_stkclass: %d package(s) had no build listing and were "
+              "assembled again - give their Makefile rule $(STKLST): %s"
+              % (len(assembled), ", ".join(assembled)))
     print("t_stkclass: %d worker%s measured%s, thinnest %s"
           % (len(rows), "" if len(rows) == 1 else "s",
              (", %d package(s) not built" % len(unbuilt)) if unbuilt else "",

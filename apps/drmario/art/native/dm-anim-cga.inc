@@ -1,2 +1,2 @@
-dm_animptrs_cga: dw dm_animdata_cga+0,dm_animdata_cga+45,dm_animdata_cga+0,dm_animdata_cga+45,dm_animdata_cga+90,dm_animdata_cga+305,dm_animdata_cga+520,dm_animdata_cga+735,dm_animdata_cga+950,dm_animdata_cga+1170,dm_animdata_cga+1390,dm_animdata_cga+1610,dm_animdata_cga+1830,dm_animdata_cga+2045,dm_animdata_cga+2260,dm_animdata_cga+2475
+dm_animptrs_cga: dw dm_animdata_cga+0,dm_animdata_cga+41,dm_animdata_cga+0,dm_animdata_cga+41,dm_animdata_cga+82,dm_animdata_cga+247,dm_animdata_cga+412,dm_animdata_cga+577,dm_animdata_cga+662,dm_animdata_cga+831,dm_animdata_cga+998,dm_animdata_cga+1167,dm_animdata_cga+1254,dm_animdata_cga+1419,dm_animdata_cga+1578,dm_animdata_cga+1743
 dm_animdata_cga: incbin "dm-anim-cga.bin"

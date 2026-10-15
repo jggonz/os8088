@@ -25,7 +25,7 @@
 
 MRM_BUFN    equ 96                  ; bytes batched before a send
 
-    MRBUF mrm_buf, MRM_BUFN
+    MRX mrm_buf, MRM_BUFN
     MRW mrm_n                       ; ...how many are in it
     MRB mrm_up                      ; the interface is ours (SNDV_MIDOPEN)
 

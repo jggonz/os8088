@@ -64,6 +64,7 @@ OPL_NCH     equ 18              ; channels the allocator knows: an OPL3's
 ; out: CF = 0 and SI = the service table, which the kernel re-copies because
 ;      this changes it; CF = 1 and AL = DRVE_* - the SB tier was wanted and
 ;      could not be had
+; clobbers: AH, DI (drv_tier_x saves both round the call, and reads neither)
 ;
 ; The FM half is never touched. It costs no memory beyond the driver image,
 ; and an AdLib is what remains when the DSP tier is off - so the two tiers
@@ -82,17 +83,24 @@ OPL_NCH     equ 18              ; channels the allocator knows: an OPL3's
 ; -----------------------------------------------------------------------------
 snd_tier:
     mov si, snd_services        ; the answer, and the cells' base (drv_tier_x
-    cmp byte [drv_up], 0        ; banks SI)
+    push ax                     ; banks SI)
+                                ; ...and the tier asked, for the Covox's
+                                ; half at .table, which runs ONCE the DSP leg
+                                ; has answered: a refused Sound Blaster (its
+                                ; claim failed) must leave the Covox exactly
+                                ; as it was, since the kernel does not
+                                ; re-publish a refusal (SPEC.md 34.14). So it
+                                ; waits on the stack, the DSP leg spending AH.
+                                ; BX must come back: drv_tier_x reads the row
+                                ; through it after the call
+    cmp byte [drv_up], 0
     je .nohw                    ; nothing attached: no tier to move
-    mov [cvx_ask], ah           ; the Covox's cap is settled at .table, ONCE
-                                ; the DSP leg has answered: a refused Sound
-                                ; Blaster (its claim failed) must leave the
-                                ; Covox exactly as it was, since the kernel
-                                ; does not re-publish a refusal (SPEC.md 34.14)
-    cmp ah, SND_RT_LPT          ; A Covox tier is the AdLib's as far as the DSP
-    jae .off                    ; goes: SND_RT_LPT + n is 4..6, numerically
-    cmp ah, SND_RT_SB           ; ABOVE the Sound Blaster and not a rung over
-    jae .want                   ; it, so it is caught first
+    cmp ah, SND_RT_SB           ; A Covox tier is the AdLib's as far as the DSP
+    je .want                    ; goes: SND_RT_LPT + n is 4..6, numerically
+                                ; ABOVE the Sound Blaster and not a rung over
+                                ; it, so the DSP is wanted for SND_RT_SB alone
+                                ; - EQUAL, not `>=`, and that one compare is
+                                ; the whole of keeping the Covox out
 .off:
                                 ; --- off ----------------------------------
     cmp word [si+DSV_STREAM], 0
@@ -111,12 +119,41 @@ snd_tier:
     jc .no                      ; DRVE_* saying which of the two failed
     call snd_sb_pub
 .table:
-    call cvx_tier               ; ...the Covox's half, on the tier taken
-    clc                         ; (it preserves SI)
+    ; --- THE COVOX'S HALF (covox.inc's header has the device) -------------
+    ; AH = SND_RT_LPT + n names LPTn+1, and when that port answered at attach
+    ; it is the DAC - [cvx_port] - and SND_CAP_LPTDAC is published. Any other
+    ; tier, or a port that did not answer, withdraws both. Cannot fail: a
+    ; Covox tier whose port has gone is the AdLib tier, which is what the
+    ; page's dot then shows (ctrl.inc's cp_snd_row). It was cvx_tier, a call
+    ; of its own, until kernel size pass 10 made it this tail. CF = 0 on the
+    ; way out: every path to the store comes from a JA taken, an OR, or a JZ
+    ; after an OR, and none of the three leaves CF set
+    pop ax                      ; AH = the tier asked
+    and byte [si+DSV_CAPS+1], ~(SND_CAP_LPTDAC >> 8) & 0xFF
+    mov al, ah
+    sub al, SND_RT_LPT          ; AL = the port, LPT1..3 = 0..2...
+    cmp al, 3
+    jb .lpt
+    mov al, -1                  ; ...or not a Covox tier (below wraps to big),
+.lpt:                           ; which reads the word in front of cvx_ports,
+    cbw                         ; never written (AL is 0..2 or -1)
+    shl ax, 1
+    xchg ax, di                 ; DI, and NOT BX: drv_tier_x reads the row
+    mov ax, [cvx_ports+di]      ; through BX after this returns, and DI is
+    or ax, ax                   ; one it saves round us and does not read
+    jz .put                     ; ...or a port that did not answer
+    or byte [si+DSV_CAPS+1], SND_CAP_LPTDAC >> 8
+.put:
+    mov [cvx_port], ax
     ret
+%if SND_CAP_LPTDAC != 0x0100
+  %error "snd_tier sets and clears SND_CAP_LPTDAC as bit 0 of DSV_CAPS's high byte"
+%endif
 .nohw:
     mov al, DRVE_HW             ; nothing attached at all, so there is no
 .no:                            ; Sound Blaster here either
+    pop di                      ; the tier's word (POP keeps AL, the reason;
+                                ; DI and not BX, for the tail's reason)
     stc
     ret
 
@@ -191,15 +228,20 @@ snd_entry:
     cmp al, DRVV_HWINFO
     je snd_hwinfo
     cmp al, DRVV_READY
-    je .nocvx                   ; nothing to do: the probes already ran at
-                                ; ATTACH, so READY just re-answers with the
-                                ; table it built then. PAST ALL THREE PROBES
-                                ; and not to .nosb, which is where the MPU's
-                                ; and the Covox's begin: READY landing there
-                                ; reset the MPU-401 a second time and latched
-                                ; every printer port again on every load, and
-                                ; read the port pin a second time where it
-                                ; could only agree (SPEC.md 34.13.2)
+    je .ready                   ; nothing to do: this driver keeps no settings
+                                ; blob (SPEC.md 51.9) and the probe already
+                                ; ran at ATTACH, so READY just re-answers with
+                                ; the table it built then. It went to .nosb
+                                ; until kernel size pass 10, which was right
+                                ; until the MPU-401 and the Covox probes were
+                                ; written BELOW that label: every load then
+                                ; re-ran both at READY - the MPU reset and
+                                ; UART command sent a second time, the three
+                                ; parallel ports' latches written again, and
+                                ; [mpu_base] cleared and re-found - so READY
+                                ; now jumps past the probes to the answer -
+                                ; and past the port pin's read, which could
+                                ; only agree (SPEC.md 34.13.2)
     cmp al, DRVV_ATTACH
     jne .nohw                   ; an unknown verb REFUSES rather than probing
                                 ; hardware nobody asked about
@@ -238,6 +280,9 @@ snd_entry:
     or word [si+DSV_CAPS], SND_CAP_FM
     or word [si+DSV_TIERS], 1 << SND_RT_FM
     mov word [si+DSV_NAME], snd_s_opl
+%ifdef PICOMEM
+    call pm_tickpub             ; the card's AdLib wants a tick of its own
+%endif                          ; (SPEC.md 34.10.6), with or without a DSP
 .nofm:
     call sbl_attach             ; the reset scan, then the DMA buffer
     jnc .sbok
@@ -299,24 +344,21 @@ snd_entry:
                                 ; put that string on the page.
 .nosb:
     call mpu_probe              ; THE THIRD REASON TO ATTACH (SPEC.md 34.13):
-    jc .nompu                   ; an MPU-401 alone is worth loading for - a
-    cmp byte [drv_up], 0        ; module on the connector is a whole synth
-    jne .nompu                  ; the package reaches through DSV_PKGCALL
-    mov byte [drv_up], 1        ; (attach only: READY arrives with drv_up
-    mov word [si+DSV_NAME], snd_s_mpu   ; set, so never here - SI is ours)
-.nompu:
+    mov ax, snd_s_mpu           ; an MPU-401 alone is worth loading for - a
+    call snd_upnm               ; module on the connector is a whole synth
+                                ; the package reaches through DSV_PKGCALL
+                                ; (attach only - READY jumps past both
+                                ; probes to .ready - so SI is ours)
     call cvx_probe              ; THE FOURTH (SPEC.md 34.14): parallel ports
-    jc .nocvx                   ; a Covox could be on. It says only that the
-    cmp byte [drv_up], 0        ; Sound page's Covox choices are live (their
-    jne .nocvx                  ; DSV_TIERS bits) - the DAC is undetectable
-    mov byte [drv_up], 1        ; and is never published here, only by the
-    mov word [si+DSV_NAME], snd_s_cvx   ; tier the user picks
-                                ; (cvx_tier). On a machine with no card it is
-                                ; the whole reason the driver is up, so the
-                                ; page names the row after it
-.nocvx:
+                                ; a Covox could be on. It says only that the
+                                ; Sound page's Covox choices are live (their
+                                ; DSV_TIERS bits) - the DAC is undetectable
+                                ; and is never published here, only by the
+                                ; tier the user picks (snd_tier's tail). It
+                                ; ends in snd_upnm itself
     cmp byte [drv_up], 0
     je .nohw
+.ready:
     mov si, snd_services
     clc
     ret
@@ -350,6 +392,9 @@ snd_entry:
 snd_sb_pub:
     mov word [si+DSV_STREAM], sbl_stream_op
     mov word [si+DSV_TICK], sbl_tick
+%ifdef PICOMEM
+    call pm_tickpub             ; ...which ends in sbl_tick (SPEC.md 34.10.6)
+%endif
     mov word [si+DSV_NAME], snd_s_sb
     or word [si+DSV_CAPS], SND_CAP_PCM_BG | SND_CAP_PCM_IN | SND_CAP_EXTBLK
     cmp byte [sbl_verhi], 3
@@ -1430,9 +1475,9 @@ opl_init:
 
 %ifdef PICOMEM
 %include "picomem.inc"          ; ...and the PicoMEM's side of getting one to
-                                ; exist at all (SPEC.md 34.10). `make PICOMEM=1`
-                                ; only; without the knob this driver is
-                                ; byte-identical to the shipped one
+                                ; exist at all (SPEC.md 34.10). In by default;
+                                ; `make NOPICOMEM=1` is the driver without it
+                                ; (SPEC.md 34.10.3)
 %endif
 
 ; =============================================================================

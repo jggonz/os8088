@@ -33,7 +33,7 @@
 ; in:  DH = byte 0 (the one with bit 6 set), DL = byte 1, BL = byte 2
 ; out: AX = dx, signed; BX = dy, signed and POSITIVE IS DOWN; CL = the buttons
 ;      in `mouse_btn`'s own two bits - bit 0 left, bit 1 right
-; clobbers: SI, flags. DH and DL are spent.
+; clobbers: flags. DH, DL and BL are spent.
 ;
 ; The two `cbw`s are the whole of the sign extension and they are why the
 ; halves are assembled into AL rather than into a word: the protocol sends
@@ -46,21 +46,11 @@
 ; shared back end never has to know which mouse it is serving.
 ; -----------------------------------------------------------------------------
 %macro MOU_DECODE_MS 0
-    ; --- dx = sign-extended {X7X6 from b0, X5..X0 from b1} -------------------
-    mov al, dh
-    and al, 0x03
-    mov cl, 6
-    shl al, cl                  ; X7X6 into bits 7:6
-    mov ah, dl
-    and ah, 0x3F
-    or  al, ah
-    cbw                         ; AX = dx, signed
-    mov si, ax                  ; ...banked, because the host wants both deltas
-                                ; at once. SI is the ISR's to spend - it is
-                                ; pushed - and it is the one register the y
-                                ; decode does not need
-
     ; --- dy = sign-extended {Y7Y6 from b0, Y5..Y0 from b2}; positive = down --
+    ; FIRST, so that dx can be assembled straight into AX afterwards: the old
+    ; order built dx first and banked it in SI across this half, a `mov si,
+    ; ax` and a `mov ax, si` the order alone makes unnecessary (kernel size
+    ; pass 10; 4 bytes and 4 clocks, and SI is no longer touched at all)
     mov al, dh
     and al, 0x0C
     mov cl, 4
@@ -69,6 +59,16 @@
     or  al, bl
     cbw                         ; AX = dy, signed
     mov bx, ax
+
+    ; --- dx = sign-extended {X7X6 from b0, X5..X0 from b1} -------------------
+    mov al, dh
+    mov cl, 6
+    shl al, cl                  ; X7X6 into bits 7:6 - and NO `and al, 3`
+                                ; first: a shift of six moves bits 7:2 out of
+                                ; the byte by itself
+    and dl, 0x3F                ; DL is spent anyway, so the low six bits are
+    or  al, dl                  ; masked in place rather than through AH
+    cbw                         ; AX = dx, signed
 
     ; --- buttons: b0 bit 5 = left, bit 4 = right -----------------------------
     xor cl, cl
@@ -80,7 +80,6 @@
     jz %%nor
     or  cl, 0x02
 %%nor:
-    mov ax, si
 %endmacro
 
 %endif                          ; MOUPROTO_INC

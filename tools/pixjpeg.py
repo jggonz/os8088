@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PiXEL's JPEG fixtures (SPEC.md 106.19, PIXEL-PLAN decision 15).
 
-    python3 tools/pixjpeg.py --check        # the committed files are these (FAST)
+    python3 tools/pixjpeg.py --check        # the committed files are these (soak row)
     python3 tools/pixjpeg.py --verify       # pixelsim on every one, every scale,
                                             # and Pillow's PSNR where Pillow is
     python3 tools/pixjpeg.py --regen        # remake them (needs Pillow and cjpeg)
@@ -13,7 +13,7 @@ sampling PiXEL reads, restart markers, sizes that are no multiple of an MCU,
 the eight EXIF orientations, 16-bit quantisation tables, progressive scripts
 with refinement scans, and the four kinds of JPEG PiXEL refuses by name - and
 are committed under tests/pixel/, each pinned by its SHA-256. --check reads
-nothing else and is the fast row; tools/pixcorpus.py derives the HOSTILE half
+nothing else and is the `pixjpeg` soak row; tools/pixcorpus.py derives the HOSTILE half
 from these files in pure Python (truncations, lying lengths, broken tables,
 bad progressions), so no hostile file needs committing.
 

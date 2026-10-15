@@ -430,15 +430,15 @@ def main():
                 vol = os88flush.Flush(marty=m).volume(1)
                 txt, txterr = None, None
                 try:
-                    txt = vol.read("VIDDISK.TXT").decode("latin-1")
-                    wtxt = vol.read("VDWRITE.TXT").decode("latin-1")
+                    txt = vol.read_latest("VIDDISK.TXT").decode("latin-1")
+                    wtxt = vol.read_latest("VDWRITE.TXT").decode("latin-1")
                 except Exception as e:
                     txterr = str(e)
         finally:
             m.close()
         if not a.floppy:
             try:                    # the report the bench SAVED, off the VHD
-                txt = os88flush.vhd_volume(vhd).read("VIDDISK.TXT").decode(
+                txt = os88flush.vhd_volume(vhd).read_latest("VIDDISK.TXT").decode(
                     "latin-1")
                 txterr = None
             except Exception as e:
@@ -446,7 +446,7 @@ def main():
         else:
             # W's file read by a reader that is NOT the kernel that wrote it
             vol = os88flush.vhd_volume(vhd)
-            if "VIDDISK.TXT" in vol.names():
+            if vol.latest("VIDDISK.TXT"):
                 wbad.append("the report went to C:, not beside the bench")
             try:
                 sd = vol.read("STREAM.DAT")

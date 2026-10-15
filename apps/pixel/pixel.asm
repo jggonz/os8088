@@ -114,7 +114,7 @@ PX_ILAB     equ 8                   ; Image Info's label column, in glyphs
 PX_IVSZ     equ 24                  ; ...and a value's buffer
 PX_HSTW     equ 11                  ; Histogram's statistics column, glyphs:
                                     ; "Std Dev" and three digits
-PXH_SZ      equ 2 + 8 * 4           ; a half-height picture record
+PXH_SZ      equ 2 + 8 * 2           ; a half-height picture record
 PX_HELPSZ   equ 400                 ; the keyboard card's text, copied in
 PX_HELPMAX  equ 12                  ; ...and its lines
 PX_MEMT     equ 91                  ; ticks between looks at free memory (5 s)
@@ -891,12 +891,7 @@ px_onup:
     jne .out
     call px_nextpanel
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp px_ld_5
 
 ; px_bfire - AX = a button that fired. A greyed one did NOT: the library arms
 ; and fires on geometry alone - so here the fact a grey states is said in a
@@ -1402,8 +1397,17 @@ px_onwake:
     mov byte [px_argpend], 0
     mov dx, [px_argdir]             ; the DOCUMENT's folder, not ours (54.8:
     mov bl, [px_argvol]             ; the kernel stood in the program's)
-    call OSAPI_FILE_GOTO
-    jnc .there
+    push cx                         ; QUIETLY, and the instance with us:
+    call OSAPI_FILE_GOTO_QM         ; px_open reads by name and nothing here
+    pop cx                          ; lists the folder, so the remount's scan,
+                                    ; sort and icon harvest were ~0.5 s of
+                                    ; floppy for no reader (docs/plans/
+                                    ; NAV-COST-PLAN.md, SPEC.md 19.9.1). CX is
+                                    ; banked for a redirected volume's
+                                    ; FSV_CHDIR (SPEC.md 62.9.1; AX, SI and DI
+                                    ; are reloaded below) and `pop` keeps CF
+    jnc .there                      ; CF=1 moved NOTHING: px_open would find
+                                    ; the name in OUR folder, so refuse
     call OSAPI_GFX_LOCK             ; gone (a disk swapped): said, from inside
     mov si, px_s_notfile            ; the lock, where a toast reaches the
     call px_toast                   ; glass (54.10)
@@ -1617,9 +1621,21 @@ px_dlgdone:
     ret
 
 ; px_revert - File > Revert (Ctrl+R): the shown picture read again from its
-; file, in its folder. Lock held
+; file, in its folder. Lock held. Preserves all registers.
+;
+; It is also every zoom-out re-decode (pxview.inc), so the stand is
+; OSAPI_FILE_GOTO_QM: the picture's folder is almost always where the
+; instance already is, and QM is then a compare where the listing remount was
+; a boot sector, a directory scan, a sort and an icon read per file - ~0.5 s
+; of floppy per zoom step for no reader (docs/plans/NAV-COST-PLAN.md, SPEC.md
+; 19.9.1). QM moves the instance too, so px_open's by-name read resolves
+; there. CF=1 moved NOTHING, so the read would resolve in whatever folder we
+; were in and could find a same-named stranger: refuse. AX and CX are banked
+; for QM's answer and a redirected volume's FSV_CHDIR (SPEC.md 62.9.1).
 px_revert:
+    push ax
     push bx
+    push cx
     push dx
     push si
     push di
@@ -1627,18 +1643,14 @@ px_revert:
     je .out
     mov dx, [px_cur + PXR_DIR]
     mov bl, [px_cur + PXR_VOL]
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_QM
     jc .out
     mov si, px_cur + PXR_NAME
     mov di, px_oname
     call px_strcpy
     call px_open
 .out:
-    pop di
-    pop si
-    pop dx
-    pop bx
-    ret
+    jmp px_ld_6
 
 ; px_infocard - File > Image Info...: Image Info's lines as a card, for the
 ; compact layout where the panel may not be the one showing
@@ -1927,7 +1939,12 @@ px_pcall:
 ; is read out of PIXEL.O88, and the instance may be standing anywhere since
 ; File > Open moved it (SPEC.md 38.10) - so the fetch goes home to the folder
 ; the package was launched from and back again (SCRIBE's bracket, 95.8.6).
-; clobbers: AX, BX, CX, DX, SI, DI, ES
+; Both legs are OSAPI_FILE_GOTO_QM: op_fetch reads by name and nothing lists
+; either folder, so the remount's scan, sort and icon harvest were ~0.5 s of
+; floppy a leg for no reader (docs/plans/NAV-COST-PLAN.md, SPEC.md 19.9.1),
+; and QM moves the instance, which is what the read resolves through.
+; clobbers: AX, BX, CX, DX, SI, DI, ES - so QM's answer in AX and a
+; redirected volume's CX, SI and DI (SPEC.md 62.9.1) cost nothing to bank
 px_pfetch:
     mov al, [px_ppart]
     call op_seg
@@ -1947,12 +1964,13 @@ px_pfetch:
 .go:
     mov dx, [px_homedir]
     mov bl, [px_homevol]
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_QM
     jnc .moved                      ; home is gone (PiXEL's disk swapped
     mov si, px_s_diskback           ; out): no fetch at all, rather than a
     call px_toast                   ; part read out of whatever PIXEL.O88
     stc                             ; stands in this folder (wave-1 review
-    ret                             ; MIN-2)
+    ret                             ; MIN-2) - and QM moved nothing, so we
+                                    ; are still where the user was
 .moved:
     mov byte [px_pmoved], 1
 .here:
@@ -1963,7 +1981,13 @@ px_pfetch:
     je .back
     mov dx, [px_pwas]
     mov bl, [px_pwvol]
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_QM         ; CF unread, as it always was: a failure
+                                    ; moved nothing and leaves the instance at
+                                    ; home (the old GOTO's left it at the root
+                                    ; with the write gate shut), and Revert
+                                    ; and the save each stand in the
+                                    ; picture's own folder first (px_revert,
+                                    ; pu_goto). The popf is op_fetch's answer
 .back:
     popf
     ret
@@ -2348,6 +2372,15 @@ px_head:
     add ax, 1023
     mov cl, 10
     shr ax, cl                      ; KB
+    inc ax                          ; ...and one KB more, which px_dmaclaim
+                                    ; no longer needs for alignment: KEPT,
+                                    ; because the head is given back before
+                                    ; the decode's claims (so it is no peak)
+                                    ; and the hole it leaves is where the
+                                    ; ring's claim lands - 3 KB there made
+                                    ; pxbench's BIG.BMP on the VGA XT
+                                    ; compact 332 KB for its ring, 1.2 s in
+                                    ; front of the first rows (size pass 1)
     call px_dmaclaim
     jnc .hc
     mov ax, PXD_MEM
@@ -2395,13 +2428,11 @@ px_head:
     cmp ax, 0xFFFF - 2
     jae .big
     push ax
-    add ax, 2                       ; a KB for the alignment, and spare
-    call OSAPI_MEM_CLAIM
-    pop ax
+    inc ax                          ; a KB spare - and none for alignment:
+    call OSAPI_MEM_CLAIM            ; guard 6b's bases are 512-aligned
+    pop ax                          ; already (px_dmaclaim)
     jc .big
     mov [px_flatraw], dx
-    add dx, 31
-    and dx, 0xFFE0
     mov [px_flatseg], dx
     push es
     mov es, dx
@@ -2818,13 +2849,7 @@ px_compose:
     call px_strcat
     mov si, px_fname
     call px_strcat
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp px_ld_6
 
 ; px_pathstr - px_cline = "D:\FOLDER\..." for where the instance stands
 px_pathstr:
@@ -2993,12 +3018,7 @@ px_menulive:
     jcxz .out
     call px_menuset
 .out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp px_ld_5
 
 ; px_mlset - the list at SI (slot, string), each item live (DX = 1) or grey
 ; (DX = 0); CX counts those that changed. Preserves the rest but AX, BX, SI
@@ -3032,27 +3052,21 @@ px_halfinit:
     mov di, px_hicons
     mov bx, PXI_N
 .icon:
-    mov byte [di], 1
-    mov byte [di + 1], 8
-    mov cx, 8
-.mask:
-    mov word [di + 2], 0xFFFF
-    add di, 2
-    loop .mask
-    sub di, 16                      ; DI = the record again
-    push si
-    add si, 2 + 32                  ; the source's data rows
-    mov cx, 8
-.data:
-    mov ax, [si]
-    or ax, [si + 2]
-    mov [di + 2 + 16], ax
-    add si, 4
-    add di, 2
+    lodsw                           ; the header: ICON_SOLID, 16 - halved
+    shr ah, 1
+    mov [di], ax
+    inc di
+    inc di
+    mov cx, 8                       ; the data rows, a pair at a time; the mask
+.data:                              ; is implied (SPEC.md 25.6.2), so a record
+    lodsw                           ; is its header and these and nothing else
+    or ax, [si]
+    inc si
+    inc si
+    mov [di], ax
+    inc di
+    inc di
     loop .data
-    pop si
-    add di, PXH_SZ - 16             ; the next record
-    add si, PXI_SZ
     dec bx
     jnz .icon
     xor bx, bx                      ; the labels: a picture's half twin
@@ -3928,99 +3942,89 @@ px_kind     equ PXB + 49            ; byte: VGA / Hercules (and EGA) / CGA
 px_half     equ PXB + 50            ; byte: half-height pictures (a CGA)
 px_tier     equ PXB + 51            ; byte: 0 full, 1 compact
 px_caps     equ PXB + 52            ; byte: the toolbar has captions
-                                    ; (PXB + 53 free)
-px_col      equ PXB + 54            ; byte: the COLOUR face (SPEC.md 106.16)
-                                    ; (PXB + 55 free)
-px_pnon     equ PXB + 56            ; byte: the panel column is laid out
-px_pnoff    equ PXB + 57            ; byte: View > Hide Panels
-px_pvis     equ PXB + 58            ; byte: the panels laid out, a bit each
-px_geo      equ PXB + 59            ; byte: px_regdraw repaints its regions
-px_pcur     equ PXB + 60            ; byte: the compact layout's panel
-px_dither   equ PXB + 61            ; byte: 0 ordered, 1 diffusion
-px_btnh     equ PXB + 62            ; word
-px_sth      equ PXB + 64
-px_hsth     equ PXB + 66            ; the Histogram's body
-px_lp       equ PXB + 68
-                                    ; (PXB + 70 free)
-px_navh     equ PXB + 72
-px_pw       equ PXB + 74
-px_tbh      equ PXB + 76
-px_tby2     equ PXB + 78
-px_sty1     equ PXB + 80
-                                    ; (PXB + 82 free)
-px_midy1    equ PXB + 84
-px_midy2    equ PXB + 86
-px_tcx2     equ PXB + 88
-px_pnx1     equ PXB + 90
-px_cvx1     equ PXB + 92
-px_cvx2     equ PXB + 94
-px_sbx      equ PXB + 96
-px_pyw      equ PXB + 98            ; 3 words: each panel's strip
-px_pbhw     equ PXB + 104           ; 3 words: ...its body's rows
-px_pbody    equ PXB + 110           ; 3 words: ...its body's full height
-px_pcurw    equ PXB + 116           ; word: px_pcur, as a word
-px_pc       equ PXB + 118           ; byte: px_fillc's colour
-px_rmask    equ PXB + 119           ; byte
-px_c_chrome equ PXB + 120           ; 8 bytes: the palette, px_pal4's order
-px_c_body   equ PXB + 121
-px_c_strip  equ PXB + 122
-px_c_stript equ PXB + 123
-px_c_canvas equ PXB + 124
-px_c_cvtext equ PXB + 125
-px_c_rule   equ PXB + 126
-px_c_text   equ PXB + 127
-px_dx1      equ PXB + 128           ; the damage rect
-px_dy1      equ PXB + 130
-px_dx2      equ PXB + 132
-px_dy2      equ PXB + 134
-px_icpair   equ PXB + 136
-px_icx      equ PXB + 138
-px_icy      equ PXB + 140
-px_tbink    equ PXB + 142
-px_tbx1     equ PXB + 144
-px_tbx2     equ PXB + 146
-px_tby      equ PXB + 148
-px_tbcx     equ PXB + 150
-px_tbn      equ PXB + 152
-px_sty      equ PXB + 154
-px_sbox     equ PXB + 156
-px_bx1      equ PXB + 158
-px_by1      equ PXB + 160
-px_bx2      equ PXB + 162
-px_by2      equ PXB + 164
-px_tyy      equ PXB + 166
-px_rx1      equ PXB + 168
-px_ry1      equ PXB + 170
-px_rx2      equ PXB + 172
-px_ry2      equ PXB + 174
-px_scells   equ PXB + 176
-px_skeep    equ PXB + 178           ; byte
-px_sdirty   equ PXB + 179           ; byte
-                                    ; (PXB + 180 free)
-px_rkind    equ PXB + 181           ; byte: OSAPI_WM_DISPLAY's own kind
-px_hchan    equ PXB + 182           ; byte: the Histogram's channel
-px_zfit     equ PXB + 183           ; byte: the zoom is Fit
-                                    ; (PXB + 184..187 free)
-px_press    equ PXB + 188           ; byte
-px_abon     equ PXB + 189           ; byte
-px_helpon   equ PXB + 190           ; byte
-px_ppart    equ PXB + 191           ; byte
-px_pvec     equ PXB + 192           ; byte
-px_pmoved   equ PXB + 193           ; byte
-px_pwas     equ PXB + 194           ; word
-px_pwvol    equ PXB + 196           ; byte
-px_infoon   equ PXB + 197           ; byte: the Image Info card is up
-px_pfar     equ PXB + 198           ; dword: the far vector being called
-px_pres     equ PXB + 202           ; word: INIT's answer, for the gate
-px_pcalls   equ PXB + 204           ; word: far calls made, for the gate
-px_clb      equ PXB + 206
-px_snlen    equ PXB + 208
-px_tyy0     equ PXB + 210           ; the status text's row (px_draw_status)
-px_tbon     equ PXB + 212           ; PX_TBN bytes
-px_tbcap    equ PXB + 226           ; PX_TBN bytes
-px_tbx      equ PXB + 240           ; PX_TBN words
-px_find     equ PXB + 266           ; OSAPI_FIND_SZ
-px_brects   equ PXB + 290           ; PX_NB * 8
+px_col      equ PXB + 53            ; byte: the COLOUR face (SPEC.md 106.16)
+px_pnon     equ PXB + 54            ; byte: the panel column is laid out
+px_pnoff    equ PXB + 55            ; byte: View > Hide Panels
+px_pvis     equ PXB + 56            ; byte: the panels laid out, a bit each
+px_geo      equ PXB + 57            ; byte: px_regdraw repaints its regions
+px_pcur     equ PXB + 58            ; byte: the compact layout's panel
+px_dither   equ PXB + 59            ; byte: 0 ordered, 1 diffusion
+px_btnh     equ PXB + 60            ; word
+px_sth      equ PXB + 62
+px_hsth     equ PXB + 64            ; the Histogram's body
+px_lp       equ PXB + 66
+px_navh     equ PXB + 68
+px_pw       equ PXB + 70
+px_tbh      equ PXB + 72
+px_tby2     equ PXB + 74
+px_sty1     equ PXB + 76
+px_midy1    equ PXB + 78
+px_midy2    equ PXB + 80
+px_tcx2     equ PXB + 82
+px_pnx1     equ PXB + 84
+px_cvx1     equ PXB + 86
+px_cvx2     equ PXB + 88
+px_sbx      equ PXB + 90
+px_pyw      equ PXB + 92            ; 3 words: each panel's strip
+px_pbhw     equ PXB + 98           ; 3 words: ...its body's rows
+px_pbody    equ PXB + 104           ; 3 words: ...its body's full height
+px_pcurw    equ PXB + 110           ; word: px_pcur, as a word
+px_pc       equ PXB + 112           ; byte: px_fillc's colour
+px_rmask    equ PXB + 113           ; byte
+px_c_chrome equ PXB + 114           ; 8 bytes: the palette, px_pal4's order
+px_c_body   equ PXB + 115
+px_c_strip  equ PXB + 116
+px_c_stript equ PXB + 117
+px_c_canvas equ PXB + 118
+px_c_cvtext equ PXB + 119
+px_c_rule   equ PXB + 120
+px_c_text   equ PXB + 121
+px_dx1      equ PXB + 122           ; the damage rect
+px_dy1      equ PXB + 124
+px_dx2      equ PXB + 126
+px_dy2      equ PXB + 128
+px_icpair   equ PXB + 130
+px_icx      equ PXB + 132
+px_icy      equ PXB + 134
+px_tbink    equ PXB + 136
+px_tbx1     equ PXB + 138
+px_tbx2     equ PXB + 140
+px_tby      equ PXB + 142
+px_tbcx     equ PXB + 144
+px_tbn      equ PXB + 146
+px_bx1      equ PXB + 148
+px_by1      equ PXB + 150
+px_bx2      equ PXB + 152
+px_by2      equ PXB + 154
+px_rx1      equ PXB + 156
+px_ry1      equ PXB + 158
+px_rx2      equ PXB + 160
+px_ry2      equ PXB + 162
+px_scells   equ PXB + 164
+px_skeep    equ PXB + 166           ; byte
+px_sdirty   equ PXB + 167           ; byte
+px_rkind    equ PXB + 168           ; byte: OSAPI_WM_DISPLAY's own kind
+px_hchan    equ PXB + 169           ; byte: the Histogram's channel
+px_zfit     equ PXB + 170           ; byte: the zoom is Fit
+px_press    equ PXB + 171           ; byte
+px_abon     equ PXB + 172           ; byte
+px_helpon   equ PXB + 173           ; byte
+px_ppart    equ PXB + 174           ; byte
+px_pvec     equ PXB + 175           ; byte
+px_pmoved   equ PXB + 176           ; byte
+px_pwas     equ PXB + 177           ; word
+px_pwvol    equ PXB + 179           ; byte
+px_infoon   equ PXB + 180           ; byte: the Image Info card is up
+px_pfar     equ PXB + 181           ; dword: the far vector being called
+px_pres     equ PXB + 185           ; word: INIT's answer, for the gate
+px_pcalls   equ PXB + 187           ; word: far calls made, for the gate
+px_snlen    equ PXB + 189
+px_tyy0     equ PXB + 191           ; the status text's row (px_draw_status)
+px_tbon     equ PXB + 193           ; PX_TBN bytes
+px_tbcap    equ PXB + 206           ; PX_TBN bytes
+px_tbx      equ PXB + 219           ; PX_TBN words
+px_find     equ PXB + 245           ; OSAPI_FIND_SZ
+px_brects   equ PXB + 269           ; PX_NB * 8
 px_bflags   equ px_brects + PX_NB * 8           ; PX_NB words
 px_lab_half equ px_bflags + PX_NB * 2           ; PX_NB words
 px_sv       equ px_lab_half + PX_NB * 2         ; PX_NSF * PX_SVSZ
@@ -4149,8 +4153,6 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_tabok, 1               ; the view claim's tables are good
     PXVAR px_tdepth, 1              ; ...for this depth
     PXVAR px_hok, 1                 ; the histogram is counted
-    PXVAR px_pctlast, 2             ; the progress shown
-    PXVAR px_ptick, 2
     ; the decode's parameters (pxsimple.inc)
     PXVAR px_dfmt, 1
     PXVAR px_dtop, 1
@@ -4219,8 +4221,6 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_ccnt, 2
     PXVAR px_cdep, 1
     PXVAR px_useP, 1
-    PXVAR px_c2pb, 2
-    PXVAR px_c2px, 2
     PXVAR px_rx0, 2
     PXVAR px_ry0, 2
     PXVAR px_ryend, 2
@@ -4429,7 +4429,6 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_pcon, 1                ; A PARAMETER CARD up (pxcard.inc)
     PXVAR px_pcv, 4                 ; ...its rows' values
     PXVAR px_pcr, 8                 ; ...its rect
-    PXVAR px_pcbtn, 1               ; ...the button that fired
     PXVAR px_wfmt, 1                ; SAVE AS: the format (pxsave.inc)
     PXVAR px_wfirst, 1              ; ...the first slot creates the file
     PXVAR px_wtok, 2                ; ...WRITE_SEQ's token

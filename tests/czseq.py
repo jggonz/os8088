@@ -135,7 +135,7 @@ def main():
              "--vbr", os.path.join(B, "boothd.bin"),
              "--mbr", os.path.join(B, "mbr.bin"),
              "--file", "HDD.DRV=" + os.path.join(B, "hdd.drv"),
-             "--file", "CLONE.DRV=" + os.path.join(B, "clone.drv")],
+             "--file", "DISKOPS.DRV=" + os.path.join(B, "diskops.drv")],
             check=True, capture_output=True)
         m0 = os88marty.launch(None, apps=img,
                               machine="os8088_5150_herc_hdd_sb_gla",

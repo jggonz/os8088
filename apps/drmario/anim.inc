@@ -80,6 +80,7 @@ dm_animpaint:
     je .out
     mov byte [dm_animdirty], 0
     xor bp, bp
+    xor cx, cx                  ; dm_animpatch's REPs keep CX zero
 .actor:
     mov al, [ds:dm_actorpose+bp]
     cmp al, [ds:dm_actorshadow+bp]
@@ -116,18 +117,32 @@ dm_animpaint:
     jb .actor
 .out: ret
 
-; Trusted offline-compiled absolute spans. CX high byte stays zero.
+; Trusted offline-compiled spans (tools/drmario_assets.py patch_plane): a
+; destination word, then count, payload, skip records; 128 ends. Counts
+; 1..127 copy literals, 128+n fills n bytes. CX is zero on entry.
 dm_animpatch:
-    xor cx, cx
-.span:
     lodsw
-    cmp ax, 0ffffh
-    je .out
     mov di, ax
+    xor ah, ah
     lodsb
+    or al, al
+    js .special
+.literal:
     mov cl, al
     rep movsb
-    jmp .span
+.skip:
+    lodsb
+    add di, ax
+    lodsb
+    or al, al
+    jns .literal
+.special:
+    and al, 7fh
+    jz .out
+    mov cl, al
+    lodsb
+    rep stosb
+    jmp .skip
 .out: ret
 
 %include "dm-anim-vga.inc"

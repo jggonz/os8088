@@ -74,7 +74,7 @@ def edit(m):
 
 
 def pick_format_unreadable(ui, m):
-    """File > Format Disk..., with every probe read sent to absent drive 3.
+    """Disk > Format Disk..., with every probe read sent to absent drive 3.
 
     The menu is picked by the harness verb, which waits for the pick to be
     CONFIRMED - so it runs on a thread while this one sits at the int 13h
@@ -82,7 +82,7 @@ def pick_format_unreadable(ui, m):
     """
     failed = 0
     m.breakpoints([{"type": "int", "addr": 0x13}])
-    t = threading.Thread(target=lambda: ui.menu_pick("File", "Format Disk..."))
+    t = threading.Thread(target=lambda: ui.menu_pick("Disk", "Format Disk..."))
     t.start()
     while m.wait_stop(20):
         r = m.regs()
@@ -153,7 +153,7 @@ try:
         M.settle(m)
 
         # --- 2. every track is laid ------------------------------------------
-        ui.menu_pick("File", "Format Disk...")
+        ui.menu_pick("Disk", "Format Disk...")
         M.settle(m, limit=300)
         check(edit(m) == 5, "a disk of random bytes is offered a format", "",
               got=edit(m), want=5)

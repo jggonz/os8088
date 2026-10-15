@@ -2002,8 +2002,8 @@ def main():
         n += write_hud_placeholders(a.force)
         print("pxsart: wrote %d placeholder master(s) under %s" % (n, ART_DIR))
     if a.hud and not (a.out or a.raw or a.check or a.preview or a.inks):
-        # THE HUD ALONE, and nothing else loaded: the pxs-gen fast row runs
-        # this inside every `make`, and the walls' and sprites' criteria are
+        # THE HUD ALONE, and nothing else loaded: the pxs-gen soak row runs
+        # this, and the walls' and sprites' criteria are
         # ~0.6 s the include does not depend on
         try:
             hs = huds()

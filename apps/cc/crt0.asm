@@ -391,21 +391,17 @@ cc_entry:
     pop es
     pop di
     pop si
-    or bx, bx                       ; CF LAST, and after the pops: `pop`
-    jz .abort                       ; writes no flags, so either order works -
-    clc                             ; pinning one removes the question (73.4)
-    ret
-.abort:
-    stc
-    ret
+    cmp bx, 1                       ; CF LAST, and after the pops: `pop`
+    ret                             ; writes no flags, so either order works -
+                                    ; pinning one removes the question (73.4).
+                                    ; The borrow IS the answer: CF = 1 exactly
+                                    ; when BX < 1, i.e. no window - abort
 %ifdef CC_HAS_PARTS
 .partsno:
-    pop es                          ; op_load refused; the C never ran, so
-    pop di                          ; there is nothing of ours to unwind and
-    pop si                          ; the loader gives the region back
-    stc
-    ret
-%endif
+    xor bx, bx                      ; op_load refused; the C never ran, so
+    jmp short .noreg                ; there is nothing of ours to unwind, the
+                                    ; loader gives the region back, and BX = 0
+%endif                              ; is the abort the pops above end in
 
 ; =============================================================================
 ; THE WINDOW CALLBACKS
@@ -445,8 +441,8 @@ cc_paint:
 ; cc_onkey - W_ONKEY (SPEC.md 11)
 ; in:  AL = the ASCII code, AH = the scan code, SI = the window; lock held
 ; out: nothing
-; The two halves of AX are moved into BX first, because building the second
-; C argument destroys the register the first one is still in.
+; The scan code is moved into BX first, because building the first C
+; argument in AX destroys the half the second one is still in.
 ; -----------------------------------------------------------------------------
 cc_onkey:
     push bx
@@ -456,12 +452,10 @@ cc_onkey:
     push di
     push es
     cld
-    mov bx, ax                      ; BL = ascii, BH = scan
     push si                         ; arg 3: void *win
-    mov al, bh
-    mov ah, 0
-    push ax                         ; arg 2: int scan
-    mov al, bl
+    mov bl, ah
+    mov bh, 0
+    push bx                         ; arg 2: int scan
     mov ah, 0
     push ax                         ; arg 1: int ascii
     call _os88_onkey
@@ -647,13 +641,9 @@ cc_onclose:
     pop dx
     pop cx
     pop bx
-    or ax, ax                       ; ...and only now, with nothing left to
-    jz .refuse                      ; restore, is FLAGS the answer
-    clc
-    ret
-.refuse:
-    stc
-    ret
+    cmp ax, 1                       ; ...and only now, with nothing left to
+    ret                             ; restore, is FLAGS the answer: the borrow
+                                    ; is CF = 1 exactly when AX = 0 - refused
 %endif
 
 %ifdef CC_HAS_ONWAKE
@@ -750,12 +740,10 @@ cc_oncmd:
     push di
     push es
     cld
-    mov bx, ax                      ; BL = item, BH = menu
     push si                         ; arg 3: void *win
-    mov al, bh
-    mov ah, 0
-    push ax                         ; arg 2: int menu
-    mov al, bl
+    mov bl, ah                      ; BL = menu, out of AX's way
+    mov bh, 0
+    push bx                         ; arg 2: int menu
     mov ah, 0
     push ax                         ; arg 1: int item
     call _os88_oncmd
@@ -829,25 +817,19 @@ cc_onfile:
     push di
     push es
     cld
-    push ax                         ; the mode, across the copy
-    push cx                         ; ...and the size, both halves
-    push dx
-    mov ax, KERNEL_SEG
-    mov es, ax                      ; ES = where the name lives, stated
-    mov bx, 0
-.cp:
-    mov al, [es:bx+di]              ; [bx+di] - a legal 8086 base+index, and
-    mov [cc_fname+bx], al           ; the store is DS: ours
-    or al, al
+    mov bx, KERNEL_SEG              ; AL is the mode and CX/DX the size: the
+    mov es, bx                      ; copy goes through AH and BX and leaves
+    xor bx, bx                      ; all three where they are. ES = where the
+.cp:                                ; name lives, stated
+    mov ah, [es:bx+di]              ; [bx+di] - a legal 8086 base+index, and
+    mov [cc_fname+bx], ah           ; the store is DS: ours
+    or ah, ah
     jz .copied
     inc bx
     cmp bx, 12
     jb .cp
     mov byte [cc_fname+12], 0       ; 12 characters and no NUL: terminate it
 .copied:
-    pop dx
-    pop cx
-    pop ax                          ; AL = the mode again
     push si                         ; arg 5: void *win
     push dx                         ; arg 4: unsigned size_hi
     push cx                         ; arg 3: unsigned size_lo
@@ -895,9 +877,11 @@ cc_onfile:
 ; -----------------------------------------------------------------------------
 cc_worker:
     cld
+%ifdef CC_HAS_OVL
     mov [cc_wksp], sp               ; the top of THIS task's 384-byte slice,
                                     ; which is how cc_iswk answers "am I the
                                     ; worker" without a kernel call - see it
+%endif
     push word [cc_win]              ; arg 1: void *win, banked by cc_entry
     call _os88_worker               ; C: it must never return
     add sp, 2                       ; ...but if it does:
@@ -909,6 +893,7 @@ cc_worker:
     jmp short .park
 %endif
 
+%ifdef CC_HAS_OVL
 ; -----------------------------------------------------------------------------
 ; cc_iswk - is this the worker task?
 ; out: CF=1 on the worker, CF=0 on the UI task. Preserves every register.
@@ -927,6 +912,8 @@ cc_worker:
 ; worker never exits. Every UI-task overlay load would then be refused, which
 ; presents as a feature that works until the app spawns a worker and never
 ; again.
+;
+; Assembled only under CC_HAS_OVL, with cc_wksp: cc_ovneed is its one caller.
 ; -----------------------------------------------------------------------------
 cc_iswk:
     push ax
@@ -946,7 +933,6 @@ cc_iswk:
     clc
     ret
 
-%ifdef CC_HAS_OVL
 ; =============================================================================
 ; THE OVERLAY (SPEC.md 73.14)
 ;
@@ -1338,16 +1324,14 @@ section .text
                                     ; AFTER the table on purpose (SPEC.md
                                     ; 20.12.9): the gates inside it are
                                     ; derived from the rows above
-    %if OP_HAS_LAZY
-    CC_PART_LAZY_THUNKS             ; ...and so are these, for the same reason
-    %endif                          ; - os88thunk.asm is included before the
-%endmacro                           ; table and cannot gate them itself
+%endmacro                           ; (the lazy-part thunks are gated on the
+                                    ; table inside os88thunk.asm, which is
+                                    ; assembled after it - see CC_IMAGE_END)
 %endif  ; CC_HAS_PARTS
 
-; =============================================================================
-; THE API BRIDGE
-; =============================================================================
-%include "cc/os88thunk.asm"
+; THE API BRIDGE, apps/cc/os88thunk.asm, is NOT included here: CC_IMAGE_END
+; includes it, after the compiled C, so that it can assemble only the thunks
+; the C names (SPEC.md 73.9.1).
 
 ; =============================================================================
 ; DATA
@@ -1396,17 +1380,20 @@ cc_bss_beg:
 cc_win:     resw 1                  ; the window os88_main() returned. Banked
                                     ; because cc_worker has no argument of its
                                     ; own and OSAPI_TASK_ALIVE needs one
-cc_ferr:    resw 1                  ; the FERR_* of the last file call, read
-                                    ; back by os88_ferr()
+                                    ; (cc_ferr and cc_assoc are os88thunk.asm's
+                                    ; now, reserved only with a thunk that
+                                    ; uses them)
+%ifdef CC_HAS_FDLG
 cc_fname:   resb 13                 ; the file dialog's chosen name, copied out
-                                    ; of KERNEL_SEG before the C sees it
-cc_assoc:   resb 11                 ; os88_assoc_set()'s space-padded block:
-                                    ; 3 extension bytes then 8 stem bytes
+%endif                              ; of KERNEL_SEG before the C sees it
+%ifdef CC_HAS_OVL
 cc_wksp:    resw 1                  ; SP at the top of the worker's stack
                                     ; slice, 0 until one is spawned. cc_iswk
                                     ; compares against it. Defined whether or
                                     ; not this package HAS a worker, so the
-                                    ; test needs no %ifdef of its own
+                                    ; test needs no %ifdef of its own - but
+                                    ; only with an overlay, cc_iswk's one
+%endif                              ; caller
 %ifdef CC_HAS_PARTS
 cc_parts_bss: resb OP_BSS           ; the parts standard's own words, which an
                                     ; assembly package puts past its image and
@@ -1445,6 +1432,12 @@ section .text                       ; leave the assembler in .text - the next
 ; that is guaranteed to run after the compiled C's last `.data` byte.
 ; -----------------------------------------------------------------------------
 %macro CC_IMAGE_END 0
+section .text
+%define CC_THUNK_GATED              ; THE API BRIDGE, here and not at the top:
+%include "cc/os88thunk.asm"         ; the compiled C has been read, so its use
+                                    ; set (tools/cc8086.py's CC_U_ defines) is
+                                    ; in scope and only the thunks it names are
+                                    ; assembled (SPEC.md 73.9.1)
 section .bss
 cc_bss_end:
 %ifdef CC_HAS_OVL

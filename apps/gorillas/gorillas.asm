@@ -36,7 +36,7 @@ gr_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [gr_win], bx
-    OS88_REGION_MOVABLE
+    OS88_REGION_MOVABLE gr_rectnone     ; a bare ret (os88api.inc: 16 B, not 19)
     OS88_ALTENTER_ARM
     mov si, gr_pref
     call OSAPI_WM_PREFER
@@ -73,13 +73,11 @@ gr_paint:
     call gr_layout
     call gr_fullpaint
     cmp byte [gr_abon], 0
-    je .out
+    je gr_return
     mov bx, [gr_win]
     mov si, gr_ablines
     call os88ui_about_d
-.out:
-    RESTORE
-    ret
+    jmp short gr_return
 
 gr_about:
     SAVE
@@ -88,71 +86,64 @@ gr_about:
     mov bx, [gr_win]
     mov si, gr_ablines
     call os88ui_about
-    RESTORE
-    ret
+    jmp short gr_return
 
 gr_click:
     SAVE
     cmp byte [gr_abon], 0
-    je .out
+    je gr_return
     mov byte [gr_abon], 0
     call gr_layout
     call gr_fullpaint
-.out:
+; The window callbacks' shared epilogue (they are entered once per event).
+gr_return:
     RESTORE
     ret
 
 gr_onkey:
     SAVE
-    push ax
-    mov bx, [gr_win]
-    call OSAPI_WM_CLIP_SET
-    pop ax
-    jc .out
-    push ax
-    call gr_layout
-    pop ax
+    call gr_clipped
+    jc gr_return
     call gr_key
-.out:
-    RESTORE
-    ret
+    jmp short gr_return
 
 gr_oncmd:
     ; AL item index, AH menu index.
     SAVE
-    cmp al, 0
-    je .new
-    cmp al, 1
-    je .full
-    mov ax, 'p'
-    jmp short .key
-.new:
+    mov dl, al
     mov ax, 'n'
-    jmp short .key
-.full:
+    or dl, dl
+    jz .key
     mov ax, KEY_ALTENTER
+    dec dl
+    jz .key
+    mov ax, 'p'
 .key:
-    push ax
-    mov bx, [gr_win]
-    call OSAPI_WM_CLIP_SET
-    pop ax
-    jc .out
-    push ax
-    call gr_layout
-    pop ax
+    call gr_clipped
+    jc gr_return
     cmp al, 'n'
     je .setup
     cmp ax, KEY_ALTENTER
     je .dispatch
     cmp byte [gr_state], 4
-    jae .out
+    jae gr_return
 .dispatch:
     call gr_key
-    jmp short .out
+    jmp short gr_return
 .setup:
     call gr_setup
+    jmp short gr_return
+
+; Arm the window's clip and re-derive the layout. AX preserved; CF=1 refused.
+gr_clipped:
+    push ax
+    mov bx, [gr_win]
+    call OSAPI_WM_CLIP_SET
+    jc .out
+    call gr_layout
+    clc
 .out:
-    RESTORE
+    pop ax
     ret
 
 gr_key:
@@ -166,23 +157,42 @@ gr_key:
     cmp al, 27
     je .escape
     cmp byte [gr_state], 4
-    jae gr_frontkey
-    cmp al, 'M'
-    je gr_bgmtoggle
-    cmp al, 'm'
-    je gr_bgmtoggle
-    cmp al, 'F'
+    jb .game
+    jmp gr_frontkey
+.escape:
+    cmp byte [gr_fs], 0
+    je .out
+.full:
+    cmp byte [gr_fs], 0
+    jne .quit
+    mov bx, [gr_win]
+    mov ax, gr_exclusive
+    xor cx, cx
+    call OSAPI_FSX_RUN
+    ret
+.quit:
+    mov byte [gr_quit], 1
+.out:
+    ret
+.new:
+    jmp gr_setup
+.pause:
+    xor byte [gr_paused], 1
+    call gr_bgmhold
+    jmp gr_hudpaint
+.game:
+    mov bl, al
+    and bl, 0dfh               ; fold case: only 'm'/'M'.. reach these letters
+    cmp bl, 'F'
     je .full
-    cmp al, 'f'
-    je .full
-    cmp al, 'N'
+    cmp bl, 'N'
     je .new
-    cmp al, 'n'
-    je .new
-    cmp al, 'P'
+    cmp bl, 'P'
     je .pause
-    cmp al, 'p'
-    je .pause
+    cmp bl, 'M'
+    jne .aim
+    jmp gr_bgmtoggle
+.aim:
     cmp byte [gr_paused], 0
     jne .human
     cmp byte [gr_players], 1
@@ -194,8 +204,6 @@ gr_key:
 .human:
     cmp al, 13
     je .enter
-    cmp byte [gr_state], 1
-    je .out
     cmp byte [gr_state], 0
     jne .out
     cmp al, 9
@@ -205,8 +213,6 @@ gr_key:
     xor byte [gr_field], 1
     mov byte [gr_edit], 0
     jmp gr_selectpaint
-.hud:
-    jmp gr_hudpaint
 .enter:
     cmp byte [gr_paused], 0
     jne .pause
@@ -214,12 +220,17 @@ gr_key:
     jne .out
     cmp byte [gr_blast], 0
     jne .out
-    cmp byte [gr_state], 1
-    je .out
-    cmp byte [gr_state], 2
+    mov bl, [gr_state]
+    cmp bl, 1
+    jne .state
+    ret
+.state:
+    cmp bl, 2
     je .round
-    cmp byte [gr_state], 3
-    je gr_results
+    cmp bl, 3
+    jne .fire
+    jmp gr_results
+.fire:
     cmp byte [gr_field], 0
     je .tab
     call gr_fire
@@ -227,21 +238,6 @@ gr_key:
 .round:
     call gr_city
     jmp gr_fullpaint
-.new:
-    jmp gr_setup
-.pause:
-    xor byte [gr_paused], 1
-    call gr_bgmhold
-    jmp gr_hudpaint
-.escape:
-    cmp byte [gr_fs], 0
-    je .out
-.full:
-    cmp byte [gr_fs], 0
-    je gr_fullscreen
-    mov byte [gr_quit], 1
-.out:
-    ret
 
 ; Model mutations and drawing share the graphics lock, so keyboard input
 ; cannot reset a shot halfway through a worker frame. No API wait under it.
@@ -253,22 +249,15 @@ gr_worker:
     cmp word [gr_musicptr], 0
     jne .active
     mov al, [gr_state]
-    cmp al, 1
-    je .active
-    cmp al, 4
-    je .active
-    cmp al, 5
-    je .active
-    cmp al, 7
-    je .active
-    cmp al, 8
-    je .active
-    cmp al, 2
-    je .active
-    cmp al, 3
-    je .active
     or al, al
-    jne .sleep
+    jz .aiming
+    cmp al, 6                  ; only the intro choice idles on a key;
+    jne .active                ; every other state animates
+.sleep:
+    mov ax, 1
+    call OSAPI_TASK_SLEEP
+    jmp gr_worker
+.aiming:
     cmp byte [gr_players], 1
     jne .music
     cmp byte [gr_turn], 1
@@ -311,53 +300,44 @@ gr_worker:
     call gr_bgmhold
 .unlock:
     call OSAPI_GFX_UNLOCK
-    jmp short .sleep
+    jmp .sleep
 .hold:
     call gr_bgmhold
-.sleep:
-    mov ax, 1
-    call OSAPI_TASK_SLEEP
-    jmp gr_worker
-
-gr_fullscreen:
-    mov bx, [gr_win]
-    mov ax, gr_exclusive
-    xor cx, cx
-    call OSAPI_FSX_RUN
-    ret
+    jmp .sleep
 
 gr_exclusive:
     mov byte [gr_fs], 1
-    mov byte [gr_fsready], 0
-    mov byte [gr_quit], 0
-    mov byte [gr_cga], 0
-    mov byte [gr_vga], 0
+    xor ax, ax
+    mov [gr_fsready], al
+    mov [gr_quit], al
+    mov [gr_cga], al
+    mov [gr_vga], al
     OS88_ALTENTER_SEED
     call gr_release_chord
     xor bx, bx
     call OSAPI_FSX_CAPS
+    mov al, FSXM_VGA12
     cmp dl, VID_VGA
-    je .vga
+    je .mode
     cmp dl, VID_CGA
     jne .native
+    mov al, FSXM_CGA320
+.mode:
+    push dx
     push ds
     pop es
     mov di, gr_fsi
-    mov al, FSXM_CGA320
     call OSAPI_FSX_MODE
+    pop dx
     jc .done
+    cmp dl, VID_VGA
+    je .vga
     mov byte [gr_cga], 1
     mov dx, 03d9h
     mov al, 11h                ; blue sky, bright green/red/yellow group
     out dx, al
     jmp short .native
 .vga:
-    push ds
-    pop es
-    mov di, gr_fsi
-    mov al, FSXM_VGA12
-    call OSAPI_FSX_MODE
-    jc .done
     mov byte [gr_vga], 1
     call gr_vgapalette
 .native:
@@ -383,9 +363,10 @@ gr_exclusive:
     mov ah, 1
     int 16h
     jz .wait
-    cmp byte [gr_state], 0
+    mov al, [gr_state]
+    or al, al
     je .loop
-    cmp byte [gr_state], 5
+    cmp al, 5
     je .loop
 .wait:
     mov al, FSXW_TICK
@@ -393,10 +374,11 @@ gr_exclusive:
     jmp .loop
 .done:
     ; Clear BEFORE FSX_RUN restores and invokes our window paint.
-    mov byte [gr_fs], 0
-    mov byte [gr_fsready], 0
-    mov byte [gr_cga], 0
-    mov byte [gr_vga], 0
+    xor ax, ax
+    mov [gr_fs], al
+    mov [gr_fsready], al
+    mov [gr_cga], al
+    mov [gr_vga], al
     ret
 
 ; A VGA BIOS mode set masks interrupts long enough to lose the Alt break
@@ -434,27 +416,22 @@ gr_layout:
     mov [gr_depth], dh
     jmp short .scale
 .fs:
-    cmp byte [gr_vga], 0
-    je .cga
     xor ax, ax
     xor bx, bx
+    cmp byte [gr_vga], 0
+    je .cga
     mov cx, 640
     mov dx, 480
-    mov byte [gr_depth], 4
-    mov byte [gr_kind], VID_VGA
+    mov word [gr_kind], (4 << 8) | VID_VGA     ; gr_depth follows gr_kind
     jmp short .box
 .cga:
     cmp byte [gr_cga], 0
     je .surface
-    xor ax, ax
-    xor bx, bx
     mov cx, 320
     mov dx, 200
-    mov byte [gr_depth], 2
-    mov byte [gr_kind], VID_CGA
+    mov word [gr_kind], (2 << 8) | VID_CGA
     jmp short .box
 .surface:
-    xor bx, bx
     call OSAPI_FSX_CAPS
     mov [gr_kind], dl
     mov byte [gr_depth], 4
@@ -486,9 +463,8 @@ gr_layout:
     jb .center
     mov word [gr_sy], 3
 .center:
-    mov ax, [gr_sx]
-    mov cx, 256
-    mul cx
+    xor ax, ax
+    mov ah, [gr_sx]            ; sx*256 (sx is 1 or 2)
     mov bx, [gr_width]
     sub bx, ax
     shr bx, 1
@@ -497,14 +473,14 @@ gr_layout:
     and bx, 0fff8h             ; byte-aligned 1bpp destination
     mov [gr_ox], bx
     mov ax, [gr_sy]
-    mov cx, 128
-    mul cx
+    mov cl, 7
+    shl ax, cl                 ; sy*128
     mov bx, [gr_height]
     sub bx, ax
     shr bx, 1
     add bx, [gr_top]
     mov [gr_oy], bx
-    ret
+    jmp gr_inktables            ; the ink tables follow the surface
 
 ; Scene primitives. x=CX, y=DX, colour=AL; out-of-bounds pixels are ignored.
 gr_put:
@@ -563,15 +539,16 @@ gr_get:
     pop dx
     pop cx
     pop bx
+gr_rectnone:                    ; gr_rect's early outs, before its SAVE
     ret
 
 ; Inclusive model rectangle (CX,DX)..(SI,DI), colour AL.
 gr_rect:
-    SAVE
     cmp cx, 256
-    jae .out
+    jae gr_rectnone
     cmp dx, 128
-    jae .out
+    jae gr_rectnone
+    SAVE
     cmp si, 255
     jbe .right
     mov si, 255
@@ -658,13 +635,16 @@ gr_rand:
     ret
 
 gr_new:
-    mov word [gr_scores], 0
-    mov byte [gr_turn], 0
-    mov byte [gr_paused], 0
-    mov word [gr_angles], 45
-    mov word [gr_angles+2], 45
-    mov word [gr_powers], 70
-    mov word [gr_powers+2], 70
+    xor ax, ax
+    mov [gr_scores], ax
+    mov [gr_turn], al
+    mov [gr_paused], al
+    mov al, 45
+    mov [gr_angles], ax
+    mov [gr_angles+2], ax
+    mov al, 70
+    mov [gr_powers], ax
+    mov [gr_powers+2], ax
     jmp gr_city
 
 ; Restore the active player's last throw (AX/BX clobbered).
@@ -680,27 +660,19 @@ gr_recallaim:
 
 gr_city:
     call gr_bgmstop
-    push ds
-    pop es
-    mov di, gr_scene
-    xor ax, ax
-    mov cx, 8192
-    rep stosw
-    ; The scene was cleared: invalidate the HUD character cache too.
-    mov di, gr_hudchars
-    mov cx, 512/2
-    rep stosw
-    mov word [gr_aipower], 0
-    mov byte [gr_state], 0
-    mov byte [gr_saved], 0
-    mov byte [gr_sunhit], 0
-    mov byte [gr_insun], 0
-    mov byte [gr_dancing], 0
-    mov byte [gr_blast], 0
-    mov byte [gr_throwticks], 0
-    mov byte [gr_roundwait], 0
-    mov byte [gr_field], 0
-    mov byte [gr_edit], 0
+    ; Clearing the scene invalidates the HUD character cache too.
+    call gr_clear               ; ...and leaves AX = 0, ES = DS
+    mov [gr_aipower], ax
+    mov [gr_state], al
+    mov [gr_saved], al
+    mov [gr_sunhit], al
+    mov [gr_insun], al
+    mov [gr_dancing], al
+    mov [gr_blast], al
+    mov [gr_throwticks], al
+    mov [gr_roundwait], al
+    mov [gr_field], al
+    mov [gr_edit], al
     call gr_recallaim
     call gr_rand
     xor dx, dx
@@ -743,10 +715,9 @@ gr_city:
     inc cx
     ; Broad random variation around an overall skyline trend.
     push cx
-    mov ax, bp
-    mov bx, 4
-    mul bx
-    mov bx, ax
+    mov bx, bp
+    shl bx, 1
+    shl bx, 1
     mov ax, [gr_buildings]
     shl ax, 1
     cmp byte [gr_profile], 0
@@ -782,7 +753,7 @@ gr_city:
     mov ax, 3
     call gr_random
     add al, 5
-    mov [gr_colors+bx], al
+    mov [gr_colors+bx], al     ; read by tests/gorillascity.py
     pop cx
     call gr_rect
     mov di, dx
@@ -903,13 +874,18 @@ gr_place:
 
 ; Packed 16x20 art. Zero is transparent sky; 1/10/11 are the orange
 ; body, highlights and shadows. Facial gaps expose the blue background.
+; SI = GR_APERIGHT draws gr_apeleft mirrored, which is what that pose is.
+GR_APERIGHT equ 0
 gr_gorilla:
     mov si, gr_ape
 gr_gorillapose:
+    or si, si
+    jz gr_gorillamirror
     mov dx, [ds:gr_gy+bp]
+    mov bx, [ds:gr_gx+bp]       ; gr_put keeps BX
     mov di, 20
 .row:
-    mov cx, [ds:gr_gx+bp]
+    mov cx, bx
     push di
     mov di, 8
 .pixel:
@@ -938,49 +914,96 @@ gr_gorillapose:
     jnz .row
     ret
 
+; gr_gorillapose's loop right to left: the right-arm pose from the left's art.
+align 2
+gr_gorillamirror:
+    mov si, gr_apeleft
+    mov dx, [ds:gr_gy+bp]
+    mov bx, [ds:gr_gx+bp]
+    add bx, 15                  ; the rightmost column first
+    mov di, 20
+.row:
+    mov cx, bx
+    push di
+    mov di, 8
+.pixel:
+    lodsb
+    mov ah, al
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    or al, al
+    jz .right
+    call gr_put
+.right:
+    dec cx
+    mov al, ah
+    and al, 15
+    jz .next
+    call gr_put
+.next:
+    dec cx
+    dec di
+    jnz .pixel
+    pop di
+    inc dx
+    dec di
+    jnz .row
+    ret
+
 ; 25x21 sun: eight rays, circular body and smile, like DoSun in the BASIC.
 ; Art rows share the scene's ink 3, which collision treats as decoration.
+; gr_sunart holds each row as two words, the leftmost pixel in bit 15.
 gr_sun:
     mov si, gr_sunart
     mov dx, 25
     mov bp, 21
+    mov al, 3                   ; gr_put keeps AX
 .row:
     mov cx, 116
-    mov di, 25
+    mov di, 16
+    call .half                  ; columns 0..15
+    mov di, 9
+    call .half                  ; 16..24
+    inc dx
+    dec bp
+    jnz .row
+    ret
+.half:
+    mov bx, [si]
+    add si, 2
 .pixel:
-    lodsb
-    or al, al
-    jz .next
-    mov al, 3
+    shl bx, 1
+    jnc .next
     call gr_put
 .next:
     inc cx
     dec di
     jnz .pixel
-    inc dx
-    dec bp
-    jnz .row
     ret
 
 ; Only the mouth changes. Keep nearby gorillas and the ray tips intact.
 gr_sunface:
-    mov si, gr_sunart + 11*25 + 8
+    mov si, gr_sunart + 11*4
     mov dx, 36
     mov bp, 6
 .row:
+    lodsw
+    mov bx, ax
+    lodsw
+    mov bh, bl
+    mov bl, ah                  ; BX = columns 8..23, column 8 in bit 15
     mov cx, 124
     mov di, 9
 .pixel:
-    lodsb
-    or al, al
-    jz .put
-    mov al, 3
-.put:
+    shl bx, 1
+    sbb al, al
+    and al, 3                   ; ink 3 or sky
     call gr_put
     inc cx
     dec di
     jnz .pixel
-    add si, 16
     inc dx
     dec bp
     jnz .row
@@ -1189,8 +1212,7 @@ gr_hud:
     mov dx, 8
     call gr_text
     mov dx, 16
-    call gr_text
-    ret
+    jmp gr_text
 .visible:
     call gr_scoreheader
     mov si, gr_status
@@ -1215,14 +1237,7 @@ gr_hud:
     mov di, gr_velocity+11
     mov bx, 2
     call gr_shotnumber
-    mov byte [gr_prompt], ' '
-    mov byte [gr_velocity], ' '
-    mov si, gr_prompt
-    cmp byte [gr_field], 0
-    je .selected
-    mov si, gr_velocity
-.selected:
-    mov byte [si], '>'
+    call gr_marker
     mov si, gr_prompt
     jmp short .line
 .state:
@@ -1247,8 +1262,7 @@ gr_hud:
     mov si, gr_velocity
 .last:
     mov dx, 16
-    call gr_text
-    ret
+    jmp gr_text
 
 ; Numeric edits format and compare only the active seven-cell field.
 ; Paused input still changes the model; resume rebuilds the visible prompt.
@@ -1282,15 +1296,21 @@ gr_inputpaint:
 .done:
     ret
 
-gr_selectpaint:
-    mov byte [gr_prompt], ' '
-    mov byte [gr_velocity], ' '
+; The '>' before the selected field (angle or velocity).
+gr_marker:
+    mov al, ' '
+    mov [gr_prompt], al
+    mov [gr_velocity], al
     mov si, gr_prompt
     cmp byte [gr_field], 0
     je .selected
     mov si, gr_velocity
 .selected:
     mov byte [si], '>'
+    ret
+
+gr_selectpaint:
+    call gr_marker
     cmp byte [gr_paused], 0
     jne .done
     call gr_dirtyclear
@@ -1565,6 +1585,66 @@ gr_fire:
     mov si, gr_musicthrow
     jmp gr_musicstart
 
+; gr_tick dispatches here every frame. These sit just above it so each of
+; its conditional branches is a short jump rather than a jump-around.
+; M is accepted throughout gameplay, including flight, AI turns and pause.
+; Muting releases voices but retains the phrase position and reference SFX.
+gr_bgmtoggle:
+    xor byte [gr_bgmenabled], 1
+    cmp byte [gr_bgmenabled], 0
+    je gr_bgmhold
+    mov byte [gr_bgmstatus], 0   ; an explicit enable retries unavailable FM
+    cmp byte [gr_paused], 0
+    jne .out
+    cmp byte [gr_abon], 0
+    jne .out
+    jmp gr_bgmtick
+.out:
+    ret
+
+; Release claims when paused, obscured, unfocused, or showing About. Resume
+; at the next row with a fresh deadline, never a burst of overdue notes.
+; Percussive envelopes also decay naturally if the UI stops servicing us.
+gr_bgmhold:
+    cmp byte [gr_bgmstatus], 1
+    jne .out
+    mov al, 3
+    call OSAPI_SND_FM
+    mov byte [gr_bgmstatus], 0
+.out:
+    ret
+
+gr_throwtick:
+    dec byte [gr_throwticks]
+    jnz .out
+    xor bx, bx
+    mov bl, [gr_turn]
+    shl bx, 1
+    mov bp, bx
+    mov si, gr_ape
+    call gr_posepaint
+    cmp word [gr_power], 2
+    jae .out
+    ; The reference treats velocity 0 or 1 as an immediate self-hit.
+    mov si, bp
+    jmp gr_tick.hitape
+.out:
+    ret
+
+gr_roundtick:
+    cmp byte [gr_roundwait], 0
+    je .out
+    dec byte [gr_roundwait]
+    jnz .out
+    cmp byte [gr_state], 3
+    je gr_results
+    call gr_city
+    jmp gr_fullpaint
+.out:
+    ret
+
+; Half-widths of radius r for row distance d = r..0 (floor of the root of
+; r*r - d*d); gr_disc mirrors each about the centre row. Byte offsets by r.
 gr_tick:
     cmp byte [gr_abon], 0
     jne gr_bgmhold
@@ -1593,14 +1673,13 @@ gr_tick:
     mov si, gr_px
     call gr_motionstep
     mov cl, 6                   ; shift through AX; CX is coordinate below
+    mov dx, [gr_py]
+    shr dx, cl
     mov ax, [gr_px]
     sar ax, cl
-    mov bx, [gr_py]
-    shr bx, cl
     mov cx, ax
-    mov dx, bx
-    cmp cx, 256
-    jae .miss
+    or ch, ch                   ; x outside 0..255, either side
+    jnz .miss
     cmp word [gr_pyhi], 0
     jl .next                    ; signed 32-bit height: high lunar arcs
     jg .miss
@@ -1622,14 +1701,14 @@ gr_tick:
     call gr_get
     cmp al, 1
     je .hitape
-    cmp al, 10
-    je .hitape
-    cmp al, 11
-    je .hitape
+    sub al, 10                  ; ink 10 or 11 (AL is not needed after)
+    cmp al, 1
+    jbe .hitape
     ; Sky between arms/legs is passable, as in POINT-based BASIC.
     jmp short .next
 .other:
-    add si, 2
+    inc si
+    inc si
     cmp si, 4
     jb .ape
     ; Sun ink triggers surprise, but never stops the projectile.
@@ -1658,10 +1737,11 @@ gr_tick:
     call gr_sunreset
     xor byte [gr_turn], 1
     call gr_recallaim
-    mov word [gr_aipower], 0
-    mov byte [gr_state], 0
-    mov byte [gr_field], 0
-    mov byte [gr_edit], 0
+    xor ax, ax
+    mov [gr_aipower], ax
+    mov [gr_state], al
+    mov [gr_field], al
+    mov [gr_edit], al
     jmp gr_hudpaint
 .terrain:
     mov al, 7
@@ -1716,7 +1796,7 @@ gr_victorytick:
     mov si, gr_apeleft
     test byte [gr_dancing], 1
     jz .draw
-    mov si, gr_aperight
+    mov si, GR_APERIGHT
 .draw:
     call gr_gorillapose
     ; Gorillas need not start on an eight-pixel blit boundary.
@@ -1771,18 +1851,18 @@ gr_unbanana:
 
 gr_banana:
     cmp word [gr_pyhi], 0
-    jne .out
+    jne gr_unbanana.out         ; (the ret just above: a short jump)
     mov cl, 6
     mov ax, [gr_px]
     sar ax, cl
     mov dx, [gr_py]
     sar dx, cl
     cmp ax, 249
-    ja .out
-    cmp dx, 0
-    jl .out
+    ja gr_unbanana.out
+    or dx, dx
+    jl gr_unbanana.out
     cmp dx, 120
-    ja .out
+    ja gr_unbanana.out
     cmp byte [gr_insun], 0
     je .visible
     cmp ax, 113
@@ -1790,7 +1870,7 @@ gr_banana:
     cmp ax, 141
     ja .leavesun
     cmp dx, 46
-    jb .out
+    jb gr_unbanana.out
 .leavesun:
     mov byte [gr_insun], 0
 .visible:
@@ -1855,71 +1935,20 @@ gr_banana:
 .out:
     ret
 
-; Full content (including borders around the centered logical scene).
-gr_fullpaint:
-    cmp byte [gr_state], 4
-    jae gr_frontpaint
-    cmp byte [gr_vga], 0
-    jne .scene
-    cmp byte [gr_cga], 0
-    jne .scene
-    call gr_margins
-.scene:
-    ; Between shots the three HUD rows are opaque font bands. Reuse the
-    ; incremental text path instead of converting them through four planes.
-    ; During flight the banana can occupy these rows, so use the scene.
-    cmp byte [gr_state], 1
-    je .city
-    xor ax, ax
-    xor bx, bx
-    mov cx, 256
-.hudrow:
-    call gr_hudblit
-    add bx, 8
-    cmp bx, 24
-    jb .hudrow
-.city:
-    xor ax, ax
-.strip:
-    xor bx, bx
-    mov cx, 32
-    mov dx, 128
-    cmp byte [gr_state], 1
-    je .draw
-    mov bx, 24
-    mov dx, 104
-.draw:
-    call gr_blit
-    add ax, 32
-    cmp ax, 256
-    jb .strip
-    ret
-
 ; Full scene bands are opaque: clear only the four surrounding margins.
 ; Clearing the city first both doubles the writes and flashes a blank frame.
 gr_margins:
-    mov al, CBLACK
-    cmp byte [gr_depth], 4
-    jne .pen
-    mov al, CBLUE
-.pen:
-    call OSAPI_SET_COLOR
-    mov ax, [gr_left]
-    mov cx, ax
-    add cx, [gr_width]
-    dec cx
+    call gr_groundpen
     mov bx, [gr_top]
     mov dx, [gr_oy]
     dec dx
     call .fill
     mov bx, [gr_sy]
-    mov dx, 128
-    push ax
-    mov ax, bx
-    mul dx
-    add ax, [gr_oy]
-    mov bx, ax
-    pop ax
+    push cx
+    mov cl, 7
+    shl bx, cl                ; sy*128
+    pop cx
+    add bx, [gr_oy]
     mov dx, [gr_top]
     add dx, [gr_height]
     dec dx
@@ -1950,22 +1979,28 @@ gr_margins:
 .out:
     ret
 
-gr_background:
+; The content's ground colour as the pen; AX = its left, CX = its right edge.
+gr_groundpen:
     mov al, CBLACK
     cmp byte [gr_depth], 4
-    jne .background
+    jne .pen
     mov al, CBLUE
-.background:
+.pen:
     call OSAPI_SET_COLOR
     mov ax, [gr_left]
-    mov bx, [gr_top]
     mov cx, ax
     add cx, [gr_width]
     dec cx
+    ret
+
+gr_background:
+    call gr_groundpen
+    mov bx, [gr_top]
     mov dx, bx
     add dx, [gr_height]
     dec dx
     call OSAPI_GFX_FILL
+gr_blitnone:                    ; gr_blit's early outs, before its SAVE
     ret
 
 ; Render AX=x (8-aligned), BX=y, CX=width (8-aligned), DX=height.
@@ -1974,17 +2009,17 @@ gr_background:
 ; Up to 32 rows for strips <=56 pixels wide, or 7 rows for wider bands.
 ; At sx=2, sy=3, either path needs at most 5376 scratch bytes.
 gr_blit:
+    cmp bx, 128
+    jae gr_blitnone
+    cmp ax, 256
+    jae gr_blitnone
+    or cx, cx
+    jz gr_blitnone
+    or dx, dx
+    jz gr_blitnone
     SAVE
     push ds
     pop es
-    cmp bx, 128
-    jae .done
-    cmp ax, 256
-    jae .done
-    or cx, cx
-    jz .done
-    or dx, dx
-    jz .done
     mov [gr_rx], ax
     mov [gr_ry], bx
     add cx, ax
@@ -2034,17 +2069,8 @@ gr_blit:
     mov di, 8000h
     call OSAPI_GFX_BLITP
     jc .bands
-    mov bx, gr_winplanes
-    cmp word [gr_sx], 1
-    je .planar
-    mov bx, gr_winplanesx2
-    jmp short .planar
 .native:
-    mov bx, gr_planebits
-    cmp word [gr_sx], 1
-    je .planar
-    call gr_nativeprepare
-    mov bx, gr_lightcache
+    mov bx, gr_inkpairs        ; the live surface's four plane tables
 .planar:
     mov byte [gr_planar], 1
     cmp word [gr_sx], 1
@@ -2052,13 +2078,11 @@ gr_blit:
     mov byte [gr_pairbits], 2
     jmp short .mono_stride
 .packed:
-    mov bx, gr_cgapairs
+    mov bx, gr_inkpairs        ; CGA pairs, or monochrome at sx bits a pixel
     cmp byte [gr_depth], 2
     je .cga_stride
-    mov bx, gr_monopairsx2
     cmp word [gr_sx], 1
     jne .mono_stride
-    mov bx, gr_monopairs
     mov byte [gr_pairbits], 2
 .mono_stride:
     shr word [gr_stride], 1
@@ -2175,7 +2199,7 @@ gr_blit:
     shr cx, 1
 .monopacked:
     lodsb
-    mov bx, gr_monopairs
+    mov bx, gr_inkpairs+256     ; one bit a pixel
     xlat
     xor ah, ah
     mov bx, ax
@@ -2195,7 +2219,7 @@ gr_blit:
     ; Packed desktop fallback, for a covered/straddling window or refusal.
     mov cx, [gr_rw]
     shr cx, 1
-    mov bx, gr_winmap
+    mov bx, gr_inkpairs+1024
     cmp word [gr_sx], 1
     jne .color2
 .color1:
@@ -2209,7 +2233,7 @@ gr_blit:
     xor ah, ah
     mov bx, ax
     shl bx, 1
-    mov ax, [gr_winx2+bx]
+    mov ax, [gr_inkpairs+1024+bx]
     stosw
     loop .color2
     jmp short .repeat
@@ -2321,24 +2345,197 @@ gr_blit:
     RESTORE
     ret
 
-; Fullscreen's doubled plane table shares the inactive intro cache. The
-; high cache-key bit makes the next frontend paint rebuild its sprite cache.
-gr_nativeprepare:
-    cmp word [gr_cachekey], 8000h
-    je .out
-    mov word [gr_cachekey], 8000h
-    mov si, gr_planebits
-    mov di, gr_lightcache
-    mov bx, gr_pairdouble
-    mov cx, 1024
-.byte:
-    lodsb
-    xlat
-    stosb
-    loop .byte
-.out:
+; The live surface's ink-pair tables (SPEC.md 99.4), built into one area when
+; the surface changes and never per frame. A packed scene byte (two inks)
+; indexes each 256-entry table:
+;   foreign VGA   +0  four planes, sx bits a pixel
+;   desktop 4bpp  +0  four planes of desktop inks, sx bits a pixel (orange
+;                     stipples at sx 2); +1024 the packed fallback, a byte a
+;                     pair at sx 1 and two at sx 2
+;   monochrome    +0  sx bits a pixel; +256 one bit a pixel (packed fallback)
+;   CGA 320x200   +0  two bits a pixel
+; gr_layout tail-calls this; gr_fullpaint and gr_frontprepare check it too.
+; Keeps every register but AX. tools/gorillas_art.py's inkpairs() is the
+; reference tests/gorillascity.py holds this area to, per surface.
+gr_inktables:
+    mov al, [gr_depth]
+    add al, al
+    add al, [gr_vga]
+    add al, al
+    add al, [gr_sx]             ; unique: depth, foreign VGA and scale
+    cmp al, [gr_tablekey]
+    jne .build
     ret
-gr_pairdouble: db 0,3,12,15
+.build:
+    mov [gr_tablekey], al
+    SAVE
+    push ds
+    pop es
+    mov di, gr_inkpairs
+    mov cl, [gr_sx]             ; native bits a pixel
+    mov si, gr_monopal
+    cmp byte [gr_depth], 2
+    jb .mono
+    je .cga
+    ; 4bpp. gr_band: each ink's left<<4|right output colour.
+    xor si, si                  ; foreign VGA: the inks themselves
+    cmp byte [gr_vga], 0
+    jne .lr
+    mov si, gr_deskpal
+.lr:
+    call gr_lrfill
+    or si, si
+    jz .planes
+    cmp cl, 1
+    je .planes
+    mov byte [gr_band+1], 0ceh  ; desktop orange: light red then yellow
+.planes:
+    xor ch, ch
+.plane:
+    call gr_planegen
+    inc ch
+    cmp ch, 4
+    jb .plane
+    or si, si
+    jz .done
+    ; Packed desktop fallback: the inks (sx 1), or both halves (sx 2).
+    mov ch, cl
+    mov cl, 4
+    dec ch
+    jz .gen
+    mov si, gr_band
+    mov cl, 8
+    jmp short .gen
+.mono:
+    call gr_lrfill
+    xor ch, ch
+    call gr_planegen
+    mov cl, 1
+    jmp short .gen
+.cga:
+    mov si, gr_cgapal
+    mov cl, 2
+.gen:
+    call gr_pairgen
+.done:
+    RESTORE
+    ret
+
+; SI = 16 inks (0: identity) -> gr_band[n] = ink*17, both output halves.
+gr_lrfill:
+    xor bx, bx
+.ink:
+    mov al, bl
+    or si, si
+    jz .ident
+    mov al, [si+bx]
+.ident:
+    mov ah, 17
+    mul ah
+    mov [gr_band+bx], al
+    inc bx
+    cmp bl, 16
+    jb .ink
+    ret
+
+; Plane CH of gr_band's colours at CL (1/2) bits a pixel -> 256 pairs at DI.
+gr_planegen:
+    push si
+    xor bx, bx
+.ink:
+    mov al, [gr_band+bx]
+    push cx
+    mov cl, ch
+    shr al, cl
+    pop cx
+    and al, 11h                 ; left bit 4, right bit 0
+    cmp al, 10h
+    jb .right
+    sub al, 0eh                 ; -> left bit 1, right bit 0
+.right:
+    cmp cl, 1
+    jne .code
+    and al, 1                   ; one pixel: both halves agree
+.code:
+    mov [gr_band+16+bx], al
+    inc bx
+    cmp bl, 16
+    jb .ink
+    mov si, gr_band+16
+    call gr_pairgen
+    pop si
+    ret
+
+; SI = 16 codes, CL = bits a code; DI += 256 bytes of high<<CL|low. CL=8
+; stores two bytes a pair instead, the high ink's first.
+gr_pairgen:
+    xor bx, bx
+.high:
+    mov dl, [si+bx]
+    cmp cl, 8
+    je .keep
+    shl dl, cl
+.keep:
+    push bx
+    xor bx, bx
+.low:
+    mov al, [si+bx]
+    cmp cl, 8
+    jne .or
+    xchg al, dl
+    stosb
+    xchg al, dl
+    jmp short .store
+.or:
+    or al, dl
+.store:
+    stosb
+    inc bx
+    cmp bl, 16
+    jb .low
+    pop bx
+    inc bx
+    cmp bl, 16
+    jb .high
+    ret
+
+; The right-arm pose (SPEC.md 99.5) as packed rows, for the intro's converters:
+; gr_apeleft mirrored into the band at GR_MIRROR. SI = the rows; keeps the rest.
+; tools/gorillas_art.py's poses() is the reference.
+GR_MIRROR equ 5376-480          ; clear of gr_widepose's 320 at the band's end
+gr_mirrorpose:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push ds
+    pop es
+    mov si, gr_apeleft
+    mov di, gr_band+GR_MIRROR
+    mov dx, 20
+    mov cl, 4
+.row:
+    mov bx, 8
+.byte:
+    dec bx
+    mov al, [si+bx]
+    rol al, cl                  ; the pixel pair swaps sides too
+    stosb
+    or bx, bx
+    jnz .byte
+    add si, 8
+    dec dx
+    jnz .row
+    mov si, gr_band+GR_MIRROR
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+align 2
 gr_monopacked: db 0,15,240,255
 gr_monowords: dw 0,0ff00h,00ffh,0ffffh
 
@@ -2371,9 +2568,9 @@ gr_vgapalette:
     mov dx, 03ceh
     mov ax, 0001h               ; disable set/reset
     out dx, ax
-    mov ax, 0003h               ; no rotation / logical operation
+    mov al, 03h                 ; no rotation / logical operation
     out dx, ax
-    mov ax, 0005h               ; write mode zero
+    mov al, 05h                 ; write mode zero
     out dx, ax
     mov ax, 0ff08h              ; every bit writable
     out dx, ax
@@ -2458,7 +2655,7 @@ gr_textdouble:
 %endrep
 %include "grart.inc"
 
-; Q14 sine, full circle plus the interpolation endpoint.
+; Q14 sine, 0..90 degrees; gr_sine folds the other three quadrants.
 gr_sin:
     dw 0,286,572,857,1143,1428,1713,1997,2280,2563,2845,3126
     dw 3406,3686,3964,4240,4516,4790,5063,5334,5604,5872,6138,6402
@@ -2467,30 +2664,7 @@ gr_sin:
     dw 12176,12365,12551,12733,12911,13085,13255,13421,13583,13741,13894,14044
     dw 14189,14330,14466,14598,14726,14849,14968,15082,15191,15296,15396,15491
     dw 15582,15668,15749,15826,15897,15964,16026,16083,16135,16182,16225,16262
-    dw 16294,16322,16344,16362,16374,16382,16384,16382,16374,16362,16344,16322
-    dw 16294,16262,16225,16182,16135,16083,16026,15964,15897,15826,15749,15668
-    dw 15582,15491,15396,15296,15191,15082,14968,14849,14726,14598,14466,14330
-    dw 14189,14044,13894,13741,13583,13421,13255,13085,12911,12733,12551,12365
-    dw 12176,11982,11786,11585,11381,11174,10963,10749,10531,10311,10087,9860
-    dw 9630,9397,9162,8923,8682,8438,8192,7943,7692,7438,7182,6924
-    dw 6664,6402,6138,5872,5604,5334,5063,4790,4516,4240,3964,3686
-    dw 3406,3126,2845,2563,2280,1997,1713,1428,1143,857,572,286
-    dw 0,-286,-572,-857,-1143,-1428,-1713,-1997,-2280,-2563,-2845,-3126
-    dw -3406,-3686,-3964,-4240,-4516,-4790,-5063,-5334,-5604,-5872,-6138,-6402
-    dw -6664,-6924,-7182,-7438,-7692,-7943,-8192,-8438,-8682,-8923,-9162,-9397
-    dw -9630,-9860,-10087,-10311,-10531,-10749,-10963,-11174,-11381,-11585,-11786,-11982
-    dw -12176,-12365,-12551,-12733,-12911,-13085,-13255,-13421,-13583,-13741,-13894,-14044
-    dw -14189,-14330,-14466,-14598,-14726,-14849,-14968,-15082,-15191,-15296,-15396,-15491
-    dw -15582,-15668,-15749,-15826,-15897,-15964,-16026,-16083,-16135,-16182,-16225,-16262
-    dw -16294,-16322,-16344,-16362,-16374,-16382,-16384,-16382,-16374,-16362,-16344,-16322
-    dw -16294,-16262,-16225,-16182,-16135,-16083,-16026,-15964,-15897,-15826,-15749,-15668
-    dw -15582,-15491,-15396,-15296,-15191,-15082,-14968,-14849,-14726,-14598,-14466,-14330
-    dw -14189,-14044,-13894,-13741,-13583,-13421,-13255,-13085,-12911,-12733,-12551,-12365
-    dw -12176,-11982,-11786,-11585,-11381,-11174,-10963,-10749,-10531,-10311,-10087,-9860
-    dw -9630,-9397,-9162,-8923,-8682,-8438,-8192,-7943,-7692,-7438,-7182,-6924
-    dw -6664,-6402,-6138,-5872,-5604,-5334,-5063,-4790,-4516,-4240,-3964,-3686
-    dw -3406,-3126,-2845,-2563,-2280,-1997,-1713,-1428,-1143,-857,-572,-286
-    dw 0,286
+    dw 16294,16322,16344,16362,16374,16382,16384
 
 %include "grphysics.inc"
 %include "grplay.inc"
@@ -2499,6 +2673,7 @@ gr_sin:
 %include "grmusic.inc"
 %include "grbgm.inc"
 
+align 2
 %define OS88UI_ABOUT
 %define OS88UI_NOBTN
 %include "os88ui.inc"
@@ -2506,10 +2681,16 @@ gr_sin:
 
 ; Every instance owns its model and scratch. No heap allocations.
 %assign GR_BSS 0
+; The bss starts word aligned whatever the image length.
+gr_bss equ os88_image_end + ((os88_image_end - $$) & 1)
 %macro VAR 2
-    %1 equ os88_image_end + GR_BSS
+    %1 equ gr_bss + GR_BSS
     %assign GR_BSS GR_BSS + %2
 %endmacro
+; First, and an even 1,538 bytes: the word table at gr_inkpairs+1024 stays
+; word aligned and everything below keeps the alignment it had before.
+VAR gr_tablekey, 2              ; gr_inktables' surface (low byte)
+VAR gr_inkpairs, 1536           ; gr_inktables: the live surface's pair tables
 VAR gr_win, 2
 VAR gr_fontseg, 2
 VAR gr_fontoff, 2
@@ -2555,7 +2736,6 @@ VAR gr_bgmstatus, 1             ; 0 unclaimed, 1 playing, 2 unavailable
 VAR gr_bgmenabled, 1            ; setup choice / M; preserved across skylines
 VAR gr_bgmchannels, 3
 VAR gr_introseq, 1
-VAR gr_frontcols, 2
 VAR gr_frontplane, 1
 VAR gr_frontsource, 2
 VAR gr_cachekey, 2
@@ -2599,7 +2779,7 @@ VAR gr_top, 2
 VAR gr_width, 2
 VAR gr_height, 2
 VAR gr_kind, 1
-VAR gr_depth, 1
+VAR gr_depth, 1                 ; must follow gr_kind (gr_layout stores both)
 VAR gr_sx, 2
 VAR gr_sy, 2
 VAR gr_ox, 2
@@ -2651,5 +2831,5 @@ VAR gr_vgheight, 2
 VAR gr_scene, 16384
 VAR gr_band, 5376
 
-OS88_BSS GR_BSS
+OS88_BSS GR_BSS + (gr_bss - os88_image_end)
 OS88_IMAGE_END

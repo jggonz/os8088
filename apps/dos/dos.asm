@@ -1732,6 +1732,26 @@ MZ_CS       equ 0x16                ; initial CS, likewise relative
 MZ_LFARLC   equ 0x18                ; where the relocation table starts
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
+dos_mzmap:                          ; dos_exe_setup's: a cell, the header
+                                    ; offset that fills it
+    dw dos_exe_cs
+    db MZ_CS
+    dw dos_exe_ip
+    db MZ_IP
+    dw dos_exe_ss
+    db MZ_SS
+    dw dos_exe_sp
+    db MZ_SP
+    dw dos_exe_hpara
+    db MZ_CPARHDR
+    dw dos_exe_nrel
+    db MZ_CRLC
+    dw dos_exe_rloc
+    db MZ_LFARLC
+    dw dos_exe_minal
+    db MZ_MINALLOC
+DOS_MZMAP_N equ ($ - dos_mzmap) / 3
+
 ; -----------------------------------------------------------------------------
 ; dos_exe_setup - turn the loaded file into a running .EXE image
 ; in:  the whole file is in the arena at DOS_IMGP, [dos_imgsz]/[dos_imghi] its
@@ -1767,22 +1787,20 @@ dos_exe_setup:
     ; the move that strips the header lands exactly on top of it. There is no
     ; copy of these four words afterwards and no "still there above": read
     ; them now or lose them.
-    mov ax, [es:MZ_CS]
-    mov [dos_exe_cs], ax
-    mov ax, [es:MZ_IP]
-    mov [dos_exe_ip], ax
-    mov ax, [es:MZ_SS]
-    mov [dos_exe_ss], ax
-    mov ax, [es:MZ_SP]
-    mov [dos_exe_sp], ax
-    mov ax, [es:MZ_CPARHDR]
-    mov [dos_exe_hpara], ax
-    mov ax, [es:MZ_CRLC]
-    mov [dos_exe_nrel], ax
-    mov ax, [es:MZ_LFARLC]
-    mov [dos_exe_rloc], ax
-    mov ax, [es:MZ_MINALLOC]
-    mov [dos_exe_minal], ax
+    ; Eight words, by TABLE: a cell and the header offset that fills it, read
+    ; through CS for dos_hook_vectors' reason (the table is in the core).
+    mov si, dos_mzmap
+    mov cx, DOS_MZMAP_N
+    cld
+.mzcopy:
+    cs lodsw                        ; AX = the cell...
+    xchg ax, di
+    cs lodsb                        ; ...AL = the header offset, all below 80h
+    cbw
+    xchg ax, bx
+    mov ax, [es:bx]
+    mov [di], ax
+    loop .mzcopy
 
     ; --- the image's size, in bytes then paragraphs ------------------------
     mov ax, [es:MZ_CP]              ; pages INCLUDING the header. A last-page
@@ -2243,25 +2261,39 @@ dos_hook_vectors:
     xor ax, ax
     mov es, ax
     cli
-    mov word [es:0x20*4], dos_int20     ; terminate, the CP/M door
-    mov [es:0x20*4+2], cs
-    mov word [es:0x21*4], dos_int21     ; ...and the one that matters
-    mov [es:0x21*4+2], cs
-    mov word [es:0x22*4], dos_int22     ; terminate address - a program may read
-    mov [es:0x22*4+2], cs               ; it out of its own PSP
-    mov word [es:0x23*4], dos_iret      ; Ctrl-Break
-    mov [es:0x23*4+2], cs
-    mov word [es:0x24*4], dos_int24     ; critical error: FAIL, never retry
-    mov [es:0x24*4+2], cs
-    mov word [es:0x2F*4], dos_int2f     ; the MULTIPLEX interrupt, which is
-    mov [es:0x2F*4+2], cs               ; how a program finds XMS (SPEC.md
-                                        ; 96.15) - and, unhooked, is how it
-                                        ; finds whatever the ROM left there
-    mov word [es:0x33*4], dos_int33     ; ...and the MOUSE (SPEC.md 96.10),
-    mov [es:0x33*4+2], cs               ; which costs us a translation and not
-                                        ; a driver: the kernel's own ISR keeps
-                                        ; mouse_x/y/btn fresh for the whole
-                                        ; bracket (SPEC.md 53.1)
+    ; --- ONE TABLE FOR EVERY VECTOR WE OWN (SPEC.md 96.5.2) -----------------
+    ; It was eleven `mov word [es:n*4], handler / mov [es:n*4+2], cs` pairs -
+    ; twelve bytes a vector - and a loop for the iret ones beside them. The
+    ; table carries a vector a byte, with bit 7 set when a NEW handler word
+    ; follows it, so a run of vectors that share one handler (the fourteen
+    ; irets, 25h/26h) costs a byte each. The order is the order they were
+    ; written in and none of it is visible: IF is 0 from the `cli` above to
+    ; the `sti` below, so no interrupt can see a half-written table.
+    ;
+    ; CS AND NOT DS FOR THE TABLE. In the parted build (SPEC.md 96.44) this
+    ; body is in the CORE and DS addresses the HOST's bss - `[dos_arena]`
+    ; below is exactly that - so a table in our own image is reachable only
+    ; through CS, which is the same segment either way.
+    mov si, dos_ivtab
+.hk:
+    cs lodsb                            ; AL = a vector, 0 = the end
+    or al, al
+    jz .hkd
+    jns .hkv                            ; bit 7 clear: the handler in DX
+    and al, 0x7F
+    push ax
+    cs lodsw                            ; ...set: a new handler follows
+    xchg ax, dx
+    pop ax
+.hkv:
+    cbw                                 ; every vector here is below 80h
+    xchg ax, bx
+    shl bx, 1
+    shl bx, 1
+    mov [es:bx], dx
+    mov [es:bx+2], cs
+    jmp short .hk
+.hkd:
     call dos_m33_hidden                 ; **AND THE CURSOR STARTS AWAY**
                                         ; (SPEC.md 96.10.5): the show counter
                                         ; is -1, which is not the zero a bss
@@ -2269,47 +2301,6 @@ dos_hook_vectors:
                                         ; bracket that skipped this would put
                                         ; a cursor on the screen of a program
                                         ; that never asked for one
-
-    ; --- ...AND THE REST OF THE BLOCK A REAL DOS OWNS (SPEC.md 96.5.2) ------
-    ; Seven vectors were hooked above and the other fourteen of DOS's own were
-    ; left at 0000:0000 - which is not `unimplemented`, it is A JUMP TO
-    ; ADDRESS ZERO. Measured on IBM DOS 3.30: 28h, 2Ah..2Eh, 32h and 34h..3Eh
-    ; all point at ONE `iret` inside IBMDOS, and 25h, 26h, 27h and 29h at real
-    ; code. The eleven from 34h up are the 8087 EMULATOR's, which every
-    ; Borland- and Microsoft-compiled program reads before installing its own.
-    ; 2Eh is COMMAND.COM's undocumented back door rather than an iret, and an
-    ; iret is the safe approximation: it does nothing where DOS would run a
-    ; command, which beats running the vector table as code.
-    ;
-    ; CS AND NOT DS FOR THE TABLE. In the parted build (SPEC.md 96.44) this
-    ; body is in the CORE and DS addresses the HOST's bss - `[dos_arena]`
-    ; below is exactly that - so a table in our own image is reachable only
-    ; through CS, which is the same segment either way.
-    mov si, dos_ivirets
-    mov dx, dos_iret
-.hkir:
-    mov al, [cs:si]
-    inc si
-    or al, al
-    jz .hkird
-    mov bl, al
-    xor bh, bh
-    shl bx, 1
-    shl bx, 1
-    mov [es:bx], dx
-    mov [es:bx+2], cs
-    jmp short .hkir
-.hkird:
-    mov word [es:0x25*4], dos_int25     ; ABSOLUTE DISK READ and WRITE: a
-    mov [es:0x25*4+2], cs               ; refusal, and refusing is exactly why
-    mov word [es:0x26*4], dos_int25     ; they cannot be `dos_iret` - both
-    mov [es:0x26*4+2], cs               ; return with the FLAGS still pushed
-    mov word [es:0x27*4], dos_int20     ; TSR: nothing can stay resident past
-    mov [es:0x27*4+2], cs               ; the bracket, so it is a terminate -
-                                        ; which is what DOS's own 27h is, a
-                                        ; jump to AH=31h
-    mov word [es:0x29*4], dos_int29     ; FAST CONSOLE OUTPUT, which DOS's own
-    mov [es:0x29*4+2], cs               ; CON driver writes through
     sti
 
     mov ax, [dos_arena]                 ; ...and INT 12h's own source, so "how
@@ -2402,9 +2393,57 @@ dos_int29:
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
-; The vectors a real IBM DOS 3.30 fills with one `iret`, measured rather than
-; listed out of a book.  Read through CS: see dos_hook_vectors.
-dos_ivirets:
+; Every vector the box owns, and last the ones a real IBM DOS 3.30 fills with
+; one `iret` - measured rather than listed out of a book.  Read through CS:
+; see dos_hook_vectors.
+dos_ivtab:
+    ; WHAT EACH VECTOR WAS, AND WHY (SPEC.md 96.5.2):
+    ;   20h  terminate, the CP/M door
+    ;   21h  ...and the one that matters
+    ;   22h  terminate address - a program may read it out of its own PSP
+    ;   24h  critical error: FAIL, never retry
+    ;   2Fh  the MULTIPLEX interrupt, which is how a program finds XMS (SPEC.md
+    ;        96.15) - and, unhooked, is how it finds whatever the ROM left there
+    ;   33h  ...and the MOUSE (SPEC.md 96.10), which costs us a translation and
+    ;        not a driver: the kernel's own ISR keeps mouse_x/y/btn fresh for
+    ;        the whole bracket (SPEC.md 53.1)
+    ;   25h, 26h  ABSOLUTE DISK READ and WRITE: a refusal, and refusing is
+    ;        exactly why they cannot be `dos_iret` - both return with the
+    ;        FLAGS still pushed
+    ;   27h  TSR: nothing can stay resident past the bracket, so it is a
+    ;        terminate - which is what DOS's own 27h is, a jump to AH=31h
+    ;   29h  FAST CONSOLE OUTPUT, which DOS's own CON driver writes through
+    ;   23h  Ctrl-Break, and then THE REST OF THE BLOCK A REAL DOS OWNS.
+    ;        Measured on IBM DOS 3.30: 28h, 2Ah..2Eh, 32h and 34h..3Eh all
+    ;        point at ONE `iret` inside IBMDOS. The eleven from 34h up are the
+    ;        8087 EMULATOR's, which every Borland- and Microsoft-compiled
+    ;        program reads before installing its own. 2Eh is COMMAND.COM's
+    ;        undocumented back door rather than an iret, and an iret is the
+    ;        safe approximation: it does nothing where DOS would run a
+    ;        command, which beats running the vector table as code. Left at
+    ;        0000:0000 they are not `unimplemented`, they are A JUMP TO
+    ;        ADDRESS ZERO
+    db 0x80 | 0x20
+    dw dos_int20
+    db 0x80 | 0x21
+    dw dos_int21
+    db 0x80 | 0x22
+    dw dos_int22
+    db 0x80 | 0x24
+    dw dos_int24
+    db 0x80 | 0x2F
+    dw dos_int2f
+    db 0x80 | 0x33
+    dw dos_int33
+    db 0x80 | 0x25
+    dw dos_int25
+    db 0x26
+    db 0x80 | 0x27
+    dw dos_int20
+    db 0x80 | 0x29
+    dw dos_int29
+    db 0x80 | 0x23
+    dw dos_iret
     db 0x28                             ; DOS idle
     db 0x2A                             ; network / critical section - the one
                                         ; BOLOBALL asks (SPEC.md 96.5.2.1)
@@ -2653,8 +2692,12 @@ dos_psp_make:
     xor ax, ax                      ; set is a field a program may read, and
     cld
     rep stosw                       ; zero is the answer DOS leaves in most
-
-    mov word [es:0x00], 0x20CD      ; INT 20h, so a .COM that plain `ret`s
+    xor di, di                      ; ...and DI is the PSP's base for the
+                                    ; stores below: `[es:di+n]` is a byte
+                                    ; shorter than `[es:n]` for every one
+                                    ; that is not AX (SPEC.md 96.21.4's
+                                    ; fields, in the same order as before)
+    mov word [es:di+0x00], 0x20CD   ; INT 20h, so a .COM that plain `ret`s
                                     ; lands here and terminates
     mov ax, [dos_ldpsp]
     add ax, [dos_ldpara]
@@ -2674,7 +2717,7 @@ dos_psp_make:
     ; - so the segment is (PSP + 5) - size/16 and the call lands on it exactly.
     ; MEASURED against IBM DOS 3.30: 0FEF0h for a block of 64KB or more
     ; (SPEC.md 96.21.4).
-    mov byte [es:0x05], 0x9A
+    mov byte [es:di+0x05], 0x9A
     mov ax, [dos_ldpara]
     cmp ax, 0x20                    ; a block too small to hold a PSP and the
     jb .cpmnone                     ; field's own bias cannot answer at all
@@ -2686,20 +2729,19 @@ dos_psp_make:
     shl ax, cl                      ; paragraphs -> bytes, and 1000h shifted is
     sub ax, 0x110                   ; 0 - which is the wrap that MAKES it 0FEF0h
     mov bx, ax
-    mov cl, 4
-    shr bx, cl
+    shr bx, cl                      ; (CL is still 4)
     mov [es:0x06], ax
     mov ax, [dos_ldpsp]
     add ax, 5
     sub ax, bx
     mov [es:0x08], ax
 .cpmnone:
-    mov word [es:0x0A], dos_int22   ; the terminate address, which DOS copies
-    mov [es:0x0C], cs               ; out of the vectors it is about to hook
-    mov word [es:0x0E], dos_iret
-    mov [es:0x10], cs
-    mov word [es:0x12], dos_int24
-    mov [es:0x14], cs
+    mov word [es:di+0x0A], dos_int22 ; the terminate address, which DOS copies
+    mov [es:di+0x0C], cs            ; out of the vectors it is about to hook
+    mov word [es:di+0x0E], dos_iret
+    mov [es:di+0x10], cs
+    mov word [es:di+0x12], dos_int24
+    mov [es:di+0x14], cs
     mov ax, [dos_parent]            ; the PARENT's PSP, which AH=4Bh's child
     or ax, ax                       ; reads to find who launched it
     jnz .haveparent
@@ -2719,25 +2761,25 @@ dos_psp_make:
     mov di, 0x18
     mov cx, 20
     mov al, 0xFF
-    cld
-    rep stosb
-    mov word [es:0x18], 0x0101      ; 0, 1: stdin and stdout, the console
-    mov byte [es:0x1A], 0x01        ; 2: stderr, the same device
-    mov byte [es:0x1B], 0x00        ; 3: AUX
-    mov byte [es:0x1C], 0x02        ; 4: PRN
-    mov word [es:0x32], 20          ; ...and its size and address, which is how
-    mov word [es:0x34], 0x0018      ; a program with more than twenty files
-    mov ax, [dos_ldpsp]             ; open finds the table that replaced it
-    mov [es:0x36], ax
-    mov word [es:0x38], 0xFFFF      ; the previous PSP: DOS 3 leaves FFFF:FFFF
-    mov word [es:0x3A], 0xFFFF      ; and a program may test for it
+    rep stosb                       ; ...which leaves DI at 2Ch: the base for
+                                    ; every store below, a byte shorter each
+    mov word [es:di-0x2C+0x18], 0x0101  ; 0, 1: stdin and stdout, the console
+    mov byte [es:di-0x2C+0x1A], 0x01    ; 2: stderr, the same device
+    mov byte [es:di-0x2C+0x1B], 0x00    ; 3: AUX
+    mov byte [es:di-0x2C+0x1C], 0x02    ; 4: PRN
+    mov word [es:di-0x2C+0x32], 20      ; ...and its size and address, which is
+    mov word [es:di-0x2C+0x34], 0x0018  ; how a program with more than twenty
+    mov ax, [dos_ldpsp]                 ; files open finds the table that
+    mov [es:di-0x2C+0x36], ax           ; replaced it
+    mov word [es:di-0x2C+0x38], 0xFFFF  ; the previous PSP: DOS 3 leaves
+    mov word [es:di-0x2C+0x3A], 0xFFFF  ; FFFF:FFFF and a program may test for it
     mov ax, [dos_arena]
     add ax, DOS_ENVSEG
-    mov [es:0x2C], ax               ; ...and one environment, shared: a child
+    mov [es:di-0x2C+0x2C], ax       ; ...and one environment, shared: a child
                                     ; inherits the parent's, which is the
                                     ; default AH=4Bh's block asks for with a 0
-    mov word [es:0x50], 0x21CD      ; INT 21h / RETF, the DOS 2+ call gate
-    mov byte [es:0x52], 0xCB
+    mov word [es:di-0x2C+0x50], 0x21CD  ; INT 21h / RETF, the DOS 2+ call gate
+    mov byte [es:di-0x2C+0x52], 0xCB
     call dos_psp_tail               ; THE ARGUMENTS (SPEC.md 96.19), or the
                                     ; empty tail this used to write flat
     mov di, 0x5C                    ; ...and the two FCBs, in the shape an
@@ -2896,107 +2938,40 @@ dos_int21:
 .nopkt:                              ; is already a dispatch, and it costs a
                                      ; host with no packet driver nothing
 
-    cmp ah, 0x4C
-    je .term
-    cmp ah, 0x00
-    je .term0
+    ; --- THE DISPATCH IS A TABLE (SPEC.md 96.7.3) ---------------------------
+    ; It was forty-eight `cmp ah, n / je` pairs, and every handler is further
+    ; than a short jump away, so each `je` assembled as `jne +3 / jmp near` -
+    ; 384 bytes, and a function's cost was its POSITION in the list: AH=06h,
+    ; the console poll a game spins on, paid forty-five compares and
+    ; forty-five TAKEN jumps before it was found. The table is one cost for
+    ; every function and is smaller. AH=02h and AH=09h are tested first,
+    ; ahead of it, because console output is the call a program makes most and
+    ; they were 3rd and 4th in the old list - they are 1st and 2nd now, so not
+    ; one function the old list put early AND that a program calls in a loop
+    ; got slower. BX is the only register the lookup needs, and it goes back
+    ; with the `xchg` that leaves the handler's address on top of the stack
+    ; for the `ret` to take - so every handler sees exactly the registers it
+    ; saw before, and [bp-10] is the slot below the gate's last bank ([bp-8]).
     cmp ah, 0x02
     je .putc
     cmp ah, 0x09
     je .puts
-    cmp ah, 0x30
-    je .ver
-    cmp ah, 0x01
-    je .getce
-    cmp ah, 0x07
-    je .getc
-    cmp ah, 0x08
-    je .getc
-    cmp ah, 0x0B
-    je .kbhit
-    cmp ah, 0x40
-    je .write
-    cmp ah, 0x4A
-    je .resize
-    cmp ah, 0x48
-    je .alloc
-    cmp ah, 0x49
-    je .free
-    cmp ah, 0x3C
-    je .create
-    cmp ah, 0x3D
-    je .open
-    cmp ah, 0x3E
-    je .close
-    cmp ah, 0x3F
-    je .read
-    cmp ah, 0x41
-    je .unlink
-    cmp ah, 0x42
-    je .seek
-    cmp ah, 0x25
-    je .setvec
-    cmp ah, 0x35
-    je .getvec
-    cmp ah, 0x19
-    je .curdrv
-    cmp ah, 0x0E
-    je .seldrv
-    cmp ah, 0x36
-    je .dfree
-    cmp ah, 0x1A
-    je .setdta
-    cmp ah, 0x2F
-    je .getdta
-    cmp ah, 0x4E
-    je .ff
-    cmp ah, 0x4F
-    je .fn
-    cmp ah, 0x0D
-    je .dskreset
-    cmp ah, 0x68
-    je .dskreset
-    cmp ah, 0x6A
-    je .dskreset
-    cmp ah, 0x39
-    je .mkdir
-    cmp ah, 0x3A
-    je .rmdir
-    cmp ah, 0x3B
-    je .chdir
-    cmp ah, 0x47
-    je .getcwd
-    cmp ah, 0x2A
-    je .getdate
-    cmp ah, 0x2B
-    je .setdate
-    cmp ah, 0x2C
-    je .gettime
-    cmp ah, 0x2D
-    je .settime
-    cmp ah, 0x4B
-    je .exec
-    cmp ah, 0x4D
-    je .retcode
-    cmp ah, 0x44
-    je .ioctl
-    cmp ah, 0x43
-    je .getattr
-    cmp ah, 0x29
-    je .parsefcb
-    cmp ah, 0x56
-    je .rename
-    cmp ah, 0x06
-    je .dconio
-    cmp ah, 0x0C
-    je .flushin
-    cmp ah, 0x31
-    je .term                        ; TSR: AL is the exit code, exactly as
-                                    ; AH=4Ch's is, and DX - the paragraphs to
-                                    ; keep - cannot be honoured, the bracket
-                                    ; taking the arena back whole. INT 27h is
-                                    ; the same call through the same door
-    jmp .bad
+    cmp ah, DOS_T21_N
+    jae .hifn
+    push bx
+    mov bl, ah
+    xor bh, bh
+    shl bx, 1
+    mov bx, [.t21 + bx]
+    xchg bx, [bp-10]
+    ret
+.hifn:                              ; above the table: 68h and 6Ah (commit
+    cmp ah, 0x68                    ; and extended commit) are the only two,
+    je .hidsk                       ; and 69h between them is not a call this
+    cmp ah, 0x6A                    ; box answers
+    jne .bad
+.hidsk:
+    jmp .dskreset
 
 .term0:
     ; AH=00h IS `INT 20h` THROUGH THE OTHER DOOR, and its exit code is ZERO
@@ -3038,6 +3013,23 @@ dos_int21:
     pop si
     pop ds
     jmp .ok
+; ...and THE TABLE, here rather than beside the lookup so that the two
+; `je`s ahead of it stay SHORT: .putc and .puts are the next thing past the
+; dispatch, so a function that is neither falls through two untaken branches
+; instead of jumping over two expanded ones.
+.t21:                               ; DOS_T21_N words, 00h up: the handler,
+    dw .term0, .getce, .putc, .bad, .bad, .bad, .dconio, .getc   ; 00h
+    dw .getc, .puts, .bad, .kbhit, .flushin, .dskreset, .seldrv, .bad   ; 08h
+    dw .bad, .bad, .bad, .bad, .bad, .bad, .bad, .bad   ; 10h
+    dw .bad, .curdrv, .setdta, .bad, .bad, .bad, .bad, .bad   ; 18h
+    dw .bad, .bad, .bad, .bad, .bad, .setvec, .bad, .bad   ; 20h
+    dw .bad, .parsefcb, .getdate, .setdate, .gettime, .settime, .bad, .getdta   ; 28h
+    dw .ver, .term, .bad, .bad, .bad, .getvec, .dfree, .bad   ; 30h
+    dw .bad, .mkdir, .rmdir, .chdir, .create, .open, .close, .read   ; 38h
+    dw .write, .unlink, .seek, .getattr, .ioctl, .bad, .bad, .getcwd   ; 40h
+    dw .alloc, .free, .resize, .exec, .term, .retcode, .ff, .fn   ; 48h
+    dw .bad, .bad, .bad, .bad, .bad, .bad, .rename   ; 50h
+DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
 
 .getce:
     call dos_getkey                 ; AH=01h echoes what it read; AH=07h and
@@ -3143,7 +3135,7 @@ dos_int21:
     call dos_fh_name                ; copied, so the mode is gone by the time
     jc .fherr                       ; the record exists to put it in
     call .fhabs
-    jc .fhpath
+    jc .fhpath0
     call dos_fh_isdev               ; A DEVICE IS NOT ON THE DISK (96.11.7)
     jnc .opdev
     call dos_fh_stat                ; fills [dos_fent]
@@ -3222,7 +3214,7 @@ dos_int21:
     ;
     ; AL is the DOS_DEV_* code and dos_fh_new preserves it.
     call dos_fh_new                 ; BX = the handle, SI = the record, zeroed
-    jc .fmany
+    jc .fmany0
     call dos_fh_setname             ; the name is the DEVICE's, which is what
                                     ; AH=44h and a debugger want to see
     mov [si+FH_VOL], al             ; ...and the code, where a file keeps its
@@ -3235,17 +3227,23 @@ dos_int21:
     mov ax, bx
     jmp .fhok
 
+; --- NEAR DOORS to the shared exits (SPEC.md 96.7.3): one `jmp near` here lets
+; the error branches around it be short, where each was `jcc +3 / jmp near`
+.fherr0: jmp .fherr
+.fmany0: jmp .fmany
+.fhpath0: jmp .fhpath
+
 .create:
     ; AH=3Ch: DS:DX = an ASCIZ name, CX = attributes; out AX = a handle. The
     ; file is not touched until the first window flushes, which is also what
     ; makes the truncate free - the first flush REPLACES.
     push bx
     call dos_fh_name
-    jc .fherr
+    jc .fherr0
     call .fhabs
-    jc .fhpath
+    jc .fhpath0
     call dos_fh_new
-    jc .fmany
+    jc .fmany0
     call dos_fh_setname
     call dos_fh_here                ; ...and the same for a file just CREATED
                                     ; (SPEC.md 96.48.3)
@@ -3260,7 +3258,7 @@ dos_int21:
     call dos_fh_slot                ; SI = the record, BX = its index
     jc .fhbad
     call dos_fh_close
-    jc .fherr
+    jc .fherr0
     call dos_jft_sync
     xor ax, ax
     jmp .fhok
@@ -3274,11 +3272,11 @@ dos_int21:
     test byte [si+FH_FLAGS], FHF_DEV ; ...and one opened BY NAME reads the same
     jnz .fhrdeof                     ; way (SPEC.md 96.11.7)
     call dos_fh_rdloop              ; AX = delivered
-    jc .fherr
+    jc .fherr0
     jmp .fhok
 .fhrdev:
     cmp bx, DOS_FH0                 ; a DEVICE handle: stdin has no line editor
-    jae .fhbad                      ; here, so it is at end of file, which is
+    jae .fhbad1                      ; here, so it is at end of file, which is
 .fhrdeof:                           ; what a program reading it will act on
     xor ax, ax
     jmp .fhok
@@ -3287,11 +3285,11 @@ dos_int21:
     ; AH=40h with a file handle: BX, CX and DS:DX as .write's.
     push bx
     call dos_fh_slot
-    jc .fhbad
+    jc .fhbad1
     test byte [si+FH_FLAGS], FHF_DEV ; ...OR A DEVICE, which is neither a file
     jnz .fwdev                       ; nor one of the five (SPEC.md 96.11.7)
     test byte [si+FH_FLAGS], FHF_WRITE
-    jz .fhacc
+    jz .fhacc1
     or byte [si+FH_FLAGS], FHF_WROTE ; **AH=44h's BIT 6 IS THE ONLY READER**
                                     ; (SPEC.md 96.7.1.2), and it is set where
                                     ; the write is ACCEPTED rather than where
@@ -3314,13 +3312,13 @@ dos_int21:
     mov ax, [si+FH_POS+2]           ; the HIGH words first, so this is an
     cmp ax, [si+FH_SIZE+2]          ; UNSIGNED 32-BIT compare and not two
     ja .fwgap                       ; equality tests wearing one
-    jb .fhacc
+    jb .fhacc1
     mov ax, [si+FH_POS]
     cmp ax, [si+FH_SIZE]
     ja .fwgap
-    jb .fhacc
+    jb .fhacc1
     call dos_fh_wrloop
-    jc .fherr
+    jc .fherr1
     jmp .fhok
 .fwgap:
     ; ...and the gap arm is dos_fh_wiloop's `.ihole`, which is chosen on the
@@ -3332,7 +3330,7 @@ dos_int21:
     ; exist yet.
 .fwinpl:
     call dos_fh_wiloop              ; ...and it may not GROW one: the loop
-    jc .fherr                       ; stops at the end of file and answers
+    jc .fherr1                       ; stops at the end of file and answers
     jmp .fhok                       ; the short count, which is what DOS
                                     ; answers for a full disk
 
@@ -3348,11 +3346,16 @@ dos_int21:
     mov ax, cx                      ; NUL, PRN, AUX: every byte accounted for
     jmp .ok                         ; and none of them written
 
+; ...the same, for the handlers either side of it
+.fherr1: jmp .fherr
+.fhacc1: jmp .fhacc
+.fhbad1: jmp .fhbad
+
 .unlink:
     ; AH=41h: DS:DX = an ASCIZ name.
     push bx
     call dos_fh_name
-    jc .fherr
+    jc .fherr1
     call .fhabs
     jc .fhpath
     push si
@@ -3364,7 +3367,7 @@ dos_int21:
     jmp .fhok
 .dlerr:
     cmp ax, FERR_NOENT              ; THE NAME IS NOT THERE, and DOS says 2 for
-    jne .fhacc                      ; that (SPEC.md 96.11.9) - `.rnerr` above
+    jne .fhacc1                      ; that (SPEC.md 96.11.9) - `.rnerr` above
     mov al, 2                       ; already makes this exact distinction for
     jmp .fherr                      ; AH=56h, and AH=41h was sending every
                                     ; refusal to 5. Microsoft Works unlinks the
@@ -3379,9 +3382,9 @@ dos_int21:
     push bx
     mov ah, al                      ; AL is about to be spent
     call dos_fh_slot
-    jc .fhbad
+    jc .fhbad1
     cmp ah, 2
-    ja .fhacc
+    ja .fhacc1
     or ah, ah
     jnz .skcur
     xor ax, ax                      ; origin 0: from the start
@@ -3557,7 +3560,7 @@ dos_int21:
     ; AH=4Eh: DS:DX = the pattern, CX = the attribute mask.
     push bx
     call dos_fh_name                ; the pattern travels the same road a name
-    jc .fherr                       ; does, wildcards and all
+    jc .fherr6                       ; does, wildcards and all
     call dos_dta_seg                ; ES:DI = the caller's DTA, and DI STAYS
     mov [es:di+DTA_MASK], cl        ; ...the mask FIRST: the rep movsb below
     mov al, [dos_pvol]              ; spends CX (SPEC.md 96.12.1)
@@ -3589,7 +3592,7 @@ dos_int21:
     jmp .fhok
 .ffnone:
     mov al, 18
-    jmp .fherr
+.fherr6: jmp .fherr                 ; ...and a near door for .ff/.fn (96.7.3)
 .fn:
     ; AH=4Fh: everything it needs is in the DTA AH=4Eh filled.
     push bx
@@ -3597,9 +3600,9 @@ dos_int21:
     mov al, [es:di+DTA_VOL]         ; ...the volume included: a walk started on
     mov [dos_fdrv], al              ; B: carries on there whatever the program
     call dos_fh_enter               ; has done to its own drive since, and
-    jc .fherr                       ; .fhok/.fherr bring us home
+    jc .fherr6                       ; .fhok/.fherr bring us home
     call dos_find_step              ; CF=1 with AL = 18 (no more files)
-    jc .fherr
+    jc .fherr6
     xor ax, ax
     jmp .fhok
 
@@ -3834,7 +3837,7 @@ dos_int21:
     mov di, dos_fname
     call dos_fh_core
     pop di
-    jc .fherr
+    jc .fherr2
     call .rndrv                     ; AL = the drive it means
     mov [dos_rndrv], al
     mov al, [dos_fabs]
@@ -3851,7 +3854,7 @@ dos_int21:
     call dos_fh_core
     pop dx
     pop di
-    jc .fherr
+    jc .fherr2
     call .rndrv
     cmp al, [dos_rndrv]
     je .rnone
@@ -3867,7 +3870,7 @@ dos_int21:
 .rngo:
     mov [dos_fdrv], al              ; ...and now stand on it. .fhok/.fherr are
     call dos_fh_enter               ; what come home (SPEC.md 96.6.2)
-    jc .fherr
+    jc .fherr2
     push si
     push di
     mov si, dos_fname
@@ -3895,9 +3898,10 @@ dos_int21:
                                     ; (SPEC.md 96.11.2's own reasoning)
 .rnerr:
     cmp ax, FERR_NOENT              ; the source is not there: DOS says 2, and
-    jne .fhacc                      ; everything else this can fail with - the
+    jne .fhacc2                      ; everything else this can fail with - the
     mov al, 2                       ; target existing included - it says 5 for
-    jmp .fherr
+.fherr2: jmp .fherr                 ; ...and a near door for the handlers
+.fhacc2: jmp .fhacc                 ; around it, as above
 
 ; --- .rndrv - the drive a just-parsed name MEANS ----------------------------
 ; out: AL = [dos_fdrv], or the volume we entered on when the name named none.
@@ -3914,30 +3918,30 @@ dos_int21:
 .mkdir:
     push bx
     call dos_fh_name
-    jc .fherr
+    jc .fherr2
     push si
     mov si, dos_fname
     call dos_be_mkdir
     pop si
-    jc .fhacc
+    jc .fhacc2
     xor ax, ax
     jmp .fhok
 .rmdir:
     push bx
     call dos_fh_name
-    jc .fherr
+    jc .fherr2
     push si
     mov si, dos_fname
     xor al, al                      ; STRICT: remove it only if it is empty,
     call dos_be_rmdir               ; which is the one AH=3Ah means. The
     pop si                          ; recursive form is a different call and
-    jc .fhacc                       ; DOS does not have it
+    jc .fhacc2                       ; DOS does not have it
     xor ax, ax
     jmp .fhok
 .chdir:
     push bx
     call dos_fh_name
-    jc .fherr
+    jc .fherr2
     call dos_cd_go
     jc .fhpath
     mov byte [dos_fhkeep], 1        ; KEEP the walk: dos_fh_enter may have moved
@@ -4126,7 +4130,7 @@ dos_int21:
     mov [dos_xparm], bx             ; the parameter block, banked while the
     mov [dos_xparms], es            ; name is copied out of the same segment
     call dos_fh_name
-    jc .fherr
+    jc .exerr
     call .fhabs
     jc .fhpath
 
@@ -4163,20 +4167,19 @@ dos_int21:
     call dos_exec_unload            ; the child's block, back to the chain
     xor ax, ax
     jmp .fhok
-.exerr:
-    xor ah, ah
-    jmp .fherr
 .exbadfn:
     mov al, 1                       ; "invalid function"
-    jmp .fherr
+    jmp short .exerr
 .exnest:
     mov al, 8                       ; "not enough memory", which is the honest
-    jmp .fherr                      ; DOS answer for a child that cannot run
+                                    ; DOS answer for a child that cannot run
+.exerr:                             ; AL = a DOS code: .fherr clears AH itself,
+    jmp .fherr                      ; so this is a near door and nothing more
 
 .resize:
     ; AH=4Ah: ES = the block, BX = the paragraphs wanted (SPEC.md 96.9).
     call dos_mcb_resize
-    jc .badax
+    jc .badax3
     jmp .ok
 
 .alloc:
@@ -4184,19 +4187,19 @@ dos_int21:
     ; the LARGEST available in BX, which is how a program asks "how much is
     ; there" - BX=FFFFh is that question and must get a truthful number.
     call dos_mcb_alloc
-    jc .badax
+    jc .badax3
     jmp .ok
 
 .free:
     ; AH=49h: ES = a segment we handed out.
     call dos_mcb_free
-    jc .badax
+    jc .badax3
     jmp .ok
 
 .ver:
     mov ax, 0x1E03                  ; AL = 3, AH = 30: DOS 3.30 (SPEC.md
-    mov bx, 0                       ; 96.21.7). The version is a SETTING and
-    mov cx, 0                       ; not a constant the day a program wants
+    xor bx, bx                      ; 96.21.7). The version is a SETTING and
+    xor cx, cx                      ; not a constant the day a program wants
     jmp .ok                         ; 5.00 - reporting a version whose
                                     ; functions we lack is worse than reporting
                                     ; a lower one, because a program branches
@@ -4205,6 +4208,8 @@ dos_int21:
                                     ; box is measured against, for no feature
                                     ; it has. BX and CX are the OEM and serial,
                                     ; and 0/0 is what IBM DOS 3.30 answers too
+
+.badax3: jmp .badax                 ; a near door, as above
 
 .dskreset:
     ; AH=0Dh - DISK RESET: flush what is buffered and forget the rest. There
@@ -4326,9 +4331,9 @@ dos_int21:
 .att_get:
     push bx
     call dos_fh_name
-    jc .fherr
+    jc .fherr4
     call .fhabs
-    jc .fhpath
+    jc .fhpath4
     cmp byte [dos_fname], 0         ; **A ROOT PARSES TO NO NAME AT ALL** and
     je .att_dir                     ; is a DIRECTORY, not a missing file
                                     ; (SPEC.md 96.12.4): `A:\` is what
@@ -4347,7 +4352,7 @@ dos_int21:
                                     ; comes off the named drive
 .att_dirq:
     call dos_att_isdir              ; ...and a FOLDER by that name is the other
-    jc .fnoent                      ; thing AH=43h is asked about. Only a name
+    jc .fnoent4                      ; thing AH=43h is asked about. Only a name
 .att_dir:                           ; that is NEITHER is `file not found`
     mov cx, 0x10                    ; DIRECTORY, which is the bit every caller
     mov ax, cx                      ; tests
@@ -4355,16 +4360,20 @@ dos_int21:
 .att_set:
     push bx
     call dos_fh_name                ; it still has to NAME something real...
-    jc .fherr
+    jc .fherr4
     call .fhabs
-    jc .fhpath
+    jc .fhpath4
     call dos_fh_stat
-    jc .fnoent
+    jc .fnoent4
     xor ax, ax                      ; ...and the new attributes are then
     jmp .fhok                       ; DROPPED rather than refused: there is
                                     ; nowhere to keep them, and a program that
                                     ; sets ARCHIVE on a file it has just
                                     ; written must not fail for it
+
+.fherr4: jmp .fherr                 ; near doors, as above
+.fhpath4: jmp .fhpath
+.fnoent4: jmp .fnoent
 
 .dconio:
     ; AH=06h - direct console I/O. DL=FFh asks for a character WITHOUT
@@ -4405,14 +4414,15 @@ dos_int21:
     pop ax
     mov ah, al
     cmp ah, 0x01
-    je .getce
+    je .getce5
     cmp ah, 0x06
     je .dconio
     cmp ah, 0x07
-    je .getce
+    je .getce5
     cmp ah, 0x08
-    je .getce
+    je .getce5
     jmp .ok                         ; flushed, and the rest is not ours
+.getce5: jmp .getce                 ; a near door, as above
 
 .bad:
     mov [dos_badfn], ah             ; the window NAMES it (SPEC.md 47): an
@@ -5172,11 +5182,9 @@ dos_be_rename:
     mov word [dos_betgt], DBE_RENAME
     jmp dos_be_go
 %endif                              ; DOS_EXTCORE
-%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
-dos_be_copy:
-    mov word [dos_betgt], DBE_COPY
-    jmp dos_be_go
-%endif                              ; DOS_EXTCORE
+; (dos_be_copy WAS HERE: nothing in the core ever called it, so the thunk is
+; gone. DBE_COPY's slot and both hosts' dos_k_copy stay, because the slot
+; numbers are the back end's ABI and a door is cheaper than a renumbering)
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 dos_be_move:
     mov word [dos_betgt], DBE_MOVE
@@ -5745,11 +5753,11 @@ dos_fmt_exit:
     pop di
     pop ax
     ret
-%endif                              ; KD_BACKEND
-%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
 ; -----------------------------------------------------------------------------
 ; dos_err_line - SI = the sentence for [dos_err]
+; THE WINDOW'S, with dos_fmt_fn and dos_hexd below it (SPEC.md 96.44.15): its
+; one caller is dosc.inc's dos_con_ended, so it is no longer a core entry.
 ; -----------------------------------------------------------------------------
 dos_err_line:
     push ax
@@ -5766,8 +5774,6 @@ dos_err_line:
     pop bx
     pop ax
     ret
-%endif                              ; DOS_EXTCORE
-%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
 dos_fmt_fn:
     push ax
@@ -5789,8 +5795,6 @@ dos_fmt_fn:
     pop di
     pop ax
     ret
-%endif                              ; DOS_EXTCORE
-%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
 dos_hexd:
     add al, '0'
@@ -5799,8 +5803,6 @@ dos_hexd:
     add al, 7
 .out:
     ret
-%endif                              ; DOS_EXTCORE
-%ifndef KD_BACKEND                  ; THE WINDOW HALF (SPEC.md 96.43.2)
 
 ; -----------------------------------------------------------------------------
 ; dos_about / dos_abdismiss - the standard About card (SPEC.md 12.2, 20.5.1.1,
@@ -10933,40 +10935,29 @@ dos_l2_ran:  db 'Exit code '
 %ifndef KD_BACKEND                  ; THE WINDOW HALF (SPEC.md 96.43.2)
 dos_exitd:   db '000', 0
 %endif                              ; KD_BACKEND
-%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
-
+%ifndef KD_BACKEND                  ; THE WINDOW HALF (SPEC.md 96.43.2)
+; **THE REFUSAL SENTENCES ARE THE WINDOW'S** (SPEC.md 96.44.15). `dos_err_line`
+; is the one reader of this table and its one caller is the console's
+; `dos_con_ended`; the core only ever stores a DER_* into [dos_err], and
+; `kern_dos` sends its DER_* HOME in KDH_CODE for this window to say. So the
+; table, the sentences and the routine that picks one are window half, which
+; takes them out of the core part and out of `kern_dos`'s image both.
 dos_errs:
-    dw dos_e_goto, dos_e_mem, dos_e_read, dos_e_big, dos_e_fsx, dos_e_exe
+    dw dos_e_goto, dos_e_mem, dos_e_read, dos_e_big, dos_e_fsx
+    dw dos_e_badexe                 ; DER_EXE: NOTHING SETS IT any more - the
+                                    ; box has run an .EXE since SPEC.md 96.8 -
+                                    ; and its sentence, `.EXE is not supported
+                                    ; yet.`, was 27 bytes no path could reach.
+                                    ; The SLOT stays, because DER_* is an index
     dw dos_e_badexe, dos_e_fit, dos_e_hand
-%endif                              ; DOS_EXTCORE
-%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 dos_e_goto:  db 'Its folder could not be opened.', 0
-%endif                              ; DOS_EXTCORE
-%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 dos_e_mem:   db 'Not enough memory.', 0
-%endif                              ; DOS_EXTCORE
-%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 dos_e_hand:  db 'A handover is already under way.', 0
-%endif                              ; DOS_EXTCORE
-%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 dos_e_read:  db 'It could not be read.', 0
-%endif                              ; DOS_EXTCORE
-%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 dos_e_big:   db 'Too large for one segment.', 0
-%endif                              ; DOS_EXTCORE
-%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 dos_e_fsx:   db 'The screen is already in use.', 0
-%endif                              ; DOS_EXTCORE
-%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
-dos_e_exe:   db '.EXE is not supported yet.', 0
-%endif                              ; DOS_EXTCORE
-%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 dos_e_badexe: db 'Its .EXE header is malformed.', 0
-%endif                              ; DOS_EXTCORE
-%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 dos_e_fit:   db 'Not enough RAM - try Setup, "Shut down the OS".', 0
-%endif                              ; DOS_EXTCORE
-%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
                                     ; **IT SAID DOS 3.30'S OWN WORDS**,
                                     ; `Program too big to fit in memory.`,
                                     ; measured at COMMAND.COM offset 2436 -
@@ -10979,14 +10970,14 @@ dos_e_fit:   db 'Not enough RAM - try Setup, "Shut down the OS".', 0
                                     ; ~600KB in it, one page away. A user told
                                     ; `too big to fit` closes the window; one
                                     ; told where the room is opens Setup
-dos_dotdot:  db '..', 0
-%endif                              ; DOS_EXTCORE
+dos_s_blast: db 'BLASTER=A', 0      ; dos_blaster_set's, which is the window's
+                                    ; too (SPEC.md 96.44.15)
+%endif                              ; KD_BACKEND
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 dos_s_epath: db 'PATH=', 0        ; **NEVER AN EMPTY SET** (SPEC.md
                                   ; 96.44.13.1): a real DOS always has a
                                   ; row, so a program that walks the set
                                   ; to reach its own path always can
-dos_s_blast: db 'BLASTER=A', 0
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 dos_mlen:    db 31,28,31,30,31,30,31,31,30,31,30,31
@@ -10994,12 +10985,10 @@ dos_mlen:    db 31,28,31,30,31,30,31,31,30,31,30,31
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 dos_dowt:    db 0,3,2,5,0,3,5,1,4,6,2,4    ; Sakamoto's month table
 %endif                              ; DOS_EXTCORE
-%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
-dos_e_fn:    db 'It asked for INT 21h AH='
-%endif                              ; DOS_EXTCORE
-%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
+%ifndef KD_BACKEND                  ; dos_fmt_fn's, and so the window's
+dos_e_fn:    db 'It asked for INT 21h AH='  ; (SPEC.md 96.44.15)
 dos_fnd:     db '00h.', 0
-%endif                              ; DOS_EXTCORE
+%endif                              ; KD_BACKEND
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
 
@@ -11108,7 +11097,7 @@ dos_int33:
     cmp ax, 3                      ; DHK_TXT is absent and both are the no-op
     je .pos                        ; they were
     cmp ax, 4
-    je .none                       ; set position: warping the host pointer is
+    je .none0                       ; set position: warping the host pointer is
     cmp ax, 5                      ; the kernel's, and a program that borrowed
     je .press                      ; the screen has not borrowed the arrow
     cmp ax, 6
@@ -11132,7 +11121,18 @@ dos_int33:
     je .setevt
     cmp ax, 0x14
     je .swpevt
-    jmp .none
+.none0:                            ; THE EPILOGUE, TWICE (it is five bytes):
+    pop di                         ; this copy is in short reach of the chain
+    pop si                         ; and the handlers just below it, which
+    pop ds                         ; each paid a near `jmp` - or a `jcc +3 /
+    pop bp                         ; jmp near` - to reach the one at the foot
+    iret
+.pos:                              ; ...and the two READS live beside it, 03h
+    call dos_mou_read              ; first - the poll a program makes every
+    jmp short .none0               ; frame. BX = buttons, CX = x, DX = y
+.motion:
+    call dos_mou_delta             ; CX = dx, DX = dy since the last call -
+    jmp short .none0               ; derived, see the header
 
 .show:
     ; AX=0001h. **THE COUNTER IS NOT A FLAG** (SPEC.md 96.10.5): it starts at
@@ -11158,14 +11158,14 @@ dos_int33:
                                    ; `0Ch` compose
 .shpaint:
     call dos_m33_paint
-    jmp .none
+    jmp short .none0
 .hide:
     ; AX=0002h, and it has NO FLOOR on purpose - a program that hides five
     ; times has asked for five shows, and clamping here would put the cursor
     ; back up in the middle of its drawing.
     dec byte [dos_m33shw]
     call dos_m33_wipe
-    jmp .none
+    jmp short .none0
 .tcur:
     ; AX=000Ah: BX = 0 SOFTWARE (CX = the screen mask, DX = the cursor mask),
     ; BX = 1 HARDWARE - a CRTC scan-line pair, which is the machine's own text
@@ -11173,7 +11173,7 @@ dos_int33:
     ; ignored rather than refused, for `.none`'s reason: a program that asks
     ; for a shape and is refused still expects a cursor.
     or bx, bx
-    jnz .none
+    jnz .none0
     pushf                          ; one critical section over all four, for
     cli                            ; `dos_m33_paint`'s reason one level up
     call dos_m33_wipe              ; off FIRST, with the masks it went on with
@@ -11181,7 +11181,7 @@ dos_int33:
     mov [dos_m33cm], dx            ; back a cell that was never there
     call dos_m33_paint
     popf
-    jmp .none
+    jmp short .none0
 
 .xwin:
     ; AX=0007h: CX and DX are the lowest and highest x the program will use.
@@ -11190,19 +11190,18 @@ dos_int33:
     ; in, and Microsoft Works reads AL as its "mouse present" flag.
     push ax
     mov ax, M33_VW
-    call dos_m33_win
-    mov [dos_m33x0], cx
-    mov [dos_m33x1], dx
-    pop ax
-    jmp .none
+    mov di, dos_m33x0              ; ...and 07h and 08h are ONE body over the
+    jmp short .win                 ; pair of words each sets: x0,x1 then y0,y1
 .ywin:
     push ax                        ; AX=0008h, the same on the other axis
     mov ax, M33_VH
-    call dos_m33_win
-    mov [dos_m33y0], cx
-    mov [dos_m33y1], dx
+    mov di, dos_m33y0
+.win:
+    call dos_m33_win               ; (DI survives it, and the gate banks DI)
+    mov [di], cx
+    mov [di+2], dx
     pop ax
-    jmp .none
+    jmp short .none0
 .reset:
     call dos_m33_wall              ; a reset opens the window to the whole
                                    ; virtual screen (96.10.7), which is the
@@ -11216,34 +11215,25 @@ dos_int33:
     mov bx, 2                      ; a mouse IS installed - and it is, whatever
     jmp .out                       ; the machine has, because the kernel found
                                    ; one at boot or the pointer would not move
-.pos:
-    call dos_mou_read              ; BX = the buttons, CX = x, DX = y
-    jmp .out
 .press:
+    mov di, dos_mou_pc             ; 05h and 06h are ONE body over a base: the
+    jmp short .prel                ; counts, then x, then y, laid out the same
+.release:                          ; way for both (the DBSS rows say so)
+    mov di, dos_mou_rc
+.prel:
+    push di                        ; (DI is banked by the gate, so it is ours)
     mov si, bx                     ; the button asked about, banked before the
     call dos_mou_read              ; read overwrites BX with the live mask
+    pop di
     mov ax, bx
     and si, 1                      ; two buttons, so anything else is button 1
-    mov bl, [si+dos_mou_pc]
-    mov byte [si+dos_mou_pc], 0    ; reading a count CONSUMES it, which is why
+    add si, di
+    mov bl, [si]
+    mov byte [si], 0               ; reading a count CONSUMES it, which is why
     xor bh, bh                     ; it is a count and not a flag
-    mov cx, [dos_mou_px]
-    mov dx, [dos_mou_py]
-    jmp .out
-.release:
-    mov si, bx
-    call dos_mou_read
-    mov ax, bx
-    and si, 1
-    mov bl, [si+dos_mou_rc]
-    mov byte [si+dos_mou_rc], 0
-    xor bh, bh
-    mov cx, [dos_mou_rx]
-    mov dx, [dos_mou_ry]
+    mov cx, [di+2]                 ; ...and where that edge last landed
+    mov dx, [di+4]
     jmp short .out
-.motion:
-    call dos_mou_delta             ; CX = dx, DX = dy since the last call -
-    jmp short .out                 ; derived, see the header
 .setevt:
     ; AX=000Ch: ES:DX = the handler, CX = the events it wants (SPEC.md
     ; 96.10.4). It answers nothing, which is why the machinery below has to
@@ -11446,9 +11436,14 @@ dos_m33_tick:
                                     ; polls nothing, and the tick is the only
                                     ; thing left that can move its pointer
     cmp word [dos_m33h+2], 0        ; no handler: two instructions a tick
-    je .out
+    je .out0
     cmp byte [dos_m33bsy], 0        ; a callback that ran long enough to be
-    jne .out                        ; interrupted by the next tick
+    je .call                        ; interrupted by the next tick
+.out0:                              ; AN EPILOGUE OF ITS OWN, three bytes: the
+    pop ds                          ; tick with no handler is the common one,
+    pop ax                          ; and the far `.out` cost it a `jcc +3 /
+    iret                            ; jmp near` every 55 ms (SPEC.md 96.7.3)
+.call:
     mov byte [dos_m33bsy], 1
 
     push bx
@@ -12731,11 +12726,11 @@ DOS_BTREC_SZ equ 16              ; **A MIRROR OF os88ui.inc's OS88UI_BT_SIZE**,
     DBSS DOS_B_MLY,   2
     DBSS DOS_B_MLB,   1        ; the button mask the last state read saw
     DBSS DOS_B_MPC,   2        ; press counts, one BYTE per button
-    DBSS DOS_B_MRC,   2        ; ...and release counts
     DBSS DOS_B_MPX,   2        ; where the last press landed, shared
     DBSS DOS_B_MPY,   2        ; between the buttons (SPEC.md 96.10.1)
-    DBSS DOS_B_MRX,   2
-    DBSS DOS_B_MRY,   2
+    DBSS DOS_B_MRC,   2        ; ...and release counts, and the same pair.
+    DBSS DOS_B_MRX,   2        ; **COUNT, X, Y IN THAT ORDER FOR BOTH**: INT
+    DBSS DOS_B_MRY,   2        ; 33h's 05h and 06h are one body over a base
     DBSS DOS_B_M33H,   4        ; the INT 33h EVENT HANDLER (SPEC.md 96.10.4),
                                 ; segment 0 = none...
     DBSS DOS_B_M33M,   2        ; ...and the events it asked for
@@ -15838,13 +15833,16 @@ dos_drv_back:
     pop bx
     pop ax
     ret
-%endif                              ; KD_BACKEND
-%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
 ; -----------------------------------------------------------------------------
 ; dos_blaster_set - "BLASTER=A220 I5 D1 T4" from the record at SI
 ; in:  SI = a DQ record whose class is DRVC_SOUND
 ; out: nothing; [dos_blaster] written
+;
+; THE WINDOW'S, and dos_hex3/dos_dec2 with it (SPEC.md 96.44.15): its one
+; caller is dos_drv_out above. The CELL it writes is the core's, because the
+; core's environment builder reads it - and `kern_dos` is handed the row the
+; box built here (KDL_F dos_blaster), so it never needed the writer.
 ;
 ; THE TYPE IS DERIVED FROM THE DSP VERSION, which is what every DOS program
 ; that reads this variable expects: 1 is an original Sound Blaster, 3 a 2.0,
@@ -15921,8 +15919,6 @@ dos_blaster_set:
     pop bx
     pop ax
     ret
-%endif                              ; DOS_EXTCORE
-%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
 ; -----------------------------------------------------------------------------
 ; dos_hex3 - AX's low twelve bits as three hex digits at ES:DI (DI advanced)
@@ -15955,8 +15951,6 @@ dos_hex3:
     pop bx
     pop ax
     ret
-%endif                              ; DOS_EXTCORE
-%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
 ; -----------------------------------------------------------------------------
 ; dos_dec2 - AL (0..99) as one or two digits at ES:DI
@@ -15986,7 +15980,7 @@ dos_dec2:
     pop bx
     pop ax
     ret
-%endif                              ; DOS_EXTCORE
+%endif                              ; KD_BACKEND
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
 ; -----------------------------------------------------------------------------
@@ -16505,23 +16499,25 @@ dos_fh_wiloop:
     jnz .ichunk                     ; a COMPRESSED file is the window (96.11.1)
     mov ax, [si+FH_POS+2]
     cmp ax, [si+FH_SIZE+2]
-    ja .ihole
+    ja .ihole0
     jb .ishort
     mov ax, [si+FH_POS]
     cmp ax, [si+FH_SIZE]
-    ja .ihole
+    ja .ihole0
     je .ichunk
 .ishort:                            ; BEFORE the end, where a count of zero is
     or bx, bx                       ; "the file ends HERE" (96.11.6.2) and
     jnz .ichunk                     ; anything else is an ordinary overwrite
     call dos_fh_shrink
-    jc .ierr
+    jc .ierr0
     jmp .idone                      ; DX is still 0, and 0 is what DOS answers
+.ierr0: jmp .ierr                   ; near doors (SPEC.md 96.7.3), so the
+.ihole0: jmp .ihole                 ; error and hole branches here are short
 .ichunk:
     or bx, bx
     jz .idone
     call dos_fh_fill                ; AX = the offset into the window, CX =
-    jc .ierr                        ; the bytes of the file that live there
+    jc .ierr0                       ; the bytes of the file that live there
     jcxz .igrow                     ; at the end of file: is there room to GROW
 .iroom:                             ; into what the file already owns?
     cmp cx, bx
@@ -17717,7 +17713,7 @@ dos_fh_fill:
     push es
 
     call dos_fh_take
-    jc .errp
+    jc .errp0
 
     cmp byte [dos_wfill], 0         ; is the position already inside it?
     je .refill
@@ -17734,16 +17730,17 @@ dos_fh_fill:
     sub cx, ax
     jmp .okp
 
+.errp0: jmp .errp                   ; a near door (SPEC.md 96.7.3)
 .refill:
     cmp byte [dos_wdirty], 0        ; **A DIRTY WINDOW GOES OUT FIRST** (SPEC.md
     je .rfclean                     ; 96.11.6): for a READ the window is a view
     call dos_fh_flush               ; and never dirty, but an in-place write
-    jc .errp                        ; makes it an accumulator for its own file -
+    jc .errp0                       ; makes it an accumulator for its own file -
 .rfclean:                           ; and a write that spans two windows would
                                     ; otherwise have the second refill discard
                                     ; the first one's bytes
     call dos_fh_commit              ; **A HELD STREAM READ BACK BY ITS OWN
-    jc .errp                        ; HANDLE IS COMMITTED FIRST** (SPEC.md
+    jc .errp0                       ; HANDLE IS COMMITTED FIRST** (SPEC.md
                                     ; 96.53): the entry keeps its last
                                     ; committed size until then, and a read by
                                     ; name stops at the entry's size

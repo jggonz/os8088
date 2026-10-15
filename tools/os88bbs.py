@@ -864,11 +864,11 @@ class ZmodemReceiver(ZmodemBase):
 # 8.3 MANGLING, the FTP server's rule and not a second opinion
 #
 # A file downloaded here by Zmodem and the same file uploaded by FTP must land
-# on the same name, so this is a second copy of `fd_mangle83`'s RULE - a
-# package cannot call another package's proc - and the point of putting it
-# here is that the Zmodem test asserts both ends against this one table.
+# on the same name. On the machine that is ONE routine both packages assemble,
+# `apps/os88m83.inc`'s `m83_mangle` (SPEC.md 77.20.1); this is the host's copy
+# of its RULE, and the reference `tests/m83.py` runs that code against.
 #
-# The characters are `fd_c83`'s set, which mirrors the kernel's `dskw_char_x`:
+# The characters are `m83_leg`'s set, which mirrors the kernel's `dskw_char_x`:
 # A-Z, 0-9 upcased, and sixteen symbols. A SPACE is not among them, which is
 # what `banana split.mod` fell foul of in the first place.
 # =============================================================================

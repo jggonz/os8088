@@ -73,7 +73,7 @@ taken round the whole loop:
   run2   ...and it launches again
 
 RED (docs/WRITING-TESTS.md 1). `cmz_cpre` is the ONE ladder both verbs ask
-(kernel/compress.inc, which rides in CLONE.DRV), and Uncompress once carried a
+(kernel/compress.inc, which rides in DISKOPS.DRV), and Uncompress once carried a
 copy of it that stopped at the association block. To put that back: in a copy
 of the tree, give Uncompress's call site (the one under `.rplain`, beside the
 comment naming DOS.O88 and VIDEO.O88) `and al, 0xDF` in front of its `call
@@ -320,7 +320,26 @@ def compress(m, mo, wx, wy, name, fails, quiet=30, item=FM_ICOMP):
         if os.environ.get("LZCOMP_TIME"):
             say("   [%s took %.1f guest s of %d]"
                 % (name, (int(m.status()["cycles"]) - c0) / 4772727.0, quiet))
-        return verdict(m)
+        t = verdict(m)
+        # **THE VERDICT IS NOT THE END OF THE VERB.** The module says its
+        # ratio (cmz_pct) and returns, and only THEN does fm_c_compress
+        # re-list the folder (fmv_bcast) - a mount that writes straight into
+        # the acting window's own cache, entry by entry as the directory is
+        # scanned (dsk_put_dir), with FS_N still the old count and
+        # dsk_sortdir after. So for that whole re-list the listing is the new
+        # scan laid over the old sorted list. The base's 1-in-4 failure is
+        # exactly ONE entry in: the scan puts the folder first, so slot 0's
+        # CALC.O88 becomes SUB and the rest is still the old list - "'CALC.O88'
+        # is not in this folder. It holds ['SUB', ..., 'SUB', 'TELNET.O88']",
+        # which step 3a's open_named read the moment the toast was up.
+        # Reproduced on demand by stopping at the second dsk_put_dir after the
+        # toast (`ui_idle` is False at the verdict): the same message, word
+        # for word. The machine is right - it paints after the sort - and the
+        # wait is the row's.
+        os88marty.ui_done(m, "File > %s on %s to re-list the folder"
+                          % ("Uncompress" if item == FM_IUNCOMP
+                             else "Compress", name))
+        return t
     except os88marty.MartyError:
         pass
     fails.append("%s: nothing was said in %d guest seconds - the verb never "
@@ -469,7 +488,7 @@ def main():
     #
     # Per-run and removed on the way out, so two of this row at once do not
     # meet either.
-    img = "/tmp/lzcomp360-%d.img" % os.getpid()
+    img = tempfile.gettempdir() + "/lzcomp360-%d.img" % os.getpid()
     disk, plain, packed, calc, telnet = build_disk(img)
     want = cz(os88lz.lzb_compress_machine(plain), len(plain))
     pwant = pkg_want(calc)
@@ -723,10 +742,8 @@ def main():
                          "index out by one dispatches the wrong command"
                          % (t, len(back), len(plain)))
 
-    try:
-        os.remove(img)                  # per-run, so nothing inherits it
-    except OSError:
-        pass
+    os88marty.scratch_drop(img)         # per-run, so nothing inherits it -
+                                        # the sidecar included
     for f in fails:
         say("  FAIL: " + f)
     say("lzcomp: %s" % ("FAILED" if fails else "ok"))

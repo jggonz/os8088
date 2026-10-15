@@ -34,9 +34,9 @@ fx_entry:
     call OSAPI_MEM_CLAIM
     jc .out
     mov [fx_iseg], dx
-    mov ax, FX_KB
-    call OSAPI_MEM_CLAIM
-    jc .out
+    mov ax, FX_KB + (SPKFX_FAMSZ + 1023) / 1024 ; the output, and the
+    call OSAPI_MEM_CLAIM            ; shaper's family past it: it is read
+    jc .out                         ; through ES, the segment emit writes
     mov [fx_oseg], dx
     mov byte [fx_up], 1
 .out:
@@ -65,7 +65,8 @@ fx_onkey:
     xor cl, cl
     call os88spk_init
     jc .fail
-    mov di, fx_fam
+    mov es, [fx_oseg]
+    mov di, FX_KB * 1024            ; the family (SPEC.md 34.11.9)
     mov al, [fx_pre]
     mov ah, [fx_idle]
     call os88spkfx_init
@@ -138,7 +139,4 @@ fx_rseg:  dw 0
 fx_iseg:  dw 0
 fx_oseg:  dw 0
 
-    OS88_BSS SPKFX_NLEV * 256
     OS88_IMAGE_END
-
-fx_fam equ os88_image_end

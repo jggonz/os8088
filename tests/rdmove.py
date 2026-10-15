@@ -92,28 +92,12 @@ RP_B0Y, RP_BH = 52, 16
 def drv_syms():
     """[rd_arena]'s offset in the driver's image, by re-assembling it.
 
-    paintmove.py's trick, pointed at a .drv: the offset is an ordinary label
-    here, but asking nasm is still the only answer that cannot go stale.
+    Off the Makefile's own recipe (tools/os88drvsym.py), which carries
+    -DRAMPAGE_KB off rampage.bin - the define this helper once left out and
+    so assembled to an ERROR - and checks the result against build/ramdisk.bin.
     """
-    src = "drivers/ramdisk/ramdisk.asm"
-    with tempfile.TemporaryDirectory() as d:
-        cp, mp = os.path.join(d, "r.asm"), os.path.join(d, "r.map")
-        open(cp, "w").write(open(src).read() + "\n[map symbols %s]\n" % mp)
-        # -DRAMPAGE_KB is the MAKEFILE's, and it is not optional: rdpage.inc
-        # sizes the page image's claim from it, so without it this assembles
-        # to an ERROR - which is what this helper did for as long as the knob
-        # has existed, and it fails before the emulator is ever started.
-        kb = (os.path.getsize(os88build.at("build/rampage.bin")) + 1023) // 1024
-        subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "drivers/",
-                        "-I", "drivers/ramdisk/", "-I", "apps/", "-I", "build/",
-                        "-DRAMPAGE_KB=%d" % kb,
-                        "-o", os.path.join(d, "r.bin"), cp], check=True)
-        out = {}
-        for line in open(mp):
-            f = line.split()
-            if len(f) == 3 and all(c in "0123456789ABCDEF" for c in f[0]):
-                out[f[2]] = int(f[0], 16)
-        return out
+    import os88drvsym
+    return os88drvsym.symbols("ramdisk.bin")
 
 
 def u16(b, i=0):

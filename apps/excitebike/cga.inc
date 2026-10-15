@@ -80,7 +80,6 @@ xc_init:
     mov word [xc_hudp], xh_hud
     mov word [xc_hudcp], xh_hud_cells
     mov word [xc_xferp], xh_xfer
-    mov word [xc_vrp], xh_vr
 .dicts:
     call xc_dicts
     RESTORE
@@ -98,11 +97,11 @@ xc_start:
     SAVE
     mov word [xc_S], 0ffffh
     mov byte [xc_hall], 1
-    mov byte [xc_hany], 0
-    mov word [xc_hn], 0
-    mov byte [xc_to], 0
-    mov byte [xc_after], 0
     xor ax, ax
+    mov [xc_hany], al
+    mov [xc_hn], ax
+    mov [xc_to], al
+    mov [xc_after], al
     mov di, xc_fp
     mov cx, XB_MAXBIKES * XB_BIKE_SIZE / 2
     push ds
@@ -129,14 +128,10 @@ xc_menu:
     ret
 
 xc_free:
-    push dx
-    mov dx, [xc_dseg]
-    or dx, dx
-    jz .out
-    call OSAPI_MEM_FREE
-    mov word [xc_dseg], 0
-.out:
-    pop dx
+    push bx
+    mov bx, xc_dseg
+    call xb_freeseg
+    pop bx
     ret
 
 ; a tile is 16 bytes: a word a line.  A parity strip lists its EVEN lines' words,
@@ -1504,10 +1499,10 @@ xc_t3:                              ; (after the POP: the stack walker starts a 
     jmp .sprites
 .paint:
     call word [xc_hudp]
-    mov byte [xc_hall], 0
-    mov byte [xc_hany], 0
-    mov word [xc_hn], 0
     xor ax, ax
+    mov [xc_hall], al
+    mov [xc_hany], al
+    mov [xc_hn], ax
     mov di, xc_hflag
     mov cx, XB_HUDLEN / 2
     push ds
@@ -1529,6 +1524,10 @@ xc_t5:
 ; time actually taken) rather than being thrown away: a skipped frame wasted all its
 ; work and, when the frames are heavy (three bikes and two columns), skipped again
 ; and again - the picture then froze for whole seconds of catch-up.
+; The CGA's 3DAh bit 3 is HIGH in the vertical retrace, which comes every 0.91 of a sub-tick,
+; so two whole sub-ticks from ENTRY always hold one: wait that long at most.  The Hercules'
+; 3BAh bit 7 is LOW while the vertical sync is active, every ~1.08 sub-ticks (50.4 Hz against
+; 54.6), so there three.  BL = the bit, BH = its reading OUTSIDE the retrace, CX = the bound.
 xc_vr:
     call xb_clk_sample
     mov ax, [xb_subs]
@@ -1536,17 +1535,23 @@ xc_vr:
     mov ax, XB_SUB
     sub ax, [xb_pitl]
     mov [xb_sp1], ax
+    mov bx, 0008h
+    mov cx, 2
     mov dx, 3dah
+    cmp byte [xb_herc], 0
+    je .spin
+    mov bx, 8080h
+    inc cx
+    mov dl, 0bah
 .spin:
     in al, dx
-    test al, 8
+    xor al, bh
+    test al, bl
     jnz .done
-    push dx
-    call xb_clk_sample
-    pop dx
+    call xb_clk_sample              ; (keeps every register but the flags)
     mov ax, [xb_subs]
-    sub ax, [xb_sp0]                ; the retrace comes every 0.91 of a sub-tick, so two whole
-    cmp ax, 2                       ; sub-ticks from ENTRY always hold one: wait that long at most
+    sub ax, [xb_sp0]
+    cmp ax, cx
     jb .spin
     mov byte [xc_to], 1             ; (unreachable in practice) no retrace at all: commit nothing
     jmp .fin

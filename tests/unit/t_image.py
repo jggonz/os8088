@@ -34,7 +34,8 @@ WHAT IT CHECKS THAT --verify CANNOT.
      that misbehaves on the host OS rather than on os8088, which is the
      hardest place for this project to notice.
 
-  3. SPEC.md 19.6's ATTRIBUTES.  `KERNEL.SYS` and every `.DRV` hidden +
+  3. SPEC.md 19.6's ATTRIBUTES.  `KERNEL.SYS`, `BOOTHD.SYS` (SPEC.md
+     52.10.16) and every `.DRV` hidden +
      system + read-only, `SYSTEM.CFG` hidden + system but WRITABLE (the
      kernel rewrites it - make it read-only and the first save locks out
      every save after it), everything else on a system disk visible and
@@ -43,6 +44,14 @@ WHAT IT CHECKS THAT --verify CANNOT.
   4. THE BOOT SECTOR'S SECTOR COUNT MATCHES THE KERNEL.  It is baked in at
      assembly time from the measured kernel size; if it is short the machine
      boots into a partly-loaded kernel, which is a black screen with no clue.
+
+  5. THE HARD-DISK BOOT SECTOR RIDES WITH ITS KERNEL (SPEC.md 52.10.16).
+     Every system disk carries `BOOTHD.SYS` in its root, byte for byte the
+     `build/boothd.bin` built with the KERNEL.SYS beside it - because the
+     installer writes the SOURCE disk's copy to a hard disk, and a disk
+     carrying another build's (or none) installs a machine that freezes at
+     `Booting HDD0` (or is refused). `t_vbrseg` is the other half: that
+     boothd.bin's constants are the kernel's own.
 """
 import os
 import struct
@@ -218,6 +227,23 @@ def check_kernel(v, kernel):
     check(secs * 512 >= len(kernel), "%s: kernel sector count covers the image" % v.name)
 
 
+def check_hdboot(v, vbr):
+    """SPEC.md 52.10.16: BOOTHD.SYS in the root is THIS build's boothd.bin."""
+    rows = [r for r in v.walk() if r[0] == "" and r[1] == b"BOOTHD  SYS"]
+    if not check(len(rows) == 1, "%s: exactly one BOOTHD.SYS in the root" % v.name,
+                 "the installer reads the SOURCE disk's boot sector and refuses a "
+                 "disk without one (SPEC.md 52.10.16)", got=len(rows)):
+        return
+    _, _, attr, clus, size = rows[0]
+    eq(size, 512, "%s: BOOTHD.SYS is one sector" % v.name)
+    base = v.cluster_lba(clus) * v.byts
+    eq(v.blob[base:base + 512], vbr,
+       "%s: BOOTHD.SYS is the boothd.bin built with this kernel" % v.name,
+       "the installer writes it in front of the KERNEL.SYS on the same disk; "
+       "another build's sector far-calls that kernel's decoder at the wrong "
+       "offset and the machine freezes at `Booting HDD0` (SPEC.md 52.10.16)")
+
+
 def check_attrs(v, is_system):
     """SPEC.md 19.6, plus the two files the KERNEL owns. Only KERNEL.SYS and
     the drivers are read-only; everything else on any disk is writable.
@@ -243,7 +269,9 @@ def check_attrs(v, is_system):
             check(not (attr & hs), "%s: %s is not hidden on a DATA disk" % (v.name, nm),
                   "a data disk is the user's; a hidden+system file there cannot be "
                   "listed or deleted from inside os8088 (SPEC.md 19.6)")
-        elif name11 == b"KERNEL  SYS" or name11.endswith(b"DRV"):
+        elif name11 in (b"KERNEL  SYS", b"BOOTHD  SYS") or name11.endswith(b"DRV"):
+            # BOOTHD.SYS is the hard-disk boot sector built with that kernel,
+            # which the installer reads off the source (SPEC.md 52.10.16)
             eq(attr & (hs | A_RDONLY), hs | A_RDONLY,
                "%s: %s is hidden+system+read-only" % (v.name, nm))
         else:
@@ -267,6 +295,7 @@ def main():
     # on a floppy is the file, so that is what a floppy is compared with; the
     # Makefile ships $(KERNFILE) for exactly the same reason.
     kernel = read(os.path.join(build, "kernel.sys"))
+    vbr = read(os.path.join(build, "boothd.bin"))
     seen = 0
     for img, is_system in ([(i, True) for i in SYSTEM_IMAGES] +
                            [(i, False) for i in DATA_IMAGES]):
@@ -281,6 +310,7 @@ def main():
         check_attrs(v, is_system)
         if is_system:
             check_kernel(v, kernel)
+            check_hdboot(v, vbr)
     check(seen == len(SYSTEM_IMAGES) + len(DATA_IMAGES),
           "every shipped image was read", got=seen)
     print("t_image: %d images, kernel %d bytes (%d sectors)"

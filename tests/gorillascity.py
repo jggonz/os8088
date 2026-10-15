@@ -174,6 +174,47 @@ def check_variety(m, p, code):
     m.write(p.base + p.offsets['gr_turn'], b'\x00')
 
 
+SURFACES = ((4, 0, 0, 1, 1), (4, 0, 0, 1, 3), (4, 0, 0, 2, 1), (4, 0, 0, 2, 2),
+            (4, 0, 0, 2, 3), (4, 1, 0, 2, 2), (4, 1, 0, 2, 3), (1, 0, 0, 1, 1),
+            (1, 0, 0, 2, 1), (1, 0, 0, 2, 2), (2, 0, 1, 1, 1))
+
+
+def check_surfaces(m, p, code):
+    """Every surface's derived tables against the generator (SPEC.md 99.3, 99.4).
+
+    The ink-pair tables, marquee masks and intro sprites are built by the
+    guest when the surface changes; a surface no arm of this row can reach
+    (sx 1 planar, sy 3, a foreign VGA at sx 1) is reached by setting the
+    variables gr_inktables and gr_frontprepare key on. The clipped desktop
+    VGA intro packs its pose on demand (gr_widepose): checked here too."""
+    names = ('depth', 'vga', 'cga', 'sx', 'sy', 'tablekey', 'cachekey')
+    saved = {n: p.data(n, 2) for n in names}
+    for depth, vga, cga, sx, sy in SURFACES + ((4, 1, 0, 1, 1),):
+        for name, value in (('depth', depth), ('vga', vga), ('cga', cga)):
+            m.write(p.base + p.offsets['gr_' + name], bytes([value]))
+        for name, value in (('sx', sx), ('sy', sy)):
+            m.write(p.base + p.offsets['gr_' + name], struct.pack('<H', value))
+        call(m, code, 'gr_inktables')
+        G.check_inkpairs(p)
+        if vga and sx == 1:
+            continue                # no intro: a foreign VGA is always sx 2
+        call(m, code, 'gr_frontprepare')
+        G.check_caches(p)
+        if depth == 4 and not vga:
+            wide = G.gorillas_art.front_sprite('win', sx)
+            for pose in (0, 1):
+                call(m, code, 'gr_widepose', bx=pose)
+                got = p.data('band', 5376)[5376-320:5376-320+len(wide)//2]
+                assert got == wide[pose*len(wide)//2:(pose+1)*len(wide)//2], \
+                    ('clipped intro pose differs', depth, sx, pose)
+    for name, value in saved.items():
+        m.write(p.base + p.offsets['gr_' + name], value)
+    # The next draw must rebuild for the real surface.
+    m.write(p.base + p.offsets['gr_tablekey'], b'\0')
+    m.write(p.base + p.offsets['gr_cachekey'], b'\0\0')
+    call(m, code, 'gr_inktables')
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--arm', choices=G.ARMS)
@@ -181,7 +222,8 @@ def main():
     ap.add_argument('--max-paint-ms', type=float, default=1800)
     args = ap.parse_args()
     off, code = G.offsets(), I.code_offsets(('gr_city', 'gr_blit', 'gr_aitick',
-                                          'gr_aitick.fire'))
+                                          'gr_aitick.fire', 'gr_inktables',
+                                          'gr_frontprepare', 'gr_widepose'))
     report = {}
     seeded_scene = None
     started = time.monotonic()
@@ -205,6 +247,9 @@ def main():
                     lock(m, p, code)
                     if mode == 'window' and not report:
                         check_variety(m, p, code)
+                    if mode == 'window':
+                        check_surfaces(m, p, code)
+                    G.check_inkpairs(p)
                     m.write(p.base + off['gr_seed'], struct.pack('<H', 12345))
                     build = call(m, code, 'gr_city')
                     scene = p.data('scene', 16384)

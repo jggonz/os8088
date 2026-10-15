@@ -864,7 +864,7 @@ sc_entry:
     push ax
     mov al, 1                       ; resizable (SPEC.md 11.1/27): sc_paint
     call OSAPI_WM_SIZABLE           ; already lays out from the live record,
-    mov al, 1                       ; so the next repaint re-wraps for free
+                                    ; so the next repaint re-wraps for free
     mov al, 1                       ; ...and it PROMISES its content stands
     call OSAPI_WM_SAVEU             ; still while it is not drawing, so a
                                     ; raise puts the old pixels back instead
@@ -2244,11 +2244,7 @@ sc_papload:
     sub dx, [sc_wleftpx]
     mov [sc_wfirstpx], dx
     pop es
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_4
 
 ; sc_papload0 - Normal, without touching the dictionary: the uniform path's
 ; whole cost. Preserves all registers.
@@ -2505,8 +2501,9 @@ sc_tabw:
 ; in:  -
 ; out: the dropdown's items and its count set; preserves all registers
 ;
-; ONCE, and lazily. ty_scan is four remounts and two listings - a couple of
-; seconds on the target - so it runs the first time somebody opens this combo
+; ONCE, and lazily. ty_scan walks the system disk's SYSTEM/FONTS and lists it
+; - quiet stands now (os88type.inc), but still floppy reads of the folder and
+; a header read per face on the target - so it runs the first time somebody opens this combo
 ; and never again. A person who never opens it pays nothing, which is the same
 ; bargain SPEC.md 6.2 strikes with a directory of faces nobody picks from.
 ;
@@ -2560,13 +2557,7 @@ sc_fontscan:
     inc al                          ; longer than the one Pica it had
     mov [sc_mtab + SC_M_FONTC * SC_MT_SZ + 3], al
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_6
 
 ; -----------------------------------------------------------------------------
 ; sc_facemetrics - the three numbers the layout reads, from the current face
@@ -7148,6 +7139,84 @@ sc_stgdrop:
     ret
 
 ; -----------------------------------------------------------------------------
+; sc_ld_N - the shared epilogue: pop the last N of AX BX CX DX SI DI ES, in
+; push order, and return (SPEC.md 95.13). A COLD routine - a command, a
+; dialog, a file operation - ends in `jmp sc_ld_N` instead of its own pops,
+; 2 or 3 bytes where 5 to 8 were. Typing, layout, redraw, scrolling and the
+; drags keep their own: the jump is 15 clocks a call. It is OS88_POPLADDER's
+; ladder (SPEC.md 20.5) WRITTEN OUT rather than expanded, Note Pad's np_ld_N
+; shape, because tools/stkbalance.py could not then resolve a macro's labels
+; (it can since shared round 2, SPEC.md 20.5); and
+; only the rungs something jumps to are named, because the walker enters an
+; unreferenced label at depth 0.
+; -----------------------------------------------------------------------------
+sc_ld_7:
+    pop es
+sc_ld_6:
+    pop di
+sc_ld_5:
+    pop si
+sc_ld_4:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sc_stgread - read a file into a staging claim SIZED FOR IT (SPEC.md 95.13)
+; in:  SI = the name, in the current folder
+; out: CF=0, ES = [sc_stgseg] = the claim, DX:AX = the bytes read;
+;      CF=1, AX = FERR_* (the claim, if one was made, is still [sc_stgseg] for
+;      sc_stgdrop), or AX = 0 = the claim was refused and [sc_stgseg] is 0.
+;      Preserves every other register.
+;
+; It was a fixed SC_LSTGKB claim whatever the file, which is 62KB of heap that
+; a 3KB document or picture had to find free before it could be opened - and
+; Insert > Picture read with a 64KB capacity into it, so a file between 62
+; and 64KB was written past the end of the claim. The zero-capacity read
+; (SPEC.md 18.4.1) answers the KB the read needs from the directory entry
+; with no data I/O. A file past the ceiling claims the ceiling, and the read
+; refuses with FERR_BIG exactly as it always did.
+; -----------------------------------------------------------------------------
+sc_stgread:
+    push bx
+    push cx
+    xor bx, bx
+    xor cx, cx
+    xor dx, dx
+    call OSAPI_FILE_READ            ; THE PROBE: FERR_BIG and DX = the KB
+    mov cx, 1                       ; CF=0 is an EMPTY file: a 1KB claim
+    jnc .kb
+    cmp ax, FERR_BIG
+    jne .fail                       ; not found, unreadable: AX says which
+    mov cx, SC_LSTGKB
+    cmp dx, cx
+    ja .kb
+    mov cx, dx
+.kb:
+    mov ax, cx
+    call OSAPI_MEM_CLAIM            ; preserves all but DX
+    jc .nomem
+    mov [sc_stgseg], dx
+    mov es, dx
+    mov ch, cl                      ; DX:CX = KB * 1024, KB <= 62
+    xor cl, cl
+    shl ch, 1
+    shl ch, 1
+    xor dx, dx
+    call OSAPI_FILE_READ            ; CF/AX/DX are the answer
+    jmp short .out
+.nomem:
+    xor ax, ax
+.fail:
+    stc
+.out:
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; sc_save - write the document as a native .DOC (SPEC.md 68.4)
 ; in:  nothing (the buffers and their lengths)
 ; out: nothing; the outcome is said as a toast; preserves all registers
@@ -7171,7 +7240,8 @@ sc_save:
     call sc_stghold             ; ES = the staging claim, or a toast and out
     jc .out
     call sc_goto                ; the folder this document belongs to, if the
-                                ; volume has been moved since (SPEC.md 19.2)
+    jc .err                     ; volume has been moved since (SPEC.md 19.2);
+                                ; CF = we are not there, so write nothing
     call sc_isrtf               ; a .RTF name is the user naming a FORMAT,
     jnc .rtf                    ; and it is the one extension Save honours
     mov bp, SCM_DOCIMG          ; the whole Word file - FIB, text, FKPs,
@@ -7203,14 +7273,7 @@ sc_save:
     call sc_stgdrop
 .out:
     pop bp
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_7
 
 ; -----------------------------------------------------------------------------
 ; sc_isrtf - does the document's name end '.RTF'?
@@ -7289,19 +7352,16 @@ sc_load:
     push bp                         ; BP TOO: the overlay verb goes in it, and
                                     ; sc_modc shifts it, so a caller banking a
                                     ; pointer there got twice the verb back
-    mov ax, SC_LSTGKB           ; the staging claim, transient across the read
-    call OSAPI_MEM_CLAIM
-    jc .nomem
-    mov [sc_stgseg], dx
     call sc_goto                ; the folder dance on the way in
-    mov es, [sc_stgseg]
-    xor bx, bx                  ; ES:BX = staging, DX:CX its capacity
-    mov cx, SC_LSTGKB * 1024
-    xor dx, dx
+    jc .err                     ; ...and a refusal, not a read of sc_name in
+                                ; whatever folder we were left standing in
     mov si, sc_name
-    call OSAPI_FILE_READ        ; DX:AX = the file's size; bigger than the
-    jc .err                     ; capacity is FERR_BIG decided from the
-                                ; directory entry, buffer untouched (18.4)
+    call sc_stgread             ; ES = a staging claim sized FOR THE FILE,
+    jnc .read                   ; DX:AX = its size (SPEC.md 95.13)
+    test ax, ax
+    jz .nomem
+    jmp .err
+.read:
     push ax                     ; the byte count, kept across the sniffs
     mov bp, SCM_ISRTF           ; '{\rtf' -> the RTF reader (SPEC.md 68.8)
     call sc_ovcall
@@ -7442,14 +7502,7 @@ sc_load:
     call sc_saymsg
 .out:
     pop bp
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_7
 
 ; -----------------------------------------------------------------------------
 ; sc_ldscan - what a load must rediscover: tabs and hidden text (SPEC.md 68.4)
@@ -7500,23 +7553,24 @@ sc_ldscan:
     ret
 
 ; -----------------------------------------------------------------------------
-; sc_errmsg - turn a FERR_* code into the toast string
+; sc_errmsg - say a FERR_* code as a toast, in the KERNEL'S words
 ; in:  AX = FERR_* (SPEC.md 18.4)
-; out: nothing - the string is said as a toast; preserves all registers
+; out: nothing; preserves all registers
+;
+; OSAPI_FERR_TEXT (SPEC.md 18.4.11) answers the Disk window's own string at
+; ES:SI, which is OSAPI_TOAST's argument as it stands - so no table here, and
+; an unknown code still reads as a disk problem (the kernel's rule).
 ; -----------------------------------------------------------------------------
 sc_errmsg:
-    push ax
-    push bx
-    cmp ax, FERR_BIG
-    jbe .known
-    mov ax, FERR_IO             ; an unknown code is still a disk problem
-.known:
-    mov bx, ax
-    shl bx, 1
-    mov ax, [bx+sc_errtab]
-    call sc_saymsg
-    pop bx
-    pop ax
+    push cx
+    push si
+    push es
+    call OSAPI_FERR_TEXT
+    xor cx, cx                  ; the default lifetime, about three seconds
+    call OSAPI_TOAST
+    pop es
+    pop si
+    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -9599,51 +9653,62 @@ sc_ondlg:
     call sc_load
     jmp short .draw
 .toobig:
-    mov ax, sc_e_big
-    call sc_saymsg
+    mov ax, FERR_BIG                ; the kernel's own words for it
+    call sc_errmsg                  ; (SPEC.md 18.4.11)
 .draw:
     jmp sc_redraw                   ; tail call; SI is the window ptr
 
 ; -----------------------------------------------------------------------------
 ; sc_goto - put the volume back in this document's folder (SPEC.md 19.2)
-; out: nothing; preserves all registers
+; out: CF=0 and every register preserved; CF=1 = could not stand there, AX =
+;      FERR_* and every other register preserved - NOTHING MOVED, so the
+;      caller must not go on to resolve sc_name (it would find it, or a
+;      stranger of the same name, in the folder we were already in)
 ;
-; **THE KERNEL DOES THIS NOW, and this routine is kept as a no-op that costs
-; two compares** (SPEC.md 19.2.1). A file name used to resolve in the ONE
-; global current directory shared by every Disk window and by the file
-; dialog: right after Save As it still named the folder the user picked -
-; which is why saving into a folder worked - but by the next Save anything
-; that navigated had moved it, and the write landed in the root. Four
-; packages each carried their own copy of the six lines below, which is what
-; eventually said the kernel owed the feature rather than the SDK owing an
-; example. An instance owns its directory now, so OSAPI_FILE_HERE answers
-; this document's folder and the OSAPI_FILE_GOTO below never fires.
+; The kernel keeps an instance in its own folder now (SPEC.md 19.2.1), so
+; once a Save As has committed somewhere OSAPI_FILE_HERE answers that folder
+; and this is two compares. **It is NOT a no-op, though, and this comment
+; once said it was**: an instance is SEEDED at the folder its PACKAGE came
+; out of, while sc_arg copies a launch document's ARG folder into sc_dir. So
+; the first load of a document double-clicked in any other folder is exactly
+; the case where HERE and sc_dir disagree and the move below fires.
 ;
-; It stays because the slots keep their contract (SPEC.md 20.8 rule 4) and
-; because a remount was always skipped when the volume was already there -
-; which is now every time. Deleting it would be correct and would also delete
-; the record of why it was ever needed.
+; It moves with OSAPI_FILE_GOTO_QM, not OSAPI_FILE_GOTO: the next thing done
+; is a by-name read or write, which resolves through the raw directory
+; sectors, and nothing here shows the folder - so the remount's scan, sort and
+; per-file icon harvest were ~0.5 s of floppy bought for no reader
+; (docs/plans/NAV-COST-PLAN.md, SPEC.md 19.9.1). QM moves the instance with
+; it, which is what makes the next file cell resolve there.
+;
+; The two differ on FAILURE and that is why CF is an output now: a failed
+; GOTO left the volume at the root with the write gate shut, so the file call
+; after it refused on its own; a failed QM moves nothing, so the caller has to
+; refuse. CX, SI and DI are banked because on a redirected volume QM reaches
+; the driver's FSV_CHDIR and those three are the driver's (SPEC.md 62.9.1).
 ; -----------------------------------------------------------------------------
 sc_goto:
     push ax
     push bx
+    push cx
     push dx
+    push si
+    push di
     cmp byte [sc_dirok], 0
-    je .out                     ; never saved anywhere in particular
+    je .out                     ; never saved anywhere in particular (CF=0)
     call OSAPI_FILE_HERE
     cmp dx, [sc_dir]
     jne .move
     cmp bl, [sc_drv]
-    je .out
+    je .out                     ; already there (equal: CF=0)
 .move:
     mov dx, [sc_dir]
     mov bl, [sc_drv]
-    call OSAPI_FILE_GOTO        ; CF = it could not be listed; the file call
-.out:                           ; that follows will say so in its own words
-    pop dx
-    pop bx
-    pop ax
-    ret
+    call OSAPI_FILE_GOTO_QM     ; quiet, and the instance follows
+    jnc .out
+    mov bx, sp                  ; CF=1: the FERR_* replaces the banked AX -
+    mov [ss:bx+10], ax          ; a mov touches no flag, so CF rides out
+.out:
+    jmp sc_ld_6
 
 ; -----------------------------------------------------------------------------
 ; sc_arg - open the document we were launched to open (SPEC.md 54.5)
@@ -10500,11 +10565,7 @@ sc_applyattr:
 .done:
     pop es
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_4
 
 ; =============================================================================
 ; Applying paragraph formatting (SPEC.md 68.3)
@@ -10864,11 +10925,7 @@ sc_modpap:
                                     ; row may have left the view
     pop es
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_4
 
 ; -----------------------------------------------------------------------------
 ; sc_copy - put the selection on the clipboard
@@ -11070,14 +11127,7 @@ sc_paste:
 .none:
     stc
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_7
 
 ; =============================================================================
 ; UNDO, five edits deep (SPEC.md 27.9)
@@ -11769,14 +11819,7 @@ sc_undo:
 .no:
     stc
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_7
 
 ; =============================================================================
 ; The search engine (SPEC.md 68.7)
@@ -12314,11 +12357,7 @@ sc_dorepall:
     call sc_fmiss
 .out:
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_4
 
 ; sc_urec_bulkend_at - close the bulk record: what replaced its span is
 ; everything from the record's own start to the end of the note. This is the
@@ -13114,35 +13153,11 @@ sc_saymsg:
     pop ax
     ret
 
-; sc_utoa - AX as decimal at DI, no leading zeros; DI advances past it.
-; Preserves every other register.
-sc_utoa:
-    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
-    push ax
-    push bx
-    push cx
-    push dx
-    mov bx, 10
-    xor cx, cx
-.div:
-    xor dx, dx
-    div bx
-    push dx
-    inc cx
-    or ax, ax
-    jnz .div
-.emit:
-    pop ax
-    add al, '0'
-    mov [di], al
-    inc di
-    loop .emit
-    mov byte [di], 0
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+; The numbers are apps/os88dec.inc's dec_u16 (SPEC.md 20.5.2): AX as decimal
+; at DI, NUL-ended, DI on the NUL; every other register kept. It was
+; sc_utoa, and sc_unum below was a second copy of it writing at BX.
+%define DEC_U16
+%include "os88dec.inc"
 
 ; sc_saycnt - "<AX> replaced" as the toast. Preserves all registers.
 sc_saycnt:
@@ -13150,7 +13165,7 @@ sc_saycnt:
     push si
     push di
     mov di, sc_tbuf
-    call sc_utoa
+    call dec_u16
     mov si, sc_m_repld
 .cp:
     mov al, [si]
@@ -13437,11 +13452,7 @@ sc_mtitler:
     mov [sc_mabox+2], ax
     add ax, SC_MENU_H-1
     mov [sc_mabox+6], ax
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_4
 
 ; -----------------------------------------------------------------------------
 ; sc_mchk - is the checkable item with action AL currently checked?
@@ -14259,11 +14270,7 @@ sc_mrepair:
     call OSAPI_WM_GROW              ; no-op unless frontmost+sizable: safe
 .nogrow:
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_4
 
 ; -----------------------------------------------------------------------------
 ; sc_ruly - AX = the ruler strip's top row (valid when the ruler is shown)
@@ -15704,11 +15711,11 @@ sc_stcomp:
     mov cx, dx
     inc ax
     push ax                         ; the page again, for the p/t field
-    call sc_utoa
+    call dec_u16
     mov si, sc_s_sec
     call sc_stcat
     pop ax                          ; --- p/t: the page over the total pages
-    call sc_utoa                    ; (status.h's pageInDoc/totalPages field,
+    call dec_u16                    ; (status.h's pageInDoc/totalPages field,
     mov byte [di], '/'              ; SPEC.md 68.2) - the total from
     inc di                          ; [sc_drows], a lower bound the height
     mov ax, [sc_drows]              ; count only ever raises
@@ -15719,7 +15726,7 @@ sc_stcomp:
     jnz .t1
     inc ax                          ; an empty document is page 1 of 1
 .t1:
-    call sc_utoa
+    call dec_u16
     ; --- graceful field dropping (SPEC.md 68.2): a window too narrow to
     ; show every cell drops the At field FIRST - it duplicates Ln by
     ; construction (a page is 54 lines), and losing it keeps Ln and Col,
@@ -15739,7 +15746,7 @@ sc_stcomp:
     call sc_stcat
     mov ax, cx
     inc ax
-    call sc_utoa                    ; At = the line on the page, in li - the
+    call dec_u16                    ; At = the line on the page, in li - the
     mov si, sc_s_li                 ; honest draft-view unit (SPEC.md 68.2)
     call sc_stcat
     jmp short .atdone
@@ -15750,7 +15757,7 @@ sc_stcomp:
     call sc_stcat
     mov ax, cx
     inc ax
-    call sc_utoa
+    call dec_u16
     mov si, sc_s_col
     call sc_stcat
     mov ax, [sc_colv]
@@ -15758,7 +15765,7 @@ sc_stcomp:
     jnz .c1
     inc ax
 .c1:
-    call sc_utoa
+    call dec_u16
 .pad:
     cmp di, sc_stbuf + SC_ST_CELLS
     jae .fin
@@ -16782,10 +16789,11 @@ sc_a_pict:
 ; -----------------------------------------------------------------------------
 ; sc_pictload - read [sc_name] and decode it. Reports either way.
 ;
-; TWO TRANSIENT CLAIMS, both handed straight back: the file's bytes and the
-; decoded picture. Transient because 50.3 is about a package SIZING itself at
-; entry, and neither of these is part of how big WORD is - they are the shape
-; of one command. A refusal is an ordinary path (47): the document is
+; TWO TRANSIENT CLAIMS: the file's bytes, handed straight back, and the
+; decoder's SC_PICKB scratch, which sc_pictkeep shrinks to the picture and
+; keeps - or which goes straight back too on any refusal. Transient because
+; 50.3 is about a package SIZING itself at entry, and neither of these is part
+; of how big WORD is - they are the shape of one command. A refusal is an ordinary path (47): the document is
 ; untouched and still editable.
 ; -----------------------------------------------------------------------------
 sc_pictload:
@@ -16797,19 +16805,17 @@ sc_pictload:
     push di
     push es
     mov word [sc_picseg], 0
-    call sc_stghold                 ; the file's bytes (the toast is set on
-    jc .out                         ; failure, and it is the right one)
-    mov es, [sc_stgseg]
-    xor bx, bx
-    mov cx, 0xFFFF                  ; DX:CX is the capacity, and 64K does not
-    xor dx, dx                      ; fit the word CX is
     mov si, sc_name
-    call OSAPI_FILE_READ            ; out DX:AX = the size read
-    jc .ioerr
-    or dx, dx
-    jnz .toobig                     ; a picture file past 64KB is past what one
-    mov si, sc_imgblk               ; segment addresses, which is os88img's own
-    mov [si+IMG_SRCLEN], ax         ; limit too
+    call sc_stgread                 ; the file's bytes, in a claim their size
+    jnc .read
+    test ax, ax
+    jz .nomem
+    cmp ax, FERR_BIG                ; past SC_LSTGKB: past what one segment
+    je .toobig                      ; addresses, less the room os88img needs
+    jmp short .ioerr
+.read:
+    mov si, sc_imgblk
+    mov [si+IMG_SRCLEN], ax
     mov ax, [sc_stgseg]
     mov [si+IMG_SRCSEG], ax
     mov ax, SC_PICKB
@@ -16856,33 +16862,35 @@ sc_pictload:
     mov ax, sc_e_nomem
     call sc_saymsg
 .done:
-    mov dx, [sc_picseg]             ; both claims go straight back - nothing
-    or dx, dx                       ; holds the picture yet
+    mov dx, [sc_picseg]             ; the scratch goes back unless
+    or dx, dx                       ; sc_pictkeep made it the picture's
     jz .nofree
     call OSAPI_MEM_FREE
     mov word [sc_picseg], 0
 .nofree:
     call sc_stgdrop
 .out:
-    pop es                          ; the pushes are ax bx cx dx si di es, so
-    pop di                          ; these unwind es di si dx cx bx ax. SI
-    pop si                          ; was missing here and `ret` took its
-    pop dx                          ; saved value for the return address: the
-    pop cx                          ; whole machine, segments and all, ended
-    pop bx                          ; up at 000E:00DF inside the vector table
-    pop ax
-    ret
+    jmp sc_ld_7                     ; the pushes are ax bx cx dx si di es,
+                                    ; which is the ladder's rung 7. A hand
+                                    ; unwind here once dropped SI, and `ret`
+                                    ; took its saved value for the return
+                                    ; address: the whole machine ended up at
+                                    ; 000E:00DF inside the vector table
 
 ; -----------------------------------------------------------------------------
-; sc_pictkeep - the decoded picture is in the SC_PICKB scratch claim; move it
-; into a claim SIZED FOR IT and take a table slot. out: CF=1 = no slot or no
-; memory, and nothing was taken.
+; sc_pictkeep - the decoded picture is in the SC_PICKB scratch claim; SHRINK
+; that claim to the picture and take a table slot. out: CF=1 = no slot, and
+; nothing was taken - [sc_picseg] still names the scratch for sc_pictload to
+; hand back. On CF=0 the claim is the PICTURE's and [sc_picseg] is 0.
 ;
-; Two claims and a copy rather than keeping the scratch, because the scratch is
-; 40KB whatever the picture is and eight of those is 320KB of a 640KB machine
-; for eight small drawings. The decoder cannot size its own destination - it
-; has to be given one before it knows the dimensions - so the sizing happens
-; here, afterwards, where they are known.
+; The scratch is 40KB whatever the picture is and eight of those is 320KB of a
+; 640KB machine for eight small drawings, so it may not be kept as it stands.
+; The decoder cannot size its own destination - it has to be given one before
+; it knows the dimensions - so the sizing happens here, afterwards. It used to
+; be a second claim and a word-at-a-time copy, which needed the scratch AND the
+; picture free at once; OSAPI_MEM_REGROW's shrink is in place, copies nothing,
+; and gives the tail back the moment it returns (SPEC.md 50.3.1's
+; shrink-to-fit, 95.13).
 ; -----------------------------------------------------------------------------
 sc_pictkeep:
     push ax
@@ -16890,79 +16898,42 @@ sc_pictkeep:
     push cx
     push dx
     push si
-    push di
-    push es
-    push ds
-    mov ax, [sc_npic]
-    cmp ax, SC_PICMAX
+    mov bx, [sc_npic]
+    cmp bx, SC_PICMAX
     jae .no
     mov si, sc_imgblk
     mov ax, [si+IMG_STRIDE]
     mul word [si+IMG_H]             ; DX:AX = the bytes it actually occupies.
     or dx, dx                       ; img_setgeom already proved this fits a
     jnz .no                         ; word, so a high half means something is
-    mov cx, ax                      ; wrong rather than merely large
-    add ax, 1023
+    add ax, 1023                    ; wrong rather than merely large
     jc .no
     mov cl, 10
     shr ax, cl                      ; ...in kilobytes, rounded up
     or ax, ax
     jnz .kbok
-    mov ax, 1
+    inc ax
 .kbok:
-    call OSAPI_MEM_CLAIM
+    mov dx, [sc_picseg]
+    call OSAPI_MEM_REGROW           ; a shrink: in place, DX unchanged
     jc .no
-    mov [sc_picnew], dx
-    mov si, sc_imgblk               ; scratch -> its own claim, a word at a
-    mov ax, [si+IMG_STRIDE]         ; time. rep movsw would need DS pointed at
-    mul word [si+IMG_H]             ; the source, and DS is the package here
-    mov cx, ax
-    inc cx
-    shr cx, 1
-    mov ax, [si+IMG_DSTSEG]
-    mov ds, ax
-    mov es, [cs:sc_picnew]
-    xor si, si
-    xor di, di
-.copy:
-    mov ax, [si]
-    mov [es:di], ax
-    add si, 2
-    add di, 2
-    dec cx
-    jnz .copy
-    pop ds
-    push ds
-    mov bx, [sc_npic]               ; the slot: w, h, stride, segment
-    mov ax, bx
+    mov word [sc_picseg], 0         ; the picture's now - not pictload's to free
     mov cl, 3
-    shl ax, cl                      ; * SC_PICREC
-    add ax, sc_pictab
-    mov di, ax
-    mov si, sc_imgblk
-    mov ax, [si+IMG_W]
-    mov [di], ax
+    shl bx, cl                      ; the slot: w, h, stride, segment
+    mov ax, [si+IMG_W]              ; (* SC_PICREC)
+    mov [bx+sc_pictab], ax
     mov ax, [si+IMG_H]
-    mov [di+2], ax
+    mov [bx+sc_pictab+2], ax
     mov ax, [si+IMG_STRIDE]
-    mov [di+4], ax
-    mov ax, [sc_picnew]
-    mov [di+6], ax
+    mov [bx+sc_pictab+4], ax
+    mov [bx+sc_pictab+6], dx
     inc word [sc_npic]
     clc
     jmp short .out
 .no:
     stc
 .out:
-    pop ds
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_5
 
 ; sc_pictput - put SC_PICCH in the text at the caret, its CHP byte the index
 ; of the picture just kept. Preserves all registers.
@@ -17017,12 +16988,7 @@ sc_pictfree:
     loop .each
 .done:
     mov word [sc_npic], 0
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_5
 
 ; sc_pictsay - AX = width, BX = height: "Picture 240x160 read - placing it
 ; is not built yet". The last clause is there on purpose. A command that
@@ -17034,11 +17000,11 @@ sc_pictsay:
     push si
     push di
     mov di, sc_pbuf
-    call sc_utoa                    ; AX = the width
+    call dec_u16                    ; AX = the width
     mov si, sc_s_pictx
     call sc_pcopy
     mov ax, bx
-    call sc_utoa
+    call dec_u16
     mov si, sc_s_pict2
     call sc_pcopy
     mov byte [di], 0
@@ -17070,7 +17036,7 @@ sc_picterr:
     pop ax
     ret
 
-; sc_pcopy - the NUL string SI to DI, DI advancing past it. sc_utoa's own
+; sc_pcopy - the NUL string SI to DI, DI advancing past it. dec_u16's own
 ; shape, so the two compose.
 sc_pcopy:
     push ax
@@ -17469,33 +17435,10 @@ sc_rad3:
 
 ; sc_unum - write unsigned AX into the NUL buffer at BX. Preserves all.
 sc_unum:
-    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
-    push ax
-    push bx
-    push cx
-    push dx
-    xor cx, cx
-.d:
-    xor dx, dx
-    push bx
-    mov bx, 10
-    div bx
-    pop bx
-    push dx
-    inc cx
-    or ax, ax
-    jnz .d
-.e:
-    pop ax
-    add al, '0'
-    mov [bx], al
-    inc bx
-    loop .e
-    mov byte [bx], 0
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    push di
+    mov di, bx
+    call dec_u16
+    pop di
     ret
 
 ; sc_uatoi - AX = the unsigned number in the NUL buffer at BX (0 if none).
@@ -17812,13 +17755,7 @@ sc_abopen:
     mov ax, sc_s_abou2              ; the version line carries the identity
     call sc_saymsg
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_6
 
 ; -----------------------------------------------------------------------------
 ; sc_abclose - take the About box down and repaint what it covered
@@ -18002,13 +17939,7 @@ sc_dgpaint:
     add di, 12
     jmp short .ctl
 .done:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_6
 
 ; -----------------------------------------------------------------------------
 ; sc_dgctl - draw ONE control record
@@ -18225,13 +18156,7 @@ sc_dgctl:
 .done:
     clc
     call OSAPI_GFX_PEN              ; the pen back live on every path
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_6
 
 ; -----------------------------------------------------------------------------
 ; sc_dghit - which LIVE control is the point on?
@@ -18813,11 +18738,7 @@ sc_dgapply:
 .done:
     pop es
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_4
 
 ; -----------------------------------------------------------------------------
 ; sc_dgclose - take the dialog down and repaint what it covered
@@ -19097,11 +19018,7 @@ sc_dgoto:
     call sc_chpsync
     mov byte [sc_follow], 1
     call sc_redraw
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_4
 
 ; -----------------------------------------------------------------------------
 ; sc_askdirty - the save-changes gate every destructive door asks (SPEC.md 68.4)
@@ -19285,11 +19202,7 @@ sc_dpinit:
     mov di, sc_de_first
     call sc_dfmt
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp sc_ld_4
 .bit:
     xor dx, dx                      ; the next state bit -> the record's p2
     shr ax, 1
@@ -19314,7 +19227,7 @@ sc_dfmt:
     div bl                          ; AL = whole inches, AH = the tenth
     mov bh, ah
     xor ah, ah
-    call sc_utoa
+    call dec_u16
     mov byte [di], '.'
     inc di
     mov al, bh
@@ -20106,21 +20019,6 @@ sc_s_nul:     db 0              ; an EMPTY string retires whatever is up
                                 ; (SPEC.md 59.3) - one call, and this app
                                 ; never has to know whether one was
 
-; FERR_* (SPEC.md 18.4) -> string, indexed by the code itself
-sc_errtab:
-    dw sc_e_ok, sc_e_nodisk, sc_e_io, sc_e_name, sc_e_noent, sc_e_exist
-    dw sc_e_full, sc_e_dirfull, sc_e_prot, sc_e_wprot, sc_e_big
-sc_e_ok:      db 'Done', 0
-sc_e_nodisk:  db 'No disk', 0
-sc_e_io:      db 'Disk error', 0
-sc_e_name:    db 'Bad name', 0
-sc_e_noent:   db 'Not found', 0
-sc_e_exist:   db 'Name exists', 0
-sc_e_full:    db 'Disk full', 0
-sc_e_dirfull: db 'Dir full', 0
-sc_e_prot:    db 'Protected', 0
-sc_e_wprot:   db 'Write protected', 0
-sc_e_big:     db 'Too big', 0
 sc_e_nomem:   db 'No memory', 0      ; the staging claim was refused (50.3)
 
 ; Insert > Picture (SPEC.md 95.9). One string per IMG_E_* code, indexed by it
@@ -20258,7 +20156,8 @@ sc_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
 ;
 ; Code that ships as SCRIBE.OVL beside WORD.O88 instead of inside it, is read
 ; into a heap claim the first time one of its features is asked for, and is
-; far-called through a dispatcher at its offset 0.
+; far-called through a dispatcher at its offset 2, behind the build stamp at
+; 0 that keeps another build's module out (SPEC.md 95.8.7).
 ;
 ; The ceiling this exists to get under is not a budget: a package links at
 ; org 0 and addresses itself with 16-bit offsets (SPEC.md 33), so image + bss
@@ -20280,20 +20179,29 @@ sc_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
 ;      everything else, which is also what keeps rule 1 to code alone.
 ;
 ; Loading is the shape drivers/hdd/hdtool.inc uses (SPEC.md 52.11) and it
-; needs no kernel byte: OSAPI_FILE_HERE / _GOTO to reach the package's own
+; needs no kernel byte: OSAPI_FILE_HERE / _GOTO_QM to reach the package's own
 ; folder, OSAPI_MEM_CLAIM for the image, OSAPI_FILE_READ to fill it. A
 ; refusal - no heap, or the disk swapped for one without SCRIBE.OVL - is an
 ; ordinary path: the feature says what is missing and the document is
 ; untouched (SPEC.md 47).
 ; =============================================================================
 
-SC_OVKB      equ 12             ; the claim SCRIBE.OVL is read into, KB. It
+SC_OVKB      equ 10             ; the claim SCRIBE.OVL is read into, KB. It
                                 ; was 8 when the module held only the picture
                                 ; decoder; the two file formats took it past
-                                ; 9KB (SPEC.md 95.8). THE MAKEFILE CHECKS THIS
+                                ; 9KB (SPEC.md 95.8), and it was 12 - 2KB of
+                                ; heap held for the whole session for nothing
+                                ; - until 95.13 set it to the module's own
+                                ; rounded size. THE MAKEFILE CHECKS THIS
                                 ; against the cut module and fails the build if
                                 ; the module outgrows it - the number is read
                                 ; out of this line, so there is one and not two
+%ifndef SC_OVSTAMP              ; THE BUILD STAMP (SPEC.md 95.8.7): the
+%define SC_OVSTAMP 0            ; Makefile passes the CRC of everything this
+%endif                          ; is assembled from. Both halves carry it and
+                                ; sc_ovload refuses a module whose word 0 is
+                                ; not ours. A bare re-assembly takes 0, with
+                                ; every offset unchanged
 SCM_PING     equ 0              ; verbs, the module's dispatch indices
 SCM_IMGLOAD  equ 1              ; SI = an OS88IMG_SZ block; see os88img.inc
 SCM_DOCIMG   equ 2              ; the six file-format entry points (88.8).
@@ -20344,15 +20252,27 @@ sc_ovload:
     call OSAPI_FILE_HERE            ; where the USER is, to be put back
     mov [sc_ovwas], dx
     mov [sc_ovwdr], bl
-    mov dx, [sc_ovdir]              ; ...and off to where we were launched
-    mov bl, [sc_ovdrv]
-    call OSAPI_FILE_GOTO
+    mov dx, [sc_ovdir]              ; ...and off to where we were launched -
+    mov bl, [sc_ovdrv]              ; QUIETLY: a by-name read is all this
+    call OSAPI_FILE_GOTO_QM         ; stand is for, so the listing remount's
+                                    ; scan, sort and icon harvest were ~0.5 s
+                                    ; of floppy for no reader (docs/plans/
+                                    ; NAV-COST-PLAN.md, SPEC.md 19.9.1). CX,
+                                    ; SI and DI are banked above, which is
+                                    ; what a redirected volume's FSV_CHDIR
+                                    ; may spend (SPEC.md 62.9.1)
+    jc .nogo                        ; and this IS read now: the old GOTO's CF
+                                    ; went unread because its failure shut the
+                                    ; write gate at the root and the read
+                                    ; below refused on its own; QM's failure
+                                    ; moves NOTHING, and the read would look
+                                    ; for SCRIBE.OVL in the user's folder
     mov ax, SC_OVKB
     call OSAPI_MEM_CLAIM
     jc .nomem
     mov [sc_ovseg], dx
-    mov word [sc_ovfar], 0          ; the far pointer sc_ovcall goes through:
-    mov [sc_ovfar+2], dx            ; the dispatcher is at the claim's 0
+    mov word [sc_ovfar], sc_modc    ; the far pointer sc_ovcall goes through:
+    mov [sc_ovfar+2], dx            ; the dispatcher, past the stamp at 0
     mov es, dx
     xor bx, bx
     mov cx, SC_OVKB * 1024
@@ -20360,6 +20280,13 @@ sc_ovload:
     mov si, sc_ovname
     call OSAPI_FILE_READ
     jc .noread
+    cmp word [es:sc_ovstmp], strict word SC_OVSTAMP
+.stimm:                             ; (the stamp is the word before this:
+                                    ; tests/scsize.py reads it there)
+    mov ax, sc_m_ovold              ; ANOTHER BUILD'S MODULE (SPEC.md 95.8.7)
+    jne .drop                       ; names our bss at its own offsets, so it
+                                    ; is refused before anything - the store
+                                    ; below included - writes through them
     mov ax, cs                      ; THE PACKAGE'S SEGMENT, STAMPED INTO THE
     mov [es:sc_pkgseg], ax          ; MODULE ITSELF (SPEC.md 95.8.3). ES is
                                     ; still the claim from the read above, and
@@ -20380,16 +20307,22 @@ sc_ovload:
 .ok:
     clc
     ret
+.nogo:
+    mov ax, sc_m_noovl              ; the launch folder could not be reached -
+    jmp short .unbank               ; on a swapped disk it is not there - and
+                                    ; nothing moved, so nothing to put back
 .noread:
-    mov dx, [sc_ovseg]              ; the claim goes back: a half-loaded
-    call OSAPI_MEM_FREE             ; module is worse than none
-    mov word [sc_ovseg], 0
     mov ax, sc_m_noovl
+.drop:
+    mov dx, [sc_ovseg]              ; the claim goes back: a half-loaded
+    call OSAPI_MEM_FREE             ; module is worse than none, and so is a
+    mov word [sc_ovseg], 0          ; stale one. Preserves AX
     jmp short .fail
 .nomem:
     mov ax, sc_e_nomem
 .fail:
     call sc_ovback
+.unbank:
     pop es
     pop di
     pop si
@@ -20404,15 +20337,24 @@ sc_ovload:
     ret
 
 ; sc_ovback - put the volume back where the user left it. Preserves all.
+; The same quiet stand as the way out, and for the same reason: the next
+; thing that resolves a name is a by-name file cell, never a listing. A
+; failure is not answered here and needs no answer - nothing moved, so the
+; instance is still in the launch folder, and every later Save goes through
+; sc_goto, which compares and stands in the document's own folder first.
+; AX, CX, SI and DI are banked for GOTO_QM's answer and its redirected-volume
+; clobbers (SPEC.md 62.9.1); the flags are the caller's to lose.
 sc_ovback:
+    push ax
     push bx
+    push cx
     push dx
+    push si
+    push di
     mov dx, [sc_ovwas]
     mov bl, [sc_ovwdr]
-    call OSAPI_FILE_GOTO
-    pop dx
-    pop bx
-    ret
+    call OSAPI_FILE_GOTO_QM
+    jmp sc_ld_6
 
 ; sc_ovbind - stamp this package's segment into every vector. Preserves all.
 ; The offsets are assembled in; only the segment is a runtime fact, and it is
@@ -20441,7 +20383,7 @@ sc_ovcall:
     jc .no                          ; CF=1 already, and it has said why
     mov word [sc_ovmsg], 0
     call far [sc_ovfar]             ; the dispatcher is at the claim's offset
-                                    ; 0, so the far pointer is (0, the claim)
+                                    ; 2, so the far pointer is (2, the claim)
                                     ; and the verb's own CF comes back through
     push ax                         ; THE MODULE NEVER SPEAKS; IT LEAVES A
     pushf                           ; REASON AND THIS SAYS IT (SPEC.md 95.8.1).
@@ -20457,7 +20399,8 @@ sc_ovcall:
     ret                             ; through
 
 sc_ovname:  db 'SCRIBE.OVL', 0
-sc_m_noovl: db 'SCRIBE.OVL is not on this disk', 0
+sc_m_noovl: db 'SCRIBE.OVL not on disk', 0   ; both inside TOAST_MAX = 24
+sc_m_ovold: db 'SCRIBE.OVL: wrong build', 0  ; (the first was 30, and cut)
 
 ; --- the vectors: resident routines the module far-calls (rule 1) ------------
 ; Offset assembled in, segment stamped by sc_ovbind. They are contiguous and
@@ -20513,11 +20456,13 @@ sc_v_end:
 ; align=1 is load-bearing, not tidiness. A bin section aligns to 4 by default,
 ; and the pad NASM inserts to reach it lands BETWEEN the image size the header
 ; records and where this section really starts - so the cut would take the pad
-; with it and the dispatcher would not be at the module's offset 0. It was one
+; with it and nothing would sit at the module's offsets as assembled. It was one
 ; byte, and the module ran off the end of its own jump table.
 section .modc vstart=0 align=1
 
-sc_modc:                            ; +0: the dispatcher, and the only offset
+sc_ovstmp:  dw SC_OVSTAMP           ; +0: the build stamp (SPEC.md 95.8.7),
+                                    ; read before anything else in the claim
+sc_modc:                            ; +2: the dispatcher, and the only entry
     cmp bp, SCM_MAX                 ; the resident half knows
     ja .out
     shl bp, 1
@@ -20631,6 +20576,24 @@ SC_BTREC_SZ equ 16
 %macro SCVAR 2                      ; name, size in bytes
     %1 equ os88_image_end + SCB
     %assign SCB SCB + %2
+%endmacro
+; SCUNION / SCARM / SCUEND: arms that SHARE their bytes - each arm starts at
+; the union's base and the union is as long as its longest arm (SPEC.md 95.13)
+%macro SCUNION 0
+    %assign SCU0 SCB
+    %assign SCUMAX SCB
+%endmacro
+%macro SCARM 0
+    %if SCB > SCUMAX
+        %assign SCUMAX SCB
+    %endif
+    %assign SCB SCU0
+%endmacro
+%macro SCUEND 0
+    %if SCB > SCUMAX
+        %assign SCUMAX SCB
+    %endif
+    %assign SCB SCUMAX
 %endmacro
 
 ; --- the selection (SPEC.md 27.8) --------------------------------------------
@@ -21088,24 +21051,8 @@ SC_BTREC_SZ equ 16
     SCVAR sc_dgdown, 2      ; WHICH control a press is live on, 0 for none
 
 ; --- the real .DOC format (scdoc.inc, SPEC.md 68.4) --------------------------
-    SCVAR sc_dgrp,  24      ; a grpprl under construction. Six paragraph
-                            ; sprms at three bytes is 18; SC_GRPMAX is the
-                            ; same number stated where the builder is
-    SCVAR sc_dprop, 32      ; ...and the FKP property record built from it
-                            ; (a PAPX adds a cw byte, an stc and a 6-byte PHE)
-    SCVAR sc_dfkp,  512     ; the 512-byte FKP page being built. Built HERE
-                            ; and copied into the image whole, because in
-                            ; place it needs two pointers growing towards
-                            ; each other and that arithmetic is the entire
-                            ; risk of the structure (SPEC.md 68.4)
     SCVAR sc_dfkn,  2       ; word: its crun
     SCVAR sc_dfkhi, 2       ; word: how far DOWN its properties have got
-    SCVAR sc_dfkb,  128     ; its rgb offset bytes, BANKED: rgb[i] lives at
-                            ; 4*(crun+1) + i and crun is not final until the
-                            ; page is sealed, so storing one as it is made
-                            ; stores it where the next run moves it from
-    SCVAR sc_dbtfc, 128     ; SC_MAXBTE words: each FKP page's first fc, for
-                            ; the bin table written at the end
     SCVAR sc_dbtn,  2       ; word: how many of them
     SCVAR sc_dbn0,  2       ; word } the CHP and PAP page counts, kept apart
     SCVAR sc_dbn1,  2       ; word } because the second pass reuses the array
@@ -21137,11 +21084,6 @@ SC_BTREC_SZ equ 16
     SCVAR sc_rdep,  2       ; word: the reader's group depth
     SCVAR sc_rskip, 2       ; word: the depth a skipped destination began at,
                             ; 0 = not skipping (SPEC.md 68.8)
-    SCVAR sc_rstk,  32      ; SC_RTFDEPTH bytes of saved attributes, one per
-                            ; open group, so a \b's scope ends with its group
-                            ; (padded to a word each, which keeps the indexing
-                            ; a single shift)
-    SCVAR sc_rcw,   20      ; the control word being read, NUL-terminated
     SCVAR sc_fpw,   94      ; the COMPILED search pattern (SPEC.md 68.7),
                             ; one word per element: a value 0..255 is that
                             ; character, SCP_ANY and SCP_WHITE the wildcards
@@ -21154,12 +21096,7 @@ SC_BTREC_SZ equ 16
     SCVAR sc_us0,   2       ; word } the span Sort / Renumber / Table of
     SCVAR sc_us1,   2       ; word } Contents operate on, snapped out to
                             ; whole paragraphs
-    SCVAR sc_upst,  258     ; SC_UMAXP+1 words: each paragraph's start, plus
-                            ; a sentinel at [sc_us1] - so a paragraph's
-                            ; length is the NEXT entry and no second array
-                            ; exists to disagree with this one
     SCVAR sc_upn,   2       ; word: how many paragraphs are in it
-    SCVAR sc_uord,  256     ; SC_UMAXP words: the sort's order array
     SCVAR sc_scseg, 2       ; word: the rebuild scratch claim, 0 = none
     SCVAR sc_scn,   2       ; word: how many characters are in it
     SCVAR sc_vpage, 1       ; byte: 0 = Draft, 1 = Page (SPEC.md 68.11)
@@ -21210,7 +21147,7 @@ SC_BTREC_SZ equ 16
 %ifdef SCBENCH
 ; --- the walk bench (tests/scbench.inc), in the -DWDBENCH build only ---------
     SCVAR wdb_buf, 640      ; the report, composed here and then copied into
-                            ; the document claim: sc_utoa writes through DS
+                            ; the document claim: dec_u16 writes through DS
     SCVAR wdb_ls,  2        ; word: where the line being composed began
     SCVAR wdb_t,   2        ; word } the row being emitted: ticks over
     SCVAR wdb_i,   2        ; word } iterations
@@ -21230,12 +21167,51 @@ SC_BTREC_SZ equ 16
     SCVAR sc_pictwant, 1    ; byte: the file dialog is being opened FOR a
                             ; picture, so sc_ondlg routes its answer here
                             ; instead of to open-or-save
+; --- ONE COMMAND'S SCRATCH, SHARED (SPEC.md 95.13) -------------------------
+; Four groups of buffers that each live for the length of ONE command and
+; never across an event: Insert > Picture's decoder block and row, the .DOC
+; writer's FKP page and its banks, Sort/Renumber's paragraph arrays, and the
+; RTF reader's group stack. Every one of those commands runs start to finish
+; inside a single callback with the gfx lock held, so no two can be live at
+; once and the worker (which takes the same lock) cannot see any of them.
+; Each arm is filled before it is read; nothing here may rely on bss
+; arriving zeroed. 2,746 bytes laid end to end, 1,356 as arms.
+    SCUNION
     SCVAR sc_imgblk, OS88IMG_SZ
     SCVAR sc_imgrow, OS88IMG_ROW
+    SCARM
+    SCVAR sc_dgrp,  24      ; a grpprl under construction. Six paragraph
+                            ; sprms at three bytes is 18; SC_GRPMAX is the
+                            ; same number stated where the builder is
+    SCVAR sc_dprop, 32      ; ...and the FKP property record built from it
+                            ; (a PAPX adds a cw byte, an stc and a 6-byte PHE)
+    SCVAR sc_dfkp,  512     ; the 512-byte FKP page being built. Built HERE
+                            ; and copied into the image whole, because in
+                            ; place it needs two pointers growing towards
+                            ; each other and that arithmetic is the entire
+                            ; risk of the structure (SPEC.md 68.4)
+    SCVAR sc_dfkb,  128     ; its rgb offset bytes, BANKED: rgb[i] lives at
+                            ; 4*(crun+1) + i and crun is not final until the
+                            ; page is sealed, so storing one as it is made
+                            ; stores it where the next run moves it from
+    SCVAR sc_dbtfc, 128     ; SC_MAXBTE words: each FKP page's first fc, for
+                            ; the bin table written at the end
+    SCARM
+    SCVAR sc_upst,  258     ; SC_UMAXP+1 words: each paragraph's start, plus
+                            ; a sentinel at [sc_us1] - so a paragraph's
+                            ; length is the NEXT entry and no second array
+                            ; exists to disagree with this one
+    SCVAR sc_uord,  256     ; SC_UMAXP words: the sort's order array
+    SCARM
+    SCVAR sc_rstk,  32      ; SC_RTFDEPTH bytes of saved attributes, one per
+                            ; open group, so a \b's scope ends with its group
+                            ; (padded to a word each, which keeps the indexing
+                            ; a single shift)
+    SCVAR sc_rcw,   20      ; the control word being read, NUL-terminated
+    SCUEND
     SCVAR sc_picseg, 2      ; word: the decode scratch claim, transient
     SCVAR sc_npic,   2      ; word: pictures this document holds
     SCVAR sc_pictab, SC_PICMAX * SC_PICREC
-    SCVAR sc_picnew, 2      ; word: the claim sc_pictkeep is filling
     SCVAR sc_chpbank, 1     ; byte: [sc_chp] across the picture insert
     SCVAR sc_rowpic, 2      ; word: the picture the row being built IS, or
                             ; 0xFFFF. Set at row entry by sc_rowhc and read at
@@ -21300,6 +21276,12 @@ SC_BTREC_SZ equ 16
  %error "SC_BTREC_SZ mirrors OS88UI_BT_SIZE and they have drifted - the bss chain is laid out before this include, so the size must be written twice; fix the literal"
 %endif
 
+%define OS88TY_NOWIDTH          ; SPEC.md 6.5.5: the routines Scribe never
+%define OS88TY_NOWIDTHN         ; calls - it measures with ty_advof, as Word
+%define OS88TY_NOFIT            ; does
+%define OS88TY_NOPUT
+%define OS88TY_NOFAMN
+%define OS88TY_NOGETASC
 %include "os88type.inc"         ; SPEC.md 6.5: proportional type, and the band
                                 ; it is composed into. AFTER os88ui.inc for no
                                 ; reason but tidiness - it depends on nothing

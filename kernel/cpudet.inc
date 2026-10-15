@@ -101,7 +101,7 @@ cpu_feat        db 0            ; CPU_F_* - what actually verified, as
 ; This routine is the one place in either module that runs before the tier
 ; is known, so there is no island in it and there cannot be one.
 
-section .ovlw                   ; the boot overlay (SPEC.md 2.5): runs once from
+section .ovl                   ; the boot overlay (SPEC.md 2.5): runs once from
                                 ; kmain and is written over by the first
                                 ; mount. cpu_info stays resident below: it is
                                 ; API slot 0x0155 and answers all session
@@ -210,9 +210,9 @@ cpu_detect:
     retf                        ; FAR, and the shim that used to own this
                                 ; return is deleted (SPEC.md 2.6.1, 2.5.2):
                                 ; the caller names this body directly through
-                                ; OVWCALL - a plain `call FAT_SEG:%%1` - and
-                                ; nothing near-calls it. NOT OVLGATE1: that is
-                                ; the .ovl half's gate and this body is .ovlw,
+                                ; OVLCALL - a plain `call FAT_SEG:%%1` - and
+                                ; nothing near-calls it. NOT SPLGATE1: that is
+                                ; the blob half's gate and this body is .ovl,
                                 ; which the first mount overwrites rather than
                                 ; spl_finish
 

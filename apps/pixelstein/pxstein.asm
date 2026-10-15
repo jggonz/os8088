@@ -22,8 +22,12 @@
 ;      image and plays Flat;
 ;   2  PXA_BTKB for the byte-texture set px_bt_build transposes (97.4) -
 ;      15 materials x 2 shades x 1,024 texels. OP_OPT likewise;
-;   3  the level stream tools/pxslevel.py writes (97.7) - LAZY and plain
-;      since wave 4, as the plan first had it: eight floors are 9.8 KB, 20
+;   3  the level stream tools/pxslevel.py writes (97.7) - LAZY since wave
+;      4, as the plan first had it, and OP_COMP since apps size pass 1
+;      (97.9.1: a plain lazy row is used where it was read, behind the head
+;      slack in a claim of whole clusters, for the session; a packed one
+;      is expanded onto its claim's base and shrunk to fit, and 9,831
+;      bytes pack to 5,256): eight floors are 9.8 KB, 20
 ;      sectors, and with the HUD, the states and the scores in part 0 the
 ;      eager run would have been 111 + 20 = 131 unpacked sectors, past
 ;      the 128 20.12.7 allows (97.9). pxl_lev fetches it into a claim of its own and hands
@@ -89,7 +93,7 @@ PXL_RESKB    equ (PXL_STREAM + 1023) / 1024 + 2 + PXL_SHKB
                                     ; shadow. DERIVED, so a ninth floor
                                     ; grows it (review, wave 6 r2; 28 KB
                                     ; today: 10 + 2 + 16)
-PX_GENKB     equ 51                 ; part 1: tools/pxsgen.py --sizes reads
+PX_GENKB     equ 50                 ; part 1: tools/pxsgen.py --sizes reads
                                     ; 46,291 for the widest phase (CGA4) -
                                     ; both scaler sets, each scaler behind
                                     ; its 66-byte codeofs table (wave 3),
@@ -97,7 +101,9 @@ PX_GENKB     equ 51                 ; part 1: tools/pxsgen.py --sizes reads
                                     ; puts PXG_SCAL - 4,430 of bodies (232),
                                     ; driver (96), header (6) and queue
                                     ; (4,096) - in front of it: 50,721 of
-                                    ; 52,224, 1,503 spare; tests/unit/
+                                    ; 51,200, 479 spare (51 KB until the
+                                    ; col2tex blocks had a fence of their
+                                    ; own, PXG_C2TMAX); tests/unit/
                                     ; t_pxsscale.py holds the model to this
                                     ; number and PXH_GENLEN below is the
                                     ; machine's own fence (px_gen_build)
@@ -265,13 +271,12 @@ pxl_entry:
     mov word [es:di+PXH_NLEV], PXL_NLEV
 
     ; --- the hand-over -------------------------------------------------------
-    ; AX is what the kernel bounds the part's image + bss against, so it is
-    ; OUR word for what is actually there (SPEC.md 20.12.10.4): the part is
-    ; padded to image + bss, so its own two header fields ARE that length.
-    mov ax, [es:LD_H_IMG]
-    add ax, [es:LD_H_BSS]
+    ; In the KEEP form (SPEC.md 20.12.10.5): the standard keeps the carve to
+    ; where its last part ends. With the scratch and the byte set granted that
+    ; is the claim's own end and nothing is cut; with them refused it is the
+    ; program, and the read's margin past it goes back to the heap.
     mov dx, es
-    call OSAPI_PKG_REHOME
+    OS88_REHOME
     jc .no
     xor bx, bx                      ; NO WINDOW: ours is the region that is
     clc                             ; about to be freed (SPEC.md 20.12.10.6)
@@ -285,7 +290,7 @@ pxl_entry:
       OS88_PART OP_SEG,   OP_COMP   ; 0 THE PROGRAM
       OS88_PART OP_SEG,   OP_ZERO | OP_OPT, PX_GENKB   ; 1 the scalers' scratch
       OS88_PART OP_ASSET, OP_ZERO | OP_OPT, PXA_BTKB   ; 2 the byte-texture set
-      OS88_PART OP_ASSET, OP_LAZY   ; 3 the level stream: lazy, kept (pxl_lev)
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP ; 3 the level stream: lazy, kept (pxl_lev)
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP ; 4 the art masters (pxl_art)
     OS88_PARTS_END
 
@@ -299,6 +304,6 @@ PXL_BSS  equ 6
 
 ; the program's greyed Textured caption is the sum of these three, held
 ; there by an %if on a restated PX_GENKB - and the restatement is held here
-%if PX_GENKB != 51
+%if PX_GENKB != 50
 %error "PX_GENKB moved: restate pxgame.asm's PX_GENKB_CAP and the greyed Textured caption"
 %endif

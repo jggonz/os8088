@@ -34,6 +34,7 @@ coordinates - so the compare is allowed to shift by one and has to be EXACT
 at one of them.
 """
 import argparse
+import tempfile
 import os
 import sys
 
@@ -72,7 +73,7 @@ def tool_xy(ox, oy, i):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/paintbig.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/paintbig.img")
     ap.add_argument("--machine", default="os8088_xt_vga")
     ap.add_argument("--gif", default=None)
     # WHICH PRIMITIVE THE CANVAS ARRIVES ON is what says which format it is
@@ -91,7 +92,7 @@ def main():
     gif = dispapps.colour_gif()
     gifname = os.path.basename(gif)
 
-    if a.apps == "/tmp/paintbig.img":
+    if a.apps == tempfile.gettempdir() + "/paintbig.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:" + gif)
 

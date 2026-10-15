@@ -84,9 +84,8 @@ pw_decode:
     cmp cl, WF_N
     jae .bad
     mov [cs:pw_sp], sp              ; where pw_abort unwinds to
-    mov ax, cs                      ; the scratch's own segment
-    add ax, PW_SCRP
-    mov [cs:pw_dseg], ax
+    mov ax, [px_ewseg]              ; the scratch: pu_start's claim, 0
+    mov [cs:pw_dseg], ax            ; for a BMP (pw_skb)
     mov word [px_erow], 0
     mov byte [cs:pw_gbn], 0
     xor ax, ax                      ; THE RECT: the whole master (a copy's
@@ -1554,15 +1553,22 @@ df_dist:    dw 0
 df_lim:     dw 0
 pw_gbuf:    times 256 db 0
 
-; THE SCRATCH, its own segment: the LZW table (GIF), or the deflate's window,
-; heads, links, IDAT buffer and tables (PNG), or a PCX line, or PIX's nearest
-; - one format a save, so one region for all of them
-    align 16
-pw_scr:
-    times DS_END db 0
-PW_SCRP     equ (pw_scr - $$) >> 4
-%if LZW_EKB * 1024 > DS_END
-  %error "the LZW table does not fit the scratch"
+; THE SCRATCH, a claim of its own: the LZW table (GIF), or the deflate's
+; window, heads, links, IDAT buffer and tables (PNG), or a PCX line, or PIX's
+; nearest - one format a save, so one region for all of them, sized by the
+; format (pw_skb) and claimed by pu_start on the UI task into [px_ewseg],
+; which an edit's work claim is otherwise (no edit runs beside a save:
+; [px_busy]). It was 42,240 zero bytes at the part's tail, so every fetch of
+; this part - Save As's dialog, Copy Info, a BMP save - held 48 KB where it
+; needs 6 (apps size pass 1, set 5; SPEC.md 106.24)
+pw_skb:     db (DS_END + 1023) / 1024           ; WF_PNG
+            db LZW_EKB                          ; WF_GIF
+            db 0                                ; WF_BMP
+            db (PX_DIMMAX + 1 + 1023) / 1024    ; WF_PCX: a line and its pad
+            db 1                                ; WF_PIX: the 256 nearest
+            db 0                                ; WF_BMP24
+%if WF_N != 6 || WF_PNG != 0 || WF_BMP24 != 5
+  %error "pw_skb is one byte a WF_*, in their order"
 %endif
 
 ; =============================================================================
@@ -1823,8 +1829,18 @@ pu_done:
 ; (nothing held then)
 pu_start:
     mov byte [px_clok], 0           ; the target volume's cluster
-    PSV SV_RINGCL
+    mov bl, [px_wfmt]               ; THE SCRATCH, the format's (pw_skb)
+    xor bh, bh
+    mov al, [cs:pw_skb + bx]
+    cbw
+    or ax, ax
+    jz .r
+    call OSAPI_MEM_CLAIM            ; (all but DX kept)
     jc .no
+    mov [px_ewseg], dx
+.r:
+    PSV SV_RINGCL
+    jc .ns
     PSV SV_SPAWN
     jc .nw
     xor ax, ax
@@ -1850,16 +1866,44 @@ pu_start:
     ret
 .nw:
     PSV SV_WFREE
+.ns:
+    call pu_sfree
 .no:
     stc
     ret
 
+; pu_sfree - the scratch given back, if there is one. Preserves all
+pu_sfree:
+    push dx
+    xor dx, dx
+    xchg dx, [px_ewseg]
+    or dx, dx
+    jz .x
+    call OSAPI_MEM_FREE
+.x:
+    pop dx
+    ret
+
 ; pu_goto - stand in the folder the save goes to. CF = 1 it is gone (a disk
 ; taken out). Preserves all
+;
+; Called per pumped chunk, so the compare is what usually answers. When it
+; does not, the move is OSAPI_FILE_GOTO_QM: every write that follows is by
+; name and nothing lists the folder, so the remount's scan, sort and icon
+; harvest were ~0.5 s of floppy for no reader (docs/plans/NAV-COST-PLAN.md,
+; SPEC.md 19.9.1), and QM moves the instance, which the writes resolve
+; through. CF=1 moved NOTHING - not the old GOTO's root with the write gate
+; shut - so it is the callers' `jc` that keeps a chunk out of the wrong
+; folder, and they all have one. CX, SI and DI are banked because a
+; redirected volume's FSV_CHDIR owns them (SPEC.md 62.9.1); AX is QM's answer
+; and the pop puts the caller's back without touching CF.
 pu_goto:
     push ax
     push bx
+    push cx
     push dx
+    push si
+    push di
     call OSAPI_FILE_HERE
     cmp dx, [px_sdir]
     jne .go
@@ -1868,12 +1912,15 @@ pu_goto:
 .go:
     mov dx, [px_sdir]
     mov bl, [px_svol]
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_QM
     jc .x
 .ok:
     clc
 .x:
+    pop di
+    pop si
     pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -1946,6 +1993,7 @@ pu_fin:
                                     ; its look at [px_job] (a PCX lost its
                                     ; final 1,325 bytes so)
     PSV SV_WFREE
+    call pu_sfree                   ; ...and the scratch
     cmp byte [px_wres], 0           ; the worker's answer, or the disk's
     jne .fail
     cmp byte [px_rerr], 0

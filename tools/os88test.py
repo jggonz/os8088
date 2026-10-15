@@ -168,6 +168,49 @@ SLIP = 2.0
 # that got quicker.
 UNDER = 0.05
 
+
+def scratch_tmpdir(environ=None):
+    """Point every row's `tempfile` at `build/tmp/` unless $TMPDIR says else.
+
+    Every `/tmp` in tests/ and tools/ goes through `tempfile.gettempdir()`
+    (HANDOFF-APPS-SHARED 0.5, A5), so setting $TMPDIR keeps a row's scratch
+    inside the checkout - which is the rule for agents sharing a box, and the
+    end of two worktrees' rows meeting in one `/tmp`. Nothing set it, so
+    every caller had to remember to. The runner is the one place every row
+    passes through: rows are its subprocesses and inherit the variable, and
+    os88soak and os88bisect both run rows through this file.
+
+    WHY `build/tmp` OF THE CHECKOUT AND NOT THE SOAK'S FROZEN TREE. A soak's
+    rows read their artefacts from `build/trees/<key>/` through
+    `os88build.at()`, and it might look right for their scratch to live there
+    too. It is not, for two reasons:
+
+      * the path has to stay SHORT. A QMP socket is an AF_UNIX path and those
+        stop at ~107 bytes; `tests/rdxms.py` makes its socket inside a
+        `mkdtemp()`, and from an agent's worktree a frozen tree's tmp puts it
+        at ~117. `build/tmp` is 20 bytes shorter than a tree's;
+      * scratch is not an artefact. `at()` re-bases only a path SPELLED
+        `build/...`, and `gettempdir()` is absolute, so a row's scratch file
+        is the same file at every later step whether or not a tree is in
+        play - which is the property that matters. A tree is re-used by the
+        next run with the same key; scratch belongs to nobody's tree.
+
+    `make clean` takes `build/tmp` with everything else, which is no loss:
+    it takes the frozen trees too. Created here because `gettempdir()`
+    silently falls back to `/tmp` when $TMPDIR names a directory that does
+    not exist. An explicit $TMPDIR - even `/tmp` - is the caller's and wins.
+    """
+    env = os.environ if environ is None else environ
+    if env.get("TMPDIR"):
+        return env["TMPDIR"]
+    d = os.path.join(ROOT, "build", "tmp")
+    os.makedirs(d, exist_ok=True)
+    env["TMPDIR"] = d
+    if environ is None:
+        import tempfile
+        tempfile.tempdir = None     # re-read on the next call in THIS process
+    return d
+
 GREEN, RED, YELLOW, DIM, OFF = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
 if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
     GREEN = RED = YELLOW = DIM = OFF = ""
@@ -241,6 +284,16 @@ def capabilities():
     # row as a traceback and a FAIL instead of a skip.
     if os88build.have_pil():
         caps.add("pil")
+    # unicorn, for the one row that runs driver code against a MODEL of a
+    # card no emulator here carries - the PicoMEM (tests/picomem.py).
+    if os88build.have_unicorn():
+        caps.add("unicorn")
+    # the owner's XDC video streams, for `vidbench`, whose only subject they
+    # are. Not in the tree and never can be (copyrighted), so a box without
+    # $OS88_XDC_SAMPLES pointing at them SKIPS the row; it used to run, skip
+    # itself and exit 0, which scored `ok` in 0.1s against 34s declared.
+    if os88build.have_xdc():
+        caps.add("xdc")
     # ffmpeg AND numpy, the encoder front end's (tools/os88venc.py, SPEC.md
     # 98.2.1). Nothing in the build needs either, so they are a capability
     # and not a dependency, and `make deps` does not install ffmpeg's
@@ -785,6 +838,7 @@ def main():
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="print every row's output, not just the failures")
     a = ap.parse_args()
+    scratch_tmpdir()
 
     import suite
     rows = suite.rows()

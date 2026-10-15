@@ -85,6 +85,10 @@ def main():
     ap.add_argument("--screen", choices=sorted(DESK),
                     help="play on this layout's machine: the shadow path")
     ap.add_argument("--machine")
+    ap.add_argument("--kpart", type=int, default=vid.KEY_PART,
+                    help="a key's read at most (98.1.3.8): a small one cuts "
+                    "every key into KEY PARTS, and every question below is "
+                    "asked of keys in parts")
     a = ap.parse_args()
     screen = a.screen or a.layout
     shadow = screen != a.layout
@@ -96,7 +100,13 @@ def main():
         sys.exit("vidpreview: no build/video.o88 - run `make`")
     bad = []
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
-        v88 = vidplay.clip(tmp, a.layout)
+        v88 = vidplay.clip(tmp, a.layout, kpart=a.kpart)
+        if a.kpart < vid.KEY_PART:
+            rk = vid.Reader(v88)
+            np_ = [len(vid.key_reads(rk.key(i)[1])) for i in range(rk.nkeys)]
+            print("   keys in parts: %r reads each" % np_)
+            if not rk.kparts or max(np_) < 2:
+                sys.exit("vidpreview: --kpart made no key in parts")
         r = vid.Reader(v88)
         g = r.g
         keys = [e[0] for e in r.keys]

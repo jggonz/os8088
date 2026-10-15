@@ -11,11 +11,12 @@
 ;    beside the game. The file browser is the whole of how a user reaches an
 ;    application here, so a data file in an app folder is a misclick waiting to
 ;    happen.
-;  - **It is OSAPI_FILE_GOTO and not its quiet twin.** GOTO_Q moves the GLOBAL
-;    directory and deliberately not the instance's, while FILE_FIND, _READ and
-;    _WRITE all resolve in the INSTANCE's - so a quiet move is undone by the
-;    very next call, and the save writes nothing at all while the load appears
-;    to work.
+;  - **The folder is reached through apps/os88data.inc**, which walks with
+;    OSAPI_FILE_GOTO_QM - the quiet stand that MOVES THE INSTANCE, so the
+;    file cell after it resolves there - banks APPDATA's cluster, and
+;    rewrites a file of unchanged length with one sector. This file used to
+;    walk with OSAPI_FILE_GOTO, a remount for DISPLAY at every step
+;    (docs/plans/NAV-COST-PLAN.md).
 ;
 ; The write happens when the initials are committed, not at close: a score is
 ; banked when the player finishes typing it, and a machine switched off - or a
@@ -30,8 +31,7 @@ DD_TABW   equ 19 * 8            ; the table's own width, in whole cells
 dd_hs_file:  db 'DOTDEL.HS', 0
 dd_hs_magic: db 'DD8', 1        ; so a stale or foreign file is refused rather
                                 ; than decoded
-dd_d_system: db 'SYSTEM', 0
-dd_d_appdat: db 'APPDATA', 0
+dd_hs_ip:    db 0               ; os88data.inc's in-place stamp, DOTDEL.HS
 
 ; The table a machine with no file has ever seen.
 dd_hs_def:
@@ -390,140 +390,7 @@ dd_hs_commit:
 ; SYSTEM\APPDATA, AND THE FILE
 ; =============================================================================
 
-; dd_data_enter - bank where we are and go to SYSTEM\APPDATA on this volume.
-; out: CF = 1 we did not get there and NOTHING was banked or moved.
-dd_data_enter:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    push ds
-    pop es
-    call OSAPI_FILE_HERE            ; DX = our directory, BL = our drive
-    mov [dd_dbclus], dx
-    mov [dd_dbdrv], bl
-    xor dx, dx                      ; the ROOT of that same volume
-    call OSAPI_FILE_GOTO
-    jc .back
-    mov si, dd_d_system
-    call dd_data_dive
-    jc .back
-    mov si, dd_d_appdat
-    call dd_data_dive
-    jc .back
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-.back:
-    call dd_data_home               ; a disk without the folder is a user's own
-    pop es                          ; disk, not an error: put the volume back
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
-
-dd_data_leave:
-    pushf
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    call dd_data_home
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    popf
-    ret
-
-dd_data_home:
-    push ax
-    push bx
-    push dx
-    mov dx, [dd_dbclus]
-    mov bl, [dd_dbdrv]
-    call OSAPI_FILE_GOTO
-    pop dx
-    pop bx
-    pop ax
-    ret
-
-; dd_data_dive - step into the folder named at SI. CF = 1 there is none.
-dd_data_dive:
-    push ax
-    push cx
-    push si
-    push di
-    xor cx, cx
-.each:
-    push ds                         ; ES EVERY TIME: nothing promises it
-    pop es                          ; survives a far call into the kernel
-    mov di, dd_dfind
-    call OSAPI_FILE_FIND
-    jc .none
-    cmp word [dd_dfind + 14], OSAPI_FT_DIR
-    jne .each                       ; only a FOLDER can be dived into, and
-                                    ; type 1 is a PACKAGE, not "a file"
-    push cx
-    push si
-    mov di, dd_dfind
-    call dd_data_same
-    pop si
-    pop cx
-    jc .each
-    mov dx, [dd_dfind + 16]
-    mov bl, [dd_dbdrv]
-    call OSAPI_FILE_GOTO
-    jc .none
-    pop di
-    pop si
-    pop cx
-    pop ax
-    clc
-    ret
-.none:
-    pop di
-    pop si
-    pop cx
-    pop ax
-    stc
-    ret
-
-; dd_data_same - is the NUL name at SI the one at DI? CF = 0 yes.
-dd_data_same:
-    push ax
-.n:
-    mov al, [si]
-    cmp al, [di]
-    jne .no
-    or al, al
-    jz .yes
-    inc si
-    inc di
-    jmp short .n
-.yes:
-    pop ax
-    clc
-    ret
-.no:
-    pop ax
-    stc
-    ret
+%include "os88data.inc"
 
 ; -----------------------------------------------------------------------------
 ; dd_hs_load - read the table once, at startup. Anything wrong with the file
@@ -538,25 +405,23 @@ dd_hs_load:
     push si
     push di
     push es
-    call dd_data_enter
-    jc .out
     push ds
     pop es
     mov si, dd_hs_file
     mov bx, dd_hsbuf
     mov cx, DD_HSFSZ
     xor dx, dx
-    call OSAPI_FILE_READ
-    jc .leave
+    call od_read                    ; ...and we stand where we started again
+    jc .out
     cmp ax, DD_HSFSZ
-    jne .leave
+    jne .out
     mov si, dd_hsbuf
     mov di, dd_hs_magic
     mov cx, 4
 .mag:
     mov al, [si]
     cmp al, [di]
-    jne .leave
+    jne .out
     inc si
     inc di
     loop .mag
@@ -576,8 +441,6 @@ dd_hs_load:
     inc si
     inc di
     loop .nm
-.leave:
-    call dd_data_leave
 .out:
     pop es
     pop di
@@ -625,17 +488,13 @@ dd_hs_save:
     inc si
     inc di
     loop .nm
-    call dd_data_enter
-    jc .out
     push ds
     pop es
     mov si, dd_hs_file
     mov bx, dd_hsbuf
     mov cx, DD_HSFSZ
-    xor dx, dx
-    call OSAPI_FILE_WRITE
-    call dd_data_leave
-.out:
+    mov di, dd_hs_ip
+    call od_write                   ; one sector, after the session's first
     pop es
     pop di
     pop si

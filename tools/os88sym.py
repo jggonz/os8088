@@ -28,7 +28,7 @@ Knob builds (`VIDEO=`, `DISKCNT=1`, ...) move everything: pass the same
 **AND THE SECTION DECIDES THE SEGMENT.** This answered `KERNEL_SEG:offset` for
 every symbol for as long as it existed, which is right for `.text` and `.bss`
 and wrong for the others: `.cold` runs at COLD_SEG and `.lowbss` lives at
-LOW_SEG (SPEC.md 2.1/2.6), while `.boot2` and `.ovl` have no fixed segment at
+LOW_SEG (SPEC.md 2.1/2.6), while `.boot2` (the blob) has no fixed segment at
 all - stage 2 chooses it and publishes it in `[spl_fseg]`. That is 25KB of resident
 code and every task stack, disk buffer and claim record - and the wrong answer
 is a small plausible address INSIDE the kernel image that reads back happily
@@ -63,15 +63,17 @@ SECTION_SEG = {".text": "KERNEL_SEG", ".bss": "KERNEL_SEG",
                # segment in [spl_fseg]. It is a kernel constant in the map, but
                # a kernel started some other way never wrote the word, so the
                # honest answer is the same one the on-demand modules get: read
-               # [spl_fseg] out of the guest first. `.ovl` used to be FAT_SEG.
-               ".boot2": None, ".ovl": None,
-               # ...and the overlay's OTHER half (SPEC.md 2.5.2): `.ovlw` is
+               # [spl_fseg] out of the guest first. The overlay's blob half
+               # is part of `.boot2` (SPEC.md 2.9.14); it was `.ovl`, and
+               # before that FAT_SEG.
+               ".boot2": None,
+               # ...and the overlay's OTHER half (SPEC.md 2.5.2): `.ovl` is
                # emitted at the FAT window's file offset, so stage 2's one
                # contiguous read lands it at FAT_SEG - a ladder constant, and
                # the kernel reaches it as `call FAT_SEG:`. Fixed until the
                # first mount overwrites it, which is the same caveat `.cold`
                # carries and does not change the answer
-               ".ovlw": "FAT_SEG",
+               ".ovl": "FAT_SEG",
                # the planar decoder's buffers, a rung of their own above
                # .lowbss so a mono machine's heap can start under them
                # (SPEC.md 39.22)
@@ -89,6 +91,7 @@ SECTION_SEG = {".text": "KERNEL_SEG", ".bss": "KERNEL_SEG",
                # exactly that for XMEM.DRV, SPEC.md 41.12).
                ".modc": None, ".modf": None, ".modl": None, ".modh": None,
                ".modp": None, ".modd": None, ".modk": None, ".modx": None,
+               ".modw": None,
                ".modmap": None}
 # Every section either kernel emits, and the list is the UNION of both builds:
 # `.modh` is hibernate's (SPEC.md 87) and `.modp`/`.modd` are kern_small's
@@ -97,8 +100,8 @@ SECTION_SEG = {".text": "KERNEL_SEG", ".bss": "KERNEL_SEG",
 # section MISSING here is not silently wrong, it is `segment_of` raising "add
 # it rather than assuming KERNEL_SEG" - loud rather than wrong, which is why
 # `.modp`/`.modd` went unnoticed from the day the module split created them,
-# and `.ovlw` from the day SPEC.md 2.5.2 split the overlay: `--all` died on
-# the first `.ovlw` symbol of EITHER kernel, and `linear()` on any of the 246
+# and `.ovl` from the day SPEC.md 2.5.2 split the overlay: `--all` died on
+# the first `.ovl` symbol of EITHER kernel, and `linear()` on any of the 246
 # boot-overlay labels (`mouse_init`, `desk_init`, `wm_init`...) raised too.
 
 _cache = {}
@@ -204,8 +207,8 @@ def segment_of(name, defines=(), check=True):
     if nm is None:
         raise RuntimeError(
             "%s is in %s, which has NO FIXED SEGMENT. An on-demand module "
-            "(SPEC.md 2.8) is loaded into a heap claim; `.boot2` and `.ovl` "
-            "are stage 2's blob, which puts itself where it likes (2.9.5). "
+            "(SPEC.md 2.8) is loaded into a heap claim; `.boot2` "
+            "is stage 2's blob, which puts itself where it likes (2.9.5). "
             "Either way this offset is only meaningful against a base the "
             "kernel chose at run time - read it out of the guest first "
             "([spl_fseg] for the blob)." % (name, s))
@@ -389,6 +392,17 @@ def _load(defines=(), check=True):
     if key in _cache:
         return _cache[key]
 
+    # **A MAP ALREADY PROVEN AGAINST THIS IMAGE IS NOT PROVEN AGAIN** - see
+    # _disk_key. Every row that resolves a symbol used to re-assemble the
+    # whole kernel (3.6s of CPU), which made api-abi a 3.7s fast row whose own
+    # work is 0.05s, and charged the same 3.6s to every emulator row in a
+    # soak. Only a map that passed the byte-identity check below is stored.
+    dkey = _disk_key(bdir, idir, defines) if check else None
+    hit = _disk_get(bdir, dkey)
+    if hit is not None:
+        _cache[key] = hit
+        return hit
+
     src = os.path.join(ROOT, "kernel", "kernel.asm")
     with open(src) as f:
         body = f.read()
@@ -529,7 +543,90 @@ def _load(defines=(), check=True):
     shutil.rmtree(tmp, ignore_errors=True)
 
     _cache[key] = (out, sect, equ)
+    if check and os.path.exists(built):
+        _disk_put(bdir, dkey, _cache[key])
     return _cache[key]
+
+
+# --- the map, kept beside the build it was proven against --------------------
+# The byte-identity check above is the whole proof that a map describes an
+# image: assembling THESE sources with THESE defines gives exactly the bytes in
+# kernel.bin. Nothing in that proof changes until one of its inputs does, so
+# its answer is kept on disk under a key made of every input:
+#
+#   * the image itself (kernel.bin), which is what the proof is against;
+#   * the defines this call assembled with, the KZ numbers included;
+#   * every file the assembly can read - kernel/, boot/ (kernel.asm includes
+#     ../boot/boot2.asm), apps/*.inc, and the build's and icon directory's
+#     generated *.inc - because a renamed label changes the MAP and not one
+#     byte of the image, so the image alone is not a sufficient key;
+#   * this file, whose parse is what the entry holds.
+#
+# 90 files and ~8MB, hashed in ~30ms. $OS88_NOSYMCACHE=1 turns it off - every
+# call proves its map from scratch, as it always used to.
+_DISK = ".os88sym"
+_DISK_KEEP = 8
+
+
+def _disk_key(bdir, idir, defines):
+    import hashlib
+    if os.environ.get("OS88_NOSYMCACHE"):
+        return None
+    built = os.path.join(bdir, "kernel.bin")
+    h = hashlib.sha256()
+    try:
+        with open(built, "rb") as f:
+            h.update(f.read())
+        h.update(("\0".join(defines)).encode())
+        dirs = [(os.path.join(ROOT, "kernel"), None), (os.path.join(ROOT, "boot"), None),
+                (os.path.join(ROOT, "apps"), ".inc"), (bdir, ".inc")]
+        if idir:
+            dirs.append((idir, ".inc"))
+        files = [os.path.abspath(__file__)]
+        for d, ext in dirs:
+            if os.path.isdir(d):
+                files += [os.path.join(d, n) for n in sorted(os.listdir(d))
+                          if ext is None or n.endswith(ext)]
+        for p in files:
+            if os.path.isfile(p):
+                h.update(p.encode() + b"\0")
+                with open(p, "rb") as f:
+                    h.update(f.read())
+    except OSError:
+        return None
+    return h.hexdigest()[:32]
+
+
+def _disk_get(bdir, dkey):
+    if not dkey:
+        return None
+    import json
+    try:
+        with open(os.path.join(bdir, _DISK, dkey + ".json")) as f:
+            out, sect, equ = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return out, sect, equ
+
+
+def _disk_put(bdir, dkey, val):
+    if not dkey:
+        return
+    import json
+    d = os.path.join(bdir, _DISK)
+    try:
+        os.makedirs(d, exist_ok=True)
+        fd, tmpf = tempfile.mkstemp(dir=d, suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
+            json.dump(val, f)
+        os.replace(tmpf, os.path.join(d, dkey + ".json"))   # atomic: a
+        # parallel row reads the old entry or the new one, never half of one
+        old = sorted((os.path.getmtime(os.path.join(d, n)), n)
+                     for n in os.listdir(d) if n.endswith(".json"))
+        for _, n in old[:-_DISK_KEEP]:
+            os.unlink(os.path.join(d, n))
+    except OSError:
+        pass
 
 
 def linear(name, defines=()):

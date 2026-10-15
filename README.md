@@ -62,6 +62,7 @@ make run-120  # the same, off the 1.2MB 5.25" HD pair. RUNAPPS120=<img>
               # swaps the B: floppy, so any 1.2MB app disk can be looked at
 make xt       # boot the 360KB image on an emulated IBM PC/XT in 86Box
 make xt-640   # the same XT with a full 640KB of RAM
+make wireball-pair # two 86Box XTs linked over COM2 for WireBall (86Box 6.0+)
 make xt-mfm   # ...and a 20MB MFM hard disk on IBM's Fixed Disk Adapter
 make xt-cga   # the same XT with a CGA card instead of VGA
 make xt-hercules  # ...and the same XT with a Hercules card
@@ -115,6 +116,19 @@ make xt-pixelstein # 86Box: the 4.77MHz 640KB XT on CGA with games360.img in
               # the CGA 320x200x4 bracket and whose Mode row's second item
               # the 160x100x16 retime (SPEC.md 97.15)
 make xt-pixelstein-herc # ...the same XT on a Hercules: F takes the box
+make isotrondisk # isoTron, a light-wall duel on a raised 3D slab (SPEC.md 108):
+              # the package and its README in all four geometries
+              # (isotron.img, isotron720/120/360.img). It is on the apps
+              # disks and games360.img too; apps/isotron/README.md.
+              # `make isotrontest` runs its gates (the host model, then
+              # seeded games, pictures, toggle, flow, sound, keys and pace
+              # on MartyPC); `tests/isotron.py --perf all` is the XT audit
+make xt-isotron # 86Box: the 4.77MHz 640KB VGA XT with isotron360.img in B:
+              # (double-click ISOTRON.O88; F is the 320x200x16 bracket)
+make xt-isotron-cga # ...a 640KB CGA XT: 1bpp windowed, F the 320x200x4 palette 1
+make xt-isotron-herc # ...a Hercules XT: F takes 720x348 at 2x by 1.5
+make xt-isotron-ega # ...the 256KB IBM XT with a real EGA: F is a same-mode
+              # bracket in 16 colours at 640x350
 make pmcbandbench # its band composer's benchmark, under QEMU -icount shift=3
 make c64disk  # build the C64 floppy - a Commodore 64: the package, its
               # overlay; the KERNAL/BASIC/CHARGEN ROM rides INSIDE the
@@ -241,6 +255,12 @@ Book8088's BIOS uses for flash drives, so the driver leaves a flash drive
 alone. It has been exercised against a model of the chip rather than a real
 Book8088, so a report from one is welcome (SPEC.md 9.12).
 
+An **EMS board** -- a Lo-tech 2MB board, or a PicoMEM's EMS -- gives programs
+up to 4MB of expanded memory, even on an XT: tick **EMS** on the Drivers page.
+It looks for the board at its usual places (ports 260h-26Ch, frame E000h,
+D000h or C000h) and needs no setting. Programs that use it are still to come;
+the driver is the first step (SPEC.md 107).
+
 ## What it does
 
 Boots straight into the GUI, and boots *clean* — nothing is running, and
@@ -317,7 +337,14 @@ multi-instance:
   band: eight floors with textured walls, guards and dogs, sliding doors,
   keys and secret doors, a status bar, a Tab map of what you have seen,
   floor passwords instead of saves, a high-score table, and a timedemo - T
-  on the title page - that prints the machine's own frame rate).
+  on the title page - that prints the machine's own frame rate), and
+  [isoTron](apps/isotron/README.md) (a light-wall duel against the computer on
+  a raised slab drawn in 3D, every trail an extruded wall, and two wins in a
+  row stacking the next arena one slab higher, a tower four levels tall; in a
+  desktop window on every adapter and full screen in colour wherever the
+  card has it - CGA 320x200x4, VGA 320x200x16, 16 colours on an EGA - with F
+  to switch at any time. A step writes one column of the picture and redraws
+  nothing, so the game keeps its pace on a 4.77 MHz XT).
 - ...plus the Task Manager itself, and HELLO, a minimal package that exists to
   be the smallest thing the SDK can build.
 

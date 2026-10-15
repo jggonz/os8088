@@ -522,10 +522,17 @@ def main():
                          "source and exit - the build gate")
     ap.add_argument("--top", type=int, default=12,
                     help="how many roots to list when none is named")
+    ap.add_argument("--listing", metavar="PREFIX",
+                    help="walk PREFIX.lst and PREFIX.map - the listing and map "
+                         "the BUILD wrote beside the image (the Makefile's "
+                         "STKLST) - instead of assembling the package again")
     a = ap.parse_args()
     inc = a.inc or [os.path.dirname(a.asm) + "/", "drivers/net/",
                     "drivers/ramdisk/", "drivers/", "apps/"]
-    lst, mp = assemble(a.asm, inc)
+    if a.listing:
+        lst, mp = a.listing + ".lst", a.listing + ".map"
+    else:
+        lst, mp = assemble(a.asm, inc)
     syms = symbols(mp)
     rout, indirect, saves, owns = routines(lst, syms)
     if a.check:

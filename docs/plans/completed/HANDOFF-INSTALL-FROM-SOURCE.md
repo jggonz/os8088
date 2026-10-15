@@ -1,5 +1,20 @@
 # Handoff: install from the SOURCE's installer, not the booted system's
 
+> **BUILT - SPEC.md 52.10.16 is the contract; this is the design record.**
+> It came back from the field on 2026-10-14 off a stock build, not a knob:
+> a PicoMEM-hosted VHD booted from C:, keep-installed from a newer system
+> floppy, and froze at `Booting HDD0`, one byte of `KZ_HD` short. What was
+> built is neither shape A nor shape B below but the rule in section 3 applied
+> to the one artefact that broke it: the boot sector rides the system disk as
+> `BOOTHD.SYS` and the running installer writes the SOURCE's copy, refusing a
+> disk that has none. Section 4's two refusals stand - this is not a guard on
+> the wrong procedure and it patches no constant: the bytes come off the same
+> disk as the kernel, as every other file of the unit does. Shape B is still
+> what an online upgrade wants, and a staged system's own `BOOTHD.SYS` is what
+> it would write.
+>
+> What follows is the original handoff, unedited.
+
 **Nothing here is built, and this document changes nothing.** It is the
 record of a defect found on 2026-10-07 at `111d6ba` while testing something
 else (SPEC.md 18.91.5's `HDCYLRUN=1`), and the owner's direction for it:

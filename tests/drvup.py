@@ -60,6 +60,12 @@ ARG = sys.argv[1] if len(sys.argv) > 1 else "os8088_xt_hdd"
 NET = ARG == "net"
 MACHINE = "os8088_5150_cga_lpt" if NET else ARG
 IMG = "build/os8088-360.img"
+# ...WITH THE HARD DISK ANSWERED OFF (tests/hdoff.py): SPEC.md 51.3.2 loads
+# HDD.DRV at boot on a machine with a disk, and the tick below is what this
+# row counts the mount from
+import hdoff                                                # noqa: E402
+if not NET:
+    IMG = hdoff.image(IMG)
 NET_ROW = 4                        # drv_tab: os88net, last since the page
                                    # was reordered (SPEC.md 31.1)
 NP_BX, NP_BY, NP_BW, NP_BH = 2, 66, 92, 16      # netui.inc: Connect

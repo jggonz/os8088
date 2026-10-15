@@ -60,6 +60,19 @@ in the destination must still be poison afterwards, which is the overrun test:
 the file is 2,000 bytes, the last sector is read whole into `dsk_secbuf`, and
 only 464 of its 512 bytes may reach the caller.
 
+AND THE TRANSFER'S OWN BOUNCE (SPEC.md 18.91.4), B0-B2. The file layer's
+stage above copies the sector BEFORE dsk_xfer sees it, so the transfer has
+nothing to bounce there - every case above asserts `dsk_xfer.bounce` fired
+ZERO times, which is the control on that counter. WRITE_AT's inside arm and
+every dsk_read_chain caller hand the transfer the caller's ES:BX, and
+dsk_xfer bounces the one sector through `dsk_secbuf` itself: B0 makes
+BNC.TST the ordinary way, B1 rewrites its first cluster through
+`dskw_write_at_x` from a straddling source, and B2 reads it whole through
+`dskw_read_at_x` into a straddling destination with `[dsk_rah_busy]` = 1 so
+§18.95's read cache stands aside and the bytes come off the disk. `.bounce`
+and `.unbounce` each fire exactly once per leg, ES comes back the caller's,
+and BNC.TST is checked in the guest and off the flushed floppy.
+
 `--bug` INVERTS W1: the straddling write must be REFUSED with FERR_IO, which
 is what every kernel from `2e8e292` to SPEC.md 18.4.2.1 does. That is the A/B
 this row exists to make repeatable - point it at a pre-fix image
@@ -372,6 +385,48 @@ def _where(m, limit):
                "; ".join(extra)))
 
 
+BNC = "dsk_xfer.bounce"         # the transfer's own bounce (SPEC.md 18.91.4)
+UNBNC = "dsk_xfer.unbounce"
+
+
+def bnc_pattern(n):
+    """B1's bytes: not pattern()'s, never 0 and never POISON."""
+    out = bytearray()
+    for i in range(n):
+        b = (((i * 13) ^ (i >> 7)) + 5) % 0xF0 + 1
+        out.append(0x33 if b == POISON else b)
+    return bytes(out)
+
+
+BNC_PAT = bnc_pattern(4096)
+
+
+def no_bounce(tag, hits):
+    """dsk_xfer's bounce must NOT fire on a file-layer case: the stage hands
+    the transfer dsk_secbuf, which cannot straddle - so this is the control
+    that the B legs' counter counts the straddle and nothing else."""
+    n = hits.get(BNC, 0)
+    return (["%s: dsk_xfer.bounce fired %d times, and the file layer's stage "
+             "should have left the transfer nothing to bounce" % (tag, n)]
+            if n else [])
+
+
+def bounced(tag, r, hits, buf):
+    """B1/B2's verdict: answered, ONE bounce and ONE unbounce, ES given back."""
+    bad = []
+    if r["flags"] & 1 or (tag == "B1" and r["ax"]):
+        bad.append("%s: refused, CF=%d AX=%d" % (tag, r["flags"] & 1, r["ax"]))
+    for w in (BNC, UNBNC):
+        if hits.get(w, 0) != 1:
+            bad.append("%s: %s executed %d times, want 1 - the buffer starts "
+                       "%d bytes short of a 64KB page, so exactly its first "
+                       "sector bounces" % (tag, w, hits.get(w, 0), NEAR_END))
+    if r["es"] != buf >> 4:
+        bad.append("%s: ES came back %04X, want the caller's %04X - the "
+                   "bounce did not put it back" % (tag, r["es"], buf >> 4))
+    return bad
+
+
 def blast(m, addr, data, chunk=2048):
     for i in range(0, len(data), chunk):
         m.write(addr + i, data[i:i + chunk])
@@ -505,10 +560,10 @@ def run(img, apps, machine, want_bug, verbose):
         blast(m, safe_src, src_pat)
 
         # --- W1: the straddling write --------------------------------------
-        r, hits = c.call("dskw_write_x", watch=("dskw_wdata.stg",),
+        r, hits = c.call("dskw_write_x", watch=("dskw_xclus.stg", BNC),
                          si=name_at(m, "STGW.TST"),
                          es=straddle_src >> 4, bx=0, cx=FSIZE, dx=0)
-        cf, ax, n = r["flags"] & 1, r["ax"], hits["dskw_wdata.stg"]
+        cf, ax, n = r["flags"] & 1, r["ax"], hits["dskw_xclus.stg"]
         if want_bug:
             if not (cf and ax == FERR_IO):
                 bad.append("W1 --bug: the straddling write returned CF=%d "
@@ -516,7 +571,7 @@ def run(img, apps, machine, want_bug, verbose):
                            "CF=1 FERR_IO(%d). This image is FIXED."
                            % (cf, ax, FERR_IO))
             if n:
-                bad.append("W1 --bug: dskw_wdata.stg executed %d times, and "
+                bad.append("W1 --bug: dskw_xclus.stg executed %d times, and "
                            "in a pre-18.4.2.1 kernel nothing can reach it at "
                            "all" % n)
             return bad
@@ -525,29 +580,31 @@ def run(img, apps, machine, want_bug, verbose):
                        "(FERR_IO is %d). dskw_runmax answered 0 and the third "
                        "case went to the error arm - which is exactly the "
                        "defect SPEC.md 18.4.2.1 fixed" % (cf, ax, FERR_IO))
+        bad += no_bounce("W1", hits)
         if n != 1:
-            bad.append("W1: dskw_wdata.stg executed %d times, want 1. The "
+            bad.append("W1: dskw_xclus.stg executed %d times, want 1. The "
                        "source starts %d bytes short of a 64KB page, so "
                        "exactly one sector stages and the rest go in runs"
                        % (n, NEAR_END))
 
         # --- W2: the same bytes, page-safe (control) -----------------------
-        r, hits = c.call("dskw_write_x", watch=("dskw_wdata.stg",),
+        r, hits = c.call("dskw_write_x", watch=("dskw_xclus.stg", BNC),
                          si=name_at(m, "SAFEW.TST"),
                          es=safe_src >> 4, bx=0, cx=FSIZE, dx=0)
         if r["flags"] & 1 or r["ax"]:
             bad.append("W2 (control): an ORDINARY write failed, CF=%d AX=%d - "
                        "this row's machinery is broken, not the staging"
                        % (r["flags"] & 1, r["ax"]))
-        if hits["dskw_wdata.stg"]:
-            bad.append("W2 (control): dskw_wdata.stg fired %d times on a "
+        bad += no_bounce("W2", hits)
+        if hits["dskw_xclus.stg"]:
+            bad.append("W2 (control): dskw_xclus.stg fired %d times on a "
                        "PAGE-SAFE buffer, so the .stg counter above is not "
-                       "measuring the straddle" % hits["dskw_wdata.stg"])
+                       "measuring the straddle" % hits["dskw_xclus.stg"])
 
         # --- R1/R2/R3: read it back ----------------------------------------
         def readback(tag, fname, dst, want_stg):
             m.write(dst, bytes([POISON]) * 4096)
-            r, hits = c.call("dskw_read_x", watch=("dskw_rdata.stg",),
+            r, hits = c.call("dskw_read_x", watch=("dskw_xclus.stg", BNC),
                              si=name_at(m, fname),
                              es=dst >> 4, bx=0, cx=4096, dx=0)
             got = m.read(dst, 4096)
@@ -559,9 +616,10 @@ def run(img, apps, machine, want_bug, verbose):
             if size != FSIZE:
                 bad.append("%s: %s came back %d bytes, want %d"
                            % (tag, fname, size, FSIZE))
-            n = hits["dskw_rdata.stg"]
+            bad.extend(no_bounce(tag, hits))
+            n = hits["dskw_xclus.stg"]
             if n != want_stg:
-                bad.append("%s: dskw_rdata.stg executed %d times, want %d"
+                bad.append("%s: dskw_xclus.stg executed %d times, want %d"
                            % (tag, n, want_stg))
             if got[:FSIZE] != src_pat:
                 first = next(i for i in range(FSIZE)
@@ -590,18 +648,72 @@ def run(img, apps, machine, want_bug, verbose):
                        "into a straddling one differ - the read staging is "
                        "delivering different bytes from the run path")
 
+        # --- B0/B1/B2: the TRANSFER's own bounce (SPEC.md 18.91.4) ---------
+        # Everything above is the FILE layer's stage, which copies a sector
+        # the 8237 cannot carry before dsk_xfer ever sees it - so .bounce
+        # never fires there, and no_bounce() says so on every case above.
+        # WRITE_AT's inside arm and every dsk_read_chain caller hand the
+        # transfer the caller's ES:BX instead, and dsk_xfer bounces the
+        # sector through dsk_secbuf itself. B0 makes a file the ordinary way,
+        # B1 rewrites its first cluster through WRITE_AT from a straddling
+        # source, and B2 reads it whole through READ_AT into a straddling
+        # destination with the read cache stood aside ([dsk_rah_busy] = 1,
+        # as its own fill sets it), so the bytes come off the disk. Each
+        # bounce must fire exactly once, put the caller's ES back, and move
+        # the right 512 bytes - and the host reads the result below.
+        r, hits = c.call("dskw_write_x", watch=(BNC,),
+                         si=name_at(m, "BNC.TST"),
+                         es=safe_src >> 4, bx=0, cx=FSIZE, dx=0)
+        if r["flags"] & 1 or r["ax"]:
+            bad.append("B0: making BNC.TST failed, CF=%d AX=%d"
+                       % (r["flags"] & 1, r["ax"]))
+        bad += no_bounce("B0", hits)
+        blast(m, straddle_src, BNC_PAT)
+        clb = 512 * spc
+        r, hits = c.call("dskw_write_at_x", watch=(BNC, UNBNC),
+                         si=name_at(m, "BNC.TST"),
+                         es=straddle_src >> 4, bx=0, cx=clb, dx=0, ax=0)
+        bad += bounced("B1", r, hits, straddle_src)
+        if verbose:
+            print("  B1 WRITE_AT %d bytes from %#07x: bounce %d, unbounce %d"
+                  % (clb, straddle_src, hits[BNC], hits[UNBNC]))
+        busy = os88sym.linear("dsk_rah_busy")
+        was_busy = m.read(busy, 1)[0]
+        m.write(busy, b"\x01")
+        m.write(straddle_dst, bytes([POISON]) * 4096)
+        r, hits = c.call("dskw_read_at_x", watch=(BNC, UNBNC),
+                         si=name_at(m, "BNC.TST"),
+                         es=straddle_dst >> 4, bx=0, cx=2 * clb, dx=0, ax=0)
+        m.write(busy, bytes((was_busy,)))
+        bad += bounced("B2", r, hits, straddle_dst)
+        if verbose:
+            print("  B2 READ_AT  %d bytes into %#07x: bounce %d, unbounce %d"
+                  % (2 * clb, straddle_dst, hits[BNC], hits[UNBNC]))
+        size = r["ax"] | (r["dx"] << 16)
+        if not r["flags"] & 1 and size != FSIZE:
+            bad.append("B2: READ_AT delivered %d bytes of BNC.TST, want %d"
+                       % (size, FSIZE))
+        bnc_want = BNC_PAT[:clb] + src_pat[clb:]
+        got = m.read(straddle_dst, FSIZE)
+        if got != bnc_want:
+            first = next(i for i in range(FSIZE) if got[i] != bnc_want[i])
+            bad.append("B2: BNC.TST reads back WRONG through the bounce at "
+                       "byte %d (sector %d + %d): got %#04x, want %#04x"
+                       % (first, first // 512, first % 512, got[first],
+                          bnc_want[first]))
+
         # --- and the host reads the disk, with none of the kernel's code ---
         with tempfile.NamedTemporaryFile(suffix=".img", delete=False) as t:
             out = t.name
         try:
             m.flush(0, path=out)
-            bad += host_check(out, src_pat, verbose)
+            bad += host_check(out, src_pat, verbose, bnc_want)
         finally:
             os.unlink(out)
     return bad
 
 
-def host_check(path, src_pat, verbose):
+def host_check(path, src_pat, verbose, bnc_want=None):
     """Walk the flushed floppy with tests/unit/t_image's own FAT12 reader.
 
     Independent of os8088 by construction: it shares no code with the kernel,
@@ -619,6 +731,8 @@ def host_check(path, src_pat, verbose):
         if want not in found:
             bad.append("host: %s is not in the flushed volume's root at all"
                        % want)
+    if bnc_want is not None:
+        bad += bnc_check(v, bnc_want)
     if len(found) != 2:
         return bad
 
@@ -663,6 +777,28 @@ def host_check(path, src_pat, verbose):
         bad.append("host: os88disk.py --verify refuses the volume after the "
                    "staged write:\n%s" % (rc.stdout + rc.stderr).strip())
     return bad
+
+
+def bnc_check(v, want):
+    """BNC.TST off the disk: B1's bounced cluster, then B0's bytes."""
+    for _path, name11, attr, clus, size in v.walk():
+        if name11.decode("ascii", "replace") == "BNC     TST":
+            break
+    else:
+        return ["host: BNC.TST is not in the flushed volume's root"]
+    if size != FSIZE:
+        return ["host: BNC.TST's entry says %d bytes, want %d"
+                % (size, FSIZE)]
+    chain, _eoc = v.chain(clus)
+    blob = b"".join(v.blob[v.cluster_lba(cl) * v.byts:
+                           (v.cluster_lba(cl) + v.spc) * v.byts]
+                    for cl in chain)[:FSIZE]
+    if blob != want:
+        first = next((i for i in range(min(len(blob), FSIZE))
+                      if blob[i] != want[i]), FSIZE)
+        return ["host: BNC.TST's bytes ON THE DISK are wrong from byte %d - "
+                "the WRITE_AT bounce wrote the wrong sector" % first]
+    return []
 
 
 def main():

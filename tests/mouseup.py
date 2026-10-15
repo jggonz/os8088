@@ -8,6 +8,9 @@ screen-scraped, so a pass is a memory read and not a picture:
   B  press One, release on Two                   -> not fired, release ARRIVED
   C  press One, release outside the window       -> not fired, release ARRIVED
   D  press One, release One                      -> FIRED (the window hides)
+  0  press One (the handler ZEROES SI, as SPEC.md
+     12.2 permits), release on Two               -> armed on THIS window,
+                                                    and the release lands
   7  press a window that DESTROYS ITSELF, then
      release over where it was                   -> the release is REFUSED
 
@@ -16,7 +19,7 @@ reach: between the two passes a package can free the record the kernel armed
 the release against, and .mup_pkg has to notice before it dispatches through
 it. muptest's second window does exactly that with OSAPI_WM_DESTROY.
 
-  python3 tests/mouseup.py [machine]
+  python3 tests/mouseup.py [machine] [--break-si]
 """
 import sys, struct
 sys.path.insert(0, "tools")
@@ -24,7 +27,13 @@ import os88marty as M
 from os88mouse import Mouse
 from os88fixture import need
 
-MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_cga_gla"
+# --break-si takes SPEC.md 12.2's SI save back OUT of the running kernel - the
+# `push si` / `pop si` around .content_front's `call ui_bill` become NOPs in
+# guest RAM - so case 0 can be watched going red without a second kernel
+# build. Every other case runs against the same patched kernel.
+BREAK = "--break-si" in sys.argv
+_args = [a for a in sys.argv[1:] if not a.startswith("--")]
+MACHINE = _args[0] if _args else "os8088_5150_cga_gla"
 import os88geom                                              # noqa: E402
 from os88geom import WIN_SIZE, MAX_WIN   # NOT a local copy: this one
                                         # moved 28 -> 30 with SPEC.md
@@ -83,6 +92,19 @@ def disk_win(m):
     return next((w for w in wins(m) if (w[2], w[3]) not in (MUP, VAN)), None)
 
 
+def rec(m, size):
+    """The window RECORD's kernel address - what [ui_armw] must name."""
+    blob = m.read(m.sym("wm_wins"), WIN_SIZE * MAX_WIN)
+    for i in range(MAX_WIN):
+        r = blob[i * WIN_SIZE:(i + 1) * WIN_SIZE]
+        if struct.unpack_from("<H", r, 0)[0] & 2 and \
+                struct.unpack_from("<HH", r, 6) == size:
+            # m.sym is LINEAR; [ui_armw] is an offset in KERNEL_SEG
+            return m.sym("wm_wins") - os88geom.KERNEL_SEG * 16 \
+                + i * WIN_SIZE
+    return None
+
+
 def armw(m):
     return int.from_bytes(m.read(m.sym("ui_armw"), 2), "little")
 
@@ -93,6 +115,15 @@ with M.launch("build/os8088-360.img", apps="build/muptest.img",
               machine=MACHINE) as m:
     M.settle(m)
     mo = Mouse(marty=m)
+    if BREAK:
+        at = m.sym("ui_task.content_front")
+        code = bytes(m.read(at, 64))
+        k = next(i for i in range(len(code) - 4)
+                 if code[i] == 0x56 and code[i + 1] == 0xE8
+                 and code[i + 4] == 0x5E)
+        m.write(at + k, b"\x90")
+        m.write(at + k + 4, b"\x90")
+        print("   --break-si: the SI save at %#x is NOPped out" % (at + k))
     print(f"== {MACHINE} : SPEC 13.7 + os88ui.inc + MOUSEUP-PLAN 4.2 ==")
 
     if not disk_win(m):
@@ -172,6 +203,37 @@ with M.launch("build/os8088-360.img", apps="build/muptest.img",
               f"(title {mid[4]:#06x} -> {w2[4]:#06x})" if w2 and mid else "")
         check("...and the arm was SPENT either way", armw(m) == 0,
               f"(ui_armw={armw(m):#06x})")
+
+    # --- case 0: SPEC.md 12.2 lets W_ONCLICK clobber SI, and mu_onclick
+    # ZEROES it. The arm must still name the window the press went to: a
+    # kernel that read SI back after the handler armed nothing (0) and the
+    # release never arrived - every case below then fails as well, but this
+    # one says WHY.
+    print("-- 0: the handler clobbers SI; the arm must not care --")
+    want = rec(m, MUP)
+    t0 = find(m, MUP)[4]
+    mo.to(*one)
+    mo._pk(l=True)
+    try:
+        M.until(m, lambda mm: armw(mm) != 0, "the press to arm a release",
+                poll=0.1, limit=10.0)
+    except M.MartyError:
+        pass
+    got = armw(m)
+    check("the arm names the PRESSED window, not the handler's SI",
+          want is not None and got == want,
+          f"(ui_armw={got:#06x}, record={want or 0:#06x})")
+    mo.to(*two)
+    mo._pk()
+    try:
+        M.until(m, lambda mm: armw(mm) == 0, "the release to spend the arm",
+                poll=0.1, limit=10.0)
+    except M.MartyError:
+        pass
+    M.settle(m)
+    w2 = find(m, MUP)
+    check("...and the release LANDED (retitled, not fired)",
+          w2 is not None and w2[4] != t0)
 
     print("-- A: press off both buttons, release on One --")
     mo.menu(cx + 8, cy + 8, one[0], one[1])

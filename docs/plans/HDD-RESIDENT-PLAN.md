@@ -6,6 +6,15 @@ and 52.13.4 and is not repeated here — this file is what is LEFT, why the
 obvious next step buys nothing, and the one gate that should exist before any
 of it is taken.
 
+> **CORRECTION, 2026-10-13 (build 906).** The figures below are `d1ceac13`'s
+> and are out of date: kernel size pass 11 (`bacea172`) took `HDD.DRV`'s
+> image to **3,584** bytes and its claim to **4 KB** — the resident under
+> 3,072 and the attach run under 512 — so this file's "bar" of 1,025 bytes to
+> the next kilobyte is now **512 to the next one down** (under 3,072) and
+> nothing between. SPEC.md 51.3.2 (the boot sniff, `DRVE_NOVOL`) added 24
+> bytes inside the resident's existing padding and left the image at 3,584.
+> The reasoning below is unaffected; re-measure before quoting a number.
+
 ## 1. Where it stands, and the number that matters
 
 | | image | what `drv_load` CLAIMS |

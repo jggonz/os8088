@@ -93,7 +93,7 @@ IMGS = ["build/small360.img", "build/small.img",
 # HDD.DRV, NET.DRV, ETHER.DRV, RAMDISK.DRV, RAMPAGE.DRV, HDDTOOL.DRV,
 # XMEM.DRV, SAVER.DRV and VMMOUSE.DRV are all out today, and so is the
 # eleventh one nobody has written.
-DRV_OK = {"CTRL.DRV", "FORMAT.DRV", "CLONE.DRV", "FILECP.DRV", "FDLG.DRV"}
+DRV_OK = {"CTRL.DRV", "FORMAT.DRV", "DISKOPS.DRV", "FILECP.DRV", "FDLG.DRV"}
 
 # (8.3 name, why it may not be on a small floppy). One row per SPEC.md 24.5
 # ground; the § is in the reason so a failure sends the reader to the argument
@@ -124,8 +124,8 @@ FORBIDDEN = {
     # $(DM_SHIP) a thousand lines before $(DM_SHIP) existed, so the filter
     # matched nothing - the silent no-op this table exists to catch, and it
     # had no row
-    "DRMARCO.O88":  "the loader cannot place it: image 49,685 + bss 6,648 is "
-                    "56,333 bytes in ONE claim against a 53,760-byte arena, so "
+    "DRMARCO.O88":  "the loader could not place it: image 49,685 + bss 6,648 was "
+                    "56,333 bytes (37,720 since the apps size pass, unmeasured) in ONE claim against a 53,760-byte arena, so "
                     "it is `Load failed` before it can refuse in its own words "
                     "(SPEC.md 24.5, 100)",
     "DRMARCO.VGA":  "DrMarco's front screen, read by nothing else (SPEC.md 100)",
@@ -176,6 +176,38 @@ READERS = {
 }
 
 
+def solid_writers():
+    """{PKG.O88: file} for every package whose sources write ICON_SOLID.
+
+    SPEC.md 25.6.2.1: kern_small refuses the implied-solid-mask picture
+    record (its icon_draw_x answers CF = 1 for a first byte of 0), so a
+    package that writes one draws an empty cell wherever it draws a picture
+    there. That is a REQUIREMENT ground of 24.5's kind, and it is checked by
+    the RULE rather than by a name, so the next package to write the form is
+    caught without anyone adding a row. A package is `apps/<dir>/` and ships
+    as `<DIR>.O88`, which is true of every writer today; the SDK's own two
+    includes are where the form is documented and are not packages.
+    """
+    import re
+    out = {}
+    apps = os.path.join(ROOT, "apps")
+    pat = re.compile(r"^\s*(?:\w+:)?\s*db\s+ICON_SOLID\b", re.M)
+    for d in sorted(os.listdir(apps)):
+        top = os.path.join(apps, d)
+        if not os.path.isdir(top):
+            continue
+        for base, _dirs, files in os.walk(top):
+            for f in files:
+                if not f.endswith((".asm", ".inc")):
+                    continue
+                fp = os.path.join(base, f)
+                with open(fp, errors="replace") as h:
+                    if pat.search(h.read()):
+                        out.setdefault(d.upper()[:8] + ".O88",
+                                       os.path.relpath(fp, ROOT))
+    return out
+
+
 def names(vol):
     """(folder, 8.3 NAME) for every file on the volume, directories excluded."""
     out = []
@@ -198,6 +230,7 @@ def main():
 
     seen = 0
     pkgs = {}
+    solid = solid_writers()
     for rel in IMGS:
         path = _at(rel)
         if not os.path.exists(path):
@@ -239,6 +272,16 @@ def main():
                   "$(SMALLOMIT_DATA), and a filter that matches nothing is "
                   "SILENT: the build stays green and the floppy ships",
                   got=why or "", want="omitted")
+
+            check(nm not in solid,
+                  "%s: %s%s draws no picture kern_small refuses"
+                  % (rel, folder, nm),
+                  "SPEC.md 25.6.2.1 - kern_small's icon_draw_x takes the "
+                  "plain record only and answers CF = 1 to `db ICON_SOLID, "
+                  "rows`, so every such picture is an empty cell on this "
+                  "machine. Store the full mask, or spend the fifteen bytes "
+                  "on kern_small - a decision, not a rebuild",
+                  got=solid.get(nm, ""), want="no ICON_SOLID record")
 
             ext = nm.rsplit(".", 1)[-1] if "." in nm else ""
             readers = READERS.get(ext)

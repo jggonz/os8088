@@ -280,38 +280,48 @@ xb_racekey:
     ret
 
 xb_race_init:
-    mov word [xb_subs], 0
-    mov word [xb_pitl], 0
+    xor ax, ax                      ; (the zeros below are stores of AX: 3 bytes each, not 6)
+    mov [xb_subs], ax
+    mov [xb_pitl], ax
     call xb_clk_sample              ; primes the last count; a stray wrap is harmless
-    mov word [xb_subs], 0
-    mov word [xb_n], 1
-    mov word [xb_period], 1
-    mov byte [xb_quiet], 0
-    mov word [xb_acc], 0
-    mov word [xb_acc + 2], 0
-    mov ax, [xb_subs]
-    mov [xb_f0p], ax
+    mov [xb_subs], ax
+    mov [xb_f0p], ax                ; (the sub-tick count: 0)
+    mov [xb_quiet], al
+    mov [xb_acc], ax
+    mov [xb_acc + 2], ax
+    mov [xb_sacc], ax
+    mov [xb_sacc + 2], ax
+    mov [xb_pcl], ax
+    mov [xb_pch], ax
+    mov [xb_pos], ax
+    mov [xb_pos + 2], ax
+    mov [xb_S], ax
+    mov [xb_tpause], al
+    mov [xb_tframes], ax
+    mov [xb_tset], al
+    mov [xb_tburst], ax
+    mov [xb_cs], ax
+    mov [xb_ct10], ax
+    mov [xb_frames], ax
+    mov [xb_tsi], ax
+    mov [xb_tsn], ax
+    mov [xb_cd], ax
+    mov [xb_flash], ax
+    mov [xb_fint], ax
+    mov [xb_ksteps], ax
+    mov [xb_attn], ax
+    mov [xb_paused], al
+    mov [xb_inp], al
+    inc ax
+    mov [xb_n], ax
+    mov [xb_period], ax
     mov ax, XB_SUB
     sub ax, [xb_pitl]
     mov [xb_u0p], ax
-    mov word [xb_sacc], 0
-    mov word [xb_sacc + 2], 0
-    mov word [xb_pcl], 0
-    mov word [xb_pch], 0
-    mov word [xb_pos], 0
-    mov word [xb_pos + 2], 0
-    mov word [xb_S], 0
     mov ax, [xb_ncols]
     sub ax, [xb_wcols]
     mov [xb_Smax], ax
     mov word [xb_tspeed], XB_TSPEED
-    mov byte [xb_tpause], 0
-    mov word [xb_tframes], 0
-    mov byte [xb_tset], 0
-    mov word [xb_tburst], 0
-    mov word [xb_cs], 0
-    mov word [xb_ct10], 0
-    mov word [xb_frames], 0
     mov word [xb_cslast], 0ffffh
     ; the HUD string and what is drawn: nothing yet
     push ds
@@ -337,15 +347,6 @@ xb_race_init:
     mov word [xb_bikes + 4], 100
     mov byte [xb_bikes + 6], 10
     mov byte [xb_simon], 1          ; the race; the wave-2 scroll test is `xb_simon` = 0
-    mov word [xb_tsi], 0
-    mov word [xb_tsn], 0
-    mov word [xb_cd], 0
-    mov word [xb_flash], 0
-    mov word [xb_fint], 0
-    mov word [xb_ksteps], 0
-    mov word [xb_attn], 0
-    mov byte [xb_paused], 0
-    mov byte [xb_inp], 0
     cmp byte [xb_noflow], 0
     jne .raw
     mov word [xb_cd], XB_COUNTDOWN  ; READY 3, 2, 1 - the rider and the clock wait
@@ -484,6 +485,33 @@ xb_gov:
 .out:
     ret
 
+; ---- the harness's claim ---------------------------------------------------------------
+; The script the harness feeds and the trace it reads back (SPEC.md 102.3's hooks) are
+; 4,352 bytes no player needs, so they are not bss: the first fresh rider a harness asks
+; for in xb_tmode claims them (script at XB_TSCRIPT, trace at XB_TTRACE, [xb_tseg]), and
+; the bracket's end frees them (xb_fsdone).  A refusal leaves [xb_tseg] 0 and the steps
+; take the keys.  CF=1: no claim.  Preserves every other register.
+xb_tclaim:
+    cmp word [xb_tseg], 0
+    jne .have
+    cmp byte [xb_tmode], 0
+    stc
+    je .out
+    push ax
+    push dx
+    mov ax, XB_TCLAIM_KB
+    call OSAPI_MEM_CLAIM
+    jc .no
+    mov [xb_tseg], dx
+.no:
+    pop dx
+    pop ax
+.out:
+    ret
+.have:
+    clc
+    ret
+
 ; ---- the frame's simulation ---------------------------------------------------------
 xb_frame_step:
     cmp byte [xb_simon], 0
@@ -501,6 +529,7 @@ xb_sim_frame:
     je .noreset
     mov byte [xb_treset], 0
     call xa_init
+    call xb_tclaim
 .noreset:
     cmp byte [xb_tpause], 0
     jne .out
@@ -540,24 +569,7 @@ xb_sim_frame:
 .step:
     push cx
     cmp byte [xb_tmode], 0
-    je .live
-    mov bx, [xb_tsi]
-    cmp bx, [xb_tsn]
-    jae .stop
-    and bx, XB_TSTEPS - 1           ; the script and the trace are rings of XB_TSTEPS
-    mov al, [xb_tscript + bx]
-    mov [xm_inp], al
-    call xm_step
-    call xm_trace
-    inc word [xb_tsi]
-    inc word [xb_ksteps]
-    mov ax, [xb_tsi]
-    cmp ax, [xb_tsn]
-    jb .next
-.stop:
-    mov byte [xb_tdone], 1          ; the script is spent: draw this frame, then hold
-    pop cx
-    jmp .render
+    jne .harness                    ; (out of line: the game's own step pays one compare)
 .live:
     cmp word [xb_cd], 0
     je .go
@@ -605,6 +617,30 @@ xb_sim_frame:
     mov byte [xm_ev], 0
 .out:
     ret
+.harness:                           ; the harness's step: its script byte in, its trace record out
+    call xb_tclaim                  ; (made at the fresh rider; no claim, no harness)
+    jc .live
+    mov bx, [xb_tsi]
+    cmp bx, [xb_tsn]
+    jae .stop
+    and bx, XB_TSTEPS - 1           ; the script and the trace are rings of XB_TSTEPS
+    push es
+    mov es, [xb_tseg]
+    mov al, [es:bx + XB_TSCRIPT]
+    pop es
+    mov [xm_inp], al
+    call xm_step
+    call xm_trace
+    inc word [xb_tsi]
+    inc word [xb_ksteps]
+    mov ax, [xb_tsi]
+    cmp ax, [xb_tsn]
+    jae .stop
+    jmp .next
+.stop:
+    mov byte [xb_tdone], 1          ; the script is spent: draw this frame, then hold
+    pop cx
+    jmp .render
 
 ; ---- the scroll test track (wave 2's stand-in for the simulation) --------------
 xb_tt_step:

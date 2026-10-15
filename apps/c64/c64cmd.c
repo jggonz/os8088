@@ -86,11 +86,11 @@ static int ovl_conv_init(void)
     for (i = 0; i < 128; i++) {
         if (i <= 0x1F)
             c = i + 0x40;
-        else if (i >= 0x40 && i <= 0x5F)
+        else if ((unsigned)(i - 0x40) <= 0x1F)    /* 0x40..0x5F */
             c = i + 0x20;
         else
             c = i;
-        if (c >= 0x60 && c <= 0x7F)         /* petcii_fix_dupes: the CHROUT
+        if ((unsigned)(c - 0x60) <= 0x1F)   /* petcii_fix_dupes: the CHROUT
                                              * duplicates onto the proper
                                              * codes (charset.c:114-115) */
             c = c - 0x60 + 0xC0;
@@ -100,12 +100,12 @@ static int ovl_conv_init(void)
             c = '\r';
         else if (c == 0xA0)                 /* PETSCII shifted space */
             c = ' ';
-        else if (c >= 0xC1 && c <= 0xDA)
+        else if ((unsigned)(c - 0xC1) <= 0xDA - 0xC1)
             c = 'A' + (c - 0xC1);
-        else if (c >= 0x41 && c <= 0x5A)
+        else if ((unsigned)(c - 0x41) <= 0x5A - 0x41)
             c = 'a' + (c - 0x41);           /* ...and this is the LOWER case,
                                              * charset.c:156-158 */
-        else if (c < 0x20 || c > 0x7E)
+        else if ((unsigned)(c - 0x20) > 0x7E - 0x20)   /* outside 20..7E */
             /* ASCII_UNMAPPED IS '.', NOT '?' (charset.c:126), AND THE COMMENT
              * THAT USED TO SAY OTHERWISE READ THE REFERENCE BACKWARDS.
              * charset.c:122-127 gives the reason in VICE's own words - these
@@ -138,14 +138,14 @@ static int ovl_conv_init(void)
                                              * style names */
         else if (i == '`')
             c = 0x27;
-        else if (i >= 'a' && i <= 'z')
+        else if ((unsigned)(i - 'a') <= 'z' - 'a')
             c = 0x41 + (i - 'a');
-        else if (i >= 'A' && i <= 'Z')
+        else if ((unsigned)(i - 'A') <= 'Z' - 'A')
             c = 0xC1 + (i - 'A');           /* NOT the 0x61 duplicates
                                              * (charset.c:190-191) */
         else if (i >= 0x7B)
             c = 0x3F;
-        else if (i >= 0x60 && i <= 0x7F)    /* petcii_fix_dupes again, which is
+        else if (i >= 0x60)                 /* petcii_fix_dupes again, which is
                                              * what :199 returns through */
             c = i - 0x60 + 0xC0;
         else
@@ -209,7 +209,7 @@ static int ovl_conv_init(void)
  * stated there: Copy is ~103 ms of conversion, Paste is a 2KB heap claim and
  * an os88_clip_get, and both reach kernel/clip.inc's mem_claim, which may
  * compact an arena holding this app's pinned 64KB and pinned 20KB. The
- * bodies are c64_clip_service (c64kbd.c), run from the top of the next wake
+ * bodies are ovl_clip_service (c64kbd.c), run from the top of the next wake
  * with no lock held; that function's header carries the whole argument, and
  * the wake that spends the latch is the one os88_oncmd posts after this
  * returns.
@@ -252,23 +252,23 @@ static int ovl_cmd(int menu, int item, void *win)
                 c64_say("A file dialog is already open.");
             return 1;
         }
-        if (item == C64_I_RESETCPU || item == C64_I_POWER) {
-            /* Reset machine CPU vs Power cycle machine: on a real machine the
-             * difference is the RAM, and this port keeps that difference.
-             *
-             * THE BODY IS A LATCH, for the reason Copy's and Paste's are.
-             * Power cycle's RAM fill is 65,536 bytes through c64_zfill - two
-             * calls per 128 bytes of VICE's factory pattern - and os88_oncmd
-             * is dispatched under the DESKTOP's gfx lock, so doing it here was
-             * about a quarter of a second of every other task's drawing, the
-             * mouse and the dock stopped dead for a command that draws
-             * nothing. c64_reset_service (c64.c) runs the whole thing from the
-             * top of the next wake with no lock held, and no emulated cycle
-             * runs in between, so the machine the user reset is the machine
-             * that is reset. */
-            c64_reset_req = (item == C64_I_POWER) ? 2 : 1;
-            return 1;
-        }
+        /* Reset machine CPU vs Power cycle machine: on a real machine the
+         * difference is the RAM, and this port keeps that difference.
+         *
+         * THE BODY IS A LATCH, for the reason Copy's and Paste's are.
+         * Power cycle's RAM fill is 65,536 bytes through c64_zfill - two
+         * calls per 128 bytes of VICE's factory pattern - and os88_oncmd
+         * is dispatched under the DESKTOP's gfx lock, so doing it here was
+         * about a quarter of a second of every other task's drawing, the
+         * mouse and the dock stopped dead for a command that draws
+         * nothing. ovl_reset_service (c64.c) runs the whole thing from the
+         * top of the next wake with no lock held, and no emulated cycle
+         * runs in between, so the machine the user reset is the machine
+         * that is reset. */
+        if (item == C64_I_RESETCPU)
+            c64_reset_req = 1;
+        else if (item == C64_I_POWER)
+            c64_reset_req = 2;
         return 1;
     }
 
@@ -371,8 +371,9 @@ static int ovl_cmd(int menu, int item, void *win)
                                              * meaningful to play, and the note
                                              * it was holding would simply
                                              * stand for the whole warp */
-            if (!c64_warp && c64_budget > C64_SLICE_MAX)
-                c64_budget = C64_SLICE_MAX;
+            if (!c64_warp)
+                if (c64_budget > C64_SLICE_MAX)
+                    c64_budget = C64_SLICE_MAX;
             c64_menu_state();
             /* ...AND ON THE TARGET IT SAYS SO, AND THE RENDER CAP DOES NOT
              * CHANGE THAT. BOTH of warp's halves are no-ops on CPU_8086, for
@@ -437,10 +438,10 @@ static int ovl_cmd(int menu, int item, void *win)
              * (identically src/arch/gtk3/ui.c:2735-2743) PAUSES a running
              * machine and advances only an already-paused one, so from a
              * running machine this item runs no frame at all. c64.c's
-             * c64_advance_frame is that action, transcribed; and with no
+             * ovl_advance_frame is that action, transcribed; and with no
              * machine at all - no C64.ROM, or a JAM - c64_menu_state greys
              * the item rather than let it be a silent no-op (§47). */
-            c64_advance_frame();
+            ovl_advance_frame();
             return 1;
         }
         if (item == C64_I_SWAPJOY) {

@@ -54,6 +54,7 @@ half and the low 16 bits of a multiply are the same either way.  This row is
 what makes that a checked fact rather than a second piece of reasoning.
 """
 import argparse
+import tempfile
 import os
 import struct
 import sys
@@ -81,8 +82,8 @@ def fixture(w, name):
     hdr = struct.pack("<2sIHHI", b"BM", 62 + stride * H, 0, 0, 62)
     hdr += struct.pack("<IiiHHIIIIII", 40, w, H, 1, 1, 0, stride * H, 0, 0, 2, 0)
     hdr += bytes([0, 0, 0, 0, 255, 255, 255, 0])
-    open("/tmp/" + name, "wb").write(hdr + b"".join(reversed(rows)))
-    return "/tmp/" + name
+    open(tempfile.gettempdir() + "/" + name, "wb").write(hdr + b"".join(reversed(rows)))
+    return tempfile.gettempdir() + "/" + name
 
 
 def expect(w):
@@ -109,7 +110,7 @@ def arm(label, name, w, want_fast, machine, refuse=False):
     def w16(m, seg, n, k=2):
         return int.from_bytes(m.read(off(seg, n), k), "little")
 
-    apps = os88marty.scratch_disk("/tmp/p1b_%d.img" % w,
+    apps = os88marty.scratch_disk(tempfile.gettempdir() + "/p1b_%d.img" % w,
                                   "APPS:build/paint.o88",
                                   "MEDIA:" + fixture(w, name))
     with os88marty.launch("build/os8088-360.img", apps=apps,

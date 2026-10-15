@@ -1,5 +1,7 @@
 ; Native caches: no per-pixel conversion, multiplication or port selection
-; inside the changing-cell copy loops. Source planes are 48 bytes per cell.
+; inside the changing-cell copy loops. A cell stores its source rows only:
+; two 32-byte VGA planes, each written to a pair of planes (0/1, 2/3), or 32
+; CGA bytes; the copy loops repeat the rows the vertical scale doubles.
 dm_palette:
     cmp byte [dm_cga], 0
     je .vga
@@ -22,6 +24,9 @@ dm_palette:
 dm_dac: db 0,0,0, 12,24,63, 63,12,16, 63,56,8
         db 5,10,30, 30,4,5, 30,24,2, 63,63,63
 
+; Stage the 63 glyphs fullscreen text uses in dm_glyphs (the render queue,
+; idle at mode entry): ASCII 32..90, then a/c/o/r for the DrMarco title in
+; four otherwise unused punctuation slots.
 dm_fontcache:
     call OSAPI_FONT_GLYPHS
     mov bl, 32
@@ -33,19 +38,16 @@ dm_fontcache:
     add si, bx
     push ds
     pop es
+    mov di, dm_glyphs
     push ds
     mov ds, dx
-    mov di, dm_glyphs
-    mov cx, 768
-    rep movsb
-    pop ds
-    ; Fullscreen text uses ASCII 32..90 plus a/c/o/r in the DrMarco title.
-    ; Fold those four glyphs into otherwise unused punctuation slots.
-    mov di, dm_glyphs+59*8
+    mov cx, 59*4
+    rep movsw
+    mov bx, si                  ; ASCII 91
 %assign letter 'a'
 %rep 4
-    mov si, dm_glyphs+(letter-32)*8
-    mov cx, 4
+    lea si, [bx+(letter-91)*8]
+    mov cl, 4
     rep movsw
 %if letter == 'a'
 %assign letter 'c'
@@ -55,11 +57,11 @@ dm_fontcache:
 %assign letter 'r'
 %endif
 %endrep
+    pop ds
     ret
 
 dm_fontbuild:
-    push ds
-    pop es
+    call dm_fontcache
     cmp byte [dm_cga], 0
     jne .cga
     mov bx, dm_glyphs
@@ -92,36 +94,57 @@ dm_fontbuild:
     jnz .glyph
     ret
 .cga:
+    ; Each glyph bit becomes a pixel of ink 3: a nibble is one CGA byte.
     mov si, dm_glyphs
     mov di, dm_fontcga
-    mov cx, 504
+    mov bx, dm_cgaink
+    mov cl, 4
+    mov dx, 504
 .cgarow:
     lodsb
-    xor dx, dx
-    mov bp, 8
-.bit:
-    shl dx, 1
-    shl dx, 1
-    shl al, 1
-    jnc .zero
-    or dl, 3
-.zero:
-    dec bp
-    jnz .bit
-    mov al, dh
+    mov ah, al
+    shr al, cl
+    xlat
     stosb
-    mov al, dl
+    mov al, ah
+    and al, 0fh
+    xlat
     stosb
-    loop .cgarow
+    dec dx
+    jnz .cgarow
     ret
+dm_cgaink:
+%assign n 0
+%rep 16
+    db ((n&8)/8*0c0h)|((n&4)/4*30h)|((n&2)/2*0ch)|(n&1)*3
+%assign n n+1
+%endrep
 
+; Board cell -> video offset, built for this mode's geometry at mode entry:
+; 16 rows of 8 cells, 12 (VGA) or 5 (CGA bank) scanlines a row.
 dm_addresses:
-    mov ax, dm_vgaaddr
+    push ds
+    pop es
+    mov di, dm_celladdr
+    mov ax, 32*80+24
+    mov dx, 12*80
     cmp byte [dm_cga], 0
-    je .vga
-    mov ax, dm_cgaaddr
-.vga:
-    mov [dm_addrtab], ax
+    je .fill
+    mov ax, 12*80+24
+    mov dx, 5*80
+.fill:
+    mov bx, 16
+.row:
+    push ax
+    mov cx, 8
+.cell:
+    stosw
+    add ax, 4
+    loop .cell
+    pop ax
+    add ax, dx
+    dec bx
+    jnz .row
     ret
 
 dm_invalidate:
@@ -211,40 +234,54 @@ dm_background:
     RESTORE
     ret
 
+; DS:SI one plane/bank stream, ES:DI its video memory. Each row's packets
+; are decoded into dm_queue, which still holds the previous row: a copy
+; packet, and a row's zero terminator for the rest of it, leave bytes as the
+; row above had them. The row is then stored once per repeat. dm_queue is
+; idle here (dm_render rebuilds it) and nothing reads video memory.
 dm_unpack:
     push bx
     push dx
+    push bp
+    mov bp, es
     xor ax, ax
+    xor cx, cx
 .rows:
     lodsb                       ; count of identical native scanlines
     or al, al
     jz .done
-    mov bx, ax
-    mov dx, si                  ; replay this row's RLE, without VRAM reads
-.repeat:
-    mov si, dx
-    xor cx, cx
+    mov bl, al
+    mov dx, di
+    push ds
+    pop es
+    mov di, dm_queue
     cmp byte [dm_cga], 0
     je .vgarun
 .run:
     lodsb
     or al, al
     jz .rowdone
-    js .literal
+    js .high
     mov cl, al
     lodsb
     rep stosb
     jmp .run
-.literal:
+.high:
+    cmp al, 192
+    jae .ccopy
     and al, 7fh
     mov cl, al
     inc cx
     rep movsb
     jmp .run
+.ccopy:
+    sub al, 191
+    add di, ax
+    jmp .run
 .vgarun:
     lodsb
-    or al, al
-    jz .rowdone
+    cmp al, 8
+    jb .vcopy
     mov cl, al
     shr cl, 1
     shr cl, 1
@@ -252,11 +289,28 @@ dm_unpack:
     and al, 7
     rep stosb
     jmp .vgarun
+.vcopy:
+    cmp al, 7
+    jb .vskip
+    lodsb
+.vskip:
+    add di, ax
+    or al, al
+    jnz .vgarun
 .rowdone:
-    dec bx
+    mov di, dx
+    mov es, bp
+    mov dx, si
+.repeat:
+    mov si, dm_queue
+    mov cl, 40
+    rep movsw
+    dec bl
     jnz .repeat
+    mov si, dx
     jmp .rows
 .done:
+    pop bp
     pop dx
     pop bx
     ret
@@ -432,8 +486,7 @@ dm_cellcheck:
     mov [dm_shadow+bx], al
     push bx
     shl bx, 1
-    mov si, [dm_addrtab]
-    mov di, [si+bx]
+    mov di, [dm_celladdr+bx]
     call dm_enqueue
     pop bx
 .out: ret
@@ -464,7 +517,11 @@ dm_flush:
     je .done
     cmp byte [dm_cga], 0
     jne .cga
-    mov byte [dm_mask], 1
+    ; Cells are horizontally doubled, so planes 0/1 and 2/3 hold the same
+    ; bytes: two passes, each writing one 32-byte plane to two planes. A
+    ; plane stores the cell's 8 source rows; the unrolled 12 rows step back
+    ; over the four the vertical scale repeats (y*8/12: 0, 2, 4 and 6).
+    mov byte [dm_mask], 3
     mov word [dm_planeoff], 0
 .plane:
     mov dx, 3c4h
@@ -476,16 +533,23 @@ dm_flush:
     mov di, [bx]
     mov si, [bx+2]
     add si, [dm_planeoff]
-    mov cx, 12
-.row:
+%assign y 0
+%rep 12
     movsw
     movsw
+%if y < 11
     add di, 76
-    loop .row
+%endif
+%if y == 0 || y == 3 || y == 6 || y == 9
+    sub si, 4
+%endif
+%assign y y+1
+%endrep
     add bx, 4
     cmp bx, [dm_qend]
     jb .tile
-    add word [dm_planeoff], 48
+    add word [dm_planeoff], 32
+    shl byte [dm_mask], 1
     shl byte [dm_mask], 1
     cmp byte [dm_mask], 16
     jb .plane
@@ -493,17 +557,25 @@ dm_flush:
 .cga:
     mov bx, dm_queue
 .cgat:
+    ; Rows alternate banks. 8 source rows make 10 (y*8/10 repeats 0 and 4).
     mov di, [bx]
     mov si, [bx+2]
-    mov cx, 5
-.cgar:
+%assign y 0
+%rep 10
     movsw
     movsw
+%if y < 9
+%if y % 2 == 0
     add di, 8192-4
-    movsw
-    movsw
+%else
     sub di, 8192+4-80
-    loop .cgar
+%endif
+%endif
+%if y == 0 || y == 5
+    sub si, 4
+%endif
+%assign y y+1
+%endrep
     add bx, 4
     cmp bx, [dm_qend]
     jb .cgat
@@ -524,11 +596,7 @@ dm_text:
 ; AL=ASCII, BX=x, DX=y. Native glyphs opaque, preserving all registers.
 dm_glyph:
     SAVE
-    sub al, 32
-    push bx
-    mov bx, dm_fontmap
-    xlat
-    pop bx
+    sub al, 32                  ; ASCII 32..94 is glyph 0..62
     xor ah, ah
     mov si, ax
     mov cl, 6
@@ -746,7 +814,9 @@ dm_hudpaint:
     jb .next
     ret
 
-dm_titlecaps: db 'DrMarco',0
+; Fullscreen text is ASCII 32..90; the title's a/c/o/r are drawn from the
+; glyphs dm_fontcache folds into slots 91..94, so it spells them that way.
+dm_titlecaps: db 'D',94,'M',91,94,92,93,0     ; DrMarco
 dm_footer: db 'Z/X ROTATE P PAUSE M MUSIC ESC EXIT',0
 dm_lscore: db 'SCORE',0
 dm_llevel: db 'LEVEL',0
@@ -759,21 +829,6 @@ dm_lover: db 'OVER',0
 dm_lenter: db 'ENTER',0
 dm_lclear: db 'CLEAR!',0
 
-align 2
-dm_addrtab: dw dm_vgaaddr
-dm_oldnext: dw 0ffffh
-dm_vgaaddr:
-%assign i 0
-%rep 128
-    dw (32+(i/8)*12)*80+24+(i % 8)*4
-%assign i i+1
-%endrep
-dm_cgaaddr:
-%assign i 0
-%rep 128
-    dw (12+(i/8)*5)*80+24+(i % 8)*4
-%assign i i+1
-%endrep
 dm_tilemap:
 %assign i 0
 %rep 116
@@ -788,16 +843,17 @@ dm_tilemap:
 %endif
 %assign i i+1
 %endrep
+align 2
 dm_vgaptrs:
 %assign i 0
 %rep 23
-    dw dm_vgatiles+i*192
+    dw dm_vgatiles+i*64
 %assign i i+1
 %endrep
 dm_cgaptrs:
 %assign i 0
 %rep 23
-    dw dm_cgatiles+i*40
+    dw dm_cgatiles+i*32
 %assign i i+1
 %endrep
 dm_vgatiles: incbin "dm-vga.bin"
@@ -805,22 +861,3 @@ dm_cgatiles: incbin "dm-cga.bin"
 dm_screenvga: incbin "dm-screen-vga.bin"
 dm_screencga: incbin "dm-screen-cga.bin"
 
-; Packed native glyph indices. Only the title uses lowercase.
-dm_fontmap:
-%assign ch 32
-%rep 96
-%if ch == 'a'
-    db 59
-%elif ch == 'c'
-    db 60
-%elif ch == 'o'
-    db 61
-%elif ch == 'r'
-    db 62
-%elif ch <= 'Z'
-    db ch-32
-%else
-    db 0
-%endif
-%assign ch ch+1
-%endrep

@@ -298,7 +298,7 @@ n_writerow:
 ; Available before the first disk read. Draw directly into page zero from
 ; 176 bytes embedded in the package, then leave it visible throughout I/O.
 n_loading:
-    SAVE
+    call n_pushall
     mov es,[n_fsi+FSI_SEG]
     xor di,di
     xor ax,ax
@@ -399,8 +399,7 @@ n_loading:
     xor ax,ax
     call OSAPI_FSX_PAGE
 .out:
-    RESTORE
-    ret
+    jmp n_popall
 
 
 ; Union CGA old/new actor rectangles and the fixed HUD into one interval per

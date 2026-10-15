@@ -58,8 +58,12 @@ CRT0 = os.path.join("apps", "cc", "crt0.asm")
 HEADER = re.compile(r"^\s*OS88_HEADER\b", re.M)
 CRT0INC = re.compile(r'^\s*%include\s+"cc/crt0\.asm"', re.M)
 
-REGION = re.compile(r"^\s*OS88_REGION_MOVABLE\b", re.M)
-WORKER = re.compile(r"^\s*OS88_WORKER_RESTARTABLE\b", re.M)
+# Either spelling of each macro: the _NOKEEP forms are the same declaration
+# without the register bracket (apps/os88api.inc, SPEC.md 66.6.1.1), and a
+# `\b` straight after the base name would not match them - `_` is a word
+# character - so they would read as undeclared.
+REGION = re.compile(r"^\s*OS88_REGION_MOVABLE(?:_NOKEEP)?\b", re.M)
+WORKER = re.compile(r"^\s*OS88_WORKER_RESTARTABLE(?:_NOKEEP)?\b", re.M)
 # ...and the hand-rolled spellings, so a package that calls the slot directly
 # is not reported as undeclared. sheet.asm did exactly that for a cycle and a
 # grep for the macro called it a gap.

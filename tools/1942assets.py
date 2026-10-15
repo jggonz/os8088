@@ -179,11 +179,17 @@ def vga_cache(sprites):
                     end=x+1
                     while end<stride and row[end]==row[x]:end+=1
                     groups.setdefault(row[x],[]).append((y*80+x,cachebase+start+y*stride+x,end-x));x=end
+            # Group: plane-mask byte, run-count byte (<=255), then runs of
+            # destination word, VRAM source word and length byte; mask 0 ends.
             commands+=['n_cache%d_%d:'%(i,phase)]
             for mask,runs in groups.items():
-                commands+=['    dw %d,%d'%((mask<<8)|2,len(runs))]
-                commands+=['    dw %d,%d,%d'%r for r in runs]
-            commands+=['    dw 0']
+                for k in range(0,len(runs),255):
+                    chunk=runs[k:k+255]
+                    commands+=['    db %d,%d'%(mask,len(chunk))]
+                    for dst,src,n in chunk:
+                        if not 0<n<256:raise ValueError('VGA cache run length')
+                        commands+=['    dw %d,%d'%(dst,src),'    db %d'%n]
+            commands+=['    db 0']
     if len(planes[0])+cachebase>65536:raise ValueError('VGA cache exceeds offscreen memory')
     return b''.join(planes),['N_PAGE_BYTES equ %d'%pagebytes,'N_PAGE_PAD equ %d'%(padding*80),'N_CACHE_START equ %d'%cachebase,'N_CACHE_BYTES equ %d'%len(planes[0]),'n_cacheindex: dw '+','.join(entries)]+commands
 
@@ -240,13 +246,16 @@ def build(out,rom=None):
         inc+=['N_WORLD_V_SIZE equ %d'%len(world),'N_WORLD_V_SUM equ %d'%checksum(world),
               'N_WORLD_C_SIZE equ %d'%len(cworld),'N_WORLD_C_SUM equ %d'%checksum(cworld)]
     for i,s in enumerate(sprites):inc.append('n_%sart equ %d'%(s['name'],i))
-    inc.append('n_cgawidths: dw '+','.join(str((s['w']*5+3)//4) for s in sprites))
-    inc.append('n_cgaheights: dw '+','.join(str((s['h']*5+5)//6) for s in sprites))
+    # CGA extents by logical width/height (validate() bounds both to 1..64).
+    inc.append('n_cgawt: db '+','.join(str((w*5+3)//4) for w in range(65)))
+    inc.append('n_cgaht: db '+','.join(str((h*5+5)//6) for h in range(65)))
     def emit(name,data):
         inc.append(name+':')
         for i in range(0,len(data),16):inc.append('    db '+','.join(map(str,data[i:i+16])))
     emit('n_dac',[v*63//255 for c in pal['rgb'] for v in c]);inc.append('N_COLORS equ %d'%len(pal['rgb']))
-    emit('n_latedac',[v*63//255 for c in pal['late_rgb'] for v in c]);emit('n_cgainks',pal['cga_map'])
+    if pal['late_rgb']==pal['rgb']:inc.append('n_latedac equ n_dac')
+    else:emit('n_latedac',[v*63//255 for c in pal['late_rgb'] for v in c])
+    emit('n_cgainks',pal['cga_map'])
     emit('n_cgaregs',[p['register'] for p in pal['cga']])
     cached,commands=vga_cache(sprites);inc+=commands
     write(out/'1942L.GFX',cached)

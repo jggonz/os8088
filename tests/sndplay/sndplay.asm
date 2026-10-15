@@ -51,11 +51,14 @@ sp_clip:
     push es
     push si
     push cx
+    push bx                         ; (BX is sp_put's index)
     push ds
     pop es
     mov si, sp_samp
     mov cx, SP_N
+    mov bx, sp_tab                  ; the library's rescale table is ours
     call os88pcm_play
+    pop bx
     pop cx
     pop si
     pop es
@@ -143,9 +146,10 @@ sp_samp:                            ; the clip: (i * 37) & 0xFF, a pattern
 
 %include "os88pcm.inc"
 
-SP_BSS equ 17
+SP_BSS equ 17 + 256
     OS88_BSS SP_BSS
     OS88_IMAGE_END
 
 sp_res  equ os88_image_end + 0      ; 8 words
 sp_done equ os88_image_end + 16     ; byte
+sp_tab  equ os88_image_end + 17     ; 256 B: os88pcm_play's rescale table

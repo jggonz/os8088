@@ -13,16 +13,15 @@
 ;    not beside the package. The file browser is the whole of how a user
 ;    reaches an application here, so a data file in an app folder is a
 ;    misclick waiting to happen.
-;  - **It is OSAPI_FILE_GOTO and not its quiet twin.** GOTO_Q moves the GLOBAL
-;    cwd and deliberately not the instance's, while FILE_FIND, _READ and
-;    _WRITE all resolve in the INSTANCE's folder - so a quiet move is undone
-;    by the very next call, and the save writes nothing at all while the load
-;    appears to work.
+;  - **The folder is reached through apps/os88data.inc**, which walks with
+;    OSAPI_FILE_GOTO_QM - the quiet stand that MOVES THE INSTANCE, so the
+;    file cell after it resolves there - banks APPDATA's cluster, and
+;    rewrites a file of unchanged length with one sector.
 ;
-; This is the FOURTH copy of the eighty lines below - tank, cyclone and ftpd
-; carry the other three - and the obvious next step is one `apps/os88data.inc`
-; that all four include. It is not taken here: those three work, and moving
-; them is a change to three shipped packages rather than to this one.
+; This file was the FOURTH copy of an eighty-line walker built out of
+; OSAPI_FILE_GOTO, a remount for DISPLAY at every step, and it named the
+; shared include as the obvious next step. That step is taken: five packages
+; include os88data.inc now (docs/plans/NAV-COST-PLAN.md).
 ;
 ; WHEN IT SAVES is the choice this file makes differently to tank's. Tank
 ; banks a score the moment the initials are typed, inside the fsx bracket,
@@ -38,160 +37,42 @@ CS_SETFSZ  equ 4 + 5                ; the magic and the five bytes
 cs_set_file:  db 'CSSET.DAT', 0
 cs_set_magic: db 'CS8', 1           ; so a stale or foreign file is refused
                                     ; rather than decoded
-cs_sd_system: db 'SYSTEM', 0
-cs_sd_appdat: db 'APPDATA', 0
+cs_set_ip:    db 0                  ; os88data.inc's in-place stamp, CSSET.DAT
 
 ; What each byte is, and the largest value it may hold. A file that matches
 ; the magic and holds nonsense anyway is CLAMPED and not refused: the magic is
 ; what tells a foreign file apart, and a rung out of range is one byte of a
 ; file this program wrote, so the honest answer is the nearest rung rather
 ; than throwing five good settings away.
-cs_set_at:  dw cs_setbld, cs_setlod, cs_setsize, cs_modepref, cs_setfill
-cs_set_max: db CSBL_HIGH, CSL_ULTRA, CSZ_FULL, 1, CSFL_ALL
+;
 ; ...and what a 286 or better starts on with no file at all (SPEC.md 88.13.9).
-; NOT cs_set_max: that is a CEILING for the clamp, and the Mode byte's ceiling
-; is 1, which is CGA - a machine given the best of everything else would have
-; been given the worse of two displays.
-cs_set_best: db CSBL_HIGH, CSL_ULTRA, CSZ_FULL, 0, CSFL_ALL
-CS_SETN     equ 5
+; NOT the ceiling: the Mode byte's ceiling is 1, which is CGA - a machine
+; given the best of everything else would have been given the worse of two
+; displays.
+;
+; ONE ROW A SETTING, four bytes - where it lives, its ceiling, its best - so
+; the three walks below step ONE pointer by CS_SETW where they used to index
+; three tables with one counter and a shift.
+CS_SETW     equ 4
+CS_FILLMAX  equ CSFL_ALL | CSFL_HAZE | CSFL_GTEX
+CSS_MAX     equ 2
+CSS_BEST    equ 3
+cs_set_tab: dw cs_setbld
+            db CSBL_ULTRA, CSBL_HIGH        ; Ultra is asked for, never given
+            dw cs_setlod
+            db CSL_ULTRA, CSL_ULTRA
+            dw cs_setsize
+            db CSZ_FULL,  CSZ_FULL
+            dw cs_modepref
+            db 1,         0
+            dw cs_setfill
+            db CS_FILLMAX, CS_FILLMAX   ; a 286 gets the haze; an 8088 must ask
+                                    ; (88.4.1.1.1). The texture is free and
+                                    ; every machine starts with it
+cs_set_end:
+CS_SETN     equ (cs_set_end - cs_set_tab) / CS_SETW
 
-; -----------------------------------------------------------------------------
-; cs_set_enter / cs_set_leave - stand in SYSTEM\APPDATA on our own volume, and
-;                               come back to where we were standing.
-;                               CF=1 there is no such folder.
-; -----------------------------------------------------------------------------
-cs_set_enter:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    push ds
-    pop es
-    call OSAPI_FILE_HERE            ; DX = our cwd cluster, BL = our drive
-    mov [cs_sdclus], dx
-    mov [cs_sddrv], bl
-    xor dx, dx                      ; the ROOT of that same volume
-    call OSAPI_FILE_GOTO
-    jc .back
-    mov si, cs_sd_system
-    call cs_set_dive
-    jc .back
-    mov si, cs_sd_appdat
-    call cs_set_dive
-    jc .back
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-.back:
-    call cs_set_home                ; a disk without the folder is a user's own
-    pop es                          ; disk, not an error: put the volume back
-    pop di                          ; and refuse
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
-
-cs_set_leave:
-    pushf
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    call cs_set_home
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    popf
-    ret
-
-cs_set_home:
-    push ax
-    push bx
-    push dx
-    mov dx, [cs_sdclus]
-    mov bl, [cs_sddrv]
-    call OSAPI_FILE_GOTO
-    pop dx
-    pop bx
-    pop ax
-    ret
-
-; cs_set_dive - step into the folder named at SI. CF=1 there is none.
-cs_set_dive:
-    push ax
-    push cx
-    push si
-    push di
-    xor cx, cx
-.each:
-    push ds                         ; ES EVERY TIME: nothing promises it
-    pop es                          ; survives a far call into the kernel
-    mov di, cs_sdfind
-    call OSAPI_FILE_FIND
-    jc .none
-    cmp word [cs_sdfind + 14], OSAPI_FT_DIR
-    jne .each                       ; only a FOLDER can be dived into, and
-                                    ; type 1 is a PACKAGE, not "a file"
-    push cx
-    push si
-    mov di, cs_sdfind
-    call cs_set_same
-    pop si
-    pop cx
-    jc .each
-    mov dx, [cs_sdfind + 16]
-    mov bl, [cs_sddrv]
-    call OSAPI_FILE_GOTO
-    jc .none
-    pop di
-    pop si
-    pop cx
-    pop ax
-    clc
-    ret
-.none:
-    pop di
-    pop si
-    pop cx
-    pop ax
-    stc
-    ret
-
-; cs_set_same - is the NUL name at SI the one at DI? CF=0 yes.
-cs_set_same:
-    push ax
-.n:
-    mov al, [si]
-    cmp al, [di]
-    jne .no
-    or al, al
-    jz .yes
-    inc si
-    inc di
-    jmp short .n
-.yes:
-    pop ax
-    clc
-    ret
-.no:
-    pop ax
-    stc
-    ret
+%include "os88data.inc"
 
 ; -----------------------------------------------------------------------------
 ; cs_set_load - read the five bytes once. Anything wrong with the file leaves
@@ -230,26 +111,20 @@ cs_set_load:
     call OSAPI_CPU_INFO
     cmp al, CPU_8086
     jbe .noboost
-    xor bx, bx
+    mov bx, cs_set_tab
 .boost:
-    mov al, [cs_set_best + bx]
-    push bx
-    shl bx, 1
-    mov di, [cs_set_at + bx]
+    mov di, [bx]
+    mov al, [bx + CSS_BEST]
     mov [di], al
-    pop bx
-    inc bx
-    cmp bx, CS_SETN
+    add bx, CS_SETW
+    cmp bx, cs_set_end
     jb .boost
 .noboost:
-    call cs_set_enter
-    jc .done
     mov si, cs_set_file
     mov bx, cs_setbuf
     mov cx, CS_SETFSZ
     xor dx, dx
-    call OSAPI_FILE_READ
-    call cs_set_leave               ; ...and we stand where we started again,
+    call od_read                    ; ...and we stand where we started again,
     jc .done                        ; whatever the read answered
     or dx, dx
     jnz .done
@@ -258,28 +133,19 @@ cs_set_load:
     mov si, cs_setbuf
     mov di, cs_set_magic
     mov cx, 4
-.mag:
-    mov al, [si]
-    cmp al, [di]
+    repe cmpsb                      ; DF is clear on every callback (SPEC.md 1)
     jne .done
-    inc si
-    inc di
-    loop .mag
-    xor bx, bx                      ; SI is the fifth byte of the buffer
+    mov bx, cs_set_tab              ; SI is the fifth byte of the buffer
 .each:
-    mov al, [si]
-    cmp al, [cs_set_max + bx]       ; ...clamped rather than refused
+    lodsb
+    cmp al, [bx + CSS_MAX]          ; ...clamped rather than refused
     jbe .ok
-    mov al, [cs_set_max + bx]
+    mov al, [bx + CSS_MAX]
 .ok:
-    push bx
-    shl bx, 1
-    mov di, [cs_set_at + bx]
+    mov di, [bx]
     mov [di], al
-    pop bx
-    inc si
-    inc bx
-    cmp bx, CS_SETN
+    add bx, CS_SETW
+    cmp bx, cs_set_end
     jb .each
 .done:
     pop es
@@ -316,57 +182,36 @@ cs_set_save:
     mov si, cs_setbuf
     mov di, cs_set_magic
     mov cx, 4
-.same:
-    mov al, [si]
-    cmp al, [di]
+    repe cmpsb
     jne .differs
-    inc si
-    inc di
-    loop .same
-    xor bx, bx
+    mov bx, cs_set_tab
 .sameb:
-    push bx
-    shl bx, 1
-    mov di, [cs_set_at + bx]
-    pop bx
+    mov di, [bx]
     mov al, [di]
     cmp al, [si]
     jne .differs
     inc si
-    inc bx
-    cmp bx, CS_SETN
+    add bx, CS_SETW
+    cmp bx, cs_set_end
     jb .sameb
-    jmp .gone                       ; byte for byte what is on the disk
+    jmp short .gone                 ; byte for byte what is on the disk
 .differs:
     mov si, cs_set_magic
     mov di, cs_setbuf
     mov cx, 4
-.mag:
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    loop .mag
-    xor bx, bx
+    rep movsb
+    mov bx, cs_set_tab
 .each:
-    push bx
-    shl bx, 1
-    mov si, [cs_set_at + bx]
-    pop bx
-    mov al, [si]
-    mov [di], al
-    inc di
-    inc bx
-    cmp bx, CS_SETN
+    mov si, [bx]
+    movsb
+    add bx, CS_SETW
+    cmp bx, cs_set_end
     jb .each
-    call cs_set_enter
-    jc .gone
     mov si, cs_set_file
     mov bx, cs_setbuf
     mov cx, CS_SETFSZ
-    xor dx, dx
-    call OSAPI_FILE_WRITE
-    call cs_set_leave
+    mov di, cs_set_ip
+    call od_write                   ; one sector, after the session's first
 .gone:
     pop es
     pop di

@@ -26,7 +26,13 @@ WHAT THIS ROW ASSERTS, and each line of it goes red on a different half:
      based at the loader's old segment must not exist;
   5. the carve's `MC_OWN` is the instance SLOT and its `MC_RLOC` is SET - owned
      the way `ld_alloc` owns a region, and MOVABLE since SPEC.md 66.6.1.2;
-  6. closing it returns the heap to the free runs it had before the launch.
+  6. closing it returns the heap to the free runs it had before the launch;
+  7. THE TAIL IS CUT TO THE KEEP (SPEC.md 20.12.10.5): the loader hands the
+     kernel OSAPI_PKG_REHOME's KEEP form through `OS88_REHOME`, so the carve
+     must END exactly where the asset - its last part - ends, worked out here
+     from the part table in the FILE, and everything from there to the
+     carve's original end must be a FREE run: the read's margin is heap again
+     rather than region.
 
 WHY 360KB IS THE DEFAULT here where multiseg takes both: its clusters are 1KB,
 so `op_claim`'s head slack is non-zero and part 0's segment is NOT the carve's
@@ -74,6 +80,29 @@ say("build: loader image %d, part 0 at file+%d, its image %d + bss %d = %d"
 if pkg[P0_OFF:P0_OFF + 2] != b"O8" or pkg[P0_OFF + 2] != PKG_FMT:
     sys.exit("rehome: part 0 of build/rehome.o88 is not a v3 package image - "
              "nothing below can run (SPEC.md 20.12.10.4)")
+
+# --- ...and where the carve's LAST part ends, which is the keep (assertion 7)
+# The part table is in the loader's image, found by its magic as os88pkg.py
+# finds it; off is in sectors and len in bytes, and nothing here is
+# compressed, so part i sits (off_i - off_0) sectors up from part 0 - the
+# disk's layout, which op_seg's fast path reads too (20.12.7).
+_t = pkg.index(b"O88PARTS")
+ROWS = [struct.unpack_from("<BBHHH", pkg, _t + 10 + 8 * i)
+        for i in range(pkg[_t + 8])]
+_eager = [r for r in ROWS if r[2] and not (r[1] & 8)]      # filed, not LAZY
+KEEP = (_eager[-1][2] - _eager[0][2]) * 32 + (_eager[-1][3] + 15) // 16
+# ...and where the carve ENDED before the kernel cut it: op_claim reads from
+# the cluster at or below part 0, rounds slack + run up to a cluster, and
+# claims that in whole KB (20.12.2) - so on the 360KB disk's 1KB clusters
+# the claim carries a margin past the asset that this figure names.
+CLB = 1024 if GEOM == "360" else 512
+_slack = (_eager[0][2] * 512) % CLB
+_bend = (_eager[-1][2] - _eager[0][2]) * 512 + _eager[-1][3]
+_cap = (_slack + _bend + CLB - 1) // CLB * CLB
+CARVE_PARA = (_cap + 1023) // 1024 * 64
+say("build: the carve's last part ends %d paragraphs past the program "
+    "(the keep); the claim was %d paragraphs from a %d-byte head slack"
+    % (KEEP, CARVE_PARA, _slack))
 
 def claims(m, S):
     return heapmap.Map(m, {n: S(n) for n in
@@ -231,6 +260,36 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
                 "the program at %04X is not inside the claim owned by its own "
                 "slot (%04X..%04X) - the wrong claim was re-owned"
                 % (wseg, c.seg, c.end))
+        # --- 7. THE TAIL, cut to the keep and given back -------------------
+        # The carve must end where the asset does - not a paragraph later,
+        # which is the margin kept, and not a paragraph earlier, which is a
+        # part freed under a program still reading it (the wdparts failure
+        # SPEC.md 20.12.10.5 records) - and the bytes past it up to where the
+        # claim used to end must be a FREE run, not a claim of their own.
+        old_end = rp_carve + CARVE_PARA
+        say("carve ends %d paragraphs past the program (keep %d); it ended "
+            "at %04X before the cut, %d paragraphs of margin"
+            % (c.end - wseg, KEEP, old_end, old_end - (wseg + KEEP)))
+        if c.end - wseg != KEEP:
+            fails.append(
+                "the carve ends %d paragraphs past the program and its last "
+                "part ends %d past it. %s (SPEC.md 20.12.10.5: OS88_REHOME "
+                "states the keep, mem_reown_x cuts the tail to it)"
+                % (c.end - wseg, KEEP,
+                   "The tail was NOT cut - the read's margin is still held as "
+                   "region" if c.end - wseg > KEEP else
+                   "It was cut INTO a part the program still reads"))
+        free_at = dict(now.runs())
+        if old_end > wseg + KEEP and free_at.get(c.end, 0) < old_end - c.end:
+            fails.append(
+                "the %d paragraphs from %04X (the keep's end) to %04X (where "
+                "the carve ended) are not one free run: runs %r. A cut tail "
+                "is heap again by being the gap above a shorter claim"
+                % (old_end - c.end, c.end, old_end, now.runs()))
+        if GEOM == "360" and old_end <= wseg + KEEP:
+            fails.append(
+                "the carve had no margin past its last part on a 360KB disk, "
+                "so this run had nothing to cut and tested nothing")
         # THE DOOR NO LONGER TELLS THE TWO APART, AND THAT IS THE POINT
         # (SPEC.md 20.12.10.8). This read `if c.hi: fail` - the carve came in
         # bottom-up, the loader's region top-down, so the door was a free

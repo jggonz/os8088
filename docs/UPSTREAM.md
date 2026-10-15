@@ -259,8 +259,26 @@ squashed, and that shapes what to write:
   down. It is an archive rather than a narrative, so the *title* carries the
   meaning and the individual commit messages fill the archive — both are worth
   writing well, for different reasons.
+- **A bug the cycle created and fixed inside the cycle is not a bugfix to
+  `main`, and stays out of the description.** `main` never had it, so to
+  `main`'s reader it is part of the feature it was found in, and listing it
+  makes the round read as buggier than what it ships. That holds for every
+  PR description, not only this cycle's. "Fixes" names only defects that are
+  in `main`. Check each one against `main`'s own source before listing it —
+  the lines the fix removed or guards should be in `git show upstream/main:<file>`
+  and reachable there. Two cases need care:
+  - **A defect latent in `main`, exposed by this cycle's work**, is a fix to
+    `main` when `main`'s code is wrong in itself (a primitive that misdraws
+    any input `main` could hand it). It is not one when `main`'s code is only
+    wrong for an input this cycle invented (a stub no `main` caller reaches).
+  - **A fix to a feature this cycle added** belongs in that feature's
+    paragraph, if anywhere, never under Fixes.
 - **Never re-add `build/`.** It is gitignored outright and no artifact in it is
   tracked (SPEC.md §16).
+- **`make budget-check` must pass first.** The integration branch may carry a
+  kernel up to 2KB over its budget (`KERN_GRACE`, docs/KERNEL-MEMORY.md);
+  `main` may not. Over at this point is a size pass or a conversation with the
+  owner about the budgets, never a raise to get the PR out.
 - **The squash replaces `main`'s tree wholesale**, so the branch's SPEC
   numbering becomes `main`'s and it is the section coming *from `main`* that
   renumbers. That is expected, not a conflict to resolve; scope the rewrite to
@@ -289,6 +307,19 @@ squashed, and that shapes what to write:
     DOT DELIRIUM, which had moved Picture decoders to §94 and Scribe to §95 —
     the new subsection became **§95.8.6**, three citations (two in SPEC.md,
     one comment in `apps/scribe/scribe.asm`).
+  - #252: `main`'s §107 WireBall (#254) met the branch's §107 `EMS.DRV` —
+    WireBall became **§108**, 17 citations: its section and four
+    subsections, `docs/INDEX.md`'s row, the Makefile's comment, four
+    `tests/suite.py` rows and the comments in `apps/wireball/`. A second
+    merge the same day met `main`'s §108 isoTron (#250), whose ~400 citations
+    include bare numbers (`equ 108`, `(108, 90)`) a rewrite must not touch, so
+    the SMALLER footprint moved instead: WireBall became **§109** and isoTron
+    kept §108. That is the rule's intent - renumber what `main` brought in -
+    applied to whichever incoming section has the fewer citations: WireBall's
+    section moved after isoTron's, its six headings, `docs/INDEX.md`, the
+    Makefile's comment, six `tests/suite.py` rows, five `apps/wireball/`
+    comments, and #257/#258's §107.5 in `CLAUDE.md`, `AGENTS.md` (heading and
+    Set 160 anchor), `PERFORMANCE.md` Set 160 and `docs/MARTYPC-DEBUG.md`.
 
 ## Quick reference
 
@@ -296,6 +327,7 @@ squashed, and that shapes what to write:
 git rev-parse --is-shallow-repository && git fetch --unshallow   # ALWAYS first
 git fetch upstream main
 git log --oneline HEAD..upstream/main     # what am I behind by, and which kind?
+make budget-check                         # before the PR back: no branch grace on main
 git merge upstream/main                   # only for genuine upstream work
 grep -oE '^#+ [0-9.]+' SPEC.md | sort | uniq -d   # no duplicate § headings
 git ls-files build | wc -l                # must be 0 after any merge

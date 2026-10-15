@@ -31,7 +31,10 @@ ADAPTERS = {"cga": (0x0102, "CGA 640x200x1 Dynamic"),
             "herc": (0x0101, "Hercules 720x348x1 Dynamic"),
             "vga": (0x0400, "VGA 640x480x4 Default")}
 
-NAMES = ("rl_ran", "rl_runs", "bl_saved", "rl_results", "rl_convkb", "rl_cpuname", "rl_early", "rl_video",
+NAMES = ("os88ui_awin", "os88ui_ar", "cs_setv", "cs_meth", "cs_saved", "cs_tfast", "cs_amsg", "cs_s_saved",
+         "cs_crc", "cs_tier", "cs_pres", "cs_lines", "cs_tab", "cs_measd", "cs_drop", "cs_pick", "cs_found", "cs_pane",
+         "cs_act", "cs_sw_fail", "cs_sw_bad", "cs_sw_n", "cs_sw_log", "cs_warn", "cs_tgt", "cs_target", "cs_stat", "cs_mhz", "cs_tq", "cs_rd8", "cs_nsio", "ru_buttonflags", "ru_buttonlabels", "ru_benchlabels",
+         "rl_ran", "rl_runs", "bl_saved", "rl_results", "rl_convkb", "rl_cpuname", "rl_early", "rl_video",
          "rl_key", "rl_alu", "rl_facts_start", "rl_facts_end", "bl_nrow", "bl_used", "bl_full",
          "rl_div48by32", "bl_m", "rl_detect", "rl_e820", "rl_mapok", "rl_ramkb",
          "rl_nominal", "rl_tscmhz", "rl_signature", "rl_family", "rl_model", "rl_cpuid",
@@ -61,6 +64,60 @@ def symbols():
         assert data[:-2 * len(NAMES)] == image, "symbol map does not describe build/redline.bin"
         return dict(zip(NAMES, struct.unpack("<%dH" % len(NAMES), data[-2 * len(NAMES):])))
 
+
+
+def workload_shape(root=ROOT):
+    """SHA-256 of the timed workload code [rl_alu, rl_detect) with every
+    ADDRESS masked out - what the reference's counts actually describe.
+
+    The raw bytes (`workload_code_sha256`) also carry where every variable and
+    every out-of-region routine happens to sit, so they change whenever any
+    shared include grows, with not one instruction of the workload different:
+    the SDK putting 25 bytes in front of REDLINE's data moved 98 displacement
+    bytes and failed the gate. On the 8088 the reference is measured on, a
+    displacement's VALUE costs nothing - the EA calculation is priced by the
+    addressing form and the bus by the byte - so the counts still hold. What
+    is masked is exactly what nasm's listing marks `[...]` (an absolute
+    address) and the displacement of a relative jump or call whose target is
+    OUTSIDE the region; opcodes, ModR/M, immediates, far API cells and every
+    jump inside the region are hashed as they are."""
+    lst_re = re.compile(r"^\s*\d+\s+([0-9A-F]{8})\s+([0-9A-F\[\]()]+-?)\s")
+    with tempfile.TemporaryDirectory() as td:
+        asm, binary, lst = (Path(td) / n for n in ("s.asm", "s.bin", "s.lst"))
+        src = (Path(root) / "apps/redline/redline.asm").read_text()
+        asm.write_text(src + "\ndw rl_alu\ndw rl_detect\n")
+        subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", str(Path(root) / "apps") + "/",
+                        "-I", str(Path(root) / "tests") + "/", "-l", str(lst),
+                        "-o", str(binary), str(asm)], cwd=root, check=True)
+        data = bytearray(binary.read_bytes())
+        lo, hi = struct.unpack("<2H", data[-4:])
+        mask = bytearray(len(data))
+        for line in lst.read_text(errors="replace").splitlines():
+            m = lst_re.match(line)
+            if not m:
+                continue
+            at_, field = int(m.group(1), 16), m.group(2).rstrip("-")
+            if not lo <= at_ < hi:
+                continue
+            i = 0
+            for tok in re.findall(r"\[[0-9A-F]+\]|\([0-9A-F]+\)|[0-9A-F]{2}", field):
+                n = (len(tok) - 2) // 2 if tok[0] in "[(" else 1
+                if tok[0] in "[(":
+                    for k in range(n):
+                        mask[at_ + i + k] = 1
+                i += n
+            op = data[at_]
+            # A relative transfer: E8/E9 rel16, EB/7x/E0-E3 rel8.
+            if op in (0xE8, 0xE9):
+                tgt = (at_ + 3 + struct.unpack("<h", bytes(data[at_ + 1:at_ + 3]))[0]) & 0xFFFF
+                if not lo <= tgt < hi:
+                    mask[at_ + 1] = mask[at_ + 2] = 1
+            elif op == 0xEB or 0x70 <= op <= 0x7F or 0xE0 <= op <= 0xE3:
+                tgt = (at_ + 2 + struct.unpack("<b", bytes(data[at_ + 1:at_ + 2]))[0]) & 0xFFFF
+                if not lo <= tgt < hi:
+                    mask[at_ + 1] = 1
+        region = bytes(0 if mask[i] else data[i] for i in range(lo, hi))
+        return hashlib.sha256(region).hexdigest()
 
 class Probe:
     def __init__(self, ui, sym):
@@ -197,6 +254,7 @@ def run(machine, out, repeat=True, calibrate=False):
             "runtime_machines_sha256": sha(Path(ui.m.run_dir) / "configs/machines/ibm5150.toml"),
             "guest_cycles_including_inventory_ui": end - start,
             "workload_code_sha256": hashlib.sha256(image[sym["rl_alu"]:sym["rl_detect"]]).hexdigest(),
+            "workload_shape_sha256": workload_shape(),
             "workloads": workloads,
             "workload_counts": list(counts), "trials": trials,
             "trial_relative_spread": spread,

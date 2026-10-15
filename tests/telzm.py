@@ -20,9 +20,11 @@ FIVE ASSERTIONS, IN TWO SESSIONS OF ONE BOOT.
    70.11.4, which is SPEC.md 77.20's rule). The server sends a batch of tiny
    files whose names are the table's rows, and `[tz_name]` is read out of guest
    memory at each Save dialog. A file this machine downloads by Zmodem and the
-   same file uploaded to it by FTP must land on the same name, and the two
-   implementations of that rule share no code - so this is what stops them
-   drifting.
+   same file uploaded to it by FTP must land on the same name. They used to be
+   two implementations that shared no code and this was what stopped them
+   drifting; they are ONE now, `apps/os88m83.inc`, and `tests/m83.py` asserts
+   that code whole against every row. What this leg still proves is the
+   INTEGRATION - that Telnet hands the ZFILE name in and stores what comes out.
 
    **FOUR OF THE SIXTEEN ROWS CANNOT BE PUT ON A WIRE** and are named in the
    output rather than quietly skipped: the two pathname rows, because the
@@ -264,6 +266,9 @@ def wait_desktop(m, letter="A", secs=90):
             return False
     if os88qemu.acted(m, zone, secs=secs, what="drive %s's zone" % letter,
                       poll=0.4):
+        # ...and the first paint after it: a cell is PLACED before it is
+        # drawn, and a click that lands mid-paint is a click on nothing
+        os88qemu.ui_done(m, S, cap=8.0, what="the first desktop")
         return
     sys.exit("telzm: drive %s: had no desktop zone after %ds - the guest "
              "never reached a desktop (a boot failure, not a telzm failure)"
@@ -296,8 +301,8 @@ def main():
     sy = telansi.te_syms()
     for n in ("te_zon", "te_state", "tz_st", "tz_dlg", "tz_name", "tz_pan",
               "tz_req", "tz_pos", "tz_rcv", "tz_fsz", "tz_diag", "con_scr",
-              "tz_why", "tz_ferr",
-              "te_btn", "te_line", "te_hbuf"):
+              "tz_why", "tz_ewhy", "tz_sseg",
+              "te_btn", "te_line", "te_hbuf", "te_btrec", "te_btlbl"):
         if n not in sy:
             sys.exit("telzm: %s is not in the package map" % n)
 
@@ -368,6 +373,15 @@ def main():
         # a stale emulator for a package that is byte-for-byte correct.
         head[3] &= ~0x18
         want[3] &= ~0x18
+        # ...AND THE WORDS THE PACKAGE WRITES INTO ITS OWN IMAGE, which a
+        # smaller image brings inside this window: the button record's four
+        # runtime words (OS88UI_BTNREC: WIN, DOWN, ONCLK, NEXT - os88ui_btninit
+        # fills them at launch) and the caption pointer te_button patches.
+        # The size pass moved te_btrec from past offset 512 to 0x1E8, and the
+        # row then read `guest F1, file 00` at 496 - the record's ONCLK.
+        for lo, n in ((sy["te_btrec"] + 8, 8), (sy["te_btlbl"], 2)):
+            for i in range(lo, min(lo + n, 512)):
+                head[i] = want[i] = 0
         if head != want:
             n = next((i for i in range(512) if head[i] != want[i]), -1)
             sys.exit("telzm: the guest's TELNET is not build/telnet.bin - "
@@ -556,6 +570,13 @@ def main():
                 if got != want:
                     fails.append("the dialog was pre-filled %r and not %r"
                                  % (got, want))
+                # **THE STAGING AREA IS A CLAIM HELD FOR THE TRANSFER**
+                # (SPEC.md 70.11.3): made BEFORE the dialog, so it is there
+                # while the user is asked - and given back after (below).
+                if not rw("tz_sseg"):
+                    fails.append("the Save dialog for %s is up and [tz_sseg] "
+                                 "is 0 - the staging claim is made before the "
+                                 "question (SPEC.md 70.11.3)" % want)
                 telansi.qmp("sendkey ret")      # ...SAVE, under the name the
                 os88qemu.pace(m, 1.0)           # receiver mangled
                 wait_nodlg(20.0)
@@ -566,6 +587,14 @@ def main():
                 fails.append("the transfer never finished - [tz_st] %d, "
                              "[tz_req] %d, %d bytes committed"
                              % (rb("tz_st"), rb("tz_req"), rw("tz_pos")))
+            # ...AND GIVEN BACK. tz_sfree runs on the UI task once [te_zon]
+            # is clear and no commit is outstanding, which is the TZ_DONE wake
+            # the end of the batch posts - so an idle terminal holds no 8 KB.
+            elif not os88qemu.acted(m, lambda: not rw("tz_sseg"), secs=20.0,
+                                    what="[tz_sseg] freed", poll=0.5):
+                fails.append("the batch is over and [tz_sseg] is still %04X - "
+                             "the staging claim was never given back "
+                             "(SPEC.md 70.11.3)" % rw("tz_sseg"))
             # **AND THE BOARD'S SCREEN IS UNTOUCHED.** The receiver owns the
             # stream from the handover to the sender's closing `OO`, so not one
             # byte of it may reach the ANSI parser - and ending on the FIRST of
@@ -711,9 +740,11 @@ def main():
                 "%d received, reason %r"
                 % (rb("tz_st"), rb("tz_req"), rb("tz_diag"), rw("tz_pos"),
                    rw("tz_rcv"), why()))
-            if rb("tz_ferr"):
-                say("cancel  the commit was refused with FERR %d"
-                    % rb("tz_ferr"))
+            if rb("tz_ewhy"):
+                # the kernel's words for the FERR_* a commit met, copied
+                # there by tz_commit (OSAPI_FERR_TEXT, SPEC.md 18.4.11)
+                say("cancel  the commit was refused: %r"
+                    % rstr("tz_ewhy", 16))
             if not ok:
                 fails.append("the cancel run's second file never finished")
             if rb("te_zon"):

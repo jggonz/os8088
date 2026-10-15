@@ -217,6 +217,19 @@ def requirements():
                 "Pillow and used to FAIL on the ImportError.",
                 "make deps      (installs python3-pil)"))
 
+    req.append(("unicorn", os88build.have_unicorn(),
+                "picomem, pxextraemu, pxanimemu, pxsavehost and pxedithost, "
+                "which run driver or PiXEL part code under it against a model "
+                "(SPEC.md 34.10.1, 72.2, 106.24, 106.25).",
+                "python3 -m pip install unicorn"))
+
+    req.append(("xdc", os88build.have_xdc(),
+                "vidbench, which decodes the owner's four XDC streams and has "
+                "nothing else to decode (docs/plans/VIDEO-PLAN.md 13).",
+                "export OS88_XDC_SAMPLES=<a directory holding %s>\n"
+                "                  (copyrighted: they are the owner's and "
+                "never in the tree)" % ", ".join(os88build.XDC_STREAMS)))
+
     req.append(("ffmpeg", bool(shutil.which("ffmpeg"))
                 and bool(shutil.which("ffprobe"))
                 and os88build.have_numpy(),

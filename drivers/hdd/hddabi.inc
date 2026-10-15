@@ -30,7 +30,10 @@
 ; to a private interface, for the same reason and not by analogy.
 ; =============================================================================
 
-HD_ABI_VER   equ 4              ; bumped whenever a verb changes meaning
+HD_ABI_VER   equ 5              ; bumped whenever a verb changes meaning -
+                                ; or a row field does: 5 is HDD_BIOS set on
+                                ; EVERY row the ROM reads, which a 4 tool's
+                                ; hd_kvol would not know a BIOS row by
 HD_TOOLFILE  equ 0              ; (the name itself is in the resident: a
                                 ; string is not an ABI number)
 
@@ -45,14 +48,24 @@ HD_MAXVOL    equ 4              ; volumes mountable at once: ONE PER FAT
 ; --- one device row, stride HDD_SIZE ----------------------------------------
 HDD_KIND     equ 0              ; db: HDK_*
 HDD_UNIT     equ 1              ; db: int 13h drive (80h/81h), or 0/1 on the
-                                ; IDE channel in HDD_BASE
+                                ; IDE channel in HDD_BASE (rung 0 transfers
+                                ; read HDD_BIOS, which a BIOS row also holds)
 HDD_FLAGS    equ 2              ; db: bit 0 = geometry known, bit 1 typed by
                                 ; hand; HDF_CYLASK/HDF_CYLOK below
 HDF_CYLASK   equ 0x40           ; ...rung 0's ROM has been ASKED whether one
                                 ; int 13h may carry a read across a head
 HDF_CYLOK    equ 0x80           ; ...and it may (SPEC.md 18.91.5): hd_bios_run
                                 ; then bounds a read at the cylinder
-HDD_PAD      equ 3
+HDD_BIOS     equ 3              ; db: the int 13h drive (80h/81h) of EVERY
+                                ; row the ROM reads, else 0: a BIOS row's
+                                ; (= HDD_UNIT), and an IDE row's when rung 1
+                                ; took a drive the BIOS also knows (SPEC.md
+                                ; 52.1.1). What DSV_GEOM, the kernel's
+                                ; boot-volume question and rung 0's own int
+                                ; 13h all ask by - so during the probe a BIOS
+                                ; row hd_at_dup paired may carry the IDE unit
+                                ; in HDD_UNIT and its port in HDD_BASE, for
+                                ; hd_twins to prove at DRVV_READY
 HDD_CYL      equ 4              ; dw: cylinders
 HDD_HEADS    equ 6              ; dw: heads      } 1..255
 HDD_SPT      equ 8              ; dw: sectors    } 1..63

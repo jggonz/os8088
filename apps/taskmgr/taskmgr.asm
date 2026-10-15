@@ -241,7 +241,7 @@ TMM_XB_Y1   equ 42              ; the XMS bar's frame, directly under its
 TMM_XB_Y2   equ 51              ; figures - same shape as the RAM bar in the
                                 ; performance view, because it answers the
                                 ; same question about a different pool
-TMM_HDR_Y   equ 55              ; "NAME    ADDR SIZE   HEAP" header line
+TMM_HDR_Y   equ 55              ; "NAME     ADDR  SIZE  HEAP" header line
 
 ; --- ...and what all of that becomes on a machine with NO store above 1MB ----
 ; A bar whose scale is zero is not a reading, it is an empty rectangle: on the
@@ -467,8 +467,9 @@ TM_ROWC     equ TM_NAMEF + TM_STC + 1 + TM_CPUC + TM_MEMC
   %error "taskmgr: a memory row now runs past the right edge of its band"
 %endif
 
-TMM_ROWS    equ INST_MAX + 6    ; System, its three buffer rows, the two
-                                ; headings, every instance - 18 x TM_ROW_H
+TMM_ROWS    equ INST_MAX + 7    ; low memory, System, its three buffer rows,
+                                ; the two headings, every instance - 19 x
+                                ; TM_ROW_H
                                 ; from TMM_ROW_Y, which is what decides both
                                 ; the template's height and that free slots
                                 ; are not drawn at all. tm_mrow_open clamps
@@ -477,7 +478,10 @@ TMM_ROWS    equ INST_MAX + 6    ; System, its three buffer rows, the two
                                 ; It was INST_MAX + 7 while `Disk bufs` was a
                                 ; row (SPEC.md 20.9), and the window is a row
                                 ; shorter for losing it rather than a row
-                                ; emptier - TM_PREF_H is cut from this
+                                ; emptier - TM_PREF_H is cut from this. The
+                                ; `IVT+BDA` row took that row back (SPEC.md
+                                ; 28): 1.5K of every machine that no other
+                                ; figure in this window could account for
 
 ; --- THE TWO FRAMES THIS WINDOW WANTS (SPEC.md 11.100.1) ---------------------
 ; tm_layout has always worked out the frame its column count needs; these are
@@ -1205,6 +1209,10 @@ tm_s_pre:   db 'SCH preempt', 0 ; read-only scheduler-mode field, chars 9..19
 tm_s_coop:  db 'SCH coop   ', 0 ; both exactly 11: the padding erases the
                                 ; longer word when the mode changes
 tm_s_ram:   db 'RAM ', 0
+tm_s_heap:  db '  HEAP ', 0     ; + claimed/size KB (SPEC.md 50), on both
+                                ; pages. The two leading spaces are the RAM
+                                ; line's gap, and the memory view draws the
+                                ; claim swatch into them
 ; Each caption sits at the LEFT of the column the widths above name, and the
 ; gap after it is that column's width less the caption's own - so the header
 ; is derived from the layout rather than typed out beside it, and it cannot
@@ -1231,17 +1239,20 @@ tm_s_frtl:  db '  -     -', 0   ; free row's CPU + MEM columns
 
 %ifdef TMF_MEM
 ; --- memory view (SPEC.md 28) ------------------------------------------------
-tm_s_mhdr:  db 'NAME     ADDR SIZE   HEAP', 0 ; 25 chars, the row width. The
+tm_s_mhdr:  db 'NAME     ADDR  SIZE  HEAP', 0 ; 25 chars, the row width. The
                                 ; NAME field is EIGHT wide plus a separator:
                                 ; seven for the name and one for the indent a
                                 ; nested row carries, so a seven-character
                                 ; name still gets a gap before the address
                                 ; Two spaces of gap, not one: a 150K back
                                 ; buffer beside a 150K package ran the two
-                                ; figures together at the old width
-tm_s_heap:  db '  HEAP ', 0     ; + claimed/size KB (SPEC.md 50). The two
-                                ; leading spaces are the RAM line's gap, and
-                                ; the claim swatch is drawn into them
+                                ; figures together at the old width.
+                                ; SIZE ends at column 18 and HEAP at 24,
+                                ; which is where every row's two tm_kcol
+                                ; figures end: ADDR 9-12, a space, then two
+                                ; five-wide KB columns with a space between.
+                                ; The heading said 17 for SIZE, so it sat one
+                                ; column left of every figure under it
 tm_s_t86:   db '8086  ', 0      ; the detected tier (SPEC.md 41.1), which
 tm_s_t286:  db '286   ', 0      ; nothing else in the UI says out loud. Each
 tm_s_t386:  db '386+  ', 0      ; name is padded to the SAME six columns, so
@@ -1255,13 +1266,31 @@ tm_s_bhdr:  db 'Builtins', 0     ; no figures: a built-in owns no band on
                                 ; either map - its code is inside Code+data
                                 ; and its memory is heap claims, billed to
                                 ; its own row
-tm_s_phdr:  db 'Packages     ', 0; + allocated/size KB of the pool
+tm_s_phdr:  db 'Packages      ', 0; + allocated/size KB of the pool:
+                                ; fourteen wide, so its tm_kcol lands in
+                                ; SIZE exactly where tm_buf_row's does
 tm_s_mfr:   db '   -    -', 0   ; the ADDR+SIZE pair a built-in has no answer
                                 ; for: it owns no region of its own
 tm_s_dash4: db '   -', 0        ; one empty KB column
 tm_s_dash5: db '    -', 0       ; ...and one with tm_kcol's leading space
 tm_s_sys0:  db '0600', 0        ; where the kernel starts: KERNEL_SEG, the
                                 ; first paragraph above the BIOS data area
+
+; The row ABOVE System: everything below KERNEL_SEG, which is the one span of
+; conventional memory that is neither the kernel nor the heap and was in no
+; figure on this page (SPEC.md 28). The interrupt vector table (1K at 0000),
+; the BIOS data area (256 bytes at 0400) and the page at 0500 - the BIOS/DOS
+; communication area, where boot/boot.asm also puts the diskette parameter
+; table int 1Eh points at (DPT_AT, 0580). It is the SAME 1,536 bytes on every
+; machine and every build: KERNEL_SEG is an SDK constant, not a ladder rung,
+; so the whole row is one literal and draws for three string copies. The size
+; is printed as 1.5K because that is what it is - tm_kcol's whole kilobytes
+; would read 1K or 2K and either is the very rounding this row exists to
+; stop hiding. ' 1.5K' is tm_kcol's five columns, leading space included.
+%if KERNEL_SEG * 16 != 1536
+  %error "taskmgr: the low-memory row is a 1.5K literal and KERNEL_SEG moved"
+%endif
+tm_s_low:   db 'IVT+BDA  0000  1.5K', 0
 
 ; The kernel's own buffers, one row each under System (SPEC.md 28). Every
 ; figure beside them is a compile-time constant (TM_K*_KB above), so drawing
@@ -1342,6 +1371,7 @@ tm_s_tasc:  db 'Assoc', 0
 tm_s_tclip: db 'Clipbrd', 0
 tm_s_twsav: db 'WinSave', 0
 tm_s_tdirw: db 'DirRead', 0
+tm_s_tflst: db 'FileClp', 0
 tm_s_tico:  db 'Icons', 0        ; the machine-wide icon store (SPEC.md 25.9),
                                 ; one row per DISTINCT body. It is claimed at
                                 ; the first mount that harvests one and lives
@@ -1378,6 +1408,8 @@ tm_s_tsc:   db 'Shortcut', 0    ; the desktop shortcuts' one table (SPEC.md
                                 ; 26.8), read off SYSTEM.CFG at boot and held
                                 ; while any shortcut exists - a permanent
                                 ; 'FF11' row on a machine with one, otherwise
+tm_s_timg:  db 'Disk img', 0    ; a mounted .IMG's run table (SPEC.md
+                                ; 18.101), 1KB a mount, freed at the unmount
 ; (owner word, name) pairs, ended by a 0 owner. MEM_P_WSAVE is NOT here: it is
 ; a RANGE (SPEC.md 11.96.3), one cache per window slot, and tm_htype tests it
 ; before it walks this.
@@ -1405,7 +1437,9 @@ tm_ktab:
     dw MEM_K_FDLG,  tm_s_tfdlg
     dw MEM_K_FONT,  tm_s_tfont
     dw MEM_K_SC,    tm_s_tsc
+    dw MEM_K_IMG,   tm_s_timg
     dw MEM_P_DIRW,  tm_s_tdirw
+    dw MEM_P_FLIST, tm_s_tflst
     dw MEM_P_ICO,   tm_s_tico
     dw 0
 
@@ -3162,16 +3196,20 @@ tm_map_ram:
     call tm_map_rect
     call OSAPI_GFX_FILL
 
-    xor ax, ax                  ; [0, kernel end): the BIOS data area and the
+    xor ax, ax                  ; [0, kernel end): low memory and the
     mov dx, [tm_kb+SK_KERN]     ; kernel entire - image, scratch, buffers and
-    dec dx                      ; stacks (SPEC.md 2). 50% gray: reserved, and
-    call tm_band                ; not available to anything else
-    call OSAPI_GFX_FILL_GRAY
+                                ; stacks (SPEC.md 2). 50% gray: reserved, and
+    call tm_band                ; not available to anything else. The kernel
+    call OSAPI_GFX_FILL_GRAY    ; starts 1.5K up (the IVT+BDA row), so the
+                                ; inclusive end is SK_KERN and not SK_KERN - 1:
+                                ; the span's KB count less one, plus the whole
+                                ; KB under KERNEL_SEG. SK_KERN rounds UP, so
+                                ; this end never paints a free KB as kernel
 
     mov ax, [tm_kb+SK_KERN]           ; ...and its BUFFERS, over the top of
     sub ax, [tm_kb+SK_BUF]            ; that, in a texture of their own: the
-    mov dx, [tm_kb+SK_KERN]           ; FAT snapshot, the disk caches and
-    dec dx                            ; every task stack are the part of the
+    inc ax                            ; FAT snapshot, the disk caches and
+    mov dx, [tm_kb+SK_KERN]           ; every task stack are the part of the
     call tm_band                      ; kernel that is scratch rather than
     mov si, tm_pat_buf                ; program, and the part these figures
     TM_FILL_PAT                       ; are steered by (docs/KERNEL-MEMORY.md)
@@ -3345,7 +3383,22 @@ tm_rows_mem:
     mov word [tm_mrow], 0       ; (SI is free until the instance loops, and
                                 ; tm_copy keeps it anyway)
 
-    ; --- row 0: the kernel's fixed reservation --------------------------------
+    ; --- row 0: low memory, below the kernel ----------------------------------
+    ; Not the kernel's and not the heap's, so without it System + HEAP came to
+    ; 1.5K short of the RAM total and a reader asked where it went. NO square:
+    ; the map draws it in the same gray as the kernel band it sits under, and
+    ; at 4K a pixel on a 640K machine it is not a band of its own anyway. A
+    ; dash in HEAP, as the buffer rows have - it is not a claim.
+    call tm_mrow_open
+    mov si, tm_s_low
+    call tm_copy
+    mov byte [di], ' '          ; the HEAP column's own gap (tm_s_mhdr)
+    inc di
+    mov si, tm_s_dash5
+    call tm_copy
+    call tm_mrow_close
+
+    ; --- row 1: the kernel's fixed reservation --------------------------------
     call tm_mrow_open
     mov si, tm_s_sys
     call tm_copy7
@@ -3542,10 +3595,12 @@ tm_inst_row:
 ;
 ; The name is given the ADDR column's width as well as its own, because a
 ; buffer's segment is an implementation detail and its NAME is the thing worth
-; twelve characters. SIZE and CLM land exactly where row 0 puts them: the
-; System row above pads to 8, writes four ADDR characters and then two
-; five-wide KB columns, so padding to 12 and writing the same two columns
-; keeps every figure in this view in one pair of vertical rules.
+; fourteen characters. SIZE and CLM land exactly where row 0 puts them: the
+; System row pads its name to 9, writes four ADDR characters and a space, and
+; then two five-wide KB columns with a space between, so padding to 14 and
+; writing the same two columns keeps every figure in this view in one pair of
+; vertical rules. It padded to 13 for a while, which put every figure on these
+; rows one column left of System's and of the heading's.
 ;
 ; The CLM column is a dash on purpose. A buffer is not a claim - it is part of
 ; the kernel, present whether or not anything is running - and the whole point
@@ -3570,7 +3625,7 @@ tm_buf_row:
     push ax
     mov si, bx
     call tm_copy                ; the name carries its own two-space indent
-    mov cx, tm_str + 13         ; the NAME field plus its separator: a buffer
+    mov cx, tm_str + 14         ; the NAME field plus its separator: a buffer
     sub cx, di                  ; has no address, so the name spans both
     jle .size
 .pad:
@@ -3878,62 +3933,20 @@ tm_hsum:
 ; stopped PURGE lining up with AVAIL and FRAG: at nine records the line is a
 ; character shorter than at ten, so the label moved sideways as claims came
 ; and went (SPEC.md 28.4.2). Two columns is the NARROWEST fixed field that
-; holds MEM_MAX, which is what tm_putn's note about '(  5)' was really
+; holds MEM_MAX, which is what the old tm_putn's note about '(  5)' was really
 ; objecting to - three columns of padding, not the idea of a column. The
 ; guard below is the whole of what makes two enough.
 ;
-; It JUMPS to tm_putn rather than falling through into it, though tm_putn is
-; the next thing in the file and three bytes cheaper that way: a routine
-; inserted between the two would assemble cleanly, boot, and pad every count
-; with whatever that routine left at DI.
+; THE FIELD IS apps/os88dec.inc's dec_fld (SPEC.md 20.5.2), shared with
+; tm_put3 and tm_put5 through tm_putw: two columns, the digits at the right.
 ; -----------------------------------------------------------------------------
 %if MEM_MAX > 99
   %error "taskmgr: MEM_MAX no longer fits tm_put2's two columns"
 %endif
 tm_put2:
-    cmp ax, 10                  ; AX survives a cmp, and tm_putn clobbers no
-    jae .n                      ; more than the flags this just spent
-    mov byte [di], ' '
-    inc di
-.n:
-    jmp tm_putn
-
-; -----------------------------------------------------------------------------
-; tm_putn - an unsigned count in as few digits as it needs
-; in:  AX = value, DI = dest
-; out: DI advanced by 1..5
-; clobbers: nothing else (flags)
-;
-; tm_put3 pads to three columns, which is right for a KB figure in a column
-; and wrong for a parenthesised count: '(  5)' against '(5)'. The split line
-; is 27 characters at two-digit counts and there is no room for the padding.
-; -----------------------------------------------------------------------------
-tm_putn:
-    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
-    push ax
-    push bx
     push cx
-    push dx
-    xor cx, cx
-    mov bx, 10
-.split:
-    xor dx, dx
-    div bx                      ; AX = quotient, DX = this digit
-    push dx
-    inc cx
-    or ax, ax
-    jnz .split
-.emit:                          ; ...back off the stack, most significant first
-    pop ax
-    add al, '0'
-    mov [di], al
-    inc di
-    loop .emit
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    mov cx, 2
+    jmp tm_putw
 
 ; -----------------------------------------------------------------------------
 ; tm_hsplit - what is claimed, split by whether the kernel can take it back
@@ -5828,14 +5841,21 @@ tm_txt_cpu:
 ; out: nothing
 ; clobbers: nothing (flags only)
 ;
-; **In the memory view it carries the HEAP figures too**, in ONE string and
-; one font_str, with the claim swatch drawn into the two-space gap between
-; the pairs. Two draws on one line would need two check words and a fill that
-; belongs to neither; as one string it is one key, and the key is exact.
+; **It carries the HEAP figures too**, in ONE string and one font_str. Two
+; draws on one line would need two check words and a fill that belongs to
+; neither; as one string it is one key, and the key is exact.
 ;
-; The heap has no map of its own and never will - a claim is drawn in the
-; conventional map at its real address - so its figures belong to that map's
-; caption, which is this line.
+; ON BOTH PAGES, and the first is the one that matters. It used to be the
+; memory view's alone, which left the process page - the one a launch opens
+; on, and the ONLY one on the small build (28.12) - saying how much of the
+; machine was used and not how much a program could still claim. On a 128KB
+; machine those are different questions by tens of KB: RAM's total is int
+; 12h, and the kernel is not heap. The figures are already in [tm_kb] on
+; every sample, so the line costs a string copy and a tm_kpair.
+;
+; The claim SWATCH in the two-space gap is the memory view's alone, because
+; it keys the claim texture of that view's map - the process page has no map,
+; so a square there would be a legend for nothing and the gap stays blank.
 ; -----------------------------------------------------------------------------
 tm_txt_ram:
     push ax
@@ -5861,19 +5881,14 @@ tm_txt_ram_y:
     call tm_kpair               ; 'nnn/nnnK' - one K, not two, because the
                                 ; memory view fits a second pair on this line
                                 ; and eight characters is what it costs
-%ifdef TMF_MEM
-    cmp byte [tm_view], 0
-    je .built
     mov si, tm_s_heap           ; ...whose two leading spaces are where the
-    call tm_copy                ; claim swatch goes
+    call tm_copy                ; memory view's claim swatch goes
     mov ax, [tm_kb+SK_CLAIM]    ; the claimed half EXCLUDES the purgeables,
     mov bx, [tm_kb+SK_HEAP]     ; because no row below shows one (28.4.1) -
     call tm_kpair               ; and it is SK_CLAIM that does the excluding
                                 ; now, so the two pairs on this one line
                                 ; cannot disagree about what claimed MEANS:
                                 ; RAM's used half is SK_KERN + this word
-.built:
-%endif
     mov bx, tm_elck + 2*TMC_LINE    ; neither view puts this line at the same
     mov ax, [tm_liny]           ; y, so the band comes off the variable the
     call tm_capline             ; draw reads (SPEC.md 28.10.2)
@@ -6417,33 +6432,9 @@ tm_kpair:
 ; clobbers: nothing else (internal helper)
 ; -----------------------------------------------------------------------------
 tm_put5:
-    push ax
-    push bx
     push cx
-    push dx
-    push di
-
-    mov bx, di
     mov cx, 5
-.pad:
-    mov byte [bx], ' '
-    inc bx
-    loop .pad
-    dec bx                      ; BX = the ones column
-
-    mov cx, 10
-.dig:
-    xor dx, dx
-    div cx                      ; AX = quotient, DX = this digit
-    add dl, '0'
-    mov [bx], dl
-    dec bx
-    or ax, ax
-    jnz .dig                    ; at most 5 passes: AX <= 65535
-
-    pop di
-    add di, 5
-    jmp tm_pop_dcba
+    jmp short tm_putw
 
 %endif
 
@@ -6454,37 +6445,25 @@ tm_put5:
 ; clobbers: nothing else (internal helper)
 ; -----------------------------------------------------------------------------
 tm_put3:
-    push ax
-    push bx
     push cx
-    cmp ax, 999                 ; out of contract, and past 2,559 the byte
-    jbe .ok                     ; divide below would fault: pin it
-    mov ax, 999
-.ok:
-    add di, 3                   ; digits from the RIGHT, so the units land
-    push di                     ; first and the field pads itself
-    mov bl, 10
     mov cx, 3
-.dig:
-    dec di
-    div bl                      ; AL = AX / 10, AH = the digit (AX < 2,560)
-    add ah, '0'
-    mov [di], ah
-    xor ah, ah
-    dec cx
-    jz .done
-    or al, al
-    jnz .dig
-.pad:
-    dec di                      ; nothing left: blanks to the field's left
-    mov byte [di], ' '
-    loop .pad
-.done:
-    pop di
-    pop cx
-    pop bx
+    cmp ax, 999                 ; out of contract, and a field keeps the LOW
+    jbe tm_putw                 ; digits of a number too wide for it: pin it
+    push ax
+    mov ax, 999
+    call dec_fld
     pop ax
+    pop cx
     ret
+
+; tm_putw - the field, CX wide; tm_put2/3/5 pushed CX and this pops it
+tm_putw:
+    call dec_fld
+    pop cx
+    ret
+
+%define DEC_FLD                 ; tm_put2/3/5's fixed fields (SPEC.md 20.5.2)
+%include "os88dec.inc"
 
 ; --- the shared scroll bar (SPEC.md 13.10) -----------------------------------
 ; AT THE END OF THE CODE, just before OS88_BSS, because the header and the

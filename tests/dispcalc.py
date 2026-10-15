@@ -359,10 +359,10 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     # number needed to reach it is where that image ends - which the package
     # header carries at +8 (SPEC.md 20.2).
     img_end = u16(bss(m, seg, 0, 32), 8)
-    cal = {"nvis": img_end + 8, "open": img_end + 22, "err": img_end + 23,
-           "op": img_end + 24, "hn": img_end + 27, "hhead": img_end + 28,
-           "cbuf": img_end + 104, "nbuf": img_end + 136,
-           "htext": img_end + 296}
+    cal = {"nvis": img_end + 8, "open": img_end + 14, "err": img_end + 15,
+           "op": img_end + 19, "hn": img_end + 20, "hhead": img_end + 21,
+           "cbuf": img_end + 76, "nbuf": img_end + 104,
+           "htext": img_end + 190}
     print("image ends at +%d; [cal_nvis] at +%d" % (img_end, cal["nvis"]))
     watch_calc(m, seg, cal)         # ...and from here `typed`/`ctrl` settle
                                     # on the display buffer, not the screen
@@ -384,6 +384,10 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         ("c2.50+0=",      "2.5",          "...and a COMPUTED one is stripped"),
         ("c9q",           "3",            "square root"),
         ("c2q",           "1.41421356",   "...and an irrational one"),
+        # Scaled to 7.2e18 - 63 bits - whose Newton seed is 2^32: it wrapped
+        # to a zero divisor and the root showed '0' (SPEC.md 65.2). The root
+        # is 26843.54559, rounded into nine digits by cal_pack.
+        ("c720575940q",   "26843.5456",   "...and a 63-bit radicand"),
         ("c4r",           "0.25",         "reciprocal"),
         ("c200+10%=",     "220",          "percent of the accumulator"),
         ("c5/0=",         "Error",        "a zero divisor is refused"),

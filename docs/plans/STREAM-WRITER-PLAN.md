@@ -126,7 +126,7 @@ operation. A crash between calls loses nothing that was acknowledged.
 
 **Consumers**, in the order they are worth converting:
 1. the split-set join (`Uncompress` and `Uncompress To...`, branch
-   `split-v88`) - kernel-side, `CLONE.DRV`,
+   `split-v88`) - kernel-side, `DISKOPS.DRV`,
    through the far door the module already uses for APPEND;
 2. the file manager's copy (SPEC.md 22.5) - kernel-side;
 3. FTPD `STOR` - a package, through the new slot;
@@ -219,7 +219,10 @@ What is left, in order:
 1. ~~The consumers.~~ **All three are converted**: the split-set join
    (section 11) and the file manager's copy are HELD, one stream per file,
    closed before the rename or at the copy's end (SPEC.md 22.5.3); FTPD's
-   `STOR` is PLAIN (SPEC.md 77.49). Before and after on every one of them,
+   `STOR` was PLAIN (SPEC.md 77.49) and is HELD now, with `WSEQF_KEEP` so
+   the hold outlives the wake that stages each chunk on a fixed disk and a
+   `WSEQF_CKPT` every 256 KB (SPEC.md 18.4.9.3, 77.50) - which is what the
+   field heard as clicking on the ST-225 and on a 286. Before and after on every one of them,
    against `origin/elendilon`, is
    docs/reports/STREAM-WRITER-AB-2026-09-29.md.
 2. ~~The FAT at a hop~~ - **BUILT** as SPEC.md 18.8.5, on section 11's
@@ -288,7 +291,7 @@ Estimated ~120-160 bytes of `.cold` and `DVOL_MAX * 4` of `.text`, against
 two writes per hop on a held stream only. **Recommendation: convert the
 join, count its target writes per block with VIDDISK's `VD_TRACE` tally
 pointed at the join, and decide on the number.** If the join's block is
-small, a larger block cuts the hops for nothing. The block is `CLONE.DRV`'s
+small, a larger block cuts the hops for nothing. The block is `DISKOPS.DRV`'s
 to choose, and on a one-drive machine the hops are disk swaps anyway.
 
 ## 10. The write API: one body per verb, and the doors are not the cost

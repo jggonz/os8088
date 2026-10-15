@@ -36,6 +36,7 @@ the byte grid, because gfx_blitp refuses anything else and Paint would have
 fallen back to nibbles (pt_topacked) before the first frame.
 """
 import argparse
+import tempfile
 import os
 import sys
 
@@ -69,7 +70,7 @@ def idle(m):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/paintplan.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/paintplan.img")
     ap.add_argument("--machine", default="os8088_xt_vga")
     ap.add_argument("--gif", default=None,
                     help="the picture to open (default: a COLOUR derivation "
@@ -79,7 +80,7 @@ def main():
     if a.gif is None:
         a.gif = dispapps.colour_gif()
 
-    if a.apps == "/tmp/paintplan.img":
+    if a.apps == tempfile.gettempdir() + "/paintplan.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:" + a.gif)
 

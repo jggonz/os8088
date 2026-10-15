@@ -553,9 +553,9 @@ def main():
         fails.append("frogfind's home page has 3 links, %d parsed" % n)
     elif seg:
         arena = bytes(m.readseg(seg, 0, max(rw("br_lnkw"), 1)))
-        offs = [u16(m.readseg(pseg, sy["br_lnkoff"] + i * 2, 2))
-                for i in range(n)]
-        hrefs = [arena[o:arena.index(b"\0", o)].decode("latin-1") for o in offs]
+        # the arena IS the index (br_follow): hrefs packed in link order,
+        # each ending at its NUL, so link N is the Nth string
+        hrefs = [h.decode("latin-1") for h in arena.split(b"\0")[:n]]
         print("  hrefs: %r" % hrefs)
         if "about.php" not in hrefs:
             fails.append("the relative link is missing: %r" % hrefs)

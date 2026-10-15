@@ -54,7 +54,8 @@ APX_END     equ 3                   ; the playlist ran out
 APX_ERR     equ 4                   ; ap_msg says why
 
     APB aps_on                      ; a session: its ring holds this track
-    APW aps_rseg                    ; the ring's claim (RL + 272)
+    APW aps_rseg                    ; the ring's claim (RL + SPKFX_RINGEND:
+                                    ; the table, then the shaper's family)
     APW aps_rate                    ; R
     APB aps_k                       ; box k (1: none), 0: a step
     APW aps_stepf                   ; the step, 16.16: fraction...
@@ -74,11 +75,16 @@ APX_ERR     equ 4                   ; ap_msg says why
     APW aps_cons0                   ; CONS at the last clock update
     APB aps_btn                     ; mouse buttons as last seen
     APW aps_drawt                   ; aps_hk at the last redraw
-    APW aps_dtab                    ; the box's table (sum -> average)
-    APBUF aps_src, 2048             ; the source, before the box or the step
+aps_src     equ apd_out             ; the source, before the box or the step:
+                                    ; a PCM file's copy (aps_get), where an
+                                    ; ADPCM one decodes into apd_out itself -
+                                    ; one format a track, so one buffer, sized
+                                    ; for a step's span (APD_SRCSZ, audio.asm)
     APBUF aps_stage, 512            ; ...and a span of the speaker's rate
-    APBUF aps_fam, SPKFX_NLEV * 256 ; the shaper's level family
-    APBUF aps_dbuf, 6 * 256         ; the box's table, k up to 6
+APS_KMAX    equ 3                   ; the largest box aps_plan builds
+    APBUF aps_dbuf, APS_KMAX * 256  ; the box's table: a sum of k <= 3 bytes
+                                    ; (and ap_cinv's 256, audio.asm: a track
+                                    ; is boxed or counts, never both)
 
 ; THE LADDER (aps_plan, aps_fall): the speaker's top rate, rung by rung - an
 ; 8088's from its 8,000 Hz (VP_SPKMAX) down, a 286's from a 48-count pulse
@@ -163,7 +169,7 @@ aps_plan:
     jnz .step
     cmp ax, APS_RMIN
     jb .step
-    cmp cl, 3                       ; (a box of more than 3 costs more than
+    cmp cl, APS_KMAX                ; (a box of more than 3 costs more than
     ja .step                        ; the step it would save: PERFORMANCE)
     mov [aps_k], cl                 ; S / k exactly: the box
     jmp short .rate
@@ -232,7 +238,7 @@ aps_dtab_build:
     inc al
 .n:
     inc bx
-    cmp bx, 6 * 256
+    cmp bx, APS_KMAX * 256
     jb .l
     pop dx
     pop cx
@@ -252,7 +258,7 @@ aps_setup:
     push es
     cmp word [aps_rseg], 0
     jne .have
-    mov ax, (APS_RL + 272 + 1023) / 1024
+    mov ax, (APS_RL + SPKFX_RINGEND + 1023) / 1024
     call OSAPI_MEM_CLAIM
     jc .nomem
     mov [aps_rseg], dx
@@ -265,7 +271,8 @@ aps_setup:
     jc .rate
     cmp byte [aps_mode], APS_XL     ; (APS_COPY or APS_XL: no shaper)
     jae .ring
-    mov di, aps_fam
+    mov es, [aps_rseg]              ; the family: in the ring's claim, so a
+    mov di, APS_RL + SPKFX_RINGX    ; card machine never holds it (34.11.9)
     mov al, [aps_mode]
     mov ah, 1                       ; the carrier put away in the quiet
     call os88spkfx_init
@@ -454,13 +461,7 @@ aps_bracket:
     jne .out                        ; APX_ERR: ap_msg already says why
     mov word [ap_msg], ap_s_endlist
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ap_ret6
 
 ; -----------------------------------------------------------------------------
 ; aps_main - THE BRACKET'S BODY. DS = CS, SI = our window

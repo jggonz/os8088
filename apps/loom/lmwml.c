@@ -97,7 +97,8 @@ static int      lmw_line;
 /* One element's attributes. A single table is enough because every element
  * CONSUMES its attributes before it parses a child - the only nesting that
  * exists (app > card > canvas > sprite, app > card > list > item, app > menu >
- * item) never needs two live at once. */
+ * item) never needs two live at once. The six arrays below are in loom.h's
+ * PHASE STORE: this pass's alone, sharing storage with the other passes'. */
 #define LMW_MAXATTR  16
 #define LMW_VALBUF  640             /* the folded values, packed. 3.3's
                                      * longest legal value is an <input>'s

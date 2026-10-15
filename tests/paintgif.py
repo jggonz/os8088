@@ -24,6 +24,7 @@ comes up on B:\\MEDIA with the GIF the only thing in it - SPEC.md 38.10's
 default, and it removes every navigation click from the measurement.
 """
 import argparse
+import tempfile
 import os
 import sys
 
@@ -54,7 +55,7 @@ def u16(b, i=0): return b[i] | (b[i + 1] << 8)
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/paintbench.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/paintbench.img")
     ap.add_argument("--machine", default="os8088_xt_vga")
     ap.add_argument("--far", action="store_true",
                     help="...and then drag Paint wholly onto the second one")
@@ -66,7 +67,7 @@ def main():
     # The docstring's recipe, RUN rather than transcribed: a registered row
     # that only passes after a human builds its disk by hand is a row that
     # fails for a reason the summary line cannot name.
-    if a.apps == "/tmp/paintbench.img":
+    if a.apps == tempfile.gettempdir() + "/paintbench.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:build/OS8088.GIF")
 
@@ -124,7 +125,7 @@ def main():
             sys.exit("paint did not open on the association")
         print("paint window %r" % (dispcp.win_rect(m, S, pw[-1]),))
         w, h, fb = m.fbuf(card=0)
-        os88marty.write_png_rgb("/tmp/paintgif.png", w, h, fb)
+        os88marty.write_png_rgb(tempfile.gettempdir() + "/paintgif.png", w, h, fb)
 
         if a.far:
             # THE NEW PATH: a blit wholly on the SECOND display, which is the
@@ -141,7 +142,7 @@ def main():
                   % (px, px + pw2 - 1, seam))
             for c, nm in ((0, "vga"), (1, "herc")):
                 w2, h2, fb2 = m.fbuf(card=c)
-                os88marty.write_png_rgb("/tmp/paintgif-far-%s.png" % nm,
+                os88marty.write_png_rgb(tempfile.gettempdir() + "/paintgif-far-%s.png" % nm,
                                         w2, h2, fb2)
                 print("   %s: %d lit" % (nm, sum(
                     1 for i in range(0, len(fb2), 3)

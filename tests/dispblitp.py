@@ -28,6 +28,7 @@ half is NOT: MartyPC's MDA aperture is offset from the guest origin (SPEC.md
 so a compare in guest coordinates there is sampling the wrong pixels.
 """
 import argparse
+import tempfile
 import os
 import sys
 
@@ -221,7 +222,7 @@ def run(a, case, iw, ih, px, sym):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/dispblitp.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/dispblitp.img")
     ap.add_argument("--machine", default="os8088_xt_vga_mda")
     ap.add_argument("--gif", default=None)
     ap.add_argument("--case", choices=("straddle", "direct"), default=None)
@@ -235,7 +236,7 @@ def main():
     # pixel, so every oracle below is the one it always was.
     gif = gifpath()
 
-    if a.apps == "/tmp/dispblitp.img":
+    if a.apps == tempfile.gettempdir() + "/dispblitp.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:" + gif)
 

@@ -582,7 +582,7 @@ pointer before a click reaches the guest, and nothing in this tree drives an
   one that returns with DF set, and a deliberately flipped bit in an expected
   vector.
 
-Beyond those, `tests/unit/t_paccman.py` is a fast-tier row (the maze's 244
+Beyond those, `tests/unit/t_paccman.py` is a soak row (`pmcrom`) (the maze's 244
 dots, the door tiles, the table sizes, the pin, the prelude melody's first
 notes, and that `pmcband.inc` and `paccman.c` agree about the three band
 constants); `tests/unit/t_ctoolchain.py` builds this package in the **full**

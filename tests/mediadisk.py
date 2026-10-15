@@ -93,7 +93,13 @@ def run(apps, want_root):
 # (SPEC.md 19.9) - the same folder every other shipped floppy carries. This
 # line said ["MEDIA"] and the row failed as `root: ['MEDIA', 'SYSTEM']`,
 # which is the disk being right and the expectation being old.
-run("build/media360.img", ["MEDIA", "SYSTEM"])
+#
+# ...AND MIDIRACK IS THERE ON PURPOSE TOO (SPEC.md 105.10): at 360KB the
+# player and its pictures ride the root of the disk whose subject is music
+# already, with its ten songs in MEDIA/MIDI/ - $(MEDIAARGS360) - and the row
+# failed as `root: [..., 'MIDIRACK.GFX', 'MIDIRACK.O88', ...]` for the same
+# reason as above, a disk that was right and an expectation that was old.
+run("build/media360.img", ["MEDIA", "MIDIRACK.GFX", "MIDIRACK.O88", "SYSTEM"])
 run("build/apps360.img", ["APPS", "GAMES", "MEDIA", "SYSTEM"])
 
 if fails:

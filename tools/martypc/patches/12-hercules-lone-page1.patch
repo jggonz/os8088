@@ -1,0 +1,81 @@
+diff --git a/crates/marty_core/src/bus/mod.rs b/crates/marty_core/src/bus/mod.rs
+--- a/crates/marty_core/src/bus/mod.rs
++++ b/crates/marty_core/src/bus/mod.rs
+@@ -1358,6 +1358,19 @@
+                     mda.set_monitor_emulation(card.monitor_emulation);
+                     add_io_device!(self, mda, IoDeviceType::Video(video_id));
+                     add_mmio_device!(self, mda, MmioDeviceType::Video(video_id));
++                    // Page 1 can only be used on a lone Hercules. Keep the
++                    // dual-card aperture rule from patch 02 regardless of order.
++                    if machine_config.video.len() == 1
++                        && card.video_subtype == Some(VideoCardSubType::Hercules)
++                    {
++                        self.register_map(MmioDeviceType::Video(video_id), MemRangeDescriptor {
++                            address: 0xB8000,
++                            size: 0x8000,
++                            cycle_cost: 0,
++                            read_only: false,
++                            priority: 3,
++                        });
++                    }
+                     VideoCardDispatch::Mda(Box::new(mda))
+                 }
+                 VideoType::CGA => {
+diff --git a/crates/marty_core/src/devices/mda/mmio.rs b/crates/marty_core/src/devices/mda/mmio.rs
+--- a/crates/marty_core/src/devices/mda/mmio.rs
++++ b/crates/marty_core/src/devices/mda/mmio.rs
+@@ -47,6 +47,13 @@
+     }
+ 
+     fn mmio_read_u8(&mut self, address: usize, _cycles: u32, _cpumem: Option<&[u8]>) -> (u8, u32) {
++        if self.subtype == VideoCardSubType::Hercules
++            && (address & 0xf8000) == 0xb8000
++            && !self.hgc_config.enable_page()
++        {
++            return (0xff, 0);
++        }
++
+         let a_offset = address & self.mem_mask;
+ 
+         trace!(self, "READ_U8: {:04X}:{:02X}", a_offset, self.mem[a_offset]);
+@@ -62,12 +69,26 @@
+     }
+ 
+     fn mmio_peek_u8(&self, address: usize, _cpumem: Option<&[u8]>) -> u8 {
++        if self.subtype == VideoCardSubType::Hercules
++            && (address & 0xf8000) == 0xb8000
++            && !self.hgc_config.enable_page()
++        {
++            return 0xff;
++        }
++
+         let a_offset = address & self.mem_mask;
+ 
+         self.mem[a_offset]
+     }
+ 
+     fn mmio_peek_u16(&self, address: usize, _cpumem: Option<&[u8]>) -> u16 {
++        if self.subtype == VideoCardSubType::Hercules
++            && (address & 0xf8000) == 0xb8000
++            && !self.hgc_config.enable_page()
++        {
++            return 0xffff;
++        }
++
+         let a_offset = address & self.mem_mask;
+ 
+         (self.mem[a_offset] as u16) << 8 | self.mem[(a_offset + 1) & self.mem_mask] as u16
+@@ -84,6 +105,13 @@
+     }
+ 
+     fn mmio_write_u8(&mut self, address: usize, byte: u8, _cycles: u32, _cpumem: Option<&mut [u8]>) -> u32 {
++        if self.subtype == VideoCardSubType::Hercules
++            && (address & 0xf8000) == 0xb8000
++            && !self.hgc_config.enable_page()
++        {
++            return 0;
++        }
++
+         let a_offset = address & self.mem_mask;
+ 
+         self.mem[a_offset] = byte;

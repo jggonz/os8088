@@ -2,7 +2,7 @@
 """Split the on-demand kernel modules out of the assembled kernel.
 
 SPEC.md 2.8, docs/plans/completed/ONDEMAND-PLAN.md.  `kernel.asm` assembles to
-`.text | pad | .cold | pad | .ovl | .modc | .modf | .modmap`, and everything
+`.text | pad | .cold | pad | .boot2 | .modc | .modf | .modmap`, and everything
 from `.modc` onward is code that must NOT ship inside KERNEL.SYS: each module
 becomes a file of its own that the kernel reads into a heap claim when the
 feature is asked for.
@@ -24,7 +24,7 @@ added, so a word offset would truncate.  18 bytes, in a region that is about
 to be cut off.
 
 **The truncation is checked, not assumed.**  `.modc` starts UNPADDED at the
-end of `.ovl`, so the head of the file is byte for byte the kernel.bin that
+end of `.boot2`, so the head of the file is byte for byte the kernel.bin that
 would have been emitted with no modules in the tree at all - and --expect
 proves it against a known md5 when one is supplied.
 """
@@ -168,7 +168,7 @@ def main():
              % (len(rows), len(wanted)))
 
     # The kernel is everything before the first module.  Modules are emitted
-    # UNPADDED and in order, so this is also where .ovl ends.
+    # UNPADDED and in order, so this is also where .boot2 ends.
     cut = rows[0][0] if rows else map_off
     for i, (start, size, _) in enumerate(rows):
         if start + size > len(blob):

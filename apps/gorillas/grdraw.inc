@@ -11,12 +11,9 @@ gr_frontsprites:
     mov cx, [gr_sx]
     mov dx, [gr_sy]
     mov ch, cl
-    xor cl, cl
-    push ax
-    mov ax, 128
-    mul dx
-    mov dx, ax
-    pop ax
+    mov cl, 7
+    shl dx, cl                 ; sy*128
+    xor cl, cl                 ; CX = sx*256
     add cx, ax
     dec cx
     add dx, bx
@@ -29,8 +26,7 @@ gr_frontsprites:
     mov al, [gr_animphase]
     mov cx, 448
     mul cx
-    add ax, gr_front_lights
-    mov si, ax
+    mov si, ax                  ; this phase's masks
     xor ax, ax
     xor bx, bx
     mov cx, 256
@@ -39,16 +35,14 @@ gr_frontsprites:
     add si, 96
     mov bx, 125
     call gr_lightblit
+    lea bp, [si+96]             ; the left strip's mask
     xor bx, bx
     mov bl, [gr_animphase]
-    shl bx, 1
-    shl bx, 1
-    mov di, [gr_lightruns+bx]
-    push bx
+    mov bl, [gr_lightidx+bx]
+    lea di, [gr_lightruns+bx]
     xor ax, ax
     call gr_lightside
-    pop bx
-    mov di, [gr_lightruns+bx+2]
+    add bp, 128                 ; the right strip's, whose runs follow
     mov ax, 248
     call gr_lightside
     cmp byte [gr_state], 8
@@ -70,23 +64,27 @@ gr_frontsprites:
 
 ; Only rows touched by the old or new lights need repainting. The generator
 ; coalesces neighboring old/new crosses, excluding the blank gaps and corners.
+; DI = (first row, count) runs, ended by a zero (DI is left past it); AX = x,
+; BP = the strip's mask offset.
 gr_lightside:
-    xor dx, dx
-    mov dl, [di+3]
-    or dx, dx
-    jz .out
-    mov si, [di]
-    add si, gr_front_lights
     xor bx, bx
-    mov bl, [di+2]
-    add di, 4
+    mov bl, [di]
+    inc di
+    or bl, bl
+    jz .out
+    xor dx, dx
+    mov dl, [di]
+    inc di
+    mov si, bp
+    add si, bx
     mov cx, 8
     call gr_lightblit
     jmp gr_lightside
 .out:
     ret
 
-; Logical rectangle AX/BX/CX/DX and SI=packed 1bpp mask.
+; Logical rectangle AX/BX/CX/DX and SI=offset of its 1bpp mask (ratio 1).
+align 2                         ; word-aligned on a 16-bit bus, as it was
 gr_lightblit:
     SAVE
     push ds
@@ -98,7 +96,6 @@ gr_lightblit:
     shr cx, 1
     shr cx, 1
     shr cx, 1
-    mov [gr_frontcols], cx
     mov ax, [gr_sx]
     cmp byte [gr_cga], 0
     je .stride
@@ -108,7 +105,6 @@ gr_lightblit:
     mul cx
     mov [gr_stride], ax
     mov ax, si
-    sub ax, gr_front_lights
     mul word [gr_cacheratio]
     add ax, gr_lightcache
     ; Cached masks contain one copy of each logical row. Expand only the
@@ -167,110 +163,222 @@ gr_lightblit:
     RESTORE
     ret
 
-gr_lightcompose:
-    push ds
-    pop es
-    mov bp, [gr_rh]
-.row:
-    push di
-    mov cx, [gr_frontcols]
-.byte:
-    lodsb
-    cmp word [gr_cellbytes], 1
-    je .single
-    xor ah, ah
-    mov bx, ax
-    shl bx, 1
-    mov ax, [gr_textdouble+bx]
-    cmp byte [gr_cga], 0
-    je .double
-    and ax, 0aaaah            ; palette 2 for the red marquee
-.double:
-    stosw
-    jmp short .next
-.single:
-    stosb
-.next:
-    loop .byte
-    pop bx
-    dec bp
-    jnz .row
-    ret
-
-; Prepare scaled masks once per surface geometry, before music/animation.
-; The 6,400-byte cache holds horizontal masks and repeated sprite planes.
+; Prepare the intro once per surface (SPEC.md 99.3), before music/animation:
+; the five marquee phases' masks, then both raised-arm poses in the surface's
+; own form. The 6,400-byte cache holds horizontal masks and the poses (VGA
+; planes with rows repeated sy times, else one native row a line).
 gr_frontprepare:
-    mov ax, [gr_sx]
+    call gr_inktables
+    mov al, [gr_tablekey]
     mov ah, [gr_sy]
-    cmp byte [gr_cga], 0
-    je .vga
-    or al, 10h
-.vga:
-    cmp byte [gr_vga], 0
-    je .key
-    or al, 20h
-.key:
     cmp ax, [gr_cachekey]
-    je .out
+    jne .build
+    ret
+.build:
     mov [gr_cachekey], ax
     mov ax, [gr_sx]
     cmp byte [gr_cga], 0
     je .ratio
     mov ax, 2
 .ratio:
-    mov [gr_cellbytes], ax
     mov [gr_cacheratio], ax
-    mov si, gr_front_lights
+    ; Five phases of top/bottom (32x3) and side (1x128) masks lie end to
+    ; end, lit a cross at a time (tools/gorillas_art.py's light_masks()).
+    push ds
+    pop es
     mov di, gr_lightcache
-    xor bp, bp
-.part:
-    push bp
-    mov word [gr_frontcols], 32
-    mov word [gr_rh], 3
-    test bp, 2
-    jz .size
-    mov word [gr_frontcols], 1
-    mov word [gr_rh], 128
-.size:
-    mov ax, [gr_frontcols]
-    mul word [gr_cellbytes]
-    mov [gr_stride], ax
-    call gr_lightcompose
-    pop bp
-    inc bp
+    mov cx, 5*448/2
+    xor ax, ax
+    rep stosw
+    mov di, gr_lightcache       ; phase: top +0, bottom +96 (three rows
+    xor bp, bp                  ; of 32), left +192, right +320; BP=phase*4
+.phase:
+    mov cx, bp
+.across:
+    mov bx, di
+    call gr_spark               ; (x, 0)
+    push cx
+    neg cx
+    add cx, 252
+    lea bx, [di+96]
+    call gr_spark               ; (252-x, 125)
+    pop cx
+    add cx, 20
+    cmp cx, 253
+    jb .across
+    lea bx, [bp+5]
+.down:
+    or byte [bx+di+192], 40h    ; (0, y): columns 0..2, a byte a row
+    or byte [bx+di+193], 0e0h
+    or byte [bx+di+194], 40h
+    push bx
+    neg bx
+    or byte [bx+di+320+125], 02h ; (253, 125-y): columns 253..255
+    or byte [bx+di+320+126], 07h
+    or byte [bx+di+320+127], 02h
+    pop bx
+    add bx, 20
+    cmp bx, 123
+    jb .down
+    ; The side strips' three end rows are the across strips' end bytes.
+    xor bx, bx
+    mov si, di
+.corner:
+    mov al, [si]
+    or [bx+di+192], al
+    mov al, [si+31]
+    or [bx+di+320], al
+    mov al, [si+96]
+    or [bx+di+192+125], al
+    mov al, [si+96+31]
+    or [bx+di+320+125], al
+    add si, 32
+    inc bx
+    cmp bx, 3
+    jb .corner
+    add di, 448
+    add bp, 4
     cmp bp, 20
-    jb .part
-    mov ax, [gr_sx]
-    shl ax, 1
-    mov [gr_stride], ax
-    mov si, gr_front_planar1
-    cmp word [gr_sx], 1
+    jb .phase
+    ; Two cache bytes a mask byte at sx 2 and on CGA (palette 2's red),
+    ; widened in place from the end.
+    cmp byte [gr_cacheratio], 1
     je .apes
-    mov si, gr_front_planar2
+    mov dx, 0ffffh
+    cmp byte [gr_cga], 0
+    je .widemask
+    mov dx, 0aaaah
+.widemask:
+    mov si, gr_lightcache+5*448-1
+    mov di, gr_lightcache+2*(5*448-1)
+    mov cx, 5*448
+    std
+.widen:
+    lodsb
+    xor ah, ah
+    shl ax, 1
+    xchg bx, ax
+    mov ax, [gr_textdouble+bx]
+    and ax, dx
+    stosw
+    loop .widen
+    cld
 .apes:
-    cmp byte [gr_vga], 0
-    je .source
-    mov si, gr_front_vga2
-.source:
+    ; Both poses through the surface's pair tables, gr_pairbits bits (so
+    ; bytes) a source byte (row): four planes repeated sy times on VGA.
+    mov al, [gr_sx]
+    cmp byte [gr_depth], 2
+    jne .bits
+    mov al, 2
+.bits:
+    add al, al
+    mov [gr_pairbits], al
     mov di, gr_apecache
-    mov bp, 160
+    mov bp, gr_apeleft          ; then its mirror, the right pose
+.pose:
+    mov bx, gr_inkpairs
+    mov byte [gr_planesleft], 1
+    cmp byte [gr_depth], 4
+    jne .plane
+    mov byte [gr_planesleft], 4
+.plane:
+    mov si, bp
+    mov dx, 20
 .row:
-    mov dx, [gr_sy]
-.repeat:
+    push di
+    call gr_convrow
+    pop ax
+    cmp byte [gr_depth], 4
+    jne .next
     push si
-    mov cx, [gr_stride]
-    rep movsb
+    xchg si, ax
+    mov al, [gr_pairbits]
+    mov cl, [gr_sy]
+    dec cl
+    mul cl
+    xchg cx, ax
+    rep movsb                   ; overlapping: the row sy-1 more times
     pop si
+.next:
     dec dx
-    jnz .repeat
-    add si, [gr_stride]
-    dec bp
     jnz .row
-.out:
+    add bx, 256
+    dec byte [gr_planesleft]
+    jnz .plane
+    cmp bp, gr_apeleft
+    jne .done
+    call gr_mirrorpose
+    mov bp, si
+    jmp .pose
+.done:
     ret
 
-; AX=logical x, BX=pose (0/1). The generator supplies native pixel order,
+; One 16-pixel packed row at SI through table BX, gr_pairbits bits a byte.
+gr_convrow:
+    mov cx, 4
+    cmp byte [gr_pairbits], 2
+    je .two
+.four:
+    lodsb
+    xlat
+    mov ah, al
+    lodsb
+    xlat
+    shl ah, 1
+    shl ah, 1
+    shl ah, 1
+    shl ah, 1
+    or al, ah
+    stosb
+    loop .four
+    ret
+.two:
+    shr cx, 1
+.byte:
+    lodsb
+    xlat
+    mov ah, al
+%rep 3
+    shl ah, 1
+    shl ah, 1
+    lodsb
+    xlat
+    or ah, al
+%endrep
+    mov al, ah
+    stosb
+    loop .byte
+    ret
+
+; The 5-pixel cross at x+1 (CX = x, 0..252) in the 3-row, 32-byte strip at
+; BX: one column above and below, three across the middle. Nothing spills
+; out of the row: x+2 is in column 31 whenever x is.
+gr_spark:
+    push bx
+    push cx
+    mov ax, cx
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    add bx, ax
+    and cl, 7
+    mov ax, 4000h
+    shr ax, cl
+    or [bx], ah
+    or [bx+1], al
+    or [bx+64], ah
+    or [bx+65], al
+    mov ax, 0e000h
+    shr ax, cl
+    or [bx+32], ah
+    or [bx+33], al
+    pop cx
+    pop bx
+    ret
+
+; AX=logical x, BX=pose (0/1). gr_frontprepare supplies native pixel order,
 ; palette conversion, horizontal scaling, and VGA plane separation.
+align 2
 gr_frontape:
     SAVE
     mov word [gr_frontsource], gr_band
@@ -279,99 +387,7 @@ gr_frontape:
     mov word [gr_rw], 16
     mov word [gr_rh], 20
     cmp byte [gr_vga], 0
-    jne .nativecache
-    cmp byte [gr_depth], 4
-    jne .fallback
-    push bx
-    call gr_frontcoords
-    mov di, 8000h
-    call OSAPI_GFX_BLITP
-    pop bx
-    jc .fallback
-    call gr_frontplanar
-    jnc .out
-.fallback:
-    mov byte [gr_frontplane], 1
-    mov si, gr_front_mono1
-    mov ax, 2
-    cmp word [gr_sx], 1
-    je .mode
-    mov si, gr_front_mono2
-    mov ax, 4
-.mode:
-    cmp byte [gr_vga], 0
-    jne .vga
-    cmp byte [gr_cga], 0
-    jne .cga
-    cmp byte [gr_depth], 4
-    jne .chosen
-    mov si, gr_front_win1
-    mov ax, 8
-    cmp word [gr_sx], 1
-    je .chosen
-    mov si, gr_front_win2
-    mov ax, 16
-    jmp short .chosen
-.cga:
-    mov si, gr_front_cga1
-    mov ax, 4
-    jmp short .chosen
-.vga:
-    mov si, gr_front_vga2
-    shl bx, 1
-    shl bx, 1               ; four 80-byte planes per pose
-    mov ax, 4
-.chosen:
-    mov [gr_stride], ax
-    mov cx, 20
-    mul cx
-    mul bx
-    add si, ax
-.plane:
-    push ds
-    pop es
-    mov di, gr_band
-    mov bp, 20
-.row:
-    mov dx, [gr_sy]
-.repeat:
-    push si
-    mov cx, [gr_stride]
-    rep movsb
-    pop si
-    dec dx
-    jnz .repeat
-    add si, [gr_stride]
-    dec bp
-    jnz .row
-    push si
-    call gr_frontcoords
-    cmp byte [gr_vga], 0
-    jne .native
-    cmp byte [gr_cga], 0
-    jne .packed
-    cmp byte [gr_depth], 4
-    jne .mono
-    call OSAPI_GFX_BLIT4
-    jmp short .done
-.mono:
-    call OSAPI_GFX_BLIT1
-    jmp short .done
-.packed:
-    call gr_cgablit
-    jmp short .done
-.native:
-    call gr_frontvgaplane
-    pop si
-    shl byte [gr_frontplane], 1
-    cmp byte [gr_frontplane], 16
-    jb .plane
-    jmp short .out
-.done:
-    pop si
-.out:
-    RESTORE
-    ret
+    je .desktop
 .nativecache:
     mov word [gr_stride], 4
     mov ax, 80
@@ -392,10 +408,111 @@ gr_frontape:
     shl byte [gr_frontplane], 1
     cmp byte [gr_frontplane], 16
     jb .cachedplane
+.out:
+    RESTORE
+    ret
+.desktop:
+    cmp byte [gr_depth], 4
+    jne .fallback
+    push bx
+    call gr_frontcoords
+    mov di, 8000h
+    call OSAPI_GFX_BLITP
+    pop bx
+    jc .fallback
+    call gr_frontplanar
+    jnc .out
+.fallback:
+    ; Foreign VGA never gets here: it drew from the cache above. Monochrome
+    ; and CGA rows are cached too; a clipped or refused desktop VGA pose is
+    ; packed from the pose itself, into the band's tail.
+    mov ax, [gr_sx]
+    shl ax, 1                   ; monochrome: two or four bytes a row
+    cmp byte [gr_cga], 0
+    je .mode
+    mov ax, 4
+.mode:
+    mov si, gr_apecache
+    cmp byte [gr_depth], 4
+    jne .chosen
+    call gr_widepose
+    xor bx, bx
+.chosen:
+    mov [gr_stride], ax
+    mov cx, 20
+    mul cx
+    mul bx
+    add si, ax
+    push ds
+    pop es
+    mov di, gr_band
+    mov bp, 20
+.row:
+    mov dx, [gr_sy]
+.repeat:
+    push si
+    mov cx, [gr_stride]
+    rep movsb
+    pop si
+    dec dx
+    jnz .repeat
+    add si, [gr_stride]
+    dec bp
+    jnz .row
+    call gr_frontcoords
+    cmp byte [gr_cga], 0
+    jne .packed
+    cmp byte [gr_depth], 4
+    jne .mono
+    call OSAPI_GFX_BLIT4
+    jmp short .done
+.mono:
+    call OSAPI_GFX_BLIT1
+    jmp short .done
+.packed:
+    call gr_cgablit
+.done:
+    jmp .out
+
+; Pose BX as packed desktop rows (gr_inktables' fallback map) at the band's
+; tail, clear of the 960 bytes the rows expand to: SI = rows, AX = stride.
+GR_WIDE equ 5376-320
+gr_widepose:
+    push ds
+    pop es
+    mov si, gr_apeleft
+    or bx, bx
+    jz .left
+    call gr_mirrorpose
+.left:
+    mov di, gr_band+GR_WIDE
+    mov bx, gr_inkpairs+1024
+    mov cx, 160
+    cmp word [gr_sx], 1
+    jne .pairs
+.byte:
+    lodsb
+    xlat
+    stosb
+    loop .byte
+    mov ax, 8
     jmp short .out
+.pairs:
+    lodsb
+    xor ah, ah
+    shl ax, 1
+    xchg bx, ax
+    mov ax, [gr_inkpairs+1024+bx]
+    stosw
+    loop .pairs
+    mov ax, 16
+.out:
+    mov si, gr_band+GR_WIDE
+    ret
 
 ; The OS accepts planar bands only when it can honor the complete rectangle.
 ; Probe first; packed BLIT4 above remains the clipped/cross-display fallback.
+align 2
 gr_frontplanar:
     push bx
     mov ax, [gr_sx]

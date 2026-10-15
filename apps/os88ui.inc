@@ -319,7 +319,11 @@ OS88UI_IMG equ 64               ; THE LABEL IS A PICTURE, not a string (SPEC.md
                                 ; its own 16 x rows cell, ground and ink in one
                                 ; pass, which is what lets the button never
                                 ; write a pixel twice. Pressed, the pair
-                                ; inverts like a caption does.
+                                ; inverts like a caption does. A full mask is
+                                ; a constant, so WRITE IT `db ICON_SOLID, rows`
+                                ; and the data words alone (SPEC.md 25.6.2):
+                                ; the kernel fills the mask in, and the record
+                                ; is 2 * rows bytes shorter.
                                 ;
                                 ; ONLY UNDER `%define OS88UI_BIMG`, and that
                                 ; define changes the drawing body for the
@@ -402,7 +406,9 @@ OS88UI_BT_N      equ 6          ; how many are LIVE this pass. A paged window
 OS88UI_BT_WIN    equ 8          ; the window, written by os88ui_btninit
 OS88UI_BT_DOWN   equ 10         ; THE LIBRARY'S: index PLUS ONE of the control
                                 ; a press is live on, 0 for none. Read it if
-                                ; you like; never write it
+                                ; you like; never write it - except under
+                                ; OS88UI_NOGEST, where it is YOURS (Piano,
+                                ; Word, Scribe write it; SPEC.md 20.5.1.3.4)
 OS88UI_BT_ONCLK  equ 12         ; YOUR own W_ONCLICK proc, or 0. The library
                                 ; installs ITSELF as the window's click
                                 ; handler (SPEC.md 20.5.1.3.3) and chains here
@@ -460,6 +466,11 @@ OS88UI_BT_SIZE   equ 16
   %ifndef OS88UI_ABOUT
    %error "OS88UI_NOBTN with neither OS88UI_SCROLL nor OS88UI_ABOUT includes no drawing code at all"
   %endif
+ %endif
+%endif
+%ifdef OS88UI_SBUPD
+ %ifndef OS88UI_SCROLL
+  %error "OS88UI_SBUPD redraws a scroll bar: it needs OS88UI_SCROLL"
  %endif
 %endif
 %ifdef OS88UI_NOGEST
@@ -2142,6 +2153,50 @@ os88ui_sbmove:
     pop ax
     ret
 
+%ifdef OS88UI_SBUPD
+; -----------------------------------------------------------------------------
+; os88ui_sbupd  - redraw the bar the cheapest CORRECT way, and keep what was
+;                 drawn (OPT-IN: %define OS88UI_SBUPD beside OS88UI_SCROLL)
+; os88ui_sbupdw - the WHOLE bar always (a paint), and keep it the same way
+; in:  BX = the block FOLLOWED BY three words - total, fit and pos as these
+;      two entries last DREW them (10 words in all; SPEC.md 13.10.3.2);
+;      the block holds the NEW total, fit and pos; the gfx lock is held
+; out: nothing (all registers preserved); the pen is left BLACK
+;
+; os88ui_sbmove is only right while total and fit are what the bar on the
+; glass was drawn from - it finds the old thumb by putting the old pos back,
+; and a total that moved under it leaves a fragment of the old thumb behind -
+; so every caller kept three words and wrote this choice out by hand, TeXpad
+; once per bar. The seven-word block does not grow (13.10.5.6): the three
+; words are the CALLER's, laid out behind it. A live thumb drag is the
+; caller's to rule out: during one the thumb on the glass is the hand's.
+; -----------------------------------------------------------------------------
+os88ui_sbupd:
+    push ax
+    mov ax, [bx+8]
+    cmp ax, [bx+14]             ; total as drawn...
+    jne os88ui_sbupdw.w
+    mov ax, [bx+10]
+    cmp ax, [bx+16]             ; ...and fit: either moved, the thumb's
+    jne os88ui_sbupdw.w         ; HEIGHT did, and only the whole bar resizes it
+    mov ax, [bx+18]             ; the pos it is drawn at
+    call os88ui_sbmove          ; three drawing calls, or none
+    jmp short os88ui_sbupdw.k
+os88ui_sbupdw:
+    push ax
+.w:
+    call os88ui_sbar
+.k:
+    mov ax, [bx+8]              ; ...and what is on the glass now
+    mov [bx+14], ax
+    mov ax, [bx+10]
+    mov [bx+16], ax
+    mov ax, [bx+12]
+    mov [bx+18], ax
+    pop ax
+    ret
+%endif                          ; OS88UI_SBUPD
+
 %ifdef OS88UI_SBDRAG
 ; =============================================================================
 ; THE THUMB DRAG (SPEC.md 13.10.5) - a KNOB, and KERN_BIG's
@@ -3219,23 +3274,87 @@ OS88UI_ABLH   equ 12            ; the line pitch: an 8px cell and 4px of air
 OS88UI_ABPADX equ 12            ; ...the margin either side of the widest line
 OS88UI_ABPADY equ 7             ; ...and above the first cell, inside the frame
 
+; --- THREE OPT-INS for a card that is not a credit (SPEC.md 20.5.1.1) --------
+; TameGram's 'How to Play' sheet is thirteen lines of key table on a 124-row
+; CGA content box, and it is why these exist. None of them moves a byte in a
+; carrier that does not define it.
+;
+;   OS88UI_ABFIT   the pitch steps DOWN to fit: 12 while the card fits the
+;                  content box, then a pixel at a time to OS88UI_ABLHMIN - a
+;                  glyph's height, below which the text overlaps itself. Past
+;                  the floor the card is clamped as it always was. The pitch
+;                  chosen is left in os88ui_abp (a gate's proof the measure ran)
+;   OS88UI_ABLEFT  a line whose first byte is OS88UI_ABLT is drawn at the
+;                  card's left margin instead of centred; the byte is neither
+;                  drawn nor measured (MENU_DIS's shape: no second array)
+;   OS88UI_ABPACK  SI is the text itself, its lines END TO END, each with its
+;                  NUL, closed by an OS88UI_ABEND byte where the next line
+;                  would begin - in place of the pointer table. A blank line
+;                  is a lone NUL. Two bytes a line cheaper
+OS88UI_ABLHMIN equ 8
+OS88UI_ABLT    equ 1
+OS88UI_ABEND   equ 0FFh
+
 ; -----------------------------------------------------------------------------
 ; os88ui_about - the standard About card, from your ABOUT HANDLER
 ; in:  BX = your window ptr, SI = your line table; the gfx lock is HELD
 ; out: CF = 1 nothing was drawn - not one pixel of your content is visible
 ; preserves every register
 ; -----------------------------------------------------------------------------
+; A PAINTER-ONLY user - one whose handler only sets its flag and lets the
+; next paint put the card up (MIDIRack) - defines OS88UI_ABDONLY and this
+; entry's 8 bytes go: os88ui_about_d is all it calls.
+%ifndef OS88UI_ABDONLY
 os88ui_about:
     call OSAPI_WM_CLIP_SET      ; see "why there are two entries" above. The
     jnc os88ui_about_d          ; region dies at the kernel's own gfx_unlock,
     ret                         ; so there is nothing here to undo. CF is set,
                                 ; and BX/SI are wm_clip_set's own
+%endif
+
+%ifdef OS88UI_ABDISMISS
+; -----------------------------------------------------------------------------
+; os88ui_abdismiss - take your About card down, if it is up (OPT-IN:
+;                    %define OS88UI_ABDISMISS beside OS88UI_ABOUT)
+; in:  SI = your window ptr; BX -> your flag byte (nonzero = the card is up);
+;      AX = your repaint proc, entered with SI = BX = the window and a clip
+;      region ARMED over it (nothing armed one for a click, a key or a menu
+;      pick, SPEC.md 11.3); it clobbers whatever it clobbers
+; out: CF = 1 the card was up and is gone - the click or key was spent on it;
+;      CF = 0 there was no card. The flag is cleared even when the window is
+;      not visible (the next paint draws the content without the card).
+;      Clobbers BX and whatever the repaint proc does.
+;
+; THE "STATE IS YOURS" RULE ABOVE STANDS: the flag is still your byte and the
+; repaint still your proc; this is only the eleven instructions of cmp/clear/
+; clip/repaint/answer every About user wrote out. MEASURED, it is NOT a byte
+; saving in a package with one dismissal - the body is 21 bytes and the
+; site's two loads and a jmp are 9, against an inline 22-28: Hello, the one
+; user, is +2 for it (apps/hello is the SDK's worked example, and its use is
+; what keeps this body assembling). Every About user in the tree dismisses
+; from ONE proc, so take it for the tested body and the flag/CF contract,
+; never for size.
+; -----------------------------------------------------------------------------
+os88ui_abdismiss:
+    cmp byte [bx], 0            ; CF = 0 whatever the byte holds...
+    je .r                       ; ...so no card answers CF = 0 for nothing
+    mov byte [bx], 0
+    mov bx, si
+    call OSAPI_WM_CLIP_SET
+    jc .g                       ; not visible: nothing to repaint
+    call ax
+.g:
+    stc
+.r:
+    ret
+%endif                          ; OS88UI_ABDISMISS
 
 ; -----------------------------------------------------------------------------
 ; os88ui_about_d - the same card, from your PAINTER, with a region already
 ;                  armed. Draw it LAST: it is opaque over its own rect and
 ;                  everything under it has been drawn by now.
-; in:  BX = your window ptr, SI = your line table; the gfx lock is HELD
+; in:  BX = your window ptr, SI = your line table (the text itself under
+;      OS88UI_ABPACK); the gfx lock is HELD
 ; out: CF = 1 the window is not visible and nothing was drawn
 ; preserves every register
 ;
@@ -3265,28 +3384,85 @@ os88ui_about_d:
     call OSAPI_WM_GEOM          ; CX = content width, DX = content height
     pop bx                      ; BX = the content's left...
     pop di                      ; ...DI its top. A pop writes no flags, so...
-    jc .out                     ; ...CF = 1 is still WM_GEOM's: not visible
+    jnc .vis                    ; ...CF = 1 is still WM_GEOM's: not visible
+.out:                           ; THE EPILOGUE IS UP HERE and not at the end:
+    pop bp                      ; the body is ~150 bytes, so a `jc` to a
+    pop di                      ; bottom .out assembled as jnc+jmp near (5
+    pop si                      ; bytes) where this is a short jnc, and the
+    pop dx                      ; draw loop's `jz .out` reaches back to it
+    pop cx                      ; short (-116). CF is the caller's answer on
+    pop bx                      ; both paths: WM_GEOM's 1 here, `or ax, ax`'s
+    pop ax                      ; 0 from the loop
+    ret
+.vis:
 
     ; --- MEASURE: the widest line sets the width, the count the height ------
     push si                     ; the table, again for the draw below
     push cx                     ; the content width: CX is the height's sum
+%ifdef OS88UI_ABFIT
+    xor cx, cx                  ; CX = the line COUNT: the pitch is not known
+%else                           ; until it is
     mov cx, OS88UI_ABPADY * 2   ; CX = the card's height, a line at a time
+%endif
     xor bp, bp                  ; BP = the widest line in pixels. BP as a
 .m:                             ; REGISTER is free; [bp+disp] addresses SS
+%ifdef OS88UI_ABPACK
+    cmp byte [si], OS88UI_ABEND ; the byte where the next line would begin
+    je .md
+%else
     lodsw                       ; AX = the next line, 0 ends the table
     or ax, ax
     jz .md
     push si
     xchg si, ax
+%endif
+%ifdef OS88UI_ABLEFT
+    cmp byte [si], OS88UI_ABLT  ; measure the TEXT, not the marker
+    jne .mw
+    inc si
+.mw:
+%endif
     UI_WIDTH                    ; AX = this line's pixels; clobbers nothing
-    pop si                      ; else, so CX and BP ride through it
+%ifndef OS88UI_ABPACK           ; else, so CX and BP ride through it
+    pop si
+%endif
+%ifdef OS88UI_ABFIT
+    inc cx
+%else
     add cx, OS88UI_ABLH
+%endif
     cmp ax, bp
+%ifdef OS88UI_ABPACK
+    jbe .ms
+    xchg bp, ax
+.ms:
+    lodsb                       ; on past this line's NUL
+    or al, al
+    jnz .ms
+%else
     jbe .m
     xchg bp, ax
+%endif
     jmp short .m
 .md:
+%ifdef OS88UI_ABFIT
+    mov si, OS88UI_ABLH + 1     ; SI = the pitch, walked down from the
+.p:                             ; standard one while the card does not fit
+    dec si
+    mov ax, si
+    push dx                     ; (mul writes DX: the content height)
+    mul cx
+    pop dx
+    add ax, OS88UI_ABPADY * 2   ; AX = the card's height at this pitch
+    cmp ax, dx
+    jbe .pok
+    cmp si, OS88UI_ABLHMIN
+    ja .p                       ; at the floor it is clamped below instead
+.pok:
+    mov [os88ui_abp], si
+%else
     xchg ax, cx                 ; AX = the card's height
+%endif
     pop cx                      ; CX = the content width
     pop si                      ; SI = the table
     cmp ax, dx
@@ -3327,36 +3503,55 @@ os88ui_about_d:
     xchg bx, ax                 ; BX = the card's left again (AX is free)
     add di, OS88UI_ABPADY       ; the first cell's top, inside the frame
 .l:
+%ifdef OS88UI_ABPACK
+    cmp byte [si], OS88UI_ABEND ; ...equal clears CF: the card was drawn
+    je .out
+%else
     lodsw
     or ax, ax                   ; ...which clears CF: the card was drawn
     jz .out
     push si
     xchg si, ax
+%endif
+%ifdef OS88UI_ABLEFT
+    cmp byte [si], OS88UI_ABLT
+    jne .lc
+    inc si                      ; step over the marker: it is not a glyph
+    jmp short .wide             ; ...and the pen goes to the left margin
+.lc:
+%endif
     UI_WIDTH                    ; AX = its pixels
     mov cx, bp
     sub cx, ax
     jns .cok                    ; a line WIDER than the clamped card would
-    mov cx, OS88UI_ABPADX * 2   ; otherwise centre itself off the LEFT edge -
-.cok:                           ; shr on a negative is a large positive - so it
-    shr cx, 1                   ; starts at the margin and clips at the frame.
-                                ; Keep the lines short: the card is clamped to
+.wide:                          ; otherwise centre itself off the LEFT edge -
+    mov cx, OS88UI_ABPADX * 2   ; shr on a negative is a large positive - so it
+.cok:                           ; starts at the margin and clips at the frame.
+    shr cx, 1                   ; Keep the lines short: the card is clamped to
                                 ; the content box and a CGA's is the narrow one
     add cx, bx                  ; CX = the pen x, DX = the pen y
     mov dx, di
     mov ax, (CWHITE << 8) | CBLACK
     UI_RUN                      ; OPAQUE (SPEC.md 6.1): the cell's ground and
-    pop si                      ; its glyph in one pass, so no pixel of the
-    add di, OS88UI_ABLH         ; card is written twice
-    jmp short .l
-.out:
-    pop bp
-    pop di
+                                ; its glyph in one pass, so no pixel of the
+                                ; card is written twice
+%ifdef OS88UI_ABPACK
+.ls:
+    lodsb                       ; on past this line's NUL (FONT_RUN keeps SI)
+    or al, al
+    jnz .ls
+%else
     pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+%endif
+%ifdef OS88UI_ABFIT
+    add di, [os88ui_abp]
+%else
+    add di, OS88UI_ABLH
+%endif
+    jmp short .l
+%ifdef OS88UI_ABFIT
+os88ui_abp: dw 0                ; the pitch the last measure chose - DATA,
+%endif                          ; inline, for os88ui_armw's reason
 %endif                          ; OS88UI_ABOUT
 
 %ifdef OS88UI_CHK

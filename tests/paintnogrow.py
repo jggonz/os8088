@@ -34,6 +34,7 @@ width, and on VGA both shrink the height - which is the same bug by the other
 axis, and why `--machine` is a real second row rather than a duplicate.
 """
 import argparse
+import tempfile
 import os
 import struct
 import sys
@@ -53,7 +54,7 @@ BAND1, BAND2 = 32, 63           # the black band's first and last rows
 # being 448x280. 466 grows the width on both.
 ARMS = ((448, "NOGROW.BMP", "the window does NOT grow"),
         (466, "GROWS.BMP", "it grows - the positive control"))
-TMP = "/tmp"
+TMP = tempfile.gettempdir()
 
 
 def _fixture(w, name):
@@ -97,7 +98,7 @@ def main(argv):
     files = ["APPS:build/paint.o88"]
     for w, name, _ in ARMS:
         files.append("MEDIA:" + _fixture(w, name))
-    apps = os88marty.scratch_disk("/tmp/paintnogrow.img", *files)
+    apps = os88marty.scratch_disk(tempfile.gettempdir() + "/paintnogrow.img", *files)
     fails = []
 
     for w, name, why in ARMS:

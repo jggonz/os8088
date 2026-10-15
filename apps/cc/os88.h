@@ -163,9 +163,11 @@
  * window-record accessors and six runtime helpers that are not slots at all -
  * 133 C entry points, and every one of them is in apps/cc/os88thunk.asm -
  * FOUR OF THEM ONLY IF THE SHIM SAYS SO. The four fsx_* thunks are behind
- * `%define CC_HAS_FSX` (the gate list below), so a package without it
- * ASSEMBLES 101 slots and 129 entry points and the four names are prototypes
- * with no bodies. The recipe below counts the FILE, which holds all of them.
+ * `%define CC_HAS_FSX` (the gate list below), so a package without it has
+ * four prototypes with no bodies. And a package ASSEMBLES ONLY THE ENTRY
+ * POINTS ITS C CALLS (SPEC.md 73.9.1): ccsmoke carries 13 of the 133, so an
+ * unused prototype here costs nothing and neither does an unused thunk. The
+ * recipe below counts the FILE, which holds all of them.
  *
  * How those three are counted, so the next person does not have to guess:
  *   164  `%define OSAPI_<NAME> KERNEL_SEG:0x...` lines in apps/os88api.inc.
@@ -284,10 +286,12 @@ struct os88_menuset {
 /* The layouts above are the kernel's, not this header's opinion of them, so
  * the header checks itself: a mismatch is an "Array dimension less than 1"
  * at the line below rather than a package that reads a menu set at the wrong
- * stride. Costs one byte of bss each. */
-static char os88__sz_menu[sizeof(struct os88_menu)    ==  6 ? 1 : -1];
-static char os88__sz_mset[sizeof(struct os88_menuset) == 36 ? 1 : -1];
-static char os88__sz_find[sizeof(struct os88_find)    == 24 ? 1 : -1];
+ * stride. TYPEDEFS, so they cost nothing: SmallerC checks a typedef's
+ * dimension exactly as it checks an object's, and emits no storage for it -
+ * they were `static char` once, a byte of bss each in every C package. */
+typedef char os88__sz_menu[sizeof(struct os88_menu)    ==  6 ? 1 : -1];
+typedef char os88__sz_mset[sizeof(struct os88_menuset) == 36 ? 1 : -1];
+typedef char os88__sz_find[sizeof(struct os88_find)    == 24 ? 1 : -1];
 
 /* --- constants, mirrored from apps/os88api.inc ---------------------------
  * Mirrored, which means they are two copies of one fact: if a value here ever
@@ -1075,7 +1079,10 @@ int os88_disk_cluster_sectors(void);             /* chunk sizes are multiples
 
 void os88_file_here(struct os88_place *p);       /* bank where you stand... */
 int  os88_file_goto(struct os88_place *p);       /* ...and come back. A
-                                                  * REMOUNT: real floppy I/O */
+                                                  * REMOUNT for DISPLAY - real
+                                                  * floppy I/O. To read or
+                                                  * write by name, stand with
+                                                  * os88_file_goto_q_mark() */
 
 /* os88_file_goto_q_mark - stand in another folder QUIETLY, and STAY there
  * (SPEC.md 74.1, 19.2.2). Inside the volume you are on it is a word - no disk
@@ -1281,8 +1288,16 @@ int os88_toast(const char *text, int ticks);
 /* --- the runtime's own helpers -------------------------------------------
  * There is no C library here (SPEC.md 73.9: no printf family - it is
  * thousands of bytes for the one conversion a program wanted). These six are
- * hand-written in apps/cc/os88thunk.asm, are DS-only - no string instruction
- * and therefore no ES - and are all a package has needed so far. */
+ * hand-written in apps/cc/os88thunk.asm, work on DS only - memset and memcpy
+ * are `rep stosb`/`rep movsb` with ES loaded from DS inside the call, which is
+ * why compiled C may not spell them itself (SPEC.md 73.5.1) - and are all a
+ * package has needed so far.
+ *
+ * os88_memcpy copies FORWARD, a byte at a time, so it is safe for an
+ * OVERLAPPING move to a LOWER address (dst < src: closing a gap, the way a
+ * text editor deletes) and wrong for one to a higher address, which needs a
+ * backward copy of your own. A non-overlapping copy is either. n = 0 copies
+ * nothing. */
 void os88_memset(void *p, int c, unsigned n);
 void os88_memcpy(void *dst, const void *src, unsigned n);
 unsigned os88_strlen(const char *s);

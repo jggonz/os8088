@@ -1620,7 +1620,7 @@ static void do_about(void *w)
  * can be stated there - Copy is ~103 ms of conversion and Paste is a 2KB heap
  * claim, and both reach kernel/clip.inc's mem_claim, which may compact an
  * arena holding this app's pinned 64KB and 20KB. So the command LATCHES and
- * the top of the next wake runs c64_clip_service with no lock held.
+ * the top of the next wake runs ovl_clip_service with no lock held.
  *
  * THE FIRST HALF OF THIS FUNCTION IS THE NEGATIVE CONTROL and it is the whole
  * reason the helper exists rather than two lines at each call site: a command
@@ -1644,9 +1644,9 @@ static void do_reset(int item, void *w)
              "the whole desktop stopped (LESSONS.md 6)");
     if (lock_depth != 0)
         fail("do_reset: the command left the lock held");
-    c64_reset_service();                /* what the top of the next wake does */
+    ovl_reset_service();                /* what the top of the next wake does */
     if (lock_depth != 0)
-        fail("c64_reset_service took the gfx lock - it is called from the "
+        fail("ovl_reset_service took the gfx lock - it is called from the "
              "wake and holds none (SPEC.md 74.1)");
 }
 
@@ -1661,9 +1661,9 @@ static void do_edit(int item, void *w)
              "(LESSONS.md 6, C64-SPEC 7.7)");
     if (lock_depth != 0)
         fail("do_edit: the command left the lock held");
-    c64_clip_service(c64_mbase);        /* what the top of the next wake does */
+    ovl_clip_service(c64_mbase);        /* what the top of the next wake does */
     if (lock_depth != 0)
-        fail("c64_clip_service took the gfx lock - it is called from the wake "
+        fail("ovl_clip_service took the gfx lock - it is called from the wake "
              "and holds none (SPEC.md 74.1)");
 }
 
@@ -3653,7 +3653,7 @@ int main(int argc, char **argv)
                  "SPEC.md 47 forbids");
         /* ...AND THE CHORD DOES NOT WALK ROUND THE GREYING. The kernel never
          * dispatches a disabled item, but os88_onkey dispatches Alt+Shift+P
-         * itself (§7.5) - and it used to reach c64_advance_frame's state
+         * itself (§7.5) - and it used to reach ovl_advance_frame's state
          * guard and return in silence, which is §47's shape by the other
          * route. */
         c64_adv = 0;
@@ -4034,7 +4034,7 @@ int main(int argc, char **argv)
                                              * feeder runs inside the wake */
         /* ONE crossing: os88_oncmd -> ovl_cmd (the runtime's far entry) and
          * back. ovl_cmd only LATCHES - the clipboard calls, the claim and the
-         * refusals are c64_clip_service's, which is resident and runs from the
+         * refusals are ovl_clip_service's, which is resident and runs from the
          * wake - so ovl_cmd -> ovl_paste, ovl_paste -> os88_clip_size and
          * ovl_paste -> os88_clip_get are all gone. There is no conversion call
          * in the command either: the byte map is the feeder's, ten a wake with

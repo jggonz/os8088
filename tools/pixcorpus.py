@@ -2,7 +2,7 @@
 """pixcorpus: PiXEL's simple-format fixtures, made from nothing (SPEC.md 106.13).
 
     python3 tools/pixcorpus.py --out DIR      # write every fixture into DIR
-    python3 tools/pixcorpus.py --check        # every fixture's verdict (fast row)
+    python3 tools/pixcorpus.py --check        # every fixture's verdict (soak row)
 
 DETERMINISTIC AND NEVER COMMITTED. Every file is built here from a formula,
 so a fixture is never a binary in the tree and two runs write the same bytes.

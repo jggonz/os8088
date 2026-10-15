@@ -152,8 +152,30 @@
     CC_PARTS_BEGIN 1
       OS88_PART OP_ASSET
     CC_PARTS_END
+_a2_opbase equ op_base              ; the carve's CLAIM base, which apple2.c
+                                    ; shrinks to the main ROM once the
+                                    ; CHARGEN is decoded (APPLE2-SPEC 1.5):
+                                    ; os88_part_seg answers the part, which
+                                    ; sits the run's head slack above it
 
 %include "apple2.gen.asm"           ; the compiled C, found through -I build/
+
+%define A2_SHIP 1                   ; THE SHIPPING BUILD, AND NOT A HARNESS:
+                                    ; nasm has no dead-code elimination, so
+                                    ; this define is what keeps the routines
+                                    ; only a harness calls out of the resident
+                                    ; image - a2band.inc's `a2_rowsig` (~34
+                                    ; bytes: the shift test compares forty
+                                    ; source bytes now, APPLE2-SPEC 7.7 step 2)
+                                    ; and, from apps size pass 1, a2mem.inc's
+                                    ; a2_rom_rd, a2_zfill and a2_zcopy_in
+                                    ; (hosttest/a2memtest.asm's subjects) and
+                                    ; the a2_dirty and a2_cut nothing calls at
+                                    ; all - 150 bytes. The harnesses that
+                                    ; %include these files themselves -
+                                    ; tests/a2band/a2bandbench.asm and
+                                    ; hosttest/a2memtest.asm, a2cputest.asm -
+                                    ; do not define it, and keep them
 
 ; The hand-written half (SPEC.md 73.11's rule that the inner loop is
 ; assembly). ORDER MATTERS ONLY IN THAT a2cpu.inc declares the register file
@@ -163,21 +185,14 @@
                                     ; memory hooks and the entry/exit shell
 %include "apple2/a2mem.inc"         ; the RAM/ROM claim accessors and movers
                                     ; (APPLE2-SPEC section 3.4)
-%define A2_SHIP 1                   ; ...and a2band.inc's `a2_rowsig` is NOT in
-                                    ; it. The shift test compares forty source
-                                    ; bytes now (APPLE2-SPEC 7.7 step 2) and
-                                    ; nothing calls the signature; nasm has no
-                                    ; dead-code elimination, so this define is
-                                    ; what keeps ~34 unreachable bytes out of
-                                    ; the resident image. The two harnesses
-                                    ; that %include a2band.inc themselves -
-                                    ; tests/a2band/a2bandbench.asm and
-                                    ; hosttest/a2memtest.asm - do not define
-                                    ; it, and keep the routine as their subject
 %include "apple2/a2band.inc"        ; the 1bpp composers and the span compare
                                     ; (APPLE2-SPEC 7.3)
 %include "apple2/a2nib.inc"         ; the 6-and-2 encoder - a STUB until the
                                     ; Disk II follow-up PR (section 14)
+%define A2_HITAB_AT _a2_x2b + 1152  ; a2fsx.inc's artifact table, in the
+                                    ; last 128 bytes of the 1,280-byte doubled
+                                    ; band the bracket never uses (a2fsx.inc,
+                                    ; a2scr.c's a2_fsxbuf and its check)
 %include "apple2/a2fsx.inc"         ; THE FOREIGN-MODE RASTER WRITERS (section
                                     ; 13): a2_fsx_row's three-mode scan-line
                                     ; composer over a CELL RANGE - a masked

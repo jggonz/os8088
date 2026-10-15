@@ -66,8 +66,12 @@ def kzdefs(t):
     return json.load(open(t.img("kernel.kz.json")))
 
 
-def blob_bytes():
+def blob_bytes(knob=False):
     """BOOT2_SECS * 512 - the blob, read out of the source the Makefile reads.
+
+    `knob` adds kernel.asm's BOOT2_KNOBSEC: a KNOB kernel's blob is a sector
+    longer than the shipped literal says (SPEC.md 2.5.3.3), and NOKZIP=1 is a
+    knob, so the --nokzip arm passes it.
 
     kernel.bin is [ the blob ][ the image ] and only the second half lands at
     KERNEL_SEG; stage 1 reads the first into BLOB_SEG. Under KZIP os88kz.py
@@ -79,7 +83,7 @@ def blob_bytes():
     m = re.search(r"^BOOT2_SECS\s+equ\s+(\d+)", src, re.M)
     if not m:
         sys.exit("kzboot: no BOOT2_SECS in kernel/kernel.asm")
-    return int(m.group(1)) * 512
+    return (int(m.group(1)) + (1 if knob else 0)) * 512
 
 
 def spl_resident():
@@ -149,7 +153,7 @@ def main():
             fails.append("NOKZIP=1 still produced a packed KERNEL.SYS (%d vs "
                          "the image's %d) - the knob did not reach the build"
                          % (packed, len(image)))
-        blob, head = blob_bytes(), spl_resident()
+        blob, head = blob_bytes(knob=True), spl_resident()
     else:
         n = kzdefs(t)
         blob, head = n["blob"], n["head"]

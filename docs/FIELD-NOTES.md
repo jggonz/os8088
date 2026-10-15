@@ -19,7 +19,7 @@ Two rules the entries exist to serve:
   audio report sat here for months as a 5150 report and had come off PCem;
   the 5150 has no sound card.
 
-**Still open:** 3 (mechanism D), 10, 14, 19, 24.2, 28, 32, 43, 61, and one residual
+**Still open:** 3 (mechanism D), 10, 14, 19, 24.2, 28, 32, 43, 61, 63, 64, 66, and one residual
 each in 33 and 37.
 
 ---
@@ -678,7 +678,7 @@ recoverable only under another OS.
 
 **What the source says.** Every floppy `int 13h` this system issues is
 `AH=02h`/`03h` (`[dsk_op]` takes exactly those two values), `AH=00h` on a
-retry and `AH=08h` in `clone.inc`. There is **no `AH=05h` format-track call
+retry and `AH=08h` in `diskops.inc`. There is **no `AH=05h` format-track call
 anywhere in the tree** and no `AH=17h`/`18h` set-media-type either. The
 geometry comes from the image's size, which was right. The diskette parameter
 table is the ROM's own with only EOT rewritten (§18.92).
@@ -700,7 +700,7 @@ table is the ROM's own with only EOT rewritten (§18.92).
    over 48-tpi tracks leaves old ID fields under the new ones;
    docs/FIELD-MACHINES.md warns of the same thing). The same test separates
    them.
-3. **`clone.inc`'s window arithmetic writing off a track.** Weak: §18.91.3
+3. **`diskops.inc`'s window arithmetic writing off a track.** Weak: §18.91.3
    bounds every write run at the track. A `DISKCNT=1` clone with every write's
    CHS logged against the image's geometry is the cheap check, and the only
    one an emulator can run.
@@ -3267,7 +3267,7 @@ the cull, and the cull's only input that grows with a long session is the
 clock. `tests/skiesticks.py` sets `[ticks]` and reproduces it in 25 seconds.
 
 
-## 63. Pentium 4, USB keyboard on a USB-to-PS/2 converter: Space cannot PAUSE MIDIRack's speaker play (OPEN — instrumented: SPEC.md 9.8.1)
+## 63. Pentium 4, USB keyboard on a USB-to-PS/2 converter: Space cannot PAUSE MIDIRack's speaker play (OPEN — the keyboard is HELD OFF for the whole bracket: SPEC.md 9.8.1)
 
 Reported by a tester on a **Pentium 4**, keyboard USB through a USB-to-PS/2
 converter. The keyboard works on the desktop, types, and **Space RESUMES** a
@@ -3290,3 +3290,993 @@ a CLICK (or let the song end), touch nothing, and photograph the panel under
 the menu bar. Esc and S in the bracket are worth trying too - if they also do
 nothing, it is not about Space.
 
+
+
+### 63.1 The first photograph: the keys are not lost, they are DELAYED
+
+The machine is a **Compaq Evo D500 small-form-factor** (P4 1.8 GHz, 256MB
+PC133, so Intel 845 with an ICH2), PS/2 keyboard and mouse sockets, the
+keyboard a USB part through a converter in the purple one. A PS/2 mouse is in
+use (`x` = 06: a mouse has spoken, an aux port is present). The tester pressed
+Space three times, then Esc, then S, inside the bracket, and paused with a
+click. The panel says:
+
+- **`irq1 000A/0000`**: ten keyboard interrupts in the session and **none**
+  inside any of the three brackets; `fsx-ticks 06D8` (1,752 ticks, 96 s in
+  brackets) with **`obf`, `irr1`, `isr1` and `msk1` all 0**. So it is the
+  first of 9.8.1's three pictures and the strongest form of it: the byte never
+  reached the 8042's output buffer, the PIC never saw a request, and IRQ1 was
+  never masked.
+- **The ten bytes are EXACTLY what was typed**, in order - `39 B9 39 B9 39 B9
+  01 81 1F 9F`, Space make/break three times, Esc, S - and every one of them
+  arrives in the same tick as an `L` row, i.e. the instant a bracket ends. The
+  keyboard (or its converter) BUFFERED them while it could not send.
+- **The `int 16h` half works inside a bracket.** After the first `L`, Space,
+  Space arrive on the desktop; the first resumes the play (`E`, head 20, tail
+  22) and the second is still in the BIOS buffer, so the new bracket takes it
+  and pauses at once (`L` in the same tick, head 22). A key that is already in
+  the buffer pauses MIDIRack as designed.
+- **The 8042's status changes within one tick of the speaker starting**:
+  `1C` at the bracket's first sample (tick 1423) and **`34`** at the next
+  (1424), and it reads `34` for the whole bracket and `15`/`1C` again the
+  moment it ends. Bit 3 cleared says the last write the controller saw was to
+  **port 60h** - and nothing in this kernel or in MIDIRack writes port 60h or
+  64h at run time (`mou_p2cw`/`mou_p2dw` are boot and `mou_p2_off` only) - and
+  bit 5 set is the aux/timeout bit. What happens in that one tick is
+  `os88spk_go`: the FSX_SPK door turns channel 2 into the PWM, IRQ0's vector
+  goes to the speaker ISR and channel 0 is reprogrammed to the sample rate.
+
+So the bracket's own code is not reading the keyboard wrongly: something
+outside it **stops the PS/2 keyboard channel** while the PIT runs at the
+sample rate, and lets it go when it stops. The mouse channel keeps working
+(the click that ended the bracket arrived). The prime suspect is the BIOS's
+**USB legacy support**: its SMM handler traps ports 60h/64h on the ICH even
+for a PS/2 keyboard, a status read is then the EMULATOR's answer, and a
+write to port 60h that no code here made is exactly what an SMI handler would
+leave behind. DOS programs that reprogram the PIT losing the keyboard with USB
+legacy enabled is a known class of failure on machines of this age.
+
+**Next**: the same disk with USB legacy support DISABLED in Compaq's F10
+setup. If Space then pauses, it is the SMM handler and the question becomes
+what in the speaker's start upsets it; if not, a second build that records the
+status after each step of `os88spk_go` names the step.
+
+
+## 64. 286, Video Player: Esc, then the close box while the disk still clicks - the machine froze (OPEN - once in seven, not reproduced)
+
+Reported by the owner on their **real 286** (16 MHz AMD, PVGA1A on the
+board, laptop IDE disk, no sound card, `EMS.DRV` mounted and measured too
+slow, so the bank was XMS's - SPEC.md 98.3.18.8), playing a banked `.V88`
+full screen: Esc during the play, then quickly the window's close box while
+the hard disk was still clicking. **The machine froze**: the pointer stopped
+moving, the disk stopped, no progress bar in the menu bar. The keyboard
+lights were not tried. Six more tries did not freeze.
+
+What was running: Esc ENDS the session, and the disk after it is the
+window's timer reading the rest of the file into its hold in XMS
+(`vp_ontimer` -> `vp_xstep`, a 32 KB `READ_SEQ` and a 32 KB `int 15h AH=87h`
+a step). The player had no close negotiator, so the close tore it down with
+that load alive.
+
+**Ruled out, on reading the code**: the kernel's teardown reclaims it all
+(`inst_rel_rec`: `EMSV_GONE`, `XMV_RELINST`; the region's claims;
+`wm_destroy` clears the record `ui_timer_pass` tests, so the timer cannot
+fire into a freed segment); `READ_SEQ` keeps no read-ahead and the XMS copy
+is synchronous; the speaker's IRQ0 is bracket-bound. Every `pushf`/`cli` on
+the close path is balanced. **Not reproduced** on QEMU (XMS, no EMS board)
+in 26 tries, and three more per `tests/vidclose.py` run - though those 26
+never checked that the hold was still loading at the close, which
+`vidclose` now asserts. MartyPC has EMS and no XMS, so nothing here
+runs the owner's pairing.
+
+**What shipped** (SPEC.md 98.3.18.10): a close negotiator that stops the play
+and gives the hold back before the kernel frees anything. It changes the
+ORDER and is not shown to fix this. **What a recurrence on that build should
+tell**: whether the keyboard lights still toggle (Num Lock) - lit means
+interrupts are alive and the UI task is stuck, dark means IRQ0 or IF is
+wedged, entry 61's signature on another 286 BIOS. A kernel race found on the
+way, which needs a WORKER and so not this file (the player hires one only
+for a Live play): `ui_timer_pass` tested `W_FLAGS` before `gfx_lock`, which can
+block while a dying worker frees the window, and called the handler without
+testing again - FIXED, SPEC.md 13.9.2, `tests/timerrace.py`.
+
+
+## 65. 286, Video Player on the PC speaker: a disk-heavy file plays slow, "nothing late" (FIXED - SPEC.md 52.1.1)
+
+Reported by the owner on their **real 286** and reproduced identically on
+86Box's `mr286`: PCWolf.V88 (286-pvga, Mode X, 394 KB/s, 8 kHz on the
+speaker), booted from floppy with HDD.DRV and the file on a hard-disk
+partition, played its 15.1 s in ~17.5 s with the sound breaking up - and the
+card said nothing late, nothing stalled, and the ticks on target. Muted it
+played normally; held whole in XMS (a smaller encode) it played in time; a
+20 KB/s speaker file for the 5150 played fine.
+
+**The cause**: the drive is one the BIOS knows, so HDD.DRV read it on rung 0,
+the BIOS's int 13h - and an AT BIOS moves an IDE sector by PIO with
+interrupts OFF. Under the speaker IRQ0 is one a sample and the play's clock
+is the samples played, so every one due inside a read was lost, and the
+kernel tick the speaker's ISR chains with it: a play slow by exactly what
+was lost, tick for tick on a clock that was losing too. Ruled out on the way:
+the speaker's own cost (SPKBENCH on 86Box: 6.9% at 8 kHz, under the
+profile's 9.2%), fragmentation (the files are one run each), and the
+player's and the kernel's own interrupt-off windows. **The decisive test was
+the owner's**: MR BIOS told there was no hard disk, so rung 1 found the
+drive instead - and PCWolf played in 15.1 s with clean sound.
+
+**The fix**: rung 1 takes a drive the BIOS also knows on a 286 or better,
+once LBA 0 read through both rungs agrees (SPEC.md 52.1.1), so no BIOS
+setting is needed - and the boot partition of an installed machine (a video
+disk is one partition) is handed to the driver too (`OSAPI_VOL_TAKE`, now `OSAPI_VOL_ADD` with DX != 0), and
+given back to the BIOS when the driver goes. `tests/hdtake.py` is the gate.
+
+## 66. PicoMEM: the Sound Blaster plays nothing, and the NE2000 transmits but never receives - no DHCP (FIXED on both cards — the network, the USB mouse, B: and Restart in os8088; the 1.x's Sound Blaster in its FIRMWARE, branch `os8088-pm114` of Elendilon/ISA-PicoMEM, plus SOUND.DRV masking a racing DMA channel 1; the crackles were two firmware defects and are fixed too: SPEC.md 34.10, 72.2, 18.97.6, 18.100.1, 9.12.7)
+
+Two machines, two cards: a **286 with a PicoMEM 1.x** and **5150 #2 with a
+PicoMEM 2.x** (docs/FIELD-MACHINES.md). On both, `ETHER.DRV` found the card,
+called it an NE1000, counted transmits, never counted a receive and never got
+a DHCP lease; and the `PICOMEM=1` Sound Blaster (SPEC.md 34.10) came up and
+played nothing.
+
+**The network was the memory map.** The PicoMEM's emulated NE2000 answers its
+PROM un-doubled, so `ne_probe`'s pair test calls it 8-bit and the ring went at
+page 0x20 - and the card's packet RAM starts at 0x4000. Transmits went out
+from outside the card's buffer (counted, nonsense on the air) and receives
+were written outside it (never seen). `ne_memok` now tests the NE1000 map
+before using it (SPEC.md 72.2). `tests/picomem.py`'s `ne` leg runs the
+driver's own code against a model of the firmware's 8390 and reproduces the
+report exactly with the old `ne2000.inc`.
+
+**The sound was IRQ discovery taking the card's own vector.** A 1.x has one
+IRQ jumper, hooked by a multiplexer in its BIOS that copies every DMA block
+and raises the SB's IRQ as a software `int`; `sbl_f_irqdisc` swapped that
+vector for a stub. The PicoMEM build now learns the card's line (PM BIOS
+function 0), never offers it, keeps it unmasked, and hooks the SB on the line
+it configured without probing (SPEC.md 34.10.1).
+
+**The network is confirmed working on the 286's PicoMEM 1.x** (the owner,
+2026-10-10). The Sound Blaster is still untested there - that card's firmware
+has to be updated first - and it stays behind `PICOMEM=1` until it is.
+
+**The 5150's PicoMEM 2.x, first run of the fix** (jumpers IRQ 3 and 5, DMA 1):
+the Ethernet page said `Ne2000` at address **`AAAAAAAAAAAA`**, tx counting, no
+rx, no address; the Sound Blaster tier red. Two separate findings:
+
+- **The `Ne2000` was an EMPTY SLOT.** `AAh` is the opcode of the `stosb` after
+  the PROM loop's `in` - on an 8088 an undriven port answers with a byte the
+  bus just carried - so the probe accepted the first base in `eth_bases` with
+  nothing in it and never reached the card. Fixed: the command register must
+  read back on two pages (SPEC.md 72.2). Whether the card is THEN found depends
+  on it being up: the PicoMEM's own boot screen names its NE2000 port and its
+  Wi-Fi state.
+- **The SB is refused by the FIRMWARE, before any of our code matters.**
+  `CMD_SBOnOff` answers `CMDERR_NOIRQ` whenever the card detected no IRQ of
+  its own, and the 2.x firmware notes say for PM2-6-21-26: *"PicoMEM IRQ is
+  still hard coded, Jumper on IRQ7 is mandatory"* - with jumpers on 3 and 5
+  only, there is none. PM2-10-4-26 makes the line configurable (`IRQ` in
+  `config.txt`) and also first implements the SB's IRQ/DMA command. So: a
+  jumper on IRQ 7 as well (the card's own line; 3 and 5 stay for the SB and
+  the NE2000), or the newer firmware with the line set in `config.txt`. The
+  PicoMEM's boot screen shows the IRQ it found, and it must not read 0.
+
+**Second run on the 2.x, IRQ 7 jumpered as well** (the card's page: `IRQ: 7
+All IRQ: 3 5 7`, NE2000 at 320h IRQ 3): **the Ethernet WORKS** - DHCP address
+and all - because the probe no longer stops at the empty 300h and reaches 320h.
+**The SB was still refused, and the card's Devices page said why**: `CMS >
+Port: 220-22F`. The firmware refuses an SB base another of its emulated
+devices holds (`CMDERR_PORTUSED`), and we only ever asked for 220h. On DOS the
+`BLASTER` variable names a free port; here `pm_snd_on` now walks 220h, 240h,
+230h, 250h, 260h on `PORTUSED` alone (SPEC.md 34.10.2), and `tests/picomem.py`
+carries the card as its page showed it - the code before this asks for 220h
+once and gives up.
+
+**The SB is FIXED and confirmed on the 2.x** (Tracker playing through it) - so
+the tier is in every `SOUND.DRV` now (SPEC.md 34.10.3: two port reads and no
+heap on a machine without the card). The 1.x's SB waits on that card's
+firmware update. Three more reports came with it, all fixed in code and
+awaiting the field:
+
+- **B: never appeared with an image mounted on it** - the boot probe asks the
+  FDC about TRACK 0 and a PicoMEM floppy is not on the FDC. The card is asked
+  first now, its own `FDDn_Attribute` bit 7 (SPEC.md 18.97.6), `kern_big`.
+- **Chip -> Restart never came back** while Ctrl-Alt-Del did. On a PicoMEM
+  Restart warm-resets through the ROM as Ctrl-Alt-Del does, so POST re-runs
+  the card's option ROM (SPEC.md 18.100.1). Not root-caused - no emulator has
+  the card - so the fix takes the path the field showed working.
+- **The card's USB mouse** is `USBMOUSE.DRV`'s second backend (SPEC.md
+  9.12.7): tick **USB Mouse** on the Drivers page (or `make picomemtest`'s
+  disks, which want it), with the card's USB host and mouse enabled in its own
+  setup. Its reports reach us through the card's IRQ, so the IRQ 7 jumper
+  matters here too.
+
+**Third run on the 2.x: B: and Restart are CONFIRMED** - B: appears with an
+image mounted, and Chip -> Restart comes back to the card's own floppies.
+**Ticking USB Mouse froze the machine** (off `os8088-360.img`). The attach
+turned the card's mouse on and THEN hooked `int 33h`, PMMOUSE's order - and
+the card's firmware flags a waiting report on every USB report whether the
+mouse is enabled or not, so any movement since power-on was an IRQ raised the
+instant the enable returned, delivered through an `int 33h` that on a 5150 is
+0000:0000. The hook goes in first now, and the card's line is opened as
+`SOUND.DRV` opens it (SPEC.md 9.12.7); `tests/picomem.py` reads the vector at
+the moment the card is told to enable and goes red on the old order.
+
+**Fourth run on the 2.x: the USB mouse WORKS** (2026-10-10) - ticked on the
+Drivers page off `os8088-360.img`, the driver loads and the pointer moves.
+That closes the 2.x: network, Sound Blaster, B:, Restart and mouse, all
+confirmed on the card.
+
+### What is left: the 1.x, after its firmware update
+
+This is written for whoever picks the 286 up again, possibly much later, and
+is meant to need nothing else from this session.
+
+**The firmware.** The 1.x's Sound Blaster first exists in
+**`PM_x_11_16_25_x`** (FreddyVRetro/ISA-PicoMEM, `firmware/README.md`: *"Sound
+Blaster emulation with DMA emulation (Not working on Slow PC/XT)"* - a 286 is
+not slow in that sense). Take the **`PM_W_`** build, the Pico W one, because
+the NE2000 that already works on this card needs it. Flashing is the Pico's
+BOOTSEL drag-and-drop; a **1.1 board** (not 1.11) must be in a powered PC
+while it is done. The firmware tree this work read was `be7b2e6`
+(2026-10-06). The card's own ROM, `src/rom/pmbios.bin`, is NEWER than the
+`pmbios/*.asm` beside it, which is why SPEC.md 34.10.1's multiplexer was read
+off a disassembly - re-read the new ROM the same way before trusting either.
+
+**The disk.** `make picomemtest` builds `build/pmsys720.img` for the 286 (and
+`pmsys360.img` for the 5150): `SYSTEM.CFG` wants SOUND, ETHER and USB MOUSE,
+so all three come up at boot with nothing to tick. The stock disks work too -
+the tier is in every `SOUND.DRV` - but need the rows ticked.
+
+**What to look at, in order, and what each answer means:**
+
+1. **The Sound page's Sound Blaster radio.** Greyed means `SOUND.DRV` found
+   no DSP: either the card refused the DSP command before any playback code
+   ran, or the tier never reached it. The glass cannot say which; the card's
+   own screens can - its boot screen (the IRQ it found must not read 0) and
+   its Devices page (what holds 220h: §34.10.2 walks past CMS to 240h, 230h,
+   250h, 260h, but a device a new firmware adds could hold the rest). On a
+   machine with a debugger, `picomem.inc`'s own record is five bytes:
+   `[pm_base]` (0 = the ramp failed), `[pm_pmirq]` (the card's line, 0 =
+   unknown), `[pm_irq]` (the line the firmware accepted for the SB, 0 = it
+   accepted none), `[pm_sbport]` (the base it took, 0 = none) and `[pm_up]`.
+2. **Selectable but silent.** The card's line and the SB's must differ
+   (§34.10.1 rule 2), and a 1.x's SB interrupt is a SOFTWARE `int 8+n` the
+   multiplexer issues only when line n's 8259 bit is CLEAR - rule 3 opens it.
+   So the 8259's mask (port 21h) against `[pm_irq]` and `[pm_pmirq]` is the
+   first thing to read, and the second is whether `int 8+[pm_pmirq]` still
+   names the card's BIOS segment (anything that took it starves every block).
+3. **Plays, but stutters or the clock drifts.** Every 128 bytes of sound is one
+   multiplexer interrupt that copies by CPU, so this is throughput, and the
+   firmware's own wiki says games' SB detection often fails for the same
+   reason (*"one interrupt to do 2 actions"*). One thing of OURS to suspect
+   there: `sbl_isr` ends in a non-specific EOI (`out 0x20, 20h`), and on a
+   1.x that EOI is a second one - the multiplexer already sent its own before
+   it issued the software `int`. With nothing else in service it is a no-op;
+   if the multiplexer interrupted a handler that had re-enabled interrupts
+   (the ROM's `int 08h` inside `sch_isr`'s chain), it ends THAT one's service
+   early. `[sch_chskip]` counting up during playback would be the sign.
+4. **The USB mouse** goes through an OTG adapter on a 1.x and uses the same
+   backend the 2.x confirmed (SPEC.md 9.12.7). The card's USB host and mouse
+   must be on in its setup. A mouse that loads and does not move, on a card
+   jumpered to **IRQ 3** with a COM2 UART in the machine, is the gap 9.12.7
+   names: the kernel's mouse contest masks IRQ 3 when a driver wins.
+
+### The 1.x after its firmware update (`PM_W_11_16_25`, 2026-10-11)
+
+On the 286: **Ethernet still works, the USB mouse WORKS** (through the OTG
+adapter, on SPEC.md 9.12.7's backend unchanged), and **the Sound Blaster is
+DETECTED** - its radio is selectable. Played through MIDIRack with the
+Sound Blaster synth output: **very loud static for about two seconds, then the
+whole machine froze.**
+
+What the session could establish without the card, and what it could not:
+
+- **MIDIRack on a 286 is NOT on the high-speed path.** Automatic picks 16 kHz
+  (SPEC.md 105.7.1), so this is auto-init `1Ch` on an external ring (105.8.4),
+  the same DSP regime a DOS tracker uses. Every DSP command `sb.inc` sends -
+  `48h`, `1Ch`, `90h`, `D0h`, `D4h`, `DAh` - is in the 1.x firmware's
+  `sbdsp.cpp`.
+- **The 1.x learns where the ring is by SNOOPING our 8237 writes**
+  (`dev_dma.cpp`): ports 00-0Ch and 83h, with a flip-flop of its own reset
+  only by a 0Ch it sees, and a `changed` flag that restarts its transfer from
+  the base whenever a channel register is written. `sb.inc`'s two programming
+  sites write 0Ah, 0Ch, 02h twice, 0Ch, 03h twice, 0Bh, 83h, 0Ah - the order
+  the snooper wants - and its one READ of the count (`sbl_v_ppos`) is under
+  `cli` behind its own 0Ch. The snooping is installed at the card's boot only
+  if a register-capture self-test passes, and a card that failed it never
+  learns a size and copies NOTHING (`isa_dma_transfer` returns on a size of
+  0) - while block IRQs keep arriving on time, because those come from the
+  card's SAMPLE clock and not from the copies. What the DSP plays from a
+  buffer nobody fills is the open question that would make it static. That self-test's verdict is only on the card's debug console.
+- **The ROM's side is sound as read**: the copy is `rep movsw` of the posted
+  block under IF=0, the real 8237's channel 1 rewritten behind `BV_DMANoUpdate`
+  so the snooper ignores it, and the audio interrupt dispatched through a word
+  table the firmware indexes with `irq << 1` - checked, because an undoubled
+  index would have been a jump to garbage. CH from function 0 IS the card's
+  line on this ROM, so rule 2 of SPEC.md 34.10.1 holds, and the firmware does
+  refuse an SB on its own line.
+- **Not a candidate, ruled out**: `sbl_isr` runs NESTED inside the card's
+  multiplexer on a 1.x (on a 2.x the SB's line is real), so anything in it
+  that re-enabled interrupts would let the multiplexer re-enter - and nothing
+  does; the underrun path's `sbl_halt` is a bounded poll. The extra EOI it
+  sends is harmless: the multiplexer EOIs its own line first, and nothing of
+  lower priority can be in service under it here. The stream watchdog (`sbl_tick`)
+  STOPS a stream whose IRQs do not come, so the freeze is not ours waiting.
+- **The release firmware's logging is compiled out** (`PM_PRINTF=0`), so the
+  card cannot say what it copied without a debug build of its own firmware.
+
+The experiments that split it, cheapest first:
+
+1. **Tracker** on the same disk - it played on the 2.x, and it is the DSP and
+   its DMA with nothing of MIDIRack's in the way. (NOT the Sound page's Test
+   button, which this note first proposed: a tone goes to the driver's
+   `DSV_TONE`, which `SOUND.DRV` publishes from the OPL - `snd_tone_out`,
+   `kernel/snd.inc` - so on the Sound Blaster tier Test plays FM and never
+   reaches the DSP. The owner caught it.)
+2. **Audio** playing a WAV, the grant-ring path rather than an external ring.
+3. **MIDIRack at 8,000 Hz** (Settings): half the copy rate.
+4. For whichever of those fails: whether the pointer still moves DURING the
+   two seconds of static (interrupts alive) and after (it froze with them or
+   not). The card's line is **IRQ 5** by its own report (a serial/parallel
+   card and the board leave no other), so the SB takes **7** - and on line 7
+   `sbl_isr`'s `.spur` arm reads the 8259's in-service register, which a
+   SOFTWARE `int 0Fh` from the multiplexer never sets.
+
+**Tracker with `BEVERLY.MOD` does the same** (2026-10-11): loud squeal, THE
+POINTER KEEPS MOVING through it, then a freeze of about a fifth of a second and
+a SOFT RESET. So it is the 1.x path and not MIDIRack's, interrupts stay alive
+through the noise, and the end is a reset rather than a hang - not the stack
+canary, which halts with a panel (SPEC.md 8.8).
+
+**What the static says.** The card puts a byte in its DSP FIFO only when a copy
+has landed (`sbdsp_transfer` reads `buffer_level`), so an empty or never-filled
+buffer is SILENCE, not static: static from the first sample means the card is
+copying from the WRONG ADDRESS, which it computes from what it SNOOPED. The two
+ways that goes wrong, in the order the evidence favours:
+
+1. **It never sees the page register.** Port 83h is a motherboard register; on
+   a 286 chipset a write to it need not reach the slots, and the card's own
+   boot self-test of its snoop writes and checks the ADDRESS register only
+   (`CMD_DEV_Init`'s `PC_SetDMARegs` test). A card blind to 83h copies the right
+   offset of the wrong 64KB - the interrupt table, the BIOS data, the kernel -
+   which is exactly loud static.
+2. **It misses back-to-back writes.** `sb.inc` programs channel 1 with one
+   `mov` between `out`s; PMINIT's `setup_dma_transfer` is compiled C with a
+   function call between each, and a 16 MHz 286's I/O cycles are 2-3x an XT's.
+
+**The instrument is `tests/pmdma` (PMDMA.O88, on both pmsys disks at the
+root).** The card WRITES the source of every copy into its own RAM (BIOS:4364h,
+`OFFS_IRQ_PARAM`) and the bytes land at BIOS:5800h, both readable by the PC -
+so PMDMA programs channel 1 four ways (sb.inc's sequence; the same spaced by
+I/O reads; PMINIT's order; the page first), runs one 64-byte single-cycle DSP
+transfer with the speaker off after each, and prints programmed against copied
+and how many bytes arrived, then a verdict line. No stream runs, so nothing is
+left to crash. Each variant has its OWN 64 bytes, because a card that keeps the
+previous address would otherwise hand the right bytes from a stale register -
+`tests/picomem.py`'s `pmdma` leg runs it whole against the snooper healthy,
+blind to 83h and dropping close writes, and each must name its own fault (a
+shared buffer reads RIGHT on the third). Open it, click the window or press R,
+photograph it.
+
+**PMDMA's first field run (2026-10-11): every variant "NO COPY", and that was
+PMDMA's bug, not the card's.** The DSP answered at **240h** (the CMS holds 220h
+again, SPEC.md 34.10.2), version 2.1, card on IRQ 5 - and the last line, the
+8237 as the card's ROM had rewritten it, read **address 40BBh, count FFFFh**:
+variant D's buffer was 8407:B, linear 8407Bh, and 64 bytes on is 840BBh. So the
+card had copied D's 64 bytes from the RIGHT place and finished, and the short
+burst of static the owner heard was the test pattern played. What PMDMA got
+wrong was WHERE it read the card's parameter block: 4364h is the October 2026
+firmware SOURCE's offset, and the November 2025 firmware's own ROM - pulled out
+of `PM_W_11_16_25.uf2` and disassembled - keeps the whole shared area 200h
+lower (IRR list 4156h, parameter block 4164h, `BV_DMANoUpdate` 400Ch, the
+copy loop at ROM 2CE8h). PMDMA now FINDS the block by that copy loop's own
+instructions rather than trusting a constant, and the copy's destination comes
+from the block's +4/+6. The dispatch table at 1E8h is laid out for the doubled
+index the firmware posts (IRQ 7 = 14 -> `int 0Fh`), so the interrupt route
+itself is consistent on this ROM.
+
+**So single-cycle copies work, and the question moves to the STREAM.** PMDMA
+gains **variant E**: a 2KB ring of SILENCE, auto-init `1Ch` with a 512-byte
+`48h` block at 16 kHz for two seconds, its own handler on the SB's line (every
+one of 3, 5, 7 bar the card's), counting every copy the card asks for, every
+one outside the ring, every copied byte that was not silence, and every block
+interrupt - and whether it came as a real IRQ or the multiplexer's software
+`int`. That is playback minus everything of os8088's that is not the DMA and
+the interrupt. `tests/picomem.py`'s model streams too and must call a card that
+reloads auto-init from the wrong place out.
+
+**E's first field run (2026-10-11): one short click, then the machine froze at
+once, nothing on the screen.** Nothing on the screen is PMDMA's - it painted
+the report only at the end - but A-D had run to completion on the previous
+build, so the freeze is E: **a bare auto-init stream of silence, with none of
+os8088's sound code in it, stops this machine within moments.** That is the
+failure Tracker and MIDIRack showed (their squeal being their data, E's ring
+being silence), so it sits BELOW `sb.inc`. ETHER.DRV is not loading the card
+meanwhile: it polls only inside a package's own socket calls. And on a 1.x the
+CPU runs the multiplexer OUT OF THE CARD'S ROM on every copy - a card that
+stalls or answers garbage there takes the CPU with it, which would fit both a
+freeze and a soft reset.
+
+PMDMA now paints after every step, and gains **variant F**, run BEFORE E:
+the same ring played as CHAINED SINGLE-CYCLE blocks - `14h` per 512-byte
+block, the 8237 and the DSP re-armed from our own handler, never auto-init -
+which is the shape `sb.inc` already plays for a DSP 1.x. If F behaves and E
+freezes, the workaround is to make `SOUND.DRV` take that path on a PicoMEM
+1.x. `tests/picomem.py`'s model gives exactly that split for a card that
+breaks only auto-init (F behaves, E leaves the ring), and both behave on a
+healthy one.
+
+**F and E's field run (2026-10-11): no freeze, several blips - and every copy
+LEFT THE RING, in both.** F made 4 copies and E 2, all outside the ring, 512
+and 256 bytes that were not silence, and **no block interrupt at all**. The
+same run's A-D were the answer: **A (`sb.inc`'s back-to-back order) WRONG
+ADDRESS, B (the same writes spaced) RIGHT, C (PMINIT's order) WRONG PAGE ONLY,
+D RIGHT** - where the previous build's run had them right. So the card's snoop
+**misses 8237 writes that arrive back to back on this 286**, intermittently,
+and E and F were programmed A's way: their streams were set up at an address
+the card had half heard, which is exactly static and a machine that may or
+may not survive what the card then does. The owner adds that under DOS, after
+`PMINIT`, the card is as finicky as PicoMEM's own documentation says - many
+programs freeze it or play nonsense, the listed ones work - which is this
+fault seen from the other side: whether a program works is whether it happens
+to program the DMA slowly enough.
+
+The no-IRQ half is PMDMA's: the multiplexer delivers an audio IRQ only on a
+line the 8259 has UNMASKED, and nothing had opened IRQ 7.
+
+`SOUND.DRV` was given B's spacing in `sbl_dma_auto` on the strength of that
+(+45 bytes) and PMDMA's E and F were programmed the same way, with the SB's
+candidate lines opened for the two seconds.
+
+**The next run (2026-10-11) took the spacing back out.** A RIGHT, **B (the
+spaced one) WRONG PAGE ONLY**, C RIGHT, D WRONG ADDRESS - the failures had
+moved, and F, spaced, made 254 copies of which 188 left the ring, with the
+IRQs now arriving (61 of ~63, all the multiplexer's software `int`). It played
+a long string of low noise broken by blips, and then froze in E. But the WRONG
+VALUES had not moved, and that is the finding. Every wrong copy in both runs:
+
+| run, variant | programmed | the card copied from | what it heard |
+|---|---|---|---|
+| 2, A | 8F7D5 | 8F7**02**, len 128 | address low **02** - port 02h |
+| 2, C | 8F855 | **3**F855 | page **3** - port 83h in a 20-bit space |
+| 3, B | 8BD4D | **3**BD4D | page 3 |
+| 3, D | 8BDCD | 8BD**02**, len 128 | address low 02 |
+| 3, F | 8BF0D | **3**BF**02**, len 128 | both |
+
+and the 128 is a copy capped by a count heard as 0303h - port 03h, twice.
+**The card records the PORT NUMBER in place of the byte written to it**: it
+samples the ISA address where the data should be, on some writes and not
+others. That is per write and in the card, so no order or spacing of ours
+cures it, and it is the same fault behind the owner's DOS report - after
+`PMINIT` the card is as finicky as its documentation says, many programs
+freezing it or playing nonsense and the listed ones working. The spaced
+writes are out of `SOUND.DRV` again (SPEC.md 34.10.4).
+
+PMDMA now measures it rather than reasoning from five copies. **G** makes 32
+single copies with sb.inc's writes as `out imm8, al` and 32 as `out dx, al`
+and scores each field right, THE PORT'S NUMBER, or anything else - the `dx`
+form has no port byte in its instruction stream, so the port number turning
+up there too puts it on the ADDRESS LINES and not the prefetch. **E** becomes
+a VERIFIED START: it checks the card's first copy against the ring and starts
+again until the card heard it (up to 8), printing how many starts that took
+and the count the card meant to leave after its first copy (077Fh if it heard
+2047 too). If a verified E plays clean, that is the shape of a `SOUND.DRV`
+fix; if it still freezes, the misheard field is one a first copy cannot show
+(the mode), or the card. F is gone - G measures what it was asking.
+
+**G's and the verified E's run (2026-10-11): G read 64 of 64 right - so the
+card is NOT mishearing at random - and E's verified start failed EIGHT TIMES
+OUT OF EIGHT**, every start the page heard as 3 and nothing else (the card's
+first copy left address BC9F and count 077F behind: it had the address and
+the count right). A-D read exactly as the run before - A right, B WRONG PAGE
+ONLY, C right, D WRONG ADDRESS - so for one build it is DETERMINISTIC, and a
+retry of the same writes at the same moment is misheard the same way. The
+blips sounded different on a couple of starts this time. The 286's BIOS setup
+has no bus or wait-state options at all, only the hard disk.
+
+Laid side by side, two things line up with every miss across the three runs:
+
+- **The address LOW BYTE's value.** Every wrong low byte was written as C0h or
+  more - D5 (run 2's A), CD (run 3's D), DF (run 4's D) - and every right one
+  under it: 0D, 15, 1F, 4D, 55, 5F, 8D, 95, 9F. Which variant holds the
+  run's C0h-and-up quarter is the buffer's position, which is why it moved
+  from A to D between builds and stayed on D between two runs of one.
+- **I/O READS just before the page write.** B (four `in al, 21h` before every
+  write), run 3's spaced F, and E's spaced starts eight times out of eight
+  lost the page; the same writes back to back - A, and G's sixty-four - kept
+  it. Run 2's C is the one page loss with no reads before it.
+
+So PMDMA's G becomes a set of SWEEPS, which it can afford because the card
+only ever READS a copy's source: the address low byte, the high byte and the
+page each through all sixteen high nibbles with the other two held at 5515h
+and our page, two copies a value, then sixteen copies at the held values
+back to back and sixteen with four reads before the page write - one
+character a copy, `.` right, `l h p` that field heard as the port number,
+`L H P` wrong some other way, `C` the count. And E goes back to `sb.inc`'s
+own order, back to back, with each retry made a little later than the last
+(touching no port while it waits), so a verified start is no longer the same
+misheard writes eight times over.
+
+**The sweeps' run (2026-10-11) put it on ONE BIT.** The address LOW byte,
+swept through its sixteen high nibbles with everything else held: 05-35 and
+85-B5 right, **45-75 lost the page, C5-F5 lost two or more fields** (the low
+byte and the count, as D always had). The high byte and the page read right at
+every value, and so did sixteen copies with reads before the page write - the
+reads were never it. **So the card trips on bit 6 (40h) of the FIRST byte
+written to a register pair**, which is every miss in every run: B's low byte
+was 7E, D's FE, run 2's A D5, and E - whose ring sat at 3E and still lost the
+page eight times - writes its count as 07FFh, whose low byte FF is the first
+write to port 03h. The same disks reproduce it exactly, run after run.
+
+What that buys is a fix that does not depend on timing at all, and the
+question is only which. PMDMA's G now sweeps the low byte under four ways of
+writing the same values - plain, ~1 ms of nothing after every write, the
+whole sequence twice, the page written again after the rest - sweeps the
+count's low byte, and prints what the card actually heard for 45 and C5. E
+makes each of its eight starts a different way (`starts until heard` is the
+way that worked: 1 plain, 2 slow, 3 twice, 4 page again, then their
+combinations). If one of them is clean, it goes into `sbl_dma_auto` on a
+PicoMEM; if none is, the way out is VALUES - a ring whose start and length
+keep bit 6 clear in both low bytes.
+
+**The cures' run (2026-10-11): none of the four is one.** Plain, slow (~1 ms
+after every write), twice and the page again all read the IDENTICAL pattern -
+45-75 `PP`, C5-F5 `**` - so it is the values and not the writing, and no
+order, delay or repetition of ours will move it. What the card heard: 45 as
+`5545 page 0003 len 0040` (the page written as 08, heard as port 83h's 3) and
+C5 as `5502 page 0008 len 0080` (the low byte heard as port 02h, the count
+wrong). And the COUNT is stricter than the address: its low byte at 0F-3F was
+heard, and at 4F and every value above - 8F-BF included, which the address
+gets away with - the page was lost. E's eight starts lost both again: ring at
+A6, count 07FF, heard as `3AD0:0002` with a count of 037F.
+
+**The firmware says how it can be at all** (FreddyVRetro/ISA-PicoMEM,
+`src/isa_iomem_m2.pio`, the 1.x's bus program): the PIO reads the address on
+the multiplexed AD pins, switches the multiplexer to DATA, and *"Data is read
+after by the Pico core (Not PIO)"*. A core that reads before the data has
+settled reads what the pins still hold - the address's low byte, the port
+number. `dev_dma_iow` itself is a plain switch with no value in it anywhere.
+WHY bit 6 of a pair's first byte decides it is not in the source; the photos
+are what say it does, and say it the same way every run.
+
+So PMDMA now asks the question SOUND.DRV needs answered - which VALUES does
+this card hear: the low-byte sweep again as the control, the count's low byte
+and its high byte swept, a grid of the address's low byte (05 45 85 C5)
+against the count's (0F 3F 4F 7F 8F BF CF FF), and E's starts are eight
+different RINGS (start low byte / count: as found/07FF, 00/07FF, 00/0800,
+00/0820, 20/0800, 80/0800, 00/0400, 00/0200), each verified by address, page
+and the count the card leaves after its first copy. The start that is heard
+is a ring SOUND.DRV can be given.
+
+**The grid's run (2026-10-11): no ring of values is safe.** The count's
+HIGH byte failed at every value but 0 (`count hi n, lo 3F`: `..` then `PP` to
+F), so any stream longer than 256 bytes is misheard; E's eight rings all
+failed (the last, 00/0200, heard as `39F0:0002`). The grid was not even
+consistent with the run before it: the count's low byte now failed from 6F
+where it had failed from 4F, and address 45 and C5 were HEARD with a count
+of 0F. A values rule that moves between runs is not the mechanism.
+
+**The firmware is.** In the 1.x's bus loop (`src/pm_isa_rp2040_m2_dev.h`,
+identical in the 2026-06 source), an IOW to one of the card's ports is
+handled `ISA_IO_Addr = pio_sm_get_blocking(...)`, `pio_sm_put(...)`, one
+`nop`, then `ISAIOW_Data = gpio_get_all() >> PIN_AD0` - the data is sampled
+a few core cycles after the PIO flipped the multiplexer from address to
+data, with no wait for the 286 to have driven it. An early sample reads what
+SD0-7 last held. **And in both ways PMDMA writes, that byte is the PORT
+NUMBER**: `out 02h, al` puts its own immediate on the bus as it is fetched,
+and the table emitter reads the (port, value) WORD - its value byte is odd,
+so the low lines carry the even one, the port. That is every "heard as the
+port number" in five runs, and a sampling race explains a pattern that is
+stable within a run (the same code, the same bus) and moves between builds.
+
+So the cure is to make the last thing on SD0-7 before each OUT the VALUE:
+store it at an even address and read it straight back, then `out dx, al`.
+On any other card it is two moves. PMDMA's G now runs the low-byte sweep and
+both count sweeps ECHOED beside the plain control rows, and E's starts mix
+echoed rings (as found, 00/07FF, 00/0800, 00/0400, with slow and twice) with
+the plain one SOUND.DRV uses today. `tests/picomem.py` models exactly that
+card - a write whose value has bit 6 set sampled from the last even byte
+read - and the row goes red if the echo is taken out. If the field's echoed
+rows read clean, the echo goes into `sbl_dma_auto`.
+
+**The echo's run (2026-10-11): it changes nothing, and that closes the
+software side.** The echoed low-byte row reads exactly as the plain one - 45-75
+lose the page, C5-F5 lose the low byte and the count - and so did the slow,
+twice and page-again rows a run before: five ways of making the same writes,
+four builds, one pattern. A-D obey it to the letter this run too: A at low
+byte 51 lost the page, C at D1 lost the low byte and the count (`8340:2`,
+len 128), B at 91 and D at 11 were right. The count's high byte failed at
+nearly every value from 1 up, echoed or plain, so **no DMA cycle longer than
+256 bytes is reliably heard** - which is every stream `SOUND.DRV` makes. E froze
+the machine before printing anything.
+
+What is established, for whoever takes it further: the card mishears an 8237
+write as a deterministic function of the VALUES written, not of their timing,
+order, spacing, repetition or what precedes them on the bus; every wrong value
+it records is a port number (02h for the address, 3 for the page, 03h in the
+count); `dev_dma_iow` holds no value dependence, so it is in the capture below
+it. PicoMEM's own documentation already lists which DOS programs work on a 1.x,
+and the owner's DOS experience matches - the listed ones work, most others
+freeze or play nonsense. On the 2.x, which takes the transfer over real DMA
+lines, none of this applies and the Sound Blaster plays.
+
+**Not the card's other work either.** With the USB mouse off (the owner
+found it saved unwanted after a reboot) PMDMA read the same; with Ethernet
+unticked, the same. So the card's USB host and NE2000 emulation are not what
+makes it mishear.
+
+**The USB Mouse tick that will not come off** is a second fault found on the
+way: on the PicoMEM 1.x, clicking USB Mouse in the Drivers page leaves the box
+ticked and the status line unchanged - with the card's own mouse plugged in the
+pointer dies at once (detach turned the card's mouse off), with a PS/2 mouse
+nothing visible happens at all - while Ethernet's tick comes off in the same
+boot, and the setting IS saved unwanted (it is off after a reboot). The same
+untick on the CH375 path frees the row and redraws it under MartyPC, with the
+click on the box itself, so the panel and `drv_unload` are not wrong in
+general. PMDMA's D key now prints the Drivers page as the kernel holds it -
+every row's segment, entry, class, want and error, `[drv_wcnt]`, int 33h, the
+pointer class's published segment and USBMOUSE.DRV's own `um_pm`, `um_alive`,
+`um_stop` and `um_btn` - with offsets generated from the build
+(`tests/pmdma/mkkern.py`). D before the click and after it says whether the
+row was freed and only the box is stale, or the row was never freed and why.
+
+**D answered it in one pair of photos (2026-10-11).** Before the untick: USB
+Mouse at segment 9140, want 1, int 33h 9140:0155 (the driver's), workers 0.
+After: want 0 and int 33h back at the BIOS's F000:D265 - detach had run to the
+end - and the row STILL at 9140, workers still 0. So `drv_unload` was not
+waiting on anybody; it was handed the wrong row. USBMOUSE.DRV's PicoMEM detach
+restored BX before calling `um_release`, which zeroes BX first thing, so the
+kernel freed offset 0 as the row (SPEC.md 9.12.7). Fixed by restoring BX after
+the release; the unicorn leg now checks BX on both verbs. The fix changes
+`USBMOUSE.DRV` only.
+**Confirmed on the card (2026-10-11)**: the tick comes off.
+
+**Into the firmware (2026-10-11).** Nothing a driver writes avoids the
+mishearing, so the next instrument is the card's own. The PicoMEM firmware
+builds here: `Elendilon/ISA-PicoMEM` branch `os8088-pm114` is the 1.14 board
+(`PICOMEM_BOARD "PICOMEM"`, `pico_w`, USB host on), built with that fork's
+`tools/build-linux.sh` against Pico SDK 2.2.0 and TinyUSB 0.21.0. The reading
+of the source that makes it the suspect: the 1.x core reads an IOW's data with
+`gpio_get_all()` one instruction after it hands the cycle to the PIO, before
+the wait state it asserts can have held the PC, so what it latches can be the
+multiplexed bus still carrying the ADDRESS - and every wrong value recorded is
+a port number. The diagnostic build re-reads the data lines ~1 us later, while
+IOCHRDY holds the cycle, and logs both (port, early, late, sequence) in the
+last 1KB of the card's dual-port RAM (`DMALOG1` at BIOS:5C00). A mode byte at
+BIOS:5C08 picks which one `dev_dma_iow` is handed: 0 the stock early read, 1
+the late one. PMDMA's G page finds the log, sweeps the low byte EARLY, prints
+the last ten writes for low bytes 45 and C5 with `<- DIFFER` where the two
+reads disagree, then sweeps the low byte, the count's high byte and its low
+byte LATE, and leaves LATE on so a player can be tried in the same boot.
+`tests/picomem.py`'s `fw` fault models exactly that firmware and checks the
+page reads it. A clean LATE sweep is the fix; a LATE that mishears the same is
+the capture ruled out and the bus timing next.
+
+**The first two firmwares did not boot, and why (2026-10-11).** Built from the
+only source published after the November 2025 firmware - the June 2026
+PicoMEM 2 source - a 1.14 never lit its LED and hung the PC after the option
+ROM. That source dropped two things a 1.x needs: `CYW43_PIO_CLOCK_DIV_INT=4`
+(the Wi-Fi chip, which drives the LED, clocked twice as fast at 280MHz) and
+1.20V at 280MHz on an RP2040 (it set the RP2350's 1.15V). With both back and
+the 2025 recipe - SDK 2.1.1, wbcbz7's `rp2040-epx-only` TinyUSB - it boots,
+connects to Wi-Fi and runs os8088. **The saved PICOMEM.CFG from the November
+firmware is not read correctly by it**: ETHER.DRV said no hardware until the
+file was deleted and the same settings entered again in the menu.
+
+**What the log said (v1).** The early and late bytes of the card BIOS's own
+DMA update (`PCC_DMA_WRITE`: the flip-flop, the address 5585 = 5545 + 64,
+the count FFFF) agree and are right. The last four writes PMDMA makes before
+the copy - count high, mode, PAGE, unmask - were logged at ports **81, 82, 83,
+84** (and 01-04 in the C5 run), each with the port number as its early byte,
+so the page write was taken with 83 as its data - the `page 0003` PMDMA
+reports. The late read, ~1 us on, was 50 52 A0 56: the bus had moved on to the
+next cycles, so the card does not hold the PC for as long as the code
+assumes. An incrementing "port" is what the low address byte of byte-wide
+memory fetches looks like, so the open question is whether these were I/O
+writes at all. Log v2 (the same branch) records, for every DMA-register write,
+the full address the PIO latched - an I/O cycle has A19-A10 zero - and 16
+samples of the data, command, multiplexer and IOCHRDY lines ~90 ns apart, so
+each write is a timeline. PMDMA's G prints the last 16 writes behind a copy
+of 45 and one of C5, and PMDMA now saves the whole report to `PMDMA.TXT` after
+G (before E, which can freeze), after E and after D.
+
+**Log v2 found it (2026-10-12): the card decodes DMA cycles as CPU writes.**
+Every write PMDMA itself makes was heard exactly - stable data, the wait
+state held (ctrl 48), the page 08 right. The bogus entries were not CPU
+writes at all: their latched address was `0F080`, `0F082`, `0F084` (`0F000`,
+`0F002`, `0F004` in the C5 run) with IOW, no wait state and the multiplexer
+back on the address - the bus program's path for a cycle taken with AEN
+high, which answers the real A0-A7 under a stand-in for A8-A19. The stand-in
+left A10 clear, and the I/O decode indexes its table with A3-A10, so a DMA
+cycle was decoded as an I/O cycle to its own memory address's low byte. The
+8237 really does run channel 1 on this 286 once it is unmasked, so a
+transfer from xx45 walks xx45..xx84 and "writes" ports 80-84 - 83 is
+channel 1's page, given 83 as data: `page 0003` - and one from xxC5 wraps
+through 00-04, the address and count. That is every row of the earlier
+sweeps: the page lost from low byte 45-75, the address and count from
+C5-F5, every count past 256, and a "port number as data" every time,
+because the data IS the address. The fix is one constant in the firmware
+(`0x0FFFFF0F0` -> `0x0FFFFF0F4`, A10 set, so the index lands on ports
+400h-4FFh, which nothing maps; the memory decode reads A13-A19 and is
+unchanged) - Elendilon/ISA-PicoMEM `os8088-pm114` 0bc4680. Nothing in
+os8088 could have avoided it: no driver chooses where the 8237 walks. A DMA
+read cycle (a floppy's, say) decoded onto a device's IOR would also leave
+the core out of step with the bus program, which is a candidate for the
+freezes. **Confirmed (2026-10-12)**: with the fix PMDMA reads right on every row, and
+the Video Player and Tracker play without freezing.
+
+**What was left: playback at a quarter to a tenth of its speed.** The owner's
+recording of BEVERLY.MOD is ~110 ms of sound, then ~600 ms of silence,
+round and round - not slow sound, bursts. The v2 log already said why: the
+8237 ran channel 1's transfer the moment PMDMA unmasked it, before any DSP
+command, so channel 1's request line is HELD on this 286 with nothing
+asking (a 1.x drives no DMA line). In auto-init the 8237 then never stops,
+and every stream's DMA cycles come off the CPU for as long as it plays. A 1.x
+does not need the channel open - its firmware never reads the mask bit - so
+`SOUND.DRV` now probes at attach (one byte, single cycle, the DSP idle) and,
+where the 8237 completes it unasked, keeps channel 1 masked at every start
+(SPEC.md 34.10.5). A 2.x, whose DRQ1 is quiet until its DSP asks, is
+unchanged.
+
+**It changed nothing (2026-10-12).** Tracker and the Video Player play in the
+same bursts with the channel masked, and the same run's PMDMA E is the
+number that says where NOT to look: **250 copies and 62 block IRQs in 2 s**,
+exactly a 16 kHz auto-init stream's, every one delivered as the
+multiplexer's software `int` (`...as real IRQs 0`). So the card copies and
+interrupts at full rate for a stream PMDMA drives, and the gap is in what
+`SOUND.DRV` and the players do differently - block size, pause and resume,
+direct or double-buffered, the feed. `sbl_isr` was checked for the obvious
+suspect, an IRQ 7 dropped as spurious because the 8259 never saw it, and
+does not do that while a block is expected. SOUND.DRV now counts its ISR
+entries, the strays, resumes and watchdog stops beside the underruns it
+already counted, and PMDMA's S key reads them with the stream record - two
+snapshots a second apart - while a player runs.
+
+**S answered where the time goes (2026-10-12).** Tracker (22 kHz, direct
+ring, 2KB blocks, a 16KB ring) in one second: **2,048 bytes fed, 2,048
+played, one block IRQ, one underrun, one resume** - and no strays, no
+watchdog. The Video Player (5.5 kHz, 256-byte blocks, external ring) had
+ended on the watchdog after 13 underruns. So `SOUND.DRV` and the card play
+every block they are given, on time, and the PRODUCERS deliver about a tenth
+of what they need: Tracker wakes every tick and may mix six halves a pass,
+and the Video Player mixes nothing at all, so the machine itself is losing
+most of its CPU while a stream plays. The probe that would have kept DMA
+channel 1 masked read the line QUIET (`DRQ1 kept masked 0`) - it asks with
+the DSP idle, and the v2 log saw the 8237 walk a transfer only after a DSP
+start. The 1.14 schematic carries DRQ1 only as a connector label (the IRQ
+lines it uses appear twice, the connector and the jumper), so the card does
+not drive it. PMDMA's S now also samples channel 1's live 8237 count and
+counts the CPU its own task got in that second, and M / U mask and open the
+channel live - with `SOUND.DRV` told to keep it so - for an A/B by ear.
+
+**And that was it (2026-10-12).** S with nothing playing: the count still at
+1B3B, **0x1FE01** loop passes in the second. With Tracker playing and the
+channel open: the count falling 062F, 05BC, 054B ... ~113 bytes a read, and
+**0x311B** passes - **9.6%**. After M: still at 28FF, **0x1E195** passes -
+**94%** - and BEVERLY.MOD played smooth, the Task Manager reading 25-80%.
+The line is quiet with the DSP idle, so attach cannot see it; `SOUND.DRV`
+now watches for it while a stream plays (SPEC.md 34.10.5): `pm_runaway`, on
+the watchdog's tick, masks the channel the first time its count falls more
+than 32 bytes across ~100 bus cycles. The idle-time probe is gone.
+
+The Video Player still stutters while it reads from the PicoMEM's emulated
+hard disk - slow picture, repeated and dropped sound - and plays smooth once
+the rest of the file is in RAM, or for a file that fits XMS. That is next,
+and it is the disk and the sound sharing one card.
+
+The play is fullscreen, so S cannot be pressed during it. The card BIOS's
+int 13h (pmbios.asm, `PM_Int13_MyDisk`) hands each call to the Pico and then
+runs the Pico's own copy loop on our CPU - the same PC-command channel and
+the same Pico main loop the Sound Blaster's copies use - and HDD.DRV's BIOS
+rung reads to the CYLINDER's end, up to **127 sectors in one call**. So the
+suspect is one long call with no sound copied in it. HDD.DRV's cap was
+made a byte (`hd_runcap`, after the marker `RUNCAP`, 127 by default) and
+PMDMA's H key cycled it 127 -> 32 -> 8 live, for an A/B on the same video
+(both since REMOVED - the A/B below found nothing, and HDD.DRV is the
+constant 127 it was);
+the Video Player built with `VPDIAG=1` says after a play, on its info card,
+how far the reader led the picture and how often the card ran dry.
+
+**The disk was not the reader's problem (2026-10-12).** Three plays of a
+460 KB/s Mode X clip at caps 127, 32 and 8 read the same: 361 of 361 drawn,
+no stalls, no pauses, nothing late, the reader never fewer than 6 chunks
+ahead, the card dry 0 times - and **356, 357 and 355 ticks for a 273-tick
+clip**. S across each play: 649 block IRQs (the whole sound) and no
+underrun until the end. So every block arrived and the player was never
+short; the CARD's clock ran ~30% slow. In the firmware the SB's virtual DMA
+(the copy requests, the FIFO, the block IRQ) is `sbdsp_dma_worker()`, run
+only by the Pico's main loop - and an int 13h holds that loop for the whole
+call, pumping the mixer per sector but never the SB. The fix pumps the SB
+worker in the disk loop too, and while the PC copies each sector
+(Elendilon/ISA-PicoMEM `os8088-pm114`, `pm_audio_pump`); PMDMA's P key
+flips it off and on for an A/B.
+
+**The pump worked, and left a microstutter (2026-10-12).** The same clip:
+**292 ticks of 273**, and its 10 pauses all the STREAM's (`Dry 10/10`, lead
+down to 2) - at 460 KB/s the card's disk does not keep up, and a lighter
+encode plays in very nearly real time. But both still drop 2-6 ms of sound
+several times a second while the disk works (a phone recording: 107 gaps
+in 16 s, irregular), and neither does from RAM. The card's mixer abandons an
+output buffer the moment the SB's FIFO is empty, so the FIFO is running
+dry. The firmware now keeps an audio health record at BIOS:5F80h ('AH01':
+FIFO empties and lowest level, the timer's backlog, the longest worker
+gap, the longest copy wait, int 13h calls and their time) and PMDMA's A
+key reads and clears it: A, play, A.
+
+**What the record said, and the change it led to (2026-10-12).** `CGAWolf2`
+from XMS, smooth, against `SnowWolf2` off the card's disk, stuttering: the
+longest gap between SB worker passes was **168 us against 42 ms** (an SD
+read the pump cannot reach), the timer's backlog **127 samples against
+530**, and the longest copy wait the same ~11.4 ms in both. That last one is
+the defect under the symptom. The FIFO is filled JUST IN TIME off the sample
+timer, so the only sound in hand is what it waits for before it starts -
+512 samples, 46 ms at 11 kHz - and the virtual DMA copies **128 bytes a PC
+round trip**, single-buffered, which is 11.6 ms of 11 kHz sound per trip of
+up to 11.4 ms. While the PC is inside the card's own int 13h the supply
+barely matches the play, the cushion never comes back after one SD read,
+and the next one empties it. The `AH02` firmware copies **512 bytes a trip**
+(a copy of up to 768 fits the 1KB PC buffer, and the card BIOS moves a
+16-bit length with `rep movsw`) and starts the SB's FIFO at **1,024
+samples** of a 2,048 FIFO - 93 ms at 11 kHz, at the cost of 46 ms more
+sound latency. A sound shorter than the start level, which stock already
+held back below 512, is played once its DMA has stopped. PMDMA's B key flips
+the byte at BIOS:5F85 back to stock for an A/B, and A on that firmware names
+which path ran.
+
+**That changed nothing you could hear, and the reason is one level further
+out (2026-10-12).** With `AH02` the copies fell from 1,299 to 326 for the
+same 166KB of sound and the backlog peaked at 472 samples, well inside the
+1,024 held - and it still stuttered the same. The FIFO is not the last
+buffer before the speaker. The mixer turns it into 64-sample output buffers
+at 49,716 Hz (1.29 ms each), the I2S DMA plays them from an interrupt, and
+the mixer runs ONLY in core 0's main loop - and stock keeps **four** in
+flight: **5.1 ms**. Every stall of that loop longer than 5 ms (an SD read is
+up to 42 ms) left the I2S nothing to play, and it played a silent buffer
+per 1.29 ms until the loop came back: the 2-6 ms gaps, and why RAM, where
+the loop never stalls longer than 168 us, was clean. The SB FIFO's own
+cushion is what the mixer then catches up from, so the `AH02` change stays.
+The first `AH03` queued **47** (60 ms) and **froze the card at boot**:
+audio starts before the NE2000, the 12.5KB pool took the heap the NE2000's
+unchecked 32KB `malloc` needed, and nothing after the option ROM ran. So the
+queue stays at the stock 4 and the stall is fixed where it happens: the SD
+driver already mixed once per block, but not while it WAITED - for a read's
+start token or for the card to come ready, which an SD card can stretch to
+tens of ms - and those loops now mix as they poll. The int 13h read path
+also waits for the PC's previous sector copy with the audio pumped, where
+`PC_MemCopyW_512b`'s own wait (up to 20 ms) pumped nothing. Firmware RAM is
+24 bytes over `AH02`'s. A counts silent buffers, the longest run of them,
+the mixes run inside SD waits, and the heap never yet handed out; B flips
+the SD-wait mixing to stock with the rest.
+
+It booted, and sounds much better - but the A/B says the SD-wait mixing is
+not why. Both arms carry the pumped copy wait: os8088's arm fed the speaker
+216 silent buffers (longest run 29, 37 ms) and stock's 173 (13), with 1.1
+million mixes inside SD waits in the first and none in the second, so the
+waits were not where the rest of the silence was, and two plays differ more
+than the arms do. The card's heap had 12KB never handed out. `AH04` counts
+each silent buffer against what core 0 was running when it was played (the
+I2S interrupt runs on core 0, on top of the stall): the main loop, the USB
+host, the SB worker, mixing, the 100 ms housekeeping, a PC command, int 13h,
+FatFs and the SD transfer, an SD wait, the PC's sector copy, an unpumped PC
+command end, a network send.
+
+That build froze os8088 at the desktop, and so did the narrower one and the
+last firmware that had booted - so it was the INSTALLED IMAGE, damaged by an
+earlier freeze, and it booted again once reinstalled. (Keep a copy of the
+image before reinstalling over a freeze; this one was not kept.) The
+reading on the narrower build: **236 of 246** silent buffers inside int
+13h, outside FatFs, the SD transfer and the pumped sector wait, and 10 in
+other PC commands. What is left in there is `Send_PC_CMD` and the `PC_Wait_*`
+loops, which spin on the PC - busy in one of its own interrupts for
+milliseconds at a time - with nothing mixing. The next firmware pumps the
+audio in them for the length of an int 13h, on core 0 only.
+
+**It worked: 246 silent buffers became 12**, and those twelve were ONE run
+(15 ms) in a PC-command wait - most likely a command other than int 13h,
+where the pump stays off (the reading before had 10 there). `AH05` names
+the site and the PM command for the last silent buffer and for the longest
+run, and makes `AH_UNDER` count the SB FIFO's dry spells once each and only
+while its DMA runs - before, it counted every mixer pass that found the
+FIFO empty, the idle after a play included, so it said nothing.
+
+`AH05` on three videos: Bad Apple 320 and 640 **no silent buffer at all**,
+Snow Wolf 2 one run of 12 at `0A88h` - PCCMD inside `CMD_Int13h`, which is
+`PC_End`'s handshake, after the handler had returned and the pump was off;
+the pump now stays on through it. Each play shows ONE FIFO dry spell, which
+is the fill to 1,024 at the start. A 420 KB/s video plays clean by ear. What
+is left by ear is not silence: **crackles and pops** - continual in Bad
+Apple 320, ~4 in the others - which neither counter sees, so they are WRONG
+samples rather than missing ones. Open; the first question is whether B's
+stock copies (128, a ~190-byte read-ahead against 512's ~768) change them.
+
+**On `PM114_pcend` (2026-10-12) both are gone**: Snow Wolf 2's last dropout,
+and the crackles too - including Bad Carrot 320, which had been crackling
+**two or three times a second**. Nothing in pcend can account for crackles
+(it moves one hook clear past `PC_End`, a silence fix, and silence was
+already zero in the crackly runs), and the 512-byte copies were on in both
+the crackly runs and the clean one, so the crackles were INTERMITTENT and
+state-dependent rather than fixed. One correlation, unproven: the crackly
+runs, and both desktop freezes in the same session, came after FTP use -
+FTPD listening and the card's Wi-Fi busy, and the card's NE2000 is serviced
+by the same core 0 that mixes. If they return, note whether FTPD was up and
+replay with it closed. Meanwhile pcend is the firmware to keep: the record
+and the A/B switch cost a few bytes and keep A and B useful.
+
+Two things that are true of BOTH cards and are not defects: inside the DOS box
+the USB mouse does not move (the box owns `int 33h` for its bracket, SPEC.md
+9.12.7), and on a 2.x the Sound Blaster cannot DMA from memory the card is
+itself emulating (§34.10.1), with the DMA jumper on **1**.
+
+
+
+**Where it was left (2026-10-12, the clean-up).** What SHIPS: SOUND.DRV's
+`pm_runaway` and `sbl_drqmask` (SPEC.md 34.10.5) and USBMOUSE.DRV's detach
+fix; HDD.DRV is back to `elendilon`'s bytes and SOUND.DRV's event counters
+(`sbl_n_isr` and three more, PMDMA's S rows) are gone. The firmware's fixes
+are on in every build of `os8088-pm114` - the A10 DMA decode, the disk-loop
+and PC-command pumps, SD-wait mixing, 512-byte copies and the 1,024 start -
+and everything that measured them is behind its `OS88_DIAG` CMake knob, off
+by default (its BUILDING.md lists both). `tests/pmdma` stays in the tree and
+on the two pmsys test disks: its A, B and P keys answer "no record" or "no
+switch" on a default firmware, and work on an `OS88_DIAG=1` one. Tested on
+ONE 1.x in ONE 286. The 2.x in the 5150 runs its own firmware, not this
+branch, and has not been re-checked: what this work changed for it is
+SOUND.DRV's runaway test, which runs on every PicoMEM and must leave a 2.x's
+real DMA alone (it moves ~5 bytes in the test's window; `PM_RACE` is 32).
+
+**The crackles, found (2026-10-12).** They came back, and the shape was the
+clue: a play crackled from start to end or not at all, cleaner for its first
+seconds and worse as it went, and the first play after a boot was always
+clean. Neither counter saw them because no sample went missing: SOUND.DRV
+was overwriting ring bytes the card had not read yet, with sound ~1.5 s
+later, because the card's block IRQ said they had been read. Two defects, one
+symptom. The firmware raised the IRQ off its sample TIMER, before the copy
+had brought the block in. And a copy is a whole 512-byte block, so a
+stopped stream leaves up to 767 bytes of the old ring in the card's buffer:
+SOUND.DRV stops with D0h/DAh and no DSP reset, so nothing cleared them, and
+the NEXT play fed them to the FIFO first and counted them as its own - every
+IRQ of that play early by as much, for the whole play. The IRQ is now sent
+when the transfer reaches the block's end, and the leftover is dropped when
+the PC programs the 8237 again (`AH08` counts it, PMDMA's A page). Nothing
+in os8088 changed for it. **~30 openings of the videos on the drive since,
+none crackled.** The fixes are one commit, `pm1x-sb-fixes` on
+Elendilon/ISA-PicoMEM, written for upstream, which also carries the
+multi-sector disk read (docs/reports/VIDDISK-PICOMEM1-286-MULTI-2026-10-12.md); `os8088-pm114` is that commit
+plus the 1.14 build setup and the `OS88_DIAG` diagnostics, rebased onto it
+whenever it changes.
+
+## 67. 286, PicoMEM 1.x USB mouse: after a Video Player play the pointer is dead and the keyboard is not (FIXED — a driver move left `int 33h` on the old copy: SPEC.md 66.6.3.1)
+
+Reported by the owner on their **real 286 with a PicoMEM 1.x**, mouse through
+`USBMOUSE.DRV`'s PicoMEM backend (SPEC.md 9.12.7), no sound card, the speaker
+muted for a banked file. `SnowWolf3.V88` (Mode X, 320x179, 24 fps, 15.1 s)
+plays full screen; the desktop comes back with the player's window and the
+keyframe, and then **the pointer never moves again**. It looked frozen, but
+Space played the video again: the machine was alive and only the mouse was
+dead. Any video did it.
+
+**The cause is not in the player.** The player posts a heap compaction
+(SPEC.md 66.4.3, `OSAPI_MEM_COMPACT`), and a driver image is a movable claim
+(66.6.3). The kernel rewrites every word naming the moved image, and in the
+interrupt vector table it rewrote only the hardware IRQ vectors - 66.6.3.1's
+contract said a driver hooks its own IRQ and nothing else. This backend has to
+hook **`int 33h`**: the card's IRQ multiplexer hands each report to
+`int 33h AX=0060h`. So after the move the vector named the vacated copy. Its
+bytes were still intact, so the card's next report ran the OLD `um_pm33`,
+which fed the report with the OLD segment, and `OSAPI_MOUSE_FEED`'s fence
+(`ES == [drv_fseg6]`, already the new segment) refused it, every time. Nothing
+crashed and nothing else was wrong, which is what the owner saw. A later claim
+landing on the vacated bytes would have turned it into a crash on the next
+report.
+
+It "came in with recent work" because the backend is two days old: the
+player's compaction is older, and the CH375 backend hooks no vector at all.
+Anything that compacts the heap would have done the same - Tracker opening a
+large module, a claim that has to pack - and the player was simply the
+program this machine ran.
+
+**Fixed** by putting `int 33h` in the compactor's `ES = 0` patch rows beside
+the sixteen IRQ vectors: **4 bytes of `.text`** on kern_big (kernsize +6),
+kern_small unchanged. `tests/drvmove.py` plants `int 33h` on the RAM disk's
+image before the forced move and reads it after; it is red with the row taken
+out and green with it. **Not yet confirmed on the card** - the first play on
+the fixed build is the check: the pointer should move as soon as the desktop
+is back.

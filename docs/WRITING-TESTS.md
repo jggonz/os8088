@@ -87,7 +87,17 @@ changes SKIES tests SKIES, and charging every other contributor two seconds a
 build for it buys them nothing. `soak -k 'cs*'` is one command and it is run
 by the person it is for. This is the rule that retired `csworld`, `csworlds`,
 `csart`, the three `fr*` rows, `inktab`, `wab`, `lmpack`, `sfx` and
-`stknosave`. It retired `drvmem` too, and that one came BACK (incident 77): its subject
+`stknosave` - and, at the 2026-10-11 recut (incident 78), the five PiXEL rows,
+both Excitebike rows, `midtab`, `pmcrom`, `pxs-gen`, `imgcases`, `wire`,
+`cpmcache` and `spkfxtab`, plus four that are one HOST TOOL's business
+(`imager`, `hddgeom`, `allapps`, `ccmake`).
+
+**Being a build input is not an exception.** A generated include checked
+against its generator, a committed asset checked against its source, a
+format checked against its packer - every one of them is stale only when
+somebody edits that package or that tool, and that somebody runs the row.
+`pxs-gen` and `pmcrom` argued their way into `fast` on exactly this ground
+and are in `soak` now. It retired `drvmem` too, and that one came BACK (incident 77): its subject
 reads as one page of one application, but its two sides are the kernel's
 constants and every driver's image, which is the boundary family below.
 
@@ -97,6 +107,10 @@ purgeable eviction ranks, `clk_mlen`'s month mask — is defended by whoever
 edits that subsystem, and that is exactly the person who will run `soak -k` on
 it. `fast` is not where the kernel is proved to still work; it is where a
 writer who has never opened that subsystem is caught breaking it by accident.
+`p2restore` (the PS/2 probe's failure paths, all in `kernel/mouse.inc`) left on
+this rule. The line it draws is SUBSYSTEM against RULE: `stkbalance` reads only
+the kernel and stays, because what it checks - every `ret` at its entry depth -
+is broken by ordinary edits to any kernel file, and most of all by a size pass.
 
 > **The exception is what makes the rule useful.** A kernel-side row stays if
 > code OUTSIDE the kernel can reach it — a package, a driver, the SDK, or a
@@ -151,10 +165,11 @@ Three rules, and each retired a row when the tier was recut from 14 to 5:
 the vehicle for a generic check — `ctoolchain` builds four C packages because
 that is what a toolchain produces, and the row is about the toolchain — but a
 row whose SUBJECT is one program belongs in `soak`. That moved `weavesmoke`
-(72.8s, WEAVE opening a bundle) and `appsmall` out.
+(72.8s, WEAVE opening a bundle) and `appsmall` out, and later `drmarcoart`,
+which had crept back in as a sixth row checking one game's committed art.
 
-**A kernel check is allowed, and should be short.** `kernresident` boots a VGA
-machine and walks `mem_tab` in 13.7s; `small128` builds the second shipped
+**A kernel check is allowed, and should be short.** `kernresident` boots a
+128KB VGA machine and walks `mem_tab` in 12s; `small128` builds the second shipped
 kernel and boots it on the 128KB floor machine. That is the shape. A deep sweep
 of one subsystem is not, however true it is — `smallboot` walked three adapters
 for 118s where `small128` beside it already proves that kernel builds and
@@ -177,7 +192,7 @@ The five that remain, and the part of the question each answers:
 | row | answers |
 |---|---|
 | `bootsmoke` | does it boot to a desktop, on both 1bpp adapters |
-| `kernresident` | does it boot on VGA — and does `kern_big` still fit 128KB at the desktop |
+| `kernresident` | does `kern_big` boot on a 128KB VGA machine — and does it still fit 100KB at the desktop |
 | `small128` | does the second shipped kernel still compile, and boot on its floor machine |
 | `ps2mouse` | do the mouse and the keyboard still work |
 | `ctoolchain` | does the C toolchain still produce a package |
@@ -204,7 +219,7 @@ Row("lzmod", "soak", py("tests/lzmod.py"), 30.0,
 | `secs` | **measured**, not guessed. §4. |
 | `why` | what breaks if this row goes red, with the § that owns it. Written for somebody who finds it failing in a year and does not know what it was defending. |
 | `needs` | capabilities, PROBED not configured: `marty`, `qemu`, `nasm`, `nasm3`, `cc`, `pil`, `wiredisk` (`capabilities()` in the runner). **A Python module a row imports is a capability too** — `pxsshots` declared only `marty`, wrote its photographs through Pillow, and FAILED on an ImportError where it should have skipped; `pil` is probed as `from PIL import Image` (`os88build.have_pil()`) because an archive Pillow built for another interpreter imports as a package and breaks only at its extension. A missing one SKIPS the row, and a skip is the box declining to answer — never a pass. `nasm3` is a second assembler and not a newer one: it is read out of `nasm -v` (`os88build.nasm3()`), so a `nasm3` on PATH that is a symlink to 2.16 is absence. |
-| `serial` | it drives an emulator. The runner keeps those in their own lane, `--marty-jobs` wide (default cores−1); the host-side rows fan out ahead of them. Forgetting it puts an emulator row in the host lane, where it competes with every other row on the box. |
+| `serial` | it drives an emulator. The runner keeps those in their own lane, `--marty-jobs` wide (default one per core); the host-side rows fan out ahead of them. **`needs=("marty",)` implies it** (`Row.__init__`): 116 rows had forgotten the flag and ran in the host lane, competing with every other row on the box, so it is derived now. Say it anyway for a row that drives QEMU. |
 | `wants` | build artefacts this row OPENS that `make all` does not produce. §5. |
 | `builds` | it shells out to `make` and writes `build/`. **You almost certainly do not want this.** §5. |
 | `alone` | its ANSWER needs the cores — a rate, a frames-per-second, a millisecond redraw. Not the same claim as `builds`. §4.1. |
@@ -410,6 +425,15 @@ Key anything you write to the process (`os.getpid()`) or take it from the
 instance's own run directory, and sweep it on the way out — a per-PID name
 cannot be reclaimed by the next run the way a fixed one was, because `pid_max`
 wraps in minutes on a busy box.
+
+**Scratch that is not an artefact goes through `tempfile`**, never a literal
+`/tmp`: `tools/os88test.py` sets `$TMPDIR` to the checkout's `build/tmp/`
+when it is unset (`scratch_tmpdir()`), so under either runner - and
+`os88bisect`, which runs rows through it - nothing a row writes leaves the
+tree it was run from. The path is absolute, so `os88build.at()` never re-bases
+it and a later step finds the file where an earlier one put it. A row typed
+by hand gets the system's temporary directory unless you export `TMPDIR`
+yourself.
 
 
 ## 6. Driving the machine: `tools/os88ui.py`
@@ -888,6 +912,7 @@ not. Each one can still happen today.
 | 75 | The Memory page's press riding in **DI** across five controls. It worked while the block held one — `os88ui_rad` preserves every register — and stopped the moment there were five: `os88ui_drpress` does `xor di, di` and `dos_mck_di` ANSWERS in DI. The limit field then hit-tested at a garbage x, which reads as *the box refused the click*. Same task, same shape one layer up: the limit field was tested AFTER the radio whose rect covers it, so a press on it picked the arm it was already in and `doslnk` reported a `.LNK` carrying `memkb: 0` — a shortcut losing a setting, for a control that was never reached. **When a block grows past one control, the point belongs in memory and the innermost control asks first** | §1, §7 |
 | 76 | `btngesture` registered with `wants=("marty",)` — the emulator CAPABILITY put in the field that names build ARTEFACTS. The runner builds a `wants=` entry with `make <entry>` and then asks `os.path.exists(ROOT/<entry>)`, and `marty` is a PHONY target with no file at the root: cargo compiled it, `make` exited 0, and the runner still printed *"1 artefact(s) would not build: marty"* and skipped the row. **It had never run once.** The registry's own comment on the field already said *"Paths, not make targets"*; nothing checked it, and nothing needed to check it for the row to look fine — a SKIP is a line of output like any other, and **nobody investigates a skip**, which is §1's rule in different clothes. The gesture work under it was correct and passed the moment the row could run. `t_registry` fails an entry with no `/` in it now | §1, §5.1 || 77 | `dosglyph` reading a slot **the mount had not written yet**, and a whole session spent proving it was the kernel. The row navigates into a folder and immediately reads `assoc_glyph`; `os88ui.open` returned when the listing NAMES changed, which a mount does long before its icon harvest runs, so the read landed in the gap. Measured exactly: at the moment the verb returned the slot held the poison, and **21 ms of guest time later it held the shipped glyph with the FDC read count unchanged** - the sector had been read, the kernel had not yet reached the store. It went red on an unrelated kernel branch and stayed red 5/5, so it read as that branch's defect, and the elimination table built for it concluded *"dead code flips it and the same number of inert bytes does not"* - true, and not the answer: **THE KERNEL IS COMPRESSED** (SPEC.md 2.9.13), so zero padding costs the packed `KERNEL.SYS` nothing and real code costs it sectors, and every padding arm was a control holding the boot timing fixed. The same fault had already taken `tanksmall`, `pathcost`, `uilat` and `wireflick` red, where it read as four different product bugs. **A row that flips on unrelated kernel bytes has a race in it, and the first question is what it waits for** - never what the bytes are. And a build-size experiment that separates code from padding is asking the packer a question before it asks the kernel one | §1, §6 |
 | 77 | `drvmem` retired to `soak` under rule 1 because it "re-derives ONE PAGE of ONE application". Then the system-side size pass had one agent per driver: RAMDISK.DRV went 9KB -> 8KB and NET.DRV 7KB -> 5KB, neither agent edited `kernel/driver.inc`, both reported "fast tier passed, which covers `t_drvmem`", and every `make` was green while the Drivers page quoted 9K and 7K. It was caught at the MERGE by a hand-run of the unit soak rows. The subject was one page; the PARTIES were the kernel and every driver, which is the boundary | §2.1 |
+| 78 | The `fast` tier at 61 rows where this file and CLAUDE.md said 35, and `full` at 6 where they said 5. Twenty of the additions were one package's or one host tool's business - five PiXEL rows landed in one day - and two argued an exception ("a BUILD INPUT, not a package invariant") that the rule never had. Separately `make` ran `checkdocs.py` (7.3s) and `os88index.py --check` twice, once as `all`'s prerequisite and once as fast rows; `test-fast` now depends on the target and excludes the two rows. Nobody noticed because each row was cheap: the tier is paid in rows nobody wrote, so the count is the thing to watch | §2.1 |
 
 
 ---

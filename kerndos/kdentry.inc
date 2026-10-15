@@ -701,6 +701,20 @@ kd_leave:
     xor ah, ah                  ; the ROM's own wait: a program that printed
     int 0x16                    ; its last line deserves to have it read
 .park0:
+    ; --- A PICOMEM IS WARM-RESET, NOT int 19h'd (SPEC.md 18.100.1) ----------
+    ; The desktop's Restart learned this off the field machine - `int 19h`
+    ; boots into a card whose emulated devices are as the session left them
+    ; and never came back, where the ROM's warm reset runs the card's option
+    ; ROM again - and leaving a DOS program is the same `int 19h` one assembly
+    ; along. So it takes the same macro: on a PicoMEM the warm reset, and POST
+    ; resets the FDC the park below would; anywhere else 2A3h fails its second
+    ; read and this falls through to the park with IF back on. The exit code
+    ; kd_bda posted rides POST only as far as the BIOS leaves 0040:00F0 alone,
+    ; which is the price of a machine that restarts at all.
+    cli
+    DSK_PMEM_WARM .nopm
+.nopm:
+    sti
 
     ; --- the park, AND the DL the ROM boots from (SPEC.md 18.100, 96.40.2) ---
     ; **`int 19h` READS THE BOOT DRIVE OUT OF DL AS IT FINDS IT.** The

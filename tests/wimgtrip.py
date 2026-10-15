@@ -50,14 +50,14 @@ def equ(path, name):
 
 FS_EDIT = equ("kernel/files.inc", "FS_EDIT")
 FS_SIZE = equ("kernel/files.inc", "FS_SIZE")
-CL_STEP = equ("kernel/clone.inc", "CL_STEP")
-CL_TOT = equ("kernel/clone.inc", "CL_TOT")
-CL_SPT = equ("kernel/clone.inc", "CL_SPT")
-CLS_WIMG = equ("kernel/clone.inc", "CLS_WIMG")
-CLS_PICK = equ("kernel/clone.inc", "CLS_PICK")
-CL_TGT = equ("kernel/clone.inc", "CL_TGT")
+CL_STEP = equ("kernel/diskops.inc", "CL_STEP")
+CL_TOT = equ("kernel/diskops.inc", "CL_TOT")
+CL_SPT = equ("kernel/diskops.inc", "CL_SPT")
+CLS_WIMG = equ("kernel/diskops.inc", "CLS_WIMG")
+CLS_PICK = equ("kernel/diskops.inc", "CLS_PICK")
+CL_TGT = equ("kernel/diskops.inc", "CL_TGT")
 CLE_IMG = int(re.search(r"^CLE_IMG\s+equ\s+(0x[0-9A-Fa-f]+)",
-                        open("kernel/clone.inc").read(), re.M).group(1), 16)
+                        open("kernel/diskops.inc").read(), re.M).group(1), 16)
 TITLE_H = 18            # SPEC.md 11: a window's content starts 18 below it
 FS_SEL = equ("kernel/files.inc", "FS_SEL")
 FS_DRV = equ("kernel/files.inc", "FS_DRV")
@@ -114,8 +114,8 @@ def to_b(ui, m, w):
 
 
 def pick_image(ui, m):
-    """File > Write Img..., then B: and the image's row in the chooser."""
-    ui.menu_pick("File", "Write Img...")
+    """Disk > Write Image..., then B: and the image's row in the chooser."""
+    ui.menu_pick("Disk", "Write Image...")
     w = chooser(ui, "Open")
     check(w is not None, "Write Img... opens the Open chooser",
           "fm_c_wimg is fdlg_open_x and nothing else (SPEC.md 22.21.5)")
@@ -186,11 +186,11 @@ try:
               "...and still ends the mode and gives the claim back", "")
         # FIRST, because it cannot change A: - the write fails at the first
         # chunk and sector 0 goes down last (SPEC.md 18.99.2) - while the round
-        # trip below replaces the system disk, CLONE.DRV and all, and a second
+        # trip below replaces the system disk, DISKOPS.DRV and all, and a second
         # Write Img after it could not load the module at all ('No disk').
 
         # --- 1b. Clone Disk... with an IMAGE as its target: the Save box ---
-        # SPEC.md 18.99.8. CLONE.DRV opens this box ITSELF (size pass 8),
+        # SPEC.md 18.99.8. DISKOPS.DRV opens this box ITSELF (size pass 8),
         # through fdf_fdlg_open with the resident fm_img_done_x as the
         # completion proc - where it used to answer CLA_SAVE and have
         # fm_editkey open it. So what is asserted is everything the image now
@@ -203,7 +203,7 @@ try:
         # it needs), and that is useful rather than a gap: the refusal is
         # clo_froom's, reached only once clo_saved has run on the clone's own
         # claim with the name the box gave.
-        ui.menu_pick("File", "Clone Disk...")
+        ui.menu_pick("Disk", "Clone Disk...")
         M.settle(m)
         for _ in range(6):
             if job(m, CL_TGT) == CLE_IMG:

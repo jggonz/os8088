@@ -52,6 +52,8 @@ import os88fixture                                       # noqa: E402
 import os88qemu                                              # noqa: E402
 import os88sym                                               # noqa: E402
 
+DISK = "build/trkscrl.img"
+
 # Where things are on a 640x480 desktop with build/trkscrl.img in drive B:
 # the B: drive zone, and BEVERLY.MOD's row in the window it opens (it sorts
 # first - the only other file is TRKSCRL.O88). These two are the ONLY thing
@@ -204,7 +206,7 @@ def boot():
     # puts that back. Its prerequisites ($(TESTIMG) $(TESTAPPS)) are declared
     # as this row's `wants=`, so the runner has them current and nothing is
     # built here either.
-    r = os88fixture.make("test", "TESTAPPS=build/trkscrl.img")
+    r = os88fixture.make("test", "TESTAPPS=" + DISK)
     if r.returncode:
         raise SystemExit("trkscrl: make test failed:\n" + r.stdout + r.stderr)
 
@@ -256,7 +258,7 @@ def main():
 
     def resident():
         nonlocal seg
-        seg, _drv = os88rate.scan(q)
+        seg, _drv = os88rate.scan(q, DISK)
         return bool(seg)
     # 12s of settling and ten 2s re-scans was the old budget: 52 guest s
     os88qemu.acted(q, resident, secs=52, what="TRKSCRL.O88 resident",

@@ -38,6 +38,7 @@ package's own header and explicitly **not** the contract.
 | `lmwrite.c` | the resolve pass and the bundle writer (WEAVE-SPEC §2) — in the overlay. **This is where byte identity is either true or not** |
 | `lmovl.c` | `LOOM.OVL`'s remaining tenants: About and New Project |
 | `lmui.inc` | the alert, the scroll bar, the two claim movers, the line scanner and the glass shadow's comparator (assembly) |
+| `lmpool.py` | a host pass over the compiled assembly: lays `loom.h`'s PHASE STORE - four pack passes' private tables - from one base. `.bss` only; the code is the code `tools/cc8086.py` checked. Its first job, folding a string literal SmallerC emitted twice (or as the tail of a longer one) onto one copy, is every C package's now (`tools/ccpeep.py`, SPEC.md 73.15) |
 | `icon.inc` | the 16×16 icon: a loom — beams, warp threads and a shuttle |
 | `lmassoc.inc` | the association block: `.WML` and `.WJS` (WEAVE-SPEC §1.5 step 2) |
 | `hosttest/` | `lmhost.c`: the compilers built with the HOST's `cc`, driven by `tests/unit/t_lmpack.py` and diffed against `weavesim --pack`. The dev loop, not the gate — `int` is 32 bits there and 16 bits here |

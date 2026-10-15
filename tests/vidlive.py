@@ -26,7 +26,10 @@ VGA), with a seam back to frame 10 and Repeat on. On the screen named:
    desktop, live and playing; ESC STOPS IT.
 
 --screen vga4 is LIVE IN COLOUR (98.3.10.4): the VGA rendition is a VGA4
-canvas of the same size, and every hold is read off the RENDERED glass
+canvas of the same size - SUB2 (98.1.3.2.4), its sub-records' lists behind
+list maps as the encoder writes every planar file, so the RAM decode
+(vp_decram) and the resident check (vp_rbnd) read them - and every hold is
+read off the RENDERED glass
 against the decode's sixteen colours. The pass's blits are OSAPI_GFX_BLITPs
 and no BLIT4 - uncovered, and under the Disk window too, where BLITP walks
 the clip (SPEC.md 5.4.3.6): a hold there has the box's uncovered pixels
@@ -99,6 +102,7 @@ def canvases4():
 
 def writer4():
     g = vid.Geom(vid.LAY_LIN80, WB, H, bitplanes=True)
+    g.sub2 = True                   # list maps, as the encoder writes it
     w = vid.Writer(g, int(FPS * 100), 100, vid.AUD_NONE, 0, vid.PF_VGA4,
                    title="live", keysecs=100.0, loop=L)
     surf, prev = g.surface(), bytes(WB * 8 * H)

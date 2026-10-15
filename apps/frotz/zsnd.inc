@@ -74,7 +74,7 @@ ZS_CH       equ 0                   ; the one FM channel we key. Channel 8 is
                                     ; because we can only ever have one
                                     ; substitute sounding - see zs_effect.
 
-; --- our slice of the bss (apps/frotz/zbss.inc, ZSND_SLACK: 64 bytes) --------
+; --- our slice of the bss (apps/frotz/zbss.inc, ZSND_SLACK: 16 bytes) --------
 ; zs_caps/zs_capsok are named in zbss.inc itself; these four are the state
 ; this module needed that the map did not anticipate.
 %define zs_patch      (os88_image_end + ZSND_SLACK + 0)   ; 11: the working
@@ -191,12 +191,7 @@ zs_effect:
 
 .out:
     pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp zf_pop5
 
 ; -----------------------------------------------------------------------------
 ; zs_tone - one duration-limited tone, fire and forget

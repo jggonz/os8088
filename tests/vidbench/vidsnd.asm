@@ -694,6 +694,7 @@ vs_run:
     ret
 
 %define BL_ARENA_BYTES 4000
+%define BL_NUMBERED                 ; a field run saves NAME1, NAME2... (benchlib)
 %include "benchlib.inc"
 
 vs_tpl:

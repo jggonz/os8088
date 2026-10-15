@@ -17,6 +17,8 @@ XB_LANE_ROWS    equ 6                   ; collision rows: tile rows 21..16
 ; a race is a runway plus two laps, and the compiler refuses a lap over 797
 ; columns (tools/excitebike_assets.py), so this is the worst case
 XB_CID_MAX      equ 43 + 2 * 797        ; 43 = EXB_RUNWAY
+XB_TOK_SKIP     equ 62                  ; a course stream's two ids that are not columns (world.inc,
+XB_TOK_COPY     equ 63                  ;   tools/excitebike_assets.py TOK_SKIP / TOK_COPY)
 
 ; where the Wave 1 placeholder starts looking along the course
 XB_X0           equ 30
@@ -133,6 +135,9 @@ XEV_OVERHEAT    equ 0x40
 XEV_BOUNCE      equ 0x80
 
 XB_TSTEPS       equ 256                 ; the harness's script and trace chunk (steps)
+XB_TSCRIPT      equ 0                   ; ...in the harness claim: the script ring, then
+XB_TTRACE       equ XB_TSTEPS           ;   the trace ring of 16-byte records (game.inc xb_tclaim)
+XB_TCLAIM_KB    equ (XB_TSTEPS * 17 + 1023) / 1024
 
 ; ---- wave 4: race flow, opponents, front end (SPEC.md 102.4) --------------------
 XB_NAI_MAX      equ 3                   ; opponents in Selection B

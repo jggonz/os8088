@@ -671,7 +671,22 @@ cs_scene:
     add si, CSO_SIZE
     loop .o
 .done:
+    xor al, al                      ; --- ULTRA'S FIELDS (88.13.1.5), filed
+    cmp byte [cs_setbld], CSBL_ULTRA ;    LAST so a full list drops a field
+    jb .nf                          ;    and not the world, and drawn FIRST
+    test byte [cs_setfill], CSFL_TERRAIN
+    jz .nf                          ; (a terrain fill turned off is no field)
+    call cs_gtex
+    mov al, 1
+.nf:
+    push ax
     call cs_occlude                 ; what stands wholly behind something else
+    pop ax
+    or al, al
+    jz .nt
+    mov byte [cs_pass], CSM_TEXT    ; the fields, under everything else flat
+    call cs_drawpass
+.nt:
     ; --- the ground shapes, far to near, then the solids ---------------------
     mov byte [cs_pass], CSM_FLAT
     call cs_drawpass
@@ -1065,6 +1080,44 @@ cs_occlev:
     ret
 
 ; -----------------------------------------------------------------------------
+; CS_LADDER refused, kept - the Detail Level's ladder for the object at SI
+; (SPEC.md 88.13.1): jumps to `refused` or to `kept`, or FALLS THROUGH to what
+; follows, which is `kept`. Clobbers AX and BL. A MACRO so that the two walks
+; that ask it - cs_consider for the view and cs_mapdraw for the map (88.16) -
+; ask the same question in one source and neither pays a call for it.
+;
+; A LADDER: the DENSE CITY goes first, then everything but the points of
+; interest, then all but the roads, then those too.
+; -----------------------------------------------------------------------------
+%macro CS_LADDER 2
+    mov ax, [si + CSO_FLAGS]
+    mov bl, [cs_setbld]
+    cmp bl, CSBL_HIGH               ; (and Ultra, which is High's content
+    jae %2                          ; and the ground's texture, 88.13.1.5)
+    test ax, CSO_DENSE              ; HIGH'S OWN CONTENT, AND ONLY HIGH'S, and
+    jnz %1                          ; it is tested FIRST so that no exemption
+                                    ; below can undo it: this sat under
+                                    ; TERRAIN's, and 88.13.1.1 is the record
+                                    ; of what that costs - Nepal's CSO_FILLER
+                                    ; ridges were terrain too, so the flag had
+                                    ; never filtered one of them, and its own
+                                    ; High tier (88.13.1.3) drew at every rung
+                                    ; for the same reason until this moved
+    test ax, CSO_TERRAIN            ; TERRAIN is exempt from what is left -
+    jnz %2                          ; the hills, the water and the runway are
+    cmp bl, CSBL_NONE               ; the world's own surface and not
+    je %1                           ; buildings to thin out - and the
+    test ax, CSO_ROAD               ; ROADS come back one rung up, being
+    jnz %2                          ; the shape of a city with no city on
+    cmp bl, CSBL_ROADS              ; it and a line model each
+    je %1
+    cmp bl, CSBL_LOW
+    jne %2
+    test ax, CSO_POI
+    jz %1
+%endmacro
+
+; -----------------------------------------------------------------------------
 ; cs_consider - cull object SI, and file it in cs_vis by depth if it survives
 ; clobbers everything but SI... no: everything (SI is the caller's to keep)
 ;
@@ -1075,32 +1128,7 @@ cs_occlev:
 ; -----------------------------------------------------------------------------
 cs_consider:
     mov [cs_obj], si
-    mov ax, [si + CSO_FLAGS]        ; --- WHAT THE PLAYER ASKED FOR (88.13.1),
-    mov bl, [cs_setbld]             ;     a LADDER: the DENSE CITY goes first,
-    cmp bl, CSBL_HIGH               ;     then everything but the points of
-    je .tier                        ;     interest, then all but the roads,
-    test ax, CSO_DENSE              ;     then those too.
-    jnz .out                        ; HIGH'S OWN CONTENT, AND ONLY HIGH'S, and
-                                    ; it is tested FIRST so that no exemption
-                                    ; below can undo it: this sat under
-                                    ; TERRAIN's, and 88.13.1.1 is the record
-                                    ; of what that costs - Nepal's CSO_FILLER
-                                    ; ridges were terrain too, so the flag had
-                                    ; never filtered one of them, and its own
-                                    ; High tier (88.13.1.3) drew at every rung
-                                    ; for the same reason until this moved
-    test ax, CSO_TERRAIN            ; TERRAIN is exempt from what is left -
-    jnz .tier                       ; the hills, the water and the runway are
-    cmp bl, CSBL_NONE               ; the world's own surface and not
-    je .out                         ; buildings to thin out - and the
-    test ax, CSO_ROAD               ; ROADS come back one rung up, being
-    jnz .tier                       ; the shape of a city with no city on
-    cmp bl, CSBL_ROADS              ; it and a line model each
-    je .out
-    cmp bl, CSBL_LOW
-    jne .tier
-    test ax, CSO_POI
-    jz .out
+    CS_LADDER .out, .tier           ; WHAT THE PLAYER ASKED FOR (88.13.1)
 .tier:
     mov ax, [si + CSO_SKIP]         ; out of range last time by enough that
     or ax, ax                       ; it cannot be back yet (88.5.2) - and
@@ -1439,8 +1467,8 @@ cs_drawobj:
     mov al, [si + CSM_NF]
     cmp al, 1
     sbb al, al                      ; AL = -1 for a wireframe (no faces)
-    cmp byte [si + CSM_TYPE], CSM_FLAT
-    je .flat
+    test byte [si + CSM_TYPE], CSM_FLAT ; (and Ultra's fields, CSM_TEXT -
+    jnz .flat                       ; flat by this bit, 88.13.1.5)
     ; --- a solid under CS_LODPX pixels across is its box, filled: one
     ;     rectangle off THREE projected points for a dozen transformed
     ;     vertices and five faces, and nobody can tell at that size.
@@ -1512,8 +1540,10 @@ cs_drawobj:
     mov si, [cs_mdl]
     cmp byte [si + CSM_NF], 0
     je .edg
-    cmp byte [cs_setfill], CSFL_ALL  ; a fill the player turned off leaves the
-    jne .edg                        ; OUTLINE as the whole of the object, so
+    mov al, [cs_setfill]            ; a fill the player turned off leaves the
+    not al                          ; OUTLINE as the whole of the object, so
+    test al, CSFL_ALL               ; (BOTH fill bits, and not the byte: the
+    jnz .edg                        ;  haze is a bit of it too, 88.4.1.1.1)
     mov cx, [cs_ocz]                ; the size test that drops it cannot run
     or cx, cx                       ; AT OR BEHIND THE EYE it is not far and
     jle .edg                        ; it is not small, it is UNDER YOU: the
@@ -1525,7 +1555,7 @@ cs_drawobj:
                                     ; THE SAME LINE IS IN cs_boxlod ABOVE and
                                     ; carries the same story about a building:
                                     ; one of the two got the guard and the
-                                    ; other did not (SPEC.md 88.6.2.1)
+                                    ; other did not (SPEC.md 88.13.1.5.3)
     cmp cx, 2600
     ja .out                         ; 24 cz would not fit: far and small
     mov ax, [si + CSM_RAD]
@@ -3169,6 +3199,8 @@ cs_fillon:
     je .test
     cmp al, CSI_HILL
     je .test
+    cmp al, CSI_HILL2               ; ...and both of its shades (88.4.4.1),
+    jae .test                       ; the last inks there are
     mov ah, CSFL_BLDG
 .test:
     test [cs_setfill], ah
@@ -3508,6 +3540,13 @@ cs_edges:
     xor ch, ch
     jcxz .out
     mov al, [si + CSM_EINK]
+    cmp al, CSI_MARK                ; A ROAD draws its lines in CSI_ROAD
+    jne .ink                        ; (88.13.1.5.3): the runway's edges are the
+    mov bx, [cs_obj]                ; same ink and must stay CSI_MARK, which
+    test byte [bx + CSO_FLAGS + 1], CSO_ROAD >> 8   ; on CGA is green - the
+    jz .ink                         ; ground's own colour, so a road was a
+    mov al, CSI_ROAD                ; stripe with the ground's dots wiped off
+.ink:
     call cs_setink
     mov si, [si + CSM_EDGES]
     cld

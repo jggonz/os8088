@@ -20,8 +20,7 @@ import gorillas as G
 def code_offsets(extra=()):
     source = (G.ROOT / 'apps/gorillas/gorillas.asm').read_text()
     names = ('gr_key', 'gr_tick', 'gr_fullpaint', 'gr_status', 'gr_prompt', 'gr_velocity',
-             'gr_pausemsg', 'gr_roundmsg', 'gr_matchmsg', 'gr_animate',
-             'gr_apeleft', 'gr_aperight') + tuple(extra)
+             'gr_pausemsg', 'gr_roundmsg', 'gr_matchmsg', 'gr_animate') + tuple(extra)
     # Symbol-only probe: its appended table is not part of the shipped image.
     source = source.replace('OS88_IMAGE_END', '').replace('OS88_BSS GR_BSS', 'OS88_BSS 0')
     source += '\n' + '\n'.join('dw ' + n for n in names) + '\nOS88_IMAGE_END\n'

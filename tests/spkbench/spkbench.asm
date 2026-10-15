@@ -359,9 +359,13 @@ sp_setup:
 sp_brk:
     mov ax, 8000                    ; the shaper's tables need a rate: its
     call sp_ringat                  ; count table is the ring's
+    push es                         ; the family: in the segment emit
+    push cs                         ; writes, ours here (sp_shaper's ES)
+    pop es
     mov di, sp_fam
     mov ax, SPKFX_PRE_DIFF          ; AH = 0: the carrier slide, as Audio
     call os88spkfx_init
+    pop es
     call sp_shaper                  ; 1. SHUT
     mov [sp_n0], ax
     xor bx, bx
@@ -803,6 +807,7 @@ sp_bseg     equ os88_image_end + 20
 sp_nr       equ os88_image_end + 32     ; a word a rate (4)
 sp_src      equ os88_image_end + 64
 sp_dst      equ sp_src + SP_SPAN
-sp_fam      equ sp_dst + SP_SPAN        ; the shaper's family, in our segment
+sp_fam      equ sp_dst + SP_SPAN        ; the shaper's family: our segment,
+                                        ; which is where sp_shaper's emit writes
 
     BL_BSS os88_image_end + SP_BSS_OWN

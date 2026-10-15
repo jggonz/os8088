@@ -21,7 +21,6 @@ Hercules's own printer port at 3BCh answers (SPEC.md 34.14). So `mpu_base`
 is the reading, not whether the row loaded.
 """
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -32,6 +31,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 sys.path.insert(0, HERE)
 import os88build                                            # noqa: E402
+import os88drvsym                                           # noqa: E402
 import os88sym                                              # noqa: E402
 import os88ui                                               # noqa: E402
 
@@ -51,26 +51,11 @@ def check(ok, what):
 
 
 def sound_syms():
-    """SOUND.DRV's map, refused unless it describes build/sound.bin."""
-    with tempfile.TemporaryDirectory() as d:
-        src, mp, out = (os.path.join(d, n) for n in ("s.asm", "s.map",
-                                                      "s.bin"))
-        shutil.copy("drivers/sound/sound.asm", src)
-        with open(src, "a") as f:
-            f.write("\n[map all %s]\n" % mp)
-        subprocess.run(["nasm", "-f", "bin", "-w+error", "-I",
-                        "drivers/sound/", "-I", "drivers/", "-I", "apps/",
-                        "-o", out, src], check=True)
-        if open(out, "rb").read() != open(os88build.at("build/sound.bin"),
-                                          "rb").read():
-            sys.exit("mpupin: the mapped build is not build/sound.bin")
-        syms = {}
-        for line in open(mp):
-            m = re.match(r"^\s+([0-9A-Fa-f]+)\s+([0-9A-Fa-f]+)\s+(\S+)\s*$",
-                         line)
-            if m:
-                syms[m.group(3)] = int(m.group(1), 16)
-        return syms
+    """SOUND.DRV's map, off the Makefile's own recipe (tools/os88drvsym.py):
+    it ships with -DPICOMEM, and a hand-written nasm line without it reads
+    every symbol 341 bytes out of place. A map that is not build/sound.bin
+    RAISES there."""
+    return os88drvsym.symbols("sound.bin")
 
 
 def cfg(pin):

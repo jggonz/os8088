@@ -108,6 +108,11 @@ def main():
         pseg = rec[22] | (rec[23] << 8)
         rb = lambda n: m.readseg(pseg, sy[n], 1)[0]        # noqa: E731
         rw = lambda n: u16(m.readseg(pseg, sy[n], 2))      # noqa: E731
+        # THE PAGE ARRIVES ON THE WAKE, after the window is up (SPEC.md 54.10):
+        # read straight after the open and this is an empty browser
+        os88marty.until(m, lambda _m: rw("br_nlines") > 0, "the page laid out",
+                        limit=120)
+        os88marty.settle(m)
 
         # --- 0: the bar OPENS holding `http://`, focused, caret at the end
         # (SPEC.md 71.7). It is read before anything is clicked, because the
@@ -136,9 +141,9 @@ def main():
             sys.exit("brclick: no link arena was claimed - nothing below can "
                      "be measured")
         arena = bytes(m.readseg(lseg, 0, max(rw("br_lnkw"), 1)))
-        offs = [u16(m.readseg(pseg, sy["br_lnkoff"] + i * 2, 2))
-                for i in range(n)]
-        hrefs = [arena[o:arena.index(b"\0", o)].decode("latin-1") for o in offs]
+        # the arena IS the index (br_follow): hrefs packed in link order,
+        # each ending at its NUL, so link N is the Nth string
+        hrefs = [h.decode("latin-1") for h in arena.split(b"\0")[:n]]
         say("hrefs: %r" % hrefs)
         if hrefs != WANT_HREFS:
             fails.append("hrefs %r != %r" % (hrefs, WANT_HREFS))

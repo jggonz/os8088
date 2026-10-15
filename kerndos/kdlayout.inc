@@ -57,18 +57,25 @@ KERNEL_SEG  equ KD_SEG          ; ...and the kernel's own files call it this
 ; because DOS has no such call - AH=3Ah removes an empty directory and refuses
 ; a populated one, which is the strict `dskw_rmdir` arm `dos_k_rmdir` already
 ; takes. 381 bytes of the rung left.
+;
+; **AND 35 -> 33 IN APPS SIZE PASS 1** (SPEC.md 96.44.15): that was Task #27,
+; the kilobyte SPEC.md 96.11.7's character devices borrowed and one more. The
+; core part lost 1,071 bytes - its window-only routines and strings went to
+; the window half, and its INT 21h dispatch became a table - and CORE_MAX came
+; down with it, 16,384 -> 15,312, so this image reserves that much less hole.
+; MEASURED at the foot of kdos.asm: 33,659 of 33,792, 133 bytes left; the DOS
+; program gets the two kilobytes. DOSR_MARK's 542 bytes still need one more,
+; so the knob pays a kilobyte over the shipped rung exactly as it did.
 %ifdef DOSR_MARK                ; SPEC.md 96.49's resume trace is 542 bytes
-KD_IMG_KB   equ 36              ; and the shipped image has 237 of its rung
+KD_IMG_KB   equ 34              ; and the shipped image has 133 of its rung
 %else                           ; left: the KNOB pays the kilobyte, as a DOS
                                 ; program on a trace build, and no shipped one
-KD_IMG_KB   equ 35              ; 34 until SPEC.md 96.11.7's character devices
-%endif
-                                ; raised CORE_MAX by a kilobyte, and this rung
-                                ; reserves the core's block - so a kilobyte
+KD_IMG_KB   equ 33              ; 34 until SPEC.md 96.11.7's character devices
+%endif                          ; raised CORE_MAX by a kilobyte to 35, and 33
+                                ; since apps size pass 1 (above): this rung
+                                ; reserves the core's block, so a kilobyte
                                 ; there is a kilobyte here, which is a kilobyte
-                                ; off the DOS program. Task #27 is where both
-                                ; come back; the owner's call was *"working at
-                                ; all is most important"*.
+                                ; off the DOS program
                                 ; the image rung: every progbits section PLUS
 KIMG_PARA   equ KD_IMG_KB * 64  ; the bss, rounded up to whole KB and asserted
                                 ; at the foot of each root.  IT HAS TO CLEAR
@@ -77,7 +84,7 @@ KIMG_PARA   equ KD_IMG_KB * 64  ; the bss, rounded up to whole KB and asserted
                                 ; kilobyte puts the FAT snapshot INSIDE the
                                 ; code and the mount overwrites what called it.
                                 ; At wave 4 kdos.asm measures .text 32,425 +
-                                ; .cold 11,397 + .ovlw 762 + .modf 1,235 =
+                                ; .cold 11,397 + .ovl 762 + .modf 1,235 =
                                 ; 45,827 of image and 12,316 of `.bss` above
                                 ; it, so 58,144 all in and 60KB is the rung
                                 ; that holds it.  **BOTH HALVES COST A ROUND

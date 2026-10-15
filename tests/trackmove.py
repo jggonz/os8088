@@ -264,8 +264,11 @@ def main():
         # --- the SOUND DRIVER's staging pool, if this machine has a card ----
         # SPEC.md 66.5.5. docs/FIELD-NOTES.md 2 named it the fragmenting party,
         # and it is the one claim in the tree that needs a DRIVER to park.
-        D = pkg_syms("drivers/sound/sound.asm",
-                     ("drivers/sound/", "drivers/", "apps/"))
+        # Off the Makefile's own recipe, checked against build/sound.bin:
+        # re-assembled here without -DPICOMEM it read sbl_poolseg 341 bytes
+        # out of place (docs/plans/HANDOFF-APPS-SHARED.md 6.2).
+        import os88drvsym
+        D = os88drvsym.symbols("sound.bin")
         dseg = next((c[0] for c in claims(m, S) if c[2] == MEM_K_DRV), None)
         pool0 = prloc = None
         direct = 0

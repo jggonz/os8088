@@ -1,5 +1,6 @@
 ; Local NES arrangements, native bounded sequencer. SPEC 99.
-; Music records: phrase-list ptr, event ptr, remaining NES frames, note Hz.
+; Music records: phrase-list ptr, event ptr, remaining NES frames, note Hz;
+; dm_audio_dur holds each voice's current note length (phrases omit repeats).
 ; No allocations, sample loops, IRQ hooks or per-frame patch loads.
 DM_AV_SIZE equ 8
 DM_FX_CURSOR equ 1
@@ -275,8 +276,8 @@ dm_audio_tick:
 .event:
     mov si, [di+2]
     lodsb
-    or al, al
-    jnz .note
+    cmp al, 7fh                 ; end of phrase
+    jne .note
     mov bx, [di]
     add bx, 2
     mov si, [bx]
@@ -290,11 +291,18 @@ dm_audio_tick:
     mov [di], bx
     lodsb
 .note:
-    xor ah, ah
-    add [di+4], ax
-    lodsb
-    xor ah, ah
-    mov bx, ax
+    ; Pitch index; bit 7 says a new duration byte follows. CH is zero.
+    mov bx, cx
+    or al, al
+    jns .same
+    mov ah, [si]
+    inc si
+    mov [dm_audio_dur+bx], ah
+    and al, 7fh
+.same:
+    mov bl, [dm_audio_dur+bx]
+    add [di+4], bx
+    mov bl, al
     shl bx, 1
     mov ax, [dm_note_hz+bx]
     mov [di+6], ax

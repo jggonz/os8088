@@ -4,6 +4,7 @@
 ; the game's graphics lock; rendering services the same clock between strips.
 
 ; Select by completed points: every skyline advances, every match resets.
+align 2
 gr_bgmlevel:
     call gr_bgmstop
     xor ax, ax
@@ -22,35 +23,9 @@ gr_bgmlevel:
 
 gr_bgmstop:
     call gr_bgmhold
-    mov word [gr_bgmptr], 0
-    mov byte [gr_bgmstatus], 0
-    ret
-
-; M is accepted throughout gameplay, including flight, AI turns and pause.
-; Muting releases voices but retains the phrase position and reference SFX.
-gr_bgmtoggle:
-    xor byte [gr_bgmenabled], 1
-    cmp byte [gr_bgmenabled], 0
-    je gr_bgmhold
-    mov byte [gr_bgmstatus], 0   ; an explicit enable retries unavailable FM
-    cmp byte [gr_paused], 0
-    jne .out
-    cmp byte [gr_abon], 0
-    jne .out
-    jmp gr_bgmtick
-.out:
-    ret
-
-; Release claims when paused, obscured, unfocused, or showing About. Resume
-; at the next row with a fresh deadline, never a burst of overdue notes.
-; Percussive envelopes also decay naturally if the UI stops servicing us.
-gr_bgmhold:
-    cmp byte [gr_bgmstatus], 1
-    jne .out
-    mov al, 3
-    call OSAPI_SND_FM
-    mov byte [gr_bgmstatus], 0
-.out:
+    xor ax, ax
+    mov [gr_bgmptr], ax
+    mov [gr_bgmstatus], al
     ret
 
 ; Claim any three free channels (0..7). Failure releases partial claims and
@@ -87,36 +62,40 @@ gr_bgmacquire:
     mov byte [gr_bgmstatus], 1
     call OSAPI_GET_TICKS
     mov [gr_bgmdue], ax
+gr_bgmidle:                     ; gr_bgmtick's early outs, in short range
     ret
 
 gr_bgmtick:
     cmp byte [gr_bgmenabled], 0
-    je .out
+    je gr_bgmidle
     cmp word [gr_bgmptr], 0
-    je .out
+    je gr_bgmidle
     cmp byte [gr_bgmstatus], 2
-    je .out
+    je gr_bgmidle
     cmp byte [gr_bgmstatus], 1
     je .clock
     call gr_bgmacquire
     cmp byte [gr_bgmstatus], 1
-    jne .out
+    jne gr_bgmidle
 .clock:
     call OSAPI_GET_TICKS
     mov dx, ax
     sub ax, [gr_bgmdue]
-    js .out
+    js gr_bgmidle
     cmp ax, 9
     ja .resync
     mov dx, [gr_bgmdue]
 .resync:
     mov si, [gr_bgmptr]
-    cmp byte [si], 0
+    cmp byte [si], 0ffh
     jne .row
     mov si, [gr_bgmstart]
 .row:
-    lodsb
-    xor ah, ah
+    mov al, [si]
+    mov cl, 6
+    shr al, cl                  ; ticks-1 rides on the melody's byte
+    cbw
+    inc ax
     add dx, ax
     mov [gr_bgmdue], dx
     xor di, di
@@ -125,8 +104,11 @@ gr_bgmtick:
     mov al, 1
     call OSAPI_SND_FM       ; retrigger even repeated notes
     jc .lost
-    lodsw
-    mov bx, ax
+    lodsb
+    and ax, 3fh
+    shl ax, 1
+    xchg bx, ax
+    mov bx, [gr_bgmhz+bx]
     or bx, bx
     jz .next
     xor al, al
@@ -137,7 +119,6 @@ gr_bgmtick:
     cmp di, 3
     jb .voice
     mov [gr_bgmptr], si
-.out:
     ret
 .lost:
     ; Driver unloaded, or channels revoked: don't keep trying every tick.
@@ -151,6 +132,7 @@ gr_bgmtick:
 ; The additional 14 steps reduce the previous mix by approximately 70%.
 ; Leave modulators and tone/SFX unchanged.
 GR_BGM_QUIET equ 18
+align 2
 gr_bgmpatches: dw gr_bgmbright, gr_bgmsoft, gr_bgmtwang
 gr_bgmbright:
     db 01h,22h,0f3h,57h,00h, 01h,08h+GR_BGM_QUIET,0f4h,67h,00h, 04h ; mallet

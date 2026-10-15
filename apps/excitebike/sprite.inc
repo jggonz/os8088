@@ -59,6 +59,17 @@ xs_claim1 equ $                     ; (tests/excitebike_video.py --smallclaim re
 .done:
     jc .free
     mov byte [xb_nspr], EXB_NPOSES
+    ; The claim was the BUDGET (44 / 28 / 17 KB), taken before the expansion knew its size;
+    ; the blobs and the compiled code end at [xb_sprused] and nothing is written past it, so
+    ; the tail goes back to the heap now - before the CGA's 48 KB dictionary claim, which
+    ; is the peak.  A shrink is always in place (the base, and so [xs_cfar], stays put).
+    ; [xb_sprkb] keeps saying which BUDGET was taken: it is what decided the compile.
+    mov ax, [xb_sprused]
+    add ax, 1023
+    mov cl, 10
+    shr ax, cl
+    mov dx, [xb_sprseg]
+    call OSAPI_MEM_REGROW
     RESTORE
     clc
     ret
@@ -73,15 +84,11 @@ xs_claim1 equ $                     ; (tests/excitebike_video.py --smallclaim re
     ret
 
 xb_spr_free:
-    push dx
-    mov dx, [xb_sprseg]
-    or dx, dx
-    jz .out
-    call OSAPI_MEM_FREE
-    mov word [xb_sprseg], 0
+    push bx
+    mov bx, xb_sprseg
+    call xb_freeseg
+    pop bx
     mov byte [xb_nspr], 0
-.out:
-    pop dx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -259,12 +266,10 @@ xs_load_cga:
     rep stosw
     pop es
     call xs_mkexp
-    push ds
-    mov bx, [xb_recs + EXBR_PAL * 2]
+    mov bx, [xb_pal]                    ; (the copy in our segment: xb_font_copy)
     mov si, bx
     add si, 34                      ; the four pose ink slots
     mov di, xs_ink55
-    mov ds, [cs:xb_gfxseg]
     mov cx, 4
 .ink:
     lodsb
@@ -275,10 +280,9 @@ xs_load_cga:
     pop bx
     mov ah, 55h
     mul ah                          ; ink * 55h: the ink in all four pixel positions
-    mov [cs:di], al
+    mov [di], al
     inc di
     loop .ink
-    pop ds
     mov di, EXB_NPOSES * XB_PHASES_C * 2   ; the blobs start after the table
     mov word [xs_p], 0
 .pose:
@@ -679,9 +683,8 @@ xs_compile_v:
     SAVE
     push ds
     ; the layers' colours from the palette record's pose ink slots (after the five themes)
-    mov bx, [xb_recs + EXBR_PAL * 2]
+    mov bx, [xb_pal]                    ; (the copy in our segment: xb_font_copy)
     add bx, 240
-    mov ds, [cs:xb_gfxseg]
     mov al, [bx]
     mov [cs:xs_vink], al
     mov al, [bx + 2]

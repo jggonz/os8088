@@ -500,6 +500,51 @@ One of three, and the first is the likely one:
    separate spend — at which point gating one and not the other stops making
    sense.
 
+## 6. `gfx_fill_pat_raw`'s VGA teardown and edge columns shared — **TAKEN**
+
+Kernel size pass 10 (docs/plans/completed/HANDOFF-KERNEL-SIZE-P11.md §2,
+`docs/plans/completed/ksp10/gfx.md`), commit `9a7e1c6c`. **26 bytes of
+`kern_big` `.text` for +0.28% of a VGA patterned fill.** Kept on the owner's
+word, with the note that it is the first thing to give back if a pass is ever
+squeezing cycles rather than bytes.
+
+### What it does
+
+Two changes to `gfx_fill_pat_raw`'s VGA arm (`kernel/vga12.inc`), neither
+touching the 1bpp renderer:
+
+| change | bytes | cost per patterned fill |
+|---|---:|---|
+| the teardown leaves through `vga_solid_rect`'s `.reset`/`.done` instead of its own | -5 | +1 taken `jmp` |
+| the two edge-column loops are one local `.col` subroutine | -21 | +2 `call`/`ret` |
+
+### Measured
+
+`tests/gfxbench` on MartyPC's VGA XT, base `833f13e4` against the gfx agent's
+branch: **`GFX_FILL_PAT` 64x64 +0.28%**. Hercules and CGA are unaffected (the
+VGA arm only). The same shape on `gfx_fill_gray_raw` measured **+0.29%** (~57
+clocks, where ~15 had been estimated) and was GIVEN BACK in `03f8b36d`,
+because gray is the common fill; this one stayed because the patterned fill is
+the rare one.
+
+### Who pays it
+
+`gfx_fill_pat` / `OSAPI_GFX_FILL_PAT` is a once-per-repaint call everywhere it
+is used, never a per-frame or per-pixel one: the Task Manager's memory map
+(`apps/taskmgr`), the Disk window's chevron row at the foot of a listing that
+runs past the fold (`kernel/files.inc`, one call whatever the width), Word's
+and Scribe's ruler, every minor tick in one call, and REDLINE's UI. So the
+price is a fraction of a millisecond per repaint of one of those, on VGA only.
+
+### What would flip the answer
+
+1. **A pass that trades bytes FOR cycles.** This is the cheapest cycle refund
+   on the list: undo both rows of the table (+26 bytes) and the fill is back to
+   the base.
+2. **A caller that fills patterns per frame** - an animated meter or a pattern
+   used as a moving texture - would make the 0.28% a per-frame cost, which is
+   the case the trade was not priced for.
+
 ## The apparatus, so it is not rebuilt
 
 Everything Set 29 needed already exists in the tree:

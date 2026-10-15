@@ -220,14 +220,12 @@ dsl_entry:
                                     ; table's copy has been spent by now
 
     ; --- and the hand-over --------------------------------------------------
-    ; AX is what the kernel bounds the part's image + bss against, so it is OUR
-    ; word for what is actually there (SPEC.md 20.12.10.4). The part is padded
-    ; to image + bss, so its own two header fields ARE that length - said by
-    ; adding them rather than by a constant this file would have to keep in
-    ; step with the other one.
-    mov ax, [es:LD_H_IMG]
-    add ax, [es:LD_H_BSS]
-    call OSAPI_PKG_REHOME
+    ; In the KEEP form (SPEC.md 20.12.10.5): the standard works out, from the
+    ; table, where the carve's last part ends, and the kernel cuts the carve
+    ; there - so the read's margin past the program goes back to the heap
+    ; instead of standing in the region for the session. The same figure is
+    ; what bounds the part's image + bss (20.12.10.4).
+    OS88_REHOME
     jc .no
     xor bx, bx                      ; NO WINDOW: ours is the region that is
     clc                             ; about to be freed (SPEC.md 20.12.10.6)

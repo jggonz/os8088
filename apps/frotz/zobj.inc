@@ -12,15 +12,16 @@
 ; zm_pw16 throughout rather than the 20-bit DX:AX pair. That is not an
 ; optimisation taken on faith: it is what "in dynamic memory" means, and it
 ; is why the three ABI entry points that hand a story address back to a
-; caller (zo_addr, zo_name, zo_proplen) can always answer with DX = 0.
+; caller (zo_name, zo_proplen) can always answer with DX = 0.
 ;
 ; THE SECOND DECISION: every layout number here is derived from [zf_ver] and
 ; from nothing else. There are six of them - entry size, attribute bytes,
 ; the offset of the tree past the defaults, the defaults count, the width of
 ; an object number, and the property-size encoding - and they change together
-; at v4 or not at all. [zf_objsz] caches the same 9/14 that zo_isv3 decides;
-; taking five numbers from the version and the sixth from a cache is exactly
-; how the two drift apart on the story where it matters. One test settles all
+; at v4 or not at all. Nothing caches the 9/14 that zo_isv3 decides (a cache
+; did once, written by zm_setup and read by nobody): taking five numbers from
+; the version and the sixth from a cache is exactly how the two drift apart
+; on the story where it matters. One test settles all
 ; six (Standard 12.3.1 vs 12.3.2, 12.4.1 vs 12.4.2).
 ;
 ; [zf_objtab] is the header's word at $0a - the address of the WHOLE object
@@ -127,19 +128,6 @@ zo_ent16:
     pop bx
     ret
 
-; =============================================================================
-; zo_addr - the public form of the above (SPEC.md 61.3)
-; in:  AX = object number
-; out: DX:AX = the entry's story address, or 0 if there is no such object
-;
-; DX is always zero. The object table is in dynamic memory (12.1) and this is
-; the seam where that stops being an internal assumption and becomes something
-; another module can rely on.
-; =============================================================================
-zo_addr:
-    call zo_ent16
-    xor dx, dx
-    ret
 
 ; -----------------------------------------------------------------------------
 ; zo_rel - read one of the three tree links

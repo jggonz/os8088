@@ -83,11 +83,22 @@ AT_MAXKB   equ 60                   ; ...and its ceiling. NOT the heap's - it
                                     ; that range alone
 AT_NL      equ 10                   ; the internal newline
 AT_MAXLN   equ 2048                 ; visual-line table entries
-AT_LBUFCAP equ 128                  ; one visual line's slice cap
 AT_STGCAP  equ 64                   ; relayout staging entries
 AT_S1ST    equ 80                   ; 1bpp strip stride (640 px covers the
-                                    ; widest text region, Hercules' 592)
-AT_S4ST    equ 304                  ; 4bpp strip stride (608 px)
+                                    ; widest text region, Hercules' 592 -
+                                    ; and at_geom_init clamps [at_tw] to it)
+AT_LBUFCAP equ AT_S1ST              ; one visual line's slice cap: every raw
+                                    ; character takes a cell of at least 8px
+                                    ; and at_scan wraps at [at_tw], so a line
+                                    ; is at most [at_tw]/8 characters (46.4.12)
+AT_S4ST    equ 304                  ; 4bpp strip stride (608 px) - NOATBLIT1's
+                                    ; alone since SPEC.md 46.4.12
+AT_BIGW    equ 608                  ; at_bigtext's cap: what the 4bpp strip
+                                    ; held, kept when it went (46.4.12)
+AT_NONECAP equ 4556                 ; Style > None's position list, at most
+                                    ; (46.6.3): the 4bpp strip's old clamp
+AT_NONESTRIP equ (AT_S1ST*AT_SROWS)/2 - 4   ; ...and what at_strip1 holds of
+                                    ; it, so a short selection claims nothing
 AT_SROWS   equ 30                   ; strip rows (the tallest row height)
 
 ; --- the strip's POLARITY (SPEC.md 46.4.2) ------------------------------------
@@ -131,6 +142,10 @@ AT_SROWS   equ 30                   ; strip rows (the tallest row height)
 
 AT_CBGCAP  equ 80                   ; per-8px-column background flags
 AT_UMAX    equ 15                   ; undo/redo depth (MAX_UNDO_LEVELS)
+AT_USZ     equ 24576                ; ...and each stack's capacity, bytes
+AT_UKB0    equ 1                    ; the arena at first entry, KB - it grows
+AT_UGROWKB equ 4                    ; ...in this quantum (power of two) to at
+                                    ; most 2*AT_USZ as the stacks fill (46.6.3)
 AT_FONTBYTES equ 95*8               ; room for the kernel's glyph table
                                     ; (FONT_FIRST..FONT_LAST at 8 rows), which
                                     ; at_font_init copies in and at_glyph
@@ -1177,8 +1192,10 @@ at_trp:
 %endrep
 %endmacro
 
+%ifdef NOATBLIT1
 at_x4w: AT_X4TAB 15
 at_x4g: AT_X4TAB 7
+%endif
 
 ; =============================================================================
 ; bss (SPEC.md 20.1: loader-zeroed; all-zero = windowed, markdown-empty,
@@ -1314,8 +1331,14 @@ at_gsty     equ at_pforce + 1                ; byte: composing style
 at_grow     equ at_gsty + 1                  ; 4 bytes: scaled glyph row
 ; --- the strips ---------------------------------------------------------------
 at_strip1   equ at_grow + 4                  ; AT_S1ST * AT_SROWS
+%ifdef NOATBLIT1
 at_strip4   equ at_strip1 + AT_S1ST*AT_SROWS ; AT_S4ST * AT_SROWS
 at_xw       equ at_strip4 + AT_S4ST*AT_SROWS ; word: expand/blit width
+%else
+; SPEC.md 46.4.12: no 4bpp strip. at_strip1 is the band on every path, and
+; a colour line's code span goes down as runs in their own pens.
+at_xw       equ at_strip1 + AT_S1ST*AT_SROWS ; word: at_button's width
+%endif
 at_dly      equ at_xw + 2                    ; word: draw-line y
 ; --- the caret ----------------------------------------------------------------
 at_cshown   equ at_dly + 2                   ; byte
@@ -1439,7 +1462,8 @@ at_sncnt    equ at_snpad + 1                 ; word
 at_sntop    equ at_sncnt + 2                 ; word
 at_snbase   equ at_sntop + 2                 ; word
 at_snoffs   equ at_snbase + 2                ; word
-at_fontbuf  equ at_snoffs + 2                ; the kernel's glyph table,
+at_akb      equ at_snoffs + 2                ; word: the arena's size NOW, KB
+at_fontbuf  equ at_akb + 2                ; the kernel's glyph table,
                                              ; copied in at launch
 at_abon     equ at_fontbuf + AT_FONTBYTES     ; byte: the About card is up
 at_bss_end  equ at_abon + 1

@@ -46,6 +46,7 @@ The VGA's canvas pixels are compared against the file; the mono half never is
 coordinates there samples the wrong pixels).
 """
 import argparse
+import tempfile
 import os
 import sys
 
@@ -314,7 +315,7 @@ def pkg_base(m, slot):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="/tmp/paintback.img")
+    ap.add_argument("--apps", default=tempfile.gettempdir() + "/paintback.img")
     ap.add_argument("--machine", default="os8088_xt_vga_mda")
     ap.add_argument("--gif", default=None,
                     help="the picture to open (default: a COLOUR derivation "
@@ -331,7 +332,7 @@ def main():
     if a.gif is None:
         a.gif = dispapps.colour_gif()
 
-    if a.apps == "/tmp/paintback.img":
+    if a.apps == tempfile.gettempdir() + "/paintback.img":
         os88marty.scratch_disk(a.apps, "APPS:build/paint.o88",
                                "MEDIA:" + a.gif)
 

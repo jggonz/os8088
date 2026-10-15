@@ -20,9 +20,10 @@
 ; unit and the diskette parameter table (kerndos/kdlaunch.inc) - and carries
 ; no probe, no hot-plug poller, no per-port arrays and no contest at all.
 ;
-; WHAT IT COSTS THE DOS PROGRAM IS NOTHING. `KD_IMG_KB` is 35 and the image
-; measured 34,969 of 35,840 before this, so this lands in slack that was
-; already bought and `LOW_SEG` does not move.
+; WHAT IT COSTS THE DOS PROGRAM IS NOTHING. `KD_IMG_KB` was 35 and the image
+; measured 34,969 of 35,840 before this, so this landed in slack that was
+; already bought and `LOW_SEG` did not move. (`KD_IMG_KB` is 33 since apps
+; size pass 1 - kerndos/kdlayout.inc carries the measurement.)
 ;
 ; **SERIAL ONLY.** A PS/2 mouse ([mou_port] = MOU_P2ROW, SPEC.md 9.9) is a
 ; different transport on a different line through the 8042, and the box sends
@@ -196,7 +197,7 @@ kd_mou_arm:
 ; owner needs - `int 19h` and a boot re-init it from scratch.
 ;
 ; **THE LIVE RESTORE DOES NOT, AND THIS COMMENT USED TO SAY IT DID** (SPEC.md
-; 96.45.2). `mouse_init` is in `.ovlw`, handed back by `mem_unblob` at the end
+; 96.45.2). `mouse_init` is in `.ovl`, handed back by `mem_unblob` at the end
 ; of `kmain`, and a live resume re-enters the kernel at `hbm_wake` rather than
 ; at a boot - so the one place in the tree that writes IER = 1 cannot run, and
 ; the IER = 0 below stood for the rest of the session. It presented as a dead

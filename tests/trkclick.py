@@ -165,9 +165,14 @@ def main():
     q.hmp("sendkey ret")
 
     seg = [None]
+    # scan(q, DISK) counts a TRACKER header only once its region holds the
+    # IMAGE: while the compressed FILE is being read high, its header is the
+    # only one in memory and every offset through it is the LZ4 stream's
+    # (tools/os88rate.py's scan() has the account; this row read trk_cpu0 =
+    # 12 and mp_xt = 51 the day a size pass moved R).
 
     def resident():
-        seg[0] = scan(q)[0]
+        seg[0] = scan(q, DISK)[0]
         return bool(seg[0])
     os88qemu.acted(q, resident, secs=52, what="TRACKER.O88 resident", poll=1.0)
     if not seg[0]:

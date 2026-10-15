@@ -46,7 +46,7 @@ HZ = 4772727.0                  # the 5150's 8088, PERFORMANCE.md Part 2
 MAXF = 32                       # VB_MAXF
 NKIND = 3                       # VB_NKIND
 NRES = 8 + MAXF * NKIND         # VB_NRES
-STREAMS = ("BADAPPLE.XDV", "THUNDERC.XDV", "TRONDISC.XDV", "BBBB_BW.XDV")
+STREAMS = os88build.XDC_STREAMS   # the suite probes for the same four
 RAW = ("movsb 8000 to screen", "movsw 8000 to screen",
        "movsb 8000 to RAM", "movsw 8000 to RAM",
        "movsb 8000 screen->RAM", "latch copy 8000 (VGA)",
@@ -172,7 +172,7 @@ def main():
             inmode = m.read(base + syms["vb_inmode"], 1)[0]
             full = m.read(base + syms["bl_full"], 1)[0]
             try:                    # the report the bench SAVED (benchlib's
-                txt = os88flush.Flush(marty=m).volume(1).read(  # bl_save):
+                txt = os88flush.Flush(marty=m).volume(1).read_latest(  # bl_save):
                     "VIDBENCH.TXT").decode("latin-1")         # B:, where it
             except Exception as e:                            # was launched
                 txt = None

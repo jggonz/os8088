@@ -16,7 +16,6 @@ import time
 import gorillas as G
 import gorillascity as C
 import gorillasinput as I
-from cycweb import pkg_syms
 
 MACHINES = {'adlib': 'os8088_5150_herc_adlib_720_gla',
             'sb': 'os8088_5150_herc_sb_gla',
@@ -102,6 +101,36 @@ def arm(tag, disk, off, code, driver, clobber):
         def now():
             return struct.unpack('<H', m.read(m.sym('ticks'), 2))[0]
 
+        def keyons():
+            """gr_bgmtick under the lock, collecting (channel, Hz) at every
+            SOUND.DRV opl_keyon it reaches - the pitch the decode produced."""
+            seg = struct.unpack('<H', m.read(m.sym('drv_tab') + 2, 2))[0]
+            saved = m.regs()
+            registers = ('ax', 'bx', 'cx', 'dx', 'si', 'di', 'bp', 'sp',
+                         'ss', 'ds', 'es', 'flags')
+            m.cmd(cmd='park', cs=saved['cs'], ip=code['gr_bgmtick'])
+            for reg in registers:       # park does not keep them
+                m.setreg(reg, saved[reg])
+            m.setreg('flags', saved['flags'] & ~0x200)  # one stream of key-ons
+            sp = (saved['sp'] - 2) & 65535
+            m.setreg('sp', sp)
+            m.write((saved['ss'] << 4) + sp, struct.pack('<H', saved['ip']))
+            back = (saved['cs'] << 4) + saved['ip']
+            m.bp_exec((seg << 4) + driver['opl_keyon'], back)
+            hits = []
+            while True:
+                m.run()
+                assert m.wait_stop(30) == 'breakpoint', 'gr_bgmtick never returned'
+                r = m.regs()
+                if (r['cs'] << 4) + r['ip'] == back:
+                    break
+                hits.append((r['cx'] & 255, r['bx']))
+                m.step(1)
+            m.bp_exec()
+            for reg in registers:
+                m.setreg(reg, saved[reg])
+            return hits
+
         call('about')
         before = p.w('bgmptr')
         call('tick')
@@ -156,6 +185,12 @@ def arm(tag, disk, off, code, driver, clobber):
         assert not p.b('bgmenabled') and owner not in dr('opl_own'), 'new skyline unmuted music'
         call('key', ax=ord('m'))
 
+        # The guest's pitch table, then every row decoded through it, against
+        # the generator's scores: Hz, rests and ticks (SPEC.md 99).
+        table = G.gorillas_bgm.frequencies()
+        hz = struct.unpack('<%dH' % len(table),
+                           m.read(p.base + code['gr_bgmhz'], 2*len(table)))
+        assert list(hz) == table, 'FM pitch table differs from the generator'
         starts = []
         for level in range(4):
             # Trigger the automatic next-skyline path after its one-tick wait.
@@ -169,16 +204,24 @@ def arm(tag, disk, off, code, driver, clobber):
             call('bgmhold')
             word('bgmptr', start)
             if clobber:
-                m.write(p.base + start + 128*7, b'\x03')
+                m.write(p.base + start + 128*3, b'\x80')
+            score = list(G.gorillas_bgm.rows(G.gorillas_bgm.TRACKS[level % 3]))
             # Walk all 128 rows and the seam with actual FM driver calls.
             for row in range(130):
-                word('bgmdue', now())
-                call('bgmtick')
+                due = now()
+                word('bgmdue', due)
+                played = keyons()
                 index = row % 128
-                assert p.w('bgmptr') == start + (index+1)*7, \
+                assert p.w('bgmptr') == start + (index+1)*3, \
                     ('loop did not return to first row', tag, level, row)
+                assert (p.w('bgmdue') - due) & 65535 == score[index][0], \
+                    ('row lasted the wrong number of ticks', tag, level, row)
                 channels = list(p.data('bgmchannels', 3))
-                notes = struct.unpack('<3H', m.read(p.base + start + index*7+1, 6))
+                notes = [hz[b & 63] for b in m.read(p.base + start + index*3, 3)]
+                assert notes == list(score[index][1:]), ('score differs', tag, level, row)
+                # ...and what the guest's own decode handed the card, voice by voice.
+                assert played == [(c, n) for c, n in zip(channels, notes) if n], \
+                    ('key-on pitches differ from the score', tag, level, row, played)
                 keyed = dr('opl_b0')
                 assert [bool(keyed[c] & 32) for c in channels] == [bool(n) for n in notes], \
                     ('card key-on/rest state differs from score', tag, level, row)
@@ -244,9 +287,13 @@ def main():
     off = G.offsets()
     code = I.code_offsets(('gr_bgmtick', 'gr_bgmhold', 'gr_new', 'gr_results',
                            'gr_setup', 'gr_roundtick', 'gr_about',
-                           'gr_musicstart', 'gr_musicvictory', 'gr_musicstop'))
-    driver, _ = pkg_syms('drivers/sound/sound.asm',
-                         ('drivers/sound/', 'drivers/', 'apps/'))
+                           'gr_musicstart', 'gr_musicvictory', 'gr_musicstop',
+                           'gr_bgmhz'))
+    # SOUND.DRV ships with -DPICOMEM (the Makefile's SNDDEF): without it every
+    # driver symbol, opl_own included, is read 341 bytes out of place - so the
+    # recipe is asked of make and checked against build/sound.bin.
+    import os88drvsym
+    driver = os88drvsym.symbols('sound.bin')
     with tempfile.TemporaryDirectory() as td:
         disk = Path(td) / 'gorillas.img'
         subprocess.run(['python3', 'tools/os88disk.py', '-o', str(disk), '--size', '360',

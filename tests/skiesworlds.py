@@ -32,9 +32,20 @@ full loads is the point of the row rather than a cost to trim.
 
 Measured, before the fix and after: eight locations flew either way and
 **SFO flew only after** - `cs_wldnow` FF, nothing loaded, on every geometry.
+
+**AND THE BYTES, since the streams are ONE part (SPEC.md 88.10.7).** A world
+is found by its BYTE offset inside csw.z now, so an offset table one stream
+out reads a neighbour's bytes - which may well expand (it is a valid stream),
+leave `[cs_wldnow]` right and draw another country. So every flight also holds
+the overlay, vocabulary and world, to what `tools/csworlds.py` assembles for
+that world; and after the last flight's way out, the UNION to the title bands
+the program read back into it - which since SPEC.md 88.10.7.1 is the KEPT
+packed copy in `cs_artz` exact, then the title and the plane in use expanded and
+NOTHING ELSE, then each of the other bands as a repaint draws it.
 """
 import argparse
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -44,10 +55,16 @@ sys.path.insert(0, HERE)
 
 import os88marty                                            # noqa: E402
 import dispapps                                             # noqa: E402
+import csworlds                                             # noqa: E402
 from skies import open_game, Bss                            # noqa: E402
 
 MACHINE = "os8088_5150_herc_gla"
 NONE = 0xFF                             # [cs_wldnow]: no world in the overlay
+# a plane record's band: skies.asm's own equ, read rather than restated - an
+# equ is not in nasm's map
+CSP_ART = int(re.search(r"^CSP_ART\s+equ\s+(\d+)", open(os.path.join(
+    ROOT, "apps", "skies", "skies.asm")).read(), re.M).group(1))
+PLANES = ("cs_p_c172", "cs_p_pitts", "cs_p_fouga", "cs_p_bijave", "cs_p_a5")
 
 
 def apwld(m, seg, mp, n):
@@ -111,8 +128,22 @@ def main():
             r.poke("cs_inited", b"\x00")
             r.poke("cs_back", b"\x00")
             r.poke("cs_quit", b"\x00")
+            # THE BYTES ARE READ AT THE PICK, before a frame runs: an object
+            # record carries state the renderer writes (a LOD's hysteresis
+            # bit, 88.5.4), so the overlay a moment into a flight is not the
+            # world as it arrived and a compare there fails on content
+            m.bp_exec(seg * 16 + mp["cs_cmd_fly.picked"])
             m.run()
             m.type_text("f")
+            have = None
+            if m.wait_stop(60):
+                want = csworlds.overlay(csworlds.WORLDS[wld[i]])
+                lo = csworlds.CS_VOCAB_AT
+                hi = csworlds.CS_WLD_AT + len(csworlds.assemble(
+                    csworlds.WORLDS[wld[i]], os.path.join(ROOT, "build"))[0])
+                have = m.readseg(seg, lo, hi - lo)
+            m.bp_exec()
+            m.run()
             flew = False
             for _ in range(25):
                 m.advance(frames=20)
@@ -135,7 +166,21 @@ def main():
                       "at belongs to a different country"
                       % (loc[i], i, got, wld[i]))
             else:
-                print("  ok   %-12s row %d -> world %d" % (loc[i], i, got))
+                # THE BYTES, as they arrived: the overlay holds the vocabulary
+                # and this world exactly as csworlds.py assembles them at this
+                # tree's address
+                if have is None or have != want[lo:hi]:
+                    bad.append(loc[i])
+                    print("  FAIL %-12s row %d: world %d is in [cs_wldnow] but "
+                          "the overlay's bytes are not that world's - %d of %d "
+                          "differ (SPEC.md 88.10.7: a stream offset out by one)"
+                          % (loc[i], i, got,
+                             sum(x != y for x, y in zip(have or b"",
+                                                        want[lo:hi])),
+                             hi - lo))
+                else:
+                    print("  ok   %-12s row %d -> world %d, %d bytes exact"
+                          % (loc[i], i, got, hi - lo))
 
             if flew:                                    # back to the launcher
                 m.type_text("f")
@@ -146,6 +191,85 @@ def main():
                         break
                 m.advance(frames=60)
                 m.run()
+
+        # ...AND THE TITLE BANDS (SPEC.md 88.10.7, 88.10.7.1). The art stream
+        # is KEPT packed in cs_artz from the launch on, and a band is expanded
+        # into the union only when it is first DRAWN after a flight - so the
+        # way out leaves exactly the title and the aeroplane in use, and each
+        # of the other four arrives when a repaint asks for it. cs_kx is the
+        # union's base: an equ, in the map. The band table is read out of the
+        # GUEST (cs_artroff), so a re-cut csart.inc cannot make this row
+        # assert the old one.
+        m.pause()
+        art = open(os.path.join(ROOT, "build", "csart.bin"), "rb").read()
+        csz = open(os.path.join(ROOT, "build", "csw.z"), "rb").read()
+        wof = [int.from_bytes(m.readseg(seg, mp["cs_wstroff"] + 2 * i, 2),
+                              "little") for i in range(11)]
+        kept = csz[wof[9]:wof[10]]
+        nb = (mp["cs_artzoff"] - mp["cs_artroff"]) // 2 - 1
+        roff = [int.from_bytes(m.readseg(seg, mp["cs_artroff"] + 2 * i, 2),
+                               "little") for i in range(nb + 1)]
+        plane0 = int.from_bytes(m.readseg(seg, base + dispapps.bss_off(
+            "skies", "cs_plane"), 2), "little")
+
+        def bandof(rec):
+            o = int.from_bytes(m.readseg(seg, rec + CSP_ART, 2), "little")
+            return roff.index(o) if o in roff[:-1] else -1
+
+        def held():
+            """[cs_artok], and the bands it claims whose bytes are wrong."""
+            ok = r.byte("cs_artok")
+            have = m.readseg(seg, mp["cs_kx"], len(art))
+            wrong = [i for i in range(nb) if ok >> i & 1
+                     and have[roff[i]:roff[i + 1]] != art[roff[i]:roff[i + 1]]]
+            return ok, wrong
+
+        zok = r.byte("cs_artzok")
+        zhave = m.readseg(seg, mp["cs_artz"], len(kept))
+        if not zok or zhave != kept:
+            bad.append("the kept bands")
+            print("  FAIL kept bands: [cs_artzok] %d, %d of %d bytes of cs_artz "
+                  "differ from csw.z's art stream (SPEC.md 88.10.7.1)"
+                  % (zok, sum(x != y for x, y in zip(zhave, kept)), len(kept)))
+        else:
+            print("  ok   bands kept packed in cs_artz, %d bytes exact"
+                  % len(kept))
+        ok, wrong = held()
+        want = 1 | 1 << bandof(plane0)
+        if ok != want or wrong:
+            bad.append("the title bands")
+            print("  FAIL after the way out: [cs_artok] %02X where the title "
+                  "and the plane in use are %02X, bands %s wrong"
+                  % (ok, want, wrong))
+        else:
+            print("  ok   after the way out: the title and band %d, exact, and "
+                  "nothing else expanded" % bandof(plane0))
+        # ...and every other band ON DEMAND: a key on the instructions page
+        # goes back to the title page through cs_repaint, which draws whatever
+        # [cs_plane] names
+        for rec in PLANES:
+            m.pause()
+            r.poke("cs_plane", mp[rec].to_bytes(2, "little"))
+            r.poke("cs_page", b"\x01")
+            m.run()
+            m.type_text("x")
+            for _ in range(20):
+                m.advance(frames=10)
+                m.run()
+                if r.byte("cs_page") == 0 and \
+                        r.byte("cs_artok") >> bandof(mp[rec]) & 1:
+                    break
+        m.pause()
+        ok, wrong = held()
+        r.poke("cs_plane", plane0.to_bytes(2, "little"))
+        m.run()
+        if ok != (1 << nb) - 1 or wrong:
+            bad.append("the bands on demand")
+            print("  FAIL on demand: [cs_artok] %02X after every plane was "
+                  "drawn, bands %s wrong" % (ok, wrong))
+        else:
+            print("  ok   on demand: all %d bands expanded as they were drawn, "
+                  "%d bytes exact" % (nb, len(art)))
 
     if bad:
         print("skiesworlds: FAILED - %s" % ", ".join(bad))

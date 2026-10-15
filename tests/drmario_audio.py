@@ -70,14 +70,14 @@ def reference_cpu(source):
 
 
 def driver_symbols():
-    names=('opl_own','opl_b0','sbl_str_act','sbl_up')
-    source=(D.ROOT/'drivers/sound/sound.asm').read_text()
-    with tempfile.TemporaryDirectory() as td:
-        p=Path(td)/'probe.asm';b=Path(td)/'probe.bin'
-        p.write_text(source+'\n'+'\n'.join('dw '+n for n in names))
-        subprocess.run(['nasm','-f','bin','-I','drivers/','-I','drivers/sound/',
-                        '-I','apps/','-I','build/','-o',str(b),str(p)],cwd=D.ROOT,check=True)
-        return dict(zip(names,struct.unpack('<4H',b.read_bytes()[-8:])))
+    # SOUND.DRV's offsets off the Makefile's OWN recipe (tools/os88drvsym.py):
+    # a hand-written nasm line without -DPICOMEM read every one 341 bytes out
+    # of place, and this arm failed at `sbl_up` before any audio ran
+    # (docs/plans/HANDOFF-APPS-SHARED.md 6.3).
+    import sys;sys.path.insert(0,str(D.ROOT/'tools'))
+    import os88drvsym
+    s=os88drvsym.symbols('sound.bin')
+    return {n:s[n] for n in ('opl_own','opl_b0','sbl_str_act','sbl_up')}
 
 
 @contextmanager
