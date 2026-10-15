@@ -20,13 +20,18 @@ so a fixture that never had the module cannot pass for one that lost it.
        slot still names mod_gone;
     D  its row is KEPT: still the DIA row (+3 = 'D'), with no desktop cell -
        a refused QUERY is not a missing target, and nothing downgrades it;
-    E  THE VOLUME IS PUT BACK: the open bracket's pair (drv_vol_cwd /
-       drv_vol_drv) is the boot root the moment the window is up, and the
-       machine gets there - [dsk_cwd] = 0 and [disk_drive] = [dsk_bootvol],
-       waited for, sc_open's restore running after the load's paint. The load (twice: the loader's
-       step 5 and the QUERY) ran a drv_vol bracket INSIDE sc_open's, which
-       keeps one static pair, and without desk_need's save the outer
-       restore left the machine in SYSTEM\DIA (cluster 89 on this disk).
+    E  THE VOLUME IS PUT BACK: read at an exec breakpoint on dia_boot's
+       RETURN, when every sc_open bracket has closed and the widget has run
+       nothing yet, the open bracket's pair (drv_vol_cwd / drv_vol_drv) is
+       the boot root and so is the machine - [dsk_cwd] = 0 and [disk_drive] =
+       [dsk_bootvol]. The load (twice: the loader's step 5 and the QUERY) ran
+       a drv_vol bracket INSIDE sc_open's, which keeps one static pair, and
+       without desk_need's save the outer restore left the machine in
+       SYSTEM\DIA (cluster 89 on this disk). It is NOT read once the window
+       is up: by then the widget's first tick has registered its row through
+       the settings core - a drv_vol bracket of its own, banked wherever the
+       machine stands - and its own file I/O has walked to its folder, so
+       both name SYSTEM\DIA on any build, which is not sc_open's doing.
   present the same disk with DESK.DRV left on it - the control:
     A  the calendar is up, B a DESK window (WF_DESK, no title bar), C the
        module HELD (the row's segment non-zero, the hover slot not mod_gone),
@@ -55,6 +60,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
+import os88marty   # noqa: E402
 import os88ui      # noqa: E402
 import os88dia     # noqa: E402
 import os88flush   # noqa: E402
@@ -118,8 +124,41 @@ def leg(name, tmp):
         bimg = os.path.join(tmp, "nodesk-b.img")    # SYSTEM\DIA\ holds
         shutil.copy(os.path.join(BDIR, "os8088-360.img"), bimg)  # DESKCAL
     print("%s:" % name)
-    with os88ui.boot(img, apps=bimg, machine="os8088_xt_vga") as ui:
-        m = ui.m
+    with os88marty.launch(img, apps=bimg,
+                          machine=os88marty.machine("os8088_xt_vga", None),
+                          boot=False) as m:
+        # E's reading is taken FIRST, at the one instant it means anything:
+        # dia_boot's return, when every sc_open bracket has closed and the
+        # widget has run nothing yet. Read after the window is up, it is not
+        # sc_open's result any more - the widget's first tick registers its
+        # row through the settings core (os88dia.inc's dia_beat: mod_need
+        # MOD_SETS, a drv_vol bracket of its own, banked wherever the machine
+        # stands), and its state-file save walks to its own folder, so
+        # [dsk_cwd] and the pair both name SYSTEM\DIA on any build. That was
+        # this row's first E, and it failed for that reason on all three legs
+        m.bp_exec("dia_boot")
+        m.run()
+        hit = m.wait_stop(120)
+        ret = None
+        if hit == "breakpoint":
+            r = m.regs()
+            ret = (r["cs"] << 4) + struct.unpack(
+                "<H", bytes(m.read((r["ss"] << 4) + r["sp"], 2)))[0]
+            m.bp_exec(ret)
+            m.run()
+            hit = m.wait_stop(120)
+        sym = m.sym
+        boot = m.read(sym("dsk_bootvol"), 1)[0]
+        at_ret = hit == "breakpoint" and ret is not None
+        pcwd = struct.unpack("<H", bytes(m.read(sym("drv_vol_cwd"), 2)))[0]
+        pdrv = m.read(sym("drv_vol_drv"), 1)[0]
+        cwd = struct.unpack("<H", bytes(m.read(sym("dsk_cwd"), 2)))[0]
+        drv = m.read(sym("disk_drive"), 1)[0]
+        m.bp_exec()
+        m.run()
+        ui = os88ui.UI(m)
+        ui.up(limit=180.0)
+        os88marty.no_saver(m)
         print(" A: the boot relaunched the calendar")
         w = ui.wait_window(TITLE, limit=120)
         check(w is not None, "the Desk Calendar is up")
@@ -159,30 +198,13 @@ def leg(name, tmp):
               "still the DIA row (+3 = %#x), with no cell (%#x)"
               % (r["mark"], zb))
         print(" E: the volume is put back")
-        # THE PAIR FIRST, and at once: desk_need restores it before the
-        # loader's step 9 shows the window, so it is settled the moment the
-        # window is up - and it is the outer bracket's, the boot root, or
-        # sc_open's restore cannot get back there
-        boot = ui._byte("dsk_bootvol")
-        pcwd, pdrv = ui._word("drv_vol_cwd"), ui._byte("drv_vol_drv")
+        check(at_ret, "dia_boot was entered and returned (%r)" % hit)
         check(pcwd == 0 and pdrv == boot,
-              "the open bracket's pair is the boot root: drv_vol_cwd %#x, "
-              "drv_vol_drv %d (boot %d)" % (pcwd, pdrv, boot))
-        # ...and the machine gets back there - which is sc_open's restore,
-        # AFTER the window shows and the load's paint, so it is WAITED for:
-        # read at the window's first sight it is still the widget's folder
-        # on any build (a 4.77 MHz paint is long), which is a race and not
-        # the defect
-        def home():
-            return (ui._word("dsk_cwd") == 0
-                    and ui._byte("disk_drive") == boot)
-        try:
-            ui._wait(home, "the boot volume's root", 30)
-        except os88ui.UIError:
-            pass
-        cwd, drv = ui._word("dsk_cwd"), ui._byte("disk_drive")
+              "at dia_boot's return the open bracket's pair is the boot "
+              "root: drv_vol_cwd %#x, drv_vol_drv %d (boot %d)"
+              % (pcwd, pdrv, boot))
         check(cwd == 0 and drv == boot,
-              "the boot volume's root: dsk_cwd %#x, disk_drive %d (boot %d)"
+              "...and so is the machine: dsk_cwd %#x, disk_drive %d (boot %d)"
               % (cwd, drv, boot))
         if not absent:
             print(" F: DESK.DRV sits above the widget's region")

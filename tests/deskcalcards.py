@@ -208,12 +208,12 @@ def run(leg):
                       "reaches the next week (COMPACT)")
 
             print("E: the bell")
-            bw, brec = BELL[li]
+            belw, brec = BELL[li]   # NOT bw: G below reads the box width
             bx, by = c.at(c.remc(), G["BELLX"], G["BELLY"])
             if li == 2:
                 check(c.pane() == 2, "the CGA slot shows the reminder page "
                       "a DUE reminder took (pane %d)" % c.pane())
-            bad = rec_bad(gl, bx, by, brec, bw)
+            bad = rec_bad(gl, bx, by, brec, belw)
             check(not bad, "the bell is the layout's record, every pixel (%d "
                   "off)" % len(bad))
 
@@ -248,7 +248,10 @@ def run(leg):
                      (x0 + 1, y0 + hb - 2), (x0 + bw - 2, y0 + hb - 2)]
             check(all(gl.ink(*p) for p in corners)
                   and not any(gl.ink(*p) for p in inner),
-                  "its box is a 1-px outline: corners ink, inside paper")
+                  "its box is a 1-px outline: corners ink, inside paper "
+                  "(paper corners %r, inked inside %r)"
+                  % ([p for p in corners if not gl.ink(*p)],
+                     [p for p in inner if gl.ink(*p)]))
             x0, y0, r = box(24)
             check(gl.ink(x0, y0) and gl.ink(x0 + 1, y0 + 1),
                   "...and today keeps its inverse box")

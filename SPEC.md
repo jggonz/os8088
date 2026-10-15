@@ -20793,7 +20793,14 @@ resolved in the wrong folder. `desk_need` pushes `drv_vol_cwd` as a word
 and `drv_vol_drv` as a byte (never `push word [drv_vol_drv]`: its high byte
 is unrelated `.text`), calls `mod_need MOD_DESK`, and puts both back - 24
 bytes of `.cold`. `tests/dianodesk.py`'s E (every leg, B: included) is the
-row.
+row, and it reads the pair and `[dsk_cwd]`/`[disk_drive]` at an exec
+breakpoint on `dia_boot`'s RETURN - every `sc_open` bracket closed, the
+widget not yet run. Read once the window is up they name `SYSTEM\DIA` on
+any build, because the widget's first tick has by then registered its row
+through the settings core (`mod_need MOD_SETS`, a bracket of its own, banked
+wherever the machine stands) and done its own file I/O; the row's first E
+read them there and failed on all three legs in the final pass for that
+reason, not `sc_open`'s.
 
 **What the first load costs.** A directory find of the system disk's root
 and a one-sector read of `DESK.DRV` - priced, not yet measured, at about one

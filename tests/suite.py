@@ -9959,9 +9959,12 @@ SOAK = [
         "cell-less. present, the control: the same disk with the module - a "
         "desk window, the module held, the row kept, and the module's claim "
         "ABOVE the calendar's region. bdrive: present with the row on B:. "
-        "Every leg: the boot ends at the boot volume's root (dsk_cwd 0, "
-        "disk_drive = dsk_bootvol) - the load's drv_vol bracket nests inside "
-        "sc_open's and desk_need keeps the outer pair.",
+        "Every leg, read at an exec breakpoint on dia_boot's RETURN: the "
+        "bracket's pair and the machine are the boot volume's root (dsk_cwd "
+        "0, disk_drive = dsk_bootvol) - the load's drv_vol bracket nests "
+        "inside sc_open's and desk_need keeps the outer pair. Not read once "
+        "the window is up: the widget's first tick (its registration through "
+        "the settings core, its own file I/O) moves both on any build.",
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
     Row("diashort", "soak", py("tests/diashort.py"), 15.0,
