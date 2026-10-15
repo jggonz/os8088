@@ -560,7 +560,7 @@ def main():
                      "never completed")
 
 
-    # --- 5: a REAL page off the wire: links, and a relative form action -----
+    # --- 6: a REAL page off the wire: links, and a relative form action -----
     fetch("http://10.0.2.2:%d/f.htm" % PORT)
     wait_done("FrogFind home")
     n = rw("br_lnkn")
@@ -606,7 +606,7 @@ def main():
                     fails.append("submitting a form whose action is `/` did "
                                  "not reach the server: %r" % got)
 
-    # --- 6: POST keeps values in the body, with an exact bounded length -----
+    # --- 7: POST keeps values in the body, with an exact bounded length -----
     fetch(URL_POST)
     wait_done("POST form page")
     if rb("br_fn"):
@@ -639,7 +639,7 @@ def main():
     else:
         fails.append("POST form page produced no editable text field")
 
-    # --- 4: Save As ---------------------------------------------------------
+    # --- 8: Save As ---------------------------------------------------------
     if not rw("br_srcseg"):
         fails.append("the source was freed after the parse, so Save As has "
                      "nothing to write")
@@ -697,10 +697,15 @@ def main():
         # the 8.3 directory entry is 'SAVED   HTM'
         if b"SAVED   HTM" not in raw:
             fails.append("%s is not in the apps image's directory" % SAVED)
-    # ...the page CURRENTLY loaded, which is the search result the submit
-    # above fetched - not PAGE_B. Assert against whatever was last served, or
-    # this reads as a broken Save As every time a fetch is added ahead of it.
-    if b"FrogFind!" not in raw:
+    # ...the page CURRENTLY loaded, which is PAGE_A - the server's answer to
+    # the POST in step 7 - and not the FrogFind result or PAGE_B. Assert
+    # against whatever was last served, or this reads as a broken Save As
+    # every time a fetch is added ahead of it. And assert a string NO FIXTURE
+    # on the disk carries: "FrogFind!" is in FFHOME.HTM, which is on
+    # brtest360.img before the browser writes a byte, so that check was
+    # satisfied by a file that was there already. "Page Alpha" is in no file
+    # under tests/htm/, so only the saved page can supply it.
+    if b"Page Alpha" not in raw:
         fails.append("the saved file does not hold the server's bytes")
     else:
         print("the image holds the server's own bytes")

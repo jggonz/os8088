@@ -237,10 +237,14 @@ FLD_VALUE    equ 20                 ;   BR_VALMAX: radio/checkbox value
 FLD_SCAN     equ 32                 ;   word: next option in retained source
 FLD_FIRST    equ 34                 ;   word: first option search position
 BR_SUBMAX    equ 4
-BR_SUBSZ     equ 5
+BR_SUBSZ     equ 9
 SUB_OFS      equ 0
 SUB_END      equ 2
 SUB_FORM     equ 4
+SUB_ASTART   equ 5                  ; word: the button tag's attribute span in
+SUB_AEND     equ 7                  ;   the retained source - only the CLICKED
+                                    ;   button's name=value is a successful
+                                    ;   control, so it is encoded at submit
 KSC_TAB      equ 0x0F                 ; a column's floor is its longest WORD,
                                     ; capped here: one very long word does not
                                     ; get to reserve the whole band
@@ -1946,6 +1950,10 @@ br_onkey:
 .enter:
     cmp byte [br_fcur], 0FFh
     je .out
+    mov al, [br_fcur]               ; br_submit takes the FORM index, which is
+    call br_fld                     ; the focused field's owner - AL here is
+    mov al, [bx+FLD_FORM]           ; the key's ASCII, and 13 names no form
+    mov byte [br_subhit], 0FFh      ; ...and Return clicked no button
     call br_submit
     jmp .out
 .scroll:
@@ -3152,6 +3160,7 @@ br_page_click:
     jb .substep
     cmp si, [di+SUB_END]
     jae .substep
+    mov [br_subhit], bl             ; WHICH button: its name=value goes too
     mov al, [di+SUB_FORM]
     call br_submit
     jmp .out
@@ -3239,6 +3248,8 @@ br_choiceclick:
 .same:
     pop si
     pop cx
+    cmp bx, si                      ; the clicked radio matches its own name:
+    je .next                        ; .choose paints it ONCE, not off then on
     cmp byte [bx+FLD_LEN], 0
     je .next
     mov byte [bx+FLD_LEN], 0
@@ -3943,9 +3954,14 @@ br_parse:
     mov word [br_onw], 0
     mov word [br_lnkopen], 0FFFFh
     mov word [br_lnkhit], 0FFFFh
-    mov byte [br_fn], 0
-    mov byte [br_formn], 0
     mov byte [br_formcur], 0FFh
+    cmp byte [br_frameappend], 0    ; THE FORMS ARE THE PAGE'S, like the links:
+    je .newforms                    ; a child frame ADDS its records to the
+    cmp byte [br_framecurrent], 0   ; frames before it, or a form in any frame
+    jne .keepforms                  ; but the last would have no record and
+.newforms:                          ; its button no click. The FIRST child
+    mov byte [br_fn], 0             ; starts over: the frameset's own records
+    mov byte [br_formn], 0          ; point into the document brnet discarded
     mov byte [br_subn], 0
     push es
     push ds
@@ -3955,6 +3971,7 @@ br_parse:
     mov cx, (BR_FORMMAX*BR_ACTMAX + BR_FORMMAX*BR_HIDMAX + BR_FORMMAX*3 + BR_SUBMAX*BR_SUBSZ)/2
     rep stosw
     pop es
+.keepforms:
     mov byte [br_ptitle], 0         ; the title is the PAGE's, like the links
     mov byte [br_fcur], 0FFh        ; 0 is a real field, so "none" is 0FFh
     mov byte [br_on], 0
@@ -5018,7 +5035,12 @@ br_image:
     jae .done
     mov al, [es:si]
     inc si
+    cmp al, '&'                     ; alt="Tom &amp; Jerry": the entity, as
+    je .ent                         ; br_parse's own loop decodes it
     call br_char
+    jmp .copy
+.ent:
+    call br_entity
     jmp .copy
 .done:
     pop si
@@ -5040,11 +5062,11 @@ br_select:
     push di
     mov al, [br_formcur]
     cmp al, BR_FORMMAX
-    jae .done
+    jae .unsup
     mov dl, al
     mov al, [br_fn]
     cmp al, BR_FMAX
-    jae .done
+    jae .unsup
     call br_fld
     mov [bx+FLD_FORM], dl
     mov byte [bx+FLD_TYPE], 1
@@ -5127,6 +5149,13 @@ br_select:
     inc byte [br_fn]
 .skip:
     mov si, [bx+FLD_FIRST]
+    call br_skipelem
+    jmp .done
+.unsup:                             ; outside any form, or past the control
+    push si                         ; limit: refused VISIBLY and its options
+    mov si, br_s_unsup              ; SWALLOWED, the textarea's way - SI is
+    call br_puts                    ; still the body start and br_tname is
+    pop si                          ; still "select"
     call br_skipelem
 .done:
     pop di
@@ -7412,7 +7441,6 @@ br_input:
     mov al, [br_formcur]
     cmp al, BR_FORMMAX
     jae .out
-    call br_hidden                   ; a named submit is a successful control
     mov dl, al
     mov al, [br_subn]
     cmp al, BR_SUBMAX
@@ -7426,6 +7454,10 @@ br_input:
     add ax, [br_onw]                ; button is ordinary document text and has
     mov [bx+SUB_OFS], ax
     mov [bx+SUB_FORM], dl
+    mov ax, [br_astart]             ; ...and its TAG, so br_submit can send
+    mov [bx+SUB_ASTART], ax         ; the clicked button's name=value and no
+    mov ax, [br_aend]               ; other's - baked into the hidden pairs,
+    mov [bx+SUB_AEND], ax           ; Search and I'm Feeling Lucky both went
 .subdraw:                           ; a form index on every field
     mov al, '<'
     call br_fput
@@ -8315,7 +8347,7 @@ br_submit:
     xor dx, dx                      ; DX = have we written a pair yet
 .fld:
     cmp cl, [br_fn]
-    jae .hid
+    jae .button
     mov al, cl
     call br_fld
     mov al, [br_submitform]
@@ -8378,6 +8410,36 @@ br_submit:
 .nextf:
     inc cl
     jmp .fld
+.button:                            ; --- the CLICKED submit button, alone ---
+    mov al, [br_subhit]             ; 0FFh: Return in a field, no button
+    cmp al, 0FFh
+    je .hid
+    xor ah, ah
+    mov bl, BR_SUBSZ
+    mul bl
+    mov bx, ax
+    add bx, br_subs
+    mov ax, [bx+SUB_ASTART]         ; its tag's span in the retained source,
+    mov [br_astart], ax             ; which lives as long as the page does -
+    mov ax, [bx+SUB_AEND]           ; br_selcycle reads its options the same
+    mov [br_aend], ax               ; way, on this task
+    mov es, [br_srcseg]
+    mov di, br_a_name
+    call br_getattr
+    jc .hid                         ; an unnamed button is not a control
+    or dx, dx
+    jz .bamp0
+    mov al, '&'
+    call br_uput
+.bamp0:
+    mov dx, 1
+    call br_henc                    ; the name, percent-encoded
+    mov al, '='
+    call br_uput
+    mov di, br_a_value
+    call br_getattr
+    jc .hid
+    call br_henc
 .hid:
     xor ax, ax
     mov al, [br_submitform]
@@ -9042,7 +9104,8 @@ br_formn      equ br_lnkhit + 2
 br_formcur    equ br_formn + 1
 br_subn       equ br_formcur + 1
 br_submitform equ br_subn + 1
-br_flds       equ br_submitform + 1
+br_subhit     equ br_submitform + 1 ; the submit button clicked, 0FFh for none
+br_flds       equ br_subhit + 1
 br_factions   equ br_flds + BR_FMAX*BR_FLDSZ
 br_hids       equ br_factions + BR_FORMMAX*BR_ACTMAX
 br_hnws       equ br_hids + BR_FORMMAX*BR_HIDMAX

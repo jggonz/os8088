@@ -113801,7 +113801,14 @@ close-delimited flow. The encoded body is limited to 159 bytes and appended
 to the existing 512-byte request staging area; no second body buffer, dynamic
 allocation, framebuffer or kernel API is introduced. Oversized bodies are
 refused visibly, never truncated. Unchecked controls are omitted; checked choices and selected
-options remain successful controls.
+options remain successful controls. Only the CLICKED submit button is a
+successful control: a named `<input type=submit>` is not baked into the form's
+hidden pairs at parse time but keeps its tag's span in the retained source
+(`SUB_ASTART`/`SUB_AEND`, the submit record being `BR_SUBSZ` = 9 bytes), and
+`br_submit` encodes that one button's `name=value` after the fields, so a
+form with two buttons (Search / I'm Feeling Lucky, Login / Register) tells the
+server which was pressed. Return in a focused text field submits the field's
+own form with no button pair.
 
 Password and file controls remain visibly unsupported. With no TLS, the
 browser must not show a password control that could be submitted in plaintext.
