@@ -67,7 +67,56 @@ PAGE_F = open("tests/htm/frogfind-home.htm", "rb").read()
 URL_A = "http://10.0.2.2:%d/a.htm" % PORT
 URL_SLOW = "http://10.0.2.2:%d/slow.htm" % PORT
 URL_B = "http://10.0.2.2:%d/b.htm" % PORT
+URL_POST = "http://10.0.2.2:%d/postform.htm" % PORT
+URL_R301 = "http://10.0.2.2:%d/r301.htm" % PORT
+URL_R302 = "http://10.0.2.2:%d/r302.htm" % PORT
+URL_POST303 = "http://10.0.2.2:%d/postform303.htm" % PORT
 SAVED = "SAVED.HTM"
+PAGE_POST = (b"<html><body><form action=\"/posted\" method=post>"
+             b"<input type=text name=q size=12>"
+             b"<input type=hidden name=token value=\"a b\">"
+             b"<input type=submit value=Send></form></body></html>")
+# ...and the same form answered the way a post-redirect-get server answers it:
+# 303 to the results page, which the browser must then GET (SPEC.md 71.17)
+PAGE_POST303 = PAGE_POST.replace(b"/posted", b"/posted303")
+# The 301's body is what Apache sends with a redirect - a short page a browser
+# that stopped at the redirect would DISPLAY; the 302 has no body at all, which
+# is nginx's `return 302` and every add-the-slash redirect (SPEC.md 71.15)
+PAGE_R301 = (b"<html><head><title>301 Moved</title></head><body>"
+             b"<p>Moved <a href=\"/a.htm\">here</a>.</p></body></html>\r\n")
+# A two-frame frameset whose children are each MORE than 2,000 bytes of
+# distinct text: the frameset page itself is a few hundred bytes, and before
+# the re-claim (SPEC.md 71.15) the children were drained into a source cut to
+# ITS size - 1 KB - so the page was the first child's first kilobyte and `Page
+# truncated`. The marker words are in no other fixture; f1 carries a link and
+# f2 a text form, which must be live when the page is done.
+URL_FS = "http://10.0.2.2:%d/fs.htm" % PORT
+PAGE_FS = (b"<html><head><title>Frame Set</title></head>\r\n"
+           b"<frameset rows=\"50%,*\"><frame src=\"/f1.htm\">"
+           b"<frame src=\"/f2.htm\"></frameset></html>\r\n")
+
+
+def _frame_page(title, marker, extra):
+    body = b"<html><head><title>%s</title></head><body><h1>%s</h1>\r\n" \
+        % (title, title)
+    body += b"<p>The marker word is %s and it occurs in this frame only.</p>\r\n" \
+        % marker
+    body += extra
+    for i in range(16):
+        body += (b"<p>Paragraph %d of %s: the quick brown fox number %d jumps "
+                 b"over the lazy dog, and this frame runs on well past a "
+                 b"kilobyte so that a source cut to the frameset's own size "
+                 b"would have lost it.</p>\r\n" % (i, title, i))
+    return body + b"</body></html>\r\n"
+
+
+PAGE_F1 = _frame_page(b"Frame One", b"Hesperus",
+                      b"<p><a href=\"/a.htm\">Page Alpha</a></p>\r\n")
+PAGE_F2 = _frame_page(b"Frame Two", b"Phosphorus",
+                      b"<form action=\"/posted\" method=post>"
+                      b"<input type=text name=q size=12>"
+                      b"<input type=submit value=Send></form>\r\n")
+assert len(PAGE_F1) > 2000 and len(PAGE_F2) > 2000
 
 
 class TwoPages(threading.Thread):
@@ -81,6 +130,7 @@ class TwoPages(threading.Thread):
         self.s.listen(4)
         self.log = []
         self.heads = []
+        self.posts = []
 
     def run(self):
         while True:
@@ -92,6 +142,18 @@ class TwoPages(threading.Thread):
             try:
                 req = b""
                 while b"\r\n\r\n" not in req and len(req) < 4096:
+                    b = c.recv(1024)
+                    if not b:
+                        break
+                    req += b
+                header_end = req.find(b"\r\n\r\n") + 4
+                content_length = 0
+                if header_end >= 4:
+                    for line in req[:header_end].split(b"\r\n"):
+                        if line.lower().startswith(b"content-length:"):
+                            content_length = int(line.split(b":", 1)[1])
+                            break
+                while len(req) < header_end + content_length:
                     b = c.recv(1024)
                     if not b:
                         break
@@ -109,7 +171,29 @@ class TwoPages(threading.Thread):
                                      daemon=True).start()
                     c = None                    # ...the thread owns it now
                     continue
-                if b"/f.htm" in first or first.startswith(b"GET /?"):
+                status = b"200 OK"
+                extra = b""
+                if first.startswith(b"POST /posted303 "):
+                    self.posts.append(req.decode("latin-1", "replace"))
+                    status, extra, body = b"303 See Other", b"Location: /a.htm\r\n", b""
+                elif first.startswith(b"POST /posted "):
+                    self.posts.append(req.decode("latin-1", "replace"))
+                    body = PAGE_A
+                elif b"/postform303.htm" in first:
+                    body = PAGE_POST303
+                elif b"/postform.htm" in first:
+                    body = PAGE_POST
+                elif b"/r301.htm" in first:
+                    status, extra, body = b"301 Moved Permanently", b"Location: /a.htm\r\n", PAGE_R301
+                elif b"/r302.htm" in first:
+                    status, extra, body = b"302 Found", b"Location: /b.htm\r\n", b""
+                elif b"/fs.htm" in first:
+                    body = PAGE_FS
+                elif b"/f1.htm" in first:
+                    body = PAGE_F1
+                elif b"/f2.htm" in first:
+                    body = PAGE_F2
+                elif b"/f.htm" in first or first.startswith(b"GET /?"):
                     body = PAGE_F
                 elif b"/b.htm" in first:
                     body = PAGE_B
@@ -117,8 +201,9 @@ class TwoPages(threading.Thread):
                     body = PAGE_A
                 self.log.append(first.decode("latin-1", "replace"))
                 self.heads.append(req.decode("latin-1", "replace"))
-                c.sendall(b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n"
-                          b"Content-Length: %d\r\n\r\n" % len(body) + body)
+                c.sendall(b"HTTP/1.0 " + status + b"\r\nContent-Type: text/html\r\n"
+                          + extra
+                          + b"Content-Length: %d\r\n\r\n" % len(body) + body)
             except OSError:
                 pass
             finally:
@@ -481,7 +566,7 @@ def main():
             if ln.startswith("User-Agent:"):
                 line = ln
     print("the server saw %r" % line)
-    if line != "User-Agent: os8088 Browser 1.0":
+    if line != "User-Agent: os8088 Browser 1.4":
         fails.append("the User-Agent is %r" % line)
 
     # --- 5: BACK DURING A FETCH DROPS IT (SPEC.md 71.8) --------------------
@@ -537,13 +622,13 @@ def main():
                      "never completed")
 
 
-    # --- 5: a REAL page off the wire: links, and a relative form action -----
+    # --- 6: a REAL page off the wire: links, and a relative form action -----
     fetch("http://10.0.2.2:%d/f.htm" % PORT)
     wait_done("FrogFind home")
     n = rw("br_lnkn")
     seg = rw("br_lnkseg")
     print("frogfind: %d link(s), arena %04X, action %r, %d field(s)"
-          % (n, seg, bytes(m.readseg(pseg, sy["br_faction"], 40))
+          % (n, seg, bytes(m.readseg(pseg, sy["br_factions"], 40))
              .split(b"\0")[0].decode("latin-1"), rb("br_fn")))
     if not seg:
         fails.append("the link arena was not claimed on the NETWORK path - "
@@ -571,7 +656,7 @@ def main():
             fails.append("frogfind field: " + err)
         else:
             m_type("os8088")
-            sub0 = rw("br_subofs")
+            sub0 = rw("br_subs")
             err = click_offset(sub0 + 2)
             if err:
                 fails.append("frogfind submit: " + err)
@@ -583,7 +668,173 @@ def main():
                     fails.append("submitting a form whose action is `/` did "
                                  "not reach the server: %r" % got)
 
-    # --- 4: Save As ---------------------------------------------------------
+    # --- 7: POST keeps values in the body, with an exact bounded length -----
+    fetch(URL_POST)
+    wait_done("POST form page")
+    if rb("br_fn"):
+        fofs = u16(m.readseg(pseg, sy["br_flds"], 2))
+        err = click_offset(fofs)
+        if err:
+            fails.append("POST form field: " + err)
+        else:
+            m_type("os8088")
+            sub0 = rw("br_subs")
+            err = click_offset(sub0 + 2)
+            if err:
+                fails.append("POST form submit: " + err)
+            else:
+                wait_done("POST form submission")
+                post = srv.posts[-1] if srv.posts else ""
+                head, _, body = post.partition("\r\n\r\n")
+                print("  POST request: %r body=%r" %
+                      (head.split("\r\n", 1)[0], body))
+                if not head.startswith("POST /posted HTTP/1.0\r\n"):
+                    fails.append("form method/action produced a wrong request "
+                                 "line: %r" % (head.split("\r\n", 1)[0],))
+                if "Content-Type: application/x-www-form-urlencoded" not in head:
+                    fails.append("POST is missing its form content type")
+                if "Content-Length: %d" % len(body) not in head:
+                    fails.append("POST Content-Length does not match %d bytes" %
+                                 len(body))
+                if body != "q=os8088&token=a+b":
+                    fails.append("POST body %r != expected encoded controls" % body)
+    else:
+        fails.append("POST form page produced no editable text field")
+
+    # --- 7b: REDIRECTS ARE FOLLOWED, and before the hand-over (SPEC.md 71.15)
+    # The worker decides a 301/302/303/307/308 at the end of the drain, while
+    # the source is still at its ceiling and nothing else is claimed. Three
+    # shapes: a 302 with NO body (which used to be `Empty reply`), a 301 with
+    # Apache's short body (which used to be drained into a 1 KB source and
+    # leak the page claims), and a POST answered 303 (which used to be
+    # re-POSTed to the Location).
+    def title():
+        return (bytes(m.readseg(pseg, sy["br_ptitle"], 32)).split(b"\0")[0]
+                .decode("latin-1"))
+
+    def bar_text():
+        return (bytes(m.readseg(pseg, sy["br_ubuf"], 160)).split(b"\0")[0]
+                .decode("latin-1"))
+
+    before = len(srv.log)
+    fetch(URL_R302)
+    st = wait_done("302 with an empty body")
+    print("after r302: state %d, title %r, requests %r"
+          % (st, title(), srv.log[before:]))
+    if st != 6 or title() != "Page Beta":
+        fails.append("a 302 with Content-Length: 0 did not land on Page Beta "
+                     "(state %d, title %r) - an empty redirect body was "
+                     "`Empty reply` and never followed" % (st, title()))
+    if not srv.log or "/b.htm" not in srv.log[-1]:
+        fails.append("the 302 was not followed to /b.htm: %r" % (srv.log[-1:],))
+
+    before = len(srv.log)
+    fetch(URL_R301)
+    st = wait_done("301 with a body")
+    ln_len = u16(m.readseg(pseg, sy["br_loc"] + 12, 2))
+    print("after r301: state %d, title %r, bar %r (LN_LEN %d), requests %r"
+          % (st, title(), bar_text(), ln_len, srv.log[before:]))
+    if st != 6 or title() != "Page Alpha":
+        fails.append("a 301 with a body did not land on Page Alpha (state %d, "
+                     "title %r)" % (st, title()))
+    if bar_text() != URL_A:
+        fails.append("after the 301 the location bar holds %r, not the page "
+                     "it landed on %r" % (bar_text(), URL_A))
+    if ln_len != len(URL_A):
+        fails.append("the bar's LN_LEN is %d for a %d-byte URL - the worker "
+                     "rewrote br_ubuf without os88line_resync, so the bar "
+                     "draws the OLD length and a keystroke lands at the stale "
+                     "caret" % (ln_len, len(URL_A)))
+    if not srv.log or "/a.htm" not in srv.log[-1]:
+        fails.append("the 301 was not followed to /a.htm: %r" % (srv.log[-1:],))
+
+    fetch(URL_POST303)
+    wait_done("POST 303 form page")
+    if rb("br_fn"):
+        fofs = u16(m.readseg(pseg, sy["br_flds"], 2))
+        err = click_offset(fofs)
+        if err:
+            fails.append("POST 303 form field: " + err)
+        else:
+            m_type("os8088")
+            sub0 = rw("br_subs")
+            before = len(srv.log)
+            err = click_offset(sub0 + 2)
+            if err:
+                fails.append("POST 303 form submit: " + err)
+            else:
+                st = wait_done("POST answered 303")
+                seen = srv.log[before:]
+                print("  after the 303: state %d, title %r, requests %r"
+                      % (st, title(), seen))
+                posts = [r for r in seen if r.startswith("POST ")]
+                gets = [r for r in seen if r.startswith("GET /a.htm ")]
+                if len(posts) != 1 or not posts[0].startswith("POST /posted303 "):
+                    fails.append("a POST answered 303 must be POSTed ONCE and "
+                                 "then fetched as a GET; the server saw %r"
+                                 % seen)
+                if not gets or seen.index(gets[0]) < seen.index(posts[0]):
+                    fails.append("the 303's Location was not fetched with a "
+                                 "GET after the POST: %r - a double submission "
+                                 "or a 405 on every post-redirect-get form"
+                                 % seen)
+                if st != 6 or title() != "Page Alpha":
+                    fails.append("the 303 did not land on Page Alpha (state "
+                                 "%d, title %r)" % (st, title()))
+    else:
+        fails.append("POST 303 form page produced no editable text field")
+
+    # --- 7c: a FRAMESET, its children fetched into buffers RE-CLAIMED AT THE
+    # CEILING (SPEC.md 71.15). The frameset page is a few hundred bytes and
+    # 71.14's hand-over cut the source to that; the children used to be
+    # drained into it, so the page was the first child's first kilobyte and
+    # `Page truncated`. Both children are over 2,000 bytes, so the document
+    # holding BOTH markers is the re-claim working; the bar reading the
+    # frameset's own URL (with LN_LEN following) is br_frameclose putting it
+    # back; the form count is the last child's form being live; and the fetch
+    # after it is the lock having been released.
+    before = len(srv.log)
+    fetch(URL_FS)
+    st = wait_done("the frameset")
+    doc = bytes(m.readseg(rw("br_docseg"), 0, rw("br_doclen")))
+    ln_len = u16(m.readseg(pseg, sy["br_loc"] + 12, 2))
+    print("after fs: state %d, msg %04X, doclen %d, title %r, bar %r (LN_LEN "
+          "%d), %d form(s), requests %r"
+          % (st, rw("br_nmsg"), len(doc), title(), bar_text(), ln_len,
+             rb("br_fn"), srv.log[before:]))
+    if st != 6:
+        fails.append("the frameset did not finish: state %d" % st)
+    if rw("br_nmsg") != 0:
+        fails.append("the frameset finished with a message (br_nmsg %04X) - "
+                     "`Page truncated` is the children being drained into a "
+                     "source cut to the frameset's own size" % rw("br_nmsg"))
+    for mark in (b"Hesperus", b"Phosphorus"):
+        if mark not in doc:
+            fails.append("the frameset's document lacks %r - the child that "
+                         "carries it was never appended whole" % mark)
+    if bar_text() != URL_FS:
+        fails.append("after the frameset the location bar holds %r, not the "
+                     "frameset's own %r - Reload would re-fetch the last "
+                     "child alone" % (bar_text(), URL_FS))
+    if ln_len != len(URL_FS):
+        fails.append("the bar's LN_LEN is %d for a %d-byte URL after the "
+                     "frameset" % (ln_len, len(URL_FS)))
+    if title() != "Frame Set":
+        fails.append("the caption is %r, not the frameset's own title"
+                     % title())
+    if rb("br_fn") < 1:
+        fails.append("the form in the last frame is not live (%d forms)"
+                     % rb("br_fn"))
+    seen = [r.split(" ")[1] for r in srv.log[before:] if " " in r]
+    if seen != ["/fs.htm", "/f1.htm", "/f2.htm"]:
+        fails.append("the frameset's requests were %r, not the frameset and "
+                     "then each child once" % seen)
+    fetch(URL_A)
+    if wait_done("page A after the frameset") != 6:
+        fails.append("a fetch after the frameset never completed - the gfx "
+                     "lock or the hand-over was not released")
+
+    # --- 8: Save As ---------------------------------------------------------
     if not rw("br_srcseg"):
         fails.append("the source was freed after the parse, so Save As has "
                      "nothing to write")
@@ -641,10 +892,15 @@ def main():
         # the 8.3 directory entry is 'SAVED   HTM'
         if b"SAVED   HTM" not in raw:
             fails.append("%s is not in the apps image's directory" % SAVED)
-    # ...the page CURRENTLY loaded, which is the search result the submit
-    # above fetched - not PAGE_B. Assert against whatever was last served, or
-    # this reads as a broken Save As every time a fetch is added ahead of it.
-    if b"FrogFind!" not in raw:
+    # ...the page CURRENTLY loaded, which is PAGE_A - where the 303 in step
+    # 7b landed - and not the FrogFind result or PAGE_B. Assert
+    # against whatever was last served, or this reads as a broken Save As
+    # every time a fetch is added ahead of it. And assert a string NO FIXTURE
+    # on the disk carries: "FrogFind!" is in FFHOME.HTM, which is on
+    # brtest360.img before the browser writes a byte, so that check was
+    # satisfied by a file that was there already. "Page Alpha" is in no file
+    # under tests/htm/, so only the saved page can supply it.
+    if b"Page Alpha" not in raw:
         fails.append("the saved file does not hold the server's bytes")
     else:
         print("the image holds the server's own bytes")

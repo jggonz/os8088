@@ -2948,13 +2948,42 @@ apic_inst_minimize:               ; DOCK.DRV's door (SPEC.md 30.4)
                                   ;          words (SPEC.md 18.4.11). 0x0467
                                   ;          was OSAPI_VOL_TAKE for one cycle
                                   ;          and never shipped (52.1.1)
-    OSAPI_RCSLOT osapi_clk_get_x  ; 0x046D - THE DATE AND TIME (SPEC.md
+    OSAPI_ICELL 8                  ; 0x046D - AL = THM_BRIGHT/DARK/COLOR/WIN
+                                   ; (SPEC.md 76, 76.14.14): adopts it as the
+                                   ; theme, repaints the chrome and owes the
+                                   ; settings write. An unknown value, or
+                                   ; COLOR on an adapter with no colour, is
+                                   ; Bright (76.12.1); WIN reads WIN95.DRV,
+                                   ; and CF = 1 says it could not (76.14.1).
+                                   ; The UI TASK only - a worker may not
+                                   ; touch a file (20.6). OSAPI_SLOT's exact
+                                   ; 8-byte shape, by hand: kern_small has no
+                                   ; theme to set at all (76.13) and spends
+                                   ; the length as NOPs, gfx_blit1_pen's own
+                                   ; precedent (0x0393 above)
+%ifdef KERN_BIG
+    push ds
+    push cs
+    pop ds
+    call api_thm_set
+    pop ds
+%else
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+%endif
+    OSAPI_IEND
+    OSAPI_RCSLOT osapi_clk_get_x  ; 0x0475 - THE DATE AND TIME (SPEC.md
                                   ;          37.96): out CX = year, DH:DL =
                                   ;          month:day, BH:BL = hour:minute,
                                   ;          AH = second, AL = bit 0 RTC
                                   ;          found / bit 1 12-hour; the live
                                   ;          fields under cli. Both kernels
-    OSAPI_RCSLOT osapi_wm_desk_x  ; 0x0473 - THE DESK LAYER (SPEC.md 11.103.9):
+    OSAPI_RCSLOT osapi_wm_desk_x  ; 0x047B - THE DESK LAYER (SPEC.md 11.103.9):
                                   ;          AL = 0 QUERY, 1 MAKE BX = a hidden
                                   ;          window, 2 DRAG (W2), 3 RELEASE
                                   ;          the bar. CF = 1 refused, and every
@@ -2963,14 +2992,14 @@ apic_inst_minimize:               ; DOCK.DRV's door (SPEC.md 30.4)
     OSAPI_RSLOT thm_desk          ; build with no themes comes later than this)
 %else
     OSAPI_RSLOT gfx_fill_gray
-%endif                            ; 0x0479 - THE DESKTOP'S GROUND over AX,BX
+%endif                            ; 0x0481 - THE DESKTOP'S GROUND over AX,BX
                                   ;          .. CX,DX, lock held (SPEC.md
                                   ;          11.103.9, 76.2): the theme's, per
                                   ;          display; [gfx_color] is the theme's
                                   ;          after on Dark/Color/Windows. kern_small's
                                   ;          thm_desk IS gfx_fill_gray
-osapi_table_end:                  ; 0x047F today (0x0473 before the desk
-                                  ; layer, 0x046D before OSAPI_CLK_GET,
+osapi_table_end:                  ; 0x0487 today (0x0475 before the DIA's
+                                  ; three cells, 0x046D before OSAPI_THM_SET,
                                   ; 0x0467 before OSAPI_FERR_TEXT, 0x05A8
                                   ; before pass 4's renumber). TWO cells
                                   ; came off the tail in
@@ -2990,8 +3019,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 102*6 + 6*3 + 6 + 12*5 + 3*6
-%error "os8088 API jump table must be exactly 0x046F bytes: 43 SLOT (8), 11 XCELL (7), 102 rare (6), 6 JCELL (3), 1 FCELL (6), 15 ICELL (12 of 5, 3 of 6)"
+%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 102*6 + 6*3 + 6 + 12*5 + 3*6 + 8
+%error "os8088 API jump table must be exactly 0x0477 bytes: 43 SLOT (8), 11 XCELL (7), 102 rare (6), 6 JCELL (3), 1 FCELL (6), 16 ICELL (12 of 5, 3 of 6, 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14)"
 %endif
 
 ; =============================================================================

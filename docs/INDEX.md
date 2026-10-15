@@ -20,7 +20,7 @@ Read first: [§11 wm.inc — windows](../SPEC.md#11-wminc--windows); [§20 Loada
 | `0x008E` | `OSAPI_WM_CONTENT` | BX=win ptr; out AX=content left, DX=top |
 | `0x0096` | `OSAPI_WM_OBSCURED` | BX=win ptr; out CF=1 if covered - which INCLUDES your window being hidden, so a worker gating a draw on this needs no visibility test of its own... |
 | `0x03BF` | `OSAPI_WM_OWNSEG` | AL = a window slot; out CF=1 no live window in that slot, else CF=0 and DX = the owning segment... |
-| `0x0473` | `OSAPI_WM_DESK` | AL = 0 QUERY: CF=0 this kernel has the layer (kern_small: CF=1, and every verb refuses there)... |
+| `0x047B` | `OSAPI_WM_DESK` | AL = 0 QUERY: CF=0 this kernel has the layer (kern_small: CF=1, and every verb refuses there)... |
 | `0x00F1` | `OSAPI_WM_SIZABLE` | BX=win ptr, AL = 0 clear / non-zero set WF_SIZABLE; call from the entry proc after OSAPI_WM_CREATE... |
 | `0x03CD` | `OSAPI_WM_NOANIM` | BX = win ptr; NO other argument and no answer: this window does not zoom open (SPEC.md 11.99.2.1). Call it between OSAPI_WM_CREATE and OSAPI_WM_SHOW... |
 | `0x0413` | `OSAPI_WM_MINIMIZE` | BX = a window of YOURS; the gfx lock held (a window callback does)... |
@@ -96,7 +96,7 @@ Read first: [§5 vga12.inc](../SPEC.md#5-vga12inc); [§25 icons.inc — icon for
 | `0x039D` | `OSAPI_ICON_DRAW` | CX = x, DX = y, SI -> the record. out CF = 1 refused (a first byte that is neither 1 nor ICON_SOLID, or a record taller than 16) |
 | `0x0393` | `OSAPI_GFX_BLIT1_PEN` | AL = ink (what a SET bit in the next OSAPI_GFX_BLIT1's band becomes), AH = paper (a CLEAR one). SPEC.md 5.4.2.2... |
 | `0x00B3` | `OSAPI_SET_COLOR` | AL -> [gfx_color] |
-| `0x0479` | `OSAPI_GFX_DESK` | AX,BX = x1,y1 CX,DX = x2,y2 (inclusive), lock held (W_PAINT): lay the DESKTOP'S OWN GROUND there... |
+| `0x0481` | `OSAPI_GFX_DESK` | AX,BX = x1,y1 CX,DX = x2,y2 (inclusive), lock held (W_PAINT): lay the DESKTOP'S OWN GROUND there... |
 | `0x019C` | `OSAPI_GFX_SCROLL` | move a rect's contents up or down instead of redrawing them (SPEC.md 5.5): AX/BX/CX/DX = x1/y1/x2/y2 inclusive ABSOLUTE screen coords, SI = signed... |
 | `0x03A4` | `OSAPI_GFX_BLITP` | ES:SI = plane 0's first row, DI = the step to the next plane, BP = the row stride inside one, AX = x (A MULTIPLE OF 8), BX = y, CX = width in pixels,... |
 | `0x03DC` | `OSAPI_GFX_SAVE` | AX = x1, BX = y1, CX = x2, DX = y2 (INCLUSIVE, absolute screen), ES:DI = your buffer. Copies those pixels into it... |
@@ -107,6 +107,7 @@ Read first: [§5 vga12.inc](../SPEC.md#5-vga12inc); [§25 icons.inc — icon for
 | `0x0222` | `OSAPI_GFX_FILL_PAT` | AX/BX/CX/DX = the rect, SI = 8 pattern bytes in YOUR segment: row y takes byte [SI + (y & 7)], a set bit is WHITE and bit 7 is the leftmost pixel of... |
 | `0x0404` | `OSAPI_GFX_POINTS` | ES:SI = CX records of two words each, x then y (screen px); CX = how many, 0 legal and does nothing. [gfx_color] is the ink; hold the lock... |
 | `0x0260` | `OSAPI_GFX_PEN` | CF = 0 live (CBLACK, flag clear) / CF = 1 disabled (CDGRAY, flag set). Preserves every register. |
+| `0x046D` | `OSAPI_THM_SET` | AL = THM_BRIGHT(0)/DARK(1)/ COLOR(2)/WIN(3): adopts it as the system theme, repaints the desktop's chrome and owes SYSTEM.CFG the change... |
 
 ### Text and fonts
 
@@ -211,7 +212,7 @@ Read first: [§7 Concurrency model (read carefully — this is the crux)](../SPE
 | `0x009E` | `OSAPI_TASK_YIELD` | give up the time slice |
 | `0x00A6` | `OSAPI_TASK_SLEEP` | AX = ticks to sleep (18 ~ 1 second) |
 | `0x00AE` | `OSAPI_GET_TICKS` | out AX = [ticks] |
-| `0x046D` | `OSAPI_CLK_GET` | out CX = the year (1980..2099), DH = the month (1..12), DL = the day, BH = the hour (0..23), BL = the minute, AH = the second... |
+| `0x0475` | `OSAPI_CLK_GET` | out CX = the year (1980..2099), DH = the month (1..12), DL = the day, BH = the hour (0..23), BL = the minute, AH = the second... |
 | `0x012F` | `OSAPI_TASK_SPAWN` | AX = your worker's near entry (a plain `mov ax, my_worker`... |
 | `0x0135` | `OSAPI_TASK_ALIVE` | BX = YOUR window ptr; the gfx lock must NOT be held, and it must be YOUR WORKER calling - never a window callback... |
 | `0x0318` | `OSAPI_TASK_PARK` | a DRIVER's worker parks here for a heap compaction (SPEC.md 66.5.5), the way a package's parks at OSAPI_TASK_ALIVE... |
@@ -505,7 +506,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 
 **The DIRECTORY says what a document is, and the filename does not.** `docs/` describes how the system works today - instructions, contracts and maintained reference. Everything under `docs/plans/` is a design record: what was considered, including the options that were rejected, and it is never a description of what shipped - SPEC.md is the current state and these are how it got there. `docs/plans/completed/` is the subset whose work has landed; what stays directly in `docs/plans/` still has work open. `docs/history/` is superseded or closed - a record of a moment that has passed, and true of no tree you can check out. `docs/reports/` is a MEASUREMENT taken at a point in time: true of the tree it was taken on, quotable with its date and its box, and never to be read as a description of today.
 
-*How it works today - `docs/` (23):* `APPLE2-PORT-PLAN.md`, `APPLE2-SPEC.md`, `BIFF-NOTES.md`, `C-TOOLCHAIN.md`, `C64-SPEC.md`, `DOS-DEBUGGING.md`, `FIELD-MACHINES.md`, `FIELD-NOTES.md`, `HEAP-CLAIMS.md`, `HERCULES-TESTING.md`, `IMAGER.md`, `KERNEL-MEMORY.md`, `LIVE-MEDIA.md`, `MARTYPC-DEBUG.md`, `PACCMAN-PORT-PLAN.md`, `README.md`, `REDLINE.md`, `TELNET-PLAN.md`, `TESTING.md`, `UPSTREAM.md`, `WEAVE-SPEC.md`, `WIRE-PLAN.md`, `WRITING-TESTS.md`
+*How it works today - `docs/` (24):* `APPLE2-PORT-PLAN.md`, `APPLE2-SPEC.md`, `BIFF-NOTES.md`, `C-TOOLCHAIN.md`, `C64-SPEC.md`, `DOS-DEBUGGING.md`, `FIELD-MACHINES.md`, `FIELD-NOTES.md`, `HEAP-CLAIMS.md`, `HERCULES-TESTING.md`, `IMAGER.md`, `KERNEL-MEMORY.md`, `LIVE-MEDIA.md`, `MARTYPC-DEBUG.md`, `PACCMAN-PORT-PLAN.md`, `README.md`, `REDLINE.md`, `TELNET-PLAN.md`, `TESTING.md`, `UPSTREAM.md`, `WEAVE-SPEC.md`, `WIRE-PLAN.md`, `WRITING-TESTS.md`, `README.md`
 
 *Plans with work still open - `docs/plans/` (48):* `ARTFUL-PERF-PLAN.md`, `ASSOC-FIND-PLAN.md`, `BUTTON-GESTURE-PLAN.md`, `CGA-SNOW-PLAN.md`, `CONTENT-COORDS-PLAN.md`, `DISK-CPU-PLAN.md`, `DOS-CABLE-NET-PLAN.md`, `DOS-EXEC-PLAN.md`, `EXCITEBIKE-PLAN.md`, `GORILLAS-PARITY-PLAN.md`, `HANDOFF-APPS-SHARED.md`, `HANDOFF-STOP-DETECTION.md`, `HDD-RESIDENT-PLAN.md`, `HEAP-UNPIN-PLAN.md`, `ICON-IDENTITY-PLAN.md`, `ISOTRON-PLAN.md`, `KERN-DOS-PLAN.md`, `KERN-SMALL-CUT-PLAN.md`, `KERN-SMALL-NOCOMPACT.md`, `KERNEL-BYTE-QUEUE.md`, `LARGE-LZ4-PLAN.md`, `LAST-DROP-BYTES.md`, `LAST-DROP-PERF.md`, `LISTING-HOME-PLAN.md`, `MARTYPC-PLAN.md`, `MODULE-SELFCONTAIN-PLAN.md`, `MONO-RECLAIM-PLAN.md`, `MOUSE-BOOT-FREEZE-PLAN.md`, `NAV-COST-PLAN.md`, `O88-COMPRESSION-PLAN.md`, `PARTS-REHOME-PLAN.md`, `PATH-WAVE-PLAN.md`, `PIXEL-PLAN.md`, `PIXELSTEIN-PLAN.md`, `REDLINE-TUNE-PLAN.md`, `REGION-SELF-COMPACT-PLAN.md`, `SCRIBE-OVL-PLAN.md`, `SKIES-FRAME-PLAN.md`, `SOAK-PARALLEL.md`, `SPEAKER-LEVELLER-NEXT.md`, `STREAM-WRITER-PLAN.md`, `UI-MENU-ELEMENT.md`, `UI-TEXTFIELD-PLAN.md`, `VIDEO-LATCH-PLAN.md`, `VIDEO-OVERAGE-PLAN.md`, `VIDEO-PALETTE-PLAN.md`, `VIDEO-PLAN.md`, `VIDEO-XMS-PLAN.md`
 

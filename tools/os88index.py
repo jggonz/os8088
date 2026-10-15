@@ -51,7 +51,7 @@ GROUPS = [
     ("Menus and the menu bar", ["12", "59"],
      ["MENU_", "TOAST"]),
     ("Drawing", ["5", "25", "32", "39", "76"],
-     ["GFX_", "SET_COLOR", "ICON_"]),
+     ["GFX_", "SET_COLOR", "ICON_", "THM_"]),
     ("Text and fonts", ["6", "83"],
      ["FONT_"]),
     ("Input - keyboard and mouse", ["9", "10", "13"],

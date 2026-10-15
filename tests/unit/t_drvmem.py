@@ -314,7 +314,7 @@ def main():
     # on it, and asserting a class nobody prints would be a rule about nothing.
     # ...re-read, because `src` was re-bound to a path inside section 2's loop
     dsrc = open(os.path.join(ROOT, "kernel/driver.inc"), errors="replace").read()
-    rows = re.search(r"^drv_tab:(.*?)^drv_memk:", dsrc, re.M | re.S)
+    rows = re.search(r"^drv_tab:(.*?)^(?:thmv_row|drv_memk):", dsrc, re.M | re.S)  # thmv_row follows the table, outside DRV_MAX (SPEC.md 76.14.14)
     klass = re.findall(r"^\s*db\s+(DRVC_\w+)\b", rows.group(1), re.M) \
         if rows else []
     eq(len(klass), len(ROWS), "every drv_tab row names a class",

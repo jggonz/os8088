@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "005efa76661e8949d58ca2f40c537f3519b2a1fd7032b74010ef617b7c6fe278",
+  "fingerprint": "9b0a00f1f978abdfcf17b98e442435c737ebc3de1e2bfb245346700d60f18d91",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "94cf82ea7bfa503f91b56824b7430e3df03583584cd2c521da12f757f35d411f",
+  "fingerprint": "d6927629077962e494f119851ecea36972deaf327cfcd23c976e2781e2edca54",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -66,31 +66,45 @@
    "to": 11
   },
   {
-   "fingerprint": "9a5d33180cf627fd4dcd3dd5aa79d2aac97eb2fb8a4f7d72210bcd996cb4d56d",
+   "fingerprint": "16b2fbfe6285c623f7411c01794bed407ebb40674797c457162a0181235d4b5d",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "feature/dia merged onto main b47de145 (PKG_FMT 10 / DRV_VER 11 kept): the DIA cells move to the END of main's table, after main's OSAPI_FERR_TEXT at 0x0467 - OSAPI_CLK_GET 0x046D (SPEC.md 37.96), OSAPI_WM_DESK 0x0473 and OSAPI_GFX_DESK 0x0479 (SPEC.md 11.103.9); header flag bit 6 OS88_F_DESK, WF_DESK/WF_HOVER/IF_DESK, OSAPI_WM_TOP never answering a desk window and OSAPI_DESK_ITEM's DIA mark at +3 (SPEC.md 110.2) as the branch recorded them. Cells appended and contracts filled in on inputs no earlier package passed: everything built against main's SDK still runs, so no bump",
+   "reason": "Append the Color theme mode, preset, and style API cells at free slots 0x046D, 0x0475 and 0x047D. Existing binaries never called these cells; the style cell preserves its 0/1 meanings and adds bit 1 for the Windows Classic button layout, so PKG_FMT and DRV_VER remain unchanged.",
    "to": 10
   },
   {
-   "fingerprint": "df5f981f0d263863eb80f1acda24a8a9ce86941079aa4ae4bb7c12d849990b96",
+   "fingerprint": "fcc4cc6a5ff92fb80f83388d88603e5c85a65373efa0abf4403899f85b3c1dfe",
    "from": 11,
    "guard": "DRV_VER",
-   "reason": "feature/dia merged onto main b47de145 (PKG_FMT 10 / DRV_VER 11 kept): the DIA cells move to the END of main's table, after main's OSAPI_FERR_TEXT at 0x0467 - OSAPI_CLK_GET 0x046D (SPEC.md 37.96), OSAPI_WM_DESK 0x0473 and OSAPI_GFX_DESK 0x0479 (SPEC.md 11.103.9); header flag bit 6 OS88_F_DESK, WF_DESK/WF_HOVER/IF_DESK, OSAPI_WM_TOP never answering a desk window and OSAPI_DESK_ITEM's DIA mark at +3 (SPEC.md 110.2) as the branch recorded them. Cells appended and contracts filled in on inputs no earlier package passed: everything built against main's SDK still runs, so no bump",
+   "reason": "Append the Color theme mode, preset, and style API cells at free slots 0x046D, 0x0475 and 0x047D. Existing binaries never called these cells; the style cell preserves its 0/1 meanings and adds bit 1 for the Windows Classic button layout, so PKG_FMT and DRV_VER remain unchanged.",
    "to": 11
   },
   {
-   "fingerprint": "94cf82ea7bfa503f91b56824b7430e3df03583584cd2c521da12f757f35d411f",
+   "fingerprint": "432329e4aff92c47b0957e27a5d8ce8886fb01fe0cecc86ed823873fcab1758a",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "OSAPI_WM_DESK QUERY's contract clarified: it loads DESK.DRV and holds 1 KB until restart, so it is asked once in the entry proc on the UI task (SPEC.md 11.103.10); no cell moved, nothing built before stops running",
+   "reason": "PR #249 (Color presets) after the zero-resident redesign: OSAPI_THM_SET is ONE new cell appended at 0x046D, after OSAPI_FERR_TEXT; the PR's _SET_PRESET/_SET_STRIPES cells never shipped and are gone. Every existing cell keeps its address and contract, so nothing built before stops running",
    "to": 10
   },
   {
-   "fingerprint": "005efa76661e8949d58ca2f40c537f3519b2a1fd7032b74010ef617b7c6fe278",
+   "fingerprint": "b1f91147886e07beb2016963005e30d6be8487966b32cb8d5c7e01c05a8aa5b6",
    "from": 11,
    "guard": "DRV_VER",
-   "reason": "OSAPI_WM_DESK QUERY's contract clarified: it loads DESK.DRV and holds 1 KB until restart, so it is asked once in the entry proc on the UI task (SPEC.md 11.103.10); no cell moved, nothing built before stops running",
+   "reason": "PR #249 (Color presets) after the zero-resident redesign: OSAPI_THM_SET is ONE new cell appended at 0x046D, after OSAPI_FERR_TEXT; the PR's _SET_PRESET/_SET_STRIPES cells never shipped and are gone. Every existing cell keeps its address and contract, so nothing built before stops running",
+   "to": 11
+  },
+  {
+   "fingerprint": "d6927629077962e494f119851ecea36972deaf327cfcd23c976e2781e2edca54",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "feature/dia merged onto main 70df8a99 (PKG_FMT 10 / DRV_VER 11 kept): the DIA cells follow main's last cell, OSAPI_THM_SET's 8-byte inline cell at 0x046D - OSAPI_CLK_GET 0x0475 (SPEC.md 37.96), OSAPI_WM_DESK 0x047B and OSAPI_GFX_DESK 0x0481 (SPEC.md 11.103.9), osapi_table_end 0x0487; header flag bit 6 OS88_F_DESK, WF_DESK/WF_HOVER/IF_DESK, OSAPI_WM_TOP never answering a desk window, OSAPI_DESK_ITEM's DIA mark at +3 (SPEC.md 110.2) and OSAPI_WM_DESK QUERY loading DESK.DRV (SPEC.md 11.103.10). Cells appended after every existing one and contracts filled in on inputs no earlier package passed: everything built against main's SDK still runs, so no bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "9b0a00f1f978abdfcf17b98e442435c737ebc3de1e2bfb245346700d60f18d91",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "feature/dia merged onto main 70df8a99 (PKG_FMT 10 / DRV_VER 11 kept): the DIA cells follow main's last cell, OSAPI_THM_SET's 8-byte inline cell at 0x046D - OSAPI_CLK_GET 0x0475 (SPEC.md 37.96), OSAPI_WM_DESK 0x047B and OSAPI_GFX_DESK 0x0481 (SPEC.md 11.103.9), osapi_table_end 0x0487; header flag bit 6 OS88_F_DESK, WF_DESK/WF_HOVER/IF_DESK, OSAPI_WM_TOP never answering a desk window, OSAPI_DESK_ITEM's DIA mark at +3 (SPEC.md 110.2) and OSAPI_WM_DESK QUERY loading DESK.DRV (SPEC.md 11.103.10). Cells appended after every existing one and contracts filled in on inputs no earlier package passed: everything built against main's SDK still runs, so no bump",
    "to": 11
   }
  ]

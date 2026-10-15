@@ -2101,7 +2101,8 @@ KERNEL_SRC := kernel/kernel.asm
 # stale. Caught once already - a fix to the 286 head-cross gate assembled
 # perfectly, never reached the disk, and the only symptom was os88sym refusing
 # a map that described "a DIFFERENT kernel".
-KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
+KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm \
+              drivers/thmpal/thmrows.inc
 
 .PHONY: stkdiag kbddiag small emu kernsplit all run run-640 run-720 run-120 debug test test-snd xt xt-640 pc5150 xt-mfm xt-cga \
         xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 xt-midirack 386-midirack xt-covox xt-wire \
@@ -3064,6 +3065,16 @@ DRIVERS += $(BUILD)/xmem.drv
 # back out ($(SMALLDRIVERS) below): drv_load_at, its only loader, is inside
 # %ifdef KERN_BIG and nothing on that kernel can name the file
 DRIVERS += $(BUILD)/saver.drv
+# ...and the Customize... window for Color's eight presets (SPEC.md 76.14), an
+# overlay for the identical reason and riding every KERN_BIG disk the same
+# way: no drv_tab row, no Drivers-page tick, no SYSTEM.CFG bit of its own.
+# kernel/vga12.inc's thmv_open_x reads it when the Theme page's button is
+# pressed, and a machine that cannot read it beeps instead of opening the
+# window - so a disk without this file is a working machine whose Color
+# theme is stuck on whichever preset SYSTEM.CFG already names. kern_small
+# never carries it: Customize's button is %ifdef KERN_BIG, same as Color
+# itself (SPEC.md 76.12.3)
+DRIVERS += $(BUILD)/thmpal.drv
 # ...and SPEC.md 9.12's CH375 USB mouse, the Book8088's. A drv_tab row with a
 # SYSTEM.CFG bit (6) and not wanted by default, so a disk that carries it
 # costs a machine without the chip one directory slot and nothing read. On
@@ -3806,6 +3817,22 @@ $(BUILD)/saver.bin: drivers/saver/saver.asm drivers/saver/svcube.inc \
 
 $(BUILD)/saver.drv: $(BUILD)/saver.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/saver.bin -o $@
+
+# THMPAL.DRV - the Customize... window for Color's eight presets (SPEC.md
+# 76.14). An overlay for SAVER.DRV's own two reasons: it is mostly DATA (ten
+# preset names, two button captions) a Control Panel page cannot afford, and
+# its owner is the kernel - kernel/vga12.inc's thmv_open_x reads it when the
+# Theme page's Customize... button is pressed and frees it again when the
+# Control Panel closes (kernel/ctrl.inc's cp_flush_close_x).
+$(BUILD)/thmpal.bin: drivers/thmpal/thmpal.asm drivers/thmpal/thmrows.inc \
+                     drivers/os88drv.inc \
+                     apps/os88api.inc apps/os88ui.inc \
+                     | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/ -I apps/ -o $@ drivers/thmpal/thmpal.asm
+	@echo "thmpal: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/thmpal.drv: $(BUILD)/thmpal.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/thmpal.bin -o $@
 
 # The MBR's 446 bytes of boot code (SPEC.md 52.10.1). Assembled on its own and
 # incbin'ed by drivers/hdd/part.inc, which is why the driver gets -I $(BUILD):
@@ -11175,8 +11202,9 @@ $(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
 
 # --- the BROWSER's test disk (docs/plans/completed/BROWSER-PLAN.md 10 step 1) -----------------
 # The renderer with no network in the machine: the package plus tests/htm/'s
-# fixtures, so a scripted session can open demo.htm, torture.htm and the
-# FrogFind capture off a floppy and diff the framebuffer. On demand only -
+# fixtures, so a scripted session can open demo.htm, formatting.htm, torture.htm, the
+# FrogFind capture and the frameset fixture off a floppy and diff the
+# framebuffer. On demand only -
 # `all` builds none of it and nothing here ships.
 #
 #   make browsertest                      # build the disks
@@ -11185,6 +11213,8 @@ $(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
 #   python3 tests/brtest.py --page BROWSER.HTM
 #                                         # ...and on the page that SHIPS
 #                                         # (SPEC.md 71.12)
+#   python3 tests/brtest.py --page FORMAT.HTM
+#                                         # ...and on Browser 1.3 formatting
 #   python3 tests/brclick.py              # ...and the PAGE-CLICK one: links,
 #                                         # a form field and the submit button
 #                                         # (BROWSER-PLAN 5.1/7.4). Both use
@@ -11206,6 +11236,9 @@ $(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
 #                                         # three - an anchor inside a cell,
 #                                         # the doubled last line and a `..`
 #                                         # in a relative link
+#   python3 tests/br14.py                 # ...and Browser 1.4's cell spans,
+#                                         # per-cell alignment and refused
+#                                         # password/file/textarea controls
 #   python3 tests/brnav.py                # Back/Forward/Reload and Save As
 #                                         # (BROWSER-PLAN 5/5.2/5.3). It needs
 #                                         # `make ethertest` too and boots
@@ -11232,13 +11265,16 @@ $(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
 # every shipped apps image then fails a freshness check about a disk that is
 # perfectly fresh. Renaming is a reason for a copy; having one is not.
 BRFILES := $(BUILD)/browser.o88 apps/browser/browser.htm $(BUILD)/DEMO.HTM \
+           $(BUILD)/FORMAT.HTM \
            $(BUILD)/TORTURE.HTM \
            $(BUILD)/UTF8.HTM $(BUILD)/FROGFIND.HTM $(BUILD)/FFHOME.HTM \
-           $(BUILD)/LINKS.HTM $(BUILD)/PUBZONE.HTM
+           $(BUILD)/LINKS.HTM $(BUILD)/PUBZONE.HTM $(BUILD)/FRAMESET.HTM
 
 browsertest: $(BUILD)/brtest.img $(BUILD)/brtest360.img
 
 $(BUILD)/DEMO.HTM: tests/htm/demo.htm | $(BUILD)
+	cp $< $@
+$(BUILD)/FORMAT.HTM: tests/htm/formatting.htm | $(BUILD)
 	cp $< $@
 $(BUILD)/TORTURE.HTM: tests/htm/torture.htm | $(BUILD)
 	cp $< $@
@@ -11251,6 +11287,8 @@ $(BUILD)/FFHOME.HTM: tests/htm/frogfind-home.htm | $(BUILD)
 $(BUILD)/LINKS.HTM: tests/htm/links.htm | $(BUILD)
 	cp $< $@
 $(BUILD)/PUBZONE.HTM: tests/htm/pubzone.htm | $(BUILD)
+	cp $< $@
+$(BUILD)/FRAMESET.HTM: tests/htm/frameset.htm | $(BUILD)
 	cp $< $@
 
 $(BUILD)/brtest.img: $(BRFILES) tools/os88disk.py

@@ -1154,7 +1154,10 @@ recommended default in its §7 is what shipped.
    **Done at the merge of `b47de145`**: `OSAPI_CLK_GET` `0x046D`,
    `OSAPI_WM_DESK` `0x0473`, `OSAPI_GFX_DESK` `0x0479`, `osapi_table_end`
    `0x047F`; `PKG_FMT` 10 / `DRV_VER` 11 kept, the lock re-taken on top of
-   main's (cells appended at the end).
+   main's (cells appended at the end). **Moved again at the merge of `70df8a99`**,
+   behind #249's 8-byte `OSAPI_THM_SET` at `0x046D`: `OSAPI_CLK_GET`
+   `0x0475`, `OSAPI_WM_DESK` `0x047B`, `OSAPI_GFX_DESK` `0x0481`,
+   `osapi_table_end` `0x0487`; the same numbers kept, the lock re-taken.
 
 ### The rows that hold it
 

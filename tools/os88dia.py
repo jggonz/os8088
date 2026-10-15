@@ -54,13 +54,14 @@ DSL_PIN, DSL_GONE, DSL_SLOT = 0x40, 0x80, 0x3F
 CFG_SIG = b"O88CFG\0\0"
 CFG_GEN_V = 3
 CFG_REC0 = 10
-CFG_FBUF = 152                  # SPEC.md 2.8.7: a file this size or less
+CFG_FBUF = 163                  # SPEC.md 2.8.7: a file this size or less
                                 # carries no trailer the boot will read.
                                 # kern_big's - the only kernel that reads a
                                 # trailer - and DERIVED there (driver.inc), so
                                 # tests/unit/t_dia.py evaluates the kernel's
                                 # own expression with nasm and holds this to
-                                # it: it was 131 until #248's two pin keys
+                                # it: it was 131 until #248's two pin keys,
+                                # and 152 until #249's 'TP' theme preset
 CFG_MAXFILE = 4096              # ...and one this size or more is refused
 
 # --- SPEC.md 110.5 ------------------------------------------------------------
@@ -289,7 +290,16 @@ def cfg(rows=(), pins=None, head=None):
         raise DiaError("the pins block is %d bytes" % DESK_SC0)
     if not rows and all(b == 0xFF for b in pins):
         return head
-    out = head + b"".join(rows) + pins + b"SC" + bytes([SC_VER, len(rows)])
+    tail = b"".join(rows) + pins + b"SC" + bytes([SC_VER, len(rows)])
+    # A file of CFG_FBUF or less is never read for a trailer (ovl_sc_load's
+    # first compare). The kernel's own writer cannot make one - it rewrites
+    # EVERY key, so its head alone is CFG_FBUF (SPEC.md 26.8.6) - but a
+    # fixture's head is only the keys the test asked for, and one row behind
+    # the bare head stopped clearing it when #249's 'TP' grew CFG_FBUF to
+    # 163. So pad AFTER the terminator, which both readers stop at: the
+    # settings reader at the `dw 0`, the trailer reader from the END.
+    head += bytes(max(0, CFG_FBUF + 1 - len(head) - len(tail)))
+    out = head + tail
     if len(out) >= CFG_MAXFILE:
         raise DiaError("%d bytes: the boot reader refuses %d or more"
                        % (len(out), CFG_MAXFILE))
@@ -527,10 +537,13 @@ def selfcheck():
        "a drag-made '\\' at +3 is NOT a DIA row")
     ok(p["rows"][1]["dia"] and p["rows"][1]["path"]
        == "SYSTEM\\DIA\\DESKCAL.O88", "the DIA row back")
-    ok(p["head"] == settings_head(), "the settings head untouched")
+    ok(p["head"][:len(settings_head())] == settings_head(),
+       "the settings head untouched")
     ok(p["pins"] == [0xFF] * DESK_SC0, "nine pins, none placed")
     ok(len(dia_rows(f)) == 1, "dia_rows finds one")
     ok(cfg([]) == settings_head(), "nothing to keep, no trailer")
+    ok(len(cfg([r])) > CFG_FBUF and parse_cfg(cfg([r]))["trailer"],
+       "one row behind the bare head still clears CFG_FBUF")
 
     # what the boot reader refuses, mirrored
     bad = bytearray(f)

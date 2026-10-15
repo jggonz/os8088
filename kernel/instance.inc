@@ -1709,6 +1709,11 @@ app_close_win:
                                 ; is staging it into the blob that is about to
                                 ; be written rather than the one after
 %endif
+%ifdef KERN_BIG
+    call thmv_reap_x            ; ...and the Customize window, BEFORE the
+                                ; write and ungated by it: a close with nothing
+                                ; to save is still a close (SPEC.md 76.14.14)
+%endif
     call COLD_SEG:cpf_cp_flush_close ; to here (SPEC.md 31.8): one floppy write per
                                 ; session instead of one per click. Only the
                                 ; TASK-LESS branch needs it - the panel owns

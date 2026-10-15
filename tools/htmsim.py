@@ -139,8 +139,10 @@ def fold(ch):
 # implementation is a check on the parts it implements and SILENT on the rest.
 BLOCK = {"p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li",
          "dl", "dt", "dd", "caption",
-         "pre", "table", "tr", "hr", "center", "blockquote", "form"}
-DROP_CONTENT = {"script", "style", "head", "title", "select", "textarea"}
+         "pre", "table", "tr", "hr", "center", "blockquote", "form",
+         "main", "article", "section", "header", "footer", "nav", "figure",
+         "figcaption", "details", "summary"}
+DROP_CONTENT = {"script", "style", "head", "title", "textarea"}
 HEADING = {"h1": 1, "h2": 2, "h3": 3, "h4": 4, "h5": 5, "h6": 6}
 
 TAG_RE = re.compile(rb"<(/?)([A-Za-z][A-Za-z0-9]*)((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>")
@@ -198,8 +200,8 @@ def unescape(text):
 
 
 class Cell:
-    def __init__(self, colspan=1, header=False):
-        self.ops, self.colspan, self.header = [], colspan, header
+    def __init__(self, colspan=1, header=False, align="left"):
+        self.ops, self.colspan, self.header, self.align = [], colspan, header, align
 
     def text_len(self):
         return sum(len(o[1]) for o in self.ops if o[0] == "RUN")
@@ -225,6 +227,7 @@ def parse(raw):
     text, enc = decode(raw)
     ops = []
     stack = []            # open Table objects; a nested table pushes
+    frame_depth = 0        # nested framesets share the guest's one table
     style = {"b": 0, "i": 0, "link": 0}
     pre = 0
     st = dict(enc=enc, tags=set(), dropped=set(), links=0, imgs=0, ents=0,
@@ -273,8 +276,25 @@ def parse(raw):
         pos = lt + mt.end()
         st["tags"].add(tag)
 
+        if tag == "select" and not closing:
+            end = re.search(r"</\s*select\s*>", text[pos:], re.I)
+            body = text[pos:] if not end else text[pos:pos + end.start()]
+            opts = list(re.finditer(
+                r"<option\b([^>]*)>(.*?)(?=<option\b|$)", body,
+                re.I | re.S))
+            chosen = next((o for o in opts if re.search(r"\bselected\b", o.group(1), re.I)),
+                          opts[0] if opts else None)
+            if chosen:
+                label = re.sub(r"<[^>]*>", "", chosen.group(2)).strip()
+                label = unescape(label)[:8]
+                add_text("[" + label + " " * (8 - len(label)) + "]")
+            pos = n if not end else pos + end.end()
+            continue
+
         if tag in DROP_CONTENT:
             if not closing:
+                if tag == "textarea":
+                    add_text("[unsupported]")
                 end = re.search(r"</\s*%s\s*>" % tag, text[pos:], re.I)
                 st["dropped"].add(tag)
                 pos = n if not end else pos + end.end()
@@ -282,7 +302,26 @@ def parse(raw):
 
         a = {k.lower(): v.strip("\"'") for k, v in ATTR_RE.findall(attrs)}
 
-        if tag == "table":
+        if tag == "frameset":
+            if not closing:
+                if frame_depth == 0:
+                    stack.append(Table())
+                frame_depth += 1
+            elif frame_depth:
+                frame_depth -= 1
+                if frame_depth == 0 and stack:
+                    emit(("TABLE", stack.pop()))
+        elif tag == "frame" and not closing:
+            if stack and frame_depth:
+                label = a.get("name", "Frame")[:16] or "Frame"
+                row = [Cell(1, True), Cell(1, False)]
+                row[0].ops.append(("RUN", label, dict(style), False))
+                row[1].ops.extend((
+                    ("HREF", a.get("src", "")),
+                    ("RUN", "Open", dict(style, link=1), False)))
+                stack[-1].rows.append(row)
+                st["links"] += 1
+        elif tag == "table":
             if closing:
                 if stack:
                     t = stack.pop()
@@ -297,21 +336,36 @@ def parse(raw):
                 if not stack[-1].rows:
                     stack[-1].rows.append([])
                 try:
-                    cs = max(1, min(16, int(a.get("colspan", "1"))))
+                    cs = int(a.get("colspan", "1"))
+                    if not 1 <= cs <= 8:
+                        cs = 1
                 except ValueError:
                     cs = 1
-                stack[-1].rows[-1].append(Cell(cs, tag == "th"))
+                align = a.get("align", "left").lower()
+                if align == "middle":
+                    align = "center"
+                if align not in ("left", "center", "right"):
+                    align = "left"
+                stack[-1].rows[-1].append(Cell(cs, tag == "th", align))
         elif tag == "pre":
             pre = 0 if closing else 1
             emit(("PARA",))
         elif tag in HEADING:
-            emit(("PARA",) if closing else ("HEAD", HEADING[tag]))
+            emit(("PARA",))
+            if closing:
+                emit(("HEAD", 0))
+            else:
+                emit(("HEAD", HEADING[tag]))
+        elif tag == "blockquote":
+            emit(("PARA",))
+            emit(("QUOTE", not closing))
         elif tag == "br":
             emit(("BR",))
         elif tag == "hr":
             emit(("HR",))
-        elif tag == "li" and not closing:
-            emit(("LI", 1))
+        elif tag == "li":
+            if not closing:
+                emit(("LI", 1))
         elif tag == "center":
             emit(("CENTRE", not closing))
         elif tag == "img" and not closing:
@@ -319,6 +373,25 @@ def parse(raw):
             alt = a.get("alt", "").strip()
             if alt:
                 add_text(unescape(alt))
+        elif tag == "input" and not closing:
+            typ = a.get("type", "text").lower()
+            if typ == "hidden":
+                pass
+            elif typ == "submit":
+                add_text("< " + unescape(a.get("value", "submit")) + " >")
+            elif typ == "checkbox":
+                add_text("[x]" if re.search(r"\bchecked\b", attrs, re.I) else "[ ]")
+            elif typ == "radio":
+                add_text("(*)" if re.search(r"\bchecked\b", attrs, re.I) else "( )")
+            elif typ in ("password", "file", "image"):
+                add_text("[unsupported]")
+            elif typ != "image":
+                try:
+                    width = max(1, min(40, int(a.get("size", "20"))))
+                except ValueError:
+                    width = 20
+                value = unescape(a.get("value", ""))[:width]
+                add_text("[" + value + " " * (width - len(value)) + "]")
         elif tag == "a":
             if closing:
                 style["link"] = max(0, style["link"] - 1)
@@ -330,6 +403,8 @@ def parse(raw):
             style["b"] += -1 if closing else 1
         elif tag in ("i", "em", "cite", "var"):
             style["i"] += -1 if closing else 1
+        elif tag == "u":
+            pass                             # ink style; never literal delimiters
         elif tag in BLOCK:
             emit(("PARA",))
         # font, small, tt, span, big, style=, color=, bgcolor= : 2.2.1, dropped
@@ -406,16 +481,18 @@ def cell_text(ops):
 def layout_table(t, width, out):
     """A table is the ATOMIC unit of layout (3.2): one measuring pass over the
     parsed cells, integer arithmetic and not one glyph, then rows."""
-    ncols = min(t.ncols(), 16)
+    ncols = min(t.ncols(), 8)
     if not ncols:
         return
     want = [0] * ncols
     for r in t.rows:
         col = 0
         for c in r:
-            if col < ncols and c.colspan == 1:
-                want[col] = max(want[col], min(len(cell_text(c.ops)), width))
-            col += c.colspan
+            span = min(c.colspan, max(1, ncols - col))
+            if col < ncols:
+                need = max(1, len(cell_text(c.ops)) - 2 * (span - 1))
+                want[col] = max(want[col], min(need, width))
+            col += span
     # The DRAWN width is sum(w) + 2*ncols + 1 - a '|' and a space either side
     # of every column and a '+' at each edge - so that is what has to fit, not
     # the sum alone. The first version subtracted ncols+1 and could overflow
@@ -429,10 +506,11 @@ def layout_table(t, width, out):
     for r in t.rows:
         col = 0
         for c in r:
-            if col < ncols and c.colspan == 1:
+            span = min(c.colspan, max(1, ncols - col))
+            if col < ncols:
                 for w in cell_text(c.ops).split():
                     floor[col] = max(floor[col], min(len(w), 14))
-            col += c.colspan
+            col += span
     total = sum(want) or 1
     if total > avail:                            # squeeze proportionally...
         want = [max(1, w * avail // total) for w in want]
@@ -448,22 +526,27 @@ def layout_table(t, width, out):
     for r in t.rows:
         wrapped, col = [], 0
         for c in r:
-            span = sum(want[col:col + c.colspan]) + (c.colspan - 1) * 2
-            wrapped.append(wrap(cell_text(c.ops).split(), max(1, span)) or [""])
-            col += c.colspan
+            spancols = min(c.colspan, max(1, ncols - col))
+            cellw = sum(want[col:col + spancols]) + (spancols - 1) * 2
+            wrapped.append((wrap(cell_text(c.ops).split(), max(1, cellw)) or [""], cellw))
+            col += spancols
         for k in range(max(len(w) for w in wrapped)):
             col, parts = 0, []
             for ci, c in enumerate(r):
-                span = sum(want[col:col + c.colspan]) + (c.colspan - 1) * 2
-                parts.append((wrapped[ci][k] if k < len(wrapped[ci]) else "").ljust(span))
-                col += c.colspan
+                spancols = min(c.colspan, max(1, ncols - col))
+                cellw = wrapped[ci][1]
+                line = wrapped[ci][0][k] if k < len(wrapped[ci][0]) else ""
+                spare = max(0, cellw - len(line))
+                left = spare if c.align == "right" else spare // 2 if c.align == "center" else 0
+                parts.append(" " * left + line + " " * (spare - left))
+                col += spancols
             out.append(Line("|" + "|".join(" " + p for p in parts) + "|", 0, "row"))
         out.append(Line(rule, 0, "rule"))
 
 
 def layout(ops, width):
     """-> the line table. One entry per display line (2.3)."""
-    out, pending, centre, indent = [], [], 0, 0
+    out, pending, centre, indent, heading, quote = [], [], 0, 0, 0, 0
 
     def flush():
         nonlocal pending
@@ -473,11 +556,14 @@ def layout(ops, width):
         pending = []
         if not words:
             return
-        for ln in wrap(words, width - indent):
-            s = " " * indent + ln
+        left = indent + (min(4, quote) * 2)
+        if heading and not quote:
+            left = max(left, min(5, heading - 1))
+        for ln in wrap(words, max(1, width - left)):
+            s = " " * left + ln
             if centre and len(s) < width:
                 s = " " * ((width - len(ln)) // 2) + ln
-            out.append(Line(s))
+            out.append(Line(s, left, "heading" if heading else "text"))
 
     for op in ops:
         k = op[0]
@@ -494,14 +580,16 @@ def layout(ops, width):
                 out.append(Line("", 0, "blank"))
         elif k == "HEAD":
             flush()
-            if out:
-                out.append(Line("", 0, "blank"))
+            heading = op[1]
         elif k == "HR":
             flush()
             out.append(Line("-" * width, 0, "rule"))
         elif k == "LI":
             flush()
             pending.append(" * ")
+        elif k == "QUOTE":
+            flush()
+            quote = min(4, quote + (1 if op[1] else -1))
         elif k == "CENTRE":
             flush()
             centre = op[1]
@@ -591,6 +679,22 @@ def self_check():
         print("selfcheck %s  78-cell row: model %.1f ms vs measured %.1f ms  (%.1f%%) %s"
               % (flag, got / 1000.0, measured / 1000.0, 100 * err, ad))
         ok = ok and err < 0.02
+    sample = (b"<table><tr><td>aaa</td><td align=center>mid</td>"
+              b"<td align=right>r</td></tr><tr><td colspan=2>two</td>"
+              b"<td>end</td></tr></table><input type=password value=secret>"
+              b"<textarea>private</textarea>")
+    ops, _ = parse(sample)
+    ops, _, _, _ = simplify(ops)
+    lines = layout(ops, 40)
+    rows = [line.cells for line in lines if line.kind == "row"]
+    checks = ("| aaa| mid|   r|" in rows and
+              "| two     | end|" in rows and
+              any("[unsupported]" in line.cells for line in lines) and
+              not any("secret" in line.cells or "private" in line.cells
+                      for line in lines))
+    print("selfcheck %s  1.4 colspan/alignment and unsupported controls"
+          % ("ok " if checks else "OFF"))
+    ok = ok and checks
     return ok
 
 

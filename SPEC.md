@@ -2077,7 +2077,7 @@ first.**
 |---|---|---:|
 | `.modc` | the header and the SETTINGS CORE: `modc_e_sc` and the `sc_m_*` gestures (§26.8.7), the SYSTEM.CFG writer (`CFG_DATA`/`CFG_SAVE cpc`, `cp_cfg_save`), `cp_flush_x`, `cp_flush_cfg`, `cp_toast`/`sc_m_say`, and the image's epilogue ladder | `MODS_SIZE` = 2,447 bytes, 5 sectors |
 | `.modu` | the panel: every page, `cp_flush_close_x`'s RTC half, `clockw.inc` and shutdown (§12.3.2) | the rest, 11,119 in all |
-| `.modcb` | the writer's file buffer, `cpc_buf` (`CFG_FBUF`, 131 bytes): BSS, in the claim's KB rounding and not in the file | — |
+| `.modcb` | the writer's file buffer, `cpc_buf` (`CFG_FBUF`, 163 bytes): BSS, in the claim's KB rounding and not in the file | — |
 
 `.modu` is `follows=.modc vfollows=.modc align=1`, so the two halves are
 one image at one set of offsets, and the panel reaches the core with a near
@@ -20678,7 +20678,7 @@ zeroes it) and **45** of `.cold` - which §11.103.10's cut moved into
 - **A future window cycler skips `WF_DESK`.** There is none in the tree; Close
   Window never reaches a widget because `wm_top` does not.
 
-#### 11.103.9 The two cells: `OSAPI_WM_DESK` (0x0473) and `OSAPI_GFX_DESK` (0x0479)
+#### 11.103.9 The two cells: `OSAPI_WM_DESK` (0x047B) and `OSAPI_GFX_DESK` (0x0481)
 
 **`OSAPI_WM_DESK`**, a rare cell (`OSAPI_RCSLOT`) whose body is a `.cold`
 QUERY thunk in front of `DESK.DRV`'s `dkd_verb` (§11.103.10).
@@ -40866,13 +40866,15 @@ cells **inline** and took the table to **1,093 bytes**: 43 plain SLOTs and 11
 X cells hot, 95 rare cells, 15 inline cells, six jump cells and the far cell.
 `OSAPI_FILE_READ_SEQ` (18.4.8) and `OSAPI_FSX_SPK` (34.11) have since added a
 96th and a 97th rare cell, **1,105 bytes**; `OSAPI_FILE_WRITE_SEQ` (18.4.9) a
-98th, 1,111; `OSAPI_FERR_TEXT` (18.4.11, at `0x0467`) a 99th, 1,117; and
-`OSAPI_CLK_GET` (§37.96, at `0x046D`) a 100th, 1,123 bytes. The desk layer
-(§11.103.9) appends a 101st and a 102nd - `OSAPI_WM_DESK` at `0x0473` (a cold
-body, `kern_small`'s the `mod_gone` refusal) and `OSAPI_GFX_DESK` at `0x0479`
-(`thm_desk`, which IS `gfx_fill_gray` on `kern_small`) - **1,135 bytes**,
+98th, 1,111; `OSAPI_FERR_TEXT` (18.4.11, at `0x0467`) a 99th, 1,117;
+`OSAPI_THM_SET` (§76.14.14, at `0x046D`) a sixteenth INLINE cell, of 8 bytes,
+1,125; and `OSAPI_CLK_GET` (§37.96, at `0x0475`) a 100th rare cell, 1,131
+bytes. The desk layer (§11.103.9) appends a 101st and a 102nd -
+`OSAPI_WM_DESK` at `0x047B` (a cold body, `kern_small`'s the `mod_gone`
+refusal) and `OSAPI_GFX_DESK` at `0x0481` (`thm_desk`, which IS
+`gfx_fill_gray` on `kern_small`) - **1,143 bytes**,
 which is what `kernel.asm`'s length guard asserts from the counts.
-`osapi_table_end` is `0x047F`.
+`osapi_table_end` is `0x0487`.
 Those counts are the tree it landed on, not a contract; `t_api_abi` prints
 the span it walked.
 
@@ -67090,7 +67092,7 @@ the menu bar's clock is the kernel's to draw, and the `'CK'` debug block
 So one RARE cell, appended at the end of the table on both kernels:
 
 ```
-OSAPI_CLK_GET   KERNEL_SEG:0x046D
+OSAPI_CLK_GET   KERNEL_SEG:0x0475
   in   nothing
   out  CX = the year (1980..2099)    DH = the month (1..12)   DL = the day
        BH = the hour (0..23)         BL = the minute          AH = the second
@@ -67112,7 +67114,7 @@ OSAPI_CLK_GET   KERNEL_SEG:0x046D
 - **kern_small has the cell and the body**, its `clk_rtc` is 0 (§37.0.1's PIT
   clock), so a package there can say "clock not set".
 - A package that calls it **ships beside its own kernel**: an older kernel at
-  the same `PKG_FMT` has no 0x046D (§20.2.0.1's open gap), which is why the
+  the same `PKG_FMT` has no 0x0475 (§20.2.0.1's open gap), which is why the
   Desk Calendar is not offered on The Wire (§110.8).
 
 ## 38. fdlg.inc — the Standard File dialog
@@ -90170,7 +90172,9 @@ the wrong settings. Every value now travels with a key that says what it is.
 the boot overlay and read by nothing resident. `FD` is §31.14's Floppy page, two bytes at ver 1 on `kern_big` — the four
 drives' overrides and the read bound, one record so the page costs one key
 entry and one header. `DK` is the dock's one byte (§30.5), a key of its own at ver 1, on `kern_big`
-only. Seven keys at the time this paragraph was written, 81 bytes: `DW` driver-wanted bitmap, `SR` sound route, `CH`
+only. `TP` is §76.14.14's Color preset, seven bytes at ver 1 on both kernels -
+the preset's number, `[thm_cstrp]`'s title style and the five colours it puts
+in the Color row - one record so all three cost one header. Seven keys at the time this paragraph was written, 81 bytes: `DW` driver-wanted bitmap, `SR` sound route, `CH`
 clock 12/24, `CS` clock seconds, `SM` scheduler mode, and
 `HD` — a **driver's** own settings, whose contents the kernel does not know
 (§51.9). They are ASCII so a hex dump of the file reads as the list of
@@ -114589,6 +114593,119 @@ What a page holds while it is on screen, `eth.htm` (442 bytes) off the wire:
 links 1) - and the peak DURING a fetch is the 32KB source alone. A file load
 saves only the link arena's difference, its other three sizes being unchanged.
 
+### 71.15 Bounded compatibility for retro pages
+
+The Browser identifies itself as **os8088 Browser 1.4**. Its compatibility
+work stays within the existing page and link claims. HTTP redirects are limited
+to three hops, and a redirect is decided by the worker at the end of the drain,
+BEFORE the page buffers are claimed (71.14's hand-over): the source claim is
+still at its ceiling and nothing else has been claimed, so a hop leaks nothing,
+the target is not drained into a buffer cut to the redirect body's size, and a
+redirect with an empty body is followed rather than reported as an empty
+reply; forms retain a fixed maximum of four forms and twelve controls;
+images contribute only their alternate text; and a frameset is fetched child
+by child and appended into one page. URL, host, path, page, and link
+storage remain bounded. When a bound is reached, the Browser truncates or
+refuses the affected operation visibly rather than allocating without limit.
+
+**A frameset's children are drained into page buffers RE-CLAIMED AT THE
+CEILING.** The frameset page is parsed like any other and its `<frame src>`s
+are queued in the link arena; but 71.14's hand-over cut the source to the
+frameset's own size and claimed the document from it, and a child drained into
+those was cut at a kilobyte. So instead of fetching the first child the worker
+posts `[br_fin]` = 4 and a wake, and the UI task re-claims (`br_frameclaim`):
+the document and the line table are freed, the source is regrown to
+`BR_MAXKB` (or, when the heap cannot grow it where it stands, freed and
+claimed again at the ceiling - the frameset's source is parsed and not needed
+again), the two are claimed again from the ceiling (`br_claimpage`, the head
+of `br_claimrest`), and **the link arena is kept**, because the queued srcs and
+each child's base URL live in it. The UI task answers `[br_fin]` = 5 and the
+worker fetches the first child; a refusal is `Out of memory`. The hand-over
+byte's values are therefore 0 draining, 1 the page is in and the UI task owes
+its claims, 2 claimed, 3 parsing, 4 the UI task owes a frameset's re-claim, 5
+re-claimed. A frameset costs what the largest page costs - 32 KB of source,
+the document claim sized from `BR_MAXKB` through `BR_DOCMUL`/`BR_DOCSLK` and
+capped at `BR_DOCMAX` (63 KB), `BR_LINEKB` (8 KB) of lines - plus the frameset
+page's own link arena, min(frameset KB, `BR_LINKKB` = 6) KB, which bounds the
+children's links together: `Links limited` is the visible refusal. Each child
+resolves into the location bar and `br_host`/`br_path`; when the last child is
+in, or one is refused, the document is ended (an open frame table closed) and
+the frameset's own title, host, path and bar text are restored
+(`br_frameclose`), so Reload re-fetches the frameset and a top-level relative
+link resolves against it. File > Save As after a frameset writes the source
+claim, which holds the LAST child's bytes.
+
+### 71.16 Browser 1.3 — text formatting on the cell font
+
+The 1.3 renderer stays on the existing 8×8 cell font and linear document
+stream. `<b>`/`<strong>` use a one-pixel double-strike; `<i>`/`<em>` shear the
+existing glyph bitmap by at most two pixels; and `<u>` uses the existing row
+ink pass. Styled rows are composed from `OSAPI_FONT_GLYPHS` through one fixed
+`BR_MAXCOL`-byte scanline buffer and eight one-row `OSAPI_GFX_BLIT1` calls.
+The band is composed with a set bit as ink and handed over under an ink/paper
+pen; on a 1bpp adapter the pen is not read (SPEC.md 5.4.2.2) and a set bit is
+a lit pixel, so there the band is complemented before each blit. Layout
+reserves the scroll bar plus a two-cell margin at the right edge.
+Wrapping also subtracts each
+line's active heading, list, or quote indent before measuring its text.
+Unstyled rows retain the single opaque `OSAPI_FONT_RUN` path. This adds no font
+resource, framebuffer, dynamic allocation, or per-character drawing call. If
+the blit is refused by a small-kernel configuration, the row falls back to the
+normal cell font. Formatting markers are zero-width document controls, so
+wrapping, scrolling, links, and hit-testing continue to use the same bounded
+path.
+
+Headings remain block elements, gain a level-dependent left indent, and are
+underlined through the Browser's existing per-row ink pass. Unordered and
+ordered list items use the same compact `*` bullet and hanging indent. A
+blockquote receives a two-cell indent, including wrapped lines. `<pre>` keeps
+its existing literal spaces and line breaks and does not wrap. Paragraphs
+retain one blank line between nonempty blocks; duplicate empty breaks are
+coalesced. Unsupported styling such as CSS, colors, and font sizes remains
+ignored, and application content is never rewritten outside the Browser's
+own document buffer.
+
+### 71.17 Browser 1.4 — table spans, cell alignment and form POST
+
+The table renderer extends its bounded ASCII compositor. A `<td>` or `<th>`
+may span one through eight logical columns with `colspan`. Missing, malformed,
+zero or over-limit values fall back to one column. The cell's measured width is
+the sum of the spanned columns plus the existing separators. `align=left`,
+`align=center`, `align=middle` and `align=right` affect text in that cell; left
+is the default and `middle` aliases `center`. The eight-column limit,
+wrapping, link hit-testing and row bounds remain unchanged. Width, colors, CSS,
+borders and spacing remain ignored presentation hints.
+
+Forms retain their fixed limits and successful-control rules. `GET` remains
+the default; `method=post` sends the existing bounded, percent-encoded pairs
+as an `application/x-www-form-urlencoded` request body. The resolved `action`
+is the request target; submitted pairs are not appended to its URL. The
+request includes an exact `Content-Length` and uses the existing HTTP/1.0
+close-delimited flow. A `301`, `302` or `303` answering a POST is followed as a
+GET with no body, which is what a post-redirect-get server expects; `307` and
+`308` keep the method and the body, which is what those two codes are for.
+The encoded body is limited to 159 bytes and appended
+to the existing 512-byte request staging area; no second body buffer, dynamic
+allocation, framebuffer or kernel API is introduced. Oversized bodies are
+refused visibly, never truncated. Unchecked controls are omitted; checked choices and selected
+options remain successful controls. Only the CLICKED submit button is a
+successful control: a named `<input type=submit>` is not baked into the form's
+hidden pairs at parse time but keeps its tag's span in the retained source
+(`SUB_ASTART`/`SUB_AEND`, the submit record being `BR_SUBSZ` = 9 bytes), and
+`br_submit` encodes that one button's `name=value` after the fields, so a
+form with two buttons (Search / I'm Feeling Lucky, Login / Register) tells the
+server which was pressed. Return in a focused text field submits the field's
+own form with no button pair.
+
+Password and file controls remain visibly unsupported. With no TLS, the
+browser must not show a password control that could be submitted in plaintext.
+`<textarea>` remains outside the single-line control model and is shown as
+unsupported, while its source contents are skipped as control content rather
+than rendered as page text. The reference renderer and guest share fixtures
+for spans, alignment and unsupported controls; a local HTTP test checks the
+POST request line, headers, exact length and body. Existing GET, formatting
+and frame-navigation behavior remains covered.
+
 ### 72.1 What the packages did have to change, which is one question
 
 The claim "without one byte changing" is not quite true and the exact shortfall
@@ -119920,15 +120037,15 @@ back stale pixels.
 
 #### 76.14.10 The Theme page
 
-A fourth radio, **Windows**, under Color at pane y 66; the animation group
-moves down 16; and the **Screen Saver** button moves to the right-hand column
-beside the animation radios, whose labels are short. Its rows are the Off
-radio's rows too, so `cp_thm_click` claims the button only INSIDE its
-rectangle and sends any other press to the groups. The control ids are 1-4
-the theme rows, 5-6 the animation pair, 7 the button. Windows is never
-greyed on kern_big: whether `WIN95.DRV` can be read is a mount and a search,
-and §47 rule 3's only honest test is doing it — so a refusal is a toast and
-the radios redraw to what is live.
+Three theme radios - **Bright**, **Dark**, **Color** - with **Customize...**
+on the Color row (76.14.14), then the animation pair, and the **Screen
+Saver** button centred under them at pane y 110. **Windows is not a radio**:
+it is a title style of Color, chosen in Customize (76.14.13), so its row went
+and the animation group moved up to pane y 80. The control ids are 1-3 the
+theme rows, 4-5 the animation pair, 6 the Screen Saver button and 7
+Customize. Customize is live only while Color or Windows is (and Color is
+offered at all, 76.12.1); a Windows that `WIN95.DRV` cannot be read for is
+refused at the click that asked for it, with a toast.
 
 #### 76.14.11 Measured
 
@@ -119999,6 +120116,117 @@ re-deriving it:
   between pull-downs (§76.14.8 handles Esc, Up, Down and Enter only).
 - **Phase 1's own leftovers** - a bold caption, an ellipsis on a cut caption,
   a 3D window frame, and a bevelled pull-down with etched separators.
+
+#### 76.14.13 Title styles: Solid, Stripes, Windows, and 95
+
+Customize has a **Title bar style** group under the presets - **Solid**,
+**Stripes**, **Windows** - and a **95** box beside Windows. Solid and Stripes
+are the existing `wm_draw_title` bar without or with its pinstripes; no
+second renderer, framebuffer or palette change. **Windows is §76.14's chrome
+wearing the selected preset's colours**: its title pair and its buttons take
+the Color row (76.14.14), and 95 puts back main's original button face and
+bevel (`thm_bgc` face, black glyphs, white lit edge) while keeping the
+preset's bar. 95 is disabled unless Windows is chosen. Bright and Dark keep
+their striped rows whatever this says; inactive bars stay solid.
+
+`[thm_cstrp]` is the one resident byte: bit 0 stripes, bit 1 95, bit 2 the
+Windows style. `thm_set` promotes Color to Windows when bit 2 is set - so the
+saved theme stays Color and the style rides beside it - and clears bit 2
+when `WIN95.DRV` cannot be read, so an unavailable style is never saved. The
+settings writer saves a Windows reached through the style as Color for the
+same reason. A preset change keeps every bit. The byte persists as byte 1 of
+the `TP` record (76.14.14); there is no API cell for it.
+
+Apply keeps the live preview; Cancel, Escape and the close box restore the
+opening preset, style and kind. The window stays within EGA's 640x350
+desktop.
+
+#### 76.14.14 Color presets: one Color row, no preset table
+
+Eight presets on the fixed EGA palette: no DAC or attribute register is
+touched, every value is a standard index, and Color - so every preset - needs
+a four-plane primary, VGA (mode 12h) or EGA (mode 10h). On CGA and Hercules
+Color is refused and Customize greys with it (76.12.1). Bright, Dark and the
+original Color appearance (Classic, preset 0) are unchanged.
+
+**IT COSTS NO RESIDENT RUNG.** The kernel carries ONE Color row - the one it
+always had - and no preset table, no preset byte and no setter. A preset is a
+row of `drivers/thmpal/thmrows.inc` copied over that Color row, and what
+persists it is the row itself. Measured against `main` before it: kern_big's
+`.text`/`.bss` grow inside the image rung's standing slack, `.cold` by
+nothing, KERN_SIZE unchanged; kern_small unchanged.
+
+| ID | Name | Desktop | Active title | Inactive title | Inactive ink | Menu XOR | Menu highlight |
+|---|---|---|---|---|---|---|---|
+| 0 | Classic | 3 | 1 | 7 | 0 | 0Fh | dark grey bar, white text |
+| 1 | Workbench | 9 | 1 | 8 | 15 | 0Eh | light blue bar, yellow text |
+| 2 | Light | 7 | 3 | 8 | 15 | 08h | white bar, dark grey text |
+| 3 | Forest | 10 | 2 | 8 | 15 | 0Fh | dark grey bar, white text |
+| 4 | Amethyst | 13 | 5 | 8 | 15 | 0Fh | dark grey bar, white text |
+| 5 | Amber | 14 | 6 | 8 | 15 | 09h | yellow bar, light blue text |
+| 6 | Midnight | 1 | 8 | 7 | 0 | 07h | black bar, light grey text |
+| 7 | Desert | 6 | 4 | 8 | 15 | 0Fh | dark grey bar, white text |
+
+All presets use menu background 7, ink 0, disabled ink 8 and active title
+ink 15. **Window content is not themeable**: white paper and black text in
+every window the kernel draws, and an application's own colours untouched.
+
+**The row.** The live block and every `thm_tab` row are ten bytes: menu bg,
+ink, disabled ink, active title bg and ink, desktop, stripes, inactive title
+bg and ink, and the menu XOR mask. `thm_tab` has four rows - Bright, Dark,
+Color (`THM_CROW`, the one a preset lands in) and Windows-on-1bpp; Windows
+on a colour adapter wears the Color row (76.14.13).
+
+**The open menu's highlight is still one XOR.** `vga_xor_fill_vram` XORs the
+item's cell with the row's mask through the Graphics Controller's Set/Reset:
+one call per move, its own undo, never a second write. On grey (7) paper and
+black (0) ink a mask `m` gives a `7 xor m` bar with `m`-coloured text, so the
+bar and its text cannot be chosen apart - which is why Forest, Amethyst and
+Desert keep the dark-grey bar. `menu_drop` takes the mask once per menu
+(`[menu_xorm]`) so a theme change while a menu is down cannot make the
+off-XOR disagree with the on. 1bpp adapters invert as before, and every other
+XOR fill keeps 0Fh.
+
+**The chooser.** `THMPAL.DRV` (79.2's species) holds the rows and names.
+`CTRL.DRV` loads it - `cp_thmv_open`, in the panel's own image, so nothing
+of the loader is resident - and checks the private ABI word at header +10,
+now 4. OPEN is handed `SI` = the Color row, `DI` = `drv_cfg+CFG_THMP`, `DX` =
+`thm_cstrp`'s address and `CH` = `[thm_kind]`. Every change installs the row,
+the preset's number and the style bits, and makes ONE `OSAPI_THM_SET` with
+Color. The opening state is banked on a fresh open only; Cancel puts it back
+and sets nothing that did not change, and a kind that cannot come back
+(Windows whose `WIN95.DRV` has gone) is toasted.
+
+`OSAPI_THM_SET` (0x046D, after `OSAPI_FERR_TEXT`) is the one public cell:
+AL = 0..3 adopts a kind, posts the repaint and owes `SYSTEM.CFG` a write; CF
+= 1 when Windows was refused. It may read a disk, so it is for the UI task.
+**A change of kind through it drops every window's bank** (`wm_su_drop_all`):
+the Theme page draws its radios from `[thm_kind]`, and a panel behind the
+chooser is repainted from its bank (11.96.4) rather than its `W_PAINT` - so
+the bank would show the kind before the change, which is §11.96.1's promise
+broken from outside the window. A preview within one kind keeps every bank.
+
+**Persistence is the row.** One version-1 `TP` record of seven bytes,
+appended after `EP`: the preset's number, `[thm_cstrp]`, and the five colours
+a preset varies (active title, desktop, inactive pair, XOR mask). The number
+is read only by `THMPAL.DRV`. The other six are in `_map`, byte for byte onto
+`[thm_cstrp]` and the Color row, so the boot restores a preset with the loop
+that restores every other setting and needs no table - which is also what the
+boot blob had room for (2.9.14). kern_small carries the record untouched.
+
+**Lifetime.** `THMPAL.DRV` stays cached while the Control Panel is open. Its
+row (`thmv_row`) sits one row past `drv_tab`, outside `DRV_MAX`, so
+`drv_call`'s one range test reaches it with no compare in `.cold`, and
+`mem_rr_tab` names its segment so a compaction can move it (66.6.3). The
+panel's close branch in `instance.inc` calls the resident `thmv_reap_x` on
+EVERY close, before and independent of the settings write: the window goes
+first, then the image.
+
+**Verification.** `tests/colorpresets_qemu.py` drives each preset through the
+chooser's own click handler and asserts the desktop, both title pairs and the
+menu bar's XOR on and off, white content, Cancel, the style group, the
+private ABI refusal, the reap on panel close and a `SYSTEM.CFG` round trip
+across a reboot.
 
 ---
 
@@ -183778,6 +184006,22 @@ number, card 2's `No appointments`) moved `DESKCAL.O88` to 16,171 bytes on
 disk inside the same clusters: the 360 KB system disk is still 343 of 354,
 the small one 296.
 
+**Re-measured on `main` at `70df8a99`, NOT blessed** (#249's `OSAPI_THM_SET`
+took `0x046D` as an 8-byte inline cell, so the DIA cells moved to `0x0475` /
+`0x047B` / `0x0481`, §20.3). Against main's own kernels:
+
+| | `.text` | `.cold` | `.bss` | rungs left after (main's) | footprint |
+|---|---:|---:|---:|---|---|
+| kern_big | **+187** | **+204** | **+16** | image 318 (**9**) - **the IMAGE rung CROSSED, 96 -> 97**; cold 308 (0) - the accepted step | 98,816 -> **99,840**, +1,024, 2 steps spare |
+| kern_emu | +187 | +204 | +16 | image 59 (262), cold 308 (0) - the accepted step only | 99,328 -> 99,840, +512, 2 steps spare |
+| kern_small | +18 | +32 | 0 | image 373 (391), cold 54 (86) - none crossed | 62,464, unchanged |
+
+#249's own `.text` (+195 against `b47de145`) left kern_big's image rung at 9
+bytes, so the DIA's resident `.text` + `.bss` (+203) crosses it: a second
+step beyond the accepted one, and the owner's decision. 194 bytes off kern_big's
+`.text` + `.bss` un-cross it. The 360 KB system disk is 346 of 354 clusters
+(main's alone: 325).
+
 **The disks.** `SYSTEM\DIA\` costs a folder's cluster and `DESKCAL.O88` five
 more. Measured with `os88disk.py --verify`: the 360 KB system disk went from
 **313 to 319 of 354 clusters** and the small 360 KB one from 262 to 268; the
@@ -183867,7 +184111,7 @@ no alert.
   (§110.7, `clk_rtc` = 0 there), so every launch with an armed reminder
   still to come says `No RTC - check the time`, whether or not the user set
   the clock this session - the cell cannot say which (§110.3).
-- **Not on The Wire**: a DIA calls `OSAPI_CLK_GET` (0x046D), which an older
+- **Not on The Wire**: a DIA calls `OSAPI_CLK_GET` (0x0475), which an older
   kernel at the same `PKG_FMT` does not have — the gap §20.2.0.1 names — so it
   ships only beside its own kernel until a "highest cell used" fence exists.
 
@@ -184700,7 +184944,7 @@ the rung (KERN_SIZE +512, one footprint step).
 
 The kernel half, exactly:
 
-- **K1 `OSAPI_CLK_GET`** (§37, §20.3), a rare cell at `0x046D` on both kernels.
+- **K1 `OSAPI_CLK_GET`** (§37, §20.3), a rare cell at `0x0475` on both kernels.
 - **K2** `SC_R_DIA` = 3 and `SC_DIA` = `'D'` (kernel) mirrored as
   `OSAPI_DI_DIA` and `OSAPI_DIA_MARK` (SDK); `t_mirror` holds the pairs.
 - **K3** `desk_live` answers "not live" for a DIA row (§26.9).

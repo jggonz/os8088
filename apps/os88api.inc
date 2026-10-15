@@ -334,9 +334,9 @@ ICON_SOLID  equ 0                ; the record's first byte for a picture whose
 ; --- the date and time of day (SPEC.md 37.96) --------------------------------
 ; The wall clock the menu bar shows, as fields. Both kernels. A package that
 ; calls it ships beside its own kernel: an older one at the same PKG_FMT has no
-; cell at 0x046D (SPEC.md 20.2.0.1's open gap), so such a package is not
+; cell at 0x0475 (SPEC.md 20.2.0.1's open gap), so such a package is not
 ; offered on The Wire.
-%define OSAPI_CLK_GET       KERNEL_SEG:0x046D   ; out CX = the year (1980..2099),
+%define OSAPI_CLK_GET       KERNEL_SEG:0x0475   ; out CX = the year (1980..2099),
                                  ; DH = the month (1..12), DL = the day,
                                  ; BH = the hour (0..23), BL = the minute,
                                  ; AH = the second; AL bit 0 = a hardware RTC
@@ -354,7 +354,7 @@ ICON_SOLID  equ 0                ; the record's first byte for a picture whose
 ; bar, frame, shadow or dock tile, the bar and the keys only while it was the
 ; last thing pressed. apps/os88dia.inc is the way to use these; a package
 ; that calls either ships beside its own kernel (SPEC.md 110.8).
-%define OSAPI_WM_DESK       KERNEL_SEG:0x0473   ; AL = 0 QUERY: CF=0 this
+%define OSAPI_WM_DESK       KERNEL_SEG:0x047B   ; AL = 0 QUERY: CF=0 this
                                  ; kernel has the layer (kern_small: CF=1, and
                                  ; every verb refuses there). QUERY IS NOT
                                  ; FREE: it LOADS DESK.DRV off the system disk
@@ -403,7 +403,7 @@ ICON_SOLID  equ 0                ; the record's first byte for a picture whose
                                  ; refused; every register preserved. NEVER
                                  ; minimize or fullscreen a desk window: it
                                  ; has no tile to come back by
-%define OSAPI_GFX_DESK      KERNEL_SEG:0x0479   ; AX,BX = x1,y1  CX,DX = x2,y2
+%define OSAPI_GFX_DESK      KERNEL_SEG:0x0481   ; AX,BX = x1,y1  CX,DX = x2,y2
                                  ; (inclusive), lock held (W_PAINT): lay the
                                  ; DESKTOP'S OWN GROUND there - the theme's,
                                  ; Bright's dither phased on the screen as the
@@ -5627,3 +5627,20 @@ FSIF_BANKED equ 4
     db %2
     times 8 - %%slen db ' '
 %endmacro
+
+; --- THE THEME (SPEC.md 76, 76.14.14) --------------------------------------
+%define OSAPI_THM_SET        KERNEL_SEG:0x046D   ; AL = THM_BRIGHT(0)/DARK(1)/
+                                 ; COLOR(2)/WIN(3): adopts it as the system
+                                 ; theme, repaints the desktop's chrome and
+                                 ; owes SYSTEM.CFG the change. An unknown
+                                 ; value, or COLOR on an adapter with no
+                                 ; colour in it, is Bright. WIN reads
+                                 ; WIN95.DRV off the system disk: out CF = 1
+                                 ; when it could not, and Color (or Bright on
+                                 ; 1bpp) stands instead. It may read a disk,
+                                 ; so call it from the UI task, never a worker
+                                 ; (SPEC.md 20.6). Which of Color's presets
+                                 ; shows, and its title style, are the user's,
+                                 ; in the Control Panel - there is no call for
+                                 ; either. kern_small has no theme to set and
+                                 ; does nothing
