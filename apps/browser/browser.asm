@@ -9033,10 +9033,12 @@ br_lnkopen  equ br_lnkseg + 6         ; word: the link the PARSE is inside,
 br_lnkst    equ br_lnkseg + 8         ; word: ...and what it was when the line
                                       ; being laid out began (br_emitline)
 br_upos     equ br_lnkseg + 10        ; word: br_resolve's write cursor.
-                                      ; br_lnkhit (written once, read never)
-                                      ; and br_lnkoff (BR_LNKMAX words, an
-                                      ; index the arena already is - see
-                                      ; br_follow) were here
+                                      ; br_lnkhit and br_lnkoff were here;
+                                      ; br_lnkoff is back (after the frame
+                                      ; metadata below) as a BR_LNKMAX-word
+                                      ; table, because frames store resolved
+                                      ; base URLs between hrefs and the
+                                      ; arena is no longer its own index
 br_lnkcell  equ br_upos + 2           ; byte: br_build's running state
 br_lmark    equ br_lnkcell + 1        ; BR_MAXCOL bytes: 1 = this band cell
                                       ; is inside a link, for the underline

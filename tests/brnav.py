@@ -68,11 +68,22 @@ URL_A = "http://10.0.2.2:%d/a.htm" % PORT
 URL_SLOW = "http://10.0.2.2:%d/slow.htm" % PORT
 URL_B = "http://10.0.2.2:%d/b.htm" % PORT
 URL_POST = "http://10.0.2.2:%d/postform.htm" % PORT
+URL_R301 = "http://10.0.2.2:%d/r301.htm" % PORT
+URL_R302 = "http://10.0.2.2:%d/r302.htm" % PORT
+URL_POST303 = "http://10.0.2.2:%d/postform303.htm" % PORT
 SAVED = "SAVED.HTM"
 PAGE_POST = (b"<html><body><form action=\"/posted\" method=post>"
              b"<input type=text name=q size=12>"
              b"<input type=hidden name=token value=\"a b\">"
              b"<input type=submit value=Send></form></body></html>")
+# ...and the same form answered the way a post-redirect-get server answers it:
+# 303 to the results page, which the browser must then GET (SPEC.md 71.17)
+PAGE_POST303 = PAGE_POST.replace(b"/posted", b"/posted303")
+# The 301's body is what Apache sends with a redirect - a short page a browser
+# that stopped at the redirect would DISPLAY; the 302 has no body at all, which
+# is nginx's `return 302` and every add-the-slash redirect (SPEC.md 71.15)
+PAGE_R301 = (b"<html><head><title>301 Moved</title></head><body>"
+             b"<p>Moved <a href=\"/a.htm\">here</a>.</p></body></html>\r\n")
 
 
 class TwoPages(threading.Thread):
@@ -127,11 +138,22 @@ class TwoPages(threading.Thread):
                                      daemon=True).start()
                     c = None                    # ...the thread owns it now
                     continue
-                if first.startswith(b"POST /posted "):
+                status = b"200 OK"
+                extra = b""
+                if first.startswith(b"POST /posted303 "):
+                    self.posts.append(req.decode("latin-1", "replace"))
+                    status, extra, body = b"303 See Other", b"Location: /a.htm\r\n", b""
+                elif first.startswith(b"POST /posted "):
                     self.posts.append(req.decode("latin-1", "replace"))
                     body = PAGE_A
+                elif b"/postform303.htm" in first:
+                    body = PAGE_POST303
                 elif b"/postform.htm" in first:
                     body = PAGE_POST
+                elif b"/r301.htm" in first:
+                    status, extra, body = b"301 Moved Permanently", b"Location: /a.htm\r\n", PAGE_R301
+                elif b"/r302.htm" in first:
+                    status, extra, body = b"302 Found", b"Location: /b.htm\r\n", b""
                 elif b"/f.htm" in first or first.startswith(b"GET /?"):
                     body = PAGE_F
                 elif b"/b.htm" in first:
@@ -140,8 +162,9 @@ class TwoPages(threading.Thread):
                     body = PAGE_A
                 self.log.append(first.decode("latin-1", "replace"))
                 self.heads.append(req.decode("latin-1", "replace"))
-                c.sendall(b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n"
-                          b"Content-Length: %d\r\n\r\n" % len(body) + body)
+                c.sendall(b"HTTP/1.0 " + status + b"\r\nContent-Type: text/html\r\n"
+                          + extra
+                          + b"Content-Length: %d\r\n\r\n" % len(body) + body)
             except OSError:
                 pass
             finally:
@@ -639,6 +662,89 @@ def main():
     else:
         fails.append("POST form page produced no editable text field")
 
+    # --- 7b: REDIRECTS ARE FOLLOWED, and before the hand-over (SPEC.md 71.15)
+    # The worker decides a 301/302/303/307/308 at the end of the drain, while
+    # the source is still at its ceiling and nothing else is claimed. Three
+    # shapes: a 302 with NO body (which used to be `Empty reply`), a 301 with
+    # Apache's short body (which used to be drained into a 1 KB source and
+    # leak the page claims), and a POST answered 303 (which used to be
+    # re-POSTed to the Location).
+    def title():
+        return (bytes(m.readseg(pseg, sy["br_ptitle"], 32)).split(b"\0")[0]
+                .decode("latin-1"))
+
+    def bar_text():
+        return (bytes(m.readseg(pseg, sy["br_ubuf"], 160)).split(b"\0")[0]
+                .decode("latin-1"))
+
+    before = len(srv.log)
+    fetch(URL_R302)
+    st = wait_done("302 with an empty body")
+    print("after r302: state %d, title %r, requests %r"
+          % (st, title(), srv.log[before:]))
+    if st != 6 or title() != "Page Beta":
+        fails.append("a 302 with Content-Length: 0 did not land on Page Beta "
+                     "(state %d, title %r) - an empty redirect body was "
+                     "`Empty reply` and never followed" % (st, title()))
+    if not srv.log or "/b.htm" not in srv.log[-1]:
+        fails.append("the 302 was not followed to /b.htm: %r" % (srv.log[-1:],))
+
+    before = len(srv.log)
+    fetch(URL_R301)
+    st = wait_done("301 with a body")
+    ln_len = u16(m.readseg(pseg, sy["br_loc"] + 12, 2))
+    print("after r301: state %d, title %r, bar %r (LN_LEN %d), requests %r"
+          % (st, title(), bar_text(), ln_len, srv.log[before:]))
+    if st != 6 or title() != "Page Alpha":
+        fails.append("a 301 with a body did not land on Page Alpha (state %d, "
+                     "title %r)" % (st, title()))
+    if bar_text() != URL_A:
+        fails.append("after the 301 the location bar holds %r, not the page "
+                     "it landed on %r" % (bar_text(), URL_A))
+    if ln_len != len(URL_A):
+        fails.append("the bar's LN_LEN is %d for a %d-byte URL - the worker "
+                     "rewrote br_ubuf without os88line_resync, so the bar "
+                     "draws the OLD length and a keystroke lands at the stale "
+                     "caret" % (ln_len, len(URL_A)))
+    if not srv.log or "/a.htm" not in srv.log[-1]:
+        fails.append("the 301 was not followed to /a.htm: %r" % (srv.log[-1:],))
+
+    fetch(URL_POST303)
+    wait_done("POST 303 form page")
+    if rb("br_fn"):
+        fofs = u16(m.readseg(pseg, sy["br_flds"], 2))
+        err = click_offset(fofs)
+        if err:
+            fails.append("POST 303 form field: " + err)
+        else:
+            m_type("os8088")
+            sub0 = rw("br_subs")
+            before = len(srv.log)
+            err = click_offset(sub0 + 2)
+            if err:
+                fails.append("POST 303 form submit: " + err)
+            else:
+                st = wait_done("POST answered 303")
+                seen = srv.log[before:]
+                print("  after the 303: state %d, title %r, requests %r"
+                      % (st, title(), seen))
+                posts = [r for r in seen if r.startswith("POST ")]
+                gets = [r for r in seen if r.startswith("GET /a.htm ")]
+                if len(posts) != 1 or not posts[0].startswith("POST /posted303 "):
+                    fails.append("a POST answered 303 must be POSTed ONCE and "
+                                 "then fetched as a GET; the server saw %r"
+                                 % seen)
+                if not gets or seen.index(gets[0]) < seen.index(posts[0]):
+                    fails.append("the 303's Location was not fetched with a "
+                                 "GET after the POST: %r - a double submission "
+                                 "or a 405 on every post-redirect-get form"
+                                 % seen)
+                if st != 6 or title() != "Page Alpha":
+                    fails.append("the 303 did not land on Page Alpha (state "
+                                 "%d, title %r)" % (st, title()))
+    else:
+        fails.append("POST 303 form page produced no editable text field")
+
     # --- 8: Save As ---------------------------------------------------------
     if not rw("br_srcseg"):
         fails.append("the source was freed after the parse, so Save As has "
@@ -697,8 +803,8 @@ def main():
         # the 8.3 directory entry is 'SAVED   HTM'
         if b"SAVED   HTM" not in raw:
             fails.append("%s is not in the apps image's directory" % SAVED)
-    # ...the page CURRENTLY loaded, which is PAGE_A - the server's answer to
-    # the POST in step 7 - and not the FrogFind result or PAGE_B. Assert
+    # ...the page CURRENTLY loaded, which is PAGE_A - where the 303 in step
+    # 7b landed - and not the FrogFind result or PAGE_B. Assert
     # against whatever was last served, or this reads as a broken Save As
     # every time a fetch is added ahead of it. And assert a string NO FIXTURE
     # on the disk carries: "FrogFind!" is in FFHOME.HTM, which is on

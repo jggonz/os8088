@@ -113743,9 +113743,14 @@ saves only the link arena's difference, its other three sizes being unchanged.
 
 ### 71.15 Bounded compatibility for retro pages
 
-The Browser identifies itself as **os8088 Browser 1.3**. Its compatibility
+The Browser identifies itself as **os8088 Browser 1.4**. Its compatibility
 work stays within the existing page and link claims. HTTP redirects are limited
-to three hops; forms retain a fixed maximum of four forms and twelve controls;
+to three hops, and a redirect is decided by the worker at the end of the drain,
+BEFORE the page buffers are claimed (71.14's hand-over): the source claim is
+still at its ceiling and nothing else has been claimed, so a hop leaks nothing,
+the target is not drained into a buffer cut to the redirect body's size, and a
+redirect with an empty body is followed rather than reported as an empty
+reply; forms retain a fixed maximum of four forms and twelve controls;
 images contribute only their alternate text; and framesets fetch child pages
 sequentially into the existing page buffer. URL, host, path, page, and link
 storage remain bounded. When a bound is reached, the Browser truncates or
@@ -113797,7 +113802,10 @@ the default; `method=post` sends the existing bounded, percent-encoded pairs
 as an `application/x-www-form-urlencoded` request body. The resolved `action`
 is the request target; submitted pairs are not appended to its URL. The
 request includes an exact `Content-Length` and uses the existing HTTP/1.0
-close-delimited flow. The encoded body is limited to 159 bytes and appended
+close-delimited flow. A `301`, `302` or `303` answering a POST is followed as a
+GET with no body, which is what a post-redirect-get server expects; `307` and
+`308` keep the method and the body, which is what those two codes are for.
+The encoded body is limited to 159 bytes and appended
 to the existing 512-byte request staging area; no second body buffer, dynamic
 allocation, framebuffer or kernel API is introduced. Oversized bodies are
 refused visibly, never truncated. Unchecked controls are omitted; checked choices and selected

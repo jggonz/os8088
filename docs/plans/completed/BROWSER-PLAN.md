@@ -1715,8 +1715,10 @@ The network worker now retains only a bounded `Location` header and follows at
 most three HTTP redirects. This is why a directory URL such as
 `http://m5933.net/amiga` reaches the server's `/amiga/` response rather than
 displaying its 301 body. HTTPS remains outside the machine's arithmetic budget
-and is still refused explicitly. Link storage attempts 6, 4, 2 and 1 KB in
-that order, and URL overflow is reported instead of silently sending a cut
-address. The renderer also emits `img alt` text and paragraph boundaries for
-the common HTML5 structural elements; `tools/htmsim.py` mirrors those parse
-rules.
+and is still refused explicitly. Link storage is one claim of
+min(`BR_LINKKB` = 6, source KB) KB, made by `br_claimrest` alongside the
+document and line table; when it is refused `br_lnkseg` stays 0 and the page
+renders its anchors as plain text. URL overflow is reported instead of silently
+sending a cut address. The renderer also emits `img alt` text and paragraph
+boundaries for the common HTML5 structural elements; `tools/htmsim.py` mirrors
+those parse rules.

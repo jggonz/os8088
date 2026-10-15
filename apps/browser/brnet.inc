@@ -553,12 +553,24 @@ br_nstep:
     jnz .out                        ; closing, and there is still data behind
     call br_gchk
     jc .out
-    call br_hclose                  ; **THE PAGE HAS ARRIVED, AND ITS SIZE IS
-    mov ax, [br_nlen]               ; A FACT** (SPEC.md 71.14): hand it to the
-    mov [br_srclen], ax             ; UI task, which cuts the source to it and
-    or ax, ax                       ; claims the other three buffers from it -
-    jz .empty                       ; a worker may not (SPEC.md 20.6 rule 7).
-    mov byte [br_fin], 1            ; The state stays BN_BODY, IN FLIGHT, so a
+    call br_hclose
+    mov ax, [br_code]               ; **A REDIRECT IS DECIDED HERE, BEFORE THE
+    cmp ax, 301                     ; HAND-OVER** (SPEC.md 71.15): the source
+    je .redirect                    ; is still the BR_MAXKB ceiling and nothing
+    cmp ax, 302                     ; else has been claimed, so a hop neither
+    je .redirect                    ; leaks a claim nor drains its target into
+    cmp ax, 303                     ; one cut to the redirect body's size - and
+    je .redirect                    ; a 301 with no body at all, which is what
+    cmp ax, 307                     ; most servers send, is followed rather
+    je .redirect                    ; than reported `Empty reply` below
+    cmp ax, 308
+    je .redirect
+    mov ax, [br_nlen]               ; **THE PAGE HAS ARRIVED, AND ITS SIZE IS
+    mov [br_srclen], ax             ; A FACT** (SPEC.md 71.14): hand it to the
+    or ax, ax                       ; UI task, which cuts the source to it and
+    jz .empty                       ; claims the other three buffers from it -
+    mov byte [br_fin], 1            ; a worker may not (SPEC.md 20.6 rule 7).
+                                    ; The state stays BN_BODY, IN FLIGHT, so a
 .kick:                              ; navigation in the gap drops this fetch
     mov bx, [br_win]                ; as it always did. Posted again on every
     call OSAPI_WM_WAKE              ; pass until answered: a wake into a full
@@ -582,6 +594,56 @@ br_nstep:
     call br_nshow
 .out:
     jmp br_pop7
+
+.redirect:                          ; 301/302/303/307/308, AX = the code.
+    cmp byte [br_redirurl], 0       ; Decided UNDER THE LOCK br_go runs under,
+    je .redirbad                    ; the way br_finish decides .page: a
+    cmp byte [br_redirs], 3         ; navigation that waited on it has dropped
+    jae .redirmany                  ; this fetch and owns the bar now, so the
+    inc byte [br_redirs]            ; generation is asked again before
+    cmp ax, 307                     ; br_resolve writes it. 301/302/303 after
+    jae .redirsame                  ; a POST become a GET (SPEC.md 71.17); 307
+    mov byte [br_reqpost], 0        ; and 308 keep the method, which is what
+.redirsame:                         ; they are for
+    mov si, br_redirurl
+    push ds
+    pop es                          ; br_resolve reads ES:SI...
+    call OSAPI_GFX_LOCK             ; ...and may paint its refusal (br_errst)
+    call br_gchk
+    jc .redirunlock
+    call br_resolve
+    jc .redirrefused
+    mov si, br_loc                  ; br_ubuf IS the bar's LN_BUF, so its
+    call os88line_resync            ; LN_LEN and LN_CAR follow the new text
+    mov si, br_ubuf
+    call br_split
+    jc .redirunbad
+    mov word [br_nlen], 0           ; per-fetch header state, as br_go sets it
+    mov word [br_code], 0
+    mov byte [br_trunc], 0
+    mov word [br_hcol], 0
+    mov byte [br_hstate], 0
+    mov byte [br_lstate], 0
+    mov word [br_redirlen], 0
+    mov byte [br_redirurl], 0
+    mov byte [br_nstate], BN_OPEN   ; ...and the source claim stands at its
+.redirunlock:                       ; ceiling for the target
+    call OSAPI_GFX_UNLOCK
+    jmp .out
+.redirrefused:                      ; https: and too-long said why themselves
+    call OSAPI_GFX_UNLOCK           ; and stored BN_ERR; a `#frag` refuses
+    cmp byte [br_nstate], BN_ERR    ; silently, and left in BN_BODY it would
+    je .redraw                      ; drain the closed handle and say `Link
+    mov si, br_s_redirbad           ; lost` about a redirect it declined
+    jmp .fail
+.redirunbad:
+    call OSAPI_GFX_UNLOCK
+.redirbad:
+    mov si, br_s_redirbad
+    jmp .fail
+.redirmany:
+    mov si, br_s_redirect
+    jmp .fail
 
 ; --- br_qstat - NETV_STATUS on our handle. out AH = state, CX = readable ----
 br_qstat:
@@ -714,6 +776,7 @@ br_req:
 ; The body is at most 159 bytes, so three decimal digits cover its exact length.
 ; The request bound above includes this field and the existing body staging.
 br_rputdec:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx
@@ -980,63 +1043,8 @@ br_finish:
     push di
     mov byte [br_fin], 3            ; main's page-buffer ownership handshake
     call br_gchk
-    jc .drop
-    mov ax, [br_code]
-    cmp ax, 301
-    je .redirect
-    cmp ax, 302
-    je .redirect
-    cmp ax, 303
-    je .redirect
-    cmp ax, 307
-    je .redirect
-    cmp ax, 308
-    jne .page
-.redirect:
-    cmp byte [br_redirurl], 0
-    je .redirfail
-    cmp byte [br_redirs], 3
-    jae .redirfail
-    inc byte [br_redirs]
-    mov si, br_redirurl
-    push ds
-    pop es
-    call OSAPI_GFX_LOCK
-    call br_resolve
-    pushf
-    call OSAPI_GFX_UNLOCK
-    popf
-    jc .redirresolved
-    mov si, br_ubuf
-    call br_split
-    jc .redirfail
-    mov word [br_nlen], 0
-    mov word [br_code], 0
-    mov byte [br_trunc], 0
-    mov word [br_hcol], 0
-    mov byte [br_hstate], 0
-    mov byte [br_lstate], 0
-    mov word [br_redirlen], 0
-    mov byte [br_redirurl], 0
-    mov byte [br_nstate], BN_OPEN
-    mov byte [br_fin], 0
-    jmp .out
-.redirresolved:
-    mov byte [br_fin], 0
-    call br_nshow
-    jmp .out
-.redirfail:
-    cmp byte [br_redirs], 3
-    jb .redirectbad
-    mov word [br_nmsg], br_s_redirect
-    jmp .redirectsay
-.redirectbad:
-    mov word [br_nmsg], br_s_redirbad
-.redirectsay:
-    mov byte [br_nstate], BN_ERR
-    mov byte [br_fin], 0
-    call br_nshow
-    jmp .out
+    jc .drop                        ; (a redirect never gets here: br_nstep's
+                                    ; .maybeend follows it before the hand-over)
 .page:
     mov al, [br_trunc]              ; br_take's ceiling, BANKED ACROSS THE
     push ax                         ; PARSE: br_parse clears the flag on its
@@ -1075,7 +1083,13 @@ br_finish:
     mov byte [br_frameappend], 1
     mov byte [br_frameidx], 0
     call br_framefetch
-    jmp .out
+.frameleave:
+    call OSAPI_GFX_UNLOCK           ; **THE HOLD TAKEN AT .page COMES OFF
+    cmp byte [br_nstate], BN_ERR    ; HERE**: both frame legs left through
+    jne .out                        ; .out with it held, and the next lock on
+    call br_nshow                   ; either task spun for ever. A refused
+    jmp .out                        ; child is said once the hold is off -
+                                    ; br_nshow takes the lock itself
 .framechild:
     cmp byte [br_framecut], 0
     jne .framedone                  ; stop fetching after the document ceiling
@@ -1092,7 +1106,7 @@ br_finish:
     cmp al, [br_framecount]
     jae .framedone
     call br_framefetch
-    jmp .out
+    jmp .frameleave
 .framedone:
     cmp byte [br_factive], 0
     je .frameend
@@ -1336,8 +1350,7 @@ br_framefetch:
     jmp .out
 .failed:
     mov word [br_nmsg], br_s_framebad
-    mov byte [br_nstate], BN_ERR
-    call br_nshow
+    mov byte [br_nstate], BN_ERR    ; said by the caller, once its hold is off
 .out:
     pop es
     pop di
