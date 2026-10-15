@@ -388,7 +388,7 @@ FAST = [
         "and the next one is written by copying the last; an unregistered or "
         "a vanished site fails make"),
     Row("dia", "fast", py("tests/unit/t_dia.py"), 0.5,
-        "SPEC.md 107.10: a DIA's shared half between MartyPC runs - "
+        "SPEC.md 110.10: a DIA's shared half between MartyPC runs - "
         "tools/os88dia.py --selfcheck, tests/diaprobe ASSEMBLED so the SDK's "
         "os88dia.inc is built by every `make` (only `make diatest` built it), "
         "the DIA header's offsets in the include where the host tool writes "
@@ -8844,7 +8844,7 @@ SOAK = [
         "cell, the claim and the trailer away again.",
         needs=("marty",), timeout=600, wants=("build/deskitem360.img",)),
     Row("diaboot", "soak", py("tests/diaboot.py"), 17.0,
-        "SPEC.md 107.4: a DESKTOP INTEGRATED APPLICATION comes back at boot. "
+        "SPEC.md 110.4: a DESKTOP INTEGRATED APPLICATION comes back at boot. "
         "`make diatest`'s restore disk holds one DIA row (written by "
         "tools/os88dia.py) and DIAPROBE.DAT: the probe is up with the desktop "
         "at (303,184), where its state file put it; its row holds NO cell; "
@@ -8856,7 +8856,7 @@ SOAK = [
         "the closed widget came back at every boot.",
         needs=("marty",), timeout=600, wants=("build/diarestore360.img",)),
     Row("diaswap", "soak", py("tests/diaswap.py"), 50.0,
-        "SPEC.md 107.5.1: a DIA's save asks whether the disk is still HOME. "
+        "SPEC.md 110.5.1: a DIA's save asks whether the disk is still HOME. "
         "The apps disk goes in A: under the running probe and it is dragged: "
         "nothing is written there (every shipped disk has SYSTEM\\APPDATA, "
         "and a W1 build wrote its state onto it), the save stays owed and is "
@@ -8869,7 +8869,7 @@ SOAK = [
         needs=("marty",), timeout=900,
         wants=("build/diarestore360.img", "build/apps360.img")),
     Row("diamiss", "soak", py("tests/diamiss.py"), 21.0,
-        "SPEC.md 107.4: a DIA that cannot be found is a graceful failure. "
+        "SPEC.md 110.4: a DIA that cannot be found is a graceful failure. "
         "ghost: a row to SYSTEM\\DIA\\GONE.O88 ahead of the probe's - the "
         "desktop, ONE `Shortcut not found (A:)`, the missing row DOWNGRADED "
         "in memory to a placed, captioned shortcut, and the probe behind it "
@@ -8878,7 +8878,7 @@ SOAK = [
         needs=("marty",), timeout=900,
         wants=("build/diaghost360.img", "build/diabvol360.img")),
     Row("diashort", "soak", py("tests/diashort.py"), 15.0,
-        "SPEC.md 26.8.1/107.2, the regression for +3: SPEC.md called the "
+        "SPEC.md 26.8.1/110.2, the regression for +3: SPEC.md called the "
         "byte spare and every drag-made shortcut carries `\\` there. Three "
         "such shortcuts and no DIA row: each SHOWN in its own cell (the "
         "table byte, and its pixels against a free cell's), each +3 still "
@@ -8886,7 +8886,7 @@ SOAK = [
         "three.",
         needs=("marty",), timeout=600, wants=("build/diashort360.img",)),
     Row("diahiber", "soak", py("tests/diahiber.py"), 15.0,
-        "SPEC.md 107.4: a pending RESUME stands the relaunch down. A hard "
+        "SPEC.md 110.4: a pending RESUME stands the relaunch down. A hard "
         "disk of this process's own with HIBERNAT.PTR in its root, so "
         "hb_probe posts UI_RBQ_ASK: dia_boot is entered with [ui_rebootq] = "
         "5, and twenty guest seconds later no DiaProbe has launched and its "
@@ -8894,7 +8894,7 @@ SOAK = [
         needs=("marty",), serial=True, timeout=900,
         wants=("build/diahiber360.img",)),
     Row("diaregister", "soak", py("tests/diaregister.py"), 50.0,
-        "SPEC.md 107.2/107.5.2: the Desk Calendar REGISTERS itself, once, off "
+        "SPEC.md 110.2/110.5.2: the Desk Calendar REGISTERS itself, once, off "
         "the SHIPPED 360KB system disk. Double-clicked out of SYSTEM\\DIA it "
         "opens on OSAPI_CLK_GET's today, and its first tick writes ONE DIA "
         "row (KIND 1, 'D', SYSTEM\\DIA\\DESKCAL.O88, `Calendar`) and, "
@@ -8902,36 +8902,40 @@ SOAK = [
         "on; a second "
         "double-click is refused by the package's own singleton - `Desk "
         "Calendar is open`, LD_EABORT, no write, SYSTEM.CFG unchanged; the "
-        "close box removes the row by name and saves a 2,456-byte "
+        "x its hovered HANDLE reveals removes the row by name and saves a "
+        "2,456-byte "
         "DESKCAL.DAT holding its place; a reset brings nothing back.",
         needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
     Row("diamove", "soak", py("tests/diamove.py"), 30.0,
-        "SPEC.md 107.4/107.5: the Desk Calendar stays where it was PUT. "
+        "SPEC.md 110.4/110.5: the Desk Calendar stays where it was PUT. "
         "Opened off the shipped 360KB disk and dragged: within two polls its "
         "state file on A: holds the new place and the 640x480 screen, and "
         "after a RESET dia_boot relaunches it from its row and dia_load puts "
         "it back at the dragged place, not the template's, holding no cell.",
         needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
     Row("diamovecga", "soak", py("tests/diamove.py", "--leg", "cga"), 25.0,
-        "SPEC.md 107.3/107.5.2: diamove on the 5150's CGA, the adapter the "
+        "SPEC.md 110.3/110.5.2: diamove on the 5150's CGA, the adapter the "
         "COMPACT frame exists for. Wave 2 authored the template at the TALL "
         "frame, so wm_create's fit cut it to the 155-row band and clamped "
-        "every restored y to 20 before PREFER made it 142 - the place came "
-        "back at y = 20 and the next poll saved 20 over the user's. A drag "
-        "to y = 24 must come back at y = 24 after a reset.",
+        "every restored y to 20 - the place came back at y = 20 and the "
+        "next poll saved 20 over the user's. v2's COMPACT face is 146 rows, "
+        "sized before the create; a drag by its tag row to y = 28 must come "
+        "back at y = 28 after a reset.",
         needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
     Row("diaanchor", "soak", py("tests/diamove.py", "--leg", "anchor"), 25.0,
-        "SPEC.md 107.5.2: a place saved on ANOTHER screen. tools/os88dia.py "
-        "puts DESKCAL.DAT at (479,68) on 720x348 into the shipped disk; on "
-        "the VGA XT's 640x480 the calendar opens anchored to the far edges "
-        "at (399,200) - a frame hanging over the dock, which wm_create's fit "
-        "pulls up above it and dia_made gives back - and, untouched, "
+        "SPEC.md 110.5.2: a place saved on ANOTHER screen. tools/os88dia.py "
+        "puts a V1 DESKCAL.DAT - a titled frame at (560,100) on 800x600, no "
+        "DIA_HF_CONT - into the shipped disk; on the VGA XT's 640x480 it is "
+        "converted to a face (561,118) and anchored: x from the far edge, "
+        "the frame at 399, y 118 - a face hanging over the dock, which "
+        "wm_create's fit pulls up above it and dia_made gives back - and, "
+        "untouched, "
         "writes nothing: the state file is the fixture byte for byte "
         "seven guest seconds later.",
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
     Row("deskcaledit", "soak", py("tests/deskcaledit.py"), 76.0,
-        "SPEC.md 107.3: the Desk Calendar WIDGET's APPOINTMENTS, read back "
+        "SPEC.md 110.3: the Desk Calendar WIDGET's APPOINTMENTS, read back "
         "off the guest's own disk by tools/os88dia.py, selected the v2 way "
         "(the two-line agenda paged by its `+N more` pager). A DAMAGED "
         "state file (count 60) opens empty and its first edit asks `Replace "
@@ -8942,7 +8946,7 @@ SOAK = [
         "kept); Del asks and Yes deletes; 26 characters are refused (`At "
         "most 25 letters`, nothing written); Delete Item picked with the "
         "field open asks on a bar with nothing right of the app name "
-        "(SPEC.md 107.9); v2's FOCUS with a Disk window in front all along "
+        "(SPEC.md 110.9); v2's FOCUS with a Disk window in front all along "
         "- a card-margin press hands the widget the bar and the Disk window "
         "stays wm_top, `+` opens the field in card 2's heading row and a "
         "plain line is a TASK and a timed one an appointment, losing the "
@@ -8952,7 +8956,7 @@ SOAK = [
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
     Row("deskcaltask", "soak", py("tests/deskcaltask.py"), 85.0,
-        "SPEC.md 107.3: the Desk Calendar's TASKS on a Hercules 5150 - v2's "
+        "SPEC.md 110.3: the Desk Calendar's TASKS on a Hercules 5150 - v2's "
         "MID layout by the screen's height, a readable 1bpp framebuffer. "
         "Three typed tasks are three in the state file; the box is 9 x 9 at "
         "face x 8, its frame ink, pixel for pixel the layout's record; a "
@@ -8967,7 +8971,7 @@ SOAK = [
         "page and the pager wraps.",
         needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
     Row("deskcalgrid", "soak", py("tests/deskcalgrid.py"), 40.0,
-        "SPEC.md 107.3: the Desk Calendar's 42-byte grid, read out of the "
+        "SPEC.md 110.3: the Desk Calendar's 42-byte grid, read out of the "
         "running guest's bss, is Python calendar's - MONDAY FIRST since v2 "
         "(firstweekday=0) - for Oct 2026, Feb 2028 (leap), Mar 2028 (by "
         "PgDn), Jan 1980 and Dec 2099, each reached by setting the "
@@ -8977,7 +8981,7 @@ SOAK = [
         "is refused while the other direction still moves.",
         needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
     Row("deskcalremind", "soak", py("tests/deskcalremind.py"), 72.0,
-        "SPEC.md 107.3 (v2): the Desk Calendar's REMINDERS RING ON CARD 3 - "
+        "SPEC.md 110.3 (v2): the Desk Calendar's REMINDERS RING ON CARD 3 - "
         "no alert - on MartyPC's VGA XT with the clock SET through the live "
         "clk_* fields. A launch at 09:28 sums up ONE missed reminder in one "
         "toast, marks it FIRED and DUE and card 3 rings it, a v1 FIRED one "
@@ -9041,10 +9045,10 @@ SOAK = [
         "window leaves no ghost and the Disk window byte for byte - and "
         "PRICES that drop, wm_draw_win twice: the widget and the covering "
         "Disk window redrawn whole, which the backmost window's drop still "
-        "owes (107.9's owner item); a DRAG posted from the beat's TIMER "
+        "owes (110.9's owner item); a DRAG posted from the beat's TIMER "
         "leaves the widget's record in [ui_dragy] and is inert - the next "
         "card press is a click; DESKPROB.DAT holds the FACE's origin with "
-        "DIA_HF_CONT (107.11); and a drop that leaves the frame's bottom "
+        "DIA_HF_CONT (110.11); and a drop that leaves the frame's bottom "
         "past the screen - ui_drag's bound is the title bar's - is put back "
         "on the glass by the include's next beat and saved there.",
         needs=("marty",), timeout=900,
@@ -9052,7 +9056,7 @@ SOAK = [
     Row("deskhover", "soak", py("tests/desklayer.py", "--leg", "hover"), 80.0,
         "SPEC.md 11.103.7: the HOVER EDGE on MartyPC's VGA XT. The pointer on "
         "a gap sets WF_HOVER, names the widget in [cur_hovw] and wakes it "
-        "ONCE, and os88dia.inc's dia_wake (DIA_WIDGET, 107.11) shows the "
+        "ONCE, and os88dia.inc's dia_wake (DIA_WIDGET, 110.11) shows the "
         "handle after DIA_HOVER_T's dwell - every tag pixel against the "
         "guest's own font; "
         "card, gap, card is one window and no further edge; off it, the "
@@ -9077,7 +9081,7 @@ SOAK = [
         "the MID layout.",
         needs=("marty",), timeout=900, wants=("build/diadesk360.img",)),
     Row("deskclose", "soak", py("tests/desklayer.py", "--leg", "close"), 45.0,
-        "SPEC.md 11.103.6-7, 107.11: a widget closes by its OWN box. On the "
+        "SPEC.md 11.103.6-7, 110.11: a widget closes by its OWN box. On the "
         "revealed handle a press arms and lights the box; slid off and "
         "released, nothing closes, and the handle goes only after the linger, "
         "leaving the focused plate; a press on the box's place while not revealed posts a DRAG and arms nothing; a press and "
@@ -9088,7 +9092,7 @@ SOAK = [
         wants=("build/diadesk360.img",)),
     Row("deskground", "soak", py("tests/desklayer.py", "--leg", "ground"),
         60.0,
-        "SPEC.md 107.11 (wave 3): the THEME in a widget's gaps. On MartyPC's "
+        "SPEC.md 110.11 (wave 3): the THEME in a widget's gaps. On MartyPC's "
         "VGA XT, with DESKPROB up, Bright, then Dark and Color picked on the "
         "Control Panel's Theme page: every gap pixel, both ground columns "
         "and the tag row beside the plate are the desktop's own ground - "
@@ -9101,7 +9105,7 @@ SOAK = [
         "under Color a Disk window laid over it and closed leaves teal.",
         needs=("marty",), timeout=900, wants=("build/diadesk360.img",)),
     Row("deskfit", "soak", py("tests/desklayer.py", "--leg", "fit"), 45.0,
-        "SPEC.md 107.11 (wave 3): the layout by the screen's HEIGHT. A "
+        "SPEC.md 110.11 (wave 3): the layout by the screen's HEIGHT. A "
         "VIDEO=ega kernel in a private tree (39.24's 640x350 on a VGA): the "
         "include picks MID - [dia_li] 1, a 130 x 83 frame, not TALL's 104 - "
         "and it sits inside the 306-row band between the bar and the dock, "
@@ -9109,14 +9113,14 @@ SOAK = [
         needs=("marty", "nasm"), timeout=1200,
         wants=("build/diadesk360.img",)),
     Row("desksmall", "soak", py("tests/desklayer.py", "--leg", "small"), 30.0,
-        "SPEC.md 11.103.9, 107.7: kern_small has the two cells and no layer. "
+        "SPEC.md 11.103.9, 110.7: kern_small has the two cells and no layer. "
         "On MartyPC's 128KB CGA 5150 off `make small`'s system disk with "
         "DESKPROB.O88 mcopied into SYSTEM\\DIA\\: QUERY refuses, so the probe "
         "is the TITLED FALLBACK - no WF_DESK, no IF_DESK, the COMPACT "
         "layout, an ordinary 130 x 70 frame (no tag row, no last gap) with "
         "a dock tile and a title-bar drag - and its gap is white with a "
-        "1-px rule, one BLIT1 (107.7); the worker's kicks reach the probe's "
-        "own DIA_WAKE (the worker arm keeps it, 107.11); and kern_small's "
+        "1-px rule, one BLIT1 (110.7); the worker's kicks reach the probe's "
+        "own DIA_WAKE (the worker arm keeps it, 110.11); and kern_small's "
         "OSAPI_GFX_DESK, laid by the probe's beat over the face's top 4 "
         "rows on request, is the desktop's dither - the cell's only runtime "
         "caller there, the titled gaps being white.",
@@ -9124,7 +9128,7 @@ SOAK = [
         wants=("build/small360.img", "build/smallk/kernel.bin",
                "build/deskprob.o88")),
     Row("diasmall", "soak", py("tests/diasmall.py"), 35.0,
-        "SPEC.md 107.7: the Desk Calendar on kern_small, end to end, on "
+        "SPEC.md 110.7: the Desk Calendar on kern_small, end to end, on "
         "MartyPC's 128KB CGA 5150 off `make small`'s system disk. There is no "
         "OSAPI_WM_TIMER there, so the first paint HIRES THE WORKER (dia_st "
         "WORKER | HIRED), registration is never tried and NOTHING is said; a "
@@ -9137,38 +9141,39 @@ SOAK = [
         needs=("marty",), timeout=900,
         wants=("build/small360.img", "build/smallk/kernel.bin")),
     Row("deskcalperf", "soak", py("tests/deskcalperf.py"), 63.0,
-        "SPEC.md 107.6 / PERFORMANCE.md Part 5: what the Desk Calendar's "
+        "SPEC.md 110.6 / PERFORMANCE.md Part 5: what the Desk Calendar's "
         "gestures COST in primitive calls - a breakpoint on every drawing "
         "cell of the API table, a call counted only when its far return "
         "address is the calendar's own segment - on the VGA XT (TALL) and "
-        "the 5150 CGA (COMPACT): the first paint, the same picture by the "
-        "About card's take-down, a day select (the frame pair, today's field, "
-        "the heading and the agenda lines that were occupied - asserted "
-        "exactly), an IDLE stretch of three beats and a minute boundary that "
-        "must draw ZERO, and a reminder (one run of the calendar's own, the "
-        "rest the alert's paint) - and, counted at the drive, the save a "
-        "missed launch and a firing each owe, the second under its alert; "
+        "the 5150 CGA (COMPACT), against v2's budgets: the first paint (<= "
+        "20 calls TALL, <= 14 COMPACT), the About card's take-down (its rows "
+        "alone, fewer calls than the first paint), a day select (<= 5: the "
+        "two boxes and card 2), a month (<= 8), a task's tick (exactly 1), "
+        "the tag's reveal and hide (1 / 3), an IDLE stretch of three beats "
+        "and a minute boundary that must draw ZERO, and a reminder going off "
+        "(card 3's slabs, 2 calls; COMPACT the slot it takes) - and, counted "
+        "at the drive, the save a missed launch and a firing each owe; "
         "then two cold boots - no SYSTEM.CFG, and a "
         "DIA row - timed to dia_boot and to ui_task with the drive's "
         "counters: a boot with no row makes no disk call after its paint.",
         needs=("marty", "mtools"), timeout=1200,
         wants=("build/os8088-360.img",)),
     Row("deskcal1bpp", "soak", py("tests/deskcal1bpp.py"), 45.0,
-        "SPEC.md 107.3, 39.4, 47: the Desk Calendar WIDGET on BOTH 1bpp "
+        "SPEC.md 110.3, 39.4, 47: the Desk Calendar WIDGET on BOTH 1bpp "
         "adapters, asserted on the framebuffer's own bits (MartyPC's 5150 "
         "with a CGA, and with a Hercules card): COMPACT 178x146 and MID "
         "178x242 by the screen's height; today's box mostly ink (inverse) "
         "and a plain day's mostly ground; a press on the 20th puts an "
         "unbroken 1-px outline round its box and today stays inverse; the "
         "20th's dot is ink and the 13th has none (the COMPACT box once took "
-        "the dot row of the day above, SPEC.md 107.9); every gap pixel is "
+        "the dot row of the day above, SPEC.md 110.9); every gap pixel is "
         "the desktop's dither; and with the Calendar menu held down on the "
         "widget's own bar, every item's band - the greyed `(no item)` ones "
         "included - carries ink.",
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
     Row("deskcalcards", "soak", py("tests/deskcalcards.py"), 110.0,
-        "SPEC.md 107.3 (v2): the Desk Calendar's THREE CARDS probed pixel "
+        "SPEC.md 110.3 (v2): the Desk Calendar's THREE CARDS probed pixel "
         "by pixel with the owner's mockup in the state file, on MartyPC's "
         "VGA XT (TALL), its 5150 CGA (COMPACT) and Hercules (MID): a "
         "178-wide frame of the layout's height at face x = width - 264; "
@@ -9182,7 +9187,7 @@ SOAK = [
         needs=("marty", "mtools"), timeout=1500,
         wants=("build/os8088-360.img",)),
     Row("deskcalsnooze", "soak", py("tests/deskcalsnooze.py"), 60.0,
-        "SPEC.md 107.3 (v2): SNOOZE and DISMISS on MartyPC's VGA XT, the "
+        "SPEC.md 110.3 (v2): SNOOZE and DISMISS on MartyPC's VGA XT, the "
         "clock set through clk_*. A v1-shaped file (zeros at payload +4/+6) "
         "loads with nothing due or snoozed and its v1 FIRED read as "
         "dismissed; Dentist rings with no alert, Snooze pressed on card 3 "
@@ -9194,7 +9199,7 @@ SOAK = [
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
     Row("deskmodal", "soak", py("tests/deskmodal.py"), 40.0,
-        "SPEC.md 107.3, 11.103.4: a widget's MODAL QUESTION on MartyPC's "
+        "SPEC.md 110.3, 11.103.4: a widget's MODAL QUESTION on MartyPC's "
         "VGA XT with a Disk window in front: the widget is wm_zord[0] and "
         "the Disk window wm_top; Del on the widget's appointment puts "
         "`Delete this appointment?` at the TOP of wm_zord owning the bar, "

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SPEC.md 107.3 / 11.103.4: a widget's MODAL QUESTION lands above every
+"""SPEC.md 110.3 / 11.103.4: a widget's MODAL QUESTION lands above every
 application and takes the bar - and the widget stays on the desk.
 
     make && python3 tests/deskmodal.py

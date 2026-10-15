@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SPEC.md 107.10: a DESKTOP INTEGRATED APPLICATION's shared half, between
+"""SPEC.md 110.10: a DESKTOP INTEGRATED APPLICATION's shared half, between
 MartyPC runs.
 
 `apps/os88dia.inc` is an SDK include (docs/INDEX.md lists it) and
@@ -34,8 +34,8 @@ were written the same afternoon. So:
   F  and NO data image does: no apps disk, no category disk, no media disk,
      no small apps disk carries SYSTEM/DIA or a DESKCAL.O88 - a widget
      belongs to the BOOT volume, and its row names a path on it (SPEC.md
-     107.1, the THEWIRE rule).
-  W  the WIDGET's (v2 wave 3, SPEC.md 107.11): DIA_HF_CONT is the host
+     110.1, the THEWIRE rule).
+  W  the WIDGET's (v2 wave 3, SPEC.md 110.11): DIA_HF_CONT is the host
      tool's; every DIA_WIDGET bss field the soak rows read out of a running
      probe (dia_hv, dia_tagp, dia_wf, dia_li, ...) is where
      os88dia.widget_off() says, EVALUATED BY NASM from the desk probe's own
@@ -215,7 +215,8 @@ def deskcal_equs(tmp):
              "dia_st - os88_image_end", "dia_file - os88_image_end",
              "dc_line - os88_image_end", "dc_band - os88_image_end",
              "GFXE_BAND_W", "GFXE_BAND_H", "DIA_FACE_W",
-             "DIA_PAYLEN", "DIA_PAYVER", "dc_geos", "DCG_SZ", "DCG_BELLX"]
+             "DIA_PAYLEN", "DIA_PAYVER", "dc_geos", "DCG_SZ", "DCG_BELLX",
+             "dc_lays", "DIAL_SZ"]
     src = open(os.path.join(ROOT, "apps", "deskcal", "deskcal.asm")).read()
     probe = ("\n    db 'T_DIA_PROBE'\n" +
              "".join("    dw %s\n" % n for n in names))
@@ -233,6 +234,8 @@ def deskcal_equs(tmp):
     e = dict(zip(names, struct.unpack_from("<%dH" % len(names), b, i)))
     g, n = e["dc_geos"], e["DCG_SZ"]
     e["geos"] = [b[g + k * n:g + (k + 1) * n] for k in range(3)]
+    g, n = e["dc_lays"], e["DIAL_SZ"]
+    e["lays"] = [b[g + k * n:g + (k + 1) * n] for k in range(3)]
     return e
 
 
@@ -338,7 +341,7 @@ def main():
               "the face-origin flag agrees", got=inc.get("DIA_HF_CONT"),
               want=os88dia.DIA_HF_CONT,
               why="a widget's state file holds its FACE when +3 bit 1 is "
-                  "set (SPEC.md 107.11); a skew converts a face twice")
+                  "set (SPEC.md 110.11); a skew converts a face twice")
         names = ["%s - os88_image_end" % n for n, _ in os88dia.WIDGET_FIELDS]
         names += ["DIA_BSS", "DIA_HOVER_T", "DIA_LEAVE_T", "DIA_W_DESK",
                   "DIA_W_FOCUS", "DIA_W_ARMED"]
@@ -408,7 +411,7 @@ def main():
             got = files.get("SYSTEM/DIA/DESKCAL.O88")
             check(got is not None, "%s carries SYSTEM/DIA/DESKCAL.O88" % img,
                   why="a DIA ships in SYSTEM\\DIA\\ on the BOOT volume "
-                      "(SPEC.md 107.1); $(DIAARGS) / $(SMALLDIAARGS) thread it "
+                      "(SPEC.md 110.1); $(DIAARGS) / $(SMALLDIAARGS) thread it "
                       "into each system-disk recipe",
                   got=sorted(k for k in files if k.startswith("SYSTEM/")))
             if got is not None and want is not None:
@@ -424,7 +427,7 @@ def main():
             check(not bad, "%s carries no DIA" % img, got=bad, want=[],
                   why="a widget on an apps disk is a copy that is never the "
                       "one the desktop relaunches - its row names the boot "
-                      "volume (SPEC.md 107.1, the THEWIRE rule of 92)")
+                      "volume (SPEC.md 110.1, the THEWIRE rule of 92)")
 
         # G ----------------------------------------------------------------
         try:
@@ -489,7 +492,7 @@ def main():
                   os88dia.dia_st_off(os88dia.DESKCAL_DIA_BSS,
                                      os88dia.DESKCAL_PAYLEN))]
         # v2: the calendar is a DESK widget - header flag bit 6, OS88_F_DESK
-        # (SPEC.md 20.2, 107.3) - read off the BUILT package's header
+        # (SPEC.md 20.2, 110.3) - read off the BUILT package's header
         dbin = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"),
                             "deskcal.bin")
         if os.path.exists(dbin):
@@ -511,6 +514,23 @@ def main():
                   want=want + [host["BELLX"]],
                   why="the rows press and probe the calendar by the "
                       "host's copy of these numbers")
+        # ...and the cards, the tag, the face and its default y (dc_lays,
+        # os88dia.inc's DIA_LAYOUT: db cards, db tag, dw fy, then a height
+        # and a gap per card), which every soak row's card_top comes from
+        for li, raw in enumerate(e.get("lays", [])):
+            host = os88dia.DESKCAL_GEO[li]
+            nc, tag, fy = raw[0], raw[1], struct.unpack_from("<H", raw, 2)[0]
+            cards = tuple((raw[4 + 2 * k], raw[5 + 2 * k]) for k in range(nc))
+            face = (os88dia.DESKCAL_FACE_W,
+                    sum(h + gp for h, gp in cards) + tag)
+            check((cards, tag, face, fy) == (host["cards"], host["tag"],
+                                             host["face"], host["fy"]),
+                  "dc_lays' layout %d is os88dia.DESKCAL_GEO[%d]'s cards, "
+                  "tag, face and fy" % (li, li),
+                  got=(cards, tag, face, fy),
+                  want=(host["cards"], host["tag"], host["face"], host["fy"]),
+                  why="deskcal_card_top and every row's probe rows come "
+                      "from the host's copy of these numbers")
         for name, host in pairs:
             check(e.get(name) == host, "deskcal.asm's %s is tools/os88dia.py's"
                   % name, got=e.get(name), want=host,

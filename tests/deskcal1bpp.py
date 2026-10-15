@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SPEC.md 107.3, 39.4, 47: the Desk Calendar WIDGET on BOTH 1bpp adapters -
+"""SPEC.md 110.3, 39.4, 47: the Desk Calendar WIDGET on BOTH 1bpp adapters -
 the layout each one gets, today's inverse box, the selected day's 1-px
 outline, a day's dot, the gaps as the desktop's ground, and a greyed menu
 item still legible on the widget's own (focused) bar.

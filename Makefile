@@ -3089,7 +3089,7 @@ EMUDIR := $(BUILD)/emuk
 SYSAPPS := $(BUILD)/taskmgr.o88 $(BUILD)/thewire.o88
 SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
 
-# --- ...and THE DESKTOP INTEGRATED APPLICATIONS in SYSTEM/DIA/ (SPEC.md 107) --
+# --- ...and THE DESKTOP INTEGRATED APPLICATIONS in SYSTEM/DIA/ (SPEC.md 110) --
 # A widget belongs to the BOOT volume - the desktop configuration that
 # relaunches it is that volume's SYSTEM.CFG, and its row names a path on it -
 # so it rides every SYSTEM disk and NO apps disk, the THEWIRE rule (SPEC.md
@@ -3098,7 +3098,7 @@ SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
 # rather than folded into $(SYSAPPSARGS): that variable is restated in a dozen
 # tight 360KB GATE-disk recipes that have no room and no reason for it.
 # Measured at 360KB (`tools/os88disk.py --verify build/os8088-360.img`): 313
-# of 354 clusters in use before DESKCAL.O88 and its folder; SPEC.md 107.6 has
+# of 354 clusters in use before DESKCAL.O88 and its folder; SPEC.md 110.6 has
 # the figure after.
 DIAAPPS := $(BUILD)/deskcal.o88
 DIAARGS := $(addprefix SYSTEM/DIA:,$(DIAAPPS))
@@ -5225,7 +5225,7 @@ $(BUILD)/calc.bin: apps/calc/calc.asm apps/os88api.inc apps/os88ui.inc | $(BUILD
 $(BUILD)/calc.o88: $(BUILD)/calc.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/calc.bin -o $@
 
-# Desk Calendar (SPEC.md 107.3): the first DESKTOP INTEGRATED APPLICATION, in
+# Desk Calendar (SPEC.md 110.3): the first DESKTOP INTEGRATED APPLICATION, in
 # SYSTEM/DIA/ on every system disk ($(DIAARGS) above) and on no apps disk.
 # apps/os88dia.inc is its widget half - place, state file, desktop row, and
 # (v2) the widget treatment, which composes with apps/os88gfx.inc.
@@ -7334,7 +7334,7 @@ $(BUILD)/deskitem.o88: $(BUILD)/deskitem.bin tools/os88pkg.py
 $(BUILD)/deskitem360.img: $(BUILD)/deskitem.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/deskitem.o88
 
-# diatest: DESKTOP INTEGRATED APPLICATIONS' gate disks (SPEC.md 107.10) -
+# diatest: DESKTOP INTEGRATED APPLICATIONS' gate disks (SPEC.md 110.10) -
 # scratch 360KB SYSTEM disks, each the shipped one plus DIAPROBE.O88 in
 # SYSTEM\DIA\ and a SYSTEM.CFG (and a state file) that tools/os88dia.py, the
 # host's own second reader, writes. On demand, like every gate here:
@@ -7392,7 +7392,7 @@ $(DIAFIX)/DIAPROBE.DAT: tools/os88dia.py | $(BUILD)
 # header flag OS88_F_DESK, OSAPI_WM_DESK's MAKE, a face of two white cards
 # with the desktop's ground between them. Its own build because the v1 rows
 # drag DiaProbe by a title bar a desk window has not got. Since wave 3 it is
-# the include's DIA_WIDGET (SPEC.md 107.11), whose state file holds the FACE:
+# the include's DIA_WIDGET (SPEC.md 110.11), whose state file holds the FACE:
 # DESKPROB.DAT puts the face at (376,184), the frame at (375,184) - 375 = 7
 # mod 8, the snap's fixpoint (SPEC.md 11.94)
 $(BUILD)/deskprob.bin: tests/diaprobe/diaprobe.asm apps/os88dia.inc apps/os88gfx.inc apps/os88api.inc | $(BUILD)
@@ -11272,7 +11272,7 @@ SMALLAPPSARGS  = $(addprefix APPS:,$(SMALLTOOLS))
 # system-disk package is subtracted here rather than in a second list.
 SMALLSYSAPPS      = $(call SMALLSUB,,$(filter-out $(SMALLOMIT) $(SMALLOMIT_ORPHAN),$(SYSAPPS)))
 SMALLSYSAPPSARGS  = $(addprefix SYSTEM:,$(SMALLSYSAPPS))
-# SYSTEM/DIA/ rides the small system disks too (SPEC.md 24.5.1, 107.7): the
+# SYSTEM/DIA/ rides the small system disks too (SPEC.md 24.5.1, 110.7): the
 # Desk Calendar needs no driver and has no small build, so it is the shipped
 # package - the API table is the same on both kernels (SPEC.md 20.8 rule 4)
 SMALLDIAAPPS      = $(DIAAPPS)
@@ -13186,7 +13186,7 @@ $(if $(filter-out $(APPSYS),$(SYSAPPS)),,$(error the SYSAPPS live set is \
      either on every apps disk or on none; SPEC.md 92.11 says it is on \
      neither))
 # (the FILTER, not $(LIVESYSARGS): that also carries $(DIAARGS), so testing
-# it could never fire again - SPEC.md 107.9)
+# it could never fire again - SPEC.md 110.9)
 
 # THE WHOLE STORY LIBRARY (SPEC.md 61, 80.6). FROTZ.O88 rides APPS/ on this
 # volume and has ridden it since the everything disk was built - WITH NOTHING

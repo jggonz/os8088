@@ -11614,7 +11614,7 @@ wm_cbd:
 ; gap: step 9 publishes it before the show, whose repaint reaches the
 ; package's W_PAINT. A window that is owned, another package's, or a call with
 ; no load in progress is refused; the [ld_rec] test alone was satisfied by a
-; FREED record, which [ld_rec] keeps naming after any load (SPEC.md 107.9). Package window pointers are trusted
+; FREED record, which [ld_rec] keeps naming after any load (SPEC.md 110.9). Package window pointers are trusted
 ; here as at every wm_* cell (wm_ptr2idx's own div); the USED bit is what
 ; guarantees the window is in wm_zord, which the rotation below relies on.
 ; -----------------------------------------------------------------------------

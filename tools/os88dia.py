@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """os88dia - the host's own reader and writer for a DIA's two stores
-(SPEC.md 107).
+(SPEC.md 110).
 
 A Desktop Integrated Application keeps two things in two places, each where
 the OS already keeps that kind of state:
 
   * WHICH widgets are open and where each was launched from - one DIA ROW per
-    widget in SYSTEM.CFG's desktop trailer (SPEC.md 26.8.6, 107.2): a 128-byte
+    widget in SYSTEM.CFG's desktop trailer (SPEC.md 26.8.6, 110.2): a 128-byte
     shortcut record with KIND 1 and 'D' at +3;
   * its WINDOW'S PLACE and its data - SYSTEM\\APPDATA\\<NAME>.DAT (SPEC.md
-    19.9, 107.5): a 16-byte DIA header, then the application's payload. The
+    19.9, 110.5): a 16-byte DIA header, then the application's payload. The
     Desk Calendar's payload v1 is coded here too (DESKCAL_*).
 
 This file is an INDEPENDENT SECOND READER, written from SPEC.md and not from
@@ -23,7 +23,7 @@ fixture it accepts is one the machine accepts.
     os88dia.py dat -o X.DAT --x 303 --y 184 --screen 640x480 [--payver 1]
                    [--paylen 0 | --deskcal] [--cont]
                  --cont: x,y are a widget's FACE origin (header +3 bit 1,
-                 DIA_HF_CONT, SPEC.md 107.11), not a titled frame's
+                 DIA_HF_CONT, SPEC.md 110.11), not a titled frame's
     os88dia.py dump FILE         a SYSTEM.CFG or a .DAT, as JSON
     os88dia.py --selfcheck       round-trip and refusal checks; exit 0 = good
 """
@@ -33,7 +33,7 @@ import json
 import struct
 import sys
 
-# --- SPEC.md 26.8.1 / 26.8.6 / 107.2 -----------------------------------------
+# --- SPEC.md 26.8.1 / 26.8.6 / 110.2 -----------------------------------------
 SC_REC = 128
 SC_VER = 2
 SC_MAX = 15
@@ -63,15 +63,15 @@ CFG_FBUF = 141                  # SPEC.md 2.8.7: a file this size or less
                                 # it: it was 131 until #248's two pin keys
 CFG_MAXFILE = 4096              # ...and one this size or more is refused
 
-# --- SPEC.md 107.5 ------------------------------------------------------------
+# --- SPEC.md 110.5 ------------------------------------------------------------
 DIA_HDR_SIZE = 16
 DIA_HDR_MAGIC = b"DA"
 DIA_HDR_VER = 1
 DIA_HF_POS = 1
-DIA_HF_CONT = 2                 # v2 (SPEC.md 107.11): +4/+6 are the FACE's
+DIA_HF_CONT = 2                 # v2 (SPEC.md 110.11): +4/+6 are the FACE's
 TITLE_H = 18                    # ...and a v1 file's frame is a title bar up
 
-# --- the Desk Calendar's payload v1 (SPEC.md 107.3, 107.5) --------------------
+# --- the Desk Calendar's payload v1 (SPEC.md 110.3, 110.5) --------------------
 DESKCAL_PAYVER = 1
 DESKCAL_NAPPT, DESKCAL_NTASK = 48, 32
 DESKCAL_APPT = 32               # +0 date, +2 time, +4 flags, +5 lead, +6 26 text
@@ -82,7 +82,7 @@ DESKCAL_PAYLEN = DESKCAL_TASK0 + DESKCAL_NTASK * DESKCAL_TASK    # 2440
 DESKCAL_SNZT = 4                # v2: dw the snooze slot's minute of the day
 DESKCAL_SNZD = 6                # ...and its FAT date (read only beside a
                                 # SNOOZED appointment, so v1's zeros mean
-                                # nothing - SPEC.md 107.3)
+                                # nothing - SPEC.md 110.3)
 APPT_REMIND, APPT_FIRED = 1, 2
 APPT_SNOOZED, APPT_DUE = 4, 8   # v2: snoozed; fired and not dismissed (card
                                 # 3 rings it). A v1 file has neither
@@ -125,7 +125,7 @@ DESKCAL_C3 = {0: "none", 1: "next", 2: "ringing"}
 
 
 # The calendar's three layouts (deskcal's dc_lays and dc_geos, SPEC.md
-# 107.3), by [dia_li]: 0 TALL (VGA), 1 MID (Hercules, EGA), 2 COMPACT (CGA).
+# 110.3), by [dia_li]: 0 TALL (VGA), 1 MID (Hercules, EGA), 2 COMPACT (CGA).
 # Rows are CARD-LOCAL, x face-relative. t_dia reads dc_geos' bytes out of the
 # assembled package and holds DESKCAL_GEO_FIELDS to them, in this order
 DESKCAL_GEO_FIELDS = ("BIGS", "BIGY", "DOWX", "DOWY", "MONY", "NAVY", "NAVL",
@@ -136,19 +136,19 @@ DESKCAL_GEO_FIELDS = ("BIGS", "BIGY", "DOWX", "DOWY", "MONY", "NAVY", "NAVL",
                       "LKY", "LKX", "NONEX")     # then dw BELL, dw BOXR, BELLX
 DESKCAL_GEO = {
     0: dict(zip(DESKCAL_GEO_FIELDS, (
-        0x0A, 7, 64, 9, 22, 44, 8, 160, 0, 40, 60, 78, 16, 10, 2, 4, 16,
+        0x0A, 7, 64, 9, 22, 44, 8, 160, 0, 40, 60, 78, 16, 9, 2, 4, 16,
         6, 22, 14, 2, 50, 57, 16, 2, 32, 2, 11, 2, 12, 14, 17,
         5, 32, 8, 32, 25, 17, 41, 32, 28)), BELLX=8,
         cards=((178, 6), (91, 6), (57, 5)), tag=12, face=(176, 355),
         fy=42),
     1: dict(zip(DESKCAL_GEO_FIELDS, (
-        0x06, 4, 48, 4, 13, 26, 8, 160, 0, 22, 38, 50, 12, 9, 1, 2, 12,
+        0x06, 4, 48, 4, 13, 26, 8, 160, 0, 22, 38, 50, 12, 8, 1, 2, 12,
         4, 16, 11, 2, 39, 42, 12, 2, 24, 1, 9, 1, 10, 14, 18,
         3, 22, 4, 68, 4, 13, 18, 22, 26)), BELLX=4,
         cards=((122, 4), (67, 4), (30, 4)), tag=11, face=(176, 242),
         fy=24),
     2: dict(zip(DESKCAL_GEO_FIELDS, (
-        0x06, 2, 48, 2, 0xFF, 10, 48, 136, 64, 19, 20, 30, 9, 8, 1, 0, 9,
+        0x06, 2, 48, 2, 0xFF, 10, 48, 136, 64, 19, 20, 30, 9, 8, 1, 0, 8,
         3, 14, 10, 3, 0, 14, 10, 3, 24, 0, 8, 1, 10, 14, 18,
         14, 24, 14, 24, 24, 18, 34, 24, 24)), BELLX=8,
         cards=((85, 3), (44, 3)), tag=11, face=(176, 146), fy=22),
@@ -174,7 +174,7 @@ def dia_hdr_off(dia_bss):
     return dia_bss
 
 
-# os88dia.inc's DIA_WIDGET fields (SPEC.md 107.11), after v1's dia_nx - in
+# os88dia.inc's DIA_WIDGET fields (SPEC.md 110.11), after v1's dia_nx - in
 # the include's order; tests/unit/t_dia.py has NASM evaluate each against a
 # DIA_WIDGET build and holds this table to it
 WIDGET_FIELDS = (("dia_wf", 1), ("dia_hv", 1), ("dia_tagp", 1),
@@ -368,7 +368,7 @@ def parse_dat(data, paylen, payver):
         raise DiaError("payload length %d, not %d" % (ln, paylen))
     cont = bool(flags & DIA_HF_CONT)
     out = {"pos": bool(flags & DIA_HF_POS), "x": x, "y": y, "cont": cont,
-           # the FACE a widget reads it as (SPEC.md 107.11): its own origin,
+           # the FACE a widget reads it as (SPEC.md 110.11): its own origin,
            # or a v1 file's titled frame - a border in, a title bar down
            "face": [x, y] if cont else [x + 1, y + TITLE_H],
            "screen": [sw, sh], "payver": pv, "paylen": ln,
@@ -392,7 +392,7 @@ def unpack_date(w):
 def deskcal(appts=(), tasks=(), lead=5, flags=0, snooze=None):
     """appts: (date-tuple, minute-of-day or None, text, remind, fired, lead,
     due, snoozed), remind defaulting to "timed" - an all-day one has none
-    (SPEC.md 107.3) - and due / snoozed to False (v2, SPEC.md 107.3); tasks:
+    (SPEC.md 110.3) - and due / snoozed to False (v2, SPEC.md 110.3); tasks:
     (text, done, due-date-tuple or None); snooze: (date-tuple, minute), the
     snooze slot at payload +4/+6 (v2), or None for v1's zeros. Sorted by
     (date, time + 1) as the package keeps them."""
@@ -417,7 +417,7 @@ def deskcal(appts=(), tasks=(), lead=5, flags=0, snooze=None):
                      | (APPT_FIRED if fired else 0)
                      | (APPT_DUE if due else 0)
                      | (APPT_SNOOZED if snz else 0), al, text))
-    # the package's own order (SPEC.md 107.3): (date, time + 1) as words,
+    # the package's own order (SPEC.md 110.3): (date, time + 1) as words,
     # so ALL DAY (0FFFFh) wraps to 0 and comes first in its day
     recs.sort(key=lambda r: (r[0], (r[1] + 1) & 0xFFFF))
     for i, (d, t, f, al, text) in enumerate(recs):

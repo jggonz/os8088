@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SPEC.md 26.8.1 / 107.2: a DRAG-MADE shortcut is not a DIA row.
+"""SPEC.md 26.8.1 / 110.2: a DRAG-MADE shortcut is not a DIA row.
 
     make && make diatest && python3 tests/diashort.py
 

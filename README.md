@@ -270,7 +270,7 @@ a Standard File dialog for opening and saving.
   own once it is clicked. Once opened it comes back at every boot where it
   was left, and a widget that has gone missing becomes a desktop shortcut
   with one message rather than stopping the boot. `apps/os88dia.inc` is the
-  shared half a new widget includes (SPEC.md 107).
+  shared half a new widget includes (SPEC.md 110).
 - **Menu bar clock** — read from the hardware RTC at boot if the machine has
   one, kept from the PIT after that, and settable.
 - **A system clipboard**, shared across apps.

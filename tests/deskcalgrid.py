@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""SPEC.md 107.3: the Desk Calendar's month is the CALENDAR's month.
+"""SPEC.md 110.3: the Desk Calendar's month is the CALENDAR's month.
 
     make && python3 tests/deskcalgrid.py
 
 The grid is 42 bytes at the head of the package's bss (`DC_GRID`): byte i is
-the day in week row i/7, column i%7 - MONDAY first since v2 (SPEC.md 107.3,
+the day in week row i/7, column i%7 - MONDAY first since v2 (SPEC.md 110.3,
 `dc_build`'s (dow + 6) % 7) - or 0. This reads it out
 of a running guest and compares it with Python's own `calendar` - an
 independent second implementation of the same date maths - for the months

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SPEC.md 107.6 / PERFORMANCE.md Part 5: what the Desk Calendar WIDGET's
+"""SPEC.md 110.6 / PERFORMANCE.md Part 5: what the Desk Calendar WIDGET's
 gestures COST, in primitive calls and in 4.77 MHz time, and what an autostart
 costs a boot.
 
@@ -18,11 +18,12 @@ last call of a gesture are 5150 time; a stopped guest does not count cycles.
 On the VGA XT (TALL) and on the 5150's CGA (COMPACT), each off the SHIPPED
 360KB disk with a state file holding two appointments today (09:00, 10:00)
 and three tasks, the clock at Wed 14 Oct 2026 09:58, v2's budgets (SPEC.md
-107.3) ASSERTED:
+110.3) ASSERTED:
 
   first paint   the launch, its W_PAINT whole: <= 20 calls TALL, <= 14 COMPACT
-  full paint    the About card taken down by a key: dia_redraw, the face
-                again - the first paint's count
+  About down    the About card taken down by a key: dia_redrawr over the
+                card's rows alone - FEWER calls than the first paint (the
+                slabs those 62 rows reach, v4 review)
   day select    a press on the 15th, a day with nothing on it: <= 5 - today's
                 box and the 15th's, a sub-rect each, and card 2
   month         PgDn: <= 8 - card 1 from the nav down and card 2
@@ -42,7 +43,7 @@ SYSTEM.CFG, and with one whose trailer holds the calendar's DIA row - timed
 from reset to `dia_boot` (the desktop painted) and to `ui_task` (the
 autostart done), with the drive's own counters.
 
-Every number is PRINTED as the table PERFORMANCE.md Part 5 and SPEC.md 107.6
+Every number is PRINTED as the table PERFORMANCE.md Part 5 and SPEC.md 110.6
 quote.
 """
 import argparse
@@ -174,7 +175,7 @@ def ui_leg(tmp, machine, label, results):
             ui._wait(lambda: c.bss(st_off)[0] & 3 == 3,
                      "the first tick's registration", 120)
             # 09:00 Standup was missed: its FIRED and DUE marks owe the one
-            # save a launch makes by itself (SPEC.md 107.5.2)
+            # save a launch makes by itself (SPEC.md 110.5.2)
             m.disk(reset=True)
             ui._wait(lambda: not c.st() & DIA_S_DIRTY,
                      "the missed reminder's save", 60)
@@ -207,7 +208,7 @@ def ui_leg(tmp, machine, label, results):
 
         def gesture(act, settle=2.0, extra=(), tag=True):
             """The calendar's calls during `act`. tag=False sets aside the
-            tag row's: a PRESS reveals the handle at once (SPEC.md 107.11),
+            tag row's: a PRESS reveals the handle at once (SPEC.md 110.11),
             one plate BLIT1 of the include's that every press pays when the
             handle is down, and not the gesture's own draw."""
             hits, _ = measure(m, lambda: (act(),
@@ -231,11 +232,11 @@ def ui_leg(tmp, machine, label, results):
         os88marty.pace(m, 1.0)
         c.front()
         full = gesture(lambda: m.key("KeyX"), 3.0)
-        print("%s: full paint       %s" % (label, full))
-        r["full_paint"] = full.row()
-        check(abs(full.n - first.n) <= 2, "%s: the About card's take-down is "
-              "the first paint's picture (%d against %d calls)"
-              % (label, full.n, first.n))
+        print("%s: About down       %s" % (label, full))
+        r["about_down"] = full.row()
+        check(0 < full.n < first.n, "%s: the About card's take-down repaints "
+              "the rows it covered, not the face (%d against the first "
+              "paint's %d calls)" % (label, full.n, first.n))
 
         print("%s: a press on the 15th" % label)
         c.front()

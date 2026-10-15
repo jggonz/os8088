@@ -12,7 +12,7 @@ OSAPI_WM_DESK's QUERY and MAKE in its entry proc, a face of two white cards
 with the desktop's ground between them through OSAPI_GFX_DESK, and counters
 of its presses, releases and keys in its bss - with a SYSTEM.CFG DIA row and
 a DESKPROB.DAT that put its FACE at (376,184), the frame at (375,184) - a
-v2 header with DIA_HF_CONT (SPEC.md 107.11). Every assertion is the GUEST'S
+v2 header with DIA_HF_CONT (SPEC.md 110.11). Every assertion is the GUEST'S
 state: wm_zord, [menu_win], W_FLAGS, I_FLAGS, the probe's bss, breakpoints,
 and the framebuffer.
 
@@ -41,7 +41,7 @@ and the framebuffer.
               takes them too; and a Standard File chooser takes the keys over
               a widget that owns the bar.
   --leg small (row desksmall, MartyPC's 128KB CGA 5150, kern_small) QUERY
-              refuses, so the probe is the TITLED FALLBACK (SPEC.md 107.7):
+              refuses, so the probe is the TITLED FALLBACK (SPEC.md 110.7):
               no WF_DESK, the COMPACT layout, an ordinary 130 x 70 frame with
               a title (no tag row, no last gap), a dock tile, a gap that is
               WHITE with a 1-px rule through its middle, the worker's kicks
@@ -73,7 +73,7 @@ kernel's hover edge says WF_HOVER - and these legs:
               box's place unrevealed drags, and a press and release on it
               closes the widget and removes its DIA row by name.
 
-WAVE 3 (SPEC.md 107.11) MOVES THE PROBE ONTO os88dia.inc's DIA_WIDGET: its
+WAVE 3 (SPEC.md 110.11) MOVES THE PROBE ONTO os88dia.inc's DIA_WIDGET: its
 face, tag, gestures and timers are the include's, so every leg above now
 gates the INCLUDE - the tag row is compared pixel for pixel with a picture
 composed here from the guest's own font ([font_seg]:[font_base]), the
@@ -113,7 +113,7 @@ fails on wm_dc_take; take the `[wm_dmg_npro]` store out and D fails on a
 title bar drawn; take the hover edge's compare out of cur_shape_pass and
 `hover` fails at B; take cur_hov_x's chooser test out and F fails.
 
-**BREAK IT ON PURPOSE** (each run, SPEC.md 107.9): take wm_lift's desk test
+**BREAK IT ON PURPOSE** (each run, SPEC.md 110.9): take wm_lift's desk test
 out and `z` fails on wm_zcut firing under the right press; take the
 content press's WF_DESK arm out of ui.inc and `z` fails with the press
 swallowed (no W_ONCLICK, no release); take wm_top's desk test out and `z`
@@ -752,7 +752,7 @@ def leg_small(ui):
     rule = GAP // 2
     check(all(all(g) if r != rule else not any(g) for r, g in enumerate(gap)),
           "its gap is white with a 1-px rule through row %d of %d - one "
-          "BLIT1, no ground (SPEC.md 107.7): lit per row %r"
+          "BLIT1, no ground (SPEC.md 110.7): lit per row %r"
           % (rule, GAP, [sum(g) for g in gap]))
     card = all(rows[fy + 5][x] for x in range(fx, fx + FACE_W))
     check(card, "card 1 is white across the face")
@@ -760,7 +760,7 @@ def leg_small(ui):
     os88marty.guest_sleep(m, 5)
     k1 = p.b(DP_WAKES)
     check(k1 != k0, "the worker's kicks reach the package's DIA_WAKE (%d -> "
-          "%d): the worker arm keeps it, SPEC.md 107.11" % (k0, k1))
+          "%d): the worker arm keeps it, SPEC.md 110.11" % (k0, k1))
     print("A2: OSAPI_GFX_DESK on kern_small, laid by the probe's beat")
     m.write(p.seg * 16 + p.img + DP_TDRAG, b"\x03")
     ui._wait(lambda: p.b(DP_TDRAG) == 4, "the beat's OSAPI_GFX_DESK", 30)
@@ -867,12 +867,14 @@ def tag_picture(f, state):
             out[r][PX:PX + PW] = b.px[r]
         return out
     b = Band(FACE_W, TAG, lit=False)
-    by = (TAG - XW) // 2
+    xw = XW if TAG >= 12 else 8         # os88dia.inc's dia_boxy: a black
+    by = (TAG - xw) // 2                # row above it on an 11-row tag
+    xi = (xw - 6) // 2
     if state == "handle":
-        b.fill(XX, by, XW, XW, inv=True)
-        b.bits(XBITS, XX + 2, by + 2)
+        b.fill(XX, by, xw, xw, inv=True)
+        b.bits(XBITS, XX + xi, by + xi)
     else:
-        b.bits(XBITS, XX + 2, by + 2, inv=True)
+        b.bits(XBITS, XX + xi, by + xi, inv=True)
     b.text(f, NAME, NX, (TAG - 8) // 2, inv=True)
     b.bits(GRIP, GX, (TAG - 7) // 2, inv=True)
     return b.px
@@ -976,7 +978,7 @@ def edge_trace(m):
 
 
 def edge_check(tr, what, blits, grounds, ticks, why):
-    """SPEC.md 107.11's price of an edge: `blits` BLIT1s and `grounds`
+    """SPEC.md 110.11's price of an edge: `blits` BLIT1s and `grounds`
     OSAPI_GFX_DESKs, `ticks` (to 2 more) after the kernel's edge."""
     edges = [h for h in tr.hits if h["name"] == "cur_hov_x"]
     after = [h for h in tr.hits if h["name"] != "cur_hov_x"]
@@ -1154,7 +1156,7 @@ def leg_drag(ui, tmp):
     # Disk window over its old rect is marked stale and redrawn whole - chrome,
     # title bar and W_PAINT - over pixels that were already right. Measured
     # rather than refused: the cure is resident bytes kern_big does not have
-    # (107.9's owner item), and this count is what says it is still paid.
+    # (110.9's owner item), and this count is what says it is still paid.
     print("   a drop under the Disk window ran wm_draw_win %d times "
           "(the widget, and the Disk window redrawn whole)"
           % tr.count("wm_draw_win"))
@@ -1444,7 +1446,7 @@ def leg_close(ui, tmp):
 
 
 # =============================================================================
-# WAVE 3 (SPEC.md 107.11): the theme in the gaps, and the layout by height
+# WAVE 3 (SPEC.md 110.11): the theme in the gaps, and the layout by height
 # =============================================================================
 THEMES = ("Bright", "Dark", "Color")
 
@@ -1456,7 +1458,7 @@ CPH_ROWS = {0: 22, 1: 38, 2: 55}        # the Theme page's radios, pane-relative
 def set_theme(ui, kind):
     """The Control Panel's Theme page, the radio, the close box - the user's
     own route, on the RUNNING widget: a theme change must reach its gaps with
-    no cache to drop (SPEC.md 107.11)."""
+    no cache to drop (SPEC.md 110.11)."""
     import dispcp
     m = ui.m
     settle = os88marty.settle

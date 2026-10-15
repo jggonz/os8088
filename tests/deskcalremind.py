@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SPEC.md 107.3: the Desk Calendar's REMINDERS go off - at their minute, one
+"""SPEC.md 110.3: the Desk Calendar's REMINDERS go off - at their minute, one
 a minute - and RING ON CARD 3 until dismissed; a launch sums up what it
 missed. v2: there is NO ALERT on a firing any more.
 

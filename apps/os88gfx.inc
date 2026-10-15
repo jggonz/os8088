@@ -462,7 +462,7 @@ gfxe_line:
 
 %ifdef GFXE_STYLED
 ; =============================================================================
-; GFXE_TEXT / GFXE_BITS - a widget's face, composed (SPEC.md 5.12.8, 107.11)
+; GFXE_TEXT / GFXE_BITS - a widget's face, composed (SPEC.md 5.12.8, 110.11)
 ;
 ; Both draw into the band at the caller's stride, in the STYLE [gfxe_tsty]:
 ;

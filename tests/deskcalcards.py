@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SPEC.md 107.3 (v2): the Desk Calendar's THREE CARDS, probed pixel by pixel
+"""SPEC.md 110.3 (v2): the Desk Calendar's THREE CARDS, probed pixel by pixel
 on all three adapters.
 
     make && python3 tests/deskcalcards.py --leg vga|cga|herc

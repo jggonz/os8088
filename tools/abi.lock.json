@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "e3f079124479e7e9f01fcd00b82288eaf7b61a0a47b6505a1b1919ea75720ae9",
+  "fingerprint": "1a207a1f8a03967a91888b8c172d649e85b48579078362773d2a1121b676edf8",
   "version": 9
  },
  "PKG_FMT": {
-  "fingerprint": "e8a2734d75cfb47c465f4b9811936289dda3616c5de6918c2092950d4fe0e7e5",
+  "fingerprint": "5c330367b2613d78392bcf5e7460d1da2d46ef6df93935837819d39c101e7016",
   "version": 8
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -41,14 +41,14 @@
    "fingerprint": "29974c7cda4f5a83617babf4e1320bcb476ba23a92d9d77c2df2cd23ac8093f1",
    "from": 8,
    "guard": "PKG_FMT",
-   "reason": "OSAPI_CLK_GET appended at 0x0467 (SPEC.md 37.96); OSAPI_DESK_ITEM's record gains the DIA mark at +3 and the remove AH = 0xFF by name (SPEC.md 107.2) - both only add meaning to inputs no earlier package passed, so nothing built before stops running: no bump. Re-recorded on the merge of main's port pins (#248)",
+   "reason": "OSAPI_CLK_GET appended at 0x0467 (SPEC.md 37.96); OSAPI_DESK_ITEM's record gains the DIA mark at +3 and the remove AH = 0xFF by name (SPEC.md 110.2) - both only add meaning to inputs no earlier package passed, so nothing built before stops running: no bump. Re-recorded on the merge of main's port pins (#248)",
    "to": 8
   },
   {
    "fingerprint": "395279e0170b1cbddde17153f7960c49caec21793dd35b0702b7fc92ebd35ee9",
    "from": 9,
    "guard": "DRV_VER",
-   "reason": "OSAPI_CLK_GET appended at 0x0467 (SPEC.md 37.96); OSAPI_DESK_ITEM's record gains the DIA mark at +3 and the remove AH = 0xFF by name (SPEC.md 107.2) - both only add meaning to inputs no earlier package passed, so nothing built before stops running: no bump. Re-recorded on the merge of main's port pins (#248)",
+   "reason": "OSAPI_CLK_GET appended at 0x0467 (SPEC.md 37.96); OSAPI_DESK_ITEM's record gains the DIA mark at +3 and the remove AH = 0xFF by name (SPEC.md 110.2) - both only add meaning to inputs no earlier package passed, so nothing built before stops running: no bump. Re-recorded on the merge of main's port pins (#248)",
    "to": 9
   },
   {
@@ -105,6 +105,20 @@
    "from": 9,
    "guard": "DRV_VER",
    "reason": "OSAPI_WM_DESK DRAG reads BX now (your desk window) and WF_HOVER's chooser/dock caveats are written down: a contract clarified, no cell moved, so no PKG_FMT bump",
+   "to": 9
+  },
+  {
+   "fingerprint": "5c330367b2613d78392bcf5e7460d1da2d46ef6df93935837819d39c101e7016",
+   "from": 8,
+   "guard": "PKG_FMT",
+   "reason": "comments only: SPEC.md 107 renumbered 110 (the DIA section; main took 107 for EMS.DRV) - no cell, register or record changed",
+   "to": 8
+  },
+  {
+   "fingerprint": "1a207a1f8a03967a91888b8c172d649e85b48579078362773d2a1121b676edf8",
+   "from": 9,
+   "guard": "DRV_VER",
+   "reason": "comments only: SPEC.md 107 renumbered 110 (the DIA section; main took 107 for EMS.DRV) - no cell, register or record changed",
    "to": 9
   }
  ]

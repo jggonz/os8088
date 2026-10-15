@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SPEC.md 107.4: a pending RESUME stands the DIA relaunch down.
+"""SPEC.md 110.4: a pending RESUME stands the DIA relaunch down.
 
     make && make diatest && python3 tests/diahiber.py
 

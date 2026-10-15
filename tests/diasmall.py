@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SPEC.md 107.7: the Desk Calendar on `kern_small`, end to end - the WORKER
+"""SPEC.md 110.7: the Desk Calendar on `kern_small`, end to end - the WORKER
 arm is its tick, its reminders go off through it, and the place and the data
 come back with no autostart at all.
 
@@ -10,7 +10,7 @@ SYSTEM\\DIA\\DESKCAL.O88 like every system disk, SPEC.md 24.5.1) copied to a
 scratch file, on MartyPC's 128KB 5150 with a CGA - the floor machine, COMPACT.
 
   A  double-clicked out of SYSTEM\\DIA it opens as v2's TITLED FALLBACK
-     (SPEC.md 107.7): OSAPI_WM_DESK QUERY refuses on kern_small, so it is an
+     (SPEC.md 110.7): OSAPI_WM_DESK QUERY refuses on kern_small, so it is an
      ordinary 178 x 151 window - COMPACT's face less its tag row and last
      gap, plus the title bar - with no WF_DESK and an ordinary instance slot
      (a dock tile); kern_small has no OSAPI_WM_TIMER, so the first paint

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SPEC.md 107.3 (v2): the Desk Calendar's SNOOZE and DISMISS, the snooze
+"""SPEC.md 110.3 (v2): the Desk Calendar's SNOOZE and DISMISS, the snooze
 slot in the payload's spare words, and an old file read with nothing due.
 
     make && python3 tests/deskcalsnooze.py

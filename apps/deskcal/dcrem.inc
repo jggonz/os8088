@@ -1,5 +1,5 @@
 ; =============================================================================
-; apps/deskcal/dcrem.inc - the Desk Calendar's REMINDERS (SPEC.md 107.3, v2)
+; apps/deskcal/dcrem.inc - the Desk Calendar's REMINDERS (SPEC.md 110.3, v2)
 ;
 ; The DIA beat (dc_tick, every 36 ticks) reads the clock; when the MINUTE has
 ; changed it re-fires a SNOOZED appointment whose slot is reached, or fires
@@ -20,7 +20,7 @@
 DC3_NONE    equ 0               ; [dc_c3k]: card 3 says `No reminders today`,
 DC3_NEXT    equ 1               ; ...the next armed one (or the snoozed one),
 DC3_RING    equ 2               ; ...or RINGS the first DUE one
-DC_SNOOZE   equ 5               ; minutes (SPEC.md 107's open decision 7)
+DC_SNOOZE   equ 5               ; minutes (DIA-LAYER-PLAN.md 7, decision 7)
 
 ; dc_tpack - BX = TODAY, FAT-packed (dc_pack's shape for [dc_ty..dc_td]).
 ; Every other register kept
@@ -267,7 +267,7 @@ dc_ring:
 
 ; dc_snooze - S / Snooze: the RINGING appointment snoozed DC_SNOOZE minutes -
 ; DUE off, SNOOZED on, the slot now + 5 (into tomorrow past midnight). ONE
-; snooze is held: a snoozed other goes back to DUE (SPEC.md 107.3). Every
+; snooze is held: a snoozed other goes back to DUE (SPEC.md 110.3). Every
 ; register kept
 dc_snooze:
     cmp byte [dc_c3k], DC3_RING
@@ -395,8 +395,9 @@ dc_c3calc:
 ; dc_c3sync - card 3 recomposed when its state CHANGED - or [dc_c3f] says
 ; its text did (an edit) - and on COMPACT a reminder that starts ringing
 ; TAKES THE SLOT (and gives it back once it stops, if the user did not page
-; it meanwhile); never while the field is open there. The lock held. Every
-; register kept
+; it meanwhile); never while the field is open there - the sync is owed
+; ([dc_c3f]) until it shuts - and nothing is drawn under the About card,
+; whose dismissal paints the face. The lock held. Every register kept
 dc_c3sync:
     push ax
     push bx
@@ -418,12 +419,17 @@ dc_c3sync:
 .chg:
     cmp byte [dia_li], 2
     je .slot
+    cmp byte [dc_abon], 0
+    jne .x                      ; About up: its dismissal paints the face
     mov al, 2                   ; TALL / MID: card 3
     call dc_rshow
     jmp short .x
 .slot:
     cmp byte [dc_ed], 0
-    jne .x                      ; the field holds the slot's heading
+    je .open
+    mov byte [dc_c3f], 1        ; the field holds the slot's heading: the
+    jmp short .x                ; sync is OWED, and its shutting forces it
+.open:
     cmp byte [dc_c3k], DC3_RING
     jne .quiet
     cmp byte [dc_pane], 2
@@ -443,7 +449,9 @@ dc_c3sync:
     mov byte [dc_pane0], 0FFh
     call dc_menulive
 .draw:
-    mov al, 1
+    cmp byte [dc_abon], 0
+    jne .x                      ; the page turned under About: its
+    mov al, 1                   ; dismissal paints it
     call dc_rshow
 .x:
     pop cx
@@ -463,7 +471,7 @@ dc_rshow:
 ; Remind pick). A moment already PAST - before this minute - is FIRED at
 ; once, silently (not DUE: nothing rings for it); one that IS this minute is
 ; the next beat's to fire, so the minute last seen is forgotten (SPEC.md
-; 107.3). Every register kept
+; 110.3). Every register kept
 dc_stale:
     push bx
     push cx

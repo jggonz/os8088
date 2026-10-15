@@ -344,7 +344,7 @@ CWHITE    equ 15
 ; A DESK WINDOW lives under every application window: never raised, no title
 ; bar, frame, shadow or dock tile, the bar and the keys only while it was the
 ; last thing pressed. apps/os88dia.inc is the way to use these; a package
-; that calls either ships beside its own kernel (SPEC.md 107.8).
+; that calls either ships beside its own kernel (SPEC.md 110.8).
 %define OSAPI_WM_DESK       KERNEL_SEG:0x046D   ; AL = 0 QUERY: CF=0 this
                                  ; kernel has the layer (kern_small: CF=1, and
                                  ; every verb refuses there). AL = 1 MAKE, BX
@@ -1270,7 +1270,7 @@ OSAPI_LD_EVER   equ 6            ; ...and the AL that means THAT FILE IS AN
                                  ;   +1   1  the cell you would like
                                  ;   +2   1  0 document, 1 package, 2 folder
                                  ;   +3   1  OSAPI_DIA_MARK for a DIA's row
-                                 ;           (SPEC.md 107.2; KIND must be 1),
+                                 ;           (SPEC.md 110.2; KIND must be 1),
                                  ;           else stored as 0
                                  ;   +4  45  the path BELOW THE ROOT, NUL:
                                  ;           `APPS\CALC.O88`
@@ -1298,11 +1298,11 @@ OSAPI_LD_EVER   equ 6            ; ...and the AL that means THAT FILE IS AN
                                  ; or path differ and writes NOTHING when they
                                  ; do not, so register on every launch; it
                                  ; takes no desktop cell and the kernel
-                                 ; relaunches it at boot (SPEC.md 107.4).
+                                 ; relaunches it at boot (SPEC.md 110.4).
 OSAPI_DI_VOL    equ 0           ; a package's link record, field by field
 OSAPI_DI_CELL   equ 1
 OSAPI_DI_KIND   equ 2
-OSAPI_DI_DIA    equ 3           ; the DIA mark's byte (SPEC.md 107.2)
+OSAPI_DI_DIA    equ 3           ; the DIA mark's byte (SPEC.md 110.2)
 OSAPI_DI_PATH   equ 4
 OSAPI_DI_CAP    equ 49
 OSAPI_DI_BODY   equ 64

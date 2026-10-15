@@ -1,9 +1,9 @@
 ; =============================================================================
 ; apps/deskcal/dcdraw.inc - the Desk Calendar's three layouts, its three
 ; cards' composers, the partial redraws, the hit tests and the entry field
-; (SPEC.md 107.3, v2)
+; (SPEC.md 110.3, v2)
 ;
-; EVERY CARD PIXEL IS COMPOSED, THEN ONE OSAPI_GFX_BLIT1 (SPEC.md 107.11):
+; EVERY CARD PIXEL IS COMPOSED, THEN ONE OSAPI_GFX_BLIT1 (SPEC.md 110.11):
 ; dc_compose is os88dia.inc's DIA_COMPOSE - AL = the card, BX = the slab's
 ; first card row, CX = its rows - and writes the card's picture into the
 ; 176 x 32 band with GFXE_TEXT / GFXE_BITS, black ink on the white paper
@@ -91,7 +91,7 @@ dc_geos:
     ;  BIGS                  BIGY DOWX DOWY MONY NAVY NAVL NAVR NAVM HDRB
     db GFXE_X3 | GFXE_BOLD,   7,  64,   9,  22,  44,   8, 160,   0,  40
     ;  WKY W0 WP DOTY DOTH BOXT BOXH
-    db  60, 78, 16, 10,   2,   4,  16
+    db  60, 78, 16,  9,   2,   4,  16   ; the dot r+9..10, the box to r+11
     ;  HY A0 AP AN RULE T0 TP TN TX TTY BOX BAR BARH ATN TTN
     db  6, 22, 14, 2,  50, 57, 16, 2, 32, 2,  11,  2,  12,  14, 17
     ;  BELLY RX R1Y R2X R2Y R2N LKY LKX NONEX
@@ -100,15 +100,17 @@ dc_geos:
     db   8                      ; BELLX
 .mid:
     db GFXE_X2 | GFXE_BOLD,   4,  48,   4,  13,  26,   8, 160,   0,  22
-    db  38, 50, 12,  9,   1,   2,  12
+    db  38, 50, 12,  8,   1,   2,  12   ; the dot r+8, the box to r+9
     db  4, 16, 11, 2,  39, 42, 12, 2, 24, 1,   9,  1,  10,  14, 18
     db   3,  22,  4,  68,  4,  13, 18,  22, 26
     dw dc_bell12, dc_box9
     db   4                      ; BELLX: `21:00 Back up files` on one line
 .comp:
     db GFXE_X2 | GFXE_BOLD,   2,  48,   2, 0FFh, 10,  48, 136,  64,  19
-    db  20, 30,  9,  8,   1,   0,   9  ; the box r..r+8: at r-1 it took
-                                        ; the dot row of the day above
+    db  20, 30,  9,  8,   1,   0,   8  ; the box r..r+7 and the dot r+8
+                                        ; under it: at r-1 the box took the
+                                        ; dot row of the day above, and to
+                                        ; r+8 it ate its own (SPEC.md 110.9)
     db  3, 14, 10, 3,   0, 14, 10, 3, 24, 0,   8,  1,  10,  14, 18
     db  14,  24, 14,  24, 24,  18, 34,  24, 24
     dw dc_bell8, dc_box8
@@ -180,7 +182,7 @@ dc_role:
 ; -----------------------------------------------------------------------------
 ; dc_compose - DIA_COMPOSE (and dc_rrect's): AL = the card, BX = the band's
 ; first card row, CX = its rows. The card's elements on those rows, into the
-; band; then a held button's light (SPEC.md 107.3: the light is part of the
+; band; then a held button's light (SPEC.md 110.3: the light is part of the
 ; picture). Every register kept
 ; -----------------------------------------------------------------------------
 dc_compose:
@@ -260,6 +262,22 @@ dc_ctext:
     xchg ax, dx
     call dc_vis
     jc .x
+    cmp word [dc_cx1], 0
+    je .go                      ; dc_rrect's window: a string wholly
+    cmp cx, [dc_cx1]            ; outside the bytes it puts down is never
+    jge .x                      ; composed (a day box's week, say)
+    push ax
+    push dx
+    sub dx, ax                  ; DX = a cell's width (its height: 8/16/24)
+    call dc_slen                ; AX = the characters
+    mul dx
+    add ax, cx
+    inc ax                      ; past its last pixel, bold's one included
+    cmp ax, [dc_cx0]
+    pop dx
+    pop ax
+    jle .x
+.go:
     mov dx, ax
     sub dx, [dc_cr0]            ; the band row
     call gfxe_text
@@ -664,7 +682,7 @@ dc_cmon:
     xor ch, ch
     mov dl, [di + DCG_DOWY]
     xor dh, dh
-    mov bl, GFXE_BOLD
+    xor bl, bl                  ; regular: x1 bold fuses MONDAY (SPEC.md 110.3)
     call dc_cline
     ; --- today's month, `AUG 2026`
     cmp byte [di + DCG_MONY], 0FFh
@@ -937,9 +955,15 @@ dc_chead:
 .named:
     mov di, dc_line
     call dc_puts
+    xor bl, bl                  ; a page's name: regular
     jmp short .gt
 .day:
     call dc_hdname
+    xor bl, bl                  ; `Today` alone is bold: a date's `0` fills
+    call dc_istoday             ; in at x1 bold (SPEC.md 110.3)
+    jne .wt
+    mov bl, GFXE_BOLD
+.wt:
     cmp byte [dia_li], 2
     jb .put
 .gt:
@@ -948,7 +972,6 @@ dc_chead:
     call dc_lnz
 .put:
     mov cx, 8
-    mov bl, GFXE_BOLD
     call dc_cline
 .plus:
     cmp byte [dc_pane], 2       ; no `+` on the reminder's page
@@ -1287,17 +1310,62 @@ dc_crem:
     xor bl, bl
     jmp dc_ctext
 .some:
-    call dc_ln0                 ; the time, bold
+    call dc_ln0                 ; the time - after the day, when the one it
+    mov al, [dc_c3a]            ; rings for is not today's (a missed one
+    call dc_aptr                ; must not read as today's going off early)
+    mov ax, [si + DCA_DATE]
+    call dc_tpack               ; BX = today
+    xor cx, cx                  ; CX = the text's shift right (MID)
+    cmp ax, bx
+    je .tm
+    xor bl, bl
+    cmp byte [dia_li], 1
+    je .wd
+    push ax                     ; TALL / COMPACT: `23 Aug 21:00`
+    and al, 31
+    call dc_putn
+    mov al, ' '
+    call dc_putc
+    pop ax
+    mov cl, 5
+    shr ax, cl
+    and al, 15
+    call dc_mname
+    call dc_puts3
+    xor cx, cx
+    jmp short .sp
+.wd:                            ; MID, one line: `Sun 21:00`, the text moved
+    mov bh, al                  ; over and cut to fit
+    and bh, 31                  ; BH = the day
+    mov dx, ax
+    mov cl, 5
+    shr dx, cl
+    mov bl, dl
+    and bl, 15                  ; BL = the month
+    mov cl, 9
+    shr ax, cl
+    add ax, DC_Y0
+    call dc_dow_of
+    call dc_dname
+    xor bl, bl
+    call dc_puts3
+    mov cx, 32
+.sp:
+    mov al, ' '
+    call dc_putc
+.tm:
     mov ax, [dc_c3t]
     call dc_tfmt
     call dc_lnz
+    push cx
     mov di, [dc_geo]
     mov cl, [di + DCG_RX]
     xor ch, ch
     mov dl, [di + DCG_R1Y]
     xor dh, dh
-    mov bl, GFXE_BOLD
+    xor bl, bl                  ; regular: x1 bold fills a time's `0`s
     call dc_cline
+    pop bx                      ; BX = the shift
     call dc_ln0                 ; the text
     mov al, [dc_c3a]
     call dc_aptr
@@ -1305,12 +1373,18 @@ dc_crem:
     mov di, [dc_geo]
     mov cl, [di + DCG_R2N]
     xor ch, ch
+    mov ax, bx
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    sub cx, ax                  ; a character fewer for each 8 px moved
     mov di, dc_line
     call dc_putsn
     call dc_lnz
     mov di, [dc_geo]
     mov cl, [di + DCG_R2X]
     xor ch, ch
+    add cx, bx
     mov dl, [di + DCG_R2Y]
     xor dh, dh
     xor bl, bl
@@ -1378,6 +1452,20 @@ dc_rrect:
     mov [dc_rr0], bx
     mov [dc_rr1], dx
     mov [dc_rb], cx
+    mov al, cl                  ; the x window the compose may skip text
+    xor ah, ah                  ; outside of (dc_ctext): bytes CL..CH
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    mov [dc_cx0], ax
+    mov al, ch
+    xor ah, ah
+    inc ax
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    mov [dc_cx1], ax
+    mov al, [dc_rcard]
     call dc_lpdone              ; a pending un-light this covers is settled
     call dia_ctop               ; BX = the card's face-relative top
     add bx, [dia_fy]
@@ -1424,12 +1512,16 @@ dc_rrect:
     dec dx
     mov al, [dc_rcard]
     mov bx, [dc_rr0]
+    cmp byte [dc_rb], DC_FX2 / 8
+    ja .nof                     ; bytes right of the field: none of it
     call dc_fover               ; the field over these rows, when open
+.nof:
     mov ax, [dc_rr0]
     add ax, [gfxe_bh]
     mov [dc_rr0], ax
     cmp ax, [dc_rr1]
     jle .chunk
+    mov word [dc_cx1], 0        ; the paint's compose: the whole width
     pop es
     pop bp
     pop di
@@ -1705,7 +1797,10 @@ dc_hmon:
     sub si, 2                   ; the nav's light: 2 above, 1 below
     cmp byte [dia_li], 2
     jne .tall
-    ; --- COMPACT: the number left, the weekday and the nav right of it
+    ; --- COMPACT: the number left, the weekday and the nav right of it -
+    ; the light from the nav's own row, MONDAY's last being the one above
+    inc si
+    inc si
     cmp dx, 19
     jg .grid
     cmp cx, 40
@@ -1767,9 +1862,12 @@ dc_hmon:
 .navb:
     mov si, [di + DCG_NAVY]
     and si, 0FFh
-    sub si, 2
     mov dx, si
-    add dx, 11
+    add dx, 9                   ; 1 below the 8 rows
+    cmp byte [dia_li], 2
+    je .nb1                     ; COMPACT: none above (MONDAY's rows)
+    sub si, 2                   ; 2 above
+.nb1:
     jmp dc_hbtn
 .today:
     mov ah, 2                   ; the day number's own bytes light: from
@@ -1860,10 +1958,10 @@ dc_hday:
     add dx, 11
     cmp byte [dc_pane], 2
     je .page
-    cmp cx, DC_PLUSX - 8
-    jl .page
-    mov al, DCB_PLUS
-    mov bx, ((DIA_FACE_W / 8 - 1) << 8) | ((DC_PLUSX - 8) / 8)
+    cmp cx, DC_PLUSX            ; bytes 20..21 - clear of the field's
+    jl .page                    ; last byte (19), so its un-light cannot
+    mov al, DCB_PLUS            ; reach the field it just opened
+    mov bx, ((DIA_FACE_W / 8 - 1) << 8) | (DC_PLUSX / 8)
     jmp dc_hbtn
 .page:
     cmp byte [dia_li], 2

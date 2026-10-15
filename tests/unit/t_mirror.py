@@ -259,7 +259,7 @@ ALIAS = [
     # to packages under the SDK's prefix: OSAPI_PKG_START answers it in AL,
     # and The Wire words it rather than printing the number.
     ("kernel/loader.inc", "LD_EVER", "apps/os88api.inc", "OSAPI_LD_EVER"),
-    # SPEC.md 107.2. The DIA mark: which byte of a desktop row says "this is
+    # SPEC.md 110.2. The DIA mark: which byte of a desktop row says "this is
     # a remembered widget", and the value it must EQUAL. The kernel's desk_live
     # and dia_boot read it, CTRL.DRV's settings core writes it, a package sets
     # it in the record it hands OSAPI_DESK_ITEM, and the host tool writes the

@@ -4661,7 +4661,7 @@ section .cold                   ; ...and back: drv_notice_x runs AFTER the first
                                 ; it is resident cold code and not this
 drv_notice_x:
 %ifdef OS88_SHORTCUTS
-    call dia_boot               ; the widgets FIRST (SPEC.md 107.4), so a
+    call dia_boot               ; the widgets FIRST (SPEC.md 110.4), so a
 %endif                          ; driver's panel opens IN FRONT of them
     push ax
     cmp byte [drv_nerr], 0

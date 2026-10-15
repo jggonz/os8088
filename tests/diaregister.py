@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SPEC.md 107.2, 107.5, 107.5.2: the Desk Calendar REGISTERS itself, once.
+"""SPEC.md 110.2, 110.5, 110.5.2: the Desk Calendar REGISTERS itself, once.
 
     make && python3 tests/diaregister.py
 
@@ -15,14 +15,14 @@ DESKCAL.DAT. One boot on a VGA XT (MartyPC), driven by name:
      whose caption is `Calendar`. OSAPI_CLK_GET's first caller is here too:
      the month on show and the selected day are today's. Untouched, it then
      WRITES NOTHING: seven guest seconds on, no save is owed and A: has no
-     DESKCAL.DAT (SPEC.md 107.5.2).
+     DESKCAL.DAT (SPEC.md 110.5.2).
   C  a second double-click is REFUSED by the package itself (dia_load's
-     singleton, SPEC.md 107.5.2): `Desk Calendar is open`, ld_status
+     singleton, SPEC.md 110.5.2): `Desk Calendar is open`, ld_status
      LD_EABORT, one calendar window - and SYSTEM.CFG is byte-identical to
      B's, and nothing was written: the refusal comes before dia_load's
      first file call (the loader's read of the package is all it costs).
   D  the x its HANDLE reveals (hovered: a widget has no close box, SPEC.md
-     107.11) removes the row BY NAME: SYSTEM.CFG has no trailer, and the
+     110.11) removes the row BY NAME: SYSTEM.CFG has no trailer, and the
      close saved DESKCAL.DAT - 2,456 bytes, a valid header holding the
      widget's FACE origin (DIA_HF_CONT) and the empty payload.
   E  a reset brings NO calendar back: the row went with the close.
@@ -137,7 +137,7 @@ def main():
               "it opened on today's month with today selected (%d-%d %d)"
               % (y, mo, sel))
 
-        # A LAUNCH ALONE WRITES NOTHING (SPEC.md 107.5.2): with no state
+        # A LAUNCH ALONE WRITES NOTHING (SPEC.md 110.5.2): with no state
         # file the place on record is where the window opened, so three
         # polls later no save is owed and A: has no DESKCAL.DAT - a wave-2
         # build wrote one ~2 s after every first launch. The file comes with

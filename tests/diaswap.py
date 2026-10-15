@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SPEC.md 107.5.1: a DIA's save asks whether the disk is still HOME.
+"""SPEC.md 110.5.1: a DIA's save asks whether the disk is still HOME.
 
     make && make diatest && python3 tests/diaswap.py
 
@@ -19,7 +19,7 @@ user swaps A: to reach anything else, and every shipped disk carries
      floppies still pass os88disk.py --verify.
   D  the apps disk goes in again and the probe's close box is clicked: the
      remove cannot read CTRL.DRV, whose toast asks for the system disk, and
-     the close is DECLINED once (SPEC.md 107.5) - the probe stays up rather
+     the close is DECLINED once (SPEC.md 110.5) - the probe stays up rather
      than closing with its row stranded in SYSTEM.CFG. The system disk back,
      the next close goes ahead and the row is gone.
 

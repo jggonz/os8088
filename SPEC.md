@@ -1995,7 +1995,7 @@ MODULE-SELFCONTAIN-PLAN 3.2's named fallback, a word per module in `mod_tab`,
 is 8 of them. The pad is zero bytes outside that zone, so every build that
 already fitted is byte-identical; it exists because `ANIMOFF=1` takes 124
 bytes of panel out and landed `CTRL.DRV` at 12,193 + 141 against a 12,288
-claim, refusing the knob build on §107's branch. What moved is page *body* text, whose only readers are the `cp_*_paint` bodies
+claim, refusing the knob build on §110's branch. What moved is page *body* text, whose only readers are the `cp_*_paint` bodies
 and their click ladders — every one inside the image, entered only through
 `call far [CPFP+…]` after `mod_need` succeeded. **The module-cannot-load path
 reads none of them**: `cp_open_x` is `.cold` and letters `cp_s_noload` /
@@ -2078,13 +2078,13 @@ that row:
 the whole image is already in memory and the gesture runs in it, at the same
 offset, and leaves it loaded. Otherwise the core is loaded, run and dropped.
 
-**The core carries §107.2's DIA rules**, because the core is what writes the
+**The core carries §110.2's DIA rules**, because the core is what writes the
 trailer they live in: `sc_m_add` stores +3 = 0 on any record that is not a
 DIA record, refuses a DIA record whose KIND is not 1, finds an existing DIA
 row by its path's final component and updates it in place or — byte-identical
 — answers its zone and writes NOTHING, and gives a DIA row no cell and no
 `desk_free` refusal; `sc_m_pdel` takes AH = 0xFF as "find the DIA row by
-name". `MODS_SIZE` grows by what that costs (§107.6) and no resident byte.
+name". `MODS_SIZE` grows by what that costs (§110.6) and no resident byte.
 
 **CTRL.DRV ships PLAIN on kern_big** (`os88mod.py --plain 0`). It packed to
 90%, so it costs two sectors of disk, about what the decode it no longer
@@ -7386,9 +7386,9 @@ byte survives, `[gfx_ln_ink]`, and `gfx_points` is its only reader.
 - **`apps/paint`'s `PT_LNLINE` arm** — deleted. It was the A/B §42.23.8 was
   measured with, and that measurement cannot be repeated.
 
-#### 5.12.8 `GFXE_TEXT` and `GFXE_BITS` — a widget's face, composed (§107.11)
+#### 5.12.8 `GFXE_TEXT` and `GFXE_BITS` — a widget's face, composed (§110.11)
 
-The DIA widget treatment (§107.11) draws every pixel of a card into ONE band
+The DIA widget treatment (§110.11) draws every pixel of a card into ONE band
 and puts it down with ONE `OSAPI_GFX_BLIT1`, so text on a card is never a
 `font_run` over a fill and nothing is written twice. These two capabilities
 are what it composes with; both imply `GFXE_BAND` and draw into
@@ -7415,7 +7415,7 @@ gfxe_bits    SI = record, CX = x, DX = y      a bit record: db rows, then a word
   `deskground` compares them pixel for pixel with the guest's own font.
 - **Clipping is by ROW and by the stride.** `y` is SIGNED and rows outside
   `0 .. GFXE_BAND_H - 1` are skipped, which is what lets a card be composed
-  32 rows at a time (§107.11's slabs) with a glyph that straddles two slabs
+  32 rows at a time (§110.11's slabs) with a glyph that straddles two slabs
   drawn half into each; bytes past the stride are skipped; `x` itself must
   not be negative. `gfxe_bfill` clips both ways.
 - **The glyphs are the kernel's** (`OSAPI_FONT_GLYPHS`, 8 bytes a glyph),
@@ -7452,7 +7452,7 @@ gfxe_bits    SI = record, CX = x, DX = y      a bit record: db rows, then a word
   fetched at 4 clocks a byte and two read-modify-writes, so eight rows and
   the setup are ~2,350. A face of ~190 x1 glyphs composes in ~95 ms before
   its blits, and a `DIA_COMPOSE` that skips the glyphs a slab cannot hold
-  saves the rejects as well (§107.6).
+  saves the rejects as well (§110.6).
 
 ### 5.13 `gfx_pixel` and `gfx_points` — which to reach for
 
@@ -19805,7 +19805,7 @@ smaller than it declared.
 ### 11.103 The desk layer (`WF_DESK`): windows that live under every application
 
 A **DESK WINDOW** is a window that belongs to the desktop rather than to the
-stack of applications: §107's widgets, the Desk Calendar first. It is drawn
+stack of applications: §110's widgets, the Desk Calendar first. It is drawn
 above the desktop's ground and its icons and **below every ordinary window**,
 it is never raised, it has no title bar, frame, shadow or boxes, it has no
 dock tile, and it takes the menu bar and the keys only while it is the last
@@ -19813,7 +19813,7 @@ thing the user pressed. The owner asked for exactly that: *"the always behind
 layer, and ... a different window treatment than regular apps to
 differentiate them"*. The treatment itself - the cards, the name tag, the
 hover handle - is package code shared as source (`apps/os88dia.inc`,
-§107.11); what is here is the kernel's half, which is the layer and nothing
+§110.11); what is here is the kernel's half, which is the layer and nothing
 that draws.
 
 It is **kern_big's** (and kern_emu's, which is kern_big plus §9.11.7).
@@ -19831,23 +19831,23 @@ of `WF_DESK`, the loader of `IF_DESK`, §11.103.7's hover edge of
 bit.
 `tools/os88geom.py` mirrors them and `t_mirror` holds the copies.
 
-**What it costs**, measured at wave 1 (§107.6): **+104** bytes of `.text`
+**What it costs**, measured at wave 1 (§110.6): **+104** bytes of `.text`
 on kern_big and kern_emu (image rungs 183 and 430 left before) and **+154**
 of `.cold` (351 and 227 before - kern_emu's is the binding one, 73 left
 after); kern_small spends the two cells' 12 bytes of `.text` and nothing
-else. No rung was crossed. Wave 1's review fixes (§107.9) add **+28** of
+else. No rung was crossed. Wave 1's review fixes (§110.9) add **+28** of
 `.text` and **+18** of `.cold` on both: kern_big image 51 left, cold 179;
 kern_emu image 298, cold **55**; kern_small unchanged. Wave 2 (the posted
 drag and the hover edge, §11.103.6-7) adds **+46** of `.text` (two of them
 `[cur_hovw]`, initialised data) and **+54** of `.cold` on both, and nothing
 on kern_small, which assembles byte for byte as before: kern_big image **5**
-left, cold 125; kern_emu image 252, cold **1** (§107.9). Wave 2's review
-fixes (§107.9) add **+5** of `.text` and take **1** of `.cold` back on both -
+left, cold 125; kern_emu image 252, cold **1** (§110.9). Wave 2's review
+fixes (§110.9) add **+5** of `.text` and take **1** of `.cold` back on both -
 the DRAG post names its window and the pick-up asks for a desk one - and
 nothing on kern_small: kern_big image **0** left, cold 126; kern_emu image
 247, cold **2**. **A
 rung crossing is a stop for the owner**, not a build fix (CLAUDE.md): the cut
-order is §107.10's.
+order is §110.10's.
 
 #### 11.103.1 The z invariant: every desk window is at the BOTTOM of `wm_zord`
 
@@ -19923,7 +19923,7 @@ anyone can hold. Showing a widget under open windows therefore redraws the
 ordinary windows it overlaps whole (`.mbelow`): that is rare - a boot's
 autostart runs before any application is open - and safe. **A DROP is the
 same marking and is not rare** once a widget can be dragged: §11.103.6
-prices it, and the cure is an owner's decision (§107.9).
+prices it, and the cure is an owner's decision (§110.9).
 
 A desk window already on the glass shown again is the same arm: one damage
 pass over its frame.
@@ -19958,7 +19958,7 @@ the same store, for every window (§11.103.6).
   `kernel/fdlg.inc`) gains an arm on its "no chooser" path: if `[menu_win]` is
   a `WF_DESK` window, the key goes to IT (§12.6). There is no visible test:
   `menu_check` takes the bar off a window that is not visible at the paint
-  that hid it, so `[menu_win]` is never a hidden window (§107.9). A modal Standard
+  that hid it, so `[menu_win]` is never a hidden window (§110.9). A modal Standard
   File chooser is tested first and still takes every key (§38.2); a chooser
   gone and not yet reaped still sends the key nowhere. `desk_key_x` is already
   gated on `[menu_win]` = 0 (§26.8.5), so a widget typing never selects a
@@ -19969,7 +19969,7 @@ the same store, for every window (§11.103.6).
   now promotes the front ORDINARY window), and when the widget gives them
   back itself: `OSAPI_WM_DESK` RELEASE, which a widget calls on Esc.
 - **There is no lost-focus event.** A widget that shows focus polls
-  `OSAPI_MENU_OWNER` (an inline cell) only while it owns the bar (§107.11).
+  `OSAPI_MENU_OWNER` (an inline cell) only while it owns the bar (§110.11).
 
 #### 11.103.5 No chrome: the chromeless sites, and the `t_chromesites` ratchet
 
@@ -19999,7 +19999,7 @@ as CHROMELESS (it must read `test word [..+W_FLAGS], WF_FULL | WF_DESK`,
 | `wm_clip_subl` | CHROMELESS | `wm_occl_l`'s frame-and-L is the frame alone: no L to draw back (§11.103.1) |
 | `wm_refit` | FULL-ONLY | the latch's refit to its display |
 | `wm_raise` | FULL-ONLY | the incoming window covers the screen; a desk window is never raised |
-| `wm_snap_want` (and its assertion) | FULL-ONLY | a desk window KEEPS §11.94's snap: `W_X` = 7 mod 8, so the face at `W_X + 1` is on the byte grid (§107.11) |
+| `wm_snap_want` (and its assertion) | FULL-ONLY | a desk window KEEPS §11.94's snap: `W_X` = 7 mod 8, so the face at `W_X + 1` is on the byte grid (§110.11) |
 | `wm_fullscreen` | FULL-ONLY | the latch's own setter |
 | `wm_damage` | FULL-ONLY | FULL forces "whole" because its fill ignores `WF_OWNBG`; a desk window is OWNBG and gets a sub-rect |
 | `wm_cov_rect` | FULL-ONLY | a desk window reaches the frame through `wm_su_rect` (below) |
@@ -20020,7 +20020,7 @@ arm there does something a widget must not:
   chromeless arm has already shrunk by the shadow). `wm_su_rect` is "the
   content rect" for `wm_damage`, `wm_cov_rect`, the raise cache and the drag
   cache, and its title inset would otherwise cut the top `TITLE_H` rows and
-  the borders off every damage rect `OSAPI_WM_DAMAGE` hands a widget (§107.9).
+  the borders off every damage rect `OSAPI_WM_DAMAGE` hands a widget (§110.9).
 
 #### 11.103.6 The posted drag, and no drag cache
 
@@ -20092,7 +20092,7 @@ widget's and the Disk window's whole chrome, 15-call title bar and
 on the order of a second with a Note Pad window over the widget. The same
 root is a standing cost once a widget is left over the dock: every dock
 change marks it through `dock_px_hit`, and that marks every window above it.
-**The cure is resident and kern_big's image rung has none** (§107.9's owner
+**The cure is resident and kern_big's image rung has none** (§110.9's owner
 item): make "a desk window paints with exact primitives only" a contract,
 then have `wm_dmg_stale` treat the windows above a `WF_DESK`
 `[wm_dmg_stwin]` as clean and skip `.mbelow` - about 10 to 16 bytes of
@@ -20110,7 +20110,7 @@ no byte on it (a `WF_DESK` clamp of `y + h` to the dock's top is 8 to 10 of
 `.text`, kern_big has 0): **wave 3's include re-fits the frame** - after a
 drop whose bottom is past `[vid_h]`, the poll that sees the drag is over
 brings the whole frame back on the glass before it saves the place, at one
-extra paint for an out-of-band drop only (§107.11).
+extra paint for an out-of-band drop only (§110.11).
 
 **A drag promotes nobody**: `ui_drag` stores `[wm_dmg_npro]` = 1 before its
 `wm_paint_dmg`, on kern_big, for EVERY window. A drag never changes which
@@ -20177,7 +20177,7 @@ of `wm_hit`'s answer and both for want of a byte:
   chooser (§38.2): a dead control shown, never a live one. The cure is an
   edge to nothing at the chooser's show (`xor bx, bx` / `xor cx, cx` / the
   far call, about 8 bytes of `.cold`), and kern_emu's cold rung has 2: the
-  owner's (§107.9). A package can refuse only for a chooser of its OWN.
+  owner's (§110.9). A package can refuse only for a chooser of its OWN.
 - **An open auto-hide dock over a widget is not a cover.** The edge asks
   bare `wm_hit`, which does not know `[dock_up]` (§30.6.1), so the pointer
   on an open strip lying over a widget reads as a hover. A hidden strip has
@@ -20201,7 +20201,7 @@ zeroes it) and **45** of `.cold`.
 - **No `OSAPI_WM_MINIMIZE` and no `OSAPI_FULLSCREEN`** on a desk window. It
   has no tile, so a minimized widget could not be brought back; a fullscreen
   one would be a latch over the screen with no title to leave it by. A
-  written rule rather than a kernel refusal (§107's open decision 12, the
+  written rule rather than a kernel refusal (DIA-LAYER-PLAN.md §7's decision 12, the
   default): `os88dia.inc` never calls either.
 - **No `OSAPI_SAVEU` after MAKE.** MAKE clears `WF_SAVEU` and `WF_1BPP`: a
   covered widget banked off the glass would bank other windows' pixels, and a
@@ -20219,7 +20219,7 @@ CF answers.
 | AL | verb | in | what |
 |---|---|---|---|
 | 0 | QUERY | - | CF = 0: this kernel has the desk layer. kern_small answers CF = 1, and so does every verb |
-| 1 | MAKE | BX = your window | make it a desk window - **in your ENTRY PROC only**, between `OSAPI_WM_CREATE` and its return. **Refused (CF = 1)** for a window not in use, VISIBLE, `WF_FULL` or `WF_SIZABLE`, for a window that already HAS an owner, with no load in progress, and for a window the loading package did not make. That is how MAKE knows its caller for nothing: `wm_owner` is published only at the loader's step 9, AFTER the entry proc returns (§21), so the window being set up is the one nobody owns yet; `[ld_base]` is the loading package's segment from step 5 until step 9's show and 0 otherwise, so `W_SEG` = `[ld_base]` (non-zero) says the window is ITS, made in this load; and the loader's `[ld_rec]` is still unpublished (`I_STATE` = 0), which a callback that step 9's own repaint reaches is not (§107.9). Effect: `WF_DESK \| WF_NOANIM \| WF_OWNBG` on, `WF_SAVEU \| WF_1BPP` off, and the z entry ROTATED to `[0]` (each entry below it moves up one, in order). **`IF_DESK` is step 9's, not MAKE's**: the loader sets it on the record when the window the entry proc RETURNS is `WF_DESK`, so an instance is tile-less exactly when its own window is a widget - a DIA that also opens an ordinary window and returns that one keeps its tile, and the window it can be minimized by |
+| 1 | MAKE | BX = your window | make it a desk window - **in your ENTRY PROC only**, between `OSAPI_WM_CREATE` and its return. **Refused (CF = 1)** for a window not in use, VISIBLE, `WF_FULL` or `WF_SIZABLE`, for a window that already HAS an owner, with no load in progress, and for a window the loading package did not make. That is how MAKE knows its caller for nothing: `wm_owner` is published only at the loader's step 9, AFTER the entry proc returns (§21), so the window being set up is the one nobody owns yet; `[ld_base]` is the loading package's segment from step 5 until step 9's show and 0 otherwise, so `W_SEG` = `[ld_base]` (non-zero) says the window is ITS, made in this load; and the loader's `[ld_rec]` is still unpublished (`I_STATE` = 0), which a callback that step 9's own repaint reaches is not (§110.9). Effect: `WF_DESK \| WF_NOANIM \| WF_OWNBG` on, `WF_SAVEU \| WF_1BPP` off, and the z entry ROTATED to `[0]` (each entry below it moves up one, in order). **`IF_DESK` is step 9's, not MAKE's**: the loader sets it on the record when the window the entry proc RETURNS is `WF_DESK`, so an instance is tile-less exactly when its own window is a widget - a DIA that also opens an ordinary window and returns that one keeps its tile, and the window it can be minimized by |
 | 2 | DRAG | BX = your DESK window | post the kernel's outline drag of BX (§11.103.6): `[ui_dragy]` = BX, which the content press compares with the window PRESSED once its `W_ONCLICK` has returned, and honours only for a `WF_DESK` one - so it is for your desk window's own `W_ONCLICK`, on the UI task, and never for a fullscreen window. Posted before a press, the press's seed wipes it; naming another window it does not match; from a worker it is a race. Anywhere else it moves nothing, but an ARMED press is handed one `W_ONDRAG` at an unmoved point. CF = 0. The drag eats the release: no `W_ONMOUSEUP` follows (nor after a refused post, which skipped the arm) |
 | 3 | RELEASE | BX = your window | if `[menu_win]` is BX, the bar - and with it the keys - goes to `wm_top` (the front application window, or Locator) and is redrawn. From a callback, under the lock (a widget's `W_ONKEY` on Esc). CF = 0 |
 
@@ -20244,7 +20244,7 @@ kern_small's loader ignores it.
 
 Both cells are appended at the table's end, so the ABI lock moves without a
 `PKG_FMT` bump (§20.2.0.1). A package that calls either ships beside its own
-kernel - §107.8's "not on The Wire" already applies to every DIA.
+kernel - §110.8's "not on The Wire" already applies to every DIA.
 
 ## 12. menu.inc
 
@@ -28052,7 +28052,7 @@ definer (§6.2 of docs/plans/completed/GFX-EMBEDDABLE-PLAN.md). It also takes
 conversions that plan's wave 8 needs.
 
 **A desk widget's check box carries a real tick, and it is not this mark
-revived** (§107.11, §107's open decision 4). What this section retired was a
+revived** (§110.11, DIA-LAYER-PLAN.md §7's decision 4). What this section retired was a
 pair of 1-pixel `gfx_line` diagonals, which are scattered single pixels on a
 1bpp adapter. The widget's tick is COMPOSED into its card's slab with strokes
 at least 2 pixels wide, and blitted with the rest of the slab in the one
@@ -38951,7 +38951,7 @@ Four things about the convention:
   later, is the quiet stand that DOES move the instance**, so a program that
   saves often may make the FIRST step a full `OSAPI_FILE_GOTO` - the one that
   re-reads the disk, which may have been swapped - and walk the rest with it:
-  a DIA's save does (§107.5.1), and says why the first one must stay full.
+  a DIA's save does (§110.5.1), and says why the first one must stay full.
 - **`SYSTEM/` is found by walking, not assumed.** `OSAPI_FILE_FIND` (§19.7.1)
   from the root, matching `type == OSAPI_FT_DIR` — the folder is an ordinary
   visible directory, unlike the system *files* inside it (§19.6).
@@ -38969,7 +38969,7 @@ configuration, and the file exists so that a gate can point one machine at a
 host server (`make thewiretest`) and a user can point theirs at a mirror.
 Nothing on the machine writes it.
 
-**A DIA's state file is the fourth** (§107.5): `SYSTEM\APPDATA\DESKCAL.DAT`
+**A DIA's state file is the fourth** (§110.5): `SYSTEM\APPDATA\DESKCAL.DAT`
 for the Desk Calendar, its window's place and the screen it was saved on
 ahead of its appointments and tasks, under a 16-byte DIA header that
 `apps/os88dia.inc` owns. It is on the widget's own volume like every other
@@ -49400,7 +49400,7 @@ than derived is a list that goes stale the first time anything is swapped in
 it — which is an argument for §24.5.6's shape as much as a correction, since a
 disk that takes the WHOLE payload has no curated list to go stale.)
 
-**`SYSTEM\DIA\` rides the small system disks too** (§107.7). A DIA needs no
+**`SYSTEM\DIA\` rides the small system disks too** (§110.7). A DIA needs no
 driver and a few KB of heap, so none of §24.5's three grounds applies; what
 kern_small lacks is the autostart, not the widget, and a widget launched by
 hand there keeps its place and its data in its own state file.
@@ -51221,7 +51221,7 @@ there would be nothing to keep one in.
 | 0 | 1 | the volume index (0 = A:), `0xFF` = a free row |
 | 1 | 1 | its byte of `[desk_zslot]` — in the FILE only: CTRL.DRV writes it from the table and the boot reader puts it back (§26.8.6) |
 | 2 | 1 | the kind: 0 document, 1 package, 2 folder (§19.1's type word) |
-| 3 | 1 | NOT spare, whatever this table said until §107: `\` (0x5C) on a shortcut dragged out of a Disk window — `sc_m_new` writes the path one byte early so `dsk_path`'s leading separator lands here — 0 on a package's link (`sc_m_add` stores it), and **`'D'`** (0x44) on a DIA row (§107.2). The DIA mark is an EQUALITY, so neither of the other two values can be read as one |
+| 3 | 1 | NOT spare, whatever this table said until §110: `\` (0x5C) on a shortcut dragged out of a Disk window — `sc_m_new` writes the path one byte early so `dsk_path`'s leading separator lands here — 0 on a package's link (`sc_m_add` stores it), and **`'D'`** (0x44) on a DIA row (§110.2). The DIA mark is an EQUALITY, so neither of the other two values can be read as one |
 | 4 | 45 | the entry's path BELOW THE ROOT, `APPS\CALC.O88`, NUL: `dsk_path`'s 32-byte folder path less its leading `\`, a `\` and an 8.3 name |
 | 49 | 13 | the caption, NUL |
 | 62 | 2 | `db 1, 16`: an icon record's header, so header and body ARE a record and the picture draws straight out of the claim |
@@ -51347,7 +51347,7 @@ then dispatch.
   thing. The letter is patched into the string before each toast,
   `desk_lbl_gen`'s way, and the 23 characters are exactly a toast's room. A
   package that will not load gets `ld_say_status`'s verdict.
-- **`sc_open` answers CF** (§107.4): CF = 1 iff the walk found no volume,
+- **`sc_open` answers CF** (§110.4): CF = 1 iff the walk found no volume,
   folder or file, after the toast; CF = 0 for everything else, a load the
   loader REFUSED included (its sentence is the answer, and the target is
   there). `desk_open`'s `jmp sc_open` ignores it; `dia_boot` is what reads
@@ -51521,7 +51521,7 @@ The ZONE INDEX says what the item is: 0..`DVOL_MAX`−1 the volumes, `DESK_SVZ`
 = 8 the service item, `DESK_SC0` = 9 .. `DESK_NZ`−1 = 23 the shortcuts.
 kern_small has only the volumes, so its `DESK_NZ` is `DVOL_MAX`. "Is it
 live" is `desk_live`: a volume's `DV_FLAGS` bit 0, the service item's
-`[desk_svc_seg]`, a shortcut's row — unless that row carries §107.2's DIA
+`[desk_svc_seg]`, a shortcut's row — unless that row carries §110.2's DIA
 mark, `'D'` at +3, which is a remembered WIDGET and not an icon: it is never
 live, so it holds no cell and is never painted or hit. That test has to be
 resident, on the reflow's own path, which never touches a disk. `desk_owner` answers the inverse, which
@@ -51555,9 +51555,9 @@ writes the asked-for cell as `DSL_PIN | DSL_GONE | cell` and pass 2 grants it
 if it can — "the slot you ask for, or the first available" is this routine
 and nothing new.
 
-**A DIA row is not live** (§26.9.2, §107.2), and its table byte is 0xFF, so
+**A DIA row is not live** (§26.9.2, §110.2), and its table byte is 0xFF, so
 the reflow never gives it a cell; rule 1's "a non-live row holds nothing" is
-the whole of its handling here. A row `dia_boot` downgrades (§107.4) loses
+the whole of its handling here. A row `dia_boot` downgrades (§110.4) loses
 its mark and so becomes live, and the reflow then places it like any new
 shortcut: the first free cell, pinned.
 
@@ -51664,7 +51664,7 @@ SERVICE item, and anything else is a PACKAGE and adds a LINK.
                    +0   1  the volume, 0 = A:
                    +1   1  the cell it would like, 0xFF = the first free
                    +2   1  0 document, 1 package, 2 folder
-                   +3   1  'D' (OSAPI_DIA_MARK): a DIA row (§107.2) -
+                   +3   1  'D' (OSAPI_DIA_MARK): a DIA row (§110.2) -
                            KIND must be 1. Anything else is stored as 0
                    +4  45  the path BELOW THE ROOT, NUL
                    +49 13  the caption, NUL
@@ -51673,7 +51673,7 @@ SERVICE item, and anything else is a PACKAGE and adds a LINK.
        AH    = (a package's remove) the zone its add returned, and ES:SI
                the record it added: the row goes only while its volume
                and path are still that record's. AH = 0xFF: the DIA row
-               whose path's FINAL component is the record's (§107.2) -
+               whose path's FINAL component is the record's (§110.2) -
                found by name, then the same check
   out  CF = 0 AL = the item's ZONE (an add)
        CF = 1 refused: a second service item, a withdraw of somebody
@@ -51698,7 +51698,7 @@ stamped `1, 16`, so a hostile record can mislead nobody but its own user.
 A kind above 2 or a volume past `DVOL_MAX` is refused, because those would
 send the open somewhere no code path goes.
 
-**A DIA record** (+3 = `'D'`, §107.2) is the same call with three differences
+**A DIA record** (+3 = `'D'`, §110.2) is the same call with three differences
 the settings core makes: an add of a widget that already has a row is an
 UPDATE in place when its volume or path changed and a no-op that writes
 nothing when neither did; it is not refused by a full desktop and takes no
@@ -59288,7 +59288,7 @@ tick to ¼ s) opens it; once open, it closes **`DOCK_LEAVE_T` = 14 ticks**
 (0.77 s, the nearest to ¾ s) after the pointer leaves the strip's rect, and
 a pointer that comes back inside that time resets the count.
 
-**A desk widget's handle uses the same two constants BY NAME** (§107.11):
+**A desk widget's handle uses the same two constants BY NAME** (§110.11):
 it is revealed `DOCK_HOVER_T` ticks after the pointer comes onto the widget
 and hidden `DOCK_LEAVE_T` ticks after it leaves, and it declines on the same
 four facts this strip declines on - a button held, a saver, a modal chooser,
@@ -64357,7 +64357,7 @@ column is a row nobody can read.
 
 ### 37.96 `OSAPI_CLK_GET` — the date and time a package may read
 
-Until §107 the SDK had **no date at all**: `OSAPI_GET_TICKS` is a tick count,
+Until §110 the SDK had **no date at all**: `OSAPI_GET_TICKS` is a tick count,
 the menu bar's clock is the kernel's to draw, and the `'CK'` debug block
 (§37.92) is closed to shipped code (§57.3 rule 1). A calendar needs the day.
 So one RARE cell, appended at the end of the table on both kernels:
@@ -64386,7 +64386,7 @@ OSAPI_CLK_GET   KERNEL_SEG:0x0467
   clock), so a package there can say "clock not set".
 - A package that calls it **ships beside its own kernel**: an older kernel at
   the same `PKG_FMT` has no 0x0467 (§20.2.0.1's open gap), which is why the
-  Desk Calendar is not offered on The Wire (§107.8).
+  Desk Calendar is not offered on The Wire (§110.8).
 
 ## 38. fdlg.inc — the Standard File dialog
 
@@ -86228,7 +86228,7 @@ page. The `[cp_sel]`-before-`KIND_CTRL` precedent is the menu bar clock's
 A machine with **no system disk at all** is not told about drivers it never
 enabled: only a row whose `DRVR_WANT` is set counts as a failure.
 
-**`dia_boot` is the first thing kern_big's `drv_notice` does** (§107.4):
+**`dia_boot` is the first thing kern_big's `drv_notice` does** (§110.4):
 every DIA row SYSTEM.CFG put back is launched through `sc_open`, in this
 routine's context — painted desktop, no lock, the boot disk in A: — which is
 `OSAPI_PKG_START`'s own. It goes BEFORE the Control Panel's notice so a
@@ -169775,11 +169775,11 @@ afterwards it said so in every one, the pixels that moved the status bar's
 `Memory:` digits (the CGA's 368-390 x 165-171, the VGA's 464-486 x 475-481)
 and the menu bar's clock: the cause, seen. All five passed.
 
-## 107. Desktop Integrated Applications (`SYSTEM\DIA\`, `apps/os88dia.inc`)
+## 110. Desktop Integrated Applications (`SYSTEM\DIA\`, `apps/os88dia.inc`)
 
 A **DESKTOP INTEGRATED APPLICATION** — a DIA, a widget — is a small program
 that belongs to the desktop rather than to a document: the Desk Calendar
-(§107.3) is the first. The ask was four things at once: it can be put
+(§110.3) is the first. The ask was four things at once: it can be put
 anywhere on the desktop; the desktop remembers it between boots, from where
 it was last launched; a widget that cannot be found is a graceful failure and
 not a stopped boot; and it is "modularized like the dock" while changing the
@@ -169794,8 +169794,8 @@ So a DIA is **not a new kind of program**. It is an ordinary `.O88` package
    shape, which owns its position, its state file's header and its presence;
 3. while it is open, the **desktop configuration** — §26.8.6's SYSTEM.CFG
    trailer, the one that already keeps every desktop icon — holds one **DIA
-   ROW** for it (§107.2), and the kernel relaunches it from that row at boot
-   (§107.4).
+   ROW** for it (§110.2), and the kernel relaunches it from that row at boot
+   (§110.4).
 
 **"Like the dock" is the §2.8 lesson, not its vehicle.** DOCK.DRV is an
 on-demand module: what is resident is tests and thunks, and everything that
@@ -169812,9 +169812,14 @@ driver attaches inside `drv_boot` before `ui_task` exists, cannot reach
 The design record is `docs/plans/completed/DIA-PLAN.md`, the judged design
 the waves were built from with the builders' log of every deviation at its
 end; what the code proved it wrong about is also recorded here, where it
-bound (§107.9).
+bound (§110.9).
 
-### 107.1 What a DIA is, and where it lives
+v2's design record - the desk layer, the widget treatment and the calendar as
+the owner's second mockup - is `docs/plans/completed/DIA-LAYER-PLAN.md`. **"The
+v2 design's open decision N"** in this section is that file's §7, item N
+(not DIA-PLAN.md's D1-D5, which are v1's).
+
+### 110.1 What a DIA is, and where it lives
 
 ```
 A:\SYSTEM\DIA\DESKCAL.O88        the package; LZ4-packed by PKGZ like any other
@@ -169828,22 +169833,22 @@ A:\SYSTEM\APPDATA\DESKCAL.DAT    its state (§19.9), written at runtime, never s
 - **A DIA is a DESK WINDOW** (§11.103) on kern_big and kern_emu: under
   every application window, never raised, no title bar, frame, shadow or
   dock tile, the bar and the keys only while it is the last thing pressed.
-  Its look is the WIDGET TREATMENT (§107.11) - chromeless cards with the
+  Its look is the WIDGET TREATMENT (§110.11) - chromeless cards with the
   desktop between them and a name tag that turns into a handle under the
   pointer - drawn by the package through `os88dia.inc`. On kern_small, and
   under any kernel whose `OSAPI_WM_DESK` QUERY refuses, it is the TITLED
-  FALLBACK: an ordinary window with v2's face (§107.7). §11.94's snap
+  FALLBACK: an ordinary window with v2's face (§110.7). §11.94's snap
   applies to both forms.
 - **Version 1** - an ordinary titled window with a dock tile, raised by a
-  click - is what the Desk Calendar still is until v2's wave 4 (§107.10); the
+  click - is what the Desk Calendar still is until v2's wave 4 (§110.10); the
   rest of this section describes v1 where it says "the window".
-- `apps/os88dia.inc` is the framework (§107.5): it loads the state file in the
+- `apps/os88dia.inc` is the framework (§110.5): it loads the state file in the
   entry proc — legal there, because the entry proc is stamped with its
   instance (`kernel/loader.inc`'s note; §20.12) — places the window, and on
   its first timer tick registers the DIA row. On close it removes the row by
   NAME and saves.
 
-### 107.2 The DIA row
+### 110.2 The DIA row
 
 A DIA row is a §26.8.1 shortcut record with two bytes pinned:
 
@@ -169893,22 +169898,22 @@ moves rows with `rep movsb` and `sc_m_add` with `rep movsw` — so the mark cost
 **no boot-overlay byte at all**, where a new KIND would have (`ovl_sc_load`
 turns a kind above 2 into a free row, and the blob has ~26 bytes left).
 
-### 107.3 The Desk Calendar (`apps/deskcal/`)
+### 110.3 The Desk Calendar (`apps/deskcal/`)
 
 The first DIA: a monthly calendar, a day's appointments, task checkboxes and
 reminders, two-colour on every adapter. `DESKCAL.O88` ships in `SYSTEM\DIA\`
 on every system disk - the four geometries, `emu.img`, both small system
-disks and the live media - and on no apps disk (§107.1). v1's wave 2
-(§107.10) was the window, the month and its navigation; wave 3 the
+disks and the live media - and on no apps disk (§110.1). v1's wave 2
+(§110.10) was the window, the month and its navigation; wave 3 the
 appointments, the tasks, the one-line entry and the Remind menu's lead times;
 wave 4 the reminders' FIRING, `kern_small`'s worker arm run end to end, and
-the measurements (§107.6). v2's wave 4 made it the widget below.
+the measurements (§110.6). v2's wave 4 made it the widget below.
 
 **v2 (wave 4) is THREE CARDS ON THE DESK** - the owner's second mockup,
 "even more of a widget". What follows is v2 and the contract; v1's titled
 232-wide window, its four-cell day fields and `*` marks, the inverse header
-strip, the selection `GFX_FRAME` and the alert-on-fire are gone (§107.9's
-"v2, wave 4" says what each became and why). §107.11 is the widget treatment
+strip, the selection `GFX_FRAME` and the alert-on-fire are gone (§110.9's
+"v2, wave 4" says what each became and why). §110.11 is the widget treatment
 the calendar wears, and every card pixel below is composed by it.
 
 ```
@@ -169927,22 +169932,22 @@ apps/deskcal/dcrem.inc     the reminders: the minute pass, the firing, the
 **The package.** `OS88_HEADER 'Desk Calendar', dc_entry, OS88_F_ICON |
 OS88_F_DESK` - header flag bit 6, so the loader gives it the TOP instance slot
 and the dock no tile (§11.103, §30) - a 16x16 calendar-page icon (also the DIA
-row's picture, so a row downgraded at boot shows it, §107.4),
+row's picture, so a row downgraded at boot shows it, §110.4),
 `OSAPI_ABOUT_SET` through `os88ui_about`, and `os88gfx.inc` (`GFXE_TEXT`,
 `GFXE_BITS`, a 176 x 32 band of 704 bytes in its own bss) with `os88dia.inc`
 included last. The DIA definitions are v1's (`DIA_DATNAME 'DESKCAL.DAT'`,
 `DIA_CAP 'Calendar'`, `DIA_PAYLEN` 2,440, `DIA_PAYVER` 1, `DIA_ICON` 32,
-`DIA_ONTICK dc_tick`) plus §107.11's: `DIA_WIDGET`, `DIA_TAG 'Desk
+`DIA_ONTICK dc_tick`) plus §110.11's: `DIA_WIDGET`, `DIA_TAG 'Desk
 Calendar'` (= the title), `DIA_RIGHT` 264, `DIA_LAYOUTS`, `DIA_PAINTCARD
 dc_pcard` (the include's `dia_slabs`, then the entry field when it is open),
 `DIA_COMPOSE dc_compose`, `DIA_ONCARD`, `DIA_ONCARDUP` and `DIA_ONFOCUS`.
 
 **The window** is the include's: a desk window 178 wide (the face and a
-ground column either side, §107.11) on kern_big and kern_emu, the titled
-fallback on kern_small (§107.7). `OSAPI_WM_KEEPH` stays; `OSAPI_WM_PREFER`
+ground column either side, §110.11) on kern_big and kern_emu, the titled
+fallback on kern_small (§110.7). `OSAPI_WM_KEEPH` stays; `OSAPI_WM_PREFER`
 and `OSAPI_WM_ONRESIZE` are GONE - the layout is chosen once, at `dia_load`,
 from `OSAPI_VIDEO`'s HEIGHT, and a PREFER pair is keyed by the adapter's KIND,
-which is the EGA bug §107.11 names (§107.9).
+which is the EGA bug §110.11 names (§110.9).
 
 **Three layouts by height** (`DIA_LAYOUT`, each `%error`-checked against its
 band): the face is 176 px wide on all three and each card is composed one
@@ -169962,14 +169967,14 @@ band): the face is 176 px wide on all three and each card is composed one
 | | TALL | MID | COMPACT |
 |---|---|---|---|
 | TODAY's day number, x3 (24 px a digit) / x2 (16) at x 8 | rows 7-30, x3 | 4-19, x2 | 2-17, x2 |
-| today's weekday, bold capitals (`MONDAY`) | x 64, rows 9-16 | x 48, rows 4-11 | x 48, rows 2-9 |
+| today's weekday, capitals (`MONDAY`), regular - x1 bold fuses it (v4 review) | x 64, rows 9-16 | x 48, rows 4-11 | x 48, rows 2-9 |
 | today's month, capitals (`AUG 2026`) | x 64, rows 22-29 | x 48, rows 13-20 | - (none) |
 | the nav: bare `<`, the month ON SHOW, `>` | rows 44-51: `<` x 8, `August 2026` centred, `>` x 160 | rows 26-33, the same | rows 10-17 beside the weekday: `<` x 48, `Aug 2026` x 64, `>` x 136 |
 | the weekday letters `M T W T F S S` (MONDAY FIRST) | rows 60-67 | 38-45 | 20-27 |
 | six week rows: first, pitch | 78, 16 | 50, 12 | 30, 9 |
 | a day: its number CENTRED in a 24 px field from x 4 (one digit at field + 8, two at + 4) | | | |
-| the dot under a day with appointments, 2 px wide at field + 11 | 2 rows at r + 10 | 1 row at r + 9 | 1 row at r + 8 |
-| TODAY: an inverse box 20 wide at field + 2, the number white | rows r - 4 .. r + 11 | r - 2 .. r + 9 | r .. r + 8 (the design's r - 1 took the dot row of the day above, §107.9) |
+| the dot under a day with appointments, 2 px wide at field + 11 | 2 rows at r + 9 | 1 row at r + 8 | 1 row at r + 8 |
+| TODAY: an inverse box 20 wide at field + 2, the number white | rows r - 4 .. r + 11 | r - 2 .. r + 9 | r .. r + 7, the dot row under it (§110.9) |
 | the SELECTED day when it is not today: a 1 px outline of that box | | | |
 
 The header block is TODAY's - the desk calendar's own page - and the nav
@@ -169977,15 +169982,16 @@ and the grid are the month ON SHOW. At either end of the range (January
 1980, December 2099) its arrow is not drawn and the step is refused. Ink and
 paper only, never grey, so nothing rounds to black on 1bpp (§39.4).
 
-**Card 2, the day** (TALL and MID): a bold heading - `Today` when the
-selected day is today, else `Tue 25 Aug` - with a bold `+` at x 160; the
+**Card 2, the day** (TALL and MID): a heading - `Today`, bold, when the
+selected day is today, else `Tue 25 Aug`, regular (x1 bold fills a date's
+`0`) - with a bold `+` at x 160; the
 selected day's appointments; a 1 px rule (x 8..167); the TASK list (one list,
 not per day, as v1). TALL: heading rows 6-13, agenda lines at 22 and 36
 (`HH:MM` at x 8 - `--:--` all day - and the text at x 56, at most 14
 characters on the glass), the rule at 50, tasks at 57 and 73 (an 11 x 11 box
 at x 8, its text at x 32, at most 17 characters); MID: heading 4-11, agenda
 16 and 27, rule 39, tasks 42 and 54 with 9 x 9 boxes and the text at x 24.
-**Two lines each** (the mockup's 91-row card; §107's open decision 2). When a
+**Two lines each** (the mockup's 91-row card; the v2 design's open decision 2). When a
 list has more items than lines its LAST line reads `+N more` and a click on
 it shows the next page (the last page's click the first). The selected item
 is its line INVERSE. A DONE task's box carries a real TICK, 2 px strokes - a
@@ -169996,12 +170002,12 @@ package no longer carries (`OS88UI_NOGLYPH`).
 
 | state | what it shows |
 |---|---|
-| RINGING - an appointment is DUE (fired, not dismissed) | a bell (16 x 16 TALL, 16 x 12 MID), its time bold, its text, and `Snooze • Dismiss` (TALL: time x 32 rows 8-15, text rows 25-32, links rows 41-48 - Snooze x 32, the dot x 88, Dismiss x 104; MID: `21:00 Back up files` on rows 4-11, links 18-25) |
+| RINGING - an appointment is DUE (fired, not dismissed) | a bell (16 x 15 TALL, 16 x 12 MID), its time (regular: x1 bold fills a `0`), its text, and `Snooze • Dismiss` (TALL: time x 32 rows 8-15, text rows 25-32, links rows 41-48 - Snooze x 32, the dot x 88, Dismiss x 104; MID: `21:00 Back up files` on rows 4-11, links 18-25) |
 | NEXT - the next armed reminder TODAY (or the snoozed one, at its snooze time) | the bell, the time and the text; no links |
 | NONE | the bell and `No reminders today` |
 
 **COMPACT's SLOT** (the CGA's second card, 44 rows) is ONE card that PAGES:
-its bold heading on rows 3-10 reads `Today >` (or `Tue 25 Aug >`), `Tasks
+its heading on rows 3-10 reads `Today >` (bold) or `Tue 25 Aug >`, `Tasks
 >` or `Reminder >`, with `+` at x 160 on the first two, and three lines at
 rows 14, 24, 34 hold that page - the day's appointments, the tasks (8 x 8
 boxes) or the reminder (an 8 x 8 bell, the time, the text, the links). A
@@ -170009,10 +170015,10 @@ click on the heading, `Tab` or Calendar > Show Tasks / Show Day pages it, and
 **a reminder that goes off TAKES THE SLOT** (it pages to the reminder), giving
 it back to the day once it is dismissed or snoozed.
 
-**Every card pixel is composed, then one `OSAPI_GFX_BLIT1`** (§107.11): no
+**Every card pixel is composed, then one `OSAPI_GFX_BLIT1`** (§110.11): no
 `font_run`, no fill under a glyph, nothing written twice - with one exception,
 the open entry field, below. What a gesture costs (PERFORMANCE.md's unit,
-the budgets `deskcalperf` holds; §107.6 has the measured figures):
+the budgets `deskcalperf` holds; §110.6 has the measured figures):
 
 | gesture | TALL calls | how |
 |---|---|---|
@@ -170030,7 +170036,7 @@ month label and the header block (both Go to Today), `+`, `+N more`, `Snooze`,
 out to bytes, composed INVERSE - one `BLIT1`) and acts on a release inside it
 (`DIA_ONCARDUP`); a release off it un-lights it and does nothing (the §13.5
 gesture). The light is part of the PICTURE, so a repaint while a button is
-held draws it lit and cannot leave a stale inversion (§107.9).
+held draws it lit and cannot leave a stale inversion (§110.9).
 
 | press on | does |
 |---|---|
@@ -170061,7 +170067,7 @@ Today, Previous Month, Next Month) and `Remind` (the leads), with every v1
 greying (§47). The app-name cell carries About and the kernel's Close,
 through `os88dia.inc`'s negotiator. **The About card** lies over the face
 (its lines are 14 cells at most) until a key, a press or a pick, and its
-take-down is ONE whole-face repaint (`dia_redraw`, §107.11).
+take-down is ONE whole-face repaint (`dia_redraw`, §110.11).
 
 **The one-line entry** (`os88line.inc`) takes card 2's HEADING ROW (the
 slot's on COMPACT): content x 4..155, so the `+` stays, rows heading - 3 ..
@@ -170071,9 +170077,13 @@ for EITHER, the parse deciding. It closes on `Enter` (kept), `Esc` (thrown
 away), a menu pick (as `Esc`, before the pick acts) and **losing the bar**
 (`DIA_ONFOCUS` with AL = 0: as `Esc`). Opening it is one `os88line_draw`
 over the heading; closing it is the heading's rows recomposed, one `BLIT1`.
-**A paint while it is open writes the field's pixels twice** - the slab with
-the heading, then `os88line_draw` over it - the one double write left, and it
-needs a paint while the user is typing. The parser, the order, the limits and
+**A redraw of card 2's heading rows while it is open writes the field's
+pixels twice** - the slab (the heading not composed under an open field),
+then `os88line_draw` over it. It needs a paint while the user is typing, a
+midnight while it is open (`dc_rday`), or COMPACT's open that turns the
+slot's page to the field's list; `+`'s own un-light is not one, its rect
+being bytes 20..21, clear of the field's last byte (19), and a `dc_rrect`
+wholly right of byte 19 never draws the field (v4 review). The parser, the order, the limits and
 the edit rules are v1's:
 
 | typed | is |
@@ -170089,7 +170099,7 @@ stays open); a task's at most 23. Editing an appointment keeps its reminder
 and lead while it stays timed, and its FIRED mark only while its time does
 not move (a moved one also loses DUE and SNOOZED). Appointments are kept in
 `(date, time + 1)` order (all day first in its day); the load CHECKS the
-order and the counts, and a payload that fails is DAMAGED (§107.5.2). `Del`
+order and the counts, and a payload that fails is DAMAGED (§110.5.2). `Del`
 asks through `os88ui_ask` (`Delete this appointment?` / `Delete this
 task?`) - an ordinary window that lands ABOVE every application and over the
 widget and takes the bar, giving it to `wm_top` when it closes (§11.103.4;
@@ -170104,12 +170114,12 @@ re-armed) or the DEFAULT for new ones, the toast saying which. v1's click on
 a line's mark column is gone with the mark.
 
 **A damaged state file** opens EMPTY and its first save asks `Replace
-damaged calendar?` (§107.5.2), as v1.
+damaged calendar?` (§110.5.2), as v1.
 
 **Date maths** (`dcdate.inc`) is v1's - Sakamoto's day of the week, the
 `0x15AA` month mask, navigation clamped to January 1980 .. December 2099 -
 with ONE change: the grid is MONDAY-FIRST (`dc_build` takes `(dow + 6) % 7`
-for the 1st's column). It is display only and fixed (§107's open decision
+for the 1st's column). It is display only and fixed (the v2 design's open decision
 5); the payload holds dates, not columns. The 42-byte grid is still the
 first thing in the package's bss, byte `i` = week row `i / 7`, column `i %
 7` counted from MONDAY; `deskcalgrid` compares it with Python's
@@ -170117,7 +170127,8 @@ first thing in the package's bss, byte `i` = week row `i / 7`, column `i %
 
 **Reminders** (`dcrem.inc`). The beat (`DIA_ONTICK`, every 36 ticks) reads
 `OSAPI_CLK_GET`; nothing is done inside a minute and a minute with nothing
-due draws nothing. An appointment's flags (payload `+4`):
+due draws nothing. An appointment's flags (its RECORD's `+4`, `DCA_FLAGS` -
+not the payload's `+4`, which is the snooze slot's minute):
 
 | bit | | |
 |---|---|---|
@@ -170135,7 +170146,11 @@ due draws nothing. An appointment's flags (payload `+4`):
   is REMOVED - so nothing waits on the user, nothing takes the keyboard, and
   nothing is gated on an alert or an open field any more.
 - **Card 3 rings the FIRST due appointment** in table order; dismissing it
-  shows the next due one, if any. `S` / Snooze and `D` / Dismiss act on it.
+  shows the next due one, if any. One that is NOT today's - a DUE left from
+  another day - carries its date before its time (`23 Aug 21:00` TALL and
+  COMPACT; MID's one line `Sun 21:00`, the text moved over 32 px and cut by
+  four characters), so a missed one never reads as today's going off early
+  (v4 review). `S` / Snooze and `D` / Dismiss act on it.
 - **Snooze** clears DUE, sets `SNOOZED`, and writes the SNOOZE SLOT, the
   payload's spare words: `+4` the snooze's minute of the day, `+6` its FAT
   date - now + `DC_SNOOZE` (5 minutes), into tomorrow past midnight. ONE
@@ -170161,13 +170176,16 @@ due draws nothing. An appointment's flags (payload `+4`):
   header and today's old and new boxes, card 2's heading and card 3, and
   runs the minute's work for the new day.
 - The save a firing, a snooze or a dismiss owes waits for a quiet poll, as
-  every edit's (`DIA_ONTICK`'s CF, §107.5).
+  every edit's (`DIA_ONTICK`'s CF, §110.5).
 
-**The state file** is v1's 2,456 bytes - §107.5's header and this payload -
+**The state file** is v1's 2,456 bytes - §110.5's header and this payload -
 with the snooze slot in the words v1 left zero:
 
 ```
 +0     db n_appt (0..48), n_task (0..32), lead_default, flags
+         flags bit 0 DCF_NOREM: a NEW timed appointment is created with
+         no reminder (REMIND clear); clear, it is armed at lead_default
+         (v1's bit, kept - `tools/os88dia.py`'s DESKCAL_NOREM)
 +4     dw snooze minute (0..1439; read only beside a SNOOZED appointment)
 +6     dw snooze date (FAT-packed)
 +8     48 x 32 B APPT, sorted by (date, time):
@@ -170189,9 +170207,9 @@ offsets, the two new bits and the slot equal to `deskcal.asm`'s by NASM's own
 evaluation. An edit owes a save, held while the field or the Delete question
 is open and until one poll has passed with no edit, as v1.
 
-**What it costs**: §107.6's package rows.
+**What it costs**: §110.6's package rows.
 
-### 107.4 The boot relaunch: `dia_boot`, and what a failure looks like
+### 110.4 The boot relaunch: `dia_boot`, and what a failure looks like
 
 `dia_boot` (`kernel/desksc.inc`, `.cold`, kern_big) is the first thing the
 kern_big `drv_notice_x` does (§51.3) — after the first desktop paint, with no
@@ -170210,7 +170228,7 @@ dia_boot:       [ui_rebootq] != 0  -> nothing (a resume or DOS question is up)
   one byte compare (`[sc_nrows]`); with ordinary shortcuts and no DIA row,
   one `sc_row` and one word compare per row. A machine with one pays the path
   walk, the package read and whatever the package's entry proc reads
-  (§107.6).
+  (§110.6).
 - **`sc_open` answers CF now** (§26.8.5): CF = 1 iff the walk found no
   volume, folder or file. A load REFUSAL (memory, version) is CF = 0 — the
   loader's own sentence has been said, and the row is KEPT for next time.
@@ -170237,7 +170255,7 @@ dia_boot:       [ui_rebootq] != 0  -> nothing (a resume or DOS question is up)
 | launched from B:, booted with no disk in B: | the same, naming `(B:)` | the same |
 | a hard-disk install: a row recorded against A: | the same — a row's VOL is a volume index, which is existing shortcut semantics (§26.8.1) | the same |
 | load refused (memory, version) | `ld_say_status`'s sentence | KEPT |
-| state file missing / damaged / position off this screen | the package's own answers (§107.5) | — |
+| state file missing / damaged / position off this screen | the package's own answers (§110.5) | — |
 | hibernate or DOS question pending | nothing is launched | — |
 
 **The boot always reaches the desktop.** Nothing on this path can stop it:
@@ -170252,10 +170270,10 @@ next boot. Only its own close removes it.
 boot. That is accepted: SYSTEM.CFG is hidden + system on the boot disk
 (§19.6), and whoever can write it can write `KERNEL.SYS`.
 
-### 107.5 `os88dia.inc`, the DIA header and the state file
+### 110.5 `os88dia.inc`, the DIA header and the state file
 
 The DIA's state file is `SYSTEM\APPDATA\<NAME>.DAT` on its OWN volume (§19.9's
-rule: `OSAPI_FILE_HERE`'s `BL`), reached bank, walk, act, walk back (§107.5.1).
+rule: `OSAPI_FILE_HERE`'s `BL`), reached bank, walk, act, walk back (§110.5.1).
 It is a 16-byte DIA header owned by `os88dia.inc`, then the application's
 payload.
 
@@ -170263,7 +170281,7 @@ payload.
 |---|---|---|
 | +0 | 2 | `'DA'` |
 | +2 | 1 | header version, 1 |
-| +3 | 1 | flags: bit 0 = the position is valid; **bit 1 = `DIA_HF_CONT`, +4/+6 are the FACE's origin** (v2, §107.11) |
+| +3 | 1 | flags: bit 0 = the position is valid; **bit 1 = `DIA_HF_CONT`, +4/+6 are the FACE's origin** (v2, §110.11) |
 | +4 | 2 | the frame's x (`W_X`) - or, with bit 1, the face's x |
 | +6 | 2 | the frame's y (`W_Y`) - or, with bit 1, the face's y |
 | +8 | 2 | the screen's width when it was saved |
@@ -170285,16 +170303,16 @@ the independent host reader and writer of both this header and the SYSTEM.CFG
 trailer's DIA row, `--selfcheck` round-trips them, and every fixture the
 gates boot is written by it.
 
-**The framework's calls**, at the package's own points (§107.5.2 has the
+**The framework's calls**, at the package's own points (§110.5.2 has the
 four that wave 2 added):
 
 | call | when | what |
 |---|---|---|
-| `dia_load` | the entry proc, before `OSAPI_WM_CREATE` | refuse a SECOND instance (CF = 1, §107.5.2); copy the 8.3 name; bank `OSAPI_FILE_HERE` ONCE - the launch folder is HOME for the session; walk to `SYSTEM\APPDATA`; read and validate the file; place the template, anchored when the screen differs |
-| `dia_made` | after `OSAPI_WM_CREATE` **and the package's own sizing calls** (`KEEPH`, `PREFER`) | give back a restored `y` the create's fit pulled up and re-fit under the window's own height rule (§107.5.2); take the place the window OPENED at as the place on record; install `OSAPI_WM_ONTIMER` and `OSAPI_WM_ONCLOSE`; arm a 1-tick timer - or, where the timer is refused (kern_small), install the wake handler for the worker arm |
+| `dia_load` | the entry proc, before `OSAPI_WM_CREATE` | refuse a SECOND instance (CF = 1, §110.5.2); copy the 8.3 name; bank `OSAPI_FILE_HERE` ONCE - the launch folder is HOME for the session; walk to `SYSTEM\APPDATA`; read and validate the file; place the template, anchored when the screen differs |
+| `dia_made` | after `OSAPI_WM_CREATE` **and the package's own sizing calls** (`KEEPH`, `PREFER`) | give back a restored `y` the create's fit pulled up and re-fit under the window's own height rule (§110.5.2); take the place the window OPENED at as the place on record; install `OSAPI_WM_ONTIMER` and `OSAPI_WM_ONCLOSE`; arm a 1-tick timer - or, where the timer is refused (kern_small), install the wake handler for the worker arm |
 | `dia_painted` | the end of the package's `W_PAINT` | on kern_small, hire the worker (once); nothing elsewhere |
 | `dia_touch` | whenever the payload changed | owe a save; the next tick makes it |
-| `dia_tick` | each timer tick (UI task, lock held) | the FIRST registers the DIA row (`OSAPI_DESK_ITEM` AL = 1, +3 = `'D'`, path from `OSAPI_FILE_PATH`); every one polls the frame's x,y and, once two polls agree on a place that is NOT the one on record, records it and owes a save; calls `DIA_ONTICK`, whose CF = 1 holds any save owed to a later poll (the package is mid-edit); saves what is owed; re-arms for 36 ticks - or ONCE for `dia_nx` ticks, when `DIA_ONTICK` stored a sooner beat there (the calendar's second chirp note, §107.3; the worker arm's sleep ignores it). A widget that has not been moved or edited writes nothing, whatever its state file was - unless its OWN payload changed by itself: the calendar's FIRED marks, set by a launch that missed reminders and by a reminder going off, owe a save like an edit (§107.3, §107.5.2) |
+| `dia_tick` | each timer tick (UI task, lock held) | the FIRST registers the DIA row (`OSAPI_DESK_ITEM` AL = 1, +3 = `'D'`, path from `OSAPI_FILE_PATH`); every one polls the frame's x,y and, once two polls agree on a place that is NOT the one on record, records it and owes a save; calls `DIA_ONTICK`, whose CF = 1 holds any save owed to a later poll (the package is mid-edit); saves what is owed; re-arms for 36 ticks - or ONCE for `dia_nx` ticks, when `DIA_ONTICK` stored a sooner beat there (the calendar's second chirp note, §110.3; the worker arm's sleep ignores it). A widget that has not been moved or edited writes nothing, whatever its state file was - unless its OWN payload changed by itself: the calendar's FIRED marks, set by a launch that missed reminders and by a reminder going off, owe a save like an edit (§110.3, §110.5.2) |
 | `dia_close` | `W_ONCLOSE` | `DIA_ONCLOSE`; remove the row by name (AL = 0, AH = 0xFF); save; let the close proceed - except that a remove `OSAPI_DESK_ITEM` REFUSED (no system disk in A: to read `CTRL.DRV` from, whose own toast asks for it) declines the FIRST close (CF = 1) so the user can put the disk back and close again; the next close goes ahead whatever the remove answers, so a refusal can never make the window unclosable. `DIA_ONCLOSE` can therefore run twice |
 
 **The row is about the PROGRAM, not the state file**, so the first tick
@@ -170311,7 +170329,7 @@ other, and `CTRL.DRV` says its verdict, `Settings Saved` (or `Not saved: disk
 error`); so does the close's remove. An autostart, whose row is already
 there, writes nothing and says nothing. A widget with a launch message of
 its own says it from its first `DIA_ONTICK`, after the registration, or it is
-covered (§107.3's missed summary). On the live CD (§80.3) the write refuses
+covered (§110.3's missed summary). On the live CD (§80.3) the write refuses
 where it happens - that toast, the row kept in memory for the session only,
 nothing back at the next boot - and is not handled specially; no gate
 drives it. The record it registered stays in memory untouched until
@@ -170320,7 +170338,7 @@ build used the record AS that buffer, and after the first save the close
 removed by `APPDATA`'s directory entry, matched nothing, and the widget came
 back at every boot - `diaboot`'s E leg is that case).
 
-#### 107.5.1 Saving: is this still home, and what a refusal costs
+#### 110.5.1 Saving: is this still home, and what a refusal costs
 
 A widget runs for hours while the user swaps the disk under it - at 360 KB
 that is the only way to reach another disk - so `dia_save` cannot trust
@@ -170363,7 +170381,7 @@ GOTO_QM    home
   nothing". The close always makes one last try that the backoff does not
   gate.
 
-#### 107.5.2 One at a time, another screen, a damaged file, and kern_small
+#### 110.5.2 One at a time, another screen, a damaged file, and kern_small
 
 - **A DIA is a SINGLETON.** Two calendars would be two writers of one state
   file and two registrations of one row, so `dia_load` walks the window
@@ -170388,7 +170406,7 @@ GOTO_QM    home
   screen's dock is pulled up rather than lost. A negative result is clamped
   to 0 here first. The template's `w` and `h` are the package's, so a
   package whose frame differs by adapter sizes its template for this one
-  before `dia_load` (the calendar does, §107.3).
+  before `dia_load` (the calendar does, §110.3).
 - **A place over the dock is restored over the dock.** `wm_fit` keeps every
   frame that FITS the band above the dock at creation, `OSAPI_WM_KEEPH` or
   not (the flag only lowers the floor for a frame taller than the band) -
@@ -170402,7 +170420,7 @@ GOTO_QM    home
   DOWN (under the menu bar) and `x` are the fit's. The bank `wm_refit`
   replays on an adapter change already holds the restored place, because
   `dia_load` put it in the template the bank was taken from.
-- **v2: the give-back is measured with the FACE** (§107.11): a desk frame
+- **v2: the give-back is measured with the FACE** (§110.11): a desk frame
   is the face plus one ground column, so the shown height is the face's; a
   titled fallback's is the face's plus `TITLE_H` + 1 less the tag and the
   last gap. Either way the floor is the display's height less that height
@@ -170410,17 +170428,17 @@ GOTO_QM    home
 - **Nothing is written that the user did not cause.** `dia_made` takes the
   place the window OPENED at as the place on record, and the poll owes a
   save only when two polls agree on a DIFFERENT one. So a launch with no
-  state file writes nothing until the first drag, edit or close (§107.6's
+  state file writes nothing until the first drag, edit or close (§110.6's
   "the first time the calendar is closed or moved"), and a place anchored or
   clamped at launch is not written back as though the user had chosen it -
   the file keeps the place the user DID choose, for the screen they chose it
   on. A wave-2 build compared against "never saved" and wrote a missing file
   ~2 s after every first launch, and put the damaged-file question up
   unprompted ~2 s after every launch over a damaged one. **The one exception
-  is the calendar's reminders** (§107.3): a FIRED mark is the payload
+  is the calendar's reminders** (§110.3): a FIRED mark is the payload
   changing, so a launch that finds reminders MISSED, and a reminder going
   off with nobody at the machine, each owe a save at the next quiet poll -
-  §107.6 prices both. A launch with nothing missed still writes nothing.
+  §110.6 prices both. A launch with nothing missed still writes nothing.
 - **A DAMAGED file is asked about, once, before it is overwritten.** Wave 1
   never saved over one. Now the first save that is owed - a settled drag
   away from where the window opened, an edit (`dia_touch`); never a launch
@@ -170428,7 +170446,7 @@ GOTO_QM    home
   `os88ui_ask` with Yes / No, when the package includes `os88ui.inc` with
   `OS88UI_ALERT` and defines that string. **Yes** clears the damage and the
   next tick writes a whole new file; **No**, or a dismissed alert, makes the
-  state READ-ONLY for the session (`DIA_S_RDONLY`, §107.5.1's word for it):
+  state READ-ONLY for the session (`DIA_S_RDONLY`, §110.5.1's word for it):
   kept in memory, never written, never asked again. The question is NOT put
   from the close - the alert is a window of the closing package's own and
   would die with it - so a damaged file the user never answered for stays
@@ -170448,9 +170466,9 @@ GOTO_QM    home
   there (its damaged-file question is an `os88ui_ask`, which wants the lock
   held). One body, `dia_beat`, serves both arms. The worker is
   declared restartable (§66.6.2). There is no registration on kern_small,
-  whose `OSAPI_DESK_ITEM` is the refusal (§107.7).
+  whose `OSAPI_DESK_ITEM` is the refusal (§110.7).
 
-### 107.6 What it costs
+### 110.6 What it costs
 
 The kernel half, measured by `tools/kernsize.py` against the tree it was cut
 from (2f6a0a88), on all three shipped kernels; the rungs left are re-read
@@ -170486,10 +170504,10 @@ from (8311137f):
 | DOCK.DRV (on demand) | | | | 2,246 → 2,270 bytes, 5 sectors |
 
 No rung is crossed on any kernel; the first MAKE did cross kern_emu's cold
-rung and was rewritten (§107.9). Wave 2's drag and hover come out of what is
+rung and was rewritten (§110.9). Wave 2's drag and hover come out of what is
 left - kern_emu's 73 cold bytes bind.
 
-**v2's widget** (§107.11), planned: the full paint ~18 calls on VGA (11 card
+**v2's widget** (§110.11), planned: the full paint ~18 calls on VGA (11 card
 slabs, the ground column, 3 gaps, the tag's two sides and its plate) against
 v1's 65, ≤ 20 TALL and ≤ 14 COMPACT as `deskcalperf`'s budget; a day select
 ≤ 5, a month ≤ 8, a tick 1, a reveal 1 and a hide 3, idle 0. `DESKCAL.O88`
@@ -170515,30 +170533,56 @@ VGA XT and 5150 CGA; PERFORMANCE.md Part 5 carries the rows): the full paint
 **19 calls on TALL, 12 on COMPACT** (12 + 7 and 6 + 6 `BLIT1` + `GFX_DESK`),
 **265 / 169 ms** from the first compose to the last call; a day select 5 / 4,
 a month 5..8, a tick 1, a reveal 1 and a hide 3, a firing 2, idle 0 - every
-budget of §107.3 met. `DESKCAL.O88` is **18,336** bytes of image (13,168 at
+CALL budget of §110.3 met. `DESKCAL.O88` is **18,336** bytes of image (13,168 at
 v1's polish) and **15,630** on disk lz4-packed (11,211): 16 clusters, the 360
 KB system disk **332 of 354** (22 left; 323 before) and the small one 280 of
 354. A cold boot with the calendar's row reaches the paint at 15.38 s and
 `ui_task` at 19.22 s (7 reads, 50 sectors after the paint) against 14.85 s
 with none - the package's five more clusters are +0.2 s against v1's 19.02.
 
-**Waves 2, 3 and 4 moved no kernel byte.** Re-measured at wave 4's head,
-`tools/kernsize.py` reads `unchanged` on both kernels, and the absolute
-figures are the ledger above applied to the tree it was cut from:
+**Two regressions, FOR THE OWNER** (v4 review). The calls fell and the TIME
+did not: the full paint is **265 ms against v1's 177** (the design priced
+~90-110 ms) and a day select **88 / 73 ms against v1's 21 / 24**, about 4x -
+a composed slab is one call but every glyph on its rows is composed into the
+band at ~0.49 ms, and a sub-rect `BLIT1` of 3-4 bytes recomposed its card's
+whole width (all seven cells of a day box's week). The review fixes cut what
+is avoidable without a decision - a `dc_rrect` composes no string wholly
+outside the bytes it puts down (`dc_cx0` / `dc_cx1`), a select never redraws
+today's box (inverse whether selected or not), a commit redraws a day's box
+only when its dot appeared and card 3 only when it changed, a selection's
+change is the two lines' rows and not card 2, and the About card's take-down
+is its rows (`dia_redrawr`) - and `deskcalperf` re-measured them: a day
+select **60 / 48 ms** (4 / 3 calls), the About card's take-down **6 calls,
+54 / 95 ms** (it was the whole face), the first paint 263 / 161 ms. A select
+is still ~2.5x v1's and the full paint ~1.5x; that composing is the rest,
+and whether v2's look is worth it is the owner's. **The package overran the design's ledger**: §110.9's design said
+~14.0-14.5 KB of image and at most one more cluster on the 360 KB system disk
+(321-326 of 354); it is ~18.3 KB (18,912 after the v4 review) and five more
+clusters, the disk at 332 with 22 left - the composer, the three layouts'
+strings and tables and the calendar's own growth, ~4 KB the design did not
+price. No owner decision was asked for those four clusters; this is it.
+
+**v1's waves 2, 3 and 4 moved no kernel byte** (this paragraph and its table
+are v1's; v2's kernel half is the wave 1 table above, v2's wave 2 moved +46
+`.text` / +54 `.cold` more, and today kern_big has **0 image and 126 cold
+bytes** of its rungs left, kern_emu 247 and **2**, kern_small 303 and 65).
+Re-measured at v1's wave 4 head, `tools/kernsize.py` read `unchanged` on both
+kernels, and the absolute figures were the ledger above applied to the tree
+it was cut from:
 
 | | `.text` | `.cold` | `.bss` | `.lowbss` | `.ovl` | image rung left | cold rung left | footprint |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | kern_big | 44,346 | 38,049 | 5,135 | 5,598 | 2,490 | 183 | 351 | 99,328 of 129,536 (59 steps spare) |
 | kern_small (`--build build/smallk -DKERN_SMALL`) | 32,933 | 23,999 | 3,104 | 2,868 | 2,086 | 315 | 65 | 65,024 of 107,520 (83 steps spare) |
 
-The whole of the reminders (§107.3) is the package's: the shared include
+The whole of the reminders (§110.3) is the package's: the shared include
 gained one bss byte, `dia_nx` - the once-only sooner beat the chirp's second
 note rides on - and the few bytes of `dia_tick` that read it (an `xchg`, an
 `or` and a `jnz` ahead of the re-arm): `DIAPROBE.O88`, the include's own
 measure, went from 1,520 to **1,536** bytes of image and 196 to **197** of
 bss.
 
-**At runtime**, a machine with no DIA row reads nothing at boot (§107.4).
+**At runtime**, a machine with no DIA row reads nothing at boot (§110.4).
 What a widget costs, MEASURED on MartyPC's 4.77 MHz XT with its FDC counters
 (the probe: a 1 KB package and a 16-byte state file - the calendar adds its
 larger package and a five-sector file to the reads):
@@ -170549,10 +170593,10 @@ larger package and a five-sector file to the reads):
 | the first tick: `OSAPI_FILE_PATH`'s `..` walk, then the settings core's read for a compare that writes nothing | 7 reads | 2.05 s | yes |
 | **a whole autostart** | **13 reads** | **~4.9 s** | |
 | a settled drag's save | 2 reads, 6 writes | ~3.2 s at PERFORMANCE.md's 400 ms a call | yes |
-| **the calendar's save** (a five-sector file): any edit's or drag's, and the two the user does not cause - a reminder going off (~2 s after it, under its alert) and a launch that missed reminders (the first quiet poll after the registration) - for the FIRED marks | **3 reads, 8 writes** after a firing, 4 and 8 after a missed launch - counted at the drive by `deskcalperf` on both legs, both adapters | ~4.4-4.8 s at 400 ms a call | yes |
+| **the calendar's save** (a five-sector file): any edit's or drag's, and the two the user does not cause - a reminder going off (~2 s after it; under its alert in v1, v2 having none) and a launch that missed reminders (the first quiet poll after the registration) - for the FIRED marks | **3 reads, 8 writes** after a firing, 4 and 8 after a missed launch - counted at the drive by `deskcalperf` on both legs, both adapters | ~4.4-4.8 s at 400 ms a call | yes |
 | the close of a widget that owes nothing: the settings core, the row away, SYSTEM.CFG written | 8 reads, 6 writes | | yes |
 | an idle widget | 0 | 0 | |
-| **the calendar, wave 4**: reset to `ui_task` with its row in SYSTEM.CFG, against the same disk with none | 7 reads, 44 sectors in `dia_boot` | **19.02 s against 14.85 s**: +0.55 s reading the trailer before the paint, +3.62 s autostarting - then the first tick's ~2 s, and on a day whose reminders came due before the boot (the first boot of a working day, typically) the missed marks' save ~2 s later, ~4.8 s more (the row above; `deskcalperf`'s boot leg has nothing missed) | no |
+| **the calendar, v1's wave 4** (v2: 19.22 s, above): reset to `ui_task` with its row in SYSTEM.CFG, against the same disk with none | 7 reads, 44 sectors in `dia_boot` | **19.02 s against 14.85 s**: +0.55 s reading the trailer before the paint, +3.62 s autostarting - then the first tick's ~2 s, and on a day whose reminders came due before the boot (the first boot of a working day, typically) the missed marks' save ~2 s later, ~4.8 s more (the row above; `deskcalperf`'s boot leg has nothing missed) | no |
 
 The design priced an autostart at 8-10 calls and 3-4 s and a save at "one
 write, 1-2 s"; both were short. The calendar's own autostart (`deskcalperf`'s
@@ -170560,13 +170604,14 @@ boot leg, MartyPC's VGA XT, cold) is 7 reads before `ui_task` and its first
 tick's 7 after - and a boot with NO row makes **no** disk call after its
 paint, which the row asserts. The FIRST TICK's cost is paid on EVERY
 launch, a double-click included, because the widget registers on every one
-(§107.5). The save's writes are the file system's own - the directory entry,
-the FAT and its copy, the data - and what §107.5.1's walk changed is the rest:
+(§110.5). The save's writes are the file system's own - the directory entry,
+the FAT and its copy, the data - and what §110.5.1's walk changed is the rest:
 the W1 walk made four full remounts around one 16-byte write, **6 reads and
 6 writes, ~4.8 s**, and one full mount plus quiet stands is **2 reads**.
 First registration and close each write SYSTEM.CFG once.
 
-**The packages** (the build's own figures):
+**The packages** (the build's own figures; v1's - v2's are the wave 4
+paragraph above):
 
 | | image | bss | on disk (lz4) |
 |---|---:|---:|---:|
@@ -170585,8 +170630,8 @@ the 360 KB system disk went from **321 to 326 of 354 clusters, 28 left**
 270 to 275. Wave 4's 567 more bytes on disk stayed inside the eleventh
 cluster: 326 and 275, unchanged.
 
-**What the calendar's gestures cost** (`tests/deskcalperf.py`; PERFORMANCE.md
-Part 5 carries the rows): primitive calls counted at the API table's drawing
+**What v1's calendar's gestures cost** (the titled window; v2's are the wave
+4 paragraph above, `tests/deskcalperf.py` rewritten for them): primitive calls counted at the API table's drawing
 cells, a call counted when its far return is the calendar's own segment, and
 the time from the first call to the last off MartyPC's cycle counter on a
 4.77 MHz 8088:
@@ -170615,11 +170660,11 @@ each (it crossed a 1 KB boundary), so the shipped 360 KB system disk was
 **321 of 354, 33 left**. The state file is three more clusters at runtime,
 in `SYSTEM\APPDATA`, the first time the calendar is closed or moved.
 
-### 107.7 `kern_small`
+### 110.7 `kern_small`
 
 kern_small reads no SYSTEM.CFG (§51.5), has no shortcuts (`OS88_SHORTCUTS`)
 and its `OSAPI_DESK_ITEM` is the refusal, so **there is no autostart and no
-restore there**, and nothing of §107.2 or §107.4 is compiled. What it does
+restore there**, and nothing of §110.2 or §110.4 is compiled. What it does
 have is `OSAPI_CLK_GET` (the cell is in both kernels, §20.8 rule 4; its
 `clk_rtc` is 0, the PIT clock of §37.0.1) and the whole of a DIA's own state:
 a widget launched by hand on kern_small opens where it was left, with its
@@ -170631,14 +170676,15 @@ with a CGA, off `make small`'s 360 KB system disk): the first paint hires the
 worker (`dia_st` = WORKER | HIRED), registration is never TRIED - the worker
 arm skips it, so nothing is asked and nothing is said, no toast at all - a
 drag is saved by the worker's beat, a reminder goes off through the same
-beat with its alert and ONE note (880 Hz, 8 ticks: the worker's 36-tick
+beat with ONE note (v1 also raised its alert; v2 has none and rings the CGA
+slot, below) (880 Hz, 8 ticks: the worker's 36-tick
 sleep has begun before the beat that could shorten it runs, so there is no
 second note to time), the close box closes at once with nothing to remove,
 a reset brings no calendar back, and opened by hand again it is where it was
 dragged with its data. Nothing about the calendar is a different build on
 kern_small: the same `DESKCAL.O88` is on both kinds of system disk.
 
-**v2: the titled fallback with v2's face** (§107.11, open decision 9's
+**v2: the titled fallback with v2's face** (§110.11, the v2 design's open decision 9's
 default). kern_small has the two cells of §11.103.9 and nothing else of the
 layer - its `.cold` rung has 65 bytes, and it has no WM timer for a handle's
 dwell - so `OSAPI_WM_DESK` QUERY refuses there and `dia_load` sizes a TITLED
@@ -170662,15 +170708,15 @@ and its dock tile, the title-bar drag saved as the FACE's origin
 (`DIA_HF_CONT`), and a reminder that rings the CGA slot with ONE note and
 no alert.
 
-### 107.8 What is not done
+### 110.8 What is not done
 
-- **The desk layer and the chrome are DONE in v2** (§11.103, §107.11): the
+- **The desk layer and the chrome are DONE in v2** (§11.103, §110.11): the
   owner asked for both. What v2 leaves:
 - **A drop repaints the widget.** A desk window takes no drag cache
   (§11.103.6), so a move costs one `W_PAINT` - a few slabs' `BLIT1`s.
 - **Desktop shortcuts under a widget** are invisible and unclickable, as
   under any window, and a shortcut DROPPED under one is accepted (`desk_free`
-  knows no windows; §107's open decision 14). The right-anchored default
+  knows no windows; the v2 design's open decision 14). The right-anchored default
   place keeps a widget off the drive column.
 - **A DIA runs only beside its own kernel**: `OSAPI_WM_DESK` and
   `OSAPI_GFX_DESK` join `OSAPI_CLK_GET` on the list an older kernel at the
@@ -170687,18 +170733,18 @@ no alert.
   and the toast are always 24-hour (`09:30`, `23:00`). The entry
   parser reads 24-hour times only, so the two agree with each other.
 - **A past day's unfired reminders never ring.** Earlier days are not
-  replayed at launch (§107.3), so an armed reminder whose day went by with
+  replayed at launch (§110.3), so an armed reminder whose day went by with
   the calendar closed stays armed and silent on that day for good (v2 has
   no per-line mark to show it; card 3 is today's).
 - **kern_small with no RTC toasts at every launch.** Its clock is the PIT's
-  (§107.7, `clk_rtc` = 0 there), so every launch with an armed reminder
+  (§110.7, `clk_rtc` = 0 there), so every launch with an armed reminder
   still to come says `No RTC - check the time`, whether or not the user set
-  the clock this session - the cell cannot say which (§107.3).
+  the clock this session - the cell cannot say which (§110.3).
 - **Not on The Wire**: a DIA calls `OSAPI_CLK_GET` (0x0467), which an older
   kernel at the same `PKG_FMT` does not have — the gap §20.2.0.1 names — so it
   ships only beside its own kernel until a "highest cell used" fence exists.
 
-### 107.9 Where the code proved the design wrong
+### 110.9 Where the code proved the design wrong
 
 - The design added `clk_hour - clk_min == 1` to `clock.inc`'s day+month
   assertion. The first `%if` beside the fields already asserts
@@ -170709,7 +170755,7 @@ no alert.
 - **`dia_boot` is NEAR** (`call dia_boot`, `ret`), not the design's far
   `dia_boot_x`: both ends are `.cold`, so the far form was two bytes of
   call for nothing. A future far caller (a hibernate Discard's relaunch,
-  §107.8) gets a one-line thunk then.
+  §110.8) gets a one-line thunk then.
 - **It preserves every register** (`kentc_bp` + `es`), because
   `drv_notice_x`'s contract says it does, and it tests KIND and the mark in
   ONE word compare.
@@ -170739,17 +170785,17 @@ no alert.
   not a full GOTO per component as §19.9 prescribed and the design copied:
   `GOTO_QM` (§74.1) is the quiet stand that moves the instance, which is the
   property §19.9 refused `GOTO_Q` for lacking. 6 reads to 2 per save
-  (§107.6). The first stays full for §107.5.1's reason.
-- **A save asks whether the disk is still home** (§107.5.1), which the design
+  (§110.6). The first stays full for §110.5.1's reason.
+- **A save asks whether the disk is still home** (§110.5.1), which the design
   did not: it trusted §19.9's "in the drive by definition", which is not true
   of a program that runs for hours across disk swaps.
-- **A failed save is classified and backed off** (§107.5.1), where the design
+- **A failed save is classified and backed off** (§110.5.1), where the design
   said "keep dirty, retry on the next tick, silently": that retried a
   write-protected disk every 2 s for as long as the widget was open.
 - **The widget registers whatever its state file said**, where the design
   skipped it with no `SYSTEM\APPDATA` and wave 1 also with a DAMAGED file:
   a row from an earlier session could then never be removed by closing
-  (§107.5).
+  (§110.5).
 - **`HOME` is banked once, at the load**, not at every save: a save after a
   refused one would have banked wherever the refusal left the instance.
 - **Wave 2.** The layout is chosen from the CONTENT HEIGHT the kernel gave
@@ -170788,12 +170834,12 @@ no alert.
   body (`dia_beat`) serves both arms.
 - **The damaged-file question is the package's option** (`DIA_DAMAGEDQ` with
   `OS88UI_ALERT`), never asked from the close, and a No is read-only for the
-  session (§107.5.2).
+  session (§110.5.2).
 - **The package's own state comes FIRST in its bss** (`DIA_BSS` = 112), so a
   gate reads the grid at the image's end + 0; `tools/os88dia.py` names every
   such offset and `t_dia` has NASM evaluate the package's own equates
   against them.
-- Verified, not changed: `desk_reflow` is safe with no lock (above, §107.4),
+- Verified, not changed: `desk_reflow` is safe with no lock (above, §110.4),
   so the design's deferred `[desk_zdirty]` path was not needed; and
   `OSAPI_FILE_HERE`'s `BL` is `inst_fdrv`, the volume index a row's +0 holds
   — `diaboot`'s byte-identical SYSTEM.CFG is that fact measured.
@@ -170807,7 +170853,7 @@ no alert.
     155-row band and every `y` came back as 20; and it keeps every frame
     that fits the band above the dock, where `wm_dock_snap` lets a drag
     leave one over it. The template is now sized for the adapter before the
-    create (§107.3) and `dia_made` gives a pulled-up `y` back (§107.5.2).
+    create (§110.3) and `dia_made` gives a pulled-up `y` back (§110.5.2).
     `diamove` ran on VGA alone, where neither shows; `diamovecga` and
     `diaanchor` are the rows that would have caught both.
   - **The poll compares against the place the window OPENED at**, not
@@ -170821,16 +170867,16 @@ no alert.
   - **A read that FAILED is not a damaged file.** `FERR_NODISK` and
     `FERR_IO` made the file DAMAGED, so the first owed save offered to
     replace a file that had never been read; they are now read-only for the
-    session (§107.5). A walk that fails at the load stays `DIA_S_NOHOME` -
+    session (§110.5). A walk that fails at the load stays `DIA_S_NOHOME` -
     whatever the cause, saving over an unread file is what must not happen.
-  - **A close whose remove is refused is declined once** (§107.5): with the
+  - **A close whose remove is refused is declined once** (§110.5): with the
     system disk out of A:, `CTRL.DRV` cannot load, the row stayed and the
     widget came back at the next boot although the user had closed it.
     Declining every time would make it unclosable (§75.1), so only the first.
   - **A date change re-runs the two fields** rather than the month (`~18`
     calls to 1-3), and draws nothing under an open About card; a menu pick
     takes the card down by its own draw, not by the card's repaint followed
-    by the month's (§107.3).
+    by the month's (§110.3).
   - `DIA_CAP` is checked by `%strlen`: the old check passed 13 and 14
     characters into the row's picture header. The Makefile's `LIVESYSARGS`
     guard tests the SYSAPPS filter itself, since `$(DIAARGS)` made the
@@ -170883,7 +170929,7 @@ no alert.
   - **Wave 3's review moved four things.** `DIA_ONTICK` gained an answer,
     CF = 1 = hold the save: the design priced a save as "one write" and it
     is a remount, a walk and the write (the calendar's: 3 reads and 8
-    writes, ~4.4 s, §107.6) with the lock held, which
+    writes, ~4.4 s, §110.6) with the lock held, which
     landed in the middle of a typed word at the next 2 s poll; the
     calendar holds it while the field or its question is open and until a
     poll passes with no edit. A check box's toggle is the calendar's own
@@ -170921,7 +170967,7 @@ no alert.
     one armed for THIS minute fires at the next beat with its alert.
   - **The FIRED marks owe saves the user did not cause**: a launch that
     missed reminders and an unattended firing each write the state file
-    (§107.5.2's one exception, §107.6's row). The design's "set FIRED and
+    (§110.5.2's one exception, §110.6's row). The design's "set FIRED and
     dirty" implied it; the contract text had said nothing is ever written
     unprompted.
   - **The tone is asserted at the cell, not off the speaker.** The design's
@@ -170929,7 +170975,7 @@ no alert.
     hearing 880 Hz; what was built reads `OSAPI_SND_TONE`'s AX and CX at a
     breakpoint on the cell on MartyPC, which proves the requests the
     calendar makes and not that the speaker sounds them - the cell's own
-    gates (§34) own that half. Nothing in §107's rows plays the speaker.
+    gates (§34) own that half. Nothing in §110's rows plays the speaker.
   - **No `make diashot` fixture.** The design's §9 set belongs to the pull
     request that ships the series and was made there, as `docs/dia/*.png`,
     by a driver outside the tree; `deskcal1bpp`'s framebuffer reads are
@@ -170939,7 +170985,7 @@ no alert.
     so one opening mid-word would have swallowed the rest of the line. The
     reminder fires at the first minute after the field closes. (The first
     build also held the firing's SAVE while its alert was up; the review
-    took that out, §107.3 - an alert can stay up for hours.)
+    took that out, §110.3 - an alert can stay up for hours.)
   - **The no-RTC toast is `No RTC - check the time`**, not `Clock not set
     (no RTC)`: `OSAPI_CLK_GET` says there is no chip, not whether anybody set
     the clock this session, and §47's rule is to say a fact. It is said at
@@ -171015,7 +171061,7 @@ no alert.
     clip there (reasoned from the code; no row reaches that beat).
     `deskcaledit` G is the gate, verified to read 305 with the clear taken
     out of `dc_askdel`.
-  - **The entry field is inset as the boxes are**, content x 4..227 (§107.3):
+  - **The entry field is inset as the boxes are**, content x 4..227 (§110.3):
     it had the boxes' 2-pixel line against the frame on both sides. No call
     and no visible column of text is spent - the pen stays on cell 1.
 
@@ -171046,7 +171092,7 @@ no alert.
   - **The desk frame is 178 wide, not 177**: `wm_create`'s size snap
     (§11.94.5) puts `W_W` at 8k + 2 before MAKE runs, so the face has a
     column of the desktop's ground on BOTH sides. That is the titled
-    fallback's width as well, so the two forms are one width (§107.11).
+    fallback's width as well, so the two forms are one width (§110.11).
   - **The header flag rides `[ld_cfmt]` bit 3**: step 5 runs before the image
     is read, and `ld_check_hdr`'s two callers leave the header in different
     places, so the flags byte's bit 6 is kept three shifts down beside the
@@ -171075,7 +171121,7 @@ no alert.
     (430), cold **73** (227); kern_small image 303 (315), cold 65 (65).
     DOCK.DRV grew 24 bytes, still 5 sectors. **Wave 2 inherits 73 bytes of
     kern_emu's cold rung** for the drag pick-up (~22) and the hover edge
-    (~40), so its own measurement decides whether §107.10's cut order runs.
+    (~40), so its own measurement decides whether §110.10's cut order runs.
   - **Wave 1's review fixes**, each a place the wave's own code was wrong:
     - **The shadow subtractions take a chromeless window's FRAME**
       (§11.103.1). §11.103.1 said every z-order reader was unchanged, and for
@@ -171109,7 +171155,7 @@ no alert.
     - Measured: **+28** `.text` and **+18** `.cold` on kern_big and kern_emu,
       0 on kern_small; no rung crossed. kern_big image **51** left, cold 179;
       kern_emu image 298, cold **55** - so wave 2 has 55 bytes of kern_emu's
-      cold rung, not 73, against ~62 planned: §107.10's cut order is likely
+      cold rung, not 73, against ~62 planned: §110.10's cut order is likely
       to run there.
 
 - **v2, wave 2 (the posted drag and the hover edge, §11.103.6-7)** - where
@@ -171163,7 +171209,7 @@ no alert.
     unchanged. **No rung crossed** - but kern_big's image rung has **5**
     bytes left and kern_emu's cold rung **1**, so wave 3's include must not
     spend a resident kernel byte, and anything later that does crosses a
-    rung, which is the owner's call. §107.10's cut order was not run and
+    rung, which is the owner's call. §110.10's cut order was not run and
     could not have helped: each of its cuts moves bytes INTO `.cold`.
 - **v2, wave 2's review fixes** - what the review proved, and what it cost:
   - **The DRAG post names its window, and the pick-up honours a desk one
@@ -171193,7 +171239,7 @@ no alert.
     (§2.8's claim paragraph): zero bytes on every build that fitted, which
     are byte-identical, and no resident byte.
 
-- **v2, wave 3 (the widget treatment, §107.11 and §5.12.8)** - where the
+- **v2, wave 3 (the widget treatment, §110.11 and §5.12.8)** - where the
   code proved the design record wrong, or settled what it left open:
   - **`GFXE_TEXT` carries a rectangle fill** (`gfxe_bfill`): the focused
     plate, the handle's white box, the titled fallback's rule and a card's
@@ -171229,7 +171275,7 @@ no alert.
     window) is painted as titled in the frame it has.
   - **What it cost**: the include **2,235** bytes of image under
     `DIA_WIDGET` against ~500 planned, `GFXE_TEXT` / `GFXE_BITS` ~600 more
-    (§107.6). **No kernel byte**: `tools/kernsize.py` reads byte for byte the
+    (§110.6). **No kernel byte**: `tools/kernsize.py` reads byte for byte the
     same on kern_big, kern_emu and kern_small, and a v1 DIA - `DIAPROBE.O88`,
     `DESKCAL.O88` until wave 4 - assembles byte for byte as it did.
   - **The gates**: the probe is the include's now (three layouts, a 128-wide
@@ -171256,7 +171302,7 @@ no alert.
     the plate alone**, 1 call where it was 3. **A quit owes nothing more**
     (`DIA_F_QUIT`). `desksmall` sees `OSAPI_GFX_DESK` on kern_small again,
     through a probe verb its beat lays on request.
-- **v2, wave 4 (the Desk Calendar as three cards, §107.3)** - where the code
+- **v2, wave 4 (the Desk Calendar as three cards, §110.3)** - where the code
   and the rows proved the design record wrong, or left it to choose:
   - **COMPACT's day box is rows r .. r + 8, not r - 1 .. r + 8.** At a 9-row
     pitch the design's box began on the row the day ABOVE draws its dot
@@ -171267,14 +171313,14 @@ no alert.
     + 8, two at + 4), not right-aligned: the mockup centres them under the
     weekday letters.
   - **`DIA_RIGHT` is a `%define`, not an `equ`** - the include tests it with
-    `%ifdef`, so §107.11's `equ` was silently ignored and the default place
+    `%ifdef`, so §110.11's `equ` was silently ignored and the default place
     was the template's (the Hercules look caught it, the face at 376 on a
     720-wide screen).
   - **No `OSAPI_WM_PREFER` and no `OSAPI_WM_ONRESIZE`.** The design kept
     "three derived pairs", but a PREFER pair is keyed by the adapter's KIND
     - the EGA bug itself - and the layout is chosen once by height at
     `dia_load`. A runtime adapter switch keeps the layout; the beat's
-    re-fit (§107.11) lifts a face that no longer fits.
+    re-fit (§110.11) lifts a face that no longer fits.
   - **A held button's light is COMPOSED, not an `OSAPI_GFX_XOR_FILL`.** The
     rect, rounded out to bytes, is inverted in the band and put down in
     ONE `BLIT1` - the same one call - so a repaint while the button is held
@@ -171286,7 +171332,7 @@ no alert.
     light and wait for a release. A selection needs no confirmation, and
     the box's budget (1 call) has no room for a light.
   - **A press pays the include's reveal**: the handle comes up at once
-    (§107.11), one tag-row `BLIT1` when it was down. The gestures' budgets
+    (§110.11), one tag-row `BLIT1` when it was down. The gestures' budgets
     are the calendar's own draw; `deskcalperf` and `deskcaltask` set the
     tag row's calls aside and say so.
   - **`+` opens the field for EITHER** (`DCE_NEW`): the parse decides, and a
@@ -171302,8 +171348,9 @@ no alert.
   - **Card 3 rings the FIRST DUE appointment in table order**, an earlier
     day's undismissed one included: undismissed is undismissed.
   - **The About card's lines fit the 176-pixel face** (`A desk widget`,
-    `SPEC.md 107`), and its take-down is ONE whole-face repaint through a
-    new include entry, `dia_redraw` (§107.11).
+    `SPEC.md 110`), and its take-down was ONE whole-face repaint through a
+    new include entry, `dia_redraw` (§110.11) - since the v4 review, the
+    card's rows alone (`dia_redrawr`, below).
   - **MID's card 3 puts `21:00 Back up files` on one line** - bell at x 4,
     time x 22, text x 68 - where the design's x 32 / x 80 cut the text at
     eleven characters.
@@ -171322,10 +171369,64 @@ no alert.
     lz4 file 11,211 -> **15,630** (16 clusters, 11 before): the 360 KB
     system disk is **332 of 354 clusters, 22 left** (323 at wave 3), the
     small one 280 (275). The include and the composer are ~3.3 KB of it
-    (§107.6); the rest is the three cards' composers and hit tests. No
+    (§110.6); the rest is the three cards' composers and hit tests. No
     kernel byte.
 
-### 107.10 How it was built, and its gates
+- **v4 review** (wave 4's four reviewers; each finding re-verified against
+  the code before it was fixed). What changed, and the design it departs
+  from where it does:
+  - **Renumbered**: `main` took §107 for `EMS.DRV` (#252), and §108 and §109
+    are isoTron's and WireBall's, so the DIA section is **§110** - every
+    citation in the branch's own lines, the index and `DIA-LAYER-PLAN.md`.
+  - **x1 text is REGULAR**: `GFXE_BOLD` at x1 ORs each glyph one pixel right
+    and keeps the 8-px advance, so a glyph using columns 0-6 meets the next
+    one's column 0 - `21:00`'s zeros filled into one block and `MONDAY`
+    smeared. The weekday, card 3's time and a dated heading are regular, as
+    the mockup draws them; `Today`, `+` and the x2 / x3 day number keep bold.
+  - **The dot sits a row higher** on TALL (r + 9..10) and MID (r + 8), so
+    today's box closes under it with a black row and a selected day's
+    outline does not swallow it; on COMPACT today's box is **r .. r + 7** and
+    the dot row stays r + 8, under the box - today's own white dot is then
+    on paper and unseen, and a selected day's black one shows under its
+    outline. W4's deviation note said the dot was inside the box; the
+    captures said it notched the box's edge. COMPACT's box still has no row
+    above its digits (the design's r - 1 takes the day above's dot row), and
+    a 9-row pitch has no spare one: **for the owner** - drop the boxed day's
+    dot and box r - 1 .. r + 7, or move the weeks down a row into card 1's
+    one spare.
+  - **`+` lights bytes 20..21** (x 160..175), not 19..21: byte 19 is the
+    entry field's last, so the un-light whited its edge and `dc_fover` drew
+    the whole field again - a double write on every `+`. A `dc_rrect`
+    wholly right of byte 19 never draws the field now.
+  - **COMPACT's nav lights from its own row** (rows 10..19): two rows above
+    it are MONDAY's last.
+  - **A refused commit keeps the field's mode**: `dc_fenter` banks the mode
+    the field was opened in and puts it back when the commit refuses - a
+    `+` field stays for EITHER (it was left appointment-only) and an edit
+    stays an edit (a too-long task edit had become `+`'s).
+  - **Card 3's sync is owed, not dropped**: on COMPACT a reminder that rings
+    while the field is open sets `[dc_c3f]`, so the field's shutting - or a
+    task's commit, which now syncs too - pages the slot to it; and nothing
+    of card 3's is drawn while the About card is up (its take-down paints).
+  - **Card 3 dates another day's ring** (`23 Aug 21:00`; MID `Sun 21:00`).
+  - **The hover handle's close box is 8 x 8 under an 11-row tag** (MID and
+    COMPACT), on rows 1..8, so a black row stays above it.
+  - **Redraws** (the regressions §110.6 raises for the owner): a select
+    never redraws today's box, a commit draws a day's box only when its dot
+    appeared and card 3 only when it changed (or it was card 3's own
+    appointment that was edited), a selection's change is the old and new
+    lines' rows (one `dc_rrows` when their span fits a band), the About
+    card's take-down is its rows (`dia_redrawr`, a damage rect into
+    `dia_paint`'s body), and `dc_rrect` composes no string wholly outside
+    the bytes it puts down.
+  - **Unrecorded at W4, recorded here**: TALL's day number is on rows 7-30
+    (the design's 8-31) and COMPACT's slot heading on rows 3-10 (2-9), each
+    a row of air the composed slab needed; TALL's bell is 16 x 15, not 16.
+  - **`t_dia` holds `dc_lays`** - each layout's cards, tag, face height and
+    default y - to `DESKCAL_GEO`, not only `dc_geos`' 41 fields.
+  - **The design record is in the tree**: `docs/plans/completed/DIA-LAYER-PLAN.md`.
+
+### 110.10 How it was built, and its gates
 
 | wave | what | gates |
 |---|---|---|
@@ -171339,11 +171440,11 @@ and every §7 default of the design record was taken):
 
 | wave | what | gates |
 |---|---|---|
-| W0 | this document first: §11.103, §7.2.1, §12.6, §13.7, §13.16.2.1, §20.2, §20.3, §30, §30.6, §107.x; PERFORMANCE.md Part 5's placeholders and docs/KERNEL-MEMORY.md's planned bytes; the kernsize baselines | - |
+| W0 | this document first: §11.103, §7.2.1, §12.6, §13.7, §13.16.2.1, §20.2, §20.3, §30, §30.6, §110.x; PERFORMANCE.md Part 5's placeholders and docs/KERNEL-MEMORY.md's planned bytes; the kernsize baselines | - |
 | W1 | the kernel layer: the flags, `wm_top`, `wm_lift`, `wm_show_b`'s and `wm_front_b`'s desk arms, the chromeless sites and `wm_draw_win`'s and `wm_su_rect`'s arms, the press without a raise, the key target, `OSAPI_WM_DESK` QUERY / MAKE / RELEASE and `OSAPI_GFX_DESK`, header flag bit 6 with the top-down slot, the dock and DOCK.DRV; `tests/diaprobe`'s desk build. **The Desk Calendar is untouched** | `t_chromesites` (fast); `deskz`, `deskdock`, `deskkeys`, `desksmall`; kernsize on all three kernels - **a crossed rung is a stop for the owner**; `t_api_abi`, the ABI lock, `os88sym --all`, `os88ladder --selfcheck`, buildmatrix, test-full alone |
-| W2 | the DRAG verb (`[ui_dragy]` = the caller's window), its pick-up and desk test, the desk `.nocache` and the drag's `[wm_dmg_npro]`; the hover edge (`[cur_hovw]`, `cur_hov_x`, `WF_HOVER`); `tests/diaprobe`'s tag row, handle and close box | `deskdrag`, `deskhover`, `deskhovercga`, `deskhoverherc`, `deskclose` (each broken on purpose and failing, §107.9); kernsize on all three kernels - measured +46 / +54, no rung crossed, kern_big image 5 and kern_emu cold 1 left; the review fixes +5 / -1, kern_big image **0** and kern_emu cold 2 left; `deskz`, `deskdock`, `deskkeys`, `desksmall` again |
-| W3 | `apps/os88gfx.inc` `GFXE_TEXT` / `GFXE_BITS` (§5.12.8); `os88dia.inc`'s `DIA_WIDGET` (§107.11): the geometry, the paint, the prefilters, the hover and focus states, `dia_quit`, the face-origin header, the titled fallback; `tests/diaprobe`'s desk build onto it; `tools/os88dia.py` (`DIA_HF_CONT`, `widget_off`) and `t_dia` W | `deskground`, `deskfit` (new); every wave 1 and 2 row re-gated on the include - the tag row pixel for pixel against the guest's font, the dwell and linger to the tick, 1 / 3 calls an edge, the re-fit; kernsize unchanged on all three kernels |
-| W4 | the Desk Calendar as three cards (§107.3): header flag bit 6, the three layouts by height and their `dc_geos`, the slab composers, the Monday-first grid with dots, today's box and the outline, card 2's lists with real ticks and `+N more`, card 3's RINGING / NEXT / NONE, COMPACT's paging slot, the controls and keys, `DCA_SNOOZED` / `DCA_DUE` and the snooze slot, the alert-on-fire removed, the menus kept; `os88dia.inc`'s `dia_redraw`; `tools/os88dia.py`'s bits, slot and `DESKCAL_GEO`; `tools/os88ui.py`'s `widget_*` | `deskcaledit`, `deskcaltask`, `deskcalgrid`, `deskcalremind`, `deskcal1bpp`, `deskcalperf`, `diaregister`, `diamove`, `diamovecga`, `diaanchor`, `diasmall` updated; `deskcalcards`, `deskcalsnooze`, `deskmodal` new; `t_dia` holds `dc_geos` to the host's mirror and the header's `OS88_F_DESK` |
+| W2 | the DRAG verb (`[ui_dragy]` = the caller's window), its pick-up and desk test, the desk `.nocache` and the drag's `[wm_dmg_npro]`; the hover edge (`[cur_hovw]`, `cur_hov_x`, `WF_HOVER`); `tests/diaprobe`'s tag row, handle and close box | `deskdrag`, `deskhover`, `deskhovercga`, `deskhoverherc`, `deskclose` (each broken on purpose and failing, §110.9); kernsize on all three kernels - measured +46 / +54, no rung crossed, kern_big image 5 and kern_emu cold 1 left; the review fixes +5 / -1, kern_big image **0** and kern_emu cold 2 left; `deskz`, `deskdock`, `deskkeys`, `desksmall` again |
+| W3 | `apps/os88gfx.inc` `GFXE_TEXT` / `GFXE_BITS` (§5.12.8); `os88dia.inc`'s `DIA_WIDGET` (§110.11): the geometry, the paint, the prefilters, the hover and focus states, `dia_quit`, the face-origin header, the titled fallback; `tests/diaprobe`'s desk build onto it; `tools/os88dia.py` (`DIA_HF_CONT`, `widget_off`) and `t_dia` W | `deskground`, `deskfit` (new); every wave 1 and 2 row re-gated on the include - the tag row pixel for pixel against the guest's font, the dwell and linger to the tick, 1 / 3 calls an edge, the re-fit; kernsize unchanged on all three kernels |
+| W4 | the Desk Calendar as three cards (§110.3): header flag bit 6, the three layouts by height and their `dc_geos`, the slab composers, the Monday-first grid with dots, today's box and the outline, card 2's lists with real ticks and `+N more`, card 3's RINGING / NEXT / NONE, COMPACT's paging slot, the controls and keys, `DCA_SNOOZED` / `DCA_DUE` and the snooze slot, the alert-on-fire removed, the menus kept; `os88dia.inc`'s `dia_redraw`; `tools/os88dia.py`'s bits, slot and `DESKCAL_GEO`; `tools/os88ui.py`'s `widget_*` | `deskcaledit`, `deskcaltask`, `deskcalgrid`, `deskcalremind`, `deskcal1bpp`, `deskcalperf`, `diaregister`, `diamove`, `diamovecga`, `diaanchor`, `diasmall` updated; `deskcalcards`, `deskcalsnooze`, `deskmodal` new; `t_dia` holds `dc_geos` to the host's mirror and the header's `OS88_F_DESK` |
 | W5 | look on 1bpp, EGA, Dark and Color; measure on MartyPC's 5150; `kernsize --bless`; `docs/dia/` retaken | `deskcalperf`'s new budgets, test-full alone, the soak |
 
 **If W1 or W2 measures a crossed rung**, the cut order is: move
@@ -171390,25 +171491,27 @@ no fixture, because what is on it is what a user has:
 | `diaanchor` | `DESKCAL.DAT` written by `tools/os88dia.py` at (479,68) on 720x348 and put on the disk with `mcopy`: on 640x480 the calendar opens at (399,200), both axes anchored to the far edges and the frame hanging over the dock as it was left; seven guest seconds later nothing is owed and the file on A: is the fixture byte for byte |
 | `deskcalgrid` | the 42-byte grid read out of the guest's bss is Python `calendar`'s for Oct 2026, Feb 2028, Mar 2028 (by PgDn), Jan 1980 and Dec 2099, each reached by setting the machine's clock and pressing `T`; past either end the step is refused and the other way still moves |
 
-**Wave 3's rows**, the state file read back off the guest's own drive by
+**v1 wave 3's rows** (as v1 shipped them - v2's rewrites are the v2 wave 4
+table below), the state file read back off the guest's own drive by
 `tools/os88dia.py`:
 
 | row | asserts |
 |---|---|
-| `deskcaledit` | MartyPC's VGA XT, the clock at 2026-10-14. A DAMAGED state file opens empty and its first edit puts `Replace damaged calendar?` up with the file on A: the fixture byte for byte, until Yes; `9:30 Dentist`, `1230 Lunch`, `815 Gym` and `Mum's birthday` are four appointments IN ORDER, all-day first and the three timed ones armed (H:MM, HHMM and HMM each by what the guest wrote); a clicked line and Enter open the field holding `09:30 Dentist`, and `Doctor` keeps the reminder; Del asks, Yes deletes; 26 characters are refused (`At most 25 letters`, the field still open, nothing written); Calendar > Delete Item picked with the field OPEN shuts it and asks on a bar with nothing inked between the question's app name and the clock (§107.9's polish pass; 305 ink pixels without `dc_askdel`'s clear). A second boot with 48 appointments: New Appointment greyed `(full)`, `N` answering `Calendar is full (48)` |
+| `deskcaledit` | MartyPC's VGA XT, the clock at 2026-10-14. A DAMAGED state file opens empty and its first edit puts `Replace damaged calendar?` up with the file on A: the fixture byte for byte, until Yes; `9:30 Dentist`, `1230 Lunch`, `815 Gym` and `Mum's birthday` are four appointments IN ORDER, all-day first and the three timed ones armed (H:MM, HHMM and HMM each by what the guest wrote); a clicked line and Enter open the field holding `09:30 Dentist`, and `Doctor` keeps the reminder; Del asks, Yes deletes; 26 characters are refused (`At most 25 letters`, the field still open, nothing written); Calendar > Delete Item picked with the field OPEN shuts it and asks on a bar with nothing inked between the question's app name and the clock (§110.9's polish pass; 305 ink pixels without `dc_askdel`'s clear). A second boot with 48 appointments: New Appointment greyed `(full)`, `N` answering `Calendar is full (48)` |
 | `deskcaltask` | MartyPC's Hercules 5150 (TALL, a 1bpp framebuffer it reads whole). Three typed tasks in order, their boxes four ground columns off the window's frame with a ground row under each; Clear Done greyed `(none done)`; a click on a box checks it and the window differs in the 6x6 mark and nothing else, with ZERO runs through the package's own `dc_run` (a breakpoint counter at the label a NASM map of the running image names; selecting a row, two runs, is its control); Space on the selected task the same; Clear Done Tasks leaves the unchecked one; Del and Yes empty the list; and a PAGED list (six tasks): a delete that ends paging starts the list at its top, and a pager that goes away is erased - row 4 ground, every pixel |
 
 Both are verified to fail on a broken build: a parser that refuses three
 digits stores `815 Gym` as an all-day line, and a toggle that redraws its row
 reads one run on the counter.
 
-**Wave 4's rows**:
+**v1 wave 4's rows** (v1's titled window and its alert; v2 rewrote all
+four calendar rows - the v2 wave 4 table below):
 
 | row | asserts |
 |---|---|
 | `deskcalremind` | MartyPC's VGA XT, the clock SET through the live `clk_*` fields. A launch at 09:28 says `1 missed reminder` and marks it FIRED; at 09:30 Dentist goes off - the alert reads `Reminder 09:30 Dentist` (through `os88ui.inc`'s own message pointer), the toast `09:30 Dentist`, `OSAPI_SND_TONE` was asked for 880 then 660 Hz four ticks each (a breakpoint on the cell, AX and CX read at the stop), ONE run drawn, its line's mark `-`; two minutes pass under that alert and Call Bob waits - and once the toast is down the alert's menu bar is ground right of its name (the calendar's armed clip once left `Cal` there) - then goes off ALONE at the next minute after OK though another is due; a 23-letter text loses the prefix and keeps every letter; nothing goes off under an open entry field; a 09:30 appointment typed at 09:37 is created FIRED; the state file has every FIRED; a relaunch with the RTC flag down and a reminder to come says `No RTC - check the time`; at 23:59 the 23:00 one goes off, and at the rollover today's inverse moves in TWO runs and the 15th's 00:00 reminder goes off |
-| `diasmall` | §107.7's paragraph, on MartyPC's 128 KB CGA 5150 |
-| `deskcalperf` | §107.6's tables, asserting the zeros and the selection's count exactly, that a boot with no DIA row makes no disk call after its paint, and - counted at the drive - that a launch that missed a reminder and a reminder going off each make the save their FIRED marks owe, the second with its alert still up |
+| `diasmall` | §110.7's paragraph, on MartyPC's 128 KB CGA 5150 |
+| `deskcalperf` | §110.6's tables, asserting the zeros and the selection's count exactly, that a boot with no DIA row makes no disk call after its paint, and - counted at the drive - that a launch that missed a reminder and a reminder going off each make the save their FIRED marks owe, the second with its alert still up |
 | `deskcal1bpp` | MartyPC's 5150 with a CGA and with a Hercules card, on the framebuffer's own bits: COMPACT 234x142 and TALL 234x272; today's field mostly ink and a plain day's mostly ground; a click on the 20th puts an unbroken ink rectangle round it and takes the 14th's off, which stays inverse; the 20th's mark cell, AFTER its number, carries its `*` and the blank before its number is ground; and the Calendar menu held down shows every item - the greyed `(no item)` ones included - with ink in its band |
 
 Each was verified to FAIL on a broken build: without dc_rpass's one-alert
@@ -171431,14 +171534,18 @@ reminder-caused saves at the drive.
 | `deskfit` | a `VIDEO=ega` kernel in a private tree: `[vid_h]` 350, `[dia_li]` 1 (MID, not TALL), a 130 x 83 frame inside the 306-row band, its face drawn |
 
 **v2 wave 4's rows** (the calendar; every coordinate out of
-`tools/os88dia.py`'s `DESKCAL_GEO`, which `t_dia` holds to `dc_geos`):
+`tools/os88dia.py`'s `DESKCAL_GEO`, which `t_dia` holds to `dc_geos` and `dc_lays`):
 
 | row | asserts |
 |---|---|
 | `deskcalcards` | the owner's mockup in the state file, on VGA (TALL), CGA (COMPACT) and Hercules (MID): the frame 178 wide at face x = width - 264; card corners paper, every gap and ground column the desktop's dither; today's inverse box; the 6th's dot; the bell and both check-box records pixel for pixel; a pressed day's 1-px outline |
 | `deskcalsnooze` | a v1-shaped file loads with nothing due; Snooze on card 3 writes the slot (today 09:35) and shows the earlier one NEXT; a second snooze puts the first back to DUE; the snooze re-fires with its chirp; a 23:57 snooze's slot is tomorrow 00:02, read back off A: |
 | `deskmodal` | with a Disk window in front, Del's question is the top of wm_zord and owns the bar while the widget stays wm_zord[0]; Yes gives the bar to wm_top, never the widget |
-| `deskcalperf` | the budgets of §107.3, asserted - full paint <= 20 (COMPACT <= 14), a day <= 5, a month <= 8, a tick 1, a reveal 1 and a hide 3, a firing 2, idle 0 - and the saves at the drive |
+| `deskcalperf` | the budgets of §110.3, asserted - the first paint <= 20 (COMPACT <= 14), the About card's take-down FEWER than the first paint (its rows alone, v4 review), a day <= 5, a month <= 8, a tick 1, a reveal 1 and a hide 3, a firing 2, idle 0 - and the saves at the drive |
+| `deskcalremind` (v2) | MartyPC's VGA XT, the clock set through the live `clk_*` fields: a launch at 09:28 says `1 missed reminder` and card 3 RINGS Gym (a v1 FIRED one reads as dismissed); `D` shows the next; Dentist goes off at 09:30 - the toast, 880 then 660 Hz four ticks each, card 3's two slabs and nothing else, and NO ALERT (wm_zn unmoved); one ringing at a time - Call Bob waits under Dentist, Dismiss brings it up; an open entry field no longer holds a firing back; and the rollover |
+| `deskcal1bpp` (v2) | the 5150 with a CGA and with a Hercules card, on the framebuffer's bits: COMPACT 178 x 146 and MID 178 x 242 by the screen's height; today's box inverse, a plain day's ground; a press on the 20th outlines it and today stays inverse; the 20th's dot; every gap the desktop's dither; a greyed item still inked in the dropped Calendar menu |
+| `deskcaltask` (v2) | the Hercules 5150 (MID): three typed tasks in order, Clear Done greyed `(none done)`; a press on a 9 x 9 box checks it in EXACTLY ONE `BLIT1` that changes the box's rect and nothing else, and the box is the TICKED record pixel for pixel; the two-line list pages (`+2 more`), Space checks the selected one; Clear Done, Del and Yes, and the pager's wrap |
+| `deskcaledit` (v2) | the VGA XT: a DAMAGED file opens empty and its first edit asks `Replace damaged calendar?`; `9:30 Dentist`, `1230 Lunch`, `815 Gym`, `Mum's birthday` in order; edit keeps the reminder; Del asks; 26 characters refused with the field open; Delete Item with the field open shuts it on a clean bar; v2's FOCUS with a Disk window in front - a press on a card's margin takes the bar and the Disk window stays wm_top |
 
 **`t_dia`** (fast tier) is what keeps that include honest between MartyPC
 runs: it runs `tools/os88dia.py --selfcheck`, assembles `diaprobe.asm` (so
@@ -171452,7 +171559,7 @@ package), NO data image carries a DIA, and the calendar's payload layout, its
 bss fields and the include's `dia_st` - evaluated by NASM from the package's
 own source - equal `tools/os88dia.py`'s.
 
-### 107.11 The widget treatment (v2: `%define DIA_WIDGET`)
+### 110.11 The widget treatment (v2: `%define DIA_WIDGET`)
 
 What makes a DIA LOOK like a widget is package code, shared as source in
 `apps/os88dia.inc` and opted into with `%define DIA_WIDGET`, so a DIA that
@@ -171465,7 +171572,7 @@ ground either side - at `W_X` and at `W_X + 177` - and the face at
 `W_X + 1`, which §11.94's snap (`W_X` = 7 mod 8) puts on the byte grid for
 nothing. 178 and not the 177 one ground column would take, because
 `wm_create`'s SIZE snap (§11.94.5) puts every frame's `W_W` at 8k + 2 before
-MAKE runs (§107.9). The titled fallback (§107.7) is 178 wide too, with the
+MAKE runs (§110.9). The titled fallback (§110.7) is 178 wide too, with the
 face at `W_X + 1` again, so `x` and the width are the same in both forms.
 
 **Every pixel is written once per paint**:
@@ -171493,7 +171600,7 @@ card:
 |---|---|
 | REST | a white plate 112 px wide (13 cells and 4 px each side) with the name, ground either side |
 | FOCUS (the widget owns the bar) | the same plate inverse, like a selected icon's label (§76.8) |
-| HOVER | a face-width black bar: a white 10x10 close box with a black x at face `x` + 3..12, the name in white centred, a three-line dotted grip at `x` + 158..170 |
+| HOVER | a face-width black bar: a white 10x10 close box with a black x at face `x` + 3..12 (under an 11-row tag, MID and COMPACT, an 8x8 box at `x` + 3..10 on rows 1..8, so a black row stays above it - v4 review), the name in white centred, a three-line dotted grip at `x` + 158..170 |
 
 It is revealed `DOCK_HOVER_T` ticks after the pointer comes over any visible
 part of the frame (§30.6's constants by name) and hidden `DOCK_LEAVE_T`
@@ -171518,7 +171625,7 @@ app-name cell's About and Close while the widget owns the bar (§12.7), Esc
 for RELEASE.
 
 **The include's API**, under `DIA_WIDGET` (wave 3). The caller defines,
-beside v1's (§107.5):
+beside v1's (§110.5):
 
 ```
 %define DIA_WIDGET
@@ -171562,7 +171669,7 @@ drawn by `OSAPI_GFX_DESK` on a desk window and not at all titled, so it is
 not bound. It is a macro of the include's, so the table goes AFTER
 the `%include`. `dia_load` picks the layout from **`OSAPI_VIDEO`'s
 height** - 400 rows or more TALL, 300-399 MID, below that COMPACT - so EGA's
-640x350 takes Hercules' layout and not VGA's (§107.3's PREFER pair took the
+640x350 takes Hercules' layout and not VGA's (§110.3's PREFER pair took the
 adapter's kind), and sizes the template itself.
 
 **Its calls** are v1's - `dia_load` in the entry proc, `dia_made` after
@@ -171620,13 +171727,13 @@ every beat, forever. `deskdrag`'s H leg drops the
 probe to a bottom at 544 on a 480-row screen and reads it back at 480.
 
 **The state file's place is the FACE's origin** (header +3 bit 1,
-`DIA_HF_CONT`, §107.5): a v1 file holds a titled frame, so its face is
+`DIA_HF_CONT`, §110.5): a v1 file holds a titled frame, so its face is
 `(x + 1, y + TITLE_H)`, and there is no `DIA_HDR_VER` bump - no existing file
 reads as damaged. The bit is set in memory the moment the place on record is
 taken, so a v1 file is converted once, by its next save, and never twice.
 `dia_anchor` measures with the FACE's size. D rows carry no geometry
-(§107.2), so nothing migrates there. A `DIA_WIDGET` build is the only one
+(§110.2), so nothing migrates there. A `DIA_WIDGET` build is the only one
 that writes the bit; a v1 DIA's file is byte for byte what it was.
 
-It landed in v2's wave 3 (§107.10); the Desk Calendar adopted it in wave 4
-(§107.3).
+It landed in v2's wave 3 (§110.10); the Desk Calendar adopted it in wave 4
+(§110.3).

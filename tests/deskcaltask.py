@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""SPEC.md 107.3: the Desk Calendar's TASKS - typed, checked, cleared and
+"""SPEC.md 110.3: the Desk Calendar's TASKS - typed, checked, cleared and
 deleted - and a check box whose toggle is the BOX ALONE, one sub-rect BLIT1.
 
     make && python3 tests/deskcaltask.py
 
 The SHIPPED 360KB system disk copied to a scratch file, on MartyPC's 5150
-with a Hercules card: v2's MID layout (348 rows, SPEC.md 107.3), and a 1bpp
+with a Hercules card: v2's MID layout (348 rows, SPEC.md 110.3), and a 1bpp
 framebuffer the harness can read whole (`vram`). The state file is flushed
 off the emulated drive and parsed by tools/os88dia.py; every coordinate is
 the layout's, out of tools/os88dia.py's DESKCAL_GEO, which t_dia holds to
@@ -169,7 +169,7 @@ def main():
                 c.front()
                 hits, _ = measure(m, lambda: (act(),
                                               os88marty.guest_sleep(m, 1.5)))
-                # a PRESS reveals the handle at once (SPEC.md 107.11) - the
+                # a PRESS reveals the handle at once (SPEC.md 110.11) - the
                 # include's one tag-row BLIT1, there when the handle was not
                 # up - so the tag row's calls are set aside: the CALENDAR's
                 # draw is what is counted

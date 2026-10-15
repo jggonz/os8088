@@ -1,5 +1,5 @@
 ; =============================================================================
-; apps/deskcal/dcdata.inc - the Desk Calendar's payload (SPEC.md 107.3)
+; apps/deskcal/dcdata.inc - the Desk Calendar's payload (SPEC.md 110.3)
 ;
 ; The appointments and the tasks, as the state file holds them: checked at
 ; load, an appointment inserted IN ORDER, a record taken out by closing the
@@ -16,7 +16,7 @@
 ; -----------------------------------------------------------------------------
 ; dc_check - the payload as it was read: both counts inside their tables and
 ; the appointments in order. CF = 1 it is not ours to trust (a DAMAGED file,
-; SPEC.md 107.3). Every register kept
+; SPEC.md 110.3). Every register kept
 ; -----------------------------------------------------------------------------
 dc_check:
     push ax
@@ -141,7 +141,7 @@ dc_arange:
     ret
 
 ; -----------------------------------------------------------------------------
-; dc_ains - dc_rec into the appointments, IN ORDER (SPEC.md 107.3)
+; dc_ains - dc_rec into the appointments, IN ORDER (SPEC.md 110.3)
 ; out: AL = its index; CF = 1 the table is full and nothing changed.
 ; Every other register kept
 ; -----------------------------------------------------------------------------
@@ -428,7 +428,7 @@ dc_trim:
     ret
 
 ; -----------------------------------------------------------------------------
-; dc_parse - what an appointment's line MEANS (SPEC.md 107.3): a first word
+; dc_parse - what an appointment's line MEANS (SPEC.md 110.3): a first word
 ; that is H:MM, HH:MM, HMM or HHMM - an hour 0..23, a minute 0..59, followed
 ; by a space or the end - is the time, and the rest is the text; anything
 ; else is an ALL-DAY line, the whole of it the text.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SPEC.md 107.3: the Desk Calendar's APPOINTMENTS - typed, kept in order,
+"""SPEC.md 110.3: the Desk Calendar's APPOINTMENTS - typed, kept in order,
 edited, deleted, refused at the limits - read back off the guest's own disk.
 
     make && python3 tests/deskcaledit.py
@@ -14,7 +14,7 @@ independent reader - and not about the package's memory.
 
 Boot 1, a DAMAGED file (its appointment count is 60, past the table):
 
-  A  it opens EMPTY (the payload is not trusted, SPEC.md 107.3), and the
+  A  it opens EMPTY (the payload is not trusted, SPEC.md 110.3), and the
      first edit - a task - puts `Replace damaged calendar?` up instead of
      writing: the file on A: is the fixture byte for byte. Yes replaces it.
   B  the one-line entry: `N` and `9:30 Dentist` Enter, then `1230 Lunch`,
@@ -32,9 +32,9 @@ Boot 1, a DAMAGED file (its appointment count is 60, past the table):
      letters`, the field still open, and Esc shuts it with nothing written.
   G  Calendar > Delete Item picked while the field is OPEN shuts it and asks
      on a bar that is the question's own: nothing inked between its app
-     name and the clock (dc_fclose had left the clip armed, SPEC.md 107.9).
+     name and the clock (dc_fclose had left the clip armed, SPEC.md 110.9).
 
-  H  v2's FOCUS (SPEC.md 107.3, 11.103.4), with a Disk window in front all
+  H  v2's FOCUS (SPEC.md 110.3, 11.103.4), with a Disk window in front all
      along: a press on a card's margin hands the widget the bar and the
      Disk window stays wm_top; `+` opens the field for EITHER in card 2's
      heading row - `Walk the dog` is a TASK and `1700 Tea` an appointment;
@@ -104,7 +104,7 @@ def disk_with(tmp, name, dat):
 
 class Cal(object):
     """One running calendar: its bss, its state file on A:, its keys - and
-    its GEOMETRY, v2's three cards (SPEC.md 107.3), from tools/os88dia.py's
+    its GEOMETRY, v2's three cards (SPEC.md 110.3), from tools/os88dia.py's
     DESKCAL_GEO, which t_dia holds to the package's own dc_geos."""
 
     def __init__(self, ui, tmp, check=check, before=None, today=TODAY,
@@ -415,7 +415,7 @@ def boot_damaged(tmp):
         # clip to redraw the heading; the question's create recomposes the
         # bar under whatever clip is armed, and through ours every cell was
         # recorded drawn and dropped - the `Calendar  Remind` titles stayed
-        # on the question's bar (SPEC.md 107.9). dc_askdel disarms first.
+        # on the question's bar (SPEC.md 110.9). dc_askdel disarms first.
         # With the toast and the disk widget down, everything right of the
         # app name is ground
         c.select_appt(0)

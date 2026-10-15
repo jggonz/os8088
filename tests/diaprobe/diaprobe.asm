@@ -1,6 +1,6 @@
 ; =============================================================================
 ; tests/diaprobe/diaprobe.asm - the smallest DESKTOP INTEGRATED APPLICATION
-; (SPEC.md 107)
+; (SPEC.md 110)
 ;
 ; Not shipped software: the gate package `make diatest` puts in SYSTEM\DIA\
 ; of its fixture system disks. It is apps/os88dia.inc and a window, nothing
@@ -23,9 +23,9 @@
 ; frame's left column, through OSAPI_GFX_DESK - every pixel once. It counts
 ; its presses, releases and keys in its bss for desk*.py to read, and gives
 ; the bar back (RELEASE) on Esc. Where QUERY refuses (kern_small) it is the
-; TITLED FALLBACK: the same face under an ordinary title bar (SPEC.md 107.7).
+; TITLED FALLBACK: the same face under an ordinary title bar (SPEC.md 110.7).
 ; It is its own build, not DIAPROBE's, because the v1 rows drag DiaProbe by
-; its title bar and close it with its close box (SPEC.md 107.9).
+; its title bar and close it with its close box (SPEC.md 110.9).
 ;
 ; WAVE 2 (SPEC.md 11.103.6-7) gives it a crude TAG ROW under the cards: at
 ; rest a white plate on the desktop's ground; while the kernel's hover edge
@@ -34,10 +34,10 @@
 ; anything that is not a card - a gap, the tag, a ground column - posts
 ; OSAPI_WM_DESK DRAG; a press on the revealed box arms it (lit), and its
 ; release ON the box closes the probe through the include's own negotiator
-; and OSAPI_WM_CLOSE, as a widget's x must (SPEC.md 107.11). Its DIA_ONTICK
+; and OSAPI_WM_CLOSE, as a widget's x must (SPEC.md 110.11). Its DIA_ONTICK
 ; posts a DRAG from the TIMER on request, which must be inert.
 ;
-; WAVE 3 (SPEC.md 107.11) MOVES IT ONTO THE INCLUDE: `%define DIA_WIDGET`,
+; WAVE 3 (SPEC.md 110.11) MOVES IT ONTO THE INCLUDE: `%define DIA_WIDGET`,
 ; and every pixel, gesture and timer of the face is apps/os88dia.inc's -
 ; the probe is three layouts (TALL 104 rows, MID 83, COMPACT 65, picked by
 ; the screen's height), a DIA_COMPOSE that exercises GFXE_TEXT and
@@ -83,7 +83,7 @@ DIA_BSS     equ 0
 %endif
 
 %ifdef DP_DESK
-; --- the widget (SPEC.md 107.11), in miniature -------------------------------
+; --- the widget (SPEC.md 110.11), in miniature -------------------------------
 %define DIA_WIDGET
 %define DIA_TAG       'DeskProbe'   ; = the title
 %define DIA_FACE_W    128
@@ -330,7 +330,7 @@ dp_paint:                       ; SI = the window, lock held: one opaque run
     mov si, dp_msg
     mov ax, 0x0F00              ; ink 0 on 15: two colours, every adapter
     call OSAPI_FONT_RUN
-    call dia_painted            ; kern_small: hire the worker (SPEC.md 107.5.2)
+    call dia_painted            ; kern_small: hire the worker (SPEC.md 110.5.2)
     pop si
     pop dx
     pop cx
@@ -351,7 +351,7 @@ dp_msg:     db 'DIA probe', 0
 %endif
 %include "os88dia.inc"
 %ifdef DP_DESK
-; three layouts, picked by the screen's height (SPEC.md 107.11) - after the
+; three layouts, picked by the screen's height (SPEC.md 110.11) - after the
 ; include, which is where DIA_LAYOUT is defined
 dp_lays:
     DIA_LAYOUT 436, 60, 12, 40,8, 40,4      ; TALL, VGA: 104 rows

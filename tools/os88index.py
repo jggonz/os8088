@@ -46,7 +46,7 @@ OUT = os.path.join(ROOT, "docs", "INDEX.md")
 GROUPS = [
     ("Windows", ["11", "20"],
      ["WM_", "ABOUT_SET"]),
-    ("Packages and the desktop", ["21", "26", "107"],
+    ("Packages and the desktop", ["21", "26", "110"],
      ["PKG_", "DESK_"]),
     ("Menus and the menu bar", ["12", "59"],
      ["MENU_", "TOAST"]),
@@ -117,7 +117,7 @@ INCLUDES = [
      "`cmp ax, KEY_ALTENTER` in its W_ONKEY is both directions. Both want "
      "`OS88_ALTENTER_ARM` (apps/os88api.inc) in the entry proc, without which "
      "the chord is silently dead."),
-    ("os88dia.inc", "107",
+    ("os88dia.inc", "110",
      "A DESKTOP INTEGRATED APPLICATION - a widget that lives in SYSTEM\\DIA\\ "
      "and comes back at the next boot where it was left. Its state file "
      "(SYSTEM\\APPDATA, a 16-byte DIA header then your payload), its DIA row "
@@ -128,7 +128,7 @@ INCLUDES = [
      "your own KEEPH/PREFER, `dia_painted` as the LAST thing your W_PAINT "
      "does (kern_small's worker is hired there - without it that kernel has "
      "no tick, no save and no reminders, and says nothing), and `dia_touch` "
-     "whenever your payload changes. `%define DIA_WIDGET` (§107.11) is the "
+     "whenever your payload changes. `%define DIA_WIDGET` (§110.11) is the "
      "widget TREATMENT: a desk window (§11.103) of chromeless cards with the "
      "desktop between them and a name tag that becomes a handle - x to "
      "close, drag by the tag or a gap - under the pointer; you give "
@@ -413,7 +413,7 @@ def packages():
     """
     mk = re.sub(r"\\\n\s*", " ", read("Makefile"))
     mvars = make_vars(mk)
-    # ...OR the system disk's own SYSTEM/ and SYSTEM/DIA/ (SPEC.md 92, 107):
+    # ...OR the system disk's own SYSTEM/ and SYSTEM/DIA/ (SPEC.md 92, 110):
     # The Wire and the Desk Calendar ride every system floppy and no apps
     # disk, so the everything-set alone called both "built by its own target
     # only", which is the one thing neither is

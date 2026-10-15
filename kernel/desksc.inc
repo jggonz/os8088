@@ -44,7 +44,7 @@ SC_R_KIND   equ 2               ;  1: 0 document, 1 package, 2 folder - the
 SC_R_DIA    equ 3               ;  1: NOT spare (SPEC.md 26.8.1): `\` on a
                                 ;     dragged shortcut (sc_m_new's dsk_path
                                 ;     spill, below), 0 on a package's link,
-                                ;     SC_DIA on a DIA row (SPEC.md 107.2) -
+                                ;     SC_DIA on a DIA row (SPEC.md 110.2) -
                                 ;     an EQUALITY, which neither of the other
                                 ;     two values can meet
 SC_DIA      equ 'D'             ; the DIA mark: a remembered WIDGET, KIND 1,
@@ -185,7 +185,7 @@ sc_open:
     jnc .back
     call ld_say_status          ; the Disk window's verdicts (SPEC.md 22.9)
     clc                         ; ...and a REFUSAL is not "not found": the
-.back:                          ; target is there (SPEC.md 107.4)
+.back:                          ; target is there (SPEC.md 110.4)
     jmp drv_vol_back            ; FLAGS preserved: CF = 0, found
 .nf:
     mov ax, bp                  ; `Shortcut not found (B:)`, the letter
@@ -201,13 +201,13 @@ sc_open:
     ret                         ; (SPEC.md 26.8.5) and desk_open does not
 
 ; -----------------------------------------------------------------------------
-; dia_boot - relaunch every DIA row SYSTEM.CFG put back (SPEC.md 107.4)
+; dia_boot - relaunch every DIA row SYSTEM.CFG put back (SPEC.md 110.4)
 ; in:  nothing; kmain's tail through kern_big's drv_notice_x, FIRST: the
 ;      desktop painted, NO lock held, task 0 about to be ui_task, A: the boot
 ;      disk - OSAPI_PKG_START's own context
 ; out: nothing (all registers preserved)
 ;
-; A DIA row is a package shortcut carrying SC_DIA at +3 (107.2): KIND and the
+; A DIA row is a package shortcut carrying SC_DIA at +3 (110.2): KIND and the
 ; mark are one word compare. Each is opened by sc_open, exactly as a
 ; double-click would; a target that is NOT FOUND (CF = 1, after its one
 ; toast) is DOWNGRADED in memory to the shortcut it is - the mark cleared, and
@@ -614,7 +614,7 @@ sc_m_new:
 ; file would keep it for ever. +3 is stored as 0 unless the record is a DIA
 ; record, so no package's junk there can become the mark.
 ;
-; A DIA RECORD (+3 = SC_DIA, SPEC.md 107.2) is ONE ROW PER WIDGET, by name: a
+; A DIA RECORD (+3 = SC_DIA, SPEC.md 110.2) is ONE ROW PER WIDGET, by name: a
 ; marked row whose path ends in the same component is UPDATED in place when
 ; the volume or path differ - where it was last launched from wins - and is
 ; the answer with NOTHING WRITTEN when they do not, so a widget may register
@@ -716,7 +716,7 @@ sc_m_tail:
     ret
 
 ; sc_m_dfind - the live DIA row whose path ENDS like the record's (SPEC.md
-; 107.2): in DX:CX = the record; out CF = 0 AL = its zone, CF = 1 none.
+; 110.2): in DX:CX = the record; out CF = 0 AL = its zone, CF = 1 none.
 ; Clobbers AH, SI, DI, BP, ES. A zone does not survive a boot (ovl_sc_load
 ; compacts the rows), a widget's NAME does
 sc_m_dfind:
@@ -1068,7 +1068,7 @@ sc_m_move:
 ; -----------------------------------------------------------------------------
 ; sc_m_pdel - SC_OP_PDEL: a PACKAGE's OSAPI_DESK_ITEM remove (SPEC.md 26.9.6)
 ; in:  AL = the zone its add answered, or 0xFF: a DIA's remove by name
-;      (SPEC.md 107.2); DX:CX = the caller's SC_REC record
+;      (SPEC.md 110.2); DX:CX = the caller's SC_REC record
 ; out: AL = 0 removed, 0xFF refused
 ;
 ; A ZONE IS NOT AN IDENTITY: the row a user's Delete frees is the next one a
@@ -1078,7 +1078,7 @@ sc_m_move:
 ; -----------------------------------------------------------------------------
 sc_m_pdel:
     cmp al, 0xFF                ; AH = 0xFF at the door: a DIA's remove BY
-    jne .z                      ; NAME (SPEC.md 107.2) - its zone is found,
+    jne .z                      ; NAME (SPEC.md 110.2) - its zone is found,
     call sc_m_dfind             ; then the same check as any remove
     jc .no
 .z:

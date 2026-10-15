@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SPEC.md 107.4: a DESKTOP INTEGRATED APPLICATION comes back at boot.
+"""SPEC.md 110.4: a DESKTOP INTEGRATED APPLICATION comes back at boot.
 
     make && make diatest && python3 tests/diaboot.py
 
@@ -21,7 +21,7 @@ screen. One boot on a VGA XT, and every claim is asked of the GUEST'S state:
      And DIAPROBE.DAT is the fixture still: it opened where it was saved,
      so nothing was owed.
   D  a DRAG is saved: two polls agree, and DIAPROBE.DAT on the guest's A:
-     holds the new place (SPEC.md 107.5.1's walk, on the disk it came from).
+     holds the new place (SPEC.md 110.5.1's walk, on the disk it came from).
   E  ...and AFTER that save its close box still removes the row BY NAME
      (OSAPI_DESK_ITEM AH = 0xFF): the table is empty and SYSTEM.CFG has no
      trailer. A W1 build failed exactly here - the save's walk used the row
@@ -55,7 +55,7 @@ BDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
 DESK_SC0 = os88dia.DESK_SC0
 # os88dia.inc's bss, after the image: header + payload (0 for the probe), the
 # 128-byte row, the 13-byte name, the banked folder word and drive byte, then
-# dia_st (SPEC.md 107.5)
+# dia_st (SPEC.md 110.5)
 DIA_ST = 16 + 0 + 128 + 13 + 2 + 1
 DIA_S_TRIED, DIA_S_ROW, DIA_S_DIRTY = 1, 2, 16
 

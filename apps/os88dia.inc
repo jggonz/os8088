@@ -1,22 +1,22 @@
 ; =============================================================================
-; os88dia.inc - a DESKTOP INTEGRATED APPLICATION's shared half (SPEC.md 107)
+; os88dia.inc - a DESKTOP INTEGRATED APPLICATION's shared half (SPEC.md 110)
 ;
 ; A DIA - a widget - is an ordinary package in SYSTEM\DIA\ on the boot volume
 ; that includes this file. It owns three things for it:
 ;
 ;   its STATE FILE  SYSTEM\APPDATA\<DIA_DATNAME> on its own volume (SPEC.md
 ;                   19.9): a 16-byte DIA header - where its window was, on
-;                   what screen - then the application's payload (107.5)
+;                   what screen - then the application's payload (110.5)
 ;   its PRESENCE    one DIA ROW in the desktop configuration, the SYSTEM.CFG
-;                   trailer (107.2), registered on the first timer tick and
+;                   trailer (110.2), registered on the first timer tick and
 ;                   removed BY NAME when the window closes - which is what the
-;                   kernel's dia_boot relaunches from at the next boot (107.4)
+;                   kernel's dia_boot relaunches from at the next boot (110.4)
 ;   its TICK        a 36-tick timer that polls the window's place, saves once
 ;                   a drag has settled, and calls the application's own tick
 ;
 ; A save asks first whether the disk in the drive is still HOME - the folder
 ; the widget was launched from still holds a file of its own name - because a
-; widget outlives a disk swap (SPEC.md 107.5.1). A refusal that may clear
+; widget outlives a disk swap (SPEC.md 110.5.1). A refusal that may clear
 ; (no disk, an I/O error, not home) is retried on a doubling backoff; one that
 ; will not (write-protected, full) makes the state read-only for the session.
 ;
@@ -24,7 +24,7 @@
 ;
 ;   %define DIA_DATNAME 'DESKCAL.DAT'   the state file's 8.3 name
 ;   %define DIA_CAP     'Calendar'      the row's caption (<= 12 chars) - what
-;                                       a downgraded row's icon says (107.4)
+;                                       a downgraded row's icon says (110.4)
 ;   DIA_PAYLEN  equ n                   the payload's EXACT length
 ;   DIA_PAYVER  equ v                   ...and its version
 ;   DIA_ICON    equ 32                  the 64-byte icon body in the image
@@ -42,7 +42,7 @@
 ;                                       owed to a later poll (a field open,
 ;                                       a question up, an edit this poll),
 ;                                       CF = 0 lets it go. A save is seconds
-;                                       of disk on a 5150 (SPEC.md 107.6)
+;                                       of disk on a 5150 (SPEC.md 110.6)
 ;   %define DIA_ONCLOSE proc            optional: before the row is removed
 ;   %define DIA_ISOPEN  'Desk Calendar is open'   optional: the toast a SECOND
 ;                                       launch is refused with (<= 24 chars,
@@ -50,7 +50,7 @@
 ;   %define DIA_DAMAGEDQ 'Replace damaged calendar?'   optional, and only with
 ;                                       os88ui.inc's OS88UI_ALERT included
 ;                                       first: asked before the first save
-;                                       over a damaged file (SPEC.md 107.5.2)
+;                                       over a damaged file (SPEC.md 110.5.2)
 ;
 ; and gets DIA_PAY (the payload, DIA_PAYLEN bytes, zero when there was no
 ; valid file) and DIA_BSS_END (the next free bss offset).
@@ -75,20 +75,20 @@
 ;               makes it. Every register and the flags kept.
 ;   [dia_nx]    a byte: store n (1..35) from DIA_ONTICK and the NEXT beat is
 ;               n ticks out instead of 36, once - a second note of a chirp
-;               (SPEC.md 107.3). The timer arm's; kern_small's worker has
+;               (SPEC.md 110.3). The timer arm's; kern_small's worker has
 ;               begun its next sleep before the beat runs, and ignores it.
 ;
-; SPEC.md 107.5 and 107.5.2 are the contract.
+; SPEC.md 110.5 and 110.5.2 are the contract.
 ; =============================================================================
 
 %ifndef OS88DIA_INC
 %define OS88DIA_INC
 
-DIA_HDR_MAGIC   equ 0x4144      ; 'DA' (SPEC.md 107.5)
+DIA_HDR_MAGIC   equ 0x4144      ; 'DA' (SPEC.md 110.5)
 DIA_HDR_VER     equ 1
 DIA_HF_POS      equ 1           ; +3 bit 0: the position is valid
 DIA_HF_CONT     equ 2           ; +3 bit 1: +4/+6 are the FACE's origin, not
-                                ; a titled frame's (v2, SPEC.md 107.11) - only
+                                ; a titled frame's (v2, SPEC.md 110.11) - only
                                 ; a DIA_WIDGET build writes it
 DIA_H_MAGIC     equ 0
 DIA_H_VER       equ 2
@@ -112,9 +112,9 @@ DIA_S_NOHOME    equ 4           ; no SYSTEM\APPDATA: the state stays in memory
 DIA_S_DAMAGED   equ 8           ; the file was there and was not ours
 DIA_S_DIRTY     equ 16          ; owed a save
 DIA_S_RDONLY    equ 32          ; a save was refused for good (write-protected,
-                                ; full): the state stays in memory (107.5.1)
+                                ; full): the state stays in memory (110.5.1)
 DIA_S_WORKER    equ 64          ; no OSAPI_WM_TIMER (kern_small): the tick is
-                                ; a worker's wake (SPEC.md 107.5.2)
+                                ; a worker's wake (SPEC.md 110.5.2)
 DIA_S_HIRED     equ 128         ; ...and the worker is running
 ; dia_fl bits
 DIA_F_ASKING    equ 1           ; the damaged-file question is on the glass
@@ -146,7 +146,7 @@ dia_bn      equ dia_bk + 1                                  ; ...still to wait
 dia_fnd     equ dia_bn + 1                                  ; the walk's FIND
                                 ; buffer - its OWN: dia_rec is the registered
                                 ; row from the first tick to the close, and
-                                ; the close removes by it (SPEC.md 107.5)
+                                ; the close removes by it (SPEC.md 110.5)
 dia_fl      equ dia_fnd + OSAPI_FIND_SZ                     ; DIA_F_* (wave 2)
 dia_wy      equ dia_fl + 1                                  ; the restored y
 dia_nx      equ dia_wy + 2                                  ; the next beat,
@@ -154,7 +154,7 @@ dia_nx      equ dia_wy + 2                                  ; the next beat,
 %ifndef DIA_WIDGET
 DIA_BSS_END equ DIA_BSS + DIA_HDR_SIZE + DIA_PAYLEN + OSAPI_DI_SIZE + 13 + 2 + 1 + 1 + 2 + 2 + 2 + 1 + 1 + OSAPI_FIND_SZ + 1 + 2 + 1
 %else
-; THE WIDGET'S OWN (SPEC.md 107.11), after v1's - so every v1 offset above
+; THE WIDGET'S OWN (SPEC.md 110.11), after v1's - so every v1 offset above
 ; is where it was, and tools/os88dia.py's widget_off() names these
 dia_wf      equ dia_nx + 1      ; db DIA_W_*: the form, the focus, the x armed
 dia_hv      equ dia_wf + 1      ; db the hover state, DIA_HV_*
@@ -191,7 +191,7 @@ DIA_BSS_END equ dia_ty + 2 - os88_image_end
 
 ; DIA_PLACE reg - AX, DX = the place a window's record means to the state
 ; file: its frame's x,y (v1), or its FACE's origin (DIA_WIDGET, SPEC.md
-; 107.11). `reg` holds the record, ES = KERNEL_SEG; nothing else changes
+; 110.11). `reg` holds the record, ES = KERNEL_SEG; nothing else changes
 %macro DIA_PLACE 1
 %ifdef DIA_WIDGET
   %ifidni %1, si
@@ -209,7 +209,7 @@ DIA_BSS_END equ dia_ty + 2 - os88_image_end
 %endmacro
 
 %ifdef DIA_WIDGET
-; --- THE WIDGET TREATMENT (SPEC.md 107.11) -----------------------------------
+; --- THE WIDGET TREATMENT (SPEC.md 110.11) -----------------------------------
 %ifndef GFXE_TEXT
   %error "os88dia: DIA_WIDGET composes with os88gfx.inc - define GFXE_TEXT"
 %endif
@@ -319,7 +319,7 @@ DIA_GX      equ DIA_FACE_W - 18                 ; ...and its grip
 %endif ; DIA_WIDGET
 
 ; -----------------------------------------------------------------------------
-; dia_load - the entry proc's half (SPEC.md 107.5, 107.5.2)
+; dia_load - the entry proc's half (SPEC.md 110.5, 110.5.2)
 ; in:  SI = the loader's name (an offset in KERNEL_SEG), DI = the template
 ; out: CF = 1 another instance's window is up and its toast has been said:
 ;      return CF = 1 from the entry proc. CF = 0 the state file is read and
@@ -341,7 +341,7 @@ dia_load:
     push es
 %ifdef DIA_WIDGET
     call dia_wsize              ; QUERY, the layout, the template's size and
-                                ; its default place (SPEC.md 107.11)
+                                ; its default place (SPEC.md 110.11)
 %endif
     push di
     push ds                     ; the NAME, out of KERNEL_SEG: copy it, the
@@ -360,7 +360,7 @@ dia_load:
     pop ds
     call OSAPI_FILE_HERE        ; HOME, banked ONCE: every save comes back
     mov [dia_hdx], dx           ; here, and asks whether this is still it
-    mov [dia_hbl], bl           ; (SPEC.md 107.5.1)
+    mov [dia_hbl], bl           ; (SPEC.md 110.5.1)
     call dia_enter              ; standing in SYSTEM\APPDATA, or CF = 1
     jc .none
     push ds
@@ -380,7 +380,7 @@ dia_load:
     or byte [dia_st], DIA_S_RDONLY  ; FERR_NODISK / FERR_IO: UNREAD - nothing
     jmp short .zero             ; is known about it, so it is neither damaged
                                 ; nor ever written over this session; the
-                                ; next launch reads it again (SPEC.md 107.5)
+                                ; next launch reads it again (SPEC.md 110.5)
 .got:
     or dx, dx
     jnz .bad
@@ -422,7 +422,7 @@ dia_load:
     or byte [dia_st], DIA_S_DAMAGED
 .zero:
     push ds                     ; DAMAGED: run empty, and never overwrite it
-    pop es                      ; silently (dia_save asks first, 107.5.2)
+    pop es                      ; silently (dia_save asks first, 110.5.2)
     mov di, dia_file
     mov cx, DIA_HDR_SIZE + DIA_PAYLEN
     xor al, al
@@ -445,7 +445,7 @@ dia_load:
     clc
     ret
 
-; dia_anchor - one axis of a saved place, onto this screen (SPEC.md 107.5.2)
+; dia_anchor - one axis of a saved place, onto this screen (SPEC.md 110.5.2)
 ; in:  SI = the saved coordinate, CX = the screen's extent when it was saved,
 ;      AX = the extent now, DX = the frame's template extent on that axis
 ; out: SI = the coordinate now: unchanged when the screen is the same size or
@@ -470,7 +470,7 @@ dia_anchor:
 .x:
     ret
 
-; dia_single - is another instance of this package up? (SPEC.md 107.5.2) Its
+; dia_single - is another instance of this package up? (SPEC.md 110.5.2) Its
 ; window's segment carries OUR program name at +16. CF = 1 yes, and the toast
 ; is said; every register kept
 dia_single:
@@ -535,7 +535,7 @@ dia_made:
     mov es, ax
 %ifdef DIA_WIDGET
     call dia_wmade              ; MAKE, or the titled fallback's promises; the
-                                ; prefilters and the wake (SPEC.md 107.11)
+                                ; prefilters and the wake (SPEC.md 110.11)
 %endif
     test byte [dia_fl], DIA_F_PLACED
     jz .rec
@@ -547,7 +547,7 @@ dia_made:
     mov cx, bx                  ; took, down to the lowest y whose frame and
     mov bx, [dia_win]           ; shadow are on this display - wm_fit's own
     pop ax                      ; floor for a KEEPH window, ph - h - 1 - and
-    sub cx, [es:bx+W_H]         ; never past it (SPEC.md 107.5.2). The window
+    sub cx, [es:bx+W_H]         ; never past it (SPEC.md 110.5.2). The window
     dec cx                      ; is not shown yet; x is clamped the same
     cmp ax, cx                  ; either way and is not touched
     jle .put
@@ -563,7 +563,7 @@ dia_made:
     or byte [dia_file+DIA_H_FLAGS], DIA_HF_CONT ; ...a FACE's from now on: a
                                 ; v1 file is converted by its next save, once
 %endif
-    mov [dia_px], ax            ; launch alone writes nothing (107.5.2). The
+    mov [dia_px], ax            ; launch alone writes nothing (110.5.2). The
     mov [dia_py], dx            ; header's screen goes with it, or a later
     mov [dia_file+DIA_H_X], ax  ; save would pair this place with the old
     mov [dia_file+DIA_H_Y], dx  ; screen; DIA_HF_POS is left as the file had
@@ -577,12 +577,12 @@ dia_made:
     call OSAPI_WM_ONCLOSE
     mov ax, 1                   ; the first tick: the window is up by then
     call OSAPI_WM_TIMER         ; CF = 1: kern_small, which has no timer -
-    jnc .t                      ; the WORKER ARM (SPEC.md 107.5.2): the
+    jnc .t                      ; the WORKER ARM (SPEC.md 110.5.2): the
     or byte [dia_st], DIA_S_WORKER  ; first paint hires it, and its wake is
 %ifndef DIA_WIDGET              ; the tick - a widget's W_ONWAKE is DIA_WAKE
     mov ax, dia_wake            ; already (dia_wmade), which reaches dia_wake,
     call OSAPI_WM_ONWAKE        ; and dia_wake reads DIA_S_WORKER (SPEC.md
-%endif                          ; 107.11)
+%endif                          ; 110.11)
 .t:
     pop es
     pop si
@@ -657,7 +657,7 @@ dia_tick:
     mov bx, [dia_win]
     xor ax, ax
     xchg al, [dia_nx]           ; a sooner beat the application asked for,
-    or al, al                   ; once (SPEC.md 107.5)
+    or al, al                   ; once (SPEC.md 110.5)
     jnz .t
     mov al, DIA_TICKS
 .t:
@@ -680,7 +680,7 @@ dia_beat:
     jnz .poll                   ; (kern_small's OSAPI_DESK_ITEM is the
     or byte [dia_st], DIA_S_TRIED   ; refusal: its path walk would buy nothing)
     call dia_register           ; EVERY launch, whatever the state file said:
-.poll:                          ; the row is the program's (SPEC.md 107.5)
+.poll:                          ; the row is the program's (SPEC.md 110.5)
     mov ax, KERNEL_SEG          ; ES = KERNEL_SEG on entry to a callback -
     mov es, ax                  ; and the registration's ES = DS since
     mov si, [dia_win]
@@ -704,7 +704,7 @@ dia_beat:
 .app:
 %ifdef DIA_ONTICK
     call DIA_ONTICK             ; CF = 1: the package is mid-edit - any save
-    jc .arm                     ; owed waits for a later poll (SPEC.md 107.5)
+    jc .arm                     ; owed waits for a later poll (SPEC.md 110.5)
 %endif
     test byte [dia_st], DIA_S_DIRTY
     jz .arm
@@ -748,7 +748,7 @@ dia_pos:
     pop ax
     ret
 
-; dia_register - the DIA row (SPEC.md 107.2): our volume, KIND 1, the mark,
+; dia_register - the DIA row (SPEC.md 110.2): our volume, KIND 1, the mark,
 ; the path we were launched from and our name. A refusal - no system disk in
 ; A:, a full table, kern_small - is CTRL.DRV's to say (or nobody's): the
 ; widget runs on, unremembered
@@ -801,7 +801,7 @@ dia_register:
 ; dia_close - the close negotiator (SI = the window; UI task, lock held). The
 ; application's own close, the row away BY NAME, the last place saved; and the
 ; close goes ahead (CF = 0). Restart and power-off do not come here (SPEC.md
-; 107.4): the row stays, which is what restore wants. A remove REFUSED - no
+; 110.4): the row stays, which is what restore wants. A remove REFUSED - no
 ; system disk in A: to read CTRL.DRV from, whose toast asks for it - declines
 ; the FIRST close (CF = 1), so the user can put it back and close again; the
 ; next one goes ahead whatever the remove says, so the window can never be
@@ -849,7 +849,7 @@ dia_close:
     test byte [dia_st], DIA_S_DIRTY
     jz .out
     or byte [dia_fl], DIA_F_CLOSING ; never ask from here: the alert would
-    call dia_save               ; die with this package (SPEC.md 107.5.2)
+    call dia_save               ; die with this package (SPEC.md 110.5.2)
 .out:
     clc
 .ret:
@@ -863,8 +863,8 @@ dia_close:
     ret
 
 ; dia_save - the state file, header and payload in one write (SPEC.md
-; 107.5.1). Not with no home, not once a refusal was for good, and not over a
-; DAMAGED file until the user has said Yes to DIA_DAMAGEDQ (107.5.2). A
+; 110.5.1). Not with no home, not once a refusal was for good, and not over a
+; DAMAGED file until the user has said Yes to DIA_DAMAGEDQ (110.5.2). A
 ; refusal that may clear keeps it owed and backs the next try off; one that
 ; will not makes the state read-only for the session. Keeps every register
 dia_save:
@@ -882,7 +882,7 @@ dia_save:
     push es
     call OSAPI_WM_CLIP_CLEAR    ; DIA_ONTICK may have left a clip armed this
                                 ; beat, and the alert's create recomposes
-                                ; the bar through it (SPEC.md 107.9)
+                                ; the bar through it (SPEC.md 110.9)
     mov ax, KERNEL_SEG          ; os88ui_ask reads our window's title out of
     mov es, ax                  ; the record, in KERNEL_SEG
     mov al, OS88UI_AYESNO
@@ -970,7 +970,7 @@ dia_dans:
 %endif
 
 ; dia_enter - walk to SYSTEM\APPDATA on HOME's volume, having asked whether
-; the disk in the drive is still home (SPEC.md 107.5.1). ONE full
+; the disk in the drive is still home (SPEC.md 110.5.1). ONE full
 ; OSAPI_FILE_GOTO first - the disk may have been swapped, and only a full
 ; mount re-reads its FAT (18.8.2 cannot tell two os8088 disks apart) - then
 ; the quiet stand that moves the instance, a word inside the volume just
@@ -1099,7 +1099,7 @@ dia_seek:
 
 %ifdef DIA_WIDGET
 ; =============================================================================
-; THE WIDGET TREATMENT (SPEC.md 107.11) - the face, its tag and its gestures.
+; THE WIDGET TREATMENT (SPEC.md 110.11) - the face, its tag and its gestures.
 ; No pixel of it is the kernel's: the kernel's part is SPEC.md 11.103's layer
 ; =============================================================================
 
@@ -1122,7 +1122,7 @@ dia_wsize:
     xor cx, cx                  ; TALL at 400 rows or more, MID from 300 -
     cmp bx, 400                 ; Hercules' 348 AND EGA's 350, which the
     jae .l                      ; adapter's kind would have called VGA -
-    inc cx                      ; COMPACT below (SPEC.md 107.11)
+    inc cx                      ; COMPACT below (SPEC.md 110.11)
     cmp bx, 300
     jae .l
     inc cx
@@ -1329,10 +1329,27 @@ dia_paint:
     call OSAPI_WM_DAMAGE        ; CF = 1: the whole of it, AX..DX either way
     jmp short dia_pbody
 
+; dia_redrawr - dia_redraw over the damage AX, BX - CX, DX alone (screen,
+; inclusive): what a card over the face uncovered, its slabs and nothing
+; else (SPEC.md 110.11). Every register kept
+dia_redrawr:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push bx
+    mov bx, si
+    call OSAPI_WM_CLIP_SET
+    pop bx
+    jnc dia_pbody
+    jmp dia_pdone
+
 ; dia_redraw - the whole face again OUTSIDE a paint (SI = the window, lock
-; held): OSAPI_WM_CLIP_SET, then dia_paint's body over all of it - a
-; package's About card taken down, say (SPEC.md 107.11). Nothing when none
-; of the window is on the glass. Every register kept
+; held): OSAPI_WM_CLIP_SET, then dia_paint's body over all of it. Nothing
+; when none of the window is on the glass. Every register kept
 dia_redraw:
     push ax
     push bx
@@ -1757,8 +1774,7 @@ dia_tagdraw:
     mov byte [gfxe_tsty], GFXE_INV  ; the close box white...
     mov ax, DIA_XX
     call dia_boxy
-    mov cx, DIA_XW
-    mov dx, DIA_XW
+    mov dx, cx
     call gfxe_bfill
     mov byte [gfxe_tsty], 0     ; ...with a black x
     jmp short .xm
@@ -1766,10 +1782,12 @@ dia_tagdraw:
     mov byte [gfxe_tsty], GFXE_INV  ; armed: the box black, its x white
 .xm:
     call dia_boxy
+    sub cx, 6
+    shr cx, 1                   ; the x's inset: centred in the box
     mov dx, bx
-    add dx, 2
+    add dx, cx
+    add cx, DIA_XX
     mov si, dia_xbits
-    mov cx, DIA_XX + 2
     call gfxe_bits
     pop ax
     mov byte [gfxe_tsty], GFXE_INV  ; the name in white, centred
@@ -1822,10 +1840,18 @@ dia_tagrows:
     dec dx
     ret
 
-; dia_boxy - BX = the close box's first band row, (tag rows - 10) / 2
+; dia_boxy - the close box under a tag of [gfxe_bh] rows: CX = its size,
+; DIA_XW - or 8 under a tag shorter than 12 rows, so a black row stays above
+; it on MID / COMPACT's 11 (v4 review) - and BX = its first band row,
+; (tag rows - size) / 2. The rest kept
 dia_boxy:
     mov bx, [gfxe_bh]
-    sub bx, DIA_XW
+    mov cx, DIA_XW
+    cmp bx, 12
+    jae .s
+    mov cx, 8
+.s:
+    sub bx, cx
     shr bx, 1
     ret
 
@@ -2078,7 +2104,7 @@ dia_mup:
 
 ; dia_quit - the widget's close (SI = the window, lock held): dia_close's
 ; negotiator, then OSAPI_WM_CLOSE. CF = 0 the close is under way - draw
-; nothing more and return; CF = 1 it was declined (the disk, SPEC.md 107.5)
+; nothing more and return; CF = 1 it was declined (the disk, SPEC.md 110.5)
 dia_quit:
     call dia_close
     jc .r
@@ -2163,7 +2189,7 @@ dia_tick:
     pop ax
     xor bx, bx
     xchg bl, [dia_nx]           ; a sooner beat the application asked for,
-    or bl, bl                   ; once (SPEC.md 107.5)
+    or bl, bl                   ; once (SPEC.md 110.5)
     jnz .t
     mov bl, DIA_TICKS
 .t:
@@ -2214,7 +2240,7 @@ dia_hvtick:
     test al, 3
     jz .show
     mov ax, DIA_HOVER_T         ; a button held: never revealed (SPEC.md
-    call dia_hset               ; 107.11) - ask again a dwell later
+    call dia_hset               ; 110.11) - ask again a dwell later
     jmp short .x
 .show:
     mov byte [dia_hv], DIA_HV_SHOWN

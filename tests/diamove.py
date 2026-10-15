@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SPEC.md 107.4, 107.5, 107.5.2: the Desk Calendar stays WHERE IT WAS PUT,
+"""SPEC.md 110.4, 110.5, 110.5.2: the Desk Calendar stays WHERE IT WAS PUT,
 across a reset - on every adapter, and on a screen of another size.
 
     make && python3 tests/diamove.py [--leg vga|cga|anchor]
@@ -32,8 +32,8 @@ before the boot - a TITLED frame's place (560,100) saved on an 800x600
 screen, no DIA_HF_CONT - and opens the calendar on the VGA XT's 640x480:
 
   D  the v1 place is CONVERTED to a face, (561,118) - a border in and a
-     title bar down (SPEC.md 107.11) - and each axis ANCHORED with the
-     face's size (SPEC.md 107.5.2): x from the far edge, 561 -> 401, the
+     title bar down (SPEC.md 110.11) - and each axis ANCHORED with the
+     face's size (SPEC.md 110.5.2): x from the far edge, 561 -> 401, the
      frame at 399 under the snap; y from the near one, 118 - a face hanging
      over the dock (118 + 355 > 456), which wm_create's fit pulls up above
      it: dia_made must give it back.

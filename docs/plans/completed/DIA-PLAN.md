@@ -1,42 +1,42 @@
 # DIA-PLAN: Desktop Integrated Applications, and the Desk Calendar
 
-**Status: BUILT** - waves 0 to 4 on `feature/dia` (SPEC.md §107 is the
+**Status: BUILT** - waves 0 to 4 on `feature/dia` (SPEC.md §110 is the
 contract; this file is the design record it was built from). Wave 5, the
-desk LAYER, was owner decision D1 and is NOT built (§107.8). "§" means
+desk LAYER, was owner decision D1 and is NOT built (§110.8). "§" means
 SPEC.md throughout.
 
 This is the judged and synthesized design exactly as it was taken into the
 build - three candidate designs scored, one corrected, four ideas taken from
 the runners-up - followed by **every place the code proved it wrong**,
 wave by wave, as the builders recorded them. Read the design for WHY the
-shape is what it is; read the log at the end, and §107.9, for what actually
+shape is what it is; read the log at the end, and §110.9, for what actually
 ships where the two differ. Byte counts in the design are its estimates; the
-measured ones are §107.6's.
+measured ones are §110.6's.
 
 ## As built, in one table
 
 | the design said | what shipped | where |
 |---|---|---|
-| K1-K6, ~+6 `.text` / ~+104 `.cold` on kern_big | K1-K6, **+6 / +116**, and **+6 / +32** on kern_small; no rung crossed; nothing in waves 2-4 | §107.6 |
-| `dia_boot_x`, far | `dia_boot`, near (both ends `.cold`) | §107.9 |
-| a save is one full `OSAPI_FILE_GOTO` per path component | one full mount, then `OSAPI_FILE_GOTO_QM`; and it asks whether the disk is still HOME first | §107.5.1 |
-| register only on `OPEN = 0` | register on EVERY launch, whatever the state file said | §107.5 |
-| the day field `dd*`, glyph 7 as a bullet | `[ ][d][d][m]` with a `*` hard against the number (glyph 7 is outside the kernel font; wave 2's `[mark][d][d]` read `15*16` as either day's, so the polish pass added the blank and the window grew to 234) | §107.3, §107.9 |
-| agenda 5 lines at pitch 10, a tab row on COMPACT | 7 / 4 lines, at pitch 10 on TALL and 9 on COMPACT (wave 3's pitch 8 until the polish pass), no tab row; the entry field takes a heading's place | §107.3, §107.9 |
-| the layout chosen from `OSAPI_VIDEO`'s height | chosen from the CONTENT height the kernel gave the window | §107.3 |
-| `wm_fit` clamps "whatever is left" | the template is sized for the adapter BEFORE the create, and `dia_made` gives a pulled-up `y` back | §107.5.2 |
-| a save at the next 2 s tick | held while the user is mid-edit (`DIA_ONTICK`'s CF), so a burst is one save | §107.5 |
-| the chirp 880 then 660 Hz everywhere | the same on kern_big through a once-only sooner beat (`dia_nx`); ONE 880 Hz note on kern_small's worker arm | §107.3 |
-| missed = due-but-unfired at launch | missed = due BEFORE this minute; a moment already past (before this minute) when ARMED is fired silently, one armed for this minute fires at the next beat; nothing fires under an open entry field | §107.3 |
-| "set FIRED and dirty" | the FIRED marks owe saves the user did not cause - a launch that missed reminders, an unattended firing - and they are priced; an alert holds no save | §107.3, §107.5.2, §107.6 |
-| `deskcalremind`'s QEMU `make test-snd` + `sndcheck.py` arm | the tone asserted at `OSAPI_SND_TONE`'s registers on MartyPC, not off the speaker | §107.9 |
-| `Clock not set (no RTC)` | `No RTC - check the time` (the cell cannot say whether it was set) | §107.3 |
-| §9's `make diashot` fixture and the PR's screenshot set | no `make diashot`: the gates assert on pixels and on the state file, and the 1bpp pictures between sets are `tests/deskcal1bpp.py --shots`'s. The PR's set is `docs/dia/*.png`, twelve pictures made on MartyPC by a driver outside the tree and retaken after the polish pass | §107.9 |
+| K1-K6, ~+6 `.text` / ~+104 `.cold` on kern_big | K1-K6, **+6 / +116**, and **+6 / +32** on kern_small; no rung crossed; nothing in waves 2-4 | §110.6 |
+| `dia_boot_x`, far | `dia_boot`, near (both ends `.cold`) | §110.9 |
+| a save is one full `OSAPI_FILE_GOTO` per path component | one full mount, then `OSAPI_FILE_GOTO_QM`; and it asks whether the disk is still HOME first | §110.5.1 |
+| register only on `OPEN = 0` | register on EVERY launch, whatever the state file said | §110.5 |
+| the day field `dd*`, glyph 7 as a bullet | `[ ][d][d][m]` with a `*` hard against the number (glyph 7 is outside the kernel font; wave 2's `[mark][d][d]` read `15*16` as either day's, so the polish pass added the blank and the window grew to 234) | §110.3, §110.9 |
+| agenda 5 lines at pitch 10, a tab row on COMPACT | 7 / 4 lines, at pitch 10 on TALL and 9 on COMPACT (wave 3's pitch 8 until the polish pass), no tab row; the entry field takes a heading's place | §110.3, §110.9 |
+| the layout chosen from `OSAPI_VIDEO`'s height | chosen from the CONTENT height the kernel gave the window | §110.3 |
+| `wm_fit` clamps "whatever is left" | the template is sized for the adapter BEFORE the create, and `dia_made` gives a pulled-up `y` back | §110.5.2 |
+| a save at the next 2 s tick | held while the user is mid-edit (`DIA_ONTICK`'s CF), so a burst is one save | §110.5 |
+| the chirp 880 then 660 Hz everywhere | the same on kern_big through a once-only sooner beat (`dia_nx`); ONE 880 Hz note on kern_small's worker arm | §110.3 |
+| missed = due-but-unfired at launch | missed = due BEFORE this minute; a moment already past (before this minute) when ARMED is fired silently, one armed for this minute fires at the next beat; nothing fires under an open entry field | §110.3 |
+| "set FIRED and dirty" | the FIRED marks owe saves the user did not cause - a launch that missed reminders, an unattended firing - and they are priced; an alert holds no save | §110.3, §110.5.2, §110.6 |
+| `deskcalremind`'s QEMU `make test-snd` + `sndcheck.py` arm | the tone asserted at `OSAPI_SND_TONE`'s registers on MartyPC, not off the speaker | §110.9 |
+| `Clock not set (no RTC)` | `No RTC - check the time` (the cell cannot say whether it was set) | §110.3 |
+| §9's `make diashot` fixture and the PR's screenshot set | no `make diashot`: the gates assert on pixels and on the state file, and the 1bpp pictures between sets are `tests/deskcal1bpp.py --shots`'s. The PR's set is `docs/dia/*.png`, twelve pictures made on MartyPC by a driver outside the tree and retaken after the polish pass | §110.9 |
 
 The rows that hold it: `t_dia` (fast); `diaboot`, `diamiss`, `diashort`,
 `diahiber`, `diaswap`, `diaregister`, `diamove`, `diamovecga`, `diaanchor`,
 `deskcalgrid`, `deskcaledit`, `deskcaltask`, `deskcalremind`, `diasmall`,
-`deskcalperf`, `deskcal1bpp` (soak) - §107.10 says what each asserts.
+`deskcalperf`, `deskcal1bpp` (soak) - §110.10 says what each asserts.
 
 ---
 
@@ -119,7 +119,7 @@ Zero-kernel registers only when the DAT says `OPEN = 0`. Here is the failure seq
 | Content click on a background window | **Confirmed**. It is raised and the click is swallowed (`ui.inc:456-462`). |
 | Hibernate question posted before ui_task | **Confirmed**. `hb_probe_x` posts `UI_RBQ_ASK` (`hiber.inc:341`) and step 0 of ui_task spends it (`ui.inc:85-98`). `hiber.inc:420` can also post `UI_RBQ_DOSRUN`. "`[ui_rebootq]` ≠ 0 → stand down" covers both. |
 | Discard runs with the gfx lock **held** | **Confirmed** (`hiber.inc:1113-1150`, `hbm_act`). So user-first is right: a Discard re-launch has to be **posted** (`CMD_DIA`), not called. |
-| Section numbering | §106 is the highest used top-level section and §104 was never used. **Take §107.** No section registry exists under docs/. |
+| Section numbering | §106 is the highest used top-level section and §104 was never used. **Take §110.** No section registry exists under docs/. |
 | Rung headroom [measured, `tools/kernsize.py`] | kern_big image rung **200 B left**, cold rung **462 left**, low 34, footprint 59 steps spare. kern_small was not measured (no `build/smallk` in this worktree). |
 | `OSAPI_WM_OWNSEG` (0x03BF) | **Exists**. It answers DX = the segment owning window slot AL, so a package-side singleton is possible. |
 | `TESTIMG` | **Exists** (`Makefile:13667`). `make test TESTIMG=<img>` boots a chosen A: disk. That is what the screenshots use. |
@@ -372,7 +372,7 @@ The include provides:
 | case | what the user sees | state |
 |---|---|---|
 | widget file deleted or renamed, `SYSTEM\DIA` gone, or a file where a folder was | one toast `Shortcut not found (A:)` (the existing sentence, `sc_s_nf`, drive patched in); a **Calendar** icon appears in a desktop cell | the row is downgraded in memory to an ordinary shortcut. The user can double-click it (retry) or Delete it. The next SYSTEM.CFG write persists it |
-| launched from B:, booted without that disk | the same, naming `(B:)` | the same, and stated in §107 |
+| launched from B:, booted without that disk | the same, naming `(B:)` | the same, and stated in §110 |
 | load refused (memory, version) | `ld_say_status`'s sentence | the row is **kept** |
 | DAT missing | a fresh calendar at the template position | — |
 | DAT damaged | an empty calendar; the first edit asks `Replace damaged calendar?` | the file is never silently overwritten |
@@ -410,7 +410,7 @@ A:\SYSTEM\APPDATA\DESKCAL.DAT    written at runtime, never shipped (so never pac
 
 ---
 
-## 4. The Desk Calendar (`apps/deskcal/`, §107.3)
+## 4. The Desk Calendar (`apps/deskcal/`, §110.3)
 
 - **Files:** `deskcal.asm` (header, entry, menus, callbacks), `dcdraw.inc`, `dcdate.inc`, `dcdata.inc`, `dcrem.inc`.
 - **Header:** `OS88_HEADER 'Desk Calendar', dc_entry, OS88_F_ICON`.
@@ -517,7 +517,7 @@ The file is the 16-byte DIA header (§3.3) followed by this payload. Fixed size 
 
 **No RTC** (`CLK_GET` AL bit 0 = 0): the first launch toasts `Clock not set (no RTC)`.
 
-Reminders fire only while the widget runs, including while minimized (§13.9). Autostart is what makes that the normal case; §107 and readme.txt say so.
+Reminders fire only while the widget runs, including while minimized (§13.9). Autostart is what makes that the normal case; §110 and readme.txt say so.
 
 ### 4.5 Redraw budget (5150, PERFORMANCE.md's table; to be confirmed on MartyPC)
 
@@ -544,18 +544,18 @@ Reminders fire only while the widget runs, including while minimized (§13.9). A
 
 ## 6. SPEC.md work (wave 0, written before any code)
 
-- **New §107 "Desktop Integrated Applications"**:
+- **New §110 "Desktop Integrated Applications"**:
 
   | subsection | subject |
   |---|---|
-  | §107.1 | definition: package, `SYSTEM\DIA`, `os88dia.inc` |
-  | §107.2 | the DIA row (`'D'` at +3, KIND 1, zslot 0xFF), add-or-update and remove-by-name |
-  | §107.3 | the Desk Calendar |
-  | §107.4 | the boot relaunch (`dia_boot_x`) and the failure table |
-  | §107.5 | the DIA header and the DAT payload |
-  | §107.6 | what it costs (the kernsize ledger) |
-  | §107.7 | kern_small |
-  | §107.8 | what is not done: desk layer, chrome, a move notification, a shutdown hook |
+  | §110.1 | definition: package, `SYSTEM\DIA`, `os88dia.inc` |
+  | §110.2 | the DIA row (`'D'` at +3, KIND 1, zslot 0xFF), add-or-update and remove-by-name |
+  | §110.3 | the Desk Calendar |
+  | §110.4 | the boot relaunch (`dia_boot_x`) and the failure table |
+  | §110.5 | the DIA header and the DAT payload |
+  | §110.6 | what it costs (the kernsize ledger) |
+  | §110.7 | kern_small |
+  | §110.8 | what is not done: desk layer, chrome, a move notification, a shutdown hook |
 
 - **Amend:**
   - §26.8.1: the +3 byte's three real values. This fixes existing drift: +3 is `\` today, not spare.
@@ -569,7 +569,7 @@ Reminders fire only while the widget runs, including while minimized (§13.9). A
   - §19.9: `DESKCAL.DAT`.
   - §24.5.1: the small system disk carries `SYSTEM\DIA`.
 - Also: docs/KERNEL-MEMORY.md (ledger), PERFORMANCE.md Part 5 (a row in W4), docs/INDEX.md (regenerated), and a root `readme.txt` section (`tools/checkreadme.py`).
-- **Renumber check before merge:** another branch could take §107 first (the port-workflow lesson).
+- **Renumber check before merge:** another branch could take §110 first (the port-workflow lesson).
 
 ---
 
@@ -653,7 +653,7 @@ Chrome removal (user-first's ten `WF_FULL` sites, +60-100 B) is a **separate** l
 | `deskcaledit` | type `9:30 Dentist` Enter (sendkey); the DAT holds date, 570, REMIND; Del + Yes removes it; the 49th add is greyed |
 | `deskcaltask` | add `Buy milk`, click its box: the mark pixels flip and DONE is set in the DAT after the debounce; Clear Done compacts |
 | `deskcalremind` | poke the live `clk_*` to 09:29:40 (tests/kdreturn.py:387's reader, inverted); the alert window is `wm_top` with `Reminder 09:30 Dentist`; the toast buffer holds `09:30 Dentist`. Plus a QEMU `make test-snd` arm with `tools/sndcheck.py` for 880 Hz |
-| `deskcalperf` | counters in `font_run` / `gfx_fill` / `wm_paint_dmg`: first paint, day select, an idle tick (must be **0**), a reminder tick, and boot time with and without a DIA row (`tools/os88boot.py` phase table). These figures go into PERFORMANCE.md Part 5 and §107.6 |
+| `deskcalperf` | counters in `font_run` / `gfx_fill` / `wm_paint_dmg`: first paint, day select, an idle tick (must be **0**), a reminder tick, and boot time with and without a DIA row (`tools/os88boot.py` phase table). These figures go into PERFORMANCE.md Part 5 and §110.6 |
 | `deskcal1bpp` | CGA (MartyPC `os8088_5150_cga`) and Hercules (`os8088_5150_herc_gla`): the COMPACT and TALL layouts, today inverse, the selected frame, greyed items legible (§39.4, §47) |
 
 Hazards (memory notes): run soak groups one at a time with `--marty-jobs 1`; a MartyPC client is single; knob kernels go in private trees; never run test-full beside another make.
@@ -717,7 +717,7 @@ Hercules comes off MartyPC (`os88marty.py ... shot herc.png`, docs/HERCULES-TEST
 5. **Shared rows.** A DIA row is one of `SC_MAX` = 15 shortcut rows. A full table means the widget runs but is not restored, and `Too many shortcuts` is the only notice.
 6. **A hostile SYSTEM.CFG** can mark any package row `'D'` and have it autostart. Accepted: SYSTEM.CFG is hidden+system on the boot disk, and whoever can write it can write KERNEL.SYS.
 7. **ABI fence.** `DESKCAL` calls 0x0467, so on an older kernel at the same PKG_FMT it would far-call past the table. It ships only beside its own kernel and must **not** go into `wire.json` (D5).
-8. **HDD install.** A row's VOL is a volume index. After an install, a row recorded against A: misses and is downgraded; that is existing shortcut semantics, stated in §107.
+8. **HDD install.** A row's VOL is a volume index. After an install, a row recorded against A: misses and is downgraded; that is existing shortcut semantics, stated in §110.
 9. **Rungs.** +6 / ≈ +104 bytes against 200 / 462 left today. A concurrent PR can cross first, so re-run kernsize at merge on both kernels.
 10. **Settings core** may grow from 5 to 6 sectors (`MODS_SIZE` 2,447 + ~120). Measure it.
 
@@ -738,7 +738,7 @@ Hercules comes off MartyPC (`os88marty.py ... shot herc.png`, docs/HERCULES-TEST
 
 ## Where the code proved the design wrong - the builders' log
 
-Numbered as the waves appended them; SPEC.md §107.9 carries the same in
+Numbered as the waves appended them; SPEC.md §110.9 carries the same in
 prose.
 
 
@@ -782,7 +782,7 @@ prose.
 12. Mirror: SC_MAX added to tools/os88geom.py's _MIRROR (t_mirror refused two
     host copies - tests/desksc.py and tools/os88dia.py - without an entry).
 
-## Wave 1 fixes (after review; SPEC.md 107.5, 107.5.1, 107.6, 107.9 carry the same)
+## Wave 1 fixes (after review; SPEC.md 110.5, 110.5.1, 110.6, 110.9 carry the same)
 
 13. **The save's walk is ONE full OSAPI_FILE_GOTO (the root) then
     OSAPI_FILE_GOTO_QM per step**, not a full GOTO per component (design 3.3
@@ -808,7 +808,7 @@ prose.
     the new fast row t_dia (nasm evaluates the kernel's own equ chain;
     os88geom refuses expressions so t_mirror could not).
 
-## Wave 2 (os88dia.inc in full, apps/deskcal skeleton, the disks; SPEC.md 107.3, 107.5.2, 107.6, 107.9 carry the same)
+## Wave 2 (os88dia.inc in full, apps/deskcal skeleton, the disks; SPEC.md 110.3, 110.5.2, 110.6, 110.9 carry the same)
 
 19. **Layout chosen from the CONTENT HEIGHT** (>= 236 TALL, else COMPACT), not
     OSAPI_VIDEO BX >= 300: same answer on one display, right after a drag
@@ -853,7 +853,7 @@ prose.
     clock field out of range (month 0, day past the month) reads as
     1980-01-01.
 
-## Wave 2 review fixes (SPEC.md 107.3, 107.5, 107.5.2, 107.9 carry the same)
+## Wave 2 review fixes (SPEC.md 110.3, 110.5, 110.5.2, 110.9 carry the same)
 
 31. **wm_fit inside wm_create does not "clamp whatever is left" usefully**
     (design 3.3's placement rule): it runs BEFORE the entry proc's PREFER and
@@ -896,7 +896,7 @@ prose.
     untouched (it waited for the unprompted save before); diaswap gains leg D
     (the declined close).
 
-## Wave 3 (appointments and tasks; SPEC.md 107.3, 107.6, 107.9, 107.10 carry the same)
+## Wave 3 (appointments and tasks; SPEC.md 110.3, 110.6, 110.9, 110.10 carry the same)
 
 38. **Wave 2's day mark never drew**: glyph 7 is outside the kernel font
     (FONT_FIRST 32..FONT_LAST 126, kernel/font.inc; anything else is a
@@ -959,8 +959,8 @@ prose.
 ## Wave 3 review fixes (w3-fix)
 
 52. **DIA_ONTICK answers CF = 1 = hold the save** (os88dia.inc, dia_beat).
-    The design (and W3's SPEC 107.3) priced an edit's save as "one write of
-    the whole file"; it is SPEC 107.6's 2 reads + 6 writes, ~3.2 s with the
+    The design (and W3's SPEC 110.3) priced an edit's save as "one write of
+    the whole file"; it is SPEC 110.6's 2 reads + 6 writes, ~3.2 s with the
     gfx lock held, and dia_touch made it land at the next 2 s poll - in the
     middle of a typed word. The calendar holds it while the entry field or
     its Delete question is open and until one poll passes with no edit
@@ -985,7 +985,7 @@ prose.
 57. tools/os88dia.py deskcal(): an appointment's REMIND defaults to "timed",
     as the package creates it; all-day has none.
 
-## Wave 4 (reminders, kern_small end to end, measurement; SPEC.md 107.3, 107.5, 107.6, 107.7, 107.9, 107.10 carry the same)
+## Wave 4 (reminders, kern_small end to end, measurement; SPEC.md 110.3, 110.5, 110.6, 110.7, 110.9, 110.10 carry the same)
 
 58. **The chirp's second note rides a once-only sooner beat**: OSAPI_SND_TONE
     is one channel / one request, the DIA beat is 36 ticks, so os88dia.inc
@@ -1024,7 +1024,7 @@ prose.
     reaching into the previous day.
 66. **No CLAUDE.md document-table row** for docs/plans/completed/DIA-PLAN.md:
     checkdocs does not require one and most completed plans are not listed;
-    SPEC.md 107 names the plan file instead.
+    SPEC.md 110 names the plan file instead.
 67. **deskcalperf's times are MartyPC's cycle counter, first call to last**:
     54 calls in 159 ms (TALL) is ~0.25 ms a glyph cell, which agrees with
     PERFORMANCE.md Set 86 (a 27-cell font_run 8.4 ms on MartyPC's 5150) and
@@ -1043,8 +1043,8 @@ prose.
     (`0930`, 15-minute lead, typed at 09:15) is a reminder now: dc_lnow is
     forgotten and the next beat fires it with chirp and alert.
 70. **The FIRED marks owe saves the user did not cause** - a launch that
-    missed reminders and an unattended firing. SPEC 107.5.2's "nothing is
-    written that the user did not cause" names the exception; 107.6 and
+    missed reminders and an unattended firing. SPEC 110.5.2's "nothing is
+    written that the user did not cause" names the exception; 110.6 and
     PERFORMANCE.md Part 5 price both saves, and deskcalperf counts them at
     the drive. Not saving them would re-toast the same missed reminders at a
     relaunch.
@@ -1065,7 +1065,7 @@ prose.
     (dc_ltp) and the first DIA_ONTICK says it and nothing else that beat.
     deskcalremind A re-reads the bar once the row is granted, verified to
     fail with the old order.
-75. SPEC 107.5 states the registration's and the close's `Settings Saved`,
+75. SPEC 110.5 states the registration's and the close's `Settings Saved`,
     the silent autostart, and the live CD's unhandled refusal (§80.3).
 76. The live media's getruncpm `--reserve` list prices DESKCAL's clusters
     ($(DIAAPPS)).

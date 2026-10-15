@@ -581,7 +581,7 @@ class UI:
         return self._refresh(w)
 
     # =========================================================================
-    # DESK WIDGETS (SPEC.md 11.103, 107.11): a window under every application
+    # DESK WIDGETS (SPEC.md 11.103, 110.11): a window under every application
     # window, with no title bar, no close box and no dock tile. A widget is
     # ACTIVATED (it takes the bar and the keys) rather than raised, DRAGGED by
     # its tag row, and CLOSED by the x its handle reveals while the pointer
@@ -689,7 +689,7 @@ class UI:
     def widget_close(self, w, limit=T_RAISE, dia=None):
         """Hover the widget until its handle is SHOWN, then press and release
         ON the handle's x (face x 3..12, the tag row's middle) - the include
-        closes through its negotiator (SPEC.md 107.11) - and wait for the
+        closes through its negotiator (SPEC.md 110.11) - and wait for the
         record to go free."""
         w = self._refresh(self._as_win(w))
         self.widget_hover(w, True, dia=dia)

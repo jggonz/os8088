@@ -1,5 +1,5 @@
 ; =============================================================================
-; apps/deskcal/dcdate.inc - the Desk Calendar's date maths (SPEC.md 107.3)
+; apps/deskcal/dcdate.inc - the Desk Calendar's date maths (SPEC.md 110.3)
 ;
 ; All integer, all 8086, and exact over the range the payload can store:
 ; January 1980 to December 2099, the FAT date's own span. Nothing here draws
@@ -15,7 +15,7 @@
 ; =============================================================================
 
 DC_Y0       equ 1980            ; the first month navigation reaches...
-DC_Y1       equ 2099            ; ...and the last year (SPEC.md 107.3)
+DC_Y1       equ 2099            ; ...and the last year (SPEC.md 110.3)
 
 ; -----------------------------------------------------------------------------
 ; dc_dim_of - days in a month
@@ -117,7 +117,7 @@ dc_build:
     mov ax, [dc_y]
     call dc_dow_of              ; 0 = Sunday...
     add al, 6                   ; ...and the grid is MONDAY-FIRST: the 1st's
-    cmp al, 7                   ; column is (dow + 6) % 7 (SPEC.md 107.3, v2;
+    cmp al, 7                   ; column is (dow + 6) % 7 (SPEC.md 110.3, v2;
     jb .mon                     ; display only - the payload holds dates)
     sub al, 7
 .mon:

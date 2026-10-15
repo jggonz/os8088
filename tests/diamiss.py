@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SPEC.md 107.4: a DIA that CANNOT BE FOUND at boot is a graceful failure.
+"""SPEC.md 110.4: a DIA that CANNOT BE FOUND at boot is a graceful failure.
 
     make && make diatest && python3 tests/diamiss.py [--only ghost|bvol]
 
