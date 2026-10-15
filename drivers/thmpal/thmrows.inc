@@ -12,7 +12,7 @@
 ;   menu bg, menu ink, disabled ink, active title bg, active title ink,
 ;   desktop, stripes, inactive title bg, inactive title ink, menu XOR mask
 ; The stripes byte is 0 here: 'TS' is installed over it separately. The XOR
-; mask is what the open menu's highlight bar is XORed with (SPEC.md 76.14.14.1):
+; mask is what the open menu's highlight bar is XORed with (SPEC.md 76.14.14):
 ; on grey (7) paper and black (0) ink a mask m gives a (7 xor m) bar with
 ; m-coloured text, so 0Fh is the dark-grey bar every other theme draws.
 ; =============================================================================
