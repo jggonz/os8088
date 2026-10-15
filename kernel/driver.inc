@@ -737,9 +737,15 @@ CFG_EPIN    equ CFG_SPIN + DRV_PBLOB_SZ     ; ...and the Ethernet row's -
                                 ; where its card is. Both edited by the
                                 ; Drivers page's Ports view, read by the
                                 ; drivers AT ATTACH, before they probe
-CFG_NB      equ CFG_EPIN + DRV_PBLOB_SZ     ; ...the struct's size
+CFG_THMP    equ CFG_EPIN + DRV_PBLOB_SZ ; appended Color preset (76.14)
+CFG_THMS    equ CFG_THMP + 1    ; appended Color title stripes
+CFG_NB      equ CFG_THMS + 1    ; ...the struct's size
 %else
-CFG_NB      equ CFG_DBLOB + DRV_BLOB_SZ     ; no RAM disk here, so no second
+CFG_THMP    equ CFG_DBLOB + DRV_BLOB_SZ     ; db: [thm_preset] - same field,
+                                ; same reason, appended last on this struct
+                                ; too (SPEC.md 76.14)
+CFG_THMS    equ CFG_THMP + 1    ; Color title stripes, appended without moving TP
+CFG_NB      equ CFG_THMS + 1    ; no RAM disk here, so no second
 %endif                          ; blob and 24 fewer bytes of settings struct
                                 ; carried on the machine that has least of it
                                 ; (SPEC.md 62.9.15)
@@ -823,9 +829,23 @@ CFG_NB      equ CFG_DBLOB + DRV_BLOB_SZ     ; no RAM disk here, so no second
     db 1, DRV_PBLOB_SZ, CFG_SPIN    ; pins (51.9.2), a key each because a blob
     dw 'EP'                     ; belongs to a ROW (51.9.1)
     db 1, DRV_PBLOB_SZ, CFG_EPIN
-CFG_NKEY    equ 15              ; ...and 'DK' (DOCK_OPT is kern_big's)
+    dw 'TP'                     ; Theme Preset - which of Color's eight
+    db 1, 1, CFG_THMP           ; (SPEC.md 76.14). Its OWN key rather than a
+                                ; sixth byte on 'TH': growing THAT record
+                                ; bumps its version and resets the theme and
+                                ; the screen saver's three settings once, for
+                                ; a feature that touches neither (76.11's own
+                                ; 'DK' precedent, word for word)
+    dw 'TS'                     ; Theme Stripes: separate version-1 byte
+    db 1, 1, CFG_THMS
+CFG_NKEY    equ 17              ; ...and 'DK' (DOCK_OPT is kern_big's)
 %else
-CFG_NKEY    equ 8               ; no 'RD' key: kern_small has no RAM disk, and
+    dw 'TP'                     ; same key, same reason, on kern_small too -
+    db 1, 1, CFG_THMP           ; [thm_preset] round-trips there even though
+                                ; this kernel never reads it (SPEC.md 76.14)
+    dw 'TS'                     ; round-trips through kern_small too
+    db 1, 1, CFG_THMS
+CFG_NKEY    equ 10               ; no 'RD' key: kern_small has no RAM disk, and
 %endif                          ; an unknown key is DROPPED rather than carried
                                 ; (SPEC.md 51.5 rule 1), which is the honest
                                 ; answer for a build with nothing to give it to
@@ -866,12 +886,18 @@ CFG_FBUF    equ CFG_REC0 + CFG_NKEY * CFR_HDR + CFG_NB + 2
     dw ss_secs
     db CFG_SSN
     dw ss_mins
+    db CFG_THMP                 ; SPEC.md 76.14: a plain store like CFG_THM
+    dw thm_preset                ; beside it - thm_set's own re-resolve (the
+                                 ; cw_thm_set call below this loop) picks it
+                                 ; up because this loop runs first
+    db CFG_THMS
+    dw thm_cstrp
 %ifdef DOCK_OPT
     db CFG_DOCK
     dw dock_cfg
-DRV_CFG_MAPN equ 9
+DRV_CFG_MAPN equ 11
 %else
-DRV_CFG_MAPN equ 8
+DRV_CFG_MAPN equ 10
 %endif
 
 ; --- whose blob is whose (SPEC.md 51.9.1) ------------------------------------
@@ -1877,6 +1903,8 @@ drv_call:
     je .row                     ; LEGITIMATE ROWS** (SPEC.md 41.12.5). xm_row
     cmp bx, ss_row              ; ...and ss_row is the SECOND (SPEC.md 79.2),
     je .row                     ; which is why this is a list and not a pair of
+    cmp bx, thmv_row            ; ...and thmv_row is the THIRD (SPEC.md 76.14)
+    je .row                     ; - the Customize window's, same species
 %endif                          ; compares somebody has to remember to widen.
                                 ; xm_row is a DRVR_-shaped record with no drv_tab
                                 ; entry by design - no Drivers tick, no
@@ -3833,6 +3861,14 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     mov [drv_cfg+CFG_VDM], al
     mov al, [vid_dlay]
     mov [drv_cfg+CFG_VDL], al
+%ifdef OS88_THEME
+    cmp byte [thm_kind], THM_WIN ; persist the selected Color preset as the
+    jne %%theme_kind_saved      ; theme; Windows is a title-bar style only
+    test byte [thm_cstrp], 4    ; old settings remain compatible until edited
+    jz %%theme_kind_saved
+    mov byte [drv_cfg+CFG_THM], THM_COLOR
+%%theme_kind_saved:
+%endif
 %endif
     pop di
     pop si

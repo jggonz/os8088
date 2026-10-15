@@ -19,7 +19,8 @@ SONGS = [('fever',4), ('chill',2), ('clear_fever',9), ('clear_chill',10),
 
 def read_rom(path):
     rom = {}
-    for line in path.read_text().splitlines():
+    # Match the asset reader: ASCII annotations with arbitrary comment bytes.
+    for line in path.read_text(encoding='latin-1').splitlines():
         m = re.search(r'01:([0-9A-F]{4}): ((?:[0-9A-F]{2} )+)',line)
         if m:
             raw=bytes.fromhex(m[2])

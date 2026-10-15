@@ -7310,8 +7310,8 @@ wm_ownseg:
 ; in:  DI = the window, BP = the frontmost one (wm_draw_title's own registers)
 ; out: [gfx_color]; clobbers flags
 ;
-; The ACTIVE pair when this window has the focus and the chrome pair when it
-; has not. In Bright and Dark the two pairs are equal, so this is one compare
+; The ACTIVE pair when this window has the focus and its INACTIVE pair
+; when it has not. Menus and controls retain their own chrome pair. In Bright and Dark the two pairs are equal, so this is one compare
 ; and the same pixels; under Color it is the whole feature - a blue bar with a
 ; white caption against a grey one with a black caption, which is what makes
 ; focus readable across a screen without reading any text.
@@ -7323,11 +7323,11 @@ wm_ownseg:
 wm_tpen_bg:
     cmp di, bp
     je thm_tbg
-    jmp thm_bg
+    jmp thm_ibg
 wm_tpen_ink:
     cmp di, bp
     je thm_tink
-    jmp thm_ink
+    jmp thm_iink
 %else                           ; no Color, so the two pairs are one pair and
 wm_tpen_bg  equ thm_bg          ; the focus question has no answer to give
 wm_tpen_ink equ thm_ink

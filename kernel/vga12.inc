@@ -99,7 +99,7 @@ gfx_b1adp       db 0            ; 0 = the band is in SCREEN polarity, 1 = a set
 %endif
 
 ; --- THEME (SPEC.md 76) -----------------------------------------------------
-; [thm_kind] is the SETTING; the eight bytes below are what it MEANS, copied
+; [thm_kind] is the SETTING; the semantic bytes below are what it MEANS, copied
 ; whole from thm_tab at the switch so every chrome site is a load and never a
 ; branch. The content of a window is not themed in any of them - only the
 ; desktop, the menu bar, the dock and a window's own chrome.
@@ -108,14 +108,14 @@ gfx_b1adp       db 0            ; 0 = the band is in SCREEN polarity, 1 = a set
 ; distinctions real: a title bar that is blue when focused and grey when not
 ; needs a second pair, and a desktop that is neither a dither nor black needs
 ; a colour rather than a flag. THE LIVE BLOCK AND THE TABLE ROW ARE THE SAME
-; EIGHT BYTES IN THE SAME ORDER, so the switch is one `rep movsb` and there is
+; TWELVE BYTES IN THE SAME ORDER, so the switch is one `rep movsw` and there is
 ; no per-field copy to fall out of step with the table.
 THM_BRIGHT  equ 0
 THM_DARK    equ 1
 THM_COLOR   equ 2
 THM_WIN     equ 3               ; Windows (SPEC.md 76.14): the palette below
                                 ; AND WIN95.DRV, which redraws the chrome
-THM_WINMONO equ 4               ; ...its 1bpp ROW. Not a kind: thm_set picks
+THM_WINMONO equ 10              ; ...its 1bpp ROW. Not a kind: thm_set picks
                                 ; it for THM_WIN on a 1bpp primary, so the
                                 ; setting stays 3 whatever the adapter
 %ifdef KERN_BIG
@@ -127,6 +127,13 @@ THM_NKIND   equ 2               ; NO COLOR ON kern_small (SPEC.md 76.12.3):
                                 ; reduce to Bright anyway
 THM_DITHER  equ 0xFF            ; [thm_deskc]: lay SPEC.md 26's 50% dither
                                 ; rather than a solid colour
+THM_NPRESET equ 8              ; SPEC.md 76.14: how many rows Color itself
+                                ; has, Classic (= the old single Color
+                                ; row) at 0. Unconditional on both builds -
+                                ; it costs nothing to compile and clamping
+                                ; against it is what keeps a settings byte
+                                ; from a future version from indexing off
+                                ; the end of thm_tab (SPEC.md 76.14)
 
 %ifdef THEMEDARK                ; make THEMEDARK=1 (Dark) or =2 (Color): the
 thm_kind        db THEMEDARK    ; A/B, and the only way to see a theme before
@@ -139,6 +146,14 @@ thm_kind        db THM_BRIGHT
                                 ; round-trips untouched through a small kernel
                                 ; instead of being reset by booting one
                                 ; (SPEC.md 76.13)
+thm_cstrp       db 0            ; bit 0 stripes; bit 1 95 buttons; bit 2 Windows title style
+thm_preset      db 0            ; WHICH of THM_NPRESET rows Color resolves to
+                                ; (SPEC.md 76.14) - 0 is Classic, the
+                                ; row Color always had. IS IN BOTH BUILDS for
+                                ; [thm_kind]'s own reason one line up: a
+                                ; preset chosen on kern_big round-trips
+                                ; through a kern_small boot untouched, even
+                                ; though kern_small never reads it
 %ifdef OS88_THEME
 ; ...and the live block. ADJACENT AND IN THIS ORDER: thm_pair reads the first
 ; two as one word, and thm_set copies the row over the lot.
@@ -152,18 +167,36 @@ thm_tinkc       db CBLACK       ; ...and its ink. Equal to the pair above in
 thm_deskc       db THM_DITHER   ; the desktop's ground, or THM_DITHER
 thm_strp        db 1            ; 1 = the active title carries SPEC.md 11's
                                 ; pinstripes; 0 = it is a solid bar
-thm_pad         db 0            ; the row is 8 so the index is a shift
+thm_ibgc        db CWHITE       ; inactive title: separate from menus/controls
+thm_iinkc       db CBLACK
+thm_sbgc        db CBLACK       ; menu selection; legacy modes retain XOR
+thm_live_end:
 
-; bg      ink     dis     tbg     tink    desk        stripes pad
+; menu bg/ink/dis, active title bg/ink, desktop, stripes,
+; inactive title bg/ink, selection bg. Selected ink is always white;
+; Bright/Dark/Classic keep their original XOR selection instead.
+THM_ROW_BYTES equ 10
+%if thm_live_end - thm_bgc != THM_ROW_BYTES
+  %error "theme live block must match the semantic table row"
+%endif
 thm_tab:
-    db CWHITE, CBLACK, CDGRAY, CWHITE, CBLACK, THM_DITHER, 1, 0   ; Bright
-    db CBLACK, CWHITE, CLGRAY, CBLACK, CWHITE, CBLACK,     1, 0   ; Dark
+    db 15, 0, 8, 15, 0, THM_DITHER, 1, 15, 0, 0 ; Bright unchanged
+    db 0, 15, 7, 0, 15, 0, 1, 0, 15, 15 ; Dark unchanged
 %ifdef KERN_BIG
-    db CLGRAY, CBLACK, CDGRAY, CBLUE,  CWHITE, CTEAL,      0, 0   ; Color
-    db CLGRAY, CBLACK, CDGRAY, CBLUE,  CWHITE, CTEAL,      0, 0   ; Windows
-    db CWHITE, CBLACK, CDGRAY, CBLACK, CWHITE, THM_DITHER, 0, 0   ; ...on 1bpp:
-                                ; Bright's DITHERED desktop, the owner's pick
-                                ; (76.14.6) - the black title bar reads on it
+; ID 0 preserves the original Color appearance. Other development IDs are
+; contiguous in visible order, as requested; no compatibility holes remain.
+    db 7, 0, 8, 1, 15, 3, 0, 7, 0, 0 ; 0 Classic
+    db 7, 0, 8, 1, 15, 9, 0, 8, 15, 1 ; 1 Workbench
+    db 7, 0, 8, 3, 15, 7, 0, 8, 15, 3 ; 2 Light
+    db 7, 0, 8, 2, 15, 10, 0, 8, 15, 2 ; 3 Forest
+    db 7, 0, 8, 5, 15, 13, 0, 8, 15, 5 ; 4 Amethyst
+    db 7, 0, 8, 6, 15, 14, 0, 8, 15, 6 ; 5 Amber
+    db 7, 0, 8, 8, 15, 1, 0, 7, 0, 1 ; 6 Midnight
+    db 7, 0, 8, 4, 15, 6, 0, 8, 15, 4 ; 7 Desert
+    db 15, 0, 8, 0, 15, THM_DITHER, 0, 15, 0, 0 ; Windows on 1bpp
+%if ($ - thm_tab) / THM_ROW_BYTES != THM_COLOR + THM_NPRESET + 1
+  %error "thm_tab's row count has drifted from THM_NPRESET (SPEC.md 76.14)"
+%endif
 %endif
 
 %endif
@@ -4393,6 +4426,17 @@ thm_tbg:
 thm_tink:
     push ax
     mov al, [thm_tinkc]
+    jmp short thm_pen
+%ifdef KERN_BIG
+thm_ibg:
+    push ax
+    mov al, [thm_ibgc]
+    jmp short thm_pen
+thm_iink:
+    push ax
+    mov al, [thm_iinkc]
+    jmp short thm_pen
+%endif
 thm_pen:
     mov [gfx_color], al
     pop ax
@@ -4466,6 +4510,14 @@ thm_set:
     xor al, al
 .known:
 %ifdef KERN_BIG
+    cmp al, THM_COLOR
+    jne .kind_ready
+    test byte [thm_cstrp], 4  ; restore the selected Color title-bar style
+    jz .kind_ready
+    mov al, THM_WIN
+.kind_ready:
+%endif
+%ifdef KERN_BIG
     mov bl, al                  ; BL = the ROW, which is the kind until the
     cmp al, THM_COLOR           ; adapter says otherwise
     jb .apply
@@ -4496,6 +4548,9 @@ thm_set:
     xor ax, ax
     xor bl, bl
 .refused:
+%ifdef KERN_BIG
+    and byte [thm_cstrp], 0FBh ; unavailable Windows style must not be saved
+%endif
     stc
 .live:
     pushf                       ; ...the caller's answer, kept past the copy
@@ -4503,17 +4558,52 @@ thm_set:
     mov bl, al
 %endif
     mov [thm_kind], al
+    mov bl, al                  ; BL = the TABLE ROW, defaulting to the kind
+                                 ; (Bright=0, Dark=1 index their own rows
+                                 ; directly, unchanged by any of this)
+%ifdef KERN_BIG
+    cmp al, THM_COLOR            ; Color and Windows share the selected Color
+    je .presetrow                ; preset's semantic colors; Windows changes
+    cmp al, THM_WIN              ; only how title bars and controls are drawn
+    jne .rowset
+    mov ah, [vid_kind]
+    dec ah
+    cmp ah, 2                   ; mono adapters use Windows' own monochrome row
+    jb .winmono
+.presetrow:
+    mov bl, [thm_preset]         ; a byte from a future version, or from a
+    cmp bl, THM_NPRESET          ; settings disk with more presets than this
+    jb .presetok                 ; kernel's table has rows for - same fallback
+.presetfallback:
+    xor bl, bl                   ; as an unknown [thm_kind] above: Classic
+.presetok:                       ; 8088 rather than reading off the table's end
+    mov [thm_preset], bl         ; store the CLAMPED value: a round-trip to
+    add bl, THM_COLOR            ; disk and back must not drift from what is
+.rowset:                         ; actually on screen
+    jmp short .rowready
+.winmono:
+    mov bl, THM_WINMONO
+.rowready:
+%endif
     mov al, bl
-    mov ah, 8                   ; the row: index * 8, the row being padded to
-    mul ah                      ; 8 for exactly this (a byte MUL: AX only)
+    mov ah, THM_ROW_BYTES       ; byte MUL: AX only
+    mul ah
     add ax, thm_tab
     xchg ax, si
     push ds                     ; ONE copy, so the live block cannot fall out
     pop es                      ; of step with the table field by field
     mov di, thm_bgc
-    mov cx, 4                   ; ...of four WORDS: the block is 8 bytes
+    mov cx, THM_ROW_BYTES / 2   ; one copy of the semantic role block
     cld
     rep movsw
+%ifdef KERN_BIG
+    cmp byte [thm_kind], THM_COLOR
+    jne .stripes_done
+    mov al, [thm_cstrp]
+    and al, 1
+    mov [thm_strp], al           ; Color only; Bright/Dark retain their rows
+.stripes_done:
+%endif
     call menu_force             ; THE TWO DIFFING PAINTERS CANNOT SEE THIS
     call dock_force             ; (SPEC.md 76.7). menu_bcell is a record of
                                 ; CHARACTERS and a dock tile's key is its icon
@@ -4532,6 +4622,106 @@ thm_set:
     pop di
     pop si
     jmp kret_cx
+
+; Public mode setter posts repaint/save; internal thm_set also serves boot.
+api_thm_set:
+    push ax
+    call thm_set
+    pushf                       ; preserve THM_WIN's module-refusal answer
+    mov word [cp_dirty], 0x0101
+    inc byte [ui_post]
+    popf
+    pop ax
+    ret
+
+; thm_set_preset - adopt AL (0..THM_NPRESET-1) as the active Color preset
+; (SPEC.md 76.14)
+; in:  AL = preset index
+; out: nothing; all registers preserved
+;
+; Only reaches the screen when Color is already the live theme - thm_set's
+; own repaint path, called exactly as a Color radio click calls it. Otherwise
+; this is a store for whenever the user switches TO Color later, which is
+; what lets the Customize window preview a preset without disturbing Bright
+; or Dark, and what its Cancel needs: restoring the preset that was live
+; when the window opened is this same call with that byte.
+thm_set_preset:
+    push ax
+    cmp al, THM_NPRESET
+    jb .known
+.fallback:
+    xor al, al                  ; a byte from a future version with more
+.known:                         ; presets than this table has rows for -
+    mov [thm_preset], al        ; Classic, the same fallback thm_set's
+                                 ; own [thm_kind] clamp uses
+thm_refresh_color:
+    cmp byte [thm_kind], THM_COLOR
+    jne thm_post
+    mov al, THM_COLOR
+    call thm_set
+thm_post:
+    mov word [cp_dirty], 0x0101  ; cp_repost's own two bytes (kernel/ctrl.inc),
+    inc byte [ui_post]           ; poked directly rather than called: this may
+                                 ; run with CTRL.DRV not loaded at all, which is
+                                 ; blank.inc's ss_post_x's own precedent for the
+                                 ; identical store - a call into ctrl.inc's own
+                                 ; code would not be safe here, a write to its
+                                 ; two RESIDENT bytes is
+    pop ax
+    ret
+
+%ifdef KERN_BIG
+; AL bit 0 = Color title stripes; bit 1 = original 95 button colors;
+; bit 2 = Windows title style. One persisted byte, independent of the preset.
+thm_set_stripes:
+    push ax
+    and al, 7
+    mov [thm_cstrp], al
+    cmp byte [thm_kind], THM_WIN
+    jne .color
+    test al, 4                  ; clearing Windows is followed by Color set
+    jz .post
+    jmp short .refresh
+.color:
+    cmp byte [thm_kind], THM_COLOR
+    jne .post
+.refresh:
+    mov al, [thm_kind]
+    call thm_set
+.post:
+    jmp thm_post
+%endif
+
+; --- the Customize window: a window with no instance behind it (SPEC.md
+; 76.14), blank.inc's ss_row/ss_open/ss_reap_x pattern one more time, for
+; THMPAL.DRV instead of SAVER.DRV ---------------------------------------
+%ifdef KERN_BIG
+THMV_OPEN    equ 0               ; CH/CL = kind/preset, DL = style preference bits
+THMV_BUSY    equ 1               ; CF = window still owns callbacks
+THMV_CLOSE   equ 2               ; destroy child before parent frees image
+THMV_ABI_VER equ 3               ; private header word +10, checked on open
+
+thmv_fname: db 'THMPAL.DRV', 0   ; DRVR_TITLE points at this too - no row on
+                                  ; the Drivers page and no caption, so nothing
+                                  ; else ever reads it (ss_fname's reason)
+thmv_row:
+    dw PKG_DISP, 0               ; DRVR_DISP, DRVR_SEG
+    dw thmv_fname, thmv_fname    ; DRVR_FILE, DRVR_TITLE
+    dw 0, 0                      ; DRVR_KB, DRVR_ENT
+    db DRVC_OVL                  ; DRVR_CLASS - not a class the kernel loads,
+                                  ; so this can never take a publication slot
+    db 0                         ; DRVR_WANT - no settings bit can reach it
+    db DRVE_OK                   ; DRVR_ERR, and NO DRVR_PAD after it: this
+                                  ; record is deliberately not in drv_tab, so
+                                  ; nothing strides over it (xm_row/ss_row's
+                                  ; own reason, kernel/xmem.inc)
+
+; thmv_call/thmv_open_x/thmv_reap_x/thmv_reap_f (SPEC.md 76.14) are CODE and
+; live in .cold, alongside gfx_blit1_x further down this file - but not HERE:
+; .cold's first byte is gfx_blit1_x's own, by a `[gfx_bpfn] = 0` sentinel
+; (os88ovlchk.py's own check), so this block is physically placed after it
+; and reads as a forward reference from here.
+%endif
 
 %endif
 
@@ -6297,6 +6487,97 @@ gfx_bppiece:
 %endif
 %endif
                                 ; (the body's %ifdef KERN_BIG is gone: SPEC.md 5.4.2.5)
+
+; thmv_call/thmv_open_x/thmv_reap_x/thmv_reap_f (SPEC.md 76.14) - the
+; Customize window's loader glue, blank.inc's ss_call/ss_open/ss_reap_x
+; pattern for THMPAL.DRV. CODE ONLY (DATA STAYS IN .text, SPEC.md 2.6 rule
+; 1): thmv_row/thmv_fname are declared with the rest of the theme's state,
+; well before this point in the file.
+%ifdef KERN_BIG
+; thmv_call - BX-free: the row and the call in one place
+thmv_call:
+    push bx
+    push bp
+    mov bx, thmv_row
+    call drv_call_ent
+    pop bp
+    pop bx
+    ret
+
+; thmv_open_x - load THMPAL.DRV and ask it to open its window
+; in:  the gfx lock is HELD - this is a Control Panel click (SPEC.md 31.1),
+;      so the overlay may draw and must not take the lock
+; out: CF = 0 the window is up; CF = 1 it could not be read
+thmv_open_x:
+    push bx
+    push cx
+    push dx
+    mov bx, thmv_row
+    call drv_load_at             ; CF = 0 immediately once it is already live
+    jc .no
+    push es
+    mov es, [bx+DRVR_SEG]
+    cmp word [es:10], THMV_ABI_VER
+    pop es
+    je .compatible
+    call drv_release            ; never call an incompatible private overlay
+    mov byte [bx+DRVR_ERR], DRVE_BAD
+    jmp .no
+.compatible:
+    mov ch, [thm_kind]           ; THMPAL.DRV has no symbol for either
+    mov cl, [thm_preset]         ; address, only this file does - so the
+    mov dl, [thm_cstrp]          ; title-style preference bits
+    xor dh, dh
+    test dl, 4
+    jnz .windows_arg
+    cmp byte [thm_kind], THM_WIN
+    jne .style_arg
+.windows_arg:
+    inc dh                       ; the overlay opens with Windows selected
+.style_arg:
+    mov al, THMV_OPEN            ; current (kind, preset) travels in CX,
+    call thmv_call               ; which drv_call_ent/drv_call (SPEC.md 51.2)
+                                  ; and thmv_call itself all document as
+                                  ; "that proc's own arguments" and leave
+                                  ; alone
+    jnc .out
+    call thmv_reap_x             ; it loaded and then refused: give it back
+.no:
+    stc
+.out:
+    pop dx
+    pop cx
+    pop bx
+    retf                         ; FAR: cw_thmv_open's own door and the only
+                                  ; one (SPEC.md 2.6.1) - nothing in .cold
+                                  ; ever calls this one near
+
+; thmv_reap_x - parent teardown: destroy the child, then free its image.
+; Also called when opening fails. It must run outside a child callback;
+; freeing that callback's own return address would be unsafe.
+; out: nothing (all registers preserved)
+thmv_reap_x:
+    push ax
+    push bx
+    cmp word [thmv_row+DRVR_SEG], 0
+    je .out                      ; nothing loaded: nothing to ask and nothing
+                                  ; to free
+    mov al, THMV_CLOSE           ; caller is outside the child's callback
+    call thmv_call
+    mov bx, thmv_row
+    call drv_release
+.out:
+    pop bx
+    pop ax
+    ret                          ; NEAR: thmv_open_x's own refusal path calls
+                                  ; this one - thmv_reap_f below is the far
+                                  ; door cw_thmv_reap uses instead (SPEC.md
+                                  ; 2.6.1)
+
+thmv_reap_f:
+    call thmv_reap_x
+    retf
+%endif
 
 section .lowbss                 ; LOW_SEG (SPEC.md 2.1), and not .bss for
                                 ; vid_rowtab's reason: 848 bytes in the image

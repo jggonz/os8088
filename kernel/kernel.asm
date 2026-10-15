@@ -2947,7 +2947,68 @@ apic_inst_minimize:               ; DOCK.DRV's door (SPEC.md 30.4)
                                   ;          words (SPEC.md 18.4.11). 0x0467
                                   ;          was OSAPI_VOL_TAKE for one cycle
                                   ;          and never shipped (52.1.1)
-osapi_table_end:                  ; 0x046D today (0x05A8 before pass 4's
+    OSAPI_ICELL 8                  ; 0x046D - AL = THM_BRIGHT/DARK/COLOR/WIN
+                                   ; (SPEC.md 76, 76.14): adopts it as the
+                                   ; theme and repaints the chrome. An
+                                   ; unknown value, or COLOR on an adapter
+                                   ; with no colour, falls back to Bright -
+                                   ; the same refusal a settings file gets
+                                   ; (76.12.1). OSAPI_SLOT's exact 8-byte
+                                   ; shape, by hand: kern_small has no theme
+                                   ; to set at all (76.13) and spends the
+                                   ; length as NOPs, gfx_blit1_pen's own
+                                   ; precedent (0x0393 above)
+%ifdef KERN_BIG
+    push ds
+    push cs
+    pop ds
+    call api_thm_set
+    pop ds
+%else
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+%endif
+    OSAPI_IEND
+    OSAPI_ICELL 8                  ; 0x0475 - AL = 0..7, one of Color's eight
+                                   ; presets (SPEC.md 76.14). Only reaches
+                                   ; the screen while Color is already the
+                                   ; live theme; otherwise a store for
+                                   ; whenever the machine switches to Color.
+                                   ; An out-of-range value falls back to 0.
+                                   ; Same shape and reason as the cell above
+%ifdef KERN_BIG
+    push ds
+    push cs
+    pop ds
+    call thm_set_preset
+    pop ds
+%else
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+%endif
+    OSAPI_IEND
+    OSAPI_ICELL 8                  ; 0x047D - AL bit 0 stripes, bit 1 95 buttons, bit 2 Windows title style
+%ifdef KERN_BIG
+    push ds
+    push cs
+    pop ds
+    call thm_set_stripes
+    pop ds
+%else
+    times 7 nop
+%endif
+    OSAPI_IEND
+osapi_table_end:                  ; 0x0485 today (0x05A8 before pass 4's
                                   ; renumber). TWO cells came off the tail in
                                   ; the size pass: OSAPI_MEM_COMPACT_WAKE
                                   ; (0x0598) is 0x0590's MEMC_POST verb
@@ -2965,8 +3026,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 99*6 + 6*3 + 6 + 12*5 + 3*6
-%error "os8088 API jump table must be exactly 0x045D bytes: 43 SLOT (8), 11 XCELL (7), 99 rare (6), 6 JCELL (3), 1 FCELL (6), 15 ICELL (12 of 5, 3 of 6)"
+%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 99*6 + 6*3 + 6 + 12*5 + 3*6 + 3*8
+%error "os8088 API jump table length mismatch: includes FERR_TEXT and Color theme cells"
 %endif
 
 ; =============================================================================
@@ -5585,6 +5646,21 @@ cw_thm_desk:            call thm_desk
                     retf
 cw_thm_set:             call thm_set
                     retf
+%ifdef KERN_BIG
+cw_thmv_open:           call COLD_SEG:thmv_open_x  ; thmv_* is .cold (it
+                    retf                           ; calls drv_load_at/
+                                                    ; drv_release, SPEC.md
+                                                    ; 76.14) - THMPAL.DRV's
+                                                    ; own far door is
+                                                    ; OSAPI_THM_SET/
+                                                    ; _SET_PRESET; this pair
+                                                    ; is ctrl.inc's: the
+                                                    ; button that opens the
+                                                    ; window and the
+                                                    ; teardown that frees it
+cw_thmv_reap:           call COLD_SEG:thmv_reap_f
+                    retf
+%endif
 %endif
 %ifdef DOCK_OPT
 cw_dock_band:           call dock_band

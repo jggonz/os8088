@@ -443,7 +443,9 @@ def animation_art(out, native, tag, background):
 def build(source, out, native=None):
     check_source(source)
     chrdata = (source / 'CHR_ROM.chr').read_bytes()
-    bank = (source / 'bank_FF.asm').read_text()
+    # Only ASCII byte/address annotations are parsed; extended comment bytes
+    # must not depend on the host's default text encoding.
+    bank = (source / 'bank_FF.asm').read_text(encoding='latin-1')
     if len(chrdata) != 32768:
         raise ValueError('expected the supplied 32768-byte CHR_ROM.chr')
     # Byte addresses in the annotated disassembly, not the comment's file offsets.

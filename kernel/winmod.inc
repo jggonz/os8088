@@ -1,10 +1,10 @@
 ; =============================================================================
 ; os8088 - winmod.inc
 ;
-; The Windows theme's chrome (SPEC.md 76.14): THM_WIN's palette is a row of
-; thm_tab like every other theme, and what a palette cannot say - the buttons
-; on the RIGHT, the X, a maximize button, a caption on the left, a size grip,
-; a pull-down that stays open on a click - is WIN95.DRV, an on-demand module
+; The Windows title style (SPEC.md 76.14): its active Color preset supplies
+; the semantic colors, while WIN95.DRV supplies what a palette cannot say -
+; buttons on the RIGHT, the X, a maximize button, a caption on the left, a size
+; grip, a pull-down that stays open on a click. It is an on-demand module
 ; (SPEC.md 2.8) that takes five of the kernel's chrome routines over for as
 ; long as the theme is live.
 ;
@@ -235,14 +235,11 @@ wn_title:
     push bp
     push es
 
-    ; --- the pens: focused is the theme's title pair, unfocused is grey -----
+    ; --- the pens come from the selected Color preset -----------------------
     mov ax, [thm_tbgc]          ; AL = ground, AH = ink (adjacent, in order)
     cmp di, bp
     je .pens
-    mov ax, [thm_bgc]           ; unfocused: the chrome pair...
-    cmp al, CLGRAY              ; ...except on the COLOUR row, where Windows'
-    jne .pens                   ; inactive caption is dark grey lettered in
-    mov ax, (CLGRAY << 8) | CDGRAY  ; light grey
+    mov ax, [thm_ibgc]          ; unfocused title pair, also from that preset
 .pens:
     mov [cs:wn_pair], ax
 
@@ -345,9 +342,16 @@ wn_buttons:
     push cs
     pop es
     push word [gfx_b1ink]       ; THE PEN, banked and put back: a package's
-    mov al, [thm_bgc]           ; W_PAINT runs later in this same lock hold
-    mov ah, CBLACK              ; and expects the resting one (desk.inc's
-    mov [gfx_b1ink], ax         ; idiom). AL = ink = the face, AH = paper
+    test byte [thm_cstrp], 2     ; Classic restores main's original Windows
+    jnz .classic                ; button colors, but keeps this theme's bar
+    mov ax, [cs:wn_pair]        ; current layout: buttons follow the selected
+    mov [gfx_b1ink], ax         ; preset's title pair
+    jmp short .draw
+.classic:
+    mov al, [thm_bgc]           ; original main layout used the UI chrome face
+    mov ah, CBLACK              ; and black glyphs, independent of title color
+    mov [gfx_b1ink], ax
+.draw:
 
     mov ax, WN_MIN
     mov si, wnb_min
@@ -360,7 +364,14 @@ wn_buttons:
     call wn_band
     pop word [gfx_b1ink]
 
-    mov byte [gfx_color], CWHITE    ; --- the lit edges
+    test byte [thm_cstrp], 2
+    jnz .classic_edges
+    mov al, [cs:wn_pair+1]      ; --- the new style uses the title's ink
+    jmp short .edges
+.classic_edges:
+    mov al, CWHITE              ; original main button bevel
+.edges:
+    mov [gfx_color], al
     mov ax, WN_MIN              ; ONE top line across minimize AND maximize,
     call wn_bx                  ; which touch: minimize's left to the last
     mov bx, ax                  ; column before maximize's dark one

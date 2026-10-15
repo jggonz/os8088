@@ -163,10 +163,9 @@ CPH_ROWH  equ 16                ; row pitch inside a group
 CPH_R0Y   equ 18                ; Bright glyph top
 CPH_R1Y   equ CPH_R0Y + CPH_ROWH        ; 34: Dark
 CPH_R2Y   equ CPH_R1Y + CPH_ROWH        ; 50: Color (SPEC.md 76.12)
-CPH_R3Y   equ CPH_R2Y + CPH_ROWH        ; 66: Windows (SPEC.md 76.14.10)
-CPH_H2Y   equ 86                ; 'Window Animations' heading text row
-CPH_A0Y   equ 98                ; On glyph top
-CPH_A1Y   equ CPH_A0Y + CPH_ROWH        ; 114: Off; + 12px = 126, inside
+CPH_H2Y   equ 70                ; 'Window Animations' heading text row
+CPH_A0Y   equ 80                ; On glyph top
+CPH_A1Y   equ CPH_A0Y + CPH_ROWH        ; 96: Off; ends before the button
                                 ; CP_CH (132). The two-line caption that used
                                 ; to sit under this is what the third theme
                                 ; row is drawn in - the page had no other room
@@ -182,34 +181,47 @@ CPH_B0Y1  equ CPH_R0Y - 4                   ; 14: theme row 0 top
 CPH_B0Y2  equ CPH_R0Y + CP_GW + 1           ; 31: ...bottom = row 1 top - 1
 CPH_B1Y2  equ CPH_R1Y + CP_GW + 1           ; 47: theme row 1 bottom
 CPH_B2Y2  equ CPH_R2Y + CP_GW + 1           ; 63: theme row 2 bottom
-CPH_B3Y2  equ CPH_R3Y + CP_GW + 1           ; 79: theme row 3 bottom
 CPH_A0Y1  equ CPH_A0Y - 4                   ; 78: anim row 0 top
 CPH_A0Y2  equ CPH_A0Y + CP_GW + 1           ; 79: ...bottom
 CPH_A1Y2  equ CPH_A1Y + CP_GW + 1           ; 95: anim row 1 bottom
 
-; ...and the SCREEN SAVER button (SPEC.md 79.7), in the RIGHT-HAND column
-; beside the animation group (SPEC.md 76.14.10): it stood under both groups
-; until the Windows row took that band, and the animation labels - 'On',
-; 'Off' - leave the right of the pane empty. It is a BUTTON and not a third
+; ...and the SCREEN SAVER button (SPEC.md 79.7), centred under both groups.
+; It is a BUTTON and not a third
 ; group because what is behind it is four checkboxes and two numbers, which is
 ; a window's worth (SPEC.md 79.7) - the same call HDD.DRV's page makes for its
 ; disk tool and ETHER.DRV's for its addresses (SPEC.md 52.2, 72.7).
-; It sits in the pane's bottom-right CORNER, one margin in from both edges:
-; level with 'On' it floated, a button with nothing under it beside a group
-; that runs on below it.
+; It sits at the pane's bottom with a six-pixel margin.
 CPH_BTW   equ 104                           ; 'Screen Saver' is 96px of glyph
 CPH_BTH   equ 16
 CPH_BTM   equ 6                             ; the corner margin, both edges
-CPH_BTX   equ CP_PRGT + 1 - CPH_BTM - CPH_BTW   ; 112
+CPH_BTX   equ (CP_PRGT + 1 - CPH_BTW) / 2       ; centred
 CPH_BTY   equ CP_CH - CPH_BTM - CPH_BTH         ; 110
-CPH_CSAVE equ 7                             ; its control id: 1..4 are the
-                                            ; theme rows and 5..6 the zoom's
+CPH_CSAVE equ 6                             ; 1..3 theme, 4..5 animation
 
 %if CPH_BTY + CPH_BTH > CP_CH || CPH_A1Y + CP_GW > CP_CH
 %error "ctrl: the Theme page runs past its pane - see SPEC.md 76.4"
 %endif
 %if CPH_BTX + CPH_BTW - 1 > CP_PRGT
 %error "ctrl: the Screen Saver button runs past the pane's right edge"
+%endif
+
+; ...and CUSTOMIZE..., ON THE COLOR ROW ITSELF rather than a row of its own
+; (SPEC.md 76.14): the pane has no room left below CPH_A1Y2 (the Screen Saver
+; button already takes it), and the task this row's label leaves 150px of a
+; 222px pane unused is the one place a fourth control fits without moving
+; anything else. It OVERLAPS the theme group's Y band (CPH_B0Y1..CPH_B2Y2),
+; so cp_thm_click tests this rect FIRST, exactly as it already tests the
+; Screen Saver button's before falling into the band logic that ignores X.
+CPH_CZX   equ 112                           ; clear of 'Color''s label at
+                                            ; CP_PLX (22) plus five glyphs
+CPH_CZY   equ CPH_R2Y - 2                   ; 48: centred on the Color row's
+                                            ; 12px glyph band (50..61)
+CPH_CZW   equ 104                           ; 'Customize...' is 96px of glyph
+CPH_CZH   equ 16
+CPH_CCUST equ 7                             ; 6 is the Screen Saver's
+
+%if CPH_CZX + CPH_CZW > CP_CW - CP_RX
+%error "ctrl: the Customize button runs past the Theme page's pane"
 %endif
 
 %endif
@@ -1441,7 +1453,8 @@ cp_vid_ctls:
 %ifdef OS88_THEME
 cp_thm_ctls:
     call cp_thm_radios          ; the whole group: a radio glyph is one
-    jmp cp_thm_btn              ; os88ui_glyph_f, and the button
+    call cp_thm_btn             ; os88ui_glyph_f, and the two buttons
+    jmp cp_thm_cust_btn
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -2719,9 +2732,7 @@ cp_thm_paint:
     call cp_lbl
     dw cp_s_tclr, CP_PLX, CPH_R2Y + CP_PLDY
     call cp_penlive
-    call cp_lbl                 ; theme row 3 - never greyed: whether
-    dw cp_s_twin, CP_PLX, CPH_R3Y + CP_PLDY ; WIN95.DRV reads is the click's
-%endif                          ; to find out (SPEC.md 76.14.10)
+%endif
 
 %ifdef WM_ANIM
     call cp_lbl                 ; --- the second group's heading
@@ -2769,6 +2780,36 @@ cp_thm_btn:
     call cp_dnbtn               ; ...pressed if it is the one down (13.8.3)
     call cp_bemit
     jmp kretm_bp
+
+; -----------------------------------------------------------------------------
+; cp_thm_cust_btn - the Customize... button, beside the Color row (SPEC.md
+; 76.14)
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved)
+;
+; GREYS where Color itself greys (SPEC.md 47 rule 1): cp_thm_colgrey is the
+; one predicate behind the Color label, the Color radio's refusal AND this
+; button, so the three cannot disagree. Unlike the Screen Saver button above,
+; this one CAN grey on a fact (rule 3): whether the primary adapter has
+; colour in it is known before the click, not discovered by making it.
+; -----------------------------------------------------------------------------
+cp_thm_cust_btn:
+    call kentm_bp
+    mov ax, CPH_CZX
+    mov dx, CPH_CZY
+    mov cx, CPH_CZX + CPH_CZW - 1
+    mov bx, CPH_CZY + CPH_CZH - 1
+    call cp_krect               ; BX = os88ui_krect
+    CPSTAGE cp_s_tcust
+    mov di, OS88UI_FILL
+    call cp_thm_custok
+    jnc .enabled
+    or di, OS88UI_DIS
+.enabled:
+    mov al, CPH_CCUST
+    call cp_dnbtn               ; ...pressed if it is the one down (13.8.3)
+    call cp_bemit
+    jmp kretm_bp
 %endif
 
 ; cp_thm_colpen - the pen for the Color row: greyed unless this machine has
@@ -2800,6 +2841,22 @@ cp_thm_colgrey:
     stc
 .live:
     ret
+
+; cp_thm_custok - may Customize be opened for the currently selected theme?
+; out: CF = 0 only when Color is live and the primary can display it
+cp_thm_custok:
+    call cp_thm_colgrey
+    jc .disabled
+    cmp byte [thm_kind], THM_COLOR
+    je .enabled
+    cmp byte [thm_kind], THM_WIN ; Windows is a title style of Color
+    jne .disabled
+.enabled:
+    clc
+    ret
+.disabled:
+    stc
+    ret
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -2821,10 +2878,11 @@ cp_thm_click:
 %ifdef KERN_BIG
     cmp cx, CPH_BTX             ; --- the Screen Saver button, claimed only
     jl .groups                  ; INSIDE its rectangle: its rows are the Off
-    cmp cx, CPH_BTX + CPH_BTW - 1   ; radio's too, beside it (SPEC.md
-    jg .groups                  ; 76.14.10), and a press left of it is that
+    cmp cx, CPH_BTX + CPH_BTW - 1
+    jg .cust                    ; a press outside may be
+                                ; Customize on the Color row
     cmp dx, CPH_BTY             ; group's
-    jl .groups
+    jl .cust
     cmp dx, CPH_BTY + CPH_BTH - 1
     jg .groups
     mov al, CPH_CSAVE
@@ -2858,12 +2916,48 @@ cp_thm_click:
                                 ; and it costs no resident string
 .donej:                         ; ...and the five refusals above
     jmp .done
+
+; --- Customize..., beside the Color row (SPEC.md 76.14) --------------------
+; Tested here, BEFORE the band logic below that ignores X entirely, because
+; this rect sits INSIDE the theme group's own Y band (CPH_B0Y1..CPH_B2Y2): a
+; miss on any of the four bounds falls through to .groups exactly as a click
+; outside this button, anywhere else on the Color row, already does.
+.cust:
+    cmp dx, CPH_CZY
+    jl .groups
+    cmp dx, CPH_CZY + CPH_CZH - 1
+    jg .groups
+    cmp cx, CPH_CZX
+    jl .groups
+    cmp cx, CPH_CZX + CPH_CZW - 1
+    jg .groups
+    call cp_thm_custok          ; disabled button is also inert on the release
+    jc .donej
+    mov al, CPH_CCUST
+    call cp_ctl                  ; ...and it FIRES ON THE RELEASE (13.8.3),
+    jc .donej                    ; ssf_cfg's own reason: opening a window is
+                                  ; not a safe prefix action
+    call KERNEL_SEG:cw_thmv_open ; the overlay, and then its window (76.14)
+    jnc .donej
+    mov al, [thmv_row+DRVR_ERR]  ; the one refusal on THIS row the user is
+    or al, al                    ; standing in front of, said out loud rather
+    jz .cnowin                   ; than swallowed - ssf_cfg's exact shape
+    cmp al, DRVE_NERR
+    jae .cnowin
+    push si
+    call drv_errstg
+    call cp_toast
+    pop si
+    jmp short .donej
+.cnowin:
+    call KERNEL_SEG:cw_snd_beep  ; DRVE_OK = the image loaded and THMV_OPEN
+    jmp short .donej             ; itself refused (wm_create's table full)
 .groups:
 %endif
     cmp dx, CPH_B0Y1
     jl .done
 %ifdef KERN_BIG
-    cmp dx, CPH_B3Y2
+    cmp dx, CPH_B2Y2
 %else
     cmp dx, CPH_B1Y2            ; no Color row on this build (SPEC.md 76.12.3)
 %endif
@@ -2875,9 +2969,6 @@ cp_thm_click:
 %ifdef KERN_BIG
     cmp dx, CPH_B1Y2
     jle .tset
-    mov al, THM_WIN             ; ...the fourth, Windows (SPEC.md 76.14.10)
-    cmp dx, CPH_B2Y2
-    jg .tset
     mov al, THM_COLOR           ; ...and the third refuses where it is greyed,
     call cp_thm_colgrey         ; through the predicate that greyed it
     jc .done
@@ -2893,21 +2984,6 @@ cp_thm_click:
     cmp al, [thm_kind]
     je .done                    ; already live: change nothing
     call KERNEL_SEG:cw_thm_set
-%ifdef KERN_BIG
-    jnc .tok                    ; WIN95.DRV could not be mounted (SPEC.md
-    push si                     ; 76.14.1): thm_set has adopted the nearest
-    push es                     ; theme that needs no module and [thm_kind]
-    push cx                     ; says which - the radios below read it back,
-    push cs                     ; and the toast says why they did not move.
-    pop es                      ; The line is in THIS image, so ES is CS
-    mov si, cp_s_tnowin         ; (cp_toast is for the kernel's strings)
-    xor cx, cx
-    call KERNEL_SEG:cw_toast_show
-    pop cx
-    pop es
-    pop si
-.tok:
-%endif
     call cp_repost              ; remembered on close (SPEC.md 31.8)
                                 ; ui_task repaints the world (SPEC.md 13)
                                 ; ...and SAY SO once (SPEC.md 13.13)
@@ -2930,7 +3006,7 @@ cp_thm_click:
 .aset:
     mov ah, al
 %ifdef KERN_BIG
-    add al, 5                   ; ...id 5 or 6 (SPEC.md 13.8.3)
+    add al, 4                   ; ...id 4 or 5 (SPEC.md 13.8.3)
     call cp_ctl
     jc .done
     mov al, ah
@@ -2946,7 +3022,7 @@ cp_thm_click:
     ret
 
 ; -----------------------------------------------------------------------------
-; cp_thm_radios - all four glyphs, each group's live row filled
+; cp_thm_radios - three theme glyphs, each group's live row filled
 ; -----------------------------------------------------------------------------
 cp_thm_radios:
     call kentm_si                ; KENT: push ax..si
@@ -2954,6 +3030,10 @@ cp_thm_radios:
     lea cx, [di+CP_PGX]         ; CX = glyph left x (every row)
 
     mov bl, [thm_kind]          ; --- the theme group
+    cmp bl, THM_WIN             ; Windows is picked inside Customize and
+    jne .theme_kind             ; appears under Color on the page
+    mov bl, THM_COLOR
+.theme_kind:
     lea dx, [bp+CPH_R0Y]        ; row 0: Bright
 %ifdef KERN_BIG
     mov bh, 1
@@ -2974,25 +3054,21 @@ cp_thm_radios:
     mov bh, 3
     cmp bl, THM_COLOR
     call cp_gz
-    lea dx, [bp+CPH_R3Y]        ; row 3: Windows (SPEC.md 76.14.10)
-    mov bh, 4
-    cmp bl, THM_WIN
-    call cp_rad
 %endif
 
 %ifdef WM_ANIM
     mov bl, [wm_animon]         ; --- the animation group
     lea dx, [bp+CPH_A0Y]        ; row 0: On
-    mov bh, 6                   ; ...id 6, which is what cp_thm_click's UPPER
+    mov bh, 5                   ; ...id 5, which is what cp_thm_click's UPPER
                                 ; band reports for this row (SPEC.md 13.8.3):
-                                ; its `inc al` then `add al, 5` makes On 6 and
-                                ; Off 5, so the painter must agree or a press
+                                ; its `inc al` then `add al, 4` makes On 5 and
+                                ; Off 4, so the painter must agree or a press
                                 ; on one row draws the OTHER one pressed
     mov ax, OS88UI_GRADIO
     or bl, bl                   ; set when the byte is NOT zero
     call cp_gnz
     lea dx, [bp+CPH_A1Y]        ; row 1: Off
-    mov bh, 5
+    mov bh, 4
     or bl, bl
     call cp_rad
 %endif
@@ -5274,6 +5350,12 @@ cp_flush_close_x:
                                 ; to, so the edit is the SESSION's and the
                                 ; flag is cleared rather than acted on
 %endif
+%ifdef KERN_BIG
+    call KERNEL_SEG:cw_thmv_reap ; SPEC.md 76.14: the Customize window's image
+                                 ; goes back here if it is still loaded - the
+                                 ; latest point it can still be open at, since
+                                 ; opening it is only reachable from this page
+%endif
     jmp cp_flush_cfg            ; ...and the settings, in the core
 
 ; =============================================================================
@@ -6858,8 +6940,6 @@ CPS cp_s_tbrt,  'Bright'
 CPS cp_s_tdrk,  'Dark'
 %ifdef KERN_BIG
 CPS cp_s_tclr,  'Color'         ; ...and the third, VGA's alone (SPEC.md 76.12)
-CPS cp_s_twin,  'Windows'       ; ...and the fourth (SPEC.md 76.14)
-CPS cp_s_tnowin, 'WIN95.DRV not loaded'   ; ...and its refusal (76.14.1)
 %endif
 %ifdef WM_ANIM
 CPS cp_s_tanim, 'Window Animations'
@@ -6873,6 +6953,9 @@ CPS cp_s_tsave, 'Screen Saver'  ; the button, SPEC.md 79.7. The settings
                                 ; is on the disk (SPEC.md 79.2) - this is now
                                 ; the only byte the feature costs the panel,
                                 ; and it is not resident either
+CPS cp_s_tcust, 'Customize...' ; the button beside Color, SPEC.md 76.14 - the
+                                ; eight preset names are THMPAL.DRV's own, on
+                                ; the disk, for SAVER.DRV's identical reason
 %endif
 %endif
 

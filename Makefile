@@ -3062,6 +3062,16 @@ DRIVERS += $(BUILD)/xmem.drv
 # back out ($(SMALLDRIVERS) below): drv_load_at, its only loader, is inside
 # %ifdef KERN_BIG and nothing on that kernel can name the file
 DRIVERS += $(BUILD)/saver.drv
+# ...and the Customize... window for Color's eight presets (SPEC.md 76.14), an
+# overlay for the identical reason and riding every KERN_BIG disk the same
+# way: no drv_tab row, no Drivers-page tick, no SYSTEM.CFG bit of its own.
+# kernel/vga12.inc's thmv_open_x reads it when the Theme page's button is
+# pressed, and a machine that cannot read it beeps instead of opening the
+# window - so a disk without this file is a working machine whose Color
+# theme is stuck on whichever preset SYSTEM.CFG already names. kern_small
+# never carries it: Customize's button is %ifdef KERN_BIG, same as Color
+# itself (SPEC.md 76.12.3)
+DRIVERS += $(BUILD)/thmpal.drv
 # ...and SPEC.md 9.12's CH375 USB mouse, the Book8088's. A drv_tab row with a
 # SYSTEM.CFG bit (6) and not wanted by default, so a disk that carries it
 # costs a machine without the chip one directory slot and nothing read. On
@@ -3790,6 +3800,21 @@ $(BUILD)/saver.bin: drivers/saver/saver.asm drivers/saver/svcube.inc \
 
 $(BUILD)/saver.drv: $(BUILD)/saver.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/saver.bin -o $@
+
+# THMPAL.DRV - the Customize... window for Color's eight presets (SPEC.md
+# 76.14). An overlay for SAVER.DRV's own two reasons: it is mostly DATA (ten
+# preset names, two button captions) a Control Panel page cannot afford, and
+# its owner is the kernel - kernel/vga12.inc's thmv_open_x reads it when the
+# Theme page's Customize... button is pressed and frees it again when the
+# Control Panel closes (kernel/ctrl.inc's cp_flush_close_x).
+$(BUILD)/thmpal.bin: drivers/thmpal/thmpal.asm drivers/os88drv.inc \
+                     apps/os88api.inc apps/os88ui.inc \
+                     | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/ -I apps/ -o $@ drivers/thmpal/thmpal.asm
+	@echo "thmpal: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/thmpal.drv: $(BUILD)/thmpal.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/thmpal.bin -o $@
 
 # The MBR's 446 bytes of boot code (SPEC.md 52.10.1). Assembled on its own and
 # incbin'ed by drivers/hdd/part.inc, which is why the driver gets -I $(BUILD):

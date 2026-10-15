@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "f313c179bb120bd6508c57bf54a87ccd8e31ad8329f9515c8ac8dd6d037e88ea",
+  "fingerprint": "fcc4cc6a5ff92fb80f83388d88603e5c85a65373efa0abf4403899f85b3c1dfe",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "a2bee65027656e83a58bf15dfe7f26bb38dbfa83ae59f54904e877f89414fe13",
+  "fingerprint": "16b2fbfe6285c623f7411c01794bed407ebb40674797c457162a0181235d4b5d",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -63,6 +63,20 @@
    "from": 9,
    "guard": "DRV_VER",
    "reason": "PKG_FMT 8 -> 10 and DRV_VER 9 -> 11 (SPEC.md 20.2.0): the RAM disk's class moved 5 -> 8 (DRVC_FILE -> DRVC_FILE2, SPEC.md 62.9.19), which the round's entry above recorded as an addition. It is not: RAMDISK.DRV's header class and RD_CLASS (drivers/ramdisk/rdpkg.inc, outside the locked surface) both name 8 now and drv_tab row 3 expects it, so an old RAMDISK.DRV would have been refused by drv_check as a bad driver, and an old package reaching the RAM disk through RD_CLASS - THEWIRE.O88's archive path - would have called class 5, NET.DRV's slot, and been told there is no RAM disk. At the new numbers that package is Wrong os8088 version (LD_EVER) at load and that driver fails on its version byte. 10 and 11 collide with no number ever used (module 5, package 3/6/8, driver 4/7/9) nor with each other.",
+   "to": 11
+  },
+  {
+   "fingerprint": "16b2fbfe6285c623f7411c01794bed407ebb40674797c457162a0181235d4b5d",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "Append the Color theme mode, preset, and style API cells at free slots 0x046D, 0x0475 and 0x047D. Existing binaries never called these cells; the style cell preserves its 0/1 meanings and adds bit 1 for the Windows Classic button layout, so PKG_FMT and DRV_VER remain unchanged.",
+   "to": 10
+  },
+  {
+   "fingerprint": "fcc4cc6a5ff92fb80f83388d88603e5c85a65373efa0abf4403899f85b3c1dfe",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "Append the Color theme mode, preset, and style API cells at free slots 0x046D, 0x0475 and 0x047D. Existing binaries never called these cells; the style cell preserves its 0/1 meanings and adds bit 1 for the Windows Classic button layout, so PKG_FMT and DRV_VER remain unchanged.",
    "to": 11
   }
  ]

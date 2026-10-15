@@ -119150,6 +119150,42 @@ re-deriving it:
 - **Phase 1's own leftovers** - a bold caption, an ellipsis on a cut caption,
   a 3D window frame, and a bevelled pull-down with etched separators.
 
+#### 76.14.13 Optional title stripes and Windows button layout
+
+Customize includes a standard **Title stripes** checkbox below the presets.
+It previews the existing `wm_draw_title` pinstripes on the active title bar;
+it does not introduce a second renderer, framebuffer or palette change.
+The preference is shared by all Color presets and defaults to off, preserving
+the original Color appearance. Bright and Dark continue using their original
+striped rows regardless of this preference. Inactive title bars remain solid.
+When Windows is selected, a **95** checkbox beside that style switches
+to the original Windows button colors from the main-branch implementation.
+The newer preset-colored buttons remain available as the default. Both layouts
+keep the selected Color preset's title-bar colors; 95 changes the button
+face and glyph colors, not the title-bar color or Windows controls.
+
+`thm_cstrp` is the existing resident setting byte. Bit 0 controls Color title
+stripes; bit 1 selects the original Windows button colors; bit 2 selects the
+Windows title-bar style. The saved theme kind remains Color and the preset ID
+remains the selected theme; the Windows style is stored independently in this
+byte. At runtime, `thm_set` resolves Color through the Windows renderer when
+bit 2 is set. Changing a preset therefore keeps all style preferences.
+`OSAPI_THM_SET_STRIPES`
+(0x047D) accepts those two bits in AL, preserves registers, posts the existing
+repaint/save flags and does nothing on kern_small. No existing API cell moves.
+The kernel's private overlay-open arguments pass DL=the preference bits; the
+existing CH/CL mode/preset arguments are unchanged.
+
+Both checkboxes use the SDK's existing check-box glyph and hit handling, on a
+white pane with black text. 95 is disabled unless Windows is selected.
+Apply keeps the live preview. Cancel/Escape restore the opening mode, preset
+and style preference. The preference remains in the already persisted theme
+settings byte; no new configuration record is added. Selecting another Color
+preset while Windows is selected updates its title/button palette in place and
+keeps the Windows style selected.
+The enlarged Customize window remains within EGA's 640x350 desktop.
+
+
 ---
 
 ## 77. FTPD — the FTP server (`apps/ftpd/ftpd.asm`)
