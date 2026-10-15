@@ -79,37 +79,87 @@ DESKCAL_TASK = 28               # +0 flags, +1 0, +2 due, +4 24 text
 DESKCAL_APPT0 = 8
 DESKCAL_TASK0 = DESKCAL_APPT0 + DESKCAL_NAPPT * DESKCAL_APPT     # 1544
 DESKCAL_PAYLEN = DESKCAL_TASK0 + DESKCAL_NTASK * DESKCAL_TASK    # 2440
+DESKCAL_SNZT = 4                # v2: dw the snooze slot's minute of the day
+DESKCAL_SNZD = 6                # ...and its FAT date (read only beside a
+                                # SNOOZED appointment, so v1's zeros mean
+                                # nothing - SPEC.md 107.3)
 APPT_REMIND, APPT_FIRED = 1, 2
+APPT_SNOOZED, APPT_DUE = 4, 8   # v2: snoozed; fired and not dismissed (card
+                                # 3 rings it). A v1 file has neither
 TASK_DONE, TASK_DATED = 1, 2
 TIME_ALLDAY = 0xFFFF
+DESKCAL_SNOOZE = 5              # deskcal's DC_SNOOZE, minutes
 
 # --- where a RUNNING package keeps things, as offsets past its image ---------
 # The gates read these out of a live guest (tests/deskcalgrid.py, diaboot.py
 # and their kin); tests/unit/t_dia.py has NASM evaluate the package's own
 # equs and holds these equal, so a moved field fails `make` and not a soak.
-DESKCAL_DIA_BSS = 304           # deskcal.asm's DC_BSS: its own state first
-DESKCAL_BSS_GRID = 0            # 42 bytes, the month on show
+DESKCAL_DIA_BSS = 1024          # deskcal.asm's DC_BSS: its own state first
+DESKCAL_BSS_GRID = 0            # 42 bytes, the month on show (Monday first)
 DESKCAL_BSS_Y = 42              # dw the year on show
 DESKCAL_BSS_M = 44              # db its month
 DESKCAL_BSS_SEL = 45            # db the selected day
 DESKCAL_BSS_TY = 46             # dw today's year
 DESKCAL_BSS_TM = 48             # db ...month
 DESKCAL_BSS_TD = 49             # db ...day
-DESKCAL_BSS_OX = 62             # dw the content origin, as the last draw
-DESKCAL_BSS_OY = 64             # found it
-DESKCAL_BSS_ED = 99             # db the entry field: 0 shut, 1..4 its mode
-DESKCAL_BSS_EDI = 100           # db ...the item it edits
-DESKCAL_BSS_SELK = 101          # db the selected item: 0, 1 appt, 2 task
-DESKCAL_BSS_SELI = 102          # db ...its index in its table
-DESKCAL_BSS_EBUF = 134          # 32: the entry field's text, NUL
-DESKCAL_BSS_TTOP = 105          # db the first task on show
-DESKCAL_BSS_TSHOW = 107         # db task rows on the glass, to the pager
-DESKCAL_BSS_ALERT = 211         # db a reminder's alert is up (wave 4)
-DESKCAL_BSS_NOW = 212           # dw the minute of the day, as the last beat
-DESKCAL_BSS_LNOW = 214          # dw ...and the one the reminders looked at
-DESKCAL_BSS_RMSG = 224          # 42: `Reminder HH:MM text`, the toast at +9
-DESKCAL_BSS_LINE = 272          # 32: dc_line, the row the last run drew
+DESKCAL_BSS_ED = 62             # db the entry field: 0 shut, 1..5 its mode
+DESKCAL_BSS_EDI = 63            # db ...the item it edits
+DESKCAL_BSS_SELK = 64           # db the selected item: 0, 1 appt, 2 task
+DESKCAL_BSS_SELI = 65           # db ...its index in its table
+DESKCAL_BSS_PANE = 66           # db COMPACT's slot: 0 day, 1 tasks, 2 reminder
+DESKCAL_BSS_ATOP = 68           # db the agenda's first item on show
+DESKCAL_BSS_TTOP = 69           # db the first task on show
+DESKCAL_BSS_ACNT = 74           # db the selected day's appointments
+DESKCAL_BSS_NOW = 80            # dw the minute of the day, as the last beat
+DESKCAL_BSS_LNOW = 82           # dw ...and the one the reminders looked at
+DESKCAL_BSS_C3K = 86            # db card 3: 0 none, 1 next, 2 RINGING
+DESKCAL_BSS_C3A = 87            # db ...its appointment
+DESKCAL_BSS_C3T = 88            # dw ...the time it shows
+DESKCAL_BSS_LIT = 90            # db a HELD button's card + 1, 0 none
+DESKCAL_BSS_EBUF = 180          # 32: the entry field's text, NUL
+DESKCAL_BSS_RMSG = 244          # 42: the last toast's line, NUL
+DESKCAL_BSS_LINE = 288          # 32: dc_line, the string the last compose built
+DESKCAL_BSS_BAND = 320          # 704: the composer's band, 176 x 32
 DESKCAL_NOREM = 1               # payload +3 bit 0: new ones get no reminder
+DESKCAL_C3 = {0: "none", 1: "next", 2: "ringing"}
+
+
+# The calendar's three layouts (deskcal's dc_lays and dc_geos, SPEC.md
+# 107.3), by [dia_li]: 0 TALL (VGA), 1 MID (Hercules, EGA), 2 COMPACT (CGA).
+# Rows are CARD-LOCAL, x face-relative. t_dia reads dc_geos' bytes out of the
+# assembled package and holds DESKCAL_GEO_FIELDS to them, in this order
+DESKCAL_GEO_FIELDS = ("BIGS", "BIGY", "DOWX", "DOWY", "MONY", "NAVY", "NAVL",
+                      "NAVR", "NAVM", "HDRB", "WKY", "W0", "WP", "DOTY",
+                      "DOTH", "BOXT", "BOXH", "HY", "A0", "AP", "AN", "RULE",
+                      "T0", "TP", "TN", "TX", "TTY", "BOX", "BAR", "BARH",
+                      "ATN", "TTN", "BELLY", "RX", "R1Y", "R2X", "R2Y", "R2N",
+                      "LKY", "LKX", "NONEX")     # then dw BELL, dw BOXR, BELLX
+DESKCAL_GEO = {
+    0: dict(zip(DESKCAL_GEO_FIELDS, (
+        0x0A, 7, 64, 9, 22, 44, 8, 160, 0, 40, 60, 78, 16, 10, 2, 4, 16,
+        6, 22, 14, 2, 50, 57, 16, 2, 32, 2, 11, 2, 12, 14, 17,
+        5, 32, 8, 32, 25, 17, 41, 32, 28)), BELLX=8,
+        cards=((178, 6), (91, 6), (57, 5)), tag=12, face=(176, 355),
+        fy=42),
+    1: dict(zip(DESKCAL_GEO_FIELDS, (
+        0x06, 4, 48, 4, 13, 26, 8, 160, 0, 22, 38, 50, 12, 9, 1, 2, 12,
+        4, 16, 11, 2, 39, 42, 12, 2, 24, 1, 9, 1, 10, 14, 18,
+        3, 22, 4, 68, 4, 13, 18, 22, 26)), BELLX=4,
+        cards=((122, 4), (67, 4), (30, 4)), tag=11, face=(176, 242),
+        fy=24),
+    2: dict(zip(DESKCAL_GEO_FIELDS, (
+        0x06, 2, 48, 2, 0xFF, 10, 48, 136, 64, 19, 20, 30, 9, 8, 1, 0, 9,
+        3, 14, 10, 3, 0, 14, 10, 3, 24, 0, 8, 1, 10, 14, 18,
+        14, 24, 14, 24, 24, 18, 34, 24, 24)), BELLX=8,
+        cards=((85, 3), (44, 3)), tag=11, face=(176, 146), fy=22),
+}
+DESKCAL_RIGHT = 264             # the default face x: screen width - 264
+DESKCAL_FACE_W = 176
+
+
+def deskcal_card_top(li, card):
+    """Card `card`'s first row, face-relative, in layout `li`."""
+    return sum(h + g for h, g in DESKCAL_GEO[li]["cards"][:card])
 
 
 def dia_st_off(dia_bss, paylen):
@@ -339,25 +389,34 @@ def unpack_date(w):
     return (w >> 9) + 1980, (w >> 5) & 15, w & 31
 
 
-def deskcal(appts=(), tasks=(), lead=5, flags=0):
-    """appts: (date-tuple, minute-of-day or None, text, remind, fired, lead),
-    remind defaulting to "timed" - an all-day one has none (SPEC.md 107.3);
-    tasks: (text, done, due-date-tuple or None). Sorted by (date, time + 1) as the
-    package keeps them."""
+def deskcal(appts=(), tasks=(), lead=5, flags=0, snooze=None):
+    """appts: (date-tuple, minute-of-day or None, text, remind, fired, lead,
+    due, snoozed), remind defaulting to "timed" - an all-day one has none
+    (SPEC.md 107.3) - and due / snoozed to False (v2, SPEC.md 107.3); tasks:
+    (text, done, due-date-tuple or None); snooze: (date-tuple, minute), the
+    snooze slot at payload +4/+6 (v2), or None for v1's zeros. Sorted by
+    (date, time + 1) as the package keeps them."""
     appts, tasks = list(appts), list(tasks)
     if len(appts) > DESKCAL_NAPPT or len(tasks) > DESKCAL_NTASK:
         raise DiaError("too many appointments or tasks")
     out = bytearray(DESKCAL_PAYLEN)
     out[0:4] = bytes([len(appts), len(tasks), lead, flags])
+    if snooze is not None:
+        struct.pack_into("<HH", out, DESKCAL_SNZT, snooze[1],
+                         pack_date(*snooze[0]))
     recs = []
     for a in appts:
         date, t, text = a[0], a[1], a[2]
         remind = a[3] if len(a) > 3 else (t is not None)  # all day: none
         fired = a[4] if len(a) > 4 else False
         al = a[5] if len(a) > 5 else lead
+        due = a[6] if len(a) > 6 else False
+        snz = a[7] if len(a) > 7 else False
         recs.append((pack_date(*date), TIME_ALLDAY if t is None else t,
                      (APPT_REMIND if remind else 0)
-                     | (APPT_FIRED if fired else 0), al, text))
+                     | (APPT_FIRED if fired else 0)
+                     | (APPT_DUE if due else 0)
+                     | (APPT_SNOOZED if snz else 0), al, text))
     # the package's own order (SPEC.md 107.3): (date, time + 1) as words,
     # so ALL DAY (0FFFFh) wraps to 0 and comes first in its day
     recs.sort(key=lambda r: (r[0], (r[1] + 1) & 0xFFFF))
@@ -384,6 +443,7 @@ def parse_deskcal(p):
     na, nt, lead, flags = p[0], p[1], p[2], p[3]
     if na > DESKCAL_NAPPT or nt > DESKCAL_NTASK:
         raise DiaError("counts %d/%d past the table" % (na, nt))
+    st, sd = struct.unpack_from("<HH", p, DESKCAL_SNZT)
     appts, tasks = [], []
     for i in range(na):
         o = DESKCAL_APPT0 + i * DESKCAL_APPT
@@ -391,7 +451,9 @@ def parse_deskcal(p):
         appts.append({"date": list(unpack_date(d)),
                       "time": None if t == TIME_ALLDAY else t,
                       "remind": bool(f & APPT_REMIND),
-                      "fired": bool(f & APPT_FIRED), "lead": al,
+                      "fired": bool(f & APPT_FIRED),
+                      "due": bool(f & APPT_DUE),
+                      "snoozed": bool(f & APPT_SNOOZED), "lead": al,
                       "text": _cstr(p[o + 6:o + 32])})
     for i in range(nt):
         o = DESKCAL_TASK0 + i * DESKCAL_TASK
@@ -400,7 +462,11 @@ def parse_deskcal(p):
         tasks.append({"done": bool(f & TASK_DONE),
                       "due": list(unpack_date(due)) if f & TASK_DATED
                       else None, "text": _cstr(p[o + 4:o + 28])})
-    return {"lead": lead, "flags": flags, "appts": appts, "tasks": tasks}
+    snooze = None
+    if any(a["snoozed"] for a in appts):
+        snooze = {"date": list(unpack_date(sd)), "time": st}
+    return {"lead": lead, "flags": flags, "appts": appts, "tasks": tasks,
+            "snooze": snooze}
 
 
 # =============================================================================
@@ -514,6 +580,25 @@ def selfcheck():
     bad = bytearray(pay)
     bad[0] = 49
     refuses(lambda: parse_deskcal(bytes(bad)), "49 appointments")
+    # v2: DUE, SNOOZED and the snooze slot (+4 minute, +6 date)
+    ok(dc["snooze"] is None and not any(a["due"] or a["snoozed"]
+                                        for a in dc["appts"]),
+       "a v1-shaped payload: nothing due, nothing snoozed, no slot")
+    p2 = deskcal(appts=[((2026, 10, 13), 1260, "Back up", True, True, 0,
+                         False, True),
+                        ((2026, 10, 13), 540, "Sync", True, True, 0, True)],
+                 snooze=((2026, 10, 13), 1265))
+    ok(struct.unpack_from("<HH", p2, DESKCAL_SNZT)
+       == (1265, pack_date(2026, 10, 13)), "the slot lands at +4/+6")
+    d2 = parse_deskcal(p2)
+    ok(d2["appts"][0]["due"] and not d2["appts"][0]["snoozed"]
+       and d2["appts"][1]["snoozed"] and not d2["appts"][1]["due"],
+       "DUE and SNOOZED round-trip, each on its own appointment")
+    ok(p2[DESKCAL_APPT0 + 4] == APPT_REMIND | APPT_FIRED | APPT_DUE
+       and p2[DESKCAL_APPT0 + DESKCAL_APPT + 4]
+       == APPT_REMIND | APPT_FIRED | APPT_SNOOZED, "flags bits 2 and 3")
+    ok(d2["snooze"] == {"date": [2026, 10, 13], "time": 1265},
+       "the slot reads back beside the snoozed appointment")
 
     for f_ in fails:
         print("os88dia: FAIL  %s" % f_)

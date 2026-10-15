@@ -21,9 +21,10 @@ DESKCAL.DAT. One boot on a VGA XT (MartyPC), driven by name:
      LD_EABORT, one calendar window - and SYSTEM.CFG is byte-identical to
      B's, and nothing was written: the refusal comes before dia_load's
      first file call (the loader's read of the package is all it costs).
-  D  its close box removes the row BY NAME: SYSTEM.CFG has no trailer, and
-     the close saved DESKCAL.DAT - 2,456 bytes, a valid header holding the
-     window's place and the empty v1 payload.
+  D  the x its HANDLE reveals (hovered: a widget has no close box, SPEC.md
+     107.11) removes the row BY NAME: SYSTEM.CFG has no trailer, and the
+     close saved DESKCAL.DAT - 2,456 bytes, a valid header holding the
+     widget's FACE origin (DIA_HF_CONT) and the empty payload.
   E  a reset brings NO calendar back: the row went with the close.
 
 **BREAK IT ON PURPOSE**: take dia_single's call out of dia_load and C fails
@@ -169,9 +170,10 @@ def main():
         check(cfg_of(volume(m, tmp)) == cfg_b,
               "SYSTEM.CFG is B's to the byte")
 
-        print("D: the close box takes the row away and saves")
+        print("D: the handle's x takes the row away and saves")
         w = ui.window(TITLE)
-        ui.close(w)
+        ui.widget_hover(w, True)
+        ui.mo.click(w.x + 1 + 7, w.y + w.h - 6, settle=0)
         ui.wait_toast(says="Saved", limit=90)
         ui._wait(lambda: not calendars(ui), "the calendar to close", 30)
         v = volume(m, tmp)
@@ -189,13 +191,14 @@ def main():
         check(len(dat) == os88dia.DIA_HDR_SIZE + os88dia.DESKCAL_PAYLEN,
               "DESKCAL.DAT is %d bytes (%d)"
               % (os88dia.DIA_HDR_SIZE + os88dia.DESKCAL_PAYLEN, len(dat)))
-        check(pd.get("pos") and (pd["x"], pd["y"]) == (w.x, w.y)
+        check(pd.get("pos") and pd.get("cont")
+              and (pd["x"], pd["y"]) == (w.x + 1, w.y)
               and tuple(pd.get("screen") or ()) == (640, 480),
-              "...holding the window's place (%r at %r)"
+              "...holding the widget's FACE origin (%r at %r)"
               % ({k: v for k, v in pd.items() if k != "payload"},
-                 (w.x, w.y)))
+                 (w.x + 1, w.y)))
         check(cal.get("appts") == [] and cal.get("tasks") == [],
-              "...and the empty v1 payload (%r)" % (cal,))
+              "...and the empty payload (%r)" % (cal,))
 
         print("E: a reset brings no calendar back")
         t0 = struct.unpack("<H", bytes(m.read(0x46C, 2)))[0]

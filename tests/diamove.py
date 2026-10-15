@@ -10,37 +10,39 @@ MartyPC's VGA XT and its 5150 CGA:
 
   A  A: > SYSTEM > DIA > DESKCAL.O88 opens it, and its first tick registers
      its row in SYSTEM.CFG.
-  B  its title bar is DRAGGED; within two polls (~4 s) the new place is
-     saved - DESKCAL.DAT on the guest's A: holds it and the 640x480 screen
-     it was saved on, and nothing is owed any more.
+  B  the WIDGET is DRAGGED by its tag row (ui.widget_drag - v2 has no title
+     bar); within two polls (~4 s) the new place is saved - DESKCAL.DAT on
+     the guest's A: holds the FACE's origin, flagged DIA_HF_CONT, and the
+     screen it was saved on, and nothing is owed any more.
   C  RESET. The boot's dia_boot relaunches it from the row, dia_load reads
-     the state file in the entry proc, and the window comes back AT THE
-     DRAGGED PLACE - not at the template's (335,40) - holding no desktop
-     cell, with nobody touching the mouse.
+     the state file in the entry proc, and the widget comes back AT THE
+     DRAGGED PLACE - not at the default (screen width - 264) - holding no
+     desktop cell, with nobody touching the mouse; and it is a widget again:
+     wm_zord[0], the TOP instance slot (INST_MAX - 1), no dock tile.
 
 The reset is waited out on the BIOS tick restarting rather than on settle(),
 which returns during the BIOS disk probe after a warm boot on a loaded host.
 
-THE CGA LEG is the one wave 2 shipped broken: the template was the 255-row
-TALL frame, so wm_create's fit cut it to the 155-row band and clamped every
-restored y to 20 before PREFER made it COMPACT's - the place came back at
-y = 20 and the next poll saved 20 over the user's. Its drag lands at y = 24.
+THE CGA LEG is the one wave 2 shipped broken (the template was TALL's frame
+and every restored y came back as 20): v2's COMPACT face is 146 rows, sized
+before the create, and its drag lands at y = 28.
 
-`--leg anchor` (row `diaanchor`) writes DESKCAL.DAT with tools/os88dia.py
-before the boot - a place (479,68) saved on a 720x348 screen, the frame 7
-pixels off its right edge - and opens the calendar on the VGA XT's 640x480:
+`--leg anchor` (row `diaanchor`) writes a V1 DESKCAL.DAT with tools/os88dia.py
+before the boot - a TITLED frame's place (560,100) saved on an 800x600
+screen, no DIA_HF_CONT - and opens the calendar on the VGA XT's 640x480:
 
-  D  each axis is ANCHORED to the old screen's nearer edge (SPEC.md
-     107.5.2): x 479 -> 399 and y 68 -> 200, both from the far edge. y 200 is
-     a frame hanging over the dock, which wm_create's fit pulls up above it
-     (to 183): dia_made must give it back. (It must also still be ON the
-     screen: 200 + 272 is 472, and a KEEPH frame is never put below 479.)
+  D  the v1 place is CONVERTED to a face, (561,118) - a border in and a
+     title bar down (SPEC.md 107.11) - and each axis ANCHORED with the
+     face's size (SPEC.md 107.5.2): x from the far edge, 561 -> 401, the
+     frame at 399 under the snap; y from the near one, 118 - a face hanging
+     over the dock (118 + 355 > 456), which wm_create's fit pulls up above
+     it: dia_made must give it back.
   E  nobody touched it, so NOTHING IS WRITTEN: three polls later the state
      file on A: is byte for byte the fixture, and no save is owed. A wave-2
      build saved the anchored place ~2 s after the launch.
 
 **BREAK IT ON PURPOSE**: make dia_tick skip dia_pos and B fails (no save);
-take dia_load's placement out and C fails (the template's place); take
+take dia_load's placement out and C fails (the default place); take
 `call dia_boot` out of drv_notice_x and C fails (no window); take the
 template's sizing out of dc_entry AND dia_made's y out and the CGA leg's C
 fails at y = 20; take dia_made's y out alone and D fails (y clamped above
@@ -65,7 +67,7 @@ import os88dia     # noqa: E402
 ROOT = os.path.join(HERE, "..")
 BDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
 TITLE = "Desk Calendar"
-TEMPLATE = (335, 40)            # dc_tpl's (336,40) under the snap
+TEMPLATE = (375, 42)            # the default place: face (640 - 264, 42)
 DIA_ST = os88dia.dia_st_off(os88dia.DESKCAL_DIA_BSS, os88dia.DESKCAL_PAYLEN)
 HDR = os88dia.dia_hdr_off(os88dia.DESKCAL_DIA_BSS)
 DIA_S_ROW, DIA_S_DIRTY = 2, 16
@@ -110,8 +112,10 @@ def move_leg(tmp, machine, template, drag, screen):
         print("A: open it, and it registers")
         w = ui.path("A:/SYSTEM/DIA/DESKCAL.O88")
         check(w.title == TITLE and (w.x, w.y) == template,
-              "the calendar opened at its template's place (%d,%d)"
+              "the calendar opened at its default place (%d,%d)"
               % (w.x, w.y))
+        check(w.flags & geom.WF_DESK, "...a DESK window (W_FLAGS %#06x)"
+              % w.flags)
         wseg = wseg_of(ui, w)
 
         def st():
@@ -130,8 +134,9 @@ def move_leg(tmp, machine, template, drag, screen):
         w = ui.window(TITLE)
         moved = (w.x, w.y)
         check(moved != template, "the frame moved (%d,%d)" % moved)
-        ui._wait(lambda: hdr() == (os88dia.DIA_HF_POS,) + moved
-                 and not st() & DIA_S_DIRTY, "the drag's save", 120,
+        face = (moved[0] + 1, moved[1])
+        ui._wait(lambda: hdr() == (os88dia.DIA_HF_POS | os88dia.DIA_HF_CONT,)
+                 + face and not st() & DIA_S_DIRTY, "the drag's save", 120,
                  snapshot=lambda: "dia_st = %#x, header %r" % (st(), hdr()))
         try:
             d = os88dia.parse_dat(volume(m, tmp).read(
@@ -140,10 +145,10 @@ def move_leg(tmp, machine, template, drag, screen):
         except Exception as e:
             d = {"pos": False, "x": None, "y": None, "screen": None,
                  "err": str(e)}
-        check(d["pos"] and (d["x"], d["y"]) == moved
+        check(d["pos"] and d.get("cont") and (d["x"], d["y"]) == face
               and tuple(d["screen"] or ()) == screen,
-              "DESKCAL.DAT on A: holds %r on %dx%d (%r)"
-              % ((moved,) + screen
+              "DESKCAL.DAT on A: holds the FACE %r (DIA_HF_CONT) on %dx%d "
+              "(%r)" % ((face,) + screen
                  + ({k: v for k, v in d.items() if k != "payload"},)))
 
         print("C: reset - it comes back where it was put")
@@ -167,11 +172,21 @@ def move_leg(tmp, machine, template, drag, screen):
         if dia:
             z = m.read(ui._S("desk_zslot") + os88dia.DESK_SC0 + dia[0], 1)[0]
             check(z == 0xFF, "...holding no desktop cell (%#x)" % z)
+        zo = list(m.read(ui._S("wm_zord"), m.read(ui._S("wm_zn"), 1)[0]))
+        inst = geom.instances(m)
+        mine = [k for k, rr in inst.items()
+                if (rr["win"] + geom.KERNEL_SEG * 16 - ui._S("wm_wins"))
+                // geom.WIN_SIZE == w2.i]
+        check(zo[:1] == [w2.i] and w2.flags & geom.WF_DESK,
+              "...a widget again: wm_zord[0] (%r)" % (zo,))
+        check(mine == [geom.INST_MAX - 1],
+              "...in the TOP instance slot, INST_MAX - 1 (%r)" % (mine,))
 
 
 # the anchor leg's fixture: a place saved on a Hercules-sized screen
-SAVED, SAVED_SCREEN = (479, 68), (720, 348)    # 720 - 7 - 234
-ANCHORED = (399, 200)           # 640 - (720 - 479), 480 - (348 - 68)
+SAVED, SAVED_SCREEN = (560, 100), (800, 600)   # a v1 TITLED frame's place
+ANCHORED = (399, 118)           # face (561, 118): x 561 - 800 + 640 = 401,
+                                # the frame 400 snapped to 399; y near: 118
 
 
 def anchor_leg(tmp):
@@ -192,8 +207,10 @@ def anchor_leg(tmp):
         w = ui.path("A:/SYSTEM/DIA/DESKCAL.O88")
         dock = ui._word("vid_dock_y0")
         check(ANCHORED[1] + w.h > dock,
-              "the anchored frame hangs over the dock (y %d + h %d > %d) - "
+              "the anchored face hangs over the dock (y %d + h %d > %d) - "
               "the case wm_create's fit clamps" % (ANCHORED[1], w.h, dock))
+        check(w.flags & geom.WF_DESK and w.h == 355,
+              "a TALL desk widget, 355 rows (%d)" % w.h)
         check((w.x, w.y) == ANCHORED,
               "anchored to the far edges: (%d,%d), want %r"
               % (w.x, w.y, ANCHORED))
@@ -222,13 +239,13 @@ def main(argv=None):
     tmp = tempfile.mkdtemp(prefix="diamove-")
     try:
         if a.leg == "vga":
-            move_leg(tmp, "os8088_xt_vga", TEMPLATE, (-216, 88), (640, 480))
+            move_leg(tmp, "os8088_xt_vga", TEMPLATE, (-216, 40), (640, 480))
         elif a.leg == "cga":
-            # the template's (336,40) is 33 under the snap and the 176-row
-            # dock (40 + 142 > 176); a drag 9 up lands at y = 24, which a
-            # wave-2 build brought back as 20
-            move_leg(tmp, os88marty.machine("os8088_5150_cga"), (335, 33),
-                     (-216, -9),
+            # COMPACT's default face is (376, 22); a drag 6 down lands at
+            # y = 28, its bottom 174 above the 176-row dock (a wave-2 build
+            # brought every CGA place back as 20)
+            move_leg(tmp, os88marty.machine("os8088_5150_cga"), (375, 22),
+                     (-216, 6),
                      (640, 200))
         else:
             anchor_leg(tmp)

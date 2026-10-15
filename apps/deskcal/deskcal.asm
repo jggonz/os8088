@@ -7,23 +7,29 @@
 ; and includes apps/os88dia.inc, which owns its place, its state file
 ; (SYSTEM\APPDATA\DESKCAL.DAT) and its row in the desktop configuration.
 ;
-; Wave 2 is the window, the month, today and the navigation; wave 3 the
-; appointments, the tasks, the one-line entry and the Remind menu's lead
-; times; the reminders' firing is wave 4 (107.10).
+; v2 (wave 4) is a WIDGET: three white cards ON the desk - under every
+; application window, chromeless, no dock tile - with the desktop's own
+; ground between them and a name tag under them that turns into a handle
+; while the pointer is over it (os88dia.inc's DIA_WIDGET, SPEC.md 107.11).
+; Card 1 is today's page and the month, card 2 the selected day's
+; appointments and the tasks, card 3 the reminder; a CGA's COMPACT layout
+; pages cards 2 and 3 through one slot.
 ;
-;   deskcal.asm   this: header, entry proc, menus, keys, clicks, the edits
+;   deskcal.asm   this: header, entry proc, menus, keys, the card presses
+;                 and releases, the edits, the tick
 ;   dcdate.inc    the date maths (day of week, days in a month, the grid)
 ;   dcdata.inc    the payload: the load's check, the sorted insert, the
 ;                 deletes, the tasks, the entry's time parser
-;   dcdraw.inc    the two layouts and every draw
+;   dcdraw.inc    the three layouts, the composers, the partial redraws
+;   dcrem.inc     the reminders: firing, snooze, dismiss, card 3's state
 ;
-; Two colours on every adapter - ink 0 on ground 15 - so today is INVERSE and
-; the selected day is a FRAME: nothing is carried by colour (SPEC.md 39.4).
+; Two colours on every adapter - ink and paper - so today is INVERSE and
+; the selected day an OUTLINE: nothing is carried by colour (SPEC.md 39.4).
 ; =============================================================================
 
 %include "os88api.inc"
 
-    OS88_HEADER 'Desk Calendar', dc_entry, OS88_F_ICON
+    OS88_HEADER 'Desk Calendar', dc_entry, OS88_F_ICON | OS88_F_DESK
 
 ; A calendar page: a solid header band over a grid of days. It is also the
 ; DIA row's picture (DIA_ICON below), so a row the boot could not launch
@@ -35,40 +41,17 @@
     dw 0x4002, 0x5552, 0x4002, 0x5552, 0x4002, 0x7FFE, 0x0000, 0x0000
     OS88_ICON16_END
 
-; --- geometry (SPEC.md 107.3) ------------------------------------------------
-DC_CELLS    equ 29              ; the content is 29 cells wide on both layouts:
-                                ; seven 4-cell day fields `[ ][d][d][m]` and
-                                ; one cell of margin after Saturday's mark
-                                ; (SPEC.md 107.3)
-DC_CW       equ DC_CELLS * 8    ; 232
-DC_TALL_CH  equ 253             ; the TALL content; anything shorter is COMPACT
-DC_COMP_CH  equ 123
-DC_FW       equ DC_CW + 2       ; the frames: content + border, + the title bar
-DC_TALL_FH  equ DC_TALL_CH + TITLE_H + 1
-DC_COMP_FH  equ DC_COMP_CH + TITLE_H + 1
-DC_FLD0     equ 0               ; the first day field's first cell
-DC_FLDW     equ 4               ; a day field's cells: a blank, two digits and
-                                ; the mark hard against them, ` 16*` - so the
-                                ; blank between two days is always there and
-                                ; a mark can only be read as its own day's
-DC_MARK     equ '*'             ; the mark cell's glyph: a day with an
-                                ; appointment. It must be PRINTABLE - the
-                                ; kernel keeps glyphs 32..126 and draws any
-                                ; other as a space (font.inc), which is what
-                                ; wave 2's glyph 7 did: no day ever showed
-                                ; its bullet. A star's middle row reaches
-                                ; column 7, which the selection frame's right
-                                ; side stands on, so a marked day the frame
-                                ; leaves is re-run (dc_reselect), as today
-                                ; always was
 DC_GRIDN    equ 42
 
-; --- the payload v1, what wave 2 reads of it (SPEC.md 107.3) -----------------
+; --- the payload v1, what the calendar reads of it (SPEC.md 107.3) -----------
 ; tools/os88dia.py's DESKCAL_* are the same numbers; t_dia holds them equal
 DCP_LEN     equ 2440
 DCP_VER     equ 1
 DCP_NAPPT   equ 0               ; db: appointments in use
 DCP_NTASK   equ 1               ; db: tasks in use
+DCP_SNZT    equ 4               ; dw: the SNOOZE SLOT's minute of the day (v2)
+DCP_SNZD    equ 6               ; dw: ...and its FAT date - read only beside a
+                                ; SNOOZED appointment, so v1's zeros mean nothing
 DCP_MAXAPPT equ 48
 DCP_MAXTASK equ 32
 DCP_APPT0   equ 8               ; the first appointment
@@ -77,12 +60,16 @@ DCP_TASK0   equ DCP_APPT0 + DCP_MAXAPPT * DCP_APPTSZ    ; 1544
 DCP_TASKSZ  equ 28
 DCA_DATE    equ 0               ; dw: FAT-packed
 DCA_TIME    equ 2               ; dw: minute of the day, 0FFFFh all day
-DCA_FLAGS   equ 4               ; db: DCA_REMIND, DCA_FIRED
+DCA_FLAGS   equ 4               ; db: DCA_REMIND, FIRED, SNOOZED, DUE
 DCA_LEAD    equ 5               ; db: minutes before
 DCA_TEXT    equ 6               ; 26 bytes, NUL
 DCA_TMAX    equ 25              ; ...so at most 25 characters
-DCA_REMIND  equ 1
-DCA_FIRED   equ 2
+DCA_REMIND  equ 1               ; armed
+DCA_FIRED   equ 2               ; it went off
+DCA_SNOOZED equ 4               ; v2: snoozed - it rings again at the slot
+DCA_DUE     equ 8               ; v2: it went off and is NOT DISMISSED: card 3
+                                ; rings it. A v1 file has neither, so a v1
+                                ; FIRED reminder reads as already dismissed
 DCT_FLAGS   equ 0               ; db: DCT_DONE, DCT_DATED
 DCT_DUE     equ 2               ; dw: FAT-packed, iff DCT_DATED
 DCT_TEXT    equ 4               ; 24 bytes, NUL
@@ -94,18 +81,13 @@ DCF_NOREM   equ 1               ; new appointments get no reminder
 DC_ALLDAY   equ 0FFFFh
 DC_ESZ      equ 32              ; the entry's buffer, its NUL in it: `HH:MM `
                                 ; and 25 characters
-DC_TPITCH   equ 13              ; a task row: the check box's height and one
-                                ; row of ground, so stacked boxes never touch
-DC_TBOX     equ 4               ; the box's x: inset off the window's frame
-DC_FIN      equ DC_TBOX         ; the entry field's inset, each side: the
-                                ; same 2-pixel line otherwise (SPEC.md 107.3)
-DC_AMARK    equ 6               ; an agenda line's reminder-mark cell
 DCS_APPT    equ 1               ; dc_selk: an appointment selected...
 DCS_TASK    equ 2               ; ...or a task
 DCE_NEWA    equ 1               ; dc_ed: the field is a new appointment,
 DCE_EDA     equ 2               ; an appointment being edited,
 DCE_NEWT    equ 3               ; a new task,
-DCE_EDT     equ 4               ; a task being edited
+DCE_EDT     equ 4               ; a task being edited,
+DCE_NEW     equ 5               ; ...or either: `+`, the parse decides
 %if DCP_TASK0 + DCP_MAXTASK * DCP_TASKSZ != DCP_LEN
   %error "deskcal: the payload's tables do not add up to DCP_LEN"
 %endif
@@ -114,7 +96,7 @@ KSC_PGUP    equ 0x49
 KSC_PGDN    equ 0x51
 KSC_DEL     equ 0x53
 
-; --- the DIA (apps/os88dia.inc, SPEC.md 107.5) --------------------------------
+; --- the DIA (apps/os88dia.inc, SPEC.md 107.5, 107.11) -----------------------
 %define DIA_DATNAME  'DESKCAL.DAT'
 %define DIA_CAP      'Calendar'
 %define DIA_ISOPEN   'Desk Calendar is open'
@@ -124,9 +106,24 @@ DIA_PAYLEN  equ DCP_LEN
 DIA_PAYVER  equ DCP_VER
 DIA_ICON    equ 32
 DIA_BSS     equ DC_BSS          ; the include's state follows ours
+%define DIA_WIDGET
+%define DIA_TAG       'Desk Calendar'   ; = the title
+%define DIA_RIGHT     264       ; the face opens 264 px in from the right edge
+                                ; (a %define: the include tests it with %ifdef)
+%define DIA_LAYOUTS   dc_lays
+%define DIA_PAINTCARD dc_pcard
+%define DIA_COMPOSE   dc_compose
+%define DIA_ONCARD    dc_oncard
+%define DIA_ONCARDUP  dc_oncardup
+%define DIA_ONFOCUS   dc_onfocus
+%define GFXE_TEXT
+%define GFXE_BITS
+%define GFXE_BAND_W   176       ; the face: 22 cells, a 704-byte band
+%define GFXE_BAND_H   32
+%define GFXE_BAND_BUF dc_band
 
-; --- bss: OURS FIRST, at fixed offsets - tests read the grid out of a running
-; guest (tests/deskcalgrid.py), and tools/os88dia.py's DESKCAL_BSS_* say where
+; --- bss: OURS FIRST, at fixed offsets - tests read it out of a running guest
+; (tests/deskcal*.py), and tools/os88dia.py's DESKCAL_BSS_* say where
 DC_BSS_GRID equ 0               ; 42 bytes, the month on show
 DC_BSS_Y    equ 42              ; dw the year on show
 DC_BSS_M    equ 44              ; db its month
@@ -141,75 +138,106 @@ dc_sel      equ os88_image_end + DC_BSS_SEL
 dc_ty       equ os88_image_end + DC_BSS_TY
 dc_tm       equ os88_image_end + DC_BSS_TM
 dc_td       equ os88_image_end + DC_BSS_TD
-dc_lay      equ os88_image_end + 50     ; dw the layout table
-dc_win      equ os88_image_end + 52     ; dw our window
-dc_abon     equ os88_image_end + 54     ; db the About card is up
-dc_dow1     equ os88_image_end + 55     ; db the 1st's column
-dc_dim      equ os88_image_end + 56     ; db the month's length
-dc_mark     equ os88_image_end + 57     ; 4 bytes: bit d = day d has an item
-DC_BSS_OX   equ 62                      ; dw the content origin, as the last
-DC_BSS_OY   equ 64                      ; draw found it (the rows click by it)
-dc_ox       equ os88_image_end + DC_BSS_OX
-dc_oy       equ os88_image_end + DC_BSS_OY
-dc_cw       equ os88_image_end + 66     ; dw the content box
-dc_ch       equ os88_image_end + 68
-                                        ; 70..97 spare: dc_line's old place,
-                                        ; 28 bytes against the 29-cell row's 31
-dc_redo     equ os88_image_end + 98     ; db the next draw is a WHOLE paint: a
-                                        ; menu pick took the About card down
-DC_BSS_ED   equ 99                      ; db the entry field: 0 shut, DCE_*
-DC_BSS_EDI  equ 100                     ; db ...the item it edits
-DC_BSS_SELK equ 101                     ; db the selected item: 0, DCS_*
-DC_BSS_SELI equ 102                     ; db ...its index in its table
+dc_win      equ os88_image_end + 50     ; dw our window
+dc_abon     equ os88_image_end + 52     ; db the About card is up
+dc_dow1     equ os88_image_end + 53     ; db the 1st's column (Monday first)
+dc_dim      equ os88_image_end + 54     ; db the month's length
+dc_clip     equ os88_image_end + 55     ; db the clip is armed this lock hold
+dc_mark     equ os88_image_end + 56     ; 4 bytes: bit d = day d has an item
+dc_geo      equ os88_image_end + 60     ; dw the layout's geometry (dcdraw)
+DC_BSS_ED   equ 62                      ; db the entry field: 0 shut, DCE_*
+DC_BSS_EDI  equ 63                      ; db ...the item it edits
+DC_BSS_SELK equ 64                      ; db the selected item: 0, DCS_*
+DC_BSS_SELI equ 65                      ; db ...its index in its table
+DC_BSS_PANE equ 66                      ; db COMPACT's slot: 0 the day, 1 the
+                                        ; tasks, 2 the reminder
 dc_ed       equ os88_image_end + DC_BSS_ED
 dc_edi      equ os88_image_end + DC_BSS_EDI
 dc_selk     equ os88_image_end + DC_BSS_SELK
 dc_seli     equ os88_image_end + DC_BSS_SELI
-dc_pane     equ os88_image_end + 103    ; db COMPACT: 0 the agenda, 1 the tasks
-dc_atop     equ os88_image_end + 104    ; db the agenda's first item on show
-DC_BSS_TTOP equ 105                     ; db ...and the tasks'
-DC_BSS_TSHOW equ 107                    ; db task rows occupied on the glass
+dc_pane     equ os88_image_end + DC_BSS_PANE
+dc_pane0    equ os88_image_end + 67     ; db the page a ringing reminder took
+                                        ; the slot from, 0FFh: not taken
+DC_BSS_ATOP equ 68                      ; db the agenda's first item on show
+DC_BSS_TTOP equ 69                      ; db ...and the tasks'
+dc_atop     equ os88_image_end + DC_BSS_ATOP
 dc_ttop     equ os88_image_end + DC_BSS_TTOP
-dc_ashow    equ os88_image_end + 106    ; db agenda lines occupied on the glass
-dc_tshow    equ os88_image_end + DC_BSS_TSHOW
-dc_ask      equ os88_image_end + 108    ; db our Delete question is up
-dc_delk     equ os88_image_end + 109    ; db ...about this kind
-dc_deli     equ os88_image_end + 110    ; db ...and index
-dc_afirst   equ os88_image_end + 111    ; db the day's first appointment
-dc_acnt     equ os88_image_end + 112    ; db ...and how many
-dc_ph       equ os88_image_end + 113    ; db the parser's hour
-dc_ln       equ os88_image_end + 114    ; 20: the entry field (os88line.inc)
-DC_BSS_EBUF equ 134                     ; 32: its text
-dc_ebuf     equ os88_image_end + DC_BSS_EBUF
-dc_ck       equ os88_image_end + 166    ; 12: one check box, aimed at a row
-dc_rec      equ os88_image_end + 178    ; 32: an appointment being inserted
-dc_tq       equ os88_image_end + 210    ; db an edit since the last poll
-DC_BSS_ALERT equ 211                    ; db our reminder's alert is up
-DC_BSS_NOW  equ 212                     ; dw the minute of the day, as the
-DC_BSS_LNOW equ 214                     ; dw last beat read it, and the one the
+dc_ask      equ os88_image_end + 70     ; db our Delete question is up
+dc_delk     equ os88_image_end + 71     ; db ...about this kind
+dc_deli     equ os88_image_end + 72     ; db ...and index
+dc_afirst   equ os88_image_end + 73     ; db the day's first appointment
+DC_BSS_ACNT equ 74
+dc_acnt     equ os88_image_end + DC_BSS_ACNT    ; db ...and how many
+dc_ph       equ os88_image_end + 75     ; db the parser's hour
+dc_tq       equ os88_image_end + 76     ; db an edit since the last poll
+dc_chirp    equ os88_image_end + 77     ; db the chirp's second note is owed
+dc_rtc      equ os88_image_end + 78     ; db OSAPI_CLK_GET's AL: bit 0 an RTC
+dc_fresh    equ os88_image_end + 79     ; db dc_cappt: armed afresh
+DC_BSS_NOW  equ 80                      ; dw the minute of the day, as the
+DC_BSS_LNOW equ 82                      ; dw last beat read it, and the one the
                                         ; reminders last looked at (0FFFFh none)
-dc_alert    equ os88_image_end + DC_BSS_ALERT
 dc_now      equ os88_image_end + DC_BSS_NOW
 dc_lnow     equ os88_image_end + DC_BSS_LNOW
-dc_chirp    equ os88_image_end + 216    ; db the chirp's second note is owed
-dc_rtc      equ os88_image_end + 217    ; db OSAPI_CLK_GET's AL: bit 0 an RTC
-dc_fresh    equ os88_image_end + 218    ; db dc_cappt: the reminder is armed
-                                        ; afresh (new, or its time moved)
-dc_ltp      equ os88_image_end + 220    ; dw the LAUNCH's toast, owed to the
-                                        ; first beat (0 none): said after the
-                                        ; registration's `Settings Saved`, so
-                                        ; it is the line left on the bar
-DC_BSS_RMSG equ 224                     ; 42: `Reminder HH:MM text`, NUL - the
-dc_rmsg     equ os88_image_end + DC_BSS_RMSG    ; alert's line, which it
-                                        ; repaints from while it is up; the
-                                        ; toast is the same from +9
-DC_RMSG_PRE equ 9                       ; `Reminder `
-dc_line     equ os88_image_end + 272    ; 32: a row being built - 29 cells,
-                                        ; its NUL, and the byte after the NUL
-                                        ; that dc_part's word read reaches
-DC_BSS      equ 304                     ; a multiple of 16 (os88dia.inc)
-%if 178 + DCP_APPTSZ > 210 || DC_BSS_RMSG + DC_RMSG_PRE + 6 + DCA_TMAX + 1 > 272 || 220 + 2 > DC_BSS_RMSG || 272 + DC_CELLS + 2 > DC_BSS
-  %error "deskcal: its own bss has outgrown DC_BSS"
+dc_ltp      equ os88_image_end + 84     ; dw the LAUNCH's toast, owed to the
+                                        ; first beat (0 none)
+DC_BSS_C3K  equ 86                      ; db card 3: DC3_NONE / NEXT / RING
+DC_BSS_C3A  equ 87                      ; db ...its appointment
+DC_BSS_C3T  equ 88                      ; dw ...the time it shows
+dc_c3k      equ os88_image_end + DC_BSS_C3K
+dc_c3a      equ os88_image_end + DC_BSS_C3A
+dc_c3t      equ os88_image_end + DC_BSS_C3T
+DC_BSS_LIT  equ 90                      ; db the HELD button's card + 1, 0 none
+dc_lit      equ os88_image_end + DC_BSS_LIT
+dc_lact     equ os88_image_end + 91     ; db ...its DCB_*
+dc_lx0      equ os88_image_end + 92     ; db ...its first byte of the face
+dc_lx1      equ os88_image_end + 93     ; db ...its last
+dc_ly0      equ os88_image_end + 94     ; dw ...its first card row
+dc_ly1      equ os88_image_end + 96     ; dw ...its last
+dc_lpend    equ os88_image_end + 98     ; db its un-light owed (card + 1)
+dc_c3f      equ os88_image_end + 99     ; db card 3 redrawn whatever its state
+dc_cr0      equ os88_image_end + 100    ; dw dc_compose: the band's first row
+dc_cr1      equ os88_image_end + 102    ; dw ...and past its last
+dc_ccard    equ os88_image_end + 104    ; db ...the card
+dc_tdow     equ os88_image_end + 105    ; db today's day of the week
+dc_tix      equ os88_image_end + 106    ; db today's grid index, 0FFh none
+dc_six      equ os88_image_end + 107    ; db the selected day's
+dc_wrow     equ os88_image_end + 108    ; db the week being composed
+dc_wcol     equ os88_image_end + 109    ; db ...its column
+dc_wr       equ os88_image_end + 110    ; dw ...its number row
+dc_wday     equ os88_image_end + 112    ; db ...the day
+dc_wink     equ os88_image_end + 113    ; db ...its ink (0 / GFXE_INV)
+dc_wfx      equ os88_image_end + 114    ; dw ...its field's x
+dc_li       equ os88_image_end + 116    ; db a list's line
+dc_lsec     equ os88_image_end + 117    ; db ...which list: 0 agenda, 1 tasks
+dc_tty      equ os88_image_end + 118    ; dw a task's text row below its box
+dc_rcard    equ os88_image_end + 120    ; db dc_rrect: the card
+dc_hk       equ os88_image_end + 121    ; db dc_hit: the kind, DCH_*
+dc_rr0      equ os88_image_end + 122    ; dw dc_rrect: the rows
+dc_rr1      equ os88_image_end + 124
+dc_rb       equ os88_image_end + 126    ; 2 db: ...the bytes
+dc_rtop     equ os88_image_end + 128    ; dw ...the card's screen top
+dc_hi       equ os88_image_end + 130    ; db dc_hit: a day, an item
+dc_hb       equ os88_image_end + 131    ; db ...a button, DCB_*
+dc_hx0      equ os88_image_end + 132    ; db ...its rect's bytes
+dc_hx1      equ os88_image_end + 133
+dc_hy0      equ os88_image_end + 134    ; dw ...and card rows
+dc_hy1      equ os88_image_end + 136
+dc_qx       equ os88_image_end + 138    ; dw the press, card-relative
+dc_qy       equ os88_image_end + 140
+dc_ln       equ os88_image_end + 160    ; 20: the entry field (os88line.inc)
+DC_BSS_EBUF equ 180                     ; 32: its text
+dc_ebuf     equ os88_image_end + DC_BSS_EBUF
+dc_rec      equ os88_image_end + 212    ; 32: an appointment being inserted
+DC_BSS_RMSG equ 244                     ; 42: the toast's line, NUL
+dc_rmsg     equ os88_image_end + DC_BSS_RMSG
+DC_BSS_LINE equ 288
+dc_line     equ os88_image_end + DC_BSS_LINE    ; 32: a string being built
+DC_BSS_BAND equ 320
+dc_band     equ os88_image_end + DC_BSS_BAND    ; 704: the composer's band,
+                                        ; 176 x 32 (os88gfx.inc's GFXE_BAND)
+DC_BSS      equ DC_BSS_BAND + 176 / 8 * 32  ; 1024: a multiple of 16
+%if 142 > 160 || 160 + 20 > DC_BSS_EBUF || DC_BSS_EBUF + DC_ESZ > 212 || 212 + DCP_APPTSZ > DC_BSS_RMSG || DC_BSS_RMSG + 42 > DC_BSS_LINE || DC_BSS_LINE + 32 > DC_BSS_BAND || DC_BSS % 16
+  %error "deskcal: its own bss has outgrown its offsets"
 %endif
 
 
@@ -221,24 +249,14 @@ DC_BSS      equ 304                     ; a multiple of 16 (os88dia.inc)
 dc_entry:
     push si
     push di
-    push si
-    call OSAPI_VIDEO            ; DL = the adapter: the TEMPLATE takes its
-    pop si                      ; preferred frame BEFORE the create, whose
-    cmp dl, VID_CGA             ; wm_fit runs before PREFER can - a 255-row
-    jbe .kind                   ; template on a CGA was cut to the band and
-    mov dl, VID_VGA             ; its y clamped for a height it never had
-.kind:                          ; (SPEC.md 107.3). EGA takes VGA's, as the
-    mov bl, dl                  ; kernel does (11.100.1)
-    xor bh, bh
-    shl bx, 1
-    shl bx, 1
-    mov ax, [dc_pref + bx]
-    mov [dc_tpl + WT_W], ax
-    mov ax, [dc_pref + bx + 2]
-    mov [dc_tpl + WT_H], ax     ; ...and dia_anchor measures with it too
     mov di, dc_tpl
-    call dia_load               ; places the template; CF = 1 one is open
-    jc .out
+    call dia_load               ; QUERY, the layout by the screen's height,
+    jc .out                     ; the template's size and place (107.11)
+    mov al, [dia_li]
+    mov ah, DCG_SZ
+    mul ah
+    add ax, dc_geos
+    mov [dc_geo], ax            ; our own geometry for that layout
     call dc_check               ; a payload whose counts or order are not
     jnc .ok                     ; ours is a DAMAGED file: empty, and the
     push es                     ; first save asks before it replaces it
@@ -263,32 +281,28 @@ dc_entry:
     mov [dc_sel], al
     call dc_build
     call dc_arange              ; the day's appointments
+    mov byte [dc_pane0], 0FFh
+    call dc_c3calc              ; card 3 as the file left it - and a CGA's
+    cmp byte [dia_li], 2        ; slot opens on the reminder when it rings
+    jne .mk
+    cmp byte [dc_c3k], DC3_RING
+    jne .mk
+    mov byte [dc_pane], 2
+    mov byte [dc_pane0], 0
+.mk:
     mov si, dc_tpl
     call OSAPI_WM_CREATE        ; BX = the window, CF = the table is full
     jc .out
     mov [dc_win], bx
     OS88_REGION_MOVABLE
     mov al, 1
-    call OSAPI_WM_OWNBG         ; we lay every pixel of the content
-    mov al, OSAPI_SAVEU_ON | OSAPI_SAVEU_1BPP
-    call OSAPI_WM_SAVEU         ; two colours: a one-plane raise cache
-    mov al, 1
     call OSAPI_WM_KEEPH         ; a fixed layout: hang over the dock, never cut
-    mov si, dc_pref
-    call OSAPI_WM_PREFER        ; TALL, or COMPACT on a CGA
-    mov ax, dc_onresize
-    call OSAPI_WM_ONRESIZE
     mov si, dc_menus
     call OSAPI_MENU_SET
     mov si, dc_about
     call OSAPI_ABOUT_SET
-    mov cx, [es:bx + W_W]       ; the box as PREFER left it: the frame less
-    sub cx, 2                   ; its border and its title bar (OSAPI_WM_GEOM
-    mov dx, [es:bx + W_H]       ; answers "not visible" until the loader has
-    sub dx, TITLE_H + 1         ; shown us)
-    call dc_layout
     call dc_menulive            ; the greyed items, as the payload stands
-    call dia_made               ; LAST: after KEEPH and PREFER (os88dia.inc)
+    call dia_made               ; LAST: MAKE, the prefilters, the tick
     clc
 .out:
     pop di
@@ -296,46 +310,24 @@ dc_entry:
     ret
 
 ; -----------------------------------------------------------------------------
-; dc_paint - W_PAINT (SI = the window; lock held, the clip armed)
+; dc_paint - W_PAINT (SI = the window; lock held, the clip armed): the
+; include's paint - the ground, every card's slabs, the tag - then the About
+; card over it while it is up
 ; -----------------------------------------------------------------------------
 dc_paint:
-    push ax
+    mov byte [dc_clip], 1
+    call dia_paint
+    cmp byte [dc_abon], 0
+    je .x
     push bx
-    push cx
-    push dx
     push si
-    mov bx, si
-    call OSAPI_WM_GEOM          ; CX, DX = the content box
-    jc .x
-    call dc_layout
-    call dc_org
-    call dc_all
-    cmp byte [dc_abon], 0       ; the About card LAST, over the lot, through
-    je .x                       ; the _d entry: the region is armed already
     mov bx, [dc_win]
     mov si, dc_ablines
     call os88ui_about_d
-.x:
-    call dia_painted            ; kern_small: the worker (SPEC.md 107.5.2)
     pop si
-    pop dx
-    pop cx
     pop bx
-    pop ax
+.x:
     ret
-
-; dc_onresize - the box moved under us (SPEC.md 11.98): SI = the window,
-; CX/DX = the new content box. No drawing; the full paint follows
-dc_onresize:
-    call dc_layout
-    push ax                     ; TALL and COMPACT page at different counts:
-    mov al, [dc_atop]           ; each list's top re-derived as the page of
-    add al, [dc_afirst]         ; the new layout that holds it (SPEC.md 107.3)
-    call dc_aview
-    mov al, [dc_ttop]
-    call dc_tview
-    pop ax
-    jmp dc_menulive             ; Show Tasks greys on TALL
 
 ; -----------------------------------------------------------------------------
 ; the About card (SPEC.md 12.2, 20.5.1)
@@ -351,15 +343,16 @@ dc_about:
     pop bx
     ret
 
-; dc_abdismiss - the card down if it is up, and CF = 1: the event was that
+; dc_abdismiss - the card down if it is up - the whole face again, ONE
+; repaint (os88dia.inc's dia_redraw) - and CF = 1: the event was that
 dc_abdismiss:
     cmp byte [dc_abon], 0
     je .no
     mov byte [dc_abon], 0
-    call dc_arm
-    jc .gone
-    call dc_all
-.gone:
+    push si
+    mov si, [dc_win]
+    call dia_redraw
+    pop si
     stc
     ret
 .no:
@@ -460,15 +453,52 @@ dc_month_q:
 .b:
     jmp dc_build
 
-; dc_select - select day AL of the month on show
+; dc_newday - the selected day changed: its appointments, from their first;
+; an appointment selected on the old day is selected no more
+dc_newday:
+    call dc_arange
+    mov byte [dc_atop], 0
+    cmp byte [dc_selk], DCS_APPT
+    jne .x
+    mov byte [dc_selk], 0
+.x:
+    jmp dc_menulive
+
+; dc_select - select day AL of the month on show: the old day's box and the
+; new day's, a sub-rect each, and card 2 (SPEC.md 107.3: <= 5 calls)
 dc_select:
     cmp al, [dc_sel]
-    je .x
+    je .r
     push ax
-    call dc_sidx                ; AL = the old index
+    push bx
+    push ax
+    call dc_sidx
+    mov bl, al                  ; BL = the old index
+    pop ax
+    mov [dc_sel], al
+    call dc_newday
+    call dc_arm
+    jc .x
+    mov al, bl
+    call dc_rbox
+    call dc_sidx
+    call dc_rbox
+    call dc_rday
+.x:
     pop bx
-    mov [dc_sel], bl
-    call dc_reselect
+    pop ax
+.r:
+    ret
+
+; dc_regrid - a new month on show: the grid, the day's list, card 1 from the
+; nav down and card 2 (SPEC.md 107.3: <= 8 calls)
+dc_regrid:
+    call dc_build
+    call dc_newday
+    call dc_arm
+    jc .x
+    call dc_rmon
+    call dc_rday
 .x:
     ret
 
@@ -496,6 +526,143 @@ dc_gotoday:
     pop ax
     ret
 
+; --- the redraws the edits use (the clip armed by dc_arm) --------------------
+
+; dc_rday - card 2 whole (the slot on COMPACT)
+dc_rday:
+    push ax
+    mov al, 1
+    call dc_rcardw
+    pop ax
+    ret
+
+; dc_rmon - card 1 from the nav down: a new month on show
+dc_rmon:
+    push ax
+    push bx
+    push dx
+    push di
+    mov di, [dc_geo]
+    mov bl, [di + DCG_NAVY]
+    xor bh, bh
+    sub bx, 2
+    xor al, al
+    call dc_chgt
+    dec dx
+    call dc_rrows
+    pop di
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; dc_rhdr - card 1's header block: today's page, a new date
+dc_rhdr:
+    push ax
+    push bx
+    push dx
+    push di
+    mov di, [dc_geo]
+    mov dl, [di + DCG_HDRB]
+    xor dh, dh
+    xor bx, bx
+    xor al, al
+    call dc_rrows
+    pop di
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; dc_rbox - grid index AL's box alone (0FFh: nothing), a sub-rect
+dc_rbox:
+    cmp al, 0FFh
+    je .r
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov di, [dc_geo]
+    xor ah, ah
+    mov bl, 7
+    div bl                      ; AL = the week, AH = the column
+    mov cl, ah
+    mul byte [di + DCG_WP]
+    add al, [di + DCG_W0]
+    adc ah, 0
+    mov bl, [di + DCG_BOXT]
+    xor bh, bh
+    sub ax, bx
+    mov bx, ax                  ; BX = the box's first row
+    mov dl, [di + DCG_BOXH]
+    xor dh, dh
+    add dx, bx
+    dec dx
+    mov al, cl
+    mov ah, DC_FLDW
+    mul ah
+    add ax, DC_FLD0 + 2         ; the box's first pixel...
+    mov cx, ax
+    add ax, DC_BOXW - 1         ; ...and its last
+    push cx
+    mov cl, 3
+    shr ax, cl
+    mov ch, al
+    pop ax
+    shr ax, cl
+    mov cl, al
+    xor al, al
+    call dc_rrect
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.r:
+    ret
+
+; dc_rtbox - task AL's box alone, when it is on show
+dc_rtbox:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    cmp byte [dia_li], 2
+    jne .on
+    cmp byte [dc_pane], 1
+    jne .x                      ; COMPACT, and the tasks are not the page
+.on:
+    sub al, [dc_ttop]
+    jb .x
+    push ax
+    call dc_tslot               ; is the row an item (and not the pager)?
+    pop ax
+    jc .x
+    call dc_trow                ; DX = the box's top
+    mov bx, dx
+    mov di, [dc_geo]
+    mov al, [di + DCG_BOX]
+    xor ah, ah
+    add dx, ax
+    dec dx
+    add ax, 7                   ; its bytes: from x 8
+    mov ch, al
+    shr ch, 1
+    shr ch, 1
+    shr ch, 1
+    mov cl, 1
+    mov al, 1
+    call dc_rrect
+.x:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 ; dc_onkey - W_ONKEY (AL = ASCII, AH = scancode, SI = the window; lock held).
 ; With the entry field open every key is the field's (os88line_key) and only
@@ -507,6 +674,7 @@ dc_onkey:
     push cx
     push dx
     push si
+    mov byte [dc_clip], 0
     call dc_abdismiss           ; a key takes the card down and is spent
     jc .x
     cmp byte [dc_ed], 0
@@ -548,6 +716,10 @@ dc_onkey:
     je .na
     cmp al, 'k'
     je .nt
+    cmp al, 's'
+    je .snz
+    cmp al, 'd'
+    je .dis
     cmp al, ','                 ; '<' and '>', shifted or not
     je .pu
     cmp al, '<' | 0x20
@@ -588,6 +760,12 @@ dc_onkey:
 .nt:
     call dc_newt
     jmp short .x
+.snz:
+    call dc_snooze
+    jmp short .x
+.dis:
+    call dc_dismiss
+    jmp short .x
 .enter:
     call dc_edit
     jmp short .x
@@ -595,8 +773,7 @@ dc_onkey:
     call dc_askdel
     jmp short .x
 .esc:
-    xor bx, bx                  ; nothing selected
-    call dc_selset
+    call dc_release
     jmp short .x
 .tab:
     call dc_pswap
@@ -610,6 +787,26 @@ dc_onkey:
     pop si
     pop dx
     pop cx
+    pop bx
+    pop ax
+    ret
+
+; dc_release - Esc: the bar and the keys back to the front application
+; (OSAPI_WM_DESK RELEASE, SPEC.md 11.103.4) - and on kern_small, where there
+; is none, nothing selected, as v1
+dc_release:
+    push ax
+    push bx
+    test byte [dia_wf], DIA_W_DESK
+    jz .sel
+    mov bx, [dc_win]
+    mov al, 3
+    call OSAPI_WM_DESK
+    jmp short .x
+.sel:
+    xor bx, bx
+    call dc_selset
+.x:
     pop bx
     pop ax
     ret
@@ -640,91 +837,78 @@ dc_fkey:
     ret
 
 ; -----------------------------------------------------------------------------
-; dc_onclick - W_ONCLICK (CX, DX = the screen point, SI = the window; lock
-; held). A day selects; the header's end cells step the month; under the rule
-; the lists (SPEC.md 107.3). SI goes back as it came (SPEC.md 13.7)
+; dc_oncard - DIA_ONCARD (AL = the card, CX, DX the press card-relative, SI =
+; the window; W_ONCLICK's environment). A day, a task's box and a line act
+; NOW; a button LIGHTS and waits for its release (dc_oncardup)
 ; -----------------------------------------------------------------------------
-dc_onclick:
+dc_oncard:
     push ax
     push bx
     push cx
     push dx
     push si
     push di
+    mov byte [dc_clip], 0
     call dc_abdismiss
     jc .x
-    call dc_org
-    cmp byte [dc_ed], 0         ; the field open: a press in it places the
-    je .cal                     ; caret, and anything else waits
+    call dc_hit                 ; [dc_hk] / [dc_hi] / [dc_hb] and its rect
+    mov bl, [dc_hk]
+    cmp byte [dc_ed], 0
+    je .shut
+    cmp bl, DCH_FIELD           ; the field open: a press in it places the
+    jne .x                      ; caret, and anything else waits
+    call dc_fclick
+    jmp short .x
+.shut:
+    cmp bl, DCH_DAY
+    jne .b
+    mov al, [dc_hi]
+    call dc_select
+    jmp short .x
+.b:
+    cmp bl, DCH_BTN
+    jne .a
+    inc al                      ; THE BUTTON: lit now, acted on at its release
+    mov [dc_lit], al
+    dec al
+    mov ah, [dc_hb]
+    mov [dc_lact], ah
+    mov bx, [dc_hx0]
+    mov [dc_lx0], bx            ; (and dc_lx1)
+    mov bx, [dc_hy0]
+    mov [dc_ly0], bx
+    mov dx, [dc_hy1]
+    mov [dc_ly1], dx
     call dc_arm
     jc .x
-    call dc_frect
-    mov si, dc_ln
-    mov bx, [si + LN_CAR]       ; the bar's old cell
-    call os88line_click
-    jc .x                       ; outside the field
-    mov ax, [si + LN_CAR]
-    cmp ax, bx
-    je .x                       ; the same cell: nothing moved
-    xchg ax, bx
-    call os88line_caroff        ; ...and the BAR follows it: the old cell
-    xchg ax, bx                 ; repainted, the new bar drawn (the DOS box's
-    call os88line_caron         ; dos_caret_to, SPEC.md 107.3)
+    mov cx, [dc_lx0]
+    call dc_rrect
     jmp short .x
-.cal:
-    push cx                     ; the screen point, for a check box's hit
-    push dx
-    sub cx, [dc_ox]             ; content-relative
-    sub dx, [dc_oy]
-    js .xp
-    mov di, [dc_lay]
-    mov ax, cx
-    mov cl, 3
-    shr ax, cl                  ; AX = the cell
-    cmp dx, [di + DCL_RULE]
-    jae .lists
-    mov bx, dx
-    sub bx, [di + DCL_HDR]
-    cmp bx, 8
-    jae .grid
-    or ax, ax
-    jz .prev
-    cmp ax, DC_CELLS - 1
-    jne .xp
-    mov al, 1
-    call dc_month
-    jmp short .xp
-.prev:
-    mov al, 0FFh
-    call dc_month
-    jmp short .xp
-.grid:
-    sub ax, DC_FLD0             ; the cell among the fields
-    jb .xp
-    cmp ax, 7 * DC_FLDW
-    jae .xp                     ; the margin after Saturday
-    mov bl, DC_FLDW
-    div bl                      ; AL = the column
-    mov cl, al
-    mov ax, dx
-    sub ax, [di + DCL_W0]
-    jb .xp
-    mov bl, [di + DCL_PITCH]
-    div bl                      ; AL = the row
-    cmp al, 6
-    jae .xp
-    mov bl, 7
-    mul bl
-    add al, cl                  ; the grid index
-    mov bl, al
-    xor bh, bh
-    mov al, [dc_grid + bx]
-    or al, al
-    jz .xp                      ; a blank field: before the 1st, after the last
-    call dc_select
-.xp:
-    pop dx
-    pop cx
+.a:
+    mov bh, [dc_hi]
+    cmp bl, DCH_ALINE
+    jne .tb
+    mov bl, DCS_APPT
+    jmp short .sel
+.tb:
+    cmp bl, DCH_TBOX
+    jne .tt
+    mov al, bh
+    call dc_toggle
+    jmp short .x
+.tt:
+    cmp bl, DCH_TTEXT
+    jne .x
+    mov bl, DCS_TASK
+.sel:
+    cmp bl, [dc_selk]           ; the item ALREADY selected: edit it
+    jne .ss
+    cmp bh, [dc_seli]
+    jne .ss
+    call dc_edit
+    jmp short .x
+.ss:
+    call dc_selset
 .x:
     pop di
     pop si
@@ -733,156 +917,116 @@ dc_onclick:
     pop bx
     pop ax
     ret
-.lists:                         ; AX = the cell, DX = the row (relative)
-    mov bx, dx
-    sub bx, [di + DCL_HEAD]
-    cmp bx, 8
-    jae .ag
-    call dc_tsolo               ; the row under the rule: COMPACT's swap
-    jnc .swap
-    cmp word [di + DCL_SPLIT], 0
-    jne .xp
-.swap:
-    call dc_pswap
-    jmp short .xp
-.ag:
-    call dc_aon
-    jc .tk
-    mov bx, dx
-    sub bx, [di + DCL_PANE]
-    jb .tk
-    xchg ax, bx
-    div byte [di + DCL_APITCH]  ; AL = the agenda line (a line's gap is its)
-    xchg ax, bx                 ; BL = it, AL = the cell again
-    xor bh, bh
-    cmp bx, [di + DCL_AN]
-    jae .tk
-    mov ah, al                  ; AH = the cell
-    mov al, bl
-    call dc_aclick
-    jmp short .xp
-.tk:
-    call dc_ton
-    jc .xp
-    mov bx, dx
-    sub bx, [di + DCL_T0]
-    jb .xp
-    xchg ax, bx
-    mov cl, DC_TPITCH
-    div cl                      ; AL = the task row
-    cmp al, [di + DCL_TN]
-    jae .xp
-    pop dx                      ; the screen point back, for the box
-    pop cx
-    push cx
-    push dx
-    call dc_tclick
-    jmp short .xp
 
-; dc_aclick - a press on agenda line AL, cell AH: the pager pages, an
-; appointment is selected - and its reminder flips when the press is on its
-; mark - and a blank line selects nothing
-dc_aclick:
+; dc_fclick - a press in the open field (card-relative [dc_qx]/[dc_qy]):
+; the caret to it - the old bar's cell repainted and the new bar drawn
+dc_fclick:
+    call dc_arm
+    jc .r
+    call dc_frect
+    mov cx, [dia_fx]
+    add cx, [dc_qx]
+    mov al, 1
+    call dia_ctop
+    mov dx, [dia_fy]
+    add dx, bx
+    add dx, [dc_qy]
+    mov si, dc_ln
+    mov bx, [si + LN_CAR]       ; the bar's old cell
+    call os88line_click
+    jc .r                       ; outside the field
+    mov ax, [si + LN_CAR]
+    cmp ax, bx
+    je .r                       ; the same cell: nothing moved
+    xchg ax, bx
+    call os88line_caroff
+    xchg ax, bx
+    call os88line_caron
+.r:
+    ret
+
+; -----------------------------------------------------------------------------
+; dc_oncardup - DIA_ONCARDUP (AL = the card the PRESS went to, CX, DX the
+; release card-relative - it may be off the card): a held button un-lights,
+; and acts when the release is inside it (SPEC.md 13.5). The un-light is
+; owed (dc_lpend) and settled by the act's own redraw when that covers it
+; -----------------------------------------------------------------------------
+dc_oncardup:
     push ax
     push bx
     push cx
+    push dx
     push si
-    mov ch, ah                  ; CH = the cell
-    call dc_apage               ; BL = a page, BH = 1 there are pages
+    push di
+    mov byte [dc_clip], 0
+    mov bl, [dc_lit]
+    or bl, bl
+    jz .x
+    mov [dc_lpend], bl
+    mov byte [dc_lit], 0
+    dec bl
     cmp al, bl
-    jb .item
-    or bh, bh
-    jz .none
-    mov al, [dc_atop]           ; the pager: the next page, or the first
-    add al, bl
-    cmp al, [dc_acnt]
-    jb .pg
-    xor al, al
-.pg:
-    mov [dc_atop], al
+    jne .owe
+    cmp dx, [dc_ly0]            ; inside its rect?
+    jl .owe
+    cmp dx, [dc_ly1]
+    jg .owe
+    or cx, cx
+    js .owe
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1
+    cmp cl, [dc_lx0]
+    jb .owe
+    cmp cl, [dc_lx1]
+    ja .owe
+    mov bl, [dc_lact]
+    dec bl
+    xor bh, bh
+    shl bx, 1
+    call [dc_bacts + bx]
+.owe:
+    mov bl, [dc_lpend]          ; still owed: drawn plain again
+    or bl, bl
+    jz .x
+    mov byte [dc_lpend], 0
     call dc_arm
     jc .x
-    call dc_agnew
-    jmp short .x
-.item:
-    add al, [dc_atop]
-    cmp al, [dc_acnt]
-    jae .none
-    add al, [dc_afirst]         ; AL = the appointment
-    cmp ch, DC_AMARK
-    jne .sel
-    call dc_busy
-    jc .sel
-    call dc_aptr
-    cmp word [si + DCA_TIME], DC_ALLDAY
-    je .sel
-    xor byte [si + DCA_FLAGS], DCA_REMIND   ; the reminder, on or off, at
-    and byte [si + DCA_FLAGS], ~DCA_FIRED & 0FFh ; its own lead
-    call dc_stale               ; ...fired at once if its moment is past
-    call dc_touch
-.sel:
-    mov bl, DCS_APPT
-    mov bh, al
-    call dc_selset
-    jmp short .x
-.none:
-    xor bx, bx
-    call dc_selset
+    mov al, bl
+    dec al
+    mov bx, [dc_ly0]
+    mov dx, [dc_ly1]
+    mov cx, [dc_lx0]
+    call dc_rrect
 .x:
+    pop di
     pop si
+    pop dx
     pop cx
     pop bx
     pop ax
     ret
 
-; dc_tclick - a press on task row AL at the screen point CX, DX: the pager
-; pages; on a task, a press on its BOX (os88ui_bhit on the box's rect)
-; toggles it - dc_toggle, which fills the mark and nothing else - and
-; anywhere else selects it
-dc_tclick:
-    push ax
-    push bx
-    push si
-    call dc_titem               ; AL = the task, or BH = the pager
-    jnc .item
-    or bh, bh
-    jz .none
-    mov al, [dc_ttop]
-    add al, bl
-    cmp al, [DIA_PAY + DCP_NTASK]
-    jb .pg
-    xor al, al
-.pg:
-    mov [dc_ttop], al
-    call dc_arm
-    jc .x
-    xor al, al
-    call dc_tasks
-    jmp short .x
-.item:
-    call dc_busy
-    jc .sel
-    push ax
-    sub al, [dc_ttop]           ; the row again
-    call dc_ckaim               ; the box's rect (dc_org is current)
-    mov bx, dc_ck
-    call os88ui_bhit            ; CF = 0 the press is on the box
-    pop ax
-    jc .sel
-    call dc_toggle
-    jmp short .x
-.sel:
-    mov bl, DCS_TASK
-    mov bh, al
-    call dc_selset
-    jmp short .x
-.none:
-    xor bx, bx
-    call dc_selset
-.x:
-    pop si
-    pop bx
-    pop ax
+dc_bacts:   dw dc_bprev, dc_bnext, dc_gotoday, dc_plus, dc_apager
+            dw dc_tpager, dc_snooze, dc_dismiss, dc_pswap
+
+dc_bprev:
+    mov al, 0FFh
+    jmp dc_month
+dc_bnext:
+    mov al, 1
+    jmp dc_month
+
+; dc_onfocus - DIA_ONFOCUS (AL = 1 gained the bar, 0 lost it): losing it
+; closes an open field, as Esc does (SPEC.md 107.3)
+dc_onfocus:
+    mov byte [dc_clip], 0
+    or al, al
+    jnz .r
+    cmp byte [dc_ed], 0
+    je .r
+    call dc_fclose
+.r:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -892,14 +1036,9 @@ dc_tclick:
 dc_oncmd:
     push ax
     push bx
-    cmp byte [dc_abon], 0       ; a pick takes the card down BY its own draw:
-    je .go                      ; one whole paint rather than the card's
-    mov byte [dc_abon], 0       ; repaint and then the month over it (SPEC.md
-    mov byte [dc_redo], 1       ; 107.3) - and a field under it goes with it,
-    mov byte [dc_ed], 0         ; unseen
-    mov byte [dc_ln + LN_FOCUS], 0
-    call dc_menulive
-.go:
+    mov byte [dc_clip], 0
+    call dc_abdismiss           ; a pick takes the card down - one repaint -
+                                ; then acts on what it shows
     cmp byte [dc_ed], 0
     je .shut
     call dc_fclose
@@ -907,21 +1046,13 @@ dc_oncmd:
     cmp ah, 1
     je .remind
     cmp al, DCM_TODAY
-    jae .month                  ; the three that draw a month themselves
-    cmp byte [dc_redo], 0       ; the rest draw onto the content as it is:
-    je .cmd                     ; the card's ground first
-    mov byte [dc_redo], 0
-    call dc_arm
-    jc .cmd
-    call dc_all
-.cmd:
+    jae .month
     xor ah, ah
     mov bx, ax
     shl bx, 1
     call [dc_cmds + bx]
     jmp short .x
 .remind:
-    call dc_redo1
     call dc_remind
     jmp short .x
 .month:
@@ -930,31 +1061,16 @@ dc_oncmd:
     je .prev
     mov al, 1
     call dc_month
-    jmp short .done
+    jmp short .x
 .prev:
     mov al, 0FFh
     call dc_month
-    jmp short .done
+    jmp short .x
 .today:
     call dc_gotoday
-.done:
-    cmp byte [dc_redo], 0       ; the pick drew nothing - refused at an end
-    je .x                       ; of the range, or today selected already -
-    call dc_redo1               ; and the card's ground is still owed
 .x:
     pop bx
     pop ax
-    ret
-
-; dc_redo1 - the whole content now if a pick took the About card down
-dc_redo1:
-    cmp byte [dc_redo], 0
-    je .x
-    mov byte [dc_redo], 0
-    call dc_arm
-    jc .x
-    call dc_all
-.x:
     ret
 
 dc_cmds:    dw dc_newa, dc_newt, dc_edit, dc_askdel, dc_clear, dc_pswap
@@ -1025,10 +1141,10 @@ dc_menulive:
     mov [dc_i_cal + 2 * DCM_EDIT], ax
     mov [dc_i_cal + 2 * DCM_DEL], di
     cmp byte [dc_ed], 0         ; the field open: the three that would close
-    je .ne                      ; it, throwing its line away, and open
-    mov word [dc_i_cal + 2 * DCM_NEWA], dc_i_newa1  ; another over the band
-    mov word [dc_i_cal + 2 * DCM_NEWT], dc_i_newt1  ; that close just drew
-    mov word [dc_i_cal + 2 * DCM_EDIT], dc_i_edit1  ; (SPEC.md 107.3)
+    je .ne                      ; it, throwing its line away
+    mov word [dc_i_cal + 2 * DCM_NEWA], dc_i_newa1
+    mov word [dc_i_cal + 2 * DCM_NEWT], dc_i_newt1
+    mov word [dc_i_cal + 2 * DCM_EDIT], dc_i_edit1
 .ne:
     mov ax, dc_i_clr
     call dc_anydone
@@ -1036,12 +1152,13 @@ dc_menulive:
     mov ax, dc_i_clr0
 .c:
     mov [dc_i_cal + 2 * DCM_CLEAR], ax
-    mov di, [dc_lay]
-    mov ax, dc_i_pane0
-    cmp word [di + DCL_SPLIT], 0
+    mov ax, dc_i_pane0          ; Show Tasks / Reminder / Day: COMPACT's slot
+    cmp byte [dia_li], 2
     jne .p
     mov ax, dc_i_showt
-    cmp byte [dc_pane], 0
+    cmp byte [dc_pane], 1
+    jb .p
+    mov ax, dc_i_showr
     je .p
     mov ax, dc_i_showd
 .p:
@@ -1051,113 +1168,101 @@ dc_menulive:
     popf
     ret
 
-; dc_selset - select BL = 0 (nothing), DCS_APPT or DCS_TASK, index BH: the
-; old item's line drawn plain and the new one's inverse, where they are on
-; show. Every register kept
+; dc_selset - select BL = 0 (nothing), DCS_APPT or DCS_TASK, index BH: card
+; 2 again, where it shows. Every register kept
 dc_selset:
     push ax
-    push bx
     mov al, [dc_selk]
     mov ah, [dc_seli]
     mov [dc_selk], bl
     mov [dc_seli], bh
     call dc_menulive
+    cmp ax, bx
+    je .x
     call dc_arm
     jc .x
-    cmp ax, bx
-    je .new                     ; the same item: drawn once
-    push bx
-    mov bx, ax
-    call dc_selitem
-    pop bx
-.new:
-    call dc_selitem
+    call dc_rday
 .x:
-    pop bx
     pop ax
     ret
 
-; dc_selitem - redraw item BL / BH where it is on show (the clip armed)
-dc_selitem:
-    push ax
-    push bx
-    mov al, bh
-    cmp bl, DCS_APPT
-    je .appt
-    cmp bl, DCS_TASK
-    jne .x
-    call dc_ton
-    jc .x
-    sub al, [dc_ttop]
-    jb .x
-    push bx
-    call dc_tpage
-    cmp al, bl
-    pop bx
-    jae .x
-    call dc_ttext
-    jmp short .x
-.appt:
-    call dc_aon
-    jc .x
-    sub al, [dc_afirst]
-    jb .x
-    cmp al, [dc_acnt]
-    jae .x
-    sub al, [dc_atop]
-    jb .x
-    push bx
-    call dc_apage
-    cmp al, bl
-    pop bx
-    jae .x
-    call dc_aline
-.x:
-    pop bx
-    pop ax
-    ret
-
-; dc_pswap - COMPACT: the other list (Tab, a click on its heading, the menu).
-; The heading and the pane under it; nothing on TALL, which shows both
+; dc_pswap - COMPACT's slot: the next page (Tab, a press on its heading, the
+; menu). The user's paging is the user's: a ringing reminder's hold on the
+; slot is given up. Nothing on TALL / MID, which show all three cards
 dc_pswap:
-    push di
-    mov di, [dc_lay]
-    cmp word [di + DCL_SPLIT], 0
-    jne .x
-    xor byte [dc_pane], 1
+    cmp byte [dia_li], 2
+    jne .r
+    push ax
+    mov al, [dc_pane]
+    inc ax
+    cmp al, 3
+    jb .s
+    xor al, al
+.s:
+    mov [dc_pane], al
+    mov byte [dc_pane0], 0FFh
     call dc_menulive
     call dc_arm
     jc .x
-    call dc_day
-    call dc_plist
+    call dc_rday
 .x:
-    pop di
+    pop ax
+.r:
     ret
 
-; dc_plist - COMPACT's one list, whole, under its heading (the clip armed)
-dc_plist:
+; dc_apager / dc_tpager - `+N more`: the list's next page, the last page's
+; the first
+dc_apager:
     push ax
     push bx
-    push cx
-    push dx
-    push di
-    cmp byte [dc_pane], 0
-    jne .t
-    mov ax, 0x0100
-    call dc_agenda              ; every line, and the gaps between them
-    call dc_aend                ; BX = the agenda's end
-    mov dx, [dc_ch]
-    dec dx
-    call dc_fill
-    jmp short .x
-.t:
-    call dc_tpaint
+    mov bx, [dc_geo]
+    mov al, [bx + DCG_AN]
+    dec ax
+    add al, [dc_atop]
+    cmp al, [dc_acnt]
+    jb .s
+    xor al, al
+.s:
+    mov [dc_atop], al
+    jmp short dc_pgdraw
+
+dc_tpager:
+    push ax
+    push bx
+    mov bx, [dc_geo]
+    mov al, [bx + DCG_TN]
+    dec ax
+    add al, [dc_ttop]
+    cmp al, [DIA_PAY + DCP_NTASK]
+    jb .s
+    xor al, al
+.s:
+    mov [dc_ttop], al
+dc_pgdraw:
+    call dc_arm
+    jc .x
+    call dc_rday
 .x:
-    pop di
-    pop dx
-    pop cx
     pop bx
     pop ax
+    ret
+
+; dc_plus - `+`: the field for EITHER (the parse decides) - or, on COMPACT's
+; tasks page, for a task
+dc_plus:
+    cmp byte [dia_li], 2
+    jne .any
+    cmp byte [dc_pane], 1
+    je dc_newt
+.any:
+    call dc_busy
+    jc .r
+    push ax
+    mov al, DCE_NEW
+    mov byte [dc_ebuf], 0
+    call dc_fopen
+    pop ax
+.r:
     ret
 
 ; dc_newa / dc_newt - the field, empty, for a new appointment on the selected
@@ -1200,7 +1305,8 @@ dc_newt:
     pop ax
     ret
 
-; dc_edit - the field holding the selected item (Enter, Edit Item)
+; dc_edit - the field holding the selected item (Enter, a second press, Edit
+; Item)
 dc_edit:
     call dc_busy
     jc .r
@@ -1267,18 +1373,19 @@ dc_copyz:
     pop ax
     ret
 
-; dc_fopen - open the field, mode AL (DCE_*), holding what dc_ebuf holds: in
-; its heading's place, on COMPACT with that heading's list on show
+; dc_fopen - open the field, mode AL (DCE_*), holding what dc_ebuf holds, in
+; card 2's heading row - on COMPACT with the page its list is on
 dc_fopen:
     push ax
     push cx
-    push di
     mov [dc_ed], al
     call dc_menulive            ; the three that would close it grey
     mov word [dc_ln + LN_BUF], dc_ebuf
     mov word [dc_ln + LN_MAX], DC_ESZ
     cmp al, DCE_NEWT
     jb .m
+    cmp al, DCE_EDT
+    ja .m
     mov word [dc_ln + LN_MAX], DCT_TMAX + 1
 .m:
     mov byte [dc_ln + LN_FOCUS], 1
@@ -1287,18 +1394,20 @@ dc_fopen:
     mov si, dc_ln
     call os88line_resync        ; the caret at the end of what is there
     pop si
-    xor ah, ah                  ; AH = the list the field belongs to
-    cmp al, DCE_NEWT
-    jb .l
-    inc ah
-.l:
-    xor cl, cl                  ; CL = 1: COMPACT, and the other list
-    mov di, [dc_lay]
-    cmp word [di + DCL_SPLIT], 0
+    xor cl, cl                  ; CL = 1: COMPACT turned to another page
+    cmp byte [dia_li], 2
     jne .a
+    mov ah, 0                   ; the page its list is on: the day's, or the
+    cmp al, DCE_NEWT            ; tasks'; `+` stays where it was pressed
+    jb .pg
+    cmp al, DCE_EDT
+    ja .a
+    inc ah
+.pg:
     cmp [dc_pane], ah
     je .a
     mov [dc_pane], ah
+    mov byte [dc_pane0], 0FFh
     call dc_menulive
     inc cx
 .a:
@@ -1306,64 +1415,85 @@ dc_fopen:
     jc .x
     or cl, cl
     jz .d
-    call dc_plist               ; that list, then the field over its heading
-.d:                             ; - the heading's own run is not drawn first
+    call dc_rday                ; the page, and the field over its heading
+    jmp short .x                ; (dc_fover) - its heading not composed
+.d:
     call dc_fdraw
 .x:
-    pop di
     pop cx
     pop ax
     ret
 
-; dc_fclose - shut the field (Esc, an empty Enter, a menu pick, a commit):
-; its heading's run back, and the two gap rows it took
+; dc_fclose - shut the field (Esc, an empty Enter, a menu pick, a commit,
+; the bar lost): the heading's rows recomposed, one BLIT1
 dc_fclose:
     push ax
     push bx
     push dx
-    push si
-    push di
-    call dc_fhead               ; AX = its heading's row - asked while open
     mov byte [dc_ed], 0
     mov byte [dc_ln + LN_FOCUS], 0
     call dc_menulive            ; ...and are live again
     call dc_arm
     jc .x
-    mov di, [dc_lay]
-    mov bx, ax
-    sub bx, 3                   ; the frame's top row...
-    cmp bx, [di + DCL_RULE]
-    ja .t
-    mov bx, [di + DCL_RULE]     ; ...unless it IS the rule (COMPACT)
-    inc bx
-.t:
-    mov dx, ax
-    dec dx
-    call dc_fill
-    mov dx, ax
-    cmp ax, [di + DCL_HEAD]
-    jne .tk
-    call dc_day
-    jmp short .b
-.tk:
-    call dc_tasksh
-.b:
-    add dx, 8                   ; the frame's bottom row
-    mov bx, dx
-    call dc_fill
+    call dc_fhead               ; BX..DX = its rows
+    mov al, 1
+    call dc_rrows
+    call dc_c3sync              ; COMPACT: a reminder that rang meanwhile
 .x:
-    pop di
-    pop si
     pop dx
     pop bx
     pop ax
     ret
 
-; dc_fenter - Enter in the field: keep what it says
+; dc_fenter - Enter in the field: keep what it says. `+`'s field is an
+; appointment when the line starts with a time, else a task
 dc_fenter:
+    cmp byte [dc_ed], DCE_NEW
+    jne .k
+    push bx
+    push cx
+    push si
+    mov si, dc_ebuf
+    push word [dc_ebuf]         ; the parse trims: look, then put it back
+    call dc_ptime               ; BX = the time, DC_ALLDAY none
+    pop word [dc_ebuf]
+    mov byte [dc_ed], DCE_NEWA
+    cmp bx, DC_ALLDAY
+    jne .t
+    mov byte [dc_ed], DCE_NEWT
+.t:
+    pop si
+    pop cx
+    pop bx
+.k:
     cmp byte [dc_ed], DCE_NEWT
     jb dc_cappt
     jmp dc_ctask
+
+; dc_ptime - BX = the time the line SI starts with, DC_ALLDAY when it starts
+; with none (dc_parse's first word, on a copy). Every other register kept
+dc_ptime:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    push si                     ; the line to dc_rec, which is scratch until
+    mov di, dc_rec              ; dc_cappt builds its record there
+    mov cx, DC_ESZ
+    cld
+    rep movsb
+    pop si
+    mov si, dc_rec
+    call dc_parse               ; BX = the time
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
 
 ; dc_cappt - the field's line as an appointment on the selected day (SPEC.md
 ; 107.3): parsed, refused when its text is too long, inserted in order -
@@ -1396,6 +1526,14 @@ dc_cappt:
 .x0:
     jmp .x
 .fits:
+    cmp byte [dc_ed], DCE_EDA
+    je .room
+    cmp byte [DIA_PAY + DCP_NAPPT], DCP_MAXAPPT
+    jb .room
+    mov si, dc_s_afull          ; `+`'s line at a full table
+    call dc_toast
+    jmp .shut
+.room:
     mov byte [dc_fresh], 1      ; armed afresh, unless an edit keeps its time
     push si                     ; dc_rec := the new appointment
     push cx
@@ -1421,14 +1559,11 @@ dc_cappt:
     jnz .fl
     mov byte [dc_rec + DCA_FLAGS], DCA_REMIND
 .fl:
-    mov al, [dc_sel]
-    call dc_marked              ; ZF = 0: the day had its bullet
-    pushf
     cmp byte [dc_ed], DCE_EDA
     jne .ins
     mov al, [dc_edi]            ; EDITED: out first, and its reminder kept
-    call dc_aptr                ; while it stays timed (its FIRED only while
-    mov dx, [si + DCA_TIME]     ; its time does not move)
+    call dc_aptr                ; while it stays timed (its FIRED, DUE and
+    mov dx, [si + DCA_TIME]     ; SNOOZED only while its time does not move)
     cmp dx, DC_ALLDAY
     je .del
     cmp bx, DC_ALLDAY
@@ -1436,10 +1571,10 @@ dc_cappt:
     mov ah, [si + DCA_FLAGS]
     cmp dx, bx
     jne .moved
-    mov byte [dc_fresh], 0      ; the same time: its FIRED stands
+    mov byte [dc_fresh], 0      ; the same time: its marks stand
     jmp short .same
 .moved:
-    and ah, ~DCA_FIRED & 0FFh
+    and ah, ~(DCA_FIRED | DCA_DUE | DCA_SNOOZED) & 0FFh
 .same:
     mov [dc_rec + DCA_FLAGS], ah
     mov ah, [si + DCA_LEAD]
@@ -1448,35 +1583,29 @@ dc_cappt:
     call dc_adel
     call dc_fixsel
 .ins:
-    call dc_ains                ; AL = where it went (a new one was refused
-    jc .full                    ; at the table's end before the field opened)
+    call dc_ains                ; AL = where it went
+    jc .shut
     cmp byte [dc_fresh], 0
     je .kept
     call dc_stale               ; a moment already past: fired, silently
 .kept:
-    mov dl, [dc_selk]           ; DX = the selection before: a TASK's row is
-    mov dh, [dc_seli]           ; drawn plain again (an appointment's line is
-    mov byte [dc_selk], DCS_APPT    ; the agenda's, which is redrawn)
+    mov byte [dc_selk], DCS_APPT
     mov [dc_seli], al
     call dc_touch
-    call dc_fclose
+    mov byte [dc_ed], 0         ; shut, unseen: card 2 is drawn whole below
+    mov byte [dc_ln + LN_FOCUS], 0
     call dc_arange
     call dc_aview               ; its page
-    call dc_build               ; the day's bullet
-    mov al, [dc_sel]
-    popf
-    call dc_markfix
+    call dc_build               ; the day's dot
     call dc_menulive
     call dc_arm
     jc .x
-    call dc_agnew
-    cmp dl, DCS_TASK
-    jne .x
-    mov bx, dx
-    call dc_selitem
+    call dc_sidx
+    call dc_rbox
+    call dc_rday
+    mov byte [dc_c3f], 1        ; its text may be card 3's
+    call dc_c3sync
     jmp short .x
-.full:
-    popf
 .shut:
     call dc_fclose
 .x:
@@ -1498,15 +1627,32 @@ dc_ctask:
     push si
     mov si, dc_ebuf
     call dc_trim
-    jcxz .shut
-    mov bl, [dc_ttop]           ; the page before, to know what moved
-    mov bh, [dc_ed]             ; ...and the mode, which the close clears
+    or cx, cx
+    jz .shut0
+    cmp cx, DCT_TMAX
+    jbe .fits
+    mov si, dc_s_tlong          ; `+`'s line, typed in a 31-character field:
+    call dc_toast               ; refused, never cut (v1's rule) - the field
+    mov byte [dc_ed], DCE_NEW   ; stays open, still for either
+    mov si, dc_ln
+    call os88line_resync
+    call dc_arm
+    jc .x
+    call dc_fdraw
+    jmp short .x
+.fits:
     mov al, [dc_edi]
     cmp byte [dc_ed], DCE_EDT
     je .set
     mov al, [DIA_PAY + DCP_NTASK]
     cmp al, DCP_MAXTASK
-    jae .shut
+    jb .new
+    push si
+    mov si, dc_s_tfull
+    call dc_toast
+    pop si
+    jmp short .shut
+.new:
     push si
     call dc_tptr
     mov word [si + DCT_FLAGS], 0
@@ -1515,35 +1661,23 @@ dc_ctask:
     inc byte [DIA_PAY + DCP_NTASK]
 .set:
     call dc_tset
-    push word [dc_selk]         ; the selection before (SELK, SELI adjacent)
     mov byte [dc_selk], DCS_TASK
     mov [dc_seli], al
     call dc_touch
-    call dc_fclose
+    mov byte [dc_ed], 0         ; shut, unseen: card 2 is drawn whole below
+    mov byte [dc_ln + LN_FOCUS], 0
     call dc_tview               ; its page
+    cmp byte [dia_li], 2
+    jne .draw
+    mov byte [dc_pane], 1       ; COMPACT: the tasks' page shows it
+    mov byte [dc_pane0], 0FFh
+.draw:
     call dc_menulive
     call dc_arm
-    pop cx                      ; CL / CH = the old selection
     jc .x
-    push bx
-    mov bx, cx                  ; ...drawn plain where it is on show, if it
-    cmp bx, [dc_selk]           ; was another item
-    je .same
-    call dc_selitem
-.same:
-    pop bx
-    sub al, [dc_ttop]           ; its row: an edit's text alone, a new one
-    cmp bl, [dc_ttop]           ; from there down (the pager is the last
-    jne .all                    ; occupied row, so it comes with it) - or
-    cmp bh, DCE_EDT             ; the whole list when the page moved
-    jne .go
-    call dc_ttext
+    call dc_rday
     jmp short .x
-.all:
-    xor al, al
-.go:
-    call dc_tasks
-    jmp short .x
+.shut0:
 .shut:
     call dc_fclose
 .x:
@@ -1592,38 +1726,32 @@ dc_tview:
     pop ax
     ret
 
-; dc_markfix - day AL of the month on show (0: none), whose bullet the flags
-; say it HAD (ZF = 0, from dc_marked before the change): when that changed,
-; its field re-run - and the frame again when it is the selected day, the
-; run laying the frame's side columns. After dc_build. Keeps every register
-dc_markfix:
-    push ax
-    push bx
-    push cx
-    pushf
-    pop bx                      ; BL bit 6 = ZF before
-    or al, al
-    jz .x
-    mov cl, al
-    call dc_marked
-    pushf
-    pop ax
-    xor al, bl
-    test al, 40h
-    jz .x
-    call dc_arm
-    jc .x
-    mov al, cl
-    add al, [dc_dow1]
-    dec ax
-    call dc_field
-    cmp cl, [dc_sel]
-    jne .x
-    call dc_selon
+; dc_apage / dc_tpage - BL = items a page, BH = 1 when there is more than
+; one page (and the last line is the pager). Every other register kept
+dc_apage:
+    push di
+    mov di, [dc_geo]
+    mov bl, [di + DCG_AN]
+    xor bh, bh
+    cmp [dc_acnt], bl
+    jbe .x
+    dec bl
+    inc bh
 .x:
-    pop cx
-    pop bx
-    pop ax
+    pop di
+    ret
+
+dc_tpage:
+    push di
+    mov di, [dc_geo]
+    mov bl, [di + DCG_TN]
+    xor bh, bh
+    cmp [DIA_PAY + DCP_NTASK], bl
+    jbe .x
+    dec bl
+    inc bh
+.x:
+    pop di
     ret
 
 ; dc_aday - AL = the day of appointment AL when its date is in the month on
@@ -1673,7 +1801,9 @@ dc_fixsel:
     ret
 
 ; dc_askdel - Del / Delete Item: ask, and let the answer delete (SPEC.md
-; 107.3). Nothing changes while the question is up (dc_busy)
+; 107.3). Nothing changes while the question is up (dc_busy). The question
+; is an ordinary window: it lands above every application and the widget
+; and takes the bar (SPEC.md 11.103.4)
 dc_askdel:
     call dc_busy
     jc .r
@@ -1692,10 +1822,8 @@ dc_askdel:
     mov si, dc_s_qtask
 .q:
     call OSAPI_WM_CLIP_CLEAR    ; the create recomposes the bar under any
-                                ; armed clip - dc_oncmd's field close or
-                                ; card repaint left ours armed - and the
-                                ; titles' cells would be recorded drawn and
-                                ; dropped, as dc_fire's were (SPEC.md 107.9)
+    mov byte [dc_clip], 0       ; armed clip, and the titles' cells would be
+                                ; recorded drawn and dropped (SPEC.md 107.9)
     mov al, OS88UI_AYESNO
     mov bx, [dc_win]
     mov di, dc_delans
@@ -1719,40 +1847,36 @@ dc_askdel:
 dc_delans:
     push ax
     push bx
+    mov byte [dc_clip], 0
     mov byte [dc_ask], 0
     or al, al
     jnz .x
     mov al, [dc_deli]
     cmp byte [dc_delk], DCS_APPT
     jne .task
-    mov bl, al                  ; BL = the appointment
-    call dc_aday                ; AL = its day, if this month is on show (the
-    mov bh, al                  ; question may have outlived a move to another
-    call dc_marked              ; day: ITS bullet is the one at stake)
-    mov al, bl
-    pushf
     call dc_adel
     call dc_fixsel
     call dc_touch
     call dc_arange
-    mov al, [dc_atop]           ; a page that emptied: the first
+    mov al, [dc_atop]           ; a page that emptied: the first...
     cmp al, [dc_acnt]
     jb .ka
     xor al, al
 .ka:
-    add al, [dc_afirst]         ; ...and the page holding the top NOW - the
-    call dc_aview               ; first, when the delete ended paging (SPEC.md
-    call dc_build               ; 107.3). dc_agnew draws from line 0 anyway
-    mov al, bh
-    popf
-    call dc_markfix
+    add al, [dc_afirst]         ; ...and the page holding the top NOW
+    call dc_aview
+    call dc_build               ; the day's dot
     call dc_menulive
     call dc_arm
-    jc .x
-    call dc_agnew
+    jc .c3
+    call dc_sidx
+    call dc_rbox
+    call dc_rday
+.c3:
+    mov byte [dc_c3f], 1
+    call dc_c3sync
     jmp short .x
 .task:
-    mov bl, [dc_ttop]
     call dc_tdel
     cmp byte [dc_selk], DCS_TASK
     jne .kt
@@ -1765,64 +1889,36 @@ dc_delans:
     dec byte [dc_seli]
 .kt:
     call dc_touch
-    push ax
     mov al, [dc_ttop]           ; a page that emptied: the first...
     cmp al, [DIA_PAY + DCP_NTASK]
     jb .tk
     xor al, al
 .tk:
-    call dc_tview               ; ...and the page holding the top NOW: the
-    pop ax                      ; first when the delete ended paging, which
-                                ; BL != [dc_ttop] below redraws whole
+    call dc_tview               ; ...and the page holding the top NOW
     call dc_menulive
     call dc_arm
     jc .x
-    sub al, [dc_ttop]           ; from its row down - or the whole list
-    jb .all
-    cmp bl, [dc_ttop]
-    jne .all
-    push bx
-    call dc_tpage
-    cmp al, bl
-    pop bx
-    jb .go
-.all:
-    xor al, al
-.go:
-    call dc_tasks
+    call dc_rday
 .x:
     pop bx
     pop ax
     ret
 
-; dc_toggle - task AL checked or not (Space, a press on its box): the mark
-; redrawn, ONE fill and nothing else (SPEC.md 107.3)
+; dc_toggle - task AL checked or not (Space, a press on its box): the box
+; redrawn, ONE sub-rect BLIT1 and nothing else (SPEC.md 107.3)
 dc_toggle:
     call dc_busy
     jc .r
-    push ax
     push si
     call dc_tptr
     xor byte [si + DCT_FLAGS], DCT_DONE
-    mov ah, [si + DCT_FLAGS]
-    and ah, DCT_DONE
     call dc_touch
     call dc_menulive
-    sub al, [dc_ttop]
-    jb .x
-    push bx
-    call dc_tpage
-    cmp al, bl
-    pop bx
-    jae .x
-    call dc_ton
-    jc .x
     call dc_arm
     jc .x
-    call dc_tmark
+    call dc_rtbox
 .x:
     pop si
-    pop ax
 .r:
     ret
 
@@ -1843,8 +1939,7 @@ dc_clear:
     call dc_menulive
     call dc_arm
     jc .x
-    xor al, al
-    call dc_tasks
+    call dc_rday
 .x:
     pop ax
 .r:
@@ -1871,21 +1966,14 @@ dc_remind:
     call dc_aptr
     cmp word [si + DCA_TIME], DC_ALLDAY
     je .def
-    and byte [si + DCA_FLAGS], ~(DCA_REMIND | DCA_FIRED) & 0FFh
+    and byte [si + DCA_FLAGS], ~(DCA_REMIND | DCA_FIRED | DCA_DUE | DCA_SNOOZED) & 0FFh
     cmp ah, 0FFh
     je .one
     or byte [si + DCA_FLAGS], DCA_REMIND
     mov [si + DCA_LEAD], ah
 .one:
     call dc_stale               ; armed for a moment already past: fired
-    push bx
-    mov bl, DCS_APPT
-    mov bh, al
-    call dc_arm
-    jc .nd
-    call dc_selitem
-.nd:
-    pop bx
+    call dc_c3sync
     mov di, dc_s_rem
     jmp short .say
 .def:
@@ -1899,7 +1987,7 @@ dc_remind:
 .say:
     call dc_touch
     push di                     ; the toast: its prefix and the lead's words
-    call dc_blank
+    mov di, dc_line
     pop si
     call dc_puts
     mov si, bx
@@ -1916,23 +2004,20 @@ dc_remind:
 
 ; -----------------------------------------------------------------------------
 ; dc_tick - DIA_ONTICK, every 36 ticks (the UI task, lock held, no clip): a
-; new DATE moves today's inverse - the old field and the new, each re-run
-; alone when it is on show, and the frame again when either is the selected
-; day (a run lays the frame's side columns). The month on show does not
-; change with the date, so nothing else is drawn; nor is anything while the
-; About card is up - the paint that takes it down shows the new today
-; (SPEC.md 107.3). Then the reminders' minute (dcrem.inc), and the second
-; note of a chirp one beat after the first.
+; new DATE recomposes today's page, today's old box and new, card 2's
+; heading and card 3; nothing is drawn while the About card is up - the
+; repaint that takes it down shows the new today (SPEC.md 107.3). Then the
+; reminders' minute (dcrem.inc), and the second note of a chirp one beat
+; after the first.
 ; out: CF = 1 HOLD the save owed (os88dia.inc): the entry field, our Delete
 ;      question is open, or an edit landed since the last poll - a save is
 ;      seconds of disk with the lock held (SPEC.md 107.6), so it waits for a
-;      quiet poll and a burst of edits is one save. A reminder's alert does
-;      NOT hold it: unanswered, it would hold every edit and drag for as
-;      long as it stays up, and lose them all at a Restart
+;      quiet poll and a burst of edits is one save
 ; -----------------------------------------------------------------------------
 dc_tick:
     push ax
     push bx
+    mov byte [dc_clip], 0
     mov ax, [dc_ltp]            ; the launch's summary (dc_missed), said HERE:
     or ax, ax                   ; the first registration writes SYSTEM.CFG
     jz .ch                      ; on this same beat, before us, and CTRL.DRV
@@ -1941,9 +2026,9 @@ dc_tick:
     mov si, ax                  ; (SPEC.md 107.3)
     call dc_toast
     pop si
-    jmp short .hold             ; ...and nothing else this beat, so no
-.ch:                            ; reminder's toast covers it: one due now
-    cmp byte [dc_chirp], 0      ; fires on the next, 2 s on
+    jmp short .hold             ; ...and nothing else this beat
+.ch:
+    cmp byte [dc_chirp], 0
     je .c
     mov byte [dc_chirp], 0      ; the chirp's second note, four ticks after
     push cx                     ; its first (dia_nx)
@@ -1960,51 +2045,36 @@ dc_tick:
     call dc_today               ; CF = 1 the date changed
     jnc .min
     mov word [dc_lnow], 0FFFFh  ; a new day: the minute's work for it
+    mov byte [dc_c3f], 1        ; ...and card 3's NEXT is another day's
     cmp byte [dc_abon], 0
     jne .min
-    call dc_tidx
-    mov bh, al                  ; BL = the old today's index, BH = the new
-    and al, bl                  ; (each 0FFh when not on show; an index is
-    cmp al, 0FFh                ; < 42, so the AND is 0FFh only for both)
-    je .min
     call dc_arm
     jc .min                     ; not visible: the next paint draws it
+    call dc_rhdr                ; today's page
     mov al, bl
-    call .one
-    mov al, bh
-    call .one
-    call dc_sidx
-    cmp al, bl
-    je .fr
-    cmp al, bh
-    jne .min
-.fr:
-    call dc_selon
+    call dc_rbox                ; the old today's box...
+    call dc_tidx
+    call dc_rbox                ; ...and the new one's
+    call dc_rday                ; `Today`, or the selected day's name
 .min:
     call dc_rpass               ; the reminders: nothing unless the minute moved
+    cmp byte [dc_c3f], 0
+    je .hold
+    call dc_c3sync              ; a new day's card 3
 .hold:
     mov al, [dc_tq]             ; an edit this poll...
     mov byte [dc_tq], 0
     or al, [dc_ed]              ; ...the field open, or the Delete
-    or al, [dc_ask]             ; question up. NOT a reminder's alert: it
-    neg al                      ; may stay up for hours, and a Restart
-                                ; closes nothing (107.4). CF = 1 for any
+    or al, [dc_ask]             ; question up: CF = 1 for any
+    neg al
     pop bx
     pop ax
     ret
-.one:
-    cmp al, 0FFh
-    je .r
-    call dc_field
-.r:
-    ret
 
-; --- the window (SPEC.md 107.3) -----------------------------------------------
+; --- the window (SPEC.md 107.3, 107.11) --------------------------------------
 dc_tpl:
-    dw 336, 40, DC_FW, DC_TALL_FH    ; (335,40) under the snap: the frame and
-                                    ; its shadow end left of the drive icons
-    dw dc_title, dc_paint, dc_onkey, dc_onclick
-    OS88_PREFER dc_pref, DC_FW, DC_TALL_FH, DC_FW, DC_TALL_FH, DC_FW, DC_COMP_FH
+    dw 375, 42, 178, 357        ; dia_load sizes and places it (DIA_RIGHT)
+    dw dc_title, dc_paint, dc_onkey, 0
 
 dc_title:   db 'Desk Calendar', 0
 
@@ -2044,6 +2114,7 @@ dc_i_del0:  db MENU_DIS, 'Delete Item (no item)', 0
 dc_i_clr:   db 'Clear Done Tasks', 0
 dc_i_clr0:  db MENU_DIS, 'Clear Done (none done)', 0
 dc_i_showt: db 'Show Tasks  Tab', 0
+dc_i_showr: db 'Show Reminder  Tab', 0
 dc_i_showd: db 'Show Day  Tab', 0
 dc_i_pane0: db MENU_DIS, 'Show Tasks (both shown)', 0
 dc_i_today: db 'Go to Today  T', 0
@@ -2069,37 +2140,36 @@ dc_s_def:   db 'Default: ', 0       ; ...or a new one's (<= 24 in all)
 dc_s_afull: db 'Calendar is full (48)', 0
 dc_s_tfull: db 'Task list is full (32)', 0
 dc_s_long:  db 'At most 25 letters', 0
+dc_s_tlong: db 'A task: at most 23', 0
 dc_s_qappt: db 'Delete this appointment?', 0
 dc_s_qtask: db 'Delete this task?', 0
 
 dc_ablines: dw dc_ab1, dc_ab2, dc_ab3, dc_ab4, 0
-dc_ab1:     db 'Desk Calendar', 0
-dc_ab2:     db 'A desktop widget for os8088', 0
+dc_ab1:     db 'Desk Calendar', 0   ; each line inside the 176-px face
+dc_ab2:     db 'A desk widget', 0
 dc_ab3:     db 0
-dc_ab4:     db 'SYSTEM\DIA  -  SPEC.md 107', 0
+dc_ab4:     db 'SPEC.md 107', 0
 
 %include "dcdate.inc"
-%include "dcdraw.inc"
-
 %include "dcdata.inc"
 %include "dcrem.inc"
 
 %define OS88UI_ABOUT
 %define OS88UI_ALERT
-%define OS88UI_CHK
+%define OS88UI_NOGLYPH          ; no check-box glyph: the widget's tick is a
+                                ; composed bit record (SPEC.md 13.16.2.1)
 %include "os88ui.inc"
 %include "os88line.inc"
+%include "os88gfx.inc"
 %include "os88dia.inc"
-%if DC_TBOX + OS88UI_CKBOX != 16
-  %error "deskcal: a task's box must end where its text run's cell 2 begins (dcdraw.inc)"
+%include "dcdraw.inc"           ; AFTER os88dia.inc: DIA_LAYOUT is its macro
+
+%if DC_FX1 + LN_INSET > LN_CELL
+  %error "deskcal: the entry field's inset must leave its pen on face x 8 (dc_frect)"
 %endif
 
-%if DC_FIN + LN_INSET > LN_CELL
-  %error "deskcal: the entry field's inset must leave its pen on content cell 1 (dc_frect)"
-%endif
-
-%if OS88LINE_SZ != 20 || OS88UI_CK_SIZE != 12
-  %error "deskcal: its bss holds a 20-byte field block and a 12-byte check box"
+%if OS88LINE_SZ != 20
+  %error "deskcal: its bss holds a 20-byte field block"
 %endif
 
     align 16, db 0              ; os88dia.inc's read lands on a paragraph

@@ -9,7 +9,8 @@
 ;                                      holds the 31-day months, February is
 ;                                      28 + (year AND 3 = 0) - exact 1901-2099
 ;   dc_dow_of    day of the week       Sakamoto's, as apps/dos's dos_dow
-;   dc_build     the 42-byte grid of the month on show, and its marks
+;   dc_build     the 42-byte grid of the month on show, MONDAY-FIRST
+;                (v2), and its marks
 ;   dc_today     OSAPI_CLK_GET's date, clamped into the range
 ; =============================================================================
 
@@ -93,8 +94,9 @@ dc_sakt:    db 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4
 
 ; -----------------------------------------------------------------------------
 ; dc_build - the month on show, [dc_y]/[dc_m], into the grid and the marks
-; out: [dc_grid] 42 bytes, byte i = the day in week row i/7, column i%7, or
-;      0; [dc_dow1] the 1st's column; [dc_dim] the month's length; [dc_mark]
+; out: [dc_grid] 42 bytes, byte i = the day in week row i/7, column i%7
+;      counted from MONDAY, or 0; [dc_dow1] the 1st's column; [dc_dim] the
+;      month's length; [dc_mark]
 ;      bit d set when the payload holds an appointment on day d. A payload
 ;      whose count is past the table marks nothing. Every register kept
 ; -----------------------------------------------------------------------------
@@ -113,7 +115,12 @@ dc_build:
     mov [dc_dim], al
     mov bh, 1
     mov ax, [dc_y]
-    call dc_dow_of
+    call dc_dow_of              ; 0 = Sunday...
+    add al, 6                   ; ...and the grid is MONDAY-FIRST: the 1st's
+    cmp al, 7                   ; column is (dow + 6) % 7 (SPEC.md 107.3, v2;
+    jb .mon                     ; display only - the payload holds dates)
+    sub al, 7
+.mon:
     mov [dc_dow1], al
     push ds
     pop es

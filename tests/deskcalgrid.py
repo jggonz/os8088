@@ -4,7 +4,8 @@
     make && python3 tests/deskcalgrid.py
 
 The grid is 42 bytes at the head of the package's bss (`DC_GRID`): byte i is
-the day in week row i/7, column i%7 (Sunday first), or 0. This reads it out
+the day in week row i/7, column i%7 - MONDAY first since v2 (SPEC.md 107.3,
+`dc_build`'s (dow + 6) % 7) - or 0. This reads it out
 of a running guest and compares it with Python's own `calendar` - an
 independent second implementation of the same date maths - for the months
 that exercise it hardest:
@@ -16,13 +17,16 @@ that exercise it hardest:
   Mar 2028   reached from Feb 2028 by PgDn, so the navigation's own
              arithmetic is checked, not only the jump
 
-Each month is reached the way a user reaches it: the machine's CLOCK is set
+The keys reach the WIDGET once it owns the bar: `ui.raise_window` on a desk
+window is `ui.widget_activate`, a press on a card's margin (SPEC.md
+11.103.4). Each month is reached the way a user reaches it: the machine's CLOCK is set
 (the live `clk_*` fields poked, tests/kdreturn.py's reader inverted), the
 calendar's tick sees today change (OSAPI_CLK_GET, every 36 ticks), and `T`
 goes to today. So OSAPI_CLK_GET is asserted by every leg, and the selected
 day and today's index come back with it.
 
-**BREAK IT ON PURPOSE**: make dc_dim_of answer 28 for every February and the
+**BREAK IT ON PURPOSE**: put dc_build back on `dow` (Sunday first) and every
+leg fails; make dc_dim_of answer 28 for every February and the
 Feb 2028 leg fails; drop dc_atfirst's test from dc_month and PgUp at Jan 1980
 walks to Dec 1979, which the refusal leg fails.
 """
@@ -56,7 +60,7 @@ def check(cond, what):
 
 
 def want_grid(y, m):
-    rows = calendar.Calendar(firstweekday=6).monthdayscalendar(y, m)
+    rows = calendar.Calendar(firstweekday=0).monthdayscalendar(y, m)
     flat = [d for r in rows for d in r]
     return flat + [0] * (42 - len(flat))
 

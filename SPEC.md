@@ -169898,250 +169898,183 @@ turns a kind above 2 into a free row, and the blob has ~26 bytes left).
 The first DIA: a monthly calendar, a day's appointments, task checkboxes and
 reminders, two-colour on every adapter. `DESKCAL.O88` ships in `SYSTEM\DIA\`
 on every system disk - the four geometries, `emu.img`, both small system
-disks and the live media - and on no apps disk (§107.1). Wave 2 (§107.10) is
-the window, the month and its navigation; wave 3 the appointments, the tasks,
-the one-line entry and the Remind menu's lead times; wave 4 the reminders'
-FIRING (below), `kern_small`'s worker arm run end to end, and the
-measurements (§107.6).
+disks and the live media - and on no apps disk (§107.1). v1's wave 2
+(§107.10) was the window, the month and its navigation; wave 3 the
+appointments, the tasks, the one-line entry and the Remind menu's lead times;
+wave 4 the reminders' FIRING, `kern_small`'s worker arm run end to end, and
+the measurements (§107.6). v2's wave 4 made it the widget below.
 
-**v2 replaces this window with three CARDS** (§107.11 is the contract, and
-the owner's second mockup the picture; it lands in v2's wave 4, §107.10, and
-until then everything below is v1 and true): card 1 a big day number,
-weekday and month, a bare `<  August 2026  >` and an unruled MONDAY-FIRST
-grid with a dot under each day holding appointments and today inverse; card
-2 `Today` with `+`, two appointments, a rule and two tasks with real ticks
-and a `+N more` pager; card 3 the reminder - a bell, its time, its text and
-`Snooze • Dismiss` - which REPLACES the alert-on-fire (the toast and the chirp
-stay). Snooze is 5 minutes (`DC_SNOOZE`), held in the payload's spare words
-+4/+6 with two new appointment flags, `DCA_SNOOZED` = 4 and `DCA_DUE` = 8, so
-an old file reads as nothing due and nothing snoozed and needs no version
-bump. Per adapter the layout is chosen by `OSAPI_VIDEO`'s HEIGHT and not by
-the adapter kind: TALL at 400 rows or more (VGA), MID at 300-399 (Hercules
-and EGA - which v1's `OS88_PREFER` wrongly gives VGA's pair), COMPACT below
-(CGA, one paged slot for cards 2 and 3). The Calendar and Remind menus stay,
-shown while the widget owns the bar.
+**v2 (wave 4) is THREE CARDS ON THE DESK** - the owner's second mockup,
+"even more of a widget". What follows is v2 and the contract; v1's titled
+232-wide window, its four-cell day fields and `*` marks, the inverse header
+strip, the selection `GFX_FRAME` and the alert-on-fire are gone (§107.9's
+"v2, wave 4" says what each became and why). §107.11 is the widget treatment
+the calendar wears, and every card pixel below is composed by it.
 
 ```
-apps/deskcal/deskcal.asm   header, entry proc, menus, keys, clicks, the tick
+apps/deskcal/deskcal.asm   header, entry proc, menus, keys, the card presses
+                           and releases, the edits, the tick
 apps/deskcal/dcdate.inc    the date maths: day of week, days in a month,
-                           the grid, the 1980-2099 clamp
-apps/deskcal/dcdraw.inc    the two layouts and every draw, the agenda, the
-                           tasks and the entry field among them
+                           the MONDAY-FIRST grid, the 1980-2099 clamp
+apps/deskcal/dcdraw.inc    the three layouts, the three cards' composers, the
+                           partial redraws, the hit tests, the entry field
 apps/deskcal/dcdata.inc    the payload: its check at load, the sorted insert,
                            delete, the tasks, and the entry's time parser
 apps/deskcal/dcrem.inc     the reminders: the minute pass, the firing, the
-                           missed-at-launch summary
+                           snooze, the dismiss, card 3's state
 ```
 
-**The package.** `OS88_HEADER 'Desk Calendar', dc_entry, OS88_F_ICON`, a
-16x16 calendar-page icon (which is also the DIA row's picture, so a row
-downgraded at boot shows it, §107.4), `OSAPI_ABOUT_SET` (the SHEET/CHART
-lesson, §12.2) through `os88ui_about`, and `os88dia.inc` included last after
-`os88ui.inc`. The DIA definitions are `DIA_DATNAME 'DESKCAL.DAT'`,
-`DIA_CAP 'Calendar'`, the payload v1 below (`DIA_PAYLEN` 2,440,
-`DIA_PAYVER` 1), `DIA_ICON` 32 and `DIA_ONTICK dc_tick`.
+**The package.** `OS88_HEADER 'Desk Calendar', dc_entry, OS88_F_ICON |
+OS88_F_DESK` - header flag bit 6, so the loader gives it the TOP instance slot
+and the dock no tile (§11.103, §30) - a 16x16 calendar-page icon (also the DIA
+row's picture, so a row downgraded at boot shows it, §107.4),
+`OSAPI_ABOUT_SET` through `os88ui_about`, and `os88gfx.inc` (`GFXE_TEXT`,
+`GFXE_BITS`, a 176 x 32 band of 704 bytes in its own bss) with `os88dia.inc`
+included last. The DIA definitions are v1's (`DIA_DATNAME 'DESKCAL.DAT'`,
+`DIA_CAP 'Calendar'`, `DIA_PAYLEN` 2,440, `DIA_PAYVER` 1, `DIA_ICON` 32,
+`DIA_ONTICK dc_tick`) plus §107.11's: `DIA_WIDGET`, `DIA_TAG 'Desk
+Calendar'` (= the title), `DIA_RIGHT` 264, `DIA_LAYOUTS`, `DIA_PAINTCARD
+dc_pcard` (the include's `dia_slabs`, then the entry field when it is open),
+`DIA_COMPOSE dc_compose`, `DIA_ONCARD`, `DIA_ONCARDUP` and `DIA_ONFOCUS`.
 
-**The window** is not sizable, snaps (§11.94), and declares every promise it
-can keep:
+**The window** is the include's: a desk window 178 wide (the face and a
+ground column either side, §107.11) on kern_big and kern_emu, the titled
+fallback on kern_small (§107.7). `OSAPI_WM_KEEPH` stays; `OSAPI_WM_PREFER`
+and `OSAPI_WM_ONRESIZE` are GONE - the layout is chosen once, at `dia_load`,
+from `OSAPI_VIDEO`'s HEIGHT, and a PREFER pair is keyed by the adapter's KIND,
+which is the EGA bug §107.11 names (§107.9).
 
-| call | why |
+**Three layouts by height** (`DIA_LAYOUT`, each `%error`-checked against its
+band): the face is 176 px wide on all three and each card is composed one
+32-row slab at a time.
+
+| | TALL (400+ rows: VGA) | MID (300-399: Hercules, EGA) | COMPACT (below: CGA) |
+|---|---|---|---|
+| band (h - 20 - 24) | 436 | 304 (Hercules), 306 (EGA) | 156 |
+| cards (rows) and the gap under each | 178 / 6, 91 / 6, 57 / 5 | 122 / 4, 67 / 4, 30 / 4 | 85 / 3, a 44-row SLOT / 3 |
+| tag row | 12 | 11 | 11 |
+| face | 176 x **355** | 176 x **242** | 176 x **146** |
+| default face origin | (screen w - 264, 42): (376, 42) | (456, 24) Hercules, (376, 24) EGA | (376, 22) |
+| titled fallback frame (kern_small) | 178 x 357 | 178 x 246 | 178 x 151 |
+
+**Card 1, the month** (all three layouts; card-local rows):
+
+| | TALL | MID | COMPACT |
+|---|---|---|---|
+| TODAY's day number, x3 (24 px a digit) / x2 (16) at x 8 | rows 7-30, x3 | 4-19, x2 | 2-17, x2 |
+| today's weekday, bold capitals (`MONDAY`) | x 64, rows 9-16 | x 48, rows 4-11 | x 48, rows 2-9 |
+| today's month, capitals (`AUG 2026`) | x 64, rows 22-29 | x 48, rows 13-20 | - (none) |
+| the nav: bare `<`, the month ON SHOW, `>` | rows 44-51: `<` x 8, `August 2026` centred, `>` x 160 | rows 26-33, the same | rows 10-17 beside the weekday: `<` x 48, `Aug 2026` x 64, `>` x 136 |
+| the weekday letters `M T W T F S S` (MONDAY FIRST) | rows 60-67 | 38-45 | 20-27 |
+| six week rows: first, pitch | 78, 16 | 50, 12 | 30, 9 |
+| a day: its number CENTRED in a 24 px field from x 4 (one digit at field + 8, two at + 4) | | | |
+| the dot under a day with appointments, 2 px wide at field + 11 | 2 rows at r + 10 | 1 row at r + 9 | 1 row at r + 8 |
+| TODAY: an inverse box 20 wide at field + 2, the number white | rows r - 4 .. r + 11 | r - 2 .. r + 9 | r .. r + 8 (the design's r - 1 took the dot row of the day above, §107.9) |
+| the SELECTED day when it is not today: a 1 px outline of that box | | | |
+
+The header block is TODAY's - the desk calendar's own page - and the nav
+and the grid are the month ON SHOW. At either end of the range (January
+1980, December 2099) its arrow is not drawn and the step is refused. Ink and
+paper only, never grey, so nothing rounds to black on 1bpp (§39.4).
+
+**Card 2, the day** (TALL and MID): a bold heading - `Today` when the
+selected day is today, else `Tue 25 Aug` - with a bold `+` at x 160; the
+selected day's appointments; a 1 px rule (x 8..167); the TASK list (one list,
+not per day, as v1). TALL: heading rows 6-13, agenda lines at 22 and 36
+(`HH:MM` at x 8 - `--:--` all day - and the text at x 56, at most 14
+characters on the glass), the rule at 50, tasks at 57 and 73 (an 11 x 11 box
+at x 8, its text at x 32, at most 17 characters); MID: heading 4-11, agenda
+16 and 27, rule 39, tasks 42 and 54 with 9 x 9 boxes and the text at x 24.
+**Two lines each** (the mockup's 91-row card; §107's open decision 2). When a
+list has more items than lines its LAST line reads `+N more` and a click on
+it shows the next page (the last page's click the first). The selected item
+is its line INVERSE. A DONE task's box carries a real TICK, 2 px strokes - a
+composed bit record (§13.16.2.1's note), never `os88ui`'s glyph, which this
+package no longer carries (`OS88UI_NOGLYPH`).
+
+**Card 3, the reminder** (TALL and MID), one of three states:
+
+| state | what it shows |
 |---|---|
-| `OSAPI_WM_OWNBG` | the painter writes every pixel of the content, so the kernel's white fill in front of `W_PAINT` - the first half of a double draw - is skipped (§11.90.1) |
-| `OSAPI_WM_SAVEU` AL = 3 | ON and 1BPP (§11.96.17): ink 0 on ground 15 on every adapter, so an uncover is a one-plane blit. Every draw outside `W_PAINT` arms `OSAPI_WM_CLIP_SET` first, which is what keeps the promise when the window is covered and its state changes (§11.96) |
-| `OSAPI_WM_PREFER` | 234 x 272 on VGA, EGA and Hercules; 234 x 142 on CGA |
-| `OSAPI_WM_KEEPH` | the layout is fixed rather than reflowing |
-| `OSAPI_WM_ONRESIZE` | the layout is re-chosen from the new content box after an adapter switch or a drag onto another display (§11.98) |
+| RINGING - an appointment is DUE (fired, not dismissed) | a bell (16 x 16 TALL, 16 x 12 MID), its time bold, its text, and `Snooze • Dismiss` (TALL: time x 32 rows 8-15, text rows 25-32, links rows 41-48 - Snooze x 32, the dot x 88, Dismiss x 104; MID: `21:00 Back up files` on rows 4-11, links 18-25) |
+| NEXT - the next armed reminder TODAY (or the snoozed one, at its snooze time) | the bell, the time and the text; no links |
+| NONE | the bell and `No reminders today` |
 
-**The template is sized for the adapter BEFORE `OSAPI_WM_CREATE`**: the
-entry proc copies the `OSAPI_WM_PREFER` pair for `OSAPI_VIDEO`'s kind (EGA
-takes VGA's, as §11.100.1 does) into `dc_tpl`'s width and height, and only
-then calls `dia_load` and creates. `wm_create`'s own `wm_fit` runs before
-any of the calls above can, and `PREFER` and `KEEPH` resize WITHOUT moving
-the window (§11.100.9) - so a 255-row template on a CGA was cut to the
-155-row band and its `y` clamped to 20 against a height it never had, and
-every restored `y` came back as 20 and was then saved as 20 (§107.9). Sized
-first, the create's fit clamps the place against the frame the window will
-really have, and `dia_anchor` measures the frame's middle with it too.
+**COMPACT's SLOT** (the CGA's second card, 44 rows) is ONE card that PAGES:
+its bold heading on rows 3-10 reads `Today >` (or `Tue 25 Aug >`), `Tasks
+>` or `Reminder >`, with `+` at x 160 on the first two, and three lines at
+rows 14, 24, 34 hold that page - the day's appointments, the tasks (8 x 8
+boxes) or the reminder (an 8 x 8 bell, the time, the text, the links). A
+click on the heading, `Tab` or Calendar > Show Tasks / Show Day pages it, and
+**a reminder that goes off TAKES THE SLOT** (it pages to the reminder), giving
+it back to the day once it is dismissed or snoozed.
 
-**Two layouts, one code path.** The content is 232 pixels wide - 29 cells -
-on both. Which one is drawn is decided from the CONTENT HEIGHT the kernel
-gave the window (the record's `W_W`/`W_H` at entry, because
-`OSAPI_WM_GEOM` answers "not visible" until the loader has shown the window;
-`OSAPI_WM_GEOM` in every paint; `OSAPI_WM_ONRESIZE` after), not from an
-adapter code: 253 rows or more is TALL, anything less is COMPACT. A layout
-is a row of `y` values and two counts in a table:
+**Every card pixel is composed, then one `OSAPI_GFX_BLIT1`** (§107.11): no
+`font_run`, no fill under a glyph, nothing written twice - with one exception,
+the open entry field, below. What a gesture costs (PERFORMANCE.md's unit,
+the budgets `deskcalperf` holds; §107.6 has the measured figures):
 
-| row | TALL (232 x 253) | COMPACT (232 x 123) |
+| gesture | TALL calls | how |
 |---|---|---|
-| header `<   October 2026   >`, 29 cells, inverse | 0 | 0 |
-| weekday names, `Su` .. `Sa` over the day fields | 12 | 9 |
-| first of six week rows | 24 | 18 |
-| week-row pitch | 10 | 9 |
-| rule | 88 | 72 |
-| the selected day's heading, `Tue 13 October 2026` | 92 | 75 |
-| the agenda's first line | 104 | 84 |
-| agenda pitch: the 8-row run and a GAP under it, so a descender never meets the next line's capitals | 10 | 9 |
-| agenda lines | 7 | 4 |
-| the task list's heading, ` Tasks` | 176 | 75 (it SHARES the day heading's row) |
-| the first task row (pitch 13: the check box's 12 rows and one of ground, so stacked boxes never touch) | 188 | 84 (the same pane) |
-| task rows | 5 | 3 |
+| the full paint | ≤ 20 (COMPACT ≤ 14) | 11 card slabs (6 + 3 + 2), the two ground columns, 3 gaps, the tag's ground either side and its plate |
+| another day in the same month | ≤ 5 | the old day's box and the new day's, each ONE sub-rect `BLIT1` (16 rows, 3-4 bytes), and card 2 |
+| another month | ≤ 8 | card 1 from the nav down (5) and card 2 (3) |
+| a task's box | **1** | the box's 11 x 11 alone, a sub-rect `BLIT1` |
+| a reminder going off | 2 + the toast | card 3's two slabs |
+| an idle beat, a minute with nothing due | **0** | |
 
-COMPACT's agenda pitch is 9 rather than TALL's 10 because 9 keeps its four
-lines (rows 84..119) inside the 123 rows its three task rows take at a pitch
-of 13; at 10 they would need 124, a taller frame for one row of white. 123 is
-three more than the 120 a 12-row task pitch needed, and the 142-row frame
-still fits the CGA's 155-row band (the template's y 40 is clamped to 33).
+**The controls** are presses on the cards (`DIA_ONCARD`, card-relative). A
+DAY, a task's BOX and a LINE act on the press; a BUTTON - `<`, `>`, the nav's
+month label and the header block (both Go to Today), `+`, `+N more`, `Snooze`,
+`Dismiss` and COMPACT's slot heading - LIGHTS on the press (its rect, rounded
+out to bytes, composed INVERSE - one `BLIT1`) and acts on a release inside it
+(`DIA_ONCARDUP`); a release off it un-lights it and does nothing (the §13.5
+gesture). The light is part of the PICTURE, so a repaint while a button is
+held draws it lit and cannot leave a stale inversion (§107.9).
 
-TALL shows both lists, one under the other. COMPACT has room for one: the
-row under the rule is the day heading while the AGENDA is on show and
-` Tasks` while the TASKS are, and `Tab`, a click on that row or Calendar >
-Show Tasks / Show Day swaps them (the item is greyed `(both shown)` on
-TALL). Every agenda line is a fixed 29-cell run and every task row the
-check box's glyph and a 27-cell run over cells 2..28, so both layouts are the
-same code with these numbers in it.
+| press on | does |
+|---|---|
+| `<` / `>` | the previous / next month; the selected day kept or clamped |
+| the header block, the nav's label | Go to Today |
+| a day | select it; card 2 follows it |
+| `+` | the entry field, empty, in the heading's place: `HH:MM text` is an APPOINTMENT on the selected day, plain text a TASK (COMPACT's tasks page: a task) |
+| an agenda line / a task's text | select it; a press on the line ALREADY selected edits it |
+| a task's box | DONE, the box alone redrawn |
+| `+N more` | that list's next page |
+| `Snooze` / `Dismiss` | the ringing reminder: snoozed `DC_SNOOZE` = 5 minutes / dismissed |
+| COMPACT's slot heading | the slot's next page |
 
-**A day field is four cells, `[ ][d][d][m]`**: a blank, the day
-right-aligned in two, and the MARK HARD AGAINST THE NUMBER - ` 16*`, `  2*`.
-The mark cell is a `*` when the day has an appointment, a space when it has
-none - a PRINTABLE glyph, because the kernel's font keeps 32..126 and draws
-anything else as a space (wave 2's glyph 7 never drew, §107.9). Four cells
-and not three is the whole of what makes the mark readable: with three, the
-mark cell was also the only thing between two numbers, so `15*16` could be
-either day's and `1* 2` read as the 1st's when it was the 2nd's. The blank is
-always there now, so a mark can only sit after its own number. The week row
-is ONE opaque run of 29 cells - seven fields from content x 0, and one cell
-of margin after Saturday's mark - exactly under the weekday row's ` Su  Mo
-... Sa  `, whose names sit over each field's number.
+**Keys** reach the widget while it owns the bar (§11.103.4): v1's table -
+Left / Right a day, Up / Down a week, PgUp / PgDn (`,` `.`) a month, `T`
+today, `N` a new appointment, `K` a new task, `Enter` edit, `Del` delete
+(after asking), `Space` a task's box, `Tab` COMPACT's slot - plus `S`
+snooze and `D` dismiss the ringing reminder, and `Esc`, which is
+`OSAPI_WM_DESK` RELEASE: the bar and the keys go back to the front
+application (on kern_small, where there is no RELEASE, `Esc` selects
+nothing, as v1). While the field is open its keys are `os88line_key`'s and
+only `Enter` and `Esc` come back.
 
-- **Today** is drawn inverse: its row is three runs instead of one, the
-  middle one - the number and its mark, `13*` - ink 15 on ground 0, the
-  field's leading blank staying ground. Nothing else is carried by colour,
-  so the same picture reads on both 1bpp adapters (§39.4).
-- **The selected day** gets one `OSAPI_GFX_FRAME`: its left column is
-  column 1 of the field's leading blank, its right column the mark cell's
-  column 7, and its top and bottom rows are in the gaps between week rows.
-  Column 1 rather than 0 keeps it a pixel off the day before's mark, and off
-  the window's own frame on a Sunday - the same reason the task boxes are
-  inset (below). A digit never sets either column; the star's middle row
-  reaches column 7. So a selection move is two frames and no re-lettering -
-  except where the old day is today, whose inverse ground the white frame
-  cut, or MARKED, whose star it cut, and whose number and mark are then
-  re-run (the frame never touches the leading blank's glyph columns).
-  **On today the frame reads off-centre, and that is accepted**: its right
-  column is the mark cell's column 7, which is the inverse block's own last
-  column (black on black), while its left stands six ground columns short
-  of the block. Inversing the blank as well would make both sides flush at
-  no cost in calls, but would put the day before's star (its column 7,
-  middle row) against the block; which reads better is the owner's call.
-- **Every pixel is written once** in a full paint: a run per text row, a
-  `gfx_fill` per gap between rows, one `gfx_hline` for the rule, and the
-  lists below it (wave 3, below). No fill lies under a run. The one primitive drawn over
-  another's pixels is the selection frame: its two side columns are pixels
-  the field's run has just laid (16) and its top and bottom rows are ground
-  the gap fills above and below the week row have just laid (31 each) -
-  **78 pixels**, one of them a marked day's star.
-- **What a change costs**, in primitive calls (PERFORMANCE.md's unit): a
-  full paint is ~22 - nine runs (header, weekday row, six weeks, the
-  heading), **10 gap fills** (header to weekday row, above the first week,
-  below each of the six, rule to heading, the pane; 11 when the content box
-  is wider than 232), the rule and the frame - and two more when today is on
-  show; a new selected day is 3 - the old frame in white, the new in black,
-  the heading - and 4 when the old day was today; a new month is ~18
-  (header, weeks and their gaps, frame, heading); a new DATE is one run per
-  changed field that is on show and the frame again when one of them is the
-  selected day, 1-3 calls; an idle tick is **0**, one `OSAPI_CLK_GET` and a
-  compare. Wave 4's `deskcalperf` measured them with the lists in (§107.6):
-  a full paint is **65** calls on TALL and **31** on COMPACT (54 and 28
-  before the agenda's gaps and the boxes' inset), a selection leaving today
-  with two appointments on it **6**, an idle beat **0**.
-- **The About card** (`os88ui_about`) lies over the content until a key, a
-  click or a menu pick takes it down. Nothing draws under it: a date change
-  while it is up only updates the state, and the paint that takes it down
-  shows the new today. A menu pick that redraws the month takes the card
-  down BY that redraw - one whole paint, not the card's repaint and then the
-  month's over it, which is the double draw §6.1 forbids.
+**The menus** are v1's, shown while the widget owns the bar: `Calendar` (New
+Appointment, New Task, Edit Item, Delete Item, Clear Done Tasks, Show Tasks /
+Show Day - live on COMPACT only, greyed `(both shown)` elsewhere - Go to
+Today, Previous Month, Next Month) and `Remind` (the leads), with every v1
+greying (§47). The app-name cell carries About and the kernel's Close,
+through `os88dia.inc`'s negotiator. **The About card** lies over the face
+(its lines are 14 cells at most) until a key, a press or a pick, and its
+take-down is ONE whole-face repaint (`dia_redraw`, §107.11).
 
-**Date maths** (`dcdate.inc`), all integer and 8086: the day of the week is
-Sakamoto's (as `apps/dos`'s `dos_dow`), exact over the whole range; the days
-in a month are `clk_mlen`'s mask `0x15AA` plus `year AND 3` for February,
-exact over 1901-2099; navigation is clamped to **January 1980 .. December
-2099** - the FAT date's range, which is what the payload stores - and at
-either end the arrow cell in the header is drawn as a space and the step is
-refused. The grid is 42 bytes in the package's bss, the first thing after
-its image (`DC_GRID`, offset 0): byte `i` is the day in week row `i / 7`,
-column `i % 7`, or 0. `deskcalgrid` (§107.10) reads it from the guest and
-compares it with Python's `calendar`.
-
-**Today** comes from `OSAPI_CLK_GET` (§37.96) at launch, clamped to the range
-above, and the calendar opens on today's month with today selected. The
-DIA tick (`DIA_ONTICK`, every 36 ticks) asks again, and when the DATE has
-changed moves the inverse: each of the old today's field and the new one
-that is in the month on show is re-run alone - the month on show does not
-change with the date, so nothing else is - and the selection frame is drawn
-again when either is the selected day, because a field's run lays the
-frame's side columns. The clock's own year is what `OSAPI_CLK_GET` answers, so a
-machine with no RTC opens on whatever the PIT clock says (§37.0.1).
-
-**The agenda** is the selected day's appointments, in the payload's order,
-one 29-cell run a line, at the layout's agenda pitch:
-
-```
- 09:30! Dentist            timed: the time, the reminder mark, 21 cells of text
- --:--  Mum's birthday     all day
-```
-
-The mark is `!` while a reminder is armed, `-` once it has FIRED
-(**Reminders**, below) and a space when there is none. A day with more appointments than there are
-lines shows one fewer and makes the last line a PAGER, `  more...  page 1 of
-3`; a click on it shows the next page, and the last page's click shows the
-first. The selected appointment is its line drawn INVERSE - the one more
-thing state is carried by, and the same ink pair as today.
-
-**The tasks** are ONE list, not per day (the payload's `DATED` bit is kept
-and written back but nothing in wave 3 sets it). A row is `os88ui.inc`'s check
-box (§13.15, `OS88UI_CHK`): the box's glyph at content x 4..15 - INSET four
-columns off the window's frame, which the box's own left side and the frame
-read as one 2-pixel line without - drawn and hit by `os88ui_chkdraw` and
-`os88ui_bhit` at that rect, the shared control's own routines, at a pitch of
-13 so a ground row parts each box from the next - and the text as the
-calendar's own 27-cell run from cell 2, its words from cell 3, because
-`os88ui_chk`'s label pen is the box's width plus a gap, 18 pixels in, and an
-unaligned run takes `font_run`'s two-pass fallback (§6.1). A click on a box
-toggles DONE and redraws THE MARK and nothing else - ONE fill, the 6x6 square
-inside the frame, black or white - and so does `Space` on the selected task.
-It is not `os88ui_chkmark`: that routine is the shared glyph whole, and its
-published contract (§13.15.1) clears the box white before the frame and the
-mark go back, so a toggle through it writes the frame's 44 pixels twice.
-Here the frame is known to be on the glass, so the press is hit-tested with
-`os88ui_bhit` against the box's rect and the mark alone is filled. The
-selected task is its text inverse; more tasks than rows makes a pager row,
-as the agenda's.
-
-**The one-line entry** (`os88line.inc`, §83) is how anything is typed. `N` or
-Calendar > New Appointment opens it for the selected day; `K` or New Task for
-the task list; `Enter` on a selected item opens it holding that item. The
-field takes the HEADING's place - the day heading for an appointment, the
-task heading for a task - with its frame on the rows round it (on COMPACT its
-top edge IS the rule, the same pixels), INSET four columns off the window's
-frame each side (content x 4..227) as the task boxes are - at x 0..231 its
-sides and the frame read as one 2-pixel line - and the columns it leaves are
-the heading's own ground, so the inset costs no call and the pen (content
-cell 1, os88line rounding X1 + 3 up) and the 27 columns it shows are the
-same. So opening it is one
-`os88line_draw` over a heading whose first cell and gaps are already white,
-and closing it is the heading's run and the two gap rows it took. A
-keystroke is `os88line_edit`'s, which repaints the cell it changed (§83.1.1).
-`Enter` keeps it, `Esc` throws it away, and while it is open the rest of the
-calendar waits: a click elsewhere in it does nothing, and a menu pick closes
-the field as `Esc` does before it acts. A click IN the field moves the caret:
-the old bar's cell repainted and the new bar drawn, two cells, where the
-caret did move (`os88line_caroff` / `os88line_caron`, the DOS box's
-`dos_caret_to`). New Appointment, New Task and Edit Item are GREYED while the
-field is open (`(typing)`), because each would close it - throwing the typed
-line away - and draw the heading band only for the new field to be drawn over
-it.
-
-What an appointment's line MEANS is decided by its first word:
+**The one-line entry** (`os88line.inc`) takes card 2's HEADING ROW (the
+slot's on COMPACT): content x 4..155, so the `+` stays, rows heading - 3 ..
+heading + 8. `N` (or `+` on the day) opens it for an appointment, `K` for a
+task, `Enter` (or a second press) holding the selected item; `+` opens it
+for EITHER, the parse deciding. It closes on `Enter` (kept), `Esc` (thrown
+away), a menu pick (as `Esc`, before the pick acts) and **losing the bar**
+(`DIA_ONFOCUS` with AL = 0: as `Esc`). Opening it is one `os88line_draw`
+over the heading; closing it is the heading's rows recomposed, one `BLIT1`.
+**A paint while it is open writes the field's pixels twice** - the slab with
+the heading, then `os88line_draw` over it - the one double write left, and it
+needs a paint while the user is typing. The parser, the order, the limits and
+the edit rules are v1's:
 
 | typed | is |
 |---|---|
@@ -170150,196 +170083,97 @@ What an appointment's line MEANS is decided by its first word:
 | `Dentist`, `3 apples`, `24:00 x`, `9:5 x` | ALL DAY, the whole line - a first word that is not a time (one or two digits, an hour past 23, a minute past 59, a one-digit minute, anything followed by a letter) is text |
 
 A timed appointment is created with its reminder ARMED at the default lead
-(below), unless the default is `No Reminder`; an all-day one has none. The
-text is at most 25 characters, and longer is REFUSED - the field stays open
-and the toast says `At most 25 letters` - never cut. An empty line closes
-the field as `Esc` does. A task's text is at most 23, which the field's own
-capacity enforces. Leading and trailing spaces are not kept.
+unless the default is `No Reminder`; an all-day one has none. Its text is
+at most 25 characters and longer is REFUSED (`At most 25 letters`, the field
+stays open); a task's at most 23. Editing an appointment keeps its reminder
+and lead while it stays timed, and its FIRED mark only while its time does
+not move (a moved one also loses DUE and SNOOZED). Appointments are kept in
+`(date, time + 1)` order (all day first in its day); the load CHECKS the
+order and the counts, and a payload that fails is DAMAGED (§107.5.2). `Del`
+asks through `os88ui_ask` (`Delete this appointment?` / `Delete this
+task?`) - an ordinary window that lands ABOVE every application and over the
+widget and takes the bar, giving it to `wm_top` when it closes (§11.103.4;
+`deskmodal`). Clear Done Tasks removes every checked task without asking. A
+page is re-derived whenever its list changes shape, as v1. The limits grey
+as v1: `New Appointment (full)` at 48, `New Task (full)` at 32, `(no item)`,
+`(none done)`, `(typing)`.
 
-**Editing an appointment** keeps its reminder and lead when it stays timed,
-and its FIRED mark only when its time did not change (a moved appointment
-can remind again); an all-day appointment given a time is armed as a new one
-is. The edited appointment is taken out and inserted again, so it lands in
-order.
+**Remind** sets a lead (At the Time, 5, 15, 30 Min Early, 1 Hour Early, No
+Reminder): the selected TIMED appointment's (FIRED, DUE and SNOOZED cleared,
+re-armed) or the DEFAULT for new ones, the toast saying which. v1's click on
+a line's mark column is gone with the mark.
 
-**Sorted on insert.** Appointments are kept in `(date, time + 1)` order, a
-word compare each: the date is FAT-packed so it orders as a word, and
-`time + 1` puts ALL DAY (0FFFFh, which wraps to 0) first in its day. The
-load CHECKS that order - and that the counts are inside the tables - and a
-payload that fails is a DAMAGED file (§107.5.2): it is zeroed, and the first
-save asks before replacing it. `tools/os88dia.py` writes the same order.
+**A damaged state file** opens EMPTY and its first save asks `Replace
+damaged calendar?` (§107.5.2), as v1.
 
-**Deleting.** `Del` or Calendar > Delete Item asks, through `os88ui_ask`
-(§75.3, Yes / No): `Delete this appointment?` or `Delete this task?`. While
-the question is up nothing in the calendar can be changed - the item it asks
-about is the one deleted. Calendar > Clear Done Tasks removes every task
-whose box is checked, without asking: the user checked each box.
+**Date maths** (`dcdate.inc`) is v1's - Sakamoto's day of the week, the
+`0x15AA` month mask, navigation clamped to January 1980 .. December 2099 -
+with ONE change: the grid is MONDAY-FIRST (`dc_build` takes `(dow + 6) % 7`
+for the 1st's column). It is display only and fixed (§107's open decision
+5); the payload holds dates, not columns. The 42-byte grid is still the
+first thing in the package's bss, byte `i` = week row `i / 7`, column `i %
+7` counted from MONDAY; `deskcalgrid` compares it with Python's
+`calendar.Calendar(firstweekday=0)`.
 
-**A page is re-derived whenever its list can change shape**: after a delete,
-the first item on show is the page that holds it NOW (or the first page, when
-the page emptied) - a delete that takes a list down to its row count ends
-paging, and a top left mid-table would hide the items above it with no pager
-to reach them. So does a layout change (§11.98, TALL and COMPACT page at
-different counts). The rows on the glass are counted to the PAGER when there
-is one - it is the last row, whatever a short last page holds - so the next
-partial redraw takes a pager that went away off the glass.
+**Reminders** (`dcrem.inc`). The beat (`DIA_ONTICK`, every 36 ticks) reads
+`OSAPI_CLK_GET`; nothing is done inside a minute and a minute with nothing
+due draws nothing. An appointment's flags (payload `+4`):
 
-**What a limit looks like** (§47, grey a fact). The 49th appointment is not
-refused at the keyboard alone: Calendar > New Appointment is GREYED as `New
-Appointment (full)` while the table holds 48, `N` answers `Calendar is full
-(48)`, and the same for tasks at 32 (`New Task (full)`, `Task list is full
-(32)`). Edit Item and Delete Item are greyed `(no item)` with nothing
-selected, and Clear Done Tasks reads `Clear Done (none done)` with no box
-checked. The items are
-switched by a store into the menu's item array (§12.2): the kernel reads the
-array when the menu drops, so nothing is re-registered.
+| bit | | |
+|---|---|---|
+| 0 | `DCA_REMIND` = 1 | armed (v1) |
+| 1 | `DCA_FIRED` = 2 | it went off (v1) |
+| 2 | `DCA_SNOOZED` = 4 | **v2**: snoozed; it rings again at the snooze slot's time |
+| 3 | `DCA_DUE` = 8 | **v2**: it went off and is not dismissed - card 3 RINGS |
 
-**Remind** sets a lead time: At the Time, 5, 15 and 30 Min Early, 1 Hour
-Early, No Reminder. With a TIMED appointment selected, the pick is that
-appointment's (its FIRED mark cleared, its line redrawn) and the toast says
-`Reminder 15 min early`; with nothing timed selected it is the DEFAULT for
-new appointments (`lead_default`, and the payload's flags bit 0 for No
-Reminder) and the toast says `Default: 15 min early`. A click on a timed
-line's mark column toggles its reminder at the lead it has. Both arm it
-afresh: FIRED is cleared - unless its moment has already passed, below.
+- **Firing** - the first of today's armed, unfired, timed appointments whose
+  moment `max(0, time - lead)` is at or before now, one a minute - sets
+  `FIRED | DUE` and owes a save, chirps (880 then 660 Hz, `dia_nx`'s second
+  beat; one 880 Hz note of 8 ticks on kern_small's worker arm), says the
+  toast `09:30 Dentist` (§59.10) and recomposes card 3 to RINGING (COMPACT:
+  the slot pages to it). **There is no alert** - the modal `os88ui_ask` of v1
+  is REMOVED - so nothing waits on the user, nothing takes the keyboard, and
+  nothing is gated on an alert or an open field any more.
+- **Card 3 rings the FIRST due appointment** in table order; dismissing it
+  shows the next due one, if any. `S` / Snooze and `D` / Dismiss act on it.
+- **Snooze** clears DUE, sets `SNOOZED`, and writes the SNOOZE SLOT, the
+  payload's spare words: `+4` the snooze's minute of the day, `+6` its FAT
+  date - now + `DC_SNOOZE` (5 minutes), into tomorrow past midnight. ONE
+  snooze is held: snoozing another puts the first back to DUE. The minute
+  pass re-fires a snoozed appointment once its slot is reached (the slot's
+  date before today counts as reached): SNOOZED off, DUE on, the chirp and
+  the toast again, card 3 ringing.
+- **Dismiss** clears DUE and SNOOZED.
+- **An old file** (v1's) has bits 2 and 3 clear, so nothing is due and
+  nothing snoozed, and a v1 FIRED reminder reads as already DISMISSED. The
+  slot's words are read only for an appointment whose SNOOZED is set, so a
+  v1 file's zeros there mean nothing. No `DCP_VER` or `DIA_HDR_VER` bump.
+- **Missed at launch**: today's armed reminders whose moment is BEFORE this
+  minute are marked `FIRED | DUE` - card 3 rings the first of them - and
+  summed up in ONE toast (`3 missed reminders`), staged for the first beat
+  as v1. Earlier days are not replayed. With no RTC and an armed reminder
+  still to come, `No RTC - check the time`, as v1.
+- **A moment already past is fired at once, silently** (FIRED, not DUE),
+  whenever a reminder is armed - a new timed appointment, a moved time, a
+  Remind pick - and one that IS this minute is the next beat's to fire, as
+  v1.
+- **Midnight**: the beat that finds the date changed recomposes card 1's
+  header and today's old and new boxes, card 2's heading and card 3, and
+  runs the minute's work for the new day.
+- The save a firing, a snooze or a dismiss owes waits for a quiet poll, as
+  every edit's (`DIA_ONTICK`'s CF, §107.5).
 
-**A damaged state file** - not ours, or a payload whose counts or order fail
-the check above - opens EMPTY and is never written over silently: the first
-edit owes a save, and that save first asks `Replace damaged calendar?`
-(§107.5.2). Yes replaces it with what is on the glass; No keeps the session
-read-only.
-
-**Input**, while the calendar is the front window:
-
-| | |
-|---|---|
-| click a day | select it |
-| click `<` / `>` (header cells 0 and 28) | the previous / next month |
-| Left / Right | a day back / forward, across a month edge |
-| Up / Down | a week back / forward |
-| PgUp / PgDn, `<` / `>` (`,` / `.`) | the previous / next month; the selected day is kept, or clamped to the new month's length |
-| `T` | today |
-| `N` / `K` | a new appointment on the selected day / a new task (the entry field) |
-| `Enter` | edit the selected item |
-| `Del` | delete the selected item, after asking |
-| `Space` | check or uncheck the selected task |
-| `Tab` | COMPACT: the agenda or the tasks |
-| `Esc` | no item selected |
-| click an agenda line / a task's text | select it |
-| click a timed line's mark column (cell 6) | its reminder on or off |
-| click a task's box | DONE, the mark redrawn and nothing else |
-| click a pager line | its list's next page |
-
-While the entry field is open its keys are the field's (`os88line_key`) and
-only `Enter` and `Esc` come back to the calendar.
-
-**Menus.** `Calendar`: New Appointment, New Task, Edit Item, Delete Item,
-Clear Done Tasks, Show Tasks (Show Day), Go to Today, Previous Month, Next
-Month. `Remind`: At the Time, 5 Min Early, 15 Min Early, 30 Min Early, 1 Hour
-Early, No Reminder. The application-name menu carries `About Desk Calendar`
-and the kernel's own `Close`, which goes through `os88dia.inc`'s negotiator
-like the close box. The menus carry only what works in the wave that ships
-them; wave 3's Remind stored a lead that wave 4 fires.
-
-**Reminders** (`dcrem.inc`, wave 4). The DIA beat (`DIA_ONTICK`, every 36
-ticks, about 2 s) asks `OSAPI_CLK_GET` for the date and the minute of the
-day, and does the reminders' work only when the MINUTE has changed since the
-last beat that looked - or the date has, which changes it too:
-
-- **The due check.** The first appointment that is TODAY's, TIMED, ARMED
-  (`REMIND`) and not `FIRED`, whose moment `max(0, time - lead)` is at or
-  before now. The table is in date order, so this is a scan of at most 48
-  records and two compares each; a minute with nothing due draws NOTHING, and
-  a beat inside a minute is one `OSAPI_CLK_GET` and a compare - **0 draw
-  calls** (§107.6 measures both). The moment is clamped at midnight rather
-  than reaching into yesterday: `00:30` an hour early is due at `00:00`.
-- **Firing it** is five things, in this order: `FIRED` set and a save owed;
-  a two-note chirp through `OSAPI_SND_TONE` (880 Hz for 4 ticks, then 660 Hz
-  for 4 - one tone channel, so the second note is a second request, made on a
-  beat the include re-arms 4 ticks out instead of 36, `dia_nx` §107.5); that
-  appointment's agenda line, where it is on show, redrawn - `!` to `-`, ONE
-  run - BEFORE the alert exists, because the clip it draws through is the
-  window's visible region as it is at that moment, and the clip is then
-  DISARMED (`OSAPI_WM_CLIP_CLEAR`): the alert's create recomposes the menu
-  bar, and it does so through whatever clip is armed, so through the
-  calendar's - nowhere near the bar - every cell of that composition was
-  recorded as drawn and dropped, and the `Cal` of the calendar's own
-  `Calendar` title stayed on the alert's bar for good (§107.9); the toast, `09:30
-  Dentist` - the user's text LAST, because 24 characters reach the bar
-  (§59.10); and an alert with OK alone (`os88ui_ask`, `OS88UI_AOK`),
-  `Reminder 09:30 Dentist` - or, when the prefix would take the line past
-  `OS88UI_AMAX`'s 34 characters, `09:30 Dentist` without it, so the user's
-  text is never the part that is lost.
-- **One alert at a time.** While any alert of the calendar's is up - the
-  reminder's own, the Delete question, the damaged-file question; they share
-  `os88ui.inc`'s one gate - or the entry field is open, the minute passes and
-  nothing fires. The next one due fires at the first minute after, so two
-  reminders due in one minute are a minute apart and never stacked, and a
-  reminder that came due while the user was typing waits until the line is
-  done rather than taking the keyboard from under it. The SAVE the firing
-  owes is NOT held while the alert is up: it waits for the one quiet poll
-  every edit waits for (`DIA_ONTICK`'s CF, §107.5), ~2 s, and then lands
-  under the alert - 3 reads and 8 writes, ~4.4 s of disk with the lock
-  held (§107.6), so an OK
-  clicked in that window waits behind it. Holding it until the OK (wave 4's
-  first build) held every edit and drag made meanwhile for as long as the
-  alert stayed up, behind another window or with nobody there, and a
-  Restart closes nothing (§107.4), so all of it was lost.
-- **Missed at launch.** At the entry proc, today's armed reminders whose
-  moment is BEFORE this minute - they came due while the widget was not
-  running - are marked `FIRED` and summarised in ONE toast, `1 missed
-  reminder` or `3 missed reminders`. Earlier days are not replayed. **The
-  entry proc stages that line and the FIRST BEAT says it** (`dc_ltp`), after
-  the beat's registration: a hand launch registers a row the last close took
-  away, so it writes SYSTEM.CFG and `CTRL.DRV` says `Settings Saved` for the
-  write (§107.5), and a summary said from the entry proc was that line's
-  within seconds - the toast slot holds one (§59.3). The beat that says it
-  does nothing else, so no reminder's toast covers it either. One whose
-  moment IS this minute is not missed: the next beat fires it, because the
-  minute last seen starts as none. The FIRED marks are the state file's, so
-  a launch that missed any OWES A SAVE, made at the first quiet poll after
-  the registration (~2 s after it, ~4.4 s of disk on the lock, §107.6) -
-  the one write a launch makes that the user did not cause (§107.5.2). Not
-  saving them would cost a relaunch before the next save the user does
-  cause the same toast again, for reminders already reported.
-- **A moment already past is fired at once, silently**, whenever a reminder
-  is ARMED: a new timed appointment, an edit that moves its time (or gives an
-  all-day one a time), a click on the mark column, a Remind pick. A reminder
-  for a moment the user has just typed past would otherwise go off the
-  instant it was typed; its mark reads `-`. PAST is strictly before this
-  minute, as it is for a launch: a moment that IS this minute - `0930` with
-  the 15-minute lead typed at 09:15 - is a reminder NOW, so the minute last
-  seen is forgotten and the next beat fires it, chirp, toast and alert (a
-  wave-4 build counted this minute as past and fired it silently, so the
-  user was never told of an appointment fifteen minutes away).
-- **Midnight.** The beat that finds the date changed moves today's inverse
-  (above) and runs the minute's work for the NEW day, so a `00:00` reminder
-  fires at the rollover. The selected day and the month on show stay where
-  the user left them.
-- **No hardware clock.** `OSAPI_CLK_GET`'s AL bit 0 = 0 says the time is the
-  PIT's since boot (§37.0.1): right only if somebody set it this session,
-  which the cell cannot say. So at launch, with no RTC and an armed reminder
-  still to come, the toast is `No RTC - check the time` - unless reminders
-  were missed, whose toast it does not displace (the slot holds one line,
-  §59.3). It is staged and said by the first beat as the missed summary is.
-- **Reminders fire only while the widget runs** - minimized included, its
-  timer runs (§13.9) - which autostart (§107.4) makes the normal case.
-  `readme.txt` says so.
-- **On `kern_small`** the beat is the worker's wake (§107.5.2), and the chirp
-  is ONE note, 880 Hz for 8 ticks: the worker's sleep for the next beat has
-  already begun when the beat that would shorten it runs.
-
-**The state file**, `SYSTEM\APPDATA\DESKCAL.DAT`, is §107.5's 16-byte header
-and this payload, 2,440 bytes, so the file is 2,456 bytes - five sectors, one
-read and one write:
+**The state file** is v1's 2,456 bytes - §107.5's header and this payload -
+with the snooze slot in the words v1 left zero:
 
 ```
 +0     db n_appt (0..48), n_task (0..32), lead_default, flags
-+4     dw 0, 0
++4     dw snooze minute (0..1439; read only beside a SNOOZED appointment)
++6     dw snooze date (FAT-packed)
 +8     48 x 32 B APPT, sorted by (date, time):
-         +0 dw date   FAT-packed ((y-1980)<<9 | m<<5 | d): a word compare orders it
+         +0 dw date   FAT-packed ((y-1980)<<9 | m<<5 | d)
          +2 dw time   minute of the day, 0..1439, 0FFFFh = all day
-         +4 db flags  bit 0 REMIND, bit 1 FIRED
+         +4 db flags  bit 0 REMIND, 1 FIRED, 2 SNOOZED, 3 DUE
          +5 db lead   minutes before
          +6 26 B text, NUL
 +1544  32 x 28 B TASK:
@@ -170349,38 +170183,11 @@ read and one write:
          +4 24 B text, NUL
 ```
 
-The bullet in a day's mark cell is an appointment on that date. The flags
-byte at +3 is bit 0 = new appointments get NO reminder (Remind > No Reminder
-with nothing timed selected). An edit owes a save (`dia_touch`), which the
-next tick makes - and a save is not one write: it is `dia_enter`'s remount
-and walk and then `OSAPI_FILE_WRITE` - for the calendar's five-sector file
-3 reads and 8 writes counted at the drive (`deskcalperf`; the probe's
-16-byte one is 2 and 6), about 4.4 s of disk on a 5150 with the lock held
-(§107.6). So the calendar HOLDS it
-(`DIA_ONTICK` answers CF = 1, §107.5) while the entry field or the Delete
-question is open - a save in the middle of a typed word stalls the echo for
-seconds - and until one poll has passed with no edit, so a burst of ticked
-boxes is one save, 2 to 4 seconds after the last of them.
-`tools/os88dia.py` writes and reads the same layout (`deskcal()`,
-`parse_deskcal()`), and `t_dia` holds its offsets equal to `deskcal.asm`'s.
-
-**What a change costs, wave 3**, in primitive calls: a new selected day is
-wave 2's three plus one run per agenda line that was or is now occupied (a
-day with nothing on it, moved to another with nothing, costs nothing more);
-selecting an item is two runs; a check box is one fill (and one pen) and
-nothing else; a keystroke in the field is `os88line_edit`'s one
-cell; opening the field is one `os88line_draw` and closing it one run and
-two fills - the frame's top rows (three on TALL, two on COMPACT, whose frame
-top is the rule) and its bottom row; an insert or a delete is the occupied agenda lines (or
-the task rows from the one that changed), plus the day's field and its frame
-when its bullet came or went. A full paint adds the two lists: an agenda
-line is ONE run and the fill of the gap under it (the last line's gap is the
-band below the list's), a task row is the glyph, one run, the strip below the
-run and the row below the box, with one fill down the box's 4-column inset
-for the whole list. Only a full paint WHILE THE FIELD IS OPEN writes pixels twice:
-the band round the field is filled white once and the field drawn over it,
-because `os88line_draw` assumes a blank interior and a full paint follows a
-picture that may not have been one (the About card, an uncover).
+`tools/os88dia.py` writes and reads it (`deskcal(snooze=...)`,
+`parse_deskcal()`'s `snoozed` / `due` and `snooze`), and `t_dia` holds the
+offsets, the two new bits and the slot equal to `deskcal.asm`'s by NASM's own
+evaluation. An edit owes a save, held while the field or the Delete question
+is open and until one poll has passed with no edit, as v1.
 
 **What it costs**: §107.6's package rows.
 
@@ -170703,6 +170510,18 @@ gaps, the tag's three); MEASURED, a reveal is 1 `BLIT1` and a hide 2
 edge (`deskhover`), and a focus edge 1 `BLIT1` (`deskz`, after wave 3's
 review: it was 3).
 
+**v2's calendar, MEASURED at wave 4** (`deskcalperf`, MartyPC's 4.77 MHz
+VGA XT and 5150 CGA; PERFORMANCE.md Part 5 carries the rows): the full paint
+**19 calls on TALL, 12 on COMPACT** (12 + 7 and 6 + 6 `BLIT1` + `GFX_DESK`),
+**265 / 169 ms** from the first compose to the last call; a day select 5 / 4,
+a month 5..8, a tick 1, a reveal 1 and a hide 3, a firing 2, idle 0 - every
+budget of §107.3 met. `DESKCAL.O88` is **18,336** bytes of image (13,168 at
+v1's polish) and **15,630** on disk lz4-packed (11,211): 16 clusters, the 360
+KB system disk **332 of 354** (22 left; 323 before) and the small one 280 of
+354. A cold boot with the calendar's row reaches the paint at 15.38 s and
+`ui_task` at 19.22 s (7 reads, 50 sectors after the paint) against 14.85 s
+with none - the package's five more clusters are +0.2 s against v1's 19.02.
+
 **Waves 2, 3 and 4 moved no kernel byte.** Re-measured at wave 4's head,
 `tools/kernsize.py` reads `unchanged` on both kernels, and the absolute
 figures are the ledger above applied to the tree it was cut from:
@@ -170837,7 +170656,11 @@ the desk form's, and the state file's face origin means the same place on
 both kernels. The worker arm still beats and a reminder rings card 3 (or the
 CGA slot) with its single note. `desksmall` is its gate: COMPACT on the
 128 KB CGA 5150, a 130 x 70 frame for the probe, a dock tile, the title-bar
-drag, and the gap white with its rule.
+drag, and the gap white with its rule. **The calendar's is `diasmall`**
+(wave 4): a 178 x 151 titled frame, no WF_DESK, an ordinary instance slot
+and its dock tile, the title-bar drag saved as the FACE's origin
+(`DIA_HF_CONT`), and a reminder that rings the CGA slot with ONE note and
+no alert.
 
 ### 107.8 What is not done
 
@@ -170860,13 +170683,13 @@ drag, and the gap white with its rule.
 - **No relaunch after a hibernate Discard**; the widgets return at the next
   boot.
 - **The 12-hour display is not honoured.** `OSAPI_CLK_GET`'s AL bit 1 is
-  the user's 12-hour choice (§37), and the calendar ignores it: the agenda,
-  the alert and the toast are always 24-hour (`09:30`, `23:00`). The entry
+  the user's 12-hour choice (§37), and the calendar ignores it: the cards
+  and the toast are always 24-hour (`09:30`, `23:00`). The entry
   parser reads 24-hour times only, so the two agree with each other.
-- **A past day's unfired reminders keep their `!`.** Earlier days are not
-  replayed at launch (§107.3), and nothing marks them, so an armed
-  reminder whose day went by with the calendar closed reads `!` on that
-  day for good.
+- **A past day's unfired reminders never ring.** Earlier days are not
+  replayed at launch (§107.3), so an armed reminder whose day went by with
+  the calendar closed stays armed and silent on that day for good (v2 has
+  no per-line mark to show it; card 3 is today's).
 - **kern_small with no RTC toasts at every launch.** Its clock is the PIT's
   (§107.7, `clk_rtc` = 0 there), so every launch with an armed reminder
   still to come says `No RTC - check the time`, whether or not the user set
@@ -171433,6 +171256,74 @@ drag, and the gap white with its rule.
     the plate alone**, 1 call where it was 3. **A quit owes nothing more**
     (`DIA_F_QUIT`). `desksmall` sees `OSAPI_GFX_DESK` on kern_small again,
     through a probe verb its beat lays on request.
+- **v2, wave 4 (the Desk Calendar as three cards, §107.3)** - where the code
+  and the rows proved the design record wrong, or left it to choose:
+  - **COMPACT's day box is rows r .. r + 8, not r - 1 .. r + 8.** At a 9-row
+    pitch the design's box began on the row the day ABOVE draws its dot
+    on, so a selected or today's box hid that day's dot - `deskcal1bpp`'s
+    "the 13th has none" read the 20th's outline there. Inside the box the
+    dot is white, as on the other layouts.
+  - **A day's number is CENTRED in its 24-pixel field** (one digit at field
+    + 8, two at + 4), not right-aligned: the mockup centres them under the
+    weekday letters.
+  - **`DIA_RIGHT` is a `%define`, not an `equ`** - the include tests it with
+    `%ifdef`, so §107.11's `equ` was silently ignored and the default place
+    was the template's (the Hercules look caught it, the face at 376 on a
+    720-wide screen).
+  - **No `OSAPI_WM_PREFER` and no `OSAPI_WM_ONRESIZE`.** The design kept
+    "three derived pairs", but a PREFER pair is keyed by the adapter's KIND
+    - the EGA bug itself - and the layout is chosen once by height at
+    `dia_load`. A runtime adapter switch keeps the layout; the beat's
+    re-fit (§107.11) lifts a face that no longer fits.
+  - **A held button's light is COMPOSED, not an `OSAPI_GFX_XOR_FILL`.** The
+    rect, rounded out to bytes, is inverted in the band and put down in
+    ONE `BLIT1` - the same one call - so a repaint while the button is held
+    (a beat, an uncover) draws it lit, and an XOR pair straddling such a
+    repaint cannot leave a stale inversion. The un-light is OWED
+    (`dc_lpend`) and settled by the act's own redraw when that covers the
+    rect, so `>` is the month's 8 calls and not 9.
+  - **A day, a task's box and a line act on the PRESS**; only the buttons
+    light and wait for a release. A selection needs no confirmation, and
+    the box's budget (1 call) has no room for a light.
+  - **A press pays the include's reveal**: the handle comes up at once
+    (§107.11), one tag-row `BLIT1` when it was down. The gestures' budgets
+    are the calendar's own draw; `deskcalperf` and `deskcaltask` set the
+    tag row's calls aside and say so.
+  - **`+` opens the field for EITHER** (`DCE_NEW`): the parse decides, and a
+    plain line longer than a task's 23 characters is REFUSED (`A task: at
+    most 23`), never cut - v1's rule.
+  - **Firing is gated on nothing.** v1 held it while any alert of the
+    calendar's was up or the field was open, because the firing put up an
+    alert; with no alert nothing waits on the user, and a reminder due
+    under an open field rings with the field still open.
+  - **A missed reminder RINGS** (`FIRED | DUE`), so the launch's toast has a
+    card to point at; a moment already past when it is armed is FIRED and
+    not DUE - silent, as v1.
+  - **Card 3 rings the FIRST DUE appointment in table order**, an earlier
+    day's undismissed one included: undismissed is undismissed.
+  - **The About card's lines fit the 176-pixel face** (`A desk widget`,
+    `SPEC.md 107`), and its take-down is ONE whole-face repaint through a
+    new include entry, `dia_redraw` (§107.11).
+  - **MID's card 3 puts `21:00 Back up files` on one line** - bell at x 4,
+    time x 22, text x 68 - where the design's x 32 / x 80 cut the text at
+    eleven characters.
+  - **What a line shows**: an agenda line's text 14 characters, a task's 17
+    (TALL) or 18, card 3's 17 (TALL) or 13 (MID); an all-day appointment's
+    time `--:--`. The record keeps 25 / 23; the field edits all of it.
+  - **The rows**: `ui.raise_window`, `ui.close` and `ui.move_window` send a
+    desk window to `ui.widget_activate` / `widget_close` / `widget_drag`,
+    so a row written for a titled window drives a widget. `diaboot` and
+    `diaswap` stay on the v1 `DIAPROBE.O88` - the include's v1 path is what
+    they gate - and the widget's relaunch (wm_zord[0], `INST_MAX - 1`) is
+    `diamove` C's. `diasmall` stays the calendar's kern_small row (the
+    titled fallback, 178 x 151, no alert, the slot ringing); `desksmall` is
+    the probe's.
+  - **What it cost**: `DESKCAL.O88` 13,168 -> **18,336** bytes of image, its
+    lz4 file 11,211 -> **15,630** (16 clusters, 11 before): the 360 KB
+    system disk is **332 of 354 clusters, 22 left** (323 at wave 3), the
+    small one 280 (275). The include and the composer are ~3.3 KB of it
+    (§107.6); the rest is the three cards' composers and hit tests. No
+    kernel byte.
 
 ### 107.10 How it was built, and its gates
 
@@ -171452,7 +171343,7 @@ and every §7 default of the design record was taken):
 | W1 | the kernel layer: the flags, `wm_top`, `wm_lift`, `wm_show_b`'s and `wm_front_b`'s desk arms, the chromeless sites and `wm_draw_win`'s and `wm_su_rect`'s arms, the press without a raise, the key target, `OSAPI_WM_DESK` QUERY / MAKE / RELEASE and `OSAPI_GFX_DESK`, header flag bit 6 with the top-down slot, the dock and DOCK.DRV; `tests/diaprobe`'s desk build. **The Desk Calendar is untouched** | `t_chromesites` (fast); `deskz`, `deskdock`, `deskkeys`, `desksmall`; kernsize on all three kernels - **a crossed rung is a stop for the owner**; `t_api_abi`, the ABI lock, `os88sym --all`, `os88ladder --selfcheck`, buildmatrix, test-full alone |
 | W2 | the DRAG verb (`[ui_dragy]` = the caller's window), its pick-up and desk test, the desk `.nocache` and the drag's `[wm_dmg_npro]`; the hover edge (`[cur_hovw]`, `cur_hov_x`, `WF_HOVER`); `tests/diaprobe`'s tag row, handle and close box | `deskdrag`, `deskhover`, `deskhovercga`, `deskhoverherc`, `deskclose` (each broken on purpose and failing, §107.9); kernsize on all three kernels - measured +46 / +54, no rung crossed, kern_big image 5 and kern_emu cold 1 left; the review fixes +5 / -1, kern_big image **0** and kern_emu cold 2 left; `deskz`, `deskdock`, `deskkeys`, `desksmall` again |
 | W3 | `apps/os88gfx.inc` `GFXE_TEXT` / `GFXE_BITS` (§5.12.8); `os88dia.inc`'s `DIA_WIDGET` (§107.11): the geometry, the paint, the prefilters, the hover and focus states, `dia_quit`, the face-origin header, the titled fallback; `tests/diaprobe`'s desk build onto it; `tools/os88dia.py` (`DIA_HF_CONT`, `widget_off`) and `t_dia` W | `deskground`, `deskfit` (new); every wave 1 and 2 row re-gated on the include - the tag row pixel for pixel against the guest's font, the dwell and linger to the tick, 1 / 3 calls an edge, the re-fit; kernsize unchanged on all three kernels |
-| W4 | the Desk Calendar as three cards (§107.3's v2 paragraph) | every `dia*` / `deskcal*` row updated; `deskcalcards`, `deskcalsnooze`, `deskmodal` |
+| W4 | the Desk Calendar as three cards (§107.3): header flag bit 6, the three layouts by height and their `dc_geos`, the slab composers, the Monday-first grid with dots, today's box and the outline, card 2's lists with real ticks and `+N more`, card 3's RINGING / NEXT / NONE, COMPACT's paging slot, the controls and keys, `DCA_SNOOZED` / `DCA_DUE` and the snooze slot, the alert-on-fire removed, the menus kept; `os88dia.inc`'s `dia_redraw`; `tools/os88dia.py`'s bits, slot and `DESKCAL_GEO`; `tools/os88ui.py`'s `widget_*` | `deskcaledit`, `deskcaltask`, `deskcalgrid`, `deskcalremind`, `deskcal1bpp`, `deskcalperf`, `diaregister`, `diamove`, `diamovecga`, `diaanchor`, `diasmall` updated; `deskcalcards`, `deskcalsnooze`, `deskmodal` new; `t_dia` holds `dc_geos` to the host's mirror and the header's `OS88_F_DESK` |
 | W5 | look on 1bpp, EGA, Dark and Color; measure on MartyPC's 5150; `kernsize --bless`; `docs/dia/` retaken | `deskcalperf`'s new budgets, test-full alone, the soak |
 
 **If W1 or W2 measures a crossed rung**, the cut order is: move
@@ -171539,6 +171430,16 @@ reminder-caused saves at the drive.
 | `deskground` | the VGA XT, the probe up: Bright, then Dark and Color picked on the Control Panel's Theme page - every gap pixel, both ground columns and the tag row beside the plate are the desktop's ground (the dither by screen parity, black, teal (0,170,170)), the cards and the plate white, both cards every pixel what the host composes from the guest's font (x3 across two slabs, bold, white on black, a tick, x2 bold at an odd `x`); under Color a Disk window over it, closed, leaves teal and the cards whole |
 | `deskfit` | a `VIDEO=ega` kernel in a private tree: `[vid_h]` 350, `[dia_li]` 1 (MID, not TALL), a 130 x 83 frame inside the 306-row band, its face drawn |
 
+**v2 wave 4's rows** (the calendar; every coordinate out of
+`tools/os88dia.py`'s `DESKCAL_GEO`, which `t_dia` holds to `dc_geos`):
+
+| row | asserts |
+|---|---|
+| `deskcalcards` | the owner's mockup in the state file, on VGA (TALL), CGA (COMPACT) and Hercules (MID): the frame 178 wide at face x = width - 264; card corners paper, every gap and ground column the desktop's dither; today's inverse box; the 6th's dot; the bell and both check-box records pixel for pixel; a pressed day's 1-px outline |
+| `deskcalsnooze` | a v1-shaped file loads with nothing due; Snooze on card 3 writes the slot (today 09:35) and shows the earlier one NEXT; a second snooze puts the first back to DUE; the snooze re-fires with its chirp; a 23:57 snooze's slot is tomorrow 00:02, read back off A: |
+| `deskmodal` | with a Disk window in front, Del's question is the top of wm_zord and owns the bar while the widget stays wm_zord[0]; Yes gives the bar to wm_top, never the widget |
+| `deskcalperf` | the budgets of §107.3, asserted - full paint <= 20 (COMPACT <= 14), a day <= 5, a month <= 8, a tick 1, a reveal 1 and a hide 3, a firing 2, idle 0 - and the saves at the drive |
+
 **`t_dia`** (fast tier) is what keeps that include honest between MartyPC
 runs: it runs `tools/os88dia.py --selfcheck`, assembles `diaprobe.asm` (so
 `os88dia.inc` is assembled by every `make`, where before only `make diatest`
@@ -171624,8 +171525,9 @@ beside v1's (§107.5):
 %define DIA_TAG      'Desk Calendar'  the name tag - equal to the window's title
 DIA_FACE_W   equ 176                  the face's width: a multiple of 8, no wider
                                       than GFXE_BAND_W (default 176, 22 cells)
-DIA_RIGHT    equ 264                  optional: with no saved place the face
+%define DIA_RIGHT 264                 optional: with no saved place the face
                                       opens at x = screen width - DIA_RIGHT
+                                      (a %define: the include tests %ifdef)
 %define DIA_LAYOUTS  my_lays          three DIA_LAYOUT entries: TALL, MID, COMPACT
 %define DIA_PAINTCARD proc            AL = the card, BX..DX = its damaged rows
                                       (card-local, inclusive); or dia_slabs
@@ -171671,6 +171573,7 @@ adapter's kind), and sizes the template itself.
 | `dia_load` | also: `OSAPI_WM_DESK` QUERY; the layout; the template's size and, from the state file or the default, its place - converting a v1 file's titled frame to a face |
 | `dia_made` | also: MAKE (the desk form) or `OWNBG` + `SAVEU ON\|1BPP` (the titled fallback); `W_ONCLICK` = `dia_click`, `W_ONMOUSEUP` = `dia_mup`, `W_ONWAKE` = `DIA_WAKE`; the place on record is the FACE's |
 | `dia_paint` | the template's `W_PAINT` (or the package's, tail-jumping to it): `OSAPI_WM_DAMAGE`, then only what intersects it - the two ground columns and every gap by `OSAPI_GFX_DESK`, each card by `DIA_PAINTCARD`, the tag row from the state - and `dia_painted` |
+| `dia_redraw` | (wave 4) the whole face again OUTSIDE a paint, SI = the window, the lock held: `OSAPI_WM_CLIP_SET`, then `dia_paint`'s body with the damage the whole of it - a package's About card taken down; nothing when none of the window shows |
 | `dia_slabs` | the slab painter a `DIA_PAINTCARD` may be: for each `GFXE_BAND_H`-row slab of the card that the rows touch, paper the band white, call `DIA_COMPOSE` (AL = the card, BX = the slab's first card row, CX = its rows; compose with `y` = card row - BX) and blit the damaged rows of it, ONE `OSAPI_GFX_BLIT1` |
 | `dia_click`, `dia_mup` | the prefilters (the gestures above) |
 | `dia_wake` | `W_ONWAKE`: on the worker arm, v1's beat; otherwise the hover edge's reconcile |
@@ -171725,4 +171628,5 @@ taken, so a v1 file is converted once, by its next save, and never twice.
 (§107.2), so nothing migrates there. A `DIA_WIDGET` build is the only one
 that writes the bit; a v1 DIA's file is byte for byte what it was.
 
-It lands in v2's wave 3 (§107.10); the Desk Calendar adopts it in wave 4.
+It landed in v2's wave 3 (§107.10); the Desk Calendar adopted it in wave 4
+(§107.3).

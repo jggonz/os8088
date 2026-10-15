@@ -261,12 +261,16 @@ a Standard File dialog for opening and saving.
   done inside an app's window callbacks billed to that app.
 - **Control Panel** — Scheduler, Buffer, Display, Sound and Date/Time.
 - **Desk Calendar** — the first *desktop integrated application*: a widget
-  in `SYSTEM/DIA/` on the system disk with a month view, appointments, task
-  check boxes and reminders that beep and put up a note at their time. Drag
-  it anywhere; once opened it comes back at every boot where it was left,
-  and a widget that has gone missing becomes a desktop shortcut with one
-  message rather than stopping the boot. `apps/os88dia.inc` is the shared
-  half a new widget includes (SPEC.md 107).
+  in `SYSTEM/DIA/` on the system disk that lives ON the desktop, under every
+  window, with no frame and no dock tile - three white cards (today and a
+  Monday-first month with a dot under each busy day; the chosen day's
+  appointments and your tasks with real ticks; a reminder card that rings,
+  with Snooze and Dismiss) and a name tag that turns into a handle to drag
+  it or close it while the pointer is over it. Its keys and menus are its
+  own once it is clicked. Once opened it comes back at every boot where it
+  was left, and a widget that has gone missing becomes a desktop shortcut
+  with one message rather than stopping the boot. `apps/os88dia.inc` is the
+  shared half a new widget includes (SPEC.md 107).
 - **Menu bar clock** — read from the hardware RTC at boot if the machine has
   one, kept from the PIT after that, and settable.
 - **A system clipboard**, shared across apps.

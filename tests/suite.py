@@ -8931,62 +8931,67 @@ SOAK = [
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
     Row("deskcaledit", "soak", py("tests/deskcaledit.py"), 76.0,
-        "SPEC.md 107.3: the Desk Calendar's APPOINTMENTS, read back off the "
-        "guest's own disk by tools/os88dia.py. A DAMAGED state file (count "
-        "60) opens empty and its first edit asks `Replace damaged calendar?` "
-        "with the file untouched until Yes; `9:30 Dentist`, `1230 Lunch`, "
-        "`815 Gym` and `Mum's birthday` are four appointments IN ORDER, "
-        "all-day first, the timed ones armed; Enter on a clicked line edits "
-        "it in the field (09:30 Doctor, reminder kept); Del asks and Yes "
-        "deletes; 26 characters are refused (`At most 25 letters`, nothing "
-        "written); Delete Item picked with the field open asks on a bar "
-        "with nothing right of the app name (SPEC.md 107.9); and a full table of 48 greys New Appointment `(full)` and "
-        "answers N with `Calendar is full (48)`.",
+        "SPEC.md 107.3: the Desk Calendar WIDGET's APPOINTMENTS, read back "
+        "off the guest's own disk by tools/os88dia.py, selected the v2 way "
+        "(the two-line agenda paged by its `+N more` pager). A DAMAGED "
+        "state file (count 60) opens empty and its first edit asks `Replace "
+        "damaged calendar?` with the file untouched until Yes; `9:30 "
+        "Dentist`, `1230 Lunch`, `815 Gym` and `Mum's birthday` are four "
+        "appointments IN ORDER, all-day first, the timed ones armed; Enter "
+        "on a pressed line edits it in the field (09:30 Doctor, reminder "
+        "kept); Del asks and Yes deletes; 26 characters are refused (`At "
+        "most 25 letters`, nothing written); Delete Item picked with the "
+        "field open asks on a bar with nothing right of the app name "
+        "(SPEC.md 107.9); v2's FOCUS with a Disk window in front all along "
+        "- a card-margin press hands the widget the bar and the Disk window "
+        "stays wm_top, `+` opens the field in card 2's heading row and a "
+        "plain line is a TASK and a timed one an appointment, losing the "
+        "bar shuts an open field keeping nothing, Esc RELEASES the bar; and "
+        "a full table of 48 greys New Appointment `(full)` and answers N "
+        "with `Calendar is full (48)`.",
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
     Row("deskcaltask", "soak", py("tests/deskcaltask.py"), 85.0,
-        "SPEC.md 107.3: the Desk Calendar's TASKS on a Hercules 5150 "
-        "(TALL, a readable 1bpp framebuffer). Three typed tasks are three in "
-        "the state file, their boxes inset 4 px off the window's frame with "
-        "a ground row between each two; a click on a box checks it and the window differs "
-        "in its 6x6 mark and NOTHING ELSE, with ZERO runs through the "
-        "package's own dc_run (a breakpoint counter; a selection click, two "
-        "runs, is its control); Space on a selected task the same; Clear "
-        "Done Tasks greyed `(none done)` until one is checked and leaving the "
-        "unchecked one; Del and Yes empty the list; and a PAGED list - a "
-        "delete that ends paging starts it at its top, and a pager that goes "
-        "away is erased (row 4 ground, every pixel).",
+        "SPEC.md 107.3: the Desk Calendar's TASKS on a Hercules 5150 - v2's "
+        "MID layout by the screen's height, a readable 1bpp framebuffer. "
+        "Three typed tasks are three in the state file; the box is 9 x 9 at "
+        "face x 8, its frame ink, pixel for pixel the layout's record; a "
+        "press on it checks it as EXACTLY ONE calendar BLIT1 (a breakpoint "
+        "on every drawing cell, the far return the calendar's segment; the "
+        "tag row's reveal set aside) with the screen changed inside the "
+        "box's rect and nowhere else, the box then pixel for pixel the "
+        "TICKED record; the two-line list pages by `+2 more`, a text press "
+        "selects and Space checks, one BLIT1 again; Clear Done Tasks greyed "
+        "`(none done)` until one is checked and leaving the unchecked one; "
+        "Del and Yes empty the list; and three again show the last one's "
+        "page and the pager wraps.",
         needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
     Row("deskcalgrid", "soak", py("tests/deskcalgrid.py"), 40.0,
         "SPEC.md 107.3: the Desk Calendar's 42-byte grid, read out of the "
-        "running guest's bss, is Python calendar's for Oct 2026, Feb 2028 "
-        "(leap), Mar 2028 (by PgDn), Jan 1980 and Dec 2099 - each reached by "
-        "setting the machine's CLOCK and pressing T, so OSAPI_CLK_GET is "
-        "asserted every leg - and stepping past either end of the range is "
-        "refused while the other direction still moves.",
+        "running guest's bss, is Python calendar's - MONDAY FIRST since v2 "
+        "(firstweekday=0) - for Oct 2026, Feb 2028 (leap), Mar 2028 (by "
+        "PgDn), Jan 1980 and Dec 2099, each reached by setting the "
+        "machine's CLOCK and pressing T with the widget owning the bar "
+        "(ui.raise_window of a desk window activates it), so OSAPI_CLK_GET "
+        "is asserted every leg - and stepping past either end of the range "
+        "is refused while the other direction still moves.",
         needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
     Row("deskcalremind", "soak", py("tests/deskcalremind.py"), 72.0,
-        "SPEC.md 107.3: the Desk Calendar's REMINDERS, on MartyPC's VGA XT "
-        "with the clock SET through the live clk_* fields. A launch at 09:28 "
-        "sums up ONE missed reminder in one toast and marks it FIRED; at "
-        "09:30 Dentist goes off - the alert `Reminder 09:30 Dentist` (OK "
-        "alone, read through os88ui.inc's own message pointer), the toast "
-        "`09:30 Dentist`, OSAPI_SND_TONE asked for 880 then 660 Hz four ticks "
-        "each (a breakpoint on the cell), and ONE run, its line's mark `!` to "
-        "`-`; ONE AT A TIME - two minutes pass under its alert and Call Bob "
-        "waits - the save Dentist's firing owed landing UNDER its alert, "
-        "which holds nothing, and the alert's own menu bar clean right of its "
-        "name once the toast is down (the calendar's armed clip once left "
-        "`Cal` there) - then goes off alone at the next minute after "
-        "OK; a 23-letter "
-        "text drops the `Reminder ` prefix rather than lose a letter; nothing "
-        "goes off with the entry field open; one typed for THIS minute goes "
-        "off on the next beat, and one for a moment already past is created "
-        "FIRED; the state file has every FIRED; a relaunch AT a reminder's "
-        "own minute with no RTC does not call it missed - the toast is `No "
-        "RTC - check the time` and it goes off on the first beat; and "
-        "at midnight today's inverse moves (two runs) and a 00:00 reminder on "
-        "the new day goes off.",
+        "SPEC.md 107.3 (v2): the Desk Calendar's REMINDERS RING ON CARD 3 - "
+        "no alert - on MartyPC's VGA XT with the clock SET through the live "
+        "clk_* fields. A launch at 09:28 sums up ONE missed reminder in one "
+        "toast, marks it FIRED and DUE and card 3 rings it, a v1 FIRED one "
+        "reads as dismissed, and D shows Dentist NEXT; at 09:30 Dentist "
+        "goes off - the toast `09:30 Dentist`, OSAPI_SND_TONE asked for 880 "
+        "then 660 Hz four ticks each, card 3's two slabs and nothing else "
+        "of the calendar's drawn, and NO second window (wm_zn unmoved); one "
+        "ringing at a time - Call Bob fires under Dentist and card 3 keeps "
+        "the first due until Dismiss is pressed on it; an open entry field "
+        "no longer holds a firing; this minute is not past, a moment "
+        "already past is FIRED and not DUE; the state file's FIRED and DUE; "
+        "a relaunch AT a reminder's own minute with no RTC says `No RTC - "
+        "check the time` and it rings on the next beat; and at midnight the "
+        "00:00 reminder on the new day rings.",
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
     Row("deskz", "soak", py("tests/desklayer.py", "--leg", "z"), 30.0,
@@ -9149,16 +9154,53 @@ SOAK = [
         needs=("marty", "mtools"), timeout=1200,
         wants=("build/os8088-360.img",)),
     Row("deskcal1bpp", "soak", py("tests/deskcal1bpp.py"), 45.0,
-        "SPEC.md 107.3, 39.4, 47: the Desk Calendar on BOTH 1bpp adapters, "
-        "asserted on the framebuffer's own bits (MartyPC's 5150 with a CGA, "
-        "and with a Hercules card): COMPACT 234x142 and TALL 234x272; today's "
-        "field mostly ink (inverse) and a plain day's mostly ground; a click "
-        "on the 20th puts an unbroken ink rectangle round its field and takes "
-        "the 14th's away while the 14th stays inverse; the 20th's mark cell, "
-        "hard after its number, carries its `*` and the blank before its "
-        "number is ground; and with the Calendar menu held down, every item's "
-        "band - the greyed `(no item)` ones included - carries ink.",
+        "SPEC.md 107.3, 39.4, 47: the Desk Calendar WIDGET on BOTH 1bpp "
+        "adapters, asserted on the framebuffer's own bits (MartyPC's 5150 "
+        "with a CGA, and with a Hercules card): COMPACT 178x146 and MID "
+        "178x242 by the screen's height; today's box mostly ink (inverse) "
+        "and a plain day's mostly ground; a press on the 20th puts an "
+        "unbroken 1-px outline round its box and today stays inverse; the "
+        "20th's dot is ink and the 13th has none (the COMPACT box once took "
+        "the dot row of the day above, SPEC.md 107.9); every gap pixel is "
+        "the desktop's dither; and with the Calendar menu held down on the "
+        "widget's own bar, every item's band - the greyed `(no item)` ones "
+        "included - carries ink.",
         needs=("marty", "mtools"), timeout=900,
+        wants=("build/os8088-360.img",)),
+    Row("deskcalcards", "soak", py("tests/deskcalcards.py"), 110.0,
+        "SPEC.md 107.3 (v2): the Desk Calendar's THREE CARDS probed pixel "
+        "by pixel with the owner's mockup in the state file, on MartyPC's "
+        "VGA XT (TALL), its 5150 CGA (COMPACT) and Hercules (MID): a "
+        "178-wide frame of the layout's height at face x = width - 264; "
+        "every card corner paper and every gap and ground column the "
+        "desktop's dither; today's inverse box with white digits; the 6th's "
+        "dot; the bell pixel for pixel the layout's record (the CGA slot's "
+        "reminder page, which a DUE reminder took); the TICKED and plain "
+        "boxes pixel for pixel (the CGA slot paged to its tasks by its "
+        "heading); and a pressed day's 1-px outline with today staying "
+        "inverse.",
+        needs=("marty", "mtools"), timeout=1500,
+        wants=("build/os8088-360.img",)),
+    Row("deskcalsnooze", "soak", py("tests/deskcalsnooze.py"), 60.0,
+        "SPEC.md 107.3 (v2): SNOOZE and DISMISS on MartyPC's VGA XT, the "
+        "clock set through clk_*. A v1-shaped file (zeros at payload +4/+6) "
+        "loads with nothing due or snoozed and its v1 FIRED read as "
+        "dismissed; Dentist rings with no alert, Snooze pressed on card 3 "
+        "makes it SNOOZED with the slot (today, 09:35) and card 3 shows the "
+        "earlier Call Bob NEXT; S on Call Bob puts Dentist back to DUE (one "
+        "snooze held); D dismisses; at 09:36 the snooze RE-FIRES with the "
+        "chirp; and a snooze at 23:57 writes TOMORROW 00:02 into the slot, "
+        "read back off A: by tools/os88dia.py.",
+        needs=("marty", "mtools"), timeout=900,
+        wants=("build/os8088-360.img",)),
+    Row("deskmodal", "soak", py("tests/deskmodal.py"), 40.0,
+        "SPEC.md 107.3, 11.103.4: a widget's MODAL QUESTION on MartyPC's "
+        "VGA XT with a Disk window in front: the widget is wm_zord[0] and "
+        "the Disk window wm_top; Del on the widget's appointment puts "
+        "`Delete this appointment?` at the TOP of wm_zord owning the bar, "
+        "the widget still at [0] under the Disk window; Yes deletes it and "
+        "the bar goes to wm_top - the Disk window, never the widget.",
+        needs=("marty", "mtools"), timeout=600,
         wants=("build/os8088-360.img",)),
     Row("curdisk", "soak", py("tests/curdisk.py"), 240.0,
         "SPEC.md 7.4: the arrow TRACKS the hand through a disk transfer. It "

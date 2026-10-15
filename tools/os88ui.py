@@ -59,6 +59,7 @@ button edges. tools/os88mouserel.py is the relative one and is not used here;
 if the mouse itself is what you are testing, this file is the wrong layer.
 """
 import os
+import struct
 import sys
 import time
 
@@ -385,6 +386,8 @@ class UI:
         front nor minimized, that is a raise.
         """
         w = self._as_win(w)
+        if self._is_desk(w):
+            return self.widget_activate(w, limit=limit)
         top = self.front()
         if top is not None and top.i == w.i:
             return w
@@ -453,6 +456,8 @@ class UI:
         to close it.
         """
         w = self._as_win(w)
+        if self._is_desk(w):
+            return self.widget_close(w, limit=limit)
         self.raise_window(w)
         # **THE RECT IS RE-READ HERE**, and that is not belt and braces. The
         # caller's handle is a SNAPSHOT: `wait_window` answers the instant a
@@ -495,6 +500,8 @@ class UI:
         packet and retrying a clamp is an infinite loop with a timeout on it.
         """
         w = self._as_win(w)
+        if self._is_desk(w):
+            return self.widget_drag(w, x - w.x, y - w.y, limit=limit)
         # **A RAISE FOLLOWED BY A GRAB IS A DOUBLE-CLICK ON THE TITLE BAR**,
         # and SPEC.md 11.95 says what that does: it ZOOMS the window, and the
         # next one restores it - so the drag never happens and the record
@@ -572,6 +579,125 @@ class UI:
                 "a window may not be dragged off its display."
                 % ((w.title, x, y) + want + got))
         return self._refresh(w)
+
+    # =========================================================================
+    # DESK WIDGETS (SPEC.md 11.103, 107.11): a window under every application
+    # window, with no title bar, no close box and no dock tile. A widget is
+    # ACTIVATED (it takes the bar and the keys) rather than raised, DRAGGED by
+    # its tag row, and CLOSED by the x its handle reveals while the pointer
+    # is over it. raise_window, close and move_window send a desk window
+    # here, so a caller written for a titled window drives a widget too.
+    # =========================================================================
+    _WIDGETS = {"Desk Calendar": ("DESKCAL_DIA_BSS", "DESKCAL_PAYLEN"),
+                "DeskProbe": (288, 0)}
+
+    def _is_desk(self, w):
+        return bool(w.flags & geom.WF_DESK)
+
+    def _wrec(self, w):
+        """The record as a KERNEL_SEG offset - what [menu_win] holds."""
+        return (self._S("wm_wins") + w.i * geom.WIN_SIZE
+                - geom.KERNEL_SEG * 16) & 0xFFFF
+
+    def _wfield(self, w, name, dia=None):
+        """A byte of os88dia.inc's DIA_WIDGET state (tools/os88dia.py's
+        widget_off), read out of the widget's own segment: its image size is
+        the header word at +8 of the loaded image."""
+        import os88dia
+        if dia is None:
+            k = self._WIDGETS.get(w.title)
+            if k is None:
+                raise UIError("widget %r: say where its DIA state is "
+                              "(dia=(DIA_BSS, DIA_PAYLEN))" % w.title)
+            dia = tuple(getattr(os88dia, v) if isinstance(v, str) else v
+                        for v in k)
+        rec = self._S("wm_wins") + w.i * geom.WIN_SIZE
+        seg = struct.unpack("<H", bytes(self.m.read(rec + geom.W_SEG, 2)))[0]
+        img = struct.unpack("<H", bytes(self.m.readseg(seg, 8, 2)))[0]
+        off = os88dia.widget_off(dia[0], dia[1])[name]
+        return self.m.readseg(seg, img + off, 1)[0]
+
+    def _above(self, w):
+        """The windows over `w` - every visible ordinary window, for a desk
+        window, which is under all of them."""
+        return [o for o in self.windows()
+                if o.i != w.i and o.visible and not o.flags & geom.WF_DESK]
+
+    def _wpoint(self, w, pts):
+        above = self._above(w)
+        for x, y in pts:
+            if not any(o.covers(x, y) for o in above):
+                return x, y
+        raise UIError("widget %r: every point tried is covered by %r"
+                      % (w.title, [o.title for o in above]))
+
+    def widget_activate(self, w, limit=T_RAISE):
+        """Give a widget the bar and the keys - a press on a card's MARGIN,
+        the top right of a card, which no control is under - and PROVE it:
+        [menu_win] names its record. Free when it owns the bar already."""
+        w = self._refresh(self._as_win(w))
+        rec = self._wrec(w)
+        if self._word("menu_win") == rec:
+            return w
+        fx = w.x + 1
+        pts = [(fx + 172, w.y + 2), (fx + 172, w.y + 30), (fx + 2, w.y + 2)]
+        pt = self._wpoint(w, pts)
+        self.mo.click(pt[0], pt[1], settle=0)
+        self._wait(lambda: self._word("menu_win") == rec,
+                   "widget %r to take the bar (pressed a card margin at %r)"
+                   % (w.title, pt), limit,
+                   snapshot=lambda: "menu_win = %#06x" % self._word("menu_win"))
+        return self._refresh(w)
+
+    def widget_hover(self, w, on=True, limit=T_RAISE, dia=None):
+        """The pointer onto the widget's tag row (on) or off to the bare
+        desktop's top left (off), and wait for the include's handle to be
+        SHOWN / for WF_HOVER to clear - the dwell is DIA_HOVER_T ticks."""
+        w = self._refresh(self._as_win(w))
+        if on:
+            pt = self._wpoint(w, [(w.x + 1 + 20, w.y + w.h - 6),
+                                  (w.x + 1 + 160, w.y + w.h - 6)])
+            self.mo.to(*pt)
+            self._wait(lambda: self._wfield(w, "dia_hv", dia) == 2,
+                       "widget %r's handle (dia_hv SHOWN)" % w.title, limit)
+        else:
+            self.mo.to(40, 60)
+            self._wait(lambda: not self._refresh(w).flags & geom.WF_HOVER,
+                       "widget %r's WF_HOVER to clear" % w.title, limit)
+        return self._refresh(w)
+
+    def widget_drag(self, w, dx, dy, limit=T_MOVE):
+        """Drag a widget by its TAG ROW (left of its plate, right of the x)
+        by (dx, dy), and wait for ui_drag to be over - the kernel's own drag,
+        posted by the include (SPEC.md 11.103.6), so [ui_dragwin] is the
+        witness exactly as for a title bar. x lands where 11.94's snap puts
+        it; the record is returned, not predicted."""
+        w = self._refresh(self._as_win(w))
+        gx, gy = self._wpoint(w, [(w.x + 1 + 20, w.y + w.h - 6),
+                                  (w.x + 1 + 160, w.y + w.h - 6)])
+        self._grab(w, gx, gy)
+        self.mo.to(gx + dx, gy + dy, l=True)
+        self.mo._edge(False)
+        lockf = self._S("gfx_lock_flag")
+        was = (w.x, w.y)
+        self._wait(lambda: (self._rect(w.i)[:2] != was
+                            and self.m.read(lockf, 1)[0] == 0),
+                   "widget %r to move by (%d,%d)" % (w.title, dx, dy), limit,
+                   snapshot=lambda: "at %r" % (self._rect(w.i)[:2],))
+        return self._refresh(w)
+
+    def widget_close(self, w, limit=T_RAISE, dia=None):
+        """Hover the widget until its handle is SHOWN, then press and release
+        ON the handle's x (face x 3..12, the tag row's middle) - the include
+        closes through its negotiator (SPEC.md 107.11) - and wait for the
+        record to go free."""
+        w = self._refresh(self._as_win(w))
+        self.widget_hover(w, True, dia=dia)
+        x, y = w.x + 1 + 7, w.y + w.h - 6
+        gone = lambda: all(o.i != w.i for o in self.windows())    # noqa: E731
+        self.mo.click(x, y, settle=0)
+        self._wait(gone, "widget %r to close" % w.title, limit,
+                   snapshot=self.titles)
 
     def _edge_until(self, cond, what, guest=T_SHORT, tries=3, snapshot=None,
                     prep=None):

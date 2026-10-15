@@ -9,20 +9,22 @@ come back with no autostart at all.
 SYSTEM\\DIA\\DESKCAL.O88 like every system disk, SPEC.md 24.5.1) copied to a
 scratch file, on MartyPC's 128KB 5150 with a CGA - the floor machine, COMPACT.
 
-  A  double-clicked out of SYSTEM\\DIA it opens; kern_small has no
-     OSAPI_WM_TIMER, so the first paint HIRES THE WORKER (dia_st WORKER |
-     HIRED) and registration is never TRIED - kern_small's OSAPI_DESK_ITEM is
-     the refusal - and NOTHING IS SAID: no toast six guest seconds on.
-  B  a drag is saved by the worker's beat: DESKCAL.DAT on A: holds the new
-     place on 640x200 (the wake takes the lock round the whole beat, so the
-     save is kern_big's own).
-  C  an appointment typed at 09:59:50, `1000 Small`, goes off at 10:00
-     through the same beat: the alert `Reminder 10:00 Small` and ONE note,
-     880 Hz for 8 ticks (the worker's sleep for the next beat has begun
-     before this one runs, so there is no second note to time) - a
-     breakpoint on the OSAPI_SND_TONE cell, its AX and CX read at the stop.
-  D  OK, and the close box closes it at once (no row to remove) with the
-     state written.
+  A  double-clicked out of SYSTEM\\DIA it opens as v2's TITLED FALLBACK
+     (SPEC.md 107.7): OSAPI_WM_DESK QUERY refuses on kern_small, so it is an
+     ordinary 178 x 151 window - COMPACT's face less its tag row and last
+     gap, plus the title bar - with no WF_DESK and an ordinary instance slot
+     (a dock tile); kern_small has no OSAPI_WM_TIMER, so the first paint
+     HIRES THE WORKER (dia_st WORKER | HIRED) and registration is never
+     TRIED, and NOTHING IS SAID: no toast six guest seconds on.
+  B  a TITLE-BAR drag is saved by the worker's beat: DESKCAL.DAT on A: holds
+     the FACE's origin - (x + 1, y + TITLE_H), DIA_HF_CONT - on 640x200.
+  C  an appointment typed at 09:59:45, `1000 Small`, goes off at 10:00
+     through the same beat: NO ALERT (v2), the toast `10:00 Small`, ONE
+     note, 880 Hz for 8 ticks (the worker's sleep for the next beat has
+     begun before this one runs, so there is no second note to time), and
+     the CGA SLOT pages to the reminder and rings it.
+  D  the close box closes it at once (no row to remove) with the state
+     written.
   E  a RESET brings no calendar back: no autostart on kern_small.
   F  opened again by hand it is WHERE IT WAS DRAGGED, with `Small` in it,
      FIRED.
@@ -164,25 +166,39 @@ def main():
             txt, on = ui.toast()
             check(txt == "" and not on, "and nothing was said (toast %r, %s)"
                   % (txt, "up" if on else "down"))
+            w = ui.window(TITLE)
+            check(not w.flags & geom.WF_DESK and (w.w, w.h) == (178, 151),
+                  "the TITLED fallback: no WF_DESK, 178 x 151 (%r, %#06x)"
+                  % ((w.w, w.h), w.flags))
+            inst = geom.instances(m)
+            mine = [k for k, rr in inst.items()
+                    if (rr["win"] + geom.KERNEL_SEG * 16 - ui._S("wm_wins"))
+                    // geom.WIN_SIZE == w.i]
+            check(mine and mine[0] != geom.INST_MAX - 1
+                  and not inst[mine[0]]["flags"] & geom.IF_DESK,
+                  "...an ordinary instance slot, no IF_DESK: it keeps its "
+                  "dock tile (%r)" % (mine,))
 
             print("B: a drag, saved by the worker's beat")
             w0 = ui.window(TITLE)
             ui.drag_window(w0, -200, 0)
             w = ui.window(TITLE)
             moved = (w.x, w.y)
+            face = (w.x + 1, w.y + geom.TITLE_H)
             check(moved != (w0.x, w0.y), "the frame moved to %r" % (moved,))
             def hdr():                  # the header IN MEMORY: the place
                 b = bytes(c.bss(HDR, 8))    # recorded once two polls agree
-                return b[3] & 1, struct.unpack_from("<HH", b, 4)
-            ui._wait(lambda: hdr() == (1, moved) and not c.st() & S_DIRTY,
+                return b[3] & 3, struct.unpack_from("<HH", b, 4)
+            ui._wait(lambda: hdr() == (3, face) and not c.st() & S_DIRTY,
                      "the drag's save (two polls, then the write)", 120,
                      snapshot=lambda: "dia_st %#x, header %r"
                      % (c.st(), hdr()))
             d = c.dat() or {}
-            check(d.get("pos") and (d.get("x"), d.get("y")) == moved
+            check(d.get("pos") and d.get("cont")
+                  and (d.get("x"), d.get("y")) == face
                   and tuple(d.get("screen") or ()) == (640, 200),
-                  "DESKCAL.DAT holds %r on 640x200 (%r)"
-                  % (moved, {k: v for k, v in d.items() if k != "payload"}))
+                  "DESKCAL.DAT holds the FACE %r on 640x200 (%r)"
+                  % (face, {k: v for k, v in d.items() if k != "payload"}))
 
             print("C: a reminder, through the same beat")
             m.write(ui._S("clk_sec"), bytes([45, 59, 9]))
@@ -197,8 +213,8 @@ def main():
                   "Small is armed and not fired (%r)"
                   % (c.appts().get("Small"),))
             with os88marty.bp_trace(m, TONE_CELL, regs=True) as tr:
-                ui._wait(lambda: c.bss(D.DESKCAL_BSS_ALERT)[0] == 1
-                         and c.windows() == 2, "Small's alert", 90,
+                ui._wait(lambda: c.bss(D.DESKCAL_BSS_C3K)[0] == 2,
+                         "Small to ring", 90,
                          snapshot=lambda: "clock %r" % (
                              m.read(ui._S("clk_min"), 2),))
                 os88marty.guest_sleep(m, 3.0)
@@ -206,13 +222,13 @@ def main():
             check(tones == [(880, 8)], "ONE note, 880 Hz for 8 ticks (%r)"
                   % (tones,))
             msg = bytes(c.bss(D.DESKCAL_BSS_RMSG, 42)).split(b"\0")[0]
-            check(msg == b"Reminder 10:00 Small",
-                  "the alert's line is %r" % msg)
+            check(msg == b"10:00 Small", "the toast's line is %r" % msg)
             check(c.appts().get("Small") == (True, True), "Small is FIRED")
+            check(c.windows() == 1, "NO ALERT: one window with its title")
+            check(c.bss(D.DESKCAL_BSS_PANE)[0] == 2,
+                  "the slot paged to the reminder, which rings it")
 
-            print("D: OK, and the close box")
-            m.key("Enter")
-            ui._wait(lambda: c.windows() == 1, "the alert to go", 30)
+            print("D: the close box")
             c.front()
             w = ui.window(TITLE)
             x, y = geom.close_xy(w.x, w.y)

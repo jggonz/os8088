@@ -204,14 +204,18 @@ def deskcal_equs(tmp):
              "DCP_MAXTASK", "DCP_APPT0", "DCP_APPTSZ", "DCP_TASK0",
              "DCP_TASKSZ", "DC_BSS", "DC_BSS_GRID", "DC_BSS_Y", "DC_BSS_M",
              "DC_BSS_SEL", "DC_BSS_TY", "DC_BSS_TM", "DC_BSS_TD",
-             "DC_BSS_OX", "DC_BSS_OY", "DC_BSS_ED", "DC_BSS_EDI", "DC_BSS_SELK", "DC_BSS_SELI", "DC_BSS_EBUF",
-             "DC_BSS_TTOP", "DC_BSS_TSHOW", "DC_BSS_ALERT", "DC_BSS_NOW",
-             "DC_BSS_LNOW", "DC_BSS_RMSG",
+             "DC_BSS_ED", "DC_BSS_EDI", "DC_BSS_SELK", "DC_BSS_SELI",
+             "DC_BSS_PANE", "DC_BSS_ATOP", "DC_BSS_TTOP", "DC_BSS_ACNT",
+             "DC_BSS_EBUF", "DC_BSS_NOW", "DC_BSS_LNOW", "DC_BSS_C3K",
+             "DC_BSS_C3A", "DC_BSS_C3T", "DC_BSS_LIT", "DC_BSS_RMSG",
+             "DC_BSS_LINE", "DC_BSS_BAND",
              "DCA_FLAGS", "DCA_LEAD", "DCA_TEXT", "DCT_TEXT", "DCP_LEAD",
-             "DCP_FLAGS", "DCA_REMIND", "DCA_FIRED", "DCT_DONE",
+             "DCP_FLAGS", "DCA_REMIND", "DCA_FIRED", "DCA_SNOOZED",
+             "DCA_DUE", "DCP_SNZT", "DCP_SNZD", "DC_SNOOZE", "DCT_DONE",
              "dia_st - os88_image_end", "dia_file - os88_image_end",
-             "dc_line - os88_image_end",
-             "DIA_PAYLEN", "DIA_PAYVER"]
+             "dc_line - os88_image_end", "dc_band - os88_image_end",
+             "GFXE_BAND_W", "GFXE_BAND_H", "DIA_FACE_W",
+             "DIA_PAYLEN", "DIA_PAYVER", "dc_geos", "DCG_SZ", "DCG_BELLX"]
     src = open(os.path.join(ROOT, "apps", "deskcal", "deskcal.asm")).read()
     probe = ("\n    db 'T_DIA_PROBE'\n" +
              "".join("    dw %s\n" % n for n in names))
@@ -226,7 +230,10 @@ def deskcal_equs(tmp):
         raise RuntimeError(r.stderr.strip()[-400:])
     b = open(out, "rb").read()
     i = b.index(b"T_DIA_PROBE") + len("T_DIA_PROBE")
-    return dict(zip(names, struct.unpack_from("<%dH" % len(names), b, i)))
+    e = dict(zip(names, struct.unpack_from("<%dH" % len(names), b, i)))
+    g, n = e["dc_geos"], e["DCG_SZ"]
+    e["geos"] = [b[g + k * n:g + (k + 1) * n] for k in range(3)]
+    return e
 
 
 def probe_equs(tmp, names, defines=("-DDP_DESK",)):
@@ -444,30 +451,66 @@ def main():
                  ("DC_BSS_TY", os88dia.DESKCAL_BSS_TY),
                  ("DC_BSS_TM", os88dia.DESKCAL_BSS_TM),
                  ("DC_BSS_TD", os88dia.DESKCAL_BSS_TD),
-                 ("DC_BSS_OX", os88dia.DESKCAL_BSS_OX),
-                 ("DC_BSS_OY", os88dia.DESKCAL_BSS_OY),
                  ("DC_BSS_ED", os88dia.DESKCAL_BSS_ED),
                  ("DC_BSS_EDI", os88dia.DESKCAL_BSS_EDI),
                  ("DC_BSS_SELK", os88dia.DESKCAL_BSS_SELK),
                  ("DC_BSS_SELI", os88dia.DESKCAL_BSS_SELI),
-                 ("DC_BSS_EBUF", os88dia.DESKCAL_BSS_EBUF),
+                 ("DC_BSS_PANE", os88dia.DESKCAL_BSS_PANE),
+                 ("DC_BSS_ATOP", os88dia.DESKCAL_BSS_ATOP),
                  ("DC_BSS_TTOP", os88dia.DESKCAL_BSS_TTOP),
-                 ("DC_BSS_TSHOW", os88dia.DESKCAL_BSS_TSHOW),
-                 ("DC_BSS_ALERT", os88dia.DESKCAL_BSS_ALERT),
+                 ("DC_BSS_ACNT", os88dia.DESKCAL_BSS_ACNT),
+                 ("DC_BSS_EBUF", os88dia.DESKCAL_BSS_EBUF),
                  ("DC_BSS_NOW", os88dia.DESKCAL_BSS_NOW),
                  ("DC_BSS_LNOW", os88dia.DESKCAL_BSS_LNOW),
+                 ("DC_BSS_C3K", os88dia.DESKCAL_BSS_C3K),
+                 ("DC_BSS_C3A", os88dia.DESKCAL_BSS_C3A),
+                 ("DC_BSS_C3T", os88dia.DESKCAL_BSS_C3T),
+                 ("DC_BSS_LIT", os88dia.DESKCAL_BSS_LIT),
                  ("DC_BSS_RMSG", os88dia.DESKCAL_BSS_RMSG),
+                 ("DC_BSS_LINE", os88dia.DESKCAL_BSS_LINE),
+                 ("DC_BSS_BAND", os88dia.DESKCAL_BSS_BAND),
                  ("DCA_FLAGS", 4), ("DCA_LEAD", 5), ("DCA_TEXT", 6),
                  ("DCT_TEXT", 4), ("DCP_LEAD", 2), ("DCP_FLAGS", 3),
                  ("DCA_REMIND", os88dia.APPT_REMIND),
                  ("DCA_FIRED", os88dia.APPT_FIRED),
+                 ("DCA_SNOOZED", os88dia.APPT_SNOOZED),
+                 ("DCA_DUE", os88dia.APPT_DUE),
+                 ("DCP_SNZT", os88dia.DESKCAL_SNZT),
+                 ("DCP_SNZD", os88dia.DESKCAL_SNZD),
+                 ("DC_SNOOZE", os88dia.DESKCAL_SNOOZE),
                  ("DCT_DONE", os88dia.TASK_DONE),
                  ("dc_line - os88_image_end", os88dia.DESKCAL_BSS_LINE),
+                 ("dc_band - os88_image_end", os88dia.DESKCAL_BSS_BAND),
+                 ("GFXE_BAND_W", 176), ("DIA_FACE_W", 176),
+                 ("GFXE_BAND_H", 32),
                  ("dia_file - os88_image_end",
                   os88dia.dia_hdr_off(os88dia.DESKCAL_DIA_BSS)),
                  ("dia_st - os88_image_end",
                   os88dia.dia_st_off(os88dia.DESKCAL_DIA_BSS,
                                      os88dia.DESKCAL_PAYLEN))]
+        # v2: the calendar is a DESK widget - header flag bit 6, OS88_F_DESK
+        # (SPEC.md 20.2, 107.3) - read off the BUILT package's header
+        dbin = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"),
+                            "deskcal.bin")
+        if os.path.exists(dbin):
+            fl = open(dbin, "rb").read()[3]
+            check(fl & 0x40, "deskcal.bin's header carries OS88_F_DESK "
+                  "(bit 6)", got=hex(fl), want="bit 6 set",
+                  why="without it the loader gives the widget an ordinary "
+                      "slot and the dock a tile (SPEC.md 11.103, 30)")
+        # the three layouts' geometry (dc_geos) against the host mirror
+        # every soak row computes its coordinates from
+        for li, raw in enumerate(e.get("geos", [])):
+            host = os88dia.DESKCAL_GEO[li]
+            want = [host[f] for f in os88dia.DESKCAL_GEO_FIELDS]
+            nf = len(os88dia.DESKCAL_GEO_FIELDS)
+            check(list(raw[:nf]) == want and raw[e["DCG_BELLX"]]
+                  == host["BELLX"], "dc_geos' layout %d is "
+                  "os88dia.DESKCAL_GEO[%d]" % (li, li),
+                  got=list(raw[:nf]) + [raw[e["DCG_BELLX"]]],
+                  want=want + [host["BELLX"]],
+                  why="the rows press and probe the calendar by the "
+                      "host's copy of these numbers")
         for name, host in pairs:
             check(e.get(name) == host, "deskcal.asm's %s is tools/os88dia.py's"
                   % name, got=e.get(name), want=host,

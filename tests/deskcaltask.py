@@ -1,49 +1,40 @@
 #!/usr/bin/env python3
 """SPEC.md 107.3: the Desk Calendar's TASKS - typed, checked, cleared and
-deleted - and a check box that redraws its MARK and nothing else.
+deleted - and a check box whose toggle is the BOX ALONE, one sub-rect BLIT1.
 
     make && python3 tests/deskcaltask.py
 
 The SHIPPED 360KB system disk copied to a scratch file, on MartyPC's 5150
-with a Hercules card: TALL layout, and a 1bpp framebuffer the harness can
-read whole (`vram`), which is what the pixel assertion needs. The state
-file is flushed off the emulated drive and parsed by tools/os88dia.py.
+with a Hercules card: v2's MID layout (348 rows, SPEC.md 107.3), and a 1bpp
+framebuffer the harness can read whole (`vram`). The state file is flushed
+off the emulated drive and parsed by tools/os88dia.py; every coordinate is
+the layout's, out of tools/os88dia.py's DESKCAL_GEO, which t_dia holds to
+the package's own dc_geos.
 
   A  `K` and three lines - `Buy milk`, `Call plumber`, `Post letter` - are
      three tasks in the state file, in the order typed, none done; Calendar
      > Clear Done Tasks is GREYED `Clear Done (none done)` (SPEC.md 47).
-  B  THE BOXES SIT OFF THE FRAME AND OFF EACH OTHER: four ground columns
-     between the window's frame and every box, and a ground row under each
-     box before the next - the frame and a box once read as one 2px line,
-     and two boxes as one (SPEC.md 107.3). Then a click on Buy milk's BOX
-     checks it: the screen differs from before in
-     the box's 6x6 mark and in NOTHING ELSE - not the label, not the frame,
-     not another row (dc_tmark's one fill, SPEC.md 107.3) - and
-     after the debounce the file has it DONE. Clear Done Tasks is live.
-  C  a click on Post letter's TEXT selects it, and Space checks it: the same
-     mark-only picture, and DONE in the file.
-  D  Calendar > Clear Done Tasks leaves `Call plumber` alone in the file,
-     the item greyed again.
-  E  Call plumber selected, Del, and Yes: the file has no task.
-  F  a PAGED list (SPEC.md 107.3): six tasks put the sixth on page 2, whose
-     pager is row 4 - and the rows on the glass count to it (5). Deleting
-     one ends paging, so the list starts at its TOP again (dc_ttop 0), not
-     mid-table with no pager to reach the rest. Six again, page 2, its two
-     tasks checked and cleared: four are left and row 4 - the old pager's -
-     is ground, every pixel of its text, which a count that stopped at the
-     short page's last task never erased.
+  B  THE BOX: 9 x 9 at face x 8, its frame ink and its inside ground. A
+     press on Buy milk's box checks it, and the gesture is EXACTLY ONE
+     drawing call of the calendar's - an OSAPI_GFX_BLIT1 (a breakpoint on
+     every drawing cell, counted when its far return is the calendar's
+     segment, tests/deskcalperf.py's instrument) - and the screen differs
+     from before inside the box's rect and NOWHERE ELSE; the box is then
+     pixel for pixel the TICKED record (2-pixel strokes, SPEC.md
+     13.16.2.1's note). After the debounce the file has it DONE, and Clear
+     Done Tasks is live.
+  C  the list PAGES (two lines, three tasks: `+2 more`): a press on the
+     pager shows Call plumber, a press on its TEXT selects it, and Space
+     checks it - one BLIT1 again - and DONE in the file.
+  D  Calendar > Clear Done Tasks leaves `Post letter` alone in the file, the
+     item greyed again.
+  E  Post letter selected, Del, and Yes: the file has no task.
+  F  three tasks again: the list shows the page holding the last one typed,
+     and its pager wraps back to the first page.
 
-What "nothing else" means is asserted twice, because a picture cannot say
-it alone: a redraw of the label lays the same pixels again and changes none
-of them. So the PIXELS say nothing else changed, and a breakpoint COUNTER on
-the package's own `dc_run` - every run it draws goes through it, found in a
-NASM map of the very image that is running - says no text was drawn at all,
-with a selection click, two runs, as the counter's own control.
-
-**BREAK IT ON PURPOSE**: make dc_tclick redraw the whole row after the
-toggle (call dc_trow) and B's counter reads 1; take the DONE flip out of
-dc_toggle and B's file check fails; take dc_shown's pager arm out and F's
-row 4 keeps `page 2 of 2`.
+**BREAK IT ON PURPOSE**: make dc_toggle redraw card 2 (dc_rday) instead of
+the box and B counts 3 BLIT1s; take the DONE flip out and B's file check
+fails; draw the plain record for a done task and B's tick compare fails.
 """
 import os
 import re
@@ -63,9 +54,11 @@ from deskcaledit import Cal, TITLE   # noqa: E402
 
 BDIR = os.path.join(HERE, "..", os.environ.get("OS88_BUILD", "build"))
 MACHINE = "os8088_5150_herc_gla"
-T0, TPITCH = 188, 13            # the TALL task rows (SPEC.md 107.3's table)
-TBOX = 4                        # the box's x: inset off the window's frame
 TASK_DONE = os88dia.TASK_DONE
+BOX9 = (0xFF80, 0x8080, 0x8080, 0x8080, 0x8080, 0x8080, 0x8080, 0x8080,
+        0xFF80)                 # dcdraw.inc's dc_box9, and its ticked twin
+TICK9 = (0xFF80, 0x8080, 0x8380, 0x8680, 0xAC80, 0xB880, 0x9080, 0x8080,
+         0xFF80)
 
 fails = []
 
@@ -120,7 +113,20 @@ def bbox(px):
     return ", in (%d,%d)-(%d,%d)" % (min(xs), min(ys), max(xs), max(ys))
 
 
+def rec_bad(img, x, y, rec, w):
+    """The pixels of a w-wide bit record at (x, y) that are not what the
+    record says (ink where a bit is set, ground where it is clear)."""
+    bad = []
+    for r, bits in enumerate(rec):
+        for c in range(w):
+            ink = bool(bits & (0x8000 >> c))
+            if (not img[y + r][x + c]) != ink:
+                bad.append((x + c, y + r))
+    return bad
+
+
 def main():
+    from deskcalperf import measure, Gesture
     tmp = tempfile.mkdtemp(prefix="deskcaltask-")
     img = os.path.join(tmp, "os8088-360.img")
     shutil.copy(os.path.join(BDIR, "os8088-360.img"), img)
@@ -128,7 +134,12 @@ def main():
         with os88ui.boot(img, machine=MACHINE) as ui:
             c = Cal(ui, tmp, check=check)
             m = c.m
-            run_at = c.wseg * 16 + pkg_sym(tmp, "dc_run")
+            check(c.li() == 1, "Hercules takes the MID layout (dia_li %d)"
+                  % c.li())
+            g = c.g()
+
+            def g_tag():
+                return os88dia.DESKCAL_GEO[c.li()]["tag"]
 
             def tasks():
                 return [(t["text"], t["done"])
@@ -141,18 +152,48 @@ def main():
                 return its[4] if len(its) > 4 else None
 
             def box(k):
-                ox, oy = c.origin()
-                return ox + TBOX, oy + T0 + TPITCH * k
-
-            def mark(k):
-                x, y = box(k)
-                return set((x + 3 + i, y + 3 + j) for i in range(6)
-                           for j in range(6))
+                return c.at(1, 8, g["T0"] + g["TP"] * k)
 
             def frame_now():
                 ui.mo.to(20, 300)        # the pointer off the window: it is
                 os88marty.pace(m, 1.0)   # drawn INTO the framebuffer
                 return m.vram("herc")[2]
+
+            def done(k):
+                return c.bss(os88dia.DESKCAL_DIA_BSS + 16
+                             + os88dia.DESKCAL_TASK0
+                             + k * os88dia.DESKCAL_TASK)[0] & TASK_DONE
+
+            def toggled(what, act, k):
+                a = frame_now()
+                c.front()
+                hits, _ = measure(m, lambda: (act(),
+                                              os88marty.guest_sleep(m, 1.5)))
+                # a PRESS reveals the handle at once (SPEC.md 107.11) - the
+                # include's one tag-row BLIT1, there when the handle was not
+                # up - so the tag row's calls are set aside: the CALENDAR's
+                # draw is what is counted
+                w = c.win()
+                tag_y = w.y + w.h - g_tag()
+                hits = [h for h in hits
+                        if not (h.get("regs") and h["regs"]["bx"] >= tag_y)]
+                gst = Gesture(hits, c.wseg)
+                ui._wait(lambda: done(k), "task %d to be DONE in memory" % k,
+                         30)
+                b = frame_now()
+                x, y = box(0)
+                rect = set((x + i, y + j) for i in range(g["BOX"])
+                           for j in range(g["BOX"]))
+                d = diff(a, b, c.win())
+                check(gst.n == 1 and gst.by == {"GFX_BLIT1": 1},
+                      "%s: the toggle is ONE sub-rect BLIT1 (%s)" % (what, gst))
+                check(d and d <= rect, "%s: only the box's rect changed (%d "
+                      "pixels, %d outside it%s)" % (what, len(d),
+                                                    len(d - rect),
+                                                    bbox(d - rect)))
+                bad = rec_bad(b, x, y, TICK9, 9)
+                check(not bad, "%s: the box is the TICKED record, every pixel "
+                      "(%d off)" % (what, len(bad)))
 
             print("A: three tasks typed")
             for line in ("Buy milk", "Call plumber", "Post letter"):
@@ -169,89 +210,48 @@ def main():
                   "Clear Done Tasks is greyed with its reason (%r)"
                   % (clear_item(),))
 
-            print("B: Buy milk's box: the mark and nothing else")
-            x, y = box(0)
-            c.front()
+            print("B: Buy milk's box: the box, one BLIT1")
+            ttop = os88dia.DESKCAL_BSS_TTOP
+            while c.bss(ttop)[0] != 0:          # the page holding task 0
+                c.press(c.task_text(g["TN"] - 1))
             a = frame_now()
-            ox, oy = c.origin()
-            inset = [(px, py) for px in range(ox, x)
-                     for py in range(y, y + 3 * TPITCH)]
-            check(all(a[py][px] for px, py in inset),
-                  "the boxes are INSET: the %d columns between the window's "
-                  "frame and them are ground on every row" % (x - ox))
-            check(not any(a[py][x] for py in range(y, y + 12))
-                  and not any(a[py][x] for py in range(y + TPITCH,
-                                                      y + TPITCH + 12)),
-                  "...and each box's own left side is ink, %d px in" % TBOX)
-            under = [(px, y + k * TPITCH + 12) for k in (0, 1)
-                     for px in range(x, x + 12)]
-            check(all(a[py][px] for px, py in under),
-                  "stacked boxes do not TOUCH: the row under each is ground")
-            check(all(a[py][px] for px, py in mark(0)),
-                  "the box is empty before: its mark's pixels are ground")
-            runs = os88marty.bp_count(m, run_at,
-                                      lambda: ui.mo.click(x + 5, y + 5))
-            check(runs == 0, "the toggle drew NO text run (%d of the "
-                  "package's dc_run)" % runs)
-            ui._wait(lambda: c.bss(os88dia.DESKCAL_DIA_BSS + 16
-                                   + os88dia.DESKCAL_TASK0)[0] & TASK_DONE,
-                     "Buy milk to be DONE in memory", 30)
-            b = frame_now()
-            d = diff(a, b, ui.window(TITLE))
-            check(d == mark(0), "only the 6x6 mark changed in the window (%d pixels, %d of "
-                  "them outside the mark%s)" % (len(d), len(d - mark(0)),
-                                                bbox(d - mark(0))))
-            check(not any(b[py][px] for px, py in mark(0)),
-                  "...and it is the solid ink mark")
+            x, y = box(0)
+            bad = rec_bad(a, x, y, BOX9, 9)
+            check(not bad, "the box is 9 x 9 at face x 8: its frame ink, its "
+                  "inside ground (%d off)" % len(bad))
+            toggled("the box", lambda: ui.mo.click(*c.task_box(0)), 0)
             got = tasks()
             check(got[:1] == [("Buy milk", True)], "the file has it DONE "
                   "(%r)" % (got,))
             check(clear_item() == ("Clear Done Tasks", True),
                   "Clear Done Tasks is live now (%r)" % (clear_item(),))
 
-            print("C: Post letter selected by its text, then Space")
-            for k in (1, 2):
-                c.front()
-                runs = os88marty.bp_count(
-                    m, run_at, lambda: ui.mo.click(x + 100,
-                                                   y + k * TPITCH + 5))
-                check(runs == 2, "...selecting row %d is two runs, the old "
-                      "row's text and its own - the counter's control (%d)"
-                      % (k, runs))
-            os88marty.pace(m, 1.0)
-            check(c.bss(os88dia.DESKCAL_BSS_SELK)[0] == 2
-                  and c.bss(os88dia.DESKCAL_BSS_SELI)[0] == 2,
-                  "task 2 is selected")
-            a = frame_now()
+            print("C: paged to Call plumber, selected by its text, Space")
             c.front()
-            runs = os88marty.bp_count(m, run_at,
-                                      lambda: m.key("Space"))
-            check(runs == 0, "Space drew no text run (%d)" % runs)
-            ui._wait(lambda: c.bss(os88dia.DESKCAL_DIA_BSS + 16
-                                   + os88dia.DESKCAL_TASK0
-                                   + 2 * os88dia.DESKCAL_TASK)[0] & TASK_DONE,
-                     "Post letter to be DONE in memory", 30)
-            b = frame_now()
-            d = diff(a, b, ui.window(TITLE))
-            check(d == mark(2), "Space drew its mark and nothing else (%d "
-                  "pixels, %d outside)" % (len(d), len(d - mark(2))))
+            c.press(c.task_text(g["TN"] - 1))       # `+2 more`
+            check(c.bss(ttop)[0] == 1, "the pager showed the next page "
+                  "(dc_ttop %d)" % c.bss(ttop)[0])
+            c.press(c.task_text(0))
+            check(c.bss(os88dia.DESKCAL_BSS_SELK)[0] == 2
+                  and c.bss(os88dia.DESKCAL_BSS_SELI)[0] == 1,
+                  "task 1 is selected")
+            toggled("Space", lambda: m.key("Space"), 1)
             got = tasks()
-            check(got == [("Buy milk", True), ("Call plumber", False),
-                          ("Post letter", True)], "the file (%r)" % (got,))
+            check(got == [("Buy milk", True), ("Call plumber", True),
+                          ("Post letter", False)], "the file (%r)" % (got,))
 
             print("D: Clear Done Tasks")
             c.front()
             ui.menu_pick("Calendar", "Clear Done Tasks")
             got = tasks()
-            check(got == [("Call plumber", False)],
-                  "Call plumber is the one left (%r)" % (got,))
+            check(got == [("Post letter", False)],
+                  "Post letter is the one left (%r)" % (got,))
             check(clear_item() == ("Clear Done (none done)", False),
                   "...and the item is greyed again")
 
-            print("E: Call plumber deleted, after asking")
+            print("E: Post letter deleted, after asking")
             c.front()
-            ui.mo.click(x + 100, y + 5)
-            os88marty.pace(m, 1.0)
+            c.press(c.task_text(0))
             c.key("Delete")
             ui._wait(lambda: len([w for w in ui.windows()
                                   if w.title == TITLE]) == 2,
@@ -260,69 +260,17 @@ def main():
             got = tasks()
             check(got == [], "no task is left in the file (%r)" % (got,))
 
-            print("F: a paged list")
-
-            def tbss(off):
-                return c.bss(off)[0]
-
-            def add(line):
+            print("F: three again: the last one's page, and the wrap")
+            for line in ("T0", "T1", "T2"):
                 c.key("KeyK")
                 c.type(line)
                 c.key("Enter")
                 c.field_shut("the field to shut after %r" % line)
-                os88marty.pace(m, 0.5)
-
-            for line in ("T0", "T1", "T2", "T3", "T4", "T5"):
-                add(line)
-            check(tbss(os88dia.DESKCAL_BSS_TTOP) == 4,
-                  "the sixth task is on page 2 (dc_ttop %d)"
-                  % tbss(os88dia.DESKCAL_BSS_TTOP))
-            check(tbss(os88dia.DESKCAL_BSS_TSHOW) == 5,
-                  "...and the rows on the glass count to its pager (%d)"
-                  % tbss(os88dia.DESKCAL_BSS_TSHOW))
-            c.front()
-            ui.mo.click(x + 100, y + TPITCH + 5)     # T5, row 1
-            os88marty.pace(m, 1.0)
-            c.key("Delete")
-            ui._wait(lambda: len([w for w in ui.windows()
-                                  if w.title == TITLE]) == 2,
-                     "the Delete question", 30)
-            c.answer_yes("the Delete question")
-            got = tasks()
-            check([t for t, _ in got] == ["T0", "T1", "T2", "T3", "T4"],
-                  "five left (%r)" % (got,))
-            check(tbss(os88dia.DESKCAL_BSS_TTOP) == 0,
-                  "paging ended, so the list starts at its top (dc_ttop %d)"
-                  % tbss(os88dia.DESKCAL_BSS_TTOP))
-            img = frame_now()
-            ox, oy = c.origin()
-            row0 = [(px, oy + T0 + 2 + j) for px in range(ox + 16, ox + 40)
-                    for j in range(8)]
-            check(any(not img[py][px] for px, py in row0),
-                  "row 0 shows T0's text")
-            add("T6")
-            check(tbss(os88dia.DESKCAL_BSS_TTOP) == 4,
-                  "six again: page 2 (dc_ttop %d)"
-                  % tbss(os88dia.DESKCAL_BSS_TTOP))
-            for k in (0, 1):
-                c.front()
-                ui.mo.click(x + 5, y + k * TPITCH + 5)
-                os88marty.pace(m, 1.0)
-            c.front()
-            ui.menu_pick("Calendar", "Clear Done Tasks")
-            got = tasks()
-            check([t for t, _ in got] == ["T0", "T1", "T2", "T3"],
-                  "Clear Done leaves four (%r)" % (got,))
-            img = frame_now()
-            row4 = [(px, oy + T0 + 4 * TPITCH + 2 + j)
-                    for px in range(ox + 16, ox + 16 + 27 * 8)
-                    for j in range(8)]
-            ink = [p for p in row4 if not img[p[1]][p[0]]]
-            check(not ink, "row 4, the old pager's, is ground (%d ink "
-                  "pixels%s)" % (len(ink), bbox(set(ink))))
-            check(tbss(os88dia.DESKCAL_BSS_TSHOW) == 4,
-                  "...and four rows are counted on the glass (%d)"
-                  % tbss(os88dia.DESKCAL_BSS_TSHOW))
+            check(c.bss(ttop)[0] == 2, "the list shows T2's page (dc_ttop %d)"
+                  % c.bss(ttop)[0])
+            c.press(c.task_text(g["TN"] - 1))
+            check(c.bss(ttop)[0] == 0, "...and its pager wraps to the first "
+                  "(dc_ttop %d)" % c.bss(ttop)[0])
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("deskcaltask: %s" % ("PASS" if not fails else

@@ -1325,10 +1325,34 @@ dia_paint:
     push si
     push di
     push bp
-    mov word [gfxe_fseg], 0     ; the glyph table is asked for again: a
-                                ; resume may have MOVED it (SPEC.md 5.12.8)
     mov bx, si
     call OSAPI_WM_DAMAGE        ; CF = 1: the whole of it, AX..DX either way
+    jmp short dia_pbody
+
+; dia_redraw - the whole face again OUTSIDE a paint (SI = the window, lock
+; held): OSAPI_WM_CLIP_SET, then dia_paint's body over all of it - a
+; package's About card taken down, say (SPEC.md 107.11). Nothing when none
+; of the window is on the glass. Every register kept
+dia_redraw:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov bx, si
+    call OSAPI_WM_CLIP_SET
+    jnc .all
+    jmp dia_pdone
+.all:
+    mov ax, 8000h               ; the damage is everything
+    mov bx, ax
+    mov cx, 7FFFh
+    mov dx, cx
+dia_pbody:
+    mov word [gfxe_fseg], 0     ; the glyph table is asked for again: a
+                                ; resume may have MOVED it (SPEC.md 5.12.8)
     mov [dia_dmg], ax
     mov [dia_dmg+2], bx
     mov [dia_dmg+4], cx
@@ -1426,6 +1450,7 @@ dia_paint:
     mov byte [dia_tagp], DIA_P_NONE ; drawn whole, the ground beside it too
     call dia_tagdraw
 .done:
+dia_pdone:
     pop bp
     pop di
     pop si

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""SPEC.md 107.3, 39.4, 47: the Desk Calendar on BOTH 1bpp adapters - the
-layout each one gets, today drawn inverse, the selected day's frame, and a
-greyed menu item still legible where grey rounds to black.
+"""SPEC.md 107.3, 39.4, 47: the Desk Calendar WIDGET on BOTH 1bpp adapters -
+the layout each one gets, today's inverse box, the selected day's 1-px
+outline, a day's dot, the gaps as the desktop's ground, and a greyed menu
+item still legible on the widget's own (focused) bar.
 
     make && python3 tests/deskcal1bpp.py [--leg cga|herc] [--shots DIR]
 
@@ -10,32 +11,27 @@ the 20th, on MartyPC's 5150 - with a CGA (os8088_5150_cga, its GLaBIOS twin)
 and with a Hercules card (os8088_5150_herc_gla). Both framebuffers are one
 bit a pixel and the harness reads them whole (`vram`), so every assertion is
 about PIXELS: bit 1 is ground, bit 0 is ink. The clock is Wed 14 Oct 2026.
+Coordinates are the layout's (tools/os88dia.py's DESKCAL_GEO).
 
-  A  the frame is the adapter's: COMPACT 234 x 142 on the CGA's 640x200,
-     TALL 234 x 272 on the Hercules' 720x348 (SPEC.md 107.3's PREFER row).
-  B  TODAY IS INVERSE: the 14th's field is mostly ink (its ground), a plain
-     day's (the 13th) mostly ground - state carried by the picture, not by a
-     colour neither adapter has.
-  C  THE SELECTED DAY'S FRAME: a click on the 20th puts an unbroken ink
-     rectangle on its field's leading blank's column 1 and its mark cell's
-     column 7, and the gap rows round it, and
-     takes the 14th's off - its gap rows are ground again, and its field is
-     still inverse (dc_reselect re-ran it).
-  D  THE 20th's MARK: its mark cell - the one AFTER its number, ` 20*` -
-     shows the `*` (ink in the cell), the 13th's does not, and the blank
-     cell before the 20th's number is ground, so no mark can sit between
-     two numbers.
-  E  A GREYED ITEM IS LEGIBLE: the Calendar menu held open with nothing
-     selected - Edit Item and Delete Item greyed `(no item)`, Show Tasks
-     greyed on TALL - and every item's band in the dropped menu carries ink,
-     the greyed ones included - never a blank band (the pictures are what a
-     reader judges "legible" by; --shots keeps them).
+  A  the frame is the layout's by the screen's HEIGHT: COMPACT 178 x 146 on
+     the CGA's 640x200, MID 178 x 242 on the Hercules' 720x348 (v2; v1's
+     PREFER pair gave Hercules TALL).
+  B  TODAY IS INVERSE: the 14th's box is mostly ink, a plain day's (the
+     13th) mostly ground - state carried by the picture, not by a colour.
+  C  THE SELECTED DAY'S OUTLINE: a press on the 20th puts an unbroken 1-px
+     ink rectangle round its box with ground inside it, and today's box
+     stays inverse.
+  D  THE 20th's DOT: ink under its number; the 13th has none.
+  E  THE GAPS ARE THE DESKTOP: every gap row between the cards is the
+     desktop's dither, pixel for pixel the desktop 180 columns left.
+  F  A GREYED ITEM IS LEGIBLE: the widget owns the bar, nothing selected -
+     Edit Item and Delete Item greyed `(no item)` - and every item's band
+     in the dropped Calendar menu carries ink, the greyed ones included.
 
 `--shots DIR` writes the screen of each leg, whole and with the menu down.
 
-**BREAK IT ON PURPOSE**: draw today's field with DC_INK instead of DC_INV in
-dc_field and B fails; drop dc_reselect's frame erase and C finds the 14th
-still framed.
+**BREAK IT ON PURPOSE**: compose today with black digits on white in
+dc_cday1 and B fails; fill the selected day's box and C fails.
 """
 import argparse
 import os
@@ -53,7 +49,6 @@ import os88dia     # noqa: E402
 from deskcaledit import Cal, TITLE, disk_with   # noqa: E402
 
 TODAY = (2026, 10, 14)
-DOW1 = 4                        # 1 October 2026 is a Thursday
 
 fails = []
 
@@ -65,33 +60,9 @@ def check(cond, what):
     return cond
 
 
-def field(c, day, tall):
-    """(x0, y0) of day's NUMBER on the glass - the field `[ ][d][d][m]` is
-    content x 32 * column, so its number and mark, the 24 pixels today's
-    inverse covers, start 8 in - and the week row's top (SPEC.md 107.3's
-    table)."""
-    ox, oy = c.origin()
-    i = day + DOW1 - 1
-    w0, pitch = (24, 10) if tall else (18, 9)
-    return ox + 32 * (i % 7) + 8, oy + w0 + pitch * (i // 7)
-
-
 def ink(rows, x0, y0, w, h):
     return sum(1 for y in range(y0, y0 + h) for x in range(x0, x0 + w)
                if not rows[y][x])
-
-
-def perimeter(x0, y0):
-    """dc_frame's rectangle round the number at x0: the leading blank's
-    column 1 to the mark cell's column 7, x0-7..x0+23, and y0-1..y0+8."""
-    pts = set()
-    for x in range(x0 - 7, x0 + 24):
-        pts.add((x, y0 - 1))
-        pts.add((x, y0 + 8))
-    for y in range(y0 - 1, y0 + 9):
-        pts.add((x0 - 7, y))
-        pts.add((x0 + 23, y))
-    return pts
 
 
 def shot(m, kind, path):
@@ -107,20 +78,27 @@ def shot(m, kind, path):
 def leg(tmp, machine, kind, shots):
     print("== %s (%s)" % (kind, machine))
     fx = os88dia.dat(os88dia.deskcal([((2026, 10, 20), 600, "Review")],
-                                     lead=0),
-                     x=335, y=40, screen=(640, 480))
+                                     lead=0))
     img = disk_with(tmp, "1bpp-%s.img" % kind, fx)
-    tall = kind == "herc"
     with os88ui.boot(img, machine=machine) as ui:
         m = ui.m
         c = Cal(ui, tmp, check=check)
         w = ui.window(TITLE)
         os88marty.pace(m, 2.0)
+        G = os88dia.DESKCAL_GEO[c.li()]
+        fx0, fy0 = c.face()
+        grid = list(c.bss(os88dia.DESKCAL_BSS_GRID, 42))
 
-        print("A: the adapter's layout")
-        want = (234, 272) if tall else (234, 142)
-        check((w.w, w.h) == want, "%s: the frame is %dx%d (%s), want %r"
-              % (kind, w.w, w.h, "TALL" if tall else "COMPACT", want))
+        def box(day):
+            i = grid.index(day)
+            r = fy0 + G["W0"] + G["WP"] * (i // 7)
+            return fx0 + 4 + 24 * (i % 7) + 2, r - G["BOXT"], r
+
+        print("A: the layout by the screen's height")
+        want = (178, 242) if kind == "herc" else (178, 146)
+        check((w.w, w.h) == want and c.li() == (1 if kind == "herc" else 2),
+              "%s: the frame is %dx%d (layout %d), want %r"
+              % (kind, w.w, w.h, c.li(), want))
 
         def frame():
             ui.mo.to(8, 100)            # the pointer is drawn INTO the
@@ -130,56 +108,68 @@ def leg(tmp, machine, kind, shots):
         rows = frame()
         if shots:
             shot(m, kind, os.path.join(shots, "deskcal-%s.png" % kind))
+        hb = G["BOXH"]
 
         print("B: today inverse")
-        tx, ty = field(c, 14, tall)
-        px, py = field(c, 13, tall)
-        t_ink = ink(rows, tx, ty, 24, 8) / 192.0
-        p_ink = ink(rows, px, py, 24, 8) / 192.0
-        check(t_ink > 0.6, "%s: the 14th's field is mostly INK (%.0f%%)"
+        tx, ty, _ = box(14)
+        px, py, _ = box(13)
+        t_ink = ink(rows, tx, ty, 20, hb) / (20.0 * hb)
+        p_ink = ink(rows, px, py, 20, hb) / (20.0 * hb)
+        check(t_ink > 0.6, "%s: the 14th's box is mostly INK (%.0f%%)"
               % (kind, 100 * t_ink))
         check(p_ink < 0.3, "%s: the 13th's is mostly ground (%.0f%%)"
               % (kind, 100 * p_ink))
 
-        print("C: the selected day's frame")
-        gaps14 = [(x, ty - 1) for x in range(tx - 7, tx + 24)] + \
-                 [(x, ty + 8) for x in range(tx - 7, tx + 24)]
-        check(all(not rows[y][x] for x, y in gaps14),
-              "%s: the 14th, selected at launch, has its frame's gap rows"
-              % kind)
-        sx, sy = field(c, 20, tall)
+        print("C: the selected day's outline")
         c.front()
-        ui.mo.click(sx + 12, sy + 4)
-        os88marty.pace(m, 1.5)
+        c.press(c.day_xy(20))
         check(c.bss(os88dia.DESKCAL_BSS_SEL)[0] == 20,
               "%s: the 20th is selected" % kind)
         rows = frame()
-        per = perimeter(sx, sy)
+        sx, sy, sr = box(20)
+        per = set()
+        for x in range(sx, sx + 20):
+            per.add((x, sy))
+            per.add((x, sy + hb - 1))
+        for y in range(sy, sy + hb):
+            per.add((sx, y))
+            per.add((sx + 19, y))
         lit = [p for p in per if rows[p[1]][p[0]]]
-        check(not lit, "%s: an unbroken ink rectangle round the 20th (%d of "
+        check(not lit, "%s: an unbroken ink outline round the 20th (%d of "
               "%d perimeter pixels are ground)" % (kind, len(lit), len(per)))
-        back = [p for p in gaps14 if not rows[p[1]][p[0]]]
-        check(not back, "%s: the 14th's gap rows are ground again (%d ink)"
-              % (kind, len(back)))
-        t_ink = ink(rows, tx, ty, 24, 8) / 192.0
-        check(t_ink > 0.6, "%s: ...and its field is still inverse (%.0f%%)"
+        inside = [(sx + 1, sy + 1), (sx + 18, sy + 1), (sx + 1, sy + hb - 2),
+                  (sx + 18, sy + hb - 2)]
+        check(all(rows[y][x] for x, y in inside),
+              "%s: ...one pixel wide: ground inside its corners" % kind)
+        t_ink = ink(rows, tx, ty, 20, hb) / (20.0 * hb)
+        check(t_ink > 0.6, "%s: today's box is still inverse (%.0f%%)"
               % (kind, 100 * t_ink))
 
-        print("D: the 20th's mark")
-        check(ink(rows, sx + 17, sy, 6, 8) > 0,
-              "%s: the 20th's mark cell, hard after its number, carries "
-              "the `*`" % kind)
-        check(ink(rows, px + 17, py, 6, 8) == 0,
-              "%s: the 13th's mark cell is ground" % kind)
-        check(ink(rows, sx - 6, sy, 6, 8) == 0,     # past the frame's col 1
-              "%s: ...and the blank before the 20th is ground: the 19th's "
-              "number and the 20th's are always a cell apart" % kind)
+        print("D: the 20th's dot")
+        dy = sr + G["DOTY"]
+        check(ink(rows, sx + 9, dy, 2, G["DOTH"]) == 2 * G["DOTH"],
+              "%s: the 20th's dot is ink" % kind)
+        _, _, pr = box(13)
+        check(ink(rows, px + 9, pr + G["DOTY"], 2, G["DOTH"]) == 0,
+              "%s: the 13th has none" % kind)
 
-        print("E: a greyed item is legible")
-        c.key("Escape")                 # nothing selected: Edit / Delete grey
+        print("E: the gaps are the desktop's ground")
+        y, bad = fy0, []
+        for h, gap in G["cards"]:
+            for gy in range(y + h, y + h + gap):
+                for gx in range(fx0, fx0 + 176):
+                    if rows[gy][gx] != rows[gy][gx - 180]:
+                        bad.append((gx, gy))
+            y += h + gap
+        check(not bad, "%s: every gap pixel is the desktop's (%d off)"
+              % (kind, len(bad)))
+
+        print("F: a greyed item is legible, on the widget's own bar")
+        c.front()
         os88marty.pace(m, 1.0)
         cal = [mm for mm in ui.menus() if mm[0] == "Calendar"]
-        check(bool(cal), "%s: a Calendar menu on the bar" % kind)
+        check(bool(cal), "%s: the widget owns the bar: a Calendar menu on it"
+              % kind)
         if cal:
             title, x0, x1, items = cal[0]
             greyed = [t for t, on in items if not on]
@@ -206,8 +196,8 @@ def leg(tmp, machine, kind, shots):
                 band = (by1 - by0 + 1) // len(items)
                 inks = []
                 for k in range(len(items)):
-                    y0 = by0 + k * band
-                    inks.append(ink(after, bx0 + 4, y0 + 2, bx1 - bx0 - 8,
+                    yy = by0 + k * band
+                    inks.append(ink(after, bx0 + 4, yy + 2, bx1 - bx0 - 8,
                                     max(band - 4, 1)))
                 print("      menu %dx%d at (%d,%d), %d bands of %d: ink %r"
                       % (bx1 - bx0 + 1, by1 - by0 + 1, bx0, by0, len(items),
