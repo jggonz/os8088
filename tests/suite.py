@@ -13086,16 +13086,10 @@ SOAK = [
         "half of pt_copy/pt_paste runs without a second monitor. Rebuilds the"
         "tree, like blitplane",
         needs=("marty", "nasm"), serial=True),
-    Row("bouncecost", "soak", py("tests/bouncecost.py"), 20.0,
-        "SPEC.md 14/2.6: what one Bounce frame costs the machine in 8088 "
-        "cycles. Its PERIOD is task_sleep's, so nothing here can move its "
-        "frame rate - what it measures is how much of a 4.77MHz machine one "
-        "live Bounce takes away from the UI, which is the quantity SPEC.md "
-        "2.6's cadence test is an argument about. Frames are PAIRED on the "
-        "ball's (x,y,vx,vy) and the trajectory is seeded, so two kernels are "
-        "compared frame for frame and the per-frame variation - which is real "
-        "work, not noise - cancels instead of being averaged over.",
-        needs=("marty",), serial=True, timeout=600),
+    # (bouncecost - what one frame of the kernel's Bounce KIND cost, paired
+    # frame for frame across two kernels - retired with the kind: Bounce is
+    # a package since SPEC.md 14.8, and its frame is the API's to price.
+    # PERFORMANCE.md Set 110 keeps the measurement it took.)
     Row("atkey", "soak", py("tests/atkey.py"), 100.0,
         "WHAT ONE ARTFULTYPE KEYSTROKE COSTS on a 4.77MHz 8088, in guest "
         "cycles off at_onkey's entry to its return. Nothing in this tree had "
@@ -13765,18 +13759,11 @@ SOAK = [
         "TeXPad - the largest window in the tree, and the one four planes "
         "cannot fund - keeps its pixels one plane deep (SPEC.md 11.96.17)",
         needs=("marty",), serial=True),
-    Row("tmrup", "soak", py("tests/tmrup.py"), 60.0,
-        "SPEC.md 13.8: the Timer's three buttons fire on the RELEASE.",
-        needs=("marty",), serial=True),
-    Row("tmrnotask", "soak", py("tests/tmrnotask.py"), 15.0,
-        "SPEC.md 14.7: the Timer holds NO task slice - its clock is the "
-        "window's one-shot timer (13.9) on the UI task. It had a 128-byte "
-        "slice sized from Bounce and never measured, and a window cutting its "
-        "digit line took it through the canary (STACK OVERFLOW TASK 02 Timer "
-        "on vm/pc5150). Asserts no task is spawned, the clock keeps guest "
-        "time, and SPEC.md 14.4's cut line still draws above the edge and "
-        "not below it.",
-        needs=("marty",), serial=True),
+    # (tmrup and tmrnotask - the Timer KIND's buttons firing on the release,
+    # and the kind keeping time with no task slice - retired with the kind:
+    # the Timer is a package since SPEC.md 14.8, its buttons are the standard
+    # control's gesture that every package row drives, and the clock it
+    # keeps is a package's one-shot timer, SPEC.md 13.9's row's.)
     Row("kernresident", "full", py("tests/kernresident.py"), 15.0,
         "docs/KERNEL-MEMORY.md rules 1 and 3 for kern_big in ONE boot, on "
         "os8088_xt_vga_128k: it reaches a desktop on a 128KB machine, and at "

@@ -400,9 +400,10 @@ there is no math engine, no figures and no colour. `PAPER.TEX` and `GUIDE.TEX`
 ride the software disk beside it, and `GUIDE.TEX` is the markup written up as
 a document TeXPad sets.
 
-Timer and Bounce are built into the kernel rather than loaded. **Drivers**
-load the same way packages do — hard disk, sound, and a serial debug
-monitor.
+Timer (a stopwatch) and Bounce (a square bouncing in its window) are
+packages too, `TIMER.O88` and `BOUNCE.O88` on every software disk; they were
+built into the kernel until it was asked what that cost. **Drivers** load the
+same way packages do — hard disk, sound, and a serial debug monitor.
 
 **Frotz** ships separately, on a story floppy of its own (`make zdisk`): an
 interpreter for Infocom's Z-machine, v1–v8, windowed, with a scrollback,
@@ -1061,9 +1062,9 @@ drive the system from a script.
 `make test` boots headless with a QMP socket at `build/qmp.sock`:
 
 ```
-python3 tools/mouse.py build/qmp.sock to 110 8          # Locator's File menu
+python3 tools/mouse.py build/qmp.sock to 12 8           # the System menu
 python3 tools/mouse.py build/qmp.sock down              # menus need press...
-python3 tools/mouse.py build/qmp.sock to 110 30         # ...drag to Timer...
+python3 tools/mouse.py build/qmp.sock to 60 30          # ...drag to About...
 python3 tools/mouse.py build/qmp.sock up                # ...release to choose
 python3 tools/qmp.py build/qmp.sock 'sendkey h' 'sendkey i'
 python3 tools/qmp.py build/qmp.sock 'screendump /abs/path/shot.ppm'

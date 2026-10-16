@@ -63,11 +63,15 @@ is provably the Task Manager's, and then CHECKED against `wm_zord` before a
 single assertion runs.
 
 MAKING THE LIST OVERFLOW IS PART OF THE TEST, not a fixture: it opens
-built-ins until the guest's own `[tm_hrows]` exceeds its own `[tm_maxrow]`,
+programs until the guest's own `[tm_hrows]` exceeds its own `[tm_maxrow]`,
 which is self-adjusting across adapters where a fixed number of Bounces would
-be right on one and pointless on another. If it cannot get there - the
-scheduler's task slots are the usual reason, a Bounce owning a worker - it
-says so and fails rather than passing quietly, because a "scroll test" that
+be right on one and pointless on another. The programs are TIMER.O88 and
+BOUNCE.O88 out of the apps disk's APPS/ folder (they were the kernel's Timer
+and Bounce kinds, launched from Locator's Builtins menu, until SPEC.md 14.8
+made them packages and the menu went), opened BY NAME through dispcp.open_named
+so the row waits for each window rather than guessing. If it cannot get there
+- the scheduler's task slots are the usual reason, a Bounce owning a worker -
+it says so and fails rather than passing quietly, because a "scroll test" that
 never scrolled is worse than no test at all.
 """
 import argparse
@@ -93,10 +97,14 @@ S = os88sym.linear
 APP = "taskmgr"
 NAME = b"TaskMgr"
 
-# The chip menu's items and the Locator's Builtins menu. MENU-BAR coordinates,
-# which are the same on every adapter because the bar is.
+# The chip menu's items. MENU-BAR coordinates, which are the same on every
+# adapter because the bar is.
 CHIP, MI_TASKS, MI_CTRL = (12, 8), (60, 60), (60, 44)
-BUILTINS, MI_TIMER, MI_BOUNCE = (190, 8), (190, 28), (190, 44)
+# ...and the two packages that make the list overflow, in the apps disk's
+# APPS/ folder (SPEC.md 111, 112). Opened by name: dispcp.open_named reads
+# the listing and waits for the window, so nothing here depends on where a
+# row is drawn or how long a launch takes.
+PKG_FOLDER, PKG_TIMER, PKG_BOUNCE = "APPS", "TIMER.O88", "BOUNCE.O88"
 
 # How much deeper than the frame the list has to be before anything is
 # asserted about scrolling it. NOT one row: a window's raise cache is a
@@ -400,18 +408,21 @@ def main(argv):
         # --- make the list longer than the frame ---------------------------
         # NOTHING RAISES THE TASK MANAGER IN HERE and it does not need to be:
         # the worker's paint walks the list and settles [tm_hrows] whatever
-        # the z-order is, and only the DRAWING is clipped away.
-        plan = ([("Timer", MI_TIMER)] + [("Bounce", MI_BOUNCE)] * 6 +
-                [("Control", MI_CTRL)])
+        # the z-order is, and only the DRAWING is clipped away. The programs
+        # come off B:'s APPS/ folder: open_named raises that Disk window
+        # itself (the acting one, which B: is - it was opened last) and waits
+        # for each package's window before answering.
+        dispcp.open_named(m, mo, S, wait, 0, 0, PKG_FOLDER, expect="nav")
+        tick(m, 40)
+        plan = ([("Timer", PKG_TIMER)] + [("Bounce", PKG_BOUNCE)] * 6 +
+                [("Control", None)])
         for what, how in plan:
             if tm.word("tm_hrows") >= tm.word("tm_maxrow") + SLACK:
                 break
             if what == "Control":           # the chip menu is the KERNEL's
                 mo.menu(CHIP[0], CHIP[1], MI_CTRL[0], MI_CTRL[1])
-            else:                           # ...Builtins is the LOCATOR's, so
-                mo.click(6, wy + 40)        # the desktop has to be clicked to
-                tick(m, 25)                 # put its bar back first
-                mo.menu(BUILTINS[0], BUILTINS[1], how[0], how[1])
+            else:
+                dispcp.open_named(m, mo, S, wait, 0, 0, how, expect="window")
             tick(m, 60)
             say("  ... %-8s -> %d rows" % (what, tm.word("tm_hrows")))
 
@@ -422,8 +433,8 @@ def main(argv):
                      "the list is %d rows longer than the frame" % SLACK,
                      "nothing below this can scroll, and a scroll test that "
                      "never scrolled passes for the wrong reason. The usual "
-                     "cause is MAX_TASKS: a Bounce owns a worker and the "
-                     "sixth one does not get a slot"):
+                     "cause is MAX_TASKS: a Bounce owns a worker (SPEC.md "
+                     "112) and the sixth one does not get a slot"):
             return report()
 
         # --- put it in front, and PROVE it ---------------------------------

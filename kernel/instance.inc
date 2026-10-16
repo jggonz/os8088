@@ -87,28 +87,23 @@ INST_FNSZ equ 13                ; the per-instance Standard File name below:
                                 ; asserted against it there rather than here,
                                 ; because this file is included first
 
+; THE INDEX IS THE TABLE POSITION and nothing else - inst_launch multiplies
+; it by KD_SIZE - so these are not free-floating ids that may drift from the
+; rows below. The numbering has closed up twice: Note Pad (kind 1) became the
+; NOTEPAD package (SPEC.md 27), the Task Manager (kind 4) the TASKMGR package
+; (SPEC.md 28), and the Timer and Bounce (kinds 1 and 2, kern_big's alone
+; since SPEC.md 14.6) the TIMER and BOUNCE packages (SPEC.md 14.8, 111, 112)
+; - so both kernels number the same way now. **NOT AN ABI CHANGE**: the SDK
+; publishes only KIND_PKG, bit 7 of SSI_KIND (apps/os88api.inc), and every
+; kernel use of a kind is by NAME, so no package and no shipped .o88 can see
+; a renumbering.
 KIND_ABOUT   equ 0
-%ifdef KERN_BIG
-KIND_TIMER   equ 1              ; (Note Pad was kind 1 until it became the
-KIND_BOUNCE  equ 2              ;  NOTEPAD package - SPEC.md 27; kind 1 was
-                                ;  the Clock until it gained its buttons and
-                                ;  became the Timer - SPEC.md 14)
-KIND_FILES   equ 3
-KIND_CTRL    equ 4              ; (the Task Manager was kind 4 until it
-                                ;  became the TASKMGR package - SPEC.md 28)
-KIND_HIBER   equ 5              ; the Hibernate window (SPEC.md 87.1): the
-                                ; confirmation, and the boot-time question.
-                                ; kern_big only
-%else
-; SPEC.md 14.6: Timer and Bounce are not built here, so inst_kinds has two
-; fewer ROWS and every kind above them moves down two. THE INDEX IS THE TABLE
-; POSITION and nothing else - inst_launch multiplies it by KD_SIZE - so these
-; are not free-floating ids that may drift from the rows below.
-; **NOT AN ABI CHANGE**: the SDK publishes only KIND_PKG, bit 7 of SSI_KIND
-; (apps/os88api.inc), and every kernel use of a kind is by NAME, so no package
-; and no shipped .o88 can see this renumbering.
 KIND_FILES   equ 1
 KIND_CTRL    equ 2
+%ifdef KERN_BIG
+KIND_HIBER   equ 3              ; the Hibernate window (SPEC.md 87.1): the
+                                ; confirmation, and the boot-time question.
+                                ; kern_big only
 %endif
 KIND_PKG     equ 0x80           ; bit 7: package instance
 
@@ -176,7 +171,13 @@ is wrong. Put it back, or renumber BOTH files and rebuild every package"
 
 ; --- kind descriptor table (SPEC.md 29.3) -------------------------------------
 KD_TPL   equ 0                  ; word: wm_create template ptr
-KD_TASK  equ 2                  ; word: task entry, 0 = task-less
+KD_PAD   equ 2                  ; word: 0. This was KD_TASK, a built-in kind's
+                                ; task entry, and Bounce was the last kind
+                                ; with one (SPEC.md 14.8): a package's worker
+                                ; is claimed at run time through SPEC.md 20.6
+                                ; and declared nowhere, so no row names a task
+                                ; and app_launch spawns none. The word stays
+                                ; so the stride keeps its power of two
 KD_POOL  equ 4                  ; word: state pool base, 0 = stateless
 KD_SSIZE equ 6                  ; word: pool stride, bytes per instance
 KD_INIT  equ 8                  ; word: init proc or 0 - in: BX = window,
@@ -195,18 +196,6 @@ inst_kinds:                     ; indexed by KIND_* * 16; caps are binding
     dw app_tpl_about,  0,               0,             0,   0,                app_ttl_about
     dw inst_ico_about
     db 1, 0                     ; About: stateless singleton
-%ifdef KERN_BIG                 ; SPEC.md 14.6: Timer and Bounce are kern_big's
-    dw app_tpl_timer,  0,               app_tmr_pool,  TMR_SIZE, app_tmr_kinit, app_ttl_timer
-    dw inst_ico_timer
-    db 10, 0                    ; Timer: 10 x 16-byte time state and NO task -
-                                ; its clock is the window's one-shot timer
-                                ; (SPEC.md 13.9, 14.7). 8 of the 16 are the
-                                ; cells on screen, so a redraw can be the ones
-                                ; that moved (SPEC.md 14)
-    dw app_tpl_bounce, app_bounce_task, app_ball_pool, 8,   app_bounce_kinit, app_ttl_bounce
-    dw inst_ico_bounce
-    db 10, 0                    ; Bounce: 10 x 8-byte ball state, one task each
-%endif                          ; KERN_BIG - no Timer, no Bounce (SPEC.md 14.6)
     dw fm_tpl,         0,               fm_pool,       FS_SIZE,  fm_kinit,     fm_ttl
     dw inst_ico_disk
     db VIEW_SLOTS+1, WF_SIZABLE ; Disk: FOUR of the user's windows, each with
@@ -232,20 +221,16 @@ inst_kinds:                     ; indexed by KIND_* * 16; caps are binding
 ; the dock (SPEC.md 30). KD_ICON 0 still means "the generic icon" and still
 ; works; nothing in the tree uses it now except a package that ships without
 ; one, which apps/hello does deliberately.
-; inst_ico_pool - the row VALUES the five icons below are RUNS over (size pass 4):
+; inst_ico_pool - the row VALUES the three icons below are RUNS over (size pass 4):
 ; each icon is bytes of (count-1) << 6 | index into this table, 32 rows in all
 ; (16 mask then 16 data, icon_draw16's layout), and inst_icon_ptr expands one
 ; into inst_icobuf - the slot a PACKAGE icon is already staged through. The
-; kern_small kinds' rows come first so its table stops short.
+; Timer's and Bounce's rows left with their kinds (SPEC.md 14.8): the two
+; packages carry the same two pictures in their headers (apps/timer,
+; apps/bounce), as every package does.
 inst_ico_pool:
     dw 0x0000, 0x3FFC, 0xFFFF, 0x1E78, 0x7FFE, 0x1FF8, 0xFF00, 0x7E00
     dw 0x43FE, 0x4002, 0x5FFA, 0x4C02, 0x4032, 0x4182
-%ifdef KERN_BIG
-    dw 0x03C0, 0x07E0, 0x0FF0, 0x0C30, 0x1818, 0x310C, 0x6106, 0x4102
-    dw 0x41E2, 0x6006, 0x300C, 0xFF80, 0x7FC0, 0x03E0, 0x01F0, 0x00F8
-    dw 0x007C, 0x003E, 0x001F, 0x000F, 0x3C00, 0x0100, 0x0080, 0x0040
-    dw 0x0020, 0x0010, 0x0008, 0x0004, 0x0002
-%endif
 
 ; inst_ico_about - the os8088 DIP chip, the same logo the System menu
 ; carries (menu_logo_bmp) at icon size
@@ -268,52 +253,6 @@ inst_ico_pool:
 inst_ico_about:
     db 0x00, 0x01, 0xC2, 0xC2, 0x82, 0x01, 0xC0, 0x03, 0x04, 0x05
     db 0x04, 0x05, 0x04, 0x05, 0x04, 0x05, 0x04, 0x05, 0x80
-%ifdef KERN_BIG                 ; SPEC.md 14.6: Timer and Bounce are kern_big's
-
-; inst_ico_timer - a stopwatch: crown on top, hands at 12 and 3
-;   ......####......
-;   ......####......
-;   .....######.....
-;   ....##oooo##....
-;   ...##oooooo##...
-;   ..##ooo#oooo##..
-;   .##oooo#ooooo##.
-;   .#ooooo#oooooo#.
-;   .#ooooo#oooooo#.
-;   .#ooooo####ooo#.
-;   .#oooooooooooo#.
-;   .##oooooooooo##.
-;   ..##oooooooo##..
-;   ...##oooooo##...
-;   ....##oooo##....
-;   .....######.....
-inst_ico_timer:
-    db 0x4E, 0x0F, 0x10, 0x05, 0x01, 0xC4, 0x44, 0x01, 0x05, 0x10
-    db 0x0F, 0x4E, 0x0F, 0x11, 0x12, 0x13, 0x14, 0x55, 0x16, 0x09
-    db 0x17, 0x18, 0x12, 0x11, 0x0F
-
-; inst_ico_bounce - a ball, its trajectory and the floor it will come off
-;   ................
-;   ..####..........
-;   .######.........
-;   .######.........
-;   ..####..........
-;   .......#........
-;   ........#.......
-;   .........#......
-;   ..........#.....
-;   ...........#....
-;   ............#...
-;   .............#..
-;   ..............#.
-;   ................
-;   .##############.
-;   ................
-inst_ico_bounce:
-    db 0x07, 0x86, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20
-    db 0x21, 0x82, 0x00, 0x22, 0x47, 0x22, 0x23, 0x24, 0x25, 0x26
-    db 0x27, 0x28, 0x29, 0x2A, 0x00, 0x04, 0x00
-%endif                          ; KERN_BIG - no Timer, no Bounce (SPEC.md 14.6)
 
 ; inst_ico_disk - a folder: the Disk window browses a volume, so it is
 ; the browser that gets an icon here, not the drive - desk.inc
@@ -1607,31 +1546,19 @@ app_launch:
 
     mov byte [ds:bp+I_STATE], 1    ; publish - the LAST record write
 
-    ; --- task, if the kind has one -------------------------------------------
-    mov ax, [si+KD_TASK]
-    or ax, ax
-    jz .show
-    mov di, bp                  ; DX = instance index (the spawn argument), off
-    call inst_fhome_idx         ; the one copy of that arithmetic. DI is dead
-    mov dx, bx                  ; from here to this routine's exit and BX is
-    xor bx, bx                  ; written next: a built-in kind's task is
-                                ; kernel code
-    mov cx, SCH_BUILTIN_STK     ; ...and asks for a sleeper's stack (SPEC.md
-                                ; 8.7): Bounce is the one built-in that takes
-                                ; a task, and six at once measured +10..24
-                                ; over the floor. The Timer took one too until
-                                ; SPEC.md 14.7 measured it going through it
-    call task_spawn             ; in AX, BX, CX, DX; out CF / AL = slot
-    jc .rollback
-    mov [ds:bp+I_TASK], al
-
-.show:
+    ; NO TASK ARM. A built-in kind's row named a task entry until SPEC.md
+    ; 14.8 - Bounce was the last to have one, spawned here on a
+    ; SCH_BUILTIN_STK slice, with a .rollback that undid a half-built launch
+    ; when the task table was full - and every kind left is task-less, so a
+    ; launch that reaches this line has nothing left that can fail. A
+    ; PACKAGE's worker is its own to spawn (OSAPI_TASK_SPAWN, SPEC.md 20.6),
+    ; after the loader has published it, which is why it is not here either.
     mov bx, [ds:bp+I_WIN]
     cmp byte [inst_lkhd], 0     ; the Standard File chooser is launched by a
     jne .held                   ; caller that HOLDS the lock (SPEC.md 38.6),
-    call gfx_lock               ; and the lock is not recursive. Only .show
-    call wm_show                ; asks: .rollback is a task-spawn failure and
-    call gfx_unlock             ; a Disk window has no task
+    call gfx_lock               ; and the lock is not recursive
+    call wm_show
+    call gfx_unlock
     jmp short .ok
 .held:
     call wm_show
@@ -1639,12 +1566,6 @@ app_launch:
     clc
     jmp .out
 
-.rollback:                      ; task table full: undo the half-built launch
-    mov byte [ds:bp+I_STATE], 0    ; unpublish first (readers skip state 0)
-    call gfx_lock
-    mov bx, [ds:bp+I_WIN]
-    call wm_destroy             ; also resets the wm_owner entry
-    call gfx_unlock
 .fail:
     stc
 .out:

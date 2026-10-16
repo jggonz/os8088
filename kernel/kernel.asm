@@ -5694,25 +5694,12 @@ cw_inst_fhome_idx:      call inst_fhome_idx
                     retf
 cw_inst_win_owner:      call inst_win_owner
                     retf
-; ...and apps.inc's three (SPEC.md 14): the three built-in kinds are cold now,
-; so every reach back into the instance store crosses. inst_task_die NEVER
-; RETURNS - both Timer and Bounce end their loop on it - and it is still a
-; `call` rather than a `jmp`, for drv_task's reason: a jmp to a shim pops the
-; jumping routine's near frame as CS:IP the day the target does come back.
-%ifdef KERN_BIG                 ; its callers are kern_big only
-cw_inst_of_win:         call inst_of_win
-                    retf
-%endif
+; ...and the instance store's. (apps.inc's three kinds had three more here -
+; cw_inst_of_win, cw_task_sleep and cw_inst_task_die - until Timer and Bounce
+; became packages, SPEC.md 14.8; About reaches nothing in the store.)
 %ifdef KERN_BIG                 ; its callers are kern_big only
 cw_inst_ptr:            call inst_ptr
                     retf
-%endif
-%ifdef KERN_BIG                 ; its callers are kern_big only
-cw_inst_task_die equ inst_task_die  ; NEVER RETURNS (it ends in task_exit's
-                                ; jmp sch_switch), so the shim's `retf` was
-                                ; unreachable and the far call may land on the
-                                ; body: the frame it leaves dies with the
-                                ; task's stack either way (size pass 9)
 %endif
 cw_mem_disp equ spw_near        ; `call bp` / `retf` - viddet.inc's splash door
                                 ; is the same three bytes, and it stays where
@@ -5744,10 +5731,6 @@ cw_task_exit equ task_exit      ; NEVER RETURNS - cw_inst_task_die's reason
 %endif
 cw_task_spawn:           call task_spawn
                      retf
-%ifdef KERN_BIG                 ; its callers are kern_big only
-cw_task_sleep:           call task_sleep     ; Bounce's 2 ticks (SPEC.md 14),
-                     retf                    ; from .cold
-%endif
 cw_task_yield:          call task_yield
                     retf
 cw_toast_show equ apic_toast_show ; THE CELL IS THE DOOR (size pass 9)
@@ -5794,14 +5777,11 @@ cw_vid_disp_of:         call vid_disp_of
 cw_wm_clip_clear equ apic_wm_clip_clear ; THE CELL IS THE DOOR (size pass 9)
 cw_wm_clip_rows:        call wm_clip_rows
                     retf
-%ifdef KERN_BIG                 ; its callers are kern_big only
-cw_wm_clip_set:         call wm_clip_set
-                    retf
-%endif
 cw_wm_clip_test equ apic_wm_clip_test ; THE CELL IS THE DOOR (size pass 9)
-cw_wm_content:          call wm_content ; NOT the cell: app_ball_wipe and
-                    retf                ; app_ball_fill reach it on the Bounce
-                                        ; WORKER's 128-byte slice
+cw_wm_content:          call wm_content ; NOT the cell: it was app_ball_wipe's
+                    retf                ; and app_ball_fill's on the Bounce
+                                        ; WORKER's 128-byte slice, and ctrl.inc
+                                        ; and hiber.inc still reach it
 cw_wm_minsize equ apic_wm_minsize ; THE CELL IS THE DOOR (size pass 9)
 %ifdef KERN_BIG                 ; its callers are kern_big only
 cw_wm_snap equ apic_wm_snap ; THE CELL IS THE DOOR (size pass 9)
@@ -6009,16 +5989,15 @@ fm_kinit:             call COLD_SEG:fm_kinit_x
 ; the ladder's compare and the body's.
 
 
-; --- apps.inc's (SPEC.md 14): the three built-in kinds. They joined the cold
-; set on CADENCE, which is SPEC.md 2.6's test and not size: a launch, a click
-; and a repaint are human-scale, and the two background tasks wake every 9 and
-; every 2 ticks - so a far call is microseconds against a frame whose two
-; gfx_fills alone are ~1.5ms on the target machine (PERFORMANCE.md Part 2).
-; The DATA stayed resident: rule 1, and every reader of the templates, titles
-; and strings addresses DS.
+; --- apps.inc's (SPEC.md 14): the built-in kinds. They joined the cold set on
+; CADENCE, which is SPEC.md 2.6's test and not size: a launch, a click and a
+; repaint are human-scale - so a far call is microseconds against a frame
+; whose two gfx_fills alone are ~1.5ms on the target machine (PERFORMANCE.md
+; Part 2). The DATA stayed resident: rule 1, and every reader of the
+; templates, titles and strings addresses DS.
 ;
-; FOUR ENTRIES, and they are the two KD_INIT words and the two KD_TASK words
-; in inst_kinds, which inst_launch and task_spawn reach NEAR in KERNEL_SEG.
+; The kinds' entries here were the KD_INIT and KD_TASK words in inst_kinds,
+; which inst_launch and task_spawn reach NEAR in KERNEL_SEG.
 ; The three templates' paint and click words and the two edges app_tmr_kinit
 ; installs name the cold bodies: they land on wm_pkgcall, which dispatches a
 ; kernel window into `.cold` (SPEC.md 2.6.3). So did app_about_center, whose
@@ -6029,18 +6008,10 @@ fm_kinit:             call COLD_SEG:fm_kinit_x
 ; below it is unreachable. It is written anyway rather than as a far `jmp`,
 ; because a thunk that is not shaped like every other thunk here is one a
 ; future reader has to stop and check.
-%ifdef KERN_BIG                 ; SPEC.md 14.6: Timer and Bounce are kern_big's
-app_tmr_kinit:        call COLD_SEG:app_tmr_kinit_x
-                    ret
-%endif                          ; KERN_BIG - no Timer, no Bounce (SPEC.md 14.6)
-%ifdef KERN_BIG                 ; SPEC.md 14.6: Timer and Bounce are kern_big's
-app_bounce_kinit:     call COLD_SEG:app_bounce_kinit_x
-                    ret
-%endif                          ; KERN_BIG - no Timer, no Bounce (SPEC.md 14.6)
-%ifdef KERN_BIG                 ; SPEC.md 14.6: Timer and Bounce are kern_big's
-app_bounce_task:      call COLD_SEG:app_bounce_task_x
-                    ret                     ; never reached (inst_task_die)
-%endif                          ; KERN_BIG - no Timer, no Bounce (SPEC.md 14.6)
+; (app_tmr_kinit, app_bounce_kinit and app_bounce_task stood here - the two
+; KD_INIT words and the one KD_TASK word of the kinds that became the TIMER
+; and BOUNCE packages, SPEC.md 14.8. About has neither, so apps.inc has no
+; thunk left in this block.)
 
 ; --- ...and assoc.inc's (SPEC.md 54). It joined the cold set because nothing
 ; in it runs faster than a double-click, and because its heaviest callees were

@@ -5328,6 +5328,26 @@ $(BUILD)/hello.bin: apps/hello/hello.asm apps/os88api.inc apps/os88ui.inc \
 $(BUILD)/hello.o88: $(BUILD)/hello.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/hello.bin -o $@
 
+# TIMER and BOUNCE (SPEC.md 111, 112): the two kernel KINDS of SPEC.md 14
+# that became packages (14.8) - a stopwatch and a bouncing square, in
+# $(APPS_TOOLS) so they ride every apps disk the way the Builtins menu used
+# to offer them on every machine. Both carry their kind's icon in the header.
+$(BUILD)/timer.bin: apps/timer/timer.asm apps/os88api.inc apps/os88ui.inc \
+                    | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/timer/timer.asm
+	@echo "timer:  $(call FILESIZE,$@) bytes"
+
+$(BUILD)/timer.o88: $(BUILD)/timer.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/timer.bin -o $@
+
+$(BUILD)/bounce.bin: apps/bounce/bounce.asm apps/os88api.inc apps/os88ui.inc \
+                     | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/bounce/bounce.asm
+	@echo "bounce: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/bounce.o88: $(BUILD)/bounce.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/bounce.bin -o $@
+
 # VIDEO PLAYER (SPEC.md 98.3, docs/plans/VIDEO-PLAN.md), in $(APPS_TOOLS) - on
 # every apps disk, by the owner's decision - and in $(SMALLOMIT), because what
 # it plays through is kern_big's. No video ships beside it yet (the owner's
@@ -12623,7 +12643,11 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
               $(BUILD)/paint.o88 $(BUILD)/piano.o88 \
               $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 $(BUILD)/telnet.o88 \
               $(BUILD)/texpad.o88 $(BUILD)/tracker.o88 $(BUILD)/audio.o88 \
-              $(BUILD)/video.o88 $(BUILD)/midirack.o88 $(BUILD)/pixel.o88
+              $(BUILD)/video.o88 $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 \
+              $(BUILD)/timer.o88 $(BUILD)/bounce.o88
+# TIMER.O88 and BOUNCE.O88 are SPEC.md 14's two kinds as packages (14.8,
+# 111, 112): on every apps disk, every geometry, because the Builtins menu
+# that used to launch them was on every machine's bar.
 # MODPLUG.O88 IS RETIRED too (SPEC.md 56.15): Tracker's windowed face
 # (SPEC.md 45.21) is ModPlug's player done to the tree's standards, with the
 # playlist, the Repeat modes and the per-adapter faces carried over, so two

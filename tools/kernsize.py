@@ -272,7 +272,7 @@ THEMES = (
      (RESIDUAL, "memory.inc", "sched.inc", "events.inc", "mod.inc",
       "bootprof.inc", "stkdiag.inc")),
     ("the Control Panel", ("ctrl.inc",)),
-    ("the three built-in kinds", ("apps.inc",)),
+    ("the About box, the one built-in kind left in apps.inc", ("apps.inc",)),
 )
 
 

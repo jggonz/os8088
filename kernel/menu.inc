@@ -77,14 +77,17 @@ CMD_SHUTDOWN equ 7
 CMD_CLOSE   equ 8               ; ids stay one lower
 %ifdef OS88_SHORTCUTS
 CMD_SCDEL   equ 9               ; Locator: File > Remove Shortcut (SPEC.md 26.8.5)
-CMD_TIMER   equ 10              ; --- Locator: Builtins (SPEC.md 12.3.1) ---
-CMD_BOUNCE  equ 11
-CMD_FILES   equ 12
+CMD_FILES   equ 10
 %else
-CMD_TIMER   equ 9               ; --- Locator: Builtins (SPEC.md 12.3.1) ---
-CMD_BOUNCE  equ 10
-CMD_FILES   equ 11
+CMD_FILES   equ 9
 %endif
+                                ; No Builtins menu on either build (SPEC.md
+                                ; 14.6, 14.8): CMD_TIMER and CMD_BOUNCE are
+                                ; gone with their kinds - the two are packages
+                                ; - and CMD_FILES survives only because ui_cmd
+                                ; still needs the id: a Disk window is opened
+                                ; from the desktop zone (SPEC.md 26.1), which
+                                ; posts it
 %else
 CMD_REBOOT  equ 5
 CMD_SHUTDOWN equ 6
@@ -2618,21 +2621,15 @@ menu_loc_name   db 'Locator', 0 ; the kernel's own application (SPEC 12.3)
                                 ; A menu item is a window title said twice by
                                 ; construction: the item OPENS the window.
 menu_s_file     equ fm_s_mfile          ; the Disk window's own File menu
-menu_s_builtin  equ fm_s_mbuilt         ; ...and its Builtins menu, which is
-                                ; the SAME menu with the same items in the
-                                ; same order (SPEC.md 12.3.1) - it was
-                                ; 'Special', and that was the wrong word
-                                ; twice over: it named a leftover rather than
-                                ; a category, and the things in it were
-                                ; somewhere ELSE on the desktop
+                                ; (Its Builtins menu - Timer, Bounce, Disk -
+                                ; is gone from both bars: SPEC.md 12.3.1 put
+                                ; it in one place, 22.28 took it off the Disk
+                                ; window's, and 14.8 made the first two items
+                                ; packages, leaving a menu of one item that
+                                ; duplicated a double-click)
 
 menu_s_about    db 'About os8088...', 0
 menu_s_ctrl     equ cp_ttl              ; the Control Panel's window title
-%ifdef KERN_BIG
-menu_s_timer    equ app_ttl_timer       ; the two builtins' window titles
-menu_s_bounce   equ app_ttl_bounce
-%endif                          ; KERN_BIG - SPEC.md 14.6
-menu_s_disk     equ fm_s_root           ; the Disk window's title at the root
 menu_s_closex   db MENU_DIS     ; ...with nothing to close; ui_loc_gate points
 menu_s_close    db 'Close Window', 0    ; the item at one or the other before
 %if menu_s_close - menu_s_closex != 1
@@ -2709,12 +2706,6 @@ MENU_FILE_N equ 2
 %else
 MENU_FILE_N equ 1
 %endif
-%ifdef KERN_BIG
-menu_items_builtin:
-    dw menu_s_timer
-    dw menu_s_bounce
-    dw menu_s_disk
-%endif                          ; KERN_BIG - SPEC.md 14.6
 
 ; Locator's menu set (SPEC.md 12.3) - an ordinary SPEC.md 12.2 structure
 ; whose AM_ONCMD is 0, the one value reserved to mean "dispatched by the
@@ -2725,20 +2716,14 @@ menu_items_builtin:
 menu_loc_set:
     dw menu_loc_name            ; AM_NAME
     dw 0                        ; AM_ONCMD: kernel-dispatched
-%ifdef KERN_BIG
-    dw 2                        ; AM_COUNT
+    dw 1                        ; AM_COUNT: File alone, on both builds (SPEC.md
     dw menu_s_file,    menu_items_file,    MENU_FILE_N
-    dw menu_s_builtin, menu_items_builtin, 3
-%else
-    dw 1                        ; AM_COUNT: File alone (SPEC.md 14.6). The
-    dw menu_s_file,    menu_items_file,    1
-                                ; Builtins menu held Timer, Bounce and Disk,
-                                ; and on this build the first two do not exist
-                                ; while the third is reachable from the
-                                ; desktop's own drive zones (SPEC.md 26.1) -
-                                ; so what is left is a menu with one item that
-                                ; duplicates a double-click
-%endif
+                                ; 14.6, 14.8). The Builtins menu held Timer,
+                                ; Bounce and Disk; the first two are packages
+                                ; on the apps disk now and the third is
+                                ; reachable from the desktop's own drive zones
+                                ; (SPEC.md 26.1) - so what was left was a menu
+                                ; with one item that duplicates a double-click
 
 ; -----------------------------------------------------------------------------
 menu_s_abpfx db 'About ', 0     ; + the app's name -> menu_abstr (12.2)

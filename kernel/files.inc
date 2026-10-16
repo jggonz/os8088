@@ -2338,10 +2338,9 @@ fm_s_folder:  db 'Folder', 0    ; with five bytes in front) ...and in a
 fm_s_mfile:   db 'File', 0
 fm_s_medit:   db 'Edit', 0
 fm_s_mnav:    db 'Nav', 0
-fm_s_mbuilt:  db 'Builtins', 0   ; the SAME menu as Locator's, with the
-                                ; same items in the same order (SPEC.md
-                                ; 12.3.1) - which is the whole point of
-                                ; the rename
+                                ; (fm_s_mbuilt, 'Builtins', went with the
+                                ; menu: SPEC.md 22.28 took the cell off this
+                                ; bar and 14.8 took the menu off Locator's)
 
 fm_s_open     equ fdlg_s_topen   ; the Standard File dialog's title, which
                                 ; is the same four bytes (SPEC.md 38)

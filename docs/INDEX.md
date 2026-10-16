@@ -331,6 +331,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | AUDIO PLAYER | `apps/audio/audio.asm` | §86 | yes |
 | ArtfulType | `apps/artful/artful.asm` | §46 | yes |
 | BROWSER | `apps/browser/browser.asm` | §71 | yes |
+| Bounce | `apps/bounce/bounce.asm` | §112 | yes |
 | C64 | `apps/c64/c64.asm` | `docs/C64-SPEC.md` | yes |
 | CALCULATOR | `apps/calc/calc.asm` | §65 | yes |
 | CHART | `apps/chart/chart.asm` | §82 | yes |
@@ -379,6 +380,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | TRACKER | `apps/tracker/tracker.asm` | §45 | yes |
 | TaskMgr | `apps/taskmgr/taskmgr.asm` | §28 | yes |
 | The Wire | `apps/thewire/thewire.asm` | §92 | yes |
+| Timer | `apps/timer/timer.asm` | §111 | yes |
 | Video Player | `apps/video/video.asm` | §98 | yes |
 | WEAVE | `apps/weave/weave.asm` | `docs/WEAVE-SPEC.md` | yes |
 | WIRE | `apps/wire/wire.asm` | §78 | no |
@@ -501,6 +503,8 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 108 | isoTron — a light-wall duel in a raised 3D arena (`apps/isotron/isotron.asm`) |
 | 109 | WireBall — Pong across a null modem (`apps/wireball/`) |
 | 110 | Desktop Integrated Applications (`SYSTEM\DIA\`, `apps/os88dia.inc`) |
+| 111 | TIMER — the stopwatch (`apps/timer/timer.asm`) |
+| 112 | BOUNCE — the square (`apps/bounce/bounce.asm`) |
 
 ## docs/
 

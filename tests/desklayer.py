@@ -542,8 +542,9 @@ def leg_z(ui):
     ui._wait(lambda: menu_win_i(ui) is None, "the bar to go to Locator", 20,
              snapshot=lambda: "menu_win = %r" % menu_win_i(ui))
     check(menu_win_i(ui) is None, "[menu_win] = 0: Locator, not the widget")
-    check("Builtins" in bar_names(ui) and TITLE not in bar_names(ui),
-          "the bar is Locator's (its Builtins cell): %r" % (bar_names(ui),))
+    check("File" in bar_names(ui) and TITLE not in bar_names(ui),
+          "the bar is Locator's (its File cell - the Builtins cell went with "
+          "the two kinds, SPEC.md 14.8): %r" % (bar_names(ui),))
     check(top_i(ui) is None and TITLE in ui.titles(),
           "the widget is up and wm_top is 0")
 

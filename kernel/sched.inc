@@ -129,14 +129,13 @@ SCH_IDLE_STK    equ 128         ; the idle task. Its own footprint is at most 4
                                 ; own `pushf`/`cli` - so what it needs IS the
                                 ; interrupt floor, measured at 32 on QEMU and
                                 ; 40-64 on real iron (docs/plans/completed/STACK-SLOTS-PLAN.md
-                                ; 7.1). 128 is 2x the worst of those
-SCH_BUILTIN_STK equ 128         ; a built-in kind's task. Bounce is the one
-                                ; that takes one, and six Bounces at once
-                                ; measured +10..24 over the floor. The Timer
-                                ; was the other, sized from Bounce and never
-                                ; measured: half covered it reached 112 of 128
-                                ; on a floor of 32, so 132 on vm/pc5150's 52 -
-                                ; and it has no task at all now (SPEC.md 14.7)
+                                ; 7.1). 128 is 2x the worst of those.
+                                ; (SCH_BUILTIN_STK, 128, was a built-in
+                                ; kind's task's: Bounce's, measured six at
+                                ; once at +10..24 over the floor, and the
+                                ; Timer's until SPEC.md 14.7. No kind has a
+                                ; task since SPEC.md 14.8 - Bounce is a
+                                ; package whose header names its own class)
 SCH_DRV_STK     equ 192         ; a driver's worker. The only one in the tree
                                 ; is the sound driver's stream task, whose
                                 ; deepest static chain is 28 bytes

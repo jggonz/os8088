@@ -10464,7 +10464,7 @@ for no other.
 | | |
 |---|---|
 | machine | **MartyPC**, cycle-accurate IBM 5150/XT, 4.77 MHz 8088, `os8088_5150_cga_gla` |
-| harness | `tests/bouncecost.py` — exec breakpoints on the loop body's two ends, cycle deltas, two kernels |
+| harness | `tests/bouncecost.py` — exec breakpoints on the loop body's two ends, cycle deltas, two kernels. **Retired with the kind** (SPEC.md §14.8, 2026-10-15): Bounce is a package, `apps/bounce/`, and the frame it measured is the API's to price now |
 | date | 2026-08-27 |
 
 Set 109 priced a crossing and said, in its own last paragraph, that it could

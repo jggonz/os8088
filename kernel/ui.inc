@@ -735,10 +735,11 @@ ui_task:
     call snd_beep               ; CF = the tables are full, or the kind is at
                                 ; its cap (SPEC.md 29.4.1) - the same audible
                                 ; refusal ui_cmd gives the Apple-menu route.
-                                ; This is the Disk window's Builtins route
-                                ; (fm_c_timer/fm_c_bounce), and it discarded
-                                ; the CF, so ten Bounces plus one more here
-                                ; did nothing and said nothing - exactly the
+                                ; This is the Disk window's New Window route
+                                ; (fm_newwin; it was Builtins' Timer and
+                                ; Bounce too until SPEC.md 14.8), and it
+                                ; discarded the CF, so ten Bounces plus one
+                                ; more here did nothing and said nothing -
                                 ; symptom 29.4.1 exists to remove
 .chk_ld:
     xor ax, ax                  ; set by files.inc's click handler, stored as
@@ -2457,15 +2458,12 @@ ui_dispatch:
     jmp gfx_unlock
 
 ; the base CMD_* of each kernel-dispatched bar cell (SPEC.md 12.3): the
-; System menu, then Locator's File and Builtins (SPEC.md 12.3.1)
+; System menu, then Locator's File. There is no Builtins cell on either
+; build (SPEC.md 14.6, 14.8): its two launches are packages now and its
+; third, Disk, is the desktop's own drive zones
 ui_loc_base:
-%ifdef KERN_BIG
-    dw CMD_ABOUT, CMD_CLOSE, CMD_TIMER
-UI_LOC_N equ 3
-%else
-    dw CMD_ABOUT, CMD_CLOSE     ; SPEC.md 14.6: no Builtins cell on this build
+    dw CMD_ABOUT, CMD_CLOSE
 UI_LOC_N equ 2
-%endif
 
 ; -----------------------------------------------------------------------------
 ; ui_post_cmd - defer one of the kernel's own menu commands (SPEC.md 13)
@@ -2858,9 +2856,9 @@ ui_cmd:
                                 ; transfer, so EVERY ENTRY HERE MUST BE .text
                                 ; and is
 %ifdef OS88_SHORTCUTS
-    dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .shutdown, .close, .scdel, .timer, .bounce, .files
+    dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .shutdown, .close, .scdel, .files
 %elifdef KERN_BIG
-    dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .shutdown, .close, .timer, .bounce, .files
+    dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .shutdown, .close, .files
 %else
     dw .about, .ctrl, .tasks, .done, .reboot, .shutdown, .close, .files
 %endif
@@ -2888,18 +2886,11 @@ ui_cmd:
                                 ; retf and ui_cmd does not, so the retf would
                                 ; pop a NEAR frame as CS:IP - a wild jump, and
                                 ; os88ovlchk refuses it
-%ifdef KERN_BIG
-.timer:
-    mov al, KIND_TIMER
-    jmp .launch
-.bounce:
-    mov al, KIND_BOUNCE
-    jmp .launch
-%endif                          ; KERN_BIG - SPEC.md 14.6
 .tasks:
     jmp ui_tm_open              ; not a kind any more: it is a package on the
                                 ; system disk (SPEC.md 28)
-.launch:
+.launch:                        ; About's alone now: Timer and Bounce are
+                                ; packages on the apps disk (SPEC.md 14.8)
     call app_launch             ; takes its own locks; out CF = tables full
     jnc .done
 .beep:

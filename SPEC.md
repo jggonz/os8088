@@ -44,9 +44,10 @@ via the PIT timer interrupt, switchable at run time to cooperative from the
 Control Panel (§8.2/§31). Microsoft serial mouse on COM1 or COM2, and a
 PS/2 mouse on machines that have somewhere to put one (§9.9). Boots from floppy
 straight into the GUI: gray dithered desktop, menu bar with pull-down menus,
-draggable overlapping windows with title bars and close boxes. Built-in apps:
-About dialog, Timer and Bounce (each running as its own
-pre-empted background task, updating live while the user types or drags).
+draggable overlapping windows with title bars and close boxes. One built-in
+app, the About dialog; everything else - the stopwatch and the bouncing
+square included, since §14.8 - is a package loaded from a disk, running as
+its own pre-empted instance and updating live while the user types or drags.
 
 ## 1. Hard rules (apply to every module)
 
@@ -3462,7 +3463,7 @@ VIEW_KB       equ 3          ; each window's cache, claimed when it opens
 | `kernel/menu.inc`   | menu bar (System menu + the active application's name and menus), runtime bar layout, pull-down tracking, Locator's own menu set (§12/§12.2/§12.3) |
 | `kernel/fprog.inc`  | the file-operation progress widget (§12.8): a document icon and a progress bar in a line box at the right end of the menu bar, armed by the file-operation layer and stepped from inside `dsk_xfer`'s per-sector loop — prefix `fpg_`, all state in `.text` |
 | `kernel/ui.inc`     | UI task: event pump, keyboard poll, drag, dispatch      |
-| `kernel/apps.inc`   | built-in app kinds: About, Timer, Bounce — state pools, kinit procs, per-instance tasks |
+| `kernel/apps.inc`   | the built-in app kind: About — its template, strings and paint. Timer and Bounce were kinds here until §14.8 made them packages (§111, §112) |
 | `kernel/disk.inc`   | BIOS int 13h floppy transfers (`disk_read`/`disk_write`), FAT12/16 mount + directory + chain walk (§18–19); and `dsk_ncopy`/`dsk_streq`, the **counted DS:SI→DS:DI byte copy and the NUL string compare the whole `.cold` segment shares** — `diskw.inc`, `filecp.inc`, `files.inc` and `fdlg.inc` all call it, and it lives here because `disk.inc` is the first `.cold` `%include`, so every site is a backward near reference. It was the same seventeen bytes in four files. Not to be confused with a NUL-stopping bounded copy, which answers a different question |
 | `kernel/diskw.inc`  | the FAT write path (§18.4): name parsing, cluster allocation + free, FAT flush, directory entry create/update/delete, the five whole-file operations — prefix `dskw_`; the ONLY caller of `disk_write`. **`.cold`** (§2.6) |
 | `kernel/diskops.inc`  | the disk cloner (§18.99): the on-demand `DISKOPS.DRV` — sector-for-sector copy between any two floppy drives or one drive twice, its XMS/heap planner, its own geometry probe and its status-line prompts — prefix `clo_`; the resident half is one word and one thunk, both **`.cold`**/`.text` (§2.6) |
@@ -12213,8 +12214,12 @@ A driver and the two kernel-side spawners have no header to declare in, so
 | | bytes | why |
 |---|---|---|
 | `SCH_IDLE_STK` | 128 | the idle task's own footprint is ≤ 4 bytes (§8.1.2), so what it needs *is* the interrupt floor — 32 on QEMU, 40–64 on real iron |
-| `SCH_BUILTIN_STK` | 128 | Bounce is the built-in kind that takes a task; six at once measured +10…24 over the floor. The Timer was the other until §14.7, sized from Bounce and never measured — it read 112 of 128 half covered, on a floor of 32 |
 | `SCH_DRV_STK` | 192 | the sound driver's stream task, the only driver worker in the tree, walks 28 bytes statically — 64 + 28 = 92, so 2.1× |
+
+(`SCH_BUILTIN_STK`, 128, was the third row: a built-in kind's task, which
+was Bounce's - six at once measured +10…24 over the floor - and the Timer's
+until §14.7. No kind has a task since §14.8; the Bounce PACKAGE declares
+`OS88_STACK_128`, the same class, in its header.)
 
 `OSAPI_DRV_TASK` is called from one driver in the whole tree — the sound
 driver's refill and drain spawners, both light — which is why one number
@@ -16746,7 +16751,8 @@ Frame drawing (paint-all does this before calling W_PAINT):
 
 Paint procs and key handlers run on the **UI task** (via wm_paint_all /
 dispatch) or on the window's own background task — which, since §20.6, may
-be a package's worker as well as a Timer or Bounce task. In all cases the
+be a package's worker as well as a Timer or Bounce task (the two kinds'
+tasks, before §14.8 made them packages). In all cases the
 caller of W_PAINT already holds the gfx lock. **W_PAINT must not lock and
 must not block.** `OSAPI_TASK_SPAWN` (§20.6) is legal here and is
 idempotent by construction — the second call refuses with CF=1 because the
@@ -24475,10 +24481,13 @@ whenever no window owns it.
 `menu_loc_set` (menu.inc data) is an ordinary §12.2 set with
 `AM_NAME` = `'Locator'` and **`AM_ONCMD` = 0**, the one value reserved to
 mean *dispatched by the kernel*: ui.inc recognises it and reconstructs a
-`CMD_*` instead of calling through (§13). Its menus are **File**: "Close
-Window" (CMD_CLOSE); and **Builtins**: "Timer" (CMD_TIMER), "Bounce"
-(CMD_BOUNCE), "Disk" (CMD_FILES) — see §12.3.1 for why that is not how they
-started. The System menu is cell 0 for every application: "About os8088..."
+`CMD_*` instead of calling through (§13). Its one menu is **File**: "Close
+Window" (CMD_CLOSE), and Remove Shortcut under `OS88_SHORTCUTS` (§26.8.5).
+It carried a **Builtins** menu too — "Timer" (CMD_TIMER), "Bounce"
+(CMD_BOUNCE), "Disk" (CMD_FILES) — from §12.3.1 to §14.8, which made the
+first two packages and left a menu whose one item duplicates the desktop's
+drive zones; it is gone on both kernels (§14.6 had already taken it off
+`kern_small`). The System menu is cell 0 for every application: "About os8088..."
 (CMD_ABOUT), "Control Panel" (CMD_CTRL, §31), "Task Manager" (CMD_TASKS,
 §28), a rule, "Hibernate..." (CMD_HIBER, §87 — kern_big only, so the ids
 below it are one lower in kern_small), "Restart" (CMD_REBOOT), and
@@ -24490,9 +24499,9 @@ bar — the item list is static `.text` and nothing relays the bar out when the
 last window goes, so layout time is too early. It is the §46 rule 5 case in
 its purest form (a stable, one-word fact) and the one a user meets on the
 desktop at boot before meeting any other; it used to be a live item that
-answered with a beep. The tables-full refusals beside it — Timer, Bounce and
-Disk at the instance cap — stay beeps on purpose: `MAX_TASKS` is 8, and the
-predicate is per-kind rather than one word.
+answered with a beep. The tables-full refusal of a Disk window at the
+instance cap stays a beep on purpose: the predicate is per-kind rather than
+one word. (Timer's and Bounce's were the same beep while they were kinds.)
 
 ```nasm
 CMD_ABOUT  equ 1   ; --- System (cell 0, every application) ---
@@ -24500,11 +24509,12 @@ CMD_CTRL   equ 2
 CMD_TASKS  equ 3
 CMD_SEP    equ 4   ; the rule above Hibernate - no handler, see below
 CMD_HIBER  equ 5   ; kern_big only (§87); kern_small has no such item and
-CMD_REBOOT equ 6   ;   its ids from here stay one lower: REBOOT 5, CLOSE 6,
-CMD_CLOSE  equ 7   ;   TIMER 7, BOUNCE 8, FILES 9
-CMD_TIMER  equ 8   ; --- Locator: Builtins ---
-CMD_BOUNCE equ 9
-CMD_FILES  equ 10
+CMD_REBOOT equ 6   ;   its ids from here stay one lower: REBOOT 5,
+CMD_SHUTDOWN equ 7 ;   SHUTDOWN 6, CLOSE 7, FILES 8
+CMD_CLOSE  equ 8   ; --- Locator: File ---
+CMD_SCDEL  equ 9   ;   (OS88_SHORTCUTS only, §26.8.5; FILES is then 10)
+CMD_FILES  equ 9   ; no menu of its own since §14.8: the desktop's drive
+                   ; zone posts it (§26.1), so the id stays
 ```
 
 The ids are contiguous **within** a menu, because that is what makes
@@ -26634,6 +26644,13 @@ the pane-relative point to the screen rather than lowering the rect, so there
 is one conversion at the asking end and no second copy of the rectangle.
 
 #### 13.8.5 The Timer, and the four states of two flags
+
+*(The Timer is the TIMER package since §14.8, and its buttons are the
+standard control's own gesture, §20.5.1.3 - `os88ui_btnup` and
+`os88ui_btndrag` over one record - rather than the hand-rolled edges this
+section describes. What it says about the four states still holds: the
+package's `tm_bok` is the one predicate and `tm_flags` writes it into the
+record, §111.2.)*
 
 The Timer (§14) is the first control converted where §47's **greying** and
 §13.8's **down state** both apply, and all four combinations are reachable in
@@ -29032,38 +29049,27 @@ does nothing.
 
 ## 14. apps.inc
 
-The built-in app **kinds**: About, Timer, Bounce. Nothing is
-created at boot (there is no `apps_init`) — every instance is launched on
-demand through `app_launch` (§29), which allocates an instance record and
-a per-instance state block from the kind's pool, creates the window from
-the kind's template (cascaded +16px per pool slot so instances don't
-stack), runs the kind's init proc, and spawns the kind's task if it has
-one. Closing an instance frees all of it.
+The built-in app **kinds** that live in this file: **About**, and nothing else
+since §14.8. Nothing is created at boot (there is no `apps_init`) — an
+instance is launched on demand through `app_launch` (§29), which allocates an
+instance record, creates the window from the kind's template (cascaded +16px
+per pool slot so instances don't stack) and runs the kind's init proc if it
+has one. Closing an instance frees all of it, synchronously: no kind has a
+task any more (§29.3's `KD_TASK` word is `KD_PAD`).
 
-Per-instance state pools (**`.lowbss`**, reached through `ss:` — two of the
-four tables §2's optimization moved out of the kernel's own segment; slot
-stride and cap pinned in the §29 kind table): `app_tmr_pool` 10 × 16
-(TMR_HRS/MIN/SEC bytes at +0/+1/+2, **TMR_RUN byte at +3**, TMR_LAST word at
-+4, TMR_ACC word at +6, **TMR_SHOWN 8 bytes at +8**),
-`app_ball_pool` 10 × 8 (BAL_X/Y/VX/VY words). About is stateless. Init procs (KD_INIT contract,
-§29): `app_tmr_kinit` (h/m/s = 0, **run = 1**, last =
-[ticks], acc = 0, TMR_SHOWN forgotten, `wm_snap`), `app_bounce_kinit`
-(x=4, y=4, vx=3, vy=2).
+**Timer and Bounce were kinds in this file from the first Clock to §14.8** and
+are the TIMER and BOUNCE packages now (§111, §112; `apps/timer/`,
+`apps/bounce/`), loaded from the apps disk like every other program. The
+subsections below that record their design — §14.1's incremental digit
+redraw, §14.4's cut line, §14.5's flicker-free step, §14.7's taskless clock —
+describe mechanisms the packages carry unchanged and are kept as the record
+of why; the `app_tmr_*` / `app_bounce_*` / `app_ball_*` names in them are the
+kinds' bodies, which the packages spell `tm_*` and `bn_*`. The two `.lowbss`
+state pools (`app_tmr_pool`, 10 × 16; `app_ball_pool`, 10 × 8), the kinds'
+icons and the Builtins menu that launched them went with them.
 
-`TMR_RUN` is the byte that used to be the stride's padding, which is the
-whole reason the Timer's buttons cost no memory: the pool and the cap were
-exactly the Clock's. **The stride is not** — it went 8 → 16 when TMR_SHOWN
-arrived, and that is the one thing here with a price on it: 80 bytes of
-`.lowbss` crossed the 512-byte step its rung rounds to, so the kernel's
-footprint moved 81,920 → 82,432, one of the nine steps move 10 granted
-(docs/KERNEL-MEMORY.md). It buys the redraw below, and the alternative —
-a parallel array in `.bss`, where the rounding happened to have room —
-indexes per-instance state by a slot derived from a stride, which is the
-kind of thing that breaks silently the next time the stride moves.
-
-Paint/onkey/onclick procs receive SI = window ptr (§11) and find their state via
-`inst_of_win` (§29) + `I_SPTR`; module-level draw scratch (used only under
-the gfx lock) may stay shared. Kind behavior:
+Paint procs receive SI = window ptr (§11). About is stateless and has no
+onkey. Kind behavior:
 
 - **About** — 300×120 at (170,140), title "About os8088". Paint: four
   centered lines — "os8088 1.0  Build 333" (the version, and the build
@@ -29077,106 +29083,14 @@ the gfx lock) may stay shared. Kind behavior:
   be a constant in the third line any more, which is why it moved into a
   fourth; `app_about_center` re-measures every string, so unequal line
   lengths cost nothing. No onkey. Singleton (cap 1).
-- **Timer** — 160×60 at (330,60), title "Timer": a stopwatch, HH:MM:SS over a
-  row of three buttons. Cap 10 (the template
-  position keeps the whole +16·9 cascade on-screen and above the dock —
-  330 + 144 + 160 = 634 on a 640px screen; on a
-  shorter screen `wm_fit` clamps its tail back onto it, §39.7).
-  **No task** (§14.7): the clock is the window's one-shot timer (§13.9),
-  installed and armed for `APP_TMR_TICKS` = 9 by `app_tmr_kinit`, and
-  `app_tmr_tick` is its `W_ONTIMER` — the UI task, gfx lock held. Each
-  firing: re-arm 9; AX = [ticks]; delta = AX −
-  TMR_LAST (subtraction idiom, safe across wrap); **TMR_LAST = AX
-  unconditionally**; if TMR_RUN = 0 the delta is discarded here; else TMR_ACC
-  += delta*10, and while TMR_ACC >= 182: TMR_ACC −= 182 and advance seconds
-  with carries (s 60→0/m+1, m 60→0/h+1, h 24→0). This sampling runs
-  every firing, and a timer fires whether or not its window shows (§13.9),
-  so a minimized Timer keeps time; only drawing is conditional: `wm_clip_set`
-  (§11.3), which answers CF = 1 for a hidden window as well — if it does,
-  skip; else draw HH:MM:SS from the instance's TMR_HRS/MIN/SEC. The clip dies
-  at `ui_timer_pass`'s `gfx_unlock`. A task-less kind closes at once, and
-  `wm_destroy` zeroing `W_FLAGS` is what stops a dead Timer firing. A half-covered
-  Timer therefore redraws the half that shows, whole glyphs only, instead of
-  stopping. Paint proc forgets TMR_SHOWN (§14.1 — `wm_draw_win` has just
-  white-filled the content) and renders the same string from the state block,
-  then the three buttons. The accumulator design is binding.
 
-  **Sampling the tick while stopped is what Stop means.** The delta is taken
-  and banked into TMR_LAST on every wake whether the timer runs or not, so a
-  stopped interval is *thrown away* rather than owed; leaving TMR_LAST alone
-  would make Start jump forward by however long the timer had been stopped.
-  `app_tmr_onclick`'s Start re-stamps TMR_LAST for the same reason at finer
-  grain — up to 9 ticks of stopped time can be sitting unsampled at the
-  moment of the click.
-
-  **Layout** (content-relative; the window is fixed-size, never resizable,
-  and 160×60 fits inside every adapter's desktop band — CGA's is the
-  tightest — so `wm_fit` cannot shrink it and these may be constants rather
-  than another read of `[vid_*]`, §1/§39.7). Content is 158 × 41. Digits:
-  8 cells = 64px wide, centred across the content, top at +5. Buttons:
-  three of 46 × 15 with 6px gaps, left inset 4, top at +20 — rows 20..34 of
-  the 41 the content has. A label sits at +3 within its button, centred by
-  `font_width`.
-
-  **Start · Stop · Reset**, in that index order, hit-tested by
-  `app_tmr_hit` from those same constants (the `fm_hit` argument, §22.2):
-  Start sets TMR_RUN = 1 and re-stamps TMR_LAST; Stop clears TMR_RUN; Reset
-  zeroes h/m/s **and** TMR_ACC **and** re-stamps TMR_LAST — the part-second
-  in flight goes at both ends — and leaves TMR_RUN alone, so a reset while
-  running keeps running. **Opening the Timer starts it** (`app_tmr_kinit`
-  sets TMR_RUN = 1): the buttons are there to stop it and to put it back,
-  not to arm it.
-
-  **Greying follows §47.** `app_tmr_bok` is the one predicate — Start is
-  refused while running, Stop while stopped, Reset never — and it is what
-  both `gfx_pen_cf` and the click path read, so the greying and the refusal
-  cannot disagree (rule 2). The frame greys with the label, never just the
-  caption; a click on a greyed button does nothing at all, with no beep and
-  no notice, because a greyed control already explains itself (rule 6).
-  On the two 1bpp adapters that reads as a dotted frame around a
-  checkerboard label (§39.4), which is where it was looked at.
-
-  **`app_tmr_btn` erases its own button before drawing it**, and the fill and
-  the label are gated *together* on one `wm_clip_test` over the whole button:
-  a button is one control, so it is drawn whole or not at all, and §11.3's
-  granularity rule cannot bite. Both callers run with the clip disarmed —
-  `W_PAINT`, and `W_ONCLICK`, which fires on the frontmost window alone —
-  so the test always answers "free" today; it is there so the routine stays
-  safe to call from anywhere. A Start/Stop click redraws **those two buttons
-  and nothing else**; a Reset click redraws **the digits that changed and
-  nothing else** (§14.1). `app_tmr_render` sets its pen with `gfx_pen_live`
-  rather than a bare `[gfx_color]` store, because a button drawn just before
-  may have left `[gfx_dis]` set — and there that flag costs twice, since a
-  flagged glyph is a checkerboard *and* `font_run` refuses its fast path
-  while it is set. The buttons themselves are deliberately **not** converted
-  to `font_run`: a button is one `gfx_fill` erasing a frame plus one centred
-  label, so a run would repaint a background the fill already covered — the
-  Disk window's reasoning in §11.94 — and they are drawn on a click, not
-  twice a second.
-- **Bounce** — 150×130 at (300,150), title "Bounce". Cap 10 (on VGA the
-  template position keeps the whole +16·9 cascade on-screen and above the
-  dock; on a shorter screen `wm_fit` clamps its tail back onto it, §39.7).
-  Per-instance task: loop { task_sleep 2; **if I_STATE = 2 → `inst_task_die`**;
-  gfx_lock; **check under the lock** that the window is visible, then
-  `wm_clip_set` (§11.3); if both hold, erase the 8×8 black square at the old
-  pos (white fill), step, draw at the new pos — both fills cut to the
-  visible region, so a half-covered Bounce shows the square crossing the
-  half you can see. If either fails, **step anyway** and draw nothing;
-  gfx_unlock }. Paint proc: square at the instance's current pos.
-  **The step is unconditional**, which is what makes a fully covered or
-  minimized Bounce come back where it now is rather than where it was
-  buried; it is safe precisely because the paint proc draws from state.
-  (Before §11.3 the frame was skipped without erasing *or* stepping, and a
-  covered Bounce looked frozen. That rule is retired.)
-
-The close protocol for these tasks is §29's: the UI task never destroys a
-task-owned instance's window — it sets I_STATE = 2 and hides; the task
-notices at its next wake (≤ 9 ticks for Timer, ≤ 2 for Bounce) and tears
-itself down with `inst_task_die` → `task_exit`. A package's worker (§20.6)
-reaches exactly this path through `OSAPI_TASK_ALIVE`, whose whole job is to
-be the worker's "next wake" check; there the latency bound is whatever the
-worker's own sleep is, which is why rule 2 makes the call mandatory once
-per outer-loop iteration.
+A package's worker reaches §29's close protocol — the UI task sets I_STATE = 2
+and hides, the task notices at its next wake and tears itself down through
+`inst_task_die` → `task_exit` — through `OSAPI_TASK_ALIVE`, whose whole job is
+to be the worker's "next wake" check; the latency bound is whatever the
+worker's own sleep is, which is why §20.6 rule 2 makes the call mandatory
+once per outer-loop iteration. The Bounce package (§112) is the worked
+example, as the Bounce kind's task was before it.
 
 ### 14.1 The digits are one opaque run, and only of what changed
 
@@ -29568,6 +29482,74 @@ and is byte-identical. The 128 slot a Timer held is free for a Bounce or
 anything else that fits there, and ten Timers no longer take ten task slots. `tests/tmrnotask.py` is the row: no task
 spawned, guest time kept to the second, and §14.4's cut line drawing above
 the edge and not below it.
+
+### 14.8 Timer and Bounce are packages
+
+**What.** The Timer and Bounce kinds became `TIMER.O88` and `BOUNCE.O88`
+(§111, §112; `apps/timer/timer.asm`, `apps/bounce/bounce.asm`), in
+`$(APPS_TOOLS)` and so in `APPS/` on every apps disk in every geometry, with
+the icons the kinds wore embedded in their headers. The kernel keeps About.
+Both kernels are one shape here now: `kern_small` had left the pair out
+since §14.6, so this makes `kern_big` the same — and the two packages run on
+both, where the kinds ran on one.
+
+**Why.** The owner's call, priced since kernel size pass 9's "what is left"
+(docs/plans/completed/HANDOFF-KERNEL-SIZE-P10.md §4: *Timer / Bounce as
+packages, ~1.8KB big, a product decision*). A stopwatch and a bouncing square
+are applications; §2.8's test says a feature the machine can live without
+until it is asked for should not be resident, and the apps disk is where
+every other application already lives. They stayed as long as they did
+because they predate the package format (§20) — the Clock was kind 1 before
+Note Pad was a package — and because §20.6 pointed at Bounce's task as the
+reference implementation of a worker, which it still is, as a package.
+
+**What went** (`kern_big`; `kern_small` had none of it):
+
+- `apps.inc`: the two templates, titles, labels and limits, `[app_tmr_down]`,
+  the two KD_INIT procs, `app_state_of`, every `app_tmr_*`, `app_bounce_*`
+  and `app_ball_*` body, `app_tmr_str`, `app_bwy`, and the two `.lowbss`
+  pools (240 bytes).
+- `instance.inc`: `KIND_TIMER` and `KIND_BOUNCE` with their rows — `KIND_FILES`
+  is 1, `KIND_CTRL` 2 and `KIND_HIBER` 3 on `kern_big` now, the numbering
+  `kern_small` already had (§14.6.1: a table position, not an ABI); the two
+  icon bodies and the 29 pool rows only they used; `app_launch`'s task arm and
+  its `.rollback`, no kind naming a task any more (`KD_TASK` is `KD_PAD`, a
+  zero word kept so the stride stays a power of two); and the three `cw_`
+  thunks only they reached (`cw_inst_of_win`, `cw_task_sleep`,
+  `cw_inst_task_die`) with the three resident entry thunks for the
+  KD_INIT/KD_TASK words.
+- `sched.inc`: `SCH_BUILTIN_STK` (§8.7). The Bounce package's header declares
+  `OS88_STACK_128`, the same class; the Timer's `OS88_STACK_256`, for the
+  worker it runs only on `kern_small` (§111.3).
+- **The Builtins menu**, on `kern_big` as on `kern_small`: `CMD_TIMER`,
+  `CMD_BOUNCE`, `menu_items_builtin`, `ui_loc_base`'s third cell and
+  `fm_s_mbuilt`. Its two launches are packages and its third item, Disk,
+  duplicates the desktop's drive zones (§26.1), so what was left was a menu
+  of one item that duplicates a double-click — §14.6's argument, true of both
+  kernels now. Locator's bar is **System · File** everywhere; `CMD_FILES` is 9
+  (10 with `OS88_SHORTCUTS`) and stays, because the desktop zone posts it.
+
+**What it cost, measured** (`tools/kernsize.py`, `kern_big`, against
+`da3688c5`): `.text` −326, `.bss` −11, `.cold` −1,070, `.lowbss` −240 —
+**−1,647 resident bytes**, the cold rung uncrossed, **KERN_SIZE 99,328 →
+98,304 (−1,024)**, and the image rung from 15 bytes left to 352. The
+packages: TIMER.O88 2,045 bytes of image and 76 of bss, BOUNCE.O88 922 and
+30; three clusters of the 360KB apps disk (345 → 348 of 354).
+
+**What a user sees.** Timer and Bounce are a double-click on the apps disk
+rather than a pick from a menu that is gone; ten of either still open (a
+package is multi-instance, §20, and each cascades +16px by its instance
+index as the kinds did by pool slot); a machine with no apps disk in B: has
+no stopwatch, as it has no Note Pad. Every `kern_big` machine gets 1KB of
+heap back, and a `kern_small` machine gets a Timer and a Bounce it never had.
+
+**Tests.** `bouncecost`, `tmrup` and `tmrnotask` measured the kinds and are
+retired with them (PERFORMANCE.md Set 110 keeps bouncecost's figures);
+`heapscrl` opens the two packages by name from the apps disk's `APPS/` where
+it picked the kinds off the Builtins menu; `dispfit` parks its poked handler
+at `sch_chstack`'s base where it used `app_ball_pool`; `desklayer` looks for
+Locator's File cell where it looked for Builtins. `tests/timerbounce.py`
+(§111.5) is the packages' own row.
 
 ## 15. kernel.asm — boot sequence
 
@@ -42433,14 +42415,12 @@ Two teardown corollaries, both about not trading a crash for a leak:
    `OSAPI_GFX_UNLOCK`, so there is nothing to undo. `OSAPI_WM_OBSCURED` is
    still there and still correct, but it vetoes the whole frame for one
    covered pixel, which for a worker that spends minutes on a frame is the
-   wrong trade. This is the §14 Bounce idiom, and `app_bounce_task` in
-   `kernel/apps.inc` is the reference implementation for everything a
-   worker does, written inline as a package writes it: open, then
-   sleep / die-check / `gfx_lock` → `test W_FLAGS, 2` →
-   `OSAPI_WM_CLIP_SET` → draw → unlock. (It called three shared steps,
-   `app_kind_open`, `app_kind_wait` and `app_kind_arm`, while the Timer ran
-   the same spine; §14.7 took the Timer's task away and the indirection
-   went with it.)
+   wrong trade. This is the §14 Bounce idiom, and `bn_worker` in
+   `apps/bounce/bounce.asm` (§112.2) is the reference implementation for
+   everything a worker does - a package's worker in fact, since §14.8, where
+   it was the kernel's `app_bounce_task` written "as a package writes it":
+   open, then `OSAPI_TASK_ALIVE` / sleep / `OSAPI_GFX_LOCK` →
+   `test [es:bx+W_FLAGS], 2` → `OSAPI_WM_CLIP_SET` → draw → unlock.
 6. **The worker's stack is the CLASS the package's header declares** (§8.7.2,
    byte +15), resolved through `sch_clsbytes`: 128, 192, 256 or `SCH_STACK`
    (**384**). A header that declares nothing gets `SCH_STACK`, which is what
@@ -42508,12 +42488,12 @@ Two teardown corollaries, both about not trading a crash for a leak:
 **Refusal is normal, not exceptional.** `MAX_TASKS` is **14** on `kern_big`
 and **7** on `kern_small`, so there are 13 background slices on one and 6 on
 the other (§8.7) — the idle task holding one for the life of the machine — and
-the UI task, up to ten Timer/Bounce instances, the Task Manager's worker and a
+the UI task, every Bounce's worker (§112), the Task Manager's worker and a
 transient SB refill/drain task (§34.5) all draw from them, so CF=1 is an
 ordinary outcome, and it arrives sooner for a worker that asks for the largest
 class: `kern_big`'s partition has two 384-byte slices and `kern_small`'s one. A package must degrade — stay a perfectly good task-less
 package, window, callbacks, menus and close box all working — and **should
-retry**, because the condition is transient: closing one Timer frees the
+retry**, because the condition is transient: closing one Bounce frees the
 slot, and a package that latched its refusal is broken until it is
 relaunched. On refusal nothing was created and `I_TASK` is untouched, so a
 retry is free — ask again from every callback that already runs under the
@@ -46802,7 +46782,7 @@ only by the UI task (§7) and `fm_oncmd` runs *inside* it:
 | Up One Folder / Root Folder | inline: `fmv_sync`, then the **`..` row's own handle** + `fmv_load` / `fmv_load` AX=0 |
 | New Window / Open in New Window | **deferred** — seed + `inst_launch_post` (§29.4); at cap, `snd_beep` and nothing else, because `app_launch` would front an existing window and silently drop the seed |
 | as List / as Icons | inline: set `FS_VIEW`, reset `FS_SCRL`. Not on the bar since §22.15 — the context menu and the in-window button reach them |
-| Timer / Bounce | **deferred** — `inst_launch_post` (§29.4); `app_launch` takes the lock |
+| Timer / Bounce | **deferred** — `inst_launch_post` (§29.4); `app_launch` takes the lock. (Off this bar since §22.28, and packages since §14.8; `Nav > New Window` is the route that still posts a launch) |
 | Close Window | **deferred** — `ui_post_cmd` CMD_CLOSE (§13); `ui_cmd` takes the lock |
 | Restart | **deferred** — `ui_post_cmd` CMD_REBOOT; `ui_cmd` takes the lock and never gives it back |
 
@@ -50721,7 +50701,9 @@ Clone and Write Image (renamed from `Write Img…`, there being room) keep
 
 **Builtins left the Disk window's bar.** It is the DESKTOP's menu - Timer,
 Bounce and a new Disk window - and a Disk window is a program of its own,
-not a part of the desktop; Locator's own bar keeps it unchanged (§12.3.1).
+not a part of the desktop; Locator's own bar kept it unchanged (§12.3.1)
+until §14.8 made Timer and Bounce packages and took the menu off that bar
+too.
 Its three ids, three bodies and its item list went with it, and the bar is
 four cells on both builds, with one of `MENU_APPMAX`'s five spare - which is
 48px of the 640-wide bar given back to the clock and the toasts beside it
@@ -52009,10 +51991,11 @@ db height        ; rows
 
 **Every built-in kind carries one** (`KD_ICON`, §29.3), in the header-less
 `icon_draw16` layout, stored in `instance.inc`'s `.text` next to
-`inst_kinds`: About is the DIP chip the System menu draws, Timer a stopwatch
-(crown, face, two hands), Bounce a ball with its arc and floor, Disk a folder (the drive icon is
-desk.inc's job, §26), Task Manager a bar chart on an axis, Control Panel
-three sliders. `KD_ICON` = 0 still means "the generic icon" and still works;
+`inst_kinds`: About is the DIP chip the System menu draws, Disk a folder (the drive icon is
+desk.inc's job, §26), Control Panel three sliders (the Timer's stopwatch -
+crown, face, two hands - and Bounce's ball with its arc and floor went into
+the two packages' headers with their kinds, §14.8; the Task Manager's bar
+chart on an axis went into TASKMGR.O88's the same way, §28). `KD_ICON` = 0 still means "the generic icon" and still works;
 what it stops meaning is "every built-in", which made the dock six identical
 tiles. The last two were the test: a framed list of bars and a framed list of
 sliders are the same shape at 16px, and had to be redrawn until they were
@@ -60611,13 +60594,13 @@ I_CYC    equ 28   ; dword (lo word first): PIT cycles billed to this
 I_RECSZ  equ 32
 
 KIND_ABOUT   equ 0
-KIND_TIMER   equ 1       ; (Note Pad was kind 1 until it became the
-KIND_BOUNCE  equ 2       ;  NOTEPAD package, §27 — the numbering closed up;
-                         ;  kind 1 was the Clock until it gained its buttons
-                         ;  and became the Timer, §14)
-KIND_FILES   equ 3
-KIND_CTRL    equ 4       ; Control Panel (§31)
-KIND_HIBER   equ 5       ; the Hibernate window (§87.1), kern_big only
+KIND_FILES   equ 1       ; (the numbering has closed up three times: Note Pad,
+KIND_CTRL    equ 2       ;  kind 1, became the NOTEPAD package, §27; the Task
+                         ;  Manager, kind 4, TASKMGR, §28; and the Timer and
+                         ;  Bounce, kinds 1 and 2, TIMER and BOUNCE, §14.8 -
+                         ;  so both kernels number the same way now, which
+                         ;  §14.6.1 says is a table position and not an ABI)
+KIND_HIBER   equ 3       ; the Hibernate window (§87.1), kern_big only
 KIND_PKG     equ 0x80    ; bit 7: package instance
 ```
 
@@ -60763,9 +60746,11 @@ without its twin, which is the standing arrangement `MAX_TASKS`, `INST_MAX` and
 
 ### 29.3 Kind descriptor table (.text, `inst_kinds`, stride KD_SIZE = 16)
 
-Per built-in kind: `KD_TPL` (word, wm_create template ptr), `KD_TASK`
-(word, task entry, 0 = task-less — built-in kinds only; a package's worker
-is claimed at run time through §20.6 and is declared nowhere),
+Per built-in kind: `KD_TPL` (word, wm_create template ptr), `KD_PAD`
+(word, 0 — this was `KD_TASK`, a kind's task entry, until §14.8: Bounce was
+the last kind with one, no row names a task now and `app_launch` spawns
+none; a package's worker is claimed at run time through §20.6 and is
+declared nowhere. The word stays so the stride keeps its power of two),
 `KD_POOL` (word, state pool base, 0 =
 stateless), `KD_SSIZE` (word, pool stride), `KD_INIT` (word, state-init
 proc or 0 — in: BX = window ptr, DI = state ptr or 0, SI = instance
@@ -60778,18 +60763,17 @@ only feature bits (WF_SIZABLE — never bits 0/1, and WF_FULL makes no
 sense at create time). The Disk kind sets WF_SIZABLE (§22); every other
 row keeps 0.
 
-Pinned caps: About 1 (stateless), Timer 10
-(stride 16 — 8 of state and 8 of §14.1's TMR_SHOWN), Bounce 10 (stride 8),
+Pinned caps: About 1 (stateless),
 **Files 4 (stride `FS_SIZE`, pool `fm_pool`)**,
-TaskMgr 1 (one sampler), Control Panel 1 (no per-instance state, §31),
+Control Panel 1 (no per-instance state, §31),
 Hibernate 1 (stateless, painted by its module, §87.1). The
 Files cap is 4 because each window claims its own `VIEW_KB` cache (§2.3); `KD_CAP`, `VIEW_SLOTS` and the `fm_pool` size are one
-number wearing three hats and must move together. The
-per-kind caps deliberately over-subscribe INST_MAX now that Timer and
-Bounce allow 10 each — `INST_MAX` (and MAX_TASKS, §8) is the real ceiling,
-and a launch on a full table simply fails with CF=1. Since §20.6 and §34.5
+number wearing three hats and must move together. (Timer and Bounce were
+10 each - stride 16, 8 of state and 8 of §14.1's TMR_SHOWN, and stride 8 -
+until §14.8; a package has no cap but `INST_MAX`, and `MAX_TASKS` (§8) is
+the ceiling a Bounce's worker meets first. Since §20.6 and §34.5
 put package workers and transient sound tasks in the same pool, MAX_TASKS
-is now the binding ceiling more often than INST_MAX is.
+is the binding ceiling more often than INST_MAX is.)
 
 `inst_kinds` rows are in KIND_* order, one 16-byte row per kind; the
 Control Panel's row is the last one and is task-less, pool-less and
@@ -60817,7 +60801,7 @@ init-less:
 | `inst_alloc` | out CF=0 + DI = a free record **wholly zeroed** — all `I_RECSZ` bytes, so I_NAME, I_WIN and I_TASK go with I_FLAGS/I_SPTR/I_SIZE/I_ICON/I_CYC; CF=1 table full. I_TASK therefore momentarily reads 0 rather than the last tenant's slot, which nothing can see: I_STATE is 0 across the whole gap and every walker skips a free row, and both callers write I_TASK = 0xFF before the record publishes. DF is left clear. Does NOT publish. UI task only. |
 | `inst_set_name_x` | in DI = record, **ES:SI** = name source (NUL-terminated or NUL-padded; at most 15 chars taken). Byte I_NAME+15 is always 0 and the tail after a short name is NUL-padded by the same 15-step loop. Safe on a package header's 16-byte name field. The DS-relative `inst_set_name` was a thunk with one caller and is gone (kernel size pass 9): `app_launch` sets ES = DS and calls this. |
 | `inst_bind_win` | in DI = record, BX = window ptr: I_WIN ← BX, `wm_owner[window index]` ← record index. |
-| `app_launch` | in AL = kind (built-in). UI task only, no lock held; takes its own locks. out CF=1 failed (instance/window/task table full — silent no-op for the caller), CF=0 done. Order: cap check (at cap → gfx_lock, clear the live instance's minimized bit, wm_show it, gfx_unlock — i.e. "launch" of a full singleton fronts it; only-dying-instances → CF=1, retry after a task period) → inst_alloc → pool-slot pick (first candidate `pool + s·stride` not held by a same-kind record with I_STATE != 0) → template copied to scratch with x/y cascaded +16·s → wm_create (CF → fail; record was never published), then OR the kind's `KD_WFLAG` byte into the new window's W_FLAGS (§29.3/§11.1) → fill record (I_KIND, I_TASK=0xFF, I_ICON, name) + inst_bind_win → KD_INIT → **publish I_STATE ← 1** → if KD_TASK: task_spawn (AX = entry, DX = instance index), I_TASK ← returned slot; spawn CF → rollback (I_STATE ← 0, then locked wm_destroy) → gfx_lock, wm_show, gfx_unlock. |
+| `app_launch` | in AL = kind (built-in). UI task only, no lock held; takes its own locks. out CF=1 failed (instance/window/task table full — silent no-op for the caller), CF=0 done. Order: cap check (at cap → gfx_lock, clear the live instance's minimized bit, wm_show it, gfx_unlock — i.e. "launch" of a full singleton fronts it; only-dying-instances → CF=1, retry after a task period) → inst_alloc → pool-slot pick (first candidate `pool + s·stride` not held by a same-kind record with I_STATE != 0) → template copied to scratch with x/y cascaded +16·s → wm_create (CF → fail; record was never published), then OR the kind's `KD_WFLAG` byte into the new window's W_FLAGS (§29.3/§11.1) → fill record (I_KIND, I_TASK=0xFF, I_ICON, name) + inst_bind_win → KD_INIT → **publish I_STATE ← 1** → gfx_lock, wm_show, gfx_unlock. (It spawned a kind's `KD_TASK` here, with a rollback for a full task table, until §14.8 left no kind with a task; a package's worker is its own to spawn, §20.6.) |
 | `app_close_win` | in BX = window ptr; **caller holds the gfx lock**; UI task only. Unowned window → wm_hide (fallback). I_STATE = 2 already → wm_hide (idempotent). Task-less (I_TASK = 0xFF) → I_STATE ← 2, wm_destroy (clears wm_owner, repaints), I_WIN ← 0, I_STATE ← 0 — for a package instance that final store frees the region (rule 29.2.7). Task-owned → I_STATE ← 2 (the die flag), wm_hide (instant feedback); the task tears down at its next wake — and for a package instance that took a §20.6 worker, `task_exit`'s release-byte store is what frees the region. A package instance reaches this second branch exactly when it owns a worker. |
 | `inst_minimize` | in BX = window ptr, lock held: set I_FLAGS bit0 (unowned → skip), wm_hide. |
 | `inst_restore` | in DI = record, lock held: clear I_FLAGS bit0, wm_show I_WIN. |
@@ -60850,10 +60834,10 @@ count has reached `KD_CAP`, what happens next depends on whether the cap is
   About*, and there is one About, so the existing instance is fronted and
   un-minimized and the call succeeds. That is singleton semantics and it is the
   right answer.
-- **`KD_CAP` > 1** — Timer and Bounce, both 10. "Open Bounce" for the eleventh
-  time means *make me another one*, and fronting one of the ten already there is
-  not that. It **refuses**: CF = 1, and `ui_cmd` turns that into `snd_beep`
-  (§34.3).
+- **`KD_CAP` > 1** — the Disk window (4), and Timer and Bounce (both 10) until
+  §14.8. "Open Bounce" for the eleventh time means *make me another one*, and
+  fronting one of the ten already there is not that. It **refuses**: CF = 1,
+  and `ui_cmd` turns that into `snd_beep` (§34.3).
 
 **It used to front in both cases**, which made a multi-instance kind at its cap
 indistinguishable from nothing happening at all — the pick did nothing visible,
@@ -66435,10 +66419,10 @@ inks.
 
 The wall clock: one date + time of day for the whole system, seeded from
 the hardware RTC when the machine has one and advanced from the PIT
-afterwards. Label prefix `clk_` (the built-in **Timer** app of §14 keeps its
-own `app_tmr_` names and its own per-instance stopwatch state — the two are
-unrelated, and the app's rename away from "Clock" is what finally makes the
-two prefixes read differently). Included right after `events.inc`; `clk_init` runs in kmain
+afterwards. Label prefix `clk_` (the **Timer** - §14's kind, the TIMER
+package of §111 since §14.8 - keeps its own `tm_` names and its own
+per-instance stopwatch state — the two are unrelated, and the app's rename
+away from "Clock" is what finally makes the two read differently). Included right after `events.inc`; `clk_init` runs in kmain
 right after `sched_init` and `sch_idle_start` (§15). All code is near `.text`: it is called from
 the UI task's inner loop and from the Control
 Panel's far page (§31.5).
@@ -185289,3 +185273,110 @@ that writes the bit; a v1 DIA's file is byte for byte what it was.
 
 It landed in v2's wave 3 (§110.10); the Desk Calendar adopted it in wave 4
 (§110.3).
+
+## 111. TIMER — the stopwatch (`apps/timer/timer.asm`)
+
+The kernel's Timer kind (§14) as a package since §14.8: `TIMER.O88`, in
+`APPS/` on every apps disk, 2,045 bytes of image and 76 of bss, the
+stopwatch icon in its header, label prefix `tm_`. Everything §14 says about
+the Timer's behaviour holds — the window, the layout, the accumulator
+(binding), §14.1's incremental redraw, §14.4's cut line, §47's greying — and
+this section says only what is different about being a package.
+
+### 111.1 Window and layout
+
+160×60 at (330, 60), cascaded +16px per **instance index** (the entry proc's
+DX) where the kind cascaded per pool slot; `WF_SNAP` asked for in the entry
+proc (§11.94) so the digit run at content x 48 is byte-aligned on every
+adapter. Content 158×41: digits 64px wide at +48,+5; three 46×15 buttons
+with 6px gaps at +4,+20. The `TM_*` constants mirror the kind's `APP_TMR_*`
+to the pixel, and the same assembly-time `%error` holds the digits on a cell.
+
+### 111.2 The buttons are the standard control
+
+One `OS88UI_BTNREC` — rects in the bss, filled by the painter (`tm_layout`)
+from `OSAPI_WM_CONTENT` each pass; labels; three flag words — and
+`os88ui_btninit` from the entry proc, which installs W_ONCLICK, W_ONMOUSEUP
+and W_ONDRAG itself (§20.5.1.3). So the kind's hand-rolled gesture
+(`app_tmr_hit` / `track` / `setdown` / `onup` / `ondrag`, §13.8.5) is the
+library's `os88ui_btnup` and `os88ui_btndrag` over the record, and a button
+fires on the RELEASE and un-draws as the pointer slides off it (§13.8) with
+nothing in this file saying how. `tm_bok` is the ONE predicate (§47 rule 2):
+`tm_flags` writes `OS88UI_DIS` on the button it refuses — Start while
+running, Stop while stopped, Reset never — and `tm_act` refuses the same one
+on the release, so the grey and the refusal cannot disagree. `OS88UI_FILL` on
+all three, because a button is redrawn over its previous pen's frame after a
+click. Start re-stamps the sample (up to 9 ticks of stopped time can be
+sitting unsampled at the click); Stop clears `tm_run`; Reset zeroes h/m/s AND
+the accumulator AND re-stamps, leaving `tm_run` alone. Start and Stop redraw
+those two buttons and nothing else; Reset redraws the digits that changed.
+
+### 111.3 The clock, on both kernels
+
+`OSAPI_WM_ONTIMER` and `OSAPI_WM_TIMER` for `TM_TICKS` = 9, re-armed inside
+the handler (`tm_tick`, §13.9), which arms the clip itself — a timer dispatch
+arrives without one (§11.3). **On `kern_small` `OSAPI_WM_TIMER` refuses**
+(it carries the slot and not the body), so there the clock is a WORKER
+(`tm_worker`) spawned at the first paint, in the class `OS88_STACK_256`: the
+kind's task overflowed a 128-byte slice drawing text through `font_run`'s
+per-cell path (§14.7 read 112 of 128), so the package asks for the class
+above it rather than guessing again. The worker does from a task exactly
+what the handler does from the UI task — `OSAPI_TASK_ALIVE`, sleep 9, lock,
+keep time, visible?, `OSAPI_WM_CLIP_SET`, digits, unlock. The kind never ran
+on `kern_small` (§14.6); the package does. `tm_keep` samples `[ticks]` on
+every firing whether running or not, and accumulates only while running:
+§14's design, binding.
+
+### 111.4 Drawing
+
+`tm_digits`: "HH:MM:SS" formatted with `aam` (the kind borrowed the kernel's
+`clk_put2`; a package has no near route to it, and the idiom is four
+instructions), one `OSAPI_WM_CLIP_TEST` over the whole line, the span of
+cells that differ from `tm_shown`, a cut line drawn whole and forgotten,
+`OSAPI_SET_COLOR CBLACK` before the run because a greyed button leaves the
+pen disabled (§47 rule 1, and the bare store is what clears the flag), then
+one `OSAPI_FONT_RUN`.
+
+### 111.5 About, and the row
+
+The standard About card (§20.5.1), two lines — 41px of content holds two.
+While the card is up the button record is told it has NO buttons, so a
+press anywhere in the content reaches the dismissal rather than the button
+under the card. `tests/timerbounce.py` is the gate (soak, MartyPC): it opens
+`TIMER.O88` and `BOUNCE.O88` by name out of the apps disk's `APPS/`, reads the
+Timer's seconds advancing out of its own bss, presses Stop and then Start
+through the real gesture and reads `tm_run` both ways, and reads the Bounce's
+square moving and its worker holding a task slot.
+
+## 112. BOUNCE — the square (`apps/bounce/bounce.asm`)
+
+The kernel's Bounce kind (§14) as a package since §14.8: `BOUNCE.O88`, in
+`APPS/` on every apps disk, 922 bytes of image and 30 of bss, the ball icon
+in its header, label prefix `bn_`. §14.5's draw-then-subtract and §11.3's
+unconditional step hold, and this section says only what is different about
+being a package.
+
+### 112.1 Window
+
+150×130 at (300, 150), cascaded +16px per instance index; content 148×111,
+the square 8×8 at (4,4) with velocity (3,2) — the kind's seed, set in the
+entry proc rather than a KD_INIT. The `%error` that holds a step under the
+square's width, which is what keeps `bn_wipe` two strips, is the kind's.
+
+### 112.2 The worker IS §20.6's reference implementation
+
+`bn_worker` is spawned from the first paint (`bn_spawn_ck`; an entry proc
+cannot spawn, the loader has not published the instance), declared
+restartable there (§66.6.2), in the class `OS88_STACK_128` — the class the
+kind's task measured at, +10…24 over the floor six at once (§8.7). The loop
+is the one §20.6 names: `OSAPI_TASK_ALIVE`, sleep 2, `OSAPI_GFX_LOCK`,
+`test [es:bx+W_FLAGS], 2` with ES = KERNEL_SEG, `OSAPI_WM_CLIP_SET`, step,
+the new square black, the colour white, `bn_wipe`, unlock; a hidden or
+wholly covered window steps and draws nothing. §20.6 pointed at
+`app_bounce_task` as the reference for a worker "written as a package writes
+it"; it points here now, and the reference is a package.
+
+### 112.3 About
+
+The standard card, two lines; the window's W_ONCLICK is its dismissal, as
+Hello's is (§27).
