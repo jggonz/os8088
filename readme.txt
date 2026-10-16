@@ -145,6 +145,8 @@ GAMES: F full screen and P pause in most. Arkanoid: Space serves. Tank: arrows o
 
 DESK CALENDAR (STIKAPPS): lives on the desktop under every window - today and the month, the chosen day's appointments and your tasks, and a reminder. Click it for its keys and its Calendar and Remind menus; Esc hands them back. Arrows or a click pick a day, PgUp/PgDn (or < >) the month, T today. + adds a line: "9:30 Dentist" is an appointment, anything else a task. Click a line twice or press Enter to change it, Del deletes, click a task's box to tick it. A reminder beeps and rings while the calendar is open: S snoozes 5 minutes, D dismisses. Point at its name tag to drag it, or click its x to close it. It comes back at every start, where you left it, until closed; only one opens. On the 128KB small system disk it is an ordinary window.
 
+STICKY NOTE (STIKAPPS): a note pad on the desktop. The arrow (or Enter) opens its editor; + makes a note, < > turn the pages. The first line is the note's title. Type [ ] at the start of a line for a check box, Ctrl+T toggles one, Enter after a box starts the next, and a click ticks it. New and Delete are in the editor, and so is On desktop: turn it off and the note lives in its window. On a colour screen the Color menu picks each note's paper. It saves itself; up to 24 notes and 4KB.
+
 More disks: Frotz (Infocom stories), Word, CWord, RunCPM, C64, Apple II, Weave/Loom. Word keeps Word 1.1's keys: Ctrl+C centres, Shift+Del cuts, Shift+Ins pastes.
 
 

@@ -42,6 +42,12 @@ were written the same afternoon. So:
      os88stik.widget_off() says, EVALUATED BY NASM from the desk probe's own
      build; and STIK_HOVER_T / STIK_LEAVE_T are kern_big's DOCK_HOVER_T /
      DOCK_LEAVE_T, which the widget reuses by value (SPEC.md 30.6).
+  N  Sticky Note's numbers are the host tool's (SPEC.md 110.13): the
+     payload's layout (stiknote.asm's SNP_* / SN_* against os88stik.py's
+     STIKNOTE_*), the bss fields tests/stiknote.py reads, where the pad's
+     and the editor's presses land, and both geometry tables - each
+     EVALUATED BY NASM - and STIKNOTE.O88 rides every system image beside
+     the calendar (E) and no data image (F).
   G  the Desk Calendar's numbers are the host tool's: the payload's layout
      (deskcal.asm's DCP_* against os88stik.py's DESKCAL_*), its own bss
      fields the soak rows read out of a running guest (DC_BSS_*), and the
@@ -240,6 +246,44 @@ def deskcal_equs(tmp):
     return e
 
 
+def stiknote_equs(tmp):
+    """stiknote.asm's own numbers, evaluated by NASM - deskcal_equs' shape:
+    the payload, the bss fields the soak row reads, and the pad's and the
+    editor's geometry tables."""
+    names = ["SNP_LEN", "SNP_VER", "SN_MAXN", "SN_POOL", "SNP_N", "SNP_CUR",
+             "SNP_FLAGS", "SNF_DESK", "SNF_INIT", "SNP_COL", "SNP_LENS",
+             "SNP_POOL", "SN_BOX0", "SN_BOX1", "SN_NCOL", "SN_BSS",
+             "sne_win - os88_image_end", "sne_open - os88_image_end",
+             "sne_car - os88_image_end", "sne_top - os88_image_end",
+             "stik_st - os88_image_end", "stik_file - os88_image_end",
+             "STIK_FACE_W", "STIK_PAYLEN", "STIK_PAYVER", "SNP_S", "SNP_TW",
+             "SNP_BTW", "SNP_PLUSX", "SNP_PREVX", "SNP_NEXTX", "SNP_OPENX",
+             "SNP_BX", "SNP_BTX", "SNE_LW", "SNE_NEWX", "SNE_NEWW",
+             "SNE_DELX", "SNE_DELW", "SNE_CBX", "snp_geos", "SNPG_SZ",
+             "sne_geos", "SNEG_SZ", "snp_lays", "STIKL_SZ"]
+    src = open(os.path.join(ROOT, "apps", "stiknote", "stiknote.asm")).read()
+    probe = ("\n    db 'T_STIK_PROBE'\n" +
+             "".join("    dw %s\n" % n for n in names))
+    at = src.rindex("    align 16, db 0")
+    path = os.path.join(tmp, "stiknote_probe.asm")
+    open(path, "w").write(src[:at] + probe + src[at:])
+    out = os.path.join(tmp, "stiknote_probe.bin")
+    r = subprocess.run([NASM, "-f", "bin", "-w+error", "-I", "apps/",
+                        "-I", "apps/stiknote/", "-o", out, path],
+                       capture_output=True, text=True, cwd=ROOT)
+    if r.returncode:
+        raise RuntimeError(r.stderr.strip()[-400:])
+    b = open(out, "rb").read()
+    i = b.index(b"T_STIK_PROBE") + len("T_STIK_PROBE")
+    e = dict(zip(names, struct.unpack_from("<%dH" % len(names), b, i)))
+    for key, tab, sz in (("geos", "snp_geos", "SNPG_SZ"),
+                         ("edgeos", "sne_geos", "SNEG_SZ"),
+                         ("lays", "snp_lays", "STIKL_SZ")):
+        g, n = e[tab], e[sz]
+        e[key] = [b[g + k * n:g + (k + 1) * n] for k in range(3)]
+    return e
+
+
 def probe_equs(tmp, names, defines=("-DDP_DESK",)):
     """tests/stikprob/stikprob.asm's numbers, evaluated by NASM in the build
     `defines` makes - deskcal_equs' marker shape."""
@@ -397,6 +441,11 @@ def main():
         want = open(pkg, "rb").read() if os.path.exists(pkg) else None
         check(want is not None, "build/deskcal.o88 exists",
               why="every system disk carries it; run `make`")
+        snpkg = os.path.join(build, "stiknote.o88")
+        snwant = open(snpkg, "rb").read() if os.path.exists(snpkg) else None
+        check(snwant is not None, "build/stiknote.o88 exists",
+              why="every system disk carries it beside the calendar "
+                  "(SPEC.md 110.13); run `make`")
         for img in SYSTEM_IMAGES + OPTIONAL_SYSTEM:
             p = os.path.join(build, img)
             if not os.path.exists(p):
@@ -406,6 +455,11 @@ def main():
             if (img in OPTIONAL_SYSTEM and want is not None
                     and os.path.getmtime(p) < os.path.getmtime(pkg)):
                 print("t_stik: %s predates build/deskcal.o88 - not read "
+                      "(rebuild it with its own target)" % img)
+                continue
+            if (img in OPTIONAL_SYSTEM and snwant is not None
+                    and os.path.getmtime(p) < os.path.getmtime(snpkg)):
+                print("t_stik: %s predates build/stiknote.o88 - not read "
                       "(rebuild it with its own target)" % img)
                 continue
             files = walk(p)
@@ -418,17 +472,107 @@ def main():
             if got is not None and want is not None:
                 check(got == want, "%s's DESKCAL.O88 is build/deskcal.o88 "
                       "byte for byte" % img, got=len(got), want=len(want))
+            got = files.get("STIKAPPS/STIKNOTE.O88")
+            check(got is not None, "%s carries STIKAPPS/STIKNOTE.O88" % img,
+                  why="the second Sticky App rides $(STIKAPPS) beside the "
+                      "first (SPEC.md 110.13) - on the 360KB disk too, which "
+                      "gave Paint up for it (SPEC.md 24.3.1.4)",
+                  got=sorted(k for k in files if k.startswith("STIKAPPS/")))
+            if got is not None and snwant is not None:
+                check(got == snwant, "%s's STIKNOTE.O88 is "
+                      "build/stiknote.o88 byte for byte" % img,
+                      got=len(got), want=len(snwant))
         for img in DATA_IMAGES + OPTIONAL_DATA:
             p = os.path.join(build, img)
             if not os.path.exists(p):
                 check(img in OPTIONAL_DATA, "%s is missing" % img)
                 continue
             bad = [k for k in walk(p) if k.startswith("STIKAPPS")
-                   or k.endswith("DESKCAL.O88")]
+                   or k.endswith("DESKCAL.O88")
+                   or k.endswith("STIKNOTE.O88")]
             check(not bad, "%s carries no Sticky App" % img, got=bad, want=[],
                   why="a widget on an apps disk is a copy that is never the "
                       "one the desktop relaunches - its row names the boot "
                       "volume (SPEC.md 110.1, the THEWIRE rule of 92)")
+
+        # N ----------------------------------------------------------------
+        try:
+            sn = stiknote_equs(tmp)
+        except (RuntimeError, ValueError) as ex:
+            sn = {}
+            check(False, "stiknote.asm assembles with the probe", got=str(ex))
+        for name, want in (
+                ("SNP_LEN", os88stik.STIKNOTE_PAYLEN),
+                ("STIK_PAYLEN", os88stik.STIKNOTE_PAYLEN),
+                ("SNP_VER", os88stik.STIKNOTE_PAYVER),
+                ("STIK_PAYVER", os88stik.STIKNOTE_PAYVER),
+                ("SN_MAXN", os88stik.STIKNOTE_MAXN),
+                ("SN_POOL", os88stik.STIKNOTE_POOL),
+                ("SNP_N", os88stik.STIKNOTE_N),
+                ("SNP_CUR", os88stik.STIKNOTE_CUR),
+                ("SNP_FLAGS", os88stik.STIKNOTE_FLAGS),
+                ("SNF_DESK", os88stik.STIKNOTE_F_DESK),
+                ("SNF_INIT", os88stik.STIKNOTE_F_INIT),
+                ("SNP_COL", os88stik.STIKNOTE_COL),
+                ("SNP_LENS", os88stik.STIKNOTE_LENS),
+                ("SNP_POOL", os88stik.STIKNOTE_POOL0),
+                ("SN_BOX0", os88stik.STIKNOTE_BOX0),
+                ("SN_BOX1", os88stik.STIKNOTE_BOX1),
+                ("SN_NCOL", len(os88stik.STIKNOTE_PAPERS)),
+                ("SN_BSS", os88stik.STIKNOTE_STIK_BSS),
+                ("sne_win - os88_image_end", os88stik.STIKNOTE_BSS_WIN),
+                ("sne_open - os88_image_end", os88stik.STIKNOTE_BSS_OPEN),
+                ("sne_car - os88_image_end", os88stik.STIKNOTE_BSS_CAR),
+                ("sne_top - os88_image_end", os88stik.STIKNOTE_BSS_TOP),
+                ("STIK_FACE_W", os88stik.STIKNOTE_FACE_W),
+                ("SNP_S", os88stik.STIKNOTE_S),
+                ("SNP_TW", os88stik.STIKNOTE_TW),
+                ("SNP_BTW", os88stik.STIKNOTE_BTW),
+                ("SNP_PLUSX", os88stik.STIKNOTE_PLUSX),
+                ("SNP_PREVX", os88stik.STIKNOTE_PREVX),
+                ("SNP_NEXTX", os88stik.STIKNOTE_NEXTX),
+                ("SNP_OPENX", os88stik.STIKNOTE_OPENX),
+                ("SNP_BX", os88stik.STIKNOTE_BX),
+                ("SNP_BTX", os88stik.STIKNOTE_BTX),
+                ("SNE_LW", os88stik.STIKNOTE_ED_LW),
+                ("SNE_NEWX", os88stik.STIKNOTE_ED_NEW[0]),
+                ("SNE_NEWW", os88stik.STIKNOTE_ED_NEW[1]),
+                ("SNE_DELX", os88stik.STIKNOTE_ED_DEL[0]),
+                ("SNE_DELW", os88stik.STIKNOTE_ED_DEL[1]),
+                ("SNE_CBX", os88stik.STIKNOTE_ED_CBX),
+                ("stik_file - os88_image_end",
+                 os88stik.stik_hdr_off(os88stik.STIKNOTE_STIK_BSS)),
+                ("stik_st - os88_image_end",
+                 os88stik.stik_st_off(os88stik.STIKNOTE_STIK_BSS,
+                                      os88stik.STIKNOTE_PAYLEN))):
+            check(sn.get(name) == want, "stiknote.asm's %s is "
+                  "tools/os88stik.py's (%s)" % (name, want),
+                  got=sn.get(name), want=want,
+                  why="tests/stiknote.py writes the state file, reads the "
+                      "guest's bss and presses the pad by these numbers")
+        for li, raw in enumerate(sn.get("geos", [])):
+            host = os88stik.STIKNOTE_GEO[li]
+            want = [host[f] for f in os88stik.STIKNOTE_GEO_FIELDS]
+            check(list(raw[:len(want)]) == want, "snp_geos' layout %d is "
+                  "os88stik.STIKNOTE_GEO[%d]" % (li, li),
+                  got=list(raw[:len(want)]), want=want)
+        for li, raw in enumerate(sn.get("edgeos", [])):
+            host = os88stik.STIKNOTE_ED[li]
+            want = [host[f] for f in os88stik.STIKNOTE_ED_FIELDS]
+            check(list(raw[:len(want)]) == want, "sne_geos' layout %d is "
+                  "os88stik.STIKNOTE_ED[%d]" % (li, li),
+                  got=list(raw[:len(want)]), want=want)
+        for li, raw in enumerate(sn.get("lays", [])):
+            check(raw[4] == os88stik.STIKNOTE_GEO[li]["H"],
+                  "snp_lays' layout %d's card is snp_geos' height" % li,
+                  got=raw[4], want=os88stik.STIKNOTE_GEO[li]["H"],
+                  why="the composer pads the card snp_geos says; the include "
+                      "sizes the window by snp_lays")
+        snbin = os.path.join(build, "stiknote.bin")
+        if os.path.exists(snbin):
+            fl = open(snbin, "rb").read()[3]
+            check(fl & 0xC1 == 0xC1, "stiknote.bin's header carries an icon, "
+                  "OS88_F_DESK and OS88_F_STIK", got=hex(fl), want="0xc1 set")
 
         # G ----------------------------------------------------------------
         try:

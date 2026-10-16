@@ -3185,7 +3185,7 @@ SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
 # Measured at 360KB (`tools/os88disk.py --verify build/os8088-360.img`): 313
 # of 354 clusters in use before DESKCAL.O88 and its folder; SPEC.md 110.6 has
 # the figure after.
-STIKAPPS := $(BUILD)/deskcal.o88
+STIKAPPS := $(BUILD)/deskcal.o88 $(BUILD)/stiknote.o88
 STIKARGS := $(addprefix STIKAPPS:,$(STIKAPPS))
 
 # --- ...and DOS (SPEC.md 96) is in the system disk's APPS/, not SYSTEM/ ------
@@ -3578,7 +3578,14 @@ SYSDOCRAW := $(BUILD)/readme-plain.txt
 # SYSTEM.CFG together want seven, measured both sides of the line. The owner
 # took MINES.O88 off this geometry: a game, so 24.3's argument never covered
 # it, and it stays on apps360.img and games360.img and on every other disk.
-SYS360OMIT := $(BUILD)/browser.o88 $(BUILD)/telnet.o88 $(BUILD)/mines.o88
+#
+# **AND PAINT, FOR THE SECOND STICKY APP** (SPEC.md 24.3.1.4): STIKNOTE.O88
+# and the state file its first save writes did not fit the eight clusters
+# Mines bought. The owner took PAINT.O88 off this geometry - 24.3.1.1's own
+# candidate, the largest package the Wire can give back - and it stays on
+# apps360.img and on every 720KB, 1.44MB and 1.2MB disk.
+SYS360OMIT := $(BUILD)/browser.o88 $(BUILD)/telnet.o88 $(BUILD)/mines.o88 \
+              $(BUILD)/paint.o88
 CORE_TOOLS360 := $(filter-out $(SYS360OMIT),$(CORE_TOOLS))
 CORE_GAMES360 := $(filter-out $(SYS360OMIT),$(CORE_GAMES))
 COREAPPS360 := $(CORE_TOOLS360) $(CORE_GAMES360)
@@ -5588,6 +5595,19 @@ $(BUILD)/deskcal.bin: $(DESKCALSRC) | $(BUILD)
 
 $(BUILD)/deskcal.o88: $(BUILD)/deskcal.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/deskcal.bin -o $@
+
+# Sticky Note (SPEC.md 110.13): the second STICKY APP - a pad on the desk and
+# an editor window behind it - in STIKAPPS/ beside the Desk Calendar.
+STIKNOTESRC := apps/stiknote/stiknote.asm apps/stiknote/sntext.inc \
+               apps/stiknote/snpad.inc apps/stiknote/sned.inc \
+               apps/os88stik.inc apps/os88ui.inc apps/os88gfx.inc \
+               apps/os88api.inc
+$(BUILD)/stiknote.bin: $(STIKNOTESRC) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/stiknote/ -o $@ apps/stiknote/stiknote.asm
+	@echo "stiknote: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/stiknote.o88: $(BUILD)/stiknote.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/stiknote.bin -o $@
 
 # Browser (docs/plans/completed/BROWSER-PLAN.md): the text-and-table HTML viewer. Step 1 of
 # that document is the RENDERER, with no network in the machine - it opens a

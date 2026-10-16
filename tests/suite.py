@@ -10093,6 +10093,26 @@ SOAK = [
         "Del and Yes empty the list; and three again show the last one's "
         "page and the pager wraps.",
         needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
+    Row("stiknote", "soak", py("tests/stiknote.py"), 120.0,
+        "SPEC.md 110.13: Sticky Note on a Hercules 5150 off the shipped 360KB "
+        "system disk - the MID layout. The pad is a desk window and its first "
+        "beat writes STIKNOTE.DAT with the welcome note; the sheet's edge "
+        "and the stack's are ink, both notches the desktop's dither and the "
+        "turned corner's diagonal ink; a pad press ticks a box (the ticked "
+        "record, the file's SN_BOX1); the arrow opens the titled editor, "
+        "New + `Groceries` + `[ ]milk` + Enter + `eggs` is two open boxes in "
+        "the file, Ctrl+T takes one away, Delete + Proceed leaves one note; "
+        "`On desktop` off hides the pad, the editor's close then ends the "
+        "program and its Sticky App row; launched again the editor opens "
+        "alone; and the Color menu is greyed `(color screen)` on 1bpp.",
+        needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
+    Row("stiknotevga", "soak", py("tests/stiknote.py", "--leg", "vga"), 70.0,
+        "SPEC.md 110.13: Sticky Note's PAPERS on a VGA XT, read off the card's "
+        "rendered framebuffer (fbuf): the TALL layout; the pad's sheet yellow "
+        "with a black edge, the editor's page yellow and its list white; "
+        "Color > Pink makes the page and the pad pink and says so in the "
+        "file, the list still white.",
+        needs=("marty",), timeout=600, wants=("build/os8088-360.img",)),
     Row("deskcalgrid", "soak", py("tests/deskcalgrid.py"), 40.0,
         "SPEC.md 110.3: the Desk Calendar's 42-byte grid, read out of the "
         "running guest's bss, is Python calendar's - MONDAY FIRST since v2 "

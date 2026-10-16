@@ -291,6 +291,13 @@ a Standard File dialog for opening and saving.
   was left, and a widget that has gone missing becomes a desktop shortcut
   with one message rather than stopping the boot. `apps/os88stik.inc` is the
   shared half a new widget includes (SPEC.md 110).
+- **Sticky Note** — the second Sticky App: a pinned note pad on the desk, a
+  sheet on a stack of sheets with its corner turned, showing one note at a
+  time with `< 1 / 3 >` to page through them, and an editor window behind it
+  with the notes listed beside the page. A note's first line is its title,
+  `[ ]` at the start of a line makes a check box, and a click ticks one on
+  the pad or in the editor. On VGA and EGA each note has a paper - yellow,
+  pink, green, blue or white (SPEC.md 110.13).
 - **Menu bar clock** — read from the hardware RTC at boot if the machine has
   one, kept from the PIT after that, and settable.
 - **A system clipboard**, shared across apps.

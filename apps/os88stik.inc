@@ -47,6 +47,10 @@
 ;   %define STIK_ISOPEN 'Desk Calendar is open'   optional: the toast a SECOND
 ;                                       launch is refused with (<= 24 chars,
 ;                                       SPEC.md 59.10); 'Already open' if not
+;   %define STIK_COLOR                  optional, STIK_WIDGET's: the cards are
+;                                       painted in colours other than 0 and
+;                                       15, so the titled fallback's
+;                                       save-under keeps all four planes
 ;   %define STIK_DAMAGEDQ 'Replace damaged calendar?'   optional, and only with
 ;                                       os88ui.inc's OS88UI_ALERT included
 ;                                       first: asked before the first save
@@ -1231,7 +1235,11 @@ stik_wmade:
 .t:
     mov al, 1
     call OSAPI_WM_OWNBG         ; every pixel is ours (OSAPI_WM_DAMAGE wants it)
-    mov al, OSAPI_SAVEU_ON | OSAPI_SAVEU_1BPP   ; ...and two colours, as v1
+%ifdef STIK_COLOR
+    mov al, OSAPI_SAVEU_ON      ; ...in the colours it is drawn in: a widget
+%else                           ; whose cards are not two-colour (STIK_COLOR,
+    mov al, OSAPI_SAVEU_ON | OSAPI_SAVEU_1BPP   ; Sticky Note's papers) keeps
+%endif                          ; four planes; the rest two, as v1
     call OSAPI_WM_SAVEU
 .cb:
     mov ax, stik_click
