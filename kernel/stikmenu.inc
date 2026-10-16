@@ -108,15 +108,23 @@ modn_hdr:
 %endmacro
 
 ; --- what the menu holds, and its geometry ------------------------------------
-STM_MAX     equ 8               ; Sticky Apps listed at most
+STM_MAX     equ 64              ; Sticky Apps listed at most, PAGED: the
+                                ; panel shows what the screen holds and a
+                                ; pager row turns the page (SPEC.md 110.12)
+STM_PGMAX   equ 8               ; App slots on one page, at most
 STE_VOL     equ 0               ; byte: the volume it was found on
 STE_RUN     equ 1               ; byte: 1 = an instance of it is running
 STE_FILE    equ 2               ; 13: its 8.3 name in the STIKAPPS folder
 STE_HNAME   equ 15              ; 16: its header's program name (+16), which is
                                 ; what an instance record carries (I_NAME)
-STE_CARD    equ 31              ; 192: its card
-STE_SIZE    equ 224
-STM_SLMAX   equ 16              ; slabs: head, rule, 8 apps, rule, 3, rule, hint
+STE_NAME    equ 31              ; 24: its card's name...
+STE_DESC    equ 55              ; 36: ...and description - the TEXT of the
+                                ; card. The PICTURE is read again for the page
+                                ; on show (stm_pics), so an entry is 96 bytes
+                                ; and not 224, and 64 of them fit the image
+STE_CLUS    equ 91              ; word: its first cluster, for that re-read
+STE_SIZE    equ 96
+STM_SLMAX   equ 18              ; head, rule, 8 apps, pager, rule, 3, rule, hint
 SL_KIND     equ 0               ; byte: SK_*
 SL_PARAM    equ 1               ; byte: the entry, or the IT_* item
 SL_FLAGS    equ 2               ; byte: SF_*
@@ -129,6 +137,7 @@ SK_APP      equ 2
 SK_ITEM     equ 3
 SK_HINT     equ 4
 SK_NONE     equ 5
+SK_PAGE     equ 6               ; the pager: an ITEM's height
 SF_SEL      equ 1               ; a pick: highlighted under the pointer
 SF_DIS      equ 2               ; greyed
 IT_ARR      equ 0               ; Arrange Sticky Apps...
@@ -143,15 +152,19 @@ AK_ARR      equ 5
 AK_MORE     equ 6
 STY_BOLD    equ 1               ; stm_text's DL
 STY_GREY    equ 2
-STM_STRMAX  equ 50              ; the widest row, in bytes: 14 + 35 + 1
+STM_STRMAX  equ 52              ; the widest row, in bytes: TALL's 8 + 35 + 9
+STM_SLABMAX equ 56              ; ...and the tallest slab, TALL's App
 STM_SAVEMAX equ 0xF000          ; the save-under's ceiling, bytes: inside one
                                 ; segment, so gfx_save cannot wrap
-; A LAYOUT, sixteen bytes: TALL for a primary of 300 rows or more, COMPACT
-; for CGA's 200. Every row is relative to its own slab's first.
+; A LAYOUT, LY_SIZE bytes, picked by the primary's height as the widget's own
+; are (SPEC.md 110.11): TALL at 400 rows or more (VGA) - the owner's mockup's
+; air: a 56-row App, 18-row items, two-cell margins - MID at 300-399
+; (Hercules, EGA) and COMPACT below that (CGA). Every row is relative to its
+; own slab's first; every column is a BYTE of the band.
 LY_HT       equ 0               ; 6: the slab heights, by SK_*
 LY_HDR1     equ 6               ; the header's first line
 LY_HDR2     equ 7               ; ...and its second
-LY_ITEM     equ 8               ; an item's line, and the hint's
+LY_ITEM     equ 8               ; an item's line
 LY_NONE     equ 9               ; 'No Sticky Apps found'
 LY_PIC      equ 10              ; the picture's first row
 LY_NAME     equ 11              ; the name
@@ -159,7 +172,13 @@ LY_DESC     equ 12              ; the description
 LY_BTXT     equ 13              ; 'On' / 'Add'
 LY_BTOP     equ 14              ; the Add box's top row
 LY_BH       equ 15              ; ...and its rows
-LY_SIZE     equ 16
+LY_HINT     equ 16              ; the hint's line
+LY_PICX     equ 17              ; the picture's column (byte)
+LY_TXTX     equ 18              ; the name's and the description's
+LY_HDRX     equ 19              ; the header's, the hint's and NONE's
+LY_ITEMX    equ 20              ; the three items'
+LY_RFURN    equ 21              ; bytes right of the text: gap, On/Add, frame
+LY_SIZE     equ 22
 
 ; -----------------------------------------------------------------------------
 ; smn_track - the drop (SMN_TRACK), far: DS = KERNEL_SEG, the gfx lock held,
@@ -181,9 +200,12 @@ smn_track:
     call stm_scan               ; STIKAPPS\ on the boot volume and the fixed
     call stm_census             ; disks; then who is running
     call stm_layout
+    call stm_loadpics           ; the first page's pictures
     call stm_open               ; the save-under, the dock's hole, the pens
     call stm_drawall
+    mov byte [cs:stm_live], 1   ; the panel is on the glass (a row's witness:
     call stm_loop               ; AX = the slab picked, 0FFFFh none
+    mov byte [cs:stm_live], 0   ; tests/stikmenu.py)
     push ax
     call stm_shut               ; the screen back, whatever was picked
     pop ax
@@ -355,6 +377,8 @@ stm_take:
     mov al, [cs:stm_vol]
     mov [cs:di+STE_VOL], al
     mov byte [cs:di+STE_RUN], 0
+    mov ax, [cs:stm_find+16]
+    mov [cs:di+STE_CLUS], ax
     push si
     push di
     push es                     ; the 8.3 name: image to image
@@ -374,11 +398,14 @@ stm_take:
     mov byte [cs:di], 0
     pop di
     pop si
+    push si
     push di
-    add di, STE_CARD
-    mov cx, STM_C_SIZE
+    add si, STM_C_NAME          ; the name and the description, which
+    add di, STE_NAME            ; follow one another in the card as here
+    mov cx, STM_C_NAMEMAX + STM_C_DESCMAX
     call stm_cpy
     pop di
+    pop si
     inc byte [cs:stm_n]
 .no:
     ret
@@ -605,6 +632,9 @@ stm_find_inst:
 ; -----------------------------------------------------------------------------
 stm_layout:
     mov si, stm_lay_tall
+    cmp word [vid_ph], 400
+    jae .t
+    mov si, stm_lay_mid
     cmp word [vid_ph], 300
     jae .t
     mov si, stm_lay_comp
@@ -618,18 +648,22 @@ stm_layout:
     jae .wd
     push ax
     call stm_ent
-    lea si, [di+STE_CARD+STM_C_NAME]
+    lea si, [di+STE_NAME]
     call stm_len
-    lea si, [di+STE_CARD+STM_C_DESC]
+    lea si, [di+STE_DESC]
     call stm_len
     pop ax
     inc al
     jmp short .w
 .wd:
-    add dl, 14                  ; frame+pad, picture, gap; gap, On/Add, pad+frame
-    cmp dl, 31                  ; the hint and the header want 31 at least
+    mov si, [cs:stm_ly]         ; the widest text, the furniture either side
+    add dl, [cs:si+LY_TXTX]     ; of it - the margin, the picture and the gap
+    add dl, [cs:si+LY_RFURN]    ; left of it, On/Add and the frame right
+    mov al, [cs:si+LY_HDRX]
+    add al, 31                  ; ...and never narrower than the hint (29
+    cmp dl, al                  ; cells) with the header's margin either side
     jae .wok
-    mov dl, 31
+    mov dl, al
 .wok:
     mov [cs:stm_stride], dl
     mov dh, 0
@@ -674,31 +708,48 @@ stm_layout:
     add bx, ax
     mov ax, [vid_ph]
     sub ax, MBAR_H + 1          ; the shadow's row
-    xchg cx, ax                 ; CX = the rows the screen allows
-    mov ax, [cs:stm_stridew]
-    add ax, 2                   ; menu_drop's byte span allowance
-    mul word [vid_planes_w]
-    xchg di, ax                 ; DI = save bytes per row
-    mov ax, STM_SAVEMAX
-    xor dx, dx
-    div di
-    dec ax                      ; ...less the shadow's row
-    cmp ax, cx
-    jae .scr
-    xchg cx, ax                 ; the save-under is the tighter bound
-.scr:
+    xchg cx, ax                 ; CX = the rows the screen allows (a panel
+                                ; too big for one segment of save-under is
+                                ; drawn anyway and REPAINTED on close -
+                                ; stm_open's refusal, menu_drop's own path)
     sub cx, bx                  ; rows left for apps
     jnc .fit
     xor cx, cx
 .fit:
-    xchg ax, cx
+    xchg ax, cx                 ; AX = those rows
     mov cl, [cs:si+LY_HT+SK_APP]
-    div cl                      ; AL = apps that fit (AH the remainder)
-    cmp al, [cs:stm_n]
-    jbe .nok
-    mov al, [cs:stm_n]
-.nok:
+    push ax
+    div cl                      ; AL = apps that fit with NO pager
+    mov ah, [cs:stm_n]
+    cmp ah, al
+    pop bx
+    ja .page                    ; more than fit: a pager, and a page
+    cmp ah, STM_PGMAX
+    ja .page
+    mov [cs:stm_shown], ah      ; all of them, and no pager
+    mov byte [cs:stm_paged], 0
+    jmp short .nok
+.page:
+    xchg ax, bx                 ; the rows again, less the pager's
+    xor bx, bx
+    mov bl, [cs:si+LY_HT+SK_ITEM]
+    sub ax, bx
+    jnc .pfit
+    xor ax, ax
+.pfit:
+    div cl                      ; AL = App slots on a page
+    cmp al, STM_PGMAX
+    jbe .pmax
+    mov al, STM_PGMAX
+.pmax:
+    or al, al
+    jnz .pone
+    inc ax                      ; never a page of none
+.pone:
     mov [cs:stm_shown], al
+    mov byte [cs:stm_paged], 1
+.nok:
+    mov byte [cs:stm_top], 0
     ; --- the slabs, top down --------------------------------------------------
     mov di, stm_sl
     mov dx, MBAR_H              ; DX = the next slab's y
@@ -718,6 +769,12 @@ stm_layout:
     inc cx
     jmp short .ap
 .apd:
+    cmp byte [cs:stm_paged], 0
+    je .nopg
+    mov byte [cs:stm_sflag], SF_SEL
+    mov ax, SK_PAGE
+    call stm_addsl
+.nopg:
     cmp byte [cs:stm_n], 0
     jne .some
     mov byte [cs:stm_sflag], SF_DIS
@@ -780,6 +837,10 @@ stm_addsl:
     mov [cs:di+SL_FLAGS], bl
     mov bx, [cs:stm_ly]
     mov ah, 0
+    cmp al, SK_PAGE
+    jne .ht
+    mov al, SK_ITEM             ; the pager is an item's height
+.ht:
     add bx, ax
     mov al, [cs:bx+LY_HT]
     mov [cs:di+SL_H], al
@@ -799,6 +860,7 @@ stm_addsl:
 ; -----------------------------------------------------------------------------
 stm_open:
     mov word [menu_sseg], 0
+    mov word [cs:stm_sseg2], 0
     call stm_rect               ; AX..DX
     xchg ax, cx                 ; AX = x2+1, CX = x1
     push cx
@@ -808,14 +870,28 @@ stm_open:
     shr bx, cl
     sub ax, bx
     add ax, 2                   ; span -> count, and the misalignment byte
-    mov bx, [cs:stm_y2]
-    sub bx, [cs:stm_y1]
-    add bx, 2                   ; rows, the shadow's included
-    mul bx
-    mul word [vid_planes_w]     ; <= STM_SAVEMAX by stm_layout
-    add ax, 1023
-    mov cl, 10
-    shr ax, cl
+    mul word [vid_planes_w]     ; AX = the bytes ONE ROW saves, every plane
+    mov [cs:stm_rowb], ax
+    xchg bx, ax
+    mov ax, STM_SAVEMAX
+    xor dx, dx
+    div bx                      ; AX = the rows one segment holds
+    mov cx, [cs:stm_y2]
+    sub cx, [cs:stm_y1]
+    add cx, 2                   ; CX = the rows, the shadow's included
+    mov [cs:stm_rows], cx
+    cmp cx, ax
+    ja .two
+    xchg ax, cx                 ; one segment holds the lot
+.two:
+    mov [cs:stm_cut], ax        ; the rows the FIRST part saves
+    ; --- TWO PARTS when one segment cannot hold the panel - a paged VGA
+    ; panel can be 440 rows, ~80 KB - so the close RESTORES rather than
+    ; repainting what it covered. The first part is menu_drop's own claim
+    ; ([menu_sseg], MEM_P_MSAVE, movable), the second the module's
+    ; (MEM_K_MOD, pinned, freed with it); either refused, neither is kept
+    mul word [cs:stm_rowb]
+    call stm_kb
     mov bx, MEM_P_MSAVE         ; TRIVIAL-purgeable (SPEC.md 12.4.2)
     call COLD_SEG:mmf_mem_claim
     jc .nosave
@@ -823,10 +899,34 @@ stm_open:
     mov ax, menu_reloc          ; MOVABLE, as menu_drop's is (SPEC.md 66.5.6)
     mov bx, MEM_P_MSAVE
     call COLD_SEG:mmf_mem_movable
+    mov ax, [cs:stm_rows]
+    sub ax, [cs:stm_cut]
+    jz .save
+    mul word [cs:stm_rowb]
+    or dx, dx
+    jnz .drop1                  ; (a screen is never three segments tall)
+    call stm_kb
+    mov bx, MEM_K_MOD
+    call COLD_SEG:mmf_mem_claim
+    jc .drop1
+    mov [cs:stm_sseg2], dx
+.save:
     mov es, [menu_sseg]
     xor di, di
-    call stm_rect
+    call stm_rect1
     SMK gfx_save
+    cmp word [cs:stm_sseg2], 0
+    je .nosave
+    mov es, [cs:stm_sseg2]
+    xor di, di
+    call stm_rect2
+    SMK gfx_save
+    jmp short .nosave
+.drop1:
+    xor dx, dx
+    xchg dx, [menu_sseg]
+    mov bx, MEM_P_MSAVE
+    call COLD_SEG:mmf_mem_free  ; no save-under at all: the close repaints
 .nosave:
     xor ax, ax                  ; a menu over an open dock draws whole
     xchg ax, [gfx_hole]         ; (SPEC.md 30.6.1)
@@ -862,6 +962,35 @@ stm_open:
 .r:
     ret
 
+; stm_kb - AX bytes -> AX whole KB, never 0 (mem_bytes_kb's)
+stm_kb:
+    add ax, 1023
+    jnc .ok
+    mov ax, 0xFFFF              ; (STM_SAVEMAX keeps every part under this)
+.ok:
+    push cx
+    mov cl, 10
+    shr ax, cl
+    pop cx
+    or ax, ax
+    jnz .r
+    inc ax
+.r:
+    ret
+
+; stm_rect1 / stm_rect2 - AX..DX = the save-under's first part (stm_cut
+; rows from the top) and its second (the rest, to the shadow's row)
+stm_rect1:
+    call stm_rect
+    mov dx, bx
+    add dx, [cs:stm_cut]
+    dec dx
+    ret
+stm_rect2:
+    call stm_rect
+    add bx, [cs:stm_cut]
+    ret
+
 ; stm_rect - AX..DX = the panel and its shadow
 stm_rect:
     mov ax, [cs:stm_x1]
@@ -884,12 +1013,25 @@ stm_shut:
     mov [gfx_hole], ax
     mov ax, [cs:stm_clipn]
     mov [wm_clip_n], ax
-    mov ax, [menu_sseg]
-    or ax, ax
-    jz .repaint
+    mov ax, [menu_sseg]         ; the first part gone (shed while the menu
+    or ax, ax                   ; was down) or a second part owed and not
+    jz .repaint                 ; held: the whole rect repaints
+    mov cx, [cs:stm_rows]
+    cmp cx, [cs:stm_cut]
+    jbe .one
+    cmp word [cs:stm_sseg2], 0
+    je .repaint
+.one:
     mov es, ax
     xor si, si
-    call stm_rect
+    call stm_rect1
+    SMK gfx_restore
+    mov ax, [cs:stm_sseg2]
+    or ax, ax
+    jz .free
+    mov es, ax
+    xor si, si
+    call stm_rect2
     SMK gfx_restore
     jmp short .free
 .repaint:
@@ -900,8 +1042,15 @@ stm_shut:
     xor dx, dx
     xchg dx, [menu_sseg]
     or dx, dx
-    jz .nofree
+    jz .free2
     mov bx, MEM_P_MSAVE
+    call COLD_SEG:mmf_mem_free
+.free2:
+    xor dx, dx
+    xchg dx, [cs:stm_sseg2]
+    or dx, dx
+    jz .nofree
+    mov bx, MEM_K_MOD
     call COLD_SEG:mmf_mem_free
 .nofree:
     mov byte [menu_bdirty], 1
@@ -994,6 +1143,11 @@ stm_slab:
     call stm_c_hint
     jmp short .framed
 .k5:
+    cmp al, SK_PAGE
+    jne .k6
+    call stm_c_page
+    jmp short .framed
+.k6:
     call stm_c_none
 .framed:
     call stm_frame              ; the frame's two columns, every row
@@ -1066,7 +1220,7 @@ stm_c_head:
     xor al, al                  ; the frame's top row
     call stm_hrule0
     mov al, [cs:si+LY_HDR1]
-    mov ah, 1
+    mov ah, [cs:si+LY_HDRX]
     call stm_at
     push si
     mov si, stm_s_keep
@@ -1074,7 +1228,7 @@ stm_c_head:
     call stm_text
     pop si
     mov al, [cs:si+LY_HDR2]
-    mov ah, 1
+    mov ah, [cs:si+LY_HDRX]
     call stm_at
     call stm_count              ; SI = 'N Sticky Apps active'
     xor dl, dl
@@ -1096,8 +1250,8 @@ stm_c_hint:
     mov al, [cs:bx+SL_H]
     dec ax                      ; the frame's bottom row
     call stm_hrule0
-    mov al, [cs:si+LY_ITEM]
-    mov ah, 1
+    mov al, [cs:si+LY_HINT]
+    mov ah, [cs:si+LY_HDRX]
     call stm_at
     mov si, stm_s_hint
     xor dl, dl
@@ -1105,14 +1259,68 @@ stm_c_hint:
 
 stm_c_none:
     mov al, [cs:si+LY_NONE]
-    mov ah, 1
+    mov ah, [cs:si+LY_HDRX]
     call stm_at
     mov si, stm_s_none
     jmp stm_greytext
 
+; the pager: 'Next page (P of N)', or 'First page (N of N)' on the last
+stm_c_page:
+    mov al, [cs:si+LY_ITEM]
+    mov ah, [cs:si+LY_ITEMX]
+    call stm_at
+    push di
+    mov di, stm_cnt
+    mov si, stm_s_next
+    mov al, [cs:stm_top]        ; this page's first entry...
+    add al, [cs:stm_shown]
+    cmp al, [cs:stm_n]          ; ...and is there one past the page?
+    jb .nx
+    mov si, stm_s_first
+.nx:
+    call stm_cat
+    mov al, [cs:stm_top]        ; the page number: top / page + 1
+    mov ah, 0
+    div byte [cs:stm_shown]
+    inc ax
+    call stm_num
+    mov si, stm_s_of
+    call stm_cat
+    mov al, [cs:stm_n]          ; the pages: ceil(n / page)
+    add al, [cs:stm_shown]
+    dec ax
+    mov ah, 0
+    div byte [cs:stm_shown]
+    call stm_num
+    mov byte [cs:di], ')'
+    mov byte [cs:di+1], 0
+    pop di
+    mov si, stm_cnt
+    xor dl, dl
+    jmp stm_text
+
+; stm_num - AL (0..99) as one or two digits at CS:DI; DI past them.
+; clobbers AX
+stm_num:
+    mov ah, 0
+    push cx
+    mov cl, 10
+    div cl                      ; AL tens, AH units
+    pop cx
+    or al, al
+    jz .u
+    add al, '0'
+    mov [cs:di], al
+    inc di
+.u:
+    add ah, '0'
+    mov [cs:di], ah
+    inc di
+    ret
+
 stm_c_item:
     mov al, [cs:si+LY_ITEM]
-    mov ah, 2
+    mov ah, [cs:si+LY_ITEMX]
     call stm_at
     mov al, [cs:bx+SL_PARAM]
     mov si, stm_s_arr
@@ -1149,19 +1357,29 @@ stm_greytext:
 ; --- an app's row: its picture, its name (bold), its description, and On or
 ; Add at the right ---------------------------------------------------------------
 stm_c_app:
-    mov al, [cs:bx+SL_PARAM]
+    mov al, [cs:bx+SL_PARAM]    ; the slot...
+    mov [cs:stm_slot], al
+    add al, [cs:stm_top]        ; ...and the entry the page puts in it
+    cmp al, [cs:stm_n]
+    jb .ent
+    ret                         ; past the last App: an empty slot, the frame
+.ent:                           ; alone, so a short last page keeps its size
     call stm_ent                ; CS:DI = the entry
     mov bp, di
-    ; the picture at byte 1: 32 rows, or (COMPACT) 16 of row pairs ORed
+    ; the picture: 32 rows, or (COMPACT) 16 of row pairs ORed
     mov al, [cs:si+LY_PIC]
-    mov ah, 1
+    mov ah, [cs:si+LY_PICX]
     call stm_at
     xor dx, dx                  ; DL = 1 for pairs
     cmp si, stm_lay_comp
     jne .full
     inc dx
 .full:
-    lea si, [bp+STE_CARD+STM_C_PIC]
+    mov al, [cs:stm_slot]       ; the slot's picture, read for this page
+    mov ah, 128                 ; (stm_loadpics)
+    mul ah
+    add ax, stm_pics
+    xchg si, ax
     mov dh, 32                  ; source rows left
 .pic:
     mov cx, 4
@@ -1188,18 +1406,18 @@ stm_c_app:
     ; the name (bold) and the description, at byte 6
     mov si, [cs:stm_ly]
     mov al, [cs:si+LY_NAME]
-    mov ah, 6
+    mov ah, [cs:si+LY_TXTX]
     call stm_at
     push si
-    lea si, [bp+STE_CARD+STM_C_NAME]
+    lea si, [bp+STE_NAME]
     mov dl, STY_BOLD
     call stm_text
     pop si
     mov al, [cs:si+LY_DESC]
-    mov ah, 6
+    mov ah, [cs:si+LY_TXTX]
     call stm_at
     push si
-    lea si, [bp+STE_CARD+STM_C_DESC]
+    lea si, [bp+STE_DESC]
     xor dl, dl
     call stm_text
     pop si
@@ -1371,9 +1589,7 @@ stm_count:
     jz .r
     push di
     mov di, stm_cnt
-    add al, '0'                 ; STM_MAX is 8: one digit
-    mov [cs:di], al
-    inc di
+    call stm_num                ; STM_MAX is 64: one or two digits
     mov si, stm_s_app
     call stm_cat
     cmp byte [cs:stm_nrun], 1
@@ -1474,6 +1690,15 @@ stm_loop:
     call KERNEL_SEG:cw_task_yield
     jmp short .poll
 .up:
+    call stm_ispage             ; a release on the PAGER turns the page and
+    jc .close                   ; keeps the panel up for the next click
+    SMK cursor_hide
+    call stm_turn
+    SMK cursor_show
+    mov byte [cs:stm_stk], 1    ; ...a click away, and drained like the
+    mov byte [cs:stm_stky], 1   ; stay-up click when the menu closes
+    jmp .poll
+.close:
     SMK cursor_hide             ; down again: the restore and gfx_unlock do
     cmp byte [cs:stm_stky], 0   ; what they always did
     je .ret
@@ -1483,6 +1708,141 @@ stm_loop:
     pop di
 .ret:
     mov ax, [cs:stm_sel]
+    ret
+
+; stm_ispage - CF = 0 when [stm_sel] is the pager. clobbers AX
+stm_ispage:
+    mov ax, [cs:stm_sel]
+    cmp ax, 0xFFFF
+    je .no
+    push bx
+    mov bl, SL_SIZE
+    mul bl
+    xchg bx, ax
+    cmp byte [cs:bx+stm_sl+SL_KIND], SK_PAGE
+    pop bx
+    je .yes
+.no:
+    stc
+    ret
+.yes:
+    clc
+    ret
+
+; stm_turn - the next page (the first after the last): its pictures read,
+; every App slot and the pager recomposed - the pager highlighted, the
+; pointer still on it. The panel keeps its size, so nothing else is drawn.
+; clobbers AX, BX, CX, DX, SI
+stm_turn:
+    mov al, [cs:stm_top]
+    add al, [cs:stm_shown]
+    cmp al, [cs:stm_n]
+    jb .set
+    xor al, al
+.set:
+    mov [cs:stm_top], al
+    call stm_loadpics
+    xor ax, ax
+.s:
+    cmp al, [cs:stm_nsl]
+    jae .r
+    push ax
+    mov bl, SL_SIZE
+    mul bl
+    xchg bx, ax
+    mov cl, [cs:bx+stm_sl+SL_KIND]
+    pop ax
+    cmp cl, SK_APP
+    je .draw
+    cmp cl, SK_PAGE
+    jne .n
+    mov ah, 1                   ; the pager, lit: it is under the pointer
+.draw:
+    call stm_slab
+    mov ah, 0
+.n:
+    inc al
+    jmp short .s
+.r:
+    ret
+
+; -----------------------------------------------------------------------------
+; stm_loadpics - the page's pictures, read again out of each file's first
+; sector into stm_pics (an entry keeps its card's TEXT only, STE_*): each
+; App's volume quietly, its first cluster, the card where its flags say.
+; A sector that no longer holds a card leaves the slot's picture blank.
+; On a floppy the scan's own reads are still in the track cache (SPEC.md
+; 18.95), so the first page costs nothing more; a turn reads its page.
+; clobbers AX, BX, CX, DX, SI, DI, BP, ES
+; -----------------------------------------------------------------------------
+stm_loadpics:
+    push cs
+    pop es
+    mov di, stm_pics            ; the page's slots blank first
+    mov cx, STM_PGMAX * 128 / 2
+    xor ax, ax
+    cld
+    rep stosw
+    call COLD_SEG:drvf_drv_vol_bank
+    xor cx, cx                  ; CL = the slot
+.s:
+    cmp cl, [cs:stm_shown]
+    jae .donej
+    mov al, cl
+    add al, [cs:stm_top]
+    cmp al, [cs:stm_n]
+    jb .go
+.donej:
+    jmp .done
+.go:
+    push cx
+    call stm_ent                ; CS:DI = the entry
+    mov al, [cs:di+STE_VOL]
+    xor bx, bx
+    call COLD_SEG:fcpf_fcp_goto ; its volume (a word when it is current)
+    jc .next
+    mov ax, [cs:di+STE_CLUS]
+    mov cx, 512
+    mov bp, dsk_peek_x
+    call COLD_SEG:wm_cbd        ; ES:BX = the first sector, AX = its bytes
+    jc .next
+    cmp word [es:bx], 0x384F
+    jne .next
+    mov dl, [es:bx+3]
+    test dl, LD_HF_STIK
+    jz .next
+    mov si, 32 + STM_C_PIC      ; the picture, behind the prefix's blocks
+    test dl, 1
+    jz .ni
+    add si, 64
+.ni:
+    test dl, 2
+    jz .na
+    add si, 16
+.na:
+    test dl, LD_HF_GLYPH
+    jz .ng
+    add si, 16
+.ng:
+    lea cx, [si+128]
+    cmp ax, cx
+    jb .next
+    add si, bx                  ; ES:SI = the picture
+    pop cx
+    push cx
+    mov al, cl
+    mov ah, 128
+    mul ah
+    add ax, stm_pics
+    xchg di, ax                 ; CS:DI = the slot's
+    mov cx, 128
+    call stm_cpy
+.next:
+    pop cx
+    inc cx
+    jmp .s
+.done:
+    call COLD_SEG:drvf_drv_vol_back
     ret
 
 ; stm_hit - AX = the selectable slab under the pointer, 0FFFFh none; the
@@ -1514,6 +1874,13 @@ stm_hit:
     add cx, [cs:si+SL_Y]
     cmp dx, cx
     jae .n
+    cmp byte [cs:si+SL_KIND], SK_APP
+    jne .hit
+    mov cl, [cs:si+SL_PARAM]
+    add cl, [cs:stm_top]
+    cmp cl, [cs:stm_n]
+    jae .r                      ; a short last page's empty slot: nothing
+.hit:
     xchg ax, bx
     ret
 .n:
@@ -1533,9 +1900,10 @@ stm_pick:
     xchg bx, ax
     add bx, stm_sl
     mov al, [cs:bx+SL_PARAM]
-    mov [cs:stm_ai], al
     cmp byte [cs:bx+SL_KIND], SK_APP
     jne .item
+    add al, [cs:stm_top]        ; the slot's entry on this page
+    mov [cs:stm_ai], al
     call stm_ent
     mov ah, AK_LAUNCH           ; a row that runs is a toggle: picking it
     cmp byte [cs:di+STE_RUN], 0 ; turns it OFF (SPEC.md 110.12)
@@ -1805,19 +2173,36 @@ smk_go:                         ; ovlchk: builds its own far frame
     retf
 
 ; --- the image's constants ----------------------------------------------------
-; The two LAYOUTS (LY_*): the slab heights by SK_* (HEAD, RULE, APP, ITEM,
-; HINT, NONE), then the rows, each from its own slab's top. TALL: the header's
-; lines at 4 and 15 under the frame's top row; an app's 40 rows with the
-; picture at 4..35 and the text block - name 9, description 23 - centred on
-; it, the Add box 11..28 round its word at 16. COMPACT: the same at 20 rows,
-; the picture 16 rows of pairs at 2..17.
-stm_lay_tall:
+; The three LAYOUTS (LY_*): the slab heights by SK_* (HEAD, RULE, APP, ITEM,
+; HINT, NONE), the rows - each from its own slab's top - and the columns, in
+; bytes. TALL is the owner's mockup at VGA's 480: a 56-row App with the
+; picture and the name-and-description block both centred on its middle, the
+; name and the description 18 rows apart, 18-row items, 11-row rules and two
+; cells of margin; MID is the 40-row App that fits Hercules' and EGA's 348
+; and 350; COMPACT is CGA's 20-row App with the picture in row pairs.
+stm_lay_tall:                   ; VGA: the mockup's proportions
+    db 34, 11, 56, 18, 20, 24   ; LY_HT: HEAD RULE APP ITEM HINT NONE
+    db 9, 22, 5, 8              ; HDR1 HDR2 ITEM NONE
+    db 12, 15, 33               ; PIC NAME DESC: the picture 12..43 and the
+                                ; text block 15..40 both centred on 27.5
+    db 24, 19, 18               ; BTXT BTOP BH: the box 19..36, its word 24
+    db 6                        ; HINT
+    db 2, 8, 2, 3, 9            ; PICX TXTX HDRX ITEMX RFURN
+stm_lay_mid:                    ; Hercules, EGA
     db 26, 7, 40, 12, 13, 16
-    db 4, 15, 2, 4, 4, 9, 23, 16, 11, 18
-stm_lay_comp:
+    db 4, 15, 2, 4
+    db 4, 9, 23
+    db 16, 11, 18
+    db 2
+    db 1, 6, 1, 2, 8
+stm_lay_comp:                   ; CGA: the picture in row pairs
     db 20, 3, 20, 10, 11, 12
-    db 2, 11, 1, 2, 2, 2, 11, 6, 2, 16
-%if stm_lay_comp - stm_lay_tall != LY_SIZE || ($ - stm_lay_comp) != LY_SIZE
+    db 2, 11, 1, 2
+    db 2, 2, 11
+    db 6, 2, 16
+    db 1
+    db 1, 6, 1, 2, 8
+%if stm_lay_mid - stm_lay_tall != LY_SIZE || stm_lay_comp - stm_lay_mid != LY_SIZE || ($ - stm_lay_comp) != LY_SIZE
   %error "a layout is LY_SIZE bytes, LY_* in order"
 %endif
 
@@ -1834,6 +2219,9 @@ stm_s_show: db 'Show All Sticky Apps', 0
 stm_s_more: db 'More Sticky Apps...', 0
 stm_s_hint: db 'Drag a Sticky App to move it.', 0
 stm_s_on:   db 'On', 0
+stm_s_next: db 'Next page (', 0
+stm_s_first: db 'First page (', 0
+stm_s_of:   db ' of ', 0
 stm_s_add:  db 'Add', 0
 stm_s_wiref: db 'THEWIRE.O88', 0     ; DSV_FILEMAX bytes, with the padding
             times DSV_FILEMAX - ($ - stm_s_wiref) db 0
@@ -1869,6 +2257,14 @@ stm_pol:    db 0
 stm_sty:    db 0
 stm_ak:     db 0
 stm_ai:     db 0
+stm_top:    db 0                ; the first entry on show
+stm_paged:  db 0                ; 1 = more than one page: a pager row
+stm_live:   db 0                ; 1 while the panel is on the glass
+stm_sseg2:  dw 0                ; the save-under's second part, 0 = none
+stm_rowb:   dw 0                ; the bytes one row of it saves
+stm_rows:   dw 0                ; its rows, the shadow's included
+stm_cut:    dw 0                ; ...and how many the first part holds
+stm_slot:   db 0                ; stm_c_app's slot
 stm_sel:    dw 0
 stm_bn:     dw 0
 stm_pens:   dw 0
@@ -1881,7 +2277,8 @@ stm_cnt:    times 24 db 0
 stm_find:   times DSK_FIND_SZ db 0
 stm_sl:     times STM_SLMAX * SL_SIZE db 0
 stm_ents:   times STM_MAX * STE_SIZE db 0
-stm_band:   times STM_STRMAX * 40 db 0
+stm_pics:   times STM_PGMAX * 128 db 0  ; the page's pictures (stm_loadpics)
+stm_band:   times STM_STRMAX * STM_SLABMAX db 0
 %if stm_nvis - stm_ndesk != 1
   %error "stm_census writes stm_ndesk and stm_nvis as one word"
 %endif

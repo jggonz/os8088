@@ -24,6 +24,10 @@ about what the module DECIDED, not about pixels:
      4), right of the drive zones' column;
   F  picking the RUNNING row closes it - through app_close_win, so its own
      negotiator removes its Sticky App row from the desktop table.
+  G  a second boot with six more Sticky Apps - one-sector stubs, a header
+     and a card - lists seven, PAGED (a page smaller than seven and a pager
+     row); a release on the pager turns to page 2 and the panel STAYS UP;
+     a click off it then closes it with nothing posted.
 
 **BREAK IT ON PURPOSE** (docs/WRITING-TESTS.md 1): clear DESKCAL's
 OS88_F_STIK and A fails (no card, nothing listed); make stm_track_x drop the
@@ -53,11 +57,11 @@ TITLE = "Desk Calendar"
 # IT_*/SF_* and mod.inc's MODR_SIZE, so the row cannot agree with a stale copy
 EQ = os88sym.equates()
 MODR_SIZE = EQ["MODR_SIZE"]
-STE_SIZE, STE_RUN, STE_FILE, STE_CARD = (EQ[n] for n in (
-    "STE_SIZE", "STE_RUN", "STE_FILE", "STE_CARD"))
+STE_SIZE, STE_RUN, STE_FILE, STE_NAME = (EQ[n] for n in (
+    "STE_SIZE", "STE_RUN", "STE_FILE", "STE_NAME"))
 SL_SIZE, SL_KIND, SL_PARAM, SL_FLAGS, SL_H, SL_Y = (EQ[n] for n in (
     "SL_SIZE", "SL_KIND", "SL_PARAM", "SL_FLAGS", "SL_H", "SL_Y"))
-SK_APP, SK_ITEM = EQ["SK_APP"], EQ["SK_ITEM"]
+SK_APP, SK_ITEM, SK_PAGE = EQ["SK_APP"], EQ["SK_ITEM"], EQ["SK_PAGE"]
 IT_ARR, IT_HIDE, IT_MORE = EQ["IT_ARR"], EQ["IT_HIDE"], EQ["IT_MORE"]
 SF_SEL, SF_DIS = EQ["SF_SEL"], EQ["SF_DIS"]
 T = 120                         # guest seconds: a floppy scan on a 5150
@@ -106,11 +110,11 @@ class Menu:
         """Press the cell and hold until the panel is up; the slabs."""
         self.ui.mo.to(self.cell(), geom.MBAR_H // 2)
         self.ui.mo._edge(True)
-        # The panel is up when THIS drop's save-under is claimed: stm_open
-        # takes it after the layout. The module's own scratch is no witness
-        # - a reload lands in the same claim, whose memory still holds the
-        # LAST drop's answers until this one's read overwrites them
-        self.ui._wait(lambda: self.base() and self.ui._word("menu_sseg"),
+        # The panel is up when stm_live is 1: set after the draw and cleared
+        # before the close, so the last drop's image - a reload lands in the
+        # same claim, whose memory still holds its bytes until this one's
+        # read overwrites them - always left it 0
+        self.ui._wait(lambda: self.base() and self.b("stm_live"),
                       "the Sticky Apps panel to drop", T)
         n = self.b("stm_nsl")
         raw = self.rd("stm_sl", n * SL_SIZE)
@@ -158,10 +162,9 @@ def entries(menu):
     out = []
     for k in range(n):
         e = raw[k * STE_SIZE:(k + 1) * STE_SIZE]
-        card = e[STE_CARD:STE_CARD + 192]
         out.append(dict(file=e[STE_FILE:STE_FILE + 13].split(b"\0")[0],
                         run=e[STE_RUN],
-                        name=card[4:28].split(b"\0")[0],
+                        name=e[STE_NAME:STE_NAME + 24].split(b"\0")[0],
                         vol=e[0]))
     return out
 
@@ -177,6 +180,66 @@ def stik_rows(m, ui):
         if r["stik"] and r["vol"] != 0xFF:      # 0xFF: a free row
             out.append(r)
     return out
+
+
+def stub(name):
+    """A one-sector .O88 that is nothing BUT a header and a card - what the
+    menu reads to list an App (SPEC.md 110.12). It would not launch, and the
+    paging leg never launches it: six of them cost six clusters where six
+    copies of the calendar would not fit a 360KB disk."""
+    b = bytearray(512)
+    b[0:2], b[2], b[3] = b"O8", EQ.get("PKG_FMT", 10), 0x80
+    struct.pack_into("<HHH", b, 6, 0x20 + 192, 512, 0)  # entry, image, bss
+    b[12:15] = bytes((0xFF, 0xD5, 0xCB))
+    b[16:16 + len(name)] = name.encode()
+    c = 32
+    b[c:c + 4] = b"SA\x01\x00"
+    b[c + 4:c + 4 + len(name)] = name.encode()
+    b[c + 28:c + 28 + 12] = b"A paging app"
+    for r in range(32):
+        b[c + 64 + r * 4:c + 68 + r * 4] = b"\x81\x00\x00\x81"
+    return bytes(b)
+
+
+def paging(tmp):
+    """G: more Apps than a page holds - a pager, and a turn that keeps the
+    panel up."""
+    import subprocess
+    img = os.path.join(tmp, "paging.img")
+    shutil.copy(os.path.join(BDIR, "os8088-360.img"), img)
+    env = dict(os.environ, MTOOLS_SKIP_CHECK="1")
+    for k in range(6):
+        f = os.path.join(tmp, "PAGE%d.O88" % k)
+        open(f, "wb").write(stub("Pager %d" % k))
+        subprocess.run(["mcopy", "-o", "-i", img, f,
+                        "::/STIKAPPS/PAGE%d.O88" % k], check=True, env=env,
+                       stdout=subprocess.DEVNULL)
+    print("G: seven Sticky Apps page")
+    with os88marty.launch(img, machine=os88marty.machine(
+            "os8088_xt_vga", None), boot=True) as m:
+        ui = os88ui.UI(m)
+        ui.up(limit=180.0)
+        os88marty.no_saver(m)
+        menu = Menu(m, ui)
+        slabs = menu.drop()
+        n, shown = menu.b("stm_n"), menu.b("stm_shown")
+        check(n == 7, "seven listed (%d)" % n)
+        check(menu.b("stm_paged") == 1 and shown < n,
+              "paged: %d a page of %d" % (shown, n))
+        pg = [i for i, s in enumerate(slabs) if s["kind"] == SK_PAGE]
+        if check(len(pg) == 1, "one pager row"):
+            menu.release_on(slabs, pg[0])
+            ui._wait(lambda: menu.b("stm_top") == shown, "the page turned", T)
+            check(menu.b("stm_top") == shown and menu.base()
+                  and menu.b("stm_live"),
+                  "page 2 begins at entry %d and the panel is still up"
+                  % menu.b("stm_top"))
+            menu.ui.mo.to(20, ui._word("vid_ph") - 40)    # a click OFF it
+            menu.ui.mo._edge(True)
+            menu.ui.mo._edge(False)
+            menu.gone()
+            check(ui._word("ui_pcmd") == 0, "...and a click off closes it, "
+                  "nothing posted")
 
 
 def main():
@@ -273,6 +336,7 @@ def main():
             check(not is_open(ui, TITLE), "the Desk Calendar is closed")
             check(not stik_rows(m, ui),
                   "its own negotiator removed its Sticky App row")
+        paging(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("stikmenu: %s" % ("PASS" if not fails else

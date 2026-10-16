@@ -185431,9 +185431,15 @@ cannot disturb it - and for each `.O88` its first sector (`dsk_peek_x`, 512
 bytes). It is LISTED when its magic is `'O8'`, bit 7 is set, the file holds
 the whole card and the card passes the menu's own check (`stm_cardok`: the
 validator's tests less "zeros after the NUL"). A NAME already listed is
-skipped, so the boot volume's copy wins over a hard disk's. At most
-`STM_MAX` = 8 are listed, and the machine's own place is banked round the
-whole walk (`drv_vol_bank`).
+skipped, so the boot volume's copy wins over a hard disk's. **Up to
+`STM_MAX` = 64 are listed** - the owner wants many - and the machine's own
+place is banked round the whole walk (`drv_vol_bank`). An entry keeps its
+card's TEXT (96 bytes: the volume, the file, the program name, the name, the
+description and the first cluster); the 32x32 PICTURES are read again, out
+of each file's first sector, for the page on show only (`stm_loadpics`, at
+most `STM_PGMAX` = 8 of them) - on a floppy the scan's own reads are still in
+the track cache for the first page. 64 whole cards would not fit the
+module's 16 KB ceiling (`MOD_MAX_KB`); 64 entries do.
 
 An App is **RUNNING** when a live package instance's `I_NAME` - its header's
 program name, the loader's copy - is the App's: `stik_single`'s test (§110.5.2)
@@ -185465,21 +185471,38 @@ the ROM 8x8 off `[font_seg]:[font_base]`; the Apps' names are BOLD (each row
 ORed with itself one pixel right); the tick is an 8x8 with 2-px strokes,
 which a 1bpp adapter keeps (§13.16.2.1).
 
-- **Two layouts**, by the primary's height (`[vid_ph]`): TALL at 300 rows or
-  more - a 40-row App with the 32x32 picture - and COMPACT below that, CGA's
-  200, where an App is 20 rows and the picture is its row PAIRS ORed, 16
-  rows, which on CGA's tall pixels is about square.
-- **The width** is the widest name or description in cells plus 14 (the
-  picture, the gaps, the right column, the frame), and at least 31 for the
-  hint; the panel shifts left rather than leave the primary.
-- **As many Apps as fit**: the screen, and a save-under of at most
-  `STM_SAVEMAX` = 61,440 bytes (one segment, so `gfx_save` cannot wrap). On
-  VGA that is 7 Apps as wide as the Desk Calendar's card and 5 at the widest
-  a card can be; the rest are not shown.
-- **The save-under is `menu_drop`'s** (§12.4.2): `[menu_sseg]`, `MEM_P_MSAVE`,
-  `menu_reloc`, sized from the rect - ~22 KB on VGA and ~4 KB on CGA for one
-  App - and a refused claim repaints on close with `menu_drop`'s
-  `[menu_bdirty]` care. An open dock's hole is put away while it is down
+- **Three layouts**, by the primary's height (`[vid_ph]`), the widget's own
+  thresholds (§110.11): **TALL** at 400 rows or more (VGA) is the owner's
+  mockup - a 56-row App with the picture and the name-and-description block
+  both centred on its middle, the name and the description 18 rows apart,
+  18-row items, 11-row rules and two cells of margin; **MID** at 300-399
+  (Hercules, EGA) is a 40-row App with one cell of margin; **COMPACT** below
+  that (CGA's 200) is a 20-row App whose picture is its row PAIRS ORed, 16
+  rows, which on CGA's tall pixels is about square. Each layout carries its
+  own rows AND columns (`LY_*`), so the composers name no number.
+- **The width** is the widest name or description in cells plus the
+  layout's furniture either side of it (the margin, the picture and the gap
+  left of the text; the gap, the right column and the frame right of it),
+  and at least the hint with the header's margin either side; the panel
+  shifts left rather than leave the primary.
+- **PAGES.** As many Apps as the screen holds are shown at once; when there
+  are more, the last App row is followed by a **pager** - `Next page (1 of
+  3)`, and `First page (3 of 3)` on the last - and the page size is what
+  fits WITH it, at most `STM_PGMAX` = 8. A release (or, with the panel
+  staying up, a click) on the pager turns the page and the panel STAYS UP
+  for the next click: its pictures are read, every App slot and the pager
+  are recomposed, and nothing else is drawn, because every page has the same
+  slots - a short last page's empty ones are the frame alone and no pick.
+  On VGA that is five a page, on Hercules and EGA five, on CGA four.
+- **The save-under is up to TWO parts**: the rows one segment holds
+  (`STM_SAVEMAX` = 61,440 bytes, so `gfx_save` cannot wrap) and the rest. A
+  paged VGA panel is 440 rows, ~80 KB, so it takes both; one smaller takes
+  one. Either refused, neither is kept and the close repaints.
+- **The save-under's first part is `menu_drop`'s** (§12.4.2): `[menu_sseg]`,
+  `MEM_P_MSAVE`, `menu_reloc`, sized from the rect - ~34 KB on VGA and ~4 KB
+  on CGA for one App - and its second, when there is one, the module's own
+  `MEM_K_MOD` claim, freed at the close. A part shed while the menu is down
+  makes the close a repaint, with `menu_drop`'s `[menu_bdirty]` care. An open dock's hole is put away while it is down
   (§30.6.1).
 - **The theme**: the band is composed 1 = ink and put in the pen's polarity -
   Bright and Windows keep the default pen and invert the band (the blit's
@@ -185519,6 +185542,7 @@ no pick drops the module at once.
 | `Hide All Sticky Apps` | `wm_hide` on every desk window: nothing closed, nothing written, their timers still run |
 | `Show All Sticky Apps` | the same item while every desk window is hidden: `wm_show` on each. Hidden is DERIVED - a used, invisible `WF_DESK` window - since nothing else leaves one hidden at a moment this menu can run, and no byte records it. A Restart brings them back anyway (§110.4) |
 | `More Sticky Apps...` | The Wire (§92), as the desktop's service zone opens it; with no driver registered the module names `THEWIRE.O88` itself, and The Wire explains what it needs (§92.9) |
+| the pager | the next page, the panel kept up (110.12.3) - not a pick, nothing posted |
 | the hint | nothing: it is not a pick |
 
 Arrange and Hide/Show act on DESK windows; an App up TITLED (§110.7's
@@ -185531,7 +185555,7 @@ fallback, no `DESK.DRV`) is listed and toggled but not arranged or hidden.
 | kern_big | **+72** | **+8** | **+47** | image 272 (352), cold 78 (125) |
 | kern_emu | +72 | +8 | +47 | image **13** (93), cold 78 (125) |
 | kern_small | 0 | 0 | +8 | image 429 (429), cold 46 (54): the card's ladder step alone |
-| `STIKMENU.DRV` (on demand) | | | | 3,222 bytes on the disk ('CZ'), a 7,473-byte image - 4,426 of it the scratch, zeros that pack to nothing and come back zero at every load - an 8 KB claim from the press to the act |
+| `STIKMENU.DRV` (on demand) | | | | 4,040 bytes on the disk ('CZ'), a 14,758-byte image - most of it the scratch (64 entries, a page of pictures, the band), zeros that pack to nothing and come back zero at every load - a 15 KB claim from the press to the act, beside the save-under |
 
 The `.text` is the title, the two set entries, `menu_track`'s test, `CMD_STIK`
 and its handler, the module's row and file name, and the loader's step; the
@@ -185551,9 +185575,11 @@ room to save; §24.3.1.3 took Mines off that disk, and it is 346, 8 free.
 - **A keyboard-only drop**: like every bar menu, the panel is reached by the
   pointer or the keyboard mouse (§9.6); it does not step by item as
   `menu_kbnav` does for a pull-down.
-- **No cache of the scan**: every drop reads `STIKAPPS\` again. That is what
-  makes a newly copied App appear with no refresh, and on a floppy it is the
-  cost above.
+- **No cache of the scan**: every drop reads `STIKAPPS\` again - a directory
+  walk and one header peek per App. That is what makes a newly copied App
+  appear with no refresh; on a floppy with MANY Apps it is a peek apiece
+  (~400 ms each where the track cache misses), so the scan is the thing to
+  cache when a machine first carries dozens.
 
 `tests/stikmenu.py` is the row (soak): one boot of the VGA XT on the shipped
 360 KB system disk, the panel read out of the module's own image, and every

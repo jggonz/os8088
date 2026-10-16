@@ -9984,7 +9984,7 @@ SOAK = [
         "the settings core, its own file I/O) moves both on any build.",
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
-    Row("stikmenu", "soak", py("tests/stikmenu.py"), 30.0,
+    Row("stikmenu", "soak", py("tests/stikmenu.py"), 45.0,
         "SPEC.md 110.12: Locator's Sticky Apps menu, one boot of the VGA XT "
         "on the shipped 360KB system disk. A press on the cell loads "
         "STIKMENU.DRV and lists DESKCAL.O88 by its CARD (name 'Desk "
@@ -9994,9 +9994,11 @@ SOAK = [
         "Hide All hides the widget and Show All brings it back; Arrange puts "
         "it at W_X = 7 mod 8 at the column's top; picking the RUNNING row "
         "closes it through app_close_win, so its own negotiator removes its "
-        "Sticky App row. Read out of the module's own image (mod_tab's row + "
+        "Sticky App row. A second boot with six more (one-sector card stubs) "
+        "PAGES: a pager row, a release on it turns the page and the panel "
+        "stays up. Read out of the module's own image (mod_tab's row + "
         "os88sym's offsets), not out of pixels.",
-        needs=("marty",), timeout=900,
+        needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
     Row("stikshort", "soak", py("tests/stikshort.py"), 15.0,
         "SPEC.md 26.8.1/110.2, the regression for +3: SPEC.md called the "
