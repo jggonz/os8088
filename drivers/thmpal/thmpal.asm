@@ -278,7 +278,8 @@ tv_install:
 ; ONE install and ONE OSAPI_THM_SET for every change (SPEC.md 76.14.14): the
 ; kernel promotes Color to Windows when the style bit says so, and falls back
 ; to Color - clearing the bit - when WIN95.DRV cannot be read, which is the
-; refusal this answers by putting the radio back.
+; refusal this answers by putting the radio back and saying why at the click
+; that asked for it (SPEC.md 76.14.10).
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 tv_apply:
@@ -294,6 +295,7 @@ tv_apply:
     mov al, [tv_stripes]        ; Windows refused: the kernel fell back to
     xor ah, ah                  ; Color and cleared the style bit
     mov [tv_styles+OS88UI_RD_SEL], ax
+    call tv_nowin
 .live:
     mov ax, [tv_styles+OS88UI_RD_SEL]
     mov [tv_live_style], al
@@ -311,9 +313,6 @@ tv_apply:
 ; -----------------------------------------------------------------------------
 tv_cancel:
     push ax
-    push cx
-    push si
-    push es
     cmp byte [tv_chg], 0
     je .out
     mov byte [tv_chg], 0
@@ -323,16 +322,24 @@ tv_cancel:
     mov al, [tv_okind]
     call OSAPI_THM_SET
     jnc .out
+    call tv_nowin
+.out:
+    pop ax
+    ret
+
+; tv_nowin - toast that WIN95.DRV could not be read; all registers preserved
+tv_nowin:
+    push cx
+    push si
+    push es
     push ds
     pop es
     mov si, tv_s_nowin
     xor cx, cx
     call OSAPI_TOAST
-.out:
     pop es
     pop si
     pop cx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------

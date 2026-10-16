@@ -6,9 +6,11 @@
 Five legs, every one on MartyPC's 4.77 MHz 8088:
 
   A. VGA, a kernel built to BOOT Windows (`THEMEDARK=3`, a private tree):
-     the three caption buttons PIXEL BY PIXEL against the art (lit edge, face,
-     dark edge, the X, and the navy ground beside each band - which is where
-     SPEC.md 5.4.2.9's Bit Mask defect showed); one title bar's COST off the
+     the close button PIXEL BY PIXEL in both title styles (SPEC.md 76.14.13) -
+     the default, which wears the title pair, and 95, main's original art (lit
+     edge, face, dark edge, the X) - and the navy ground beside each band,
+     which is where SPEC.md 5.4.2.9's Bit Mask defect showed; one title bar's
+     COST off the
      trace, under a ceiling; the click-open menu (a click on the chip leaves it
      up, Esc closes, Up/Down step, Enter runs, a click OFF it closes and goes
      no further, press-drag-release still runs, a right-click leaves a
@@ -18,10 +20,14 @@ Five legs, every one on MartyPC's 4.77 MHz 8088:
      it (SPEC.md 76.14.5).
   B. Hercules, the same kernel: the 1bpp row - a white button face, the black
      X, the dither desktop - and the click-open menu once.
-  C. VGA, the SHIPPED kernel: the Theme page's Windows row mounts WIN95.DRV
-     and hooks every door; Bright unhooks them all and drops the claim.
-  D. VGA, the shipped kernel on a system disk WITHOUT WIN95.DRV: the row is
-     refused, Color stands, nothing is claimed, and the toast says why.
+  C. VGA, the SHIPPED kernel: Windows is a title style of Color now, not a
+     Theme-page row (SPEC.md 76.14.10), so Color, Customize... and the
+     chooser's Windows radio mount WIN95.DRV and hook every door; Return
+     keeps it, and the Theme page's Bright unhooks them all and drops the
+     claim.
+  D. VGA, the shipped kernel on a system disk WITHOUT WIN95.DRV: the same
+     radio is refused, Color stands, nothing is claimed, and the toast says
+     why at the click that asked (SPEC.md 76.14.10).
   E. VGA, Windows SAVED in SYSTEM.CFG and no WIN95.DRV: the boot comes up
      Color with every door at rest (SPEC.md 76.14.1).
 
@@ -55,6 +61,7 @@ BLACK, NAVY, TEAL, LGRAY, DGRAY, WHITE = ((0, 0, 0), (0, 0, 170),
                                           (0, 170, 170), (170, 170, 170),
                                           (85, 85, 85), (255, 255, 255))
 THM_COLOR, THM_WIN = 2, 3
+TV_SY, TV_SPITCH = 3 + 8 * 11 + 8 + 10, 16  # thmpal.asm: the style radios
 DOORS = ("wm_draw_title_b", "wm_hit_ttl_b", "wm_grow_glyph_b", "kret_ret",
          "wmz_crect_b")
 
@@ -132,23 +139,34 @@ def leg_a(eq):
             return
         disk = ui.open_drive("B")
         os88marty.settle(m)
-        a_pixels(m, disk)
+        a_pixels(m, disk, "default")
+        a_pixels95(m, ui)
         a_cost(m, ui, disk)
         a_menus(m, mo, ui, disk)
         a_buttons(m, mo, ui, disk)
 
 
-def a_pixels(m, w):
+# A close button's colours by title style (SPEC.md 76.14.13, winmod.inc's
+# wn_buttons): the default wears the title pair - its ground for the face, its
+# ink for the glyph and both edges - and 95 is main's original art
+STYLE_ART = {"default": dict(lit=WHITE, dark=WHITE, face=NAVY, glyph=WHITE),
+             "95": dict(lit=WHITE, dark=BLACK, face=LGRAY, glyph=BLACK)}
+
+
+def a_pixels(m, w, style):
     """The close button against its art, and the ground either side of it."""
     g = grab(m)
+    art = STYLE_ART[style]
     x1, y1 = w.x + w.w - geom.WN_CLOSE, w.y + geom.WN_BTY
-    checks = [((x1, y1), WHITE, "close's top-left: the lit edge"),
-              ((x1, y1 + 5), WHITE, "close's left column: the lit edge"),
-              ((x1 + 15, y1 + 5), BLACK, "close's right column: the dark edge"),
-              ((x1 + 5, y1 + 13), BLACK, "close's bottom row: the dark edge"),
-              ((x1 + 2, y1 + 2), LGRAY, "close's face"),
-              ((x1 + 4, y1 + 3), BLACK, "the X's top-left stroke"),
-              ((x1 + 7, y1 + 6), BLACK, "the X's crossing"),
+    checks = [((x1, y1), art["lit"], "close's top-left: the lit edge"),
+              ((x1, y1 + 5), art["lit"], "close's left column: the lit edge"),
+              ((x1 + 15, y1 + 5), art["dark"],
+               "close's right column: the dark edge"),
+              ((x1 + 5, y1 + 13), art["dark"],
+               "close's bottom row: the dark edge"),
+              ((x1 + 2, y1 + 2), art["face"], "close's face"),
+              ((x1 + 4, y1 + 3), art["glyph"], "the X's top-left stroke"),
+              ((x1 + 7, y1 + 6), art["glyph"], "the X's crossing"),
               ((x1 + 16, y1 + 5), NAVY, "the ground RIGHT of close (5.4.2.9)"),
               ((x1 - 1, y1 + 5), NAVY, "the ground LEFT of close (5.4.2.9)"),
               ((w.x + w.w - geom.WN_MIN - 1, y1 + 5), NAVY,
@@ -156,9 +174,24 @@ def a_pixels(m, w):
     bad = [(what, xy, g(*xy), want) for xy, want, what in checks
            if g(*xy) != want]
     for what, xy, got, want in bad:
-        fail("A pixels: %s at %s is %s, want %s" % (what, xy, got, want))
+        fail("A pixels (%s): %s at %s is %s, want %s"
+             % (style, what, xy, got, want))
     if not bad:
-        print("   the close button is its art, and the ground beside it navy")
+        print("   the %s close button is its art, and the ground beside it "
+              "navy" % style)
+
+
+def a_pixels95(m, ui):
+    """95's art: [thm_cstrp] bit 1, the byte Customize's 95 box writes, set
+    under a fresh window so its title is drawn with it - then put back."""
+    bits = m.sym("thm_cstrp")
+    was = m.read(bits, 1)[0]
+    m.write(bits, bytes([was | 2]))
+    a = ui.open_drive("A")
+    os88marty.settle(m)
+    a_pixels(m, a, "95")
+    ui.close(a)
+    m.write(bits, bytes([was]))
 
 
 def a_cost(m, ui, disk):
@@ -414,7 +447,8 @@ def leg_b(eq):
 
 # --- C, D, E ------------------------------------------------------------------
 def fixture(folder, name, win95, saved):
-    files = [os88build.at("build/ctrl.drv")]
+    files = [os88build.at("build/ctrl.drv"),     # the panel, and its
+             os88build.at("build/thmpal.drv")]   # Customize... window
     if win95:
         files.append(os88build.at("build/win95.drv"))
     if saved:
@@ -440,6 +474,25 @@ def pick(m, mo, row):
              wy + geom.TITLE_H + 1 + 18 + row * 16 + 6, settle=0)
 
 
+def customize(m, mo, ui, eq):
+    """Color, then Customize... beside it: THMPAL.DRV's chooser, up and found.
+    Customize is live only while Color is (SPEC.md 76.14.10)."""
+    pick(m, mo, 2)
+    wait(m, lambda: kind(m) == THM_COLOR, "the Color row to take")
+    wx, wy = dispcp._cp_win(m, m.sym)
+    mo.click(wx + 1 + dispcp.CP_RX + eq["CPH_CZX"] + 20,
+             wy + geom.TITLE_H + 1 + eq["CPH_CZY"] + 8, settle=0)
+    wait(m, lambda: "Color Theme" in ui.titles(), "the Customize window")
+    os88marty.settle(m)
+    return ui.window("Color Theme")
+
+
+def style_win(mo, ch):
+    """The chooser's Title bar style radio for Windows (thmpal.asm's TV_SY)."""
+    mo.click(ch.x + 15, ch.y + geom.TITLE_H + 1 + TV_SY + 2 * TV_SPITCH + 8,
+             settle=0)
+
+
 def shipped():
     """C, D and E are about the SHIPPED kernel: put the paths and the symbol
     reader back on the shared tree, which A and B moved to THEMEDARK=3's"""
@@ -453,15 +506,23 @@ def leg_c(eq, folder):
         m, mo = ui.m, ui.mo
         at_rest(m, "C boot")
         dispcp.open_panel(m, mo, m.sym, os88marty.settle, page=5)
-        pick(m, mo, 3)
-        wait(m, lambda: kind(m) == THM_WIN, "the Windows row to take")
+        ch = customize(m, mo, ui, eq)
+        style_win(mo, ch)
+        wait(m, lambda: kind(m) == THM_WIN, "the Windows style to take")
         hooked(m, eq, "C Windows")
+        m.key("Enter")                      # Return keeps it (tv_key)
+        wait(m, lambda: "Color Theme" not in ui.titles(),
+             "Return to close the chooser")
+        os88marty.settle(m)
+        if kind(m) != THM_WIN:
+            fail("C: Return did not keep Windows (kind %d)" % kind(m))
         pick(m, mo, 0)
         wait(m, lambda: kind(m) == 0, "the Bright row to take")
         if modseg(m, eq):
             fail("C: Bright left WIN95.DRV claimed")
         at_rest(m, "C Bright")
-        print("   Windows hooks five doors to the module, Bright puts them back")
+        print("   the Windows style hooks five doors to the module, Bright "
+              "puts them back")
 
 
 def leg_d(eq, folder):
@@ -470,8 +531,9 @@ def leg_d(eq, folder):
     with os88ui.boot(fixture(folder, "d", False, False), machine=VGA) as ui:
         m, mo = ui.m, ui.mo
         dispcp.open_panel(m, mo, m.sym, os88marty.settle, page=5)
+        ch = customize(m, mo, ui, eq)
         before = m.read(m.sym("toast_buf"), 24).split(b"\0")[0]
-        pick(m, mo, 3)
+        style_win(mo, ch)
         wait(m, lambda: m.read(m.sym("toast_buf"), 24).split(b"\0")[0]
              != before, "the refusal's toast")
         toast = m.read(m.sym("toast_buf"), 24).split(b"\0")[0]
@@ -480,7 +542,7 @@ def leg_d(eq, folder):
         if modseg(m, eq):
             fail("D: a refused Windows left a claim")
         at_rest(m, "D refused")
-        if not toast.startswith(b"WIN95.DRV"):
+        if b"WIN95.DRV" not in toast:
             fail("D: the refusal's toast is %r" % toast)
         print("   refused: Color stands, nothing claimed, toast %r"
               % toast.decode("latin-1"))
