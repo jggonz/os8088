@@ -3,21 +3,21 @@
 arm is its tick, its reminders go off through it, and the place and the data
 come back with no autostart at all.
 
-    make && make small && python3 tests/diasmall.py
+    make && make small && python3 tests/stiksmall.py
 
 `make small`'s 360KB system disk (build/small360.img, which carries
-SYSTEM\\DIA\\DESKCAL.O88 like every system disk, SPEC.md 24.5.1) copied to a
+STIKAPPS\\DESKCAL.O88 like every system disk, SPEC.md 24.5.1) copied to a
 scratch file, on MartyPC's 128KB 5150 with a CGA - the floor machine, COMPACT.
 
-  A  double-clicked out of SYSTEM\\DIA it opens as v2's TITLED FALLBACK
+  A  double-clicked out of STIKAPPS it opens as v2's TITLED FALLBACK
      (SPEC.md 110.7): OSAPI_WM_DESK QUERY refuses on kern_small, so it is an
      ordinary 178 x 151 window - COMPACT's face less its tag row and last
      gap, plus the title bar - with no WF_DESK and an ordinary instance slot
      (a dock tile); kern_small has no OSAPI_WM_TIMER, so the first paint
-     HIRES THE WORKER (dia_st WORKER | HIRED) and registration is never
+     HIRES THE WORKER (stik_st WORKER | HIRED) and registration is never
      TRIED, and NOTHING IS SAID: no toast six guest seconds on.
   B  a TITLE-BAR drag is saved by the worker's beat: DESKCAL.DAT on A: holds
-     the FACE's origin - (x + 1, y + TITLE_H), DIA_HF_CONT - on 640x200.
+     the FACE's origin - (x + 1, y + TITLE_H), STIK_HF_CONT - on 640x200.
   C  an appointment typed at 09:59:45, `1000 Small`, goes off at 10:00
      through the same beat: NO ALERT (v2), the toast `10:00 Small`, ONE
      note, 880 Hz for 8 ticks (the worker's sleep for the next beat has
@@ -29,11 +29,11 @@ scratch file, on MartyPC's 128KB 5150 with a CGA - the floor machine, COMPACT.
   F  opened again by hand it is WHERE IT WAS DRAGGED, with `Small` in it,
      FIRED.
 
-**BREAK IT ON PURPOSE**: make dia_made ignore the timer's CF (never set
-DIA_S_WORKER) and A finds no worker and B never saves; take the `test
-[dia_st], DIA_S_WORKER` out of dc_fire and C hears TWO requests, (880,4)
+**BREAK IT ON PURPOSE**: make stik_made ignore the timer's CF (never set
+STIK_S_WORKER) and A finds no worker and B never saves; take the `test
+[stik_st], STIK_S_WORKER` out of dc_fire and C hears TWO requests, (880,4)
 then (660,4) - the second made 36 ticks late, on the worker's next beat,
-because the sooner re-arm (dia_nx) is the timer's and the worker's sleep for
+because the sooner re-arm (stik_nx) is the timer's and the worker's sleep for
 that beat had already begun.
 """
 import os
@@ -56,15 +56,15 @@ import os88ui      # noqa: E402
 import os88marty   # noqa: E402
 import os88geom as geom   # noqa: E402
 import os88flush   # noqa: E402
-import os88dia     # noqa: E402
+import os88stik    # noqa: E402
 
 MACHINE = "os8088_5150_cga_128k"
 TITLE = "Desk Calendar"
 TODAY = (2026, 10, 14)
 TONE_CELL = 0x0060 * 16 + 0x00D3        # OSAPI_SND_TONE (os88api.inc)
-D = os88dia
-DIA_ST = D.dia_st_off(D.DESKCAL_DIA_BSS, D.DESKCAL_PAYLEN)
-HDR = D.dia_hdr_off(D.DESKCAL_DIA_BSS)
+D = os88stik
+STIK_ST = D.stik_st_off(D.DESKCAL_STIK_BSS, D.DESKCAL_PAYLEN)
+HDR = D.stik_hdr_off(D.DESKCAL_STIK_BSS)
 S_TRIED, S_ROW, S_DIRTY, S_WORKER, S_HIRED = 1, 2, 16, 64, 128
 
 fails = []
@@ -86,7 +86,7 @@ class Cal(object):
     def __init__(self, ui, tmp):
         self.ui, self.m, self.tmp = ui, ui.m, tmp
         self.image = image_size()
-        w = ui.path("A:/SYSTEM/DIA/DESKCAL.O88")
+        w = ui.path("A:/STIKAPPS/DESKCAL.O88")
         check(w is not None and w.title == TITLE, "the calendar opened")
         self.w = w
         self.wseg = struct.unpack_from("<H", self.m.read(
@@ -96,7 +96,7 @@ class Cal(object):
         return self.m.readseg(self.wseg, self.image + off, n)
 
     def st(self):
-        return self.bss(DIA_ST)[0]
+        return self.bss(STIK_ST)[0]
 
     def windows(self):
         return len([w for w in self.ui.windows() if w.title == TITLE])
@@ -114,7 +114,7 @@ class Cal(object):
             os88marty.pace(self.m, 0.6)
 
     def appts(self):
-        p = bytes(self.bss(D.DESKCAL_DIA_BSS + D.DIA_HDR_SIZE,
+        p = bytes(self.bss(D.DESKCAL_STIK_BSS + D.STIK_HDR_SIZE,
                            D.DESKCAL_PAYLEN))
         return dict((a["text"], (a["remind"], a["fired"]))
                     for a in D.parse_deskcal(p)["appts"])
@@ -136,12 +136,12 @@ class Cal(object):
     def saved(self, what):
         os88marty.guest_sleep(self.m, 1.0)
         self.ui._wait(lambda: not self.st() & S_DIRTY, what, 90,
-                      snapshot=lambda: "dia_st = %#x" % self.st())
+                      snapshot=lambda: "stik_st = %#x" % self.st())
         return self.dat()
 
 
 def main():
-    tmp = tempfile.mkdtemp(prefix="diasmall-")
+    tmp = tempfile.mkdtemp(prefix="stiksmall-")
     img = os.path.join(tmp, "small360.img")
     shutil.copy(os.path.join(PKGDIR, "small360.img"), img)
     try:
@@ -155,14 +155,14 @@ def main():
             print("A: it opens, hires its worker, and says nothing")
             c = Cal(ui, tmp)
             ui._wait(lambda: c.st() & S_HIRED, "the worker to be hired", 60,
-                     snapshot=lambda: "dia_st = %#x" % c.st())
+                     snapshot=lambda: "stik_st = %#x" % c.st())
             os88marty.guest_sleep(m, 6.0)
             st = c.st()
             check(st & S_WORKER and st & S_HIRED,
-                  "the worker arm: WORKER | HIRED (dia_st %#x)" % st)
+                  "the worker arm: WORKER | HIRED (stik_st %#x)" % st)
             check(not st & (S_TRIED | S_ROW),
                   "registration never tried - OSAPI_DESK_ITEM is the refusal "
-                  "here (dia_st %#x)" % st)
+                  "here (stik_st %#x)" % st)
             txt, on = ui.toast()
             check(txt == "" and not on, "and nothing was said (toast %r, %s)"
                   % (txt, "up" if on else "down"))
@@ -191,7 +191,7 @@ def main():
                 return b[3] & 3, struct.unpack_from("<HH", b, 4)
             ui._wait(lambda: hdr() == (3, face) and not c.st() & S_DIRTY,
                      "the drag's save (two polls, then the write)", 120,
-                     snapshot=lambda: "dia_st %#x, header %r"
+                     snapshot=lambda: "stik_st %#x, header %r"
                      % (c.st(), hdr()))
             d = c.dat() or {}
             check(d.get("pos") and d.get("cont")
@@ -262,7 +262,7 @@ def main():
                   "...with Small in it, FIRED (%r)" % (c.appts().get("Small"),))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    print("diasmall: %s" % ("PASS" if not fails else
+    print("stiksmall: %s" % ("PASS" if not fails else
                             "FAIL (%d): %s" % (len(fails), "; ".join(fails))))
     return 1 if fails else 0
 

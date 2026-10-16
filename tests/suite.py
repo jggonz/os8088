@@ -420,11 +420,11 @@ FAST = [
         "never see), each with its reason - the two look identical in a diff "
         "and the next one is written by copying the last; an unregistered or "
         "a vanished site fails make"),
-    Row("dia", "fast", py("tests/unit/t_dia.py"), 0.5,
-        "SPEC.md 110.10: a DIA's shared half between MartyPC runs - "
-        "tools/os88dia.py --selfcheck, tests/diaprobe ASSEMBLED so the SDK's "
-        "os88dia.inc is built by every `make` (only `make diatest` built it), "
-        "the DIA header's offsets in the include where the host tool writes "
+    Row("stik", "fast", py("tests/unit/t_stik.py"), 0.5,
+        "SPEC.md 110.10: a Sticky App's shared half between MartyPC runs - "
+        "tools/os88stik.py --selfcheck, tests/stikprob ASSEMBLED so the SDK's "
+        "os88stik.inc is built by every `make` (only `make stiktest` built it), "
+        "the Sticky App header's offsets in the include where the host tool writes "
         "each field, and the host tool's copies of kern_big's DERIVED "
         "CFG_FBUF and DESK_SC0 evaluated by nasm from the kernel's own equ "
         "chain - expressions t_mirror cannot hold, and CFG_FBUF went 131 -> "
@@ -9924,10 +9924,10 @@ SOAK = [
         "holds that link is REFUSED and the row stays, and Remove takes the "
         "cell, the claim and the trailer away again.",
         needs=("marty",), timeout=600, wants=("build/deskitem360.img",)),
-    Row("diaboot", "soak", py("tests/diaboot.py"), 17.0,
-        "SPEC.md 110.4: a DESKTOP INTEGRATED APPLICATION comes back at boot. "
-        "`make diatest`'s restore disk holds one DIA row (written by "
-        "tools/os88dia.py) and DIAPROBE.DAT: the probe is up with the desktop "
+    Row("stikboot", "soak", py("tests/stikboot.py"), 17.0,
+        "SPEC.md 110.4: a STICKY APP comes back at boot. "
+        "`make stiktest`'s restore disk holds one Sticky App row (written by "
+        "tools/os88stik.py) and STIKPROB.DAT: the probe is up with the desktop "
         "at (303,184), where its state file put it; its row holds NO cell; "
         "its first tick registers it and, the row being byte-identical, "
         "SYSTEM.CFG is the fixture to the byte; a drag is then saved to its "
@@ -9935,9 +9935,9 @@ SOAK = [
         "row BY NAME (AH = 0xFF) - no trailer left. The last leg is the W1 "
         "defect: the save's walk used the row record as its find buffer and "
         "the closed widget came back at every boot.",
-        needs=("marty",), timeout=600, wants=("build/diarestore360.img",)),
-    Row("diaswap", "soak", py("tests/diaswap.py"), 50.0,
-        "SPEC.md 110.5.1: a DIA's save asks whether the disk is still HOME. "
+        needs=("marty",), timeout=600, wants=("build/stikrestore360.img",)),
+    Row("stikswap", "soak", py("tests/stikswap.py"), 50.0,
+        "SPEC.md 110.5.1: a Sticky App's save asks whether the disk is still HOME. "
         "The apps disk goes in A: under the running probe and it is dragged: "
         "nothing is written there (every shipped disk has SYSTEM\\APPDATA, "
         "and a W1 build wrote its state onto it), the save stays owed and is "
@@ -9948,28 +9948,28 @@ SOAK = [
         "stranding the row; with the disk back the next close takes it "
         "away. Every floppy --verify.",
         needs=("marty",), timeout=900,
-        wants=("build/diarestore360.img", "build/apps360.img")),
-    Row("diamiss", "soak", py("tests/diamiss.py"), 21.0,
-        "SPEC.md 110.4: a DIA that cannot be found is a graceful failure. "
-        "ghost: a row to SYSTEM\\DIA\\GONE.O88 ahead of the probe's - the "
+        wants=("build/stikrestore360.img", "build/apps360.img")),
+    Row("stikmiss", "soak", py("tests/stikmiss.py"), 21.0,
+        "SPEC.md 110.4: a Sticky App that cannot be found is a graceful failure. "
+        "ghost: a row to STIKAPPS\\GONE.O88 ahead of the probe's - the "
         "desktop, ONE `Shortcut not found (A:)`, the missing row DOWNGRADED "
         "in memory to a placed, captioned shortcut, and the probe behind it "
         "still launched. bvol: a row on B: with no disk there - `(B:)`, the "
         "same downgrade, nothing launched. SYSTEM.CFG unwritten by either.",
         needs=("marty",), timeout=900,
-        wants=("build/diaghost360.img", "build/diabvol360.img")),
-    Row("dianodesk", "soak", py("tests/dianodesk.py"), 32.0,
+        wants=("build/stikghost360.img", "build/stikbvol360.img")),
+    Row("stiknodesk", "soak", py("tests/stiknodesk.py"), 32.0,
         "SPEC.md 11.103.10: DESK.DRV is the desk layer's code, loaded by the "
-        "loader's step 5 for an OS88_F_DESK package and by a DIA's QUERY. "
-        "absent: the shipped 360KB system disk with a DIA row "
+        "loader's step 5 for an OS88_F_DESK package and by a Sticky App's QUERY. "
+        "absent: the shipped 360KB system disk with a Sticky App row "
         "to DESKCAL.O88 and DESK.DRV mdel'd (asserted gone on the host) - "
-        "the boot still relaunches the calendar (dia_boot is resident), it "
+        "the boot still relaunches the calendar (stik_boot is resident), it "
         "comes up TITLED (no WF_DESK, a title bar), mod_tab's MOD_DESK row "
         "is 0 and every DKDFP slot mod_gone, and the row is kept, marked and "
         "cell-less. present, the control: the same disk with the module - a "
         "desk window, the module held, the row kept, and the module's claim "
         "ABOVE the calendar's region. bdrive: present with the row on B:. "
-        "Every leg, read at an exec breakpoint on dia_boot's RETURN: the "
+        "Every leg, read at an exec breakpoint on stik_boot's RETURN: the "
         "bracket's pair and the machine are the boot volume's root (dsk_cwd "
         "0, disk_drive = dsk_bootvol) - the load's drv_vol bracket nests "
         "inside sc_open's and desk_need keeps the outer pair. Not read once "
@@ -9977,27 +9977,27 @@ SOAK = [
         "the settings core, its own file I/O) moves both on any build.",
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
-    Row("diashort", "soak", py("tests/diashort.py"), 15.0,
+    Row("stikshort", "soak", py("tests/stikshort.py"), 15.0,
         "SPEC.md 26.8.1/110.2, the regression for +3: SPEC.md called the "
         "byte spare and every drag-made shortcut carries `\\` there. Three "
-        "such shortcuts and no DIA row: each SHOWN in its own cell (the "
+        "such shortcuts and no Sticky App row: each SHOWN in its own cell (the "
         "table byte, and its pixels against a free cell's), each +3 still "
         "`\\`, nothing launched - a mark tested as non-zero would hide all "
         "three.",
-        needs=("marty",), timeout=600, wants=("build/diashort360.img",)),
-    Row("diahiber", "soak", py("tests/diahiber.py"), 15.0,
+        needs=("marty",), timeout=600, wants=("build/stikshort360.img",)),
+    Row("stikhiber", "soak", py("tests/stikhiber.py"), 15.0,
         "SPEC.md 110.4: a pending RESUME stands the relaunch down. A hard "
         "disk of this process's own with HIBERNAT.PTR in its root, so "
-        "hb_probe posts UI_RBQ_ASK: dia_boot is entered with [ui_rebootq] = "
-        "5, and twenty guest seconds later no DiaProbe has launched and its "
+        "hb_probe posts UI_RBQ_ASK: stik_boot is entered with [ui_rebootq] = "
+        "5, and twenty guest seconds later no StikProbe has launched and its "
         "row still carries the mark - kept for the next ordinary boot.",
         needs=("marty",), serial=True, timeout=900,
-        wants=("build/diahiber360.img",)),
-    Row("diaregister", "soak", py("tests/diaregister.py"), 50.0,
+        wants=("build/stikhiber360.img",)),
+    Row("stikregister", "soak", py("tests/stikregister.py"), 50.0,
         "SPEC.md 110.2/110.5.2: the Desk Calendar REGISTERS itself, once, off "
-        "the SHIPPED 360KB system disk. Double-clicked out of SYSTEM\\DIA it "
-        "opens on OSAPI_CLK_GET's today, and its first tick writes ONE DIA "
-        "row (KIND 1, 'D', SYSTEM\\DIA\\DESKCAL.O88, `Calendar`) and, "
+        "the SHIPPED 360KB system disk. Double-clicked out of STIKAPPS it "
+        "opens on OSAPI_CLK_GET's today, and its first tick writes ONE Sticky App "
+        "row (KIND 1, 'D', STIKAPPS\\DESKCAL.O88, `Calendar`) and, "
         "untouched, writes nothing more - no DESKCAL.DAT seven guest seconds "
         "on; a second "
         "double-click is refused by the package's own singleton - `Desk "
@@ -10006,15 +10006,15 @@ SOAK = [
         "2,456-byte "
         "DESKCAL.DAT holding its place; a reset brings nothing back.",
         needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
-    Row("diamove", "soak", py("tests/diamove.py"), 30.0,
+    Row("stikmove", "soak", py("tests/stikmove.py"), 30.0,
         "SPEC.md 110.4/110.5: the Desk Calendar stays where it was PUT. "
         "Opened off the shipped 360KB disk and dragged: within two polls its "
         "state file on A: holds the new place and the 640x480 screen, and "
-        "after a RESET dia_boot relaunches it from its row and dia_load puts "
+        "after a RESET stik_boot relaunches it from its row and stik_load puts "
         "it back at the dragged place, not the template's, holding no cell.",
         needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
-    Row("diamovecga", "soak", py("tests/diamove.py", "--leg", "cga"), 25.0,
-        "SPEC.md 110.3/110.5.2: diamove on the 5150's CGA, the adapter the "
+    Row("stikmovecga", "soak", py("tests/stikmove.py", "--leg", "cga"), 25.0,
+        "SPEC.md 110.3/110.5.2: stikmove on the 5150's CGA, the adapter the "
         "COMPACT frame exists for. Wave 2 authored the template at the TALL "
         "frame, so wm_create's fit cut it to the 155-row band and clamped "
         "every restored y to 20 - the place came back at y = 20 and the "
@@ -10022,13 +10022,13 @@ SOAK = [
         "sized before the create; a drag by its tag row to y = 28 must come "
         "back at y = 28 after a reset.",
         needs=("marty",), timeout=900, wants=("build/os8088-360.img",)),
-    Row("diaanchor", "soak", py("tests/diamove.py", "--leg", "anchor"), 25.0,
-        "SPEC.md 110.5.2: a place saved on ANOTHER screen. tools/os88dia.py "
+    Row("stikanchor", "soak", py("tests/stikmove.py", "--leg", "anchor"), 25.0,
+        "SPEC.md 110.5.2: a place saved on ANOTHER screen. tools/os88stik.py "
         "puts a V1 DESKCAL.DAT - a titled frame at (560,100) on 800x600, no "
-        "DIA_HF_CONT - into the shipped disk; on the VGA XT's 640x480 it is "
+        "STIK_HF_CONT - into the shipped disk; on the VGA XT's 640x480 it is "
         "converted to a face (561,118) and anchored: x from the far edge, "
         "the frame at 399, y 118 - a face hanging over the dock, which "
-        "wm_create's fit pulls up above it and dia_made gives back - and, "
+        "wm_create's fit pulls up above it and stik_made gives back - and, "
         "untouched, "
         "writes nothing: the state file is the fixture byte for byte "
         "seven guest seconds later.",
@@ -10036,7 +10036,7 @@ SOAK = [
         wants=("build/os8088-360.img",)),
     Row("deskcaledit", "soak", py("tests/deskcaledit.py"), 76.0,
         "SPEC.md 110.3: the Desk Calendar WIDGET's APPOINTMENTS, read back "
-        "off the guest's own disk by tools/os88dia.py, selected the v2 way "
+        "off the guest's own disk by tools/os88stik.py, selected the v2 way "
         "(the two-line agenda paged by its `+N more` pager). A DAMAGED "
         "state file (count 60) opens empty and its first edit asks `Replace "
         "damaged calendar?` with the file untouched until Yes; `9:30 "
@@ -10100,7 +10100,7 @@ SOAK = [
         wants=("build/os8088-360.img",)),
     Row("deskz", "soak", py("tests/desklayer.py", "--leg", "z"), 30.0,
         "SPEC.md 11.103: the DESK LAYER on MartyPC's VGA XT, off `make "
-        "diatest`'s diadesk360.img (DESKPROB.O88, tests/diaprobe's -DDP_DESK "
+        "stiktest`'s stikdesk360.img (DESKPROB.O88, tests/stikprob's -DDP_DESK "
         "build). MAKE took (WF_DESK|WF_OWNBG|WF_NOANIM, no WF_SAVEU, IF_DESK on "
         "the record) and the face is two white cards with the desktop's own "
         "dither in the gaps and down both ground columns; a Disk window opened "
@@ -10108,21 +10108,21 @@ SOAK = [
         "visible part reaches its W_ONCLICK and W_ONMOUSEUP with NO wm_raise "
         "and NO wm_zcut, leaves wm_zord, wm_top and the Disk window's "
         "overlapping pixels byte for byte as they were, and hands the widget "
-        "the bar - and the include's FOCUS (DIA_ONFOCUS 1), its tag plate "
+        "the bar - and the include's FOCUS (STIK_ONFOCUS 1), its tag plate "
         "inverse pixel for pixel; a press on the Disk window takes it back "
         "and the plate un-inverts within 6 ticks (the 4-tick focus poll, "
-        "DIA_ONFOCUS 0) for ONE BLIT1 and no OSAPI_GFX_DESK inside "
-        "dia_tagdraw - plate to plate, the ground beside it stays; closing the Disk window gives the bar to LOCATOR, "
+        "STIK_ONFOCUS 0) for ONE BLIT1 and no OSAPI_GFX_DESK inside "
+        "stik_tagdraw - plate to plate, the ground beside it stays; closing the Disk window gives the bar to LOCATOR, "
         "never the widget; and with only the widget up Close Window is the "
         "MENU_DIS twin.",
-        needs=("marty",), timeout=600, wants=("build/diadesk360.img",)),
+        needs=("marty",), timeout=600, wants=("build/stikdesk360.img",)),
     Row("deskdock", "soak", py("tests/desklayer.py", "--leg", "dock"), 25.0,
         "SPEC.md 30, 11.103.9: a package with header flag OS88_F_DESK takes "
         "the TOP instance slot (INST_MAX - 1); the strip draws no tile for an "
         "IF_DESK instance (the slot's rect is bare strip); a click where its "
         "tile would be fronts nothing, minimizes nothing and reaches nothing; "
         "and the first application opened is tile 0.",
-        needs=("marty",), timeout=600, wants=("build/diadesk360.img",)),
+        needs=("marty",), timeout=600, wants=("build/stikdesk360.img",)),
     Row("deskkeys", "soak", py("tests/desklayer.py", "--leg", "keys"), 45.0,
         "SPEC.md 11.103.4, 12.6: Note Pad in front; a press on the widget "
         "sends the keys to IT while Note Pad stays wm_top, and Note Pad's "
@@ -10131,7 +10131,7 @@ SOAK = [
         "and the bar and the keys go back; a press on Note Pad takes them "
         "too; a Standard File chooser takes the keys over a widget that owns "
         "the bar.",
-        needs=("marty",), timeout=600, wants=("build/diadesk360.img",)),
+        needs=("marty",), timeout=600, wants=("build/stikdesk360.img",)),
     Row("deskdrag", "soak", py("tests/desklayer.py", "--leg", "drag"), 75.0,
         "SPEC.md 11.103.6: the POSTED DRAG on MartyPC's VGA XT. A press on the "
         "probe's tag row, then a gap, then its 1-px ground column posts "
@@ -10148,16 +10148,16 @@ SOAK = [
         "owes (110.9's owner item); a DRAG posted from the beat's TIMER "
         "leaves the widget's record in [ui_dragy] and is inert - the next "
         "card press is a click; DESKPROB.DAT holds the FACE's origin with "
-        "DIA_HF_CONT (110.11); and a drop that leaves the frame's bottom "
+        "STIK_HF_CONT (110.11); and a drop that leaves the frame's bottom "
         "past the screen - ui_drag's bound is the title bar's - is put back "
         "on the glass by the include's next beat and saved there.",
         needs=("marty",), timeout=900,
-        wants=("build/diadesk360.img",)),
+        wants=("build/stikdesk360.img",)),
     Row("deskhover", "soak", py("tests/desklayer.py", "--leg", "hover"), 80.0,
         "SPEC.md 11.103.7: the HOVER EDGE on MartyPC's VGA XT. The pointer on "
         "a gap sets WF_HOVER, names the widget in [cur_hovw] and wakes it "
-        "ONCE, and os88dia.inc's dia_wake (DIA_WIDGET, 110.11) shows the "
-        "handle after DIA_HOVER_T's dwell - every tag pixel against the "
+        "ONCE, and os88stik.inc's stik_wake (STIK_WIDGET, 110.11) shows the "
+        "handle after STIK_HOVER_T's dwell - every tag pixel against the "
         "guest's own font; "
         "card, gap, card is one window and no further edge; off it, the "
         "clear, a second wake and the rest plate. Over a covering Disk window "
@@ -10166,30 +10166,30 @@ SOAK = [
         "re-entry still wakes it and the include refuses to reveal, asking "
         "again a dwell later; under a Standard File chooser nothing is hovered and nothing woken, and the "
         "first move after the chooser is reaped reveals.",
-        needs=("marty",), timeout=900, wants=("build/diadesk360.img",)),
+        needs=("marty",), timeout=900, wants=("build/stikdesk360.img",)),
     Row("deskhovercga", "soak", py("tests/desklayer.py", "--leg",
                                    "hovercga"), 40.0,
         "SPEC.md 11.103.7 on the 5150's CGA (MartyPC os8088_5150_cga, its "
         "GLaBIOS twin): the edge, the one wake and the handle and rest "
         "pictures read off the 1bpp framebuffer's own bits, in the COMPACT "
         "layout the include picks for 200 rows.",
-        needs=("marty",), timeout=900, wants=("build/diadesk360.img",)),
+        needs=("marty",), timeout=900, wants=("build/stikdesk360.img",)),
     Row("deskhoverherc", "soak", py("tests/desklayer.py", "--leg",
                                     "hoverherc"), 40.0,
         "SPEC.md 11.103.7 on the 5150's Hercules card (720x348): the edge, "
         "the one wake and both tag pictures off the 1bpp framebuffer, in "
         "the MID layout.",
-        needs=("marty",), timeout=900, wants=("build/diadesk360.img",)),
+        needs=("marty",), timeout=900, wants=("build/stikdesk360.img",)),
     Row("deskclose", "soak", py("tests/desklayer.py", "--leg", "close"), 45.0,
         "SPEC.md 11.103.6-7, 110.11: a widget closes by its OWN box. On the "
         "revealed handle a press arms and lights the box; slid off and "
         "released, nothing closes, and the handle goes only after the linger, "
         "leaving the focused plate; a press on the box's place while not revealed posts a DRAG and arms nothing; a press and "
         "release ON it runs the include's negotiator and OSAPI_WM_CLOSE - "
-        "the window and the instance go, and SYSTEM.CFG on A: holds no DIA "
+        "the window and the instance go, and SYSTEM.CFG on A: holds no Sticky App "
         "row.",
         needs=("marty",), timeout=900,
-        wants=("build/diadesk360.img",)),
+        wants=("build/stikdesk360.img",)),
     Row("deskground", "soak", py("tests/desklayer.py", "--leg", "ground"),
         60.0,
         "SPEC.md 110.11 (wave 3): the THEME in a widget's gaps. On MartyPC's "
@@ -10203,34 +10203,34 @@ SOAK = [
         "an x1 glyph off the grid across a slab on the straight path and a "
         "bold one cut at the stride on the general path); "
         "under Color a Disk window laid over it and closed leaves teal.",
-        needs=("marty",), timeout=900, wants=("build/diadesk360.img",)),
+        needs=("marty",), timeout=900, wants=("build/stikdesk360.img",)),
     Row("deskfit", "soak", py("tests/desklayer.py", "--leg", "fit"), 45.0,
         "SPEC.md 110.11 (wave 3): the layout by the screen's HEIGHT. A "
         "VIDEO=ega kernel in a private tree (39.24's 640x350 on a VGA): the "
-        "include picks MID - [dia_li] 1, a 130 x 83 frame, not TALL's 104 - "
+        "include picks MID - [stik_li] 1, a 130 x 83 frame, not TALL's 104 - "
         "and it sits inside the 306-row band between the bar and the dock, "
         "its face drawn.",
         needs=("marty", "nasm"), timeout=1200,
-        wants=("build/diadesk360.img",)),
+        wants=("build/stikdesk360.img",)),
     Row("desksmall", "soak", py("tests/desklayer.py", "--leg", "small"), 30.0,
         "SPEC.md 11.103.9, 110.7: kern_small has the two cells and no layer. "
         "On MartyPC's 128KB CGA 5150 off `make small`'s system disk with "
-        "DESKPROB.O88 mcopied into SYSTEM\\DIA\\: QUERY refuses, so the probe "
+        "DESKPROB.O88 mcopied into STIKAPPS\\: QUERY refuses, so the probe "
         "is the TITLED FALLBACK - no WF_DESK, no IF_DESK, the COMPACT "
         "layout, an ordinary 130 x 70 frame (no tag row, no last gap) with "
         "a dock tile and a title-bar drag - and its gap is white with a "
         "1-px rule, one BLIT1 (110.7); the worker's kicks reach the probe's "
-        "own DIA_WAKE (the worker arm keeps it, 110.11); and kern_small's "
+        "own STIK_WAKE (the worker arm keeps it, 110.11); and kern_small's "
         "OSAPI_GFX_DESK, laid by the probe's beat over the face's top 4 "
         "rows on request, is the desktop's dither - the cell's only runtime "
         "caller there, the titled gaps being white.",
         needs=("marty", "mtools"), timeout=600,
         wants=("build/small360.img", "build/smallk/kernel.bin",
                "build/deskprob.o88")),
-    Row("diasmall", "soak", py("tests/diasmall.py"), 35.0,
+    Row("stiksmall", "soak", py("tests/stiksmall.py"), 35.0,
         "SPEC.md 110.7: the Desk Calendar on kern_small, end to end, on "
         "MartyPC's 128KB CGA 5150 off `make small`'s system disk. There is no "
-        "OSAPI_WM_TIMER there, so the first paint HIRES THE WORKER (dia_st "
+        "OSAPI_WM_TIMER there, so the first paint HIRES THE WORKER (stik_st "
         "WORKER | HIRED), registration is never tried and NOTHING is said; a "
         "drag is saved by the worker's beat (640x200 in the state file); an "
         "appointment goes off through the same beat with ONE 880 Hz note of "
@@ -10257,7 +10257,7 @@ SOAK = [
         "through the slabs it vacated, more than 0 and no more than the "
         "first paint's calls; "
         "then two cold boots - no SYSTEM.CFG, and a "
-        "DIA row - timed to dia_boot and to ui_task with the drive's "
+        "Sticky App row - timed to stik_boot and to ui_task with the drive's "
         "counters: a boot with no row makes no disk call after its paint.",
         needs=("marty", "mtools"), timeout=1200,
         wants=("build/os8088-360.img",)),
@@ -10298,7 +10298,7 @@ SOAK = [
         "earlier Call Bob NEXT; S on Call Bob puts Dentist back to DUE (one "
         "snooze held); D dismisses; at 09:36 the snooze RE-FIRES with the "
         "chirp; and a snooze at 23:57 writes TOMORROW 00:02 into the slot, "
-        "read back off A: by tools/os88dia.py.",
+        "read back off A: by tools/os88stik.py.",
         needs=("marty", "mtools"), timeout=900,
         wants=("build/os8088-360.img",)),
     Row("deskmodal", "soak", py("tests/deskmodal.py"), 40.0,

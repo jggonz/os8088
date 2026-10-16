@@ -6299,7 +6299,7 @@ section .cold
 ; ALL OF IT IS `.cold` (SPEC.md 76.14.14.1), with api_thm_set_x and
 ; thmv_reap_x below: a theme change, a preset, a panel close and a boot are
 ; human cadence, and the three were 223 bytes of `.text` that kern_big's image
-; rung could not hold beside DIA v2's desk layer. A FAR body: every caller
+; rung could not hold beside Sticky App v2's desk layer. A FAR body: every caller
 ; far-calls COLD_SEG:thm_set - kmain_o, the settings reader, CTRL.DRV,
 ; vid_switch and api_thm_set_x - so it ends in `retf` and the 4-byte cw_thm_set
 ; shim went with the move. It keeps its NAME, not an `_x`, because the boot

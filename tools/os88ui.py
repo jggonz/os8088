@@ -600,7 +600,7 @@ class UI:
     # is over it. raise_window, close and move_window send a desk window
     # here, so a caller written for a titled window drives a widget too.
     # =========================================================================
-    _WIDGETS = {"Desk Calendar": ("DESKCAL_DIA_BSS", "DESKCAL_PAYLEN"),
+    _WIDGETS = {"Desk Calendar": ("DESKCAL_STIK_BSS", "DESKCAL_PAYLEN"),
                 "DeskProbe": (288, 0)}
 
     def _is_desk(self, w):
@@ -611,22 +611,22 @@ class UI:
         return (self._S("wm_wins") + w.i * geom.WIN_SIZE
                 - geom.KERNEL_SEG * 16) & 0xFFFF
 
-    def _wfield(self, w, name, dia=None):
-        """A byte of os88dia.inc's DIA_WIDGET state (tools/os88dia.py's
+    def _wfield(self, w, name, stik=None):
+        """A byte of os88stik.inc's STIK_WIDGET state (tools/os88stik.py's
         widget_off), read out of the widget's own segment: its image size is
         the header word at +8 of the loaded image."""
-        import os88dia
-        if dia is None:
+        import os88stik
+        if stik is None:
             k = self._WIDGETS.get(w.title)
             if k is None:
-                raise UIError("widget %r: say where its DIA state is "
-                              "(dia=(DIA_BSS, DIA_PAYLEN))" % w.title)
-            dia = tuple(getattr(os88dia, v) if isinstance(v, str) else v
+                raise UIError("widget %r: say where its Sticky App state is "
+                              "(stik=(STIK_BSS, STIK_PAYLEN))" % w.title)
+            stik = tuple(getattr(os88stik, v) if isinstance(v, str) else v
                         for v in k)
         rec = self._S("wm_wins") + w.i * geom.WIN_SIZE
         seg = struct.unpack("<H", bytes(self.m.read(rec + geom.W_SEG, 2)))[0]
         img = struct.unpack("<H", bytes(self.m.readseg(seg, 8, 2)))[0]
-        off = os88dia.widget_off(dia[0], dia[1])[name]
+        off = os88stik.widget_off(stik[0], stik[1])[name]
         return self.m.readseg(seg, img + off, 1)[0]
 
     def _above(self, w):
@@ -661,17 +661,17 @@ class UI:
                    snapshot=lambda: "menu_win = %#06x" % self._word("menu_win"))
         return self._refresh(w)
 
-    def widget_hover(self, w, on=True, limit=T_RAISE, dia=None):
+    def widget_hover(self, w, on=True, limit=T_RAISE, stik=None):
         """The pointer onto the widget's tag row (on) or off to the bare
         desktop's top left (off), and wait for the include's handle to be
-        SHOWN / for WF_HOVER to clear - the dwell is DIA_HOVER_T ticks."""
+        SHOWN / for WF_HOVER to clear - the dwell is STIK_HOVER_T ticks."""
         w = self._refresh(self._as_win(w))
         if on:
             pt = self._wpoint(w, [(w.x + 1 + 20, w.y + w.h - 6),
                                   (w.x + 1 + 160, w.y + w.h - 6)])
             self.mo.to(*pt)
-            self._wait(lambda: self._wfield(w, "dia_hv", dia) == 2,
-                       "widget %r's handle (dia_hv SHOWN)" % w.title, limit)
+            self._wait(lambda: self._wfield(w, "stik_hv", stik) == 2,
+                       "widget %r's handle (stik_hv SHOWN)" % w.title, limit)
         else:
             self.mo.to(40, 60)
             self._wait(lambda: not self._refresh(w).flags & geom.WF_HOVER,
@@ -698,13 +698,13 @@ class UI:
                    snapshot=lambda: "at %r" % (self._rect(w.i)[:2],))
         return self._refresh(w)
 
-    def widget_close(self, w, limit=T_RAISE, dia=None):
+    def widget_close(self, w, limit=T_RAISE, stik=None):
         """Hover the widget until its handle is SHOWN, then press and release
         ON the handle's x (face x 3..12, the tag row's middle) - the include
         closes through its negotiator (SPEC.md 110.11) - and wait for the
         record to go free."""
         w = self._refresh(self._as_win(w))
-        self.widget_hover(w, True, dia=dia)
+        self.widget_hover(w, True, stik=stik)
         x, y = w.x + 1 + 7, w.y + w.h - 6
         gone = lambda: all(o.i != w.i for o in self.windows())    # noqa: E731
         self.mo.click(x, y, settle=0)

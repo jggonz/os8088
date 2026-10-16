@@ -2998,7 +2998,7 @@ apic_inst_minimize:               ; DOCK.DRV's door (SPEC.md 30.4)
                                   ;          display; [gfx_color] is the theme's
                                   ;          after on Dark/Color/Windows. kern_small's
                                   ;          thm_desk IS gfx_fill_gray
-osapi_table_end:                  ; 0x0487 today (0x0475 before the DIA's
+osapi_table_end:                  ; 0x0487 today (0x0475 before the Sticky App's
                                   ; three cells, 0x046D before OSAPI_THM_SET,
                                   ; 0x0467 before OSAPI_FERR_TEXT, 0x05A8
                                   ; before pass 4's renumber). TWO cells

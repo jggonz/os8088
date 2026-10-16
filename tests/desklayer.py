@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """SPEC.md 11.103: the DESK LAYER - a window under every application window.
 
-    make && make diatest && python3 tests/desklayer.py --leg z
+    make && make stiktest && python3 tests/desklayer.py --leg z
     ...                                               --leg dock
     ...                                               --leg keys
-    make small && make diatest && python3 tests/desklayer.py --leg small
+    make small && make stiktest && python3 tests/desklayer.py --leg small
 
-`make diatest`'s diadesk360.img is the shipped 360KB system disk plus
-DESKPROB.O88 - tests/diaprobe built with -DDP_DESK: header flag OS88_F_DESK,
+`make stiktest`'s stikdesk360.img is the shipped 360KB system disk plus
+DESKPROB.O88 - tests/stikprob built with -DDP_DESK: header flag OS88_F_DESK,
 OSAPI_WM_DESK's QUERY and MAKE in its entry proc, a face of two white cards
 with the desktop's ground between them through OSAPI_GFX_DESK, and counters
-of its presses, releases and keys in its bss - with a SYSTEM.CFG DIA row and
+of its presses, releases and keys in its bss - with a SYSTEM.CFG Sticky App row and
 a DESKPROB.DAT that put its FACE at (376,184), the frame at (375,184) - a
-v2 header with DIA_HF_CONT (SPEC.md 110.11). Every assertion is the GUEST'S
+v2 header with STIK_HF_CONT (SPEC.md 110.11). Every assertion is the GUEST'S
 state: wm_zord, [menu_win], W_FLAGS, I_FLAGS, the probe's bss, breakpoints,
 and the framebuffer.
 
@@ -45,7 +45,7 @@ and the framebuffer.
               no WF_DESK, the COMPACT layout, an ordinary 130 x 70 frame with
               a title (no tag row, no last gap), a dock tile, a gap that is
               WHITE with a 1-px rule through its middle, the worker's kicks
-              reaching the probe's own DIA_WAKE, OSAPI_GFX_DESK laying the
+              reaching the probe's own STIK_WAKE, OSAPI_GFX_DESK laying the
               desktop's dither when the probe's beat is asked to (the cell's
               one runtime caller on kern_small), and a title-bar drag that
               moves it.
@@ -71,17 +71,17 @@ kernel's hover edge says WF_HOVER - and these legs:
   --leg close (row deskclose) the box arms and lights, a slide off cancels
               (the handle goes after the linger, the plate focused), the
               box's place unrevealed drags, and a press and release on it
-              closes the widget and removes its DIA row by name.
+              closes the widget and removes its Sticky App row by name.
 
-WAVE 3 (SPEC.md 110.11) MOVES THE PROBE ONTO os88dia.inc's DIA_WIDGET: its
+WAVE 3 (SPEC.md 110.11) MOVES THE PROBE ONTO os88stik.inc's STIK_WIDGET: its
 face, tag, gestures and timers are the include's, so every leg above now
 gates the INCLUDE - the tag row is compared pixel for pixel with a picture
 composed here from the guest's own font ([font_seg]:[font_base]), the
-handle comes after the dwell (DIA_HOVER_T) and goes after the linger
-(DIA_LEAVE_T), and the geometry is the layout the include picked by the
-screen's height ([dia_li]: TALL on VGA, MID on Hercules, COMPACT on CGA).
+handle comes after the dwell (STIK_HOVER_T) and goes after the linger
+(STIK_LEAVE_T), and the geometry is the layout the include picked by the
+screen's height ([stik_li]: TALL on VGA, MID on Hercules, COMPACT on CGA).
 `z` prices the focus loss too: the plate un-inverted by ONE BLIT1 inside
-dia_tagdraw and no OSAPI_GFX_DESK - plate to plate, the ground beside it is
+stik_tagdraw and no OSAPI_GFX_DESK - plate to plate, the ground beside it is
 on the glass already. Two legs are new:
 
   --leg ground (row deskground, MartyPC's VGA XT) the THEME reaches the
@@ -154,7 +154,7 @@ import os88build   # noqa: E402
 import os88ui      # noqa: E402
 import os88marty   # noqa: E402
 import os88geom as geom   # noqa: E402
-import os88dia     # noqa: E402
+import os88stik    # noqa: E402
 import os88flush   # noqa: E402
 
 TITLE = "DeskProbe"
@@ -162,23 +162,23 @@ W_ONKEY = 14                    # apps/os88api.inc
 WF_SAVEU, WF_OWNBG, WF_NOANIM = 32, 64, 0x4000
 WF_DESK = geom.WF_DESK
 IF_DESK = geom.IF_DESK
-# the probe's bss (tests/diaprobe/diaprobe.asm, DP_DESK): image + these
+# the probe's bss (tests/stikprob/stikprob.asm, DP_DESK): image + these
 DP_CLICKS, DP_UPS, DP_KEYS, DP_DESK, DP_LASTKEY, DP_PAINTS, DP_REL = \
     0, 1, 2, 3, 4, 6, 8
 DP_WAKES, DP_TDRAG, DP_ONDRAGS, DP_FOCI, DP_FOCL, DP_LCARD = \
     9, 13, 16, 17, 18, 19
-# os88dia.inc's bss after the probe's own 288 bytes (DIA_BSS: 32 of counters
+# os88stik.inc's bss after the probe's own 288 bytes (STIK_BSS: 32 of counters
 # and a 128 x 16 band), through the host tool's own arithmetic
-DP_DIA_BSS = 288
-DIA_HDR = os88dia.dia_hdr_off(DP_DIA_BSS)
-DIA_ST = os88dia.dia_st_off(DP_DIA_BSS, 0)
-WOFF = os88dia.widget_off(DP_DIA_BSS, 0)
-DIA_S_ROW, DIA_S_DIRTY = 2, 16
+DP_STIK_BSS = 288
+STIK_HDR = os88stik.stik_hdr_off(DP_STIK_BSS)
+STIK_ST = os88stik.stik_st_off(DP_STIK_BSS, 0)
+WOFF = os88stik.widget_off(DP_STIK_BSS, 0)
+STIK_S_ROW, STIK_S_DIRTY = 2, 16
 HV_HIDDEN, HV_SHOWN = 0, 2
 P_REST, P_FOCUS, P_HAND, P_ARMED = 0, 1, 2, 3
-W_FOCUS, W_ARMED = os88dia.DIA_W_FOCUS, os88dia.DIA_W_ARMED
+W_FOCUS, W_ARMED = os88stik.STIK_W_FOCUS, os88stik.STIK_W_ARMED
 
-# THE PROBE'S THREE LAYOUTS (diaprobe.asm's dp_lays), by [dia_li]: the tag
+# THE PROBE'S THREE LAYOUTS (stikprob.asm's dp_lays), by [stik_li]: the tag
 # row's height and (card, the gap under it)
 LAYOUTS = {0: (12, ((40, 8), (40, 4))),        # TALL - VGA
            1: (11, ((32, 4), (32, 4))),        # MID - Hercules, EGA
@@ -190,7 +190,7 @@ PX = (FACE_W - PW) // 2
 NX = (FACE_W - len(NAME) * 8) // 2      # the handle's name...
 GX = FACE_W - 18                        # ...and its grip
 XX, XW = 3, 10                          # the handle's close box
-XBITS = (0x8400, 0x4800, 0x3000, 0x3000, 0x4800, 0x8400)    # os88dia.inc's
+XBITS = (0x8400, 0x4800, 0x3000, 0x3000, 0x4800, 0x8400)    # os88stik.inc's
 GRIP = (0xAAA8, 0, 0, 0xAAA8, 0, 0, 0xAAA8)                 # records
 TICK = (0x0030, 0x0060, 0x00C0, 0xC180, 0x6300, 0x3600, 0x1C00, 0x0800)
 C1 = GAP = C2 = GAP2 = TAG = TY = FACE_H = LI = None
@@ -222,7 +222,7 @@ _PSYMS = {}
 
 
 def probe_sym(name):
-    """An offset in the PROBE's image: diaprobe.asm assembled again with a
+    """An offset in the PROBE's image: stikprob.asm assembled again with a
     symbol map, refused unless it is byte for byte build/deskprob.bin."""
     if not _PSYMS:
         import re
@@ -230,13 +230,13 @@ def probe_sym(name):
         wrap, mp, out = (os.path.join(tmp, n) for n in ("w.asm", "p.map",
                                                         "w.bin"))
         open(wrap, "w").write('[map symbols %s]\n%%include '
-                              '"tests/diaprobe/diaprobe.asm"\n' % mp)
+                              '"tests/stikprob/stikprob.asm"\n' % mp)
         subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
-                        "-I", "tests/diaprobe/", "-DDP_DESK", "-o", out, wrap],
+                        "-I", "tests/stikprob/", "-DDP_DESK", "-o", out, wrap],
                        check=True, cwd=ROOT)
         if open(out, "rb").read() != open(os.path.join(
                 PKGDIR, "deskprob.bin"), "rb").read():
-            raise SystemExit("diaprobe.asm does not assemble to "
+            raise SystemExit("stikprob.asm does not assemble to "
                              "deskprob.bin - `make` first")
         for line in open(mp):
             f = line.split()
@@ -258,21 +258,21 @@ class Probe(object):
         self.seg = struct.unpack_from("<H", self.m.read(
             self.rec() + geom.W_SEG, 2))[0]
         self.img = image_size()
-        self.li = self.b(WOFF["dia_li"])
+        self.li = self.b(WOFF["stik_li"])
         if self.li in LAYOUTS:
             set_layout(self.li)
 
     def hv(self):
-        return self.b(WOFF["dia_hv"])
+        return self.b(WOFF["stik_hv"])
 
     def wf(self):
-        return self.b(WOFF["dia_wf"])
+        return self.b(WOFF["stik_wf"])
 
     def tagp(self):
-        return self.b(WOFF["dia_tagp"])
+        return self.b(WOFF["stik_tagp"])
 
     def rev(self):
-        """The HANDLE is the picture on the glass (os88dia.inc's dia_tagp)."""
+        """The HANDLE is the picture on the glass (os88stik.inc's stik_tagp)."""
         return self.tagp() in (P_HAND, P_ARMED)
 
     def armed(self):
@@ -467,7 +467,7 @@ def leg_z(ui):
     check(top_i(ui) == d.i, "wm_top is STILL the Disk window")
     check(menu_win_i(ui) == p.w.i, "[menu_win] is the widget: it owns the bar")
     check(p.wf() & W_FOCUS and p.b(DP_FOCL) == 1,
-          "...and the include saw it: FOCUS, DIA_ONFOCUS(1) (wf %#x, focl %d)"
+          "...and the include saw it: FOCUS, STIK_ONFOCUS(1) (wf %#x, focl %d)"
           % (p.wf(), p.b(DP_FOCL)))
     os88marty.guest_sleep(m, 0.5)
     check(TITLE in bar_names(ui), "the bar names it: %r" % (bar_names(ui),))
@@ -502,12 +502,12 @@ def leg_z(ui):
     bad, n = tag_bad(ui, w, "focus", [(d.x, d.y, d.w + 1, d.h + 1)])
     check(not bad, "the plate is INVERSE while the widget owns the bar (%d "
           "of %d off: %r)" % (len(bad), n, bad[:6]))
-    # the trace is armed BEFORE the click, and only what dia_tagdraw itself
+    # the trace is armed BEFORE the click, and only what stik_tagdraw itself
     # lays is counted - between its entry and its ret - so the kernel's own
     # drawing for the click is outside it and the 4-tick poll cannot win a
     # race with the arming
-    td0 = p.seg * 16 + probe_sym("dia_tagdraw")
-    td1 = p.seg * 16 + probe_sym("dia_tagrows") - 1
+    td0 = p.seg * 16 + probe_sym("stik_tagdraw")
+    td1 = p.seg * 16 + probe_sym("stik_tagrows") - 1
     blit, gnd = m.sym("gfx_blit1"), m.sym("thm_desk")
     tr = os88marty.bp_trace(m, td0, td1, blit, gnd)
     with tr:
@@ -535,7 +535,7 @@ def leg_z(ui):
     check(menu_win_i(ui) == d.i, "[menu_win] is the Disk window again")
     check(dt <= 6 and not p.wf() & W_FOCUS and p.b(DP_FOCL) == 0,
           "the plate un-inverted %d tick(s) after the bar went - the 4-tick "
-          "focus poll (at most 6), DIA_ONFOCUS(0)" % dt)
+          "focus poll (at most 6), STIK_ONFOCUS(0)" % dt)
 
     print("E: closing the Disk window gives the bar to LOCATOR")
     ui.close(d)
@@ -722,14 +722,14 @@ def leg_keys(ui):
 def leg_small(ui):
     m = ui.m
     print("A: opened by hand on kern_small: QUERY refuses")
-    w = ui.path("A:/SYSTEM/DIA/DESKPROB.O88")
+    w = ui.path("A:/STIKAPPS/DESKPROB.O88")
     p = Probe(ui)
     ui.settle()
     f = p.flags()
     check(not f & WF_DESK, "no WF_DESK (W_FLAGS %#06x)" % f)
     check(p.b(DP_DESK) == 0, "the probe saw MAKE refused")
     w = p.win()
-    check(p.li == 2, "the COMPACT layout on a 200-row screen ([dia_li] %d)"
+    check(p.li == 2, "the COMPACT layout on a 200-row screen ([stik_li] %d)"
           % p.li)
     th = C1 + GAP + C2 + geom.TITLE_H + 1   # no tag row, no last gap
     check((w.w, w.h) == (FACE_W + 2, th),
@@ -759,7 +759,7 @@ def leg_small(ui):
     k0 = p.b(DP_WAKES)
     os88marty.guest_sleep(m, 5)
     k1 = p.b(DP_WAKES)
-    check(k1 != k0, "the worker's kicks reach the package's DIA_WAKE (%d -> "
+    check(k1 != k0, "the worker's kicks reach the package's STIK_WAKE (%d -> "
           "%d): the worker arm keeps it, SPEC.md 110.11" % (k0, k1))
     print("A2: OSAPI_GFX_DESK on kern_small, laid by the probe's beat")
     m.write(p.seg * 16 + p.img + DP_TDRAG, b"\x03")
@@ -867,7 +867,7 @@ def tag_picture(f, state):
             out[r][PX:PX + PW] = b.px[r]
         return out
     b = Band(FACE_W, TAG, lit=False)
-    xw = XW if TAG >= 12 else 8         # os88dia.inc's dia_boxy: a black
+    xw = XW if TAG >= 12 else 8         # os88stik.inc's stik_boxy: a black
     by = (TAG - xw) // 2                # row above it on an 11-row tag
     xi = (xw - 6) // 2
     if state == "handle":
@@ -881,7 +881,7 @@ def tag_picture(f, state):
 
 
 def card_picture(f, card, rows):
-    """A card as dp_compose composes it (diaprobe.asm), `rows` tall."""
+    """A card as dp_compose composes it (stikprob.asm), `rows` tall."""
     b = Band(FACE_W, rows)
     if card == 0:
         b.text(f, NAME, 8, 8)
@@ -1048,7 +1048,7 @@ def box_point(w):
 
 def dat(ui, m, tmp):
     try:
-        return os88dia.parse_dat(volume(m, tmp).read(
+        return os88stik.parse_dat(volume(m, tmp).read(
             "SYSTEM/APPDATA/DESKPROB.DAT"), 0, 1)
     except Exception as e:      # noqa: BLE001 - reported, not hidden
         return {"pos": False, "x": None, "y": None, "err": str(e)}
@@ -1209,15 +1209,15 @@ def leg_drag(ui, tmp):
 
     print("G: the place is saved")
     w7 = p.win()
-    hdr = lambda: struct.unpack("<HH", m.readseg(p.seg, p.img + DIA_HDR + 4, 4))
-    st = lambda: m.readseg(p.seg, p.img + DIA_ST, 1)[0]
+    hdr = lambda: struct.unpack("<HH", m.readseg(p.seg, p.img + STIK_HDR + 4, 4))
+    st = lambda: m.readseg(p.seg, p.img + STIK_ST, 1)[0]
     face = (w7.x + 1, w7.y)             # a desk window's face: one column in
-    ui._wait(lambda: hdr() == face and not st() & DIA_S_DIRTY,
+    ui._wait(lambda: hdr() == face and not st() & STIK_S_DIRTY,
              "the drag's save", 120,
-             snapshot=lambda: "header %r, dia_st %#x" % (hdr(), st()))
+             snapshot=lambda: "header %r, stik_st %#x" % (hdr(), st()))
     dd = dat(ui, m, tmp)
     check(dd["pos"] and dd["cont"] and (dd["x"], dd["y"]) == face,
-          "DESKPROB.DAT on A: holds the FACE's origin %r with DIA_HF_CONT "
+          "DESKPROB.DAT on A: holds the FACE's origin %r with STIK_HF_CONT "
           "(%r)" % (face, dd))
 
     print("H: dropped with its tag row off the glass, the beat puts it back")
@@ -1244,9 +1244,9 @@ def leg_drag(ui, tmp):
     bad, n = tag_bad(ui, w10, "rest")
     check(not bad, "...and its tag row is on the glass, the plate (%d of %d "
           "off)" % (len(bad), n))
-    ui._wait(lambda: hdr() == (w10.x + 1, w10.y) and not st() & DIA_S_DIRTY,
+    ui._wait(lambda: hdr() == (w10.x + 1, w10.y) and not st() & STIK_S_DIRTY,
              "the re-fit's save", 120,
-             snapshot=lambda: "header %r, dia_st %#x" % (hdr(), st()))
+             snapshot=lambda: "header %r, stik_st %#x" % (hdr(), st()))
 
 
 def leg_hover(ui, tmp, full=True):
@@ -1270,7 +1270,7 @@ def leg_hover(ui, tmp, full=True):
                  snapshot=lambda: "W_FLAGS %#06x wakes %d"
                  % (p.flags(), p.b(DP_WAKES)))
         os88marty.guest_sleep(m, 0.3)
-    edge_check(tr, "the reveal", 1, 0, 5, "DIA_HOVER_T's dwell")
+    edge_check(tr, "the reveal", 1, 0, 5, "STIK_HOVER_T's dwell")
     check(p.flags() & geom.WF_HOVER, "WF_HOVER is set")
     check(hovw(ui) == p.w.i, "[cur_hovw] names the widget (%r)" % hovw(ui))
     check(p.b(DP_WAKES) == (wk0 + 1) & 255, "ONE wake (%d -> %d)"
@@ -1291,7 +1291,7 @@ def leg_hover(ui, tmp, full=True):
         park(ui)
         ui._wait(lambda: not p.rev(), "the rest plate", 20)
         os88marty.guest_sleep(m, 0.3)
-    edge_check(tr, "the hide", 1, 2, 14, "DIA_LEAVE_T's linger")
+    edge_check(tr, "the hide", 1, 2, 14, "STIK_LEAVE_T's linger")
     check(not p.flags() & geom.WF_HOVER, "WF_HOVER is clear")
     check(hovw(ui) is None, "[cur_hovw] is the desktop (0)")
     check(p.b(DP_WAKES) == (wk0 + 2) & 255, "the second wake")
@@ -1396,12 +1396,12 @@ def leg_close(ui, tmp):
     m = ui.m
     p = Probe(ui)
     ui.settle()
-    st = lambda: m.readseg(p.seg, p.img + DIA_ST, 1)[0]
-    ui._wait(lambda: st() & DIA_S_ROW, "the probe's registration", 90)
+    st = lambda: m.readseg(p.seg, p.img + STIK_ST, 1)[0]
+    ui._wait(lambda: st() & STIK_S_ROW, "the probe's registration", 90)
     w = p.win()
-    cfg = os88dia.parse_cfg(volume(m, tmp).read("SYSTEM.CFG"))
-    check([r for r in cfg["rows"] if r and r["dia"]],
-          "SYSTEM.CFG on A: carries its DIA row before the close")
+    cfg = os88stik.parse_cfg(volume(m, tmp).read("SYSTEM.CFG"))
+    check([r for r in cfg["rows"] if r and r["stik"]],
+          "SYSTEM.CFG on A: carries its Sticky App row before the close")
     print("A: press the box, slide off, release: still open")
     ui.mo.to(*box_point(w))
     ui._wait(lambda: p.rev(), "the handle", 20)
@@ -1432,7 +1432,7 @@ def leg_close(ui, tmp):
     ui.mo.to(*box_point(w))
     ui._wait(lambda: p.rev(), "the handle", 20)
     # the include's own state: "not revealed" (the dwell not yet run out)
-    m.write(p.seg * 16 + p.img + WOFF["dia_hv"], bytes([HV_HIDDEN]))
+    m.write(p.seg * 16 + p.img + WOFF["stik_hv"], bytes([HV_HIDDEN]))
     with os88marty.bp_trace(m, "ui_drag") as tr:
         ui.mo._sep()
         ui.mo._edge(True)
@@ -1458,9 +1458,9 @@ def leg_close(ui, tmp):
     inst = geom.instances(m)
     check(geom.INST_MAX - 1 not in inst, "its instance is gone (%r)" % (inst,))
     os88marty.guest_sleep(m, 1.0)
-    cfg = os88dia.parse_cfg(volume(m, tmp).read("SYSTEM.CFG"))
-    rows = [r for r in cfg["rows"] if r and r["dia"]]
-    check(not rows, "SYSTEM.CFG holds no DIA row: removed by name (%r)"
+    cfg = os88stik.parse_cfg(volume(m, tmp).read("SYSTEM.CFG"))
+    rows = [r for r in cfg["rows"] if r and r["stik"]]
+    check(not rows, "SYSTEM.CFG holds no Sticky App row: removed by name (%r)"
           % (rows,))
 
 
@@ -1523,8 +1523,8 @@ def cards_bad(ui, w):
 
 
 def leg_ground(tmp):
-    img = os.path.join(tmp, "diadesk360.img")
-    shutil.copy(os.path.join(PKGDIR, "diadesk360.img"), img)
+    img = os.path.join(tmp, "stikdesk360.img")
+    shutil.copy(os.path.join(PKGDIR, "stikdesk360.img"), img)
     with os88ui.boot(img, machine="os8088_xt_vga") as ui:
         m = ui.m
         p = Probe(ui)
@@ -1583,16 +1583,16 @@ def leg_ground(tmp):
 
 
 def leg_fit(tmp):
-    tree = os88build.tree("VIDEO=ega", targets=("diadesk360.img",)).apply()
+    tree = os88build.tree("VIDEO=ega", targets=("stikdesk360.img",)).apply()
     img = os.path.join(tmp, "ega.img")
-    shutil.copy(tree.img("diadesk360.img"), img)
+    shutil.copy(tree.img("stikdesk360.img"), img)
     with os88ui.boot(img, machine="os8088_xt_vga") as ui:
         p = Probe(ui)
         ui.settle()
         vh = ui._word("vid_h")
         check(vh == 350, "the VIDEO=ega kernel's screen is 350 rows (%d)" % vh)
         check(p.li == 1, "the include picked MID by the HEIGHT, not TALL by "
-              "the adapter's kind ([dia_li] %d)" % p.li)
+              "the adapter's kind ([stik_li] %d)" % p.li)
         w = p.win()
         check((w.w, w.h) == (FACE_W + 2, FACE_H) and FACE_H == 83,
               "the frame is 130 x 83, MID's column: %r" % ((w.w, w.h),))
@@ -1614,14 +1614,14 @@ def main():
             shutil.copy(os.path.join(PKGDIR, "small360.img"), img)
             r = subprocess.run(["mcopy", "-o", "-i", img,
                                 os.path.join(PKGDIR, "deskprob.o88"),
-                                "::/SYSTEM/DIA/DESKPROB.O88"],
+                                "::/STIKAPPS/DESKPROB.O88"],
                                capture_output=True, text=True)
             if r.returncode:
                 sys.exit("mcopy failed: %s" % r.stderr)
             machine = "os8088_5150_cga_128k"
         else:
-            img = os.path.join(tmp, "diadesk360.img")
-            shutil.copy(os.path.join(PKGDIR, "diadesk360.img"), img)
+            img = os.path.join(tmp, "stikdesk360.img")
+            shutil.copy(os.path.join(PKGDIR, "stikdesk360.img"), img)
             machine = {"hovercga": os88marty.machine("os8088_5150_cga"),
                        "hoverherc": "os8088_5150_herc_gla"}.get(
                            ARGS.leg, "os8088_xt_vga")

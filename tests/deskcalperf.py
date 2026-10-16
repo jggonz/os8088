@@ -10,7 +10,7 @@ that is what this counts: a breakpoint on every DRAWING cell of the API table
 (OSAPI_FONT_RUN, OSAPI_GFX_FILL, OSAPI_GFX_BLIT1, OSAPI_GFX_DESK, ... - the
 set is read out of apps/os88api.inc by name), and at each stop the FAR
 RETURN ADDRESS read off the guest's stack, so a call is counted only when it
-came from the calendar's own segment (its include, os88dia.inc, is in that
+came from the calendar's own segment (its include, os88stik.inc, is in that
 segment too: the tag and the gaps are the widget's). MartyPC is
 cycle-accurate on a 4.77 MHz 8088, so the cycles between the first and the
 last call of a gesture are 5150 time; a stopped guest does not count cycles.
@@ -21,7 +21,7 @@ and three tasks, the clock at Wed 14 Oct 2026 09:58, v2's budgets (SPEC.md
 110.3) ASSERTED:
 
   first paint   the launch, its W_PAINT whole: <= 20 calls TALL, <= 14 COMPACT
-  About down    the About card taken down by a key: dia_redrawr over the
+  About down    the About card taken down by a key: stik_redrawr over the
                 card's rows alone - FEWER calls than the first paint (the
                 slabs those 62 rows reach, v4 review)
   day select    a press on the 15th, a day with nothing on it: <= 5 - today's
@@ -29,7 +29,7 @@ and three tasks, the clock at Wed 14 Oct 2026 09:58, v2's budgets (SPEC.md
   month         PgDn: <= 8 - card 1 from the nav down and card 2
   tick          Space on a selected task: EXACTLY 1, its box's BLIT1
   reveal/hide   the pointer onto the tag row and away: 1 / 3 (the include's)
-  idle          three DIA beats AND a minute boundary with nothing due:
+  idle          three Sticky App beats AND a minute boundary with nothing due:
                 MUST BE ZERO - the beats counted at the package's own dc_tick
   reminder      09:00 `Standup` was missed (DUE at launch) and is dismissed;
                 at 10:00 `Review` goes off: card 3's slabs, 2 calls (COMPACT:
@@ -40,11 +40,11 @@ and three tasks, the clock at Wed 14 Oct 2026 09:58, v2's budgets (SPEC.md
   uncover       a Disk window over the left half of the cards dragged clear:
                 the widget's W_PAINT over what it vacated, the slabs that
                 meet OSAPI_WM_DAMAGE - more than 0 and no more than the
-                first paint (PERFORMANCE.md Part 5's last DIA row)
+                first paint (PERFORMANCE.md Part 5's last Sticky App row)
 
 and on the VGA XT, two cold boots of the shipped 360KB disk - with no
-SYSTEM.CFG, and with one whose trailer holds the calendar's DIA row - timed
-from reset to `dia_boot` (the desktop painted) and to `ui_task` (the
+SYSTEM.CFG, and with one whose trailer holds the calendar's Sticky App row - timed
+from reset to `stik_boot` (the desktop painted) and to `ui_task` (the
 autostart done), with the drive's own counters.
 
 Every number is PRINTED as the table PERFORMANCE.md Part 5 and SPEC.md 110.6
@@ -65,9 +65,9 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 import os88ui      # noqa: E402
 import os88marty   # noqa: E402
-import os88dia     # noqa: E402
+import os88stik    # noqa: E402
 import os88sym     # noqa: E402
-from deskcaledit import Cal, TITLE, disk_with, DIA_S_DIRTY   # noqa: E402
+from deskcaledit import Cal, TITLE, disk_with, STIK_S_DIRTY  # noqa: E402
 from deskcaltask import pkg_sym                 # noqa: E402
 
 ROOT = os.path.join(HERE, "..")
@@ -158,7 +158,7 @@ def fixture():
     appts = [(TODAY, 540, "Standup"), (TODAY, 600, "Review")]
     tasks = [("Buy milk", False), ("Call plumber", True), ("Post letter",
                                                            False)]
-    return os88dia.dat(os88dia.deskcal(appts, tasks, lead=0))
+    return os88stik.dat(os88stik.deskcal(appts, tasks, lead=0))
 
 
 def ui_leg(tmp, machine, label, results):
@@ -174,14 +174,14 @@ def ui_leg(tmp, machine, label, results):
             # UNCOVER the widget and repaint that part in the same count
             box["c"] = Cal(ui, tmp, check=check, bare=False)
             c = box["c"]
-            st_off = os88dia.dia_st_off(os88dia.DESKCAL_DIA_BSS,
-                                        os88dia.DESKCAL_PAYLEN)
+            st_off = os88stik.stik_st_off(os88stik.DESKCAL_STIK_BSS,
+                                        os88stik.DESKCAL_PAYLEN)
             ui._wait(lambda: c.bss(st_off)[0] & 3 == 3,
                      "the first tick's registration", 120)
             # 09:00 Standup was missed: its FIRED and DUE marks owe the one
             # save a launch makes by itself (SPEC.md 110.5.2)
             m.disk(reset=True)
-            ui._wait(lambda: not c.st() & DIA_S_DIRTY,
+            ui._wait(lambda: not c.st() & STIK_S_DIRTY,
                      "the missed reminder's save", 60)
             box["miss"] = m.disk()
             os88marty.guest_sleep(m, 1.0)
@@ -220,7 +220,7 @@ def ui_leg(tmp, machine, label, results):
                               extra=tuple(extra) + (comp_at,))
             if not tag:
                 wv = c.win()
-                ty = wv.y + wv.h - os88dia.DESKCAL_GEO[c.li()]["tag"]
+                ty = wv.y + wv.h - os88stik.DESKCAL_GEO[c.li()]["tag"]
                 hits = [h for h in hits if not (
                     h["addr"] in CELLS and h.get("regs")
                     and h["regs"]["bx"] >= ty)]
@@ -245,7 +245,7 @@ def ui_leg(tmp, machine, label, results):
         print("%s: a press on the 15th" % label)
         c.front()
         sel = gesture(lambda: ui.mo.click(*c.day_xy(15)), tag=False)
-        check(c.bss(os88dia.DESKCAL_BSS_SEL)[0] == 15,
+        check(c.bss(os88stik.DESKCAL_BSS_SEL)[0] == 15,
               "%s: the 15th is selected" % label)
         print("%s: day select       %s" % (label, sel))
         r["day_select"] = sel.row()
@@ -265,7 +265,7 @@ def ui_leg(tmp, machine, label, results):
             while c.pane() != 1:
                 c.press(c.heading())
         c.press(c.task_text(0))
-        check(c.bss(os88dia.DESKCAL_BSS_SELK)[0] == 2, "%s: a task is "
+        check(c.bss(os88stik.DESKCAL_BSS_SELK)[0] == 2, "%s: a task is "
               "selected" % label)
         tick = gesture(lambda: m.key("Space"))
         print("%s: tick             %s" % (label, tick))
@@ -279,12 +279,12 @@ def ui_leg(tmp, machine, label, results):
         print("%s: the handle revealed and hidden" % label)
         wv = c.win()
         ui.mo.to(40, 60)
-        ui._wait(lambda: c.wb("dia_hv") == 0, "the handle down", 30)
+        ui._wait(lambda: c.wb("stik_hv") == 0, "the handle down", 30)
         tagpt = (wv.x + 1 + 20, wv.y + wv.h - 6)
         rev = gesture(lambda: (ui.mo.to(*tagpt), ui._wait(
-            lambda: c.wb("dia_tagp") == 2, "the handle", 20)), 0.5)
+            lambda: c.wb("stik_tagp") == 2, "the handle", 20)), 0.5)
         hide = gesture(lambda: (ui.mo.to(40, 60), ui._wait(
-            lambda: c.wb("dia_tagp") in (0, 1), "the plate", 30)), 0.5)
+            lambda: c.wb("stik_tagp") in (0, 1), "the plate", 30)), 0.5)
         print("%s: reveal / hide    %s / %s" % (label, rev, hide))
         r["reveal"], r["hide"] = rev.row(), hide.row()
         check(rev.n == 1 and hide.n <= 3, "%s: a reveal is 1 call and a hide "
@@ -295,7 +295,7 @@ def ui_leg(tmp, machine, label, results):
 
         def lnow():
             return struct.unpack("<H", bytes(c.bss(
-                os88dia.DESKCAL_BSS_LNOW, 2)))[0]
+                os88stik.DESKCAL_BSS_LNOW, 2)))[0]
         ui._wait(lambda: lnow() == 9 * 60 + 58, "a beat at 09:58", 10)
         lnow0 = lnow()
         hits, _ = measure(m, lambda: os88marty.guest_sleep(m, 8.0),
@@ -322,7 +322,7 @@ def ui_leg(tmp, machine, label, results):
         m.disk(reset=True)
         rem = gesture(lambda: ui._wait(lambda: c.c3()[0] == 2,
                                        "Review to ring", 60), 3.0)
-        ui._wait(lambda: not c.st() & DIA_S_DIRTY,
+        ui._wait(lambda: not c.st() & STIK_S_DIRTY,
                  "the save Review's firing owed", 60)
         d = m.disk()
         print("%s: reminder         %s; the save: %d reads, %d writes"
@@ -335,7 +335,7 @@ def ui_leg(tmp, machine, label, results):
         r["reminder"] = dict(rem.row(), save_reads=d["reads"],
                              save_writes=d["writes"])
 
-        # THE UNCOVER (PERFORMANCE.md Part 5's last DIA row, SPEC.md 11.103.6
+        # THE UNCOVER (PERFORMANCE.md Part 5's last Sticky App row, SPEC.md 11.103.6
         # risk 3): a widget is the BACKMOST window and has no drag cache, so
         # an application window moved off it repaints what it vacated through
         # the widget's own W_PAINT, which recomposes only the slabs that meet
@@ -363,7 +363,7 @@ def boot_once(img, machine):
     with os88marty.launch(img, machine=os88marty.machine(machine),
                           boot=False) as m:
         out = {}
-        for name in ("dia_boot", "ui_task"):
+        for name in ("stik_boot", "ui_task"):
             m.bp_exec(name)
             m.run()
             if m.wait_stop(240.0) is None:
@@ -372,7 +372,7 @@ def boot_once(img, machine):
             out[name] = (int(st["cycles"]), m.disk())
         m.bp_exec()
         m.run()
-    a, b = out["dia_boot"], out["ui_task"]
+    a, b = out["stik_boot"], out["ui_task"]
     return {"to_paint_ms": round(a[0] * 1000.0 / HZ),
             "autostart_ms": round((b[0] - a[0]) * 1000.0 / HZ),
             "to_ui_task_ms": round(b[0] * 1000.0 / HZ),
@@ -387,19 +387,19 @@ def boot_leg(tmp, results):
     row = disk_with(tmp, "boot-row.img", fixture())
     cfg = os.path.join(tmp, "SYSTEM.CFG")
     subprocess.run([sys.executable, os.path.join(ROOT, "tools",
-                                                 "os88dia.py"),
-                    "cfg", "-o", cfg, "--dia",
-                    "A:SYSTEM/DIA/DESKCAL.O88=Calendar"], check=True,
+                                                 "os88stik.py"),
+                    "cfg", "-o", cfg, "--stik",
+                    "A:STIKAPPS/DESKCAL.O88=Calendar"], check=True,
                    stdout=subprocess.DEVNULL)
     subprocess.run(["mcopy", "-o", "-i", row, cfg, "::/SYSTEM.CFG"],
                    check=True, stdout=subprocess.DEVNULL,
                    env=dict(os.environ, MTOOLS_SKIP_CHECK="1"))
     b0 = boot_once(plain, "os8088_xt_vga")
-    print("boot, no DIA row:   %r" % b0)
+    print("boot, no Sticky App row:   %r" % b0)
     b1 = boot_once(row, "os8088_xt_vga")
     print("boot, the row:      %r" % b1)
     check(b0["reads_after_paint"] == 0,
-          "a boot with no DIA row makes NO disk call after its paint (%d)"
+          "a boot with no Sticky App row makes NO disk call after its paint (%d)"
           % b0["reads_after_paint"])
     check(b1["reads_after_paint"] > 0, "the row's boot reads the calendar "
           "(%d calls)" % b1["reads_after_paint"])

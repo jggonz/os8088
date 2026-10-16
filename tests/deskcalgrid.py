@@ -42,7 +42,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 import os88ui      # noqa: E402
 import os88marty   # noqa: E402
 import os88geom as geom   # noqa: E402
-import os88dia     # noqa: E402
+import os88stik    # noqa: E402
 
 ROOT = os.path.join(HERE, "..")
 BDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
@@ -74,7 +74,7 @@ def main():
 
     with os88ui.boot(sysimg, machine="os8088_xt_vga") as ui:
         m = ui.m
-        w = ui.path("A:/SYSTEM/DIA/DESKCAL.O88")
+        w = ui.path("A:/STIKAPPS/DESKCAL.O88")
         wseg = struct.unpack_from("<H", m.read(
             ui._S("wm_wins") + w.i * geom.WIN_SIZE + geom.W_SEG, 2))[0]
 
@@ -82,13 +82,13 @@ def main():
             raw = m.readseg(wseg, image, 50)
             return {"grid": list(raw[:42]),
                     "y": struct.unpack_from("<H", raw,
-                                            os88dia.DESKCAL_BSS_Y)[0],
-                    "m": raw[os88dia.DESKCAL_BSS_M],
-                    "sel": raw[os88dia.DESKCAL_BSS_SEL],
+                                            os88stik.DESKCAL_BSS_Y)[0],
+                    "m": raw[os88stik.DESKCAL_BSS_M],
+                    "sel": raw[os88stik.DESKCAL_BSS_SEL],
                     "today": (struct.unpack_from(
-                        "<H", raw, os88dia.DESKCAL_BSS_TY)[0],
-                        raw[os88dia.DESKCAL_BSS_TM],
-                        raw[os88dia.DESKCAL_BSS_TD])}
+                        "<H", raw, os88stik.DESKCAL_BSS_TY)[0],
+                        raw[os88stik.DESKCAL_BSS_TM],
+                        raw[os88stik.DESKCAL_BSS_TD])}
 
         def set_clock(y, mo, d):
             m.write(ui._S("clk_day"), bytes([d, mo]))

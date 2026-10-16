@@ -1,31 +1,31 @@
 #!/usr/bin/env python3
-"""os88dia - the host's own reader and writer for a DIA's two stores
+"""os88stik - the host's own reader and writer for a Sticky App's two stores
 (SPEC.md 110).
 
-A Desktop Integrated Application keeps two things in two places, each where
+A Sticky App keeps two things in two places, each where
 the OS already keeps that kind of state:
 
-  * WHICH widgets are open and where each was launched from - one DIA ROW per
+  * WHICH widgets are open and where each was launched from - one Sticky App ROW per
     widget in SYSTEM.CFG's desktop trailer (SPEC.md 26.8.6, 110.2): a 128-byte
     shortcut record with KIND 1 and 'D' at +3;
   * its WINDOW'S PLACE and its data - SYSTEM\\APPDATA\\<NAME>.DAT (SPEC.md
-    19.9, 110.5): a 16-byte DIA header, then the application's payload. The
+    19.9, 110.5): a 16-byte Sticky App header, then the application's payload. The
     Desk Calendar's payload v1 is coded here too (DESKCAL_*).
 
 This file is an INDEPENDENT SECOND READER, written from SPEC.md and not from
-the kernel's source: every fixture `make diatest` boots is written by it, and
+the kernel's source: every fixture `make stiktest` boots is written by it, and
 every assertion a gate makes about what the machine wrote back is read by it.
 It mirrors the kernel's boot reader (ovl_sc_load) in what it REFUSES, so a
 fixture it accepts is one the machine accepts.
 
-    os88dia.py cfg -o SYSTEM.CFG [--want BITS] [--dia A:SYSTEM/DIA/X.O88=Cap]...
+    os88stik.py cfg -o SYSTEM.CFG [--want BITS] [--stik A:STIKAPPS/X.O88=Cap]...
                                  [--short A:PATH=Caption@kind,cell]...
-    os88dia.py dat -o X.DAT --x 303 --y 184 --screen 640x480 [--payver 1]
+    os88stik.py dat -o X.DAT --x 303 --y 184 --screen 640x480 [--payver 1]
                    [--paylen 0 | --deskcal] [--cont]
                  --cont: x,y are a widget's FACE origin (header +3 bit 1,
-                 DIA_HF_CONT, SPEC.md 110.11), not a titled frame's
-    os88dia.py dump FILE         a SYSTEM.CFG or a .DAT, as JSON
-    os88dia.py --selfcheck       round-trip and refusal checks; exit 0 = good
+                 STIK_HF_CONT, SPEC.md 110.11), not a titled frame's
+    os88stik.py dump FILE         a SYSTEM.CFG or a .DAT, as JSON
+    os88stik.py --selfcheck       round-trip and refusal checks; exit 0 = good
 """
 
 import argparse
@@ -40,14 +40,14 @@ SC_MAX = 15
 SC_R_VOL = 0
 SC_R_SLOT = 1
 SC_R_KIND = 2
-SC_R_DIA = 3
+SC_R_STIK = 3
 SC_R_PATH = 4
 SC_PATHMAX = 45
 SC_R_CAP = 49
 SC_CAPMAX = 13
 SC_R_HDR = 62
 SC_R_BODY = 64
-DIA_MARK = 0x44                 # 'D'
+STIK_MARK = 0x44                 # 'D'
 DESK_SC0 = 9                    # the pins block: zones 0..8
 DVOL_MAX = 8
 DSL_PIN, DSL_GONE, DSL_SLOT = 0x40, 0x80, 0x3F
@@ -58,18 +58,18 @@ CFG_FBUF = 163                  # SPEC.md 2.8.7: a file this size or less
                                 # carries no trailer the boot will read.
                                 # kern_big's - the only kernel that reads a
                                 # trailer - and DERIVED there (driver.inc), so
-                                # tests/unit/t_dia.py evaluates the kernel's
+                                # tests/unit/t_stik.py evaluates the kernel's
                                 # own expression with nasm and holds this to
                                 # it: it was 131 until #248's two pin keys,
                                 # and 152 until #249's 'TP' theme preset
 CFG_MAXFILE = 4096              # ...and one this size or more is refused
 
 # --- SPEC.md 110.5 ------------------------------------------------------------
-DIA_HDR_SIZE = 16
-DIA_HDR_MAGIC = b"DA"
-DIA_HDR_VER = 1
-DIA_HF_POS = 1
-DIA_HF_CONT = 2                 # v2 (SPEC.md 110.11): +4/+6 are the FACE's
+STIK_HDR_SIZE = 16
+STIK_HDR_MAGIC = b"DA"
+STIK_HDR_VER = 1
+STIK_HF_POS = 1
+STIK_HF_CONT = 2                 # v2 (SPEC.md 110.11): +4/+6 are the FACE's
 TITLE_H = 18                    # ...and a v1 file's frame is a title bar up
 
 # --- the Desk Calendar's payload v1 (SPEC.md 110.3, 110.5) --------------------
@@ -92,10 +92,10 @@ TIME_ALLDAY = 0xFFFF
 DESKCAL_SNOOZE = 5              # deskcal's DC_SNOOZE, minutes
 
 # --- where a RUNNING package keeps things, as offsets past its image ---------
-# The gates read these out of a live guest (tests/deskcalgrid.py, diaboot.py
-# and their kin); tests/unit/t_dia.py has NASM evaluate the package's own
+# The gates read these out of a live guest (tests/deskcalgrid.py, stikboot.py
+# and their kin); tests/unit/t_stik.py has NASM evaluate the package's own
 # equs and holds these equal, so a moved field fails `make` and not a soak.
-DESKCAL_DIA_BSS = 1024          # deskcal.asm's DC_BSS: its own state first
+DESKCAL_STIK_BSS = 1024          # deskcal.asm's DC_BSS: its own state first
 DESKCAL_BSS_GRID = 0            # 42 bytes, the month on show (Monday first)
 DESKCAL_BSS_Y = 42              # dw the year on show
 DESKCAL_BSS_M = 44              # db its month
@@ -126,8 +126,8 @@ DESKCAL_C3 = {0: "none", 1: "next", 2: "ringing"}
 
 
 # The calendar's three layouts (deskcal's dc_lays and dc_geos, SPEC.md
-# 110.3), by [dia_li]: 0 TALL (VGA), 1 MID (Hercules, EGA), 2 COMPACT (CGA).
-# Rows are CARD-LOCAL, x face-relative. t_dia reads dc_geos' bytes out of the
+# 110.3), by [stik_li]: 0 TALL (VGA), 1 MID (Hercules, EGA), 2 COMPACT (CGA).
+# Rows are CARD-LOCAL, x face-relative. t_stik reads dc_geos' bytes out of the
 # assembled package and holds DESKCAL_GEO_FIELDS to them, in this order
 DESKCAL_GEO_FIELDS = ("BIGS", "BIGY", "DOWX", "DOWY", "MONY", "NAVY", "NAVL",
                       "NAVR", "NAVM", "HDRB", "WKY", "W0", "WP", "DOTY",
@@ -184,37 +184,37 @@ def deskcal_card_top(li, card):
     return sum(h + g for h, g in DESKCAL_GEO[li]["cards"][:card])
 
 
-def dia_st_off(dia_bss, paylen):
-    """os88dia.inc's dia_st, as an offset past the image: the DIA header,
+def stik_st_off(stik_bss, paylen):
+    """os88stik.inc's stik_st, as an offset past the image: the Sticky App header,
     the payload, the 128-byte row, the 13-byte name, the banked folder word
     and its drive byte."""
-    return dia_bss + DIA_HDR_SIZE + paylen + SC_REC + 13 + 2 + 1
+    return stik_bss + STIK_HDR_SIZE + paylen + SC_REC + 13 + 2 + 1
 
 
-def dia_hdr_off(dia_bss):
-    """The DIA header in the package's bss (os88dia.inc's dia_file)."""
-    return dia_bss
+def stik_hdr_off(stik_bss):
+    """The Sticky App header in the package's bss (os88stik.inc's stik_file)."""
+    return stik_bss
 
 
-# os88dia.inc's DIA_WIDGET fields (SPEC.md 110.11), after v1's dia_nx - in
-# the include's order; tests/unit/t_dia.py has NASM evaluate each against a
-# DIA_WIDGET build and holds this table to it
-WIDGET_FIELDS = (("dia_wf", 1), ("dia_hv", 1), ("dia_tagp", 1),
-                 ("dia_press", 1), ("dia_li", 1), ("dia_ci", 1),
-                 ("dia_lay", 2), ("dia_fh", 2), ("dia_fx", 2), ("dia_fy", 2),
-                 ("dia_cy", 2), ("dia_ch", 2), ("dia_dmg", 8), ("dia_pp", 2),
-                 ("dia_gh", 2), ("dia_tbeat", 2), ("dia_thov", 2),
-                 ("dia_qx", 2), ("dia_qy", 2), ("dia_pre", 1), ("dia_sc", 1),
-                 ("dia_ss", 2), ("dia_sr0", 2), ("dia_sr1", 2), ("dia_ty", 2))
-DIA_HV = {0: "hidden", 1: "dwell", 2: "shown", 3: "linger"}
-DIA_W_DESK, DIA_W_FOCUS, DIA_W_ARMED = 1, 2, 4
-DIA_P = {0: "rest", 1: "focus", 2: "handle", 3: "armed", 0xFF: "none"}
+# os88stik.inc's STIK_WIDGET fields (SPEC.md 110.11), after v1's stik_nx - in
+# the include's order; tests/unit/t_stik.py has NASM evaluate each against a
+# STIK_WIDGET build and holds this table to it
+WIDGET_FIELDS = (("stik_wf", 1), ("stik_hv", 1), ("stik_tagp", 1),
+                 ("stik_press", 1), ("stik_li", 1), ("stik_ci", 1),
+                 ("stik_lay", 2), ("stik_fh", 2), ("stik_fx", 2), ("stik_fy", 2),
+                 ("stik_cy", 2), ("stik_ch", 2), ("stik_dmg", 8), ("stik_pp", 2),
+                 ("stik_gh", 2), ("stik_tbeat", 2), ("stik_thov", 2),
+                 ("stik_qx", 2), ("stik_qy", 2), ("stik_pre", 1), ("stik_sc", 1),
+                 ("stik_ss", 2), ("stik_sr0", 2), ("stik_sr1", 2), ("stik_ty", 2))
+STIK_HV = {0: "hidden", 1: "dwell", 2: "shown", 3: "linger"}
+STIK_W_DESK, STIK_W_FOCUS, STIK_W_ARMED = 1, 2, 4
+STIK_P = {0: "rest", 1: "focus", 2: "handle", 3: "armed", 0xFF: "none"}
 
 
-def widget_off(dia_bss, paylen):
-    """{field: offset past the image} for a DIA_WIDGET package's state -
-    dia_st, then v1's 37 bytes (dia_st .. dia_nx), then WIDGET_FIELDS."""
-    off = dia_st_off(dia_bss, paylen) + 1 + 2 + 2 + 2 + 1 + 1 + 24 + 1 + 2 + 1
+def widget_off(stik_bss, paylen):
+    """{field: offset past the image} for a STIK_WIDGET package's state -
+    stik_st, then v1's 37 bytes (stik_st .. stik_nx), then WIDGET_FIELDS."""
+    off = stik_st_off(stik_bss, paylen) + 1 + 2 + 2 + 2 + 1 + 1 + 24 + 1 + 2 + 1
     out = {}
     for name, size in WIDGET_FIELDS:
         out[name] = off
@@ -232,7 +232,7 @@ def _cstr(b):
 
 
 def _path(p):
-    """`A:SYSTEM/DIA/X.O88` -> (0, 'SYSTEM\\DIA\\X.O88')."""
+    """`A:STIKAPPS/X.O88` -> (0, 'STIKAPPS\\X.O88')."""
     vol = 0
     if len(p) >= 2 and p[1] == ":":
         vol = ord(p[0].upper()) - ord("A")
@@ -245,7 +245,7 @@ def _path(p):
 # =============================================================================
 
 def row(vol, path, cap, kind=1, mark=0, slot=0xFF, body=None):
-    """One 128-byte record. `mark` is +3's byte: DIA_MARK for a DIA row,
+    """One 128-byte record. `mark` is +3's byte: STIK_MARK for a Sticky App row,
     0x5C ('\\') for what a drag-out writes, 0 for a package's link."""
     p = path.encode("latin-1")
     c = cap.encode("latin-1")
@@ -254,7 +254,7 @@ def row(vol, path, cap, kind=1, mark=0, slot=0xFF, body=None):
     if len(c) > SC_CAPMAX - 1:
         raise DiaError("caption %r is over %d characters" % (cap, SC_CAPMAX - 1))
     r = bytearray(SC_REC)
-    r[SC_R_VOL], r[SC_R_SLOT], r[SC_R_KIND], r[SC_R_DIA] = vol, slot, kind, mark
+    r[SC_R_VOL], r[SC_R_SLOT], r[SC_R_KIND], r[SC_R_STIK] = vol, slot, kind, mark
     r[SC_R_PATH:SC_R_PATH + len(p)] = p
     r[SC_R_CAP:SC_R_CAP + len(c)] = c
     r[SC_R_HDR:SC_R_HDR + 2] = b"\x01\x10"
@@ -267,9 +267,9 @@ def row(vol, path, cap, kind=1, mark=0, slot=0xFF, body=None):
     return bytes(r)
 
 
-def dia_row(vol, path, cap, body=None):
-    """A DIA row as CTRL.DRV keeps it: KIND 1, the mark, no cell."""
-    return row(vol, path, cap, kind=1, mark=DIA_MARK, slot=0xFF, body=body)
+def stik_row(vol, path, cap, body=None):
+    """A Sticky App row as CTRL.DRV keeps it: KIND 1, the mark, no cell."""
+    return row(vol, path, cap, kind=1, mark=STIK_MARK, slot=0xFF, body=body)
 
 
 def settings_head(records=b""):
@@ -310,7 +310,7 @@ def parse_row(r):
     r = bytes(r)
     return {
         "vol": r[SC_R_VOL], "slot": r[SC_R_SLOT], "kind": r[SC_R_KIND],
-        "mark": r[SC_R_DIA], "dia": r[SC_R_DIA] == DIA_MARK,
+        "mark": r[SC_R_STIK], "stik": r[SC_R_STIK] == STIK_MARK,
         "path": _cstr(r[SC_R_PATH:SC_R_PATH + SC_PATHMAX - 1]),
         "cap": _cstr(r[SC_R_CAP:SC_R_CAP + SC_CAPMAX - 1]),
         "hdr": list(r[SC_R_HDR:SC_R_HDR + 2]),
@@ -352,10 +352,10 @@ def parse_cfg(data):
             "pins": list(data[end:end + DESK_SC0]), "trailer": True}
 
 
-def dia_rows(data):
-    """Just the DIA rows a SYSTEM.CFG carries, in file order."""
+def stik_rows(data):
+    """Just the Sticky App rows a SYSTEM.CFG carries, in file order."""
     return [r for r in parse_cfg(data)["rows"]
-            if r is not None and r["dia"] and r["kind"] == 1]
+            if r is not None and r["stik"] and r["kind"] == 1]
 
 
 # =============================================================================
@@ -363,47 +363,47 @@ def dia_rows(data):
 # =============================================================================
 
 def dat(payload=b"", x=None, y=None, screen=None, payver=1, cont=False):
-    """A DIA state file: header + payload. A position needs all of x, y and
+    """A Sticky App state file: header + payload. A position needs all of x, y and
     the screen it was saved on; `cont` says they are a widget's FACE origin
-    (DIA_HF_CONT), which only a DIA_WIDGET package writes."""
+    (STIK_HF_CONT), which only a STIK_WIDGET package writes."""
     payload = bytes(payload)
     pos = x is not None
     if pos and (y is None or screen is None):
         raise DiaError("a position is x, y AND the screen it was saved on")
     sw, sh = screen if pos else (0, 0)
-    hdr = DIA_HDR_MAGIC + struct.pack(
-        "<BBHHHHBBH", DIA_HDR_VER,
-        (DIA_HF_POS if pos else 0) | (DIA_HF_CONT if cont else 0),
+    hdr = STIK_HDR_MAGIC + struct.pack(
+        "<BBHHHHBBH", STIK_HDR_VER,
+        (STIK_HF_POS if pos else 0) | (STIK_HF_CONT if cont else 0),
         x if pos else 0, y if pos else 0, sw, sh, payver, 0, len(payload))
-    assert len(hdr) == DIA_HDR_SIZE
+    assert len(hdr) == STIK_HDR_SIZE
     return hdr + payload
 
 
 def parse_dat(data, paylen, payver):
-    """The package's own test (os88dia.inc's dia_load): the EXACT size, the
+    """The package's own test (os88stik.inc's stik_load): the EXACT size, the
     magic, the header version, the payload's version and length. Raises
     DiaError naming the first refusal - a file that is not exactly this is
     DAMAGED to the package, never partly read."""
     data = bytes(data)
-    if len(data) != DIA_HDR_SIZE + paylen:
-        raise DiaError("%d bytes, not %d" % (len(data), DIA_HDR_SIZE + paylen))
-    if data[:2] != DIA_HDR_MAGIC:
+    if len(data) != STIK_HDR_SIZE + paylen:
+        raise DiaError("%d bytes, not %d" % (len(data), STIK_HDR_SIZE + paylen))
+    if data[:2] != STIK_HDR_MAGIC:
         raise DiaError("no 'DA' magic")
     ver, flags, x, y, sw, sh, pv, z, ln = struct.unpack_from(
         "<BBHHHHBBH", data, 2)
-    if ver != DIA_HDR_VER:
+    if ver != STIK_HDR_VER:
         raise DiaError("header version %d" % ver)
     if pv != payver:
         raise DiaError("payload version %d, not %d" % (pv, payver))
     if ln != paylen:
         raise DiaError("payload length %d, not %d" % (ln, paylen))
-    cont = bool(flags & DIA_HF_CONT)
-    out = {"pos": bool(flags & DIA_HF_POS), "x": x, "y": y, "cont": cont,
+    cont = bool(flags & STIK_HF_CONT)
+    out = {"pos": bool(flags & STIK_HF_POS), "x": x, "y": y, "cont": cont,
            # the FACE a widget reads it as (SPEC.md 110.11): its own origin,
            # or a v1 file's titled frame - a border in, a title bar down
            "face": [x, y] if cont else [x + 1, y + TITLE_H],
            "screen": [sw, sh], "payver": pv, "paylen": ln,
-           "payload": data[DIA_HDR_SIZE:]}
+           "payload": data[STIK_HDR_SIZE:]}
     return out
 
 
@@ -519,11 +519,11 @@ def selfcheck():
         fails.append("did not refuse: " + what)
 
     # the row, field by field
-    r = dia_row(0, "SYSTEM\\DIA\\DESKCAL.O88", "Calendar")
+    r = stik_row(0, "STIKAPPS\\DESKCAL.O88", "Calendar")
     ok(len(r) == SC_REC, "a row is 128 bytes")
     ok(r[2] == 1 and r[3] == 0x44 and r[1] == 0xFF, "KIND 1, 'D', no cell")
-    ok(r[4:4 + 22] == b"SYSTEM\\DIA\\DESKCAL.O88" and r[4 + 22] == 0,
-       "the path below the root, 22 of 45")
+    ok(r[4:4 + 20] == b"STIKAPPS\\DESKCAL.O88" and r[4 + 20] == 0,
+       "the path below the root, 20 of 45")
     refuses(lambda: row(0, "X" * 45, "c"), "a 45-character path")
     refuses(lambda: row(0, "X", "C" * 13), "a 13-character caption")
 
@@ -533,14 +533,14 @@ def selfcheck():
     f = cfg([s, r])
     p = parse_cfg(f)
     ok(p["trailer"] and len(p["rows"]) == 2, "two rows back")
-    ok(p["rows"][0]["mark"] == 0x5C and not p["rows"][0]["dia"],
-       "a drag-made '\\' at +3 is NOT a DIA row")
-    ok(p["rows"][1]["dia"] and p["rows"][1]["path"]
-       == "SYSTEM\\DIA\\DESKCAL.O88", "the DIA row back")
+    ok(p["rows"][0]["mark"] == 0x5C and not p["rows"][0]["stik"],
+       "a drag-made '\\' at +3 is NOT a Sticky App row")
+    ok(p["rows"][1]["stik"] and p["rows"][1]["path"]
+       == "STIKAPPS\\DESKCAL.O88", "the Sticky App row back")
     ok(p["head"][:len(settings_head())] == settings_head(),
        "the settings head untouched")
     ok(p["pins"] == [0xFF] * DESK_SC0, "nine pins, none placed")
-    ok(len(dia_rows(f)) == 1, "dia_rows finds one")
+    ok(len(stik_rows(f)) == 1, "stik_rows finds one")
     ok(cfg([]) == settings_head(), "nothing to keep, no trailer")
     ok(len(cfg([r])) > CFG_FBUF and parse_cfg(cfg([r]))["trailer"],
        "one row behind the bare head still clears CFG_FBUF")
@@ -568,7 +568,7 @@ def selfcheck():
     ok(not parse_cfg(settings_head() + b"\0" * 20)["trailer"],
        "a file of CFG_FBUF or less carries no trailer")
 
-    # the DIA header and the probe's empty payload
+    # the Sticky App header and the probe's empty payload
     d = dat(b"", x=303, y=184, screen=(640, 480))
     ok(len(d) == 16 and d[:2] == b"DA", "an empty payload is 16 bytes")
     q = parse_dat(d, 0, 1)
@@ -587,7 +587,7 @@ def selfcheck():
        dat(b"", x=1, y=2, screen=(3, 4), cont=True)[3] == 3,
        "a face origin round-trips with +3 = POS | CONT")
     w = widget_off(288, 0)
-    ok(w["dia_wf"] == dia_st_off(288, 0) + 37 and w["dia_hv"] == w["dia_wf"] + 1,
+    ok(w["stik_wf"] == stik_st_off(288, 0) + 37 and w["stik_hv"] == w["stik_wf"] + 1,
        "the widget's fields follow v1's 37 bytes")
 
     # the Desk Calendar's payload
@@ -635,8 +635,8 @@ def selfcheck():
        "the slot reads back beside the snoozed appointment")
 
     for f_ in fails:
-        print("os88dia: FAIL  %s" % f_)
-    print("os88dia: selfcheck %s (%d failure(s))"
+        print("os88stik: FAIL  %s" % f_)
+    print("os88stik: selfcheck %s (%d failure(s))"
           % ("ok" if not fails else "FAILED", len(fails)))
     return 1 if fails else 0
 
@@ -654,7 +654,7 @@ def _jsonable(o):
 def main(argv):
     if "--selfcheck" in argv:
         return selfcheck()
-    ap = argparse.ArgumentParser(prog="os88dia.py", description=__doc__,
+    ap = argparse.ArgumentParser(prog="os88stik.py", description=__doc__,
                                  formatter_class=argparse.RawTextHelpFormatter)
     sub = ap.add_subparsers(dest="cmd")
     c = sub.add_parser("cfg", help="write a SYSTEM.CFG with a desktop trailer")
@@ -662,12 +662,12 @@ def main(argv):
     c.add_argument("--want", type=lambda v: int(v, 0), default=None,
                    help="the drivers wanted, SPEC.md 51.3's 'DW' bitmap - "
                         "HDD.DRV is bit 1")
-    c.add_argument("--dia", action="append", default=[],
-                   help="VOL:PATH=Caption - a DIA row")
+    c.add_argument("--stik", action="append", default=[],
+                   help="VOL:PATH=Caption - a Sticky App row")
     c.add_argument("--short", action="append", default=[],
                    help="VOL:PATH=Caption@kind,cell - a drag-made shortcut "
                         "('\\' at +3), placed in that cell")
-    d = sub.add_parser("dat", help="write a DIA state file")
+    d = sub.add_parser("dat", help="write a Sticky App state file")
     d.add_argument("-o", required=True)
     d.add_argument("--x", type=int)
     d.add_argument("--y", type=int)
@@ -677,7 +677,7 @@ def main(argv):
     d.add_argument("--deskcal", action="store_true",
                    help="an EMPTY Desk Calendar payload (v1, 2,440 bytes)")
     d.add_argument("--cont", action="store_true",
-                   help="x,y are a widget's FACE origin (DIA_HF_CONT)")
+                   help="x,y are a widget's FACE origin (STIK_HF_CONT)")
     u = sub.add_parser("dump", help="a SYSTEM.CFG or a .DAT, as JSON")
     u.add_argument("file")
     u.add_argument("--paylen", type=int)
@@ -686,10 +686,10 @@ def main(argv):
 
     if a.cmd == "cfg":
         rows = []
-        for spec in a.dia:
+        for spec in a.stik:
             where, cap = spec.split("=", 1)
             vol, path = _path(where)
-            rows.append(dia_row(vol, path, cap))
+            rows.append(stik_row(vol, path, cap))
         for spec in a.short:
             where, rest = spec.split("=", 1)
             cap, how = rest.rsplit("@", 1)
@@ -702,8 +702,8 @@ def main(argv):
             rec = b"DW" + bytes([1, 2]) + struct.pack("<H", a.want)
         data = cfg(rows, head=settings_head(rec))
         open(a.o, "wb").write(data)
-        print("os88dia: %s %d bytes, %d row(s), %d DIA"
-              % (a.o, len(data), len(rows), len(a.dia)))
+        print("os88stik: %s %d bytes, %d row(s), %d Sticky App"
+              % (a.o, len(data), len(rows), len(a.stik)))
         return 0
     if a.cmd == "dat":
         if a.deskcal:
@@ -715,7 +715,7 @@ def main(argv):
         data = dat(payload, x=a.x, y=a.y, screen=screen, payver=payver,
                    cont=a.cont)
         open(a.o, "wb").write(data)
-        print("os88dia: %s %d bytes" % (a.o, len(data)))
+        print("os88stik: %s %d bytes" % (a.o, len(data)))
         return 0
     if a.cmd == "dump":
         data = open(a.file, "rb").read()
@@ -723,7 +723,7 @@ def main(argv):
             out = parse_cfg(data)
             out["head"] = len(out["head"])
         else:
-            n = a.paylen if a.paylen is not None else len(data) - DIA_HDR_SIZE
+            n = a.paylen if a.paylen is not None else len(data) - STIK_HDR_SIZE
             out = parse_dat(data, n, a.payver)
             if n == DESKCAL_PAYLEN:
                 out["deskcal"] = parse_deskcal(out["payload"])

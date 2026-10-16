@@ -144,7 +144,7 @@ dc_build:
     xor ax, ax
     stosw
     stosw
-    mov cl, [DIA_PAY + DCP_NAPPT]
+    mov cl, [STIK_PAY + DCP_NAPPT]
     cmp cl, DCP_MAXAPPT
     ja .done                    ; not ours to trust: mark nothing
     xor ch, ch
@@ -156,7 +156,7 @@ dc_build:
     mul dx                      ; AX = (y - 1980) * 16
     or al, [dc_m]
     mov dx, ax
-    mov si, DIA_PAY + DCP_APPT0
+    mov si, STIK_PAY + DCP_APPT0
 .a:
     mov ax, [si + DCA_DATE]
     mov bx, ax

@@ -352,7 +352,7 @@ ICON_SOLID  equ 0                ; the record's first byte for a picture whose
 ; --- the desk layer (SPEC.md 11.103) -----------------------------------------
 ; A DESK WINDOW lives under every application window: never raised, no title
 ; bar, frame, shadow or dock tile, the bar and the keys only while it was the
-; last thing pressed. apps/os88dia.inc is the way to use these; a package
+; last thing pressed. apps/os88stik.inc is the way to use these; a package
 ; that calls either ships beside its own kernel (SPEC.md 110.8).
 %define OSAPI_WM_DESK       KERNEL_SEG:0x047B   ; AL = 0 QUERY: CF=0 this
                                  ; kernel has the layer (kern_small: CF=1, and
@@ -1307,7 +1307,7 @@ OSAPI_LD_EVER   equ 6            ; ...and the AL that means THAT FILE IS AN
                                  ;   +0   1  the volume, 0 = A:
                                  ;   +1   1  the cell you would like
                                  ;   +2   1  0 document, 1 package, 2 folder
-                                 ;   +3   1  OSAPI_DIA_MARK for a DIA's row
+                                 ;   +3   1  OSAPI_STIK_MARK for a Sticky App's row
                                  ;           (SPEC.md 110.2; KIND must be 1),
                                  ;           else stored as 0
                                  ;   +4  45  the path BELOW THE ROOT, NUL:
@@ -1325,12 +1325,12 @@ OSAPI_LD_EVER   equ 6            ; ...and the AL that means THAT FILE IS AN
                                  ; (withdraw at detach); a package the link
                                  ; in zone AH, ES:SI = the record it added -
                                  ; CF=1 if that zone no longer holds it (a
-                                 ; zone is reused). AH = 0xFF: the DIA row
+                                 ; zone is reused). AH = 0xFF: the Sticky App row
                                  ; whose path's FINAL component is your
                                  ; record's - a zone does not survive a boot.
                                  ; Both strings are terminated by the kernel
                                  ; whatever you put in them.
-                                 ; A DIA record (+3 = OSAPI_DIA_MARK) is ONE
+                                 ; A Sticky App record (+3 = OSAPI_STIK_MARK) is ONE
                                  ; ROW PER WIDGET: an add whose name has a row
                                  ; already UPDATES it in place when the volume
                                  ; or path differ and writes NOTHING when they
@@ -1340,12 +1340,12 @@ OSAPI_LD_EVER   equ 6            ; ...and the AL that means THAT FILE IS AN
 OSAPI_DI_VOL    equ 0           ; a package's link record, field by field
 OSAPI_DI_CELL   equ 1
 OSAPI_DI_KIND   equ 2
-OSAPI_DI_DIA    equ 3           ; the DIA mark's byte (SPEC.md 110.2)
+OSAPI_DI_STIK   equ 3           ; the Sticky App mark's byte (SPEC.md 110.2)
 OSAPI_DI_PATH   equ 4
 OSAPI_DI_CAP    equ 49
 OSAPI_DI_BODY   equ 64
 OSAPI_DI_SIZE   equ 128
-OSAPI_DIA_MARK  equ 'D'         ; +3 of a DIA row: a remembered WIDGET
+OSAPI_STIK_MARK equ 'D'         ; +3 of a Sticky App row: a remembered WIDGET
 
 ; --- a LOADER hands its identity to one of its own PARTS (SPEC.md 20.12.10) ---
 ; A package whose image is a small LOADER, whose parts include a full package

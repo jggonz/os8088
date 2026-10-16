@@ -6,7 +6,7 @@ missed. v2: there is NO ALERT on a firing any more.
     make && python3 tests/deskcalremind.py
 
 The SHIPPED 360KB system disk copied to a scratch file, with a DESKCAL.DAT
-that tools/os88dia.py wrote put into SYSTEM\\APPDATA by mtools, on MartyPC's
+that tools/os88stik.py wrote put into SYSTEM\\APPDATA by mtools, on MartyPC's
 VGA XT (TALL: card 3 is its own card). The machine's clock is SET by writing
 the live `clk_*` fields - the same block OSAPI_CLK_GET reads (SPEC.md 37.96)
 - so each minute the test needs is ten guest seconds away rather than an
@@ -64,17 +64,17 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 import os88ui      # noqa: E402
 import os88marty   # noqa: E402
-import os88dia     # noqa: E402
+import os88stik    # noqa: E402
 import os88geom as geom   # noqa: E402
-from deskcaledit import Cal, TITLE, disk_with, DIA_S_DIRTY   # noqa: E402
-DIA_S_ROW = 2                           # os88dia.inc's dia_st: row granted
+from deskcaledit import Cal, TITLE, disk_with, STIK_S_DIRTY  # noqa: E402
+STIK_S_ROW = 2                           # os88stik.inc's stik_st: row granted
 from deskcaltask import pkg_sym                 # noqa: E402
 
 TODAY = (2026, 10, 14)
 TOMORROW = (2026, 10, 15)
 TONE_CELL = 0x0060 * 16 + 0x00D3        # OSAPI_SND_TONE (os88api.inc)
 TOAST_AT = 0x0060 * 16 + 0x02AA         # OSAPI_TOAST
-B = os88dia
+B = os88stik
 
 fails = []
 
@@ -110,7 +110,7 @@ class Rem(object):
 
     def appts(self):
         """The payload as it is in MEMORY, by text."""
-        p = bytes(self.c.bss(B.DESKCAL_DIA_BSS + B.DIA_HDR_SIZE,
+        p = bytes(self.c.bss(B.DESKCAL_STIK_BSS + B.STIK_HDR_SIZE,
                              B.DESKCAL_PAYLEN))
         return dict((a["text"], a) for a in B.parse_deskcal(p)["appts"])
 
@@ -121,7 +121,7 @@ class Rem(object):
         return self.appts().get(text, {}).get("due")
 
     def idx(self, text):
-        p = bytes(self.c.bss(B.DESKCAL_DIA_BSS + B.DIA_HDR_SIZE,
+        p = bytes(self.c.bss(B.DESKCAL_STIK_BSS + B.STIK_HDR_SIZE,
                              B.DESKCAL_PAYLEN))
         return [a["text"] for a in B.parse_deskcal(p)["appts"]].index(text)
 
@@ -130,7 +130,7 @@ class Rem(object):
         k, a, _ = self.c.c3()
         if k != 2:
             return None
-        p = bytes(self.c.bss(B.DESKCAL_DIA_BSS + B.DIA_HDR_SIZE,
+        p = bytes(self.c.bss(B.DESKCAL_STIK_BSS + B.STIK_HDR_SIZE,
                              B.DESKCAL_PAYLEN))
         return B.parse_deskcal(p)["appts"][a]["text"]
 
@@ -172,8 +172,8 @@ def main():
             print("A: the launch sums up what it missed")
             txt = ui.wait_toast(says="missed", limit=60)
             check(txt == "1 missed reminder", "the toast says %r" % txt)
-            ui._wait(lambda: c.st() & DIA_S_ROW, "the registration", 60,
-                     snapshot=lambda: "dia_st = %#x" % c.st())
+            ui._wait(lambda: c.st() & STIK_S_ROW, "the registration", 60,
+                     snapshot=lambda: "stik_st = %#x" % c.st())
             os88marty.guest_sleep(m, 1.0)
             txt, _ = ui.toast()
             check(txt == "1 missed reminder", "after the registration the "
@@ -225,9 +225,9 @@ def main():
             check(r.due("Call Bob") and r.ringing() == "Dentist",
                   "09:31: Call Bob went off too (DUE) and card 3 still rings "
                   "Dentist, the first due (%r)" % (r.ringing(),))
-            ui._wait(lambda: not c.st() & DIA_S_DIRTY,
+            ui._wait(lambda: not c.st() & STIK_S_DIRTY,
                      "the save the firings owed (nothing holds it)", 60,
-                     snapshot=lambda: "dia_st %#x" % c.st())
+                     snapshot=lambda: "stik_st %#x" % c.st())
             c.front()
             c.press(c.link(1))
             check(not r.due("Dentist") and r.ringing() == "Call Bob",

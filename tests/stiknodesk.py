@@ -1,37 +1,37 @@
 #!/usr/bin/env python3
-"""SPEC.md 11.103.10: with NO DESK.DRV on the system disk, a DIA row still
+"""SPEC.md 11.103.10: with NO DESK.DRV on the system disk, a Sticky App row still
 comes up at boot - as a TITLED widget - and its row is kept.
 
-    make && python3 tests/dianodesk.py [--only absent|present|bdrive]
+    make && python3 tests/stiknodesk.py [--only absent|present|bdrive]
 
-diamiss's shape, one boot per leg on MartyPC's VGA XT. Each leg is the
+stikmiss's shape, one boot per leg on MartyPC's VGA XT. Each leg is the
 SHIPPED 360KB system disk copied to a scratch file, with a SYSTEM.CFG that
-tools/os88dia.py writes - one DIA row, A:SYSTEM\\DIA\\DESKCAL.O88 - put on
+tools/os88stik.py writes - one Sticky App row, A:STIKAPPS\\DESKCAL.O88 - put on
 it by mtools; leg `absent` also DELETES DESK.DRV from the copy (mdel), and
 asserts on the host that the file is gone from it and was on the original,
 so a fixture that never had the module cannot pass for one that lost it.
 
   absent  DESK.DRV deleted:
-    A  the boot reaches the desktop and the Desk Calendar is UP - dia_boot is
+    A  the boot reaches the desktop and the Desk Calendar is UP - stik_boot is
        resident (SPEC.md 110.4), so the relaunch does not need the module;
     B  it is TITLED: no WF_DESK, a title bar (not WF_FULL) - its QUERY was
        refused (mod_need found no file) and it took kern_small's path;
     C  the module is NOT held: mod_tab's MOD_DESK row is 0 and every DKDFP
        slot still names mod_gone;
-    D  its row is KEPT: still the DIA row (+3 = 'D'), with no desktop cell -
+    D  its row is KEPT: still the Sticky App row (+3 = 'D'), with no desktop cell -
        a refused QUERY is not a missing target, and nothing downgrades it;
-    E  THE VOLUME IS PUT BACK: read at an exec breakpoint on dia_boot's
+    E  THE VOLUME IS PUT BACK: read at an exec breakpoint on stik_boot's
        RETURN, when every sc_open bracket has closed and the widget has run
        nothing yet, the open bracket's pair (drv_vol_cwd / drv_vol_drv) is
        the boot root and so is the machine - [dsk_cwd] = 0 and [disk_drive] =
        [dsk_bootvol]. The load (twice: the loader's step 5 and the QUERY) ran
        a drv_vol bracket INSIDE sc_open's, which keeps one static pair, and
        without desk_need's save the outer restore left the machine in
-       SYSTEM\DIA (cluster 89 on this disk). It is NOT read once the window
+       STIKAPPS. It is NOT read once the window
        is up: by then the widget's first tick has registered its row through
        the settings core - a drv_vol bracket of its own, banked wherever the
        machine stands - and its own file I/O has walked to its folder, so
-       both name SYSTEM\DIA on any build, which is not sc_open's doing.
+       both name STIKAPPS on any build, which is not sc_open's doing.
   present the same disk with DESK.DRV left on it - the control:
     A  the calendar is up, B a DESK window (WF_DESK, no title bar), C the
        module HELD (the row's segment non-zero, the hover slot not mod_gone),
@@ -44,7 +44,7 @@ so a fixture that never had the module cannot pass for one that lost it.
        the B: drive) - every claim again, and E is the DRIVE half of the
        pair: the boot ends on A:, where it was, and not mounted on B:.
 
-**BREAK IT ON PURPOSE** (docs/WRITING-TESTS.md 1): move dia_boot's loop into
+**BREAK IT ON PURPOSE** (docs/WRITING-TESTS.md 1): move stik_boot's loop into
 DESK.DRV (the cut design's first draft) and `absent` A fails - no window at
 all; drop desk_need's save of drv_vol_cwd / drv_vol_drv and E fails on both
 legs; take the loader's step-5 `call desk_need` out and `present` F fails; make osapi_wm_desk_x's QUERY answer CF = 0 without mod_need and
@@ -62,13 +62,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 import os88marty   # noqa: E402
 import os88ui      # noqa: E402
-import os88dia     # noqa: E402
+import os88stik    # noqa: E402
 import os88flush   # noqa: E402
 import os88geom as geom  # noqa: E402
 
 ROOT = os.path.join(HERE, "..")
 BDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
-DESK_SC0 = os88dia.DESK_SC0
+DESK_SC0 = os88stik.DESK_SC0
 TITLE = "Desk Calendar"
 MOD_DESK = 7                    # kernel/mod.inc (SPEC.md 11.103.10)
 MODR_SIZE = 4
@@ -100,9 +100,9 @@ def fixture(tmp, leg):
     shutil.copy(os.path.join(BDIR, "os8088-360.img"), img)
     cfg = os.path.join(tmp, "SYSTEM.CFG")
     vol = "B" if leg == "bdrive" else "A"
-    subprocess.run([sys.executable, os.path.join(ROOT, "tools", "os88dia.py"),
-                    "cfg", "-o", cfg, "--dia",
-                    "%s:SYSTEM/DIA/DESKCAL.O88=Calendar" % vol], check=True,
+    subprocess.run([sys.executable, os.path.join(ROOT, "tools", "os88stik.py"),
+                    "cfg", "-o", cfg, "--stik",
+                    "%s:STIKAPPS/DESKCAL.O88=Calendar" % vol], check=True,
                    stdout=subprocess.DEVNULL)
     subprocess.run(["mcopy", "-o", "-i", img, cfg, "::/SYSTEM.CFG"],
                    check=True, stdout=subprocess.DEVNULL, env=MTENV)
@@ -121,22 +121,22 @@ def leg(name, tmp):
     absent = name == "absent"
     bimg = None
     if name == "bdrive":        # B: is the shipped system disk again, so its
-        bimg = os.path.join(tmp, "nodesk-b.img")    # SYSTEM\DIA\ holds
+        bimg = os.path.join(tmp, "nodesk-b.img")    # STIKAPPS\ holds
         shutil.copy(os.path.join(BDIR, "os8088-360.img"), bimg)  # DESKCAL
     print("%s:" % name)
     with os88marty.launch(img, apps=bimg,
                           machine=os88marty.machine("os8088_xt_vga", None),
                           boot=False) as m:
         # E's reading is taken FIRST, at the one instant it means anything:
-        # dia_boot's return, when every sc_open bracket has closed and the
+        # stik_boot's return, when every sc_open bracket has closed and the
         # widget has run nothing yet. Read after the window is up, it is not
         # sc_open's result any more - the widget's first tick registers its
-        # row through the settings core (os88dia.inc's dia_beat: mod_need
+        # row through the settings core (os88stik.inc's stik_beat: mod_need
         # MOD_SETS, a drv_vol bracket of its own, banked wherever the machine
         # stands), and its state-file save walks to its own folder, so
-        # [dsk_cwd] and the pair both name SYSTEM\DIA on any build. That was
+        # [dsk_cwd] and the pair both name STIKAPPS on any build. That was
         # this row's first E, and it failed for that reason on all three legs
-        m.bp_exec("dia_boot")
+        m.bp_exec("stik_boot")
         m.run()
         hit = m.wait_stop(120)
         ret = None
@@ -192,15 +192,15 @@ def leg(name, tmp):
                   "every DKDFP slot points into it (%r)" % flat)
         print(" D: the row is kept")
         sseg = ui._word("sc_seg")
-        r = os88dia.parse_row(bytes(m.read(sseg << 4, os88dia.SC_REC)))
+        r = os88stik.parse_row(bytes(m.read(sseg << 4, os88stik.SC_REC)))
         zb = m.read(ui._S("desk_zslot") + DESK_SC0, 1)[0]
-        check(r["dia"] and r["kind"] == 1 and zb == 0xFF,
-              "still the DIA row (+3 = %#x), with no cell (%#x)"
+        check(r["stik"] and r["kind"] == 1 and zb == 0xFF,
+              "still the Sticky App row (+3 = %#x), with no cell (%#x)"
               % (r["mark"], zb))
         print(" E: the volume is put back")
-        check(at_ret, "dia_boot was entered and returned (%r)" % hit)
+        check(at_ret, "stik_boot was entered and returned (%r)" % hit)
         check(pcwd == 0 and pdrv == boot,
-              "at dia_boot's return the open bracket's pair is the boot "
+              "at stik_boot's return the open bracket's pair is the boot "
               "root: drv_vol_cwd %#x, drv_vol_drv %d (boot %d)"
               % (pcwd, pdrv, boot))
         check(cwd == 0 and drv == boot,
@@ -218,14 +218,14 @@ def main():
     only = None
     if "--only" in sys.argv:
         only = sys.argv[sys.argv.index("--only") + 1]
-    tmp = tempfile.mkdtemp(prefix="dianodesk-")
+    tmp = tempfile.mkdtemp(prefix="stiknodesk-")
     try:
         for name in ("absent", "present", "bdrive"):
             if only in (None, name):
                 leg(name, tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    print("dianodesk: %s" % ("PASS" if not fails else
+    print("stiknodesk: %s" % ("PASS" if not fails else
                              "FAIL (%d): %s" % (len(fails), "; ".join(fails))))
     return 1 if fails else 0
 

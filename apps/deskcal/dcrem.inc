@@ -1,7 +1,7 @@
 ; =============================================================================
 ; apps/deskcal/dcrem.inc - the Desk Calendar's REMINDERS (SPEC.md 110.3, v2)
 ;
-; The DIA beat (dc_tick, every 36 ticks) reads the clock; when the MINUTE has
+; The Sticky App beat (dc_tick, every 36 ticks) reads the clock; when the MINUTE has
 ; changed it re-fires a SNOOZED appointment whose slot is reached, or fires
 ; the first of today's armed, unfired, timed appointments whose moment -
 ; max(0, time - lead) - is at or before now: FIRED and DUE set, a chirp, a
@@ -20,7 +20,7 @@
 DC3_NONE    equ 0               ; [dc_c3k]: card 3 says `No reminders today`,
 DC3_NEXT    equ 1               ; ...the next armed one (or the snoozed one),
 DC3_RING    equ 2               ; ...or RINGS the first DUE one
-DC_SNOOZE   equ 5               ; minutes (DIA-LAYER-PLAN.md 7, decision 7)
+DC_SNOOZE   equ 5               ; minutes (STICKY-APPS-LAYER-PLAN.md 7, decision 7)
 
 ; dc_tpack - BX = TODAY, FAT-packed (dc_pack's shape for [dc_ty..dc_td]).
 ; Every other register kept
@@ -114,7 +114,7 @@ dc_due:
     push si
     push di
     call dc_tpack               ; BX = today
-    mov di, [DIA_PAY + DCP_NAPPT]
+    mov di, [STIK_PAY + DCP_NAPPT]
     and di, 0FFh                ; DI = how many
 .l:
     xor ah, ah
@@ -151,7 +151,7 @@ dc_due:
 ; SI = its record; CF = 1 none. Every other register kept
 dc_flagged:
     push cx
-    mov cl, [DIA_PAY + DCP_NAPPT]
+    mov cl, [STIK_PAY + DCP_NAPPT]
     xor ch, ch
     xor al, al
     jcxz .no
@@ -187,11 +187,11 @@ dc_rpass:
     jc .due                     ; minute - and it rings again
     push bx
     call dc_tpack
-    cmp [DIA_PAY + DCP_SNZD], bx
+    cmp [STIK_PAY + DCP_SNZD], bx
     pop bx
     jb .snz
     ja .due
-    mov dx, [DIA_PAY + DCP_SNZT]
+    mov dx, [STIK_PAY + DCP_SNZT]
     cmp dx, [dc_now]
     ja .due
 .snz:
@@ -244,14 +244,14 @@ dc_ring:
     mov cx, DCA_TMAX            ; at most the field's own 25, NUL'd: a file's
     call dc_copyz               ; record need not be
     mov ax, 880                 ; THE CHIRP: 880 Hz, then 660 on a beat four
-    mov cx, 4                   ; ticks out (dia_nx) - one tone channel, so
-    test byte [dia_st], DIA_S_WORKER    ; the second note is a second ask.
+    mov cx, 4                   ; ticks out (stik_nx) - one tone channel, so
+    test byte [stik_st], STIK_S_WORKER   ; the second note is a second ask.
     jz .two                     ; kern_small's worker has begun its next
     mov cl, 8                   ; 36-tick sleep before this beat ran: one
     jmp short .tone             ; longer note there
 .two:
     mov byte [dc_chirp], 1
-    mov byte [dia_nx], 4
+    mov byte [stik_nx], 4
 .tone:
     mov dl, 40h
     call OSAPI_SND_TONE         ; refused (a louder owner): no matter
@@ -295,8 +295,8 @@ dc_snooze:
     sub ax, 24 * 60
     call dc_tomorrow
 .slot:
-    mov [DIA_PAY + DCP_SNZT], ax
-    mov [DIA_PAY + DCP_SNZD], bx
+    mov [STIK_PAY + DCP_SNZT], ax
+    mov [STIK_PAY + DCP_SNZD], bx
     call dc_touch
     call dc_c3sync
     pop si
@@ -349,7 +349,7 @@ dc_c3calc:
     mov byte [dc_c3k], DC3_NONE
     mov dx, 0FFFFh              ; DX = the best minute so far
     call dc_tpack               ; BX = today
-    mov cl, [DIA_PAY + DCP_NAPPT]
+    mov cl, [STIK_PAY + DCP_NAPPT]
     xor ch, ch
     xor al, al
     jcxz .snz
@@ -376,9 +376,9 @@ dc_c3calc:
     mov ah, DCA_SNOOZED
     call dc_flagged
     jc .x
-    cmp [DIA_PAY + DCP_SNZD], bx
+    cmp [STIK_PAY + DCP_SNZD], bx
     jne .x                      ; another day's: it rings at the first minute
-    mov cx, [DIA_PAY + DCP_SNZT]
+    mov cx, [STIK_PAY + DCP_SNZT]
     cmp cx, dx
     jae .x
     mov byte [dc_c3k], DC3_NEXT
@@ -417,7 +417,7 @@ dc_c3sync:
     or cl, cl
     jz .x
 .chg:
-    cmp byte [dia_li], 2
+    cmp byte [stik_li], 2
     je .slot
     cmp byte [dc_abon], 0
     jne .x                      ; About up: its dismissal paints the face
@@ -507,9 +507,9 @@ dc_armed:
     push cx
     push si
     call dc_tpack
-    mov cl, [DIA_PAY + DCP_NAPPT]
+    mov cl, [STIK_PAY + DCP_NAPPT]
     xor ch, ch
-    mov si, DIA_PAY + DCP_APPT0
+    mov si, STIK_PAY + DCP_APPT0
     jcxz .no
 .l:
     cmp [si + DCA_DATE], bx

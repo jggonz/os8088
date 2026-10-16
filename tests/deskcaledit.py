@@ -5,11 +5,11 @@ edited, deleted, refused at the limits - read back off the guest's own disk.
     make && python3 tests/deskcaledit.py
 
 The SHIPPED 360KB system disk copied to a scratch file, with a DESKCAL.DAT
-that tools/os88dia.py wrote put into SYSTEM\\APPDATA by mtools, on MartyPC's
+that tools/os88stik.py wrote put into SYSTEM\\APPDATA by mtools, on MartyPC's
 VGA XT. The machine's clock is set to Wed 14 October 2026 before the
 calendar opens, so "the selected day" is a date this file knows. Every
 assertion about the data is about the STATE FILE as the guest wrote it -
-flushed off the emulated drive and parsed by tools/os88dia.py, the
+flushed off the emulated drive and parsed by tools/os88stik.py, the
 independent reader - and not about the package's memory.
 
 Boot 1, a DAMAGED file (its appointment count is 60, past the table):
@@ -67,14 +67,14 @@ import os88ui      # noqa: E402
 import os88marty   # noqa: E402
 import os88geom as geom   # noqa: E402
 import os88flush   # noqa: E402
-import os88dia     # noqa: E402
+import os88stik    # noqa: E402
 
 ROOT = os.path.join(HERE, "..")
 BDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
 TITLE = "Desk Calendar"
 TODAY = (2026, 10, 14)
-DIA_ST = os88dia.dia_st_off(os88dia.DESKCAL_DIA_BSS, os88dia.DESKCAL_PAYLEN)
-DIA_S_DIRTY, DIA_S_DAMAGED = 16, 8
+STIK_ST = os88stik.stik_st_off(os88stik.DESKCAL_STIK_BSS, os88stik.DESKCAL_PAYLEN)
+STIK_S_DIRTY, STIK_S_DAMAGED = 16, 8
 
 fails = []
 
@@ -104,12 +104,12 @@ def disk_with(tmp, name, dat):
 
 class Cal(object):
     """One running calendar: its bss, its state file on A:, its keys - and
-    its GEOMETRY, v2's three cards (SPEC.md 110.3), from tools/os88dia.py's
-    DESKCAL_GEO, which t_dia holds to the package's own dc_geos."""
+    its GEOMETRY, v2's three cards (SPEC.md 110.3), from tools/os88stik.py's
+    DESKCAL_GEO, which t_stik holds to the package's own dc_geos."""
 
     def __init__(self, ui, tmp, check=check, before=None, today=TODAY,
                  bare=True):
-        """`before`, when given, runs with SYSTEM\\DIA open and the
+        """`before`, when given, runs with STIKAPPS open and the
         double-click not yet made - so a caller can set the clock to the
         very minute the entry proc will read. `bare` closes the folder
         window the launch was made from: a widget is UNDER every window, so
@@ -120,17 +120,17 @@ class Cal(object):
         m.write(ui._S("clk_day"), bytes([today[2], today[1]]))
         m.write(ui._S("clk_year"), struct.pack("<H", today[0]))
         if before is None:
-            w = ui.path("A:/SYSTEM/DIA/DESKCAL.O88")
+            w = ui.path("A:/STIKAPPS/DESKCAL.O88")
         else:
-            ui.path("A:/SYSTEM/DIA")
+            ui.path("A:/STIKAPPS")
             before()
             w = ui.open("DESKCAL.O88")
         check(w is not None and w.title == TITLE, "the calendar opened")
         self.slot = w.i
         self.wseg = struct.unpack_from("<H", m.read(
             ui._S("wm_wins") + w.i * geom.WIN_SIZE + geom.W_SEG, 2))[0]
-        self.woff = os88dia.widget_off(os88dia.DESKCAL_DIA_BSS,
-                                       os88dia.DESKCAL_PAYLEN)
+        self.woff = os88stik.widget_off(os88stik.DESKCAL_STIK_BSS,
+                                       os88stik.DESKCAL_PAYLEN)
         if bare:
             for o in list(ui.windows()):
                 if o.i != self.slot and o.visible:
@@ -144,23 +144,23 @@ class Cal(object):
         return struct.unpack("<H", bytes(self.bss(off, 2)))[0]
 
     def wb(self, name):
-        """A byte of os88dia.inc's widget state (dia_li, dia_hv, ...)."""
+        """A byte of os88stik.inc's widget state (stik_li, stik_hv, ...)."""
         return self.bss(self.woff[name])[0]
 
     def st(self):
-        return self.bss(DIA_ST)[0]
+        return self.bss(STIK_ST)[0]
 
     def ed(self):
-        return self.bss(os88dia.DESKCAL_BSS_ED)[0]
+        return self.bss(os88stik.DESKCAL_BSS_ED)[0]
 
     def c3(self):
         """Card 3: (kind 0 none / 1 next / 2 RINGING, appointment, time)."""
-        return (self.bss(os88dia.DESKCAL_BSS_C3K)[0],
-                self.bss(os88dia.DESKCAL_BSS_C3A)[0],
-                self.word(os88dia.DESKCAL_BSS_C3T))
+        return (self.bss(os88stik.DESKCAL_BSS_C3K)[0],
+                self.bss(os88stik.DESKCAL_BSS_C3A)[0],
+                self.word(os88stik.DESKCAL_BSS_C3T))
 
     def pane(self):
-        return self.bss(os88dia.DESKCAL_BSS_PANE)[0]
+        return self.bss(os88stik.DESKCAL_BSS_PANE)[0]
 
     def win(self):
         for o in self.ui.windows():
@@ -173,10 +173,10 @@ class Cal(object):
 
     # --- the geometry --------------------------------------------------------
     def li(self):
-        return self.wb("dia_li")
+        return self.wb("stik_li")
 
     def g(self):
-        return os88dia.DESKCAL_GEO[self.li()]
+        return os88stik.DESKCAL_GEO[self.li()]
 
     def face(self):
         w = self.win()
@@ -188,7 +188,7 @@ class Cal(object):
     def at(self, card, x, y):
         """Card `card`'s point (x, y) on the glass."""
         fx, fy = self.face()
-        return fx + x, fy + os88dia.deskcal_card_top(self.li(), card) + y
+        return fx + x, fy + os88stik.deskcal_card_top(self.li(), card) + y
 
     def dayc(self):
         """Card 2's index: the day card (TALL / MID) or the slot (COMPACT)."""
@@ -223,7 +223,7 @@ class Cal(object):
 
     def day_xy(self, day):
         g = self.g()
-        i = list(self.bss(os88dia.DESKCAL_BSS_GRID, 42)).index(day)
+        i = list(self.bss(os88stik.DESKCAL_BSS_GRID, 42)).index(day)
         return self.at(0, 4 + 24 * (i % 7) + 12,
                        g["W0"] + g["WP"] * (i // 7) + 3)
 
@@ -263,14 +263,14 @@ class Cal(object):
         its `+N more` pager - the user's own route - and return its line."""
         g = self.g()
         for _ in range(64):
-            top = self.bss(os88dia.DESKCAL_BSS_ATOP)[0]
-            n = self.bss(os88dia.DESKCAL_BSS_ACNT)[0]
+            top = self.bss(os88stik.DESKCAL_BSS_ATOP)[0]
+            n = self.bss(os88stik.DESKCAL_BSS_ACNT)[0]
             page = g["AN"] if n <= g["AN"] else g["AN"] - 1
             if top <= k < top + page:
                 return k - top
             print("        DBG top %d n %d page %d pager at %r lit %d" % (
                 top, n, page, self.line(g["AN"] - 1),
-                self.bss(os88dia.DESKCAL_BSS_LIT)[0]))
+                self.bss(os88stik.DESKCAL_BSS_LIT)[0]))
             self.press(self.line(g["AN"] - 1))
         raise SystemExit("the agenda never paged to appointment %d" % k)
 
@@ -294,8 +294,8 @@ class Cal(object):
     def saved(self, what):
         """Wait for the edit's save, then the state file off A:."""
         os88marty.guest_sleep(self.m, 1.0)
-        self.ui._wait(lambda: not self.st() & DIA_S_DIRTY, what, 60,
-                      snapshot=lambda: "dia_st = %#x" % self.st())
+        self.ui._wait(lambda: not self.st() & STIK_S_DIRTY, what, 60,
+                      snapshot=lambda: "stik_st = %#x" % self.st())
         return self.dat()
 
     def raw(self):
@@ -315,9 +315,9 @@ class Cal(object):
         d = self.raw()
         if d is None:
             return None
-        p = os88dia.parse_dat(d, os88dia.DESKCAL_PAYLEN,
-                              os88dia.DESKCAL_PAYVER)
-        return os88dia.parse_deskcal(p["payload"])
+        p = os88stik.parse_dat(d, os88stik.DESKCAL_PAYLEN,
+                              os88stik.DESKCAL_PAYVER)
+        return os88stik.parse_deskcal(p["payload"])
 
 
 def appts_of(cal):
@@ -326,16 +326,16 @@ def appts_of(cal):
 
 
 def boot_damaged(tmp):
-    pay = bytearray(os88dia.deskcal([(TODAY, 600, "Not trusted")]))
+    pay = bytearray(os88stik.deskcal([(TODAY, 600, "Not trusted")]))
     pay[0] = 60                 # past the 48-record table
-    fixture = os88dia.dat(bytes(pay), x=335, y=40, screen=(640, 480))
+    fixture = os88stik.dat(bytes(pay), x=335, y=40, screen=(640, 480))
     img = disk_with(tmp, "damaged.img", fixture)    # a v1 place: converted
     with os88ui.boot(img, machine="os8088_xt_vga") as ui:
         c = Cal(ui, tmp)
         print("A: a DAMAGED file opens empty and is not written unasked")
-        check(c.st() & DIA_S_DAMAGED, "the load called it damaged (dia_st %#x)"
+        check(c.st() & STIK_S_DAMAGED, "the load called it damaged (stik_st %#x)"
               % c.st())
-        check(c.bss(os88dia.DIA_HDR_SIZE + os88dia.DESKCAL_DIA_BSS)[0] == 0,
+        check(c.bss(os88stik.STIK_HDR_SIZE + os88stik.DESKCAL_STIK_BSS)[0] == 0,
               "...and runs empty: no appointment in memory")
         c.key("KeyK")
         c.type("First")
@@ -369,12 +369,12 @@ def boot_damaged(tmp):
 
         print("C: Dentist edited in the field")
         c.select_appt(2)
-        check(c.bss(os88dia.DESKCAL_BSS_SELK)[0] == 1
-              and c.bss(os88dia.DESKCAL_BSS_SELI)[0] == 2,
+        check(c.bss(os88stik.DESKCAL_BSS_SELK)[0] == 1
+              and c.bss(os88stik.DESKCAL_BSS_SELI)[0] == 2,
               "a click on its line selected appointment 2")
         c.key("Enter")
         ui._wait(lambda: c.ed() == 2, "the field to open on it", 30)
-        buf = bytes(c.bss(os88dia.DESKCAL_BSS_EBUF, 32)).split(b"\0")[0].decode("latin-1")
+        buf = bytes(c.bss(os88stik.DESKCAL_BSS_EBUF, 32)).split(b"\0")[0].decode("latin-1")
         check(buf == "09:30 Dentist", "the field holds %r" % buf)
         for _ in range(7):
             c.m.key("Backspace")
@@ -407,7 +407,7 @@ def boot_damaged(tmp):
         c.key("Escape")
         c.field_shut("Esc to shut the field")
         os88marty.guest_sleep(c.m, 3.0)
-        check(c.raw() == before and not c.st() & DIA_S_DIRTY,
+        check(c.raw() == before and not c.st() & STIK_S_DIRTY,
               "nothing was written")
 
         print("G: Delete Item picked with the field OPEN asks on a clean bar")
@@ -484,7 +484,7 @@ def boot_damaged(tmp):
         x, y = disk.x + disk.w // 2, disk.y + disk.h // 2
         ui.mo.click(x, y, settle=0)
         ui._wait(lambda: c.ed() == 0, "losing the bar to shut the field "
-                 "(DIA_ONFOCUS 0, as Esc)", 20)
+                 "(STIK_ONFOCUS 0, as Esc)", 20)
         os88marty.guest_sleep(c.m, 3.0)
         check(c.raw() == before, "...and nothing typed there was kept")
         c.front()
@@ -498,7 +498,7 @@ def boot_damaged(tmp):
 def boot_full(tmp):
     days = [(2026, 10, d) for d in range(1, 25)]
     appts = [(d, 600 + i, "Busy %d" % i) for d in days for i in (0, 1)]
-    fixture = os88dia.dat(os88dia.deskcal(appts), x=335, y=40,
+    fixture = os88stik.dat(os88stik.deskcal(appts), x=335, y=40,
                           screen=(640, 480))
     img = disk_with(tmp, "full.img", fixture)
     with os88ui.boot(img, machine="os8088_xt_vga") as ui:

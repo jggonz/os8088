@@ -602,7 +602,7 @@ desk_zs:
 ; The one question asked PER KIND, and only by the placement: a volume is live
 ; while its row carries the desktop flag (SPEC.md 26.1), the service item while
 ; a driver has one registered (26.7), a shortcut while its claim row is in use
-; (26.8.1) and does not carry the DIA mark (110.2). RESIDENT, because it is on
+; (26.8.1) and does not carry the Sticky App mark (110.2). RESIDENT, because it is on
 ; the reflow's and the paint's path, and neither may touch a disk.
 ; -----------------------------------------------------------------------------
 desk_live:
@@ -627,8 +627,8 @@ desk_live:
     mov al, bl
     call sc_row                 ; CF = 1: no claim, past it, or a free row
     jc .ld
-    cmp byte [es:bx+SC_R_DIA], SC_DIA
-    stc                         ; ...or a DIA ROW (SPEC.md 110.2): a remembered
+    cmp byte [es:bx+SC_R_STIK], SC_STIK
+    stc                         ; ...or a Sticky App ROW (SPEC.md 110.2): a remembered
     je .ld                      ; widget, never live, so never in a cell and
     clc                         ; never painted or hit
 .ld:

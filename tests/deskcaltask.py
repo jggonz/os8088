@@ -7,8 +7,8 @@ deleted - and a check box whose toggle is the BOX ALONE, one sub-rect BLIT1.
 The SHIPPED 360KB system disk copied to a scratch file, on MartyPC's 5150
 with a Hercules card: v2's MID layout (348 rows, SPEC.md 110.3), and a 1bpp
 framebuffer the harness can read whole (`vram`). The state file is flushed
-off the emulated drive and parsed by tools/os88dia.py; every coordinate is
-the layout's, out of tools/os88dia.py's DESKCAL_GEO, which t_dia holds to
+off the emulated drive and parsed by tools/os88stik.py; every coordinate is
+the layout's, out of tools/os88stik.py's DESKCAL_GEO, which t_stik holds to
 the package's own dc_geos.
 
   A  `K` and three lines - `Buy milk`, `Call plumber`, `Post letter` - are
@@ -49,12 +49,12 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 import os88ui      # noqa: E402
 import os88marty   # noqa: E402
-import os88dia     # noqa: E402
+import os88stik    # noqa: E402
 from deskcaledit import Cal, TITLE   # noqa: E402
 
 BDIR = os.path.join(HERE, "..", os.environ.get("OS88_BUILD", "build"))
 MACHINE = "os8088_5150_herc_gla"
-TASK_DONE = os88dia.TASK_DONE
+TASK_DONE = os88stik.TASK_DONE
 BOX9 = (0xFF80, 0x8080, 0x8080, 0x8080, 0x8080, 0x8080, 0x8080, 0x8080,
         0xFF80)                 # dcdraw.inc's dc_box9, and its ticked twin
 TICK9 = (0xFF80, 0x8080, 0x8380, 0x8680, 0xAC80, 0xB880, 0x9080, 0x8080,
@@ -134,12 +134,12 @@ def main():
         with os88ui.boot(img, machine=MACHINE) as ui:
             c = Cal(ui, tmp, check=check)
             m = c.m
-            check(c.li() == 1, "Hercules takes the MID layout (dia_li %d)"
+            check(c.li() == 1, "Hercules takes the MID layout (stik_li %d)"
                   % c.li())
             g = c.g()
 
             def g_tag():
-                return os88dia.DESKCAL_GEO[c.li()]["tag"]
+                return os88stik.DESKCAL_GEO[c.li()]["tag"]
 
             def tasks():
                 return [(t["text"], t["done"])
@@ -160,9 +160,9 @@ def main():
                 return m.vram("herc")[2]
 
             def done(k):
-                return c.bss(os88dia.DESKCAL_DIA_BSS + 16
-                             + os88dia.DESKCAL_TASK0
-                             + k * os88dia.DESKCAL_TASK)[0] & TASK_DONE
+                return c.bss(os88stik.DESKCAL_STIK_BSS + 16
+                             + os88stik.DESKCAL_TASK0
+                             + k * os88stik.DESKCAL_TASK)[0] & TASK_DONE
 
             def toggled(what, act, k):
                 a = frame_now()
@@ -211,7 +211,7 @@ def main():
                   % (clear_item(),))
 
             print("B: Buy milk's box: the box, one BLIT1")
-            ttop = os88dia.DESKCAL_BSS_TTOP
+            ttop = os88stik.DESKCAL_BSS_TTOP
             while c.bss(ttop)[0] != 0:          # the page holding task 0
                 c.press(c.task_text(g["TN"] - 1))
             a = frame_now()
@@ -232,8 +232,8 @@ def main():
             check(c.bss(ttop)[0] == 1, "the pager showed the next page "
                   "(dc_ttop %d)" % c.bss(ttop)[0])
             c.press(c.task_text(0))
-            check(c.bss(os88dia.DESKCAL_BSS_SELK)[0] == 2
-                  and c.bss(os88dia.DESKCAL_BSS_SELI)[0] == 1,
+            check(c.bss(os88stik.DESKCAL_BSS_SELK)[0] == 2
+                  and c.bss(os88stik.DESKCAL_BSS_SELI)[0] == 1,
                   "task 1 is selected")
             toggled("Space", lambda: m.key("Space"), 1)
             got = tasks()

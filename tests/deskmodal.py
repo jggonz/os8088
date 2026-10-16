@@ -34,7 +34,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 import os88ui      # noqa: E402
 import os88marty   # noqa: E402
-import os88dia     # noqa: E402
+import os88stik    # noqa: E402
 from deskcaledit import Cal, disk_with, TITLE, TODAY, appts_of   # noqa: E402
 
 fails = []
@@ -55,7 +55,7 @@ def zord(ui):
 def main():
     tmp = tempfile.mkdtemp(prefix="deskmodal-")
     try:
-        img = disk_with(tmp, "modal.img", os88dia.dat(os88dia.deskcal(
+        img = disk_with(tmp, "modal.img", os88stik.dat(os88stik.deskcal(
             [(TODAY, 600, "Dentist")])))
         with os88ui.boot(img, machine="os8088_xt_vga") as ui:
             c = Cal(ui, tmp, check=check)
@@ -71,7 +71,7 @@ def main():
             print("B: Del on the widget's appointment: the question")
             c.front()
             c.press(c.line(0))
-            check(c.bss(os88dia.DESKCAL_BSS_SELK)[0] == 1,
+            check(c.bss(os88stik.DESKCAL_BSS_SELK)[0] == 1,
                   "the appointment is selected")
             c.key("Delete")
             ui._wait(lambda: len([w for w in ui.windows()
