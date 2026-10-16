@@ -203,12 +203,14 @@ sn_ismark:
     jz .no
     cmp al, SN_BOX1
     ja .no
+    push cx
     push si
     push di
-    call sn_cur                 ; SI = the note's start
-    mov bx, si
+    call sn_cur                 ; SI = the note's start (CX spent: kept -
+    mov bx, si                  ; sne_kdel counts its delete in it)
     pop di
     pop si
+    pop cx
     cmp si, bx
     je .no                      ; the title's first byte is never a box
     cmp byte [si - 1], 10

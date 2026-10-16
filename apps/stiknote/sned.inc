@@ -407,7 +407,7 @@ sne_lfit:
 sne_paint:
     call sne_lay
     jc .r
-    call sne_fix                ; a resize may have moved the page
+    call sne_clamp              ; a resize may have moved the page's range
     mov bx, si
     call OSAPI_WM_DAMAGE        ; AX..DX, screen, inclusive
     sub ax, [sne_ox]
@@ -467,7 +467,7 @@ sne_rall:
     push dx
     call sne_lay
     jc .x
-    call sne_fix
+    call sne_clamp
     xor ax, ax
     xor bx, bx
     mov cx, [sne_cw]
@@ -517,7 +517,7 @@ sne_rpane:
     push di
     call sne_lay
     jc .x
-    call sne_fix
+    call sne_clamp
     call sne_geo
     mov ax, SNE_LW
     mov bl, [di + SNEG_TBH]
@@ -780,14 +780,13 @@ sne_rptr:
     pop ax
     ret
 
-; sne_rswitch - the current note changed from AH: the two list rows (or the
-; list, scrolled), the page and the bar
+; sne_rswitch - the current note changed from AH, the list's scroll from BL:
+; the two list rows (or the list, scrolled), the page and the bar
 sne_rswitch:
     push ax
     push bx
     call sne_lay
     jc .x
-    mov bl, [sne_ltop]
     call sne_lfit
     cmp bl, [sne_ltop]
     je .rows
@@ -838,6 +837,8 @@ sne_put:
     push di
     push bp
     push es
+    mov word [gfxe_fseg], 0     ; the glyph table asked for again: a resume
+                                ; may have MOVED it (SPEC.md 5.12.8)
     and ax, 0FFF8h
     add cx, 7
     and cx, 0FFF8h
@@ -1864,23 +1865,32 @@ sne_nt:
     call sne_widths
     jmp sn_vcount
 
-; sne_fix - the list's scroll and the page's in range, and the caret's line
-; on show. CF = 1 the page's moved. Every register kept
-sne_fix:
+; sne_clamp - the list's scroll and the page's IN RANGE, and no more: what
+; a paint may do, so a scroll-bar scroll away from the caret survives a
+; repaint and a partial one draws one scroll position. Every register kept
+sne_clamp:
     push ax
-    push bx
-    push dx
     call sne_lfit
-    mov bx, [sne_top]
     call sne_nt
     sub ax, [sne_nv]
     jge .m
     xor ax, ax
 .m:
     cmp [sne_top], ax           ; no further than the last screenful
-    jle .c
+    jle .x
     mov [sne_top], ax
-.c:
+.x:
+    pop ax
+    ret
+
+; sne_fix - sne_clamp, and the caret's line on show: after a move or an
+; edit. CF = 1 the page's scroll moved. Every register kept
+sne_fix:
+    push ax
+    push bx
+    push dx
+    mov bx, [sne_top]
+    call sne_clamp
     call sne_loc
     cmp ax, -1
     je .y                       ; on the title, which is always on show
@@ -2110,8 +2120,8 @@ sne_postmove:
 .g:
     call sne_fix
     jnc .lines
-    jmp sne_rbody               ; scrolled: the page
-.lines:
+    jmp sne_rpane               ; scrolled: the page, its title (an old
+.lines:                         ; caret there) and the bar
     jmp sne_rcar2
 
 ; sne_rcar2 - the caret's old line ([sne_l0]) and its new one drawn
@@ -2311,6 +2321,7 @@ sne_kpgdn:
 ; sne_pre - before an edit: the caret's line and the body's lines banked; AL
 ; = 0 a body edit, 1 the title's alone, 2 one that crosses the title's end
 sne_pre:
+    mov byte [sne_jb], 0        ; any edit spends the swallow
     mov [sne_tk], al
     push ax
     call sne_loc
@@ -2538,6 +2549,11 @@ sne_cbox:
     mov bx, ax
     call sn_cur
     add si, bx
+    push ax                     ; the whole paragraph re-wraps at the other
+    call sne_widths             ; width and its first line gains or loses
+    call sn_vfind               ; the box: redraw from that line, not the
+    mov [sne_l0], ax            ; caret's
+    pop ax
     call sn_ismark
     jc .add
     mov cx, 1                   ; a box: the marker out
@@ -2773,7 +2789,9 @@ sne_joinok:
     inc bx
     jmp short .s
 .ok:
-    cmp bl, [sne_tw]
+    mov al, [sne_tw]
+    xor ah, ah
+    cmp bx, ax                  ; a WORD: the two lines may be 4 KB together
     ja .no
     clc
     jmp short .x
@@ -2980,6 +2998,10 @@ sne_pgclick:
     mov ax, dx
     div byte [di + SNEG_P]
     xor ah, ah
+    cmp ax, [sne_nv]
+    jb .on
+    jmp .r                      ; the rows below the last line on show
+.on:
     add ax, [sne_top]
     push ax
     call sne_nt
@@ -3024,7 +3046,7 @@ sne_pgclick:
     call sn_norm
     call sne_fix
     jnc .two
-    jmp sne_rbody
+    jmp sne_rpane
 .two:
     jmp sne_rcar2
 .r:

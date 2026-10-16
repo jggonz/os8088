@@ -812,7 +812,9 @@ snp_oncardup:
     ret
 .box:
     call sn_vtick               ; SI = the marker
-    call sn_edit
+    push word [sn_t1]           ; (sn_edit's status redraw spends the
+    call sn_edit                ; scratch words)
+    pop word [sn_t1]
     mov byte [snp_dirty], 0     ; ...drawn now, not at the beat
     call snp_rline              ; [sn_t1] = the pad's line
     jmp sne_rptr

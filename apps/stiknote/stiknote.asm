@@ -214,6 +214,7 @@ STIK_BSS    equ SN_BSS          ; the include's state follows ours
     SNV it_end, 1               ; ...it ended at the note's end
     SNV it_w, 1                 ; ...the widths: a text line's, in cells
     SNV it_wb, 1                ; ...and a box line's
+    SNV sn_delnote, 1           ; the note our Delete question is about
     SNV sn_t0, 2                ; scratch words
     SNV sn_t1, 2
     SNV sn_t2, 2
@@ -261,13 +262,18 @@ sn_entry:
     rep stosb
     pop es
     or byte [stik_st], STIK_S_DAMAGED
+    mov byte [STIK_PAY + SNP_FLAGS], SNF_DESK   ; empty, and on the desk
     jmp short .seeded
 .ok:
     test byte [STIK_PAY + SNP_FLAGS], SNF_INIT
     jnz .seeded
-    test byte [stik_st], STIK_S_NOHOME | STIK_S_RDONLY
-    jnz .seeded                 ; (nothing to keep it in: no welcome either)
-    call sn_seed                ; the first launch: the welcome note
+    test byte [stik_st], STIK_S_RDONLY
+    jz .seed                    ; UNREAD (an I/O error): nothing is known, so
+    mov byte [STIK_PAY + SNP_FLAGS], SNF_DESK   ; no welcome - but the pad
+    jmp short .seeded           ; is on the desk
+.seed:
+    call sn_seed                ; the first launch: the welcome note (with no
+                                ; SYSTEM\APPDATA it is never saved)
 .seeded:
     mov si, snp_tpl
     call OSAPI_WM_CREATE        ; BX = the pad, CF = the table is full
@@ -282,9 +288,11 @@ sn_entry:
     call stik_made              ; MAKE, the prefilters, the tick
     test byte [STIK_PAY + SNP_FLAGS], SNF_DESK
     jnz .live
-    mov byte [sn_boot], 1       ; off the desktop: the loader shows the pad
-    call sne_show               ; after we return, so the first beat hides
-.live:                          ; it - and the editor is what opens
+    call sne_show               ; off the desktop: the editor is what opens,
+    cmp word [sne_win], 0       ; and the loader shows the pad after we
+    je .live                    ; return, so the first beat hides it - unless
+    mov byte [sn_boot], 1       ; there is no editor to be had
+.live:
     call sn_menulive
     clc
 .out:
@@ -412,26 +420,27 @@ sn_tick:
     call OSAPI_WM_HIDE
     jmp short .ed
 .norm:
+    cmp byte [sne_open], 0      ; the editor still up? A minimize hides an
+    je .pv                      ; unbound window, and nothing tells us
+    mov bx, [sne_win]
+    test byte [es:bx + W_FLAGS], 2
+    jnz .pv
+    mov byte [sne_open], 0
+    call sn_menulive
+    test byte [STIK_PAY + SNP_FLAGS], SNF_DESK
+    jnz .pv
+    or byte [STIK_PAY + SNP_FLAGS], SNF_DESK ; it was the only window: the
+    mov bx, si                  ; pad comes back
+    call OSAPI_WM_SHOW
+    call sn_dtouch
+    jmp short .ed
+.pv:
     test byte [es:si + W_FLAGS], 2
-    jz .pad0
+    jz .ed
     test byte [STIK_PAY + SNP_FLAGS], SNF_DESK
     jnz .ed
     or byte [STIK_PAY + SNP_FLAGS], SNF_DESK ; shown by somebody else (the
     call sn_dtouch              ; Sticky Apps menu's Show All): on the desk
-    jmp short .ed
-.pad0:
-    test byte [STIK_PAY + SNP_FLAGS], SNF_DESK
-    jnz .ed
-    cmp byte [sne_open], 0      ; off the desk, the editor the only window:
-    je .ed                      ; is it still up?
-    mov bx, [sne_win]
-    test byte [es:bx + W_FLAGS], 2
-    jnz .ed
-    mov byte [sne_open], 0      ; minimized - which hides an unbound window
-    or byte [STIK_PAY + SNP_FLAGS], SNF_DESK ; for good: the pad comes back
-    mov bx, si
-    call OSAPI_WM_SHOW
-    call sn_dtouch
 .ed:
     cmp byte [snp_dirty], 0
     je .st
@@ -479,11 +488,14 @@ sn_setdesk:
     call OSAPI_WM_SHOW
     jmp short .t
 .off:
+    call sne_lay                ; the editor ON THE GLASS - not as far as we
+    jnc .h                      ; know: a minimize hid it behind our back
+    call sne_show
+    call sne_lay
+    jc .x                       ; none to be had: the pad stays, and the flag
+.h:
     and byte [STIK_PAY + SNP_FLAGS], ~SNF_DESK & 0FFh
     call OSAPI_WM_HIDE
-    call sne_lay                ; the editor ON THE GLASS - not as far as we
-    jnc .t                      ; know: a minimize hid it behind our back
-    call sne_show
 .t:
     call sn_dtouch
 .x:
@@ -602,6 +614,8 @@ sn_askdel:
     call os88ui_ask
     jc .busy
     mov byte [sn_ask], 1
+    mov al, [STIK_PAY + SNP_CUR] ; the note ASKED about: the question is not
+    mov [sn_delnote], al        ; modal, and the current one may change
 .busy:
     pop es
     pop di
@@ -616,6 +630,10 @@ sn_delans:
     mov byte [sn_ask], 0
     cmp al, 1
     jne .r
+    mov al, [sn_delnote]        ; the note the question named, made current
+    cmp al, [STIK_PAY + SNP_N]  ; (notes are only ever ADDED after it while
+    jae .r                      ; the question is up: its index still holds)
+    mov [STIK_PAY + SNP_CUR], al
     call sn_delete
     call sn_menulive
 .r:
@@ -712,13 +730,16 @@ sn_goto:
     cmp al, [STIK_PAY + SNP_CUR]
     je .r
     push ax
+    push bx
     mov ah, [STIK_PAY + SNP_CUR]
     mov [STIK_PAY + SNP_CUR], al
     call stik_touch             ; the page is remembered - not an edit
+    mov bl, [sne_ltop]          ; the list's scroll BEFORE newcur moves it
     call sne_newcur
-    call sne_rswitch            ; AH = the old one: its row, the new one's, the
-    call snp_redraw             ; page and the scroll bar
+    call sne_rswitch            ; AH = the old note, BL the old scroll: its
+    call snp_redraw             ; row, the new one's, the page, the bar
     call sn_menulive
+    pop bx
     pop ax
 .r:
     ret
