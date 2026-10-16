@@ -391,7 +391,7 @@ def vga(tmp):
               % (px(fb, *lst),))
 
         print("K: Color > Pink")
-        ui.menu_pick("Color", "Pink")
+        ui.menu_pick("Color", "  Pink")    # (two cells kept for the `*`)
         os88marty.pace(m, 1.0)
         st = n.saved("the paper's save")
         check(st["notes"][0]["paper"] == "pink", "the file says pink")

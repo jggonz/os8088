@@ -9987,8 +9987,9 @@ SOAK = [
     Row("stikmenu", "soak", py("tests/stikmenu.py"), 45.0,
         "SPEC.md 110.12: Locator's Sticky Apps menu, one boot of the VGA XT "
         "on the shipped 360KB system disk. A press on the cell loads "
-        "STIKMENU.DRV and lists DESKCAL.O88 by its CARD (name 'Desk "
-        "Calendar', not running, Arrange/Hide greyed, More live); releasing "
+        "STIKMENU.DRV and lists the disk's two Sticky Apps, DESKCAL.O88 by "
+        "its CARD (name 'Desk Calendar', not running, Arrange/Hide greyed, "
+        "More live) beside STIKNOTE.O88 (SPEC.md 110.13); releasing "
         "on its row POSTS the pick and launches it as a desk window, and the "
         "module is dropped after; a release off the panel posts nothing; "
         "Hide All hides the widget and Show All brings it back; Arrange puts "

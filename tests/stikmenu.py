@@ -11,9 +11,10 @@ kernel's mod_tab row, its labels' offsets os88sym's - so every assertion is
 about what the module DECIDED, not about pixels:
 
   A  a press on the 'Sticky Apps' cell loads STIKMENU.DRV and drops a panel
-     listing ONE Sticky App: DESKCAL.O88 on the boot volume, its card's name
-     'Desk Calendar', not running, '0 active'; Arrange and Hide greyed (no
-     widget), More live;
+     listing the system disk's TWO Sticky Apps (DESKCAL.O88 and, since
+     SPEC.md 110.13, STIKNOTE.O88), each row a pick: DESKCAL.O88 on the boot
+     volume, its card's name 'Desk Calendar', not running, '0 active';
+     Arrange and Hide greyed (no widget), More live;
   B  releasing on its row POSTS the pick and LAUNCHES it: a desk window
      called 'Desk Calendar' comes up, and the module is dropped after;
   C  a press released OFF the panel picks nothing: nothing posted, and the
@@ -25,7 +26,7 @@ about what the module DECIDED, not about pixels:
   F  picking the RUNNING row closes it - through app_close_win, so its own
      negotiator removes its Sticky App row from the desktop table.
   G  a second boot with six more Sticky Apps - one-sector stubs, a header
-     and a card - lists seven, PAGED (a page smaller than seven and a pager
+     and a card - lists eight, PAGED (a page smaller than eight and a pager
      row); a release on the pager turns to page 2 and the panel STAYS UP;
      a click off it then closes it with nothing posted.
 
@@ -214,7 +215,7 @@ def paging(tmp):
         subprocess.run(["mcopy", "-o", "-i", img, f,
                         "::/STIKAPPS/PAGE%d.O88" % k], check=True, env=env,
                        stdout=subprocess.DEVNULL)
-    print("G: seven Sticky Apps page")
+    print("G: eight Sticky Apps page")
     with os88marty.launch(img, machine=os88marty.machine(
             "os8088_xt_vga", None), boot=True) as m:
         ui = os88ui.UI(m)
@@ -223,7 +224,7 @@ def paging(tmp):
         menu = Menu(m, ui)
         slabs = menu.drop()
         n, shown = menu.b("stm_n"), menu.b("stm_shown")
-        check(n == 7, "seven listed (%d)" % n)
+        check(n == 8, "eight listed (%d)" % n)
         check(menu.b("stm_paged") == 1 and shown < n,
               "paged: %d a page of %d" % (shown, n))
         pg = [i for i, s in enumerate(slabs) if s["kind"] == SK_PAGE]
@@ -258,9 +259,15 @@ def main():
             print("A: the panel lists the Desk Calendar by its card")
             slabs = menu.drop()
             ents = entries(menu)
-            check(len(ents) == 1, "one Sticky App listed (%d)" % len(ents))
+            check(len(ents) == 2 and sorted(e["file"] for e in ents)
+                  == [b"DESKCAL.O88", b"STIKNOTE.O88"],
+                  "two Sticky Apps listed, the calendar and Sticky Note "
+                  "(%r)" % [e["file"] for e in ents])
+            k = [i for i, e in enumerate(ents)
+                 if e["file"] == b"DESKCAL.O88"]
+            k = k[0] if k else 0
             if ents:
-                e = ents[0]
+                e = ents[k]
                 check(e["file"] == b"DESKCAL.O88" and e["vol"] == boot,
                       "it is DESKCAL.O88 on the boot volume (%r, vol %d)"
                       % (e["file"], e["vol"]))
@@ -269,15 +276,16 @@ def main():
                 check(e["run"] == 0, "it is not running")
             check(menu.b("stm_nrun") == 0, "'No Sticky Apps active'")
             apps = [i for i, s in enumerate(slabs) if s["kind"] == SK_APP]
-            check(len(apps) == 1 and slabs[apps[0]]["flags"] & SF_SEL,
-                  "one app row, and it is a pick")
+            check(len(apps) == 2 and all(slabs[a]["flags"] & SF_SEL
+                                         for a in apps),
+                  "two app rows, each a pick")
             check(slabs[item(slabs, IT_ARR)]["flags"] & SF_DIS and
                   slabs[item(slabs, IT_HIDE)]["flags"] & SF_DIS and
                   slabs[item(slabs, IT_MORE)]["flags"] & SF_SEL,
                   "Arrange and Hide greyed with no widget, More live")
 
             print("B: releasing on its row launches it")
-            menu.release_on(slabs, apps[0])
+            menu.release_on(slabs, apps[k])
             w = ui.wait_window(TITLE, limit=T)
             check(w is not None, "the Desk Calendar is up")
             if w is not None:
@@ -295,7 +303,7 @@ def main():
             print("D: Hide All, then Show All")
             slabs = menu.drop()
             ents = entries(menu)
-            check(ents and ents[0]["run"] == 1 and menu.b("stm_nrun") == 1,
+            check(ents and ents[k]["run"] == 1 and menu.b("stm_nrun") == 1,
                   "the row is RUNNING now, '1 Sticky App active'")
             menu.release_on(slabs, item(slabs, IT_HIDE))
             menu.gone()
@@ -330,7 +338,7 @@ def main():
             check(len(stik_rows(m, ui)) == 1, "its Sticky App row is there")
             slabs = menu.drop()
             apps = [i for i, s in enumerate(slabs) if s["kind"] == SK_APP]
-            menu.release_on(slabs, apps[0])
+            menu.release_on(slabs, apps[k])
             menu.gone()
             ui._wait(lambda: not is_open(ui, TITLE), "the calendar closed", T)
             check(not is_open(ui, TITLE), "the Desk Calendar is closed")
