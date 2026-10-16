@@ -284,6 +284,38 @@ def stiknote_equs(tmp):
     return e
 
 
+def deskclok_equs(tmp):
+    """deskclok.asm's own numbers, evaluated by NASM - stiknote_equs' shape:
+    the payload and the bss fields tests/deskclock.py reads."""
+    names = ["DKP_LEN", "DKP_VER", "STIK_PAYLEN", "STIK_PAYVER", "DKP_FACE",
+             "DKP_FLAGS", "DKF_ONLY", "DKF_SECS", "DKF_H24", "DKF_ALARM",
+             "DKF_INIT", "DKP_SIZE", "DKP_AH", "DKP_AM", "DKP_LABEL",
+             "DK_LABMAX", "DKF_N", "DKF_ANALOG", "DK_BSS",
+             "dk_win - os88_image_end", "dk_cw - os88_image_end",
+             "dk_ch - os88_image_end", "dk_ring - os88_image_end",
+             "dk_snz - os88_image_end", "dk_swin - os88_image_end",
+             "dk_awin - os88_image_end", "dk_cok - os88_image_end",
+             "stik_file - os88_image_end", "stik_st - os88_image_end",
+             "STIK_FACE_W", "DK_SZW"]
+    src = open(os.path.join(ROOT, "apps", "deskclok", "deskclok.asm")).read()
+    probe = ("\n    db 'T_STIK_PROBE'\n" +
+             "".join("    dw %s\n" % n for n in names))
+    at = src.rindex("    align 16, db 0")
+    path = os.path.join(tmp, "deskclok_probe.asm")
+    open(path, "w").write(src[:at] + probe + src[at:])
+    out = os.path.join(tmp, "deskclok_probe.bin")
+    r = subprocess.run([NASM, "-f", "bin", "-w+error", "-I", "apps/",
+                        "-I", "apps/deskclok/", "-o", out, path],
+                       capture_output=True, text=True, cwd=ROOT)
+    if r.returncode:
+        raise RuntimeError(r.stderr.strip()[-400:])
+    b = open(out, "rb").read()
+    i = b.index(b"T_STIK_PROBE") + len("T_STIK_PROBE")
+    e = dict(zip(names, struct.unpack_from("<%dH" % len(names), b, i)))
+    e["szw"] = list(b[e["DK_SZW"]:e["DK_SZW"] + 6])
+    return e
+
+
 def probe_equs(tmp, names, defines=("-DDP_DESK",)):
     """tests/stikprob/stikprob.asm's numbers, evaluated by NASM in the build
     `defines` makes - deskcal_equs' marker shape."""
@@ -443,6 +475,11 @@ def main():
               why="every system disk carries it; run `make`")
         snpkg = os.path.join(build, "stiknote.o88")
         snwant = open(snpkg, "rb").read() if os.path.exists(snpkg) else None
+        dkpkg = os.path.join(build, "deskclok.o88")
+        dkwant = open(dkpkg, "rb").read() if os.path.exists(dkpkg) else None
+        check(dkwant is not None, "build/deskclok.o88 exists",
+              why="every system disk carries it beside the calendar and the "
+                  "note (SPEC.md 110.14); run `make`")
         check(snwant is not None, "build/stiknote.o88 exists",
               why="every system disk carries it beside the calendar "
                   "(SPEC.md 110.13); run `make`")
@@ -460,6 +497,11 @@ def main():
             if (img in OPTIONAL_SYSTEM and snwant is not None
                     and os.path.getmtime(p) < os.path.getmtime(snpkg)):
                 print("t_stik: %s predates build/stiknote.o88 - not read "
+                      "(rebuild it with its own target)" % img)
+                continue
+            if (img in OPTIONAL_SYSTEM and dkwant is not None
+                    and os.path.getmtime(p) < os.path.getmtime(dkpkg)):
+                print("t_stik: %s predates build/deskclok.o88 - not read "
                       "(rebuild it with its own target)" % img)
                 continue
             files = walk(p)
@@ -482,6 +524,16 @@ def main():
                 check(got == snwant, "%s's STIKNOTE.O88 is "
                       "build/stiknote.o88 byte for byte" % img,
                       got=len(got), want=len(snwant))
+            got = files.get("STIKAPPS/DESKCLOK.O88")
+            check(got is not None, "%s carries STIKAPPS/DESKCLOK.O88" % img,
+                  why="the third Sticky App rides $(STIKAPPS) beside the "
+                      "others (SPEC.md 110.14) - on the 360KB disk too, "
+                      "which gave its typefaces up for it (SPEC.md 24.3.1.5)",
+                  got=sorted(k for k in files if k.startswith("STIKAPPS/")))
+            if got is not None and dkwant is not None:
+                check(got == dkwant, "%s's DESKCLOK.O88 is "
+                      "build/deskclok.o88 byte for byte" % img,
+                      got=len(got), want=len(dkwant))
         for img in DATA_IMAGES + OPTIONAL_DATA:
             p = os.path.join(build, img)
             if not os.path.exists(p):
@@ -489,7 +541,8 @@ def main():
                 continue
             bad = [k for k in walk(p) if k.startswith("STIKAPPS")
                    or k.endswith("DESKCAL.O88")
-                   or k.endswith("STIKNOTE.O88")]
+                   or k.endswith("STIKNOTE.O88")
+                   or k.endswith("DESKCLOK.O88")]
             check(not bad, "%s carries no Sticky App" % img, got=bad, want=[],
                   why="a widget on an apps disk is a copy that is never the "
                       "one the desktop relaunches - its row names the boot "
@@ -572,6 +625,66 @@ def main():
         if os.path.exists(snbin):
             fl = open(snbin, "rb").read()[3]
             check(fl & 0xC1 == 0xC1, "stiknote.bin's header carries an icon, "
+                  "OS88_F_DESK and OS88_F_STIK", got=hex(fl), want="0xc1 set")
+
+        # K: the Desk Clock -------------------------------------------------
+        try:
+            dk = deskclok_equs(tmp)
+        except (RuntimeError, ValueError) as ex:
+            dk = {}
+            check(False, "deskclok.asm assembles with the probe", got=str(ex))
+        for name, want in (
+                ("DKP_LEN", os88stik.DESKCLOK_PAYLEN),
+                ("STIK_PAYLEN", os88stik.DESKCLOK_PAYLEN),
+                ("DKP_VER", os88stik.DESKCLOK_PAYVER),
+                ("STIK_PAYVER", os88stik.DESKCLOK_PAYVER),
+                ("DKP_FACE", os88stik.DESKCLOK_FACE),
+                ("DKP_FLAGS", os88stik.DESKCLOK_FLAGS),
+                ("DKF_ONLY", os88stik.DESKCLOK_F_ONLY),
+                ("DKF_SECS", os88stik.DESKCLOK_F_SECS),
+                ("DKF_H24", os88stik.DESKCLOK_F_H24),
+                ("DKF_ALARM", os88stik.DESKCLOK_F_ALARM),
+                ("DKF_INIT", os88stik.DESKCLOK_F_INIT),
+                ("DKP_SIZE", os88stik.DESKCLOK_SIZE),
+                ("DKP_AH", os88stik.DESKCLOK_AH),
+                ("DKP_AM", os88stik.DESKCLOK_AM),
+                ("DKP_LABEL", os88stik.DESKCLOK_LABEL),
+                ("DK_LABMAX", os88stik.DESKCLOK_LABMAX),
+                ("DKF_N", len(os88stik.DESKCLOK_FACES)),
+                ("DKF_ANALOG", os88stik.DESKCLOK_ANALOG),
+                ("DK_BSS", os88stik.DESKCLOK_STIK_BSS),
+                ("dk_win - os88_image_end", os88stik.DESKCLOK_BSS_WIN),
+                ("dk_cw - os88_image_end", os88stik.DESKCLOK_BSS_CW),
+                ("dk_ch - os88_image_end", os88stik.DESKCLOK_BSS_CH),
+                ("dk_ring - os88_image_end", os88stik.DESKCLOK_BSS_RING),
+                ("dk_snz - os88_image_end", os88stik.DESKCLOK_BSS_SNZ),
+                ("dk_swin - os88_image_end", os88stik.DESKCLOK_BSS_SWIN),
+                ("dk_awin - os88_image_end", os88stik.DESKCLOK_BSS_AWIN),
+                ("dk_cok - os88_image_end", os88stik.DESKCLOK_BSS_COK),
+                ("stik_file - os88_image_end",
+                 os88stik.stik_hdr_off(os88stik.DESKCLOK_STIK_BSS)),
+                ("stik_st - os88_image_end",
+                 os88stik.stik_st_off(os88stik.DESKCLOK_STIK_BSS,
+                                      os88stik.DESKCLOK_PAYLEN))):
+            check(dk.get(name) == want, "deskclok.asm's %s is "
+                  "tools/os88stik.py's (%s)" % (name, want),
+                  got=dk.get(name), want=want,
+                  why="tests/deskclock.py writes the state file and reads the "
+                      "guest's bss by these numbers")
+        check(dk.get("szw") == [w for k in os88stik.DESKCLOK_SZW for w in k],
+              "DK_SZW is os88stik.DESKCLOK_SZW", got=dk.get("szw"),
+              want=[w for k in os88stik.DESKCLOK_SZW for w in k])
+        check(all(w % 8 == 0 for k in os88stik.DESKCLOK_SZW for w in k)
+              and max(w for k in os88stik.DESKCLOK_SZW for w in k)
+              <= dk.get("STIK_FACE_W", 0),
+              "every face width is a byte multiple and no wider than "
+              "STIK_FACE_W", why="the face is blitted on the byte grid "
+              "(BLITP refuses an odd x) and the include's band is "
+              "STIK_FACE_W wide")
+        dkbin = os.path.join(build, "deskclok.bin")
+        if os.path.exists(dkbin):
+            fl = open(dkbin, "rb").read()[3]
+            check(fl & 0xC1 == 0xC1, "deskclok.bin's header carries an icon, "
                   "OS88_F_DESK and OS88_F_STIK", got=hex(fl), want="0xc1 set")
 
         # G ----------------------------------------------------------------

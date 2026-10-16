@@ -51451,6 +51451,7 @@ gave - until the office disk is the one in B:.
 |---|---|
 | the 360KB system disk, after §24.3.1.4 | 339 of 354, 15 free |
 | `SYSTEM/FONTS/` (15) and `FONTVIEW.O88` (4) off | **321 of 354, 33 free** (measured) |
+| `DESKCLOK.O88` (20) on | **341 of 354, 13 free** (measured): the three Sticky Apps' first saves are a cluster each (§110.5.3) |
 | `office360.img`, with `SYSTEM/FONTS/` | 303 → **318 of 354, 36 free** (measured) |
 
 `tests/unit/t_fonts.py` holds both halves: the faces on the three larger
@@ -183243,8 +183244,10 @@ v2 design's open decision N"** in this section is that file's §7, item N
 ```
 A:\STIKAPPS\DESKCAL.O88        the package; LZ4-packed by PKGZ like any other
 A:\STIKAPPS\STIKNOTE.O88       ...and the second Sticky App (§110.13)
+A:\STIKAPPS\DESKCLOK.O88       ...and the third (§110.14)
 A:\SYSTEM\APPDATA\DESKCAL.DAT    its state (§19.9), written at runtime, never shipped
 A:\SYSTEM\APPDATA\STIKNOTE.DAT   ...and the second's
+A:\SYSTEM\APPDATA\DESKCLOK.DAT   ...and the third's
 ```
 
 - **`STIKAPPS\`** is on the BOOT volume, the THEWIRE rule (§92): a widget
@@ -185649,9 +185652,9 @@ room to save; §24.3.1.3 took Mines off that disk, and it is 346, 8 free.
 - **Hercules is not looked at on the glass here**: QEMU cannot show it
   (docs/HERCULES-TESTING.md). Its layout is TALL on 1bpp, the two halves
   CGA and VGA each check; a MartyPC or 86Box look is owed.
-- **Two of the other Apps in the mockup** (Desk Clock, Calculator) are not
-  built: the menu lists what `STIKAPPS\` holds, so today it lists two - the
-  Desk Calendar and Sticky Note (§110.13).
+- **One of the other Apps in the mockup** (Calculator) is not built: the
+  menu lists what `STIKAPPS\` holds, so today it lists three - the Desk
+  Calendar, Sticky Note (§110.13) and the Desk Clock (§110.14).
 - **A keyboard-only drop**: like every bar menu, the panel is reached by the
   pointer or the keyboard mouse (§9.6); it does not step by item as
   `menu_kbnav` does for a pull-down.
@@ -185843,8 +185846,325 @@ every system image for `STIKAPPS/STIKNOTE.O88`.
 
 ### 110.14 Desk Clock (`apps/deskclok/`)
 
-The third Sticky App: a clock on the desk, in nine faces. (Being built; this
-section is completed with the package.)
+The third Sticky App: a clock pinned to the desk, in nine faces, at three
+sizes, with a daily alarm. `DESKCLOK.O88` ships in `STIKAPPS\` beside the
+Desk Calendar and Sticky Note on every system disk - the four geometries (the
+360KB one gave its typefaces up for it, §24.3.1.5), `emu.img`, both small
+system disks and the live media - and its state is
+`SYSTEM\APPDATA\DESKCLOK.DAT`. The owner's two mockups are the shape: the
+clock on the desk - a dial over a white panel with the time, the date and the
+alarm's row, the `Desk Clock` tag under it - and `Desk Clock Settings`, a
+titled window with three check boxes, a size, a gallery of nine previews and
+Cancel / Apply / OK.
+
+```
+apps/deskclok/deskclok.asm   header, card, payload, bss, entry, the tick, keys,
+                             menus, the alarm's ringing
+apps/deskclok/dkdraw.inc     the composer: a 1- or 4-plane band, spans, mask
+                             rows, glyphs, rectangles, ellipses, lines
+apps/deskclok/dkface.inc     the nine faces as PROGRAMS, the time and the date
+apps/deskclok/dkwid.inc      the clock on the desk: layout, paint, the face
+                             cache, presses, redraws
+apps/deskclok/dkset.inc      the settings window
+apps/deskclok/dkalm.inc      the alarm window
+```
+
+#### 110.14.1 A face of its own size: `STIK_VARFACE`
+
+Every other Sticky App is one width (`STIK_FACE_W`, an assembly-time
+constant) in one layout per screen class. The clock is not: its width and its
+card's height follow the size (Small, Medium, Large), the kind of face (a
+dial, a rectangle), `Clock face only`, and whether an alarm is ringing. So
+`os88stik.inc` gained an opt-in, `%define STIK_VARFACE`, which leaves every
+other Sticky App **byte for byte** what it was (measured: `deskcal.bin` and
+`stiknote.bin` assemble identically before and after):
+
+- `STIK_FACE_W` becomes the WIDEST face (the band's bound) and **`[stik_fw]`**
+  the face now; every place the include took the constant takes the word
+  (`STIK_ADDFW`, `STIK_ADDFW1`, `STIK_MOVFW` emit the constant's own
+  instruction without the opt-in).
+- **`STIK_SIZEUP`**, the package's proc, sets `[stik_fw]` and may point
+  `[stik_lay]` at a layout entry of its own (the clock's `dk_lay`, ONE card).
+  It is called with the layout class chosen and the state file READ: under
+  `STIK_VARFACE`, `stik_load` reads the file first and sizes the template
+  after, and the saved place is anchored with the face's size as it is now.
+- **`stik_resize`** (SI = the window, the lock held): the package changed
+  something its size depends on. A frame of the same size is one
+  `stik_redraw`; another size is HIDDEN, re-sized from its top-left (kept on
+  its display and on the byte grid) and SHOWN - there is no move cell, and the
+  kernel's Arrange does the same (§110.12.4) - and a widget that owned the bar
+  takes it back with `OSAPI_WM_FRONT`, which on a desk window activates and
+  raises nothing (§11.103.4). The titled fallback goes through
+  `OSAPI_WM_RESIZE` and is drawn again whole (a shrink is no damage there).
+- **`[stik_np]`** = 1: the tag row at rest is the DESKTOP - no plate - which
+  is `Clock face only`'s "no desktop label". The handle still comes up under
+  the pointer, and on a face narrower than the plate's name (`STIK_NAMEMIN`)
+  it is the close box and the grip alone.
+
+#### 110.14.2 The clock on the desk
+
+ONE card: the face, centred, and - unless `Clock face only` - the INFO PANEL,
+128 px wide, under it: under a dial the time as text (`20:58` at x2, the
+seconds and AM/PM small beside it) with the dial's foot overlapping the
+panel's top as the mockup draws it; then the date (`MON 24 AUG 2026`), a rule,
+and the alarm's row - its bell, `Alarm off` / `Alarm 07:30` / `Zz 07:35`, and
+the settings gear at the right. A RINGING alarm turns the row into
+`21:00 Back up files` and adds `Snooze . Dismiss` under it, and shows those
+two rows even face-only (the panel is the alarm's alone then), because an
+alarm nobody can stop is worse than a label the user asked to hide. The
+frame grows for them and shrinks back after.
+
+| size | a dial's width | a digital face's width | the card with the panel |
+|---|---:|---:|---|
+| Small | 80 | 96 | 128 wide (the panel's) |
+| Medium | 112 | 128 | 128 |
+| Large | 152 | 176 | the face's |
+
+A dial is as tall as it is wide **to the eye**: its rows are its width times
+the screen's aspect (`[dk_ys]`, 256 on VGA's square pixels, 186 on EGA, 165 on
+Hercules, 107 on CGA), so every circle stays round on every adapter. A
+digital face's height is its own share of its width (`dk_fhr`: the Casios
+0.66, Mono Digital 0.53, the LEDs 0.5, the flip clock 0.47).
+
+**Presses.** The panel's controls - the bell's row opens the alarm window
+(§110.14.7), the gear the settings, `Snooze` and `Dismiss` - act on the
+release, sliding off cancels (§13.5). A DOUBLE click anywhere else (9 ticks,
+the kernel's `UI_TDBLT`, 4 px) opens the settings - on a face-only clock too.
+And any other press **drags the clock** (`OSAPI_WM_DESK` DRAG), as the tag and
+the gaps do, so a face-only clock is moved by grabbing it.
+
+**Keys**, while it owns the bar: Enter Settings, `A` the alarm window, `F`
+`Clock face only`, `S` seconds, `H` 24-hour, Left/Right the face, Up/Down the
+size, `Z` Snooze, `D` Dismiss, Esc dismisses a ringing alarm or hands the bar
+back. **Menus**: `Clock` (Settings..., Alarm..., the three toggles marked `* `,
+Snooze and Dismiss - greyed `(not ringing)`, §47), `Face` (the nine, the
+current one marked) and `Size`. A change from the keys or the menus is
+COMMITTED at once (saved); with the settings window up, its applied copy
+follows it so a later Cancel does not undo it. The app-name cell's About is
+a toast: the clock can be smaller than os88ui's About card.
+
+**Its time** is `OSAPI_CLK_GET`'s, read at every beat. The beat is aimed: every
+6 ticks while the seconds show or the alarm rings, else at the next minute
+(`(60 - s) x 18` ticks, at most `STIK_TICKS - 1` = 35 - the include's ceiling
+for `[stik_nx]`). A beat that finds nothing new draws nothing. The hour hand
+sits between the hours (`h mod 12 x 10 + m / 6`, 120 steps of 3 degrees) and
+the minute hand steps at the half minute too. A new DAY redraws the card
+whole. Under `kern_small` the worker's sleep ignores `[stik_nx]` (§110.5), so
+the seconds there move every 2 s.
+
+#### 110.14.3 Nine faces, as programs
+
+A face is a few dozen bytes of OPS interpreted by `dk_face`, never a drawing
+routine: every coordinate is a share of the face - a radius of the dial
+(/256), an angle in 3-degree steps clockwise from 12, or a fraction of the
+face's width and height - so one program draws the face at every size, in a
+gallery tile, and on every adapter.
+
+| op | its arguments |
+|---|---|
+| `OP_INK` | a logical colour (below) |
+| `OP_ELL` | the dial, centred, at radius f |
+| `OP_TICKS` | n (12 or 60), the inner and outer radius, the stroke, flags (skip the hours, skip 12/3/6/9, only on a face 120 px or wider) |
+| `OP_NUMS` | radius, colour: 12, 3, 6, 9 (x2 on a face 152 px or wider; none under 64) |
+| `OP_TRI` / `OP_DOT` / `OP_SQ` / `OP_POLY` | shapes in polar coordinates: Memphis' and Neon's markings |
+| `OP_HANDS` | the three hands' colours, lengths and strokes (the second only with seconds on) |
+| `OP_CAP` | the centre |
+| `OP_RRECT` | a rounded rectangle: a fraction rect, an inset in px, a corner radius (at a 128-px face) |
+| `OP_TEXTC` / `OP_DATE` / `OP_HLINE` | `CASIO`, `MO 8-24`, a rule |
+| `OP_TIME` | a rect, a style - seven segments, bitmap digits, split-flap panels - a lit colour, a dim one, a panel colour |
+| `OP_DYN` | what follows changes with the time (§110.14.4) |
+
+`OP_TIME` lays out `HH:MM` big and, when there are seconds to show or a
+12-hour clock's AM/PM, a narrow right column with the seconds small at its
+foot and `AM`/`PM` at its head (a dot for PM on a face too short for the
+letters). A 12-hour clock's tens digit is blank under 10. The seven-segment
+digits leave a pixel between segments; the LEDs draw the unlit ones dim. The
+bitmap digits (Mono Digital, the flip clock) are `dk_dfont`, a 6x7 face with
+two-pixel strokes - the ROM's slashed zero scales into a blot - no taller than
+1.5x their width to the eye. The flip clock's card is split across its middle.
+
+**COLOUR is logical.** A program names `dk_lc` entries, each a VGA colour,
+its dither partner and a 1bpp rendering, so one program draws both worlds:
+
+| face | VGA / EGA | 1bpp |
+|---|---|---|
+| Classic | white dial, black rim, ticks, numerals and hands, a light red second hand | as VGA; the second hand black |
+| Memphis '80 | white dial; a magenta zigzag and dot, a cyan and a yellow triangle, a red mark at 12 | the shapes black, 50% and 25% grey |
+| Neon '90 | navy dial; cyan markings and hour hand, magenta minute hand, triangle and squares | black dial, white markings |
+| Mono Digital | black digits in a white rounded frame | the same |
+| Casio LCD | dark bezel, `CASIO` in white, light-green glass, black segments, `MO 8-24` | the glass white |
+| Casio VGA | navy body, a cyan rim and a magenta one, yellow digits | black body, white digits and rims |
+| Red LED | light red segments, the unlit ones dark red dithered with black, on black | white segments, the unlit ones dotted |
+| Amber LED | AMBER = yellow and light red dithered pixel by pixel (the palette has no orange), the unlit ones brown with black | as the red |
+| Flip Clock | white digits on black cards edged grey | the same |
+
+The palette is the standard one and no theme remaps it (§76.12), so the
+colours are fixed; the 1bpp renderings are black, white, 50% and two 25%
+greys (`dk_mpat`).
+
+#### 110.14.4 Every pixel composed, once
+
+Everything the clock and its two windows draw is laid down in the package's
+own RAM first and put on the glass with ONE blit a slab: `OSAPI_GFX_BLITP`'s
+four planes (DI bit 14: an armed clip is walked, not refused) on a colour
+display, `OSAPI_GFX_BLIT1`'s one on a 1bpp display - and on a colour one where
+the BLITP probe refuses (`kern_small`, a straddle), where the faces are drawn
+in their 1bpp renderings. Nothing is written to the glass twice.
+
+- **INK IS A PATTERN.** `[ck_pp]` names a byte per plane per row parity, and
+  a span writes it under a mask: a solid colour is FF/00 a plane, a two-colour
+  dither AA/55. So the amber LED, the dim segments and the 1bpp greys are the
+  same code as black.
+- **THE DESKTOP IS SAMPLED, NOT DRAWN.** A round dial's corners, a narrow
+  face's sides and the gap over a digital face's panel are the desktop. The
+  include lays its two ground columns with `OSAPI_GFX_DESK` before the card,
+  so the card reads two pixels of one of them back (`OSAPI_WM_CLIP_TEST`, then
+  `OSAPI_GFX_SAVE`) and composes the desktop's own ground into the band. The
+  ground is a solid colour or §26's 50% dither, so two pixels a row apart say
+  both its colours and its phase: the dither runs on through the clock with
+  no seam, on every theme. No pixel readable this paint: the last sample.
+- **THE FACE CACHE.** Everything a program draws before `OP_DYN` - the ground
+  at its corners, the panel under a dial, the bezel, the dial, its ticks and
+  numerals - is composed ONCE into a heap claim the face's size
+  (`OSAPI_MEM_CLAIM`: a Medium dial is 7 KB on VGA, 2 KB on 1bpp; a Large
+  one 12 KB) and copied from there; only the hands, the time and the date are
+  drawn each time. A layout change drops it, a paint whose planes or desktop
+  ground differ rebuilds it, and a refused claim is no cache - every paint
+  composes the whole program.
+- **A CHANGE REDRAWS WHAT CHANGED.** A hand that moved repaints the box from
+  the dial's centre to its tip - its old one and its new one as ONE union -
+  and a box drawn from the centre lies inside the dial, so it never touches
+  the ground. A new second under a dial repaints the panel's `:07` alone; on a
+  digital face the right 3/10 of it. The paint composes only the damage's
+  byte columns and rows (`OSAPI_WM_CLIP_SET` arms the window's whole visible
+  region, not the damage, so a paint that put down more than it composed
+  would write stale band over the glass).
+
+**Measured on a 4.77 MHz 8088 (MartyPC, a VGA XT)**, the guest cycles between
+the tick's entry and its next-beat store:
+
+| what | time |
+|---|---|
+| a beat that finds nothing new | 0.4 ms |
+| a second, Medium Classic, seconds on | 104 - 147 ms (the hand's angle sets the box) |
+| a second, Medium Red LED, seconds on | 103 ms |
+| a new minute, seconds off | one such update a minute |
+| a face change (the cache rebuilt, the card whole) | ~0.75 s |
+| the settings window, opened (nine previews) | ~3.1 s |
+
+So the seconds cost an XT about 10-15% of its time, and the clock without
+them nothing it would notice. The first cut was a second's worth of work a
+second - the whole program re-run for every hand's box - and four things
+took it down: the face cache,
+lines as one span a row on an 8.8 slope (no multiply or divide a row), glyph
+rows as one masked write a plane (`ck_g1`, `ck_mrow`), and composing only a
+slab's live rows and columns.
+
+#### 110.14.5 The payload, v1
+
+| off | size | field |
+|---|---|---|
+| +0 | 1 | the face, 0..8 (the gallery's order) |
+| +1 | 1 | flags: bit 0 `Clock face only`, bit 1 seconds, bit 2 24-hour, bit 3 the alarm is set, bit 7 the defaults were made |
+| +2 | 1 | the size, 0 Small, 1 Medium, 2 Large |
+| +3 | 1 | the alarm's hour, 0..23 |
+| +4 | 1 | its minute |
+| +5 | 17 | its label: 0..16 printable characters and a NUL |
+
+32 bytes. A payload with no bit 7, or one `dk_check` refuses (a face, a size
+or a time out of range, a label without its NUL or not printable), is made
+the DEFAULTS: Classic, Medium, the panel shown, no seconds, the system's own
+12/24-hour choice (`OSAPI_CLK_GET` AL bit 1), the alarm off at 07:00
+`Wake up`. The file is as long as its content (§110.5.3): the label's NUL and
+what follows are not written. Its POSITION and whether it is open are the
+include's (§110.5, §110.2). `tools/os88stik.py`'s `deskclok()` /
+`parse_deskclok()` are the host's writer and reader.
+
+#### 110.14.6 The settings window
+
+`Desk Clock Settings`, an ordinary titled second window (unbound: no dock
+tile, §42.1), opened by the gear, a double click, Enter or Clock >
+Settings..., placed on the side of the clock with the more room - wholly
+clear of it where the screen allows, so the preview shows - and drawn in the
+same composer: `OWNBG`, every pixel composed, a slab at a time.
+
+- **Three layouts** by the screen's class, each a table of controls
+  (`dks_tall`, `dks_mid`, `dks_comp`): TALL is the mockup (the subtitle under
+  `Clock face only`, 88-row tiles with 64-px dial and 96-px digital
+  previews); MID drops nothing but height (60-row tiles, 56-px dials); COMPACT
+  (CGA's 200 rows) puts the three boxes on one row and the size and the
+  status on the next, with 30-row tiles (36 and 56 px previews), 156 rows in
+  all.
+- **The previews ARE the faces**: `dk_face` at the tile's size, with the time
+  as it is and the seconds and the 12/24 hours as the boxes say - so the
+  gallery is redrawn when either box changes. The selected tile has a double
+  border and its name white on a black bar beside a ticked box; the status
+  line says `Selected: Red LED`.
+- **A change previews at once**: the window edits the PAYLOAD itself and the
+  clock is laid out and drawn again (`dk_relay`), while `dk_sav` keeps what
+  was last applied. **Apply** makes the preview the applied state and owes
+  the save; **OK** is Apply and close; **Cancel**, Esc and the close box put
+  `dk_sav` back and close. The clock's tick holds any save while a window of
+  its is up (`STIK_ONTICK`'s CF), so a preview is never what the disk says;
+  closing the clock with a preview up restores first.
+- **Size** is a drop-down: the box shows the size and an arrow; a press opens
+  the three below it, over the gallery and in the same slabs, and a press on
+  one picks it.
+- **Keys**: the arrows walk the gallery (and preview), `F`, `S`, `H` the
+  boxes, `Z` the size, `A` Apply, Enter OK, Esc Cancel (or shuts the open
+  list). OK is the default button: its ring is two pixels thick.
+- A colour paint borrows a heap claim ONE TILE ROW tall (17 KB on VGA) for
+  its band and lays its slabs on the tile rows, so each preview is composed
+  once; refused, it paints with the 4.6 KB band, slower.
+
+#### 110.14.7 The alarm
+
+**The alarm window** (`Alarm`, titled, unbound, beside the clock): `[x] Alarm
+on`, `Time: [07] : [30] [AM]` with `-` and `+`, and `Label: [Wake up_]`. It
+edits a COPY; OK writes it into the payload - owing the save, dropping a
+snooze - and Cancel, Esc and the close box drop it. The keys: Tab and
+Left/Right walk the hour, the minute, the AM/PM (12-hour only) and the label;
+Up/Down and `-`/`+` step the hour or the minute round its dial; a digit types
+into one (the field's last digit becomes its tens); Space ticks the box
+outside the label; letters and Backspace edit the label (16 characters).
+
+**It rings** at its minute, once a day: the tick that sees a new minute
+compares it with the alarm's (or a snooze's), and `[dk_lfire]` keeps it to
+once a minute. Ringing: a toast `Alarm: <label>` (§59.10), the panel's rows
+grow `Snooze . Dismiss`, and the speaker chirps - 880 Hz and 660 Hz, a note a
+6-tick beat, `OSAPI_SND_TONE` at the package priority - for 30 seconds; its
+rows stay until one is picked. **Snooze** is 5 minutes (past midnight it
+rolls into tomorrow) and shows `Zz 07:35` on the row; **Dismiss** waits for
+tomorrow. Neither is modal and neither takes the keys (§110.3's rules).
+
+#### 110.14.8 What it costs
+
+**No kernel byte.** `DESKCLOK.O88` is a 25,152-byte image and 5,368 bytes of
+bss (its band 4,608 of it), 20,382 bytes packed on the disk - 20 clusters at
+360 KB, which is where §24.3.1.5's room went. At run time it claims the face
+cache (above) and, for a colour settings paint, its tall band. `os88stik.inc`
+gained `STIK_VARFACE`, which neither other Sticky App defines, so their builds
+are unchanged.
+
+#### 110.14.9 What is not done
+
+- **The Sticky Apps menu** (§110.12) starts and closes the clock as it does
+  every App; its settings are the clock's own: its menus, the gear, a double
+  click and Enter. A row of Locator's menu that opens an App's settings would
+  be a protocol between `STIKMENU.DRV` and the App, which nothing has yet.
+- **One alarm**, daily; no weekday set, no tune.
+- **Seconds every 2 s on kern_small** (the worker's beat), and the titled
+  fallback's corners are white (no desktop under a titled window).
+- **EGA is checked by its geometry**, not on the glass: MartyPC has no EGA,
+  and the MID layout is Hercules'.
+
+`tests/deskclock.py` is the gate (soak): the `vga` leg - the corners the
+desktop's dither, the seconds, Face > Red LED and its save, the settings
+window beside the clock with a tile's preview, Cancel and OK, `Clock face
+only`, the alarm saved, ringing at 07:00 on the guest's clock and snoozed, and
+the clock back after a reset - and the `herc` leg (`deskclockherc`), the Red
+LED face on one plane. `t_stik` (fast) holds the payload and the bss fields to
+the host tool and walks every system image for `STIKAPPS/DESKCLOK.O88`.
 
 ## 111. TIMER — the stopwatch (`apps/timer/timer.asm`)
 

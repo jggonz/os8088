@@ -10114,6 +10114,26 @@ SOAK = [
         "Color > Pink makes the page and the pad pink and says so in the "
         "file, the list still white.",
         needs=("marty",), timeout=600, wants=("build/os8088-360.img",)),
+    Row("deskclock", "soak", py("tests/deskclock.py"), 150.0,
+        "SPEC.md 110.14: the Desk Clock on a VGA XT off the shipped 360KB "
+        "system disk - a desk window, Medium Classic, whose dial's corners "
+        "are the desktop's dither with its phase (the ground sampled off the "
+        "glass and composed); S moves the dial a second at a time; Face > "
+        "Red LED lights it red and saves face 6; Enter opens the settings "
+        "BESIDE the clock, a tile previews on the desk (Neon's navy) and Esc "
+        "puts the Red LED back, Classic + OK keeps Classic in the file; F "
+        "shrinks the frame to the face with a plate-less tag row; the alarm "
+        "set to 07:00 in its window is saved, rings at 07:00 on the guest's "
+        "clock (the face-only frame grows for its rows) and Z snoozes it; "
+        "and a reset brings the clock back from its row, as it was.",
+        needs=("marty",), timeout=1200, wants=("build/os8088-360.img",)),
+    Row("deskclockherc", "soak", py("tests/deskclock.py", "--leg", "herc"),
+        60.0,
+        "SPEC.md 110.14: the Desk Clock on a Hercules 5150 (one plane, the MID "
+        "layout): the Red LED face lit white on black with its unlit "
+        "segments dotted, and the ground at the face's corner the desktop's "
+        "dither.",
+        needs=("marty",), timeout=600, wants=("build/os8088-360.img",)),
     Row("deskcalgrid", "soak", py("tests/deskcalgrid.py"), 40.0,
         "SPEC.md 110.3: the Desk Calendar's 42-byte grid, read out of the "
         "running guest's bss, is Python calendar's - MONDAY FIRST since v2 "

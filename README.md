@@ -298,10 +298,20 @@ a Standard File dialog for opening and saving.
   `[ ]` at the start of a line makes a check box, and a click ticks one on
   the pad or in the editor. On VGA and EGA each note has a paper - yellow,
   pink, green, blue or white (SPEC.md 110.13).
+- **Desk Clock** — the third Sticky App: a clock on the desk in nine faces -
+  three dials (Classic, Memphis '80, Neon '90) and six digital (Mono
+  Digital, Casio LCD, Casio VGA, Red LED, Amber LED, Flip Clock) - at three
+  sizes, with seconds or not, 12- or 24-hour, and a daily alarm with Snooze
+  and Dismiss. `Clock face only` leaves just the face on the desk; a double
+  click, the gear or Enter opens `Desk Clock Settings`, whose gallery
+  previews every face and whose changes preview on the desk before OK. In
+  colour on VGA and EGA, in black, white and greys on CGA and Hercules
+  (SPEC.md 110.14).
 - **Menu bar clock** — read from the hardware RTC at boot if the machine has
   one, kept from the PIT after that, and settable.
 - **A system clipboard**, shared across apps.
-- **Typefaces** — **ten** `.F88` faces in `SYSTEM/FONTS/` on the system disk, found
+- **Typefaces** — **ten** `.F88` faces in `SYSTEM/FONTS/` on the system disk (on the
+  office disk at 360KB, SPEC.md 24.3.1.5), found
   at run time by any app that asks: Charter and the house 8x8 cell, a Times, a
   Helvetica and a Courier, two more text faces and three monospaces, each
   fitted onto an 8-pixel grid from an open outline font (SPEC.md 6.4.1). The

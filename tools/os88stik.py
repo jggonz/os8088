@@ -653,6 +653,97 @@ def stiknote_paras(body):
     return out
 
 
+# --- the Desk Clock's payload (SPEC.md 110.14.5) --------------------------------
+# deskclok.asm's DKP_* / DKF_* / DK_*; tests/unit/t_stik.py holds every one of
+# these to the package's own numbers, evaluated by NASM
+DESKCLOK_PAYLEN = 32
+DESKCLOK_PAYVER = 1
+DESKCLOK_FACE = 0                # db the face, 0..8
+DESKCLOK_FLAGS = 1               # db DESKCLOK_F_*
+DESKCLOK_F_ONLY = 1              # `Clock face only`
+DESKCLOK_F_SECS = 2              # seconds shown
+DESKCLOK_F_H24 = 4               # 24-hour
+DESKCLOK_F_ALARM = 8             # the alarm is set
+DESKCLOK_F_INIT = 0x80           # the defaults were made once
+DESKCLOK_SIZE = 2                # db 0 Small, 1 Medium, 2 Large
+DESKCLOK_AH = 3                  # db the alarm's hour, 0..23
+DESKCLOK_AM = 4                  # db ...its minute
+DESKCLOK_LABEL = 5               # 17: the label, 0..16 characters and a NUL
+DESKCLOK_LABMAX = 16
+DESKCLOK_FACES = ("Classic", "Memphis '80", "Neon '90", "Mono Digital",
+                  "Casio LCD", "Casio VGA", "Red LED", "Amber LED",
+                  "Flip Clock")
+DESKCLOK_ANALOG = 3              # faces 0..2 have hands
+DESKCLOK_SIZES = ("Small", "Medium", "Large")
+DESKCLOK_SZW = ((80, 112, 152), (96, 128, 176))   # a face's width: dial, digital
+DESKCLOK_STIK_BSS = 5088         # deskclok.asm's DK_BSS: its own state first
+DESKCLOK_BSS_WIN = 251           # dw the clock's window
+DESKCLOK_BSS_CW = 271            # dw the card's width...
+DESKCLOK_BSS_CH = 273            # dw ...and height
+DESKCLOK_BSS_RING = 382          # db 0 quiet, 1 ringing, 2 rung out
+DESKCLOK_BSS_SNZ = 383           # db snoozed
+DESKCLOK_BSS_SWIN = 388          # dw the settings window, 0 none
+DESKCLOK_BSS_AWIN = 437          # dw the alarm window, 0 none
+DESKCLOK_BSS_COK = 136           # db the face cache holds the face
+
+
+def deskclok(face=0, only=False, secs=False, h24=True, alarm=False, size=1,
+             ah=7, am=0, label="Wake up", init=True):
+    """A Desk Clock payload: what dk_check accepts, the face an index into
+    DESKCLOK_FACES and the size into DESKCLOK_SIZES."""
+    if not 0 <= face < len(DESKCLOK_FACES):
+        raise DiaError("face %d" % face)
+    if not 0 <= size < len(DESKCLOK_SIZES):
+        raise DiaError("size %d" % size)
+    if not (0 <= ah < 24 and 0 <= am < 60):
+        raise DiaError("alarm %d:%d" % (ah, am))
+    lab = label.encode("latin-1")
+    if len(lab) > DESKCLOK_LABMAX or any(c < 32 or c > 126 for c in lab):
+        raise DiaError("label %r" % label)
+    p = bytearray(DESKCLOK_PAYLEN)
+    p[DESKCLOK_FACE] = face
+    p[DESKCLOK_FLAGS] = ((DESKCLOK_F_ONLY if only else 0) |
+                         (DESKCLOK_F_SECS if secs else 0) |
+                         (DESKCLOK_F_H24 if h24 else 0) |
+                         (DESKCLOK_F_ALARM if alarm else 0) |
+                         (DESKCLOK_F_INIT if init else 0))
+    p[DESKCLOK_SIZE] = size
+    p[DESKCLOK_AH] = ah
+    p[DESKCLOK_AM] = am
+    p[DESKCLOK_LABEL:DESKCLOK_LABEL + len(lab)] = lab
+    return bytes(p)
+
+
+def parse_deskclok(p):
+    """The payload back, with deskclok.asm's own refusals (dk_check): a
+    payload it would replace with the defaults raises DiaError."""
+    p = bytes(p)
+    if len(p) != DESKCLOK_PAYLEN:
+        raise DiaError("%d bytes, not %d" % (len(p), DESKCLOK_PAYLEN))
+    fl = p[DESKCLOK_FLAGS]
+    if not fl & DESKCLOK_F_INIT:
+        raise DiaError("no INIT mark: the defaults")
+    if p[DESKCLOK_FACE] >= len(DESKCLOK_FACES) or p[DESKCLOK_SIZE] >= 3:
+        raise DiaError("face %d, size %d" % (p[DESKCLOK_FACE], p[DESKCLOK_SIZE]))
+    if p[DESKCLOK_AH] >= 24 or p[DESKCLOK_AM] >= 60:
+        raise DiaError("alarm %d:%d" % (p[DESKCLOK_AH], p[DESKCLOK_AM]))
+    lab = p[DESKCLOK_LABEL:DESKCLOK_LABEL + DESKCLOK_LABMAX + 1]
+    if 0 not in lab:
+        raise DiaError("the label has no NUL")
+    lab = lab[:lab.index(0)]
+    if any(c < 32 or c > 126 for c in lab):
+        raise DiaError("the label is not printable")
+    return {"face": p[DESKCLOK_FACE],
+            "face_name": DESKCLOK_FACES[p[DESKCLOK_FACE]],
+            "only": bool(fl & DESKCLOK_F_ONLY),
+            "secs": bool(fl & DESKCLOK_F_SECS),
+            "h24": bool(fl & DESKCLOK_F_H24),
+            "alarm": bool(fl & DESKCLOK_F_ALARM),
+            "size": p[DESKCLOK_SIZE],
+            "ah": p[DESKCLOK_AH], "am": p[DESKCLOK_AM],
+            "label": lab.decode("latin-1")}
+
+
 def stiknote_wrap(body, w=STIKNOTE_TW, wb=STIKNOTE_BTW):
     """sntext.inc's WALK, mirrored: the body cut into visual lines - a
     paragraph that does not fit breaks after its last space (the space is
@@ -780,6 +871,19 @@ def selfcheck():
     w = widget_off(288, 0)
     ok(w["stik_wf"] == stik_st_off(288, 0) + 37 and w["stik_hv"] == w["stik_wf"] + 1,
        "the widget's fields follow v1's 37 bytes")
+
+    # the Desk Clock's payload
+    dk = deskclok(face=6, only=True, secs=True, alarm=True, ah=21, am=0,
+                  label="Back up files")
+    ok(len(dk) == DESKCLOK_PAYLEN, "a Desk Clock payload is 32 bytes")
+    pk = parse_deskclok(dk)
+    ok(pk["face_name"] == "Red LED" and pk["only"] and pk["secs"]
+       and pk["h24"] and pk["alarm"] and (pk["ah"], pk["am"]) == (21, 0)
+       and pk["label"] == "Back up files", "a Desk Clock payload round-trips")
+    ok(trim_payload(dk) == dk[:DESKCLOK_LABEL + len("Back up files")],
+       "...and its file is its content: the label's NUL and on are left off")
+    refuses(lambda: parse_deskclok(bytes(32)), "a payload with no INIT mark")
+    refuses(lambda: deskclok(label="X" * 17), "a 17-character label")
 
     # the Desk Calendar's payload
     pay = deskcal(appts=[((2026, 10, 13), 570, "Dentist"),

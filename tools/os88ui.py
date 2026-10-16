@@ -601,6 +601,7 @@ class UI:
     # here, so a caller written for a titled window drives a widget too.
     # =========================================================================
     _WIDGETS = {"Desk Calendar": ("DESKCAL_STIK_BSS", "DESKCAL_PAYLEN"),
+                "Desk Clock": ("DESKCLOK_STIK_BSS", "DESKCLOK_PAYLEN"),
                 "DeskProbe": (288, 0)}
 
     def _is_desk(self, w):
