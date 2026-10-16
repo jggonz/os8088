@@ -1,0 +1,1147 @@
+; =============================================================================
+; os8088 - apps/deskclok/deskclok.asm
+;
+; DESK CLOCK - the third STICKY APP (SPEC.md 110, its own section 110.14): a
+; clock pinned to the desktop, in nine faces - three dials (Classic, Memphis
+; '80, Neon '90) and six digital ones (Mono Digital, Casio LCD, Casio VGA,
+; Red LED, Amber LED, Flip Clock) - at three sizes, with seconds or not, 12-
+; or 24-hour, and a daily alarm with Snooze and Dismiss. It ships in
+; STIKAPPS\ on the system disk and includes apps/os88stik.inc, which owns its
+; place, its state file (SYSTEM\APPDATA\DESKCLOK.DAT) and its row in the
+; desktop configuration.
+;
+; THREE WINDOWS, ONE PROGRAM:
+;
+;   THE CLOCK      the Sticky App's own window - a DESK window (SPEC.md
+;                  11.103) in os88stik.inc's widget treatment, its size the
+;                  settings' (STIK_VARFACE): the face and, unless `Clock face
+;                  only`, the info panel under it (dkwid.inc)
+;   THE SETTINGS   `Desk Clock Settings`, a titled second window: the three
+;                  check boxes, the size, the gallery of nine faces, and
+;                  Cancel / Apply / OK. A change previews on the desk at once
+;                  (dkset.inc)
+;   THE ALARM      `Alarm`, a small titled second window: on or off, the
+;                  time, the label (dkalm.inc)
+;
+;   deskclok.asm  this: header, card, payload, bss, entry, the tick, keys,
+;                 menus, the alarm's ringing
+;   dkdraw.inc    the composer: a 1- or 4-plane band, spans, glyphs, shapes
+;   dkface.inc    the nine faces, as programs, and the time and date
+;   dkwid.inc     the clock on the desk: layout, paint, presses, redraws
+;   dkset.inc     the settings window
+;   dkalm.inc     the alarm window
+;
+; COLOUR is composed in four planes and put down with OSAPI_GFX_BLITP on a
+; VGA or EGA; a 1bpp adapter gets the same faces in black, white and three
+; greys (dkdraw.inc's dk_lc). Nothing is drawn twice: each slab is composed
+; in RAM, desktop and all, and blitted once (SPEC.md 110.14.4).
+; =============================================================================
+
+%include "os88api.inc"
+
+    OS88_HEADER 'Desk Clock', dk_entry, OS88_F_ICON | OS88_F_DESK | OS88_F_STIK
+
+; A clock's dial at ten past ten: also the Sticky App row's picture
+; (STIK_ICON), so a row the boot could not launch becomes a desktop icon that
+; looks like what it was (SPEC.md 110.4).
+    OS88_ICON16
+    dw 0x0000, 0x0FF0, 0x1FF8, 0x3FFC, 0x7FFE, 0x7FFE, 0x7FFE, 0x7FFE
+    dw 0x7FFE, 0x7FFE, 0x7FFE, 0x7FFE, 0x3FFC, 0x1FF8, 0x0FF0, 0x0000
+    dw 0x0000, 0x0FF0, 0x1898, 0x300C, 0x6006, 0x4C1A, 0x4672, 0x43C2
+    dw 0x6086, 0x4002, 0x4002, 0x6006, 0x300C, 0x1898, 0x0FF0, 0x0000
+    OS88_ICON16_END
+
+; The Sticky Apps menu's row for us (SPEC.md 110.12): a dial at ten past ten.
+    OS88_STIKCARD 'Desk Clock', 'Nine faces & an alarm'
+    OS88_STIKROW '................................'
+    OS88_STIKROW '..............####..............'
+    OS88_STIKROW '..........############..........'
+    OS88_STIKROW '........####....#...####........'
+    OS88_STIKROW '.......###......#.....###.......'
+    OS88_STIKROW '......##.##.....#....##.##......'
+    OS88_STIKROW '.....##...#..........#...##.....'
+    OS88_STIKROW '....##....................##....'
+    OS88_STIKROW '...##......................##...'
+    OS88_STIKROW '...###....................###...'
+    OS88_STIKROW '..##.##................####.##..'
+    OS88_STIKROW '..##.....###.........#####..##..'
+    OS88_STIKROW '..#......####......######....#..'
+    OS88_STIKROW '..#.......#####...#####......#..'
+    OS88_STIKROW '.##........##########........##.'
+    OS88_STIKROW '.##..........#######.........##.'
+    OS88_STIKROW '.#####........####........#####.'
+    OS88_STIKROW '.##..........................##.'
+    OS88_STIKROW '..#..........................#..'
+    OS88_STIKROW '..#..........................#..'
+    OS88_STIKROW '..##........................##..'
+    OS88_STIKROW '..##.##..................##.##..'
+    OS88_STIKROW '...###....................###...'
+    OS88_STIKROW '...##......................##...'
+    OS88_STIKROW '....##....................##....'
+    OS88_STIKROW '.....##...#..........#...##.....'
+    OS88_STIKROW '......##.##.....#....##.##......'
+    OS88_STIKROW '.......###......#.....###.......'
+    OS88_STIKROW '........####....#...####........'
+    OS88_STIKROW '..........############..........'
+    OS88_STIKROW '..............####..............'
+    OS88_STIKROW '................................'
+    OS88_STIKCARD_END
+
+; --- the payload v1 (SPEC.md 110.14.5) -----------------------------------------
+; tools/os88stik.py's DESKCLOK_* are the same numbers; t_stik holds them equal
+DKP_FACE    equ 0               ; db the face, 0..8 (dkface.inc's order)
+DKP_FLAGS   equ 1               ; db DKF_*
+DKF_ONLY    equ 1               ; `Clock face only`
+DKF_SECS    equ 2               ; seconds shown
+DKF_H24     equ 4               ; 24-hour
+DKF_ALARM   equ 8               ; the alarm is set
+DKF_INIT    equ 80h             ; the defaults were made once
+DKP_SIZE    equ 2               ; db 0 Small, 1 Medium, 2 Large
+DKP_AH      equ 3               ; db the alarm's hour, 0..23
+DKP_AM      equ 4               ; db ...its minute
+DKP_LABEL   equ 5               ; 17: its label, 0..16 characters and a NUL
+DK_LABMAX   equ 16
+DKP_LEN     equ 32
+DKP_VER     equ 1
+DKF_N       equ 9               ; the faces (dkface.inc's order)
+DKF_ANALOG  equ 3               ; 0..2 have hands; 3..8 are digital
+
+; --- the Sticky App (apps/os88stik.inc, SPEC.md 110.5, 110.11, 110.14.1) -------
+%define STIK_DATNAME 'DESKCLOK.DAT'
+%define STIK_CAP     'Desk Clock'
+%define STIK_ISOPEN  'Desk Clock is open'
+%define STIK_DAMAGEDQ 'Replace damaged clock?'
+%define STIK_ONTICK  dk_tick
+%define STIK_ONCLOSE dk_onclose
+STIK_PAYLEN equ DKP_LEN
+STIK_PAYVER equ DKP_VER
+STIK_ICON   equ 32
+STIK_BSS    equ DK_BSS          ; the include's state follows ours
+%define STIK_WIDGET
+%define STIK_VARFACE            ; the width and the card are the settings'
+%define STIK_SIZEUP   dk_sizeup
+%define STIK_COLOR              ; the titled fallback's save-under: 4 planes
+%define STIK_TAG      'Desk Clock'      ; = the title
+%define STIK_FACE_W 176         ; the WIDEST face (a %define: %ifndef)
+%define STIK_RIGHT    400
+%define STIK_LAYOUTS  dk_lays
+%define STIK_PAINTCARD dk_pcard
+%define STIK_ONCARD   dk_oncard
+%define STIK_ONCARDUP dk_oncardup
+%define GFXE_TEXT
+%define GFXE_BITS
+%define GFXE_BAND_W   176       ; the tag's band: the include's, in ours
+%define GFXE_BAND_H   16
+%define GFXE_BAND_BUF dk_band
+
+DKP         equ STIK_PAY
+DK_BANDSZ   equ 4608            ; the composer's band: four planes of a
+DK_SLABMAX  equ 64              ; 368-px window x 25 rows, or of the clock
+                                ; x 52; one plane takes more rows, up to 64
+DK_SETW     equ 368             ; the settings window's content width
+
+KSC_PGUP    equ 0x49
+KSC_PGDN    equ 0x51
+
+; --- bss: OURS FIRST, at fixed offsets ----------------------------------------
+%assign DKB 0
+%macro DKV 2                    ; name, bytes
+%1 equ os88_image_end + DKB
+%assign DKB DKB + %2
+%endmacro
+    ; the composer (dkdraw.inc)
+    DKV ck_st, 2
+    DKV ck_ps, 2
+    DKV ck_y0, 2
+    DKV ck_sh, 2
+    DKV ck_cx0, 2
+    DKV ck_cx1, 2
+    DKV ck_ox, 2
+    DKV ck_oy, 2
+    DKV ck_pp, 2
+    DKV ck_pat, 8
+    DKV ck_gnd, 8
+    DKV ck_fseg, 2
+    DKV ck_foff, 2
+    DKV ck_bw, 2
+    DKV ck_bh, 2
+    DKV ck_rx, 2
+    DKV ck_ry, 2
+    DKV dk_gl, 8
+    DKV dk_lx, 2
+    DKV dk_ly, 2
+    DKV dk_lsx, 2
+    DKV dk_lsy, 2
+    DKV dk_tp, 12
+    DKV ck_np, 1
+    DKV ck_par, 1
+    DKV ck_gpar, 1
+    DKV ck_ffst, 1
+    DKV ck_flst, 1
+    DKV ck_gsx, 1
+    DKV ck_gsy, 1
+    DKV ck_gbold, 1
+    ; the faces (dkface.inc)
+    DKV dk_fw, 2
+    DKV dk_fh, 2
+    DKV dk_cx, 2
+    DKV dk_cy, 2
+    DKV dk_R, 2
+    DKV dk_Ry, 2
+    DKV dk_ys, 2                ; the screen's aspect: rows a px across, x256
+    DKV dk_tx, 2
+    DKV dk_ty, 2
+    DKV dk_tw, 2
+    DKV dk_th, 2
+    DKV dk_dw, 2
+    DKV dk_gap, 2
+    DKV dk_cur, 2
+    DKV dk_stx, 2
+    DKV dk_sty, 2
+    DKV dk_smid, 2
+    DKV dk_dig, 6
+    DKV dk_numf, 1
+    DKV dk_tn, 1
+    DKV dk_tf1, 1
+    DKV dk_tf2, 1
+    DKV dk_tfl, 1
+    DKV dk_tst, 1
+    DKV dk_tsty, 1
+    DKV dk_tlit, 1
+    DKV dk_tdim, 1
+    DKV dk_taux, 1
+    DKV dk_tam, 1
+    DKV dk_tcol, 1
+    DKV dk_d, 1
+    DKV dk_sbits, 1
+    DKV dk_sbit, 1
+    ; the clock
+    DKV dk_year, 2
+    DKV dk_mon, 1
+    DKV dk_day, 1
+    DKV dk_hh, 1
+    DKV dk_mm, 1
+    DKV dk_ss, 1
+    DKV dk_dow, 1
+    DKV dk_rtc, 1
+    DKV dk_line, 24
+    DKV dk_small, 8
+    ; the clock on the desk (dkwid.inc)
+    DKV dk_win, 2
+    DKV dk_lay, 12              ; a STIK_LAYOUT entry (STIKL_SZ, checked below)
+    DKV dk_faw, 2
+    DKV dk_fah, 2
+    DKV dk_fox, 2
+    DKV dk_cw, 2
+    DKV dk_ch, 2
+    DKV dk_pix, 2
+    DKV dk_pt, 2
+    DKV dk_ph, 2
+    DKV dk_tyT, 2
+    DKV dk_tyD, 2
+    DKV dk_tyR, 2
+    DKV dk_tyA, 2
+    DKV dk_tyS, 2
+    DKV dk_r0, 2
+    DKV dk_r1, 2
+    DKV dk_t0, 2
+    DKV dk_t1, 2
+    DKV dk_gsx, 2
+    DKV dk_gsy, 2
+    DKV dk_gsv, 8
+    DKV dk_hnew, 24             ; the hands' boxes now...
+    DKV dk_hold, 24             ; ...and on the glass
+    DKV dk_hang, 3              ; the hands' angles now...
+    DKV dk_hshown, 3            ; ...and on the glass
+    DKV dk_clkt, 2              ; the last press: its tick and place
+    DKV dk_clkx, 2
+    DKV dk_clky, 2
+    DKV dk_lfire, 2             ; the minute of the day the alarm last rang
+    DKV dk_rbeat, 2             ; the beats it has rung
+    DKV dk_kind, 1              ; 0 a dial, 3 digital
+    DKV dk_pan, 1               ; 0 no panel, 1 the full one, 2 the alarm's
+    DKV dk_bsy, 1               ; the big time's rows a glyph row
+    DKV dk_dbpp, 1              ; the window's display's bits a pixel
+    DKV dk_gok, 1               ; a ground sample is held
+    DKV dk_gq, 1
+    DKV dk_press, 1             ; the panel control a press went to
+    DKV dk_ring, 1              ; 0 quiet, 1 ringing, 2 rung out (shown)
+    DKV dk_snz, 1               ; snoozed...
+    DKV dk_snh, 1               ; ...until this hour
+    DKV dk_snm, 1               ; ...and minute
+    DKV dk_lsec, 1              ; the second the glass shows
+    DKV dk_mono, 1              ; the primary is 1bpp
+    ; the settings window (dkset.inc)
+    DKV dk_swin, 2
+    DKV dk_sav, DKP_LEN         ; the payload as last applied
+    DKV dk_sgeo, 2              ; its layout
+    DKV dk_sox, 2               ; its content's origin
+    DKV dk_soy, 2
+    DKV dk_sbtn, 1              ; a button pressed, + 1
+    DKV dk_sdrop, 1             ; the size list is open
+    DKV dk_sfold, 1             ; the face before a change
+    ; the alarm window (dkalm.inc)
+    DKV dk_awin, 2
+    DKV dk_ageo, 2
+    DKV dk_aox, 2
+    DKV dk_aoy, 2
+    DKV dk_aon, 1               ; the edit: on, hour, minute, label
+    DKV dk_ah, 1
+    DKV dk_am, 1
+    DKV dk_afoc, 1              ; the field with the keys: 0 hour, 1 minute,
+                                ; 2 the label
+    DKV dk_abtn, 1
+    DKV dk_alab, DK_LABMAX + 1
+%assign DKB (DKB + 15) & ~15
+    DKV dk_band, DK_BANDSZ
+DK_BSS      equ DKB             ; a multiple of 16
+%if DK_BSS % 16
+  %error "deskclok: its own bss must end on a paragraph"
+%endif
+
+; -----------------------------------------------------------------------------
+; dk_entry - the entry proc (DS = CS = ours, ES = KERNEL_SEG, the UI task)
+; in:  SI = the loader's name, for os88stik.inc
+; out: CF = 0 launched; CF = 1 not (another Desk Clock is up, or no window)
+; -----------------------------------------------------------------------------
+dk_entry:
+    push si
+    push di
+    call dk_aspect              ; [dk_ys]: STIK_SIZEUP measures with it
+    mov word [dk_lfire], 0FFFFh
+    mov word [dk_clkt], 8000h
+    call dk_now                 ; the clock, before the first paint
+    mov di, dk_tpl
+    call stik_load              ; the state file, the layout (dk_sizeup),
+    jc .out                     ; the template's size and place
+    mov si, dk_tpl
+    call OSAPI_WM_CREATE        ; BX = the clock, CF = the table is full
+    jc .out
+    mov [dk_win], bx
+    OS88_REGION_MOVABLE dk_ret
+    mov al, 1
+    call OSAPI_WM_KEEPH         ; a fixed layout: hang over the dock, never cut
+    mov si, dk_menus
+    call OSAPI_MENU_SET
+    mov si, dk_about
+    call OSAPI_ABOUT_SET
+    call stik_made              ; MAKE, the prefilters, the tick
+    call dk_hands               ; what the first paint will draw
+    call dk_hkeep
+    mov al, [dk_ss]
+    mov [dk_lsec], al
+    call dk_menulive
+    clc
+.out:
+    pop di
+    pop si
+dk_ret:
+    ret
+
+; dk_aspect - [dk_ys] = the primary's rows a pixel across, x256: 256 on
+; VGA's square pixels, 107 on CGA's 640 x 200, 165 on Hercules. [dk_mono]
+dk_aspect:
+    push ax
+    push bx
+    push cx
+    push dx
+    call OSAPI_VIDEO            ; AX = width, BX = height, DH = bits a pixel
+    mov cl, 0
+    cmp dh, 1
+    ja .c
+    inc cx
+.c:
+    mov [dk_mono], cl
+    mov cx, ax
+    mov ax, bx
+    mov dx, 1024 / 4            ; h x 1024 / (3 w), in two steps for range:
+    mul dx                      ; h x 256 / (3 w / 4)
+    push ax
+    mov ax, cx
+    mov bx, 3
+    push dx
+    mul bx
+    shr ax, 1
+    shr ax, 1
+    mov bx, ax
+    pop dx
+    pop ax
+    div bx
+    mov [dk_ys], ax
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dk_check - a payload this build did not write is made the DEFAULTS: Classic,
+; Medium, the panel shown, no seconds, the system's 12/24-hour choice, the
+; alarm off at 07:00 `Wake up`. A file with no INIT mark is a first launch.
+; Keeps everything
+; -----------------------------------------------------------------------------
+dk_check:
+    push ax
+    push cx
+    push si
+    test byte [DKP + DKP_FLAGS], DKF_INIT
+    jz .def
+    cmp byte [DKP + DKP_FACE], DKF_N
+    jae .def
+    cmp byte [DKP + DKP_SIZE], 3
+    jae .def
+    cmp byte [DKP + DKP_AH], 24
+    jae .def
+    cmp byte [DKP + DKP_AM], 60
+    jae .def
+    mov si, DKP + DKP_LABEL     ; the label: printable, and its NUL inside
+    mov cx, DK_LABMAX + 1
+.l:
+    lodsb
+    or al, al
+    jz .ok
+    cmp al, ' '
+    jb .def
+    cmp al, 126
+    ja .def
+    loop .l
+    jmp short .def
+.ok:
+    pop si
+    pop cx
+    pop ax
+    ret
+.def:
+    push di
+    push es
+    push ds
+    pop es
+    mov di, DKP
+    mov cx, DKP_LEN
+    xor al, al
+    cld
+    rep stosb
+    mov byte [DKP + DKP_SIZE], 1
+    mov byte [DKP + DKP_AH], 7
+    mov si, dks_wake
+    mov di, DKP + DKP_LABEL
+    mov cx, 8
+    rep movsb
+    pop es
+    pop di
+    mov al, DKF_INIT | DKF_H24
+    test byte [dk_rtc], 2       ; the user chose a 12-hour clock (SPEC.md
+    jz .h                       ; 37.96): so does a first launch
+    and al, ~DKF_H24 & 0FFh
+.h:
+    mov [DKP + DKP_FLAGS], al
+    jmp short .ok
+dks_wake:   db 'Wake up', 0
+
+; -----------------------------------------------------------------------------
+; dk_tick - STIK_ONTICK, every beat (the UI task, lock held, no clip): the
+; time read; what changed redrawn and nothing more; the alarm; the next beat
+; aimed - every 6 ticks while the seconds show or the alarm rings, else at
+; the next minute (at most 35 ticks out).
+; out: CF = 1 HOLD any save owed: the settings or the alarm window is up, so
+;      the payload is a preview
+; -----------------------------------------------------------------------------
+dk_tick:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov ch, [dk_hh]             ; the time on the glass
+    mov cl, [dk_mm]
+    mov dh, [dk_day]
+    call dk_now
+    cmp dh, [dk_day]
+    jne .full                   ; a new day: the date, everything
+    cmp ch, [dk_hh]
+    jne .min
+    cmp cl, [dk_mm]
+    jne .min
+    mov al, [dk_ss]
+    cmp al, [dk_lsec]
+    je .ring
+    test byte [DKP + DKP_FLAGS], DKF_SECS
+    jz .hands                   ; (the minute hand steps at :30 too)
+    call dk_dsecs               ; a second: the seconds and nothing else
+    jmp short .hands
+.min:
+    call dk_alarm               ; a minute: is it time?
+    call dk_dmin
+.hands:
+    cmp byte [dk_kind], 0
+    jne .ring
+    call dk_hmove
+    jmp short .ring
+.full:
+    call dk_alarm
+    call dk_redraw
+    call dk_hands
+    call dk_hkeep
+.ring:
+    mov al, [dk_ss]
+    mov [dk_lsec], al
+    call dk_chirp               ; a note, while it rings
+    mov al, 6                   ; the next beat
+    cmp byte [dk_ring], 1
+    je .nx
+    test byte [DKP + DKP_FLAGS], DKF_SECS
+    jnz .nx
+    mov al, 60
+    sub al, [dk_ss]             ; ticks to the minute: (60 - s) x 18.2
+    mov ah, 18
+    mul ah
+    cmp ax, 35
+    jbe .lo
+    mov ax, 35
+.lo:
+    cmp al, 2
+    jae .nx
+    mov al, 2
+.nx:
+    mov [stik_nx], al
+    mov ax, [dk_swin]           ; a window of ours up: the payload is a
+    or ax, [dk_awin]            ; preview - hold the save
+    neg ax                      ; CF = 1 when either is open
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dk_dmin - a new minute on the glass: a digital face whole, the panel's
+; time under a dial
+dk_dmin:
+    cmp byte [dk_kind], 0
+    jne dk_dface
+    jmp short dk_dbig
+
+; dk_dsecs - a new second: a digital face's seconds column, or the panel's
+; time under a dial (whose second hand dk_hmove moves)
+dk_dsecs:
+    cmp byte [dk_kind], 0
+    je dk_dbig
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [dk_faw]            ; the right 3/10 of the face: the column
+    mov cx, 3                   ; of the seconds (and a 12-hour clock's
+    mul cx                      ; AM/PM, over them)
+    mov cx, 10
+    div cx
+    neg ax
+    add ax, [dk_faw]
+    add ax, [dk_fox]
+    xor bx, bx
+    mov cx, [dk_fox]
+    add cx, [dk_faw]
+    dec cx
+    mov dx, [dk_fah]
+    dec dx
+    call dk_rrect
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dk_dface - the face again whole
+dk_dface:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [dk_fox]
+    xor bx, bx
+    mov cx, ax
+    add cx, [dk_faw]
+    dec cx
+    mov dx, [dk_fah]
+    dec dx
+    call dk_rrect
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dk_dbig - the panel's big time again (under a dial, with the panel full)
+dk_dbig:
+    cmp byte [dk_pan], 1
+    jne .r
+    cmp byte [dk_kind], 0
+    jne .r
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [dk_pix]
+    mov cx, ax
+    add cx, DK_PANW - 1
+    mov bx, [dk_tyT]
+    mov dl, [dk_bsy]
+    xor dh, dh
+    shl dx, 1
+    shl dx, 1
+    shl dx, 1
+    add dx, bx
+    dec dx
+    call dk_rrect
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.r:
+    ret
+
+; -----------------------------------------------------------------------------
+; THE ALARM: it rings at its minute once a day (and at a snooze's), chirps -
+; 880 Hz and 660 Hz, a note a beat - for 30 seconds, and its panel rows show
+; `Snooze . Dismiss` until one is picked. A toast says it, as the calendar's
+; reminders do (SPEC.md 110.3); nothing is modal and nothing takes the keys
+; -----------------------------------------------------------------------------
+DK_RINGN    equ 90              ; beats of 6 ticks: about 30 seconds
+DK_SNOOZE   equ 5               ; minutes
+
+; dk_alarm - the minute changed: ring when it is the alarm's (or a snooze's)
+; and it has not rung this minute. Keeps everything
+dk_alarm:
+    push ax
+    push bx
+    push cx
+    mov al, [dk_hh]
+    mov ah, 60
+    mul ah
+    add al, [dk_mm]
+    adc ah, 0
+    cmp ax, [dk_lfire]
+    je .x
+    mov cx, ax                  ; CX = the minute of the day
+    cmp byte [dk_snz], 0
+    je .set
+    mov al, [dk_snh]
+    mov ah, 60
+    mul ah
+    add al, [dk_snm]
+    adc ah, 0
+    cmp ax, cx
+    je .go
+.set:
+    test byte [DKP + DKP_FLAGS], DKF_ALARM
+    jz .x
+    mov al, [DKP + DKP_AH]
+    mov ah, 60
+    mul ah
+    add al, [DKP + DKP_AM]
+    adc ah, 0
+    cmp ax, cx
+    jne .x
+.go:
+    mov [dk_lfire], cx
+    mov byte [dk_snz], 0
+    mov word [dk_rbeat], 0
+    mov byte [dk_ring], 1
+    call dk_ringtoast
+    call dk_relay               ; the panel's rows grow for Snooze . Dismiss
+    call dk_menulive
+.x:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dk_chirp - one note a beat while ringing; rung out after DK_RINGN beats
+; (its rows stay until Snooze or Dismiss). Keeps everything
+dk_chirp:
+    cmp byte [dk_ring], 1
+    jne .r
+    push ax
+    push cx
+    push dx
+    inc word [dk_rbeat]
+    cmp word [dk_rbeat], DK_RINGN
+    jb .note
+    mov byte [dk_ring], 2
+    jmp short .x
+.note:
+    mov ax, 880
+    test byte [dk_rbeat], 1
+    jz .n
+    mov ax, 660
+.n:
+    mov cx, 3
+    mov dl, 40h
+    call OSAPI_SND_TONE
+.x:
+    pop dx
+    pop cx
+    pop ax
+.r:
+    ret
+
+; dk_ringtoast - `Alarm: <label>` on the bar
+dk_ringtoast:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    cld
+    mov di, dk_line
+    mov si, dks_almc
+    call dk_cat
+    mov si, DKP + DKP_LABEL
+    call dk_cat
+    xor al, al
+    stosb
+    mov si, dk_line
+    xor cx, cx
+    call OSAPI_TOAST
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+dks_almc:   db 'Alarm: ', 0
+
+; dk_snooze - Snooze: quiet, and back in DK_SNOOZE minutes. Keeps everything
+dk_snooze:
+    cmp byte [dk_ring], 0
+    je .r
+    push ax
+    mov al, [dk_mm]
+    add al, DK_SNOOZE
+    mov ah, [dk_hh]
+    cmp al, 60
+    jb .h
+    sub al, 60
+    inc ah
+    cmp ah, 24
+    jb .h
+    xor ah, ah
+.h:
+    mov [dk_snm], al
+    mov [dk_snh], ah
+    mov byte [dk_snz], 1
+    mov byte [dk_ring], 0
+    xor ax, ax                  ; the tone off now
+    push cx
+    push dx
+    xor cx, cx
+    mov dl, 40h
+    call OSAPI_SND_TONE
+    pop dx
+    pop cx
+    call dk_relay
+    call dk_menulive
+    pop ax
+.r:
+    ret
+
+; dk_dismiss - Dismiss: quiet until tomorrow's. Keeps everything
+dk_dismiss:
+    cmp byte [dk_ring], 0
+    jne .go
+    cmp byte [dk_snz], 0
+    je .r
+.go:
+    push ax
+    push cx
+    push dx
+    mov byte [dk_ring], 0
+    mov byte [dk_snz], 0
+    xor ax, ax
+    xor cx, cx
+    mov dl, 40h
+    call OSAPI_SND_TONE
+    call dk_relay
+    call dk_menulive
+    pop dx
+    pop cx
+    pop ax
+.r:
+    ret
+
+; dk_relay - the payload or the ringing changed the card's shape: the clock
+; laid out again and redrawn (os88stik.inc's stik_resize: the same frame is
+; one redraw, another is a hide, a re-size and a show), the hands' record
+; taken again. The lock held. Keeps everything
+dk_relay:
+    push si
+    mov si, [stik_win]
+    or si, si
+    jz .x
+    test byte [stik_fl], STIK_F_QUIT
+    jnz .x
+    call stik_resize
+    call dk_hands
+    call dk_hkeep
+.x:
+    pop si
+    ret
+
+; dk_onclose - STIK_ONCLOSE: an unapplied preview goes back before the save,
+; and the settings and alarm windows go with the clock
+dk_onclose:
+    push bx
+    mov bx, [dk_swin]
+    or bx, bx
+    jz .a
+    call dk_srestore
+    mov word [dk_swin], 0
+    call OSAPI_WM_DESTROY
+.a:
+    mov bx, [dk_awin]
+    or bx, bx
+    jz .x
+    mov word [dk_awin], 0
+    call OSAPI_WM_DESTROY
+.x:
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; dk_onkey - W_ONKEY, while the clock owns the bar (AL = ASCII, AH = the
+; scancode, SI = the window; lock held). Every action has a key:
+;   Enter  Settings        A  Alarm...          F  Clock face only
+;   S      Seconds         H  24-hour           Left / Right  the face
+;   Up / Down  the size    Z  Snooze            D  Dismiss
+;   Esc    Dismiss a ringing alarm, else hand the bar back
+; -----------------------------------------------------------------------------
+dk_onkey:
+    push ax
+    push bx
+    cmp ah, KSC_LEFT
+    je .fl
+    cmp ah, KSC_RIGHT
+    je .fr
+    cmp ah, KSC_UP
+    je .su
+    cmp ah, KSC_DOWN
+    je .sd
+    cmp al, 13
+    je .set
+    cmp al, 27
+    je .esc
+    or al, 20h
+    cmp al, 'a'
+    je .alm
+    cmp al, 'f'
+    je .only
+    cmp al, 's'
+    je .secs
+    cmp al, 'h'
+    je .h24
+    cmp al, 'z'
+    je .snz
+    cmp al, 'd'
+    je .dis
+    jmp short .x
+.fl:
+    mov al, [DKP + DKP_FACE]
+    dec al
+    jns .fs
+    mov al, DKF_N - 1
+    jmp short .fs
+.fr:
+    mov al, [DKP + DKP_FACE]
+    inc al
+    cmp al, DKF_N
+    jb .fs
+    xor al, al
+.fs:
+    call dk_setface
+    jmp short .x
+.su:
+    mov al, [DKP + DKP_SIZE]
+    inc al
+    cmp al, 3
+    jb .ss
+    jmp short .x
+.sd:
+    mov al, [DKP + DKP_SIZE]
+    dec al
+    js .x
+.ss:
+    call dk_setsize
+    jmp short .x
+.set:
+    call dk_setopen
+    jmp short .x
+.alm:
+    call dk_almopen
+    jmp short .x
+.only:
+    mov al, DKF_ONLY
+    jmp short .tg
+.secs:
+    mov al, DKF_SECS
+    jmp short .tg
+.h24:
+    mov al, DKF_H24
+.tg:
+    call dk_toggle
+    jmp short .x
+.snz:
+    call dk_snooze
+    jmp short .x
+.dis:
+    call dk_dismiss
+    jmp short .x
+.esc:
+    cmp byte [dk_ring], 0
+    jne .dis
+    mov bx, [dk_win]
+    mov al, 3
+    call OSAPI_WM_DESK          ; RELEASE: the bar to the front application
+.x:
+    pop bx
+    pop ax
+    ret
+
+; dk_setface / dk_setsize / dk_toggle - one setting changed from the clock
+; itself (its keys, its menus): it is COMMITTED - saved, and, with the
+; settings window up, its preview and its applied copy follow. Keep all
+dk_setface:
+    cmp al, [DKP + DKP_FACE]
+    je .r
+    mov [DKP + DKP_FACE], al
+    jmp dk_commit
+.r:
+    ret
+dk_setsize:
+    cmp al, [DKP + DKP_SIZE]
+    je .r
+    mov [DKP + DKP_SIZE], al
+    jmp dk_commit
+.r:
+    ret
+dk_toggle:
+    xor [DKP + DKP_FLAGS], al
+dk_commit:
+    call dk_relay
+    call dk_menulive
+    call stik_touch
+    cmp word [dk_swin], 0
+    je .r
+    call dk_sapplied            ; the window's copy is this too
+    call dk_sredraw
+.r:
+    ret
+
+; -----------------------------------------------------------------------------
+; the menus (SPEC.md 12.2): Clock, Face and Size - every setting the window
+; has, from the bar
+; -----------------------------------------------------------------------------
+dk_oncmd:
+    push ax
+    push bx
+    cmp ah, 1
+    je .face
+    cmp ah, 2
+    je .size
+    xor ah, ah
+    mov bx, ax
+    shl bx, 1
+    call [dk_cmds + bx]
+    jmp short .x
+.face:
+    call dk_setface
+    jmp short .x
+.size:
+    call dk_setsize
+.x:
+    pop bx
+    pop ax
+    ret
+dk_cmds:    dw dk_setopen, dk_almopen, dk_c_only, dk_c_secs, dk_c_h24
+            dw dk_snooze, dk_dismiss
+dk_c_only:
+    mov al, DKF_ONLY
+    jmp dk_toggle
+dk_c_secs:
+    mov al, DKF_SECS
+    jmp dk_toggle
+dk_c_h24:
+    mov al, DKF_H24
+    jmp dk_toggle
+
+; dk_about - the app-name cell's About: a toast, the clock being too small a
+; card to hold os88ui's (SPEC.md 12.2)
+dk_about:
+    push cx
+    push si
+    push es
+    push ds
+    pop es
+    mov si, dks_about
+    xor cx, cx
+    call OSAPI_TOAST
+    pop es
+    pop si
+    pop cx
+    ret
+dks_about:  db 'Desk Clock - 9 faces', 0
+
+; dk_menulive - the items as the state stands: the toggles ticked, the face
+; and the size marked, Snooze and Dismiss greyed when nothing rings (SPEC.md
+; 47). Keeps everything
+dk_menulive:
+    push ax
+    push bx
+    push cx
+    push si
+    mov si, dk_i_clock + 2 * DKM_ONLY
+    mov bx, dk_t_only
+    mov al, DKF_ONLY
+    call .tog
+    mov bx, dk_t_secs
+    mov al, DKF_SECS
+    call .tog
+    mov bx, dk_t_h24
+    mov al, DKF_H24
+    call .tog
+    mov bx, dk_i_snz            ; ringing: Snooze; snoozed or ringing:
+    cmp byte [dk_ring], 0       ; Dismiss
+    jne .s
+    mov bx, dk_i_snz0
+.s:
+    mov [si], bx
+    mov bx, dk_i_dis
+    cmp byte [dk_ring], 0
+    jne .d
+    cmp byte [dk_snz], 0
+    jne .d
+    mov bx, dk_i_dis0
+.d:
+    mov [si+2], bx
+    mov si, dk_i_face           ; the face marked
+    mov bx, dk_t_faces
+    mov cl, [DKP + DKP_FACE]
+    mov ch, DKF_N
+    call .mark
+    mov si, dk_i_size
+    mov bx, dk_t_sizes
+    mov cl, [DKP + DKP_SIZE]
+    mov ch, 3
+    call .mark
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+; SI = the item's slot, BX = its two strings (DKM_SZ apart), AL = the flag
+.tog:
+    test [DKP + DKP_FLAGS], al
+    jz .t0
+    add bx, DKM_SZ
+.t0:
+    mov [si], bx
+    add si, 2
+    ret
+; SI = the menu's slots, BX = its items' pairs, CL = the marked one, CH = n
+.mark:
+    push dx
+    xor dl, dl
+.m:
+    cmp dl, ch
+    jae .mx
+    mov ax, bx
+    cmp cl, dl
+    jne .m0
+    add ax, DKM_SZ
+.m0:
+    mov [si], ax
+    add si, 2
+    add bx, 2 * DKM_SZ
+    inc dl
+    jmp short .m
+.mx:
+    pop dx
+    ret
+
+; --- the clock's window (SPEC.md 110.11, 110.14) ------------------------------
+dk_tpl:
+    dw 239, 60, 130, 200        ; stik_load sizes and places it (STIK_RIGHT)
+    dw dk_title, dk_paint, dk_onkey, 0
+
+dk_paint:
+    jmp stik_paint
+
+dk_title:   db 'Desk Clock', 0
+
+    OS88_MENUSET dk_menus, dk_title, dk_oncmd   ; AM_NAME NOT 0 (SPEC.md 110.9)
+        OS88_MENU dk_m_clock, dk_i_clock, DKM_N
+        OS88_MENU dk_m_face, dk_i_face, DKF_N
+        OS88_MENU dk_m_size, dk_i_size, 3
+    OS88_MENUSET_END dk_menus
+DKM_SET     equ 0               ; the Clock menu's items, in order (dk_cmds)
+DKM_ALM     equ 1
+DKM_ONLY    equ 2
+DKM_SECS    equ 3
+DKM_H24     equ 4
+DKM_SNZ     equ 5
+DKM_DIS     equ 6
+DKM_N       equ 7
+dk_m_clock: db 'Clock', 0
+dk_m_face:  db 'Face', 0
+dk_m_size:  db 'Size', 0
+dk_i_clock: dw dk_i_set, dk_i_alm, 0, 0, 0, 0, 0
+dk_i_face:  times DKF_N dw 0
+dk_i_size:  times 3 dw 0
+dk_i_set:   db 'Settings...  Enter', 0
+dk_i_alm:   db 'Alarm...  A', 0
+dk_i_snz:   db 'Snooze  Z', 0
+dk_i_snz0:  db MENU_DIS, 'Snooze (not ringing)', 0
+dk_i_dis:   db 'Dismiss  D', 0
+dk_i_dis0:  db MENU_DIS, 'Dismiss (not ringing)', 0
+DKM_SZ      equ 24              ; an item's two strings: off, then on
+%macro DK_ITEM 1+
+%%off:  db '  ', %1, 0
+        times DKM_SZ - ($ - %%off) db 0
+%%on:   db '* ', %1, 0          ; marked as Sticky Note's Color menu marks
+        times DKM_SZ - ($ - %%on) db 0
+%endmacro
+dk_t_only:  DK_ITEM 'Clock Face Only  F'
+dk_t_secs:  DK_ITEM 'Show Seconds  S'
+dk_t_h24:   DK_ITEM '24-Hour Clock  H'
+dk_t_faces: DK_ITEM 'Classic'
+            DK_ITEM 'Memphis ', 27h, '80'
+            DK_ITEM 'Neon ', 27h, '90'
+            DK_ITEM 'Mono Digital'
+            DK_ITEM 'Casio LCD'
+            DK_ITEM 'Casio VGA'
+            DK_ITEM 'Red LED'
+            DK_ITEM 'Amber LED'
+            DK_ITEM 'Flip Clock'
+dk_t_sizes: DK_ITEM 'Small'
+            DK_ITEM 'Medium'
+            DK_ITEM 'Large'
+
+%include "dkdraw.inc"
+%include "dkface.inc"
+
+%define OS88UI_ALERT            ; STIK_DAMAGEDQ's question
+%include "os88ui.inc"
+%include "os88gfx.inc"
+%include "os88stik.inc"
+%include "dkwid.inc"            ; AFTER os88stik.inc: its STIKL_* and macros
+%include "dkset.inc"
+%include "dkalm.inc"
+
+%if STIKL_SZ != 12
+  %error "deskclok: dk_lay is one STIK_LAYOUT entry"
+%endif
+
+    align 16, db 0              ; os88stik.inc's read lands on a paragraph
+    OS88_BSS STIK_BSS_END
+    OS88_IMAGE_END

@@ -3185,7 +3185,7 @@ SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
 # Measured at 360KB (`tools/os88disk.py --verify build/os8088-360.img`): 313
 # of 354 clusters in use before DESKCAL.O88 and its folder; SPEC.md 110.6 has
 # the figure after.
-STIKAPPS := $(BUILD)/deskcal.o88 $(BUILD)/stiknote.o88
+STIKAPPS := $(BUILD)/deskcal.o88 $(BUILD)/stiknote.o88 $(BUILD)/deskclok.o88
 STIKARGS := $(addprefix STIKAPPS:,$(STIKAPPS))
 
 # --- ...and DOS (SPEC.md 96) is in the system disk's APPS/, not SYSTEM/ ------
@@ -5617,6 +5617,20 @@ $(BUILD)/stiknote.bin: $(STIKNOTESRC) | $(BUILD)
 
 $(BUILD)/stiknote.o88: $(BUILD)/stiknote.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/stiknote.bin -o $@
+
+# Desk Clock (SPEC.md 110.14): the third STICKY APP - nine faces, three sizes,
+# an alarm - in STIKAPPS/ beside the Desk Calendar and Sticky Note.
+DESKCLOKSRC := apps/deskclok/deskclok.asm apps/deskclok/dkdraw.inc \
+               apps/deskclok/dkface.inc apps/deskclok/dkwid.inc \
+               apps/deskclok/dkset.inc apps/deskclok/dkalm.inc \
+               apps/os88stik.inc apps/os88ui.inc apps/os88gfx.inc \
+               apps/os88api.inc
+$(BUILD)/deskclok.bin: $(DESKCLOKSRC) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/deskclok/ -o $@ apps/deskclok/deskclok.asm
+	@echo "deskclok: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/deskclok.o88: $(BUILD)/deskclok.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/deskclok.bin -o $@
 
 # Browser (docs/plans/completed/BROWSER-PLAN.md): the text-and-table HTML viewer. Step 1 of
 # that document is the RENDERER, with no network in the machine - it opens a
