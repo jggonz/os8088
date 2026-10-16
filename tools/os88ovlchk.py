@@ -54,9 +54,10 @@ CCELL = re.compile(r'^\s*OSAPI_(?:RCSLOT|RCXCELL|RNCELL|FCELL)\s+'
 # all, which is how adding JSLOT alone would have bought nothing.
 CELLDEF = re.compile(r'^\s*OSAPI_(?:NSTUB|XSTUB)\s+([A-Za-z_]\w*)\s*,')
 MODS = ('.modc', '.modu', '.modf', '.modl', '.modh', '.modp', '.modd',
-        '.modk', '.modx', '.modw', '.modj')  # module images (2.8).
+        '.modk', '.modx', '.modw', '.modj', '.modn')  # module images (2.8).
 # `.modw` is winmod.inc's WIN95.DRV (SPEC.md 76.14), kern_big's alone, and
-# `.modj` deskmod.inc's DESK.DRV (SPEC.md 11.103.10), kern_big's alone too.
+# `.modj` deskmod.inc's DESK.DRV (SPEC.md 11.103.10), kern_big's alone too, and
+# `.modn` stikmenu.inc's STIKMENU.DRV (SPEC.md 110.12), kern_big's alone.
 # `.modp` is Cut/Copy/Paste and kern_small's ALONE (SPEC.md 22.3,
 # docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md 9.2): filecp.inc emits its bodies there on
 # that build and into `.cold` on kern_big, which is the first conditional

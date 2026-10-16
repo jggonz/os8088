@@ -3427,8 +3427,8 @@ cmz_pkg:
 ; cmz_cpre - AL = a package's LD_H_FLAGS -> DX = [cs:cmz_x] = its CLEAR prefix,
 ; ld_cpre's own ladder (loader.inc; SPEC.md 20.13.1): what the mount reads out
 ; of the first sector and must never have to decompress to get - the header,
-; the icon, the association block and the document glyph (SPEC.md 54.3.2). At
-; most 128, and always a multiple of 16 - which is what lets a source or a
+; the icon, the association block, the document glyph (SPEC.md 54.3.2) and the
+; Sticky App card (SPEC.md 110.12). At most 320, and always a multiple of 16 - which is what lets a source or a
 ; destination be a SEGMENT and the 'CZ' header land on a paragraph in front of
 ; the stream. Compress and Uncompress both ask it, so the two cannot disagree.
 ; clobbers: DX (the output), flags
@@ -3446,6 +3446,10 @@ cmz_cpre:
     jz .nogly
     add dx, 16
 .nogly:
+    test al, LD_HF_STIK         ; ...and the Sticky App card (SPEC.md 110.12),
+    jz .nostk                   ; the Sticky Apps menu's own read of the first
+    add dx, LD_STIK_SIZE        ; sector
+.nostk:
     mov [cs:cmz_x], dx
     ret
 

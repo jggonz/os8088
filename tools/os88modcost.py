@@ -115,7 +115,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # EXTD.DRV (SPEC.md 30.5, 39.19.6), which this list missed until the second.
 MODS = {False: ('.modc', '.modf', '.modl', '.modh', '.modk', '.modx',
                 '.modw',          # ...and WIN95.DRV (SPEC.md 76.14)
-                '.modj'),         # ...and DESK.DRV (SPEC.md 11.103.10)
+                '.modj',          # ...and DESK.DRV (SPEC.md 11.103.10)
+                '.modn'),         # ...and STIKMENU.DRV (SPEC.md 110.12)
         True:  ('.modc', '.modf', '.modl', '.modp', '.modd')}
 OVLS = ('.blob', '.ovl')   # `.blob` = the overlay's `.boot2` blocks (SPEC.md 2.9.14)
 RESIDENT = ('.text', '.bss', '.cold')

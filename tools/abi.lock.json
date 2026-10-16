@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "ac878c472188707cb70d1cbff1e47c2d870f33531aa05680b6e01f712e78a1df",
+  "fingerprint": "be5ce5faeec75706cd33eac4de3838f259bcc56d073cc850fc1c2ad0883c7873",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "6cfd133a4425ef421d43d7bba90562d044f557ef7023e39e2c58fcda2c0ff02f",
+  "fingerprint": "cb840b3e66b596fe66a7ad9b07f61f9c8f402799cfa71b8bdb83497b1a9b6f67",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -119,6 +119,20 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "rename only: the DIA concept is Sticky Apps (OSAPI_DIA_MARK -> OSAPI_STIK_MARK, OSAPI_DI_DIA -> OSAPI_DI_STIK, same values); nothing built before is affected",
+   "to": 11
+  },
+  {
+   "fingerprint": "cb840b3e66b596fe66a7ad9b07f61f9c8f402799cfa71b8bdb83497b1a9b6f67",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OS88_F_STIK (header flags bit 7) and OS88_STIKCARD/OS88_STIKROW/OS88_STIKCARD_END: the Sticky App card (SPEC.md 110.12), the last block of the clear prefix. ADDITIVE - no cell moved and no header field changed meaning; every package built before still runs (none sets bit 7), so no PKG_FMT bump. A new card-bearing package on an older kernel mis-places a compressed body and is refused as bad data",
+   "to": 10
+  },
+  {
+   "fingerprint": "be5ce5faeec75706cd33eac4de3838f259bcc56d073cc850fc1c2ad0883c7873",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OS88_F_STIK (header flags bit 7) and OS88_STIKCARD/OS88_STIKROW/OS88_STIKCARD_END: the Sticky App card (SPEC.md 110.12), the last block of the clear prefix. ADDITIVE - no cell moved and no header field changed meaning; every package built before still runs (none sets bit 7), so no PKG_FMT bump. A new card-bearing package on an older kernel mis-places a compressed body and is refused as bad data",
    "to": 11
   }
  ]

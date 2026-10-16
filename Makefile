@@ -2019,6 +2019,7 @@ $(shell mkdir -p $(BUILD); \
                                       $(BUILD)/diskops.drv $(BUILD)/hiber.drv \
                                       $(BUILD)/dock.drv $(BUILD)/extd.drv \
                                       $(BUILD)/win95.drv $(BUILD)/desk.drv \
+                                      $(BUILD)/stikmenu.drv \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin \
                                       $(BUILD)/boot120.bin \
                                       $(BUILD)/hdd.bin $(BUILD)/hdd.drv \
@@ -2411,12 +2412,14 @@ KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/diskops.drv
 # in $(DRIVERS) through here is what puts it on every kern_big system disk in
 # all four geometries, the emu disk and the live media, beside CTRL.DRV. And
 # so is DESK.DRV (SPEC.md 11.103.10), the desk layer's code, which a Sticky App's
-# OSAPI_WM_DESK QUERY loads: kern_small has no desk layer at all.
+# OSAPI_WM_DESK QUERY loads: kern_small has no desk layer at all. And so is
+# STIKMENU.DRV (SPEC.md 110.12), Locator's Sticky Apps menu, which its drop
+# loads and its pick drops: kern_small has no Sticky Apps menu.
 ifneq ($(KERN_SMALL),)
 BIGMODS =
 else
 BIGMODS = $(KMODDIR)/hiber.drv $(KMODDIR)/dock.drv $(KMODDIR)/extd.drv \
-          $(KMODDIR)/win95.drv $(KMODDIR)/desk.drv
+          $(KMODDIR)/win95.drv $(KMODDIR)/desk.drv $(KMODDIR)/stikmenu.drv
 endif
 KMODARGS = -m 0=$(BUILD)/ctrl.drv -m 1=$(BUILD)/format.drv \
            -m 2=$(BUILD)/diskops.drv
@@ -2437,7 +2440,8 @@ KMODARGS += -m 3=$(BUILD)/filecp.drv
 KMODARGS += -m 4=$(BUILD)/fdlg.drv
 else
 KMODARGS += -m 3=$(BUILD)/hiber.drv -m 4=$(BUILD)/dock.drv -m 5=$(BUILD)/extd.drv \
-            -m 6=$(BUILD)/win95.drv -m 7=$(BUILD)/desk.drv
+            -m 6=$(BUILD)/win95.drv -m 7=$(BUILD)/desk.drv \
+            -m 8=$(BUILD)/stikmenu.drv
 endif
 # ...AND THE MODULES ARE 'CZ' FILES ON THE DISK (SPEC.md 2.8, 20.13.5), by
 # the route a driver took: mod_need sizes its claim from the directory hint
@@ -3567,7 +3571,14 @@ SYSDOCRAW := $(BUILD)/readme-plain.txt
 # opens it - this disk never carried the page. The 360KB gate disks
 # (ether360, thewire360, the usbm pair) take the same list; every network
 # row opens the browser off B:.
-SYS360OMIT := $(BUILD)/browser.o88 $(BUILD)/telnet.o88
+#
+# **AND MINES IS THE NEXT** (SPEC.md 24.3.1.3): STIKMENU.DRV, Locator's Sticky
+# Apps menu (SPEC.md 110.12), took four of the nine clusters left, and five
+# free is too few for the Desk Calendar's own first save - its state file and
+# SYSTEM.CFG together want seven, measured both sides of the line. The owner
+# took MINES.O88 off this geometry: a game, so 24.3's argument never covered
+# it, and it stays on apps360.img and games360.img and on every other disk.
+SYS360OMIT := $(BUILD)/browser.o88 $(BUILD)/telnet.o88 $(BUILD)/mines.o88
 CORE_TOOLS360 := $(filter-out $(SYS360OMIT),$(CORE_TOOLS))
 CORE_GAMES360 := $(filter-out $(SYS360OMIT),$(CORE_GAMES))
 COREAPPS360 := $(CORE_TOOLS360) $(CORE_GAMES360)

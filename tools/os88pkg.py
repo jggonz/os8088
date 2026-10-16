@@ -47,6 +47,12 @@ GLYPH_ROWS = 8            # bit 5: eight glyph bytes, one a row, then eight
                           # reserved - sixteen so the clear prefix stays a
                           # multiple of 16 (SPEC.md 20.13.1)
 PKG_GLYPH_BIT = 0x20      # ...and the bit itself
+STIK_SIZE = 192           # the STICKY APP CARD (SPEC.md 110.12), flags bit 7:
+STIK_BIT = 0x80           # 'SA', version, 0, a 24-byte name, a 36-byte
+STIK_MAGIC = b"SA"        # description and a 32x32 picture (128 bytes),
+STIK_VER = 1              # after the rest of the clear prefix
+STIK_NAME = (4, 24)       # (offset, field size) - NUL-padded, so the text is
+STIK_DESC = (28, 36)      # at most one byte shorter than the field
 OP_SECMAX = 1920          # apps/os88parts.inc's: the carve's ceiling in
                           # sectors, packed and unpacked (SPEC.md 20.12.11)
 OP_PARTMAX = 0xFE00       # ...and ONE part's: op_size rounds a row's length
@@ -170,10 +176,10 @@ def main() -> int:
     if version != VERSION:
         fail(f"bad version {version} (want {VERSION}; rebuild against the "
              "v3 os88api.inc)")
-    if flags & 0x98:
+    if flags & 0x18:
         fail(f"flags 0x{flags:02X} has reserved bits set (bits 3-4 are this "
-             f"tool's to set, bit 7 must be 0; bit 6 is OS88_F_DESK, "
-             f"SPEC.md 11.103.9)")
+             f"tool's to set; bit 6 is OS88_F_DESK, SPEC.md 11.103.9, and "
+             f"bit 7 OS88_F_STIK, SPEC.md 110.12)")
     if link != 0:
         fail(f"bad link base 0x{link:04X}: a v3 package links at org 0")
     if a[12:15] != DISPATCH:
@@ -244,6 +250,18 @@ def main() -> int:
                  "after all. Draw one, or clear flags bit 5")
         if any(a[glyph_base + GLYPH_ROWS:glyph_base + GLYPH_SIZE]):
             fail("the document-glyph block's eight reserved bytes must be 0")
+    # The Sticky App card (SPEC.md 110.12) follows whatever of the above the
+    # flags declare - so it is the LAST block of the clear prefix, and every
+    # reader that already knew the prefix finds its own blocks where they were.
+    if flags & STIK_BIT:
+        stik_base = entry_min
+        entry_min = stik_base + STIK_SIZE
+        if image < entry_min:
+            fail(f"flags bit 7 set but the image is {image} bytes; the "
+                 f"Sticky App card needs at least {entry_min}")
+        msg = stik_card_problem(a[stik_base:entry_min])
+        if msg:
+            fail(f"the Sticky App card at +{stik_base}: {msg}")
     if not (entry_min <= entry < image):
         fail(f"entry +0x{entry:04X} outside [0x{entry_min:04X}, "
              f"0x{image:04X})")
@@ -317,7 +335,36 @@ def clear_prefix(flags: int) -> int:
         n += ASSOC_SIZE
     if flags & PKG_GLYPH_BIT:
         n += GLYPH_SIZE         # SPEC.md 54.3.2: the mount reads it too
-    return n
+    if flags & STIK_BIT:
+        n += STIK_SIZE          # SPEC.md 110.12: and so does the Sticky Apps
+    return n                    # menu
+
+
+def stik_card_at(flags: int) -> int:
+    """where the Sticky App card starts: the clear prefix WITHOUT it."""
+    return clear_prefix(flags & ~STIK_BIT)
+
+
+def stik_card_problem(card: bytes):
+    """None when `card` (192 bytes) is a card the kernel's menu takes, else
+    why not - the SAME tests kernel/stikmenu.inc makes, so a package this
+    passes is listed and one it refuses would have been skipped."""
+    if len(card) != STIK_SIZE:
+        return f"{len(card)} bytes, not {STIK_SIZE}"
+    if card[0:2] != STIK_MAGIC or card[2] != STIK_VER or card[3] != 0:
+        return "it does not start 'SA', 1, 0"
+    for what, (off, size) in (("name", STIK_NAME), ("description", STIK_DESC)):
+        field = card[off:off + size]
+        if 0 not in field:
+            return f"the {what} fills its {size} bytes with no NUL"
+        text = field[:field.index(0)]
+        if any(not 0x20 <= b <= 0x7E for b in text):
+            return f"the {what} has a byte that is not printable ASCII"
+        if any(field[len(text):]):
+            return f"the {what} has bytes after its NUL"
+        if what == "name" and not text:
+            return "the name is empty"
+    return None
 
 
 def compress_image(out: bytearray, image: int, bss: int, flags: int,

@@ -1650,8 +1650,9 @@ finished. Both builds carry `CTRL.DRV`, the Control Panel (§31),
 (§18.99). `kern_big` also carries `HIBER.DRV` (§87), the optional
 `DOCK.DRV`, advanced Dock behavior (§30.5), `EXTD.DRV`, the extended
 desktop's placement policy (§39.19.6), `WIN95.DRV`, the Windows theme's
-chrome (§76.14), and `DESK.DRV`, the desk layer's verbs, hover edge, show
-and key arms (§11.103.10); `kern_small` instead carries
+chrome (§76.14), `DESK.DRV`, the desk layer's verbs, hover edge, show
+and key arms (§11.103.10), and `STIKMENU.DRV`, Locator's Sticky Apps menu
+(§110.12); `kern_small` instead carries
 `FILECP.DRV` and `FDLG.DRV` (§22.3, §38.0), bodies `kern_big` keeps resident.
 **On the disk every one is a `'CZ'` container** (§20.13.5): `os88mod.py`
 checks each image the way `mod_check` will and then wraps it, `mod_need`
@@ -1746,10 +1747,11 @@ in the tree.
   bytes) allocated and never armed on each kernel, made an eighth entry a hard
   NASM error in whichever module grew, and could not be per-build because the
   host tool scraped it with a regex. Removing it was −36 bytes on `kern_big`
-  and −38 on `kern_small`. `MOD_MAX` is 9 on `kern_big` (eight images and
+  and −38 on `kern_small`. `MOD_MAX` is 10 on `kern_big` (nine images and
   `MOD_SETS`, §2.8.7) and 5 on `kern_small`. BIG has `MOD_HIBER` 3,
   `MOD_DOCK` 4, `MOD_EXT` 5, `MOD_WIN` 6, `MOD_DESK` 7 (`DKD_NENT` 4,
-  §11.103.10) and `MOD_SETS` 8; SMALL has `MOD_FCP` 3 and `MOD_FDLG` 4.
+  §11.103.10), `MOD_STIKM` 8 (`SMN_NENT` 2, §110.12) and `MOD_SETS` 9;
+  SMALL has `MOD_FCP` 3 and `MOD_FDLG` 4.
 - **`mod_fpr` indexes by `MOD_TAB_OFF` and not `mod_tab`, and that is an
   ASSEMBLER constraint rather than a taste.** An expression like
   `mod_fpt - mod_tab/2` is label arithmetic nasm 3 refuses outright
@@ -3479,6 +3481,7 @@ VIEW_KB       equ 3          ; each window's cache, claimed when it opens
 | `kernel/extmod.inc` | EXTD.DRV, `kern_big` only: the extended desktop's placement policy — bringing display 1 up, landing and the straddle fit, which display a window is on, the fsx bracket's collapse, and the second display's arms that run on a user's action (its ground, the zoom and fullscreen boxes, a drag's floor, fsx caps) — prefix `ext_`/`exk_`; the resident half is `exf_sync` in **`.cold`** and the `EXTCALL` sites (§39.19.6) |
 | `kernel/winmod.inc` | WIN95.DRV, `kern_big` only: the Windows theme's chrome — the title bar with its three buttons on the right, which button a point is on, a held button's rect, the size grip and the pull-down that stays open on a click — prefix `wn_`/`wnx_`/`wnk_`; the resident half is `thv`, its five `jmp far` doors and `thf_apply` in **`.cold`** (§76.14) |
 | `kernel/deskmod.inc` | DESK.DRV, `kern_big` only: the desk layer's code that runs only where a widget exists — `OSAPI_WM_DESK`'s MAKE, DRAG and RELEASE, the hover edge's body, a desk window's show and the widget's key arm — prefix `dkd_`; the resident half is `osapi_wm_desk_x`'s QUERY thunk and `desk_need` in **`.cold`** (which load it - `desk_need` is also the loader's step 5's, for an `OS88_F_DESK` package, and keeps an open `drv_vol` bracket's pair) and the slot calls in `cur_shape_pass`, `wm_show_b` and `fdlg_top_x` (§11.103.10) |
+| `kernel/stikmenu.inc` | STIKMENU.DRV, `kern_big` only: Locator's Sticky Apps menu (§110.12) — the scan of every reachable `STIKAPPS\`, the card reader, the panel's composer and tracker, and the posted pick's launch, close, hide, show and arrange — prefix `stm_`/`smn_`; the resident half is `stm_track_x` and `stm_act_x` in **`.cold`** (load, track, drop; the posted act, drop), `menu_track`'s test for the item-less kernel cell and `ui_cmd`'s `CMD_STIK` |
 | `kernel/ctrl.inc`   | Control Panel window: two-pane item list + settings pages (§31), prefix `cp_`. **`.cold`** (§2.6) |
 | `kernel/snd.inc`    | sound core (§34): driver table + router, tone tier, speaker driver (tone + PWM clips), `snd_tick`, the five API slot targets, `snd_release_inst`/`snd_unhook` — prefix `snd_`, lands Phases 1–2 |
 | `kernel/fsx.inc`    | fullscreen exclusive (§53): the bracket, the scheduler freeze arming, foreign mode set + info block, and the frame clock/present — prefix `fsx_` |
@@ -24515,7 +24518,17 @@ CMD_CLOSE  equ 8   ; --- Locator: File ---
 CMD_SCDEL  equ 9   ;   (OS88_SHORTCUTS only, §26.8.5; FILES is then 10)
 CMD_FILES  equ 9   ; no menu of its own since §14.8: the desktop's drive
                    ; zone posts it (§26.1), so the id stays
+CMD_STIK   equ CMD_FILES + 1   ; kern_big: the Sticky Apps menu's pick,
+                   ; POSTED from under the lock (§110.12)
 ```
+
+**On kern_big and kern_emu both sets carry a second title, `Sticky Apps`**
+(§110.12): `menu_loc_set`'s second cell and `fm_menus`' fifth, the last
+`MENU_APPMAX` allows. It is a cell with NO items, and `menu_track` hands a
+kernel cell (`MB_SEG` 0, which no package's cell is) with `MB_NITEM` 0 to
+`STIKMENU.DRV` instead of dropping it - the module draws and tracks its own
+panel and POSTS what was picked as `CMD_STIK`, so `menu_track` answers 0FFFFh
+and neither `ui_dispatch` route sees the cell at all.
 
 The ids are contiguous **within** a menu, because that is what makes
 `ui_loc_base[cell] + item` work; they are internal constants and renumber
@@ -40622,7 +40635,7 @@ each needed a mechanism**:
 |-----|------|------------------------------------------------------------|
 | 0   | 2    | magic: bytes `'O','8'` (word 0x384F)                      |
 | 2   | 1    | format version = **10** (`PKG_FMT`): the segment-per-package layout, built against the API table as §20.3 lays it out now. Anything else — 1 to 9 included — is refused (§20.2.0) |
-| 3   | 1    | flags: bit 0 = embedded icon follows the header; bit 1 = an association block follows it (§54.6); **bit 2 = the FILE is longer than the image and the rest is the package's own (§20.12)**; **bit 3 = the image is COMPRESSED and the file is SHORTER than it, bit 4 = which format (0 = LZ4, 1 = LZB)** — docs/plans/O88-COMPRESSION-PLAN.md; **bit 5 = a 16-byte DOCUMENT-GLYPH block follows the association block (§54.3.2)**; **bit 6 = `OS88_F_DESK`, the package makes a desk window (§11.103.9): kern_big's loader takes its instance record from the top of the table down**; bit 7 zero |
+| 3   | 1    | flags: bit 0 = embedded icon follows the header; bit 1 = an association block follows it (§54.6); **bit 2 = the FILE is longer than the image and the rest is the package's own (§20.12)**; **bit 3 = the image is COMPRESSED and the file is SHORTER than it, bit 4 = which format (0 = LZ4, 1 = LZB)** — docs/plans/O88-COMPRESSION-PLAN.md; **bit 5 = a 16-byte DOCUMENT-GLYPH block follows the association block (§54.3.2)**; **bit 6 = `OS88_F_DESK`, the package makes a desk window (§11.103.9): kern_big's loader takes its instance record from the top of the table down**; **bit 7 = `OS88_F_STIK`, a 192-byte STICKY APP CARD follows the rest of the clear prefix (§110.12)** |
 | 4   | 2    | link base — must be **0**: a v3 package links at org 0     |
 | 6   | 2    | entry offset (≥ 0x20; ≥ 0x60 with icon; < image size)      |
 | 8   | 2    | image size = resident bytes: header + icon + code + data. Equals the file size exactly — **unless flags bit 2 is set, when it may be smaller and the file's tail is the package's (§20.12)**. |
@@ -44297,8 +44310,9 @@ step-2 peek all at once — every byte any of them reads is already in the first
 sector and already plain.
 
 The clear prefix is therefore **32 bytes**, plus 64 with an icon, plus 16 with
-an association block, plus 16 with a document glyph (§54.3.2): at most
-**128**, always inside the first sector, and **always a multiple of 16** —
+an association block, plus 16 with a document glyph (§54.3.2), plus 192 with
+a Sticky App card (§110.12): at most **320**, always inside the first sector,
+and **always a multiple of 16** —
 `ld_expand` puts the expanded body's destination a SEGMENT along (§20.14),
 which is why the glyph block is sixteen bytes for eight of glyph.
 
@@ -51354,6 +51368,40 @@ The 360KB gate disks (`ether360.img`, `thewire360.img`, the `usbm` pair)
 take the same list, as they took 24.3.1.1's; every network row opens the
 browser off `B:`. `tests/btnall.py` and `tests/btngesture.py`, which launched
 both off `A:`, now launch them off the apps disk they already boot with.
+
+#### 24.3.1.3 Mines leaves the 360KB system disk
+
+**`SYS360OMIT` gains `MINES.O88`**, by the owner's decision, for §110.12's
+Sticky Apps menu. `STIKMENU.DRV` must ride the system disk - `mod_need`
+reads a module off the boot volume (§2.8) - and it is four clusters, which
+took the disk from 345 to 349 of 354. That left five free, and **five is too
+few for the Desk Calendar's own first save**: its 2,456-byte state file (v1:
+three clusters, and three more while a save writes the new copy before it
+frees the old, §18.4) and the SYSTEM.CFG its registration rewrites want seven
+between them. Measured on
+`deskcaltask`, which saves both: it fails with five and six clusters free and
+passes with seven. A system disk on which the one Sticky App it ships cannot
+keep its own state is not shippable, so something had to go.
+
+Mines is a GAME, which 24.3's argument - programs the boot disk's own drivers
+make useful - never covered; it is the smallest package on the disk that is
+not a system program, and it stays on `apps360.img` (`GAMES/`) and
+`games360.img`, and on every 720KB, 1.44MB and 1.2MB disk. Every row that
+opens Mines on the 360KB machine already opens it off `B:`.
+
+| the 360KB system disk | clusters |
+|---|---|
+| main, before §110.12 | 345 of 354, 9 free |
+| with `STIKMENU.DRV` | 349 of 354, 5 free - the calendar's save refused |
+| `MINES.O88` and its `GAMES/` folder off | **346 of 354, 8 free** (measured) |
+
+(Timer and Bounce were never on a system disk: §14.8 made them packages on
+the apps disks alone.)
+
+**Then the calendar's payload went to v2** (§110.3): sixteen appointments and
+sixteen tasks, a 984-byte file - one cluster where v1's took three - so what
+its first save wants falls from seven free to three. Mines stays off: the
+owner's decision stands, and the room is the next Sticky App's.
 
 ### 24.4 The MEDIA DISK — a third shipped disk, at 360KB alone
 
@@ -183266,7 +183314,7 @@ row's picture, so a row downgraded at boot shows it, §110.4),
 `OSAPI_ABOUT_SET` through `os88ui_about`, and `os88gfx.inc` (`GFXE_TEXT`,
 `GFXE_BITS`, a 176 x 32 band of 704 bytes in its own bss) with `os88stik.inc`
 included last. The Sticky App definitions are v1's (`STIK_DATNAME 'DESKCAL.DAT'`,
-`STIK_CAP 'Calendar'`, `STIK_PAYLEN` 2,440, `STIK_PAYVER` 1, `STIK_ICON` 32,
+`STIK_CAP 'Calendar'`, `STIK_PAYLEN` 968, `STIK_PAYVER` 2, `STIK_ICON` 32,
 `STIK_ONTICK dc_tick`) plus §110.11's: `STIK_WIDGET`, `STIK_TAG 'Desk
 Calendar'` (= the title), `STIK_RIGHT` 264, `STIK_LAYOUTS`, `STIK_PAINTCARD
 dc_pcard` (the include's `stik_slabs`, then the entry field when it is open),
@@ -183510,23 +183558,23 @@ not the payload's `+4`, which is the snooze slot's minute):
 - The save a firing, a snooze or a dismiss owes waits for a quiet poll, as
   every edit's (`STIK_ONTICK`'s CF, §110.5).
 
-**The state file** is v1's 2,456 bytes - §110.5's header and this payload -
-with the snooze slot in the words v1 left zero:
+**The state file** is **984 bytes** - §110.5's header and this payload,
+**v2** - with the snooze slot in the words v1 left zero:
 
 ```
-+0     db n_appt (0..48), n_task (0..32), lead_default, flags
++0     db n_appt (0..16), n_task (0..16), lead_default, flags
          flags bit 0 DCF_NOREM: a NEW timed appointment is created with
          no reminder (REMIND clear); clear, it is armed at lead_default
          (v1's bit, kept - `tools/os88stik.py`'s DESKCAL_NOREM)
 +4     dw snooze minute (0..1439; read only beside a SNOOZED appointment)
 +6     dw snooze date (FAT-packed)
-+8     48 x 32 B APPT, sorted by (date, time):
++8     16 x 32 B APPT, sorted by (date, time):
          +0 dw date   FAT-packed ((y-1980)<<9 | m<<5 | d)
          +2 dw time   minute of the day, 0..1439, 0FFFFh = all day
          +4 db flags  bit 0 REMIND, 1 FIRED, 2 SNOOZED, 3 DUE
          +5 db lead   minutes before
          +6 26 B text, NUL
-+1544  32 x 28 B TASK:
++520   16 x 28 B TASK:
          +0 db flags  bit 0 DONE, bit 1 DATED
          +1 db 0
          +2 dw due    packed date, valid iff DATED
@@ -183538,6 +183586,21 @@ with the snooze slot in the words v1 left zero:
 offsets, the two new bits and the slot equal to `deskcal.asm`'s by NASM's own
 evaluation. An edit owes a save, held while the field or the Delete question
 is open and until one poll has passed with no edit, as v1.
+
+**v2 is SIXTEEN APPOINTMENTS AND SIXTEEN TASKS** - v1's tables were 48 and
+32, a 2,456-byte file - by the owner's decision, for the 360 KB system disk.
+At 1,024-byte clusters v1's file was THREE clusters, and a save writes its
+new chain before it frees the old one (§18.4), so the calendar needed six
+free while it saved, plus SYSTEM.CFG's one for its registration; §110.12's
+module left five, and the calendar's saves were refused (§24.3.1.3). v2's
+984 bytes are ONE cluster - two while a save is in flight, three with
+SYSTEM.CFG. The full table's words follow the counts (`Calendar is full
+(16)`, `Task list is full (16)`, spelled from `DC_NAPPT`/`DC_NTASK` with
+`%defstr`), and the package's bss is 1,472 bytes smaller. **A v1 file is a
+DAMAGED file to v2** - its length and its payload version both differ - so
+it opens empty and its first edit asks `Replace damaged calendar?` (§110.5.2);
+no shipped release carried v1, so the only v1 files are a developer's. Card
+2 already pages its appointments (`+N more`), so nothing it draws assumed 48.
 
 **What it costs**: §110.6's package rows.
 
@@ -185287,6 +185350,203 @@ that writes the bit; a v1 Sticky App's file is byte for byte what it was.
 
 It landed in v2's wave 3 (§110.10); the Desk Calendar adopted it in wave 4
 (§110.3).
+
+### 110.12 The Sticky Apps menu (`kernel/stikmenu.inc`, `STIKMENU.DRV`)
+
+Locator's bar carries a **`Sticky Apps`** title on kern_big and kern_emu
+(§12.3), beside File on the bare desktop and after Disk on a Disk window. It
+**discovers** every Sticky App the machine can reach, lists each by what the
+App says about itself, and starts, stops, hides, shows and arranges them.
+The owner's mockup is the shape: a two-line header, a row per App - its
+picture, its name, its description, and at the right a tick and `On` or an
+`Add` button - then `Arrange Sticky Apps...`, `Hide All Sticky Apps`, `More
+Sticky Apps...` and a hint line, `Drag a Sticky App to move it.`
+
+#### 110.12.1 The CARD: what a Sticky App says about itself
+
+A Sticky App answers "what are you" **without being launched**, in a block of
+its own header: the **Sticky App card**, flagged by header flags **bit 7,
+`OS88_F_STIK`** (§20.2), the last free bit.
+
+| off | size | field |
+|---|---|---|
+| +0 | 2 | `'SA'` |
+| +2 | 1 | the card's version, 1 |
+| +3 | 1 | 0 |
+| +4 | 24 | the NAME: 1..23 printable characters, NUL-padded |
+| +28 | 36 | the DESCRIPTION: 0..35 printable characters, NUL-padded |
+| +64 | 128 | the 32x32 PICTURE: 32 rows of 4 bytes, bit 7 of a row's first byte the leftmost pixel, 1 = ink |
+
+- **It is the LAST block of the clear prefix** (§20.13.1): it follows the
+  icon, the association block and the document glyph, whichever the flags
+  declare, so it starts at 32 + 64·bit0 + 16·bit1 + 16·bit5 and every older
+  reader finds its own block where it always was. The prefix becomes **at
+  most 320 bytes** and is still a multiple of 16 inside the first sector, so
+  a COMPRESSED Sticky App's card is read with no decoder - one sector, the
+  mount's own icon-harvest argument.
+- **What it cost the kernel is a step over it**: each of the two clear-prefix
+  ladders - the loader's (`ld_run_body_x`'s step 6a, `LD_HF_STIK` /
+  `LD_STIK_SIZE` in `loader.inc`) and the on-machine compressor's
+  (`cmz_cpre`) - adds 192 for bit 7. That is on every kernel, kern_small
+  included, because the Desk Calendar ships on every system disk; it is
+  **+8 bytes of `.cold`** on each.
+- **No `PKG_FMT` bump** (§20.2.0.1): nothing built before sets bit 7, so
+  everything built before still runs; the ABI lock records it without one.
+  A card-bearing package on an OLDER kernel takes the old prefix, expands its
+  body from inside the card and is refused as bad data, which is the right
+  answer by a harmless route - and a Sticky App ships on the system disk
+  beside its own kernel.
+- **The SDK writes it**: `OS88_STIKCARD 'Name', 'Description'`, then 32
+  `OS88_STIKROW '..##..'` lines of exactly 32 characters (`#` is ink), then
+  `OS88_STIKCARD_END`, right after the last block the header's flags declare.
+  The macros assert the card's place, the two lengths and the row count, so
+  a wrong card fails at ASSEMBLY; `OS88_HEADER` keeps its flags as
+  `OS88_HDR_FLAGS` so the first macro can find its place.
+- **`tools/os88pkg.py` validates it** (`stik_card_problem`: the magic, the
+  version, each field NUL-terminated inside itself, printable, an empty name
+  refused, zeros after the NUL) and `clear_prefix` counts it.
+  `tests/unit/t_stikcard.py` (fast tier) breaks each rule, keeps the card
+  verbatim through compression, holds the kernel's two ladders and the menu's
+  offsets to the tool's, and walks every shipped system image's `STIKAPPS/`
+  for a valid card; `t_pkg` checks it independently off the file.
+- **The Desk Calendar's card** is `'Desk Calendar'`, `'Dates, tasks &
+  reminders'` and today's page over the month's grid (§110.3), at +96.
+
+**Why not the other two shapes.** A SIDECAR file (`DESKCAL.STK`) changes no
+format and costs every App a second file that can be left behind on a copy -
+the App would list as a bare name. LAUNCHING each App to ask it is a load per
+App per menu drop, ~400 ms of `int 13h` apiece on the target before anything
+is drawn. The owner chose the card.
+
+#### 110.12.2 Discovery: `STIKAPPS\` on the boot volume and the fixed disks
+
+Every drop scans: the BOOT volume first (`[dsk_bootvol]` - its copy is the
+one a Sticky App row names, §110.4), then every other volume that is a FIXED
+disk - `hb_pick1`'s test (`dsk_vol_fixed_x` AL = 1, and not a redirected
+`DVK_FILE` volume, so not the RAM disk or the cable) less a mounted disk
+IMAGE (`DRVC_IMG`), which is a floppy's contents. On each: its root quietly
+(`fcp_goto`), `STIKAPPS` by name (`dskw_stat`), into it, then
+`dsk_find_x` by ordinal - stateless, so the header peeks between the calls
+cannot disturb it - and for each `.O88` its first sector (`dsk_peek_x`, 512
+bytes). It is LISTED when its magic is `'O8'`, bit 7 is set, the file holds
+the whole card and the card passes the menu's own check (`stm_cardok`: the
+validator's tests less "zeros after the NUL"). A NAME already listed is
+skipped, so the boot volume's copy wins over a hard disk's. At most
+`STM_MAX` = 8 are listed, and the machine's own place is banked round the
+whole walk (`drv_vol_bank`).
+
+An App is **RUNNING** when a live package instance's `I_NAME` - its header's
+program name, the loader's copy - is the App's: `stik_single`'s test (§110.5.2)
+from the kernel's side. The header says how many are (`1 Sticky App active`,
+`N Sticky Apps active`, `No Sticky Apps active`).
+
+**What a drop costs the target**, in `int 13h` calls (PERFORMANCE.md's unit):
+the module (1-2 on a floppy, `mod_need`), the boot volume's root and folder
+(0-2: the track cache of §18.95 holds most of a floppy's directory), one
+header peek per `.O88` (often 0 - DESKCAL's first sector is in the folder's
+track), and the same per fixed disk. On a floppy-booted 5150 with one App
+that is ~2-3 calls, about a second, before the panel is drawn; the title is
+lit the whole time. A press RELEASED in that second is the common case there,
+so the panel then STAYS UP for a click (`stm_loop`'s one difference from
+`menu_drop`); on a machine fast enough that the release lands after the
+panel, it behaves as every bar menu does.
+
+#### 110.12.3 The panel: composed a slab at a time, every pixel once
+
+The panel is a column of SLABS - the header, a rule, one per App, a rule,
+the three items, a rule, the hint - each **composed into a 1bpp band in the
+module and drawn by ONE `gfx_blit1`** (§5.4.2): the frame's two columns,
+the text, the picture, the tick, the button box, all in the band, so a slab
+is one primitive call and no pixel is written twice (§6.1's rule, which a
+fill-then-text menu would break on every row). Two fills draw the shadow.
+Every pen is on the byte grid (the panel's x is the title's, rounded down to
+8), so a slab is composed with byte ORs and blitted on the fast path. Text is
+the ROM 8x8 off `[font_seg]:[font_base]`; the Apps' names are BOLD (each row
+ORed with itself one pixel right); the tick is an 8x8 with 2-px strokes,
+which a 1bpp adapter keeps (§13.16.2.1).
+
+- **Two layouts**, by the primary's height (`[vid_ph]`): TALL at 300 rows or
+  more - a 40-row App with the 32x32 picture - and COMPACT below that, CGA's
+  200, where an App is 20 rows and the picture is its row PAIRS ORed, 16
+  rows, which on CGA's tall pixels is about square.
+- **The width** is the widest name or description in cells plus 14 (the
+  picture, the gaps, the right column, the frame), and at least 31 for the
+  hint; the panel shifts left rather than leave the primary.
+- **As many Apps as fit**: the screen, and a save-under of at most
+  `STM_SAVEMAX` = 61,440 bytes (one segment, so `gfx_save` cannot wrap). On
+  VGA that is 7 Apps as wide as the Desk Calendar's card and 5 at the widest
+  a card can be; the rest are not shown.
+- **The save-under is `menu_drop`'s** (§12.4.2): `[menu_sseg]`, `MEM_P_MSAVE`,
+  `menu_reloc`, sized from the rect - ~22 KB on VGA and ~4 KB on CGA for one
+  App - and a refused claim repaints on close with `menu_drop`'s
+  `[menu_bdirty]` care. An open dock's hole is put away while it is down
+  (§30.6.1).
+- **The theme**: the band is composed 1 = ink and put in the pen's polarity -
+  Bright and Windows keep the default pen and invert the band (the blit's
+  fast path), any other theme gets `thm_inkc`/`thm_bgc` as the pen on a
+  planar adapter, and a 1bpp adapter inverts when the theme's ink is dark.
+  A GREYED item (Arrange and Hide with no widget, `No Sticky Apps found`) is
+  a checkerboard on 1bpp - which is what grey is there (§47) - and the
+  theme's `thm_disc` pen on a planar adapter.
+- **The highlight** recomposes the slab inverted INSIDE the frame and blits
+  it: two blits per move, the menu's XOR without the XOR.
+
+#### 110.12.4 What a pick does
+
+A pick is not done under the lock - `menu_track` holds it and a launch takes
+it (§21.5) - so the module records it and POSTS `CMD_STIK` (`ui_post_cmd`),
+answers `menu_track` 0FFFFh, and stays loaded; `ui_cmd`'s `CMD_STIK` runs the
+module's ACT entry on `ui_task` with nothing held and drops it. A drop with
+no pick drops the module at once.
+
+| pick | what it does |
+|---|---|
+| an App with `Add` | `STIKAPPS\NAME.O88` off the volume it was found on: `sc_open`'s walk and its loader call (`ldf_ld_pkg_start`), a refusal saying the loader's own sentence; the App's first tick registers its row (§110.5) |
+| an App with the tick and `On` | **closes it** - `app_close_win` under the lock, as the user's own close, so the App's negotiator (`stik_close`) removes its Sticky App row and saves. Not `OSAPI_WM_CLOSE`, whose pass clears the negotiator first |
+| `Arrange Sticky Apps...` | a column down the right of the desktop band, `STM_ARR_R` = 64 px in from its edge (the drive zones' column), from `MBAR_H` + 4, 8 px apart, wrapping left; each desk window hidden, placed with `W_X` 7 mod 8 (the face on the grid, §110.11) and its natural rect banked, and shown - there is no move cell (§110.11) - and the App's own poll saves the place |
+| `Hide All Sticky Apps` | `wm_hide` on every desk window: nothing closed, nothing written, their timers still run |
+| `Show All Sticky Apps` | the same item while every desk window is hidden: `wm_show` on each. Hidden is DERIVED - a used, invisible `WF_DESK` window - since nothing else leaves one hidden at a moment this menu can run, and no byte records it. A Restart brings them back anyway (§110.4) |
+| `More Sticky Apps...` | The Wire (§92), as the desktop's service zone opens it; with no driver registered the module names `THEWIRE.O88` itself, and The Wire explains what it needs (§92.9) |
+| the hint | nothing: it is not a pick |
+
+Arrange and Hide/Show act on DESK windows; an App up TITLED (§110.7's
+fallback, no `DESK.DRV`) is listed and toggled but not arranged or hidden.
+
+#### 110.12.5 What it costs
+
+| | `.text` | `.bss` | `.cold` | rungs left after |
+|---|---:|---:|---:|---|
+| kern_big | **+72** | **+8** | **+47** | image 272 (352), cold 78 (125) |
+| kern_emu | +72 | +8 | +47 | image **13** (93), cold 78 (125) |
+| kern_small | 0 | 0 | +8 | image 429 (429), cold 46 (54): the card's ladder step alone |
+| `STIKMENU.DRV` (on demand) | | | | 3,222 bytes on the disk ('CZ'), a 7,473-byte image - 4,426 of it the scratch, zeros that pack to nothing and come back zero at every load - an 8 KB claim from the press to the act |
+
+The `.text` is the title, the two set entries, `menu_track`'s test, `CMD_STIK`
+and its handler, the module's row and file name, and the loader's step; the
+`.bss` the two slots; the `.cold` the two thunks and the ladder. No rung was
+crossed on any kernel, measured against main `a123653b` built alongside.
+**kern_emu's image rung is the one to watch**: 93 left before this, 13 now. The 360 KB system disk went 345 → 349 of 354
+clusters (`STIKMENU.DRV` is four), which left the Desk Calendar too little
+room to save; §24.3.1.3 took Mines off that disk, and it is 346, 8 free.
+
+#### 110.12.6 What is not done
+
+- **Hercules is not looked at on the glass here**: QEMU cannot show it
+  (docs/HERCULES-TESTING.md). Its layout is TALL on 1bpp, the two halves
+  CGA and VGA each check; a MartyPC or 86Box look is owed.
+- **The other Apps in the mockup** (Sticky Note, Desk Clock, Calculator) are
+  not built: the menu lists what `STIKAPPS\` holds, so today it lists one.
+- **A keyboard-only drop**: like every bar menu, the panel is reached by the
+  pointer or the keyboard mouse (§9.6); it does not step by item as
+  `menu_kbnav` does for a pull-down.
+- **No cache of the scan**: every drop reads `STIKAPPS\` again. That is what
+  makes a newly copied App appear with no refresh, and on a floppy it is the
+  cost above.
+
+`tests/stikmenu.py` is the row (soak): one boot of the VGA XT on the shipped
+360 KB system disk, the panel read out of the module's own image, and every
+pick - Add, a release off the panel, Hide All and Show All, Arrange, and the
+running row's close removing its row.
 
 ## 111. TIMER — the stopwatch (`apps/timer/timer.asm`)
 

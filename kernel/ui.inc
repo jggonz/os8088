@@ -2839,8 +2839,8 @@ ui_sys_find:
 ; which quits the frontmost instance - with nothing to close.
 ; -----------------------------------------------------------------------------
 ui_cmd:
-    dec ax                      ; CMD_ABOUT = 1 .. CMD_FILES (8 on small;
-    cmp ax, CMD_FILES           ; 11 or 12 on big with shortcuts) are CONTIGUOUS
+    dec ax                      ; CMD_ABOUT = 1 .. CMD_LAST (8 on small;
+    cmp ax, CMD_LAST            ; 11 or 12 on big with shortcuts) are CONTIGUOUS
     jae .done                   ; (SPEC.md 13, menu.inc), so an eight-deep
     mov bx, ax                  ; compare ladder is a table walk. AX = 0 wraps
     shl bx, 1                   ; to 0xFFFF and the same unsigned compare
@@ -2856,9 +2856,9 @@ ui_cmd:
                                 ; transfer, so EVERY ENTRY HERE MUST BE .text
                                 ; and is
 %ifdef OS88_SHORTCUTS
-    dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .shutdown, .close, .scdel, .files
+    dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .shutdown, .close, .scdel, .files, .stik
 %elifdef KERN_BIG
-    dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .shutdown, .close, .files
+    dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .shutdown, .close, .files, .stik
 %else
     dw .about, .ctrl, .tasks, .done, .reboot, .shutdown, .close, .files
 %endif
@@ -2867,6 +2867,11 @@ ui_cmd:
 .hiber:
     call COLD_SEG:hbf_open      ; the module first, then the window (SPEC.md
     ret                         ; 87.1) - cp_open's shape, and its refusal
+.stik:
+    call COLD_SEG:stm_act_x     ; the Sticky Apps menu's pick (SPEC.md 110.12):
+    ret                         ; STIKMENU.DRV is still held from the drop, and
+                                ; this is the lock-free half that launches,
+                                ; closes, hides, arranges - then drops it
 %endif
 %ifdef OS88_SHORTCUTS
 .scdel:

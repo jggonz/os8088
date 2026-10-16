@@ -81,6 +81,10 @@ CMD_FILES   equ 10
 %else
 CMD_FILES   equ 9
 %endif
+CMD_STIK    equ CMD_FILES + 1   ; the Sticky Apps menu's pick, POSTED by
+                                ; STIKMENU.DRV from under the lock and spent
+                                ; by ui_cmd with nothing held (SPEC.md 110.12)
+CMD_LAST    equ CMD_STIK
                                 ; No Builtins menu on either build (SPEC.md
                                 ; 14.6, 14.8): CMD_TIMER and CMD_BOUNCE are
                                 ; gone with their kinds - the two are packages
@@ -98,6 +102,7 @@ CMD_CLOSE   equ 7               ; --- Locator: File ---
                                 ; id: a Disk window is opened from the desktop
                                 ; zone (SPEC.md 26.1), which posts it
 CMD_FILES   equ 8
+CMD_LAST    equ CMD_FILES
 %endif
 
 ; --- app menu set layout (SPEC.md 12.2; mirrored in apps/os88api.inc) --------
@@ -1711,6 +1716,15 @@ menu_track:
     mov [menu_ent], si
     call menu_title_xor         ; highlight the title cell (VRAM-direct, so
                                 ; no flush needed - SPEC.md 32)
+%ifdef KERN_BIG
+    mov ax, [ss:si + MB_SEG]    ; THE STICKY APPS CELL (SPEC.md 110.12): the
+    or ax, [ss:si + MB_NITEM]   ; kernel's own (MB_SEG 0, which no package's
+    jnz .plain                  ; cell is) and the one of those with no items.
+    mov bx, [ss:si + MB_XL]     ; Its panel is STIKMENU.DRV's, drawn and
+    call COLD_SEG:stm_track_x   ; tracked there; AX = 0xFFFF back, because a
+    jmp short .untitle          ; pick is posted and never dispatched
+.plain:
+%endif
 
     ; --- menu rect: width = widest item + 16, items are 16px cells -----------
     mov bx, [ss:si + MB_ITEMS]
@@ -1726,6 +1740,7 @@ menu_track:
     mov dx, MBAR_H              ; it always hangs from the bar
     mov cl, 1                   ; the LEFT button keeps a bar menu open
     call menu_pull              ; AX = item index, or 0xFFFF
+.untitle:
     call menu_title_xor         ; un-highlight the title (self-inverting)
     cmp ax, 0xFFFF
     je .out
@@ -2621,6 +2636,11 @@ menu_loc_name   db 'Locator', 0 ; the kernel's own application (SPEC 12.3)
                                 ; A menu item is a window title said twice by
                                 ; construction: the item OPENS the window.
 menu_s_file     equ fm_s_mfile          ; the Disk window's own File menu
+%ifdef KERN_BIG
+menu_s_stik     db 'Sticky Apps', 0     ; ...and the desktop's widgets (SPEC.md
+                                ; 110.12): a title with NO items, which is
+                                ; what menu_track hands to STIKMENU.DRV
+%endif
                                 ; (Its Builtins menu - Timer, Bounce, Disk -
                                 ; is gone from both bars: SPEC.md 12.3.1 put
                                 ; it in one place, 22.28 took it off the Disk
@@ -2716,14 +2736,21 @@ MENU_FILE_N equ 1
 menu_loc_set:
     dw menu_loc_name            ; AM_NAME
     dw 0                        ; AM_ONCMD: kernel-dispatched
-    dw 1                        ; AM_COUNT: File alone, on both builds (SPEC.md
+%ifdef KERN_BIG
+    dw 2                        ; AM_COUNT: File and Sticky Apps (SPEC.md
+%else                           ; 110.12); File alone on kern_small (SPEC.md
+    dw 1                        ; 14.6, 14.8)
+%endif
     dw menu_s_file,    menu_items_file,    MENU_FILE_N
-                                ; 14.6, 14.8). The Builtins menu held Timer,
+%ifdef KERN_BIG
+    dw menu_s_stik,    0,                  0
+%endif
+                                ; (The Builtins menu held Timer,
                                 ; Bounce and Disk; the first two are packages
                                 ; on the apps disk now and the third is
                                 ; reachable from the desktop's own drive zones
                                 ; (SPEC.md 26.1) - so what was left was a menu
-                                ; with one item that duplicates a double-click
+                                ; with one item that duplicates a double-click)
 
 ; -----------------------------------------------------------------------------
 menu_s_abpfx db 'About ', 0     ; + the app's name -> menu_abstr (12.2)

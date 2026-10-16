@@ -3317,6 +3317,12 @@ OS88_F_GLYPH  equ 32            ; a 16-byte DOCUMENT-GLYPH block follows the
                                 ; your documents wear, SHIPPED rather than
                                 ; reduced out of the icon. Wants both bits 0
                                 ; and 1 beside it, and os88pkg.py checks
+OS88_F_STIK   equ 128           ; a 192-byte STICKY APP CARD follows the
+                                ; rest of the clear prefix (SPEC.md 110.12):
+                                ; the name, the description and the 32x32
+                                ; picture the Sticky Apps menu lists you by,
+                                ; read out of your file's first sector without
+                                ; launching you. OS88_STIKCARD writes it
 
 ; --- OS88_STACK_* : what to pass as OS88_HEADER's 4th argument (SPEC.md 8.7)
 ; Your worker's stack class. The kernel owns the sizes; you name the one you
@@ -3372,8 +3378,10 @@ PKG_FMT equ 10
     db PKG_FMT              ; +2  format version: segment-per-package, this table
     %if %0 >= 3
     db %3                   ; +3  flags (bit 0 = embedded icon)
-    %else
+OS88_HDR_FLAGS equ %3       ;     ...kept by name: OS88_STIKCARD finds its
+    %else                   ;     place in the clear prefix from it
     db 0                    ; +3  flags
+OS88_HDR_FLAGS equ 0
     %endif
     dw 0                    ; +4  link base: 0, and the loader checks it
     dw (%2) - $$            ; +6  entry offset
@@ -3469,6 +3477,77 @@ PKG_FMT equ 10
         %error "the document glyph is exactly eight db bytes, one a row"
     %endif
     times 8 db 0                ; ...and eight reserved, so the block is 16
+%endmacro
+
+; -----------------------------------------------------------------------------
+; OS88_STIKCARD name, description / OS88_STIKROW x 32 / OS88_STIKCARD_END -
+; the STICKY APP CARD (SPEC.md 110.12). Only valid with OS88_F_STIK in the
+; header's flags, and it goes IMMEDIATELY after the last block of the clear
+; prefix in front of it - the icon, the association block or the document
+; glyph, whichever comes last (offset 32 + 64 + 16 + 16 at most). The card is
+; a fixed 192 bytes and stays in the clear (SPEC.md 20.13.1), so the Sticky
+; Apps menu reads it out of your file's first sector, compressed or not.
+;
+;   +0   'SA', then the card's version (1) and a reserved 0
+;   +4   the NAME, at most 23 characters, NUL-padded to 24
+;   +28  the DESCRIPTION, at most 35 characters, NUL-padded to 36
+;   +64  the 32x32 PICTURE, 32 rows of 4 bytes, bit 7 of a row's first byte
+;        the leftmost pixel, 1 = ink. Write it as 32 OS88_STIKROW lines of
+;        exactly 32 characters, '#' for ink and anything else for paper, so
+;        the source is the picture
+;
+; Both macros assert their ends, so a 31st row or a 24-character name fails
+; at ASSEMBLY rather than in the menu.
+; -----------------------------------------------------------------------------
+%macro OS88_STIKCARD 2
+    %if (OS88_HDR_FLAGS & OS88_F_STIK) == 0
+        %error "OS88_STIKCARD needs OS88_F_STIK in OS88_HEADER's flags"
+    %endif
+    %if ($ - $$) != 32 + (OS88_HDR_FLAGS & 1) * 64 + ((OS88_HDR_FLAGS >> 1) & 1) * 16 + ((OS88_HDR_FLAGS >> 5) & 1) * 16
+        %error "OS88_STIKCARD must immediately follow the icon, association block or glyph the flags declare"
+    %endif
+    %assign OS88_STIK_BASE ($ - $$)
+    %strlen %%nl %1
+    %strlen %%dl %2
+    %if %%nl < 1 || %%nl > 23
+        %error "OS88_STIKCARD: the name is 1 to 23 characters"
+    %endif
+    %if %%dl > 35
+        %error "OS88_STIKCARD: the description is at most 35 characters"
+    %endif
+    db 'SA', 1, 0               ; +0 magic, version, reserved
+    db %1                       ; +4 the name...
+    times 24 - %%nl db 0        ;    ...NUL-padded
+    %if %%dl > 0
+    db %2                       ; +28 the description...
+    %endif
+    times 36 - %%dl db 0        ;    ...NUL-padded
+%endmacro
+
+%macro OS88_STIKROW 1
+    %strlen %%rl %1
+    %if %%rl != 32
+        %error "OS88_STIKROW: a row of the card's picture is exactly 32 characters"
+    %endif
+    %assign %%i 1
+    %rep 4
+        %assign %%b 0
+        %rep 8
+            %substr %%c %1 %%i
+            %assign %%b %%b * 2
+            %if %%c == '#'
+                %assign %%b %%b + 1
+            %endif
+            %assign %%i %%i + 1
+        %endrep
+        db %%b
+    %endrep
+%endmacro
+
+%macro OS88_STIKCARD_END 0
+    %if ($ - $$) != OS88_STIK_BASE + 192
+        %error "the Sticky App card is 64 bytes of text and exactly 32 OS88_STIKROW rows"
+    %endif
 %endmacro
 
 ; -----------------------------------------------------------------------------

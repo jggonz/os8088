@@ -90,6 +90,10 @@ LD_HF_GLYPH equ 0x20            ; ...its bit 5: a 16-byte DOCUMENT-GLYPH block
                                 ; follows the association block (SPEC.md
                                 ; 54.3.2). Read by assoc.inc and by the two
                                 ; clear-prefix ladders, and by nothing else
+LD_HF_STIK  equ 0x80            ; ...its bit 7: the 192-byte STICKY APP CARD
+LD_STIK_SIZE equ 192            ; follows the rest of the clear prefix (SPEC.md
+                                ; 110.12). Only the Sticky Apps menu READS it;
+                                ; the two clear-prefix ladders only step over it
 LD_H_GLYPH  equ 112             ; ...and where it sits: header 32 + icon 64 +
                                 ; association block 16 (the tool requires all
                                 ; three in front of it)
@@ -297,11 +301,11 @@ ld_hdr_ok:
 ; TWO MOVES, and the first is easy to miss: the file was read high, so the
 ; region's first `prefix` bytes - the header the disk-swap re-check below is
 ; about to validate - are otherwise NEVER WRITTEN. They come down first. R is
-; at least 512 and the prefix at most 112, so the copy cannot overlap.
+; at least 512 and the prefix at most 320, so the copy cannot overlap.
 ;
 ; Then the body. `lz_decomp_x` wants its destination at offset 0 of a segment
 ; (SPEC.md 20.13.3) and the body belongs at `prefix`, which would be a
-; problem if the prefix were not always a multiple of 16 - 32, 48, 96 or 112.
+; problem if the prefix were not always a multiple of 16 - 32 to 320, by 16.
 ; It is, so the destination is a SEGMENT `prefix/16` paragraphs along and DI
 ; stays 0, which keeps the offset bound one instruction.
 ; -----------------------------------------------------------------------------
@@ -950,7 +954,7 @@ ld_run_body_x:
     test al, 1                  ; the first sector and must never have to
     jz .noico                   ; decompress to get (SPEC.md 20.13.1) - the
     add bx, 64                  ; header, the icon, the association block,
-.noico:                         ; the document glyph. At most 128, and ALWAYS
+.noico:                         ; the glyph, the card. At most 320, and ALWAYS
     test al, 2                  ; a multiple of 16, which is what lets the
     jz .noasc                   ; body's destination be a SEGMENT below
     add bx, 16
@@ -959,6 +963,10 @@ ld_run_body_x:
     jz .nogly                   ; sixteen bytes for eight of glyph for the
     add bx, 16                  ; multiple-of-16 reason above
 .nogly:
+    test al, LD_HF_STIK         ; ...and the Sticky App card (SPEC.md 110.12),
+    jz .nostk                   ; 192 bytes, so at most 320 in all - still
+    add bx, LD_STIK_SIZE        ; inside the first sector and under R's 512
+.nostk:
     test al, 0x10               ; bit 4 says which format (SPEC.md 20.13): the
     mov al, LZ_LZ4              ; decoder wants 0 or 1, and CX - the file's
     jz .fmt                     ; length - is not a register to shift by

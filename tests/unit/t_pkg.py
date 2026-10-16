@@ -68,15 +68,23 @@ MOD_H_IMG, MOD_H_NENT = 8, 10
 
 def app(blob, nm, flags, entry, image, bss):
     """SPEC.md 20.2 - a v3 application package."""
-    check(not (flags & 0x80), "%s: no reserved flag bits" % nm, got=hex(flags),
-          why="bit 0 is an embedded icon, bit 1 an association block (SPEC.md "
-              "54.6), bit 2 says the FILE is longer than the image on purpose "
-              "(SPEC.md 20.12), bits 3-4 say it is SHORTER because the "
-              "image is compressed and in which format (SPEC.md 20.13), and "
-              "bit 5 says a shipped document glyph follows the association "
-              "block (SPEC.md 54.3.2), and bit 6 is OS88_F_DESK, a package "
-              "that makes a desk window (SPEC.md 11.103.9). Bit 7 is nobody's "
-              "yet")
+    # Every bit of the flags byte has a meaning now: 0 an embedded icon, 1 an
+    # association block (SPEC.md 54.6), 2 the FILE longer than the image on
+    # purpose (SPEC.md 20.12), 3-4 SHORTER because compressed and in which
+    # format (SPEC.md 20.13), 5 a shipped document glyph (SPEC.md 54.3.2), 6
+    # OS88_F_DESK (SPEC.md 11.103.9) and 7 OS88_F_STIK, the Sticky App card
+    # (SPEC.md 110.12) - which, being in the clear prefix, is checked here off
+    # the FILE as the menu reads it, compressed or not.
+    if flags & 0x80:
+        at = (96 if flags & 1 else 32) + (16 if flags & 2 else 0) + \
+            (16 if flags & 0x20 else 0)     # the card follows the prefix,
+        card = blob[at:at + 192]            # counted here rather than asked
+        ok = (len(card) == 192 and card[0:4] == b"SA\x01\x00"
+              and 0 in card[4:28] and card[4] != 0 and 0 in card[28:64])
+        check(ok, "%s: its Sticky App card is where bit 7 says" % nm,
+              got=card[:28],
+              why="flags bit 7 promises a card the Sticky Apps menu reads "
+                  "out of the first sector (SPEC.md 110.12)")
     if flags & 0x20:
         check(flags & 3 == 3, "%s: the shipped glyph has an icon and a "
               "declaration in front of it" % nm, got=hex(flags),

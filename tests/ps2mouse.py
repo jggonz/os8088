@@ -203,11 +203,18 @@ def main():
             subprocess.run([sys.executable, "tools/mouse.py", SOCK, "down",
                             str(x), "8"], cwd=ROOT, check=True,
                            stdout=subprocess.DEVNULL, timeout=180)
+            # OPEN is either kind of drop: menu_drop's pull-down sets
+            # menu_dropd, and the Sticky Apps cell's panel (SPEC.md 110.12)
+            # does not - its rows are not 16px items for the keyboard mouse
+            # to step - but both hold the menu save-under while they are up
+            def is_open():
+                return (byte(q, "menu_dropd") == 1
+                        or word(q, "menu_sseg") != 0)
             os88qemu.acted(q, lambda: byte(q, "menu_cell") == cell
-                           and byte(q, "menu_dropd") == 1, secs=3,
+                           and is_open(), secs=3,
                            what="bar cell %d" % cell)
             got = byte(q, "menu_cell")
-            dropped = byte(q, "menu_dropd")
+            dropped = 1 if is_open() else 0
             if got != cell or dropped != 1:
                 fails.append("bar cell %d at x=%d opened cell %d, drop=%d"
                              % (cell, x, got, dropped))
@@ -215,7 +222,7 @@ def main():
                            cwd=ROOT, check=True, stdout=subprocess.DEVNULL,
                            timeout=30)
             # ...and the pull-down gone again before the next title is aimed
-            os88qemu.acted(q, lambda: byte(q, "menu_dropd") == 0, secs=3,
+            os88qemu.acted(q, lambda: not is_open(), secs=3,
                            what="the pull-down closing")
 
         # --- ...and the keyboard, which shares the one output buffer --------

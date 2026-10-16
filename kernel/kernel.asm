@@ -1144,6 +1144,7 @@ section .modk    start=MODK_START vstart=0
 section .modx    start=MODX_START vstart=0
 section .modw    start=MODW_START vstart=0
 section .modj    start=MODJ_START vstart=0  ; DESK.DRV (SPEC.md 11.103.10)
+section .modn    start=MODN_START vstart=0  ; STIKMENU.DRV (SPEC.md 110.12)
 %endif
 section .modmap  start=MODMAP_START vstart=0
 section .text
@@ -5055,6 +5056,7 @@ EXT_YLOW    equ 11              ; ui_ylow's arm, behind its caller's gate
 %include "extmod.inc"             ; EXTD.DRV, the extended desktop
 %include "winmod.inc"             ; WIN95.DRV, the Windows theme (SPEC.md 76.14)
 %include "deskmod.inc"            ; DESK.DRV, the desk layer (SPEC.md 11.103.10)
+%include "stikmenu.inc"           ; STIKMENU.DRV, the Sticky Apps menu (110.12)
                                   ; (SPEC.md 39.19.6) - kern_big only
 %include "ctrl.inc"
 %include "desksc.inc"           ; desktop shortcuts (SPEC.md 26.8): empty
@@ -5108,6 +5110,7 @@ mod_fpt:
     MODFP EXFP, MOD_EXT, EXT_NENT
     MODFP WNFP, MOD_WIN, WN_NENT
     MODFP DKDFP, MOD_DESK, DKD_NENT
+    MODFP SMNFP, MOD_STIKM, SMN_NENT
 %endif
 %ifdef OS88_SHORTCUTS
     MODFP SETFP, MOD_SETS, 1    ; the settings core's ONE slot, CPE_SC (2.8.7)
@@ -6524,8 +6527,9 @@ MODMAP_START equ MODD_START + MODD_SIZE   ; no Dock module (SPEC.md 30.5)
 %ifdef DOCK_OPT                           ; DOCK_OPT is KERN_BIG, so
 MODX_START   equ MODK_START + MODK_SIZE   ; EXTD.DRV (SPEC.md 39.19.6),
 MODW_START   equ MODX_START + MODX_SIZE   ; WIN95.DRV (SPEC.md 76.14) and
-MODJ_START   equ MODW_START + MODW_SIZE   ; DESK.DRV (SPEC.md 11.103.10) are
-MODMAP_START equ MODJ_START + MODJ_SIZE   ; always the last three images there
+MODJ_START   equ MODW_START + MODW_SIZE   ; DESK.DRV (SPEC.md 11.103.10) and
+MODN_START   equ MODJ_START + MODJ_SIZE   ; STIKMENU.DRV (SPEC.md 110.12) are
+MODMAP_START equ MODN_START + MODN_SIZE   ; always the last four images there
 %endif
 
 %ifdef KERN_BIG
@@ -6543,6 +6547,12 @@ modj_end:
 MODJ_SIZE equ modj_end - $$
 %if MODJ_SIZE > MOD_MAX_KB*1024
   %error "DESK.DRV exceeds its maximum claim"
+%endif
+section .modn
+modn_end:
+MODN_SIZE equ modn_end - $$
+%if MODN_SIZE > MOD_MAX_KB*1024
+  %error "STIKMENU.DRV exceeds its maximum claim"
 %endif
 %endif
 %ifdef DOCK_OPT
@@ -6728,6 +6738,8 @@ mod_map:
     dw WN_NENT
     dd MODJ_START, MODJ_SIZE    ; the desk layer (SPEC.md 11.103.10)
     dw DKD_NENT
+    dd MODN_START, MODN_SIZE    ; the Sticky Apps menu (SPEC.md 110.12)
+    dw SMN_NENT
 %endif
     dd MODMAP_START             ; ...where the table began, and
     dw 0x384F                   ; the last two bytes of the file
@@ -7261,6 +7273,10 @@ section .modw
 section .modj
 %if $ != modj_end
   %error "something landed in .modj after modj_end"
+%endif
+section .modn
+%if $ != modn_end
+  %error "something landed in .modn after modn_end"
 %endif
 %endif
 section .modmap

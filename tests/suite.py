@@ -952,6 +952,13 @@ FAST = [
         "reduction, DOS.O88 setting the bit, and every shipped ASSOC.DAT being "
         "version 2 with the glyph in DOS's row. Host-only, one package format "
         "and three tools, which is why it is here beside `pkg` and not in soak"),
+    Row("stikcard", "fast", py("tests/unit/t_stikcard.py"), 0.6,
+        "a Sticky App carries a CARD (SPEC.md 110.12) - name, description and "
+        "32x32 picture in the clear prefix behind flags bit 7: the validator's "
+        "refusals, the card kept verbatim through compression, the kernel's two "
+        "clear-prefix ladders stepping over it, the menu's offsets equal to the "
+        "tool's, and every STIKAPPS/*.O88 on every shipped system image "
+        "carrying a valid one. Host-only, docglyph's shape"),
     Row("fonts", "fast", py("tests/unit/t_fonts.py"), 0.1,
         "the typefaces are in SYSTEM/FONTS on every shipped system image and "
         "nowhere else (SPEC.md 19.8.1), and apps/os88type.inc's ty_gofonts "
@@ -9976,6 +9983,20 @@ SOAK = [
         "the window is up: the widget's first tick (its registration through "
         "the settings core, its own file I/O) moves both on any build.",
         needs=("marty", "mtools"), timeout=900,
+        wants=("build/os8088-360.img",)),
+    Row("stikmenu", "soak", py("tests/stikmenu.py"), 30.0,
+        "SPEC.md 110.12: Locator's Sticky Apps menu, one boot of the VGA XT "
+        "on the shipped 360KB system disk. A press on the cell loads "
+        "STIKMENU.DRV and lists DESKCAL.O88 by its CARD (name 'Desk "
+        "Calendar', not running, Arrange/Hide greyed, More live); releasing "
+        "on its row POSTS the pick and launches it as a desk window, and the "
+        "module is dropped after; a release off the panel posts nothing; "
+        "Hide All hides the widget and Show All brings it back; Arrange puts "
+        "it at W_X = 7 mod 8 at the column's top; picking the RUNNING row "
+        "closes it through app_close_win, so its own negotiator removes its "
+        "Sticky App row. Read out of the module's own image (mod_tab's row + "
+        "os88sym's offsets), not out of pixels.",
+        needs=("marty",), timeout=900,
         wants=("build/os8088-360.img",)),
     Row("stikshort", "soak", py("tests/stikshort.py"), 15.0,
         "SPEC.md 26.8.1/110.2, the regression for +3: SPEC.md called the "

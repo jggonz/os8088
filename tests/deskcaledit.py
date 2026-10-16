@@ -44,10 +44,10 @@ Boot 1, a DAMAGED file (its appointment count is 60, past the table):
 The appointments are selected the user's way on v2's two-line agenda:
 paged by its `+N more` line until the one wanted is on show, then pressed.
 
-Boot 2, a FULL table (48 appointments):
+Boot 2, a FULL table (DESKCAL_NAPPT appointments, 16):
 
   F  Calendar > New Appointment is GREYED as `New Appointment (full)` (SPEC.md
-     47), and `N` answers `Calendar is full (48)` and opens no field.
+     47), and `N` answers `Calendar is full (16)` and opens no field.
 
 **BREAK IT ON PURPOSE**: make dc_parse refuse three digits and B's 08:15
 comes back all-day; take dc_check out of dc_entry and A opens the junk
@@ -327,7 +327,7 @@ def appts_of(cal):
 
 def boot_damaged(tmp):
     pay = bytearray(os88stik.deskcal([(TODAY, 600, "Not trusted")]))
-    pay[0] = 60                 # past the 48-record table
+    pay[0] = 60                 # past the 16-record table
     fixture = os88stik.dat(bytes(pay), x=335, y=40, screen=(640, 480))
     img = disk_with(tmp, "damaged.img", fixture)    # a v1 place: converted
     with os88ui.boot(img, machine="os8088_xt_vga") as ui:
@@ -496,14 +496,15 @@ def boot_damaged(tmp):
 
 
 def boot_full(tmp):
-    days = [(2026, 10, d) for d in range(1, 25)]
+    days = [(2026, 10, d) for d in range(1, os88stik.DESKCAL_NAPPT // 2 + 1)]
     appts = [(d, 600 + i, "Busy %d" % i) for d in days for i in (0, 1)]
     fixture = os88stik.dat(os88stik.deskcal(appts), x=335, y=40,
                           screen=(640, 480))
     img = disk_with(tmp, "full.img", fixture)
     with os88ui.boot(img, machine="os8088_xt_vga") as ui:
         c = Cal(ui, tmp)
-        print("F: 48 appointments: New Appointment greyed, N refused")
+        print("F: %d appointments: New Appointment greyed, N refused"
+              % os88stik.DESKCAL_NAPPT)
         c.front()
         cal = [mm for mm in ui.menus() if mm[0] == "Calendar"]
         items = cal[0][3] if cal else []
@@ -513,7 +514,8 @@ def boot_full(tmp):
               "...and New Task is live (%r)" % (items[1:2],))
         c.key("KeyN")
         txt = ui.wait_toast(says="full")
-        check(txt == "Calendar is full (48)", "N says %r" % txt)
+        check(txt == "Calendar is full (%d)" % os88stik.DESKCAL_NAPPT,
+              "N says %r" % txt)
         os88marty.pace(c.m, 1.0)
         check(c.ed() == 0, "and opened no field")
 
