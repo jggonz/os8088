@@ -272,6 +272,8 @@ LNF_UNDER    equ 128
 
 LM_LINK      equ 1                  ; per-cell style marks in br_lmark
 LM_HEAD      equ 2
+LM_FOCUS     equ 4                  ; keyboard-focused link, XOR overlay
+LM_SELECT    equ 8                  ; mouse-selected page text, XOR overlay
 LM_BOLD      equ LNF_BOLD
 LM_ITALIC    equ LNF_ITALIC
 LM_UNDER     equ LNF_UNDER
@@ -315,6 +317,12 @@ BR_MAXCOL    equ 96                 ; widest band we will ever letter: 720/8 is
 ; =============================================================================
 br_entry:
     push si
+    pushf
+    push ax
+    mov al, 0x1D                   ; left Ctrl: arm the key-state map once
+    call OSAPI_KEY_DOWN
+    pop ax
+    popf
     call br_size                    ; the template's HEIGHT is the machine's
     mov si, br_tpl
     call OSAPI_WM_CREATE
@@ -323,6 +331,10 @@ br_entry:
     mov si, br_menus
     call OSAPI_MENU_SET
     mov [br_win], bx
+    mov ax, br_onrclk
+    call OSAPI_WM_ONRCLICK          ; right click copies an active selection
+    mov byte [br_bmrefreshreq], 1   ; first read waits until W_ONWAKE, after show
+    call br_bmmenuset
     push ax                         ; **THE BUTTONS' THREE SLOTS** (SPEC.md
     push bx                         ; 20.5.1.3.3): btninit links this record so
     push cx                         ; the library's click thunk can find it,
@@ -576,6 +588,173 @@ br_onresize:
     pop bx                          ; is, and preserves the flags doing it
     ret
 
+; --- br_copyselection - copy the current selection to the text clipboard ----
+; The page copy buffer is a short-lived claim sized to the selected source
+; span. Nothing is reserved while browsing, and even a long selection costs
+; memory only for this callback. The clipboard copies the bytes before return.
+br_copyselection:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    cmp byte [br_selkind], 1
+    je .page
+    cmp byte [br_selkind], 2
+    jne .out
+    mov ax, [br_baranch]
+    mov bx, [br_barend]
+    cmp ax, bx
+    ja .barreverse
+    jmp short .barordered
+.barreverse:
+    xchg ax, bx
+    inc bx                          ; the anchor cell is part of a reverse drag
+.barordered:
+    cmp ax, bx
+    je .out
+    mov cx, bx
+    sub cx, ax
+    mov si, br_ubuf
+    add si, ax
+    push ds
+    pop es
+    call OSAPI_CLIP_PUT
+    jmp .out
+.page:
+    mov ax, [br_selanch]
+    mov bx, [br_selend]
+    cmp ax, bx
+    je .out
+    ja .reverse
+    jmp short .range
+.reverse:
+    xchg ax, bx
+    inc bx
+.range:
+    mov [br_copystart], ax
+    mov [br_copyend], bx
+    sub bx, ax
+    or bx, bx
+    jz .out
+    mov ax, bx
+    cmp ax, 16384
+    jae .maxcap
+    shl ax, 1                       ; room for CR/LF expansion of break markers
+    jmp short .cap
+.maxcap:
+    mov ax, 32768
+.cap:
+    mov [br_copycap], ax
+    add ax, 1023
+    mov cl, 10
+    shr ax, cl                      ; claim only enough KB for this selection
+    or ax, ax
+    jnz .claim
+    inc ax
+.claim:
+    cmp ax, 32                      ; OSAPI_CLIP_PUT's published ceiling
+    ja .out
+    call OSAPI_MEM_CLAIM
+    jc .out
+    mov [br_copyseg], dx
+    mov es, dx
+    xor di, di
+    mov si, [br_copystart]
+    mov bx, [br_copyend]
+    mov dx, [br_docseg]
+    mov es, dx
+.scan:
+    cmp si, bx
+    jae .put
+    mov al, [es:si]
+    inc si
+    cmp al, 0x20
+    jae .char
+    cmp al, D_LNK1
+    jne .m1
+    add si, 2                      ; two opaque bytes carry the link index
+    jmp short .scan
+.m1:
+    cmp al, D_CMETA
+    jne .m2
+    inc si                          ; cell-span hint, not visible text
+    jmp short .scan
+.m2:
+    cmp al, D_PARA
+    je .newline
+    cmp al, D_BR
+    je .newline
+    cmp al, D_ROW
+    je .newline
+    cmp al, D_CELL
+    je .space
+    jmp short .scan                 ; formatting and layout markers are hidden
+.newline:
+    cmp di, [br_copycap]
+    jae .overflow
+    mov al, 13
+    call br_copyemit
+    cmp di, [br_copycap]
+    jae .overflow
+    mov al, 10
+    call br_copyemit
+    jmp short .scan
+.space:
+    cmp di, [br_copycap]
+    jae .overflow
+    mov al, 9
+    call br_copyemit
+    jmp short .scan
+.char:
+    cmp al, D_NBSP
+    jne .emit
+    mov al, ' '
+.emit:
+    cmp di, [br_copycap]
+    jae .overflow
+    call br_copyemit
+    jmp short .scan
+.put:
+    mov cx, di
+    mov si, 0
+    mov dx, [br_copyseg]
+    mov es, dx
+    call OSAPI_CLIP_PUT
+    mov dx, [br_copyseg]
+    call OSAPI_MEM_FREE
+    jmp short .out
+.overflow:
+    mov dx, [br_copyseg]
+    call OSAPI_MEM_FREE              ; leave the previous clipboard untouched
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; Append AL at the transient clipboard segment while ES remains the page reader.
+; The page and output are separate segments on 8086, so switch only per byte.
+br_copyemit:
+    push ax
+    push dx
+    push es
+    mov dx, [br_copyseg]
+    mov es, dx
+    pop dx                          ; page segment, restored after the store
+    mov [es:di], al
+    mov es, dx
+    pop dx
+    pop ax
+    inc di
+    ret
+
 ; -----------------------------------------------------------------------------
 ; br_arg - BANK the document we were launched on (SPEC.md 54.5/54.10)
 ; in:  entry-proc context: UI task, no lock, window created but not shown
@@ -610,6 +789,8 @@ br_arg:
                                     ; (the folder, the volume) ride through
     mov [br_argclus], dx            ; **BANK, DO NOT READ** (SPEC.md 54.10).
     mov [br_argdrv], bl             ; This did the GOTO and the br_load right
+    mov byte [br_islocal], 1
+    mov byte [br_viewsrc], 0
     mov byte [br_argp], 1           ; here, in the entry proc - under the
                                     ; loader's own gfx-lock burst, with no
                                     ; window on the glass and the file manager
@@ -636,6 +817,7 @@ br_arg:
 ; nothing but where the name came from.
 ; -----------------------------------------------------------------------------
 br_onwake:
+    call br_bmservice               ; bookmark file I/O runs unlocked here
     cmp byte [br_fin], 4            ; A FRAMESET'S RE-CLAIM (SPEC.md 71.15):
     jne .net                        ; the worker has parsed the frameset and
     cmp byte [br_nstate], BN_BODY   ; its children need the page buffers at
@@ -749,9 +931,12 @@ br_paint:
     push dx
     push si
     push di
+    call br_bmpost                  ; retry a bookmark wake refused by a full ring
     mov [br_win], si
     call br_hire
     call br_measure                 ; CF=1 if the width moved (relayout done)
+    mov byte [br_ctxopen], 0        ; a full page paint removes any old popup
+    mov byte [br_bmredraw], 0       ; this paint draws the current star/status
     call br_toolbar                 ; ...the strip draws the state itself
     call br_ldraw
     call br_paint_band
@@ -760,7 +945,13 @@ br_paint:
     call OSAPI_WM_GROW              ; the grow box is ours to put back
     cmp byte [br_abon], 0           ; ...and the credit card LAST, because it
     je .noab                        ; is on top of all of it. A repaint the
+    cmp byte [br_abhelp], 0
+    jne .helpcard
     mov si, br_ablines              ; KERNEL ordered - a raise, a drag, another
+    jmp short .drawcard
+.helpcard:
+    mov si, br_shortlines
+.drawcard:
     call os88ui_about_d             ; (BX = the window, from WM_GROW above)
 .noab:                              ; window closing - would otherwise erase a
     jmp br_pop6                     ; card that is still up as far as the next
@@ -855,6 +1046,7 @@ br_locrect:
     call br_brect                   ; Fwd
     mov cx, BR_BTNW2
     call br_brect                   ; Reload
+    call br_starrect                ; the 16px target at the far right
     call br_srect                   ; ...and the state, right-aligned
                                     ; --- then the bar under it ---
     mov ax, [br_cx]
@@ -882,7 +1074,71 @@ br_ldraw:
     push si
     mov si, br_loc
     call os88line_draw
+    cmp byte [br_selkind], 2
+    jne .out
+    call br_barinvert
+.out:
     pop si
+    ret
+
+; XOR just the visible address-bar cells in the retained selection.
+br_barinvert:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, br_loc
+    mov ax, [br_baranch]
+    mov bx, [br_barend]
+    cmp ax, bx
+    jbe .ordered
+    xchg ax, bx
+.ordered:
+    cmp ax, bx
+    je .out
+    mov [br_copystart], ax
+    mov [br_copyend], bx
+    cmp bx, [si+LN_VIEW]
+    jbe .out
+    cmp ax, [si+LN_LEN]
+    jae .out
+    mov cx, [si+LN_VIEW]
+    cmp ax, cx
+    jae .startok
+    mov ax, cx
+.startok:
+    mov [br_copystart], ax
+    call os88line_cols
+    add cx, [si+LN_VIEW]
+    cmp [br_copyend], cx
+    jbe .endok
+    mov [br_copyend], cx
+.endok:
+    mov ax, [br_copystart]
+    mov si, br_loc
+    call os88line_cell           ; AX=x1, DX=y1 from the line control itself
+    jc .out
+    mov [br_barx1], ax
+    mov [br_bary], dx
+    mov ax, [br_copyend]
+    dec ax
+    mov si, br_loc
+    call os88line_cell           ; the last included cell gives the exact x2
+    jc .out
+    add ax, 7
+    mov cx, ax
+    mov ax, [br_barx1]
+    mov bx, [br_bary]
+    mov dx, bx
+    add dx, 7
+    call OSAPI_GFX_XOR_FILL
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; --- br_brect - one button's rect, and the next one's left edge -------------
@@ -945,7 +1201,7 @@ br_srect:
                                     ; above it when floored
     mov bx, [br_cx]
     add bx, [br_cw]
-    sub bx, BR_LPAD                 ; BX = one past its right edge
+    sub bx, BR_LPAD + BR_STARW + 9  ; include its alignment slack at the edge
     mov ax, bx
     sub ax, dx
     js .none                        ; the buttons already fill the strip
@@ -1083,7 +1339,7 @@ br_underline:
                                     ; (SPEC.md 1), and BP addresses SS here
 .scan:
     cmp di, [br_cols]
-    jae .out
+    jae .overlay
     test byte [bx+di], LM_LINK | LM_HEAD | LM_UNDER
     jz .step
     mov cx, di                      ; CX = the run's first column
@@ -1117,6 +1373,77 @@ br_underline:
     pop di
     pop bx
     jmp .scan
+.overlay:
+    mov bx, br_lmark                ; focus/selection XOR, separate from the
+    xor di, di                      ; underline pass so plain text is not underlined
+.scaninv:
+    cmp di, [br_cols]
+    jae .focus
+    test byte [bx+di], LM_SELECT
+    jz .stepinv
+    mov cx, di                      ; start of one contiguous highlighted run
+.runinv:
+    inc di
+    cmp di, [br_cols]
+    jae .emitinv
+    test byte [bx+di], LM_SELECT
+    jnz .runinv
+.emitinv:
+    push bx
+    push di
+    mov ax, cx
+    mov cl, 3
+    shl ax, cl
+    add ax, si                      ; x1
+    mov dx, di
+    shl dx, cl
+    dec dx
+    add dx, si                      ; x2
+    mov cx, dx
+    mov bx, bp                      ; full eight-pixel glyph cell
+    mov dx, bp
+    add dx, BR_CELL - 1
+    call OSAPI_GFX_XOR_FILL
+    pop di
+    pop bx
+    jmp .scaninv
+.stepinv:
+    inc di
+    jmp .scaninv
+.focus:
+    xor di, di
+.scanfocus:
+    cmp di, [br_cols]
+    jae .out
+    test byte [bx+di], LM_FOCUS
+    jz .stepfocus
+    mov cx, di                      ; keyboard focus is a caret-like cue, not a
+.runfocus:                          ; second full-text selection: mark only the
+    inc di                          ; first visible glyph of each wrapped run
+    cmp di, [br_cols]
+    jae .emitfocus
+    test byte [bx+di], LM_FOCUS
+    jnz .runfocus
+.emitfocus:
+    push bx
+    push di
+    mov ax, cx
+    mov cl, 3
+    shl ax, cl
+    add ax, si                      ; first focused cell, x1
+    mov dx, ax
+    add dx, BR_CELL - 1             ; one glyph only, x2
+    mov cx, dx
+    mov bx, bp
+    mov dx, bx
+    add dx, BR_CELL - 1
+    call OSAPI_GFX_XOR_FILL
+    pop di
+    pop bx
+    jmp .scanfocus
+.stepfocus:
+    inc di
+    jmp .scanfocus
 .step:
     inc di
     jmp .scan
@@ -1341,8 +1668,11 @@ br_build:
     mov ah, [es:si+LN_FL]
     mov bh, ah                      ; BH = flags
     mov [br_lflags], ah
-    and ah, LNF_LNK                 ; ...and the LINK STATE this line inherits
-    mov [br_lnkcell], ah            ; (LNF_LNK, set by br_emitline)
+    mov byte [br_lnkcell], 0
+    test ah, LNF_LNK                ; line flags and cell marks have different
+    jz .linkstate                   ; bit assignments: map, never copy LNF_LNK
+    mov byte [br_lnkcell], LM_LINK  ; into br_lmark (LM_FOCUS is also bit 2)
+.linkstate:
     mov al, [br_lflags]
     and al, LNF_BOLD | LNF_ITALIC
     mov [br_lfmt], al
@@ -1467,6 +1797,46 @@ br_build:
     jz .markstore
     mov byte [br_undraw], 1
 .markstore:
+    push ax
+    mov ax, si
+    dec ax                          ; source offset of this visible cell
+    cmp byte [br_tfocus], 3
+    jne .selmark
+    cmp ax, [br_tstart]
+    jb .selmark
+    cmp ax, [br_tend]
+    jae .selmark
+    pop ax
+    or al, LM_FOCUS
+    jmp short .checksel
+.selmark:
+    cmp byte [br_selkind], 1
+    jne .nomark
+    mov dx, [br_selanch]
+    cmp dx, [br_selend]
+    jae .revsel
+    cmp ax, dx
+    jb .nomark
+    cmp ax, [br_selend]
+    jae .nomark
+    pop ax
+    or al, LM_SELECT
+    jmp short .checksel
+.revsel:
+    cmp ax, [br_selend]
+    jb .nomark
+    cmp ax, dx
+    ja .nomark
+    pop ax
+    or al, LM_SELECT
+    jmp short .checksel
+.nomark:
+    pop ax
+.checksel:
+    test al, LM_FOCUS | LM_SELECT
+    jz .storemark
+    mov byte [br_undraw], 1
+.storemark:
     mov [di + (br_lmark - br_lbuf)], al ; is what the underline is drawn from
     inc di
     jmp .copy
@@ -1592,12 +1962,206 @@ br_nodrag:  db 0                    ; 0xFF = this kernel has no tracking edge
 ; tests is derived from the content box, and the content box moves whenever
 ; the window does. FLAT labels for the shared tail (13.10.7.4).
 ; -----------------------------------------------------------------------------
+br_selmove:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call br_measure
+    call br_hitofs
+    jc .out
+    mov byte [br_seldrag], 1
+    mov [br_selcur], ax
+    mov ax, [br_selend]
+    mov [br_seloldend], ax
+    mov ax, [br_selcur]
+    cmp ax, [br_selanch]
+    jb .reverse
+    inc ax                          ; forward endpoint is exclusive
+    mov [br_selend], ax
+    jmp short .paint
+.reverse:
+    mov ax, [br_selcur]
+    mov [br_selend], ax             ; reverse endpoint includes the anchor
+.paint:
+    call br_selpaint                ; redraw only rows crossed by old/new spans
+.out:
+    jmp br_pop6
+
+; Paint the visible lines that intersect either the old or new selection.
+; The 50-row worst case is a pair of comparisons per row, not a full document
+; repaint on every pointer event. Input ranges are source offsets.
+br_selpaint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov ax, [br_top]
+    mov [br_tline], ax
+    xor bx, bx                      ; visible row
+.row:
+    cmp bx, [br_rows]
+    jae .out
+    mov ax, [br_tline]
+    cmp ax, [br_nlines]
+    jae .out
+    mov di, LN_SIZE
+    mul di
+    mov es, [br_lseg]
+    mov si, ax
+    mov cx, [es:si+LN_OFS]
+    mov dx, [es:si+LN_END]
+    mov ax, [br_selanch]
+    mov di, [br_selend]
+    call br_selintersects
+    jnc .paint
+    mov ax, [br_selanch]
+    mov di, [br_seloldend]
+    call br_selintersects
+    jc .next
+.paint:
+    mov ax, [br_tline]
+    call br_paint_line
+.next:
+    inc word [br_tline]
+    inc bx
+    jmp .row
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; Repaint only the visible rows occupied by the focused link after focus leaves
+; it. Redrawing the band would make Ctrl+L cost a page repaint to erase one XOR.
+br_focuspaint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov ax, [br_top]
+    mov [br_tline], ax
+    xor bx, bx
+.row:
+    cmp bx, [br_rows]
+    jae .out
+    mov ax, [br_tline]
+    cmp ax, [br_nlines]
+    jae .out
+    mov di, LN_SIZE
+    mul di
+    mov es, [br_lseg]
+    mov si, ax
+    mov cx, [es:si+LN_OFS]
+    mov dx, [es:si+LN_END]
+    mov ax, [br_tstart]
+    mov di, [br_tend]
+    call br_selintersects
+    jc .next
+    mov ax, [br_tline]
+    call br_paint_line
+.next:
+    inc word [br_tline]
+    inc bx
+    jmp .row
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; AX = fixed anchor, DI = endpoint, CX/DX = line source span [start,end).
+; CF=0 when the selection intersects the line. The reverse endpoint includes
+; the original anchor cell, hence its exclusive limit is anchor+1.
+br_selintersects:
+    cmp ax, di
+    jae .reverse
+    cmp cx, di
+    jae .no
+    cmp dx, ax
+    jbe .no
+    clc
+    ret
+.reverse:
+    inc ax
+    cmp cx, ax
+    jae .no
+    cmp dx, di
+    jbe .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+br_barselmove:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov di, cx                      ; screen pointer x
+    mov si, br_loc
+    call os88line_pen
+    mov bx, ax
+    mov ax, di
+    sub ax, bx
+    jns .column
+    xor ax, ax
+.column:
+    mov cl, 3
+    shr ax, cl
+    add ax, [br_loc+LN_VIEW]
+    cmp ax, [br_loc+LN_LEN]
+    jbe .store
+    mov ax, [br_loc+LN_LEN]
+.store:
+    mov bx, ax
+    cmp bx, [br_baranch]
+    jb .reverse
+    inc ax                          ; address ranges use [start,end)
+    jmp short .endpoint
+.reverse:
+    mov ax, bx
+.endpoint:
+    mov [br_barend], ax
+    call br_ldraw
+.out:
+    jmp br_pop6
+
 br_ondrag:
     push ax
     push bx
     push cx
     push dx
     push si
+    cmp byte [br_selmode], 1
+    je .pageselection
+    cmp byte [br_selmode], 2
+    jne .scrollbar
+    call br_barselmove
+    jmp br_sbd_out
+.pageselection:
+    call br_selmove
+    jmp br_sbd_out
+.scrollbar:
     mov bx, br_btrec            ; THE BUTTONS FIRST: the held one follows the
     call os88ui_btndrag         ; pointer, and a package has ONE arm word, so
     call os88ui_sbdragging      ; the bar and the buttons cannot both be live
@@ -1610,24 +2174,55 @@ br_ondrag:
     call br_sbfill                  ; BX = the block; DX is still the pointer
     call os88ui_sbtrack             ; CF = 1: nothing owed - the rate, or the
     jc br_sbd_out                   ; same line
-    jmp short br_sbd_go
+    jmp br_sbd_go
 br_ontimer:                     ; the thumb has been STILL for BR_SBIDLE
     push ax                     ; ticks (SPEC.md 13.9 disarms before this
     push bx                     ; runs, and this does not re-arm: a pause is
     push cx                     ; ONE commit however long it lasts)
     push dx
     push si
+    cmp byte [br_bmretry], 0
+    je .scrollbar
+    mov byte [br_bmretry], 0
+    call br_bmpost               ; a full event ring refused the bookmark wake
+.scrollbar:
     call br_measure
     call br_sbfill
     call os88ui_sbowed          ; ...and NOT os88ui_sbdrop: a pause is not
     jc br_sbd_out                 ; the end of the gesture, so the record
-    jmp short br_sbd_go          ; survives it
+    jmp br_sbd_go                ; survives it
 br_onup:
     push ax
     push bx
     push cx
     push dx
     push si
+    cmp byte [br_selmode], 0
+    je .noselection
+    mov al, [br_selmode]
+    mov byte [br_selmode], 0
+    cmp al, 1
+    jne .selectiondone
+    cmp byte [br_seldrag], 0
+    jne .selectiondone
+    mov ax, [br_selclick]
+    mov word [br_selclick], 0FFFFh
+    cmp ax, 0FFFFh
+    jne .linkclick
+    ; A plain press provisionally inverted one cell so a drag could extend it.
+    ; Without movement it is not a text selection: clear that XOR on release,
+    ; or a click leaves a stray inverted glyph and the next right click copies
+    ; one character instead of opening the page menu.
+    mov ax, [br_selend]
+    mov [br_seloldend], ax
+    mov byte [br_selkind], 0
+    call br_selpaint
+    jmp short .selectiondone
+.linkclick:
+    call br_follow
+.selectiondone:
+    jmp br_sbd_out
+.noselection:
     mov bx, br_btrec            ; the toolbar FIRES here (SPEC.md 13.7)
     call os88ui_btnup           ; AX = what fired, 0 = nothing of ours
     or ax, ax
@@ -1912,14 +2507,149 @@ br_onkey:
     push cx
     push dx
     push si
+    push ax                         ; redraw helpers may clobber ASCII/scancode
+    call br_bmpost                  ; retry if an earlier wake hit a full ring
+    call br_bmredrawnow             ; apply a completed disk result under lock
     call br_abdismiss               ; ...the card first: any key takes it down
+    pop ax                          ; POP preserves CF from br_abdismiss
     jc .out                         ; and is swallowed, so a reader cannot type
                                     ; into a bar they cannot see
+    cmp ah, KSC_TAB                 ; Tab belongs to the window-wide focus ring,
+    jne .location                  ; including while the address field is active
+    call br_tabnext
+    jmp .out
+.location:
+    cmp ah, KSC_ENTER               ; Enter activates the focused link before
+    jne .shortcuts                  ; the ordinary page/field key routing
+    cmp byte [br_tfocus], 3
+    jne .shortcuts
+    xor ax, ax
+    mov al, [br_tlinkidx]           ; byte index: do not inherit br_tstart in AH
+    call br_follow
+    jmp .out
+.shortcuts:
+    cmp ah, 0x2E                    ; only poll Ctrl for keys that can be
+    je .shortcutkey                 ; browser shortcuts; ordinary typing keeps
+    cmp ah, 0x20                    ; the original event untouched
+    je .shortcutkey
+    cmp ah, 0x1E
+    je .shortcutkey
+    cmp ah, 0x16
+    je .shortcutkey
+    cmp ah, 0x26
+    je .shortcutkey
+    cmp ah, 0x1F
+    je .shortcutkey
+    cmp ah, 0x13
+    je .shortcutkey
+    cmp ah, 0x18
+    jne .normalkey
+.shortcutkey:
+    push cx                         ; keep the caller's working registers intact
+    push ax                         ; KEY_DOWN needs AL=scancode; preserve the
+    mov al, 0x1D                    ; Ctrl's make code, armed at package entry
+    call OSAPI_KEY_DOWN
+    pushf
+    pop cx                          ; hold only returned flags in saved CX
+    pop ax
+    push cx
+    popf
+    pop cx
+    jnc .normalkey
+    cmp ah, 0x2E                    ; Ctrl+C: same system clipboard as Copy Link
+    je .copy
+    cmp ah, 0x20                    ; Ctrl+D: bookmark the current remote page
+    je .bookmark
+    cmp ah, 0x1E                    ; Ctrl+A: select the address or page text
+    je .selectall
+    cmp ah, 0x16                    ; Ctrl+U: toggle the retained page source
+    je .source
+    cmp ah, 0x26                    ; Ctrl+L: focus the location field
+    je .locshortcut
+    cmp ah, 0x1F                    ; Ctrl+S: Save As
+    je .saveshortcut
+    cmp ah, 0x13                    ; Ctrl+R: Reload
+    je .reloadshortcut
+    cmp ah, 0x18                    ; Ctrl+O: Open
+    je .openshortcut
+    jmp .normalkey
+.copy:
+    call br_copyselection
+    jmp .out
+.selectall:
+    cmp byte [br_loc+LN_FOCUS], 0
+    je .selectpage
+    mov byte [br_selkind], 2
+    mov word [br_baranch], 0
+    mov ax, [br_loc+LN_LEN]
+    mov [br_barend], ax
+    call br_ldraw
+    jmp .out
+.selectpage:
+    mov byte [br_selkind], 1
+    mov word [br_selanch], 0
+    mov ax, [br_doclen]
+    mov [br_selend], ax
+    call br_paint_band
+    jmp .out
+.bookmark:
+    call br_bmadd
+    jmp .out
+.source:
+    call br_sourcetoggle
+    jmp .out
+.locshortcut:
+    call br_fblur
+    mov byte [br_fcur], 0FFh
+    mov byte [br_loc+LN_FOCUS], 1
+    cmp byte [br_tfocus], 3
+    jne .locsetfocus
+    mov byte [br_tfocus], 1
+    call br_focuspaint
+    jmp short .locdraw
+.locsetfocus:
+    mov byte [br_tfocus], 1
+.locdraw:
+    call br_ldraw
+    jmp .out
+.saveshortcut:
+    call br_saveas
+    jmp .out
+.reloadshortcut:
+    call br_okrel
+    jc .out
+    call br_reload
+    jmp .out
+.openshortcut:
+    call br_open
+    jmp .out
+.normalkey:
+    cmp ah, 0x3F                    ; F5: Reload
+    jne .locationkey
+    call br_okrel
+    jc .out
+    call br_reload
+    jmp .out
+.locationkey:
+    cmp byte [br_loc+LN_FOCUS], 0
+    jne .linekey
+    cmp byte [br_islocal], 0      ; on a new blank Browser, printable input
+    jne .linekey                  ; always belongs to the address, even if the
+    cmp byte [br_nstate], BN_IDLE ; launch click left focus outside the field
+    jne .linekey
+    cmp al, 0x20
+    jb .linekey
+    cmp al, 0x7E
+    ja .linekey
+    mov byte [br_loc+LN_FOCUS], 1
+    mov byte [br_tfocus], 1
+.linekey:
     push si                         ; ...THE LOCATION BAR FIRST, and only when
     mov si, br_loc                  ; it has focus - os88line_key refuses every
     call os88line_key               ; key on an unfocused field, which is what
     pop si                          ; keeps the page's own keys working
     jc .notbar
+    mov byte [br_selkind], 0
     call br_ldraw
     jmp .out
 .notbar:
@@ -1952,7 +2682,7 @@ br_onkey:
     jc .out
     jmp .scroll
 .tab:
-    call br_ftab
+    call br_tabnext
     jmp .out
 .enter:
     cmp byte [br_fcur], 0FFh
@@ -1968,6 +2698,175 @@ br_onkey:
     call br_scroll_by               ; ...which coalesces: the copy that used to
 .out:                               ; be here is br_coalesce now
     jmp br_pop5
+
+; --- browser-wide Tab ring: address -> text fields -> links -> address -------
+br_tabnext:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    cmp byte [br_loc+LN_FOCUS], 0
+    jne .fromaddr
+    cmp byte [br_fcur], 0FFh
+    jne .fromfield
+    cmp byte [br_tfocus], 3
+    je .fromlink
+    mov al, 0                       ; first stop: the address bar
+    jmp .address
+.fromaddr:
+    mov byte [br_loc+LN_FOCUS], 0
+    call br_ldraw
+    xor al, al
+    jmp .fieldscan
+.fromfield:
+    mov al, [br_fcur]
+    inc al
+.fieldscan:
+    xor cx, cx
+.fieldloop:
+    cmp cl, [br_fn]
+    jae .firstlink
+    cmp al, [br_fn]
+    jae .firstlink
+    push ax
+    call br_fld
+    cmp byte [bx+FLD_TYPE], 0
+    pop ax
+    je .fieldfound
+    inc al
+    inc cl
+    jmp .fieldloop
+.fieldfound:
+    cmp byte [br_fcur], 0FFh
+    je .setfield
+    mov byte [br_fcur], 0FFh
+    mov byte [br_selkind], 0
+    call br_fblur
+.setfield:
+    call br_ffocus
+    mov byte [br_tfocus], 2
+    call br_paint_band
+    jmp short .out
+.firstlink:
+    cmp byte [br_fcur], 0FFh
+    je .findfirst
+    call br_fblur
+    mov byte [br_fcur], 0FFh
+.findfirst:
+    mov byte [br_tlinkidx], 0FFh
+    xor al, al
+    jmp short .nextlink
+.fromlink:
+    mov al, [br_tlinkidx]
+    inc al
+    xor ah, ah
+    cmp ax, [br_lnkn]
+    jae .addresszero
+.nextlink:
+    xor ah, ah
+    call br_tablink
+    jc .addresszero
+    mov byte [br_tfocus], 3
+    call br_paint_band
+    jmp short .out
+.addresszero:
+    xor al, al
+.address:
+    mov byte [br_tfocus], 1
+    mov byte [br_loc+LN_FOCUS], 1
+    call br_ldraw
+    call br_paint_band
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; AL = zero-based link index. Find its visible document span without a table.
+; The two payload bytes are opaque to marker scanning and must be skipped.
+br_tablink:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    xor ah, ah
+    mov [br_tlinkidx], al
+    mov es, [br_docseg]
+    xor si, si
+.scan:
+    cmp si, [br_doclen]
+    jae .no
+    mov al, [es:si]
+    cmp al, D_LNK1
+    je .marker
+    cmp al, D_CMETA
+    jne .step
+    inc si
+.step:
+    inc si
+    jmp .scan
+.marker:
+    mov al, [es:si+1]
+    and al, 15
+    mov ah, [es:si+2]
+    and ah, 15
+    mov cl, 4
+    shl ah, cl
+    or al, ah
+    cmp al, [br_tlinkidx]
+    je .found
+    add si, 3
+    jmp .scan
+.found:
+    lea ax, [si+3]
+    mov [br_tstart], ax
+    mov bx, ax
+.endlink:
+    cmp bx, [br_doclen]
+    jae .no
+    mov al, [es:bx]
+    cmp al, D_CMETA
+    jne .endcheck
+    inc bx
+.endcheck:
+    cmp al, D_LNK0
+    je .endfound
+    inc bx
+    jmp .endlink
+.endfound:
+    mov [br_tend], bx
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+br_fblur:
+    push ax
+    push bx
+    mov al, [br_fcur]
+    cmp al, 0FFh
+    je .out
+    call br_fld
+    mov al, D_NBSP
+    call br_fcaret
+    call br_frepaint
+.out:
+    pop bx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; br_keydelta - one keystroke -> a signed line delta
@@ -2036,6 +2935,12 @@ br_onclick:
     push cx
     push dx
     push si
+    push cx                         ; repainting a completed bookmark operation
+    push dx                         ; may clobber the event coordinates
+    call br_bmpost                  ; retry if a previous wake hit a full ring
+    call br_bmredrawnow             ; apply a completed disk result under lock
+    pop dx
+    pop cx
 %ifdef OS88UI_SBDRAG
     call os88ui_sbdragging      ; A PRESS CANNOT ARRIVE DURING A LIVE DRAG, so
     jc .nostale                 ; one that does means the release never came
@@ -2066,18 +2971,42 @@ br_onclick:
                                     ; the point, and it may relayout - which is
                                     ; safe here and nowhere near free, so it is
                                     ; a click and not a mouse-move
+    push cx                         ; os88line_click may update the field; the
+    push dx                         ; later toolbar/page hit tests still need
     push si                         ; ...THE LOCATION BAR FIRST, because it sits
     mov si, br_loc                  ; above the band and a click in it is not a
     call os88line_click             ; click in the page
     pop si
+    pop dx
+    pop cx
     jc .nobar
+    call br_selclear                ; remove an old page highlight first
+    cmp byte [br_tfocus], 3         ; remove the old link's XOR from the glass
+    jne .barfocus                   ; before the reader edits the address
+    mov byte [br_tfocus], 1
+    push cx
+    push dx
+    call br_paint_band
+    pop dx
+    pop cx
+.barfocus:
+    mov byte [br_selkind], 2
+    mov byte [br_selmode], 2
+    mov ax, [br_loc+LN_CAR]
+    mov [br_baranch], ax
+    mov [br_barend], ax
+    mov byte [br_tfocus], 1
     call br_ldraw
     jmp .out
 .nobar:
     cmp byte [br_loc + LN_FOCUS], 0 ; **A CLICK ANYWHERE ELSE BLURS THE BAR**,
     je .nofoc                       ; because LN_FOCUS is what draws the caret
     mov byte [br_loc + LN_FOCUS], 0 ; (os88line_draw) - so a bar left focused
+    push cx                         ; its redraw must not replace the click
+    push dx                         ; coordinates used by the following tests
     call br_ldraw                   ; while the reader is clicking links keeps
+    pop dx
+    pop cx
                                     ; a caret in it, pointing at a control the
                                     ; keyboard is no longer going to. The
                                     ; include deliberately does NOT do this
@@ -2085,17 +3014,39 @@ br_onclick:
                                     ; different in every host, and the Setup
                                     ; window's four fields hand focus to each
                                     ; other rather than dropping it
+    cmp byte [br_ctxopen], 0        ; keep the selection alive while its Copy
+    je .clearselection              ; popup owns the next left click
+    cmp byte [br_ctxkind], 2
+    je .selectionretained
+.clearselection:
+    push cx                         ; clearing XOR may repaint the location bar;
+    push dx                         ; preserve the click for toolbar hit testing
+    call br_selclear
+    pop dx
+    pop cx
+.selectionretained:
+    cmp byte [br_ctxopen], 0
+    je .ctxclosed
+    call br_ctxclick
+    jc .out                         ; menu action or outside click consumed
+.ctxclosed:
     mov ax, [br_tby]                ; --- the toolbar strip ---
     cmp dx, ax
     jb .out
     add ax, BR_TBH - 1
     cmp dx, ax
     ja .nostrip
+    mov bx, br_starx1
+    call br_inrect
+    jnc .star
     jmp .out                        ; the toolbar's press was the LIBRARY's
                                     ; (SPEC.md 20.5.1.3.3) and never reaches
                                     ; here; br_onup has the action, and it
                                     ; asks the SAME ok-predicate the greying
                                     ; does (47 rule 5)
+.star:
+    call br_bmtoggle
+    jmp .out
 .nostrip:
     cmp cx, [br_sbx]
     jb .page                        ; not in the scroll bar: the PAGE's
@@ -2478,6 +3429,7 @@ br_toolbar:
     mov al, 3
     call br_btn1
     call br_status
+    call br_stardraw
     jmp br_pop6
 
 ; --- br_inrect - is (CX,DX) inside the rect at BX? CF=0 yes ------------------
@@ -3145,11 +4097,34 @@ br_page_click:
     push dx
     push si
     push di
+    cmp byte [br_tfocus], 3
+    jne .clearfocus
+    mov byte [br_tfocus], 0
+    call br_focuspaint
+    jmp short .focuscleared
+.clearfocus:
+    mov byte [br_tfocus], 0
+.focuscleared:
     call br_hitofs
     jc .out
     mov si, ax                      ; SI = the document offset clicked
     call br_linkat                  ; --- a link, first: it is the commonest
     jc .notlink                     ; thing on a page and the cheapest to ask
+%ifdef OS88UI_SBDRAG
+    cmp byte [br_nodrag], 0
+    jne .follow
+    mov [br_selclick], ax
+    mov byte [br_seldrag], 0
+    mov byte [br_selkind], 1
+    mov byte [br_selmode], 1
+    mov [br_selanch], si
+    mov ax, si
+    inc ax
+    mov [br_selend], ax
+    call br_paint_band
+    jmp .out
+.follow:
+%endif
     call br_follow
     jmp .out
 .notlink:
@@ -3178,7 +4153,7 @@ br_page_click:
     xor bx, bx                      ; BL = field index
 .next:
     cmp bl, [br_fn]
-    jae .out
+    jae .selecttext
     mov al, bl
     push bx
     call br_fld                     ; BX = the record
@@ -3208,6 +4183,20 @@ br_page_click:
 .step:                              ; field in every system does
     inc bl
     jmp .next
+.selecttext:
+%ifdef OS88UI_SBDRAG
+    cmp byte [br_nodrag], 0
+    jne .out
+    mov byte [br_selkind], 1
+    mov byte [br_selmode], 1
+    mov word [br_selclick], 0FFFFh
+    mov byte [br_seldrag], 0
+    mov [br_selanch], si
+    mov ax, si
+    inc ax
+    mov [br_selend], ax
+    call br_paint_band              ; the clicked character is selected now
+%endif
 .out:
     jmp br_pop6
 
@@ -3377,10 +4366,20 @@ br_selcycle:
 br_ablines:                         ; os88ui_about's line table (SPEC.md
                                     ; 20.5.1.1): near pointers, 0 ends it
     dw br_ab1, br_ab2, br_ab3, br_ab4, 0
-br_ab1:      db 'os8088 Browser 1.4', 0
-br_ab2:      db 'HTTP, HTML and tables', 0
-br_ab3:      db 0                   ; a blank line is a line with no glyphs
-br_ab4:      db 'Contributed by Elendilon', 0
+br_ab1:      db 'os8088 Browser 1.5', 0
+br_ab2:      db 'Bringing the web to XT PCs', 0
+br_ab3:      db 'Version 1.0 contributed by Elendilon', 0
+br_ab4:      db 'Version 1.2-1.5 contributed by Pentagram666', 0
+br_shortlines:
+    dw br_sh1, br_sh2, br_sh3, br_sh4, br_sh5, br_sh6, br_sh7, br_sh8, 0
+br_sh1: db 'Tab: address, fields, links', 0
+br_sh2: db 'Enter: Go, activate, or submit', 0
+br_sh3: db 'Page arrows/Page keys: scroll', 0
+br_sh4: db 'Page Home/End: top/bottom; Esc: leave bar', 0
+br_sh5: db 'Ctrl+O Open; Ctrl+L Location', 0
+br_sh6: db 'Ctrl+S Save; Ctrl+R or F5 Reload', 0
+br_sh7: db 'Ctrl+A all (address/page); Ctrl+C copy', 0
+br_sh8: db 'Ctrl+D bookmark; Ctrl+U source', 0
 
 ; -----------------------------------------------------------------------------
 ; br_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
@@ -3398,6 +4397,7 @@ br_ab4:      db 'Contributed by Elendilon', 0
 br_about:
     push bx
     push si
+    mov byte [br_abhelp], 0
     mov byte [br_abon], 1
     mov bx, si                      ; BX = our window
     mov si, br_ablines
@@ -3422,6 +4422,7 @@ br_abdismiss:
     je .none
     push si
     mov byte [br_abon], 0
+    mov byte [br_abhelp], 0
     mov si, [br_win]
     call br_paint
     pop si
@@ -3438,6 +4439,7 @@ br_oncmd:
     push ax
     push bx
     push si
+    call br_bmredrawnow
     or ah, ah
     jnz .m1
     or al, al
@@ -3458,6 +4460,10 @@ br_oncmd:
                                     ; put the caret where the user can type
     jmp .out
 .m1:
+    cmp ah, 4
+    je .help
+    cmp ah, 3
+    je .bookmarks
     cmp ah, 2
     je .hist
 .go:
@@ -3490,6 +4496,32 @@ br_oncmd:
     jae .out
     mov [br_histi], ax
     call br_hgo
+    jmp .out
+.bookmarks:
+    cmp byte [br_bmdata+4], 0
+    je .out
+    xor ah, ah
+    cmp al, [br_bmdata+4]
+    jae .out
+    call br_bmurlptr                 ; DS:SI = selected URL
+    push es
+    push ds
+    pop es
+    mov di, br_ubuf
+    mov cx, BR_UBUF
+    call br_copyz
+    pop es
+    mov si, br_ubuf
+    call br_go
+    jmp .out
+.help:
+    or al, al
+    jnz .out
+    mov byte [br_abhelp], 1
+    mov byte [br_abon], 1
+    mov bx, [br_win]
+    mov si, br_shortlines
+    call os88ui_about_d
     jmp .out
 .reload:
     call br_okrel                   ; the SAME predicate the button uses, and
@@ -3849,6 +4881,9 @@ br_opened:
     ja .toobig
     or cx, cx
     jz .out                         ; a folder, or a name with no file
+    mov byte [br_islocal], 1
+    mov byte [br_viewsrc], 0
+    mov byte [br_bmsaved], 0
     mov [br_srclen], cx
 
     call br_getname                 ; the kernel's buffer is valid for this
@@ -4050,6 +5085,22 @@ br_parse:
 .keepforms:
     mov byte [br_ptitle], 0         ; the title is the PAGE's, like the links
     mov byte [br_fcur], 0FFh        ; 0 is a real field, so "none" is 0FFh
+    mov byte [br_tfocus], 0
+    mov byte [br_tlinkidx], 0FFh
+    mov ax, 0FFFFh
+    mov [br_tstart], ax
+    mov [br_tend], ax
+    xor ax, ax
+    mov [br_selmode], al
+    mov [br_selkind], al
+    mov [br_selanch], ax
+    mov [br_selend], ax
+    mov [br_seloldend], ax
+    mov [br_selcur], ax
+    mov word [br_selclick], 0FFFFh
+    mov byte [br_seldrag], 0
+    mov [br_baranch], ax
+    mov [br_barend], ax
     mov byte [br_on], 0
     mov byte [br_wsp], 0
     mov byte [br_any], 0
@@ -5669,6 +6720,8 @@ br_layout:
     jne .count
     cmp al, ' '
     jne .count
+    cmp byte [br_lpre], 0
+    jne .count                       ; literal PRE indentation is content
     mov [br_lstart], si             ; a leading space never starts a line
     jmp .loop
 .count:
@@ -7960,7 +9013,7 @@ br_hidden:
     pop ax
     ret
 
-; --- br_henc - percent-encode the source span SI..CX into br_hid -------------
+; --- br_henc - percent-encode the source span SI..CX into the current sink --
 br_henc:
     push ax
     push si
@@ -8790,6 +9843,8 @@ br_tpl:
                                             ; an empty pull-down is a box with
                                             ; nothing in it - the one item says
                                             ; so instead
+        OS88_MENU br_m_bm, br_bmitems, 1
+        OS88_MENU br_m_help, br_i_help, 1
     OS88_MENUSET_END br_menus
 
 ; The item-count word of the History cell, addressed through the macro's own
@@ -8798,6 +9853,7 @@ br_tpl:
 ; of the TITLES, which do not move, and the kernel reads the items when it
 ; drops the menu (SPEC.md 12.2).
 BR_HNITEM equ br_menus_list + 2 * AMENU_ENTSZ + AMENU_NITEM
+BR_BMNITEM equ br_menus_list + 3 * AMENU_ENTSZ + AMENU_NITEM
 
 br_name_s:  db 'Browser', 0
 br_m_file:  db 'File', 0
@@ -8805,8 +9861,13 @@ br_i_file:  dw br_it_open, br_it_loc, br_it_save
 br_it_open: db 'Open...', 0
 br_it_loc:  db 'Open Location...', 0
 br_it_save: db 'Save As...', 0
+br_m_bm:    db 'Bookmarks', 0
+br_it_bmnone: db '(empty)', 0
 br_m_hist:  db 'History', 0
 br_it_none: db '(empty)', 0
+br_m_help:  db 'Help', 0
+br_i_help:  dw br_it_shortcuts
+br_it_shortcuts: db 'Keyboard Shortcuts...', 0
 br_m_go:    db 'Go', 0
 br_i_go:    dw br_it_top, br_it_bot, br_it_rel
 br_it_top:  db 'Top', 0
@@ -8829,6 +9890,7 @@ br_a_alt:     db 'alt', 0
 br_a_checked: db 'checked', 0
 br_s_post:    db 'post', 0
 br_s_posting: db 'POST request', 0
+br_s_postget: db 'History GET: POST body not replayed', 0
 br_s_password: db 'password', 0
 br_s_file:    db 'file', 0
 br_s_center:  db 'center', 0
@@ -8874,6 +9936,7 @@ br_s_bad:   db 'Cannot open page', 0
 %define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)
 %include "os88ui.inc"           ; the standard button (SPEC.md 20.5.1)...
 %include "os88line.inc"         ; ...and the one-line field the bar is
+%include "br15.inc"              ; Browser 1.5 clipboard, context and bookmarks
 %include "brnet.inc"            ; ...and the fetch (NET-STACK-PLAN stage D)
 %define OS88SOCK_STATE             ; ...every net_find here asks NETV_STATE too
 %include "os88sock.inc"         ; ...whose driver net_find locates (SPEC.md 72)
@@ -8964,10 +10027,11 @@ br_fcur     equ os88_image_end + 539  ; byte: which has focus, 0FFh = none
 br_post     equ os88_image_end + 540  ; byte: one-shot form POST handoff to br_go
 br_hn       equ os88_image_end + 541  ; byte: any hidden pairs
 br_dest     equ os88_image_end + 542  ; byte: which sink br_encb appends to
-br_hnw      equ os88_image_end + 544  ; word: bytes of hidden pairs
+br_hnw      equ os88_image_end + 544  ; word: hidden-pair bytes in old form state
 br_un       equ os88_image_end + 546  ; word: bytes of composed URL
 br_faction  equ os88_image_end + 620  ; BR_ACTMAX
 br_hid      equ os88_image_end + 684  ; BR_HIDMAX
+br_postwarn equ os88_image_end + 945  ; one-shot note: history replays POST as GET
 br_gen      equ os88_image_end + 940  ; byte: bumped by every br_go that drops
                                       ; a fetch in flight (brnet.inc's
                                       ; br_abort)
@@ -9177,7 +10241,7 @@ br_framecurrent equ br_parsing + 1
 br_lnkfrm equ br_framecurrent + 1
 br_lnkoff   equ br_lnkfrm + BR_LNKMAX
 br_lnkhit   equ br_lnkoff + BR_LNKMAX*2
-; Variable-size 1.2b form tables follow main's fixed ABI and the frame/link
+; Variable-size Browser 1.5 form tables follow main's fixed ABI and frame/link
 ; metadata. These stay in the loader-zeroed package BSS, not the image.
 br_formn      equ br_lnkhit + 2
 br_formcur    equ br_formn + 1
@@ -9222,7 +10286,58 @@ br_glyphlast  equ br_bpp + 1              ; OSAPI_FONT_GLYPHS' AH, the last code
 br_frameurl   equ br_glyphlast + 1        ; BR_UBUF: the frameset's own URL,
                                           ; banked while its children own the
                                           ; bar (br_frameclose puts it back)
-BR_BSS      equ (br_frameurl + BR_UBUF - os88_image_end)
+br_tfocus   equ br_frameurl + BR_UBUF ; byte: 0 document, 1 address, 2 field,
+                                      ; 3 link - browser-wide Tab ring
+br_tlinkidx equ br_tfocus + 1         ; byte: selected link index
+br_tstart   equ br_tlinkidx + 1       ; word: selected link text start
+br_tend     equ br_tstart + 2         ; word: selected link text end
+br_selmode  equ br_tend + 2           ; byte: active drag, 1 page / 2 address
+br_selkind  equ br_selmode + 1        ; byte: retained selection, 1 page / 2 bar
+br_selanch  equ br_selkind + 1        ; word: page drag anchor
+br_selend   equ br_selanch + 2        ; word: page drag end
+br_selclick equ br_selend + 2         ; word: pending link click, FFFF = none
+br_seldrag  equ br_selclick + 2       ; byte: pointer moved since press
+br_seloldend equ br_seldrag + 1       ; word: previous endpoint for row damage
+br_selcur    equ br_seloldend + 2     ; word: current pointer's source offset
+br_baranch  equ br_selcur + 2        ; word: address-bar character anchor
+br_barend   equ br_baranch + 2        ; word: address-bar selection end
+br_copystart equ br_barend + 2        ; word: temporary copy source start
+br_copyend   equ br_copystart + 2     ; word: exclusive end
+br_copyseg   equ br_copyend + 2       ; word: transient clipboard claim
+br_copycap   equ br_copyseg + 2       ; word: allocated output capacity
+br_barx1     equ br_copycap + 2       ; word: current address selection x1
+br_bary      equ br_barx1 + 2         ; word: current address selection y1
+br_abhelp    equ br_bary + 2          ; byte: shortcuts card is displayed
+br_tline     equ br_abhelp + 1        ; word: selection damage walk
+br_islocal   equ br_tline + 2        ; byte: current document came from a file
+br_viewsrc   equ br_islocal + 1      ; byte: raw-source view is active
+br_bmsaved   equ br_viewsrc + 1      ; byte: current remote URL is bookmarked
+br_ctxopen   equ br_bmsaved + 1      ; byte: package-side context menu is up
+br_ctxkind   equ br_ctxopen + 1      ; byte: 0 page actions, 1 link actions
+br_ctxlink   equ br_ctxkind + 1      ; word: link index owned by the popup
+br_ctxx      equ br_ctxlink + 2      ; popup left relative to band
+br_ctxy      equ br_ctxx + 2         ; popup top relative to band
+br_ctxpx     equ br_ctxy + 2         ; pending pointer x
+br_ctxpy     equ br_ctxpx + 2        ; pending pointer y
+br_ctxclickitem equ br_ctxpy + 2     ; byte: chosen row in open popup
+br_ctxw      equ br_ctxclickitem + 1 ; byte: popup width, selected by menu kind
+br_ctxh      equ br_ctxw + 1         ; byte: popup height (one or two rows)
+br_bmreq     equ br_ctxh + 1         ; 0 none, 1 ensure saved, 2 ensure removed
+br_bmrefreshreq equ br_bmreq + 1     ; byte: refresh requested by navigation
+br_bmretry   equ br_bmrefreshreq + 1 ; byte: the event ring refused our wake
+br_bmopwork  equ br_bmretry + 1      ; byte: current W_ONWAKE operation
+br_bmredraw  equ br_bmopwork + 1     ; redraw debt after unlocked W_ONWAKE
+br_starx1    equ br_bmredraw + 1     ; toolbar star rectangle
+br_stary1    equ br_starx1 + 2
+br_starx2    equ br_stary1 + 2
+br_stary2    equ br_starx2 + 2
+br_bmdata    equ br_stary2 + 2       ; header plus fixed bookmark records
+br_bmitems   equ br_bmdata + BR_BMFILEBYTES ; menu near-pointer array
+br_bmstamp   equ br_bmitems + BR_BMMAX*2 ; os88data.inc write stamp
+br_bmrequrl  equ br_bmstamp + 1      ; pending operation's canonical URL
+br_bmreqtitle equ br_bmrequrl + BR_UBUF ; pending title (empty uses URL)
+br_bmworkurl equ br_bmreqtitle + BR_BMTITLE ; current URL during reconciliation
+BR_BSS      equ (br_bmworkurl + BR_UBUF - os88_image_end)
 
 ; --- what the code assumes about the layout above ----------------------------
 %if br_wsp != br_on + 1 || br_pre != br_any + 1
@@ -9238,5 +10353,5 @@ BR_BSS      equ (br_frameurl + BR_UBUF - os88_image_end)
 %error "br_free_all walks br_srcseg, br_docseg and br_lseg as a run"
 %endif
 %if br_url + BR_URLMAX != br_gen
-%error "the 1.2b URL buffer must end before main's fixed worker-generation slots"
+%error "the URL buffer must end before main's fixed worker-generation slots"
 %endif

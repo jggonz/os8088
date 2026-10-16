@@ -5614,6 +5614,7 @@ $(BUILD)/stiknote.o88: $(BUILD)/stiknote.bin tools/os88pkg.py $(PKGZSTAMP)
 # .HTM through the Standard File dialog. tools/htmsim.py is its reference
 # implementation and tests/htm/ is what both are checked against.
 $(BUILD)/browser.bin: apps/browser/browser.asm apps/browser/brnet.inc \
+                      apps/browser/br15.inc apps/os88data.inc \
                       apps/os88api.inc \
                       apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
                       drivers/net/netpkg.inc $(SBSTAMP) | $(BUILD)
@@ -11289,7 +11290,8 @@ $(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
 #                                         # in a relative link
 #   python3 tests/br14.py                 # ...and Browser 1.4's cell spans,
 #                                         # per-cell alignment and refused
-#                                         # password/file/textarea controls
+#                                         # password/file/textarea controls,
+#                                         # plus literal indentation in <pre>
 #   python3 tests/brnav.py                # Back/Forward/Reload and Save As
 #                                         # (BROWSER-PLAN 5/5.2/5.3). It needs
 #                                         # `make ethertest` too and boots
@@ -11343,10 +11345,10 @@ $(BUILD)/FRAMESET.HTM: tests/htm/frameset.htm | $(BUILD)
 	cp $< $@
 
 $(BUILD)/brtest.img: $(BRFILES) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(BRFILES)
+	python3 tools/os88disk.py -o $@ --size 1440 --folder SYSTEM/APPDATA $(BRFILES)
 
 $(BUILD)/brtest360.img: $(BRFILES) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(BRFILES)
+	python3 tools/os88disk.py -o $@ --size 360 --folder SYSTEM/APPDATA $(BRFILES)
 
 # --- the FIELD disks: one BOOTABLE 360KB floppy per adapter ------------------
 #

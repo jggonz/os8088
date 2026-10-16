@@ -106,6 +106,11 @@ def main():
             fails.append("password/file/textarea controls were not visible")
         if any("secret" in line or "private text" in line for line in rendered):
             fails.append("unsupported control content leaked onto the page")
+        preline = next((line for line in rendered
+                        if "leading   spaces   preserved" in line), "")
+        indent = len(preline) - len(preline.lstrip())
+        if not preline or indent < 7:
+            fails.append("<pre> leading spaces were collapsed: %r" % preline)
 
     for fail in fails:
         print("FAIL:", fail)

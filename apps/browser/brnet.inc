@@ -195,16 +195,34 @@ br_go:
     call br_abort
 .free:
     mov al, [br_post]
+    mov ah, [br_reqpost]            ; method of the page we are leaving
     mov [br_reqpost], al
     mov byte [br_post], 0
+    mov byte [br_postwarn], 0
+    or al, al                       ; a history GET cannot replay the old body
+    jnz .method
+    cmp byte [br_nopush], 0
+    je .method
+    cmp byte [br_nstate], BN_DONE
+    jne .method
+    or ah, ah
+    jz .method
+    mov byte [br_postwarn], 1
+.method:
     mov word [br_nmsg], 0
     call br_split                   ; the URL into host, port and path
     jc .badurl
+    mov byte [br_islocal], 0        ; only an accepted HTTP navigation is remote
+    mov byte [br_viewsrc], 0        ; a navigation always returns to rendered HTML
+    mov al, 3                       ; refresh the per-instance bookmark cache
+    call br_bmrequest               ; refresh this page before drawing its star
     push si
     mov si, br_loc
     mov di, br_ubuf                 ; ...and the bar shows what we are getting,
     call os88line_set               ; whether it was typed there or not -
     call os88line_draw              ; **AND IT IS DRAWN HERE AND NOT BY THE
+    call br_bmcheck                 ; reflect the destination even before the
+    call br_stardraw                ; response arrives or after a failed fetch
     pop si                          ; CALLERS.** os88line_set moves the BUFFER;
                                     ; only a draw moves the glass, and every
                                     ; caller but the typed one had forgotten it
@@ -233,6 +251,11 @@ br_go:
                                     ; last time's verdict goes: without this a
                                     ; `Saved` would survive into the next page
                                     ; and be shown again when it finished
+    cmp byte [br_postwarn], 0
+    je .warned
+    mov word [br_nmsg], br_s_postget ; history stores URLs, never a POST body
+.warned:
+    mov byte [br_postwarn], 0
     mov [br_nlen], ax
     mov [br_fin], al                ; ...the hand-over (SPEC.md 71.14)
     mov [br_code], ax
@@ -286,6 +309,7 @@ br_go:
 .nomem:
     mov si, br_s_nomem
 .say:
+    mov byte [br_postwarn], 0
     call br_errst                   ; the refusal, said
     call br_promise                 ; **THIS TAIL IS A THIRD SETTLE** (SPEC.md
                                     ; 71.11). A `https://` URL, an empty host
@@ -1190,6 +1214,7 @@ br_finish:
     mov word [br_cols], 0           ; force br_measure to relayout: the page
                                     ; changed under a band whose width did not
     call br_measure                 ; ...and THAT is the layout, run whether
+    call br_settitle                ; network titles arrive only after parsing
     mov word [br_top], 0            ; or not we draw: br_paint measures but
     mov word [br_ptop], 0           ; does not lay out, so a reveal after a
                                     ; skipped frame would paint a stale line

@@ -114421,6 +114421,64 @@ and by the PageUp/PageDown pair, which repaints the band whole in both
 directions, agreeing to **0 differing pixels** on CGA (15-row band) and
 Hercules (27-row band).
 
+### 71.19 Browser focus, text selection and clipboard
+
+Tab traverses the location bar, supported form controls and links as one
+window-wide cycle, skipping groups that are absent. Enter keeps its control
+meaning: navigate in the location bar, activate a focused link, or submit a
+focused form. On an empty Browser, printable input focuses the location bar so
+the first typed character cannot disappear after launch. Up and Down scroll
+when the page or a link has focus. Keyboard
+focus on a link is shown by inverting only its first visible cell on each
+wrapped display line with `OSAPI_GFX_XOR_FILL`. This keeps keyboard focus
+visually distinct from a mouse text selection, which inverts the selected span;
+neither changes layout or allocates a per-link geometry table. The per-cell
+link mark is translated from the line flag so it cannot alias the focus bit.
+When the location bar takes focus, link focus is cleared before repainting the
+page so its XOR marker cannot remain behind while the user edits a URL.
+
+Dragging selects text in either the location bar or the rendered page. A page
+press starts a provisional one-cell range so a drag can extend it; releasing
+without moving clears that provisional range, so a plain click neither leaves
+an inverted glyph nor turns the next page-context click into Copy. A completed
+drag is shown by inverting its selected cells. A right click on a retained
+selection opens a one-item **Copy** menu; choosing it copies through
+`OSAPI_CLIP_PUT`, so the text can be pasted into another application.
+Dismissing the menu keeps the selection. Popups are sized to their labels,
+offset from the cursor so its glyph does not overlap the frame, and flip left
+or up as needed to stay inside the visible page band. The popup and its erase
+path arm the owning window's clip, so a stale edge cannot paint outside the
+Browser frame. Its white field uses bounded horizontal spans: clipped
+`OSAPI_GFX_FILL` extended to the content clip's left edge in this callback,
+erasing text before the popup. Reopening a popup fills the previous popup's
+recorded rectangle before repainting the page;
+`OSAPI_GFX_FRAME` is XOR, so a page repaint alone can leave its outline behind.
+The page menu says **Close Source** while the retained source view is active,
+and **View Source** otherwise. The Browser owns the selection range;
+the existing shared clipboard owns the copied text. Selection rendering is
+limited to the rows whose contents changed, and the normal page paint path pays
+no selection cost.
+
+The Browser menu includes a Keyboard Shortcuts reference listing only actions
+the current build implements: Tab focus traversal, Enter, page scrolling and
+Home/End, Escape to leave the address bar, and the implemented Ctrl shortcuts.
+Ctrl+A selects the address when it has focus and page text otherwise; Ctrl+C
+copies the current selection. `OSAPI_KEY_DOWN` is used to read modifier state;
+the key-state map is armed once at package entry.
+
+Bookmark persistence uses `W_ONWAKE` for every `SYSTEM\\APPDATA` read and write.
+The initial bookmark read is deferred until the Browser's first wake, after its
+window has been created and shown; package entry performs no bookmark-file I/O.
+Mouse and key callbacks show the requested star state immediately and queue the
+disk operation; they do not perform disk I/O while holding the graphics lock.
+If `OSAPI_WM_WAKE` refuses because the event ring is full, the Browser retries
+from its one-shot window timer until the wake is accepted; it must not leave a
+bookmark request waiting for an unrelated future click. The wake reconciles the
+per-instance cache and records any status/star redraw for the next locked paint
+or input callback. Navigation also requests a wake refresh so the current page's
+star reflects changes made by another Browser instance. The bookmark menu is
+rebuilt from that per-instance cache after each refresh.
+
 ## 72. `ETHER.DRV` — an Ethernet card and a TCP/IP stack (`drivers/ether/`)
 
 docs/plans/completed/NET-STACK-PLAN.md stage E, and the test of whether §1 of that plan drew
@@ -114748,6 +114806,11 @@ hidden pairs at parse time but keeps its tag's span in the retained source
 form with two buttons (Search / I'm Feeling Lucky, Login / Register) tells the
 server which was pressed. Return in a focused text field submits the field's
 own form with no button pair.
+
+History records URLs rather than POST bodies. Reloading or navigating through
+history from a POST response therefore performs a GET; after such a history
+fetch, the state line says `History GET: POST body not replayed` rather than
+silently implying that the original form submission was repeated.
 
 Password and file controls remain visibly unsupported. With no TLS, the
 browser must not show a password control that could be submitted in plaintext.

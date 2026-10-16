@@ -698,6 +698,19 @@ def main():
                                  len(body))
                 if body != "q=os8088&token=a+b":
                     fails.append("POST body %r != expected encoded controls" % body)
+                before = len(srv.log)
+                toolbar_click("rel")
+                st = wait_done("Reload after POST")
+                replay = srv.log[before:]
+                print("  POST history replay: state %d, request(s) %r, note %04X"
+                      % (st, replay, rw("br_nmsg")))
+                if st != 6 or not replay or not replay[0].startswith("GET /posted "):
+                    fails.append("Reload after POST must be a single GET of the "
+                                 "result URL, got %r (state %d)" % (replay, st))
+                if rw("br_nmsg") != sy["br_s_postget"]:
+                    fails.append("Reload after POST did not explain that the "
+                                 "POST body was not replayed (message %04X)"
+                                 % rw("br_nmsg"))
     else:
         fails.append("POST form page produced no editable text field")
 

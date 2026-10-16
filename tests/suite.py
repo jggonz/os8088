@@ -6886,7 +6886,8 @@ SOAK = [
         "align=center/middle/right move the cell's text, and password, file "
         "and textarea controls read `[unsupported]` with their contents kept "
         "off the page - read out of the document and the line table on "
-        "TORTURE.HTM, the way brtable reads its rows",
+        "TORTURE.HTM, the way brtable reads its rows; `<pre>` keeps leading "
+        "spaces verbatim",
         needs=("marty",), serial=True,
         wants=("build/brtest360.img",)),
     Row("brtoolbar", "soak", py("tests/brtoolbar.py"), 145.0,
