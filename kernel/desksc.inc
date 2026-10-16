@@ -41,15 +41,15 @@ SC_R_SLOT   equ 1               ;  1: its byte of [desk_zslot], for the FILE
 SC_R_KIND   equ 2               ;  1: 0 document, 1 package, 2 folder - the
                                 ;     SPEC.md 19.1 type word's low byte. 3 is
                                 ;     spare
-SC_R_DIA    equ 3               ;  1: NOT spare (SPEC.md 26.8.1): `\` on a
+SC_R_STIK   equ 3               ;  1: NOT spare (SPEC.md 26.8.1): `\` on a
                                 ;     dragged shortcut (sc_m_new's dsk_path
                                 ;     spill, below), 0 on a package's link,
-                                ;     SC_DIA on a DIA row (SPEC.md 110.2) -
+                                ;     SC_STIK on a Sticky App row (SPEC.md 110.2) -
                                 ;     an EQUALITY, which neither of the other
                                 ;     two values can meet
-SC_DIA      equ 'D'             ; the DIA mark: a remembered WIDGET, KIND 1,
+SC_STIK     equ 'D'             ; the Sticky App mark: a remembered WIDGET, KIND 1,
                                 ; never live and never in a cell - relaunched
-                                ; at boot by dia_boot
+                                ; at boot by stik_boot
 SC_R_PATH   equ 4               ; 45: the entry's path BELOW THE ROOT,
 SC_PATHMAX  equ 45              ;     `APPS\CALC.O88`, NUL - dsk_path's 32-byte
                                 ;     folder path less its leading `\`, a `\`
@@ -75,8 +75,8 @@ SC_VER      equ 2               ; the trailer's own version (SPEC.md 26.8.6):
 %if SC_R_KIND != SC_R_SLOT + 1
   %error "desksc: ovl_sc_load reads SC_R_SLOT and SC_R_KIND as one word"
 %endif
-%if SC_R_DIA != SC_R_KIND + 1 || SC_R_DIA >= SC_R_PATH
-  %error "desksc: the DIA mark is the one byte between the kind and the path"
+%if SC_R_STIK != SC_R_KIND + 1 || SC_R_STIK >= SC_R_PATH
+  %error "desksc: the Sticky App mark is the one byte between the kind and the path"
 %endif
 
 SC_OP_NEW   equ 0               ; CTRL.DRV's door - CPE_SC, the settings
@@ -200,17 +200,17 @@ sc_open:
     mov si, sc_s_nf
     xor cx, cx
     call KERNEL_SEG:cw_toast_show
-    stc                         ; CF = 1: NOT FOUND, which dia_boot reads
+    stc                         ; CF = 1: NOT FOUND, which stik_boot reads
     ret                         ; (SPEC.md 26.8.5) and desk_open does not
 
 ; -----------------------------------------------------------------------------
-; dia_boot - relaunch every DIA row SYSTEM.CFG put back (SPEC.md 110.4)
+; stik_boot - relaunch every Sticky App row SYSTEM.CFG put back (SPEC.md 110.4)
 ; in:  nothing; kmain's tail through kern_big's drv_notice_x, FIRST: the
 ;      desktop painted, NO lock held, task 0 about to be ui_task, A: the boot
 ;      disk - OSAPI_PKG_START's own context
 ; out: nothing (all registers preserved)
 ;
-; A DIA row is a package shortcut carrying SC_DIA at +3 (110.2): KIND and the
+; A Sticky App row is a package shortcut carrying SC_STIK at +3 (110.2): KIND and the
 ; mark are one word compare. Each is opened by sc_open, exactly as a
 ; double-click would; a target that is NOT FOUND (CF = 1, after its one
 ; toast) is DOWNGRADED in memory to the shortcut it is - the mark cleared, and
@@ -221,7 +221,7 @@ sc_open:
 ; runs it with nothing held. A pending resume or DOS question
 ; ([ui_rebootq]) stands everything down: that image IS the session.
 ; -----------------------------------------------------------------------------
-dia_boot:
+stik_boot:
     cmp byte [ui_rebootq], 0
     jne .r0
     cmp byte [sc_nrows], 0      ; no row, no work and no I/O: what every
@@ -234,7 +234,7 @@ dia_boot:
 .l:
     call sc_row                 ; ES:BX = the row
     jc .n
-    cmp word [es:bx+SC_R_KIND], 1 | (SC_DIA << 8)   ; a PACKAGE, marked
+    cmp word [es:bx+SC_R_KIND], 1 | (SC_STIK << 8)   ; a PACKAGE, marked
     jne .n
     push ax
     push cx
@@ -243,7 +243,7 @@ dia_boot:
     pop ax                      ; `pop` writes no flag: CF is sc_open's
     jnc .n
     call sc_row                 ; re-read: the load may have moved [sc_seg]
-    mov byte [es:bx+SC_R_DIA], 0    ; DOWNGRADED, in memory
+    mov byte [es:bx+SC_R_STIK], 0    ; DOWNGRADED, in memory
     call desk_reflow            ; ...into the first free cell, posted
 .n:
     inc ax
@@ -676,10 +676,10 @@ sc_m_new:
 ; terminated whatever it said, the kind is bounded, the picture's header is
 ; stamped, and a volume no row can have is refused - sc_open would otherwise
 ; walk a path on a drive that is not there, which says "not found", but the
-; file would keep it for ever. +3 is stored as 0 unless the record is a DIA
+; file would keep it for ever. +3 is stored as 0 unless the record is a Sticky App
 ; record, so no package's junk there can become the mark.
 ;
-; A DIA RECORD (+3 = SC_DIA, SPEC.md 110.2) is ONE ROW PER WIDGET, by name: a
+; A Sticky App RECORD (+3 = SC_STIK, SPEC.md 110.2) is ONE ROW PER WIDGET, by name: a
 ; marked row whose path ends in the same component is UPDATED in place when
 ; the volume or path differ - where it was last launched from wins - and is
 ; the answer with NOTHING WRITTEN when they do not, so a widget may register
@@ -693,10 +693,10 @@ sc_m_add:
     mov ax, [bx+SC_R_KIND]      ; AL = the kind, AH = the mark
     mov bl, [bx+SC_R_VOL]
     pop ds
-    cmp ah, SC_DIA
+    cmp ah, SC_STIK
     jne .new                    ; a link, as ever
     cmp al, 1
-    jne .no                     ; a DIA that is not a package: refused, and
+    jne .no                     ; a Sticky App that is not a package: refused, and
     cmp bl, DVOL_MAX            ; so is a volume nobody has - BEFORE any row
     jae .no                     ; is touched, since the update writes over one
     call sc_m_dfind             ; AL = the widget's row, by its name
@@ -726,10 +726,10 @@ sc_m_add:
     ja .bad
     cmp byte [es:di+SC_R_VOL], DVOL_MAX
     jae .bad
-    mov al, 0xFF                ; a DIA row: no cell, never shown
-    cmp byte [es:di+SC_R_DIA], SC_DIA
+    mov al, 0xFF                ; a Sticky App row: no cell, never shown
+    cmp byte [es:di+SC_R_STIK], SC_STIK
     je .zs
-    mov byte [es:di+SC_R_DIA], 0    ; ...and nothing else may look like one
+    mov byte [es:di+SC_R_STIK], 0    ; ...and nothing else may look like one
     mov bp, desk_free           ; a full desktop refuses, rather than keep
     call sc_m_cold              ; a link nobody can see
     jc .full
@@ -780,7 +780,7 @@ sc_m_tail:
     pop ax
     ret
 
-; sc_m_dfind - the live DIA row whose path ENDS like the record's (SPEC.md
+; sc_m_dfind - the live Sticky App row whose path ENDS like the record's (SPEC.md
 ; 110.2): in DX:CX = the record; out CF = 0 AL = its zone, CF = 1 none.
 ; Clobbers AH, SI, DI, BP, ES. A zone does not survive a boot (ovl_sc_load
 ; compacts the rows), a widget's NAME does
@@ -799,7 +799,7 @@ sc_m_dfind:
     call sc_m_off               ; ES:DI = the row, AX kept
     cmp byte [es:di+SC_R_VOL], 0xFF
     je .nx
-    cmp byte [es:di+SC_R_DIA], SC_DIA
+    cmp byte [es:di+SC_R_STIK], SC_STIK
     jne .nx
     add di, SC_R_PATH
     call sc_m_tail
@@ -1132,7 +1132,7 @@ sc_m_move:
 
 ; -----------------------------------------------------------------------------
 ; sc_m_pdel - SC_OP_PDEL: a PACKAGE's OSAPI_DESK_ITEM remove (SPEC.md 26.9.6)
-; in:  AL = the zone its add answered, or 0xFF: a DIA's remove by name
+; in:  AL = the zone its add answered, or 0xFF: a Sticky App's remove by name
 ;      (SPEC.md 110.2); DX:CX = the caller's SC_REC record
 ; out: AL = 0 removed, 0xFF refused
 ;
@@ -1142,7 +1142,7 @@ sc_m_move:
 ; and a shortcut the user made in that zone since is nobody's to take.
 ; -----------------------------------------------------------------------------
 sc_m_pdel:
-    cmp al, 0xFF                ; AH = 0xFF at the door: a DIA's remove BY
+    cmp al, 0xFF                ; AH = 0xFF at the door: a Sticky App's remove BY
     jne .z                      ; NAME (SPEC.md 110.2) - its zone is found,
     call sc_m_dfind             ; then the same check as any remove
     jc .no

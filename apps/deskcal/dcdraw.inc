@@ -4,10 +4,10 @@
 ; (SPEC.md 110.3, v2)
 ;
 ; EVERY CARD PIXEL IS COMPOSED, THEN ONE OSAPI_GFX_BLIT1 (SPEC.md 110.11):
-; dc_compose is os88dia.inc's DIA_COMPOSE - AL = the card, BX = the slab's
+; dc_compose is os88stik.inc's STIK_COMPOSE - AL = the card, BX = the slab's
 ; first card row, CX = its rows - and writes the card's picture into the
 ; 176 x 32 band with GFXE_TEXT / GFXE_BITS, black ink on the white paper
-; dia_slabs (or dc_rrect) laid. Nothing is a font_run, nothing lies under a
+; stik_slabs (or dc_rrect) laid. Nothing is a font_run, nothing lies under a
 ; glyph, nothing is written twice. Each element is tested against the slab's
 ; rows FIRST, so a slab costs only the glyphs it holds (SPEC.md 5.12.8: a
 ; reject is 0.08 ms, a glyph 0.49).
@@ -18,8 +18,8 @@
 ; OSAPI_WM_CLIP_SET once for the gesture.
 ; =============================================================================
 
-; --- the layouts (os88dia.inc's DIA_LAYOUT: band, face y, tag, card,gap ...)
-; and the calendar's own geometry for each, in [dia_li]'s order. Every row is
+; --- the layouts (os88stik.inc's STIK_LAYOUT: band, face y, tag, card,gap ...)
+; and the calendar's own geometry for each, in [stik_li]'s order. Every row is
 ; CARD-LOCAL; every x is face-relative
 DCG_BIGS    equ 0               ; db the day number's style (X3 / X2, bold)
 DCG_BIGY    equ 1               ; db ...its row
@@ -89,9 +89,9 @@ ROLE_REM    equ 2               ; the reminder (card 3),
 ROLE_SLOT   equ 3               ; COMPACT's paging slot
 
 dc_lays:
-    DIA_LAYOUT 436, 42, 12, 178,6, 91,6, 57,5   ; TALL, VGA: 176 x 355
-    DIA_LAYOUT 304, 24, 11, 122,4, 67,4, 30,4   ; MID, Hercules and EGA: 242
-    DIA_LAYOUT 156, 22, 11, 85,3, 44,3          ; COMPACT, CGA: 146
+    STIK_LAYOUT 436, 42, 12, 178,6, 91,6, 57,5   ; TALL, VGA: 176 x 355
+    STIK_LAYOUT 304, 24, 11, 122,4, 67,4, 30,4   ; MID, Hercules and EGA: 242
+    STIK_LAYOUT 156, 22, 11, 85,3, 44,3          ; COMPACT, CGA: 146
 
 dc_geos:
     ;  BIGS                  BIGY DOWX DOWY MONY NAVY NAVL NAVR NAVM HDRB
@@ -138,7 +138,7 @@ dc_geos:
 %endif
 
 ; -----------------------------------------------------------------------------
-; dc_org - the face's origin now (os88dia.inc's dia_org, from our window).
+; dc_org - the face's origin now (os88stik.inc's stik_org, from our window).
 ; Every register kept
 ; -----------------------------------------------------------------------------
 dc_org:
@@ -149,7 +149,7 @@ dc_org:
     mov ax, KERNEL_SEG
     mov es, ax
     mov si, [dc_win]
-    call dia_org
+    call stik_org
     pop es
     pop si
     pop dx
@@ -178,7 +178,7 @@ dc_arm:
 
 ; dc_role - AL = a card: AL = its role. Every other register kept
 dc_role:
-    cmp byte [dia_li], 2
+    cmp byte [stik_li], 2
     jb .r                       ; TALL / MID: the card is its role
     or al, al
     jz .r
@@ -187,7 +187,7 @@ dc_role:
     ret
 
 ; -----------------------------------------------------------------------------
-; dc_compose - DIA_COMPOSE (and dc_rrect's): AL = the card, BX = the band's
+; dc_compose - STIK_COMPOSE (and dc_rrect's): AL = the card, BX = the band's
 ; first card row, CX = its rows. The card's elements on those rows, into the
 ; band; then a held button's light (SPEC.md 110.3: the light is part of the
 ; picture). Every register kept
@@ -822,7 +822,7 @@ dc_navlbl:
     call dc_slen
     mov cl, 3
     shl ax, cl
-    mov cx, DIA_FACE_W
+    mov cx, STIK_FACE_W
     sub cx, ax
     shr cx, 1
 .x:
@@ -967,7 +967,7 @@ dc_chead:
     xor dh, dh
     cmp byte [dc_ed], 0
     jne .plus                   ; the field is there: its own pixels
-    cmp byte [dia_li], 2
+    cmp byte [stik_li], 2
     jb .day
     cmp byte [dc_pane], 1
     jb .day
@@ -986,7 +986,7 @@ dc_chead:
     jne .wt
     mov bl, GFXE_BOLD
 .wt:
-    cmp byte [dia_li], 2
+    cmp byte [stik_li], 2
     jb .put
 .gt:
     mov si, dc_s_more2
@@ -1096,7 +1096,7 @@ dc_tslot:
     push di
     mov di, [dc_geo]
     mov bl, [di + DCG_TN]
-    mov bh, [DIA_PAY + DCP_NTASK]
+    mov bh, [STIK_PAY + DCP_NTASK]
     mov ah, [dc_ttop]
 dc_slot:                        ; BL = lines, BH = items, AH = the top
     cmp bh, bl
@@ -1190,7 +1190,7 @@ dc_caline:
     mov dl, [di + DCG_BARH]
     xor dh, dh
     mov ax, 4
-    mov cx, DIA_FACE_W - 8
+    mov cx, STIK_FACE_W - 8
     mov byte [gfxe_tsty], 0
     call dc_cfill
     pop dx
@@ -1253,7 +1253,7 @@ dc_ctsec:
     mov cl, [di + DCG_TX]
     xor ch, ch
     add dx, [dc_tty]
-    mov ah, [DIA_PAY + DCP_NTASK]
+    mov ah, [STIK_PAY + DCP_NTASK]
     call dc_cmore
     jmp short .n
 .item:
@@ -1298,7 +1298,7 @@ dc_ctline:
     mov al, [di + DCG_TX]
     xor ah, ah
     sub ax, 4
-    mov cx, DIA_FACE_W - 4
+    mov cx, STIK_FACE_W - 4
     sub cx, ax
     mov byte [gfxe_tsty], 0
     call dc_cfill
@@ -1351,7 +1351,7 @@ dc_crem:
     cmp ax, bx
     je .tm
     xor bl, bl
-    cmp byte [dia_li], 1
+    cmp byte [stik_li], 1
     je .wd
     push ax                     ; TALL / COMPACT: `23 Aug 21:00`
     and al, 31
@@ -1499,8 +1499,8 @@ dc_rrect:
     mov [dc_cx1], ax
     mov al, [dc_rcard]
     call dc_lpdone              ; a pending un-light this covers is settled
-    call dia_ctop               ; BX = the card's face-relative top
-    add bx, [dia_fy]
+    call stik_ctop              ; BX = the card's face-relative top
+    add bx, [stik_fy]
     mov [dc_rtop], bx
 .chunk:
     mov cx, [dc_rr1]
@@ -1523,7 +1523,7 @@ dc_rrect:
     add si, dc_band
     mov cl, 3
     shl ax, cl
-    add ax, [dia_fx]
+    add ax, [stik_fx]
     mov cl, [dc_rb + 1]
     sub cl, [dc_rb]
     inc cl
@@ -1567,7 +1567,7 @@ dc_rrect:
 ; dc_rrows - card AL's rows BX..DX, the whole face width
 dc_rrows:
     push cx
-    mov cx, (DIA_FACE_W / 8 - 1) << 8
+    mov cx, (STIK_FACE_W / 8 - 1) << 8
     call dc_rrect
     pop cx
     ret
@@ -1589,13 +1589,13 @@ dc_rcardw:
 ; dc_chgt - DX = card AL's height. The rest kept
 dc_chgt:
     push bx
-    mov bx, [dia_lay]
+    mov bx, [stik_lay]
     push ax
     xor ah, ah
     shl ax, 1
     add bx, ax
     pop ax
-    mov dl, [bx + DIAL_CARDS]
+    mov dl, [bx + STIKL_CARDS]
     xor dh, dh
     pop bx
     ret
@@ -1629,11 +1629,11 @@ dc_lpdone:
     ret
 
 ; -----------------------------------------------------------------------------
-; DIA_PAINTCARD: the include's slab painter, then the field over card 2's
+; STIK_PAINTCARD: the include's slab painter, then the field over card 2's
 ; heading when it is open and the damage reached it
 ; -----------------------------------------------------------------------------
 dc_pcard:
-    call dia_slabs
+    call stik_slabs
     push ax
     push bx
     push dx
@@ -1674,14 +1674,14 @@ dc_fover:
 ; heading's row - 3 .. + 8
 ; -----------------------------------------------------------------------------
 
-; dc_frect - the field's rect on the glass now ([dia_fx]/[dia_fy] current)
+; dc_frect - the field's rect on the glass now ([stik_fx]/[stik_fy] current)
 dc_frect:
     push ax
     push bx
     push di
     mov al, 1
-    call dia_ctop
-    add bx, [dia_fy]
+    call stik_ctop
+    add bx, [stik_fy]
     mov di, [dc_geo]
     mov al, [di + DCG_HY]
     xor ah, ah
@@ -1690,7 +1690,7 @@ dc_frect:
     mov [dc_ln + LN_Y1], ax
     add ax, 11
     mov [dc_ln + LN_Y2], ax
-    mov ax, [dia_fx]
+    mov ax, [stik_fx]
     add ax, DC_FX1
     mov [dc_ln + LN_X1], ax
     add ax, DC_FX2 - DC_FX1
@@ -1827,7 +1827,7 @@ dc_hmon:
     xor ah, ah
     mov si, ax
     sub si, 2                   ; the nav's light: 2 above, 1 below
-    cmp byte [dia_li], 2
+    cmp byte [stik_li], 2
     jne .tall
     ; --- COMPACT: the number left, the weekday and the nav right of it -
     ; the light from the nav's own row, MONDAY's last being the one above
@@ -1896,7 +1896,7 @@ dc_hmon:
     and si, 0FFh
     mov dx, si
     add dx, 9                   ; 1 below the 8 rows
-    cmp byte [dia_li], 2
+    cmp byte [stik_li], 2
     je .nb1                     ; COMPACT: none above (MONDAY's rows)
     sub si, 2                   ; 2 above
 .nb1:
@@ -1993,16 +1993,16 @@ dc_hday:
     cmp cx, DC_PLUSX            ; bytes 20..21 - clear of the field's
     jl .page                    ; last byte (19), so its un-light cannot
     mov al, DCB_PLUS            ; reach the field it just opened
-    mov bx, ((DIA_FACE_W / 8 - 1) << 8) | (DC_PLUSX / 8)
+    mov bx, ((STIK_FACE_W / 8 - 1) << 8) | (DC_PLUSX / 8)
     jmp dc_hbtn
 .page:
-    cmp byte [dia_li], 2
+    cmp byte [stik_li], 2
     jne .r                      ; TALL / MID: the heading does nothing
     mov al, DCB_PAGE
     mov bx, 0B00h               ; bytes 0..11 - `Reminder >` is 10 cells
     jmp dc_hbtn
 .lists:
-    cmp byte [dia_li], 2
+    cmp byte [stik_li], 2
     jne .both
     cmp byte [dc_pane], 1       ; COMPACT: the page's one list
     jb .ag

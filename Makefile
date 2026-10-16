@@ -2410,7 +2410,7 @@ KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/diskops.drv
 # EXTD.DRV (SPEC.md 39.19.6): kern_small has no second display at all. Being
 # in $(DRIVERS) through here is what puts it on every kern_big system disk in
 # all four geometries, the emu disk and the live media, beside CTRL.DRV. And
-# so is DESK.DRV (SPEC.md 11.103.10), the desk layer's code, which a DIA's
+# so is DESK.DRV (SPEC.md 11.103.10), the desk layer's code, which a Sticky App's
 # OSAPI_WM_DESK QUERY loads: kern_small has no desk layer at all.
 ifneq ($(KERN_SMALL),)
 BIGMODS =
@@ -3170,19 +3170,19 @@ EMUDIR := $(BUILD)/emuk
 SYSAPPS := $(BUILD)/taskmgr.o88 $(BUILD)/thewire.o88 $(BUILD)/rlapply.o88
 SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
 
-# --- ...and THE DESKTOP INTEGRATED APPLICATIONS in SYSTEM/DIA/ (SPEC.md 110) --
+# --- ...and THE STICKY APPS in STIKAPPS/ (SPEC.md 110) --
 # A widget belongs to the BOOT volume - the desktop configuration that
 # relaunches it is that volume's SYSTEM.CFG, and its row names a path on it -
 # so it rides every SYSTEM disk and NO apps disk, the THEWIRE rule (SPEC.md
 # 92). Threaded EXPLICITLY into each system-disk recipe, the four geometries,
-# emu.img, the small pair (SMALLDIAARGS) and the live media (LIVESYSARGS),
+# emu.img, the small pair (SMALLSTIKARGS) and the live media (LIVESYSARGS),
 # rather than folded into $(SYSAPPSARGS): that variable is restated in a dozen
 # tight 360KB GATE-disk recipes that have no room and no reason for it.
 # Measured at 360KB (`tools/os88disk.py --verify build/os8088-360.img`): 313
 # of 354 clusters in use before DESKCAL.O88 and its folder; SPEC.md 110.6 has
 # the figure after.
-DIAAPPS := $(BUILD)/deskcal.o88
-DIAARGS := $(addprefix SYSTEM/DIA:,$(DIAAPPS))
+STIKAPPS := $(BUILD)/deskcal.o88
+STIKARGS := $(addprefix STIKAPPS:,$(STIKAPPS))
 
 # --- ...and DOS (SPEC.md 96) is in the system disk's APPS/, not SYSTEM/ ------
 # It belongs on the system disk for THE WIRE's reason one step along: a .COM
@@ -4292,10 +4292,10 @@ $(BUILD)/os88net.com: drivers/net/os88sfx.asm $(BUILD)/os88net.lz \
 	$(NASM) -f bin -w+error -I $(BUILD)/ -o $@ $<
 	@echo "os88net.com: $(call FILESIZE,$@) bytes packed - self-extracting, runs on DOS"
 
-$(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(DIAAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(DIAARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER)
 
 # The 720KB 3.5" DD disk (SPEC.md 19). It is the geometry the machines
@@ -4307,10 +4307,10 @@ $(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(DIAAPPS) $(SYSROOT
 #
 # Same boot sector as the 360KB disk (see boot360.bin above): 9 spt, 2 heads,
 # 80 cylinders instead of 40, and the boot sector never counts cylinders.
-$(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(DIAAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(DIAARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER)
 
 # The 1.2MB 5.25" HD disk (SPEC.md 19). The geometry of the machine the 720KB
@@ -4334,10 +4334,10 @@ $(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(DIAAPPS) $(S
 # Its OWN boot sector, unlike the pair above it: 15 spt is a different track
 # shape, and boot/boot.asm's whole knowledge of a disk is SPT and HEADS. See
 # build/boot120.bin's rule for why that is three sectors and not four.
-$(IMG120): $(BUILD)/boot120.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(DIAAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG120): $(BUILD)/boot120.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 \
 		--boot $(BUILD)/boot120.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(DIAARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER)
 
 # ETHERTEST - the system disk with a SYSTEM.CFG that already asks for the
@@ -4959,10 +4959,10 @@ $(BUILD)/ftpapps.img: $(FTPDFILES) tools/os88disk.py
 # ...and this one alone takes $(COREAPPSARGS360)/$(FACESARG360) - the 354
 # clusters that geometry has do not hold MINES.O88 and JETBRAIN.F88 as well as
 # SPEC.md 70.9's parser, and §24.3 carries the arithmetic.
-$(IMG360): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(DIAAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py
+$(IMG360): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(DIAARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(APPDATAFOLDER)
 
 # FMTEST: the AdLib gate package (SPEC.md 34.2/51.4). NEVER on the shipped
@@ -5562,14 +5562,14 @@ $(BUILD)/calc.bin: apps/calc/calc.asm apps/os88api.inc apps/os88ui.inc | $(BUILD
 $(BUILD)/calc.o88: $(BUILD)/calc.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/calc.bin -o $@
 
-# Desk Calendar (SPEC.md 110.3): the first DESKTOP INTEGRATED APPLICATION, in
-# SYSTEM/DIA/ on every system disk ($(DIAARGS) above) and on no apps disk.
-# apps/os88dia.inc is its widget half - place, state file, desktop row, and
+# Desk Calendar (SPEC.md 110.3): the first STICKY APP, in
+# STIKAPPS/ on every system disk ($(STIKARGS) above) and on no apps disk.
+# apps/os88stik.inc is its widget half - place, state file, desktop row, and
 # (v2) the widget treatment, which composes with apps/os88gfx.inc.
 DESKCALSRC := apps/deskcal/deskcal.asm apps/deskcal/dcdate.inc \
               apps/deskcal/dcdraw.inc apps/deskcal/dcdata.inc \
               apps/deskcal/dcrem.inc \
-              apps/os88dia.inc apps/os88ui.inc apps/os88line.inc \
+              apps/os88stik.inc apps/os88ui.inc apps/os88line.inc \
               apps/os88gfx.inc apps/os88api.inc
 $(BUILD)/deskcal.bin: $(DESKCALSRC) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/deskcal/ -o $@ apps/deskcal/deskcal.asm
@@ -7674,98 +7674,98 @@ $(BUILD)/deskitem.o88: $(BUILD)/deskitem.bin tools/os88pkg.py
 $(BUILD)/deskitem360.img: $(BUILD)/deskitem.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/deskitem.o88
 
-# diatest: DESKTOP INTEGRATED APPLICATIONS' gate disks (SPEC.md 110.10) -
-# scratch 360KB SYSTEM disks, each the shipped one plus DIAPROBE.O88 in
-# SYSTEM\DIA\ and a SYSTEM.CFG (and a state file) that tools/os88dia.py, the
+# stiktest: STICKY APPS' gate disks (SPEC.md 110.10) -
+# scratch 360KB SYSTEM disks, each the shipped one plus STIKPROB.O88 in
+# STIKAPPS\ and a SYSTEM.CFG (and a state file) that tools/os88stik.py, the
 # host's own second reader, writes. On demand, like every gate here:
-# `make diatest && python3 tests/diaboot.py` (and diamiss / diashort /
-# diahiber). DIAPROBE never ships: it is the mechanism with no application.
+# `make stiktest && python3 tests/stikboot.py` (and stikmiss / stikshort /
+# stikhiber). STIKPROB never ships: it is the mechanism with no application.
 #
-#   restore  a DIA row to SYSTEM\DIA\DIAPROBE.O88; DIAPROBE.DAT puts its frame
+#   restore  a Sticky App row to STIKAPPS\STIKPROB.O88; STIKPROB.DAT puts its frame
 #            at (303,184) on a 640x480 screen - 303 because a snapped window
 #            holds W_X = 7 mod 8 (SPEC.md 11.94), so the place is a fixpoint
-#   ghost    a DIA row to SYSTEM\DIA\GONE.O88 AHEAD of the restore row
-#   bvol     a DIA row on B:, for a boot with no disk in B:
-#   short    three DRAG-MADE shortcuts, `\` at +3, and no DIA row - the
+#   ghost    a Sticky App row to STIKAPPS\GONE.O88 AHEAD of the restore row
+#   bvol     a Sticky App row on B:, for a boot with no disk in B:
+#   short    three DRAG-MADE shortcuts, `\` at +3, and no Sticky App row - the
 #            regression for SPEC.md 26.8.1's +3, which was never spare
-#   hiber    the restore row, and HDD.DRV wanted: tests/diahiber.py puts a
+#   hiber    the restore row, and HDD.DRV wanted: tests/stikhiber.py puts a
 #            HIBERNAT.PTR on a hard disk of its own, so the resume question
-#            is posted before dia_boot runs
-# ...and diarestore.img, the restore row on a 1.44MB disk for QEMU.
-DIAFIX := $(BUILD)/diafix
-DIATESTS := restore ghost bvol short hiber
-DIACFG_restore := --dia A:SYSTEM/DIA/DIAPROBE.O88=DiaProbe
-DIACFG_ghost   := --dia A:SYSTEM/DIA/GONE.O88=Gone \
-                  --dia A:SYSTEM/DIA/DIAPROBE.O88=DiaProbe
-DIACFG_bvol    := --dia B:DIAPROBE.O88=DiaProbe
-DIACFG_short   := --short 'A:SYSTEM/TASKMGR.O88=TASKMGR@1,3' \
+#            is posted before stik_boot runs
+# ...and stikrestore.img, the restore row on a 1.44MB disk for QEMU.
+STIKFIX := $(BUILD)/stikfix
+STIKTESTS := restore ghost bvol short hiber
+STIKCFG_restore := --stik A:STIKAPPS/STIKPROB.O88=StikProbe
+STIKCFG_ghost  := --stik A:STIKAPPS/GONE.O88=Gone \
+                  --stik A:STIKAPPS/STIKPROB.O88=StikProbe
+STIKCFG_bvol   := --stik B:STIKPROB.O88=StikProbe
+STIKCFG_short  := --short 'A:SYSTEM/TASKMGR.O88=TASKMGR@1,3' \
                   --short 'A:SYSTEM=SYSTEM@2,4' \
                   --short 'A:README.TXT=README.TXT@0,5'
-DIACFG_hiber   := --want 2 --dia A:SYSTEM/DIA/DIAPROBE.O88=DiaProbe
-DIACFG_desk    := --dia A:SYSTEM/DIA/DESKPROB.O88=DeskProbe
+STIKCFG_hiber  := --want 2 --stik A:STIKAPPS/STIKPROB.O88=StikProbe
+STIKCFG_desk   := --stik A:STIKAPPS/DESKPROB.O88=DeskProbe
 
-.PHONY: diatest
-diatest: $(foreach t,$(DIATESTS),$(BUILD)/dia$(t)360.img) $(BUILD)/diarestore.img $(BUILD)/diadesk360.img $(BUILD)/deskprob.o88
-	@echo "diatest: build/dia<restore|ghost|bvol|short|hiber|desk>360.img and build/diarestore.img"
-	@echo "         Run them with: python3 tests/diaboot.py (diamiss, diashort, diahiber;"
+.PHONY: stiktest
+stiktest: $(foreach t,$(STIKTESTS),$(BUILD)/stik$(t)360.img) $(BUILD)/stikrestore.img $(BUILD)/stikdesk360.img $(BUILD)/deskprob.o88
+	@echo "stiktest: build/stik<restore|ghost|bvol|short|hiber|desk>360.img and build/stikrestore.img"
+	@echo "         Run them with: python3 tests/stikboot.py (stikmiss, stikshort, stikhiber;"
 	@echo "         deskz, deskdock, deskkeys, and desksmall after make small)"
 
-$(BUILD)/diaprobe.bin: tests/diaprobe/diaprobe.asm apps/os88dia.inc apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -o $@ tests/diaprobe/diaprobe.asm
-	@echo "diaprobe: $(call FILESIZE,$@) bytes"
+$(BUILD)/stikprob.bin: tests/stikprob/stikprob.asm apps/os88stik.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/stikprob/stikprob.asm
+	@echo "stikprob: $(call FILESIZE,$@) bytes"
 
-$(BUILD)/diaprobe.o88: $(BUILD)/diaprobe.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/diaprobe.bin -o $@
+$(BUILD)/stikprob.o88: $(BUILD)/stikprob.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/stikprob.bin -o $@
 
 # ...SECONDARY, or make deletes each as the intermediate of a pattern rule and
 # rebuilds every image on the next run
-.SECONDARY: $(foreach t,$(DIATESTS) desk,$(DIAFIX)/$(t)/system.cfg)
-$(DIAFIX)/%/system.cfg: tools/os88dia.py Makefile | $(BUILD)
-	@mkdir -p $(DIAFIX)/$*
-	python3 tools/os88dia.py cfg -o $@ $(DIACFG_$*)
+.SECONDARY: $(foreach t,$(STIKTESTS) desk,$(STIKFIX)/$(t)/system.cfg)
+$(STIKFIX)/%/system.cfg: tools/os88stik.py Makefile | $(BUILD)
+	@mkdir -p $(STIKFIX)/$*
+	python3 tools/os88stik.py cfg -o $@ $(STIKCFG_$*)
 
-$(DIAFIX)/DIAPROBE.DAT: tools/os88dia.py | $(BUILD)
-	@mkdir -p $(DIAFIX)
-	python3 tools/os88dia.py dat -o $@ --x 303 --y 184 --screen 640x480
+$(STIKFIX)/STIKPROB.DAT: tools/os88stik.py | $(BUILD)
+	@mkdir -p $(STIKFIX)
+	python3 tools/os88stik.py dat -o $@ --x 303 --y 184 --screen 640x480
 
 # THE DESK BUILD of the same probe (SPEC.md 11.103, v2's wave 1): DESKPROB.O88,
 # header flag OS88_F_DESK, OSAPI_WM_DESK's MAKE, a face of two white cards
 # with the desktop's ground between them. Its own build because the v1 rows
-# drag DiaProbe by a title bar a desk window has not got. Since wave 3 it is
-# the include's DIA_WIDGET (SPEC.md 110.11), whose state file holds the FACE:
+# drag StikProbe by a title bar a desk window has not got. Since wave 3 it is
+# the include's STIK_WIDGET (SPEC.md 110.11), whose state file holds the FACE:
 # DESKPROB.DAT puts the face at (376,184), the frame at (375,184) - 375 = 7
 # mod 8, the snap's fixpoint (SPEC.md 11.94)
-$(BUILD)/deskprob.bin: tests/diaprobe/diaprobe.asm apps/os88dia.inc apps/os88gfx.inc apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -DDP_DESK -o $@ tests/diaprobe/diaprobe.asm
+$(BUILD)/deskprob.bin: tests/stikprob/stikprob.asm apps/os88stik.inc apps/os88gfx.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DDP_DESK -o $@ tests/stikprob/stikprob.asm
 	@echo "deskprob: $(call FILESIZE,$@) bytes"
 
 $(BUILD)/deskprob.o88: $(BUILD)/deskprob.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/deskprob.bin -o $@
 
-$(DIAFIX)/DESKPROB.DAT: tools/os88dia.py | $(BUILD)
-	@mkdir -p $(DIAFIX)
-	python3 tools/os88dia.py dat -o $@ --x 376 --y 184 --screen 640x480 --cont
+$(STIKFIX)/DESKPROB.DAT: tools/os88stik.py | $(BUILD)
+	@mkdir -p $(STIKFIX)
+	python3 tools/os88stik.py dat -o $@ --x 376 --y 184 --screen 640x480 --cont
 
-$(BUILD)/diadesk360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/deskprob.o88 $(DIAFIX)/desk/system.cfg $(DIAFIX)/DESKPROB.DAT tools/os88disk.py
+$(BUILD)/stikdesk360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/deskprob.o88 $(STIKFIX)/desk/system.cfg $(STIKFIX)/DESKPROB.DAT tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
-		SYSTEM/DIA:$(BUILD)/deskprob.o88 SYSTEM/APPDATA:$(DIAFIX)/DESKPROB.DAT \
-		$(DIAFIX)/desk/system.cfg
+		STIKAPPS:$(BUILD)/deskprob.o88 SYSTEM/APPDATA:$(STIKFIX)/DESKPROB.DAT \
+		$(STIKFIX)/desk/system.cfg
 
-$(BUILD)/dia%360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/diaprobe.o88 $(DIAFIX)/%/system.cfg $(DIAFIX)/DIAPROBE.DAT tools/os88disk.py
+$(BUILD)/stik%360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/stikprob.o88 $(STIKFIX)/%/system.cfg $(STIKFIX)/STIKPROB.DAT tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
-		SYSTEM/DIA:$(BUILD)/diaprobe.o88 SYSTEM/APPDATA:$(DIAFIX)/DIAPROBE.DAT \
-		$(DIAFIX)/$*/system.cfg
+		STIKAPPS:$(BUILD)/stikprob.o88 SYSTEM/APPDATA:$(STIKFIX)/STIKPROB.DAT \
+		$(STIKFIX)/$*/system.cfg
 
-$(BUILD)/diarestore.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/diaprobe.o88 $(DIAFIX)/restore/system.cfg $(DIAFIX)/DIAPROBE.DAT tools/os88disk.py
+$(BUILD)/stikrestore.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/stikprob.o88 $(STIKFIX)/restore/system.cfg $(STIKFIX)/STIKPROB.DAT tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
-		SYSTEM/DIA:$(BUILD)/diaprobe.o88 SYSTEM/APPDATA:$(DIAFIX)/DIAPROBE.DAT \
-		$(DIAFIX)/restore/system.cfg
+		STIKAPPS:$(BUILD)/stikprob.o88 SYSTEM/APPDATA:$(STIKFIX)/STIKPROB.DAT \
+		$(STIKFIX)/restore/system.cfg
 
 # fcpapi: OSAPI_FILE_COPY's gate (SPEC.md 22.24). EVERY ANSWER IS A FILE - the
 # copies it makes and the verdict it writes - because a copy engine that goes
@@ -11773,11 +11773,11 @@ SMALLAPPSARGS  = $(addprefix APPS:,$(SMALLTOOLS))
 # system-disk package is subtracted here rather than in a second list.
 SMALLSYSAPPS      = $(call SMALLSUB,,$(filter-out $(SMALLOMIT) $(SMALLOMIT_ORPHAN),$(SYSAPPS)))
 SMALLSYSAPPSARGS  = $(addprefix SYSTEM:,$(SMALLSYSAPPS))
-# SYSTEM/DIA/ rides the small system disks too (SPEC.md 24.5.1, 110.7): the
+# STIKAPPS/ rides the small system disks too (SPEC.md 24.5.1, 110.7): the
 # Desk Calendar needs no driver and has no small build, so it is the shipped
 # package - the API table is the same on both kernels (SPEC.md 20.8 rule 4)
-SMALLDIAAPPS      = $(DIAAPPS)
-SMALLDIAARGS      = $(addprefix SYSTEM/DIA:,$(SMALLDIAAPPS))
+SMALLSTIKAPPS     = $(STIKAPPS)
+SMALLSTIKARGS     = $(addprefix STIKAPPS:,$(SMALLSTIKAPPS))
 
 # --- THE SMALL SYSTEM DISK CARRIES THE WHOLE APPS PAYLOAD (SPEC.md 24.5.6) ----
 #
@@ -11893,12 +11893,12 @@ $(BUILD)/small360.img: KMODDIR := $(SMALLDIR)
 smallsub:
 	@$(MAKE) BUILD=$(SMALLDIR) KERN_SMALL=1 $(SMALLDIR)/boot360.bin $(SMALLDIR)/boot.bin
 
-$(BUILD)/small360.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) $(SMALLDIAAPPS) $(SMALLPKGS) \
+$(BUILD)/small360.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) $(SMALLSTIKAPPS) $(SMALLPKGS) \
                        $$(SMALLTOOLS) $$(SMALLGAMES) $$(SMALLDATA_360) \
                        $(SYSDOC) tools/os88disk.py | smallsub
 	python3 tools/os88disk.py --fatcap 2 --kern-small -o $@ --size 360 \
 		--boot $(SMALLDIR)/boot360.bin --kernel $(SMALLDIR)/$(KERNNAME) \
-		$(SMALLDRIVERS) $(SMALLMODS) $(SMALLSYSAPPSARGS) $(SMALLDIAARGS) \
+		$(SMALLDRIVERS) $(SMALLMODS) $(SMALLSYSAPPSARGS) $(SMALLSTIKARGS) \
 		$(SMALLAPPSARGS) $(addprefix GAMES:,$(SMALLGAMES)) \
 		$(addprefix MEDIA:,$(SMALLDATA_360)) \
 		$(SYSDOC) $(MEDIAFOLDER) $(APPDATAFOLDER)
@@ -11908,12 +11908,12 @@ $(BUILD)/small360.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) $(SMALLDIAAPPS) $(SMALLPK
 # its kernel is $(SMALLDIR)'s, so its modules are too
 $(BUILD)/small.img: KMODDIR := $(SMALLDIR)
 
-$(BUILD)/small.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) $(SMALLDIAAPPS) $(SMALLPKGS) \
+$(BUILD)/small.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) $(SMALLSTIKAPPS) $(SMALLPKGS) \
                     $$(SMALLTOOLS) $$(SMALLGAMES) $$(SMALLDATA) \
                     $(SYSDOC) tools/os88disk.py | smallsub
 	python3 tools/os88disk.py --fatcap 2 --kern-small -o $@ --size 1440 \
 		--boot $(SMALLDIR)/boot.bin --kernel $(SMALLDIR)/$(KERNNAME) \
-		$(SMALLDRIVERS) $(SMALLMODS) $(SMALLSYSAPPSARGS) $(SMALLDIAARGS) \
+		$(SMALLDRIVERS) $(SMALLMODS) $(SMALLSYSAPPSARGS) $(SMALLSTIKARGS) \
 		$(SMALLAPPSARGS) $(addprefix GAMES:,$(SMALLGAMES)) \
 		$(addprefix MEDIA:,$(SMALLDATA)) \
 		$(SYSDOC) $(MEDIAFOLDER) $(APPDATAFOLDER)
@@ -11973,13 +11973,13 @@ $(BUILD)/emu.img: KMODDIR := $(EMUDIR)
 # one feature it was built for has not been given anything. build/vmmcfg is the
 # gate's own SYSTEM.CFG with bit 5 set, which is the absolute mouse's bit and
 # not its row number (drv_cfgbit), and it is reused verbatim rather than copied.
-$(BUILD)/emu.img: $(EMUDRIVERS) $(SYSAPPS) $(DIAAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) \
+$(BUILD)/emu.img: $(EMUDRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) \
                   $(FACES) $(FACELIC) $(BUILD)/vmmcfg/system.cfg \
                   tools/os88disk.py
 	@$(MAKE) BUILD=$(EMUDIR) KERN_EMU=1 $(EMUDIR)/boot.bin $(EMUDIR)/boothd.sys
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(EMUDIR)/boot.bin --kernel $(EMUDIR)/$(KERNNAME) \
-		$(EMUDRIVERS) $(SYSAPPSARGS) $(DIAARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) \
+		$(EMUDRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) \
 		$(SYSLOGOARG) $(FACESARG) $(BUILD)/vmmcfg/system.cfg \
 		$(APPDATAFOLDER)
 
@@ -13665,7 +13665,7 @@ LIVEISO := $(BUILD)/os8088.iso
 # the two lists, so a second SYSAPPS package lands here the day it lands
 # there and neither list is edited twice.
 LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS))) \
-               $(DIAARGS)
+               $(STIKARGS)
 # THE FOUR PACKAGES THAT RIDE NO FLOPPY, AND THE DOCUMENTS MEDIA/ LACKED.
 # RECORDER (SPEC.md 35.1), HELLO (27.0), PACMAN (89) and SCRIBE (95) are built
 # by `all` and shipped nowhere, and every one of those decisions is an argument
@@ -13719,7 +13719,7 @@ $(if $(filter-out $(APPSYS),$(SYSAPPS)),,$(error the SYSAPPS live set is \
      empty - $(SYSAPPS) and $(APPSYS) no longer differ, so THEWIRE.O88 is \
      either on every apps disk or on none; SPEC.md 92.11 says it is on \
      neither))
-# (the FILTER, not $(LIVESYSARGS): that also carries $(DIAARGS), so testing
+# (the FILTER, not $(LIVESYSARGS): that also carries $(STIKARGS), so testing
 # it could never fire again - SPEC.md 110.9)
 
 # THE WHOLE STORY LIBRARY (SPEC.md 61, 80.6). FROTZ.O88 rides APPS/ on this
@@ -13868,7 +13868,7 @@ $(EMUUSBIMG): $(KERNEL_SRC) $(KERNEL_INC) $(BUILD)/vmmouse.drv \
 # which is RUNCPMIMG's order and is here for its reason.
 $(USBIMG) $(EMUUSBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
            $(DRIVERS) $(SYSDOC) $(SYSLOGO) $(LOGOVID) $(FACES) $(FACELIC) \
-           $(SYSAPPS) $(DIAAPPS) $(SYSROOT) $(LIVEPKGDEPS) $(BUILD)/stories.stamp $(BUILD)/BRONZE.PIX \
+           $(SYSAPPS) $(STIKAPPS) $(SYSROOT) $(LIVEPKGDEPS) $(BUILD)/stories.stamp $(BUILD)/BRONZE.PIX \
            $(BUILD)/zcat/live/CATALOG.TXT $(BUILD)/cpmsw.stamp \
            tools/getcpmsw.py tools/getstories.py \
            $(ALLAPPS) tools/os88disk.py
@@ -13880,7 +13880,7 @@ $(USBIMG) $(EMUUSBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 	[ -n "$$gsel" ] || { echo "usb: getcpmsw.py --select hdd chose nothing"; exit 1; }; \
 	zsel="$$(python3 tools/getstories.py -o $(STORYDIR) --disk-args STORIES/)"; \
 	[ -n "$$zsel" ] || { echo "usb: getstories.py --disk-args printed nothing"; exit 1; }; \
-	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select hdd --dir-slots $(RUNCPMSLOTS) --folders $(LIVEFOLDERS) --reserve-clusters $$gcost --reserve $(ALLAPPSFILES) $(LIVEPKGDEPS) $(SYSAPPS) $(DIAAPPS) | sed 's,^,RUNCPM/A/0:,')"; \
+	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select hdd --dir-slots $(RUNCPMSLOTS) --folders $(LIVEFOLDERS) --reserve-clusters $$gcost --reserve $(ALLAPPSFILES) $(LIVEPKGDEPS) $(SYSAPPS) $(STIKAPPS) | sed 's,^,RUNCPM/A/0:,')"; \
 	[ -n "$$sel" ] || { echo "usb: getruncpm.py --select hdd chose nothing"; exit 1; }; \
 	python3 tools/os88disk.py -o $@ --hdd \
 		--mbr $(LIVEKDIR)/mbr.bin --boot $(LIVEKDIR)/boothd.bin \

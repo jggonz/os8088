@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""SPEC.md 110.5.1: a DIA's save asks whether the disk is still HOME.
+"""SPEC.md 110.5.1: a Sticky App's save asks whether the disk is still HOME.
 
-    make && make diatest && python3 tests/diaswap.py
+    make && make stiktest && python3 tests/stikswap.py
 
 A widget autostarted from the system disk outlives the disk: at 360KB the
 user swaps A: to reach anything else, and every shipped disk carries
-`SYSTEM\\APPDATA`. One boot of `diarestore360.img` on a VGA XT, then:
+`SYSTEM\\APPDATA`. One boot of `stikrestore360.img` on a VGA XT, then:
 
   A  the probe up and registered; then a COPY OF THE APPS DISK goes in A:
      and the probe is dragged.
-  B  the save is REFUSED as not home: the apps disk gains no DIAPROBE.DAT,
+  B  the save is REFUSED as not home: the apps disk gains no STIKPROB.DAT,
      the state stays owed, and it is not retried every poll - a W1 build
      re-walked the disk every 2 s for as long as it was out (61 reads in
      68 guest s); the backoff waits 1, 2, 4, 8, 16 polls, so 40 guest s of
      it is a handful of tries.
   C  the system disk goes back and the owed save lands THERE: its
-     DIAPROBE.DAT holds the dragged place and the state is clean, and both
+     STIKPROB.DAT holds the dragged place and the state is clean, and both
      floppies still pass os88disk.py --verify.
   D  the apps disk goes in again and the probe's close box is clicked: the
      remove cannot read CTRL.DRV, whose toast asks for the system disk, and
@@ -23,9 +23,9 @@ user swaps A: to reach anything else, and every shipped disk carries
      than closing with its row stranded in SYSTEM.CFG. The system disk back,
      the next close goes ahead and the row is gone.
 
-**BREAK IT ON PURPOSE**: take dia_enter's own-name FIND out of os88dia.inc
-and B fails (the apps disk gains SYSTEM/APPDATA/DIAPROBE.DAT); take the
-backoff out of dia_tick and B's read count fails; make dia_close ignore
+**BREAK IT ON PURPOSE**: take stik_enter's own-name FIND out of os88stik.inc
+and B fails (the apps disk gains SYSTEM/APPDATA/STIKPROB.DAT); take the
+backoff out of stik_tick and B's read count fails; make stik_close ignore
 the remove's CF and D fails (the probe closes, its row left behind).
 """
 import os
@@ -41,12 +41,12 @@ import os88ui      # noqa: E402
 import os88marty   # noqa: E402
 import os88geom as geom   # noqa: E402
 import os88flush   # noqa: E402
-import os88dia     # noqa: E402
+import os88stik    # noqa: E402
 
 ROOT = os.path.join(HERE, "..")
 BDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
-DIA_ST = 16 + 0 + 128 + 13 + 2 + 1      # tests/diaboot.py's layout
-DIA_S_ROW, DIA_S_DIRTY, DIA_S_RDONLY = 2, 16, 32
+STIK_ST = 16 + 0 + 128 + 13 + 2 + 1      # tests/stikboot.py's layout
+STIK_S_ROW, STIK_S_DIRTY, STIK_S_RDONLY = 2, 16, 32
 HZ = 4772727.0
 MAXREADS = 24       # 40 guest s: <= 6 tries at the backoff, ~2-3 reads each;
                     # a try every poll would be ~20 tries and 40+ reads
@@ -72,33 +72,33 @@ def snap(m, tmp, name):
 
 
 def main():
-    tmp = tempfile.mkdtemp(prefix="diaswap-")
-    sysimg = os.path.join(tmp, "diarestore360.img")
-    shutil.copy(os.path.join(BDIR, "diarestore360.img"), sysimg)
+    tmp = tempfile.mkdtemp(prefix="stikswap-")
+    sysimg = os.path.join(tmp, "stikrestore360.img")
+    shutil.copy(os.path.join(BDIR, "stikrestore360.img"), sysimg)
     apps = os.path.join(tmp, "apps360.img")
     shutil.copy(os.path.join(BDIR, "apps360.img"), apps)
-    b = open(os.path.join(BDIR, "diaprobe.bin"), "rb").read()
+    b = open(os.path.join(BDIR, "stikprob.bin"), "rb").read()
     image = struct.unpack_from("<H", b, 8)[0]
 
     with os88ui.boot(sysimg, machine="os8088_xt_vga") as ui:
         m = ui.m
         print("A: the probe is up and registered; the apps disk goes in A:")
-        w = ui.wait_window("DiaProbe", limit=60)
+        w = ui.wait_window("StikProbe", limit=60)
         wseg = struct.unpack_from("<H", m.read(
             ui._S("wm_wins") + w.i * geom.WIN_SIZE + geom.W_SEG, 2))[0]
 
         def st():
-            return m.readseg(wseg, image + DIA_ST, 1)[0]
+            return m.readseg(wseg, image + STIK_ST, 1)[0]
 
         def hdr():
             return struct.unpack("<HH", m.readseg(wseg, image + 4, 4))
-        ui._wait(lambda: st() & DIA_S_ROW, "the probe's registration", 90,
-                 snapshot=lambda: "dia_st = %#x" % st())
+        ui._wait(lambda: st() & STIK_S_ROW, "the probe's registration", 90,
+                 snapshot=lambda: "stik_st = %#x" % st())
         home = snap(m, tmp, "home.img")       # the system disk as it stands
         m.mount(0, apps)
         os88marty.pace(m, 3)
         ui.drag_window(w, 64, 40)
-        w = ui.window("DiaProbe")
+        w = ui.window("StikProbe")
         moved = (w.x, w.y)
         check(moved != (303, 184), "the frame moved (%d,%d)" % moved)
 
@@ -109,8 +109,8 @@ def main():
             os88marty.pace(m, 5)
         d = m.disk()
         check(hdr() == moved, "the poll took the new place %r" % (hdr(),))
-        check(st() & DIA_S_DIRTY and not st() & DIA_S_RDONLY,
-              "the save is still owed, and not given up (dia_st %#x)" % st())
+        check(st() & STIK_S_DIRTY and not st() & STIK_S_RDONLY,
+              "the save is still owed, and not given up (stik_st %#x)" % st())
         check(d.get("writes", 0) == 0, "no write reached the apps disk "
               "(%r)" % (d,))
         check(d.get("reads", 0) <= MAXREADS, "%d reads in 40 guest s: backed "
@@ -119,48 +119,48 @@ def main():
         out = snap(m, tmp, "apps_after.img")
         v = os88flush.Volume(open(out, "rb").read())
         names = [e.name for e in v.listdir("SYSTEM/APPDATA")]
-        check("DIAPROBE.DAT" not in names, "the apps disk's SYSTEM/APPDATA "
-              "has no DIAPROBE.DAT (%r)" % names)
+        check("STIKPROB.DAT" not in names, "the apps disk's SYSTEM/APPDATA "
+              "has no STIKPROB.DAT (%r)" % names)
 
         print("C: the system disk back - the owed save lands at home")
         m.mount(0, home)
-        ui._wait(lambda: not st() & DIA_S_DIRTY, "the owed save", 120,
-                 snapshot=lambda: "dia_st = %#x" % st())
+        ui._wait(lambda: not st() & STIK_S_DIRTY, "the owed save", 120,
+                 snapshot=lambda: "stik_st = %#x" % st())
         back = snap(m, tmp, "home_after.img")
         v = os88flush.Volume(open(back, "rb").read())
         try:
-            dat = os88dia.parse_dat(v.read("SYSTEM/APPDATA/DIAPROBE.DAT"),
+            dat = os88stik.parse_dat(v.read("SYSTEM/APPDATA/STIKPROB.DAT"),
                                     0, 1)
         except Exception as e:
             dat = {"pos": False, "x": None, "y": None, "err": str(e)}
         check(dat["pos"] and (dat["x"], dat["y"]) == moved,
-              "the system disk's DIAPROBE.DAT holds %r (%r)" % (moved, dat))
+              "the system disk's STIKPROB.DAT holds %r (%r)" % (moved, dat))
 
         print("D: closed with the apps disk in A: - declined ONCE")
         m.mount(0, apps)
         os88marty.pace(m, 3)
-        w = ui.window("DiaProbe")
+        w = ui.window("StikProbe")
         ui.raise_window(w)
-        w = ui.window("DiaProbe")
+        w = ui.window("StikProbe")
         ui.mo.click(*geom.close_xy(w.x, w.y), settle=0)
         txt = ui.wait_toast(says="Sys Disk", limit=60)
         check("Needs Sys Disk" in txt, "CTRL.DRV's toast asks for the "
               "system disk (%r)" % txt)
         os88marty.guest_sleep(m, 3.0)
-        check(any(o.title == "DiaProbe" for o in ui.windows()),
+        check(any(o.title == "StikProbe" for o in ui.windows()),
               "the close was DECLINED: the probe is still up, so the row "
               "still on the system disk is not stranded")
         m.mount(0, back)                # the system disk as C left it
         os88marty.pace(m, 3)
-        ui.close(ui.window("DiaProbe"))
+        ui.close(ui.window("StikProbe"))
         fin = snap(m, tmp, "home_fin.img")
         cfg = os88flush.Volume(open(fin, "rb").read())
         try:
-            rows = os88dia.dia_rows(cfg.read("SYSTEM.CFG"))
+            rows = os88stik.stik_rows(cfg.read("SYSTEM.CFG"))
         except Exception:
             rows = []
         check(not rows, "with the system disk back the next close goes "
-              "ahead and takes the row away (%d DIA rows left)" % len(rows))
+              "ahead and takes the row away (%d Sticky App rows left)" % len(rows))
     for f in (out, back, fin):
         r = subprocess.run([sys.executable, os.path.join(ROOT, "tools",
                                                          "os88disk.py"),
@@ -170,7 +170,7 @@ def main():
                  ": " + (r.stdout + r.stderr).strip()[-200:]))
 
     shutil.rmtree(tmp, ignore_errors=True)
-    print("diaswap: %s" % ("PASS" if not fails else
+    print("stikswap: %s" % ("PASS" if not fails else
                            "FAIL (%d): %s" % (len(fails), "; ".join(fails))))
     return 1 if fails else 0
 

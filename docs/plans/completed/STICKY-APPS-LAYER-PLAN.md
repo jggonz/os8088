@@ -1,12 +1,12 @@
-> **Status: landed** (DIA v2, PR #251). The design record for SPEC.md 110 v2 -
+> **Status: landed** (Sticky App v2, PR #251). The design record for SPEC.md 110 v2 -
 > the desk layer, the widget treatment and the Desk Calendar as the owner's
 > second mockup. SPEC.md 110 cites its section 7 as "the v2 design's open
 > decision N"; the owner had answered none of them when it was built, so
 > every default below is what shipped, and SPEC.md 110.9 records each place
-> the code proved this wrong. (The DIA section was numbered 107 when this was
+> the code proved this wrong. (The Sticky App section was numbered 107 when this was
 > written; its citations here are renumbered to 110.)
 
-# DIA v2: the desk layer, the widget treatment, and the Desk Calendar as mockup2
+# Sticky App v2: the desk layer, the widget treatment, and the Desk Calendar as mockup2
 
 Judge and synthesis. Read-only against `/Users/jggonz/Repos/os8088-dia` at
 8311137f (feature/dia, PR #251). I re-checked every claim below that the
@@ -16,8 +16,8 @@ design depends on. I ran `tools/kernsize.py` on kern_big (it printed
 | kernel | image rung left | cold rung left | low rung left | source |
 |---|---:|---:|---:|---|
 | kern_big | **183** | 351 | 34 | measured here |
-| kern_emu | 430 | **227** | 34 | map-dia, same tree |
-| kern_small | 315 | **65** | 204 | map-dia; SPEC §110.6 |
+| kern_emu | 430 | **227** | 34 | map-stik, same tree |
+| kern_small | 315 | **65** | 204 | map-stik; SPEC §110.6 |
 
 The binding limits are **kern_big's image rung (183 B, for .text plus .bss)**
 and **kern_emu's cold rung (227 B)**.
@@ -107,7 +107,7 @@ Five ideas are grafted in from the other two designs:
   instance.inc:1727. Some must widen and some must stay FULL-only. A ratchet
   that classifies each one is the only safe way to do this.
 - **include-chrome: the poll cost is real and permanent.** "0.25-0.7% per
-  widget forever" is honest, and it multiplies the DIA's timer fires by 9.
+  widget forever" is honest, and it multiplies the Sticky App's timer fires by 9.
   That is the wrong standing cost on a 4.77 MHz target when a 13-byte
   resident edge gives zero idle cost.
 - **map-zorder: CF cannot survive `ui_bill` cheaply.** It says "W_ONCLICK
@@ -236,12 +236,12 @@ the owner (CLAUDE.md: a rung is not a build fix).
   - A press that does not move repaints nothing (ui_drag's rule).
   - `ui_tdbl`'s zoom and `.tb_raise` are never reached.
 - **Close.** A press on the revealed × arms it in the package, which lights
-  it with one BLIT1. A release over it runs `dia_quit`:
-  1. `dia_close` (os88dia.inc:613): `DIA_ONCLOSE`, remove the row by name,
+  it with one BLIT1. A release over it runs `stik_quit`:
+  1. `stik_close` (os88stik.inc:613): `STIK_ONCLOSE`, remove the row by name,
      save.
   2. On CF=0, `OSAPI_WM_CLOSE` (0x0368), then return without drawing.
 
-  Sliding off cancels (the §13.5 gesture), and diaswap's declined-once case
+  Sliding off cancels (the §13.5 gesture), and stikswap's declined-once case
   is unchanged. **0 kernel bytes.** While the widget owns the bar, the
   app-name cell's Close (§12.7) is the keyboard route through the same
   negotiator.
@@ -267,13 +267,13 @@ the owner (CLAUDE.md: a rung is not a build fix).
   widget under a WF_FULL window is not drawn and the full window wins
   `wm_hit`. An fsx bracket freezes UI passes.
 - **Minimize.** A widget has no tile, so a minimized widget could not come
-  back. It is a written rule that a DIA never calls `OSAPI_WM_MINIMIZE` or
-  `OSAPI_FULLSCREEN` on its widget, and os88dia never does (open decision
+  back. It is a written rule that a Sticky App never calls `OSAPI_WM_MINIMIZE` or
+  `OSAPI_FULLSCREEN` on its widget, and os88stik never does (open decision
   12).
 
-### 2.3 The widget treatment: package-owned, shared as source in `apps/os88dia.inc`
+### 2.3 The widget treatment: package-owned, shared as source in `apps/os88stik.inc`
 
-It is opt-in by `%define DIA_WIDGET`, so `deskcal` stays v1 until W4.
+It is opt-in by `%define STIK_WIDGET`, so `deskcal` stays v1 until W4.
 
 **Geometry:**
 - The FACE is the column of cards plus the tag row, 22 cells (176 px) wide.
@@ -317,56 +317,56 @@ glyph, so ~3-4 ms to compose, plus ~4.4 ms to blit on VGA (scaled from
 PERFORMANCE.md:8008's 12.6 ms for 128x128) and less on 1bpp.
 
 **Include API:**
-- **`DIA_TAG`.** `'Desk Calendar'`, which equals W_TITLE. `DIA_CAP` stays
+- **`STIK_TAG`.** `'Desk Calendar'`, which equals W_TITLE. `STIK_CAP` stays
   the downgraded row's caption.
-- **`DIA_LAYOUTS`.** Per layout: the card count, the card heights, the gaps
+- **`STIK_LAYOUTS`.** Per layout: the card count, the card heights, the gaps
   and the tag height. Each table carries a `%error` sum check against its
   band.
-- **`DIA_PAINTCARD`.** AL = card, BX..DX = the damaged rows in card-local
+- **`STIK_PAINTCARD`.** AL = card, BX..DX = the damaged rows in card-local
   coordinates. The package recomposes and blits only the slabs that
   intersect.
-- **`DIA_ONCARD` / `DIA_ONCARDUP`.** Card-relative press and release.
-- **`DIA_ONFOCUS`.** AL = 1 when the widget gained the bar, 0 when it lost
+- **`STIK_ONCARD` / `STIK_ONCARDUP`.** Card-relative press and release.
+- **`STIK_ONFOCUS`.** AL = 1 when the widget gained the bar, 0 when it lost
   it. The calendar uses 0 to close an open entry line, as Esc does.
-- **`dia_paint` (W_PAINT).** Calls `OSAPI_WM_DAMAGE`; fills the ground
+- **`stik_paint` (W_PAINT).** Calls `OSAPI_WM_DAMAGE`; fills the ground
   pieces that intersect; draws the plate, inverse plate or handle by state;
-  calls `DIA_PAINTCARD` for each card that intersects; and ends with
-  `dia_painted`.
-- **`dia_click` prefilter.**
+  calls `STIK_PAINTCARD` for each card that intersects; and ends with
+  `stik_painted`.
+- **`stik_click` prefilter.**
 
   | press on | result |
   |---|---|
   | tag row, outside a revealed × | DRAG |
   | gap or left column | DRAG |
   | revealed × | arm the × |
-  | a card | `DIA_ONCARD` |
+  | a card | `STIK_ONCARD` |
 
-- **`dia_mup`.** The × release goes to `dia_quit`; otherwise
-  `DIA_ONCARDUP`.
-- **`dia_wake` (W_ONWAKE, free on kern_big).** Level-triggered. It reads
-  WF_HOVER and `OSAPI_MENU_OWNER` and reconciles the `dia_hv` state (HIDDEN,
+- **`stik_mup`.** The × release goes to `stik_quit`; otherwise
+  `STIK_ONCARDUP`.
+- **`stik_wake` (W_ONWAKE, free on kern_big).** Level-triggered. It reads
+  WF_HOVER and `OSAPI_MENU_OWNER` and reconciles the `stik_hv` state (HIDDEN,
   DWELL, SHOWN, LINGER, plus a FOCUS bit), arming `OSAPI_WM_TIMER` for the
   next deadline.
-- **`dia_tick`.** Multiplexes the dwell, linger and focus checks with the
-  36-tick `dia_beat`. A beat that comes early is harmless, because
-  `dia_beat` is a poll.
-- **`dia_load` / `dia_made`.** Unchanged in shape, plus QUERY, MAKE,
-  `OSAPI_WM_ONWAKE dia_wake` and `ONCLICK`/`ONMOUSEUP` set to the
+- **`stik_tick`.** Multiplexes the dwell, linger and focus checks with the
+  36-tick `stik_beat`. A beat that comes early is harmless, because
+  `stik_beat` is a poll.
+- **`stik_load` / `stik_made`.** Unchanged in shape, plus QUERY, MAKE,
+  `OSAPI_WM_ONWAKE stik_wake` and `ONCLICK`/`ONMOUSEUP` set to the
   prefilters.
 - **Titled fallback.** No tag and no hover. Gaps are white with a centred
   1 px `gfx_hline` (so each gap is still one fill plus one line, never
   ground then rule). SAVEU ON\|1BPP, as v1.
 
 **Positions:**
-- The header +4/+6 now hold the **face origin**, flagged by `DIA_HF_CONT` =
-  header +3 bit 1 (bit 0 is `DIA_HF_POS`).
+- The header +4/+6 now hold the **face origin**, flagged by `STIK_HF_CONT` =
+  header +3 bit 1 (bit 0 is `STIK_HF_POS`).
   - Desk: face = (W_X+1, W_Y).
   - Titled: face = (W_X+1, W_Y+TITLE_H).
 - A v1 file (bit 1 clear) holds a titled frame (x, y), so face =
   (x+1, y+18).
-- `DIA_HDR_VER` stays 1, so no file reads as damaged.
-- `dia_anchor` measures with the face size. The give-back over the dock
-  (os88dia.inc:356-381) uses the shown height.
+- `STIK_HDR_VER` stays 1, so no file reads as damaged.
+- `stik_anchor` measures with the face size. The give-back over the dock
+  (os88stik.inc:356-381) uses the shown height.
 - D rows carry no geometry (§110.2): **no migration**.
 
 ### 2.4 Auto-hide: what appears, when, and what it costs
@@ -387,9 +387,9 @@ HOVER  #[x]#### Desk Calendar ##|||#  a full face-width black bar: a white
 
 **When:**
 - **Reveal** after the pointer has been over any visible part of the frame
-  (cards, gaps, tag) for `DIA_HOVER_T` = 5 ticks (275 ms, the dock's
+  (cards, gaps, tag) for `STIK_HOVER_T` = 5 ticks (275 ms, the dock's
   `DOCK_HOVER_T`, dock.inc:85).
-- **Hide** `DIA_LEAVE_T` = 14 ticks (770 ms, `DOCK_LEAVE_T`) after the
+- **Hide** `STIK_LEAVE_T` = 14 ticks (770 ms, `DOCK_LEAVE_T`) after the
   pointer leaves. Crossing a gap is not a leave.
 - **A press anywhere on the widget reveals at once.**
 - **Never revealed:**
@@ -401,7 +401,7 @@ HOVER  #[x]#### Desk Calendar ##|||#  a full face-width black bar: a white
   - under a saver;
   - during a menu drop or another window's drag, because no passes run then.
     One correct edge arrives afterwards.
-- **Focus.** While the widget owns the bar, `dia_tick` runs at 4 ticks and
+- **Focus.** While the widget owns the bar, `stik_tick` runs at 4 ticks and
   checks `OSAPI_MENU_OWNER` (an inline cell). Focus loss is therefore seen
   within 220 ms, and the plate un-inverts. When the widget does not own the
   bar there is no focus poll at all.
@@ -559,7 +559,7 @@ the target with one `OSAPI_GFX_XOR_FILL`, and a release inside it acts):
   Done, the reminder leads, Go to Today and About. "Show Tasks/Day"
   survives on CGA only.
 
-**Data** (no version bump: `DIA_HDR_VER` = `DCP_VER` = 1):
+**Data** (no version bump: `STIK_HDR_VER` = `DCP_VER` = 1):
 - **Monday-first is display only.** `dc_build`'s offset (dcdate.inc:101)
   becomes `(dow+6)%7`.
 - **New appointment flags.** `DCA_SNOOZED` = 4 and `DCA_DUE` = 8 join
@@ -572,7 +572,7 @@ the target with one `OSAPI_GFX_XOR_FILL`, and a release inside it acts):
   dcrem.inc:191-196).
 - **An old file** has bits 2 and 3 clear, so nothing is due and nothing is
   snoozed, and an old FIRED reminder reads as already dismissed.
-- **`tools/os88dia.py`** learns the bits and the slot.
+- **`tools/os88stik.py`** learns the bits and the slot.
 
 **Dropped:**
 - `dc_head`'s inverse strip;
@@ -586,16 +586,16 @@ the target with one `OSAPI_GFX_XOR_FILL`, and a release inside it acts):
 **Size.** The image goes from 13,168 B to about 14.0-14.5 KB, and bss grows
 by ~0.8 KB (the slab and bitmaps). lz4 goes from 11,211 to ~12 KB: at most 1
 more cluster on the 360 KB system disk (§110.6 quotes 321-326 of 354). The
-include grows by ~+500 B of image per DIA, under `DIA_WIDGET`.
+include grows by ~+500 B of image per Sticky App, under `STIK_WIDGET`.
 
 ### 2.7 kern_small
 
 kern_small gets the two cells and nothing else (12 B .text, 0 .cold).
-- QUERY refuses, so `dia_load` sizes a titled frame.
+- QUERY refuses, so `stik_load` sizes a titled frame.
 - The widget is v1's window with v2's face: title bar, shadow, a dock tile,
   raised on click, and the kernel's close box and title-bar drag.
 - Gaps are white with a 1 px rule, and there is no tag.
-- The worker arm (os88dia.inc:444-459) still beats, and a reminder rings
+- The worker arm (os88stik.inc:444-459) still beats, and a reminder rings
   card 3 or the slot with a single note.
 - BLIT1 needs x on the byte grid on small. Face x = W_X+1 is aligned, and
   the slab composes glyphs at any x itself.
@@ -615,7 +615,7 @@ kern_small gets the two cells and nothing else (12 B .text, 0 .cold).
   - 11.103.5 the chromeless sites and the `t_chromesites` ratchet;
   - 11.103.6 the posted drag, and no drag cache;
   - 11.103.7 the hover edge (WF_HOVER, `cur_hovw`, the refusals);
-  - 11.103.8 what a DIA must not call (MINIMIZE, FULLSCREEN), and that a
+  - 11.103.8 what a Sticky App must not call (MINIMIZE, FULLSCREEN), and that a
     future window cycler skips WF_DESK.
 - **§7.2.1** gets one paragraph: the hover edge in `cur_shape_pass`.
 - **§12.6** gets an amendment: keys follow a desk window that owns the bar.
@@ -629,7 +629,7 @@ kern_small gets the two cells and nothing else (12 B .text, 0 .cold).
   `OSAPI_GFX_DESK`.
 - **§30**: no tile for IF_DESK, and the top-down slot. **§30.6**: the
   widget's hover reuses the strip's constants by name.
-- **§110.1**: strike "a DIA is a normal window".
+- **§110.1**: strike "a Sticky App is a normal window".
 - **§110.3**: rewrite to cards and controls, per adapter.
 - **§110.5**: header +3 bit 1 and the include's new routines.
   **§110.5.2**: the give-back measured with the face.
@@ -650,7 +650,7 @@ kern_small gets the two cells and nothing else (12 B .text, 0 .cold).
 - **No `PKG_FMT` bump** (cells added at the end and a reserved bit given a
   meaning, §20.2.0.1), and no `DRV_VER` bump.
 - `tools/os88pkg.py:173`'s mask goes from 0xD8 to 0x98.
-- DIAs stay off the Wire (§110.8, already true because of 0x0467).
+- Sticky Apps stay off the Wire (§110.8, already true because of 0x0467).
 
 ---
 
@@ -668,7 +668,7 @@ small. No code.
   `OSAPI_GFX_DESK`; the header bit with top-down allocation; dock and
   DOCK.DRV.
 - `tests/unit/t_chromesites.py` (fast tier).
-- `tests/diaprobe` opts in and paints two white cards plus gaps through
+- `tests/stikprob` opts in and paints two white cards plus gaps through
   `OSAPI_GFX_DESK`. `deskcal` is untouched and stays a v1 titled window.
 - Rows: `deskz`, `deskdock`, `deskkeys`, `desksmall`.
 - Gates: kernsize on all three kernels (**stop for the owner on any rung
@@ -684,10 +684,10 @@ small. No code.
 
 **W3 — the treatment:**
 - `apps/os88gfx.inc` gets `GFXE_TEXT`/`GFXE_BITS`.
-- `apps/os88dia.inc` gets `DIA_WIDGET`: `dia_paint`, the prefilters,
-  `dia_wake`/`dia_tick`, `dia_quit`, focus, the face-origin header with v1
+- `apps/os88stik.inc` gets `STIK_WIDGET`: `stik_paint`, the prefilters,
+  `stik_wake`/`stik_tick`, `stik_quit`, focus, the face-origin header with v1
   conversion, and the titled fallback.
-- `tools/os88dia.py` and `t_dia` follow.
+- `tools/os88stik.py` and `t_stik` follow.
 - The probe moves onto the include.
 - Rows: `deskground` (Bright, Dark and Color gap parity), `deskfit` (EGA
   takes MID).
@@ -703,7 +703,7 @@ small. No code.
 - the alert-on-fire removed;
 - the menus kept.
 
-Every existing `dia*`/`deskcal*` row is updated (§5), and `deskcalcards`,
+Every existing `stik*`/`deskcal*` row is updated (§5), and `deskcalcards`,
 `deskcalsnooze` and `deskmodal` are added.
 
 **W5 — look, measure, publish:**
@@ -713,7 +713,7 @@ Every existing `dia*`/`deskcal*` row is updated (§5), and `deskcalcards`,
 - `deskcalperf` on the MartyPC 5150 (VGA, CGA, Hercules): paint, reveal,
   hide, select, toggle, reminder and drop. Fill in PERFORMANCE.md Part 5.
 - Run `kernsize --bless`.
-- Retake all 12 `docs/dia/` images plus the hover set: `vga-rest`,
+- Retake all 12 `docs/stikapps/` images plus the hover set: `vga-rest`,
   `vga-hover`, `vga-focus` (bar = Desk Calendar, Disk window striped),
   `vga-reminder`, `vga-dark`, `vga-color`, `vga-covered` (an app window over
   half the tag, with the handle clipped), `cga-rest`/`cga-hover`/`cga-page1..3`,
@@ -723,7 +723,7 @@ Every existing `dia*`/`deskcal*` row is updated (§5), and `deskcalcards`,
   (`shot.py --crop ... --zoom 4`). The rest crop must equal the computed
   desktop ground outside the plate.
 - Update `prshots.py`, README.md and readme.txt.
-- Run test-full alone, then soak `dia*` and `deskcal*` with
+- Run test-full alone, then soak `stik*` and `deskcal*` with
   `--marty-jobs 1`, then the functional-check skill on the glass.
 - Update PR #251's body and screenshots.
 
@@ -735,7 +735,7 @@ Every assertion is one of:
 - a symbol read through `os88sym`: `wm_zord`, `wm_zn`, `menu_win`,
   `cur_hovw`, `ui_dragq`, `wm_dc_win`, and each record's W_FLAGS and
   I_FLAGS;
-- a package bss read through I_SPTR: `dia_hv`, `dc_sel`, `dc_month`;
+- a package bss read through I_SPTR: `stik_hv`, `dc_sel`, `dc_month`;
 - a breakpoint count;
 - framebuffer pixels;
 - a host read of SYSTEM.CFG or DESKCAL.DAT.
@@ -747,9 +747,9 @@ double-click is driven from a single process.
 - `t_chromesites` (new): every `WF_FULL` reference is registered FULL-ONLY
   or CHROMELESS with a reason; the CHROMELESS sites assemble as word tests
   of 0x0408; an unregistered site fails `make`.
-- `t_dia`: `OS88_F_DESK` set in deskcal's header, `DIA_HF_CONT`,
+- `t_stik`: `OS88_F_DESK` set in deskcal's header, `STIK_HF_CONT`,
   `DCA_SNOOZED`/`DCA_DUE`, and payload +4/+6 round-tripped through
-  `os88dia.py`.
+  `os88stik.py`.
 - `t_api_abi`: the two cells. `t_mirror`: WF_DESK, WF_HOVER and IF_DESK.
 - abilock; the os88index check; `os88pkg` bit 6.
 - `t_appsmall` and buildmatrix: kern_small byte-identical except the table
@@ -778,7 +778,7 @@ double-click is driven from a single process.
   there (vram); a click at that strip position fronts nothing; the first app
   is drawn at tile 0.
 - **`deskhover`** (VGA, plus `--leg cga|herc`):
-  - pointer on a gap: WF_HOVER set within one pass, `dia_hv` SHOWN by 5+2
+  - pointer on a gap: WF_HOVER set within one pass, `stik_hv` SHOWN by 5+2
     ticks, the handle crop equals the golden;
   - pointer away: hidden by 14+2 ticks;
   - never revealed when the pointer is over a covering window, with a
@@ -792,20 +792,20 @@ double-click is driven from a single process.
   - W_PAINT ran once;
   - every gap pixel equals the independently computed `(x+y)&1` ground at
     its screen coordinate (Bright);
-  - DESKCAL.DAT carries `DIA_HF_CONT` and the face origin;
+  - DESKCAL.DAT carries `STIK_HF_CONT` and the face origin;
   - a drag out from under a Disk window leaves no ghost (crop compare);
   - a press without movement repaints 0 calls;
   - `ui_dragq` is 0 afterwards;
   - a DRAG posted from a timer does not turn the next press into a drag.
 - **`deskclose`.** Press the ×, slide off, release: still open. Press and
   release on the ×: the instance is gone and the D row removed (mtools). A
-  press on the × cell while it is not revealed drags. diaswap's no-disk
+  press on the × cell while it is not revealed drags. stikswap's no-disk
   decline is unchanged.
 - **`deskground`.** Under Bright, Dark and Color, gap pixels equal desktop
   pixels just outside the frame. Cover and uncover under Color restores
   teal.
 - **`deskfit`.** `VIDEO=ega` picks MID, and the frame fits the 306-row band.
-- **`desksmall`** (extends `diasmall`, MartyPC 128 KB 5150 CGA): QUERY
+- **`desksmall`** (extends `stiksmall`, MartyPC 128 KB 5150 CGA): QUERY
   refused, a titled frame of 178 x 151, a dock tile, the v2 face, the
   title-bar drag saved as the face origin, and a reminder on the slot with
   no alert.
@@ -819,18 +819,18 @@ double-click is driven from a single process.
   alert is the top of `wm_zord` and owns the bar, the widget stays at [0],
   and answering it gives the bar to `wm_top`.
 
-**Existing rows that change** (tests/suite.py:8838-9014, and the fast `dia`
+**Existing rows that change** (tests/suite.py:8838-9014, and the fast `stik`
 row :382):
-- **`diaboot`.** Relaunched at `wm_zord[0]` with no tile, at INST_MAX-1.
-- **`diaswap`, `diaregister`.** Close through `ui.widget_close` instead of
+- **`stikboot`.** Relaunched at `wm_zord[0]` with no tile, at INST_MAX-1.
+- **`stikswap`, `stikregister`.** Close through `ui.widget_close` instead of
   `ui.close`/`geom.close_xy` (os88geom.py:813). The face-origin header.
-- **`diamove` (and its CGA and anchor legs).**
+- **`stikmove` (and its CGA and anchor legs).**
   - drag through `ui.widget_drag` instead of `ui.drag_window`
     (os88ui.py:671);
   - positions become face origins;
   - the KEEPH arithmetic uses 355/242/146;
   - the anchor fixture is v1-format, which exercises the conversion.
-- **`diasmall`.** Becomes the `desksmall` above.
+- **`stiksmall`.** Becomes the `desksmall` above.
 - **`deskcal1bpp`.** The 177x146 and 177x242 frames, the today box, the dot,
   the tick, the 1 px selection outline, the gaps as ground. The greyed-menu
   leg stays, but on the focused bar.
@@ -860,11 +860,11 @@ row :382):
   | idle across three beats and a minute boundary | 0 |
 
   About is still picked from the menu.
-- **No change:** `diahiber`, `diamiss` and `diashort` read only titles, and
+- **No change:** `stikhiber`, `stikmiss` and `stikshort` read only titles, and
   W_TITLE is still the tag.
 - **`tools/os88ui.py`** gains `widget_hover(win, on)`,
   `widget_drag(win, dx, dy)` (press at the tag row's centre),
-  `widget_close(win)` (hover, wait for `dia_hv` SHOWN, press and release the
+  `widget_close(win)` (hover, wait for `stik_hv` SHOWN, press and release the
   × at face x+7, tag row +6) and `widget_activate(win)` (a press on a card
   margin).
 - **`tools/prshots.py`**: new constants.
@@ -877,11 +877,11 @@ row :382):
    measures before anything else lands; the cut list is in §2.1, and the
    owner decides.
 2. **kern_emu's cold rung.** About 164 against 227. The verbs are the bulk;
-   moving MAKE's z-shift into the `dia_made` package side is impossible (the
+   moving MAKE's z-shift into the `stik_made` package side is impossible (the
    kernel owns `wm_zord`), so if it is short, merge RELEASE into the
    key-target stub's tail.
 3. **Bottom-always repaints.** Any window moved off a widget repaints the
-   uncovered part through `DIA_PAINTCARD`, with no cache. The slab design
+   uncovered part through `STIK_PAINTCARD`, with no cache. The slab design
    makes that ≤ a few BLIT1s, and `deskcalperf` measures an app window
    dragged across it.
 4. **Showing a widget under open windows** (a hand launch) redraws the

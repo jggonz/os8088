@@ -9,7 +9,7 @@ today Mon 24 August 2026, 09:00 Team sync and 14:30 Dentist on it, dots on
 the 6th and the 14th, `Read mail` done and `Fix mouse driver` not, and
 `Back up files` (the 23rd, 21:00) DUE - on MartyPC's VGA XT (TALL), its
 5150 with a CGA (COMPACT) and with a Hercules card (MID). Every coordinate
-is the layout's, out of tools/os88dia.py's DESKCAL_GEO (t_dia holds it to
+is the layout's, out of tools/os88stik.py's DESKCAL_GEO (t_stik holds it to
 the package's own dc_geos); every pixel is read off the framebuffer.
 
   A  the frame is 178 wide and the face's height for the layout (355 / 242 /
@@ -46,10 +46,10 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 import os88ui      # noqa: E402
 import os88marty   # noqa: E402
-import os88dia     # noqa: E402
+import os88stik    # noqa: E402
 from deskcaledit import Cal, disk_with     # noqa: E402
 
-B = os88dia
+B = os88stik
 T = (2026, 8, 24)
 MACHINES = {"vga": ("os8088_xt_vga", 0), "cga": ("os8088_5150_cga_gla", 2),
             "herc": ("os8088_5150_herc_gla", 1)}
@@ -132,9 +132,9 @@ def run(leg):
             m = ui.m
             m.write(ui._S("clk_sec"), bytes([0, 58, 20]))
             c = Cal(ui, tmp, check=check, today=T)
-            check(c.li() == li, "%s takes layout %d (dia_li %d)"
+            check(c.li() == li, "%s takes layout %d (stik_li %d)"
                   % (leg, li, c.li()))
-            g, G = c.g(), os88dia.DESKCAL_GEO[li]
+            g, G = c.g(), os88stik.DESKCAL_GEO[li]
             os88marty.guest_sleep(m, 2.0)
             park(ui)
             gl = Glass(m)
@@ -177,9 +177,9 @@ def run(leg):
 
             def box(day):
                 f, r = field(day)
-                return os88dia.deskcal_box(G, f)[0], r - G["BOXT"], r
+                return os88stik.deskcal_box(G, f)[0], r - G["BOXT"], r
 
-            bw = os88dia.deskcal_box(G, 0)[1]
+            bw = os88stik.deskcal_box(G, 0)[1]
 
             print("C: today, inverse")
             x0, y0, r = box(24)
@@ -195,14 +195,14 @@ def run(leg):
 
             print("D: the dot of the 6th")
             f6, r = field(6)
-            ddx, ddy, ddw, ddh = os88dia.deskcal_dot(G, f6, 6)
+            ddx, ddy, ddw, ddh = os88stik.deskcal_dot(G, f6, 6)
             dy = r + ddy
             dot = [(ddx + i, dy + j) for i in range(ddw) for j in range(ddh)]
             check(all(gl.ink(*p) for p in dot), "its %d x %d dot is ink at "
                   "x + %d, row + %d" % (ddw, ddh, ddx - f6, ddy))
             check(not any(gl.ink(ddx + i, dy + ddh) for i in range(ddw)),
                   "...and the row under it is paper")
-            if G["DOTY"] & os88dia.DESKCAL_DOTBY:
+            if G["DOTY"] & os88stik.DESKCAL_DOTBY:
                 check(not any(gl.ink(f6 + i, r + 8) for i in range(24)),
                       "...and so is the row under the 6th's number: no mark "
                       "reaches the next week (COMPACT)")

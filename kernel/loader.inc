@@ -1287,7 +1287,7 @@ ld_start:
     test byte [bx+W_FLAGS+1], WF_DESK >> 8
     jz .ndesk                   ; the window it RETURNS is a widget: the
     or byte [di+I_FLAGS], IF_DESK   ; instance is tile-less (SPEC.md 11.103.9).
-.ndesk:                         ; Here and not in MAKE, so a DIA returning an
+.ndesk:                         ; Here and not in MAKE, so a Sticky App returning an
 %endif                          ; ordinary window keeps the tile it needs
     mov bp, inst_bind_win
     call ct_cw_mem_disp         ; DI = record, BX = window (from the entry)

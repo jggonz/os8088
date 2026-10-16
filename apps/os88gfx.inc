@@ -472,7 +472,7 @@ gfxe_line:
 ;   GFXE_X2 / GFXE_X3   the glyph at twice or three times its size
 ;
 ; THE OPPOSITE POLARITY THE PLOT KEEPS OUT IS HERE, and it is tested: the
-; DIA widget's focused plate and its handle are white text on black, and
+; Sticky App widget's focused plate and its handle are white text on black, and
 ; tests/desklayer.py's deskground leg compares them pixel for pixel with the
 ; guest's own font. Only these two capabilities carry it.
 ;

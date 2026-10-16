@@ -11,7 +11,7 @@ the 20th, on MartyPC's 5150 - with a CGA (os8088_5150_cga, its GLaBIOS twin)
 and with a Hercules card (os8088_5150_herc_gla). Both framebuffers are one
 bit a pixel and the harness reads them whole (`vram`), so every assertion is
 about PIXELS: bit 1 is ground, bit 0 is ink. The clock is Wed 14 Oct 2026.
-Coordinates are the layout's (tools/os88dia.py's DESKCAL_GEO).
+Coordinates are the layout's (tools/os88stik.py's DESKCAL_GEO).
 
   A  the frame is the layout's by the screen's HEIGHT: COMPACT 178 x 146 on
      the CGA's 640x200, MID 178 x 242 on the Hercules' 720x348 (v2; v1's
@@ -46,7 +46,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 import os88ui      # noqa: E402
 import os88marty   # noqa: E402
-import os88dia     # noqa: E402
+import os88stik    # noqa: E402
 from deskcaledit import Cal, TITLE, disk_with   # noqa: E402
 
 TODAY = (2026, 10, 14)
@@ -78,7 +78,7 @@ def shot(m, kind, path):
 
 def leg(tmp, machine, kind, shots):
     print("== %s (%s)" % (kind, machine))
-    fx = os88dia.dat(os88dia.deskcal([((2026, 10, 20), 600, "Review")],
+    fx = os88stik.dat(os88stik.deskcal([((2026, 10, 20), 600, "Review")],
                                      lead=0))
     img = disk_with(tmp, "1bpp-%s.img" % kind, fx)
     with os88ui.boot(img, machine=machine) as ui:
@@ -86,9 +86,9 @@ def leg(tmp, machine, kind, shots):
         c = Cal(ui, tmp, check=check)
         w = ui.window(TITLE)
         os88marty.pace(m, 2.0)
-        G = os88dia.DESKCAL_GEO[c.li()]
+        G = os88stik.DESKCAL_GEO[c.li()]
         fx0, fy0 = c.face()
-        grid = list(c.bss(os88dia.DESKCAL_BSS_GRID, 42))
+        grid = list(c.bss(os88stik.DESKCAL_BSS_GRID, 42))
 
         def field(day):
             i = grid.index(day)
@@ -96,14 +96,14 @@ def leg(tmp, machine, kind, shots):
 
         def box(day):
             fx, r = field(day)
-            return os88dia.deskcal_box(G, fx)[0], r - G["BOXT"], r
+            return os88stik.deskcal_box(G, fx)[0], r - G["BOXT"], r
 
         def dot(day):
             fx, r = field(day)
-            x, dy, dw, dh = os88dia.deskcal_dot(G, fx, day)
+            x, dy, dw, dh = os88stik.deskcal_dot(G, fx, day)
             return x, r + dy, dw, dh
 
-        bw = os88dia.deskcal_box(G, 0)[1]
+        bw = os88stik.deskcal_box(G, 0)[1]
 
         print("A: the layout by the screen's height")
         want = (178, 242) if kind == "herc" else (178, 146)
@@ -134,7 +134,7 @@ def leg(tmp, machine, kind, shots):
         print("C: the selected day's outline")
         c.front()
         c.press(c.day_xy(20))
-        check(c.bss(os88dia.DESKCAL_BSS_SEL)[0] == 20,
+        check(c.bss(os88stik.DESKCAL_BSS_SEL)[0] == 20,
               "%s: the 20th is selected" % kind)
         rows = frame()
         sx, sy, sr = box(20)
@@ -163,7 +163,7 @@ def leg(tmp, machine, kind, shots):
         dx, dy, dw, dh = dot(13)
         check(ink(rows, dx, dy, dw, dh) == 0,
               "%s: the 13th has none" % kind)
-        if G["DOTY"] & os88dia.DESKCAL_DOTBY:
+        if G["DOTY"] & os88stik.DESKCAL_DOTBY:
             # COMPACT: the dot BESIDE the number touches nothing - its
             # ring of pixels is paper, and the row under every week
             # (r + 8) is paper too, so no mark reaches the next week

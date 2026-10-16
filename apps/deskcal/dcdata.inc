@@ -5,11 +5,11 @@
 ; load, an appointment inserted IN ORDER, a record taken out by closing the
 ; gap, the done tasks cleared out, and the one-line entry's time parser.
 ; Nothing here draws and nothing here touches a file - an edit says
-; dia_touch and os88dia.inc's next tick writes the whole file.
+; stik_touch and os88stik.inc's next tick writes the whole file.
 ;
 ; THE ORDER is (date, time + 1), each a word compare: the date is FAT-packed
 ; so it orders as a word, and time + 1 makes ALL DAY (0FFFFh) wrap to 0, so an
-; all-day appointment comes first in its day. tools/os88dia.py writes the same
+; all-day appointment comes first in its day. tools/os88stik.py writes the same
 ; order, and dc_check refuses a payload that is not in it.
 ; =============================================================================
 
@@ -24,13 +24,13 @@ dc_check:
     push cx
     push dx
     push si
-    cmp byte [DIA_PAY + DCP_NAPPT], DCP_MAXAPPT
+    cmp byte [STIK_PAY + DCP_NAPPT], DCP_MAXAPPT
     ja .bad
-    cmp byte [DIA_PAY + DCP_NTASK], DCP_MAXTASK
+    cmp byte [STIK_PAY + DCP_NTASK], DCP_MAXTASK
     ja .bad
-    mov cl, [DIA_PAY + DCP_NAPPT]
+    mov cl, [STIK_PAY + DCP_NAPPT]
     xor ch, ch
-    mov si, DIA_PAY + DCP_APPT0
+    mov si, STIK_PAY + DCP_APPT0
     xor dx, dx                  ; the last key: the date...
     xor bx, bx                  ; ...and its time + 1
     jcxz .ok
@@ -87,7 +87,7 @@ dc_aptr:
     and si, 0FFh
     mov cl, 5
     shl si, cl
-    add si, DIA_PAY + DCP_APPT0
+    add si, STIK_PAY + DCP_APPT0
     pop cx
     ret
 
@@ -97,7 +97,7 @@ dc_tptr:
     xor ah, ah
     mov dl, DCP_TASKSZ
     mul dl
-    add ax, DIA_PAY + DCP_TASK0
+    add ax, STIK_PAY + DCP_TASK0
     mov si, ax
     pop dx
     pop ax
@@ -115,9 +115,9 @@ dc_arange:
     push si
     call dc_pack
     mov dx, ax
-    mov cl, [DIA_PAY + DCP_NAPPT]
+    mov cl, [STIK_PAY + DCP_NAPPT]
     xor ch, ch
-    mov si, DIA_PAY + DCP_APPT0
+    mov si, STIK_PAY + DCP_APPT0
     xor ax, ax                  ; AL = the first, AH = how many
     jcxz .x
 .l:
@@ -152,14 +152,14 @@ dc_ains:
     push si
     push di
     push es
-    mov cl, [DIA_PAY + DCP_NAPPT]
+    mov cl, [STIK_PAY + DCP_NAPPT]
     cmp cl, DCP_MAXAPPT
     jae .full
     mov dx, [dc_rec + DCA_DATE]
     mov bx, [dc_rec + DCA_TIME]
     inc bx                      ; the key: all day first in its day
     xor ch, ch                  ; CH = the place
-    mov si, DIA_PAY + DCP_APPT0
+    mov si, STIK_PAY + DCP_APPT0
 .f:
     cmp ch, cl
     je .at
@@ -202,7 +202,7 @@ dc_ains:
     mov cx, DCP_APPTSZ / 2
     cld
     rep movsw
-    inc byte [DIA_PAY + DCP_NAPPT]
+    inc byte [STIK_PAY + DCP_NAPPT]
     clc
     jmp short .x
 .full:
@@ -226,7 +226,7 @@ dc_adel:
     push si
     push di
     push es
-    mov cl, [DIA_PAY + DCP_NAPPT]
+    mov cl, [STIK_PAY + DCP_NAPPT]
     cmp al, cl
     jae .x
     push ds
@@ -246,7 +246,7 @@ dc_adel:
     mov cx, DCP_APPTSZ / 2
     xor ax, ax
     rep stosw                   ; ...which is zeroed
-    dec byte [DIA_PAY + DCP_NAPPT]
+    dec byte [STIK_PAY + DCP_NAPPT]
 .x:
     pop es
     pop di
@@ -261,7 +261,7 @@ dc_tdel:
     push si
     push di
     push es
-    mov cl, [DIA_PAY + DCP_NTASK]
+    mov cl, [STIK_PAY + DCP_NTASK]
     cmp al, cl
     jae .x
     push ds
@@ -280,7 +280,7 @@ dc_tdel:
     mov cx, DCP_TASKSZ / 2
     xor ax, ax
     rep stosw
-    dec byte [DIA_PAY + DCP_NTASK]
+    dec byte [STIK_PAY + DCP_NTASK]
 .x:
     pop es
     pop di
@@ -334,9 +334,9 @@ dc_tclear:
     push ds
     pop es
     cld
-    mov cl, [DIA_PAY + DCP_NTASK]
+    mov cl, [STIK_PAY + DCP_NTASK]
     xor ch, ch
-    mov si, DIA_PAY + DCP_TASK0
+    mov si, STIK_PAY + DCP_TASK0
     mov di, si
     xor bl, bl                  ; BL = the tasks kept
     jcxz .tail
@@ -354,7 +354,7 @@ dc_tclear:
 .n:
     loop .l
 .tail:
-    mov al, [DIA_PAY + DCP_NTASK]
+    mov al, [STIK_PAY + DCP_NTASK]
     sub al, bl                  ; the ones that went
     push ax
     mov ah, DCP_TASKSZ / 2
@@ -362,7 +362,7 @@ dc_tclear:
     mov cx, ax
     xor ax, ax
     rep stosw
-    mov [DIA_PAY + DCP_NTASK], bl
+    mov [STIK_PAY + DCP_NTASK], bl
     pop ax
     pop es
     pop di
@@ -375,9 +375,9 @@ dc_tclear:
 dc_anydone:
     push cx
     push si
-    mov cl, [DIA_PAY + DCP_NTASK]
+    mov cl, [STIK_PAY + DCP_NTASK]
     xor ch, ch
-    mov si, DIA_PAY + DCP_TASK0
+    mov si, STIK_PAY + DCP_TASK0
     jcxz .no
 .l:
     test byte [si + DCT_FLAGS], DCT_DONE

@@ -264,16 +264,16 @@ ALIAS = [
     # to packages under the SDK's prefix: OSAPI_PKG_START answers it in AL,
     # and The Wire words it rather than printing the number.
     ("kernel/loader.inc", "LD_EVER", "apps/os88api.inc", "OSAPI_LD_EVER"),
-    # SPEC.md 110.2. The DIA mark: which byte of a desktop row says "this is
+    # SPEC.md 110.2. The Sticky App mark: which byte of a desktop row says "this is
     # a remembered widget", and the value it must EQUAL. The kernel's desk_live
-    # and dia_boot read it, CTRL.DRV's settings core writes it, a package sets
+    # and stik_boot read it, CTRL.DRV's settings core writes it, a package sets
     # it in the record it hands OSAPI_DESK_ITEM, and the host tool writes the
     # fixtures every gate boots - four readers of one byte.
-    ("kernel/desksc.inc", "SC_R_DIA", "apps/os88api.inc", "OSAPI_DI_DIA"),
-    ("kernel/desksc.inc", "SC_DIA", "apps/os88api.inc", "OSAPI_DIA_MARK"),
-    ("kernel/desksc.inc", "SC_R_DIA", "tools/os88dia.py", "SC_R_DIA"),
-    ("kernel/desksc.inc", "SC_REC", "tools/os88dia.py", "SC_REC"),
-    ("kernel/desksc.inc", "SC_VER", "tools/os88dia.py", "SC_VER"),
+    ("kernel/desksc.inc", "SC_R_STIK", "apps/os88api.inc", "OSAPI_DI_STIK"),
+    ("kernel/desksc.inc", "SC_STIK", "apps/os88api.inc", "OSAPI_STIK_MARK"),
+    ("kernel/desksc.inc", "SC_R_STIK", "tools/os88stik.py", "SC_R_STIK"),
+    ("kernel/desksc.inc", "SC_REC", "tools/os88stik.py", "SC_REC"),
+    ("kernel/desksc.inc", "SC_VER", "tools/os88stik.py", "SC_VER"),
 ]
 DEFINE = re.compile(r"^%define\s+([A-Z][A-Z0-9_]*)\s+([^\s;]+)", re.M)
 

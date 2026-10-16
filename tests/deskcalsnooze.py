@@ -4,7 +4,7 @@ slot in the payload's spare words, and an old file read with nothing due.
 
     make && python3 tests/deskcalsnooze.py
 
-The SHIPPED 360KB system disk, a DESKCAL.DAT that tools/os88dia.py wrote,
+The SHIPPED 360KB system disk, a DESKCAL.DAT that tools/os88stik.py wrote,
 MartyPC's VGA XT, the clock set through the live `clk_*` fields. Today is
 Wed 14 October 2026; the fixture is v1-SHAPED (no DUE, no SNOOZED, zeros at
 payload +4/+6) and holds, with no lead:
@@ -28,7 +28,7 @@ payload +4/+6) and holds, with no lead:
      the one still to come, Late call, NEXT.
   E  23:57 Late call rings; Snooze: the slot is TOMORROW 00:02 - the date
      at +6 is the 15th's - and the state file (flushed off A:) carries the
-     SNOOZED bit and that slot, read back by tools/os88dia.py.
+     SNOOZED bit and that slot, read back by tools/os88stik.py.
 
 **BREAK IT ON PURPOSE**: take dc_snooze's "the other back to DUE" out and C
 finds Call Bob ringing and Dentist quiet; make dc_rpass skip the snooze
@@ -46,11 +46,11 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 import os88ui      # noqa: E402
 import os88marty   # noqa: E402
-import os88dia     # noqa: E402
-from deskcaledit import Cal, disk_with, DIA_S_DIRTY   # noqa: E402
+import os88stik    # noqa: E402
+from deskcaledit import Cal, disk_with, STIK_S_DIRTY  # noqa: E402
 from deskcalremind import Rem, TONE_CELL      # noqa: E402
 
-B = os88dia
+B = os88stik
 TODAY = (2026, 10, 14)
 fails = []
 
@@ -71,7 +71,7 @@ def fixture():
 
 
 def slot(c):
-    p = bytes(c.bss(B.DESKCAL_DIA_BSS + B.DIA_HDR_SIZE + B.DESKCAL_SNZT, 4))
+    p = bytes(c.bss(B.DESKCAL_STIK_BSS + B.STIK_HDR_SIZE + B.DESKCAL_SNZT, 4))
     t, d = struct.unpack("<HH", p)
     return B.unpack_date(d), t
 

@@ -8,11 +8,11 @@
 ; has no desk layer, and its cell is mod_gone (wm.inc).
 ;
 ; WHY IT IS A MODULE. Main's size pass left kern_big's `.cold` at exactly a
-; rung boundary, so every cold byte of the DIA kernel half crossed it. The
+; rung boundary, so every cold byte of the Sticky App kernel half crossed it. The
 ; owner accepted ONE 512-byte cold step and this cut together (SPEC.md
 ; 11.103.10), so that the step is not spent at once.
 ;
-; WHY IT QUALIFIES (docs/plans/completed/ONDEMAND-PLAN.md 1). Every DIA asks
+; WHY IT QUALIFIES (docs/plans/completed/ONDEMAND-PLAN.md 1). Every Sticky App asks
 ; QUERY first, inside its ENTRY PROC, where it is about to read its own state
 ; file off the system disk - so the disk is already required, and QUERY is the
 ; load point. Nothing else loads it: DRAG and RELEASE only follow a MAKE that
@@ -48,7 +48,7 @@ section .cold
 ;
 ; QUERY IS THE LOAD (SPEC.md 11.103.10): AL = 0 is desk_need's answer - CF =
 ; 0 the layer is resident from here until restart, CF = 1 it is not (no
-; DESK.DRV on the system disk, no heap, a stale stamp), and the DIA takes the
+; DESK.DRV on the system disk, no heap, a stale stamp), and the Sticky App takes the
 ; titled path as on kern_small. Every other verb is the image's dkd_verb, and
 ; with no image the slot is mod_gone's refusal. A package carrying
 ; OS88_F_DESK has normally been given the image already, by the loader's
@@ -78,7 +78,7 @@ osapi_wm_desk_x:
 ; THE PAIR IS SAVED BECAUSE THE BRACKET NESTS HERE. drv_vol_bank keeps ONE
 ; static pair (drv_vol_cwd / drv_vol_drv) on the rule that no two brackets
 ; ever nest - and both callers run inside one: a desktop shortcut's or
-; dia_boot's launch is under sc_open's, and a widget's entry proc is reached
+; stik_boot's launch is under sc_open's, and a widget's entry proc is reached
 ; from it. mod_need's own bracket would overwrite the outer pair with the
 ; widget's FOLDER, and sc_open's restore would then leave the machine there
 ; instead of where the user was. The pair is two adjacent words' worth of

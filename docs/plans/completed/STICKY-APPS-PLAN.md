@@ -1,11 +1,11 @@
-# DIA-PLAN: Desktop Integrated Applications, and the Desk Calendar
+# STICKY-APPS-PLAN: Sticky Apps, and the Desk Calendar
 
 **Status: BUILT** - waves 0 to 4 on `feature/dia` (SPEC.md §110 is the
 contract; this file is the design record it was built from). Wave 5, the
 desk LAYER, was owner decision D1 and was deferred for v1 (§110.8); **the
 owner then asked for it, and v2 built it** - the desk layer, the widget
 treatment and the Desk Calendar as three cards. v2's own design record is
-[DIA-LAYER-PLAN.md](DIA-LAYER-PLAN.md), and the last section of this file,
+[STICKY-APPS-LAYER-PLAN.md](STICKY-APPS-LAYER-PLAN.md), and the last section of this file,
 "v2: what was built and why", is the account of it. "§" means SPEC.md
 throughout; the section was §107 when this was written and is §110 since
 main took 107-109 (EMS.DRV, isoTron, WireBall), and the citations here are
@@ -24,24 +24,24 @@ measured ones are §110.6's.
 | the design said | what shipped | where |
 |---|---|---|
 | K1-K6, ~+6 `.text` / ~+104 `.cold` on kern_big | K1-K6, **+6 / +116**, and **+6 / +32** on kern_small; no rung crossed; nothing in waves 2-4 | §110.6 |
-| `dia_boot_x`, far | `dia_boot`, near (both ends `.cold`) | §110.9 |
+| `stik_boot_x`, far | `stik_boot`, near (both ends `.cold`) | §110.9 |
 | a save is one full `OSAPI_FILE_GOTO` per path component | one full mount, then `OSAPI_FILE_GOTO_QM`; and it asks whether the disk is still HOME first | §110.5.1 |
 | register only on `OPEN = 0` | register on EVERY launch, whatever the state file said | §110.5 |
 | the day field `dd*`, glyph 7 as a bullet | `[ ][d][d][m]` with a `*` hard against the number (glyph 7 is outside the kernel font; wave 2's `[mark][d][d]` read `15*16` as either day's, so the polish pass added the blank and the window grew to 234) | §110.3, §110.9 |
 | agenda 5 lines at pitch 10, a tab row on COMPACT | 7 / 4 lines, at pitch 10 on TALL and 9 on COMPACT (wave 3's pitch 8 until the polish pass), no tab row; the entry field takes a heading's place | §110.3, §110.9 |
 | the layout chosen from `OSAPI_VIDEO`'s height | chosen from the CONTENT height the kernel gave the window | §110.3 |
-| `wm_fit` clamps "whatever is left" | the template is sized for the adapter BEFORE the create, and `dia_made` gives a pulled-up `y` back | §110.5.2 |
-| a save at the next 2 s tick | held while the user is mid-edit (`DIA_ONTICK`'s CF), so a burst is one save | §110.5 |
-| the chirp 880 then 660 Hz everywhere | the same on kern_big through a once-only sooner beat (`dia_nx`); ONE 880 Hz note on kern_small's worker arm | §110.3 |
+| `wm_fit` clamps "whatever is left" | the template is sized for the adapter BEFORE the create, and `stik_made` gives a pulled-up `y` back | §110.5.2 |
+| a save at the next 2 s tick | held while the user is mid-edit (`STIK_ONTICK`'s CF), so a burst is one save | §110.5 |
+| the chirp 880 then 660 Hz everywhere | the same on kern_big through a once-only sooner beat (`stik_nx`); ONE 880 Hz note on kern_small's worker arm | §110.3 |
 | missed = due-but-unfired at launch | missed = due BEFORE this minute; a moment already past (before this minute) when ARMED is fired silently, one armed for this minute fires at the next beat; nothing fires under an open entry field | §110.3 |
 | "set FIRED and dirty" | the FIRED marks owe saves the user did not cause - a launch that missed reminders, an unattended firing - and they are priced; an alert holds no save | §110.3, §110.5.2, §110.6 |
 | `deskcalremind`'s QEMU `make test-snd` + `sndcheck.py` arm | the tone asserted at `OSAPI_SND_TONE`'s registers on MartyPC, not off the speaker | §110.9 |
 | `Clock not set (no RTC)` | `No RTC - check the time` (the cell cannot say whether it was set) | §110.3 |
-| §9's `make diashot` fixture and the PR's screenshot set | no `make diashot`: the gates assert on pixels and on the state file, and the 1bpp pictures between sets are `tests/deskcal1bpp.py --shots`'s. The PR's set is `docs/dia/*.png`, twelve pictures made on MartyPC by a driver outside the tree and retaken after the polish pass | §110.9 |
+| §9's `make stikshot` fixture and the PR's screenshot set | no `make stikshot`: the gates assert on pixels and on the state file, and the 1bpp pictures between sets are `tests/deskcal1bpp.py --shots`'s. The PR's set is `docs/stikapps/*.png`, twelve pictures made on MartyPC by a driver outside the tree and retaken after the polish pass | §110.9 |
 
-The rows that hold it: `t_dia` (fast); `diaboot`, `diamiss`, `diashort`,
-`diahiber`, `diaswap`, `diaregister`, `diamove`, `diamovecga`, `diaanchor`,
-`deskcalgrid`, `deskcaledit`, `deskcaltask`, `deskcalremind`, `diasmall`,
+The rows that hold it: `t_stik` (fast); `stikboot`, `stikmiss`, `stikshort`,
+`stikhiber`, `stikswap`, `stikregister`, `stikmove`, `stikmovecga`, `stikanchor`,
+`deskcalgrid`, `deskcaledit`, `deskcaltask`, `deskcalremind`, `stiksmall`,
 `deskcalperf`, `deskcal1bpp` (soak) - §110.10 says what each asserts.
 
 ---
@@ -55,7 +55,7 @@ The rows that hold it: `t_dia` (fast); `diaboot`, `diamiss`, `diashort`,
 **The winner is `zero-kernel`, with one fatal flaw corrected and four ideas taken from the runners-up.**
 
 What the user gets:
-- A DIA is an ordinary package in `A:\SYSTEM\DIA\` that includes a new shared source file, `apps/os88dia.inc`.
+- A Sticky App is an ordinary package in `A:\STIKAPPS\` that includes a new shared source file, `apps/os88stik.inc`.
 - "This widget is open, launched from here" is stored as one row in the existing SYSTEM.CFG desktop trailer. That trailer is how desktop icons are already persisted. The row is written through the existing `OSAPI_DESK_ITEM` (0x03F8) into the existing on-demand settings core (CTRL.DRV), which is §2.8's mechanism, the one DOCK.DRV uses.
 - At boot, a ~60-byte loop in `.cold` relaunches each marked row through the existing `sc_open`. A missing file produces one toast, and the row turns back into a visible desktop shortcut.
 - Position and calendar data live in the widget's own `SYSTEM\APPDATA\DESKCAL.DAT`.
@@ -73,8 +73,8 @@ What it does not do yet: v1 is a normal window. A true desk layer (behind other 
 
 | criterion (0-10) | zero-kernel | user-first | risk-first |
 |---|---|---|---|
-| Fidelity to the request (minimise kernel, dock-like split, reuse desktop-icon code, DIA folder, free placement, restore, graceful failure) | **8**. Reuses the icon trailer and CTRL.DRV; free placement is a window drag; restore and failure both handled. Loses points on widget feel. | **7**. Best widget feel (desk layer, no chrome, no tile), but ~300 resident bytes in hot paths runs against "minimize or eliminate". | **7**. Copies the Dock vehicle literally (new DIA.DRV); uses the icon code only for an optional "Put on Desktop". |
-| Correctness against the code | **5**. One fatal bug (+3 is not spare, §2.1) and one stale-state bug (§2.2). Otherwise its claims check out. | **6**. Kind-3 overlay work identified correctly; the Discard lock problem caught. `CLK_GET` via `clk_snapshot` steps on the UI formatters' copy; the ten-site `WF_FULL` widening is under-analysed. | **5**. Its central cell `OSAPI_DIA AL=0` rests on a stale rule (§2.3); otherwise careful. |
+| Fidelity to the request (minimise kernel, dock-like split, reuse desktop-icon code, Sticky App folder, free placement, restore, graceful failure) | **8**. Reuses the icon trailer and CTRL.DRV; free placement is a window drag; restore and failure both handled. Loses points on widget feel. | **7**. Best widget feel (desk layer, no chrome, no tile), but ~300 resident bytes in hot paths runs against "minimize or eliminate". | **7**. Copies the Dock vehicle literally (new Sticky App.DRV); uses the icon code only for an optional "Put on Desktop". |
+| Correctness against the code | **5**. One fatal bug (+3 is not spare, §2.1) and one stale-state bug (§2.2). Otherwise its claims check out. | **6**. Kind-3 overlay work identified correctly; the Discard lock problem caught. `CLK_GET` via `clk_snapshot` steps on the UI formatters' copy; the ten-site `WF_FULL` widening is under-analysed. | **5**. Its central cell `OSAPI_STIK AL=0` rests on a stale rule (§2.3); otherwise careful. |
 | Kernel bytes, big / small | **9 / 9** (≈116 / 36, corrected) | **3 / 9** (≈301 + .ovl / 34) | **5 / 9** (≈26 text + 110 cold + 10 bss + module plumbing / 36) |
 | Testability | 8 | 7 | **9**. Fixture disks, and a proof that the stock machine pays nothing. |
 | Build risk | **8**. No overlay, no module plumbing. | 4. Image rung has 200 B left; drag cache, raise paths and `WF_FULL` sites. | 5. New `MOD_*`, five tool section lists, `KMODARGS`, a CFG struct byte. |
@@ -91,7 +91,7 @@ What it does not do yet: v1 is a normal window. A true desk layer (behind other 
 - SPEC §26.8.1's table (SPEC.md:50620) still calls +3 "spare". That is SPEC drift to fix in wave 0.
 - Zero-kernel's `desk_live` test, `cmp byte [+3],1 / cmc`, treats any non-zero +3 as not live. It would **hide every existing drag-made shortcut on boot**.
 - Its writer rule ("reset +3 values other than 0 or 1 to 0") would then rewrite them.
-- **Fix used below:** a DIA row is +3 == **`'D'` (0x44)** exactly, plus KIND == 1. `'\'` and `0` (the only values the tree writes today) never match. `desk_live` tests equality, and the writer leaves +3 alone. The package-add path (`sc_m_add`) zeroes +3 for any record that is not a DIA record, so a junk +3 from an old package's record cannot become `'D'`.
+- **Fix used below:** a Sticky App row is +3 == **`'D'` (0x44)** exactly, plus KIND == 1. `'\'` and `0` (the only values the tree writes today) never match. `desk_live` tests equality, and the writer leaves +3 alone. The package-add path (`sc_m_add`) zeroes +3 for any record that is not a Sticky App record, so a junk +3 from an old package's record cannot become `'D'`.
 - **Kind 3 (user-first) was the other way out.** It costs `.ovl` bytes in `ovl_sc_load`: its `cmp ah,2 / ja .kill` turns kind > 2 into a free row (`desksc.inc:1291-1297` [verified]). The blob has **26 bytes left** on kern_big [measured: `BOOT2_SECS`·512 − `OVL_AT` − ovl = 5,120 − 2,624 − 2,470], less on kern_emu and on knob builds. The `'D'` mark costs no `.ovl` byte at all, because `ovl_sc_load` copies +3 verbatim (`rep movsb`, :1263-1270 [verified]) and `sc_m_add` copies it with `rep movsw` (:551-565 [verified]).
 
 ### 2.2 zero-kernel: the DAT's OPEN flag goes stale
@@ -102,14 +102,14 @@ Zero-kernel registers only when the DAT says `OPEN = 0`. Here is the failure seq
 3. The user later relaunches the widget by hand.
 4. The widget sees `OPEN = 1` and never registers again, so it never autostarts again.
 
-**Fix:** register on every launch. CTRL.DRV's DIA add is idempotent and **writes nothing** when an identical marked row already exists (user-first's rule). The price is one settings-core read per launch, after the window is up: 5 sectors, 1-2 `int 13h` calls.
+**Fix:** register on every launch. CTRL.DRV's Sticky App add is idempotent and **writes nothing** when an identical marked row already exists (user-first's rule). The price is one settings-core read per launch, after the window is up: 5 sectors, 1-2 `int 13h` calls.
 
 ### 2.3 risk-first: "an entry proc reads no file" is stale [verified]
 
 - `kernel/loader.inc:1120-1137`: the entry proc is now **stamped with its instance**. The comment says that before the stamp, "the file API answered with the machine's directory instead of the instance's". That has since been fixed.
 - `apps/os88api.inc:746` lists file calls as legal from "the entry proc, a window callback, a menu handler or a file-dialog completion proc".
 - §67.20 and the `cyclone.asm:1106` note are Cyclone's own history, written before the stamp.
-- So the widget can read its own DAT in the entry proc and place the window before `OSAPI_WM_CREATE`. **`OSAPI_DIA AL=0` (the staged-position cell) is unnecessary**, and so is the 'DA' gate byte.
+- So the widget can read its own DAT in the entry proc and place the window before `OSAPI_WM_CREATE`. **`OSAPI_STIK AL=0` (the staged-position cell) is unnecessary**, and so is the 'DA' gate byte.
 
 ### 2.4 Other checks
 
@@ -124,7 +124,7 @@ Zero-kernel registers only when the DAT says `OPEN = 0`. Here is the failure seq
 | `sc_modcall` lock and refusal | **Confirmed**. It documents "the gfx lock held" and on a missing module says `Needs Sys Disk A:` through `hbf_nodisk` (:189-227). |
 | Content click on a background window | **Confirmed**. It is raised and the click is swallowed (`ui.inc:456-462`). |
 | Hibernate question posted before ui_task | **Confirmed**. `hb_probe_x` posts `UI_RBQ_ASK` (`hiber.inc:341`) and step 0 of ui_task spends it (`ui.inc:85-98`). `hiber.inc:420` can also post `UI_RBQ_DOSRUN`. "`[ui_rebootq]` ≠ 0 → stand down" covers both. |
-| Discard runs with the gfx lock **held** | **Confirmed** (`hiber.inc:1113-1150`, `hbm_act`). So user-first is right: a Discard re-launch has to be **posted** (`CMD_DIA`), not called. |
+| Discard runs with the gfx lock **held** | **Confirmed** (`hiber.inc:1113-1150`, `hbm_act`). So user-first is right: a Discard re-launch has to be **posted** (`CMD_STIK`), not called. |
 | Section numbering | §106 is the highest used top-level section and §104 was never used. **Take §107** (renumbered §110 when main took 107 first - the hazard the renumber check below names). No section registry exists under docs/. |
 | Rung headroom [measured, `tools/kernsize.py`] | kern_big image rung **200 B left**, cold rung **462 left**, low 34, footprint 59 steps spare. kern_small was not measured (no `build/smallk` in this worktree). |
 | `OSAPI_WM_OWNSEG` (0x03BF) | **Exists**. It answers DX = the segment owning window slot AL, so a package-side singleton is possible. |
@@ -137,10 +137,10 @@ Zero-kernel registers only when the DAT says `OPEN = 0`. Here is the failure seq
 
 ### 3.1 Definition and vehicle
 
-A **DIA** is an ordinary `.O88` package: `OS88_HEADER`, an `OS88_F_ICON` 16×16 icon, and one window. It has three properties:
-1. It lives in **`SYSTEM\DIA\`** on the boot volume. This is shipped by the build; DIA has no header flag and no registry file.
-2. It includes **`apps/os88dia.inc`**, shared as source in the `os88ui.inc` / `os88line.inc` shape. That include owns position restore and save, presence registration, the state file header, and the tick multiplexer.
-3. While it is open, the **desktop configuration** (the SYSTEM.CFG trailer, §26.8.6) holds one **DIA row** for it, and the kernel relaunches it from that row at boot.
+A **Sticky App** is an ordinary `.O88` package: `OS88_HEADER`, an `OS88_F_ICON` 16×16 icon, and one window. It has three properties:
+1. It lives in **`STIKAPPS\`** on the boot volume. This is shipped by the build; Sticky App has no header flag and no registry file.
+2. It includes **`apps/os88stik.inc`**, shared as source in the `os88ui.inc` / `os88line.inc` shape. That include owns position restore and save, presence registration, the state file header, and the tick multiplexer.
+3. While it is open, the **desktop configuration** (the SYSTEM.CFG trailer, §26.8.6) holds one **Sticky App row** for it, and the kernel relaunches it from that row at boot.
 
 **Why this is "the dock lesson".** DOCK.DRV is a §2.8 on-demand module (`MOD_DOCK`, `mod.inc:46`). It is not a §51 driver. The lesson is: keep the resident part to tests and thunks, and put everything that touches a file into a module read from the system disk. Here:
 - The file-writing logic (add, update, remove the row, and persist SYSTEM.CFG) goes into the **already existing** settings-core module, CTRL.DRV's `.modc` / `MOD_SETS`, which already owns that trailer.
@@ -175,18 +175,18 @@ A **DIA** is an ordinary `.O88` package: `OS88_HEADER`, an `OS88_F_ICON` 16×16 
 - Cost: **.text +6, .cold ≈ +24, on both kernels.** kern_small has the PIT clock (§37.0.1); `clk_rtc` = 0 there.
 - It is unavoidable. The SDK has no date at all (`apps/dos/dos.asm:13563`), and the debug block is closed to shipped code (§57.3 rule 1).
 
-**K2 — the DIA row mark (constants only).**
-- `kernel/desksc.inc`: `SC_R_DIA equ 3` and `SC_DIA equ 'D'`. Rewrite the record comment at :38-40 to say: "+3: `\` on a dragged shortcut (sc_m_new's dsk_path spill), 0 on a package's link, `'D'` on a DIA row".
-- `apps/os88api.inc`: `OSAPI_DI_DIA equ 3` and `OSAPI_DIA_MARK equ 'D'`.
+**K2 — the Sticky App row mark (constants only).**
+- `kernel/desksc.inc`: `SC_R_STIK equ 3` and `SC_STIK equ 'D'`. Rewrite the record comment at :38-40 to say: "+3: `\` on a dragged shortcut (sc_m_new's dsk_path spill), 0 on a package's link, `'D'` on a Sticky App row".
+- `apps/os88api.inc`: `OSAPI_DI_STIK equ 3` and `OSAPI_STIK_MARK equ 'D'`.
 - `t_mirror` holds both pairs equal.
 
-**K3 — `desk_live` hides a DIA row** (`kernel/desk.inc:624-634`, `.link` arm, `.cold`, `%ifdef OS88_SHORTCUTS`). The sequence after `call sc_row` becomes:
+**K3 — `desk_live` hides a Sticky App row** (`kernel/desk.inc:624-634`, `.link` arm, `.cold`, `%ifdef OS88_SHORTCUTS`). The sequence after `call sc_row` becomes:
 ```
     call sc_row                 ; CF = 1 free/none
     jc .ld
-    cmp byte [es:bx+SC_R_DIA], SC_DIA
+    cmp byte [es:bx+SC_R_STIK], SC_STIK
     stc
-    je .ld                      ; a DIA row: not live, no cell, never painted or hit
+    je .ld                      ; a Sticky App row: not live, no cell, never painted or hit
     clc
 .ld:
     sbb al, al
@@ -202,9 +202,9 @@ A **DIA** is an ordinary `.O88` package: `OS88_HEADER`, an `OS88_F_ICON` 16×16 
 
 New contract: CF = 1 iff the walk found no volume, folder or file. **.cold +2.** `desk_open`'s `jmp sc_open` ignores it.
 
-**K5 — `dia_boot_x`**, new `.cold` far routine in `kernel/desksc.inc` beside `sc_open`, `%ifdef OS88_SHORTCUTS`:
+**K5 — `stik_boot_x`**, new `.cold` far routine in `kernel/desksc.inc` beside `sc_open`, `%ifdef OS88_SHORTCUTS`:
 ```
-dia_boot_x:                     ; far (retf): kmain via drv_notice_x, and wave 5's CMD_DIA
+stik_boot_x:                     ; far (retf): kmain via drv_notice_x, and wave 5's CMD_STIK
     push ax / push bx / push cx / push es
     cmp byte [ui_rebootq], 0
     jne .r                      ; resume/DOS question pending: the image IS the session
@@ -214,7 +214,7 @@ dia_boot_x:                     ; far (retf): kmain via drv_notice_x, and wave 5
     mov al, DESK_SC0
 .l: call sc_row                 ; ES:BX = row
     jc .n
-    cmp byte [es:bx+SC_R_DIA], SC_DIA
+    cmp byte [es:bx+SC_R_STIK], SC_STIK
     jne .n
     cmp byte [es:bx+SC_R_KIND], 1
     jne .n
@@ -223,31 +223,31 @@ dia_boot_x:                     ; far (retf): kmain via drv_notice_x, and wave 5
     pop cx / pop ax
     jnc .n
     call sc_row                 ; re-read: the load may have moved [sc_seg]
-    mov byte [es:bx+SC_R_DIA], 0    ; DOWNGRADE, in memory, to the shortcut it is
+    mov byte [es:bx+SC_R_STIK], 0    ; DOWNGRADE, in memory, to the shortcut it is
     call desk_reflow            ; it takes the first free cell, is pinned, is posted
 .n: inc al
     loop .l
 .r: pop es / pop cx / pop bx / pop ax
     retf
 ```
-- Call site: the first instruction of the kern_big `drv_notice_x` (driver.inc:4637) is `call COLD_SEG:dia_boot_x`. It goes there, before the Control Panel notice, so that a driver-failure panel still opens **in front** of the widgets.
+- Call site: the first instruction of the kern_big `drv_notice_x` (driver.inc:4637) is `call COLD_SEG:stik_boot_x`. It goes there, before the Control Panel notice, so that a driver-failure panel still opens **in front** of the widgets.
 - **.cold ≈ +62 (body) +5 (call), kern_big only.** kern_small's `drv_notice_x` is the `retf` stub and pays 0.
-- A machine with no DIA row pays one byte compare and a `jcxz`, and does no disk I/O.
+- A machine with no Sticky App row pays one byte compare and a `jcxz`, and does no disk I/O.
 - This is the context `OSAPI_PKG_START` demands: task 0 becomes `ui_task`, the lock is free, the desktop is painted, and A: holds the boot disk (driver.inc:4642-4646).
 - **Wave 1 must check that `desk_reflow` is safe with no lock held.** It only rewrites `desk_zslot` and posts `desk_cdirty`, and its driver-half caller precedent is `osapi_desk_item_x`. If it is not, the downgrade sets `[desk_zdirty]` and the ui_task tail does the reflow instead.
 
-**K6 — CTRL.DRV settings core: the DIA rules** (`.modc`, not resident).
+**K6 — CTRL.DRV settings core: the Sticky App rules** (`.modc`, not resident).
 
 `sc_m_add` (desksc.inc:551):
 1. On entry, peek the caller's record at DX:CX.
    - If +3 ≠ `'D'`, store +3 = 0 after the copy, so no other value can masquerade as a mark.
    - If +3 = `'D'` and KIND ≠ 1, refuse (`.bad`).
-2. **DIA add-or-update.**
+2. **Sticky App add-or-update.**
    - Scan the live rows for one with +3 = `'D'` whose path's **final component** equals the record's.
    - If that row is byte-identical in VOL and PATH, answer AL = its zone and **write nothing**.
    - If it differs (a launch from a new place), copy the record over that row in place, so "where it was last launched from" wins.
    - Otherwise claim a row via `sc_m_row`.
-3. For a DIA row, **skip the `desk_free` refusal** and store zslot **0xFF** (no cell, never shown) instead of `wish|DSL_PIN|DSL_GONE`.
+3. For a Sticky App row, **skip the `desk_free` refusal** and store zslot **0xFF** (no cell, never shown) instead of `wish|DSL_PIN|DSL_GONE`.
 4. `sc_m_save` writes SYSTEM.CFG through `cp_flush_cfg`, as it does today.
 
 `sc_m_pdel` (desksc.inc:880): if AL = 0xFF on entry, find the `'D'` row whose path's final component matches the record's; AL = that zone; then join the existing VOL+path check, which will match. Zones renumber at boot because `ovl_sc_load` compacts rows, so a package cannot hold its zone across boots. Remove-by-name is what makes the close work.
@@ -262,7 +262,7 @@ Toasts: no new kernel string. A full table answers `Too many shortcuts`, the mod
 - `ovl_sc_load` (0 `.ovl` bytes);
 - `mod.inc` (no new module id);
 - `drv_tab`;
-- `SC_VER`, which stays 2. An older kernel shows a DIA row as a plain shortcut icon, which is harmless.
+- `SC_VER`, which stays 2. An older kernel shows a Sticky App row as a plain shortcut icon, which is harmless.
 
 **Resident ledger (estimate, to be measured in W1):**
 
@@ -273,22 +273,22 @@ Toasts: no new kernel string. A full table answers `Too many shortcuts`, the mod
 
 That spends 6 of the image rung's 200 B and ~104 of the cold rung's 462. No rung is expected to be crossed.
 
-### 3.3 The framework: `apps/os88dia.inc`
+### 3.3 The framework: `apps/os88stik.inc`
 
 The caller defines:
 
 | symbol | meaning |
 |---|---|
-| `DIA_DATNAME` | `'DESKCAL.DAT'` |
-| `DIA_CAP` | `'Calendar'`, the caption of the row and of a downgraded shortcut, ≤ 12 characters |
-| `DIA_PAYLOAD` / `DIA_PAYLEN` / `DIA_PAYVER` | the application's payload |
-| `DIA_ICON` | its header's 64-byte icon body, at +32 |
-| `DIA_ONTICK` | its near proc, called once per mux tick |
-| `DIA_ONCLOSE` | its near proc, called before the row is removed |
+| `STIK_DATNAME` | `'DESKCAL.DAT'` |
+| `STIK_CAP` | `'Calendar'`, the caption of the row and of a downgraded shortcut, ≤ 12 characters |
+| `STIK_PAYLOAD` / `STIK_PAYLEN` / `STIK_PAYVER` | the application's payload |
+| `STIK_ICON` | its header's 64-byte icon body, at +32 |
+| `STIK_ONTICK` | its near proc, called once per mux tick |
+| `STIK_ONCLOSE` | its near proc, called before the row is removed |
 
 The include provides:
 
-1. **`dia_load`** (entry proc, before `OSAPI_WM_CREATE`; SI = `ld_lname`, DI = the template):
+1. **`stik_load`** (entry proc, before `OSAPI_WM_CREATE`; SI = `ld_lname`, DI = the template):
    - Copy the 8.3 name.
    - **Singleton:** for each window slot 0..11, call `OSAPI_WM_OWNSEG`. If a segment other than our DS has the same header name at +16, toast `Desk Calendar is open` and answer CF = 1, which declines the launch (`[ld_said]` keeps the kernel quiet).
    - Bank with `OSAPI_FILE_HERE` (0x01C1: DX = cluster, BL = volume).
@@ -296,17 +296,17 @@ The include provides:
    - `OSAPI_FILE_READ` (0x0109) into a paragraph-aligned buffer with 80 B of slack, then GOTO back.
    - Validate the magic, the version and the **exact size**:
      - **missing:** use the defaults;
-     - **damaged:** set `dia_damaged` and run empty;
+     - **damaged:** set `stik_damaged` and run empty;
      - **valid:** copy the payload in and place the window (anchoring rule below).
-   - **No APPDATA folder:** set `dia_nohome`. The state stays in memory; say nothing (§19.9).
-2. **`dia_made`** (after WM_CREATE, BX = window):
+   - **No APPDATA folder:** set `stik_nohome`. The state stays in memory; say nothing (§19.9).
+2. **`stik_made`** (after WM_CREATE, BX = window):
    - Store the window.
-   - Install `OSAPI_WM_ONTIMER` (0x0342) → `dia_tick` and `OSAPI_WM_ONCLOSE` (0x0362) → `dia_close`.
+   - Install `OSAPI_WM_ONTIMER` (0x0342) → `stik_tick` and `OSAPI_WM_ONCLOSE` (0x0362) → `stik_close`.
    - Arm `OSAPI_WM_TIMER` (0x033A) for 1 tick.
-   - If that answers CF = 1 (kern_small), set `dia_worker`; the first W_PAINT hires the worker (item 6).
+   - If that answers CF = 1 (kern_small), set `stik_worker`; the first W_PAINT hires the worker (item 6).
    - Do **not** call `OSAPI_WM_NOANIM`: the SDK says not for a main window (os88api.inc:649), and an open animation at boot is harmless.
-3. **`dia_tick`** (timer callback: UI task, lock held, file slots legal, §13.9):
-   - (a) **First call only**, when `dia_nohome` = 0: build the 128-byte record in bss and call `OSAPI_DESK_ITEM` AL = 1. On a refusal (no system disk, table full, or kern_small), just stay unregistered; CTRL.DRV's own toast is the only message. The record:
+3. **`stik_tick`** (timer callback: UI task, lock held, file slots legal, §13.9):
+   - (a) **First call only**, when `stik_nohome` = 0: build the 128-byte record in bss and call `OSAPI_DESK_ITEM` AL = 1. On a refusal (no system disk, table full, or kern_small), just stay unregistered; CTRL.DRV's own toast is the only message. The record:
 
      | offset | content |
      |---|---|
@@ -314,37 +314,37 @@ The include provides:
      | +1 | 0xFF |
      | +2 | 1 |
      | +3 | `'D'` |
-     | +4 | `OSAPI_FILE_PATH` (0x041F) minus its leading `\`, then `\`, then the 8.3 name: `SYSTEM\DIA\DESKCAL.O88`, 22 of 45 |
-     | +49 | `DIA_CAP` |
-     | +64 | `DIA_ICON` |
+     | +4 | `OSAPI_FILE_PATH` (0x041F) minus its leading `\`, then `\`, then the 8.3 name: `STIKAPPS\DESKCAL.O88`, 22 of 45 |
+     | +49 | `STIK_CAP` |
+     | +64 | `STIK_ICON` |
 
      A path over 44 characters means no registration.
    - (b) **Position poll:** read `[es:bx+W_X]` and `[es:bx+W_Y]`. If they differ from the saved pair **and** equal the previous poll's pair, the drag has settled: store them with `OSAPI_VIDEO`'s AX and BX, and set dirty.
-   - (c) Call `DIA_ONTICK` (the app's minute logic).
-   - (d) If dirty and `dia_nohome` = 0, run `dia_save`.
+   - (c) Call `STIK_ONTICK` (the app's minute logic).
+   - (d) If dirty and `stik_nohome` = 0, run `stik_save`.
    - (e) Re-arm for **36 ticks** (~2 s).
-4. **`dia_save`:**
+4. **`stik_save`:**
    - Bank, walk, `OSAPI_FILE_WRITE` (0x0103) the header and payload as one call, GOTO back.
    - On CF = 1 (the disk is swapped), keep dirty and retry on the next tick, silently.
-   - If `dia_damaged`, the first save first asks `os88ui_ask AYESNO 'Replace damaged calendar?'`. On No, it stays read-only for the session.
-5. **`dia_close`** (W_ONCLOSE negotiator: close box and File ▸ Close; **not** Restart or power-off, `ui.inc:2814-2850`):
-   - Call `DIA_ONCLOSE`, then `OSAPI_DESK_ITEM` AL = 0, AH = 0xFF, ES:SI = the record.
-   - Then `dia_save`, then answer CF = 0.
+   - If `stik_damaged`, the first save first asks `os88ui_ask AYESNO 'Replace damaged calendar?'`. On No, it stays read-only for the session.
+5. **`stik_close`** (W_ONCLOSE negotiator: close box and File ▸ Close; **not** Restart or power-off, `ui.inc:2814-2850`):
+   - Call `STIK_ONCLOSE`, then `OSAPI_DESK_ITEM` AL = 0, AH = 0xFF, ES:SI = the record.
+   - Then `stik_save`, then answer CF = 0.
    - Because Restart does not close windows, an open widget **stays registered across a restart**, which is what the user asked for.
    - A Task Manager kill also leaves the row, so the widget comes back next boot. This is documented.
-6. **kern_small arm** (`dia_worker`), from the first W_PAINT, as the `taskmgr.asm:1068-1123` pattern does:
+6. **kern_small arm** (`stik_worker`), from the first W_PAINT, as the `taskmgr.asm:1068-1123` pattern does:
    - `OSAPI_TASK_SPAWN`, then `OS88_WORKER_RESTARTABLE`. The worker loops `OSAPI_TASK_SLEEP` 36 / `OSAPI_TASK_ALIVE` / `OSAPI_WM_WAKE`, and touches no file (§20.6 rule 7).
-   - The `W_ONWAKE` handler (no lock) runs (b), takes `OSAPI_GFX_LOCK` around `DIA_ONTICK`, so the app sees the same environment as on kern_big, then runs (d).
+   - The `W_ONWAKE` handler (no lock) runs (b), takes `OSAPI_GFX_LOCK` around `STIK_ONTICK`, so the app sees the same environment as on kern_big, then runs (d).
    - The registration (a) is skipped, because `OSAPI_DESK_ITEM` is `stc` there.
 
-**Placement on restore**, user-first's anchor rule, applied in `dia_load`:
+**Placement on restore**, user-first's anchor rule, applied in `stik_load`:
 - If the saved screen width and height equal `OSAPI_VIDEO` AX/BX (0x0127), use the saved x,y.
 - Otherwise anchor to the nearer edge on each axis:
   - `x' = x` if `x + w/2 < oldW/2`, else `newW - (oldW - x)`;
   - the same for y against the dock line (`OSAPI_VIDEO` CX).
 - `wm_fit` inside `wm_create` (wm.inc:1339 → :511) then clamps whatever is left onto the glass (§39.7). That is the graceful answer for a resolution change.
 
-**The DIA header** (16 B, owned by `os88dia.inc`, at the front of the app's DAT):
+**The Sticky App header** (16 B, owned by `os88stik.inc`, at the front of the app's DAT):
 
 | off | size | field |
 |---|---|---|
@@ -355,9 +355,9 @@ The include provides:
 | +6 | 2 | frame y (W_Y) |
 | +8 | 2 | screen width at save |
 | +10 | 2 | screen height at save |
-| +12 | 1 | payload version (`DIA_PAYVER`) |
+| +12 | 1 | payload version (`STIK_PAYVER`) |
 | +13 | 1 | 0 |
-| +14 | 2 | payload length; must equal `DIA_PAYLEN` and file size − 16 |
+| +14 | 2 | payload length; must equal `STIK_PAYLEN` and file size − 16 |
 
 **Estimated size:** ~650 B of image (with the singleton check and the worker arm), ~200 B of bss (record 128 + state).
 
@@ -365,19 +365,19 @@ The include provides:
 
 | store | holds | written by | when |
 |---|---|---|---|
-| SYSTEM.CFG trailer (§26.8.6): a `'D'` row, KIND 1, zslot 0xFF | **which** DIAs are open and **where the program file is**, i.e. "launched from" | CTRL.DRV settings core, via `OSAPI_DESK_ITEM` | first launch (later launches are a no-op compare, no write) and close |
+| SYSTEM.CFG trailer (§26.8.6): a `'D'` row, KIND 1, zslot 0xFF | **which** Sticky Apps are open and **where the program file is**, i.e. "launched from" | CTRL.DRV settings core, via `OSAPI_DESK_ITEM` | first launch (later launches are a no-op compare, no write) and close |
 | `SYSTEM\APPDATA\DESKCAL.DAT` on the widget's **own** volume (§19.9) | position, the screen it was saved on, appointments, tasks | the package, UI task only | debounced 2 s after an edit, once a drag settles (~4 s), and at close |
 
 - Read at boot by `ovl_sc_load` (the boot overlay, no resident byte), which copies +3 verbatim.
-- Launched by `dia_boot_x` → `sc_open` → `ldf_ld_pkg_start` → `dia_load`.
-- Rows are shared with the user's shortcuts: `SC_MAX` = 15 rows, `ovl_sc_load`'s 4,096-byte cap (desksc.inc:1203). A DIA row costs **no** desktop cell.
+- Launched by `stik_boot_x` → `sc_open` → `ldf_ld_pkg_start` → `stik_load`.
+- Rows are shared with the user's shortcuts: `SC_MAX` = 15 rows, `ovl_sc_load`'s 4,096-byte cap (desksc.inc:1203). A Sticky App row costs **no** desktop cell.
 - kern_small reads no SYSTEM.CFG (§51.5), so restore does not exist there. The DAT still restores position and data at launch.
 
 **Graceful failure table:**
 
 | case | what the user sees | state |
 |---|---|---|
-| widget file deleted or renamed, `SYSTEM\DIA` gone, or a file where a folder was | one toast `Shortcut not found (A:)` (the existing sentence, `sc_s_nf`, drive patched in); a **Calendar** icon appears in a desktop cell | the row is downgraded in memory to an ordinary shortcut. The user can double-click it (retry) or Delete it. The next SYSTEM.CFG write persists it |
+| widget file deleted or renamed, `STIKAPPS` gone, or a file where a folder was | one toast `Shortcut not found (A:)` (the existing sentence, `sc_s_nf`, drive patched in); a **Calendar** icon appears in a desktop cell | the row is downgraded in memory to an ordinary shortcut. The user can double-click it (retry) or Delete it. The next SYSTEM.CFG write persists it |
 | launched from B:, booted without that disk | the same, naming `(B:)` | the same, and stated in §110 |
 | load refused (memory, version) | `ld_say_status`'s sentence | the row is **kept** |
 | DAT missing | a fresh calendar at the template position | — |
@@ -391,11 +391,11 @@ Boot always continues to the desktop.
 ### 3.5 Disk layout and Makefile
 
 ```
-A:\SYSTEM\DIA\DESKCAL.O88        LZ4-packed by PKGZ, ~4-5 KB, ~5 clusters at 360 KB
+A:\STIKAPPS\DESKCAL.O88        LZ4-packed by PKGZ, ~4-5 KB, ~5 clusters at 360 KB
 A:\SYSTEM\APPDATA\DESKCAL.DAT    written at runtime, never shipped (so never packed)
 ```
 
-- `DIAAPPS := $(BUILD)/deskcal.o88` and `DIAARGS := $(addprefix SYSTEM/DIA:,$(DIAAPPS))`.
+- `STIKAPPS := $(BUILD)/deskcal.o88` and `STIKARGS := $(addprefix STIKAPPS:,$(STIKAPPS))`.
 - Thread it **explicitly**, as zero-kernel says, rather than through `SYSAPPSARGS`. That variable is restated in ~12 tight 360 KB gate-disk recipes; the uses are listed at `Makefile:4266-4690` and 9935-11744.
 
 | recipe | location |
@@ -406,13 +406,13 @@ A:\SYSTEM\APPDATA\DESKCAL.DAT    written at runtime, never shipped (so never pac
 | `$(IMG360)` | :4643 |
 | `$(BUILD)/emu.img` | :11347 |
 | `LIVESYSARGS` (live media and `usb-emu`) | :13005 |
-| small system disks, via a new `SMALLDIAARGS` | :11272/:11287 |
+| small system disks, via a new `SMALLSTIKARGS` | :11272/:11287 |
 
-- Add the prerequisite `$(DIAAPPS)` to each of those recipes.
+- Add the prerequisite `$(STIKAPPS)` to each of those recipes.
 - `$(BUILD)/deskcal.bin` and `.o88` rules in calc's shape (`Makefile:5206-5212`).
 - Not on any apps disk. A widget belongs to the boot volume (the THEWIRE rule, §92).
 - 360 KB system disk: **42 free clusters today** [measured by map-cfg]; this spends ~6 (1 directory + the packed package), plus 3 at runtime for the DAT.
-- APPDATA capacity is ~14 entries at 1.44 MB/1.2 MB (FERR_DIRFULL, §18.5). DESKCAL uses one; each future DIA should keep to one file.
+- APPDATA capacity is ~14 entries at 1.44 MB/1.2 MB (FERR_DIRFULL, §18.5). DESKCAL uses one; each future Sticky App should keep to one file.
 
 ---
 
@@ -420,9 +420,9 @@ A:\SYSTEM\APPDATA\DESKCAL.DAT    written at runtime, never shipped (so never pac
 
 - **Files:** `deskcal.asm` (header, entry, menus, callbacks), `dcdraw.inc`, `dcdate.inc`, `dcdata.inc`, `dcrem.inc`.
 - **Header:** `OS88_HEADER 'Desk Calendar', dc_entry, OS88_F_ICON`.
-- **Includes, at the end before `OS88_BSS`:** `os88ui.inc` with `OS88UI_CHK`, `OS88UI_ALERT` and `OS88UI_ABOUT`, then `os88line.inc`, then `os88dia.inc` (os88line must follow os88ui, `os88line.inc:18-22`).
+- **Includes, at the end before `OS88_BSS`:** `os88ui.inc` with `OS88UI_CHK`, `OS88UI_ALERT` and `OS88UI_ABOUT`, then `os88line.inc`, then `os88stik.inc` (os88line must follow os88ui, `os88line.inc:18-22`).
 - **About:** `OSAPI_ABOUT_SET` is mandatory (§12.2; the SHEET/CHART lesson).
-- **Estimate:** image ≈ 8-9 KB (the shared UI includes are 2,798 B measured by map-pkg; dia ~0.65 KB; the calendar ~4.5 KB); bss ≈ 2.9 KB; ~4.5 KB on disk.
+- **Estimate:** image ≈ 8-9 KB (the shared UI includes are 2,798 B measured by map-pkg; stik ~0.65 KB; the calendar ~4.5 KB); bss ≈ 2.9 KB; ~4.5 KB on disk.
 
 **Window setup:**
 - non-sizable; snap on (the default);
@@ -465,7 +465,7 @@ Every text pen sits at content origin + 8k. Every row is **one opaque `OSAPI_FON
 
 ### 4.2 Data: `DESKCAL.DAT` payload v1
 
-The file is the 16-byte DIA header (§3.3) followed by this payload. Fixed size **2,456 B = 5 sectors**, one read call and one write call.
+The file is the 16-byte Sticky App header (§3.3) followed by this payload. Fixed size **2,456 B = 5 sectors**, one read call and one write call.
 
 ```
 +0     db n_appt (0..48), n_task (0..32), lead_default (0/5/15/30/60), flags
@@ -506,7 +506,7 @@ The file is the 16-byte DIA header (§3.3) followed by this payload. Fixed size 
 
   The About card is `os88ui_about` with 4 lines.
 
-### 4.4 Reminders (`DIA_ONTICK`, every 36 ticks)
+### 4.4 Reminders (`STIK_ONTICK`, every 36 ticks)
 
 `OSAPI_CLK_GET` is called. When the minute differs from the last one seen:
 1. **Date rolled:** move today's inverse (two 3-cell runs, ~8 ms), plus the header if the month changed.
@@ -539,7 +539,7 @@ Reminders fire only while the widget runs, including while minimized (§13.9). A
 
 ## 5. kern_small
 
-- Ship `DESKCAL.O88` in `SYSTEM\DIA\` on the small system disks too (`SMALLDIAARGS`). It needs no driver and ~12 KB of heap, so none of §24.5's three grounds (driver unreachable, claim larger than the machine, no reader) applies.
+- Ship `DESKCAL.O88` in `STIKAPPS\` on the small system disks too (`SMALLSTIKARGS`). It needs no driver and ~12 KB of heap, so none of §24.5's three grounds (driver unreachable, claim larger than the machine, no reader) applies.
 - What works there: the widget, its data and its position (from the DAT at launch). Ticks come from the worker arm (§3.3 item 6).
 - What does not: autostart and restore. `OSAPI_DESK_ITEM` is `stc` (`desk.inc:2213`) and is refused silently; `OS88_SHORTCUTS` and `drv_notice_x` do not exist there.
 - The inline editor rather than a second window is what keeps it inside kern_small's 6 window slots.
@@ -550,15 +550,15 @@ Reminders fire only while the widget runs, including while minimized (§13.9). A
 
 ## 6. SPEC.md work (wave 0, written before any code)
 
-- **New §110 "Desktop Integrated Applications"**:
+- **New §110 "Sticky Apps"**:
 
   | subsection | subject |
   |---|---|
-  | §110.1 | definition: package, `SYSTEM\DIA`, `os88dia.inc` |
-  | §110.2 | the DIA row (`'D'` at +3, KIND 1, zslot 0xFF), add-or-update and remove-by-name |
+  | §110.1 | definition: package, `STIKAPPS`, `os88stik.inc` |
+  | §110.2 | the Sticky App row (`'D'` at +3, KIND 1, zslot 0xFF), add-or-update and remove-by-name |
   | §110.3 | the Desk Calendar |
-  | §110.4 | the boot relaunch (`dia_boot_x`) and the failure table |
-  | §110.5 | the DIA header and the DAT payload |
+  | §110.4 | the boot relaunch (`stik_boot_x`) and the failure table |
+  | §110.5 | the Sticky App header and the DAT payload |
   | §110.6 | what it costs (the kernsize ledger) |
   | §110.7 | kern_small |
   | §110.8 | what is not done: desk layer, chrome, a move notification, a shutdown hook |
@@ -566,14 +566,14 @@ Reminders fire only while the widget runs, including while minimized (§13.9). A
 - **Amend:**
   - §26.8.1: the +3 byte's three real values. This fixes existing drift: +3 is `\` today, not spare.
   - §26.8.5: `sc_open`'s CF.
-  - §26.9 / §26.9.3: `desk_live` and DIA rows.
-  - §26.9.6: the `OSAPI_DESK_ITEM` DIA record and remove AH = 0xFF.
-  - §2.8.7: the settings core's DIA rules.
+  - §26.9 / §26.9.3: `desk_live` and Sticky App rows.
+  - §26.9.6: the `OSAPI_DESK_ITEM` Sticky App record and remove AH = 0xFF.
+  - §2.8.7: the settings core's Sticky App rules.
   - §20.3: cell 0x0467 and the table-length line.
   - §37: `OSAPI_CLK_GET` as a reader.
-  - §51.3: `dia_boot_x` at the head of `drv_notice`.
+  - §51.3: `stik_boot_x` at the head of `drv_notice`.
   - §19.9: `DESKCAL.DAT`.
-  - §24.5.1: the small system disk carries `SYSTEM\DIA`.
+  - §24.5.1: the small system disk carries `STIKAPPS`.
 - Also: docs/KERNEL-MEMORY.md (ledger), PERFORMANCE.md Part 5 (a row in W4), docs/INDEX.md (regenerated), and a root `readme.txt` section (`tools/checkreadme.py`).
 - **Renumber check before merge:** another branch could take §107 first (the port-workflow lesson). One did: main took 107 for EMS.DRV in #252, and the section is §110.
 
@@ -585,27 +585,27 @@ Reminders fire only while the widget runs, including while minimized (§13.9). A
 
 **W1 — kernel and module half, no calendar yet.**
 - K1-K6; SDK defines and contract text; `abilock --update` with no bump; the `clk_hour − clk_min` assertion.
-- `tests/diaprobe/diaprobe.asm`, built by `make bench` only and never shipped (deskitem's shape): it includes a minimal `os88dia.inc` arm (register on its first tick, remove by name on close) and paints its own x,y.
-- `tools/os88dia.py` (with `--selfcheck`): an independent host writer and reader for the SYSTEM.CFG trailer (rows, pin bytes, footer, the `'D'` row) and for the DAT (DIA header + DESKCAL payload).
-- `make diatest`: scratch 1.44 MB and 360 KB system images (ethertest's shape) with fixture SYSTEM.CFG and DAT files.
+- `tests/stikprob/stikprob.asm`, built by `make bench` only and never shipped (deskitem's shape): it includes a minimal `os88stik.inc` arm (register on its first tick, remove by name on close) and paints its own x,y.
+- `tools/os88stik.py` (with `--selfcheck`): an independent host writer and reader for the SYSTEM.CFG trailer (rows, pin bytes, footer, the `'D'` row) and for the DAT (Sticky App header + DESKCAL payload).
+- `make stiktest`: scratch 1.44 MB and 360 KB system images (ethertest's shape) with fixture SYSTEM.CFG and DAT files.
 
   | variant | contents |
   |---|---|
-  | `restore` | a DIA row → DIAPROBE at (304,184) |
-  | `ghost` | a row → `SYSTEM\DIA\GONE.O88` plus the restore row |
+  | `restore` | a Sticky App row → STIKPROB at (304,184) |
+  | `ghost` | a row → `STIKAPPS\GONE.O88` plus the restore row |
   | `bvol` | a row on B:, booted with no B: |
-  | `short` | three ordinary drag-made shortcuts with `\` at +3, and no DIA row |
+  | `short` | three ordinary drag-made shortcuts with `\` at +3, and no Sticky App row |
   | `hiber` | a hibernate image present |
 
 - Checks: `tools/kernsize.py` before and after on both kernels, `--bless`, docs/KERNEL-MEMORY.md; `os88sym --all` on both kernels and `os88ladder --selfcheck` (memory: instruments break silently); verify that `desk_reflow` is lock-free-safe and that `OSAPI_FILE_HERE`'s BL equals the DI record's volume index.
-- Gate rows: `diaboot`, `diamiss`, `diashort`, `diahiber`; `desksc`, `deskitem` and `cfgtrip` stay green; `make test-full` run alone.
+- Gate rows: `stikboot`, `stikmiss`, `stikshort`, `stikhiber`; `desksc`, `deskitem` and `cfgtrip` stay green; `make test-full` run alone.
 
 **W2 — the framework and the calendar skeleton.**
-- `apps/os88dia.inc` in full: singleton, anchoring, register, remove, mux, save, worker arm.
+- `apps/os88stik.inc` in full: singleton, anchoring, register, remove, mux, save, worker arm.
 - `apps/deskcal/`: window, About, menus, grid, navigation, date maths, the TALL and COMPACT tables, ONRESIZE.
-- Makefile: rules, `DIAARGS` threaded through all seven recipes of §3.5.
-- `t_dia`, `t_livefull`, `t_smallreq` green; INDEX regenerated.
-- Gate rows: `diaregister`, `diamove`, `deskcalgrid`, plus the first VGA and CGA screenshots.
+- Makefile: rules, `STIKARGS` threaded through all seven recipes of §3.5.
+- `t_stik`, `t_livefull`, `t_smallreq` green; INDEX regenerated.
+- Gate rows: `stikregister`, `stikmove`, `deskcalgrid`, plus the first VGA and CGA screenshots.
 
 **W3 — appointments and tasks.**
 - One-line entry and its parser, sorted insert, agenda select / edit / delete, tasks with `os88ui_chk`, Clear Done.
@@ -617,7 +617,7 @@ Reminders fire only while the widget runs, including while minimized (§13.9). A
 - The kern_small worker arm end to end; small system disks.
 - MartyPC counters and the PERFORMANCE.md Part 5 row; readme.txt.
 - Full screenshot set; functional-check skill pass; PR.
-- Gate rows: `deskcalremind`, `diasmall`, `deskcalperf`.
+- Gate rows: `deskcalremind`, `stiksmall`, `deskcalperf`.
 
 **W5 — OWNER DECISION D1, not built by default: the desk layer.** The wm map §8 items a-g, ≈ 100 B resident, mostly hot-path `.text`, so it cannot be a module:
 - `WF_DESK` = W_FLAGS bit 10, added to `WF_HIBITS` (wm.inc:286);
@@ -635,31 +635,31 @@ Chrome removal (user-first's ten `WF_FULL` sites, +60-100 B) is a **separate** l
 ## 8. Tests (`tests/suite.py` rows)
 
 **FAST** (host, inside every `make`):
-- **`t_dia`** (`tests/unit/t_dia.py`):
-  - Every shipped **system** image carries `SYSTEM/DIA/DESKCAL.O88`, read by the independent FAT12 reader. The images: four geometries, four small, `emu.img`, and `os8088-usb.img` when built.
+- **`t_stik`** (`tests/unit/t_stik.py`):
+  - Every shipped **system** image carries `STIKAPPS/DESKCAL.O88`, read by the independent FAT12 reader. The images: four geometries, four small, `emu.img`, and `os8088-usb.img` when built.
   - **No** apps image carries it.
-  - `tools/os88dia.py --selfcheck` round-trips: exact-size, magic and count refusals, and the `'D'` row.
-  - A constant mirror holds `SC_R_DIA` = `OSAPI_DI_DIA` = 3 and `SC_DIA` = `OSAPI_DIA_MARK` = `'D'`, plus the DIA-header and payload offsets across `os88dia.inc`, `deskcal.asm` and `os88dia.py`.
+  - `tools/os88stik.py --selfcheck` round-trips: exact-size, magic and count refusals, and the `'D'` row.
+  - A constant mirror holds `SC_R_STIK` = `OSAPI_DI_STIK` = 3 and `SC_STIK` = `OSAPI_STIK_MARK` = `'D'`, plus the Sticky App-header and payload offsets across `os88stik.inc`, `deskcal.asm` and `os88stik.py`.
 - Existing rows that must go green: `t_api_abi` and the abilock row (cell 0x0467), `t_mirror` (new pairs), `t_livefull` part A (`DESKCAL.O88` in LIVEARGS through `LIVESYSARGS`), `t_image`, `t_diskverify`, `t_registry`, the INDEX `--check`, `checkreadme`.
 
 **FULL:** no new row; this keeps the ~50 s budget. `t_buildmatrix` (kern_small, kern_emu, knob kernels) and the 1bpp desktop boots cover assembly.
 
-**SOAK** — group `dia*` / `deskcal*`. On MartyPC per docs/TESTING.md and the `deskitem` precedent (`needs=("marty",)`) unless noted:
+**SOAK** — group `stik*` / `deskcal*`. On MartyPC per docs/TESTING.md and the `deskitem` precedent (`needs=("marty",)`) unless noted:
 
 | row | what it asserts |
 |---|---|
-| `diaboot` | `diatest restore`: DIAPROBE's window is at (304,184) after the snap; no desktop cell taken (`desk_zslot` of its zone is 0xFF); desktop reached; SYSTEM.CFG unchanged (no write) |
-| `diamiss` | `ghost` and `bvol`: the desktop is reached; the toast text is `Shortcut not found (A:)` / `(B:)`; a Calendar icon occupies a cell; the surviving widget launched |
-| `diashort` | **the regression for §2.1**: `short` boots, all three drag-made shortcuts are drawn in their cells, nothing is launched |
-| `diahiber` | with a hibernate image: no package instance exists when the Resume question is up |
-| `diaregister` | open A: ▸ SYSTEM ▸ DIA and double-click DESKCAL.O88 (one process, per the double-click-latency lesson); read the image back: one `'D'` row with path `SYSTEM\DIA\DESKCAL.O88`, KIND 1; relaunch: still one row, SYSTEM.CFG byte-identical; close box: the row is gone; reset: no widget |
-| `diamove` | drag the title bar; wait 6 s; DAT read-back holds the new x,y; reset (wait on a kernel symbol, not `settle()`, per the warm-boot lesson); the window is back at the same place |
-| `diasmall` | `make small`: the widget opens, `OSAPI_DESK_ITEM` refuses silently (no toast), reset brings back no widget, a relaunch restores position and data |
+| `stikboot` | `stiktest restore`: STIKPROB's window is at (304,184) after the snap; no desktop cell taken (`desk_zslot` of its zone is 0xFF); desktop reached; SYSTEM.CFG unchanged (no write) |
+| `stikmiss` | `ghost` and `bvol`: the desktop is reached; the toast text is `Shortcut not found (A:)` / `(B:)`; a Calendar icon occupies a cell; the surviving widget launched |
+| `stikshort` | **the regression for §2.1**: `short` boots, all three drag-made shortcuts are drawn in their cells, nothing is launched |
+| `stikhiber` | with a hibernate image: no package instance exists when the Resume question is up |
+| `stikregister` | open A: ▸ SYSTEM ▸ Sticky App and double-click DESKCAL.O88 (one process, per the double-click-latency lesson); read the image back: one `'D'` row with path `STIKAPPS\DESKCAL.O88`, KIND 1; relaunch: still one row, SYSTEM.CFG byte-identical; close box: the row is gone; reset: no widget |
+| `stikmove` | drag the title bar; wait 6 s; DAT read-back holds the new x,y; reset (wait on a kernel symbol, not `settle()`, per the warm-boot lesson); the window is back at the same place |
+| `stiksmall` | `make small`: the widget opens, `OSAPI_DESK_ITEM` refuses silently (no toast), reset brings back no widget, a relaunch restores position and data |
 | `deskcalgrid` | read the package's 42-byte day grid out of its bss (via `I_SPTR`) for Oct 2026, Feb 2028, Jan 1980 and Dec 2099 and compare with Python's `calendar.monthcalendar`; stepping past 2099 is refused |
 | `deskcaledit` | type `9:30 Dentist` Enter (sendkey); the DAT holds date, 570, REMIND; Del + Yes removes it; the 49th add is greyed |
 | `deskcaltask` | add `Buy milk`, click its box: the mark pixels flip and DONE is set in the DAT after the debounce; Clear Done compacts |
 | `deskcalremind` | poke the live `clk_*` to 09:29:40 (tests/kdreturn.py:387's reader, inverted); the alert window is `wm_top` with `Reminder 09:30 Dentist`; the toast buffer holds `09:30 Dentist`. Plus a QEMU `make test-snd` arm with `tools/sndcheck.py` for 880 Hz |
-| `deskcalperf` | counters in `font_run` / `gfx_fill` / `wm_paint_dmg`: first paint, day select, an idle tick (must be **0**), a reminder tick, and boot time with and without a DIA row (`tools/os88boot.py` phase table). These figures go into PERFORMANCE.md Part 5 and §110.6 |
+| `deskcalperf` | counters in `font_run` / `gfx_fill` / `wm_paint_dmg`: first paint, day select, an idle tick (must be **0**), a reminder tick, and boot time with and without a Sticky App row (`tools/os88boot.py` phase table). These figures go into PERFORMANCE.md Part 5 and §110.6 |
 | `deskcal1bpp` | CGA (MartyPC `os8088_5150_cga`) and Hercules (`os8088_5150_herc_gla`): the COMPACT and TALL layouts, today inverse, the selected frame, greyed items legible (§39.4, §47) |
 
 Hazards (memory notes): run soak groups one at a time with `--marty-jobs 1`; a MartyPC client is single; knob kernels go in private trees; never run test-full beside another make.
@@ -668,25 +668,25 @@ Hazards (memory notes): run soak groups one at a time with `--marty-jobs 1`; a M
 
 ## 9. PR screenshots (the user's request)
 
-**Fixture.** `make diashot` builds `build/diashot.img`: the system disk plus a SYSTEM.CFG trailer with the DESKCAL `'D'` row and a `DESKCAL.DAT` written by `tools/os88dia.py`. The DAT is placed at the desktop's right, with three appointments today (one with a reminder at **host-time + 2 min**, generated at build time) and four tasks (one done). QEMU's RTC is the host clock, so the grid shows the real month.
+**Fixture.** `make stikshot` builds `build/stikshot.img`: the system disk plus a SYSTEM.CFG trailer with the DESKCAL `'D'` row and a `DESKCAL.DAT` written by `tools/os88stik.py`. The DAT is placed at the desktop's right, with three appointments today (one with a reminder at **host-time + 2 min**, generated at build time) and four tasks (one done). QEMU's RTC is the host clock, so the grid shows the real month.
 
 **VGA:**
 ```sh
-make diashot && make test TESTIMG=build/diashot.img       # widget autostarts at boot
-python3 tools/shot.py build/qmp.sock docs/dia/full-vga.png               # full frame FIRST
-python3 tools/shot.py build/qmp.sock docs/dia/vga.png --crop X,Y,W,H --zoom 2
+make stikshot && make test TESTIMG=build/stikshot.img       # widget autostarts at boot
+python3 tools/shot.py build/qmp.sock docs/stikapps/full-vga.png               # full frame FIRST
+python3 tools/shot.py build/qmp.sock docs/stikapps/vga.png --crop X,Y,W,H --zoom 2
 ```
 
 **One 1bpp adapter, CGA.** QEMU's VGA renders CGA mode natively, so `shot.py` works. Build it in a private tree so `build/` keeps the stock kernel:
 ```sh
-make BUILD=build-cga VIDEO=cga build-cga/diashot.img
-make BUILD=build-cga VIDEO=cga test TESTIMG=build-cga/diashot.img   # QMP is still build/qmp.sock
+make BUILD=build-cga VIDEO=cga build-cga/stikshot.img
+make BUILD=build-cga VIDEO=cga test TESTIMG=build-cga/stikshot.img   # QMP is still build/qmp.sock
 python3 tools/mouse.py --screen 640x200 build/qmp.sock ...
-python3 tools/shot.py build/qmp.sock docs/dia/cga-compact.png --crop ... --zoom 2
+python3 tools/shot.py build/qmp.sock docs/stikapps/cga-compact.png --crop ... --zoom 2
 ```
 Hercules comes off MartyPC (`os88marty.py ... shot herc.png`, docs/HERCULES-TESTING.md) as a bonus.
 
-**The set, one per user-visible claim, committed under `docs/dia/`** (docs/*.png are tracked precedent; never anything in `build/`):
+**The set, one per user-visible claim, committed under `docs/stikapps/`** (docs/*.png are tracked precedent; never anything in `build/`):
 
 | file | claim |
 |---|---|
@@ -700,7 +700,7 @@ Hercules comes off MartyPC (`os88marty.py ... shot herc.png`, docs/HERCULES-TEST
 | `herc.png` | optional, MartyPC |
 
 **PR body:**
-- each image embedded as `![claim](https://github.com/jggonz/os8088/blob/<head-sha>/docs/dia/<f>.png?raw=true)`, pinned to the head SHA;
+- each image embedded as `![claim](https://github.com/jggonz/os8088/blob/<head-sha>/docs/stikapps/<f>.png?raw=true)`, pinned to the head SHA;
 - the functional-check skill's `claim | driven | glass | verdict` table;
 - the kernsize ledger for both kernels;
 - the compromise list (§10);
@@ -716,11 +716,11 @@ Hercules comes off MartyPC (`os88marty.py ... shot herc.png`, docs/HERCULES-TEST
    - W5 / D1 is the costed fix.
 2. **No move notification and no shutdown hook.** Position is polled every 2 s and written once two polls agree. A power-off within ~4 s of a drag, or ~2 s of an edit, loses that change.
 3. **Floppy cost.**
-   - Each autostarted widget adds roughly 8-10 `int 13h` calls ≈ 3-4 s to an XT floppy boot: path walk, package read, APPDATA walk, DAT read, the first-tick settings-core read. A machine with no DIA row pays nothing.
+   - Each autostarted widget adds roughly 8-10 `int 13h` calls ≈ 3-4 s to an XT floppy boot: path walk, package read, APPDATA walk, DAT read, the first-tick settings-core read. A machine with no Sticky App row pays nothing.
    - Each committed edit or settled move is one DAT write (~1-2 s, pointer tracking per §7.4).
    - First registration and close each write SYSTEM.CFG once.
-4. **The boot launch runs in kmain's tail**, before ui_task's first pass. No package has been loaded from there before (the Control Panel is a builtin). `diaboot` gates it. If the loader misbehaves there, the fallback is a `[ui_post]`-gated post at `ui.inc:597-600`, about 10 B of `.text`.
-5. **Shared rows.** A DIA row is one of `SC_MAX` = 15 shortcut rows. A full table means the widget runs but is not restored, and `Too many shortcuts` is the only notice.
+4. **The boot launch runs in kmain's tail**, before ui_task's first pass. No package has been loaded from there before (the Control Panel is a builtin). `stikboot` gates it. If the loader misbehaves there, the fallback is a `[ui_post]`-gated post at `ui.inc:597-600`, about 10 B of `.text`.
+5. **Shared rows.** A Sticky App row is one of `SC_MAX` = 15 shortcut rows. A full table means the widget runs but is not restored, and `Too many shortcuts` is the only notice.
 6. **A hostile SYSTEM.CFG** can mark any package row `'D'` and have it autostart. Accepted: SYSTEM.CFG is hidden+system on the boot disk, and whoever can write it can write KERNEL.SYS.
 7. **ABI fence.** `DESKCAL` calls 0x0467, so on an older kernel at the same PKG_FMT it would far-call past the table. It ships only beside its own kernel and must **not** go into `wire.json` (D5).
 8. **HDD install.** A row's VOL is a volume index. After an install, a row recorded against A: misses and is downgraded; that is existing shortcut semantics, stated in §110.
@@ -736,7 +736,7 @@ Hercules comes off MartyPC (`os88marty.py ... shot herc.png`, docs/HERCULES-TEST
 | D1 | Desk layer (behind other windows, one-click, no dock tile), ≈ 100 B resident hot path; chrome removal is +60-100 B more | **Defer.** Ship v1 as a normal window, look at the screenshots, then decide W5. |
 | D2 | A widget that cannot be found at boot | **Downgrade to a visible shortcut + one toast** (the user can retry or Delete), rather than silently retrying every boot. |
 | D3 | kern_small | **Ship it on the small system disks**: widget + data + position, no autostart. |
-| D4 | Relaunch widgets after a hibernate **Discard** (`CMD_DIA` post: ≈ 8 B `.text` + ~5 B HIBER.DRV) | **Defer**: they return on the next boot. |
+| D4 | Relaunch widgets after a hibernate **Discard** (`CMD_STIK` post: ≈ 8 B `.text` + ~5 B HIBER.DRV) | **Defer**: they return on the next boot. |
 | D5 | Offer DESKCAL on The Wire | **No**, until a "highest cell used" fence exists. |
 
 
@@ -748,7 +748,7 @@ Numbered as the waves appended them; SPEC.md §110.9 carries the same in
 prose.
 
 
-## Wave 1 (kernel half, SDK, os88dia.py, diaprobe, diatest, four soak rows)
+## Wave 1 (kernel half, SDK, os88stik.py, stikprob, stiktest, four soak rows)
 
 1. **K1 assertion**: `clk_hour - clk_min == 1` was NOT added as a new %if - the
    first %if beside the fields already asserts `clk_min - clk_sec == 1` and
@@ -758,35 +758,35 @@ prose.
 3. **K4 needed a third site**: `sc_open`'s folder arm ended `jmp fm_choose`
    (flags undefined) -> `call fm_choose / clc / ret` (+2 B), so "CF = 1 iff not
    found" holds for every arm.
-4. **K5 is near**: `dia_boot` (ret) called `call dia_boot` from `drv_notice_x`;
-   both are .cold so the design's far `dia_boot_x`/`call COLD_SEG:` was 2 B of
-   call for nothing. A future far caller (W5/D4 CMD_DIA) needs a 4-byte thunk.
+4. **K5 is near**: `stik_boot` (ret) called `call stik_boot` from `drv_notice_x`;
+   both are .cold so the design's far `stik_boot_x`/`call COLD_SEG:` was 2 B of
+   call for nothing. A future far caller (W5/D4 CMD_STIK) needs a 4-byte thunk.
    It preserves ALL registers (kentc_bp + push es / jmp kretc_es) because
    drv_notice_x's contract says so; KIND and mark are ONE word compare.
-5. **K6 order**: a DIA record's KIND==1 and VOL<DVOL_MAX are checked BEFORE the
+5. **K6 order**: a Sticky App record's KIND==1 and VOL<DVOL_MAX are checked BEFORE the
    by-name find, because the update-in-place writes over a live row and the
    existing post-copy `.bad` path frees the row it wrote into.
 6. **K6 size**: MODS_SIZE grew 2,492 -> 2,673 (+181), 5 -> 6 sectors. Design
    estimated +100-130 from 2,447 (which had already grown to 2,492).
 7. **Fixture place (303,184)** not (304,184): WF_SNAP keeps W_X = 7 mod 8 (SPEC 11.94).
-8. **apps/os88dia.inc shipped in W1** as the subset the probe needs (state file
+8. **apps/os88stik.inc shipped in W1** as the subset the probe needs (state file
    load/validate/place, register on first tick, 36-tick poll + save, remove
    by name + save on close). W2 adds: singleton, anchoring to another screen
-   size, damaged-file ask, kern_small worker arm. Layout contract: DIA_BSS
+   size, damaged-file ask, kern_small worker arm. Layout contract: STIK_BSS
    multiple of 16 and the image ends on a paragraph (`align 16` before
-   OS88_IMAGE_END); dia_rec doubles as the read's 80-byte slack and the walk's
-   find buffer; payload is DIA_PAY (= dia_file + 16), owned by the include.
+   OS88_IMAGE_END); stik_rec doubles as the read's 80-byte slack and the walk's
+   find buffer; payload is STIK_PAY (= stik_file + 16), owned by the include.
    The include also skips registration when the DAT was DAMAGED (design: only nohome).
-9. **DIAPROBE is built by `make diatest`** (deskitem's precedent), not `make bench`.
-10. **diahiber uses a hard disk**: hb_pick only asks a FIXED volume, so the
+9. **STIKPROB is built by `make stiktest`** (deskitem's precedent), not `make bench`.
+10. **stikhiber uses a hard disk**: hb_pick only asks a FIXED volume, so the
     fixture is a per-process VHD (os88hdd.py --noboot --file HIBERNAT.PTR=junk)
-    plus diahiber360.img wanting HDD.DRV; asserted by a breakpoint on dia_boot
-    reading [ui_rebootq] == UI_RBQ_ASK, then 20 guest s with no DiaProbe.
+    plus stikhiber360.img wanting HDD.DRV; asserted by a breakpoint on stik_boot
+    reading [ui_rebootq] == UI_RBQ_ASK, then 20 guest s with no StikProbe.
 11. Verified, not changed: desk_reflow is lock-free-safe (no deferred path);
-    OSAPI_FILE_HERE's BL is inst_fdrv = the row's volume index (diaboot's
+    OSAPI_FILE_HERE's BL is inst_fdrv = the row's volume index (stikboot's
     byte-identical SYSTEM.CFG measures it).
 12. Mirror: SC_MAX added to tools/os88geom.py's _MIRROR (t_mirror refused two
-    host copies - tests/desksc.py and tools/os88dia.py - without an entry).
+    host copies - tests/desksc.py and tools/os88stik.py - without an entry).
 
 ## Wave 1 fixes (after review; SPEC.md 110.5, 110.5.1, 110.6, 110.9 carry the same)
 
@@ -799,22 +799,22 @@ prose.
 14. **A save checks HOME first**: the banked launch folder must hold a file
     of the package's own name, else "not home now" (save stays owed). The
     design trusted 19.9's "in the drive by definition"; measured, an apps
-    disk in A: got SYSTEM\APPDATA\DIAPROBE.DAT. HOME is banked ONCE, at
-    dia_load, not at every save.
+    disk in A: got SYSTEM\APPDATA\STIKPROB.DAT. HOME is banked ONCE, at
+    stik_load, not at every save.
 15. **Failed saves are classified**: FERR_NODISK/FERR_IO/not-home retry on a
     1,2,4,8,16-poll backoff; anything else (WPROT, FULL, DIRFULL, PROT) sets
-    DIA_S_RDONLY for the session. Design said "keep dirty, retry every tick".
+    STIK_S_RDONLY for the session. Design said "keep dirty, retry every tick".
 16. **Registration on every launch regardless of the DAT** (DAMAGED and
     NOHOME too). Design 3.3(a) skipped it with no APPDATA, W1 also when
     DAMAGED; either left a row from an earlier session unremovable.
-17. **dia_fnd**: the walk's find buffer is its own 24 bytes (bss +26 with the
-    two backoff bytes); dia_rec stays the row record to the close. The W1
+17. **stik_fnd**: the walk's find buffer is its own 24 bytes (bss +26 with the
+    two backoff bytes); stik_rec stays the row record to the close. The W1
     blocker.
-18. tools/os88dia.py's CFG_FBUF is 141 after merging main (#248), held by
-    the new fast row t_dia (nasm evaluates the kernel's own equ chain;
+18. tools/os88stik.py's CFG_FBUF is 141 after merging main (#248), held by
+    the new fast row t_stik (nasm evaluates the kernel's own equ chain;
     os88geom refuses expressions so t_mirror could not).
 
-## Wave 2 (os88dia.inc in full, apps/deskcal skeleton, the disks; SPEC.md 110.3, 110.5.2, 110.6, 110.9 carry the same)
+## Wave 2 (os88stik.inc in full, apps/deskcal skeleton, the disks; SPEC.md 110.3, 110.5.2, 110.6, 110.9 carry the same)
 
 19. **Layout chosen from the CONTENT HEIGHT** (>= 236 TALL, else COMPACT), not
     OSAPI_VIDEO BX >= 300: same answer on one display, right after a drag
@@ -841,19 +841,19 @@ prose.
 24. **Anchor y uses the saved screen HEIGHT** (the header has no dock line);
     wm_fit clamps above the dock. x and y use the TEMPLATE's w/h.
 25. **kern_small wake takes the lock around the whole beat** (poll, ONTICK,
-    save) via one shared dia_beat, not only around DIA_ONTICK: the save runs
+    save) via one shared stik_beat, not only around STIK_ONTICK: the save runs
     in exactly kern_big's timer environment. Registration skipped on the
     worker arm.
-26. **Damaged-file question is optional** (DIA_DAMAGEDQ + OS88UI_ALERT), never
+26. **Damaged-file question is optional** (STIK_DAMAGEDQ + OS88UI_ALERT), never
     asked from the close (the alert would die with the package), No /
-    dismiss = DIA_S_RDONLY for the session.
-27. **App state first in bss** (DIA_BSS = 112): gates read the grid at
-    image + 0; tools/os88dia.py names the offsets (DESKCAL_BSS_*,
-    dia_st_off) and t_dia has NASM evaluate deskcal.asm's own equs.
-28. **t_dia reads the small pair and emu.img only when built after the
+    dismiss = STIK_S_RDONLY for the session.
+27. **App state first in bss** (STIK_BSS = 112): gates read the grid at
+    image + 0; tools/os88stik.py names the offsets (DESKCAL_BSS_*,
+    stik_st_off) and t_stik has NASM evaluate deskcal.asm's own equs.
+28. **t_stik reads the small pair and emu.img only when built after the
     package** (their targets are on demand; a stale image would make `make`
     red on something nothing rebuilt). The live media is t_livefull part A's.
-29. **tools/os88index.py counts SYSTEM/ and SYSTEM/DIA/ packages as shipped**
+29. **tools/os88index.py counts SYSTEM/ and STIKAPPS/ packages as shipped**
     (The Wire flipped no -> yes too; it was misreported before).
 30. Today from OSAPI_CLK_GET is clamped to 1980-01-01..2099-12-31, and a
     clock field out of range (month 0, day past the month) reads as
@@ -869,24 +869,24 @@ prose.
     (the flag only lowers the floor for a frame taller than the band), while
     wm_dock_snap lets a drag leave one more than half over the strip. Fix:
     deskcal sizes dc_tpl from its own PREFER row for OSAPI_VIDEO's kind
-    before dia_load/create (EGA -> VGA's row), and dia_made writes a
+    before stik_load/create (EGA -> VGA's row), and stik_made writes a
     pulled-UP restored y back into the (not yet shown) record, down to
     OSAPI_WM_DISPLAY height - W_H - 1 (wm_fit's own KEEPH floor). First try
     (re-fit via OSAPI_WM_KEEPH with the flag as it stood) was MEASURED not to
     work: the re-fit clamps a band-fitting frame above the dock again
-    (diaanchor read y 200 for 220).
-32. **The poll compares against the place the window OPENED at** (dia_made
-    primes dia_px/py and the header's x,y,sw,sh; DIA_HF_POS is left as the
+    (stikanchor read y 200 for 220).
+32. **The poll compares against the place the window OPENED at** (stik_made
+    primes stik_px/py and the header's x,y,sw,sh; STIK_HF_POS is left as the
     file had it). Design 3.3(b) said "differ from the saved pair"; with no
     saved pair W2 saved unprompted. Now: no write until a drag, an edit or
     the close; an anchored/clamped launch place is not written back unless
     the user moves it or edits.
-33. **FERR_NODISK/FERR_IO on the load's read => DIA_S_RDONLY, not DAMAGED**
+33. **FERR_NODISK/FERR_IO on the load's read => STIK_S_RDONLY, not DAMAGED**
     (buffer zeroed either way). A walk failure at load stays NOHOME (blocks
     every save, which is the safe answer for an unread file) - the review's
     "do not latch NOHOME on I/O" was not taken: allowing saves after an
     unread walk would overwrite the unread file.
-34. **dia_close declines the FIRST close whose remove is refused** (CF=1),
+34. **stik_close declines the FIRST close whose remove is refused** (CF=1),
     then lets the next go ahead regardless (SPEC 75.1: never unclosable).
     The not-found case (a row that vanished) also costs one silent decline;
     it cannot be told from "no system disk" by OSAPI_DESK_ITEM's CF alone.
@@ -894,12 +894,12 @@ prose.
     selected day), never the month, and draws nothing under the About card.
     **dc_oncmd folds the card's dismissal into the command's own draw**
     (dc_redo: one dc_all instead of dc_all + dc_regrid).
-36. DIA_CAP checked with %strlen (<= 12). Makefile LIVESYSARGS guard tests
-    $(filter-out $(APPSYS),$(SYSAPPS)) (DIAARGS made the old test dead).
-37. New soak rows diamovecga (MartyPC 5150 CGA via os88marty.machine, the
-    GLaBIOS twin) and diaanchor (needs mtools: mcopy puts the fixture DAT on
-    the scratch disk); diaregister now asserts NO DESKCAL.DAT after 7 guest s
-    untouched (it waited for the unprompted save before); diaswap gains leg D
+36. STIK_CAP checked with %strlen (<= 12). Makefile LIVESYSARGS guard tests
+    $(filter-out $(APPSYS),$(SYSAPPS)) (STIKARGS made the old test dead).
+37. New soak rows stikmovecga (MartyPC 5150 CGA via os88marty.machine, the
+    GLaBIOS twin) and stikanchor (needs mtools: mcopy puts the fixture DAT on
+    the scratch disk); stikregister now asserts NO DESKCAL.DAT after 7 guest s
+    untouched (it waited for the unprompted save before); stikswap gains leg D
     (the declined close).
 
 ## Wave 3 (appointments and tasks; SPEC.md 110.3, 110.6, 110.9, 110.10 carry the same)
@@ -928,7 +928,7 @@ prose.
     box is os88ui_chkdraw / os88ui_chkhit / os88ui_chkmark (the shared
     control), so a toggle redraws only the mark.
 43. **Sort key (date, time+1)**: all-day (0FFFFh) wraps to 0 and comes FIRST
-    in its day (design: (date,time), all-day last). tools/os88dia.py's
+    in its day (design: (date,time), all-day last). tools/os88stik.py's
     deskcal() sorts the same way; its selfcheck updated.
 44. **A Remind pick changes ONE thing**: the selected timed appointment, or
     (none selected) the default for new ones - the toast says which
@@ -938,7 +938,7 @@ prose.
     heading too (the task asked for "toggle redraws only the mark").
 46. **The payload is checked at load** (dc_check: counts inside the tables,
     appointments in (date, time+1) order); a failure zeroes it and sets
-    DIA_S_DAMAGED, so the include's existing `Replace damaged calendar?`
+    STIK_S_DAMAGED, so the include's existing `Replace damaged calendar?`
     path guards it.
 47. **Menus**: Calendar = New Appointment, New Task, Edit Item, Delete Item,
     Clear Done Tasks, Show Tasks/Day, Go to Today, Previous/Next Month;
@@ -959,20 +959,20 @@ prose.
     window read 1 on it.
 51. Sizes: DESKCAL image 6,080 -> 12,160, bss 2,748 -> 2,860, lz4 5,343 ->
     10,411; os8088-360 321 -> 326 of 354 clusters (28 left), small360
-    270 -> 275. DC_BSS 112 -> 224 (DIA_BSS moves; dia_st's offset follows,
-    tools/os88dia.py DESKCAL_DIA_BSS = 224, t_dia G holds it).
+    270 -> 275. DC_BSS 112 -> 224 (STIK_BSS moves; stik_st's offset follows,
+    tools/os88stik.py DESKCAL_STIK_BSS = 224, t_stik G holds it).
 
 ## Wave 3 review fixes (w3-fix)
 
-52. **DIA_ONTICK answers CF = 1 = hold the save** (os88dia.inc, dia_beat).
+52. **STIK_ONTICK answers CF = 1 = hold the save** (os88stik.inc, stik_beat).
     The design (and W3's SPEC 110.3) priced an edit's save as "one write of
     the whole file"; it is SPEC 110.6's 2 reads + 6 writes, ~3.2 s with the
-    gfx lock held, and dia_touch made it land at the next 2 s poll - in the
+    gfx lock held, and stik_touch made it land at the next 2 s poll - in the
     middle of a typed word. The calendar holds it while the entry field or
     its Delete question is open and until one poll passes with no edit
     (dc_touch sets dc_tq; dc_tick answers), so a burst of ticked boxes is
     one save. A contract addition to the shared include, not an ABI change:
-    the only DIA_ONTICK is dc_tick.
+    the only STIK_ONTICK is dc_tick.
 53. **A check box's toggle is the calendar's own 6x6 fill (dc_tmark), not
     os88ui_chkmark.** chkmark is the shared glyph whole and its published
     contract (13.15.1) clears the box before the frame and mark, so the
@@ -988,14 +988,14 @@ prose.
     new field over it.
 56. A click in the open field moves the caret on the glass (caroff/caron of
     the two cells, dos_caret_to's shape).
-57. tools/os88dia.py deskcal(): an appointment's REMIND defaults to "timed",
+57. tools/os88stik.py deskcal(): an appointment's REMIND defaults to "timed",
     as the package creates it; all-day has none.
 
 ## Wave 4 (reminders, kern_small end to end, measurement; SPEC.md 110.3, 110.5, 110.6, 110.7, 110.9, 110.10 carry the same)
 
 58. **The chirp's second note rides a once-only sooner beat**: OSAPI_SND_TONE
-    is one channel / one request, the DIA beat is 36 ticks, so os88dia.inc
-    gained `dia_nx` (1 bss byte): DIA_ONTICK stores n and dia_tick re-arms n
+    is one channel / one request, the Sticky App beat is 36 ticks, so os88stik.inc
+    gained `stik_nx` (1 bss byte): STIK_ONTICK stores n and stik_tick re-arms n
     ticks out once. The worker arm cannot honour it (its next 36-tick sleep
     has begun before the beat runs), so kern_small chirps ONE note, 880 Hz
     for 8 ticks (design: 880 then 660 everywhere).
@@ -1028,7 +1028,7 @@ prose.
     count wins).
 65. **A reminder's moment is max(0, time - lead)** - clamped at midnight, not
     reaching into the previous day.
-66. **No CLAUDE.md document-table row** for docs/plans/completed/DIA-PLAN.md:
+66. **No CLAUDE.md document-table row** for docs/plans/completed/STICKY-APPS-PLAN.md:
     checkdocs does not require one and most completed plans are not listed;
     SPEC.md 110 names the plan file instead.
 67. **deskcalperf's times are MartyPC's cycle counter, first call to last**:
@@ -1056,7 +1056,7 @@ prose.
     relaunch.
 71. **No `make test-snd` / sndcheck arm**: the tone is asserted at the
     SND_TONE cell's registers on MartyPC (design 8.x's QEMU arm not built).
-72. **No `make diashot` / docs/dia/ PNG set in waves 0-4**: it belongs to
+72. **No `make stikshot` / docs/stikapps/ PNG set in waves 0-4**: it belongs to
     the pull request.
 73. **The calendar's save is 3 reads + 8 writes at the drive** (4 + 8 after
     a missed launch, deskcalperf), not the probe's 2 + 6 that wave 3's text
@@ -1068,13 +1068,13 @@ prose.
     launch registers the row the last close removed - one SYSTEM.CFG write,
     whose verdict CTRL.DRV toasts - so `1 missed reminder` said from the
     entry proc became `Settings Saved` within seconds. dc_missed stages it
-    (dc_ltp) and the first DIA_ONTICK says it and nothing else that beat.
+    (dc_ltp) and the first STIK_ONTICK says it and nothing else that beat.
     deskcalremind A re-reads the bar once the row is granted, verified to
     fail with the old order.
 75. SPEC 110.5 states the registration's and the close's `Settings Saved`,
     the silent autostart, and the live CD's unhandled refusal (§80.3).
 76. The live media's getruncpm `--reserve` list prices DESKCAL's clusters
-    ($(DIAAPPS)).
+    ($(STIKAPPS)).
 
 ---
 
@@ -1088,7 +1088,7 @@ closeable by auto-hiding UI elements"* - and then picked a second mockup,
 *"it's even more of a widget"*: three white cards in a column with the
 desktop showing between them and a name tag under them, no chrome, no dock
 tile, the menu bar the front application's. v2 is that. Its design record is
-[DIA-LAYER-PLAN.md](DIA-LAYER-PLAN.md) (three candidates scored, the
+[STICKY-APPS-LAYER-PLAN.md](STICKY-APPS-LAYER-PLAN.md) (three candidates scored, the
 "risk-first" one taken with five grafts); SPEC.md §11.103 and §110.11 are the
 contract, and §110.9's v2 blocks list every place the code proved the design
 wrong. The owner answered none of the design's open decisions, so every
@@ -1099,7 +1099,7 @@ recommended default in its §7 is what shipped.
 | layer | what | why there |
 |---|---|---|
 | kernel (`kern_big`, `kern_emu`) | `WF_DESK`: a desk window lives in `wm_zord[0..k-1]` under every application window; `wm_top` means "the front ORDINARY window"; `wm_lift` never moves one; it is shown by the damage pass, activated without a raise, takes the bar and the keys only while it is the last thing pressed, has no chrome at any of the `WF_FULL` sites the `t_chromesites` ratchet classifies, no drag cache and no dock tile (`IF_DESK`, header flag bit 6, the top-down instance slot). `OSAPI_WM_DESK` (QUERY / MAKE / DRAG / RELEASE) and `OSAPI_GFX_DESK` (the desktop's own ground in any rect). `WF_HOVER` and `[cur_hovw]`: a one-compare hover EDGE in the mouse path that wakes the package | z-order, activation and hover are the window manager's facts and nothing else can know them; everything a pixel needs is left to the package, so the kernel draws no widget chrome and keeps no FACE record, no module and no hover timer |
-| `apps/os88dia.inc` (`%define DIA_WIDGET`) | the widget TREATMENT as shared source: the geometry (a face of cards and gaps plus a tag row, one ground column each side), every non-card pixel (the gaps and sides by `OSAPI_GFX_DESK`, the tag's plate / inverse plate / handle in one BLIT1), the press prefilter (tag, gaps and sides drag; the revealed x closes; a card is the package's), the hover and focus states (dwell 5 ticks, linger 14 - the dock's), the face-origin header, the re-fit, and the titled fallback where QUERY refuses | a second DIA gets the look and the gestures by including it, and the kernel pays nothing for them |
+| `apps/os88stik.inc` (`%define STIK_WIDGET`) | the widget TREATMENT as shared source: the geometry (a face of cards and gaps plus a tag row, one ground column each side), every non-card pixel (the gaps and sides by `OSAPI_GFX_DESK`, the tag's plate / inverse plate / handle in one BLIT1), the press prefilter (tag, gaps and sides drag; the revealed x closes; a card is the package's), the hover and focus states (dwell 5 ticks, linger 14 - the dock's), the face-origin header, the re-fit, and the titled fallback where QUERY refuses | a second Sticky App gets the look and the gestures by including it, and the kernel pays nothing for them |
 | `apps/os88gfx.inc` (`GFXE_TEXT`, `GFXE_BITS`) | the kernel's 8x8 glyphs at any x, x1/x2/x3, bold and inverse, a rect fill and 16-wide bit records, composed into the package's own 704-byte band, one 32-row slab at a time | a card is one `BLIT1` a slab, every pixel written once - no `font_run` over a fill, nothing drawn twice |
 | `apps/deskcal/` | the calendar as the mockup: the day number x3 beside the weekday and month; a bare `< August 2026 >`; an unruled Monday-first grid with a dot under every busy day, today inverse and the selection a 1-px box; card 2's agenda, rule and ticked tasks with `+N more`; card 3's ringing reminder with Snooze and Dismiss, which replaced v1's modal alert; three layouts chosen by the screen's HEIGHT (TALL VGA, MID Hercules and EGA, COMPACT CGA, whose second slot pages) | the package owns its own look, and the mockup is a VGA picture that the two 1bpp heights have to be designed into |
 | `kern_small` | the two cells and nothing else (+12 bytes): QUERY refuses and the same `DESKCAL.O88` draws v2's face in a titled window with a dock tile, the gaps white with a 1-px rule | its 65-byte cold rung and its missing WM timer rule the layer out, and one package on both kernels is worth more than a widget on the floor machine |
@@ -1116,7 +1116,7 @@ recommended default in its §7 is what shipped.
 | never revealed under a chooser | the kernel does not clear a standing hover when a chooser opens, nor treat an open auto-hide dock as a cover; ~8 bytes of `.cold` each, which kern_emu does not have | §11.103.7 |
 | the composer at 0.1-0.2 ms a glyph, a full paint ~90-110 ms | 0.49 ms a x1 glyph after the review's straight path; the full paint **263 / 161 ms** against v1's 177 / 117 and a day select **60 / 48 ms** against 21 / 24 - fewer calls, more time, raised for the owner | §110.6, PERFORMANCE.md Part 5 |
 | ~14.0-14.5 KB of image, at most one more cluster | **18,912** bytes, 16 clusters, five more on the 360 KB system disk (332 of 354) - raised for the owner | §110.6 |
-| `OSAPI_WM_PREFER` pairs per adapter | the layout picked once by height in `dia_load` - a PREFER pair is keyed by adapter KIND, which is the EGA bug | §110.9 v2 W4 |
+| `OSAPI_WM_PREFER` pairs per adapter | the layout picked once by height in `stik_load` - a PREFER pair is keyed by adapter KIND, which is the EGA bug | §110.9 v2 W4 |
 | x1 bold for the weekday and the time | regular at x1 - an OR one pixel right fuses the 2-px-stroke font | §110.9 v4 review |
 | the day box r-1..r+8 on COMPACT | r..r+7, the dot under it; the box's top touches its digits - the owner's call | §110.9 v4 review |
 
@@ -1161,16 +1161,16 @@ recommended default in its §7 is what shipped.
 
 ### The rows that hold it
 
-Fast: `t_chromesites`, `t_dia` (the header bit, `DIA_HF_CONT`, the snooze
+Fast: `t_chromesites`, `t_stik` (the header bit, `STIK_HF_CONT`, the snooze
 slot, `DESKCAL_GEO` against the assembled tables), `t_api_abi`, `t_mirror`,
 `t_pkg`, the ABI lock. Soak: `deskz`, `deskdock`, `deskkeys`, `desksmall`,
 `deskdrag`, `deskhover`, `deskhovercga`, `deskhoverherc`, `deskclose`,
 `deskground`, `deskfit`, `deskcalcards`, `deskcalsnooze`, `deskmodal`, and
-every v1 `dia*` / `deskcal*` row re-gated on the widget. The PR's pictures
-are `docs/dia/*.png`, nineteen of them retaken as v2 on MartyPC with the
+every v1 `stik*` / `deskcal*` row re-gated on the widget. The PR's pictures
+are `docs/stikapps/*.png`, nineteen of them retaken as v2 on MartyPC with the
 mockup's data (SPEC.md §110.9 lists them): the VGA mockup scene and its crop,
 the handle with a 4x tag row, focus, covered, `+`, a task ticked, a reminder
 firing with no alert, moved, a warm reset restoring it, the not-found
-downgrade, the DIA folder and the widget under main's Windows theme beside a
+downgrade, the Sticky App folder and the widget under main's Windows theme beside a
 Windows-chromed Disk window; CGA's COMPACT and Hercules' whole screen, each
 at rest and hovered; kern_small's titled fallback.

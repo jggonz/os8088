@@ -280,8 +280,8 @@ a Standard File dialog for opening and saving.
 - **Task Manager** — live CPU and RAM, one row per instance, with the work
   done inside an app's window callbacks billed to that app.
 - **Control Panel** — Scheduler, Buffer, Display, Sound and Date/Time.
-- **Desk Calendar** — the first *desktop integrated application*: a widget
-  in `SYSTEM/DIA/` on the system disk that lives ON the desktop, under every
+- **Desk Calendar** — the first *Sticky App*: a widget
+  in `STIKAPPS/` on the system disk that lives ON the desktop, under every
   window, with no frame and no dock tile - three white cards (today and a
   Monday-first month with a dot under each busy day; the chosen day's
   appointments and your tasks with real ticks; a reminder card that rings,
@@ -289,7 +289,7 @@ a Standard File dialog for opening and saving.
   it or close it while the pointer is over it. Its keys and menus are its
   own once it is clicked. Once opened it comes back at every boot where it
   was left, and a widget that has gone missing becomes a desktop shortcut
-  with one message rather than stopping the boot. `apps/os88dia.inc` is the
+  with one message rather than stopping the boot. `apps/os88stik.inc` is the
   shared half a new widget includes (SPEC.md 110).
 - **Menu bar clock** — read from the hardware RTC at boot if the machine has
   one, kept from the PIT after that, and settable.

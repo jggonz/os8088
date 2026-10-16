@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "9b0a00f1f978abdfcf17b98e442435c737ebc3de1e2bfb245346700d60f18d91",
+  "fingerprint": "ac878c472188707cb70d1cbff1e47c2d870f33531aa05680b6e01f712e78a1df",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "d6927629077962e494f119851ecea36972deaf327cfcd23c976e2781e2edca54",
+  "fingerprint": "6cfd133a4425ef421d43d7bba90562d044f557ef7023e39e2c58fcda2c0ff02f",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -97,14 +97,28 @@
    "fingerprint": "d6927629077962e494f119851ecea36972deaf327cfcd23c976e2781e2edca54",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "feature/dia merged onto main 70df8a99 (PKG_FMT 10 / DRV_VER 11 kept): the DIA cells follow main's last cell, OSAPI_THM_SET's 8-byte inline cell at 0x046D - OSAPI_CLK_GET 0x0475 (SPEC.md 37.96), OSAPI_WM_DESK 0x047B and OSAPI_GFX_DESK 0x0481 (SPEC.md 11.103.9), osapi_table_end 0x0487; header flag bit 6 OS88_F_DESK, WF_DESK/WF_HOVER/IF_DESK, OSAPI_WM_TOP never answering a desk window, OSAPI_DESK_ITEM's DIA mark at +3 (SPEC.md 110.2) and OSAPI_WM_DESK QUERY loading DESK.DRV (SPEC.md 11.103.10). Cells appended after every existing one and contracts filled in on inputs no earlier package passed: everything built against main's SDK still runs, so no bump",
+   "reason": "feature/dia merged onto main 70df8a99 (PKG_FMT 10 / DRV_VER 11 kept): the Sticky App cells follow main's last cell, OSAPI_THM_SET's 8-byte inline cell at 0x046D - OSAPI_CLK_GET 0x0475 (SPEC.md 37.96), OSAPI_WM_DESK 0x047B and OSAPI_GFX_DESK 0x0481 (SPEC.md 11.103.9), osapi_table_end 0x0487; header flag bit 6 OS88_F_DESK, WF_DESK/WF_HOVER/IF_DESK, OSAPI_WM_TOP never answering a desk window, OSAPI_DESK_ITEM's Sticky App mark at +3 (SPEC.md 110.2) and OSAPI_WM_DESK QUERY loading DESK.DRV (SPEC.md 11.103.10). Cells appended after every existing one and contracts filled in on inputs no earlier package passed: everything built against main's SDK still runs, so no bump",
    "to": 10
   },
   {
    "fingerprint": "9b0a00f1f978abdfcf17b98e442435c737ebc3de1e2bfb245346700d60f18d91",
    "from": 11,
    "guard": "DRV_VER",
-   "reason": "feature/dia merged onto main 70df8a99 (PKG_FMT 10 / DRV_VER 11 kept): the DIA cells follow main's last cell, OSAPI_THM_SET's 8-byte inline cell at 0x046D - OSAPI_CLK_GET 0x0475 (SPEC.md 37.96), OSAPI_WM_DESK 0x047B and OSAPI_GFX_DESK 0x0481 (SPEC.md 11.103.9), osapi_table_end 0x0487; header flag bit 6 OS88_F_DESK, WF_DESK/WF_HOVER/IF_DESK, OSAPI_WM_TOP never answering a desk window, OSAPI_DESK_ITEM's DIA mark at +3 (SPEC.md 110.2) and OSAPI_WM_DESK QUERY loading DESK.DRV (SPEC.md 11.103.10). Cells appended after every existing one and contracts filled in on inputs no earlier package passed: everything built against main's SDK still runs, so no bump",
+   "reason": "feature/dia merged onto main 70df8a99 (PKG_FMT 10 / DRV_VER 11 kept): the Sticky App cells follow main's last cell, OSAPI_THM_SET's 8-byte inline cell at 0x046D - OSAPI_CLK_GET 0x0475 (SPEC.md 37.96), OSAPI_WM_DESK 0x047B and OSAPI_GFX_DESK 0x0481 (SPEC.md 11.103.9), osapi_table_end 0x0487; header flag bit 6 OS88_F_DESK, WF_DESK/WF_HOVER/IF_DESK, OSAPI_WM_TOP never answering a desk window, OSAPI_DESK_ITEM's Sticky App mark at +3 (SPEC.md 110.2) and OSAPI_WM_DESK QUERY loading DESK.DRV (SPEC.md 11.103.10). Cells appended after every existing one and contracts filled in on inputs no earlier package passed: everything built against main's SDK still runs, so no bump",
+   "to": 11
+  },
+  {
+   "fingerprint": "6cfd133a4425ef421d43d7bba90562d044f557ef7023e39e2c58fcda2c0ff02f",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "rename only: the DIA concept is Sticky Apps (OSAPI_DIA_MARK -> OSAPI_STIK_MARK, OSAPI_DI_DIA -> OSAPI_DI_STIK, same values); nothing built before is affected",
+   "to": 10
+  },
+  {
+   "fingerprint": "ac878c472188707cb70d1cbff1e47c2d870f33531aa05680b6e01f712e78a1df",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "rename only: the DIA concept is Sticky Apps (OSAPI_DIA_MARK -> OSAPI_STIK_MARK, OSAPI_DI_DIA -> OSAPI_DI_STIK, same values); nothing built before is affected",
    "to": 11
   }
  ]

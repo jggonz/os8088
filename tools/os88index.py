@@ -117,23 +117,23 @@ INCLUDES = [
      "`cmp ax, KEY_ALTENTER` in its W_ONKEY is both directions. Both want "
      "`OS88_ALTENTER_ARM` (apps/os88api.inc) in the entry proc, without which "
      "the chord is silently dead."),
-    ("os88dia.inc", "110",
-     "A DESKTOP INTEGRATED APPLICATION - a widget that lives in SYSTEM\\DIA\\ "
+    ("os88stik.inc", "110",
+     "A STICKY APP - a widget that lives in STIKAPPS\\ "
      "and comes back at the next boot where it was left. Its state file "
-     "(SYSTEM\\APPDATA, a 16-byte DIA header then your payload), its DIA row "
+     "(SYSTEM\\APPDATA, a 16-byte Sticky App header then your payload), its Sticky App row "
      "in SYSTEM.CFG's desktop trailer, registered on the first tick and "
      "removed by name on close, and a 36-tick poll that saves the window's "
-     "place once a drag settles. `dia_load` in the entry proc (size your "
-     "template for the adapter first), `dia_made` after OSAPI_WM_CREATE and "
-     "your own KEEPH/PREFER, `dia_painted` as the LAST thing your W_PAINT "
+     "place once a drag settles. `stik_load` in the entry proc (size your "
+     "template for the adapter first), `stik_made` after OSAPI_WM_CREATE and "
+     "your own KEEPH/PREFER, `stik_painted` as the LAST thing your W_PAINT "
      "does (kern_small's worker is hired there - without it that kernel has "
-     "no tick, no save and no reminders, and says nothing), and `dia_touch` "
-     "whenever your payload changes. `%define DIA_WIDGET` (§110.11) is the "
+     "no tick, no save and no reminders, and says nothing), and `stik_touch` "
+     "whenever your payload changes. `%define STIK_WIDGET` (§110.11) is the "
      "widget TREATMENT: a desk window (§11.103) of chromeless cards with the "
      "desktop between them and a name tag that becomes a handle - x to "
      "close, drag by the tag or a gap - under the pointer; you give "
-     "`DIA_LAYOUT`s (picked by the screen's height) and a card painter "
-     "(`dia_slabs` + `DIA_COMPOSE` into os88gfx.inc's band), it owns every "
+     "`STIK_LAYOUT`s (picked by the screen's height) and a card painter "
+     "(`stik_slabs` + `STIK_COMPOSE` into os88gfx.inc's band), it owns every "
      "other pixel, the gestures, the hover and focus states and the titled "
      "fallback on kern_small."),
     ("os88line.inc", "83",
@@ -431,13 +431,13 @@ def packages():
     """
     mk = re.sub(r"\\\n\s*", " ", read("Makefile"))
     mvars = make_vars(mk)
-    # ...OR the system disk's own SYSTEM/ and SYSTEM/DIA/ (SPEC.md 92, 110):
+    # ...OR the system disk's own SYSTEM/ and STIKAPPS/ (SPEC.md 92, 110):
     # The Wire and the Desk Calendar ride every system floppy and no apps
     # disk, so the everything-set alone called both "built by its own target
     # only", which is the one thing neither is
     shipped = set(re.findall(r"\$\(BUILD\)/([a-z0-9]+)\.o88",
                              make_expand("$(ALLAPPSFILES) $(SYSAPPS) "
-                                         "$(DIAAPPS)", mvars)))
+                                         "$(STIKAPPS)", mvars)))
     retired = set()
     rp = os.path.join(ROOT, "apps", "RETIRED.txt")
     if os.path.exists(rp):
@@ -635,7 +635,7 @@ def build():
       "shortest package that uses it is usually the fastest answer. "
       "*ships* is **retired** for a package apps/RETIRED.txt retires "
       "(SPEC.md 20.16), and otherwise whether a shipped floppy carries it (the `make allapps` "
-      "payload, SPEC.md 19.10, or the system disk's `SYSTEM/` and `SYSTEM/DIA/`); "
+      "payload, SPEC.md 19.10, or the system disk's `SYSTEM/` and `STIKAPPS/`); "
       "a `no` is built by its own target only.")
     w("")
     w("| package | source | SPEC | ships |")

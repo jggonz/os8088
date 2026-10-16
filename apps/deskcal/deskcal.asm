@@ -1,16 +1,16 @@
 ; =============================================================================
 ; os8088 - apps/deskcal/deskcal.asm
 ;
-; THE DESK CALENDAR - the first DESKTOP INTEGRATED APPLICATION (SPEC.md 110,
+; THE DESK CALENDAR - the first STICKY APP (SPEC.md 110,
 ; its own section 110.3). A month on the desktop that stays where it was put
-; and comes back at the next boot: it ships in SYSTEM\DIA\ on the system disk
-; and includes apps/os88dia.inc, which owns its place, its state file
+; and comes back at the next boot: it ships in STIKAPPS\ on the system disk
+; and includes apps/os88stik.inc, which owns its place, its state file
 ; (SYSTEM\APPDATA\DESKCAL.DAT) and its row in the desktop configuration.
 ;
 ; v2 (wave 4) is a WIDGET: three white cards ON the desk - under every
 ; application window, chromeless, no dock tile - with the desktop's own
 ; ground between them and a name tag under them that turns into a handle
-; while the pointer is over it (os88dia.inc's DIA_WIDGET, SPEC.md 110.11).
+; while the pointer is over it (os88stik.inc's STIK_WIDGET, SPEC.md 110.11).
 ; Card 1 is today's page and the month, card 2 the selected day's
 ; appointments and the tasks, card 3 the reminder; a CGA's COMPACT layout
 ; pages cards 2 and 3 through one slot.
@@ -32,7 +32,7 @@
     OS88_HEADER 'Desk Calendar', dc_entry, OS88_F_ICON | OS88_F_DESK
 
 ; A calendar page: a solid header band over a grid of days. It is also the
-; DIA row's picture (DIA_ICON below), so a row the boot could not launch
+; Sticky App row's picture (STIK_ICON below), so a row the boot could not launch
 ; turns into a desktop icon that looks like what it was (SPEC.md 110.4).
     OS88_ICON16
     dw 0x0000, 0x7FFE, 0x7FFE, 0x7FFE, 0x7FFE, 0x7FFE, 0x7FFE, 0x7FFE
@@ -44,7 +44,7 @@
 DC_GRIDN    equ 42
 
 ; --- the payload v1, what the calendar reads of it (SPEC.md 110.3) -----------
-; tools/os88dia.py's DESKCAL_* are the same numbers; t_dia holds them equal
+; tools/os88stik.py's DESKCAL_* are the same numbers; t_stik holds them equal
 DCP_LEN     equ 2440
 DCP_VER     equ 1
 DCP_NAPPT   equ 0               ; db: appointments in use
@@ -96,26 +96,26 @@ KSC_PGUP    equ 0x49
 KSC_PGDN    equ 0x51
 KSC_DEL     equ 0x53
 
-; --- the DIA (apps/os88dia.inc, SPEC.md 110.5, 110.11) -----------------------
-%define DIA_DATNAME  'DESKCAL.DAT'
-%define DIA_CAP      'Calendar'
-%define DIA_ISOPEN   'Desk Calendar is open'
-%define DIA_DAMAGEDQ 'Replace damaged calendar?'
-%define DIA_ONTICK   dc_tick
-DIA_PAYLEN  equ DCP_LEN
-DIA_PAYVER  equ DCP_VER
-DIA_ICON    equ 32
-DIA_BSS     equ DC_BSS          ; the include's state follows ours
-%define DIA_WIDGET
-%define DIA_TAG       'Desk Calendar'   ; = the title
-%define DIA_RIGHT     264       ; the face opens 264 px in from the right edge
+; --- the Sticky App (apps/os88stik.inc, SPEC.md 110.5, 110.11) -----------------------
+%define STIK_DATNAME 'DESKCAL.DAT'
+%define STIK_CAP     'Calendar'
+%define STIK_ISOPEN  'Desk Calendar is open'
+%define STIK_DAMAGEDQ 'Replace damaged calendar?'
+%define STIK_ONTICK  dc_tick
+STIK_PAYLEN equ DCP_LEN
+STIK_PAYVER equ DCP_VER
+STIK_ICON   equ 32
+STIK_BSS    equ DC_BSS          ; the include's state follows ours
+%define STIK_WIDGET
+%define STIK_TAG      'Desk Calendar'   ; = the title
+%define STIK_RIGHT    264       ; the face opens 264 px in from the right edge
                                 ; (a %define: the include tests it with %ifdef)
-%define DIA_LAYOUTS   dc_lays
-%define DIA_PAINTCARD dc_pcard
-%define DIA_COMPOSE   dc_compose
-%define DIA_ONCARD    dc_oncard
-%define DIA_ONCARDUP  dc_oncardup
-%define DIA_ONFOCUS   dc_onfocus
+%define STIK_LAYOUTS  dc_lays
+%define STIK_PAINTCARD dc_pcard
+%define STIK_COMPOSE  dc_compose
+%define STIK_ONCARD   dc_oncard
+%define STIK_ONCARDUP dc_oncardup
+%define STIK_ONFOCUS  dc_onfocus
 %define GFXE_TEXT
 %define GFXE_BITS
 %define GFXE_BAND_W   176       ; the face: 22 cells, a 704-byte band
@@ -123,7 +123,7 @@ DIA_BSS     equ DC_BSS          ; the include's state follows ours
 %define GFXE_BAND_BUF dc_band
 
 ; --- bss: OURS FIRST, at fixed offsets - tests read it out of a running guest
-; (tests/deskcal*.py), and tools/os88dia.py's DESKCAL_BSS_* say where
+; (tests/deskcal*.py), and tools/os88stik.py's DESKCAL_BSS_* say where
 DC_BSS_GRID equ 0               ; 42 bytes, the month on show
 DC_BSS_Y    equ 42              ; dw the year on show
 DC_BSS_M    equ 44              ; db its month
@@ -245,16 +245,16 @@ DC_BSS      equ DC_BSS_BAND + 176 / 8 * 32  ; 1024: a multiple of 16
 
 ; -----------------------------------------------------------------------------
 ; dc_entry - the entry proc (DS = CS = ours, ES = KERNEL_SEG, the UI task)
-; in:  SI = the loader's name, for os88dia.inc
+; in:  SI = the loader's name, for os88stik.inc
 ; out: CF = 0 launched; CF = 1 not (another calendar is up, or no window)
 ; -----------------------------------------------------------------------------
 dc_entry:
     push si
     push di
     mov di, dc_tpl
-    call dia_load               ; QUERY, the layout by the screen's height,
+    call stik_load              ; QUERY, the layout by the screen's height,
     jc .out                     ; the template's size and place (110.11)
-    mov al, [dia_li]
+    mov al, [stik_li]
     mov ah, DCG_SZ
     mul ah
     add ax, dc_geos
@@ -264,13 +264,13 @@ dc_entry:
     push es                     ; first save asks before it replaces it
     push ds                     ; (SPEC.md 110.3, 110.5.2)
     pop es
-    mov di, DIA_PAY
+    mov di, STIK_PAY
     mov cx, DCP_LEN
     xor al, al
     cld
     rep stosb
     pop es
-    or byte [dia_st], DIA_S_DAMAGED
+    or byte [stik_st], STIK_S_DAMAGED
 .ok:
     call dc_today               ; today, and the month on show is today's
     mov word [dc_lnow], 0FFFFh  ; no minute seen: the first beat looks
@@ -285,7 +285,7 @@ dc_entry:
     call dc_arange              ; the day's appointments
     mov byte [dc_pane0], 0FFh
     call dc_c3calc              ; card 3 as the file left it - and a CGA's
-    cmp byte [dia_li], 2        ; slot opens on the reminder when it rings
+    cmp byte [stik_li], 2        ; slot opens on the reminder when it rings
     jne .mk
     cmp byte [dc_c3k], DC3_RING
     jne .mk
@@ -304,7 +304,7 @@ dc_entry:
     mov si, dc_about
     call OSAPI_ABOUT_SET
     call dc_menulive            ; the greyed items, as the payload stands
-    call dia_made               ; LAST: MAKE, the prefilters, the tick
+    call stik_made              ; LAST: MAKE, the prefilters, the tick
     clc
 .out:
     pop di
@@ -318,7 +318,7 @@ dc_entry:
 ; -----------------------------------------------------------------------------
 dc_paint:
     mov byte [dc_clip], 1
-    call dia_paint
+    call stik_paint
     cmp byte [dc_abon], 0
     je .x
     push bx
@@ -346,7 +346,7 @@ dc_about:
     ret
 
 ; dc_abdismiss - the card down if it is up - what it covered again, ONE
-; repaint over its rows (os88dia.inc's dia_redrawr: the slabs those rows
+; repaint over its rows (os88stik.inc's stik_redrawr: the slabs those rows
 ; reach, the content's width) - and CF = 1: the event was that. The rows are
 ; os88ui_about_d's: the content's height less the card's, halved
 DC_ABN      equ 4               ; dc_ablines' lines
@@ -384,7 +384,7 @@ dc_abdismiss:
     add cx, ax
     dec cx                      ; CX = the content's last column
     mov si, [dc_win]
-    call dia_redrawr
+    call stik_redrawr
 .x:
     pop si
     pop dx
@@ -675,7 +675,7 @@ dc_rtbox:
     push cx
     push dx
     push di
-    cmp byte [dia_li], 2
+    cmp byte [stik_li], 2
     jne .on
     cmp byte [dc_pane], 1
     jne .x                      ; COMPACT, and the tasks are not the page
@@ -843,7 +843,7 @@ dc_onkey:
 dc_release:
     push ax
     push bx
-    test byte [dia_wf], DIA_W_DESK
+    test byte [stik_wf], STIK_W_DESK
     jz .sel
     mov bx, [dc_win]
     mov al, 3
@@ -883,7 +883,7 @@ dc_fkey:
     ret
 
 ; -----------------------------------------------------------------------------
-; dc_oncard - DIA_ONCARD (AL = the card, CX, DX the press card-relative, SI =
+; dc_oncard - STIK_ONCARD (AL = the card, CX, DX the press card-relative, SI =
 ; the window; W_ONCLICK's environment). A day, a task's box and a line act
 ; NOW; a button LIGHTS and waits for its release (dc_oncardup)
 ; -----------------------------------------------------------------------------
@@ -970,11 +970,11 @@ dc_fclick:
     call dc_arm
     jc .r
     call dc_frect
-    mov cx, [dia_fx]
+    mov cx, [stik_fx]
     add cx, [dc_qx]
     mov al, 1
-    call dia_ctop
-    mov dx, [dia_fy]
+    call stik_ctop
+    mov dx, [stik_fy]
     add dx, bx
     add dx, [dc_qy]
     mov si, dc_ln
@@ -992,7 +992,7 @@ dc_fclick:
     ret
 
 ; -----------------------------------------------------------------------------
-; dc_oncardup - DIA_ONCARDUP (AL = the card the PRESS went to, CX, DX the
+; dc_oncardup - STIK_ONCARDUP (AL = the card the PRESS went to, CX, DX the
 ; release card-relative - it may be off the card): a held button un-lights,
 ; and acts when the release is inside it (SPEC.md 13.5). The un-light is
 ; owed (dc_lpend) and settled by the act's own redraw when that covers it
@@ -1063,7 +1063,7 @@ dc_bnext:
     mov al, 1
     jmp dc_month
 
-; dc_onfocus - DIA_ONFOCUS (AL = 1 gained the bar, 0 lost it): losing it
+; dc_onfocus - STIK_ONFOCUS (AL = 1 gained the bar, 0 lost it): losing it
 ; closes an open field, as Esc does (SPEC.md 110.3)
 dc_onfocus:
     mov byte [dc_clip], 0
@@ -1127,11 +1127,11 @@ dc_cmds:    dw dc_newa, dc_newt, dc_edit, dc_askdel, dc_clear, dc_pswap
 ; paint shows the state as it is)
 ; -----------------------------------------------------------------------------
 
-; dc_touch - an edit: a save owed (dia_touch), held to the next quiet poll
+; dc_touch - an edit: a save owed (stik_touch), held to the next quiet poll
 ; (dc_tick). Every register and the flags kept
 dc_touch:
     mov byte [dc_tq], 1
-    jmp dia_touch
+    jmp stik_touch
 
 ; dc_busy - CF = 1 nothing may be changed now: the field is open, or our
 ; Delete question is up (its answer deletes the item it asked about)
@@ -1166,13 +1166,13 @@ dc_menulive:
     push ax
     push di
     mov ax, dc_i_newa
-    cmp byte [DIA_PAY + DCP_NAPPT], DCP_MAXAPPT
+    cmp byte [STIK_PAY + DCP_NAPPT], DCP_MAXAPPT
     jb .a
     mov ax, dc_i_newa0
 .a:
     mov [dc_i_cal + 2 * DCM_NEWA], ax
     mov ax, dc_i_newt
-    cmp byte [DIA_PAY + DCP_NTASK], DCP_MAXTASK
+    cmp byte [STIK_PAY + DCP_NTASK], DCP_MAXTASK
     jb .t
     mov ax, dc_i_newt0
 .t:
@@ -1199,7 +1199,7 @@ dc_menulive:
 .c:
     mov [dc_i_cal + 2 * DCM_CLEAR], ax
     mov ax, dc_i_pane0          ; Show Tasks / Reminder / Day: COMPACT's slot
-    cmp byte [dia_li], 2
+    cmp byte [stik_li], 2
     jne .p
     mov ax, dc_i_showt
     cmp byte [dc_pane], 1
@@ -1229,7 +1229,7 @@ dc_selset:
     je .x
     call dc_arm
     jc .x
-    cmp byte [dia_li], 2
+    cmp byte [stik_li], 2
     jne .lines
     call dc_rday
     jmp short .x
@@ -1305,7 +1305,7 @@ dc_selrows:
     sub al, [dc_ttop]
     jb .no
     mov cl, [di + DCG_TN]
-    mov ch, [DIA_PAY + DCP_NTASK]
+    mov ch, [STIK_PAY + DCP_NTASK]
     call .fit
     jc .no
     call dc_trow                ; DX = the box's top
@@ -1358,7 +1358,7 @@ dc_selrows:
 ; menu). The user's paging is the user's: a ringing reminder's hold on the
 ; slot is given up. Nothing on TALL / MID, which show all three cards
 dc_pswap:
-    cmp byte [dia_li], 2
+    cmp byte [stik_li], 2
     jne .r
     push ax
     mov al, [dc_pane]
@@ -1401,7 +1401,7 @@ dc_tpager:
     mov al, [bx + DCG_TN]
     dec ax
     add al, [dc_ttop]
-    cmp al, [DIA_PAY + DCP_NTASK]
+    cmp al, [STIK_PAY + DCP_NTASK]
     jb .s
     xor al, al
 .s:
@@ -1418,7 +1418,7 @@ dc_pgdraw:
 ; dc_plus - `+`: the field for EITHER (the parse decides) - or, on COMPACT's
 ; tasks page, for a task
 dc_plus:
-    cmp byte [dia_li], 2
+    cmp byte [stik_li], 2
     jne .any
     cmp byte [dc_pane], 1
     je dc_newt
@@ -1438,7 +1438,7 @@ dc_plus:
 dc_newa:
     call dc_busy
     jc .x
-    cmp byte [DIA_PAY + DCP_NAPPT], DCP_MAXAPPT
+    cmp byte [STIK_PAY + DCP_NAPPT], DCP_MAXAPPT
     jb .ok
     push si
     mov si, dc_s_afull
@@ -1457,7 +1457,7 @@ dc_newa:
 dc_newt:
     call dc_busy
     jc .x
-    cmp byte [DIA_PAY + DCP_NTASK], DCP_MAXTASK
+    cmp byte [STIK_PAY + DCP_NTASK], DCP_MAXTASK
     jb .ok
     push si
     mov si, dc_s_tfull
@@ -1563,7 +1563,7 @@ dc_fopen:
     call os88line_resync        ; the caret at the end of what is there
     pop si
     xor cl, cl                  ; CL = 1: COMPACT turned to another page
-    cmp byte [dia_li], 2
+    cmp byte [stik_li], 2
     jne .a
     mov ah, 0                   ; the page its list is on: the day's, or the
     cmp al, DCE_NEWT            ; tasks'; `+` stays where it was pressed
@@ -1708,7 +1708,7 @@ dc_cappt:
 .fits:
     cmp byte [dc_ed], DCE_EDA
     je .room
-    cmp byte [DIA_PAY + DCP_NAPPT], DCP_MAXAPPT
+    cmp byte [STIK_PAY + DCP_NAPPT], DCP_MAXAPPT
     jb .room
     mov si, dc_s_afull          ; `+`'s line at a full table
     call dc_toast
@@ -1731,11 +1731,11 @@ dc_cappt:
     call dc_pack
     mov [dc_rec + DCA_DATE], ax
     mov [dc_rec + DCA_TIME], bx
-    mov al, [DIA_PAY + DCP_LEAD]
+    mov al, [STIK_PAY + DCP_LEAD]
     mov [dc_rec + DCA_LEAD], al
     cmp bx, DC_ALLDAY
     je .fl
-    test byte [DIA_PAY + DCP_FLAGS], DCF_NOREM
+    test byte [STIK_PAY + DCP_FLAGS], DCF_NOREM
     jnz .fl
     mov byte [dc_rec + DCA_FLAGS], DCA_REMIND
 .fl:
@@ -1834,7 +1834,7 @@ dc_ctask:
     mov al, [dc_edi]
     cmp byte [dc_ed], DCE_EDT
     je .set
-    mov al, [DIA_PAY + DCP_NTASK]
+    mov al, [STIK_PAY + DCP_NTASK]
     cmp al, DCP_MAXTASK
     jb .new
     push si
@@ -1848,7 +1848,7 @@ dc_ctask:
     mov word [si + DCT_FLAGS], 0
     mov word [si + DCT_DUE], 0
     pop si
-    inc byte [DIA_PAY + DCP_NTASK]
+    inc byte [STIK_PAY + DCP_NTASK]
 .set:
     call dc_tset
     mov byte [dc_selk], DCS_TASK
@@ -1857,7 +1857,7 @@ dc_ctask:
     mov byte [dc_ed], 0         ; shut, unseen: card 2 is drawn whole below
     mov byte [dc_ln + LN_FOCUS], 0
     call dc_tview               ; its page
-    cmp byte [dia_li], 2
+    cmp byte [stik_li], 2
     jne .draw
     mov byte [dc_pane], 1       ; COMPACT: the tasks' page shows it
     mov byte [dc_pane0], 0FFh
@@ -1883,7 +1883,7 @@ dc_ctask:
 ; kept
 dc_cdraw:
     call dc_c3sync
-    cmp byte [dia_li], 2
+    cmp byte [stik_li], 2
     jne .d
     cmp byte [dc_pane], 2
     je .r
@@ -1951,7 +1951,7 @@ dc_tpage:
     mov di, [dc_geo]
     mov bl, [di + DCG_TN]
     xor bh, bh
-    cmp [DIA_PAY + DCP_NTASK], bl
+    cmp [STIK_PAY + DCP_NTASK], bl
     jbe .x
     dec bl
     inc bh
@@ -2095,7 +2095,7 @@ dc_delans:
 .kt:
     call dc_touch
     mov al, [dc_ttop]           ; a page that emptied: the first...
-    cmp al, [DIA_PAY + DCP_NTASK]
+    cmp al, [STIK_PAY + DCP_NTASK]
     jb .tk
     xor al, al
 .tk:
@@ -2184,11 +2184,11 @@ dc_remind:
 .def:
     cmp ah, 0FFh
     jne .lead
-    or byte [DIA_PAY + DCP_FLAGS], DCF_NOREM
+    or byte [STIK_PAY + DCP_FLAGS], DCF_NOREM
     jmp short .say
 .lead:
-    and byte [DIA_PAY + DCP_FLAGS], ~DCF_NOREM & 0FFh
-    mov [DIA_PAY + DCP_LEAD], ah
+    and byte [STIK_PAY + DCP_FLAGS], ~DCF_NOREM & 0FFh
+    mov [STIK_PAY + DCP_LEAD], ah
 .say:
     call dc_touch
     push di                     ; the toast: its prefix and the lead's words
@@ -2208,13 +2208,13 @@ dc_remind:
     ret
 
 ; -----------------------------------------------------------------------------
-; dc_tick - DIA_ONTICK, every 36 ticks (the UI task, lock held, no clip): a
+; dc_tick - STIK_ONTICK, every 36 ticks (the UI task, lock held, no clip): a
 ; new DATE recomposes today's page, today's old box and new, card 2's
 ; heading and card 3; nothing is drawn while the About card is up - the
 ; repaint that takes it down shows the new today (SPEC.md 110.3). Then the
 ; reminders' minute (dcrem.inc), and the second note of a chirp one beat
 ; after the first.
-; out: CF = 1 HOLD the save owed (os88dia.inc): the entry field, our Delete
+; out: CF = 1 HOLD the save owed (os88stik.inc): the entry field, our Delete
 ;      question is open, or an edit landed since the last poll - a save is
 ;      seconds of disk with the lock held (SPEC.md 110.6), so it waits for a
 ;      quiet poll and a burst of edits is one save
@@ -2236,7 +2236,7 @@ dc_tick:
     cmp byte [dc_chirp], 0
     je .c
     mov byte [dc_chirp], 0      ; the chirp's second note, four ticks after
-    push cx                     ; its first (dia_nx)
+    push cx                     ; its first (stik_nx)
     push dx
     mov ax, 660
     mov cx, 4
@@ -2278,7 +2278,7 @@ dc_tick:
 
 ; --- the window (SPEC.md 110.3, 110.11) --------------------------------------
 dc_tpl:
-    dw 375, 42, 178, 357        ; dia_load sizes and places it (DIA_RIGHT)
+    dw 375, 42, 178, 357        ; stik_load sizes and places it (STIK_RIGHT)
     dw dc_title, dc_paint, dc_onkey, 0
 
 dc_title:   db 'Desk Calendar', 0
@@ -2369,8 +2369,8 @@ dc_ab4:     db 'SPEC.md 110', 0
 %include "os88ui.inc"
 %include "os88line.inc"
 %include "os88gfx.inc"
-%include "os88dia.inc"
-%include "dcdraw.inc"           ; AFTER os88dia.inc: DIA_LAYOUT is its macro
+%include "os88stik.inc"
+%include "dcdraw.inc"           ; AFTER os88stik.inc: STIK_LAYOUT is its macro
 
 %if DC_FX1 + LN_INSET > LN_CELL
   %error "deskcal: the entry field's inset must leave its pen on face x 8 (dc_frect)"
@@ -2380,6 +2380,6 @@ dc_ab4:     db 'SPEC.md 110', 0
   %error "deskcal: its bss holds a 20-byte field block"
 %endif
 
-    align 16, db 0              ; os88dia.inc's read lands on a paragraph
-    OS88_BSS DIA_BSS_END
+    align 16, db 0              ; os88stik.inc's read lands on a paragraph
+    OS88_BSS STIK_BSS_END
     OS88_IMAGE_END
