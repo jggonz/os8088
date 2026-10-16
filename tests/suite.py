@@ -9533,8 +9533,17 @@ SOAK = [
         "nothing but OSAPI_VOL_SYS. The unit rows either side of it check the "
         "disk (`fonts`) and the bytes (`pkg`) and neither runs the walk; a "
         "walk that fails is SILENT, because face 0 is the kernel's own cell "
-        "and a Font menu one item long looks like a Font menu",
+        "and a Font menu one item long looks like a Font menu. On the 360KB "
+        "system disk, which has no faces since SPEC.md 24.3.1.5, this is the "
+        "SECOND rung: the faces found on the package's own volume",
         needs=("marty",), wants=("build/bench360.img",)),
+    Row("facescan144", "soak", py("tests/facescan.py", "--machine",
+                                  "os8088_xt_vga_144", "--sys",
+                                  "build/os8088.img", "--bench",
+                                  "build/bench.img"), 18.0,
+        "SPEC.md 19.8: facescan's FIRST rung - the faces in SYSTEM/FONTS on "
+        "the 1.44MB system disk, the package on a B: that has none.",
+        needs=("marty",), wants=("build/bench.img",)),
     Row("fmbtn", "soak", py("tests/fmbtn.py"), 60.0,
         "SPEC.md 22.18: the Disk window's two header buttons fire on the"
         "RELEASE.",

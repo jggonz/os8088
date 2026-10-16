@@ -11271,8 +11271,13 @@ $(BUILD)/weaveband.img: $(BUILD)/wbband.o88 tools/os88disk.py
 $(BUILD)/bench.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BENCHIMGPKGS) $(BENCHDATA)
 
-$(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(BENCHIMGPKGS) $(BENCHDATA)
+# bench360.img carries SYSTEM/FONTS too (SPEC.md 24.3.1.5): the 360KB system
+# disk has no faces any more, so tests/facescan.py's FACETEST, standing on B:,
+# finds them by ty_gofonts' SECOND rung - the program's own volume - which is
+# the rung office360.img is there for. bench.img does not, and facescan144
+# boots the 1.44MB system disk, so the FIRST rung has its row as well.
+$(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) $(FACES) $(FACELIC) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BENCHIMGPKGS) $(BENCHDATA) $(FACESARG)
 
 # --- the BROWSER's test disk (docs/plans/completed/BROWSER-PLAN.md 10 step 1) -----------------
 # The renderer with no network in the machine: the package plus tests/htm/'s

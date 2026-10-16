@@ -29,6 +29,13 @@ rather than an inconvenience - the package is on B: and the faces are on A:,
 so a scan that only ever worked relative to where the caller was standing
 fails this row and would pass one driven from the system disk.
 
+AND THERE ARE TWO RUNGS NOW (SPEC.md 24.3.1.5). The 360KB system disk gave
+its faces to office360.img, so ty_gofonts walks the program's OWN volume when
+the system disk has none - and build/bench360.img carries SYSTEM/FONTS for
+exactly that, making this row's default the SECOND rung. `facescan144`
+(`--machine os8088_xt_vga_144 --sys build/os8088.img --bench build/bench.img`)
+is the FIRST: the faces on the system disk, none on B:.
+
 FOUR ASSERTIONS, and the last two are why the vehicle is facetest rather than
 a listing read on the host:
 
