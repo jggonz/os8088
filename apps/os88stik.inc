@@ -388,16 +388,27 @@ stik_load:
 .got:
     or dx, dx
     jnz .bad
-    cmp ax, STIK_HDR_SIZE + STIK_PAYLEN
-    jne .bad                    ; the EXACT size, or it is not ours
+    sub ax, STIK_HDR_SIZE       ; AS LONG AS ITS CONTENT (SPEC.md 110.5.3):
+    jb .bad                     ; a save writes the payload less its zero
+    cmp ax, STIK_PAYLEN         ; tail, so a file is the header and 0..
+    ja .bad                     ; STIK_PAYLEN bytes - and +14 says how many
     cmp word [stik_file+STIK_H_MAGIC], STIK_HDR_MAGIC
     jne .bad
     cmp byte [stik_file+STIK_H_VER], STIK_HDR_VER
     jne .bad
     cmp byte [stik_file+STIK_H_PAYVER], STIK_PAYVER
     jne .bad
-    cmp word [stik_file+STIK_H_LEN], STIK_PAYLEN
-    jne .bad
+    cmp [stik_file+STIK_H_LEN], ax
+    jne .bad                    ; the size the header says, or it is not ours
+    push ds                     ; the tail the save left off comes back zero
+    pop es                      ; - the read may have put STIK_SLACK's bytes
+    mov di, STIK_PAY            ; there, or a longer file's
+    add di, ax
+    mov cx, STIK_PAYLEN
+    sub cx, ax
+    xor al, al
+    cld
+    rep stosb
     test byte [stik_file+STIK_H_FLAGS], STIK_HF_POS
     jz .home
     pop di                      ; the template
@@ -918,12 +929,23 @@ stik_save:
     mov byte [stik_file+STIK_H_VER], STIK_HDR_VER
     mov byte [stik_file+STIK_H_PAYVER], STIK_PAYVER
     mov byte [stik_file+STIK_H_PAYVER+1], 0
-    mov word [stik_file+STIK_H_LEN], STIK_PAYLEN
     push ds
     pop es
+    push di                     ; AS LONG AS ITS CONTENT (SPEC.md 110.5.3):
+    mov di, STIK_PAY + STIK_PAYLEN - 1  ; the payload less its ZERO TAIL -
+    mov cx, STIK_PAYLEN         ; which a load gives back as zeros, so the
+    xor al, al                  ; payload in memory is the same either way
+    std                         ; and a notes file holding one note is one
+    repe scasb                  ; cluster and not five
+    cld
+    je .zt                      ; all zero: CX = 0
+    inc cx                      ; stopped ON a non-zero byte: it is kept
+.zt:
+    pop di
+    mov [stik_file+STIK_H_LEN], cx
+    add cx, STIK_HDR_SIZE
     mov bx, stik_file
     mov si, stik_dname
-    mov cx, STIK_HDR_SIZE + STIK_PAYLEN
     xor dx, dx
     call OSAPI_FILE_WRITE
     call stik_leave             ; AX and the flags kept

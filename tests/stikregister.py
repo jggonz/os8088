@@ -188,9 +188,13 @@ def main():
             cal = os88stik.parse_deskcal(pd["payload"])
         except Exception as e:
             dat, pd, cal = b"", {"pos": False}, {"err": str(e)}
-        check(len(dat) == os88stik.STIK_HDR_SIZE + os88stik.DESKCAL_PAYLEN,
-              "DESKCAL.DAT is %d bytes (%d)"
-              % (os88stik.STIK_HDR_SIZE + os88stik.DESKCAL_PAYLEN, len(dat)))
+        # as long as its content (SPEC.md 110.5.3): the header and the
+        # payload less its zero tail - parse_dat has checked +14 against it
+        check(os88stik.STIK_HDR_SIZE <= len(dat)
+              <= os88stik.STIK_HDR_SIZE + os88stik.DESKCAL_PAYLEN
+              and pd.get("paylen") == len(dat) - os88stik.STIK_HDR_SIZE,
+              "DESKCAL.DAT is the header and its content (%d bytes)"
+              % len(dat))
         check(pd.get("pos") and pd.get("cont")
               and (pd["x"], pd["y"]) == (w.x + 1, w.y)
               and tuple(pd.get("screen") or ()) == (640, 480),

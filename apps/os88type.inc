@@ -537,22 +537,29 @@ ty_gofonts:
     call OSAPI_VOL_SYS              ; where the system disk is
     mov [ty_sysvol], bl
     mov byte [ty_fresh], 0
-    cmp bl, [ty_fdrv]               ; banked, and on THIS system volume?
-    jne .walk                       ; (0xFF = nothing banked: never a volume)
+    mov al, [ty_fdrv]               ; banked, and on THIS system volume - or
+    cmp al, bl                      ; on the caller's own, the second rung's
+    je .bank                        ; (0xFF = nothing banked: never a volume)
+    cmp al, [ty_bkdrv]
+    jne .walk
+    mov bl, al
+.bank:
     mov dx, [ty_fclus]
     call ty_qm                      ; one quiet stand, and done
     jnc .out
+    mov bl, [ty_sysvol]
 .walk:
     mov byte [ty_fdrv], 0xFF        ; nothing is trusted until the walk lands
-    xor dx, dx                      ; the system disk's ROOT (BL is still
-    call ty_qm                      ; [ty_sysvol]: the kernel keeps BX)
+    call ty_walk                    ; the system disk's SYSTEM/FONTS...
+    jnc .found
+    mov bl, [ty_bkdrv]              ; ...or, with none there, the CALLER'S own
+    cmp bl, [ty_sysvol]             ; volume's (SPEC.md 24.3.1.5: the 360KB
+    stc                             ; system disk carries no faces, and the
+    je .out                         ; office disk its programs ride does)
+    mov [ty_sysvol], bl
+    call ty_walk
     jc .out
-    mov si, ty_s_system
-    call ty_dive
-    jc .out
-    mov si, ty_s_fonts
-    call ty_dive                    ; DX = FONTS' first cluster on CF=0
-    jc .out
+.found:
     mov [ty_fclus], dx              ; ...banked, with the volume it is on
     mov al, [ty_sysvol]
     mov [ty_fdrv], al
@@ -565,6 +572,20 @@ ty_gofonts:
     pop cx
     pop bx
     pop ax
+    ret
+
+; ty_walk - BL = [ty_sysvol] = a volume: stand in its SYSTEM/FONTS. out CF=0
+; and DX = FONTS' first cluster, CF=1 not there. Clobbers AX, BX, CX, DX, SI, DI
+ty_walk:
+    xor dx, dx                      ; the volume's ROOT (the kernel keeps BX)
+    call ty_qm
+    jc .r
+    mov si, ty_s_system
+    call ty_dive
+    jc .r
+    mov si, ty_s_fonts
+    call ty_dive                    ; DX = FONTS' first cluster on CF=0
+.r:
     ret
 
 ; ty_dive - SI names a folder in the one we are standing in; stand in IT.

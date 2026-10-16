@@ -265,6 +265,8 @@ sn_entry:
     mov byte [STIK_PAY + SNP_FLAGS], SNF_DESK   ; empty, and on the desk
     jmp short .seeded
 .ok:
+    call sn_ztail               ; a file an older build wrote may carry a
+                                ; deleted note's bytes past the pool's end
     test byte [STIK_PAY + SNP_FLAGS], SNF_INIT
     jnz .seeded
     test byte [stik_st], STIK_S_RDONLY

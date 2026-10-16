@@ -78,6 +78,30 @@ sn_used:
     pop bx
     ret
 
+; sn_ztail - the pool past the bytes in use ZEROED: os88stik.inc writes the
+; payload less its zero tail (SPEC.md 110.5.3), so a pool whose free end is
+; clean is a file as long as its notes. Every register kept
+sn_ztail:
+    push ax
+    push cx
+    push di
+    push es
+    call sn_used
+    mov di, SN_POOLB
+    add di, ax
+    mov cx, SN_POOL
+    sub cx, ax
+    push ds
+    pop es
+    xor al, al
+    cld
+    rep stosb
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret
+
 ; sn_ins - insert AL at offset BX of the current note: the pool's tail up one.
 ; CF = 1 the pool is full and nothing changed (the toast is said). Every
 ; register kept
@@ -158,6 +182,7 @@ sn_del:
     pop cx
     call sn_curlen
     sub [bx], cx
+    call sn_ztail               ; the bytes the move left behind, zero
 .x:
     pop es
     pop di

@@ -40221,6 +40221,10 @@ is the rung this decision was checked against: a family is ~1.5 KB a style, so
 the whole set is a rounding error there and would have been 27% of the apps
 floppy's free space.
 
+**At 360 KB they ride `office360.img` instead** (§24.3.1.5): that system disk
+gave its room to the Desk Clock, and `ty_gofonts`' second rung walks the same
+`SYSTEM/FONTS/` on the program's own volume when the system disk has none.
+
 **`OSAPI_VOL_SYS` (slot 0x0328) is what makes it reachable, and it had to be
 new.** A package stands in the folder it was launched from, or in one a Standard
 File dialog gave it (§19.2.1); **nothing told it where the SYSTEM's files were**.
@@ -51420,6 +51424,37 @@ disk. Every row that opens Paint on the 360KB machine opens it off `B:`.
 |---|---|
 | main, after §24.3.1.3 | 346 of 354, 8 free |
 | `PAINT.O88` (22) off, `STIKNOTE.O88` (15) on | **339 of 354, 15 free** (measured) |
+
+#### 24.3.1.5 The typefaces and the Font Viewer move to the office disk
+
+**`SYSTEM/FONTS/` leaves the 360KB system disk for `office360.img`, and
+`SYS360OMIT` gains `FONTVIEW.O88`**, by the owner's decision, for §110.14's
+Desk Clock - the third Sticky App, which did not fit the fifteen clusters
+Paint left once Sticky Note's first save was counted. The ten faces and their
+licence are fourteen clusters and the folder one; the Font Viewer is four,
+and it goes with them because on this disk it would list a folder that is not
+there. Both stay on every 720KB, 1.44MB and 1.2MB system disk (§19.8), and the
+Font Viewer was on `office360.img` already.
+
+**The office disk is where the programs that set type ride** at this
+geometry - Word, ArtfulType, PiXEL and the Font Viewer - and `ty_gofonts`
+(`apps/os88type.inc`) finds the faces there because it has a SECOND RUNG
+now: when the system disk has no `SYSTEM/FONTS/`, it walks the same path on
+the volume the PROGRAM is standing on (the caller's banked
+`OSAPI_FILE_HERE`). The bank remembers which of the two it found, and the
+system disk is always asked first, so every larger geometry behaves exactly
+as before. ArtfulType off `apps360.img` finds no faces on this machine and
+offers the kernel's 8x8 cell alone - the empty-folder answer §19.8 already
+gave - until the office disk is the one in B:.
+
+| | clusters |
+|---|---|
+| the 360KB system disk, after §24.3.1.4 | 339 of 354, 15 free |
+| `SYSTEM/FONTS/` (15) and `FONTVIEW.O88` (4) off | **321 of 354, 33 free** (measured) |
+| `office360.img`, with `SYSTEM/FONTS/` | 303 → **318 of 354, 36 free** (measured) |
+
+`tests/unit/t_fonts.py` holds both halves: the faces on the three larger
+system images and on `office360.img`, and none at all on `os8088-360.img`.
 
 ### 24.4 The MEDIA DISK — a third shipped disk, at 360KB alone
 
@@ -183714,7 +183749,7 @@ payload.
 | +10 | 2 | the screen's height when it was saved |
 | +12 | 1 | the payload's version (`STIK_PAYVER`) |
 | +13 | 1 | 0 |
-| +14 | 2 | the payload's length: must equal `STIK_PAYLEN` AND the file's size − 16 |
+| +14 | 2 | the payload's length WRITTEN: 0..`STIK_PAYLEN`, and the file's size − 16 (§110.5.3 - the zero tail is not written) |
 
 A file that is not exactly that is refused whole — missing is "defaults",
 damaged is "run empty, never overwrite silently". A file that could not be
@@ -183893,6 +183928,30 @@ GOTO_QM    home
   held). One body, `stik_beat`, serves both arms. The worker is
   declared restartable (§66.6.2). There is no registration on kern_small,
   whose `OSAPI_DESK_ITEM` is the refusal (§110.7).
+
+#### 110.5.3 A state file is as long as its content
+
+**A save writes the header and the payload LESS ITS ZERO TAIL**, and +14 says
+how many payload bytes followed. A load accepts any length from 0 to
+`STIK_PAYLEN` that matches +14 and the file's size, and gives the rest back as
+zeros - so the payload in memory is byte for byte what it was when it was
+saved, and the package never sees the difference. It is the include's alone:
+no package names a length, and none had to change its payload to get it.
+
+What it bought is DISK, on the geometry that runs out first. Sticky Note's
+payload is a 4 KB pool (§110.13.2) and its file was 4,192 bytes - **five
+clusters on a 360 KB disk whatever it held** - where the welcome note is a
+few hundred bytes and one cluster. A payload whose free space sits at its END
+gets the whole of the saving; Sticky Note keeps its pool's free end zero for
+it (`sn_ztail`: after a delete moves the tail down, and at launch, for a file
+an older build wrote). The Desk Calendar's 984-byte payload was one cluster
+already and stays one.
+
+An OLDER build reads a shorter file as damaged and asks before replacing it
+(§110.5.2) - the right answer by a harmless route, the card's argument
+(§110.12.1), and a Sticky App ships on the system disk beside its own kernel.
+A file this build reads that an older one wrote is `STIK_PAYLEN` long, which
+is the longest legal length, so nothing migrates.
 
 ### 110.6 What it costs
 
@@ -185670,7 +185729,9 @@ apps/stiknote/sned.inc       the editor: layout, composer, keys, clicks, scroll
 | +28 | 48 | each note's length, a word, in list order |
 | +80 | 4,096 | the POOL: the notes' text, one after the other |
 
-4,176 bytes, a 4,192-byte file: five clusters on a 360KB disk. **One pool and
+4,176 bytes - and a file only as long as the notes in it (§110.5.3): the
+pool's free end is kept zero and the save leaves it off, so the welcome note
+is one cluster on a 360KB disk where the whole pool was five. **One pool and
 not 24 slots** (the owner's choice): a note may be long while the others are
 short, and a note's place is the sum of the lengths before it, so an insert
 moves the pool's tail up a byte (`sn_ins`) and nothing else moves. A payload
@@ -185779,6 +185840,11 @@ the desk, the greyed Color menu - and the `vga` leg (`stiknotevga`), the
 papers read off the card's rendered framebuffer. `t_stik` (fast) holds the
 payload, the bss fields and both geometry tables to the host tool and walks
 every system image for `STIKAPPS/STIKNOTE.O88`.
+
+### 110.14 Desk Clock (`apps/deskclok/`)
+
+The third Sticky App: a clock on the desk, in nine faces. (Being built; this
+section is completed with the package.)
 
 ## 111. TIMER — the stopwatch (`apps/timer/timer.asm`)
 

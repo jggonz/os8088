@@ -394,8 +394,12 @@ def parse_dat(data, paylen, payver):
     DiaError naming the first refusal - a file that is not exactly this is
     DAMAGED to the package, never partly read."""
     data = bytes(data)
-    if len(data) != STIK_HDR_SIZE + paylen:
-        raise DiaError("%d bytes, not %d" % (len(data), STIK_HDR_SIZE + paylen))
+    # AS LONG AS ITS CONTENT (SPEC.md 110.5.3): a save writes the payload
+    # less its zero tail, so 0..paylen bytes follow the header and +14 says
+    # how many; the reader gives the tail back as zeros
+    if not STIK_HDR_SIZE <= len(data) <= STIK_HDR_SIZE + paylen:
+        raise DiaError("%d bytes, not %d..%d" % (len(data), STIK_HDR_SIZE,
+                                                 STIK_HDR_SIZE + paylen))
     if data[:2] != STIK_HDR_MAGIC:
         raise DiaError("no 'DA' magic")
     ver, flags, x, y, sw, sh, pv, z, ln = struct.unpack_from(
@@ -404,16 +408,23 @@ def parse_dat(data, paylen, payver):
         raise DiaError("header version %d" % ver)
     if pv != payver:
         raise DiaError("payload version %d, not %d" % (pv, payver))
-    if ln != paylen:
-        raise DiaError("payload length %d, not %d" % (ln, paylen))
+    if ln != len(data) - STIK_HDR_SIZE:
+        raise DiaError("payload length %d, not the file's %d"
+                       % (ln, len(data) - STIK_HDR_SIZE))
     cont = bool(flags & STIK_HF_CONT)
     out = {"pos": bool(flags & STIK_HF_POS), "x": x, "y": y, "cont": cont,
            # the FACE a widget reads it as (SPEC.md 110.11): its own origin,
            # or a v1 file's titled frame - a border in, a title bar down
            "face": [x, y] if cont else [x + 1, y + TITLE_H],
            "screen": [sw, sh], "payver": pv, "paylen": ln,
-           "payload": data[STIK_HDR_SIZE:]}
+           "payload": data[STIK_HDR_SIZE:] + bytes(paylen - ln)}
     return out
+
+
+def trim_payload(payload):
+    """What os88stik.inc's stik_save writes of a payload: all of it but its
+    zero tail (SPEC.md 110.5.3)."""
+    return bytes(payload).rstrip(b"\0")
 
 
 # --- the Desk Calendar's payload ----------------------------------------------
@@ -755,6 +766,17 @@ def selfcheck():
     ok(c["cont"] and c["pos"] and c["face"] == [376, 184] and
        dat(b"", x=1, y=2, screen=(3, 4), cont=True)[3] == 3,
        "a face origin round-trips with +3 = POS | CONT")
+    # AS LONG AS ITS CONTENT (SPEC.md 110.5.3): the zero tail is not written
+    t = trim_payload(b"ab\0c\0\0\0")
+    ok(t == b"ab\0c", "the trim keeps an inner zero and drops the tail")
+    sh = parse_dat(dat(t), 7, 1)
+    ok(sh["paylen"] == 4 and sh["payload"] == b"ab\0c\0\0\0",
+       "a short file reads back zero-padded to the payload's length")
+    ok(parse_dat(dat(b""), 7, 1)["payload"] == bytes(7),
+       "an all-zero payload is a header alone")
+    refuses(lambda: parse_dat(dat(b"x" * 8), 7, 1), "a payload too long")
+    refuses(lambda: parse_dat(dat(b"xy")[:-1], 7, 1),
+            "a file shorter than +14 says")
     w = widget_off(288, 0)
     ok(w["stik_wf"] == stik_st_off(288, 0) + 37 and w["stik_hv"] == w["stik_wf"] + 1,
        "the widget's fields follow v1's 37 bytes")
