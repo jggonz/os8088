@@ -185490,6 +185490,18 @@ which a 1bpp adapter keeps (§13.16.2.1).
   theme's `thm_disc` pen on a planar adapter.
 - **The highlight** recomposes the slab inverted INSIDE the frame and blits
   it: two blits per move, the menu's XOR without the XOR.
+- **The arrow stays on the glass** while the panel is up, as it does over
+  WIN95.DRV's click-to-open menu (§76.14) and over no other pull-down. The
+  mouse ISR draws it only while the lock is free and the tracker holds the
+  lock, so the tracker draws it: `cur_unlazy` and `cursor_show` once the
+  panel is up, and on every MOVE `cursor_hide`, the highlight moved under it,
+  `cursor_show` where the pointer now is - a still pointer redraws nothing.
+  It is hidden again before the restore, so `menu_track`'s `gfx_unlock` puts
+  it back the way it always has.
+- **The stay-up click is drained**: when the panel stayed up because the press
+  was released during the scan, the click that later picks or dismisses it
+  leaves a press and a release in the event ring, and `evq_drain` empties it
+  at the close (`wn`'s own step) so neither reaches what the panel covered.
 
 #### 110.12.4 What a pick does
 

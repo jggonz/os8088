@@ -1405,17 +1405,35 @@ stm_cat:
 ; stm_loop - follow the pointer: AX = the slab released on, 0FFFFh none
 ; menu_drop's poll (SPEC.md 12.4): the button, one torn-free reading of the
 ; pointer, a highlight moved by recomposing the two slabs, the keyboard
-; mouse, task_yield. ONE DIFFERENCE: a press RELEASED while the disk was
-; being read - on a floppy the commonest way this menu comes up - leaves the
-; panel up for a click, rather than closing it before it was seen.
+; mouse, task_yield. THREE DIFFERENCES:
+;   - THE ARROW STAYS ON THE GLASS. The mouse ISR draws it only while the
+;     lock is free, and this loop holds the lock, so it is drawn HERE: shown
+;     once the panel is up, and on every move hidden, the highlight moved
+;     under it, and shown again where the pointer now is - WIN95.DRV's
+;     click-to-open menu (wn_track), the one other tracker that does it.
+;     It is hidden again before the restore, so menu_track's gfx_unlock
+;     puts it back the way it always has.
+;   - A press RELEASED while the disk was being read - on a floppy the
+;     commonest way this menu comes up - leaves the panel up for a click,
+;     rather than closing it before it was seen.
+;   - ...and that click's press and release are DRAINED from the event ring
+;     when the menu closes (wn's evq_drain), or they would reach whatever the
+;     panel covered once it is put back.
 ; clobbers: AX, BX, CX, DX, SI
 ; -----------------------------------------------------------------------------
 stm_loop:
     mov word [cs:stm_sel], 0xFFFF
-    mov byte [cs:stm_stk], 0
+    mov word [cs:stm_lastx], 0xFFFF ; nowhere: the first pass tracks
+    xor ax, ax
+    mov [cs:stm_stk], al
+    mov [cs:stm_stky], al
     test byte [mouse_btn], 1
-    jnz .poll
-    mov byte [cs:stm_stk], 1    ; released already: wait for the click
+    jnz .arrow
+    inc byte [cs:stm_stk]       ; released already: wait for the click
+    inc byte [cs:stm_stky]      ; ...and drain it when the menu closes
+.arrow:
+    SMK cur_unlazy              ; any deferred hide spent, then the arrow
+    SMK cursor_show             ; drawn where the pointer is
 .poll:
     test byte [mouse_btn], 1
     jnz .down
@@ -1425,9 +1443,19 @@ stm_loop:
 .down:
     mov byte [cs:stm_stk], 0    ; a press: its release ends the menu
 .track:
+    mov cx, [mouse_x]           ; only a MOVE redraws anything (the hit
+    mov dx, [mouse_y]           ; test below reads its own torn-free pair)
+    cmp cx, [cs:stm_lastx]
+    jne .moved
+    cmp dx, [cs:stm_lasty]
+    je .same
+.moved:
+    mov [cs:stm_lastx], cx
+    mov [cs:stm_lasty], dx
+    SMK cursor_hide             ; the arrow off before any slab is blitted
     call stm_hit
     cmp ax, [cs:stm_sel]
-    je .same
+    je .shown
     xchg ax, [cs:stm_sel]
     cmp ax, 0xFFFF
     je .noold
@@ -1436,14 +1464,24 @@ stm_loop:
 .noold:
     mov ax, [cs:stm_sel]
     cmp ax, 0xFFFF
-    je .same
+    je .shown
     mov ah, 1
     call stm_slab
+.shown:
+    SMK cursor_show             ; ...and back on, where the pointer is now
 .same:
     SMK kbm_pollm               ; the keyboard mouse's button (SPEC.md 9.6)
     call KERNEL_SEG:cw_task_yield
     jmp short .poll
 .up:
+    SMK cursor_hide             ; down again: the restore and gfx_unlock do
+    cmp byte [cs:stm_stky], 0   ; what they always did
+    je .ret
+    push di
+    mov di, ui_ev
+    SMK evq_drain
+    pop di
+.ret:
     mov ax, [cs:stm_sel]
     ret
 
@@ -1824,6 +1862,9 @@ stm_iflag:  db 0
 stm_vol:    db 0
 stm_hi:     db 0
 stm_stk:    db 0
+stm_stky:   db 0                ; the stay-up click happened: drain it
+stm_lastx:  dw 0                ; where the arrow was last drawn
+stm_lasty:  dw 0
 stm_pol:    db 0
 stm_sty:    db 0
 stm_ak:     db 0
