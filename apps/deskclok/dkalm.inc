@@ -132,6 +132,7 @@ dk_almopen:
     call OSAPI_WM_OWNBG
     mov al, 1
     call OSAPI_WM_KEEPH
+    call OSAPI_WM_NOANIM
     mov ax, dk_aclose
     call OSAPI_WM_ONCLOSE
     mov ax, dk_amup

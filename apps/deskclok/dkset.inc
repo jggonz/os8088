@@ -169,6 +169,7 @@ dk_setopen:
     call OSAPI_WM_OWNBG         ; every pixel is ours
     mov al, 1
     call OSAPI_WM_KEEPH
+    call OSAPI_WM_NOANIM        ; no zoom: the paint is the opening
     mov ax, dk_sclose
     call OSAPI_WM_ONCLOSE
     mov ax, dk_smup
@@ -442,33 +443,135 @@ dk_sbody:
     call ck_font
     mov bx, DK_SETW
     call ck_setband
+    call dk_stall               ; a band a tile row tall, if the heap has one
     mov ax, [dk_r0]
 .slab:
     cmp ax, [dk_r1]
     jg .x
     mov [ck_y0], ax
-    call dk_crows
+    call dk_sslab               ; DX = its rows: to a tile row's edge at most
     call dk_scomp
-    mov dx, [dk_r1]
-    sub dx, ax
-    inc dx
-    cmp dx, [ck_sh]
-    jbe .n
-    mov dx, [ck_sh]
-.n:
     mov bx, [dk_soy]
     add bx, ax
     mov ax, [dk_sox]
     call dk_put
     mov ax, [ck_y0]
-    add ax, [dk_shf]
+    add ax, dx
     jmp short .slab
 .x:
+    call dk_sfree
     pop es
     pop bp
     pop di
     pop si
     pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dk_stall - on four planes, a heap claim a TILE ROW tall for the paint's
+; band: each preview is then composed once, where the 25-row band composed
+; each one four times over (4.8 s a full paint on a 4.77 MHz 8088). Refused,
+; the paint keeps dk_band. Keeps everything
+dk_stall:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov word [dk_sbseg], 0
+    call dk_stiles              ; AX = the first tile row's y, BX = the pitch
+    mov [dk_st0], ax
+    mov [dk_spit], bx
+    cmp byte [ck_np], 4
+    jne .x
+    mov ax, DK_SETW / 8 * 4
+    mul bx
+    mov cx, ax                  ; CX = the bytes
+    add ax, 1023
+    mov al, ah
+    shr al, 1
+    shr al, 1
+    xor ah, ah                  ; AX = the KB
+    call OSAPI_MEM_CLAIM
+    jc .x
+    mov [dk_sbseg], dx
+    mov [ck_bseg], dx
+    mov word [ck_buf], 0
+    mov word [ck_lrow], 8000h
+    mov [ck_sh], bx
+    mov [dk_shf], bx
+    mov ax, DK_SETW / 8
+    mul bx
+    mov [ck_ps], ax
+.x:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dk_sfree - the paint's claim back, and dk_band the composer's again
+dk_sfree:
+    push dx
+    mov dx, [dk_sbseg]
+    or dx, dx
+    jz .x
+    mov word [dk_sbseg], 0
+    call OSAPI_MEM_FREE
+.x:
+    call ck_ourband
+    pop dx
+    ret
+
+; dk_stiles - AX = the first tile row's y, BX = the rows from one to the
+; next. Keeps the rest
+dk_stiles:
+    push si
+    push di
+    mov si, 0
+    call dk_tileent             ; DI = face 0's tile: the first row
+    mov ax, [di+4]
+    mov si, 3
+    call dk_tileent             ; ...face 3's: the second
+    mov bx, [di+4]
+    sub bx, ax
+    pop di
+    pop si
+    ret
+
+; dk_sslab - AX = a slab's first row: DX = its rows - the band's, the
+; damage's, and never across the edge of a tile row - in [ck_sh] and
+; [ck_crow] while it is composed. Keeps everything else
+dk_sslab:
+    push ax
+    push bx
+    push cx
+    mov dx, [dk_r1]
+    sub dx, ax
+    inc dx
+    cmp dx, [dk_shf]
+    jbe .a
+    mov dx, [dk_shf]
+.a:
+    mov bx, [dk_st0]            ; the next tile row's edge past AX
+    mov cx, 4
+.e:
+    cmp bx, ax
+    jg .b
+    add bx, [dk_spit]
+    loop .e
+    jmp short .s
+.b:
+    sub bx, ax                  ; BX = the rows to it
+    cmp dx, bx
+    jbe .s
+    mov dx, bx
+.s:
+    mov [ck_sh], dx
+    mov [ck_crow], dl
     pop cx
     pop bx
     pop ax

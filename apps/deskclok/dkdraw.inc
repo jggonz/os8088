@@ -146,6 +146,7 @@ ck_gwhite:
 ck_ourband:
     mov [ck_bseg], ds
     mov word [ck_buf], dk_band
+    mov word [ck_lrow], 8000h   ; ck_span's row cache: no row
     ret
 
 ; ck_setband - BX = the canvas's width in px (a multiple of 8, <= DK_BANDW):
@@ -278,77 +279,106 @@ ck_spanc:
 .in:
     push si
     push di
-    push bp
     push es
-    mov es, [ck_bseg]           ; the band: ours, or the face cache's claim
-    mov bx, dx                  ; BX = the slab row
+    mov es, [ck_bseg]           ; the band: ours, or a claim
+    cmp dx, [ck_lrow]           ; the row's base: the last span's, its next
+    jne .nr                     ; one stride on, or a multiply
+    mov di, [ck_lrdi]
+    jmp short .hr
+.nr:
     push ax
     mov ax, dx
+    dec ax
+    cmp ax, [ck_lrow]
+    jne .mu
+    mov di, [ck_lrdi]
+    add di, [ck_st]
+    jmp short .st
+.mu:
+    mov ax, dx
+    push dx
     mul word [ck_st]
+    pop dx
+    add ax, [ck_buf]
     mov di, ax
-    add di, [ck_buf]            ; DI = the row in plane 0
+.st:
     pop ax
+    mov [ck_lrow], dx
+    mov [ck_lrdi], di
+.hr:
+    mov bx, dx                  ; BX = the pattern: this row's parity, plane 0
     add bx, [ck_y0]
     add bl, [ck_par]
     and bx, 1
-    add bx, [ck_pp]             ; BX = the pattern, plane 0, this parity
-    mov bp, cx                  ; BP = x1
+    add bx, [ck_pp]
     mov dx, ax                  ; DX = x0
-    mov cl, 3
-    shr ax, cl
-    add di, ax                  ; DI = the first byte
-    mov si, bp
-    shr si, cl
-    sub si, ax                  ; SI = bytes - 1
-    mov cl, dl
-    and cl, 7
-    mov ah, 0FFh
-    shr ah, cl                  ; AH = the first byte's mask
-    mov cx, bp
-    and cl, 7
-    mov al, 80h
-    sar al, cl                  ; AL = the last byte's
-    or si, si
-    jnz .m
-    and ah, al                  ; one byte: both
-.m:
-    mov cl, [ck_np]
-    xor ch, ch
+    mov si, cx
+    shr si, 1
+    shr si, 1
+    shr si, 1                   ; SI = the last byte column
+    push bx
+    mov bx, cx
+    and bx, 7
+    mov ch, [ck_rmt + bx]       ; CH = the last byte's mask
+    mov bx, dx
+    and bx, 7
+    mov cl, [ck_lmt + bx]       ; CL = the first's
+    pop bx
+    shr dx, 1
+    shr dx, 1
+    shr dx, 1
+    add di, dx                  ; DI = the first byte
+    sub si, dx                  ; SI = bytes - 1
+    jnz .multi
+    and cl, ch                  ; ONE byte: both masks, a plane at a time
+    mov ch, [ck_np]
+.one:
+    mov al, [es:di]
+    xor al, [bx]
+    and al, cl
+    xor [es:di], al
+    add di, [ck_ps]
+    add bx, 2
+    dec ch
+    jnz .one
+    jmp short .done
+.multi:
+    mov ah, [ck_np]
     cld
 .pl:
-    push cx
+    mov dl, [bx]                ; DL = this plane's pattern
     push di
-    mov dl, [bx]
-    mov dh, [es:di]             ; [di] ^= ([di] ^ pattern) & mask
-    xor dh, dl
-    and dh, ah
-    xor [es:di], dh
-    or si, si
-    jz .nx
+    mov al, [es:di]             ; the first byte, under its mask
+    xor al, dl
+    and al, cl
+    xor [es:di], al
     inc di
+    push cx
     mov cx, si
     dec cx
     jcxz .last
-    push ax
-    mov al, dl
+    mov al, dl                  ; the middle, whole
     rep stosb
-    pop ax
 .last:
-    mov dh, [es:di]
-    xor dh, dl
-    and dh, al
-    xor [es:di], dh
-.nx:
-    pop di
     pop cx
+    mov al, [es:di]             ; the last, under its mask
+    xor al, dl
+    and al, ch
+    xor [es:di], al
+    pop di
     add di, [ck_ps]
     add bx, 2
-    loop .pl
+    dec ah
+    jnz .pl
+.done:
     pop es
-    pop bp
     pop di
     pop si
     ret
+
+ck_lmt:     db 0FFh, 7Fh, 3Fh, 1Fh, 0Fh, 07h, 03h, 01h
+ck_rmt:     db 80h, 0C0h, 0E0h, 0F0h, 0F8h, 0FCh, 0FEh, 0FFh
+
 
 ; -----------------------------------------------------------------------------
 ; ck_mrow - ONE ROW OF A BIT PATTERN in the current ink: [ck_mw] (a dword,
@@ -626,8 +656,10 @@ ck_expand:
     pop ax
     ret
 
-; ck_rect - AX = x, BX = y, CX = w, DX = h (canvas less the origin), filled.
-; Keeps everything
+; ck_rect - AX = x, BX = y, CX = w, DX = h (canvas less the origin), filled
+; in the current pattern: clipped ONCE, its masks found once, then row after
+; row a stride apart - a frame's 1-px side is a bit a plane a row, not a
+; span call a row (4,762 calls were a settings paint's). Keeps everything
 ck_rect:
     push ax
     push bx
@@ -635,28 +667,142 @@ ck_rect:
     push dx
     push si
     push di
+    push bp
+    push es
     or cx, cx
     jle .x
-    mov si, ax                  ; SI = x0
-    mov di, ax
-    add di, cx
-    dec di                      ; DI = x1
-    add dx, bx                  ; DX = the end row
-    call ck_rowcut              ; ...both cut to the slab's rows
-.r:
+    add dx, bx                  ; the rows, cut to the slab
+    call ck_rowcut
     cmp bx, dx
     jge .x
-    push bx
-    push dx
-    mov ax, si
-    mov cx, di
-    mov dx, bx
-    call ck_span
-    pop dx
+    mov bp, dx
+    sub bp, bx                  ; BP = the rows
+    add bx, [ck_oy]
+    sub bx, [ck_y0]             ; BX = the first slab row
+    add ax, [ck_ox]             ; the columns, cut to [ck_cx0]..[ck_cx1]
+    mov dx, ax
+    add dx, cx
+    dec dx
+    cmp ax, [ck_cx0]
+    jge .a
+    mov ax, [ck_cx0]
+.a:
+    cmp dx, [ck_cx1]
+    jle .b
+    mov dx, [ck_cx1]
+.b:
+    cmp ax, dx
+    jg .x
+    mov es, [ck_bseg]
+    push bx                     ; the masks and the bytes
+    mov bx, dx
+    and bx, 7
+    mov ch, [ck_rmt + bx]
+    mov bx, ax
+    and bx, 7
+    mov cl, [ck_lmt + bx]
     pop bx
-    inc bx
-    jmp short .r
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    shr dx, 1
+    shr dx, 1
+    shr dx, 1
+    sub dx, ax                  ; DX = bytes - 1
+    jnz .w
+    and cl, ch
+.w:
+    mov [dk_rw], dx
+    mov [dk_rm], cx
+    push ax                     ; DI = the first byte of the first row
+    mov ax, bx
+    push dx
+    mul word [ck_st]
+    pop dx
+    add ax, [ck_buf]
+    pop dx
+    add ax, dx
+    mov di, ax
+    mov ax, bx                  ; the first row's parity
+    add ax, [ck_y0]
+    add al, [ck_par]
+    and ax, 1
+    mov [dk_rpar], al
+    mov si, [ck_pp]
+    mov dh, [ck_np]
+    cld
+    cmp word [dk_rw], 0         ; ONE byte wide (a frame's side): the tight
+    jne .pl                     ; loop - a stride in BX, nothing on the stack
+    mov dl, cl                  ; DL = the mask
+.vp:
+    push di
+    push bp
+    mov bl, [dk_rpar]
+    xor bh, bh
+    mov al, [si + bx]
+    xor bl, 1
+    mov ah, [si + bx]
+    mov bx, [ck_st]
+.vr:
+    mov cl, [es:di]
+    xor cl, al
+    and cl, dl
+    xor [es:di], cl
+    add di, bx
+    xchg al, ah
+    dec bp
+    jnz .vr
+    pop bp
+    pop di
+    add di, [ck_ps]
+    add si, 2
+    dec dh
+    jnz .vp
+    jmp .x
+.pl:                            ; a plane at a time, every row of it
+    push di
+    push bp
+    mov bl, [dk_rpar]
+    xor bh, bh
+    mov al, [si + bx]           ; AL = the first row's byte, AH = the next's
+    xor bl, 1
+    mov ah, [si + bx]
+.row:
+    push di
+    mov bx, [dk_rm]             ; BL = the first mask, BH = the last
+    mov cx, [dk_rw]
+    jcxz .one
+    mov dl, [es:di]
+    xor dl, al
+    and dl, bl
+    xor [es:di], dl
+    inc di
+    dec cx
+    jz .lst
+    push ax
+    rep stosb
+    pop ax
+.lst:
+    mov bl, bh
+.one:
+    mov dl, [es:di]
+    xor dl, al
+    and dl, bl
+    xor [es:di], dl
+    pop di
+    add di, [ck_st]
+    xchg al, ah                 ; the next row's parity
+    dec bp
+    jnz .row
+    pop bp
+    pop di
+    add di, [ck_ps]
+    add si, 2
+    dec dh
+    jnz .pl
 .x:
+    pop es
+    pop bp
     pop di
     pop si
     pop dx
@@ -1094,6 +1240,44 @@ ck_isqrt:
     pop bx
     ret
 
+; ck_rootg - AX -> AX = floor(sqrt(AX)), from the guess [ck_hwg] (the last
+; row's root: the next row's is a step or two from it) - a multiply a step
+; instead of ck_isqrt's eight rounds. [ck_hwg] = 0 asks ck_isqrt. The answer
+; becomes the next guess. Keeps the rest
+ck_rootg:
+    push bx
+    push cx
+    push dx
+    mov cx, ax                  ; CX = N
+    mov bx, [ck_hwg]
+    or bx, bx
+    jnz .up
+    call ck_isqrt
+    mov bx, ax
+    jmp short .x
+.up:
+    mov ax, bx                  ; up while (g + 1)^2 <= N
+    inc ax
+    mul ax
+    cmp ax, cx
+    ja .dn
+    inc bx
+    jmp short .up
+.dn:
+    mov ax, bx                  ; down while g^2 > N
+    mul ax
+    cmp ax, cx
+    jbe .x
+    dec bx
+    jnz .dn
+.x:
+    mov [ck_hwg], bx
+    mov ax, bx
+    pop dx
+    pop cx
+    pop bx
+    ret
+
 ; ck_ehw - an ellipse's half-width at a row: BX = rx, CX = ry (> 0), DX = j,
 ; the row from the centre (-ry .. ry - 1; the centre lies BETWEEN rows). Out
 ; AX = the half-width: the row is cx - AX .. cx + AX - 1. Keeps the rest
@@ -1121,7 +1305,7 @@ ck_ehw:
     pop dx
     mul dx                      ; DX:AX = (rx^2 + rx)(R2 - t^2)
     div cx
-    call ck_isqrt
+    call ck_rootg               ; ...from the last row's answer
     jmp short .x
 .z:
     xor ax, ax
@@ -1149,6 +1333,7 @@ ck_ell:
     mov si, ax                  ; SI = cx
     mov di, cx                  ; DI = rx
     mov bp, dx                  ; BP = ry
+    mov word [ck_hwg], 0        ; the root: from scratch for the first row
     push bx
     sub bx, dx                  ; the rows: cy - ry ..
     shl dx, 1
@@ -1225,6 +1410,7 @@ ck_rrect:
     mov si, ax                  ; SI = x
     mov di, cx                  ; DI = w
     mov bp, dx                  ; BP = h
+    mov word [ck_hwg], 0
     push bx                     ; the rows in it the slab holds: CX from
     add dx, bx                  ; there up to [dk_rend]
     call ck_rowcut
@@ -1234,6 +1420,21 @@ ck_rrect:
     sub cx, bx
     sub ax, bx
     mov [dk_rend], ax
+    push ax                     ; the straight middle, ry .. h - ry: ONE
+    push bx                     ; rectangle (ck_rect), the corners' rows
+    push cx                     ; a span each below
+    push dx
+    mov ax, si
+    add bx, [ck_ry]
+    mov cx, di
+    mov dx, bp
+    sub dx, [ck_ry]
+    sub dx, [ck_ry]
+    call ck_rect
+    pop dx
+    pop cx
+    pop bx
+    pop ax
 .r:
     cmp cx, [dk_rend]
     jge .x
@@ -1248,7 +1449,10 @@ ck_rrect:
 .n:
     pop bp
     cmp dx, [ck_ry]
-    jge .in
+    jl .cor
+    inc cx                      ; the middle: drawn above
+    jmp short .r
+.cor:
     push bx
     push cx
     sub dx, [ck_ry]             ; j = -ry .. -1
@@ -1259,7 +1463,6 @@ ck_rrect:
     add ax, [ck_rx]             ; inset = rx - hw
     pop cx
     pop bx
-.in:
     push bx
     push cx
     push dx

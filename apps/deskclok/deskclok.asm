@@ -190,6 +190,10 @@ KSC_PGDN    equ 0x51
     DKV dk_gsh, 1               ; ...and its shift
     DKV dk_eend, 2              ; ck_ell's last j, past it
     DKV dk_rend, 2              ; ck_rrect's last row, past it
+    DKV dk_rw, 2                ; ck_rect's bytes - 1...
+    DKV dk_rm, 2                ; ...its masks, first and last
+    DKV dk_rpar, 1              ; ...its first row's parity
+    DKV ck_hwg, 2               ; ck_rootg's guess: the last row's root
     DKV dk_tp, 12
     DKV ck_bseg, 2              ; the band's segment and offset: dk_band, or
     DKV ck_buf, 2               ; the face cache's claim (dkwid.inc)
@@ -203,6 +207,8 @@ KSC_PGDN    equ 0x51
     DKV dk_cpar, 1              ; ...its ground's parity
     DKV dk_fmode, 1             ; dk_face: 0 every op, 1 the static, 2 the rest
     DKV ck_crow, 1              ; ck_clear's rows: the slab's live ones
+    DKV ck_lrow, 2              ; ck_span's last row, and its base (8000h:
+    DKV ck_lrdi, 2              ; none - a band that changes says so)
     DKV dk_shf, 2               ; the band's full height ([ck_sh] is cut to
                                 ; a slab's live rows while it is composed)
     DKV ck_np, 1
@@ -312,6 +318,9 @@ KSC_PGDN    equ 0x51
     DKV dk_sbtn, 1              ; a button pressed, + 1
     DKV dk_sdrop, 1             ; the size list is open
     DKV dk_sfold, 1             ; the face before a change
+    DKV dk_sbseg, 2             ; a paint's tall band: its claim, 0 none
+    DKV dk_st0, 2               ; ...the tile rows: the first's y, the pitch
+    DKV dk_spit, 2
     ; the alarm window (dkalm.inc)
     DKV dk_awin, 2
     DKV dk_ageo, 2

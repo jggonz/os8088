@@ -388,8 +388,7 @@ dk_put:
     push di
     push bp
     push es
-    push ds
-    pop es
+    mov es, [ck_bseg]           ; the band: ours, or a claim of the settings'
     mov cx, [ck_cx1]
     sub cx, [ck_cx0]
     jl .none
@@ -399,7 +398,7 @@ dk_put:
     shr si, 1
     shr si, 1
     shr si, 1
-    add si, dk_band
+    add si, [ck_buf]
     mov bp, [ck_st]
     cmp byte [ck_np], 1
     je .one
@@ -686,6 +685,7 @@ dk_cbuild:
     mov ax, [dk_cseg]           ; the composer, onto the claim: the face's own
     mov [ck_bseg], ax           ; canvas, one slab its whole height
     mov word [ck_buf], 0
+    mov word [ck_lrow], 8000h
     mov ax, [dk_cst]
     mov [ck_st], ax
     mov ax, [dk_fah]
