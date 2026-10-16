@@ -250,6 +250,7 @@ dk_pcard:
     call ck_gwhite
 .gnd:
     call ck_font
+    call dk_cprep               ; the face's static layer, cached
     mov bx, [dk_cw]
     call ck_setband
     mov ax, [stik_dmg]          ; the columns the damage reaches, so a hand's
@@ -262,6 +263,7 @@ dk_pcard:
     cmp ax, [dk_r1]
     jg .x
     mov [ck_y0], ax
+    call dk_crows
     call dk_ccard               ; compose the slab
     mov dx, [dk_r1]             ; its rows that are damaged
     sub dx, ax
@@ -275,7 +277,7 @@ dk_pcard:
     mov ax, [stik_fx]
     call dk_put
     mov ax, [ck_y0]
-    add ax, [ck_sh]
+    add ax, [dk_shf]
     jmp short .slab
 .x:
     pop es
@@ -285,6 +287,24 @@ dk_pcard:
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; dk_crows - AX = the slab's first row: [ck_crow] = its rows the damage
+; reaches, [dk_r1] the last. Keeps everything
+dk_crows:
+    push ax
+    push dx
+    mov dx, [dk_r1]
+    sub dx, ax
+    inc dx
+    cmp dx, [dk_shf]
+    jbe .s
+    mov dx, [dk_shf]
+.s:
+    mov [ck_crow], dl           ; ...and every primitive clips to them: rows
+    mov [ck_sh], dx             ; past the damage are never composed
+    pop dx
     pop ax
     ret
 
@@ -529,8 +549,8 @@ dk_gcand:   dw 0, 0, 1, 0       ; left top, right top...
 
 ; -----------------------------------------------------------------------------
 ; dk_ccard - compose slab [ck_y0] of the card: the ground, the panel, the
-; face. Keeps everything
-; -----------------------------------------------------------------------------
+; face - its static layer copied out of the cache when there is one, and
+; only the ops after OP_DYN drawn over it. Keeps everything
 dk_ccard:
     push ax
     push bx
@@ -553,12 +573,282 @@ dk_ccard:
     mov [dk_fw], ax
     mov ax, [dk_fah]
     mov [dk_fh], ax
+    mov byte [dk_fmode], 0
+    cmp byte [dk_cok], 0
+    je .all
+    call dk_ccopy
+    mov byte [dk_fmode], 2      ; the hands, the time: what moves
+.all:
+    call dk_prog
+    call dk_face
+    mov byte [dk_fmode], 0
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dk_prog - SI = the current face's program. Keeps the rest
+dk_prog:
+    push bx
     mov bl, [DKP + DKP_FACE]
     xor bh, bh
     shl bx, 1
     shl bx, 1
     mov si, [dk_faces + bx + 2]
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; THE FACE CACHE (SPEC.md 110.14.4): the face's STATIC layer - the ground at
+; its corners, the panel under a dial, everything a program draws before
+; OP_DYN - composed once into a heap claim the face's size, so a hand's box or
+; a second's digits is a copy and a few spans, not the whole program again
+; (290 ms a box on a 4.77 MHz 8088 without it). It is the face as it stands:
+; any layout change drops it (dk_relay), and a paint whose planes or desktop
+; ground differ from the ones it was composed on builds it again. A refused
+; claim is no cache: every paint composes the whole program, as it did.
+; -----------------------------------------------------------------------------
+; dk_cprep - the cache valid for this paint, or rebuilt. Keeps everything
+dk_cprep:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    cmp byte [dk_cok], 0
+    je .build
+    mov al, [ck_np]
+    cmp al, [dk_cnp]
+    jne .build
+    mov al, [ck_gpar]
+    cmp al, [dk_cpar]
+    jne .build
+    push ds
+    pop es
+    mov si, ck_gnd
+    mov di, dk_cgnd
+    mov cx, 4
+    cld
+    repe cmpsw
+    je .x
+.build:
+    call dk_cbuild
+.x:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; dk_cbuild - compose the static layer into the claim (claimed, or grown, as
+; the face needs). Keeps everything
+dk_cbuild:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov byte [dk_cok], 0
+    mov ax, [dk_faw]
+    mov cl, 3
+    shr ax, cl
+    mov [dk_cst], ax
+    mul word [dk_fah]
+    mov [dk_cps], ax
+    mov cl, [ck_np]
+    xor ch, ch
+    mul cx                      ; DX:AX = the bytes
+    add ax, 1023
+    adc dx, 0
+    mov cl, 10
+    shr ax, cl
+    mov cl, 6
+    shl dx, cl
+    or ax, dx                   ; AX = the KB
+    cmp word [dk_cseg], 0
+    je .claim
+    cmp al, [dk_ckb]
+    jbe .have
+    mov dx, [dk_cseg]           ; too small: give it back, take a bigger one
+    call OSAPI_MEM_FREE
+    mov word [dk_cseg], 0
+.claim:
+    call OSAPI_MEM_CLAIM        ; DX = the segment, CF = 1 refused
+    jc .x
+    mov [dk_cseg], dx
+    mov [dk_ckb], al
+.have:
+    mov ax, [dk_cseg]           ; the composer, onto the claim: the face's own
+    mov [ck_bseg], ax           ; canvas, one slab its whole height
+    mov word [ck_buf], 0
+    mov ax, [dk_cst]
+    mov [ck_st], ax
+    mov ax, [dk_fah]
+    mov [ck_sh], ax
+    mov [dk_shf], ax
+    mov [ck_crow], al
+    mov ax, [dk_cps]
+    mov [ck_ps], ax
+    xor ax, ax
+    mov [ck_y0], ax
+    mov [ck_cx0], ax
+    mov [ck_ox], ax
+    mov [ck_oy], ax
+    mov ax, [dk_faw]
+    dec ax
+    mov [ck_cx1], ax
+    call ck_ground
+    call ck_clear
+    cmp byte [dk_pan], 1        ; under a dial in the full view: the panel's
+    jne .f                      ; top, which the dial's foot overlaps
+    cmp byte [dk_kind], 0
+    jne .f
+    mov al, LC_WHT
+    call ck_ink
+    mov ax, [dk_pix]
+    sub ax, [dk_fox]
+    mov bx, [dk_pt]
+    mov cx, DK_PANW
+    mov dx, [dk_fah]
+    sub dx, bx
+    call ck_rect
+.f:
+    mov ax, [dk_faw]
+    mov [dk_fw], ax
+    mov ax, [dk_fah]
+    mov [dk_fh], ax
+    mov byte [dk_fmode], 1      ; up to OP_DYN
+    call dk_prog
     call dk_face
+    mov byte [dk_fmode], 0
+    mov al, [ck_np]             ; what it was composed on
+    mov [dk_cnp], al
+    mov al, [ck_gpar]
+    mov [dk_cpar], al
+    push ds
+    pop es
+    mov si, ck_gnd
+    mov di, dk_cgnd
+    mov cx, 4
+    cld
+    rep movsw
+    mov byte [dk_cok], 1
+.x:
+    call ck_ourband
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dk_ccopy - the cache's rows and byte columns this slab reaches, into the
+; band at the face's place. Keeps everything
+dk_ccopy:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov ax, [ck_y0]             ; AX = the first row, BX = past the last
+    mov bx, ax
+    add bx, [ck_sh]
+    cmp bx, [dk_fah]
+    jbe .r1
+    mov bx, [dk_fah]
+.r1:
+    cmp ax, bx
+    jae .x
+    sub bx, ax
+    mov [dk_t1], bx             ; the rows
+    mov cx, [ck_cx0]            ; the byte columns, face-local
+    sub cx, [dk_fox]
+    jge .c0
+    xor cx, cx
+.c0:
+    mov dx, [ck_cx1]
+    sub dx, [dk_fox]
+    jl .x
+    push cx
+    mov cl, 3
+    shr dx, cl
+    pop cx
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1
+    mov bx, [dk_cst]
+    dec bx
+    cmp dx, bx
+    jbe .c1
+    mov dx, bx
+.c1:
+    cmp cx, dx
+    ja .x
+    sub dx, cx
+    inc dx
+    mov [dk_t0], dx             ; the bytes a row
+    push ax                     ; the source: row AX, byte CX, plane 0
+    mul word [dk_cst]
+    add ax, cx
+    mov si, ax
+    pop ax
+    sub ax, [ck_y0]             ; the destination: its slab row, the face's
+    mul word [ck_st]            ; byte column plus CX, plane 0
+    add ax, cx
+    mov dx, [dk_fox]
+    shr dx, 1
+    shr dx, 1
+    shr dx, 1
+    add ax, dx
+    add ax, dk_band
+    mov di, ax
+    push ds
+    pop es
+    mov bp, [dk_t1]             ; BP = the rows
+    mov dx, [dk_t0]             ; DX = the bytes a row
+    mov bx, [dk_cst]
+    sub bx, dx                  ; BX = the source's step past a row's bytes
+    mov ax, [ck_st]
+    sub ax, dx                  ; AX = the band's
+    mov cl, [ck_np]
+    xor ch, ch
+    cld
+.pl:
+    push cx
+    push si
+    push di
+    push bp
+    push ds
+    mov ds, [dk_cseg]
+.row:
+    mov cx, dx
+    rep movsb
+    add si, bx
+    add di, ax
+    dec bp
+    jnz .row
+    pop ds
+    pop bp
+    pop di
+    pop si
+    pop cx
+    add si, [dk_cps]
+    add di, [ck_ps]
+    loop .pl
+.x:
+    pop es
+    pop bp
+    pop di
     pop si
     pop dx
     pop cx
@@ -568,12 +858,23 @@ dk_ccard:
 
 ; dk_cpanel - the info panel, in canvas coordinates (origin 0)
 dk_cpanel:
+    mov bx, [dk_pt]             ; a slab, or a box's columns, that miss it:
+    mov dx, [dk_ph]             ; nothing at all (each part below asks the
+    call ck_rows                ; same of its own rows - a hand's box costs
+    jc .r                       ; no string built for a row it never shows)
+    mov ax, [dk_pix]
+    cmp ax, [ck_cx1]
+    jg .r
+    add ax, DK_PANW - 1
+    cmp ax, [ck_cx0]
+    jge .go
+.r:
+    ret
+.go:
     mov al, LC_WHT
     call ck_ink
     mov ax, [dk_pix]
-    mov bx, [dk_pt]
     mov cx, DK_PANW
-    mov dx, [dk_ph]
     call ck_rect
     mov al, LC_BLK
     call ck_ink
@@ -583,6 +884,10 @@ dk_cpanel:
     jne .date
     call dk_cbig                ; the time, big, under a dial
 .date:
+    mov bx, [dk_tyD]
+    mov dx, 8 + 3 + 1
+    call ck_rows
+    jc .alarm
     call ck_sc1
     call dk_sdate
     mov si, dk_line
@@ -597,6 +902,11 @@ dk_cpanel:
     mov dx, [dk_tyR]
     call ck_span
 .alarm:
+    mov bx, [dk_tyA]
+    mov dx, [dk_ch]
+    sub dx, bx
+    call ck_rows
+    jc .r
     call ck_sc1
     mov si, dk_bell
     mov cx, [dk_pix]
@@ -636,15 +946,25 @@ dk_cpanel:
     add cx, DK_DISX
     mov dx, [dk_tyS]
     jmp ck_text
-DK_SNZX     equ 10              ; `Snooze` at the panel's x + 10...
-DK_DOTX     equ DK_SNZX + 6 * 8 + 6
-DK_DISX     equ DK_DOTX + 8     ; ...the dot, `Dismiss`
+DK_SNZX     equ 6               ; `Snooze`, the dot, `Dismiss`: 116 px,
+DK_DOTX     equ DK_SNZX + 6 * 8 + 5     ; centred on the panel
+DK_DISX     equ DK_DOTX + 2 + 5
 dks_snz:    db 'Snooze', 0
 dks_dis:    db 'Dismiss', 0
 
 ; dk_cbig - the time as text, big, centred on the panel: HH:MM at x2 and -
 ; small after it - the seconds and the AM/PM
 dk_cbig:
+    mov bx, [dk_tyT]
+    mov dl, [dk_bsy]
+    xor dh, dh
+    shl dx, 1
+    shl dx, 1
+    shl dx, 1
+    call ck_rows
+    jnc .go
+    ret
+.go:
     call dk_stime
     mov byte [ck_gsx], 2
     mov al, [dk_bsy]
@@ -664,7 +984,9 @@ dk_cbig:
     add cx, DK_PANW / 2
     shr ax, 1
     sub cx, ax
-    mov byte [ck_gsx], 2
+    add bx, cx
+    mov [dk_smx], bx            ; where the small part starts: a new second
+    mov byte [ck_gsx], 2        ; repaints it alone (dk_dsec)
     mov al, [dk_bsy]
     mov [ck_gsy], al
     mov byte [ck_gbold], 1
@@ -830,7 +1152,7 @@ dk_cat:
     ret
 
 ; ck_bits - SI = a record (db rows, then a word a row, bit 15 the leftmost)
-; at CX, DX in the current ink. Keeps everything
+; at CX, DX in the current ink: a mask row each (ck_mrow). Keeps everything
 ck_bits:
     push ax
     push bx
@@ -838,8 +1160,7 @@ ck_bits:
     push dx
     push si
     push di
-    push bp
-    mov bp, cx
+    cld
     lodsb
     xor ah, ah
     mov di, ax                  ; DI = the rows
@@ -847,43 +1168,18 @@ ck_bits:
     or di, di
     jz .x
     lodsw
-    mov bx, ax
-    xor cx, cx                  ; CX = the bit
-.b:
-    cmp cx, 16
-    jae .nr
-    test bx, 8000h
-    jnz .run
-    shl bx, 1
-    inc cx
-    jmp short .b
-.run:
-    mov ax, cx
-.rr:
-    shl bx, 1
-    inc cx
-    cmp cx, 16
-    jae .re
-    test bx, 8000h
-    jnz .rr
-.re:
-    push bx
+    mov [ck_mw+2], ax
+    mov word [ck_mw], 0
     push cx
     push dx
-    add ax, bp
-    add cx, bp
-    dec cx
-    call ck_span
+    mov ax, cx
+    call ck_mrow
     pop dx
     pop cx
-    pop bx
-    jmp short .b
-.nr:
     inc dx
     dec di
     jmp short .row
 .x:
-    pop bp
     pop di
     pop si
     pop dx
@@ -986,6 +1282,29 @@ dk_rrect:
     pop cx
     pop bx
     pop ax
+    ret
+
+; dk_refocus - a dialog of ours went down: the bar and the keys back to the
+; clock it was opened from (a desk window's OSAPI_WM_FRONT activates, raising
+; nothing - SPEC.md 11.103.4). Keeps everything
+dk_refocus:
+    push bx
+    push es
+    push ax
+    mov ax, KERNEL_SEG
+    mov es, ax
+    pop ax
+    mov bx, [stik_win]
+    or bx, bx
+    jz .x
+    test byte [stik_fl], STIK_F_QUIT
+    jnz .x
+    test byte [es:bx + W_FLAGS], 2
+    jz .x
+    call OSAPI_WM_FRONT
+.x:
+    pop es
+    pop bx
     ret
 
 ; dk_hbox - AL = a hand's angle, AH = its length f, CX = its stroke width:
@@ -1125,21 +1444,39 @@ dk_hmove:
     push si
     mov cl, 3
     shl si, cl                  ; x8
-    mov ax, [dk_hold + si]
+    mov ax, [dk_hnew + si]      ; where it is and where it was, ONE repaint:
+    mov bx, [dk_hnew + si + 2]  ; the two boxes share the centre and most of
+    mov cx, [dk_hnew + si + 4]  ; their rows, and each pass draws every hand
+    mov dx, [dk_hnew + si + 6]
+    cmp word [dk_hold + si], 0FFFFh
+    je .one
     cmp ax, 0FFFFh
-    je .new
+    jne .u
+    mov ax, [dk_hold + si]      ; (no new one: the old alone)
     mov bx, [dk_hold + si + 2]
     mov cx, [dk_hold + si + 4]
     mov dx, [dk_hold + si + 6]
-    call dk_rrect               ; where it was...
-.new:
-    mov ax, [dk_hnew + si]
+    jmp short .one
+.u:
+    cmp ax, [dk_hold + si]
+    jle .u1
+    mov ax, [dk_hold + si]
+.u1:
+    cmp bx, [dk_hold + si + 2]
+    jle .u2
+    mov bx, [dk_hold + si + 2]
+.u2:
+    cmp cx, [dk_hold + si + 4]
+    jge .u3
+    mov cx, [dk_hold + si + 4]
+.u3:
+    cmp dx, [dk_hold + si + 6]
+    jge .one
+    mov dx, [dk_hold + si + 6]
+.one:
     cmp ax, 0FFFFh
     je .p
-    mov bx, [dk_hnew + si + 2]
-    mov cx, [dk_hnew + si + 4]
-    mov dx, [dk_hnew + si + 6]
-    call dk_rrect               ; ...and where it is
+    call dk_rrect
 .p:
     pop si
 .n:

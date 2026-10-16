@@ -93,7 +93,7 @@ dks_mid:
     db DKST_END
 dks_comp:
     dw 137
-    db 36, 96
+    db 36, 56
     DKSE DKST_CHKB, DKF_ONLY, 8, 2, 140, 12, dkss_only
     DKSE DKST_CHK, DKF_SECS, 160, 2, 90, 12, dkss_secs
     DKSE DKST_CHK, DKF_H24, 264, 2, 90, 12, dkss_h24
@@ -157,14 +157,8 @@ dk_setopen:
     mov ax, [si + DKSG_CH]
     add ax, TITLE_H + 1
     mov [dk_stpl + WT_H], ax
-    call OSAPI_VIDEO            ; centred across, under the bar
-    sub ax, DK_SETW + 2
-    shr ax, 1
-    and ax, 0FFF8h
-    dec ax
-    jns .xx
-    mov ax, 7
-.xx:
+    mov cx, DK_SETW + 2         ; beside the clock, so its preview shows
+    call dk_beside
     mov [dk_stpl + WT_X], ax
     mov word [dk_stpl + WT_Y], MBAR_H + 4
     mov si, dk_stpl
@@ -190,6 +184,55 @@ dk_setopen:
     pop cx
     pop bx
     pop ax
+    ret
+
+; dk_beside - CX = a window's width: AX = its x, the side of the clock with
+; the more room - wholly clear of it where the screen allows (W_X = 7 mod 8,
+; the content on the byte grid). Keeps the rest
+dk_beside:
+    push bx
+    push dx
+    push si
+    push es
+    push cx
+    call OSAPI_VIDEO            ; AX = the screen's width
+    pop cx
+    mov dx, ax
+    mov ax, KERNEL_SEG
+    mov es, ax
+    mov si, [stik_win]
+    mov bx, [es:si + W_X]       ; BX = the room left of the clock
+    mov ax, dx
+    sub ax, bx
+    sub ax, [es:si + W_W]       ; AX = the room right of it
+    cmp ax, bx
+    jg .right
+    mov ax, bx                  ; LEFT: its right edge at the clock's left,
+    sub ax, cx                  ; or the screen's edge
+    jmp short .snap
+.right:
+    mov ax, [es:si + W_X]
+    add ax, [es:si + W_W]
+    add ax, 8                   ; clear of it once snapped down
+    mov bx, dx
+    sub bx, cx
+    cmp ax, bx
+    jle .snap
+    mov ax, bx                  ; ...no further than the screen's right
+.snap:
+    or ax, ax
+    jns .p
+    xor ax, ax
+.p:
+    and ax, 0FFF8h
+    dec ax
+    jns .x
+    mov ax, 7
+.x:
+    pop es
+    pop si
+    pop dx
+    pop bx
     ret
 
 ; dk_sapplied / dk_srestore - the payload to dk_sav, and back. Keep all
@@ -226,6 +269,7 @@ dk_sshut:
     jz .x
     mov word [dk_swin], 0
     call OSAPI_WM_DESTROY
+    call dk_refocus
 .x:
     call dk_menulive
     pop bx
@@ -403,6 +447,7 @@ dk_sbody:
     cmp ax, [dk_r1]
     jg .x
     mov [ck_y0], ax
+    call dk_crows
     call dk_scomp
     mov dx, [dk_r1]
     sub dx, ax
@@ -416,7 +461,7 @@ dk_sbody:
     mov ax, [dk_sox]
     call dk_put
     mov ax, [ck_y0]
-    add ax, [ck_sh]
+    add ax, [dk_shf]
     jmp short .slab
 .x:
     pop es
@@ -891,13 +936,13 @@ dk_sstat:
 ; a button: its edge, its label centred; OK the default (a second edge, two
 ; px thick, a px out); a pressed one inverse
 dk_sbtnd:
+    mov al, LC_BLK
+    call ck_ink
     call dk_sent
     push ax
     mov al, [di+1]
     inc al
     cmp al, [dk_sbtn]
-    mov al, LC_BLK
-    call ck_ink
     pop ax
     jne .up
     call ck_rect                ; pressed: black, the label white

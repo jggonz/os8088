@@ -123,7 +123,9 @@ STIK_BSS    equ DK_BSS          ; the include's state follows ours
 %define STIK_COLOR              ; the titled fallback's save-under: 4 planes
 %define STIK_TAG      'Desk Clock'      ; = the title
 %define STIK_FACE_W 176         ; the WIDEST face (a %define: %ifndef)
-%define STIK_RIGHT    400
+%define STIK_RIGHT    616       ; the left of the desk, clear of Sticky
+                                ; Note's 472 and the calendar's 264, with the
+                                ; settings window's room right of it
 %define STIK_LAYOUTS  dk_lays
 %define STIK_PAINTCARD dk_pcard
 %define STIK_ONCARD   dk_oncard
@@ -168,11 +170,41 @@ KSC_PGDN    equ 0x51
     DKV ck_rx, 2
     DKV ck_ry, 2
     DKV dk_gl, 8
-    DKV dk_lx, 2
-    DKV dk_ly, 2
-    DKV dk_lsx, 2
-    DKV dk_lsy, 2
+    DKV dk_lx0, 2               ; ck_line's line: its ends' x...
+    DKV dk_lx1, 2
+    DKV dk_ly0, 2               ; ...their rows, doubled
+    DKV dk_ly1, 2
+    DKV dk_lk, 2                ; ...the slope, 8.8 a doubled row, and two
+    DKV dk_lk2, 2
+    DKV dk_lhu, 2               ; ...the brush's rows above and below (doubled)
+    DKV dk_lhd, 2
+    DKV dk_lta, 2               ; ...the row's two ends: their doubled rows
+    DKV dk_ltb, 2
+    DKV dk_lfa, 2               ; ...and their 8.8 offsets
+    DKV dk_lfb, 2
+    DKV dk_lend, 2              ; ...the last row to draw
+    DKV ck_mw, 4                ; ck_mrow's pattern, bit 31 the leftmost
+    DKV dk_mb, 5                ; ...shifted onto the byte grid
+    DKV dk_smx, 2               ; the panel's small `:07`, as last drawn
+    DKV dk_gx, 2                ; ck_g1's first byte...
+    DKV dk_gsh, 1               ; ...and its shift
+    DKV dk_eend, 2              ; ck_ell's last j, past it
+    DKV dk_rend, 2              ; ck_rrect's last row, past it
     DKV dk_tp, 12
+    DKV ck_bseg, 2              ; the band's segment and offset: dk_band, or
+    DKV ck_buf, 2               ; the face cache's claim (dkwid.inc)
+    DKV dk_cseg, 2              ; the face cache: its claim, 0 none...
+    DKV dk_cst, 2               ; ...its stride and plane
+    DKV dk_cps, 2
+    DKV dk_cgnd, 8              ; ...the ground it was composed on
+    DKV dk_ckb, 1               ; ...the KB held
+    DKV dk_cok, 1               ; ...it is the face as it stands
+    DKV dk_cnp, 1               ; ...its planes
+    DKV dk_cpar, 1              ; ...its ground's parity
+    DKV dk_fmode, 1             ; dk_face: 0 every op, 1 the static, 2 the rest
+    DKV ck_crow, 1              ; ck_clear's rows: the slab's live ones
+    DKV dk_shf, 2               ; the band's full height ([ck_sh] is cut to
+                                ; a slab's live rows while it is composed)
     DKV ck_np, 1
     DKV ck_par, 1
     DKV ck_gpar, 1
@@ -307,6 +339,7 @@ DK_BSS      equ DKB             ; a multiple of 16
 dk_entry:
     push si
     push di
+    call ck_ourband             ; the composer's band, until a cache is made
     call dk_aspect              ; [dk_ys]: STIK_SIZEUP measures with it
     mov word [dk_lfire], 0FFFFh
     mov word [dk_clkt], 8000h
@@ -519,13 +552,13 @@ dk_tick:
 dk_dmin:
     cmp byte [dk_kind], 0
     jne dk_dface
-    jmp short dk_dbig
+    jmp dk_dbig
 
 ; dk_dsecs - a new second: a digital face's seconds column, or the panel's
-; time under a dial (whose second hand dk_hmove moves)
+; seconds under a dial (whose second hand dk_hmove moves)
 dk_dsecs:
     cmp byte [dk_kind], 0
-    je dk_dbig
+    je dk_dsec
     push ax
     push bx
     push cx
@@ -549,6 +582,36 @@ dk_dsecs:
     pop cx
     pop bx
     pop ax
+    ret
+
+; dk_dsec - the panel's `:07` alone: a second that is not a new minute
+; changes those three cells under a dial, and nothing else of its row
+dk_dsec:
+    cmp byte [dk_pan], 1
+    jne .r
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [dk_smx]
+    mov cx, ax
+    add cx, 3 * 8 - 1
+    mov bx, [dk_tyT]
+    mov dl, [dk_bsy]            ; the small part sits on the big one's foot
+    dec dl
+    xor dh, dh
+    shl dx, 1
+    shl dx, 1
+    shl dx, 1
+    add bx, dx
+    mov dx, bx
+    add dx, 7
+    call dk_rrect
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.r:
     ret
 
 ; dk_dface - the face again whole
@@ -777,6 +840,7 @@ dk_dismiss:
 ; taken again. The lock held. Keeps everything
 dk_relay:
     push si
+    mov byte [dk_cok], 0        ; the face cache is the old face's
     mov si, [stik_win]
     or si, si
     jz .x
@@ -1071,7 +1135,7 @@ dk_menulive:
 
 ; --- the clock's window (SPEC.md 110.11, 110.14) ------------------------------
 dk_tpl:
-    dw 239, 60, 130, 200        ; stik_load sizes and places it (STIK_RIGHT)
+    dw 23, 60, 130, 200         ; stik_load sizes and places it (STIK_RIGHT)
     dw dk_title, dk_paint, dk_onkey, 0
 
 dk_paint:

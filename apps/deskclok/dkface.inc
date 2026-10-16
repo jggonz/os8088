@@ -32,6 +32,10 @@ OP_TEXTC    equ 12              ; x, y, the string - centred on x
 OP_DATE     equ 13              ; x, y - `MO 8-24`
 OP_HLINE    equ 14              ; x0, x1, y
 OP_TIME     equ 15              ; x, y, w, h, style, lit, dim (0FFh none), aux
+OP_DYN      equ 16              ; what follows changes with the time: the
+                                ; face cache (dkwid.inc) holds what comes
+                                ; before it, and a partial redraw draws only
+                                ; what comes after (SPEC.md 110.14.4)
 DKT_SKIP5   equ 1               ; OP_TICKS: no tick where an hour's is
 DKT_SKIPQ   equ 2               ; ...nor at 12, 3, 6 and 9
 DKT_BIG     equ 4               ; ...and only on a face 120 px or wider
@@ -75,6 +79,7 @@ dkp_classic:
     db OP_TICKS, 60, 226, 238, 2, DKT_SKIP5 | DKT_BIG
     db OP_TICKS, 12, 214, 238, 8, 0
     db OP_NUMS, 166, LC_BLK
+    db OP_DYN
     db OP_HANDS, LC_BLK, LC_BLK, LC_RED, 132, 196, 206, 12, 7
     db OP_CAP, LC_BLK, 14
     db OP_END
@@ -95,6 +100,7 @@ dkp_memphis:
     db OP_INK, LC_BLK
     db OP_TICKS, 12, 216, 238, 6, DKT_SKIPQ
     db OP_NUMS, 166, LC_BLK
+    db OP_DYN
     db OP_HANDS, LC_BLK, LC_BLK, LC_MAGB, 132, 196, 206, 12, 7
     db OP_CAP, LC_BLK, 16
     db OP_END
@@ -110,6 +116,7 @@ dkp_neon:
     db OP_SQ, 60, 226, 8
     db OP_SQ, 90, 226, 8
     db OP_NUMS, 166, LC_CYNW
+    db OP_DYN
     db OP_HANDS, LC_CYNW, LC_MAGW, LC_WHT, 132, 200, 206, 12, 7
     db OP_CAP, LC_MAGW, 16
     db OP_END
@@ -117,6 +124,7 @@ dkp_neon:
 dkp_mono:
     db OP_INK, LC_BLK,  OP_RRECT, 0, 0, 255, 255, 0, 10
     db OP_INK, LC_WHT,  OP_RRECT, 0, 0, 255, 255, 3, 8
+    db OP_DYN
     db OP_TIME, 18, 40, 220, 176, DKS_GLYPH, LC_BLK, 0FFh, 0
     db OP_END
 ; --- 5. CASIO LCD: a dark bezel, green glass, black segments -----------------
@@ -125,8 +133,9 @@ dkp_lcd:
     db OP_INK, LC_BLK,  OP_RRECT, 0, 0, 255, 255, 2, 10
     db OP_INK, LC_WHT,  OP_TEXTC, 128, 14, 0
     db OP_INK, LC_LCD,  OP_RRECT, 22, 64, 212, 176, 0, 3
+    db OP_INK, LC_BLK,  OP_HLINE, 30, 226, 126
+    db OP_DYN
     db OP_INK, LC_BLK,  OP_DATE, 34, 76
-    db OP_HLINE, 30, 226, 126
     db OP_TIME, 30, 140, 196, 92, DKS_SEG, LC_BLK, 0FFh, 0
     db OP_END
 ; --- 6. CASIO VGA: navy, a cyan rim, magenta accents, yellow digits ----------
@@ -138,26 +147,30 @@ dkp_vga:
     db OP_INK, LC_CYNW, OP_TEXTC, 128, 14, 0
     db OP_INK, LC_MAGW, OP_HLINE, 26, 50, 22
     db OP_HLINE, 206, 230, 22
-    db OP_INK, LC_YLWW, OP_DATE, 34, 76
     db OP_INK, LC_CYNW, OP_HLINE, 30, 226, 126
+    db OP_DYN
+    db OP_INK, LC_YLWW, OP_DATE, 34, 76
     db OP_TIME, 30, 140, 196, 92, DKS_SEG, LC_YLWW, 0FFh, 0
     db OP_END
 ; --- 7. RED LED: vivid red segments, the dark ones dim -----------------------
 dkp_red:
     db OP_INK, LC_DGRY, OP_RRECT, 0, 0, 255, 255, 0, 10
     db OP_INK, LC_BLK,  OP_RRECT, 0, 0, 255, 255, 2, 8
+    db OP_DYN
     db OP_TIME, 20, 44, 216, 168, DKS_SEG, LC_LRED, LC_RDIM, 0
     db OP_END
 ; --- 8. AMBER LED: amber segments on black ------------------------------------
 dkp_amber:
     db OP_INK, LC_DGRY, OP_RRECT, 0, 0, 255, 255, 0, 10
     db OP_INK, LC_BLK,  OP_RRECT, 0, 0, 255, 255, 2, 8
+    db OP_DYN
     db OP_TIME, 20, 44, 216, 168, DKS_SEG, LC_AMB, LC_ADIM, 0
     db OP_END
 ; --- 9. FLIP CLOCK: white numbers on black split-flap panels -----------------
 dkp_flip:
     db OP_INK, LC_DGRY, OP_RRECT, 0, 0, 255, 255, 0, 8
     db OP_INK, LC_BLK,  OP_RRECT, 0, 0, 255, 255, 2, 6
+    db OP_DYN
     db OP_TIME, 12, 30, 232, 196, DKS_FLIP, LC_WHT, 0FFh, LC_DGRY
     db OP_END
 
@@ -545,10 +558,21 @@ dk_face:
     call dk_fgeo
     mov byte [ck_gbold], 0
     cld
+    cmp byte [dk_fmode], 2      ; the dynamic part alone: skip to OP_DYN
+    jne .op
+.skip:
+    call dk_opskip
+    jc .x
 .op:
     lodsb
     or al, al
     jz .x
+    cmp al, OP_DYN
+    jne .run
+    cmp byte [dk_fmode], 1      ; the static part alone ends here
+    je .x
+    jmp short .op
+.run:
     dec al
     xor ah, ah
     mov bx, ax
@@ -564,6 +588,46 @@ dk_face:
     pop bx
     pop ax
     ret
+
+; dk_opskip - SI = a program: SI past its OP_DYN, CF = 1 it has none
+dk_opskip:
+    push ax
+    push bx
+.n:
+    lodsb
+    or al, al
+    jz .none
+    cmp al, OP_DYN
+    je .y
+    cmp al, OP_POLY
+    jne .f
+    lodsb                       ; OP_POLY: n, the width, n points
+    xor ah, ah
+    shl ax, 1
+    inc ax
+    add si, ax
+    jmp short .n
+.f:
+    mov bl, al
+    xor bh, bh
+    mov al, [dk_oplen + bx - 1]
+    xor ah, ah
+    add si, ax
+    jmp short .n
+.y:
+    clc
+    jmp short .x
+.none:
+    stc
+.x:
+    pop bx
+    pop ax
+    ret
+; each op's argument bytes, OP_INK .. OP_TIME (OP_POLY's is counted above)
+dk_oplen:   db 1, 1, 5, 2, 6, 3, 0, 3, 8, 2, 6, 3, 2, 3, 8
+%if $ - dk_oplen != OP_TIME
+  %error "dkface: dk_oplen has a length for every op up to OP_TIME"
+%endif
 
 dk_ops:     dw dko_ink, dko_ell, dko_ticks, dko_nums, dko_tri, dko_dot
             dw dko_poly, dko_sq, dko_hands, dko_cap, dko_rrect, dko_textc
@@ -837,7 +901,9 @@ dko_hands:
 .r:
     ret
 
-; dk_hand - AL = an angle, AH = f: a line from the centre out
+; dk_hand - AL = an angle, AH = f: a line from the centre out - none at
+; all when its box misses the columns being composed (a hand's redraw
+; composes its own box: the other two hands are elsewhere)
 dk_hand:
     push ax
     push bx
@@ -848,7 +914,28 @@ dk_hand:
     mov dx, bx
     mov ax, [dk_cx]
     mov bx, [dk_cy]
+    push ax
+    push cx
+    cmp ax, cx                  ; AX = its left, CX = its right, on the canvas
+    jle .o
+    xchg ax, cx
+.o:
+    sub ax, [ck_bw]
+    add cx, [ck_bw]
+    add ax, [ck_ox]
+    add cx, [ck_ox]
+    cmp cx, [ck_cx0]
+    jl .no
+    cmp ax, [ck_cx1]
+    jg .no
+    pop cx
+    pop ax
     call ck_line
+    jmp short .x
+.no:
+    pop cx
+    pop ax
+.x:
     pop dx
     pop cx
     pop bx

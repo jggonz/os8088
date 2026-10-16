@@ -120,14 +120,8 @@ dk_almopen:
     mov ax, [si]
     add ax, TITLE_H + 1
     mov [dk_atpl + WT_H], ax
-    call OSAPI_VIDEO
-    sub ax, DKA_W + 2
-    shr ax, 1
-    and ax, 0FFF8h
-    dec ax
-    jns .xx
-    mov ax, 7
-.xx:
+    mov cx, DKA_W + 2           ; beside the clock
+    call dk_beside
     mov [dk_atpl + WT_X], ax
     mov word [dk_atpl + WT_Y], MBAR_H + 24
     mov si, dk_atpl
@@ -163,6 +157,7 @@ dk_ashut:
     jz .x
     mov word [dk_awin], 0
     call OSAPI_WM_DESTROY
+    call dk_refocus
 .x:
     pop bx
     ret
@@ -344,6 +339,7 @@ dk_abody:
     cmp ax, [dk_r1]
     jg .x
     mov [ck_y0], ax
+    call dk_crows
     call dk_acomp
     mov dx, [dk_r1]
     sub dx, ax
@@ -357,7 +353,7 @@ dk_abody:
     mov ax, [dk_aox]
     call dk_put
     mov ax, [ck_y0]
-    add ax, [ck_sh]
+    add ax, [dk_shf]
     jmp short .slab
 .x:
     pop es
@@ -560,13 +556,13 @@ dk_ah12:
 
 ; a button, as the settings' are, OK the default
 dk_abtnd:
+    mov al, LC_BLK
+    call ck_ink
     call dk_sent
     push ax
     mov al, [di+1]
     inc al
     cmp al, [dk_abtn]
-    mov al, LC_BLK
-    call ck_ink
     pop ax
     jne .up
     call ck_rect
