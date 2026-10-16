@@ -29533,13 +29533,15 @@ reference implementation of a worker, which it still is, as a package.
 `da3688c5`): `.text` −326, `.bss` −11, `.cold` −1,070, `.lowbss` −240 —
 **−1,647 resident bytes**, the cold rung uncrossed, **KERN_SIZE 99,328 →
 98,304 (−1,024)**, and the image rung from 15 bytes left to 352. The
-packages: TIMER.O88 2,045 bytes of image and 76 of bss, BOUNCE.O88 922 and
-30; three clusters of the 360KB apps disk (345 → 348 of 354).
+packages: TIMER.O88 2,012 bytes of image and 60 of bss, BOUNCE.O88 885 and
+14; three clusters of the 360KB apps disk (345 → 348 of 354).
 
 **What a user sees.** Timer and Bounce are a double-click on the apps disk
 rather than a pick from a menu that is gone; ten of either still open (a
-package is multi-instance, §20, and each cascades +16px by its instance
-index as the kinds did by pool slot); a machine with no apps disk in B: has
+package is multi-instance, §20, and a second one opens on the first as a
+second Note Pad does - the kind cascaded +16px by pool slot, and a package has
+no pool and no index of its own to cascade by: the entry proc's DX is the
+loader's, not the instance's); a machine with no apps disk in B: has
 no stopwatch, as it has no Note Pad. Every `kern_big` machine gets 1KB of
 heap back, and a `kern_small` machine gets a Timer and a Bounce it never had.
 
@@ -185289,7 +185291,7 @@ It landed in v2's wave 3 (§110.10); the Desk Calendar adopted it in wave 4
 ## 111. TIMER — the stopwatch (`apps/timer/timer.asm`)
 
 The kernel's Timer kind (§14) as a package since §14.8: `TIMER.O88`, in
-`APPS/` on every apps disk, 2,045 bytes of image and 76 of bss, the
+`APPS/` on every apps disk, 2,012 bytes of image and 60 of bss, the
 stopwatch icon in its header, label prefix `tm_`. Everything §14 says about
 the Timer's behaviour holds — the window, the layout, the accumulator
 (binding), §14.1's incremental redraw, §14.4's cut line, §47's greying — and
@@ -185297,10 +185299,11 @@ this section says only what is different about being a package.
 
 ### 111.1 Window and layout
 
-160×60 at (330, 60), cascaded +16px per **instance index** (the entry proc's
-DX) where the kind cascaded per pool slot; `WF_SNAP` asked for in the entry
-proc (§11.94) so the digit run at content x 48 is byte-aligned on every
-adapter. Content 158×41: digits 64px wide at +48,+5; three 46×15 buttons
+160×60 at (330, 60), the kind's position; a second Timer opens on the first,
+as a second Note Pad does, where the kind cascaded +16px per pool slot (a
+package has no pool, and nothing at its entry names its instance - the entry
+proc's DX is the loader's). `WF_SNAP` asked for in the entry proc (§11.94) so
+the digit run at content x 48 is byte-aligned on every adapter. Content 158×41: digits 64px wide at +48,+5; three 46×15 buttons
 with 6px gaps at +4,+20. The `TM_*` constants mirror the kind's `APP_TMR_*`
 to the pixel, and the same assembly-time `%error` holds the digits on a cell.
 
@@ -185363,14 +185366,15 @@ square moving and its worker holding a task slot.
 ## 112. BOUNCE — the square (`apps/bounce/bounce.asm`)
 
 The kernel's Bounce kind (§14) as a package since §14.8: `BOUNCE.O88`, in
-`APPS/` on every apps disk, 922 bytes of image and 30 of bss, the ball icon
+`APPS/` on every apps disk, 885 bytes of image and 14 of bss, the ball icon
 in its header, label prefix `bn_`. §14.5's draw-then-subtract and §11.3's
 unconditional step hold, and this section says only what is different about
 being a package.
 
 ### 112.1 Window
 
-150×130 at (300, 150), cascaded +16px per instance index; content 148×111,
+150×130 at (300, 150), the kind's position (a second one opens on the first,
+§111.1's reason); content 148×111,
 the square 8×8 at (4,4) with velocity (3,2) — the kind's seed, set in the
 entry proc rather than a KD_INIT. The `%error` that holds a step under the
 square's width, which is what keeps `bn_wipe` two strips, is the kind's.

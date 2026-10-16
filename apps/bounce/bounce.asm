@@ -66,34 +66,18 @@ BN_PERIOD   equ 2                   ; ticks between steps
 
 ; -----------------------------------------------------------------------------
 ; bn_entry - package entry point (SPEC.md 20.2)
-; in:  DS = CS = our segment, ES = KERNEL_SEG, DX = our instance index, IF = 1,
-;      gfx lock NOT held
+; in:  DS = CS = our segment, ES = KERNEL_SEG, SI = the file we came out of,
+;      IF = 1, gfx lock NOT held
 ; out: BX = window ptr, CF clear (CF set = abort, propagated from wm_create)
 ; NOTHING IS SPAWNED HERE: OSAPI_TASK_SPAWN refuses before the loader has
 ; published the instance, so the worker starts at the first paint (bn_spawn_ck).
 ; -----------------------------------------------------------------------------
 bn_entry:
     push si
-    push di
-    push cx
-    mov si, bn_tpl                  ; the template, CASCADED (+16, +16) per
-    mov di, bn_tplbuf               ; instance index so a second Bounce does
-    mov cx, 8                       ; not sit exactly on the first (the kind
-.cp:                                ; cascaded by pool slot, SPEC.md 29.4). No
-    mov ax, [si]                    ; string op: ES is the kernel's here
-    mov [di], ax
-    inc si
-    inc si
-    inc di
-    inc di
-    loop .cp
-    mov ax, dx
-    mov cl, 4
-    shl ax, cl
-    add [bn_tplbuf], ax             ; x
-    add [bn_tplbuf+2], ax           ; y (wm_fit clamps a tail that falls off a
-                                    ; shorter screen, SPEC.md 39.7)
-    mov si, bn_tplbuf
+    mov si, bn_tpl                  ; the kind's window, where the kind put it
+                                    ; (a second Bounce opens on the first, as a
+                                    ; second Note Pad does; the kind cascaded by
+                                    ; pool slot and a package has no pool)
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     jc .out
     mov [bn_win], bx
@@ -108,8 +92,6 @@ bn_entry:
     mov word [bn_vel+2], BN_VY0
     clc                             ; the CF the loader is owed
 .out:
-    pop cx
-    pop di
     pop si
     ret
 
@@ -425,17 +407,16 @@ bn_ab2:     db 'a square, bouncing', 0
 %define OS88UI_ABDISMISS        ; ...and takes the card down with os88ui_abdismiss
 %include "os88ui.inc"
 
-    OS88_BSS 30
+    OS88_BSS 14
     OS88_IMAGE_END
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5) --------------------------------------
 bn_win      equ os88_image_end + 0  ; word: our window
-bn_tplbuf   equ os88_image_end + 2  ; 16: the cascaded template copy
-bn_pos      equ os88_image_end + 18 ; 2 words: the square, content-relative x, y
-bn_vel      equ os88_image_end + 22 ; 2 words: its velocity
-bn_oldy     equ os88_image_end + 26 ; word: bn_wipe's old square's absolute y
-bn_spawned  equ os88_image_end + 28 ; byte: the worker is running
-bn_abon     equ os88_image_end + 29 ; byte: the About card is up
+bn_pos      equ os88_image_end + 2  ; 2 words: the square, content-relative x, y
+bn_vel      equ os88_image_end + 6  ; 2 words: its velocity
+bn_oldy     equ os88_image_end + 10 ; word: bn_wipe's old square's absolute y
+bn_spawned  equ os88_image_end + 12 ; byte: the worker is running
+bn_abon     equ os88_image_end + 13 ; byte: the About card is up
 %if bn_vel - bn_pos != 4
 %error "bn_step reads each axis's velocity at bn_vel - bn_pos from its position"
 %endif

@@ -112,37 +112,19 @@ TM_SEC      equ 2                   ; which is what makes the carry walk one loo
 
 ; -----------------------------------------------------------------------------
 ; tm_entry - package entry point (SPEC.md 20.2)
-; in:  DS = CS = our segment, ES = KERNEL_SEG, DX = our instance index, IF = 1,
-;      gfx lock NOT held
+; in:  DS = CS = our segment, ES = KERNEL_SEG, SI = the file we came out of,
+;      IF = 1, gfx lock NOT held
 ; out: BX = window ptr, CF clear (CF set = abort, propagated from wm_create)
 ; The loader shows the window; nothing here may show, draw or spawn.
 ; -----------------------------------------------------------------------------
 tm_entry:
     push si
     push di
-    push cx
-    ; --- the template, CASCADED (+16, +16) per instance index -----------------
-    ; The kind cascaded by pool slot so ten Timers did not stack exactly
-    ; (SPEC.md 29.4); a package has no pool, and its instance index is the
-    ; same kind of small number. No string op: ES is the kernel's here.
-    mov si, tm_tpl
-    mov di, tm_tplbuf
-    mov cx, 8
-.cp:
-    mov ax, [si]
-    mov [di], ax
-    inc si
-    inc si
-    inc di
-    inc di
-    loop .cp
-    mov ax, dx
-    mov cl, 4
-    shl ax, cl                      ; index * 16
-    add [tm_tplbuf], ax             ; x
-    add [tm_tplbuf+2], ax           ; y (wm_fit clamps a tail that falls off a
-                                    ; shorter screen, SPEC.md 39.7)
-    mov si, tm_tplbuf
+    push dx
+    mov si, tm_tpl                  ; the kind's window, where the kind put it.
+                                    ; A second Timer opens on the first, as a
+                                    ; second Note Pad does: the kind cascaded
+                                    ; by pool slot and a package has no pool
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     jc .out
     mov [tm_win], bx
@@ -182,7 +164,7 @@ tm_entry:
     mov [tm_last], ax
     clc                             ; the CF the loader is owed
 .out:
-    pop cx
+    pop dx
     pop di
     pop si
     ret
@@ -718,10 +700,9 @@ tm_repaint:
     ret
 
 ; --- data ----------------------------------------------------------------------
-; window template (SPEC.md 11: 16 bytes, 8 words). The kind's position: 330,60
-; keeps the whole cap-10 cascade (+16 per instance) on a 640px screen - 330 +
-; 144 + 160 = 634. No W_ONCLICK word: os88ui_btninit installs the library's,
-; which chains to tm_onclick.
+; window template (SPEC.md 11: 16 bytes, 8 words), at the kind's position.
+; No W_ONCLICK word: os88ui_btninit installs the library's, which chains to
+; tm_onclick.
 tm_tpl:     dw 330, 60, TM_W, TM_H
             dw tm_ttl, tm_paint, 0, 0
 
@@ -754,24 +735,23 @@ tm_ab2:     db 'a stopwatch', 0
 %define OS88UI_ABDISMISS        ; ...taken down with os88ui_abdismiss
 %include "os88ui.inc"           ; ...and the button, with its gesture
 
-    OS88_BSS 76
+    OS88_BSS 60
     OS88_IMAGE_END
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5) --------------------------------------
 tm_win      equ os88_image_end + 0  ; word: our window
-tm_tplbuf   equ os88_image_end + 2  ; 16: the cascaded template copy
-tm_hms      equ os88_image_end + 18 ; 3 bytes: hours, minutes, seconds (TM_HRS..)
-tm_run      equ os88_image_end + 21 ; byte: 0 stopped, 1 running
-tm_last     equ os88_image_end + 22 ; word: last [ticks] sample
-tm_acc      equ os88_image_end + 24 ; word: tenth-of-tick accumulator
-tm_shown    equ os88_image_end + 26 ; 8: the cells this window is DISPLAYING;
+tm_hms      equ os88_image_end + 2  ; 3 bytes: hours, minutes, seconds (TM_HRS..)
+tm_run      equ os88_image_end + 5  ; byte: 0 stopped, 1 running
+tm_last     equ os88_image_end + 6  ; word: last [ticks] sample
+tm_acc      equ os88_image_end + 8  ; word: tenth-of-tick accumulator
+tm_shown    equ os88_image_end + 10 ; 8: the cells this window is DISPLAYING;
                                     ; all zero = nothing here describes the glass
-tm_str      equ os88_image_end + 34 ; 9: "HH:MM:SS",0 scratch (under the lock)
-tm_notimer  equ os88_image_end + 43 ; byte: OSAPI_WM_TIMER refused (kern_small)
-tm_spawned  equ os88_image_end + 44 ; byte: the worker is running
-tm_abon     equ os88_image_end + 45 ; byte: the About card is up
-tm_rects    equ os88_image_end + 46 ; 3 x 4 words: the buttons, screen, inclusive
-tm_bflags   equ os88_image_end + 70 ; 3 words: OS88UI_FILL, and DIS on the refused one
-%if tm_bflags + 2 * TM_NB - os88_image_end != 76
+tm_str      equ os88_image_end + 18 ; 9: "HH:MM:SS",0 scratch (under the lock)
+tm_notimer  equ os88_image_end + 27 ; byte: OSAPI_WM_TIMER refused (kern_small)
+tm_spawned  equ os88_image_end + 28 ; byte: the worker is running
+tm_abon     equ os88_image_end + 29 ; byte: the About card is up
+tm_rects    equ os88_image_end + 30 ; 3 x 4 words: the buttons, screen, inclusive
+tm_bflags   equ os88_image_end + 54 ; 3 words: OS88UI_FILL, and DIS on the refused one
+%if tm_bflags + 2 * TM_NB - os88_image_end != 60
 %error "the Timer's bss layout and OS88_BSS disagree"
 %endif

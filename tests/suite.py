@@ -13090,6 +13090,16 @@ SOAK = [
     # frame for frame across two kernels - retired with the kind: Bounce is
     # a package since SPEC.md 14.8, and its frame is the API's to price.
     # PERFORMANCE.md Set 110 keeps the measurement it took.)
+    Row("timerbounce", "soak", py("tests/timerbounce.py"), 90.0,
+        "SPEC.md 14.8, 111, 112: TIMER.O88 and BOUNCE.O88, the two kinds of "
+        "SPEC.md 14 as packages, opened BY NAME out of the apps disk's APPS/ "
+        "on a 5150 with a CGA. The Timer's seconds advance (its one-shot "
+        "timer re-arms), its digit line is lettered, Stop and Start pressed "
+        "through the standard control's real gesture flip tm_run and hold the "
+        "seconds still; the Bounce's worker takes a task slot at the first "
+        "paint and its square moves inside the content. Everything is read "
+        "out of each package's own bss through its map.",
+        needs=("marty",), serial=True, timeout=600),
     Row("atkey", "soak", py("tests/atkey.py"), 100.0,
         "WHAT ONE ARTFULTYPE KEYSTROKE COSTS on a 4.77MHz 8088, in guest "
         "cycles off at_onkey's entry to its return. Nothing in this tree had "
