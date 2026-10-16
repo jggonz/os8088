@@ -13758,6 +13758,43 @@ usb: $(USBIMG)
 iso: $(LIVEISO)
 live: $(USBIMG) $(LIVEISO)
 
+# A PLAIN `make` KEEPS A BUILT LIVE IMAGE CURRENT. tests/unit/t_livefull.py's
+# PART B walks $(USBIMG) whenever one exists, and only `make usb` ever rebuilt
+# it - so a tree that built it once failed every later `make` the day a
+# package joined $(LIVEARGS), on an artefact `make` could not fix (DESK.DRV,
+# DESKCAL.O88 and THMPAL.DRV did exactly that). When the image is there,
+# test-fast now brings it up to date first, and make's own prerequisites
+# decide whether that is a rebuild or nothing. When it is NOT there nothing
+# changes: `make usb` needs the C toolchain and three fetches a plain clone
+# has none of, which is why the live media is on demand at all, and PART B
+# skips. A knob build leaves it alone - test-fast skips there, and a knob
+# kernel must never land on the live volume. The ISO and usb-emu stay on
+# demand: no row in `all` reads either.
+#
+# AND THE IMAGE SAYS WHICH LIST IT WAS BUILT FROM, for every road that does
+# not come through here - `tools/os88test.py fast` run direct, a knob build's
+# tree, an image copied in from elsewhere. The recipe above copies
+# $(BUILD)/livepayload.txt to $(USBIMG).payload once the image has verified
+# (and deletes it first, so a failed build leaves none), and PART B judges an
+# image only when that record matches the list the build computes NOW. A
+# stale one is skipped with a line saying to run `make usb`, never failed: it
+# is a fact about when the image was built, not about the recipe. A recipe
+# that drops a listed file still fails, because right after `make usb` the
+# two lists agree.
+#
+# The list is an ordinary prerequisite of the image, and its rule above
+# rewrites it only when its CONTENT changes - so an edit to the Makefile that
+# leaves $(LIVEARGS) alone rebuilds nothing, and one that moves it rebuilds
+# the image. An image with no record at all (built before the record existed)
+# is rebuilt once, through the phony below.
+$(USBIMG): $(BUILD)/livepayload.txt \
+           $(if $(wildcard $(USBIMG).payload),,livelist-missing)
+.PHONY: livelist-missing
+livelist-missing:
+ifeq ($(KNOBS),)
+test-fast: $(if $(wildcard $(USBIMG)),$(USBIMG))
+endif
+
 # --- THE BROWSER'S IMAGE: THE SAME VOLUME ON kern_emu (SPEC.md 80.7) ----------
 # build/os8088-emu-usb.img is $(USBIMG) with three things changed and nothing
 # else: the kernel and its two boot sectors are $(EMUDIR)'s, the drivers are
@@ -13811,6 +13848,7 @@ $(USBIMG) $(EMUUSBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
            $(BUILD)/zcat/live/CATALOG.TXT $(BUILD)/cpmsw.stamp \
            tools/getcpmsw.py tools/getstories.py \
            $(ALLAPPS) tools/os88disk.py
+	@rm -f $@.payload
 	$(if $(LIVESUB),@$(LIVESUB))
 	gsel="$$(python3 tools/getcpmsw.py -o $(CPMSWDIR) --select hdd | sed 's,^,RUNCPM/,')"; \
 	gcost="$$(python3 tools/getcpmsw.py -o $(CPMSWDIR) --cost hdd)"; \
@@ -13827,6 +13865,7 @@ $(USBIMG) $(EMUUSBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 		--folder DOCS $(APPDATAFOLDER) $(LIVESTORYDIRS) \
 		$(LIVEDRVS) $(LIVEREST) $$sel $$gsel $$zsel $(CPMSW) $(STORIES)
 	@python3 tools/os88disk.py --verify-hdd $@
+	@$(if $(LIVESUB),true,cp -f $(BUILD)/livepayload.txt $@.payload)
 	@$(if $(LIVESUB),$(LIVENOTE_EMU),$(LIVENOTE_USB))
 
 LIVENOTE_USB = echo "usb:    $@ - the live USB image (SPEC.md 80.1). Write it raw"; \
@@ -13888,7 +13927,7 @@ $(BUILD)/livepayload.txt: Makefile | $(BUILD)
 	   printf 'LIVEPKGARGS %s\n' $(LIVEPKGARGS); \
 	   printf 'MEDIA_EXTRA %s\n' $(MEDIA_EXTRA); \
 	   printf 'APPSARGS %s\n' $(APPSARGS); } > $@.tmp
-	@mv -f $@.tmp $@
+	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
 
 # Discover built images and attached floppy/USB/CD media without building.
 .PHONY: imager

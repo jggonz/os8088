@@ -924,8 +924,10 @@ FAST = [
         "payload list `all` emits from $(LIVEARGS) itself - so a new apps/ "
         "directory fails the build on the day it is added, which is the "
         "enforcement this row exists for; PART B walks build/os8088-usb.img "
-        "when `make usb` has built one, because a list can name a file that "
-        "never lands. It reads that artefact rather than running `make "
+        "when `make usb` has built one FROM THE CURRENT LIST (the recipe "
+        "records it beside the image; a stale image is skipped with a note, "
+        "and a plain `make` rebuilds an existing one first), because a list "
+        "can name a file that never lands. It reads that artefact rather than running `make "
         "print-`, which registry refuses and rightly: a knob in the "
         "environment makes $(VIDSTAMP) delete build/kernel.bin"),
     Row("catdisk", "fast", py("tests/unit/t_catdisk.py"), 0.1,

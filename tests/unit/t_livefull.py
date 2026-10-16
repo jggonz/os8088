@@ -50,9 +50,17 @@ halves are not interchangeable:
           under whatever is running beside it (tests/unit/t_registry refuses
           one that does, which is how this was caught).
   PART B  walks build/os8088-usb.img itself, and runs only when `make usb` has
-          built one. A list can name a file that never lands (a folder the
-          recipe forgot, a --select that truncated); the variable is right and
-          the image is wrong, which is PART A's blind spot exactly.
+          built one FROM THE CURRENT LIST. A list can name a file that never
+          lands (a folder the recipe forgot, a --select that truncated); the
+          variable is right and the image is wrong, which is PART A's blind
+          spot exactly. The recipe records the list it built from beside the
+          image (build/os8088-usb.img.payload); an image whose record is
+          missing or differs from build/livepayload.txt is STALE, and is
+          skipped with a note to run `make usb` rather than failed - its
+          verdict would be about when it was built, not about the recipe. A
+          plain `make` rebuilds an existing image before this row runs, so
+          the skip is for the roads that do not: os88test.py run direct, a
+          knob tree, an image copied in.
 
 THE EXEMPTIONS ARE A LIST WITH A REASON EACH, and that is the shape on
 purpose: `filter-out` of a name is how this tree already says "this one is
@@ -70,6 +78,7 @@ from harness import check, done                                    # noqa: E402
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 USBIMG = os.path.join(ROOT, "build", "os8088-usb.img")
 PAYLOAD = os.path.join(ROOT, "build", "livepayload.txt")
+USBLIST = USBIMG + ".payload"           # the list the image was built from
 
 # apps/ directories that are NOT a shipping package, each with the reason it
 # is not one. Anything else under apps/ must reach the live media.
@@ -366,6 +375,23 @@ def main():
     if not os.path.exists(USBIMG):
         print("t_livefull: no %s - PART B skipped (`make usb`)"
               % os.path.relpath(USBIMG, ROOT))
+        return done("livefull")
+
+    def _read(path):
+        try:
+            with open(path, "rb") as fh:
+                return fh.read()
+        except OSError:
+            return None
+    built = _read(USBLIST)
+    if built is None or built != _read(PAYLOAD):
+        print("t_livefull: %s is STALE - %s - PART B skipped. Run `make usb` "
+              "(a plain `make` does it for you)"
+              % (os.path.relpath(USBIMG, ROOT),
+                 "it has no record of the payload list it was built from"
+                 if built is None else
+                 "it was built from a different payload list than $(LIVEARGS)"
+                 " computes now"))
         return done("livefull")
 
     with open(USBIMG, "rb") as fh:

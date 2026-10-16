@@ -126082,6 +126082,16 @@ which is why four separate gaps sat in it at once.
   against `getcpmsw`'s `AREAS`, and every master-disk file against the fetch's
   own `A0.list`. That last one is the check that a floppy-priced selection
   cannot pass, and a truncated selection reads exactly like a working disk.
+  **It judges only an image built from the current list.** The recipe copies
+  `build/livepayload.txt` to `build/os8088-usb.img.payload` once the image
+  has verified, and an image whose record is missing or differs is STALE:
+  PART B skips it with a note to run `make usb`, because its verdict would be
+  about when it was built rather than about the recipe. A plain `make`
+  rebuilds an existing image before the fast tier runs - the list is one of
+  its prerequisites and is rewritten only when its content changes - so the
+  skip is for the roads that do not come through `make` (the runner run
+  direct, a knob tree, an image copied in). A tree that never built one
+  still builds none: `make usb` needs the C toolchain and three fetches.
 
 **The exemptions are a list with a reason each**, which is `$(CORE_SYSONLY)`'s
 shape (§24.3) borrowed: `apps/cc` is the C SDK, `apps/fptest` and

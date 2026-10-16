@@ -540,7 +540,12 @@ make live     #   plus the allapps payload on one FAT16 partition that the
               #   emits from $(LIVEARGS) itself) and sweeps apps/: **a new
               #   package directory FAILS `make` until it is on the live
               #   media or written into that file's EXEMPT_DIRS with a
-              #   reason.** PART B walks the built image when there is one.
+              #   reason.** PART B walks the built image when there is one
+              #   built from the CURRENT list: the recipe records the list
+              #   beside the image (`os8088-usb.img.payload`), a stale image
+              #   is skipped with a note rather than failed, and a plain
+              #   `make` rebuilds an existing image first, so it stays current
+              #   once it has been built.
               #   The four packages are LIVE-ONLY and not in the
               #   everything set. §19.10.1's arithmetic for that (one 1.2MB
               #   floppy paying for a package out of RunCPM's drive A) is
