@@ -61,10 +61,13 @@ def fv_quiet(m, seg):
 
 
 fails = []
-with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
+# The 360KB machine: its system disk has no faces since SPEC.md 24.3.1.5 -
+# they and the viewer ride office360.img, which is what this opens on B:, so
+# the viewer finds them by ty_gofonts' SECOND rung, its own volume.
+with os88marty.launch("build/os8088-360.img", apps="build/office360.img",
                       machine=MACHINE) as m:
     mo = os88mouse.Mouse(marty=m)
-    dispcp.open_drive(m, mo, S, os88marty.settle, "A")
+    dispcp.open_drive(m, mo, S, os88marty.settle, "B")
     slot = dispcp.win_list(m, S)[-1]
     wx, wy, _, _ = dispcp.win_rect(m, S, slot)
     # SYSTEM/FONTS and not FONTS: SPEC.md 19.8.1 moved the folder INTO SYSTEM/

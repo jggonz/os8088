@@ -11,8 +11,9 @@ kernel's mod_tab row, its labels' offsets os88sym's - so every assertion is
 about what the module DECIDED, not about pixels:
 
   A  a press on the 'Sticky Apps' cell loads STIKMENU.DRV and drops a panel
-     listing the system disk's TWO Sticky Apps (DESKCAL.O88 and, since
-     SPEC.md 110.13, STIKNOTE.O88), each row a pick: DESKCAL.O88 on the boot
+     listing the system disk's THREE Sticky Apps (DESKCAL.O88 and, since
+     SPEC.md 110.13 and 110.14, STIKNOTE.O88 and DESKCLOK.O88), each row a
+     pick: DESKCAL.O88 on the boot
      volume, its card's name 'Desk Calendar', not running, '0 active';
      Arrange and Hide greyed (no widget), More live;
   B  releasing on its row POSTS the pick and LAUNCHES it: a desk window
@@ -26,7 +27,7 @@ about what the module DECIDED, not about pixels:
   F  picking the RUNNING row closes it - through app_close_win, so its own
      negotiator removes its Sticky App row from the desktop table.
   G  a second boot with six more Sticky Apps - one-sector stubs, a header
-     and a card - lists eight, PAGED (a page smaller than eight and a pager
+     and a card - lists nine, PAGED (a page smaller than nine and a pager
      row); a release on the pager turns to page 2 and the panel STAYS UP;
      a click off it then closes it with nothing posted.
 
@@ -215,7 +216,7 @@ def paging(tmp):
         subprocess.run(["mcopy", "-o", "-i", img, f,
                         "::/STIKAPPS/PAGE%d.O88" % k], check=True, env=env,
                        stdout=subprocess.DEVNULL)
-    print("G: eight Sticky Apps page")
+    print("G: nine Sticky Apps page")
     with os88marty.launch(img, machine=os88marty.machine(
             "os8088_xt_vga", None), boot=True) as m:
         ui = os88ui.UI(m)
@@ -224,7 +225,7 @@ def paging(tmp):
         menu = Menu(m, ui)
         slabs = menu.drop()
         n, shown = menu.b("stm_n"), menu.b("stm_shown")
-        check(n == 8, "eight listed (%d)" % n)
+        check(n == 9, "nine listed (%d)" % n)
         check(menu.b("stm_paged") == 1 and shown < n,
               "paged: %d a page of %d" % (shown, n))
         pg = [i for i, s in enumerate(slabs) if s["kind"] == SK_PAGE]
@@ -259,9 +260,10 @@ def main():
             print("A: the panel lists the Desk Calendar by its card")
             slabs = menu.drop()
             ents = entries(menu)
-            check(len(ents) == 2 and sorted(e["file"] for e in ents)
-                  == [b"DESKCAL.O88", b"STIKNOTE.O88"],
-                  "two Sticky Apps listed, the calendar and Sticky Note "
+            check(len(ents) == 3 and sorted(e["file"] for e in ents)
+                  == [b"DESKCAL.O88", b"DESKCLOK.O88", b"STIKNOTE.O88"],
+                  "three Sticky Apps listed, the calendar, the clock and "
+                  "Sticky Note "
                   "(%r)" % [e["file"] for e in ents])
             k = [i for i, e in enumerate(ents)
                  if e["file"] == b"DESKCAL.O88"]
@@ -276,9 +278,9 @@ def main():
                 check(e["run"] == 0, "it is not running")
             check(menu.b("stm_nrun") == 0, "'No Sticky Apps active'")
             apps = [i for i, s in enumerate(slabs) if s["kind"] == SK_APP]
-            check(len(apps) == 2 and all(slabs[a]["flags"] & SF_SEL
+            check(len(apps) == 3 and all(slabs[a]["flags"] & SF_SEL
                                          for a in apps),
-                  "two app rows, each a pick")
+                  "three app rows, each a pick")
             check(slabs[item(slabs, IT_ARR)]["flags"] & SF_DIS and
                   slabs[item(slabs, IT_HIDE)]["flags"] & SF_DIS and
                   slabs[item(slabs, IT_MORE)]["flags"] & SF_SEL,
