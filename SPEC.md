@@ -185616,7 +185616,7 @@ a flat binary at org 0, appended by `os88pkg.py --part`, fetched into a
 claim of its own when first wanted and dropped after. The one exception is
 the LAST row, part 9: the colour face's pictures (106.16), an `OP_ASSET`
 with no header and no vectors, which nothing far-calls - it is read through
-`[pxa_seg]` and never dropped. The header every part
+`[pxa_seg]`, and dropped only by an open's pressure (106.16). The header every part
 opens with (`apps/pixel/pxpart.inc`):
 
 ```
@@ -186344,6 +186344,28 @@ code are the other 4 KB).
 `[pxa_seg]` and the row's `zkb` - the word `op_drop` would free - so a 27 KB
 block held for the whole session is no longer a wall in the middle of the
 heap.
+
+**...and an open UNDER PRESSURE drops it** (the owner's decision,
+2026-10-17). Movable is not free: an open's claims still compact AROUND the
+block, and on the 640 KB VGA XT BIG.BMP's (640x480, 8-bit) compacted three
+times where it compacts once without the pictures - first rows 4.5 s against
+3.6 (`pxbenchvga`, measured by holding `PXA_MINFREE` out of reach).
+`px_artroom` asks the entry's own rule again where it can change: in
+`px_claims`, the master's KB sized, a master that would leave less than
+`PXA_MINFREE` free beside the pictures drops them - `[pxa_seg]` zeroed
+first, so nothing draws out of a claim being given back, then `op_drop` -
+and the scale is planned again. The face draws its bevel from there; a
+picture already on the glass stays until something repaints it, since
+redrawing the toolbar before the first rows is the very time this buys.
+`px_artback`, at the open's end, asks for them again on `px_artload`'s
+terms and redraws the toolbar and tool column when they come - *before*
+`[px_ndone]` counts the open as ended, refused or finished, because that
+read is a disk read on the UI task and belongs to the open: a reader that
+waits on the count and then types finds PiXEL idle. A smaller
+picture opened later brings them back after its first rows, and a heap that
+still cannot spare them leaves the bevel. `[pxa_drop]` is set by the drop
+alone, so a machine whose ENTRY refused the pictures never re-asks. BIG.BMP
+reads 3.75 s with one compaction.
 
 **They were a sidecar file, `PIXEL.GFX`, beside the package** until
 §20.13.8 let a parted image be packed; the reason that kept them out

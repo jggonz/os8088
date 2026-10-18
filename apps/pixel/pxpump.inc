@@ -1194,8 +1194,9 @@ px_open:
     call px_refusal                 ; "BMP: depth not read"
     call px_compose
     call px_shown
-    inc word [px_ndone]             ; an open has ended (a test waits on it)
-.out:
+    call px_artback                 ; the face's pictures, if the claims took
+    inc word [px_ndone]             ; them (SPEC.md 106.16), BEFORE the open
+.out:                               ; is said to have ended
     pop es
     pop di
     pop si
@@ -1396,9 +1397,10 @@ px_finish:
     mov al, PX_R_CANVAS | PX_R_PANELS
     call px_regdraw
 .out:
-    inc word [px_ndone]             ; an open has ended (a test waits on it)
-    pop dx
-    pop ax
+    call px_artback                 ; the face's pictures, if the open took
+    inc word [px_ndone]             ; them (SPEC.md 106.16), and only THEN has
+    pop dx                          ; it ended: their read is a disk read on
+    pop ax                          ; the UI task, part of this open
     ret
 
 ; px_cancel - Esc, or Stop: the worker stops at its next row or refill and

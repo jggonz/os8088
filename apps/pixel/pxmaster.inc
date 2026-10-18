@@ -439,6 +439,9 @@ px_claims:
     mov [px_cur + PXR_SCL], cl
     mov [px_cur + PXR_DSCL], cl
     call px_mkb                     ; AX = master KB, px_tmw/tmh
+    call px_artroom                 ; UNDER PRESSURE the face's pictures go
+    jc .again                       ; (SPEC.md 106.16), and the scale is
+                                    ; asked again without them
     mov [px_cur + PXR_MKB], ax
     mov bx, [px_tmw]
     mov [px_cur + PXR_MW], bx

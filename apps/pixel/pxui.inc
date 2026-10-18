@@ -3492,6 +3492,8 @@ px_bvband:
 ; them. Silent when it cannot: op_lazyok is asked first, so op_fetch's own
 ; toast is only ever a read that failed. Preserves all
 px_artload:
+    cmp word [pxa_seg], 0           ; held already: nothing to read
+    jne .ret
     push ax
     push bx
     push cx
@@ -3525,6 +3527,60 @@ px_artload:
     pop cx
     pop bx
     pop ax
+.ret:
+    ret
+
+; px_artroom - AX = the KB an open's master is about to claim: CF = 1 the
+; pictures were held and are DROPPED now, because that master would leave
+; less than PXA_MINFREE free beside them - px_artload's own rule, asked again
+; where it can change (SPEC.md 106.16). Held, their 27 KB sits mid-heap and
+; every claim the open makes compacts around it: BIG.BMP on the 640 KB VGA
+; XT compacted three times where it compacts once without them, ~0.9 s
+; before its first rows. The face draws its bevel from here (a picture
+; already on the glass stays until something repaints it), and px_artback
+; asks for them again when the open ends. Preserves all but the flags
+px_artroom:
+    cmp word [pxa_seg], 0
+    je .keep                        ; (CF = 0: equal)
+    push bx
+    mov bx, [px_avt]                ; the KB free in all, less this master
+    sub bx, ax
+    jb .drop
+    cmp bx, PXA_MINFREE
+    jae .kept
+.drop:
+    push ax
+    xor ax, ax
+    mov [pxa_seg], ax               ; the face's bevel FIRST, so nothing draws
+    mov byte [pxa_drop], 1          ; out of a claim being given back
+    mov al, PXPART_GFX
+    call op_drop
+    pop ax
+    pop bx
+    stc
+    ret
+.kept:
+    pop bx
+.keep:
+    clc
+    ret
+
+; px_artback - an open has ended: pictures an open's pressure dropped are
+; asked for again on px_artload's terms, and the face is drawn with them if
+; they came. A machine whose ENTRY refused them never asks (pxa_drop is set
+; by px_artroom alone). Preserves all
+px_artback:
+    cmp byte [pxa_drop], 0
+    je .ret
+    call px_artload
+    cmp word [pxa_seg], 0
+    je .ret                         ; still no room: the bevel stays
+    mov byte [pxa_drop], 0
+    push ax
+    mov al, PX_R_TB | PX_R_TOOLS
+    call px_regdraw
+    pop ax
+.ret:
     ret
 
 ; --- the window's ONE button record (SPEC.md 106.3): every control in it, in

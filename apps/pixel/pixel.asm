@@ -4311,6 +4311,8 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_bvcap, 2
     PXVAR px_bvy, 2                 ; ...and the next row
     PXVAR pxa_seg, 2                ; part 9's segment (the pictures), or 0
+    PXVAR pxa_drop, 1               ; ...1: dropped by an open's pressure, so
+                                    ; the open's end asks for them again
     ; the decoder parts (SPEC.md 106.18)
     PXVAR px_k, PXK_SZ              ; THE CONTEXT, both vectors' DI
     PXVAR px_kheld, 1               ; the decoder part held, 0 none
