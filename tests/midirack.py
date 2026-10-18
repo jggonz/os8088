@@ -83,6 +83,7 @@ ARMS = {
 OUT_MIDI, MRO_MIDI = 5, 5
 OUT_WT, MRO_WT = 6, 6
 OUT_LPT, MRO_LPT = 7, 7
+FROM_START = {"covoxpoll"}      # arms whose pitch check is the FIRST play (main)
 
 
 def fail(msg):
@@ -135,9 +136,11 @@ def onset(s, rate, start, thresh=0.01):
 
 def agreement(wav, ref, tail, box=1, dec=2, wins=10):
     """The share of half-second windows whose strongest pitch class the
-    reference has sounding, at the best alignment within +-1 s."""
+    reference has sounding, at the best alignment within +-1 s. The play is
+    the first onset in the last `tail` seconds, or in the whole capture for
+    tail None."""
     rate, s, _ = sndcheck.load(wav)
-    at = onset(s, rate, max(0, len(s) - int(tail * rate)))
+    at = onset(s, rate, 0 if tail is None else max(0, len(s) - int(tail * rate)))
     if at is None:
         fail("the capture %s is silent where the song should be" % wav)
     tops = []
@@ -625,7 +628,15 @@ def main():
         wav = cap + "." + src + ".wav"
         ref = spans(SONG, 6 if a.brk else 0)
         box, dec = (9, 4) if a.arm == "spk" else (1, 2)
-        hit, n = agreement(wav, ref, tail + 2.0, box, dec)
+        # THE REFERENCE IS THE SONG FROM ITS START, so the window must be a
+        # play from its start. An arm's tail is that play everywhere but
+        # covoxpoll, whose last stretch is the RESUME - the song from where
+        # the pause landed - and whose capture ends where the HOST closed the
+        # machine: anchored to the end it read 6, 7 or 8 of 10 on one build,
+        # as those two moved. Its first polled play is the song from 0 and
+        # reads 10 of 10 every run, so that is the play it is judged on
+        span = None if a.arm in FROM_START else tail + 2.0
+        hit, n = agreement(wav, ref, span, box, dec)
         need = {"fm": 6, "sb": 8, "spk": 5, "wt": 7, "covox": 7,
                 "covoxpoll": 7}[a.arm]
         print("%s %s: %d of %d half-seconds' strongest pitch class sounding "
@@ -636,7 +647,7 @@ def main():
             return 1
         # THE NEGATIVE CONTROL, free: the same capture against the reference
         # a tritone away must NOT pass, or the oracle is not looking
-        bad, _ = agreement(wav, spans(SONG, 6), tail + 2.0, box, dec)
+        bad, _ = agreement(wav, spans(SONG, 6), span, box, dec)
         if bad >= need:
             print("FAIL %s: the tritone-transposed reference ALSO scores %d - "
                   "the pitch check cannot tell" % (a.arm, bad), flush=True)
