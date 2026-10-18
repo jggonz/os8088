@@ -1,9 +1,13 @@
 # LOADALL on a 286 — reading extended memory where it lies
 
-**Status: INVESTIGATION; wave L0, the field instrument, is BUILT (VIDDISK
-`L`, section 8) and RUN on the Victory 286 - LOADALL works there
-(docs/reports/LOADALL-VICTORY286-2026-10-14.md, section 9.1) - and nothing
-else is built (2026-10-14, branch `loadall`).** The
+**Status: BUILT where it pays - L0 the field instrument (VIDDISK `L`, run on
+the Victory 286, docs/reports/LOADALL-VICTORY286-2026-10-14.md), L1 the hold
+decoded in place (SPEC.md 98.3.18.11), L3 XMEM.DRV's LOADALL transport
+(SPEC.md 41.13) and L4 the XMS bank decoded in place (SPEC.md 98.3.18.13),
+all 2026-10-15. L2 (the fill straight into the bank) and L5-L9 are not
+built, and section 10's questions 4 and 7 want a machine nobody has run.**
+The rest of this file is the investigation they came from: section 9 is the
+wave list with each one's state, and SPEC.md is the contract. The
 owner asked whether the 286's undocumented `LOADALL` could give the Video
 Player direct access to XMS, because a banked byte today goes
 disk -> conventional -> XMS and then XMS -> conventional -> screen: two
