@@ -41,6 +41,7 @@ A local label (`gfx_blit4.run`) may be pinned the same way, being in the map.
 """
 import glob
 import os
+import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
@@ -91,6 +92,9 @@ def current_map(bdir):
     return off
 
 
+MOVED = []                      # the symbols that failed, for the hint
+
+
 def check(name, off, want):
     bad = []
     for sym, par in sorted(want.items()):
@@ -101,6 +105,7 @@ def check(name, off, want):
             bad.append("%s at %04X is %s, measured %s" % (
                 sym, off[sym], "ODD" if off[sym] & 1 else "EVEN",
                 "odd" if par else "even"))
+            MOVED.append(sym)
     for b in bad:
         print("  FAIL: kern_%s %s" % (name, b))
     if not bad:
@@ -131,11 +136,19 @@ def main():
     else:
         ok &= check("small", off, HOT["small"])
     if not ok:
-        print("t_hotpar: a hot routine moved by an ODD amount. Pad the run "
-              "in front of it (tools/os88rdiff.py kernel <base> --hot names "
-              "the boundary), or - if it moved on purpose and was "
-              "re-measured - update HOT in tests/unit/t_hotpar.py and say "
-              "why in the commit")
+        hot = " ".join("--hot '^%s$'" % re.escape(s) for s in
+                       sorted(set(MOVED))) or "--hot '<symbol>'"
+        print("t_hotpar: a hot routine moved by an ODD amount, so on a "
+              "16-bit bus (8086, V20, 286) every word operand and jump "
+              "target in it now costs a second bus cycle - the code is "
+              "identical, every other row stays green, and it is slower. "
+              "The cause is usually a byte cut, or a branch nasm re-relaxed, "
+              "IN FRONT of it rather than a change to it. Find the boundary "
+              "with\n    python3 tools/os88rdiff.py kernel <the commit before "
+              "your change> %s\nand put a never-executed pad byte there "
+              "(`grep -n PARITY kernel/*.inc` shows the ones in use). If it "
+              "moved ON PURPOSE and was re-measured, update HOT in "
+              "tests/unit/t_hotpar.py and say why in the commit." % hot)
         return 1
     return 0
 
