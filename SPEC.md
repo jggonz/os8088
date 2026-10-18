@@ -126779,9 +126779,19 @@ So the count is extended upward by the BIOS tick at `0040:006C`, which our int
 The tick is read **before and after** the counter and the pair is taken again
 if it moved: without that, a bracket landing on the reload takes the old tick
 with the freshly reloaded counter and reports 55 ms that did not happen. `IF`
-is cleared across the latch and the two `IN`s and nowhere else — holding it
+is cleared across the latch and the `IN`s and nowhere else — holding it
 down across the tick reads as well would defeat the check, because the tick
 cannot move while its ISR cannot run.
+
+**The re-read alone does not close it.** A reload that lands *inside* the
+`cli` leaves IRQ0 pending, and the CPU need not have taken it by the time the
+tick is read again, so the pair passes with the old tick and the new count —
+one tick *early*. Measured on MartyPC's 5150, a bare loop of reads saw it 40
+times in 60,000 over 211 ticks, and PIXELSTEIN's Auto (§97.8) judged a
+98.2 ms frame as 43.3 about one run in twelve of `tests/pxsauto.py`. So the
+PIC's IRR is read in the same window: IRQ0 pending with the count under half
+a tick in means the reload came before the latch, and its tick is owed. The
+kernel's own per-task accounting (§8.1) has done exactly this all along.
 
 **A bracket spanning a `cli` longer than 55 ms under-reports**, for that same
 reason. Nothing in this driver holds interrupts off for anything like it, and

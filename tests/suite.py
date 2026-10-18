@@ -11152,6 +11152,17 @@ SOAK = [
         "y & 3, 90 bytes a row, +5 for the box) against the reference "
         "renderer's bytes, and the WIN1 band on a 1bpp desktop",
         needs=("marty", "nasm"), serial=True),
+    Row("pitnow", "soak", py("tests/pitnow.py"), 5.0,
+        "SPEC.md 72.15.1: apps/os88pit.inc's pit_now - the 838 ns clock "
+        "PIXELSTEIN, isoTron, MIDIRack, FTPD and ETHER.DRV's profiler share - "
+        "hammered 60,000 times from a BOOT SECTOR on the 5150 with the "
+        "kernel's mode 2 on channel 0: no read may go backwards or jump a "
+        "whole tick. A reload landing inside the cli leaves IRQ0 pending past "
+        "the tick re-read, and only the IRR check catches it; --no-irr takes "
+        "that check out and must FAIL (14 bad reads, deterministic). It is "
+        "what made pxsauto's Auto judge a 98.2 ms frame as 43.3 about one run "
+        "in twelve",
+        needs=("marty", "nasm"), serial=True),
     Row("pxsauto", "soak", py("tests/pxsauto.py"), 65.0,
         "SPEC.md 97.8, 97.10, PLAN 14: the DETAIL SELECTOR, every movement, "
         "on the CGA 5150 - windowed with a breakpoint on px_auto_frame and "
