@@ -40,6 +40,8 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 | **[PERFORMANCE.md](PERFORMANCE.md)** | anything that draws, lays out or loops — but the load-bearing ~200 lines are condensed below, and over half the file is a field-measurement log. Open it for the reasons listed at the end of that section, not by default |
 | **[docs/TESTING.md](docs/TESTING.md)** | concluding something is untestable — it is the matrix of what each emulator can and cannot do, with a recipe per capability |
 | **[docs/KERNEL-MEMORY.md](docs/KERNEL-MEMORY.md)** | spending any memory |
+| **[docs/plans/ROM-PLAN.md](docs/plans/ROM-PLAN.md)** | putting part of the system in ROM (§2.10) — what a 5150's five spare sockets hold, why a ROM is cut against ONE kernel, and what `make rom` builds |
+| **[docs/plans/HMA-PLAN.md](docs/plans/HMA-PLAN.md)** | anything above 1MB on a 286 or better (§2.10.7, §2.10.8) — `.cold` run from the HMA, and the drivers loaded into what it leaves |
 | **[docs/HERCULES-TESTING.md](docs/HERCULES-TESTING.md)** | testing on Hercules — it *is* automatable, and all three ways of getting it wrong give you a black image rather than an error |
 | **[docs/C-TOOLCHAIN.md](docs/C-TOOLCHAIN.md)** | writing or building a package in C (§73) — how to install the compiler, the four C rules and what each refusal means, and what the language does not have here |
 | **[docs/plans/completed/NET-STACK-PLAN.md](docs/plans/completed/NET-STACK-PLAN.md)** | anything on the wire (§72) — the stack's stages, what each layer refuses, and why TLS is not on this machine |
@@ -965,7 +967,9 @@ The rules that fall out:
    into 32 bits per iteration.
 4. **Measure before redesigning; a counter is not a timer.** Put a counter in a
    primitive (`font_char`, `gfx_fill`, `wm_paint_all`) — it costs one rebuild —
-   then multiply by the table above and say that you did.
+   then multiply by the table above and say that you did. A clock is
+   `apps/os88pit.inc`'s `pit_now` (838 ns, an hour before it wraps), never a
+   hand-rolled PIT latch: one misses the tick at the reload.
 5. **Keeping the shape of an optimisation is not keeping the optimisation.**
    `gfx_blit4`'s first version emitted exactly the designed number of calls and
    decoded every pixel by hand inside them: nine times slower, and QEMU priced
