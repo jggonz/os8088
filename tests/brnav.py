@@ -47,6 +47,8 @@ from os88geom import MB_ENTSZ                         # noqa: E402
 import os88qemu                                              # noqa: E402
 import os88build                                       # noqa: E402
 
+u32 = lambda b: u16(b[:2]) | (u16(b[2:4]) << 16)      # noqa: E402,E731
+
 PORT = 8091
 SLOW_SECS = 12          # how long /slow.htm is held open (SPEC.md 71.8)
 
@@ -84,12 +86,12 @@ PAGE_POST303 = PAGE_POST.replace(b"/posted", b"/posted303")
 # is nginx's `return 302` and every add-the-slash redirect (SPEC.md 71.15)
 PAGE_R301 = (b"<html><head><title>301 Moved</title></head><body>"
              b"<p>Moved <a href=\"/a.htm\">here</a>.</p></body></html>\r\n")
-# A two-frame frameset whose children are each MORE than 2,000 bytes of
-# distinct text: the frameset page itself is a few hundred bytes, and before
-# the re-claim (SPEC.md 71.15) the children were drained into a source cut to
-# ITS size - 1 KB - so the page was the first child's first kilobyte and `Page
-# truncated`. The marker words are in no other fixture; f1 carries a link and
-# f2 a text form, which must be live when the page is done.
+# A two-frame frameset whose combined formatted output exceeds the ordinary
+# page's 16 KB initial claim: the frameset page itself is a few hundred bytes,
+# and before the re-claim (SPEC.md 71.15) the children were drained into a
+# source cut to ITS size - 1 KB - so the page was the first child's first
+# kilobyte and `Page truncated`. The marker words are in no other fixture; f1
+# carries a link and f2 a text form, which must be live when the page is done.
 URL_FS = "http://10.0.2.2:%d/fs.htm" % PORT
 PAGE_FS = (b"<html><head><title>Frame Set</title></head>\r\n"
            b"<frameset rows=\"50%,*\"><frame src=\"/f1.htm\">"
@@ -102,7 +104,7 @@ def _frame_page(title, marker, extra):
     body += b"<p>The marker word is %s and it occurs in this frame only.</p>\r\n" \
         % marker
     body += extra
-    for i in range(16):
+    for i in range(100):
         body += (b"<p>Paragraph %d of %s: the quick brown fox number %d jumps "
                  b"over the lazy dog, and this frame runs on well past a "
                  b"kilobyte so that a source cut to the frameset's own size "
@@ -116,7 +118,7 @@ PAGE_F2 = _frame_page(b"Frame Two", b"Phosphorus",
                       b"<form action=\"/posted\" method=post>"
                       b"<input type=text name=q size=12>"
                       b"<input type=submit value=Send></form>\r\n")
-assert len(PAGE_F1) > 2000 and len(PAGE_F2) > 2000
+assert len(PAGE_F1) > 10000 and len(PAGE_F2) > 10000
 
 
 class TwoPages(threading.Thread):
@@ -363,10 +365,10 @@ def main():
     def click_offset(off):
         """Aim from the app's OWN line table, never by eye."""
         lseg, nl, docseg = rw("br_lseg"), rw("br_nlines"), rw("br_docseg")
-        tab = bytes(m.readseg(lseg, 0, nl * 6))
+        tab = bytes(m.readseg(lseg, 0, nl * 10))
         ln = None
         for i in range(nl):
-            o, e = u16(tab[i*6:i*6+2]), u16(tab[i*6+2:i*6+4])
+            o, e = u32(tab[i*10:i*10+4]), u32(tab[i*10+4:i*10+8])
             if o <= off < e:
                 ln = i
                 break
@@ -384,7 +386,8 @@ def main():
                 Mouse().click(x + ww - 8, y + hh - 20)
             if rw("br_top") == was:
                 return "could not scroll line %d into view" % ln
-        o, e, lx = (u16(tab[ln*6:ln*6+2]), u16(tab[ln*6+2:ln*6+4]), tab[ln*6+4])
+        o, e, lx = (u32(tab[ln*10:ln*10+4]),
+                    u32(tab[ln*10+4:ln*10+8]), tab[ln*10+8])
         doc = bytes(m.readseg(docseg, o, e - o))
         col, i = lx, 0
         target = None
@@ -393,8 +396,8 @@ def main():
                 target = col
                 break
             ch = doc[i]
-            if ch == 14:                    # D_LNK1 carries two payload bytes
-                i += 3
+            if ch == 14:                    # D_LNK1 carries three payload bytes
+                i += 4
                 continue
             i += 1
             if ch < 0x20:
@@ -566,7 +569,7 @@ def main():
             if ln.startswith("User-Agent:"):
                 line = ln
     print("the server saw %r" % line)
-    if line != "User-Agent: os8088 Browser 1.4":
+    if line != "User-Agent: os8088 Browser 1.6":
         fails.append("the User-Agent is %r" % line)
 
     # --- 5: BACK DURING A FETCH DROPS IT (SPEC.md 71.8) --------------------
@@ -810,17 +813,24 @@ def main():
     fetch(URL_FS)
     st = wait_done("the frameset")
     doc = bytes(m.readseg(rw("br_docseg"), 0, rw("br_doclen")))
+    linekb = rw("br_linekb")
     ln_len = u16(m.readseg(pseg, sy["br_loc"] + 12, 2))
-    print("after fs: state %d, msg %04X, doclen %d, title %r, bar %r (LN_LEN "
-          "%d), %d form(s), requests %r"
-          % (st, rw("br_nmsg"), len(doc), title(), bar_text(), ln_len,
-             rb("br_fn"), srv.log[before:]))
+    print("after fs: state %d, msg %04X, doclen %d, lines %d/%d KB, title %r, "
+          "bar %r (LN_LEN %d), %d form(s), requests %r"
+          % (st, rw("br_nmsg"), len(doc), rw("br_nlines"), linekb,
+             title(), bar_text(), ln_len, rb("br_fn"), srv.log[before:]))
     if st != 6:
         fails.append("the frameset did not finish: state %d" % st)
     if rw("br_nmsg") != 0:
         fails.append("the frameset finished with a message (br_nmsg %04X) - "
                      "`Page truncated` is the children being drained into a "
                      "source cut to the frameset's own size" % rw("br_nmsg"))
+    if len(doc) <= 16 * 1024:
+        fails.append("the frameset output is only %d bytes; this fixture must "
+                     "exercise aggregate output growth beyond 16 KB" % len(doc))
+    if linekb * 1024 < rw("br_nlines") * 10 or linekb > 62:
+        fails.append("the frameset needs the full safe line table; got %d KB "
+                     "for %d lines" % (linekb, rw("br_nlines")))
     for mark in (b"Hesperus", b"Phosphorus"):
         if mark not in doc:
             fails.append("the frameset's document lacks %r - the child that "
@@ -886,7 +896,19 @@ def main():
                        secs=20, what="the Save As dialog closing", poll=0.25)
         os88qemu.ui_done(m, S, cap=2.0, what="the save's write")
         st = rb("br_nstate")
-        print("state after the save: %d" % st)
+        msgptr = rw("br_nmsg")
+        msg = bytearray()
+        for i in range(32):
+            ch = m.readseg(pseg, msgptr + i, 1)[0]
+            if not ch:
+                break
+            msg.append(ch)
+        saved_name = bytes(m.readseg(pseg, sy["br_name"], 12)).split(b"\0", 1)[0]
+        print("state after the save: %d, message %r, name %r"
+              % (st, bytes(msg).decode("ascii", "replace"), saved_name))
+        if bytes(msg) != b"Saved":
+            fails.append("Save As completion says %r, not Saved"
+                         % bytes(msg).decode("ascii", "replace"))
         if st != 6:
             fails.append("a save that WORKED reports state %d - a message and "
                          "a failure are different things (BN_DONE is 6)" % st)

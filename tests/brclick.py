@@ -51,6 +51,7 @@ _OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 import dispcp                                          # noqa: E402
+import os88flush                                       # noqa: E402
 import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
@@ -59,6 +60,7 @@ from os88geom import MB_ENTSZ                          # noqa: E402
 
 S = os88sym.linear
 u16 = lambda b: b[0] | (b[1] << 8)                     # noqa: E731
+u32 = lambda b: u16(b[:2]) | (u16(b[2:4]) << 16)      # noqa: E731
 # THE MACHINE IS THE GLaBIOS TWIN, resolved rather than chosen here.
 # This used to be a conditional on whether the IBM ROM happened to be
 # in the checkout, which made the machine a property of the box - and
@@ -119,6 +121,16 @@ def main():
         pseg = rec[22] | (rec[23] << 8)
         rb = lambda n: m.readseg(pseg, sy[n], 1)[0]        # noqa: E731
         rw = lambda n: u16(m.readseg(pseg, sy[n], 2))      # noqa: E731
+        about = [
+            ("br_ab1", "os8088 Browser 1.6"),
+            ("br_ab2", "Bringing the web to XT PCs"),
+            ("br_ab3", "Version 1.0 contributed by Elendilon"),
+            ("br_ab4", "Version 1.2-1.6 contributed by Pentagram666"),
+        ]
+        for symbol, expected in about:
+            actual = bytes(m.readseg(pseg, sy[symbol], len(expected) + 1))
+            if actual.split(b"\0", 1)[0].decode("ascii") != expected:
+                fails.append("About line %s does not match %r" % (symbol, expected))
         # THE PAGE ARRIVES ON THE WAKE, after the window is up (SPEC.md 54.10):
         # read straight after the open and this is an empty browser
         os88marty.until(m, lambda _m: rw("br_nlines") > 0, "the page laid out",
@@ -175,28 +187,28 @@ def main():
         # --- the app's own line table, for aiming ------------------------
         docseg = rw("br_docseg")
         nl = rw("br_nlines")
-        tab = bytes(m.readseg(rw("br_lseg"), 0, nl * 6))
+        tab = bytes(m.readseg(rw("br_lseg"), 0, nl * 10))
 
         def line_of(off):
             for i in range(nl):
-                o, e = u16(tab[i * 6:i * 6 + 2]), u16(tab[i * 6 + 2:i * 6 + 4])
+                o, e = u32(tab[i * 10:i * 10 + 4]), u32(tab[i * 10 + 4:i * 10 + 8])
                 if o <= off < e:
                     return i
             return None
 
         def column_of(line, off):
             """br_build's walk, in Python: markers are not cells."""
-            o = u16(tab[line * 6:line * 6 + 2])
-            e = u16(tab[line * 6 + 2:line * 6 + 4])
-            col = tab[line * 6 + 4]
+            o = u32(tab[line * 10:line * 10 + 4])
+            e = u32(tab[line * 10 + 4:line * 10 + 8])
+            col = tab[line * 10 + 8]
             doc = bytes(m.readseg(docseg, o, e - o))
             i = 0
             while i < len(doc):
                 if o + i == off:
                     return col
                 ch = doc[i]
-                if ch == 14:            # D_LNK1 carries two payload bytes
-                    i += 3
+                if ch == 14:            # D_LNK1 carries three payload bytes
+                    i += 4
                     continue
                 i += 1
                 if ch < 0x20:
@@ -386,8 +398,8 @@ def main():
                             rw("br_rows"), rb("br_selkind"),
                             rb("br_ctxopen"), rb("br_ctxkind")))
         else:
-            old_ctxx, old_ctxy, old_ctxw = (
-                rw("br_ctxx"), rw("br_ctxy"), rb("br_ctxw"))
+            old_ctxx, old_ctxy, old_ctxw, old_ctxh = (
+                rw("br_ctxx"), rw("br_ctxy"), rb("br_ctxw"), rb("br_ctxh"))
             if rb("br_ctxw") != 124:
                 fails.append("page context menu width is %d, expected 124"
                              % rb("br_ctxw"))
@@ -495,23 +507,30 @@ def main():
                   != rw("br_rows") * 8 - 22):
                 fails.append("page menu did not move up from the bottom edge")
             # The old XOR frame must be fully removed when a second popup
-            # replaces it. Compare the original menu rectangle after the new
-            # menu opens at the opposite corner, where the rectangles do not
-            # overlap and the pointer is outside the old one.
+            # replaces it. Compare its perimeter: the interior can contain
+            # underlying text that is repainted when the old popup is erased.
             after = m.fbuf()
             fw, fh, _before_px = baseline
             ax, ay, current = after
             x0 = rw("br_cx") + old_ctxx
             y0 = rw("br_cy") + old_ctxy
-            x1, y1 = min(x0 + old_ctxw, fw, ax), min(y0 + 28, fh, ay)
-            old_before = b"".join(
-                baseline[2][(y * fw + x0) * 3:(y * fw + x1) * 3]
-                for y in range(y0, y1))
-            old_after = b"".join(
-                current[(y * ax + x0) * 3:(y * ax + x1) * 3]
-                for y in range(y0, y1))
+            x1, y1 = min(x0 + old_ctxw, fw, ax), min(y0 + old_ctxh, fh, ay)
+            perimeter = set()
+            for x in range(x0, x1):
+                perimeter.add((x, y0))
+                perimeter.add((x, y1 - 1))
+            for y in range(y0, y1):
+                perimeter.add((x0, y))
+                perimeter.add((x1 - 1, y))
+            old_pixels = []
+            for x, y in perimeter:
+                i0, i1 = (y * fw + x) * 3, (y * ax + x) * 3
+                old_pixels.append((baseline[2][i0:i0 + 3],
+                                   current[i1:i1 + 3]))
+            old_before = b"".join(pair[0] for pair in old_pixels)
+            old_after = b"".join(pair[1] for pair in old_pixels)
             if old_before != old_after:
-                fails.append("replacing the page menu left pixels in its old box")
+                fails.append("replacing the page menu left pixels on its old frame")
             mo.click(rw("br_cx") + rw("br_ctxx") + 8,
                      rw("br_cy") + rw("br_ctxy") + 18)  # View Source
             os88marty.settle(m)
@@ -536,14 +555,15 @@ def main():
         # --- 2: click the RELATIVE link ---------------------------------
         # find where it sits in the document: the byte after its D_LNK1
         want = 2                                    # 'torture.htm', index 2
-        marker = bytes([14, 0x10 | (want & 15), 0x10 | (want >> 4)])
+        marker = bytes([14, 0x10 | (want & 15),
+                        0x10 | ((want >> 4) & 15), 0x10 | (want >> 8)])
         at = doc.find(marker)
         if at < 0:
             fails.append("link %d's marker is not in the document" % want)
         else:
             # The Browser owns a small package-side right-click menu. Exercise
             # both actions and inspect the system clipboard by its public state.
-            err = right_click_offset(at + 3)
+            err = right_click_offset(at + 4)
             if err:
                 fails.append("right-click link: " + err)
             elif rb("br_ctxopen") != 1 or rw("br_ctxlink") != want:
@@ -571,7 +591,7 @@ def main():
                 if rb("br_ctxopen") != 0:
                     fails.append("Copy Link left the context menu open")
 
-                err = right_click_offset(at + 3)
+                err = right_click_offset(at + 4)
                 if err:
                     fails.append("right-click link for Open Link: " + err)
                 else:
@@ -585,7 +605,7 @@ def main():
                         fails.append("Open Link did not use the normal relative-"
                                      "link/no-server path")
 
-            err = click_offset(at + 3)
+            err = click_offset(at + 4)
             if err:
                 fails.append("relative link: " + err)
             else:
@@ -676,11 +696,11 @@ def main():
 
         # Tab is the Browser's focus ring, not a blind key sink. Check that
         # Ctrl+L erases it without repainting unrelated page rows.
-        first_link = doc.find(bytes([14, 0x10, 0x10]))
+        first_link = doc.find(bytes([14, 0x10, 0x10, 0x10]))
         if first_link < 0:
             fails.append("could not find the first link marker for focus rendering")
         else:
-            first_link_line = line_of(first_link + 3)
+            first_link_line = line_of(first_link + 4)
             if first_link_line is None or not goto(first_link_line):
                 fails.append("could not bring the first link into view for focus rendering")
 
@@ -704,11 +724,11 @@ def main():
                 break
         if rb("br_tfocus") != 3:
             fails.append("Tab did not reach a link in the focus cycle")
-        if rb("br_tlinkidx") >= rw("br_lnkn"):
+        if rw("br_tlinkidx") >= rw("br_lnkn"):
             fails.append("Tab left link focus without a valid link index")
         if rw("br_tend") <= rw("br_tstart"):
             fails.append("focused link has an empty visible text span")
-        if rb("br_tlinkidx") == 0 and first_link >= 0:
+        if rw("br_tlinkidx") == 0 and first_link >= 0:
             focus_line = line_of(rw("br_tstart"))
             cols = [column_of(focus_line, off)
                     for off in range(rw("br_tstart"), rw("br_tend"))]
@@ -736,13 +756,13 @@ def main():
             os88marty.settle(m)
             if rb("br_tfocus") == 3:
                 break
-        if rb("br_tfocus") == 3 and rb("br_tlinkidx") == 0:
+        if rb("br_tfocus") == 3 and rw("br_tlinkidx") == 0:
             # The first fixture link is an in-page anchor, deliberately inert
             # in this browser version. Advance to the HTTPS link: Enter must
             # activate it and produce the browser's explicit TLS refusal.
             m.key("Tab")
             os88marty.settle(m)
-            if rb("br_tfocus") != 3 or rb("br_tlinkidx") != 1:
+            if rb("br_tfocus") != 3 or rw("br_tlinkidx") != 1:
                 fails.append("Tab did not advance focus to the HTTPS link")
             else:
                 m.key("Enter")
@@ -804,6 +824,18 @@ def main():
                    rw("br_stary2"), sx, sy0, rb("br_islocal")))
             if bm_count() != 1 or rb("br_bmsaved") != 1:
                 fails.append("clicking the empty bookmark star did not add it")
+            try:
+                saved = os88flush.Flush(marty=m).volume(1).read(
+                    "SYSTEM/APPDATA/BROWSE.DAT")
+                if (saved[:5] != b"BM01\x01"
+                        or bookmark_url.encode("ascii") not in saved):
+                    fails.append("BROWSE.DAT does not contain the saved URL: %r"
+                                 % saved[:64])
+                else:
+                    say("BROWSE.DAT persisted on B: (%d bytes)" % len(saved))
+            except (OSError, os88flush.FlushError) as e:
+                fails.append("BROWSE.DAT was not readable from B: after save: %s"
+                             % e)
             mo.click(sx, sy0)
             os88marty.settle(m)
             say("after filled-star click: req=%d saved=%d local=%d ctx=%d sel=%d/%d focus=%d pointer=%r rect=%d,%d..%d,%d"
@@ -828,6 +860,9 @@ def main():
             if bm_count() != 1 or rb("br_bmsaved") != 1:
                 fails.append("clicking the empty bookmark star did not restore it")
         except os88mouse.MartyError as e:
+            say("bookmark failure state: count=%d saved=%d req=%d op=%d status=%04X"
+                % (bm_count(), rb("br_bmsaved"), rb("br_bmreq"),
+                   rb("br_bmopwork"), rw("br_nmsg")))
             fails.append("bookmark star pointer test: %s" % e)
 
         bookmark_cell = None

@@ -57,6 +57,7 @@ NASM  := nasm
 VMPORT ?= off
 QEMUMACH := -machine pc,vmport=$(VMPORT)
 QEMU  := qemu-system-i386
+QMP_SOCK ?= build/qmp.sock
 BUILD := build
 IMG   := $(BUILD)/os8088.img
 # ...and the 1.2MB 5.25" HD pair (SPEC.md 19), which is the AT-class machine
@@ -11317,13 +11318,34 @@ $(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
 # not part of `all`, so the copy goes stale the moment the page is edited and
 # every shipped apps image then fails a freshness check about a disk that is
 # perfectly fresh. Renaming is a reason for a copy; having one is not.
-BRFILES := $(BUILD)/browser.o88 apps/browser/browser.htm $(BUILD)/DEMO.HTM \
+BRFILES := $(BUILD)/browser.o88 $(BUILD)/ANOTE.O88 apps/browser/browser.htm $(BUILD)/DEMO.HTM \
            $(BUILD)/FORMAT.HTM \
            $(BUILD)/TORTURE.HTM \
            $(BUILD)/UTF8.HTM $(BUILD)/FROGFIND.HTM $(BUILD)/FFHOME.HTM \
-           $(BUILD)/LINKS.HTM $(BUILD)/PUBZONE.HTM $(BUILD)/FRAMESET.HTM
+           $(BUILD)/LINKS.HTM $(BUILD)/PUBZONE.HTM $(BUILD)/FRAMESET.HTM \
+           $(BUILD)/LINARENA.HTM $(BUILD)/DOCWIDE.HTM
 
 browsertest: $(BUILD)/brtest.img $(BUILD)/brtest360.img
+
+.PHONY: brmemorypages
+brmemorypages:
+	python3 tools/brmemory.py --out $(BUILD)/brmemory
+
+.PHONY: brsourcecut
+brsourcecut: browsertest $(BUILD)/brmemory/sourcepressure.htm
+	python3 tests/ethernet.py --page $(BUILD)/brmemory/sourcepressure.htm \
+		--allow-source-cutoff --response-chunk-size 512 --response-delay-ms 5
+
+$(BUILD)/LINARENA.HTM: tools/brmemory.py | $(BUILD)
+	python3 tools/brmemory.py --out $(BUILD)/brmemory
+	cp $(BUILD)/brmemory/linearena.htm $@
+
+$(BUILD)/DOCWIDE.HTM: tools/brmemory.py | $(BUILD)
+	python3 tools/brmemory.py --out $(BUILD)/brmemory
+	cp $(BUILD)/brmemory/docwide.htm $@
+
+$(BUILD)/brmemory/sourcepressure.htm: tools/brmemory.py | $(BUILD)
+	python3 tools/brmemory.py --out $(BUILD)/brmemory
 
 $(BUILD)/DEMO.HTM: tests/htm/demo.htm | $(BUILD)
 	cp $< $@
@@ -11349,6 +11371,11 @@ $(BUILD)/brtest.img: $(BRFILES) tools/os88disk.py
 
 $(BUILD)/brtest360.img: $(BRFILES) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 --folder SYSTEM/APPDATA $(BRFILES)
+
+# Browser memory gate: put Note Pad at the top of its test-only disk listing so
+# QEMU can launch the second app without depending on a blind scrollbar walk.
+$(BUILD)/ANOTE.O88: $(BUILD)/notepad.o88
+	cp $< $@
 
 # --- the FIELD disks: one BOOTABLE 360KB floppy per adapter ------------------
 #
@@ -14483,7 +14510,7 @@ endif
 test: $(TESTIMG) $(TESTAPPS) $(HDDIMG)
 	$(QEMU) $(QEMUMACH) -drive file=$(TESTIMG),format=raw,if=floppy -boot $(TESTBOOT) $(MOUSE) \
 		-drive file=$(TESTAPPS),format=raw,if=floppy,index=1 $(HDDDEV) \
-		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
+		-display none -qmp unix:$(QMP_SOCK),server,nowait -daemonize -pidfile build/qemu.pid \
 		$(CARDAUDIO) $(ADLIBDEV) $(SBDEV) $(DEVCARD) $(ETHERDEV)
 
 # `make test` plus audio capture (SPEC.md 34): the PC speaker renders into
@@ -14493,7 +14520,7 @@ test: $(TESTIMG) $(TESTAPPS) $(HDDIMG)
 test-snd: $(IMG) $(TESTAPPS)
 	$(QEMU) $(QEMUMACH) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(TESTAPPS),format=raw,if=floppy,index=1 \
-		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
+		-display none -qmp unix:$(QMP_SOCK),server,nowait -daemonize -pidfile build/qemu.pid \
 		-audiodev wav,id=snd,path=build/snd.wav -machine pcspk-audiodev=snd \
 		$(ADLIBDEV) $(SBDEV)
 

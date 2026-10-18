@@ -302,6 +302,9 @@ def main():
 
         nstate, nlines = bss_b(BR_NSTATE), bss_w(BR_NLINES)
         say("br_nstate = %d, br_nlines = %d" % (nstate, nlines))
+        linekb = sym_w("br_linekb")
+        expected_linekb = min(62, max(1, (nlines * 10 + 1023) // 1024))
+        say("line table = %d KB for %d source bytes" % (linekb, len(PAGE)))
         if nstate == BN_ERR:
             fails.append("the browser's own state is BN_ERR: the fetch failed "
                          "and it knows")
@@ -311,6 +314,13 @@ def main():
         if nlines < 5:
             fails.append("br_nlines is %d: the page never reached the layout"
                          % nlines)
+        if linekb != expected_linekb:
+            fails.append("the line table is %d KB, expected %d KB for the "
+                         "%d-byte response" % (linekb, expected_linekb,
+                                               len(PAGE)))
+        if nlines > len(PAGE) or nlines * 10 > linekb * 1024:
+            fails.append("%d lines do not fit the %d KB line table"
+                         % (nlines, linekb))
         page_title = bytes(m.readseg(pseg, sy["br_ptitle"], 32)).split(b"\0", 1)[0]
         if page_title != b"Over the wire":
             fails.append("the parsed page title is %r, not 'Over the wire'"

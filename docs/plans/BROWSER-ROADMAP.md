@@ -16,8 +16,10 @@ review outcomes and engineering lessons forward after the PR is merged.
   `3987ad05`; re-check `main` before any eventual PR or merge.
 - HTTPS and JavaScript remain unsupported. The optional host proxy is not a
   dependency of the native Browser.
-- The page remains bounded by the existing 20 KB document ceiling. Small
-  pages must not pay for a larger fixed buffer; EMS/XMS remains optional work.
+- Browser 1.6 starts network source storage at 4 KB and grows source and
+  formatted output on demand, each below the 64 KB word-offset boundary. The
+  line table remains capped at 8 KB and links at 6 KB. Small pages do not pay
+  for large fixed buffers; the page retains a 20% conventional free-heap floor.
 
 ## Milestones
 
@@ -29,7 +31,7 @@ review outcomes and engineering lessons forward after the PR is merged.
 | 1.5 | Navigation and usability: bookmarks, View Source, Windows/IE-era shortcuts, keyboard focus/selection and page/link context menus | Closed in the local 1.5 release commit; no push. Find remains deferred until it has a bounded UI and storage design |
 | 1.6 | Memory-aware page storage and render-path audit | One commit after measurement and validation. Establish the conventional-memory path first; use optional EMS/XMS only through existing contracts |
 | 1.6b | Separate Download Manager window and transfer lifecycle | One commit after validation. Add Save Link As / Save Image As and fixed-size disk writes without staging a whole response |
-| 1.7 | Image handling, initially static GIF/JPEG, reusing PiXEL decoders where practical | After memory design; decode on demand with small reusable buffers |
+| 1.7 | Inline images and adapter-aware colour output, initially static GIF/JPEG | After memory design; decode into bounded row buffers and reuse the kernel's automatic VGA/EGA/mono graphics dispatch |
 | 1.8 | Compatibility and integration against early-Web pages; refine progressive rendering and interactions | Follow image and memory work |
 | 1.9 | Full audit: code reuse, allocations, binary/RAM footprint and 8088 execution cost | Broad optimization after features stabilize |
 | 2.0 | Consolidated stable Browser for early-Web use | Release milestone |
@@ -114,16 +116,24 @@ Browser's HTML/source, document or line-table storage.
 
 The key constraint is the windowed API. `OSAPI_GFX_BLIT4` accepts a packed
 4bpp source in the app's RAM and the kernel writes it to the live framebuffer;
-windowed apps do not receive a framebuffer pointer. Direct VRAM access and
-page selection belong to an exclusive `OSAPI_FSX_RUN` bracket, which suspends
-the desktop and is not a rendering mode for an ordinary Browser window. The
-1.6 audit should therefore test a bounded staging path: decode an image row or
-tile into a small RAM buffer and blit it through the normal graphics API,
-leaving the displayed pixels in VRAM instead of retaining a full decoded
-bitmap. This could lower peak and retained RAM, while increasing decode work
-when the window is exposed, scrolled or repainted. Measure that tradeoff and
-verify redraw behavior before choosing it; VRAM contents alone are not a
-durable per-window image cache.
+windowed apps do not receive a framebuffer pointer. The kernel already
+dispatches that call to VGA/EGA's planar colour renderer or the 1bpp renderer
+on Hercules/CGA, where its standard palette reduction and 50% dither apply
+(SPEC.md §§5.4, 39.4, 39.24). The Browser must not add its own adapter probe,
+VRAM writes, fullscreen bracket, or duplicate grayscale converter.
+
+The 1.6 audit should test bounded staging: decode an image row or tile into a
+small RAM buffer and blit it through `OSAPI_GFX_BLIT4`, leaving the displayed
+pixels in VRAM instead of retaining a full decoded bitmap. This lowers peak
+and retained RAM, while increasing decode work when the window is exposed,
+scrolled or repainted. Reuse `apps/os88img.inc` only for its existing BMP/PCX/
+PIX subset and only after adapting its whole-image output contract; it is not
+a GIF/JPEG/PNG row decoder. PiXEL's GIF/JPEG/PNG parts are mature but depend on
+PiXEL-owned state and callbacks, so their code is not directly callable from
+the Browser. A shared decoder interface must preserve caller-owned state,
+bounded input, row output and cancellation before either package shares code.
+The exact audit and conversion findings are recorded in
+[BROWSER-IMAGES-PLAN.md](BROWSER-IMAGES-PLAN.md).
 
 **1.5 interaction contract:** keep this state in the Browser package:
 a star at the toolbar's far right toggles a persistent remote bookmark (filled
@@ -189,12 +199,69 @@ memory path on all adapters and hardware tiers. EMS/XMS may be an optional
 optimization, never a requirement.
 
 The memory/render investigation starts from the existing post-1.4 sized page
-claims in §71.14; first measure their peak and retained bytes, then identify a
-change with a real reduction before changing the storage model. PR #258's
-direct-VRAM and dirty-page techniques are a study lead for future image
-staging, not an API the windowed Browser can call: normal windows draw through
-the clipped graphics API. Any image-like scratch storage must remain bounded
-and redrawable, with displayed pixels left in VRAM only as a transient result.
+claims in §71.14. A reproducible QEMU/NE2000 run served the captured
+http://theoldnet.com/ response (76,728 bytes) through the real Ethernet
+driver and HTTP path. The current Browser retained 32,767 source bytes and
+reported truncation. The parse produced 2,516 formatted bytes in 85 lines;
+the page held 32 KB source, 63 KB document, 8 KB line table and 6 KB links.
+The same run launched Note Pad afterward: its 20 KB instance opened, and the
+heapmap showed 239.5 KB total free holes with a 237.5 KB largest run. The
+Browser's own instance region was 35 KB. This is a useful initial result, not
+a speed measurement; QEMU's CPU and memory timing are not the 8088 target.
+
+Keep 1.6 in these steps, all under one version commit:
+
+1. **Conventional baseline and reserve.** Add a deterministic large-response
+   fixture to the NE2000 gate and record source/document/line/link claims,
+   free heap and rendered output. Query OSAPI_MEM_AVAIL at the point of
+   growth; preserve a documented free-heap reserve and refuse growth cleanly
+   when it would consume that reserve. The 8088 path remains complete without
+   an expanded or extended-memory driver.
+2. **Incremental conventional storage.** Grow the network source only as the
+   response needs it, up to the current word-offset ceiling. Start the output
+   document from a small source-based estimate and grow/reparse only when the
+   renderer proves it needs more. Keep the line table's source-derived bound
+   for this step; if that claim would cross the reserve, refuse the load
+   visibly. A refused document growth must keep the complete output prefix and
+   must not hang the UI or leave a stale worker writing into freed memory.
+3. **Optional EMS/XMS study and backend.** Use the existing EMS driver only
+   when its frame and pages are available, with conventional fallback. Measure
+   the copy/map cost and leave the feature disabled when it does not reduce
+   conventional pressure. XMS is likewise optional and must use
+   OSAPI_XMEM_COPY; never dereference an XMS token as a pointer. Do not add
+   an OS or driver API. This stage can be deferred if the measured gain does
+   not justify a second backend before image support.
+4. **Pressure and regression gate.** Repeat the large NE2000 page with no
+   EMS/XMS, then with optional memory if implemented; keep another app
+   launchable, verify the reserve and rendered lines, and exercise navigation
+   during receive/parse growth. Compare output and memory claims against the
+   recorded baseline.
+
+PR #258's direct-VRAM and dirty-page techniques are a study lead for future
+image staging, not an API the windowed Browser can call: normal windows draw
+through the clipped graphics API. Any image-like scratch storage must remain
+bounded and redrawable, with displayed pixels left in VRAM only as a transient
+result.
+
+**1.6 implementation checkpoint (2026-10-16):** the conventional source and
+document growth path is in the working tree. The NE2000/QEMU gate served a
+40,889-byte page and retained all of it: 40 KB source, 40,405 formatted bytes
+in a 48 KB document, an 8 KB line table and a 6 KB link arena. The navigation
+recorded a 93 KB free-heap floor, and the test opened Note Pad while the page
+remained loaded. A 61,391-byte page also fit (60 KB source, 60,706 formatted
+bytes, 63 KB document). A 69,551-byte boundary fixture retained the maximum
+64,511 source bytes, grew the document to 63 KB, and reported `Page truncated`
+while Note Pad still opened. These are QEMU behavior and allocation checks,
+not XT speed measurements. The reproducible command is
+`python3 tests/ethernet.py --large-kb 40`; `--large-kb 60` and `68` exercise the
+last complete range and the cap respectively.
+
+The focused gate still needs a navigation-supersedes-growth race case before
+this milestone closes. EMS/XMS remains deferred: the current plain-text pages
+fit the conventional word-offset stores, while paging them through a second
+backend would add mapping/copy paths without a measured benefit. Revisit that
+decision with bounded image staging, where decoded pixels are the likely
+conventional-memory pressure point.
 
 The 1.6 memory acceptance is a measured reduction in peak or retained memory
 with unchanged page output and redraw behavior, on the baseline 8088 path.
@@ -302,3 +369,13 @@ cannot start because virtualization support was unavailable. An attempted
 `python tools/os88test.py fast` also stops on Windows because the runner uses
 `os.wait4`, which Python's Windows runtime does not provide; this is an
 environment limitation, not a passing suite.
+
+## Browser 1.6 capacity continuation
+
+The 32 KiB source limit is the original baseline. The requested 3x target is 96 KiB for both logical source and formatted output. The current implementation checkpoint remains bounded by 16-bit offsets: 63 KiB source and 63 KiB document. Raising constants alone is unsafe because source offsets, formatted offsets, selections, link positions and line records are words.
+
+The remaining 1.6 prerequisite is a Browser-local segmented representation for source and formatted document, with selector plus offset wherever a logical page position is stored. It must cover network receive, known-size local files, frameset aggregation, line records, selection/copy, links and redraw. Do not claim 96 KiB support until the 96 KiB fixtures reach their unique tail markers without wrap or corruption over NE2000, and a second app still launches within the memory reserve. No kernel or driver changes are authorized.
+
+The current reproducible fixture server is 	ests/brcapacity.py --serve, at http://10.0.2.2:8097/ for the user's QEMU/slirp network. It covers source/document, layout, links, forms, framesets and the next image-integration corpus. Keep EMS/XMS optional and open; this phase must pass without either.
+
+The 1.7 image-integration contract and fixture usage are in [BROWSER-IMAGES-PLAN.md](BROWSER-IMAGES-PLAN.md). Static GIF/JPEG are the first candidates, with row-sized decode into packed 4bpp and kernel-managed VGA/EGA colour or Hercules/CGA grayscale output. Image work starts after the 96 KiB source/document/line representation is implemented and tested.

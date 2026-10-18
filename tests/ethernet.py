@@ -76,7 +76,7 @@ import os88qemu                                              # noqa: E402
 import os88build                                       # noqa: E402
 
 S = os88sym.linear
-SOCK = "build/qmp.sock"
+SOCK = os.environ.get("QMP_SOCK", "build/qmp.sock")
 PORT = 8090
 PATH = "/eth.htm"
 URL = "http://10.0.2.2:%d%s" % (PORT, PATH)
@@ -86,7 +86,11 @@ ETH_ROW, DRVR_SZ, DRVR_SEG = 2, 16, 2   # drv_tab row 2 since SPEC.md 31.1's
                                         # reorder (sound, hdd, ETHER, ram, net)
 DH_BOUND = 3
 BN_DONE, BN_ERR = 6, 7
-BR_NLINES, BR_NSTATE = 38, 946
+BR_SRCSEG, BR_DOCSEG = 24, 26
+BR_SRCLEN, BR_SRCKB, BR_DOCKB, BR_DOCLEN, BR_NLINES = 30, 32, 34, 36, 38
+BR_NSTATE = 946
+BR_TRUNC = 53
+BR_NMSG = 958
 
 PAGE = (b"<html><head><title>Over the card</title></head><body>\r\n"
         b"<h1>Fetched over an NE2000</h1>\r\n"
@@ -315,13 +319,16 @@ def type_url(text):
 class Server(threading.Thread):
     """One page, and it REMEMBERS THE REQUEST - which is assertion 3."""
 
-    def __init__(self):
+    def __init__(self, page=PAGE, chunk_size=0, chunk_delay=0.0):
         threading.Thread.__init__(self, daemon=True)
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.s.bind(("0.0.0.0", PORT))
         self.s.listen(4)
         self.request = None
+        self.page = page
+        self.chunk_size = chunk_size
+        self.chunk_delay = chunk_delay
 
     def run(self):
         while True:
@@ -339,8 +346,15 @@ class Server(threading.Thread):
                     req += b
                 if self.request is None:
                     self.request = req
-                c.sendall(b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n"
-                          b"Content-Length: %d\r\n\r\n" % len(PAGE) + PAGE)
+                response = (b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n"
+                            b"Content-Length: %d\r\n\r\n" % len(self.page)
+                            + self.page)
+                if self.chunk_size > 0 and self.chunk_delay > 0:
+                    for pos in range(0, len(response), self.chunk_size):
+                        c.sendall(response[pos:pos + self.chunk_size])
+                        time.sleep(self.chunk_delay)
+                else:
+                    c.sendall(response)
             except OSError:
                 pass
             finally:
@@ -374,9 +388,75 @@ def claims(m, S):
     return sorted(out)
 
 
+def browser_state(m, pseg, img):
+    """The page arenas and their logical usage, from the app's own BSS."""
+    def word(offset):
+        return u16(m.readseg(pseg, img + offset, 2))
+    # br_srclen_hi is appended after the Browser's current BSS records. Resolve
+    # it from NASM's map instead of pinning a second copy of its moving offset
+    # in this test.
+    offsets = {}
+    with open("build/browser.map", encoding="ascii") as f:
+        for line in f:
+            fields = line.split()
+            if len(fields) >= 3 and fields[-1] in (
+                    "br_srclen_hi", "br_srcpos", "br_lnkn", "br_lnkseg",
+                    "br_lnkoff", "br_linecap", "br_doclen_hi"):
+                offsets[fields[-1]] = int(fields[0], 16) - img
+    if any(name not in offsets or offsets[name] < 0 for name in
+           ("br_srclen_hi", "br_srcpos", "br_lnkn", "br_lnkseg",
+            "br_lnkoff", "br_linecap", "br_doclen_hi")):
+        raise RuntimeError("Browser logical source symbols are missing from build/browser.map")
+    source_length = word(BR_SRCLEN) | (word(offsets["br_srclen_hi"]) << 16)
+    parser_position = (word(offsets["br_srcpos"])
+                       | (word(offsets["br_srcpos"] + 2) << 16))
+    link_count = word(offsets["br_lnkn"])
+    link_segment = word(offsets["br_lnkseg"])
+    link_hrefs = []
+    if link_segment:
+        for i in range(link_count):
+            link_offset = word(offsets["br_lnkoff"] + i * 2)
+            raw = m.readseg(link_segment, link_offset, 64)
+            link_hrefs.append(raw.split(b"\0", 1)[0].decode(
+                "ascii", errors="replace"))
+    return {
+        "source_segment": word(BR_SRCSEG),
+        "source_capacity_kb": word(BR_SRCKB),
+        "source_length": source_length,
+        "parser_source_position": parser_position,
+        "link_count": link_count,
+        "link_hrefs": link_hrefs,
+        "document_segment": word(BR_DOCSEG),
+        "document_capacity_kb": word(BR_DOCKB),
+        "document_length": (word(BR_DOCLEN)
+                             | (word(offsets["br_doclen_hi"]) << 16)),
+        "display_lines": word(BR_NLINES),
+        "line_capacity_bytes": word(offsets["br_linecap"]),
+        "truncated": m.readseg(pseg, img + BR_TRUNC, 1)[0],
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--shot", default=None)
+    ap.add_argument("--page", default=None,
+                    help="serve this HTML body to the NE2000 guest instead of the small default")
+    ap.add_argument("--response-chunk-size", type=int, default=0,
+                    help="send a large test response in chunks of this many bytes")
+    ap.add_argument("--response-delay-ms", type=float, default=0,
+                    help="pause this many milliseconds between response chunks")
+    ap.add_argument("--snapshot", default=None,
+                    help="write before/after heap-claim snapshots as JSON")
+    ap.add_argument("--expect-source-bytes", type=int, default=None,
+                    help="assert an intentional source cutoff for a large-page test")
+    ap.add_argument("--expect-source-capacity-kb", type=int, default=None,
+                    help="assert the Browser's final source claim capacity")
+    ap.add_argument("--expect-lines-at-least", type=int, default=None,
+                    help="assert that layout reached this many display lines")
+    ap.add_argument("--expect-document-sentinel", default=None,
+                    help="assert these ASCII bytes survived formatting in the guest")
+    ap.add_argument("--allow-source-cutoff", action="store_true",
+                    help="accept a safe-memory cutoff and verify the retained prefix")
     ap.add_argument("--keep", action="store_true",
                     help="leave QEMU running for a look afterwards")
     a = ap.parse_args()
@@ -408,9 +488,13 @@ def main():
         if n not in syms:
             sys.exit("ethernet: %s is not in the map" % n)
 
-    srv = Server()
+    page = open(a.page, "rb").read() if a.page else PAGE
+    if a.response_chunk_size < 0 or a.response_delay_ms < 0:
+        sys.exit("ethernet: response chunk size and delay must be non-negative")
+    srv = Server(page, a.response_chunk_size, a.response_delay_ms / 1000.0)
     srv.start()
-    say("http server on %s, %d byte page" % (URL, len(PAGE)))
+    say("http server on %s, %d byte page%s"
+        % (URL, len(page), " from " + a.page if a.page else ""))
 
     # A SURVIVOR KEEPS THE SOCKET, so the new machine cannot bind and every
     # read below would come from the OLD one - which reads as a change that
@@ -438,6 +522,7 @@ def main():
         sys.exit("ethernet: make test failed:\n" + r.stdout + r.stderr)
 
     m = Qemu()
+    snapshots = {}
     try:
         # --- 1: a card, and an address ------------------------------------
         # EVERY WAIT BELOW IS IN THE GUEST'S SECONDS (tests/os88qemu.py) and on
@@ -574,6 +659,14 @@ def main():
         rec = m.read(S("wm_wins") + bw * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
         pseg = u16(rec, 22)
         say("browser at %04X" % pseg)
+        browser_image_size = os.path.getsize(os88build.at("build/browser.bin"))
+
+        snapshots = {
+            "browser_open": {
+                "claims": claims(m, S),
+                "browser": browser_state(m, pseg, browser_image_size),
+            }
+        }
 
         # **THE BAR IS ALREADY FOCUSED AND ALREADY HOLDS `http://`** (SPEC.md
         # 71.7): the browser opens it that way ON PURPOSE, because the scheme
@@ -594,13 +687,103 @@ def main():
         subprocess.run(["python3", "tools/qmp.py", SOCK, "sendkey ret"],
                        check=True, capture_output=True)
 
-        img = os.path.getsize(os88build.at("build/browser.bin"))
-        os88qemu.acted(m, lambda: m.readseg(pseg, img + BR_NSTATE, 1)[0]
-                       in (BN_DONE, BN_ERR), secs=30, what="br_nstate",
+        wait_secs = 90 if len(page) > 32 * 1024 else 30
+        os88qemu.acted(m, lambda: m.readseg(pseg, browser_image_size + BR_NSTATE, 1)[0]
+                       in (BN_DONE, BN_ERR), secs=wait_secs, what="br_nstate",
                        poll=0.5)
-        nstate = m.readseg(pseg, img + BR_NSTATE, 1)[0]
-        nlines = u16(m.readseg(pseg, img + BR_NLINES, 2))
-        say("br_nstate = %d, br_nlines = %d" % (nstate, nlines))
+        nstate = m.readseg(pseg, browser_image_size + BR_NSTATE, 1)[0]
+        nlines = u16(m.readseg(pseg, browser_image_size + BR_NLINES, 2))
+        # This is deliberately the byte count the guest actually retained,
+        # not Content-Length from the host. It exposes a source cap that still
+        # lets the short prefix render and report BN_DONE.
+        bstate = browser_state(m, pseg, browser_image_size)
+        source_len = bstate["source_length"]
+        say("br_nstate = %d, br_nlines = %d, br_srclen = %d"
+            % (nstate, nlines, source_len))
+        snapshots["after_fetch"] = {
+            "claims": claims(m, S),
+            "browser": bstate,
+            "br_nstate": nstate,
+            "br_nlines": nlines,
+            "br_srclen": source_len,
+            "response_bytes": len(page),
+        }
+        if (a.expect_source_bytes is not None
+                and source_len != a.expect_source_bytes):
+            fails.append("the guest retained %d source bytes, expected %d"
+                         % (source_len, a.expect_source_bytes))
+        if (a.expect_source_capacity_kb is not None
+                and bstate["source_capacity_kb"] != a.expect_source_capacity_kb):
+            fails.append("the source claim is %d KiB, expected %d KiB"
+                         % (bstate["source_capacity_kb"],
+                            a.expect_source_capacity_kb))
+        if (a.expect_lines_at_least is not None
+                and nlines < a.expect_lines_at_least):
+            fails.append("layout reached %d lines, expected at least %d"
+                         % (nlines, a.expect_lines_at_least))
+        if a.expect_document_sentinel is not None:
+            needle = a.expect_document_sentinel.encode("ascii")
+            dseg = bstate["document_segment"]
+            dlen = bstate["document_length"]
+            chunks = []
+            for pos in range(0, dlen, 0x4000):
+                count = min(0x4000, dlen - pos)
+                seg = (dseg + (pos >> 4)) & 0xFFFF
+                chunks.append(m.readseg(seg, pos & 15, count))
+            if needle not in b"".join(chunks):
+                fails.append("formatted document is %d bytes but does not contain %r"
+                             % (dlen, needle))
+        if (a.page and a.expect_source_bytes is None and not a.allow_source_cutoff
+                and source_len != len(page)):
+            fails.append("the guest retained %d/%d source bytes"
+                         % (source_len, len(page)))
+        if a.allow_source_cutoff:
+            if not 0 < source_len < len(page):
+                fails.append("expected a non-empty source cutoff below %d bytes, got %d"
+                             % (len(page), source_len))
+            if bstate["source_capacity_kb"] * 1024 < source_len:
+                fails.append("the source claim is smaller than its retained byte count")
+            if bstate["parser_source_position"] != source_len:
+                fails.append("the parser stopped at %d after retaining %d bytes"
+                             % (bstate["parser_source_position"], source_len))
+            if not bstate["truncated"]:
+                fails.append("source growth was cut at %d bytes but the Browser "
+                             "did not mark the page truncated" % source_len)
+            msgptr = u16(m.readseg(pseg, browser_image_size + BR_NMSG, 2))
+            message = m.readseg(pseg, msgptr, 32).split(b"\0", 1)[0]
+            if message != b"Page truncated":
+                fails.append("source cutoff status is %r, expected 'Page truncated'"
+                             % message.decode("ascii", "replace"))
+        if a.page and os.path.basename(a.page) == "boundaryui100k.htm":
+            expected_links = ["/target/16k", "/target/72k"]
+            if bstate["link_hrefs"] != expected_links:
+                fails.append("the parser retained boundary hrefs %r, expected %r"
+                             % (bstate["link_hrefs"], expected_links))
+        if source_len > 65536 and source_len <= len(page):
+            # Every 64 KiB alias must contain its exact contiguous source
+            # window, not merely advance the logical receive counter. Verify
+            # both sides of each seam and the final bytes, including bank 2.
+            srcseg = bstate["source_segment"]
+            for boundary in range(65536, source_len, 65536):
+                before_seg = (srcseg + ((boundary - 65536) // 16)) & 0xFFFF
+                after_seg = (srcseg + (boundary // 16)) & 0xFFFF
+                before = m.readseg(before_seg, 0xFFF0, 16)
+                after = m.readseg(after_seg, 0, 16)
+                if before != page[boundary - 16:boundary]:
+                    fails.append("source bytes before the %d KiB alias boundary differ"
+                                 % (boundary // 1024))
+                if after != page[boundary:boundary + 16]:
+                    fails.append("source bytes after the %d KiB alias boundary differ"
+                                 % (boundary // 1024))
+            tail_bank, tailoff = divmod(source_len, 65536)
+            if tailoff >= 16:
+                tail_seg = (srcseg + (tail_bank * 0x1000)) & 0xFFFF
+                tail = m.readseg(tail_seg, tailoff - 16, 16)
+                if tail != page[source_len - 16:source_len]:
+                    fails.append("source bytes at the end of the final alias differ")
+            if bstate["parser_source_position"] != source_len:
+                fails.append("the parser stopped at logical source byte %d/%d"
+                             % (bstate["parser_source_position"], source_len))
         say("frames rx %d tx %d, segments %d, dropped %d, overruns %d"
             % (dw("eth_nrx"), dw("eth_ntx"), dw("eth_nseg"),
                dw("eth_ndrop"), dw("eth_novw")))
@@ -618,10 +801,17 @@ def main():
                          % dw("eth_novw"))
 
         if a.shot:
+            settle(m)
             subprocess.run(["python3", "tools/shot.py", SOCK, a.shot],
                            check=True)
             say("wrote %s" % a.shot)
     finally:
+        if a.snapshot:
+            os.makedirs(os.path.dirname(a.snapshot) or ".", exist_ok=True)
+            with open(a.snapshot, "w") as f:
+                json.dump(snapshots, f, indent=2)
+                f.write("\n")
+            say("wrote heap snapshot %s" % a.snapshot)
         if not a.keep:
             m.quit()
 

@@ -6851,6 +6851,15 @@ SOAK = [
         "page parses and RENDERS, and the location bar holds the file's URL",
         needs=("marty",), serial=True,
         wants=("build/brtest360.img",)),
+    Row("brarena", "soak", py("tests/brarena.py"), 180.0,
+        "BROWSER-MEMORY-ROADMAP: a local 3,000-line page grows the Browser's "
+        "line-index arena past 16 KiB in QEMU, without NE2000 traffic",
+        needs=("qemu",), serial=True, builds=True,
+        wants=("build/brtest360.img",)),
+    Row("brcapacity", "soak", py("tests/brcapacity.py"), 45.0,
+        "BROWSER-MEMORY-ROADMAP: a 200 KiB local source crosses the formatted "
+        "floor, then honors the conventional-memory reserve",
+        needs=("qemu",), serial=True, builds=True),
     Row("brclick", "soak", py("tests/brclick.py"), 300.0,
         "SPEC.md 71: the PAGE takes the mouse - links parse in order and "
         "underline, a click on a form field focuses it, the submit button "
@@ -13703,6 +13712,18 @@ SOAK = [
         "find is a row nobody runs.",
         needs=("qemu",), serial=True, builds=True,
         wants=("build/brtest360.img",)),
+    Row("brmem", "soak", py("tests/brmem.py"), 40.0,
+        "SPEC.md 71.18: a deterministic 40 KB page over the NE2000 grows the "
+        "source and document claims within the recorded 20% free-heap reserve, "
+        "then Note Pad must still open. QEMU is required for the NIC, not for "
+        "timing. This is separate from ethernet because a regular fetch never "
+        "crosses the old 32 KB source limit.",
+        needs=("qemu",), serial=True, builds=True,
+        wants=("build/brtest360.img",)),
+    Row("brcapacity-fixtures", "fast", py("tests/brcapacity.py"), 0.2,
+        "SPEC.md 71.18.1: the manual 96 KiB source/document, 2,200-row, "
+        "400-link, doubled-form and aggregate-frameset pages have the exact "
+        "sizes and counts the Browser capacity gate expects."),
     Row("netcoexist", "soak", py("tests/netcoexist.py"), 90.0,
         "SPEC.md 72.9.1 and 34.13.1: a network card and an MPU-401 in one "
         "machine. The field lost its network the moment an MPU was added: "

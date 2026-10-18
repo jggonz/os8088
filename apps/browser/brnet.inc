@@ -11,11 +11,10 @@
 ; verb is non-blocking (netpkg.inc), so the division is forced and is the
 ; right one anyway:
 ;
-;   the UI task  claims the SOURCE buffer and starts the fetch (br_go), out
-;                of a menu command, a Return in the location bar, or a form's
-;                Submit - all of which already run with the gfx lock held
-;   the worker   opens, polls, sends the request, drains the reply into the
-;                source claim, and posts a wake
+;   the UI task  claims the first 1 KiB of SOURCE and starts the fetch (br_go)
+;   the worker   opens, polls, sends the request and drains into the source
+;                claim; at its end it pauses and asks the UI task to grow it
+;   the UI task  grows by 4 KiB under br_memroom, then lets the worker resume
 ;   the UI task  cuts the source to the page and claims the other three
 ;                buffers from its size (br_netclaim, SPEC.md 71.14)
 ;   the worker   parses and repaints under the lock
@@ -23,7 +22,7 @@
 ; ...and a FRAMESET goes round once more (SPEC.md 71.15): its children are
 ; drained into the page's own buffers, which were cut to the frameset's size,
 ; so the worker posts [br_fin] = 4 instead of fetching the first child, the UI
-; task frees the document and line table, regrows the source to BR_MAXKB and
+; task frees the document and line table, regrows the source to 1 KiB and
 ; claims the two again from it (br_frameclaim - the link arena is KEPT, the
 ; queued frame srcs live there), and answers 5, on which br_nstep starts the
 ; first child. [br_fin] is 0 draining, 1 the page is in and the UI task owes
@@ -31,9 +30,13 @@
 ; the UI task owes a frameset's re-claim, 5 re-claimed - start the first child.
 ;
 ; **THE SOURCE CLAIM IS KEPT UNTIL THE NEXT LOAD**, as a file load keeps it:
-; File > Save As writes it. It is claimed at BR_MAXKB and cut to the page's own
-; size by br_netclaim, and given back by br_free_all at the start of whatever
-; is loaded next.
+; File > Save As writes it. The network claim starts at one KiB and grows in
+; the UI task only when full, through the first 96 KiB raw-source floor and
+; farther while br_memroom can preserve the load-start 20-percent reserve. The
+; receive counter and parser's logical cursor cross each 64 KiB alias. Parser
+; helpers see only bounded 48 KiB windows; document positions remain 16-bit.
+; br_netclaim cuts it to the received size; br_free_all returns it at the next
+; load.
 ;
 ; --- WHAT IS AND IS NOT PARSED ------------------------------------------------
 ; The status line's CODE is read, because 404 and 200 are different pages and
@@ -42,7 +45,7 @@
 ; the byte-by-byte scan writes into the source claim only once BN_BODY is
 ; reached, so the page starts at offset 0 by construction. Buffering the whole
 ; reply and moving the body down afterwards would have been a `rep movsb` of up
-; to BR_MAXKB for no gain.
+; to the entire response for no gain.
 ;
 ; No chunked encoding: HTTP/1.0 is what this asks for and a 1.0 server answers
 ; with a length or a close. 301/302/303/307/308 retain only Location and reuse
@@ -235,9 +238,12 @@ br_go:
                                     ; reported). One draw at the one place the
                                     ; text changes, which is here
     call br_free_all
-    mov ax, BR_MAXKB                ; claim only the source until the page arrives
+    call OSAPI_MEM_AVAIL
+    mov [br_membase], bx            ; conventional free total at this fetch's start
+    mov ax, 1                       ; claim a small source window; grow on demand
     call br_srcclaim
     jc .nomem
+    mov byte [br_memstop], 0
     mov byte [br_frameappend], 0
     mov byte [br_framecount], 0
     mov byte [br_frameidx], 0
@@ -257,6 +263,8 @@ br_go:
 .warned:
     mov byte [br_postwarn], 0
     mov [br_nlen], ax
+    mov word [br_nlen_hi], 0
+    mov word [br_srclen_hi], 0
     mov [br_fin], al                ; ...the hand-over (SPEC.md 71.14)
     mov [br_code], ax
     mov [br_trunc], al              ; ...the CUT flag, which br_parse clears on
@@ -494,6 +502,10 @@ br_nstep:
     je .kick                        ; re-claim, 5 re-claimed - start the first
     cmp al, 5                       ; child (SPEC.md 71.15)
     je .framestart
+    cmp al, 6                       ; UI task owns the source growth handshake
+    je .kick
+    cmp al, 7                       ; growth refused: drain and discard overflow
+    je .drain
     dec al
     jz .kick                        ; the wake was refused or not yet served
     call br_finish
@@ -567,9 +579,49 @@ br_nstep:
     jmp .redraw
 
 .drain:
+    ; Ask the driver for no more than the currently available source bytes.
+    ; When the extent fills, pause before the next receive so the UI task can
+    ; regrow the claim while no worker pointer into it is live.
+    cmp byte [br_fin], 7
+    je .drainonly
+    mov ax, [br_srckb]
+    mov cl, 6
+    shr ax, cl                      ; complete 64 KiB banks in the claim
+    cmp [br_nlen_hi], ax
+    ja .grow                        ; defensive: do not address past the claim
+    jb .bankfull
+    mov ax, [br_srckb]
+    and ax, 63                      ; final partial bank, in KiB
+    mov cl, 10
+    shl ax, cl
+    sub ax, [br_nlen]               ; bytes left in that final bank
+    jbe .grow
+    mov bx, ax
+    jmp short .roomcheck
+.bankfull:
+    xor bx, bx
+    sub bx, [br_nlen]               ; bytes to the next 64 KiB boundary
+    jnz .roomcheck
+    mov bx, BR_CHUNK                ; 65,536 cannot be represented in BX
+.roomcheck:
+    or bx, bx
+    jnz .recvroom
+.grow:
+    mov byte [br_fin], 6
+    mov bx, [br_win]
+    call OSAPI_WM_WAKE
+    jmp .out
+.recvroom:
+    mov cx, BR_CHUNK
+    cmp bx, cx
+    jae .recv
+    mov cx, bx
+    jmp short .recv
+.drainonly:
+    mov cx, BR_CHUNK                ; capacity refused: consume without storing
+.recv:
     mov al, [br_hnd]
     mov di, br_rxb
-    mov cx, BR_CHUNK
     mov bh, NET_CLASS
     mov bl, NETV_RECV
     call OSAPI_DRV_CALL
@@ -594,7 +646,7 @@ br_nstep:
     call br_hclose
     mov ax, [br_code]               ; **A REDIRECT IS DECIDED HERE, BEFORE THE
     cmp ax, 301                     ; HAND-OVER** (SPEC.md 71.15): the source
-    je .redirect                    ; is still the BR_MAXKB ceiling and nothing
+    je .redirect                    ; is still the live receive claim and nothing
     cmp ax, 302                     ; else has been claimed, so a hop neither
     je .redirect                    ; leaks a claim nor drains its target into
     cmp ax, 303                     ; one cut to the redirect body's size - and
@@ -605,7 +657,9 @@ br_nstep:
     je .redirect
     mov ax, [br_nlen]               ; **THE PAGE HAS ARRIVED, AND ITS SIZE IS
     mov [br_srclen], ax             ; A FACT** (SPEC.md 71.14): hand it to the
-    or ax, ax                       ; UI task, which cuts the source to it and
+    mov ax, [br_nlen_hi]
+    mov [br_srclen_hi], ax
+    or ax, [br_nlen]                ; UI task, which cuts the source to it and
     jz .empty                       ; claims the other three buffers from it -
     mov byte [br_fin], 1            ; a worker may not (SPEC.md 20.6 rule 7).
                                     ; The state stays BN_BODY, IN FLIGHT, so a
@@ -666,6 +720,7 @@ br_nstep:
     call br_split
     jc .redirunbad
     mov word [br_nlen], 0           ; per-fetch header state, as br_go sets it
+    mov word [br_nlen_hi], 0
     mov word [br_code], 0
     mov byte [br_trunc], 0
     mov word [br_hcol], 0
@@ -733,6 +788,7 @@ br_abort:
     inc byte [br_gen]               ; FIRST, and the order is the handshake:
     mov ax, [br_srclen]             ; ...then a parse in progress is STOPPED
     mov word [br_srclen], 0         ; - every bound br_parse tests is this
+    mov word [br_srclen_hi], 0
 .parse:                             ; word - and waited for, because the
     cmp byte [br_fin], 3            ; caller frees its buffers next (SPEC.md
     jne .parsed                     ; 71.14). br_finish stores 3 before it
@@ -740,6 +796,7 @@ br_abort:
     jmp short .parse                ; has not got there yet finds itself
 .parsed:                            ; superseded and never starts
     mov [br_srclen], ax             ; back: br_load reads it as the file's size
+    mov word [br_srclen_hi], 0
     call br_hclose
     xor ax, ax
     mov [br_nstate], al             ; BN_IDLE
@@ -902,12 +959,16 @@ br_take:
     push di
     push es
     push cx                         ; **THE CEILING IS THE CLAIM'S**, not the
-    mov bx, [br_srckb]              ; constant's, which is br_flushbuf's shape
-    mov cl, 10                      ; against [br_dockb]: a file load claims the
-    shl bx, cl                      ; FILE's size and nothing else here knows
-    dec bx                          ; that, so a fetch bounded on BR_MAXKB
-    pop cx                          ; writes past a smaller block
-    mov es, [br_srcseg]             ; ONCE - the claim is PINNED, so it cannot
+    pop cx                          ; br_nstep has bounded this receive to the
+                                    ; live source claim and never lets a chunk
+; cross its 64 KiB segment alias.
+    push cx                         ; CL is the shift count below, but CX is
+    mov ax, [br_nlen_hi]
+    mov cl, 12
+    shl ax, cl                      ; one segment paragraph window per 64 KiB
+    add ax, [br_srcseg]
+    pop cx                          ; NETV_RECV's byte count drives LOOP below
+    mov es, ax                      ; contiguous claim; its base is pinned
     mov dx, es                      ; move under us - and ZERO means br_go has
     or dx, dx                       ; freed it: segment 0 is the kernel image
     jz .done                        ; and every task's stack
@@ -932,21 +993,13 @@ br_take:
     call br_hdrb
     jmp short .step
 .body:
+    cmp byte [br_fin], 7            ; after a refused growth, drain and discard
+    je .step                        ; the rest of the body to close the socket
     mov di, [br_nlen]
-    cmp di, bx
-    jb .store
-    mov byte [br_trunc], 1          ; the ceiling: the page is TRUNCATED and
-    jmp short .step                 ; br_trunc is what says so on screen - it
-                                    ; is set HERE as well as in br_flushbuf,
-                                    ; because a reply cut at the ceiling used
-                                    ; to record nothing at all and the reader
-                                    ; got a page that stops mid-sentence under
-                                    ; a status line reading `Ready`. A browser
-                                    ; that stopped reading would leave the far
-                                    ; side driving a socket nobody is draining
-.store:
     mov [es:di], al
     inc word [br_nlen]
+    jnz .step
+    inc word [br_nlen_hi]
 .step:
     loop .next
 .done:
@@ -1110,8 +1163,35 @@ br_finish:
 .page:
     mov al, [br_trunc]              ; br_take's ceiling, BANKED ACROSS THE
     push ax                         ; PARSE: br_parse clears the flag on its
-    call br_parse                   ; way in and br_flushbuf may set it again,
-    pop ax                          ; so the two truncations are one answer
+                                    ; way in and br_flushbuf may set it again
+.parse:
+    call br_parse                   ; replay only when the UI grew the document
+    cmp byte [br_docfull], 0
+    je .parsedoc
+    cmp byte [br_frameappend], 0
+    jne .doccut                     ; an appended frame cannot replay alone
+    mov byte [br_fin], 8            ; UI task owns every claim and the regrow
+.docwake:
+    mov bx, [br_win]
+    call OSAPI_WM_WAKE              ; re-post if the event ring refused it
+    call br_gchk
+    jc .docabort
+    cmp byte [br_fin], 8
+    jne .docanswer
+    call OSAPI_TASK_YIELD
+    jmp short .docwake
+.docanswer:
+    cmp byte [br_fin], 9
+    jne .doccut                     ; 10 = growth was refused
+    mov byte [br_fin], 3
+    jmp short .parse                ; parser resets output and its side tables
+.docabort:
+    pop ax
+    jmp .drop
+.doccut:
+    mov byte [br_trunc], 1
+.parsedoc:
+    pop ax                          ; source and formatted-output cuts combine
     mov byte [br_fin], 0            ; ...over: a waiting UI task may free now
     call OSAPI_GFX_LOCK             ; and the rest is decided UNDER THE LOCK,
     call br_gchk                    ; which br_go runs under: a navigation
@@ -1119,6 +1199,7 @@ br_finish:
                                     ; it must not store BN_DONE over the new
                                     ; fetch's BN_OPEN or label its history
     or al, [br_trunc]
+    mov [br_trunc], al              ; keep either source or output truncation
     or [br_framecut], al
     cmp byte [br_frameappend], 0
     jne .framechild
@@ -1171,14 +1252,17 @@ br_finish:
 .framechild:
     cmp byte [br_framecut], 0
     jne .framedone                  ; stop fetching after the document ceiling
-    mov bx, [br_doclen]
-    or bx, bx
+    mov ax, [br_doclen]
+    mov dx, [br_doclen_hi]
+    or ax, dx
     jz .noend
-    dec bx
-    mov es, [br_docseg]
-    cmp byte [es:bx], D_END
+    sub ax, 1                       ; the sentinel is at the logical tail,
+    sbb dx, 0                       ; which may be above the 64 KiB seam
+    call br_docmap
+    cmp byte [es:di], D_END
     jne .noend
-    dec word [br_doclen]            ; remove this fragment's D_END
+    sub word [br_doclen], 1         ; remove this fragment's D_END
+    sbb word [br_doclen_hi], 0
 .noend:
     mov al, [br_frameidx]
     cmp al, [br_framecount]
@@ -1257,21 +1341,29 @@ br_finish:
 ; -----------------------------------------------------------------------------
 ; br_netclaim - the UI task's half of the hand-over (SPEC.md 71.14)
 ; Called from br_onwake when the worker has drained a page and set [br_fin] = 1.
-; Cuts the source claim to the page and claims the document, the line table and
-; the link arena from that size, then hands back to the worker with
+; Cuts the source claim to the page, starts document/layout storage at 1 KiB
+; each, then hands back to the worker with
 ; [br_fin] = 2. A refusal is the BN_ERR br_go used to give for the same claims.
 ; All registers preserved.
 ; -----------------------------------------------------------------------------
 br_netclaim:
     push ax
+    push bx
     push cx
     push dx
     cmp byte [br_frameappend], 0
     jne .claimed                     ; keep the existing page claims for frames
-    mov ax, [br_srclen]             ; br_load's own sizing: KB, plus one
+    mov ax, [br_srclen_hi]          ; ceil(DX:AX / 1024), without a 32-bit
+    mov cl, 6                       ; divide instruction on the 8086
+    shl ax, cl
+    mov bx, [br_srclen]
     mov cl, 10
-    shr ax, cl
+    shr bx, cl
+    add ax, bx
+    test word [br_srclen], 0x03FF
+    jz .sized
     inc ax
+.sized:
     mov dx, [br_srcseg]
     call OSAPI_MEM_REGROW           ; a SHRINK, which always succeeds in place
     jc .keep                        ; ...and if it did not, the ceiling stands
@@ -1290,6 +1382,7 @@ br_netclaim:
 .out:
     pop dx
     pop cx
+    pop bx
     pop ax
     ret
 
@@ -1393,6 +1486,7 @@ br_framefetch:
 .markers:
     call br_flushbuf
     mov word [br_nlen], 0
+    mov word [br_nlen_hi], 0
     mov word [br_code], 0
     mov byte [br_trunc], 0
     mov word [br_hcol], 0
@@ -1582,9 +1676,9 @@ br_status:
 br_s_get:    db 'GET ', 0
 br_r_post:   db 'POST ', 0
 br_s_http:   db ' HTTP/1.0', 13, 10, 'Host: ', 0
-br_s_tail:   db 13, 10, 'User-Agent: os8088 Browser 1.4', 13, 10
+br_s_tail:   db 13, 10, 'User-Agent: os8088 Browser 1.6', 13, 10
              db 'Connection: close', 13, 10, 13, 10, 0
-br_r_posttail: db 13, 10, 'User-Agent: os8088 Browser 1.4', 13, 10
+br_r_posttail: db 13, 10, 'User-Agent: os8088 Browser 1.6', 13, 10
                db 'Connection: close', 13, 10
                db 'Content-Type: application/x-www-form-urlencoded', 13, 10
                db 'Content-Length: ', 0

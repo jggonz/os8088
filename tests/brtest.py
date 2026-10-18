@@ -99,6 +99,38 @@ def main():
                      "did not resolve to BROWSER.O88" % args.page)
         say("browser window opened (%d windows now)" % len(wins2))
 
+        if args.page.upper() == "LINARENA.HTM":
+            rec = m.read(S("wm_wins") + wins2[-1] * dispcp.WIN_SIZE,
+                         dispcp.WIN_SIZE)
+            pseg = rec[22] | (rec[23] << 8)
+            image = os.path.getsize(os88build.at("build/browser.bin"))
+
+            def word(offset):
+                raw = m.readseg(pseg, image + offset, 2)
+                return raw[0] | (raw[1] << 8)
+
+            linecap_off = None
+            with open("build/browser.map", encoding="ascii") as f:
+                for line in f:
+                    fields = line.split()
+                    if len(fields) >= 3 and fields[-1] == "br_linecap":
+                        linecap_off = int(fields[0], 16) - image
+                        break
+            if linecap_off is None or linecap_off < 0:
+                sys.exit("brtest: br_linecap is missing from build/browser.map")
+            os88marty.until(m, lambda _m: word(38) >= 2750,
+                            "the 3,000-line document layout", limit=120)
+            line_count = word(38)
+            line_bytes = word(linecap_off)
+            docseg, doclen = word(26), word(36)
+            doc = m.readseg(docseg, 0, doclen)
+            say("line arena: %d bytes for %d lines; document %d bytes"
+                % (line_bytes, line_count, doclen))
+            if line_bytes <= 16 * 1024 or line_bytes < line_count * 10:
+                fails.append("line arena did not grow enough for its records")
+            if b"END OF 3000 LINE ARENA TEST" not in doc:
+                fails.append("the local formatted stream lost its final sentinel")
+
         # --- 1: it has to have DRAWN something -------------------------------
         # Without this the comparison below passes on a blank window: two
         # identical nothings differ by zero pixels, which is a check that

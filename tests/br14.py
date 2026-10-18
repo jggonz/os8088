@@ -55,17 +55,20 @@ def main():
             if value not in table_meta:
                 fails.append("missing packed cell metadata for " + label)
 
-        tab = bytes(m.readseg(rw("br_lseg"), 0, rw("br_nlines") * 6))
+        # Browser 1.6 widens document offsets to dwords and adds a byte to
+        # each line record. Keep this renderer regression independent of the
+        # current document's position in a conventional/EMS arena.
+        tab = bytes(m.readseg(rw("br_lseg"), 0, rw("br_nlines") * 10))
         rendered = []
         for i in range(rw("br_nlines")):
-            o = tab[i * 6] | (tab[i * 6 + 1] << 8)
-            e = tab[i * 6 + 2] | (tab[i * 6 + 3] << 8)
+            o = int.from_bytes(tab[i * 10:i * 10 + 4], "little")
+            e = int.from_bytes(tab[i * 10 + 4:i * 10 + 8], "little")
             line = []
             j = o
             while j < e:
                 b = doc[j]
                 if b == 14:
-                    j += 3
+                    j += 4
                     continue
                 j += 1
                 if b >= 0x20:

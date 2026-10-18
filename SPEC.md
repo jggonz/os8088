@@ -114703,9 +114703,30 @@ What a page holds while it is on screen, `eth.htm` (442 bytes) off the wire:
 links 1) - and the peak DURING a fetch is the 32KB source alone. A file load
 saves only the link arena's difference, its other three sizes being unchanged.
 
+**The line table is sized to the page, up to its existing 8KB ceiling.** A
+line-table record is six bytes, and no supported layout can emit more display
+lines than there are source bytes: text lines consume a source character,
+structural breaks consume their source markup, and a table's generated border
+rows are bounded by the row/cell markup they replace. `br_claimpage` therefore
+claims `min(BR_LINEKB, max(1, ceil(linebound * LN_SIZE / 1024)))` KB, where
+`linebound` is the exact source length already known on File > Open and
+completed network paths, or the source claim's full byte capacity when a
+launch association did not supply a length. The 8KB ceiling still admits
+1,365 lines; larger bounds keep that full ceiling. A frameset's re-claim uses
+the 32KB source ceiling because the combined child documents are not bounded
+by the frameset document's own source length. `br_lslot` checks the actual
+claim size, not the maximum.
+
+For `eth.htm`, 442 source bytes need at most 442 records, so the line claim is
+3KB instead of 8KB. Its retained page drops from 16KB to **11KB** (source 1,
+document 6, lines 3, links 1), with identical rendered lines and redraw
+behavior; the network-fetch peak remains the 32KB source claim. This is the
+8088/conventional-memory baseline. EMS and XMS remain optional stores for later
+image work, not dependencies of the page or line-table path.
+
 ### 71.15 Bounded compatibility for retro pages
 
-The Browser identifies itself as **os8088 Browser 1.4**. Its compatibility
+The Browser identifies itself as **os8088 Browser 1.5**. Its compatibility
 work stays within the existing page and link claims. HTTP redirects are limited
 to three hops, and a redirect is decided by the worker at the end of the drain,
 BEFORE the page buffers are claimed (71.14's hand-over): the source claim is
@@ -114735,7 +114756,7 @@ byte's values are therefore 0 draining, 1 the page is in and the UI task owes
 its claims, 2 claimed, 3 parsing, 4 the UI task owes a frameset's re-claim, 5
 re-claimed. A frameset costs what the largest page costs - 32 KB of source,
 the document claim sized from `BR_MAXKB` through `BR_DOCMUL`/`BR_DOCSLK` and
-capped at `BR_DOCMAX` (63 KB), `BR_LINEKB` (8 KB) of lines - plus the frameset
+capped at `BR_DOCMAX` (63 KB), `BR_LINEKB`'s full 8 KB ceiling of lines - plus the frameset
 page's own link arena, min(frameset KB, `BR_LINKKB` = 6) KB, which bounds the
 children's links together: `Links limited` is the visible refusal. Each child
 resolves into the location bar and `br_host`/`br_path`; when the last child is
@@ -114774,6 +114795,191 @@ retain one blank line between nonempty blocks; duplicate empty breaks are
 coalesced. Unsupported styling such as CSS, colors, and font sizes remains
 ignored, and application content is never rewritten outside the Browser's
 own document buffer.
+
+### 71.18 Browser 1.6 — adaptive page storage
+
+The page store grows with the page, subject to the machine's current claim
+heap and the Browser's 16-bit offsets. It does not reserve the old maximum for
+every response. The baseline 1.6 limits are 63 KB each for source and
+formatted document, 8 KB for line records, and the existing bounded link
+arena; no individual word-offset store may cross 64 KB. The source claim
+reserves one byte for its terminator, so it retains at most 64,511 response
+bytes. If a network source or formatted document reaches its bound, the
+retained prefix is displayed and the status field says `Truncated`. This is an
+address-representation limit, not a claim that HTTP replies are at most 63 KB.
+
+At the start of a navigation, after the previous page's claims are released,
+the UI task reads OSAPI_MEM_AVAIL and records a reserve equal to 20% of its
+reported total-free KB, rounded up. Growth of Browser page claims must leave at
+least that many conventional claim-heap KB free, based on a fresh query at
+each growth decision. The API's largest-run and total-free answers remain
+distinct: a request may still be refused because a suitable contiguous run
+cannot be formed. Every refusal is handled as a bounded, visible truncation
+or an ordinary allocation error; it must not spin, corrupt a claim, or block
+the UI. This is a Browser policy over the existing OS API; it does not change
+the system allocator or promise that later applications will fit.
+
+The network source begins with a 4 KB conventional claim. When the worker's
+current source capacity is exhausted, it stops receiving and posts a UI wake
+with the required next capacity. The UI task alone checks the reserve and
+regrows the claim, in increments no larger than 4 KB, up to 63 KB; it updates
+the base segment before answering the worker. A refused growth ends the drain
+at the last byte received and marks the page truncated. The worker never
+claims, regrows, frees or remaps page memory, and never receives into a claim
+while the UI task changes that claim. A navigation or close superseding the
+request invalidates the growth request before freeing the source.
+
+For an ordinary page, the formatted document starts at a bounded estimate: at
+least 4 KB, roughly a quarter of the source capacity plus 2 KB, and no more
+than 16 KB initially. It grows by doubling, capped at 63 KB. When a parse
+reaches its output capacity, the worker asks the UI task to grow the claim
+while its parse stack is parked at a pass boundary. On success, the worker
+repeats the bounded parse from retained source; parser side tables are reset
+by that pass. If growth is refused, the retained output prefix remains
+displayable and the page is marked truncated. A frameset keeps the existing
+63 KB aggregate document claim because child documents append into one stream
+and cannot replay independently. The line table retains §71.14's source-sized
+estimate and existing 8 KB ceiling in this step; when that table cannot fit
+above the reserve, the load fails visibly instead of silently shortening the
+page. Source and
+document growth use the reserve rule and the existing UI/worker lifetime
+handshake. Growth is capped by the representable offset, and every retry must
+make progress or terminate visibly.
+
+A file whose size is known may claim its rounded source size directly, subject
+to the same reserve and representable ceiling. A larger file is refused before
+read I/O or opened only through the bounded source prefix path; the choice is
+visible and must never wrap a word-sized byte count.
+
+EMS and XMS are optional stores, not prerequisites. EMS may back a page only
+through DRVC_EMS's owned 16 KB pages and mapped frame quarters; a frame is
+usable only while those quarters remain owned by the Browser instance. XMS
+addresses are opaque and every transfer uses OSAPI_XMEM_COPY. A backend
+must fall back to conventional storage if unavailable or refused, and must
+show a measured reduction in conventional pressure before it is enabled by
+default. EMS/XMS capacity does not relax the 16-bit per-store limits above.
+No kernel or driver change is implied by this package contract.
+
+The acceptance fixture is a deterministic 40 KB response over QEMU's NE2000
+path, plus a second launchable app. It checks the exact retained source length,
+truncation/capacity verdict, formatted bytes and lines, the grown document
+claim, the recorded 20% reserve, and a navigation superseding a pending
+growth. A 60 KB fixture verifies the last fully retained source range; a
+larger fixture verifies the 64,511-byte prefix and visible `Truncated` status.
+The same rendered output must match the conventional baseline for pages that
+fit without growth. QEMU supplies network-card behavior only; timing claims
+belong to an 8088-capable emulator or field machine.
+
+#### 71.18.1 The 1.6 capacity target — three times the 32 KiB baseline
+
+The original source ceiling was 32 KiB (32,767 retained response bytes). The
+1.6 completion target is 96 KiB (98,304 bytes) of logical source and 96 KiB of
+logical formatted document, independently bounded and subject to the existing
+20% conventional free-heap reserve. Network responses, known-size local files,
+and a frameset's aggregate child output use the same logical ceilings. A page
+may stop below either ceiling only when its reserve or allocation check
+requires it; then the complete retained prefix is rendered and `Truncated` is
+reported.
+
+No individual conventional claim may cross the 16-bit segment boundary. The
+Browser must represent a larger logical source/document as multiple bounded
+claims and carry a claim selector with every logical offset. Source, document,
+selection, form-field, link, and line-table offsets must not silently wrap at
+64 KiB. EMS/XMS remains optional and cannot be required to reach the 96 KiB
+target. The Browser performs no kernel or driver changes.
+
+The line table grows from 8 KiB to at most 16 KiB (2,730 six-byte line
+records), still governed by the reserve. A page requiring more rows keeps a
+valid prefix and reports truncation; the layout pass must not monopolize the
+graphics lock for a whole large document. It works in bounded background
+slices, checks navigation generation and window width between slices, and
+holds the page-buffer ownership handshake until its completed line table is
+published.
+
+The 6 KiB link arena doubles to 12 KiB and the page link count to 400. Link
+indices therefore use three nibble payload bytes after `D_LNK1`, each in the
+16..31 range already reserved for marker payload, so every document walker
+can distinguish payload from control markers. The arena and link count remain
+independently bounded: a page that exhausts either keeps its text and reports
+the existing link-limit status.
+
+Form capacities double where they count entries: eight forms, 24 visible
+controls, eight submit controls, and 96 hidden name/value pairs per form.
+Existing per-string limits (action, name, value, and composed URL lengths) do
+not change. Exceeding a count remains a bounded omission, not a memory write
+past the corresponding table.
+
+The capacity gate serves separate deterministic pages for a 96 KiB raw source,
+a 96 KiB formatted document, more than 1,365 but no more than 2,730 layout
+rows, 400 links with working links on both sides of index 255, and the doubled
+form counts including 96 hidden pairs. It also exercises a local 96 KiB file
+and a frameset whose children approach the aggregate document ceiling. The
+test checks exact retained lengths, the final visible marker, no wrapped
+offsets, and another application's ability to launch above the reserve. Run
+the network cases through QEMU/NE2000 for correctness and the local fixtures
+through MartyPC or 86Box for 8088 responsiveness; QEMU provides no timing
+claim.
+
+### 71.20 Browser 1.6b — streamed downloads and the Download Manager
+
+Downloads are a separate sink from the retained page source. Saving a link
+must not first fetch the response into the Browser's HTML claim, because a
+binary response may be larger than the page store and is not parsed or
+rendered. The Browser opens its Download Manager window and asks the existing
+Save dialog for an 8.3 destination. The Browser remains usable while the
+transfer runs. This first version permits one active transfer per Browser
+instance; another Save Link As request while it is active reports that the
+manager is busy rather than replacing or corrupting the current destination.
+
+The manager owns one transfer record: resolved HTTP URL, destination name,
+socket handle, stream token, transfer state, and a 32-bit received-byte count.
+The record distinguishes connecting, receiving, complete, failed, and
+cancelled. The window shows the name, current state, and byte count; when a
+valid Content-Length is present it also shows the total. Cancel closes the
+socket and closes the file stream, committing the complete clusters already
+received. The partial file remains on disk with its current byte count shown;
+the Browser never launches it automatically. A second transfer starts only
+after the current one is terminal.
+
+The network worker owns socket calls and receives body data into a temporary
+buffer sized to one destination cluster. It parses and discards HTTP headers,
+follows the same bounded redirect set as page navigation, and treats the
+response body as opaque bytes. HTTP/1.0 close-delimited bodies and a valid
+Content-Length are supported. Chunked transfer encoding, TLS, and malformed
+or conflicting lengths are refused visibly. The worker never calls a file or
+memory API. For each full cluster, it parks at a wake boundary and lets the UI
+task write that cluster through `OSAPI_FILE_WRITE_SEQ`; the worker cannot
+overwrite the buffer until the UI acknowledges the write. The UI task alone
+creates the empty destination, owns the write token, closes the stream, and
+frees the temporary buffer. Every stale wake is checked against the download
+generation before touching a buffer or file.
+
+The staging claim is acquired only after the destination dialog returns. Its
+size is the destination volume's cluster size, derived from
+`OSAPI_FILE_DFREE`; it is bounded by the current Browser memory reserve and
+freed at every terminal path. This avoids imposing a fixed multi-kilobyte
+buffer on every Browser instance and ensures writes meet the file API's
+cluster rule. A volume whose cluster cannot be claimed is refused before the
+socket opens. Disk-full, write, receive, redirect, cancel, and close failures
+must close the stream and socket exactly once, preserve the already committed
+prefix, release the staging claim, and leave the Browser page intact.
+
+Save Link As is offered only for a resolved `http://` link. It uses the
+existing instance-scoped file dialog for destination selection; local
+directory browsing remains the dialog's responsibility, and the Browser does
+not change another app's directory. Save Image As is deferred until 1.7 adds
+image source handling. The Download Manager is a second Browser-owned window,
+not a second package or a kernel service, so it shares the instance's worker,
+network configuration, and bounded transfer state without introducing IPC or
+an OS/driver change.
+
+The gate uses a deterministic NE2000 HTTP server that serves a binary body
+larger than the Browser page cap. It checks byte-for-byte output, no page
+truncation or page replacement, progress totals with and without
+Content-Length, redirect handling, cancellation at a cluster boundary,
+disk-full failure, busy refusal, and release of the staging claim and socket
+on every terminal path. A later launch opens the downloaded file through the
+existing file association to verify exact bytes independently.
 
 ### 71.17 Browser 1.4 — table spans, cell alignment and form POST
 

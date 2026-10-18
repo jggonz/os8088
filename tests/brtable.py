@@ -52,6 +52,7 @@ from brclick import browser_syms, MACHINE              # noqa: E402
 
 S = os88sym.linear
 u16 = lambda b: b[0] | (b[1] << 8)                     # noqa: E731
+u32 = lambda b: u16(b[:2]) | (u16(b[2:4]) << 16)      # noqa: E731
 
 D_LNK1, D_LNK0 = 14, 15
 LNF_RULE, LNF_LNK = 1, 4
@@ -78,8 +79,8 @@ def render(doc, tab, i):
     """br_build's walk, in Python: the text of display line `i` and, per cell,
     whether it is inside a link. The hit test and the underline are both this
     state, so a cell's mark IS the claim `a link in a cell works`."""
-    o, e = u16(tab[i * 6:i * 6 + 2]), u16(tab[i * 6 + 2:i * 6 + 4])
-    col, fl = tab[i * 6 + 4], tab[i * 6 + 5]
+    o, e = u32(tab[i * 10:i * 10 + 4]), u32(tab[i * 10 + 4:i * 10 + 8])
+    col, fl = tab[i * 10 + 8], tab[i * 10 + 9]
     if fl & LNF_RULE:
         return "-" * 60, []
     text, mark = " " * col, [0] * col
@@ -89,7 +90,7 @@ def render(doc, tab, i):
         ch = doc[j]
         if ch == D_LNK1:
             inlink = 1
-            j += 3                                     # ...and its payload
+            j += 4                                     # ...and its payload
             continue
         j += 1
         if ch == D_LNK0:
@@ -142,7 +143,7 @@ def main():
         docseg, doclen = rw("br_docseg"), rw("br_doclen")
         comp = rw("br_comp")                            # the composed rows sit
         doc = bytes(m.readseg(docseg, 0, max(comp, doclen) + 16))
-        tab = bytes(m.readseg(rw("br_lseg"), 0, nl * 6))
+        tab = bytes(m.readseg(rw("br_lseg"), 0, nl * 10))
         lines = [render(doc, tab, i) for i in range(nl)]
         say("%d display lines:" % nl)
         for i, (t, _) in enumerate(lines):
@@ -172,7 +173,7 @@ def main():
         # span. A blank line is 0..0 twice over legitimately, so text only.
         spans = {}
         for i in range(nl):
-            o, e = u16(tab[i * 6:i * 6 + 2]), u16(tab[i * 6 + 2:i * 6 + 4])
+            o, e = u32(tab[i * 10:i * 10 + 4]), u32(tab[i * 10 + 4:i * 10 + 8])
             if e > o:
                 spans.setdefault(o, []).append(i)
         dup = {o: v for o, v in spans.items() if len(v) > 1}
@@ -225,22 +226,22 @@ def main():
         # --- the aiming machinery, from brclick -------------------------
         def line_of(off):
             for i in range(nl):
-                o, e = u16(tab[i * 6:i * 6 + 2]), u16(tab[i * 6 + 2:i * 6 + 4])
+                o, e = u32(tab[i * 10:i * 10 + 4]), u32(tab[i * 10 + 4:i * 10 + 8])
                 if o <= off < e:
                     return i
             return None
 
         def column_of(line, off):
-            o = u16(tab[line * 6:line * 6 + 2])
-            col = tab[line * 6 + 4]
-            e = u16(tab[line * 6 + 2:line * 6 + 4])
+            o = u32(tab[line * 10:line * 10 + 4])
+            col = tab[line * 10 + 8]
+            e = u32(tab[line * 10 + 4:line * 10 + 8])
             i = o
             while i < e:
                 if i == off:
                     return col
                 ch = doc[i]
                 if ch == D_LNK1:
-                    i += 3
+                    i += 4
                     continue
                 i += 1
                 if ch < 0x20:
@@ -271,13 +272,14 @@ def main():
             searching the parsed document alone finds the original, which is
             on no display line at all.
             """
-            marker = bytes([D_LNK1, 0x10 | (idx & 15), 0x10 | (idx >> 4)])
+            marker = bytes([D_LNK1, 0x10 | (idx & 15),
+                            0x10 | ((idx >> 4) & 15), 0x10 | (idx >> 8)])
             at, ln = -1, None
             while True:
                 at = doc.find(marker, at + 1)
                 if at < 0:
                     break
-                ln = line_of(at + 3)
+                ln = line_of(at + 4)
                 if ln is not None:
                     break
             if at < 0:
@@ -287,7 +289,7 @@ def main():
                 return "link %d's text is on no display line" % idx
             if not goto(ln):
                 return "could not scroll display line %d into view" % ln
-            col = column_of(ln, at + 3)
+            col = column_of(ln, at + 4)
             if col is None:
                 return "link %d's first byte is in no cell" % idx
             os88marty.settle(m)
