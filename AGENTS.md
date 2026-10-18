@@ -322,7 +322,7 @@ make apple2disk #   an Apple II Plus — a 6502 in a 48K claim, the II+'s video
 make weave      # WEAVE (WEAVE-SPEC §1.2), the family's runtime: web-style
 make weavedisk  #   apps - markup, script and formulas - compiled at pack time
                 #   into one `.WAB` bundle and interpreted natively. `make
-                #   weavedisk` builds the family's floppy in all three
+                #   weavedisk` builds the family's floppy in all four
                 #   geometries: the runtime (its overlay and its canvas
                 #   core, WEAVE-SPEC §1.2.2, are PARTS of WEAVE.O88), the
                 #   three demo bundles, LOOM (its overlay and its preview
@@ -343,9 +343,10 @@ make loom       # LOOM (WEAVE-SPEC §1.2), the family's second package: the
 make loomdisk   #   in-OS IDE that edits a project's sources and packs the
                 #   `.WAB` ON THE MACHINE, byte-identical to what
                 #   `tools/weavesim.py --pack` writes on the host. That
-                #   identity IS the gate (WEAVE-SPEC §11.1): `make` runs the
-                #   host half of it every time (the `lmpack` row, four
-                #   seconds), and `python3 tools/os88test.py soak -k
+                #   identity IS the gate (WEAVE-SPEC §11.1): the host half
+                #   is `soak -k 'lmpack'` (six seconds; it was a fast row
+                #   until the family stopped charging every build for two
+                #   packages) and `python3 tools/os88test.py soak -k
                 #   'weave*'` runs the machine's. `make loomdisk` puts both
                 #   packages (each one file, its modules inside it), the
                 #   demo bundles and the demo SOURCES on one floppy in all
@@ -400,6 +401,13 @@ make thewiretest # THE WIRE'S GATE DISKS (§92.12): ethertest's shape plus one
                 #   a SCRATCH image of its own because Add to Disk WRITES.
                 #   `make thewiretest && python3 tests/thewire.py`. QEMU by
                 #   name, for tests/ethernet.py's reason: MartyPC has no NIC
+make autostarttest # THE AUTOSTART GATE'S DISKS (SPEC.md 26.10): a 360KB system
+              #   disk whose \AUTOSTRT holds a link to the Task Manager, one
+              #   with a wrong version and a file that is not a link, plus a
+              #   B: of its own with the Calculator and room, because the
+              #   Alt-drop leg WRITES a link there and the shipped apps disk
+              #   is a cluster from full. `make autostarttest && python3
+              #   tests/autostart.py`
 make ethertest  # THE ETHERNET GATE'S DISK (§72.9): a SYSTEM.CFG that already
                 #   asks for ETHER.DRV, so the card is up and DHCP has run
                 #   before the first paint and the test reads state instead of
@@ -484,6 +492,28 @@ make emu      # THE THIRD KERNEL (§9.11.7): kern_emu, into build/emuk/, plus
               #   the one feature it was built for has been given nothing.
               #   Pair it with the SHIPPED build/apps.img: same API table, same
               #   offsets, so there is no emu apps disk and must not be
+make rom      # THE KERNEL IN ROM (SPEC.md 2.10, docs/plans/ROM-PLAN.md): an
+make socketrom#   IBM 5150's five spare sockets, U28-U32 at F4000-FDFFF, as
+              #   ONE option ROM, written into build/rom/ as the 40KB window
+              #   and one 8KB file per socket. ON DEMAND and never in `all`:
+              #   a ROM is cut per release, not per build. `rom` is both
+              #   kernels' (`rom-big`, `rom-small`), because a ROM is cut
+              #   against ONE kernel and refuses every other - it checks
+              #   `.cold` byte for byte and a hash over `.text` before it
+              #   touches anything. Every shipped disk FINDS its ROM at boot
+              #   and boots the same without one; with one, `.cold` runs from
+              #   F400 and the heap floor falls by the cold rung `kernsize`
+              #   prints - 37.0KB on kern_big and 21.5KB on kern_small at
+              #   this writing - and kern_small's ROM also carries the
+              #   Standard File dialog, Cut/Copy/Paste, the Control Panel and
+              #   the formatter, so none of them needs the system disk in a
+              #   drive (SPEC.md 2.10.5). Build it from the tree whose disks
+              #   it will meet: a ROM from yesterday's tree is a ROM for
+              #   yesterday's disks.
+              #   `socketrom` has no os8088 in it at all - a pattern and an
+              #   init that print `U28 ok ... U32 ok` at POST: flash it first
+              #   on any new board or wiring. tests/romsock.py, romsmall.py
+              #   and rombig.py are the gates
 make allapps  # THE EVERYTHING SET (§19.10): build/apps-all-1.img, -2.img, ...
               #   (and apps-all-120-N.img at 1.2MB), every app on as many
               #   floppies as it takes - tools/os88allapps.py adds a disk when
@@ -836,16 +866,16 @@ whose `LESSONS.md` is what MIDIRack's (SPEC.md §105.9.4, §105.9.5) learned.
   the test may grow `.text`/`.cold`, and moving code to `.cold` or the boot
   overlay relieves `KERN_CODE_MAX` but not `KERN_BUDGET` — a module relieves
   both. Check `tools/kernsize.py` before and after: a byte costs a byte.
-  **"Freed when it is done" is GATED**: `tests/unit/t_moddrop.py` (fast)
-  fails `make` for a `mod_tab` row nothing drops, unless
-  `tests/moddrop.txt` says why it is held until restart - `DESK.DRV` held
-  5KB pinned after the last Sticky App closed, until SPEC.md 11.103.10's
-  drop rule. A new module needs its drop on the day it lands.
   **docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md is what the mechanism
   REFUSES**, and it refused two of four candidates: `mod_need`'s own transitive
   cone is 155 symbols in 7 files, so a module inside it must be gated rather
   than moved. There is no entry cap (§2.8.1): a module's slot block is its
   own entry count.
+  **"Freed when it is done" is GATED**: `tests/unit/t_moddrop.py` (fast)
+  fails `make` for a `mod_tab` row nothing drops, unless
+  `tests/moddrop.txt` says why it is held until restart - `DESK.DRV` held
+  5KB pinned after the last Sticky App closed, until SPEC.md 11.103.10's
+  drop rule. A new module needs its drop on the day it lands.
 - **An ABI change is a written decision** (§20.2.0.1). `PKG_FMT` and
   `DRV_VER` are locked in `tools/abi.lock.json` to a fingerprint of
   `apps/os88api.inc` and `drivers/os88drv.inc`, and `make` fails when the SDK
