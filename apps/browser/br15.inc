@@ -16,6 +16,7 @@ BR_BMREC       equ br_bmdata + BR_BMHEADER
 BR_CTXPAD      equ 4               ; two pixels either side of the widest label
 BR_CTXH        equ 28
 BR_CTXH_COPY   equ 16
+BR_CTXH_LINK   equ 40
 BR_CTXGAP      equ 18              ; keep the cursor glyph clear of the frame
 BR_STARW       equ 16
 
@@ -31,6 +32,7 @@ br_s_bmtoggling: db 'Updating bookmark...', 0
 br_s_copied:   db 'Link copied', 0
 br_s_ctxopen:  db 'Open Link', 0
 br_s_ctxcopy:  db 'Copy Link', 0
+br_s_ctxdl:    db 'Save Link As...', 0
 br_s_ctxselcopy: db 'Copy', 0
 br_s_ctxsave:  db 'Save Page As...', 0
 br_s_ctxview:  db 'View Source', 0
@@ -66,21 +68,14 @@ br_selclear:
 .out:
     ret
 
-; --- right-click retains a selection in the one-item Copy popup; otherwise it
-; opens the page/link popup at the pointer. The shared WM right-click API remains.
+; --- A link under the pointer takes priority; otherwise a retained selection
+; gets its one-item Copy popup. The shared WM right-click API remains.
 br_onrclk:
-    cmp byte [br_selkind], 0
-    je .page
-    mov [br_ctxpx], cx
-    mov [br_ctxpy], dx
-    mov byte [br_ctxkind], 2
-    jmp br_ctxshow
-.page:
     mov [br_ctxpx], cx
     mov [br_ctxpy], dx
     jmp br_ctxshow
 
-; --- frame and place the two-item context panel inside the current band ------
+; --- frame and place the context panel inside the current band --------------
 br_ctxshow:
     push ax
     push bx
@@ -103,20 +98,24 @@ br_ctxshow:
     mov byte [br_ctxkind], 0
     mov byte [br_ctxh], BR_CTXH
     mov word [br_ctxlink], 0FFFFh
-    cmp byte [br_selkind], 0
-    je .hit
-    mov byte [br_ctxkind], 2
-    mov byte [br_ctxh], BR_CTXH_COPY
-    jmp short .measure
+    ; Resolve the pointer first. A retained text selection must not mask the
+    ; link-specific actions when the user right-clicks directly on a link.
 .hit:
     mov cx, [br_ctxpx]
     mov dx, [br_ctxpy]
     call br_hitofs
-    jc .measure
+    jc .selection
     call br_linkat
-    jc .measure
+    jc .selection
     mov [br_ctxlink], ax
     mov byte [br_ctxkind], 1
+    mov byte [br_ctxh], BR_CTXH_LINK
+    jmp .measure
+.selection:
+    cmp byte [br_selkind], 0
+    je .measure
+    mov byte [br_ctxkind], 2
+    mov byte [br_ctxh], BR_CTXH_COPY
 .measure:
     ; Size each popup from its actual longest label. The old per-kind fixed
     ; widths left a broad empty strip beside short menu text.
@@ -131,7 +130,7 @@ br_ctxshow:
     jne .measureclose
     mov si, br_s_ctxview
     call OSAPI_FONT_WIDTH
-    jmp short .measuremax
+    jmp .measuremax
 .measureclose:
     mov si, br_s_ctxclose
     call OSAPI_FONT_WIDTH
@@ -139,7 +138,7 @@ br_ctxshow:
     cmp ax, di
     jae .measurepad
     mov ax, di
-    jmp short .measurepad
+    jmp .measurepad
 .measurelink:
     mov si, br_s_ctxopen
     call OSAPI_FONT_WIDTH
@@ -147,9 +146,15 @@ br_ctxshow:
     mov si, br_s_ctxcopy
     call OSAPI_FONT_WIDTH
     cmp ax, di
+    jb .measurelinkdl
+    mov di, ax
+.measurelinkdl:
+    mov si, br_s_ctxdl
+    call OSAPI_FONT_WIDTH
+    cmp ax, di
     jae .measurepad
     mov ax, di
-    jmp short .measurepad
+    jmp .measurepad
 .measurecopy:
     mov si, br_s_ctxselcopy
     call OSAPI_FONT_WIDTH
@@ -331,7 +336,7 @@ br_ctxdraw:
     mov si, br_s_ctxselcopy
     mov ax, (CWHITE << 8) | CBLACK
     call OSAPI_FONT_RUN
-    jmp short .out
+    jmp .out
 .tworow:
     add dx, 2
     cmp byte [br_ctxkind], 0
@@ -348,12 +353,12 @@ br_ctxdraw:
     mov si, br_s_ctxview
     mov ax, (CWHITE << 8) | CBLACK
     call OSAPI_FONT_RUN
-    jmp short .out
+    jmp .out
 .close_source:
     mov si, br_s_ctxclose
     mov ax, (CWHITE << 8) | CBLACK
     call OSAPI_FONT_RUN
-    jmp short .out
+    jmp .out
 .link:
     mov si, br_s_ctxopen
     mov ax, (CWHITE << 8) | CBLACK
@@ -363,6 +368,13 @@ br_ctxdraw:
     mov dx, [br_ctxpy]
     add dx, 14
     mov si, br_s_ctxcopy
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
+    mov cx, [br_ctxpx]
+    add cx, 2
+    mov dx, [br_ctxpy]
+    add dx, 26
+    mov si, br_s_ctxdl
     mov ax, (CWHITE << 8) | CBLACK
     call OSAPI_FONT_RUN
 .out:
@@ -413,8 +425,16 @@ br_ctxclick:
     add ax, 13
     cmp dx, ax
     jb .first
+    cmp byte [br_ctxkind], 1
+    jne .second
+    add ax, 13
+    cmp dx, ax
+    jb .second
+    mov al, 2
+    jmp .action
+.second:
     mov al, 1
-    jmp short .action
+    jmp .action
 .first:
     xor al, al
 .action:
@@ -428,26 +448,32 @@ br_ctxclick:
     cmp byte [br_ctxclickitem], 0
     jne .source
     call br_saveas
-    jmp short .consumed
+    jmp .consumed
 .source:
     call br_sourcetoggle
-    jmp short .consumed
+    jmp .consumed
 .link:
+    cmp byte [br_ctxclickitem], 2
+    je .download
     cmp byte [br_ctxclickitem], 0
     jne .copylink
     mov ax, [br_ctxlink]
     call br_follow
-    jmp short .consumed
+    jmp .consumed
 .copylink:
     call br_ctxcopylink
-    jmp short .consumed
+    jmp .consumed
+.download:
+    mov ax, [br_ctxlink]
+    call br_dl_link
+    jmp .consumed
 .copyselection:
     mov byte [br_ctxopen], 0
     call br_ctxerase
     call br_paint_band
     call br_sbar
     call br_copyselection
-    jmp short .consumed
+    jmp .consumed
 .dismiss:
     mov byte [br_ctxopen], 0
     call br_ctxerase
@@ -515,7 +541,7 @@ br_ctxcopylink:
     je .put
     inc si
     inc cx
-    jmp short .len
+    jmp .len
 .put:
     sub si, cx
     call OSAPI_CLIP_PUT
@@ -570,7 +596,7 @@ br_bmrefresh:
     add ax, BR_BMHEADER
     cmp ax, [br_copycap]
     ja .empty
-    jmp short .done
+    jmp .done
 .empty:
     push es
     push ds
@@ -618,7 +644,7 @@ br_bmmenuset:
     inc bx
     loop .item
     mov [BR_BMNITEM], bx
-    jmp short .out
+    jmp .out
 .none:
     mov word [br_bmitems], br_it_bmnone
     mov word [BR_BMNITEM], 1
@@ -681,14 +707,14 @@ br_bmfind:
     jz .found
     inc si
     inc di
-    jmp short .cmp
+    jmp .cmp
 .different:
     inc bx
-    jmp short .next
+    jmp .next
 .found:
     mov ax, bx
     clc
-    jmp short .out
+    jmp .out
 .miss:
     stc
 .out:
@@ -758,7 +784,7 @@ br_stardraw:
     cmp byte [br_bmsaved], 0
     jne .filled
     mov si, br_star_empty
-    jmp short .draw
+    jmp .draw
 .filled:
     mov si, br_star_full
 .draw:
@@ -826,10 +852,10 @@ br_bmrequest:
     jne .wantremove
     mov byte [br_bmsaved], 1       ; immediate feedback while the file is saved
     mov word [br_nmsg], br_s_bmsaving
-    jmp short .wantdraw
+    jmp .wantdraw
 .toggle:
     mov word [br_nmsg], br_s_bmtoggling
-    jmp short .wantdraw
+    jmp .wantdraw
 .wantremove:
     mov byte [br_bmsaved], 0
     mov word [br_nmsg], br_s_bmremoving
@@ -871,13 +897,13 @@ br_bmrequest:
     pop si
     pop cx
     pop ax
-    jmp short .post
+    jmp .post
 .post:
     call br_bmpost
     ret
 .refresh:
     mov byte [br_bmrefreshreq], 1
-    jmp short .post
+    jmp .post
 
 ; Called only from locked UI callbacks; W_ONWAKE records the redraw debt.
 br_bmredrawnow:
@@ -952,7 +978,7 @@ br_bmservice:
     cmp byte [br_bmsaved], 0
     je .toggle_add
     mov byte [br_bmopwork], 2
-    jmp short .decide
+    jmp .decide
 .toggle_add:
     mov byte [br_bmopwork], 1
 .decide:
@@ -965,7 +991,7 @@ br_bmservice:
     call br_bmwrite
     jc .failed
     mov word [br_nmsg], br_s_bmsaved
-    jmp short .success
+    jmp .success
 .remove:
     cmp byte [br_bmsaved], 0
     je .restore
@@ -975,7 +1001,7 @@ br_bmservice:
     mov word [br_nmsg], br_s_bmremoved
 .success:
     mov byte [br_nstate], BN_DONE
-    jmp short .restore
+    jmp .restore
 .failed:
     call br_bmrefresh
     mov word [br_nmsg], br_s_bmfail
@@ -1106,7 +1132,7 @@ br_copyz:
     jz .zero
     stosb
     loop .copy
-    jmp short .done
+    jmp .done
 .zero:
     stosb
     dec cx
@@ -1171,17 +1197,17 @@ br_sourcetoggle:
     jb .replace
     cmp al, 126
     ja .replace
-    jmp short .emit
+    jmp .emit
 .space:
     mov al, ' '
-    jmp short .emit
+    jmp .emit
 .replace:
     mov al, '?'
 .emit:
     mov dx, [br_ctxpy]
     mov es, dx
     stosb
-    jmp short .raw
+    jmp .raw
 .newline:
     cmp al, 13
     jne .line
@@ -1195,14 +1221,14 @@ br_sourcetoggle:
     mov dx, [br_ctxpy]
     mov es, dx
     stosb
-    jmp short .raw
+    jmp .raw
 .endraw:
     mov al, D_END
     mov dx, [br_ctxpy]
     mov es, dx
     stosb
     mov [br_doclen], di
-    jmp short .layout
+    jmp .layout
 .rendered:
     mov byte [br_viewsrc], 0
     call br_parse
@@ -1215,7 +1241,7 @@ br_sourcetoggle:
     call br_paint_band
     call br_sbar
     call br_settitle
-    jmp short .out
+    jmp .out
 .none:
     mov word [br_nmsg], br_s_srcnone
 .out:
@@ -1256,7 +1282,7 @@ br_settitle:
     mov cx, br_s_titlesfx_end - br_s_titlesfx
     rep movsb
     mov ax, br_wtitle
-    jmp short .title
+    jmp .title
 .default:
     mov ax, br_s_webbrowser
 .title:

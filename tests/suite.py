@@ -13712,6 +13712,25 @@ SOAK = [
         "find is a row nobody runs.",
         needs=("qemu",), serial=True, builds=True,
         wants=("build/brtest360.img",)),
+    Row("brdownload", "soak", py("tests/brdownload.py"), 180.0,
+        "SPEC.md 71.20: Save Link As streams a 32 KiB unknown-length binary "
+        "response through the NE2000 into cluster-aligned disk writes; the "
+        "test confirms no total is invented and compares the saved FAT file "
+        "byte-for-byte. QEMU is required for ETHER.DRV.",
+        needs=("qemu",), serial=True, builds=True,
+        wants=("build/browser.o88",)),
+    Row("brdownload-length", "soak",
+        py("tests/brdownload.py", "--content-length"), 180.0,
+        "SPEC.md 71.20: the same 32 KiB Save Link As transfer with a declared "
+        "Content-Length, checking the displayed total and exact saved bytes.",
+        needs=("qemu",), serial=True, builds=True,
+        wants=("build/browser.o88",)),
+    Row("brdownload-auto", "soak",
+        py("tests/brdownload.py", "--automatic"), 180.0,
+        "SPEC.md 71.20: an ordinary click on a non-rendered file URL opens the "
+        "existing Save dialog automatically before the byte-exact download.",
+        needs=("qemu",), serial=True, builds=True,
+        wants=("build/browser.o88",)),
     Row("brmem", "soak", py("tests/brmem.py"), 40.0,
         "SPEC.md 71.18: a deterministic 40 KB page over the NE2000 grows the "
         "source and document claims within the recorded 20% free-heap reserve, "

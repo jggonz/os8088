@@ -51929,6 +51929,12 @@ row to read is the Makefile's `APPS_TOOLS_360`, not a list here — a package
 list in prose goes stale the next time anything ships, and the enforcement is
 `os88disk.py` refusing an image that does not fit.
 
+It ran out again on 2026-10-18 when Browser 1.6b added its native Download
+Manager: the full set exceeded the volume by five clusters. Fractal and Piano
+move off `apps360.img` for this geometry so Browser and the remaining apps fit;
+both remain on the 720KB, 1.2MB and 1.44MB app disks. Neither package has a
+data dependency on the 360KB apps disk.
+
 #### 24.6.2 One sample document per application
 
 Every application on a category disk opens its File dialog on something.
@@ -114951,8 +114957,9 @@ memory API. For each full cluster, it parks at a wake boundary and lets the UI
 task write that cluster through `OSAPI_FILE_WRITE_SEQ`; the worker cannot
 overwrite the buffer until the UI acknowledges the write. The UI task alone
 creates the empty destination, owns the write token, closes the stream, and
-frees the temporary buffer. Every stale wake is checked against the download
-generation before touching a buffer or file.
+frees the temporary buffer. A wake handler checks the current state and acts
+only on the currently published pending cluster; a stale wake with no pending
+cluster is ignored.
 
 The staging claim is acquired only after the destination dialog returns. Its
 size is the destination volume's cluster size, derived from
@@ -114964,6 +114971,50 @@ socket opens. Disk-full, write, receive, redirect, cancel, and close failures
 must close the stream and socket exactly once, preserve the already committed
 prefix, release the staging claim, and leave the Browser page intact.
 
+#### 71.20.1 Download Manager window and progress
+
+The manager is a native monochrome Browser-owned window titled `Download
+Manager`. Its compact drawing uses the existing window, font, icon and graphics
+APIs, so the same path serves Hercules, CGA, EGA and VGA. Three static server,
+file and PC symbols frame a short transfer path. A small set of file positions
+is advanced by the manager's one-shot window timer; it never busy-waits and
+does no network or disk work. Timer refusal on a reduced kernel leaves a static
+path and does not affect transfer correctness. The moving file is stopped in
+terminal states and while the manager is hidden.
+
+The window shows the selected 8.3 file name, resolved source URL, selected
+destination path, state, bytes received and total when known. A percentage is
+shown only with a validated `Content-Length`; without one the bar is
+indeterminate. Speed is the average over elapsed system ticks, so small timer
+samples are not discarded on slow links. If a transfer finishes before the
+first tick, the completion path takes one final sample at the clock's
+one-tick resolution. Remaining time is shown only when a validated total and
+a representable speed are available; otherwise the value is `Calculating...`
+or `--`. The timer refreshes the visible progress at a bounded cadence rather
+than repainting for every byte. Completed transfers show
+`Download complete.` and 100% only when the HTTP body was completely received
+and the stream was closed successfully.
+
+There is no Pause button in 1.6b: neither the socket driver nor the Browser's
+transfer state provides a safe pause contract. The active control is Cancel;
+after completion, cancellation or failure it becomes Close. Cancel is a
+request/acknowledge handshake with the network worker, so the UI never frees a
+buffer the worker may still be using. It commits a final partial cluster when
+possible and leaves a valid partial file on failure. Closing the manager hides
+its secondary window; `File > Downloads` reopens it and the active transfer
+continues. Closing the Browser itself stops the worker, closes the socket and
+stream, destroys the secondary window and releases the transfer claim before
+the instance is torn down.
+
+#### 71.20.2 UI ownership and redraw
+
+The worker remains the sole owner of `NETV_*` calls. It stages at most one
+destination cluster and posts the manager window a wake when that cluster is
+ready. The UI task writes it, then acknowledges the worker. The manager's
+paint and timer handlers only read the published transfer record. Graphics
+updates are clipped to the manager window and use only the shared monochrome
+drawing path; no framebuffer, palette change or kernel slot is added.
+
 Save Link As is offered only for a resolved `http://` link. It uses the
 existing instance-scoped file dialog for destination selection; local
 directory browsing remains the dialog's responsibility, and the Browser does
@@ -114973,13 +115024,26 @@ not a second package or a kernel service, so it shares the instance's worker,
 network configuration, and bounded transfer state without introducing IPC or
 an OS/driver change.
 
-The gate uses a deterministic NE2000 HTTP server that serves a binary body
-larger than the Browser page cap. It checks byte-for-byte output, no page
-truncation or page replacement, progress totals with and without
-Content-Length, redirect handling, cancellation at a cluster boundary,
-disk-full failure, busy refusal, and release of the staging claim and socket
-on every terminal path. A later launch opens the downloaded file through the
-existing file association to verify exact bytes independently.
+For an ordinary GET navigation, the Browser sends a URL whose final path
+component has an extension it does not render to the same Save dialog and
+Download Manager automatically. This applies to typed addresses and followed
+links. The final suffix is case-insensitive; a query or fragment is not part
+of it. `.htm`, `.html`, `.cgi`, and common server-rendered page suffixes
+(`.php`, `.phtml`, `.shtml`, `.asp`, `.aspx`, `.jsp`) remain Browser
+navigations. An extensionless URL also remains a Browser navigation because
+many sites serve their home page that way. Form submissions remain page
+navigations. The Browser does not infer file type from `Content-Type`; the
+existing response parser does not retain that header, and adding a second
+classification path would make link behavior depend on response timing.
+
+The `brdownload` and `brdownload-length` soak rows use a deterministic NE2000
+HTTP server to serve a binary body larger than the Browser page cap, once
+without `Content-Length` and once with it. They verify the reported total and
+compare the saved FAT file byte-for-byte. The current automated pair does not
+yet exercise redirect, cancellation, disk-full, busy refusal or repeated
+downloads; these remain acceptance checks for follow-up coverage. A later
+launch should open the downloaded file through the existing file association
+to verify exact bytes independently.
 
 ### 71.17 Browser 1.4 — table spans, cell alignment and form POST
 

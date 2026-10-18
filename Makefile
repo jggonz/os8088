@@ -5614,8 +5614,17 @@ $(BUILD)/stiknote.o88: $(BUILD)/stiknote.bin tools/os88pkg.py $(PKGZSTAMP)
 # that document is the RENDERER, with no network in the machine - it opens a
 # .HTM through the Standard File dialog. tools/htmsim.py is its reference
 # implementation and tests/htm/ is what both are checked against.
+apps/browser/assets/brdownload_icons.inc: tools/os88bmp1.py \
+                                           apps/browser/assets/server_48x48_1bpp.bmp \
+                                           apps/browser/assets/document_24x28_1bpp.bmp \
+                                           apps/browser/assets/pc_48x48_1bpp.bmp
+	python3 tools/os88bmp1.py --output $@
+
 $(BUILD)/browser.bin: apps/browser/browser.asm apps/browser/brnet.inc \
-                      apps/browser/br15.inc apps/os88data.inc \
+                      apps/browser/br15.inc apps/browser/brdownload.inc \
+                      apps/browser/brdownload_bss.inc \
+                      apps/browser/assets/brdownload_icons.inc \
+                      apps/os88data.inc \
                       apps/os88api.inc \
                       apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
                       drivers/net/netpkg.inc $(SBSTAMP) | $(BUILD)
@@ -13218,8 +13227,14 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
 #     dated 2026-10-02): that disk had 12 clusters spare and the player with
 #     its songs is ~50. It rides the MEDIA DISK instead (MEDIAARGS360) - the
 #     floppy whose subject is music already - at its root, songs in MEDIA/MIDI.
+# --- 360KB curation remade 2026-10-18: Browser 1.6b's Download Manager adds
+#     five clusters to the full set. Keep the Browser on this disk and move
+#     the small standalone Fractal and Piano packages to the larger app disks;
+#     neither has a data dependency that would strand another package here.
+#     The 720KB, 1.2MB and 1.44MB app disks continue to carry both.
 APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
-                    $(BUILD)/midirack.o88 $(BUILD)/pixel.o88,$(APPS_TOOLS))
+                    $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 \
+                    $(BUILD)/fractal.o88 $(BUILD)/piano.o88,$(APPS_TOOLS))
 APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) $(APPS_DATA_360) $(APPS_SYS) $(APPS_DOS)
 
 # ...and the same list with the folder each package lands in. os88disk.py

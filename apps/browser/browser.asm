@@ -330,6 +330,8 @@ br_entry:
     mov [br_win], bx
     mov ax, br_onrclk
     call OSAPI_WM_ONRCLICK          ; right click copies an active selection
+    mov ax, br_dl_mainclose
+    call OSAPI_WM_ONCLOSE           ; stop and release an active transfer first
     mov byte [br_bmrefreshreq], 1   ; first read waits until W_ONWAKE, after show
     call br_bmmenuset
     push ax                         ; **THE BUTTONS' THREE SLOTS** (SPEC.md
@@ -814,6 +816,14 @@ br_arg:
 ; nothing but where the name came from.
 ; -----------------------------------------------------------------------------
 br_onwake:
+    ; A closed Download Manager cannot receive its worker's final wake. The
+    ; worker redirects CANCELREADY here, where the UI task owns file cleanup.
+    cmp byte [br_dl_state], DL_CANCELREADY
+    jne .download_reaped
+    cmp word [br_dl_win], 0
+    jne .download_reaped
+    call br_dl_onwake
+.download_reaped:
     call br_bmservice               ; retain Browser 1.5 cross-instance refresh
     cmp byte [br_fin], 6            ; the worker filled its current source
     jne .frames                    ; extent and waits for the UI task to grow it
@@ -2266,6 +2276,14 @@ br_onup:
     call br_selpaint
     jmp short .selectiondone
 .linkclick:
+    ; A normal link press starts a provisional one-cell selection so a drag
+    ; can select through it. If release resolves to a link, erase that XOR and
+    ; discard the provisional selection before following it. A refused or
+    ; failed navigation must not leave a phantom Copy selection behind.
+    mov ax, [br_selend]
+    mov [br_seloldend], ax
+    mov byte [br_selkind], 0
+    call br_selpaint
     call br_follow
 .selectiondone:
     jmp br_sbd_out
@@ -4500,10 +4518,10 @@ br_selcycle:
 br_ablines:                         ; os88ui_about's line table (SPEC.md
                                     ; 20.5.1.1): near pointers, 0 ends it
     dw br_ab1, br_ab2, br_ab3, br_ab4, 0
-br_ab1:      db 'os8088 Browser 1.6', 0
+br_ab1:      db 'os8088 Browser 1.6b', 0
 br_ab2:      db 'Bringing the web to XT PCs', 0
 br_ab3:      db 'Version 1.0 contributed by Elendilon', 0
-br_ab4:      db 'Version 1.2-1.6 contributed by Pentagram666', 0
+br_ab4:      db 'Version 1.2-1.6b contributed by Pentagram666', 0
 br_shortlines:
     dw br_sh1, br_sh2, br_sh3, br_sh4, br_sh5, br_sh6, br_sh7, br_sh8, 0
 br_sh1: db 'Tab: address, fields, links', 0
@@ -4583,9 +4601,14 @@ br_oncmd:
 .f1:
     cmp al, 2
     je .save
+    cmp al, 3
+    je .downloads
     jmp .loc
 .save:
     call br_saveas                  ; File > Save As...
+    jmp .out
+.downloads:
+    call br_dl_show                 ; File > Downloads reopens the manager
     jmp .out
 .loc:
     mov byte [br_loc + LN_FOCUS], 1 ; File > Open Location... is FOCUS AND
@@ -4736,8 +4759,8 @@ br_srcgrow:
     mov byte [br_fin], 7            ; keep draining, but discard past capacity
 .out:
     pop dx
-    pop bx
     pop cx
+    pop bx
     pop ax
     ret
 
@@ -4808,8 +4831,8 @@ br_claimpage:
     jmp short .fail
 .out:
     pop dx
-    pop bx
     pop cx
+    pop bx
     pop ax
     ret
 
@@ -11178,7 +11201,7 @@ br_tpl:
 ; application, so a File > Close here would be a second door onto the same
 ; kernel routine.
     OS88_MENUSET br_menus, br_name_s, br_oncmd
-        OS88_MENU br_m_file, br_i_file, 3   ; ...and the COUNT is here, not in
+        OS88_MENU br_m_file, br_i_file, 4   ; ...and the COUNT is here, not in
                                             ; br_i_file's list: adding a
                                             ; pointer without it leaves the
                                             ; item unreachable and invisible,
@@ -11206,10 +11229,11 @@ BR_BMNITEM equ br_menus_list + 3 * AMENU_ENTSZ + AMENU_NITEM
 
 br_name_s:  db 'Browser', 0
 br_m_file:  db 'File', 0
-br_i_file:  dw br_it_open, br_it_loc, br_it_save
+br_i_file:  dw br_it_open, br_it_loc, br_it_save, br_it_downloads
 br_it_open: db 'Open...', 0
 br_it_loc:  db 'Open Location...', 0
 br_it_save: db 'Save As...', 0
+br_it_downloads: db 'Downloads', 0
 br_m_bm:    db 'Bookmarks', 0
 br_it_bmnone: db '(empty)', 0
 br_m_hist:  db 'History', 0
@@ -11287,6 +11311,7 @@ br_s_bad:   db 'Cannot open page', 0
 %include "os88line.inc"         ; ...and the one-line field the bar is
 %include "br15.inc"              ; Browser 1.5 clipboard, context and bookmarks
 %include "brnet.inc"            ; ...and the fetch (NET-STACK-PLAN stage D)
+%include "brdownload.inc"       ; Browser 1.6b's streamed Download Manager
 %define OS88SOCK_STATE             ; ...every net_find here asks NETV_STATE too
 %include "os88sock.inc"         ; ...whose driver net_find locates (SPEC.md 72)
 
@@ -11741,7 +11766,9 @@ br_linewant  equ br_linehnd + 2
 br_linekb    equ br_linewant + 2     ; compatibility/reporting size in KiB
 br_docfull   equ br_linekb + 2       ; parser paused for logical output growth
 br_memstop   equ br_docfull + 1      ; network source cannot grow conventionally
-BR_BSS      equ (br_memstop + 1 - os88_image_end)
+br_dl_bss    equ br_memstop + 1
+%include "brdownload_bss.inc"
+BR_BSS      equ (br_dl_bss_end - os88_image_end)
 
 ; --- what the code assumes about the layout above ----------------------------
 %if br_wsp != br_on + 1 || br_pre != br_any + 1

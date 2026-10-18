@@ -215,6 +215,15 @@ br_go:
     mov word [br_nmsg], 0
     call br_split                   ; the URL into host, port and path
     jc .badurl
+    cmp byte [br_reqpost], 0        ; form responses are page navigations; the
+    jne .native                     ; download worker currently issues GETs
+    mov si, br_path                 ; route non-rendered file suffixes before
+    call br_dl_autosave             ; allocating the page/source arenas
+    jnc .native
+    mov ax, 0FFFFh                  ; direct URL sentinel for br_dl_link
+    call br_dl_link
+    jmp .out
+.native:
     mov byte [br_islocal], 0        ; only an accepted HTTP navigation is remote
     mov byte [br_viewsrc], 0        ; a navigation always returns to rendered HTML
     mov al, 3                       ; refresh the per-instance bookmark cache
@@ -460,6 +469,7 @@ br_worker:
     mov bx, [br_win]
     call OSAPI_TASK_ALIVE           ; the death door: may never return
     call br_nstep
+    call br_dl_step                ; Browser 1.6b's independent download socket
     mov ax, 1
     call OSAPI_TASK_SLEEP
     jmp .loop
@@ -1676,9 +1686,9 @@ br_status:
 br_s_get:    db 'GET ', 0
 br_r_post:   db 'POST ', 0
 br_s_http:   db ' HTTP/1.0', 13, 10, 'Host: ', 0
-br_s_tail:   db 13, 10, 'User-Agent: os8088 Browser 1.6', 13, 10
+br_s_tail:   db 13, 10, 'User-Agent: os8088 Browser 1.6b', 13, 10
              db 'Connection: close', 13, 10, 13, 10, 0
-br_r_posttail: db 13, 10, 'User-Agent: os8088 Browser 1.6', 13, 10
+br_r_posttail: db 13, 10, 'User-Agent: os8088 Browser 1.6b', 13, 10
                db 'Connection: close', 13, 10
                db 'Content-Type: application/x-www-form-urlencoded', 13, 10
                db 'Content-Length: ', 0

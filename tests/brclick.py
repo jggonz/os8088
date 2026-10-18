@@ -122,10 +122,10 @@ def main():
         rb = lambda n: m.readseg(pseg, sy[n], 1)[0]        # noqa: E731
         rw = lambda n: u16(m.readseg(pseg, sy[n], 2))      # noqa: E731
         about = [
-            ("br_ab1", "os8088 Browser 1.6"),
+            ("br_ab1", "os8088 Browser 1.6b"),
             ("br_ab2", "Bringing the web to XT PCs"),
             ("br_ab3", "Version 1.0 contributed by Elendilon"),
-            ("br_ab4", "Version 1.2-1.6 contributed by Pentagram666"),
+            ("br_ab4", "Version 1.2-1.6b contributed by Pentagram666"),
         ]
         for symbol, expected in about:
             actual = bytes(m.readseg(pseg, sy[symbol], len(expected) + 1))
@@ -366,6 +366,31 @@ def main():
                     if clip != selected:
                         fails.append("selection menu copied %r, expected %r"
                                      % (clip, selected))
+                    # A retained selection elsewhere on the page must not
+                    # mask the link-specific menu under the pointer.
+                    link_want = 2                    # 'torture.htm'
+                    link_marker = bytes([14, 0x10 | (link_want & 15),
+                                         0x10 | ((link_want >> 4) & 15),
+                                         0x10 | (link_want >> 8)])
+                    link_at = doc.find(link_marker)
+                    if link_at < 0:
+                        fails.append("selected-text fixture cannot find link %d"
+                                     % link_want)
+                    else:
+                        err = right_click_offset(link_at + 4)
+                        if err:
+                            fails.append("right-click link with selection retained: "
+                                         + err)
+                        elif (rb("br_ctxopen") != 1
+                              or rb("br_ctxkind") != 1
+                              or rw("br_ctxlink") != link_want):
+                            fails.append("right-click on a link with retained text "
+                                         "selection did not open that link's menu")
+                        else:
+                            mo.click(rw("br_cx") + 2, rw("br_tby") + 2)
+                            os88marty.settle(m)
+                            if rb("br_ctxopen") != 0:
+                                fails.append("dismissing the link menu left it open")
                 err = click_offset(sel_at + len(selected) + 3)
                 if err:
                     fails.append("clear text selection: " + err)
@@ -570,8 +595,8 @@ def main():
                 fails.append("right-click did not open the menu for link %d"
                              % want)
             else:
-                if rb("br_ctxw") != 76:
-                    fails.append("link context menu width is %d, expected 76"
+                if rb("br_ctxw") != 124:
+                    fails.append("link context menu width is %d, expected 124"
                                  % rb("br_ctxw"))
                 if rw("br_ctxx") + rb("br_ctxw") > rw("br_cols") * 8:
                     fails.append("link context menu extends past the page band")
@@ -609,6 +634,9 @@ def main():
             if err:
                 fails.append("relative link: " + err)
             else:
+                if rb("br_selkind") != 0:
+                    fails.append("a plain link click left a provisional text "
+                                 "selection behind")
                 st = rb("br_nstate")
                 msg = rw("br_nmsg")
                 say("after clicking the relative link: state %d, msg %04X"
