@@ -21,21 +21,15 @@ n_pcm_open:
     mov [n_pcmseg],dx
     ; Optional, and fetched inside the bracket: ask first, so a busy heap is
     ; FM effects as it always was and never op_fetch's toast (n_fsxroom).
-    ; The 13KB above is not in n_fsxroom's sum, so the run beside it must
-    ; still hold that sum too, or the banks' fetch is what refuses.
     call op_clbget
     jc .bad
     mov al,N_P_SFX
     call op_row
     call op_lazykb
     jc .bad
-    xchg ax,cx                     ; CX = the bank's KB, or the parts' if more
-    cmp cx,[n_pcmroom]
-    jae .ask
-    mov cx,[n_pcmroom]
-.ask:
-    call OSAPI_MEM_AVAIL           ; AX = the largest run (BX is the total)
-    cmp ax,cx
+    xchg ax,bx
+    call OSAPI_MEM_AVAIL
+    cmp ax,bx
     jb .bad
     ; The bank is a part of 1942.O88 (N_P_SFX), built with the package, so the
     ; header's lengths are the ones the expansion below is written for and

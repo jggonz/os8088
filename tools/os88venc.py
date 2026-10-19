@@ -5627,7 +5627,9 @@ def _seen_shift(a, b):
             int(x) - a.shape[1] if x > a.shape[1] // 2 else int(x))
 
 
-_SEEN_LUM = np.array([0.299, 0.587, 0.114], np.float32)
+# ...and only when numpy is there: the module is imported by tools and rows
+# that never encode (tests/vidsound.py), and its import is optional above
+_SEEN_LUM = np.array([0.299, 0.587, 0.114], np.float32) if np else None
 
 
 def seen_attention(lT, lP=None):

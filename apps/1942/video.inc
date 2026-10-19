@@ -183,7 +183,6 @@ n_fsxroom:
     inc ax
     loop .bank
     call OSAPI_MEM_AVAIL           ; AX = KB
-    mov [n_pcmroom],bp             ; what the PCM's claim must leave (pcm.inc)
     cmp ax,bp
 .out:
     ret
