@@ -457,7 +457,7 @@ narrow reason belongs in `soak`.
 
 ### The host-side tests, and what each is defending
 
-`tests/unit/`, python3 only. Each exists because of a failure this tree had.
+`tests/unit/`, python3 (3.11 or newer) only. Each exists because of a failure this tree had.
 The ones to know by name:
 
 | row | what it would have caught |

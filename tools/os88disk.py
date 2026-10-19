@@ -1271,15 +1271,19 @@ def build(args) -> int:
             if i != asc_i]
         size = lambda it: (dir_nclus[it[1]] if it[0] == "d" else
                            it[1] if it[0] == "p" else files[it[1]][2])
+        asc_fits = False
         if asc_i is not None:
             asecs = files[asc_i][2] * lay.spc
+            on_track = lambda c: ((lay.data_lba + (c - 2) * lay.spc) // spt ==
+                                  (lay.data_lba + (c - 2) * lay.spc
+                                   + asecs - 1) // spt)
             at = len(seq)
             start = nxt
             for pos in [0] + list(range(len(dirs), len(seq) + 1)):
                 start = nxt + sum(size(it) for it in seq[:pos])
-                lba = lay.data_lba + (start - 2) * lay.spc
-                if lba // spt == (lba + asecs - 1) // spt:
+                if on_track(start):
                     at = pos
+                    asc_fits = True
                     break
             seq.insert(at, ("f", asc_i))
         if not args.no_pack:
@@ -1287,11 +1291,26 @@ def build(args) -> int:
             # the order above, so the boot set is paid for before anything
             # else and the volume still ends in one run of free clusters.
             nsecs = lambda it: (len(files[it[1]][1]) + SECTOR - 1) // SECTOR
-            seq = cyl_pack(seq, size, nsecs, nxt, lay, spt * heads,
-                           hbase if args.hdd else 0,
-                           pinned=lambda it: it[0] == "d" or it[1] == asc_i,
-                           group=lambda it: fdir[it[1]],
-                           budget=(lay.nclus - need) // 2)
+            pack = lambda pin: cyl_pack(seq, size, nsecs, nxt, lay,
+                                        spt * heads,
+                                        hbase if args.hdd else 0,
+                                        pinned=pin,
+                                        group=lambda it: fdir[it[1]],
+                                        budget=(lay.nclus - need) // 2)
+            packed = pack(lambda it: it[0] == "d" or it[1] == asc_i)
+            # Pinning ASSOC.DAT holds it in its place in the ORDER, not on
+            # the disk: a fill or a pad ahead of it slides it by that gap,
+            # which can put the one track chosen above across two. Check
+            # again, and if it moved off, pack once more with everything
+            # ahead of it held too - no gap can then land in front of it, so
+            # it starts exactly where the check above put it.
+            if asc_fits:
+                ai = packed.index(("f", asc_i))
+                if not on_track(nxt + sum(size(it) for it in packed[:ai])):
+                    ahead = set(seq[:at])
+                    packed = pack(lambda it: it[0] == "d" or
+                                  it[1] == asc_i or it in ahead)
+            seq = packed
         for it in seq:
             chain = list(range(nxt, nxt + size(it)))
             nxt += size(it)

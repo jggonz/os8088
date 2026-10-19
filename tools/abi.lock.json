@@ -122,6 +122,20 @@
    "to": 11
   },
   {
+   "fingerprint": "cb840b3e66b596fe66a7ad9b07f61f9c8f402799cfa71b8bdb83497b1a9b6f67",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OS88_F_STIK (header flags bit 7) and OS88_STIKCARD/OS88_STIKROW/OS88_STIKCARD_END: the Sticky App card (SPEC.md 110.12), the last block of the clear prefix. ADDITIVE - no cell moved and no header field changed meaning; every package built before still runs (none sets bit 7), so no PKG_FMT bump. A new card-bearing package on an older kernel mis-places a compressed body and is refused as bad data",
+   "to": 10
+  },
+  {
+   "fingerprint": "be5ce5faeec75706cd33eac4de3838f259bcc56d073cc850fc1c2ad0883c7873",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OS88_F_STIK (header flags bit 7) and OS88_STIKCARD/OS88_STIKROW/OS88_STIKCARD_END: the Sticky App card (SPEC.md 110.12), the last block of the clear prefix. ADDITIVE - no cell moved and no header field changed meaning; every package built before still runs (none sets bit 7), so no PKG_FMT bump. A new card-bearing package on an older kernel mis-places a compressed body and is refused as bad data",
+   "to": 11
+  },
+  {
    "fingerprint": "e4d7b7c050e173a6df5cf805934083006e1432a2f8e38b46480a1f62974dbe28",
    "from": 8,
    "guard": "PKG_FMT",

@@ -32,6 +32,10 @@ import re
 import struct
 import subprocess
 import sys
+if sys.version_info < (3, 11):                 # tomllib, below (CONTRIBUTING.md)
+    sys.exit("%s: needs python3 3.11 or newer, for tomllib; this is %d.%d at %s"
+             % (os.path.basename(__file__), sys.version_info[0],
+                sys.version_info[1], sys.executable))
 import tomllib
 import zipfile
 

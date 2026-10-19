@@ -868,7 +868,8 @@ A 1.44MB drive postdates the 8086 by years, so period hardware gets the
 
 **No binary is committed to this repository.** `build/` is gitignored
 outright — the nine images, the kernel, the boot sectors, the drivers and
-every package are products of `make`, which needs only `nasm` and `python3`.
+every package are products of `make`, which needs only `nasm` and `python3`
+3.11 or newer.
 For a floppy you can boot without a toolchain, take a
 [release](https://github.com/jggonz/os8088/releases) or
 [os8088.com](https://os8088.com); the build is deterministic

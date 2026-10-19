@@ -191896,7 +191896,12 @@ system disk's clusters were 1 KB and two at today's 512 bytes (§19.3.2) -
 for that disk's sake (§24.3.1.3). On this branch the cut buys nothing: the
 file is PACKED (§110.5.3), so its size is the records in use, and a
 calendar the sixteen-slot table can hold is the same bytes under v1's. The
-cut only ever saved space on a calendar it refused to hold. The worst case
+cut only ever saved space on a calendar it refused to hold. A file `main`
+wrote - payload version 2, sixteen and sixteen - is DAMAGED to this build,
+its header's version not being exactly this one (§110.5), and the first save
+replaces it unasked (§110.5.2, `STIK_DMGREPLACE`): nothing is carried over.
+No shipped release carried v2, or any Desk Calendar, so the only such files
+are a developer's. The worst case
 - both tables full, 2,456 bytes - is the file and a second copy while a save
 is in flight, plus SYSTEM.CFG's one: **seven clusters where a cluster is 1 KB**
 (the 720 KB system disk, the small 360 KB one) and **eleven where it is 512

@@ -161,8 +161,9 @@ implementation; run their deduplicated union once after the last batch.
 
 ## Commands
 
-Needs `nasm`, `qemu-system-i386`, `python3` — plus `pkg-config` and
-`libudev-dev` on Linux. **`make deps` installs the set** and is the one
+Needs `nasm`, `qemu-system-i386`, `python3` **3.11 or newer** (`tools/`
+imports `tomllib`, so Apple's `/usr/bin/python3` 3.9 fails every `make`) —
+plus `pkg-config` and `libudev-dev` on Linux. **`make deps` installs the set** and is the one
 command to type on a box you have not built on; it is ~0.2 s when they are
 already there, so it is cheap to type rather than wonder. It PROBES rather
 than transcribing a recipe: every distro-specific cure is a fallback behind a
