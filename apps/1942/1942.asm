@@ -437,6 +437,7 @@ VAR n_effectfreq,2
 VAR n_effectsent,2
 VAR n_audiofm,1
 VAR n_pcmseg,2
+VAR n_pcmroom,2
 VAR n_pcmactive,1
 VAR n_pcmhandle,1
 VAR n_pcmflags,1

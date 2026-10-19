@@ -3510,15 +3510,28 @@ px_artload:
     call OSAPI_MEM_AVAIL            ; ...and BX = the KB free in all, which
     cmp bx, PXA_MINFREE + PXA_KB    ; must leave PXA_MINFREE beside them
     jb .out
-    mov al, PXPART_GFX
-    call op_fetch                   ; claims, reads, expands (SPEC.md 20.12.4)
-    jc .out
-    mov al, PXPART_GFX
-    call op_seg
-    mov [pxa_seg], ax
-    xchg ax, dx
-    mov ax, px_mreloc               ; the pictures move with the heap: the
-    call OSAPI_MEM_MOVABLE          ; proc re-bases pxa_seg and the row
+    call OSAPI_FILE_HERE            ; the part is read BY NAME, so at home
+    cmp dx, [px_homedir]            ; (px_pfetch's bracket): px_artback asks
+    jne .go                         ; from wherever an open left the instance
+    cmp bl, [px_homevol]
+    jne .go
+    call .get
+    jmp .out
+.go:
+    push dx                         ; the way back
+    push bx
+    mov dx, [px_homedir]
+    mov bl, [px_homevol]
+    call OSAPI_FILE_GOTO_QM
+    jc .gone                        ; PiXEL's disk is out: the bevel stays,
+    call .get                       ; and SILENTLY, where px_pfetch toasts
+    pop bx
+    pop dx
+    call OSAPI_FILE_GOTO_QM         ; CF unread, as px_pfetch's way back
+    jmp .out
+.gone:
+    pop bx                          ; QM moved nothing: no way back to take
+    pop dx
 .out:
     pop es
     pop di
@@ -3528,6 +3541,18 @@ px_artload:
     pop bx
     pop ax
 .ret:
+    ret
+.get:
+    mov al, PXPART_GFX
+    call op_fetch                   ; claims, reads, expands (SPEC.md 20.12.4)
+    jc .none
+    mov al, PXPART_GFX
+    call op_seg
+    mov [pxa_seg], ax
+    xchg ax, dx
+    mov ax, px_mreloc               ; the pictures move with the heap: the
+    call OSAPI_MEM_MOVABLE          ; proc re-bases pxa_seg and the row
+.none:
     ret
 
 ; px_artroom - AX = the KB an open's master is about to claim: CF = 1 the

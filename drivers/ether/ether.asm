@@ -342,8 +342,11 @@ eth_dropall:
     jb  .kill
     mov al, TF_RST | TF_ACK
     push cx
-    xor cx, cx
-    call tcp_out
+    push dx                     ; DL is the slot: the RST carries SND.NXT,
+    mov dx, [bx+SKO_TXS]        ; SND.UNA past what is in flight, as tcp_ack
+    xor cx, cx                  ; does - a peer takes a reset at no other
+    call tcp_out                ; sequence number (RFC 5961)
+    pop dx
     pop cx
 .kill:
     mov byte [bx+SKO_TS], TS_CLOSED

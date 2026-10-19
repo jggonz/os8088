@@ -182087,8 +182087,9 @@ both banks plus the largest scene, each priced as `op_fetch` will claim it -
 because the fetches run after the mode is set, where a refusal's toast would
 be drawn into the game's own framebuffer (§53.7). A heap that cannot hold
 them leaves the window saying so; what is left to refuse inside the bracket is
-a disk that will not read. An executable-resident bitmap says
-`1942  LOADING GRAPHICS` before the first disk read, including resume and
+a disk that will not read. The effects' 13KB DMA claim is not in that sum and
+gives way to it (the recorded effects, 101.4). An executable-resident bitmap
+says `1942  LOADING GRAPHICS` before the first disk read, including resume and
 scenery reloads. It does not depend on the graphics being loaded. A part
 that cannot be fetched returns to the launcher with an error.
 
@@ -182268,7 +182269,11 @@ edits in `apps/1942/sfx/CREDITS.md`). Music stays on FM. The bank contains a
 A page-safe 13KB DMA claim holds three prepared 4096-byte rings and their
 control words at offsets 0, 4112 and 8224. The bank, a part (101.6), is
 fetched only when the card can play it and the heap can hold it - asked first,
-so a busy heap is FM effects and not a toast inside the bracket - copied to
+so a busy heap is FM effects and not a toast inside the bracket. The claim is
+made in the bracket before the sprite banks and is not in `n_fsxroom`'s sum
+(101.1), so it is KEPT only while the largest run beside it still holds that
+sum: otherwise the effects are FM and the banks and scenes keep the room the
+desktop vouched for. The bank is copied to
 offset zero, then expanded in place, last sample first. Each one-shot is
 padded with silence and played directly through SND_STREAM's external-ring
 interface. Starting an effect copies no samples. No mixer or refill worker
@@ -186399,8 +186404,12 @@ and the scale is planned again. The face draws its bevel from there; a
 picture already on the glass stays until something repaints it, since
 redrawing the toolbar before the first rows is the very time this buys.
 `px_artback`, at the open's end, asks for them again on `px_artload`'s
-terms and redraws the toolbar and tool column when they come - *before*
-`[px_ndone]` counts the open as ended, refused or finished, because that
+terms and redraws the toolbar and tool column when they come. The open has
+moved the instance to the picture's folder by then and the part is read out
+of `PIXEL.O88` BY NAME, so `px_artload` reads it at home, `px_pfetch`'s
+bracket - but silently: a home that cannot be reached (PiXEL's disk out)
+leaves the bevel and says nothing, where `px_pfetch` would toast. The
+re-ask comes *before* `[px_ndone]` counts the open as ended, refused or finished, because that
 read is a disk read on the UI task and belongs to the open: a reader that
 waits on the count and then types finds PiXEL idle. A smaller
 picture opened later brings them back after its first rows, and a heap that
