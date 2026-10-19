@@ -2276,8 +2276,18 @@ hbm_dosrun:
     ; settled. They go
     ; into the RECORD's copy and not the stage's, for `KDLF_HIBER`'s own
     ; reason immediately below - step 5 copies the record over the stage.
+%ifdef HMA_DRV
+    cmp word [api_coldseg], HMA_SEG ; NOT WITH `.cold` IN THE HMA: nothing on
+    je .nowake                  ; the live route checks A20 or the HMA's bytes,
+%endif                          ; and a DOS program may close the one or write
+                                ; the other. KDL_WAKE + 2 stays the 0 DOS.O88
+                                ; posted, so kd_resume takes int 19h, where
+                                ; XMEM.DRV reinstalls `.cold` (SPEC.md 96.49)
     mov word [cs:bx+KDL_WAKE], hbm_wake ; ...exactly what hbm_wrimg put in
     mov [cs:bx+KDL_WAKE + 2], cs        ; the pointer, and from the same place
+%ifdef HMA_DRV
+.nowake:
+%endif
     mov [cs:bx+KDL_KSEG], ds    ; DS IS KERNEL_SEG in this module (SPEC.md 2.8)
     mov al, [hb_vol]
     mov [cs:bx+KDL_HBVOL], al

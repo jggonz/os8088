@@ -928,6 +928,11 @@ Calc (5,312) fits **instead of** the Task Manager, but not beside it.
   - A ROM arm has to compare the cold-layout hash instead. That is the same
     key as form 1, and the right one, because a module is welded exactly as
     `.cold` is.
+  - **What shipped for the COPY arm** (SPEC.md 2.10.5): the ROM hands a held
+    image out only when its `MOD_H_BUILD` equals the running kernel's
+    `mod_hdrt`, so a kernel one commit newer reads the module off the disk
+    instead of being refused with no disk tried. The ROM's copies stop
+    saving a disk read at the next commit; they never cost a refusal.
 - **Writes into the image.**
   - `kern_big`'s `CTRL.DRV` holds `cpc_buf` inside its image and writes
     `cp_fdno`.

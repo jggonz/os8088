@@ -277,7 +277,7 @@ had added.
     "bss": 5226,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 37497,
+    "cold": 37501,
     "coldpara": 2368,
     "colds": 3776,
     "fatpara": 288,
@@ -723,14 +723,14 @@ there and nowhere else.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,647 | 37.0% |
+| the file system, end to end | 29,651 | 37.0% |
 | the window system and its furniture | 22,386 | 27.9% |
 | drawing: adapters, primitives, glyphs, icons | 12,524 | 15.6% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 7,901 | 9.9% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 7,901 | 9.8% |
 | the kernel proper: API table, heap, scheduler, events | 7,101 | 8.9% |
 | the Control Panel | 353 | 0.4% |
 | the About box, the one built-in kind left in apps.inc | 301 | 0.4% |
-| **total** | **80,213** | |
+| **total** | **80,217** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -753,7 +753,7 @@ there and nowhere else.
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 23 | 1,947 | **1,970** | 91 | — | — |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,629 | 126 | **1,755** | 721 | — | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,357 | — | **1,357** | 212 | 2,944 | — |
-| `loader.inc` — the package loader (§21) | 4 | 1,340 | **1,344** | 48 | — | — |
+| `loader.inc` — the package loader (§21) | 4 | 1,344 | **1,348** | 48 | — | — |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,260 | — | **1,260** | 20 | — | — |
 | `icons.inc` — the icon renderer (§10) | 1,081 | — | **1,081** | 288 | — | — |
 | `fsx.inc` — fullscreen exclusive (§53) | 957 | — | **957** | 9 | — | — |
@@ -793,7 +793,7 @@ there and nowhere else.
 | `compress.inc` — the LZB compressor (§20.15), an on-demand module and 0 resident | — | — | **0** | — | — | — |
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,109 | 159 | **2,268** | — | — | 630 |
-| **total** | **42,716** | **37,497** | **80,213** | **5,226** | **5,358** | **5,896** |
+| **total** | **42,716** | **37,501** | **80,217** | **5,226** | **5,358** | **5,896** |
 <!-- END generated table -->
 
 ### Reading it

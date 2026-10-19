@@ -146,6 +146,8 @@ ascw_flush_x:
     jmp short .fold
 
 .built:
+    cmp word [cs:bp+asw_err-asw_v], FERR_IO
+    je .back                    ; a walk's read failed: the old file stands
     call asw_close              ; CX = the file's size; CF = nothing to write
     jc .same
     mov es, [cs:bp+asw_seg-asw_v]        ; --- 7. the same bytes write nothing ---
@@ -257,8 +259,13 @@ asw_dir:
     ASWX dsk_dirw_start_x
 .sec:
     ASWX dsk_dirw_get_x         ; dsk_secbuf (LOW_SEG = SS) holds a sector
-    jc .out                     ; ...or the directory ended, or a read failed:
-    mov si, dsk_secbuf          ; either way this directory is done
+    jnc .got
+    jz .end                     ; ...or the directory ended, or a read FAILED,
+    mov word [cs:bp+asw_err-asw_v], FERR_IO ; and a flush that missed part
+.end:                           ; of the volume writes nothing (ascw_flush_x)
+    ret
+.got:
+    mov si, dsk_secbuf
     mov cx, 512 / 32
 .ent:
     mov al, [ss:si]
@@ -383,7 +390,7 @@ asw_old:
     mov es, [cs:bp+asw_seg-asw_v]
     mov bx, ASW_OLD
     ASWX dsk_read_chain_x       ; ES:BX, DX sectors
-    jc .no
+    jc .ioerr
     mov si, asc_s_magic         ; DS:SI against ES:DI, ES the claim
     xor di, di
     mov cx, 7
@@ -412,6 +419,8 @@ asw_old:
     shr bx, 1
     mov [cs:bp+asw_onext-asw_v], bx
     ret
+.ioerr:                         ; a file that did not READ is not no file:
+    mov word [cs:bp+asw_err-asw_v], FERR_IO ; the flush must not replace it
 .no:
     xor ax, ax
     mov [cs:bp+asw_onapp-asw_v], ax
@@ -615,8 +624,8 @@ asw_take_old:
     mul word [cs:bp+asw_onapp-asw_v]
     add ax, ASW_OLD + ASC_HDR
     mov si, ax
-    mov al, [cs:bp+asw_oix-asw_v]
 .ext:
+    mov al, [cs:bp+asw_oix-asw_v] ; each pass: asw_ext leaves the NEW index
     cmp [es:si+3], al
     jne .nx
     push si

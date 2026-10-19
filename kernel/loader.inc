@@ -1128,7 +1128,7 @@ ld_alloc:
                                 ; mem_claim's own granularity then guarantees
     call ld_slot                ; BX = the owner word: this record's slot
     call mem_claim_hi_x ; from the TOP down, away from the data claims
-    jc .nomem                   ; growing up from the bottom (SPEC.md 50.3)
+    jc .nodrv                   ; growing up from the bottom (SPEC.md 50.3)
     mov [ld_base], dx
 %ifdef KERN_BIG
     test byte [ld_cfmt], LD_F_DESK >> 3
@@ -1170,7 +1170,11 @@ ld_alloc:
     ret                         ; routine's answer is CF - it was the caller's
                                 ; fall-through before the split, where the
                                 ; flag went nowhere
-.nomem:
+.nodrv:
+%ifdef KERN_BIG
+    COLDCALL desk_drop_x        ; the region refused AFTER desk_need: DI is
+%endif                          ; the unpublished record, IF_DESK clear, so
+.nomem:                         ; DESK.DRV goes unless a live widget holds it
     mov al, LD_ENOMEM
     stc
     ret

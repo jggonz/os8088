@@ -3665,6 +3665,16 @@ settings core on a ROM machine.
 **A held image is the disk's, byte for byte**: the tool compares each one with
 the unwrapped `.drv` in the build directory before it writes the ROM.
 
+**...and it is handed out only to its own BUILD.** §2.10.4 adopts a kernel
+whose only difference is the build number, so a ROM outlives the commit it
+was cut at, and a held image still carries that commit's `MOD_H_BUILD`:
+`mod_check` would refuse the copy, and the disk would never be asked. So
+`ROMF_SIZE` and `ROMF_COPY` answer CF = 1 - none - unless the held image's
+build word equals the running kernel's `[mod_hdrt + MOD_H_BUILD]`
+(`RT_HDRT`, which the tool emits and checks names `mod_hdrt`), and a newer
+kernel reads the module off the system disk as if the ROM held nothing. No
+resident byte: the test is the ROM's.
+
 **The package is the Task Manager, through `OSAPI_PKG_START`'s image arm**
 (§21.5). `ROM_PKG` (kern_small's, with `ROM_COLD`) gives `ui_sys_open` an arm
 ahead of the disk: `ROMF_PKG` reads the 8.3 name out of `[ui_desc]`'s
@@ -21412,7 +21422,7 @@ Sticky App kept 5 KB pinned for the session, reported off the field. The drop
 rule is `desk_drop_x` (`kernel/deskmod.inc`, resident `.cold`, far):
 given a record that is not a widget from here on, it clears that record's
 `IF_DESK` and, when NO record in `inst_tab` carries `IF_DESK`, calls
-`mod_drop MOD_DESK`. Four callers:
+`mod_drop MOD_DESK`. Five callers:
 
 | caller | why there |
 |---|---|
@@ -21420,6 +21430,7 @@ given a record that is not a widget from here on, it clears that record's
 | `inst_task_die`, under the gfx lock | a Sticky App on its worker arm (`os88stik.inc`'s `stik_painted`), whose record is freed on that worker |
 | step 9, for a launch whose window is NOT `WF_DESK` | an `OS88_F_DESK` package that came up titled, so step 5's load is spent |
 | `ld_unreserve` | a launch that failed after step 5 loaded the image |
+| `ld_alloc`'s region refusal | `mem_claim_hi_x` refused after `desk_need` loaded the module: DI is the unpublished record, `IF_DESK` still clear, so a near-full heap is not left 5 KB shorter. A full `inst_tab` keeps it: every record is live, and a live widget holds it anyway |
 
 **"Any record", not "any live record"**, and `ld_alloc` marks an
 `OS88_F_DESK` launch's record `IF_DESK` as soon as its region is claimed,
@@ -55818,6 +55829,11 @@ and folder. `sc_m_lnk` composes the record in `cpc_buf` from the drag's
 `fcp_cb*`, sc_m_new's path code minus the picture, writes it with
 `dskw_write` (an existing link of that name is replaced) and ends in
 `fm_paste_res`, so the listing is re-read and repainted like a paste's.
+**The one replace it refuses is the link's own source**: a `FOO.LNK`
+Alt-dropped into its own folder would be rewritten as a link to itself and
+what it named would be lost, so when the destination volume and folder are
+the drag's and the composed name is `fcp_cbname`, it writes nothing and
+toasts "A link cannot replace itself".
 **Nothing resident but the test**: seven bytes in `fm_dgdrop`, the writer
 riding the settings core the desktop gestures already read.
 
@@ -100125,7 +100141,11 @@ The entry, `ascw_flush_x`:
 3. **Claims its work buffer** (`ASW_KB`, transient, freed before return).
 4. **Walks the root**, collecting its packages, its folders and `ASSOC.DAT`'s
    own entry, and **reads the old file** under `asc_use_x`'s tests (§54.7.1's
-   guards). A bad or absent file is an empty one.
+   guards). A bad or absent file is an empty one. **A read that FAILS is
+   not an end**: a directory sector (`dsk_dirw_get_x`'s CF=1 with ZF=0) or
+   the old file not reading sets `FERR_IO`, and the flush writes nothing
+   after the walks, so a good `ASSOC.DAT` is never replaced by one missing
+   the rows past the bad sector.
 5. **For each package in the root and in each folder one level down** (the
    shape `build_assoc` and the installer index on), keyed by
    `(stem, raw size)`:
@@ -166541,6 +166561,17 @@ machine that cannot mount its volume, find its image or walk its chain reboots
 and resumes the long way instead of losing the session — so the fast path is
 an optimisation and never a new way to fail. That fallback is not theoretical:
 it is what ran, correctly, through two defects below.
+
+**A kernel whose `.cold` is in the HMA refuses the live resume** and takes
+`int 19h`. The wake address is `.cold`'s first touch (`hbm_wake`'s
+`ROMF_HRESET` through `rom_mfp`), and nothing on the live route checks that
+A20 is still open or that FFFF:x still holds `.cold`: a DOS program that
+closes the gate (an IBM-AT-style `int 15h AH=87h`) or allocates extended
+memory from 1MB up leaves it executing garbage. So step 3b writes no
+`KDL_WAKE` when `[api_coldseg]` is `HMA_SEG`, the segment stays the 0
+DOS.O88 posted, and the boot that resumes reinstalls `.cold` before
+`hbm_ask`'s pad check. A ROM-adopted `.cold` (F4000) cannot be overwritten
+and keeps the live path.
 
 **MEASURED: 996 bytes, and this one crosses the rung.** The image goes 35,476
 → 36,472, `KD_IMG_KB` 35 → 36, and the DOS program **585 KB → 584**. 392 bytes

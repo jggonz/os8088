@@ -1678,7 +1678,7 @@ vid_ctx_act:
 ;
 ; in:       the live geometry, already published by vid_apply
 ; out:      [vid_ndisp] = 1, [vid_cur] = 0, display 0 captured at (0,0)
-; clobbers: flags
+; clobbers: flags, BP (spw_near's target, left in it)
 ;
 ; Called from kmain beside vid_probe_avail and NOT from vid_apply - which is the
 ; trap this module already carries a scar from. vid_apply runs from the SPLASH,

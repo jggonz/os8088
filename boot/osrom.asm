@@ -69,6 +69,9 @@ ROMF_HCLAIM     equ 5           ; 5): the drivers and the blocks under `.cold`.
                                 ; (6 was HFREE: HCLAIM with CX = 0 now)
 ROMF_HDROP      equ 7           ; A ROM is never asked any of them - the
 ROMF_HRESET     equ 8           ; kernel's drv_hma_door asks only the HMA's
+ROM_MODHB       equ 4           ; MOD_H_BUILD: the build word of a module's
+                                ; header and of mod_hdrt (RT_HDRT), which
+                                ; kernel/mod.inc pins at +4 with an %error
 SOCK_SIZE       equ 8192        ; one socket, U28 = 0 ... U32 = 4
 SOCK_N          equ 5
 
@@ -628,6 +631,12 @@ rom_modfix:
     mov si, [cs:rt_img+bx]      ; the image's offset in this ROM, 0 = none
     or si, si
     jz .no
+    push ax                     ; ...and none unless it is THIS kernel's
+    mov ax, [cs:si+ROM_MODHB]   ; build: rom_patch adopts a kernel that
+    cmp ax, [RT_HDRT+ROM_MODHB] ; differs only in BUILD_NUM, and mod_check
+    pop ax                      ; would refuse the copy with no disk tried.
+    jne .no                     ; SIZE and COPY still agree, and the disk is
+                                ; read as if this ROM held nothing
     cmp al, ROMF_COPY
     je .copy
     mov ax, [cs:rt_img+bx+2]    ; SIZE: the bytes, out in AX

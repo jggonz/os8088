@@ -538,6 +538,9 @@ def kernel_tables(build, variant):
             # offset in `.cold`, which is the ROM's own segment on kern_small
             "ldfpkg": _symbol(amap, ".cold", "ldf_ld_pkg_start"),
             "uidesc": _symbol(amap, ".text", "ui_desc"),   # ...and whose name
+            # mod_check's header, whose build word rom_modfix compares a held
+            # image's against: a kernel one commit newer reads the disk
+            "hdrt": _symbol(amap, ".text", "mod_hdrt"),
             "modfp": _symbol_any(amap, "mod_fp"),
             "modfpend": _symbol_any(amap, "mod_fp_end"),
             "modtab": modtab, "rowimg": rowimg, "names": names,
@@ -606,7 +609,8 @@ def write_romtab(t, path, held=None, pkg=None, hdrv=(), drvorg=0):
            f"RT_PKGOFF   equ 0x{pkg[1] if pkg else 0:04X}",
            f"RT_PKGLEN   equ {pkg[2] if pkg else 0}",
            f"RT_LDFPKG   equ 0x{t['ldfpkg']:04X}",
-           f"RT_UIDESC   equ 0x{t['uidesc']:04X}"]
+           f"RT_UIDESC   equ 0x{t['uidesc']:04X}",
+           f"RT_HDRT     equ 0x{t['hdrt']:04X}"]
 
     def words(label, ws):
         out.append(f"{label}:")
@@ -781,6 +785,16 @@ def verify_model(build, img, t):
     k3[off + 100] ^= 0x01
     if model_adopt(img, k3, bytearray(blob), t):
         probs.append("the model adopts a kernel whose .cold differs")
+    # RT_HDRT IS mod_hdrt: rom_modfix answers SIZE and COPY only when a held
+    # image's build word matches the one there, so a wrong offset would
+    # send every module to the disk (or worse, accept a stale one)
+    hd = t["hdrt"]
+    if bytes(t["text"][hd:hd + 2]) != b"\x4F\x38":
+        probs.append(f"RT_HDRT ({hd:#06x}) does not name mod_hdrt's magic")
+    for n in t["held"]:
+        if bytes(t["images"][n][4:6]) != bytes(t["text"][hd + 4:hd + 6]):
+            probs.append(f"the ROM's {t['names'][n]} is not this build's - "
+                         f"rom_modfix would never hand it out")
     # A HELD MODULE IS THE DISK'S, BYTE FOR BYTE: what ROMF_COPY hands
     # mod_need must be what dskw_read_x would have, or a ROM machine runs a
     # different Control Panel from the one on the floppy

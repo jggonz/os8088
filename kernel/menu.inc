@@ -299,7 +299,8 @@ MENU_CLKC   equ 26              ; menu_clkbuf: the field is 25 cells on both
 ; -----------------------------------------------------------------------------
 ; menu_init - boot state: Locator owns the bar (SPEC.md 12)
 ; in:  nothing (called from kmain after wm_init, before the first paint)
-; out: nothing (all registers preserved)
+; out: nothing (all registers preserved but BP: spw_near's target is left in
+;      it, and the one caller holds nothing there)
 ; -----------------------------------------------------------------------------
 ; IN THE BOOT OVERLAY (SPEC.md 2.5.2, docs/plans/LAST-DROP-BYTES.md row 17). One
 ; caller, kmain:4299. menu_force is INLINED - it is the two stores below and a

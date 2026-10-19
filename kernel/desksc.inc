@@ -1029,6 +1029,24 @@ sc_m_lnk:
     stosb                       ; ...and LNK_KIND
     pop bx                      ; the destination's folder...
     pop ax                      ; ...and volume
+    cmp al, [fcp_cbdrv]         ; A LINK OVER ITS OWN SOURCE: FOO.LNK dropped
+    jne .other                  ; into its own folder would be rewritten as a
+    cmp bx, [fcp_cbcwd]         ; link to itself, and what it named is lost
+    jne .other
+    mov si, fcp_cbname
+    mov di, assoc_doc
+.same:
+    mov ah, [si]                ; AH: AL is still the volume
+    cmp ah, [di]
+    jne .other
+    inc si
+    inc di
+    or ah, ah
+    jnz .same
+    call COLD_SEG:drvf_drv_vol_back
+    mov si, sc_s_self
+    jmp sc_m_say
+.other:
     mov [fcp_ddrv], al          ; fmv_reload_all's question: which volumes
     call COLD_SEG:fcpf_fcp_goto ; changed
     jc .err
@@ -1641,6 +1659,7 @@ sc_m_serx:
 sc_s_room   db 'No room on the desktop', 0  ; the image's own strings: a toast
 sc_s_many   db 'Too many shortcuts', 0      ; copies, and these cost the
 sc_s_path   db 'Path too long', 0           ; kernel nothing (SPEC.md 2.8)
+sc_s_self   db 'A link cannot replace itself', 0
 
 ; =============================================================================
 section .boot2                    ; the BOOT half (SPEC.md 2.5.1): runs once,
