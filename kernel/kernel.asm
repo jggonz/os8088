@@ -508,7 +508,9 @@ ROMF_HCLAIM equ 5               ; CX = bytes, BX = owner -> DX = seg, AX = org;
 ROMF_HDROP  equ 7               ; DX = an owner: every block it holds;
                                 ; CF = 0 when DX is itself a segment in the
                                 ; pool - an image that ran there
-ROMF_HRESET equ 8               ; every block (a resume)
+ROMF_HRESET equ 8               ; every block (a resume with no pool to restore)
+ROMF_HTAB   equ 9               ; -> DX:AX = the block table, CX = its bytes
+                                ; (a hibernate's copy, SPEC.md 87.4 step 3b)
 HMA_SEG     equ 0xFFFF          ; [api_coldseg] when `.cold` is in the HMA
 DRV_HMA_ORG equ 0xE000          ; a block in the HMA is SEG:DRV_HMA_ORG, never
                                 ; SEG:0 - nothing above 1MB has an offset 0 -

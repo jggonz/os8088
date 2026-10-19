@@ -500,9 +500,9 @@
   "sources": [
    "kernel/hiber.inc"
   ],
-  "stamped": "e4576a70",
-  "strings": "aed273c2e9a54bb4",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "4cd88043",
+  "strings": "d35ebdb2509f31a8",
+  "why": "hibernate carries the HMA driver pool (SPEC.md 87.4 step 3b): page gains the HMA resume requirement and the 'Not enough memory' refusal"
  },
  "HOUSE_PNG": {
   "sources": [],

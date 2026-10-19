@@ -392,6 +392,22 @@ FAST = [
         wants=("build/os8088.img", "build/coldhma.sys", "build/recorder.o88",
                "build/sound.hma.map", "build/hdd.hma.map",
                "build/hddtool.map")),
+    Row("hmahiber", "soak", py("tests/hmahiber.py"), 45.0,
+        "SPEC.md 87.4 step 3b, 87.6 step 0b: hibernate carries the HMA's "
+        "driver pool. WHY QEMU: the closed list, entry 1. hmadrv's machine "
+        "booted from the FLOPPY, so C: is HDD.DRV's own volume - the "
+        "configuration whose sweep used to unload the driver serving the "
+        "image's disk. A, -m 128: Hibernate..., text mode, both files on C: "
+        "(host), QEMU killed, a fresh QEMU resumes: HDD.DRV's and NET.DRV's "
+        "rows and hb_tab records are the image's, their org-DRV_HMA_ORG code "
+        "is back in the pool, SOUND.DRV is reloaded into it, no MEM_K_HIB "
+        "claim is left, C: lists HELLO.TXT and both files are gone. B, -m 1 "
+        "on copies of the disks: `Hibernation: other build` and the pointer "
+        "deleted - the negative control. SOAK: one subsystem, a 286 feature",
+        needs=("qemu", "nasm"),
+        wants=("build/os8088.img", "build/coldhma.sys", "build/recorder.o88",
+               "build/hdd.hma.bin", "build/net.hma.bin",
+               "build/sound.hma.map", "build/hdd.hma.map")),
     Row("romtool", "fast", py("tools/os88rom.py", "--selfcheck"), 0.3,
         "docs/plans/ROM-PLAN.md 1.3: the ROM image builder re-derives its own "
         "invariants - 55 AA and a 32KB declaration (40KB would send the "

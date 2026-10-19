@@ -46,6 +46,10 @@ disk, the desktop shows a window: `A hibernation file is on drive C:`.
 - Resume only works with the same system that hibernated. After you install
   a newer os8088 the file is refused with `Hibernation: other build` and
   deleted. A file that cannot be read says `Hibernation: unreadable`.
+- On a machine with memory above 1MB, resuming needs that memory set up the
+  same way: `XMEM.DRV` turned on and `COLDHMA.SYS` on the system disk, as
+  when you hibernated. Hibernating there also needs a little free memory
+  for a moment; without it the menu bar says `Not enough memory`.
 
 Sound cards and network cards are switched off before the memory is saved
 and switched back on after a resume.

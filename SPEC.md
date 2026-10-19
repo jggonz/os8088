@@ -3739,6 +3739,8 @@ record is docs/plans/HMA-PLAN.md.
   (XMEM.DRV's tier 1, a 286; untested by any row - QEMU's CPUs take tier 2).
 - **Hibernate's pad byte** (§2.10.4) is `[api_coldseg]`'s high byte: the RAM
   rung's, F4 or FF, so an image resumes only where `.cold` is where it was.
+  The pointer's last byte, `HBP_PAD`, is the bytes of §2.10.8's block table
+  the image carries, 0 = none (§87.3).
 
 What it costs: **+2 resident bytes on kern_big** (`[gfx_bpfn]`, above), 0 on
 kern_small; XMEM.DRV's image 1,014 -> 1,145 bytes, which is its claim 1KB ->
@@ -3810,9 +3812,10 @@ The design record is docs/plans/HMA-PLAN.md 5.
   HMA, and goes red on either defect.
 - **`OSAPI_MEM_HMA`** (0x0487) is a driver's buffer up there: AX = bytes ->
   DX:AX = the block, AX never 0; AX = 0, DX = a block -> given back. Only a
-  loaded driver may ask (`drv_owns_seg`), because the HMA is in no hibernate
-  image and a driver is what a hibernate unloads. SOUND.DRV's double buffer
-  asks it first (§34.5.2) and falls back to the heap.
+  loaded driver may ask (`drv_owns_seg`), because `drv_release` gives back
+  every block a driver forgot (ROMF_HDROP) and nothing does that for a
+  package. SOUND.DRV's double buffer asks it first (§34.5.2) and falls back
+  to the heap.
 - **Nothing above 1MB is a DMA target the BIOS can reach**: the IBM AT's
   diskette code keeps four page bits. `dsk_runcap` answers 0 for an HMA buffer,
   so `dsk_xfer` bounces it a sector at a time through `dsk_secbuf`, and
@@ -3834,11 +3837,21 @@ The design record is docs/plans/HMA-PLAN.md 5.
   costs nothing rather than reproducing the window.
 - **XMEM.DRV attaches before the drivers load** - `drv_boot_x` makes the call,
   straight after its mount - so a driver SYSTEM.CFG asks for goes up at boot.
-- **Hibernate**: a driver in the HMA is swept and reloaded like a chip owner
-  whatever its class, because the image does not carry the HMA; the wake
-  empties the pool (ROMF_HRESET) before it reloads, the booting kernel's own
-  drivers having been put there. `OSAPI_DRV_SUSPEND` leaves it standing: the
-  machine stays up.
+- **Hibernate carries the pool**: a driver in the HMA follows its class like
+  a heap one, so HDD.DRV and NET.DRV stay loaded and SOUND.DRV is swept. After
+  the sweep `hbm_hsave` asks the tail where its block table is - **ROMF_HTAB**
+  (9): CF = 0, DX:AX = `hb_tab`, CX = its bytes, `HB_N` × 6 - and copies the
+  table and every live block (FFFF:base, its bytes) into one `MEM_K_HIB`
+  claim, which the image carries because it is conventional memory (§87.4
+  step 3b). `hbm_wake` copies them back to the bases they came from before
+  the `sti` (§87.6 step 0b), so every HMA segment the image names - a row's
+  `DRVR_SEG`, a class pair, a window's `W_DISP` - is true again; with no copy
+  it empties the pool (ROMF_HRESET), the booting kernel's own drivers having
+  been put there. A claim that fails refuses the hibernate (`Not enough
+  memory`). `OSAPI_DRV_SUSPEND` leaves an HMA driver standing: the machine
+  stays up. **The invariant this adds**: a kept-class driver in the HMA may
+  not have its state written by an interrupt, because the copy is taken a
+  block at a time before the image write; HDD.DRV and NET.DRV hook none.
 
 What it costs and buys, measured (`tests/hmadrv.py`, QEMU, an SB16 and an IDE
 disk with SOUND, HDD and NET wanted): **16KB of heap claims gone at boot**
@@ -136267,7 +136280,11 @@ tasks and the clipboard are all as they were.
 
 **What it is not.** Not a suspend: nothing is kept powered. Not a snapshot of
 the hardware: the drivers that own hardware are detached before the image is
-written and loaded again after it is restored (§87.4). And not a feature of
+written and loaded again after it is restored (§87.4). Not a picture of
+extended memory either — with one exception: on a machine whose `.cold` is in
+the HMA, the HMA's driver pool (§2.10.8) is copied down into a claim the image
+carries and copied back up at the wake (§87.4 step 3b, §87.6 step 0b), so a
+disk or cable driver up there survives like a heap one. And not a feature of
 the kernel image: the whole of it except the menu item, the greying
 predicate, a window kind, the boot probe and their thunks is **an on-demand
 module** (§2.8), `HIBER.DRV`, `MOD_HIBER`, read into a heap claim when the
@@ -136387,8 +136404,8 @@ it writes a byte, because a pointer that outlived its question — the window
 closed by its box, or a boot that could not load the module to ask — would
 otherwise name the new image with the old session's wake address for as long
 as the new image's write took, and for good if the new pointer's write
-failed. It is **16 bytes**, and every one of them is something this kernel
-could not have worked out for itself:
+failed. It is **18 bytes** (`HBP_SIZE`), and every one of them is something
+this kernel could not have worked out for itself:
 
 ```
 +0   db 'HIB1'                   magic          \
@@ -136396,9 +136413,17 @@ could not have worked out for itself:
 +6   dw MOD_STAMP                the layout of this build (§2.8.2)  ONE
 +8   dw [mem_top]                paragraphs of conventional memory  description,
 +10  db [vid_kind]               the adapter the desktop was on     stamped by
-+11  db 0                                                    /  build and
++11  db [api_coldseg] >> 8       where `.cold` runs (§2.10.7)  /  build and
 +12  dw off, dw seg              hb_wake, in the module's own segment
++16  db HBP_DOS                  1 = written for a DOS handoff (§96.40)
++17  db HBP_PAD                  the HMA pool's table bytes the image carries,
+                                 0 = none (§87.4 step 3b)
 ```
+
+`hbm_ask` compares the first twelve; the last two describe the occasion and
+the image rather than the machine. A non-zero `HBP_PAD` is checked against
+this boot's tail (ROMF_HTAB, §2.10.8) before anything is torn down, and a
+tail that refuses or answers another size is `Hibernation: other build`.
 
 The head in front of `hb_wake` is **one object**, `hbm_ptrfix`: it IS the
 pointer file `hbm_wrimg` writes (the wake address and the DOS byte filled in
@@ -136434,12 +136459,14 @@ and **posts** `UI_RBQ_HIBER` in `[ui_rebootq]` — §20.10's deferral, for
 follows detaches drivers, which yields. `ui_task` spends the post at the top
 of its pass with nothing held, in `hb_perform`:
 
-1. **Detach every loaded driver whose class is not `DRVC_DISK` or
-   `DRVC_FILE`** (`drv_unload` per row: sound, the parallel link, the NIC),
-   recording the rows in `[hb_drvmask]`. Their hardware state cannot cross a
-   power cycle and their claims would be restored to addresses a fresh boot
-   has given to somebody else; the disk driver and the RAM disk own no
-   hardware the BIOS does not already own, and their state is memory.
+1. **Detach every loaded driver whose class is not `DRVC_DISK`,
+   `DRVC_FILE`, `DRVC_FILE2` or `DRVC_EMS`** (`drv_unload` per row: sound,
+   the NIC), recording the rows in `[hb_drvmask]`. Their hardware state
+   cannot cross a power cycle and their claims would be restored to addresses
+   a fresh boot has given to somebody else; the disk driver, the parallel
+   cable and the RAM disk own no hardware the BIOS does not already own, and
+   their state is memory. A driver running from the HMA (§2.10.8) follows its
+   class like a heap one: step 3b carries it.
 2. `gfx_lock`, and `inc [sch_lock]`: the image must be one instant of the
    machine, so no other task runs while it is written. Interrupts stay on —
    int 13h needs them on an AT — and the tick, the mouse and the keyboard
@@ -136448,6 +136475,13 @@ of its pass with nothing held, in `hb_perform`:
    yields and a task that took the turn could have moved the current
    directory — and `hbm_forget`: the old pointer and image are deleted before
    a byte is written (§87.3).
+3b. **The HMA's pool**, when `.cold` is in the HMA (`hbm_hsave`): ROMF_HTAB
+   names the tail's block table, and the table and every live block — what
+   the sweep left, its records in order — are copied into one `MEM_K_HIB`
+   claim, a block whole under each `pushf`/`cli`, with the table's bytes in
+   the pointer's `HBP_PAD` and the claim's segment in the module's
+   `[hbm_hseg]`. Last before the write, so nothing but the write runs between
+   the copy and the picture. No live block is no claim and `HBP_PAD` = 0.
 4. Bank `hb_perform`'s **entry** `SS:SP`. The far address of `hb_wake` is
    not banked: step 6 writes it straight into the pointer, and the `.bss`
    copy once taken here was never read. Everything above that SP — the dispatcher's return, the thunk's, the UI
@@ -136461,10 +136495,11 @@ of its pass with nothing held, in `hb_perform`:
    `sched_unhook` and `int 19h` — the reboot path's tail (§20.10), so a key
    restarts the machine into the question below.
 
-A failure at 3, 5 or 6 undoes 1, 2 and 4 — the drivers are loaded again from the mask, the user's volume and folder
+A failure at 3, 3b, 5 or 6 undoes 1, 2 and 4 — the pool's claim freed, the drivers loaded again from the mask, the user's volume and folder
 put back (`drv_vol_bank`/`back`, as `hbm_arm` and a refused resume do),
-the lock and `sch_lock` released — and toasts `Hibernate failed`; the window
-goes back to `HB_M_ASK`.
+the lock and `sch_lock` released — and toasts `Hibernate failed`, or
+`Not enough memory` when 3b's claim was refused; the window goes back to
+`HB_M_ASK`.
 
 **The image is captured progressively and that is why the disk caches are
 discarded on resume** (§87.6): the FAT window, the read-ahead and the write
@@ -136548,6 +136583,13 @@ say so.
 In the restored kernel, on the restored stack, interrupts off, `[sch_lock]`
 still up from step 3 of §87.4 and the gfx lock still held:
 
+0b. **The HMA's pool**, when `.cold` is in the HMA: `[hbm_hseg]` is the
+   image's, so §87.4 step 3b's copy goes back — ROMF_HTAB, the table over this
+   boot's, then every live record's bytes to FFFF:base — before an interrupt
+   can run anything up there. `.cold` and the tail are this build's again
+   (the pad byte) and A20 is as the fresh XMEM.DRV left it, open; the boot's
+   own HMA drivers were let go by §87.5 step 3's `drv_shutdown`. With no copy
+   the pool is emptied instead (ROMF_HRESET), for step 6 to fill.
 1. `sti`. The IVT is the image's, the PIT is in the kernel's mode 2 (the
    fresh boot's `sched_init` set it and nothing on the resume path unset it),
    and with `sch_lock` up the tick counts and switches nobody.
@@ -136571,7 +136613,9 @@ still up from step 3 of §87.4 and the gfx lock still held:
    dropped (`dsk_fatw_drop`), the dirty range and the resident window marked
    empty, the read-ahead flushed, the write gate shut, the batch depths
    zeroed, `mem_pinseg` cleared and the progress widget given back with
-   `fpg_end` — every one of them a word the write was in the middle of.
+   `fpg_end` — every one of them a word the write was in the middle of. The
+   two `MEM_K_HIB` claims the picture was taken over go too: the extent list
+   (§87.6.1) and the HMA pool's copy, spent at 0b.
 4. `vid_setmode`, then the glyph table re-asked (`FONT_PICK`, §6.0.1: a
    heap copy refilled, a ROM pointer replaced), then `[hb_mode]` = `HB_M_GONE` and the Hibernate window
    closed with `app_close_win` — GONE first, so §87.1's hook leaves this
@@ -136595,7 +136639,8 @@ still up from step 3 of §87.4 and the gfx lock still held:
 **What deliberately does not survive**: the BIOS data area (the ROM's, and
 a key typed during the restore is in its buffer, not the kernel's); the
 state of any driver that owns hardware (loaded fresh); extended memory (the
-item greys while any is held); and the disk caches (rebuilt). The mouse
+item greys while any is held) — the HMA's pool apart, which step 0b puts
+back; and the disk caches (rebuilt). The mouse
 needs nothing: the fresh boot's `mouse_init` left the UART and the 8042 in
 the state the image's kernel expects, because the image's kernel set them
 up the same way, and the resume path never calls `mouse_unhook`.
@@ -136642,7 +136687,14 @@ packed) whose scratch - the DOS handoff's 561-byte record copy and the pointer
 buffer, 592 bytes - is `nobits` `.modhb` in the tail of the claim's KB
 rounding, so the whole of it is a **6KB** claim (it was 6,662 bytes of image
 and 7KB before the module's first size pass). The resume stub is ~450 bytes of
-it, its one message included.
+it, its one message included. **Carrying the HMA's pool** (§87.4 step 3b, §87.6
+step 0b) is **0 resident bytes** on either kernel, +270 of the module's image
+and 2 of its bss — inside the 7KB claim kernel size pass 13 had already
+made it (6,095 + 594 bytes of 7,168) — and 18 of
+COLDHMA.SYS's resident tail for ROMF_HTAB; it costs no int 13h call, the image
+being `[mem_top]` × 16 bytes either way, and a transient heap claim of the
+pool's live bytes (~9KB with HDD.DRV and NET.DRV up there) from the copy to the
+wake.
 
 Time on the 5150: the image is 1,280 sectors on a 640KB machine, and both the
 write and the read go out in track-sized runs, so it is ~80 int 13h calls
@@ -136677,6 +136729,20 @@ with a `SYSTEM.CFG` that wants `HDD.DRV`, the same VHD mounted through it —
 is the same script with `--driver`, registered as `hibernatedrv`. Both write
 three rendered screenshots to `build/hiber-*.png`; docs/TESTING.md has the
 recipe and what it cannot see.
+
+**The HMA's pool** is `tests/hmahiber.py` (soak, `hmahiber`), and it is QEMU's
+by name: MartyPC's 8088 has no HMA. `hmadrv`'s machine — `-m 128`, an SB16, an
+IDE disk, a FLOPPY boot whose SYSTEM.CFG wants SOUND, HDD and NET — so
+the hibernation file is on HDD.DRV's own volume, which is the configuration
+that used to refuse: the sweep took HDD.DRV down and the write had nowhere to
+go. It hibernates, kills QEMU, boots a fresh one and resumes, then reads the
+guest: HDD.DRV's and NET.DRV's rows name the same HMA segments as before, the
+tail's `hb_tab` holds their records, HDD.DRV's code in the pool is the
+org-`DRV_HMA_ORG` assembly's, SOUND.DRV is back in the pool, no `MEM_K_HIB`
+claim is left, `[sch_lock]` is down, and both files are gone from the disk on
+the host. Its second leg boots copies of the disks taken while the image was on
+them under `-m 1`, where `.cold` stays in RAM, and asserts the opposite:
+`Hibernation: other build` and the pointer deleted.
 
 ## 88. CLEAR SKIES — a filled-polygon flight simulator in a foreign mode (`apps/skies/`)
 
@@ -166563,8 +166629,8 @@ an optimisation and never a new way to fail. That fallback is not theoretical:
 it is what ran, correctly, through two defects below.
 
 **A kernel whose `.cold` is in the HMA refuses the live resume** and takes
-`int 19h`. The wake address is `.cold`'s first touch (`hbm_wake`'s
-`ROMF_HRESET` through `rom_mfp`), and nothing on the live route checks that
+`int 19h`. The wake's first touch of the HMA is `hbm_wake`'s step 0b (§87.6),
+the pool copied back up through `rom_mfp`, and nothing on the live route checks that
 A20 is still open or that FFFF:x still holds `.cold`: a DOS program that
 closes the gate (an IBM-AT-style `int 15h AH=87h`) or allocates extended
 memory from 1MB up leaves it executing garbage. So step 3b writes no

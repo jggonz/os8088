@@ -116,10 +116,11 @@ AH=87h). The 286 machines in `vm/` are where it can be looked at.
   today; it is the same class of hazard as a DOS program writing to kernel
   memory, and the box's own answer to it would be an int 15h hook there.
 * **Tier 1 on real iron** - section 2's last paragraph.
-* **Hibernate on an HMA machine** is wired (the pad byte) but not driven by a
-  row: an image hibernated with `.cold` in the HMA resumes only onto a boot
-  that put the same build's `.cold` there, which XMEM.DRV does before the
-  Resume question is ever asked.
+* **Hibernate on an HMA machine** is wired by the pad byte: an image
+  hibernated with `.cold` in the HMA resumes only onto a boot that put the
+  same build's `.cold` there, which XMEM.DRV does before the Resume question
+  is ever asked. `hmahiber` drives it under QEMU (5.4's last point); a real
+  286's resume is not driven by anything, section 2's gap.
 
 ## 4. The other 25KB - can it buy more heap?
 
@@ -267,9 +268,18 @@ Found by `tests/hmadrv.py`, each as a red row first:
   base, which an HMA driver does not have, so Install refused with *Not
   enough memory to copy* (+11 bytes of `.cold`). `hmadrv` now opens the page
   and runs the whole install with HDD.DRV in the pool.
-* **Hibernate does not carry the HMA**: a driver up there is swept and
-  reloaded like a chip owner whatever its class, and the wake empties the
-  pool (ROMF_HRESET) before it reloads. `OSAPI_DRV_SUSPEND` keeps it.
+* **Hibernate carries the pool** (SPEC.md 87.4 step 3b, 87.6 step 0b). The
+  first cut swept every HMA driver whatever its class, because nothing above
+  1MB is in the image - and on a floppy-booted 286 whose only C: is HDD.DRV's
+  that took down the volume the image was about to be written to, so the
+  hibernate refused. Now an HMA driver follows its class like a heap one,
+  and after the sweep the module asks the tail where its block table is
+  (ROMF_HTAB) and copies the table and every live block into a `MEM_K_HIB`
+  claim, which the image carries because it is conventional memory. The
+  wake copies them back to the same bases before the `sti`; with no copy it
+  empties the pool (ROMF_HRESET) as before. 0 resident bytes, +270 of
+  HIBER.DRV inside its 7KB claim, 18 of the tail, no disk I/O.
+  `OSAPI_DRV_SUSPEND` keeps an HMA driver standing.
 
 ### 5.5 SOUND.DRV's claim
 
@@ -300,8 +310,8 @@ past it, `tools/os88rom.py` refuses the build and `HMA_COLD_AT` comes down,
 which is a driver that no longer fits rather than a machine that breaks.
 
 Not driven by any row: unloading and reloading an HMA driver from the
-Drivers page (`drv_release`'s ROMF_HDROP, then a fresh placement);
-hibernate with HMA drivers (5.4's last point); and tier 1 on real iron
+Drivers page (`drv_release`'s ROMF_HDROP, then a fresh placement); and tier
+1 on real iron
 (section 2). **A20 matters more now**: SOUND.DRV's ISR and `snd_tick`'s call
 into it run from the HMA, so a DOS program that closes A20 (section 3) stops
 the sound driver as well as `.cold` - and the BIOS's own AH=87h did exactly

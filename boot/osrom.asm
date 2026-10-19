@@ -69,6 +69,7 @@ ROMF_HCLAIM     equ 5           ; 5): the drivers and the blocks under `.cold`.
                                 ; (6 was HFREE: HCLAIM with CX = 0 now)
 ROMF_HDROP      equ 7           ; A ROM is never asked any of them - the
 ROMF_HRESET     equ 8           ; kernel's drv_hma_door asks only the HMA's
+ROMF_HTAB       equ 9           ; (...and a hibernate asks where hb_tab is)
 ROM_MODHB       equ 4           ; MOD_H_BUILD: the build word of a module's
                                 ; header and of mod_hdrt (RT_HDRT), which
                                 ; kernel/mod.inc pins at +4 with an %error
@@ -777,7 +778,7 @@ HB_HI       equ RT_COLDVST
   %error "the pool reaches past HB_ORG, where a block's segment would wrap"
 %endif
 
-; rom_hma - the HMA's functions, AL = ROMF_HPLACE .. ROMF_HRESET
+; rom_hma - the HMA's functions, AL = ROMF_HPLACE .. ROMF_HTAB
 ;   HPLACE  ES = the claim holding an org-0 driver image the kernel has just
 ;           checked and zeroed the bss of, CX = image + bss bytes -> CF = 0,
 ;           AX = the segment it runs at in the HMA now (its header at AX:HB_ORG).
@@ -792,7 +793,10 @@ HB_HI       equ RT_COLDVST
 ;           when DX is a segment in the pool (F000 up: that image ran here),
 ;           CF = 1 when it is the heap's - drv_release's "is there a claim
 ;           to free as well", answered where the segment's meaning is known
-;   HRESET  every block. CF = 0 (a resume: nothing the image holds names one)
+;   HRESET  every block. CF = 0 (a resume whose image carried no pool)
+;   HTAB    -> CF = 0, DX:AX = hb_tab and CX = its bytes: a hibernate copies
+;           it and every live block into its image, and the wake copies them
+;           back (SPEC.md 87.4, 87.6). A block's own bytes are FFFF:base
 ; preserves: every register but AX and the outputs named
 rom_hma:
     push bx
@@ -807,6 +811,8 @@ rom_hma:
     cmp al, ROMF_HPLACE
     je hb_place
     mov si, hb_tab              ; (hb_free's walk, reached from hb_claim)
+    cmp al, ROMF_HTAB
+    je hb_htab
     cmp al, ROMF_HCLAIM
     je hb_claim
     cmp al, ROMF_HDROP
@@ -820,6 +826,13 @@ rom_hma:
     xor ax, ax
     rep stosw
     jmp hb_yes
+
+hb_htab:                        ; HTAB: SI = hb_tab, which is AX out; DX
+    mov bp, sp                  ; and CX are the saved frame's, as hb_claim
+    mov [bp+10], cs             ; writes its DX
+    mov word [bp+12], HB_N * 6
+    mov ax, si
+    jmp hb_yesax
 
 hb_free:                        ; SI = hb_tab
     cmp word [cs:si], 0

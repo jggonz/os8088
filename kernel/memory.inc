@@ -4080,8 +4080,8 @@ mem_sum_kb:
 ;                 docs/plans/HMA-PLAN.md 5)
 ; in:  AX = bytes, 1..8,192 -> a block; AX = 0 and DX = a block's segment ->
 ;      give it back. ES = the caller's DS (an X cell), which must be a loaded
-;      driver's: the HMA is not in a hibernate's image, and a driver is what
-;      a hibernate unloads and loads again
+;      driver's: drv_release gives back every block a driver forgot, and
+;      nothing does that for a package
 ; out: a block: CF = 0, DX = its segment and AX = its first OFFSET - which is
 ;      not 0, nothing above 1MB being reachable at offset 0 - and its physical
 ;      address is DX * 16 + AX, 24 bits, for a DMA controller. CF = 1: no HMA
