@@ -1,0 +1,1207 @@
+{
+ "00-VIDS_TXT": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "1942_O88": {
+  "sources": [
+   "apps/1942"
+  ],
+  "stamped": "e4576a70",
+  "strings": "a912f744a77d6729",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "1STREAD_ME": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "APPDATA": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "APPLE2": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "APPLE2_O88": {
+  "sources": [
+   "apps/apple2"
+  ],
+  "stamped": "e4576a70",
+  "strings": "84a2ce489ed87f7e",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "APPS": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "ARCHIVO_F88": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "ARKANOID_O88": {
+  "sources": [
+   "apps/arkanoid"
+  ],
+  "stamped": "e4576a70",
+  "strings": "be8025f72eec2b00",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "ARTFUL_O88": {
+  "sources": [
+   "apps/artful"
+  ],
+  "stamped": "9deeee7d",
+  "strings": "c739282f65a859f0",
+  "why": "start card New/Open ask about unsaved changes over the writing screen (checked on MartyPC)"
+ },
+ "ASSOC_DAT": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "AUDIO_O88": {
+  "sources": [
+   "apps/audio"
+  ],
+  "stamped": "d511fdd4",
+  "strings": "c66ee02557046ce8",
+  "why": "Open while paused keeps the paused song (added, not selected); the bar empties with the clock at End of playlist and Stop"
+ },
+ "AUTOSTRT": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "BALLOONS_PNG": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "BATTLE1_MID": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "BEVERLY_MOD": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "BOOTHD_SYS": {
+  "sources": [
+   "boot/boothd.asm"
+  ],
+  "stamped": "e4576a70",
+  "strings": "075d3ddf5a3a826e",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "BOUNCE_GIF": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "BOUNCE_O88": {
+  "sources": [
+   "apps/bounce"
+  ],
+  "stamped": "e4576a70",
+  "strings": "48d2f716be01fa6b",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "BROWSER_HTM": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "BROWSER_O88": {
+  "sources": [
+   "apps/browser"
+  ],
+  "stamped": "9deeee7d",
+  "strings": "955cbc3c9a274645",
+  "why": "a typed https address says Https is not supported, as a clicked one does; with no link driver the page being read stays live under the refusal"
+ },
+ "C64": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "C64_O88": {
+  "sources": [
+   "apps/c64"
+  ],
+  "stamped": "86ee3df0",
+  "strings": "3308f2081ea59ce1",
+  "why": "checked: Smart attach dialog opens with Open greyed until a file is picked, Preferences items aligned; the page describes neither in detail"
+ },
+ "CALC_O88": {
+  "sources": [
+   "apps/calc"
+  ],
+  "stamped": "e4576a70",
+  "strings": "f83943ee729f93c0",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "CANCAN_MID": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "CATALOG_TXT": {
+  "sources": [],
+  "stamped": "9deeee7d",
+  "strings": null,
+  "why": "checked: the Weave disk's CATALOG.TXT says how a user puts their own bundle on a disk (copy it, double-click it) instead of naming the Makefile's BUNDLES="
+ },
+ "CAT_GIF": {
+  "sources": [],
+  "stamped": "d511fdd4",
+  "strings": null,
+  "why": "Paint's refusal of a GIF over 64KB is named: the toast GIF larger than 64KB"
+ },
+ "CHARTER_F88": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "CHART_O88": {
+  "sources": [
+   "apps/chart"
+  ],
+  "stamped": "e4576a70",
+  "strings": "fe83b9c972b49330",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "CITY_PCX": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "COLDHMA_SYS": {
+  "sources": [
+   "boot/osrom.asm"
+  ],
+  "stamped": "e4576a70",
+  "strings": "8330e47c4eccd94f",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "CONTENTS_TXT": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "COPYING": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "COURIER_F88": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "CTRL_DRV": {
+  "sources": [
+   "kernel/ctrl.inc"
+  ],
+  "stamped": "d511fdd4",
+  "strings": "3ba5d1a1f6727cae",
+  "why": "Drivers page: ticking a row no longer wipes the scroll-down arrow; page text unchanged"
+ },
+ "CWORD": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "CWORD_O88": {
+  "sources": [
+   "apps/cword"
+  ],
+  "stamped": "55642792",
+  "strings": "e29c72eb33b83e26",
+  "why": "Undo, Cut/Copy/Paste keys, Ctrl+F Search, Alt+F4, Y/N/C on the save prompt, draggable ruler markers, labelled indent boxes, Confirm Changes and RTF keeping every format, all driven under MartyPC"
+ },
+ "CYCLONE_O88": {
+  "sources": [
+   "apps/cyclone"
+  ],
+  "stamped": "e4576a70",
+  "strings": "ddfc1bf0658edc87",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "DEMO_MID": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "DESKCAL_O88": {
+  "sources": [
+   "apps/deskcal"
+  ],
+  "stamped": "d0d605c1",
+  "strings": "32eeb74bb5d87863",
+  "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
+ },
+ "DESKCLOK_O88": {
+  "sources": [
+   "apps/deskclok"
+  ],
+  "stamped": "0606f018",
+  "strings": "9c05a589765551da",
+  "why": "new page: written from apps/deskclok (Clock/Face/Size menus, key tables of the clock, settings and alarm windows, panel strings) and SPEC.md 110.14; shots taken on a VGA XT"
+ },
+ "DESK_DRV": {
+  "sources": [
+   "kernel/deskmod.inc"
+  ],
+  "stamped": "e4576a70",
+  "strings": "075d3ddf5a3a826e",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "DISKOPS_DRV": {
+  "sources": [
+   "kernel/diskops.inc"
+  ],
+  "stamped": "faab005c",
+  "strings": "676cabf40e203a01",
+  "why": "Clone and Write Image give the target a serial of its own (SPEC.md 18.8.2.1); added one sentence each, nothing quoted changed"
+ },
+ "DOCK_DRV": {
+  "sources": [
+   "kernel/dockmod.inc"
+  ],
+  "stamped": "e4576a70",
+  "strings": "075d3ddf5a3a826e",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "DOCS": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "DOS": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "DOS_O88": {
+  "sources": [
+   "apps/dos"
+  ],
+  "stamped": "9deeee7d",
+  "strings": "7e5f0adda8303591",
+  "why": "CD walks a whole path (CD \\SYSTEM\\DOS) and a failed CD stays put; a missing program says Bad command or file name with or without a tail; HELP's last line says only NUL is a redirect target"
+ },
+ "DOTDEL_O88": {
+  "sources": [
+   "apps/dotdel"
+  ],
+  "stamped": "e4576a70",
+  "strings": "3b6b57ce5de9f3f3",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "DRMARCO_O88": {
+  "sources": [
+   "apps/drmario"
+  ],
+  "stamped": "9deeee7d",
+  "strings": "1aec5c4536fddfd4",
+  "why": "Enter after game over retries as a new game from score 0; P ignored on the clear and game-over screens"
+ },
+ "EMS_DRV": {
+  "sources": [
+   "drivers/ems"
+  ],
+  "stamped": "e4576a70",
+  "strings": "fdc3e9e0668eb9c0",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "ENTERTNR_MID": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "ETHER_DRV": {
+  "sources": [
+   "drivers/ether"
+  ],
+  "stamped": "e4576a70",
+  "strings": "5dbeafabe492b63d",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "EXTD_DRV": {
+  "sources": [
+   "kernel/extmod.inc"
+  ],
+  "stamped": "e4576a70",
+  "strings": "075d3ddf5a3a826e",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "FLOWER_JPG": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "FONTS": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "FONTVIEW_O88": {
+  "sources": [
+   "apps/fontview"
+  ],
+  "stamped": "e4576a70",
+  "strings": "3df195d011cbab16",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "FORMAT_DRV": {
+  "sources": [
+   "kernel/diskw.inc"
+  ],
+  "stamped": "e4576a70",
+  "strings": "ac61036c5a40b5c8",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "FORM_WAB": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "FORM_WJS": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "FORM_WML": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "FRACTAL_O88": {
+  "sources": [
+   "apps/fractal"
+  ],
+  "stamped": "e4576a70",
+  "strings": "6687e78fe155b563",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "FROTZ_O88": {
+  "sources": [
+   "apps/frotz"
+  ],
+  "stamped": "9deeee7d",
+  "strings": "d537d1f582955449",
+  "why": "Save/Restore Game greyed outside the story's own prompt; Story > Start/Stop Transcript works (stream 2, SCRIPT.TXT on Enter); .SAV double-click refusal; refusal under the splash"
+ },
+ "FTPD_O88": {
+  "sources": [
+   "apps/ftpd"
+  ],
+  "stamped": "e4576a70",
+  "strings": "0bc65f4372efd8fd",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "FURELISE_MID": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "FW_PICOMEM1": {
+  "sources": [
+   "firmware/picomem1/README.md",
+   "firmware/picomem1/SHA256SUMS"
+  ],
+  "stamped": "e4576a70",
+  "strings": "52a90b0aba7759ae",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "GAMES": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "GORILLAS_O88": {
+  "sources": [
+   "apps/gorillas"
+  ],
+  "stamped": "e4576a70",
+  "strings": "a42f0c9c00a04c78",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "GUIDE_TEX": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "HDDTOOL_DRV": {
+  "sources": [
+   "drivers/hdd"
+  ],
+  "stamped": "d0d605c1",
+  "strings": "3b0c6f26290d2442",
+  "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
+ },
+ "HDD_DRV": {
+  "sources": [
+   "drivers/hdd"
+  ],
+  "stamped": "d0d605c1",
+  "strings": "3b0c6f26290d2442",
+  "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
+ },
+ "HELV_F88": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "HIBER_DRV": {
+  "sources": [
+   "kernel/hiber.inc"
+  ],
+  "stamped": "4cd88043",
+  "strings": "d35ebdb2509f31a8",
+  "why": "hibernate carries the HMA driver pool (SPEC.md 87.4 step 3b): page gains the HMA resume requirement and the 'Not enough memory' refusal"
+ },
+ "HOUSE_PNG": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "INCONSOL_F88": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "INTRO_MID": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "ISOTRON_O88": {
+  "sources": [
+   "apps/isotron"
+  ],
+  "stamped": "e4576a70",
+  "strings": "8d43b3b01f3ba1c0",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "JETBRAIN_F88": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "KERNEL_SYS": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "KOROBEIN_MID": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "LAKE_JPG": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "LICENSE": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "LICENSE_TXT": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "LOOM": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "LOOM_O88": {
+  "sources": [
+   "apps/loom"
+  ],
+  "stamped": "7ec8cb8a",
+  "strings": "59bb257edd8ea46a",
+  "why": "checked: New Project starter packs as-is (page updated), Preview status line text updated; pack refusals lost their spec citations (page quotes none)"
+ },
+ "MEDIA": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "MIDI": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "MIDIRACK_BNK": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "MIDIRACK_O88": {
+  "sources": [
+   "apps/midirack"
+  ],
+  "stamped": "d511fdd4",
+  "strings": "2d8a5451be064e81",
+  "why": "Settings' radios are the shared round ring now (SPEC.md 13.17.1); greyed rows' labels grey on VGA"
+ },
+ "MINES_O88": {
+  "sources": [
+   "apps/mines"
+  ],
+  "stamped": "e4576a70",
+  "strings": "a0ebb72b7104eee5",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "MISSILE_O88": {
+  "sources": [
+   "apps/missile"
+  ],
+  "stamped": "e4576a70",
+  "strings": "518a0d82ecee0138",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "MOUNTAIN_BMP": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "MOUNTKNG_MID": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "NET_DRV": {
+  "sources": [
+   "drivers/net"
+  ],
+  "stamped": "9deeee7d",
+  "strings": "9bf50a723a7a10f7",
+  "why": "checked: only OS88NET.COM's /? help column moved (the /N line's indent); nothing the NET.DRV page says"
+ },
+ "NOTEPAD_O88": {
+  "sources": [
+   "apps/notepad"
+  ],
+  "stamped": "9deeee7d",
+  "strings": "b93994888feea78c",
+  "why": "New asks about unsaved changes (checked on MartyPC)"
+ },
+ "NOTES": {
+  "sources": [],
+  "stamped": "0606f018",
+  "strings": null,
+  "why": "new folder page: SYSTEM/APPDATA/NOTES, from SPEC.md 110.13.1 and the Makefile's system-disk recipes"
+ },
+ "NOTO_F88": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "OS8088_GIF": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "OS8088_V88": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "OS88CZ_COM": {
+  "sources": [
+   "dostools/os88cz.asm"
+  ],
+  "stamped": "d0d605c1",
+  "strings": "17c764321d08c2df",
+  "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
+ },
+ "OS88NET_COM": {
+  "sources": [
+   "drivers/net/os88net.asm"
+  ],
+  "stamped": "9deeee7d",
+  "strings": "ea878454d744fb04",
+  "why": "checked: the /N line of the /? text gained the space that lines its description up with the others; the page's option table is unchanged"
+ },
+ "PACCMAN": {
+  "sources": [],
+  "stamped": "9deeee7d",
+  "strings": null,
+  "why": "the folder holds README.TXT, the player's read-me"
+ },
+ "PACCMAN_O88": {
+  "sources": [
+   "apps/paccman"
+  ],
+  "stamped": "066560d2",
+  "strings": "2eacb02ecd0d6758",
+  "why": "merge of two fixes: the disk's read-me is README.TXT (plain ASCII), and full screen mid-game draws correctly; both reflected on the page"
+ },
+ "PAINT_O88": {
+  "sources": [
+   "apps/paint"
+  ],
+  "stamped": "e4576a70",
+  "strings": "3dcd43ffda068c4a",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "PAPER_TEX": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "PIANO_O88": {
+  "sources": [
+   "apps/piano"
+  ],
+  "stamped": "e4576a70",
+  "strings": "ed317f5eca4695ad",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "PICTURES": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "PIXEL_O88": {
+  "sources": [
+   "apps/pixel"
+  ],
+  "stamped": "e4576a70",
+  "strings": "40931b541b447702",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "PONG_WAB": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "PONG_WJS": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "PONG_WML": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "PONG_WSP": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "PXSTEIN_O88": {
+  "sources": [
+   "apps/pixelstein"
+  ],
+  "stamped": "e4576a70",
+  "strings": "c16e1c2472ca5437",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "RAMDISK_DRV": {
+  "sources": [
+   "drivers/ramdisk"
+  ],
+  "stamped": "d0d605c1",
+  "strings": "f8094b935197ea0e",
+  "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
+ },
+ "RAMPAGE_DRV": {
+  "sources": [
+   "drivers/ramdisk"
+  ],
+  "stamped": "d0d605c1",
+  "strings": "f8094b935197ea0e",
+  "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
+ },
+ "README_TXT": {
+  "sources": [],
+  "stamped": "9deeee7d",
+  "strings": null,
+  "why": "PaccMan's disk carries a README.TXT now; listed with the other program read-mes"
+ },
+ "REDLINE_O88": {
+  "sources": [
+   "apps/redline"
+  ],
+  "stamped": "d511fdd4",
+  "strings": "613189b6ce818efd",
+  "why": "the benchmark's progress panel clears to the window edge: no stray glyph; text unchanged"
+ },
+ "RLAPPLY_O88": {
+  "sources": [
+   "apps/rlapply"
+  ],
+  "stamped": "d511fdd4",
+  "strings": "9dede25f102f6dff",
+  "why": "the menu-bar toast leaves no clock digit beside No REDLINE.CFG to apply (kernel, SPEC.md 59.8.2); text unchanged"
+ },
+ "ROBOMONO_F88": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "ROOM_JPG": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "RUNCPM": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "RUNCPM_O88": {
+  "sources": [
+   "apps/runcpm"
+  ],
+  "stamped": "e4576a70",
+  "strings": "67bdba87c78bc549",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "SALES_SLK": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "SAMPLE_BMP": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "SAVER_DRV": {
+  "sources": [
+   "drivers/saver"
+  ],
+  "stamped": "e4576a70",
+  "strings": "98fcc452bb00e1f8",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "SCRIBE_O88": {
+  "sources": [
+   "apps/scribe"
+  ],
+  "stamped": "9deeee7d",
+  "strings": "9002627c285a05c8",
+  "why": "Exit lists Alt+F4, which Scribe now handles; the welcome files are SCWELCOM.RTF and SCWELCOM.DOC; the Insert Picture 'not placed' note removed (the message reads 'WxH placed'); About box line checked on MartyPC"
+ },
+ "SCWELCOM_RTF": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "SHEET_O88": {
+  "sources": [
+   "apps/sheet"
+  ],
+  "stamped": "2c8ba025",
+  "strings": "bfdc6bbbc5be137d",
+  "why": "Percent x100, Border over the block, ask before New/Open/Close, .XLS as Normal, what each format keeps (notes, borders) - all checked against SHEET.O88 under MartyPC"
+ },
+ "SHEET_WAB": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "SHEET_WFX": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "SHEET_WJS": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "SHEET_WML": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "SKIES_O88": {
+  "sources": [
+   "apps/skies"
+  ],
+  "stamped": "9deeee7d",
+  "strings": "130e89fbca526ee9",
+  "why": "Instructions line names no speed (the prompt computes it per aeroplane); ALT reads 0 below ground - page unchanged"
+ },
+ "SOLITAIR_O88": {
+  "sources": [
+   "apps/solitaire"
+  ],
+  "stamped": "e4576a70",
+  "strings": "2e0e8b9537fe75d2",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "SOUND_DRV": {
+  "sources": [
+   "drivers/sound"
+  ],
+  "stamped": "e4576a70",
+  "strings": "61d798f4ae5a6f01",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "SPACEJAM_MID": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "STIKAPPS": {
+  "sources": [],
+  "stamped": "0606f018",
+  "strings": null,
+  "why": "the folder holds three Sticky Apps (Desk Calendar, Sticky Note, Desk Clock); Sticky Note is not on the small disks; menu shot retaken taller"
+ },
+ "STIKMENU_DRV": {
+  "sources": [
+   "kernel/stikmenu.inc"
+  ],
+  "stamped": "e4576a70",
+  "strings": "8b9860220a28a7ab",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "STIKNOTE_O88": {
+  "sources": [
+   "apps/stiknote"
+  ],
+  "stamped": "d0d605c1",
+  "strings": "c5eb21b124ad2c07",
+  "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
+ },
+ "SYSTEM": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "SYSTEM_CFG": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "TALLX_F88": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "TAMEGRAM_O88": {
+  "sources": [
+   "apps/tamegram"
+  ],
+  "stamped": "e4576a70",
+  "strings": "a9194b590c7c12d0",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "TANK_O88": {
+  "sources": [
+   "apps/tank"
+  ],
+  "stamped": "e4576a70",
+  "strings": "97c64ff43259361b",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "TASKMGR_O88": {
+  "sources": [
+   "apps/taskmgr"
+  ],
+  "stamped": "8a6a203d",
+  "strings": "1473638a0dbc623b",
+  "why": "the IVT+Pad row (02aae095): described on both pages, folded into System on a short screen"
+ },
+ "TELNET_O88": {
+  "sources": [
+   "apps/telnet"
+  ],
+  "stamped": "9deeee7d",
+  "strings": "9180c0b4b6d6e72f",
+  "why": "the host box has the keyboard when the window opens"
+ },
+ "TEXPAD_O88": {
+  "sources": [
+   "apps/texpad"
+  ],
+  "stamped": "d0d605c1",
+  "strings": "c0dea1d8abb85a0e",
+  "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
+ },
+ "THEWIRE_O88": {
+  "sources": [
+   "apps/thewire"
+  ],
+  "stamped": "e4576a70",
+  "strings": "87b20c30500765e6",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "THMPAL_DRV": {
+  "sources": [
+   "drivers/thmpal"
+  ],
+  "stamped": "e4576a70",
+  "strings": "580629fd162b8dd9",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "TIMER_O88": {
+  "sources": [
+   "apps/timer"
+  ],
+  "stamped": "e4576a70",
+  "strings": "de7a6242f989b7a6",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "TIMES_F88": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "TOOL_BURN": {
+  "sources": [
+   "tools/os88burn.py"
+  ],
+  "stamped": "e4576a70",
+  "strings": "2db239ca557b7c88",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "TOOL_IMAGER": {
+  "sources": [
+   "tools/os88imager.py"
+  ],
+  "stamped": "e4576a70",
+  "strings": "844554cd614f4179",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "TOOL_PROXY": {
+  "sources": [
+   "tools/os88proxy.py",
+   "tools/os88proxygui.py"
+  ],
+  "stamped": "9deeee7d",
+  "strings": "3238a0f33fee57d6",
+  "why": "the start-up line and the window label name File > Open Location..., the Browser's real menu item; the page quotes the new start-up line"
+ },
+ "TOOL_VENC": {
+  "sources": [
+   "tools/os88venc.py",
+   "tools/os88vencgui.py"
+  ],
+  "stamped": "87212abf",
+  "strings": "b4bc3fa128e8c3f7",
+  "why": "lists restricted to what the file takes, Mode X's 320x240 screen, --pages max, the pre-roll's dry run: all below the page's level of detail; checked, unchanged"
+ },
+ "TRACKER_O88": {
+  "sources": [
+   "apps/tracker"
+  ],
+  "stamped": "e4576a70",
+  "strings": "4e39f41bcd912901",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "TURKISH_MID": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "USBMOUSE_DRV": {
+  "sources": [
+   "drivers/usbmouse"
+  ],
+  "stamped": "e4576a70",
+  "strings": "602d648304a770c6",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "VACATION_JPG": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "VIDEO_O88": {
+  "sources": [
+   "apps/video"
+  ],
+  "stamped": "d511fdd4",
+  "strings": "52e0d90cf0b17d66",
+  "why": "a paused Live play: the card says Paused at m:ss, and the box shows the frame even when paused before the first pass"
+ },
+ "VMMOUSE_DRV": {
+  "sources": [
+   "drivers/vmmouse"
+  ],
+  "stamped": "e4576a70",
+  "strings": "4095e5c86a5e295a",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "WEAVE": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "WEAVE_O88": {
+  "sources": [
+   "apps/weave"
+  ],
+  "stamped": "7ec8cb8a",
+  "strings": "ac1b906ade71c22c",
+  "why": "checked: no-bundle and refusal screens now name Bundle > Open Bundle..., which the page already says"
+ },
+ "WELCOME_BAS": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "WELCOME_DOC": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "WELCOME_RTF": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "WELCOME_TXT": {
+  "sources": [
+   "apps/stiknote/welcome.txt"
+  ],
+  "stamped": "0606f018",
+  "strings": "550be98fc7fd1525",
+  "why": "new page for the welcome note, checked against apps/stiknote/welcome.txt"
+ },
+ "WIN95_DRV": {
+  "sources": [
+   "kernel/winmod.inc"
+  ],
+  "stamped": "e4576a70",
+  "strings": "075d3ddf5a3a826e",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "WIREBALL_O88": {
+  "sources": [
+   "apps/wireball"
+  ],
+  "stamped": "d0d605c1",
+  "strings": "72c6168584fb83c1",
+  "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
+ },
+ "WORD": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "WORD_O88": {
+  "sources": [
+   "apps/word"
+  ],
+  "stamped": "9deeee7d",
+  "strings": "466d7146ee799a0e",
+  "why": "Exit lists Alt+F4, which Word now handles (checked on MartyPC)"
+ },
+ "WRITING_MD": {
+  "sources": [],
+  "stamped": "e4576a70",
+  "strings": null,
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "XMEM_DRV": {
+  "sources": [
+   "drivers/xmem"
+  ],
+  "stamped": "e4576a70",
+  "strings": "9b380de63648dbc5",
+  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ }
+}

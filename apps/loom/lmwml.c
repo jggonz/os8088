@@ -152,7 +152,7 @@ static const char *lmw_common[] = {
  * copies of it were 256 resident bytes against a package that closed wave 7
  * with 262 spare.  The same cut apps/weave/wval.c took (WEAVE-PLAN 5.3). */
 static const char lm_s_noelem[] =
-    ">: not a Weave element; the inventory is closed (WEAVE-SPEC 3.2)";
+    ">: not a Weave element; the inventory is closed";
 
 static const char *lmw_a_app[]    = { "name", "vm", 0 };
 static const char *lmw_a_card[]   = { "id", 0 };
@@ -401,8 +401,7 @@ static void ovl_badentity(int line, unsigned k)
         e = p;                      /* no ';': weavesim's body is "" */
     ovl_m0("&");
     ovl_msrc(p, e - p);
-    ovl_mc(": not one of &lt; &gt; &amp; &quot; - the entity set is closed "
-           "(WEAVE-SPEC 3.1)");
+    ovl_mc(": not one of &lt; &gt; &amp; &quot; - the entity set is closed");
     ovl_raise(line);
 }
 
@@ -466,8 +465,7 @@ static int ovl_opentag(void)
         aline = lmw_line;
         lmw_adv(nlen);
         if (lmw_nattr >= LMW_MAXATTR) {
-            ovl_m0("more than 16 attributes on one element "
-                   "(WEAVE-SPEC 11.4)");
+            ovl_m0("more than 16 attributes on one element");
             ovl_raise(aline);
             return 0;
         }
@@ -500,7 +498,7 @@ static int ovl_opentag(void)
             unsigned k;
             lmw_adv(1);
             if (!lmw_lit("\"")) {
-                ovl_m0("attribute values are double-quoted (WEAVE-SPEC 3.1)");
+                ovl_m0("attribute values are double-quoted");
                 ovl_raise(lmw_line);
                 return 0;
             }
@@ -531,7 +529,7 @@ static int ovl_opentag(void)
                 if (ch >= 0) {
                     if (lmw_valn >= LMW_VALBUF) {
                         ovl_m0("the attribute values on one element are over "
-                               "640 bytes (WEAVE-SPEC 11.4)");
+                               "640 bytes");
                         ovl_raise(aline);
                         return 0;
                     }
@@ -571,7 +569,7 @@ static int ovl_closetag(const char *name)
         ovl_msrc(lmw_i, m - lmw_i);
         ovl_mc("> closes <");
         ovl_mc(name);
-        ovl_mc("> - tags must nest (WEAVE-SPEC 3.1)");
+        ovl_mc("> - tags must nest");
         ovl_raise(cl);
         return 0;
     }
@@ -708,7 +706,7 @@ static int ovl_boolattr(const char *tag, const char *attr, int ai)
     ovl_mc(attr);
     ovl_mc("=\"");
     ovl_mv(ai);
-    ovl_mc("\" is not a boolean - bare or \"1\"/\"0\" (WEAVE-SPEC 3.1)");
+    ovl_mc("\" is not a boolean - bare or \"1\"/\"0\"");
     ovl_raise(lmw_aline[ai]);
     return 0;
 }
@@ -765,14 +763,14 @@ static void ovl_badattr(int ei, int ai)
             ovl_m0(lmw_elem[ei]);
             ovl_mc(": no event \"");
             ovl_msrcl(off, len);
-            ovl_mc("\" exists on it (WEAVE-SPEC 3.3)");
+            ovl_mc("\" exists on it");
             ovl_raise(lmw_aline[ai]);
             return;
         }
         ovl_m0("");
         ovl_msrcl(off, len);
         ovl_mc(": no hover exists; pointer movement reaches a package only "
-               "between press and release (SPEC.md 13.7)");
+               "between press and release");
         ovl_raise(lmw_aline[ai]);
         return;
     }
@@ -794,8 +792,8 @@ static void ovl_badattr(int ei, int ai)
 colour:
     ovl_m0("");
     ovl_msrcl(off, len);
-    ovl_mc(": no color here; a palette is a canvas's (WEAVE-SPEC 9.2.1) - "
-           "grey rounds to black on 1bpp (SPEC.md 39.4)");
+    ovl_mc(": no color here; a palette is a canvas's - "
+           "grey rounds to black on 1bpp");
     ovl_raise(lmw_aline[ai]);
 }
 
@@ -855,7 +853,7 @@ static int ovl_prop(int comp, int atom, int kind, int val)
 
     if (lm_nprop >= LM_MAXPROP) {
         ovl_m0("too many property records for one pack; this machine "
-               "stages 1024 (WEAVE-SPEC 11.4)");
+               "stages 1024");
         ovl_raise((int) lm_ww(ovl_crow(comp) + LMC_LINE));
         return 0;
     }
@@ -1004,14 +1002,13 @@ static int ovl_event(int comp, const char *name, int atom)
     if (ai < 0)
         return 1;
     if (lm_nev >= LM_MAXEV) {
-        ovl_m0("more than 128 event bindings in one app (WEAVE-SPEC 11.4)");
+        ovl_m0("more than 128 event bindings in one app");
         ovl_raise(lmw_aline[ai]);
         return 0;
     }
     at = ovl_nameput(lmw_avoff[ai], lmw_avlen[ai]);
     if (at == 0xFFFF) {
-        ovl_m0("the handler names do not fit this machine's pack claim "
-               "(WEAVE-SPEC 11.4)");
+        ovl_m0("the handler names do not fit this machine's pack claim");
         ovl_raise(lmw_aline[ai]);
         return 0;
     }
@@ -1166,7 +1163,7 @@ static int ovl_common(int comp, int ei)
         if (a < 0) {
             ovl_m0("align: no such alignment \"");
             ovl_mv(ai);
-            ovl_mc("\"; left/center/right (WEAVE-SPEC 3.3)");
+            ovl_mc("\"; left/center/right");
             ovl_raise(lmw_aline[ai]);
             return 0;
         }
@@ -1206,8 +1203,7 @@ static int ovl_newcomp(int ei, int card)
     unsigned r;
 
     if (lm_ncomp >= LM_MAXCOMP) {
-        ovl_m0("251 components; comp_id is one byte, 1..250 "
-               "(WEAVE-SPEC 2.5)");
+        ovl_m0("251 components; comp_id is one byte, 1..250");
         ovl_raise(lmw_tagline);
         return -1;
     }
@@ -1241,8 +1237,7 @@ static int ovl_list_item(void)
         return 0;
     ai = ovl_afind("oncommand");
     if (ai >= 0) {
-        ovl_m0("item: oncommand is a menu item's; a list fires onselect "
-               "(WEAVE-SPEC 3.3)");
+        ovl_m0("item: oncommand is a menu item's; a list fires onselect");
         ovl_raise(lmw_aline[ai]);
         return 0;
     }
@@ -1292,8 +1287,7 @@ static int ovl_list_item(void)
     if (lmw_nitem >= 65) {
         ovl_m0("");
         ovl_mn(lmw_nitem + 1);
-        ovl_mc(" list items; the blob count byte caps at 64 "
-               "(WEAVE-SPEC 2.6.1)");
+        ovl_mc(" list items; the blob count byte caps at 64");
         ovl_raise(lmw_tagline);
         return 0;
     }
@@ -1337,7 +1331,7 @@ static int ovl_colorattr(const char *tag, const char *attr, int ai, int dflt)
     ovl_mc(attr);
     ovl_mc("=\"");
     ovl_mv(ai);
-    ovl_mc("\" is not one of the sixteen colours (WEAVE-SPEC 6.10.7)");
+    ovl_mc("\" is not one of the sixteen colours");
     ovl_raise(lmw_aline[ai]);
     lmw_ok = 0;
     return dflt;
@@ -1360,7 +1354,7 @@ static int ovl_penok(const char *attr, int ink, int paper, int line)
     ovl_mc("=\"");
     ovl_mc(lmw_pal[ink]);
     ovl_mc("\": the two share no plane either way and GFX_BLIT1 refuses the "
-           "pair (SPEC.md 5.4.2.2)");
+           "pair");
     ovl_raise(line);
     return 0;
 }
@@ -1390,8 +1384,7 @@ static int ovl_sprite_elem(int card)
     imgoff = ovl_nameput(lmw_avoff[ai], lmw_avlen[ai]);
     imglen = lmw_avlen[ai];
     if (imgoff == 0xFFFF) {
-        ovl_m0("the sprite names do not fit this machine's pack claim "
-               "(WEAVE-SPEC 11.4)");
+        ovl_m0("the sprite names do not fit this machine's pack claim");
         ovl_raise(lmw_aline[ai]);
         return 0;
     }
@@ -1708,8 +1701,7 @@ static int ovl_component(int ei, int card)
             if (w % 8) {
                 ovl_m0("canvas: w=\"");
                 ovl_mn(w);
-                ovl_mc("\" is not a multiple of 8 - bands are byte-aligned "
-                       "(WEAVE-SPEC 3.3)");
+                ovl_mc("\" is not a multiple of 8 - bands are byte-aligned");
                 ovl_raise(lmw_aline[ovl_afind("w")]);
                 return 0;
             }
@@ -1776,8 +1768,7 @@ static int ovl_component(int ei, int card)
         if (!ovl_event(comp, "ontick", WA_ONTICK))
             return 0;
         if (ovl_afind("ontick") >= 0 && tick < 1) {
-            ovl_m0("canvas: ontick requires tick=\"1\" or more "
-                   "(WEAVE-SPEC 3.3)");
+            ovl_m0("canvas: ontick requires tick=\"1\" or more");
             ovl_raise(openline);
             return 0;
         }
@@ -1815,8 +1806,7 @@ static int ovl_component(int ei, int card)
                     if (ce != LMW_E_ITEM) {
                         ovl_m0("<");
                         ovl_mtag();
-                        ovl_mc(ce >= 0 ? ">: not a child of <list> "
-                                         "(WEAVE-SPEC 3.2)"
+                        ovl_mc(ce >= 0 ? ">: not a child of <list>"
                                        : lm_s_noelem);
                         ovl_raise(lmw_tagline);
                         return 0;
@@ -1829,8 +1819,7 @@ static int ovl_component(int ei, int card)
                     if (ce != LMW_E_SPRITE) {
                         ovl_m0("<");
                         ovl_mtag();
-                        ovl_mc(ce >= 0 ? ">: not a child of <canvas> "
-                                         "(WEAVE-SPEC 3.2)"
+                        ovl_mc(ce >= 0 ? ">: not a child of <canvas>"
                                        : lm_s_noelem);
                         ovl_raise(lmw_tagline);
                         return 0;
@@ -1841,8 +1830,7 @@ static int ovl_component(int ei, int card)
                     if (lm_canvspr > 16) {
                         ovl_m0("");
                         ovl_mn(lm_canvspr);
-                        ovl_mc(" sprites; a canvas composes 16 at most "
-                               "(WEAVE-SPEC 6.10)");
+                        ovl_mc(" sprites; a canvas composes 16 at most");
                         ovl_raise(openline);
                         return 0;
                     }
@@ -1896,8 +1884,7 @@ static int ovl_component(int ei, int card)
         unsigned at = (unsigned) lmw_namen;
         int k;
         if (at + (unsigned) lmw_nitem + 1 > LM_NAMEMAX) {
-            ovl_m0("the list items do not fit this machine's pack claim "
-                   "(WEAVE-SPEC 11.4)");
+            ovl_m0("the list items do not fit this machine's pack claim");
             ovl_raise(openline);
             return 0;
         }
@@ -1938,7 +1925,7 @@ static int ovl_element_card(void)
     if (lm_ncard >= LM_MAXCARD) {
         ovl_m0("");
         ovl_mn(lm_ncard + 1);
-        ovl_mc(" cards; an app has 1..8 (WEAVE-SPEC 3.2)");
+        ovl_mc(" cards; an app has 1..8");
         ovl_raise(openline);
         return 0;
     }
@@ -1982,7 +1969,7 @@ static int ovl_element_card(void)
             if (ce > LMW_E_CANVAS) {        /* sprite, app, card, menu... */
                 ovl_m0("<");
                 ovl_mtag();
-                ovl_mc(">: not a child of <card> (WEAVE-SPEC 3.2)");
+                ovl_mc(">: not a child of <card>");
                 ovl_raise(lmw_tagline);
                 return 0;
             }
@@ -2034,7 +2021,7 @@ static int ovl_element_menu(void)
     if (lm_nmenu >= LM_MAXMENU) {
         ovl_m0("");
         ovl_mn(lm_nmenu + 1);
-        ovl_mc(" menus; MENU_APPMAX is 5 (SPEC.md 12.2)");
+        ovl_mc(" menus; MENU_APPMAX is 5");
         ovl_raise(openline);
         return 0;
     }
@@ -2081,7 +2068,7 @@ static int ovl_element_menu(void)
             if (ce != LMW_E_ITEM) {
                 ovl_m0("<");
                 ovl_mtag();
-                ovl_mc(ce >= 0 ? ">: not a child of <menu> (WEAVE-SPEC 3.2)"
+                ovl_mc(ce >= 0 ? ">: not a child of <menu>"
                                : lm_s_noelem);
                 ovl_raise(lmw_tagline);
                 return 0;
@@ -2104,7 +2091,7 @@ static int ovl_element_menu(void)
                                               lmw_avlen[cai]);
                     if (at == 0xFFFF) {
                         ovl_m0("the handler names do not fit this machine's "
-                               "pack claim (WEAVE-SPEC 11.4)");
+                               "pack claim");
                         ovl_raise(lmw_aline[cai]);
                         return 0;
                     }
@@ -2424,7 +2411,7 @@ int ovl_wml(void)
     if (!lm_srceqi(LM_SLOT_WML, lmw_tagoff, lmw_taglen, "app")) {
         ovl_m0("<");
         ovl_mtag();
-        ovl_mc(">: the document element is <app> (WEAVE-SPEC 3.2)");
+        ovl_mc(">: the document element is <app>");
         ovl_raise(lmw_tagline);
         return 0;
     }
@@ -2441,7 +2428,7 @@ int ovl_wml(void)
         ovl_mv(ai);
         ovl_mc("\" is ");
         ovl_mn((int) lmw_avlen[ai]);
-        ovl_mc(" chars; the header field is 15 (WEAVE-SPEC 2.2)");
+        ovl_mc(" chars; the header field is 15");
         ovl_raise(lmw_aline[ai]);
         return 0;
     }
@@ -2500,8 +2487,7 @@ int ovl_wml(void)
                     } else {
                         ovl_m0("<");
                         ovl_msrcl(toff, tlen);
-                        ovl_mc(ce >= 0 ? ">: not a child of <app> "
-                                         "(WEAVE-SPEC 3.2)"
+                        ovl_mc(ce >= 0 ? ">: not a child of <app>"
                                        : lm_s_noelem);
                         ovl_raise(lmw_tagline);
                         return 0;
@@ -2533,7 +2519,7 @@ int ovl_wml(void)
             return 0;
         }
         if (lm_ncard < 1) {
-            ovl_m0("0 cards; an app has 1..8 (WEAVE-SPEC 3.2)");
+            ovl_m0("0 cards; an app has 1..8");
             ovl_raise(approot);
             return 0;
         }
@@ -2549,7 +2535,7 @@ int ovl_wml(void)
             ovl_mc(" grids, ");
             ovl_mn(ncanv);
             ovl_mc(" canvases; at most one of each - each owns a dedicated "
-                   "claim and the cap is 8 per owner (SPEC.md 50.2)");
+                   "claim and the cap is 8 per owner");
             ovl_raise(approot);
             return 0;
         }

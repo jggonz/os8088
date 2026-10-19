@@ -171,7 +171,7 @@ CAP_FND     equ 13                  ; a foundation: its suit, A..K
 CAP_SW      equ 24                  ; the stock and the waste: 52 - 28 dealt
 SOL_PILES   equ CAP_TAB*7 + CAP_FND*4 + CAP_SW*2
 
-SOL_NMET    equ 14                  ; words in a metrics record (sol_met_*)
+SOL_NMET    equ 18                  ; words in a metrics record (sol_met_*)
 
 ; --- THE FIELDS THE TWO PUBLISHED FRAME SIZES ARE A FUNCTION OF -------------
 ; Named once and spent twice - in the metric records at the bottom of this file
@@ -213,6 +213,9 @@ SOL_PH_B    equ SOL_FAND_B * 6 + SOL_FANU_B * 12 + SOL_TOPY_B + SOL_CH_B \
 SOL_PW_S    equ (SOL_CW_S + SOL_GAP_S) * 7 + SOL_MARG_S * 2 - SOL_GAP_S + 2
 SOL_PH_S    equ SOL_FAND_S * 6 + SOL_FANU_S * 12 + SOL_TOPY_S + SOL_CH_S \
                 + SOL_TGAP_S + SOL_CH_S + TITLE_H + 1
+%if SOL_CW_B % 2 || SOL_CW_S % 2
+%error "a card is an even width: the back is two pixels a byte, and sol_drop takes half the pitch as half a card and half a gap"
+%endif
 SOL_BACKMAX equ 704                 ; the back image at the LARGER metrics,
                                     ; (32/2) * 44 bytes of packed 4bpp
 SOL_TABLE   equ CGREEN              ; the felt: green on VGA, black on 1bpp
@@ -234,10 +237,17 @@ SOL_GHOST   equ CDGRAY              ; empty-slot outlines and their ghost
 ; callback left it pointing at our own segment and never put it back
 ; (SPEC.md 20.1 says it may).
 ; -----------------------------------------------------------------------------
-; sol_metrics - the card metric record this screen wants, and what it implies
+; sol_metrics - the card metric record this screen wants
 ; in:  BX = the screen HEIGHT
-; out: sol_cw.. filled, sol_pitch / sol_taby / sol_wstep / sol_cwid derived
-; clobbers: AX, BX, CX, SI, DI
+; out: sol_cw .. sol_stride filled; SI -> the record's frame width and height
+;      (two words, the frame sol_entry asks for)
+; clobbers: AX, CX, SI, DI
+;
+; EVERYTHING IS IN THE RECORD, the derived fields too (SPEC.md 43.11.7): the
+; pitch, the tableau's y, the waste's fan step and the back's stride are each
+; a function of the record and nothing else, so the assembler works them out
+; once per record rather than this routine working them out per call. The
+; content width is not kept: sol_track reads it off the live window.
 ; -----------------------------------------------------------------------------
 sol_metrics:
     mov si, sol_met_big             ; Hercules' 348 rows still take the big
@@ -256,27 +266,6 @@ sol_metrics:
     stosw
     loop .mcopy
     pop es
-
-    mov ax, [sol_topy]              ; the tableau clears the top row by the
-    add ax, [sol_ch]                ; record's own gap - two of sol_gap on the
-    add ax, [sol_tgap]              ; big record, less on the small one, where
-    mov [sol_taby], ax              ; every pixel here is one sol_colfan does
-                                    ; not have to take from the cards
-    mov ax, [sol_cw]                ; the waste fans right by a third of a
-    mov bl, 3                       ; card, into the empty column the layout
-    div bl                          ; leaves between it and the foundations
-    mov ah, 0
-    mov [sol_wstep], ax
-
-    mov ax, [sol_cw]                ; column pitch
-    add ax, [sol_gap]
-    mov [sol_pitch], ax
-    mov bl, 7                       ; content width = 2 margins + 7 columns
-    mul bl                          ; (7 * 36 is a word: `mul bl` answers AX)
-    add ax, [sol_marg]
-    add ax, [sol_marg]
-    sub ax, [sol_gap]
-    mov [sol_cwid], ax              ; ...and AX, which sol_entry reads
     ret
 
 ; -----------------------------------------------------------------------------
@@ -343,15 +332,13 @@ sol_track:
     mov es, ax
     mov bx, si
     call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
+    cmp ax, [sol_ox]                ; the window moved? every cached sliver is
+    jne .moved                      ; remembered at the OLD origin - which is
+    cmp dx, [sol_oy]                ; the one this routine stored last time,
+    je .same                        ; and nothing else writes these two
+.moved:
     mov [sol_ox], ax
     mov [sol_oy], dx
-    cmp ax, [sol_lastox]            ; the window moved? every cached sliver is
-    jne .moved                      ; remembered at the OLD origin
-    cmp dx, [sol_lastoy]
-    je .same
-.moved:
-    mov [sol_lastox], ax
-    mov [sol_lastoy], dx
     call sol_pinv
 .same:
     mov ax, [es:bx + W_W]
@@ -675,12 +662,10 @@ SOL_SHW     equ SHW_CARD + CAP_TAB  ; ...one row per tableau column
 ; -----------------------------------------------------------------------------
 sol_shwbase:
     push ax
-    push dx
-    mov dl, SOL_SHW
-    mul dl                          ; AX = pile * SOL_SHW (6*22 = 132, one byte)
-    mov si, ax
+    mov ah, SOL_SHW                 ; (a byte `mul` writes AX alone, so the
+    mul ah                          ; multiplier can ride in AH)
+    mov si, ax                      ; AX = pile * SOL_SHW (6*22 = 132, one byte)
     add si, sol_shw
-    pop dx
     pop ax
     ret
 
@@ -912,10 +897,9 @@ sol_card:
     cmp dx, si                      ; ...and no more than the content
     jbe .vok2
     mov dx, si
-.vok2:
-    or dx, dx
-    jz .out
-    mov [sol_cvis], dx
+.vok2:                              ; (never 0: SI is above 0 from the `jle`,
+    mov [sol_cvis], dx              ; and every caller's DX is a fan step of
+                                    ; at least one pixel, or the card)
     test cl, C_FACEUP
     jnz .face
     call sol_drawback
@@ -1337,7 +1321,7 @@ sol_maskrun:
 ; sol_mkback - render the card back into a packed 4bpp image, once
 ; in:  the metrics; called from the entry proc (no lock held, nothing drawn)
 ;      and from sol_onresize, which may not draw either - this writes RAM only
-; out: [sol_backbuf] filled, [sol_stride] set, CF = 0; preserves all
+; out: [sol_backbuf] filled at [sol_stride], CF = 0; preserves all
 ;      registers. sol_backbuf STARTS ON sol_entry (SPEC.md 43.11.6), so this
 ;      must never be called before the entry proc is done with itself
 ;
@@ -1365,9 +1349,6 @@ sol_mkback:
     push dx
     push si
     push di
-    mov ax, [sol_cw]
-    shr ax, 1
-    mov [sol_stride], ax
     mov dl, CBLUE * 0x11            ; DL = the field, in BOTH nibbles, so a
     cmp byte [sol_bpp], 4           ; pixel is a byte masked to its half
     je .have
@@ -1460,14 +1441,11 @@ sol_about:
 ;      All registers preserved.
 ; -----------------------------------------------------------------------------
 sol_abdismiss:
-    cmp byte [sol_abon], 0
-    je .none
-    mov byte [sol_abon], 0
+    shr byte [sol_abon], 1          ; CF = it was up (the flag is 0 or 1),
+    jnc .none                       ; and it is down now either way
     call sol_drawall
     stc
-    ret
 .none:
-    clc
     ret
 %endif   ; SOLF_ABOUT - with no card (APP_SMALL) the click and key paths
                 ; do not ask sol_abdismiss at all
@@ -1502,6 +1480,8 @@ sol_panel:
     push dx
     push si
     push di
+    mov al, CWHITE                  ; the card's ground: set here, where AX
+    call OSAPI_SET_COLOR            ; is free, since measuring draws nothing
     push cx                         ; the two margins, for later
     push si                         ; ...and the list, for the second pass
     xor bx, bx                      ; BX = the widest line
@@ -1550,10 +1530,6 @@ sol_panel:
     mov cx, ax
     add cx, [sol_pnw]
     dec cx
-    push ax
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    pop ax
     call sol_fillc
     push ax
     mov al, CBLACK
@@ -1632,20 +1608,8 @@ sol_ret:                            ; OS88_REGION_MOVABLE's relocation proc:
 sol_pilexy:
     push ax
     push bx
-    cmp al, P_STOCK
-    je .c0
-    cmp al, P_WASTE
-    je .c1
-    cmp al, P_FND0
-    jb .have                        ; a tableau pile IS its column
-    sub al, P_FND0 - 3              ; the foundations take columns 3..6
-    jmp .have
-.c0:
-    xor al, al
-    jmp .have
-.c1:
-    mov al, 1
-.have:
+    mov bx, sol_pcol                ; the pile's column (a table: four
+    xlatb                           ; compares and their branches were bigger)
     mov bl, [sol_pitch]             ; the pitch is far under 256
     mul bl                          ; AX = column * pitch
     add ax, [sol_marg]
@@ -1703,12 +1667,13 @@ sol_colfan:
     sub ax, dx
     jbe .allface
     mov bx, ax                      ; BX = face-up gaps
-    mul word [sol_cfu]
-    mov si, ax
-    mov ax, dx
-    mul word [sol_cfa]
-    add ax, si
-    jmp .test
+    xchg ax, dx                     ; AX = the face-down cards - DX, BEFORE
+    mul word [sol_cfa]              ; a `mul` makes it the product's high
+    xchg ax, si                     ; word (SPEC.md 43.11.7: it did, so the
+    mov ax, bx                      ; face-down half was read as 0 and a
+    mul word [sol_cfu]              ; column that overflowed by up to that
+    add ax, si                      ; much was not tightened)
+    jmp .test                       ; SI = what the face-down half costs
 .allface:
     xor bx, bx
     mov ax, cx
@@ -1718,11 +1683,8 @@ sol_colfan:
     jbe .out                        ; it fits at full stretch
 
     or bx, bx
-    jz .shrinkd                     ; no face-up gaps to give
-    mov ax, [sol_cfd]
-    mul word [sol_cfa]
-    mov si, ax                      ; SI = what the face-down half costs
-    mov ax, [sol_avail]
+    jz .shrinkd                     ; no face-up gaps to give - and with
+    mov ax, [sol_avail]             ; some, SI is the face-down half's cost
     sub ax, si
     jbe .shrinkboth
     cmp ax, bx
@@ -2674,14 +2636,11 @@ sol_drop:
     jmp .out
 
 .moved:
-    mov ax, [sol_cw]                ; the hand's top card, centred - and which
-    shr ax, 1                       ; column is that over?
-    add ax, [sol_dox]
-    sub ax, [sol_ox]
+    mov ax, [sol_pitch]             ; the hand's top card, centred - and which
+    shr ax, 1                       ; column is that over? Half a card and
+    add ax, [sol_dox]               ; half a gap is half the pitch, the card
+    sub ax, [sol_ox]                ; being even
     sub ax, [sol_marg]
-    mov bx, [sol_gap]
-    shr bx, 1
-    add ax, bx
     jns .col
     xor ax, ax
 .col:
@@ -2789,23 +2748,18 @@ sol_onkey:
 ; sol_oncmd - AM_ONCMD: run a menu item (SPEC.md 12.2)
 ; in:  AL = item index, AH = menu index, SI = our window, BX = the set;
 ;      caller (the UI task) holds the gfx lock
-; out: nothing; clobbers AX, BX, CX, DX like any window callback
+; out: nothing; may clobber AX, BX, CX, DX, SI, DI and ES (SPEC.md 12.2) -
+;      and keeps SI and DI all the same, every routine below keeping them
 ;
 ; Called exactly like W_ONCLICK, so it draws directly and must not lock,
 ; block or spawn - and it must repaint itself, which every command below
 ; does, because the kernel does not repaint after a menu command returns.
 ; -----------------------------------------------------------------------------
 sol_oncmd:
-    push si
-    push di
-    mov bl, al                      ; the item; sol_track needs AX
-    mov bh, ah                      ; the menu
-    call sol_track
-    or bh, bh
-    jnz .deal
-    call sol_gamecmd
-    jmp .out
-.deal:
+    mov bl, al                      ; the item; sol_track keeps AX, so AH is
+    call sol_track                  ; still the menu after it
+    or ah, ah
+    jz sol_gamecmd                  ; the Game menu: the next routine down
     mov [sol_draw3], bl             ; Draw One is item 0, Draw Three item 1
     mov bh, 0                       ; ...and MENU_DIS (SPEC.md 12.2) greys the
     lea ax, [bx + sol_s_d1x]        ; one in force: an item string that begins
@@ -2813,10 +2767,7 @@ sol_oncmd:
     mov ax, sol_s_d3                ; selected, and each plain label is its
     sub ax, bx                      ; disabled twin one byte on - so the pair
     mov [sol_mi_deal+2], ax         ; is two pointers a byte apart, a radio
-.out:                               ; pair with no kernel support at all
-    pop di
-    pop si
-    ret
+    ret                             ; pair with no kernel support at all
 
 ; -----------------------------------------------------------------------------
 ; sol_gamecmd - the Game menu's commands, shared by the keys and the menu
@@ -2957,6 +2908,14 @@ sol_ab4:     db 'Contributed by Elendilon', 0
 sol_rankch:
     db 'A', '2', '3', '4', '5', '6', '7', '8', '9', 0, 'J', 'Q', 'K'
 
+; --- the column each pile sits in (sol_pilexy): a tableau pile IS its
+; column, the foundations take columns 3..6, the stock 0 and the waste 1
+sol_pcol:
+    db 0, 1, 2, 3, 4, 5, 6, 3, 4, 5, 6, 0, 1
+%if $ - sol_pcol != SOL_NPILE || P_TAB0 != 0 || P_FND0 != 7 || P_STOCK != 11 || P_WASTE != 12
+%error "sol_pcol is indexed by pile"
+%endif
+
 ; --- where each pile starts in sol_pile (sol_pilebase): the columns, the
 ; foundations, the stock and the waste, each at the depth its kind reaches
 sol_pofs:
@@ -2970,16 +2929,42 @@ sol_pofs:
 
 ; --- metrics records (SOL_NMET bytes each, widened into bss by sol_metrics) ------
 ; card w, card h, gap, margin, top row y, face-down fan, face-up fan,
-; rank x, rank y, corner pip x, corner pip y, centre pip x, centre pip y.
+; rank x, rank y, corner pip x, corner pip y, centre pip x, centre pip y,
+; foundation row to tableau - and then the four DERIVED fields, which the
+; assembler works out here rather than sol_metrics at run time (SPEC.md
+; 43.11.7): the column pitch, the tableau's y (the top row cleared by the
+; record's own gap - two of sol_gap on the big record, less on the small one,
+; where every pixel is one sol_colfan does not have to take from the cards),
+; the waste's fan step (a third of a card, into the empty column the layout
+; leaves between it and the foundations) and the card back's stride (two
+; pixels a byte). Then two WORDS that are not copied: the frame sol_entry asks
+; for, which sol_metrics leaves SI pointing at.
 ; The face-up fan must clear the rank glyph's 8 rows or a buried card cannot
 ; be read; both records do.
 ; BYTES, widened by sol_metrics' `cbw` - so every field must stay under 128.
+%macro SOL_MET 1
+    db SOL_CW_%1, SOL_CH_%1, SOL_GAP_%1, SOL_MARG_%1, SOL_TOPY_%1
+    db SOL_FAND_%1, SOL_FANU_%1
+%endmacro
+%macro SOL_METD 1
+    db SOL_TGAP_%1
+    db SOL_CW_%1 + SOL_GAP_%1                       ; sol_pitch
+    db SOL_TOPY_%1 + SOL_CH_%1 + SOL_TGAP_%1        ; sol_taby
+    db SOL_CW_%1 / 3                                ; sol_wstep
+    db SOL_CW_%1 / 2                                ; sol_stride
+    dw SOL_PW_%1, SOL_PH_%1                         ; the frame (not copied)
+%endmacro
 sol_met_big:                        ; VGA 640x480 and Hercules 720x348
-    db SOL_CW_B, SOL_CH_B, SOL_GAP_B, SOL_MARG_B, SOL_TOPY_B, SOL_FAND_B
-    db SOL_FANU_B, 3, 3, 21, 3, 8, 22, SOL_TGAP_B
+    SOL_MET B
+    db 3, 3, 21, 3, 8, 22
+    SOL_METD B
 sol_met_sml:                        ; CGA 640x200, over the dock: 179 rows
-    db SOL_CW_S, SOL_CH_S, SOL_GAP_S, SOL_MARG_S, SOL_TOPY_S, SOL_FAND_S
-    db SOL_FANU_S, 2, 2, 18, 2, 6, 10, SOL_TGAP_S
+    SOL_MET S
+    db 2, 2, 18, 2, 6, 10
+    SOL_METD S
+%if sol_met_sml - sol_met_big != SOL_NMET + 4
+%error "a metrics record is SOL_NMET bytes and the frame's two words"
+%endif
 
 ; --- suit pips, 1 bit per pixel, the leftmost pixel the top bit -------------
 ; Solid for every suit on a colour screen; on 1bpp the two red suits are drawn
@@ -3005,23 +2990,10 @@ sol_p8s:                            ; spade, heart, diamond, club - BYTES,
     db 0x18, 0x3C, 0x7E, 0xFF, 0x7E, 0x3C, 0x18, 0x00      ; stages each as
     db 0x18, 0x3C, 0x3C, 0xBD, 0xFF, 0xDB, 0x18, 0x3C      ; a word's high half
 
-sol_p16s:                           ; spade
-    dw 0x0180, 0x03C0, 0x07E0, 0x0FF0, 0x1FF8, 0x3FFC, 0x7FFE, 0xFFFF
-    dw 0xFFFF, 0xFFFF, 0x7E7E, 0x3C3C, 0x0180, 0x03C0, 0x0FF0, 0x3FFC
-                                    ; heart
-    dw 0x3C3C, 0x7E7E, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x7FFE
-    dw 0x7FFE, 0x3FFC, 0x1FF8, 0x0FF0, 0x07E0, 0x03C0, 0x0180, 0x0000
-                                    ; diamond
-    dw 0x0180, 0x03C0, 0x07E0, 0x0FF0, 0x1FF8, 0x3FFC, 0x7FFE, 0xFFFF
-    dw 0xFFFF, 0x7FFE, 0x3FFC, 0x1FF8, 0x0FF0, 0x07E0, 0x03C0, 0x0180
-                                    ; club
-    dw 0x03C0, 0x07E0, 0x0FF0, 0x0FF0, 0x07E0, 0x33CC, 0x7BDE, 0xFFFF
-    dw 0xFFFF, 0x7BDE, 0x33CC, 0x03C0, 0x03C0, 0x07E0, 0x1FF8, 0x3FFC
-
-; The empty stock's mark: a ring, for "round again".
-sol_ic_ring:
-    dw 0x07E0, 0x1FF8, 0x381C, 0x700E, 0x6006, 0xE007, 0xC003, 0xC003
-    dw 0xC003, 0xC003, 0xE007, 0x6006, 0x700E, 0x381C, 0x1FF8, 0x07E0
+; The 16x16 pips and the empty stock's ring are not here: every one of them
+; is a MIRROR - each row's right half is its left half reversed - so the image
+; carries the left halves only (sol_pipl, after sol_entry's code) and the
+; entry proc writes the whole words into .bss (SPEC.md 43.11.7).
 
 ; -----------------------------------------------------------------------------
 ; sol_entry - package entry point (SPEC.md 20.2)
@@ -3048,28 +3020,50 @@ sol_ic_ring:
 ; of letting the clamp do it means the template and the record agree from the
 ; very first paint.
 ; -----------------------------------------------------------------------------
-sol_entry:
-    push si
-    push di
+sol_entry:                          ; (SI and DI are not saved: SPEC.md
+                                    ; 20.2 asks an entry proc for BX and CF
+                                    ; and nothing else, and the loader
+                                    ; reloads every register it reads after
+                                    ; the call - SPEC.md 43.11.7)
+    push es                         ; THE MIRRORED MASKS FIRST (SPEC.md
+    push ds                         ; 43.11.7): sol_p16s and sol_ic_ring are
+    pop es                          ; .bss, a word a row, and each row is its
+    mov si, sol_pipl                ; own left half beside that half reversed
+    mov di, sol_p16s                ; - so the image keeps one byte a row,
+    mov cx, SOL_PIPL                ; below, inside the bytes the card back
+.mirror:                            ; takes over when this proc is done
+    lodsb                           ; AL = the left half, which is the HIGH
+    mov ah, al                      ; byte of the row's word (bit 15 is the
+    mov bl, al                      ; leftmost pixel)...
+    mov bh, 8
+.rev:
+    shr bl, 1                       ; ...and the low byte is the same eight
+    rcl al, 1                       ; bits in the other order
+    dec bh
+    jnz .rev
+    stosw
+    loop .mirror
+    pop es
+
     call OSAPI_VIDEO                ; AX=w, BX=h, CX=dock top row, DH=bpp
     mov [sol_bpp], dh
     push ax                         ; the width and the dock row are for the
     push cx                         ; placement below, and for nothing else
 
-    call sol_metrics            ; the card metrics this screen wants, and
-                                ; everything derived from them - re-run by
-                                ; sol_onresize (SPEC.md 11.98)
-    add ax, 2                       ; ...plus the 1px frame either side
+    call sol_metrics            ; the card metrics this screen wants - re-run
+                                ; by sol_onresize (SPEC.md 11.98) - and SI ->
+                                ; the frame that record lays out: the content
+    lodsw                       ; width plus the 1px frame either side...
     mov [sol_tpl + WT_W], ax
-
-    pop dx                          ; DX = the dock's first row
-    mov ax, SOL_PH_B                ; the tallest column the game can build -
-    cmp byte [sol_cw], SOL_CW_B     ; 6 face-down and 13 face-up - as a frame
-    je .tall                        ; height. It IS the published preference's
-    mov ax, SOL_PH_S                ; number for the record sol_metrics took
-.tall:                              ; (the two are one formula, at the top)
-    mov bx, dx                      ; ...clamped to the desktop band, and ONE
-    sub bx, MBAR_H + 1              ; PIXEL SHORT of it: the kernel tests
+    lodsw                           ; ...and the tallest column the game can
+                                    ; build - 6 face-down and 13 face-up - as a
+                                    ; frame height. Both ARE the published
+                                    ; preference's numbers for the record
+                                    ; (the two are one formula, at the top)
+    pop bx                          ; BX = the dock's first row...
+    sub bx, MBAR_H + 1              ; ...and the height clamped to the
+                                    ; desktop band, and ONE PIXEL SHORT of
+                                    ; it: the kernel tests
                                     ; y+h against the dock's first row with
                                     ; `jae`, because the drop shadow lives on
                                     ; row y+h - so a frame that merely REACHES
@@ -3087,23 +3081,17 @@ sol_entry:
 .hok:
     mov [sol_tpl + WT_H], ax
 
-    xchg ax, dx                     ; a third of the slack down...
-    sub ax, MBAR_H
-    sub ax, dx
-    jns .yok
-    xor ax, ax
-.yok:
-    xor dx, dx
+    sub bx, ax                      ; a third of the slack down - which is
+    xchg ax, bx                     ; at least the one pixel above, so never
+    inc ax                          ; negative, and `cwd` is the zero high
+    cwd                             ; word the divide wants
     mov bx, 3
     div bx
     add ax, MBAR_H
     mov [sol_tpl + WT_Y], ax
-    pop ax                          ; ...and centred across
-    sub ax, [sol_tpl + WT_W]
-    jns .xok
-    xor ax, ax
-.xok:
-    shr ax, 1
+    pop ax                          ; ...and centred across: the widest frame
+    sub ax, [sol_tpl + WT_W]        ; (258) is narrower than the narrowest
+    shr ax, 1                       ; screen (640), so this is never negative
     mov [sol_tpl + WT_X], ax
 
     call OSAPI_GET_TICKS            ; seeded ONCE: every later New Game walks
@@ -3189,17 +3177,31 @@ sol_entry:
                                     ; it preserves the flags for the same
                                     ; reason: the CF above is the loader's
 %endif   ; SOLF_ABOUT
-    pop di
-    pop si
     jmp sol_mkback                  ; ...and LAST, the card back, over these
                                     ; very bytes: a tail jump, so nothing here
                                     ; runs after it starts writing. It keeps
                                     ; every register and answers CF = 0, which
                                     ; is the loader's "go" (BX is the window)
-.full:
-    pop di                          ; no window: CF = 1 rides out, and the
-    pop si                          ; region is the loader's to free - the
-    ret                             ; back is never needed
+.full:                              ; no window: CF = 1 rides out, and the
+    ret                             ; region is the loader's to free - the
+                                    ; back is never needed
+
+; The left halves of the 16x16 masks, bit 7 the leftmost pixel: sol_entry's
+; .mirror makes each a word, this byte high and its reverse low. Here, after
+; the code, because it is read once by the entry proc and then the card back
+; is rendered over it like the rest of sol_entry (SPEC.md 43.11.6).
+sol_pipl:
+    db 0x01, 0x03, 0x07, 0x0F, 0x1F, 0x3F, 0x7F, 0xFF  ; spade
+    db 0xFF, 0xFF, 0x7E, 0x3C, 0x01, 0x03, 0x0F, 0x3F
+    db 0x3C, 0x7E, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F  ; heart
+    db 0x7F, 0x3F, 0x1F, 0x0F, 0x07, 0x03, 0x01, 0x00
+    db 0x01, 0x03, 0x07, 0x0F, 0x1F, 0x3F, 0x7F, 0xFF  ; diamond
+    db 0xFF, 0x7F, 0x3F, 0x1F, 0x0F, 0x07, 0x03, 0x01
+    db 0x03, 0x07, 0x0F, 0x0F, 0x07, 0x33, 0x7B, 0xFF  ; club
+    db 0xFF, 0x7B, 0x33, 0x03, 0x03, 0x07, 0x1F, 0x3F
+    db 0x07, 0x1F, 0x38, 0x70, 0x60, 0xE0, 0xC0, 0xC0  ; the stock's ring,
+    db 0xC0, 0xC0, 0xE0, 0x60, 0x70, 0x38, 0x1F, 0x07  ; for "round again"
+SOL_PIPL    equ $ - sol_pipl        ; rows: four suits and the ring, 16 each
 
 ; =============================================================================
 ; .bss (SPEC.md 20.5: the loader zeroes SOL_BSS bytes after the image, and
@@ -3234,8 +3236,8 @@ sol_bssbase equ sol_backbuf + SOL_BACKMAX
 %endmacro
 
 ; --- the metrics, copied WHOLESALE out of sol_met_* --------------------------
-; These thirteen words must stay in this order and stay contiguous: sol_entry
-; copies the record over them with one loop.
+; These eighteen words must stay in this order and stay contiguous:
+; sol_metrics copies the record over them with one loop.
     SWORD sol_cw                    ; card width
     SWORD sol_ch                    ; card height
     SWORD sol_gap                   ; gap between columns
@@ -3254,11 +3256,14 @@ sol_bssbase equ sol_backbuf + SOL_BACKMAX
                                     ; one, which is a decision about a 200-row
                                     ; screen rather than a derived number
 
-; --- derived once, in sol_entry ----------------------------------------------
+; --- ...and the four the record carries ready DERIVED (SPEC.md 43.11.7) -----
     SWORD sol_pitch                 ; card width + gap
     SWORD sol_taby                  ; content y of the tableau
     SWORD sol_wstep                 ; the waste's horizontal fan step
     SWORD sol_stride                ; bytes per row of the back image
+%if sol_stride + 2 - sol_cw != SOL_NMET * 2
+%error "sol_metrics copies SOL_NMET words from sol_cw: keep them contiguous"
+%endif
 
 ; --- refreshed by sol_track, every callback ----------------------------------
     SWORD sol_ox                    ; content origin, screen coords
@@ -3323,13 +3328,19 @@ sol_bssbase equ sol_backbuf + SOL_BACKMAX
     SBUF  sol_icrec, 2              ; wwords (always 1), then rows
     SBUF  sol_icmask, SOL_ICROWS*4  ; rows of mask, then rows of data
 
+; --- the 16x16 masks, mirrored out of sol_pipl by sol_entry (43.11.7) ------
+    SBUF  sol_p16s, 4*16*2          ; spade, heart, diamond, club: 32 a suit
+    SBUF  sol_ic_ring, 16*2         ; ...and the ring, which .mirror writes
+                                    ; straight after them
+%if sol_ic_ring - sol_p16s != 4*16*2 || SOL_PIPL * 2 != sol_ic_ring + 32 - sol_p16s
+%error "sol_entry's .mirror writes sol_p16s and sol_ic_ring as one run"
+%endif
+
 ; --- sol_colfan / sol_yoff ---------------------------------------------------
     SWORD sol_cfd                   ; face-down cards in the column
     SWORD sol_cfa                   ; ...their fan step
     SWORD sol_cfu                   ; ...and the face-up one
     SWORD sol_keepn                 ; leading cards this draw may skip
-    SWORD sol_lastox                ; the origin the shadow below belongs to
-    SWORD sol_lastoy
     SBUF  sol_shw, P_TABN*SOL_SHW   ; what is on the glass, per column (43.10)
 
 ; --- sol_hit -----------------------------------------------------------------

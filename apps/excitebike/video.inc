@@ -7,8 +7,8 @@
 ;
 ; Cycle notes (8088, 4.77 MHz): a VGA tile is 4 planes x 8 `movsb` + `add` +
 ; `loop` = ~1,250 clk, the whole 960-tile grid ~1.2M clk (0.25 s, once); a CGA
-; tile is 4 x (`movsw`,`lodsw`,store,`add`) = ~330 clk.  The 16-bit checksum is
-; ~45 clk a byte: 12 KB is 0.1 s at load, never in a frame.
+; tile is 4 x (`movsw`,`lodsw`,store,`add`) = ~330 clk.  The art part's LZ4
+; expansion is ~40 clk a byte: 13 KB is 0.1 s at load, never in a frame.
 
 ; -----------------------------------------------------------------------------
 ; xb_launch - the desktop side of Enter / Alt+Enter / a click on START
@@ -96,7 +96,7 @@ xb_fullscreen:
     call xb_font_copy
     call xb_race_open              ; back end: dictionaries, sprites (CF: refused)
     jc xb_fsassetfail
-    call xb_gfx_free               ; ...and nothing reads the art file after it (xb_font_copy)
+    call xb_gfx_free               ; ...and nothing reads the art part after it (xb_font_copy)
     call xu_start                  ; the sound: FM claim or the speaker (audio.inc)
     cmp byte [xb_noflow], 0
     jne .raw
@@ -352,73 +352,28 @@ xb_puts:
     ret
 
 ; -----------------------------------------------------------------------------
-; the adapter's art file: claim, read, and prove it before following an offset
+; the adapter's game art: its PART of this package (SPEC.md 102.10), read in the
+; bracket under the loading screen, and the record directory out of it
+;
+; The bytes are this package's own file, expanded by the kernel's bounded
+; decoder to exactly the row's length, so the magic, length and checksum the
+; EXB?.GFX FILES carried against a stale or damaged pair have nothing left to
+; catch. A refused CLAIM sets [xb_nomem] (xb_partget), which is what tells
+; `NOT ENOUGH MEMORY` from `CANNOT LOAD THE RACE`.
 ; -----------------------------------------------------------------------------
 xb_gfx_load:
     SAVE
-    mov bx, xb_gfxfiles
+    mov al, XB_P_GFXV
     cmp byte [xb_cga], 0
     je .pick
-    add bx, 8
+    mov al, XB_P_GFXC
     cmp byte [xb_herc], 0
     je .pick
-    add bx, 8
+    mov al, XB_P_GFXH
 .pick:
-    mov si, [bx]                    ; file name
-    mov cx, [bx+2]                  ; its size
-    mov bp, [bx+4]                  ; its compiled checksum
-    mov di, [bx+6]                  ; the magic's second word
-    mov [xb_gfxsize], cx
-    mov ax, cx
-    add ax, 1023
-    mov cl, 10
-    shr ax, cl                      ; KB
-    call OSAPI_MEM_CLAIM
-    jc .nomem
-    mov [xb_gfxseg], dx
-    mov es, dx
-    push di
-    push bp
-    xor bx, bx
-    xor dx, dx
-    mov cx, [xb_gfxsize]
-    call OSAPI_FILE_READ
-    pop bp
-    pop di
+    call xb_partget
     jc .bad
-    or dx, dx
-    jnz .bad
-    cmp ax, [xb_gfxsize]
-    jne .bad
-    cmp word [es:0], 'EX'
-    jne .bad
-    cmp word [es:2], di
-    jne .bad
-    cmp ax, [es:4]                  ; the length word
-    jne .bad
-    mov ax, [es:6]                  ; the stored checksum
-    cmp ax, bp                      ; ...must be the one compiled into us
-    jne .bad
-    ; 16-bit byte sum of the whole file with the checksum word taken as zero
-    push ds
-    mov ds, [xb_gfxseg]
-    mov cx, [cs:xb_gfxsize]
-    xor si, si
-    xor dx, dx
-.sum:
-    lodsb
-    add dl, al
-    adc dh, 0
-    loop .sum
-    pop ds
-    mov ax, [es:6]
-    xor bx, bx
-    mov bl, al
-    sub dx, bx
-    mov bl, ah
-    sub dx, bx
-    cmp dx, ax
-    jne .bad
+    mov [xb_gfxseg], dx
     ; the record directory: 10 offsets
     mov cx, 10
     mov si, 12
@@ -426,7 +381,7 @@ xb_gfx_load:
     push ds
     pop es                          ; ES = package for the stores
     push ds
-    mov ds, [xb_gfxseg]
+    mov ds, dx
 .rec:
     lodsw                           ; offset
     add si, 2                       ; skip the length word
@@ -436,10 +391,118 @@ xb_gfx_load:
     RESTORE
     clc
     ret
-.nomem:
-    mov byte [xb_nomem], 1
 .bad:
     RESTORE
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; xb_partget - claim, read and expand part AL into a claim of its own
+; out: CF=0, DX = the claim, the part's `len` bytes at offset 0, CX = len;
+;      CF=1 = not had - and [xb_nomem] = 1 when it was the CLAIM refused
+; clobbers: AX, BX, CX, DX, SI, DI, ES
+;
+; EVERY ROW IS OP_SELF (SPEC.md 102.10, 20.12.9.1), so this is the standard's
+; op_fetch less what this package does not need - and less its TOAST, which is
+; the reason it is here: the game art is read inside the fsx bracket after the
+; mode is set, where a toast's menu-bar draw is a drawing slot SPEC.md 53.7
+; forbids, and both callers already say what failed in their own words. The
+; arithmetic is op_fetch's to the letter (SPEC.md 20.12.7.4): the read starts
+; on the cluster at or below the part and lands R = roundup512(len - packed)
+; up the claim, so the stream expands DOWN onto the claim's base and the
+; decoder's writer never overtakes its reader, and then the claim is shrunk
+; to the part. op_clbget, op_read and the cursor it keeps are the standard's.
+; -----------------------------------------------------------------------------
+xb_partget:
+    call op_row                     ; SI -> the row, AX kept
+    call op_clbget                  ; [op_clb] = bytes a cluster, asked once
+    jc .no
+    mov ax, [si+OP_R_OFF]
+    mov dx, ax
+    mov cl, 9
+    shl ax, cl
+    mov cl, 7
+    shr dx, cl                      ; DX:AX = the part's byte offset
+    mov bx, [op_clb]
+    dec bx
+    and bx, ax                      ; BX = the head slack (a multiple of 512)
+    sub ax, bx
+    sbb dx, 0
+    mov [op_off], ax
+    mov [op_off+2], dx
+    mov ax, [si+OP_R_ZKB]           ; the PACKED length (OP_COMP | OP_LAZY)
+    add ax, bx
+    mov [op_want], ax               ; ...which must all arrive
+    mov word [op_want+2], 0
+    mov cx, [op_clb]
+    dec cx
+    add ax, cx
+    not cx
+    and ax, cx                      ; the read, in whole clusters
+    mov cl, 4
+    shr ax, cl
+    mov [op_cap], ax                ; ...in paragraphs, as op_read counts
+    xchg ax, di
+    mov ax, [si+OP_R_LEN]
+    sub ax, [si+OP_R_ZKB]
+    add ax, 511
+    and ax, 0FE00h                  ; R: a disk read lands here, so a sector
+    mov cl, 4                       ; multiple (every disk-visible base is
+    shr ax, cl                      ; 512-byte aligned)
+    push ax
+    add ax, di
+    add ax, 63
+    mov cl, 6
+    shr ax, cl                      ; KB: R + the read
+    call OSAPI_MEM_CLAIM            ; DX = the base
+    pop ax
+    jc .nomem
+    add ax, dx
+    mov [op_rdseg], ax              ; the read lands R up the claim
+    push si
+    push bx
+    push dx
+    call op_read                    ; CF=1: not read, or short
+    pop dx
+    pop bx
+    pop si
+    jc .free
+    mov cl, 4
+    shr bx, cl
+    add bx, [op_rdseg]              ; BX = the stream's own segment
+    push si
+    push dx
+    mov cx, [si+OP_R_ZKB]           ; CX = the packed length
+    mov al, [op_table + OP_T_FMT]   ; the format, read before DS moves
+    mov es, dx                      ; ES:DI = the claim's base
+    mov dx, [si+OP_R_LEN]
+    push ds
+    mov ds, bx
+    xor bx, bx                      ; BX:DX = the exact output
+    xor si, si
+    xor di, di
+    call OSAPI_DECOMP
+    pop ds
+    pop dx
+    pop si
+    jc .free
+    mov cx, [si+OP_R_LEN]
+    mov ax, cx
+    add ax, 1023
+    rcr ax, 1
+    push cx
+    mov cl, 9
+    shr ax, cl                      ; KB the part keeps
+    call OSAPI_MEM_REGROW           ; a shrink: in place, DX unchanged
+    pop cx
+    clc
+    ret
+.free:
+    call OSAPI_MEM_FREE
+    jmp short .no
+.nomem:
+    mov byte [xb_nomem], 1
+.no:
     stc
     ret
 
@@ -463,21 +526,12 @@ xb_freeseg:
     pop dx
     ret
 
-; name, size, compiled checksum, magic's second word - VGA then CGA
-xb_gfxfiles:
-    dw xb_gfxname_v, EXB_GFX_VGA_SIZE, EXB_GFX_VGA_SUM, 'BV'
-    dw xb_gfxname_c, EXB_GFX_CGA_SIZE, EXB_GFX_CGA_SUM, 'BC'
-    dw xb_gfxname_h, EXB_GFX_HRC_SIZE, EXB_GFX_HRC_SUM, 'BH'
-xb_gfxname_v: db 'EXBV.GFX',0
-xb_gfxname_c: db 'EXBC.GFX',0
-xb_gfxname_h: db 'EXBH.GFX',0
-
 ; the font record -> xb_font: 64 glyphs, one 8-byte 1-bit row set (VGA) or a
 ; 16-byte 2-bit set (CGA), so text is a run of moves with DS = our segment.  The
 ; PAL record follows it there (VGA 244 bytes, CGA and Hercules 38), and [xb_pal]
 ; is that copy's offset in OUR segment, so the palette, the banner flash and the
 ; loaders read it with DS as it is, and the art claim can be handed back once the back end is built
-; (xb_fullscreen): nothing after xb_race_open reads the art file.
+; (xb_fullscreen): nothing after xb_race_open reads the art part.
 xb_font_copy:
     SAVE
     push ds

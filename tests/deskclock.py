@@ -57,7 +57,6 @@ ROOT = os.path.join(HERE, "..")
 BDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
 TITLE = "Desk Clock"
 S = os88stik
-STIK_ST = S.stik_st_off(S.DESKCLOK_STIK_BSS, S.DESKCLOK_PAYLEN)
 STIK_S_DIRTY = 16
 PAY = S.stik_hdr_off(S.DESKCLOK_STIK_BSS) + S.STIK_HDR_SIZE
 RED, NAVY = (255, 85, 85), (0, 0, 170)
@@ -83,6 +82,10 @@ class Clock(object):
     def __init__(self, ui, tmp):
         self.ui, self.m, self.tmp = ui, ui.m, tmp
         self.image = image_size()
+        # stik_st is in the Sticky App block (SPEC.md 110.15): past the
+        # image only once the image is known
+        self.st_off = S.state_off(S.DESKCLOK_LIB, S.DESKCLOK_STIK_BSS,
+                                  S.DESKCLOK_PAYLEN, self.image)["st"]
         self.seg = None
 
     def find(self):
@@ -152,9 +155,9 @@ class Clock(object):
     def saved(self, what):
         """Wait for the save a change owes, then the state file off A:."""
         os88marty.guest_sleep(self.m, 1.0)
-        self.ui._wait(lambda: not self.byte(STIK_ST) & STIK_S_DIRTY,
+        self.ui._wait(lambda: not self.byte(self.st_off) & STIK_S_DIRTY,
                       what, 90, snapshot=lambda: "stik_st = %#x"
-                      % self.byte(STIK_ST))
+                      % self.byte(self.st_off))
         d = self.raw("SYSTEM/APPDATA/DESKCLOK.DAT")
         if d is None:
             return None

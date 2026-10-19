@@ -353,6 +353,8 @@ int os88_file_dlg(int mode, void *win, const char *defname)
 int os88_arg_file(char *name13, struct os88_place *p)
 { (void)name13; (void)p; return -1; }
 int os88_file_goto(struct os88_place *p) { (void)p; return 0; }
+int os88_file_goto_q_mark(unsigned clus, int vol) { (void)clus; (void)vol; return 0; }
+void os88_wm_onwake(void *win) { (void)win; }
 int os88_assoc_set(const char *e, const char *s) { (void)e; (void)s; return 0; }
 
 static char clipbuf[4096];
@@ -384,6 +386,22 @@ char *os88_utoa(unsigned v, char *dst)
 
 /* the one hand-written routine, in C for the host */
 void cw_memmove(void *dst, const void *src, unsigned n) { memmove(dst, src, n); }
+
+/* ...and Undo's two (apps/cword/cwmove.inc), over ONE fake claim: segment 1
+ * is this array, which is all the snapshot ever needs. */
+static unsigned char farmem[9 * 1024];
+static int n_claims;
+unsigned os88_mem_claim(int kb) { n_claims++; return kb <= 9 ? 1 : 0; }
+int os88_mem_movable(unsigned seg, int on) { (void)seg; (void)on; return 0; }
+void cw_farput(const void *src, unsigned seg, unsigned off, unsigned n)
+{ (void)seg; memcpy(farmem + off, src, n); }
+void cw_farswap(void *p, unsigned seg, unsigned off, unsigned n)
+{
+    unsigned char *a = (unsigned char *)p, t;
+    unsigned i;
+    (void)seg;
+    for (i = 0; i < n; i++) { t = a[i]; a[i] = farmem[off + i]; farmem[off + i] = t; }
+}
 
 /* ==========================================================================
  * THE TYPE LIBRARY (apps/cword/cwtype.inc), STUBBED AS FACE 0
@@ -928,6 +946,53 @@ int main(void)
         }
         while (cw_len > before) { key(8, 0); verify("undo-paste backspace"); }
         verify("after undoing the paste by hand");
+    }
+
+    /* 9b'. UNDO (SPEC.md 73.12.4): a run of typing is ONE undo, Undo puts
+     *      the document back to the byte and repaints it truthfully, and a
+     *      second Undo is the Redo. */
+    {
+        static char ub[CW_DOC_MAX];
+        static unsigned char ua[CW_DOC_MAX];
+        int ulen, ucur, k2;
+
+        key(0, CW_K_END);
+        key(0, CW_K_LEFT);              /* a caret move: a new group */
+        ulen = cw_len;
+        ucur = cw_cur;
+        memcpy(ub, cw_buf, ulen);
+        memcpy(ua, cw_att, ulen);
+        typestr("undo me ");
+        key(13, 0);
+        typestr("and this");
+        verify("before undo");
+        if (cw_item_dis(14)) { printf("FAIL: Undo is greyed after typing\n"); fails++; }
+        key(CW_C_UNDO, 0);
+        verify("after undo");
+        if (cw_len != ulen || cw_cur != ucur || memcmp(cw_buf, ub, ulen) ||
+            memcmp(cw_att, ua, ulen)) {
+            printf("FAIL: Undo did not put the document back (%d vs %d)\n",
+                   cw_len, ulen);
+            fails++;
+        }
+        key(CW_C_UNDO, 0);
+        verify("after redo");
+        if (cw_len != ulen + 17) {
+            printf("FAIL: Undo of the Undo did not redo (%d vs %d)\n",
+                   cw_len, ulen + 17);
+            fails++;
+        }
+        key(CW_C_UNDO, 0);
+        verify("after undo again");
+        for (k2 = 0; k2 < 3; k2++) { key(8, 0); verify("backspace group"); }
+        key(CW_C_UNDO, 0);
+        verify("undo a backspace run");
+        if (cw_len != ulen || memcmp(cw_buf, ub, ulen)) {
+            printf("FAIL: a run of backspaces is not one Undo\n");
+            fails++;
+        }
+        printf("undo: typing, Enter and a backspace run each one group; "
+               "undo/redo round trip exact\n");
     }
 
     /* 9c. the keyboard shortcuts that are not menu commands */

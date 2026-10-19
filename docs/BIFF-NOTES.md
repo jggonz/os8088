@@ -95,12 +95,27 @@ Values: font index = `ixfe & 3`; format index from `sh_biff_numfmt_tab`
 `XF_USED_ATTRIB` = FCH (every attribute is this XF's own, since no style XF
 is written); parent style = FFFH, the documented "none"; horizontal alignment
 = bits 2-3 of the format byte, which are already `XF_HOR_ALIGN`'s 0-3
-(General/Left/Center/Right); area and border zero. So BIFF3 writes the words
+(General/Left/Center/Right); area and border zero in these 64. So BIFF3 writes the words
 `FC00H`, `align|FFF0H` and BIFF4 writes `FFF0H`, `align|FC00H`. Writing one
 body under the other opcode yields wrong formatting, not an error.
 Horizontal alignment is at offset 4 bits 2-0 in **both**, and the font and
 format indices at 0 and 1, which is why the reader has one XF body path for
 both opcodes.
+
+**Border `XF`s** (SPEC.md 81.22.3): after the 64, one more per distinct
+(format byte, border byte) pair the border table holds, at most 64, numbered
+from 64 in the order `sh_bxf_collect` finds them. The body is the format
+byte's, plus `XF_AREA_34` = 4A02H for Shade (pattern 2, the 50% grey,
+colour 8 on colour 9) and `XF_BORDER_34`'s four bytes - top, left, bottom,
+right - each 41H for a set edge (line style 1 thin, colour 8). A bordered
+cell's record carries its pair's `ixfe`.
+
+**`BLANK`** (6, 0201H): the head alone, for a bordered cell with no value -
+the only way its XF reaches the file.
+
+**`NOTE`** (6 + cch, 001CH): row(2), col(2), cch(2), the text, a line break
+being 0AH. After the sheet's cell and `BLANK` records; a note is at most
+`SH_NOTEMAX` - 1 = 239 characters, far under the record's 2,048.
 
 **`RK`** (10): head, then the packed value (see below).
 
@@ -170,7 +185,12 @@ Excel's 07H read back here as #N/A.
   (every byte off a disk is hostile). The read reports "Loaded" with what it
   had.
 - `FONT` and `XF` are tracked up to `SH_BIFF_FONT_CAP` = 32 and
-  `SH_BIFF_XF_CAP` = 64; a cell pointing past either reads back General.
+  `SH_BIFF_XF_CAP` = 128; a cell pointing past either reads back General.
+  Each XF's border byte is read too: any line style in `XF_BORDER_34` is that
+  edge and any fill pattern in `XF_AREA_34` is Shade.
+- `BLANK` (0201H) applies its XF's border to the cell; `NOTE` (001CH) becomes
+  the cell's note, cut at 239 characters or at a NUL. A continuation `NOTE`
+  (row FFFFH) is skipped by the row check below.
 - A row >= `SH_ROWS` or column >= `SH_COLS` skips the record: a row with
   bit 14 set would land on another sheet through the packed key.
 - `FORMULA`: the cached result is used and the tokens are skipped; Sheet

@@ -162,7 +162,9 @@ tv_do_busy:
 ; THE OPENING STATE IS BANKED ON A FRESH OPEN ONLY: a second press of
 ; Customize while the window is up raises it, and banking again there would
 ; make a preview the thing Cancel goes back to. Opening changes nothing on
-; screen: Customize is only live under Color or Windows (cp_thm_custok).
+; screen, whatever theme is live: Customize is live wherever Color is offered
+; (SPEC.md 76.14.10), so it may open over Bright or Dark - the first change
+; makes the theme Color, and Cancel puts the banked kind back.
 ; -----------------------------------------------------------------------------
 tv_do_open:
     mov bx, [tv_win]

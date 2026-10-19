@@ -22,33 +22,14 @@
 # WHY THERE IS NO 'my package is too complicated' EXEMPTION. A relocation proc
 # is a `ret` for almost everything (the SDK header says why: every word that
 # names a region belongs to the KERNEL, and mem_region_reloc puts those right).
-# The only packages that need more are the two shapes below - a segment of our
-# own stamped somewhere, or a worker that cannot be restarted where it parks.
+# The only packages that need more are a segment of our own stamped somewhere,
+# or a worker that cannot be restarted where it parks (the one below). The
+# first shape had one member, SCRIBE, whose SCRIBE.OVL kept DS = the package
+# and was told it by stamps meant to last the session; that module became a
+# part in the package's OWN segment (SPEC.md 95.8.8), nothing is stamped, and
+# the line is gone - docs/plans/completed/SCRIBE-OVL-PLAN.md is the record.
 
 # --- region ------------------------------------------------------------------
-
-region apps/scribe/scribe.asm    # STAMPS ITS OWN SEGMENT INTO MEMORY THE
-                                 # KERNEL DOES NOT KNOW ABOUT - the only
-                                 # package in the tree that does. SCRIBE.OVL
-                                 # is a pre-parts sidecar that keeps DS = OUR
-                                 # SEGMENT, so sc_ovload writes our base into
-                                 # the module's sc_pkgseg AND into six
-                                 # sc_v_* vectors, both meant to last the
-                                 # session. A bare `ret` proc leaves the
-                                 # module setting DS from a stale word and
-                                 # far-calling home into whatever the
-                                 # compactor packed over us.
-                                 # RETIRED BY docs/plans/SCRIBE-OVL-PLAN.md,
-                                 # option B: move both stamps from sc_ovload
-                                 # to sc_ovcall, so nothing stamped outlives
-                                 # ONE ENTRY and no proc is needed at all.
-                                 # It is six stores and one on a path that is
-                                 # already a document open - every verb is
-                                 # file-format or picture work behind an
-                                 # int 13h. The plan also costs the stopgap
-                                 # (a proc, ~15 bytes) and the parts
-                                 # migration, which is a PACKAGING fix and
-                                 # does NOT retire this line on its own.
 
 region apps/skies/csload.asm     # NOTHING TO DECLARE: it is the launch image
                                  # only. It reads the parts, hands off through
@@ -69,6 +50,17 @@ region apps/word/wdload.asm      # THE SAME SHAPE a third time: WORD.O88's
                                  # claim and moves with it, which is why its
                                  # proc is still a bare `ret`. Retired by
                                  # nothing; correct as it stands.
+
+region apps/scribe/scload.asm    # WORD's shape a fourth time, one fork along:
+                                 # SCRIBE.O88's raw loader (SPEC.md 95.8.8),
+                                 # which reads the two parts, hands its
+                                 # identity to part 0 through OSAPI_PKG_REHOME
+                                 # and has its own region freed inside that
+                                 # call. scribe.asm declares the carve, and
+                                 # part 1 - the file formats that were
+                                 # SCRIBE.OVL - is inside the same claim and
+                                 # moves with it, so the proc is a bare `ret`.
+                                 # Retired by nothing; correct as it stands.
 
 region apps/dos/dosload.asm      # THE SAME SHAPE, one package along: the
                                  # four-piece DOS.O88's raw loader image
@@ -130,10 +122,3 @@ worker apps/frotz/frotz.asm      # A PARK POINT INSIDE THE INTERPRETER'S OWN
                                  # undeclared is the SDK's own safe answer -
                                  # this is the one package in the tree where
                                  # that sentence is load-bearing.
-
-worker apps/scribe/scribe.asm    # its region cannot move at all yet - see the
-                                 # `region` line above and
-                                 # docs/plans/SCRIBE-OVL-PLAN.md. Retired with
-                                 # it: sc_worker is an ordinary poll and the
-                                 # declaration is one line once the region
-                                 # can move.

@@ -138,6 +138,7 @@ FDE_TOP     equ 4
 ;           its own far entry.
 ; =============================================================================
 %ifdef FDLG_MOD
+  %define FDV(x) [cs:x]         ; one dialog's state, in the image's bss
   %macro FDBODY 1
 %1 %+ _m:
   %endmacro
@@ -148,10 +149,15 @@ FDE_TOP     equ 4
   %macro FDK 1
     call KERNEL_SEG:%1
   %endmacro
+  %macro FDKT 1                 ; a near .text routine with no other caller on
+    call fdt_go                 ; this build: fdx_go's hop into KERNEL_SEG,
+    dw %1                       ; so it needs no resident cw_ shim (kernel
+  %endmacro                     ; size pass 13)
   %macro FDRET 0
     retf
   %endmacro
 %else
+  %define FDV(x) [x]            ; ...and resident `.bss` on kern_big
   %macro FDBODY 1
 %1:
   %endmacro
@@ -160,6 +166,9 @@ FDE_TOP     equ 4
   %endmacro
   %macro FDK 1
     call ct_ %+ %1
+  %endmacro
+  %macro FDKT 1                 ; ...which on kern_big is the shim, kept for
+    call KERNEL_SEG:cw_ %+ %1   ; its other callers (DOCK.DRV, DESK.DRV)
   %endmacro
   %macro FDRET 0
     ret
@@ -234,6 +243,19 @@ fdk_di:     pop di
 ; kern_small's `.cold`, at ~300 cycles a hop on a dialog's open, a click or a
 ; commit; the frame at the body's entry is the six bytes the thunk's was, and
 ; the peak inside this routine is 14 above the call.
+; fdt_go is the same hop into KERNEL_SEG (FDKT): the segment slot is DS's,
+; the near return cw_kretf, and the tail is fdx_go's own (kernel size pass 13,
+; for the five resident cw_ shims only this image called).
+fdt_go:                         ; ovlchk: builds its own far frame
+    push ax                     ; STKBALANCE-OK: fdx_go's frame, its target's
+    push ax                     ; return through cw_kretf. The segment slot is
+    push ds                     ; PUSHED: DS is KERNEL_SEG throughout the image
+    push ax
+    push bp
+    mov bp, sp
+    push bx
+    mov bx, cw_kretf
+    jmp short fdx_go.t
 fdx_go:                         ; ovlchk: builds its own far frame
     push ax                     ; STKBALANCE-OK: a far frame built by hand, its
     push ax                     ; four slots spent by the RETF below and by the
@@ -242,10 +264,12 @@ fdx_go:                         ; ovlchk: builds its own far frame
     push bp
     mov bp, sp                  ; [bp+2] offset, [bp+4] segment, [bp+6] the
     push bx                     ; near return, [bp+8] the far return's offset
-    mov bx, [bp+10]             ; and [bp+10] the call's own return, which
-    mov [bp+10], cs             ; becomes the far return's CS
-    mov word [bp+6], cold_kretf
-    mov word [bp+4], COLD_SEG
+    mov word [bp+4], COLD_SEG   ; and [bp+10] the call's own return, which
+    mov bx, cold_kretf          ; becomes the far return's CS
+.t:
+    mov [bp+6], bx
+    mov bx, [bp+10]
+    mov [bp+10], cs
     lea bx, [bx+2]              ; past the `dw`
     mov [bp+8], bx
     mov bx, [cs:bx-2]           ; ...which names the target
@@ -277,10 +301,10 @@ FDBODY fdlg_open_x
 
     cmp word [fdlg_win], 0
     jne fdlg_ref                ; no dialog ever opens on top of another
-    mov [fdlg_rqcb], di
-    mov [fdlg_rqwin], bx
+    mov FDV(fdlg_rqcb), di
+    mov FDV(fdlg_rqwin), bx
     mov ah, 0                   ; [fdlg_act] = 0: no answer yet
-    mov [fdlg_mode], ax         ; (and the mode, the byte below it)
+    mov FDV(fdlg_mode), ax         ; (and the mode, the byte below it)
     mov cx, fdlg_s_topen        ; the caption fm_kinit puts on it - written
     or al, al                   ; before the fences below, like the three
     jz .ttl                     ; above: nothing reads any of them until
@@ -290,12 +314,12 @@ FDBODY fdlg_open_x
 
     call fdlg_live              ; DI = the owning record; BX preserved
     jne fdlg_ref
-    mov [fdlg_rqrec], di        ; ...so from here on it is a LIVE record in
+    mov FDV(fdlg_rqrec), di        ; ...so from here on it is a LIVE record in
     mov ax, [di+I_SPTR]         ; inst_tab, and fdlg_hidx can never miss
-    mov [fdlg_rqsp], ax
+    mov FDV(fdlg_rqsp), ax
 
 %ifdef KERN_SMALL
-    mov byte [fdlg_down], 0     ; a press the last chooser never saw released
+    mov byte FDV(fdlg_down), 0     ; a press the last chooser never saw released
 %endif                          ; (an Escape mid-press) is not this one's
     or si, si                   ; the caller's default wins...
     jnz .setname
@@ -315,8 +339,8 @@ FDBODY fdlg_open_x
                                 ; Mode 0 is stored as the 0 it already was
 
     call fdlg_seed              ; AL = volume, DX = folder, SI = its name|0
-    mov [fdlg_sdrv], al         ; where it OPENED, so a cancel that never
-    mov [fdlg_scwd], dx         ; moved records nothing (SPEC.md 38.10)
+    mov FDV(fdlg_sdrv), al         ; where it OPENED, so a cancel that never
+    mov FDV(fdlg_scwd), dx         ; moved records nothing (SPEC.md 38.10)
     FDX fm_seed                 ; parked for fm_kinit, as a drive icon does
 
     or word [fdlg_win], -1      ; fm_kinit adopts the window being built:
@@ -377,7 +401,11 @@ fdlg_seed:
     cmp byte [dsk_vkind], DVK_FILE ; (dskw_stat), not in a listing (SPEC.md
     je .root                    ; 38.10). A redirected volume's stat writes
 %endif
+%ifdef FDLG_MOD
     call COLD_SEG:dwf_dskw_stat
+%else
+    COLDCALL dwf_dskw_stat      ; (`.cold` on kern_big: ROM-PLAN 3.2)
+%endif
     jc .root                    ; nothing, so it is the root there. SI is
     test al, 0x10               ; kept; AL = the attribute, BX = the cluster
     jnz .got                    ; a FILE called MEDIA is not the folder
@@ -399,8 +427,8 @@ fdlg_seed:
 ; -----------------------------------------------------------------------------
 fdlg_hidx:
     push di
-    mov di, [fdlg_rqrec]
-    call KERNEL_SEG:cw_inst_fhome_idx
+    mov di, FDV(fdlg_rqrec)
+    FDKT inst_fhome_idx
     pop di
     push ax
     mov al, INST_FNSZ
@@ -437,11 +465,11 @@ fdlg_live:
 ; -----------------------------------------------------------------------------
 fdlg_home_dir:
     call fdlg_hidx
-    mov al, [fdlg_sdrv]
+    mov al, FDV(fdlg_sdrv)
     mov [inst_fdrv+bx], al
     mov byte [inst_fpick+bx], 1
     shl bx, 1
-    mov ax, [fdlg_scwd]
+    mov ax, FDV(fdlg_scwd)
     mov [inst_fcwd+bx], ax
     ret
 
@@ -471,7 +499,7 @@ fdlg_gate:
     mov al, [bx+W_FLAGS]
     inc ax                      ; (AH too, if AL was FFh: AX is clobbered)
     and al, 3                   ; 0 exactly when both bits are set...
-    or al, [fdlg_act]           ; ...and nothing is posted: then CF=0, and
+    or al, FDV(fdlg_act)           ; ...and nothing is posted: then CF=0, and
     neg al                      ; CF=1 with ZF=0 for anything else
 .ret:
     ret
@@ -495,7 +523,7 @@ FDBODY fdlg_reap_x
     cmp word [fdlg_win], 0
     je .done
     mov dl, 0
-    xchg dl, [fdlg_act]         ; the posted answer, taken - FIRST, so that
+    xchg dl, FDV(fdlg_act)         ; the posted answer, taken - FIRST, so that
     call fdlg_gate              ; CF=1 here is "it has gone", which is a
     jnc .alive                  ; cancel (the gate clobbers AX)
     mov dl, FDA_CANCEL
@@ -522,13 +550,13 @@ FDBODY fdlg_reap_x
     je .kept
     mov al, [si+FS_DRV]
     mov dx, [si+FS_CWD]
-    cmp al, [fdlg_sdrv]
+    cmp al, FDV(fdlg_sdrv)
     jne .moved
-    cmp dx, [fdlg_scwd]
+    cmp dx, FDV(fdlg_scwd)
     je .kept
 .moved:
-    mov [fdlg_sdrv], al
-    mov [fdlg_scwd], dx
+    mov FDV(fdlg_sdrv), al
+    mov FDV(fdlg_scwd), dx
     push bx                     ; (fdlg_home_dir spends BX and SI, and both
     push si                     ; are the chooser's, wanted just below)
     call fdlg_home_dir          ; ...moving is a statement about the location
@@ -539,11 +567,11 @@ FDBODY fdlg_reap_x
     jne .gone                   ; ...or torn down already: the close box did it
     cmp [di+I_SPTR], si         ; ...and it is still the CHOOSER's: a window
     jne .gone                   ; slot is reused, a pool block names one role
-    call KERNEL_SEG:cw_app_close_win ; frees the cache claim with the record
+    FDKT app_close_win          ; frees the cache claim with the record
 .gone:
-    mov bx, [fdlg_rqwin]
-    call KERNEL_SEG:cw_menu_activate ; the bar goes back to the requester
-    call KERNEL_SEG:cw_menu_draw_bar
+    mov bx, FDV(fdlg_rqwin)
+    FDKT menu_activate          ; the bar goes back to the requester
+    FDKT menu_draw_bar
     pop dx
 %if FDA_COMMIT != 1
   %error "fdlg_reap tests the posted answer for FDA_COMMIT with dec"
@@ -557,8 +585,8 @@ FDBODY fdlg_reap_x
 
     ; --- THE COMMIT (SPEC.md 38.6, 38.7 step 7) ------------------------------
 .commit:
-    mov dl, [fdlg_sdrv]         ; the callback's contract: the file's volume
-    mov ax, [fdlg_scwd]         ; is mounted and its folder is current - put
+    mov dl, FDV(fdlg_sdrv)         ; the callback's contract: the file's volume
+    mov ax, FDV(fdlg_scwd)         ; is mounted and its folder is current - put
     cmp dl, [disk_drive]        ; them back if anything moved them, which
     jne .cd                     ; costs nothing when nothing did
     cmp ax, [dsk_cwd]
@@ -566,13 +594,13 @@ FDBODY fdlg_reap_x
 .cd:
     FDX dsk_chdir_x
 .here:
-    mov di, [fdlg_rqrec]        ; THE STALENESS TRIPLE (SPEC.md 38.6) - of a
+    mov di, FDV(fdlg_rqrec)        ; THE STALENESS TRIPLE (SPEC.md 38.6) - of a
     cmp byte [di+I_STATE], 1    ; record fdlg_open fenced live, so never 0
     jne .unlk
-    mov ax, [fdlg_rqwin]
+    mov ax, FDV(fdlg_rqwin)
     cmp ax, [di+I_WIN]
     jne .unlk
-    mov ax, [fdlg_rqsp]
+    mov ax, FDV(fdlg_rqsp)
     cmp ax, [di+I_SPTR]
     jne .unlk
     push di                     ; snd_disp_set's input, below
@@ -599,7 +627,11 @@ FDBODY fdlg_reap_x
     ; 20.14.6.2.1's line for where a sniff belongs. ES is banked round it
     ; (a sniff spends it, and this routine gives every register back).
     mov si, fdlg_name
+%ifdef FDLG_MOD
     call COLD_SEG:dwf_dskw_stat ; CF=0: AL = attribute, DX:CX = the size
+%else
+    COLDCALL dwf_dskw_stat      ; CF=0: AL = attribute, DX:CX = the size
+%endif
     jc .zero                    ; no such name in this folder
     test al, 0x10
     jnz .zero                   ; a folder has no size to report
@@ -629,7 +661,7 @@ FDBODY fdlg_reap_x
     xor dx, dx
 .sized:
     pop di                      ; the requester's record
-    mov ax, [fdlg_rqcb]
+    mov ax, FDV(fdlg_rqcb)
     or ax, ax
     jz .unlk
     push word [snd_inst]        ; the callback is the PACKAGE's code, so its
@@ -637,13 +669,13 @@ FDBODY fdlg_reap_x
     push es                     ; the callback owes us nothing (SPEC.md
     push bp                     ; 38.6), and ES is the one register the
     mov bp, ax                  ; kernel cannot shrug off (SPEC.md 1)
-    mov ax, [fdlg_mode]         ; AL = mode and AH = [fdlg_act], which the
+    mov ax, FDV(fdlg_mode)         ; AL = mode and AH = [fdlg_act], which the
                                 ; xchg at the top left 0 and nothing can post
                                 ; to a chooser that is closed. SI = its
-    mov si, [fdlg_rqwin]        ; window, DI = the name (ours - for a package
+    mov si, FDV(fdlg_rqwin)        ; window, DI = the name (ours - for a package
     mov di, fdlg_name           ; DS is its own segment and this buffer is in
                                 ; the kernel's, 20.1), DX:CX = the size
-    call KERNEL_SEG:cw_wm_pkgcall
+    FDKT wm_pkgcall
     pop bp
     pop es
     pop word [snd_inst]
@@ -702,23 +734,26 @@ FDBODY fdlg_top_x
     pop ax                      ; AX = wm_top's answer
     jnc .out
 %ifdef KERN_BIG
-    jnz .gone                   ; ZF=0: gone or answered (SPEC.md 38.2)
-    call far [DKDFP + DKD_KEY]  ; ZF=1: there is none - so does a WIDGET own
-    jnc .out                    ; the bar? DESK.DRV's dkd_key asks (SPEC.md
-    jmp short .stand            ; 11.103.10): CF = 0 and BX = it, or CF = 1,
-                                ; stand - which is also mod_gone's answer with
-                                ; no image, when no desk window can exist
-.gone:
-    xor ax, ax
+    jz .ask                     ; ZF=1: there is none - see below
 %else
     jz .stand                   ; ZF=1: there is none
-    xor ax, ax                  ; ZF=0: gone or answered (SPEC.md 38.2)
 %endif
+    xor ax, ax                  ; ZF=0: gone or answered (SPEC.md 38.2)
 .stand:
     xchg ax, bx                 ; ...which stands
 .out:
     pop ax
     retf
+%ifdef KERN_BIG
+.ask:                           ; ...so does a WIDGET own the bar? wm_top's
+    xchg ax, bx                 ; answer STANDS FIRST, in BX, and DESK.DRV's
+    call far [DKDFP + DKD_KEY]  ; dkd_key (SPEC.md 11.103.10) replaces it with
+    pop ax                      ; the widget (CF = 0) or keeps it (CF = 1) -
+    retf                        ; which is mod_gone's "registers kept" with no
+                                ; image, when no desk window can exist. A byte
+                                ; under standing after the call (kernel size
+                                ; pass 13)
+%endif
 
 ; =============================================================================
 ; THE HOOK (SPEC.md 38.9): files.inc's sites, one dispatch
@@ -779,7 +814,7 @@ fdlg_htab:
 ; FDH_ARM - fm_layout, before it caches FS_EDIT: a Save chooser that is not
 ; in some other prompt is typing its name (SPEC.md 38.5). CF=0.
 fdlg_h_arm:
-    cmp byte [fdlg_mode], 0
+    cmp byte FDV(fdlg_mode), 0
     je fdlg_h_no
     cmp byte [bx+FS_EDIT], 0
     jne fdlg_h_no
@@ -856,7 +891,7 @@ fdlg_ret:
 ; because fm_open_sel then reports "quiet". CF=1.
 fdlg_h_pick:
     call fdlg_tsel
-    cmp byte [fdlg_mode], 0
+    cmp byte FDV(fdlg_mode), 0
     je fdlg_post_commit
     call fdlg_toebuf
     mov si, [fdlg_win]          ; fm_open_sel's quiet exit reads no SI
@@ -872,7 +907,7 @@ fdlg_h_pick:
 ; kern_big's fm_btn1) and not by fdlg_blabel, which a hit test calls too.
 ; CF=0; CX, DX, SI and DI kept.
 fdlg_h_sel:
-    cmp byte [fdlg_mode], 0
+    cmp byte FDV(fdlg_mode), 0
     je .open
     call fdlg_tsel
     jc fdlg_h_no
@@ -882,7 +917,7 @@ fdlg_h_sel:
     push di
     mov al, FM_BGO
     call fdlg_blabel            ; what it should show...
-    cmp di, [fdlg_gdis]         ; ...against what the glass does
+    cmp di, FDV(fdlg_gdis)         ; ...against what the glass does
     pop di
     pop si                      ; (pop writes no flag)
     je fdlg_h_no                ; one file to another: not a pixel changes
@@ -915,7 +950,7 @@ fdlg_post_commit:
     mov al, FDA_COMMIT
 ; fdlg_post - record the answer and wake ui_task; fdlg_reap acts on it
 fdlg_post:
-    mov [fdlg_act], al
+    mov FDV(fdlg_act), al
     inc byte [ui_post]
     stc
     ret
@@ -942,13 +977,13 @@ fdlg_beep:
 fdlg_h_btn:
     mov al, ah
 fdlg_btn:
-    cmp byte [fdlg_act], 0      ; ANSWERED already: a release whose press
+    cmp byte FDV(fdlg_act), 0      ; ANSWERED already: a release whose press
     jne .done                   ; came before the answer acts on nothing
     cmp al, FM_BCANCEL
     je fdlg_post_cancel
     cmp al, FM_BDRIVE
     je .drive
-    cmp byte [fdlg_mode], 0
+    cmp byte FDV(fdlg_mode), 0
     jne .save
     mov ax, [bx+FS_SEL]         ; Open: the selection acts - a file is the
     cmp ax, [bx+FS_N]           ; answer (back through FDH_PICK), a folder is
@@ -1035,7 +1070,7 @@ fdlg_blabel:
     inc di                      ; OS88UI_FILL | OS88UI_DEF
     inc di
     mov si, fdlg_s_save
-    cmp byte [fdlg_mode], 0
+    cmp byte FDV(fdlg_mode), 0
     jne .out
     mov si, fdlg_s_topen
     cmp word [bx+FS_SEL], 0xFFFF
@@ -1055,9 +1090,9 @@ fdlg_drawbtn:
     call fdlg_blabel
     cmp al, FM_BGO              ; the default's flags as DRAWN, for FDH_SEL
     jne .ndef                   ; (fm_btn1 records them on kern_big)
-    mov [fdlg_gdis], di
+    mov FDV(fdlg_gdis), di
 .ndef:
-    cmp al, [fdlg_down]         ; the one being held (SPEC.md 13.8.3)
+    cmp al, FDV(fdlg_down)         ; the one being held (SPEC.md 13.8.3)
     jne .up
     or di, OS88UI_DOWN
 .up:
@@ -1098,7 +1133,7 @@ fdlg_h_click:
     jbe .l
     jmp short .none             ; CF=0, the `cmp` past FM_BDRIVE's
 .hit:
-    mov [fdlg_down], al         ; the ARM and the pressed look are one byte:
+    mov FDV(fdlg_down), al         ; the ARM and the pressed look are one byte:
                                 ; kern_small carries no os88ui_armw
     call fdlg_drawbtn
     stc
@@ -1120,7 +1155,7 @@ fdlg_h_up:
     push si
     push di
     xor ax, ax                  ; take it and clear it, os88ui_fire's shape
-    xchg al, [fdlg_down]
+    xchg al, FDV(fdlg_down)
     or al, al
     jz .out
     mov bx, [fdlg_win]
@@ -1146,23 +1181,42 @@ fdlg_h_up:
 ; =============================================================================
 section .bss
 
+fdlg_ttl:   resw 1              ; the caption, for fm_kinit to adopt
+fdlg_name:  resb FD_NAMEMAX+1   ; the answer, and the Save box between edits
+
+; ...and the rest is ONE DIALOG'S STATE, which only the dialog's own code reads
+; - so on kern_small, where that code is FDLG.DRV, it is the IMAGE's bss
+; (`.moddb`, in the claim's KB rounding: MODULE-SELFCONTAIN-PLAN 3.2) and every
+; access is FDV()'s `[cs:x]` (kernel size pass 13, -16 resident there). It is
+; scratch, not PENDING state (3.4): fdlg_open writes every byte of it before
+; anything reads it - fdlg_gdis aside, whose first read is answered by the
+; paint's own draw - and fdlg_reap_x drops the image only once no chooser is
+; up; a chooser opened from inside the commit keeps the image, and these with
+; it. fdlg_ttl and fdlg_name stay resident: fm_kinit and the requester read them.
+%ifdef FDLG_MOD
+section .moddb
+%endif
 fdlg_mode:  resb 1              ; 0 = Open, 1 = Save
 fdlg_act:   resb 1              ; the posted answer: 0, FDA_COMMIT, FDA_CANCEL;
                                 ; AFTER fdlg_mode, which fdlg_reap's commit
                                 ; reads as one word with this 0 for AH and
                                 ; fdlg_open writes as one word
-fdlg_ttl:   resw 1              ; its caption, for fm_kinit to adopt
 fdlg_gdis:  resw 1              ; the Open button's flags as last drawn
 fdlg_rqwin: resw 1              ; the requester's window...
 fdlg_rqcb:  resw 1              ; ...its near completion proc...
 fdlg_rqrec: resw 1              ; ...its instance record...
 fdlg_rqsp:  resw 1              ; ...and that record's I_SPTR: the staleness
                                 ; triple of SPEC.md 38.6
-fdlg_name:  resb FD_NAMEMAX+1   ; the answer, and the Save box between edits
 fdlg_sdrv:  resb 1              ; where the chooser OPENED - and, from
 fdlg_scwd:  resw 1              ; fdlg_reap's close on, where it STOOD
 %ifdef KERN_SMALL
 fdlg_down:  resb 1              ; the column button drawn pressed, 0 = none
+%endif
+%ifdef FDLG_MOD
+section .bss
+%endif
+%if fdlg_act - fdlg_mode != 1
+  %error "fdlg_mode and fdlg_act are one word to fdlg_open and fdlg_reap's commit"
 %endif
 
 section .text
@@ -1180,6 +1234,10 @@ section .cold                   ; far entries (SPEC.md 2.6): the resident
 ; far-calls in through fdx_go (and os88ui_btn_f), and tools/os88ovlchk.py's own
 ; `EXTRA` table - which files this include as `.cold` - stays true.
 %define OS88UI_KERNEL
+%define OS88UI_KGLYPH .modu    ; ...and the glyph is CTRL.DRV's alone on both
+                               ; kernels, so it goes into that image's section
+                               ; (os88ui.inc says how; kernel size pass 13 -
+                               ; kern_small first, kern_big after it)
 %define OS88UI_SCROLL          ; SPEC.md 13.10: the Disk window's bar uses it
                                ; OS88UI_SBDRAG - SPEC.md 13.10.5's thumb drag -
                                ; is NOT defined here. It has to be resolved

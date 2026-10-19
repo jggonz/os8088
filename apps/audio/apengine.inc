@@ -134,9 +134,8 @@ ap_filesize:
     call ap_nameeq                 ; ZF = 1 if equal (case-insensitive)
     pop cx
     pop si
-    je .hit
-    jmp .loop
-.hit:
+    jne .loop
+    ; the hit
     mov ax, [ap_findbuf+18]
     mov dx, [ap_findbuf+20]
     pop es
@@ -155,32 +154,23 @@ ap_filesize:
 
 ; ap_nameeq - compare NUL strings DS:SI and DS:DI, ASCII case-insensitive
 ;             ZF = 1 when equal.  preserves every register except flags.
-ap_nameeq:
+ap_nameeq:                         ; (equal: ZF = 1 and CF = 0)
     push si
     push di
     push ax
-    push bx
 .l:
-    mov al, [si]
-    mov bl, [di]
-    call ap_upcase                 ; AL
-    xchg al, bl
+    mov al, [di]
     call ap_upcase
-    xchg al, bl
-    cmp al, bl
-    jne .ne
-    or al, al
-    jz .eq
+    mov ah, al
+    mov al, [si]
+    call ap_upcase
+    cmp al, ah
+    jne .d                         ; ZF = 0
     inc si
     inc di
-    jmp .l
-.eq:
-    xor al, al                     ; ZF = 1
-    jmp .done
-.ne:
-    or al, 1                       ; ZF = 0
-.done:
-    pop bx
+    or al, al
+    jnz .l                         ; both NUL: ZF = 1, CF = 0
+.d:
     pop ax
     pop di
     pop si
@@ -449,9 +439,8 @@ ap_prime:
 ; =============================================================================
 ap_open_track:
     APCNT apc_opentk
-    call apl_count
-    or ax, ax
-    jnz .havetrk
+    cmp byte [apl_n], 0
+    jne .havetrk
     mov word [ap_msg], ap_s_nofile
     jmp .refuse
 .havetrk:
@@ -492,9 +481,21 @@ ap_prep_track:
     call ap_ensure_bufs           ; the look-ahead ring: the parser's header
     jc .nomem                     ; window too (whatever it held is dead here)
     call apw_parse                ; CF = 1 rejected, apw_err set
-    jc .parseerr
+    jnc .adopt
+    mov ax, [apw_err]             ; (the refusals sit HERE, inside a short
+    jmp short .say                ; jump of every Jcc that takes one)
+.badfile:
+    mov ax, ap_s_loaderr
+    jmp short .say
+.nomem:
+    mov ax, ap_s_nomem
+.say:
+    mov [ap_msg], ax
+    stc
+    ret
 
     ; --- adopt the parsed record ---------------------------------------
+.adopt:
     mov al, [apw_fmt]
     mov cx, [apw_balign]
     call apd_start
@@ -530,38 +531,20 @@ ap_prep_track:
     mov di, ap_rd_cur              ; a new track: the cursor names no file
     call os88_rseq_new
 
-    xor ax, ax                    ; (FR_NONE is 0 too)
-    mov [ap_got], ax
-    mov [ap_got+2], ax
-    mov [ap_src_done], al
-    mov [ap_total], ax
-    mov [ap_consumed], ax
-    mov [ap_consumed_prev], ax
-    mov [ap_played], ax
-    mov [ap_played+2], ax
-    mov [ap_ended], al
-    mov [ap_lasthalf], al
-    mov [ap_paused], al
-    mov [ap_req], al
-    mov [ap_elapsed_s], ax
+    push es                       ; the per-track run (audio.asm): got,
+    push ds                       ; played, total, consumed, the clock and
+    pop es                        ; the five flags, all from 0
+    mov di, AP_TRK0
+    mov cx, AP_TRKLEN
+    xor al, al
+    cld
+    rep stosb
+    pop es
 
     call ap_calc_duration         ; ap_total_s from datlen / rate / bytes-per-s
 
     call ap_prime                 ; fill the look-ahead ring
     clc
-    ret
-.badfile:
-    mov word [ap_msg], ap_s_loaderr
-    stc
-    ret
-.parseerr:
-    mov ax, [apw_err]
-    mov [ap_msg], ax
-    stc
-    ret
-.nomem:
-    mov word [ap_msg], ap_s_nomem
-    stc
     ret
 
 ; ap_open_card - the prepared track onto the Sound Blaster: the grant, the
@@ -793,14 +776,11 @@ ap_stage_half:
 ;   ADPCM  : samples = (datlen / balign) * spb ; seconds = samples / rate
 ; A rough value is fine; 0 means "unknown".
 ; =============================================================================
-ap_calc_duration:
-    push ax
+ap_calc_duration:                  ; (all three outputs arrive 0: the
+    push ax                        ; per-track run, ap_prep_track)
     push bx
     push cx
     push dx
-    mov word [ap_total_s], 0
-    mov word [ap_total_pcm], 0
-    mov word [ap_total_pcm+2], 0
     mov ax, [apw_datlen]
     mov dx, [apw_datlen+2]
     cmp byte [apw_fmt], AP_FMT_ADPCM
@@ -851,8 +831,15 @@ ap_stream_close:
     cmp byte [ap_mixing], 0
     jne .drain                     ; bounded: the worker re-checks ap_sopen
     call ap_free_ring
-    mov byte [ap_ended], 0
-    mov byte [ap_lasthalf], 0
+    xor ax, ax
+    mov [ap_ended], al
+    mov [ap_lasthalf], al
+    ; nothing is in the stream now, so the clock AND the bar read zero: the
+    ; bar is drawn from ap_played, and zeroing only ap_elapsed_s left a full
+    ; bar beside 00:00 after "End of playlist" (and a stale one after Stop)
+    mov [ap_played], ax
+    mov [ap_played+2], ax
+    mov [ap_elapsed_s], ax
     pop ax
     ret
 
@@ -864,24 +851,31 @@ ap_reap:
     cmp byte [ap_ended], 0
     je .out
     call ap_autoadvance
-.out:
-    ret
+.out:                              ; (a BARE ret: our region's relocation
+    ret                            ; proc too, audio.asm)
 
 ; =============================================================================
 ; ap_autoadvance - a track finished: step the playlist and start the next, or
 ;                  stop at the end of the list.
 ; =============================================================================
 ap_autoadvance:
-    call ap_stream_close
     mov al, 1
-    call apl_advance              ; CF = 1 => list ended, Repeat off
-    jc .end
-    call ap_open_track
+    call ap_step_track            ; CF = 1 => list ended, Repeat off
+    jnc .out
+    mov ax, ap_s_endlist
+    jmp ap_stop_msg
+.out:
     ret
-.end:
-    mov byte [ap_state], AP_ST_STOP
-    mov word [ap_elapsed_s], 0
-    mov word [ap_msg], ap_s_endlist
+
+; ap_step_track - AL = 1 next / 0xFF previous: close the stream, step the
+; list, open what it lands on. CF = 1: the list ended and nothing opened
+ap_step_track:
+    call ap_stream_close
+    call apl_advance
+    jc .out
+    call ap_open_track
+    clc
+.out:
     ret
 
 ; =============================================================================
@@ -899,8 +893,7 @@ ap_cmd_play:
     mov word [ap_msg], ap_s_playing
     ret
 .fresh:
-    call ap_open_track
-    ret
+    jmp ap_open_track
 
 ap_cmd_pause:
     cmp byte [ap_state], AP_ST_PLAY
@@ -913,43 +906,29 @@ ap_cmd_pause:
 
 ap_cmd_stop:
     call ap_stream_close
-    mov byte [ap_state], AP_ST_STOP
-    mov word [ap_elapsed_s], 0
-    mov word [ap_msg], ap_s_stopped
+    mov ax, ap_s_stopped
+ap_stop_msg:                      ; AX = what the status line says
+    mov [ap_msg], ax
+    mov byte [ap_state], AP_ST_STOP ; (the clock and the bar: ap_stream_close)
     ret
 
-ap_cmd_next:
-    call ap_stream_close
-    mov al, 1
-    call apl_advance
-    jc .end
-    call ap_open_track
-    ret
-.end:
-    mov word [ap_msg], ap_s_endlist
-    call ap_cmd_stop
+ap_cmd_next:                      ; (Next off the end says Stopped: the
+    mov al, 1                     ; "End of playlist" it once wrote first was
+    call ap_step_track            ; overwritten by ap_cmd_stop's own message)
+    jc ap_cmd_stop
     ret
 
 ap_cmd_prev:
-    call ap_stream_close
-    mov al, 0xFF
-    call apl_advance
-    jc .end
-    call ap_open_track
-    ret
-.end:
-    ret
+    mov al, 0xFF                  ; (Previous wraps, so it ends only on an
+    jmp ap_step_track             ; empty list - and then does nothing)
 
 ap_cmd_shuffle:
     mov al, [ap_shuffle]
     xor al, 1
-    call apl_set_shuffle
-    ret
+    jmp apl_set_shuffle
 
 ap_cmd_repeat:
-    mov al, [ap_repeat]
-    xor al, 1
-    mov [ap_repeat], al
+    xor byte [ap_repeat], 1
     ret
 
 ; =============================================================================
@@ -970,28 +949,17 @@ ap_has_wav_ext:
     jb .cl
 .got:
     cmp cx, 4
-    jb .ne
-    sub si, 4                      ; SI back to the '.' (SI is at the NUL now)
-    mov al, [si]
-    cmp al, '.'
+    jb .ne                         ; (ZF = 0: CX is not 4)
+    cmp byte [si-4], '.'
     jne .ne
-    mov al, [si+1]
-    call ap_upcase
-    cmp al, 'W'
+    mov ax, [si-3]                 ; "WA", any case: AND 0xDF folds exactly
+    and ax, 0xDFDF                 ; the two letters it is compared with, and
+    cmp ax, 'WA'                   ; maps no other byte onto them
     jne .ne
-    mov al, [si+2]
-    call ap_upcase
-    cmp al, 'A'
-    jne .ne
-    mov al, [si+3]
-    call ap_upcase
-    cmp al, 'V'
-    jne .ne
-    xor al, al                    ; ZF = 1
-    jmp .done
+    mov al, [si-1]
+    and al, 0xDF
+    cmp al, 'V'                    ; ZF = 1 iff it is
 .ne:
-    or al, 1                       ; ZF = 0
-.done:
     pop si
     pop cx
     pop ax
@@ -1007,18 +975,25 @@ ap_has_wav_ext:
 ; =============================================================================
 ap_add_file:
     mov [ap_af_flags], al
-    mov [ap_af_dir], dx
-    mov [ap_af_vol], bl
-    mov [ap_af_name], si
 
-    call ap_has_wav_ext
+    call ap_has_wav_ext            ; (preserves every register)
     jne .notwav
 
+    ; Open while a track is PLAYING OR PAUSED adds the file and leaves the
+    ; current track alone, selection included: the title line and Play both
+    ; read apl_cur, so selecting the new entry would name it over the song
+    ; still in the stream and Play would resume the old audio under the new
+    ; name. A paused song is the user's as much as a playing one.
+    test byte [ap_af_flags], AP_ADD_IDLE
+    jz .flagsok
+    cmp byte [ap_state], AP_ST_STOP
+    je .flagsok
+    and byte [ap_af_flags], ~(AP_ADD_CUR | AP_ADD_IDLE) & 0xFF
+.flagsok:
+
     ; duplicate? same name + dir + vol -> select it, do not add again
-    mov si, [ap_af_name]
-    mov dx, [ap_af_dir]
-    mov bl, [ap_af_vol]
     call apl_find                  ; out AX = index, CF = 1 not found
+                                   ; (BX..DI preserved: SI, DX, BL still ours)
     jc .fresh
     mov word [ap_msg], ap_s_dup
     test byte [ap_af_flags], AP_ADD_PLAY
@@ -1034,30 +1009,25 @@ ap_add_file:
     mov [apl_cur], al
     jmp .startcur
 .selonly:
+    test byte [ap_af_flags], AP_ADD_CUR
+    jz .ok                         ; busy: not even selected
     mov [apl_cur], al
     jmp .ok
 .fresh:
-    mov si, [ap_af_name]
-    mov dx, [ap_af_dir]
-    mov bl, [ap_af_vol]
     call apl_add                   ; CF = 1 list full
     jc .full
     mov al, [apl_n]
     dec al                         ; index of the entry just added
-    mov ah, al                     ; keep it
     test byte [ap_af_flags], AP_ADD_CUR | AP_ADD_PLAY
     jz .notcur
     mov [apl_cur], al
 .notcur:
     mov word [ap_msg], ap_s_added
 
-    test byte [ap_af_flags], AP_ADD_PLAY
-    jnz .startcur
-    test byte [ap_af_flags], AP_ADD_IDLE
+    ; PLAY starts it; IDLE survived the busy test above only if the player
+    ; is stopped, so it starts it too
+    test byte [ap_af_flags], AP_ADD_PLAY | AP_ADD_IDLE
     jz .ok
-    cmp byte [ap_state], AP_ST_PLAY
-    je .ok                         ; Open while playing: added, not interrupted
-    mov [apl_cur], ah
 .startcur:
     call ap_stream_close
     call ap_open_track             ; sets ap_msg itself
@@ -1073,9 +1043,6 @@ ap_add_file:
     stc
     ret
 
-    APW ap_af_name
-    APW ap_af_dir
-    APB ap_af_vol
     APB ap_af_flags
 
 %ifdef AP_HANDOFF                 ; (only the handoff asks, SPEC.md 86.11.1)

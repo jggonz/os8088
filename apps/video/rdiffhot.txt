@@ -8,8 +8,17 @@ vd_.*
 vo_.*
 vc_.*
 vb_.*
-vh_.*
-vx_.*
+vh_addr
+# (the half-scaler's words, vh_sseg..vh_y, are bss equs since the data
+# size pass, in the desktop's scratch: not routines, and never the play's)
+vx_n
+# (vx_run, Live's runs, is a bss equ in the desktop's scratch: not a routine)
 os88spk.*
 vp_(play|worker|hook|adue|frame|ringkb|bkkb|bkrd|rdat|bkind)
 vp_x(free|copy|in|rdat|fill|put|end|step|quiet)
+# ...and what a FRAME reaches between the hook and the decoder, which the
+# list above left out (the hot size pass, 2026-10-16): the record's read and
+# its decode, the flips and pages, the layer, the scene's palette, the
+# shadow's copy, the card's ring and Live's pass
+vp_(decrec|decram|next|nextw|addr|fill|flipdec|fpdec|pgdec|pghid|pgon|pgoff|lcopy|show|vwait)
+vp_(m3pl|palev|palevw|paldac|lydec|lybh|lyready|blitck|blit|afill|aput|lstep|lblit|lsnd)

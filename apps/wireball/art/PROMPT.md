@@ -3,7 +3,8 @@
 Generated using the built-in imagegen tool. `splash-source.png` is the original
 selected output, copied into this repository. `tools/wbfront.py` crops the
 black margins at (0,96)-(2079,616), scales to 416x104, and emits the native
-EGA 4bpp and Bayer-dithered 1bpp artwork in `wbfront.inc`. Compact windows use
+EGA 4bpp and Bayer-dithered 1bpp artwork in `wbfront.inc` (the 1bpp as a
+residual the package rebuilds, SPEC.md 109.6). Compact windows use
 alternate source rows. No image-generation service is needed to rebuild.
 
 `splash-preview.png` is a VGA emulator capture of the native splash, produced

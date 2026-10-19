@@ -501,6 +501,10 @@ static void lm_prefs_write(void)
  * window, drew the empty screen and said nothing at all).
  * ==========================================================================*/
 
+static unsigned lm_packlen;             /* the last bundle's size, 0 = none */
+static int      lm_packok;              /* 1 = the last Pack succeeded */
+static int      lm_packran;             /* 1 = a Pack has been attempted */
+
 static void lm_freeproject(void)
 {
     int i;
@@ -516,6 +520,14 @@ static void lm_freeproject(void)
     }
     lm_state = LM_ST_EMPTY;
     lm_slot = LM_SLOT_WML;
+    /* The last Pack's verdict is about the project being freed, not the
+     * next one: without this a New Project came up with the old project's
+     * "Pack failed / MAIN.WML / line 9" in the sidebar, naming a line its
+     * own three-line skeleton does not have. */
+    lm_packran = 0;
+    lm_packok = 0;
+    lm_packlen = 0;
+    lm_clearerr();
     lm_ed_reset();
 }
 
@@ -690,7 +702,7 @@ static void lm_open_pend(void *win)
     lm_mkname(lm_stem, "WML");
     os88_strcpy(lm_argname, lm_line, sizeof(lm_argname));
     if (!ovl_openproj(win, lm_argname))
-        lm_say("LOOM.OVL is missing; a project cannot be opened.");
+        lm_say("LOOM could not load its overlay; a project cannot be opened.");
 }
 
 /* ============================================================================
@@ -715,9 +727,8 @@ static void lm_open_pend(void *win)
  * refuses for ever after.
  * ==========================================================================*/
 
-static unsigned lm_packlen;             /* the last bundle's size, 0 = none */
-static int      lm_packok;              /* 1 = the last Pack succeeded */
-static int      lm_packran;             /* 1 = a Pack has been attempted */
+/* lm_packlen, lm_packok and lm_packran are declared above lm_freeproject,
+ * which forgets them with the project they describe. */
 
 static void lm_pack_free(void)
 {
@@ -840,7 +851,7 @@ static void lm_pack(void)
     ok = ovl_pack();
     if (!ok && !lm_failed()) {
         lm_pack_free();
-        lm_say("LOOM.OVL is missing or stale; no bundle can be packed.");
+        lm_say("LOOM could not load its overlay; no bundle can be packed.");
         lm_side_paint();
         lm_status_paint(0);
         return;

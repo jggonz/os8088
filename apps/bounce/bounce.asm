@@ -162,6 +162,10 @@ bn_worker:
     mov es, ax
     test word [es:bx+W_FLAGS], 2
     jz .blind
+    cmp byte [bn_abon], 0           ; the About card is up: the UI task owns
+    jne .blind                      ; the content until a click takes it down,
+                                    ; and bn_repaint then draws the square
+                                    ; where it has got to (Fractal's rule)
     call OSAPI_WM_CLIP_SET          ; CF = 1: not one visible pixel (SPEC.md
     jc .blind                       ; 11.3)
     mov cx, [bn_pos]                ; bank where the square is ON THE GLASS

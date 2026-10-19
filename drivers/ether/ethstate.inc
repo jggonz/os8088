@@ -63,6 +63,7 @@ eth_flg:    db 0                ; ...and the ones tcp_seg received. TWO WORDS
                                 ; sent
 eth_adv:    db 0                ; did the last segment advance RCV.NXT?
 eth_dlen:   dw 0
+eth_doff:   dw 0                ; ...and where in the send ring it starts
 eth_tlen:   dw 0                ; the TCP segment, header included
 eth_thl:    dw 0                ; ...its header length, options included
 eth_seglen: dw 0                ; ...and its data

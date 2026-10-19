@@ -101,7 +101,7 @@
                                     ; to be told no. `DSK`, `DO` and `PO` land
                                     ; with the Disk II follow-up PR, for the
                                     ; same reason one wave along
-%define CC_HAS_OVL                  ; APPLE2.OVL (SPEC.md 73.14) - ON FROM THE
+%define CC_HAS_OVL                  ; THE OVERLAY (SPEC.md 73.14) - ON FROM THE
                                     ; FIRST COMMIT (APPLE2-SPEC section 15.1).
                                     ; The alternative is discovering at 55,000
                                     ; that the code is not the kind that can
@@ -112,6 +112,26 @@
                                     ; and the About panel (a2about.c) are out;
                                     ; every callback, the core, the composers,
                                     ; the flush AND THE CHARGEN DECODE are in
+%define CC_OVL_PART                 ; ...AND IT IS PART 1 OF APPLE2.O88, not an
+                                    ; APPLE2.OVL beside it (SPEC.md 73.14.2,
+                                    ; APPLE2-SPEC section 15.5.1)
+%define CC_OVL_LAZY                 ; LAZY, and not because a session can go
+                                    ; without it - the first wake's probe
+                                    ; fetches it in every session, which is
+                                    ; exactly when the file form read it. An
+                                    ; EAGER row would sit in the carve BEHIND
+                                    ; the ROM, where os88_main's shrink to the
+                                    ; main ROM (section 1.5) cuts: the carve
+                                    ; would have to stay at 19KB for the whole
+                                    ; session to keep it. Lazy is its own 4KB
+                                    ; claim, movable from the moment it is
+                                    ; bound, and the ROM's carve still shrinks
+%define OP_NO_LAZYOK                ; ...and the C never ASKS whether the lazy
+                                    ; part would fit (SPEC.md 20.12.9.2): the
+                                    ; probe fetches it and op_fetch's toast is
+                                    ; the answer. CC_IMAGE_END sets this itself
+                                    ; only for a table it writes, and this
+                                    ; table is the shim's
 %define CC_ICON "apple2/icon.inc"   ; the 16x16 machine, drawn for this port -
                                     ; not Apple's rainbow mark, which is trade
                                     ; dress
@@ -149,8 +169,13 @@
 ; AND op_load RUNS BEFORE ANY C DOES, which is what lets os88_main decode the
 ; character generator and build the 7-bit reverse table there - the decision
 ; that keeps the display path off the overlay (APPLE2-SPEC section 7.3).
-    CC_PARTS_BEGIN 1
-      OS88_PART OP_ASSET
+; PART 1 is the overlay (SPEC.md 73.14.2): CC_OVL_ROW, LAST because the
+; Makefile appends the cut module as the last --part and a lazy row must follow
+; every eager one. It is OP_SEG|OP_LAZY|OP_COMP, fetched out of this file by
+; the first wake's probe (a2cmd.c's ovl_a2_init) and never part of the carve.
+    CC_PARTS_BEGIN 2
+      OS88_PART OP_ASSET, OP_COMP   ; 0 the ROM, eager, in the carve
+      CC_OVL_ROW                    ; 1 the overlay, lazy, a claim of its own
     CC_PARTS_END
 _a2_opbase equ op_base              ; the carve's CLAIM base, which apple2.c
                                     ; shrinks to the main ROM once the

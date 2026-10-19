@@ -48,26 +48,19 @@ DKS_FLIP    equ 2               ; ...split-flap panels
 ; aspect, 0 here): the mockup's proportions
 dk_fhr:     db 0, 0, 0, 136, 168, 168, 128, 128, 120
 
-dk_faces:
-    dw dkn_classic, dkp_classic
-    dw dkn_memphis, dkp_memphis
-    dw dkn_neon,    dkp_neon
-    dw dkn_mono,    dkp_mono
-    dw dkn_lcd,     dkp_lcd
-    dw dkn_vga,     dkp_vga
-    dw dkn_red,     dkp_red
-    dw dkn_amber,   dkp_amber
-    dw dkn_flip,    dkp_flip
-dkn_classic: db 'Classic', 0
-dkn_memphis: db 'Memphis ', 27h, '80', 0
-dkn_neon:    db 'Neon ', 27h, '90', 0
-dkn_mono:    db 'Mono Digital', 0
-dkn_lcd:     db 'Casio LCD', 0
-dkn_vga:     db 'Casio VGA', 0
-dkn_red:     db 'Red LED', 0
-dkn_amber:   db 'Amber LED', 0
-dkn_flip:    db 'Flip Clock', 0
+dk_faces:                       ; the names are the Face menu's items
+    dw dk_t_f0 + 2, dkp_classic     ; (deskclok.asm's DK_ITEM)
+    dw dk_t_f1 + 2, dkp_memphis
+    dw dk_t_f2 + 2, dkp_neon
+    dw dk_t_f3 + 2, dkp_mono
+    dw dk_t_f4 + 2, dkp_lcd
+    dw dk_t_f5 + 2, dkp_vga
+    dw dk_t_f6 + 2, dkp_red
+    dw dk_t_f7 + 2, dkp_amber
+    dw dk_t_f8 + 2, dkp_flip
 
+    DK_PARITY 1                 ; the programs and the ops: their measured
+                                ; parity (deskclok.asm's DK_PARITY)
 dk_strs:    dw dks_casio
 dks_casio:  db 'CASIO', 0
 

@@ -266,7 +266,7 @@ def main():
         vt, vr, cy, vis = os88marty.quiesce(m, bx.visible, guest=1.0,
                                             what="HELP's output to finish")
         first = any("CD [path]" in r for r in vis)
-        last = any("cmd > file" in r for r in vis)
+        last = any("cmd > NUL" in r for r in vis)
         prompt = any(r.rstrip().endswith(">") for r in vis)
         print("dosconcga: HELP - first line %s, last line %s, prompt %s, "
               "in %d rows" % (first, last, prompt, vr))

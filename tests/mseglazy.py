@@ -161,7 +161,7 @@ def run():
     import os88geom
     S = lambda n: os88sym.linear(n, defines=DEFINES)     # noqa: E731
     blob = open(O88, "rb").read()
-    rows = os88parts.rows(blob[:blob[8] | (blob[9] << 8)])
+    rows = os88parts.image_rows(blob)
     row = rows[LAZY]
     lazy_secs = os88parts.sectors(row)
     if not row["flags"] & os88parts.EQU["OP_LAZY"]:

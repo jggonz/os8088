@@ -124,7 +124,8 @@ ap.add_argument("--machine", default="os8088_5150_cga_gla")
 a = ap.parse_args()
 syms, image = pkg_syms()
 DISK = "build/wdclickgate.img"
-M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC")
+# ...and the faces (os88marty.faces() says why the row's own disk carries them)
+M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC", *M.faces())
 S = lambda n: m.sym(n)
 
 with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:

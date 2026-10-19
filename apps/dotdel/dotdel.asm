@@ -449,7 +449,13 @@ dd_onkey:
     push di
     push bp
     push es
+    cmp byte [dd_abon], 0           ; the About card is up: a key takes it
+    je .cmd                         ; down and is SPENT, as a click is
+    call dd_abdismiss               ; (SPEC.md 93's "any click, key or menu
+    jmp short .out                  ; pick"), or Enter starts a game under it
+.cmd:
     call dd_key_common
+.out:
     pop es
     pop bp
     pop di

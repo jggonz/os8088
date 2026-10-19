@@ -473,10 +473,10 @@ static const char *w_ctname(unsigned ct)
 static void w_paint_deck(void)
 {
     /* WEAVE-SPEC 1.6's Deck is normative from wave 1 and lands here; wave 2
-     * ships File -> Open only, which 1.6 explicitly allows. The sentence says
+     * ships Bundle -> Open only, which 1.6 explicitly allows. The sentence says
      * what to do rather than what went wrong, because nothing did. */
     w_row(0, "WEAVE - no bundle open.");
-    w_row(2, "File > Open Bundle... opens a .WAB, and a double-click on one");
+    w_row(2, "Bundle > Open Bundle... opens a .WAB, and a double-click on one");
     w_row(3, "opens it directly (the extension is declared in the header).");
 }
 
@@ -524,7 +524,7 @@ static void w_repaint2(void *win, int clear)
 
     if (w_state == W_ST_ERR) {
         w_row(0, w_status);
-        w_row(2, "File > Open Bundle... tries another one.");
+        w_row(2, "Bundle > Open Bundle... tries another one.");
     } else
         w_paint_deck();
 

@@ -52,13 +52,12 @@ dos_con_start:
     mov si, dsh_s_ver               ; THE SHELL'S OWN `VER` LINE, which is what
     call con_say                    ; a DOS machine opens with - and sharing it
     mov si, dos_c_hint              ; means the version is stated in one place
-    call con_say
+    jmp  con_say
     ; **AND THE PROMPT IS NOT WRITTEN HERE** (SPEC.md 96.33.2.1), which is the
     ; sentence three lines up taken seriously: a prompt is a statement about
     ; where the shell is STANDING, and on the document path this routine runs
     ; BEFORE the drive is known. `dos_entry` writes it at `.ok`, where both
     ; doors converge and `[dos_vol]` is settled either way.
-    ret
 
 ; -----------------------------------------------------------------------------
 ; dos_prompt - `$P$G`, recomposed (SPEC.md 96.33.2)
@@ -326,8 +325,8 @@ dos_con_run:
     mov byte [dsh_exec], 0
     cmp byte [dsh_more], 0          ; **A SUSPENDED `DIR /P` OWES NO PROMPT**
     je .ranout                      ; (SPEC.md 96.33.9): the listing stopped
-    call dos_con_draw               ; mid-page and printed `Strike a key`, and
-    ret                             ; a prompt under that would be a machine
+    jmp  dos_con_draw               ; mid-page and printed `Strike a key`, and
+                                    ; a prompt under that would be a machine
                                     ; asking two questions at once. The next
                                     ; keystroke resumes it in dos_con_key.
                                     ; **IT STILL DRAWS, THOUGH** - this arm
@@ -354,8 +353,7 @@ dos_con_run:
     call con_say
 .prompt:
     call dos_prompt
-    call dos_con_draw
-    ret
+    jmp  dos_con_draw
 
 ; -----------------------------------------------------------------------------
 ; dos_con_prog - try the typed line as a PROGRAM
@@ -619,8 +617,7 @@ dos_con_open:
     mov byte [dos_fsxgo], 1         ; the console has the screen (96.33.16)
     ret
 .wind:
-    call dos_con_draw
-    ret
+    jmp  dos_con_draw
 .bad:
     ; **THIS ARM IS THE NAME, NOT THE ASSOCIATION** (SPEC.md 96.33.22.1).
     ; dos_path_take_si refuses anything that is not a legal 8.3 path - over
@@ -635,8 +632,7 @@ dos_con_open:
     mov si, dos_c_crlf
     call con_say
     call dos_prompt
-    call dos_con_draw
-    ret
+    jmp  dos_con_draw
 
 ; -----------------------------------------------------------------------------
 ; dos_con_help - `HELP`: every verb, one line each (SPEC.md 96.33.23)
@@ -664,8 +660,7 @@ dos_con_help:
                                     ; here and dos_con_run reads that as `it is
                                     ; launching, the prompt comes with the exit
                                     ; line` - and a built-in has no exit line
-    call dos_con_draw
-    ret
+    jmp  dos_con_draw
 
 ; -----------------------------------------------------------------------------
 ; dos_con_pkg - a `.O88` typed at the prompt: hand it to the OS (96.33.17)
@@ -866,6 +861,10 @@ dos_pkg_go:
     jmp short .badend
 .badname:
     mov si, dos_s_nopkg
+    cmp byte [dos_ispkg], 2         ; ...a stem the FOLDER did not hold and
+    jne .sayname                    ; the tables did not either is a name the
+    mov si, dsh_s_bad               ; box does not know, whatever followed it
+.sayname:                           ; (SPEC.md 96.33.21.2)
     call con_say
     mov si, dos_pkgn
     call con_say
@@ -1043,12 +1042,17 @@ dos_con_ext:
     pop si                          ; the tail, and the stack is BALANCED from
     push si                         ; here - `.no` is reached from the dotted
     call dsh_skipsp                 ; path too, where nothing was pushed, so
-    cmp byte [si], 0                ; this arm may not leave a word behind it
-    pop si                          ; (`pop` writes no flag, so the compare
-    je .no                          ; above rides through it)
-    mov byte [dos_ispkg], 1         ; the kernel's assoc_app_of decides, and
-    clc                             ; refuses in its own words if it cannot
-    ret
+    mov al, [si]                    ; this arm may not leave a word behind it
+    pop si
+    or al, al
+    je .no
+    cmp al, '/'                     ; ...and a SWITCH is not a document: `FOO
+    je .no                          ; /?` is a program asked for its help, and
+                                    ; FOO not being here is the whole answer
+    mov byte [dos_ispkg], 2         ; the kernel's assoc_app_of decides - and
+    clc                             ; 2 and not 1 is what lets a refusal say
+    ret                             ; `Bad command or file name`, the answer
+                                    ; the same name gets with no tail
 .no:
     stc
     ret
@@ -1172,8 +1176,7 @@ dos_con_starting:
 .said:
     call con_say
     mov si, dos_c_crlf
-    call con_say
-    ret
+    jmp  con_say
 
 ; -----------------------------------------------------------------------------
 ; dos_con_ended - the console's line about a program that has stopped
@@ -1247,8 +1250,8 @@ dos_con_ended:
     call con_say
 .out:
     mov byte [dos_fromcon], 0       ; ...spent, so the NEXT launch - a Run
-    call dos_prompt                 ; click, or a document - is spelled its own
-    ret                             ; way
+    jmp  dos_prompt                 ; click, or a document - is spelled its own
+                                    ; way
 
 ; -----------------------------------------------------------------------------
 ; dos_con_arena - ` (Arena: 343KB)` onto the line a finished program leaves
@@ -1337,33 +1340,6 @@ dos_con_draw:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; dos_con_say - a string into the console, and drawn, with the lock TAKEN
-; in:  SI = a NUL string; the gfx lock NOT held
-; out: nothing; every register preserved
-;
-; For the paths that write to the console from outside a callback - dos_run's
-; own, which is the wake handler's context (§74.1).
-; -----------------------------------------------------------------------------
-dos_con_say:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call con_say
-    call OSAPI_GFX_LOCK
-    call dos_con_draw
-    call OSAPI_GFX_UNLOCK
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
 dos_c_hint:  db 13, 10, 'Type a command, the name of a program, or help.'
              db 13, 10, 0
 dos_c_start: db 'Starting ', 0   ; ...and the line that opens one (96.33.20.1)
@@ -1390,7 +1366,7 @@ dos_c_help:  db 'HELP', 0          ; SPEC.md 96.33.23. DOS 3.3 has no HELP
     %assign DH_LINES DH_LINES + 1
 %endmacro
 dos_h_text:
-    DHL 'CD [path]     Change directory. CD .. goes up.'
+    DHL 'CD [path]     Change directory. CD .. goes up, CD \A\B goes down.'
     DHL 'COPY a b      Copy a file. Wildcards allowed.'
     DHL 'DEL name      Delete a file. ERASE is the same.'
     DHL 'DIR [/P][/W]  List this folder. /P pages it, /W is columns.'
@@ -1405,7 +1381,7 @@ dos_h_text:
     DHL 'XCOPY a b     Copy a folder and all under it.'
     DHL 'A:            A drive letter on its own changes drive.'
     DHL 'NAME [arg]    Run a program, or open a document with it.'
-    DHL "cmd > file    Send output to a file, or to NUL."
+    DHL "cmd > NUL     Hide what a command prints. No other target."
     db 0
 %if DH_LINES > 16
   %error "HELP is over SIXTEEN lines: CGA's band is 17 rows ([con_vrows], measured), and the prompt that follows takes one - so a seventeenth line scrolls the first off a machine nobody tests on. Cut a line, or give HELP a pager and the part 96.33.23.2 costs."

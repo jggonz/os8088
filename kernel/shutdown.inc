@@ -6,7 +6,10 @@ section .modu
 modc_e_shutdown:
     call sd_confirm
     or al, al
-    jz .out
+    jnz .go
+.out:                           ; both refusals' exit, in SHORT reach of each
+    retf                        ; (kernel size pass 12)
+.go:
     call cp_flush_close_x       ; flush without dropping the executing module
     cmp byte [cp_wdirty], 0
     jne .out                   ; the existing settings toast explains failure
@@ -19,8 +22,9 @@ modc_e_shutdown:
     mov bp, sched_stop
     call sd_disp                ; BIOS IRQ0, PIT, mouse and speaker restored
     cli
-    mov al, 0xFE               ; only the BIOS timer may interrupt the halt
-    out 0x21, al
+    mov al, 0xFC               ; the BIOS timer, and the KEYBOARD: sched_stop gave
+    out 0x21, al               ; int 09h back to the ROM, whose handler is what
+                               ; answers Ctrl-Alt-Del with a warm reset
     cmp byte [cpu_tier], CPU_8086
     je .motor
     mov al, 0xFF
@@ -54,6 +58,13 @@ modc_e_shutdown:
     call sd_text
     mov byte [cs:sd_last], 0xFF
 .loop:
+    mov ah, 1                  ; any other key is read and dropped, so the ROM's
+    int 0x16                   ; buffer never fills and beeps at a held key
+    jz .tick
+    xor ah, ah
+    int 0x16
+    jmp .loop
+.tick:
     call sd_clock
     mov cl, SPL_SPINSH
     shr ax, cl
@@ -63,10 +74,8 @@ modc_e_shutdown:
     mov [cs:sd_last], al
     call sd_spin
 .idle:
-    hlt                        ; wake on IRQ0; no scheduler or disk I/O
+    hlt                        ; wake on IRQ0 or IRQ1; no scheduler or disk I/O
     jmp .loop
-.out:
-    retf
 
 ; A modal overlay owns the gfx lock, like menu tracking. It polls the same
 ; mouse state and BIOS keys as ui_task and keeps the pointer visible. Workers

@@ -582,10 +582,12 @@ pt_entry:
                                     ; say what was happening. pt_onwake spends
                                     ; it now, after the window is drawn
 .make:
-    push si
+    ; NOTHING HERE IS KEPT FOR THE LOADER BUT BX (SPEC.md 20.2: it returns BX =
+    ; the window and a CF it is TOLD, and SI was an input already spent by
+    ; pt_arg above), so the calls below take AX and SI as they come rather
+    ; than bracketing each one (apps size pass 2)
     mov si, pt_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
-    pop si
     jc .out                         ; no window: nothing to flag, nothing to
                                     ; claim - the region stays untouched
     mov [pt_win], bx
@@ -594,13 +596,12 @@ pt_entry:
     ; NO worker is the case that moves most easily, and putting it at
     ; the spawn left exactly those runs declaring nothing - measured,
     ; by the row that reads MC_RLOC back out of the kernel's own table.
-    OS88_REGION_MOVABLE
+    OS88_REGION_MOVABLE_NOKEEP pt_wait.nowait   ; (a lone `ret`)
 %ifdef PTF_FSX
     OS88_ALTENTER_ARM               ; SPEC.md 11.2.1.1: nothing tracks a
                                     ; scancode until something asks, and both
                                     ; halves of the chord ride on that map
 %endif
-    push ax
     mov ax, pt_onup                 ; SPEC.md 13.7/13.8.1: Apply fires on the
     call OSAPI_WM_ONMOUSEUP         ; RELEASE and follows the pointer between
     mov ax, pt_ondrag               ; the edges. Not template words, so they
@@ -613,10 +614,9 @@ pt_entry:
     call OSAPI_WM_ONCLOSE           ; it closes us, and a picture with unsaved
                                     ; work answers. A side table, so it goes
                                     ; here and not in pt_tpl
-    mov byte [pt_adown], 0
     mov al, 1                       ; WE OWN OUR BACKGROUND (SPEC.md 11.90.1):
     call OSAPI_WM_OWNBG             ; pt_fsbed + the palette + the strip + the
-    pop ax                          ; canvas cover every pixel of the content,
+                                    ; canvas cover every pixel of the content,
                                     ; so the kernel's white fill in front of
                                     ; W_PAINT is a white HOLE for as long as
                                     ; the canvas takes to blit - measured at
@@ -654,18 +654,14 @@ pt_entry:
                                     ; whole content IS ~9KB and Paint takes the
                                     ; lot - pt_sucache below, and it is a fact
                                     ; about the SCREEN, so pt_onresize re-asks
-    pushf                           ; THE CF wm_create OWES THE LOADER rides
-    call pt_sucache                 ; through here too, and pt_sucache asks a
-    popf                            ; question that answers in it
-    pushf                           ; ...and TELL US WHEN THE ADAPTER MOVES
-    push ax                         ; (SPEC.md 11.98). Outside the PT_M_LIVE
-    mov ax, pt_onresize             ; gate below on purpose: a Paint that could
-    call OSAPI_WM_ONRESIZE          ; not fund a canvas still has a screen, and
-    pop ax                          ; the CF wm_create owes the loader is still
-    popf                            ; riding through this proc
+    call pt_sucache                 ; (no flags to keep across it or the next:
+                                    ; the proc SAYS its CF at the bottom)
+    mov ax, pt_onresize             ; ...and TELL US WHEN THE ADAPTER MOVES
+    call OSAPI_WM_ONRESIZE          ; (SPEC.md 11.98). Outside the PT_M_LIVE
+                                    ; gate below on purpose: a Paint that could
+                                    ; not fund a canvas still has a screen
     cmp byte [pt_mode], PT_M_LIVE
     jne .menus
-    push ax
     mov al, 1                       ; resizable: the canvas IS the content, so
     call OSAPI_WM_SIZABLE           ; dragging the grow box sizes the picture.
                                     ; It used to be conditional on there being
@@ -674,22 +670,18 @@ pt_entry:
                                     ; and needs no staging area at all
     mov ax, pt_onsize               ; ...and the kernel asks us before it
     call OSAPI_WM_ONSIZE            ; commits one (SPEC.md 11.1)
-    pop ax
 %ifdef PTF_ABOUT
-    push si                         ; SI is the loader's, like the two other
-    mov si, pt_about                ; borrowings in this proc
+    mov si, pt_about
     call OSAPI_ABOUT_SET            ; 'About Paint' under our name in the bar
-    pop si                          ; (SPEC.md 12.2); BX is still the window.
+                                    ; (SPEC.md 12.2); BX is still the window.
 %endif
                                     ; LIVE only - see pt_about
     call pt_menufix                 ; and the menus say what is unavailable                      ; a notice window gets the menu bar too,
                                     ; so its name shows and File/Edit are
                                     ; visibly inert rather than absent
 .menus:
-    push si
     mov si, pt_menus                ; BX is still the window (SPEC.md 20.3:
     call OSAPI_MENU_SET             ; menu_win_set preserves flags too)
-    pop si
     clc                             ; ...WHICH IS WHY THIS IS HERE (SPEC.md
                                     ; 42.6.4). Every path from wm_create's
                                     ; `jc .out` down is a SUCCESS, and the only
@@ -824,11 +816,8 @@ pt_screen:
     mov [pt_scrw], ax
     mov [pt_scrh], bx               ; the whole screen, for the SPEC.md 53
     mov [pt_dockr], cx              ; bracket's own pointer (pt_ptr_xor)
-    mov byte [pt_mono], 0
-    cmp dh, 1
-    jne .colour
-    mov byte [pt_mono], 1
-.colour:
+    and dh, 1                       ; DH is 4 or 1 bits a pixel, so its low bit
+    mov [pt_mono], dh               ; IS "this screen is one bit"
     call pt_ncolset                 ; ...and the swatch count from both facts,
                                     ; because this runs again on every adapter
                                     ; change and the DOCUMENT's depth did not
@@ -932,20 +921,19 @@ pt_geom:
     ; DOCUMENT - a canvas born on a 1bpp screen stays one bit when the window
     ; is dragged onto the VGA beside it, because the picture has not changed
     ; and a promotion would quadruple a claim nobody asked to spend.
+    ; THE FIRST CANVAS IS pt_fmtpick'S RULE WITH THE ADAPTER AS THE DOCUMENT
+    ; (apps size pass 2): a one-bit screen opens a one-bit canvas, a colour
+    ; one a planar canvas - which is exactly a load of a picture whose
+    ; one-bitness is [pt_mono], so the same five instructions decide both and
+    ; the same pt_ncolset follows (black and white, and not SPEC.md 39.4's
+    ; dither class between them: a canvas that cannot store a colour must not
+    ; offer it). [pt_dcvt] is cleared on the way, which it already is.
 %ifndef PT_ONEBIT                   ; SPEC.md 42.22: the small arm is ALWAYS one
-    mov byte [pt_planar], 0         ; bit, on any adapter - so on that build
-    mov byte [pt_1bpp], 0           ; there is no colour arm at all rather than
-    cmp byte [pt_mono], 0           ; an unreachable one, and since 42.22.3 not
-    jne .one                        ; even the two bytes that would say so
-    mov byte [pt_planar], 1
-    jmp short .fmt
-.one:
-    mov byte [pt_1bpp], 1
-.fmt:
+    mov al, [pt_mono]               ; bit, on any adapter - so on that build
+    call pt_fmtpick                 ; there is no colour arm at all rather than
+%else                               ; an unreachable one, and since 42.22.3 not
+    call pt_ncolset                 ; even the two bytes that would say so
 %endif
-    call pt_ncolset                 ; black and white, and not SPEC.md 39.4's
-                                    ; dither class between them: a canvas that
-                                    ; cannot store a colour must not offer it
     mov ax, [pt_cwmax]              ; (SPEC.md 11.98, pt_onresize below)
     mov cx, [pt_chmax]
     cmp cx, PT_CH_MIN
@@ -1273,7 +1261,7 @@ pt_alloc:
 ; pt_reloc - THE HEAP COMPACTOR MOVED ONE OF OUR CLAIMS (SPEC.md 66.2)
 ; in:  BX = the base segment it WAS at, DX = the base it is at NOW.
 ;      DS = CS = ours, ES = KERNEL_SEG. The bytes have already moved.
-; out: nothing; every register preserved
+; out: nothing; may clobber AX-DI and ES (SPEC.md 66.3, author rule 1)
 ;
 ; The kernel packs the data arena down when a claim would otherwise be
 ; refused, and tells each holder afterwards. What it CANNOT do is know what
@@ -1302,10 +1290,8 @@ pt_alloc:
 ; It claims nothing, frees nothing, yields nothing and draws nothing, which
 ; is SPEC.md 66.3 rule 3.
 ; -----------------------------------------------------------------------------
-pt_reloc:
-    push ax
-    push cx
-    push si
+pt_reloc:                           ; (a relocation proc may clobber AX-DI and
+                                    ; ES, SPEC.md 66.3 author rule 1: it banks none)
     cmp bx, [pt_base]
     jne .notcv
     mov [pt_base], dx
@@ -1323,30 +1309,17 @@ pt_reloc:
     inc si
     loop .shift
 .notcv:
-%ifdef PTF_UNDO
-    cmp bx, [pt_unseg]
-    jne .notun
-    mov [pt_unseg], dx
-.notun:
-%endif
-%ifdef PTF_CLIP
-    cmp bx, [pt_cbseg]
-    jne .notcb
-    mov [pt_cbseg], dx
-.notcb:
-%endif
-    cmp bx, [pt_scseg]              ; the fill stack, while the fill tool is in
-    jne .notsc                      ; hand: one word, re-read at every use
-    mov [pt_scseg], dx
-.notsc:
-    cmp bx, [pt_obase]              ; a resize's outgoing canvas, held live
-    jne .notob                      ; across the claims below it
-    mov [pt_obase], dx
-.notob:
-    cmp bx, [pt_osrc]               ; ...and whichever block it is staging
-    jne .notos                      ; from, which is the old canvas on one
-    mov [pt_osrc], dx               ; path and the undo image on the other
-.notos:
+    mov si, pt_rltab                ; every other word that NAMES a block, each
+.word:                              ; re-aimed if it named the one that moved
+    mov di, [si]                    ; (a table of them since apps size pass 2)
+    inc si
+    inc si
+    cmp bx, [di]
+    jne .next
+    mov [di], dx
+.next:
+    cmp si, pt_rltab_end
+    jb .word
 %ifdef PTF_UNDO
     mov ax, [pt_unseg]              ; the delta LAST, and unconditionally:
     or ax, ax                       ; either end may have been what moved,
@@ -1355,10 +1328,22 @@ pt_reloc:
     mov [pt_undelta], ax
 %endif
 .out:
-    pop si
-    pop cx
-    pop ax
     ret
+
+pt_rltab:
+%ifdef PTF_UNDO
+    dw pt_unseg                     ; the undo image
+%endif
+%ifdef PTF_CLIP
+    dw pt_cbseg                     ; the clipboard
+%endif
+    dw pt_scseg                     ; the fill stack, while the fill tool is in
+                                    ; hand: one word, re-read at every use
+    dw pt_obase                     ; a resize's outgoing canvas, held live
+                                    ; across the claims below it
+    dw pt_osrc                      ; ...and whichever block it is staging
+pt_rltab_end:                       ; from, which is the old canvas on one path
+                                    ; and the undo image on the other
 
 ; -----------------------------------------------------------------------------
 ; pt_movable - declare the claim in DX relocatable (SPEC.md 66.2)
@@ -1473,12 +1458,11 @@ pt_alloc_undo:
 pt_alloc_clip:
     push ax
     push bx                         ; MEM_AVAIL answers in AX and BX
-    mov byte [pt_haveclip], 0
     call OSAPI_MEM_AVAIL            ; AX = the largest run a claim is served
     cmp ax, PT_CLIPMINP >> 6        ; from - and the floor is in paragraphs
-    jb .out
-    mov byte [pt_haveclip], 1
-.out:
+    sbb al, al                      ; FF under the floor, 0 at or over it...
+    inc ax                          ; ...so AL = 1 exactly when it is funded
+    mov [pt_haveclip], al
     call pt_menufix                 ; funded or not, the menu says which
     pop bx
     pop ax
@@ -4437,6 +4421,13 @@ pt_cframe:
 ; Every button, well and swatch in the palette and the strip is this: fill in
 ; some colour, frame in black. Six sites, twelve bytes each.
 ; -----------------------------------------------------------------------------
+; pt_swell - pt_cwell for a well in the bottom strip, whose top is the strip's
+; top + 1 and whose height is PT_BW: in AX = x, CX = width - 1, [pt_pen];
+; out BX = that top, DX = PT_BW - 1, everything else kept. Falls into pt_cwell
+pt_swell:
+    mov bx, [pt_stripy]
+    inc bx
+    mov dx, PT_BW - 1
 pt_cwell:
     push cx
     push dx
@@ -4915,38 +4906,37 @@ pt_draw_pal:
     jmp short .done
 %endif
 .one:
-    mov [pt_bx], cx
-    mov [pt_by], dx
-    mov byte [pt_pen], CWHITE       ; the well: black when this tool is in hand
-    xor ax, ax
-    mov al, [pt_tool]
-    cmp ax, di
+    xor ax, ax                      ; the well: black when this tool is in
+    mov al, [pt_tool]               ; hand, and its colour decided ONCE (apps
+    cmp ax, di                      ; size pass 2) - the glyph is the other one
+    mov al, CWHITE
     jne .well
-    mov byte [pt_pen], CBLACK
+    mov al, CBLACK
 .well:
+    mov [pt_pen], al
+    push ax
     mov ax, cx
     mov bx, dx
     mov cx, PT_BW - 1
-    mov dx, PT_BW - 1
-    call pt_cwell
-    mov byte [pt_pen], CBLACK       ; ...and the glyph inverts with it
-    xor ax, ax
-    mov al, [pt_tool]
-    cmp ax, di
+    mov dx, cx
+    call pt_cwell                   ; (keeps every register)
+    mov cx, ax
+    mov dx, bx
+    pop ax
+    xor al, CWHITE ^ CBLACK         ; ...and the glyph inverts with it
+    cmp al, CWHITE
     jne .glyph
-    mov byte [pt_pen], CWHITE
     cmp di, PT_T_FILL               ; ...and grey when it cannot be funded
     jne .glyph                      ; (SPEC.md 42.6.2). CDGRAY dithers on a
     cmp byte [pt_havefill], 0       ; 1bpp adapter, which is SPEC.md 47's
     jne .glyph                      ; disabled look for free
-    mov byte [pt_pen], CDGRAY
+    mov al, CDGRAY
 .glyph:
+    mov [pt_pen], al
     mov bx, di
     add bx, bx
     mov si, [pt_ic_tab+bx]
-    mov cx, [pt_bx]
     add cx, 2
-    mov dx, [pt_by]
     add dx, 2
     call pt_glyph16                 ; ONE call a glyph (SPEC.md 42.26), where
     inc di                          ; pt_icon16 was ~30: 201 ms -> 111 for
@@ -5153,9 +5143,11 @@ pt_szdraw:
 ; --- the one control's staging (SPEC.md 20.5.1.3) --------------------------
 ; One button at a time: this package's rects are not one contiguous group,
 ; so the record is pointed at whichever rect the caller staged.
-pt_btlbl: dw 0
+; The rect and the label never change, so the record names them at assembly
+; time and only the flags word is written per draw (apps size pass 2).
+pt_btlbl: dw pt_s_apply
 pt_btflg: dw 0
-    OS88UI_BTNREC pt_btrec, 0, pt_btlbl, pt_btflg, 1
+    OS88UI_BTNREC pt_btrec, pt_brect, pt_btlbl, pt_btflg, 1
 
 pt_szdraw_apply:
     push ax
@@ -5177,18 +5169,9 @@ pt_szdraw_apply:
     ;
     ; No OS88UI_FILL: pt_szdraw white-fills the whole group before the first
     ; box, so this always lands on clean ground.
-    xor ax, ax
-    add ax, [pt_ox]                 ; the rect, in SCREEN coordinates - which
-    mov [pt_brect+0], ax            ; is what pt_cframe/pt_ctext were adding
-    add ax, PT_TOOLW - 2             ; per primitive
-    mov [pt_brect+4], ax
-    mov ax, PT_SZ_AY
-    add ax, [pt_oy]
-    mov [pt_brect+2], ax
-    add ax, PT_SZ_AH - 1
-    mov [pt_brect+6], ax
-    mov si, pt_s_apply
-    mov bx, pt_brect
+    call pt_apwant                  ; the rect, in SCREEN coordinates - which
+                                    ; is what pt_cframe/pt_ctext were adding
+                                    ; per primitive
     mov di, OS88UI_FILL         ; OS88UI_FILL, and it is not optional since the
                                 ; down state (SPEC.md 13.8.4): a RELEASE
                                 ; redraws this button over a PRESSED one,
@@ -5201,16 +5184,10 @@ pt_szdraw_apply:
     je .nodn
     or di, OS88UI_DOWN
 .nodn:
-    push ax                     ; THE ONE CONTROL (SPEC.md 20.5.1.3): BX
-    push bx                     ; already holds this button's rect, SI its
-    mov [pt_btlbl], si          ; label and DI its flags, so the record takes
-    mov [pt_btflg], di          ; all three and the picture is identical
-    mov [pt_btrec+OS88UI_BT_RECTS], bx
-    mov bx, pt_btrec
-    mov al, 1
-    call os88ui_btn
-    pop bx
-    pop ax
+    mov [pt_btflg], di          ; THE ONE CONTROL (SPEC.md 20.5.1.3): the
+    mov bx, pt_btrec            ; record names pt_brect and the label, so DI's
+    mov al, 1                   ; flags are all it takes and the picture is
+    call os88ui_btn             ; identical
     mov byte [pt_pen], CBLACK       ; os88ui_btn leaves the KERNEL's pen live;
                                     ; [pt_pen] is this module's own and the
                                     ; two are not the same variable
@@ -5329,13 +5306,8 @@ pt_onup:
 ; -----------------------------------------------------------------------------
 ; pt_ondrag - W_ONDRAG (SPEC.md 13.8.1): the pointer moved, press still down
 ; -----------------------------------------------------------------------------
-pt_ondrag:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+pt_ondrag:                      ; (W_ONCLICK's rules: it may clobber all but
+                                ; SI, and nothing here writes SI)
     call os88ui_armed           ; PEEK: the arm is the release's to spend
     or ax, ax
     jz .out
@@ -5349,7 +5321,7 @@ pt_ondrag:
     mov [pt_adown], al
     call pt_szdraw_apply
 .out:
-    jmp pt_ld_6
+    ret
 
 pt_szapply:
     push ax
@@ -5576,51 +5548,42 @@ pt_draw_strip:
     mov cx, [pt_contw]
     dec cx
     mov dx, bx
-    call pt_cfill
+    call pt_cfill                   ; (pt_cfill keeps AX, BX and CX for the bed)
     mov byte [pt_pen], CWHITE
-    xor ax, ax
-    mov bx, [pt_ch]                 ; the bed starts just under the canvas, not
-    inc bx                          ; at the strip: on the fullscreen surface
-    mov cx, [pt_contw]              ; pt_stripset moves the strip to the bottom
-    dec cx                          ; of the content and the gap it leaves is
-    mov dx, [pt_stripy]             ; ours to erase. In a window the two rows
-    add dx, PT_STRIP_H - 1          ; are the same and the fill is unchanged
-    call pt_cfill
+    inc bx                          ; the bed starts just under the canvas, not
+    mov dx, [pt_stripy]             ; at the strip: on the fullscreen surface
+    add dx, PT_STRIP_H - 1          ; pt_stripset moves the strip to the bottom
+    call pt_cfill                   ; of the content and the gap it leaves is
+                                    ; ours to erase. In a window the two rows
+                                    ; are the same and the fill is unchanged
 
     ; --- four line widths for the tool in hand ----------------------------
+    ; SI walks the button x and every well's y comes back out of pt_swell, so
+    ; the loop carries no arithmetic of its own (apps size pass 2)
     xor di, di
+    mov si, PT_TH_X
 .width:
-    mov ax, di
-    mov cx, PT_TH_DX
-    mul cx
-    add ax, PT_TH_X
-    mov [pt_bx], ax                 ; button x
-    mov ax, [pt_stripy]
-    inc ax
-    mov [pt_by], ax
     call pt_thsel                   ; AL = the selected width index
     xor ah, ah
     cmp ax, di
-    mov byte [pt_pen], CWHITE
+    mov al, CWHITE                  ; the selected button is the dark one...
     jne .wbg
-    mov byte [pt_pen], CBLACK
+    mov al, CBLACK
 .wbg:
-    mov ax, [pt_bx]
-    mov bx, [pt_by]
+    mov [pt_pen], al
+    push ax
+    mov ax, si
     mov cx, PT_BW - 1
-    mov dx, PT_BW - 1
-    call pt_cwell
+    call pt_swell                   ; BX = the well's top
+    pop ax
+    xor al, CWHITE ^ CBLACK         ; ...and its glyph the light one
+    mov [pt_pen], al
     ; the glyph: a centred square whose side is the width itself, capped so
     ; the 32px eraser still fits in a 20px button
-    call pt_thsel
-    xor ah, ah
-    cmp ax, di
-    mov byte [pt_pen], CBLACK
-    jne .wg
-    mov byte [pt_pen], CWHITE
-.wg:
+    push bx
     mov bx, di
     call pt_thval                   ; AX = the width in pixels
+    pop bx
     cmp ax, 14
     jbe .wcap
     mov ax, 14
@@ -5629,15 +5592,15 @@ pt_draw_strip:
     mov ax, PT_BW
     sub ax, cx
     shr ax, 1                       ; AX = inset
-    mov bx, [pt_by]
     add bx, ax
-    add ax, [pt_bx]
+    add ax, si
     mov dx, bx
     add dx, cx
     dec dx
     add cx, ax
     dec cx
     call pt_cfill
+    add si, PT_TH_DX
     inc di
     cmp di, 4
     jb .width
@@ -5646,36 +5609,27 @@ pt_draw_strip:
     mov al, [pt_col]
     mov [pt_pen], al
     mov ax, PT_CUR_X
-    mov bx, [pt_stripy]
-    inc bx
     mov cx, PT_BW - 1
-    mov dx, PT_BW - 1
-    call pt_cwell
+    call pt_swell
 
     ; --- the palette ------------------------------------------------------
     xor di, di
+    mov si, PT_SW_X
 .sw:
-    mov ax, di
-    mul word [pt_swdx]
-    add ax, PT_SW_X
-    mov [pt_bx], ax
     mov ax, di
     call pt_swcol
     mov [pt_pen], al
-    mov ax, [pt_bx]
-    mov bx, [pt_stripy]
-    inc bx
+    push ax
+    mov ax, si
     mov cx, [pt_swsz]
     dec cx
-    mov dx, PT_BW - 1
-    call pt_cwell
-    mov ax, di                      ; the swatch in use gets a second frame
-    call pt_swcol
-    cmp al, [pt_col]
+    call pt_swell
+    pop ax
+    cmp al, [pt_col]                ; the swatch in use gets a second frame
     jne .swnext
-    mov ax, [pt_bx]
+    mov ax, si
     dec ax
-    mov bx, [pt_stripy]
+    dec bx                          ; the strip's own top
     mov cx, ax
     add cx, [pt_swsz]
     inc cx
@@ -5683,6 +5637,7 @@ pt_draw_strip:
     add dx, PT_BW + 1
     call pt_cframe
 .swnext:
+    add si, [pt_swdx]
     inc di
     cmp di, [pt_nsw]
     jb .sw
@@ -5690,15 +5645,10 @@ pt_draw_strip:
     ; --- filled-shapes toggle, and the font scale -------------------------
     mov byte [pt_pen], CWHITE
     mov ax, [pt_filx]
-    mov bx, [pt_stripy]
-    inc bx
     mov cx, PT_BTN_W16 - 1
-    mov dx, PT_BW - 1
-    call pt_cwell
-    mov ax, [pt_filx]
+    call pt_swell                   ; (pt_cwell leaves the pen black)
     add ax, 4
-    mov bx, [pt_stripy]
-    add bx, 6
+    add bx, 5                       ; the strip's top + 6
     mov cx, ax
     add cx, 7
     mov dx, bx
@@ -5712,19 +5662,16 @@ pt_draw_strip:
 .fnt:
     mov byte [pt_pen], CWHITE
     mov ax, [pt_fntx]
-    mov bx, [pt_stripy]
-    inc bx
     mov cx, PT_BTN_W16 - 1
-    mov dx, PT_BW - 1
-    call pt_cwell
+    call pt_swell
+    mov dx, bx
+    add dx, 6                       ; the strip's top + 7
+    mov cx, ax
+    add cx, 4
     mov al, [pt_fscale]
     add al, '0'
     mov [pt_fdigit], al
     mov si, pt_fdigit
-    mov cx, [pt_fntx]
-    add cx, 4
-    mov dx, [pt_stripy]
-    add dx, 7
     call pt_ctext
     ; --- and the grow box, which lives in this strip -------------------------
     ; The white bed above erases it, and the kernel draws it BEFORE W_PAINT
@@ -5823,7 +5770,7 @@ pt_brush:
 ; -----------------------------------------------------------------------------
 ; pt_paint - W_PAINT: chrome, then the picture
 ; in:  SI = window ptr (content already white-filled, gfx lock held)
-; out: nothing; preserves all registers
+; out: nothing; SI and DF = 0 kept, the rest may be clobbered (W_PAINT)
 ; -----------------------------------------------------------------------------
 ; pt_anch - what has moved since the last paint drew it? (SPEC.md 42.19.3)
 ; in:  pt_org and pt_track have run, so [pt_ox]/[pt_oy]/[pt_cw]/[pt_ch] are
@@ -5891,12 +5838,9 @@ pt_anch:
 
 ; -----------------------------------------------------------------------------
 pt_paint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    push si                         ; W_PAINT owes back SI and DF = 0 and
+                                    ; nothing else (SPEC.md 11's W_PAINT), so
+                                    ; nothing else is banked
     call pt_flush                   ; SPEC.md 42.8.8: a stroke in flight has
     mov bx, si                      ; ink the canvas has not got yet, and this
     call pt_org                     ; is about to draw FROM the canvas
@@ -5975,23 +5919,18 @@ pt_paint:
     call pt_abdraw
 .noab:
 %endif
-    cmp byte [pt_apend], 0          ; a refused resize, deferred to here
+    xor al, al                      ; a refused resize, deferred to here
+    xchg al, [pt_apend]             ; (taken, and the flag cleared, at once)
+    or al, al
     je .out
-    cmp byte [pt_apend], 2          ; 2 = pt_onsize held an axis back, so the
+    cmp al, 2                       ; 2 = pt_onsize held an axis back, so the
     je .justsay                     ; frame the kernel drew is already right
-    mov byte [pt_apend], 0
     mov bx, [pt_win]
     call OSAPI_WM_FRONT             ; the corrected frame, over a clean desktop
+.justsay:
     cmp byte [pt_apsay], 0
     je .out                         ; the frame was corrected but the canvas
     call pt_szsi                    ; moved: no notice is owed (pt_track)
-    call pt_msg_show
-    jmp short .out
-.justsay:
-    mov byte [pt_apend], 0
-    cmp byte [pt_apsay], 0
-    je .out
-    call pt_szsi
     call pt_msg_show
     jmp short .out
 .notice:
@@ -6016,7 +5955,8 @@ pt_paint:
     mov dx, 24
     call pt_ctext
 .out:
-    jmp pt_ld_6
+    pop si
+    ret
 
 ; =============================================================================
 ; Screen-only drawing in canvas coordinates
@@ -6207,6 +6147,10 @@ pt_wait_tick:
 ; app's own W_ONKEY and W_ONCLICK with the arguments the kernel would have).
 ; =============================================================================
 
+%ifdef PTF_FSX                      ; (the bracket's pointer is the bracket's:
+                                    ; the small arm has neither - apps size
+                                    ; pass 2 found these assembled there and
+                                    ; named by nothing)
 PT_PTR_R    equ 2                   ; half-side: the pointer is a 5x5 square
 
 ; -----------------------------------------------------------------------------
@@ -6496,6 +6440,7 @@ pt_ptr_move:
     mov [pt_ptry], dx
 .out:
     ret
+%endif   ; PTF_FSX, the bracket's pointer
 
 ; -----------------------------------------------------------------------------
 ; pt_cmd_fs - take the screen: the fullscreen surface, then the bracket
@@ -6723,18 +6668,15 @@ pt_fsx_key:
 ; -----------------------------------------------------------------------------
 ; pt_click - W_ONCLICK: route the press to the palette, the strip or a tool
 ; in:  CX = x, DX = y (absolute screen), SI = window ptr; gfx lock held
-; out: nothing; preserves all registers
+; out: nothing; SI kept, AX-DI and ES may be clobbered (a window callback)
 ; -----------------------------------------------------------------------------
 %endif   ; PTF_FSX - the [pt_fs]/[pt_fsx] state bytes stay in both builds and
          ; simply read 0 here, so the dozen places that ask "are we full
          ; screen?" need no gate of their own and keep their one compare
 pt_click:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    push si                         ; W_ONCLICK gives SI back and may clobber
+                                    ; the rest (SPEC.md 13.14); pt_fsx_main,
+                                    ; the other caller, re-reads everything
     cmp byte [pt_mode], PT_M_LIVE
     jne .out
     mov bx, si
@@ -6770,7 +6712,8 @@ pt_click:
     je .done
     call pt_draw_dims
 .done:
-    jmp pt_ld_6
+    pop si
+    ret
 
 ; -----------------------------------------------------------------------------
 ; pt_pal_click - a press in the tool column
@@ -6981,56 +6924,15 @@ pt_strip_click:
 pt_canvas_click:
     push ax
     push bx
-    mov al, [pt_tool]
-%ifdef PTF_CLIP
-    cmp al, PT_T_SEL
-    je .sel
-%endif
-    cmp al, PT_T_TEXT
+    mov bl, [pt_tool]
+    cmp bl, PT_T_TEXT
     je .text
     call pt_text_end                ; any other tool ends a text run...
     call pt_sel_drop                ; ...and drawing deselects
-    mov al, [pt_tool]
-    cmp al, PT_T_PENCIL
-    je .pencil
-    cmp al, PT_T_ERASER
-    je .eraser
-    cmp al, PT_T_DROP
-    je .drop
-    cmp al, PT_T_FILL
-    je .fill
-    cmp al, PT_T_RECT
-    je .shape
-    cmp al, PT_T_OVAL
-    je .shape
+    xor bh, bh                      ; then ONE indirect call by the tool index
+    add bx, bx                      ; (apps size pass 2: it was a compare per
+    call [pt_cctab+bx]              ; tool, and every tool's own epilogue)
     jmp short .out
-.pencil:
-    mov al, [pt_col]
-    mov [pt_ink], al
-    call pt_stroke
-    jmp short .out
-.eraser:
-    mov byte [pt_ink], CWHITE
-    call pt_stroke
-    jmp short .out
-.drop:
-    call pt_pick
-    jmp short .out
-.fill:
-    call pt_flood
-    jmp short .out
-.shape:
-    call pt_rubber
-    call pt_shape_commit
-    jmp short .out
-%ifdef PTF_CLIP
-.sel:
-    call pt_text_end
-    call pt_sel_drop
-    call pt_rubber
-    call pt_sel_take
-    jmp short .out
-%endif
 .text:
     call pt_sel_drop
     call pt_text_place
@@ -7038,6 +6940,39 @@ pt_canvas_click:
     pop bx
     pop ax
     ret
+.pencil:
+    mov al, [pt_col]
+    mov [pt_ink], al
+    jmp pt_stroke
+.eraser:
+    mov byte [pt_ink], CWHITE
+    jmp pt_stroke
+.shape:
+    call pt_rubber
+    jmp pt_shape_commit
+%ifdef PTF_CLIP
+.sel:
+    call pt_rubber
+    jmp pt_sel_take
+%endif
+
+; The tool in hand's press, by PTTOOL's own order; the text tool, which is
+; LAST, keeps the branch above because it must not end its own text run
+pt_cctab:
+    dw pt_canvas_click.pencil       ; PT_T_PENCIL
+    dw pt_canvas_click.eraser       ; PT_T_ERASER
+    dw pt_pick                      ; PT_T_DROP
+    dw pt_canvas_click.shape        ; PT_T_RECT
+    dw pt_canvas_click.shape        ; PT_T_OVAL
+%ifdef PTF_CLIP
+    dw pt_canvas_click.sel          ; PT_T_SEL
+%endif
+    dw pt_flood                     ; PT_T_FILL
+%if PT_T_FILL + 1 != PT_T_TEXT
+%error "pt_cctab assumes the text tool is the last one after the fill"
+%endif
+    times (pt_cctab + 2 * PT_T_TEXT) - $ db 0   ; ...and that every tool before
+    times $ - (pt_cctab + 2 * PT_T_TEXT) db 0   ; it has exactly one entry
 
 ; -----------------------------------------------------------------------------
 ; pt_pick - the dropper: adopt the colour under the press
@@ -9786,8 +9721,11 @@ pt_paste:
 ; out: nothing; preserves all registers (ES included)
 ;
 ; The paste and the text-cell restore both go through here; neither wants a
-; gfx call per pixel and neither wants an undo snapshot per pixel.
+; gfx call per pixel and neither wants an undo snapshot per pixel. They are
+; PTF_CLIP's and PTF_UNDO's, so this is PTF_EDIT's: the small arm, which has
+; neither, assembled it for nothing until apps size pass 2.
 ; -----------------------------------------------------------------------------
+%ifdef PTF_EDIT
 pt_setpx:
     push ax
     push bx
@@ -9909,6 +9847,7 @@ pt_setpx:
     pop bx
     pop ax
     ret
+%endif   ; PTF_EDIT
 
 
 %ifdef PTF_UNDO
@@ -10685,15 +10624,12 @@ pt_bs:
 ; -----------------------------------------------------------------------------
 ; pt_onkey - W_ONKEY: typing, and the two editing keys
 ; in:  AL = ascii, AH = scan, SI = window ptr; gfx lock held
-; out: nothing; preserves all registers
+; out: nothing; SI kept, AX-DI and ES may be clobbered (a window callback)
 ; -----------------------------------------------------------------------------
 pt_onkey:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    push si                         ; W_ONKEY: SI back, the rest free (and
+                                    ; pt_fsx_key, the other caller, banks
+                                    ; what it needs itself)
     cmp byte [pt_mode], PT_M_LIVE
     jne .out
     mov [pt_key], ax
@@ -10798,7 +10734,8 @@ pt_onkey:
     call pt_cmd_fs                  ; the View menu's own routine: the two
 %endif
 .out:                               ; doors onto one command cannot drift
-    jmp pt_ld_6
+    pop si
+    ret
 
 ; =============================================================================
 ; Menus (SPEC.md 12.2)
@@ -10852,37 +10789,18 @@ pt_oncmd:
     mov bx, si
     call pt_org
     mov ax, [pt_key]
-%ifdef PTF_EDIT
-    cmp ah, PT_MENU_EDIT
-    je .edit
-%endif
-    cmp ah, PT_MENU_DRAW
-    je .draw
-%ifdef PTF_FSX
-    cmp ah, PT_MENU_VIEW
-    je .view
-%endif
-    or ah, ah                       ; PT_MENU_FILE is 0 on every build
-    jnz .out
-; --- File ------------------------------------------------------------------
-    cmp al, PT_MF_NEW
-    je .new
-    cmp al, PT_MF_OPEN
-    je .open
-    cmp al, PT_MF_SAVE
-    je .save_bmp
-    cmp al, PT_MF_SAVEAS
-    je .saveas_bmp
-%ifdef PTF_GIF
-    cmp al, PT_MF_SAVEG
-    je .save_gif
-    cmp al, PT_MF_SAVEAG
-    je .saveas_gif
-%endif
+    ; --- ONE TABLE OF HANDLERS, indexed by (menu, item) (apps size pass 2): a
+    ; menu's items are a run of pt_mtab starting at pt_mbase[menu], and AL
+    ; still holds the item when the handler is reached. No range test: AH is
+    ; a menu of THIS set and AL an enabled item of it (SPEC.md 12.2's
+    ; AM_ONCMD), which is what the table is built from
+    mov bl, ah
+    xor bh, bh
+    mov bl, [pt_mbase+bx]
+    add bl, al
+    add bx, bx
+    jmp [pt_mtab+bx]
 .out:
-    ret
-.new:
-    call pt_new
     ret
 %ifdef PTF_GIF
 .save_gif:
@@ -10920,17 +10838,11 @@ pt_oncmd:
 %ifdef PTF_GIF
 .saveas_gif:
     mov byte [pt_sfmt], 1
-    push ax
-    mov al, 1
-    call pt_gate
-    pop ax
+    call pt_gate_g
     jc .out
     jmp short .saveas
 .gifchk:
-    push ax
-    mov al, 1
-    call pt_gate
-    pop ax
+    call pt_gate_g
     jc .out
     jmp short .save
 %endif
@@ -10950,59 +10862,56 @@ pt_oncmd:
 ; The WHOLE menu is PTF_EDIT's (SPEC.md 42.22.1): Undo, Cut, Copy, Paste and
 ; Clear are all of it, and Clear clears the SELECTION rather than the canvas -
 ; so with the marquee gone there is nothing left to put in it.
-%ifdef PTF_EDIT
-.edit:
-%ifdef PTF_UNDO
-    cmp al, PT_ME_UNDO
-    je .undo
-%endif
-%ifdef PTF_CLIP
-    cmp al, PT_ME_CUT
-    je .cut
-    cmp al, PT_ME_COPY
-    je .copy
-    cmp al, PT_ME_PASTE
-    je .paste
-    cmp al, PT_ME_CLEAR
-    je .clear
-%endif
-    ret
-%ifdef PTF_UNDO
-.undo:
-    jmp pt_undo_cmd
-%endif
-%ifdef PTF_CLIP
-.cut:
-    jmp pt_cmd_cut
-.copy:
-    jmp pt_cmd_copy
-.paste:
-    jmp pt_cmd_paste
-.clear:
-    jmp pt_sel_clear
-%endif
-%endif   ; PTF_EDIT
+; The Edit menu's items go straight to the routines the Ctrl keys reach (the
+; table below), so the two doors cannot drift.
 ; --- Draw ------------------------------------------------------------------
-.draw:
-    cmp al, PT_MD_FILL
-    jne .font
+.fill:
     xor byte [pt_filled], 1
     jmp pt_draw_strip
 .font:
-    cmp al, PT_MD_F4
-    ja .out
     dec al                          ; item 1/2/3 -> shift 0/1/2 -> scale 1/2/4
     call pt_setscale
     jmp pt_draw_strip
-; --- View ------------------------------------------------------------------
+; View's one item is pt_cmd_fs, which does not return until the user leaves
+; and repaints on the way out - so, like the dialog above, NO repaint after it
+
+; --- the handler table, by menu ----------------------------------------------
+pt_mtab:
+PT_MB_FILE  equ ($ - pt_mtab) / 2
+    dw pt_new, pt_oncmd.open, pt_oncmd.save_bmp, pt_oncmd.saveas_bmp
+%ifdef PTF_GIF
+    dw pt_oncmd.save_gif, pt_oncmd.saveas_gif
+%endif
+PT_MC_FILE  equ ($ - pt_mtab) / 2 - PT_MB_FILE
+%ifdef PTF_EDIT
+PT_MB_EDIT  equ ($ - pt_mtab) / 2
+%ifdef PTF_UNDO
+    dw pt_undo_cmd                  ; PT_ME_UNDO
+%endif
+%ifdef PTF_CLIP
+    dw pt_cmd_cut, pt_cmd_copy, pt_cmd_paste, pt_sel_clear
+%endif
+PT_MC_EDIT  equ ($ - pt_mtab) / 2 - PT_MB_EDIT
+%endif
+PT_MB_DRAW  equ ($ - pt_mtab) / 2
+    dw pt_oncmd.fill, pt_oncmd.font, pt_oncmd.font, pt_oncmd.font
+PT_MC_DRAW  equ ($ - pt_mtab) / 2 - PT_MB_DRAW
 %ifdef PTF_FSX
-.view:
-    cmp al, PT_MV_FULL
-    jne .out
-    jmp pt_cmd_fs
-%endif                   ; does not return until the user leaves,
-                                    ; and repaints on the way out - so, like
-                                    ; the dialog above, NO repaint after it
+PT_MB_VIEW  equ ($ - pt_mtab) / 2
+    dw pt_cmd_fs                    ; PT_MV_FULL
+PT_MC_VIEW  equ ($ - pt_mtab) / 2 - PT_MB_VIEW
+%endif
+pt_mbase:                           ; ...and each menu's first entry, in
+    db PT_MB_FILE                   ; PTMENU's order
+%ifdef PTF_EDIT
+    db PT_MB_EDIT
+%endif
+    db PT_MB_DRAW
+%ifdef PTF_FSX
+    db PT_MB_VIEW
+%endif
+    times ($ - pt_mbase) - PT_MN db 0           ; one entry a menu
+    times PT_MN - ($ - pt_mbase) db 0
 
 ; =============================================================================
 ; What a smaller machine does without (SPEC.md 42)
@@ -11096,21 +11005,23 @@ pt_menufix:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_gate - is this feature funded on this machine?
-; in:  AL = 0 undo / 1 clipboard
+; pt_gate_u / pt_gate_c - is undo / the clipboard funded on this machine?
 ; out: CF=0 go ahead; CF=1 and the toast is already up; preserves all registers
+;
+; Two doors rather than one taking AL (apps size pass 2): every caller named its
+; feature with a constant, and the push/mov/pop around each call cost more than
+; the second entry does.
 ; -----------------------------------------------------------------------------
 %ifdef PTF_GATE
-pt_gate:
-    push si
-    or al, al
-    jnz .clip
 %ifdef PTF_UNDO
+pt_gate_u:
+    push si
     mov si, pt_s_nu
     cmp byte [pt_haveundo], 0
+    jmp short pt_gate_c.test
 %endif
-    jmp short .test
-.clip:
+pt_gate_c:
+    push si
 %ifdef PTF_CLIP
     mov si, pt_s_nc
     cmp byte [pt_haveclip], 0
@@ -11136,6 +11047,28 @@ pt_gate:
     pop si
     clc
     ret
+
+; pt_gate_g - could the GIF encoder's tables be funded? The question
+; pt_menufix greys the two GIF items on and pt_save's own claim answers,
+; asked BEFORE the dialog. Until apps size pass 2 the GIF verbs asked
+; pt_gate_c - the CLIPBOARD's question, a leftover from when the encoder lived
+; in the clipboard's memory - so a heap with no room for either refused a GIF
+; save with "No RAM for clipboard", and one with 4KB but not 16KB let it
+; through to fail later.
+%ifdef PTF_GIF
+pt_gate_g:
+    push si
+    mov si, pt_s_ng
+    push ax
+    push bx                         ; MEM_AVAIL answers in AX and BX
+    call OSAPI_MEM_AVAIL            ; AX = largest free run, KB
+    cmp ax, PT_LZW_KB
+    sbb ax, ax
+    inc ax                          ; ZF = 1 exactly when the tables cannot fit
+    pop bx
+    pop ax
+    jmp short pt_gate_c.test
+%endif
 %endif   ; PTF_GATE
 
 ; -----------------------------------------------------------------------------
@@ -11147,34 +11080,25 @@ pt_gate:
 ; -----------------------------------------------------------------------------
 %ifdef PTF_CLIP
 pt_cmd_copy:
-    push ax
-    mov al, 1
-    call pt_gate
+    call pt_gate_c
     jc .out
-    call pt_copy
+    jmp pt_copy
 .out:
-    pop ax
     ret
 
 pt_cmd_cut:
-    push ax
-    mov al, 1
-    call pt_gate
+    call pt_gate_c
     jc .out
     call pt_copy
-    call pt_sel_clear
+    jmp pt_sel_clear
 .out:
-    pop ax
     ret
 
 pt_cmd_paste:
-    push ax
-    mov al, 1
-    call pt_gate
+    call pt_gate_c
     jc .out
-    call pt_paste
+    jmp pt_paste
 .out:
-    pop ax
     ret
 %endif   ; PTF_CLIP
 
@@ -11184,9 +11108,7 @@ pt_cmd_paste:
 %ifdef PTF_UNDO
 ; -----------------------------------------------------------------------------
 pt_undo_cmd:
-    push ax
-    xor al, al
-    call pt_gate
+    call pt_gate_u
     jc .out
     call pt_text_end                ; Ctrl+Z lands mid-sentence otherwise, and
                                     ; the caret would be left on a picture that
@@ -11195,7 +11117,6 @@ pt_undo_cmd:
     call pt_undo_swap
     call pt_marq
 .out:
-    pop ax
     ret
 %else
 ; -----------------------------------------------------------------------------
@@ -12362,11 +12283,8 @@ pt_lose_w:
     mov bx, ax
     shr bx, 1
     mov [pt_lwb], bx
-    mov byte [pt_lwn], 0
-    test al, 1
-    jz .rows
-    mov byte [pt_lwn], 1            ; odd: byte [pt_lwb]'s LOW nibble is lost
-.rows:
+    and al, 1                       ; odd: byte [pt_lwb]'s LOW nibble is lost
+    mov [pt_lwn], al
     xor si, si                      ; SI = row
 .row:
     mov ax, si
@@ -13987,13 +13905,10 @@ pt_bmp_in:
     jnz .big
     add ax, 31
     jc .big
+    and al, 0xE0                    ; (/ 32 * 4 is "drop the low five bits,
+    shr ax, 1                       ; then / 8")
     shr ax, 1
     shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shl ax, 1
-    shl ax, 1
     mov [pt_bstr], ax
     ; --- and the pixel data must be inside what we read, in 32 bits -------
     ; rows x stride is the number this used to give up on: 448 x 326 is
@@ -14802,19 +14717,11 @@ pt_fmtpick:
     mov [pt_dcvt], al
 %else
     mov byte [pt_dcvt], 0
-    or al, al
-    jnz .one                        ; the file has no colour in it: hold it at
-    mov byte [pt_1bpp], 0           ; the depth it really is, whatever the
-    mov byte [pt_planar], 0         ; adapter would have picked
-    cmp byte [pt_mono], 0
-    jne .out
-    mov byte [pt_planar], 1
-    jmp short .out
-.one:
-    mov byte [pt_1bpp], 1
-    mov byte [pt_planar], 0
-.out:
-%endif
+    mov [pt_1bpp], al               ; AL = 1: the file has no colour in it, so
+    or al, [pt_mono]                ; hold it at the depth it really is,
+    xor al, 1                       ; whatever the adapter would have picked;
+    mov [pt_planar], al             ; planar only for a colour file on a colour
+%endif                              ; screen (AL and [pt_mono] are both 0 or 1)
     call pt_ncolset                 ; ...AND THE STRIP FOLLOWS THE DEPTH. This
                                     ; used to store 16 here, which is wrong
                                     ; twice over: a colour file on a HERCULES
@@ -15808,47 +15715,29 @@ pt_ghdr:
     push ax
     push cx
     push si
-    mov si, pt_g_magic
-    mov cx, 6
-.mag:
-    mov al, [si]
-    call pt_gwr
-    inc si
-    loop .mag
-    mov ax, [pt_cw]
-    call pt_gwrw
-    mov ax, [pt_ch]
-    call pt_gwrw
-    mov al, 0x83                    ; a global table of 2 << 3 entries
-    call pt_gwr
-    xor al, al                      ; background index
-    call pt_gwr
-    xor al, al                      ; no aspect ratio given
-    call pt_gwr
-    mov si, pt_pal_rgb
-    mov cx, 48
-.pal:
-    mov al, [si]
-    call pt_gwr
-    inc si
-    loop .pal
-    mov al, 0x2C                    ; the image descriptor
-    call pt_gwr
-    xor ax, ax
-    call pt_gwrw                    ; left
-    xor ax, ax
-    call pt_gwrw                    ; top
-    mov ax, [pt_cw]
-    call pt_gwrw
-    mov ax, [pt_ch]
-    call pt_gwrw
-    xor al, al                      ; no local table, not interlaced
-    call pt_gwr
-    mov al, 4                       ; LZW minimum code size: sixteen colours
-    call pt_gwr
+    mov si, pt_g_magic              ; the fixed bytes are DATA, laid out in
+    mov cx, 6                       ; file order around pt_pal_rgb, and only
+    call .run                       ; the size is written by hand - twice:
+    mov cx, PT_G_RUN                ; the screen descriptor's, then the image's
+    call .run                       ; (apps size pass 2: it was a pt_gwr call a
+    mov cx, 2                       ; fixed byte)
+    call .run
     pop si
     pop cx
     pop ax
+    ret
+.run:                               ; CX bytes from SI, then - unless this was
+    mov al, [si]                    ; the last run - the width and height
+    inc si
+    call pt_gwr
+    loop .run
+    cmp si, pt_g_tail + 2
+    je .ret
+    mov ax, [pt_cw]
+    call pt_gwrw
+    mov ax, [pt_ch]
+    call pt_gwrw
+.ret:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -16089,7 +15978,6 @@ pt_s_ebmp:    db 'BMP', 0           ; the extension is the default name's tail
 %ifdef PTF_GIF
 pt_s_defgif:  db 'PICTURE.'
 pt_s_egif:    db 'GIF', 0
-pt_g_magic:   db 'GIF87a'
 pt_gstep:     db 8, 8, 4, 2         ; the interlaced row passes: step...
 pt_gstart:    db 0, 4, 2, 1         ; ...and where each one starts
 %endif
@@ -16099,7 +15987,9 @@ pt_s_saving: db 'Saving...', 0
 pt_s_wlab:   db 'W', 0
 pt_s_hlab:   db 'H', 0
 pt_s_apply:  db 'Apply', 0
+%ifdef PTF_FSX
 pt_s_nofsx:  db 'The screen is not free', 0
+%endif
 pt_s_nodlg:  db 'Leave Full Screen first', 0
 %ifdef PTF_UNDO
 pt_s_nu:     db 'No RAM for undo here', 0
@@ -16124,17 +16014,16 @@ pt_tpl:
 
 ; --- menus (SPEC.md 12.2) ----------------------------------------------------
     OS88_MENUSET pt_menus, pt_appname, pt_oncmd
-%ifdef PTF_GIF
-        OS88_MENU pt_s_file, pt_it_file, 6
-%else
-        OS88_MENU pt_s_file, pt_it_file, 4
-%endif
+        OS88_MENU pt_s_file, pt_it_file, PT_MC_FILE  ; (every count IS its run
+                                                      ; of pt_mtab, so a menu
+                                                      ; cannot outgrow its
+                                                      ; handlers)
 %ifdef PTF_EDIT
-        OS88_MENU pt_s_edit, pt_it_edit, PT_ME_N
+        OS88_MENU pt_s_edit, pt_it_edit, PT_MC_EDIT
 %endif
-        OS88_MENU pt_s_draw, pt_it_draw, 4
+        OS88_MENU pt_s_draw, pt_it_draw, PT_MC_DRAW
 %ifdef PTF_FSX
-        OS88_MENU pt_s_view, pt_it_view, 1
+        OS88_MENU pt_s_view, pt_it_view, PT_MC_VIEW
 %endif
     OS88_MENUSET_END pt_menus
 
@@ -16143,7 +16032,9 @@ pt_s_file:   db 'File', 0
 pt_s_edit:   db 'Edit', 0
 %endif
 pt_s_draw:   db 'Draw', 0
+%ifdef PTF_FSX
 pt_s_view:   db 'View', 0
+%endif
 pt_it_file:  dw pt_i_new, pt_i_open, pt_i_save, pt_i_saveas
 %ifdef PTF_GIF
              dw pt_i_saveg, pt_i_saveag
@@ -16158,7 +16049,9 @@ pt_it_edit:
 %endif
 %endif
 pt_it_draw:  dw pt_i_fill, pt_i_f1, pt_i_f2, pt_i_f4
+%ifdef PTF_FSX
 pt_it_view:  dw pt_i_full
+%endif
 pt_i_new:    db 'New', 0
 pt_i_open:   db 'Open...', 0
 pt_i_save:   db 'Save Bmp', 0
@@ -16199,7 +16092,9 @@ pt_i_f2:     db 'Text Size 2x', 0
 pt_i_f4:     db 'Text Size 4x', 0
 ; Never greyed, on any machine: this sets no video mode, so OSAPI_FSX_CAPS has
 ; nothing to say about it and there is no FACT to grey on (SPEC.md 47 rule 3).
+%ifdef PTF_FSX
 pt_i_full:   db 'Full Screen  ^F', 0
+%endif
 
 ; --- the notice windows (indexed by [pt_mode] - 1) ---------------------------
 pt_notice:   dw pt_s_nomem, pt_s_small
@@ -16231,7 +16126,9 @@ pt_s_nostage: db 'No memory to open file', 0
 pt_s_gifbig:  db 'GIF larger than 64KB', 0
 pt_s_trunc:   db 'Cropped - use Save As', 0
 pt_s_reduce:  db 'Reduced - use Save As', 0
+%ifdef PTF_CLIP
 pt_s_bigsel:  db 'Selection too big', 0
+%endif
 
 ; --- brush widths: the pencil's four, then the eraser's ----------------------
 ; The eraser's set starts where the pencil's ends, which is the whole of "a
@@ -16240,7 +16137,9 @@ pt_thtab:    db 1, 2, 4, 8
              db 8, 16, 24, 32
 
 ; --- bit masks for the undo row bitmap --------------------------------------
+%ifdef PTF_UNDO
 pt_bit8:     db 1, 2, 4, 8, 16, 32, 64, 128
+%endif
 
 ; --- the three colours a 1bpp adapter can really show (SPEC.md 39.4) --------
 ; black, the 50% dither class, white
@@ -16331,6 +16230,17 @@ pt_pal1:
     db 0xFF,0xFF,0xFF,0x00          ; 1  white
 %endif
 
+; --- THE GIF HEADER IS THIS DATA, IN FILE ORDER (apps size pass 2) ---------
+; pt_ghdr writes it as three runs with the picture's width and height between
+; them, so the fixed bytes around the palette sit against it rather than being
+; spelled out a pt_gwr call each: the magic and the screen descriptor's flags
+; before pt_pal_rgb, the image descriptor's fixed head and tail after it.
+%ifdef PTF_GIF
+pt_g_magic:  db 'GIF87a'            ; ...then the logical screen's width, height
+pt_g_lsd:    db 0x83                ; a global table of 2 << 3 entries
+             db 0                   ; background index
+             db 0                   ; no aspect ratio given
+%endif
 pt_pal_rgb:
     db 0x00,0x00,0x00               ; 0  black
     db 0x00,0x00,0xAA               ; 1  blue
@@ -16348,6 +16258,13 @@ pt_pal_rgb:
     db 0xFF,0x55,0xFF               ; 13 light magenta
     db 0xFF,0xFF,0x55               ; 14 yellow
     db 0xFF,0xFF,0xFF               ; 15 white
+%ifdef PTF_GIF
+pt_g_desc:   db 0x2C                ; the image descriptor
+             dw 0, 0                ; left, top - then the width and height
+pt_g_tail:   db 0                   ; no local table, not interlaced
+             db 4                   ; LZW minimum code size: sixteen colours
+PT_G_RUN     equ pt_g_desc + 5 - pt_g_lsd
+%endif
 
 ; --- the eight tool glyphs, 16x16, bit 15 = leftmost ------------------------
 pt_ic_tab:   dw pt_ic_pencil, pt_ic_eraser, pt_ic_drop, pt_ic_rect
@@ -16732,6 +16649,7 @@ pt_ic_text:
     PTWORD pt_dockr                 ; the first row the dock owns
     PTWORD pt_lwb                   ; pt_lose_*: first byte of the doomed band
     PTWORD pt_scrh                  ; screen height, for the bracket's pointer
+%ifdef PTF_FSX
     PTWORD pt_ptrx                  ; ...and where its crosshair is DRAWN, which
     PTWORD pt_ptry                  ; is what the XOR erase has to replay
     PTWORD pt_pnx                   ; pt_ptr_move: where it is going...
@@ -16742,6 +16660,7 @@ pt_ic_text:
     PTWORD pt_ovt
     PTWORD pt_ovr
     PTWORD pt_ovb
+%endif
 
     PTBYTE pt_mode                  ; PT_M_*
     PTBYTE pt_tool                  ; PT_T_*
@@ -16774,8 +16693,8 @@ pt_ic_text:
                                     ; takes one (SPEC.md 42.7)
     PTBYTE pt_fsx                   ; ...and pt_fsx_main is actually running,
                                     ; which is what pt_org branches on
-    PTBYTE pt_ptron                 ; the bracket's crosshair is on the glass
 %ifdef PTF_FSX
+    PTBYTE pt_ptron                 ; the bracket's crosshair is on the glass
     PTBYTE pt_pbtn                  ; ...and the mouse buttons it last saw
 %endif
 %ifdef PTF_UNDO
@@ -16833,7 +16752,9 @@ pt_ic_text:
     PTWORD pt_gncol                 ; entries in the colour table in effect
 %endif
     PTBYTE pt_fitcut                ; pt_fit had to give something up
+%ifdef PTF_EDIT
     PTBYTE pt_setval                ; pt_setpx's colour, across pt_rowset
+%endif
     PTBYTE pt_wchg                  ; the window was resized: repaint the lot
     PTBYTE pt_kept                  ; a resize was refused to save the artwork
     PTBYTE pt_apend                 ; ...and the notice for it is owed

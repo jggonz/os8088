@@ -204,7 +204,7 @@ def guest_leg(machine):
     from pxsyms import pkg_syms, instance, u16
     syms, image = pkg_syms()
     DISK = "build/pxedit.img"
-    M.scratch_disk(DISK, "build/pixel.o88", "build/PIXEL.GFX",
+    M.scratch_disk(DISK, "build/pixel.o88",
                    "apps/pixel/samples/CITY.PCX")
     city = open("apps/pixel/samples/CITY.PCX", "rb").read()
     q = P.decode(city, "PCX")

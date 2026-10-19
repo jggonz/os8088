@@ -7,9 +7,10 @@ desktop frame, walkable, with the timeline each one costs on a 4.77MHz 8088.
     python3 tools/os88ladder.py --no-measure        # structure only, no emulator
 
 **ON DEMAND. NOTHING IN `make` RUNS THIS AND NOTHING SHOULD.** It boots the
-tree under MartyPC and single-steps a whole boot through forty-odd
-breakpoints, which is minutes - `make test-fast`'s whole budget is 30 seconds
-and a row that wanted 4 would already be the most expensive thing in it.
+tree under MartyPC and stops a whole boot at sixty-odd breakpoints, and the
+self-check in front of it assembles the kernel more than once - under a minute
+on a fast box (2026-10-17: 47 s, the walk itself 9 s), and `make test-fast`'s
+whole budget is 30 seconds.
 
 **SO THE PAGE GOES STALE, AND THAT IS THE DESIGN.** Nothing rebuilds it when
 `kmain` gains a call, when a section moves in the ladder, when a constant is
@@ -205,22 +206,44 @@ def ladder(build="build", defines=()):
     k = json.loads(out)
     for want in ("kseg", "imgpara", "coldpara", "fatpara", "lowpara",
                  "vgabufpara", "kend", "ksize", "text", "bss", "cold",
-                 "lowbss", "ovl", "boot2", "stk0"):
+                 "lowbss", "ovl", "boot2", "stk0", "colds", "fats", "lows",
+                 "vgas", "blobseg"):
         if want not in k:
             raise Stale("tools/kernsize.py no longer reports `%s`" % want,
                         "tools/kernsize.py --json",
                         "its JSON keys changed; re-map them in ladder()")
+    # THE RUNGS ARE TAKEN AS MEASURED, NOT RE-STACKED HERE. This used to add
+    # the paragraph counts up in one fixed order - image, `.cold`, FAT window,
+    # `.lowbss`, `.vgabuf` - and a check that the sum reached `kend` could not
+    # see the order change: ROM_COLD moved `.cold` from under the FAT window
+    # to the top of the kernel, the sum still came out right, and the page
+    # drew every rung but the first at the wrong address. kernsize reports
+    # where each rung IS, so the page reads that, and refuses only if the
+    # rungs do not tile the kernel from its image to its end.
+    k["fat_seg"], k["low_seg"] = k["fats"], k["lows"]
+    k["cold_ram"], k["vgabuf_seg"] = k["colds"], k["vgas"]
+    k["blob_seg"] = k["blobseg"]
+    rungs = sorted([(k["kseg"], k["imgpara"]), (k["fats"], k["fatpara"]),
+                    (k["lows"], k["lowpara"]), (k["colds"], k["coldpara"]),
+                    (k["vgas"], k["vgabufpara"])])
     p = k["kseg"]
-    k["cold_seg"] = p = p + k["imgpara"]
-    k["fat_seg"] = p = p + k["coldpara"]
-    k["low_seg"] = p = p + k["fatpara"]
-    k["vgabuf_seg"] = p = p + k["lowpara"]
-    if p + k["vgabufpara"] != k["kend"]:
-        raise Stale("the ladder does not add up: %#x + %d != kend %#x"
-                    % (p, k["vgabufpara"], k["kend"]),
+    for seg, para in rungs:
+        if seg != p:
+            raise Stale("the ladder does not tile: a rung starts at %#x where "
+                        "the one below it ended at %#x" % (seg, p),
+                        "kernel/kernel.asm's ladder / tools/kernsize.py",
+                        "a rung was inserted or removed - teach ladder() and "
+                        "regions() the new one")
+        p = seg + para
+    if p != k["kend"]:
+        raise Stale("the ladder does not add up: it ends at %#x, not kend %#x"
+                    % (p, k["kend"]),
                     "kernel/kernel.asm's ladder / tools/kernsize.py",
                     "a rung was inserted or removed - teach ladder() the new "
                     "one, in kernel.asm's own order")
+    k["order"] = [n for _, n in sorted([(k["fats"], "fat"), (k["lows"], "low"),
+                                        (k["colds"], "cold"),
+                                        (k["vgas"], "vgabuf")])]
     return k
 
 
@@ -357,15 +380,16 @@ class Probe(object):
 
     def __init__(self, m, lad, defines):
         self.m, self.lad = m, lad
-        self.blob = lad["kend"] * 16
+        self.blob = lad["blob_seg"] * 16
         self.sym = probe_symbols(defines)
         self.mem_base = self.sym["mem_base"]
         self.mem_top = self.sym["mem_top"]
         self.mem_tab = self.sym["mem_tab"]
 
     # `.boot2` has no fixed segment (os88sym refuses to place it), and it does
-    # not need one here: stage 1 reads the blob to the heap's floor, so the
-    # segment is the ladder's own `kend`.
+    # not need one here: the boot sector reads the blob to BLOB_SEG_AT, which
+    # is the heap's floor plus a lift on a ROM_COLD kernel, and kernsize
+    # reports it as `blobseg`. It is NOT `kend`: the lift is three sectors.
     def blobaddr(self, name):
         return self.blob + self.sym[name]
 
@@ -515,6 +539,24 @@ def walk(image, machine, defines, lad, cons, limit=240.0, verbose=True,
         # the boot and the walk would spend the whole load stopping on them.
         seen2 = False
         dptbp = {"type": "mem", "addr": cons["DPT_AT"]}
+        # THE CODE BETWEEN TWO STOPS IS NAMED BY WHERE IT SITS, because one
+        # name for all of it put the same note on four different jobs. In the
+        # sector: the first gap after the relocation is the settings-table
+        # takeover, the ones between reads are the read loop, and the last -
+        # closed by the jump into stage 2 - is the checksum. In stage 2: the
+        # first gap is its setup, the gaps between reads are its loop, and
+        # the one closed by the unpacker is the canary.
+        gaps = {1: 0, 2: 0}
+
+        def gap(ip):
+            n = 2 if seen2 else 1
+            gaps[n] += 1
+            if n == 1:
+                return ("stage 1: sector code" if gaps[1] == 1
+                        else "stage 1: read loop")
+            if gaps[2] == 1:
+                return "stage 2: loader code"
+            return "stage 2: canary" if ip == kz_all else "stage 2: read loop"
         while True:
             bps = [{"type": "exec", "addr": a}
                    for a in (rom13, spl_tick, stage2, kmain)]
@@ -534,7 +576,7 @@ def walk(image, machine, defines, lad, cons, limit=240.0, verbose=True,
                 close("kernel", "stage 2: loop", cyc, m.disk())
                 break
             if ip == stage2:
-                close("kernel", "stage 1: sector code", cyc, m.disk())
+                close("kernel", "stage 1: checksum + jump", cyc, m.disk())
                 seen2 = True
                 continue
             if dptbp and ip not in (rom13, spl_tick):
@@ -547,9 +589,7 @@ def walk(image, machine, defines, lad, cons, limit=240.0, verbose=True,
             near = ip in (spl_tick, kz_all)
             name = ("splash tick" if ip == spl_tick
                     else "stage 2: expand" if ip == kz_all else "int 13h")
-            close("kernel", "stage %d: %s code" % (2 if seen2 else 1,
-                                                  "loader" if seen2 else "sector"),
-                  cyc, m.disk())
+            close("kernel", gap(ip), cyc, m.disk())
             frame = m.read((r["ss"] << 4) + r["sp"], 2 if near else 4)
             back = ((r["cs"] << 4) + u16(frame) if near
                     else (u16(frame, 2) << 4) + u16(frame, 0))
@@ -680,17 +720,17 @@ STAGES = [
          take=dict(until="stage 2: loop")),
     dict(id="kmain", short="hand over", title="The operating system takes over",
          moved="the working stack, into an area of its own", focus=["lowbss"],
-         take=dict(phases=["dsk_boot_from_x", "cpu_detect", "xm_sniff",
-                           "dsk_dpt_init_x", "sched_init", "sch_idle_start",
-                           "clk_init", "vid_init", "vid_ctx_init",
-                           "vid_probe_avail", "vid_disp_init"])),
+         take=dict(phases=["dsk_boot_from_x", "far [10]", "cpu_detect",
+                           "xm_sniff", "dsk_dpt_init_x", "sched_init",
+                           "sch_idle_start", "clk_init", "vid_init",
+                           "vid_ctx_init", "vid_probe_avail", "vid_disp_init"])),
     dict(id="heap", short="memory pool", title="The memory pool opens",
          moved="everything above the loader becomes available to ask for",
          focus=["free*"],
          take=dict(phases=["mem_init_x", "mod_init_x"])),
     dict(id="ui", short="typeface + windows", title="Typeface, windows and the menu bar",
-         moved="the letterforms, and the first blocks handed out",
-         focus=["lowbss"],
+         moved="the window manager's tables - and, only on a machine with a slow ROM, the letterforms",
+         focus=["ktext"],
          take=dict(phases=["font_init", "ovl_font_init", "wm_init",
                            "band_init", "menu_init", "inst_init",
                            "splf_step"])),
@@ -704,18 +744,32 @@ STAGES = [
                            "files_init_x", "drv_init_x",
                            "drv_sniff", "snd_init", "splf_step"])),
     dict(id="drvboot", short="mount + drivers", title="The floppy is mounted - over the start-up code",
-         moved="the disk's index, written across 5KB of code that was running",
-         take=dict(phases=["drv_boot_x", "hb_probe_x", "xm_boot_x",
-                           "thm_set"])),
+         moved="the disk's index, written across {ovlkb} of code that was running",
+         take=dict(phases=["drv_boot_x", "vmm_boot_x", "desk_rowcalc_x",
+                           "hb_probe_x", "thm_set"])),
+    dict(id="autostart", short="autostart", title="The loading screen ends, and Autostart runs",
+         moved="nothing on this disk - a program's memory for each shortcut in AUTOSTRT",
+         take=dict(phases=["spl_finish", "as_boot"])),
     dict(id="unblob", short="space back", title="The loader's space is given back",
-         moved="4KB returned to the pool, and the gap closed up",
+         moved="{blobkb} returned to the pool, and the pool packed down onto it",
          focus=["free*"],
-         take=dict(phases=["spl_finish", "mem_unblob_x"])),
+         take=dict(phases=["mem_unblob_x"])),
     dict(id="paint", short="first frame", title="The first desktop frame",
          moved="nothing new - the screen, at last", focus=[],
-         take=dict(phases=["gfx_lock", "wm_paint_all", "gfx_unlock",
-                           "cursor_show", "drv_notice_x"])),
+         take=dict(phases=["ui_lcall", "cursor_show", "drv_notice_x"])),
 ]
+
+
+# EVERY NAME walk() GIVES A ROW BELOW kmain, after basename() has taken the
+# decorations off. kmain's rows are os88boot's and are checked against the
+# tree; these are this tool's own, so the self-check reads them from here -
+# a name walk() starts emitting that is not in this list has no note and no
+# title, and that is a refusal rather than a raw string on the page.
+LOADER_PHASES = ["post", "relocate", "stage 1: sector code",
+                 "stage 1: read loop", "stage 1: checksum + jump",
+                 "int 13h reset", "int 13h read", "stage 2: loader code",
+                 "stage 2: read loop", "stage 2: canary", "stage 2: expand",
+                 "stage 2: loop", "splash tick"]
 
 
 def basename(name):
@@ -924,7 +978,7 @@ def regions(stage_id, lad, cons, vol, ram_kb, heap, loaded_sectors, spl_first,
              "blob": "Loader", "pending": "Still on the floppy",
              "packed": "Packed system", "unclaimed": "Not spoken for",
              "reserved": "Reserved for the unpacked system",
-             "unpack": "Unpacked so far"}
+             "unpack": "Unpacked so far", "lift": "Clearance"}
     kz = cons.get("KZ")
     unpacked = since("expand") if kz and "expand" in order else True
     # THE FILL VIEW IS THE UNPACK STEP'S OWN MAP: the moment before the
@@ -964,7 +1018,14 @@ def regions(stage_id, lad, cons, vol, ram_kb, heap, loaded_sectors, spl_first,
     # The BIOS's copy survives only until the load reaches it - which is a
     # thing to WATCH rather than assert, so it is computed from how many
     # sectors have actually landed.
-    kload_end = lad["kseg"] * 16 + loaded_sectors * vol["bps"]
+    # A PACKED kernel's sectors land on a SHELF well above the plain head, so
+    # "how far has the load reached" is the shelf's top and not the image's.
+    kz = cons.get("KZ")
+    if kz:
+        kload_end = (lad["kseg"] * 16 + kz["head"] + kz["r"]
+                     + max(0, loaded_sectors) * vol["bps"])
+    else:
+        kload_end = lad["kseg"] * 16 + loaded_sectors * vol["bps"]
     if not (since("splash") and kload_end > 0x7C00):
         add(0x7C00, 0x7E00, "vbr", "Boot sector, where the firmware put it",
             "dead" if since("reloc") else "ours",
@@ -1045,61 +1106,84 @@ def regions(stage_id, lad, cons, vol, ram_kb, heap, loaded_sectors, spl_first,
                 "packed shelf above shrinks.")
     elif since("splash"):
         img_end = min(kstart + loaded_sectors * vol["bps"], lad["kend"] * 16)
-        parts = [
-            (kstart, lad["cold_seg"] * 16, "ktext",
-             "Operating system code and working storage",
-             "kern", "%s bytes of code and %s of scratch. They share one "
-             "[[segment]], and a segment reaches 64KB - so this block is the "
-             "one hard ceiling in the whole system, and code is moved out of "
-             "it rather than allowed to grow past it."
-             % ("{:,}".format(lad["text"]), "{:,}".format(lad["bss"]))),
-            (lad["cold_seg"] * 16, lad["fat_seg"] * 16, "kcold",
-             "Operating system code, second block",
-             "kern", "%s bytes of code that lives in a [[segment]] of its own "
-             "and is reached the long way round. It is always resident; what "
-             "it buys is that none of it counts against the 64KB ceiling next "
-             "door." % "{:,}".format(lad["cold"])),
-        ]
-        if since("drvboot"):
-            parts.append((lad["fat_seg"] * 16, lad["low_seg"] * 16, "fatw",
-                          "Disk index", "data",
-                          "The [[file allocation table]] of the floppy that "
-                          "has just been [[mount|mounted]] - which is what "
-                          "makes its files openable. THESE ARE THE BYTES THE "
-                          "START-UP CODE WAS IN."))
-        else:
-            parts.append((lad["fat_seg"] * 16, lad["low_seg"] * 16, "fatwin",
-                          "Room for the disk index", "free",
-                          "%s bytes set aside for the [[file allocation table]]"
-                          " of whatever disk gets [[mount|mounted]] first. "
-                          "Nothing has been mounted yet, so what is actually "
-                          "sitting in it is [[overlay|start-up code]]."
-                          % "{:,}".format((lad["low_seg"] - lad["fat_seg"]) * 16)))
-        parts.append((lad["low_seg"] * 16, lad["vgabuf_seg"] * 16, "lowbss",
-                      "Stacks and disk buffers", "kern",
-                      "Every running task's [[stack]], and the buffers a "
-                      "[[mount]] fills. Those buffers sit at the BOTTOM of "
-                      "this block on purpose, so that the start-up code above "
-                      "can run on into them and be thrown away by the same "
-                      "mount that needs the room."))
-        parts.append((lad["vgabuf_seg"] * 16, lad["kend"] * 16, "vgabuf",
-                      "Graphics scratch", "kern",
-                      "%s bytes the picture-drawing code assembles rows in "
-                      "before pushing them at the [[framebuffer]]. A machine "
-                      "with no colour card never needs it, and gets it back."
-                      % "{:,}".format(lad["vgabuf"])))
+        # THE RUNGS IN THE KERNEL'S OWN ORDER, which ladder() reads rather than
+        # assumes: the code-and-scratch image first, then each rung where
+        # kernsize says it is. The order is not cosmetic - `.cold` sits ABOVE
+        # the stacks so that a machine whose `.cold` is in ROM can give its
+        # RAM copy to the pool from the floor up, and a page that drew it in
+        # its old place drew every rung above the image at a wrong address.
+        rung = {
+            "fat": (lad["fat_seg"], lad["fatpara"]),
+            "low": (lad["low_seg"], lad["lowpara"]),
+            "cold": (lad["cold_ram"], lad["coldpara"]),
+            "vgabuf": (lad["vgabuf_seg"], lad["vgabufpara"]),
+        }
+        parts = [(kstart, lad["fat_seg"] * 16, "ktext",
+                  "Operating system code and working storage",
+                  "kern", "%s bytes of code and %s of scratch. They share one "
+                  "[[segment]], and a segment reaches 64KB - so this block is "
+                  "the one hard ceiling in the whole system, and code is moved "
+                  "out of it rather than allowed to grow past it."
+                  % ("{:,}".format(lad["text"]), "{:,}".format(lad["bss"])))]
+        for name in lad["order"]:
+            seg, para = rung[name]
+            a, b = seg * 16, (seg + para) * 16
+            if name == "fat":
+                if since("drvboot"):
+                    parts.append((a, b, "fatw", "Disk index", "data",
+                                  "The [[file allocation table]] of the floppy "
+                                  "that has just been [[mount|mounted]] - which "
+                                  "is what makes its files openable. THESE ARE "
+                                  "THE BYTES THE START-UP CODE WAS IN."))
+                else:
+                    parts.append((a, b, "fatwin", "Room for the disk index",
+                                  "free",
+                                  "%s bytes set aside for the [[file allocation "
+                                  "table]] of whatever disk gets [[mount|mounted]]"
+                                  " first. Nothing has been mounted yet, so what "
+                                  "is actually sitting in it is [[overlay|"
+                                  "start-up code]]." % "{:,}".format(b - a)))
+            elif name == "low":
+                parts.append((a, b, "lowbss", "Stacks and disk buffers", "kern",
+                              "Every running task's [[stack]], and the buffers "
+                              "a [[mount]] fills. Those buffers sit at the "
+                              "BOTTOM of this block on purpose, right above the "
+                              "room for the disk index, so the start-up code "
+                              "there can run on into them and be thrown away by "
+                              "the same mount that needs the room."))
+            elif name == "cold":
+                parts.append((a, b, "kcold",
+                              "Operating system code, second block", "kern",
+                              "%s bytes of code that lives in a [[segment]] of "
+                              "its own and is reached the long way round, so "
+                              "none of it counts against the 64KB ceiling at "
+                              "the bottom. It is always resident. It sits at "
+                              "the TOP of the operating system on purpose: on "
+                              "a machine that has this same code in a ROM, or "
+                              "in memory above the first megabyte, the copy "
+                              "here is never used, and the [[memory pool]]'s "
+                              "floor drops straight down onto it."
+                              % "{:,}".format(lad["cold"])))
+            elif name == "vgabuf" and para:
+                parts.append((a, b, "vgabuf", "Graphics scratch", "kern",
+                              "%s bytes the colour picture-drawing code "
+                              "assembles rows in before pushing them at the "
+                              "[[framebuffer]]. A machine with no colour "
+                              "graphics card never needs them, and its "
+                              "[[memory pool]] starts underneath them instead."
+                              % "{:,}".format(lad["vgabuf"])))
         for a, b, rid, lab, cls, note in parts:
             if a >= img_end and not since("kernel"):
                 continue
             add(a, min(b, img_end) if not since("kernel") else b,
                 rid, lab, cls, note)
-        # ...AND THE OVERLAY, ON A LAYER OF ITS OWN. `.ovl` is 5,215 bytes
-        # against the FAT window's 4,608, so it does not fit the block it is
-        # drawn over: it runs on into the bottom of `.lowbss`, where SPEC.md
-        # 2.1.2 deliberately put the three MOUNT-OWNED buffers so that it
-        # could. Drawing it as a raised band that spans both is the only
-        # honest picture - it is not a region of the map, it is code lying
-        # ACROSS two of them until the mount takes the ground back.
+        # ...AND THE OVERLAY, ON A LAYER OF ITS OWN. `.ovl` is longer than the
+        # FAT window it is read onto, so it runs on into the bottom of
+        # `.lowbss`, where SPEC.md 2.1.2 deliberately put the three
+        # MOUNT-OWNED buffers so that it could. Drawing it as a raised band
+        # that spans both is the only honest picture - it is not a region of
+        # the map, it is code lying ACROSS two of them until the mount takes
+        # the ground back.
         if not since("drvboot") and lad["ovl"] and unpacked:
             ov_a = lad["fat_seg"] * 16
             ov_b = ov_a + lad["ovl"]
@@ -1111,7 +1195,7 @@ def regions(stage_id, lad, cons, vol, ram_kb, heap, loaded_sectors, spl_first,
                     "space reserved for the disk index - so it costs nothing "
                     "permanent, and it is FORFEIT the moment a disk is "
                     "[[mount|mounted]]. It is also LONGER than that space, so "
-                    "it lies across the buffers below as well. Most of the "
+                    "it lies across the buffers above it as well. Most of the "
                     "start-up work you can click on runs from here; the one "
                     "step that does not is the mount itself, because that is "
                     "the step that overwrites it."
@@ -1126,17 +1210,29 @@ def regions(stage_id, lad, cons, vol, ram_kb, heap, loaded_sectors, spl_first,
                 "loading bar is this one."
                 % (loaded_sectors, vol["kernel"]["sectors"]))
 
-    # --- stage 2's blob, on the heap's floor ---------------------------------
-    blob_a = lad["kend"] * 16
+    # --- stage 2's blob, a little above the heap's floor ---------------------
+    # BLOB_SEG_AT, not the floor itself: a ROM_COLD kernel's packed tail is
+    # read in whole sectors and can end up to three past the image, so the
+    # loader is put that far up. kernsize reports where it actually goes.
+    blob_a = lad["blob_seg"] * 16
     blob_b = blob_a + cons["BOOT2_SECS"] * vol["bps"]
     if since("blob") and not since("unblob"):
         add(blob_a, blob_b, "blob",
             "Loader, loading screen and start-up code", "ovl",
-            "%d [[sector|sectors]] read straight to what will become the FLOOR "
-            "of the [[memory pool]]. That address is chosen: when these bytes "
-            "are given back they rejoin one long free run, where the same "
-            "block at the other end of the pool would strand everything above "
-            "it." % cons["BOOT2_SECS"])
+            "%d [[sector|sectors]] read to just above what will become the "
+            "FLOOR of the [[memory pool]]. That address is chosen: when these "
+            "bytes are given back they rejoin one long free run, where the "
+            "same block at the other end of the pool would strand everything "
+            "above it." % cons["BOOT2_SECS"])
+        if blob_a > lad["kend"] * 16:
+            add(lad["kend"] * 16, blob_a, "lift", "Clearance under the loader",
+                "free",
+                "%s bytes left empty between the end of the operating system "
+                "and the loader. The packed system is read in whole "
+                "[[sector|sectors]], so its last read can run a little past "
+                "the system's end - and this is where it runs, rather than "
+                "over the loader that is doing the reading."
+                % "{:,}".format(blob_a - lad["kend"] * 16))
 
     # --- the heap, as the machine reported it --------------------------------
     if since("heap") and heap and heap.get("base") and heap.get("top"):
@@ -1251,6 +1347,7 @@ def strings():
         "mouse": s("kernel/vidsel.inc", "spl_s_mouse", "mouse message"),
         "fdd": s("kernel/vidsel.inc", "spl_s_fdd", "drives message"),
         "boot": s("kernel/vidsel.inc", "spl_s_boot", "hand-over message"),
+        "cfg": s("kernel/vidsel.inc", "spl_s_cfg", "settings message"),
     }
 
 
@@ -1352,7 +1449,7 @@ GLOSS = {
         'Stored in fewer bytes than it takes up once loaded, by writing '
         '"copy this many bytes from a little way back" wherever the same '
         'run of bytes has appeared before, instead of the bytes '
-        'themselves. Turning it back costs the processor about forty '
+        'themselves. Turning it back costs the processor a few dozen '
         'clock cycles a byte here, and the floppy costs far more than '
         'that per byte - so a packed file loads faster in spite of the '
         'work. The operating system, its programs, its drivers and its '
@@ -1366,7 +1463,8 @@ GLOSS = {
     'kernel':
         'The operating system itself, as opposed to the small loader that '
         'fetches it or the programs that run on top of it. On the disk it '
-        'is stored packed, and the loader unpacks it as it arrives.',
+        'is stored packed, and the loader unpacks it once it has all '
+        'arrived.',
     'memory pool':
         'The run of memory left over once the operating system has placed '
         'itself, out of which every later request is satisfied.',
@@ -1459,7 +1557,10 @@ NOTES = {
         'machine is too small to finish the job, and a [[block copy]] '
         'of all 512 bytes to the very top of memory. THE COPY KEEPS THE '
         'SAME OFFSET, so every address inside the sector still resolves '
-        'and only its [[segment]] changes.',
+        'and only its [[segment]] changes. Last, the drive number the '
+        'firmware handed over is checked, because not every firmware '
+        'sets it: a number that cannot be a floppy is taken to mean the '
+        'first drive.',
     'stage 1: sector code':
         "Out of harm's way, the sector replaces the [[floppy settings "
         "table]]: it copies the machine's own - those timings belong to "
@@ -1468,6 +1569,18 @@ NOTES = {
         'on a track. The original IBM PC and XT say eight. This disk '
         'has nine, and a read that ran past the eighth would come back '
         "with the other side's sectors and no error at all.",
+    'stage 1: read loop':
+        'Between two reads: work out where on the disk the loader '
+        'starts, from the layout figures at the front of this sector, '
+        'and turn the next sector number into a [[track]], a side and a '
+        '[[sector]]. The boot sector reads the loader a track at a time '
+        '- it has 512 bytes to work in and no room to be cleverer.',
+    'stage 1: checksum + jump':
+        'Every word of the loader is added up and compared with the '
+        'total the build worked out - a [[checksum]] - so a loader that '
+        'arrived incomplete stops with a message instead of running half '
+        'of itself. Then the jump into it, handing over the drive, the '
+        "disk's shape and the stopwatch's starting value in registers.",
     'int 13h reset':
         'Step the head back to track zero before trusting the drive. '
         'The one disk call here that moves no data.',
@@ -1478,61 +1591,92 @@ NOTES = {
         'what one moving six does. The firmware reporting success is '
         'what says the whole request completed - the count it hands '
         'back alongside is not reliable, and believing it costs several '
-        'times the traffic.',
+        'times the traffic. Once the loading screen is up, its spinning '
+        'logo keeps turning DURING these rows: the timer [[interrupt]] '
+        'draws a frame while the firmware is parked waiting for the '
+        'disk, in time the processor would otherwise spend doing '
+        'nothing.',
     'stage 2: loader code':
-        "The loader's own work between disk calls: a plain text screen "
-        'while the sectors land, the [[floppy settings table]] again, '
-        'and then how far one disk call may run. On an 8086 or 8088 it '
-        'widens that from a [[track]] to a whole [[cylinder]] - the '
-        '[[controller]] will carry a read onto the second [[head]] by '
-        'itself - which halves the number of calls the rest of the load '
-        'takes. Once the last sector is in, the whole transfer is checked '
-        'against a value planted in the middle of the file, and re-read '
-        'more cautiously if it fails - BEFORE a byte of it is unpacked, '
-        'because the unpacker trusts what it is given.',
+        "The loader's setup: a plain text screen while the sectors "
+        'land, the [[floppy settings table]] again, and then how far one '
+        'disk call may run. On an 8086 or 8088 it widens that from a '
+        '[[track]] to a whole [[cylinder]] - the [[controller]] will '
+        'carry a read onto the second [[head]] by itself - which halves '
+        'the number of calls the rest of the load takes.',
+    'stage 2: read loop':
+        'Between two reads: move the destination on past the sectors '
+        'that just landed and work out how far the next run may go - to '
+        'the end of the [[cylinder]], to the next [[64 KB boundary]], or '
+        'to the end of the file, whichever comes first.',
+    'stage 2: canary':
+        'The last sector is in. The stopwatch\'s starting value is '
+        'written where the [[kernel]] will look for it, and the loader '
+        'records where it is, so the kernel can still reach the loading '
+        'screen. Then the transfer is CHECKED: a word planted in the '
+        'middle of the file is compared with what landed there, because '
+        'a read that crossed to the other side of the disk wrongly would '
+        'have put a different word in its place - and if it differs the '
+        'whole operating system is read again, a track at a time. All of '
+        'this happens BEFORE a byte is unpacked, because the unpacker '
+        'trusts what it is given.',
     'stage 2: expand':
         'The packed body is turned back into the operating system it '
         'stands for, [[in place]]: block by block, each written from '
         'the end of the plain head upward while its [[compressed]] bytes '
-        'sit on the shelf above. About forty clock cycles a byte, which '
+        'sit on the shelf above. A few dozen clock cycles a byte, which '
         'is far less than the floppy costs per byte, so the boot is '
         'quicker for it. Nothing checks the stream as it goes - what it '
         'produces IS the operating system, and the one failure that '
         'actually happens, a disk read returning the wrong side of the '
         'track, was caught a moment ago.',
     'stage 2: loop':
-        "The handover. The stopwatch's starting value is written where "
-        'the [[kernel]] will look for it; the loader records where it '
-        'has ended up, so the kernel can still reach the loading screen; '
-        'and the timer [[interrupt]] is handed back.',
+        'The handover. The timer [[interrupt]] is given back to the '
+        "firmware - the loading screen's animation has been riding it, "
+        'and the kernel is about to take it for itself - and the loader '
+        'jumps into the [[kernel]], which loads its own segments and '
+        'moves the [[stack]] into an area of its own before calling '
+        'anything.',
     'splash tick':
         'One notch of the loading bar. THE FIRST ONE IS THE EXPENSIVE '
         'ONE - it switches the display into graphics, draws the frame, '
-        'the trough and the caption. The rest redraw a few pixels of '
-        'fill and four digits. Both are drawn as pixels rather than '
-        'asked of the [[BIOS screen call]], which charges about 40 '
+        'the trough, the welcome caption and the line saying what is '
+        'loading, and takes the timer [[interrupt]] so that the spinning '
+        '"8088" in the middle turns on the clock rather than in jumps '
+        'whenever a read happens to finish. The rest redraw a few pixels '
+        'of fill and the percentage. All of it is drawn as pixels rather '
+        'than asked of the [[BIOS screen call]], which charges about 40 '
         'milliseconds a character on this machine. The bar counts the '
         "packed body's sectors: the plain head that came first is not "
         'on it.',
     'dsk_boot_from_x':
         'Which disk did we come off? On a floppy this stores a single '
-        'byte.',
+        'byte; on a hard disk it is what lets the kernel read its '
+        'settings off the partition it started from.',
+    'far [10]':
+        'Is the operating system also in a ROM? The kernel can be built '
+        'into chips for the empty sockets on the main board, and a ROM '
+        'there that carries THIS kernel\'s second block of code is '
+        'adopted: that code then runs out of the ROM and its copy in '
+        'memory is handed to the [[memory pool]]. This machine has no '
+        'such ROM, so it costs two compares.',
     'cpu_detect':
         'Work out which processor this is. It happens here because this '
         "is the last moment at which none of the [[kernel]]'s own "
         '[[interrupt]] handlers are installed yet.',
     'xm_sniff':
-        'One firmware call: is there any memory above the first '
-        'megabyte? An exact answer rather than a guess, and asking it '
-        'this way needs none of the hardware gymnastics that reaching '
-        'such memory does.',
+        'Identify the processor first, then one firmware call: is there '
+        'any memory above the first megabyte? An exact answer rather '
+        'than a guess, and asking it this way needs none of the hardware '
+        'gymnastics that reaching such memory does. On an 8088 it stops '
+        'at the processor - that chip cannot address anything up there.',
     'dsk_dpt_init_x':
         "The [[floppy settings table]] becomes the [[kernel]]'s, at the "
         'same address and for the same reason the loader took it.',
     'sched_init':
         '[[task switching|Task switching]] is live from here: the '
         'kernel takes the timer [[interrupt]] and clears its table of '
-        'tasks.',
+        "tasks. The loading screen's animation rides the kernel's own "
+        'timer routine from now on.',
     'sch_idle_start':
         'The task that runs when nothing else wants to. It does nothing '
         'until the desktop starts sleeping between events - which is '
@@ -1559,17 +1703,23 @@ NOTES = {
         'one as well. It claims nothing and draws nothing, so the '
         'second monitor comes up scanning and black.',
     'mem_init_x':
-        "The [[memory pool]]. The loader is sitting on the pool's "
-        'floor, so the pool starts just above it - which is why the '
-        'loader was read to that address in the first place. When its '
-        'space is given back it rejoins one long free run, instead of '
-        'leaving a hole with everything else stranded above it.',
+        'The [[memory pool]]: everything from the end of the operating '
+        'system to the top of memory. The loader is still running at '
+        "the pool's bottom - a little above the very floor, clear of "
+        'the last read - so for now the pool starts above it. That is '
+        'why the loader was put there: when its space is given back it '
+        'rejoins one long free run, instead of leaving a hole with '
+        'everything else stranded above it.',
     'mod_init_x':
         'Point every optional-module slot at a safe stub. Nothing '
         'clears this memory, so until this runs those slots hold '
         'whatever happened to be there - and they are jump targets.',
     'font_init':
-        "The typeface, into the kernel's own storage.",
+        'Find the 8-by-8 letterforms. They are read straight out of the '
+        "machine's own ROM, where the firmware keeps them - after timing "
+        'the two copies a ROM may hold and picking the quicker. Only if '
+        'reading the ROM turns out much slower than memory are they '
+        'copied into a 1 KB block of the [[memory pool]].',
     'ovl_font_init':
         'The typeface this build carries, read out of the '
         '[[overlay|start-up code]] - so it needs nothing from the '
@@ -1603,7 +1753,9 @@ NOTES = {
         'introduce itself. THE LONGEST STRETCH OF THE BOOT THAT IS NOT '
         'THE DISK: about 0.6 s with a mouse on the other end and about '
         'twice that without one. It charges the bar a notch per '
-        '[[tick]] rather than sitting still.',
+        '[[tick]] rather than sitting still - but the spinning logo '
+        'holds still for the whole wait, because drawing one of its '
+        'frames takes long enough to miss letters the mouse is sending.',
     'ovl_spl_msg_fdd':
         '...and the caption for the second wait: asking each floppy '
         'drive whether it is there at all.',
@@ -1637,40 +1789,58 @@ NOTES = {
         'been running the last dozen steps. So this is the call that '
         'destroys it, and that is exactly why THIS routine lives '
         'somewhere else: a routine cannot be the one that overwrites '
-        'itself. Nothing loaded here can stop the boot.',
+        'itself. The mount also takes a 32 KB block of the pool for '
+        'reading directories ahead, which the pool may take back '
+        'whenever it is short. On a machine with memory above the first '
+        'megabyte, that memory is set up here too, before any '
+        '[[driver]], so a driver can be loaded up there. Nothing loaded '
+        'here can stop the boot.',
+    'vmm_boot_x':
+        'Attach the absolute pointer of a virtual machine, if the '
+        'settings file asked for it.',
+    'desk_rowcalc_x':
+        'Put every drive, and every shortcut the settings file brought '
+        "back, into its cell on the desktop's grid in one pass - "
+        'dropping any cell this screen does not have, because the file '
+        'may have come from a bigger one.',
     'hb_probe_x':
         'Is there a hibernation to resume? A look for the pointer file '
         'in the root of the one volume a hibernate writes to - after the '
         'mount, so a hard disk is there to be looked at, and before the '
         'first frame, because the answer is a question the desktop puts '
         'up. A floppy-only machine pays eight compares and no disk work.',
-    'xm_boot_x':
-        'Set up the memory above the first megabyte, if any was found. '
-        'A failure is silent by design.',
     'thm_set':
         'Resolve the colour scheme from the setting, once, before '
         'anything is drawn.',
     'spl_finish':
-        'The bar to 100% and the screen handed back. The desktop below '
-        'covers every pixel of it, so the loading screen needs no '
-        'erasing.',
+        'The bar to 100% and the screen handed back, and the animation '
+        'stops. The desktop drawn shortly covers every pixel of it, so '
+        'the loading screen needs no erasing.',
+    'as_boot':
+        "AUTOSTART: open every shortcut in the boot disk's AUTOSTRT "
+        'folder, exactly as a double-click would. It runs only now, '
+        'after the loading screen has stopped, because a program it '
+        "starts must not race the screen's last frames - and it runs "
+        'from the loader, so it costs no permanent memory. Holding '
+        'either Shift key skips it. Every system disk ships the folder '
+        'empty, so here the whole cost is one directory [[sector]].',
     'mem_unblob_x':
         "...AND THE LOADER'S SPACE GOES BACK. There is nothing to free: "
-        "the loader is at the [[memory pool]]'s floor, so putting the "
-        'floor back where it started and closing up turns the release '
-        'into part of the one long free run rather than a hole.',
-    'gfx_lock':
-        'Take the drawing lock, so what follows is one frame and not a '
-        'race with the timer.',
-    'wm_paint_all':
+        "the [[memory pool]]'s floor simply drops back to where it "
+        'really starts - under the loader and the small clearance below '
+        'it, and on a machine with no colour graphics card under the '
+        'unused graphics scratch too. Then the pool is packed: every '
+        '[[claim]] that may be moved is slid down onto the space just '
+        'returned, so it all becomes one long free run rather than a '
+        'hole. That copy is most of what this step costs.',
+    'ui_lcall':
         'THE FIRST DESKTOP FRAME - the background pattern, the menu '
-        'bar, the disk icons, the dock. From here on nothing redraws '
+        'bar, the disk icons, the dock - drawn with the drawing lock '
+        'held, so it is one frame and not a race with the timer. The '
+        "boot's stopwatch stops when it is finished - not after the "
+        'pointer, which is not the desktop. From here on nothing redraws '
         'more of the screen than it changed; on a machine this slow a '
         'full repaint is visible as a sweep.',
-    'gfx_unlock':
-        "The frame is on the glass, and the boot's stopwatch stops HERE "
-        '- not after the pointer. The question is when the first '
-        'desktop frame is finished, and the pointer is not the desktop.',
     'cursor_show':
         "The arrow. From here the mouse's own [[interrupt]] handler "
         'draws it, which is why it keeps moving smoothly however busy '
@@ -1691,15 +1861,20 @@ TITLES = {
     "post": "Firmware start-up, and the first sector",
     "relocate": "Move the boot sector to the top of memory",
     "stage 1: sector code": "Take over the floppy settings table",
+    "stage 1: read loop": "Boot sector: find the next sectors",
+    "stage 1: checksum + jump": "Check the loader, and jump into it",
     "int 13h reset": "Disk: step the head back to track zero",
     "int 13h read": "Disk read",
-    "stage 2: loader code": "Loader housekeeping",
+    "stage 2: loader code": "Loader set-up",
+    "stage 2: read loop": "Loader: find the next run",
+    "stage 2: canary": "Check the transfer",
     "stage 2: expand": "Unpack the operating system, in place",
     "stage 2: loop": "Hand over",
     "splash tick": "Advance the loading bar",
     "dsk_boot_from_x": "Which disk did we start from?",
+    "far [10]": "Is the operating system in a ROM?",
     "cpu_detect": "Identify the processor",
-    "xm_sniff": "Is there memory above the first megabyte?",
+    "xm_sniff": "The processor, and memory above the first megabyte",
     "dsk_dpt_init_x": "Take over the floppy settings again",
     "sched_init": "Start task switching",
     "sch_idle_start": "Create the idle task",
@@ -1727,14 +1902,14 @@ TITLES = {
     "drv_sniff": "Look for a music chip and a hard disk",
     "snd_init": "Start the sound layer",
     "drv_boot_x": "Mount the floppy, and load what it asks for",
+    "vmm_boot_x": "Attach a virtual machine's pointer",
+    "desk_rowcalc_x": "Place the drives and shortcuts",
     "hb_probe_x": "Is there a hibernation to resume?",
-    "xm_boot_x": "Set up the memory above the first megabyte",
     "thm_set": "Resolve the colour scheme",
     "spl_finish": "Finish the loading screen",
+    "as_boot": "Autostart",
     "mem_unblob_x": "Give the loader's space back",
-    "gfx_lock": "Take the drawing lock",
-    "wm_paint_all": "Draw the desktop",
-    "gfx_unlock": "Release the drawing lock",
+    "ui_lcall": "Draw the desktop",
     "cursor_show": "Show the pointer",
     "drv_notice_x": "Report anything that did not load",
 }
@@ -1812,8 +1987,21 @@ def build_page(walkdata, lad, cons, vol, defines, strs, notes=NOTES,
     # caption still on the glass - `spl_finish` fills the bar and nothing
     # rewrites the caption until the desktop paints over it.
     MSG = {"splash": "kern", "kernel": "kern", "kmain": "kern", "heap": "kern",
-           "ui": "kern", "mouse": "mouse", "desk": "fdd", "drvboot": "boot",
-           "unblob": "boot", "paint": "boot"}
+           "ui": "kern", "mouse": "mouse", "desk": "fdd", "drvboot": "cfg",
+           "autostart": "boot", "unblob": "boot", "paint": "boot"}
+    # Two of the stages' one-line summaries carry a size, which is the
+    # tree's to say and not this file's.
+    # The give-back is READ where the walk has it - the floor before and
+    # after mem_unblob_x - because on a machine with no colour card it is the
+    # graphics scratch's 512 bytes more than the loader and its clearance.
+    back = (cons["BOOT2_SECS"] * vol["bps"]
+            + (lad["blob_seg"] - lad["kend"]) * 16)
+    hb = [e.get("heap", {}).get("base") for e in walkdata["events"]
+          if basename(e["name"]) in ("mem_init_x", "mem_unblob_x")]
+    if len(hb) == 2 and hb[0] and hb[1]:
+        back = (hb[0] - hb[1]) * 16
+    sizes = {"ovlkb": "%.1fKB" % (lad["ovl"] / 1024.0),
+             "blobkb": "%.1fKB" % (back / 1024.0)}
 
     heap, loaded, out, t0, running = None, 0, [], 0.0, None
     for st in stages:
@@ -1869,7 +2057,7 @@ def build_page(walkdata, lad, cons, vol, defines, strs, notes=NOTES,
                 # the free run for the other, rather than a name the map
                 # does not have.
                 if not any(r["id"] == rid for r in regs):
-                    home = {"ovl": lad["fat_seg"], "blob": lad["kend"]}.get(rid)
+                    home = {"ovl": lad["fat_seg"], "blob": lad["blob_seg"]}.get(rid)
                     rid = region_at(regs, home) if home else None
                 mem.append(rid)
             elif e["kind"] == "rom":
@@ -1996,7 +2184,7 @@ def build_page(walkdata, lad, cons, vol, defines, strs, notes=NOTES,
             "start_regions": start_regs,
             "zooms": zooms(regs, ram),
             "id": st["id"], "short": st.get("short", st["id"]),
-            "title": st["title"], "moved": st["moved"],
+            "title": st["title"], "moved": st["moved"].format(**sizes),
             "ms": ms, "t0": t0, "regions": regs, "steps": steps,
             "bar": None if bar is None else {
                 "done": bar["done"], "total": bar["total"],
@@ -2041,12 +2229,12 @@ def build_page(walkdata, lad, cons, vol, defines, strs, notes=NOTES,
         # The magnified strip's span: the top of the loader's blob, rounded up
         # to a whole 4KB so the frame is a round number and does not move when
         # the kernel changes size by a rung.
-        "zoom": ((lad["kend"] * 16 + cons["BOOT2_SECS"] * vol["bps"]
+        "zoom": ((lad["blob_seg"] * 16 + cons["BOOT2_SECS"] * vol["bps"]
                   + 4095) // 4096) * 4096,
         "cons": cons, "vol": vol, "strings": strs,
         "ladder": {k: lad[k] for k in
-                   ("kseg", "cold_seg", "fat_seg", "low_seg", "vgabuf_seg",
-                    "kend", "text", "bss", "cold", "lowbss", "vgabuf", "ovl",
+                   ("kseg", "cold_ram", "fat_seg", "low_seg", "vgabuf_seg",
+                    "kend", "blob_seg", "text", "bss", "cold", "lowbss", "vgabuf", "ovl",
                     "boot2", "ksize", "minramkb")},
         "ksecs": ksecs,
         "stages": out,
@@ -3419,7 +3607,7 @@ def render(p, fragment=False):
    <p class="lede">What an IBM PC does between the power switch and a usable
     desktop \u2014 %(nst)d <b>discrete moves of memory</b>, on a 4.77&nbsp;MHz
     8088 reading a 360&nbsp;KB floppy, with the operating system stored
-    packed on the disk and unpacked in place as it arrives.
+    packed on the disk and unpacked in place once it has all arrived.
     <span class="kbd">&larr;</span><span class="kbd">&rarr;</span> walk it a
     step at a time, end to end;
     <span class="kbd">&uarr;</span><span class="kbd">&darr;</span> move a whole
@@ -3509,8 +3697,8 @@ def render(p, fragment=False):
             "The operating system is one file of %s bytes \u2014 %d sectors, "
             "fetched in %d passes of the drive; the first %d of those sectors "
             "are the loader and the loading screen. It settles into %s bytes "
-            "of memory, and %s of that is start-up code sitting in space that "
-            "is about to be reused for something else. Switch-on to desktop: "
+            "of memory, and %s bytes of start-up code ride along in space "
+            "that is about to be reused for something else. Switch-on to desktop: "
             "%.1f seconds, of which %.1f is the firmware's own self-test "
             "before any of this begins."
             % ("{:,}".format(vol["kernel"]["size"]),
@@ -3558,10 +3746,10 @@ def selfcheck(image, defines, build="build"):
     try_("constants scraped from source",
          lambda: "%d found" % len(constants(build)))
     try_("the ladder, out of tools/kernsize.py",
-         lambda: "KERNEL %04X  COLD %04X  FAT %04X  LOW %04X  VGABUF %04X  "
-                 "HEAP %04X" % tuple(ladder(build, defines)[k] for k in
-                                     ("kseg", "cold_seg", "fat_seg", "low_seg",
-                                      "vgabuf_seg", "kend")))
+         lambda: "KERNEL %04X  FAT %04X  LOW %04X  COLD %04X  VGABUF %04X  "
+                 "HEAP %04X  BLOB %04X" % tuple(ladder(build, defines)[k] for k in
+                                     ("kseg", "fat_seg", "low_seg", "cold_ram",
+                                      "vgabuf_seg", "kend", "blob_seg")))
     try_("the image's BPB and KERNEL.SYS",
          lambda: "%d sectors at LBA %d, %d SPT x %d heads"
                  % (volume(image)["kernel"]["sectors"],
@@ -3598,6 +3786,7 @@ def selfcheck(image, defines, build="build"):
     def phases_have_notes():
         import os88boot
         live = [n for _, n, _ in os88boot.collapse(os88boot.callsites(defines, build))]
+        live += LOADER_PHASES
         gap = [n for n in live if n not in NOTES]
         if gap:
             raise SystemExit("os88ladder: no note written for: %s"
@@ -3608,6 +3797,7 @@ def selfcheck(image, defines, build="build"):
     def titled():
         import os88boot
         live = [n for _, n, _ in os88boot.collapse(os88boot.callsites(defines, build))]
+        live += LOADER_PHASES
         gap = [n for n in live if n not in TITLES]
         if gap:
             raise SystemExit("os88ladder: no plain-words title for: %s"
@@ -3846,8 +4036,8 @@ def main(argv):
                     "os88ladder: the IBM 5150 ROM is not in tools/martypc/"
                     "roms/, so this measures the GLaBIOS twin. The page will "
                     "say so.\n")
-        sys.stderr.write("os88ladder: booting %s on %s - this is minutes, "
-                         "not seconds\n" % (os.path.basename(image), machine))
+        sys.stderr.write("os88ladder: booting %s on %s - this takes a "
+                         "minute or so\n" % (os.path.basename(image), machine))
         t0 = time.time()
         w = walk(image, machine, defines, lad, cons, build=build)
         sys.stderr.write("os88ladder: walked %d phases in %.0f s of host time\n"

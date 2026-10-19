@@ -60,10 +60,7 @@
                                     ; six bytes of bss and a body. Add it here,
                                     ; not beside the include.
 
-%define CC_PKG_NAME 'WEAVE'         ; <= 15 chars, and the stem of WEAVE.OVL:
-                                    ; crt0.asm builds the module's file name
-                                    ; out of this and '.OVL', so the disk and
-                                    ; the loader cannot disagree about it
+%define CC_PKG_NAME 'WEAVE'         ; <= 15 chars: the name in the header
 
 %define CC_HAS_ONKEY                ; void os88_onkey(int, int, void *)
 %define CC_HAS_ONCLICK              ; void os88_onclick(int, int, void *)
@@ -87,8 +84,24 @@
 %define CC_HAS_ABOUT                ; void os88_about(void *)
 %define CC_HAS_FDLG                 ; void os88_onfile(...) - File > Open, the
                                     ; second of WEAVE-SPEC 1.5's ways in
-%define CC_HAS_OVL                  ; ...and WEAVE.OVL (SPEC.md 73.14), whose
-                                    ; tenants are in apps/weave/wovl.c
+%define CC_HAS_OVL                  ; ...and an overlay (SPEC.md 73.14), whose
+                                    ; tenants are in apps/weave/wovl.c...
+%define CC_OVL_PART                 ; ...carried as a PART of WEAVE.O88 and
+%define CC_OVL_LAZY                 ; fetched on the first call into it
+                                    ; (SPEC.md 73.14.2). LAZY, because the
+                                    ; overlay's tenants are once-per-OPEN
+                                    ; (WEAVE-SPEC 1.2.1) and the canvas core
+                                    ; below is a lazy row too: a lazy row must
+                                    ; follow every eager one and CC_OVL_ROW must
+                                    ; be the last, so an eager overlay would
+                                    ; drag the canvas core into the carve and
+                                    ; charge its 5KB to every FORM and SHEET.
+                                    ; With both lazy the table has NO carve and
+                                    ; none of the carve's code (SPEC.md
+                                    ; 20.12.9.3); WEAVE-SPEC 1.2.5 measures it
+%define OP_NO_LAZYOK                ; ...and nothing here asks "would it fit"
+                                    ; before a fetch (SPEC.md 20.12.9.2): the
+                                    ; canvas's own 10.1 arithmetic asks first
 %define CC_HAS_WORKER               ; void os88_worker(void *) - WEAVE-SPEC
 
 %define CC_STACK_CLASS OS88_STACK_192 ; ...AND HOW MUCH STACK IT WANTS
@@ -118,8 +131,8 @@
                                     ; It also arms cc_iswk: without
                                     ; CC_HAS_WORKER, cc_wksp is never set and
                                     ; every task reads as the UI task - which
-                                    ; would let the WORKER load WEAVE.OVL, and
-                                    ; SPEC.md 20.6 rule 7 is why it may not
+                                    ; would let the WORKER fetch the overlay,
+                                    ; and SPEC.md 20.6 rule 7 is why it may not
 
 %define CC_ICON  "weave/icon.inc"   ; 32 dw rows exactly: 16 mask, 16 data
 %define CC_ASSOC "weave/wvassoc.inc" ; 'WAB' - so a bundle opens on the FIRST
@@ -130,6 +143,27 @@
                                     ; icon and association blocks, the entry
                                     ; and callback trampolines, the overlay
                                     ; runtime and the whole API bridge
+
+; --- THE PARTS TABLE (SPEC.md 20.12, WEAVE-SPEC 1.2.5) ----------------------
+; Two rows, BOTH lazy, and both the code this runtime used to read off two
+; files beside it:
+;
+;   0  the CANVAS CORE (WEAVE-SPEC 1.2.2) - apps/weave/wcanvas.asm, which was
+;      WEAVE.WSM. Fetched by the canvas load path and ONLY for a bundle whose
+;      header sets WABF_CANVAS, from the folder WEAVE.O88 was launched from
+;      (w_partfetch, apps/weave/wfetch.inc), and held until the instance
+;      closes. OP_SEG: it is code, far-called from the worker and the UI task
+;   1  the overlay, last, because CC_PACKAGE appends it last (73.14.2)
+;
+; OP_COMP on both: LZ4 takes the core 5,087 -> ~3.5KB and the overlay
+; 15.4KB -> ~8.9KB, sectors each, and a lazy compressed row is expanded onto
+; its own claim's base (SPEC.md 20.12.7.4). W_WSMPART in weave.h names row 0,
+; and the %if at the end of this file holds the two together.
+    CC_PARTS_BEGIN 2
+      %assign W_WSMPART_ASM OS88_PART_N
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP   ; 0 the canvas core
+      CC_OVL_ROW                            ; 1 the overlay
+    CC_PARTS_END
 
 %include "weave.gen.asm"            ; the compiled C, found through -I build/
 
@@ -166,6 +200,7 @@
 ; so. apps/browser/browser.asm is the worked example of this exact pair.
 %define OS88UI_NOBFIND          ; hit-tests its own rects: no os88ui_bfind (SPEC.md 20.5.1.3.4)
 %include "os88ui.inc"
+%define OS88LINE_NOEDIT         ; nothing here calls os88line_edit (SPEC.md 83.1.2)
 %include "os88line.inc"
 
 ; --- the hand-written cores (SPEC.md 73.11: the inner loop is assembly) ------
@@ -197,11 +232,13 @@
                                     ; separate `nasm -f bin` job can be
                                     ; trusted to agree with this one about
                                     ; anything at all
-%include "weave/wcv.inc"            ; ...and the three-routine seam to it. The
-                                    ; module is NOT in this image: it is read
-                                    ; once at open, into a claim of its own,
+%include "weave/wcv.inc"            ; ...and the seam to it. The module is NOT
+                                    ; in this image: it is part 0, fetched
+                                    ; once at open into a claim of its own,
                                     ; and only when the bundle declares a
                                     ; <canvas>
+%include "weave/wfetch.inc"         ; ...through this: a lazy part fetched from
+                                    ; HOME, LOOM's preview module's door too
 
 ; --- THE DRIFT GUARDS, and they are %if and not a comment --------------------
 ; weave.h carries a C copy of two of wvm.inc's own numbers, because a C file
@@ -245,6 +282,9 @@
 %endif
 %if WSS_OVF != 22 || WSM_MAXSPR != 16
   %error "wsmabi.inc's state block moved; weave.h's WSS_* must follow"
+%endif
+%if W_WSMPART_ASM != 0 || cc_ovidx != 1
+  %error "the parts table moved; weave.h's W_WSMPART must follow"
 %endif
 
     CC_IMAGE_END                    ; cc_bss_end, cc_modc_end and cc_image_end

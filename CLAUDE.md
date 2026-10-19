@@ -40,6 +40,8 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 | **[PERFORMANCE.md](PERFORMANCE.md)** | anything that draws, lays out or loops — but the load-bearing ~200 lines are condensed below, and over half the file is a field-measurement log. Open it for the reasons listed at the end of that section, not by default |
 | **[docs/TESTING.md](docs/TESTING.md)** | concluding something is untestable — it is the matrix of what each emulator can and cannot do, with a recipe per capability |
 | **[docs/KERNEL-MEMORY.md](docs/KERNEL-MEMORY.md)** | spending any memory |
+| **[docs/plans/ROM-PLAN.md](docs/plans/ROM-PLAN.md)** | putting part of the system in ROM (§2.10) — what a 5150's five spare sockets hold, why a ROM is cut against ONE kernel, and what `make rom` builds |
+| **[docs/plans/HMA-PLAN.md](docs/plans/HMA-PLAN.md)** | anything above 1MB on a 286 or better (§2.10.7, §2.10.8) — `.cold` run from the HMA, and the drivers loaded into what it leaves |
 | **[docs/HERCULES-TESTING.md](docs/HERCULES-TESTING.md)** | testing on Hercules — it *is* automatable, and all three ways of getting it wrong give you a black image rather than an error |
 | **[docs/C-TOOLCHAIN.md](docs/C-TOOLCHAIN.md)** | writing or building a package in C (§73) — how to install the compiler, the four C rules and what each refusal means, and what the language does not have here |
 | **[docs/plans/completed/NET-STACK-PLAN.md](docs/plans/completed/NET-STACK-PLAN.md)** | anything on the wire (§72) — the stack's stages, what each layer refuses, and why TLS is not on this machine |
@@ -159,8 +161,9 @@ implementation; run their deduplicated union once after the last batch.
 
 ## Commands
 
-Needs `nasm`, `qemu-system-i386`, `python3` — plus `pkg-config` and
-`libudev-dev` on Linux. **`make deps` installs the set** and is the one
+Needs `nasm`, `qemu-system-i386`, `python3` **3.11 or newer** (`tools/`
+imports `tomllib`, so Apple's `/usr/bin/python3` 3.9 fails every `make`) —
+plus `pkg-config` and `libudev-dev` on Linux. **`make deps` installs the set** and is the one
 command to type on a box you have not built on; it is ~0.2 s when they are
 already there, so it is cheap to type rather than wonder. It PROBES rather
 than transcribing a recipe: every distro-specific cure is a fallback behind a
@@ -310,20 +313,20 @@ make apple2disk #   an Apple II Plus — a 6502 in a 48K claim, the II+'s video
 make weave      # WEAVE (WEAVE-SPEC §1.2), the family's runtime: web-style
 make weavedisk  #   apps - markup, script and formulas - compiled at pack time
                 #   into one `.WAB` bundle and interpreted natively. `make
-                #   weavedisk` builds the family's floppy in all three
-                #   geometries: the runtime, `WEAVE.OVL`, `WEAVE.WSM`
-                #   (WEAVE-SPEC §1.2.2's canvas core), the three demo
-                #   bundles, LOOM and its `LOOM.WPV` (WEAVE-SPEC §1.2.4), the
-                #   demo sources and a `CATALOG.TXT` per geometry. TWO
-                #   FOLDERS — `WEAVE/` is the runtime and the compiled
-                #   bundles, `LOOM/` the IDE and the sources — and each is
-                #   WHOLE, because SPEC.md §73.14 resolves an overlay in the
-                #   LAUNCHED-FROM directory: a bundle opens only beside
-                #   WEAVE's three files, a source only beside LOOM's, so
-                #   `LOOM/` carries a second copy of the runtime for the
-                #   bundles Pack writes there (WEAVE-SPEC §11.2 has the
-                #   photographs of the folder-per-project layout refusing by
-                #   either route). `BUNDLES='path/MYAPP.WAB'`
+                #   weavedisk` builds the family's floppy in all four
+                #   geometries: the runtime (its overlay and its canvas
+                #   core, WEAVE-SPEC §1.2.2, are PARTS of WEAVE.O88), the
+                #   three demo bundles, LOOM (its overlay and its preview
+                #   module, WEAVE-SPEC §1.2.4, parts of LOOM.O88), the demo
+                #   sources and a `CATALOG.TXT` per geometry. TWO FOLDERS —
+                #   `WEAVE/` is the runtime and the compiled bundles,
+                #   `LOOM/` the IDE and the sources — ONE PROGRAM EACH:
+                #   every part is fetched from the folder its package was
+                #   LAUNCHED from, and a bundle Pack writes into `LOOM/`
+                #   finds WEAVE.O88 in `WEAVE/` through ASSOC.DAT, so the
+                #   second copy of the runtime `LOOM/` used to carry is gone
+                #   (WEAVE-SPEC §1.2.5 and WEAVE-SPEC §11.2).
+                #   `BUNDLES='path/MYAPP.WAB'`
                 #   adds your own to `WEAVE/`, the way `CPMSW=` and `STORIES=`
                 #   do — and the geometry still has to hold them, which is
                 #   what the recipe's cluster arithmetic refuses on
@@ -331,16 +334,15 @@ make loom       # LOOM (WEAVE-SPEC §1.2), the family's second package: the
 make loomdisk   #   in-OS IDE that edits a project's sources and packs the
                 #   `.WAB` ON THE MACHINE, byte-identical to what
                 #   `tools/weavesim.py --pack` writes on the host. That
-                #   identity IS the gate (WEAVE-SPEC §11.1): `make` runs the
-                #   host half of it every time (the `lmpack` row, four
-                #   seconds), and `python3 tools/os88test.py soak -k
+                #   identity IS the gate (WEAVE-SPEC §11.1): the host half
+                #   is `soak -k 'lmpack'` (six seconds; it was a fast row
+                #   until the family stopped charging every build for two
+                #   packages) and `python3 tools/os88test.py soak -k
                 #   'weave*'` runs the machine's. `make loomdisk` puts both
-                #   packages, both overlays, WEAVE.WSM, LOOM.WPV, the demo
-                #   bundles and the demo SOURCES on one floppy in all three
-                #   geometries, in the same two folders as `make weavedisk`,
-                #   which is the same shape plus `CATALOG.TXT`: a WHOLE
-                #   program per folder is a correctness requirement on both
-                #   (WEAVE-SPEC §11.2), not a layout choice
+                #   packages (each one file, its modules inside it), the
+                #   demo bundles and the demo SOURCES on one floppy in all
+                #   four geometries, in the same two folders as `make
+                #   weavedisk`, which is the same shape plus `CATALOG.TXT`
 make viddemo    # the VIDEO PLAYER (§98, apps/video/): VIDEO.O88 ships on
 make vencbundle #   every apps disk and plays `.V88` files, made on the host
                 #   by tools/os88venc.py or by the encoder's own window,
@@ -390,6 +392,13 @@ make thewiretest # THE WIRE'S GATE DISKS (§92.12): ethertest's shape plus one
                 #   a SCRATCH image of its own because Add to Disk WRITES.
                 #   `make thewiretest && python3 tests/thewire.py`. QEMU by
                 #   name, for tests/ethernet.py's reason: MartyPC has no NIC
+make autostarttest # THE AUTOSTART GATE'S DISKS (SPEC.md 26.10): a 360KB system
+              #   disk whose \AUTOSTRT holds a link to the Task Manager, one
+              #   with a wrong version and a file that is not a link, plus a
+              #   B: of its own with the Calculator and room, because the
+              #   Alt-drop leg WRITES a link there and the shipped apps disk
+              #   is a cluster from full. `make autostarttest && python3
+              #   tests/autostart.py`
 make ethertest  # THE ETHERNET GATE'S DISK (§72.9): a SYSTEM.CFG that already
                 #   asks for ETHER.DRV, so the card is up and DHCP has run
                 #   before the first paint and the test reads state instead of
@@ -474,6 +483,28 @@ make emu      # THE THIRD KERNEL (§9.11.7): kern_emu, into build/emuk/, plus
               #   the one feature it was built for has been given nothing.
               #   Pair it with the SHIPPED build/apps.img: same API table, same
               #   offsets, so there is no emu apps disk and must not be
+make rom      # THE KERNEL IN ROM (SPEC.md 2.10, docs/plans/ROM-PLAN.md): an
+make socketrom#   IBM 5150's five spare sockets, U28-U32 at F4000-FDFFF, as
+              #   ONE option ROM, written into build/rom/ as the 40KB window
+              #   and one 8KB file per socket. ON DEMAND and never in `all`:
+              #   a ROM is cut per release, not per build. `rom` is both
+              #   kernels' (`rom-big`, `rom-small`), because a ROM is cut
+              #   against ONE kernel and refuses every other - it checks
+              #   `.cold` byte for byte and a hash over `.text` before it
+              #   touches anything. Every shipped disk FINDS its ROM at boot
+              #   and boots the same without one; with one, `.cold` runs from
+              #   F400 and the heap floor falls by the cold rung `kernsize`
+              #   prints - 37.0KB on kern_big and 21.5KB on kern_small at
+              #   this writing - and kern_small's ROM also carries the
+              #   Standard File dialog, Cut/Copy/Paste, the Control Panel and
+              #   the formatter, so none of them needs the system disk in a
+              #   drive (SPEC.md 2.10.5). Build it from the tree whose disks
+              #   it will meet: a ROM from yesterday's tree is a ROM for
+              #   yesterday's disks.
+              #   `socketrom` has no os8088 in it at all - a pattern and an
+              #   init that print `U28 ok ... U32 ok` at POST: flash it first
+              #   on any new board or wiring. tests/romsock.py, romsmall.py
+              #   and rombig.py are the gates
 make allapps  # THE EVERYTHING SET (§19.10): build/apps-all-1.img, -2.img, ...
               #   (and apps-all-120-N.img at 1.2MB), every app on as many
               #   floppies as it takes - tools/os88allapps.py adds a disk when
@@ -835,6 +866,11 @@ whose `LESSONS.md` is what MIDIRack's (SPEC.md §105.9.4, §105.9.5) learned.
   cone is 155 symbols in 7 files, so a module inside it must be gated rather
   than moved. There is no entry cap (§2.8.1): a module's slot block is its
   own entry count.
+  **"Freed when it is done" is GATED**: `tests/unit/t_moddrop.py` (fast)
+  fails `make` for a `mod_tab` row nothing drops, unless
+  `tests/moddrop.txt` says why it is held until restart - `DESK.DRV` held
+  5KB pinned after the last Sticky App closed, until SPEC.md 11.103.10's
+  drop rule. A new module needs its drop on the day it lands.
 - **An ABI change is a written decision** (§20.2.0.1). `PKG_FMT` and
   `DRV_VER` are locked in `tools/abi.lock.json` to a fingerprint of
   `apps/os88api.inc` and `drivers/os88drv.inc`, and `make` fails when the SDK
@@ -872,7 +908,8 @@ whose `LESSONS.md` is what MIDIRack's (SPEC.md §105.9.4, §105.9.5) learned.
   the worker may not take one. `apps/ftpd/` (§77) is the worked example.
 - **A C package that does not fit gets a second segment, not a bigger one**
   (§73.14): a function named `ovl_*` has its CODE emitted into a module that
-  ships beside the package (`CWORD.OVL`) and is far-called both ways, while
+  is far-called both ways - shipped as a PART of the package itself with
+  `CC_OVL_PART` (§73.14.2, CWORD's shape), or as a `<NAME>.OVL` beside it - while
   every global, literal and bss byte it names stays resident and DS-relative. Split by
   FREQUENCY — a keystroke's path stays in, a menu command's can go out — and
   never take the address of an overlay function.
@@ -923,7 +960,9 @@ The rules that fall out:
    into 32 bits per iteration.
 4. **Measure before redesigning; a counter is not a timer.** Put a counter in a
    primitive (`font_char`, `gfx_fill`, `wm_paint_all`) — it costs one rebuild —
-   then multiply by the table above and say that you did.
+   then multiply by the table above and say that you did. A clock is
+   `apps/os88pit.inc`'s `pit_now` (838 ns, an hour before it wraps), never a
+   hand-rolled PIT latch: one misses the tick at the reload.
 5. **Keeping the shape of an optimisation is not keeping the optimisation.**
    `gfx_blit4`'s first version emitted exactly the designed number of calls and
    decoded every pixel by hand inside them: nine times slower, and QEMU priced

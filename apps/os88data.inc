@@ -83,6 +83,13 @@
 ; and on a one-drive machine a Save asks for the system disk. The visit still
 ; ends where the instance stood, on whatever volume that was.
 ;
+; READ-ONLY, by `%define OD_READONLY` before the include (apps size pass 2b):
+; od_write is not assembled, for a package that only ever reads its file
+; back - RLAPPLY reads the REDLINE.CFG that REDLINE writes. It is os88ui.inc's
+; OS88UI_NO* shape: an opt-out that removes the SYMBOL, so a package that sets
+; it and calls od_write does not assemble, and every package that does not
+; set it is byte-identical.
+;
 ; It keeps 30 bytes of state in YOUR IMAGE (the banked pair, the generation,
 ; one OSAPI_FILE_FIND record), so it must be %included where data may sit -
 ; anywhere a package's strings already do. Every label is od_-prefixed.
@@ -284,6 +291,7 @@ od_read:
     mov ax, FERR_NOENT              ; (CF=1 from od_enter)
     ret
 
+%ifndef OD_READONLY
 ; -----------------------------------------------------------------------------
 ; od_write - write the file in SYSTEM\APPDATA, in place when it can be
 ; in:  SI = name, ES:BX = bytes, CX = count (>= 1), DI = this file's state
@@ -327,3 +335,4 @@ od_write:
     mov ax, FERR_NOENT
     pop dx
     ret
+%endif                              ; OD_READONLY

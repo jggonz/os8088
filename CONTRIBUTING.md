@@ -27,8 +27,9 @@ Then tell the agent what you want, and make it read `SPEC.md` first.
 ## 1. Toolchain
 
 Three tools do everything: **nasm** (assembler), **qemu-system-i386**
-(emulator), **python3** (the packaging and test tooling). Plus `git` and
-`make`, which you probably have. There is no linker and no cross-compiler —
+(emulator), **python3** 3.11 or newer (the packaging and test tooling, which
+imports `tomllib` — Apple's `/usr/bin/python3` is 3.9 and fails every
+`make`). Plus `git` and `make`, which you probably have. There is no linker and no cross-compiler —
 NASM emits flat binaries directly.
 
 Optional: **gitleaks** (the pre-commit hook wants it), **gdb** (for
@@ -53,7 +54,8 @@ Xcode Command Line Tools supply `make` and `git` (`xcode-select --install`).
 Both spellings work on Apple Silicon and on Intel, and neither wants Rosetta:
 Homebrew's qemu is a native arm64 binary that *emulates* x86, and 86Box ships
 a universal build. What the script does that the three `brew` lines do not is
-**check the nasm version** (below) and **install the 86Box ROM set**, which is
+**check the nasm and python3 versions** (below; a Homebrew python3 shadowed
+by Apple's 3.9 is reported with where it is) and **install the 86Box ROM set**, which is
 the step that is easiest to miss — 86Box ships with no ROMs at all, so without
 them it launches fine and then every machine in `vm/` fails at the BIOS.
 `tools/setup-macos.sh --dry-run` prints what it would do and changes nothing;
@@ -122,6 +124,10 @@ Arch:
 ```
 sudo pacman -S nasm qemu-system-x86 python make git
 ```
+
+The `python3` has to be **3.11 or newer**, which an older release's archive
+is not (Ubuntu 22.04's is 3.10): install a newer one and put it first in PATH
+as `python3`. `tools/setup-linux.sh --check` says which you have.
 
 gitleaks: your distro may package it (`apt install gitleaks`,
 `pacman -S gitleaks`); otherwise grab a release binary from

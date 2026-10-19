@@ -99,6 +99,12 @@ DRV_OK = {"CTRL.DRV", "FORMAT.DRV", "DISKOPS.DRV", "FILECP.DRV", "FDLG.DRV"}
 # ground; the § is in the reason so a failure sends the reader to the argument
 # and not to this file.
 FORBIDDEN = {
+    # 24.5.1 - the owner's decision, a ground of its own: a program whose JOB
+    # the machine cannot do
+    "STIKNOTE.O88": "no desk layer and no associations on kern_small, so a "
+                    "Sticky Note there is a window showing one note that can "
+                    "neither live on the desk nor open it in Note Pad - Note "
+                    "Pad, worse (SPEC.md 24.5.1, 110.13)",
     # 24.5 - the driver is not in $(SMALLDRIVERS)
     "BROWSER.O88":  "ETHER.DRV is in no small driver set (SPEC.md 24.5, 72)",
     "FTPD.O88":     "ETHER.DRV is in no small driver set (SPEC.md 24.5, 72)",
@@ -128,9 +134,6 @@ FORBIDDEN = {
                     "56,333 bytes (37,720 since the apps size pass, unmeasured) in ONE claim against a 53,760-byte arena, so "
                     "it is `Load failed` before it can refuse in its own words "
                     "(SPEC.md 24.5, 100)",
-    "DRMARCO.VGA":  "DrMarco's front screen, read by nothing else (SPEC.md 100)",
-    "DRMARCO.HRC":  "DrMarco's front screen, read by nothing else (SPEC.md 100)",
-    "DRMARCO.CGA":  "DrMarco's front screen, read by nothing else (SPEC.md 100)",
     # DOTDEL.O88 IS NOT A ROW. It was omitted beside SKIES on a ground that
     # SPEC.md 5.4.2.5.1 withdrew (kern_small has a `gfx_blit1` body now), and
     # SPEC.md 24.5.5 is the measurement that put it back on the floppy. A name

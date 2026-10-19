@@ -150,14 +150,23 @@ tui_layout_for:
     push dx
     push si
     push di
+    push es
     mov [tui_vw], ax
     mov [tui_vh], bx
     mov [tui_layh], bx
-    mov byte [tui_mono], 0
+    push ds
+    pop es                          ; the two copies are string moves (DF = 0)
+    mov si, tui_col_vga
+    xor al, al
     cmp dh, 1
     jne .depth
-    mov byte [tui_mono], 1
+    inc ax                          ; [tui_mono] = 1, and the mono colours
+    mov si, tui_col_mono
 .depth:
+    mov [tui_mono], al
+    mov di, tui_col
+    mov cx, TC_N
+    rep movsb
     mov si, tui_lay_vga
     cmp bx, 400
     jae .lay
@@ -167,26 +176,8 @@ tui_layout_for:
     mov si, tui_lay_cga
 .lay:
     mov di, tui_lay
-    mov cx, TL_SIZE / 2
-.lcopy:
-    mov ax, [si]
-    mov [di], ax
-    add si, 2
-    add di, 2
-    loop .lcopy
-    mov si, tui_col_vga
-    cmp byte [tui_mono], 0
-    je .col
-    mov si, tui_col_mono
-.col:
-    mov di, tui_col
-    mov cx, TC_N
-.ccopy:
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    loop .ccopy
+    mov cl, TL_SIZE / 2             ; (CH = 0: the rep above ran CX out)
+    rep movsw
     ; derived: right edge of the channel block, of a row strip, VU bar width
     mov ax, [tui_lay + TL_CHW]
     shl ax, 1
@@ -211,6 +202,7 @@ tui_layout_for:
 .vok:
     mov [tui_vuw], ax
     mov byte [tui_inited], 1
+    pop es
     pop di
     pop si
     pop dx
@@ -980,15 +972,13 @@ tui_val_bpm:
     mov dx, 36
     mov bx, 24
     mov ax, (TC_FACE << 8) | TC_FACET
-    call tui_rdout
-    mov al, [tui_aspd]
+    call tui_rdout                  ; (preserves every register, and so does
+    mov al, [tui_aspd]              ; tui_dec3: SI, CX and BX still hold)
     call tui_dec3
-    mov si, tui_nbuf
-    mov cx, 168
     mov dx, 50
-    mov bx, 24
     mov ax, (TC_FACE << 8) | TC_FACET
     call tui_rdout
+.bank:
     mov al, [tui_abpm]
     mov [tui_lbpm], al
     mov al, [tui_aspd]
@@ -1004,13 +994,9 @@ tui_val_ptn:
     mov dx, 36
     mov bx, 16
     mov ax, (TC_FACE << 8) | TC_FACET
-    call tui_rdout
-    call tui_hexnp
-    mov si, tui_nbuf
-    mov cx, 258
+    call tui_rdout                  ; (preserves every register, and so does
+    call tui_hexnp                  ; tui_hexnp: SI, CX, BX and AX still hold)
     mov dx, 64
-    mov bx, 16
-    mov ax, (TC_FACE << 8) | TC_FACET
     call tui_rdout
     ret
 
@@ -1068,10 +1054,7 @@ tui_el_bpm:
     mov si, tui_nbuf
     mov cx, 168
     call tui_textc
-    mov al, [tui_abpm]
-    mov [tui_lbpm], al
-    mov al, [tui_aspd]
-    mov [tui_lspd], al
+    jmp tui_val_bpm.bank            ; ...and the values drawn are banked
 .out:
     ret
 
@@ -1253,17 +1236,9 @@ tui_btn:
     mov bx, dx
     add cx, 59
     add dx, 13
-    push cx
-    push dx
-    mov cx, ax
-    add cx, 59
-    mov dx, bx
-    add dx, 13
     TSETC TC_BTN
-    call tui_fillc
+    call tui_fillc                  ; (both preserve every register)
     call tui_bevelc
-    pop dx
-    pop cx
     sub cx, 55                      ; label at x+4, y+3
     sub dx, 10
     TSETC TC_BTNT
@@ -1334,7 +1309,7 @@ tui_insget:
     mov di, tui_insbuf
     mov cx, 17
 .c:
-    mov al, [es:si]
+    es lodsb                        ; (DF = 0, SPEC.md 1)
     cmp al, 32
     jb .sp
     cmp al, 126
@@ -1343,7 +1318,6 @@ tui_insget:
     mov al, ' '
 .keep:
     mov [di], al
-    inc si
     inc di
     loop .c
     mov byte [di], 0
@@ -1457,10 +1431,9 @@ tui_val_cga_pos:
     xor dx, dx
     mov bx, 40
     mov ax, (TC_BG << 8) | TC_TEXT
-    call tui_rdout
+    call tui_rdout                  ; (preserves every register: SI holds)
     mov al, [tui_apat]
     call tui_hex2
-    mov si, tui_nbuf
     mov cx, 320
     mov bx, 16
     mov ax, (TC_BG << 8) | TC_TEXT
@@ -1475,12 +1448,10 @@ tui_val_cga_bs:
     xor dx, dx
     mov bx, 24
     mov ax, (TC_BG << 8) | TC_TEXT
-    call tui_rdout
-    mov al, [tui_aspd]
+    call tui_rdout                  ; (preserves every register, and so does
+    mov al, [tui_aspd]              ; tui_dec3: SI and BX still hold)
     call tui_dec3
-    mov si, tui_nbuf
     mov cx, 168
-    mov bx, 24
     mov ax, (TC_BG << 8) | TC_TEXT
     call tui_rdout
     mov al, [tui_abpm]

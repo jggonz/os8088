@@ -410,6 +410,12 @@ bytes. That is the measurement to take before section 5 is built.
   the owner asked for it to be costed, and it came out the better store.
 - **LOADALL for the 286 copy** (HIMEM.SYS's trick: no reset). Undocumented,
   286-only, and the kernel's transport, not the player's (SPEC.md 41.9).
+  **Investigated since in docs/plans/LOADALL-PLAN.md** (2026-10-14): as a
+  copy it buys ~3% (the BIOS's copy already runs at the board's memory
+  speed); its value is decoding the DRAIN in place, which removes the copy
+  down, and - on a disk HDD.DRV's rung 1 has taken (SPEC.md 52.1.1) -
+  reading the FILL straight into the bank, which removes the copy up: both
+  of section 4.2's copies.
 - **Keeping what has been played**, as the hold does: a bank that kept its
   past would serve seeks back, but it is the same bytes spent on the
   direction the play does not go.

@@ -42,6 +42,7 @@ def assets():
             data=w.readframes(w.getnframes());samples.append(data)
             assert data[0]==data[-1]==128 and len(set(data))>32 and max(data)-min(data)>100
     assert bank[16:]==b''.join(samples) and len(bank)==8208
+    parts()
     spec = importlib.util.spec_from_file_location('assets1942', ROOT/'tools/1942assets.py')
     mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
     pal=json.loads((ROOT / os88build.at('build/1942-palette.json')).read_text())
@@ -153,10 +154,36 @@ def assets():
     assert values['N_CACHE_START']==2*values['N_PAGE_BYTES']+19200
     print('asset validation: both banks, stream bounds and rejection controls passed',flush=True)
 
+def parts():
+    """1942.O88 carries every bank, scene and the effects as a PART (SPEC.md
+    101.2), and the guest names each by apps/1942/video.inc's N_P_* rows: so
+    every row must hold exactly the build file that the asm says is there - a
+    Makefile list out of order would hand the CGA renderer the VGA bank."""
+    import os88parts
+    raw=(ROOT/os88build.at('build/1942.o88')).read_bytes()
+    src=(ROOT/'apps/1942/video.inc').read_text()
+    eq={k:int(v) for k,v in re.findall(r'^(N_P_\w+)\s+equ\s+(\d+)',src,re.M)}
+    want={eq['N_P_V']:'1942V.GFX',eq['N_P_VX']:'1942VX.GFX',eq['N_P_L']:'1942L.GFX',
+          eq['N_P_C']:'1942C.GFX',eq['N_P_CX']:'1942CX.GFX',eq['N_P_SFX']:'1942.SFX'}
+    if rom_build():scenes=['WORLD.V42','WORLD.C42']
+    else:
+        # n_scenerow: SEA REEF PORT .V42, then .C42 at +3, +5, +4.
+        scenes=['SEA.V42','REEF.V42','PORT.V42','SEA.C42','PORT.C42','REEF.C42']
+        row=re.search(r'^n_scenerow: db (.*)$',src,re.M).group(1)
+        assert [eval(x.strip(),{},eq) for x in row.split(',')]==[eq['N_P_SCENE']+i for i in (0,1,2,3,5,4)]
+    for i,name in enumerate(scenes):want[eq['N_P_SCENE']+i]=name
+    rows=os88parts.image_rows(raw)
+    assert sorted(want)==list(range(len(rows))),(sorted(want),len(rows))
+    for i,name in want.items():
+        assert rows[i]['flags']&(8|16)==24,'part %d is not OP_LAZY|OP_COMP'%i
+        assert os88parts.part_bytes(raw,i)==(ROOT/os88build.at('build/'+name)).read_bytes(),\
+            'part %d is not %s'%(i,name)
+    print('parts: %d rows of 1942.O88 hold the banks the code names'%len(rows),flush=True)
+
 def symbols():
     source = (ROOT/'apps/1942/1942.asm').read_text()
     names = re.findall(r'^VAR (n_\w+),', source, re.M)
-    code = ['n_about','n_frontprepare','n_paint','n_key','n_click','n_frontpaint','n_fronttimer','n_frontload','n_vfile','n_cfile','n_scenesums','n_scenecheck','n_loadgfx','n_sprite','n_frame_end','n_refresh','n_present','n_rand','n_dac','n_hud','n_erase','n_update','n_draw','n_loading','n_readbank','n_spawn','n_stageinit','n_scripts','n_awardpow','n_results','n_kill','n_addscore','n_depart','n_flightphaseupdate','n_campaignnew','n_turn','n_audio','n_audio_open','n_audio_close','n_pcm_open','n_pcm_close','n_pcm_halt','n_pcmfile','n_audio_quiet','n_audio_step','n_audio_fmnote','n_music','n_effect','n_tone','n_soundtab','n_event','n_highmsg','n_freeslot','n_hitplayer','n_move_bullets','n_stageevents','n_move_enemies','n_move_shots','n_enemyfire','n_fireangle','n_firerank']
+    code = ['n_about','n_frontprepare','n_paint','n_key','n_click','n_frontpaint','n_fronttimer','n_frontload','op_table','N_P_V','N_P_C','N_P_SCENE','n_scenecheck','n_loadgfx','n_sprite','n_frame_end','n_refresh','n_present','n_rand','n_dac','n_hud','n_erase','n_update','n_draw','n_loading','n_readbank','n_spawn','n_stageinit','n_scripts','n_awardpow','n_results','n_kill','n_addscore','n_depart','n_flightphaseupdate','n_campaignnew','n_turn','n_audio','n_audio_open','n_audio_close','n_pcm_open','n_pcm_close','n_pcm_halt','n_audio_quiet','n_audio_step','n_audio_fmnote','n_music','n_effect','n_tone','n_soundtab','n_event','n_highmsg','n_freeslot','n_hitplayer','n_move_bullets','n_stageevents','n_move_enemies','n_move_shots','n_enemyfire','n_fireangle','n_firerank']
     code += ['n_scriptspawn','n_scrollstep','n_nextstage','n_loop']
     if rom_build():code += ['n_motioninit','n_cartmove']
     source = source.replace('OS88_IMAGE_END','')
@@ -870,19 +897,23 @@ def run(tag,off,code):
             g.put('stage',stage);g.frame(2);assert g.get('scrollstage' if rom_build() else 'scene')==(stage if rom_build() else scene)
             check_video(g,tag)
             g.put('paused',1,1);g.frame(2);capture(g,tag,'scene%d'%scene);g.put('paused',0,1)
-        # Negative control: change the expected checksum, so an otherwise valid
-        # stage is rejected before it can replace the resident backdrop.
-        at=g.base+code['n_scenesums']+((2 if tag=='cga' else 0) if rom_build() else (1+(3 if tag=='cga' else 0))*2)
-        saved=m.read(at,2);m.write(at,struct.pack('<H',(int.from_bytes(saved,'little')+1)&65535))
+        # Negative control: shorten the scene part's unpacked length in its
+        # row, so the stream no longer expands to exactly what the row says
+        # and op_fetch refuses it before it can replace the resident backdrop.
+        row=code['N_P_SCENE']+((1 if tag=='cga' else 0) if rom_build() else (5 if tag=='cga' else 1))
+        at=g.base+code['op_table']+10+8*row+4
+        saved=m.read(at,2);m.write(at,struct.pack('<H',int.from_bytes(saved,'little')-16))
         g.put('stage',5)
         if rom_build():g.put('scene',65535)
         m.bp_exec();m.run()
         M.until(m,lambda _:g.get('infs',1)==0 and g.get('error',1)==2,'damaged bank rejection',limit=60)
         M.ui_done(m);assert m.video()['mode']==desktop_mode
         m.write(at,saved);m.key('Enter');g.frame();assert g.get('error',1)==0
-        # A missing companion file must likewise return a usable desktop.
+        # A bank whose bytes are not there must likewise return a usable
+        # desktop: its row is pointed past the end of the file.
         m.bp_exec();m.key('Escape');m.run();M.ui_done(m)
-        at=g.base+code['n_cfile' if tag=='cga' else 'n_vfile'];saved=m.read(at,1);m.write(at,b'X')
+        at=g.base+code['op_table']+10+8*code['N_P_C' if tag=='cga' else 'N_P_V']+2
+        saved=m.read(at,2);m.write(at,b'\xff\xff')
         m.key('Enter');m.run()
         M.until(m,lambda _:g.get('infs',1)==0 and g.get('error',1)==2,'missing bank rejection',limit=60)
         M.ui_done(m);assert m.video()['mode']==desktop_mode

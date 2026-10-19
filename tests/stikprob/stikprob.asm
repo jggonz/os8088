@@ -97,6 +97,7 @@ STIK_BSS    equ 0
 %define STIK_ONTICK   dp_ontick
 %define GFXE_TEXT
 %define GFXE_BITS
+%define GFXE_SCALE                  ; the x3 pair (SPEC.md 5.12.8)
 %define GFXE_BAND_W   128
 %define GFXE_BAND_H   16            ; 16 rows: a 40-row card is three slabs,
 %define GFXE_BAND_BUF dp_band       ; and the x3 pair straddles two of them

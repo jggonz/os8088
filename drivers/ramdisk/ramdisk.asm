@@ -247,7 +247,7 @@ rd_d_readme:
     db 'This volume has no sectors.', 13, 10
     db 'Its contents come from RAMDISK.DRV answering', 13, 10
     db 'questions about FILES - no BPB, no FAT, and', 13, 10
-    db 'no int 13h anywhere behind it (SPEC.md 62.9).', 13, 10
+    db 'no int 13h anywhere behind it.', 13, 10
 rd_d_readme_end:
 
 rd_d_notes:

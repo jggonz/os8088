@@ -153,9 +153,9 @@ def main() -> int:
                          "decision - the flag is on the row - and this only "
                          "says how. It is written into the part table's own "
                          "format byte, so a compressed PART is independent of "
-                         "whether the IMAGE is compressed; the two cannot both "
-                         "be, because a part's offset is measured from the "
-                         "start of the file and lives inside the image")
+                         "whether the IMAGE is compressed - and both may be: "
+                         "the image's packed length then rides the link word "
+                         "(SPEC.md 20.13.8)")
     ap.add_argument("--part", metavar="PART.bin", action="append", default=[],
                     help="append a part after the image, 512-aligned, and "
                          "fill its row in the package's own part table. One "
@@ -276,20 +276,28 @@ def main() -> int:
     if args.compress and args.compress_if:
         fail("--compress and --compress-if are the same decision taken two "
              "ways; give one")
+    zfmt, zsoft = None, False
     if args.compress and args.compress != "none":
-        out = compress_image(out, image, bss, flags, args.compress)
+        zfmt = args.compress
     elif args.compress_if and args.compress_if != "none":
-        soft = compress_image(out, image, bss, flags, args.compress_if,
-                              soft=True)
-        if soft is not None:
-            out = soft
+        zfmt, zsoft = args.compress_if, True
     table, rows = find_parts(a, image, flags)
+    timage = out                            # where report_parts reads the table
     if table is None:
         if args.part:
             fail("--part given but the image carries no 'O88PARTS' table - "
                  "bracket one with OS88_PARTS_BEGIN (SPEC.md 20.12.3)")
+        if zfmt:
+            z = compress_image(out, image, bss, flags, zfmt, soft=zsoft)
+            if z is not None:
+                out = z
     else:
         lay_out_parts(out, table, rows, args.part, args.part_compress)
+        if zfmt:
+            z = compress_parted(out, image, bss, flags, table, rows, zfmt,
+                                soft=zsoft)
+            if z is not None:
+                out, timage = z
 
     try:
         with open(args.output, "wb") as f:
@@ -304,7 +312,7 @@ def main() -> int:
     print(f"os88pkg: {name!r} entry=+0x{entry:04X} image={image} bss={bss} "
           f"icon={icon} assoc={assoc} glyph={glyph} -> {args.output}")
     if table is not None:
-        report_parts(out, table, rows, args.part)
+        report_parts(timage, table, rows, args.part)
     return 0
 
 
@@ -394,12 +402,8 @@ def compress_image(out: bytearray, image: int, bss: int, flags: int,
         fail(msg)
 
     if flags & 4:
-        return refuse(
-            "--compress with parts is not supported yet: a part's offset is "
-            "measured from the start of the FILE and lives in a table INSIDE "
-            "the image, so compressing the image and laying out its parts are "
-            "circular. docs/plans/O88-COMPRESSION-PLAN.md wave 4 (OP_COMP) is where "
-            "that is resolved; nothing in the tree needs both today")
+        fail("internal: a package with parts is packed by compress_parted, "
+             "which lays the parts out first (SPEC.md 20.13.8)")
     if flags & (PKG_COMP_BIT | PKG_COMP_FMT):
         return refuse(f"flags 0x{flags:02X} already has a compression bit set")
     if len(out) != image:
@@ -449,6 +453,103 @@ def compress_image(out: bytearray, image: int, bss: int, flags: int,
     return new
 
 
+def compress_parted(out: bytearray, image: int, bss: int, flags: int,
+                    table: int, rows: int, fmt: str, soft: bool = False):
+    """Pack the IMAGE of a package with parts (SPEC.md 20.13.8), or answer None.
+
+    `out` is the image with its parts already laid out behind it by
+    lay_out_parts, the first at roundup512(image). Packing the image moves
+    where the parts can start - and their offsets live in the table INSIDE
+    the image being packed, which is the circularity that kept this refused.
+    It is a fixed point and not a paradox: only the TABLE's `off` words move,
+    every part moves by the same whole number of sectors, so the parts' bytes
+    never change and a packed table differs from the last guess by a few
+    bytes. So: guess the base off one pack, then pack again at each base
+    until the packed image fits in front of it. The base only ever RISES, so
+    it stops; where it would oscillate it settles on the larger, which fits
+    by construction (the stream is then followed by padding).
+
+    THE KERNEL HAS TO BE TOLD THE PACKED LENGTH, because with parts the file
+    is not the image: it rides the LINK word (+4), which is zero on every
+    other package and which ld_hdr_ok lets through only beside flags bits 2
+    AND 3. Everything else is compress_image's rule - the clear prefix, the
+    format bits, the in-place margin and the region it must fit - and a
+    pack that saves no SECTOR is declined: the parts would not move, so the
+    file would not shrink, and every launch would pay the decode for nothing.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import os88lz
+
+    def refuse(msg):
+        if soft:
+            print(f"os88pkg: NOT compressed: {msg}")
+            return None
+        fail(msg)
+
+    if flags & (PKG_COMP_BIT | PKG_COMP_FMT):
+        return refuse(f"flags 0x{flags:02X} already has a compression bit set")
+    fid = os88lz.LZ4 if fmt == "lz4" else os88lz.LZB
+    pre = clear_prefix(flags)
+    base0 = roundup(image, PART_ALIGN)
+    filed = []
+    for i in range(rows):
+        o = table + PARTS_HDR + PART_ROW * i + 2
+        poff = struct.unpack_from("<H", out, o)[0]
+        if poff:
+            filed.append((o, poff))
+
+    def pack(delta):
+        img = bytearray(out[:image])
+        for o, poff in filed:
+            struct.pack_into("<H", img, o, poff + delta)
+        body = bytes(img[pre:])
+        z = os88lz.compress(body, fid)
+        if os88lz.decompress(z, fid, len(body)) != body:
+            fail(f"{fmt} did not round-trip this image - tools/os88lz.py is "
+                 "the reference the kernel copies, so this is a bug there")
+        return img, body, z
+
+    img, body, z = pack(0)
+    if pre + len(z) >= image:
+        return refuse(f"{fmt} makes this image no smaller")
+    delta = (roundup(pre + len(z), PART_ALIGN) - base0) // PART_ALIGN
+    if delta >= 0:
+        return refuse(f"{fmt} packs this image to {pre + len(z)} bytes, which "
+                      f"still starts the parts at sector {base0 // PART_ALIGN}: "
+                      "the file would not shrink and every launch would pay "
+                      "the decode")
+    while True:
+        img, body, z = pack(delta)
+        packed = pre + len(z)
+        if roundup(packed, PART_ALIGN) <= base0 + delta * PART_ALIGN:
+            break
+        delta += 1
+        if delta >= 0:
+            return refuse(f"{fmt} saves no sector of this image once its "
+                          "part table is packed with it")
+    margin = os88lz.in_place_margin(body, fid, packed=z)
+    if margin:
+        fail(f"{fmt} needs {margin} bytes of in-place margin - a stream with "
+             "a tail needs none (SPEC.md 20.13.7), so os88lz.py's cut is "
+             "wrong and this is a bug there")
+    r = roundup(image - packed, 512)
+    if r + packed > roundup(image + bss, 512):
+        return refuse(
+            f"{fmt} saves {image - packed} bytes but its in-place layout "
+            f"needs {r + packed} of the {roundup(image + bss, 512)}-byte "
+            "region, so the loader would have to claim more")
+    base = base0 + delta * PART_ALIGN
+    new = bytearray(img[:pre]) + z
+    new[3] = flags | PKG_COMP_BIT | (PKG_COMP_FMT if fid == os88lz.LZB else 0)
+    struct.pack_into("<H", new, 4, packed)        # LD_H_LINK: the packed image
+    new.extend(b"\xE5" * (base - len(new)))       # padding is poison (above)
+    new.extend(out[base0:])
+    print(f"os88pkg: compressed {fmt}: image {image} -> {packed} bytes "
+          f"({packed / image:.1%}), {pre} clear; parts {-delta} sector(s) "
+          f"earlier, file {len(out)} -> {len(new)}")
+    return new, img
+
+
 def image_unwrap(blob: bytes) -> bytes:
     """A shipped `.o88` back to the IMAGE the loader will run.
 
@@ -470,9 +571,18 @@ def image_unwrap(blob: bytes) -> bytes:
     image = struct.unpack_from("<H", blob, 8)[0]
     pre = clear_prefix(flags & ~(PKG_COMP_BIT | PKG_COMP_FMT))
     fid = os88lz.LZB if flags & PKG_COMP_FMT else os88lz.LZ4
+    end = len(blob)
     out = bytearray(blob[:pre])
     out[3] = flags & ~(PKG_COMP_BIT | PKG_COMP_FMT)
-    return bytes(out) + os88lz.decompress(blob[pre:], fid, image - pre)
+    if flags & 4:
+        # WITH PARTS the stream ends where the LINK word says (SPEC.md
+        # 20.13.8), and what is returned is the IMAGE alone: the parts are
+        # still read out of the FILE at the table's offsets, which name
+        # sectors of the packed file. The link word goes back to zero, so the
+        # header is a plain parted image's - which is what it describes now.
+        end = struct.unpack_from("<H", blob, 4)[0]
+        out[4:6] = b"\0\0"
+    return bytes(out) + os88lz.decompress(blob[pre:end], fid, image - pre)
 
 
 # --- parts (SPEC.md 20.12) ---------------------------------------------------

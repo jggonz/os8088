@@ -20,11 +20,11 @@
 ; and only MAKE, in this image, sets WF_DESK. With no image every slot is
 ; mod_gone (CF = 1, registers kept), which is the right answer for each.
 ;
-; THE LIFETIME: held from the first QUERY that loads it until restart. There
-; is no mod_drop anywhere - widgets are session-long, and a drop check would
-; cost resident bytes the cut exists to save. No entry calls anything that
-; can destroy a window, so the image could never be freed under its own code
-; even if a drop were added.
+; THE LIFETIME: held from the first QUERY that loads it until the LAST widget
+; goes - desk_drop_x below, from the instance teardowns and the loader
+; (SPEC.md 11.103.10). It was held until restart, and a 5 KB claim stayed
+; pinned after the last Sticky App closed. No entry calls anything that can
+; destroy a window, so the image is never freed under its own code.
 ;
 ; DS = KERNEL_SEG on every entry (api_rsc, cur_shape_pass, wm_show_b,
 ; fdlg_top_x), so the kernel's data is plain references. Kernel code is
@@ -57,16 +57,17 @@ section .cold
 ; -----------------------------------------------------------------------------
 osapi_wm_desk_x:
     or al, al
-    jnz .v
-    call desk_need              ; preserves every register; CF is the answer
-    retf
-.v:
+    jz desk_need                ; QUERY IS desk_need, which ends in `retf`
     jmp far [DKDFP + DKD_VERB]  ; MAKE / DRAG / RELEASE: the image's
 
 ; -----------------------------------------------------------------------------
 ; desk_need - mod_need MOD_DESK, INSIDE whatever drv_vol bracket is open
-;             (SPEC.md 11.103.10), near, resident .cold
+;             (SPEC.md 11.103.10), FAR, resident .cold
 ; in:  nothing. out: CF = mod_need's answer; every register preserved
+;
+; FAR because it IS QUERY's body (kernel size pass 13): the cell jumps here,
+; and the loader's step 5, in `.cold` beside it, calls it with COLDCALL.
+; It was a near proc behind QUERY's `call desk_need / retf`.
 ;
 ; TWO CALLERS: QUERY above, and the loader's step 5 for a package whose header
 ; carries OS88_F_DESK - BEFORE the package's region is claimed, so the 1 KB
@@ -96,7 +97,41 @@ desk_need:
     mov [drv_vol_drv], al       ; nor `mov` writes a flag)
     pop word [drv_vol_cwd]
     pop ax
-    ret
+    retf
+
+; -----------------------------------------------------------------------------
+; desk_drop_x - DESK.DRV goes when no instance is a widget (SPEC.md 11.103.10)
+;               FAR, resident .cold
+; in:  DI = an instance record that is NOT a widget from here on: one being
+;      freed, or one just launched with an ordinary window. Its IF_DESK is
+;      cleared, so a freed record never carries a stale one
+; out: nothing; every register preserved, flags spent
+;
+; THE RULE IS "ANY RECORD", NOT "ANY LIVE RECORD": ld_alloc marks an
+; OS88_F_DESK launch's record IF_DESK while it is still unpublished, so a
+; worker-arm widget dying mid-launch (inst_task_die, on that worker) cannot
+; drop the image between step 5's desk_need and the entry proc's MAKE - the
+; entry proc runs with the gfx lock FREE (SPEC.md 20.2). Every other caller
+; is on the UI task, outside the image, so the drop never frees code that is
+; running (mod_drop's banner).
+; -----------------------------------------------------------------------------
+desk_drop_x:
+    push si
+    push ax
+    and byte [di+I_FLAGS], ~IF_DESK & 0xFF
+    mov si, inst_tab
+.scan:
+    test byte [si+I_FLAGS], IF_DESK
+    jnz .keep                   ; a widget, or one on its way: keep it
+    add si, I_RECSZ
+    cmp si, inst_tab + INST_MAX * I_RECSZ
+    jb .scan
+    mov al, MOD_DESK
+    call mod_drop               ; not loaded: an empty row, and nothing done
+.keep:
+    pop ax
+    pop si
+    retf
 
 ; =============================================================================
 ; DESK.DRV - the module image
@@ -143,7 +178,7 @@ dkd_verb:
     cmp al, 1
     je .make
     cmp al, 3
-    ja .no                      ; any verb nobody defined
+    ja .lib                     ; LIB, or any verb nobody defined
     jb .drag                    ; 2, DRAG (0 never arrives: the thunk's)
     cmp bx, [menu_win]          ; --- RELEASE
     jne .ok                     ; not the bar's owner: nothing to give back
@@ -153,6 +188,13 @@ dkd_verb:
     call KERNEL_SEG:cw_menu_draw_bar
     pop bx
 .ok:
+    clc
+    retf
+.lib:
+    cmp al, 4                   ; --- LIB (SPEC.md 110.15): DX = the Sticky
+    jne .no                     ; App library's paragraph, at the end of
+    mov dx, cs                  ; this image - where its own org 0 is
+    add dx, (dkd_lib - modj_hdr) >> 4
     clc
     retf
 .no:
@@ -281,8 +323,10 @@ dkd_show:
 ; -----------------------------------------------------------------------------
 ; dkd_key - does a WIDGET own the bar? (SPEC.md 11.103.4, 12.6), far, from
 ;           fdlg_top_x with no chooser up
+; in:  BX = wm_top's answer, which stands unless a widget owns the bar
 ; out: CF = 0 and BX = [menu_win], a desk window: the key goes to IT;
-;      CF = 1 "stand" - wm_top's answer (BX spent). AX and the rest kept
+;      CF = 1 "stand" - BX kept, as mod_gone keeps it with no image. AX and
+;      the rest kept
 ;
 ; Never a HIDDEN one: every hide repaints through menu_draw_bar, whose
 ; menu_check takes the bar off a window that is not visible. A stale
@@ -290,15 +334,32 @@ dkd_show:
 ; without WF_DESK.
 ; -----------------------------------------------------------------------------
 dkd_key:
-    mov bx, [menu_win]
-    or bx, bx
+    push si
+    mov si, [menu_win]
+    or si, si
     jz .s
-    test byte [bx+W_FLAGS+1], WF_DESK >> 8
-    jnz .y                      ; CF = 0 (test clears it): BX = the widget
+    test byte [si+W_FLAGS+1], WF_DESK >> 8
+    jz .s
+    mov bx, si                  ; CF = 0 (the test cleared it): the widget
+    pop si
+    retf
 .s:
     stc
-.y:
+    pop si
     retf
+
+; -----------------------------------------------------------------------------
+; THE STICKY APP LIBRARY (SPEC.md 110.15) - apps/stiklib.asm, assembled as a
+; package-side binary of its own and carried here, on a paragraph, because
+; this image's lifetime is the one it needs: loaded by the first Sticky App's
+; QUERY (or the loader's step 5 for it), pinned, held until the restart. No
+; kernel code calls it and it calls no kernel code but the API cells; every
+; Sticky App built STIK_LIB far-calls it with its own DS. It costs the kernel
+; nothing resident: LIB above is the only line that knows it is here
+; -----------------------------------------------------------------------------
+    times (16 - (($ - $$) % 16)) % 16 db 0
+dkd_lib:
+    incbin "stiklib.bin"
 
 section .text
 %endif

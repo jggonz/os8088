@@ -12,6 +12,10 @@
 >
 > Every number came off **the 5150** unless it says otherwise; QEMU numbers are
 > labelled and are never times (PERFORMANCE.md Part 3).
+>
+> **Everything here is the UPLOAD.** The download side was a different defect
+> and is SPEC.md 72.4.3 and 77.51: a one-segment sender held to the client's
+> delayed-ACK timer, ~1 KB per 100 ms, which no slirp-based harness could see.
 
 The state of the FTP server's speed after one long session on it, written so
 the next round starts from evidence instead of from scratch. Every number here

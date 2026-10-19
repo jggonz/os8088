@@ -31,6 +31,8 @@
 ; real mode forms an address as seg<<4 + off, so the highest byte any CS:IP
 ; can name is 0x10FFEF. Everything handed out here is a DATA STORE ONLY - no
 ; code, no jump table, no callback, no relocated package image, on any tier.
+; (The HMA below the pool is not handed out: it holds the kernel's `.cold`,
+; which xm_hma puts there - SPEC.md 2.10.7.)
 ; Unreal mode does not move that line by one byte: it widens a DATA segment's
 ; limit and touches neither the width of CS nor of IP.
 ;
@@ -50,10 +52,13 @@
 ; constantly after boot - int 16h AH=01h on EVERY pass of the UI loop, plus
 ; int 13h/10h/1Ah/12h. Nothing in os8088 touches FS or GS, but BIOS code is
 ; not os8088 code and a 386-aware BIOS may load them for its own purposes and
-; hand them back with real-mode limits. So the tier-2 copy re-arms from the
-; resident GDT - and, because the BIOS is re-entered by INTERRUPTS and not
-; only by kernel calls, it re-arms inside the same cli window as the accesses
-; that depend on it. That is why the copy is chunked (xm_ucopy).
+; hand them back with real-mode limits. So the tier-2 copy does not lean on
+; them at all any more (41.15): each chunk loads DS's and ES's hidden BASES
+; from the resident GDT (apps/os88ub.inc) - and, because the BIOS is
+; re-entered by INTERRUPTS and not only by kernel calls, inside the same cli
+; window as the moves that depend on them. That is why the copy is chunked
+; (xm_ucopy). FS and GS are still armed once, at attach, because CPU_F_UNREAL
+; is published (SPEC.md 20.3) and says so.
 ;
 ; Every 386 instruction in this file sits inside a scoped `cpu 386` island
 ; closed by `cpu 8086`, AND behind a run-time [xm_tier] test. The island is
@@ -78,8 +83,10 @@
 ;
 ; THE CLAIM IS WHOLE KB, and that is heap and not a rung: drv_load_at claims
 ; mem_bytes_kb_x of the file's unpacked size, so image + bss of 1,568 bytes
-; held 2,048 of every 286+ machine's heap for the session, and 1,014 hold
-; 1,024. Two things in the image are shaped by that, beyond plain tightening:
+; held 2,048 of every 286+ machine's heap for the session, and 1,014 held
+; 1,024 - until the HMA's loader and the resident A20 re-open took the image
+; to 1,145 and the claim back to 2,048 (docs/plans/HMA-PLAN.md). That KB buys
+; the 38 the cold rung is worth, which the same attach hands the heap. Two things in the image are shaped by that, beyond plain tightening:
 ;
 ;   - THE SCRATCH LIVES ON TOP OF THE ATTACH-ONLY CODE (xm_once, at the foot
 ;     of the file). The block table, the AH=87h descriptor block, the copy's
@@ -136,11 +143,13 @@ XM_MAX_COPY     equ 32768       ; bytes per copy - a SCHEDULER rule, not a
                                 ; speeds drops PIT ticks and overruns the
                                 ; mouse UART's receive buffer (SPEC.md 9).
                                 ; A caller moving more calls twice.
-XM_UCHUNK       equ 1024        ; bytes per tier-2 chunk, each one re-armed
-                                ; and moved inside one cli window (xm_ucopy).
-                                ; ~0.3ms of IF=0 on the slowest tier-2
-                                ; machine - well inside one PIT tick and one
-                                ; 1200-baud mouse byte.
+XM_UCHUNK       equ 2048        ; bytes per tier-2 chunk, each one with its
+                                ; bases loaded and moved inside one cli window
+                                ; (xm_ucopy). ~0.3ms of IF=0 on the slowest
+                                ; tier-2 machine by `rep movsd` - well inside
+                                ; one PIT tick and one 1200-baud mouse byte.
+                                ; It was 1024 when the move was a load/store
+                                ; loop four times slower a dword
 XM_MAX_BLKS     equ 8           ; the fixed block table, entries: a bulk store
                                 ; for a handful of large claims, not a malloc
 XM_HMA_KB       equ 64          ; what a successful HMA claim takes off
@@ -234,6 +243,13 @@ xm_attach:
     mov [xm_tier], al           ; ...and we keep our own copy: this image is
                                 ; the only writer of the A20/HMA/UNREAL bits
                                 ; now, and it reports them back at the end
+%ifdef XM_FORCE_BIOS
+    cmp al, CPU_8086            ; A TEST BUILD, never shipped: tier 1's
+    je .t0                      ; transport - int 15h AH=87h - on a 386, so
+    mov al, CPU_286             ; QEMU can run the one path a real 286 takes
+    mov [xm_tier], al           ; (xm_bios). Nothing in the Makefile sets it
+.t0:
+%endif
     cmp al, CPU_8086
     je xm_no                    ; tier 0: no A20, no HMA, no store. The
                                 ; kernel's sniff should have spared us the
@@ -253,9 +269,9 @@ xm_attach:
     ; a 1MB AT has zero bytes above 0x0FFFFF and claiming an HMA there would
     ; hand out 64KB of nothing. The verified A20 bit it also needs is already
     ; set - the `jc` above is the only way here. There is no HMA allocator and
-    ; there will not be one; NOTHING IS CLAIMING IT TODAY - the bit exists so
-    ; the pool knows where it starts (SPEC.md 2.4) and so the first claimant
-    ; is a two-line change rather than an allocator.
+    ; there will not be one; ITS ONE CLAIMANT IS THE KERNEL'S `.cold`, which
+    ; xm_hma puts there below (SPEC.md 2.10.7) - and the bit is also what
+    ; tells the pool where it starts (SPEC.md 2.4).
     cmp bx, XM_HMA_KB
     jb .nohma                   ; less than 64KB up there: nothing to claim
     or byte [xm_feat], CPU_F_HMA
@@ -277,6 +293,10 @@ xm_attach:
     jbe .base
     xchg bx, ax
 .base:
+    call xm_hma                 ; `.cold` into the HMA, if it is ours to have
+                                ; and the kernel's image of it is on the disk
+                                ; (docs/plans/HMA-PLAN.md). Attach-only code,
+                                ; so it lives under the scratch below
     push es                     ; THE GATE CODE IS SPENT: lay the zeroed
     push ds                     ; scratch over it (the file header). From
     pop es                      ; HERE, outside the region, and only now -
@@ -289,13 +309,20 @@ xm_attach:
 
     mov [xm_base_hi], dx        ; the low word is 0 - both bases are on a
                                 ; 64KB boundary, so it is not stored at all
+    cmp byte [xm_tier], CPU_286
+    jne .nola
+    push bx                     ; (BX is the pool's KB, published below)
+    call xm_lainit              ; tier 1's LOADALL transport, if it checks
+    pop bx                      ; out (SPEC.md 41.13)
+.nola:
     mov [xm_kb], bx             ; LAST, and deliberately so: it is the gate
                                 ; every entry point below tests. Both are in
                                 ; the scratch, so both are written after it
     xchg ax, bx                 ; the kernel banks the total for SK_XMS
     mov dl, [xm_feat]           ; ...and the bits, so cpu_info's AH stays true
     mov si, xm_svc
-    ret                         ; CF = 0, from the `xor ax, ax` above
+    clc                         ; CF = 0 (it was the `xor ax, ax` above's,
+    ret                         ; until xm_lainit stood between them)
 xm_no:                          ; the shared refusal: entry, attach
     stc
 xm_detach:                      ; DRVV_DETACH lands on the `ret` alone, with
@@ -328,83 +355,6 @@ xm_svc:
     dw xm_relall                ; XMV_RELINST: AL = the slot, everything else
                                 ; preserved, which is xm_relall's own contract
 
-; -----------------------------------------------------------------------------
-; xm_arm - enter unreal mode: give FS and GS a 4GB limit (SPEC.md 41.4)
-;
-; out:      FS and GS cached with a base-0, limit-4GB data descriptor;
-;           CPU_F_UNREAL set
-; clobbers: the high half of EAX (flags)
-;
-; TIER 2 ONLY, and it is the CALLERS that test: both reach it from behind a
-; compare of [xm_tier] with CPU_386 - xm_attach directly, and xm_ucopy
-; through xm_copy's own branch - which is SPEC.md 41.9 rule 2's run-time half
-; for this island and for xm_ucopy's.
-;
-; Called once from xm_attach, and then once per XM_UCHUNK-byte chunk from
-; xm_ucopy - inside that chunk's cli window, so that nothing can enter the
-; BIOS between the arm and the accesses that depend on it (see the file
-; header). Calling it repeatedly is a non-event: the transition is idempotent
-; and preserves every 16-bit register and the flags.
-;
-; The whole transition runs inside one pushf/cli ... popf with NMI masked
-; (CMOS index port 0x70 bit 7) across it: a real-mode IVT is meaningless while
-; CR0.PE is set, so an interrupt taken in the window is a triple fault.
-; Nothing in the kernel touches 0x70 outside clock.inc's int 1Ah calls, so
-; there is no conflict; the read of 0x71 after each write to 0x70 is the
-; classic requirement to leave the RTC's index/data pair settled.
-;
-; THAT THE KERNEL'S OWN ISRs ARE LIVE BY THE TIME THIS FIRST RUNS IS NOT NEW
-; (SPEC.md 41.12.1). The kernel used to call it before sched_init, on the
-; reasoning that no kernel ISR was installed yet - a comfort, not a
-; requirement, because xm_ucopy has always re-armed at run time with int 08h
-; hooked and IRQ3/IRQ4 live. If an ISR could break the transition the shipped
-; transport would have been broken since it was written; what protects it is
-; the cli and the NMI mask, and both are here.
-;
-; There is no far jump. CS is never reloaded and keeps its real-mode base,
-; which is what makes the instruction after `mov cr0` reachable at all.
-;
-; Two entries, not three, in the GDT: there is no code descriptor because
-; THERE IS NO FAR JUMP AND CS IS NEVER RELOADED. The whole point of the
-; sequence is the hidden descriptor caches of FS and GS.
-; -----------------------------------------------------------------------------
-xm_arm:
-    push ax
-    pushf
-    cli                         ; --- the transition window ----------------
-    mov al, 0x80
-    out 0x70, al                ; NMI off (bit 7); index 0 is harmless
-    in  al, 0x71                ; settle the RTC index/data pair
-cpu 386                         ; ---- 386-only island, tier 2 only --------
-    xor eax, eax                ; the lgdt base is LINEAR: DS<<4 + xm_gdt.
-    mov ax, ds                  ; DS is OUR segment - a heap claim, and a
-    shl eax, 4                  ; MOVABLE one (SPEC.md 66), so this is
-    add eax, xm_gdt             ; computed on every arm and never baked in
-    mov [xm_gdt + 2], eax
-    lgdt [xm_gdt]               ; (16-bit operand size loads 24 base bits;
-                                ; the image is a heap claim below 1MB, so
-                                ; that is exact)
-    mov eax, cr0
-    or al, 1                    ; CR0.PE - protected mode, briefly
-    mov cr0, eax
-    jmp short .flush1           ; flush the prefetch queue
-.flush1:
-    mov ax, XM_SEL_FLAT
-    mov fs, ax                  ; THE ONLY WRITES TO FS OR GS IN THE TREE.
-    mov gs, ax                  ; Their hidden caches keep the 4GB limit
-    mov eax, cr0                ; after PE goes away again.
-    and al, 0xFE
-    mov cr0, eax
-    jmp short .flush2
-.flush2:
-cpu 8086                        ; ---- island closed -----------------------
-    xor al, al
-    out 0x70, al                ; NMI back on
-    in  al, 0x71
-    popf                        ; --- window closed ------------------------
-    or byte [xm_feat], CPU_F_UNREAL
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; xm_caps - what is left up there? (XMV_CAPS, behind slot 0x015A)
@@ -806,7 +756,14 @@ xm_copy:
     mov [xm_src+2], bx
     cmp byte [xm_tier], CPU_386
     je .unreal
-    call xm_bios                ; tier 1
+    cmp byte [xm_lall], 0       ; tier 1: LOADALL when attach verified it
+    je .bios                    ; (SPEC.md 41.13) and the gate is open NOW -
+    call xm_a20_probe           ; a shut one would alias the extended end
+    jc .bios                    ; 1 MB down; the BIOS's path re-opens it
+    call xm_lcopy
+    jmp short .moved
+.bios:
+    call xm_bios                ; tier 1 without it
     jmp short .moved
 .unreal:
     call xm_ucopy               ; tier 2
@@ -835,7 +792,8 @@ xm_copy:
     ret
 
 ; -----------------------------------------------------------------------------
-; xm_ucopy - the tier-2 transport: 32-bit moves through FS and GS
+; xm_ucopy - the tier-2 transport: `rep movsd` between two LOADED BASES
+; (SPEC.md 41.5, 41.15; apps/os88ub.inc)
 ;
 ; in:       [xm_src] / [xm_dst] = 32-bit linear ends, BP = bytes (even)
 ; out:      CF = 0 moved - it cannot fail
@@ -843,45 +801,37 @@ xm_copy:
 ;
 ; TIER 2 ONLY, and its one caller is xm_copy's branch on [xm_tier] a few
 ; lines up: that compare is this routine's run-time half of SPEC.md 41.9
-; rule 2, and xm_arm's. It used to repeat the test itself, as xm_arm did.
+; rule 2, and ub_set's.
 ;
-; Load through FS, store through GS, both flat, so the routine never touches
-; ES or DS and serves both directions with one loop. It is a load/store loop
-; and not `rep movsd` for a structural reason: MOVS takes its destination from
-; ES:(E)DI and ES is the ONE segment a string move cannot override - so a flat
-; destination would mean widening ES, which SPEC.md 41.4 forbids precisely
-; because ES is reloaded constantly.
+; Each chunk loads DS's hidden base with the source and ES's with the
+; destination (ub_set, a moment of protected mode), moves the chunk with ONE
+; 16-bit `rep movsd` from DS:0 to ES:0, and reloads both registers in real
+; mode - which leaves them exactly as real mode makes them, limit 0FFFFh, so
+; nothing is left widened behind the copy. That is the whole change from the
+; unreal-mode loop this replaced (2026-10-16, docs/plans/VIDEO-386-PLAN.md
+; section A): a `mov eax, [fs:esi] / mov [gs:edi], eax / add / add / dec /
+; jnz` loop is ~17-19 clocks a dword on a 386 against `rep movsd`'s ~4, and
+; MOVS could not be used then only because its destination is ES:(E)DI and a
+; flat ES would have been a widened ES left behind. A loaded base is not
+; widened, so the objection is gone.
 ;
-; THE COPY RUNS IN XM_UCHUNK-BYTE CHUNKS, AND EACH CHUNK RE-ARMS INSIDE ITS
-; OWN pushf/cli ... popf. That structure is the whole correctness argument,
-; and the obvious cheaper shapes are both wrong:
+; THE COPY RUNS IN XM_UCHUNK-BYTE CHUNKS, EACH INSIDE ITS OWN pushf/cli ...
+; popf, and each chunk loads its bases afresh. That structure is still the
+; whole correctness argument: a hidden base dies at the first segment load,
+; every ISR loads DS and ES, and a 386-aware BIOS reached from an ISR may
+; load anything - so nothing may run between the load and the moves that
+; depend on it. [sch_lock], raised by the kernel around this dispatch, keeps
+; the scratch to one copy at a time and stops a switch between chunks.
 ;
-;   - Re-arming once and then copying with IF=1 does not work. sch_isr chains
-;     `call far [sch_old08]` into the BIOS timer handler on EVERY tick, and
-;     IRQ1 reaches the BIOS keyboard handler the same way. A 386-aware BIOS
-;     that loads FS or GS for its own use hands them back with real-mode
-;     limits - the exact hazard this module exists to defend against - and the
-;     rest of the copy then wraps inside 64KB with no fault, or takes a #GP
-;     into an IVT slot the kernel never fills.
-;   - [sch_lock] does not close that hole either. It stops TASK SWITCHES, not
-;     interrupts, so it cannot protect a loop from an ISR. The KERNEL raises it
-;     around this whole dispatch for the two things it genuinely does: it
-;     keeps the scratch below to one copy at a time, and it stops a switch
-;     landing between two chunks.
-;   - One cli around the whole transfer would be correct but expensive: 32KB
-;     at 386SX speeds is milliseconds of IF=0, which drops PIT ticks and
-;     overruns the 1200-baud mouse UART (SPEC.md 9).
-;
-; A 1KB chunk is ~0.3ms of IF=0 on the slowest tier-2 machine and the arm
-; costs a few microseconds, so the whole cap of 32 chunks adds well under a
-; tick. A 16-bit ISR taken BETWEEN chunks is harmless: the loop keeps its
-; state in [xm_src]/[xm_dst] and BP, and the next chunk re-arms anyway.
-;
-; THE INNER LOOP IS THE HOT PATH and it is the instruction sequence it always
-; was, byte for byte.
+; THE CHUNK IS 2 KB where the loop's was 1: `rep movsd` moves 2 KB in about
+; the time the loop moved 1 on the slowest tier-2 machine (a 16 MHz 386SX,
+; ~0.3 ms with IF = 0), and on a 486 the base load's ~6 us is then ~8% of a
+; chunk rather than ~15%. Unmeasured on iron (VIDEO-386-PLAN section M):
+; retune when VIDDISK X has run on a 386 and a 486.
 ; -----------------------------------------------------------------------------
 xm_ucopy:
     push ax
+    push bx
     push cx
     push dx
     push si
@@ -895,33 +845,33 @@ xm_ucopy:
     mov cx, XM_UCHUNK
 .have:
     sub bp, cx
-    mov dx, cx                  ; the byte count, kept for the odd tail
+    mov dx, cx                      ; the byte count, kept for the tail
     pushf
-    cli                         ; --- one chunk, atomic against every ISR --
-    call xm_arm                 ; re-armed INSIDE the window that uses it
-cpu 386                         ; ---- 386-only island, tier 2 only --------
-    mov esi, [xm_src]
-    mov edi, [xm_dst]
+    cli                             ; --- one chunk, atomic against every ISR
+    push ds
+    push es
+cpu 386                             ; ---- 386-only island, tier 2 only ------
+    mov eax, [xm_src]               ; (the high halves are not ours to keep:
+                                    ; the loop this replaced clobbered three)
+    mov ebx, [xm_dst]
     movzx ecx, cx
-    add [xm_src], ecx           ; advance both ends for the next chunk
+    add [xm_src], ecx               ; both ends on, for the next chunk
     add [xm_dst], ecx
-    shr ecx, 2                  ; whole dwords
-    jz .tail
-.dword:
-    mov eax, [fs:esi]
-    mov [gs:edi], eax
-    add esi, 4
-    add edi, 4
-    dec ecx
-    jnz .dword
-.tail:
-    test dl, 2                  ; the odd tail, moved as a word
+    call ub_set                     ; DS = the source, ES = the destination
+    xor si, si
+    xor di, di
+    mov cx, dx
+    shr cx, 2                       ; whole dwords
+    cld
+    rep movsd
+    test dl, 2                      ; the odd tail, as a word
     jz .cdone
-    mov ax, [fs:esi]
-    mov [gs:edi], ax
+    movsw
 .cdone:
-cpu 8086                        ; ---- island closed -----------------------
-    popf                        ; --- chunk window closed ------------------
+cpu 8086                            ; ---- island closed ---------------------
+    pop es                          ; both reloaded in real mode: the bases
+    pop ds                          ; gone, every register as it was
+    popf                            ; --- chunk window closed ---------------
     jmp short .chunk
 .fin:
     pop bp
@@ -929,6 +879,7 @@ cpu 8086                        ; ---- island closed -----------------------
     pop si
     pop dx
     pop cx
+    pop bx
     pop ax
     clc
     ret
@@ -1001,17 +952,292 @@ xm_bios:
     mov cx, bp                  ; AH=87h wants at ES:SI (asserted at xm_once)
     shr cx, 1                   ; AH=87h counts WORDS
     mov ah, 0x87
-    int 0x15
-    jc .out
+    pushf
+    cli                         ; ...AND THE GATE IS OURS AGAIN BEFORE ANY
+    in al, 0x21                 ; INTERRUPT IS SERVICED: the IBM AT's AH=87h
+    push ax                     ; closes A20 on its way out, and with `.cold`
+    mov al, 0xFF                ; and SOUND.DRV in the HMA (docs/plans/HMA-PLAN.md
+    out 0x21, al                ; 5) the next call into either would run
+    int 0x15                    ; whatever wraps to the bottom of RAM. The
+                                ; `cli` above is NOT enough: that BIOS's int
+    push ax                     ; 15h handler `sti`s on entry, so an IRQ0
+    push bx                     ; between its gate-off and its return reached
+    call xm_a20_reopen          ; snd_tick and SOUND.DRV's tick in the HMA
+    pop bx                      ; with A20 shut - a video buffering into XMS
+    pop cx                      ; locked a 286 up. So the master PIC (and the
+    pop ax                      ; slave through IRQ2) holds every line until
+    out 0x21, al                ; the gate is back; the BIOS runs the move
+    xchg ax, cx                 ; itself with IF = 0, so a line is held only
+    popf                        ; for its tail. IF as the caller had it
     cmp ah, 1                   ; 1 parity, 2 exception, 3 A20 - all fatal
     cmc                         ; to this call and none of them retryable:
-.out:                           ; CF = 1 iff AH is not 0
-    pop es
+.out:                           ; CF = 1 iff AH is not 0 (the BIOS's CF says
+    pop es                      ; no more than AH does)
     pop di
     pop si
     pop cx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; xm_lcopy - the tier-1 transport by LOADALL (SPEC.md 41.13)
+;
+; in:       [xm_src] / [xm_dst] = 32-bit linear ends, BP = bytes (even);
+;           A20 verified open by the caller, xm_lall set
+; out:      CF = 0 moved - it cannot fail
+; clobbers: nothing (flags)
+;
+; Each XM_LPIECE piece is one borrow (apps/os88la.inc): DS's hidden base at
+; the source, ES's at the destination, `rep movsw`, the API cells back - all
+; inside its own pushf / cli ... popf, so an interrupt waits at most one
+; piece. AH=87h held IF = 0 for the whole call, up to 32 KB; a piece is 16.
+;
+; THE CONVENTIONAL END IS ADDRESSED AS ITSELF: its cache is its paragraph
+; and its visible selector that same paragraph, with the odd bytes in SI or
+; DI - so whichever cache did not take, the conventional end is still right.
+; The extended end shows the conventional end's selector too, so a cache
+; that did not take on that side copies the conventional buffer onto itself
+; rather than into anything else. xm_lainit's round trips are what make
+; "did not take" a case for the field and not for every call.
+; -----------------------------------------------------------------------------
+XM_LPIECE       equ 16384       ; bytes a borrow: ~5 ms masked on the
+                                ; Victory 286, against AH=87h's 32 KB. It
+                                ; was 8 KB, and the field read a borrow at
+                                ; ~0.17 ms: 4 KB 10.6% faster than AH=87h,
+                                ; 8 KB 6.1%, 16 KB level - and 32 KB 2.8%
+                                ; SLOWER, four borrows against one reset
+                                ; (docs/reports/LOADALL-L3-VICTORY286-
+                                ; 2026-10-15.md). 16 KB puts 32 KB level and
+                                ; still halves the masked window
+
+xm_lcopy:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+.piece:
+    mov cx, bp
+    jcxz .fin
+    cmp cx, XM_LPIECE
+    jbe .have
+    mov cx, XM_LPIECE
+.have:
+    sub bp, cx
+    mov ax, [xm_src]
+    mov dx, [xm_src+2]
+    mov di, la_dsc
+    mov bx, la_dsv
+    call xm_lend
+    push ax                     ; the source's offset
+    mov ax, [xm_dst]
+    mov dx, [xm_dst+2]
+    mov di, la_esc
+    mov bx, la_esv
+    call xm_lend
+    xchg di, ax                 ; DI = the destination's offset
+    pop si                      ; SI = the source's
+    mov ax, [la_dsv]            ; the extended end shows the conventional
+    or ax, [la_esv]             ; end's selector (one of the two is 0)
+    mov [la_dsv], ax
+    mov [la_esv], ax
+    push cx
+    shr cx, 1                   ; WORDS - and SI, DI and CX ride through
+    pushf                       ; the borrow, which preserves every
+    cli                         ; general register --- one piece ----------
+    call la_borrow
+.mov:                           ; (a label for tests/xmla.py: no byte)
+    rep movsw                   ; (DF clear: the table's FLAGS)
+    call la_restore             ; DS = ES = ours again
+    popf                        ; --- piece window closed -------------------
+    pop cx
+    add [xm_src], cx
+    adc word [xm_src+2], 0
+    add [xm_dst], cx
+    adc word [xm_dst+2], 0
+    jmp short .piece
+.fin:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+
+; xm_lend - one end of a piece: DX:AX = its linear address, DI = its cache
+; dword, BX = its visible selector word. A conventional end (below 1 MB)
+; gets its paragraph as cache AND selector, and AX = the odd bytes, its
+; offset; an extended end gets its exact address as cache, selector 0 (the
+; caller copies the other's in), and AX = 0. Clobbers AX, DX
+xm_lend:
+    cmp dx, 0x0010
+    jae .ext
+    push cx
+    push ax
+    and ax, 0xFFF0
+    mov [di], ax                ; the paragraph's linear base
+    mov [di+2], dx
+    mov cl, 4
+    shr ax, cl
+    mov cl, 12
+    shl dx, cl
+    or ax, dx
+    mov [bx], ax                ; ...as a selector
+    pop ax
+    and ax, 0x000F              ; the odd bytes: the offset into it
+    pop cx
+    ret
+.ext:
+    mov [di], ax
+    mov [di+2], dx
+    mov word [bx], 0
+    xor ax, ax
+    ret
+
+; -----------------------------------------------------------------------------
+; xm_lainit - may tier 1 copy by LOADALL? (SPEC.md 41.13) At attach, after
+; the scratch is zeroed and the pool's base is known, before anything is
+; allocated: the CPU's MSW/IDTR/GDTR captured, and then TWO ROUND TRIPS
+; against the BIOS's own transport through the first bytes of the empty pool,
+; with INT 6 hooked across them - a pattern up by AH=87h and down by LOADALL,
+; then its complement up by LOADALL and down by AH=87h. A CPU without the
+; instruction traps the first: la_ud steps over it, the piece copies our own
+; bytes onto the borrowed table's cells, la_restore puts them back, and
+; [la_fault] says so. Everything must come back word for word, or [xm_lall]
+; stays 0 and every copy this session is AH=87h's, as before this existed.
+; The test's buffers are the block table, empty here and zeroed again after.
+; out: [xm_lall] = 1 or 0. Clobbers AX, BX, CX, DX, SI, DI
+; -----------------------------------------------------------------------------
+XM_LTEST        equ 24              ; bytes a round trip moves
+XM_LPAT         equ 0x5A3C          ; ...and the first one's pattern
+
+xm_lainit:
+    push bp
+    push es
+    mov byte [la_csacc], 0x93
+    call la_capture
+    xor ax, ax
+    mov es, ax
+    pushf
+    cli                             ; INT 6 is ours for the two trips
+    push word [es:6 * 4]
+    push word [es:6 * 4 + 2]
+    mov word [es:6 * 4], la_ud
+    mov [es:6 * 4 + 2], cs
+    mov bp, XM_LTEST
+    mov dx, XM_LPAT
+    call xm_ltrip                   ; up by AH=87h, down by LOADALL
+    jc .back
+    not dx
+    call xm_ltrip                   ; ...the complement the other way
+.back:
+    mov bx, 0
+    mov es, bx                      ; (the trips leave ES ours)
+    pop word [es:6 * 4 + 2]
+    pop word [es:6 * 4]
+    jc .no
+    cmp byte [la_fault], 0
+    jne .no
+    mov byte [xm_lall], 1
+.no:
+    popf
+    push ds
+    pop es
+    mov di, xm_tab                  ; the buffers were the block table:
+    mov cx, (xm_tab_end - xm_tab) / 2   ; empty again
+    xor ax, ax
+    cld
+    rep stosw
+    pop es
+    pop bp
+    ret
+
+; xm_ltrip - DX = a pattern word: xm_tab filled with it (each word + its
+; index) and xm_tab + 32 cleared, sent up to the pool's base and brought back
+; into xm_tab + 32, and the two compared. XM_LPAT goes up by AH=87h and down
+; by LOADALL, any other pattern the other way. CF = 1 they differ.
+; BP = the bytes. Clobbers AX, BX, CX, SI, DI
+xm_ltrip:
+    push ds
+    pop es
+    mov di, xm_tab
+    mov cx, XM_LTEST / 2
+    mov ax, dx
+.fill:
+    mov word [di + 32], 0           ; the far side cleared, so a copy that
+    stosw                           ; never happened cannot pass
+    inc ax
+    loop .fill
+    mov bx, xm_tab
+    xor si, si                      ; SI = 0: up, from xm_tab
+    call .leg
+    jc .out
+    mov bx, xm_tab + 32
+    inc si                          ; SI = 1: down, into xm_tab + 32
+    call .leg
+    jc .out
+    mov si, xm_tab
+    mov di, xm_tab + 32
+    mov cx, XM_LTEST / 2
+    cld
+    repe cmpsw
+    je .out                         ; (equal: CF = 0)
+    stc
+.out:
+    ret
+; one leg: BX = our end's offset, SI = 0 up / 1 down. AH=87h when (up) is
+; (the pattern is XM_LPAT), LOADALL otherwise. Clobbers AX, CX, DI
+.leg:
+    push dx
+    mov ax, ds
+    call la_lin
+    add ax, bx                      ; DX:AX = our end, linear
+    adc dx, 0
+    mov di, xm_src
+    mov cx, xm_dst                  ; up: ours is the source
+    or si, si
+    jz .ends
+    xchg di, cx                     ; down: ours is the destination
+.ends:
+    mov [di], ax
+    mov [di + 2], dx
+    mov di, cx
+    mov word [di], 0                ; the pool's first bytes, the other end
+    mov ax, [xm_base_hi]
+    mov [di + 2], ax
+    pop dx
+    cmp dx, XM_LPAT
+    je .pat
+    xor si, 1                       ; the complement swaps the transports
+.pat:
+    or si, si                       ; (restored below, for the caller)
+    jnz .la
+    call xm_bios
+    jmp short .done
+.la:
+    call xm_lcopy                   ; (cannot fail)
+.done:
+    pushf
+    cmp dx, XM_LPAT
+    je .keep
+    xor si, 1
+.keep:
+    popf
+    ret
+
+%define LA_NOPROBE                  ; xm_lainit's INT 6 hook is the probe
+%include "os88la.inc"               ; the borrow (apps/os88la.inc)
+%define UB_DS                       ; the copy's source...
+%define UB_ES                       ; ...and its destination
+%include "os88ub.inc"               ; tier 2's loaded bases (apps/os88ub.inc)
+    UB_DATA                         ; ...and their GDT, resident (24 bytes)
 
 ; -----------------------------------------------------------------------------
 ; Data that must outlive attach. A driver has no BSS of its own
@@ -1030,89 +1256,25 @@ xm_feat:        db 0            ; CPU_F_* - what actually VERIFIED. This image
                                 ; CPU_F_A20 is also xm_attach's once-per-image
                                 ; test, so NOTHING may clear that bit
 
-xm_gdt:                         ; entry 0, the null descriptor, which the CPU
-    dw xm_gdt_end - xm_gdt - 1  ; never reads - so it carries the lgdt
-    dd 0                        ; pseudo-descriptor: limit, then the 32-bit
-    dw 0                        ; linear base xm_arm fills
-    dw 0xFFFF                   ; entry 1 (XM_SEL_FLAT): limit 15..0
-    dw 0x0000                   ;   base 15..0
-    db 0x00                     ;   base 23..16
-    db 0x92                     ;   present, ring 0, data, read/write
-    db 0xCF                     ;   G=1 (4KB granules), D/B=1, limit 19..16
-    db 0x00                     ;   base 31..24  -> base 0, limit 4GB
-xm_gdt_end:
-
-; =============================================================================
-; xm_once - THE ATTACH-ONLY CODE, and the scratch that replaces it
-;
-; Everything from here to xm_once_end runs during xm_attach and never again,
-; and xm_attach's last act is to zero XM_SCRATCH bytes from xm_once - so on a
-; live image this region IS the block table, the AH=87h descriptor block and
-; the copy's two ends, and the code below is gone. That is why xm_attach
-; refuses a second attach of one image: it would call into the table.
-;
-; The scratch must fit inside the code it overlays. The `times` at the foot
-; pads the region with zeros if a later edit ever shrinks the code below it,
-; so the image grows rather than the table running past the end of the claim
-; - correct, and visible in the size line, rather than silent.
-; =============================================================================
-xm_once:
-xm_src          equ xm_once             ; dd: the copy's two ends, ordered,
-xm_dst          equ xm_once + 4         ; dd: as 32-bit linear addresses
-xm_x87          equ xm_once + 8         ; int 15h AH=87h's 48-byte descriptor
-                                        ; block - it must itself be in
-                                        ; conventional memory, and this is
-xm_tab          equ xm_once + 56        ; the block table
-xm_tab_end      equ xm_tab + XM_MAX_BLKS * XM_BLKSZ
-xm_kb           equ xm_tab_end          ; dw: KB the pool may hand out.
-                                        ; PUBLISHED LAST by xm_attach (the
-                                        ; snd_live ordering of SPEC.md 34.7):
-                                        ; it is the single gate every entry
-                                        ; point here tests, so it must not be
-                                        ; visible before the base and the
-                                        ; table behind it
-xm_base_hi      equ xm_kb + 2           ; dw: the pool's 32-bit linear base,
-                                        ; high word - 0x0010, or 0x0011 when
-                                        ; the HMA was claimed. The low word is
-                                        ; always 0 and is not stored
-XM_SCRATCH      equ xm_base_hi + 2 - xm_once    ; 124, even (rep stosw)
-    times ((xm_x87 - xm_src) != 8) * -1 db 0    ; xm_bios ends its descriptor
-                                        ; loop with SI = xm_src + 8 and hands
-                                        ; that to AH=87h as the block
 
 ; -----------------------------------------------------------------------------
-; xm_a20_enable - open the A20 line, and VERIFY it (SPEC.md 41.2)
+; xm_a20_reopen - make the A20 line open, by the three steps of xm_a20_enable
 ;
-; out:      CF = 0 and CPU_F_A20 set in [xm_feat]: the line is verified open,
-;           and AX = int 15h AH=88h's answer, the KB above 1MB - asked only
-;           once the gate is proven, which is SPEC.md 41.12.1's order.
-;           CF = 1: the line is not open, on any tier - or AH=88h refused.
+; out:      CF = 0 open (and CPU_F_A20 set), CF = 1 shut
+; clobbers: AX, BX, CX, DX
 ;
-; Three steps in a binding order:
-;
-;   1. Test before enabling. Every machine the harness boots comes up with A20
-;      already open, and so do many later AT BIOSes. If the probe says open,
-;      no gate is touched at all.
-;   2. The fast gate at port 0x92 (xm_fast_a20), then re-probe.
-;   3. The keyboard controller (xm_kbc_a20), then re-probe.
-;
-; Both gates END in xm_a20_settle - the fast one by falling into it, the
-; keyboard controller's by jumping - so each step here is one call.
-;
-; clobbers: AX, BX, CX, DX - and so may every routine in this region, which
-; xm_attach calls with nothing live in any of the four. DS and ES are
-; preserved, as xm_attach's own contract needs.
+; RESIDENT, with everything it calls, where it used to be attach-only code
+; under the scratch: xm_bios runs it after every int 15h AH=87h, because an
+; IBM AT's block move leaves the gate SHUT on its way out and `.cold` may be
+; running from the HMA (docs/plans/HMA-PLAN.md). On a BIOS that keeps the gate
+; as it found it - QEMU's, and most later ones - it is one probe.
 ; -----------------------------------------------------------------------------
-xm_a20_enable:
+xm_a20_reopen:
     call xm_a20_probe
-    jnc .open                   ; already open - do not poke a working line
+    jnc .out                    ; already open - do not poke a working line
     call xm_fast_a20            ; step 2, and its settle
-    jnc .open
+    jnc .out
     call xm_kbc_a20             ; step 3, and its settle
-    jc .out                     ; the PROBE decided, never the poke
-.open:
-    mov ah, 0x88
-    int 0x15                    ; AX = KB above 1MB; CF = no such service
 .out:
     ret
 
@@ -1278,6 +1440,249 @@ xm_kbc_wait:
     stc
 .out:
     ret
+; =============================================================================
+; xm_once - THE ATTACH-ONLY CODE, and the scratch that replaces it
+;
+; Everything from here to xm_once_end runs during xm_attach and never again,
+; and xm_attach's last act is to zero XM_SCRATCH bytes from xm_once - so on a
+; live image this region IS the block table, the AH=87h descriptor block and
+; the copy's two ends, and the code below is gone. That is why xm_attach
+; refuses a second attach of one image: it would call into the table.
+;
+; The scratch must fit inside the code it overlays. The `times` at the foot
+; pads the region with zeros if a later edit ever shrinks the code below it,
+; so the image grows rather than the table running past the end of the claim
+; - correct, and visible in the size line, rather than silent.
+; =============================================================================
+xm_once:
+xm_src          equ xm_once             ; dd: the copy's two ends, ordered,
+xm_dst          equ xm_once + 4         ; dd: as 32-bit linear addresses
+xm_x87          equ xm_once + 8         ; int 15h AH=87h's 48-byte descriptor
+                                        ; block - it must itself be in
+                                        ; conventional memory, and this is
+xm_tab          equ xm_once + 56        ; the block table
+xm_tab_end      equ xm_tab + XM_MAX_BLKS * XM_BLKSZ
+xm_kb           equ xm_tab_end          ; dw: KB the pool may hand out.
+                                        ; PUBLISHED LAST by xm_attach (the
+                                        ; snd_live ordering of SPEC.md 34.7):
+                                        ; it is the single gate every entry
+                                        ; point here tests, so it must not be
+                                        ; visible before the base and the
+                                        ; table behind it
+xm_base_hi      equ xm_kb + 2           ; dw: the pool's 32-bit linear base,
+                                        ; high word - 0x0010, or 0x0011 when
+                                        ; the HMA was claimed. The low word is
+                                        ; always 0 and is not stored
+; THE LOADALL TRANSPORT'S STATE (SPEC.md 41.13, apps/os88la.inc), tier 1:
+; the API cells while they are borrowed, the CPU's MSW/IDTR/GDTR, the next
+; borrow's two caches and selectors, and the copy's two offsets. Zeroed with
+; the rest; xm_lainit fills what it needs after the zeroing
+la_save         equ xm_base_hi + 2      ; LA_SZ bytes
+la_msw          equ la_save + LA_SZ     ; dw
+la_idt          equ la_msw + 2          ; 6 bytes
+la_gdt          equ la_idt + 6          ; 6 bytes
+la_dsc          equ la_gdt + 6          ; dd
+la_esc          equ la_dsc + 4          ; dd
+la_dsv          equ la_esc + 4          ; dw
+la_esv          equ la_dsv + 2          ; dw
+la_csacc        equ la_esv + 2          ; db: 93h, set by xm_lainit
+la_fault        equ la_csacc + 1        ; db
+xm_lall         equ la_fault + 1        ; db: 1 = the LOADALL transport
+                                        ; verified at attach (xm_lainit)
+XM_SCRATCH      equ (xm_lall + 2 - xm_once) & ~1    ; even (rep stosw)
+    times ((xm_x87 - xm_src) != 8) * -1 db 0    ; xm_bios ends its descriptor
+                                        ; loop with SI = xm_src + 8 and hands
+                                        ; that to AH=87h as the block
+
+; -----------------------------------------------------------------------------
+; xm_a20_enable - open the A20 line, and VERIFY it (SPEC.md 41.2)
+;
+; out:      CF = 0 and CPU_F_A20 set in [xm_feat]: the line is verified open,
+;           and AX = int 15h AH=88h's answer, the KB above 1MB - asked only
+;           once the gate is proven, which is SPEC.md 41.12.1's order.
+;           CF = 1: the line is not open, on any tier - or AH=88h refused.
+;
+; xm_a20_reopen below is the three steps, and it is RESIDENT: xm_bios runs it
+; after every AH=87h (docs/plans/HMA-PLAN.md). Three steps in a binding order:
+;
+;   1. Test before enabling. Every machine the harness boots comes up with A20
+;      already open, and so do many later AT BIOSes. If the probe says open,
+;      no gate is touched at all.
+;   2. The fast gate at port 0x92 (xm_fast_a20), then re-probe.
+;   3. The keyboard controller (xm_kbc_a20), then re-probe.
+;
+; Both gates END in xm_a20_settle - the fast one by falling into it, the
+; keyboard controller's by jumping - so each step here is one call.
+;
+; clobbers: AX, BX, CX, DX - and so may every routine in this region, which
+; xm_attach calls with nothing live in any of the four. DS and ES are
+; preserved, as xm_attach's own contract needs.
+; -----------------------------------------------------------------------------
+xm_a20_enable:
+    call xm_a20_reopen
+    jc .out                     ; the PROBE decided, never the poke
+    mov ah, 0x88
+    int 0x15                    ; AX = KB above 1MB; CF = no such service
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; xm_hma - put the kernel's `.cold` in the HMA (docs/plans/HMA-PLAN.md)
+;
+; in:       [xm_feat] as attach has it so far; DS = this image
+; out:      nothing; every register but the flags preserved
+;
+; The HMA is this image's to give (SPEC.md 41.3), and the first claimant the
+; header always expected is the kernel's own `.cold`. The work is not here: it
+; is COLDHMA.SYS, which the build cuts from THIS kernel and which carries the
+; lists of every far reference (boot/osrom.asm, kind 3). This only reads it
+; into a scratch claim and calls it there, with CS = the claim less the
+; offset it was assembled for, so every label in it is right - then frees
+; the claim, whatever it said. It decides everything itself and touches
+; nothing unless the kernel is the one it was cut from. A missing file, a
+; refusal or a short read all leave the machine as it was: `.cold` in RAM.
+; -----------------------------------------------------------------------------
+XM_HMAF_KB      equ 4           ; COLDHMA.SYS's scratch claim: the file is ~2.9K, the
+                                ; tail and the HMA drivers' relocation tables
+
+xm_hma:
+    test byte [xm_feat], CPU_F_HMA
+    jz .out                     ; no HMA claimed: nothing to put there
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    mov ax, XM_HMAF_KB
+    call OSAPI_MEM_CLAIM        ; owned by our segment, and freed below
+    jc .done
+    push dx
+    mov es, dx
+    xor bx, bx
+    mov cx, XM_HMAF_KB * 1024
+    xor dx, dx
+    mov si, xm_hma_name
+    call OSAPI_FILE_READ        ; DX:AX = its size
+    jc .free
+    cmp word [es:0], 'OS'       ; boot/osrom.asm's rom_id: 'OS88ROM', 0...
+    jne .free
+    cmp byte [es:8], 3          ; ...and kind 3, the HMA's
+    jne .free
+    mov ax, [es:10]             ; where it was assembled to sit
+    mov cl, 4
+    shr ax, cl
+    mov dx, es
+    sub dx, ax                  ; CS = the claim less that, in paragraphs
+    mov [xm_hma_fp+2], dx
+    mov ax, [es:24]             ; ...and its entry
+    mov [xm_hma_fp], ax
+    call far [xm_hma_fp]        ; CF is its answer and nobody needs it
+.free:
+    pop dx
+    call OSAPI_MEM_FREE
+.done:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.out:
+    ret
+xm_hma_fp:      dd 0
+xm_hma_name:    db 'COLDHMA.SYS', 0
+; -----------------------------------------------------------------------------
+; xm_arm - enter unreal mode: give FS and GS a 4GB limit (SPEC.md 41.4)
+;
+; out:      FS and GS cached with a base-0, limit-4GB data descriptor;
+;           CPU_F_UNREAL set
+; clobbers: the high half of EAX (flags)
+;
+; TIER 2 ONLY, and it is the CALLER that tests: xm_attach reaches it from
+; behind a compare of [xm_tier] with CPU_386, which is SPEC.md 41.9 rule 2's
+; run-time half for this island.
+;
+; ATTACH-ONLY CODE, in xm_once's region with its GDT: the scratch overlays
+; both once xm_attach has run, which is why moving it here cost nothing.
+; Called once, from xm_attach. It was also called once per chunk from
+; xm_ucopy until the copy moved to loaded bases (41.15, apps/os88ub.inc),
+; whose transition is this one with DS and ES in place of FS and GS.
+; Calling it repeatedly is a non-event: the transition is idempotent and
+; preserves every 16-bit register and the flags.
+;
+; The whole transition runs inside one pushf/cli ... popf with NMI masked
+; (CMOS index port 0x70 bit 7) across it: a real-mode IVT is meaningless while
+; CR0.PE is set, so an interrupt taken in the window is a triple fault.
+; Nothing in the kernel touches 0x70 outside clock.inc's int 1Ah calls, so
+; there is no conflict; the read of 0x71 after each write to 0x70 is the
+; classic requirement to leave the RTC's index/data pair settled.
+;
+; THAT THE KERNEL'S OWN ISRs ARE LIVE BY THE TIME THIS FIRST RUNS IS NOT NEW
+; (SPEC.md 41.12.1). The kernel used to call it before sched_init, on the
+; reasoning that no kernel ISR was installed yet - a comfort, not a
+; requirement, because xm_ucopy has always re-armed at run time with int 08h
+; hooked and IRQ3/IRQ4 live. If an ISR could break the transition the shipped
+; transport would have been broken since it was written; what protects it is
+; the cli and the NMI mask, and both are here.
+;
+; There is no far jump. CS is never reloaded and keeps its real-mode base,
+; which is what makes the instruction after `mov cr0` reachable at all.
+;
+; Two entries, not three, in the GDT: there is no code descriptor because
+; THERE IS NO FAR JUMP AND CS IS NEVER RELOADED. The whole point of the
+; sequence is the hidden descriptor caches of FS and GS.
+; -----------------------------------------------------------------------------
+xm_arm:
+    push ax
+    pushf
+    cli                         ; --- the transition window ----------------
+    mov al, 0x80
+    out 0x70, al                ; NMI off (bit 7); index 0 is harmless
+    in  al, 0x71                ; settle the RTC index/data pair
+cpu 386                         ; ---- 386-only island, tier 2 only --------
+    xor eax, eax                ; the lgdt base is LINEAR: DS<<4 + xm_gdt.
+    mov ax, ds                  ; DS is OUR segment - a heap claim, and a
+    shl eax, 4                  ; MOVABLE one (SPEC.md 66), so this is
+    add eax, xm_gdt             ; computed on every arm and never baked in
+    mov [xm_gdt + 2], eax
+    lgdt [xm_gdt]               ; (16-bit operand size loads 24 base bits;
+                                ; the image is a heap claim below 1MB, so
+                                ; that is exact)
+    mov eax, cr0
+    or al, 1                    ; CR0.PE - protected mode, briefly
+    mov cr0, eax
+    jmp short .flush1           ; flush the prefetch queue
+.flush1:
+    mov ax, XM_SEL_FLAT
+    mov fs, ax                  ; THE ONLY WRITES TO FS OR GS IN THE TREE.
+    mov gs, ax                  ; Their hidden caches keep the 4GB limit
+    mov eax, cr0                ; after PE goes away again.
+    and al, 0xFE
+    mov cr0, eax
+    jmp short .flush2
+.flush2:
+cpu 8086                        ; ---- island closed -----------------------
+    xor al, al
+    out 0x70, al                ; NMI back on
+    in  al, 0x71
+    popf                        ; --- window closed ------------------------
+    or byte [xm_feat], CPU_F_UNREAL
+    pop ax
+    ret
+
+xm_gdt:                         ; entry 0, the null descriptor, which the CPU
+    dw xm_gdt_end - xm_gdt - 1  ; never reads - so it carries the lgdt
+    dd 0                        ; pseudo-descriptor: limit, then the 32-bit
+    dw 0                        ; linear base xm_arm fills
+    dw 0xFFFF                   ; entry 1 (XM_SEL_FLAT): limit 15..0
+    dw 0x0000                   ;   base 15..0
+    db 0x00                     ;   base 23..16
+    db 0x92                     ;   present, ring 0, data, read/write
+    db 0xCF                     ;   G=1 (4KB granules), D/B=1, limit 19..16
+    db 0x00                     ;   base 31..24  -> base 0, limit 4GB
+xm_gdt_end:
+
 xm_once_end:
     times (XM_SCRATCH - (xm_once_end - xm_once)) * \
           ((xm_once_end - xm_once) < XM_SCRATCH) db 0

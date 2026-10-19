@@ -37,6 +37,9 @@
 ; in RAM, desktop and all, and blitted once (SPEC.md 110.14.4).
 ; =============================================================================
 
+%ifndef APP_SMALL               ; kern_big's: the Sticky App code is the ONE
+%define STIK_LIB                ; copy in DESK.DRV (SPEC.md 110.15). Before
+%endif                          ; the header: OS88_STIKCARD_END lays its block
 %include "os88api.inc"
 
     OS88_HEADER 'Desk Clock', dk_entry, OS88_F_ICON | OS88_F_DESK | OS88_F_STIK
@@ -110,7 +113,8 @@ DKF_ANALOG  equ 3               ; 0..2 have hands; 3..8 are digital
 %define STIK_DATNAME 'DESKCLOK.DAT'
 %define STIK_CAP     'Desk Clock'
 %define STIK_ISOPEN  'Desk Clock is open'
-%define STIK_DAMAGEDQ 'Replace damaged clock?'
+%define STIK_DMGREPLACE         ; a damaged file is replaced by the first save
+                                ; (SPEC.md 110.5.2)
 %define STIK_ONTICK  dk_tick
 %define STIK_ONCLOSE dk_onclose
 STIK_PAYLEN equ DKP_LEN
@@ -118,6 +122,9 @@ STIK_PAYVER equ DKP_VER
 STIK_ICON   equ 32
 STIK_BSS    equ DK_BSS          ; the include's state follows ours
 %define STIK_WIDGET
+%ifndef APP_SMALL               ; kern_big's build: a desk widget or nothing.
+%define STIK_DESKONLY           ; The small build (make small) keeps the
+%endif                          ; titled fallback and the worker arm (110.7)
 %define STIK_VARFACE            ; the width and the card are the settings'
 %define STIK_SIZEUP   dk_sizeup
 %define STIK_COLOR              ; the titled fallback's save-under: 4 planes
@@ -135,6 +142,10 @@ STIK_BSS    equ DK_BSS          ; the include's state follows ours
 %define GFXE_BAND_W   176       ; the tag's band: the include's, in ours
 %define GFXE_BAND_H   16
 %define GFXE_BAND_BUF dk_band
+%define GFXE_NOBUTIL            ; the tag papers and blits its own band (the
+                                ; include's stik_blit): no bounds, pixel or
+                                ; gfxe_bput - the Desk Calendar's (SPEC.md
+                                ; 5.12.9)
 
 DKP         equ STIK_PAY
 DK_BANDSZ   equ 4608            ; the composer's band: four planes of a
@@ -309,30 +320,36 @@ KSC_PGDN    equ 0x51
     DKV dk_snm, 1               ; ...and minute
     DKV dk_lsec, 1              ; the second the glass shows
     DKV dk_mono, 1              ; the primary is 1bpp
-    ; the settings window (dkset.inc)
-    DKV dk_swin, 2
+    ; THE FORMS (dkset.inc): the settings window and the alarm window, each
+    ; a record - its window (0 none), its layout, a button pressed + 1
+    ; (DKW_*) - and what only one of them has after it
+    DKV dk_swin, 2              ; the settings
+    DKV dk_sgeo, 2
+    DKV dk_sbtn, 1
     DKV dk_sav, DKP_LEN         ; the payload as last applied
-    DKV dk_sgeo, 2              ; its layout
-    DKV dk_sox, 2               ; its content's origin
-    DKV dk_soy, 2
-    DKV dk_sbtn, 1              ; a button pressed, + 1
-    DKV dk_sdrop, 1             ; the size list is open
-    DKV dk_sfold, 1             ; the face before a change
     DKV dk_sbseg, 2             ; a paint's tall band: its claim, 0 none
     DKV dk_st0, 2               ; ...the tile rows: the first's y, the pitch
     DKV dk_spit, 2
-    ; the alarm window (dkalm.inc)
-    DKV dk_awin, 2
+    DKV dk_awin, 2              ; the alarm
     DKV dk_ageo, 2
-    DKV dk_aox, 2
-    DKV dk_aoy, 2
-    DKV dk_aon, 1               ; the edit: on, hour, minute, label
-    DKV dk_ah, 1
-    DKV dk_am, 1
-    DKV dk_afoc, 1              ; the field with the keys: 0 hour, 1 minute,
-                                ; 2 the label
     DKV dk_abtn, 1
+    DKV dk_aon, 1               ; the edit: on, then the hour, the minute
+    DKV dk_ah, 1                ; and the label as the payload has them
+    DKV dk_am, 1                ; (DKP_AH ..), one copy each way
     DKV dk_alab, DK_LABMAX + 1
+    DKV dk_afoc, 1              ; the field with the keys (DKAF_*)
+    DKV dk_fm, 2                ; the form being drawn or pressed: dk_fset / dk_falm
+    DKV dk_wox, 2               ; ...its content's origin on the glass
+    DKV dk_woy, 2
+    DKV dk_tent, 12             ; a gallery tile's entry, made (dk_tileent)
+dk_fset       equ dk_swin
+dk_falm       equ dk_awin
+DKW_WIN     equ 0
+DKW_GEO     equ dk_sgeo - dk_swin
+DKW_BTN     equ dk_sbtn - dk_swin
+    times -((dk_ageo - dk_awin != DKW_GEO) | (dk_abtn - dk_awin != DKW_BTN)) db 0
+DKA_EDIT    equ DKP_LABEL + DK_LABMAX + 1 - DKP_AH  ; dk_ah .. the label's NUL
+    times -((dk_am - dk_ah != DKP_AM - DKP_AH) | (dk_alab - dk_ah != DKP_LABEL - DKP_AH)) db 0
 %assign DKB (DKB + 15) & ~15
     DKV dk_band, DK_BANDSZ
 DK_BSS      equ DKB             ; a multiple of 16
@@ -788,7 +805,7 @@ dks_almc:   db 'Alarm: ', 0
 ; dk_snooze - Snooze: quiet, and back in DK_SNOOZE minutes. Keeps everything
 dk_snooze:
     cmp byte [dk_ring], 0
-    je .r
+    je dk_quiet.r
     push ax
     mov al, [dk_mm]
     add al, DK_SNOOZE
@@ -801,44 +818,35 @@ dk_snooze:
     jb .h
     xor ah, ah
 .h:
-    mov [dk_snm], al
-    mov [dk_snh], ah
-    mov byte [dk_snz], 1
-    mov byte [dk_ring], 0
-    xor ax, ax                  ; the tone off now
-    push cx
-    push dx
-    xor cx, cx
-    mov dl, 40h
-    call OSAPI_SND_TONE
-    pop dx
-    pop cx
-    call dk_relay
-    call dk_menulive
-    pop ax
-.r:
-    ret
+    xchg al, ah
+    mov [dk_snh], ax            ; (dk_snm follows it)
+    mov al, 1                   ; snoozed
+    jmp short dk_quiet
 
 ; dk_dismiss - Dismiss: quiet until tomorrow's. Keeps everything
 dk_dismiss:
     cmp byte [dk_ring], 0
     jne .go
     cmp byte [dk_snz], 0
-    je .r
+    je dk_quiet.r
 .go:
     push ax
+    xor al, al                  ; not snoozed
+; dk_quiet - AL = snoozed or not, AX pushed: the ringing stopped, the tone
+; off now, the card's rows and the menus again
+dk_quiet:
+    mov [dk_snz], al
+    mov byte [dk_ring], 0
     push cx
     push dx
-    mov byte [dk_ring], 0
-    mov byte [dk_snz], 0
     xor ax, ax
     xor cx, cx
     mov dl, 40h
     call OSAPI_SND_TONE
-    call dk_relay
-    call dk_menulive
     pop dx
     pop cx
+    call dk_relay
+    call dk_menulive
     pop ax
 .r:
     ret
@@ -883,6 +891,54 @@ dk_onclose:
     ret
 
 ; -----------------------------------------------------------------------------
+; dk_keys - AL = a key's ASCII, AH = its scan code, SI = a KEY TABLE: the
+; first entry the key matches runs, AL = its byte, and CF = 0 out; CF = 1
+; none, AX as it came. An entry (DKKEY): db the key - ASCII, a letter in
+; lower case matching either case, or 80h + a scan code - db its byte, dw its
+; proc; 0 ends the table. Keeps BX, CX, SI
+; -----------------------------------------------------------------------------
+%macro DKKEY 3
+    db %1, %2
+    dw %3
+%endmacro
+dk_keys:
+    push bx
+    push cx
+    push si
+    mov bl, al                  ; BL = the ASCII, a letter lower case...
+    cmp bl, 'A'
+    jb .s
+    cmp bl, 'Z'
+    ja .s
+    or bl, 20h
+.s:
+    or bl, bl
+    jns .h
+    mov bl, 0FFh                ; ...past 7Fh none of the table's
+.h:
+    mov bh, ah                  ; BH = the scan code's entry
+    or bh, 80h
+.e:
+    mov cl, [si]
+    or cl, cl
+    stc
+    jz .x
+    add si, 4
+    cmp cl, bl
+    je .hit
+    cmp cl, bh
+    jne .e
+.hit:
+    mov al, [si-3]
+    call [si-2]
+    clc
+.x:
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; dk_onkey - W_ONKEY, while the clock owns the bar (AL = ASCII, AH = the
 ; scancode, SI = the window; lock held). Every action has a key:
 ;   Enter  Settings        A  Alarm...          F  Clock face only
@@ -893,92 +949,60 @@ dk_onclose:
 dk_onkey:
     push ax
     push bx
-    cmp ah, KSC_LEFT
-    je .fl
-    cmp ah, KSC_RIGHT
-    je .fr
-    cmp ah, KSC_UP
-    je .su
-    cmp ah, KSC_DOWN
-    je .sd
-    cmp al, 13
-    je .set
-    cmp al, 27
-    je .esc
-    or al, 20h
-    cmp al, 'a'
-    je .alm
-    cmp al, 'f'
-    je .only
-    cmp al, 's'
-    je .secs
-    cmp al, 'h'
-    je .h24
-    cmp al, 'z'
-    je .snz
-    cmp al, 'd'
-    je .dis
-    jmp short .x
-.fl:
-    mov al, [DKP + DKP_FACE]
-    dec al
-    jns .fs
-    mov al, DKF_N - 1
-    jmp short .fs
-.fr:
-    mov al, [DKP + DKP_FACE]
-    inc al
-    cmp al, DKF_N
-    jb .fs
-    xor al, al
-.fs:
-    call dk_setface
-    jmp short .x
-.su:
-    mov al, [DKP + DKP_SIZE]
-    inc al
-    cmp al, 3
-    jb .ss
-    jmp short .x
-.sd:
-    mov al, [DKP + DKP_SIZE]
-    dec al
-    js .x
-.ss:
-    call dk_setsize
-    jmp short .x
-.set:
-    call dk_setopen
-    jmp short .x
-.alm:
-    call dk_almopen
-    jmp short .x
-.only:
-    mov al, DKF_ONLY
-    jmp short .tg
-.secs:
-    mov al, DKF_SECS
-    jmp short .tg
-.h24:
-    mov al, DKF_H24
-.tg:
-    call dk_toggle
-    jmp short .x
-.snz:
-    call dk_snooze
-    jmp short .x
-.dis:
-    call dk_dismiss
-    jmp short .x
-.esc:
-    cmp byte [dk_ring], 0
-    jne .dis
-    mov bx, [dk_win]
-    mov al, 3
-    call OSAPI_WM_DESK          ; RELEASE: the bar to the front application
-.x:
+    push si
+    mov si, dk_kclock
+    call dk_keys
+    pop si
     pop bx
     pop ax
+    ret
+dk_kclock:  DKKEY 80h + KSC_LEFT, -1, dk_kface
+            DKKEY 80h + KSC_RIGHT, 1, dk_kface
+            DKKEY 80h + KSC_UP, 1, dk_ksize
+            DKKEY 80h + KSC_DOWN, -1, dk_ksize
+            DKKEY 13, 0, dk_setopen
+            DKKEY 27, 0, dk_kesc
+            DKKEY 'a', 0, dk_almopen
+            DKKEY 'f', DKF_ONLY, dk_toggle
+            DKKEY 's', DKF_SECS, dk_toggle
+            DKKEY 'h', DKF_H24, dk_toggle
+            DKKEY 'z', 0, dk_snooze
+            DKKEY 'd', 0, dk_dismiss
+            db 0
+
+; dk_kface - AL = -1 / +1: the face before or after, round the nine
+dk_kface:
+    call dk_fstep
+    jmp short dk_setface
+
+; dk_fstep - AL = a step, -8..8: AL = the face that far from the payload's,
+; round the nine (the clock's keys, and the settings' gallery's)
+dk_fstep:
+    add al, [DKP + DKP_FACE]
+    jns .p
+    add al, DKF_N
+.p:
+    cmp al, DKF_N
+    jb .r
+    sub al, DKF_N
+.r:
+    ret
+
+; dk_ksize - AL = -1 / +1: the size smaller or larger, and no further
+dk_ksize:
+    add al, [DKP + DKP_SIZE]
+    cmp al, 3
+    jb dk_setsize
+    ret
+
+; dk_kesc - Esc: Dismiss a ringing alarm, else RELEASE - the bar to the
+; front application. BX spent
+dk_kesc:
+    cmp byte [dk_ring], 0
+    jne dk_dismiss
+    mov bx, [dk_win]
+    mov al, 3
+    call OSAPI_WM_DESK
     ret
 
 ; dk_setface / dk_setsize / dk_toggle - one setting changed from the clock
@@ -1067,22 +1091,24 @@ dks_about:  db 'Desk Clock - 9 faces', 0
 
 ; dk_menulive - the items as the state stands: the toggles ticked, the face
 ; and the size marked, Snooze and Dismiss greyed when nothing rings (SPEC.md
-; 47). Keeps everything
+; 47). An item is stored ONCE with a two-cell gutter, and its mark is the
+; gutter's first byte - `*` or a space - written here (Sticky Note's Color
+; menu marks the same way). Keeps everything
 dk_menulive:
     push ax
     push bx
     push cx
     push si
     mov si, dk_i_clock + 2 * DKM_ONLY
-    mov bx, dk_t_only
-    mov al, DKF_ONLY
-    call .tog
-    mov bx, dk_t_secs
-    mov al, DKF_SECS
-    call .tog
-    mov bx, dk_t_h24
-    mov al, DKF_H24
-    call .tog
+    mov ah, DKF_ONLY            ; the three toggles: ONLY, SECS, H24
+.tg:
+    mov al, [DKP + DKP_FLAGS]
+    and al, ah
+    cmp al, ah
+    call .mk
+    shl ah, 1
+    cmp ah, DKF_ALARM
+    jb .tg
     mov bx, dk_i_snz            ; ringing: Snooze; snoozed or ringing:
     cmp byte [dk_ring], 0       ; Dismiss
     jne .s
@@ -1097,49 +1123,36 @@ dk_menulive:
     mov bx, dk_i_dis0
 .d:
     mov [si+2], bx
-    mov si, dk_i_face           ; the face marked
-    mov bx, dk_t_faces
-    mov cl, [DKP + DKP_FACE]
-    mov ch, DKF_N
+    mov si, dk_i_face           ; the face marked, then the size
+    mov ah, [DKP + DKP_FACE]
+    mov cx, DKF_N
     call .mark
-    mov si, dk_i_size
-    mov bx, dk_t_sizes
-    mov cl, [DKP + DKP_SIZE]
-    mov ch, 3
+    mov ah, [DKP + DKP_SIZE]
+    mov cl, 3
     call .mark
     pop si
     pop cx
     pop bx
     pop ax
     ret
-; SI = the item's slot, BX = its two strings (DKM_SZ apart), AL = the flag
-.tog:
-    test [DKP + DKP_FLAGS], al
-    jz .t0
-    add bx, DKM_SZ
-.t0:
-    mov [si], bx
-    add si, 2
-    ret
-; SI = the menu's slots, BX = its items' pairs, CL = the marked one, CH = n
+; SI = the menu's slots, AH = the marked one, CX = n
 .mark:
-    push dx
-    xor dl, dl
+    xor al, al
 .m:
-    cmp dl, ch
-    jae .mx
-    mov ax, bx
-    cmp cl, dl
-    jne .m0
-    add ax, DKM_SZ
-.m0:
-    mov [si], ax
-    add si, 2
-    add bx, 2 * DKM_SZ
-    inc dl
-    jmp short .m
-.mx:
-    pop dx
+    cmp al, ah
+    call .mk
+    inc al
+    loop .m
+    ret
+; ZF = 1 marks the item at [SI]; SI to the next slot
+.mk:
+    mov bx, [si]
+    mov byte [bx], ' '
+    jne .k
+    mov byte [bx], '*'
+.k:
+    inc si
+    inc si
     ret
 
 ; --- the clock's window (SPEC.md 110.11, 110.14) ------------------------------
@@ -1168,44 +1181,56 @@ DKM_N       equ 7
 dk_m_clock: db 'Clock', 0
 dk_m_face:  db 'Face', 0
 dk_m_size:  db 'Size', 0
-dk_i_clock: dw dk_i_set, dk_i_alm, 0, 0, 0, 0, 0
-dk_i_face:  times DKF_N dw 0
-dk_i_size:  times 3 dw 0
+dk_i_clock: dw dk_i_set, dk_i_alm, dk_t_only, dk_t_secs, dk_t_h24, 0, 0
+dk_i_face:  dw dk_t_f0, dk_t_f1, dk_t_f2, dk_t_f3, dk_t_f4, dk_t_f5
+            dw dk_t_f6, dk_t_f7, dk_t_f8
+dk_i_size:  dw dk_t_s0, dk_t_s1, dk_t_s2
 dk_i_set:   db 'Settings...  Enter', 0
 dk_i_alm:   db 'Alarm...  A', 0
 dk_i_snz:   db 'Snooze  Z', 0
 dk_i_snz0:  db MENU_DIS, 'Snooze (not ringing)', 0
 dk_i_dis:   db 'Dismiss  D', 0
 dk_i_dis0:  db MENU_DIS, 'Dismiss (not ringing)', 0
-DKM_SZ      equ 24              ; an item's two strings: off, then on
-%macro DK_ITEM 1+
-%%off:  db '  ', %1, 0
-        times DKM_SZ - ($ - %%off) db 0
-%%on:   db '* ', %1, 0          ; marked as Sticky Note's Color menu marks
-        times DKM_SZ - ($ - %%on) db 0
-%endmacro
-dk_t_only:  DK_ITEM 'Clock Face Only  F'
-dk_t_secs:  DK_ITEM 'Show Seconds  S'
-dk_t_h24:   DK_ITEM '24-Hour Clock  H'
-dk_t_faces: DK_ITEM 'Classic'
-            DK_ITEM 'Memphis ', 27h, '80'
-            DK_ITEM 'Neon ', 27h, '90'
-            DK_ITEM 'Mono Digital'
-            DK_ITEM 'Casio LCD'
-            DK_ITEM 'Casio VGA'
-            DK_ITEM 'Red LED'
-            DK_ITEM 'Amber LED'
-            DK_ITEM 'Flip Clock'
-dk_t_sizes: DK_ITEM 'Small'
-            DK_ITEM 'Medium'
-            DK_ITEM 'Large'
+%macro DK_ITEM 2+               ; label, text: the mark's gutter, the text -
+%1:     db '  ', %2, 0          ; and the face's and the size's NAME is the
+%endmacro                       ; text, at the label + 2 (dk_faces, dkss_sizes)
+DK_ITEM dk_t_only, 'Clock Face Only  F'
+DK_ITEM dk_t_secs, 'Show Seconds  S'
+DK_ITEM dk_t_h24,  '24-Hour Clock  H'
+DK_ITEM dk_t_f0,   'Classic'
+DK_ITEM dk_t_f1,   'Memphis ', 27h, '80'
+DK_ITEM dk_t_f2,   'Neon ', 27h, '90'
+DK_ITEM dk_t_f3,   'Mono Digital'
+DK_ITEM dk_t_f4,   'Casio LCD'
+DK_ITEM dk_t_f5,   'Casio VGA'
+DK_ITEM dk_t_f6,   'Red LED'
+DK_ITEM dk_t_f7,   'Amber LED'
+DK_ITEM dk_t_f8,   'Flip Clock'
+DK_ITEM dk_t_s0,   'Small'
+DK_ITEM dk_t_s1,   'Medium'
+DK_ITEM dk_t_s2,   'Large'
 
+; DK_PARITY p - 0 or 1 byte, so the next byte's offset has parity p: the hot
+; code's (the composer, the faces, the clock's paint and its hands) stays at
+; the parity it was measured at whatever the cold code around it does - an
+; odd shift re-prices every word fetch on a 16-bit bus (tools/os88rdiff.py)
+%macro DK_PARITY 1
+    times (($ - $$) + %1) & 1 db 0
+%endmacro
+
+    DK_PARITY 1                 ; dk_lc's, measured (SPEC.md 110.14.4)
 %include "dkdraw.inc"
 %include "dkface.inc"
 
-%define OS88UI_ALERT            ; STIK_DAMAGEDQ's question
+%define OS88UI_MACROS           ; no os88ui control: the forms draw their
+                                ; own (dkset.inc) and About is a toast
 %include "os88ui.inc"
 %include "os88gfx.inc"
+%ifdef STIK_DESKONLY            ; the include's paint path (stik_paint ..
+    DK_PARITY 0                 ; stik_desk) at its measured parity: what
+%else                           ; STIK_DESKONLY takes out ahead of it is
+    DK_PARITY 1                 ; an odd number of bytes
+%endif
 %include "os88stik.inc"
 %include "dkwid.inc"            ; AFTER os88stik.inc: its STIKL_* and macros
 %include "dkset.inc"

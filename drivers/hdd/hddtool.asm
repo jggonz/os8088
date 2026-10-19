@@ -52,7 +52,6 @@
 %include "inst.inc"
 %include "os88rseq.inc"         ; os88_rseq: READ_AT's registers, READ_SEQ's walk
 %include "cppage.inc"
-%include "iassoc.inc"
 
 ; -----------------------------------------------------------------------------
 ; hd_tentry - the dispatcher's landing site
@@ -86,8 +85,14 @@ hd_tentry:
 
 ; -----------------------------------------------------------------------------
 ; hd_tinit - HDT_INIT: who loaded us, and how to call back
-; in:  DX = the resident's segment, BX = hd_svc's offset in it
+; in:  DX = the resident's segment, BX = hd_svc's offset in it, CX = its
+;      dispatcher's offset in it
 ; out: CF = 0
+;
+; CX IS NOT PKG_DISP and is not to be assumed: a resident running from the
+; HMA is assembled at DRV_ORG (SPEC.md 2.10.8) and its dispatcher is at
+; DRV_ORG + PKG_DISP. HD_ABI_VER 5 assumed 000Ch and its first service call
+; jumped into whatever the pool held below the resident.
 ;
 ; The ABI version was checked by the resident before this call (it is in our
 ; header at +10), so there is nothing left to refuse on. It is still a
@@ -98,7 +103,7 @@ hd_tentry:
 hd_tinit:
     mov [hd_rseg], dx
     mov [hd_rsvc], bx
-    mov word [hd_rdisp], PKG_DISP
+    mov [hd_rdisp], cx
     mov [hd_rdisp+2], dx
     clc
     ret

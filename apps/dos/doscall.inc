@@ -62,7 +62,7 @@ CORE_ORG    equ 0x0080
 ; opposite sides, so growing either one costs the other. This is a rung the
 ; CORE alone spends, both hosts read, and whose slack is one number in one
 ; place. Measured at the wave, with the assertion in `apps/dos/doscore.asm`.
-CORE_MAX    equ 15312            ; +512 for SPEC.md 96.7.2's stack swap and
+CORE_MAX    equ 15344            ; +512 for SPEC.md 96.7.2's stack swap and
                                 ; 96.12.5's name truncation, which are 214
                                 ; bytes between them against 89 of slack. The
                                 ; two are the Playroom's whole report: a gate
@@ -84,6 +84,11 @@ CORE_MAX    equ 15312            ; +512 for SPEC.md 96.7.2's stack swap and
                                 ; (SPEC.md 96.7.3, 96.44.15): the core fell
                                 ; to 15,311, so the kilobyte came back and
                                 ; one more with it - KD_IMG_KB 35 -> 33
+                                ; +32 for SPEC.md 96.30.9: `CD \A\B` walks
+                                ; the folder part (dsh_cdto, +30) and a CD
+                                ; that fails goes back to where it stood
+                                ; (+8), against 8 of slack. 15,342 used,
+                                ; kept a multiple of 16
 ; ...and the core's bss sits directly above its code, at the same offset in
 ; every host, which is what SPEC.md 96.44.2 requires of every `DBSS` cell.
 ; --- THE CORE'S BLOCK IS A BUDGET, NOT A SUM (SPEC.md 96.44.2) --------------

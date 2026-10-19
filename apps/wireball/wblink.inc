@@ -23,7 +23,14 @@ wb_openports:
     or al, 0x18                ; mask BOTH: mouse IRQs scan both UARTs
     out 0x21, al
     popf
-    mov ax, 0x40
+    push ds
+    pop es
+    mov di, wb_ports            ; both ports' state starts clear
+    mov cx, WP_SIZE
+    xor ax, ax
+    cld
+    rep stosw
+    mov al, 0x40
     mov es, ax
     mov si, wb_ports
     mov dx, [es:0]
@@ -44,14 +51,6 @@ wb_openports:
     pop es
     ret
 wb_openone:
-    mov byte [si+WP_QHEAD], 0
-    mov byte [si+WP_QTAIL], 0
-    mov byte [si+WP_QERR], 0
-    mov word [si+WP_BASE], 0
-    mov byte [si+WP_TLEN], 0
-    mov byte [si+WP_TPOS], 0
-    mov byte [si+WP_RLEN], 0
-    mov byte [si+WP_ESC], 0
     or dx, dx
     jz .out
     ; Every 8250 has a divisor latch; the original has no scratch register.
@@ -555,13 +554,13 @@ wb_state_valid:
 
 wb_lost:
     call wb_sound_quiet
-    mov byte [wb_bound], 0
-    mov byte [wb_phase], 0
-    mov word [wb_peer], 0
-    mov word [wb_peer+2], 0
-    mov word [wb_port], 0
-    mov byte [wb_command], 0
-    mov byte [wb_ack], 0
+    xor ax, ax
+    mov [wb_bound], al
+    mov [wb_phase], al
+    mov [wb_peer], ax
+    mov [wb_peer+2], ax
+    mov [wb_port], ax
+    mov [wb_command], ax        ; command, ack
     call OSAPI_GET_TICKS
     mov [wb_send], ax
     sub word [wb_send], 18

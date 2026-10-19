@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Does Write Img... put an image on a floppy, byte for byte?
 
+(...bar BS_VolID: SPEC.md 18.8.2.1 gives the written disk a serial of its
+own and leaves the image file alone, and the row asserts both.)
+
     python3 tests/wimgtrip.py
 
 SPEC.md 18.99.8 and 38.6.2, and docs/FIELD-NOTES.md 32. `tests/diskclone.py`
@@ -137,6 +140,7 @@ def pick_image(ui, m):
 FIX = M.scratch_disk("build/wimgtrip-%d.img" % os.getpid(), IMAGE, size=720)
 want = open(os88build.at(IMAGE), "rb").read()
 flush = os.path.abspath(os88build.at("build/wimgtrip-%d.a" % os.getpid()))
+flushb = os.path.abspath(os88build.at("build/wimgtrip-%d.b" % os.getpid()))
 
 try:
     with os88ui.boot(SYS, apps=FIX, machine=MACHINE) as ui:
@@ -280,18 +284,45 @@ try:
 
         m.flush(0, flush)
         after = open(flush, "rb").read()
-        bad = [i // 512 for i in range(0, len(want), 512)
-               if after[i:i + 512] != want[i:i + 512]]
-        check(len(after) == len(want) and not bad,
-              "drive 0 IS the image, every sector of it",
-              "an image is the disk and nothing else: a wrong LBA, a lost "
-              "sector 0 (SPEC.md 18.99.2) or a chunk read out of the file at "
-              "the wrong offset all show here as sector numbers",
-              got="%d sectors differ, first %s" % (len(bad), bad[:8]),
-              want="0 sectors differ")
+        m.flush(1, flushb)
+        bdisk = open(flushb, "rb").read()
+
+    # BS_VolID is the one field the write does NOT copy (SPEC.md 18.8.2.1):
+    # the disk gets a serial of its own, so it is not the twin of every other
+    # floppy written from this image. Every other byte must be the image's.
+    vol = slice(39, 43)
+
+    def unserial(d):
+        return d[:vol.start] + bytes(4) + d[vol.stop:]
+
+    check(want[38] == 0x29, "the image carries the extended BPB",
+          "the fixture's precondition: only a 0x29 boot sector has a serial "
+          "to stamp", got=want[38], want=0x29)
+    a2, w2 = unserial(after), unserial(want)
+    bad = [i // 512 for i in range(0, len(w2), 512)
+           if a2[i:i + 512] != w2[i:i + 512]]
+    check(len(after) == len(want) and not bad,
+          "drive 0 IS the image, every sector of it, bar the serial",
+          "an image is the disk and nothing else: a wrong LBA, a lost "
+          "sector 0 (SPEC.md 18.99.2) or a chunk read out of the file at "
+          "the wrong offset all show here as sector numbers",
+          got="%d sectors differ, first %s" % (len(bad), bad[:8]),
+          want="0 sectors differ")
+    check(after[vol] != want[vol],
+          "...and the written disk carries a SERIAL OF ITS OWN",
+          "SPEC.md 18.8.2.1: clo_fin stamps sector 0 on its way to the "
+          "floppy. The image's own serial on it makes every floppy written "
+          "from one image a twin of every other, signing the same",
+          got=after[vol].hex(), want="not " + want[vol].hex())
+    check(want in bdisk,
+          "...and the IMAGE FILE on B: is untouched",
+          "the stamp is made on the way to the destination, never in the "
+          "file it was read from: B: must still hold the image's bytes, "
+          "serial and all",
+          got="not found on B:", want="the image's 368,640 bytes, intact")
 
 finally:
-    for p in (FIX, FIX + ".args", flush):
+    for p in (FIX, FIX + ".args", flush, flushb):
         try:
             os.remove(p)
         except OSError:

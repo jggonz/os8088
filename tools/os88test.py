@@ -943,6 +943,14 @@ def main():
                         % (YELLOW, 100.0 * res.secs / res.row.secs,
                            res.row.secs, OFF))
             print("%s ok %s %-28s %5.1fs%s" % (GREEN, OFF, res.row.name, res.secs, slip))
+            # A row may pass and still have something to say: a line it
+            # starts with "warn:" is shown even when the row is ok, so a gate
+            # the fast tier only REPORTS (the guide lock) is heard on every
+            # `make` without holding one up.
+            if res.output and not a.verbose:
+                for line in res.output.splitlines():
+                    if line.startswith("warn:"):
+                        print("%s       | %s%s" % (YELLOW, line, OFF))
         else:
             print("%sFAIL%s %-28s %5.1fs  %s" % (RED, OFF, res.row.name, res.secs, res.reason))
         if res.output and (a.verbose or not (res.ok or res.skipped)):

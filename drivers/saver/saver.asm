@@ -772,6 +772,7 @@ sv_ry:      db 0
 %define OS88UI_NOBFIND          ; hit-tests its own rects: no os88ui_bfind (SPEC.md 20.5.1.3.4)
 %define OS88UI_NOGRADIO       ; check boxes only: no radio ring/dot (SPEC.md 13.15.3)
 %include "os88ui.inc"           ; the standard button, glyph and press latch
+%define OS88LINE_NOEDIT         ; nothing here calls os88line_edit (SPEC.md 83.1.2)
 %include "os88line.inc"         ; ...and the one-line field the two numbers use
 
 %include "svcfg.inc"            ; ...and the settings window (SPEC.md 79.7)

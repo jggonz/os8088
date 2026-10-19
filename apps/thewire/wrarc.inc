@@ -50,7 +50,8 @@
 ; =============================================================================
 
 ; --- the unpacker's phase ([wr_aph]) ------------------------------------------
-WAP_HDR     equ 0               ; accumulating the 32-byte file header
+WAP_HDR     equ 0               ; accumulating the 32-byte file header -
+                                ; ZERO, stored from a zeroed AL
 WAP_ENT     equ 1               ; ...or a 64-byte entry header
 WAP_BODY    equ 2               ; ...or feeding an entry's body
 WAP_END     equ 3               ; every entry is complete: a further byte is a
@@ -291,16 +292,14 @@ wr_aentck:
     inc cx                          ; the folders AND the file name
     mov si, wr_ehdr + WA_PATH
 .slot:
-    push cx
-    call wr_anamck
-    pop cx
+    call wr_anamck                  ; (CX kept)
     jc .no
     add si, WARC_SLOT
     loop .slot
-    mov word [wr_aout], 0           ; --- and the body's own state
-    mov word [wr_ain], 0
-    mov byte [wr_lph], 0
-    mov byte [wr_lbits], 0
+    mov [wr_aout], cx               ; --- and the body's own state, from the
+    mov [wr_ain], cx                ; zero `loop` leaves in CX
+    mov [wr_lph], cl
+    mov [wr_lbits], cl
     clc
     jmp short .out
 .no:
@@ -453,12 +452,11 @@ wr_lzb:
     mov es, [wr_dseg]
     mov si, di
     sub si, dx
-.copy:
-    mov al, [es:si]
-    mov [es:di], al
-    inc si
-    inc di
-    loop .copy
+    push ds                         ; DS = ES = the decode claim for one
+    push es                         ; movsb run, which copies FORWARD a byte
+    pop ds                          ; at a time - so an overlapping match
+    rep movsb                       ; (distance < length) repeats as LZ77
+    pop ds                          ; wants, exactly as the loop it replaced
     mov [wr_aout], di
 .adv:
     shr byte [wr_lflag], 1
@@ -499,19 +497,18 @@ wr_arcstart:
     mov di, wr_fname                ; /wire/pkg/<STEM>.WPK
     mov si, wr_x_wpk
     call wr_stemput
-    mov byte [wr_aph], WAP_HDR      ; --- the unpacker, from the top
-    mov word [wr_acnt], 0
-    mov word [wr_adone], 0
-    mov word [wr_an], 0
+    xor ax, ax                      ; --- the unpacker, from the top
+    mov [wr_aph], al                ; WAP_HDR
+    mov [wr_acnt], ax
+    mov [wr_adone], ax
+    mov [wr_an], ax
     mov byte [wr_ldep], 0xFF        ; ...and no folder banked, so the first
                                     ; entry always stands somewhere
     call wr_freefile                ; a claim from a previous chain, if any
-    xor ax, ax
-    xor bx, bx
+    xor bx, bx                      ; (AX kept: still 0)
     xor cx, cx
     mov dx, WK_ARC
-    call wr_start
-    ret
+    jmp wr_start
 
 ; -----------------------------------------------------------------------------
 ; wr_arcbase - the WW_HDR pause: the claim, `home`, and where we stand
@@ -557,7 +554,7 @@ wr_arcbase:
     mov [wr_bdrv], bl
     mov byte [wr_state], WS_BODY    ; ...and the worker may carry on
     clc
-    jmp short .out
+    ret
 .nomem:
     mov word [wr_msg], wr_s_nomem
     jmp short .no
@@ -671,8 +668,7 @@ wr_arcwrite:
     call OSAPI_FILE_WRITE
 .wrote:
     jc .no
-    clc
-    jmp short .out
+    ret                             ; CF = 0: the jc fell through
 .no:
     call wr_wrfail                  ; 'Could not write <name>' - a failure
     stc                             ; mid-tree LEAVES WHAT WAS WRITTEN (22)
@@ -823,14 +819,12 @@ wr_ramck:
     call wr_selrec
     mov ax, [es:si+WC_NEEDKB]
     mov [wr_needkb], ax
-    mov bh, RD_CLASS
-    mov bl, RDPV_IDENT
+    mov bx, (RD_CLASS << 8) | RDPV_IDENT
     call OSAPI_DRV_CALL
     jc .nodrv
     cmp ax, RD_SIG
     jne .nodrv
-    mov bh, RD_CLASS
-    mov bl, RDPV_STATE
+    mov bx, (RD_CLASS << 8) | RDPV_STATE
     call OSAPI_DRV_CALL
     jc .nodrv                       ; an OLDER driver, whose RDPV_MAX is 1
     cmp al, 0xFF
@@ -865,8 +859,7 @@ wr_ramck:
     mov bl, 0xFF                    ; the PREDICATE only asked, and mounting
     jmp short .yes                  ; from a painter would put a volume on the
 .doit:                              ; desktop every time the window redrew
-    mov bh, RD_CLASS
-    mov bl, RDPV_MOUNT
+    mov bx, (RD_CLASS << 8) | RDPV_MOUNT
     call OSAPI_DRV_CALL             ; AX = the KB, rounded already
     jc .short                       ; it refused after answering that it could:
                                     ; say the size, which is still the thing a
@@ -920,7 +913,6 @@ wr_rreason:
     call wr_sput
     mov si, bx
     call wr_sput
-    mov byte [di], 0
     mov si, wr_rmsg
     pop di
     pop dx

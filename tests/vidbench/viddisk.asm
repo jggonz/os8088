@@ -74,6 +74,15 @@
 ;    4 MB streamed as 64-sector commands against 4 MB of 32 KB READ_SEQ
 ;    calls on the stream: what the second costs over the first is the
 ;    kernel's and HDD.DRV's own CPU. Read-only. Saves VDCPU.TXT.
+; L  LOADALL ON A 286 (docs/plans/LOADALL-PLAN.md 8): whether this CPU's
+;    LOADALL runs, whether A20 is open before and after an OSAPI_XMEM_COPY,
+;    32 KB READ and WRITTEN in extended memory in place and checked, a
+;    borrow's fixed cost and the copies by LOADALL against OSAPI_XMEM_COPY,
+;    a read above 1 MB against below it, and - on an IDE drive at 1F0h -
+;    sectors read by the task file STRAIGHT INTO XMS, checked, timed, and
+;    counted by how many each interrupts-off borrow took. Disk read-only.
+;    M is L with the CS cache's access byte 9Bh where L uses 93h. Saves
+;    VDLALL.TXT. vk_larun's header has the rest.
 ;
 ; With a STREAM.DAT, R also CHECKS the data at 12 MB, read by READ_AT and by
 ; READ_SEQ: a stream that times well and reads the wrong bytes is not a
@@ -127,7 +136,7 @@
 
     OS88_HEADER 'VIDDISK', vk_entry
 
-VK_NRES     equ 23
+VK_NRES     equ 28
 VK_BUFKB    equ 40                  ; 32 KB chunks, and a whole track
 VK_CHUNK    equ 32768
 %ifndef VK_WSUB
@@ -204,6 +213,12 @@ vk_onkey:
     je .ems
     cmp bl, 'c'                     ; C: what a read costs the CPU
     je .cpu
+    mov byte [vk_lacs], 0x93        ; L: LOADALL, the CS cache's access 93h
+    cmp bl, 'l'
+    je .lall
+    mov byte [vk_lacs], 0x9B        ; M: the same with 9Bh
+    cmp bl, 'm'
+    je .lall
     call bl_key
     jc .out
     call bl_paint
@@ -222,6 +237,9 @@ vk_onkey:
     jmp short .paint
 .cpu:
     call vk_cprun
+    jmp short .paint
+.lall:
+    call vk_larun
     jmp short .paint
 .run:
     call vk_run
@@ -278,7 +296,7 @@ vk_b_seq:
     push ds
     pop es
     mov dx, [vk_buf]
-    xor bx, bx
+    mov bx, [vk_rdoff]              ; (0 but for vk_xrdpl's rows)
     mov cx, [vk_cap]
     mov di, vk_cur
     mov si, [vk_fname]
@@ -1348,6 +1366,7 @@ vk_wrun:
 ; vk_xmrun - X: OSAPI_XMEM_COPY on this machine (see the header)
 ; =============================================================================
 VK_XMN      equ 8                   ; iterations of a copy row
+VK_XSWKB    equ 1024                ; vk_xsweep's block
 VK_XMKB     equ 64                  ; the block: two chunks, so the fill
                                     ; rows alternate halves as a bank would
 
@@ -1402,6 +1421,7 @@ vk_xmrun:
 .got:
     mov [vk_xmb], ax
     mov [vk_xmb + 2], dx
+    call vk_xmat
     ; --- THE CHECK: chunk 3's pattern up into the block's second half, the
     ; buffer overwritten with chunk 0's, and the half copied back down: it
     ; must be chunk 3's again (vk_fill: high word 1, low words from 32768)
@@ -1462,8 +1482,10 @@ vk_xmrun:
     call bl_run
     add bx, 6
     jmp short .row
-    ; --- the bank's fill: READ_SEQ alone, then READ_SEQ and a copy up
 .fill:
+    call vk_xsweep
+    call vk_xconv
+    ; --- the bank's fill: READ_SEQ alone, then READ_SEQ and a copy up
     call vk_toc
     jnc .look
     mov si, vk_s_noc
@@ -1492,6 +1514,7 @@ vk_xmrun:
     call vk_xmfill
     mov si, vk_r_xmbank
     call vk_kv
+    call vk_xrdpl
 .home:
     call vk_back
 .free:
@@ -1514,6 +1537,587 @@ vk_xmrun:
     pop cx
     pop bx
     pop ax
+    ret
+
+; vk_xrdpl - THE DISK'S END: READ_SEQ alone (vk_xmfill, 5 s a row) into
+; the buffer at offsets 0, 1, 2 and 3 KB, then 0 again for the drift. The
+; READ_SEQ row moved 634 -> 877 KB/s between two boots that also moved the
+; wait states AND the buffer; this holds the boot still and moves the buffer
+vk_xrdpl:
+    push ax
+    push bx
+    push si
+    push di
+    mov si, vk_s_xrphdr
+    call bl_sline
+    mov word [vk_ceilmb], 0
+    mov byte [vk_xmup], 0
+    mov bx, 23
+    mov si, vk_r_xrp
+    mov di, vk_xrpoff
+.l:
+    mov ax, [di]
+    mov [vk_rdoff], ax
+    push si
+    push di
+    call vk_xmfill                  ; (which spends SI and DI)
+    pop di
+    pop si
+    call vk_kv
+    inc bx
+    add si, VK_XSWL
+    inc di
+    inc di
+    cmp di, vk_xrpoff + 10
+    jb .l
+    mov word [vk_rdoff], 0
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; vk_xmat - WHERE THIS BOOT PUT THINGS: the buffer's and the block's
+; linear addresses, in KB. The same copy has read 0.214, 0.257 and 0.337 ms
+; a KB on the Victory from one boot to the next, at either bus setting, with
+; the in-place READ unchanged - so what moves is a copy's two ends, and a
+; report that does not say where they were cannot be compared with another.
+; Preserves every register
+vk_xmat:
+    push ax
+    push cx
+    push dx
+    push si
+    mov ax, [vk_buf]                ; segment -> KB: seg / 64
+    mov cl, 6
+    shr ax, cl
+    xor dx, dx
+    mov cx, 9
+    mov si, vk_r_xwbuf
+    call bl_kv
+    mov ax, [vk_xmb]                ; linear -> KB: DX:AX >> 10
+    mov dx, [vk_xmb + 2]
+    mov cl, 10
+    shr ax, cl
+    mov cl, 6
+    shl dx, cl
+    or ax, dx
+    xor dx, dx
+    mov cx, 9
+    mov si, vk_r_xwxms
+    call bl_kv
+    mov ax, [vk_buf]                ; ...and EXACTLY, in bytes: a KB hides
+    call vk_seglin                  ; the low bits a bank interleave reads
+    mov cx, 9
+    mov si, vk_r_xwbufb
+    call bl_kv
+    mov ax, [vk_xmb]
+    mov dx, [vk_xmb + 2]
+    mov si, vk_r_xwxmsb
+    call bl_kv
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; vk_seglin - AX = a segment: DX:AX = its linear address
+vk_seglin:
+    push cx
+    mov dx, ax
+    mov cl, 4
+    shl ax, cl
+    mov cl, 12
+    shr dx, cl
+    pop cx
+    ret
+
+; vk_xsweep - the same 8 KB copy DOWN from sixteen places 64 KB apart in a
+; 1 MB block, into the same buffer: if a boot's speed is the ADDRESS (DRAM
+; banks, a page-mode hit or miss between the copy's two ends) the rows
+; differ; if it is the machine's state, they agree with each other and not
+; with another boot's. Then 8 KB RAM -> RAM inside the buffer, the control
+; with no extended memory in it. Skipped, saying so, without 1 MB free
+vk_xsweep:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov si, vk_s_xswhdr
+    call bl_sline
+    mov dx, VK_XSWKB / 64           ; DX:AX = 1 MB
+    xor ax, ax
+    call OSAPI_XMEM_ALLOC
+    jnc .got
+    mov si, vk_s_xswno
+    call bl_sline
+    jmp short .ram
+.got:
+    push word [vk_xmb]              ; the 64 KB block, back after
+    push word [vk_xmb + 2]
+    mov [vk_xsw], ax
+    mov [vk_xsw + 2], dx
+    mov [vk_xmb], ax
+    mov [vk_xmb + 2], dx
+    mov word [vk_xmlen], 8192
+    mov word [vk_xmhalf], 0
+    mov word [bl_n], VK_XMN
+    mov word [bl_body], vk_b_xmdn
+    mov si, vk_r_xsw
+.row:
+    xor al, al                      ; method P
+    call bl_run
+    inc word [vk_xmb + 2]           ; the next 64 KB
+    add si, VK_XSWL
+    cmp si, vk_r_xsw + 16 * VK_XSWL
+    jb .row
+    pop word [vk_xmb + 2]
+    pop word [vk_xmb]
+    mov ax, [vk_xsw]
+    mov dx, [vk_xsw + 2]
+    call OSAPI_XMEM_FREE
+.ram:
+    mov word [bl_body], vk_b_xram
+    mov si, vk_r_xram
+    xor al, al
+    call bl_run
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; 8 KB RAM -> RAM inside the buffer, rep movsw: the control
+vk_b_xram:
+    push cx
+    push si
+    push di
+    push ds
+    push es
+    mov es, [vk_buf]                ; ES first: [vk_buf] is ours, and DS
+    push es                         ; stops being ours on the next line
+    pop ds
+    xor si, si
+    mov di, 16384
+    mov cx, 4096
+    cld
+    rep movsw
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
+    ret
+
+; vk_xconv - the same 8 KB copy DOWN from the XMS block into CONVENTIONAL
+; memory at every place the heap will give: up to VK_XCN 64 KB claims, timed
+; at each one's start and middle, each row after a line saying where in KB.
+; vk_xsweep's sixteen rows read flat on the Victory, so a boot's speed is not
+; where the XMS end is; the other end is what this asks. Claims as much as
+; the heap holds and gives it all back before the fill rows
+vk_xconv:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, vk_s_xchdr
+    call bl_sline
+    xor bx, bx
+.claim:
+    cmp bx, VK_XCN * 2
+    jae .run
+    mov ax, 64
+    call OSAPI_MEM_CLAIM            ; DX = the block
+    jc .run
+    mov [vk_xcsegs + bx], dx
+    inc bx
+    inc bx
+    jmp short .claim
+.run:
+    mov [vk_xcn], bx
+    or bx, bx
+    jnz .go
+    mov si, vk_s_xcno
+    call bl_sline
+    jmp short .out
+.go:
+    xor bx, bx
+.blk:
+    mov ax, [vk_xcsegs + bx]
+    mov [vk_xcs], ax
+    mov word [vk_xco], 0
+    call .one
+    mov word [vk_xco], 32768
+    call .one
+    inc bx
+    inc bx
+    cmp bx, [vk_xcn]
+    jb .blk
+    ; --- the FINE sweep: the same copy into the first block at offsets 0,
+    ; 2, 4 ... 16384 bytes. A board that interleaves two banks overlaps a
+    ; read with a write in the other bank and makes one in the same bank
+    ; wait, so a copy's speed is fixed by a few LOW bits of its two ends -
+    ; which a boot's heap layout moves and a 64 KB step never does
+    mov si, vk_s_xfhdr
+    call bl_sline
+    mov ax, [vk_xcsegs]
+    mov [vk_xcs], ax
+    xor ax, ax
+.fine:
+    mov [vk_xco], ax
+    push ax
+    xor dx, dx
+    mov cx, 9
+    mov si, vk_r_xfoff
+    call bl_kv
+    mov word [bl_n], VK_XMN
+    mov word [bl_body], vk_b_xcdn
+    mov si, vk_r_xcdn
+    xor al, al
+    call bl_run
+    pop ax
+    or ax, ax
+    jnz .fnext
+    inc ax                          ; 0 -> 2 (1 after the shift below)
+.fnext:
+    shl ax, 1
+    cmp ax, 16384
+    jbe .fine
+    call vk_xgrid
+    xor bx, bx
+.free:
+    mov dx, [vk_xcsegs + bx]
+    call OSAPI_MEM_FREE
+    inc bx
+    inc bx
+    cmp bx, [vk_xcn]
+    jb .free
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.one:                               ; where, in KB, and then the row
+    mov ax, [vk_xcs]
+    mov cl, 6
+    shr ax, cl
+    mov dx, [vk_xco]
+    mov cl, 10
+    shr dx, cl
+    add ax, dx
+    xor dx, dx
+    mov cx, 9
+    mov si, vk_r_xcat
+    call bl_kv
+    mov word [bl_n], VK_XMN
+    mov word [bl_body], vk_b_xcdn
+    mov si, vk_r_xcdn
+    xor al, al                      ; method P
+    call bl_run
+    ret
+
+; vk_xgrid - WHICH END: the first claim's offset D and the XMS block's S
+; stepped a KB at a time, each against each - sixteen rows down, then four
+; up. The fine sweep moved only D, and the XMS rows only S in 64 KB steps,
+; so neither can say whether a copy's speed is where its CONVENTIONAL end
+; lies or how far its two ends are apart (mod 4 KB, on a board that
+; interleaves 2 KB pages): if the gap, the rows of one diagonal agree.
+; Then the first claim's linear address, exactly
+vk_xgrid:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, vk_s_xghdr
+    call bl_sline
+    mov ax, [vk_xcsegs]
+    mov [vk_xcs], ax
+    call vk_seglin
+    mov cx, 9
+    mov si, vk_r_xgat
+    call bl_kv
+    mov word [bl_n], VK_XMN
+    mov si, vk_r_xg
+    xor bx, bx                      ; BX = D, CX = S
+    mov word [bl_body], vk_b_xcdn
+.d:
+    xor cx, cx
+.s:
+    call .one
+    add cx, 1024
+    cmp cx, 4096
+    jb .s
+    add bx, 1024
+    cmp bx, 4096
+    jb .d
+    xor bx, bx                      ; ...and UP, S held at the block's start
+    xor cx, cx
+    mov word [bl_body], vk_b_xcup
+.u:
+    call .one
+    add bx, 1024
+    cmp bx, 4096
+    jb .u
+    mov word [vk_xco], 0
+    mov word [vk_xso], 0
+    mov ax, [vk_xmb]                ; ...and what os88xgap.inc's xg_gap
+    mov dx, [vk_xmb + 2]            ; answers from its own six copies,
+    call xg_gap                     ; which the Video Player places by: G,
+    jnc .gok                        ; the gap the grid above calls fastest
+    inc word [vk_err]
+.gok:
+    xor dx, dx
+    mov cx, 9
+    mov si, vk_r_xgg
+    call bl_kv
+    or ax, ax
+    jz .nog
+    call vk_xgrows                  ; ...and the transports AT it
+.nog:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.one:
+    mov [vk_xco], bx
+    mov [vk_xso], cx
+    push bx
+    push cx
+    push si
+    xor al, al                      ; method P
+    call bl_run
+    pop si
+    pop cx
+    pop bx
+    add si, VK_XSWL
+    ret
+
+; vk_xgrows - AX = G, the gap xg_gap answered: THE TRANSPORTS, placed. The
+; same copies by OSAPI_XMEM_COPY (on a 286, XMEM.DRV's LOADALL in 16 KB
+; pieces, SPEC.md 41.13) and by int 15h AH=87h called here, at four sizes
+; both ways, with the first claim's end G mod 2G from the block's - where
+; the Video Player puts its ring (SPEC.md 98.3.18.12) - and at 32 KB 0 mod
+; 2G apart too. It is what the encoder's copy cost should be read from: the
+; rows above time a buffer wherever this boot's heap left it, which is what
+; made the piece size a cross-boot comparison (LOADALL-PLAN 9).
+vk_xgrows:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, vk_s_xgrhd
+    call bl_sline
+    mov bx, ax                      ; G
+    shl ax, 1
+    dec ax
+    mov cx, ax                      ; 2G - 1
+    mov ax, [vk_xcsegs]
+    mov [vk_xcs], ax
+    mov dx, ax
+    push cx
+    mov cl, 4
+    shl dx, cl                      ; C, the claim's linear low word
+    pop cx
+    mov ax, [vk_xmb]
+    sub ax, dx                      ; X - C
+    and ax, cx
+    mov [vk_xwo], ax                ; 0 apart
+    mov ax, [vk_xmb]
+    add ax, bx
+    sub ax, dx                      ; X + G - C
+    and ax, cx
+    mov [vk_xbo], ax                ; G apart
+    mov word [vk_xso], 0
+    call vk_x87chk                  ; the BIOS's ends right before any timing
+    mov word [bl_n], VK_XMN
+    mov si, vk_xgtab
+.row:
+    mov ax, [si]
+    or ax, ax
+    jz .done
+    mov [vk_xcl], ax
+    mov ax, [vk_xbo]
+    cmp word [si + 2], 0
+    je .b
+    mov ax, [vk_xwo]
+.b:
+    mov [vk_xco], ax
+    mov ax, [si + 4]
+    mov word [bl_body], ax          ; (the table's: one each row)
+    push si
+    mov si, [si + 6]
+    xor al, al                      ; method P
+    call bl_run
+    pop si
+    add si, 8
+    jmp short .row
+.done:
+    mov word [vk_xcl], 8192
+    mov word [vk_xco], 0
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; [vk_xcl] bytes by int 15h AH=87h between [vk_xcs]:[vk_xco] and the block
+; + [vk_xso], up or down - the BIOS's transport, called from here so it can
+; be set beside XMEM.DRV's on one boot
+vk_b_x87up:
+    push di
+    xor di, di
+    jmp short vk_x87
+vk_b_x87dn:
+    push di
+    mov di, 1
+vk_x87:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    mov ax, [vk_xcs]
+    call vk_seglin
+    add ax, [vk_xco]
+    adc dx, 0
+    mov bx, ax
+    mov cx, dx                      ; CX:BX = the conventional end
+    mov ax, [vk_xmb]
+    mov dx, [vk_xmb + 2]
+    add ax, [vk_xso]
+    adc dx, 0                       ; DX:AX = the extended end
+    or di, di
+    jz .up
+    xchg ax, bx                     ; down: the extended end is the source
+    xchg dx, cx
+.up:                                ; CX:BX = the source, DX:AX = the target
+    mov si, vk_gdt + 0x18
+    call vk_desc
+    mov ax, bx
+    mov dx, cx
+    mov si, vk_gdt + 0x10
+    call vk_desc
+    push ds
+    pop es
+    mov si, vk_gdt
+    mov cx, [vk_xcl]
+    shr cx, 1                       ; (words)
+    mov ah, 0x87
+    int 0x15
+    jnc .ok
+    inc word [vk_err]
+.ok:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop di
+    ret
+
+; vk_x87chk - AH=87h's ends checked: 4 KB of a pattern at [vk_xcs]:[vk_xbo]
+; up, the buffer zeroed, back down; the report says ok or the first word
+; wrong (a descriptor built wrong writes somewhere else in conventional
+; memory, and would time the same). Preserves all
+vk_x87chk:
+    push ax
+    push cx
+    push di
+    push es
+    mov word [vk_xcl], 4096
+    mov ax, [vk_xbo]
+    mov [vk_xco], ax
+    mov es, [vk_xcs]
+    mov di, ax
+    mov cx, 2048
+    mov ax, 0x5A00
+    cld
+.f:
+    stosw
+    inc ax
+    loop .f
+    call vk_b_x87up
+    mov di, [vk_xco]
+    mov cx, 2048
+    xor ax, ax
+    rep stosw
+    call vk_b_x87dn
+    mov di, [vk_xco]
+    mov cx, 2048
+    mov ax, 0x5A00
+.c:
+    scasw
+    jne .bad
+    inc ax
+    loop .c
+    mov di, vk_s_dok
+    jmp short .say
+.bad:
+    inc word [vk_err]
+    mov di, vk_s_xmbad
+.say:
+    push si
+    mov si, vk_r_x87ck
+    call bl_kvs
+    pop si
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret
+
+; vk_desc - SI = an AH=87h descriptor, DX:AX = its base: [vk_xcl] long,
+; data, writable. Preserves all
+vk_desc:
+    push cx
+    mov cx, [vk_xcl]
+    dec cx
+    mov [si], cx
+    mov [si + 2], ax
+    mov [si + 4], dl
+    mov byte [si + 5], 0x93
+    mov word [si + 6], 0
+    pop cx
+    ret
+
+; 8 KB up into the XMS block (+[vk_xso]) from [vk_xcs]:[vk_xco]
+vk_b_xcup:
+    push di
+    xor di, di
+    jmp short vk_xccopy
+; 8 KB down from the XMS block (+[vk_xso]) into [vk_xcs]:[vk_xco]
+vk_b_xcdn:
+    push di
+    mov di, 1
+vk_xccopy:
+    push es
+    mov es, [vk_xcs]
+    mov si, [vk_xco]
+    mov ax, [vk_xmb]
+    mov dx, [vk_xmb + 2]
+    add ax, [vk_xso]
+    adc dx, 0
+    mov cx, [vk_xcl]
+    call OSAPI_XMEM_COPY
+    jnc .ok
+    inc word [vk_err]
+.ok:
+    pop es
+    pop di
     ret
 
 ; the copy bodies: [vk_xmlen] bytes between the buffer and the block at
@@ -2104,7 +2708,8 @@ vk_drun:
     pop ax
     ret
 
-%define BL_ARENA_BYTES 5000
+%define BL_ARENA_BYTES 9000          ; (X's report is ~7,000 with its
+                                    ; source grid and disk rows; 5,000 cut it)
 ; --- one int 13h across a head (see the header) ---------------------------------
 VK_MHMAX    equ VK_BUFKB * 2        ; sectors the buffer holds: 80
 VK_MHPAT    equ 0xE5A6              ; what a sector the ROM did not read reads
@@ -3023,6 +3628,781 @@ vk_b_ide:
     pop es
     ret
 
+; =============================================================================
+; vk_larun - L and M: LOADALL on a 286 (docs/plans/LOADALL-PLAN.md 8)
+;
+; THE 286's LOADALL (`0F 05`) loads EVERY register, the hidden descriptor
+; caches included, from 102 bytes at physical 0x800 - which in os8088 is
+; KERNEL_SEG:0x0200, the published API cells 0x0204-0x0265. So every use is
+; a BORROW inside one IF=0 window: save the 102 bytes, write the table,
+; LOADALL, do the work through the cache it set, put the bytes back
+; (vk_lborrow / vk_lrestore). Nothing calls a cell while interrupts are off.
+;
+; L builds the CS cache with access byte 93h, M with 9Bh: the one field of
+; the table nobody here has seen work on silicon. A freeze at the probe with
+; one is a reason to try the other.
+;
+; WHAT A FAILED CACHE LOAD DOES IS ARRANGED, not hoped: the table's VISIBLE
+; ES selector is the bench's own 40 KB buffer, so a write through an ES whose
+; cache did not take lands in memory the bench owns, and DS's is segment 0,
+; so a read through a DS whose cache did not take reads the interrupt table
+; and FAILS every comparison below rather than passing one.
+;
+; Rows, in this order: A20 as the machine has it; the probe (INT 6 trapped:
+; not a 286's LOADALL); the caches checked below 1 MB, before anything is
+; written through one (vk_lself); on an IDE drive at 1F0h, 64 sectors read by the task
+; file STRAIGHT INTO XMS - each run of sectors whose DRQ is up inside one
+; borrow - checked against the same sectors read plainly, then 2 MB of each
+; timed, and how many sectors each borrow took; A20 after an OSAPI_XMEM_COPY;
+; a 32 KB read IN PLACE checked against bytes that copy put there (and the
+; same read 1 KB off, which must differ); a 32 KB write in place read back
+; through OSAPI_XMEM_COPY; a borrow's fixed cost and the copies by both
+; transports at 32, 8, 4 and 1 KB; 32 KB read above 1 MB against below it.
+; The fill is FIRST because it makes no AH=87h call, and some AT BIOSes shut
+; A20 behind every one. And EVERY WRITE through a cache asks the gate first
+; (vk_la20) and is skipped, and counted, when it is shut: a write through a
+; shut gate lands 1 MB lower, in conventional memory. Read-only on the disk.
+; Saves VDLALL.TXT.
+; =============================================================================
+VK_LN       equ 8                   ; iterations of a timed row
+VK_LRUN     equ 8                   ; sectors a borrow takes at most
+VK_LDRQ     equ 256                 ; status reads a borrow waits for the next
+                                    ; DRQ before it lets the interrupts in
+VK_LSTRM    equ 64                  ; 32 KB units a fill row: 2 MB
+
+vk_larun:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov word [vk_err], 0
+    mov word [bl_nrow], 0
+    mov word [vk_ladone], 0
+    mov word [vk_la20x], 0
+    mov si, vk_s_latitle
+    call bl_sline
+    mov si, vk_r_lacs
+    mov al, [vk_lacs]
+    xor ah, ah
+    xor dx, dx
+    mov cx, 9
+    call bl_kv
+    call vk_claim
+    jnc .cpu
+    mov si, vk_s_fail
+    call bl_sline
+    jmp .save
+.cpu:
+    call OSAPI_CPU_INFO
+    push ax
+    xor ah, ah
+    xor dx, dx
+    mov si, vk_r_xmtier
+    mov cx, 9
+    call bl_kv
+    pop ax
+    cmp al, CPU_286                 ; 286 ONLY: a 386 executes 0F 05 as an
+    je .xms                         ; invalid opcode, and its LOADALL is a
+    mov si, vk_s_lanot              ; different instruction
+    call bl_sline
+    jmp .save
+.xms:
+    call OSAPI_XMEM_CAPS
+    xor dx, dx
+    mov cx, 9
+    mov si, vk_r_xmfree
+    call bl_kv
+    cmp ax, VK_XMKB
+    jae .alloc
+    mov si, vk_s_xmnone
+    call bl_sline
+    jmp .save
+.alloc:
+    mov dx, VK_XMKB / 64
+    xor ax, ax
+    call OSAPI_XMEM_ALLOC
+    jnc .got
+    mov si, vk_s_xmnoalloc
+    call bl_sline
+    jmp .save
+.got:
+    mov [vk_xmb], ax
+    mov [vk_xmb + 2], dx
+    call vk_xmat                    ; where this boot put the two ends
+    call vk_lprep                   ; the template, from SMSW / SIDT / SGDT
+    mov si, vk_r_lamsw
+    mov ax, [la_msw]
+    xor dx, dx
+    mov cx, 9
+    call bl_kv
+    mov si, vk_r_laidb
+    mov ax, [la_idt]
+    mov dl, [la_idt + 2]
+    xor dh, dh
+    call bl_kv
+    mov si, vk_r_laidl
+    mov ax, [la_idt + 4]
+    xor dx, dx
+    call bl_kv
+    ; --- A20 as the machine has it, before this run copies anything
+    mov si, vk_r_la20a
+    call vk_la20say
+    ; --- THE PROBE: a borrow that changes nothing, INT 6 hooked across it
+    mov si, vk_s_laprobe
+    call bl_progress
+    call vk_lprobe
+    mov di, vk_s_layes
+    cmp byte [vk_lfault], 0
+    je .pr
+    mov di, vk_s_lano
+.pr:
+    mov si, vk_r_laprobe
+    call bl_kvs
+    cmp byte [vk_lfault], 0
+    je .self
+    jmp .free
+    ; --- THE CACHES TOOK, before anything is WRITTEN through one: both
+    ; aimed 1 KB into the bench's own buffer and compared. A DS cache that
+    ; did not take reads the interrupt table (its selector is 0), an ES one
+    ; reads the buffer from 0 (its selector): either way the bytes differ
+.self:
+    call vk_lself
+    mov di, vk_s_dok
+    jnc .sf
+    mov di, vk_s_labad
+    inc word [vk_err]
+.sf:
+    mov si, vk_r_laself
+    call bl_kvs
+    cmp word [vk_err], 0
+    je .fill
+    jmp .free
+    ; --- THE FILL FIRST: sectors by the task file straight into XMS. It is
+    ; first because it needs no OSAPI_XMEM_COPY - its pattern goes up by
+    ; LOADALL and its reference is the disk itself - so a BIOS that shuts A20
+    ; behind every AH=87h (the rows below make them) cannot take it away
+.fill:
+    mov si, vk_s_lafhdr
+    call bl_sline
+    call vk_lfill
+    ; --- READ IN PLACE: chunk 3's pattern up to the block's second half by
+    ; OSAPI_XMEM_COPY, then compared through a borrow, and 1 KB off
+    mov si, vk_s_lachk
+    call bl_sline
+    mov ax, 3
+    call vk_fill
+    mov word [vk_xmlen], VK_CHUNK
+    mov word [vk_xmhalf], VK_CHUNK
+    call vk_b_xmup
+    mov si, vk_r_la20b
+    call vk_la20say
+    xor ax, ax
+    call vk_lcmp                    ; CF = 1: the bytes differ
+    mov di, vk_s_dok
+    jnc .rd
+    mov di, vk_s_labad
+    inc word [vk_err]
+.rd:
+    mov si, vk_r_lard
+    call bl_kvs
+    mov ax, 1024
+    call vk_lcmp
+    mov di, vk_s_ladiff
+    jc .rd2
+    mov di, vk_s_lasame
+    inc word [vk_err]
+.rd2:
+    mov si, vk_r_laoff
+    call bl_kvs
+    cmp word [vk_err], 0            ; a read that is not the bytes: nothing is
+    je .wr                          ; WRITTEN through a cache that may be wrong
+    jmp .free
+.wr:
+    ; --- WRITE IN PLACE: chunk 0's pattern up to the block's first half
+    ; through a borrow, the buffer overwritten, and the half brought back
+    ; down by OSAPI_XMEM_COPY: it must be chunk 0's again
+    xor ax, ax
+    call vk_fill
+    mov word [vk_xmlen], VK_CHUNK
+    mov word [vk_xmhalf], 0
+    call vk_b_lup
+    mov ax, 3
+    call vk_fill
+    call vk_b_xmdn
+    mov di, vk_s_dok
+    push es
+    mov es, [vk_buf]
+    cmp word [es:0], 0
+    jne .wbad
+    cmp word [es:2], 0
+    jne .wbad
+    cmp word [es:VK_CHUNK / 2], 0x4000
+    jne .wbad
+    cmp word [es:VK_CHUNK - 4], 0x7FFC
+    jne .wbad
+    cmp word [es:VK_CHUNK - 2], 0
+    je .wsay
+.wbad:
+    mov di, vk_s_labad
+    inc word [vk_err]
+.wsay:
+    pop es
+    mov si, vk_r_lawr
+    call bl_kvs
+    cmp word [vk_err], 0
+    je .rows
+    jmp .free                       ; wrong bytes: nothing worth timing
+    ; --- the timed rows
+.rows:
+    mov si, vk_s_lahdr
+    call bl_sline
+    mov word [bl_n], VK_LN
+    mov word [bl_body], vk_b_lnop
+    mov si, vk_r_lanop
+    xor al, al
+    call bl_run
+    mov word [vk_xmhalf], 0
+    mov bx, vk_larows
+.row:
+    mov ax, [bx]
+    or ax, ax
+    jz .reads
+    mov [vk_xmlen], ax
+    mov word [bl_body], vk_b_xmup
+    mov si, [bx + 2]
+    xor al, al
+    call bl_run
+    mov word [bl_body], vk_b_xmdn
+    mov si, [bx + 4]
+    xor al, al
+    call bl_run
+    mov word [bl_body], vk_b_lup
+    mov si, [bx + 6]
+    xor al, al
+    call bl_run
+    mov word [bl_body], vk_b_ldn
+    mov si, [bx + 8]
+    xor al, al
+    call bl_run
+    add bx, 10
+    jmp short .row
+.reads:
+    mov word [bl_body], vk_b_lrdx
+    mov si, vk_r_larx
+    xor al, al
+    call bl_run
+    mov word [bl_body], vk_b_lrdc
+    mov si, vk_r_larc
+    xor al, al
+    call bl_run
+.free:
+    mov ax, [vk_xmb]
+    mov dx, [vk_xmb + 2]
+    call OSAPI_XMEM_FREE
+    mov si, vk_r_la20x              ; LOADALL writes refused on a shut gate
+    mov ax, [vk_la20x]
+    xor dx, dx
+    mov cx, 9
+    call bl_kv
+.save:
+    mov si, vk_r_err
+    mov ax, [vk_err]
+    xor dx, dx
+    mov cx, 9
+    call bl_kv
+    call bl_operator
+    mov si, vk_f_latxt              ; the report, beside the bench
+    call bl_save
+    inc word [vk_ladone]            ; for a harness: L has finished
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vk_la20say - SI = label: "open" or "SHUT" for the A20 line right now
+vk_la20say:
+    push di
+    call vk_la20
+    mov di, vk_s_laopen
+    jnc .s
+    mov di, vk_s_lashut
+.s:
+    call bl_kvs
+    pop di
+    ret
+
+; vk_la20 - is the A20 line open RIGHT NOW? CF = 0 open, 1 shut. XMEM.DRV's
+; wraparound probe (xm_a20_probe): flip the word at FFFF:0510 and see whether
+; 0000:0500 moved with it, then flip it back. Preserves all but flags
+vk_la20:
+    push ax
+    push bx
+    push ds
+    push es
+    pushf
+    cli
+    xor ax, ax
+    mov es, ax
+    dec ax
+    mov ds, ax
+    mov bx, [es:0x0500]
+    not word [0x0510]
+    mov ax, [es:0x0500]
+    not word [0x0510]
+    popf
+    cmp ax, bx                      ; equal: the low word did not follow
+    pop es
+    pop ds
+    pop bx
+    pop ax
+    je .open
+    stc
+    ret
+.open:
+    clc
+    ret
+
+; THE BORROW IS apps/os88la.inc's - the include XMEM.DRV's LOADALL transport
+; assembles (SPEC.md 41.13), which is this bench's own borrow lifted out of it
+; after it ran on the Victory 286. Running it here is what proves the include
+; on a 286: these are thin names over it.
+vk_lds      equ la_dsc                  ; a borrow's DS cache, 24-bit linear
+vk_les      equ la_esc                  ; ...and ES's
+vk_lfault   equ la_fault                ; the probe trapped as INT 6
+vk_llin     equ la_lin                  ; AX = a segment -> DX:AX linear
+vk_lrestore equ la_restore              ; the cells back, DS = ES = ours
+
+; vk_lprep - the include's capture of the MSW, IDTR and GDTR, and the CS
+; cache's access byte the key chose (L 93h, M 9Bh). Preserves all but flags
+vk_lprep:
+    push ax
+    call la_capture
+    mov al, [vk_lacs]
+    mov [la_csacc], al
+    pop ax
+    ret
+
+; vk_lborrow - IF = 0: the include's borrow with DS's cache at [vk_lds] and
+; ES's at [vk_les], SHOWING selector 0 and the buffer (vk_larun's header: a
+; cache that did not take then reads the interrupt table and writes our own
+; buffer). Every general register preserved; CS: for our data until
+; vk_lrestore
+vk_lborrow:
+    push ax
+    mov word [la_dsv], 0
+    mov ax, [vk_buf]
+    mov [la_esv], ax
+    pop ax
+    jmp la_borrow
+
+; vk_lprobe - the include's probe: a borrow that changes nothing, INT 6
+; hooked; [vk_lfault] = 1 when the instruction trapped
+vk_lprobe:
+    pushf
+    call la_probe
+    popf
+    ret
+
+%include "os88la.inc"
+%include "os88xgap.inc"
+
+; vk_lxa - AX = an offset into the block -> DX:AX = its linear address
+vk_lxa:
+    xor dx, dx
+    add ax, [vk_xmb]
+    adc dx, [vk_xmb + 2]
+    ret
+
+; vk_lcmp - AX = an offset into the block's SECOND half: its 32 KB compared,
+; IN PLACE, with the buffer. CF = 1 they differ. Preserves all but flags
+vk_lcmp:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    add ax, VK_CHUNK
+    call vk_lxa
+    mov [vk_lds], ax
+    mov [vk_lds + 2], dx
+    mov ax, [vk_buf]
+    call vk_llin
+    mov [vk_les], ax
+    mov [vk_les + 2], dx
+    pushf
+    cli
+    call vk_lborrow
+    xor si, si
+    xor di, di
+    mov cx, VK_CHUNK / 2 - 512      ; 1 KB short, so the 1 KB-off row stays
+    repe cmpsw                      ; inside the block's 64 KB
+    mov [cs:vk_lcx], cx
+    lahf
+    mov [cs:vk_lzf], ah
+    call vk_lrestore
+    popf
+    test byte [vk_lzf], 0x40        ; ZF: every word equal
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    jz .diff
+    clc
+    ret
+.diff:
+    stc
+    ret
+
+; vk_lself - the caches, checked below 1 MB (vk_larun's .self). CF = 1 the
+; two reads differed. Preserves all but flags
+vk_lself:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, 3
+    call vk_fill
+    mov ax, [vk_buf]
+    call vk_llin
+    add ax, 1024
+    adc dx, 0
+    mov [vk_lds], ax
+    mov [vk_lds + 2], dx
+    mov [vk_les], ax
+    mov [vk_les + 2], dx
+    pushf
+    cli
+    call vk_lborrow
+    xor si, si
+    xor di, di
+    mov cx, (VK_CHUNK - 2048) / 2
+    repe cmpsw
+    lahf
+    mov [cs:vk_lzf], ah
+    call vk_lrestore
+    popf
+    test byte [vk_lzf], 0x40
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    jz .diff
+    clc
+    ret
+.diff:
+    stc
+    ret
+
+; the timed bodies. A borrow wants IF = 0, which method P's iteration is
+vk_b_lnop:                          ; a borrow and nothing else
+    mov ax, ds
+    call vk_llin
+    mov [vk_lds], ax
+    mov [vk_lds + 2], dx
+    mov ax, [vk_buf]
+    call vk_llin
+    mov [vk_les], ax
+    mov [vk_les + 2], dx
+    call vk_lborrow
+    call vk_lrestore
+    ret
+
+vk_b_lup:                           ; buffer -> block at [vk_xmhalf], by LOADALL
+    call vk_la20                    ; A WRITE ONLY THROUGH AN OPEN GATE: a
+    jnc .open                       ; shut one would put it 1 MB lower, in
+    inc word [vk_la20x]             ; conventional memory, and AH=87h may
+    ret                             ; close it after every OSAPI_XMEM_COPY
+.open:
+    pushf
+    cli
+    mov ax, [vk_buf]
+    call vk_llin
+    mov [vk_lds], ax
+    mov [vk_lds + 2], dx
+    mov ax, [vk_xmhalf]
+    call vk_lxa
+    mov [vk_les], ax
+    mov [vk_les + 2], dx
+    mov cx, [vk_xmlen]
+    shr cx, 1
+    call vk_lborrow
+    xor si, si
+    xor di, di
+    rep movsw
+    call vk_lrestore
+    popf
+    ret
+
+vk_b_ldn:                           ; block at [vk_xmhalf] -> buffer, by LOADALL
+    pushf
+    cli
+    mov ax, [vk_xmhalf]
+    call vk_lxa
+    mov [vk_lds], ax
+    mov [vk_lds + 2], dx
+    mov ax, [vk_buf]
+    call vk_llin
+    mov [vk_les], ax
+    mov [vk_les + 2], dx
+    mov cx, [vk_xmlen]
+    shr cx, 1
+    call vk_lborrow
+    xor si, si
+    xor di, di
+    rep movsw
+    call vk_lrestore
+    popf
+    ret
+
+vk_b_lrdx:                          ; 32 KB READ above 1 MB, through a borrow
+    xor ax, ax
+    call vk_lxa
+    mov [vk_lds], ax
+    mov [vk_lds + 2], dx
+    mov ax, [vk_buf]
+    call vk_llin
+    mov [vk_les], ax
+    mov [vk_les + 2], dx
+    mov cx, VK_CHUNK / 2
+    call vk_lborrow
+    xor si, si
+    rep lodsw
+    call vk_lrestore
+    ret
+
+vk_b_lrdc:                          ; ...and below it, the buffer
+    push ds
+    mov ds, [vk_buf]
+    xor si, si
+    mov cx, VK_CHUNK / 2
+    cld
+    rep lodsw
+    pop ds
+    ret
+
+; vk_lfill - the fill rows (see vk_larun's header). On the 286 with an IDE
+; drive at 1F0h; read-only
+vk_lfill:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ah, 8                       ; the geometry, off the ROM, for the task
+    mov dl, 0x80                    ; file's CHS (vk_ide_cmd)
+    push es
+    int 0x13
+    pop es
+    jnc .gok
+    mov si, vk_s_cpnoide
+    call bl_sline
+    jmp .out
+.gok:
+    mov al, cl
+    and al, 0x3F
+    mov [vk_spt], al
+    inc dh
+    mov [vk_heads], dh
+    call vk_ide_ready
+    jnc .ide
+    mov si, vk_s_cpnoide
+    call bl_sline
+    jmp .out
+.ide:
+    mov al, [vk_heads]              ; cylinder VK_CPCYL, as C reads
+    mul byte [vk_spt]
+    mov cx, VK_CPCYL
+    mul cx
+    mov [vk_cplba], ax
+    mov [vk_lba0], ax
+    ; the CHECK: the block's first half set to a pattern no disk holds, 64
+    ; sectors read into it by the task file through borrows, then the same
+    ; 64 read plainly into the buffer, and the two compared in place
+    mov ax, 3
+    call vk_fill
+    mov word [vk_xmlen], VK_CHUNK
+    mov word [vk_xmhalf], 0
+    call vk_b_lup                   ; up BY LOADALL: no AH=87h before the fill
+    call vk_lzero
+    call vk_b_lide
+    mov ax, [vk_lba0]
+    mov [vk_cplba], ax
+    call vk_b_ide
+    mov ax, -VK_CHUNK               ; vk_lcmp's offset is into the second
+    call vk_lcmp                    ; half: -32 KB is the first
+    mov di, vk_s_dok
+    jnc .fs
+    mov di, vk_s_labad
+    inc word [vk_err]
+.fs:
+    mov si, vk_r_lafck
+    call bl_kvs
+    cmp di, vk_s_dok
+    jne .out
+    ; the rows: 2 MB plainly (interrupts on), then 2 MB into XMS
+    call vk_lzero
+    mov ax, [vk_lba0]
+    mov [vk_cplba], ax
+    mov word [bl_n], VK_LSTRM
+    mov word [bl_body], vk_b_ide
+    mov si, vk_r_lafpl
+    mov al, 1                       ; method T
+    call bl_run
+    call vk_lzero
+    mov ax, [vk_lba0]
+    mov [vk_cplba], ax
+    mov word [bl_n], VK_LSTRM
+    mov word [bl_body], vk_b_lide
+    mov si, vk_r_lafxm
+    mov al, 1
+    call bl_run
+    mov bx, vk_lfrows
+.r:
+    mov si, [bx]
+    or si, si
+    jz .max
+    mov di, [bx + 2]
+    mov ax, [di]
+    xor dx, dx
+    mov cx, 9
+    call bl_kv
+    add bx, 4
+    jmp short .r
+.max:
+    mov ax, [vk_lmax]               ; the longest masked borrow, us x 100
+    xor dx, dx
+    mov cx, 1
+    call bl_us100
+    mov si, vk_r_lafmx
+    mov cx, 9
+    call bl_kv
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vk_lzero - the fill's counters to 0
+vk_lzero:
+    push ax
+    push cx
+    push di
+    push es
+    push ds
+    pop es
+    mov di, vk_lcnt
+    mov cx, VK_LCNTW
+    xor ax, ax
+    cld
+    rep stosw
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret
+
+; vk_b_lide - one command of VK_CPSEC sectors into the block's first half,
+; the sectors whose DRQ is up taken in borrows of up to VK_LRUN, the
+; interrupts let in between borrows and for every wait that is not short
+vk_b_lide:
+    call vk_la20                    ; vk_b_lup's rule: the gate is checked
+    jnc .open                       ; before every write through a cache, and
+    inc word [vk_la20x]             ; a shut one reads the command plainly
+    jmp vk_b_ide
+.open:
+    push es
+    call vk_ide_cmd
+    jc .err
+    xor ax, ax
+    call vk_lxa
+    mov [vk_les], ax
+    mov [vk_les + 2], dx
+    xor ax, ax                      ; DS's cache: segment 0, never read
+    mov [vk_lds], ax
+    mov [vk_lds + 2], ax
+    xor di, di
+    mov si, VK_CPSEC
+.borrow:
+    call vk_ide_drq                 ; the first of a run, interrupts on
+    jc .err
+    pushf
+    cli
+    call bl_pit
+    mov [vk_lt0], ax
+    call vk_lborrow
+    xor bx, bx                      ; BX = sectors this borrow
+.sec:
+    mov dx, VK_IDE
+    mov cx, 256
+    db 0xF3, 0x6D                   ; rep insw, into XMS through ES's cache
+    inc bx
+    dec si
+    jz .end
+    cmp bx, VK_LRUN
+    jae .end
+    mov dx, VK_IDE + 7              ; the next DRQ, if it comes soon
+    mov cx, VK_LDRQ
+.poll:
+    in al, dx
+    test al, 0x80
+    jnz .pn
+    test al, 0x01
+    jnz .end
+    test al, 0x08
+    jnz .sec
+.pn:
+    loop .poll
+.end:
+    call vk_lrestore                ; DS and ES ours again
+    call bl_pit
+    mov cx, [vk_lt0]
+    sub cx, ax
+    popf
+    cmp cx, [vk_lmax]
+    jbe .tally
+    mov [vk_lmax], cx
+.tally:
+    inc word [vk_lnb]
+    add [vk_lns], bx
+    mov ax, bx                      ; the histogram: 1, 2-3, 4-7, 8+
+    mov cx, vk_lh1
+    cmp ax, 1
+    je .h
+    mov cx, vk_lh2
+    cmp ax, 4
+    jb .h
+    mov cx, vk_lh4
+    cmp ax, VK_LRUN
+    jb .h
+    mov cx, vk_lh8
+.h:
+    xchg cx, bx
+    inc word [bx]
+    or si, si
+    jnz .borrow
+    call vk_ide_nbsy
+    add word [vk_cplba], VK_CPSEC
+    jmp short .out
+.err:
+    inc word [vk_err]
+.out:
+    pop es
+    ret
+
 %define BL_NUMBERED                 ; a field run saves NAME1, NAME2... (benchlib)
 %include "benchlib.inc"
 
@@ -3147,6 +4527,106 @@ vk_s_xmhdrf:  db '-- the bank filling: 32 KB READ_SEQ for 5 s (KB/s x 10) --', 0
 vk_r_xmtier:  db 'CPU tier (1 286, 2 386)', 0
 vk_r_xmbits:  db 'CPU feature bits', 0
 vk_r_xmfree:  db 'XMS free (KB)', 0
+vk_r_xwbuf:   db 'buffer at (KB)', 0
+vk_r_xwxms:   db 'XMS block at (KB)', 0
+vk_s_xswhdr:  db '-- 8K down from 16 places 64 KB apart (us) --', 0
+vk_s_xswno:   db 'No 1 MB of XMS free - the sweep not run', 0
+vk_r_xram:    db 'RAM->RAM 8K (control)', 0
+vk_s_xchdr:   db '-- 8K down into conventional memory, 64 KB claims (us) --', 0
+vk_s_xcno:    db 'No 64 KB of conventional heap free - not run', 0
+vk_r_xcat:    db 'conventional at (KB)', 0
+vk_r_xcdn:    db 'down 8K into it', 0
+vk_s_xfhdr:   db '-- ...into the first claim at offsets (us) --', 0
+vk_r_xfoff:   db 'offset in it (bytes)', 0
+vk_r_xwbufb:  db 'buffer at (bytes)', 0
+vk_r_xwxmsb:  db 'XMS block (bytes)', 0
+vk_s_xghdr:   db '-- 8K, conventional D and XMS S stepped (us) --', 0
+vk_r_xgat:    db 'first claim (bytes)', 0
+vk_r_xgg:     db 'xg_gap answers G', 0
+vk_r_x87ck:   db '4 KB up and back, 87h', 0
+vk_s_xgrhd:   db '-- the transports, the buffer G apart (and 0 apart) (us) --', 0
+vk_xgtab:                           ; vk_xgrows': bytes, 0 G apart / 1 0
+                                    ; apart, the body, the label
+              dw 32768, 0, vk_b_xcup, vk_r_xg00
+              dw 32768, 0, vk_b_xcdn, vk_r_xg01
+              dw 32768, 0, vk_b_x87up, vk_r_xg02
+              dw 32768, 0, vk_b_x87dn, vk_r_xg03
+              dw 16384, 0, vk_b_xcup, vk_r_xg04
+              dw 16384, 0, vk_b_xcdn, vk_r_xg05
+              dw 16384, 0, vk_b_x87up, vk_r_xg06
+              dw 16384, 0, vk_b_x87dn, vk_r_xg07
+              dw 8192, 0, vk_b_xcup, vk_r_xg08
+              dw 8192, 0, vk_b_xcdn, vk_r_xg09
+              dw 8192, 0, vk_b_x87up, vk_r_xg10
+              dw 8192, 0, vk_b_x87dn, vk_r_xg11
+              dw 4096, 0, vk_b_xcup, vk_r_xg12
+              dw 4096, 0, vk_b_xcdn, vk_r_xg13
+              dw 4096, 0, vk_b_x87up, vk_r_xg14
+              dw 4096, 0, vk_b_x87dn, vk_r_xg15
+              dw 32768, 1, vk_b_xcup, vk_r_xg16
+              dw 32768, 1, vk_b_xcdn, vk_r_xg17
+              dw 32768, 1, vk_b_x87up, vk_r_xg18
+              dw 32768, 1, vk_b_x87dn, vk_r_xg19
+              dw 0
+vk_r_xg00:    db 'G: XMEM up 32K', 0
+vk_r_xg01:    db 'G: XMEM down 32K', 0
+vk_r_xg02:    db 'G: 87h up 32K', 0
+vk_r_xg03:    db 'G: 87h down 32K', 0
+vk_r_xg04:    db 'G: XMEM up 16K', 0
+vk_r_xg05:    db 'G: XMEM down 16K', 0
+vk_r_xg06:    db 'G: 87h up 16K', 0
+vk_r_xg07:    db 'G: 87h down 16K', 0
+vk_r_xg08:    db 'G: XMEM up 8K', 0
+vk_r_xg09:    db 'G: XMEM down 8K', 0
+vk_r_xg10:    db 'G: 87h up 8K', 0
+vk_r_xg11:    db 'G: 87h down 8K', 0
+vk_r_xg12:    db 'G: XMEM up 4K', 0
+vk_r_xg13:    db 'G: XMEM down 4K', 0
+vk_r_xg14:    db 'G: 87h up 4K', 0
+vk_r_xg15:    db 'G: 87h down 4K', 0
+vk_r_xg16:    db '0: XMEM up 32K', 0
+vk_r_xg17:    db '0: XMEM down 32K', 0
+vk_r_xg18:    db '0: 87h up 32K', 0
+vk_r_xg19:    db '0: 87h down 32K', 0
+vk_s_xrphdr:  db '-- READ_SEQ alone into the buffer at +n KB (KB/s x 10) --', 0
+vk_xrpoff:    dw 0, 1024, 2048, 3072, 0
+VK_XSWL     equ 16
+vk_r_xsw:
+%assign vk_i 0
+%rep 16
+%defstr vk_is vk_i
+              db 'down 8K +', vk_is, '*64K'
+              times VK_XSWL - 1 - 13 - %strlen(vk_is) db ' '
+              db 0                  ; (VK_XSWL bytes, the NUL among them)
+%assign vk_i vk_i + 1
+%endrep
+vk_r_xg:                            ; vk_xgrid's twenty rows, VK_XSWL each
+%assign vk_d 0
+%rep 4
+%assign vk_s 0
+%rep 4
+              db 'down D+', '0' + vk_d, 'K S+', '0' + vk_s, 'K'
+              times VK_XSWL - 1 - 14 db ' '
+              db 0
+%assign vk_s vk_s + 1
+%endrep
+%assign vk_d vk_d + 1
+%endrep
+%assign vk_d 0
+%rep 4
+              db 'up   D+', '0' + vk_d, 'K S+0K'
+              times VK_XSWL - 1 - 14 db ' '
+              db 0
+%assign vk_d vk_d + 1
+%endrep
+vk_r_xrp:
+%assign vk_d 0
+%rep 5
+              db 'READ_SEQ +', '0' + (vk_d % 4), 'K'
+              times VK_XSWL - 1 - 12 db ' '
+              db 0
+%assign vk_d vk_d + 1
+%endrep
 vk_r_xmchk:   db '32 KB up and back', 0
 vk_r_xmseq:   db 'READ_SEQ alone', 0
 vk_r_xmbank:  db 'READ_SEQ + copy up', 0
@@ -3159,9 +4639,83 @@ vk_r_xd8:     db 'XMS down 8K', 0
 vk_r_xu4:     db 'XMS up 4K', 0
 vk_r_xd4:     db 'XMS down 4K', 0
 vk_f_xtxt:    db 'VDXMS.TXT', 0
+vk_f_latxt:   db 'VDLALL.TXT', 0
+vk_s_latitle: db 'VIDDISK L - LOADALL: extended memory in place (LOADALL-PLAN 8)', 0
+vk_s_lanot:   db 'NOT A 286: LOADALL (0F 05) is the 286 alone - nothing to run', 0
+vk_s_laprobe: db 'L: probing LOADALL - a freeze here: reset, then try M', 0
+vk_s_layes:   db 'ran', 0
+vk_s_lano:    db 'TRAPPED as an invalid opcode', 0
+vk_s_laopen:  db 'open', 0
+vk_s_lashut:  db 'SHUT', 0
+vk_s_labad:   db 'BAD - not the bytes', 0
+vk_s_ladiff:  db 'differs, as it must', 0
+vk_s_lasame:  db 'SAME - the check is blind', 0
+vk_s_lahdr:   db '-- a borrow and the copies, PIT-timed, ints off --', 0
+vk_s_lafhdr:  db '-- the fill: 64 sectors by the task file straight into XMS --', 0
+vk_s_lachk:   db '-- in place against OSAPI_XMEM_COPY, the other transport --', 0
+vk_r_lacs:    db 'CS cache access byte', 0
+vk_r_lamsw:   db 'MSW (SMSW)', 0
+vk_r_laidb:   db 'IDTR base', 0
+vk_r_laidl:   db 'IDTR limit', 0
+vk_r_la20a:   db 'A20 before any copy', 0
+vk_r_la20b:   db 'A20 after XMEM_COPY', 0
+vk_r_laprobe: db 'LOADALL', 0
+vk_r_lard:    db '32K read in place', 0
+vk_r_laself:  db 'caches, below 1 MB', 0
+vk_r_laoff:   db '...and 1 KB off', 0
+vk_r_lawr:    db '32K written in place', 0
+vk_r_lanop:   db 'a borrow, no work', 0
+vk_r_lxu32:   db 'XMEM_COPY up 32K', 0
+vk_r_lxd32:   db 'XMEM_COPY down 32K', 0
+vk_r_llu32:   db 'LOADALL up 32K', 0
+vk_r_lld32:   db 'LOADALL down 32K', 0
+vk_r_lxu8:    db 'XMEM_COPY up 8K', 0
+vk_r_lxd8:    db 'XMEM_COPY down 8K', 0
+vk_r_llu8:    db 'LOADALL up 8K', 0
+vk_r_lld8:    db 'LOADALL down 8K', 0
+vk_r_lxu4:    db 'XMEM_COPY up 4K', 0
+vk_r_lxd4:    db 'XMEM_COPY down 4K', 0
+vk_r_llu4:    db 'LOADALL up 4K', 0
+vk_r_lld4:    db 'LOADALL down 4K', 0
+vk_r_lxu1:    db 'XMEM_COPY up 1K', 0
+vk_r_lxd1:    db 'XMEM_COPY down 1K', 0
+vk_r_llu1:    db 'LOADALL up 1K', 0
+vk_r_lld1:    db 'LOADALL down 1K', 0
+vk_r_larx:    db 'read 32K above 1 MB', 0
+vk_r_larc:    db 'read 32K below 1 MB', 0
+vk_r_lafck:   db '64 sectors into XMS', 0
+vk_r_lafpl:   db '64-sector cmd, plain', 0
+vk_r_lafxm:   db '64-sector cmd, into XMS', 0
+vk_r_lafnb:   db 'borrows taken', 0
+vk_r_lafns:   db 'sectors in borrows', 0
+vk_r_lafh1:   db 'borrows of 1 sector', 0
+vk_r_lafh2:   db 'borrows of 2-3', 0
+vk_r_lafh4:   db 'borrows of 4-7', 0
+vk_r_lafh8:   db 'borrows of 8', 0
+vk_r_lafmx:   db 'longest borrow us x100', 0
+vk_r_la20x:   db 'writes skipped, A20 SHUT', 0
+vk_larows:    dw 32768, vk_r_lxu32, vk_r_lxd32, vk_r_llu32, vk_r_lld32
+              dw 8192, vk_r_lxu8, vk_r_lxd8, vk_r_llu8, vk_r_lld8
+              dw 4096, vk_r_lxu4, vk_r_lxd4, vk_r_llu4, vk_r_lld4
+              dw 1024, vk_r_lxu1, vk_r_lxd1, vk_r_llu1, vk_r_lld1, 0
+vk_lfrows:    dw vk_r_lafnb, vk_lnb, vk_r_lafns, vk_lns, vk_r_lafh1, vk_lh1
+              dw vk_r_lafh2, vk_lh2, vk_r_lafh4, vk_lh4, vk_r_lafh8, vk_lh8, 0
 vk_xmrows:    dw 32768, vk_r_xu32, vk_r_xd32, 16384, vk_r_xu16, vk_r_xd16
               dw 8192, vk_r_xu8, vk_r_xd8, 4096, vk_r_xu4, vk_r_xd4, 0
 vk_xmb:       dw 0, 0           ; the block
+vk_xsw:       dw 0, 0           ; vk_xsweep's 1 MB
+VK_XCN      equ 8                   ; vk_xconv's claims, 64 KB each
+vk_xcsegs:    times VK_XCN dw 0
+vk_xcn:       dw 0              ; ...how many it got, x 2
+vk_xcs:       dw 0              ; ...the row's block
+vk_xco:       dw 0              ; ...and its offset
+vk_xso:       dw 0              ; vk_xgrid's offset into the XMS block
+vk_rdoff:     dw 0              ; vk_b_seq's offset into the buffer
+vk_xcl:       dw 8192           ; vk_b_xcup/xcdn's bytes
+vk_xbo:       dw 0              ; vk_xgrows' offsets in the first claim: G
+vk_xwo:       dw 0              ; ...and 0 apart
+vk_gdt:       times 48 db 0     ; vk_x87's descriptor block
+              XG_DATA
 vk_xmlen:     dw 0              ; ...a copy's bytes
 vk_xmhalf:    dw 0              ; ...and where in the block
 vk_xmup:      db 0              ; vk_xmfill: copy each chunk up
@@ -3260,6 +4814,24 @@ vk_cpdone:    dw 0              ; for a harness: C has finished
 vk_cpx:       dw 0, 0           ; ...PIT counts: the transfers,
 vk_cpw:       dw 0, 0           ; ...the waits after a command's first,
 vk_cpf:       dw 0, 0           ; ...and its first
+vk_lacs:      db 0x93           ; L: the CS cache's access byte (M: 9Bh)
+vk_lzf:       db 0              ; ...vk_lcmp's flags
+              db 0
+vk_lcx:       dw 0              ; ...and its count left
+vk_ladone:    dw 0              ; for a harness: L has finished
+vk_la20x:     dw 0              ; ...LOADALL writes refused, A20 shut
+vk_lba0:      dw 0              ; the fill's first sector
+vk_lt0:       dw 0              ; ...a borrow's first PIT read
+vk_lcnt:                        ; the fill's counters (vk_lzero):
+vk_lnb:       dw 0              ; ...borrows,
+vk_lns:       dw 0              ; ...sectors read in them,
+vk_lh1:       dw 0              ; ...borrows of 1 sector,
+vk_lh2:       dw 0              ; ...2-3,
+vk_lh4:       dw 0              ; ...4-7,
+vk_lh8:       dw 0              ; ...VK_LRUN,
+vk_lmax:      dw 0              ; ...and the longest, PIT counts
+VK_LCNTW    equ ($ - vk_lcnt) / 2
+              LA_DATA           ; apps/os88la.inc's state
 vk_res:       times VK_NRES dd 0
 
 VK_BSS_OWN  equ 512

@@ -1036,6 +1036,7 @@ rl_blit4:
 %include "os88ui.inc"
 %define OD_BOOTVOL                  ; REDLINE.CFG is RLAPPLY's (103.6.4)
 %include "os88data.inc"
+%include "os88link.inc"           ; Apply on boot's autostart link (26.10)
 %include "redline/csrows.inc"
 %include "redline/csfe.inc"
 %include "redline/csknob.inc"

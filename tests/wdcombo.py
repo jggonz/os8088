@@ -127,7 +127,7 @@ a = ap.parse_args()
 
 syms, image = pkg_syms()
 DISK = "build/wdcombo.img"
-M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC")
+M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC", *M.faces())
 
 with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
     m, mo = ui.m, ui.mo

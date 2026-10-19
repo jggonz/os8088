@@ -234,6 +234,9 @@ mod_r_dock:
 %ifdef OS88_SHORTCUTS
     dw 0, mod_f_ctrl            ; MOD_SETS: the SAME file, cut short (2.8.7)
 %endif
+mod_tab_end:                    ; (a label and no byte: tools/os88rom.py
+                                ; counts the ROWS by it, MOD_SETS included,
+                                ; because the ROM answers per row)
 
 ; mod_fpt - each module's slot block by id, and one word more: where the LAST
 ; block ends. Emitted by kernel.asm's MODFP macro beside the blocks themselves
@@ -380,12 +383,26 @@ mod_need:
 
     call drv_vol_bank                      ; this goes to the system volume to find the
                                 ; file, and the user may have been anywhere
+%ifdef ROM_COLD
+    ; THE ROM FIRST (docs/plans/ROM-PLAN.md 4.3, SPEC.md 2.10.5): a ROM that
+    ; adopted this kernel may carry the image too, cut from the same build, so
+    ; the load is a copy out of F4000-FDFFF and needs no system disk at all -
+    ; which on a one-drive machine is the difference between a Save As onto a
+    ; data floppy and a refusal. NO TEST OF [api_coldseg] FIRST: a kernel
+    ; whose `.cold` is in RAM has rom_mfp at rom_none, which refuses SIZE, so
+    ; the disk arm is reached the same way a ROM that holds no copy sends it
+    ; there (kernel size pass 12, -10 with the COPY below)
+    mov al, ROMF_SIZE
+    call far [rom_mfp]          ; CF = 0: AX = the image's bytes in the ROM
+    jnc .sized
+%endif
     call drv_mounted           
     jc .fail
 
     mov si, [bx+MODR_FILE]
     call drv_find                             ; AX = the file's size, refused over 64KB
     jc .fail
+.sized:
     cmp ax, MOD_H_ENT + 2       ; a header with at least one entry
     jb .fail
     mov bp, ax                  ; THE FILE'S BYTE SIZE, in the register this
@@ -416,10 +433,20 @@ mod_need:
     push bx
     mov es, dx                  ; ...and NO second `mov si, [bx+MODR_FILE]`:
     mov cx, bp                  ; SI is still the one loaded for drv_find, and
-    xor bx, bx                  ; mem_claim_x banks SI/DI around everything
-                                ; including the compaction (memory.inc:520)
+%ifdef ROM_COLD                 ; mem_claim_x banks SI/DI around everything
+    mov al, ROMF_COPY           ; including the compaction (memory.inc:520).
+    call far [rom_mfp]          ; ...or the ROM has the bytes: the first CX
+    jnc .rdone                  ; of the image to ES:0, and the read's own
+                                ; answer, AX = CX and DX = 0. A ROM that holds
+                                ; none - and rom_none - refuse with every
+                                ; register kept, so the disk read below gets
+                                ; the SI, CX and ES it always had. SIZE said
+                                ; yes iff COPY will, so no mark is carried
+%endif
+    xor bx, bx
     xor dx, dx                  ; DX:CX = the capacity, DX:AX the answer
     call dskw_read_x                         ; the whole file, by name, on the system disk
+.rdone:
 %ifdef OS88_SHORTCUTS
     mov byte [dskw_trunc], 0    ; ...ONE read's worth, and spent whatever it
 %endif                          ; answered
@@ -430,6 +457,24 @@ mod_need:
 
     call mod_check
     jc .freefail
+%ifdef ROM_COLD
+    ; A MODULE ON A ROM MACHINE (docs/plans/ROM-PLAN.md 3.4.4) far-calls
+    ; `.cold` at COLD_RAM, the segment it was assembled against, and `.cold`
+    ; runs at the ROM's. The ROM carries each module's list of those words and
+    ; re-points them; it checks every one names COLD_RAM first, so a module
+    ; it was not cut against is refused here rather than run. BX is the ROW -
+    ; NOT DI's id, which mod_check has just clobbered (it is documented to,
+    ; and the first kernel ROM was handed 8C58 as a module number) - and the
+    ; ROM knows mod_tab, so it derives the id itself. BP is the bytes the read
+    ; brought in (the settings core reads a PART) - and the door takes BX and
+    ; BP as they stand, loading the claim out of the row itself (kernel size
+    ; pass 12). On a kernel whose `.cold` is in RAM rom_none answers FIX with
+    ; CF = 0 and nothing touched: there is nothing to re-point. ES and AX are
+    ; dead here (mod_check clobbers both, kretc_es restores ES)
+    mov al, ROMF_FIX            ; ...whichever source the bytes came from: the
+    call far [rom_mfp]          ; ROM keeps its copies as the build cut them
+    jc .freefail
+%endif
 
 %ifdef MOD_BSS
     ; --- the claim's TAIL is the module's own bss, and it starts zeroed -----
@@ -586,7 +631,7 @@ mod_disarm:
     call mod_fpr                ; DI = the block, CX = its count
 .slot:
     mov word [di], mod_gone
-    mov word [di+2], COLD_SEG
+    COLDSEG_TO word [di+2]      ; mod_gone is .cold's own (ROM-PLAN 3.2)
     add di, 4
     loop .slot
     ret
@@ -660,6 +705,7 @@ mod_drop:
 ; 0. mod_need cannot be trusted to be the only door, because a thunk with the
 ; test written the wrong way round still assembles.
 ; -----------------------------------------------------------------------------
+%ifndef KERN_SMALL              ; (kern_small writes it out in the blob, kmain_o)
 mod_init_x:
     mov di, mod_fp              ; ONE PASS over the whole array. The row walk
     mov cx, MOD_NSLOT           ; existed only to reach mod_fp - mod_disarm
@@ -674,6 +720,7 @@ mod_init_x:
                                 ; every boot, and this routine's ONE caller is
                                 ; kmain - Chip > Restart being `int 19h`, the
                                 ; BIOS bootstrap, which re-loads the image.
+%endif
 
 section .cold                   ; the far entry, for kmain
 

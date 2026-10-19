@@ -170,8 +170,11 @@ def run(a, sysimg, plain):
         # bytes differing at 6,408 - the same region, about a decoder that
         # had expanded every byte correctly.
         #
-        # Stopping at `drv_attach` is the assertion this row was always
-        # making: `drv_load` has read, checked, expanded and zeroed by then,
+        # Stopping at `drv_load_at.attach` is the assertion this row was always
+        # making - the far call into the loading image's attach half, which
+        # was `drv_attach` until kernel size pass 13 moved that half into the
+        # images that attach (driver.inc's DRV_ATTACH): `drv_load` has read,
+        # checked, expanded and zeroed by then,
         # and NOTHING has entered the driver. What the file says is what
         # memory must hold, all of it, with no region to carve out.
         # THE BYTES, not the segment, and they are read AT the stop. Banking
@@ -179,7 +182,7 @@ def run(a, sysimg, plain):
         # the old code read - a driver that has attached and started using its
         # own memory - and is the same failure with an extra step in front of
         # it. So the read is `on_hit`'s, which runs while the guest is still
-        # in `drv_attach`; the click is inside the trace because os88mouse
+        # at `drv_load_at.attach`; the click is inside the trace because os88mouse
         # proves it against the published `mouse_btn`, which a stopped guest
         # cannot move.
         got = {}
@@ -192,12 +195,12 @@ def run(a, sysimg, plain):
                 got["bytes"] = bytes(mm.readseg(sg, 0, len(plain)))
             return None
 
-        with os88marty.bp_trace(m, "drv_attach", regs=True,
+        with os88marty.bp_trace(m, "drv_load_at.attach", regs=True,
                                 on_hit=image) as tr:
             mo.click(x0 + drvcall.CP_RX + 40,
                      y0 + drvcall.CP_DBY1 + RD_ROW * drvcall.CP_DROWH
                      + drvcall.CP_DROWH // 2)
-            tr.until(lambda: bool(got), "drv_attach", limit=120.0,
+            tr.until(lambda: bool(got), "drv_load_at.attach", limit=120.0,
                      required=False)
         loaded = got.get("bytes")
         m.run()

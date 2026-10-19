@@ -521,6 +521,12 @@ pm_runaway:
     xchg al, ah
     ret
 
+%ifndef PM_CORE                 ; THE DRIVER'S HALF: the AdLib keep-alive and its
+                                ; DSV_TICK publication need SOUND.DRV's OPL state
+                                ; and table. A PACKAGE that drives the card itself
+                                ; - tests/vidbench/vidsnd.asm - defines PM_CORE and
+                                ; assembles the rest of this file as it is, so the
+                                ; card is brought up by ONE body (SPEC.md 34.10)
 ; -----------------------------------------------------------------------------
 ; pm_tick - SOUND.DRV's DSV_TICK on a machine pm_init found (SPEC.md 34.10.6)
 ; in:  IF = 0, inside IRQ0 (snd_tick's leaf); out: nothing; clobbers: AX, flags
@@ -586,6 +592,8 @@ pm_tickpub:
     mov word [si+DSV_TICK], pm_tick
 .out:
     ret
+
+%endif                          ; PM_CORE
 
 ; --- state and tables (a driver has no .bss - drivers/os88drv.inc) -----------
 pm_irqs:    db 7, 5, 3, 0       ; sb.inc's own candidate order, less IRQ 2:

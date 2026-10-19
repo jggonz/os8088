@@ -102,7 +102,7 @@ MACHINE = sys.argv[1] if len(sys.argv) > 1 else "os8088_5150_cga_gla"
 SYS_IMG = sys.argv[2] if len(sys.argv) > 2 else "build/os8088-360.img"
 APPS_IMG = "build/apps360.img"
 S = os88sym.linear
-NAPP = 12                       # ASSOC_NAPP
+NAPP = 16                       # ASSOC_NAPP
 DECLARED = ("BROWSER", "TEXPAD")
 PARK = (320, 190)               # the pointer is DRAWN, over the window like
                                 # anything else - it only has to be in the

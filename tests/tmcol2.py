@@ -43,9 +43,9 @@ window's shape:
 
 LAUNCH is the leg that needs the desktop set up, and the set-up IS the
 reported repro: a Disk window, a package, a second Disk window, then the Task
-Manager. That puts three built-in rows in column 0 (System and the two folder
-windows) and pushes MINES and TaskMgr into column 1, so column 1's first band
-is a package row rather than one of the `-` free slots that follow it.
+Manager. That fills column 0 (IVT+Pad, System and the folder windows, SPEC.md
+28.4.7) and pushes MINES and TaskMgr into column 1, so column 1's first band
+is a live row rather than one of the `-` free slots that follow it.
 
 **A free slot is not nothing**, and that is why LAUNCH measures ink rather
 than presence: a `-` row is one scanline of about 36 pixels where a real row
@@ -96,7 +96,7 @@ def consts():
                     (("apps", "taskmgr", "taskmgr.asm"),
                      ("apps", "os88api.inc")))
     want = ("TM_ROW_Y", "TM_ROW_H", "TM_RW", "TM_COLW", "TM_C2_ROW_Y",
-            "TM_C2_HDR_Y", "TM_ROWS", "INST_MAX", "TITLE_H")
+            "TM_C2_HDR_Y", "TM_ROWS", "TM_PROWS", "INST_MAX", "TITLE_H")
     out = {}
     for name in want:
         m = re.search(r"^%s\s+equ\s+([^;\n]+)" % name, src, re.M)
@@ -165,7 +165,12 @@ def main():
         # are cut from the FRAME - which is what SPEC.md 28.1.2 is about.
         pcolrows = (w.h - (C["TITLE_H"] + 1 + C["TM_ROW_Y"])) // pitch
         col2rows = (w.h - (C["TITLE_H"] + 1 + C["TM_C2_ROW_Y"])) // pitch
-        col2rows = min(col2rows, C["TM_ROWS"] - pcolrows)
+        # A screen too short for every row folds IVT+Pad into System
+        # (SPEC.md 28.4.7), so the list it draws is one row shorter.
+        whole = C["TM_PROWS"]
+        if pcolrows + col2rows < whole:
+            whole -= 1
+        col2rows = min(col2rows, whole - pcolrows)
 
         def bands(col, first, n):
             """Ink per row band of a column, `n` bands from its first row."""
@@ -200,12 +205,13 @@ def main():
         # leg summed the two DEPTHS - which are what the layout intends, so it
         # passed on the broken build with the second column visibly empty.
         drawn = sum(1 for v in c0 + c1[:col2rows] if v > 0)
-        check(drawn == C["TM_ROWS"],
+        check(drawn == whole,
               "LIST: both columns together show the WHOLE process list",
-              "TM_ROWS is System plus one row per instance slot, and a short "
+              "TM_PROWS is IVT+Pad, System and one row per instance slot, "
+              "less IVT+Pad where the screen is short (SPEC.md 28.4.7), and a short "
               "screen is exactly where the list has to wrap rather than be "
               "truncated - it drew 3 of 13 before SPEC.md 28.1.2",
-              got=drawn, want=C["TM_ROWS"])
+              got=drawn, want=whole)
 
         check(c1[0] >= REAL_INK,
               "LAUNCH: column 1's first row is a package, not a free slot",

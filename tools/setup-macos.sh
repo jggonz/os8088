@@ -10,7 +10,7 @@
 #               this script shipped with does NOT apply to this branch, and
 #               the comment there says why)
 #   qemu        qemu-system-i386, for `make run` / `make test`
-#   python3     the host-side tooling in tools/ - stdlib only, no pip
+#   python3     3.11 or newer, for the tooling in tools/ - stdlib only, no pip
 #   86Box       optional, for `make xt` and the other period machines
 #   86Box ROMs  NOT shipped with 86Box, from github.com/86Box/roms. Without
 #               them 86Box starts and every machine in vm/ fails to boot.
@@ -77,6 +77,17 @@ ROM_DIR_LEGACY="$HOME/Library/Application Support/86Box/roms"
 # the platform where it runs with nothing exported. CONTRIBUTING.md carries
 # the Linux half, which is a build.
 NASM_MIN_MAJOR=2
+
+# The minimum python3 the tools run under (CONTRIBUTING.md). 3.11 is where
+# `tomllib` entered the standard library, and tools/guidelock.py - which every
+# `make` runs in its fast tier - and tools/os88guide.py import it. Apple's
+# /usr/bin/python3 is 3.9, so on a Mac whose PATH finds Apple's first a plain
+# "is there a python3?" says yes and every `make` then dies on
+# ModuleNotFoundError. The gate below asks the interpreter itself.
+PY_MIN="3.11"
+py_new_enough() {   # py_new_enough <python> - true when it is ${PY_MIN}+
+	"$1" -c 'import sys; sys.exit(sys.version_info < (3, 11))' >/dev/null 2>&1
+}
 
 # The ROM subdirectories vm/*/86box.cfg actually names. Checked after the
 # download, because a truncated tarball extracts happily and then every
@@ -235,7 +246,16 @@ if [ "$ROMS_ONLY" = 0 ]; then
 	step "Installing the build toolchain (nasm, qemu, python3)"
 	brew_install nasm    nasm
 	brew_install qemu    qemu-system-i386
-	brew_install python3 python3
+	# NOT brew_install: Apple's 3.9 answers `command -v python3`, so a
+	# presence test is satisfied by the interpreter this tree cannot use.
+	if command -v python3 >/dev/null 2>&1 && py_new_enough python3; then
+		ok "python3 already present: $(command -v python3)"
+	elif BREW_PY="$(brew --prefix python3 2>/dev/null)/bin/python3" \
+	     && [ -x "$BREW_PY" ] && py_new_enough "$BREW_PY"; then
+		ok "Homebrew's python3 is installed: $BREW_PY (PATH checked below)"
+	else
+		run brew install python3
+	fi
 
 	# The nasm version gate. It matters much less on this branch than on
 	# main - see NASM_MIN_MAJOR above for why the floor is 2 here - but a
@@ -267,7 +287,38 @@ if [ "$ROMS_ONLY" = 0 ]; then
 		ok "nasm $NASM_VER at $NASM_BIN"
 	fi
 
-	command -v python3 >/dev/null 2>&1 && ok "python3 $(python3 -V 2>&1 | awk '{print $2}') (tools/ is stdlib-only: no pip, no venv)"
+	# The python3 version gate, the nasm gate's shape: the PATH's python3 is
+	# the one `make` runs, so a new enough one that is SHADOWED is reported
+	# with where it is rather than installed a second time.
+	step "Checking python3 version (this tree needs ${PY_MIN} or newer)"
+	PY_BIN="$(command -v python3 || true)"
+	BREW_PY="$(brew --prefix python3 2>/dev/null || true)/bin/python3"
+	if [ "$DRY_RUN" = 1 ] && [ ! -x "$BREW_PY" ] \
+	   && ! { [ -n "$PY_BIN" ] && py_new_enough python3; }; then
+		warn "python3 ${PY_MIN}+ not installed yet; the version gate runs on the real pass"
+	else
+		[ -n "$PY_BIN" ] || die "python3 not found in PATH"
+		PY_VER="$(python3 -V 2>&1 | awk '{print $2}')"
+		if ! py_new_enough python3; then
+			printf '\n'
+			warn "python3 $PY_VER at $PY_BIN is too old: tools/ needs tomllib."
+			warn "When \`make\` dies on ModuleNotFoundError: No module named"
+			warn "'tomllib', suspect the TOOL first - Apple's /usr/bin/python3"
+			warn "shadowing Homebrew's is the usual cause."
+			if [ -x "$BREW_PY" ]; then
+				warn "Homebrew's python3 is at $BREW_PY ($("$BREW_PY" -V 2>&1 | awk '{print $2}'))"
+				warn "and is being shadowed. Put $(dirname "$BREW_PY") (or"
+				warn "$(brew --prefix)/bin) ahead of $(dirname "$PY_BIN") in PATH."
+			fi
+			if [ "$DRY_RUN" = 1 ]; then
+				warn "python3 ${PY_MIN}+ required (dry run: carrying on)"
+			else
+				die "python3 ${PY_MIN}+ required"
+			fi
+		else
+			ok "python3 $PY_VER at $PY_BIN (tools/ is stdlib-only: no pip, no venv)"
+		fi
+	fi
 	command -v qemu-system-i386 >/dev/null 2>&1 && ok "$(qemu-system-i386 --version | head -1)"
 fi
 

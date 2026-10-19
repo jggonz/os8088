@@ -143,7 +143,7 @@ sc_rpict:
     mov al, [bx]                    ; (SPEC.md 95.9)
     pop ds
     xor ah, ah
-    call far [sc_v_picrec]; -> BX = the table slot
+    call sc_picrec                  ; -> BX = the table slot
     jc .out                         ; names no picture: emit nothing
     mov ax, [bx]
     mov [sc_rpw], ax
@@ -418,13 +418,14 @@ sc_rpap:
     PKG_LDS sc_pseg
     mov ax, [si]
     mov bx, [si+2]
-    mov ds, [cs:sc_pkgseg]          ; NOT `push cs / pop ds`: sc_rpap is in
-                                    ; .modc, so CS is the MODULE (SPEC.md
-                                    ; 94.8.3) and sc_rpp is a SCVAR - four
-                                    ; bytes of somebody else's heap written
-                                    ; once per paragraph. It wrote and read
-                                    ; back through the SAME wrong address,
-                                    ; which is why the file came out right.
+    push cs                         ; DS back on the package: sc_rpp is a
+    pop ds                          ; SCVAR, and CS IS the package because
+                                    ; part 1 is in this segment (SPEC.md
+                                    ; 95.8.8). While SCRIBE.OVL had a CS of
+                                    ; its own this idiom wrote four bytes of
+                                    ; somebody else's heap once per paragraph,
+                                    ; and read them back through the SAME
+                                    ; wrong address (SPEC.md 95.8.2).
                                     ; The refusal is NOT lost with it:
                                     ; sc_rtfimg's .tail emits with DS back on
                                     ; the package, so sc_re sets the package's
@@ -687,7 +688,7 @@ sc_rtfparse:
     mov [sc_dfsize], ax
     mov byte [sc_dtrunc], 0
     mov ax, SC_MAXKB
-    call far [sc_v_resize]
+    call sc_resize
     jc .no
     mov word [sc_len], 0
     mov word [sc_papn], 1           ; a fresh dictionary: entry 0 is Normal
@@ -703,7 +704,7 @@ sc_rtfparse:
     mov word [sc_rskip], 0
     mov word [sc_rpin], 0           ; no \pict open, and no claim held from a
     mov word [sc_rpseg], 0          ; parse that was refused half way
-    call far [sc_v_pictfree]; the OLD document's pictures go back
+    call sc_pictfree                ; the OLD document's pictures go back
                                     ; HERE and not at sc_load's commit point,
                                     ; which is past the ones this parse is
                                     ; about to build (SPEC.md 95.6)
@@ -833,7 +834,7 @@ sc_rputm:
     push ax
     push bx
     push es
-    call far [sc_v_papfind]; AL = the dictionary index (CF=1 = full,
+    call sc_papfind0                ; AL = the dictionary index (CF=1 = full,
     jc .plain                       ; and Normal is the honest fallback)
     jmp short .have
 .plain:
@@ -862,7 +863,7 @@ sc_rputm:
 ; sc_rtail - the tail paragraph's format, for sc_ldpost. Preserves all.
 sc_rtail:
     push ax
-    call far [sc_v_papfind]
+    call sc_papfind0
     jnc .have
     xor al, al
 .have:
@@ -1067,9 +1068,9 @@ sc_rword:
     mov bx, sc_r_tbl
 .look:
     mov si, [cs:bx]                 ; THE TABLE AND THE NAMES IT POINTS AT are
-    or si, si                       ; the module's own image, so they are read
-    jz .none                        ; through CS and not DS - the package's
-    mov di, sc_rcw                  ; segment no longer holds them (88.8.2)
+    or si, si                       ; read through CS and not DS: DS is the
+    jz .none                        ; document here, and CS is this segment,
+    mov di, sc_rcw                  ; part 1 included (95.8.2, 95.8.8)
     call sc_rstreq
     jc .next
     mov al, [cs:bx+2]               ; the action
@@ -1444,7 +1445,7 @@ sc_rword2:
     sub al, SCR_UL
     xor ah, ah
     mov si, ax
-    mov al, [cs:si+sc_r_ulbits]   ; the code into SCRIBE.OVL
+    mov al, [cs:si+sc_r_ulbits]     ; a part-1 table, read through CS
     or [sc_rat], al
     jmp short .out
 .nul:
@@ -1594,8 +1595,8 @@ SCR_PICPL   equ 29                  ; \wbmplanes
 sc_r_bits:   db SCAT_BOLD, SCAT_ITAL, SCAT_SCAP, SCAT_HID
 sc_r_ulbits: db SCAT_UL, SCAT_WUL, SCAT_DUL
 
-sc_r_tbl:
-    dw sc_rw_par
+sc_r_tbl: dw sc_rw_par              ; (label and data on ONE line: os88ovlchk
+                                    ; reads a bare label in part 1 as code)
     db SCR_PAR
     dw sc_rw_line
     db SCR_PAR

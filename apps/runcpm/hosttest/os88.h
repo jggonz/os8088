@@ -107,6 +107,7 @@ int  os88_peek(unsigned seg, unsigned off);
 void os88_poke(unsigned seg, unsigned off, int value);
 unsigned os88_file_read(const char *name, void *buf, unsigned cap);
 unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap);
+unsigned os88_part_seg(int i);
 int  os88_file_write_seg(const char *name, unsigned seg, unsigned count);
 int  os88_file_delete(const char *name);
 int  os88_file_rename(const char *oldname, const char *newname);

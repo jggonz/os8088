@@ -250,8 +250,9 @@ def main():
     ap.add_argument("--nowm3", action="store_true", help="vga4m3: store "
                     "the colour sub-records a PLANE AT A TIME (vp_m3pl) - "
                     "the path an EGA takes, having no write mode 3 - by "
-                    "telling the player the card has none (vp_m3ok, once "
-                    "vp_canplay has set it at the load)")
+                    "telling the player the card has none (vp_canp1's "
+                    "`inc cx` patched out, so every ask - the load's and "
+                    "Play's vp_recheck - answers none)")
     ap.add_argument("--src", help="with --cost: a tree whose apps/ to build "
                     "the player from, for the build before")
     a = ap.parse_args()
@@ -556,6 +557,17 @@ def main():
                 wait(lambda mm: rb("vp_loaded") == 1, "the header", 30.0)
                 m.write(base + syms["vp_nowin"], b"\1")
                 if a.nowm3:
+                    # THE CARD SAYS SO, not one store after the load: since
+                    # vp_recheck, Play asks vp_canp1 again (SPEC.md 98.3.21)
+                    # and it would set vp_m3ok back from the display's caps.
+                    # Its `inc cx` - the one byte that grants write mode 3 -
+                    # becomes a NOP, so every ask answers "none", as an EGA's
+                    inc = base + syms["vp_canp1.m3n"] - 1
+                    if m.read(inc, 1)[0] != 0x41:
+                        sys.exit("vidfskeys: vp_canp1.m3n is not preceded "
+                                 "by `inc cx` (%#04x) - the --nowm3 patch "
+                                 "needs re-aiming" % m.read(inc, 1)[0])
+                    m.write(inc, b"\x90")
                     m.write(base + syms["vp_m3ok"], b"\0")
                 ww("vp_stopat", 20)
                 m.type_text("p")

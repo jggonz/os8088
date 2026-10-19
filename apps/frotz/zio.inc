@@ -634,6 +634,9 @@ zi_ondlg:
 ; where refusing after the read would be ten seconds of floppy on an XT.
 ; -----------------------------------------------------------------------------
 zi_dlg_story:
+    call zi_savext                  ; one of OUR saves: ASSOC hands us .SAV so
+    je .issave                      ; a double-click lands here, and the honest
+                                    ; answer costs no read (SPEC.md 61.10)
     mov cx, [zi_fsz_l]
     mov dx, [zi_fsz_h]
     mov ax, cx
@@ -659,8 +662,46 @@ zi_dlg_story:
     jmp short .say
 .toobig:
     mov si, zi_m_toobig
+    jmp short .say
+.issave:
+    mov si, zi_m_issave
 .say:
     jmp zw_notice
+
+; -----------------------------------------------------------------------------
+; zi_savext - is [zi_name] a .SAV?
+; out: ZF = 1 it is; preserves all registers
+;
+; A save does not name its story - Quetzal's IFhd carries the release, serial
+; and checksum, and the file sits in SAVES/ rather than beside the story - so
+; there is no story to open it into. Saying what to do is the answer; a name
+; test makes it before a byte is read.
+; -----------------------------------------------------------------------------
+zi_savext:
+    push ax
+    push si
+    mov si, zi_name
+.find:
+    mov al, [si]
+    inc si
+    or al, al
+    jz .no
+    cmp al, '.'
+    jne .find
+    mov ax, [si]
+    and ax, 0DFDFh                  ; upper case, both letters
+    cmp ax, 'SA'
+    jne .out
+    mov ax, [si+2]
+    and al, 0DFh
+    cmp ax, 'V'                     ; ...and the NUL after it
+    jmp short .out
+.no:
+    or al, 1                        ; ZF = 0
+.out:
+    pop si
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; zi_dlg_save - the worker staged it; write it
@@ -752,6 +793,9 @@ zi_load:
                                     ; BEFORE claiming the new one, or both
                                     ; have to fit at once
     mov byte [zf_state], ZFS_LOAD
+    mov byte [zt_s2on], 0           ; a NEW story starts untranscribed - before
+                                    ; zm_setup, whose zt_f2keep would otherwise
+                                    ; carry the last story's bit into this one
 
     mov ax, [zi_kb]
     call OSAPI_MEM_CLAIM            ; out CF=0 and DX = the base SEGMENT
@@ -788,9 +832,10 @@ zi_load:
 .nomem:
     mov si, zi_m_nomem
 .fail:
-    call zw_notice
-    call zi_free_all
-    mov byte [zf_state], ZFS_NONE
+    mov byte [zf_state], ZFS_NONE   ; FIRST: zw_notice puts a refusal with no
+    call zw_notice                  ; story under the splash, not into a text
+    call zi_free_all                ; window that has nothing in it
+    call zf_menufix
     stc
     ret
 .story:
@@ -845,19 +890,22 @@ zi_load:
     ; is asked for and not insisted on.
     mov ax, [zi_savkb]
     or ax, ax
-    jz .win
+    jz .script
     call OSAPI_MEM_CLAIM
     jc .noundo
     mov [zi_undoseg], dx
     mov ax, zf_reloc            ; one word too, and NOT a file target - a
     call OSAPI_MEM_MOVABLE      ; snapshot is a memory copy (Standard 6.1.2)
-    jmp short .win
+    jmp short .script
 .noundo:
     mov si, zi_m_noundo
     call zw_notice
 
     ; The transcript buffer, asked for on the same terms as undo: a machine
     ; too small for it still plays the story, it just cannot write SCRIPT.TXT.
+    ; ON EVERY PATH: it sat after the undo refusal's notice, so the only
+    ; machine that ever got a buffer was one too small for undo.
+.script:
     call zi_script_open
 
 .win:
@@ -877,6 +925,8 @@ zi_load:
     call OSAPI_WM_TITLE
 
     mov byte [zf_state], ZFS_RUN
+    mov word [zf_why], 0            ; the last refusal is history now
+    call zf_menufix
     call zw_clear
     call zw_paint
 
@@ -1249,6 +1299,7 @@ zi_readline:
                                     ; cursor moves to the next line"
 .fin:
     push ax                         ; bank the terminating character
+    call zi_script_echo             ; the command into the transcript too
     call zi_commit
     pop ax
     mov byte [zi_want], ZIW_NONE
@@ -1345,12 +1396,14 @@ zi_request:
     mov byte [zf_reqres], ZRES_NONE
     mov [zf_req], al                ; LAST, and after reqres: the UI task
                                     ; reads this byte to decide there is work
+    call zf_menufix                 ; File > Save/Restore Game lights up now
     mov si, zi_m_press
     call zw_notice
 .wait:
     call zi_yield                   ; the only way out if the window closes
     cmp byte [zf_req], ZREQ_NONE
     jne .wait
+    call zf_menufix                 ; ...and greys again once it is answered
     call zi_flush                   ; the RETURN was a handshake, not input
     cmp byte [zf_reqres], ZRES_OK
     pop si
@@ -2267,6 +2320,7 @@ zi_m_bigsave: db 'This story is too large to save.', 0
 zi_m_cmem:    db 'Compressed saves cannot be read.', 0
 zi_m_wrong:   db 'That save is for another story.', 0
 zi_m_notsave: db 'Not a Quetzal saved game.', 0
+zi_m_issave:  db 'A saved game: open its story, then RESTORE.', 0
 
 ; =============================================================================
 ; THE TRANSCRIPT (output stream 2, Standard 7.1.2)
@@ -2354,6 +2408,7 @@ zi_script_putc:
     mov [es:bx], al
     inc bx
     mov [zi_scrlen], bx
+    mov byte [zi_scrdirty], 1       ; the next flush owes the disk a write
     jmp short .out
 .fill:
     mov byte [zi_scrfull], 1
@@ -2368,13 +2423,48 @@ zi_script_putc:
     ret
 
 ; -----------------------------------------------------------------------------
+; zi_script_echo - the line just typed, into the transcript (WORKER)
+; in:  [zi_line]/[zi_linen]; out: nothing; preserves every register
+;
+; The echo on the glass is zwin's and goes to no stream, so without this a
+; transcript read '>You typed 3 chars.' - the prompt, then the answer, and
+; never the command between them. Stream 3 takes nothing from here: what the
+; player types is not story output (Standard 7.1.2.2).
+; -----------------------------------------------------------------------------
+zi_script_echo:
+    cmp byte [zt_s2on], 0
+    je .out
+    cmp word [zt_s3n], 0
+    jne .out
+    push ax
+    push bx
+    xor bx, bx
+.ch:
+    cmp bx, [zi_linen]
+    jae .eol
+    mov al, [zi_line + bx]
+    call zi_script_putc
+    inc bx
+    jmp short .ch
+.eol:
+    mov al, 13                      ; zi_script_putc makes it CR LF
+    call zi_script_putc
+    pop bx
+    pop ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; zi_script_flush - write SCRIPT.TXT (UI TASK ONLY)
 ; in:  nothing; out: nothing; preserves every register
 ;
-; Called from the key callback, so the file on disk is never more than one
-; keystroke behind what is on screen - which is what makes it usable as a test
-; oracle (docs/plans/completed/FROTZ-PLAN.md 11: the transcript is read back off the image on
-; the host and diffed against dfrotz).
+; Called from the key callback on RETURN, so the file on disk is never more
+; than one command behind what is on screen - which is what makes it usable
+; as a test oracle (docs/plans/completed/FROTZ-PLAN.md 11: the transcript is
+; read back off the image on the host and diffed against dfrotz). It was every
+; KEYSTROKE, and nothing noticed only because no transcript ever started: a
+; whole-file write per letter typed is seconds of floppy per word on the XT.
+; [zi_scrdirty] skips the write when nothing was added since the last one.
 ; -----------------------------------------------------------------------------
 zi_script_flush:
     push ax
@@ -2383,7 +2473,12 @@ zi_script_flush:
     push dx
     push si
     push es
-    mov cx, [zi_scrlen]
+    cmp byte [zi_scrdirty], 0       ; nothing new since the last write: a
+    je .out                         ; flush is a whole-file replace, ~0.4 s of
+    mov byte [zi_scrdirty], 0       ; floppy, so it is never spent for nothing
+    mov cx, [zi_scrlen]             ; (cleared BEFORE the length is read: a
+                                    ; character the worker adds after it is
+                                    ; dirty again for the next flush)
     or cx, cx
     jz .out
     cmp word [zi_scrseg], 0

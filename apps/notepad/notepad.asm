@@ -1029,17 +1029,15 @@ np_fp_act:
     call np_redrawall
     jmp short .done
 .h1:
-    cmp bx, 1
-    jne .h2
+    dec bx
+    jnz .h2
     call np_dorepall            ; 1 = All
-    mov si, [np_win]
-    call np_redraw
-    call np_pdrawn
-    jmp short .done
+    jmp short .rdraw
 .h2:
-    cmp bx, 2
-    jne .h3
+    dec bx
+    jnz .h3
     call np_dorepl              ; 2 = Repl
+.rdraw:                         ; ...both of which change the count as well
     mov si, [np_win]
     call np_redraw
     call np_pdrawn
@@ -4650,24 +4648,21 @@ np_save:
     xor si, si                  ; DS:SI = the note, ES:DI the expansion. NO
     xor di, di                  ; kernel variable is readable while DS is the
     mov cx, [cs:np_len]         ; document - through CS is how the counts are
-    xor bx, bx                  ; reached, the dsk_copy_in discipline
+                                ; reached, the dsk_copy_in discipline
 .stage:
     jcxz .staged
     lodsb                       ; DF=0 per SPEC.md 1
     dec cx
-    mov [es:di], al
-    inc di
-    inc bx
+    stosb                       ; ES:DI - and DI is the staged count as it goes
     cmp al, 13
     jne .stage
-    mov byte [es:di], 10        ; the DOS half of the line ending
-    inc di
-    inc bx
+    mov al, 10                  ; the DOS half of the line ending
+    stosb
     jmp short .stage
 .staged:
     push cs
     pop ds                      ; ...and back, before anything else is read
-    mov cx, bx                  ; ES:BX = the staged bytes (SPEC.md 20.3),
+    mov cx, di                  ; ES:BX = the staged bytes (SPEC.md 20.3),
     xor bx, bx                  ; DX:CX their count (SPEC.md 18.4.1)
     xor dx, dx
     mov si, np_name
@@ -4695,6 +4690,49 @@ np_save:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_nlfold - the line-ending fold np_load and np_paste share (internal)
+; in:  ES:SI = the bytes, CX = how many, ES:DI = where the kept ones go, and
+;      DI <= SI - the fold only drops bytes, so it runs in place
+; out: DI = one past the last byte kept; CF = 1 a byte to keep met [np_cap]
+;      and the fold stopped there. Clobbers AX, CX, SI
+;
+; CR LF folds to one 13 and so does a lone LF, and anything else outside
+; 32..126 is dropped: a file and the clipboard are both bytes another program
+; wrote, and a stray control code would draw as a random glyph.
+; -----------------------------------------------------------------------------
+np_nlfold:
+    xor ah, ah                  ; AH = the byte before
+.f:
+    jcxz .done
+    es lodsb
+    dec cx
+    cmp al, 10
+    jne .notlf
+    cmp ah, 13
+    je .skip                    ; CR LF: the 13 already went in
+    mov al, 13                  ; a lone LF is a line break too
+.notlf:
+    cmp al, 13
+    je .keep
+    cmp al, 32
+    jb .skip
+    cmp al, 126
+    ja .skip
+.keep:
+    cmp di, [np_cap]
+    jae .full
+    stosb
+.skip:
+    mov ah, al
+    jmp short .f
+.done:
+    clc
+    ret
+.full:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -4771,38 +4809,10 @@ np_load:
     mov cx, ax
     xor si, si                  ; ES:SI walks what arrived...
     xor di, di                  ; ...and ES:DI writes the kept characters back
-    xor dx, dx                  ; over it. DI can never outrun SI - the fold
-                                ; only drops bytes - so in place is safe.
-                                ; DL = previous byte, DH = truncation flag
-.fold:
-    jcxz .folded
-    mov al, [es:si]
-    inc si
-    dec cx
-    cmp al, 10
-    jne .notlf
-    cmp dl, 13
-    je .skip                    ; CR LF: the 13 already went in
-    mov al, 13                  ; a lone LF is a line break too
-.notlf:
-    cmp al, 13
-    je .store
-    cmp al, 32
-    jb .skip
-    cmp al, 126
-    ja .skip
-.store:
-    cmp di, [np_cap]
-    jb .room
-    mov dh, 1                   ; unreachable - the fold cannot outgrow what
-    jmp short .folded           ; the read fitted - but a bound is a bound
-.room:
-    mov [es:di], al
-    inc di
-.skip:
-    mov dl, al
-    jmp short .fold
-.folded:
+                                ; over it. DI can never outrun SI - the fold
+                                ; only drops bytes - so in place is safe
+    call np_nlfold
+    sbb dh, dh                  ; DH = the truncation flag, read below
     mov [np_len], di
     call np_clamp               ; a shorter file must not leave the caret
                                 ; past the end of it
@@ -4838,8 +4848,9 @@ np_load:
 .done:
     call np_fitclaim            ; both paths: give back what the file did not
 .out:                           ; need, including the whole of a read that
-                                ; failed and left the note as it was
-    jmp np_ld_7
+                                ; failed and left the note as it was -
+                                ; and FALLS into np_ld_7 below, which is
+                                ; what the jmp to it was (2 bytes, 15 clocks)
 
 ; -----------------------------------------------------------------------------
 ; np_ld_N - the shared epilogue: pop the last N of AX BX CX DX SI DI ES, in
@@ -6335,7 +6346,8 @@ np_redraw:
 ; -----------------------------------------------------------------------------
 ; np_new - empty the note (File > New)
 ; in:  nothing
-; out: nothing; preserves all registers
+; out: nothing; clobbers AX (it always did - the toast's string went through
+;      it - and its one caller, np_oncmd, has spent AX by then)
 ;
 ; The length, the toast and the claim. np_paint reads exactly [np_len] bytes,
 ; so the stale tail is unreachable and wiping it would buy nothing - but the
@@ -6345,18 +6357,18 @@ np_redraw:
 ; reason an ordinary keystroke retires it.
 ; -----------------------------------------------------------------------------
 np_new:
-    mov word [np_len], 0
-    mov word [np_cur], 0
+    xor ax, ax                  ; (AX is the menu item, and spent)
+    mov [np_len], ax
+    mov [np_cur], ax
     mov ax, np_s_nul            ; retire the toast: 'Loaded NOTES.TXT' over an
     call np_saymsg              ; empty note is a lie. An EMPTY string is how
     call np_clamp               ; SPEC.md 59.3 spells that, so no flag of ours
                ; a no-op on the caret, which is already 0 -
                                 ; it is here for the invalidation np_clamp
                                 ; carries (SPEC.md 27.4/27.5)
-    push ax                     ; ...and give the heap back what the old note
-    mov ax, NP_KB0              ; had grown into. A shrink always succeeds in
-    call np_resize              ; place, so this cannot fail (SPEC.md 50.3.1)
-    pop ax
+    mov ax, NP_KB0              ; ...and give the heap back what the old note
+    call np_resize              ; had grown into. A shrink always succeeds in
+                                ; place, so this cannot fail (SPEC.md 50.3.1)
     mov byte [np_named], 0      ; ...and it is not a FILE until something
     call np_mark                ; makes it one (SPEC.md 27.15): empty and
                                 ; clean, so New then Close asks nothing
@@ -6468,6 +6480,8 @@ np_oncmd:
     call np_save
     jmp short .draw
 .new:
+    call np_asknew                  ; an edited note is asked about first
+    jc .out                         ; (SPEC.md 27.15.4): the answer does it
     call np_new
 .draw:
     mov byte [np_follow], 1
@@ -6600,23 +6614,7 @@ np_qcompose:
     push di
     mov si, np_q_pre
     mov di, np_qbuf
-.pre:
-    lodsb
-    or al, al
-    jz .name
-    mov [di], al
-    inc di
-    jmp short .pre
-.name:
-    mov si, np_name
-.copy:
-    lodsb
-    or al, al
-    jz .end
-    mov [di], al
-    inc di
-    jmp short .copy
-.end:
+    call np_cat                     ; prefix + name, DI left on the NUL
     mov word [di], '?'              ; '?' and the NUL in one store - the high
     pop di                          ; byte of the immediate is 0
     pop si
@@ -6663,15 +6661,16 @@ np_onclose:
     pop bx
     pop di
     pop si
-    jnc .up
-    cmp byte [np_asking], 0
-    jne .wait                       ; refused because OURS is up - and it has
-                                    ; just been raised
-    jmp short .wait                 ; refused because the window table is
-                                    ; full: there is nothing to ask with and
-                                    ; nothing safe to do, so stay open and let
-                                    ; the user close something
-.up:
+    mov byte [np_qnew], 0           ; a CLOSE now, whatever the question up
+                                    ; was put up for: the words are the same,
+                                    ; and closing is the stronger intent
+    jc .wait                        ; refused because OURS is up - and it has
+                                    ; just been raised - or because the window
+                                    ; table is full: there is nothing to ask
+                                    ; with and nothing safe to do, so stay
+                                    ; open and let the user close something.
+                                    ; (It tested [np_asking] to tell the two
+                                    ; apart, and both arms went here.)
     mov byte [np_asking], 1
 .wait:
     stc
@@ -6698,6 +6697,8 @@ np_onclose:
 ; -----------------------------------------------------------------------------
 np_onask:
     mov byte [np_asking], 0
+    xor ah, ah                      ; AH = 1 when the question was File >
+    xchg ah, [np_qnew]              ; New's (np_asknew), read AND cleared
     or al, al
     jz .save                        ; 0 = Save (the default, and Enter)
     cmp al, 1
@@ -6713,17 +6714,66 @@ np_onask:
                                     ; so the user still has the document and
                                     ; can pick Don't Save if they mean it
 .close:
+    or ah, ah
+    jnz .new
     mov bx, si
     call OSAPI_WM_CLOSE             ; DEFERRED (SPEC.md 75.2): this returns and
     ret                             ; the window goes on the next UI pass
+.new:
+    call np_new                     ; ...or New, which is what was asked
+    mov byte [np_follow], 1
+    jmp np_redraw                   ; SI is our window
 .saveas:
     push si
     mov al, FDLG_SAVE
     call np_dlgopen                 ; SI is still our window
     pop si
     jc .out                         ; refused: stay open
-    mov byte [np_qclose], 1         ; ...and its commit is a QUIT (np_ondlg)
+    inc ah                          ; ...and its commit is a QUIT (1) or a
+    mov [np_qclose], ah             ; NEW (2) (np_ondlg)
 .out:
+    ret
+
+; -----------------------------------------------------------------------------
+; np_asknew - File > New's question (SPEC.md 27.15.4)
+; in:  SI = our window; the UI task, gfx lock HELD
+; out: CF = 0 the note is not edited, go ahead; CF = 1 it is, and the
+;      save-changes question is up (or was up already and has been raised),
+;      np_onask doing the New when it is answered. Preserves all registers
+;
+; New used to empty an edited note without a word, while closing the same
+; note asked. It is the close question with a second ending: the alert, the
+; completion and the Save As that a never-saved note goes through are all
+; np_onclose's.
+; -----------------------------------------------------------------------------
+np_asknew:
+    call np_dirty
+    jnc .o                          ; nothing unsaved: CF = 0
+    push ax
+    push bx
+    push si
+    push di
+    push es
+    call np_qcompose
+    mov ax, KERNEL_SEG              ; os88ui_ask reads our caption out of the
+    mov es, ax                      ; window record through ES (SPEC.md 20.1)
+    mov bx, si
+    mov si, np_qbuf
+    mov di, np_onask
+    mov al, OS88UI_ASAVE
+    call os88ui_ask
+    jc .up                          ; one is up already, raised: its intent
+                                    ; stands (a close stays a close)
+    mov byte [np_asking], 1
+    mov byte [np_qnew], 1
+.up:
+    pop es
+    pop di
+    pop si
+    pop bx
+    pop ax
+    stc
+.o:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -6768,33 +6818,15 @@ np_dlgopen:
 ; been uncovered by wm_destroy.
 ; -----------------------------------------------------------------------------
 np_ondlg:
-    mov bl, al                      ; BL = the mode; AL becomes a name byte
-    mov dx, si                      ; DX = our window: SI is about to be the
-                                    ; kernel's buffer, and np_redraw wants
-                                    ; the window back in SI
-    mov si, di
-    mov di, np_name
-    mov cx, NP_NAMEMAX
-.copy:
-    mov al, [es:si]                 ; the name buffer is the KERNEL's, and ES
-    mov [di], al                    ; points there on entry (SPEC.md 38.6).
-    or al, al                       ; Bounded even though 38.6 promises <= 12:
-    jz .copied                      ; a package that trusts a promise is a
-    inc si                          ; package with an overrun in it
-    inc di
-    loop .copy
-    mov byte [di], 0
-.copied:
-    push dx                         ; the window: FILE_HERE answers in DX
-    push bx                         ; ...and the mode is in BL
+    mov ah, al                      ; AH = the mode: np_adopt spends AL only,
+                                    ; and FILE_HERE answers in DX and BL
+    push si                         ; our window, which np_redraw wants back
+    mov si, di                      ; ES:SI = the name, in the KERNEL's buffer
     call OSAPI_FILE_HERE            ; where the dialog left the volume IS the
-    mov [np_dir], dx                ; folder the user chose, and it is the one
-    mov [np_drv], bl                ; this document belongs to from here on
-    mov byte [np_dirok], 1
-    pop bx
-    pop dx
-    mov si, dx                      ; SI = our window again
-    or bl, bl
+    call np_adopt                   ; folder the user chose, and it is the one
+                                    ; this document belongs to from here on
+    pop si
+    or ah, ah
     jz .load
     call np_save
     pushf                           ; its answer, past the read-and-clear
@@ -6806,9 +6838,15 @@ np_ondlg:
                                     ; with the document still in hand
     or al, al
     jz .draw
+    cmp al, 2
+    je .new                         ; np_asknew's Save As: then New
     mov bx, si
     call OSAPI_WM_CLOSE             ; deferred; no repaint is owed after it
     ret
+.new:
+    call np_new
+    mov byte [np_follow], 1
+    jmp short .draw
 .load:
     call np_load
 .draw:
@@ -6900,25 +6938,11 @@ np_arg:
     push es
     call OSAPI_ARG_FILE             ; CF=1 = launched empty, the usual case
     jc .out
-    mov [np_dir], dx                ; the folder it lives in, recorded the
-    mov [np_drv], bl                ; way Save As records one - np_goto then
-    mov byte [np_dirok], 1          ; takes np_load there
     mov ax, KERNEL_SEG
     mov es, ax
-    mov di, np_name
-    mov cx, 13
-.copy:
-    mov al, [es:si]
-    mov [di], al
-    or al, al
-    jz .named
-    inc si
-    inc di
-    loop .copy
-    mov byte [di], 0
-.named:
-    push ds
-    pop es                          ; ES = DS again, the callback default
+    call np_adopt                   ; the folder it lives in, recorded the
+                                    ; way Save As records one - np_goto then
+                                    ; takes np_load there - and the name
     mov byte [np_argp], 1           ; np_onwake reads it; np_load is Ctrl-O and
                                     ; is what it calls (SPEC.md 54.10)
 .out:
@@ -6930,6 +6954,34 @@ np_arg:
     pop bx
     pop ax
     popf
+    ret
+
+; -----------------------------------------------------------------------------
+; np_adopt - this note IS the file ES:SI names, in folder DX on drive BL
+; in:  DX:BL = the folder (OSAPI_FILE_HERE's or OSAPI_ARG_FILE's pair), ES:SI
+;      = an 8.3 name in the KERNEL's segment; out: np_dir/np_drv/np_dirok and
+;      np_name set. Clobbers AL, CX, SI, DI - and AH is kept, np_ondlg's mode
+;
+; The two doors a name arrives by - the file dialog and a launch document -
+; record it the same way. Bounded at 13 characters and a NUL even though
+; SPEC.md 38.6 promises 12: a package that trusts a promise is a package
+; with an overrun in it, and np_name is 14 bytes.
+; -----------------------------------------------------------------------------
+np_adopt:
+    mov [np_dir], dx
+    mov [np_drv], bl
+    mov byte [np_dirok], 1
+    mov di, np_name
+    mov cx, 13
+.copy:
+    es lodsb
+    mov [di], al
+    or al, al
+    jz .done
+    inc di
+    loop .copy
+    mov byte [di], 0
+.done:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -6976,13 +7028,7 @@ np_defname:
     push di
     mov si, np_s_default
     mov di, np_name
-.copy:
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    or al, al
-    jnz .copy
+    call np_scpy
     pop di
     pop si
     pop ax
@@ -6999,30 +7045,34 @@ np_setmsg:
     push si
     push di
     mov di, np_tbuf
-.pre:
-    mov al, [si]
-    or al, al
-    jz .name
-    mov [di], al
-    inc si
-    inc di
-    jmp short .pre
-.name:
-    mov si, np_name
-.copy:
-    mov al, [si]
-    mov [di], al
-    or al, al
-    jz .done
-    inc si
-    inc di
-    jmp short .copy
-.done:
+    call np_cat
     mov ax, np_tbuf
     call np_saymsg              ; the kernel copies it, so np_tbuf is free to
     pop di                      ; be recomposed the moment this returns
     pop si
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_cat / np_scpy - the three name composers' one copy loop (internal)
+; np_cat:  SI = a NUL prefix, DI = the buffer -> the prefix, then np_name
+; np_scpy: SI = a NUL string, DI = the buffer -> that string
+; out: the string is in the buffer with its NUL and DI is left ON that NUL,
+;      so the next copy - or np_qcompose's '?' - overwrites it. Clobbers AL
+;      and SI; DS is the package's for both ends (no ES, which is the
+;      kernel's in a callback)
+; -----------------------------------------------------------------------------
+np_cat:
+    call np_scpy
+    mov si, np_name
+np_scpy:
+    lodsb
+    mov [di], al
+    or al, al
+    jz .end
+    inc di
+    jmp short np_scpy
+.end:
     ret
 
 ; =============================================================================
@@ -7358,9 +7408,7 @@ np_delspan:
 .nomv:
     pop cx
 .close:
-    mov ax, [np_len]
-    sub ax, cx
-    mov [np_len], ax
+    sub [np_len], cx
 .out:
     pop es
     pop di
@@ -7413,9 +7461,7 @@ np_gaproom:
 .nomv:
     pop cx
 .done:
-    mov ax, [np_len]
-    add ax, cx
-    mov [np_len], ax
+    add [np_len], cx
     call np_hmark
 .ok:
     clc
@@ -7557,52 +7603,23 @@ np_paste:
     mov si, bx                  ; read...
     mov di, bx                  ; ...and write, both inside the gap
     mov cx, dx
-    xor ax, ax                  ; AL = the byte before, AH = this one
-.f:
-    jcxz .fdone
-    mov ah, [es:si]
-    inc si
-    dec cx
-    cmp ah, 10
-    jne .fnotlf
-    cmp al, 13
-    je .fskip                   ; CR LF: the 13 already went in
-    mov ah, 13                  ; a lone LF is a line break too
-.fnotlf:
-    cmp ah, 13
-    je .fkeep
-    cmp ah, 32
-    jb .fskip
-    cmp ah, 126
-    ja .fskip
-.fkeep:
-    mov [es:di], ah
-    inc di
-.fskip:
-    mov al, ah
-    jmp short .f
-.fdone:
+    call np_nlfold              ; never meets [np_cap]: DI trails SI, and SI
+                                ; stays inside a gap np_gaproom fitted
     mov cx, di
     sub cx, bx                  ; CX = the bytes that survived
     push cx
     mov si, bx
     add si, dx                  ; the first byte past the gap
     mov cx, [np_len]
-    sub cx, si                  ; ...and the tail behind it
-.t:
-    jcxz .tdone
-    mov ah, [es:si]
-    mov [es:di], ah
-    inc si
-    inc di
-    dec cx
-    jmp short .t
-.tdone:
+    sub cx, si                  ; ...and the tail behind it, moved down onto
+    push ds                     ; the end of what survived - forwards, as
+    push es                     ; np_delspan closes a gap (SPEC.md 27.12)
+    pop ds
+    rep movsb
+    pop ds
     pop cx
-    mov ax, [np_len]
-    sub ax, dx
-    add ax, cx
-    mov [np_len], ax            ; the gap was n; only CX of it is text
+    sub [np_len], dx
+    add [np_len], cx            ; the gap was n; only CX of it is text
     mov ax, bx
     call np_urec_ins            ; AX = where, CX = how many
     add bx, cx
@@ -7768,9 +7785,7 @@ np_udrop0:
     dec bx
     jmp short .mv
 .shrunk:
-    mov ax, [np_utop]
-    sub ax, cx
-    mov [np_utop], ax
+    sub [np_utop], cx
 .arrays:
     xor bx, bx                  ; shift the four arrays down one, and every
 .sh:                            ; surviving blob offset with them
@@ -7901,12 +7916,8 @@ np_ublob_app:
     mov es, [np_useg]
     call np_ublob_copy
     pop si
-    mov ax, [np_utop]
-    add ax, cx
-    mov [np_utop], ax
-    mov ax, [si+np_udel]
-    add ax, cx
-    mov [si+np_udel], ax
+    add [np_utop], cx
+    add [si+np_udel], cx
 .out:
     pop es
     pop di
@@ -7963,9 +7974,7 @@ np_ublob_pre:
     mov si, ax
     mov di, bx
     call np_ublob_copy
-    mov ax, [np_utop]
-    add ax, cx
-    mov [np_utop], ax
+    add [np_utop], cx
 .out:
     pop es
     pop di
@@ -8207,9 +8216,7 @@ np_undo:
     add ax, dx                  ; the caret lands at the end of what came back
     mov [np_cur], ax
     call np_selclr
-    mov ax, [np_utop]
-    sub ax, dx
-    mov [np_utop], ax           ; the blob is the arena's last, so this is all
+    sub [np_utop], dx           ; the blob is the arena's last, so this is all
     dec byte [np_un]            ; there is to giving it back
     jnz .kept                   ; ...and the LAST record undone gives back the
     call np_uclear              ; whole arena: a Replace All's 16KB blob used
@@ -9066,15 +9073,8 @@ np_replat:
     mov es, [np_dseg]
     mov di, bx
     mov si, np_frep
-    jcxz .filled
-.f:
-    mov al, [si]
-    mov [es:di], al
-    inc si
-    inc di
-    dec cx
-    jnz .f
-.filled:
+    rep movsb                   ; DS:SI (ours) -> ES:DI (the note); CX = 0
+                                ; moves nothing, so no jcxz
     mov ax, bx
     mov cx, [np_frepn]
     call np_urec_ins
@@ -9469,61 +9469,43 @@ np_movesel:
     push bx
     push cx
     push dx
+    push di
     call np_selget              ; AX = s, CX = n
     jc .out
-    mov [np_mvs], ax
-    mov [np_mvn], cx
-    add ax, cx
-    mov [np_mve], ax
-    mov ax, [np_dpos]
-    mov [np_mvp], ax
-    cmp ax, [np_mvs]
+    mov bx, ax
+    add bx, cx                  ; BX = e
+    mov dx, [np_dpos]           ; DX = p
+    mov di, dx                  ; DI = where the block begins afterwards: p
+    cmp dx, ax                  ; leftwards...
     jb .left
-    cmp ax, [np_mve]
+    cmp dx, bx
     jbe .out                    ; dropped inside itself: nothing to do
-    mov ax, [np_mvs]            ; --- rightwards: [s,e)[e,p) -> [e,p)[s,e) ---
-    mov cx, [np_mvp]
+    sub di, cx                  ; ...p - n rightwards, where it ENDS at p.
+    jmp short .rot              ; [s,e)[e,p) -> [e,p)[s,e): (a,b,c) = (s,e,p)
+.left:                          ; [p,s)[s,e) -> [s,e)[p,s): (a,b,c) = (p,s,e)
+    xchg ax, dx
+    xchg bx, dx
+.rot:                           ; rotate [a,b)[b,c) with AX = a, BX = b, DX = c
+    push cx
+    mov cx, dx
     sub cx, ax
-    call np_urec_bulk           ; the whole span [s, p), as one replacement
+    call np_urec_bulk           ; the whole span [a, c), as one replacement
     mov byte [np_unolog], 1
-    mov ax, [np_mvs]
-    mov bx, [np_mve]
     dec bx
-    call np_rev
-    mov ax, [np_mve]
-    mov bx, [np_mvp]
+    call np_rev                 ; [a, b)
+    inc bx
+    push ax
+    mov ax, bx
+    mov bx, dx
     dec bx
-    call np_rev
-    mov ax, [np_mvs]
-    mov bx, [np_mvp]
-    dec bx
-    call np_rev
-    mov ax, [np_mvp]
-    sub ax, [np_mvn]            ; the block ends where it was dropped
-    jmp short .fin
-.left:                          ; --- leftwards: [p,s)[s,e) -> [s,e)[p,s) ---
-    mov ax, [np_mvp]
-    mov cx, [np_mve]
-    sub cx, ax
-    call np_urec_bulk           ; the whole span [p, e)
-    mov byte [np_unolog], 1
-    mov ax, [np_mvp]
-    mov bx, [np_mvs]
-    dec bx
-    call np_rev
-    mov ax, [np_mvs]
-    mov bx, [np_mve]
-    dec bx
-    call np_rev
-    mov ax, [np_mvp]
-    mov bx, [np_mve]
-    dec bx
-    call np_rev
-    mov ax, [np_mvp]            ; ...and here it begins where it was dropped
-.fin:
+    call np_rev                 ; [b, c)
+    pop ax
+    call np_rev                 ; [a, c) - BX is still c - 1
+    pop cx
+    mov ax, di
     mov byte [np_unolog], 0
     mov dx, ax
-    add dx, [np_mvn]
+    add dx, cx                  ; CX = n, kept across the rotation
     call np_selset              ; it stays selected, which is what the user
     mov [np_cur], dx            ; just spent a drag pointing at
     call np_urec_bulkend_span
@@ -9531,6 +9513,7 @@ np_movesel:
     mov byte [np_follow], 1
     mov byte [np_ckok], 0
 .out:
+    pop di
     jmp np_ld_4
 
 ; np_urec_bulkend_span - close a bulk record whose span did not change length
@@ -9708,52 +9691,41 @@ np_fpgeom:
     call OSAPI_WM_CONTENT       ; AX = content left, DX = content top
     mov [np_pl], ax
     mov [np_pt], dx
-    push ax
+    mov di, ax                  ; DI = the left, which GEOM keeps
     call OSAPI_WM_GEOM          ; CX = content w, DX = content h
-    pop ax
-    add ax, cx
-    dec ax
-    mov [np_pr], ax
-    mov ax, [np_pl]
-    add ax, 4 + NP_FP_LBL
+    add cx, di
+    dec cx
+    mov [np_pr], cx
+    lea ax, [di+4+NP_FP_LBL]
     mov [np_pfx], ax            ; a text box's interior...
-    mov ax, [np_pr]
-    sub ax, 4
-    mov [np_pfr], ax            ; ...left and right
-    call np_fph
-    mov bx, ax
-    mov ax, [np_pt]
-    add ax, bx
-    sub ax, NP_FP_PAD + 1 + NP_FP_ROW
-    mov [np_pbtny], ax          ; the button row's top
-    mov ax, [np_pl]
-    add ax, 4
+    lea ax, [di+4]
     mov [np_pcbx], ax           ; the Regex tick box...
     add ax, 9 + 4 + 16 + 8
     mov [np_pnx], ax            ; ...then 'Rx', then the count
-    mov di, [np_pr]
+    mov di, cx                  ; DI = the right
+    lea ax, [di-4]
+    mov [np_pfr], ax            ; ...the text box's right
+    call np_fph
+    add ax, [np_pt]
+    sub ax, NP_FP_PAD + 1 + NP_FP_ROW
+    mov [np_pbtny], ax          ; the button row's top
     sub di, 3
     xor bx, bx                  ; 0 = the close box
     mov cx, 14
     call np_pbset
-    cmp byte [np_fpan], NP_FPAN_REPL
-    jne .nrepl
-    mov bx, 1                   ; 1 = All
+    xor cx, cx                  ; 1 = All and 2 = Repl are shown only with
+    cmp byte [np_fpan], NP_FPAN_REPL    ; Replace open, and a zero width
+    jne .all                    ; hides one (np_pbset)
     mov cx, 3*8+8
-    call np_pbset
-    mov bx, 2                   ; 2 = Repl
+.all:
+    inc bx
+    call np_pbset               ; ...which keeps CX
+    jcxz .repl
     mov cx, 4*8+8
+.repl:
+    inc bx
     call np_pbset
-    jmp short .next
-.nrepl:
-    mov bx, 1
-    xor cx, cx
-    call np_pbset
-    mov bx, 2
-    xor cx, cx
-    call np_pbset
-.next:
-    mov bx, 3                   ; 3 = Next
+    inc bx                      ; 3 = Next
     mov cx, 4*8+8
     call np_pbset
     pop di
@@ -9800,25 +9772,20 @@ np_pfield:
     push si
     push di
     push bp
-    xor ah, ah
+    cbw                         ; AL is 0 or 1
     mov bp, ax                  ; BP = which box (a VALUE - SS is not DS here)
-    mov cx, NP_FP_ROW
-    mul cx
-    add ax, [np_pt]
-    add ax, NP_FP_PAD
-    mov di, ax                  ; DI = this row's top
-
-    mov al, CBLACK              ; the pen is the BOX FRAME's below, not the
-    call OSAPI_SET_COLOR        ; label's - the label carries its own pair
+    mov di, [np_pt]
+    add di, NP_FP_PAD           ; DI = this row's top...
     mov si, np_s_find
     or bp, bp
     jz .lbl
+    add di, NP_FP_ROW           ; ...one row down for Repl:
     mov si, np_s_repl
 .lbl:
-    mov cx, [np_pl]
-    add cx, 4
-    mov dx, di
-    add dx, 1
+    mov al, CBLACK              ; the pen is the BOX FRAME's below, not the
+    call OSAPI_SET_COLOR        ; label's - the label carries its own pair
+    mov cx, [np_pcbx]           ; the panel's left + 4, which np_fpgeom keeps
+    lea dx, [di+1]
     mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the panel's own ground
     call OSAPI_FONT_RUN             ; (SPEC.md 6.6.5)
 
@@ -9827,8 +9794,7 @@ np_pfield:
     mov bx, di
     mov cx, [np_pfr]
     add cx, 2
-    mov dx, di
-    add dx, NP_FP_ROW - 3
+    lea dx, [di+NP_FP_ROW-3]
     call OSAPI_GFX_FRAME
 
     push di
@@ -9840,8 +9806,7 @@ np_pfield:
     inc dx                      ; di+1..di+8, INSIDE the frame at di..di+9:
                                 ; the run is opaque, so a cell that reached
                                 ; the frame's own row would erase it
-    mov al, CBLACK
-    mov ah, CWHITE
+    mov ax, (CWHITE << 8) | CBLACK
     call OSAPI_FONT_RUN
 
     mov al, [np_ffield]         ; the caret, when this box has the focus
@@ -9854,10 +9819,8 @@ np_pfield:
     add ax, [np_pfx]
     cmp ax, [np_pfr]
     ja .out
-    mov bx, di
-    inc bx
-    mov dx, bx
-    add dx, 7
+    lea bx, [di+1]
+    lea dx, [di+8]
     call np_black
     call OSAPI_GFX_VLINE
 .out:
@@ -10029,12 +9992,7 @@ np_pcount:
 .blank:
     mov si, np_m_blank
 .tail:
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    or al, al
-    jnz .tail
+    call np_scpy
 .out:
     pop si
     pop di
@@ -10071,16 +10029,16 @@ np_pdrawn:
     jbe .cap
     mov bx, 13
 .cap:
-    mov si, np_fnum             ; ...and the string is padded to exactly that,
-    mov di, np_fnum             ; so a shorter answer erases the longer one it
+    mov di, np_fnum             ; ...and the string is padded to exactly that,
+    mov si, di                  ; so a shorter answer erases the longer one it
 .len:                           ; replaces and nothing runs into a button
     cmp byte [di], 0
     je .pad
     inc di
     dec bx
     jnz .len
-    mov byte [di], 0            ; longer than the room: it is cut, not spilled
-    jmp short .draw
+    jmp short .draw             ; longer than the room: .draw's NUL cuts it,
+                                ; not spilled
 .pad:
     or bx, bx
     jz .draw
@@ -10093,8 +10051,7 @@ np_pdrawn:
     mov cx, [np_pnx]
     mov dx, [np_pbtny]
     add dx, 2
-    mov al, CBLACK
-    mov ah, CWHITE
+    mov ax, (CWHITE << 8) | CBLACK
     call OSAPI_FONT_RUN
 .out:
     jmp np_ld_6
@@ -10121,63 +10078,49 @@ np_pbutton:
     push dx
     push si
     push di
-    push bx                     ; BX = the 0-based slot, and it stays: the
-    shl bx, 1                   ; group's rects, labels and flags are three
-    mov [np_btlbl+bx], si       ; parallel arrays the record indexes together
-    mov cx, [bx+np_pbw]
-    pop ax                      ; AX = the slot again
+    mov ax, bx                  ; AX = the 0-based slot, for os88ui_btn
+    shl bx, 1                   ; BX = slot * 2: the group's rects, labels
+    mov [np_btlbl+bx], si       ; and flags are parallel arrays the record
+    mov cx, [bx+np_pbw]         ; indexes together
+    mov si, bx
+    shl si, 1
+    shl si, 1
+    add si, np_brects           ; SI = this slot's rect (stride 8)
     jcxz .hide
     mov di, [bx+np_pbx]
     or di, di
     jz .hide
-    push ax
-    add ax, ax
-    add ax, ax
-    add ax, ax                  ; AX = slot * 8, the rect stride
-    mov bx, np_brects
-    add bx, ax
-    mov [bx+0], di
+    mov [si+0], di
     add di, cx
     dec di                      ; ...x2 inclusive
-    mov [bx+4], di
-    mov ax, [np_pbtny]
-    mov [bx+2], ax
-    add ax, NP_FP_BTNH - 1
-    mov [bx+6], ax
-    pop ax
-    push ax
-    add ax, ax
-    mov bx, ax
+    mov [si+4], di
+    mov dx, [np_pbtny]
+    mov [si+2], dx
+    add dx, NP_FP_BTNH - 1
+    mov [si+6], dx
     mov word [np_btflg+bx], OS88UI_FILL
                                 ; np_fpaint fills the panel band before the
                                 ; first button, but a button REDRAWN in place
                                 ; would or its caption onto the old one
                                 ; (os88ui.inc's own note), and this is the
                                 ; cheapest way for that never to become true
-    pop ax
     mov bx, np_btrec
     inc ax                      ; the record's indices are one-based
     call os88ui_btn
     jmp short .out
 .hide:                          ; not shown: ZERO its rect, so os88ui_bfind
-    add ax, ax                  ; cannot answer for a button that is not there
-    add ax, ax
-    add ax, ax
-    mov bx, np_brects
-    add bx, ax
-    xor ax, ax
-    mov [bx+0], ax
-    mov [bx+2], ax
-    mov [bx+4], ax
-    mov [bx+6], ax
+    xor ax, ax                  ; cannot answer for a button that is not there
+    mov [si+0], ax
+    mov [si+2], ax
+    mov [si+4], ax
+    mov [si+6], ax
 .out:
     jmp np_ld_6
 
-np_brects:  dw 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0   ; THE GROUP (SPEC.md
-                                ; 20.5.1.3): four rects, contiguous, in screen
-                                ; coordinates - a hidden one is zeroed
-np_btlbl:   dw 0, 0, 0, 0       ; ...its labels, written as each is drawn
-np_btflg:   dw 0, 0, 0, 0       ; ...and its flags
+                                ; np_brects, np_btlbl and np_btflg - the
+                                ; group's three parallel arrays - are bss
+                                ; (NPVAR, below the image): zeros in the
+                                ; image are file bytes for nothing
     OS88UI_BTNREC np_btrec, np_brects, np_btlbl, np_btflg, 4
 
 ; -----------------------------------------------------------------------------
@@ -10201,17 +10144,11 @@ np_fpaint:
     mov ax, [np_pl]
     mov bx, [np_pt]
     mov cx, [np_pr]
-    mov dx, bx
-    add dx, di
-    sub dx, 2
-    call OSAPI_GFX_FILL
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov ax, [np_pl]
-    mov bx, [np_pr]
-    mov dx, [np_pt]
-    add dx, di
-    dec dx
+    lea dx, [bx+di-2]
+    call OSAPI_GFX_FILL         ; (a primitive keeps every register)
+    inc dx                      ; y = the panel's last row...
+    mov bx, cx                  ; ...from the left (AX) to the right
+    call np_black
     call OSAPI_GFX_HLINE        ; the rule that separates it from the note
 
     xor ax, ax
@@ -10232,14 +10169,14 @@ np_fpaint:
     call OSAPI_GFX_FRAME
     cmp byte [np_frx], 0
     je .norx
-    mov ax, [np_pcbx]
-    add ax, 2
-    mov bx, [np_pbtny]
-    add bx, 3
-    mov cx, ax
-    add cx, 4
-    mov dx, bx
-    add dx, 4
+    inc ax                      ; the tick: the frame's rect inset by 2
+    inc ax
+    inc bx
+    inc bx
+    dec cx
+    dec cx
+    dec dx
+    dec dx
     call OSAPI_GFX_FILL
 .norx:
     mov cx, [np_pcbx]
@@ -10251,16 +10188,16 @@ np_fpaint:
     call OSAPI_FONT_RUN             ; The tick box to its left is a fill of
                                     ; its own and ends 5px short of this pen
 
-    mov bx, 3
-    mov si, np_b_next
+    mov bx, 3                   ; np_pbutton keeps BX, so the slots count
+    mov si, np_b_next           ; down 3, 2, 1, 0
     call np_pbutton
-    mov bx, 2
+    dec bx
     mov si, np_b_repl
     call np_pbutton
-    mov bx, 1
+    dec bx
     mov si, np_b_all
     call np_pbutton
-    xor bx, bx
+    dec bx
     mov si, np_b_x
     call np_pbutton
     mov si, [np_win]            ; np_pdrawn re-derives the geometry from the
@@ -10295,17 +10232,24 @@ np_fopen:
     jcxz .nosel
     mov es, [np_dseg]
     mov si, ax
-    mov di, np_fpat
+    mov di, ax
     mov dx, cx
+    mov al, 13
+    repne scasb                 ; ES:DI over the selection, BEFORE a byte of
+    je .nosel                   ; the pattern is touched: more than one line
+                                ; is not a pattern. (It checked as it copied,
+                                ; and a CR found after more characters than
+                                ; the old pattern held had already written
+                                ; over its NUL - the box showed the old
+                                ; length of the new text, and the matcher,
+                                ; which reads to the NUL, searched for more.)
+    mov di, np_fpat
+    mov cx, dx
 .cp:
-    mov al, [es:si]
-    cmp al, 13
-    je .nosel                   ; more than one line: not a pattern
+    es lodsb
     mov [di], al
-    inc si
     inc di
-    dec cx
-    jnz .cp
+    loop .cp
     mov byte [di], 0
     mov [np_fpatn], dx
     mov [np_fpcur], dx
@@ -10373,8 +10317,7 @@ np_fpclick:
     cmp dx, [np_pt]
     jb .no
 
-    mov bx, [np_pbtny]          ; --- the button row ---
-    cmp dx, bx
+    cmp dx, [np_pbtny]          ; --- the button row ---
     jb .fields
     mov bx, np_btrec            ; **THEY ONLY ARM** (SPEC.md 13.6): Replace
     call os88ui_btnpress        ; All rewrites the document, so none of these
@@ -10394,9 +10337,9 @@ np_fpclick:
     mov byte [np_fcdirty], 1
     call np_fpaint
     jmp short .yes
-.hit:                           ; UNREACHED from the press now: np_fp_act is
-    call np_fp_act              ; the same ladder as a routine of its own, so
-    jmp short .yes              ; np_onup can reach it at the release
+                                ; (a .hit arm calling np_fp_act stood here,
+                                ; unreached since the press stopped firing:
+                                ; np_onup reaches np_fp_act at the release)
 
 .fields:
     mov ax, dx                  ; --- a text box ---
@@ -10477,12 +10420,15 @@ np_fpkey:
     mov si, np_frep
     mov di, np_frepn
 .have:
-    mov bx, [di]                ; ONE caret word serves both boxes, so the
-    cmp [np_fpcur], bx          ; first thing this must do is make sure it is
+    mov cx, [di]                ; CX = the length, DX = the caret - and ONE
+    mov dx, [np_fpcur]          ; caret word serves both boxes, so the first
+    cmp dx, cx                  ; thing this must do is make sure it is
     jbe .cur                    ; inside THIS one. Without it, tabbing from a
-    mov [np_fpcur], bx          ; long pattern into a short replacement gave
+    mov dx, cx                  ; long pattern into a short replacement gave
 .cur:                           ; the insert loop a NEGATIVE count, and it
-                                ; wrote 64KB across this package's own bss
+                                ; wrote 64KB across this package's own bss.
+                                ; Both live in registers until .out stores
+                                ; the caret back on every path
     or al, al
     jnz .ascii
     cmp ah, NP_K_LEFT
@@ -10495,7 +10441,7 @@ np_fpkey:
     je .end
     cmp ah, NP_K_DEL
     je .del
-    jmp .no
+    jmp short .no
 .ascii:
     cmp al, 8
     je .bksp
@@ -10503,73 +10449,58 @@ np_fpkey:
     jb .no
     cmp al, 126
     ja .no
-    mov bx, [di]
-    cmp bx, NP_PATMAX
+    cmp cx, NP_PATMAX
     jae .yes                    ; full: the keystroke is dropped, as a full
                                 ; note's is
-    push ax                     ; open a gap at the caret
-    mov cx, bx
-    sub cx, [np_fpcur]
-    mov bx, [di]
-.ig:
-    jcxz .iplace
-    mov al, [si+bx-1]
-    mov [si+bx], al
+    mov bx, cx                  ; open a gap at the caret: [caret, len] moves
+.ig:                            ; up one, its NUL with it (a box is always
+    mov ah, [si+bx]             ; NUL-terminated at its length)
+    mov [si+bx+1], ah
+    cmp bx, dx
+    je .iplace
     dec bx
-    dec cx
     jmp short .ig
 .iplace:
-    pop ax
-    mov bx, [np_fpcur]
-    mov [si+bx], al
-    inc word [di]
-    inc word [np_fpcur]
-    mov bx, [di]
-    mov byte [si+bx], 0
+    mov [si+bx], al             ; BX = the caret
+    inc dx
+    inc cx
     jmp short .chg
 .bksp:
-    cmp word [np_fpcur], 0
-    je .yes
-    dec word [np_fpcur]
+    or dx, dx
+    jz .yes
+    dec dx
     jmp short .cut1
 .del:
-    mov bx, [np_fpcur]
-    cmp bx, [di]
+    cmp dx, cx
     jae .yes
 .cut1:
-    mov bx, [np_fpcur]
-.dg:
-    mov cx, [di]
-    cmp bx, cx
-    jae .dend
-    mov al, [si+bx+1]
-    mov [si+bx], al
+    mov bx, dx                  ; close the gap: (caret, len] moves down one,
+.dg:                            ; its NUL with it. The caret is short of the
+    mov ah, [si+bx+1]           ; length on both ways in, so this runs at
+    mov [si+bx], ah             ; least once
     inc bx
-    jmp short .dg
-.dend:
-    dec word [di]
-    mov bx, [di]
-    mov byte [si+bx], 0
+    cmp bx, cx
+    jb .dg
+    dec cx
     jmp short .chg
 .left:
-    cmp word [np_fpcur], 0
-    je .yes
-    dec word [np_fpcur]
+    or dx, dx
+    jz .yes
+    dec dx
     jmp short .yes
 .right:
-    mov bx, [np_fpcur]
-    cmp bx, [di]
+    cmp dx, cx
     jae .yes
-    inc word [np_fpcur]
+    inc dx
     jmp short .yes
 .home:
-    mov word [np_fpcur], 0
+    xor dx, dx
     jmp short .yes
 .end:
-    mov bx, [di]
-    mov [np_fpcur], bx
+    mov dx, cx
     jmp short .yes
 .chg:
+    mov [di], cx
     call np_fchk                ; the pattern changed: it may not compile, and
     mov byte [np_fcok], 0       ; the count it had is about somebody else
     mov byte [np_fcdirty], 1
@@ -10580,6 +10511,7 @@ np_fpkey:
 .no:
     stc
 .out:
+    mov [np_fpcur], dx          ; flags kept: CF is the answer
     pop di
     pop si
     ret
@@ -10879,13 +10811,7 @@ np_saycnt:
     mov di, np_tbuf
     call np_utoa
     mov si, np_m_repld
-.cp:
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    or al, al
-    jnz .cp
+    call np_scpy
     mov ax, np_tbuf
     call np_saymsg
     pop di
@@ -11148,6 +11074,22 @@ np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
                                 ; dialog has a floor of ~800 bytes wherever it
                                 ; lives, and this is where that is affordable
 %define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)
+%ifndef NPF_FIND
+%define OS88UI_NOGEST           ; ...and with no find panel there is no button
+%define OS88UI_NOBFIND          ; with a gesture: the alert's are its own
+                                ; (os88ui_ahit/arm/fire), so the record side -
+                                ; btnpress/btndrag/btnup, btninit and bfind -
+                                ; would be ~230 bytes nothing in the small
+                                ; build reaches (SPEC.md 20.5.1.3.4, 27.16)
+%else
+%define OS88UI_NOBTNINIT        ; ...and WITH it the panel routes its own press
+                                ; into os88ui_btnpress and installs its own
+                                ; up/drag pair (np_onup/np_ondrag), so the
+                                ; gesture's SETUP half - btninit, btnclick,
+                                ; btlist - is 112 bytes it never ran (apps
+                                ; size pass 2b, SPEC.md 20.5.1.3.4, 27.16)
+%endif
+%define OS88UI_1BPP             ; OSAPI_SAVEU_1BPP: a greyed caption keeps its ink (SPEC.md 13.8.11)
 %include "os88ui.inc"
 
 ; ...and it is ABOVE the bss counter below because that block sizes a field
@@ -11192,10 +11134,6 @@ np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
                             ; would leave the old bar on screen for good
     NPVAR np_dpx,   2       ; word } where the press landed, for the dead-zone
     NPVAR np_dpy,   2       ; word } test that keeps a click a click
-    NPVAR np_mvs,   2       ; word } np_movesel's four numbers. In bss rather
-    NPVAR np_mve,   2       ; word } than in registers because the three
-    NPVAR np_mvp,   2       ; word } reversals want all four at once and the
-    NPVAR np_mvn,   2       ; word } 8086 has nowhere to put them
 
 ; --- undo (SPEC.md 27.9) -----------------------------------------------------
 %ifdef NPF_UNDO
@@ -11418,6 +11356,13 @@ np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
 %endif
 
 ; --- the launch document (SPEC.md 54.10) -------------------------------------
+%ifdef NPF_FIND
+    NPVAR np_brects, 32     ; THE GROUP (SPEC.md 20.5.1.3): four rects,
+                            ; contiguous, in screen coordinates - a hidden one
+                            ; is zeroed
+    NPVAR np_btlbl,  8      ; ...its labels, written as each is drawn
+    NPVAR np_btflg,  8      ; ...and its flags
+%endif
     NPVAR np_argp,  1       ; byte: np_arg banked a document and np_onwake has
                             ; not spent it yet. The pair np_load needs is
                             ; already kept - np_dir/np_drv/np_dirok are Save
@@ -11450,6 +11395,9 @@ np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
                             ; only about ours
     NPVAR np_qclose, 1      ; byte: the Save As dialog now on screen was
                             ; started by that alert, so its commit is a QUIT
+                            ; (1) or, for File > New's question, a NEW (2)
+    NPVAR np_qnew, 1        ; byte: the alert up is File > New's, not the
+                            ; close negotiator's (SPEC.md 27.15.4)
     NPVAR np_abon, 1        ; byte: the About card is up (SPEC.md 20.5.1)
     NPVAR np_qbuf, OS88UI_AMAX + 1  ; the alert's line, composed around the
                             ; document's name. Not np_tbuf, which is 30 bytes

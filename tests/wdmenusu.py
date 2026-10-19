@@ -87,7 +87,7 @@ a = ap.parse_args()
 
 syms, image = pkg_syms()
 DISK = "build/wdmenusu.img"
-M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC")
+M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC", *M.faces())
 S = lambda n: m.sym(n)
 
 with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:

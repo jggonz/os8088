@@ -55,8 +55,10 @@ THE NEGATIVE CONTROLS ARE THE HALF THAT BREAKS SILENTLY:
   *  A TYPO WITH NO TAIL still answers `Bad command or file name` (§96.33.21.2).
      The stem is only looked up when a document follows it; without that rule
      every unresolved word on the machine reaches the package launcher.
-  *  A TYPO WITH A TAIL answers `Cannot open NOTPAD` - naming the half that
-     was wrong, not the document.
+  *  A TYPO WITH A TAIL answers `Bad command or file name: NOTPAD` - the
+     answer the same word gets with no tail, and it names the PROGRAM half,
+     not the document. It said `Cannot open NOTPAD` until the manuals pass
+     found `OS88CZ /?` and `OS88CZ` disagreeing about one missing program.
   *  `OPEN` of an extension nothing claims says so in its own words, because
      at that point there is no window to look at.
   *  A PROGRAM ON ANOTHER VOLUME is NOT asserted either way, deliberately
@@ -308,13 +310,28 @@ def main():
                  % console()[-3:])
         else:
             print("dosopen: -  NOTPAD -> Bad command or file name")
+        # ...and the WORDING no longer tells the two arms apart (both say
+        # `Bad command or file name: NOTPAD` now), so which arm ran is read
+        # off the box itself: [dos_ispkg] is 2 only on the lookup arm, and a
+        # bare word that reached the launcher would leave it 2 here
+        def ispkg():
+            return m.read((boxseg() << 4) + dm["dos_ispkg"], 1)[0]
+        if ispkg() != 0:
+            fail("a typo with NO tail reached the package launcher "
+                 "([dos_ispkg] = %d, want 0) - the stem is looked up only "
+                 "when a document follows it (SPEC.md 96.33.21.2)" % ispkg())
 
-        if not says("NOTPAD README.TXT", "Cannot open NOTPAD"):
-            fail("a typo WITH a tail must name the PROGRAM half - `Cannot "
-                 "open NOTPAD` - or the user is sent to look at the document "
-                 "(SPEC.md 96.33.21.2). Console: %r" % console()[-3:])
+        if not says("NOTPAD README.TXT", "Bad command or file name: NOTPAD"):
+            fail("a typo WITH a tail must answer as it does without one and "
+                 "name the PROGRAM half - `Bad command or file name: NOTPAD` "
+                 "- or the user is sent to look at the document (SPEC.md "
+                 "96.33.21.2). Console: %r" % console()[-3:])
         else:
-            print("dosopen: -  NOTPAD README.TXT -> Cannot open NOTPAD")
+            print("dosopen: -  NOTPAD README.TXT -> Bad command or file name")
+        if ispkg() != 2:
+            fail("a typo WITH a tail did not take the lookup arm ([dos_ispkg] "
+                 "= %d, want 2), so the refusal above came from the verb "
+                 "table instead (SPEC.md 96.33.21.2)" % ispkg())
 
         # --- CASE (SPEC.md 21.5.3.2), which is the reported bug ------------
         # A:\README.TXT with NOTEPAD.O88 in A:\APPS\ - the exact sequence.
@@ -417,7 +434,7 @@ def main():
         to_box()
         typ("help\n")
         scr = console()
-        for want in ("CD [path]", "OPEN file", "cmd > file"):
+        for want in ("CD [path]", "OPEN file", "cmd > NUL"):
             if not any(want in r for r in scr):
                 fail("HELP printed no line for %r (SPEC.md 96.33.23). "
                      "Console tail: %r" % (want, scr[-4:]))

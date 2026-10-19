@@ -38,7 +38,7 @@
 ; assembled a long way above where a shared include may put its code, and
 ; the IMG_* offsets have to exist by then or every `mov [si+IMG_*]` sizes
 ; its displacement differently on the two passes. The code itself is
-; %included into SCRIBE.OVL further down.
+; %included into part 1, `section .modc`, further down (SPEC.md 95.8.8).
 %define OS88IMG_CONSTS_ONLY
 %include "os88img.inc"
 %undef OS88IMG_CONSTS_ONLY
@@ -93,72 +93,14 @@ SC_SBIDLE   equ SB_IDLE
 ; this package's own rule.
 ;
 ; WHAT DIFFERS FROM WORD, AND ALL OF IT IS IDENTITY:
-;   the header name, the icon glyph, the overlay's filename, the About box,
-;   the title bar, and the association - which it does NOT declare.
+;   the header name, the icon glyph, the About box, the title bar, and the
+;   association - which it does NOT declare.
 ; =============================================================================
 
     OS88_HEADER 'SCRIBE', sc_entry, 1  ; bit 0 icon. NOT bit 1: see below
 
-; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
-; A white page with a big black 'W' - the document identity, one glyph. The
-; mask is the page silhouette dilated 1px, so it sits on a clean white
-; underlay over the desktop grey and over a selected row.
-;
-;   data               mask
-;   ................   .#############..
-;   ..###########...   .#############..
-;   ..#.........#...   .#############..
-;   ..#.........#...   .#############..
-;   ..#..###....#...   .#############..
-;   ..#.#...#...#...   .#############..
-;   ..#.#.......#...   .#############..
-;   ..#..###....#...   .#############..
-;   ..#.....#...#...   .#############..
-;   ..#.#...#...#...   .#############..
-;   ..#..###....#...   .#############..
-;   ..#.........#...   .#############..
-;   ..#.........#...   .#############..
-;   ..#.........#...   .#############..
-;   ..###########...   .#############..
-;   ................   .#############..
-;
-; The same page silhouette Word's icon has - these are two word processors and
-; the outline should say so - with an S where its W is. The MASK is unchanged:
-; it is the page dilated 1px and does not depend on the glyph inside.
-    OS88_ICON16
-    dw 0x7FFC                       ; 16 mask rows
-    dw 0x7FFC
-    dw 0x7FFC
-    dw 0x7FFC
-    dw 0x7FFC
-    dw 0x7FFC
-    dw 0x7FFC
-    dw 0x7FFC
-    dw 0x7FFC
-    dw 0x7FFC
-    dw 0x7FFC
-    dw 0x7FFC
-    dw 0x7FFC
-    dw 0x7FFC
-    dw 0x7FFC
-    dw 0x7FFC
-    dw 0x0000                       ; 16 data rows
-    dw 0x3FF8                       ; the page's top edge
-    dw 0x2008
-    dw 0x2008
-    dw 0x2708                       ; .###.  the S begins
-    dw 0x2888                       ; #...#
-    dw 0x2808                       ; #....
-    dw 0x2708                       ; .###.
-    dw 0x2088                       ; ....#
-    dw 0x2888                       ; #...#
-    dw 0x2708                       ; .###.
-    dw 0x2008
-    dw 0x2008
-    dw 0x2008
-    dw 0x3FF8                       ; ...and its bottom
-    dw 0x0000
-    OS88_ICON16_END
+%include "scicon.inc"           ; the icon, shared with the loader that
+                                ; launches us (SPEC.md 95.8.8)
 
 ; --- NO ASSOCIATION BLOCK, AND THAT IS THE POINT (SPEC.md 54/68.4/88.2) ------
 ; Word declares .DOC. If SCRIBE declared it too, the winner on a disk holding
@@ -637,6 +579,13 @@ SC_K_F1      equ 0x3B           ; F1 - Help: opens the About box (the only
 SC_K_F4      equ 0x3E           ; F4 - repeat search down (SPEC.md 68.7)
 SC_K_F5      equ 0x3F           ; F5 - Go To... (keys.cmd EditGoTo)
 SC_K_F8      equ 0x42           ; F8 - extend selection (status EXT)
+SC_K_AF4     equ 0x6B           ; Alt-F4 - File > Exit, the caption the menu
+                                ; has always printed beside it. int 16h hands
+                                ; Alt+F1..F10 over as AL = 0 + scans 0x68..0x71
+                                ; on every ROM back to the 5150's, and nothing
+                                ; between the BIOS and this handler claims it:
+                                ; the kernel has no window-close key, so the
+                                ; package that prints the caption keeps it
 SC_K_SF4     equ 0x57           ; Shift-F4 - repeat search up (Shift-F1..F10
                                 ; are scans 0x54..0x5D)
 SC_K_HOME    equ 0x47           ; the caret keys, int 16h scan codes
@@ -775,11 +724,6 @@ SCP_CLOSE    equ 3
 ; appears, the bar already says "Scribe  File".
 ; -----------------------------------------------------------------------------
 sc_entry:
-    call OSAPI_FILE_HERE            ; where this package was LAUNCHED from,
-    mov [sc_ovdir], dx              ; banked before anything can navigate away
-    mov [sc_ovdrv], bl              ; - it is where SCRIBE.OVL lives, and the
-                                    ; user is free to move the volume to DOCS\
-                                    ; a moment later (SPEC.md 68.10)
     call ty_init                    ; face 0 (the kernel's 8x8) before anything
                                     ; can ask for a metric - SPEC.md 6.5, and
                                     ; the reason nothing below has to test
@@ -831,26 +775,6 @@ sc_entry:
     mov word [sc_papn], 1
     mov word [sc_capkb], SC_KB0
     mov word [sc_cap], SC_KB0 * 1024
-    push ax                         ; SCRIBE.OVL NOW, NOT AT FIRST USE. 68.10
-    call sc_ovload                  ; loads a module "the first time one of its
-    pop ax                          ; features is asked for", which cost WORD
-                                    ; nothing while its module held a picture
-                                    ; feature most sessions never touch. 95.8
-                                    ; put OPEN AND SAVE in this one, so first
-                                    ; use is the first file operation - and by
-                                    ; then the launch drive may hold the disk
-                                    ; the user is opening from or saving to.
-                                    ; The module is read from the LAUNCH
-                                    ; folder, so it was not there, and a cold
-                                    ; Scribe could neither open a document off
-                                    ; a data disk nor save a new one onto it.
-                                    ; This is SPEC.md 50.3's claims-at-entry.
-                                    ; CF IS NOT READ: a machine without the
-                                    ; heap or a disk without the file still
-                                    ; runs the editor, and sc_ovneed retries at
-                                    ; first use and says why. Silent here
-                                    ; because there is no document yet for the
-                                    ; message to be about
     call sc_defname                 ; the name and the TITLE the template
     call sc_compttl                 ; points at (SPEC.md 68.2: 'Microsoft
                                     ; Word - DOCUMENT.DOC') must exist before
@@ -915,6 +839,13 @@ sc_entry:
     mov byte [sc_mhi], 0xFF         ; a REAL menu index and a real item
     mov [sc_win], bx                ; the worker (SPEC.md 27.3) has no callback
                                     ; to be handed this in SI
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1, 95.8.8). It could not while
+    ; SCRIBE.OVL was a file of its own: the module kept DS = this segment and
+    ; was told it by a stamp in its own image and six far vectors in ours,
+    ; all written once at load and meant to last the session. Part 1 is in
+    ; THIS segment now, so nothing names it but CS and a compaction moves the
+    ; two together - the bare `ret` proc is the whole of the fix-up.
+    OS88_REGION_MOVABLE
 %ifdef OS88UI_SBDRAG
     pushf                           ; the entry still owes the loader
     push ax                         ; wm_create's CF (SPEC.md 13.10.7.1)
@@ -5613,6 +5544,16 @@ sc_hire:
     call OSAPI_TASK_SPAWN
     jc .out
     mov byte [sc_hired], 1
+    ; ...AND THE WORKER MAY BE RESTARTED (SPEC.md 66.6.2). Hiring one
+    ; would otherwise pin the region for ever - task_spawn wrote our
+    ; segment into that worker's frame before its first instruction.
+    ; Word's argument, and the worker is Word's: it polls four statics and
+    ; sleeps, so a restart costs one poll. The kernel restarts a worker only
+    ; where it PARKS, which for us is inside OSAPI_TASK_ALIVE at the top of
+    ; the loop - [sc_inwk] is 0 there, being raised only inside the lock -
+    ; and we do not declare OSAPI_MEM_PARKSAFE, so the gfx-lock park is not
+    ; in play.
+    OS88_WORKER_RESTARTABLE sc_worker
 .out:
     pop bx
     pop ax
@@ -7234,9 +7175,8 @@ sc_save:
     push si
     push di
     push es
-    push bp                         ; BP TOO: the overlay verb goes in it, and
-                                    ; sc_modc shifts it, so a caller banking a
-                                    ; pointer there got twice the verb back
+    push bp                         ; BP TOO: the format engines in part 1
+                                    ; are not promised to keep it
     call sc_stghold             ; ES = the staging claim, or a toast and out
     jc .out
     call sc_goto                ; the folder this document belongs to, if the
@@ -7244,13 +7184,13 @@ sc_save:
                                 ; CF = we are not there, so write nothing
     call sc_isrtf               ; a .RTF name is the user naming a FORMAT,
     jnc .rtf                    ; and it is the one extension Save honours
-    mov bp, SCM_DOCIMG          ; the whole Word file - FIB, text, FKPs,
-    call sc_ovcall
+    call sc_docimg              ; the whole Word file - FIB, text, FKPs,
+    call sc_ovsay
     jc .big                     ; STSH, plcfsed, bin tables, DOP (65.4)
     jmp short .write
 .rtf:
-    mov bp, SCM_RTFIMG          ; ...or the RTF text (SPEC.md 68.8)
-    call sc_ovcall
+    call sc_rtfimg              ; ...or the RTF text (SPEC.md 68.8)
+    call sc_ovsay
     jc .big
 .write:
     mov cx, [sc_dend]           ; ES:BX = the image, DX:CX its byte count
@@ -7349,9 +7289,8 @@ sc_load:
     push si
     push di
     push es
-    push bp                         ; BP TOO: the overlay verb goes in it, and
-                                    ; sc_modc shifts it, so a caller banking a
-                                    ; pointer there got twice the verb back
+    push bp                         ; BP TOO: the format engines in part 1
+                                    ; are not promised to keep it
     call sc_goto                ; the folder dance on the way in
     jc .err                     ; ...and a refusal, not a read of sc_name in
                                 ; whatever folder we were left standing in
@@ -7363,12 +7302,12 @@ sc_load:
     jmp .err
 .read:
     push ax                     ; the byte count, kept across the sniffs
-    mov bp, SCM_ISRTF           ; '{\rtf' -> the RTF reader (SPEC.md 68.8)
-    call sc_ovcall
+    call sc_isrtfimg            ; '{\rtf' -> the RTF reader (SPEC.md 68.8)
+    call sc_ovsay
     jc .nortf
     pop ax
-    mov bp, SCM_RTFPARSE        ; frees the OLD pictures ITSELF and may then
-    call sc_ovcall
+    call sc_rtfparse            ; frees the OLD pictures ITSELF and may then
+    call sc_ovsay
     jc .bad                     ; register new ones (SPEC.md 95.6), so it
     jmp short .loaded2          ; must not meet sc_pictfree on the way out
 .nortf:
@@ -7380,8 +7319,8 @@ sc_load:
     jne .plain
 
     ; --- a real Word file: FIB, pieces, FKPs, the lot (SPEC.md 68.4) ------
-    mov bp, SCM_DOCPARSE        ; CF=1 = refused whole, document untouched
-    call sc_ovcall
+    call sc_docparse            ; CF=1 = refused whole, document untouched
+    call sc_ovsay
     jc .bad
 .loaded:
                                 ; NO sc_pictfree HERE ANY MORE. Both readers
@@ -7398,8 +7337,8 @@ sc_load:
 .loaded2:
     call sc_clamp               ; caret to the top; clears the has* flags,
                                 ; the tail and the typing attrs (65.3)
-    mov bp, SCM_LDPOST          ; ...then the loaded facts go back
-    call sc_ovcall
+    call sc_ldpost              ; ...then the loaded facts go back
+    call sc_ovsay
     mov byte [sc_dirty], 0
     mov si, sc_m_loaded
     call sc_setmsg
@@ -8223,6 +8162,8 @@ sc_onkey:
     jnz .typing
     cmp ah, SC_K_F1
     je .kf1                         ; F1 - the About box (the help there is)
+    cmp ah, SC_K_AF4
+    je .kaf4                        ; Alt-F4 - File > Exit, same door
     cmp ah, SC_K_F4
     je .kf4                         ; F4 / Shift-F4 - repeat the search down
     cmp ah, SC_K_SF4                ; / up (SPEC.md 68.7)
@@ -8508,6 +8449,10 @@ sc_onkey:
 .kf1:
     call sc_habout                  ; F1: the About box (bounds+settle inside)
     jmp .out
+.kaf4:
+    call sc_a_close                ; Alt-F4: File > Exit - the dirty prompt
+    jmp .out                        ; first, then the hide and the worker's
+                                    ; teardown; nothing left to repaint
 .kf4:
     call sc_donext                  ; F4: repeat search down (SPEC.md 68.7)
     jmp .redraw
@@ -10626,18 +10571,18 @@ sc_papfind0:
     jmp short .out
 .full:
     mov ax, sc_m_papfull
-    mov [sc_ovmsg], ax              ; NOT sc_saymsg. This runs inside
-    stc                             ; SCRIBE.OVL now (88.8.1) and the module
-.out:                               ; never speaks - it leaves the reason and
-    pop es                          ; sc_ovcall says it on the way out
+    mov [sc_ovmsg], ax              ; NOT sc_saymsg. The file formats call
+    stc                             ; this from part 1 (95.8.1), and the
+.out:                               ; formats never speak - they leave the
+    pop es                          ; reason and sc_ovsay says it on the way out
     pop si
     pop cx
     pop bx
     ret
 
-; sc_papfind - the dictionary lookup with its refusal said. Resident callers
-; use this; the module reaches sc_papfind0 through sc_v_papfind and lets
-; sc_ovcall speak, so the toast is raised on the resident side either way.
+; sc_papfind - the dictionary lookup with its refusal said. The editor's
+; callers use this; the file formats in part 1 call sc_papfind0 and let
+; sc_ovsay speak, so the toast is raised in one place either way.
 sc_papfind:
     call sc_papfind0
     jnc .out
@@ -16770,7 +16715,7 @@ sc_mf_ret:
 ; -----------------------------------------------------------------------------
 ; sc_a_pict - Insert > Picture... (SPEC.md 95.9)
 ;
-; Ask for a file, read it, and decode it through SCRIBE.OVL. The picture is
+; Ask for a file, read it, and decode it in part 1. The picture is
 ; measured and reported and NOT yet put in the document: the model, the
 ; layout and the file format are 88.9's remaining three parts, and the
 ; message says which stage this is rather than implying more.
@@ -16830,8 +16775,8 @@ sc_pictload:
                                     ; first, since picture numbers are not
                                     ; contiguous and a document does not know
                                     ; what they are (87.1)
-    mov bp, SCM_IMGLOAD
-    call sc_ovcall                  ; ...out to SCRIBE.OVL, and back
+    call img_load                   ; ...out to part 1's decoder, and back
+    call sc_ovsay
     jc .decerr
     call sc_pictkeep                ; the scratch claim's contents into one
     jc .full                        ; sized for them, and a table slot
@@ -16990,10 +16935,10 @@ sc_pictfree:
     mov word [sc_npic], 0
     jmp sc_ld_5
 
-; sc_pictsay - AX = width, BX = height: "Picture 240x160 read - placing it
-; is not built yet". The last clause is there on purpose. A command that
-; reports a success it did not have is worse than one that refuses (47), and
-; this stage genuinely reads the file and genuinely does not insert it.
+; sc_pictsay - AX = width, BX = height: "240x160 placed", said once the
+; picture is in the text (sc_pictput has run). The first stage read the file
+; and did not insert it, and said exactly that; the wording outlived the stage
+; and reported every real placement as a failure.
 sc_pictsay:
     push ax
     push bx
@@ -17017,8 +16962,9 @@ sc_pictsay:
     ret
 
 ; sc_picterr - AX = an IMG_E_* code, said in THIS package's words. The include
-; returns a number and never a string, because a string out in SCRIBE.OVL is at
-; a module-relative offset a resident reader takes for something else (87.2).
+; returns a number and never a string - the rule it was written to when its
+; code lived in a module with a CS of its own (87.2), and kept: the caller
+; words the message.
 sc_picterr:
     push ax
     push bx
@@ -17697,8 +17643,8 @@ sc_abopen:
     inc cx
     mov dx, bx
     call OSAPI_GFX_FILL_GRAY
-    ; the FIVE lines (SPEC.md 95.12): the name, the version, where the authentic
-    ; UI came from - the Computer History Museum's Opus release - and then the
+    ; the FIVE lines (SPEC.md 95.12): the name, the version, the program it
+    ; was forked from - in words, never a section number - and then the
     ; two credits. The fork INHERITED the first of them: Word's card carries
     ; 'Ported by Jorge Gonzalez' and this box was cut from that one with the
     ; line dropped, which is how a fork loses an attribution silently
@@ -19930,7 +19876,7 @@ sc_s_sp4:   db '    ', 0
 sc_s_sp3:   db '   ', 0
 sc_s_about: db 'Scribe', 0
 sc_s_abou2: db 'os8088 word processor', 0
-sc_s_abou3: db 'Forked from WORD (SPEC.md 86)', 0
+sc_s_abou3: db 'Forked from Word 1.1a for os8088', 0
 sc_s_abou4: db 'Ported by Jorge Gonzalez', 0
 sc_s_abou5: db 'Updated by Koriban', 0
 sc_s_ok:    db 'OK', 0
@@ -20029,9 +19975,11 @@ sc_e_nomem:   db 'No memory', 0      ; the staging claim was refused (50.3)
 ; strip simply stopped mid-word at the right edge of the screen - no error, no
 ; ellipsis, just a sentence with its end missing. The success line is built
 ; from a width and a height, so it is the longest possible one that has to
-; fit: '1280x65535 - not placed' is 23.
+; fit: '1280x65535 placed' is 17. It read ' - not placed' from the stage that
+; read a picture and did not insert it, and kept saying so after 95.9.3 made
+; the command place one - a success reported as a failure.
 sc_s_pictx:   db 'x', 0
-sc_s_pict2:   db ' - not placed', 0
+sc_s_pict2:   db ' placed', 0
 sc_e_pictio:  db 'Cannot read that file', 0
 sc_e_pictbig: db 'That file is too big', 0
 sc_e_pict0:   db 'Not a picture file', 0
@@ -20061,7 +20009,6 @@ sc_m_toobig:  db 'Too complex to save', 0
 sc_m_noclip:  db 'The clipboard is empty', 0        ; ^c with nothing in it
 sc_m_replong: db 'Replacement too long', 0          ; ...and ^m/^c past
                                      ; SC_FRXMAX (SPEC.md 68.7)
-sc_m_loaded2: db 'Module loaded from SCRIBE.OVL', 0
 sc_m_toomanyp: db 'Too many paragraphs', 0          ; past SC_UMAXP (65.9)
 sc_m_noundo2: db 'Too large to undo', 0             ; the span is bigger than
                                      ; the undo blob, so the command refuses
@@ -20074,480 +20021,130 @@ sc_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
                                         ; not fund the clipboard (SPEC.md 55)
 
 ; =============================================================================
-; REACHING THE PACKAGE'S OWN VARIABLES FROM INSIDE THE MODULE (SPEC.md 95.8.3)
+; REACHING THE PACKAGE'S OWN VARIABLES FROM INSIDE PART 1 (SPEC.md 95.8.3)
 ;
 ; The file-format engines read sc_dseg, sc_cseg, sc_len and the rest at moments
-; when DS *and* ES are both pointed at the document, CHP or staging claims.
-; Resident, they wrote `[cs:sc_len]`, because CS was the package. In the module
-; CS is the module, and there is no third segment register to use instead:
-; SS is LOW_SEG (SPEC.md 20.1), not the package.
+; when DS *and* ES are both pointed at the document, CHP or staging claims, so
+; the read has to go through CS. Part 1 is assembled in THIS segment
+; (SPEC.md 95.8.8), so CS is the package and each of these is one
+; instruction with a `cs:` override.
 ;
-; So the package's segment is stamped into the MODULE's own image at load time
-; (sc_ovneed above), where CS does reach it, and these macros borrow DS around
-; the access. Each one costs four to seven instructions where the resident
-; version cost one, and each CLOBBERS NOTHING but its own destination and - for
-; the two segment-loading forms - nothing at all: AX is banked and restored.
-; `pop` does not touch the flags, which is what lets PKG_CMP end with one.
-;
-; They are macros and not a helper routine on purpose: a helper would need its
-; arguments in registers, and the whole problem at these sites is that there is
-; no register to spare.
+; They are macros, and not a search-and-replace of the 55 sites, because the
+; sites were written against a module that had a CS OF ITS OWN: then each one
+; borrowed DS around a load from a word stamped into the module at load time,
+; four to seven instructions where this is one - and the stamp is what pinned
+; the region (SPEC.md 66.6.1.1). The names stay so the engines read as they
+; did; what they cost is what changed. Every form clobbers nothing but its
+; destination and touches no flag, which is what the old bodies promised too.
 %macro PKG_LD 2                     ; %1 = the package's word/byte at %2
-    push ds
-    mov ds, [cs:sc_pkgseg]
-    mov %1, [%2]
-    pop ds
+    mov %1, [cs:%2]
 %endmacro
-%macro PKG_LDS 1                    ; DS = the package's word at %1. The 22
-    push ax                         ; commonest sites are this one, and it
-    push ds                         ; cannot use PKG_LD because the `pop ds`
-    mov ds, [cs:sc_pkgseg]          ; would undo the load
-    mov ax, [%1]
-    pop ds
-    mov ds, ax
-    pop ax
+%macro PKG_LDS 1                    ; DS = the package's word at %1
+    mov ds, [cs:%1]
 %endmacro
 %macro PKG_LDE 1                    ; ES = the package's word at %1
-    push ax
-    push ds
-    mov ds, [cs:sc_pkgseg]
-    mov ax, [%1]
-    pop ds
-    mov es, ax
-    pop ax
+    mov es, [cs:%1]
 %endmacro
 %macro PKG_CMP 2                    ; cmp %1, [the package's %2]
-    push ds
-    mov ds, [cs:sc_pkgseg]
-    cmp %1, [%2]
-    pop ds
+    cmp %1, [cs:%2]
 %endmacro
 %macro PKG_ST 2                     ; [the package's %1] = %2
-    push ds
-    mov ds, [cs:sc_pkgseg]
-    mov [%1], %2
-    pop ds
+    mov [cs:%1], %2
 %endmacro
 %macro PKG_STB 2                    ; ...and the byte-sized store
-    push ds
-    mov ds, [cs:sc_pkgseg]
-    mov byte [%1], %2
-    pop ds
+    mov byte [cs:%1], %2
 %endmacro
 ; =============================================================================
-
-; --- the two file formats now live in SCRIBE.OVL (SPEC.md 95.8) --------------
-; scdoc.inc and scrtf.inc used to be %included here, in .text. They are
-; %included from inside `section .modc` further down instead, which is the
-; whole of what moving a subsystem out costs: the includes moved, and every
-; label in them was reclassified by the assembler and by tools/os88ovlchk.py
-; without either being told twice.
-;
-; They are the right tenants. Between them they are the largest thing in this
-; package and they run on exactly two commands - Open and Save - so the
-; kilobytes they cost are kilobytes the REDRAW path was paying for a file
-; dialog it sees twice a session.
 
 ; --- the search pattern and the Utilities commands (SPEC.md 68.7/68.9) -------
 %include "scutil.inc"
 
 ; =============================================================================
-; THE ON-DEMAND MODULE (SPEC.md 68.10)
+; sc_ovsay - say what a file-format or picture verb left in [sc_ovmsg]
+; in:  nothing; out: nothing. Preserves every register AND THE FLAGS, so it
+;      goes straight after the verb and the verb's CF reaches the caller's jc
 ;
-; Code that ships as SCRIBE.OVL beside WORD.O88 instead of inside it, is read
-; into a heap claim the first time one of its features is asked for, and is
-; far-called through a dispatcher at its offset 2, behind the build stamp at
-; 0 that keeps another build's module out (SPEC.md 95.8.7).
-;
-; The ceiling this exists to get under is not a budget: a package links at
-; org 0 and addresses itself with 16-bit offsets (SPEC.md 33), so image + bss
-; can never reach 64KB whatever the heap has free. A module has a segment of
-; its own, so it does not spend the package's.
-;
-; It is kernel SPEC.md 2.8's shape, not SPEC.md 52.11's: the module keeps
-; DS = THE PACKAGE'S SEGMENT and reaches the document, the claims and every
-; sc_* variable through it exactly as resident code does. That is what makes
-; moving a subsystem out a matter of moving its text, rather than rewriting
-; every data reference in it. What it costs instead is the two rules below,
-; and tools/os88ovlchk.py refuses a build that breaks the first.
-;
-;   1. A call from the module to resident code CANNOT be near - the module has
-;      a CS of its own. It goes through a VECTOR: `call far [sc_v_*]`, a
-;      dword of (offset, segment) filled in at load. Resident code calling
-;      INTO the module goes the other way, through sc_ovcall.
-;   2. Nothing in the module may assume CS. Its data lives in .text with
-;      everything else, which is also what keeps rule 1 to code alone.
-;
-; Loading is the shape drivers/hdd/hdtool.inc uses (SPEC.md 52.11) and it
-; needs no kernel byte: OSAPI_FILE_HERE / _GOTO_QM to reach the package's own
-; folder, OSAPI_MEM_CLAIM for the image, OSAPI_FILE_READ to fill it. A
-; refusal - no heap, or the disk swapped for one without SCRIBE.OVL - is an
-; ordinary path: the feature says what is missing and the document is
-; untouched (SPEC.md 47).
+; THE FILE FORMATS NEVER SPEAK; THEY LEAVE A REASON AND THIS SAYS IT (SPEC.md
+; 95.8.1). It was sc_ovcall, the one funnel every far call into SCRIBE.OVL
+; passed through, and the module is gone (95.8.8) - the verbs are near routines
+; in part 1 now and each caller calls its own. The rule outlived the funnel
+; because it is os88img.inc's own - IMG_ERR is a NUMBER and the caller words
+; the message - so this is what is left of it: one call after each verb.
+; Only sc_papfind0 ever leaves a reason, and its one resident caller
+; (sc_papfind) says and clears it itself.
 ; =============================================================================
-
-SC_OVKB      equ 10             ; the claim SCRIBE.OVL is read into, KB. It
-                                ; was 8 when the module held only the picture
-                                ; decoder; the two file formats took it past
-                                ; 9KB (SPEC.md 95.8), and it was 12 - 2KB of
-                                ; heap held for the whole session for nothing
-                                ; - until 95.13 set it to the module's own
-                                ; rounded size. THE MAKEFILE CHECKS THIS
-                                ; against the cut module and fails the build if
-                                ; the module outgrows it - the number is read
-                                ; out of this line, so there is one and not two
-%ifndef SC_OVSTAMP              ; THE BUILD STAMP (SPEC.md 95.8.7): the
-%define SC_OVSTAMP 0            ; Makefile passes the CRC of everything this
-%endif                          ; is assembled from. Both halves carry it and
-                                ; sc_ovload refuses a module whose word 0 is
-                                ; not ours. A bare re-assembly takes 0, with
-                                ; every offset unchanged
-SCM_PING     equ 0              ; verbs, the module's dispatch indices
-SCM_IMGLOAD  equ 1              ; SI = an OS88IMG_SZ block; see os88img.inc
-SCM_DOCIMG   equ 2              ; the six file-format entry points (88.8).
-SCM_DOCPARSE equ 3              ; Each takes and returns exactly what the
-SCM_RTFIMG   equ 4              ; routine behind it always did - the far call
-SCM_RTFPARSE equ 5              ; passes every register through and `retf`
-SCM_ISRTF    equ 6              ; does not touch the flags, so CF comes back
-SCM_LDPOST   equ 7              ; on its own
-SCM_MAX      equ 7              ; ...and the highest of them
-
-; -----------------------------------------------------------------------------
-; sc_ovneed - make sure SCRIBE.OVL is loaded
-; out: CF=0 with [sc_ovseg] the claim holding it; CF=1 and the toast already
-;      says why. Preserves all registers.
-;
-; UI TASK ONLY: it claims and it reads a floppy, and SPEC.md 20.6 rule 7
-; forbids both on a worker. [sc_inwk] is the same gate sc_itinit uses.
-; -----------------------------------------------------------------------------
-sc_ovneed:
+sc_ovsay:
     push ax
-    call sc_ovload                  ; CF=1: AX = what to say, or 0 for nothing
-    jnc .ok
-    test ax, ax
+    pushf
+    mov ax, [sc_ovmsg]
+    or ax, ax
     jz .quiet
-    call sc_saymsg                  ; preserves the flags, so CF is test's 0
-.quiet:
-    stc
-.ok:
-    pop ax
-    ret
-
-; sc_ovload - sc_ovneed without the voice, for sc_entry: there is no document
-; yet for a refusal to be about, and first use retries and speaks.
-; out: CF=0 loaded (AX clobbered); CF=1 not loaded, AX = the message to show,
-;      or 0 on a worker, where the caller's own gate has already answered.
-;      Preserves every other register.
-sc_ovload:
-    cmp word [sc_ovseg], 0
-    jne .ok
-    cmp byte [sc_inwk], 0
-    jne .nowk
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    call OSAPI_FILE_HERE            ; where the USER is, to be put back
-    mov [sc_ovwas], dx
-    mov [sc_ovwdr], bl
-    mov dx, [sc_ovdir]              ; ...and off to where we were launched -
-    mov bl, [sc_ovdrv]              ; QUIETLY: a by-name read is all this
-    call OSAPI_FILE_GOTO_QM         ; stand is for, so the listing remount's
-                                    ; scan, sort and icon harvest were ~0.5 s
-                                    ; of floppy for no reader (docs/plans/
-                                    ; NAV-COST-PLAN.md, SPEC.md 19.9.1). CX,
-                                    ; SI and DI are banked above, which is
-                                    ; what a redirected volume's FSV_CHDIR
-                                    ; may spend (SPEC.md 62.9.1)
-    jc .nogo                        ; and this IS read now: the old GOTO's CF
-                                    ; went unread because its failure shut the
-                                    ; write gate at the root and the read
-                                    ; below refused on its own; QM's failure
-                                    ; moves NOTHING, and the read would look
-                                    ; for SCRIBE.OVL in the user's folder
-    mov ax, SC_OVKB
-    call OSAPI_MEM_CLAIM
-    jc .nomem
-    mov [sc_ovseg], dx
-    mov word [sc_ovfar], sc_modc    ; the far pointer sc_ovcall goes through:
-    mov [sc_ovfar+2], dx            ; the dispatcher, past the stamp at 0
-    mov es, dx
-    xor bx, bx
-    mov cx, SC_OVKB * 1024
-    xor dx, dx
-    mov si, sc_ovname
-    call OSAPI_FILE_READ
-    jc .noread
-    cmp word [es:sc_ovstmp], strict word SC_OVSTAMP
-.stimm:                             ; (the stamp is the word before this:
-                                    ; tests/scsize.py reads it there)
-    mov ax, sc_m_ovold              ; ANOTHER BUILD'S MODULE (SPEC.md 95.8.7)
-    jne .drop                       ; names our bss at its own offsets, so it
-                                    ; is refused before anything - the store
-                                    ; below included - writes through them
-    mov ax, cs                      ; THE PACKAGE'S SEGMENT, STAMPED INTO THE
-    mov [es:sc_pkgseg], ax          ; MODULE ITSELF (SPEC.md 95.8.3). ES is
-                                    ; still the claim from the read above, and
-                                    ; CS is the package because this routine
-                                    ; is resident. It is the module's ONLY way
-                                    ; to name the package: 20.1 says SS is
-                                    ; LOW_SEG and not the package, and DS and
-                                    ; ES are both busy at the sites that need
-                                    ; it
-    call sc_ovbind                  ; fill the vectors with our own segment
-    call sc_ovback
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-.ok:
-    clc
-    ret
-.nogo:
-    mov ax, sc_m_noovl              ; the launch folder could not be reached -
-    jmp short .unbank               ; on a swapped disk it is not there - and
-                                    ; nothing moved, so nothing to put back
-.noread:
-    mov ax, sc_m_noovl
-.drop:
-    mov dx, [sc_ovseg]              ; the claim goes back: a half-loaded
-    call OSAPI_MEM_FREE             ; module is worse than none, and so is a
-    mov word [sc_ovseg], 0          ; stale one. Preserves AX
-    jmp short .fail
-.nomem:
-    mov ax, sc_e_nomem
-.fail:
-    call sc_ovback
-.unbank:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    stc
-    ret
-.nowk:
-    xor ax, ax                      ; nothing to say: a worker's own gate
-    stc                             ; answers, as it always did here
-    ret
-
-; sc_ovback - put the volume back where the user left it. Preserves all.
-; The same quiet stand as the way out, and for the same reason: the next
-; thing that resolves a name is a by-name file cell, never a listing. A
-; failure is not answered here and needs no answer - nothing moved, so the
-; instance is still in the launch folder, and every later Save goes through
-; sc_goto, which compares and stands in the document's own folder first.
-; AX, CX, SI and DI are banked for GOTO_QM's answer and its redirected-volume
-; clobbers (SPEC.md 62.9.1); the flags are the caller's to lose.
-sc_ovback:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov dx, [sc_ovwas]
-    mov bl, [sc_ovwdr]
-    call OSAPI_FILE_GOTO_QM
-    jmp sc_ld_6
-
-; sc_ovbind - stamp this package's segment into every vector. Preserves all.
-; The offsets are assembled in; only the segment is a runtime fact, and it is
-; the same one for all of them.
-sc_ovbind:
-    push ax
-    push bx
-    mov ax, cs
-    mov bx, sc_v_first
-.l:
-    mov [bx+2], ax
-    add bx, 4
-    cmp bx, sc_v_end
-    jb .l
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; sc_ovcall - far-call the module
-; in:  BP = the verb (SCM_*), everything else as the verb documents
-; out: as the verb; CF=1 if the module could not be loaded at all
-; -----------------------------------------------------------------------------
-sc_ovcall:
-    call sc_ovneed
-    jc .no                          ; CF=1 already, and it has said why
     mov word [sc_ovmsg], 0
-    call far [sc_ovfar]             ; the dispatcher is at the claim's offset
-                                    ; 2, so the far pointer is (2, the claim)
-                                    ; and the verb's own CF comes back through
-    push ax                         ; THE MODULE NEVER SPEAKS; IT LEAVES A
-    pushf                           ; REASON AND THIS SAYS IT (SPEC.md 95.8.1).
-    mov ax, [sc_ovmsg]              ; The one shim whose resident routine
-    or ax, ax                       ; touched the UI - sc_papfind's refusal
-    jz .quiet                       ; toast - is the shape 82.16 records a
-    mov word [sc_ovmsg], 0          ; freeze against, and this is not a way
-    call sc_saymsg                  ; round that so much as the rule
-.quiet:                             ; os88img.inc already follows: IMG_ERR is
-    popf                            ; a NUMBER and the caller words the
-    pop ax                          ; message (85). Generalised, and put in
-.no:                                ; the ONE place every future verb passes
-    ret                             ; through
-
-sc_ovname:  db 'SCRIBE.OVL', 0
-sc_m_noovl: db 'SCRIBE.OVL not on disk', 0   ; both inside TOAST_MAX = 24
-sc_m_ovold: db 'SCRIBE.OVL: wrong build', 0  ; (the first was 30, and cut)
-
-; --- the vectors: resident routines the module far-calls (rule 1) ------------
-; Offset assembled in, segment stamped by sc_ovbind. They are contiguous and
-; sc_ovbind walks them, so adding one is two lines and no other change.
-;
-; Each points at a SHIM, never at the routine itself. Every resident routine
-; in this package is a near proc ending in `ret` (SPEC.md 20.1 - a package
-; author never writes `retf`), so far-calling one directly pops the offset,
-; leaves the segment on the stack and returns into nothing. The shim is the
-; one place that difference lives: a near call to the real routine, then the
-; far return the module's call is waiting for. Registers and flags pass
-; through both ways untouched, so a shimmed routine keeps its own contract.
-sc_s_saymsg:
     call sc_saymsg
-    retf
-sc_s_resize:
-    call sc_resize
-    retf
-sc_s_pictfree:
-    call sc_pictfree
-    retf
-sc_s_papfind:
-    call sc_papfind0                ; the UI-FREE half - see sc_papfind
-    retf
-sc_s_ldscan:
-    call sc_ldscan
-    retf
-sc_s_picrec:
-    call sc_picrec
-    retf
+.quiet:
+    popf
+    pop ax
+    ret
 
-sc_v_first:
-sc_v_saymsg:   dw sc_s_saymsg
-               dw 0
-sc_v_resize:   dw sc_s_resize
-               dw 0
-sc_v_pictfree: dw sc_s_pictfree
-               dw 0
-sc_v_papfind:  dw sc_s_papfind
-               dw 0
-sc_v_ldscan:   dw sc_s_ldscan
-               dw 0
-sc_v_picrec:   dw sc_s_picrec
-               dw 0
-sc_v_end:
-
-; --- the module itself -------------------------------------------------------
-; vstart=0: it is loaded at offset 0 of its claim, so its own labels must be
-; numbered from there. NASM coalesces every .text fragment before it, so this
-; lands at the END of the image whatever order the source is in - which is
-; what lets tools/os88ovl.py cut at the image size the header already carries.
+; =============================================================================
+; PART 1 - THE TOP OF THIS SEGMENT (SPEC.md 95.8.8)
 ;
+; SCRIBE.O88 is a PARTED package (SPEC.md 20.12), WORD's shape one fork along
+; (SPEC.md 68.10): the image the kernel launches is apps/scribe/scload.asm,
+; which reads two parts and hands its identity to part 0 (OSAPI_PKG_REHOME,
+; SPEC.md 20.12.10). Part 0 is THIS FILE's image with its bss shipped inside
+; it; part 1 is everything assembled below, in `.modc`.
+;
+; It was SCRIBE.OVL, a file beside the package with a CS of its own, read into
+; a claim at entry and far-called through a dispatcher - and that is what made
+; it a sidecar the user saw, a pair that could be separated by a copy, a claim
+; of its own and the one package region in the tree that could not move
+; (SPEC.md 95.8.3). Part 1 is none of those, because of WHERE IT LANDS: op_load
+; lays the carve out part after part at roundup512(len) (SPEC.md 20.12.7), and
+; part 0 is exactly SC_P1ORG bytes long - image, then bss, then slack, all of
+; it this package's region - so part 1 begins at offset SC_P1ORG OF THIS SAME
+; SEGMENT. It is assembled there (vstart), so a call is near both ways, `cs:`
+; names this package, and a compaction that moves the region moves part 1
+; with it because both are one claim.
+;
+; What it buys is the room APP_MAX_SIZE denies: image + bss is capped at 61,440
+; bytes because that is the REGION (SPEC.md 20.6), and part 1 is past the
+; region's end while still under the segment's 64KB. What caps IT is the
+; carve - SC_P1ORG + part 1 <= 65,024, asserted at sc_p1end.
+;
+; THE RULE FOR WHAT GOES HERE: code the kernel never calls by its address.
+; Every callback - W_PAINT, a key or click proc, the worker, a relocation proc
+; - stays below SC_P1ORG, because the kernel bounds a package's entry points
+; by I_SIZE (SPEC.md 20.12.10.4) and I_SIZE is the region. The two file
+; formats and the picture decoders are the tenants: between them the largest
+; thing in this package, run on exactly two commands - Open and Save - and
+; Insert > Picture, so the kilobytes they cost are kilobytes the REDRAW path
+; was paying for a file dialog it sees twice a session (SPEC.md 95.8).
+;
+; RAISING SC_P1ORG is one line, by 512 when the assertion at OS88_IMAGE_END
+; says part 0 has outgrown it. It is the slack's size in RAM - the region is
+; SC_P1ORG however much of it is used - so it is kept to the next sector up
+; rather than set at the ceiling.
+; =============================================================================
+SC_P1ORG equ 0xCA00
+
 ; align=1 is load-bearing, not tidiness. A bin section aligns to 4 by default,
 ; and the pad NASM inserts to reach it lands BETWEEN the image size the header
-; records and where this section really starts - so the cut would take the pad
-; with it and nothing would sit at the module's offsets as assembled. It was one
-; byte, and the module ran off the end of its own jump table.
-section .modc vstart=0 align=1
+; records and where this section really starts - so tools/os88ovl.py's cut
+; would take the pad with it and every label here would be off by it. It was
+; one byte, and the module this used to be ran off the end of its own jump
+; table.
+section .modc vstart=SC_P1ORG align=1
 
-sc_ovstmp:  dw SC_OVSTAMP           ; +0: the build stamp (SPEC.md 95.8.7),
-                                    ; read before anything else in the claim
-sc_modc:                            ; +2: the dispatcher, and the only entry
-    cmp bp, SCM_MAX                 ; the resident half knows
-    ja .out
-    shl bp, 1
-    jmp word [cs:bp+sc_mverb]       ; INDEX THROUGH BP, NOT SI. This used to
-.out:                               ; stage the doubled verb in SI, and SI is
-    retf                            ; an ARGUMENT to a verb that takes one -
-                                    ; img_load's whole contract is SI = the
-                                    ; caller's block, and it would have been
-                                    ; handed a 0 or a 2. It lay dormant only
-                                    ; because SCM_PING takes nothing. The same
-                                    ; line was live in CHART's dispatcher and
-                                    ; cost an afternoon there
-
-; The package's segment, stamped here by sc_ovneed the moment the module is
-; read (SPEC.md 95.8.3). It is IN THE MODULE and not in the package's bss,
-; because the whole point is that module code can reach it with CS alone.
-sc_pkgseg: dw 0
-
-sc_mverb:
-    dw sc_m_ping, sc_m_imgload
-    dw sc_m_docimg, sc_m_docparse, sc_m_rtfimg, sc_m_rtfparse
-    dw sc_m_isrtf, sc_m_ldpost
-
-; sc_m_ping - what the mechanism has actually been PROVEN to do, and it is
-; deliberately not more than that. Measured on the emulator, in this order:
-; SCRIBE.OVL is found beside WORD.O88 and read into a claim; the far call lands
-; on this dispatcher at the module's offset 0; the verb table dispatches; and
-; the retf comes back to sc_ovcall with the app healthy afterwards. A far call
-; OUT through sc_v_* to a shim that only returns was proven the same way.
-;
-; WHAT IS NOT PROVEN, and must be before any feature moves out here: a shim
-; whose resident routine touches the UI. Calling sc_saymsg through sc_s_saymsg
-; froze the app, and every static explanation was checked and cleared - the
-; vector holds the shim's address, sc_ovbind stamps the right segment, the
-; string offset AX carries is the string, and the shim's near call lands
-; exactly on sc_saymsg at 0x46E5 (the displacement wraps 64K, which is legal
-; and correct). So the cause is dynamic and still unknown, and the honest
-; place to record that is here rather than in a commit message.
-sc_m_ping:
-    retf
-
-; -----------------------------------------------------------------------------
-; sc_m_imgload - decode a picture. SI = the caller's block, as img_load takes
-; it; everything else is that routine's contract (SPEC.md 94).
-;
-; THE DECODER IS THIS MODULE'S FIRST REAL TENANT, and it is a deliberate
-; choice of first tenant rather than the most useful thing that happened to be
-; movable. The note above says what is unproven out here: a shim whose
-; resident routine touches the UI. os88img.inc HAS NO SHIMS. It owns no state,
-; it calls no OSAPI, it reads two segments the caller names and writes a third
-; - one far call in, one retf out, and nothing in between that needs the
-; package. So it exercises exactly the path that IS proven and none of the
-; path that is not, which is why the freeze is still an open question below
-; and this still works.
-;
-; It is also 1,600-odd bytes that WORD, with 5,270 free of 61,440, could not
-; have spent resident.
-; -----------------------------------------------------------------------------
-sc_m_imgload:
-    call img_load
-    retf
-
-; --- the file formats, and the six ways in (SPEC.md 95.8) --------------------
-; Each is a near proc ending in `ret`, as every routine in this package is
-; (SPEC.md 20.1), so the verb table cannot point at one directly - the
-; dispatcher's `jmp` arrives with a far return address on the stack. Each gets
-; the same two-line wrapper the shims use in the other direction, and for the
-; same reason. Registers pass through untouched and `retf` does not alter the
-; flags, so CF comes back exactly as the routine set it.
-sc_m_docimg:    call sc_docimg
-                retf
-sc_m_docparse:  call sc_docparse
-                retf
-sc_m_rtfimg:    call sc_rtfimg
-                retf
-sc_m_rtfparse:  call sc_rtfparse
-                retf
-sc_m_isrtf:     call sc_isrtfimg
-                retf
-sc_m_ldpost:    call sc_ldpost
-                retf
+sc_p1org:
 
 %include "scdoc.inc"
 %include "scrtf.inc"
 %include "os88img.inc"
+
+sc_p1end:
+; The carve's run is under 128 sectors (op_size), and part 0 is SC_P1ORG of it.
+    times -((sc_p1end - sc_p1org) > 65024 - SC_P1ORG) db 0
 
 section .text
 
@@ -21103,17 +20700,9 @@ SC_BTREC_SZ equ 16
     SCVAR sc_vppad, 1       ; byte: keeps the words below even
     SCVAR sc_shl,   2       ; word } the sheet's left and right pixel edges,
     SCVAR sc_shr,   2       ; word } banked by sc_bounds for the painters
-    SCVAR sc_ovseg, 2       ; word: SCRIBE.OVL's claim, 0 = not loaded yet
-    SCVAR sc_ovmsg, 2       ; word: a message the MODULE wants said, 0 = none.
-                            ; The module never touches the UI; sc_ovcall says
-                            ; this on the way back out (SPEC.md 95.8.1)
-    SCVAR sc_ovfar, 4       ; the (offset, segment) sc_ovcall far-calls: an
-                            ; 8086 has no `call far reg:reg`, so the pointer
-                            ; lives in memory and DS reaches it
-    SCVAR sc_ovdir, 2       ; word } the folder this package was LAUNCHED
-    SCVAR sc_ovdrv, 1       ; byte } from, banked at entry (SPEC.md 68.10)
-    SCVAR sc_ovwdr, 1       ; byte } ...and where the USER had the volume,
-    SCVAR sc_ovwas, 2       ; word } banked across the load and put back
+    SCVAR sc_ovmsg, 2       ; word: a message the FILE FORMATS want said,
+                            ; 0 = none. They never touch the UI; sc_ovsay
+                            ; says this on the way back out (SPEC.md 95.8.1)
     SCVAR sc_utl,   1       ; byte: the span runs to the document's end with
                             ; no closing ¶, so the rebuilt one must not have
                             ; one either (SPEC.md 68.9)
@@ -21288,8 +20877,15 @@ SC_BTREC_SZ equ 16
                                 ; here and nothing here depends on it until
                                 ; [sc_prop] is set
 
-    OS88_BSS SC_BSS_TOTAL + TY_BSS_SIZE
-    OS88_IMAGE_END
+    OS88_BSS SC_P1ORG - OS88_IMAGE_SIZE ; THE REGION RUNS TO PART 1 (SPEC.md
+    OS88_IMAGE_END                      ; 95.8.8): image + bss IS SC_P1ORG,
+                                        ; which is also part 0's length on the
+                                        ; disk
+; ...so the real bss has to fit under it. TIMES of a negative count is an
+; error and of zero emits nothing, so this is an assertion and not a byte:
+; when it fires, raise SC_P1ORG by 512 (its comment says why not further).
+    times -((OS88_IMAGE_SIZE + SC_BSS_TOTAL + TY_BSS_SIZE) > SC_P1ORG) db 0
+    times -((SC_P1ORG % 512) != 0) db 0 ; part 1 starts a sector up the carve
 
     TY_BSS os88_image_end + SC_BSS_TOTAL
 

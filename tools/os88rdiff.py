@@ -675,7 +675,7 @@ class Side(object):
             if not os.path.isabs(f):
                 roots.add(os.path.normpath(f).split(os.sep)[0])
         if self.src == "kernel/kernel.asm":
-            roots |= {"kernel", "boot", "apps"}
+            roots |= {"kernel", "boot", "apps", "drivers"}
         roots.discard("build")
         roots.discard("..")
         have = git("ls-tree", "-r", "--name-only", self.rev, "--",
@@ -731,7 +731,9 @@ class Side(object):
     def _fetch(self, name, fl):
         """A missing include: from the commit when it has it, else from the
         working tree (a generated file under a source directory)."""
-        dirs = [os.path.dirname(self.src)] + [
+        # "." too: an include may name a ROOT-relative path (vga12.inc's
+        # `drivers/thmpal/thmrows.inc`), which nasm resolves from the cwd
+        dirs = [os.path.dirname(self.src), "."] + [
             fl[k + 1] if fl[k] == "-I" else fl[k][2:]
             for k in range(len(fl)) if fl[k] == "-I" or
             (fl[k].startswith("-I") and len(fl[k]) > 2)]

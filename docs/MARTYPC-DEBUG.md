@@ -481,6 +481,15 @@ machine that booted fine. Pass `launch(..., card=1)`; a caller running
 `settle` itself passes `gate=desktop_up, card=<idx>`. `advance(frames=…)`
 takes it too, and there it decides which card's 50 Hz or 60 Hz is counted.
 
+**A ROM in the 5150's spare sockets**, U28-U32 at F4000 (SPEC.md 2.10):
+`launch(..., rom="build/rom/osrom-big.bin")` stages it in that instance's own
+config tree, so no other instance sees it. **`$OS88_ROM` does the same for
+every launch that names none**, which makes any emulator row the with-ROM arm
+of an A/B: `OS88_ROM=build/rom/osrom-big.bin python3 tests/desksc.py`. A ROM
+is cut against one kernel and refuses every other, so point the big ROM at
+kern_big rows and the small one at kern_small's. A row whose no-ROM arm IS
+the point passes `rom=False`, which `$OS88_ROM` cannot reach.
+
 Boot times are a property of the HOST (measured here: CGA 4.6 s, Hercules
 4.7 s, VGA 7.1 s; three to four times that on a slower container), which is
 exactly what `settle` exists so that nothing has to hard-code.
@@ -1253,8 +1262,10 @@ mono: `patches/03-video-dip-config.patch` adds an optional `video_dip`
 (`"mda"` / `"cga_lores"` / `"cga_hires"` / `"expansion"`); absent, nothing
 changes.
 
-`patches/12-hercules-lone-page1.patch` restores B8000h page-1 decoding for a
-**single** Hercules, gated by 3BFh bit 1. WireBall now exercises both VRAM
+`patches/13-hercules-page1-lone-card.patch` restores B8000h page-1 decoding for a
+**single** Hercules, gated by 3BFh bit 1 (main's #257 carried the same fix as
+`12-hercules-lone-page1.patch`; the two did not apply together, and this one,
+SPEC.md 98.3.8.3's, is the one kept). WireBall now exercises both VRAM
 pages through OSAPI_FSX_PAGE (§109.5). With the enable bit clear reads return
 FFh and writes are ignored, so the kernel's color-card probe cannot mistake
 Hercules page 1 for a second adapter. Two-card configurations retain patch
@@ -1519,6 +1530,19 @@ the mouse (SPEC.md §9.6), so ten `ArrowRight` presses moved `mouse_x` from
 l, r)`; the CLI verbs are `key`, `type` and `mouse dx dy [--click]`. `key`
 names a **MartyKey** variant — `KeyC`, `Enter`, `ArrowUp`, `Digit1` — and a
 bare `'c'` is refused rather than guessed at.
+
+**Queued keys reach the guest at one byte a millisecond of GUEST time**, and
+no faster, however many are queued and whatever the batch size
+(`patches/14-keyboard-byte-pacing.patch`). Without the patch the rate was one
+key event per call to `machine.run()`. Under `advance` that is every 0.25 ms.
+Each byte went to the PPI the instant the last was acknowledged, a few
+instructions before the ROM's int 09h `sti`. So a burst of `key()` calls
+nested one int 09h inside the next until it overran the stack it landed on,
+and read as a kernel stack overflow (SPEC.md 9.8.2). A millisecond is the
+keyboard's serial line, so nothing a person types is slowed. A script that
+types faster than the application consumes still overflows the BIOS buffer
+and loses its newest keys to SPEC.md 9.8's guard, exactly as the hardware
+would. That is the application being slow, not the harness.
 
 **The speed scaler is forced to 1.0 by the `mouse` command, and that is what
 makes counting in pixels work at all.** MartyPC's mouse defaults to

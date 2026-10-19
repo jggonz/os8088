@@ -59,7 +59,10 @@ a = ap.parse_args()
 machines = a.machine or list(MACHINES)
 syms, image = pkg_syms()
 fs = part_syms("pxfull.asm")
-o88 = open(os88build.at("build/pixel.o88"), "rb").read()
+import os88pkg                                          # noqa: E402
+# the IMAGE, not the file: a parted package's image ships packed when that
+# saves a sector (SPEC.md 20.13.8)
+o88 = os88pkg.image_unwrap(open(os88build.at("build/pixel.o88"), "rb").read())
 if o88[:syms["op_table"]] != image[:syms["op_table"]]:
     sys.exit("build/pixel.o88 is not this tree's pixel.asm - run make")
 PART_FULL = 5
@@ -77,7 +80,7 @@ def check(what, ok, detail=""):
 
 
 PICS = ["VACATION.JPG", "BALLOONS.PNG", "CAT.GIF"]
-DISK = M.scratch_disk("build/pxfsx.img", "build/pixel.o88", "build/PIXEL.GFX",
+DISK = M.scratch_disk("build/pxfsx.img", "build/pixel.o88",
                       *["PICS:apps/pixel/samples/" + n for n in PICS],
                       "--folder", "SYSTEM/APPDATA", size=720)
 

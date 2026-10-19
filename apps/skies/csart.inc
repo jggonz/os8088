@@ -6,11 +6,10 @@
 ; The aircraft bands share ONE frame and a plane record names
 ; the one it is drawn from in CSP_ART (SPEC.md 88.10.1).
 ;
-; THE BANDS ARE NOT IN THIS FILE (SPEC.md 88.10.3). They are the
-; LAST stream of csw.z - the raw bands this same script writes with
-; --raw, which tools/csworlds.py packs band by band beside the
-; worlds (88.10.7, 88.10.7.1) - so the program's image carries the
-; offsets and nothing else. The program keeps that stream packed
+; THE BANDS ARE NOT IN THIS FILE (SPEC.md 88.10.3). This same
+; script writes them raw with --raw, tools/csworlds.py packs them
+; band by band into csartz.bin (88.10.7.1, 88.10.7.2), and the
+; program INCBINs that beside these offsets. It keeps them packed
 ; and expands each band into the bss UNION it shares with the
 ; bracket's own tables when it is first drawn, and every blit
 ; reads ES:offset with ES out of cs_artes exactly as it did when

@@ -95,12 +95,16 @@ def app(blob, nm, flags, entry, image, bss):
               why="all-zero is the UNRESOLVED sentinel (SPEC.md 54.2), so the "
                   "kernel would reduce the icon after all")
         check(not any(blob[120:128]), "%s: the glyph block's reserved bytes are 0" % nm)
-    check(not (flags & 8) or not (flags & 4),
-          "%s: not both compressed and carrying parts" % nm, got=hex(flags),
-          why="a part's offset is measured from the start of the FILE and its "
-              "table lives INSIDE the image, so compressing the image and "
-              "laying out its parts are circular. os88pkg.py refuses the "
-              "combination (docs/plans/O88-COMPRESSION-PLAN.md wave 4)")
+    if flags & 0x0C == 0x0C:
+        # PARTS AND A PACKED IMAGE (SPEC.md 20.13.8): the image's own stream
+        # ends at the link word, and it has to unpack to the image exactly -
+        # what the kernel's step 6a will do with those bytes
+        plen = struct.unpack_from("<H", blob, 4)[0]
+        if check(32 < plen < image and plen <= len(blob),
+                 "%s: the packed image's length lies inside the image and "
+                 "the file" % nm, got=plen, want="33..%d" % (image - 1)):
+            check(len(os88pkg.image_unwrap(blob)) == image,
+                  "%s: the packed image unpacks to %d bytes" % (nm, image))
     lo = ICON_END if flags & 1 else HEADER
     check(lo <= entry < image, "%s: entry +0x%04X is inside the image" % (nm, entry),
           got=hex(entry), want="0x%04X..0x%04X" % (lo, image))
@@ -163,13 +167,25 @@ def header(blob, nm):
     if ver == V_MOD:
         module(blob, nm)
         return ver
-    eq(link, 0, "%s: links at org 0" % nm,
-       "a v3/v4 package owns a segment and is loaded on a paragraph boundary "
-       "(SPEC.md 20.1) - a non-zero link base is a v2 image")
+    if not (ver == V_APP and b3 & 0x0C == 0x0C):
+        eq(link, 0, "%s: links at org 0" % nm,
+           "a v3/v4 package owns a segment and is loaded on a paragraph "
+           "boundary (SPEC.md 20.1) - a non-zero link base is a v2 image, and "
+           "the one package whose link word is not zero is a parted one with "
+           "a packed image (SPEC.md 20.13.8)")
     eq(blob[12:15], DISPATCH, "%s: carries the dispatcher at +12" % nm,
        "the kernel far-calls +12 to reach every callback (SPEC.md 20.2); a "
        "package without it sends the kernel into its own data on the first paint")
-    if ver == V_APP and b3 & 4:
+    if ver == V_APP and b3 & 0x0C == 0x0C:
+        # PARTS AND A PACKED IMAGE (SPEC.md 20.13.8): the bound the kernel
+        # takes is the LINK WORD - the packed stream's length, which
+        # ld_check_hdr puts in [ld_fsz] in place of the file's - and app()
+        # holds it inside the image and the file. The FILE may be shorter
+        # than the image: MIDIRack's 36,490-byte image packs to 29,141 and
+        # its one part is 772, so the file is 29,956 (SPEC.md 105.9.5)
+        check(32 <= image <= 0xFFFF,
+              "%s: image %d fits the 16-bit field" % (nm, image), got=image)
+    elif ver == V_APP and b3 & 4:
         # FLAGS BIT 2: the file is longer than the image ON PURPOSE, and the
         # tail is the package's own to read (SPEC.md 20.12). The truncation
         # guard becomes image <= file, which is still exact about the half

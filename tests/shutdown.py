@@ -6,6 +6,7 @@
 
 The kernel tick must STOP while the BIOS clock and spinner keep advancing.
 A screenshot alone cannot distinguish a shutdown from a frozen desktop.
+Ctrl-Alt-Del must still reach the ROM and warm-reset back into the kernel.
 """
 import os
 import sys
@@ -91,9 +92,19 @@ def run(card, machine, image):
             # Shutdown must return to the live desktop with the dirty flag intact.
             m.write(S.linear("cp_wdirty"), b"\x01")
             prompt()
+            # It patches the WRITER'S BODY, cpc_save, and not cp_cfg_save:
+            # that is a three-byte `jmp` at the very end of the settings
+            # core, so five bytes there wrote two over the first of the next
+            # image section's (docs/plans/completed/ksp12/ctrl.md). cpc_save opens on six
+            # one-byte pushes with no label among them, and the assert says so.
             error = eq["FERR_WPROT"]
-            m.write(seg() * 16 + offsets["cp_cfg_save"],
-                    bytes((0xB8, error & 255, error >> 8, 0xF9, 0xC3)))
+            patch = bytes((0xB8, error & 255, error >> 8, 0xF9, 0xC3))
+            at = offsets["cpc_save"]
+            inside = [v for k, v in offsets.items()
+                      if k.startswith("cpc_save.") and v >= at]
+            assert not inside or min(inside) >= at + len(patch), \
+                "the injected writer would overwrite a label inside cpc_save"
+            m.write(seg() * 16 + at, patch)
             m.key("Enter")
             cancelled()
             assert m.read(S.linear("cp_wdirty"), 1) == b"\x01", "Failed save was forgotten"
@@ -112,7 +123,7 @@ def run(card, machine, image):
         M.guest_sleep(m, 1)
         frozen = word(m, "ticks")
         assert m.read(S.linear("cp_wdirty"), 1) == b"\x00", "Settings not flushed"
-        assert m.inb(0x21) == 0xFE, "Non-timer IRQs remain enabled"
+        assert m.inb(0x21) == 0xFC, "IRQs beyond the timer and keyboard enabled"
         assert m.inb(0x3F2) & 0xF0 == 0, "Floppy motor remains on"
         bios = int.from_bytes(m.read(0x46C, 2), "little")
         io = m.disk()
@@ -130,11 +141,13 @@ def run(card, machine, image):
         for key in ("reads", "writes", "read_sectors", "write_sectors"):
             assert after.get(key) == io.get(key), "Disk I/O continued after shutdown"
         assert int.from_bytes(m.read(0x46C, 2), "little") != bios, "BIOS clock froze"
-        # Keys cannot restart or leave the terminal screen.
+        # Ordinary keys cannot restart or leave the terminal screen, and are
+        # drained so the ROM's buffer never fills and beeps.
         m.key("Enter")
         m.key("Escape")
         M.guest_sleep(m, .5)
         assert word(m, "ticks") == frozen, "Keyboard restarted the OS"
+        assert m.read(0x41A, 2) == m.read(0x41C, 2), "Keys left in the BIOS buffer"
         w, h, rgb = m.fbuf()
         M.write_png_rgb("build/shutdown-%s-terminal.png" % card, w, h, rgb)
         midx, midy = word(m, "vid_cw") // 2, word(m, "vid_ch") // 2
@@ -150,7 +163,26 @@ def run(card, machine, image):
                 text = midx - 140 <= x < midx + 140 and midy + 16 <= y < midy + 24
                 assert not lit or logo or text, \
                     "Stale desktop/cursor pixels at %d,%d" % (x, y)
-        print("shutdown: %s cancellation, settings flush, halted tasks and live spinner OK" % card)
+
+        # Ctrl-Alt-Del reaches the ROM's own int 09h and warm-resets: the
+        # machine boots again and the kernel's scheduler takes IRQ0 back.
+        isr = S.linear("sch_isr")
+
+        def reborn(_):
+            v = m.read(0x20, 4)
+            at = int.from_bytes(v[2:], "little") * 16 + int.from_bytes(v[:2], "little")
+            return at == isr and word(m, "ticks") != frozen
+        m.key("ControlLeft", down=True, up=False)
+        m.key("AltLeft", down=True, up=False)
+        try:
+            m.key("Delete")
+        finally:
+            m.key("AltLeft", down=False, up=True)
+            m.key("ControlLeft", down=False, up=True)
+        M.until(m, reborn, "Ctrl-Alt-Del warm reset back into the kernel",
+                limit=180)
+        print("shutdown: %s cancellation, settings flush, halted tasks, live "
+              "spinner and Ctrl-Alt-Del restart OK" % card)
 
 
 def main():

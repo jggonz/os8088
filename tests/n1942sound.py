@@ -199,7 +199,8 @@ def guest(backend,off,code):
             assert g.get('audiofm',1)==(backend!='speaker')
             # Failed graphics load after acquiring FM must also release it.
             m.bp_exec();m.key('Escape');m.run();N.M.ui_done(m)
-            at=g.base+code['n_vfile'];saved=m.read(at,1);m.write(at,b'Z')
+            at=g.base+code['op_table']+10+8*code['N_P_V']+2     # past the file's end
+            saved=m.read(at,2);m.write(at,b'\xff\xff')
             m.key('Enter');m.run()
             N.M.until(m,lambda _:g.get('error',1)==2 and g.get('infs',1)==0,'bad bank cleanup',limit=60)
             N.M.ui_done(m);quiet()

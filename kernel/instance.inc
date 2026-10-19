@@ -171,32 +171,32 @@ is wrong. Put it back, or renumber BOTH files and rebuild every package"
 
 ; --- kind descriptor table (SPEC.md 29.3) -------------------------------------
 KD_TPL   equ 0                  ; word: wm_create template ptr
-KD_PAD   equ 2                  ; word: 0. This was KD_TASK, a built-in kind's
-                                ; task entry, and Bounce was the last kind
-                                ; with one (SPEC.md 14.8): a package's worker
-                                ; is claimed at run time through SPEC.md 20.6
-                                ; and declared nowhere, so no row names a task
-                                ; and app_launch spawns none. The word stays
-                                ; so the stride keeps its power of two
-KD_POOL  equ 4                  ; word: state pool base, 0 = stateless
-KD_SSIZE equ 6                  ; word: pool stride, bytes per instance
-KD_INIT  equ 8                  ; word: init proc or 0 - in: BX = window,
+KD_POOL  equ 2                  ; word: state pool base, 0 = stateless
+KD_SSIZE equ 4                  ; word: pool stride, bytes per instance
+KD_INIT  equ 6                  ; word: init proc or 0 - in: BX = window,
                                 ; DI = state ptr (0 if stateless), SI =
                                 ; record; preserves all; UI task, no lock,
                                 ; window not yet visible
-KD_NAME  equ 10                 ; word: NUL name string (copied to I_NAME)
-KD_ICON  equ 12                 ; word: 16x16 icon body ptr, 0 = generic
-KD_CAP   equ 14                 ; byte: max simultaneous instances
-KD_WFLAG equ 15                 ; byte: extra W_FLAGS bits OR-ed into the new
+KD_NAME  equ 8                  ; word: NUL name string (copied to I_NAME)
+KD_ICON  equ 10                 ; word: 16x16 icon body ptr, 0 = generic
+KD_CAP   equ 12                 ; byte: max simultaneous instances
+KD_WFLAG equ 13                 ; byte: extra W_FLAGS bits OR-ed into the new
                                 ; window after wm_create (SPEC.md 29.3) -
                                 ; feature bits only (WF_SIZABLE), never 0/1
-KD_SIZE  equ 16                 ; stride
+KD_SIZE  equ 14                 ; stride. NOT A POWER OF TWO since kernel size
+                                ; pass 13: the word after KD_TPL was KD_TASK,
+                                ; a built-in kind's task entry, until Bounce
+                                ; (the last kind with one) became a package
+                                ; (SPEC.md 14.8), and then KD_PAD, a zero kept
+                                ; only so the stride stayed 16. app_launch's
+                                ; `mul` is the same eleven bytes as the shift
+                                ; it replaced, so the pad was a word a row
 
-inst_kinds:                     ; indexed by KIND_* * 16; caps are binding
-    dw app_tpl_about,  0,               0,             0,   0,                app_ttl_about
+inst_kinds:                     ; indexed by KIND_* * KD_SIZE; caps are binding
+    dw app_tpl_about,  0,             0,   0,                app_ttl_about
     dw inst_ico_about
     db 1, 0                     ; About: stateless singleton
-    dw fm_tpl,         0,               fm_pool,       FS_SIZE,  fm_kinit,     fm_ttl
+    dw fm_tpl,         fm_pool,       FS_SIZE,  fm_kinit,     fm_ttl
     dw inst_ico_disk
     db VIEW_SLOTS+1, WF_SIZABLE ; Disk: FOUR of the user's windows, each with
                                 ; its own FS_SIZE-byte state block and its own
@@ -205,11 +205,11 @@ inst_kinds:                     ; indexed by KIND_* * 16; caps are binding
                                 ; chooser's (SPEC.md 38.1), which fm_count
                                 ; does not count. The cap and fm_pool's size
                                 ; are one number (files.inc's FM_NSLOT)
-    dw cp_tpl,         0,               0,             0,   cp_kinit,         cp_sname
+    dw cp_tpl,         0,             0,   cp_kinit,         cp_sname
     dw inst_ico_ctrl
     db 1, 0                     ; Control Panel: stateless task-less singleton
 %ifdef KERN_BIG
-    dw hb_tpl,         0,               0,             0,   hb_kinit,         hb_ttl
+    dw hb_tpl,         0,             0,   hb_kinit,         hb_ttl
     dw 0                        ; the generic icon: it is never in the dock
     db 1, 0                     ; Hibernate: stateless task-less singleton
                                 ; (SPEC.md 87.1), painted by its module
@@ -299,7 +299,7 @@ inst_ico_ctrl:
     db 0x0A, 0x0C, 0x09, 0x0A, 0x0D, 0x09, 0x04, 0x80
 
 ; -----------------------------------------------------------------------------
-; inst_init - clear the instance table and the deferred-launch word
+; inst_init - clear the instance table and the deferred-launch byte
 ; in:  nothing
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
@@ -317,7 +317,7 @@ inst_init:
     mov di, inst_tab
     mov cx, INST_MAX * I_RECSZ
     rep stosb
-    mov word [inst_launch], 0
+    mov [inst_launch], al       ; AL is still the 0 the table was cleared with
     pop es
     pop di
     pop cx
@@ -1405,14 +1405,14 @@ app_launch:
     push es
 
     mov [inst_knd], al
-    cbw                         ; SI = kind descriptor. NOTHING IS BANKED HERE
-    mov si, ax                  ; and nothing needs to be: AL is not written
-    mov cl, 4                   ; (only AH is), AH is dead until the `mov ah, 0`
-    shl si, cl                  ; beside KD_WFLAG far below, and CX is zeroed by
-    add si, inst_kinds          ; the very next instruction. The push ax / push
-                                ; cx pair round this restored one register that
-                                ; was about to be overwritten and one that was
-                                ; never touched
+    mov ah, KD_SIZE             ; SI = kind descriptor: kind x KD_SIZE, which
+    mul ah                      ; is 14 and not a power of two (an 8-bit `mul`
+    add ax, inst_kinds          ; writes AX alone), and AL back out of the
+    xchg si, ax                 ; byte it was banked in - eleven bytes, as the
+    mov al, [inst_knd]          ; `cbw` and four-place shift were (kernel size
+                                ; pass 13). AH is dead until the I_KIND store
+                                ; far below, and CX is zeroed by the very
+                                ; next instruction
 
     ; --- cap check: count records of this kind with I_STATE != 0 ------------
     xor cx, cx                  ; CL = count - and DX is free now, where this
@@ -1554,14 +1554,13 @@ app_launch:
     ; PACKAGE's worker is its own to spawn (OSAPI_TASK_SPAWN, SPEC.md 20.6),
     ; after the loader has published it, which is why it is not here either.
     mov bx, [ds:bp+I_WIN]
+    mov bp, wm_show             ; BP is spent: the record's last use was above
     cmp byte [inst_lkhd], 0     ; the Standard File chooser is launched by a
     jne .held                   ; caller that HOLDS the lock (SPEC.md 38.6),
-    call gfx_lock               ; and the lock is not recursive
-    call wm_show
-    call gfx_unlock
-    jmp short .ok
-.held:
-    call wm_show
+    call ui_lcall               ; and the lock is not recursive - so lock,
+    jmp short .ok               ; show and unlock in ui_lcall's six bytes
+.held:                          ; (kernel size pass 13, -4)
+    call bp
 .ok:
     clc
     jmp .out
@@ -1630,11 +1629,10 @@ app_close_win:
                                 ; is staging it into the blob that is about to
                                 ; be written rather than the one after
 %endif
-%ifdef KERN_BIG
-    call COLD_SEG:thmv_reap_x   ; ...and the Customize window, BEFORE the
+                                ; (...and the Customize window, BEFORE the
                                 ; write and ungated by it: a close with nothing
-                                ; to save is still a close (SPEC.md 76.14.14)
-%endif
+                                ; to save is still a close, SPEC.md 76.14.14 -
+                                ; drv_cp_closed_x's own tail on kern_big)
     call COLD_SEG:cpf_cp_flush_close ; to here (SPEC.md 31.8): one floppy write per
                                 ; session instead of one per click. Only the
                                 ; TASK-LESS branch needs it - the panel owns
@@ -1658,6 +1656,9 @@ app_close_win:
                                 ; whose procs live in a freed region is a wild
                                 ; call
     call mem_free_rec           ; ...then every heap claim (SPEC.md 50.4)
+%ifdef KERN_BIG
+    call COLD_SEG:desk_drop_x   ; ...and DESK.DRV, if that was the last
+%endif                          ; widget (SPEC.md 11.103.10)
     mov byte [di+I_STATE], 0    ; record (and any package region) free
     jmp .out
 .tasked:
@@ -1668,6 +1669,11 @@ app_close_win:
 .out:
     pop di
     ret
+%ifndef KERN_SMALL
+    db 0                        ; PARITY PAD, never executed (kernel size pass
+                                ; 13): ui_task and everything to the end of
+                                ; .text back at an even shift on kern_big
+%endif                          ; (kern_small's pad is after dskw_batch)
 
 ; -----------------------------------------------------------------------------
 ; inst_minimize - send a window's instance to the dock
@@ -1865,6 +1871,11 @@ inst_task_die:
                                 ; and THE SWEEP runs either way, because a
                                 ; package can have made windows it never bound
                                 ; to the record (SPEC.md 20.2)
+%ifdef KERN_BIG
+    call COLD_SEG:desk_drop_x   ; DESK.DRV, if that was the last widget - a
+%endif                          ; Sticky App on its worker arm closes HERE,
+                                ; on that worker (SPEC.md 11.103.10), and
+                                ; under the lock
     call gfx_unlock
     call mem_free_rec           ; every heap claim, region included (50.4)
     mov bx, di                  ; I_STATE is offset 0: the release byte
@@ -2142,18 +2153,19 @@ inst_pkg_alive:
     jmp task_exit               ; precedent (SPEC.md 34.5); never returns
 
 ; -----------------------------------------------------------------------------
-; inst_launch_post - post a deferred launch request (SPEC.md 29.4)
-; in:  AL = kind; callable under the gfx lock (one atomic word store).
-;      Drained by ui_task step 3 (SPEC.md 13); rapid posts coalesce.
-; out: nothing (all registers preserved)
+; inst_launch_post - post a deferred launch of a DISK WINDOW (SPEC.md 29.4)
+; in:  nothing (AL is not read); callable under the gfx lock (one atomic byte
+;      store). Drained by ui_task step 3 (SPEC.md 13); rapid posts coalesce.
+; out: nothing (all registers preserved, the flags spent)
+;
+; IT POSTS ONE KIND. It took AL = any kind while the Builtins menu posted the
+; Timer and Bounce through it too; since SPEC.md 14.8 its one caller is the
+; Disk window's New Window (fm_newwin), so the kind is a constant and the word
+; a byte (kernel size pass 13). ui_task's drain still takes it as kind + 1.
 ; -----------------------------------------------------------------------------
 inst_launch_post:
-    push ax
-    cbw                         ; AH = 0: a kind is under 0x80
-    inc ax
-    mov [inst_launch], ax
+    mov byte [inst_launch], KIND_FILES + 1
     inc byte [ui_post]          ; ...and SAY SO once (SPEC.md 13.13)
-    pop ax
     retf
 
 ; =============================================================================
@@ -2369,9 +2381,9 @@ inst_fpick:  resb INST_MAX      ; 0 = the user has never chosen a folder for
 inst_fname:  resb INST_MAX * INST_FNSZ  ; ...and the name it picked there,
                                 ; NUL-terminated; an empty string = none
 
+%ifdef OS88_COMPACT             ; (kern_small has no compactor to ask)
 inst_parkreq: resb 1            ; SPEC.md 66.5: the compactor is asking every
                                 ; package worker to stand still
-%ifdef OS88_COMPACT
 inst_parksafe: resb INST_MAX    ; ...and which instances said the kernel may
                                 ; park them while they are BLOCKED IN IT, not
                                 ; only at OSAPI_TASK_ALIVE (SPEC.md 66.5.4).
@@ -2395,7 +2407,7 @@ sch_parked:   resb MAX_TASKS    ; ...and which TASKS have. PER TASK and not per
                                 ; sch_parked is here rather than in sched.inc
                                 ; because the park is what writes it
 
-inst_launch: resw 1             ; deferred launch: 0 = none, else kind + 1
+inst_launch: resb 1             ; deferred launch: 0 = none, else kind + 1
 inst_knd:    resb 1             ; app_launch scratch: kind being launched
                                 ; (the state-pool slot was a word here, and is
                                 ; DX across the pick since size pass 9)

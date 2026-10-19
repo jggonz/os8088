@@ -5,14 +5,15 @@ APPLE2.O88 is a windowed 48K Apple II Plus: a 6502 in a 49KB heap claim,
 Applesoft BASIC and the Autostart Monitor in ROM, and the machine's 280x192
 screen composed into 1bpp bands and blitted into a window.
 
-THREE FILES AND A LICENCE, IN ONE FOLDER
-----------------------------------------
-APPLE2.O88  the package - and the Apple II+ ROMs are INSIDE it, 14,848 bytes
-            appended past the program and claimed and read at launch before
-            anything else runs: Applesoft and the Autostart Monitor, the
-            character generator, and the Disk II boot ROM
-APPLE2.OVL  its second segment - the menu commands, Load and Save Program,
-            the disk dialog and the About panel
+TWO FILES AND A LICENCE, IN ONE FOLDER
+--------------------------------------
+APPLE2.O88  the package - and everything it needs is INSIDE it: the Apple
+            II+ ROMs (14,848 bytes - Applesoft and the Autostart Monitor,
+            the character generator and the Disk II boot ROM), read at
+            launch before anything else runs, and its second segment (the
+            menu commands, Load and Save Program, the disk dialog and the
+            About panel), read out of the same file once the window is up.
+            There is no other file the program needs.
 WELCOME.BAS a short Applesoft program written for this port. Double-click it
             and the machine starts with it already loaded: type RUN, or LIST
             to read it. It shows the text page, INVERSE text, lo-res with
@@ -26,14 +27,11 @@ COPYING     the GNU General Public License, version 2, plus the MIT notices
             APPLE2.TXT - the same two documents under names that cannot
             collide with another program's.)
 
-APPLE2.O88 AND APPLE2.OVL must be in the SAME folder, and WELCOME.BAS must be
-there too if you want to open it by double-click: the .OVL is resolved in the
-launching instance's current directory, and a double-click on a document
-leaves that directory on the DOCUMENT's. A disk with no APPLE2.OVL is a
-program whose menu commands refuse, politely - the machine itself still runs
-and still draws, because the character-generator decode is in the package and
-not in the overlay. The licence is a document and is read by nobody but you,
-so it may sit wherever it lands.
+If the second segment cannot be read - no memory for it, or the program's
+floppy taken out of the drive - the menu commands refuse, politely, and say
+so; the machine itself still runs and still draws, because the
+character-generator decode is not in that segment. The licence is a document
+and is read by nobody but you, so it may sit wherever it lands.
 
 HOW LONG WELCOME.BAS TAKES, ON THE SLOWEST MACHINE THIS RUNS ON. On a
 4.77MHz XT the text screen is up two or three seconds after RUN, and the

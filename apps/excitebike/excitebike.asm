@@ -6,13 +6,18 @@
 ; from committed sources by tools/excitebike_assets.py; nothing is read from a
 ; ROM, at build time or at run time (SPEC.md 102, plan section 0).
 %include "os88api.inc"
-OS88_HEADER 'EXCITEBIKE', xb_entry, 1, OS88_STACK_256
+OS88_HEADER 'EXCITEBIKE', xb_entry, 1 | OS88_F_PARTS, OS88_STACK_256
 OS88_ICON16
     dw 0x01f0,0x01f0,0x03f0,0x03f0,0x03f0,0x07f8,0x07f8,0x7ffe
     dw 0xffff,0xffff,0xffff,0xffff,0xffff,0xffff,0xfe7f,0xfc3f
     dw 0x0000,0x00e0,0x00e0,0x01e0,0x01c0,0x01e0,0x03b0,0x0370
     dw 0x3bfc,0x6ffe,0x8e79,0x9a49,0x8661,0xc423,0x781e,0x0000
 OS88_ICON16_END
+; The six art files are PARTS of this file (SPEC.md 102.10, 20.12): the three
+; splash screens and the three game art sets, one of each per adapter class,
+; every one compressed and LAZY - only the current adapter's are ever read.
+%define OP_WANT_READ             ; xb_partget reads its OP_SELF rows with op_read (SPEC.md 20.12.9.5)
+%include "os88parts.inc"
 %macro SAVE 0
  push ax
  push bx
@@ -36,6 +41,10 @@ OS88_ICON16_END
 %include "const.inc"
 
 xb_entry:
+    push es                     ; op_load spends ES, which arrives KERNEL_SEG
+    call op_load                ; SI is still the kernel's name: FIRST. Every
+    pop es                      ; row is lazy, so this copies the name and
+    jc .out                     ; claims nothing
     mov si, xb_tpl
     call OSAPI_WM_CREATE
     jc .out
@@ -217,12 +226,38 @@ xb_credit3: db 'Inspired by Excitebike (Nintendo, 1984)',0
 %if EXB_NCOLS > XB_TOK_SKIP
 %error "a course stream's column ids reach its skip and copy tokens"
 %endif
+; --- the part table (SPEC.md 102.10, 20.12) ---------------------------------
+; Six rows, in the Makefile's EXB_PARTS order, every one OP_LAZY | OP_COMP and
+; OP_SELF: a splash screen is read by the window when it first paints on an
+; adapter class and freed when it leaves it (front.inc), and a game art set is
+; read inside the bracket under the loading screen and freed as soon as the
+; back end is built from it (video.inc). No row is wanted by every launch, so
+; there is no carve, and OP_SELF because the package reads them itself
+; (video.inc xb_partget) - a refusal there is a sentence on the splash, where
+; op_fetch's toast would draw the menu bar into the bracket's mode. The order
+; is the packer's and not the program's: os88pkg.py starts each part on a
+; sector, so the row that would pad most goes LAST, where nothing is padded.
+XB_P_SPLH   equ 0               ; EXBSPL.HRC  splash, Hercules (264 rows, 1 bit)
+XB_P_GFXC   equ 1               ; EXBC.GFX    game art, CGA
+XB_P_GFXH   equ 2               ; EXBH.GFX    game art, Hercules
+XB_P_GFXV   equ 3               ; EXBV.GFX    game art, VGA
+XB_P_SPLV   equ 4               ; EXBSPL.VGA  splash, colour
+XB_P_SPLC   equ 5               ; EXBSPL.CGA  splash, CGA (132 rows, 1 bit)
+OS88_PARTS_BEGIN 6
+    OS88_PART OP_ASSET, OP_LAZY | OP_COMP | OP_SELF   ; 0  EXBSPL.HRC
+    OS88_PART OP_ASSET, OP_LAZY | OP_COMP | OP_SELF   ; 1  EXBC.GFX
+    OS88_PART OP_ASSET, OP_LAZY | OP_COMP | OP_SELF   ; 2  EXBH.GFX
+    OS88_PART OP_ASSET, OP_LAZY | OP_COMP | OP_SELF   ; 3  EXBV.GFX
+    OS88_PART OP_ASSET, OP_LAZY | OP_COMP | OP_SELF   ; 4  EXBSPL.VGA
+    OS88_PART OP_ASSET, OP_LAZY | OP_COMP | OP_SELF   ; 5  EXBSPL.CGA
+OS88_PARTS_END
+
 %define OS88UI_ABOUT
 %define OS88UI_NOBTN
 %include "os88ui.inc"
 %include "os88alt.inc"
 
-%assign XB_BSS 0
+%assign XB_BSS OP_BSS          ; the parts standard's bss comes first
 %macro VAR 2
  %1 equ os88_image_end + XB_BSS
  %assign XB_BSS XB_BSS + %2
@@ -261,8 +296,7 @@ VAR xb_artsize,2
 VAR xb_artkind,1
 VAR xb_fsi,FSI_SIZE
 VAR xb_gfxseg,2
-VAR xb_gfxsize,2
-VAR xb_recs,20                  ; the 10 record offsets of the loaded GFX file
+VAR xb_recs,20                  ; the 10 record offsets of the game art part
 VAR xb_theme,1
 VAR xb_profile,1
 VAR xb_plane,1

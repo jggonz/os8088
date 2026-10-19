@@ -134,11 +134,14 @@ def check(vhd, fsha):
         bad.append("FILLER.BIN was not kept")
     if v.read("USER.TXT") != USER_TXT:
         bad.append("USER.TXT was not kept")
-    for p in ("SYSTEM/TASKMGR.O88", "APPS/CALC.O88", "SYSTEM/FONTS/TALLX.F88",
-              "ASSOC.DAT"):
+    src = ID.Vol(open(os88build.at("build/os8088-360.img"), "rb").read())
+    # A TYPEFACE ONLY WHERE THE FLOPPY HAS ONE (SPEC.md 24.3.1.5: the 360KB
+    # system disk gave SYSTEM/FONTS to office360.img)
+    fonts = any(q.startswith("SYSTEM/FONTS/") for q in src.tree())
+    for p in ("SYSTEM/TASKMGR.O88", "APPS/CALC.O88", "ASSOC.DAT") + (
+            ("SYSTEM/FONTS/TALLX.F88",) if fonts else ()):
         if p not in tree:
             bad.append("%s is missing" % p)
-    src = ID.Vol(open(os88build.at("build/os8088-360.img"), "rb").read())
     if v.read("KERNEL.SYS") != src.read("KERNEL.SYS"):
         bad.append("KERNEL.SYS is not the floppy's bytes")
     first = [c for n, a, c, s in v.entries(0) if n == "KERNEL.SYS"][0]

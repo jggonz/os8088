@@ -164,6 +164,17 @@ def main():
         M.until(ui.m, lambda _: p.b("mr_loaded") == 1, "the autoload",
                 poll=.2, limit=120)
         if a.vga:
+            # THE FACES ARE PART 0 OF MIDIRACK.O88 (SPEC.md 105.9.5): a VGA
+            # primary reads them at entry. A miss falls back to the
+            # code-drawn buttons in silence, which every assertion below
+            # would pass - so the part being here is asserted on its own
+            if p.w("mra_seg") == 0:
+                print("FAIL faces: mra_seg is 0 on a VGA primary - part 0 "
+                      "of MIDIRACK.O88 was not read", flush=True)
+                ok = False
+            else:
+                print("PASS faces: part 0 read, at %04X" % p.w("mra_seg"),
+                      flush=True)
             p.put("mr_want", b"\x04")              # the speaker, and...
             p.put("mr_bg", b"\x01")                # ...in the background
         else:

@@ -3,21 +3,44 @@
 N_LIST_BYTES equ 1536
 N_BACK equ N_PAGE_BYTES*2
 N_CBUF equ 16384
-; Instance claims are sized from what is read or composed into them, not a
-; flat 64KB each (SPEC 101.1). Every bank read passes its exact size as the
-; FILE_READ capacity, so a larger or damaged file is refused, never overrun.
+; The canvas is the one claim the instance holds for its whole life, sized
+; from what is composed into it (SPEC 101.1): the desktop splash cache, or
+; CGA's background and composition. Everything READ is a fetched part of
+; 1942.O88 in a claim of its own (n_readbank), which op_fetch sizes from the
+; part's row - so a part can neither be longer than its claim nor be read
+; twice into one. The cartridge build keeps 64KB for its upper-half world.
 %define N_MAX(a,b) ((a)+((b)-(a))*((b)>(a)))
 %if N_ROM
 N_CANVAS_KB equ 64                 ; WORLD bank occupies the upper half
 %else
-N_CANVAS_VGA equ N_MAX(N_FRONT_END,61448)
-N_CANVAS_CGA equ N_MAX(N_L_SIZE,N_CBUF*2)
-N_CANVAS_BYTES equ N_MAX(N_CANVAS_VGA,N_CANVAS_CGA)
+N_CANVAS_BYTES equ N_MAX(N_FRONT_END,N_CBUF*2)
 N_CANVAS_KB equ (N_CANVAS_BYTES+1023)/1024
 %endif
-N_GFX_BYTES equ N_MAX(N_V_SIZE,N_C_SIZE)
-N_GFX_KB equ (N_MAX(N_GFX_BYTES,4*N_FRONT_LABEL)+1023)/1024   ; + desktop labels
-N_GFX2_KB equ (N_MAX(N_VX_SIZE,N_CX_SIZE)+1023)/1024
+
+; THE PARTS, in the order tools/1942assets.py's outputs are packed into the
+; file: the Makefile's N1942PARTS names the same files in the same order, and
+; tests/n1942.py checks each row's length against 1942art.inc. Every row is
+; OP_COMP | OP_LAZY: only the adapter on the glass is ever read, and a part
+; held is a claim (MEM_OWNER_MAX). The two sprite banks are held for the
+; bracket and dropped on the way out; the cache planes, a scene and the
+; effects are copied where they are used and dropped at once.
+N_P_V      equ 0                   ; 1942V.GFX   VGA sprite bank
+N_P_VX     equ 1                   ; 1942VX.GFX  ...its continuation
+N_P_L      equ 2                   ; 1942L.GFX   VGA latch cache planes
+N_P_C      equ 3                   ; 1942C.GFX   CGA sprite bank
+N_P_CX     equ 4                   ; 1942CX.GFX  ...its continuation
+N_P_SFX    equ 5                   ; 1942.SFX    Sound Blaster one-shots
+N_P_SCENE  equ 6                   ; the scenes, VGA's then CGA's
+%if N_ROM
+N_PARTS    equ N_P_SCENE+2         ; WORLD.V42 WORLD.C42
+%else
+N_PARTS    equ N_P_SCENE+6         ; SEA REEF PORT .V42, SEA PORT REEF .C42
+%endif
+OS88_PARTS_BEGIN N_PARTS
+%rep N_PARTS
+    OS88_PART OP_ASSET, OP_LAZY | OP_COMP
+%endrep
+OS88_PARTS_END
 
 n_palette:
     call n_pushall
@@ -47,48 +70,30 @@ n_palette:
 .out:
     jmp n_popall
 
-; Load and check the exact compiled bank before following any offset in it.
-; ES=claim, SI=name, CX=expected size, BP=checksum. CF on any failure.
+; Fetch part AL - claim, read, expand (SPEC 20.12.7.4). Out: CF=0 and ES =
+; its segment; CF=1 and a toast has said why. The bytes are this file's own,
+; built with the package, so there is no size or checksum to check against
+; a stale pair: a short read and a stream that does not expand to the row's
+; exact length are the standard's refusals. Clobbers AX,BX,CX,DX,SI,DI.
 n_readbank:
-    push cx
-    push bp
-    xor bx,bx
-    xor dx,dx
-    call OSAPI_FILE_READ
-    pop bp
-    pop cx
-    jc .bad
-    or dx,dx
-    jnz .bad
-    cmp ax,cx
-    jne .bad
-    xor bx,bx
-    xor dx,dx
-.sum:
-    xor ax,ax
-    mov al,[es:bx]
-    add dx,ax
-    inc bx
-    loop .sum
-    cmp dx,bp
-    jne .bad
-    clc
-    ret
-.bad:
-    stc
+    push ax
+    call op_fetch
+    pop ax
+    jc .out
+    call op_seg
+    mov es,ax
+.out:
     ret
 n_loadgfx:
     cmp byte [n_cga],0
     jne .bank
-    mov es,[n_canvas]
-    mov si,n_lfile
-    mov cx,N_L_SIZE
-    mov bp,N_L_SUM
+    mov al,N_P_L
     call n_readbank
     jc .out
     push ds
+    mov ax,es
     mov es,[n_fsi+FSI_SEG]
-    mov ds,[n_canvas]
+    mov ds,ax
     xor si,si
     mov bx,1
 .cacheplane:
@@ -103,46 +108,104 @@ n_loadgfx:
     cmp bl,16
     jb .cacheplane
     pop ds
+    mov al,N_P_L                   ; in the latches now: the claim goes back
+    call op_drop
 .bank:
-    mov es,[n_graphics]
-    mov si,n_vfile
-    mov cx,N_V_SIZE
-    mov bp,N_V_SUM
+    mov al,N_P_V
     cmp byte [n_cga],0
     je .read
-    mov si,n_cfile
-    mov cx,N_C_SIZE
-    mov bp,N_C_SUM
+    mov al,N_P_C
 .read:
     call n_readbank
     jc .out
-    mov es,[n_graphics2]
-    mov si,n_vxfile
-    mov cx,N_VX_SIZE
-    mov bp,N_VX_SUM
+    mov [n_graphics],es
+    mov al,N_P_VX
     cmp byte [n_cga],0
     je .extra
-    mov si,n_cxfile
-    mov cx,N_CX_SIZE
-    mov bp,N_CX_SUM
+    mov al,N_P_CX
 .extra:
     call n_readbank
+    jc .out
+    mov [n_graphics2],es
 .out:
     ret
-n_vxfile: db '1942VX.GFX',0
-n_cxfile: db '1942CX.GFX',0
-n_lfile: db '1942L.GFX',0
-n_vfile: db '1942V.GFX',0
-n_cfile: db '1942C.GFX',0
+; Would the heap hold what the bracket is about to fetch? DL = FSX_CAPS's
+; display kind. CF=1 = no: both sprite banks plus the largest scene, each
+; priced as op_fetch will claim it (op_lazykb: the read, its cluster slack and
+; R). It is asked on the DESKTOP because the fetches happen after the mode is
+; set, where op_fetch's refusal toast would be drawn into the game's own
+; framebuffer (SPEC 53.7) - so the refusal a busy heap can cause is said here,
+; in the window, and what is left to refuse inside is a disk that will not
+; read. Clobbers AX,BX,CX,DX,SI,BP.
+n_fsxroom:
+    mov bx,N_P_V*256+N_P_SCENE
+    cmp dl,VID_VGA
+    je .adapter
+%if N_ROM
+    mov bx,N_P_C*256+N_P_SCENE+1
+%else
+    mov bx,N_P_C*256+N_P_SCENE+3
+%endif
+.adapter:
+    call op_clbget                 ; (DFREE: it spends DX, so DL is read above)
+    jc .out
+    xor bp,bp                      ; the largest scene...
+%if N_ROM
+    mov cx,1
+%else
+    mov cx,3
+%endif
+    mov al,bl
+.scene:
+    call op_row
+    push ax
+    call op_lazykb
+    pop si                         ; (the row index; SI is free here)
+    jc .out
+    cmp ax,bp
+    jbe .next
+    xchg ax,bp
+.next:
+    xchg ax,si
+    inc ax
+    loop .scene
+    mov al,bh                      ; ...plus the bank and its continuation
+    mov cl,2
+.bank:
+    call op_row
+    push ax
+    call op_lazykb
+    pop si
+    jc .out
+    add bp,ax
+    jc .out
+    xchg ax,si
+    inc ax
+    loop .bank
+    call OSAPI_MEM_AVAIL           ; AX = KB
+    cmp ax,bp
+.out:
+    ret
+; Both banks back, on every way out of the bracket. A row never fetched is a
+; no-op for op_drop, so a load that failed half way unwinds through here too.
+n_dropgfx:
+    push ax
+    mov al,N_P_V
+.drop:
+    call op_drop
+    inc ax
+    cmp al,N_P_CX
+    jbe .drop
+    xor ax,ax
+    mov [n_graphics],ax
+    mov [n_graphics2],ax
+    pop ax
+    ret
 %if !N_ROM
-n_scenefiles: dw n_seav,n_reefv,n_portv,n_seac,n_reefc,n_portc
-n_scenesums: dw N_SEA_V_SUM,N_REEF_V_SUM,N_PORT_V_SUM,N_SEA_C_SUM,N_REEF_C_SUM,N_PORT_C_SUM
-n_seav: db 'SEA.V42',0
-n_reefv: db 'REEF.V42',0
-n_portv: db 'PORT.V42',0
-n_seac: db 'SEA.C42',0
-n_reefc: db 'REEF.C42',0
-n_portc: db 'PORT.C42',0
+; Scene -> part row, VGA's three then CGA's. REEF.C42 is the LAST part of the
+; file because it pads most to its sector (510 bytes packed) and the last part
+; is not padded - so CGA's row order is SEA, PORT, REEF (N1942SCENES).
+n_scenerow: db N_P_SCENE,N_P_SCENE+1,N_P_SCENE+2,N_P_SCENE+3,N_P_SCENE+5,N_P_SCENE+4
 n_scenecheck:
     mov ax,[n_stage]
     dec ax
@@ -164,26 +227,22 @@ n_scenecheck:
     je .index
     add bx,3
 .index:
-    shl bx,1
-    mov si,[n_scenefiles+bx]
-    mov bp,[n_scenesums+bx]
-    mov cx,61448
-    cmp byte [n_cga],0
-    je .read
-    mov cx,16008
-.read:
-    mov es,[n_canvas]
+    mov al,[n_scenerow+bx]
+    push ax
     call n_readbank
+    pop ax
     pop dx
     jc .bad
     mov [n_scene],dx
+    push ax                        ; the row, for the drop once it is copied
     cmp byte [n_cga],0
     jne .cga
     SAVE
     push ds
+    mov ax,es
     mov es,[n_fsi+FSI_SEG]
-    mov ds,[n_canvas]
-    mov si,8
+    mov ds,ax
+    xor si,si                      ; the part is the four planes, no header
     mov bx,1
 .plane:
     mov dx,3c4h
@@ -203,15 +262,20 @@ n_scenecheck:
     jb .plane
     pop ds
     RESTORE
-    jmp .refresh
+    jmp .copied
 .cga:
     push ds
-    mov ds,[n_canvas]
-    mov si,8
+    push es
+    mov es,[n_canvas]
+    pop ds
+    xor si,si
     xor di,di
     mov cx,8000
     rep movsw
     pop ds
+.copied:
+    pop ax
+    call op_drop                   ; the backdrop is in VRAM / the canvas
 .refresh:
     call n_scrollsetup
     call n_refresh

@@ -495,6 +495,51 @@ hd_raw:
     mov [hd_bcnt], cx
     mov [hd_bseg], es
     push ax
+    mov ax, es
+    cmp ah, 0xF0                ; OUR OWN BUFFER, IN THE HMA (SPEC.md 2.10.8):
+    jae .bounce                 ; hd_mbr is in this image, and hd_bios_run
+    call hd_xfer                ; refuses it there. Every other caller's
+    pop ax                      ; buffer is in the heap
+    ret
+.bounce:                        ; ...so through a 1KB heap claim, which
+    push bx                     ; starts 512-aligned and so straddles no DMA
+    push cx                     ; page. ONE SECTOR, and the buffer is OURS (ES
+    push dx                     ; = DS): hd_mbr, the partition table, read or
+    push si                     ; written once
+    push di
+    push es
+    mov ax, 1
+    call OSAPI_MEM_CLAIM        ; out DX = its segment
+    jc .out
+    mov [hd_bseg], dx
+    mov si, bx
+    mov es, dx
+    push di                     ; (the device row, which hd_xfer reads)
+    xor di, di
+    mov [hd_bofs], di           ; ...at the claim's offset 0
+    mov cx, 256
+    rep movsw                   ; in - which a read then overwrites (DF = 0,
+                                ; the system's contract, SPEC.md 1 rule 3)...
+    pop di
     call hd_xfer
+    pushf
+    push ds
+    pop es
+    mov di, bx
+    mov cx, 256
+    push ds
+    mov ds, dx
+    xor si, si
+    rep movsw                   ; ...and out: a write's own bytes, a read's
+    pop ds                      ; answer (a failed one hd_part_load blanks)
+    call OSAPI_MEM_FREE         ; DX
+    popf
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret

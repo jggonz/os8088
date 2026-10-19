@@ -21,7 +21,10 @@
 MRL_MAX     equ 64                  ; entries
 MRL_ENT     equ 16
 
-    MRBUF mrl_ent, MRL_MAX * MRL_ENT
+mrl_ent     equ mrk_pring + OS88SPK_PRL ; the bss's second buffer: the
+                                    ; image's tail runs on into it (an
+                                    ; entry is only read below [mrl_n],
+                                    ; and written whole first)
     MRB mrl_n                       ; entries
     MRB mrl_sel                     ; the highlighted one (and what Play plays)
     MRB mrl_top                     ; the first row on show

@@ -122,7 +122,7 @@ def run():
                              "(and `make` for the system disk)"
                              % (f, "msegpl" if PLAIN else "mseglz"))
     blob = open(os88build.at(O88), "rb").read()
-    rows = os88parts.rows(blob[:blob[8] | (blob[9] << 8)])
+    rows = os88parts.image_rows(blob)
     row = rows[LAZY]
     want_flags = os88parts.EQU["OP_LAZY"] | (
         0 if PLAIN else os88parts.EQU["OP_COMP"])

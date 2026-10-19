@@ -11,7 +11,8 @@
 ;                   Fastest tested - the verified sweep, the fastest that
 ;                     read right SET;
 ;                   Mfg spec   - the data sheet's value
-;   Save setting  REDLINE.CFG on the boot disk, which RLAPPLY puts back
+;   Apply on boot REDLINE.CFG on the boot disk, and \AUTOSTRT\RLAPPLY.LNK
+;                 there, so RLAPPLY puts it back at every boot (SPEC.md 26.10)
 ;
 ; plus Save report and Quit. A framed field right of the two drop-downs
 ; says what the bus is running at NOW - Stock, Tuned or Mfg spec - so the
@@ -100,7 +101,7 @@ cs_lend:    dw 0                    ; ...and its last cell
 cs_tlabels: dw cs_b_tune, cs_b_keep, cs_b_rep, ru_quit, cs_b_tune, cs_b_tune
 cs_actions: db 'tksqxxbh'           ; the eight buttons' keys on this tab
 cs_b_tune:  db 'Tune', 0
-cs_b_keep:  db 'Save setting', 0
+cs_b_keep:  db 'Apply on boot', 0
 cs_b_rep:   db 'Save report', 0
 
 ; The report pane: ui.inc's scroll-pane record (SP_*)
@@ -438,7 +439,7 @@ cs_panelines:
     ret
 
 ; cs_flags - the Tune foot's greying, for ru_buttons_paint: Tune is live on
-; a row that can write on this machine, Save setting once something is set
+; a row that can write on this machine, Apply on boot once something is set
 ; and while the pick is the row it was set on (cs_setrow)
 cs_flags:
     push ax
@@ -458,7 +459,7 @@ cs_flags:
 .dis:
     mov ax, OS88UI_DIS
 .keep:
-    mov [ru_buttonflags + 2], ax    ; Save setting
+    mov [ru_buttonflags + 2], ax    ; Apply on boot
     mov word [ru_buttonflags + 4], 0
     mov word [ru_buttonflags + 6], 0
     mov word [ru_buttonflags + 8], OS88UI_DIS
@@ -724,7 +725,7 @@ cs_tabkey:
     jmp ru_pop8
 
 ; =============================================================================
-; Writing (SPEC.md 103.6.3, 103.6.4): Tune and Save setting. Both are
+; Writing (SPEC.md 103.6.3, 103.6.4): Tune and Apply on boot. Both are
 ; refused on an 8088 and on a row with no apply proc - the button is greyed -
 ; and Tune, which writes the CHIPSET, asks once with the standard alert
 ; before writing to a row the probes did not find.
@@ -969,7 +970,7 @@ cs_swfails:
 cs_act_key:
     call cs_canset
     jc .out
-    cmp al, 'K'                     ; Save setting writes a FILE, not the chipset
+    cmp al, 'K'                     ; Apply on boot writes FILES, not the chipset
     je .go
     mov ah, [cs_pick]
     cmp ah, [cs_found]
@@ -1388,6 +1389,11 @@ cs_do_save:
     call cs_cfg_save
     jc .done
     mov byte [cs_saved], 1
+    mov word [cs_amsg], cs_s_svlnk
+    mov si, cs_lnkname              ; ...AND STARTED AT EVERY BOOT: a link to
+    mov bx, cs_lnk                  ; RLAPPLY in the boot disk's \AUTOSTRT
+    call ol_autostart               ; (SPEC.md 26.10.6). The setting is kept
+    jc .done                        ; either way; only the sentence differs
     mov word [cs_amsg], cs_s_saved
 .done:
     pop si
@@ -3133,8 +3139,8 @@ cs_h2: db 'time, reading back the screen, a slow ROM, a PicoMEM, the floppy stat
 cs_h3: db 'and an I/O write, and keeps the fastest that read right. It cannot test', 0
 cs_h4: db 'video writes, the keyboard, clock, serial ports or an 8-bit disk card:', 0
 cs_h5: db 'keep backups, and if anything misbehaves, Tune to Mfg spec. A hang', 0
-cs_h6: db 'needs a reset, which puts the BIOS timing back. Save setting keeps it', 0
-cs_h7: db 'for SYSTEM\RLAPPLY.O88 to put back after each boot.', 0
+cs_h6: db 'needs a reset, which puts the BIOS timing back. Apply on boot keeps', 0
+cs_h7: db 'it, and starts SYSTEM\RLAPPLY.O88 to put it back after each boot.', 0
 
 cs_s_file:  db 'CHIPSET.TXT', 0
 cs_s_cpu:   db 'CPU ', 0
@@ -3161,7 +3167,7 @@ cs_s_set:   db 'Set now: R4 ', 0
 cs_s_m1:    db ' (maker', 27h, 's spec)', 0
 cs_s_m3:    db ' (fastest tested)', 0
 cs_s_sv:    db ', saved for RLAPPLY', 0
-cs_s_nsv:   db ' - not saved: Save setting keeps it', 0
+cs_s_nsv:   db ' - not saved: Apply on boot keeps it', 0
 cs_s_hfe:   db 'Choose a Target, then press Tune. Help is below.', 0
 cs_s_hpick: db 'Pick the chipset above if you know it. Save report writes this page.', 0
 cs_s_hxt:   db 'Save report writes this page.', 0
@@ -3227,8 +3233,11 @@ cs_st_stk:  db 'Stock: ', 0
 cs_st_tuned: db 'Tuned: ', 0
 cs_st_spec: db 'Mfg spec: ', 0
 cs_st_waits: db ' waits', 0
-cs_s_saved: db 'Saved: SYSTEM\RLAPPLY.O88 puts it back after each boot', 0
+cs_s_saved: db 'Applied on boot: \AUTOSTRT\RLAPPLY.LNK starts RLAPPLY', 0
+cs_s_svlnk: db 'Saved, no autostart link: run SYSTEM\RLAPPLY.O88 by hand', 0
 cs_s_svno:  db 'Not saved: no SYSTEM\APPDATA on the boot disk?', 0
+OS88_LINK cs_lnk, LNK_SELF, 1, 'SYSTEM\RLAPPLY.O88'
+cs_lnkname: db 'RLAPPLY.LNK', 0
 cs_s_rpt:   db 'Report written: ', 0
 cs_s_rptno: db 'Report not written: the disk refused it', 0
 cs_s_conf:  db 'Not detected. Write to it anyway?', 0

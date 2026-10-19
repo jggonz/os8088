@@ -202,7 +202,12 @@ TM_BAR_Y2   equ 80              ; RAM bar frame bottom
 TM_HDR_Y    equ 87              ; process-list header line
 TM_ROW_Y    equ 97              ; first process row
 TM_ROW_H    equ 11              ; row pitch, px
-TM_ROWS     equ INST_MAX + 1    ; "System" plus one row per instance slot
+TM_ROWS     equ INST_MAX + 1    ; "System" plus one row per instance slot -
+                                ; the per-row DATA (tm_rcyc, tm_pct)...
+TM_PROWS    equ TM_ROWS + 1     ; ...and the rows DRAWN, which have IVT+Pad
+                                ; above System (SPEC.md 28.4.7)
+TM_LOWKB    equ 2               ; IVT+Pad: the 1.5K under KERNEL_SEG and the
+                                ; half-KB the whole-KB heap and System leave
 TM_W        equ 232             ; the window's own width - the template's, and
                                 ; one column's. Two columns add TM_COLW.
 TM_RW       equ 223             ; the rows' right edge, content-relative. It
@@ -546,11 +551,18 @@ TMH_ROWS    equ MEM_MAX + INST_MAX + 3
 ; The claim row, in characters: two of indent, the type, A SEPARATOR, the
 ; segment, the KB column tm_kcol emits, a gap and the purge tier. Stated here
 ; because the header string has to land on the same columns and nothing else
-; checks it. The separator is load-bearing rather than spacing - five of the
-; type names use all seven columns, and without it 'DirRead' and its segment
-; read as 'DirRead2000' (the memory list's 'ARKANOI9E40', SPEC.md 28).
+; checks it. The separator is load-bearing rather than spacing - three of the
+; type names use all eight columns, and without it 'Shortcut' and its segment
+; read as 'Shortcut2000' (the memory list's 'ARKANOI9E40', SPEC.md 28).
+;
+; EIGHT, because tm_ktab's names are eight and three of them use it all:
+; at seven 'Compress', 'Shortcut' and 'Disk img' showed as 'Compres',
+; 'Shortcu' and 'Disk im' (SPEC.md 28.12.2). 2+8+1+4+5+1+4 is 25, the whole
+; chunk span, so this row now has NO spare column and the guard below is
+; exact: the 25th cell ends at TM_PEN + 200 - 1 = 207, two pixels clear of
+; the scroll bar at TMH_SB_X1 = 210 (the guard after TMH_RW).
 TMH_IND     equ 2               ; the indent that puts a claim under its owner
-TMH_TYPEC   equ 7               ; TYPE - seven, the memory list's name width
+TMH_TYPEC   equ 8               ; TYPE - tm_ktab's eight-byte name, all of it
 TMH_TIERC   equ 4               ; TIER - 'TRIV'/'LOW'/'MED'/'HIGH'/'-'
 %if TMH_IND + TMH_TYPEC + 1 + 4 + 5 + 1 + TMH_TIERC > TM_NCHUNK * TM_CHUNK
   %error "taskmgr: the heap row is wider than the chunk span it is padded to"
@@ -620,7 +632,7 @@ TM_DEEPEST  equ TMH_ROWS        ; the heap page's, and it is 47
 %elifdef TMF_MEM
 TM_DEEPEST  equ TMM_ROWS        ; ...or the memory view's 19
 %else
-TM_DEEPEST  equ TM_ROWS         ; ...or the process list's own 13
+TM_DEEPEST  equ TM_PROWS        ; ...or the process list's own 14
 %endif
 
 ; ...but the heap page's 47 is how many rows it can COMPOSE, and a check word
@@ -652,7 +664,7 @@ TM_SHOWN    equ TM_DEEPEST      ; a shallower list: its own depth is the bound
 TMR_CPU     equ TM_SHOWN        ; the virtual row index it draws as: past
                                 ; every row any list on this arm can show
 TM_NCK      equ TM_SHOWN + 1    ; ...so tm_rowck holds one more row than that
-%if TM_SHOWN < TM_ROWS
+%if TM_SHOWN < TM_PROWS
   %error "taskmgr: tm_rowck is no longer sized for the process list"
 %endif
 %ifdef TMF_MEM
@@ -717,6 +729,14 @@ TM_NCK      equ TM_SHOWN + 1    ; ...so tm_rowck holds one more row than that
     call OSAPI_SET_COLOR
     pop ax
 %endmacro
+; ...and TM_INKX, which CLOBBERS AL. The audit was done (apps size pass 2): at
+; twelve of the fourteen sites AX was dead or could be loaded after the pen,
+; so the push/pop was two bytes and 27 cycles each for nothing. TM_INK stays
+; where AX really is live across the pen (tm_clear_owed's damage rect).
+%macro TM_INKX 1
+    mov al, %1
+    call OSAPI_SET_COLOR
+%endmacro
 
 ; -----------------------------------------------------------------------------
 ; tm_init - total conventional RAM and the window's derived geometry
@@ -748,15 +768,15 @@ tm_init:
     ; answers, so this needs no build-time test and gets that build right for
     ; free (SPEC.md 41.11).
     call tm_getkb
-    mov word [tm_xoff], 0
-    cmp word [tm_kb+SK_XMS], 0
-    jne .xms
-    mov word [tm_xoff], TMM_XSHIFT
+    cmp word [tm_kb+SK_XMS], 0  ; [tm_xoff] arrives 0 - the loader zeroes our
+    jne .xms                    ; bss, and this runs once, at launch - so only
+    mov byte [tm_xoff], TMM_XSHIFT  ; the no-store answer is written
 .xms:
 
     call OSAPI_VIDEO            ; and the live geometry (SPEC.md 39.2): AX =
     mov [tm_vw], ax             ; width, CX = the dock strip's top row. Banked
     mov [tm_vdock], cx          ; because everything below spends AX..DX
+    xchg ax, cx
 
     ; --- fit the window between the menu bar and the dock ---------------------
     ; The template used to carry a fixed 312, which is fine on VGA's 480 rows
@@ -776,7 +796,6 @@ tm_init:
     ; already covering its first row. wm_fit will happily hand out exactly
     ; that (it clamps y to dock_y0 - h), and the whole point of this is that
     ; it must not.
-    mov ax, [tm_vdock]
     sub ax, MBAR_H + 1          ; AX = px available to the whole frame
     call tm_layout              ; ...and everything derived from it, which the
                                 ; SPEC.md 11.98 handler below re-runs when the
@@ -795,11 +814,9 @@ tm_init:
                                 ; chrome, so feeding it back yields
                                 ; min(rows, TMM_ROWS) and then stops
 
-    mov ax, [tm_tpl+6]          ; (the y clamp below wants the height back)
-
     mov dx, [tm_vdock]          ; ...and a top that keeps y+h off the dock.
     dec dx                      ; Deriving the height is not enough on its
-    sub dx, ax                  ; own: wm_fit clamps y to dock_y0 - h, which
+    sub dx, [tm_tpl+6]          ; own: wm_fit clamps y to dock_y0 - h, which
     cmp dx, 100                 ; puts the shadow row back on the strip for
     jge .ykeep                  ; any frame tall enough to be clamped at all
     cmp dx, MBAR_H              ; (signed - a tiny screen can drive this below
@@ -815,19 +832,18 @@ tm_init:
 ; tm_rowsfit - how many TM_ROW_H rows a frame AX px tall holds under DX px of
 ;              chrome; a screen too short for any still gets one row
 ; out: AX = rows (the quotient fits a byte: the tallest frame here is 295px
-;      against an 11px pitch); clobbers nothing else
+;      against an 11px pitch); clobbers DX - every caller loads it per call
 ; -----------------------------------------------------------------------------
 tm_rowsfit:
     sub ax, dx
     jbe .one
-    push bx
-    mov bl, TM_ROW_H
-    div bl
-    pop bx
-    xor ah, ah
+    mov dl, TM_ROW_H
+    div dl
+    cbw                         ; AL < 128: the quotient fits, as above
     ret
 .one:
-    mov ax, 1
+    xor ax, ax
+    inc ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -836,7 +852,7 @@ tm_rowsfit:
 ; in:  AX = the frame HEIGHT available, [tm_vw] = the frame WIDTH available
 ; out: tm_colrows, tm_cols, tm_hcolrows, tm_col2rows, tm_maxrow and
 ;      tm_tpl+4 / tm_tpl+6, all set
-; clobbers: AX, BX, DX
+; clobbers: AX, BX, CX, DX
 ;
 ; FACTORED OUT OF tm_init FOR SPEC.md 11.98, and the two callers hand it two
 ; different things that mean the same thing. At launch the frame does not
@@ -850,41 +866,34 @@ tm_rowsfit:
 ; resize as one of the three things that arrive there.
 ; -----------------------------------------------------------------------------
 tm_layout:
-    sub ax, TITLE_H + 1 + TMM_ROW_Y     ; ...less the chrome and the maps
-    add ax, [tm_xoff]           ; ...and back the bar's height on a machine
-                                ; with no store, which is what turns the
-                                ; reclaimed space into a ROW rather than into
-                                ; a shorter window (TMM_XSHIFT = TM_ROW_H)
-    jbe .norows
-    mov bl, TM_ROW_H
-    div bl                      ; AL = rows that fit in ONE column
-    xor ah, ah
-    jmp short .haverows
-.norows:
-    mov ax, 1                   ; a screen this short still gets one row
-.haverows:
-    mov [tm_colrows], ax        ; ...and that is the column's depth
+    add ax, [tm_xoff]           ; the bar's height back on a machine with no
+                                ; store, which is what turns the reclaimed
+                                ; space into a ROW rather than into a shorter
+                                ; window (TMM_XSHIFT = TM_ROW_H)...
+    mov dx, TITLE_H + 1 + TMM_ROW_Y     ; ...less the chrome and the maps
+    call tm_rowsfit             ; AX = rows that fit in ONE column (a screen
+    mov [tm_colrows], ax        ; this short still gets one) - the column's
+                                ; depth
 
     ; --- one column, or two? -------------------------------------------------
-    mov word [tm_cols], 1
+    mov cx, 1
     mov bx, TM_W
     cmp ax, TM_COL2_MIN
     jae .cols                   ; tall enough: one column shows a useful list
-    mov dx, [tm_vw]             ; short: a second column IF the screen is wide
-    cmp dx, TM_W + TM_COLW      ; enough to carry it
-    jb .cols
-    mov word [tm_cols], 2
+    cmp word [tm_vw], TM_W + TM_COLW    ; short: a second column IF the
+    jb .cols                    ; screen is wide enough to carry it
+    inc cx
     mov bx, TM_W + TM_COLW
 .cols:
+    mov [tm_cols], cx
     mov [tm_tpl+4], bx          ; the frame width the layout needs
 
-    mov ax, [tm_colrows]        ; the height is COLUMN 0's worth: it is the
-    cmp ax, TMM_ROWS            ; column that starts lowest, so it is the one
-    jbe .hok                    ; the frame has to be tall enough for
-    mov ax, TMM_ROWS
+    cmp ax, TMM_ROWS            ; the height is COLUMN 0's worth: it is the
+    jbe .hok                    ; column that starts lowest, so it is the one
+    mov al, TMM_ROWS            ; the frame has to be tall enough for (AH = 0)
 .hok:
-    mov dx, TM_ROW_H
-    mul dx
+    mov dl, TM_ROW_H
+    mul dl
     add ax, TITLE_H + 1 + TMM_ROW_Y
     sub ax, [tm_xoff]           ; the list starts higher with no bar above it
     mov [tm_tpl+6], ax          ; the frame height the machine can take
@@ -986,8 +995,8 @@ tm_onresize:
     push cx
     push dx
     push si
-    push cx                     ; **THE CONTENT BOX THIS PROC WAS HANDED** -
-    push dx                     ; the kernel applies a published frame BEFORE
+    push dx                     ; **THE CONTENT BOX THIS PROC WAS HANDED** -
+                                ; the kernel applies a published frame BEFORE
                                 ; it notifies (SPEC.md 39.16.3.3), so CX/DX
                                 ; already describe the window we now have
     mov bx, si                  ; ...and the CARD it is on (SPEC.md 39.16.4):
@@ -1004,7 +1013,7 @@ tm_onresize:
                                 ; which is what the field reported
     mov [tm_vdock], cx
     pop ax                      ; the CONTENT height, back as a FRAME one -
-    pop cx                      ; tm_layout's argument is a frame. Handing it
+                                ; tm_layout's argument is a frame. Handing it
     add ax, TITLE_H + 1         ; the display's BAND instead makes tm_colrows
                                 ; what fits the SCREEN rather than what fits
                                 ; the window, which is 32 rows on a VGA against
@@ -1017,17 +1026,41 @@ tm_onresize:
     jmp tm_pop_sdcba
 
 ; -----------------------------------------------------------------------------
-; tm_kinit - bind the window and ask for the byte-aligned content origin
+; tm_entry - the package entry proc (SPEC.md 20.2)
+; in:  nothing; DS = CS = our segment, ES = KERNEL_SEG, UI task, no lock
+; out: CF = 0 launched, CF = 1 the loader tears us down
 ;
-; The loader zeroes our bss, so the state block does not need clearing the way
-; it did as a built-in kind: a relaunched instance is a fresh image with a
-; fresh bss and cannot inherit the previous one's calibration or graph.
-;
-; in:  BX = window ptr
-; out: nothing (all registers preserved)
+; The worker is NOT spawned here, and cannot be: the kernel sets I_STATE = 1
+; and binds our window to the record only after this returns (SPEC.md 21),
+; so OSAPI_TASK_SPAWN would find no instance and refuse. tm_paint does it -
+; the apps/fractal precedent (SPEC.md 40).
 ; -----------------------------------------------------------------------------
-tm_kinit:
-    push ax
+tm_entry:
+    push si
+    call tm_init                ; int 12h, then the template's live geometry
+    mov si, tm_tpl
+    call OSAPI_WM_CREATE        ; BX = window ptr, CF = the table is full
+    jc .out
+    mov al, 1                   ; **WE PAINT EVERY PIXEL** (SPEC.md 11.90.1,
+    call OSAPI_WM_OWNBG         ; 28.10): the kernel's white fill was the first
+                                ; layer of a double draw on a window whose
+                                ; W_PAINT is ~450 ms, so the content went white
+                                ; and re-lettered on every repaint. It also
+                                ; unlocks OSAPI_WM_DAMAGE, which answers
+                                ; "whole" without this flag (SPEC.md 11.90.2's
+                                ; interlock)
+    mov si, tm_about            ; 'About Task Manager' above the Close the
+    call OSAPI_ABOUT_SET        ; kernel already puts in our pull-down
+                                ; (SPEC.md 12.2) - BX is still the window and
+                                ; the slot preserves the flags. AX and SI are
+                                ; scratch here: the entry proc's own push/pop
+                                ; of SI is what it owes the loader
+
+    ; --- bind the window and ask for the byte-aligned content origin --------
+    ; (this was tm_kinit, called once, from here). The loader zeroes our bss,
+    ; so the state block does not need clearing the way it did as a built-in
+    ; kind: a relaunched instance is a fresh image with a fresh bss and cannot
+    ; inherit the previous one's calibration or graph.
     mov [tm_win], bx
 
     mov ax, TM_PREF_H           ; **THE HEIGHT IS PATCHED, NOT FUDGED.**
@@ -1058,42 +1091,8 @@ tm_kinit:
                                 ; (SPEC.md 11.94/6.1). EVERY adapter: this was
                                 ; mono-only until VGA was measured and gained
                                 ; more (verified aligned there - content
-                                ; origin 248). It
-                                ; PRESERVES FLAGS, which the entry proc's own
-                                ; ret owes the loader
-
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; tm_entry - the package entry proc (SPEC.md 20.2)
-; in:  nothing; DS = CS = our segment, ES = KERNEL_SEG, UI task, no lock
-; out: CF = 0 launched, CF = 1 the loader tears us down
-;
-; The worker is NOT spawned here, and cannot be: the kernel sets I_STATE = 1
-; and binds our window to the record only after this returns (SPEC.md 21),
-; so OSAPI_TASK_SPAWN would find no instance and refuse. tm_paint does it -
-; the apps/fractal precedent (SPEC.md 40).
-; -----------------------------------------------------------------------------
-tm_entry:
-    push si
-    call tm_init                ; int 12h, then the template's live geometry
-    mov si, tm_tpl
-    call OSAPI_WM_CREATE        ; BX = window ptr, CF = the table is full
-    jc .out
-    push ax                     ; **WE PAINT EVERY PIXEL** (SPEC.md 11.90.1,
-    mov al, 1                   ; 28.10): the kernel's white fill was the first
-    call OSAPI_WM_OWNBG         ; layer of a double draw on a window whose
-    pop ax                      ; W_PAINT is ~450 ms, so the content went white
-                                ; and re-lettered on every repaint. It also
-                                ; unlocks OSAPI_WM_DAMAGE, which answers
-                                ; "whole" without this flag (SPEC.md 11.90.2's
-                                ; interlock)
-    push si                     ; 'About Task Manager' above the Close the
-    mov si, tm_about            ; kernel already puts in our pull-down
-    call OSAPI_ABOUT_SET        ; (SPEC.md 12.2) - BX is still the window and
-    pop si                      ; the slot preserves the flags
-    call tm_kinit               ; preserves the flags, so the CF our ret owes
+                                ; origin 248). It PRESERVES FLAGS, so the CF
+                                ; our ret owes the loader is the one above
     ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
     ; exists, and not beside any worker's declaration: a package with
     ; NO worker is the case that moves most easily, and putting it at
@@ -1227,15 +1226,45 @@ tm_s_hdr:   db 'NAME'
             db 'CPU'
             times TM_CPUC - 3      db ' '
             db 'MEM', 0
-tm_s_sys:   db 'System', 0      ; row 0: the kernel's own share
-tm_s_dash:  db '-', 0
-tm_s_run:   db 'run', 0
-tm_s_rdy:   db 'rdy', 0
-tm_s_slp:   db 'slp', 0
-tm_s_evt:   db 'evt', 0         ; no worker task: runs only in callbacks
-tm_s_die:   db 'die', 0         ; I_STATE 2: closing, task not yet reaped
-tm_s_free:  db '---', 0
-tm_s_frtl:  db '  -     -', 0   ; free row's CPU + MEM columns
+tm_s_sys:   db 'System', 0      ; row 1: the kernel's own share
+; Row 0, IVT+Pad (SPEC.md 28.4.7), one constant: no state, no CPU, 2K
+tm_s_lowrow:
+            db 'IVT+Pad'
+            times TM_NAMEF - 7     db ' '
+            times TM_STC + 1       db ' '
+            db '  -'
+            times TM_CPUC - 3      db ' '
+            db '  2K', 0
+%if $ - tm_s_lowrow != TM_ROWC + 1
+  %error "taskmgr: the IVT+Pad row is no longer exactly one row long"
+%endif
+%if TM_LOWKB != 2
+  %error "taskmgr: tm_s_lowrow and tm_s_low print TM_LOWKB as a literal"
+%endif
+; The ST column, each WITH the separator the CPU column needs after it - the
+; one place every state string is copied, so the space is data rather than a
+; store after every copy (TM_STC + 1)
+tm_s_run:   db 'run ', 0
+tm_s_rdy:   db 'rdy ', 0
+tm_s_slp:   db 'slp ', 0
+tm_s_evt:   db 'evt ', 0        ; no worker task: runs only in callbacks
+tm_s_die:   db 'die ', 0        ; I_STATE 2: closing, task not yet reaped
+; A FREE SLOT'S ROW IS A CONSTANT, so it is one string rather than tm_namef,
+; three copies and a store: '-' padded to TM_NAMEF, '---' and its separator,
+; then the CPU and MEM columns' dashes. ITS TAIL IS THE MEMORY PAGES' DASHES,
+; overlapped rather than repeated: ' ' + tm_s_dash5 is the blank SIZE/HEAP
+; column with its leading gap (tm_s_dash6), tm_s_dash5 that column with
+; tm_kcol's leading space, tm_s_dash4 one bare KB column
+tm_s_freerow:
+            db '-'
+            times TM_NAMEF - 1     db ' '
+            db '---   -'
+tm_s_dash6: db ' '
+tm_s_dash5: db ' '
+tm_s_dash4: db '   -', 0
+%if tm_s_dash4 + 5 - tm_s_freerow != TM_NCHUNK * TM_CHUNK + 1
+  %error "taskmgr: the free slot's row is no longer exactly one row long"
+%endif
 
 %ifdef TMF_MEM
 ; --- memory view (SPEC.md 28) ------------------------------------------------
@@ -1271,10 +1300,12 @@ tm_s_phdr:  db 'Packages      ', 0; + allocated/size KB of the pool:
                                 ; SIZE exactly where tm_buf_row's does
 tm_s_mfr:   db '   -    -', 0   ; the ADDR+SIZE pair a built-in has no answer
                                 ; for: it owns no region of its own
-tm_s_dash4: db '   -', 0        ; one empty KB column
-tm_s_dash5: db '    -', 0       ; ...and one with tm_kcol's leading space
-tm_s_sys0:  db '0600', 0        ; where the kernel starts: KERNEL_SEG, the
-                                ; first paragraph above the BIOS data area
+tm_s_sys0:  db 'System   0600', 0   ; the memory list's System row up to its
+                                ; KB columns, as ONE constant: the name, both
+                                ; of the NAME field's trailing columns (row 0
+                                ; has no indent) and where the kernel starts -
+                                ; KERNEL_SEG, the first paragraph above the
+                                ; BIOS data area
 
 ; The row ABOVE System: everything below KERNEL_SEG, which is the one span of
 ; conventional memory that is neither the kernel nor the heap and was in no
@@ -1284,13 +1315,16 @@ tm_s_sys0:  db '0600', 0        ; where the kernel starts: KERNEL_SEG, the
 ; table int 1Eh points at (DPT_AT, 0580). It is the SAME 1,536 bytes on every
 ; machine and every build: KERNEL_SEG is an SDK constant, not a ladder rung,
 ; so the whole row is one literal and draws for three string copies. The size
-; is printed as 1.5K because that is what it is - tm_kcol's whole kilobytes
-; would read 1K or 2K and either is the very rounding this row exists to
-; stop hiding. ' 1.5K' is tm_kcol's five columns, leading space included.
+; is printed as 2K, IVT+Pad, and SPEC.md 28.4.7 is why: claims are whole
+; KB, so the heap is the whole KB SK_HEAP reports and the kernel is shown
+; rounded DOWN, and the 1.5K plus the half-KB those two leave is always 2.
+; '   2K' is tm_kcol's five columns, leading space included.
 %if KERNEL_SEG * 16 != 1536
-  %error "taskmgr: the low-memory row is a 1.5K literal and KERNEL_SEG moved"
+  %error "taskmgr: the low-memory row is 1.5K plus a half-KB and KERNEL_SEG moved"
 %endif
-tm_s_low:   db 'IVT+BDA  0000  1.5K', 0
+tm_s_low:   db 'IVT+Pad  0000    2K     -', 0   ; ...the whole row: a dash in
+                                ; HEAP after its own gap, as the buffer rows
+                                ; have - it is not a claim
 
 ; The kernel's own buffers, one row each under System (SPEC.md 28). Every
 ; figure beside them is a compile-time constant (TM_K*_KB above), so drawing
@@ -1312,10 +1346,11 @@ tm_s_bfat:  db '  FAT snap', 0
 
 %ifdef TMF_HEAP
 ; --- heap page (SPEC.md 28.4) ------------------------------------------------
-; The header's gaps are what put ADDR at column 9, SIZE's four digits at 14
-; and TIER at 19 - exactly where tm_hclaim composes them, and where a heading
-; row's tm_kcol total lands too.
-tm_s_hhdr:  db 'TYPE      ADDR SIZE TIER', 0
+; The header's gaps are what put ADDR at column 11, SIZE over the 'nnnK' at
+; 16 and TIER at 21 - exactly where tm_hclaim composes them (TMH_IND +
+; TMH_TYPEC + the separator is 11), and where a heading row's tm_kcol total
+; lands too. Twenty-five characters: the chunk span, to the column.
+tm_s_hhdr:  db 'TYPE       ADDR SIZE TIER', 0
 ; The three captions are a two-column TABLE and the gaps below are what make
 ; them one (SPEC.md 28.4.2). Each right-hand label starts at column 13 and
 ; each right-hand figure at 19, whatever the left half of its own line spent -
@@ -1327,6 +1362,16 @@ tm_s_hhdr:  db 'TYPE      ADDR SIZE TIER', 0
 ; + 1 + 6 + 4 + 4 = 31 characters and the line has 27 (TM_STRMAX), so the
 ; choice was one aligned column or none.
 tm_s_hheap: db 'HEAP ', 0
+; TIER names, FOUR-CHARACTER RECORDS indexed by the owner's high byte -
+; MEM_PG_TRIV first, so the index is (high byte - MEM_PG_MIN) - and copied
+; by tm_htier at TMH_TIERC = 4, so a record needs no NUL and no pointer
+; (apps size pass 2; it was a pointer table and five strings). The fifth
+; record IS the caption's 'HELD' below: an unpurgeable claim is HELD, and
+; the record is the string.
+tm_tiers:   db 'TRIV', 'LOW ', 'MED ', 'HIGH'
+%if TMH_TIERC != 4 || MEM_PG_MAX - MEM_PG_MIN != 3
+  %error "taskmgr: tm_tiers is four 4-character records"
+%endif
 tm_s_hheld: db 'HELD', 0        ; the two halves of what is claimed, never one
 tm_s_hpurg: db ' PURGE ', 0     ; figure: they are owed on different terms.
                                 ; 'HELD' takes no trailing space - tm_put3
@@ -1349,13 +1394,11 @@ tm_s_hfrag: db ' FRAG  ', 0     ; ...and everything available OUTSIDE it, so
                                 ; shorter than AVAIL and PURGE, and it is the
                                 ; FIGURES that have to line up, not the label
 
-; TYPE names, seven columns. A claim the table does not know prints its owner
+; TYPE names, TMH_TYPEC = 8 columns. A claim the table does not know prints its owner
 ; word in hex instead (tm_htype) - a debug page must not label an unknown tag
 ; as the nearest thing it recognises.
 tm_s_tregn: db 'Region', 0      ; owner = the slot, base = I_SPTR (SPEC.md 20.1)
 tm_s_tdata: db 'Data', 0        ; ...anything else that instance holds (50.3)
-tm_s_tsave: db 'MenuSav', 0
-tm_s_tdrv:  db 'DrvImg', 0
 tm_s_tdrvb: db 'DrvBuf', 0      ; ...and what that driver CLAIMED (SPEC.md
                                 ; 28.4.6): a ring, a pool, a listing buffer.
                                 ; It is NOT in tm_ktab and cannot be - a
@@ -1364,55 +1407,43 @@ tm_s_tdrvb: db 'DrvBuf', 0      ; ...and what that driver CLAIMED (SPEC.md
                                 ; which is a different number on every boot,
                                 ; so tm_hdrv decides this one by walking the
                                 ; snapshot rather than by matching a constant
-tm_s_tcopy: db 'CopyBuf', 0
 tm_s_tfatw: db 'FATwin', 0
 tm_s_tview: db 'DirView', 0     ; kern_small's listing cache (SPEC.md 50.6.5)
-tm_s_tasc:  db 'Assoc', 0
-tm_s_tclip: db 'Clipbrd', 0
 tm_s_twsav: db 'WinSave', 0
-tm_s_tdirw: db 'DirRead', 0
-tm_s_tflst: db 'FileClp', 0
-tm_s_tico:  db 'Icons', 0        ; the machine-wide icon store (SPEC.md 25.9),
-                                ; one row per DISTINCT body. It is claimed at
-                                ; the first mount that harvests one and lives
-                                ; until it is purged, so leaving it out of this
-                                ; table put a permanent hex row on the heap
-                                ; page of every machine - MEM_K_BAND's own
-                                ; lesson, one tag along
-; ...and the three that were MISSING, every one of which this page had been
-; printing as a bare owner word (SPEC.md 28.4.3). The hex fallback below is
-; the table's honesty rule about a tag this build has never SEEN, and not a
-; place to leave one the kernel ships: MEM_K_BAND is claimed at boot and
-; never freed, so 'FF0A' was a permanent row on every machine with a band
-; composer. tests/unit/t_ktags.py is the gate that stops a fourth.
-tm_s_tmod:  db 'ModImg', 0      ; ...beside DrvImg, because it is the same
-                                ; thing one rung down: an image claimed
-                                ; top-down whose base IS its CS (SPEC.md 2.8)
-tm_s_tclon: db 'Cloner', 0      ; the job block AND the sectors in flight,
-                                ; which is why freeing it is the whole of a
-                                ; clone's teardown (SPEC.md 18.99)
-tm_s_tband: db 'BandBuf', 0     ; the 1bpp composer's, one per machine (5.9.2)
-tm_s_thib:  db 'Resume', 0      ; the resume's extent list (SPEC.md 87.5), alive
-                                ; only on the way into the stub
 
-tm_s_tcmpr: db 'Compress', 0
-tm_s_tfont: db 'Font', 0        ; the glyph table copied out of an option
-                                ; ROM at boot (SPEC.md 6.0.1): 1KB, top-down
-tm_s_tfdlg: db 'FileDlg', 0     ; the Standard File dialog's listing (SPEC.md
-                                ; 38.2). It is the FOURTH the prose above
-                                ; warned about: the dialog claimed its own
-                                ; store the moment SPEC.md 22.6.3 abolished
-                                ; the floor listing, and 'FF0F' was on this
-                                ; page for as long as any Save or Open was up
-tm_s_tsc:   db 'Shortcut', 0    ; the desktop shortcuts' one table (SPEC.md
-                                ; 26.8), read off SYSTEM.CFG at boot and held
-                                ; while any shortcut exists - a permanent
-                                ; 'FF11' row on a machine with one, otherwise
-tm_s_timg:  db 'Disk img', 0    ; a mounted .IMG's run table (SPEC.md
-                                ; 18.101), 1KB a mount, freed at the unmount
-; (owner word, name) pairs, ended by a 0 owner. MEM_P_WSAVE is NOT here: it is
-; a RANGE (SPEC.md 11.96.3), one cache per window slot, and tm_htype tests it
-; before it walks this.
+; (owner word, name) RECORDS of TMK_REC bytes, ended by a 0 owner: the name
+; is IN the record, NUL-padded to eight, rather than a pointer to a string
+; elsewhere (apps size pass 2: the pointer and the terminator were three
+; bytes a tag). tm_htype copies TMH_TYPEC = 8 of it, the whole name - at 7
+; the three eight-letter ones lost their last letter (SPEC.md 28.12.2).
+; MEM_P_WSAVE is NOT here: it
+; is a RANGE (SPEC.md 11.96.3), one cache per window slot, and tm_htype tests
+; it before it walks this. Why some rows are here at all:
+;   MEM_P_ICO   - the machine-wide icon store (SPEC.md 25.9), one row per
+;                 DISTINCT body, claimed at the first mount that harvests one
+;                 and alive until purged: leaving it out put a permanent hex
+;                 row on the heap page of every machine - MEM_K_BAND's lesson
+;   MEM_K_MOD, MEM_K_CLONE, MEM_K_BAND - the three that were MISSING, every
+;                 one printed as a bare owner word (SPEC.md 28.4.3). The hex
+;                 fallback is the table's honesty rule about a tag this build
+;                 has never SEEN, not a place to leave one the kernel ships:
+;                 MEM_K_BAND is claimed at boot and never freed, so 'FF0A' was
+;                 a permanent row on every machine with a band composer.
+;                 tests/unit/t_ktags.py is the gate that stops a fourth.
+;                 ModImg sits beside DrvImg because it is the same thing one
+;                 rung down: an image claimed top-down whose base IS its CS
+;                 (SPEC.md 2.8); Cloner is the job block AND the sectors in
+;                 flight (SPEC.md 18.99); BandBuf the 1bpp composer's (5.9.2)
+;   MEM_K_HIB   - the resume's extent list (SPEC.md 87.5), alive only on the
+;                 way into the stub
+;   MEM_K_FONT  - the glyph table copied out of an option ROM at boot (SPEC.md
+;                 6.0.1): 1KB, top-down
+;   MEM_K_FDLG  - the Standard File dialog's listing (SPEC.md 38.2): the FOURTH
+;                 the prose above warned about - 'FF0F' was on this page for as
+;                 long as any Save or Open was up
+;   MEM_K_SC    - the desktop shortcuts' one table (SPEC.md 26.8), read off
+;                 SYSTEM.CFG at boot and held while any shortcut exists
+;   MEM_K_IMG   - a mounted .IMG's run table (SPEC.md 18.101), 1KB a mount
 ;
 ; MEM_K_OVL used to be a row, and was the one kernel tag with a lifetime
 ; SHORTER than the session - a heap page open early enough could catch it. The
@@ -1424,42 +1455,35 @@ tm_s_timg:  db 'Disk img', 0    ; a mounted .IMG's run table (SPEC.md
 ; ends the capture early - which drops every row below it from the gate without
 ; failing anything.
 tm_ktab:
-    dw MEM_P_MSAVE, tm_s_tsave
-    dw MEM_K_DRV,   tm_s_tdrv
-    dw MEM_K_COPY,  tm_s_tcopy
-    dw MEM_K_ASC,   tm_s_tasc
-    dw MEM_K_CLIP,  tm_s_tclip
-    dw MEM_K_MOD,   tm_s_tmod
-    dw MEM_K_CLONE, tm_s_tclon
-    dw MEM_K_BAND,  tm_s_tband
-    dw MEM_K_HIB,   tm_s_thib
-    dw MEM_K_CMPR,  tm_s_tcmpr
-    dw MEM_K_FDLG,  tm_s_tfdlg
-    dw MEM_K_FONT,  tm_s_tfont
-    dw MEM_K_SC,    tm_s_tsc
-    dw MEM_K_IMG,   tm_s_timg
-    dw MEM_P_DIRW,  tm_s_tdirw
-    dw MEM_P_FLIST, tm_s_tflst
-    dw MEM_P_ICO,   tm_s_tico
+    dw MEM_P_MSAVE, 'MenuSav'
+    dw MEM_K_DRV,   'DrvImg', 0
+    dw MEM_K_COPY,  'CopyBuf'
+    dw MEM_K_ASC,   'Assoc', 0
+    dw MEM_K_CLIP,  'Clipbrd'
+    dw MEM_K_MOD,   'ModImg', 0
+    dw MEM_K_CLONE, 'Cloner', 0
+    dw MEM_K_BAND,  'BandBuf'
+    dw MEM_K_HIB,   'Resume', 0
+    dw MEM_K_CMPR,  'Compress'
+    dw MEM_K_FDLG,  'FileDlg'
+    dw MEM_K_FONT,  'Font', 0, 0
+    dw MEM_K_SC,    'Shortcut'
+    dw MEM_K_IMG,   'Disk img'
+    dw MEM_P_DIRW,  'DirRead'
+    dw MEM_P_FLIST, 'FileClp'
+    dw MEM_P_ICO,   'Icons', 0
     dw 0
+TMK_REC     equ 10              ; owner word + an eight-byte name
+%if ($ - tm_ktab - 2) % TMK_REC
+  %error "taskmgr: a tm_ktab record is no longer TMK_REC bytes (pad its name to 8)"
+%endif
 
-; TIER names, four columns, indexed by the owner's high byte - MEM_PG_TRIV
-; first, so the index is (high byte - MEM_PG_MIN). An unpurgeable claim gets
-; the dash, which is the answer for every instance-owned row as well.
-tm_ztab:
-    dw tm_s_ztriv, tm_s_zlow, tm_s_zmed, tm_s_zhigh
-tm_s_ztriv: db 'TRIV', 0
-tm_s_zlow:  db 'LOW', 0
-tm_s_zmed:  db 'MED', 0
-tm_s_zhigh: db 'HIGH', 0
-tm_s_zno:   db 'HELD', 0        ; NOT a dash. The tiers are what LOSING a
-                                ; block costs, and a dash in that column read
-                                ; as a rank BELOW 'TRIV' - the opposite of the
-                                ; truth, since an ordinary claim is the only
-                                ; rank that outranks every cache (MEM_LVL_TOP,
-                                ; SPEC.md 50.6.4). 'HELD' says the thing the
-                                ; scale cannot: this one is not a cache at all
-                                ; and the kernel cannot take it back
+; An unpurgeable claim's TIER is 'HELD' (tm_tiers' fifth record, which is
+; tm_s_hheld), and NOT a dash. The tiers are what LOSING a block costs, and a
+; dash in that column read as a rank BELOW 'TRIV' - the opposite of the
+; truth, since an ordinary claim is the only rank that outranks every cache
+; (MEM_LVL_TOP, SPEC.md 50.6.4). 'HELD' says the thing the scale cannot: this
+; one is not a cache at all and the kernel cannot take it back.
 %endif
 
 %ifdef TMF_MEM
@@ -1706,9 +1730,7 @@ tm_quiet:
     ; truthfully. What is skipped is the REASON to paint.
     mov si, tm_claims
     xor ax, ax                  ; AX chains through all three spans
-    mov cx, MEM_MAX
 .rec:
-    push cx
     cmp word [si+CLS_SEG], 0    ; A FREE RECORD WEIGHS NOTHING, and that is
     je .zero                    ; half of what makes this work: its CLS_PARA
                                 ; and CLS_OWN are a previous tenant's leftovers,
@@ -1745,11 +1767,11 @@ tm_quiet:
     mov cx, CLS_RECSZ
     call tm_sumb                ; AX chains; SI advances past the record
 .next:
-    pop cx
-    loop .rec
-
-    mov si, tm_kb               ; ...and the two TOTALS that move with our own
-    mov cx, SK_CLAIM            ; cache are SKIPPED rather than corrected: both
+    cmp si, tm_claims + CLAIM_SNAPSHOT_SIZE
+    jb .rec
+                                ; SI = tm_kb now: it follows the claim table
+    mov cx, SK_CLAIM            ; ...and the two TOTALS that move with our own
+                                ; cache are SKIPPED rather than corrected: both
     call tm_sumb                ; are derived from the table just hashed, so a
     add si, 4                   ; real claim is still caught by the record it
     mov cx, SYSKB_SIZE - (SK_KCLAIM + 2)    ; occupies, and the arithmetic to
@@ -1843,32 +1865,29 @@ tm_sample:
     mov di, tm_snapshot
     TM_SYS_SNAPSHOT
 
-    mov si, tm_state            ; = the snapshot's own T_STATE bytes
-    mov cx, MAX_TASKS
-    mov byte [tm_idle], 0xFF    ; ...and WHICH slot is the idle task, which the
-.ssnap:                         ; snapshot names with a state of its own
-    lodsb                       ; (SPEC.md 28.7)
-    cmp al, 3
-    jne .snotidle
-    mov al, MAX_TASKS
-    sub al, cl                  ; CX counts DOWN from MAX_TASKS: the slot is
-    mov [tm_idle], al           ; MAX_TASKS - CX
-.snotidle:
-    loop .ssnap
-
-    ; --- per-task diffs ------------------------------------------------------
+    ; --- per-task diffs, and WHICH slot is the idle task on the way --------
+    ; The snapshot names the idle task with a state of its own (SPEC.md 28.7).
+    ; It was a separate pass over the same bytes; this loop already reads
+    ; every one of them. The last slot answering 3 wins, as it did.
+    ;
+    ; ES = DS from here to the end (TM_ES_DATA above), which is what lets
+    ; tm_dif bank a counter with two MOVSWs - and advance SI and DI by the
+    ; record's four bytes as it does.
+    mov byte [tm_idle], 0xFF
     mov si, tm_snapshot + SS_TCYC
     mov di, tm_told
     xor bx, bx
 .tdiff:
     mov cl, [tm_pstate+bx]
-    mov ch, [tm_state+bx]
+    mov ch, [tm_state+bx]       ; = the snapshot's own T_STATE bytes
     mov [tm_pstate+bx], ch      ; this sample's state becomes the previous
-    call tm_dif
-    mov [di+tm_tdif-tm_told], ax
-    mov [di+tm_tdif-tm_told+2], dx
-    add si, 4
-    add di, 4
+    cmp ch, 3
+    jne .tnotidle
+    mov [tm_idle], bl
+.tnotidle:
+    call tm_dif                 ; ...and SI, DI step on by 4
+    mov [di+tm_tdif-tm_told-4], ax
+    mov [di+tm_tdif-tm_told-2], dx
     inc bx
     cmp bx, MAX_TASKS
     jb .tdiff
@@ -1899,7 +1918,8 @@ tm_sample:
     mov ax, [si+SSI_KB-SSI_CYC] ; ...and what it holds off the heap, which the
     mov [tm_ikb+di], ax         ; kernel worked out from the owner word rule
     pop di
-    call tm_dif                 ; DX:AX = its callback cycles this interval
+    call tm_dif                 ; DX:AX = its callback cycles this interval,
+                                ; SI and DI on by 4
     ; ...and straight into its ROW: row 1+i is instance i's callback time
     ; plus, if it owns a task, that task's slice (the task diffs above are
     ; already done). Cycles of a task whose instance died this interval belong
@@ -1918,31 +1938,23 @@ tm_sample:
 .rnopop:
     pop bx
 .rnotask:
-    mov [di+tm_rcyc+4-tm_iold], ax
-    mov [di+tm_rcyc+4-tm_iold+2], dx
-    add si, SSI_RECSZ
-    add di, 4
+    mov [di+tm_rcyc-tm_iold], ax
+    mov [di+tm_rcyc-tm_iold+2], dx
+    add si, SSI_RECSZ - 4       ; (tm_dif has already stepped the 4)
     inc bx
     cmp bx, INST_MAX
     jb .isnap
 
     ; --- row 0, the one row the loop above does not fold -------------------
     ; Row 0 is the UI task's remainder (callbacks have already been debited
-    ; off it).
-    mov ax, [tm_tdif]
-    mov [tm_rcyc], ax
-    mov ax, [tm_tdif+2]
-    mov [tm_rcyc+2], ax
-
-    ; ...AND THE IDLE TASK, into the same row (SPEC.md 28.7). It owns no
-    ; instance, so it belongs to no application, and a machine that is 97%
+    ; off it) - AND THE IDLE TASK, into the same row (SPEC.md 28.7). It owns
+    ; no instance, so it belongs to no application, and a machine that is 97%
     ; idle reads as a System row of 97% - which is what the older Windows
     ; Task Manager shows and what a reader expects. Kept in tm_idlec as well
     ; because it is the load meter's numerator, and the meter's denominator
     ; has to be this same total or the two can disagree again.
     xor ax, ax
-    mov [tm_idlec], ax
-    mov [tm_idlec+2], ax
+    cwd
     mov bl, [tm_idle]
     cmp bl, MAX_TASKS           ; 0xFF when no slot answered to state 3
     jae .noidle
@@ -1951,54 +1963,51 @@ tm_sample:
     shl bx, 1
     mov ax, [tm_tdif+bx]
     mov dx, [tm_tdif+bx+2]
+.noidle:
     mov [tm_idlec], ax
     mov [tm_idlec+2], dx
-    add [tm_rcyc], ax
-    adc [tm_rcyc+2], dx
-.noidle:
+    add ax, [tm_tdif]
+    adc dx, [tm_tdif+2]
+    mov [tm_rcyc], ax
+    mov [tm_rcyc+2], dx
 
-
-    xor ax, ax                  ; total = sum of the rows, so the shares of
-    mov [tm_total], ax          ; a fully accounted system add up to 100
-    mov [tm_total+2], ax
+    ; total = sum of the rows, so the shares of a fully accounted system add
+    ; up to 100. In DI:CX rather than in memory: it is summed, normalised and
+    ; read here and nowhere else.
+    xor cx, cx
+    xor di, di
     xor bx, bx
 .tsum:
-    mov ax, [tm_rcyc+bx]
-    mov dx, [tm_rcyc+bx+2]
-    add [tm_total], ax
-    adc [tm_total+2], dx
+    add cx, [tm_rcyc+bx]
+    adc di, [tm_rcyc+bx+2]
     add bx, 4
     cmp bx, TM_ROWS * 4
     jb .tsum
 
-    ; normalize: shift total and every row right until total fits 16 bits
+    ; normalize: how many right shifts bring the total into 16 bits. Every
+    ; row and the meter's numerator take the SAME count (tm_shn) - or the
+    ; shares are ratios of two different scales. It used to shift all
+    ; thirteen rows in MEMORY once per bit, four bits on any machine a 9-tick
+    ; interval holds ~590,000 PIT cycles of; the count is shifted in
+    ; registers per row instead, which is fewer cycles and no second loop.
+    xor si, si
 .tnorm:
-    cmp word [tm_total+2], 0
-    je .tnormed
-    shr word [tm_total+2], 1
-    rcr word [tm_total], 1
-    shr word [tm_idlec+2], 1    ; the meter's numerator rides the SAME shift,
-    rcr word [tm_idlec], 1      ; or it is a ratio of two different scales
-    xor bx, bx
-.tshr:
-    shr word [tm_rcyc+bx+2], 1
-    rcr word [tm_rcyc+bx], 1
-    add bx, 4
-    cmp bx, TM_ROWS * 4
-    jb .tshr
-    jmp .tnorm
+    or di, di
+    jz .tnormed
+    shr di, 1
+    rcr cx, 1
+    inc si
+    jmp short .tnorm
 .tnormed:
 
     ; share_i = row_i*100/total; total 0 -> all 0; clamp keeps DIV safe
     xor bx, bx
     mov di, tm_pct
-    mov cx, [tm_total]
 .pct:
     mov ax, [tm_rcyc+bx]
     mov dx, [tm_rcyc+bx+2]
-    call tm_share
-    mov [di], al
-    inc di
+    call tm_shn
+    stosb                       ; ES = DS (TM_ES_DATA)
     add bx, 4
     cmp bx, TM_ROWS * 4
     jb .pct
@@ -2016,17 +2025,17 @@ tm_sample:
     jcxz .loadok
     mov ax, [tm_idlec]
     mov dx, [tm_idlec+2]
-    call tm_share               ; AX = idle%...
+    call tm_shn                 ; AX = idle%...
     neg ax
     add ax, 100                 ; ...and the load is the rest
 .loadok:
     mov [tm_load], ax
 
     ; --- history push: v = load*TM_GH/100, sweep index advances -------------
-    mov cx, TM_GH
-    mul cx
-    mov cx, 100
-    div cx                      ; AX = 0..TM_GH
+    mov cl, TM_GH               ; byte arithmetic: load <= 100, so load*TM_GH
+    mul cl                      ; is 4,000 at most and the quotient fits AL
+    mov cl, 100
+    div cl                      ; AL = 0..TM_GH
     mov bx, [tm_pos]
     mov [tm_hist+bx], al
     mov [tm_lastcol], bx
@@ -2056,10 +2065,18 @@ tm_sample:
     ; accounting for 132 - the missing 63 being the DirRead window, which
     ; belongs to no instance and so appears in no column. The map below still
     ; DRAWS it: a map is about addresses, and a cache occupies a real one.
-    mov ax, [tm_kb+SK_KERN]     ; the WHOLE kernel (SPEC.md 2): image,
-                                ; scratch, FAT snapshot, disk buffers and
-                                ; every task stack are one contiguous span,
-                                ; and there is no growth room in it to bill
+    ;
+    ; AND THE LOW 1.5K: the IVT, the BIOS data area and the page at 0500, which
+    ; are below KERNEL_SEG and so neither the kernel's nor the heap's. They
+    ; were in no figure on this page, so RAM's free half came out a KB or two
+    ; over the heap's free half on every machine. So the fixed half is TAKEN
+    ; rather than built: everything that is not the heap is IVT+Pad + System,
+    ; and that is the total less the heap's size (SPEC.md 28.4.7)
+    mov ax, [tm_totkb]          ; int 12h's total, less the claim heap: the
+    sub ax, [tm_kb+SK_HEAP]     ; WHOLE kernel (SPEC.md 2) - image, scratch,
+                                ; FAT snapshot, disk buffers and every task
+                                ; stack, one contiguous span with no growth
+                                ; room in it to bill - and the IVT+BDA under it
     add ax, [tm_kb+SK_CLAIM]    ; + everything claimed out of the heap
                                 ; (SPEC.md 50): the clipboard while it is
                                 ; armed, the menu save-under while a menu is
@@ -2072,15 +2089,7 @@ tm_sample:
     mov cx, [tm_totkb]          ; barw = usedK*TM_GW/totalK (all KB)
     call tm_scale
     mov [tm_barw], ax
-
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp tm_pop_edsdcba
 
 ; -----------------------------------------------------------------------------
 ; tm_dif - one 32-bit cycle counter's interval delta, and the counter banked
@@ -2090,7 +2099,9 @@ tm_sample:
 ;      a slot reused mid-interval, a rare PIT stamp race, or a task_debit
 ;      that reached back into the previous interval - a wrapped "huge" diff
 ;      would clamp rows to 100%) or the slot APPEARED (free last sample, used
-;      now: its counter was reset at spawn, so the diff is meaningless)
+;      now: its counter was reset at spawn, so the diff is meaningless);
+;      SI and DI each advanced by 4 (the counter's MOVSW bank)
+; in:  ES = DS
 ; clobbers: nothing else
 ; -----------------------------------------------------------------------------
 tm_dif:
@@ -2098,10 +2109,8 @@ tm_dif:
     mov dx, [si+2]
     sub ax, [di]                ; wrap-safe 32-bit difference
     sbb dx, [di+2]
-    push word [si]              ; bank the new value; push/pop leave the
-    pop word [di]               ; flags the sbb set
-    push word [si+2]
-    pop word [di+2]
+    movsw                       ; bank the new value; MOVSW leaves the flags
+    movsw                       ; the sbb set (ES = DS: tm_sample's TM_ES_DATA)
     js .zero
     or cl, cl                   ; appeared-slot rule (SPEC.md 28)
     jnz .keep
@@ -2113,6 +2122,20 @@ tm_dif:
 .keep:
     ret
 
+; tm_shn - tm_share of DX:AX shifted right SI places first: tm_sample's
+;          normalisation, applied per row (SI = the total's shift count)
+; out: AX; clobbers DX
+tm_shn:
+    push si
+.sh:
+    dec si
+    js .go
+    shr dx, 1
+    rcr ax, 1
+    jmp short .sh
+.go:
+    pop si
+                                ; ...and on into tm_share
 ; tm_share - DX:AX's share of CX in percent: 0..100, clamped (a pathological
 ;            part over the total reads 100), and 0 when CX is 0. CX is the
 ;            normalised total, so the divide below cannot overflow
@@ -2339,19 +2362,19 @@ tm_clear_content:
     push bx
     push cx
     push dx
+    TM_INKX CWHITE              ; first: AX is not ours yet
     mov bx, si
     call OSAPI_WM_CONTENT       ; AX = content left, DX = content top
-    push ax
-    mov ax, [es:bx+W_Y]
-    add ax, [es:bx+W_H]
-    sub ax, 2
     mov cx, [es:bx+W_X]
     add cx, [es:bx+W_W]
-    sub cx, 2
-    mov bx, dx
-    mov dx, ax
-    pop ax
-    TM_INK CWHITE
+    dec cx
+    dec cx
+    push dx
+    mov dx, [es:bx+W_Y]
+    add dx, [es:bx+W_H]
+    dec dx
+    dec dx
+    pop bx                      ; BX = content top
     call OSAPI_GFX_FILL
     jmp tm_pop_dcba
 
@@ -2487,6 +2510,7 @@ tm_dmg_hit:
     push ax
     push bx
     push cx
+    push dx
     mov ax, [tm_rowy]
     cmp ax, [tm_dmg+6]
     ja .no                      ; the row starts below the damage
@@ -2496,8 +2520,9 @@ tm_dmg_hit:
     mov ax, [tm_ci]             ; --- x1, and a chunk's band is not always its
     mov cl, TM_CW               ; own text: 5 chunks of 40px, so AL is the
     mul cl                      ; whole of the multiply
-    mov bx, ax
+    mov bx, ax                  ; BX = i * TM_CW, kept for x2
     add ax, [tm_penx]
+    mov dx, ax                  ; DX = the chunk's pen x, kept for x2
     or bx, bx
     jnz .x1
     mov ax, [tm_rowx]           ; CHUNK 0 OWNS THE LEAD-IN, here as in the
@@ -2506,22 +2531,18 @@ tm_dmg_hit:
     cmp ax, [tm_dmg+4]          ; legend square, and this is the chunk that
     ja .no                      ; has to put it back - test from the pen and
                                 ; it is erased until the row's key moves
-    mov ax, [tm_ci]             ; --- x2
-    inc ax
-    cmp ax, TM_NCHUNK
+    cmp bx, (TM_NCHUNK - 1) * TM_CW     ; --- x2
     jae .yes                    ; THE LAST CHUNK HAS NO RIGHT EDGE to test:
-    mov cl, TM_CW               ; tm_rowr runs it on to the row's own, so it
-    mul cl                      ; owns the tail past the text and damage out
-    add ax, [tm_penx]           ; there is still its to repair
-    dec ax
-    cmp ax, [tm_dmg+0]
-    jb .no
+    add dx, TM_CW - 1           ; tm_rowr runs it on to the row's own, so it
+    cmp dx, [tm_dmg+0]          ; owns the tail past the text and damage out
+    jb .no                      ; there is still its to repair
 .yes:
     clc
     jmp short .out
 .no:
     stc
 .out:
+    pop dx
     pop cx
     pop bx
     pop ax
@@ -2648,28 +2669,25 @@ tm_view_begin:
 ; in:       nothing
 ; out:      nothing (all registers preserved)
 ;
-; TWO spans, not one. This used to zero tm_elck and tm_rowck as a single run
-; on the strength of a comment saying they were declared adjacent - and they
-; were not: five unrelated words had drifted in between, so the run stopped
-; five words short and the LAST rows of tm_rowck were never invalidated at
-; all. Harmless while those were the memory list's two bottom rows, which are
-; empty on any machine that fits its instances; fatal the moment the CPU
-; caption became the last row, because a view switch then white-filled the
-; content and left four fifths of 'CPU nnn% SCH preempt' recorded as drawn.
-; An address and a count each, so the layout cannot say otherwise again.
+; ONE span again, and this time the ASSEMBLER says so. It used to zero
+; tm_elck and tm_rowck as a single run on the strength of a comment saying
+; they were declared adjacent - and they were not: five unrelated words had
+; drifted in between, so the run stopped five words short and the LAST rows
+; of tm_rowck were never invalidated at all. Harmless while those were the
+; memory list's two bottom rows, which are empty on any machine that fits
+; its instances; fatal the moment the CPU caption became the last row,
+; because a view switch then white-filled the content and left four fifths
+; of 'CPU nnn% SCH preempt' recorded as drawn. That was answered with two
+; spans; apps size pass 2 makes it one again by DEFINITION - the bss chain
+; says `tm_rowck equ tm_elck + TMC_N * 2`, so nothing can drift in between
+; without rewriting that line - which is the same guarantee for half the code.
 ; -----------------------------------------------------------------------------
 tm_rowck_clear:
     push bx
     push cx
     mov bx, tm_elck
-    mov cx, TMC_N
-    call tm_ckz
-    mov bx, tm_rowck
-    mov cx, TM_NCK * TM_NCHUNK
-    call tm_ckz
-    pop cx
-    pop bx
-    ret
+    mov cx, TMC_N + TM_NCK * TM_NCHUNK
+    jmp short tm_ckz.z
 
 ; tm_ckz - zero CX check words at BX (all registers preserved)
 tm_ckz:
@@ -2750,7 +2768,7 @@ tm_frame:
     push bx
     push cx
     push dx
-    TM_INK CBLACK
+    TM_INKX CBLACK
     mov ax, [tm_cy]
     mov bx, ax
     add bx, cx
@@ -2773,10 +2791,10 @@ tm_hdrs:
     push bx
     push cx
     push dx
-    TM_INK CBLACK
     mov cx, [tm_cx]
-    add cx, ax
+    add cx, ax                  ; the pen's x is AX's last use...
     add dx, [tm_cy]
+    TM_INKX CBLACK              ; ...so the pen may take AL after it
     mov bx, [tm_cols]
     mov ax, (CWHITE << 8) | CBLACK
 .hdr:
@@ -2790,9 +2808,12 @@ tm_hdrs:
     jmp short tm_pop_dcba
 
 ; THE SHARED EPILOGUE LADDER: a routine that pushed AX..DX (and SI, and DI)
-; in that order jumps here instead of carrying its own pops. Only routines
+; in that order (and ES last, for tm_sample) jumps here instead of carrying
+; its own pops. Only routines
 ; that run once a refresh or less take it - never one called per row or per
 ; chunk, where the jump's few cycles would be paid dozens of times over.
+tm_pop_edsdcba:
+    pop es
 tm_pop_dsdcba:
     pop di
 tm_pop_sdcba:
@@ -2879,11 +2900,11 @@ tm_click:
     jb .vset                    ; navigation a third page needs - no tabs, no
     xor al, al                  ; chrome, no second hit-test
 .vset:
-    mov [tm_view], al
-    mov byte [tm_slow], 0       ; ...and the slow count starts over, so the
-                                ; first unattended refresh of a page arrives
-                                ; one interval after it opened rather than up
-                                ; to TM_SLOW of them (SPEC.md 28.6)
+    cbw                         ; AH = 0: tm_slow is the byte after tm_view,
+    mov [tm_view], ax           ; so the slow count starts over in the same
+                                ; store, and the first unattended refresh of
+                                ; a page arrives one interval after it opened
+                                ; rather than up to TM_SLOW of them (28.6)
     call tm_clear_content       ; SI = window ptr; the ONLY thing that erases
     call tm_draw_full           ; the outgoing view (SPEC.md 28.10)
     call tm_promise             ; ...and WHICH page it is now decides whether
@@ -2931,26 +2952,21 @@ tm_hscroll:
     jnz .page                   ; a frame with one row on it still pages by
     inc cx                      ; one, or the bar would have an inert half
 .page:
-    cmp al, OS88UI_SBUP
-    je .up
-    cmp al, OS88UI_SBDOWN
-    je .down
+    cmp al, OS88UI_SBDOWN       ; an ARROW moves one row, the track a page
+    ja .step
+    mov cx, 1
+.step:
+    cmp al, OS88UI_SBUP         ; UP and PGUP go back; DOWN, PGDN and the
+    je .back                    ; THUMB (which pages the way it lies) go on
     cmp al, OS88UI_SBPGUP
-    je .pgup
-    add dx, cx                  ; PGDN, and the THUMB pages the way it lies
-    jmp short .set
-.pgup:
+    jne .on
+.back:
     sub dx, cx
     jnc .set
-    xor dx, dx                  ; ...which is the only place this can wrap
-    jmp short .set
-.up:
-    or dx, dx
-    jz .set                     ; already at the top: a dec would wrap, and
-    dec dx                      ; the compare below turns it into an end stop
-    jmp short .set
-.down:
-    inc dx
+    xor dx, dx                  ; ...the only place this can wrap: the top is
+    jmp short .set              ; an end stop the compare below turns into a
+.on:                            ; repaint of nothing
+    add dx, cx
 .set:
     mov [tm_htop], dx
     call tm_hclamp              ; ...and the bottom end stop, which is the one
@@ -3067,40 +3083,36 @@ tm_cap_xms:
     push si
     push di
 
-    call OSAPI_XMEM_CAPS                ; AX = KB still free, SK_XMS = the whole pool
-    mov bx, [tm_kb+SK_XMS]
-    neg ax
-    add ax, bx                  ; AX = KB in use: sized minus free
-    push ax                     ; --- the bar's width, worked out HERE, while
-    push bx                     ; AX and BX still hold used and sized; the
-    mov cx, bx                  ; pair rides the stack to the figures below
-    call tm_scale               ; (no pool: an empty bar, not an absent one)
-    mov [tm_xbarw], ax
-
     mov di, tm_str
     mov si, tm_s_cpu            ; 'CPU ' + the tier, ahead of the XMS figures:
     call tm_copy                ; the two belong together, because the tier is
     mov si, tm_s_t86            ; exactly what decides whether there can BE any
-    push ax
-    call OSAPI_CPU_INFO               ; AL = the tier (SPEC.md 41.1)
-    cmp al, CPU_286
-    pop ax
+    call OSAPI_CPU_INFO         ; AL = the tier (SPEC.md 41.1) - asked FIRST,
+    cmp al, CPU_286             ; while AX is still nobody's
     jb .tier
     mov si, tm_s_t286
     je .tier
     mov si, tm_s_t386
 .tier:
     call tm_copy
-    cmp word [tm_xoff], 0       ; no store above 1MB: the line is the TIER and
-    je .figs                    ; nothing else. 'XMS 0/ 0K' is the same empty
-    pop bx                      ; statement the bar was making, and the tier is
-    pop ax                      ; what makes the absence legible - 'CPU 8086'
-    jmp short .term             ; IS the reason there is none (SPEC.md 60.2)
-.figs:
-    mov si, tm_s_xms
-    call tm_copy
-    pop bx                      ; BX = total, AX = used
+
+    call OSAPI_XMEM_CAPS                ; AX = KB still free, SK_XMS = the whole pool
+    mov bx, [tm_kb+SK_XMS]
+    neg ax
+    add ax, bx                  ; AX = KB in use: sized minus free
+    push ax                     ; --- the bar's width, worked out HERE, while
+    mov cx, bx                  ; AX and BX still hold used and sized (BX
+    call tm_scale               ; survives tm_scale; AX rides the stack). No
+    mov [tm_xbarw], ax          ; pool: an empty bar, not an absent one
     pop ax
+
+    cmp word [tm_xoff], 0       ; no store above 1MB: the line is the TIER and
+    jne .term                   ; nothing else. 'XMS 0/ 0K' is the same empty
+                                ; statement the bar was making, and the tier is
+                                ; what makes the absence legible - 'CPU 8086'
+                                ; IS the reason there is none (SPEC.md 60.2)
+    mov si, tm_s_xms
+    call tm_copy                ; BX = total, AX = used
     call tm_put5                ; FIVE digits, not tm_kpair's three: AH=88h
     mov byte [di], '/'          ; answers up to 65,535 KB and tm_put3 emits a
     inc di                      ; non-digit above 999. Every other figure in
@@ -3189,7 +3201,7 @@ tm_map_ram:
     call tm_elchk_y
     jc .out
 
-    TM_INK CWHITE
+    TM_INKX CWHITE
     xor ax, ax                  ; whole interior white first
     mov cx, TM_GW - 1
     mov bx, TMM_M1_Y1
@@ -3226,6 +3238,12 @@ tm_map_ram:
     ; cannot say where one claim stops and the next starts at that size; a
     ; 1px rule can, and gfx_frame degenerates gracefully: a one-column claim
     ; comes out as a solid vertical line, which is what it should look like.
+    ;
+    ; THE PEN IS SET ONCE, before the walk and not per claim: FILL_PAT
+    ; ignores the pen (it writes only 0/15), and FILL_GRAY above does too, so
+    ; nothing between two frames can move it. One far call where there were
+    ; as many as there are claims.
+    TM_INKX CBLACK              ; the claims' hard black frames
     mov di, tm_claims
 .claim:
     mov dx, [di+CLS_SEG]
@@ -3241,8 +3259,7 @@ tm_map_ram:
     call tm_band
     mov si, tm_pat_clm          ; light interior...
     TM_FILL_PAT
-    TM_INK CBLACK               ; ...hard black frame
-    call OSAPI_GFX_FRAME
+    call OSAPI_GFX_FRAME        ; ...hard black frame
 .cnext:
     add di, CLS_RECSZ
     cmp di, tm_claims + CLAIM_SNAPSHOT_SIZE
@@ -3390,28 +3407,18 @@ tm_rows_mem:
     ; at 4K a pixel on a 640K machine it is not a band of its own anyway. A
     ; dash in HEAP, as the buffer rows have - it is not a claim.
     call tm_mrow_open
-    mov si, tm_s_low
-    call tm_copy
-    mov byte [di], ' '          ; the HEAP column's own gap (tm_s_mhdr)
-    inc di
-    mov si, tm_s_dash5
+    mov si, tm_s_low            ; one constant, HEAP column and all
     call tm_copy
     call tm_mrow_close
 
     ; --- row 1: the kernel's fixed reservation --------------------------------
     call tm_mrow_open
-    mov si, tm_s_sys
-    call tm_copy7
-    mov byte [di], ' '          ; row 0 has no indent, so it pays BOTH of the
-    inc di                      ; NAME field's trailing columns here
+    mov si, tm_s_sys0           ; 'System', no indent, and where it starts:
+    call tm_copy                ; at the bottom of low memory
     mov byte [di], ' '
     inc di
-    mov si, tm_s_sys0           ; it starts at the bottom of low memory
-    call tm_copy
-    mov byte [di], ' '
-    inc di
-    mov ax, [tm_kb+SK_KERN]     ; the kernel, whole (SPEC.md 2)
-    call tm_kcol
+    call tm_sysk                ; the kernel, whole KB rounded down: IVT+Pad
+    call tm_kcol                ; above has its tail (SPEC.md 28.4.7)
     mov byte [di], ' '          ; the HEAP column's own gap (tm_s_mhdr)
     inc di
     mov ax, [tm_kb+SK_KCLAIM]   ; ...and the kernel's own heap claims, KB
@@ -3440,10 +3447,13 @@ tm_rows_mem:
     ; now and there are three rows. Neither fix touched this file's
     ; arithmetic, because there is none: the rows have read the published
     ; block since the window left the kernel.
+    call tm_sysk                ; ...and Code+data takes the half-KB System
+    xchg ax, cx                 ; gave IVT+Pad (SPEC.md 28.4.7), so the three
+    add cx, [tm_kb+SK_IMG]      ; still sum to the System row
+    sub cx, [tm_kb+SK_KERN]
     mov bx, tm_s_bimg           ; NO square: the image is drawn in the same
-    mov cx, [tm_kb+SK_IMG]      ; gray as the System row above it, and a
-    xor dx, dx                  ; square that repeats one is not a legend
-    call tm_buf_row
+    xor dx, dx                  ; gray as the System row above it, and a
+    call tm_buf_row             ; square that repeats one is not a legend
     mov bx, tm_s_bstk
     mov cx, [tm_kb+SK_STK]
     add cx, [tm_kb+SK_STK0]
@@ -3635,11 +3645,9 @@ tm_buf_row:
 .size:
     pop ax
     call tm_kcol
-    mov byte [di], ' '          ; the HEAP column's own gap (tm_s_mhdr)
-    inc di
     push si
-    mov si, tm_s_dash5          ; HEAP: a buffer is not a claim
-    call tm_copy
+    mov si, tm_s_dash6          ; HEAP, after its own gap (tm_s_mhdr): a
+    call tm_copy                ; buffer is not a claim
     pop si
     call tm_mrow_close
     jmp tm_pop_dsdcba
@@ -3948,6 +3956,19 @@ tm_put2:
     mov cx, 2
     jmp tm_putw
 
+; tm_kcnt - 'nnnK(nn)', NUL-terminated: the HELD/PURGE caption's two halves
+; in:  AX = KB, BX = records, DI = dest; out: DI -> the NUL; clobbers AX
+tm_kcnt:
+    call tm_put3
+    mov word [di], 'K('
+    inc di
+    inc di
+    mov ax, bx
+    call tm_put2
+    mov word [di], ')'          ; ')' and the NUL in one store
+    inc di
+    ret
+
 ; -----------------------------------------------------------------------------
 ; tm_hsplit - what is claimed, split by whether the kernel can take it back
 ; in:  the claim snapshot
@@ -4028,27 +4049,31 @@ tm_htype:
     mov si, tm_s_tregn
     jmp short .put
 .seg:
-    call tm_hdrv                ; only the claim table tells the two apart: a
-    jc .data                    ; driver's ring and a package's data claim both
-    mov si, tm_s_tdrvb          ; carry a bare segment, and labelling the ring
-    jmp short .put              ; 'Data' is 28.4.3's rule failing the one way
+    mov si, tm_s_tdrvb          ; only the claim table tells the two apart: a
+    call tm_hdrv                ; driver's ring and a package's data claim both
+    jnc .put                    ; carry a bare segment, and labelling the ring
+                                ; 'Data' is 28.4.3's rule failing the one way
                                 ; that leaves nothing on screen to notice
 .data:
     mov si, tm_s_tdata
     jmp short .put
-.kern:
+.kern:                          ; (each range's name is loaded BEFORE its
+                                ; test, so a hit goes straight to .put)
+    mov si, tm_s_twsav
     mov dx, ax                  ; the raise-cache RANGE first: one per window
     sub dx, MEM_P_WSAVE         ; slot (SPEC.md 11.96.3), so it is not in the
     cmp dx, MEM_P_WSAVE_N       ; exact-match table below
-    jb .wsave
+    jb .put
+    mov si, tm_s_tfatw
     mov dx, ax                  ; ...and the FAT windows, one per VOLUME, which
     sub dx, MEM_P_FATW          ; became a range when they became a cache
     cmp dx, MEM_P_FATW_N        ; (SPEC.md 18.8.4)
-    jb .fatw
+    jb .put
+    mov si, tm_s_tview
     mov dx, ax                  ; ...and a Disk window's LISTING cache, one per
     sub dx, MEM_P_VIEW          ; fm_pool slot, which became a range when it
     cmp dx, MEM_P_VIEW_N        ; became a cache on kern_small (SPEC.md 50.6.5).
-    jb .view                    ; On kern_big nothing is stamped with it and
+    jb .put                     ; On kern_big nothing is stamped with it and
                                 ; this compare simply never fires
     mov si, tm_ktab
 .scan:
@@ -4057,19 +4082,11 @@ tm_htype:
     jz .hex
     cmp dx, ax
     je .found
-    add si, 4
+    add si, TMK_REC
     jmp short .scan
 .found:
-    mov si, [si+2]
-    jmp short .put
-.wsave:
-    mov si, tm_s_twsav
-    jmp short .put
-.fatw:
-    mov si, tm_s_tfatw
-    jmp short .put
-.view:
-    mov si, tm_s_tview
+    inc si                      ; the name is the record's own tail
+    inc si
     jmp short .put
 .hex:
     call tm_put4x               ; AX is still the owner word
@@ -4106,7 +4123,7 @@ tm_htier:
     push bx
     push cx
     push si
-    mov si, tm_s_zno
+    mov si, tm_s_hheld          ; 'HELD'
     cmp ah, MEM_PG_MIN
     jb .put                     ; an instance's own: never a cache
     cmp ah, MEM_PG_MAX
@@ -4115,7 +4132,8 @@ tm_htier:
     sub bl, MEM_PG_MIN
     xor bh, bh
     shl bx, 1
-    mov si, [tm_ztab+bx]
+    shl bx, 1
+    lea si, [bx+tm_tiers]
 .put:
     mov cx, TMH_TIERC
     call tm_copyn
@@ -4130,10 +4148,19 @@ tm_htier:
 ; in:  SI = the name, AX = the group's KB
 ; out: nothing (all registers preserved); [tm_mrow] advanced
 ;
-; The pad is what puts the total in the SIZE column, on the same vertical rule
-; as every claim row under it - a heading is not a claim, so it fills neither
-; ADDR nor TIER.
+; The name's field is everything left of the SIZE column - indent, TYPE,
+; separator and ADDR, TMH_HNAMEC = 15 - which is what puts the total on the
+; same vertical rule as every claim row under it. A heading is not a claim,
+; so it fills neither ADDR nor TIER, and that is the room the name takes:
+; I_NAME is at most 15 characters (kernel/instance.inc), so every owner name
+; is shown WHOLE. It was cut at seven ('CALCULA') for as long as this page
+; existed (SPEC.md 28.12.2). tm_kcol's own leading space is the separator,
+; so even a fifteen-character name keeps a cell clear of the figure.
 ; -----------------------------------------------------------------------------
+TMH_HNAMEC  equ TMH_IND + TMH_TYPEC + 1 + 4
+%if TMH_HNAMEC < 15
+  %error "taskmgr: a heading can no longer show a whole 15-character I_NAME"
+%endif
 tm_hhead:
     push ax
     push cx
@@ -4142,12 +4169,8 @@ tm_hhead:
     call tm_mrow_nolast         ; ...never at the foot of a column, where the
                                 ; rows it heads are in the next one
     call tm_mrow_open
-    call tm_copy7
-    mov cx, TMH_IND + TMH_TYPEC + 1 + 4 - 7
-.pad:
-    mov byte [di], ' '
-    inc di
-    loop .pad
+    mov cx, TMH_HNAMEC
+    call tm_copyn               ; space-padded to the SIZE column
     call tm_kcol
     call tm_mrow_close
     pop si
@@ -4177,10 +4200,10 @@ tm_hclaim:
     mov bx, [si+CLS_SEG]
     call tm_htype
     mov byte [di], ' '          ; the separator, and it is NOT decoration: a
-    inc di                      ; type that uses all seven columns - DirRead,
-                                ; Clipbrd, CopyBuf, MenuSav, WinSave - runs
-                                ; straight into the segment without it, which
-                                ; is 'DirRead2000'. The memory list learned
+    inc di                      ; type that uses all eight columns - Compress,
+                                ; Shortcut, Disk img - runs straight into the
+                                ; segment without it, which is
+                                ; 'Shortcut2000'. The memory list learned
                                 ; this the same way, with 'ARKANOI9E40'
     mov ax, [si+CLS_SEG]
     call tm_put4x
@@ -4357,35 +4380,27 @@ tm_hclamp:
 tm_hsbset:
     push ax
     push dx
-    mov ax, [tm_cols]           ; x2 = the last column's own right edge...
-    dec ax
-    mov dx, TM_COLW
-    mul dx
-    add ax, [tm_cx]
+    mov ax, [tm_cx]             ; x2 = the last column's own right edge...
     add ax, TM_RW
+    mov dx, [tm_cy]             ; y1 = that column's FIRST ROW: column 0 sits
+    add dx, TMH_ROW_Y           ; under two caption lines and a header, every
+    cmp word [tm_cols], 1       ; later one at the top of the content. ONE or
+    je .one                     ; TWO columns (tm_layout), so the second is a
+    add ax, TM_COLW             ; constant step on both axes and not a multiply
+    add dx, TM_C2_ROW_Y - TMH_ROW_Y
+.one:
     mov [tm_hsb+4], ax
     sub ax, TMH_SB_W - 1        ; ...and the bar is its rightmost TMH_SB_W
     mov [tm_hsb], ax
-
-    mov ax, [tm_cy]             ; y1 = that column's FIRST ROW: column 0 sits
-    cmp word [tm_cols], 1       ; under two caption lines and a header, every
-    je .y1                      ; later one at the top of the content
-    add ax, TM_C2_ROW_Y
-    jmp short .y1set
-.y1:
-    add ax, TMH_ROW_Y
-.y1set:
-    mov [tm_hsb+2], ax
+    mov [tm_hsb+2], dx
     mov ax, [tm_ylim]           ; y2 = the bottom of the lowest row band the
     add ax, 7                   ; frame holds, which is one pixel clear of the
     mov [tm_hsb+6], ax          ; frame's own bottom border
 
-    mov ax, [tm_hrows]
-    mov [tm_hsb+8], ax          ; total
-    mov ax, [tm_maxrow]
-    mov [tm_hsb+10], ax         ; fit
-    mov ax, [tm_htop]
-    mov [tm_hsb+12], ax         ; pos
+                                ; total and fit ARE [tm_hrows] and [tm_maxrow]
+                                ; (they live in this block), so only pos is
+    mov ax, [tm_htop]           ; copied - it must stay the value the last
+    mov [tm_hsb+12], ax         ; paint drew from, for tm_hscroll
     pop dx
     pop ax
     ret
@@ -4456,9 +4471,7 @@ tm_cap_heap:
     call tm_copy
     mov ax, [tm_avl]
     call tm_put3
-    mov byte [di], 'K'
-    inc di
-    mov byte [di], 0
+    mov word [di], 'K'          ; 'K' and the NUL in one store
 
     mov bx, tm_elck + 2*TMC_HTOT
     mov ax, TMH_TOT_Y
@@ -4482,36 +4495,15 @@ tm_cap_heap:
 .cap_hspl:
 
     call tm_hsplit              ; AX/BX = held KB and records, DX/CX = the
-    push dx                     ; purgeable pair
-    push cx
-    push bx
-    mov di, tm_str
-    mov si, tm_s_hheld
+    mov di, tm_str              ; purgeable pair - and nothing below touches
+    mov si, tm_s_hheld          ; DX or CX, so the pair needs no banking
     call tm_copy
-    call tm_put3
-    mov byte [di], 'K'
-    inc di
-    mov byte [di], '('
-    inc di
-    pop ax                      ; held records
-    call tm_put2                ; two columns, so PURGE below cannot move
-    mov byte [di], ')'
-    inc di
-    mov si, tm_s_hpurg
+    call tm_kcnt                ; 'nnnK(nn)': two record columns, so PURGE
+    mov si, tm_s_hpurg          ; cannot move
     call tm_copy
-    pop cx                      ; purgeable records, banked across the KB
-    pop ax                      ; purgeable KB
-    push cx
-    call tm_put3
-    mov byte [di], 'K'
-    inc di
-    mov byte [di], '('
-    inc di
-    pop ax
-    call tm_put2                ; ...and so the line is one fixed width
-    mov byte [di], ')'
-    inc di
-    mov byte [di], 0
+    xchg ax, dx
+    mov bx, cx
+    call tm_kcnt                ; ...and so the line is one fixed width
 
     mov bx, tm_elck + 2*TMC_HSPL
     mov ax, TMH_SPL_Y
@@ -4549,9 +4541,7 @@ tm_cap_heap:
     xor ax, ax                  ; so this cannot go negative - but a wrong 0
 .frag:                          ; beats a wrong 65,000 if it ever does
     call tm_put3
-    mov byte [di], 'K'
-    inc di
-    mov byte [di], 0
+    mov word [di], 'K'          ; 'K' and the NUL in one store
 
     mov bx, tm_elck + 2*TMC_HFRG
     mov ax, TMH_FRG_Y
@@ -4670,12 +4660,9 @@ tm_row_place:
     jmp short .nofit            ; an index this page has no column for - and the
 .col:                           ; row then went a TM_COLW past the frame's right
                                 ; edge, onto the desktop, which nothing clips
-    push dx                     ; DX is the row within the column and `mul`
-    mov bx, ax                  ; writes it - it does not survive this
-    mov ax, TM_COLW
-    mul bx
-    pop dx
-    add cx, ax
+    add cx, TM_COLW             ; ...and it can only be column 1: tm_layout
+                                ; makes ONE or TWO, so this is a step and
+                                ; not a multiply (DX = the row within it)
     mov bx, TM_C2_ROW_Y         ; top-anchored, whatever column 0 does
     mov ax, dx
 .place:
@@ -4971,27 +4958,19 @@ tm_lrun:
     call tm_rowok
     jc .out
 
-    mov di, tm_str              ; pad to the band's width, in place
-    xor cx, cx
-.len:
-    cmp byte [di], 0
-    je .lend
-    inc di
-    inc cx
-    cmp cx, TM_LCELLS
-    jb .len
-.lend:
-    mov ax, TM_LCELLS
-    sub ax, cx                  ; ...however many spaces that takes
-    jbe .term                   ; already the full width, or over it
-    mov cx, ax
-    mov al, ' '
-.sp:
-    mov [di], al
-    inc di
-    loop .sp
-.term:
-    mov byte [di], 0
+    push es                     ; pad to the band's width, in place - with
+    push ds                     ; the string instructions, as tm_row_draw
+    pop es                      ; pads a row (ES = our segment for them)
+    mov di, tm_str
+    mov cx, TM_LCELLS + 1
+    xor al, al
+    repne scasb                 ; DI just past the NUL (every line is at most
+    dec di                      ; TM_LCELLS: the guards at TM_STRMAX), back
+    inc cx                      ; onto it; CX >= 1 cells from there to the
+    mov al, ' '                 ; band's end, inclusive
+    rep stosb
+    mov byte [tm_str + TM_LCELLS], 0
+    pop es
 
     mov cx, [tm_cx]
     add cx, TM_PEN
@@ -5037,8 +5016,9 @@ tm_row_draw:
     push dx
     push si
     push di
-    push es
-    push ds
+    push bp                     ; BORROWED, and given back below: BP counts
+    push es                     ; the chunks drawn, which rode the stack in
+    push ds                     ; SI before - three pushes and pops a chunk
     pop es
 
     mov di, tm_str              ; pad to TM_NCHUNK*TM_CHUNK with SPACES, and
@@ -5047,9 +5027,8 @@ tm_row_draw:
     cld
     repne scasb                 ; DI just past the NUL, CX = bytes after it
     dec di                      ; ...back ONTO it: the pad overwrites it
-    inc cx
-    jcxz .padded
-    mov al, ' '                 ; SPACES, not zeros. font_run paints a space
+    inc cx                      ; (>= 1: a row is at most the span, so the
+    mov al, ' '                 ; NUL is found) SPACES, not zeros. font_run paints a space
     rep stosb                   ; as background on its fast path (the glyph's
                                 ; rows are all clear, so the mask leaves the
                                 ; background byte) - which is exactly the
@@ -5065,17 +5044,14 @@ tm_row_draw:
     add ax, tm_rowck
     mov [tm_ckb], ax            ; &tm_rowck[row][0], stepped a chunk at a time
     mov word [tm_ci], 0
-    xor si, si                  ; SI = 0: nothing drawn yet
-
+    xor bp, bp                  ; BP = 0: nothing drawn yet
+    mov di, tm_str              ; DI -> this chunk's characters, stepped by
+                                ; TM_CHUNK below rather than multiplied out
 .chunk:
-    push si                     ; the "drew something" flag rides the stack
-    mov si, [tm_ci]
-    mov ax, si
-    mov cl, TM_CHUNK
-    mul cl
-    add ax, tm_str              ; AX -> this chunk's characters
-    mov di, ax
-    call tm_chunksum            ; AX = their hash (DI preserved)
+    mov si, di                  ; the chunk's hash, which is all tm_chunksum
+    mov cx, TM_CHUNK            ; was: tm_sumb over a counted span
+    xor ax, ax
+    call tm_sumb                ; AX = their hash
     mov bx, [tm_ckb]
     call tm_elchk               ; changed? (BX = this chunk's check word)
     jnc .draw
@@ -5084,9 +5060,8 @@ tm_row_draw:
 .draw:
     call tm_row_lead            ; the FIRST chunk owns the band's LEAD-IN too
     jc .rect                    ; - and erasing it counts as a draw, because
-    pop si                      ; the legend square lives in it and the caller
-    inc si                      ; has to know to put it back
-    push si
+    inc bp                      ; the legend square lives in it and the caller
+                                ; has to know to put it back
 .rect:
     mov ax, [tm_ci]             ; the chunk's band: [penx + i*TM_CW, +TM_CW)
     mov cl, TM_CW
@@ -5111,34 +5086,31 @@ tm_row_draw:
                                 ; drawn WHOLE, which is whether its check word
                                 ; may be believed next time
 
-    push ax                     ; --- the chunk, as ONE opaque run ----------
-    push cx
-    push dx
+                                ; --- the chunk, as ONE opaque run ----------
+                                ; AX..DX are dead after it: everything below
+                                ; reloads what it uses, so nothing is saved
     mov cx, ax                  ; x
     mov dx, [tm_rowy]           ; y
     mov si, di                  ; DI -> this chunk's TM_CHUNK characters
-    mov bx, si                  ; terminate at the chunk's end and put the
-    add bx, TM_CHUNK            ; byte back after: the row is one 25-character
+    lea bx, [di+TM_CHUNK]       ; terminate at the chunk's end and put the
+                                ; byte back after: the row is one 25-character
     mov ah, [bx]                ; string and font_run runs to a NUL. The
     mov byte [bx], 0            ; buffer has room for the last chunk's, which
-    push bx                     ; lands on tm_str[25] of TM_STRMAX = 28
+                                ; lands on tm_str[25] of TM_STRMAX = 28
     push ax
     mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = background: the erase
                                 ; and the letters as one decision per cell
-    call OSAPI_FONT_RUN
+    call OSAPI_FONT_RUN         ; (preserves BX, the terminator's address)
     pop ax
-    pop bx
     mov [bx], ah
-    pop dx
-    pop cx
-    pop ax
 
     cmp word [tm_ci], TM_NCHUNK - 1     ; the LAST chunk owns the band's tail
     jne .gdone                          ; too - the pen is inset, so the row
-    push ax                             ; runs past the 25 cells and nothing
-    push bx                             ; else would scrub it
-    push cx
-    push dx
+                                        ; runs past the 25 cells and nothing
+                                        ; else would scrub it
+    TM_INKX CWHITE              ; before AX is the tail's x1. `ja .gdone`
+                                ; below is never taken at TM_PEN/TM_MPEN (the
+                                ; tail is at least a pixel on every page)
     mov ax, [tm_penx]
     add ax, TM_NCHUNK * TM_CW
     call tm_rowr
@@ -5146,32 +5118,25 @@ tm_row_draw:
     mov dx, bx                  ; run above left behind - terminating the
     add dx, 7                   ; chunk needed a register and BX was it
     cmp ax, cx
-    ja .tdone
-    TM_INK CWHITE
+    ja .gdone
     call OSAPI_GFX_FILL
-.tdone:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
 .gdone:
     popf
     jnc .kept
     mov bx, [tm_ckb]            ; an edge cut it, so some cell was skipped:
     mov word [bx], 0            ; forget the record and ask again next time
 .kept:
-    pop si
-    inc si                      ; something was drawn
-    push si
+    inc bp                      ; something was drawn
 .next:
-    pop si
+    add di, TM_CHUNK
     inc word [tm_ci]
     add word [tm_ckb], 2        ; the check word for the NEXT chunk
     cmp word [tm_ci], TM_NCHUNK
     jb .chunk
 
-    or si, si
+    or bp, bp
     pop es
+    pop bp
     pop di
     pop si
     pop dx
@@ -5247,55 +5212,27 @@ tm_row_lead:
     push bx
     push cx
     push dx
+    TM_INKX CWHITE              ; before AX is x1 (.none is never taken at
+                                ; TM_PEN/TM_MPEN, both wider than 6)
     mov ax, [tm_rowx]
     add ax, 6
     mov cx, [tm_penx]
     dec cx
     cmp cx, ax
     jb .none                    ; the pen IS the band's left edge: no lead-in
-    mov bx, [tm_rowy]
+    mov bx, [tm_rowy]           ; (CF=1 from the jb rides through the pops)
     mov dx, bx
     add dx, 7
-    TM_INK CWHITE
     call OSAPI_GFX_FILL
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     clc
-    ret
 .none:
     pop dx
     pop cx
     pop bx
     pop ax
+    ret
 .no:
     stc
-    ret
-
-; -----------------------------------------------------------------------------
-; tm_chunksum - one word standing for TM_CHUNK characters at DI
-; in:  DI -> the characters (already zero-padded by tm_row_draw)
-; out: AX = the hash; DI preserved
-; clobbers: AX (the output), flags
-; -----------------------------------------------------------------------------
-tm_chunksum:
-    push bx
-    push cx
-    push si
-    mov si, di
-    xor bx, bx
-    xor ah, ah
-    mov cx, TM_CHUNK
-.next:
-    lodsb
-    rol bx, 1
-    add bx, ax
-    loop .next
-    mov ax, bx
-    pop si
-    pop cx
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -5318,8 +5255,8 @@ tm_rowok:
     mov dx, bx
     add dx, 7
     mov ax, [tm_rowx]
+    mov cx, ax
     add ax, 6
-    mov cx, [tm_rowx]
     add cx, TM_RW
     call OSAPI_WM_CLIP_TEST
     pop dx
@@ -5365,13 +5302,13 @@ tm_rowsum:
     pop bx
     ret
 
-%ifdef TMF_MEM
 ; -----------------------------------------------------------------------------
 ; tm_sumb - the same hash over a COUNTED span, so it can key a table
 ; in:  SI = ptr, CX = bytes, AX = seed (0, or a previous result to chain)
 ; out: AX = the sum; SI advanced past the span, everything else preserved
 ;
-; What the maps are keyed on. A map's pixels are a function of one table -
+; What a row's CHUNKS are keyed on (tm_row_draw, seed 0 over TM_CHUNK bytes),
+; and what the maps are keyed on. A map's pixels are a function of one table -
 ; the conventional map of the claim map (SPEC.md 50), the pool map of the
 ; instance snapshot - so hashing the table answers "has this map changed"
 ; without drawing anything. Reading the claim table unlocked can tear against
@@ -5395,6 +5332,7 @@ tm_sumb:
     pop bx
     ret
 
+%ifdef TMF_MEM
 ; -----------------------------------------------------------------------------
 ; tm_qpeek - tm_elchk's answer WITHOUT recording it
 ; in:  AX = key, BX = a TMC_* check word's address
@@ -5490,7 +5428,7 @@ tm_sq_frame:
     push bx
     push cx
     push dx
-    TM_INK CBLACK
+    TM_INKX CBLACK
     mov ax, [tm_rowx]
     add ax, [tm_sqox]
     mov bx, [tm_rowy]
@@ -5618,6 +5556,7 @@ tm_gapcol:
     push bx
     push dx
 
+    TM_INKX CWHITE              ; first, while AX is still free
     mov ax, [tm_cx]
     add ax, 7
     add ax, bx
@@ -5625,7 +5564,6 @@ tm_gapcol:
     mov dx, bx
     add bx, TM_GF_Y1 + 1
     add dx, TM_GF_Y2 - 1
-    TM_INK CWHITE
     call OSAPI_GFX_VLINE
 
     pop dx
@@ -5669,7 +5607,7 @@ tm_grun:
 
     cmp di, TM_GH               ; white: rows TM_GF_Y1+1 .. TM_GF_Y2-1-v, and
     jae .black                  ; none of it for a full-height column
-    TM_INK CWHITE
+    TM_INKX CWHITE              ; AL is spent: v is in DI
     push bx
     mov ax, bx
     mov bx, si
@@ -5682,7 +5620,7 @@ tm_grun:
 .black:
     or di, di                   ; black: rows TM_GF_Y2-v .. TM_GF_Y2-1, and
     jz .done                    ; none of it for an empty one
-    TM_INK CBLACK
+    TM_INKX CBLACK
     mov ax, bx
     mov bx, si
     add bx, TM_GF_Y2
@@ -5731,24 +5669,22 @@ tm_graph:
 
     call tm_frame
 
-    mov si, [tm_cx]             ; --- the damaged span, clamped to the interior
-    add si, 7                   ; SI = the interior's first screen x
-    mov di, si
-    add di, TM_GW - 1           ; DI = ...and its last
-    mov ax, [tm_dmg+0]
-    cmp ax, si
+    mov ax, [tm_cx]             ; --- the damaged span, clamped to the interior
+    add ax, 7                   ; AX = the interior's first screen x, kept
+    mov si, ax                  ; SI = the span's first...
+    lea di, [si+TM_GW-1]        ; DI = ...and its last
+    mov dx, [tm_dmg+0]
+    cmp dx, si
     jbe .lo                     ; the damage starts left of us: from column 0
-    mov si, ax
+    mov si, dx
 .lo:
-    mov ax, [tm_dmg+4]
-    cmp ax, di
+    mov dx, [tm_dmg+4]
+    cmp dx, di
     jae .hi                     ; ...and runs past our right: to the last
-    mov di, ax
+    mov di, dx
 .hi:
     cmp si, di
     ja .done                    ; it crossed our band beside us, not over us
-    mov ax, [tm_cx]
-    add ax, 7
     sub si, ax                  ; SI = the first column owed
     sub di, ax                  ; DI = the last
 
@@ -5980,20 +5916,21 @@ tm_barfill:
     inc bx                      ; the interior's top row...
     mov dx, bx
     add dx, TM_BAR_Y2 - TM_BAR_Y1 - 2   ; ...and its bottom
-    mov ax, [tm_cx]
-    add ax, 7
-    or si, si
+    mov cx, [tm_cx]
+    add cx, 7                   ; CX = the interior's left, so AL is free for
+    or si, si                   ; the pen at both fills
     jz .rest
-    TM_INK CBLACK
-    mov cx, ax
+    TM_INKX CBLACK
+    mov ax, cx
     add cx, si
     dec cx                      ; x2 = 7 + barw - 1
     call OSAPI_GFX_FILL
+    inc cx                      ; CX = 7 + barw, the white run's x1
 .rest:
     cmp si, TM_GW
     jae .done
-    TM_INK CWHITE
-    add ax, si                  ; x1 = 7 + barw
+    TM_INKX CWHITE
+    mov ax, cx                  ; x1 = 7 + barw
     mov cx, [tm_cx]
     add cx, TM_RW - 1
     call OSAPI_GFX_FILL
@@ -6025,19 +5962,15 @@ tm_order:
 .pass:
     xor si, si
 .scan:
-    mov al, [tm_ist+si]
-    or al, al
-    jz .isfree
-    mov al, [tm_iknd+si]
-    and al, KIND_PKG
-    jz .isbuilt
-    mov al, 1
-    jmp short .cls
-.isbuilt:
-    xor al, al
-    jmp short .cls
-.isfree:
-    mov al, 2
+    mov al, 2                   ; free...
+    cmp byte [tm_ist+si], 0
+    je .cls
+    mov al, [tm_iknd+si]        ; ...else KIND_PKG, bit 7, as the class bit:
+    rol al, 1                   ; 1 a package, 0 a built-in
+    and al, 1
+%if KIND_PKG != 0x80
+  %error "taskmgr: tm_order rotates KIND_PKG down from bit 7"
+%endif
 .cls:
     cmp al, cl
     jne .next
@@ -6090,11 +6023,22 @@ tm_rows:
     ; were half a second ago - a free slot always is - and tm_rowsum below
     ; decides whether any of it is worth drawing.
     mov di, tm_str
-    or si, si
-    jnz .inst
+    mov bx, si                  ; BX = the LOGICAL row: a screen too short for
+    call tm_pshort              ; every row has no IVT+Pad row, and System
+    adc bx, 0                   ; carries its 2K instead (SPEC.md 28.4.7)
+    cmp bx, 1
+    ja .inst
+    je .sys
 
-    ; row 0: the kernel - task 0 minus everything debited to an instance
+    ; row 0: IVT+Pad, one constant (SPEC.md 28.4.7)
     push si
+    mov si, tm_s_lowrow
+    call tm_copy
+    pop si
+    jmp .draw
+
+.sys:                           ; row 1: the kernel - task 0 minus everything
+    push si                     ; debited to an instance
     mov si, tm_s_sys
     xor al, al                  ; the one row that is never indented
     call tm_namef
@@ -6103,16 +6047,17 @@ tm_rows:
     jne .sysst
     mov si, tm_s_run
 .sysst:
-    call tm_copy
+    call tm_copy                ; (the separator is in the string)
     pop si
-    mov byte [di], ' '
-    inc di
-    mov bx, si
-    mov al, [tm_pct+bx]
+    mov al, [tm_pct]            ; task 0's share: tm_pct is by instance + 1
     call tm_cpucol
-    mov ax, [tm_kb+SK_KERN]     ; the kernel's footprint, whole (SPEC.md 2)
-                                ; - the same term the RAM line above uses, so
-                                ; the rows still sum to the bar
+    call tm_sysk                ; the kernel, whole KB, rounded DOWN - the row
+                                ; above carries its tail (SPEC.md 28.4.7), so
+                                ; the rows still sum to the RAM line's used
+    call tm_pshort              ; ...and when there is no such row, System
+    jnc .nofold                 ; carries IVT+Pad itself
+    add ax, TM_LOWKB
+.nofold:
     add ax, [tm_kb+SK_KCLAIM]   ; + the kernel's OWN heap claims (SPEC.md
                                 ; 42.2): the save-under and the clipboard.
                                 ; A package's claim belongs to its own row.
@@ -6120,8 +6065,8 @@ tm_rows:
     jmp .draw
 
 .inst:
-    mov bx, si
-    dec bx
+    dec bx                      ; logical row - 2: IVT+Pad and System are
+    dec bx                      ; above the first instance
     mov bl, [tm_ord+bx]         ; BX = the instance this ROW shows, held to
     xor bh, bh                  ; the end; [tm_rowi] is the same thing for the
     mov [tm_rowi], bl           ; stretches where BX is needed for something
@@ -6153,10 +6098,8 @@ tm_rows:
     je .stput
     mov si, tm_s_rdy
 .stput:
-    call tm_copy
+    call tm_copy                ; (the separator is in the string)
     pop si
-    mov byte [di], ' '
-    inc di
 
     mov bl, [tm_rowi]           ; share, right-aligned in 3, then '%'
     xor bh, bh                  ; (tm_pct is indexed by instance + 1, not by
@@ -6176,16 +6119,9 @@ tm_rows:
     call tm_memcol_kb0          ; canvas costs far more than its region - the
     jmp .draw                   ; same sum the System row already shows
 
-.free:                          ; free slot: "-        ---   -    -"
+.free:                          ; free slot: one constant row
     push si
-    mov si, tm_s_dash
-    xor al, al
-    call tm_namef
-    mov si, tm_s_free
-    call tm_copy
-    mov byte [di], ' '
-    inc di
-    mov si, tm_s_frtl
+    mov si, tm_s_freerow
     call tm_copy
     pop si
 
@@ -6201,90 +6137,84 @@ tm_rows:
 
 .rnext:
     inc si
-    cmp si, TM_ROWS
+    cmp si, TM_PROWS
     jb .row
 .rdone:
 
     jmp tm_pop_dsdcba
 
 ; -----------------------------------------------------------------------------
+; tm_pshort - can this screen NOT show every process row? (SPEC.md 28.4.7)
+; out: CF = 1 when column 0 and the later columns hold fewer than TM_PROWS -
+;      a CGA, where the list fitted exactly before IVT+Pad joined it
+; clobbers: nothing else
+; -----------------------------------------------------------------------------
+tm_pshort:
+    push ax
+    push dx
+    mov ax, [tm_cols]
+    dec ax
+    mul word [tm_col2rows]
+    add ax, [tm_pcolrows]
+    cmp ax, TM_PROWS            ; CF = capacity < TM_PROWS
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_sysk - the System row's kernel figure: whole KB, rounded DOWN (SPEC.md
+;           28.4.7). Everything not the heap, less IVT+Pad's constant 2K
+; in:  [tm_totkb], [tm_kb]
+; out: AX = KB
+; clobbers: nothing else
+; -----------------------------------------------------------------------------
+tm_sysk:
+    mov ax, [tm_totkb]
+    sub ax, [tm_kb+SK_HEAP]
+    sub ax, TM_LOWKB
+    ret
+
+; -----------------------------------------------------------------------------
 ; tm_cpucol - the CPU column: share right-aligned in 3, then '%', then the
 ;             gap MEM needs after it - TM_CPUC characters, not four
 ; in:  AL = share 0..100, DI = dest
 ; out: DI advanced by TM_CPUC
-; clobbers: nothing else (internal helper)
+; clobbers: AH (every caller reloads AX after it)
 ; -----------------------------------------------------------------------------
 tm_cpucol:
-    push ax
     xor ah, ah
     call tm_put3
-    mov byte [di], '%'
+    mov word [di], '% '         ; '%' and the gap MEM needs: 100% against 335K
+    inc di                      ; with nothing between reads as one number
     inc di
-    mov byte [di], ' '          ; the gap MEM needs: 100% against 335K with
-    inc di                      ; nothing between reads as one number
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_memcol - the MEM column: KB right-aligned in 3, then 'K'; an instance
-;             that owns no region of its own (every built-in kind) shows
-;             "   -" instead of a misleading 0 (SPEC.md 28)
-; in:  AX = bytes, DI = dest
+; tm_memcol_kb0 - the MEM column: KB right-aligned in 3, then 'K'; 0 KB means
+;                 the instance owns nothing at all (no region, no claim) and
+;                 shows "   -" instead of a misleading 0 (SPEC.md 28)
+; tm_memcol_kb  - the same for a caller whose KB is never 0 - the System row,
+;                 which adds the kernel's own claims and so cannot be a byte
+;                 count. (There was a byte-count entry, `tm_memcol`; nothing
+;                 had called it since the MEM column became KB.)
+; in:  AX = KB, DI = dest
 ; out: DI advanced by 4
-; clobbers: nothing else (internal helper)
+; clobbers: AX (both callers go straight to .draw, which reloads it)
 ; -----------------------------------------------------------------------------
-tm_memcol:
-    push ax
-    push cx
+tm_memcol_kb0:
     or ax, ax
-    jz .none
-    add ax, 1023                ; round up; AX <= 0xB000 here, no overflow
-    mov cl, 10
-    shr ax, cl
-.kb:
+    jnz tm_memcol_kb
+    mov ax, '  '
+    mov [di], ax
+    mov ax, ' -'
+    mov [di+2], ax
+    add di, 4
+    ret
+tm_memcol_kb:
     call tm_put3
     mov byte [di], 'K'
     inc di
-    jmp .out
-.none:
-    mov byte [di], ' '
-    inc di
-    mov byte [di], ' '
-    inc di
-    mov byte [di], ' '
-    inc di
-    mov byte [di], '-'
-    inc di
-.out:
-    pop cx
-    pop ax
     ret
-
-; -----------------------------------------------------------------------------
-; tm_memcol_kb - tm_memcol's tail for a caller that already has KB in AX
-;                (nonzero) - the System row adds the kernel's own claims,
-;                which cannot be expressed as a 16-bit byte count
-; in:  AX = KB (> 0), DI = dest
-; out: DI advanced by 4
-; clobbers: nothing else (internal helper)
-; -----------------------------------------------------------------------------
-tm_memcol_kb:
-    push ax
-    push cx
-    jmp tm_memcol.kb
-
-; -----------------------------------------------------------------------------
-; tm_memcol_kb0 - the same, but 0 KB still means "owns nothing" and prints "-"
-; in:  AX = KB, DI = dest
-; out: DI advanced by 4
-; clobbers: nothing else (internal helper)
-; -----------------------------------------------------------------------------
-tm_memcol_kb0:
-    push ax
-    push cx
-    or ax, ax
-    jnz tm_memcol.kb
-    jmp tm_memcol.none
 
 ; -----------------------------------------------------------------------------
 ; tm_namef - the performance view's NAME field: an optional one-space indent,
@@ -6299,27 +6229,22 @@ tm_memcol_kb0:
 ; doing double duty.
 ; -----------------------------------------------------------------------------
 tm_namef:
-    push ax
     push cx
-    mov cl, al
     or al, al
     jz .noind
     mov byte [di], ' '
     inc di
 .noind:
-    push cx
     mov cx, TM_NAMEC
-    call tm_copyn
-    pop cx
+    call tm_copyn               ; (keeps AL, the indent flag)
     mov byte [di], ' '
     inc di
-    or cl, cl
+    or al, al
     jnz .out
     mov byte [di], ' '          ; not indented: the column the indent would
     inc di                      ; have taken is padding instead
 .out:
     pop cx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -6410,9 +6335,8 @@ tm_kpair:
     inc di
     mov ax, bx
     call tm_put3
-    mov byte [di], 'K'
-    inc di
-    mov byte [di], 0
+    mov word [di], 'K'          ; 'K' and the NUL in one store
+    inc di                      ; DI -> the NUL, where the next copy lands
     pop ax
     ret
 
@@ -6486,6 +6410,13 @@ tm_putw:
 %ifdef TMF_HEAP
 %define OS88UI_BARONLY
 %define OS88UI_SCROLL
+%else
+%define OS88UI_NOBTN            ; the same statement without the bar: the small
+                                ; build has no heap page and so no scroll bar,
+                                ; and the About card draws no button either -
+                                ; os88ui_btn, the glyph and the gesture were
+                                ; ~760 bytes it never reached (apps size pass
+                                ; 2b, SPEC.md 28.12)
 %endif
 %define OS88UI_ABOUT            ; ...and the standard About card (SPEC.md
 %include "os88ui.inc"           ; 20.5.1), which draws no button either
@@ -6549,8 +6480,8 @@ tm_hist     equ tm_kb + SYSKB_SIZE   ; history ring: column heights 0..40,
 tm_pos      equ tm_hist + TM_GW   ; sweep index = next column to write
 tm_lastcol  equ tm_pos + 2   ; column written by the latest sample
 tm_idlec    equ tm_lastcol + 2   ; the interval's IDLE cycles, dword: the load
-                                 ; meter's numerator (SPEC.md 28.7), normalised
-                                 ; alongside tm_total so the ratio is one scale
+                                 ; meter's numerator (SPEC.md 28.7), shifted by
+                                 ; the total's own count so the ratio is one scale
 tm_idle     equ tm_idlec + 4  ; the idle task's slot, 0xFF = none answered
 tm_load     equ tm_idle + 1   ; latest load, 0..100
 tm_told     equ tm_load + 2   ; previous sch_cycles snapshot
@@ -6581,13 +6512,7 @@ tm_sqp      equ tm_sqox + 2  ; ...and its texture, or 0 for no square. A
                                 ; the band before it letters it, so a square
                                 ; drawn while the row was being composed
                                 ; would be erased again
-tm_elck     equ tm_sqp + 2  ; the last drawn state of the non-row
-%else                           ; elements, one word each (TMC_*). The other
-tm_elck     equ tm_iend     ; arm closes over the row cursor, its fit flag
-%endif                          ; and the legend square
-
-%ifdef TMF_MEM
-tm_qkey     equ tm_elck + TMC_N * 2  ; tm_quiet's key, held until a paint
+tm_qkey     equ tm_sqp + 2  ; tm_quiet's key, held until a paint
                                 ; actually happens (SPEC.md 28.6.1): the
                                 ; question is asked with no lock and the paint
                                 ; can still be REFUSED under it, so the answer
@@ -6595,8 +6520,9 @@ tm_qkey     equ tm_elck + TMC_N * 2  ; tm_quiet's key, held until a paint
                                 ; whoever asks
 tm_rowx     equ tm_qkey + 2  ; the left edge of the row being drawn: tm_cx
 %else                           ; for column 0, one TM_COLW on for column 1.
-tm_rowx     equ tm_elck + TMC_N * 2  ; The other arm closes over tm_quiet's
-%endif                          ; key, there being no quiet page to hold one
+tm_rowx     equ tm_iend     ; The other arm closes over the row cursor, its
+%endif                          ; fit flag, the legend square and tm_quiet's
+                                ; key, there being no quiet page to hold one
 
 %ifdef TMF_MEM
 tm_xbarw    equ tm_rowx + 2  ; the XMS bar's black run, px (TMC_XBAR)
@@ -6610,8 +6536,14 @@ tm_ci       equ tm_penx + 2  ; tm_row_draw's chunk index (BP is the task's
                                 ; instance record and cannot be borrowed)
 tm_ckb      equ tm_ci + 2  ; ...and the running check-word pointer, for
                                 ; the same reason
-tm_rowck    equ tm_ckb + 2  ; the last drawn content of each row, a
-                                ; word per CHUNK (tm_chunksum), plus one
+tm_elck     equ tm_ckb + 2  ; the last drawn state of the non-row
+                                ; elements, one word each (TMC_*), and
+                                ; DIRECTLY in front of tm_rowck: the two are
+                                ; cleared as ONE span (tm_rowck_clear), which
+                                ; is why tm_rowck is defined off tm_elck's end
+                                ; - nothing may go between them
+tm_rowck    equ tm_elck + TMC_N * 2  ; the last drawn content of each row, a
+                                ; word per CHUNK (tm_sumb's), plus one
                                 ; virtual row for the CPU caption (TMR_CPU).
                                 ; Shared by all THREE pages, so it is sized
                                 ; for the deepest of them - the heap page's
@@ -6624,14 +6556,21 @@ tm_rowck    equ tm_ckb + 2  ; the last drawn content of each row, a
                                 ; not been for some time
 %ifdef TMF_MEM
 tm_view     equ tm_rowck + TM_NCK * TM_NCHUNK * 2  ; 0 = performance, 1 = memory, 2 = heap
-tm_rcyc     equ tm_view + 1  ; per-ROW cycles: task + instance, dword
+tm_slow     equ tm_view + 1  ; byte: intervals since the last paint of a
+                                ; SLOW page (SPEC.md 28.6). A byte and not a
+                                ; word: TM_SLOW is 4. Directly after tm_view
+                                ; so tm_click resets both with one word store;
+                                ; the performance-only arm has no tm_slow at
+                                ; all, that view having always painted every
+                                ; interval
+tm_rcyc     equ tm_slow + 1  ; per-ROW cycles: task + instance, dword
 %else
 tm_rcyc     equ tm_rowck + TM_NCK * TM_NCHUNK * 2  ; ...and with one page there
                                 ; is no page to record: every `cmp byte
                                 ; [tm_view], n` in the file is inside a gate
 %endif
-tm_total    equ tm_rcyc + TM_ROWS * 4  ; sum of the rows, dword
-tm_pct      equ tm_total + 4  ; per-row share, 0..100
+tm_pct      equ tm_rcyc + TM_ROWS * 4  ; per-row share, 0..100 (the rows'
+                                       ; sum lives in registers, tm_sample)
 tm_usedk    equ tm_pct + TM_ROWS  ; used RAM, KB
 tm_barw     equ tm_usedk + 2  ; RAM bar black width, 0..TM_GW
 
@@ -6651,10 +6590,14 @@ tm_pcolrows equ tm_colrows + 2  ; ...and the PROCESS list's own column 0, which
                                 ; reason and with the opposite sign
 tm_col2rows equ tm_pcolrows + 2  ; rows in each LATER column, which starts at the
                                 ; top and so holds more - A DIVISOR, never 0
+%ifdef TMF_HEAP
+tm_totkb    equ tm_col2rows + 2  ; total conventional RAM (int 12h, boot)
+%else                           ; (tm_maxrow lives in tm_hsb on this arm)
 tm_maxrow   equ tm_col2rows + 2  ; rows this SCREEN shows, <= TMM_ROWS: derived
                                 ; from [vid_dock_y0] so the window never
                                 ; overlaps the dock (SPEC.md 28.1)
 tm_totkb    equ tm_maxrow + 2  ; total conventional RAM (int 12h, boot)
+%endif
 tm_vw       equ tm_totkb + 2  ; the live screen width and the dock strip's
 tm_vdock    equ tm_vw + 2  ; top row (osapi_video, SPEC.md 39.2), banked
                                 ; at boot: the template's whole geometry is
@@ -6719,31 +6662,30 @@ tm_hskip    equ tm_htop + 2  ; ...how many rows THIS paint still owes
                                        ; makes that a SCREEN row and leaves
                                        ; tm_rowck indexed by the thing it is
                                        ; drawn at
-tm_hrows    equ tm_hskip + 2  ; ...and how many rows the last walk
-                                       ; produced in all: the bar's `total`,
-                                       ; and what tm_hclamp measures against
-tm_slow     equ tm_hrows + 2  ; byte: intervals since the last paint of a
-%elifdef TMF_MEM                       ; SLOW page (SPEC.md 28.6). A byte and
-tm_slow     equ tm_xoff + 2            ; not a word: TM_SLOW is 4. The second
-%endif                                 ; arm closes over tm_htop, tm_hskip and
-                                       ; tm_hrows; the THIRD has no tm_slow at
-                                       ; all, the performance view having
-                                       ; always painted every interval
-
-%ifdef TMF_HEAP
-tm_hpad     equ tm_slow + 2  ; ...and how many of the rows this paint
+tm_hpad     equ tm_hskip + 2  ; ...and how many of the rows this paint
                                        ; drew were tm_mrow_nolast's BLANKS,
                                        ; which belong to the layout and not to
                                        ; the table (SPEC.md 28.4.4)
 tm_hsb      equ tm_hpad + 2  ; the shared bar's seven-word block
                                        ; (SPEC.md 13.10.2): x1 y1 x2 y2, then
-                                       ; total, fit, pos
+                                       ; total, fit, pos - and the first two
+                                       ; of those ARE the page's own words:
+tm_hrows    equ tm_hsb + 8   ; how many rows the last walk produced in
+                                       ; all - the bar's `total`, and what
+                                       ; tm_hclamp measures against...
+tm_maxrow   equ tm_hsb + 10  ; ...and the rows this SCREEN shows, which
+                                       ; is its `fit` (on the other arms
+                                       ; tm_maxrow sits after tm_col2rows).
+                                       ; os88ui_sbar only reads the block, so
+                                       ; tm_hsbset copies neither. `pos` stays
+                                       ; a COPY of tm_htop: tm_hscroll tells a
+                                       ; move from an end stop by comparing them
 tm_dmg      equ tm_hsb + 14  ; THIS PAINT'S DAMAGE, absolute, x1 y1 x2
-%elifdef TMF_MEM                       ; y2 (SPEC.md 28.10.2) - the rect
-tm_dmg      equ tm_slow + 2            ; tm_clear_owed filled, which is
-%else                                  ; exactly the rect that has to be
-tm_dmg      equ tm_xoff + 2            ; lettered again. Read by tm_dmg_hit
-%endif                                 ; once per chunk and by nothing else
+%else                                  ; y2 (SPEC.md 28.10.2) - the rect
+tm_dmg      equ tm_xoff + 2            ; tm_clear_owed filled, which is
+%endif                                 ; exactly the rect that has to be
+                                       ; lettered again. Read by tm_dmg_hit
+                                       ; once per chunk and by nothing else
 
 tm_abon     equ tm_dmg + 8   ; byte: the About card is up (SPEC.md 20.5.1)
 

@@ -7,7 +7,9 @@
  * apps/apple2/ is GPL-2-or-later; see apps/apple2/COPYING.
  *
  * ----------------------------------------------------------------------------
- * EVERYTHING IN THIS FILE IS `ovl_` AND LIVES IN APPLE2.OVL (SPEC.md 73.14)
+ * EVERYTHING IN THIS FILE IS `ovl_` AND LIVES IN THE OVERLAY (SPEC.md 73.14) -
+ * part 1 of APPLE2.O88 since APPLE2-SPEC 15.5.1 (SPEC.md 73.14.2), fetched by
+ * the first wake's probe below; it was the file APPLE2.OVL until then
  * ----------------------------------------------------------------------------
  * The split is by FREQUENCY and never by size: what a keystroke touches - the
  * composers, the flush, the damage model, every callback - stays resident;
@@ -18,12 +20,14 @@
  * tempting:
  *
  *  - THE CHARGEN DECODE AND THE 7-BIT REVERSE TABLE. They are built in
- *    os88_main and are RESIDENT (section 7.3). A disk with no APPLE2.OVL must
- *    be a program whose MENUS refuse, not a window that draws nothing.
+ *    os88_main and are RESIDENT (section 7.3). A session whose overlay
+ *    cannot be fetched (no RAM, the program's floppy out) must be a program
+ *    whose MENUS refuse, not a window that draws nothing - which, when the
+ *    overlay was a file, was a disk with no APPLE2.OVL.
  *    hosttest/a2uitest.c asserts both tables after os88_main and before any
  *    wake, and WAVE 4 PROVED IT ON THE MACHINE: a scratch copy of
  *    build/apple2.img with APPLE2.OVL deleted boots to a working Apple II at
- *    `]` whose menu commands say `Unable to load APPLE2.OVL.` on the status
+ *    `]` whose menu commands said `Unable to load APPLE2.OVL.` on the status
  *    row and toast it on the bar (build/port-shots/wave4-23-noovl.png,
  *    wave4-24-noovl-refuse.png, wave4-25-noovl-toast.png). That was the
  *    wave's own done_when, driven over QMP - there is no registered test row
@@ -39,7 +43,7 @@
 
 /* ovl_a2_init - THE FIRST-WAKE PROBE.
  *
- * The .OVL cannot be loaded from os88_main: there is no instance yet to
+ * The overlay cannot be loaded from os88_main: there is no instance yet to
  * resolve a module for (LESSONS.md 13). So the first ovl_* call of the
  * session is this one, made from the FIRST WAKE - which holds no lock and may
  * call the file slots by contract (SPEC.md 74.1) - and its whole job is to
@@ -98,9 +102,9 @@ static int ovl_a2_cmd(int menu, int item, void *win)
              * and Open was live before anything was selected, committing the
              * name `*.BAS` and ending at `Cannot read the file.` With 0 the
              * box starts empty and SPEC.md 38.10's per-application last-picked
-             * name seeds it, which is what the slot is for. cwcmd.c:292 and
-             * weave.c:699 both pass 0; c64cmd.c:251's "*.PRG" is the same
-             * defect one package along and is that package's to fix. */
+             * name seeds it, which is what the slot is for. cwcmd.c, weave.c
+             * and c64cmd.c's Smart attach all pass 0 (the C64's "*.PRG" was
+             * the same defect one package along, and is gone). */
             item = os88_file_dlg(OS88_FDLG_OPEN, win, 0);
         } else if (item == A2_I_SAVE) {
             item = os88_file_dlg(OS88_FDLG_SAVE, win, "PROGRAM.BAS");

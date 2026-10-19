@@ -107,7 +107,9 @@ INCLUDES = [
      "OS88UI_BIMG` and the `OS88UI_IMG` flag (SPEC.md 13.8.9); a button whose "
      "face the PACKAGE paints, keeping the library's press gesture, is `%define "
      "OS88UI_BOWN` and the `OS88UI_OWN` flag (SPEC.md 13.8.10); a package with "
-     "no check box or radio sheds that code with `%define OS88UI_NOGLYPH`."),
+     "no check box or radio sheds that code with `%define OS88UI_NOGLYPH`, "
+     "and one whose every button is a picture sheds the caption, ink and "
+     "default-ring paths with `%define OS88UI_BIMGONLY`."),
     ("os88alt.inc", "11.2.1.1",
      "Alt+Enter, the full-screen key, for a package on SPEC.md 53's BRACKET - "
      "where no event is dispatched, so the kernel's synthesised keystroke "
@@ -135,7 +137,14 @@ INCLUDES = [
      "`STIK_LAYOUT`s (picked by the screen's height) and a card painter "
      "(`stik_slabs` + `STIK_COMPOSE` into os88gfx.inc's band), it owns every "
      "other pixel, the gestures, the hover and focus states and the titled "
-     "fallback on kern_small."),
+     "fallback on kern_small. A kern_big widget (`STIK_DESKONLY`) that adds "
+     "`%define STIK_LIB` before its OS88_HEADER carries none of the code: "
+     "it far-calls the ONE copy in DESK.DRV (§110.15)."),
+    ("os88stikc.inc", "110.15",
+     "The Sticky App library's CLIENT, and you do not include it: "
+     "os88stik.inc does for a package built `%define STIK_LIB` - the "
+     "descriptor's values, the thunks into DESK.DRV's copy, the trampoline "
+     "the library calls back through, and the bind in `stik_load`."),
     ("os88line.inc", "83",
      "A one-line text field: caret, horizontal scroll, focus, click-to-position "
      "and the editing keys. The caller owns a 20-byte block."),
@@ -150,6 +159,27 @@ INCLUDES = [
      "IEEE-754 double arithmetic in software, with an 8087 path chosen at run "
      "time. Parse, format, add, subtract, multiply, divide, compare, sqrt, "
      "trunc, floor, round."),
+    ("os88xgap.inc", "41.14",
+     "Where a buffer that copies to and from XMS should START: `xg_gap` times "
+     "8 KB copies at six gaps against a block the caller owns and answers G, "
+     "half a page-interleaved board's period, or 0. Place by (conventional - "
+     "extended) mod 2G = G. Measured, never assumed - the period is the "
+     "board's DRAM page."),
+    ("os88la.inc", "41.13",
+     "LOADALL on a 286: memory above 1 MB read and written IN PLACE through "
+     "a hidden segment base, as one BORROW of the API table at physical "
+     "0x800 inside one cli window (`la_capture`, `la_probe`, `la_borrow`, "
+     "`la_restore`). Tier 1 only, behind the INT 6 probe. XMEM.DRV's tier-1 "
+     "copy is built on it, so a package that only wants bytes moved wants "
+     "OSAPI_XMEM_COPY, not this."),
+    ("os88ub.inc", "41.15",
+     "A 386's segment BASE loaded where it is wanted: `ub_set` puts DS's "
+     "and/or ES's hidden base at any linear address through a moment of "
+     "protected mode, limit 64 KB, so 16-bit code reads and writes extended "
+     "memory unchanged until the register is next loaded. The 386's answer "
+     "to os88la.inc, under the same cli rule. Tier 2 only. XMEM.DRV's "
+     "tier-2 copy is built on it, so a package that only wants bytes moved "
+     "wants OSAPI_XMEM_COPY, not this."),
     ("os88lzw.inc", "106.18",
      "LZW DECODE, GIF's flavour: Paint's reader with Paint taken out - a code "
      "past the table or a non-root after a Clear is refused, a chain cannot "
@@ -234,6 +264,12 @@ INCLUDES = [
      "folder's cluster, rewrite a file of unchanged length in ONE sector with "
      "`OSAPI_FILE_WRITE_AT`, and put the instance back on every path out. For "
      "a high-score table or a settings file; five packages carry it."),
+    ("os88link.inc", "26.10.6",
+     "LINKS and AUTOSTART: `OS88_LINK` lays down a 50-byte `.LNK` record and "
+     "`ol_autostart` writes it into `\\AUTOSTRT` on the BOOT volume, making "
+     "the folder if need be, so the program it names is opened at every boot "
+     "(Shift held skips it). Over os88data.inc's walk, so it needs "
+     "`OD_BOOTVOL`; REDLINE's Apply on boot is the worked example."),
     ("os88pit.inc", "72.15.1",
      "`pit_now`: a 32-bit clock in 838ns units off the 8253 and the BIOS tick, "
      "good for an hour before it wraps. Sub-tick timing for a profiler."),

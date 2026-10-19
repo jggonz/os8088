@@ -838,7 +838,7 @@ static int c64_kbd_pb(void)
  * WHOLE REASON THIS BLOCK IS SHAPED THE WAY IT IS.
  * ----------------------------------------------------------------------------
  * The first draft put the 40x25 walk and the conversion loop in c64cmd.c,
- * which is C64.OVL - so the inner loop crossed the segment boundary TWICE a
+ * which is the overlay - so the inner loop crossed the segment boundary TWICE a
  * cell: `call far [cc_ovv_c64_rd]` into the resident shim (crt0.asm's
  * cc_ovthunk: pop/pop, the three-word LIFO stash, `call bx`, unstash, two
  * pushes, retf) and `call far [cc_ovm_ovl_sc_ascii]` back into the module,
@@ -956,10 +956,8 @@ static unsigned char c64_pettab[256];       /* host byte -> PETSCII */
  * against §13.0.1's headroom. Every per-byte path in this file indexes the
  * tables and calls nothing.
  *
- * A disk with no C64.OVL is unaffected: c64_sctab is read only by ovl_copy
- * and c64_pettab only by the feeder, which cannot have a queue until
- * ovl_paste has run - so an unbuilt table is unreachable on exactly the disks
- * where it is unbuilt. */
+ * The tables are filled by ovl_conv_init from os88_main (c64cmd.c), so they
+ * are built before any menu can be picked or any key fed. */
 
 /* c64_copy_screen - clipboard_read_screen_output (src/clipboard.c:41-100),
  * RESIDENT and called ONCE per Edit > Copy. `base` is the caller's c64_mbase,
@@ -1020,9 +1018,8 @@ static int c64_copy_screen(unsigned seg, unsigned base)
  * Both latches are spent whatever the machine's state, so a paused or jammed
  * machine still services the Copy that is on the glass in front of it.
  *
- * AND IT IS IN C64.OVL (apps size pass 1), because it runs once per pick and
- * its only callers are the two latches ovl_cmd sets - so the module is in
- * memory whenever one is up, and the wake's call loads nothing. The per-ROW
+ * AND IT IS IN THE OVERLAY (apps size pass 1), because it runs once per pick
+ * and its only callers are the two latches ovl_cmd sets. The per-ROW
  * and per-byte work stays resident: c64_copy_screen and c64_copy_row, and
  * c64_paste_feed, which is the per-wake feeder. */
 static void ovl_clip_service(unsigned base)

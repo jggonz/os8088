@@ -21,8 +21,7 @@
 ; with no %define is code the kernel never calls.
 ; =============================================================================
 
-%define CC_PKG_NAME 'C64'           ; <= 15 chars; the Disk window's label, and
-                                    ; the stem of C64.OVL (SPEC.md 73.14)
+%define CC_PKG_NAME 'C64'           ; <= 15 chars; the Disk window's label
 
 %define CC_HAS_ONKEY                ; void os88_onkey(int, int, void *) - the
                                     ; level keyboard's make half (C64-SPEC 7.2)
@@ -49,7 +48,7 @@
                                     ; click. OSAPI_WM_CLOSE (SPEC.md 75.2) is
                                     ; the kernel's own close path and needs no
                                     ; task at all (c64.c's os88_onwake)
-%define CC_HAS_OVL                  ; C64.OVL (SPEC.md 73.14) - ON FROM THE
+%define CC_HAS_OVL                  ; THE OVERLAY (SPEC.md 73.14) - ON FROM THE
                                     ; FIRST COMMIT (C64-SPEC 13.1). The
                                     ; alternative is discovering at 55,000
                                     ; that the code is not the kind that can
@@ -60,6 +59,20 @@
                                     ; (c64about.c) are out; every callback,
                                     ; the core, the composer and the flush
                                     ; are in
+%define CC_OVL_PART                 ; ...AND IT IS PART 1 OF C64.O88, EAGER
+                                    ; (C64-SPEC 13.3, SPEC.md 73.14.2). It was
+                                    ; C64.OVL beside the package, and the
+                                    ; program loaded it at its FIRST WAKE in
+                                    ; every session - ovl_conv_init builds
+                                    ; Copy's and Paste's tables - so a lazy
+                                    ; part would only have been a second read
+                                    ; of this file a tick after the first.
+                                    ; Eager, it rides op_load's one carve read
+                                    ; behind the ROM, and the carve code was
+                                    ; already here for the ROM. Measured
+                                    ; against the lazy arm: 768 image bytes
+                                    ; and 1,023 file bytes smaller, and one
+                                    ; cluster fewer on every c64disk geometry
 %define CC_ICON "c64/icon.inc"      ; the 16x16 breadbin, drawn for this port
 
 %define CC_HAS_PARTS                ; THE ROM IS IN THE PACKAGE (C64-SPEC 1.4,
@@ -77,7 +90,9 @@
                                     ; whole API bridge
 
 ; --- the parts table (SPEC.md 20.12.3) ---------------------------------------
-; ONE part: the KERNAL, BASIC and character generator, in C64-SPEC 1.4's fixed
+; TWO parts, both eager, both in the one carve op_load reads at launch.
+;
+; PART 0: the KERNAL, BASIC and character generator, in C64-SPEC 1.4's fixed
 ; layout, exactly as the sidecar carried them. It is an ASSET rather than a
 ; SEGMENT because nothing in it is far-called - the 6510 core reaches it
 ; through segment arithmetic off its base (c64cpu.inc 4.3), which is what an
@@ -88,8 +103,17 @@
 ; again - for ~217 ms of decode at launch on a 4.77 MHz 8088 against the ~6
 ; clusters of floppy it gives back. `len` stays 20,480, so a machine that
 ; cannot spare the ROM still refuses before a sector is read.
-    CC_PARTS_BEGIN 1
+;
+; PART 1: the overlay (CC_OVL_ROW - an OP_SEG|OP_COMP row, LAST because
+; CC_PACKAGE appends the cut module as the last --part). LZ4 takes it 2,018
+; -> ~1,530. THE CARVE STAYS PINNED, as it always was: c64_m.romseg banks
+; os88_part_seg(0), and crt0 declares an eager carve movable only when the
+; overlay is its only part (SPEC.md 73.14.2.1). It is claimed top-down
+; (SPEC.md 20.12.10.8), so the ~2KB of module that used to sit in a movable
+; claim of its own now sits beside the ROM at the ceiling, not mid-arena.
+    CC_PARTS_BEGIN 2
       OS88_PART OP_ASSET, OP_COMP
+      CC_OVL_ROW
     CC_PARTS_END
 
 %include "c64.gen.asm"              ; the compiled C, found through -I build/

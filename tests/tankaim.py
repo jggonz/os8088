@@ -91,18 +91,34 @@ def reachable(boxq, turn, maxstep, grid=4096):
 
 def sintab():
     """tksin.inc, for placing a tank at a bearing the guest will agree with."""
-    out = []
+    # The file is the quarter wave's SECOND DIFFERENCES since apps size pass
+    # 2 (SPEC.md 85.5): sin 0 = 0, the first step TK_SIN_D1, and each TKSIN
+    # number how much the next step is shorter than the last - added up here
+    # exactly as tk_mktabs adds them up in the guest.
+    d1, shrink = None, []
     for line in open(os.path.join(ROOT, "apps", "tank", "tksin.inc"),
                      encoding="utf-8"):
-        line = line.strip()
-        if line.startswith("dw"):
-            out += [int(x) for x in line[2:].split(",")]
+        line = line.split(";")[0].strip()
+        if line.startswith("TK_SIN_D1"):
+            d1 = int(line.split()[-1])
+        elif line.startswith("TKSIN"):
+            shrink += [int(x) for x in line[5:].split(",")]
+    if d1 is None or len(shrink) != 64:
+        sys.exit("tankaim: tksin.inc has %s first step and %d differences, "
+                 "not one and the 64 of a quarter wave" % (d1, len(shrink)))
+    out, v = [0], 0
+    for n in shrink:
+        v += d1
+        out.append(v)
+        d1 -= n
     # ONE QUARTER of the wave since apps size pass 1, set 6 (SPEC.md 85.5):
     # sin(0..64), which tk_sin1 reads backwards and negated for the other
-    # three. Unfolded here exactly as the guest folds it.
-    if len(out) != 65:
-        sys.exit("tankaim: tksin.inc is %d entries, not the 65 of a quarter "
-                 "wave" % len(out))
+    # three. Unfolded here exactly as the guest folds it. A quarter wave of
+    # sin x 16384 ENDS at 16384, which is what catches a bad difference.
+    if len(out) != 65 or out[64] != 16384:
+        sys.exit("tankaim: tksin.inc adds up to %d entries ending at %d, not "
+                 "the 65 of a quarter wave ending at 16384"
+                 % (len(out), out[-1]))
     full = []
     for a in range(256):
         i = a & 63

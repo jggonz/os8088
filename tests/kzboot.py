@@ -24,8 +24,9 @@ can be compared rather than a window somebody had to justify.
 
 **TWO GEOMETRIES, because there are two floppy boot sectors that reach this.**
 The 360KB disk is the tight one and gets the byte comparison - except on the
-`--nokzip` arm, where an unpacked KERNEL.SYS is 209 sectors and simply does
-not fit it any more (356 clusters of 354), so that arm takes the 720KB pair
+`--nokzip` arm, where an unpacked KERNEL.SYS is ~40 sectors longer than the
+packed one, which the 360KB disk has never had to spare for long, so that arm
+takes the 720KB pair
 and the paragraph below is why nothing is lost by it; the 1.44MB disk
 is a DIFFERENT 512 bytes (`boot.bin`, 18 spt against 9) and gets a boot. The
 720KB disk shares its sector with the 360KB one and differs only in a BPB
@@ -116,11 +117,12 @@ def main():
     # images describing different things, and the row then reads one through
     # another's numbers"): a tree cannot be half a build, so the failure it
     # describes is not available any more.
-    # **THE NOKZIP ARM CANNOT USE THE 360KB DISK ANY MORE, AND THAT IS A
-    # FINDING RATHER THAN A WORKAROUND.** An uncompressed KERNEL.SYS is 209
-    # sectors against 164, which is ~20 clusters, and the 360KB system disk
-    # has 18 free: `os88disk: error: packages need 356 clusters; disk holds
-    # 354`. The row did not report that - it died inside os88build with a
+    # **THE NOKZIP ARM DOES NOT USE THE 360KB DISK, AND THAT IS A FINDING
+    # RATHER THAN A WORKAROUND.** An uncompressed KERNEL.SYS is ~40 sectors
+    # longer than the packed one, and at 1KB clusters the 360KB system disk
+    # did not have them: `os88disk: error: packages need 356 clusters; disk
+    # holds 354`. At 512 bytes (SPEC.md 19.3.2) it has them by a few clusters
+    # on the tree that change landed on - a margin one release can spend. The row did not report that - it died inside os88build with a
     # make error, which reads as a broken private tree.
     #
     # 720KB is the RIGHT substitute and not merely a bigger one: this file's
@@ -141,7 +143,7 @@ def main():
          else os88build.plain()).apply()
     if a.nokzip:
         say("kzboot: NOKZIP=1 uses the 720KB pair - an unpacked KERNEL.SYS "
-            "no longer fits the 360KB system disk (356 clusters of 354), "
+            "has never had room on the 360KB system disk to rely on, "
             "and 720KB is the same boot sector with the same payload")
 
     fails = []

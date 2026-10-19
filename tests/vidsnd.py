@@ -42,7 +42,8 @@ SECS = 91 * 65536 / 1193182.0   # VS_TICKS
 FLAGS = {1: "no card answered at the driver's port or 220h",
          2: "the DSP did not reset", 4: "no fixed disk answered int 13h",
          8: "no IRQ line answered DSP F2h", 16: "OSAPI_DRV_SUSPEND refused",
-         32: "no claim"}
+         32: "no claim",
+         64: "a PicoMEM: the 50%-ints-on row not run (vidsnd.asm's header)"}
 
 
 def u16(b, i=0):
@@ -54,7 +55,8 @@ def main():
     ap.add_argument("--machine", default="os8088_5150_herc_hdd_sb_gla")
     a = ap.parse_args()
     os.chdir(ROOT)
-    syms, image = pkg_syms("tests/vidbench/vidsnd.asm", ("apps/", "tests/"))
+    syms, image = pkg_syms("tests/vidbench/vidsnd.asm",
+                           ("apps/", "tests/", "drivers/sound/"))
     try:
         built = open(os88build.at("build/vidsnd.bin"), "rb").read()
     except OSError:

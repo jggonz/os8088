@@ -2183,7 +2183,7 @@ clk_hour:   resb 1              ; 0..23       |
 clk_day:    resb 1              ; 1..31       |
 clk_mon:    resb 1              ; 1..12       |
 %if clk_min - clk_sec != 1 || clk_hour - clk_sec != 2 || clk_day - clk_sec != 3 || clk_mon - clk_sec != 4
-%error "clock: ctrl.inc's clk_fld_adj finds field f at (4 or 5) - f past clk_sec, and osapi_clk_get_x reads min+hour and day+month as words"
+%error "clock: ctrl.inc's clk_fld_adj finds field f at (4 or 5) - f past clk_sec, and osapi_clk_get_x reads min+hour and day+month as words (and AH = clk_sec off a word at clk_sec - 1)"
 %endif
 clk_rtc:    resb 1              ; 1 = a usable hardware RTC was found
 clk_dirty:  resb 1              ; 1 = the clock was set; write the RTC
@@ -2244,6 +2244,8 @@ clk_tier:   resb 1              ; CLK_T_*: which rung answered. [clk_rtc] is
 clk_cent:   resb 1              ; the AT chip's century byte at CMOS 32h if
                                 ; this BIOS keeps one, 0 if it does not -
                                 ; clk_at_write must not invent one
+%ifdef OS88_RTC                 ; (the four rungs' own state: kern_small has
+                                ; no rung to keep it for - kernel size pass 13)
 clk_rb:     resb 1              ; the AT chip's Register B, as we found it:
                                 ; DM and 24/12 are read and obeyed, never set
 clk_rbin:   resb 1              ; 0 = decode the raw bytes as BCD, else binary
@@ -2259,6 +2261,7 @@ clk_rp24:   resb 1              ; ...and bit 0 = the chip is running 24-hour,
                                 ; clk_rp_pd byte used to follow, carrying THAT
                                 ; sentence as its own comment while having no
                                 ; reader, no writer and no %if of its own)
+%endif
 
 clk_str:    resb 25             ; the bar's line, longest form 24 glyphs + NUL
                                 ; (drawn under the gfx lock, UI task only).
@@ -2340,13 +2343,15 @@ osapi_clk_get_x:
     mov cx, [clk_year]
     mov dx, [clk_day]           ; DL = day, DH = month
     mov bx, [clk_min]           ; BL = minute, BH = hour
-    mov ah, [clk_sec]
+    mov ax, [clk_sec - 1]       ; AH = second: a word read is the 3-byte
+    popf                        ; accumulator form where `mov ah` is 4, and
+                                ; AL is overwritten below. The two settings
+                                ; are read after the popf: neither is a field
+                                ; a rollover can tear
     mov al, [clk_h12]           ; 0 or 1 - but SYSTEM.CFG's CFG_H12 is a
     and al, 1                   ; file's byte, so bit 0 only. clk_rtc is
     shl al, 1                   ; only ever stored as 1, by clk_init
-    or al, [clk_rtc]
-    popf
-    clc
-    retf
+    or al, [clk_rtc]            ; ...and the OR is the CF = 0: no `clc`
+    retf                        ; (kernel size pass 13, -2)
 
 section .text

@@ -259,6 +259,7 @@ section .text
 %define OS88UI_NOGEST           ; presses routed by hand: no gesture install (SPEC.md 20.5.1.3.4)
 %define OS88UI_NOBFIND          ; hit-tests its own rects: no os88ui_bfind (SPEC.md 20.5.1.3.4)
 %include "os88ui.inc"
+%define OS88LINE_NOEDIT         ; nothing here calls os88line_edit (SPEC.md 83.1.2)
 %include "os88line.inc"
 %include "weave/wblob.inc"          ; reading a claim: the bundle's and the
                                     ; caller's parameter block alike

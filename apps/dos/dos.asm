@@ -6506,64 +6506,6 @@ dos_keeph:
     ret
 
 ; -----------------------------------------------------------------------------
-; dos_btn_rect - the page button's rect, into dos_brect
-; in:  BX = the window; out: dos_brect filled; every register preserved
-;
-; BOTTOM RIGHT of the content on both pages, so the button does not move when
-; the page does - a control that jumps under the pointer is one the user
-; clicks by accident.
-; -----------------------------------------------------------------------------
-dos_btn_rect:
-    push ax
-    push cx
-    push dx
-    push si
-    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
-    mov si, dos_brect
-    mov cx, ax
-    add cx, 8 + DOS_FLDW - DOS_BTNW
-    mov [si+0], cx
-    add cx, DOS_BTNW
-    mov [si+4], cx
-    mov cx, dx
-    add cx, DOS_BTNY
-    mov [si+2], cx
-    add cx, DOS_BTNH
-    mov [si+6], cx
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_sav_rect - the Save Shortcut button's rect, into dos_srect
-; in:  BX = the window; every register preserved
-; -----------------------------------------------------------------------------
-dos_sav_rect:
-    push ax
-    push cx
-    push dx
-    push si
-    call OSAPI_WM_CONTENT
-    mov si, dos_srect
-    mov cx, ax
-    add cx, 8
-    mov [si+0], cx
-    add cx, DOS_SAVW
-    mov [si+4], cx
-    mov cx, dx
-    add cx, DOS_BTNY
-    mov [si+2], cx
-    add cx, DOS_BTNH
-    mov [si+6], cx
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 ; dos_sav_go - the Save Shortcut button was pressed
 ; in:  BX = the window
 ;
@@ -8177,23 +8119,6 @@ dos_paint_mem:
     clc
     ret
 
-; -----------------------------------------------------------------------------
-; dos_btn_lbl - SI = what the page button should SAY, for the page that is up
-; out: SI; every other register preserved
-;
-; It names WHERE IT GOES and not where you are, which is what a cycle needs: a
-; button labelled with the current page is one the user has to press to find
-; out what it does.
-; -----------------------------------------------------------------------------
-dos_btn_lbl:
-    push bx
-    xor bh, bh
-    mov bl, [dos_page]
-    shl bl, 1
-    mov si, [dos_btn_tab+bx]
-    pop bx
-    ret
-
 ; in:  AX = 0..65535, DI -> five bytes inside a literal; clobbers nothing
 ;
 ; Into the LITERAL rather than into a buffer, which is dos_fmt_exit's shape
@@ -8258,8 +8183,8 @@ dos_mem_numn:                       ; in a check box's own label. The widths are
 ; -----------------------------------------------------------------------------
 dos_mem_take:
     call dos_mem_parse
-    call dos_mem_fix                ; ...and the arm, which is the other half
-    ret                             ; of this block (SPEC.md 96.36.1)
+    jmp  dos_mem_fix                ; ...and the arm, which is the other half
+                                    ; of this block (SPEC.md 96.36.1)
 
 ; -----------------------------------------------------------------------------
 ; dos_mem_parse - the limit field's digits -> [dos_memkb] (0 = no limit)
@@ -8758,40 +8683,6 @@ dos_key:
     pop cx
     pop bx
     clc
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_erow_focus - the environment row with the caret, rect placed for drawing
-; in:  BX = the window; out: SI = the block, or 0
-;
-; The rect has to be re-placed before the field is drawn OR hit, because
-; os88line's rect is in SCREEN coordinates and the window moves - which is
-; dos_fld_place's note, one page along.
-; -----------------------------------------------------------------------------
-dos_erow_focus:
-    push ax
-    push cx
-    push dx
-    push di
-    xor cx, cx
-.r:
-    push cx
-    call dos_erow
-    cmp byte [si+LN_FOCUS], 0
-    jne .got
-    pop cx
-    inc cx
-    cmp cx, DOS_ENVN
-    jb .r
-    xor si, si
-    jmp short .out
-.got:
-    pop cx
-.out:
-    pop di
-    pop dx
-    pop cx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -10244,30 +10135,6 @@ dos_ceq:
 %endif                              ; DOS_EXTCORE
 %ifndef KD_BACKEND                  ; THE WINDOW HALF (SPEC.md 96.43.2)
 
-; --- dos_lnk_skip - step SI over one StringData ------------------------------
-dos_lnk_skip:
-    push ax
-    mov ax, [dos_lend]
-    sub ax, si
-    cmp ax, 2
-    jb .no
-    mov ax, [dos_lbuf+si]           ; the character count
-    add si, 2
-    push bx
-    mov bx, [dos_lend]
-    sub bx, si
-    cmp ax, bx                      ; ...against what is LEFT, never against
-    pop bx                          ; the buffer (SPEC.md 20.8 rule 2)
-    ja .no
-    add si, ax
-    pop ax
-    clc
-    ret
-.no:
-    pop ax
-    stc
-    ret
-
 ; --- dos_lnk_take - one StringData -> dos_sbuf, NUL-terminated --------------
 dos_lnk_take:
     push di
@@ -10724,7 +10591,6 @@ dos_ttl:    db 'DOS', 0
 dos_l_args: db 'Arguments:', 0
 dos_l_envb: db 'Environment:', 0    ; ...and the rows under it are NAME=VALUE,
                                     ; one to a line (SPEC.md 96.32.2.1)
-dos_l_done: db 'Done', 0
 dos_l_retb: db 'Return', 0          ; --- the setup area's furniture (96.32.2)
 dos_l_tset: db 'Setup', 0           ; ...and its name, which the title row
                                     ; shows and the bar's own button carries -
@@ -10744,12 +10610,6 @@ dos_bt_setl: dw dos_l_retb, dos_l_savb      ; DOS_BT_RET, DOS_BT_SAV
 ; opaque font_run, which is dos_fmt_exit's shape: a number assembled anywhere
 ; else needs a second store to reach the line, and a second pass over the
 ; pixels is what SPEC.md 6.1 exists to stop.
-dos_l_memb: db 'Memory', 0
-; ...and WHERE THE BUTTON GOES from each page, indexed by DOS_PAGE_*
-dos_btn_tab:
-    dw dos_l_envb                   ; main -> environment
-    dw dos_l_memb                   ; environment -> memory
-    dw dos_l_done                   ; memory -> back to the main page
 dos_l_meml: db 'Limit:', 0
 dos_l_memk: db 'K', 0                ; ...and the UNIT, drawn hard against the
                                      ; field's right edge (SPEC.md 96.36.10.1).
@@ -12598,7 +12458,6 @@ DOS_BTREC_SZ equ 16              ; **A MIRROR OF os88ui.inc's OS88UI_BT_SIZE**,
     HBSS DOS_B_NCELL, 2          ; glyph cells the edits have redrawn...
     HBSS DOS_B_NKEY,  2          ; ...over this many keystrokes
     HBSS DOS_B_PAGE,  1          ; which page is up (DOS_PAGE_*)
-    HBSS DOS_B_BRECT, 8          ; the page button's rect, x1 y1 x2 y2
     HBSS DOS_B_BTREC, DOS_BTREC_SZ  ; the standard button record (20.5.1.4),
                                  ; REPOINTED per page by dos_place - one
                                  ; record, because only one page is ever up.
@@ -14908,11 +14767,13 @@ dos_pkt_hchk:
     sub ax, dos_pkt_htab            ; below the table wraps to a huge unsigned,
     cmp ax, PKT_NHAND * PKT_HSIZE   ; so one compare catches both ends
     jae .no
-    xor dx, dx
-    mov cx, PKT_HSIZE               ; ...and it must be ON a row boundary, not
-    div cx                          ; merely inside the table
-    or dx, dx
-    jnz .no
+    mov dl, PKT_HSIZE               ; ...and it must be ON a row boundary, not
+    div dl                          ; merely inside the table: AX is under 28,
+    or ah, ah                       ; so a BYTE divide, AH = the remainder.
+    jnz .no                         ; (It was `div cx`, and CX is the CLIENT's
+                                    ; - get_address's buffer size, read after
+                                    ; this returns - which it overwrote with 7;
+                                    ; SPEC.md 96.44.16)
     cmp byte [bx+PKT_HUSED], 0
     je .no
     pop dx
@@ -18199,6 +18060,11 @@ DOS_BSS_SIZE equ HB
                                     ; which is one pick out of a SHORT LIST of
                                     ; widths - a radio of five would be 80 px
                                     ; of a column that has 155
+%define OS88UI_NODRGEST             ; ...which is press-press (dos_click_mem ->
+                                    ; os88ui_drpress both ways) and is never
+                                    ; taken down from outside, so its drag,
+                                    ; release and close are out (SPEC.md
+                                    ; 13.14.7, apps size pass 2b)
 %define OS88UI_ABOUT                ; ...and the About card (SPEC.md 96.51).
                                     ; dos_about was a bare `ret` for the whole
                                     ; of this package's life, so the kernel put
@@ -18218,6 +18084,9 @@ DOS_BSS_SIZE equ HB
 %if DOS_BTREC_SZ != OS88UI_BT_SIZE
  %error "DOS_BTREC_SZ mirrors OS88UI_BT_SIZE and they have drifted - the HBSS block is laid out before this include, so the size must be written twice; fix the literal"
 %endif
+%define OS88LINE_NOSET              ; the fields are filled in place and
+                                    ; resynced (96.21.1), never replaced
+                                    ; (apps size pass 2b)
 %include "os88line.inc"
 %endif
 ; --- THE CONSOLE (SPEC.md 96.33), telnet's screen as a shared include -------
@@ -18241,6 +18110,8 @@ DOS_BSS_SIZE equ HB
                                     ; of them the 80x25 shadow and the 8x8 font,
                                     ; which are .bss and so are a KB of the
                                     ; image rung apiece
+%define CON_NOSCROLLDOWN            ; ...and no con_scrolldown: a teletype
+                                    ; only scrolls UP (SPEC.md 96.44.16.1)
 %define CON_TTY                     ; CR, LF, BS, TAB and BEL, because there is
                                     ; no ANSI parser over this one (SPEC.md
                                     ; 96.33.1) - and con_open, since the
@@ -18393,7 +18264,6 @@ DOS_BT_RUN equ 2
 DOS_BT_RET equ 1                       ; the Setup page: 'Return', then 'Save
 DOS_BT_SAV equ 2                       ; Shortcut' - a different page, so the
                                        ; numbers may repeat
-dos_brect equ dos_hbss + DOS_B_BRECT   ; the page button's rect
 dos_btrec equ dos_hbss + DOS_B_BTREC   ; ...and the button group's record
 %endif
 %ifndef KD_BACKEND

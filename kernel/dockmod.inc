@@ -884,13 +884,13 @@ dkx_px_hit:
 ; rather than by the bump this used to need.
 ; -----------------------------------------------------------------------------
 dkx_key:
-    xor ax, ax
     or di, di                   ; a position that shows no record (dkx_map)
-    jz .out
-    cmp byte [di+I_STATE], 1    ; live only - dying and free records have no
-    jne .out                    ; tile (SPEC.md 29.2 rule 3)
-    test byte [di+I_FLAGS], IF_DESK
-    jnz .out                    ; ...and nor does a DESK instance (SPEC.md 30)
+    jz .none
+    mov ax, [di]                ; AL = I_STATE, AH = I_FLAGS (db_key's
+    and ah, IF_DESK             ; assertion): live only - dying and free
+    dec ax                      ; records have no tile (SPEC.md 29.2 rule
+    jnz .none                   ; 3) - and nor does a DESK instance (SPEC.md
+                                ; 30). One DEC for both (kernel size pass 13)
     mov ax, [di+I_ICON]
     rol ax, 1                   ; x3 - the pointer's high bits reach the low
     rol ax, 1                   ; end. THREE 1-BIT ROTATES: 6 bytes against
@@ -918,6 +918,9 @@ dkx_key:
     jne .out
     or al, DOCK_K_ACT           ; active: the border doubles
 .out:
+    ret
+.none:
+    xor ax, ax                  ; AX = 0 is "no tile"
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1140,11 +1143,11 @@ dkx_hit:
     cmp al, 0FFh
     je .in                      ; none
     call KERNEL_SEG:cw_inst_ptr               ; DI = record (in: AL = index; AX survives)
-    cmp byte [di+I_STATE], 1
-    jne .none
-    test byte [di+I_FLAGS], IF_DESK
-    jz .in                      ; live and not a DESK instance (SPEC.md 30):
-.none:                          ; DI is the answer
+    push ax                     ; AL, the slot, is an output
+    call dkx_key                ; AX = 0: no tile - empty, dying or a DESK
+    or ax, ax                   ; instance (SPEC.md 30), dkx_key's one
+    pop ax                      ; answer to it (kernel size pass 13). `pop`
+    jnz .in                     ; writes no flag: DI is the answer
     xor di, di                  ; empty, dying or a widget: no tile here
 .in:
     clc
@@ -1334,10 +1337,10 @@ dkx_map:
     mov si, inst_tab
     xor bx, bx
 .count:
-    cmp byte [si+I_STATE], 1
-    jne .cnext
-    test byte [si+I_FLAGS], IF_DESK
-    jnz .cnext                  ; a DESK instance spends no tile (SPEC.md 30)
+    mov ax, [si]                ; live, and not a DESK instance, which spends
+    and ah, IF_DESK             ; no tile (SPEC.md 30): AX = 1 exactly then,
+    dec ax                      ; db_key's one word (AX is free until .take
+    jnz .cnext                  ; loads AH)
     inc cl
     test byte [si+I_FLAGS], 1
     jz .cnext
@@ -1364,10 +1367,10 @@ dkx_map:
     xor bx, bx                  ; BL = the slot
     mov di, dock_pos            ; DI = the next position, in OUR image
 .walk:
-    cmp byte [si+I_STATE], 1
-    jne .wnext
-    test byte [si+I_FLAGS], IF_DESK
-    jnz .wnext                  ; ...and takes no position either
+    mov cx, [si]                ; ...and takes no position either - the same
+    and ch, IF_DESK             ; word, in CX, which the counts above are
+    dec cx                      ; done with (AH and DH are the quotas)
+    jnz .wnext
     test byte [si+I_FLAGS], 1
     jz .open
     or dh, dh
@@ -1535,7 +1538,10 @@ dkx_gfx_hole_arm:
     push cx
     push dx
     push si
-    call KERNEL_SEG:cw_cur_unlazy
+    push bp                     ; (spw_near takes the routine in BP: the one
+    mov bp, cur_unlazy          ; site, so no resident shim of its own -
+    call KERNEL_SEG:spw_near    ; kernel size pass 13)
+    pop bp
     xor ax, ax
     xor dx, dx
     mov cx, [vid_wm1]

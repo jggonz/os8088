@@ -3304,8 +3304,9 @@ tk_golets:
     mov si, tk_goseg
     xor bp, bp
 .seg:
-    cmp byte [si], 0FFh
-    je .out
+    cmp bp, TK_GONSEG               ; BP is the segment's number anyway, and a
+    je .out                         ; register compare is cheaper than a
+                                    ; terminator byte read (tkover.inc)
     call tk_gooff                   ; BP's own direction and distance, scaled
     mov ax, [si]                    ; by what is left of the journey
     call tk_gopt

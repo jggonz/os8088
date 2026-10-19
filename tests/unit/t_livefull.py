@@ -325,14 +325,18 @@ def main():
               "exclusions is a 354-cluster argument and the live volume has "
               "~26MB free" % (name, why))
 
-    # SCRIBE needs its FOLDER to be whole: it resolves SCRIBE.OVL in the
-    # launching instance's directory (SPEC.md 19.2.1), so the package without
-    # the overlay is a program whose every menu then refuses.
-    for name in ("SCRIBE.OVL", "SCWELCOM.RTF"):
+    # SCRIBE's folder carries its own RTF welcome document beside the
+    # package, which is the one file of the format Scribe saves by default
+    # (SPEC.md 95.4). It used to carry SCRIBE.OVL too, resolved in the
+    # launching instance's directory; that module is part 1 of SCRIBE.O88
+    # now (SPEC.md 95.8.8), so there is no second program file to lose.
+    for name in ("SCWELCOM.RTF",):
         check(name in named,
-              "SCRIBE.O88 is on the live media and %s is not. The overlay is "
-              "resolved in the LAUNCHING instance's directory, so SCRIBE/ "
-              "has to be a whole program or it is a menu bar that refuses" % name)
+              "SCRIBE.O88 is on the live media and %s is not - the folder "
+              "lost the document that shows off Scribe's own format" % name)
+    check("SCRIBE.OVL" not in named,
+          "SCRIBE.OVL is on the live media again. It is part 1 of SCRIBE.O88 "
+          "(SPEC.md 95.8.8), so a loose copy is a sidecar nothing reads")
 
     # The documents MEDIA/ is the default File Open location for (SPEC.md
     # 38.10). $(MEDIA_EXTRA) is derived in the Makefile from the category

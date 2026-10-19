@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The Apple II+ ROM is INSIDE APPLE2.O88 (SPEC.md 20.12, APPLE2-SPEC 1.5).
+"""The Apple II+ ROM AND THE OVERLAY are INSIDE APPLE2.O88 (SPEC.md 20.12,
+73.14.2, APPLE2-SPEC 1.5 and 15.5.1).
 
     make apple2disk && python3 tests/apple2part.py [machine] [system-image]
 
@@ -10,17 +11,20 @@ the Disk II boot ROM have been part 0 since wave 1, so there is no deleted
 halted-machine state to point at - what this row defends is that the shape
 stayed that way.
 
-SIX ASSERTIONS, and the last two are this package's rather than the C64's:
+SEVEN ASSERTIONS, and the last three are this package's rather than the
+C64's:
 
-  1. APPLE2.ROM IS NOT ON THE DISK, read out of the guest's own directory
-     listing, because that is what a user would see. The four geometries
-     carry five files - the package, the overlay, README.TXT, COPYING and
-     WELCOME.BAS (APPLE2-SPEC 16.2) - and a sixth named `.ROM` would be a
-     file a copy could lose;
+  1. NEITHER APPLE2.ROM NOR APPLE2.OVL IS ON THE DISK, read out of the
+     guest's own directory listing, because that is what a user would see.
+     The four geometries carry four files - the package, README.TXT, COPYING
+     and WELCOME.BAS (APPLE2-SPEC 16.2) - and a `.ROM` or an `.OVL` would be
+     a file a copy could lose;
   2. the package declares parts - version 3, flags bit 2 - its IMAGE is
-     smaller than its FILE, and the one part is an ASSET of exactly 14,848
-     bytes: 12,288 of ROM, 2,048 of CHARGEN, 256 of DISK2 and a 256-byte pad
-     (APPLE2-SPEC 1.4's layout);
+     smaller than its FILE, and it has TWO: part 0 an eager ASSET of exactly
+     14,848 bytes (12,288 of ROM, 2,048 of CHARGEN, 256 of DISK2 and a
+     256-byte pad, APPLE2-SPEC 1.4's layout) that UNPACKS to
+     build/apple2-rom/APPLE2.ROM, and part 1 a LAZY SEGMENT - the overlay,
+     LAST - that unpacks to build/APPLE2.OVL, the cut tools/os88ovl.py made;
   3. it launched: a window, and ld_status 0. A refusal here is op_load's,
      which runs BEFORE any C and toasts why;
   4. `os88_part_seg(0)` answered and it is the segment the C put in
@@ -47,7 +51,13 @@ SIX ASSERTIONS, and the last two are this package's rather than the C64's:
      MENUS refuse, not a window that draws nothing, and a table that quietly
      moved into the module would leave the flush composing blanks. It is read
      at the moment the row reaches it, which is after the launch and before
-     anything has been clicked.
+     anything has been clicked;
+  7. AND THE FIRST WAKE FETCHED THE OVERLAY OUT OF THE PACKAGE (APPLE2-SPEC
+     15.5.1): a2_ovl_res is 1, part 1's row says OP_FETCHED, its zkb names a
+     claim of exactly ceil(len / 1KB) in mem_tab - op_fetch shrinks the read
+     window to the part - and the module's bytes in that claim are
+     build/APPLE2.OVL's, every one of them (cc_ovbind writes the resident
+     image's vectors, never the module's).
 
 ...and the machine is RUNNING, which is as far as this row goes: `a2_state`
 is A2_ST_RUN and not A2_ST_JAM, and either the 6502's PC moves across 180
@@ -83,7 +93,9 @@ SYS_IMG = sys.argv[2] if len(sys.argv) > 2 else "build/os8088-360.img"
 APPS_IMG = "build/apple2.img"
 O88 = "build/apple2.o88"
 ROM = os.path.join("build", "apple2-rom", "APPLE2.ROM")
+OVL = os.path.join("build", "APPLE2.OVL")    # the plain cut, os88ovl.py's
 ROM_PART = 0
+OVL_PART = 1
 ROM_LEN = 14848                         # APPLE2-SPEC 1.4's fixed layout
 AM_RAMSEG, AM_ROMSEG, AM_PC = 0, 2, 4   # apps/apple2/a2cpu.inc's record
 A2_ROM_MINSEG = 0x0D00                  # $D000 >> 4 - below it the fetch bias
@@ -110,7 +122,7 @@ def run():
     S = os88sym.linear
     blob = open(os.path.join(ROOT, O88), "rb").read()
     image = u16(blob, 8)
-    rows = os88parts.rows(blob[:image])
+    rows = os88parts.image_rows(blob)   # the table is in the IMAGE (20.13.8)
     say("APPLE2.O88: image %d, file %d, %d part(s), flags 0x%02X"
         % (image, len(blob), len(rows), blob[3]))
 
@@ -126,15 +138,30 @@ def run():
     if image >= len(blob):
         fails.append("APPLE2.O88's image (%d) is not smaller than the file "
                      "(%d) - the ROM was not appended" % (image, len(blob)))
-    if len(rows) != 1 or rows[ROM_PART]["len"] != ROM_LEN:
-        fails.append("the part table is %r and should be one ASSET of %d "
-                     "bytes - the ROM, CHARGEN, DISK2 and pad of APPLE2-SPEC "
-                     "1.4" % (rows, ROM_LEN))
+    E = os88parts.EQU
+    if (len(rows) != 2 or rows[ROM_PART]["len"] != ROM_LEN
+            or rows[ROM_PART]["kind"] != E["OP_ASSET"]
+            or rows[ROM_PART]["flags"] & E["OP_LAZY"]):
+        fails.append("the part table is %r and part 0 should be an eager "
+                     "ASSET of %d bytes - the ROM, CHARGEN, DISK2 and pad of "
+                     "APPLE2-SPEC 1.4" % (rows, ROM_LEN))
+    if (len(rows) != 2 or rows[OVL_PART]["kind"] != E["OP_SEG"]
+            or not rows[OVL_PART]["flags"] & E["OP_LAZY"]):
+        fails.append("the part table is %r and part 1 should be the overlay, "
+                     "a LAZY SEGMENT and the LAST row (SPEC.md 73.14.2, "
+                     "APPLE2-SPEC 15.5.1)" % (rows,))
 
     rom = open(os.path.join(ROOT, ROM), "rb").read()
     if len(rom) != ROM_LEN:
         raise SystemExit("apple2part: %s is %d bytes and the layout is %d - "
                          "run `make apple2rom`" % (ROM, len(rom), ROM_LEN))
+    ovl = open(os.path.join(ROOT, OVL), "rb").read()
+    if len(rows) == 2:
+        if os88parts.part_bytes(blob, ROM_PART) != rom:
+            fails.append("part 0 does not unpack to %s byte for byte" % ROM)
+        if os88parts.part_bytes(blob, OVL_PART) != ovl:
+            fails.append("part 1 does not unpack to %s byte for byte - the "
+                         "package carries a module from another build" % OVL)
 
     with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
         mo = os88mouse.Mouse(marty=m)
@@ -147,6 +174,11 @@ def run():
         # --- 1. ...and the ROM is not a file in the folder ----------------
         listed = [n.upper() for n, _ in dispcp.listing(m, S)]
         say("APPLE2/ holds %r" % listed)
+        if "APPLE2.OVL" in listed:
+            fails.append(
+                "APPLE2.OVL is on the disk. The overlay is part 1 of the "
+                "package (APPLE2-SPEC 15.5.1, SPEC.md 73.14.2) - a disk recipe "
+                "still naming the file is shipping a second copy nothing reads")
         if "APPLE2.ROM" in listed:
             fails.append(
                 "APPLE2.ROM is on the disk. The ROM is part 0 of the package "
@@ -161,8 +193,8 @@ def run():
                 "WELCOME.BAS is not in APPLE2/ and APPLE2-SPEC 16.2 puts it "
                 "there: the folder is the binding shape, and a listing that "
                 "does not ride with the program is one nobody can open "
-                "(the .OVL and the document are resolved in the SAME "
-                "launched-from directory, SPEC.md 73.14 and 54.9)")
+                "(the document is resolved in the launched-from directory, "
+                "SPEC.md 54.9)")
 
         wx2, wy2 = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
         dispcp.open_named(m, mo, S, os88marty.settle, wx2, wy2, "APPLE2.O88")
@@ -282,9 +314,9 @@ def run():
             fails.append(
                 "the decoded character generator is %d/512 non-zero bytes, "
                 "so a2_chargen did not run in os88_main. It is RESIDENT on "
-                "purpose (APPLE2-SPEC 7.3): a disk with no APPLE2.OVL has to "
-                "be a program whose MENUS refuse, not a window that draws "
-                "nothing" % nz)
+                "purpose (APPLE2-SPEC 7.3): a session whose overlay cannot be "
+                "fetched has to be a program whose MENUS refuse, not a window "
+                "that draws nothing" % nz)
         # the table is a 7-bit mirror: bit 0 <-> bit 6, and nothing outside
         # the low seven bits is ever set.
         bad = [i for i in range(128)
@@ -333,6 +365,42 @@ def run():
                 "driver is not running the machine, and a ROM nothing "
                 "executes is a ROM this row cannot speak for" % pcs[0])
 
+        # --- 7. the first wake fetched the overlay out of the package -------
+        # 180 frames have passed, so the first wake has run its probe.
+        res = u16(m.read((seg << 4) + A2.sym("_a2_ovl_res"), 2))
+        orow = (seg << 4) + A2.sym("cc_ovrow")
+        oflag = m.read(orow + E["OP_R_FLAG"], 1)[0]
+        oseg = u16(m.read(orow + E["OP_R_ZKB"], 2))
+        raw = m.read(S("mem_tab"), MEM_MAX * MC_SIZE)
+        oclaim = None
+        for i in range(MEM_MAX):
+            if u16(raw, i * MC_SIZE) == oseg:
+                oclaim = u16(raw, i * MC_SIZE + 2)
+        want_kb = -(-len(ovl) // 1024)
+        say("a2_ovl_res %d; part 1 flags 0x%02X, segment %04X, claim %s "
+            "paragraphs (want %d)" % (res, oflag, oseg, oclaim, want_kb * 64))
+        if res != 1 or not oflag & E["OP_FETCHED"] or not oseg:
+            fails.append(
+                "the overlay was not fetched by the first wake (a2_ovl_res %d, "
+                "row flags 0x%02X, segment %04X): ovl_a2_init is the probe, "
+                "cc_ovneed's op_fetch reads part 1 out of APPLE2.O88, and every "
+                "menu command refuses `Unable to load commands.` without it"
+                % (res, oflag, oseg))
+        else:
+            if oclaim != want_kb * 64:
+                fails.append(
+                    "the overlay's claim at %04X is %s paragraphs and the "
+                    "module is %d bytes - op_fetch shrinks its read window to "
+                    "the part, so it should be %dKB" % (oseg, oclaim,
+                                                       len(ovl), want_kb))
+            got = bytes(m.read(oseg << 4, len(ovl)))
+            if got != ovl:
+                fails.append(
+                    "the overlay in the guest differs from %s at byte %d of "
+                    "%d - op_fetch expanded something that is not the module"
+                    % (OVL, next(i for i in range(len(ovl))
+                                 if got[i] != ovl[i]), len(ovl)))
+
 
 def main():
     # NOTHING IN `all` BUILDS APPLE2 (it needs the C toolchain AND the pinned
@@ -348,9 +416,10 @@ def main():
         for f in fails:
             print("  " + f)
         return 1
-    print("\napple2part: the ROM is in the package, the standard placed it, "
-          "its bytes are the Autostart Monitor's and both display tables are "
-          "resident - PASS on %s" % MACHINE)
+    print("\napple2part: the ROM and the overlay are in the package, the "
+          "standard placed both, the ROM's bytes are the Autostart Monitor's, "
+          "both display tables are resident and the first wake fetched the "
+          "module - PASS on %s" % MACHINE)
     return 0
 
 

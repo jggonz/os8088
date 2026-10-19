@@ -9,30 +9,17 @@
 ;   [14..15] directory first cluster (0 = root)
 ;
 ; No full paths (SPEC.md 86.10): a track is reached by
-; OSAPI_FILE_GOTO_Q(dir, vol) then a name lookup - the ARG_FILE / fdlg model.
+; OSAPI_FILE_GOTO_QM(dir, vol) then a name lookup - the ARG_FILE / fdlg model.
 ; Shuffle keeps a separate order array apl_ord[] of entry indices; Repeat is a
 ; flag consulted only at the end of the list. Prefix apl_.
+;
+; (No init: the loader zeroes a package's bss, which is an empty list.)
 ; =============================================================================
 
-    APB apl_tvol                   ; scratch for apl_add
-    APW apl_tdir
-
-aplist_init:
-    mov byte [apl_n], 0
-    mov byte [apl_cur], 0
-    mov byte [apl_opos], 0
-    ret
-
+; apl_clear - empty the list
 apl_clear:
-    mov byte [apl_n], 0
-    mov byte [apl_cur], 0
+    mov word [apl_n], 0            ; apl_n and apl_cur (adjacent, audio.asm)
     mov byte [apl_opos], 0
-    ret
-
-; apl_count -> AX
-apl_count:
-    xor ah, ah
-    mov al, [apl_n]
     ret
 
 ; apl_entptr: AX = index -> BX = &entry ; preserves everything else
@@ -59,53 +46,38 @@ apl_add:
     push di
     mov al, [apl_n]
     cmp al, AP_MAXTRK
-    jae .full
-    mov [apl_tvol], bl
-    mov [apl_tdir], dx
+    cmc
+    jc .out                        ; CF = 1: full
+    mov ch, bl                     ; the volume, across apl_entptr
     xor ah, ah
     call apl_entptr                ; BX = &entry
     mov di, bx
-    xor cx, cx
+    mov cl, 12
 .cn:
-    cmp cx, 12
-    jae .term
     mov al, [si]
     mov [di], al
     or al, al
     jz .named
     inc si
     inc di
-    inc cx
-    jmp .cn
-.term:
-    mov byte [di], 0
+    dec cl
+    jnz .cn
+    mov byte [di], 0               ; twelve characters: the NUL at [12]
 .named:
-    xor ah, ah
-    mov al, [apl_n]
-    call apl_entptr                ; BX = &entry again (BL was clobbered)
-    mov al, [apl_tvol]
-    mov [bx+13], al
-    mov ax, [apl_tdir]
-    mov [bx+14], ax
+    mov [bx+13], ch
+    mov [bx+14], dx
     inc byte [apl_n]
     cmp byte [ap_shuffle], 0
     je .ok
     call apl_shuffle_build
 .ok:
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
     clc
-    ret
-.full:
+.out:
     pop di
     pop si
     pop cx
     pop bx
     pop ax
-    stc
     ret
 
 ; =============================================================================
@@ -117,74 +89,48 @@ apl_add:
 apl_find:
     push bx
     push cx
-    push dx
-    push si
     push di
-    mov [apl_tvol], bl
-    mov [apl_tdir], dx
-    xor cx, cx
+    mov cl, bl                     ; the volume, across apl_entptr
+    xor ax, ax                     ; AX = the index
 .e:
-    cmp cl, [apl_n]
+    cmp al, [apl_n]
     jae .none
-    mov al, cl
-    xor ah, ah
     call apl_entptr               ; BX = &entry
-    mov ax, [bx+14]
-    cmp ax, [apl_tdir]
+    cmp [bx+14], dx
     jne .next
-    mov al, [bx+13]
-    cmp al, [apl_tvol]
+    cmp [bx+13], cl
     jne .next
-    push si
     mov di, bx                    ; entry name
-    call ap_nameeq                ; ZF = 1 equal (SI = query name)
-    pop si
+    call ap_nameeq                ; ZF = 1 equal (SI = query name), CF = 0
     je .hit
 .next:
-    inc cx
+    inc ax
     jmp .e
-.hit:
-    mov al, cl
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    clc
-    ret
 .none:
+    stc
+.hit:
     pop di
-    pop si
-    pop dx
     pop cx
     pop bx
-    stc
     ret
 
 ; apl_curptr -> BX = &current entry ; CF = 1 if the list is empty
 apl_curptr:
-    cmp byte [apl_n], 0
-    je .empty
+    cmp byte [apl_n], 1            ; CF = 1 iff there is none
+    jc .r
     push ax
     mov al, [apl_cur]
-    xor ah, ah
+    cbw                            ; (< AP_MAXTRK)
     call apl_entptr
     pop ax
     clc
-    ret
-.empty:
-    stc
+.r:
     ret
 
-; apl_cur_name -> SI = &name of the current entry ; CF = 1 empty
+; apl_cur_name -> SI = &name of the current entry ; CF = 1 empty (SI spent)
 apl_cur_name:
     call apl_curptr
-    jc .e
     mov si, bx
-    clc
-    ret
-.e:
-    stc
     ret
 
 ; =============================================================================
@@ -210,9 +156,7 @@ apl_goto_cur:
     call OSAPI_FILE_GOTO_QM       ; DX = cluster, BL = volume; quiet, and moves us
     pop dx
     pop ax
-    ret
 .e:
-    stc
     ret
 
 ; =============================================================================
@@ -221,80 +165,58 @@ apl_goto_cur:
 ; out: CF = 1 => the list ended and Repeat is off; the caller should stop.
 ;      CF = 0 => apl_cur now names the track to play.
 ; clobbers: nothing (all pushed)
+;
+; The cursor stepped is apl_cur itself, or under Shuffle apl_opos, the
+; position in apl_ord[] - whose entry then becomes apl_cur.
 ; =============================================================================
 apl_advance:
     push ax
     push bx
     push cx
-    push dx
-    cmp byte [apl_n], 0
-    je .stop
+    mov ch, [apl_n]
+    or ch, ch
+    jz .stop
+    mov bx, apl_cur
     cmp byte [ap_shuffle], 0
-    jne .shuf
-
-    mov cl, [apl_cur]
-    mov ch, [apl_n]
+    je .c
+    mov bx, apl_opos
+.c:
+    mov cl, [bx]
     cmp al, 1
-    je .lnext
-    or cl, cl
-    jnz .lpd
+    je .next
+    or cl, cl                      ; Previous always wraps
+    jnz .pd
     mov cl, ch
-.lpd:
+.pd:
     dec cl
-    mov [apl_cur], cl
-    jmp .go
-.lnext:
+    jmp short .set
+.next:
     inc cl
     cmp cl, ch
-    jb .lset
+    jb .set
     cmp byte [ap_repeat], 0
-    je .stop
+    je .stop                       ; the end, and Repeat is off
     xor cl, cl
-.lset:
-    mov [apl_cur], cl
-    jmp .go
-
-.shuf:
-    mov cl, [apl_opos]
-    mov ch, [apl_n]
-    cmp al, 1
-    je .snext
-    or cl, cl
-    jnz .spd
-    mov cl, ch
-.spd:
-    dec cl
-    jmp .sset
-.snext:
-    inc cl
-    cmp cl, ch
-    jb .sset
-    cmp byte [ap_repeat], 0
-    je .stop
-    call apl_shuffle_build
-    xor cl, cl
-.sset:
-    mov [apl_opos], cl
-    xor ch, ch
-    mov bx, apl_ord
-    add bx, cx
-    mov al, [bx]
+    cmp bx, apl_cur
+    je .set
+    call apl_shuffle_build         ; a Shuffle wrap: a fresh order
+.set:
+    mov [bx], cl
+    cmp bx, apl_cur
+    je .go
+    mov bl, cl
+    xor bh, bh
+    mov al, [apl_ord + bx]
     mov [apl_cur], al
-    jmp .go
-
 .go:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     clc
-    ret
+    jmp short .out
 .stop:
-    pop dx
+    stc
+.out:
     pop cx
     pop bx
     pop ax
-    stc
     ret
 
 ; apl_set_shuffle - AL = 0 off / non-zero on
@@ -326,15 +248,11 @@ apl_shuffle_build:
 
     xor bx, bx                     ; identity fill
 .fill:
-    mov di, apl_ord
-    add di, bx
-    mov al, bl
-    mov [di], al
+    mov [apl_ord + bx], bl
     inc bx
     cmp bx, cx
     jb .fill
 
-    mov bx, cx
     dec bx                         ; i = n-1
 .fy:
     or bx, bx
@@ -344,24 +262,17 @@ apl_shuffle_build:
     mov si, bx
     inc si                         ; divisor = i+1
     div si                        ; DX = AX mod (i+1)
-    mov di, apl_ord
-    add di, bx
-    mov si, apl_ord
-    add si, dx
-    mov al, [di]
-    mov ah, [si]
-    mov [di], ah
-    mov [si], al
+    mov si, dx
+    mov al, [apl_ord + bx]
+    xchg al, [apl_ord + si]
+    mov [apl_ord + bx], al
     dec bx
     jmp .fy
 
 .locate:
-    mov al, [apl_cur]
-    xor bx, bx
+    mov al, [apl_cur]              ; BX = 0 here
 .loc:
-    mov di, apl_ord
-    add di, bx
-    cmp [di], al
+    cmp [apl_ord + bx], al
     je .set
     inc bx
     cmp bl, [apl_n]

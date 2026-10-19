@@ -195,10 +195,12 @@ def run(img, machine, kind, want):
                 started = True
 
             seg = int.from_bytes(m.read(lin_seg, 2), "little")
-            # COLD_SEG IN THIS WORD MEANS "NO BLOB", NOT "A BLOB AT COLD_SEG".
-            # [spl_fseg] is .text seeded COLD_SEG so that a SPLCALL made before
-            # stage 2 publishes the blob refuses through COLD_SEG:mod_gone
-            # rather than jumping into offset 0 (kernel.asm, above spl_fp). The
+            # 0 IN THIS WORD MEANS "NO BLOB" (and so did COLD_SEG, until
+            # docs/plans/ROM-PLAN.md 3.3 made the sentinel 0 - both are
+            # tested below, so the row reads an older kernel the same way).
+            # [spl_fseg] is .text seeded with it so that a SPLCALL made before
+            # stage 2 publishes the blob is skipped (kernel.asm, above
+            # spl_fp). The
             # `started` guard above says the kernel's own bytes are resident;
             # it says nothing about stage 2 having REACHED its handoff, which
             # is the last thing it does. So the seed is live for a stretch, and

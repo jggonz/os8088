@@ -506,17 +506,6 @@ static int a2_warp;                         /* CPU > Warp - OURS (section
                                              * nothing else: there is no
                                              * throttle here to take off */
 static int a2_ovl_asked;                    /* the first-wake probe ran... */
-static int a2_ovl_told;                     /* ...and its REFUSAL has been said
-                                             * once. The probe is re-armed by
-                                             * every menu pick on a disk with
-                                             * no module (a2_ovl_ready), so
-                                             * without this the toast was
-                                             * repeated per pick. The ROW is
-                                             * said every time, because the row
-                                             * is the answer to what the user
-                                             * just did; the toast is the
-                                             * announcement, and an
-                                             * announcement is made once. */
 static int a2_ovl_res;                      /* ...AND IT ANSWERED YES, WHICH IS
                                              * A DIFFERENT FACT and the one
                                              * that keeps floppy I/O out of
@@ -839,7 +828,7 @@ unsigned char a2_lopat[16];
  *              are ASCII $20-$3F unchanged. It is built in os88_main and not
  *              in the overlay, because 128 bytes of bss and a nine-line loop
  *              are cheaper than either a .data array paid for twice or a
- *              second reason for a disk with no APPLE2.OVL to behave
+ *              second reason for a session with no overlay to behave
  *              differently. */
 unsigned char a2_scrow[A2_COLS];
 unsigned char a2_astab[128];
@@ -981,10 +970,12 @@ static int a2_ovl_ready(void *win)
     /* ONE SENTENCE FOR ONE CONDITION. This used to say `No APPLE2.OVL yet.`,
      * which no user could ever read: clearing a2_ovl_asked makes the very
      * next wake re-run the probe, and the probe overwrites the row with
-     * `Unable to load APPLE2.OVL.` before a tick has passed - so the wave
-     * shipped a second string for the same fact that nothing could show. The
-     * `yet` was a promise as well, where SPEC.md 47 asks for the fact. */
-    a2_say("Unable to load APPLE2.OVL.");
+     * its own refusal before a tick has passed - so the wave shipped a second
+     * string for the same fact that nothing could show. The `yet` was a
+     * promise as well, where SPEC.md 47 asks for the fact. (The sentence
+     * named the file until the module became part 1 of APPLE2.O88, SPEC.md
+     * 73.14.2; it names what refuses now, the commands.) */
+    a2_say("Unable to load commands.");
     return 0;
 }
 
@@ -2055,41 +2046,33 @@ void os88_onwake(void *win)
         a2_ovl_asked = 1;
         a2_ovl_res = ovl_a2_init();
         if (!a2_ovl_res) {
-            /* THE ROW **AND** THE TOAST, and they are two audiences rather
-             * than one message said twice: under a WF_FULL window there is no
-             * desktop for a toast to land on (section 9), and a user who
-             * never opens a menu still sees the row. SPEC.md 59's second
-             * route is exactly this pair.
+            /* THE ROW, AND op_fetch HAS ALREADY TOASTED THE REASON. The
+             * module is part 1 of APPLE2.O88 (SPEC.md 73.14.2), fetched out
+             * of our own file by the runtime's cc_ovneed, and a refusal there
+             * toasts the parts standard's own sentence - `Not enough memory`,
+             * `No disk to read from` (the program's floppy swapped out on a
+             * one-drive machine) - before the call answers 0. So this says
+             * only the consequence, on the row, which a WF_FULL window has
+             * where it has no desktop for a toast (section 9). The package's
+             * own once-only toast (`APPLE2: no APPLE2.OVL`) went with the
+             * file: it named a file that no longer exists, and a second toast
+             * on top of op_fetch's would only replace the reason with the
+             * consequence. a2_ovl_ready re-arms this probe on every menu
+             * pick, so a retry that fails toasts again - once per pick, which
+             * is the user's own action being answered, and the fact CAN have
+             * changed in between (memory freed, the disk put back).
              *
-             * THE ROW IS SAID EVERY TIME AND THE TOAST ONCE (a2_ovl_told's
-             * own comment), because a2_ovl_ready re-arms this probe on every
-             * menu pick - so the toast was repeated per pick for a fact that
-             * had not changed.
-             *
-             * ...AND THE TOAST NAMES WHAT ACTUALLY REFUSES. `the menu
-             * commands will refuse` over-claimed: File > Quit, Machine >
-             * Toggle Fullscreen and Machine > Flashing text are answered in
-             * the RESIDENT half and work on a disk with no module at all
-             * (ovl_a2_cmd's header lists the three). */
-            a2_say("Unable to load APPLE2.OVL.");
-            if (!a2_ovl_told) {
-                a2_ovl_told = 1;
-                /* **TOAST_MAX IS 24 CHARACTERS** (`kernel/toast.inc:85`),
-                 * and a longer one is TRUNCATED rather than refused. This
-                 * said `APPLE2: no APPLE2.OVL beside the program - the menu
-                 * commands will refuse` and reached the glass as
-                 * `APPLE2: no APPLE2.OVL be` - 76 characters of which a user
-                 * could read 24, with the consequence in the half that was
-                 * cut. Photographed, not reasoned about. The status ROW has
-                 * 26 cells and carries the rest. */
-                os88_toast("APPLE2: no APPLE2.OVL", 0);
-            }
+             * ...AND THE ROW NAMES WHAT ACTUALLY REFUSES: the commands in
+             * the module. File > Quit, Machine > Toggle Fullscreen and
+             * Machine > Flashing text are answered in the RESIDENT half and
+             * work without it (ovl_a2_cmd's header lists the three). */
+            a2_say("Unable to load commands.");
         }
     }
 
     /* --- THE LAUNCH DOCUMENT, SPENT HERE (SPEC.md 54.10, section 12) ------
-     * Below the overlay probe deliberately: the loader is an ovl_ and a disk
-     * with no APPLE2.OVL has to REFUSE this the same way it refuses File >
+     * Below the overlay probe deliberately: the loader is an ovl_ and a
+     * session whose overlay could not be fetched has to REFUSE this the same way it refuses File >
      * Load Program..., on the row, rather than launching and going quiet.
      *
      * AND THE `goto` GETS ITS OWN ARM. It answers -1 when the folder could
@@ -2179,7 +2162,7 @@ void os88_onwake(void *win)
         if (!ovl_a2_clip_service()) {
             a2_copy_req = 0;
             a2_paste_req = 0;
-            a2_say("Unable to load APPLE2.OVL.");
+            a2_say("Unable to load commands.");
         }
     }
 
@@ -2375,8 +2358,9 @@ void *os88_main(void)
      * Decided once and never moved (APPLE2-SPEC section 7.3): op_load has
      * already put the ROM in memory, both tables are on the DISPLAY path, and
      * an overlay that can be absent may not own what the flush cannot run
-     * without. A disk with no APPLE2.OVL must be a program whose MENUS
-     * refuse, not a window that draws nothing. The negative control for that
+     * without. A session whose overlay cannot be fetched (part 1, section
+     * 15.5.1 - no RAM, or the program's floppy out) must be a program whose
+     * MENUS refuse, not a window that draws nothing. The negative control for that
      * is "both tables exist after os88_main and BEFORE any wake":
      * hosttest/a2uitest.c asserts it on the host, and WAVE 4 PROVED IT ON THE
      * MACHINE - a scratch disk with APPLE2.OVL deleted boots to a working

@@ -27,8 +27,10 @@ dk_lays:
 DK_SZW:     db 80, 112, 152     ; an analog face's width: Small, Medium, Large
             db 96, 128, 176     ; ...a digital one's
 DK_PANW     equ 128             ; the info panel: 16 cells
+%ifndef STIK_DESKONLY
 DK_TITMIN   equ 96              ; the titled fallback's frame floor
 DK_TITHMIN  equ 64 - TITLE_H - 1
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dk_sizeup - STIK_SIZEUP: the face, the panel and the card for the payload as
@@ -97,22 +99,9 @@ dk_geom:
     mov al, [DK_SZW + bx]
     xor ah, ah
     mov [dk_faw], ax
-    cmp byte [dk_kind], 0
-    jne .dig
-    call dk_sy                  ; a dial: as tall as it is wide, to the eye
-    jmp short .ev
-.dig:
-    mov bl, [DKP + DKP_FACE]    ; a digital face: its own share of its width
+    mov bl, [DKP + DKP_FACE]
     xor bh, bh
-    mov cl, [dk_fhr + bx]
-    xor ch, ch
-    mul cx
-    mov al, ah
-    mov ah, dl
-    call dk_sy
-.ev:
-    inc ax
-    and al, 0FEh                ; even: the centre lies between two rows
+    call dk_fhgt
     mov [dk_fah], ax
     mov al, 2                   ; the big time's scale down
     xor ah, ah
@@ -134,12 +123,14 @@ dk_geom:
     jae .w1
     mov ax, DK_PANW
 .w1:
+%ifndef STIK_DESKONLY           ; the titled fallback's frame has a floor
     test byte [stik_wf], STIK_W_DESK
     jnz .w2
     cmp ax, DK_TITMIN
     jae .w2
     mov ax, DK_TITMIN
 .w2:
+%endif
     mov [dk_cw], ax
     sub ax, [dk_faw]
     shr ax, 1
@@ -210,18 +201,41 @@ dk_geom:
     sub bx, [dk_pt]
     mov [dk_ph], bx
 .tit:
+%ifndef STIK_DESKONLY
     test byte [stik_wf], STIK_W_DESK
     jnz .x
     cmp word [dk_ch], DK_TITHMIN
     jae .x
     mov word [dk_ch], DK_TITHMIN
 .x:
+%endif
     pop dx
     pop cx
     pop bx
     pop ax
     ret
 
+; dk_fhgt - AX = a face's width, BX = the face: AX = its height - a dial as
+; tall as it is wide to the eye, a digital face its own share of its width
+; (dk_fhr) - even, so the centre lies between two rows. Keeps the rest
+dk_fhgt:
+    push dx
+    mov dl, [dk_fhr + bx]
+    or dl, dl
+    jz .s
+    xor dh, dh
+    mul dx
+    mov al, ah
+    mov ah, dl
+.s:
+    call dk_sy
+    inc ax
+    and al, 0FEh
+    pop dx
+    ret
+
+    DK_PARITY 1                 ; the paint and the hands: their measured
+                                ; parity (deskclok.asm's DK_PARITY)
 ; -----------------------------------------------------------------------------
 ; dk_pcard - STIK_PAINTCARD: AL = the card (0), BX..DX its damaged rows
 ; (card-local); [stik_fx], [stik_cy] the card on the glass, the clip armed.
@@ -242,13 +256,17 @@ dk_pcard:
     mov ax, KERNEL_SEG
     mov es, ax
     call dk_mode                ; [ck_np]: four planes or one
+%ifndef STIK_DESKONLY
     test byte [stik_wf], STIK_W_DESK
     jz .white
+%endif
     call dk_gsample             ; the desktop's pattern, off the glass
+%ifndef STIK_DESKONLY
     jmp short .gnd
 .white:
     call ck_gwhite
 .gnd:
+%endif
     call ck_font
     call dk_cprep               ; the face's static layer, cached
     mov bx, [dk_cw]
@@ -1561,8 +1579,10 @@ dk_oncard:
     mov [dk_clkt], bx
     mov [dk_clkx], cx
     mov [dk_clky], dx
+%ifndef STIK_DESKONLY
     test byte [stik_wf], STIK_W_DESK
     jz .x
+%endif
     mov bx, si                  ; the kernel's drag, once we return
     mov al, 2
     call OSAPI_WM_DESK

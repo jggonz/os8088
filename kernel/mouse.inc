@@ -2451,7 +2451,7 @@ kbm_btn:
 ; kbm_btn and in short reach of kbm_key's dispatch, for kbm_btn's reason: a
 ; jcc to a routine more than 127 bytes away assembles as FIVE bytes, and
 ; kbm_key has four of them (kernel size pass 8). mou_clamp, which used to
-; stand here, went below kbm_paint to make the room.
+; stand here, went below kbm_move to make the room.
 kbm_rclick:                     ; latches too - menu_popup ends on a level poll
     push ax                     ; of bit 1 exactly as menu_track does on bit 0
     xor byte [mouse_btn], 0x02
@@ -2497,7 +2497,38 @@ kbm_move:
     inc byte [ui_post]          ; ...and SAY SO once (SPEC.md 13.13)
     call sch_wake_ui            ; ...and WAKE the UI task (SPEC.md 8.1.2.2)
 .paint:
-    call kbm_paint
+    ; --- put the arrow where mouse_x/mouse_y now say: the ISR's own .move
+    ; rules (SPEC.md 7) - draw only with the gfx lock free and the cursor
+    ; refcount-visible, otherwise leave it to the next unlock. IF is 0 across
+    ; the move because cur_move is not re-entrant against the ISR - and on a
+    ; machine with a modem on the other port that ISR is still live. SI/DI/BP/
+    ; ES are saved round cur_move, which clobbers all four (SPEC.md 7.1.4.1):
+    ; osapi_mouse reaches this through kbm_poll from inside a package's own
+    ; tracking loop. It was kbm_paint, written here now (kernel size pass 12,
+    ; -8): AX and BX were its own bank, and here BX is kbm_key's and AX was
+    ; spent on the step above - kbm_poll and ui_task bank it themselves
+    pushf
+    cli
+    mov al, 1                   ; [cur_dirty]'s answer unless the draw below
+    cmp byte [gfx_lock_flag], 0 ; happens: ONE store at the foot where each
+    jne .pset                   ; arm carried its own immediate one (kernel
+    cmp byte [cur_level], 0     ; size pass 10: 5 bytes)
+    jl .pset
+    push si
+    push di
+    push bp
+    push es
+    mov ax, [mouse_x]
+    mov bx, [mouse_y]
+    call cur_move
+    pop es
+    pop bp
+    pop di
+    pop si
+    mov al, 0
+.pset:
+    mov [cur_dirty], al
+    popf
     pop dx
     pop cx
     pop bx
@@ -2538,47 +2569,6 @@ kbm_accel:
     mov [kbm_step], dl
     mov [kbm_lastk], ch
     jmp kret_cx
-
-; --- kbm_paint - put the arrow where mouse_x/mouse_y now say -----------------
-; The ISR's own .move rules (SPEC.md 7): draw only with the gfx lock free and
-; the cursor refcount-visible, otherwise leave it to the next unlock. IF is 0
-; across the move because cur_move is not re-entrant against the ISR - and on
-; a machine with a modem on the other port that ISR is still live.
-;
-; It saves SI/DI/BP/ES around cur_move, which clobbers all four (SPEC.md
-; 7.1.4.1 - a routine reached from the drawing paths inherits THEIR register
-; contract). AX and BX were enough while ui_task was the only caller and both
-; of the others were kernel loops; osapi_mouse calls kbm_poll now, so this is
-; reached from inside a package's own tracking loop, where kbm_key's stated
-; 'all registers preserved' is the whole contract and not a courtesy.
-kbm_paint:
-    push ax
-    push bx
-    pushf
-    cli
-    mov al, 1                   ; [cur_dirty]'s answer unless the draw below
-    cmp byte [gfx_lock_flag], 0 ; happens: ONE store at the foot where each
-    jne .set                    ; arm carried its own immediate one (kernel
-    cmp byte [cur_level], 0     ; size pass 10: 5 bytes)
-    jl .set
-    push si
-    push di
-    push bp
-    push es
-    mov ax, [mouse_x]
-    mov bx, [mouse_y]
-    call cur_move
-    pop es
-    pop bp
-    pop di
-    pop si
-    mov al, 0
-.set:
-    mov [cur_dirty], al
-    popf
-    pop bx
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; mou_clamp - the nearest legal pointer position (SPEC.md 39.15.4)
@@ -4035,11 +4025,17 @@ cur_vis:
 ; clobbers: ax, bx, cx, dx, si, di, bp, es
 ; -----------------------------------------------------------------------------
 cur_put_1:
-    cmp byte [vid_mono], 0
-    jne cur_put_mono
-    call cur_geom               ; the NEW cell's geometry FIRST: cur_saveu's
-    call cur_saveu              ; cur_rect reads it out of [cur_cellx/y], and
-    jmp cur_draw                ; cur_draw out of [cur_off] (size pass 9)
+%ifdef GFX_VGA                  ; ...AND ONLY A KERNEL WITH A VGA HAS A SIDE TO
+    cmp byte [vid_mono], 0      ; DISPATCH TO: kern_small's [vid_kind] is a
+    jne cur_put_mono            ; CGA or a Hercules for the life of the machine
+    call cur_geom               ; (SPEC.md 39.27.1), so [vid_mono] is 1 before
+    call cur_saveu              ; the first arrow is drawn and the planar half
+    jmp cur_draw                ; was never reached there. The label FALLS
+%endif                          ; INTO cur_put_mono on that build (a label,
+                                ; never an `equ`: SPEC.md 39.27.5), and the
+                                ; ISR's put pays no compare (kernel size pass
+                                ; 13, with the get, the move and the four
+                                ; planar bodies below)
 
 ; -----------------------------------------------------------------------------
 ; cur_put_mono - save the cell under the cursor and draw the arrow into it, in
@@ -4107,8 +4103,9 @@ cur_put_mono:
     ret
 
 cur_get_1:
-    cmp byte [vid_mono], 0
-    jne cur_get_mono
+%ifdef GFX_VGA                  ; cur_put_1's reason: the planar half and its
+    cmp byte [vid_mono], 0      ; dispatch are a VGA kernel's alone, and on
+    jne cur_get_mono            ; kern_small this falls into cur_get_mono
     ; fall through to cur_restoreu
 
 ; -----------------------------------------------------------------------------
@@ -4141,6 +4138,7 @@ cur_restoreu:
     pop word [vga_pn]           ; ...and the caller's arm is its own again
     pop es
     ret
+%endif                          ; GFX_VGA: cur_get_1's dispatch and the restore
 
 ; -----------------------------------------------------------------------------
 ; cur_get_mono - put cur_put_mono's bytes back, replaying its geometry
@@ -4176,6 +4174,7 @@ cur_get_mono:
 .out:
     ret
 
+%ifdef GFX_VGA                  ; the planar save and its rect: a VGA kernel's
 ; -----------------------------------------------------------------------------
 ; cur_saveu - copy the cell under (cur_drawn_x, cur_drawn_y) into cur_save via
 ;             vga_save_vram. vga_save_vram clips the rect at the screen edges
@@ -4222,6 +4221,7 @@ cur_rect:
     mov dx, bx
     add dx, CUR_GH-1
     ret
+%endif                          ; GFX_VGA
 
 ; -----------------------------------------------------------------------------
 ; cur_geom - where the cursor cell is, and how much of it is on the screen
@@ -5012,8 +5012,9 @@ cur_move:
 %endif
 cur_move_1:
     CURLOG 'm'                  ; ...from HERE (cur_drawn is still the old one)
-    cmp byte [vid_mono], 0
-    jne cur_move_mono
+%ifdef GFX_VGA                  ; cur_put_1's reason: kern_small falls straight
+    cmp byte [vid_mono], 0      ; into cur_move_mono, every move a compare
+    jne cur_move_mono           ; and a taken jump cheaper
     mov [cur_drawn_x], ax       ; planar: the save is four planes through Read
     mov [cur_drawn_y], bx       ; Map Select and cannot take a background from
     call cur_restoreu           ; a buffer, so it stays erase-then-draw. The
@@ -5025,6 +5026,7 @@ cur_move_1:
     call cur_geom               ; ...and the new cell's geometry, which the
     call cur_saveu              ; save and the draw both read (see cur_put_1)
     jmp cur_draw
+%endif
 
 cur_move_mono:
     push ax
@@ -5256,6 +5258,8 @@ cur_mvbg:
     mov bl, [es:di]
     ret
 
+%ifdef GFX_VGA                  ; ...and the PLANAR draw, whose only callers are
+                                ; the two planar arms above (kernel size pass 13)
 ; -----------------------------------------------------------------------------
 ; cur_draw - paint the arrow at (cur_drawn_x, cur_drawn_y) on a PLANAR screen:
 ;            white pass with the cur_and outline mask, black pass with the
@@ -5315,6 +5319,11 @@ cur_draw:
     out dx, ax
 .done:
     ret
+%else
+    nop                         ; PARITY, never executed (kernel size pass 13):
+                                ; cur_draw's odd 105 would put sch_isr and
+                                ; sch_switch at an odd shift on kern_small
+%endif                          ; GFX_VGA: cur_draw
 
 ; -----------------------------------------------------------------------------
 ; cursor bitmap - classic Mac arrow, hot spot (0,0), black body 11 rows tall
@@ -6022,7 +6031,7 @@ cur_celly   resw 1              ; hot-spot-relative (SPEC.md 7.2.2). Banked
 absolute gfx_u                  ; ...and cur_move_mono's working set is a
                                 ; member of vga12.inc's PRIMITIVE UNION (size
                                 ; pass 9). cur_move runs from the mouse ISR and
-                                ; kbm_paint only with the gfx lock FREE, and
+                                ; kbm_move only with the gfx lock FREE, and
                                 ; from gfx_unlock's cur_lazyend after every
                                 ; primitive of the hold has returned - so it is
                                 ; never inside one of the union's five, which is

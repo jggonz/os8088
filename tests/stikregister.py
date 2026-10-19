@@ -23,8 +23,9 @@ DESKCAL.DAT. One boot on a VGA XT (MartyPC), driven by name:
      first file call (the loader's read of the package is all it costs).
   D  the x its HANDLE reveals (hovered: a widget has no close box, SPEC.md
      110.11) removes the row BY NAME: SYSTEM.CFG has no trailer, and the
-     close saved DESKCAL.DAT - 2,456 bytes, a valid header holding the
-     widget's FACE origin (STIK_HF_CONT) and the empty payload.
+     close saved DESKCAL.DAT - 24 bytes, a valid header holding the
+     widget's FACE origin (STIK_HF_CONT) and the empty payload PACKED: its
+     8 bytes of counts and settings and no record (SPEC.md 110.5.3).
   E  a reset brings NO calendar back: the row went with the close.
 
 **BREAK IT ON PURPOSE**: take stik_single's call out of stik_load and C fails
@@ -50,7 +51,6 @@ import os88stik    # noqa: E402
 ROOT = os.path.join(HERE, "..")
 BDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
 TITLE = "Desk Calendar"
-STIK_ST = os88stik.stik_st_off(os88stik.DESKCAL_STIK_BSS, os88stik.DESKCAL_PAYLEN)
 STIK_S_ROW, STIK_S_DIRTY = 2, 16
 LD_EABORT = 4
 
@@ -95,6 +95,9 @@ def main():
     sysimg = os.path.join(tmp, "os8088-360.img")
     shutil.copy(os.path.join(BDIR, "os8088-360.img"), sysimg)
     image = image_size()
+    so = os88stik.state_off(os88stik.DESKCAL_LIB, os88stik.DESKCAL_STIK_BSS,
+                            os88stik.DESKCAL_PAYLEN, image)
+    STIK_ST = so["st"]          # in the Sticky App block (SPEC.md 110.15)
 
     with os88ui.boot(sysimg, machine="os8088_xt_vga") as ui:
         m = ui.m
@@ -143,7 +146,7 @@ def main():
         # build wrote one ~2 s after every first launch. The file comes with
         # the close (D) or a drag (stikmove)
         def hdr():
-            return m.readseg(wseg, image + os88stik.DESKCAL_STIK_BSS, 4)
+            return m.readseg(wseg, image + so["hdr"], 4)
         os88marty.guest_sleep(m, 7.0)
         check(not hdr()[3] & os88stik.STIK_HF_POS and not st() & STIK_S_DIRTY,
               "untouched, nothing is owed (stik_st = %#x, header flags %#x)"
@@ -184,17 +187,13 @@ def main():
         try:
             dat = v.read("SYSTEM/APPDATA/DESKCAL.DAT")
             pd = os88stik.parse_dat(dat, os88stik.DESKCAL_PAYLEN,
-                                   os88stik.DESKCAL_PAYVER)
+                                   os88stik.DESKCAL_PAYVER, packed=True)
             cal = os88stik.parse_deskcal(pd["payload"])
         except Exception as e:
             dat, pd, cal = b"", {"pos": False}, {"err": str(e)}
-        # as long as its content (SPEC.md 110.5.3): the header and the
-        # payload less its zero tail - parse_dat has checked +14 against it
-        check(os88stik.STIK_HDR_SIZE <= len(dat)
-              <= os88stik.STIK_HDR_SIZE + os88stik.DESKCAL_PAYLEN
-              and pd.get("paylen") == len(dat) - os88stik.STIK_HDR_SIZE,
-              "DESKCAL.DAT is the header and its content (%d bytes)"
-              % len(dat))
+        check(len(dat) == os88stik.STIK_HDR_SIZE + os88stik.DESKCAL_APPT0,
+              "DESKCAL.DAT is %d bytes, packed (%d)"
+              % (os88stik.STIK_HDR_SIZE + os88stik.DESKCAL_APPT0, len(dat)))
         check(pd.get("pos") and pd.get("cont")
               and (pd["x"], pd["y"]) == (w.x + 1, w.y)
               and tuple(pd.get("screen") or ()) == (640, 480),

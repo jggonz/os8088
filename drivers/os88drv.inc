@@ -319,8 +319,9 @@ DSV_CPDRAG   equ 32             ; near proc: the TRACKING edge - the pointer
 DSV_PKGCALL  equ 34             ; dw: near proc reached by OSAPI_DRV_CALL -
                                 ; THE FENCE (SPEC.md 20.11). Publish it and a
                                 ; package can call you; leave it 0 and it
-                                ; cannot. HDD.DRV leaves it 0, so no package
-                                ; can reach DSV_BLK and write a raw sector.
+                                ; cannot. HDD.DRV's reaches HDV_ARM and
+                                ; HDV_DISARM and no sector (52.1.4), so no
+                                ; package can reach DSV_BLK through it.
                                 ;
                                 ;   in  BL = a verb YOU define, BH = your class
                                 ;       - except DRVC_EMS, which gets the
@@ -649,18 +650,26 @@ DRV_VER equ 11
 ; doorless drivers' (HDD.DRV's 2 bytes today), and the length is the guard
 ; that makes a short table safe rather than the pad that used to be.
 ; -----------------------------------------------------------------------------
+%ifndef DRV_ORG
+  %define DRV_ORG 0         ; THE SHIPPED IMAGE IS ORG 0, ALWAYS. The Makefile
+%endif                      ; assembles HMA-capable drivers a second time at
+                            ; DRV_ORG = the kernel's DRV_HMA_ORG, and that
+                            ; copy is never shipped: tools/os88rom.py diffs
+                            ; the pair into the table COLDHMA.SYS relocates
+                            ; the loaded image by (docs/plans/HMA-PLAN.md 5)
 %macro OS88_DRIVER 3-4 DSV_SIZE
     %xdefine OS88_DSV_LEN (%4)
     cpu 8086
     bits 16
-    org 0
+    org DRV_ORG
     db 'O', '8'             ; +0  magic (word 0x384F), a package's own
     db DRV_VER              ; +2  the DRIVER format. A package is PKG_FMT, so the
                             ;     application loader refuses this file even
                             ;     if one ever reaches it (SPEC.md 51.1)
     db %2                   ; +3  class: the kernel checks it against the
                             ;     table row it is filling
-    dw 0                    ; +4  link base: 0 (org 0, like every package)
+    dw DRV_ORG              ; +4  link base: 0 (org 0, like every package) -
+                            ;     or, in a copy the HMA runs, where it runs
     dw (%3) - $$            ; +6  entry offset
     dw OS88_DRV_SIZE        ; +8  image size = the whole file, data included
     dw FSV_SIZE             ; +10 THE FSV_* TABLE LENGTH THIS DRIVER WAS BUILT

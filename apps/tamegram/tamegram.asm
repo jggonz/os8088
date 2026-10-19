@@ -180,8 +180,9 @@ TG_HUD_W    equ 248             ; the widest HUD row is 240px (LOCK's 32 at
 ; leaving the last uniformly-fixable entry on the survey invites the next reader
 ; to re-derive the whole census. It is NOT taken for the time.
 ;
-; tg_hud stores each column DIVIDED BY 8, which is the same rule written so it
-; cannot be broken: a column that is not a multiple of 8 does not assemble.
+; tg_hud's TG_HUDF checks every column it is given the same way, so a column
+; that is not a multiple of 8 does not assemble. (It stored them divided by 8
+; until apps size pass 2, which cost a `mul` a field to undo.)
 TG_HC_L     equ 8               ; row 1's title, row 2's THREAT, row 3's VECTOR
 TG_HC_LV    equ 64              ; the value beside whichever left label has one
 TG_HC_R     equ 112             ; row 2's PURGES
@@ -271,40 +272,44 @@ tg_entry:
     jbe .cap
     mov ax, TG_CSZ_MAX
 .cap:
-    or ax, ax
-    jnz .csz
-    inc ax
-.csz:
-    shl ax, cl                      ; AX = the matrix, 32 cells of it
+    shl ax, cl                      ; AX = the matrix, 32 cells of it. No
+                                    ; floor of 1 here: this is only the
+                                    ; REQUEST, the smallest desktop band
+                                    ; (CGA's 136 rows) holds 3px cells, and
+                                    ; the floor that guards the drawing is
+                                    ; tg_track's
     mov dx, TG_HUD_W                ; content width = max(matrix, HUD)
     cmp ax, dx
     jbe .wid
     mov dx, ax
 .wid:
-    inc dx                          ; frame = content + the 1px sides
-    inc dx
-    mov [tg_tpl + WT_W], dx
-    add ax, TG_HUD_H + TITLE_H + 1  ; content height = HUD + matrix
-    mov [tg_tpl + WT_H], ax
-
-    pop bx                          ; centred horizontally, a third of the way
-    sub bx, dx                      ; down the desktop band
-    jns .xok
-    xor bx, bx
+    inc dx                          ; DX = the frame's width: the content and
+    inc dx                          ; its 1px sides
+    add ax, TG_HUD_H + TITLE_H + 1  ; AX = its height: HUD, matrix, title
+    xchg ax, cx                     ; CX = the height
+    pop ax                          ; the screen width: centred horizontally,
+    sub ax, dx                      ; a third of the way down the desktop
+    jns .xok                        ; band
+    xor ax, ax
 .xok:
-    shr bx, 1
-    mov [tg_tpl + WT_X], bx
-    xchg ax, si                     ; AX = the dock row, SI = the frame height
+    shr ax, 1
+    mov di, tg_tpl                  ; the template's first four words, in
+    stosw                           ; order: WT_X...
+    xchg ax, si                     ; AX = the dock row
     sub ax, MBAR_H
-    sub ax, si
+    sub ax, cx
     jns .yok
     xor ax, ax
 .yok:
-    xor dx, dx
-    mov bx, 3
-    div bx
+    mov bl, 3                       ; what the frame leaves of the band is
+    div bl                          ; under 160 rows (the cell takes the rest
+    cbw                             ; up to its cap), so AL < 128: AH = 0
     add ax, MBAR_H
-    mov [tg_tpl + WT_Y], ax
+    stosw                           ; ...WT_Y
+    xchg ax, dx
+    stosw                           ; ...WT_W
+    xchg ax, cx
+    stosw                           ; ...and WT_H
 
     call OSAPI_GET_TICKS            ; seeded once; every later piece, faction
     call OSAPI_SRAND                ; and vector walks on down the same stream
@@ -337,7 +342,8 @@ tg_entry:
 ; in:  SI = window ptr
 ; out: [tg_ox]/[tg_oy], [tg_cwid]/[tg_chgt] and the metrics derived from them;
 ;      CF = OSAPI_WM_GEOM's (1 = not visible; the sizes are filled in either
-;      way). ES = DS. Keeps AX, SI, DI; clobbers BX, CX, DX
+;      way). ES = DS, BX = SI (the WM calls keep it). Keeps AX, SI, DI;
+;      clobbers CX, DX
 ;
 ; Called at the top of every callback and every rendered frame: the window
 ; moves, and wm_fit may have clamped what the entry proc asked for. Reading
@@ -387,13 +393,10 @@ tg_track:
     mov [tg_csz], ax
     shl ax, cl
     mov [tg_boardpx], ax
-    mov dx, [tg_cwid]               ; centre the matrix under the HUD
-    sub dx, ax
-    jns .lok
-    xor dx, dx
-.lok:
-    shr dx, 1
-    mov [tg_bx0], dx
+    mov dx, [tg_cwid]               ; centre the matrix under the HUD. It
+    sub dx, ax                      ; cannot be wider than the box: a cell
+    sar dx, 1                       ; is at most [tg_cwid] / 32, and the box
+    mov [tg_bx0], dx                ; is never under TG_HUD_W
     popf
     pop ax
     ret
@@ -416,11 +419,11 @@ tg_paint:
     ; latched on failure and the next paint tries again. What must NOT happen
     ; is a second spawn.
     cmp byte [tg_hired], 0
-    jne tg_ret
+    jne .out
     mov ax, tg_worker
     mov bx, [tg_win]
     call OSAPI_TASK_SPAWN           ; ...which answers the slot in AL
-    jc tg_ret
+    jc .out
     inc byte [tg_hired]
     ; ...AND THE REGION CANNOT MOVE WITHOUT THIS (SPEC.md 66.6.2): the
     ; kernel wrote our segment into this worker's frame before its
@@ -431,7 +434,8 @@ tg_paint:
     ; OSAPI_MEM_PARKSAFE), which is the TOP of the loop, and every byte
     ; that outlives a pass is a static and moves with us.
     OS88_WORKER_RESTARTABLE_NOKEEP tg_worker   ; 8 bytes: a W_PAINT owes
-    ret                             ; SI back and no flag (SPEC.md 11.3)
+.out:                               ; SI back and no flag (SPEC.md 11.3)
+    ret
 
 ; -----------------------------------------------------------------------------
 ; tg_onkey - W_ONKEY
@@ -451,38 +455,39 @@ tg_onkey:
     call tg_track                   ; (keeps AX)
     call tg_panel_off               ; the key that takes a panel down is spent
     jc .rep                         ; doing it, and owes the repaint
-    xchg ax, dx                     ; DH = scan, DL = ascii...
-    xchg dl, dh                     ; ...and the other way round
+    xchg ax, dx                     ; DH = scan, DL = ascii
     mov si, tg_kscan
     call tg_look
     jnc .cmd
-    mov dl, dh                      ; the ascii, for the second table
-    or dl, dl
-    jz tg_ret
-    cmp dl, 'a'                     ; letters fold to upper case; nothing in
+    mov dh, dl                      ; the ascii, for the second table
+    or dh, dh
+    jz .ret
+    cmp dh, 'a'                     ; letters fold to upper case; nothing in
     jb .up                          ; the table is above 'Z', so whatever else
-    and dl, 0xDF                    ; this folds cannot match
+    and dh, 0xDF                    ; this folds cannot match
 .up:
     mov si, tg_kasc
     call tg_look
-    jc tg_ret
+    jc .ret
     cmp al, TG_K_ACT
     jb .cmd
     sub al, TG_K_ACT
+.act:                               ; (tg_oncmd's Protocol items, too)
     call tg_act
 .rep:
     jmp tg_draw_all
 .cmd:
     mov [tg_cmd], al
+.ret:
     ret
 
-; tg_look - DL = key, SI = a table of (key, value) byte pairs ending in a 0
+; tg_look - DH = key, SI = a table of (key, value) byte pairs ending in a 0
 ; key. out: CF = 0 and AL = the value, or CF = 1 not there. Clobbers AX, SI.
 tg_look:
     lodsw
     or al, al
     jz .miss
-    cmp al, dl
+    cmp al, dh
     jne tg_look
     mov al, ah                      ; CF = 0: the compare was equal
     ret
@@ -508,17 +513,12 @@ tg_oncmd:
     call tg_track                   ; (keeps AX)
     call tg_panel_off               ; a panel is replaced, not stacked; the
     or ah, ah                       ; repaint below is the one either way
-    jnz .help
-    call tg_act
-    jmp tg_draw_all
-.help:
+    jz tg_onkey.act                 ; Protocol: tg_act, then the repaint
     or al, al                       ; menu 1 has exactly one item
-    jnz .rep
+    jnz tg_onkey.rep
     mov ah, 2                       ; panel 2, the instruction sheet
     mov bx, tg_hlines
     jmp tg_panel_on
-.rep:
-    jmp tg_draw_all
 
 ; tg_act - one of the four state toggles: AL = 0 New, 1 Halt, 2 Colour-Blind,
 ; 3 Lock Vector - the Protocol menu's item order, which N, P, C and F reach too
@@ -526,12 +526,12 @@ tg_act:
     dec al
     js tg_newgame
     jz tg_toggle_halt
+    mov bx, tg_cblind
     dec al
-    jnz .lock
-    xor byte [tg_cblind], 1
-    ret
-.lock:
-    xor byte [tg_glock], 1
+    jz .flip
+    mov bx, tg_glock
+.flip:
+    xor byte [bx], 1
     ret
 
 ; tg_toggle_halt - P / 'Halt'. A finished game cannot be paused, and it owes a
@@ -539,17 +539,29 @@ tg_act:
 tg_toggle_halt:
     mov ax, [tg_mode]               ; AL = the mode, AH = the one it halted
     cmp al, TG_M_OVER
-    je tg_owefull
-    cmp al, TG_M_PAUSE
-    je .unp
-    mov ah, al
-    mov al, TG_M_PAUSE
-    jmp short .set
-.unp:
-    mov al, ah
-.set:
-    mov [tg_mode], ax
-    jmp tg_owefull
+    je tg_owe
+    cmp al, TG_M_PAUSE              ; halted: AH holds the mode it halted,
+    je .swap                        ; and the swap puts it back (leaving
+    mov ah, TG_M_PAUSE              ; PAUSE in [tg_wasmode], which nothing
+.swap:                              ; reads before the next halt rewrites
+    xchg al, ah                     ; it); running: AL = PAUSE, AH = the
+    mov [tg_mode], ax               ; mode it halted
+    jmp short tg_owe
+
+; tg_newgame - an empty board and a fresh piece. Needs ES = DS.
+; (Here beside tg_act rather than with tg_spawn: tg_act's branch to it, and
+; tg_toggle_halt's to tg_owe, are then short jumps - apps size pass 2.)
+tg_newgame:
+    mov di, tg_fallspd              ; the block below, in its bss order
+    mov ax, TG_FALL0
+    stosw                           ; [tg_fallspd]
+    stosw                           ; [tg_fallcd]
+    xor ax, ax
+    mov cx, (TG_NGEND - tg_ocell) / 2
+    rep stosw                       ; ...and everything to the grid's end
+    mov byte [tg_grav], TG_G_S
+    call tg_owefull
+    jmp tg_spawn                    ; cannot fail on an empty board
 
 ; -----------------------------------------------------------------------------
 ; The two panels (SPEC.md 49.6)
@@ -592,8 +604,9 @@ tg_panel_on:                        ; AH = which panel, BX = its lines
 ; -----------------------------------------------------------------------------
 tg_panel_off:
     cmp byte [tg_panel], 0
-    je .none                        ; CF = 0: the compare was equal
+    je tg_owe.none                  ; CF = 0: the compare was equal
     mov byte [tg_panel], 0
+tg_owe:                             ; tg_owefull for the UI half, CF = 1
     mov word [tg_dirty], 0x0101     ; [tg_dirty] and [tg_full], one store
     stc
 .none:
@@ -628,6 +641,11 @@ tg_onclick:
 ; OSAPI_TASK_ALIVE is called with the lock FREE (rule 4: gfx_lock is not
 ; reentrant, and taking it twice never draws again). tests/tgplay.py
 ; breakpoints the three calls inside the hold, so each is written once.
+;
+; While a panel is up the UI task owns the content and the game is frozen:
+; the tick skips both halves, which is the ONE test where each half used to
+; make its own (apps size pass 2) - nothing between them can raise a panel,
+; only the UI task does, and it is shut out by the lock we hold.
 ; -----------------------------------------------------------------------------
 tg_worker:
     push ds                         ; ES = us, for tg_resolve's stosw; every
@@ -638,18 +656,19 @@ tg_worker:
     mov ax, 1
     call OSAPI_TASK_SLEEP
     call OSAPI_GFX_LOCK
+    cmp byte [tg_panel], 0
+    jne .free                       ; a panel is up: the UI task owns us
     call tg_update
     call tg_frame
+.free:
     call OSAPI_GFX_UNLOCK
     jmp .loop
 
 ; -----------------------------------------------------------------------------
 ; tg_update - advance the state machine by one tick
-; in:  gfx lock held
+; in:  gfx lock held, no panel up (tg_worker tests that)
 ; -----------------------------------------------------------------------------
 tg_update:
-    cmp byte [tg_panel], 0
-    jne tg_ret                      ; a panel is up: the UI task owns us
     call tg_do_cmds
     mov al, [tg_mode]
     cmp al, TG_M_FLASH
@@ -746,16 +765,32 @@ tg_nudge:
     test byte [tg_grav], 1          ; keep only the component across the
     jnz .row                        ; fall: a vertical fall moves the column,
     xor dh, dh                      ; a horizontal one the row
-    jmp tg_tryshift
-.row:
-    xor dl, dl
-    jmp tg_tryshift
+    jmp short tg_tryshift
 .soft:
     call tg_step_grav
     cmp byte [tg_mode], TG_M_PLAY
     jne tg_ret
     mov ax, [tg_fallspd]
     mov [tg_fallcd], ax
+    ret
+.row:
+    xor dl, dl
+    ; ...into tg_tryshift, which follows (apps size pass 2)
+
+; -----------------------------------------------------------------------------
+; tg_tryshift - move the piece by DL = d(col), DH = d(row) if it fits there
+; out: CF = 1 refused, nothing changed; else the origin moved and a frame is
+;      owed. The ONE place the origin is written outside tg_spawn.
+; -----------------------------------------------------------------------------
+tg_tryshift:
+    mov bx, [tg_pc]                 ; BL = column, BH = row
+    add bl, dl
+    add bh, dh
+    call tg_fits
+    jc .out
+    mov [tg_pc], bx
+    mov byte [tg_dirty], 1
+.out:
     ret
 
 ; tg_rotate - a quarter turn, refused (and put back) if it does not fit
@@ -798,22 +833,6 @@ tg_gvec:
     xor bh, bh
     shl bx, 1
     mov bx, [tg_gtab + bx]
-    ret
-
-; -----------------------------------------------------------------------------
-; tg_tryshift - move the piece by DL = d(col), DH = d(row) if it fits there
-; out: CF = 1 refused, nothing changed; else the origin moved and a frame is
-;      owed. The ONE place the origin is written outside tg_spawn.
-; -----------------------------------------------------------------------------
-tg_tryshift:
-    mov bx, [tg_pc]                 ; BL = column, BH = row
-    add bl, dl
-    add bh, dh
-    call tg_fits
-    jc .out
-    mov [tg_pc], bx
-    mov byte [tg_dirty], 1
-.out:
     ret
 
 ; =============================================================================
@@ -1204,20 +1223,8 @@ tg_spawn:
     mov [tg_fallcd], ax
     mov byte [tg_dirty], 1          ; CF = 0 still, from tg_fits
 .out:
-    ret
-
-; tg_newgame - an empty board and a fresh piece. Needs ES = DS.
-tg_newgame:
-    mov di, tg_fallspd              ; the block below, in its bss order
-    mov ax, TG_FALL0
-    stosw                           ; [tg_fallspd]
-    stosw                           ; [tg_fallcd]
-    xor ax, ax
-    mov cx, (TG_NGEND - tg_ocell) / 2
-    rep stosw                       ; ...and everything to the grid's end
-    mov byte [tg_grav], TG_G_S
-    call tg_owefull
-    jmp tg_spawn                    ; cannot fail on an empty board
+tg_fret:                            ; ...and the ret tg_frame's refusals and
+    ret                             ; tg_draw_all's take: the nearest one
 
 ; =============================================================================
 ; Drawing
@@ -1225,23 +1232,20 @@ tg_newgame:
 
 ; -----------------------------------------------------------------------------
 ; tg_frame - the worker's half of a frame
-; in:  gfx lock HELD by tg_worker
+; in:  gfx lock HELD by tg_worker, no panel up
 ;
 ; A PLAY frame costs the four cells the piece left and the four it arrived at.
 ; [tg_full] is the latch for everything else: a lock, a purge, a settle step,
 ; a mode change or a dismissed About all raise it and buy one whole repaint.
 ; -----------------------------------------------------------------------------
 tg_frame:
-    cmp byte [tg_panel], 0
-    jne tg_ret                      ; the UI task owns the content
-    cmp byte [tg_dirty], 0
-    je tg_ret
+    cmp byte [tg_dirty], 0          ; (no panel is up: tg_worker tests that)
+    je tg_fret
     mov si, [tg_win]
     call tg_track                   ; the window may have been dragged;
-    jc tg_ret                       ; hidden: nothing to draw on
-    mov bx, si
+    jc tg_fret                      ; hidden: nothing to draw on. BX = SI
     call OSAPI_WM_CLIP_SET          ; cut to whatever of us still shows
-    jc tg_ret                       ; (SPEC.md 11.3); CF=1 = wholly covered
+    jc tg_fret                      ; (SPEC.md 11.3); CF=1 = wholly covered
     cmp byte [tg_full], 0
     mov word [tg_dirty], 0          ; this frame pays what was owed, both
     jne tg_draw_all                 ; flags (the `mov` leaves the compare's)
@@ -1258,252 +1262,22 @@ tg_frame:
 ; tg_draw_all - the whole content, from the black up
 ; in:  gfx lock held, origin tracked
 ;
-; The black starts BELOW the HUD band: tg_draw_hud fills the band itself, so
-; a black wipe over it first was every one of its pixels written twice and an
-; instant of black behind the status line on every whole repaint (PERFORMANCE
-; rule 2).
+; The black starts BELOW the HUD band: the band is filled in its own colour,
+; so a black wipe over it first was every one of its pixels written twice and
+; an instant of black behind the status line on every whole repaint
+; (PERFORMANCE rule 2).
+;
+; tg_draw_board is this routine's middle, entered only by falling in:
+; nothing else draws the board (apps size pass 2 folded its call in).
 ; -----------------------------------------------------------------------------
 tg_draw_all:
     mov al, TG_BG
-    call OSAPI_SET_COLOR
-    xor ax, ax
     mov bx, TG_HUD_H
-    mov cx, [tg_cwid]
-    dec cx
     mov dx, [tg_chgt]
     dec dx
-    call tg_fillc
+    call tg_band
     call tg_draw_hud
-    call tg_draw_board
-    cmp byte [tg_mode], TG_M_PAUSE  ; PLAY or PAUSE: the piece is on screen
-    ja .noa
-    call tg_draw_active             ; ...and is the next PLAY frame's erase
-.noa:                               ; target
-    call tg_draw_banner
-    cmp byte [tg_panel], 0
-    je tg_ret
-    mov bx, [tg_win]                ; ...and the panel LAST: the shared card,
-    mov si, [tg_plines]             ; measured, centred and clamped to the
-    jmp os88ui_about_d              ; content box it reads for itself
 
-; -----------------------------------------------------------------------------
-; tg_clampc - clamp a content rect to the content box, then add the origin
-; in:  AX/BX/CX/DX = x1/y1/x2/y2, inclusive, in content coords
-; out: CF = 1 nothing is left to draw; else AX/BX/CX/DX are screen coords
-;
-; The one place this module turns its own rects into the screen's, and the
-; reason it exists is SPEC.md 11.3: the gfx_* primitives clip to the SCREEN,
-; not to a window, and W_PAINT runs with no clip region armed. A rect that is
-; one row too tall therefore paints over the window below us rather than
-; being trimmed. Comparisons are SIGNED - a content coordinate can be
-; negative, and an unsigned test would read -1 as 65,535 and pass it.
-; -----------------------------------------------------------------------------
-tg_clampc:
-    or ax, ax
-    jns .x1
-    xor ax, ax
-.x1:
-    or bx, bx
-    jns .y1
-    xor bx, bx
-.y1:
-    push si
-    mov si, [tg_cwid]
-    dec si
-    cmp cx, si
-    jle .x2
-    mov cx, si
-.x2:
-    mov si, [tg_chgt]
-    dec si
-    cmp dx, si
-    jle .y2
-    mov dx, si
-.y2:
-    pop si
-    cmp ax, cx
-    jg .none
-    cmp bx, dx
-    jg .none
-    add ax, [tg_ox]
-    add bx, [tg_oy]
-    add cx, [tg_ox]
-    add dx, [tg_oy]
-    clc
-    ret
-.none:
-    stc
-    ret
-
-; tg_fillc / tg_framec - a filled / outlined rect in content coords, in the
-; pen already set. Clobber AX-DX.
-tg_fillc:
-    call tg_clampc
-    jc .out
-    call OSAPI_GFX_FILL
-.out:
-    ret
-
-tg_framec:
-    call tg_clampc
-    jc .out
-    call OSAPI_GFX_FRAME
-.out:
-    ret
-
-; -----------------------------------------------------------------------------
-; tg_run / tg_str - a string in content coords, opaque and transparent
-; in:  CX/DX = content coords, SI = NUL string
-;      tg_run: AL = ink, AH = the ground the caller has just laid down
-;      tg_str: the pen, already set
-; Clobber CX, DX (and AX in tg_str_gate's test).
-;
-; All-or-nothing, and deliberately so: a cell is drawn whole or not at all, so
-; a string half outside the box cannot be trimmed to fit. One that would leave
-; the box is DROPPED rather than clipped - a missing HUD field is a layout bug
-; you can see, and a glyph painted onto the window next door is one you cannot.
-;
-; TWO ENTRIES because one caller cannot name a ground: the PAUSE / GAME OVER
-; banner lands on the matrix, which is a grid of coloured cells and not a
-; colour - SPEC.md 6.6.2 case 1, and the only transparent text left in this
-; package. Everything else letters onto something this same routine's caller
-; filled a few instructions earlier: the HUD band is [tg_hudbg] and the About
-; card is its own panel.
-; -----------------------------------------------------------------------------
-tg_run:
-    push ax                         ; the pair, banked across FONT_WIDTH
-    call tg_str_gate
-    pop ax
-    jc .out
-    call OSAPI_FONT_RUN
-.out:
-    ret
-
-tg_str:
-    call tg_str_gate
-    jc .out
-    call OSAPI_FONT_STR_XPARENT
-.out:
-    ret
-
-; tg_str_gate - the shared box test. CF=1 drop it; CF=0 draw at CX/DX, which
-; it has moved to SCREEN coordinates. Clobbers AX.
-tg_str_gate:
-    or cx, cx
-    js .no
-    or dx, dx
-    js .no
-    mov ax, dx
-    add ax, 8
-    cmp ax, [tg_chgt]
-    jg .no
-    call OSAPI_FONT_WIDTH           ; AX = the string's pixel width
-    add ax, cx
-    cmp ax, [tg_cwid]
-    jg .no
-    add cx, [tg_ox]
-    add dx, [tg_oy]
-    clc
-    ret
-.no:
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; tg_draw_hud - the status band above the matrix
-; Three 8px rows inside TG_HUD_H, and the layout the TG_HUD_W floor is for,
-; drawn from the table tg_hud: every field is an opaque run of its own on the
-; band this routine fills first, so no pen is set after the band's.
-; -----------------------------------------------------------------------------
-tg_draw_hud:
-    mov al, [tg_hudbg]
-    call OSAPI_SET_COLOR
-    xor ax, ax
-    xor bx, bx
-    mov cx, [tg_cwid]
-    dec cx
-    mov dx, TG_HUD_H - 1
-    call tg_fillc
-    mov di, tg_hud
-    cmp byte [tg_glock], 0          ; LOCK is the table's first row, and
-    jne .field                      ; there only while the vector is locked
-    add di, 4
-.field:
-    cmp byte [di], 0
-    je tg_ret
-    mov si, [di + 2]                ; a string, or a live field's number
-    cmp si, TG_HF_N
-    jae .text
-    shl si, 1
-    cmp si, 2 * TG_HF_VEC
-    jae .name
-    mov ax, [tg_score + si]         ; THREAT or PURGES, as decimal
-    call tg_fmt
-    jmp short .text
-.name:
-    mov bl, [tg_grav]               ; VECTOR: [tg_vecname + grav]
-    mov si, tg_vecname
-    je .pick
-    mov al, [tg_pfac]               ; FACTION: [tg_facname + the pair]
-    call tg_faci
-    mov si, tg_facname
-.pick:
-    xor bh, bh
-    shl bx, 1
-    mov si, [si + bx]
-.text:
-    mov al, [di]                    ; the column, stored / 8
-    mov ah, 8
-    mul ah
-    xchg ax, cx
-    mov dl, [di + 1]                ; the row; bit 7 = the one yellow field
-    mov al, CWHITE                  ; Text that must be read comes from the
-    shl dl, 1                       ; white class: SPEC.md 39.4 rounds an
-    jnc .ink                        ; unflagged glyph to black or white, and
-    mov al, CYELLOW                 ; CLGRAY rounds to black - which is what
-.ink:                               ; left Missile Command's wave counter not
-    shr dl, 1                       ; faint but absent. A filled BAND may
-    xor dh, dh                      ; dither; a 1px stroke does not survive it
-    mov ah, [tg_hudbg]              ; AH = the band, filled above
-    call tg_run
-    add di, 4
-    jmp .field
-
-; tg_faci - AL = a faction (1 or 2) -> BX = its index in the colour and name
-; tables: (colour-blind * 2) + faction - 1
-tg_faci:
-    mov bl, [tg_cblind]
-    shl bl, 1
-    add bl, al
-    mov bh, 0
-    dec bx
-    ret
-
-; -----------------------------------------------------------------------------
-; tg_fmt - AX in decimal -> SI = the digits, in tg_numbuf, which holds five
-; and the NUL the loader's bss zeroing put after them: exactly what a 16-bit
-; counter can need. 0 is one pass of the loop, so it needs no case of its own.
-; Clobbers AX, BX, DX.
-;
-; The divide's remainder is in DX, which is why nothing here may hold a y in
-; it: an earlier version of this drew THREAT's digit at y = the digit's own
-; ASCII code - a score of 3 put a stray 3 on board row 3 and left the HUD
-; field blank (SPEC.md 49.7). The caller sets its pen AFTER this returns.
-; -----------------------------------------------------------------------------
-tg_fmt:
-    mov si, tg_numbuf + 5
-    mov bx, 10
-.lp:
-    xor dx, dx
-    div bx
-    add dl, '0'
-    dec si
-    mov [si], dl
-    or ax, ax
-    jnz .lp
-    ret
-
-; -----------------------------------------------------------------------------
 ; tg_draw_board / tg_draw_flash_pages - the matrix's cells
 ;
 ; One walk over the 1,024 cells, row-major, selecting with [tg_wsel]: the
@@ -1511,21 +1285,29 @@ tg_fmt:
 ; its faction's colour) and the flash pages only the marked ones. Leaving the
 ; rest of the content alone is what stops the ghost trails a full tg_draw_all
 ; wipe left behind every shrink on the direct-to-VRAM path.
-; -----------------------------------------------------------------------------
 tg_draw_board:
     mov al, [tg_frcol]
     call OSAPI_SET_COLOR
     mov ax, [tg_bx0]
     mov bx, TG_HUD_H
-    mov cx, ax
-    add cx, [tg_boardpx]
+    mov cx, [tg_boardpx]
     dec cx
-    mov dx, bx
-    add dx, [tg_boardpx]
-    dec dx
+    mov dx, cx
+    add cx, ax                      ; x2 = bx0 + boardpx - 1
+    add dx, bx                      ; y2 = TG_HUD_H + boardpx - 1
     call tg_framec
     mov al, TG_FAC                  ; any occupant
-    jmp short tg_walk
+    call tg_walk
+    cmp byte [tg_mode], TG_M_PAUSE  ; PLAY or PAUSE: the piece is on screen
+    ja .noa
+    call tg_draw_active             ; ...and is the next PLAY frame's erase
+.noa:                               ; target
+    call tg_draw_banner
+    cmp byte [tg_panel], 0
+    je tg_walk.ret
+    mov bx, [tg_win]                ; ...and the panel LAST: the shared card,
+    mov si, [tg_plines]             ; measured, centred and clamped to the
+    jmp os88ui_about_d              ; content box it reads for itself
 
 tg_draw_flash_pages:
     mov al, TG_MARK                 ; marked cells only
@@ -1586,7 +1368,69 @@ tg_walk:
     inc di
     cmp di, TG_CELLS
     jb .cell
+.ret:
     ret
+
+; tg_draw_hud - the status band above the matrix
+; Three 8px rows inside TG_HUD_H, and the layout the TG_HUD_W floor is for,
+; drawn from the table tg_hud: every field is an opaque run of its own on the
+; band filled first, so no pen is set after the band's.
+tg_draw_hud:
+    mov al, [tg_hudbg]
+    xor bx, bx
+    mov dx, TG_HUD_H - 1
+    call tg_band
+    mov di, tg_hud
+    cmp byte [tg_glock], 0          ; LOCK is the table's first row, and
+    jne .field                      ; there only while the vector is locked
+    add di, 4
+.field:
+    cmp byte [di], 0                ; the row: 0 ends the table
+    je tg_walk.ret                  ; (the nearest ret)
+    mov si, [di + 2]                ; a string, or a live field's number
+    cmp si, TG_HF_N
+    jae .text
+    shl si, 1
+    cmp si, 2 * TG_HF_VEC
+    jae .name
+    mov ax, [tg_score + si]         ; THREAT or PURGES, as decimal
+    call tg_fmt
+    jmp short .text
+.name:
+    mov bl, [tg_grav]               ; VECTOR: [tg_vecname + grav]
+    mov si, tg_vecname
+    je .pick
+    mov al, [tg_pfac]               ; FACTION: [tg_facname + the pair]
+    call tg_faci
+    mov si, tg_facname
+.pick:
+    xor bh, bh
+    shl bx, 1
+    mov si, [si + bx]
+.text:
+    mov dx, [di]                    ; DL = the row (bit 7 = the one yellow
+    mov cl, dh                      ; field), DH = the column in pixels
+    xor ch, ch
+    mov al, CWHITE                  ; Text that must be read comes from the
+    shl dl, 1                       ; white class: SPEC.md 39.4 rounds an
+    jnc .ink                        ; unflagged glyph to black or white, and
+    mov al, CYELLOW                 ; CLGRAY rounds to black - which is what
+.ink:                               ; left Missile Command's wave counter not
+    shr dl, 1                       ; faint but absent. A filled BAND may
+    xor dh, dh                      ; dither; a 1px stroke does not survive it
+    mov ah, [tg_hudbg]              ; AH = the band, filled above
+    call tg_run
+    add di, 4
+    jmp .field
+
+; tg_band - fill the content's full width, rows BX..DX, in colour AL.
+; Clobbers AX-DX.
+tg_band:
+    call OSAPI_SET_COLOR
+    xor ax, ax
+    mov cx, [tg_cwid]
+    dec cx
+    jmp tg_fillc
 
 ; -----------------------------------------------------------------------------
 ; tg_cell_paint - the cell AH = row, AL = col in faction DL's colour
@@ -1635,7 +1479,73 @@ tg_cell_fill:
     dec cx
     sub cx, si
     pop bx
-    jmp tg_fillc
+    ; ...into tg_fillc, which follows it (apps size pass 2: one jmp fewer
+    ; for every cell drawn)
+
+; tg_fillc / tg_framec - a filled / outlined rect in content coords, in the
+; pen already set. Clobber AX-DX and SI.
+tg_fillc:
+    call tg_clampc
+    jc .out
+    call OSAPI_GFX_FILL
+.out:
+    ret
+
+tg_framec:
+    call tg_clampc
+    jc .out
+    call OSAPI_GFX_FRAME
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; tg_clampc - clamp a content rect to the content box, then add the origin
+; in:  AX/BX/CX/DX = x1/y1/x2/y2, inclusive, in content coords
+; out: CF = 1 nothing is left to draw; else AX/BX/CX/DX are screen coords.
+;      Clobbers SI, which no caller holds across it (tg_cell_fill has spent
+;      its inset by then, and every repaint sets SI afresh)
+;
+; The one place this module turns its own rects into the screen's, and the
+; reason it exists is SPEC.md 11.3: the gfx_* primitives clip to the SCREEN,
+; not to a window, and W_PAINT runs with no clip region armed. A rect that is
+; one row too tall therefore paints over the window below us rather than
+; being trimmed. Comparisons are SIGNED - a content coordinate can be
+; negative, and an unsigned test would read -1 as 65,535 and pass it.
+; -----------------------------------------------------------------------------
+tg_clampc:
+    or ax, ax
+    jns .x1
+    xor ax, ax
+.x1:
+    or bx, bx
+    jns .y1
+    xor bx, bx
+.y1:
+    mov si, [tg_cwid]
+    dec si
+    cmp cx, si
+    jle .x2
+    mov cx, si
+.x2:
+    mov si, [tg_chgt]
+    dec si
+    cmp dx, si
+    jle .y2
+    mov dx, si
+.y2:
+    cmp ax, cx
+    jg .none
+    cmp bx, dx
+    jg .none
+    add ax, [tg_ox]
+    add bx, [tg_oy]
+    add cx, [tg_ox]
+    add dx, [tg_oy]
+    clc
+    ret
+.none:
+    stc
+    ret
 
 ; -----------------------------------------------------------------------------
 ; tg_erase_prev - black out the previous active piece
@@ -1646,7 +1556,7 @@ tg_cell_fill:
 ; -----------------------------------------------------------------------------
 tg_erase_prev:
     cmp byte [tg_hasop], 0
-    je tg_ret
+    je .ret
     mov di, tg_ocell
 .e:
     mov ax, [di]                    ; AL = col, AH = row
@@ -1659,6 +1569,7 @@ tg_erase_prev:
     inc di
     cmp di, tg_ocell + 2 * TG_NPCELL
     jb .e
+.ret:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1683,6 +1594,7 @@ tg_draw_active:
     mov cx, TG_NPCELL
     rep movsw
     mov byte [tg_hasop], 1
+.ret:
     ret
 
 tg_draw_banner:
@@ -1692,21 +1604,110 @@ tg_draw_banner:
     je .d
     mov si, tg_s_over
     cmp al, TG_M_OVER
-    jne tg_ret
+    jne tg_draw_active.ret          ; (the nearest ret)
 .d:
     mov al, CWHITE
     call OSAPI_SET_COLOR
     call OSAPI_FONT_WIDTH
-    mov cx, [tg_cwid]
-    sub cx, ax
-    jns .ok
-    xor cx, cx
-.ok:
-    shr cx, 1
-    mov dx, [tg_boardpx]
+    mov cx, [tg_cwid]               ; centred; a banner wider than the box
+    sub cx, ax                      ; comes out negative here, and tg_str
+    sar cx, 1                       ; drops it exactly as it dropped one
+    mov dx, [tg_boardpx]            ; clamped to 0 and then too wide
     shr dx, 1
     add dx, TG_HUD_H - 4
-    jmp tg_str
+    ; ...into tg_str, which follows it
+
+; -----------------------------------------------------------------------------
+; tg_run / tg_str - a string in content coords, opaque and transparent
+; in:  CX/DX = content coords, SI = NUL string
+;      tg_run: AL = ink, AH = the ground the caller has just laid down
+;      tg_str: the pen, already set
+; Clobber CX, DX (and AX in tg_str_gate's test).
+;
+; All-or-nothing, and deliberately so: a cell is drawn whole or not at all, so
+; a string half outside the box cannot be trimmed to fit. One that would leave
+; the box is DROPPED rather than clipped - a missing HUD field is a layout bug
+; you can see, and a glyph painted onto the window next door is one you cannot.
+;
+; TWO ENTRIES because one caller cannot name a ground: the PAUSE / GAME OVER
+; banner lands on the matrix, which is a grid of coloured cells and not a
+; colour - SPEC.md 6.6.2 case 1, and the only transparent text left in this
+; package. Everything else letters onto something this same routine's caller
+; filled a few instructions earlier: the HUD band is [tg_hudbg] and the About
+; card is its own panel.
+; -----------------------------------------------------------------------------
+tg_str:
+    call tg_str_gate
+    jc .out
+    call OSAPI_FONT_STR_XPARENT
+.out:
+    ret
+
+tg_run:
+    push ax                         ; the pair, banked across FONT_WIDTH
+    call tg_str_gate
+    pop ax
+    jc .out
+    call OSAPI_FONT_RUN
+.out:
+    ret
+
+; tg_str_gate - the shared box test. CF=1 drop it; CF=0 draw at CX/DX, which
+; it has moved to SCREEN coordinates. Clobbers AX.
+tg_str_gate:
+    or cx, cx
+    js .no
+    or dx, dx
+    js .no
+    mov ax, dx
+    add ax, 8
+    cmp ax, [tg_chgt]
+    jg .no
+    call OSAPI_FONT_WIDTH           ; AX = the string's pixel width
+    add ax, cx
+    cmp ax, [tg_cwid]
+    jg .no
+    add cx, [tg_ox]
+    add dx, [tg_oy]
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; tg_faci - AL = a faction (1 or 2) -> BX = its index in the colour and name
+; tables: (colour-blind * 2) + faction - 1
+tg_faci:
+    mov bl, [tg_cblind]
+    shl bl, 1
+    add bl, al
+    mov bh, 0
+    dec bx
+    ret
+
+; -----------------------------------------------------------------------------
+; tg_fmt - AX in decimal -> SI = the digits, in tg_numbuf, which holds five
+; and the NUL the loader's bss zeroing put after them: exactly what a 16-bit
+; counter can need. 0 is one pass of the loop, so it needs no case of its own.
+; Clobbers AX, BX, DX.
+;
+; The divide's remainder is in DX, which is why nothing here may hold a y in
+; it: an earlier version of this drew THREAT's digit at y = the digit's own
+; ASCII code - a score of 3 put a stray 3 on board row 3 and left the HUD
+; field blank (SPEC.md 49.7). The caller sets its pen AFTER this returns.
+; -----------------------------------------------------------------------------
+tg_fmt:
+    mov si, tg_numbuf + 5
+    mov bx, 10
+.lp:
+    xor dx, dx
+    div bx
+    add dl, '0'
+    dec si
+    mov [si], dl
+    or ax, ax
+    jnz .lp
+    ret
 
 ; =============================================================================
 ; Data
@@ -1753,8 +1754,9 @@ tg_vw:       db 'WEST', 0
 tg_facname:  dw tg_s_fa, tg_s_fb, tg_s_fa_cb, tg_s_fb_cb
 tg_colours:  db TG_COL_A, TG_COL_B, TG_COL_ACB, TG_COL_BCB
 
-; The HUD, one field a row: the column / 8, the y (bit 7 = drawn yellow), and
-; a string - or, below TG_HF_N, the live field tg_draw_hud fills in. LOCK is
+; The HUD, one field a row: the y (bit 7 = drawn yellow; 0 ends the table),
+; the column in pixels, and a string - or, below TG_HF_N, the live field
+; tg_draw_hud fills in. LOCK is
 ; first because it is the one that may be skipped; the order of the rest is
 ; the order they always went up in.
 TG_HF_SCORE equ 0                   ; [tg_score], as decimal
@@ -1763,7 +1765,10 @@ TG_HF_VEC   equ 2                   ; the vector's name
 TG_HF_FAC   equ 3                   ; the faction's name
 TG_HF_N     equ 4
 %macro TG_HUDF 3
-    db (%1) / 8, %2
+  %if (%1) & 7
+    %error "a HUD column is not a multiple of 8 - see SPEC.md 11.94.3"
+  %endif
+    db %2, %1
     dw %3
 %endmacro
 tg_hud:

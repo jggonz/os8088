@@ -10,6 +10,10 @@ It is also the only thing that would catch the gate being written on
 [vid_mono] instead of [vid_avail], which reads identically on every machine
 here and parts company the moment somebody switches a VGA machine to mono
 (SPEC.md 39.11) - so [vid_avail] is printed beside every reading.
+
+And the same answer as osapi_sys_kb reports it: [vga_skkern] is SK_KERN,
+stored once at boot (kernel size pass 12), and must read KERN_KB on VGA and
+KERN_KB - SK_VGAB_KB on both mono adapters.
 """
 import os, sys
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -24,7 +28,7 @@ if not want:
     print("  vgadrop: SKIP - this kernel has no GFX_PLANE, so no rung")
     sys.exit(0)
 
-got = {}
+got, kb = {}, {}
 for mach, name in (("os8088_xt_vga", "vga"),
                    ("os8088_5150_cga_gla", "cga"),
                    ("os8088_5150_herc_gla", "herc")):
@@ -34,8 +38,10 @@ for mach, name in (("os8088_xt_vga", "vga"),
         base = int.from_bytes(m.read(S("mem_base"), 2), "little")
         avail = m.read(S("vid_avail"), 1)[0]
         got[name] = base
+        kb[name] = m.read(S("vga_skkern"), 1)[0]
         print(f"  {name:5} mem_base={base:#06x}  vid_avail={avail:#04x}  "
-              f"heap floor {'AT' if base == kend else 'UNDER'} KERN_END",
+              f"heap floor {'AT' if base == kend else 'UNDER'} KERN_END  "
+              f"vga_skkern={kb[name]}",
               flush=True)
 
 ok = True
@@ -52,6 +58,12 @@ for n in ("cga", "herc"):
         # guard 2d proves this at assembly time; proving it again on the
         # BOOTED machine is what says the constant and the subtraction agree
         print(f"  FAIL: {n}'s floor {got[n]:#06x} is not 512-aligned")
+        ok = False
+kkb, vkb = E["KERN_KB"], E["SK_VGAB_KB"]
+for n, w in (("vga", kkb), ("cga", kkb - vkb), ("herc", kkb - vkb)):
+    if kb[n] != w:
+        print(f"  FAIL: {n}'s SK_KERN [vga_skkern] = {kb[n]}, not {w} "
+              f"(KERN_KB {kkb}, SK_VGAB_KB {vkb})")
         ok = False
 print("  vgadrop: PASS" if ok else "  vgadrop: FAIL")
 sys.exit(0 if ok else 1)

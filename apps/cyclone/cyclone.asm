@@ -153,7 +153,7 @@ CY_MAXV     equ 16                  ; vertices in the widest web: a closed
                                     ; also what makes a vertex-table row 32
                                     ; bytes, a shift where it was a multiply
 %if CY_MAXV * 2 != 32
-  %error "cyclone: cy_vert and cy_lanepos shift by 5 for a CY_MAXV*2 row"
+  %error "cyclone: cy_vert and cy_lanepos shift by 5 (cy_build_verts by 4) for a CY_MAXV*2 row"
 %endif
 CY_PTMAX    equ 96                  ; the point list os88gfx.inc steps into
 CY_MAXLANE  equ 16
@@ -364,78 +364,82 @@ CY_C_BG     equ CBLACK
 ; scale in `cy_scale` - so ONE table of rim vertices describes the whole
 ; three-dimensional tube and there is no 3D arithmetic anywhere in this app.
 ;
-; Descriptor: db nlanes, closed; then nverts pairs of (db x, db y), where
+; Descriptor: db nlanes, closed | form; then the STORED pairs of (db x, db y).
 ; nverts = nlanes for a closed web and nlanes+1 for an open one. A closed web
 ; wraps lane nlanes-1 back onto vertex 0; an open one does not, and the player
 ; hits a wall at each end.
+;
+; THE FORM IS WHAT SHIPS ONLY PART OF A WEB (SPEC.md 67.26). Seven of the eight
+; are symmetric, and cy_build_verts' pass 0 derives the rest of the vertices
+; from the stored ones, in the normalised space and before any scaling, so the
+; table it scales is byte for byte the one a full listing would have given:
+;
+;  - CY_SH_ROT: a quarter turn. nlanes/4 pairs are stored and every later
+;    vertex is the one nlanes/4 back turned by 90 degrees, (x,y) -> (-y,x).
+;    The circle, the square, the plus and the star.
+;  - CY_SH_MIR: a mirror in the vertical axis. nlanes/2 + 1 pairs are stored
+;    and vertex i past them is vertex nlanes-i with x negated. The triangle
+;    (closed) and the vee, the ribbon and the horseshoe (open).
+;
+; CYSHEND asserts the stored count against the form, so a pair added or lost
+; is an assembly error and not a web with a vertex read out of the next one.
 ; =============================================================================
+CY_SH_ROT   equ 2
+CY_SH_MIR   equ 4
 
-%macro CYSHAPE 2                    ; nlanes, closed
-  %if %1 + (%2 == 0) > CY_MAXV
+%macro CYSHAPE 3-4 0                ; label, nlanes, closed, form
+  %if %2 + (%3 == 0) > CY_MAXV
     %error "cyclone: a web with more vertices than the tables hold (CY_MAXV)"
   %endif
-    db %1, %2
+  %if %4 == CY_SH_ROT
+    %if %3 == 0 || (%2 % 4) != 0
+      %error "cyclone: a quarter-turn web is closed and has 4n lanes"
+    %endif
+    %assign CYSH_K %2 / 4
+  %elif %4 == CY_SH_MIR
+    %if (%2 % 2) != 0
+      %error "cyclone: a mirrored web has an even lane count"
+    %endif
+    %assign CYSH_K %2 / 2 + 1
+  %else
+    %assign CYSH_K %2 + (%3 == 0)
+  %endif
+  %xdefine CYSH_CUR %1
+%1:
+    db %2, %3 | %4
+%endmacro
+%macro CYSHEND 0
+%[CYSH_CUR]_end:
+  %if (%[CYSH_CUR]_end - CYSH_CUR - 2) != 2 * CYSH_K
+    %error "cyclone: a web's stored pairs disagree with its form"
+  %endif
 %endmacro
 
 ; --- 0: the circle. Tempest's level 1, and the one every player learns on ----
-cy_sh_circle:
-    CYSHAPE 16, 1
+    CYSHAPE cy_sh_circle, 16, 1, CY_SH_ROT
     db  100,   0
     db   92,  38
     db   71,  71
     db   38,  92
-    db    0, 100
-    db  -38,  92
-    db  -71,  71
-    db  -92,  38
-    db -100,   0
-    db  -92, -38
-    db  -71, -71
-    db  -38, -92
-    db    0,-100
-    db   38, -92
-    db   71, -71
-    db   92, -38
+    CYSHEND                         ; ...then (0,100) round to (92,-38)
 
 ; --- 1: the square -----------------------------------------------------------
-cy_sh_square:
-    CYSHAPE 16, 1
+    CYSHAPE cy_sh_square, 16, 1, CY_SH_ROT
     db -100,-100
     db  -50,-100
     db    0,-100
     db   50,-100
-    db  100,-100
-    db  100, -50
-    db  100,   0
-    db  100,  50
-    db  100, 100
-    db   50, 100
-    db    0, 100
-    db  -50, 100
-    db -100, 100
-    db -100,  50
-    db -100,   0
-    db -100, -50
+    CYSHEND                         ; ...then (100,-100) round to (-100,-50)
 
 ; --- 2: the plus. Four inside corners, so a flipper can hide -----------------
-cy_sh_plus:
-    CYSHAPE 12, 1
+    CYSHAPE cy_sh_plus, 12, 1, CY_SH_ROT
     db  -33,-100
     db   33,-100
     db   33, -33
-    db  100, -33
-    db  100,  33
-    db   33,  33
-    db   33, 100
-    db  -33, 100
-    db  -33,  33
-    db -100,  33
-    db -100, -33
-    db  -33, -33
+    CYSHEND                         ; ...then (100,-33) round to (-33,-33)
 
 ; --- 3: the triangle ---------------------------------------------------------
-cy_sh_tri:
-    CYSHAPE 12, 1
+    CYSHAPE cy_sh_tri, 12, 1, CY_SH_MIR
     db    0,-100
     db   25, -55
     db   50, -10
@@ -443,35 +447,18 @@ cy_sh_tri:
     db  100,  80
     db   50,  80
     db    0,  80
-    db  -50,  80
-    db -100,  80
-    db  -75,  35
-    db  -50, -10
-    db  -25, -55
+    CYSHEND                         ; ...then (-50,80) back up to (-25,-55)
 
 ; --- 4: the star -------------------------------------------------------------
-cy_sh_star:
-    CYSHAPE 16, 1
+    CYSHAPE cy_sh_star, 16, 1, CY_SH_ROT
     db  100,   0
     db   41,  17
     db   71,  71
     db   17,  41
-    db    0, 100
-    db  -17,  41
-    db  -71,  71
-    db  -41,  17
-    db -100,   0
-    db  -41, -17
-    db  -71, -71
-    db  -17, -41
-    db    0,-100
-    db   17, -41
-    db   71, -71
-    db   41, -17
+    CYSHEND                         ; ...then (0,100) round to (41,-17)
 
 ; --- 5: the vee. OPEN - the player hits a wall at both ends ------------------
-cy_sh_vee:
-    CYSHAPE 12, 0
+    CYSHAPE cy_sh_vee, 12, 0, CY_SH_MIR
     db -100, -80
     db  -83, -52
     db  -67, -23
@@ -479,16 +466,10 @@ cy_sh_vee:
     db  -33,  33
     db  -17,  62
     db    0,  90
-    db   17,  62
-    db   33,  33
-    db   50,   5
-    db   67, -23
-    db   83, -52
-    db  100, -80
+    CYSHEND                         ; ...then (17,62) up to (100,-80)
 
 ; --- 6: the flat ribbon. OPEN, and the level that reads most like falling ----
-cy_sh_flat:
-    CYSHAPE 12, 0
+    CYSHAPE cy_sh_flat, 12, 0, CY_SH_MIR
     db -100,   0
     db  -83,   0
     db  -67,   0
@@ -496,16 +477,10 @@ cy_sh_flat:
     db  -33,   0
     db  -17,   0
     db    0,   0
-    db   17,   0
-    db   33,   0
-    db   50,   0
-    db   67,   0
-    db   83,   0
-    db  100,   0
+    CYSHEND                         ; ...then (17,0) out to (100,0)
 
 ; --- 7: the horseshoe. OPEN ---------------------------------------------------
-cy_sh_uu:
-    CYSHAPE 12, 0
+    CYSHAPE cy_sh_uu, 12, 0, CY_SH_MIR
     db -100, -70
     db -100, -25
     db -100,  20
@@ -513,12 +488,7 @@ cy_sh_uu:
     db  -60,  80
     db  -25,  92
     db    0,  95
-    db   25,  92
-    db   60,  80
-    db   88,  55
-    db  100,  20
-    db  100, -25
-    db  100, -70
+    CYSHEND                         ; ...then (25,92) round to (100,-70)
 
 CY_NSHAPE   equ 8
 cy_shapes:
@@ -574,14 +544,11 @@ cy_scale:
 cy_title        db 'Cyclone 88', 0  ; the window's title AND the menu's name
 cy_s_name       equ cy_scroll_txt   ; 'CYCLONE 88', the scroll's first line
 cy_s_press      db 'PRESS ENTER TO START', 0
-cy_s_keys       db 'ARROWS MOVE  SPACE FIRE  Z ZAP  J JUMP', 0
 cy_s_hiscore    db 'HIGH SCORES', 0
 cy_s_over       db 'GAME OVER', 0
-cy_s_level      db 'LEVEL', 0
 cy_s_bonus      db 'BONUS', 0
 cy_s_small      db 'Window too small', 0
 cy_s_paused     db 'PAUSED', 0
-cy_s_avoid      db 'AVOID THE SPIKES', 0
 cy_s_superzap   db 'SUPERZAPPER RECHARGE', 0
 cy_s_zapfired   db 'SUPERZAPPER!', 0
 
@@ -776,8 +743,6 @@ cy_entry:
     mov [cy_scrw], ax
     mov [cy_scrh], bx
     mov [cy_dock], cx
-    mov [cy_vkind], dl
-    mov [cy_bpp], dh
 
     ; Seed the stream once. Every wave, drop and debris vector runs off it.
     call OSAPI_GET_TICKS
@@ -802,20 +767,15 @@ cy_entry:
     mov [cy_tpl + WT_H], ax
 
     mov ax, [cy_scrw]               ; content width: the window, or the screen
-    sub ax, 2                       ; if the screen is narrower than it
-    cmp ax, CY_WIN_W
-    jbe .wok
-    mov ax, CY_WIN_W
+    cmp ax, CY_WIN_W + 2            ; if the screen is narrower than it (the
+    jbe .wok                        ; 1px sides are in both)
+    mov ax, CY_WIN_W + 2
 .wok:
-    add ax, 2
     mov [cy_tpl + WT_W], ax
 
-    mov ax, [cy_scrw]               ; centred horizontally...
-    sub ax, [cy_tpl + WT_W]
-    jns .xok
-    xor ax, ax
-.xok:
-    shr ax, 1
+    neg ax                          ; centred horizontally - and never past the
+    add ax, [cy_scrw]               ; left edge, the width being at most the
+    shr ax, 1                       ; screen's own
     mov [cy_tpl + WT_X], ax
 
     mov ax, [cy_dock]               ; ...and centred in the desktop band
@@ -876,8 +836,11 @@ cy_entry:
     mov al, KSC_LEFT
     call OSAPI_KEY_DOWN
 
-    mov byte [cy_state], CYS_TITLE
-    mov byte [cy_needlay], 1
+    mov byte [cy_needlay], 1        ; ([cy_state] is CYS_TITLE already: it
+                                    ; is 0, and the loader zeroes the bss)
+%if CYS_TITLE != 0
+  %error "cyclone: cy_entry leaves [cy_state] as the zeroed bss left it"
+%endif
 
     ; THE ATTRACT SCREEN NEEDS A WEB BEFORE ANY LEVEL HAS STARTED. Only
     ; cy_startlevel and cy_title_nextshape set this, and neither has run yet -
@@ -887,8 +850,7 @@ cy_entry:
     ; past CY_MAXV and cy_build_verts wrote through the end of the vertex
     ; tables. It showed as a small tangle in the corner on the very first
     ; frame of the attract screen and nowhere else.
-    mov word [cy_shape], cy_sh_circle
-    mov word [cy_tshape], 0
+    mov word [cy_shape], cy_sh_circle   ; ...which is [cy_tshape] 0, as zeroed
     call cy_hs_init
 
     mov bx, [cy_win]
@@ -1027,26 +989,19 @@ cy_panel_draw:
     call cy_framec
 
     mov si, [cy_pntxt]
-    mov byte [cy_pnrow], 0          ; the row INDEX, in bss - the pen used to
-.line:                              ; be carried in BX across a far call into
-    cmp byte [si], 0xFF             ; the kernel, which is a register this
-    je .done                        ; loop cannot afford to be wrong about
-    push si
-    mov al, [cy_pnrow]
-    mov ah, 0
-    mov bx, ax
-    shl ax, 1                       ; y = pny + 6 + 9*line
-    shl ax, 1
-    shl ax, 1
-    add ax, bx
-    add ax, [cy_pny]
-    add ax, 6
-    mov dx, ax
-    mov cx, [cy_pnx]
+    mov cx, [cy_pnx]                ; the pen: x = pnx + 8...
     add cx, 8
+    mov dx, [cy_pny]                ; ...and y = pny + 6 + 9*line, stepped.
+    add dx, 6                       ; CX and DX are what cy_textw PROMISES to
+    mov byte [cy_pnrow], 0          ; keep; the row INDEX is in bss - the pen
+.line:                              ; used to be carried in BX across a far
+    cmp byte [si], 0xFF             ; call into the kernel, which is a register
+    je .done                        ; this loop cannot afford to be wrong about
+    push si
     call cy_textw
     pop si
     call cy_strskip
+    add dx, 9
     inc byte [cy_pnrow]
     mov al, [cy_pnrow]
     cmp al, [cy_pnln]
@@ -1221,8 +1176,7 @@ cy_key_common:
     mov byte [cy_fsxq], 1           ; F leaves as well as enters (11.2.1)
     ret
 .fs_in:
-    call cy_go_fsx
-    ret
+    jmp cy_go_fsx
 .pause:
     cmp byte [cy_state], CYS_PLAY
     jne .p2
@@ -1235,20 +1189,15 @@ cy_key_common:
     mov byte [cy_state], CYS_PLAY
     mov byte [cy_full], 1
     ret
-.new:
-    call cy_newgame
-    ret
 .start:
     cmp byte [cy_state], CYS_TITLE
     jne .ret0
-    call cy_newgame
-    ret
+.new:
+    jmp cy_newgame
 .zap:
-    call cy_superzap
-    ret
+    jmp cy_superzap
 .jump:
-    call cy_do_jump
-    ret
+    jmp cy_do_jump
 .fire:
     mov byte [cy_firereq], 1
     ret
@@ -1297,31 +1246,24 @@ cy_oncmd:
     push si
     or ah, ah                       ; BOTH indices are tested, menu and item.
     jnz .helpm                      ; A menu with one item today is a menu with
-    cmp al, 0                       ; two tomorrow, and the second one then
+    or al, al                       ; two tomorrow, and the second one then
     je .new                         ; dispatches as the first with nothing
-    cmp al, 1                       ; saying so (tamegram's trap)
-    je .pause
-    cmp al, 2
-    je .fs
-    jmp short .out
-.helpm:
-    cmp ah, 1
+    dec ax                          ; saying so (tamegram's trap). AH is 0
+    je .pause                       ; here, so AX steps through the items
+    dec ax
     jne .out
-    or al, al
-    jz .how
+    call cy_go_fsx                  ; item 2
     jmp short .out
 .new:
     call cy_newgame
     jmp short .out
 .pause:
-    mov al, 'p'
-    mov ah, 0
+    mov ax, 'p'
     call cy_key_common
     jmp short .out
-.fs:
-    call cy_go_fsx
-    jmp short .out
-.how:
+.helpm:
+    cmp ax, 0x0100                  ; menu 1, item 0: How To Play
+    jne .out
     ; It used to be `cy_state = CYS_TITLE` plus a repaint, which is wrong in
     ; both directions: from the attract screen - where a player who has just
     ; opened the window IS - it drew the same screen again and the item did
@@ -1351,8 +1293,7 @@ cy_layout:
     push bx
     push cx
     push dx
-    push si
-    push di
+    push si                         ; (DI: nothing here or below touches it)
 
     call cy_org                     ; AX/DX = content origin, CX/BX = size
     mov [cy_ox], ax
@@ -1428,7 +1369,6 @@ cy_layout:
     mov word [cy_nlane], 0
     stc
 .out:
-    pop di
     pop si
     pop dx
     pop cx
@@ -1457,81 +1397,114 @@ cy_build_verts:
                                     ; plain scalar and must go back
 
     mov si, [cy_shape]              ; the descriptor
-    mov al, [si]
-    mov ah, 0
-    mov bl, [si + 1]
+    lodsw                           ; AL = nlanes, AH = closed | form; SI ->
+    mov dh, ah                      ; the stored pairs. DH = the form, for
+    and ah, 1                       ; pass 0
+    mov bl, ah
     mov bh, 0
     mov [cy_closed], bx
-    mov dx, CY_MAXV                 ; CLAMPED, not trusted. The tables are
+    mov ah, 0
+    mov cx, CY_MAXV                 ; CLAMPED, not trusted. The tables are
     or bx, bx                       ; CY_MAXV wide and cy_build_verts writes
     jnz .cap                        ; one entry per vertex per depth; a
-    dec dx                          ; descriptor claiming more does not draw
+    dec cx                          ; descriptor claiming more does not draw
 .cap:                               ; a wrong web, it writes through the end
-    cmp ax, dx                      ; of them. An OPEN web has a vertex more
+    cmp ax, cx                      ; of them. An OPEN web has a vertex more
     jbe .nl                         ; than it has lanes, so one lane fewer
-    mov ax, dx
+    mov ax, cx
 .nl:
     or ax, ax
     jnz .nl2
-    mov ax, 3
+    mov al, 3                       ; (AH is already 0)
 .nl2:
     mov [cy_nlane], ax
-    add si, 2                       ; -> the vertex pairs
 
-    mov cx, [cy_nlane]              ; nverts = nlanes (+1 when open)
-    cmp bx, 0
-    jne .nv
+    mov cx, ax                      ; nverts = nlanes (+1 when open)
+    or bx, bx
+    jnz .nv
     inc cx
 .nv:
     mov [cy_nvert], cx
 
+    ; --- pass 0: the stored pairs -> all nverts of them ---------------------
+    ; Into the TOP half of cy_rsx, which pass 1 then scales into the whole of
+    ; it in place: byte j is read from rsx+32+j before word j is written at
+    ; rsx+2j, and 2j+1 < 32+k for every byte k not yet read, so the two never
+    ; meet. The forms are at the shape table (SPEC.md 67.26).
+    push es
+    push ds
+    pop es
+    mov di, cy_rsx + CY_MAXV * 2
+    mov bx, cx                      ; BX = nverts; AX = nlanes, still
+    test dh, CY_SH_ROT
+    jz .nrot
+    shr al, 1
+    shr al, 1                       ; k = nlanes / 4
+    jmp short .k
+.nrot:
+    test dh, CY_SH_MIR
+    jz .copy                        ; whole: k = nverts, which CX holds
+    shr al, 1
+    inc ax                          ; k = nlanes / 2 + 1
+.k:
+    mov cx, ax
+.copy:
+    sub bx, cx                      ; BX = the pairs still to derive
+    rep movsw
+    mov cx, bx
+    jcxz .p0done
+    mov si, cy_rsx + CY_MAXV * 2    ; a quarter turn reads k pairs back...
+    test dh, CY_SH_ROT
+    jnz .rot
+    lea si, [di - 4]                ; ...and a mirror walks back from k-2
+.mir:
+    mov ax, [si]
+    neg al                          ; (x, y) -> (-x, y)
+    stosw
+    dec si
+    dec si
+    loop .mir
+    jmp short .p0done
+.rot:
+    lodsw
+    xchg al, ah
+    neg al                          ; (x, y) -> (-y, x)
+    stosw
+    loop .rot
+.p0done:
+    pop es
+
     ; --- pass 1: normalised (-128..127) -> pixels at the rim ----------------
+    ; ONE body for x and y: the pairs are just 2*nverts signed bytes in a row,
+    ; each scaled the same way into the next word of cy_rsx.
+    mov si, cy_rsx + CY_MAXV * 2
     mov di, cy_rsx
-    push cx
+    mov cx, [cy_nvert]
+    shl cx, 1
 .p1:
-    mov al, [si]                    ; x
+    lodsb
     cbw
-    imul word [cy_rad]              ; DX:AX = x * R
+    imul word [cy_rad]              ; DX:AX = v * R
     ; >> 7, because the normalised space is 128 units to the radius. The high
-    ; word is live (R can be 200, x can be 100), so shift the pair.
-    mov bx, dx
-    mov dx, ax
-    mov ax, bx                      ; AX = high, DX = low
-    ; a 15-bit arithmetic shift right of DX:AX by 7 == (<<1 then take AH:DL)
-    shl dx, 1
-    rcl ax, 1
-    mov dl, dh
-    mov dh, al
-    mov [di], dx
-    add di, 2
-
-    mov al, [si + 1]                ; y
-    cbw
-    imul word [cy_rad]
-    mov bx, dx
-    mov dx, ax
-    mov ax, bx
-    shl dx, 1
-    rcl ax, 1
-    mov dl, dh
-    mov dh, al
-    mov [di], dx
-    add di, 2
-
-    add si, 2
+    ; word is live (R can be 200, v can be 100), so shift the pair: << 1, then
+    ; the middle two bytes of the 32-bit result are the answer.
+    shl ax, 1
+    rcl dx, 1
+    mov al, ah
+    mov ah, dl
+    mov [di], ax
+    inc di
+    inc di
     loop .p1
-    pop cx
 
     ; --- pass 2: the depth ladder -------------------------------------------
     ; vx[d][v] = cx + (rsx[v] * scale[d]) >> 8
-    mov word [cy_dd], 0
+    xor bx, bx                      ; BX = depth * 2, the cy_scale index
 .p2d:
-    mov bx, [cy_dd]
-    shl bx, 1
     mov bp, [cy_scale + bx]         ; the scale for this depth
 
-    mov di, [cy_dd]                 ; row base = d * CY_MAXV * 2
-    mov cl, 5
+    mov di, bx                      ; row base = d * CY_MAXV * 2 = BX * 16
+    mov cl, 4
     shl di, cl                      ; DI = byte offset of row d
     mov si, cy_rsx
     mov cx, [cy_nvert]
@@ -1554,8 +1527,9 @@ cy_build_verts:
     add di, 2
     loop .p2v
 
-    inc word [cy_dd]
-    cmp word [cy_dd], CY_NDEPTH
+    inc bx
+    inc bx
+    cmp bx, CY_NDEPTH * 2
     jb .p2d
 
     call cy_lip_build               ; ...and then the lip, which is the one
@@ -1719,38 +1693,35 @@ cy_lip_build:
     ; the push grows a pixel at a time until that says it clears. It converges
     ; in one or two passes, it is bounded by CY_LIPKMAX, and it needs no
     ; square root anywhere.
-    mov word [cy_lpox], 0
-    mov word [cy_lpoy], 0
+    xor ax, ax
+    mov [cy_lpox], ax
+    mov [cy_lpoy], ax
     call cy_lp_cross                ; CX = the distance the scale already has
     cmp cx, [cy_lpn]
     jae .next                       ; ...and it clears this edge: leave it
     mov al, [cy_lpdir]              ; the sign of THIS cross is the direction
     mov [cy_lpdir0], al             ; to push in, and the loop overwrites it
 
-    mov ax, [cy_lpn]                ; k = ceil((need - dist) / |e|), at least 1
-    sub ax, cx
-    add ax, [cy_lpl]
+    mov ax, [cy_lpn]                ; k = ceil((need - dist) / |e|), which is
+    sub ax, cx                      ; at least 1 because need - dist is: this
+    add ax, [cy_lpl]                ; is only reached when dist < need
     dec ax
     xor dx, dx
     div word [cy_lpl]
-    or ax, ax
-    jnz .kok
-    mov ax, 1
-.kok:
     mov [cy_lpk], ax
 .try:
-    mov cx, [cy_lpk]
+    mov cx, [cy_lpk]                ; (cy_lp_scale keeps CX, for both)
     mov ax, [cy_lpey]               ; the normal is (ey, -ex)...
     call cy_lp_scale
     mov [cy_lpox], ax
-    mov cx, [cy_lpk]
     mov ax, [cy_lpex]
     neg ax
     call cy_lp_scale
     mov [cy_lpoy], ax
-    cmp byte [cy_lpdir0], 1         ; ...whose sign is the cross product's:
+    mov al, [cy_lpdir0]
+    cmp al, 1                       ; ...whose sign is the cross product's:
     je .test                        ; negative and it already leans the way
-    cmp byte [cy_lpdir0], 2         ; the scaled lip does, positive and it is
+    cmp al, 2                       ; the scaled lip does, positive and it is
     je .flip                        ; the other one
     ; A FLAT WEB LEANS NOWHERE. Every vertex has y = 0, so the lip is ON the
     ; rim line and the cross product is zero: up is as good an answer as down,
@@ -1990,8 +1961,7 @@ cy_lanepos:
     ; ...and publish the lane's SPAN as well as its centre, because that is
     ; what bounds a mover (cy_setrect). Both vertices are already in hand
     ; here; asking for them again anywhere else would be a second opinion
-    ; about how wide a lane is.
-    push ax
+    ; about how wide a lane is. (AX is spent here: the entry push restores it.)
     mov ax, [cy_vx + si]
     sub ax, cx
     jns .sx
@@ -2003,13 +1973,11 @@ cy_lanepos:
     jns .sy
     neg ax
 .sy:
-    mov [cy_lspy], ax
     cmp ax, [cy_lspx]               ; ...and the dominant of the two, which is
     ja .sm                          ; what cy_lanecap bounds BOTH axes by
     mov ax, [cy_lspx]
 .sm:
     mov [cy_lspm], ax
-    pop ax
 
     add cx, [cy_vx + si]
     add dx, [cy_vy + si]
@@ -3727,8 +3695,7 @@ cy_newgame:
     mov word [cy_pw_droid], 30000   ; THE PLAY-TEST INSTRUMENT (SPEC.md 67.9.5)
 %endif                              ; and it never ships: see the Makefile
     mov byte [cy_pw_jump], 0
-    call cy_startlevel
-    ret
+                                    ; ...and into cy_startlevel
 
 ; cy_startlevel - pick the shape, clear the board, and begin the warp.
 cy_startlevel:
@@ -3746,17 +3713,15 @@ cy_startlevel:
     mov [cy_shape], ax
 
     call cy_clearboard              ; ...which zeroes cy_left for us
-    mov byte [cy_needlay], 1
+    mov word [cy_needlay], CY_LAYFULL
     mov byte [cy_state], CYS_WARPIN
     mov byte [cy_wpha], CY_WARP_SPOKE
     mov byte [cy_wstarted], 0
-    mov byte [cy_full], 1
     mov byte [cy_huddirty], 1
     mov word [cy_spawnt], 0
     call cy_zap_recharge            ; SPEC.md 67.23.3: one charge on the house,
                                     ; every level, and the line that says so
-    call cy_wavesize
-    ret
+    jmp cy_wavesize
 
 ; cy_wavesize - how many enemies this level owes, and how fast they come.
 ;
@@ -3769,7 +3734,8 @@ cy_wavesize:
     mov ax, [cy_level]
     dec ax
     mov bx, 3
-    mul bx
+    mul bx                          ; AX = (level - 1) * 3, which both ramps
+    push ax                         ; below are built on
     add ax, 8
     cmp ax, 40
     jbe .cap
@@ -3778,32 +3744,20 @@ cy_wavesize:
     mov [cy_towave], ax
     mov [cy_wleft], ax
 
-    mov ax, [cy_level]              ; the kinds available, by level
-    mov bl, 1                       ; L1: flippers
-    cmp ax, 2
-    jb .k
-    mov bl, 2                       ; L2: + tankers
-    cmp ax, 3
-    jb .k
-    mov bl, 3                       ; L3: + spikers
-    cmp ax, 5
-    jb .k
-    mov bl, 4                       ; L5: + fuseballs
-    cmp ax, 7
-    jb .k
-    mov bl, 5                       ; L7: + pulsars
+    mov bx, [cy_level]              ; the kinds available, by level (a level
+    cmp bx, 7                       ; is never 0: cy_newgame starts it at 1)
+    jbe .k
+    mov bx, 7
 .k:
-    mov [cy_kinds], bl
+    mov al, [cy_kindlv - 1 + bx]
+    mov [cy_kinds], al
 
     ; Base climb speed, in depth-units a frame. The tube is
     ; (CY_TOPD - CY_FARD) * 256 = 3,328 units, so 15 a frame is 222 frames -
     ; TWELVE SECONDS at 18.2fps - for a level-1 flipper end to end, rising to
     ; about three seconds by level 15. Each kind then scales this by its own
     ; trait (cy_ekspd), which is where "some enemies ascend faster" lives.
-    mov ax, [cy_level]
-    dec ax
-    mov bx, 3
-    mul bx
+    pop ax                          ; (level - 1) * 3 again
     add ax, 15
     cmp ax, 55
     jbe .sc
@@ -4556,8 +4510,8 @@ cy_player_move:
 ; cy_lanepos is NOT reentrant, and this line used to say it was - generalising
 ; the tail comment at cy_lanepos, which claims something narrower and true (the
 ; LIP TEST needs no scratch word, because DI and BX still hold the row offset
-; and the lane). Eighty lines above that tail the routine writes [cy_lspx],
-; [cy_lspy] and [cy_lspm] unconditionally, on every call.
+; and the lane). Eighty lines above that tail the routine writes [cy_lspx]
+; and [cy_lspm] unconditionally, on every call.
 ;
 ; That matters here because THIS routine is the clobberer: cy_setrect calls
 ; cy_lanepos and reads [cy_lspm] eighty lines later, and cy_aim_mouse calls it
@@ -6720,8 +6674,7 @@ cy_over_update:
     dec word [cy_overt]             ; feature can be worse than not having it
     jnz .out
     mov byte [cy_state], CYS_TITLE
-    mov byte [cy_full], 1
-    mov byte [cy_needlay], 1        ; the title screen's playfield stops above
+    mov word [cy_needlay], CY_LAYFULL ; the title screen's playfield stops above
     mov byte [cy_tphase], 0         ; the scroll band, so the geometry differs
     mov byte [cy_wstarted], 0
 .out:
@@ -6822,27 +6775,21 @@ cy_hs_init:
     push bx
     push cx
     push di
-    push si
     mov word [cy_hstab], CY_HSMAG0  ; the file's magic leads the table, so the
     mov word [cy_hstab + 2], CY_HSMAG1  ; write sends it from where it lives
-    xor si, si
+    mov bx, cy_hs                   ; BX walks the scores, four bytes a row...
+    mov di, cy_hsn                  ; ...and DI the names, three
     mov cx, CY_NHS
     mov ax, 5000
 .each:
-    mov bx, si
-    shl bx, 1
-    shl bx, 1
-    mov [cy_hs + bx], ax
-    mov word [cy_hs + bx + 2], 0
-    mov di, si                      ; ...and a placeholder name, three bytes
-    add di, di                      ; per row (di = si*3)
-    add di, si
-    mov word [cy_hsn + di], '--'
-    mov byte [cy_hsn + di + 2], '-'
+    mov [bx], ax
+    mov word [bx + 2], 0
+    mov word [di], '--'             ; a placeholder name
+    mov byte [di + 2], '-'
+    add bx, 4
+    add di, 3
     sub ax, 1000
-    inc si
     loop .each
-    pop si
     pop di
     pop cx
     pop bx
@@ -6850,60 +6797,58 @@ cy_hs_init:
     ret
 
 ; cy_hs_submit - offer [cy_score] to the table.
-; out: CF = 0 and AL = the row it took, CF = 1 if it did not make it.
+; out: CF = 0 and [cy_hsidx] = the row it took, CF = 1 if it did not make it.
 cy_hs_submit:
     ; Preserves nothing: every caller is a spine or a callback that reloads
     ; what it uses on the next line (SPEC.md 67.5.5).
-    xor si, si
+    xor si, si                      ; SI = the row...
+    mov bx, cy_hs                   ; ...and BX its score, to the end
 .find:
     cmp si, CY_NHS
     jae .out
-    mov bx, si
-    shl bx, 1
-    shl bx, 1
     mov ax, [cy_score + 2]
-    cmp ax, [cy_hs + bx + 2]
+    cmp ax, [bx + 2]
     ja .ins
     jb .next
     mov ax, [cy_score]
-    cmp ax, [cy_hs + bx]
+    cmp ax, [bx]
     ja .ins
 .next:
     inc si
+    add bx, 4
     jmp short .find
 .ins:
-    mov di, CY_NHS - 1              ; shuffle the tail down one
-.shift:
-    cmp di, si
-    jbe .put
-    mov bx, di
-    shl bx, 1
-    shl bx, 1
-    mov ax, [cy_hs + bx - 4]
-    mov [cy_hs + bx], ax
-    mov ax, [cy_hs + bx - 2]
-    mov [cy_hs + bx + 2], ax
-    push si                         ; ...and the NAME with it, or the table
-    mov bx, di                      ; would keep the scores in order and
-    add bx, bx                      ; leave every name one row behind
-    add bx, di
-    mov si, bx
-    sub si, 3
-    mov ax, [cy_hsn + si]
-    mov [cy_hsn + bx], ax
-    mov al, [cy_hsn + si + 2]
-    mov [cy_hsn + bx + 2], al
+    ; Shuffle the tail down one row: the rows from SI to CY_NHS-2 move up an
+    ; index, the NAMES with the scores (or the table would keep the scores in
+    ; order and leave every name one row behind). Two backward block moves -
+    ; std, so a row is read before the move overwrites it.
+    push es
+    push ds
+    pop es
+    push si
+    mov dx, CY_NHS - 1
+    sub dx, si                      ; DX = rows to move, 0..CY_NHS-1
+    std
+    mov cx, dx
+    add cx, cx
+    add cx, dx                      ; three bytes a name
+    mov si, cy_hsn + (CY_NHS - 1) * 3 - 1
+    mov di, cy_hsn + CY_NHS * 3 - 1
+    rep movsb
+    mov cx, dx
+    shl cx, 1
+    shl cx, 1                       ; four bytes a score
+    mov si, cy_hs + (CY_NHS - 1) * 4 - 1
+    mov di, cy_hs + CY_NHS * 4 - 1
+    rep movsb
+    cld
     pop si
-    dec di
-    jmp short .shift
+    pop es
 .put:
-    mov bx, si
-    shl bx, 1
-    shl bx, 1
-    mov ax, [cy_score]
-    mov [cy_hs + bx], ax
+    mov ax, [cy_score]              ; BX is still this row's score
+    mov [bx], ax
     mov ax, [cy_score + 2]
-    mov [cy_hs + bx + 2], ax
+    mov [bx + 2], ax
     mov bx, si                      ; a blank name until the player types one
     add bx, bx
     add bx, si
@@ -7038,8 +6983,7 @@ cy_init_begin:
     mov byte [cy_ient], 1
     mov byte [cy_ipos], 0
     mov word [cy_ibuf], '  '
-    mov byte [cy_ibuf + 2], ' '
-    mov byte [cy_ibuf + 3], 0
+    mov word [cy_ibuf + 2], ' '     ; ...and the NUL after the third
     mov byte [cy_msgdirty], 1
     ret
 
@@ -7104,30 +7048,21 @@ cy_init_key:
 cy_init_commit:
     push ax
     push bx
-    push si
-    push di
     mov bx, [cy_hsidx]
     cmp bx, CY_NHS
     jae .done
     mov ax, bx
     add bx, bx
     add bx, ax                      ; row * 3
-    mov si, cy_ibuf
-    mov di, cy_hsn
-    add di, bx
-    mov al, [si]
-    mov [di], al
-    mov al, [si + 1]
-    mov [di + 1], al
-    mov al, [si + 2]
-    mov [di + 2], al
+    mov ax, [cy_ibuf]               ; the three initials, a word and a byte
+    mov [cy_hsn + bx], ax
+    mov al, [cy_ibuf + 2]
+    mov [cy_hsn + bx + 2], al
 .done:
     mov byte [cy_ient], 0
     mov byte [cy_hsdirty], 1
     mov byte [cy_msgdirty], 1
     call cy_hs_save
-    pop di
-    pop si
     pop bx
     pop ax
     ret
@@ -7188,9 +7123,8 @@ cy_title_static:
     mov byte [cy_tphase], CY_TP_SPOKE
     mov byte [cy_wstarted], 0
     mov word [cy_scrt], 0
-    call cy_scroll_reset
+    jmp cy_scroll_reset
 
-    ret
 
 ; CX = string length in cells -> CX = the x that centres it, on a multiple of
 ; 8 so font_run takes its single-store path (SPEC.md 6.1).
@@ -7201,15 +7135,12 @@ cy_centre:
     shl ax, 1
     shl ax, 1
     mov cx, [cy_cwid]
-    cmp cx, ax
-    jb .zero
     sub cx, ax
+    jae .fit
+    xor cx, cx                      ; wider than the window: the left edge
+.fit:
     shr cx, 1
     and cx, 0xFFF8
-    jmp short .out
-.zero:
-    xor cx, cx
-.out:
     pop ax
     ret
 
@@ -7645,26 +7576,19 @@ cy_scroll_next:
     cmp bl, CY_NHS
     jae .back                       ; the table is spent: back to the LIST,
     mov bh, 0                       ; which is where the marker left off
-    mov di, cy_scrbuf
-    mov byte [di], '1'
-    add [di], bl
-    mov byte [di + 1], '.'
-    mov byte [di + 2], ' '
-    push bx                         ; the NAME, then the score
-    mov ax, bx
-    add bx, bx
-    add bx, ax
-    mov si, cy_hsn
-    add si, bx
-    mov di, cy_scrbuf + 3
-    mov al, [si]
-    mov [di], al
-    mov al, [si + 1]
-    mov [di + 1], al
-    mov al, [si + 2]
-    mov [di + 2], al
-    mov byte [di + 3], ' '
-    pop bx
+    mov al, '1'                     ; 'n. ABC ' in words, then the score
+    add al, bl
+    mov ah, '.'
+    mov [cy_scrbuf], ax
+    mov si, bx
+    add si, si
+    add si, bx                      ; SI = row * 3, the NAME
+    mov al, ' '
+    mov ah, [cy_hsn + si]
+    mov [cy_scrbuf + 2], ax
+    mov ax, [cy_hsn + si + 1]
+    mov [cy_scrbuf + 4], ax
+    mov byte [cy_scrbuf + 6], ' '
     mov si, bx
     shl si, 1
     shl si, 1
@@ -7736,8 +7660,8 @@ cy_go_fsx:
     ; dismissed: the entry below already owes a whole repaint.
     call cy_pn_off
     mov byte [cy_fsxq], 0
-    mov byte [cy_fsx], 1            ; BEFORE the call: fsx_restore's
-    mov byte [cy_inbr], 1           ; wm_paint_all runs INSIDE fsx_run and
+    mov word [cy_fsx], 0x0101       ; and cy_inbr: BEFORE the call - fsx_restore's
+                                    ; wm_paint_all runs INSIDE fsx_run and
                                     ; re-enters our own W_PAINT
                                     ; the rect this bracket will own is asked
                                     ; INSIDE it, with OSAPI_FSX_SURF - there is
@@ -7746,15 +7670,13 @@ cy_go_fsx:
                                     ; answered the PRIMARY's size and an origin
                                     ; of (0,0) (SPEC.md 53.7.1)
     call cy_pal
-    mov byte [cy_needlay], 1
-    mov byte [cy_full], 1
+    mov word [cy_needlay], CY_LAYFULL
     mov ax, cy_fsx_main
     mov bx, [cy_win]
     xor cx, cx                      ; no flags: the worker freezes, and the
     call OSAPI_FSX_RUN              ; bracket runs the game itself
     ; whether it ran or was refused, we are back on the desktop
-    mov byte [cy_fsx], 0
-    mov byte [cy_inbr], 0
+    mov word [cy_fsx], 0            ; and cy_inbr
                                     ; ...and NOTHING is re-banked here: those
                                     ; four words describe the rect a BRACKET
                                     ; owns and cy_org only reads them while one
@@ -7764,8 +7686,7 @@ cy_go_fsx:
                                     ; re-asks for anyway - and left a pattern
                                     ; for somebody to copy
     call cy_pal
-    mov byte [cy_needlay], 1
-    mov byte [cy_full], 1
+    mov word [cy_needlay], CY_LAYFULL
 .out:
     ret
 
@@ -7780,8 +7701,8 @@ cy_fsx_main:
     mov [cy_scry], bx               ; desktop is NOT collapsed and "fullscreen"
     mov [cy_scrw], cx               ; is this display's rect rather than (0,0)
     mov [cy_scrh], dx               ; plus OSAPI_VIDEO's size - which on a
-    mov byte [cy_needlay], 1        ; two-card machine drew the whole game onto
-    mov byte [cy_full], 1           ; the monitor we were not on
+    mov word [cy_needlay], CY_LAYFULL ; two-card machine drew the whole game
+                                    ; onto the monitor we were not on
 .nosurf:                            ; (CF=1 is impossible here - we ARE the
                                     ; bracket - and leaves what cy_entry banked)
     OS88_ALTENTER_SEED              ; ...and the Alt+Enter that got us here is
@@ -7848,13 +7769,11 @@ cy_fsx_main:
     ; over the desktop (Tracker's [trk_fs] and Missile's [mc_fsx], the one bug
     ; both of them found).
     call cy_cur_erase               ; before the geometry changes under it
-    mov byte [cy_fsx], 0
-    mov byte [cy_inbr], 0
-    mov byte [cy_fsxq], 0
-    mov byte [cy_mheld], 0          ; the hold does not cross the boundary: the
-                                    ; windowed side arms from W_ONCLICK only
-    mov byte [cy_needlay], 1
-    mov byte [cy_full], 1
+    mov word [cy_fsx], 0            ; cy_fsx and cy_inbr...
+    mov word [cy_fsxq], 0           ; ...cy_fsxq, and cy_mheld: the hold does
+                                    ; not cross the boundary, the windowed
+                                    ; side arms from W_ONCLICK only
+    mov word [cy_needlay], CY_LAYFULL
     pop si
     ret
 
@@ -7867,6 +7786,11 @@ cy_fsx_main:
 ; offer exactly those (SPEC.md 67.9)
 cy_pu_draw:
     db CYP_ZAP, CYP_JUMP, CYP_LASER, CYP_DROID, CYP_LIFE
+
+; how many kinds a level unlocks (cy_wavesize), for levels 1..7 and on: L1
+; flippers, L2 + tankers, L3 + spikers, L5 + fuseballs, L7 + pulsars
+cy_kindlv:
+    db 1, 2, 3, 3, 4, 4, 5
 
 ; the points a kill is worth, by kind, before the level multiplier
 cy_kindsc:
@@ -7956,7 +7880,6 @@ cy_ekcol:
     CWORD cy_nlane
     CWORD cy_nvert
     CWORD cy_closed
-    CWORD cy_dd                     ; cy_build_verts' depth cursor
 
     ; --- the warp ---------------------------------------------------------
     CWORD cy_wn                     ; live walks
@@ -7993,8 +7916,6 @@ CY_TWORDS equ 14
 %endif
     CWORD cy_due                    ; the worker's frame deadline
     CBYTE cy_state
-    CBYTE cy_needlay
-    CBYTE cy_full
     CBYTE cy_hired
     CBYTE cy_pnon                   ; a panel (About or How To Play) is up
     CBYTE cy_wasplay                ; ...and it was a live game it paused
@@ -8012,14 +7933,10 @@ CY_TWORDS equ 14
     CWORD cy_cury                   ; re-read position smears permanently
     CBYTE cy_phome                  ; a new level owes the claw its start lane
     CBYTE cy_col                    ; the pen we last set (it cannot be read)
-    CBYTE cy_vkind
-    CBYTE cy_bpp
     CBYTE cy_huddirty
     CBYTE cy_msgdirty
     CBYTE cy_firereq
     CBYTE cy_firecd
-    CBYTE cy_mheld                  ; the mouse button is down and the press
-                                    ; that put it there was ours (67.11.3)
     CBYTE cy_c_e2                   ; the mover inks for THIS display (cy_pal)
     CBYTE cy_c_es
     CBYTE cy_hsav
@@ -8052,9 +7969,17 @@ CY_TWORDS equ 14
     CWORD cy_overt
 
     ; --- fullscreen -------------------------------------------------------
-    CBYTE cy_fsx                    ; the content box IS the screen
-    CBYTE cy_inbr                   ; ...and the gfx lock is already held
-    CBYTE cy_fsxq                   ; the bracket has been asked to leave
+    ; ONE CBUF, because the bracket's edges set them in WORDS (SPEC.md
+    ; 67.26.2) and the bss split (above) may not fall between two of them
+    CBUF  cy_fsx, 6                 ; the content box IS the screen
+cy_inbr     equ cy_fsx + 1          ; ...and the gfx lock is already held
+cy_fsxq     equ cy_fsx + 2          ; the bracket has been asked to leave
+cy_mheld    equ cy_fsx + 3          ; the mouse button is down and the press
+                                    ; that put it there was ours (67.11.3)
+cy_needlay  equ cy_fsx + 4          ; the geometry is owed a cy_layout...
+cy_full     equ cy_fsx + 5          ; ...and the content a whole repaint
+CY_LAYFULL  equ 0x0101              ; ...so `mov word [cy_needlay], CY_LAYFULL`
+                                    ; owes both in one store
     CBYTE cy_pbtn
 
     ; --- the banner -------------------------------------------------------
@@ -8090,7 +8015,6 @@ CY_TWORDS equ 14
     CWORD cy_tmpw
     CWORD cy_tmpbest
     CWORD cy_lspx                   ; the lane's span, published by cy_lanepos
-    CWORD cy_lspy
     CWORD cy_lspm                   ; ...and the dominant of the two
 
     ; --- the lip (67.5.3.1): cy_lip_build's own scratch, which

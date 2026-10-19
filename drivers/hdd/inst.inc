@@ -231,6 +231,7 @@ hd_iw_open:
 ; freed memory. The unowned species (SPEC.md 38.1), so hiding IS closing.
 ; -----------------------------------------------------------------------------
 hd_iw_shut:
+    call hd_ia_rel              ; ...and an abandoned install's hold with it
     push bx
     mov bx, [hd_iwin]
     or bx, bx
@@ -1200,7 +1201,7 @@ hd_bp:      dw 0                ; hd_bn_save's own cursor into hd_bbuf
 hd_bvdrv:   db 0                ; ...and the volume it has to put back
 hd_bvclus:  dw 0
 hd_s_bfile: db 'INSTBNCH.TXT', 0
-hd_s_bhdr:  db 'os8088 install, SPEC.md 52.10.9', 13, 10
+hd_s_bhdr:  db 'os8088 install timings', 13, 10
             db '      fC   fS   dC   dS   tk', 13, 10, 0
             ; ...the ROW's own columns: 3 for the label, then five 5-wide
             ; fields. The window's legend is 5 spaces in and this is 3,
@@ -1626,6 +1627,8 @@ hd_iw_click:
     cmp al, [hd_isel]
     je .done
     mov [hd_isel], al
+    call hd_ia_rel                  ; (an install waiting on its apps disk is
+                                    ; abandoned by this too)
     mov byte [hd_iw_st], HII_IDLE   ; picking another row disarms, tool.inc's
     call hd_idefwipe                ; rule: anything but the same button again
     call hd_ickmsg
@@ -1658,6 +1661,13 @@ hd_inst_step:
     jmp short .out                  ; cheapest confirm that cannot be mistaken
                                     ; for the first (SPEC.md 52.2.3)
 .go:
+    call hd_ia_acq              ; HOLD the kernel's ASSOC.DAT writer FIRST
+                                ; (SPEC.md 54.7.6.4): the system phase below
+                                ; replaces FORMAT.DRV on the boot volume, and
+                                ; on a machine booted from this disk the new
+                                ; copy is stamped for a kernel that is not the
+                                ; one running - so the flush at the end would
+                                ; find nothing it may load
     call hd_inst_sys
     jc .failed
     call hd_iapps_find          ; ...and do not ask for a disk that is already
@@ -1672,13 +1682,21 @@ hd_inst_step:
 .apps:
     call hd_inst_apps
     jc .failed
-    call hd_iassoc              ; ...and the volume's OWN association cache,
-                                ; built from what is actually on it (SPEC.md
-                                ; 52.10.14). LAST, so it sees both disks'
+    push dx                     ; ...and the volume's OWN association cache,
+    mov dl, [hd_idrv]           ; built from what is actually on it (SPEC.md
+    mov al, ASSOC_FL_FULL       ; 52.10.14) - by the kernel's writer in FULL
+    call OSAPI_ASSOC_FLUSH      ; mode (SPEC.md 54.7.6), which was this
+    pop dx                      ; tool's own hd_iassoc until the runtime
+                                ; flush made it the second copy of one
+                                ; algorithm. LAST, so it sees both disks'
                                 ; packages, and SILENT: the MBR is already
                                 ; committed and a cache that cannot be written
                                 ; is SPEC.md 54.7's absent tier rather than a
-                                ; failed install
+                                ; failed install - and the first harvest of
+                                ; the installed volume writes it after all.
+                                ; A step that installs MORE disks flushes
+                                ; after each and releases once, at the end
+    call hd_ia_rel
     mov byte [hd_iw_st], HII_DONE
 %ifdef INSTBENCH
     mov word [hd_imsg], hd_s_bdone  ; the rows below are the report now, so the
@@ -1688,9 +1706,40 @@ hd_inst_step:
 %endif                              ; its own out of the stage machine
     jmp short .out
 .failed:
+    call hd_ia_rel
     mov byte [hd_iw_st], HII_IDLE   ; [hd_imsg] already names what went wrong
 .out:
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_ia_acq / hd_ia_rel - hold and release the kernel's ASSOC.DAT writer
+; (SPEC.md 54.7.6.4) for the length of an install (module internal)
+; clobbers: nothing (flags)
+;
+; Held from the click that starts the copy to the end of the install, however
+; it ends - done, failed, or abandoned at the apps-disk prompt (another row
+; picked, the window closed, the driver detached). The release is cheap and
+; idempotent, so every exit simply asks; hd_iheld keeps it from releasing a
+; hold this tool never took.
+; -----------------------------------------------------------------------------
+hd_ia_acq:
+    push ax
+    mov al, ASSOC_FL_NOFLUSH | ASSOC_FL_HOLD
+    call OSAPI_ASSOC_FLUSH      ; a refusal (no image to be had) is the
+    mov byte [hd_iheld], 1      ; install's old behaviour: no cache at the end
+    pop ax
+    ret
+
+hd_ia_rel:
+    cmp byte [hd_iheld], 0
+    je .out
+    push ax
+    mov al, ASSOC_FL_NOFLUSH
+    call OSAPI_ASSOC_FLUSH
+    mov byte [hd_iheld], 0
+    pop ax
+.out:
     ret
 
 ; =============================================================================
@@ -2428,8 +2477,8 @@ hd_icopy_tree:
                                 ; destination, it is wrong in a way the
                                 ; kernel cannot tell from right: `.HTM`
                                 ; resolves to BROWSER and then to a cluster
-                                ; that means nothing on C:. hd_iassoc builds
-                                ; the volume its own at the end of the
+                                ; that means nothing on C:. OSAPI_ASSOC_FLUSH
+                                ; builds the volume its own at the end of the
                                 ; install.
                                 ;
                                 ; ROOT-ONLY like the kernel above, and for a
@@ -4220,6 +4269,7 @@ hd_isrcdrv:   db 0              ; the drive the COPY reads from, which is the
                                 ; two must not be the same word
 hd_iafound:   db 0              ; hd_iapps_find: an APPS folder has been seen
 hd_iappsc:    dw 0              ; ...and its first cluster, for the descent
+hd_iheld:     db 0              ; 1 = this install HOLDS the ASSOC.DAT writer
 hd_iautod:    db 0xFF           ; the auto-detected apps drive, 0xFF = none.
                                 ; .text with a real initialiser, hd_iwin's
                                 ; reason: -f bin zeroes nothing and 0 here is

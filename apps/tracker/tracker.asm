@@ -138,6 +138,17 @@
 %assign TRK_BSS TRK_BSS + (%2)
 %endmacro
 
+; --- TRK_CLC_OR_STC .label: the CF-return tail in two bytes ---------------------
+; The kernel's CLC_OR_STC (kernel/kernel.asm), for a package: `db 0A8h` and
+; then `.label: stc`. Falling in executes `test al, 0F9h` (the stc is its
+; immediate), which CLEARS CF and touches no register; a jump to .label runs
+; the stc. `test` also writes ZF/SF/PF/OF, so it goes only where the caller
+; reads CF alone (each site checked).
+%macro TRK_CLC_OR_STC 1
+    db 0A8h
+%1: stc
+%endmacro
+
 ; --- tuning --------------------------------------------------------------------
 TRK_VITEM   equ 24                  ; a composed View item: MENU_DIS +
                                     ; 'Fullscreen' + ' (5.5 kHz)' + NUL = 22
@@ -298,15 +309,19 @@ trk_entry:
                                     ; (a typed name). The grant walk then
                                     ; corrects it downward if the heap says so
     call OSAPI_CPU_INFO             ; AL = tier (SPEC.md 41.8); a tier-0
-    mov byte [trk_rsel], 1          ; (a 286 or better opens at 22 kHz:
-    or al, al                       ; SPEC.md 45.10.2 - half the machine
-    jnz .cpu                        ; there, and every card takes it) - and
-    mov byte [trk_rsel], 0          ; a tier-0 machine gets XT mode pre-armed
-                                    ; with its menu item already relabeled
-    mov byte [mp_xt], 1             ; (SPEC.md 45.9) - no table to rebuild,
-    mov byte [trk_cpu0], 1          ; nothing is loaded yet - and the machine
-    mov word [trk_mi_file + TRK_MI_XT], trk_s_xton  ; itself is remembered
+    cmp al, 1                       ; (a 286 or better opens at 22 kHz:
+    sbb ah, ah                      ; SPEC.md 45.10.2 - half the machine
+    inc ah                          ; there, and every card takes it) - and
+    mov [trk_rsel], ah              ; a tier-0 machine gets XT mode pre-armed
+    mov al, TWV_SPEC                ; with its menu item already relabeled
+    jnz .cpu                        ; (SPEC.md 45.9) - no table to rebuild,
+    mov al, 1                       ; nothing is loaded yet - and the machine
+    mov [mp_xt], al                 ; itself is remembered. The visualiser:
+    mov [trk_cpu0], al              ; the spectrum where there are cycles for
+    mov word [trk_mi_file + TRK_MI_XT], trk_s_xton  ; it, the needles (bss's
+    dec ax                          ; 0) where there are not (tw_vizfx forces
 .cpu:
+    mov [tw_viz], al                ; those); nothing reads it before a paint
     call OSAPI_VIDEO                ; AX = w, BX = h, CX = first dock row
     sub ax, TRK_WINW                ; centre the frame on the screen...
     jns .xok
@@ -361,10 +376,6 @@ trk_entry:
                                     ; did (45.21.3, 45.22.4)
     mov byte [mp_endstop], 1        ; ...once there is one: an empty list ends
     mov byte [tpl_cur], 0FFh        ; no list entry playing
-    cmp byte [trk_cpu0], 0          ; the visualiser: the spectrum where there
-    jne .viz                        ; are cycles for it, the needles where
-    mov byte [tw_viz], TWV_SPEC     ; there are not (tw_vizfx forces those)
-.viz:
     clc                             ; (wm_create's success, which the loader
                                     ; reads; the calls above write flags)
     call trk_menus_build            ; ...and this ends in MENU_SET. It has to
@@ -437,20 +448,17 @@ trk_arg:
     mov di, trk_argnm
     mov cx, 12
 .copy:
-    mov al, [es:si]
+    es lodsb
     mov [di], al
     or al, al
     jz .named
-    inc si
     inc di
     loop .copy
 .named:
     mov byte [trk_argnm+12], 0
-    push ds
-    pop es                          ; ES = DS again, the callback default
     mov byte [trk_argp], 1
 .out:
-    pop es
+    pop es                          ; ES = the caller's again
     pop di
     pop si
     pop cx
@@ -639,15 +647,11 @@ trk_oncmd:
     call trk_reap                   ; F00/watchdog leftovers close first
     call trk_abdismiss
     jc .out
-    or bh, bh
-    jz .file
-    cmp bh, 2                       ; the Rate menu (SPEC.md 45.10)
-    je .rate
-    cmp bh, 1
-    jne .out
-    or bl, bl                       ; View > Fullscreen
-    jz .vfull
-    cmp bl, 1                       ; View > Text Screen (SPEC.md 45.13.7):
+    cmp bh, 1                       ; 0 = File, 1 = View, 2 = Rate
+    jb .file
+    jne .rate
+    cmp bl, 1                       ; View > Fullscreen
+    jb .vfull                       ; View > Text Screen (SPEC.md 45.13.7):
     jne .out                        ; the surface pick. No belt like .vfull's
     call trk_txt_toggle             ; below - the row greys because XT mode
     jmp short .out                  ; makes the pick INERT, not unavailable,
@@ -661,14 +665,12 @@ trk_oncmd:
                                     ; than being two opinions
 .file:
     mov byte [trk_addpl], 0
-    or bl, bl                       ; File > Open...
-    jz .fopen
-    cmp bl, 1                       ; File > Add to PlayList... (45.22)
-    je .fadd
-    cmp bl, 2                       ; File > PlayList Editor
-    je .fedit
-    cmp bl, 3                       ; File > XT Mode (the relabeling item)
-    jne .out
+    cmp bl, 1                       ; 0 = File > Open...
+    jb .fopen
+    je .fadd                        ; 1 = File > Add to PlayList... (45.22)
+    cmp bl, 3
+    jb .fedit                       ; 2 = File > PlayList Editor
+    jne .out                        ; 3 = File > XT Mode (the relabeling item)
     call trk_xt_toggle
     jmp short .out
 .fadd:
@@ -680,6 +682,8 @@ trk_oncmd:
     call tpl_toggle
     jmp short .out
 .rate:
+    cmp bh, 2                       ; the Rate menu (SPEC.md 45.10)
+    jne .out
     mov al, bl                      ; Rate > 11/22/33/44 kHz (SPEC.md 45.10)
     call trk_rate_set
 .out:
@@ -711,14 +715,12 @@ trk_about:
 ; -----------------------------------------------------------------------------
 trk_abdismiss:
     cmp byte [trk_abon], 0
-    je .none
+    je .none                        ; CF = 0: a compare with 0 never borrows
     mov byte [trk_abon], 0
     call tw_rects                   ; the buttons are live again...
     call tw_redraw                  ; ...and the face is drawn whole over the
     stc                             ; card (tw_redraw arms our clip)
-    ret
 .none:
-    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -959,14 +961,12 @@ trk_sizeof:
     inc si
     inc di
     jmp short .chr
-.hit:
+.hit:                               ; CF = 0, from the `or`
     mov ax, [trk_find + 18]         ; +18 = the size, all 32 bits
     mov dx, [trk_find + 20]
-    clc
-    jmp short .out
+    ret
 .no:
     stc
-.out:
     ret
 
 trk_fdone:
@@ -974,18 +974,17 @@ trk_fdone:
     mov [trk_fsize+2], dx           ; banked FIRST: the name copy below uses
                                     ; CX as its counter and would eat it
     mov si, di                      ; copy the kernel's name buffer out NOW:
-    mov di, trk_fname               ; it dies when this call returns
+    mov di, trk_fname               ; it dies when this call returns. The
+    push ds                         ; segments are swapped for a movsb (DF
+    push es                         ; = 0, SPEC.md 1), which leaves ES = DS
+    pop ds                          ; again - the callback default
+    pop es
     mov cx, 12
-.cp:
-    mov al, [es:si]
-    mov [di], al
-    inc si
-    inc di
-    loop .cp
+    rep movsb
+    push es
+    pop ds
     mov byte [trk_fname + 12], 0
     inc byte [tw_gen]               ; the LCD's file name (tw_lkey)
-    push ds
-    pop es                          ; ES = DS again (the callback default)
 
     ; --- refuse what we cannot load, BEFORE any disk I/O (SPEC.md 38.6) ------
     ; Both tests below used to happen after the whole file had been read: the
@@ -1144,8 +1143,9 @@ trk_fdone:
     call tsp_natural
     jmp short .card
 .lpt:
-    mov byte [tsp_pre], 0           ; nothing filtered (tests/lzmod.py)...
-    mov byte [tsp_lvok], 0          ; ...and a new song, a new level - which
+    xor ax, ax
+    mov [tsp_pre], al               ; nothing filtered (tests/lzmod.py)...
+    mov [tsp_lvok], al              ; ...and a new song, a new level - which
 .card:                              ; is tsp_natural's first line
     mov byte [ttx_shok], 0          ; a NEW module can name the same pattern
                                     ; NUMBER with different rows in it, and
@@ -1268,16 +1268,13 @@ trk_cpq_try:
     mov byte [trk_cpq], 1
     mov si, trk_s_cpq               ; ...and SAY so: the pass is hundreds of
     call tui_msg                    ; milliseconds of rep movsw on the target
-    pop si                          ; machine and this callback returns into
-    pop bx                          ; it, so the sentence has to be on the
-    pop ax                          ; glass before the freeze rather than after
-    clc
-    ret
-.no:
+                                    ; machine and this callback returns into
+                                    ; it, so the sentence has to be on the
+                                    ; glass before the freeze rather than after
+    TRK_CLC_OR_STC .no
     pop si
     pop bx
     pop ax
-    stc
     ret
 ; =============================================================================
 ; Fullscreen is the fsx exclusive surface (SPEC.md 53) - entered from
@@ -1860,16 +1857,10 @@ trk_ring_probe:
                                     ; sub-op 1 = free: we only wanted to know
     call OSAPI_SND_STREAM
 .none:
+    TRK_CLC_OR_STC .no
     pop si
     pop cx
     pop ax
-    clc
-    ret
-.no:
-    pop si
-    pop cx
-    pop ax
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1925,10 +1916,7 @@ trk_grant_walk:
     jmp short .try
 .got:
     call trk_ring_set
-    clc
-    ret
-.no:
-    stc
+    TRK_CLC_OR_STC .no
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2031,16 +2019,13 @@ trk_play:
     push ax                         ; mp_stop ZEROES AX, and the test below is
     call mp_stop                    ; the driver's answer: every refusal read
     pop ax                          ; 'Sound open failed', err 2 included
-    mov si, trk_s_snderr
+    mov si, trk_s_norate
     cmp ax, 2                       ; err 2 = rate refused: a 33/44 kHz pick
-    jne .of8                        ; on a pre-3.x DSP (SPEC.md 45.10) - the
-    mov si, trk_s_norate            ; menu greys those now, so this is a belt
-    jmp short .ofmsg
-.of8:
+    je .say                         ; on a pre-3.x DSP (SPEC.md 45.10) - the
+    mov si, trk_s_nomem             ; menu greys those now, so this is a belt
     cmp ax, 8                       ; err 8 = no page-safe 8KB for the
-    jne .ofmsg                      ; double buffer, claimed per stream now
-    mov si, trk_s_nomem             ; (SPEC.md 34.5.2): a memory answer
-.ofmsg:
+    je .say                         ; double buffer, claimed per stream now
+    mov si, trk_s_snderr            ; (SPEC.md 34.5.2): a memory answer
 .say:
     call tui_msg
 .out:
@@ -2357,21 +2342,16 @@ trk_say:
 ;              surface. Re-run trk_transport, but only if what is on the
 ;              status line IS one of its four strings: a real message ("Rate:
 ;              22 kHz", a refusal) belongs to the user and must not be eaten
-;              by pressing F. Preserves everything.
+;              by pressing F. Preserves everything. The five legends are ONE
+;              run of bytes (asserted where they are declared), so "is one of
+;              them" is a range test.
 trk_legend:
     push si
     mov si, [tui_msgp]
     cmp si, trk_s_stopd
-    je .re
-    cmp si, trk_s_paused
-    je .re
-    cmp si, trk_s_playing
-    je .re
-    cmp si, trk_s_stopdf
-    je .re
+    jb .out
     cmp si, trk_s_playingf
-    jne .out
-.re:
+    ja .out
     call trk_transport
 .out:
     pop si
@@ -2482,9 +2462,9 @@ trk_menus_build:
     je .tmark                       ; in XT mode it is set whatever the pick
     mov al, '*'                     ; is - which is what the greying explains
 .tmark:
-    mov [di], al
+    mov ah, ' '
+    mov [di], ax
     inc di
-    mov byte [di], ' '
     inc di
     mov si, trk_s_textm
     call trk_scpy
@@ -2523,9 +2503,9 @@ trk_menus_build:
     jne .pad
     mov al, '*'
 .pad:
-    mov [di], al
+    mov ah, ' '
+    mov [di], ax
     inc di
-    mov byte [di], ' '
     inc di
     push bx
     shl bx, 1
@@ -2572,11 +2552,9 @@ trk_fs_ok:
     cmp byte [mp_xt], 0             ; XT mode's high rate cannot hold the
     je .ok                          ; 45.13 text screen (PERFORMANCE.md
     cmp byte [trk_xhi], 0           ; Sets 65-67), so it is not offered
-    je .ok
+    je .ok                          ; (CF = 0 there: a compare with 0)
     stc
-    ret
 .ok:
-    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2719,15 +2697,11 @@ trk_hirate:
     push bx
     push dx
     call OSAPI_SND_CAPS             ; AX = caps (BL/DX: the route, unused)
-    test ax, SND_CAP_PCM_HI
+    and ax, SND_CAP_PCM_HI
+    neg ax                          ; CF = the bit is set
     pop dx
     pop bx
     pop ax
-    jz .no
-    stc
-    ret
-.no:
-    clc
     ret
 
 ; trk_spkq - CF = 1 when there is NO CARD: Tracker plays through the PC speaker
@@ -2739,15 +2713,11 @@ trk_spkq:
     push bx
     push dx
     call OSAPI_SND_CAPS
-    test ax, SND_CAP_PCM_BG
+    and ax, SND_CAP_PCM_BG
+    cmp ax, 1                       ; CF = the bit is clear
     pop dx
     pop bx
     pop ax
-    jnz .card
-    stc
-    ret
-.card:
-    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3496,6 +3466,10 @@ trk_s_paused: db 'Paused  ENTER resumes', 0 ; short enough for either surface
 ; legend ends up advertising a key it was written to stop advertising.
 trk_s_stopdf: db 'Stopped  ENTER play  F/ESC exits', 0
 trk_s_playingf: db 'Playing  SPACE pause  F/ESC exits', 0
+trk_s_lgend:                        ; trk_legend's range test: these five and
+    times (trk_s_lgend - trk_s_stopd) - 166 db 0    ; nothing else, in one
+    times 166 - (trk_s_lgend - trk_s_stopd) db 0    ; run (a TIMES goes
+                                    ; negative, an error, when they are not)
 trk_s_fsload: db 'Load is windowed: F or Esc first', 0
 trk_s_notmod: db 'Not a .MOD file', 0
 trk_s_nofit:  db 'Too big for free memory', 0

@@ -1,5 +1,6 @@
 ; =============================================================================
-; os8088 - apps/weave/wcv.inc        THE SEAM TO WEAVE.WSM (WEAVE-SPEC 1.2.2)
+; os8088 - apps/weave/wcv.inc        THE SEAM TO THE CANVAS CORE (WEAVE-SPEC
+;                                    1.2.2) - part 0 of WEAVE.O88
 ;
 ; %included by apps/weave/weave.asm - so this is the PACKAGE, and everything
 ; it reaches is in a segment of its own. Three routines and one dword, and
@@ -13,13 +14,15 @@
 ; and DF preserved. The module preserves the same set, plus SI and DI.
 ; =============================================================================
 
-; THE MODULE'S SIZE, injected rather than assembled: WEAVE.WSM is a separate
-; nasm job, so this assembly cannot see its last label. tools/os88disk.py is
-; not involved either - the Makefile writes build/wsmsize.inc from the module
-; it has just built, and the package is built after it. That ordering is what
-; makes the third stamp word (1.2.2) a real staleness check rather than a
-; tautology, and it is also why no C-toolchain flag is involved: this is one
-; %include, resolved through the -I build/ every C package already has.
+; THE MODULE'S SIZE, injected rather than assembled: the core is a separate
+; nasm job (apps/weave/wcanvas.asm), so this assembly cannot see its last
+; label, and the Makefile writes build/wsmsize.inc from the module it has just
+; built, before the package is. It is no longer a STAMP - the module is part 0
+; of WEAVE.O88 (WEAVE-SPEC 1.2.2), bytes of the package's own file located by
+; a table in the image it was built with, so there is no pair of files to go
+; stale and the magic/ABI/size compare that used to stand here is gone with
+; the file. What the size is still for is WEAVE-SPEC 10.1's arithmetic, which
+; asks for the core's KB BEFORE any I/O.
 %include "wsmsize.inc"
 
 section .text
@@ -31,42 +34,6 @@ _wcv_kb:
     mov ax, WSM_SIZE + 1023
     mov cl, 10
     shr ax, cl
-    ret
-
-; -----------------------------------------------------------------------------
-; unsigned wcv_bytes(void) - WSM_SIZE, so the caller can check the read.
-; -----------------------------------------------------------------------------
-_wcv_bytes:
-    mov ax, WSM_SIZE
-    ret
-
-; -----------------------------------------------------------------------------
-; int wcv_stamp(unsigned seg) - is this really OUR module?
-; out: 0 yes, 1 not a module or truncated, 2 stale.
-;
-; THREE WORDS, and 1.2.2 says what each catches and what the set does not.
-; The check is here rather than in C for one reason: WSM_MAGIC, WSM_ABI and
-; WSM_SIZE are nasm equs out of the two files this assembly shares with the
-; module, and a C copy of them would be a fourth place for the contract to
-; drift - which is the exact failure the ABI word exists to prevent.
-; -----------------------------------------------------------------------------
-_wcv_stamp:
-    push bp
-    mov bp, sp
-    push es
-    mov es, [bp+4]
-    mov ax, 1
-    cmp word [es:WSM_H_MAGIC], WSM_MAGIC
-    jne .out
-    mov ax, 2
-    cmp word [es:WSM_H_ABI], WSM_ABI    ; a CONTRACT change need not change a
-    jne .out                            ; size, which is the half .OVL's two
-    cmp word [es:WSM_H_SIZE], WSM_SIZE  ; size words cannot express
-    jne .out
-    xor ax, ax
-.out:
-    pop es
-    pop bp
     ret
 
 ; -----------------------------------------------------------------------------
@@ -160,7 +127,7 @@ _wcv_opsps:
 ; -----------------------------------------------------------------------------
 ; unsigned wcv_call(unsigned verb, unsigned a, unsigned b, unsigned c)
 ;
-; One far call into WEAVE.WSM (WEAVE-SPEC 6.10.3). `verb` is a WORD - the low
+; One far call into the canvas core (WEAVE-SPEC 6.10.3). `verb` is a WORD - the low
 ; byte is the verb and the high byte its flag - so WSMV_SPRITE's read/write
 ; bit costs no fourth argument.
 ;
@@ -244,6 +211,6 @@ wcv_now:    resw 1                  ; banked across the three divisions
 
 section .data
 wcv_vec:    dw 0, 0                 ; (offset, segment) - the segment is 0
-                                    ; until the load path has read, stamped
-                                    ; and believed the module
+                                    ; until the load path has fetched the
+                                    ; module (part 0)
 section .text

@@ -668,23 +668,13 @@ tpl_draw:
     mov cx, TPL_NB
     dec ax
     rep stosw
-    mov si, CWHITE                  ; the body: the tiles no element owns
-    mov bx, tpl_tiles
-    mov cx, TPL_NT
-.t:
-    push cx
-    push bx
-    mov ax, [bx]
-    mov cx, [bx + 2]
-    mov dl, [bx + 5]
-    xor dh, dh
-    mov bl, [bx + 4]
-    xor bh, bh
-    call tw_fills
-    pop bx
-    pop cx
-    add bx, 6
-    loop .t
+    mov al, CWHITE                  ; the body: the tiles no element owns,
+    call tw_pen                     ; in one pen
+    mov si, tpl_tiles
+    mov di, TPL_NG
+    push bp
+    call tw_tiles
+    pop bp
     mov al, CBLACK                  ; the list's frame
     call tw_pen
     mov ax, TPL_RX - 1
@@ -1141,53 +1131,26 @@ tpl_s_empty: db 'Empty - Add...', 0
 tpl_s_full:  db 'PlayList is full', 0
 tpl_s_added: db 'Added to the PlayList', 0
 
-; the editor's body tiles - generated with the face's, by tools/trkface.py
-tpl_tiles:                 ; 22 tiles
-    dw 0, 255
-    db 0, 2
-    dw 169, 255
-    db 3, 3
-    dw 169, 175
-    db 4, 19
-    dw 248, 255
-    db 4, 19
-    dw 169, 255
-    db 20, 23
-    dw 169, 175
-    db 24, 39
-    dw 248, 255
-    db 24, 39
-    dw 169, 255
-    db 40, 43
-    dw 169, 175
-    db 44, 59
-    dw 248, 255
-    db 44, 59
-    dw 169, 255
-    db 60, 63
-    dw 169, 175
-    db 64, 79
-    dw 248, 255
-    db 64, 79
-    dw 169, 255
-    db 80, 83
-    dw 169, 175
-    db 84, 99
-    dw 248, 255
-    db 84, 99
-    dw 169, 255
-    db 100, 103
-    dw 169, 175
-    db 104, 119
-    dw 248, 255
-    db 104, 119
-    dw 0, 6
-    db 3, 132
-    dw 169, 255
-    db 120, 132
-    dw 0, 255
-    db 133, 135
-TPL_NT equ 22
+; the editor's body tiles - generated with the face's, by tools/trkface.py,
+; in its grouped form over tw_xp (trkwin.inc)
+tpl_tiles:                 ; 16 groups
+    db 0, 2, 1, 68
+    db 3, 3, 1, 72
+    db 4, 19, 2, 76, 80
+    db 20, 23, 1, 72
+    db 24, 39, 2, 76, 80
+    db 40, 43, 1, 72
+    db 44, 59, 2, 76, 80
+    db 60, 63, 1, 72
+    db 64, 79, 2, 76, 80
+    db 80, 83, 1, 72
+    db 84, 99, 2, 76, 80
+    db 100, 103, 1, 72
+    db 104, 119, 2, 76, 80
+    db 3, 132, 1, 84
+    db 120, 132, 1, 72
+    db 133, 135, 1, 68
+TPL_NG equ 16
 
 ; =============================================================================
 ; bss

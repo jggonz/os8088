@@ -1,0 +1,104 @@
+diff --git a/crates/marty_core/src/bus/mod.rs b/crates/marty_core/src/bus/mod.rs
+index e161680c..2f5d286e 100644
+--- a/crates/marty_core/src/bus/mod.rs
++++ b/crates/marty_core/src/bus/mod.rs
+@@ -130,6 +130,15 @@ pub const MEM_MMIO_BIT: u8 = 0b0000_0100; // Bit to signify that this address is
+ pub const MEM_SW_BIT: u8 = 0b0000_0010; // Bit to signify that this address is in a stopwatch
+ 
+ pub const KB_UPDATE_RATE: f64 = 5000.0; // Keyboard device update rate in microseconds
++/// os8088: the least time between two bytes reaching the PPI, in microseconds.
++/// An XT keyboard cannot start clocking its next byte until the system has
++/// acknowledged the last one, and clocking one out takes about a millisecond,
++/// so no real machine sees two closer than that. Without it a byte the
++/// keyboard was holding went to the PPI the instant the ROM's int 09h
++/// acknowledged the last one - a few instructions before that handler's
++/// `sti` - and a scripted burst nested one int 09h inside the next until it
++/// had spent the interrupted task's whole stack.
++pub const KB_BYTE_US: f64 = 1000.0;
+ 
+ pub const TIMING_TABLE_LEN: usize = 2048;
+ 
+@@ -503,6 +512,7 @@ pub struct BusInterface {
+     cga_tick_accum: u32,
+     tga_tick_accum: u32,
+     kb_us_accum: f64,
++    kb_byte_wait_us: f64,
+     refresh_enabled: bool,
+     refresh_active: bool,
+ 
+@@ -594,6 +604,7 @@ impl Default for BusInterface {
+             cga_tick_accum: 0,
+             tga_tick_accum: 0,
+             kb_us_accum: 0.0,
++            kb_byte_wait_us: 0.0,
+             refresh_active: false,
+             refresh_enabled: false,
+ 
+@@ -1485,8 +1496,14 @@ impl BusInterface {
+             // down in the guest's map). The keyboard keeps it and offers it
+             // again at its next update (KB_UPDATE_RATE, 5 ms - a scan
+             // interval, not the microseconds after the acknowledge).
+-            let ready = self.ppi.as_ref().map_or(true, |ppi| ppi.kb_ready());
++            //
++            // ...and (os8088) not until KB_BYTE_US has passed since the last
++            // byte: that is the serial line's time, and it is what keeps a
++            // queued byte from interrupting the ISR that has just taken the
++            // one before it.
++            let ready = self.ppi.as_ref().map_or(true, |ppi| ppi.kb_ready()) && self.kb_byte_wait_us <= 0.0;
+             if let Some(kb_byte) = keyboard.recv_scancode_when(ready) {
++                self.kb_byte_wait_us = KB_BYTE_US;
+                 //log::debug!("Received keyboard byte: {:02X}", kb_byte);
+ 
+                 // Do we have a PPI? if so, send the scancode to the PPI
+@@ -1530,6 +1547,7 @@ impl BusInterface {
+         let mut process_keyboard = false;
+         if let Some(keyboard) = &mut self.keyboard {
+             self.kb_us_accum += us;
++            self.kb_byte_wait_us = (self.kb_byte_wait_us - us).max(0.0);
+ 
+             // Handle user-initiated keyboard events
+             if let Some(kb_event) = kb_event_opt {
+diff --git a/crates/marty_core/src/machine.rs b/crates/marty_core/src/machine.rs
+index eca0eb4e..ba087df7 100644
+--- a/crates/marty_core/src/machine.rs
++++ b/crates/marty_core/src/machine.rs
+@@ -436,6 +436,7 @@ pub struct Machine {
+     sound_sources: Vec<SoundSourceDescriptor>,
+     debug_snd_file: Option<File>,
+     kb_buf: VecDeque<KeybufferEntry>,
++    kb_event_wait_us: f64,
+     error: bool,
+     error_str: Option<String>,
+     turbo_bit: bool,
+@@ -656,6 +657,7 @@ impl Machine {
+             sound_sources,
+             debug_snd_file: None,
+             kb_buf: VecDeque::new(),
++            kb_event_wait_us: 0.0,
+             error: false,
+             error_str: None,
+             turbo_bit: false,
+@@ -1521,11 +1523,22 @@ impl Machine {
+         //
+         // If we limit keyboard events to once per frame, this avoids this problem. I'm a reasonably
+         // fast typist and this method seems to work fine.
++        //
++        // os8088: "once per frame" is once per call to run(), and the debug
++        // server's `advance` calls it every quarter of a millisecond - so a
++        // script's queued keys reached the keyboard several times faster than
++        // its serial line can carry them. Events are also paced in GUEST time
++        // now, one per KB_BYTE_US, which is the batch size no longer
++        // mattering rather than a new limit: nothing a person can type comes
++        // near it. Idle time is not banked, so a burst after a quiet spell is
++        // paced from its first key.
++        self.kb_event_wait_us = (self.kb_event_wait_us - us).max(0.0);
+         let mut kb_event_opt: Option<KeybufferEntry> = None;
+-        if !self.kb_buf.is_empty() && !*kb_event_processed {
++        if !self.kb_buf.is_empty() && !*kb_event_processed && self.kb_event_wait_us <= 0.0 {
+             kb_event_opt = self.kb_buf.pop_front();
+             if kb_event_opt.is_some() {
+                 *kb_event_processed = true;
++                self.kb_event_wait_us = crate::bus::KB_BYTE_US;
+             }
+         }
+ 

@@ -106,7 +106,7 @@ endef
 
 # -----------------------------------------------------------------------------
 # CC_PACKAGE - the four rules for one C package.
-#   $(eval $(call CC_PACKAGE,<name>,<directory under apps/>[,<NAME>.OVL]))
+#   $(eval $(call CC_PACKAGE,<name>,<directory under apps/>[,<NAME>.OVL[,<parts>[,part]]]))
 # expects apps/<dir>/<name>.c and apps/<dir>/<name>.asm (the shim - see the
 # head of apps/cc/crt0.asm, and apps/cc/ccsmoke.asm for a filled-in one).
 #
@@ -170,15 +170,25 @@ $(BUILD)/$(1).bin: apps/$(2)/$(1).asm $(BUILD)/$(1).gen.asm $(CC_RUNTIME) | $(BU
 # 20.14) and crt0 sizes the claim from the IMAGE's own cc_modc_end, which is
 # the UNPACKED size. A disk recipe names $(CC_OVLZ)/<NAME>.OVL, never
 # $(BUILD)/<NAME>.OVL - tests/unit/t_pkgzrules.py fails the build otherwise.
+#
+# $(5) = `part` PUTS THE OVERLAY INSIDE THE PACKAGE (SPEC.md 73.14.2): the cut
+# module is appended as the LAST --part, after $(4), and no $(CC_OVLZ) copy is
+# made - there is no file to ship. It pairs with `%define CC_OVL_PART` in the
+# shim, and the two cannot drift silently: os88pkg.py refuses a --part count
+# that is not the table's file-backed rows, in either direction.
+# $(BUILD)/<NAME>.OVL is still written, plain, because the host readers
+# (tests/unit/t_ctoolchain.py, the symbol readers) want the module's bytes.
 CC_PARTZ := --part-compress $(if $(CCPARTZ),$(CCPARTZ),lz4)
+$(if $(filter-out part,$(5)),$(error CC_PACKAGE $(1): the fifth argument is `part` or nothing, not `$(5)`))
+$(if $(5),$(if $(3),,$(error CC_PACKAGE $(1): `part` names the overlay in the third argument, and there is none)))
 $(BUILD)/$(1).o88: $(BUILD)/$(1).bin tools/os88pkg.py $(if $(3),tools/os88ovl.py) $(4) $(PKGZSTAMP)
-	$(if $(3),python3 tools/os88ovl.py $$< -o $(BUILD)/$(3) --trim $(BUILD)/$(1).trim.bin$(CC_NL)	python3 tools/os88pkg.py $(PKGZARG) $(BUILD)/$(1).trim.bin -o $$@ $(CC_PARTZ) $(addprefix --part ,$(4)),python3 tools/os88pkg.py $(PKGZARG) $$< -o $$@ $(CC_PARTZ) $(addprefix --part ,$(4)))
+	$(if $(3),python3 tools/os88ovl.py $$< -o $(BUILD)/$(3) --trim $(BUILD)/$(1).trim.bin$(CC_NL)	python3 tools/os88pkg.py $(PKGZARG) $(BUILD)/$(1).trim.bin -o $$@ $(CC_PARTZ) $(addprefix --part ,$(4) $(if $(5),$(BUILD)/$(3))),python3 tools/os88pkg.py $(PKGZARG) $$< -o $$@ $(CC_PARTZ) $(addprefix --part ,$(4)))
 
 # The overlay is also a direct prerequisite of the all-apps/live images.
 # Declare its producer for fresh builds; recover it if only it was deleted.
 $(if $(3),$(BUILD)/$(3): $(BUILD)/$(1).o88$(CC_NL)	@test -f $$@ || python3 tools/os88ovl.py $(BUILD)/$(1).bin -o $$@ --trim $(BUILD)/$(1).trim.bin)
 
-$(if $(3),$(call CC_OVLZ_RULE,$(3)))
+$(if $(3),$(if $(5),,$(call CC_OVLZ_RULE,$(3))))
 
 endef
 

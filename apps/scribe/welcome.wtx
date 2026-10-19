@@ -1,18 +1,29 @@
-; apps/word/welcome.wtx - the shipped WELCOME.DOC's source (SPEC.md 68.4).
+; apps/scribe/welcome.wtx - Scribe's welcome page (SPEC.md 95). The Makefile
+; builds it twice, as SCWELCOM.RTF (tools/os88rtf.py) and SCWELCOM.DOC
+; (tools/os88doc.py), so the text must be true of both files: it names
+; neither as "this file's" format. It was a copy of apps/word/welcome.wtx
+; until the manuals pass, which put "This document is a native Word .DOC
+; file" in an RTF and "Welcome to Microsoft Word" in front of Scribe.
 ; One paragraph per line; leading '.'-directives set the paragraph format,
 ; {b}..{/b}-style spans set character formats, a literal tab is a tab.
-; tools/os88doc.py turns this into a native .DOC deterministically.
-.c {d}WELCOME TO MICROSOFT WORD{/d}
-.c Version 1.1a for os8088
+.c {d}WELCOME TO SCRIBE{/d}
+.c The os8088 word processor
 
-This document is a native Word .DOC file: everything on this page - the {b}bold{/b}, the {i}italics{/i}, the centered heading above - was saved into it and is being rendered back by the same engine you are typing into.
+Scribe is a word processor forked from os8088's Microsoft Word 1.1a: the same menus, ribbon, ruler, dialogs and keys, plus one thing Word does not have - pictures in the document.
+
+.open {b}Pictures{/b}
+Insert Picture puts a .BMP, .PCX or .PIX picture into the text at the caret, in colour or in black and white. One document holds up to eight.
+
+.open {b}Two file formats{/b}
+A new document saves as an RTF file (DOCUMENT.RTF) unless you give it a .DOC name with Save As. RTF keeps a picture's colours. A Word .DOC file can only hold black-and-white pictures, so saving as .DOC turns each one black and white.
+This page is on the disk twice, as SCWELCOM.RTF and as SCWELCOM.DOC. Scribe takes no file type for itself, so double-clicking a document never starts it: open documents with File Open.
 
 .open {b}What works{/b}
 Type anywhere; select with the mouse, or press F8 and extend with the arrow keys. Character formats live on the ribbon, in Format Character, and on the Ctrl keys: {b}bold{/b} (Ctrl-B), {i}italic{/i}, {b}{i}both together{/b}{/i}, {u}underline{/u} (Ctrl-U), {w}word underline{/w} (Ctrl-W), {d}double underline{/d} (Ctrl-D) and {k}small caps{/k} (Ctrl-K). Paragraph formats come from the ruler, the Ctrl keys, or Format Paragraph.
 .li 5 .fi -5 This paragraph wears a hanging indent, set with Ctrl-T; the ruler's markers show it, and dragging them moves it.
 .c This paragraph is centered (Ctrl-C).
 .r This one is flush right (Ctrl-R).
-.sp2 .open This one is double spaced (Ctrl-2) and open (Ctrl-O) - draft view renders the extra leading exactly as the shipped product's did.
+.sp2 .open This one is double spaced (Ctrl-2) and open (Ctrl-O).
 
 .open {b}A few keys{/b}
 Ctrl-F	Search
@@ -23,6 +34,6 @@ F8	Extend the selection (EXT)
 Shift-F12	Save
 F12	Save As
 Alt-BkSp	Undo
+Alt-F4	Exit
 
-.open This is Word's draft view - the mode the real product shipped for machines exactly like this one: one fixed-pitch face, character formatting synthesized. The menus, ribbon, ruler, status line and dialogs follow the Opus source release preserved by the Computer History Museum.
 Save your own documents into the DOCS folder with Save As; File Open reads plain text files too.

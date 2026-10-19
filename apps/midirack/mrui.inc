@@ -53,7 +53,7 @@ MRB_QUIT    equ 13
     MRB mru_col                     ; 1 = the COLOUR face (SPEC.md 105.9.5):
                                     ; a 4bpp display, decided at each full
                                     ; paint, and tall
-    MRW mra_seg                     ; MIDIRACK.GFX's claim, or 0
+    MRW mra_seg                     ; the faces' claim (part 0), or 0
     MRW mru_hdr                     ; a pane's title strip
     MRW mru_lbt                     ; the list box's top, under the title
     MRW mru_nrp                     ; Now Playing's line pitch
@@ -1011,18 +1011,15 @@ mru_bpaint:
     ja .bevel
     cmp word [mra_seg], 0
     je .bevel
-    sub ax, MRB_PREV                ; the face: button x 3 + the state
-    mov cx, ax
-    shl ax, 1
-    add ax, cx
-    test di, OS88UI_DIS
+    sub ax, MRB_PREV                ; the face: the button + MRA_NB x the
+    test di, OS88UI_DIS             ; state (the claim is state-major)
     jz .nd
-    add ax, 2
+    add ax, 2 * MRA_NB
     jmp short .st
 .nd:
     test di, OS88UI_DOWN
     jz .st
-    inc ax
+    add ax, MRA_NB
 .st:
     mov cx, MRA_FACE
     mul cx
@@ -1858,52 +1855,15 @@ mru_mode:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; mra_load - the colour face's pictures, MIDIRACK.GFX beside us, into a claim
-; of their own (SPEC.md 105.9.5). Only on a COLOUR PRIMARY: a Hercules or a
-; CGA machine never reads it. Silent when the file is not there, the heap is
-; short or the file is not exactly the size the four numbers say - the
-; transport is then code-drawn, which is a complete face and not a broken
-; one. UI task, at entry (a read and a claim, SPEC.md 20.6 rule 7)
-; -----------------------------------------------------------------------------
-mra_load:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push es
-    call OSAPI_VIDEO                ; DH = the primary's bits per pixel
-    cmp dh, 1
-    jbe .out
-    mov ax, (MRA_SIZE + 1023) / 1024
-    call OSAPI_MEM_CLAIM            ; DX = the segment
-    jc .out
-    push dx
-    mov es, dx
-    xor bx, bx
-    mov cx, ((MRA_SIZE + 1023) / 1024) * 1024
-    xor dx, dx
-    mov si, mra_name
-    call OSAPI_FILE_READ            ; DX:AX = its size (unwrapped, 20.14)
-    pop si
-    jc .free
-    or dx, dx
-    jnz .free
-    cmp ax, MRA_SIZE
-    jne .free
-    mov [mra_seg], si
-    jmp short .out
-.free:
-    mov dx, si
-    call OSAPI_MEM_FREE
-.out:
-    pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+; mra_load (midirack.asm, the image's tail: entry only) reads the colour
+; face's pictures - part 0 of MIDIRACK.O88 - into a claim and makes the ten
+; the part does not carry
+
+; mra_reloc - the pictures' claim has MOVED (OSAPI_MEM_MOVABLE, SPEC.md 66):
+; DX = where it is now. mra_seg is the only word that names it - a paint
+; reloads ES from it per face - so this is the whole of the proc
+mra_reloc:
+    mov [mra_seg], dx
     ret
 
 ; mra_free - the pictures' claim back (the window is closing)
@@ -1917,8 +1877,6 @@ mra_free:
 .r:
     pop dx
     ret
-
-mra_name:   db 'MIDIRACK.GFX', 0
 
 mru_t_list: db 'Playlist', 0
 mru_t_np:   db 'Now Playing', 0

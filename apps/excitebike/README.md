@@ -55,8 +55,8 @@ make xt-excitebike     # 86Box: a 4.77 MHz VGA XT with the 360KB game disk in B:
 A plain `make excitebikedisk` needs only NASM and Python 3 (standard library):
 there is no source directory to point at and no optional import.
 
-Open `EXCBIKE.O88` from the disk (drive B:) and keep `EXBSPL.VGA`, `EXBSPL.CGA`,
-`EXBSPL.HRC`, `EXBV.GFX`, `EXBC.GFX` and `EXBH.GFX` beside it. Enter or Alt+Enter goes
+Open `EXCBIKE.O88` from the disk (drive B:); the splash screens and the game art
+are packed inside it, so it is the one file to copy. Enter or Alt+Enter goes
 full screen (VGA, CGA or Hercules; an EGA desktop shows the splash and says so), `C`
 changes the palette, Enter pauses a race and Esc goes back a screen (and, from the
 title, to the desktop).
@@ -73,5 +73,6 @@ has no CGA colour-select port and nothing here can host one (SPEC.md 102.8.5). O
 little memory left for the game's own claims Enter is refused with `NOT ENOUGH MEMORY` and the window
 stays as it was; the 256KB floor machine holds one Excitebike.
 
-The floppy is the same eight files in each geometry: `EXCBIKE.O88`, `README.MD`, `EXBV.GFX`,
-`EXBC.GFX`, `EXBH.GFX` and the three `EXBSPL.*`. The 1.2MB one needs a 5.25 inch HD drive.
+The floppy is the same two files in each geometry: `EXCBIKE.O88` (with `EXBV.GFX`,
+`EXBC.GFX`, `EXBH.GFX` and the three `EXBSPL.*` inside it as compressed parts, SPEC.md
+102.10) and `README.MD`. The 1.2MB one needs a 5.25 inch HD drive.

@@ -293,7 +293,8 @@ tk_hs_load:
 .bad:
     call tk_hs_init
 .done:
-    pop es
+    call tk_hs_top                  ; the panel's HIGH, from the first game of
+    pop es                          ; the session and not the second
     pop di
     pop si
     pop dx

@@ -198,14 +198,16 @@ def one(scr, machine, syms, pkg, tmp, bad):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_xt_vga")
-    ap.add_argument("--screen", action="append",
-                    choices=[v[0] for v in vid.SCREENS.values()])
+    # (not the NARROW two: this clip flips every frame, which they refuse -
+    # their pages are page-ahead's, and vidpage8n / vidpage6n play them)
+    wide = [v[0] for k, v in vid.SCREENS.items() if k not in vid.NARROW]
+    ap.add_argument("--screen", action="append", choices=wide)
     a = ap.parse_args()
     os.chdir(ROOT)
     syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
     pkg = os88build.at("build/video.o88")
     bad = []
-    names = a.screen or [v[0] for v in vid.SCREENS.values()]
+    names = a.screen or wide
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
         for nm in names:
             one(vid.SCREEN_BY_NAME[nm], a.machine, syms, pkg, tmp, bad)

@@ -75,7 +75,10 @@ drv_mounted:
 ; -----------------------------------------------------------------------------
 ; drv_vol_bank / drv_vol_back - put the user's volume back (SPEC.md 51.5.2)
 ; in (bank):  nothing.  in (back): the banked pair
-; out: nothing. BOTH PRESERVE EVERY REGISTER AND THE FLAGS.
+; out: nothing. BOTH PRESERVE EVERY REGISTER; BACK PRESERVES THE FLAGS TOO,
+;      and bank clobbers them - no caller of bank reads a flag after it
+;      (kernel size pass 12: every site, HIBER.DRV's hbm_vbn included, writes
+;      or calls before it tests anything)
 ;
 ; drv_mounted goes to A: because that is where the system files are, and for
 ; a long time nothing put the volume back - so a user working on B: was
@@ -127,10 +130,9 @@ drv_mounted:
 ; healed: the restore fails the way the first mount did, so the next bracket
 ; banks the same drive again. So it banks the BOOT volume's root, which is
 ; where drv_mounted is about to stand, and drv_vol_back's compare then finds
-; nothing moved. The pushf is the contract's: this preserves the flags.
+; nothing moved. The compare writes the flags, and bank's contract lets it.
 ; -----------------------------------------------------------------------------
 drv_vol_bank:
-    pushf
     push ax
     xor ax, ax                  ; the boot volume's ROOT, cluster 0
     cmp [dsk_mntok], al
@@ -144,7 +146,6 @@ drv_vol_bank:
 .drv:
     mov [drv_vol_drv], al
     pop ax
-    popf
     ret
 
 drv_vol_back:

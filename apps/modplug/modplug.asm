@@ -2294,7 +2294,7 @@ mpp_ab3: db 'Interface ported from ModPlug Player V2', 0
 mpp_ab4: db 'by Volkan Orhan - modplugplayer.org, GPLv3', 0
 mpp_ab5: db 0
 mpp_ab6: db 'Replayer: 4-channel ProTracker, 8-bit mono.', 0
-mpp_ab7: db 'Not libopenmpt - see SPEC.md 56.1.', 0
+mpp_ab7: db 'Not libopenmpt: its own replayer.', 0
 mpp_ab8: db 0
 mpp_ab9: db 'Ported by Jorge Gonzalez', 0
 

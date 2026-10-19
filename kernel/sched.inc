@@ -803,8 +803,13 @@ sch_idle_start:
     mov cx, SCH_IDLE_STK        ; the smallest class: its own footprint is 4
                                 ; bytes and the rest is the floor (SPEC.md 8.7)
     mov dx, 0x00FF              ; DL -> T_INST = 0xFF, "owns no instance"
-    call KERNEL_SEG:cw_task_spawn ; FAR: `.boot2` -> resident, through the shim
-    jc .out                       ; driver.inc already needed
+%ifdef KERN_SMALL                ; FAR: `.ovl` -> resident. kern_small has no
+    mov bp, task_spawn          ; other caller, so spw_near's `call bp` (kmain_o
+    call KERNEL_SEG:spw_near    ; holds nothing in BP); kern_big shares the
+%else                           ; shim driver.inc's task path needs anyway
+    call KERNEL_SEG:cw_task_spawn
+%endif
+    jc .out
     mov [sch_idleslot], al      ; the ONE identifier for the idle task: the
                                 ; scan skips this index and the fallback picks
                                 ; it, and both need the index anyway.
@@ -1323,7 +1328,7 @@ task_debit:
     ret
 
 ; -----------------------------------------------------------------------------
-; sched_mode_set - select the scheduling mode (SPEC.md 8.2)
+; cp_schset - sched_mode_set, select the scheduling mode (SPEC.md 8.2)
 ;
 ; Normalises the flag to 0/1 and hands the incoming mode a full watchdog
 ; budget by clearing the hold counter. Both stores are single bytes made
@@ -1351,8 +1356,15 @@ task_debit:
 ; in:       AL = 0 pre-emptive, any non-zero = cooperative
 ; out:      nothing
 ; clobbers: flags (every register preserved, AL included)
+;
+; NOT RESIDENT (kernel size pass 13): its two callers are the settings reader
+; in the boot blob, which writes the two stores out (driver.inc's %1_unpack -
+; its range test has already normalised AL), and the Control Panel's
+; Scheduling radio, so the body is CTRL.DRV's: cp_schset, the panel half. An
+; image's DS is KERNEL_SEG like the kernel's own, so nothing else changes.
 ; -----------------------------------------------------------------------------
-sched_mode_set:
+section .modu
+cp_schset:
     push ax
     pushf
     cli                         ; no tick between the two stores
@@ -1365,7 +1377,8 @@ sched_mode_set:
                                 ; the incoming mode starts with a full budget
     popf
     pop ax
-    retf
+    ret
+section .text
 
 ; -----------------------------------------------------------------------------
 ; sched_mode_get - read the current scheduling mode (SPEC.md 8.2)
@@ -2300,8 +2313,8 @@ sch_isr:
 %if spl_quiet - spl_busy != 1
   %error "sch_isr tests [spl_busy] and [spl_quiet] as one word: viddet.inc must keep spl_quiet directly after spl_busy"
 %endif
-    cmp word [spl_fseg], COLD_SEG   ; the blob has been given back (2.9.5)
-    jbe .nospl
+    cmp word [spl_fseg], 0   ; the blob has been given back (2.9.5)
+    je .nospl
     inc byte [spl_busy]
     mov word [spl_ifp], splf_anim
     mov ax, [spl_fseg]
@@ -2686,7 +2699,12 @@ sch_dphex2:
 
 sch_s_over: db 'STACK OVERFLOW  TASK ', 0   ; grep the tree for this sentence
 sch_s_sp:   db '  SP ', 0                ; and SPEC.md 8.8 is the first hit
-sch_s_in:   db '  ', 0
+sch_s_in    equ fm_s_colsp + 1  ; '  ', 0 - the tail of the Disk window's
+                                ; ':  ' (files.inc), both .text (kernel size
+                                ; pass 13)
+%ifdef KERN_BIG
+            db 0                ; PARITY PAD (kernel size pass 13):
+%endif                          ; wm_paint_all at an even shift on kern_big
 sch_s_ui:   db 'UI TASK', 0
 
 ; -----------------------------------------------------------------------------

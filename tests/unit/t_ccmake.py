@@ -74,6 +74,36 @@ first second: cc-toolchain
             self.assertEqual((self.root / 'output/demo.o88').read_bytes(), b'package')
             overlay.unlink()
 
+    def test_overlay_part_is_the_last_part_and_ships_no_file(self):
+        """CC_PACKAGE's fifth argument `part` (SPEC.md 73.14.2): the cut module
+        is handed to os88pkg.py as the LAST --part, after the package's own,
+        and no $(CC_OVLZ) copy has a rule - so a disk still naming one fails
+        rather than shipping a file the package no longer reads."""
+        with (self.root / 'Makefile').open('a') as makefile:
+            makefile.write('\n$(eval $(call CC_PACKAGE,demo,demo,DEMO.OVL,'
+                           'output/rom.bin,part))\n')
+        (self.root / 'output').mkdir()
+        (self.root / 'output/demo.bin').write_bytes(b'resident-overlay')
+        (self.root / 'output/rom.bin').write_bytes(b'rom')
+        (self.root / 'tools/os88ovl.py').write_text(
+            "import sys\nfrom pathlib import Path\n"
+            "Path(sys.argv[sys.argv.index('-o') + 1]).write_bytes(b'overlay')\n"
+            "Path(sys.argv[sys.argv.index('--trim') + 1]).write_bytes(b'resident')\n")
+        (self.root / 'tools/os88pkg.py').write_text(
+            "import sys\nfrom pathlib import Path\n"
+            "Path(sys.argv[sys.argv.index('-o') + 1]).write_text(' '.join(sys.argv[1:]))\n")
+        result = subprocess.run(['make', '-o', 'output/demo.bin',
+                                 'output/demo.o88'],
+                                cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        argv = (self.root / 'output/demo.o88').read_text().split()
+        parts = [argv[i + 1] for i, a in enumerate(argv) if a == '--part']
+        self.assertEqual(parts, ['output/rom.bin', 'output/DEMO.OVL'])
+        result = subprocess.run(['make', '-n', 'output/ovlz/DEMO.OVL'],
+                                cwd=self.root, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0,
+                            'a part package must not have a $(CC_OVLZ) copy')
+
     def test_fresh_live_dependency_graph(self):
         """`make live` in a fresh tree acquires ALL FOUR of its inputs.
 

@@ -174,23 +174,26 @@ def main(argv):
         # code lives at that offset - the machine died between the first
         # window's clamp and the second's, and the row reported a Display page
         # that "did not take". So the code goes where a COLD offset can name
-        # it: the BASE of sch_chstack, the 128-byte .lowbss stack the ROM's
-        # int 08h chain runs on (SPEC.md 8.5). A stack grows DOWN from its
-        # top, and the chain's measured water is 56 of the 128, so the nine
-        # bytes at the base are below anything the chain has ever reached -
-        # and a chain that did reach them would corrupt the handler, which
-        # fails this row loudly rather than silently. (It was app_ball_pool
-        # until SPEC.md 14.8 made Bounce a package and the pool left.) DS is
-        # KERNEL_SEG inside the call (wm_pkgcall's kernel arm leaves it), so
-        # the two stores still record into a spare window record's W_ZOOMR,
-        # which nothing reads: wm_refit visits used records only, wm_create
-        # banks into the one slot it fills, wm_destroy clears the one it
-        # frees. Do not open more windows after this point.
-        cold = os88sym.equates()["COLD_SEG"] << 4
-        code_lin = S("sch_chstack")
+        # it - and since the ROM_COLD ladder (SPEC.md 2.10.3) puts the cold
+        # rung ABOVE .lowbss, that is no longer app_ball_pool, whose offset
+        # from COLD_SEG went negative and wraps: it is the cold rung's own
+        # SLACK, the bytes between .cold's last and the rung's end (COLD_PARA
+        # rounds up), which nothing loads, claims or reads. DS is KERNEL_SEG
+        # inside the call (wm_pkgcall's kernel arm leaves it), so the two
+        # stores still record into a spare window record's W_ZOOMR, which
+        # nothing reads: wm_refit visits used records only, wm_create banks
+        # into the one slot it fills, wm_destroy clears the one it frees. Do
+        # not open more windows after this point.
+        eq = os88sym.equates()
+        cold = eq["COLD_SEG"] << 4
+        code_lin = (eq["COLD_RAM"] << 4) + ((eq["COLD_SIZE"] + 15) & ~15)
+        if (eq["COLD_RAM"] << 4) + (eq["COLD_PARA"] << 4) - code_lin < 16:
+            sys.exit("dispfit: the cold rung has no 16 bytes of slack left "
+                     "for the handler - put it somewhere COLD_SEG can name")
         code_at = code_lin - cold                    # the offset wm_cbd calls
         if not 0 <= code_at < 0x10000:
-            sys.exit("dispfit: sch_chstack is not inside COLD_SEG's reach")
+            sys.exit("dispfit: the cold rung's slack is not inside "
+                     "COLD_SEG's reach")
         rec_at = os88sym.wfield(10, "W_ZOOMR") - KSEG_BASE    # DS-relative
         handler = (b"\x89\x0e" + rec_at.to_bytes(2, "little") +      # mov [],cx
                    b"\x89\x16" + (rec_at + 2).to_bytes(2, "little")  # mov [],dx

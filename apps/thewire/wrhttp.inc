@@ -60,8 +60,9 @@ wr_hire:
     ; costs is one pass of the loop - the park is inside
     ; OSAPI_TASK_ALIVE and nowhere else (this package is not
     ; OSAPI_MEM_PARKSAFE), which is the TOP of the loop, and every byte
-    ; that outlives a pass is a static and moves with us.
-    OS88_WORKER_RESTARTABLE wr_worker
+    ; that outlives a pass is a static and moves with us. NOKEEP: AX is
+    ; popped below and no caller reads this routine's flags.
+    OS88_WORKER_RESTARTABLE_NOKEEP wr_worker
 .out:
     pop bx
     pop ax
@@ -88,20 +89,19 @@ wr_start:
     mov [wr_dbase], bx
     mov [wr_dmax], cx
     mov [wr_kind], dl
-    mov word [wr_got], 0
-    mov word [wr_got+2], 0              ; both halves: a WK_ARC transfer leaves
-    mov word [wr_clen], 0               ; them non-zero and the next kind reads
-    mov word [wr_clen+2], 0             ; them as a 4GB body already delivered
-    mov word [wr_rxp], 0                ; ...and the bytes an archive's pause
-    mov word [wr_rxn], 0                ; kept in wr_rxb belong to a transfer
-                                        ; that is now superseded
-    mov word [wr_code], 0
-    mov word [wr_hlen], 0
-    mov word [wr_hline], 0
-    mov word [wr_sent], 0
-    mov word [wr_msg], 0
-    mov word [wr_shown], 0xFFFF
-    mov byte [wr_wake], WW_NONE
+    push ds                             ; wr_got, wr_clen, wr_code,
+    pop es                              ; wr_hline, wr_hlen, wr_sent, wr_msg,
+    mov di, os88_image_end + WR_ZERO    ; wr_rxp and wr_rxn: one block. BOTH
+    mov cx, WR_ZEROW                    ; halves of the two dwords - a WK_ARC
+    xor ax, ax                          ; transfer leaves them non-zero and the
+    rep stosw                           ; next kind reads them as a 4GB body
+                                        ; already delivered - and the bytes an
+                                        ; archive's pause kept in wr_rxb
+                                        ; belong to a transfer that is now
+                                        ; superseded
+    mov [wr_wake], al                   ; WW_NONE
+    dec ax
+    mov [wr_shown], ax                  ; 0xFFFF
     call wr_pathbuild
     mov byte [wr_state], WS_OPEN
     ret
@@ -120,12 +120,10 @@ wr_pathbuild:
     mov si, wr_p_pkg                    ; /wire/pkg/<NAME>
     call wr_sput
     mov si, wr_fname
-    call wr_sput
-    jmp short .term
+    jmp short .last
 .cat:
     mov si, wr_f_cat                    ; /wire/catalog.bin
-    call wr_sput
-    jmp short .term
+    jmp short .last
 .pic:
     mov si, wr_p_pic                    ; /wire/pic/<STEM>.PIC
     call wr_sput
@@ -134,22 +132,21 @@ wr_pathbuild:
     mov cx, 8
     call wr_stemcopy
     mov si, wr_x_pic
-    call wr_sput
-.term:
-    mov byte [di], 0
-    ret
+.last:
+    jmp wr_sput                         ; ...which writes the NUL; its ret is
+                                        ; ours, and lands in wr_rs
 
 ; --- wr_hclose - give the handle back, whatever happened ---------------------
 wr_hclose:
     push ax
     push bx
-    cmp byte [wr_hnd], 0
-    je .out
-    mov al, [wr_hnd]
+    xor al, al
+    xchg al, [wr_hnd]                   ; the handle, and NONE from this one
+    or al, al                           ; instruction on - so the other task's
+    jz .out                             ; wr_hclose cannot close it twice
     mov bh, NET_CLASS
     mov bl, NETV_CLOSE
     call OSAPI_DRV_CALL
-    mov byte [wr_hnd], 0
 .out:
     pop bx
     pop ax
@@ -233,10 +230,10 @@ wr_nstep:
     mov byte [wr_state], WS_WAIT
     jmp .redraw
 .stale:                                 ; superseded WHILE OPENING: this socket
-    mov bh, NET_CLASS                   ; belongs to nobody, and leaving it
-    mov bl, NETV_CLOSE                  ; would hold a handle for the session
-    call OSAPI_DRV_CALL
-    jmp .out
+    mov [wr_hnd], al                    ; belongs to nobody, and leaving it
+    call wr_hclose                      ; would hold a handle for the session.
+    jmp .out                            ; If the UI task closes it first, the
+                                        ; xchg there leaves this one nothing
 .nodrv:
     mov si, wr_s_nodrv
     jmp .fail
@@ -460,8 +457,7 @@ wr_take:
     mov ah, [wr_gen]
     cmp ah, [wr_gen0]
     jne .done
-    mov al, [si]
-    inc si
+    lodsb                               ; DS:SI, the chunk in wr_rxb
     dec cx
     cmp byte [wr_state], WS_BODY
     je .body
@@ -595,16 +591,15 @@ wr_hdrline:
     ; first and its carry added to the high half's product; either overflowing
     ; saturates, and wr_hdrdone then refuses the length against what the
     ; transfer can actually hold.
-    mov word [wr_clen], 0
-    mov word [wr_clen+2], 0
+    xor ax, ax
+    mov [wr_clen], ax
+    mov [wr_clen+2], ax
 .d:
     mov al, [si]
-    cmp al, '0'
-    jb .out
-    cmp al, '9'
+    sub al, '0'                         ; a digit is 0..9 after this, and
+    cmp al, 9                           ; anything else is above 9 unsigned
     ja .out
-    sub al, '0'
-    xor ah, ah
+    cbw
     mov di, ax                          ; DI = the digit
     mov cx, 10
     mov ax, [wr_clen]
@@ -626,8 +621,9 @@ wr_hdrline:
     inc si
     jmp short .d
 .huge:
-    mov word [wr_clen], 0xFFFF          ; ...and wr_hdrdone refuses it, which
-    mov word [wr_clen+2], 0xFFFF        ; no claim and no catalog size reaches
+    mov ax, 0xFFFF                      ; ...and wr_hdrdone refuses it, which
+    mov [wr_clen], ax                   ; no claim and no catalog size reaches
+    mov [wr_clen+2], ax
     jmp short .out
 .status:
     mov si, wr_hbuf                     ; `HTTP/1.0 200 OK`: columns 9..11
@@ -641,18 +637,13 @@ wr_hdrline:
     mov cx, 3
 .code:
     mov al, [si]
-    cmp al, '0'
-    jb .cdone
-    cmp al, '9'
+    sub al, '0'                         ; a digit is 0..9 after this, and
+    cmp al, 9                           ; anything else is above 9 unsigned
     ja .cdone
-    sub al, '0'
-    push ax
-    mov ax, bx
-    mov bx, 10
-    mul bx
-    mov bx, ax
-    pop ax
-    xor ah, ah
+    cbw
+    xchg ax, bx                         ; AX = the code so far, BX = the digit
+    mov dx, 10
+    mul dx
     add bx, ax
     inc si
     loop .code
@@ -777,9 +768,7 @@ wr_hdrdone:
     call wr_sput
     mov ax, [wr_code]
     call wr_snum
-    mov byte [di], ')'
-    inc di
-    mov byte [di], 0
+    mov word [di], ')'                  ; the parenthesis and its NUL
     mov word [wr_msg], wr_nmsg
     jmp short .fail
 .toobig:
@@ -804,7 +793,8 @@ wr_hdrdone:
 ; wr_finish / wr_failpost - the two ways a transfer ends
 ;
 ; Both are the WORKER's half of SPEC.md 92.5's one byte: everything the
-; handler will read is written first, and [wr_wake] LAST.
+; handler will read is written first, and [wr_wake] LAST - which is wr_post,
+; the tail the two of them and wr_pausepost share.
 ; -----------------------------------------------------------------------------
 wr_finish:
     push ax
@@ -814,15 +804,16 @@ wr_finish:
     mov [wr_catlen], ax                 ; only the catalog reads it, and it is
                                         ; free to write for every kind
     mov byte [wr_state], WS_DONE
-    mov al, [wr_kind]
-    mov [wr_wkind], al
-    mov byte [wr_wake], WW_DONE
-    mov bx, [wr_win]
-    call OSAPI_WM_WAKE
-    call wr_nshow
-    pop bx
-    pop ax
-    ret
+    mov al, WW_DONE
+    jmp short wr_post
+
+wr_failpost:
+    push ax
+    push bx
+    call wr_hclose
+    mov byte [wr_state], WS_FAIL
+    mov al, WW_FAIL
+    jmp short wr_post
 
 ; --- wr_pausepost - the THIRD way out of a pass, and it is not an end -------
 ; The unpacker has reached a boundary the worker may not cross (a claim, a
@@ -832,26 +823,18 @@ wr_finish:
 wr_pausepost:
     push ax
     push bx
-    mov al, [wr_kind]
-    mov [wr_wkind], al
     mov al, [wr_apw]
-    mov [wr_wake], al                   ; ...LAST, after everything the handler
-                                        ; will read (SPEC.md 92.5)
-    mov bx, [wr_win]
-    call OSAPI_WM_WAKE
-    call wr_nshow
-    pop bx
-    pop ax
-    ret
+    ; ...falls into wr_post
 
-wr_failpost:
-    push ax
-    push bx
-    call wr_hclose
-    mov byte [wr_state], WS_FAIL
-    mov al, [wr_kind]
-    mov [wr_wkind], al
-    mov byte [wr_wake], WW_FAIL
+; --- wr_post - AL = the WW_* code: bank the kind, then the ONE BYTE ----------
+; Entered by a jump with AX and BX pushed, and pops them. [wr_wake] is written
+; LAST, after everything the handler will read (SPEC.md 92.5).
+wr_post:
+    ; STKBALANCE-OK: never called - jumped to by the three above with AX and
+    ; BX already pushed, and pops exactly those two
+    mov ah, [wr_kind]
+    mov [wr_wkind], ah
+    mov [wr_wake], al
     mov bx, [wr_win]
     call OSAPI_WM_WAKE
     call wr_nshow

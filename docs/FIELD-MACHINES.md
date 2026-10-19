@@ -164,6 +164,8 @@ VGA-plus-mono pairing.
 | the modern card | a **Picomem 2.x**: drive A and B (360 KB), a hard disk, an AdLib, a Sound Blaster, an NE2000 and EMS. `SOUND.DRV` brings its sound up at attach (§34.10); its **DMA jumper must be on 1** and a jumper on **IRQ 7** too (§34.10.1, the card's own line on PM2-6-21-26), and `make picomemtest` is its system disk with both drivers wanted (docs/FIELD-NOTES.md 66) |
 | **audio questions go here** | 5150 #1 has no sound card. For a mixer question the answer is worth having: what §45.9's XT mode spends is CPU, and this is a stock 4.77 MHz 8088 — the Picomem replaces the *storage*, not the processor. What is the card's rather than a real one's is the DSP and its DMA, so a delivered-audio ratio taken here is a statement about that emulation; the CPU cost underneath it is genuine |
 | period | **no.** Every storage timing here is the Picomem's — **nothing from here goes into PERFORMANCE.md Part 2** |
+| BIOS | **GLaBIOS, served by a One ROM** (piers.rocks) in the BIOS socket — not the 10/27/82 ROM 5150 #1 runs. So this machine's POST is GLaBIOS's: its option-ROM scan, its `int 18h`, its BASIC detection. That is also what MartyPC's `_gla` twins run, so a ROM result here and in the container share a POST path |
+| **ROM testbed** | **docs/plans/ROM-PLAN.md's machine** (the owner, 2026-10-05): **two One ROMs, each wired into several motherboard sockets**, cover U28–U32 — F4000–FDFFF, the five sockets BASIC and the empty U28 occupy — with Cassette BASIC given up. Flash `make socketrom`'s five files FIRST on any change of board or wiring: its POST line names each socket `ok` or `BAD` before any kernel is asked to run out of it (`tests/romsock.py` is the emulator half). Then `make rom` cuts one ROM per kernel into `build/rom/` (SPEC.md 2.10): `osrom-big-U28.bin` … `-U32.bin` for the ordinary disks, `osrom-small-*` for `make small`'s. Each is cut against ONE build and refuses every other, so flash the set from the tree whose disks it will meet - and the disks boot the same with the wrong one in, only without the ROM's heap. A One ROM answering the BIOS socket is the evidence its access time suits this bus; a multi-ROM set answering a chip select on a flying lead is what the socket check proves |
 
 What it has found:
 
@@ -349,10 +351,35 @@ and not the card's. Its disk is a 720 KB one, `make picomemtest`'s
 since 2026-10-11 carrying FTPD, Tracker, the Video Player, BEVERLY.MOD and
 OS8088.V88 so a trip needs no second disk - plus a desktop shortcut to FTPD
 and an FTPD.CFG serving C:\, both written by `tools/os88pmcfg.py`); the card's
-network WORKS on the os8088 build of 2026-10-10; and its Sound Blaster and USB
-mouse are untested, waiting on the card being pulled for its firmware update.
-docs/FIELD-NOTES.md 66's *What is left: the 1.x* is the checklist for that
-day, written to need nothing else.
+network WORKS on the os8088 build of 2026-10-10. **Its Sound Blaster and USB
+mouse WORK too** (since 2026-10-11 and 2026-10-12, docs/FIELD-NOTES.md 66).
+The Sound Blaster needs the card's firmware to carry the fixes that entry
+made, and `firmware/picomem1/` is that firmware (the `pm1x-pr` build for
+the 1.x board, with its own README). **Both PicoMEM generations, the
+1.x here and 5150 #2's 2.x, are fully working** (the owner, 2026-10-14), so
+this machine plays a Video Player file through a Sound Blaster, not only the
+speaker.
+
+**The card has been repaired once (2026-10-15).** It stopped booting in the
+slot (no LED, no option ROM) while still lighting green on USB alone. The
+cause was **D1**, the Schottky from ISA +5 V to the Pico's VSYS, which had
+failed open: 4.87 V on its anode and 0 V on its cathode, live. Off the board
+it no longer tested as a diode. It is now a through-hole **1N5819**, with
+the band toward VSYS, sitting over the D1 footprint. With it the card boots
+both the stock firmware and `firmware/picomem1/`'s. A likely cause is a
+brief short of VSYS to ground with the card powered, which drives the PC
+supply's current through D1. The two "USB overcurrent" warnings seen while
+flashing, two in 50+ insertions, may be the same kind of event. Flash
+through a powered hub, and never seat or pull the card with the PC on. When
+probing it, remember that the ISA power fingers are on the **solder** side:
+the component side's third finger from the bracket is A3 (D6), not +5 V.
+
+**Its 286 runs LOADALL** (2026-10-14, VIDDISK `L`,
+docs/reports/LOADALL-VICTORY286-2026-10-14.md): the instruction, extended
+memory read and written in place, A20 left open by its BIOS after
+`int 15h AH=87h`, and memory above 1 MB as fast as below. With the PicoMEM
+in, its C: is the card's disk behind the card's ROM, and there is no IDE
+drive at 1F0h.
 
 ## The 86Box IBM PC 5150 — `vm/pc5150`, and where the bug reports come from
 
@@ -722,9 +749,9 @@ milliseconds are not.
 
 *What to boot.* Two 360 KB disks built from the commit the request quotes, no
 knobs: the plain system floppy in A: and **`make weavedisk`**'s
-`build/weave360.img` in B:. It carries `WEAVE.O88`, `WEAVE.OVL`, `WEAVE.WSM`
-and the bundles in one folder, and they have to be together or the canvas
-refuses at open (WEAVE-SPEC §10.3).
+`build/weave360.img` in B:. It carries `WEAVE.O88` - its overlay and canvas
+core inside it as parts (WEAVE-SPEC §1.2.5) - and the bundles in its `WEAVE`
+folder.
 
 *What to do — four gestures.*
 

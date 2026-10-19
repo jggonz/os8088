@@ -111,6 +111,10 @@
  * 1977-1983, so a greyed check item has its 24 too). */
 #define ON  "* "
 #define OFF "  "
+/* ...AND EVERY OTHER ITEM ON A MENU THAT HAS CHECK ITEMS STARTS WITH OFF'S
+ * TWO BLANKS TOO, so the labels line up in one column: Preferences' plain
+ * items (Restore display state, Advance frame, Emulation speed, Mouse grab,
+ * Settings...) once started two cells left of their neighbours. */
 
 /* --- File (uimachinemenu.c file_menu_head / _tape / _cart / _printer /
  *     _tail and reset_submenu) ------------------------------------------- */
@@ -303,7 +307,7 @@ static const char c64_mark[2] = { ' ', '*' };   /* OFF[0], ON[0] */
  * $xxxx` (§4.5), on the status row, which is the window's bottom row and is
  * always drawn. (A disk with no C64.ROM used to be the other state; the ROM
  * is a part of the package now, §1.4.) */
-static char c64_t_adv[] = D "Advance frame";   /* live at + 1 (Paste's) */
+static char c64_t_adv[] = D OFF "Advance frame";   /* live at + 1 (Paste's) */
 
 /* NOT const: c64_menu_state() writes these entries. The kernel keeps a COPY
  * of the SET (SPEC.md 12.2) but reads the ITEM STRINGS through the `items`
@@ -318,7 +322,7 @@ static const char *c64_pref_items[] = {
                                              * 11.2.1, the way SPEC.md 74.2
                                              * takes Alt+F: the C64 owns F and
                                              * Esc (C64-SPEC §9.8) */
-    D "Restore display state",              /* :687, and :692's
+    D OFF "Restore display state",            /* :687, and :692's
                                              * "Show menu/status in
                                              * fullscreen" folds into it. The
                                              * window is os8088's: the kernel
@@ -371,11 +375,11 @@ static const char *c64_pref_items[] = {
                                              * accumulator. A greying names a
                                              * FACT (SPEC.md 47) and this one
                                              * stopped being one. */
-    D "Emulation speed",                    /* :719. Nothing throttles here:
+    D OFF "Emulation speed",                /* :719. Nothing throttles here:
                                              * the machine delivers what the
                                              * 8088 can and the status bar
                                              * prints it (10.2) */
-    D "Mouse grab  Alt+M",                  /* :757  + hotkeys.vhk <Alt>m.
+    D OFF "Mouse grab  Alt+M",              /* :757  + hotkeys.vhk <Alt>m.
                                              * No 1351 mouse in this build */
     c64_t_swap,                             /* :771  + hotkeys.vhk <Alt>j.
                                              * CHECK, and the swapped state is
@@ -390,7 +394,7 @@ static const char *c64_pref_items[] = {
                                              * it cannot be turned off. Exactly
                                              * 24 glyphs after the MENU_DIS
                                              * byte */
-    D "Settings...  Alt+O"                  /* :800  + hotkeys-settings.vhk,
+    D OFF "Settings...  Alt+O"              /* :800  + hotkeys-settings.vhk,
                                              * and Load/Save/Restore default
                                              * settings fold into it. No
                                              * resources file in this build:

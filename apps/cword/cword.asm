@@ -14,10 +14,7 @@
 ; with no %define is code the kernel never calls.
 ; =============================================================================
 
-%define CC_PKG_NAME 'CWORD'         ; <= 15 chars, and the stem of CWORD.OVL:
-                                    ; crt0.asm builds the module's file name
-                                    ; out of this and '.OVL', so the disk and
-                                    ; the loader cannot disagree about it
+%define CC_PKG_NAME 'CWORD'         ; <= 15 chars: the name in the header
 
 %define CC_HAS_ONKEY                ; void os88_onkey(int, int, void *)
 %define CC_HAS_ONCLICK              ; void os88_onclick(int, int, void *)
@@ -42,8 +39,25 @@
                                     ; widest slice we could be given
                                     ; (there is no self-close slot: SPEC.md
                                     ; 65.2, and apps/cword/cwcmd.c says how)
+%define CC_ASSOC "cword/cwassoc.inc" ; .RTF is ours BEFORE the first run, in
+                                    ; the header the disk's warm ASSOC.DAT is
+                                    ; written from (SPEC.md 54.6)
+%define CC_HAS_ONMOVE               ; void os88_onmove(unsigned, unsigned) -
+                                    ; Undo's snapshot is a movable claim
+                                    ; (SPEC.md 66, 73.12.4)
 %define CC_HAS_OVL                  ; ...and half of this program is in
-                                    ; CWORD.OVL (SPEC.md 73.14)
+                                    ; its overlay (SPEC.md 73.14)...
+%define CC_OVL_PART                 ; ...which is PART 0 of CWORD.O88 and not
+                                    ; a CWORD.OVL beside it (SPEC.md 73.14.2),
+                                    ; and EAGER: op_load reads it at launch,
+                                    ; right behind the image the kernel just
+                                    ; read. Every command but typing is in it
+                                    ; - Open, Save, every dialog, the Font
+                                    ; list - so a lazy fetch would only move
+                                    ; the read to the first command, after the
+                                    ; motor has stopped and, on a one-drive
+                                    ; machine, after the program's disk may
+                                    ; have been swapped for a document's
 
 %define CC_HAS_MENUS                ; void os88_oncmd(int, int, void *) - and
                                     ; it can never be called. This program's

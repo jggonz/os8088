@@ -377,8 +377,9 @@ FD_CKPT     equ 262144              ; bytes between checkpoints
 ; per-chunk server's 31.4-32.1, and kept 32KB measured once at 36.0. The
 ; 8088 had kept 8KB on two refusals (77.21, 77.24), both taken against a
 ; server whose commits cost a second each and neither true of the kept
-; stream, so every CPU claims a 32KB stage for STOR alone. RETR and LIST keep
-; the 8KB one in our segment. A refused claim is the 8KB server, which works. Not
+; stream, so every CPU claims a 32KB stage for STOR - and RETR reads into it
+; too (77.51); LIST keeps the 8KB one in our segment. A refused claim is the
+; 8KB server, which works. Not
 ; 64KB: [fd_sfill] and the commit's CX are words. `-DFD_NOBIG` (ftpspeed's
 ; 8KB arms) or a bigger FD_STGSZ turns it off.
 FD_BIGSZ    equ 32768
@@ -460,18 +461,23 @@ fd_entry:
     call OSAPI_WM_CREATE
     jc .out
     mov [fd_win], bx
-    mov al, 1
-    mov bx, [fd_win]
     ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, and not beside the
     ; worker's declaration: a package with NO worker is the case that
     ; moves most easily, and putting this at the spawn left exactly
     ; those runs declaring nothing - measured, by the row that reads
-    ; MC_RLOC back out of the kernel's own table.
-    OS88_REGION_MOVABLE
+    ; MC_RLOC back out of the kernel's own table. The NOKEEP form, and
+    ; ABOVE the `mov al, 1` it used to sit below: nothing here is owed
+    ; the AX, DX or flags it spends (the entry proc ends in its own clc,
+    ; and DX's instance index is read by nobody below).
+    ;
+    ; **BX IS [fd_win] FROM HERE TO THE END** and is never reloaded:
+    ; every slot called below preserves every register but its outputs,
+    ; and none of them outputs BX (apps size pass 2).
+    OS88_REGION_MOVABLE_NOKEEP
+    mov al, 1
     call OSAPI_WM_SNAP              ; 8-aligned content, so every log line takes
                                     ; font_run's single-store path on the two
                                     ; mono adapters (SPEC.md 11.94)
-    mov bx, [fd_win]
     mov ax, fd_wake
     call OSAPI_WM_ONWAKE            ; THE UI-TASK HALF. Everything this package
                                     ; does to a disk happens in there
@@ -500,7 +506,6 @@ fd_entry:
     mov byte [fd_ckpn], FD_CKPT / FD_BIGSZ
 .nobig:
 %endif
-    mov bx, [fd_win]
     mov ax, fd_onup
     call OSAPI_WM_ONMOUSEUP         ; SPEC.md 13.7: EVERY control here fires on
                                     ; the RELEASE, over the one the press
@@ -519,14 +524,10 @@ fd_entry:
     mov ax, fd_onclose
     call OSAPI_WM_ONCLOSE           ; ...and the last chance to write the
                                     ; settings out (SPEC.md 77.17)
-    push si
-    mov si, fd_menus
-    mov bx, [fd_win]
-    call OSAPI_MENU_SET
+    mov si, fd_menus                ; SI is the entry proc's own, pushed at
+    call OSAPI_MENU_SET             ; the top and popped at .out
     mov si, fd_about
-    mov bx, [fd_win]
-    call OSAPI_ABOUT_SET            ; preserves the flags, which matters: the
-    pop si                          ; CF wm_create left still has to ride out
+    call OSAPI_ABOUT_SET
     call fd_cfg_load                ; SYSTEM\APPDATA\FTPD.CFG, if the disk has
                                     ; one. UI-task context, which the entry
                                     ; proc is - the worker does not exist yet
@@ -615,6 +616,17 @@ fd_layout:
     mov ax, [fd_btn+6]
     mov [fd_setb+6], ax
     jmp fd_x4
+    nop                             ; **A PARITY PAD, AND NOT DEAD CODE BY
+                                    ; ACCIDENT.** Apps size pass 2 took an ODD
+                                    ; number of bytes out of the cold code above
+                                    ; every hot routine (os88_rseq, the worker,
+                                    ; fd_step, the send/receive stages, fd_wake
+                                    ; and the reads and writes), so each of them
+                                    ; moved to the other parity from the one it
+                                    ; has been measured at. An 8088 does not
+                                    ; care; an 8086 or a 286 fetches a word, and
+                                    ; a branch target at an odd address costs
+                                    ; it. This byte puts all of them back
 
 ; --- fd_paint - W_PAINT: SI = window, gfx lock held --------------------------
 %ifdef FTPDBG                       ; the split's clock and nothing else's
@@ -1443,6 +1455,11 @@ fd_logline:
 ; lock. [fd_dirty] is what says the glass is behind, and whoever next holds
 ; the lock spends it.
 ; -----------------------------------------------------------------------------
+; --- fd_log2 - terminate the line composed at fd_outb2 (DI past its end) and
+; log it. Every composed log line ends this way. Clobbers SI.
+fd_log2:
+    mov byte [di], 0
+    mov si, fd_outb2
 fd_log:
     push ax
     push cx
@@ -1678,12 +1695,34 @@ fd_worker:
     jne .wnap                       ; (SPEC.md 77.36)
     mov ax, [fd_xbytes]
     cmp ax, [fd_xlast]
-    je  .nap                        ; nothing moved: an idle server, or a wire
+    je  .quiet                      ; nothing moved: an idle server, or a wire
                                     ; that really has gone quiet. Poll on the
                                     ; tick, which is what SPEC.md 72.18.1
                                     ; priced at 3.0% of an idle 8088
+.again:
     call OSAPI_TASK_YIELD           ; ...it moved. Come straight back
     jmp .loop
+.quiet:
+    ; -----------------------------------------------------------------------
+    ; **A SEND THAT TOOK NOTHING IS WAITING ON AN ACK, NOT IDLE** (SPEC.md
+    ; 77.51). A RETR or a LIST with bytes still staged ends its pass when
+    ; NETV_SEND takes 0 - the send ring is full of segments in flight - and
+    ; the next pass, straight after, finds the same: no time has passed for
+    ; the ACK to come back in. Napping a TICK there made every send ring's
+    ; worth of a download cost 55 ms whatever the wire did, which is the same
+    ; ceiling 77.34 took off the receive side, and the ACK is due in about a
+    ; millisecond. So a send with bytes staged polls; only a stage with
+    ; nothing in it - an idle server, or the UI task's turn - sleeps.
+    ; -----------------------------------------------------------------------
+    cmp byte [fd_xf], FX_RETR
+    je  .sending
+    cmp byte [fd_xf], FX_LIST
+    jne .nap
+.sending:
+    mov ax, [fd_sout]
+    cmp ax, [fd_sfill]
+    jb  .again
+    jmp short .nap
 .wnap:
     ; -----------------------------------------------------------------------
     ; **WAITING IS NOT SLEEPING** (SPEC.md 77.36). This was TASK_SLEEP 1, and
@@ -1776,25 +1815,8 @@ fd_step:
     jc .lerr
     or ax, ax
     jz .done                        ; nobody yet, which is ORDINARY and not an
-    mov [fd_chnd], al               ; error (netpkg.inc)
-    mov byte [fd_st], FD_CTRL
-    mov byte [fd_auth], 0
-    mov word [fd_clen], 0
-    mov byte [fd_rowed], 1          ; **A NEW SESSION STARTS AT THE ROOT**, and
-                                    ; this is a FLAG rather than the work: a
-                                    ; worker may not touch a file (SPEC.md
-                                    ; 20.6 rule 7) and standing in a folder is
-                                    ; OSAPI_FILE_GOTO_QM. fd_wake spends it, ahead
-                                    ; of any request, and there is time for
-                                    ; several UI passes before the client's
-                                    ; first command arrives - it has to read
-                                    ; the 220 and log in first
-    call fd_reset_xfer
-    call fd_cidle_stamp             ; the session's clock starts at the 220
-    mov si, fd_l_conn
-    call fd_log
-    mov si, fd_r220
-    call fd_reply
+    mov si, fd_l_conn               ; error (netpkg.inc)
+    call fd_session
     jmp .done
 .lerr:
     cmp ax, NETE_BUSY
@@ -1872,9 +1894,10 @@ fd_fillp:                           ; stage are the same buffer, so the pair is
 fd_commp:                           ; one answer and the index never existed
 fd_stgp:
 %endif
-    mov dx, [fd_bigseg]             ; STOR's 32KB stage (77.50.2, 77.50.3):
-    or dx, dx                       ; only STOR reaches this pair, so RETR and
-    jz .own                         ; LIST, which name fd_stage, keep 8KB
+    mov dx, [fd_bigseg]             ; STOR's 32KB stage (77.50.2, 77.50.3),
+    or dx, dx                       ; which RETR shares (77.51): only those
+    jz .own                         ; two reach this pair, and LIST, which
+                                    ; names fd_stage, keeps 8KB
     xor ax, ax
     ret
 .own:
@@ -1958,10 +1981,11 @@ fd_kick:
 ; --- fd_flush_glass - the log or the status changed, so put them on screen ---
 ; **THE LOCK IS TAKEN HERE AND NOWHERE ELSE IN THE WORKER**, and never across
 ; a wire exchange: a NETV_RECV is up to 274 ms on the cable and the cursor
-; would stop dead for it (SPEC.md 20.6 rule 3).
-fd_flush_glass:
-    jmp fd_paint_now               ; ...and the whole of it is fd_paint_now
-                                    ; now, which the wake path shares (77.33)
+; would stop dead for it (SPEC.md 20.6 rule 3). The whole of it is
+; fd_paint_now, which the wake path shares (77.33) - so it is a NAME for
+; that and not a routine: fd_step's one call goes there direct, and a pass
+; no longer spends a `jmp` on the way (apps size pass 2).
+fd_flush_glass equ fd_paint_now
 
 ; -----------------------------------------------------------------------------
 ; fd_promise - "the glass matches the face" / "it does not"
@@ -2350,12 +2374,14 @@ fd_command:
     push si
     push di
     ; --- the verb ---
-    mov word [fd_verb], 0x2020
-    mov word [fd_verb+2], 0x2020
+    mov ax, 0x2020
+    mov [fd_verb], ax
+    mov [fd_verb+2], ax
+    mov dx, [fd_lend]               ; DX = the line's end, for the whole parse
     xor si, si
     xor di, di
 .v:
-    cmp si, [fd_lend]
+    cmp si, dx
     jae .varg
     mov al, [fd_ctlb+si]
     cmp al, ' '
@@ -2375,13 +2401,13 @@ fd_command:
     jmp short .v
 .varg:
     ; --- the argument: everything after ONE space, to the end of the line ---
-    cmp si, [fd_lend]
+    cmp si, dx
     jae .noarg
     inc si                          ; the separator
 .noarg:
     xor di, di
 .a:
-    cmp si, [fd_lend]
+    cmp si, dx
     jae .adone
     cmp di, FD_PATHMAX - 1
     jae .adone
@@ -2414,8 +2440,7 @@ fd_command:
     cmp byte [fd_auth], 0
     jne .go
     mov si, fd_r530
-    call fd_reply
-    jmp short .out
+    jmp short .say
 .go:
     call word [bx+4]
     jmp short .out
@@ -2424,6 +2449,7 @@ fd_command:
     jmp short .d
 .unknown:
     mov si, fd_r502
+.say:
     call fd_reply
 .out:
     jmp fd_x6
@@ -2514,20 +2540,13 @@ fd_ctab_login:
 
 ; --- the simple ones ---------------------------------------------------------
 fd_c_user:
-    push cx
-    push si
-    push di
     mov byte [fd_auth], 0
     mov si, fd_arg                  ; BANKED, because the command buffer is the
     mov di, fd_userin               ; next command's and PASS arrives later
     mov cx, FD_USERMAX
     call fd_copyn
     mov si, fd_r331
-    call fd_reply
-    pop di
-    pop si
-    pop cx
-    ret
+    jmp fd_reply
 
 ; -----------------------------------------------------------------------------
 ; fd_c_pass - and what this server means by access control (SPEC.md 77.15)
@@ -2551,8 +2570,6 @@ fd_c_user:
 ; that never logs in cannot list a directory.
 ; -----------------------------------------------------------------------------
 fd_c_pass:
-    push si
-    push di
     cmp byte [fd_users], 0
     je .open                        ; no user configured: anyone, as before
     mov si, fd_userin
@@ -2566,17 +2583,11 @@ fd_c_pass:
 .open:
     mov byte [fd_auth], 1
     mov si, fd_r230
-    call fd_reply
-    pop di
-    pop si
-    ret
+    jmp fd_reply
 .no:
     mov byte [fd_auth], 0
     mov si, fd_r530b
-    call fd_reply
-    pop di
-    pop si
-    ret
+    jmp fd_reply
 
 ; --- fd_copyn - SI -> DI, NUL included, at most CX bytes --------------------
 fd_copyn:
@@ -2609,23 +2620,17 @@ fd_eqz:
 .c:
     mov al, [si]
     cmp al, [di]
-    jne .no
-    or al, al
-    jz .yes
+    stc                             ; a difference answers CF=1 - stc leaves ZF
+    jne .out
+    or al, al                       ; ...and the NUL both share, CF=0 (or clears
+    jz .out                         ; it)
     inc si
     inc di
     jmp short .c
-.yes:
+.out:
     pop di
     pop si
     pop ax
-    clc
-    ret
-.no:
-    pop di
-    pop si
-    pop ax
-    stc
     ret
 
 fd_c_quit:
@@ -2655,15 +2660,12 @@ fd_c_syst:
     jmp fd_reply
 
 fd_c_feat:
-    push si
     mov si, fd_r211a
     call fd_reply
     mov si, fd_r211b
     call fd_reply
     mov si, fd_r211c
-    call fd_reply
-    pop si
-    ret
+    jmp fd_reply
 
 ; -----------------------------------------------------------------------------
 ; fd_c_type - A and I are both taken and BOTH MEAN BINARY
@@ -2673,15 +2675,18 @@ fd_c_feat:
 ; would corrupt every file going the other way. Refusing TYPE A instead would
 ; break the clients that send it out of habit before every transfer.
 ; -----------------------------------------------------------------------------
+; ...and `and al, 0xDF` folds the case exactly as the a-z test it replaced:
+; the only bytes it maps onto 'A', 'I' or 'L' are those letters and their
+; lower case, bit 7 surviving it.
+;
+; **A COMMAND HANDLER KEEPS NO REGISTER** (apps size pass 2): every fd_c_* is
+; reached from fd_command's `call word [bx+4]` alone, and fd_command pushed
+; AX..DI before the dispatch and pops them after, so each handler is free to
+; spend all six and to end in a tail jump to fd_reply.
 fd_c_type:
-    push ax
+    mov si, fd_r200t
     mov al, [fd_arg]
-    cmp al, 'a'
-    jb .up
-    cmp al, 'z'
-    ja .up
-    sub al, 32
-.up:
+    and al, 0xDF
     cmp al, 'A'
     je .ok
     cmp al, 'I'
@@ -2689,46 +2694,24 @@ fd_c_type:
     cmp al, 'L'
     je .ok
     mov si, fd_r504
-    call fd_reply
-    pop ax
-    ret
 .ok:
-    mov si, fd_r200t
-    call fd_reply
-    pop ax
-    ret
+    jmp fd_reply
 
+; --- MODE S and STRU F: one letter each, the same 200 or 504 -----------------
 fd_c_mode:
-    push ax
-    mov al, [fd_arg]
-    and al, 0xDF
-    cmp al, 'S'
-    je .ok
-    mov si, fd_r504
-    call fd_reply
-    pop ax
-    ret
-.ok:
-    mov si, fd_r200
-    call fd_reply
-    pop ax
-    ret
-
+    mov ah, 'S'
+    jmp short fd_c_one
 fd_c_stru:
-    push ax
+    mov ah, 'F'
+fd_c_one:
+    mov si, fd_r200
     mov al, [fd_arg]
     and al, 0xDF
-    cmp al, 'F'
+    cmp al, ah
     je .ok
     mov si, fd_r504
-    call fd_reply
-    pop ax
-    ret
 .ok:
-    mov si, fd_r200
-    call fd_reply
-    pop ax
-    ret
+    jmp fd_reply
 
 fd_c_abor:
     call fd_data_drop
@@ -2751,9 +2734,7 @@ fd_c_abor:
 ; standard way for a client to ASK for a recursive delete, so using it here
 ; would make RMD mean something no client expects.
 ; -----------------------------------------------------------------------------
-fd_c_rmd:
-    mov al, FR_RMD
-    jmp fd_one
+; (its code is in the one-shot chain above fd_one)
 
 ; =============================================================================
 ; THE DATA CONNECTION
@@ -2940,9 +2921,7 @@ fd_log_rate:
     mov si, fd_l_gs
     call fd_dcat
 %endif
-    mov byte [di], 0
-    mov si, fd_outb2
-    call fd_log
+    call fd_log2
 %ifdef FTPDBG
     call fd_log_split               ; ...and where it went (SPEC.md 77.32)
 %endif
@@ -2983,9 +2962,7 @@ fd_log_split:
     mov bx, FT_DRAW * 4
     call fd_tms_ms
     call fd_dnum32
-    mov byte [di], 0
-    mov si, fd_outb2
-    call fd_log
+    call fd_log2
     ; --- ...and the second line, which is the SCHEDULER block named --------
     mov di, fd_outb2
     mov si, fd_l_wait
@@ -3008,9 +2985,7 @@ fd_log_split:
     mov ax, [fd_npass]
     mov dx, [fd_npass+2]
     call fd_dnum32
-    mov byte [di], 0
-    mov si, fd_outb2
-    call fd_log
+    call fd_log2
     ; --- ...and the third, which bisects fd_wake itself -------------------
     mov di, fd_outb2
     mov si, fd_l_dfree
@@ -3028,9 +3003,7 @@ fd_log_split:
     mov ax, [fd_nwake]
     mov dx, [fd_nwake+2]
     call fd_dnum32
-    mov byte [di], 0
-    mov si, fd_outb2
-    call fd_log
+    call fd_log2
 %ifdef FTPDBG
     ; --- ...and the fourth: the COMMITS (SPEC.md 77.50) ----------------
     mov di, fd_outb2
@@ -3051,9 +3024,7 @@ fd_log_split:
     call fd_dcat
     mov ax, [fd_nck]
     call fd_dnum
-    mov byte [di], 0
-    mov si, fd_outb2
-    call fd_log
+    call fd_log2
 %endif
     jmp fd_x6
 %endif                              ; FTPDBG
@@ -3073,9 +3044,7 @@ fd_log_pasv:
     call fd_dcat
     mov ax, [fd_dport]
     call fd_dnum
-    mov byte [di], 0
-    mov si, fd_outb2
-    call fd_log
+    call fd_log2
     pop si
     pop di
     pop dx
@@ -3140,9 +3109,7 @@ fd_log_sockfail:
     mov si, fd_l_nosock
     call fd_dcat
     call fd_dnum
-    mov byte [di], 0
-    mov si, fd_outb2
-    call fd_log
+    call fd_log2
     pop di
     pop si
     pop dx
@@ -3154,61 +3121,65 @@ fd_log_sockfail:
 ; else (netpkg.inc). On the cable it is the DOS box's, which is the true
 ; answer there: that is the machine an inbound connection reaches.
 fd_c_pasv:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     call fd_pasv_addr               ; the OVERRIDE if one is set, else our own
-    jc .noaddr
+    mov si, fd_r425a
+    jc .say
     call fd_data_listen
-    jc .nosock
+    mov si, fd_r425
+    jc .say
     mov di, fd_outb2
     mov si, fd_r227
     call fd_dcat
-    xor bx, bx
-.q:
-    mov al, [fd_ip+bx]
-    xor ah, ah
-    call fd_dnum
-    inc bx
-    cmp bx, 4
-    jae .port
-    mov byte [di], ','
-    inc di
-    jmp short .q
-.port:
-    mov byte [di], ','
-    inc di
+    mov si, fd_ip
+    mov dl, ','
+    call fd_quad
     mov ax, [fd_dport]
+    push ax
     mov al, ah                      ; p1 = the HIGH byte: the pair is
-    xor ah, ah                      ; big-endian, p1*256 + p2
-    call fd_dnum
-    mov byte [di], ','
-    inc di
-    mov ax, [fd_dport]
-    xor ah, ah                      ; ...and p2 the low
-    call fd_dnum
+    call fd_cnum                    ; big-endian, p1*256 + p2
+    pop ax
+    call fd_cnum                    ; ...and p2 the low
     mov byte [di], ')'
     inc di
-    mov byte [di], 0
-    mov si, fd_outb2
-    call fd_reply
-    call fd_log_pasv                ; **AND SAY WHICH PORT.** The log said
-    jmp short .out                  ; `PASV` and nothing else, so a client
+    call fd_say2
+    jmp fd_log_pasv                 ; **AND SAY WHICH PORT.** The log said
+                                    ; `PASV` and nothing else, so a client
                                     ; refused at the data port looked like a
                                     ; server fault when it was a port that
                                     ; nothing forwarded (SPEC.md 77.22)
-.noaddr:
-    mov si, fd_r425a
-    call fd_reply
-    jmp short .out
-.nosock:
-    mov si, fd_r425
-    call fd_reply
-.out:
-    jmp fd_x6
+.say:
+    jmp fd_reply
+
+; --- fd_cnum - append ',' and then AL as unsigned decimal. DI advances -------
+fd_cnum:
+    mov byte [di], ','
+    inc di
+    xor ah, ah
+    jmp fd_dnum
+
+; --- fd_quad - append the four BYTES at SI as decimals, DL between them ------
+; One loop for all four of the server's dotted quads: our own address
+; (fd_getaddr), the PASV override as typed back (fd_pasv_str), PORT's host
+; (fd_c_port) and the 227's first four fields (fd_c_pasv, DL = ','). DI
+; advances past what it wrote and no terminator is written.
+fd_quad:
+    push ax
+    push cx
+    push si
+    mov cx, 4
+    jmp short .n
+.q:
+    mov [di], dl
+    inc di
+.n:
+    lodsb
+    xor ah, ah
+    call fd_dnum
+    loop .q
+    pop si
+    pop cx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; fd_pasv_addr - the address to put in a 227, into fd_ip
@@ -3226,26 +3197,17 @@ fd_c_pasv:
 ; EPSV needs none of this, carrying only a port - so a client that speaks it
 ; works behind NAT with no setting at all, and fd_c_pasv's refusal says so.
 ; -----------------------------------------------------------------------------
+; fd_c_pasv is its one caller, so AX is spent rather than kept.
 fd_pasv_addr:
-    push ax
-    push si
-    push di
     mov ax, [fd_pasv]
-    or ax, [fd_pasv+2]
+    or ax, [fd_pasv+2]              ; CF=0 either way
     jz .own
     mov ax, [fd_pasv]               ; the configured one, straight across
     mov [fd_ip], ax
     mov ax, [fd_pasv+2]
     mov [fd_ip+2], ax
-    pop di
-    pop si
-    pop ax
-    clc
-    ret
+    ret                             ; ...with the `or`'s CF=0
 .own:
-    pop di
-    pop si
-    pop ax
     jmp fd_getaddr                  ; ...and its CF is the answer
 
 ; --- fd_c_epsv - 229, and NO address at all ----------------------------------
@@ -3253,11 +3215,9 @@ fd_pasv_addr:
 ; it work on a machine whose address the server cannot name. It is offered
 ; second rather than first because PASV is what everything understands.
 fd_c_epsv:
-    push ax
-    push si
-    push di
     call fd_data_listen
-    jc .no
+    mov si, fd_r425
+    jc .say
     mov di, fd_outb2
     mov si, fd_r229
     call fd_dcat
@@ -3265,18 +3225,9 @@ fd_c_epsv:
     call fd_dnum
     mov si, fd_r229b
     call fd_dcat
-    mov byte [di], 0
-    mov si, fd_outb2
-    call fd_reply
-    jmp short .out
-.no:
-    mov si, fd_r425
-    call fd_reply
-.out:
-    pop di
-    pop si
-    pop ax
-    ret
+    jmp fd_say2
+.say:
+    jmp fd_reply
 
 ; -----------------------------------------------------------------------------
 ; fd_c_port - active mode: WE connect out to the address the client names
@@ -3292,12 +3243,6 @@ fd_c_epsv:
 ; collides with the flag tracking whether a field had any digits at all.
 ; -----------------------------------------------------------------------------
 fd_c_port:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     call fd_data_drop
     mov si, fd_arg
     mov di, fd_pf
@@ -3307,8 +3252,8 @@ fd_c_port:
     jae .built
     call fd_pbyte                   ; a field that is empty, or cannot be a
     jc .bad                         ; byte, is not a PORT argument
-    mov [di], bx
-    add di, 2
+    mov [di], bl                    ; ...so a BYTE is what is kept
+    inc di
     inc cx
     mov al, [si]
     cmp al, ','
@@ -3320,23 +3265,13 @@ fd_c_port:
     jne .bad
     ; --- the dotted quad ---
     mov di, fd_dhost
-    xor bx, bx
-.q:
-    mov ax, [fd_pf+bx]
-    call fd_dnum
-    add bx, 2
-    cmp bx, 8
-    jae .qdone
-    mov byte [di], '.'
-    inc di
-    jmp short .q
-.qdone:
+    mov si, fd_pf
+    mov dl, '.'
+    call fd_quad
     mov byte [di], 0
     ; --- the port: p1 * 256 + p2, big-endian on the wire ---
-    mov ax, [fd_pf+8]
-    mov ah, al
-    xor al, al
-    add ax, [fd_pf+10]
+    mov ah, [fd_pf+4]
+    mov al, [fd_pf+5]
     mov [fd_dport], ax
     or ax, ax
     jz .bad                         ; port 0 is not a port
@@ -3351,10 +3286,9 @@ fd_c_port:
     mov bl, NETV_BULK               ; ACTIVE mode dials out, so the socket is
     call fd_net                     ; here rather than accepted later - and it
                                     ; is still empty, so the swap is free
-    mov al, [fd_dhnd]               ; (SPEC.md 72.21.1)
+                                    ; (SPEC.md 72.21.1)
     mov si, fd_r200
-    call fd_reply
-    jmp short .out
+    jmp fd_reply
 .noconn:
     ; 425 IS TRANSIENT AND 501 IS PERMANENT, and the difference decides
     ; whether the client retries. The commonest cause here is NETE_FULL: four
@@ -3362,16 +3296,37 @@ fd_c_port:
     ; while TCP finishes its close - so a client reconnecting immediately
     ; finds nothing free. Answered 501 it gives up and reports a malformed
     ; command; answered 425 it tries again a moment later and succeeds.
-    call fd_data_drop
     mov si, fd_r425
-    call fd_reply
-    jmp short .out
+    jmp short .drop
 .bad:
-    call fd_data_drop
     mov si, fd_r501
-    call fd_reply
-.out:
-    jmp fd_x6
+.drop:
+    call fd_data_drop
+    jmp fd_reply
+
+; --- fd_session - AL = a control handle just accepted, SI = what the log says
+; The one place a session BEGINS: fd_step's accept in FD_LISTEN and
+; fd_second's takeover of a stale one both arrive here, so the two cannot
+; drift about what a new session resets. Clobbers SI.
+fd_session:
+    mov [fd_chnd], al
+    mov byte [fd_st], FD_CTRL
+    mov byte [fd_auth], 0
+    mov word [fd_clen], 0
+    mov byte [fd_rowed], 1          ; **A NEW SESSION STARTS AT THE ROOT**, and
+                                    ; this is a FLAG rather than the work: a
+                                    ; worker may not touch a file (SPEC.md
+                                    ; 20.6 rule 7) and standing in a folder is
+                                    ; OSAPI_FILE_GOTO_QM. fd_wake spends it, ahead
+                                    ; of any request, and there is time for
+                                    ; several UI passes before the client's
+                                    ; first command arrives - it has to read
+                                    ; the 220 and log in first
+    call fd_reset_xfer
+    call fd_cidle_stamp             ; the session's clock starts at the 220
+    call fd_log
+    mov si, fd_r220
+    jmp fd_reply
 
 ; --- fd_stale - is the session holding the server worth keeping? ------------
 ; out: CF=1 = yes, keep it (refuse the newcomer); CF=0 = it is stale
@@ -3384,7 +3339,8 @@ fd_stale:
     push bx
     push cx
     cmp byte [fd_xf], FX_NONE
-    jne .keep
+    stc                             ; CF=1, keep - stc leaves ZF alone
+    jne .x
     ; --- ALREADY CLOSED beats any clock -----------------------------------
     ; A client that closes without QUIT - which is most of them, and every
     ; reconnect in the field's FileZilla log - leaves a control socket that
@@ -3393,8 +3349,8 @@ fd_stale:
     ; refuse the reconnect that FOLLOWS a close, which is the commonest
     ; sequence there is.
     mov al, [fd_chnd]
-    or al, al
-    jz .gone
+    or al, al                       ; CF=0
+    jz .x                           ; no control socket at all: gone
     mov bl, NETV_STATUS
     call fd_net
     jc .clock                       ; the driver would not say: fall back on
@@ -3402,27 +3358,16 @@ fd_stale:
     je .clock
     cmp ah, NSK_CONNECT
     je .clock
-.gone:
-    pop cx                          ; the peer has gone: not stale, FINISHED
-    pop bx
-    pop ax
-    clc
-    ret
+    clc                             ; the peer has gone: not stale, FINISHED
+    jmp short .x
 .clock:
     call OSAPI_GET_TICKS
     sub ax, [fd_cidle]              ; modular, across the counter's wrap
-    cmp ax, FD_YIELD_T
-    jb .keep
+    cmp ax, FD_YIELD_T              ; ...and THE COMPARE IS THE ANSWER: CF=1,
+.x:                                 ; below FD_YIELD_T, is keep
     pop cx
     pop bx
     pop ax
-    clc
-    ret
-.keep:
-    pop cx
-    pop bx
-    pop ax
-    stc
     ret
 
 ; =============================================================================
@@ -3482,18 +3427,9 @@ fd_second:
     push ax
     call fd_bye                     ; the old one is gone: let it go, and the
     pop ax                          ; next pass accepts this handle properly
-    mov [fd_chnd], al
-    mov byte [fd_st], FD_CTRL
-    mov byte [fd_auth], 0
-    mov word [fd_clen], 0
-    mov byte [fd_rowed], 1
-    call fd_reset_xfer
-    call fd_cidle_stamp
     mov si, fd_l_took
-    call fd_log
-    mov si, fd_r220
-    call fd_reply
-    jmp .out
+    call fd_session
+    jmp short .out
 .refuse:
     ; --- the bounded send, ON THE REFUSED HANDLE - fd_reply_h takes it in AL
     ; rather than through [fd_chnd], because that cell yields to the UI task
@@ -3528,25 +3464,16 @@ fd_second:
 fd_data_abort:
     push ax
     mov al, NETV_ABORT
-    mov [fd_dverb], al
-    call fd_data_drop_v
-    pop ax
-    ret
-
+    jmp short fd_data_drop_v
 fd_data_drop:
     push ax
     mov al, NETV_CLOSE
-    mov [fd_dverb], al
-    call fd_data_drop_v
-    pop ax
-    ret
-
-fd_data_drop_v:
-    push ax
+fd_data_drop_v:                     ; AL = the verb; AX was pushed above
     push bx
     push si
+    mov [fd_dverb], al              ; banked: fd_hverb leaves BX the driver's
+    mov bl, al
     mov si, fd_dhnd
-    mov bl, [fd_dverb]
     call fd_hverb
     mov si, fd_dlhnd
     mov bl, [fd_dverb]
@@ -3734,9 +3661,7 @@ fd_log_stall:
     pop ax                          ; CX = what is still queued
     call fd_dnum
 .nost:
-    mov byte [di], 0
-    mov si, fd_outb2
-    call fd_log
+    call fd_log2
     jmp fd_x6
 
 ; -----------------------------------------------------------------------------
@@ -3912,12 +3837,20 @@ fd_send_stage:
     mov ax, NET_SKMAX
 .n:
     mov cx, ax
-    mov si, fd_stage                ; ES is OURS - the door put it there
+    mov si, fd_stage                ; a LIST's rows are in our own segment...
+    cmp byte [fd_xf], FX_RETR
+    jne .own
+    call fd_fillp                   ; ...and a RETR's file is wherever fd_do_
+    mov si, ax                      ; read put it - STOR's 32KB stage when it
+    mov es, dx                      ; was claimed (SPEC.md 77.51)
+.own:
     add si, [fd_sout]
     mov al, [fd_dhnd]
     mov bh, NET_CLASS
     mov bl, NETV_SEND
-    call OSAPI_DRV_CALL
+    call OSAPI_DRV_CALL_AT          ; **_AT: ES IS OURS TO SET** (SPEC.md
+    push ds                         ; 20.11.2) - the plain door would put our
+    pop es                          ; segment back over the claim's
     jc .later
     call fd_count                   ; COUNTED HERE, where the bytes really move
     add [fd_sout], cx               ; **BY WHAT WAS TAKEN**, which may be less
@@ -4102,12 +4035,6 @@ fd_recv_stage:
 ; refusal one command earlier is what a hung transfer two commands later
 ; looked like.
 ; -----------------------------------------------------------------------------
-fd_xrefuse:
-    call fd_data_abort              ; refused before a byte moved: nothing is
-                                    ; in flight for the peer to lose
-    call fd_reset_xfer
-    jmp fd_reply
-
 ; --- fd_xdone - a transfer finished cleanly ----------------------------------
 fd_xdone:
     push si
@@ -4171,42 +4098,42 @@ fd_unbferr:
 ; greying a fact rather than a guess, one layer out at the wire.
 ; -----------------------------------------------------------------------------
 fd_ferr_sel:
-    cmp ax, FERR_NAME
-    je .name
-    cmp ax, FERR_FULL
-    je .full
-    cmp ax, FERR_DIRFULL
-    je .full
-    cmp ax, FERR_PROT
-    je .prot
-    cmp ax, FERR_NOENT              ; the three the ONE-SHOTS bring - DELE,
-    je .none                        ; RNTO and RMD reach here too, and for
-    cmp ax, FERR_EXIST              ; them "no such file" is the COMMON answer
-    je .taken                       ; rather than an oddity. Without these
-    cmp ax, FERR_WPROT              ; arms the catch-all below would have told
-    je .wprot                       ; a client its disk was full
-    mov si, fd_r552                 ; FERR_IO, FERR_NODISK and anything new:
-    ret                             ; the honest catch-all is "it failed"
-.name:
-    mov si, fd_r553
+    ; ONE WORD PER CODE, indexed by it: FERR_NOENT, _EXIST and _WPROT are
+    ; the three the ONE-SHOTS bring - DELE, RNTO and RMD reach here too, and
+    ; for them "no such file" is the COMMON answer rather than an oddity.
+    ; FERR_EXIST is "550 That name is already in use" and NOT "no such
+    ; file", which is the exact inversion: it demonstrably exists. FERR_IO,
+    ; FERR_NODISK, FERR_BIG and anything new take the honest catch-all, "it
+    ; failed" - which a table one code short of a new FERR_* falls to.
+    mov si, fd_r552
+    cmp ax, FD_NFERR
+    jae .out
+    mov si, ax
+    shl si, 1
+    mov si, [fd_ferr_tab+si]
+.out:
     ret
-.full:
-    mov si, fd_r552f
-    ret
-.prot:
-    mov si, fd_r550w
-    ret
-.none:
-    mov si, fd_r550
-    ret
-.taken:
-    mov si, fd_r550e                ; and NOT "no such file", which is the
-    ret                             ; exact inversion: it demonstrably exists
-.wprot:
-    mov si, fd_r552w
-    ret
+fd_ferr_tab:
+    dw fd_r552                      ; FERR_OK (never an error here)
+    dw fd_r552                      ; FERR_NODISK
+    dw fd_r552                      ; FERR_IO
+    dw fd_r553                      ; FERR_NAME
+    dw fd_r550                      ; FERR_NOENT
+    dw fd_r550e                     ; FERR_EXIST
+    dw fd_r552f                     ; FERR_FULL
+    dw fd_r552f                     ; FERR_DIRFULL
+    dw fd_r550w                     ; FERR_PROT
+    dw fd_r552w                     ; FERR_WPROT
+FD_NFERR    equ ($ - fd_ferr_tab) / 2
+%if FERR_NAME != 3 || FERR_NOENT != 4 || FERR_EXIST != 5 || FERR_FULL != 6 || FERR_DIRFULL != 7 || FERR_PROT != 8 || FERR_WPROT != 9
+  %error "fd_ferr_tab is indexed by FERR_* - os88api.inc renumbered one"
+%endif
 
 ; --- fd_xfail - it did not. SI = the reply to send ---------------------------
+; ...and fd_xrefuse, a transfer REFUSED before a byte moved, is the same
+; three instructions: nothing is in flight for the peer to lose either way,
+; so the abort is right for both. It was a second copy of them.
+fd_xrefuse:
 fd_xfail:
     call fd_data_abort              ; FAILED: the peer is gone, so the slot
                                     ; comes back now (SPEC.md 77.25)
@@ -4218,18 +4145,14 @@ fd_xfail:
 ; =============================================================================
 
 ; --- fd_have_data - is a PASV or PORT still armed? CF=1 = no, and 425 sent ---
+; Its three callers are command handlers, so SI is spent (fd_c_type says why).
 fd_have_data:
-    push si
-    cmp byte [fd_dmode], DM_NONE
+    cmp byte [fd_dmode], DM_NONE    ; CF=0: nothing is below DM_NONE
     jne .ok
     mov si, fd_r425n
     call fd_reply
-    pop si
     stc
-    ret
 .ok:
-    pop si
-    clc
     ret
 
 ; --- fd_c_list / fd_c_nlst ---------------------------------------------------
@@ -4242,8 +4165,6 @@ fd_c_list:
 fd_c_nlst:
     mov byte [fd_lstyle], 1
 fd_list_go:
-    push si
-    push di
     call fd_have_data
     jc .out
     mov byte [fd_lsdir], 0
@@ -4275,19 +4196,15 @@ fd_list_go:
     mov byte [fd_xf], FX_LIST
     call fd_xstart              ; the clock (SPEC.md 77.23)
     mov al, FR_LIST
-    call fd_post
-.out:
-    pop di
-    pop si
-    ret
+    jmp fd_post
 .toolong:
     mov si, fd_r550
-    call fd_reply
-    jmp short .out
+    jmp fd_reply
+.out:
+    ret
 
 ; --- fd_c_retr ---------------------------------------------------------------
 fd_c_retr:
-    push si
     call fd_have_data
     jc .out
     cmp word [fd_arglen], 0
@@ -4297,38 +4214,34 @@ fd_c_retr:
     mov word [fd_sfill], 0
     mov word [fd_sout], 0
     mov byte [fd_lmore], 0
-    push di
     mov di, fd_rcur                 ; a new file: the cursor names none
     call os88_rseq_new
-    pop di
     call fd_keepname                ; **THE NAME IS BANKED HERE TOO.** A RETR
                                     ; runs for as long as the download takes
                                     ; and the control buffer is reused by the
                                     ; next command, exactly as it is for STOR
     mov al, FR_RDCHK                ; **THE CHECK COMES FIRST**: a 150 sent
-    call fd_post                    ; before the file is known to exist has to
+    jmp fd_post                     ; before the file is known to exist has to
                                     ; be followed by a 550, and some clients
                                     ; have already opened their end by then
-    jmp short .out
 .noname:
     mov si, fd_r501
-    call fd_reply
+    jmp fd_reply
 .out:
-    pop si
     ret
 
 ; --- fd_c_stor ---------------------------------------------------------------
 fd_c_stor:
-    push si
     call fd_have_data
     jc .out
+    mov si, fd_r501
     cmp word [fd_arglen], 0
-    je .noname
+    je .refuse
+    mov si, fd_r550w
     cmp byte [fd_ro], 0
     je .allowed
-    mov si, fd_r550w
-    call fd_xrefuse
-    jmp short .out
+.refuse:
+    jmp fd_xrefuse
 .allowed:
     mov word [fd_sfill], 0
     mov word [fd_sout], 0
@@ -4339,26 +4252,19 @@ fd_c_stor:
     mov word [fd_scnt], 0
     mov byte [fd_created], 0
     mov byte [fd_lmore], 0
-    push cx
     mov cx, [fd_wstg]               ; STOR's stage, 32KB if claimed (77.50.3)
     call fd_setchunk                ; the cluster-rounded commit size, for THIS
-    pop cx                          ; volume, now (SPEC.md 52.3)
-    jc .noroom
+                                    ; volume, now (SPEC.md 52.3)
+    mov si, fd_r452
+    jc .say
     call fd_keepname
     mov si, fd_r150
     call fd_reply
     mov byte [fd_xf], FX_STOR
-    call fd_xstart              ; the clock (SPEC.md 77.23)
-    jmp short .out
-.noroom:
-    mov si, fd_r452
-    call fd_reply
-    jmp short .out
-.noname:
-    mov si, fd_r501
-    call fd_xrefuse
+    jmp fd_xstart               ; the clock (SPEC.md 77.23)
+.say:
+    jmp fd_reply
 .out:
-    pop si
     ret
 
 ; -----------------------------------------------------------------------------
@@ -4467,8 +4373,12 @@ fd_socks:
     xor cl, cl                      ; CL = the slot number
 .row:
     cld
-    mov di, fd_outb2
-    mov si, fd_l_sk
+    mov di, fd_skrow                ; NOT fd_outb2, which is the WORKER'S reply
+    mov si, fd_l_sk                 ; buffer: this runs on the UI task, from a
+                                    ; menu pick, at any moment - and a pick
+                                    ; landing mid-PASV lettered over the 227
+                                    ; the worker was composing (apps size
+                                    ; pass 1 found it, pass 2 fixed it)
     call fd_dcat
     mov al, cl
     xor ah, ah
@@ -4523,13 +4433,9 @@ fd_socks:
     call fd_dnum
 .noflg:
     mov byte [di], 0
-    push bx
-    push cx
-    mov si, fd_outb2
-    call fd_log                     ; BX and CL are the loop's and fd_log is
-    pop cx                          ; not documented to keep them
-    pop bx
-    add bx, SKI_SZ
+    mov si, fd_skrow
+    call fd_log                     ; ...which keeps CX and never names BX, the
+    add bx, SKI_SZ                  ; loop's two
     inc cl
     cmp cl, [fd_skn]
     jb .row
@@ -4629,69 +4535,60 @@ fd_keepname:
     ret
 
 ; --- the one-shot file commands: all of them are a request and a wait --------
-fd_c_dele:
-    mov al, FR_DELE
-    jmp short fd_one
-fd_c_mkd:
-    mov al, FR_MKD
-    jmp short fd_one
-fd_c_rnfr:
-    mov al, FR_RNFR
-    jmp short fd_one
-fd_c_rnto:
-    mov al, FR_RNTO
-    jmp short fd_one
-fd_c_cwd:
-    mov al, FR_CWD
-    jmp short fd_one
-fd_c_size:
-    mov al, FR_SIZE
-    jmp short fd_one
-fd_c_pwd:
-    mov al, FR_PWD
-    jmp short fd_one
-
+; --- THE ONE-SHOT CHAIN: each loads its FR_* and falls into fd_one ----------
+; **FD_SKIP2 IS `cmp ax, imm16`'s OPCODE AND NOTHING ELSE**: it takes the next
+; handler's two-byte `mov al, imm8` as its operand, so a handler entered at
+; the top runs its own load, then one harmless compare, then the next skip -
+; and arrives at fd_one with ITS request in AL. Three bytes a handler where a
+; `jmp short fd_one` made four. fd_one reads no flag, which is what makes a
+; compare free to stand there.
+FD_SKIP2    equ 0x3D
 fd_c_cdup:
-    push si
     mov word [fd_arg], '..'         ; CDUP is CWD .. and shares its walker, so
     mov byte [fd_arg+2], 0          ; the parent link is resolved in exactly
     mov byte [fd_arglen], 2         ; one place (SPEC.md 19.5's type-3 row)
+fd_c_cwd:
     mov al, FR_CWD
-    call fd_one
-    pop si
-    ret
-
+    db FD_SKIP2
+fd_c_dele:
+    mov al, FR_DELE
+    db FD_SKIP2
+fd_c_mkd:
+    mov al, FR_MKD
+    db FD_SKIP2
+fd_c_rnfr:
+    mov al, FR_RNFR
+    db FD_SKIP2
+fd_c_rnto:
+    mov al, FR_RNTO
+    db FD_SKIP2
+fd_c_size:
+    mov al, FR_SIZE
+    db FD_SKIP2
+fd_c_pwd:
+    mov al, FR_PWD
+    db FD_SKIP2
+fd_c_rmd:                           ; fd_c_rmd's own header says why AL = 0
+    mov al, FR_RMD                  ; is the STRICT RMD
 ; --- fd_one - post a request whose whole answer is one reply -----------------
+; ...unless the Read Only box is ticked and AL is one of the four requests
+; that WRITE, which are refused here with a 550 rather than posted.
 fd_one:
-    push bx
     cmp byte [fd_ro], 0
     je .go
-    call fd_iswrite
-    jnc .go
-    mov si, fd_r550w
-    call fd_reply
-    pop bx
-    ret
-.go:
-    call fd_post
-    pop bx
-    ret
-
-; --- fd_iswrite - CF=1 if AL is a request the Read Only box must refuse ------
-fd_iswrite:
     cmp al, FR_DELE
-    je .yes
+    je .no
     cmp al, FR_MKD
-    je .yes
+    je .no
     cmp al, FR_RMD
-    je .yes
+    je .no
     cmp al, FR_RNTO
-    je .yes
-    clc
-    ret
-.yes:
-    stc
-    ret
+    jne .go
+.no:
+    mov si, fd_r550w
+    jmp fd_reply
+.go:
+    jmp fd_post
 
 ; =============================================================================
 ; THE UI TASK'S HALF - everything in this system that touches a disk
@@ -5578,13 +5475,12 @@ fd_ewidth32:
 ; waiting on a connection that will never carry anything. This answers 550
 ; before any 150 is sent.
 ; -----------------------------------------------------------------------------
+; **A REQUEST HANDLER KEEPS NO REGISTER** (apps size pass 2): every fd_do_*
+; is reached from fd_wake's `call [fd_rqtab - 2 + bx]` alone, and fd_wake
+; pushed all seven before the dispatch and pops them after - fd_do_rnto was
+; already spending AX, BX and CX on that contract. The cold ones lean on it;
+; fd_do_read, _write and _list run once a STAGE and keep their own frames.
 fd_do_rdchk:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     call fd_xfersplit
     jc .no
     mov si, fd_leaf
@@ -5596,28 +5492,22 @@ fd_do_rdchk:
                                     ; way of asking (type 1 is a PACKAGE, not
                                     ; "a file")
     call fd_unbank
-    push cx
-    mov cx, FD_STGSZ                ; RETR reads into fd_stage, always 8KB
-    call fd_setchunk
-    pop cx
-    jc .noroom
+    mov cx, [fd_wstg]               ; RETR reads into STOR's stage, 32KB if
+    call fd_setchunk                ; claimed (SPEC.md 77.51)
+    mov si, fd_r452
+    jc .fail                        ; (the unbank again is a no-op: it is
+                                    ; spent once [fd_banked] is clear)
     mov si, fd_r150
     call fd_reply
     mov byte [fd_xf], FX_RETR
     call fd_xstart              ; the clock (SPEC.md 77.23)
     mov byte [fd_lmore], 1          ; ...so the worker's first act is FR_READ
-    jmp short .out
-.noroom:
-    call fd_unbank
-    mov si, fd_r452
-    call fd_xfail
-    jmp short .out
+    ret
 .no:
-    call fd_unbank
     mov si, fd_r550
-    call fd_xfail
-.out:
-    jmp fd_x6
+.fail:
+    call fd_unbank
+    jmp fd_xfail
 
 ; -----------------------------------------------------------------------------
 ; fd_do_read - one chunk of the file at [fd_foff] into the stage
@@ -5652,8 +5542,9 @@ fd_do_read:
     call fd_xfersplit
     jc .no
     mov si, fd_leaf
-    mov bx, fd_stage                ; ES:BX - ES is ours, set by fd_wake, and a
-                                    ; file slot is an N stub that keeps it
+    call fd_commp                   ; ES:BX - STOR's 32KB stage when there is
+    mov bx, ax                      ; one, else fd_stage (SPEC.md 77.51); a
+    mov es, dx                      ; file slot is an N stub that keeps ES
     mov cx, [fd_chunk]
     mov ax, [fd_foff]
     mov dx, [fd_foff+2]
@@ -5859,26 +5750,12 @@ fd_cmax_end:
 
 ; --- the one-shots -----------------------------------------------------------
 fd_do_dele:
-    push si
     call fd_argsplit
-    jc .no
+    jc fd_do_no
     mov si, fd_leaf
     call OSAPI_FILE_DELETE
-    jc .ferr
-    mov si, fd_r250
-    call fd_unbreply
-    pop si
-    ret
-.ferr:
-    call fd_unbferr                 ; THE KERNEL SAID WHICH IT WAS - a
-                                    ; write-protected disk answered "no such
-                                    ; file" here, which is not even close
-    pop si
-    ret
-.no:
-    call fd_unb550                  ; fd_split's own failure: AX is not a FERR
-    pop si
-    ret
+    jc fd_do_ferr
+    jmp short fd_do_250
 
 ; -----------------------------------------------------------------------------
 ; fd_do_rmd - remove an EMPTY folder (SPEC.md 18.90.2)
@@ -5890,47 +5767,28 @@ fd_do_dele:
 ; client can actually reach here is a folder with something in it.
 ; -----------------------------------------------------------------------------
 fd_do_rmd:
-    push ax
-    push si
     call fd_argsplit
-    jc .no
+    jc fd_do_no                     ; fd_split's own failure: AX is not a FERR
     mov si, fd_leaf
     xor al, al                      ; STRICT - see fd_c_rmd
     call OSAPI_FILE_RMDIR
-    jc .fail
-    mov si, fd_r250
-    call fd_unbreply
-    pop si
-    pop ax
-    ret
-.fail:
+    jnc fd_do_250
     cmp ax, FERR_PROT
-    je .notempty
-    call fd_unbferr                 ; everything else - FERR_WPROT, FERR_IO -
+    jne fd_do_ferr                  ; everything else - FERR_WPROT, FERR_IO -
                                     ; the kernel named, and "no such directory"
                                     ; named none of them
-    pop si
-    pop ax
-    ret
-.notempty:
     mov si, fd_r550n
-    call fd_unbreply
-    pop si
-    pop ax
-    ret
-.no:
-    call fd_unb550                  ; fd_split's own failure: AX is not a FERR
-    pop si
-    pop ax
-    ret
+    jmp fd_unbreply
 
 fd_do_mkd:
-    push si
     call fd_argsplit
-    jc .no
+    jc fd_do_no
     mov si, fd_leaf
     call OSAPI_FILE_MKDIR
-    jc .bad
+    jc fd_do_ferr                   ; MKD fails for the SAME two reasons STOR
+                                    ; does - a name 8.3 cannot hold, or a full
+                                    ; volume - and said "no such directory" to
+                                    ; both, which is true of neither
     call fd_unbank
     ; **257 CARRIES THE NAME, QUOTED**, which is PWD's format and not a
     ; decoration: RFC 959 gives MKD the same reply type, and a client parses
@@ -5938,7 +5796,6 @@ fd_do_mkd:
     ; string rather than raising when it is missing, so the omission is
     ; TOLERATED by the one client that would have caught it - which is exactly
     ; the kind of thing that ships.
-    push di
     mov di, fd_outb2
     mov si, fd_r257
     call fd_dcat
@@ -5946,23 +5803,21 @@ fd_do_mkd:
     call fd_dcat
     mov si, fd_r257c
     call fd_dcat
-    mov byte [di], 0
-    pop di
-    mov si, fd_outb2
-    call fd_reply
-    pop si
-    ret
-.bad:
-    call fd_unbferr                 ; MKD fails for the SAME two reasons STOR
-                                    ; does - a name 8.3 cannot hold, or a full
-                                    ; volume - and said "no such directory" to
-                                    ; both, which is true of neither
-    pop si
-    ret
-.no:
-    call fd_unb550
-    pop si
-    ret
+    jmp fd_say2
+
+; --- the one-shots' three tails ------------------------------------------------
+; DELE, RMD, MKD and RNTO reach these by a conditional jump rather than each
+; carrying its own copy - which is why they sit HERE, between the four, where
+; every one of those jumps is short.
+fd_do_250:
+    mov si, fd_r250
+    jmp fd_unbreply
+fd_do_ferr:
+    jmp fd_unbferr                  ; THE KERNEL SAID WHICH IT WAS - a
+                                    ; write-protected disk answered "no such
+                                    ; file" to DELE, which is not even close
+fd_do_no:
+    jmp fd_unb550                   ; fd_split's own failure: AX is not a FERR
 
 ; --- RNFR / RNTO -------------------------------------------------------------
 ; **BOTH NAMES MUST LAND IN ONE DIRECTORY**, because OSAPI_FILE_RENAME takes
@@ -5970,8 +5825,6 @@ fd_do_mkd:
 ; and RNTO does the whole job: checking a source at RNFR time and then walking
 ; somewhere else at RNTO time would rename a file that was never looked at.
 fd_do_rnfr:
-    push si
-    push di
     call fd_argsplit
     jc .no
     mov si, fd_leaf
@@ -5983,24 +5836,17 @@ fd_do_rnfr:
     call fd_copyz
     mov byte [fd_havern], 1
     mov si, fd_r350
-    call fd_reply
-    pop di
-    pop si
-    ret
+    jmp fd_reply
 .no:
-    call fd_unbank
     mov byte [fd_havern], 0
-    mov si, fd_r550
-    call fd_reply
-    pop di
-    pop si
-    ret
+    jmp fd_unb550                   ; = unbank, then 550
 
 fd_do_rnto:
-    push si
-    push di
+    mov si, fd_r503
     cmp byte [fd_havern], 0
-    je .seq
+    jne .have
+    jmp fd_reply                    ; RNTO with no RNFR before it
+.have:
     mov byte [fd_havern], 0
     call fd_argpath
     ; **THE SOURCE MUST LIVE IN THE DESTINATION'S DIRECTORY** (SPEC.md 77.6):
@@ -6026,7 +5872,7 @@ fd_do_rnto:
     sub bx, fd_rnfrom               ; BX = the source's
 .ds0:
     cmp cx, bx
-    jne .no
+    jne fd_do_no
     jcxz .samedir                   ; both bare names: the CWD, the usual case
     mov si, fd_rnfrom
     mov di, [fd_pathp]
@@ -6040,7 +5886,9 @@ fd_do_rnto:
 .samedir:
     mov si, [fd_pathp]
     call fd_split                   ; the DESTINATION decides the directory
-    jc .no
+    jc .no                          ; ...fd_split, or the two names
+                                    ; disagreeing about their directory above:
+                                    ; AX is not a FERR either way
     mov si, fd_leaf
     mov di, fd_rnto_l
     call fd_copyz
@@ -6056,30 +5904,13 @@ fd_do_rnto:
     mov di, fd_rnto_l
     call OSAPI_FILE_RENAME
     jc .ferr
-    mov si, fd_r250
-    call fd_unbreply
-    pop di
-    pop si
-    ret
+    jmp fd_do_250
+.no:
+    jmp fd_do_no
 .ferr:
-    call fd_unbferr                 ; FERR_EXIST is the one a client MEETS
+    jmp fd_unbferr                  ; FERR_EXIST is the one a client MEETS
                                     ; here, and "no such file" is its exact
                                     ; inversion - the name is taken, not absent
-    pop di
-    pop si
-    ret
-.no:
-    call fd_unb550                  ; fd_split, or the two names disagreeing
-                                    ; about their directory: AX is not a FERR
-    pop di
-    pop si
-    ret
-.seq:
-    mov si, fd_r503
-    call fd_reply
-    pop di
-    pop si
-    ret
 
 ; --- CWD ---------------------------------------------------------------------
 ; The path string PWD prints is maintained HERE, beside the navigation that
@@ -6087,15 +5918,12 @@ fd_do_rnto:
 ; are standing in but there is no slot that answers "what is the path to it",
 ; and walking back up to build one would be a mount per component.
 fd_do_cwd:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     mov si, fd_arg
     cmp byte [si], 0
-    je .bad
+    jne .go
+.bad0:
+    jmp .bad                        ; ...and the root walk's failure below,
+.go:                                ; which a short jump to .bad cannot reach
     call fd_pbank                   ; **A FAILED WALK IS UNDONE.** A multi-
                                     ; component CWD that dies on its third
                                     ; component has already moved twice, and
@@ -6110,7 +5938,7 @@ fd_do_cwd:
     push si
     call fd_goroot
     pop si
-    jc .bad
+    jc .bad0
     call fd_pathroot
     mov byte [fd_cdepth], 0         ; the root has nothing above it
 .rel:
@@ -6180,14 +6008,11 @@ fd_do_cwd:
                                     ; move the instance (SPEC.md 19.2.1), and
                                     ; the path and the depth stand as walked
     mov si, fd_r250c
-    call fd_reply
-    jmp short .out
+    jmp fd_reply
 .bad:
     call fd_punbank
     mov si, fd_r550d
-    call fd_reply
-.out:
-    jmp fd_x6
+    jmp fd_reply
 
 ; -----------------------------------------------------------------------------
 ; fd_cpush / fd_up - the parent stack, and why the kernel cannot keep it
@@ -6427,8 +6252,6 @@ fd_pathpush:
 
 ; --- PWD / SIZE --------------------------------------------------------------
 fd_do_pwd:
-    push si
-    push di
     mov di, fd_outb2
     mov si, fd_r257
     call fd_dcat
@@ -6441,20 +6264,14 @@ fd_do_pwd:
     call fd_dcat
     mov byte [di], '"'
     inc di
-    mov byte [di], 0
-    mov si, fd_outb2
-    call fd_reply
-    pop di
-    pop si
-    ret
+    jmp short fd_say2
 
 fd_do_size:
-    push ax
-    push dx
-    push si
-    push di
     call fd_argsplit
-    jc .no
+    jnc .split
+.no:
+    jmp fd_unb550
+.split:
     mov si, fd_leaf
     call fd_find
     jc .no
@@ -6467,21 +6284,13 @@ fd_do_size:
     mov ax, [fd_fbuf+18]
     mov dx, [fd_fbuf+20]
     call fd_dnum32
+; --- fd_say2 - terminate the reply composed at fd_outb2 and send it ----------
+; DI is past its last byte. Five composed replies end this way (PWD, SIZE,
+; MKD, PASV, EPSV); the first two fall into it.
+fd_say2:
     mov byte [di], 0
     mov si, fd_outb2
-    call fd_reply
-    pop di
-    pop si
-    pop dx
-    pop ax
-    ret
-.no:
-    call fd_unb550
-    pop di
-    pop si
-    pop dx
-    pop ax
-    ret
+    jmp fd_reply
 
 ; =============================================================================
 ; STARTING AND STOPPING
@@ -6505,18 +6314,9 @@ fd_getaddr:
     call fd_net
     jc .no
     mov di, fd_ipstr
-    xor bx, bx
-.q:
-    mov al, [fd_ip+bx]
-    xor ah, ah
-    call fd_dnum
-    inc bx
-    cmp bx, 4
-    jae .done
-    mov byte [di], '.'
-    inc di
-    jmp short .q
-.done:
+    mov si, fd_ip
+    mov dl, '.'
+    call fd_quad
     mov byte [di], 0
     clc
     jmp fd_x7
@@ -6581,15 +6381,18 @@ fd_start:
                                     ; commonest way to make PASV unreachable
     call fd_hire                    ; ...and the worker is what ACCEPTS: with
     jc .noworker                    ; none of it, the window says Listening
-    jmp short .out                  ; and every client is ignored (SPEC.md 77.1)
+                                    ; and every client is ignored (SPEC.md 77.1)
+    mov al, 1                       ; **A SERVING SERVER ASKS FOR A QUIET
+    call fd_quiet                   ; SAVER** (SPEC.md 79.10): an animation
+    jmp short .out                  ; draws on the UI task, which is our disk
+                                    ; half, and took a RETR from 125 KB/s to 40
 .noworker:
     mov si, fd_lhnd                 ; so the port goes back, exactly as .badroot
     call fd_hclose                  ; gives it back - one of NET_SOCKS held for
                                     ; the window's life is the SPEC.md 77.28 leak
-    mov si, fd_e_nowork
-    call fd_log                     ; ...and the log has just said "Listening",
-                                    ; which this contradicts - so it says so
-    jmp short .fail                 ; there too, before fd_msg carries it
+    mov si, fd_e_nowork             ; ...and the log has just said "Listening",
+    jmp short .fail                 ; which this contradicts - so .fail says
+                                    ; so there too, before fd_msg carries it
 .badroot:
     mov si, fd_lhnd                 ; the port is open and nothing is going to
     call fd_hclose                  ; serve on it, so it goes back rather than
@@ -6605,6 +6408,12 @@ fd_start:
 .noport:
     mov si, fd_e_noport
 .fail:
+    call fd_log                     ; **EVERY REFUSAL IS LOGGED**, not only the
+                                    ; one after "Listening": the status line
+                                    ; said `No network driver` while the log's
+                                    ; last line still said `Ready - press
+                                    ; Start`, the two disagreeing about one
+                                    ; click. No worker yet, so no lock is owed
     mov [fd_msg], si
     mov byte [fd_st], FD_ERR
 .out:
@@ -6658,23 +6467,17 @@ fd_bye:
     push bx
     push si
     cmp byte [fd_xf], FX_NONE       ; **A TRANSFER THAT DIED STILL MEASURED
-    je .nox                         ; SOMETHING**, and it is the one anybody
+    je .clean                       ; SOMETHING**, and it is the one anybody
     mov si, fd_l_part               ; wants the number for: a client that gives
     call fd_log_rate                ; up mid-upload leaves by this door, not by
-.nox:                               ; fd_xdone's, so the rate line was printed
-    cmp byte [fd_xf], FX_NONE       ; for every transfer EXCEPT the failures
-    je .clean
+                                    ; fd_xdone's, so the rate line was printed
+                                    ; for every transfer EXCEPT the failures
     call fd_data_abort              ; a transfer was RUNNING when the client
     jmp short .dropped              ; left: abort, or its slot lingers
 .clean:
     call fd_data_drop
 .dropped:
-    call fd_reset_xfer
-    mov si, fd_chnd
-    call fd_hclose
-
-    mov byte [fd_auth], 0
-    mov word [fd_clen], 0
+    call fd_endsess
     mov byte [fd_havern], 0
     cmp byte [fd_st], FD_CTRL
     jne .done
@@ -6689,20 +6492,23 @@ fd_bye:
     pop ax
     ret
 
+; --- fd_quiet - AL = 1 / 0: ask for a blank saver while we serve, or stop ---
+fd_quiet:
+    push bx
+    mov bx, [fd_win]
+    call OSAPI_WM_QUIET             ; (SPEC.md 79.10) - keeps every register
+    pop bx
+    ret
+
 ; --- fd_shutdown - stop serving entirely -------------------------------------
 fd_shutdown:
     push ax
     push bx
     push si
     call fd_data_drop
-    call fd_reset_xfer
-    mov si, fd_chnd
-    call fd_hclose
+    call fd_endsess
     mov si, fd_lhnd
     call fd_hclose
-
-    mov byte [fd_auth], 0
-    mov word [fd_clen], 0
     mov byte [fd_req], FR_NONE
     or byte [fd_dirty], FDD_BTN | FDD_STAT
     pop si
@@ -6711,12 +6517,28 @@ fd_shutdown:
     ret
 
 fd_stop:
-    call fd_shutdown
-    mov byte [fd_st], FD_OFF
+    push ax
     push si
+    call fd_shutdown
+    xor al, al                      ; not serving: the user's saver again
+    call fd_quiet
+    mov byte [fd_st], FD_OFF
     mov si, fd_l_stop
     call fd_log
     pop si
+    pop ax
+    ret
+
+; --- fd_endsess - the control session is over, whatever ended it ------------
+; What fd_bye (the client left) and fd_shutdown (we stopped) both do once the
+; data handles are gone: the transfer state, the control handle, the login and
+; the half-read command line. Clobbers AX, BX and SI (fd_hclose's).
+fd_endsess:
+    call fd_reset_xfer
+    mov si, fd_chnd
+    call fd_hclose
+    mov byte [fd_auth], 0
+    mov word [fd_clen], 0
     ret
 
 ; =============================================================================
@@ -7344,35 +7166,22 @@ fd_parseip:
 ; --- fd_pasv_str - render [fd_pasv] into the field, or empty when it is unset
 fd_pasv_str:
     push ax
-    push bx
+    push dx
+    push si
     push di
     mov di, fd_pasvs
     mov ax, [fd_pasv]
     or ax, [fd_pasv+2]
-    jz .none
-    xor bx, bx
-.q:
-    mov al, [fd_pasv+bx]
-    xor ah, ah
-    call fd_dnum
-    inc bx
-    cmp bx, 4
-    jae .done
-    mov byte [di], '.'
-    inc di
-    jmp short .q
-.done:
-    mov byte [di], 0
-    call fd_line_init
-    pop di
-    pop bx
-    pop ax
-    ret
+    jz .none                        ; unset: the field is EMPTY, not 0.0.0.0
+    mov si, fd_pasv
+    mov dl, '.'
+    call fd_quad
 .none:
     mov byte [di], 0
     call fd_line_init
     pop di
-    pop bx
+    pop si
+    pop dx
     pop ax
     ret
 
@@ -7858,13 +7667,43 @@ fd_cfg_load:
     call fd_pasv_str                ; the field shows whatever survived
     jmp fd_x7
 
+; --- fd_cfg_keys - every key this build knows, IN THE ORDER IT WRITES THEM ----
+; key, the setting's address, and what it holds: FK_STR | capacity for a
+; string (NUL-terminated here, carried WITHOUT one in the file), or a byte
+; count for a fixed value - the PASV address (4) and the two flags (1). One
+; table for both directions, so the reader and the writer cannot disagree
+; about a key: fd_cfg_parse looks a record's key up in it, and fd_cfg_save
+; walks it top to bottom, which is what keeps a saved file BYTE-IDENTICAL to
+; the one the per-key code wrote (A, R, U, P, M, O).
+FK_STR      equ 0x80
+FD_CFGK     equ 4                   ; bytes a row
+fd_cfg_keys:
+    db FC_PASV
+    dw fd_pasv
+    db 4
+    db FC_ROOT
+    dw fd_roots
+    db FK_STR | FD_ROOTMAX
+    db FC_USER
+    dw fd_users
+    db FK_STR | FD_USERMAX
+    db FC_PASS
+    dw fd_passs
+    db FK_STR | FD_USERMAX
+    db FC_MACH
+    dw fd_mach
+    db 1
+    db FC_RO
+    dw fd_ro
+    db 1
+    db FC_END
+%if FD_ROOTMAX > 127 || FD_USERMAX > 127
+  %error "fd_cfg_keys: a capacity has to fit beside FK_STR in seven bits"
+%endif
+
 ; --- fd_cfg_parse - the records, skipping what this build does not know -----
+; fd_cfg_load is the one caller and keeps every register itself.
 fd_cfg_parse:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
     mov si, fd_cfgb
     mov di, fd_cfg_sig
     mov cx, 8
@@ -7875,102 +7714,65 @@ fd_cfg_parse:
     inc si
     inc di
     loop .sig
-    add si, 2                       ; the version: nothing branches on it YET,
-                                    ; because the KEYS carry compatibility and
+    inc si                          ; the version: nothing branches on it YET,
+    inc si                          ; because the KEYS carry compatibility and
                                     ; a version bump is for the day a key has
                                     ; to change MEANING rather than appear
+    mov dx, fd_cfgb
+    add dx, [fd_cfgn]               ; DX = the end of what was read
 .rec:
-    mov bx, si
-    sub bx, fd_cfgb
-    add bx, 2
-    cmp bx, [fd_cfgn]
+    lea bx, [si+2]
+    cmp bx, dx
     ja .out                         ; a truncated record: keep what we have
-    mov al, [si]                    ; the key
-    cmp al, FC_END
-    je .out
-    mov ah, [si+1]                  ; its length
-    add si, 2
-    push ax
-    xor ah, ah
-    mov bx, si
-    sub bx, fd_cfgb
-    pop ax
-    push ax
-    mov al, ah
-    xor ah, ah
-    add bx, ax
-    cmp bx, [fd_cfgn]
-    pop ax
+    mov ax, [si]                    ; AL = the key, AH = its length
+    or al, al                       ; FC_END
+    jz .out
+    mov si, bx
+    mov bl, ah
+    xor bh, bh
+    add bx, si
+    cmp bx, dx
     ja .out                         ; the payload runs off the end
-    cmp al, FC_PASV
-    jne .k_root
-    cmp ah, 4
-    jne .skip
-    mov bx, [si]
-    mov [fd_pasv], bx
-    mov bx, [si+2]
-    mov [fd_pasv+2], bx
-    jmp short .skip
-.k_root:
-    cmp al, FC_ROOT
-    jne .k_user
-    mov di, fd_roots
-    mov cx, FD_ROOTMAX
-    call fd_cfg_getstr
-    jmp short .skip
-.k_user:
-    cmp al, FC_USER
-    jne .k_pass
-    mov di, fd_users
-    mov cx, FD_USERMAX
-    call fd_cfg_getstr
-    jmp short .skip
-.k_pass:
-    cmp al, FC_PASS
-    jne .k_mach
-    mov di, fd_passs
-    mov cx, FD_USERMAX
-    call fd_cfg_getstr
-    jmp short .skip
-.k_mach:
-    cmp al, FC_MACH
-    jne .kro
-    or ah, ah
-    jz .skip
-    mov bl, [si]
-    mov [fd_mach], bl
-    jmp short .skip
-.kro:
-    cmp al, FC_RO
+    mov bx, fd_cfg_keys
+.k:
+    cmp byte [bx], FC_END
+    je .skip                        ; a key this build has never heard of
+    cmp al, [bx]
+    je .hit
+    add bx, FD_CFGK
+    jmp short .k
+.hit:
+    mov di, [bx+1]
+    mov cl, [bx+3]
+    test cl, FK_STR
+    jnz .str
+    ; --- a FIXED value: the PASV address only whole, a flag from any record
+    ; that carries a byte at all - the two rules the per-key arms had
+    cmp ah, cl
+    je .fix
+    cmp cl, 1
     jne .skip
     or ah, ah
     jz .skip
-    mov bl, [si]
-    mov [fd_ro], bl
+.fix:
+    xor ch, ch
+    push si
+.f:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    loop .f
+    pop si
+    jmp short .skip
+.str:
+    and cx, 0x7F                    ; the capacity, CH = 0
+    call fd_cfg_getstr
 .skip:
     mov al, ah                      ; **SKIP BY THE LENGTH**, which is the whole
     xor ah, ah                      ; of what makes this format grow: a key
     add si, ax                      ; this build has never heard of costs it
-    jmp .rec                        ; nothing at all. NEAR: the key ladder above
-                                    ; grew past a short jump's reach
-.out:
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; --- fd_cfg_putflag - AL = the key, AH = the value, appended at DI ----------
-; OFF writes no record at all, which is the same rule fd_cfg_putstr follows
-; for an empty string: the file carries only what was actually set.
-fd_cfg_putflag:
-    or ah, ah
-    jz .out
-    mov [di], al
-    mov byte [di+1], 1
-    mov [di+2], ah
-    add di, 3
+    jmp short .rec                  ; nothing at all
 .out:
     ret
 
@@ -8062,34 +7864,48 @@ fd_cfg_save:
     inc di
     loop .sig
     mov word [di], 1                ; the version
-    add di, 2
-    mov ax, [fd_pasv]               ; ...and the ONE record there is, omitted
-    or ax, [fd_pasv+2]              ; entirely when it is unset rather than
-    jz .end                         ; written as four zeroes
-    mov byte [di], FC_PASV
-    mov byte [di+1], 4
-    add di, 2
-    mov ax, [fd_pasv]
-    mov [di], ax
-    mov ax, [fd_pasv+2]
-    mov [di+2], ax
-    add di, 4
-.end:
-    mov al, FC_ROOT                 ; an EMPTY string is omitted rather than
-    mov si, fd_roots                ; written as a record with nothing in it -
-    call fd_cfg_putstr              ; the absent key IS the default
-    mov al, FC_USER
-    mov si, fd_users
-    call fd_cfg_putstr
-    mov al, FC_PASS
-    mov si, fd_passs
-    call fd_cfg_putstr
-    mov al, FC_MACH                 ; ...and the two flags, each omitted when
-    mov ah, [fd_mach]               ; it is off - the absent key IS the default
-    call fd_cfg_putflag
-    mov al, FC_RO
-    mov ah, [fd_ro]
-    call fd_cfg_putflag
+    inc di
+    inc di
+    mov bx, fd_cfg_keys
+.k:
+    mov al, [bx]
+    or al, al
+    jz .fin
+    mov si, [bx+1]
+    mov cl, [bx+3]
+    test cl, FK_STR
+    jz .fix
+    call fd_cfg_putstr              ; an EMPTY string is omitted rather than
+    jmp short .next                 ; written as a record with nothing in it -
+                                    ; the absent key IS the default
+.fix:
+    ; ...and a fixed value is omitted when every byte of it is zero: an
+    ; unset PASV address rather than four zeroes, a flag that is off
+    xor ch, ch
+    xor ah, ah
+    push cx
+    push si
+.z:
+    or ah, [si]
+    inc si
+    loop .z
+    pop si
+    pop cx
+    or ah, ah
+    jz .next
+    mov [di], al
+    mov [di+1], cl
+    inc di
+    inc di
+.c:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    loop .c
+.next:
+    add bx, FD_CFGK
+    jmp short .k
 .fin:
     mov byte [di], FC_END
     inc di
@@ -8099,7 +7915,6 @@ fd_cfg_save:
     mov bx, fd_cfgb
     mov di, fd_cfgip                ; in place once a full write has landed
     call od_write                   ; (a refusal is silent, as it always was)
-.out:
     jmp fd_x7
 
 ; -----------------------------------------------------------------------------
@@ -8371,7 +8186,9 @@ fd_tpl:
 
 %define OS88UI_NOGEST           ; presses routed by hand: no gesture install (SPEC.md 20.5.1.3.4)
 %define OS88UI_NOGRADIO       ; check boxes only: no radio ring/dot (SPEC.md 13.15.3)
+%define OS88UI_1BPP             ; OSAPI_SAVEU_1BPP: a greyed caption keeps its ink (SPEC.md 13.8.11)
 %include "os88ui.inc"
+%define OS88LINE_NOEDIT         ; nothing here calls os88line_edit (SPEC.md 83.1.2)
 %include "os88line.inc"             ; the Setup page's address field. AFTER
                                     ; os88ui.inc, which it needs the UI_*
                                     ; macros from (its own header says so)
@@ -8449,7 +8266,8 @@ fd_dnb      equ os88_image_end + 68  ; word: what os88ui_bfind answered last
                                      ; what "a change" is measured against
                                      ; (SPEC.md 13.8.2's third consequence)
 fd_verb     equ os88_image_end + 71  ; 4, space padded
-fd_pf       equ os88_image_end + 75  ; 6 words: PORT's fields
+fd_pf       equ os88_image_end + 75  ; 6 bytes: PORT's fields (12 laid out:
+                                     ; they were words)
 fd_ip       equ os88_image_end + 87  ; 4: our own address
 fd_fbuf     equ os88_image_end + 91  ; OSAPI_FIND_SZ
 fd_sline    equ fd_fbuf + OSAPI_FIND_SZ         ; FD_LOGW + 1
@@ -8510,7 +8328,8 @@ fd_cfgb     equ fd_rclus + 2                    ; FD_CFGSZ: FTPD.CFG, whole
 ;   fd_path2   CWD's banked path, filled by fd_pbank and read back by
 ;              fd_punbank inside one fd_do_cwd (fd_wake)
 ;   fd_skbuf   the NETV_SKTAB snapshot, filled and lettered inside one
-;              fd_socks (fd_oncmd)
+;              fd_socks (fd_oncmd) - and fd_skrow, the row it letters, just
+;              past it in the same buffer
 ;
 ; The WORKER never names any of them. 368 bytes of every instance's region.
 ; -----------------------------------------------------------------------------
@@ -8649,8 +8468,11 @@ fd_skn      equ fd_wprog + 2                    ; byte: how many socket records
                                      ; table still reads whole records
 FD_SKBSZ    equ NET_SOCKS * SKI_SZ
 fd_skbuf    equ fd_cfgb                         ; FD_SKBSZ, in fd_cfgb (above)
-%if FD_SKBSZ > FD_CFGSZ
-  %error "ftpd: the socket snapshot no longer fits inside fd_cfgb"
+fd_skrow    equ fd_skbuf + FD_SKBSZ             ; FD_LOGW + 1: ...and the row
+                                     ; lettered from it, which is fd_socks'
+                                     ; alone for the same reason
+%if FD_SKBSZ + FD_LOGW + 1 > FD_CFGSZ
+  %error "ftpd: the socket snapshot and its row no longer fit inside fd_cfgb"
 %endif                      ; the snapshot itself (72.20)
 
 FD_SOFF     equ ((fd_skn + 1 - $$) + 511) & ~511

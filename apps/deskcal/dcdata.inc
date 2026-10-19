@@ -14,6 +14,84 @@
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
+; THE STATE FILE IS PACKED (os88stik.inc's STIK_PACK / STIK_UNPACK, SPEC.md
+; 110.5.3): the 8 bytes of counts and settings, the appointments IN USE, then
+; the tasks in use straight after them - so a few entries are one cluster on
+; the disk where the whole 2,440-byte table was three. Full tables pack to
+; exactly the fixed layout, so a file of DCP_LEN is read as it stands -
+; which is every file written before the packing, too.
+;
+; dc_squeeze - STIK_PACK, just before a save: the tasks down behind the last
+; appointment. Out CX = the payload bytes to write. Keeps BX, DX and ES
+; -----------------------------------------------------------------------------
+dc_squeeze:
+    push es
+    push ds
+    pop es
+    mov al, [STIK_PAY + DCP_NAPPT]
+    mov ah, DCP_APPTSZ
+    mul ah                      ; (a byte MUL: DX kept)
+    add ax, STIK_PAY + DCP_APPT0
+    xchg ax, di                 ; DI = where the tasks go
+    mov al, [STIK_PAY + DCP_NTASK]
+    mov ah, DCP_TASKSZ
+    mul ah
+    xchg ax, cx                 ; CX = their bytes
+    mov si, STIK_PAY + DCP_TASK0
+    cld
+    rep movsb                   ; DOWN, so forward is safe
+    pop es
+    lea cx, [di - STIK_PAY]     ; CX = the bytes in use
+    ret
+
+; dc_spread - STIK_UNPACK, after a load and after every save: CX = the
+; payload's length. DCP_LEN is the fixed layout, read as it stands; anything
+; shorter must be exactly the counts' records, packed, and the tasks go back
+; up to DCP_TASK0 with the gap behind them zeroed. CF = 1 it is not - a
+; DAMAGED file. Keeps BX, DX and ES
+dc_spread:
+    cmp cx, DCP_LEN
+    je .r                       ; (CF = 0)
+    push es
+    push ds
+    pop es
+    mov al, [STIK_PAY + DCP_NTASK]
+    cmp al, DCP_MAXTASK
+    ja .bad
+    mov ah, DCP_TASKSZ
+    mul ah
+    xchg ax, di                 ; DI = the tasks' bytes
+    mov al, [STIK_PAY + DCP_NAPPT]
+    cmp al, DCP_MAXAPPT
+    ja .bad
+    mov ah, DCP_APPTSZ
+    mul ah
+    add ax, DCP_APPT0           ; AX = where the packed tasks start
+    mov si, ax
+    add si, di                  ; SI = where they end, which must be the
+    cmp si, cx                  ; file's own length
+    jne .bad
+    mov cx, di
+    add si, STIK_PAY - 1        ; the last packed byte...
+    lea di, [di + STIK_PAY + DCP_TASK0 - 1] ; ...to the last task byte
+    std
+    rep movsb                   ; UP, so backwards
+    cld
+    mov cx, DCP_TASK0
+    sub cx, ax
+    xchg ax, di
+    add di, STIK_PAY            ; the gap: the records not in use, zero as
+    xor al, al                  ; dc_adel leaves them
+    rep stosb
+    pop es                      ; (CF = 0: the XOR's)
+    ret
+.bad:
+    pop es
+    stc
+.r:
+    ret
+
+; -----------------------------------------------------------------------------
 ; dc_check - the payload as it was read: both counts inside their tables and
 ; the appointments in order. CF = 1 it is not ours to trust (a DAMAGED file,
 ; SPEC.md 110.3). Every register kept
@@ -24,83 +102,91 @@ dc_check:
     push cx
     push dx
     push si
-    cmp byte [STIK_PAY + DCP_NAPPT], DCP_MAXAPPT
-    ja .bad
-    cmp byte [STIK_PAY + DCP_NTASK], DCP_MAXTASK
-    ja .bad
-    mov cl, [STIK_PAY + DCP_NAPPT]
-    xor ch, ch
-    mov si, STIK_PAY + DCP_APPT0
+    call dc_aall
+    mov al, DCP_MAXAPPT         ; (every way out below is CF = 1 bad, or
+    cmp al, cl                  ; CF = 0 good)
+    jb .x
+    mov al, DCP_MAXTASK
+    cmp al, [STIK_PAY + DCP_NTASK]
+    jb .x
     xor dx, dx                  ; the last key: the date...
     xor bx, bx                  ; ...and its time + 1
-    jcxz .ok
+    jcxz .x
 .l:
-    mov ax, [si + DCA_DATE]
-    cmp ax, dx
-    jb .bad
-    ja .up
     mov ax, [si + DCA_TIME]
     inc ax
-    cmp ax, bx
-    jb .bad
-    mov bx, ax
-    jmp short .n
-.up:
-    mov dx, ax
-    mov bx, [si + DCA_TIME]
-    inc bx
-.n:
+    cmp ax, bx                  ; this key less the last, as one 32-bit
+    mov bx, ax                  ; subtraction: a borrow is out of order
+    mov ax, [si + DCA_DATE]
+    sbb ax, dx
+    jc .x
+    mov dx, [si + DCA_DATE]
     add si, DCP_APPTSZ
     loop .l
-.ok:
-    clc
-    jmp short .x
-.bad:
-    stc
 .x:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dc_pop5
 
 ; dc_pack - AX = the selected day, FAT-packed: (y - 1980) << 9 | m << 5 | d.
 ; Every other register kept
 dc_pack:
-    push cx
+    push dx
     mov ax, [dc_y]
+    mov dx, [dc_m]              ; DL = the month, DH = the day
+    call dc_fpack
+    pop dx
+    ret
+
+; dc_fpack - AX = a year, DL = a month, DH = a day: AX = them FAT-packed.
+; Every other register kept
+dc_fpack:
+    push cx
     sub ax, DC_Y0
     mov cl, 4
     shl ax, cl
-    or al, [dc_m]               ; a month is four bits
+    or al, dl                   ; a month is four bits
     inc cx                      ; CL = 5
     shl ax, cl
-    or al, [dc_sel]
+    or al, dh
     pop cx
     ret
 
-; dc_aptr - SI = appointment AL's record. dc_tptr - task AL's. The rest kept
-dc_aptr:
-    push cx
-    mov si, ax
-    and si, 0FFh
-    mov cl, 5
-    shl si, cl
-    add si, STIK_PAY + DCP_APPT0
-    pop cx
+; dc_tall - CX = the tasks in use, SI = the first's record. dc_aall - the
+; same for the appointments. The rest kept
+dc_tall:
+    mov si, STIK_PAY + DCP_TASK0
+    mov cl, [STIK_PAY + DCP_NTASK]
+    jmp short dc_all
+dc_aall:
+    mov si, STIK_PAY + DCP_APPT0
+    mov cl, [STIK_PAY + DCP_NAPPT]
+dc_all:
+    xor ch, ch
     ret
 
+; dc_aptr - SI = appointment AL's record, CF = 0. dc_tptr - task AL's.
+; dc_anext - CF = 1 AL is not an appointment in use, else dc_aptr. The rest
+; kept
 dc_tptr:
     push ax
-    push dx
-    xor ah, ah
-    mov dl, DCP_TASKSZ
-    mul dl
+    mov ah, DCP_TASKSZ
+    mul ah
     add ax, STIK_PAY + DCP_TASK0
-    mov si, ax
-    pop dx
+    jmp short dc_ptrx
+
+dc_anext:
+    cmp al, [STIK_PAY + DCP_NAPPT]
+    cmc
+    jc dc_ptrx.r
+
+dc_aptr:
+    push ax
+    mov ah, DCP_APPTSZ
+    mul ah
+    add ax, STIK_PAY + DCP_APPT0    ; (no carry: CF = 0)
+dc_ptrx:
+    xchg ax, si
     pop ax
+.r:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -114,26 +200,19 @@ dc_arange:
     push dx
     push si
     call dc_pack
-    mov dx, ax
-    mov cl, [STIK_PAY + DCP_NAPPT]
-    xor ch, ch
-    mov si, STIK_PAY + DCP_APPT0
-    xor ax, ax                  ; AL = the first, AH = how many
-    jcxz .x
+    xchg ax, dx
+    call dc_aall
+    xor ax, ax                  ; AL = the earlier days', AH = those and
+    jcxz .x                     ; the day's own
 .l:
     cmp [si + DCA_DATE], dx
     ja .x
-    je .on
-    inc ax                      ; an earlier day (AL never reaches 256)
-    jmp short .n
-.on:
-    inc ah
-.n:
+    adc ax, 100h                ; CF = 1 an earlier day (AL never reaches 256)
     add si, DCP_APPTSZ
     loop .l
 .x:
-    mov [dc_afirst], al
-    mov [dc_acnt], ah
+    sub ah, al
+    mov [dc_afirst], ax         ; [dc_acnt] is the byte after it
     pop si
     pop dx
     pop cx
@@ -142,8 +221,8 @@ dc_arange:
 
 ; -----------------------------------------------------------------------------
 ; dc_ains - dc_rec into the appointments, IN ORDER (SPEC.md 110.3)
-; out: AL = its index; CF = 1 the table is full and nothing changed.
-; Every other register kept
+; out: AL = its index; CF = 1 the table is full and nothing changed. AH
+; clobbered (it always was); every other register kept
 ; -----------------------------------------------------------------------------
 dc_ains:
     push bx
@@ -152,61 +231,46 @@ dc_ains:
     push si
     push di
     push es
-    mov cl, [STIK_PAY + DCP_NAPPT]
+    call dc_aall                ; CH = the place
     cmp cl, DCP_MAXAPPT
-    jae .full
+    cmc
+    jc .x                       ; full
     mov dx, [dc_rec + DCA_DATE]
     mov bx, [dc_rec + DCA_TIME]
     inc bx                      ; the key: all day first in its day
-    xor ch, ch                  ; CH = the place
-    mov si, STIK_PAY + DCP_APPT0
 .f:
     cmp ch, cl
     je .at
-    cmp [si + DCA_DATE], dx
-    ja .at
-    jb .nx
     mov ax, [si + DCA_TIME]
     inc ax
-    cmp ax, bx
-    ja .at                      ; equal keys keep their order: after them
-.nx:
+    cmp bx, ax                  ; the new key less this one, as one 32-bit
+    mov ax, dx                  ; subtraction: a borrow puts it here - and
+    sbb ax, [si + DCA_DATE]     ; equal keys keep their order: after them
+    jc .at
     add si, DCP_APPTSZ
     inc ch
     jmp short .f
 .at:
     push ds
     pop es
-    push cx
-    mov al, cl
-    sub al, ch                  ; the records at and after the place...
-    xor ah, ah
-    mov cl, 4
-    shl ax, cl                  ; ...in words (16 a record)
-    mov cx, ax
-    jcxz .put
-    shl ax, 1
-    add si, ax                  ; one past the last of them
+    sub cl, ch                  ; the records at and after the place...
+    mov al, DCP_APPTSZ / 2
+    mul cl                      ; ...in words
+    xchg ax, cx                 ; AH = the place
+    add si, cx
+    add si, cx                  ; one past the last record...
     dec si
-    dec si
+    dec si                      ; ...and back a word: SI = its last word
     lea di, [si + DCP_APPTSZ]
-    std                         ; up one record, from the top down
+    std                         ; up one record, from the top down - and
+    rep movsw                   ; DI ends on the place's last word, moved
+    mov si, dc_rec + DCP_APPTSZ - 2 ; or not, for dc_rec to go in
+    mov cl, DCP_APPTSZ / 2
     rep movsw
     cld
-.put:
-    pop cx
-    mov al, ch
-    call dc_aptr
-    mov di, si
-    mov si, dc_rec
-    mov cx, DCP_APPTSZ / 2
-    cld
-    rep movsw
+    mov al, ah
     inc byte [STIK_PAY + DCP_NAPPT]
     clc
-    jmp short .x
-.full:
-    stc
 .x:
     pop es
     pop di
@@ -220,72 +284,53 @@ dc_ains:
 ; dc_adel - appointment AL out, the ones after it down one, the freed record
 ; zeroed. dc_tdel - the same for task AL. Every register kept
 ; -----------------------------------------------------------------------------
-dc_adel:
-    push ax
-    push cx
-    push si
-    push di
-    push es
-    mov cl, [STIK_PAY + DCP_NAPPT]
-    cmp al, cl
-    jae .x
-    push ds
-    pop es
-    cld
-    call dc_aptr
-    mov di, si
-    add si, DCP_APPTSZ
-    sub cl, al
-    dec cl                      ; the records after it
-    mov al, cl
-    xor ah, ah
-    mov cl, 4
-    shl ax, cl
-    mov cx, ax
-    rep movsw                   ; DI ends on the old last record...
-    mov cx, DCP_APPTSZ / 2
-    xor ax, ax
-    rep stosw                   ; ...which is zeroed
-    dec byte [STIK_PAY + DCP_NAPPT]
-.x:
-    pop es
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
-
 dc_tdel:
     push ax
+    push bx
     push cx
     push si
-    push di
+    call dc_tptr
+    mov ch, DCP_TASKSZ
+    mov bx, STIK_PAY + DCP_NTASK
+    jmp short dc_del
+
+dc_adel:
+    push ax
+    push bx
+    push cx
+    push si
+    call dc_aptr
+    mov ch, DCP_APPTSZ
+    mov bx, STIK_PAY + DCP_NAPPT
+dc_del:                         ; SI = record AL, CH = a record's bytes, BX =
+    push di                     ; the table's count; AX BX CX SI pushed
     push es
-    mov cl, [STIK_PAY + DCP_NTASK]
+    mov cl, [bx]
     cmp al, cl
     jae .x
     push ds
     pop es
     cld
-    call dc_tptr
     mov di, si
-    add si, DCP_TASKSZ
     sub cl, al
-    dec cl
-    mov al, cl
-    mov ah, DCP_TASKSZ / 2
-    mul ah
-    mov cx, ax
-    rep movsw
-    mov cx, DCP_TASKSZ / 2
+    dec cx                      ; CL = the records after it (no borrow)
+    mov al, ch
+    cbw
+    add si, ax                  ; SI = the next record
+    shr al, 1
+    mul cl                      ; AX = their words
+    xchg ax, cx                 ; AH = a record's bytes
+    rep movsw                   ; DI ends on the old last record...
+    mov cl, ah
     xor ax, ax
-    rep stosw
-    dec byte [STIK_PAY + DCP_NTASK]
+    rep stosb                   ; ...which is zeroed
+    dec byte [bx]
 .x:
     pop es
     pop di
     pop si
     pop cx
+    pop bx
     pop ax
     ret
 
@@ -306,14 +351,11 @@ dc_tset:
     call dc_tptr
     lea di, [si + DCT_TEXT]
     pop si
-    push cx
-    push di
-    mov cx, DCT_TMAX + 1
-    xor al, al
-    rep stosb
-    pop di
-    pop cx
+    mov ax, DCT_TMAX + 1
+    sub ax, cx                  ; the field's bytes past the text
     rep movsb
+    xchg ax, cx                 ; AX = 0
+    rep stosb
     pop es
     pop di
     pop si
@@ -334,11 +376,9 @@ dc_tclear:
     push ds
     pop es
     cld
-    mov cl, [STIK_PAY + DCP_NTASK]
-    xor ch, ch
-    mov si, STIK_PAY + DCP_TASK0
+    call dc_tall
     mov di, si
-    xor bl, bl                  ; BL = the tasks kept
+    xor bx, bx                  ; BL = the tasks that went
     jcxz .tail
 .l:
     test byte [si + DCT_FLAGS], DCT_DONE
@@ -347,23 +387,19 @@ dc_tclear:
     mov cx, DCP_TASKSZ / 2
     rep movsw                   ; onto itself until the first gap: harmless
     pop cx
-    inc bl
     jmp short .n
 .skip:
     add si, DCP_TASKSZ
+    inc bx
 .n:
     loop .l
 .tail:
-    mov al, [STIK_PAY + DCP_NTASK]
-    sub al, bl                  ; the ones that went
-    push ax
-    mov ah, DCP_TASKSZ / 2
-    mul ah
-    mov cx, ax
-    xor ax, ax
-    rep stosw
-    mov [STIK_PAY + DCP_NTASK], bl
-    pop ax
+    mov cx, si                  ; SI is past the last task, DI past the last
+    sub cx, di                  ; kept: the gap between is zeroed
+    mov al, 0
+    rep stosb
+    sub [STIK_PAY + DCP_NTASK], bl
+    mov al, bl
     pop es
     pop di
     pop si
@@ -375,20 +411,15 @@ dc_tclear:
 dc_anydone:
     push cx
     push si
-    mov cl, [STIK_PAY + DCP_NTASK]
-    xor ch, ch
-    mov si, STIK_PAY + DCP_TASK0
+    call dc_tall
     jcxz .no
 .l:
     test byte [si + DCT_FLAGS], DCT_DONE
-    jnz .yes
+    jnz .x                      ; CF = 0 (TEST)
     add si, DCP_TASKSZ
     loop .l
 .no:
     stc
-    jmp short .x
-.yes:
-    clc
 .x:
     pop si
     pop cx
@@ -401,18 +432,16 @@ dc_anydone:
 ; -----------------------------------------------------------------------------
 dc_trim:
     push di
+    dec si
 .sk:
-    cmp byte [si], ' '
-    jne .e0
     inc si
-    jmp short .sk
-.e0:
-    mov di, si
+    cmp byte [si], ' '
+    je .sk
+    lea di, [si - 1]
 .e:
-    cmp byte [di], 0
-    je .t
     inc di
-    jmp short .e
+    cmp byte [di], 0
+    jne .e
 .t:
     cmp di, si
     je .len
@@ -435,6 +464,9 @@ dc_trim:
 ; in:  SI = the line (NUL), written: dc_trim's NUL
 ; out: BX = the minute of the day, or DC_ALLDAY; SI = the text; CX = its
 ;      length. Every other register kept
+;
+; The digits run on over the colon, so H:MM reads H * 100 + MM as HMM does
+; and one divide splits either; DH holds how many came before the colon.
 ; -----------------------------------------------------------------------------
 dc_parse:
     push ax
@@ -444,8 +476,8 @@ dc_parse:
     mov di, si                  ; DI = the text if this is not a time
     push cx
     xor bx, bx                  ; BX = the number so far
-    xor dx, dx                  ; DL = its digits, DH = the hour's + 1 once
-.dg:                            ; a colon has been seen
+    xor dx, dx                  ; DL = its digits, DH = those before a colon
+.dg:
     mov al, [si]
     cmp al, ':'
     je .colon
@@ -459,64 +491,53 @@ dc_parse:
     shl bx, 1
     shl bx, 1
     add bx, cx
-    xor ah, ah
+    cbw
     add bx, ax
-    inc dl
+    inc dx
+.nx:
     inc si
     jmp short .dg
 .colon:
-    or dh, dh
-    jnz .no                     ; a second colon
-    or dl, dl
-    jz .no
-    cmp dl, 2
-    ja .no
+    mov ax, dx                  ; one or two digits before it, and no colon
+    dec ax                      ; before them: DX = 1 or 2
+    cmp ax, 2
+    jae .no
     mov dh, dl
-    inc dh
-    mov [dc_ph], bl             ; the hour
-    xor bx, bx
-    xor dl, dl
-    inc si
-    jmp short .dg
+    jmp short .nx
 .end:
-    mov al, [si]                ; the word must END here
-    or al, al
-    jz .fin
-    cmp al, ' '
-    jne .no
-.fin:
+    add al, '0'                 ; the word must END here: a space or the
+    test al, ~' ' & 0FFh        ; NUL, the two characters with no other bit
+    jnz .no
+
+    mov al, dl
     or dh, dh
     jz .bare
-    cmp dl, 2                   ; H:MM / HH:MM - two minute digits
+    sub al, dh                  ; H:MM / HH:MM - two minute digits...
+    cmp al, 2
     jne .no
-    mov al, [dc_ph]
-    jmp short .hm
+    inc ax                      ; ...which the next test passes
 .bare:
-    cmp dl, 3                   ; HMM / HHMM
+    cmp al, 3                   ; HMM / HHMM
     jb .no
     mov ax, bx
-    mov bl, 100
-    div bl                      ; AL = the hour, AH = the minute
-    mov bl, ah
-.hm:
+    mov cl, 100
+    div cl                      ; AL = the hour, AH = the minute
     cmp al, 23
     ja .no
-    cmp bl, 59
+    cmp ah, 59
     ja .no
-    mov ah, 60
+    mov ah, 40
     mul ah
-    xor bh, bh
-    add bx, ax                  ; BX = the minute of the day
+    sub bx, ax                  ; BX = H * 100 + MM - 40 * H: the minute of
+                                ; the day
+    dec si
 .sp:
-    cmp byte [si], ' '
-    jne .got
     inc si
-    jmp short .sp
-.got:
+    cmp byte [si], ' '
+    je .sp
     pop cx                      ; the length less the time and its spaces
-    mov ax, si
-    sub ax, di
-    sub cx, ax
+    add cx, di
+    sub cx, si
     jmp short .x
 .no:
     pop cx

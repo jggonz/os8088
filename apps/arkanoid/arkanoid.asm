@@ -9,9 +9,10 @@
 ;
 ;  - **The paddle reflects, it does not re-launch.** A bounce mirrors vy and
 ;    KEEPS vx, then adds where along the paddle it landed (ark_zbias) and how
-;    the paddle itself was moving (ark_english) to the vx it kept. An earlier
-;    version assigned both from a zone table instead, and that is what made
-;    the game feel arbitrary: a ball arriving steeply from the left and one
+;    the paddle itself was moving (its kick, in ark_padbounce) to the vx it
+;    kept. An earlier version assigned both from a zone table instead, and
+;    that is what made the game feel arbitrary: a ball arriving steeply from
+;    the left and one
 ;    drifting in from the right left the paddle identically if they landed in
 ;    the same zone, so a rally had no continuity at all. A serve has no
 ;    incoming direction to build on, so the flick IS the aim: it is thrown the
@@ -89,11 +90,13 @@
     OS88_HEADER 'ARKANOID', ark_entry, 1, OS88_STACK_192
                                 ; THE WORKER'S STACK, declared
                                 ; rather than defaulted (SPEC.md 8.7):
-                                ; static 64 for ark_worker
+                                ; static 50 for ark_worker
                                 ; over the 64-byte interrupt floor
-                                ; that is 128, and 192 gives 1.5x
-                                ; (76 and 1.37x before size pass 1:
-                                ; ark_update banks nothing now)
+                                ; that is 114, and 192 gives 1.68x
+                                ; (76 and 1.37x before size pass 1,
+                                ; 64 before pass 2 took the loop's
+                                ; helpers' saves and inlined their
+                                ; one-caller routines, SPEC.md 44.12)
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
 ; A brick wall over a ball over the paddle - the whole game in three objects.
@@ -167,6 +170,22 @@ ARK_CHW_BIG  equ 300                ; content height the layout wants
 ARK_BW_SML   equ 20                 ; ...and CGA's 200 rows
 ARK_RAIL_SML equ 3
 ARK_CHW_SML  equ 137
+ARK_CHWBIAS  equ 200                ; what the metric RECORDS store the content
+                                    ; height less, so 300 and 137 both fit the
+                                    ; signed byte every other figure is
+
+; ARK_SB - the tuning tables are SIGNED BYTES that ark_metrics widens with
+; cbw, so a figure outside -128..127 would come back as a different number
+; rather than as an error. This makes it one.
+%macro ARK_SB 1-*
+%rep %0
+  %if (%1) < -128 || (%1) > 127
+    %error "ARK_SB: a tuning figure does not fit a signed byte"
+  %endif
+    db %1
+%rotate 1
+%endrep
+%endmacro
 
 ; ark_entry's own arithmetic, as constants: content = bricks + both rails, and
 ; the frame is that plus the 1px border either side / the title bar and one
@@ -192,7 +211,8 @@ ARK_MAXROW  equ 6                   ; ...and the most rows either set uses
 ARK_NZONE   equ 5                   ; paddle zones the bounce divides it into
                                     ; (ark_zbias/ark_zbq)
 ARK_CELLS   equ ARK_COLS * ARK_MAXROW
-ARK_NMET    equ 12                  ; words in a metrics record (ark_met_*)
+ARK_NMET    equ 12                  ; bytes in a metrics record (ark_met_*)
+ARK_NVEL    equ 10 + ARK_NZONE      ; ...and in ark_vel_src, zones included
 
 ARK_LIVES   equ 3
 ARK_LIVEMAX equ 6                   ; spare-paddle slots drawn: more than this
@@ -439,8 +459,8 @@ ark_entry:
     add ax, 2
     mov [ark_tpl + WT_W], ax
 
-    mov ax, [ark_chwant]            ; the height the layout wants...
-    add ax, TITLE_H + 1
+    mov ax, [ark_chwant]            ; the height the layout wants (the
+    add ax, TITLE_H + 1 + ARK_CHWBIAS   ; record stores it less ARK_CHWBIAS)...
     mov bx, [ark_dock]              ; ...clamped to the desktop band, and one
     sub bx, MBAR_H + 1              ; pixel short of it, exactly as wm_fit
                                     ; does (SPEC.md 11): the drop shadow is
@@ -455,6 +475,9 @@ ark_entry:
     mov ax, bx
 .hok:
     mov [ark_tpl + WT_H], ax
+    sub bx, ax                      ; the slack under the band, less one - and
+                                    ; never negative, because the height was
+                                    ; just clamped to exactly that
     sub ax, TITLE_H + 1
     mov [ark_chgt], ax
     call ark_layout
@@ -466,12 +489,7 @@ ark_entry:
 .xok:
     shr ax, 1
     mov [ark_tpl + WT_X], ax
-    mov ax, [ark_dock]
-    sub ax, MBAR_H
-    sub ax, [ark_tpl + WT_H]
-    jns .yok
-    xor ax, ax
-.yok:
+    lea ax, [bx + 1]                ; the slack, dock - MBAR_H - height
     mov bl, 3                       ; a third of the slack above (a BYTE divide:
     div bl                          ; the band is under 768 rows)
     mov ah, 0
@@ -557,74 +575,38 @@ ark_track:
     ret
 
 ; -----------------------------------------------------------------------------
-; ark_scale_vel - apply [ark_vscale] to the whole velocity family
-; in:  [ark_vscale] (per cent), just copied out of the metrics record
-; out: the ten ark_v*/ark_thr*/ark_pufall words; preserves all registers
+; The BIG-metric velocity family, in ark_vxmax..ark_pufall order, and then the
+; paddle zones. ark_metrics widens and scales it into the bss words that shadow
+; it (ark_vxmax.. and ark_zbq) in the same pass that copies the metric record,
+; so this table and those fifteen words are one thing in two halves: an entry
+; added here needs its AWORD added there, in the same place.
 ;
-; Called once, from ark_entry, before anything reads a speed. The clamps at the
-; bottom are not belt-and-braces: rounding is per value, so a scale that lands
-; ark_thrhold a quarter above ark_vxmax would let a serve ask for an angle the
-; very next bounce clips - visible as a serve that bends the instant it leaves
-; the paddle. Enforcing the relationships AFTER rounding is what lets the
-; percentage be any number at all rather than one that has been checked by hand.
+; There are no clamps after the scaling, and that is a proof rather than an
+; omission (SPEC.md 44.12). ark_scale is MONOTONIC - round-to-nearest of v
+; times one per-cent figure, floored at one - so two figures in order before it
+; are in order after it, for any percentage at all. The four relationships
+; that matter (a serve no flatter than the ceiling, a flick no harder than a
+; hold, Slow's floor under the opening rally, the ceiling over it) are
+; asserted on the unscaled constants where ARK_VXMAX is declared, and that is
+; the whole of what a clamp here would have enforced.
 ; -----------------------------------------------------------------------------
-ark_scale_vel:
-    push ax
-    push si
-    push di
-    mov si, ark_vel_src             ; the BIG-metric values, in order...
-    mov di, ark_vxmax               ; ...into the bss words that shadow them -
-.each:                              ; and the five paddle zones straight after
-    lodsw                           ; them, into ark_zbq: a zone's contribution
-    call ark_scale                  ; is a vx like ark_english's, so it scales
-    mov [di], ax                    ; for the same reason - unscaled, an edge
-    inc di                          ; hit adds 8 quarters against CGA's ceiling
-    inc di                          ; of 9 and saturates the angle, where on
-    cmp di, ark_zbq + (ARK_NZONE - 1) * 2   ; VGA the same 8 is a third of 24
-    jbe .each
-
-    mov ax, [ark_vxmax]             ; a serve may ASK for the ceiling and no
-    cmp [ark_thrhold], ax           ; more; rounding is what can part them
-    jbe .tap
-    mov [ark_thrhold], ax
-.tap:
-    mov ax, [ark_thrhold]           ; ...and a flick never throws harder than
-    cmp [ark_thrtap], ax            ; a hold
-    jbe .floor
-    mov [ark_thrtap], ax
-.floor:
-    mov ax, [ark_vybase]            ; Slow's floor is a floor, not a target
-    cmp [ark_vyfloor], ax
-    jbe .top
-    mov [ark_vyfloor], ax
-.top:
-    mov ax, [ark_vybase]            ; ...and the ceiling is above wall 1
-    cmp [ark_vytop], ax
-    jae .zb
-    mov [ark_vytop], ax
-.zb:
-    pop di
-    pop si
-    pop ax
-    ret
-
-; --- the BIG-metric velocity family, in ark_vxmax..ark_pufall order -----------
-; This table and those ten bss words are one thing in two halves: the copy
-; loop above walks them in lockstep, so an entry added here needs its AWORD
-; added there, in the same place.
 ark_vel_src:
-    dw ARK_VXMAX, ARK_VXMIN, ARK_VYBASE, ARK_VYSTEP, ARK_VYMAX
-    dw ARK_VYFLOOR, ARK_VYSLOW, ARK_THRTAP, ARK_THRHOLD, ARK_PUFALL
+    ARK_SB ARK_VXMAX, ARK_VXMIN, ARK_VYBASE, ARK_VYSTEP, ARK_VYMAX
+    ARK_SB ARK_VYFLOOR, ARK_VYSLOW, ARK_THRTAP, ARK_THRHOLD, ARK_PUFALL
 
 ; What each fifth of the paddle ADDS to the ball's existing vx. Not a velocity
 ; to replace it with: replacing is what made the bounce feel arbitrary, because
 ; a ball arriving steeply from the left and one drifting in from the right left
-; the paddle identically if they landed in the same zone.
-; The five paddle zones' vx contribution, BIG-metric. ark_scale_vel copies it
-; into ark_zbq scaled for the adapter, and the bounce reads that copy - this
-; table is never read at play time. It must FOLLOW ark_vel_src, as ark_zbq
-; follows ark_pufall: the one loop walks both pairs as fifteen words.
-ark_zbias:   dw -2*ARK_VQ, -1*ARK_VQ, 0, 1*ARK_VQ, 2*ARK_VQ
+; the paddle identically if they landed in the same zone. Scaled into ark_zbq,
+; and never read at play time: the bounce reads that copy. A zone's
+; contribution is a vx like the paddle's kick, so it scales for the same reason -
+; unscaled, an edge hit adds 8 quarters against CGA's ceiling of 9 and
+; saturates the angle, where on VGA the same 8 is a third of 24.
+ark_zbias:
+    ARK_SB -2*ARK_VQ, -1*ARK_VQ, 0, 1*ARK_VQ, 2*ARK_VQ
+%if ark_zbias + ARK_NZONE - ark_vel_src != ARK_NVEL
+  %error "ark_vel_src and ark_zbias are walked as ARK_NVEL bytes in a row"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; ark_scale - one tuning figure, scaled by [ark_vscale] per cent
@@ -668,7 +650,9 @@ ark_scale:
 ; -----------------------------------------------------------------------------
 ; ark_metrics - the metric record this screen wants, and what it implies
 ; in:  BX = the screen HEIGHT
-; out: ark_bw.. filled, the velocities scaled, ark_pwmax derived
+; out: ark_bw.. filled, the velocities scaled (ark_scale's rounding, so the
+;      speeds and the zones are what a 1:1 record would give), ark_pwmax
+;      derived
 ; clobbers: AX, CX, SI, DI
 ; -----------------------------------------------------------------------------
 ark_metrics:
@@ -677,16 +661,25 @@ ark_metrics:
     jae .metric
     mov si, ark_met_sml
 .metric:
-    mov di, ark_bw                  ; copied wholesale: the bss words below
-    mov cx, ARK_NMET                ; must stay in the record's order
-.mcopy:
-    lodsw
+    mov word [ark_vscale], 100      ; PAR, for the record itself: it goes
+                                    ; through ark_scale like the speeds, and
+                                    ; at 100 per cent that is the identity.
+                                    ; Its last figure IS the scale, so the
+                                    ; speeds after it take the adapter's
+    mov di, ark_bw                  ; widened wholesale: the bss words below
+    mov cx, ARK_NMET + ARK_NVEL     ; must stay in the record's order, and the
+.each:                              ; velocity family must follow them
+    cmp cl, ARK_NVEL
+    jne .same
+    mov si, ark_vel_src             ; ...out of the one shared table
+.same:
+    lodsb
+    cbw
+    call ark_scale
     mov [di], ax
     inc di
     inc di
-    loop .mcopy
-
-    call ark_scale_vel              ; ...and the speeds that record implies
+    loop .each
 
     mov ax, [ark_pw0]               ; the widest an Expand can make it
     add ax, 24
@@ -739,7 +732,12 @@ ark_onresize:
     add cx, MBAR_H                  ; which has no menu bar and no dock - put
     mov [ark_dock], cx              ; back into the primary-shaped number every
                                     ; reader of [ark_dock] already subtracts
-                                    ; MBAR_H from
+                                    ; MBAR_H from. Only ark_entry's placement
+                                    ; reads the two in the game, and it has
+                                    ; run: they are banked as what this card
+                                    ; IS, which tests/dispsize.py leg E reads
+                                    ; back as proof the handler asked about the
+                                    ; card the window is on (SPEC.md 39.16.4)
     call ark_metrics                ; ...which reads BX, now THIS card's height:
                                     ; the one number the big/small choice turns
                                     ; on
@@ -780,7 +778,7 @@ ark_layout:
 ; in:  SI = window ptr; caller holds the gfx lock
 ; out: nothing; preserves all registers
 ;
-; The three "owed" flags are cleared here, not just in ark_render's own full
+; The three "owed" flags are cleared here, not just in the worker draw's full
 ; branch: ark_draw_all satisfies all three, and W_PAINT is the OTHER caller
 ; of it. Left set, the worker's very next frame drew the whole board a second
 ; time - most visibly on the launch, where ark_newgame raises [ark_full] and
@@ -1024,7 +1022,7 @@ ark_refocus:
 ; field is exactly the rectangle a notice wants anyway.
 ;
 ; Two rules make it safe against the worker, which is drawing the same content
-; eighteen times a second. [ark_abon] is checked by ark_render UNDER THE LOCK,
+; eighteen times a second. [ark_abon] is checked by the worker UNDER THE LOCK,
 ; right after the clip is armed, and the frame is dropped whole while it is
 ; set - so the worker never paints over the panel and the UI task owns the
 ; content until the panel comes down. And the game is PAUSED while it is up:
@@ -1056,7 +1054,7 @@ ark_about:
 ;
 ; The two UI-task paths that draw outside W_PAINT - the credits going up and
 ; coming down - drew with NO clip armed, so a window over ours took the board
-; across its content (SPEC.md 11.3, the rule ark_render already keeps). Not one
+; across its content (SPEC.md 11.3, the rule the worker's draw keeps). Not one
 ; pixel visible draws nothing and leaves the whole frame owed.
 ; -----------------------------------------------------------------------------
 ark_clipdraw:
@@ -1105,8 +1103,8 @@ ark_abdismiss:
 ;
 ; One frame a tick. The sleep is what sets the frame rate AND what keeps the
 ; machine usable: a worker that spun would starve the UI task it shares the
-; scheduler with. Everything is lock-free except ark_render, which takes the
-; lock for one short burst of drawing (rule 3).
+; scheduler with. Everything is lock-free except the drawing half at .draw,
+; which takes the lock for one short burst (rule 3).
 
 ; -----------------------------------------------------------------------------
 ; ark_worker - THE background task
@@ -1116,8 +1114,8 @@ ark_abdismiss:
 ;
 ; One frame a tick. The sleep is what sets the frame rate AND what keeps the
 ; machine usable: a worker that spun would starve the UI task it shares the
-; scheduler with. Everything is lock-free except ark_render, which takes the
-; lock for one short burst of drawing (rule 3).
+; scheduler with. Everything is lock-free except the drawing half at .draw,
+; which takes the lock for one short burst (rule 3).
 ; -----------------------------------------------------------------------------
 ark_worker:
     call OSAPI_GET_TICKS
@@ -1142,23 +1140,20 @@ ark_worker:
                                     ; all - and the deadline is re-anchored to
                                     ; now, or it runs away and this loop never
                                     ; sleeps again
-.frame:
-    call ark_update
-    call ark_render
-    jmp .loop
-
-; -----------------------------------------------------------------------------
-; ark_update - advance one frame. NO lock held, nothing drawn.
-; clobbers AX..DI: its one caller, ark_worker, holds nothing across it
-; -----------------------------------------------------------------------------
-ark_update:                         ; (ark_worker reloads everything it uses,
-    call ark_do_paddle              ; so nothing is banked here)              ; the paddle moves even while parked
+.frame:                             ; ADVANCE one frame - no lock held,
+                                    ; nothing drawn, nothing banked: this loop
+                                    ; reloads everything it uses. It was
+                                    ; ark_update, called from here and from
+                                    ; nowhere else, and inline it is the same
+                                    ; instructions less a call and a ret a
+                                    ; frame (SPEC.md 44.12)
+    call ark_do_paddle              ; the paddle moves even while parked
     call ark_focuschk               ; ...and a rally stops if we lost focus
     mov al, [ark_mode]
     cmp al, M_PAUSE
-    je .out
+    je .draw
     cmp al, M_OVER
-    je .out
+    je .draw
     cmp al, M_DEAD
     je .wait
     cmp al, M_CLEAR
@@ -1167,22 +1162,87 @@ ark_update:                         ; (ark_worker reloads everything it uses,
     call ark_do_ball
     call ark_do_pu
     call ark_do_shots
-    jmp .out
+    jmp short .draw
 .wait:
     dec word [ark_hold]             ; the pause after a death or a clear
-    jg .out
-    cmp byte [ark_mode], M_CLEAR
-    je .next
+    jg .draw
+    cmp al, M_CLEAR                 ; AL is still [ark_mode]: nothing since
+    je .next                        ; the load above can change it
     call ark_respawn
-    jmp .out
+    jmp short .draw
 .next:
     call ark_nextwall
-.out:
-    ret
+.draw:                              ; ...and DRAW it: the worker's ONE lock
+                                    ; hold a frame. This was ark_render, with
+                                    ; one caller - here - and six saves this
+                                    ; loop never needed (SPEC.md 44.12).
+    ; Rule 5 of SPEC.md 20.6, and the reason the clip exists: windows move and
+    ; get buried while we sleep, and the gfx_* primitives take absolute screen
+    ; coordinates. Without the clip a covered game paints over whatever is on
+    ; top of it. CF = 1 means not one pixel of our content shows - so the
+    ; drawing is skipped and the game keeps running, which is exactly what the
+    ; kernel's own Bounce does. [ark_full] survives the skip, so whatever was
+    ; owed still gets drawn on the first frame that shows.
+    call OSAPI_GFX_LOCK
+    mov ax, KERNEL_SEG
+    mov es, ax
+    mov bx, [ark_win]
+    test word [es:bx + W_FLAGS], 2  ; still visible?
+    jz .skip
+    mov si, bx
+    call ark_track                  ; the window may have been dragged
+    mov bx, [ark_win]
+    call OSAPI_WM_CLIP_SET
+    jc .skip
+    cmp byte [ark_abon], 0          ; the credits are up: the UI task owns the
+    jne .skip                       ; content until a click or a key takes them
+                                    ; down, and the game is paused underneath
+    cmp byte [ark_full], 0
+    je .parts
+    call ark_draw_full
+    jmp short .unlock
+.parts:
+    call ark_wipe_pu
+    call ark_wipe_shots
+    call ark_draw_bricks_dirty
+    call ark_move_paddle
+    call ark_move_ball
+    call ark_draw_pu
+    call ark_draw_shots
+    cmp byte [ark_stat], 0
+    je .msg
+    mov byte [ark_stat], 0
+    call ark_draw_status
+.msg:
+    cmp byte [ark_msg], 0
+    je .unlock
+    mov byte [ark_msg], 0
+    call ark_clear_msg
+    call ark_draw_msg
+    jmp short .unlock
+
+    ; --- a frame that drew nothing owes a WHOLE one -------------------------
+    ; the worker's update half ran and moved everything; the screen did not
+    ; follow. Every erase this module does is aimed at where something was
+    ; last DRAWN, so
+    ; one skipped frame is survivable - but that is an invariant six separate
+    ; pieces of state have to keep, and it cost a stranded capsule once
+    ; already (SPEC.md 44.4).
+    ;
+    ; In practice the kernel repaints us anyway: un-hiding goes through
+    ; wm_show, uncovering through wm_paint_dmg, and both end in W_PAINT. That
+    ; is a guarantee this module cannot enforce and does not own - and it is
+    ; being actively narrowed (SPEC.md 11.90/11.91 exist to make W_PAINT run
+    ; LESS often). One byte buys independence from it.
+.skip:
+    mov byte [ark_full], 1
+.unlock:
+    call OSAPI_GFX_UNLOCK
+    jmp .loop
+
 
 ; -----------------------------------------------------------------------------
 ; ark_focuschk - pause the rally if the player has gone somewhere else
-; preserves all registers
 ;
 ; A ball keeps moving while the game is covered - that is deliberate (SPEC.md
 ; 44.1: a dropped FRAME must not stop the game), and it is exactly wrong when
@@ -1210,11 +1270,12 @@ ark_update:                         ; (ark_worker reloads everything it uses,
 ; Runs on the WORKER, holding no lock. That is what both of those slots are
 ; for: neither takes a lock or touches VRAM - one reads wm_zord, the other one
 ; word - so a background task may ask every frame. Drawing the banner is not
-; done here: [ark_full] makes the next ark_render frame repaint under the gfx
+; done here: [ark_full] makes the worker's next frame repaint under the gfx
 ; lock, where drawing belongs.
 ; -----------------------------------------------------------------------------
+; clobbers BX and saves nothing: its one caller is the worker
+; loop, which holds no register across it (SPEC.md 44.12)
 ark_focuschk:
-    push bx
     cmp byte [ark_mode], M_PLAY
     jne .out
     call OSAPI_WM_TOP               ; BX = frontmost visible, 0 = none
@@ -1228,13 +1289,12 @@ ark_focuschk:
     mov byte [ark_mode], M_PAUSE
     mov byte [ark_full], 1          ; the banner, on the next frame that draws
 .out:
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
 ; ark_do_paddle - move the paddle at whichever of the three speeds is set
 ; in:  [ark_pdir]/[ark_pkeep]/[ark_pspd]/[ark_pacc]/[ark_pdn]; out: [ark_px]
-;      moved, clamped; preserves all registers
+;      moved, clamped
 ;
 ; [ark_pkeep] is written by the UI task and decremented here. Both are plain
 ; word accesses, and the 8086 recognises interrupts only at instruction
@@ -1278,15 +1338,28 @@ ark_focuschk:
 ; which is what lets ARK_PSTEP be 2.0 or 1.75 rather than only a whole 1 or 2
 ; (SPEC.md 44.3.2's argument, applied to the paddle).
 ; -----------------------------------------------------------------------------
+; clobbers AX, BX, DX and saves nothing: its one caller is the worker
+; loop, which holds no register across it (SPEC.md 44.12)
 ark_do_paddle:
-    push ax
-    push bx
-    push dx
     mov word [ark_pvel], 0          ; how far the paddle moves THIS frame,
                                     ; signed - the ball reads it on contact
-    call ark_pkey                   ; is the arrow the paddle is following
-    jnc .aged                       ; still down? then it is a HOLD, whatever
-                                    ; int 16h has or has not delivered
+    ; IS THE ARROW THE PADDLE IS FOLLOWING STILL DOWN? Then it is a HOLD,
+    ; whatever int 16h has or has not delivered (SPEC.md 9.7). [ark_pdir] is
+    ; the direction, so the scancode falls out of its sign; a paddle with no
+    ; direction latched at all is "not held" without asking, which is also
+    ; the one case where the answer would be meaningless. The slot takes no
+    ; lock and touches no port, so it is legal from the worker - which is
+    ; where the game loop is (SPEC.md 44.1), and the whole reason the answer
+    ; is a cheap read rather than an event. (This was ark_pkey, inline at its
+    ; one caller, SPEC.md 44.12.)
+    cmp byte [ark_pdir], 0
+    je .aged
+    mov al, KSC_RIGHT
+    jg .ask
+    mov al, KSC_LEFT
+.ask:
+    call OSAPI_KEY_DOWN             ; CF = 1 held
+    jnc .aged
     cmp word [ark_pkeep], ARK_PHOLD ; refill only from BELOW: a tap that is
     jge .held                       ; still inside its own countdown owns it
     mov word [ark_pkeep], ARK_PHOLD
@@ -1300,7 +1373,7 @@ ark_do_paddle:
     xor ax, ax
     mov [ark_pspd], ax              ; stopped, the third speed - and what tells
     mov [ark_pdn], ax               ; ark_onkey that this arrow is free again
-    jmp .out
+    ret
 .live:
     dec word [ark_pkeep]
     mov ax, ARK_PSTEP               ; the promotion, and the whole of it: the
@@ -1342,9 +1415,6 @@ ark_do_paddle:
     mov [ark_px], ax
     mov byte [ark_padwipe], 1
 .out:
-    pop dx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1372,120 +1442,6 @@ ark_park:
     mov [ark_by], ax
     pop bx
     pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; ark_pkey - is the arrow the paddle is following still DOWN? (SPEC.md 9.7)
-; out: CF = 1 held, CF = 0 not; preserves every register
-;
-; [ark_pdir] is the direction, so the scancode falls out of its sign. A paddle
-; with no direction latched at all answers "not held" without asking, which is
-; also the one case where the answer would be meaningless.
-;
-; The slot takes no lock and touches no port, so this is legal from the worker
-; task - which is where the game loop is (SPEC.md 44.1), and the whole reason
-; the answer is a cheap read rather than an event.
-; -----------------------------------------------------------------------------
-ark_pkey:
-    push ax
-    cmp byte [ark_pdir], 0
-    je .no
-    mov al, KSC_RIGHT
-    jg .ask
-    mov al, KSC_LEFT
-.ask:
-    call OSAPI_KEY_DOWN             ; CF is the answer, and the pop below
-    pop ax                          ; leaves it alone
-    ret
-.no:
-    clc
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; ark_english - the sideways kick the paddle's own motion imparts
-; out: AX = -2..+2 PIXELS, in quarter units; preserves all other registers
-;
-; [ark_pvel] is PIXELS, so a held paddle at 8 gives a clean -2..+2 without a
-; table, and a tapping one at 5 gives 1. idiv truncates toward zero, which is
-; what makes a rail-clamped part-move round down to nothing - and what put a
-; tap at 0 while ARK_PSTEP was 2, so that a rally could be steered by holding
-; and not by tapping. At 5 that distinction has gone away on its own, which is
-; the right answer for the same reason it was right before: the number tracks
-; how fast the paddle is really moving, and nothing else.
-; The result is scaled to quarter units at the end, so the arithmetic above
-; stays the pixel arithmetic it reads as.
-; -----------------------------------------------------------------------------
-ark_english:
-    push bx
-    mov ax, [ark_pvel]              ; a few pixels either way, so a BYTE divide:
-    mov bl, 4                       ; AL = pvel / 4, toward zero as the word
-    idiv bl                         ; one was
-    cbw
-    cmp ax, 2
-    jle .lo
-    mov ax, 2
-.lo:
-    cmp ax, -2
-    jge .out
-    mov ax, -2
-.out:
-    shl ax, 1                       ; pixels -> quarter units (ARK_VQ), once,
-    shl ax, 1                       ; here...
-    call ark_scale                  ; ...and then SCALED like everything else,
-    pop bx                          ; so the spin a paddle imparts stays the
-                                    ; same fraction of ark_vxmax on every
-    ret                             ; adapter (SPEC.md 44.3.3). It is the
-                                    ; RESULT that is scaled and not the unit:
-                                    ; scaling ARK_VQ itself rounds 1.48 to 1
-                                    ; and costs CGA a third of the paddle's
-                                    ; authority over the angle
-
-; -----------------------------------------------------------------------------
-; ark_throw - the sideways speed a SERVE gets from the key the player is on
-; out: AX = -ARK_THRHOLD..+ARK_THRHOLD PIXELS, in quarter units; preserves all
-;      other registers
-;
-; The serve has no incoming direction to build on, so the flick IS the aim, and
-; a paddle standing still serves straight up - honest rather than a hidden
-; default: the player who wants an angle flicks, and the one who does not gets
-; to choose after the first bounce.
-;
-; This is the ONE place that reads the player's intent rather than the paddle's
-; motion, and it has to. Everywhere else - ark_english, the rail clamp - the
-; question is physical, "how fast is this thing actually going", and [ark_pvel]
-; answers it. Here the question is "which way did you ask for", and the two
-; stopped agreeing the moment the paddle stopped being fast: at the 2 px a tick
-; ARK_PSTEP briefly was, a flick moved the paddle 2 pixels in the tick Space is
-; pressed and the old halving took that to 1, so a serve barely left the
-; vertical unless the key had been held for half a second first. The mechanism
-; had gone quiet, not the intent - and reading the intent is what keeps the
-; serve stable while ARK_PSTEP is tuned underneath it, which it has been three
-; times.
-;
-; So the ladder is the STATE MACHINE, and it has exactly three rungs to match.
-; Stopped: nothing is being asked for, straight up. Tapping, at ARK_PSTEP:
-; ARK_THRTAP. Holding, wound up to ARK_PFAST by the typematic repeats:
-; ARK_THRHOLD, harder. The two figures track the two speeds rather than deriving
-; from them - a flick that moves the paddle 5 px a tick has to throw harder
-; than one that moved it 2, or the aim stops matching the gesture.
-;
-; A paddle held against a rail still serves off it, which the physical reading
-; would refuse. That is the intent answering: the player asked for left.
-; -----------------------------------------------------------------------------
-ark_throw:
-    xor ax, ax                      ; no key latched: nothing has been asked
-    cmp word [ark_pkeep], 0         ; for, so the serve goes straight up
-    jle .out
-    mov ax, [ark_thrtap]            ; a flick throws...
-    cmp word [ark_pspd], ARK_PFAST
-    jb .sign
-    mov ax, [ark_thrhold]           ; ...and a hold throws harder
-.sign:
-    cmp byte [ark_pdir], 0          ; the key names the side, all of it
-    jge .out
-    neg ax
-.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1525,10 +1481,42 @@ ark_setspeed:
 
 ; -----------------------------------------------------------------------------
 ; ark_do_launch - Space: send the ball off, or fire the laser
-; in:  [ark_launch] set by the UI task; out: cleared; preserves all registers
+; in:  [ark_launch] set by the UI task; out: cleared
+;
+; THE SERVE'S SIDEWAYS SPEED, from the key the player is on: -ARK_THRHOLD..
+; +ARK_THRHOLD, in quarter units (this was ark_throw, inline at its one
+; caller below, SPEC.md 44.12).
+;
+; The serve has no incoming direction to build on, so the flick IS the aim, and
+; a paddle standing still serves straight up - honest rather than a hidden
+; default: the player who wants an angle flicks, and the one who does not gets
+; to choose after the first bounce.
+;
+; This is the ONE place that reads the player's intent rather than the paddle's
+; motion, and it has to. Everywhere else - the paddle's kick, the rail clamp - the
+; question is physical, "how fast is this thing actually going", and [ark_pvel]
+; answers it. Here the question is "which way did you ask for", and the two
+; stopped agreeing the moment the paddle stopped being fast: at the 2 px a tick
+; ARK_PSTEP briefly was, a flick moved the paddle 2 pixels in the tick Space is
+; pressed and the old halving took that to 1, so a serve barely left the
+; vertical unless the key had been held for half a second first. The mechanism
+; had gone quiet, not the intent - and reading the intent is what keeps the
+; serve stable while ARK_PSTEP is tuned underneath it, which it has been three
+; times.
+;
+; So the ladder is the STATE MACHINE, and it has exactly three rungs to match.
+; Stopped: nothing is being asked for, straight up. Tapping, at ARK_PSTEP:
+; ARK_THRTAP. Holding, wound up to ARK_PFAST by the typematic repeats:
+; ARK_THRHOLD, harder. The two figures track the two speeds rather than deriving
+; from them - a flick that moves the paddle 5 px a tick has to throw harder
+; than one that moved it 2, or the aim stops matching the gesture.
+;
+; A paddle held against a rail still serves off it, which the physical reading
+; would refuse. That is the intent answering: the player asked for left.
 ; -----------------------------------------------------------------------------
+; clobbers AX, BX, CX and SI (ark_fire is its tail) and saves nothing: its one
+; caller is the worker loop, which holds no register across it (SPEC.md 44.12)
 ark_do_launch:
-    push ax
     cmp byte [ark_launch], 0
     je .out
     mov byte [ark_launch], 0
@@ -1538,24 +1526,32 @@ ark_do_launch:
     mov ax, [ark_vymag]
     neg ax
     mov [ark_bvy], ax
-    call ark_throw
+    xor ax, ax                      ; no key latched: nothing has been asked
+    cmp word [ark_pkeep], 0         ; for, so the serve goes straight up
+    jle .throw
+    mov ax, [ark_thrtap]            ; a flick throws...
+    cmp word [ark_pspd], ARK_PFAST
+    jb .sign
+    mov ax, [ark_thrhold]           ; ...and a hold throws harder
+.sign:
+    cmp byte [ark_pdir], 0          ; the key names the side, all of it
+    jge .throw
+    neg ax
+.throw:
     mov [ark_bvx], ax
     mov byte [ark_mode], M_PLAY
     mov byte [ark_msg], 1           ; the READY line has to come off
     mov ax, 660
-    call ark_beep
-    jmp .out
+    jmp ark_beep                    ; ...its tail: ark_beep's ret is ours
 .laser:
     cmp byte [ark_laser], 0
     je .out
-    call ark_fire
+    jmp ark_fire                    ; ...and so is ark_fire's
 .out:
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; ark_do_ball - walk the ball along its velocity, a pixel at a time
-; preserves all registers
 ;
 ; Bresenham, one axis per step, with a collision test after each single-pixel
 ; move - not one jump of (vx,vy) a frame. At four pixels a tick a whole-vector
@@ -1564,13 +1560,9 @@ ark_do_launch:
 ; the ball is never inside anything, which is also what lets it be erased with
 ; a plain background fill.
 ; -----------------------------------------------------------------------------
+; clobbers AX..DI and saves nothing: its one caller is the worker
+; loop, which holds no register across it (SPEC.md 44.12)
 ark_do_ball:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
     cmp byte [ark_stuck], 0
     je .free
     call ark_park                   ; parked: ride the paddle
@@ -1653,12 +1645,6 @@ ark_do_ball:
     call ark_move1                  ; ...and one in y
     jnc .walk
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1690,9 +1676,31 @@ ark_move1:
 
     call ark_hit_brick              ; --- the wall ---
     jc .brick
-    call ark_hit_paddle             ; --- the paddle ---
-    jc .paddle
 
+    ; --- the paddle: is the candidate rect over it? (ark_hit_paddle, inline
+    ; here at its one caller - AX and BX are already banked, SPEC.md 44.12)
+    cmp word [ark_bvy], 0           ; only ever on the way DOWN, or a ball
+    jle .nopad                      ; clipping the side would stick to it
+    mov ax, dx
+    add ax, [ark_bsz]
+    dec ax
+    cmp ax, [ark_pady]
+    jl .nopad
+    mov bx, [ark_pady]
+    add bx, [ark_ph]
+    cmp dx, bx
+    jge .nopad
+    mov ax, cx
+    add ax, [ark_bsz]
+    dec ax
+    cmp ax, [ark_px]
+    jl .nopad
+    mov bx, [ark_px]
+    add bx, [ark_pw]
+    cmp cx, bx                      ; below is the last test passing - a hit.
+    jb .paddle                      ; Unsigned, where the others are signed:
+                                    ; both sides are on-screen x, positive
+.nopad:
     cmp dx, [ark_floor]             ; --- the floor: a life ---
     jg .lost
 
@@ -1714,73 +1722,36 @@ ark_move1:
     mov ax, 1200
     call ark_beep
     jmp short .hit
-.brick:
-    call ark_reflect
-    jmp .hit
+.brick:                             ; which way to bounce off a brick: this is
+    cmp cx, [ark_bx]                ; only ever a single-pixel move, so exactly
+    je .ybrick                      ; one coordinate changed and that is the
+    neg word [ark_bvx]              ; one to reverse. No geometry, no corner
+    jmp short .hit                  ; cases (it was ark_reflect)
+.ybrick:
+    neg word [ark_bvy]
+    jmp short .hit
 .paddle:
     call ark_padbounce
-    jmp .hit
-.lost:
-    call ark_die
+    jmp short .hit
+.lost:                              ; the ball reached the floor (it was
+    mov ax, 160                     ; ark_die): the long low one
+    mov cx, 6
+    call ark_beep_n
+    dec byte [ark_lives]            ; (the MOVs below keep its flags)
+    mov byte [ark_stat], 1
+    mov word [ark_hold], 12
+    mov al, M_DEAD
+    jg .set
+    mov al, M_OVER
+    mov byte [ark_full], 1
+.set:
+    mov [ark_mode], al
 .hit:
     pop dx
     pop cx
     pop bx
     pop ax
     stc
-    ret
-
-; -----------------------------------------------------------------------------
-; ark_reflect - which way to bounce off a brick
-; in:  CX = the blocked position's x; preserves all registers
-;
-; The step that was blocked names the axis: this is only ever reached from a
-; single-pixel move, so exactly one coordinate changed and that is the one to
-; reverse. No geometry, no corner cases.
-; -----------------------------------------------------------------------------
-ark_reflect:
-    cmp cx, [ark_bx]
-    je .yaxis
-    neg word [ark_bvx]
-    ret
-.yaxis:
-    neg word [ark_bvy]
-    ret
-
-; -----------------------------------------------------------------------------
-; ark_hit_paddle - is the candidate rect over the paddle?
-; in:  CX/DX = the candidate position, from ark_move1;
-; out: CF = 1 hit; preserves all registers
-; -----------------------------------------------------------------------------
-ark_hit_paddle:
-    push ax
-    push bx
-    cmp word [ark_bvy], 0           ; only ever on the way DOWN, or a ball
-    jle .no                         ; clipping the side would stick to it
-    mov ax, dx
-    add ax, [ark_bsz]
-    dec ax
-    cmp ax, [ark_pady]
-    jl .no
-    mov bx, [ark_pady]
-    add bx, [ark_ph]
-    cmp dx, bx
-    jge .no
-    mov ax, cx
-    add ax, [ark_bsz]
-    dec ax
-    cmp ax, [ark_px]
-    jl .no
-    mov bx, [ark_px]
-    add bx, [ark_pw]
-    cmp cx, bx                      ; CF = 1 is the last test passing - a hit.
-    pop bx                          ; Unsigned, where the others are signed:
-    pop ax                          ; both sides are on-screen x, positive
-    ret
-.no:
-    pop bx
-    pop ax
-    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1792,9 +1763,8 @@ ark_hit_paddle:
 ; powerup parks the ball instead.
 ; -----------------------------------------------------------------------------
 ark_padbounce:
-    push ax
+    push ax                         ; (not CX: nothing below writes it)
     push bx
-    push cx
     push dx
     cmp byte [ark_catch], 0
     je .bounce
@@ -1833,8 +1803,41 @@ ark_padbounce:
     mov [ark_zlast], ax             ; banked for the .minvx tie-break below
     mov bx, ax
     add bx, bx
-    mov dx, [ark_zbq+bx]            ; where along the paddle it landed
-    call ark_english                ; ...and which way the paddle was going
+    mov dx, [ark_zbq+bx]            ; where along the paddle it landed...
+
+    ; ...and which way the paddle was going: the sideways kick its own motion
+    ; imparts, -2..+2 PIXELS in quarter units (this was ark_english, inline at
+    ; its one caller, SPEC.md 44.12). [ark_pvel] is PIXELS, so a held paddle at
+    ; 8 gives a clean -2..+2 without a table, and a tapping one at 5 gives 1.
+    ; idiv truncates toward zero, which is what makes a rail-clamped part-move
+    ; round down to nothing - and what put a tap at 0 while ARK_PSTEP was 2, so
+    ; that a rally could be steered by holding and not by tapping. At 5 that
+    ; distinction has gone away on its own, which is the right answer for the
+    ; same reason it was right before: the number tracks how fast the paddle
+    ; is really moving, and nothing else. The result is scaled to quarter units
+    ; at the end, so the arithmetic stays the pixel arithmetic it reads as.
+    mov ax, [ark_pvel]              ; a few pixels either way, so a BYTE divide:
+    mov bl, 4                       ; AL = pvel / 4, toward zero as the word
+    idiv bl                         ; one was (BX is dead until the ceiling)
+    cbw
+    cmp ax, 2
+    jle .klo
+    mov ax, 2
+.klo:
+    cmp ax, -2
+    jge .kick
+    mov ax, -2
+.kick:
+    shl ax, 1                       ; pixels -> quarter units (ARK_VQ), once,
+    shl ax, 1                       ; here...
+    call ark_scale                  ; ...and then SCALED like everything else,
+                                    ; so the spin a paddle imparts stays the
+                                    ; same fraction of ark_vxmax on every
+                                    ; adapter (SPEC.md 44.3.3). It is the
+                                    ; RESULT that is scaled and not the unit:
+                                    ; scaling ARK_VQ itself rounds 1.48 to 1
+                                    ; and costs CGA a third of the paddle's
+                                    ; authority over the angle
     add ax, dx
     add ax, [ark_bvx]               ; both ADDED to the incoming vx
     mov bx, [ark_vxmax]             ; BX is dead from the zbias lookup above,
@@ -1852,7 +1855,7 @@ ark_padbounce:
     ; ground: the walk takes max(|dx|,|dy|) steps, so it was also the slowest
     ; shot in the game, and it comes straight back to where the paddle already
     ; is. The sign is whichever way it was already going, and a ball with no
-    ; opinion is sent the way the paddle is (ark_english's sign), falling back
+    ; opinion is sent the way the paddle is (the kick's sign), falling back
     ; to the side of the paddle it landed on. Only PADDLE bounces get this -
     ; a brick or a wall may still send it vertical.
     mov bx, [ark_vxmin]
@@ -1887,14 +1890,13 @@ ark_padbounce:
 .beep:
     call ark_beep
     pop dx
-    pop cx
     pop bx
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; ark_hit_brick - is the candidate rect over a live brick? If so, break it
-; in:  CX/DX = the candidate position, as ark_hit_paddle;
+; in:  CX/DX = the candidate position, from ark_move1;
 ; out: CF = 1 hit; preserves all registers
 ;
 ; Four corners rather than a cell-range walk: the ball is smaller than a brick
@@ -2085,14 +2087,10 @@ ark_maybe_pu:
 
 ; -----------------------------------------------------------------------------
 ; ark_do_pu - fall every capsule, and catch the ones that reach the paddle
-; preserves all registers
 ; -----------------------------------------------------------------------------
+; clobbers AX..DX, SI and saves nothing: its one caller is the worker
+; loop, which holds no register across it (SPEC.md 44.12)
 ark_do_pu:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
     xor si, si
 .each:
     cmp byte [ark_pukind+si], PU_NONE
@@ -2104,7 +2102,7 @@ ark_do_pu:
     mov [ark_puy+bx], ax            ; where the capsule was last DRAWN, and
                                     ; ark_draw_pu is the only thing that knows
                                     ; that. Moved here, it drifts from the
-                                    ; pixels the moment ark_render skips a
+                                    ; pixels the moment the worker skips a
                                     ; frame - and then the erase misses
     mov cx, ax                      ; caught? its bottom against the paddle
     add cx, ARK_PUH
@@ -2134,20 +2132,14 @@ ark_do_pu:
     inc si
     cmp si, ARK_MAXPU
     jb .each
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; ark_apply - a capsule was caught
-; in:  AL = kind; preserves all registers
+; in:  AL = kind; clobbers AX and BX: its one caller, ark_do_pu, holds only SI
+;      across it (SPEC.md 44.12)
 ; -----------------------------------------------------------------------------
 ark_apply:
-    push ax
-    push bx
     add word [ark_score], 50
     mov byte [ark_stat], 1
     cmp al, PU_EXPAND
@@ -2187,33 +2179,21 @@ ark_apply:
     mov byte [ark_padwipe], 1
     jmp .done
 .slow:
-    call ark_slower
-.done:
-    mov ax, 1046                    ; the catch chime
-    call ark_beep
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; ark_slower - knock the rally's vertical speed down a notch, never below
-;              ARK_VYFLOOR (a ball with no vy would never come back down)
-; preserves all registers
-;
-; It moves [ark_vymag] rather than [ark_bvy], because vymag is what every
-; paddle bounce restores - changing only the live velocity would last exactly
-; until the next one.
-;
-; The notch is ARK_VYSLOW, a QUARTER of what it was: the old step was a whole
-; pixel a frame off a base of three, so one capsule took a third of the
-; rally's speed away and two made it sluggish. Against the 3.75 base this is
-; an eighth, and the floor is 2.5 rather than 2.
-; -----------------------------------------------------------------------------
-ark_slower:
-    push ax
+    ; SLOW: knock the rally's vertical speed down a notch, never below
+    ; ARK_VYFLOOR - a ball with no vy would never come back down (this was
+    ; ark_slower, inline at its one caller, SPEC.md 44.12).
+    ;
+    ; It moves [ark_vymag] rather than [ark_bvy], because vymag is what every
+    ; paddle bounce restores - changing only the live velocity would last exactly
+    ; until the next one.
+    ;
+    ; The notch is ARK_VYSLOW, a QUARTER of what it was: the old step was a whole
+    ; pixel a frame off a base of three, so one capsule took a third of the
+    ; rally's speed away and two made it sluggish. Against the 3.75 base this is
+    ; an eighth, and the floor is 2.5 rather than 2.
     mov ax, [ark_vymag]
     cmp ax, [ark_vyfloor]
-    jle .out
+    jle .done
     sub ax, [ark_vyslow]
     cmp ax, [ark_vyfloor]
     jge .live
@@ -2221,20 +2201,21 @@ ark_slower:
 .live:
     mov [ark_vymag], ax             ; ...and take the live ball with it, in
     cmp word [ark_bvy], 0           ; whichever direction it is already going
-    jge .set
+    jge .setvy
     neg ax
-.set:
+.setvy:
     mov [ark_bvy], ax
-.out:
-    pop ax
-    ret
+.done:
+    mov ax, 1046                    ; the catch chime
+    jmp ark_beep
 
 ; -----------------------------------------------------------------------------
 ; ark_fire / ark_bolt / ark_do_shots - the laser
 ; ark_fire:     a volley - one bolt out of each muzzle
 ; ark_bolt:     arm one slot; BX = slot, AX = x
 ; ark_do_shots: fly them, and let each break one brick
-; all three preserve every register
+; ark_bolt and ark_do_shots preserve every register they do not say they
+; clobber; ark_fire clobbers AX, BX, CX and SI
 ;
 ; The bolts leave the MUZZLES, not the paddle's centre, and that is what makes
 ; the outermost brick column at either end reachable at all. ark_do_paddle
@@ -2258,11 +2239,9 @@ ark_slower:
 ; rather than a deliberate half-volley - and the muzzles are drawn as a pair,
 ; so the asymmetry would look like a bug rather than a limit.
 ; -----------------------------------------------------------------------------
-ark_fire:
-    push ax
-    push bx
-    push cx
-    push si
+ark_fire:                           ; (clobbers AX, BX, CX, SI: reached by a
+                                    ; tail jump from ark_do_launch, whose one
+                                    ; caller holds nothing, SPEC.md 44.12)
     mov cx, -1                      ; CX = the first free slot, once found
     xor si, si
 .slot:
@@ -2275,7 +2254,7 @@ ark_fire:
     inc si
     cmp si, ARK_MAXSHOT
     jb .slot
-    jmp .out                        ; fewer than two free - no half-volleys
+    ret                             ; fewer than two free - no half-volleys
 .pair:
     mov bx, cx                      ; the left muzzle
     mov ax, [ark_px]
@@ -2286,13 +2265,7 @@ ark_fire:
     dec ax
     call ark_bolt
     mov ax, 2200                    ; one beep for the volley, not one each
-    call ark_beep
-.out:
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp ark_beep
 
 ark_bolt:
     push bx
@@ -2308,12 +2281,9 @@ ark_bolt:
     pop bx
     ret
 
+; clobbers AX..DX, SI and saves nothing: its one caller is the worker
+; loop, which holds no register across it (SPEC.md 44.12)
 ark_do_shots:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
     xor si, si
 .each:
     cmp byte [ark_shot+si], 0
@@ -2337,34 +2307,6 @@ ark_do_shots:
     inc si
     cmp si, ARK_MAXSHOT
     jb .each
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; ark_die - the ball reached the floor
-; preserves all registers
-; -----------------------------------------------------------------------------
-ark_die:
-    push ax
-    push cx
-    mov ax, 160                     ; the long low one
-    mov cx, 6
-    call ark_beep_n
-    dec byte [ark_lives]            ; (the MOVs below keep its flags)
-    mov byte [ark_stat], 1
-    mov word [ark_hold], 12
-    mov al, M_DEAD
-    jg .set
-    mov al, M_OVER
-    mov byte [ark_full], 1
-.set:
-    mov [ark_mode], al
-    pop cx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2533,87 +2475,6 @@ ark_build:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; ark_render - the worker's one lock hold a frame
-; preserves all registers
-;
-; Rule 5 of SPEC.md 20.6, and the reason the clip exists: windows move and get
-; buried while we sleep, and the gfx_* primitives take absolute screen
-; coordinates. Without the clip a covered game paints over whatever is on top
-; of it. CF = 1 means not one pixel of our content shows - so the drawing is
-; skipped and the game keeps running, which is exactly what the kernel's own
-; Bounce does. [ark_full] survives the skip, so whatever was owed still gets
-; drawn on the first frame that shows.
-; -----------------------------------------------------------------------------
-ark_render:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call OSAPI_GFX_LOCK
-    mov ax, KERNEL_SEG
-    mov es, ax
-    mov bx, [ark_win]
-    test word [es:bx + W_FLAGS], 2  ; still visible?
-    jz .skip
-    mov si, bx
-    call ark_track                  ; the window may have been dragged
-    mov bx, [ark_win]
-    call OSAPI_WM_CLIP_SET
-    jc .skip
-    cmp byte [ark_abon], 0          ; the credits are up: the UI task owns the
-    jne .skip                       ; content until a click or a key takes them
-                                    ; down, and the game is paused underneath
-    cmp byte [ark_full], 0
-    je .parts
-    call ark_draw_full
-    jmp short .unlock
-.parts:
-    call ark_wipe_pu
-    call ark_wipe_shots
-    call ark_draw_bricks_dirty
-    call ark_move_paddle
-    call ark_move_ball
-    call ark_draw_pu
-    call ark_draw_shots
-    cmp byte [ark_stat], 0
-    je .msg
-    mov byte [ark_stat], 0
-    call ark_draw_status
-.msg:
-    cmp byte [ark_msg], 0
-    je .unlock
-    mov byte [ark_msg], 0
-    call ark_clear_msg
-    call ark_draw_msg
-    jmp short .unlock
-
-    ; --- a frame that drew nothing owes a WHOLE one -------------------------
-    ; ark_update ran and moved everything; the screen did not follow. Every
-    ; erase this module does is aimed at where something was last DRAWN, so
-    ; one skipped frame is survivable - but that is an invariant six separate
-    ; pieces of state have to keep, and it cost a stranded capsule once
-    ; already (SPEC.md 44.4).
-    ;
-    ; In practice the kernel repaints us anyway: un-hiding goes through
-    ; wm_show, uncovering through wm_paint_dmg, and both end in W_PAINT. That
-    ; is a guarantee this module cannot enforce and does not own - and it is
-    ; being actively narrowed (SPEC.md 11.90/11.91 exist to make W_PAINT run
-    ; LESS often). One byte buys independence from it.
-.skip:
-    mov byte [ark_full], 1
-.unlock:
-    call OSAPI_GFX_UNLOCK
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 ; ark_draw_all - the whole content
 ; in:  gfx lock held, origin tracked; preserves all registers
 ; -----------------------------------------------------------------------------
@@ -2710,10 +2571,9 @@ ark_draw_wall:
 ; The dirty map is a BIT a cell (ark_break sets them), so a frame with nothing
 ; broken reads ARK_DIRTYB bytes and draws nothing, where a byte a cell was
 ; sixty compares a frame
+; clobbers AX, BX, SI and saves nothing: its one caller is the worker loop's
+; .draw, which holds no register across it (SPEC.md 44.12)
 ark_draw_bricks_dirty:
-    push ax
-    push bx
-    push si
     xor si, si
 .byte:
     mov al, [ark_dirty+si]
@@ -2736,9 +2596,6 @@ ark_draw_bricks_dirty:
     inc si
     cmp si, ARK_DIRTYB
     jb .byte
-    pop si
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2998,11 +2855,9 @@ ark_draw_paddle:
     pop ax
     ret
 
+; clobbers AX..DX and saves nothing: its one caller is the worker loop's
+; .draw, which holds no register across it (SPEC.md 44.12)
 ark_move_paddle:
-    push ax
-    push bx
-    push cx
-    push dx
     cmp byte [ark_padwipe], 0
     je .out
     mov byte [ark_padwipe], 0
@@ -3071,10 +2926,6 @@ ark_move_paddle:
     je .out
     call ark_draw_ball
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3107,11 +2958,9 @@ ark_draw_ball:
     pop ax
     ret
 
+; clobbers AX, CX and saves nothing: its one caller is the worker loop's
+; .draw, which holds no register across it (SPEC.md 44.12)
 ark_move_ball:
-    push ax
-    push bx
-    push cx
-    push dx
     mov ax, [ark_bx]
     cmp ax, [ark_obx]
     jne .go
@@ -3160,10 +3009,6 @@ ark_move_ball:
     mov ax, [ark_by]
     mov [ark_oby], ax
 .out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3279,7 +3124,7 @@ ark_draw_pu:
 ; dimension over.
 ;
 ; It refuses rather than clamping when `d` is larger than the blank margin -
-; a frame ark_render skipped - because the honest fallback is the old path,
+; a frame the worker skipped - because the honest fallback is the old path,
 ; which erases what it has to and does not care how far anything moved.
 ; -----------------------------------------------------------------------------
 ark_blit_pu:
@@ -3382,6 +3227,17 @@ ark_blit_pu:
 ; The mark CLEARS bits, which is SPEC.md 6.3's rule in the other direction and
 ; the one bug in this area that produces a plausible wrong result: OR the ink
 ; in against a set body and nothing changes at all.
+;
+; The glyph comes from OSAPI_FONT_GLYPHS - the SAME table OSAPI_FONT_CHAR draws
+; from, which is the point: no second typeface, and it works on all three
+; adapters. It answers ES = DX, and the table is NOT in KERNEL_SEG; the body's
+; stores go through DS, so only the mark's walk cares what ES is.
+;
+; THE HEART IS A GLYPH TOO, here: ark_heartbits is ark_heartrun's picture in
+; the font's own shape - eight rows, bit 7 the left column - placed so the
+; same eight-row walk puts it exactly where ark_heartrun's runs put it (and
+; where ark_heart's fallback fills it). It was a second walk, over the runs,
+; one pixel at a time, and the letter was a routine of its own (SPEC.md 44.12).
 ; preserves all registers
 ; -----------------------------------------------------------------------------
 ark_pu_compose:
@@ -3412,16 +3268,45 @@ ark_pu_compose:
     loop .body                      ; byte 1 = E0h (x8..x10)
     pop di
 
-    push di
-    mov bx, bp                      ; the MARK: a letter, or the heart
+    push di                         ; the MARK: a letter, or the heart
+    push ds                         ; the heart's rows are ours - and ES is
+    pop es                          ; the FONT's after any letter kind
+    mov si, ark_heartbits
+    mov bx, bp
     mov al, [ark_puletter+bx]
     or al, al
-    jz .heart
-    call ark_pu_letter
-    jmp short .knext
-.heart:
-    call ark_pu_heart
-.knext:
+    jz .have
+    mov bl, al                      ; bank the character: FONT_GLYPHS returns
+    call OSAPI_FONT_GLYPHS          ; the range in AL/AH and the table in DX:SI
+    cmp bl, al
+    jb .out                         ; outside the table: no mark rather than a
+    cmp bl, ah                      ; walk past the end of it
+    ja .out
+    sub bl, al                      ; BL = the glyph's index
+    mov bh, 0
+    mov es, dx                      ; ES:SI is the table - and ES FIRST, because
+                                    ; the `mul` below returns DX:AX and would
+                                    ; take the segment with it
+    mov al, cl                      ; CX = bytes per glyph (8)
+    xor ah, ah                      ; ...and AH is still FONT_GLYPHS' last
+                                    ; character, which a 16-bit mul would use
+    mul bx
+    add si, ax                      ; SI = this glyph's first row
+.have:
+    add di, ARK_SPW                 ; DI = capsule row 1
+    mov dx, 8                       ; eight glyph rows onto body rows 1..8
+    mov cl, 6                       ; column c sits at capsule x = 2+c, and a
+.row:                               ; word here has x0 in bit 15 - so bit
+    es lodsb                        ; (7-c) has to reach bit (13-c): shift 6
+    mov ah, 0
+    shl ax, cl
+    xchg al, ah                     ; ...and the band is little-endian bytes
+    not ax
+    and [di], ax                    ; the mark CLEARS body bits
+    add di, ARK_SPW
+    dec dx
+    jnz .row
+.out:
     pop di
     add di, ARK_SPH * ARK_SPW       ; ...and the next kind's row 0
     inc bp
@@ -3439,90 +3324,11 @@ ark_pu_compose:
     ret
 
 ; -----------------------------------------------------------------------------
-; ark_pu_letter - clear the letter's pixels out of one kind's body
-; in:  AL = the character, DI = that kind's capsule row 0
-; clobbers AX/BX/CX/DX/SI/DI/ES: ark_pu_compose is its only caller, and it
-; banks all of them
-;
-; The glyph comes from OSAPI_FONT_GLYPHS - the SAME table OSAPI_FONT_CHAR draws
-; from, which is the point: no second typeface, and it works on all three
-; adapters. It answers ES = DX, and the table is NOT in KERNEL_SEG.
-; -----------------------------------------------------------------------------
-ark_pu_letter:
-    mov bl, al                      ; bank the character: FONT_GLYPHS returns
-    call OSAPI_FONT_GLYPHS          ; the range in AL/AH and the table in DX:SI
-    cmp bl, al
-    jb .out                         ; outside the table: no mark rather than a
-    cmp bl, ah                      ; walk past the end of it
-    ja .out
-    sub bl, al                      ; BL = the glyph's index
-    mov bh, 0
-    mov es, dx                      ; ES:SI is the table - and ES FIRST, because
-                                    ; the `mul` below returns DX:AX and would
-                                    ; take the segment with it
-    mov al, cl                      ; CX = bytes per glyph (8)
-    xor ah, ah                      ; ...and AH is still FONT_GLYPHS' last
-                                    ; character, which a 16-bit mul would use
-    mul bx
-    add si, ax                      ; SI = this glyph's first row
-
-    add di, ARK_SPW                 ; DI = capsule row 1
-    mov dx, 8                       ; eight glyph rows onto body rows 1..8
-    mov cl, 6                       ; column c sits at capsule x = 2+c, and a
-.row:                               ; word here has x0 in bit 15 - so bit
-    es lodsb                        ; (7-c) has to reach bit (13-c): shift 6
-    mov ah, 0
-    shl ax, cl
-    xchg al, ah                     ; ...and the band is little-endian bytes
-    not ax
-    and [di], ax                    ; the mark CLEARS body bits
-    add di, ARK_SPW
-    dec dx
-    jnz .row
-.out:
-    ret
-
-; -----------------------------------------------------------------------------
-; ark_pu_heart - the same, from ark_heartrun's horizontal runs
-; in:  DI = the kind's capsule row 0; clobbers AX/BX/CX/SI/DI, as above
-; -----------------------------------------------------------------------------
-ark_pu_heart:
-    add di, ((ARK_PUH - ARK_HEARTH) / 2) * ARK_SPW  ; the row it is centred on
-    mov si, ark_heartrun
-.row:
-    mov ch, 2                       ; two run slots a row; 0xFF ends them
-.run:
-    lodsw                           ; AL..AH inclusive, in heart columns
-    cmp al, 0xFF
-    je .rend
-.px:
-    mov cl, al
-    add cl, (ARK_PUW - ARK_HEARTW) / 2  ; ...into capsule columns
-    mov bx, 0x7FFF                  ; x0 is bit 15, and this is its COMPLEMENT
-    ror bx, cl                      ; rotated, so the hole travels alone
-    xchg bl, bh                     ; ...and the band is little-endian bytes
-    and [di], bx
-    inc al
-    cmp al, ah
-    jbe .px
-.rend:
-    dec ch
-    jnz .run
-    add di, ARK_SPW
-    cmp si, ark_heartend
-    jb .row
-    ret
-
-; -----------------------------------------------------------------------------
 ; ark_wipe_pu - erase every capsule from where it was last frame
-; preserves all registers
 ; -----------------------------------------------------------------------------
+; clobbers AX..DX, SI and saves nothing: its one caller is the worker loop's
+; .draw, which holds no register across it (SPEC.md 44.12)
 ark_wipe_pu:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
     xor si, si
 .each:
     cmp byte [ark_pukind+si], PU_NONE
@@ -3550,7 +3356,7 @@ ark_wipe_pu:
                                     ; of capsule black down the glass every
                                     ; frame - SPEC.md 44.10.6.2
     mov bx, si                      ; since it was last drawn. Two rows in the
-    add bx, bx                      ; ordinary frame; more if ark_render
+    add bx, bx                      ; ordinary frame; more if the worker
     mov ax, [ark_puy+bx]            ; skipped one and the capsule kept moving;
     sub ax, [ark_puold+bx]          ; NONE if it has not moved since, which is
     jbe .next                       ; every frame of the pause after a death
@@ -3574,11 +3380,6 @@ ark_wipe_pu:
     inc si
     cmp si, ARK_MAXPU
     jb .each
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3618,12 +3419,9 @@ ark_draw_shots:
     pop ax
     ret
 
+; clobbers AX..DX, SI and saves nothing: its one caller is the worker loop's
+; .draw, which holds no register across it (SPEC.md 44.12)
 ark_wipe_shots:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
     xor si, si
 .each:
     cmp byte [ark_shot+si], 0
@@ -3646,11 +3444,6 @@ ark_wipe_shots:
     inc si
     cmp si, ARK_MAXSHOT
     jb .each
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3705,12 +3498,20 @@ ark_draw_status:
     je .lives
     mov [ark_oscore], ax
     mov di, ark_sbuf + ARK_SFW      ; the digits at the field's END, then
-    call ark_num2str                ; slid to its start by ark_padl - a copy
-    mov si, di                      ; forward with the source ahead of the
-    mov di, ark_sbuf                ; destination, so nothing is read after
-                                    ; it is written
-    mov cx, ARK_SFW
-    call ark_padl                   ; left in the field, spaces after
+    call ark_num2str                ; slid to its start - a copy forward with
+    mov si, di                      ; the source ahead of the destination, so
+    mov di, ark_sbuf                ; nothing is read after it is written -
+    mov cx, ARK_SFW                 ; left in the field, spaces after. The
+.pad:                               ; padding is what makes the field opaque:
+    lodsb                           ; a space paints background on
+    or al, al                       ; OSAPI_FONT_RUN's fast path, so a field
+    jnz .put                        ; that got SHORTER erases the cells it gave
+    dec si                          ; up in the same pass that letters the rest.
+    mov al, ' '                     ; Parked on the NUL, every cell after it
+.put:                               ; reads the NUL again and pads. The NUL
+    mov [di], al                    ; that ends the field is ark_num2str's own,
+    inc di                          ; at ark_sbuf + ARK_SFW, which this never
+    loop .pad                       ; reaches (SPEC.md 44.12)
     mov si, ark_sbuf
     mov cx, 8                       ; a multiple of 8, because the window's own
     mov dx, bp                      ; origin is (WF_SNAP is the default) - and
@@ -3790,36 +3591,6 @@ ark_draw_status:
     pop dx
     pop cx
     pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; ark_padl - copy SI into DI left-aligned in a CX-cell field, space padded and
-;            NUL-terminated; the string must fit. Preserves every register.
-;
-; The padding is what makes the field opaque: a space paints background on
-; OSAPI_FONT_RUN's fast path, so a field that got SHORTER erases the cells it
-; gave up in the same pass that letters the rest, and never blanks.
-; -----------------------------------------------------------------------------
-ark_padl:
-    push ax
-    push cx
-    push si
-    push di
-.c:
-    lodsb
-    or al, al
-    jnz .put
-    dec si                          ; parked on the NUL: every cell after it
-    mov al, ' '                     ; reads the NUL again and pads
-.put:
-    mov [di], al
-    inc di
-    loop .c
-    mov byte [di], 0
-    pop di
-    pop si
-    pop cx
     pop ax
     ret
 
@@ -4190,10 +3961,32 @@ ark_heartend:
 ARK_HEARTW  equ 7
 ARK_HEARTH  equ 6
 
-; --- metrics records (ARK_NMET words each, copied into bss by ark_entry) --------
+; ...and the same heart as a GLYPH for ark_pu_compose: glyph row g lands on
+; capsule row g+1 and glyph column c on capsule column c+2, so the picture
+; sits one row down and no columns across - which is exactly where
+; ark_heartrun's runs are centred, (ARK_PUH - ARK_HEARTH) / 2 = 2 rows and
+; (ARK_PUW - ARK_HEARTW) / 2 = 2 columns into the capsule.
+%if (ARK_PUH - ARK_HEARTH) / 2 != 2 || (ARK_PUW - ARK_HEARTW) / 2 != 2
+  %error "ark_heartbits is placed for a heart centred 2 rows and 2 columns in"
+%endif
+ark_heartbits:
+    db 0x00                         ; ........
+    db 0x6C                         ; .##.##..
+    db 0xFE                         ; #######.
+    db 0xFE                         ; #######.
+    db 0x7C                         ; .#####..
+    db 0x38                         ; ..###...
+    db 0x10                         ; ...#....
+    db 0x00                         ; ........
+
+; --- metrics records (ARK_NMET signed BYTES each, widened into bss words by
+; ark_metrics) ------------------------------------------------------------------
 ; brick w, brick h, rows, rail, status strip, gap under it, paddle w, paddle h,
-; ball size, paddle inset from the bottom, wanted content height, VELOCITY
-; SCALE (per cent of the ARK_V* constants; see them for why it is one number).
+; ball size, paddle inset from the bottom, wanted content height LESS
+; ARK_CHWBIAS, VELOCITY SCALE (per cent of the ARK_V* constants; see them for
+; why it is one number). Bytes, because every figure fits one - the content
+; height only once ARK_CHWBIAS is taken off it, and ark_entry, its one reader,
+; adds the bias back inside an add it already made (SPEC.md 44.12).
 ;
 ; The scale is NOT the ratio of the content heights, and that is the point.
 ; 100 and 37 make BAND TRAVERSALS PER SECOND match, which is what a player
@@ -4201,9 +3994,9 @@ ARK_HEARTH  equ 6
 ; made CGA feel 2.7x too fast. The measured bands are 198px (VGA), 182px
 ; (Hercules) and 72px (CGA), against one shared 18.2fps frame clock.
 ark_met_big:                        ; VGA 640x480 and Hercules 720x348
-    dw ARK_BW_BIG, 10, 6, ARK_RAIL_BIG, 14, 10, 44, 6, 4, 18, ARK_CHW_BIG, 100
+    ARK_SB ARK_BW_BIG, 10, 6, ARK_RAIL_BIG, 14, 10, 44, 6, 4, 18, ARK_CHW_BIG - ARK_CHWBIAS, 100
 ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
-    dw ARK_BW_SML,  7, 5, ARK_RAIL_SML, 11,  5, 34, 4, 3, 13, ARK_CHW_SML,  37
+    ARK_SB ARK_BW_SML,  7, 5, ARK_RAIL_SML, 11,  5, 34, 4, 3, 13, ARK_CHW_SML - ARK_CHWBIAS,  37
 
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
 %define OS88UI_ABOUT            ; the standard About card, and NOTHING else: a
@@ -4230,9 +4023,11 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
 %assign ARK_BSS ARK_BSS + (%2)
 %endmacro
 
-; --- the metrics, copied WHOLESALE out of ark_met_* --------------------------
-; These eleven words must stay in this order and stay contiguous: ark_entry
-; copies the record over them with one loop.
+; --- the metrics, widened WHOLESALE out of ark_met_* -------------------------
+; These twelve words must stay in this order and stay contiguous, and the
+; velocity family must follow them: ark_metrics widens the record and then
+; ark_vel_src over all of them with one loop (asserted after ark_zbq).
+%assign ARK_MSTART ARK_BSS
     AWORD ark_bw                    ; brick width
     AWORD ark_bh                    ; brick height
     AWORD ark_rows                  ; brick rows in play
@@ -4243,14 +4038,17 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
     AWORD ark_ph                    ; paddle height
     AWORD ark_bsz                   ; ball size
     AWORD ark_pado                  ; paddle inset from the content bottom
-    AWORD ark_chwant                ; content height the layout wants
+    AWORD ark_chwant                ; content height the layout wants, LESS
+                                    ; ARK_CHWBIAS (ark_entry adds it back)
     AWORD ark_vscale                ; velocity scale, PER CENT (SPEC.md 44.3.3)
 
 ; --- the velocity family, ARK_V*/ARK_THR* scaled by [ark_vscale] --------------
-; Written once by ark_scale_vel and read everywhere after. They are bss rather
+; Written by ark_metrics, straight after the record and in the same loop, and
+; read everywhere after. They are bss rather
 ; than equs so one binary can hold two adapters' worth of tuning; every one of
 ; them is in QUARTER pixels except ark_pufall, which is whole ones.
-; ark_english scales its own result rather than owning a word here.
+; The paddle's kick (ark_padbounce) scales its own result rather than owning a
+; word here.
     AWORD ark_vxmax
     AWORD ark_vxmin
     AWORD ark_vybase
@@ -4262,6 +4060,9 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
     AWORD ark_thrhold
     AWORD ark_pufall                ; capsule fall, WHOLE px/frame
     ABUF  ark_zbq, ARK_NZONE * 2    ; ark_zbias, scaled (SPEC.md 44.3.3)
+%if ARK_BSS - ARK_MSTART != (ARK_NMET + ARK_NVEL) * 2
+  %error "ark_metrics walks ark_bw..ark_zbq as one run of words"
+%endif
 
 ; --- derived ------------------------------------------------------------------
     AWORD ark_pwmax

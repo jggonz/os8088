@@ -132,7 +132,10 @@ a = ap.parse_args()
 ceil = CEIL.get(a.machine, {})
 
 syms, image = pkg_syms()
-o88 = open(os88build.at("build/pixel.o88"), "rb").read()
+import os88pkg                                          # noqa: E402
+# the IMAGE, not the file: a parted package's image ships packed when that
+# saves a sector (SPEC.md 20.13.8)
+o88 = os88pkg.image_unwrap(open(os88build.at("build/pixel.o88"), "rb").read())
 if o88[:syms["op_table"]] != image[:syms["op_table"]]:
     sys.exit("build/pixel.o88 is not this tree's pixel.asm - run "
              "`make build/pixel.o88`")
@@ -316,8 +319,16 @@ if "1" in a.sessions:
 # than a 360 KB volume holds, so this one disk is 720 KB and goes in an
 # 80-cylinder 720 KB B: - the same machine with that drive, whose 9 sectors a
 # track at 250 kbps read as the 360 KB drive's do. A is the 360 KB system disk
-DISK2 = M.scratch_disk("build/pxbench2.img", "build/pixel.o88",
-                       "PICS:" + SMALL, "PICS:" + BIG, size=720)
+#
+# THE PICTURES GO FIRST. Since SPEC.md 19.3.1 os88disk lays chains out in
+# ARGUMENT order, so the package named first took clusters 4-117 and pushed
+# BIG.BMP from 5..306 out to 116..417 - and a bottom-up BMP's first rows on
+# the glass are its LAST clusters, so the "first rows" figure measured a
+# longer walk to them rather than the decoder, and read 4.5 s against a 3.9 s
+# ceiling set on the old layout. Naming the folder first puts BIG.BMP back
+# where every figure in CEIL was taken
+DISK2 = M.scratch_disk("build/pxbench2.img", "PICS:" + SMALL, "PICS:" + BIG,
+                       "build/pixel.o88", size=720)
 MACH720 = {"os8088_5150_cga_gla": "os8088_5150_cga_720b_gla",
            "os8088_xt_vga": "os8088_xt_vga_720b"}
 

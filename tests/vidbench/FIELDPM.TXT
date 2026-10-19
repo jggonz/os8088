@@ -1,48 +1,126 @@
 VIDEO PLAYER - PICOMEM PROFILE BENCHES
 ======================================
 
-Five files that turn a machine with a PicoMEM into a
-video encoder profile (tools/os88venc.py): one for
-the 286 with a PicoMEM 1.x, one for the 5150 with a
-PicoMEM 2.x. The 5150's "5150-picomem2" was guessed;
-this is the run that replaces the guess.
+The benches that turn a machine with a PicoMEM
+into a video encoder profile (tools/os88venc.py):
+"286-picomem1" for the Victory 286 with its
+PicoMEM 1.x, "5150-picomem2" for the 5150 with a
+2.x. This round REMODELS 286-picomem1 - the
+profile the 286 is encoded for now that its disk
+is the card's - and settles what LOADALL is worth
+(docs/plans/LOADALL-PLAN.md).
 
   VIDBENCH.O88  how fast THIS CPU and card decode a
   VIDBENCH.DAT  frame (the DAT must sit beside it)
-  VIDDISK.O88   how fast THIS disk streams a file
+  VIDDISK.O88   how fast THIS disk streams a file,
+                and extended memory (X, L)
   VIDSND.O88    whether the card's Sound Blaster
                 gives one interrupt a frame
+  VIDEOD.O88    the Video Player with the info
+                card's diagnostic lines
+  VIDEOR.O88    VIDEOD that also logs every read
+                (item 8)
   README.TXT    this file
 
-PUT ALL FIVE ON THE PICOMEM'S DISK, in one folder.
-VIDDISK measures the disk it runs FROM. If the
-PicoMEM's disk is not C:, copy them there with the
-Disk window. Each bench saves its report as a .TXT
-beside itself, so the disk must be writable.
-Saves NUMBER THEMSELVES: VIDDISK.TXT below is
-written as VIDDISK1.TXT, then VIDDISK2.TXT on the
-next run - the first number not already on the
-disk - so passes never overwrite each other. The
-status line names the file each save went to.
+COPY ALL SEVEN INTO ONE EMPTY FOLDER ON THE
+PICOMEM'S DISK (C:). VIDDISK measures the disk it
+runs FROM. Each bench saves its report as a .TXT
+beside itself, and saves NUMBER THEMSELVES - the
+first VIDDISK report is VIDDISK1.TXT, the next
+VIDDISK2.TXT - so passes never overwrite each
+other. An EMPTY folder is what makes the numbers
+below mean the setting: 1 = 14 wait states, 2 = 8.
+The status line names the file each save went to.
 
 PLEASE NOTE THE MACHINE: CPU and clock, video card
 and bus, which drive letter is the PicoMEM's, the
 PicoMEM firmware version, and the SD card.
 
+TWO ROUNDS ON THE 286 - THE BUS WAIT STATES
+---
+The board copies 25% faster than it did on
+2026-10-08 (0.257 ms a KB against 0.339), and the
+bus going from 14 wait states to 8 ("Tune") is the
+suspect. So every bench runs TWICE: round 1 at 14
+wait states, round 2 at 8. On the 5150 there is
+one round; skip X and L there (286 only).
+
 HOW - close each window before opening the next
 ---
+ROUND 1: set the bus to 14 WAIT STATES, boot.
 1. VIDBENCH.O88, R. Screen garbage while it runs
-   is the frames being drawn. -> VIDBENCH.TXT
+   is the frames being drawn. -> VIDBENCH1.TXT
 2. VIDDISK.O88, W. Writes STREAM.DAT, 12.5 MB, beside
-   itself (minutes). -> VDWRITE.TXT
-   Then R (about a minute). -> VIDDISK.TXT
-   Then X (286 only: extended memory). -> VDXMS.TXT
-   Then E (the PicoMEM's EMS). -> VDEMS.TXT
-   Then D deletes STREAM.DAT again.
-3. OPTIONAL: VIDSND.O88, R (about a minute; expect
-   silence - the count of interrupts is the answer).
-   -> VIDSND.TXT. On the 286's PicoMEM 1.x it ended
-   in STACK OVERFLOW; if it does that here, skip it.
+   itself (minutes). -> VDWRITE1.TXT
+   Then R (about a minute). -> VIDDISK1.TXT
+   Then X (extended memory). -> VDXMS1.TXT
+   Then L (LOADALL). -> VDLALL1.TXT
+   Then E (the PicoMEM's EMS). -> VDEMS1.TXT
+   LEAVE STREAM.DAT: round 2 reads it again.
+3. VIDSND.O88, R (about a minute; expect silence
+   - the count of interrupts is the answer).
+   -> VIDSND1.TXT. It no longer crashes on the
+   PicoMEM: it sets the card up the way SOUND.DRV
+   does. If it still ends in STACK OVERFLOW or
+   hangs, note it and go on.
+
+ROUND 2: set the bus to 8 WAIT STATES, boot.
+4. VIDBENCH R, VIDDISK R, X, L and E, VIDSND R -
+   the same as round 1 but NOT W. Every file ends
+   in 2: VIDBENCH2.TXT, VIDDISK2.TXT ...
+   Then VIDDISK D deletes STREAM.DAT.
+
+5. OPTIONAL, at 8 wait states: open VIDEOD.O88
+   and play GasGas24.V88 (the 24 fps Gas Gas Gas)
+   and the Bad Carrot encode to the end, each by
+   its Open button - a double-click on a .V88
+   opens the ordinary player instead. The info
+   card (I) then has four extra lines: Heap, Ring,
+   Lead and Dry. Photograph them for each file,
+   with whether it played smoothly. That is how
+   much room the real playback had, which the
+   model is checked against.
+
+6. OPTIONAL: VIDDISK L again WHILE A MODULE PLAYS
+   (Tracker or MIDIRack through the Sound Blaster).
+   Listen for clicks. -> the next VDLALL number.
+
+7. THE PLAY'S PROFILE (the 286) - THIS ROUND'S
+   ASK. VIDEOD.O88 now times every frame it
+   draws and, when the play stops, saves the
+   times as VPPROF1.DAT (then 2, 3 ... 9) - in
+   the folder it was playing from, so look
+   beside the player AND beside the videos.
+   What they are for: fitting the encoder's
+   model to what this machine really does, so a
+   profile's defaults make what you now get by
+   raising --peak.
+   Bus at 8 wait states. Copy VIDEOD.O88 next
+   to the videos, open it, and play each video
+   to the END by its Open button, one after the
+   other, closing nothing in between - a
+   double-click on a .V88 opens the ordinary
+   player, which saves nothing. Note which
+   VPPROFn.DAT is which video (they number in
+   the order played) and whether each played
+   smoothly. Bring back every VPPROFn.DAT.
+   A speaker play saves nothing: use the card.
+
+8. A PLAY THAT BREAKS - THIS ROUND'S OTHER ASK.
+   VIDEOR.O88 is VIDEOD that also writes down
+   every chunk it reads off the disk - where in
+   the file, how many bytes, and a checksum of
+   them as they arrived - and, if the play stops
+   on "a damaged super-packet", where the player
+   was. Copy it next to the video that breaks,
+   open it, play that video MUTED until it
+   breaks, press Esc, and bring back the
+   VPPROFn.DAT it saves. It says whether the
+   disk handed over the wrong bytes, and which.
+   Same wait states as the play that broke.
+
+IF THE MACHINE FREEZES at "probing LOADALL": reset,
+boot again and press M instead of L.
 
 Bring the .TXT files back. FTP them off, or
 photograph every page: Space / PgDn / PgUp page.
@@ -53,10 +131,16 @@ WHAT EACH ONE SETS
   VIDDISK R  the disk rate and its curve as the
              decode takes 0/25/50/75% of a frame
   VIDDISK X  what banking video in XMS costs
+  VIDDISK L  the same copies by LOADALL, and the
+             in-place read the bank would use
   VIDDISK E  the same for the PicoMEM's EMS
   VIDSND     the sound the profile may ask for
              (PCM 22 kHz, 8 kHz, 4-bit ADPCM)
+  VIDEOD     the headroom a real file had
+  VIDEOR     where a play that breaks went wrong
 
 On the 286, VIDSND's 25/50/75% rows are timed for an
 8088 and mean less there; its interrupt counts and
-the ADPCM row are what matter.
+the ADPCM row are what matter. Its row with
+interrupts on is not run on a PicoMEM, whose
+interrupt may not be re-entered.

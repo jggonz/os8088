@@ -214,6 +214,11 @@ OP_CHUNK      equ 32768         ; bytes a read moves at a time: a multiple of
 %assign OP_HAS_PLAZY 0              ; ...a PLAIN lazy row op_fetch reads, which
                                     ; is what earns its move-down (SPEC.md
                                     ; 20.12.7.4.4) - ZLAZY's other half
+%assign OP_HAS_CARVE 0              ; ...and a row that is NOT lazy, which is
+                                    ; what earns op_size, op_claim, op_unpack
+                                    ; and op_load's whole body: a table of
+                                    ; nothing but lazy rows has no carve, so
+                                    ; op_load is the name copy (SPEC.md 20.12.9)
 %assign OP_HAS_FETCH 0              ; ...and either of them: a lazy row the
                                     ; STANDARD fetches rather than one marked
                                     ; OP_SELF, which is what earns op_fetch,
@@ -292,6 +297,9 @@ op_t_n:
     %endif
     %if ((%2) & OP_COMP)
         %assign OP_HAS_COMP 1
+    %endif
+    %if !((%2) & OP_LAZY)
+        %assign OP_HAS_CARVE 1
     %endif
     %if ((%2) & OP_LAZY) && !((%2) & OP_SELF)
         %assign OP_HAS_FETCH 1

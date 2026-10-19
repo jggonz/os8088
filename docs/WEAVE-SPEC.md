@@ -49,12 +49,12 @@ whole develop–run cycle lives on the target with zero new kernel bytes.
 
 | piece | what it is |
 |---|---|
-| **`WEAVE.O88`** | the runtime. A C package (`CC_PACKAGE(weave,weave,WEAVE.OVL)`, SPEC.md §73) with hand-written 8086 cores for the hot loops. Opens one `.WAB` per instance. Measured on this tree: image 51,688 + bss 9,214 = **60,902 resident** against SPEC.md §20.1's 61,440-byte ceiling (`APP_MAX_SIZE`); `os88pkg.py` prints the count on every build. 55,000 bytes is the overlay-split trigger (SPEC.md §73.14) |
-| **`WEAVE.OVL`** | the runtime's one overlay (21,217 bytes): refusable, UI-task-only paths — the tenant list is §1.2.1. Nothing an event handler needs mid-run lives here, with the one stated exception |
-| **`WEAVE.WSM`** | the runtime's **canvas core** (§1.2.2): a second, RESIDENT segment (5,087 bytes), read ONCE at open and only when the bundle declares a `<canvas>`, far-called from the worker as well as from the UI task. Not an overlay, and not `.OVL`: an overlay is refusable and on-demand, this is neither — `cc_ovneed` refuses a worker outright (SPEC.md §73.14), and every byte in here runs per frame on one |
-| **`LOOM.O88`** | the IDE. A separate native package (the WORD/CWORD precedent: two things may not answer to one name). Note Pad's editor engine with prefix `lm_`, taken from `apps/cword`'s C realisation of it and not from `notepad.asm` (§1.2.3), a file-list sidebar, one editor pane. Measured: 42,812 + 4,934 = **47,746 resident**, 13,694 under the ceiling (61,194 when it landed; the C SDK passes and the first apps size pass took the rest) |
-| **`LOOM.OVL`** | Loom's one overlay (43,702 bytes): the WML compiler, the WJS compiler, the FX pre-compiler, the atom interner, the bundle writer, About, New/Open Project. Pack is a menu command and menu commands may refuse — the canonical overlay tenant |
-| **`LOOM.WPV`** | Loom's **preview module** (§1.2.4): a second, RESIDENT segment carrying WEAVE's flow walk and component painter, compiled a second time out of the same source, read once the first time Preview is opened. `WEAVE.WSM`'s lifecycle; the difference is that this one is compiled C, so its header carries a `.bss` word and it zeroes that region itself on first entry |
+| **`WEAVE.O88`** | the runtime. A C package (`CC_PACKAGE(weave,weave,WEAVE.OVL,$(BUILD)/WEAVE.WSM,part)`, SPEC.md §73) with hand-written 8086 cores for the hot loops, and **its two modules below carried inside it as lazy parts** (§1.2.5). Opens one `.WAB` per instance. Measured on this tree: image 43,324 + bss 9,296 = **52,620 resident** against SPEC.md §20.1's 61,440-byte ceiling (`APP_MAX_SIZE`); `os88pkg.py` prints the count on every build. 55,000 bytes is the overlay-split trigger (SPEC.md §73.14). One file of 42,098 bytes on a disk |
+| **the overlay** | the runtime's one overlay (15,250 bytes; part 1 of `WEAVE.O88`, the file `WEAVE.OVL` until §1.2.5): refusable, UI-task-only paths — the tenant list is §1.2.1. Nothing an event handler needs mid-run lives here, with the one stated exception |
+| **the canvas core** | the runtime's **canvas core** (§1.2.2; part 0 of `WEAVE.O88`, the file `WEAVE.WSM` until §1.2.5, and still that name as a build artefact): a second, RESIDENT segment (5,087 bytes), fetched ONCE at open and only when the bundle declares a `<canvas>`, far-called from the worker as well as from the UI task. Not an overlay: an overlay is refusable and on-demand, this is neither — `cc_ovneed` refuses a worker outright (SPEC.md §73.14), and every byte in here runs per frame on one |
+| **`LOOM.O88`** | the IDE. A separate native package (the WORD/CWORD precedent: two things may not answer to one name). Note Pad's editor engine with prefix `lm_`, taken from `apps/cword`'s C realisation of it and not from `notepad.asm` (§1.2.3), a file-list sidebar, one editor pane, and its two modules below carried inside it as lazy parts (§1.2.5). Measured: 42,960 + 5,034 = **47,994 resident**, 13,446 under the ceiling. One file of 52,847 bytes on a disk |
+| **LOOM's overlay** | Loom's one overlay (34,573 bytes; part 1 of `LOOM.O88`, the file `LOOM.OVL` until §1.2.5): the WML compiler, the WJS compiler, the FX pre-compiler, the atom interner, the bundle writer, About, New/Open Project. Pack is a menu command and menu commands may refuse — the canonical overlay tenant |
+| **the preview module** | Loom's **preview module** (§1.2.4; part 0 of `LOOM.O88`, the file `LOOM.WPV` until §1.2.5): a second, RESIDENT segment carrying WEAVE's flow walk and component painter, compiled a second time out of the same source, fetched once the first time Preview is opened. The canvas core's lifecycle; the difference is that this one is compiled C, so its header carries a `.bss` word, its part carries that bss as zeros and it zeroes the region itself on first entry |
 | **`apps/weave/*` shared source** | what LOOM compiles out of WEAVE's tree, as SOURCE and never as a copy (SPEC.md §20.5.1 — this platform's only code-sharing mechanism): `wflow.c` and `wpaint.c` (the flow walk and the painter, into `LOOM.WPV`), `wdraw.inc` (the paint and hit-test cores, assembly because they run under the gfx lock once per callback), `wblob.inc` (the claim accessors), `wnum.inc` (§5.1's conversion), `watom.c` (§2.7's atom accessors), `weave.h`, `wpvabi.inc`/`wpvabi.h`, and `wfxc.c`, which is LOOM's whole FX pre-compiler. One description of the picture, two copies of the object code; **never a second copy of the text**, because two layouts that must agree cell for cell (§12) is the failure §11's byte-identity rule exists to prevent, said about code |
 | **`tools/weavesim.py`** | the host reference implementation (the `tools/htmsim.py` precedent): parser, compiler, packer (`--pack`), WVM and FX interpreters, flow-walk layout, gfx-call cost model (`--costs`, §14), `--render` (with `--preview`, `--cells`, `--card`, `--adapter`), `--catalog`, `--emit-optab`, `--emit-foldtab`, `--emit-foldtab-c`, `--emit-vmcorpus`, `--emit-fxcorpus`, `--emit-cvcorpus`, `--selfcheck`. Deterministic, byte for byte |
 | **`tests/unit/t_wab.py`** | the independent second reader of `.WAB`, written from THIS file, sharing no code with any packer |
@@ -120,13 +120,14 @@ discovered.** A refused load returns 0 (`apps/cc/crt0.asm`), so every tenant
 whose natural answer is a pointer or a count has to answer "did it run"
 separately from "what did it say" — the validator's `const char *` where 0
 means VALID is the worked example (§10.4). With the validator and the load
-path out, a missing or stale `WEAVE.OVL` means **no bundle opens at all**,
-refused with the sentence naming the overlay rather than the bundle (§10.3).
-That is the price of the split, paid once and visibly on a disk somebody has
-taken the package off without its module — which is why `make weavedisk`
-puts both in one folder and `weavesmoke` boots that folder.
+path out, an overlay that cannot be fetched means **no bundle opens at all**,
+refused with the sentence naming the overlay rather than the bundle (§10.3),
+and `op_fetch`'s toast saying why (memory, the read, or the program's disk
+gone from its drive). Since §1.2.5 it cannot be a MISSING file: the overlay is
+part 1 of `WEAVE.O88`, fetched from the folder the package was launched from,
+so the case a disk could produce by losing a file is gone with the file.
 
-#### 1.2.2 `WEAVE.WSM` — the canvas core, resident and beside the package
+#### 1.2.2 The canvas core — resident, and part 0 of the package
 
 **Why a second segment and not the overlay.** SPEC.md §20.1 caps a package's
 image + bss at `APP_MAX_SIZE` = 0xF000 = 61,440 bytes, a kernel constant a
@@ -144,8 +145,11 @@ a second segment, not a bigger one* — read through the two precedents this
 tree has for a second segment that is **not** an overlay: SPEC.md §68.10's
 former `WORD.OVL` (an ASSEMBLY module beside the package, DS still the package's)
 and `C64.ROM` (a sidecar read at launch into a claim, C64-SPEC §14).
-`WEAVE.WSM` is the first and takes the second's lifecycle. The alternatives
-are priced in docs/plans/completed/WEAVE-PLAN.md §2.9.
+The canvas core is the first and takes the second's lifecycle - and, since
+§1.2.5, the second's resolution too: `C64.ROM` became part 0 of `C64.O88`,
+and the canvas core (shipped as the file `WEAVE.WSM` until then) is part 0 of
+`WEAVE.O88`. The alternatives are priced in
+docs/plans/completed/WEAVE-PLAN.md §2.9.
 
 - **A separate `nasm -f bin` assembly at `org 0`**, built from
   `apps/weave/wcanvas.asm`, which `%include`s `apps/weave/wspr.inc` (the
@@ -153,10 +157,15 @@ are priced in docs/plans/completed/WEAVE-PLAN.md §2.9.
   the package's one translation unit (SPEC.md §73.1) and names no package
   label; the two agree about nothing except this section's ABI
   (`apps/weave/wsmabi.inc`, `%include`d by both).
-- **Read ONCE, at open, by the UI task**, from inside §1.2.1's load path —
+- **Fetched ONCE, at open, by the UI task**, from inside §1.2.1's load path —
   and **only when the bundle's header sets `WABF_CANVAS`**. A bundle with no
-  canvas never asks for the file, never claims for it, and pays nothing: not
-  a byte of heap, not a disk revolution, not a KB of §10.1's arithmetic.
+  canvas never asks for the part, never claims for it, and pays nothing: not
+  a byte of heap, not a disk revolution, not a KB of §10.1's arithmetic. The
+  fetch is `w_partfetch` (`apps/weave/wfetch.inc`): `op_fetch` of the lazy
+  row, standing in the folder `WEAVE.O88` was LAUNCHED from for the read
+  and coming back - because a bundle double-clicked anywhere else leaves the
+  instance standing beside the bundle (SPEC.md §54.9), and the package's own
+  file is not there (§1.2.5).
 - **Resident from that moment until the instance closes or reloads.** No
   unload, no re-read, no refusal after open. That is the whole difference
   from an overlay and it is what makes the module callable from the worker.
@@ -166,8 +175,8 @@ are priced in docs/plans/completed/WEAVE-PLAN.md §2.9.
   own constants are reached `cs:`-relative. It holds **no** package-DS
   pointer across a call.
 
-**The layout.** The file begins with an 8-byte header, and the entry point is
-at a fixed offset so the package can far-call it with a dword it assembles
+**The layout.** The module begins with an 8-byte header, and the entry point
+is at a fixed offset so the package can far-call it with a dword it assembles
 itself:
 
 | offset | size | field |
@@ -178,42 +187,35 @@ itself:
 | +6 | 2 | the byte offset of the module's STATE BLOCK (§6.10.4) within the module image |
 | +8 | — | **the entry**: `WSM_ENTRY` = 8, far-called, `AL` = verb (§6.10.3) |
 
-**The stamp, and what it catches.** `WEAVE.O88` and `WEAVE.WSM` are separate
-files on a floppy, so a rebuilt package beside a stale module is a thing a
-user can produce with a file copy — SPEC.md §73.14 says this about `.OVL` and
-it is just as true here. Three words are checked before the module is believed
-and the check is the whole of the trust:
+**The stamp is RETIRED with the file** (§1.2.5). It was three words - the
+magic, `WSM_ABI` and the module's size against `WSM_SIZE` - and what it caught
+was a stale PAIR: a rebuilt `WEAVE.O88` beside an old `WEAVE.WSM`, which a
+file copy could produce. A part is bytes of the package's own file, located by
+a table in the image it was built with, so there is no pair to go stale, and
+`op_fetch` already refuses a stream that does not expand to exactly the row's
+length (SPEC.md §20.13.4). The header words stay in the module: the magic and
+the ABI number cost nothing and `wcanvas.asm` asserts its own layout with
+them, `+6` is how the package finds the state block, and `WSM_SIZE` - written
+into `build/wsmsize.inc` from the module before the package is assembled - is
+still what §10.1's before-any-I/O arithmetic adds.
 
-1. **the magic**, so a truncated or unrelated file is refused rather than
-   entered;
-2. **the ABI number** against `WSM_ABI`, which the package assembles in from
-   the same `%include` — this is the half `.OVL`'s two size words cannot do,
-   because a *contract* change need not change a size;
-3. **the size word** against `WSM_SIZE`, the module's byte count as it stood
-   when the package was assembled, injected by the Makefile with `-D` after
-   the module is built and before the package is.
+**The refusal.** A bundle that declares a canvas and cannot get its module
+refuses at open the way §10.3 says - window up, the sentence in the content
+area, the status row keeps it, the toast fires too:
 
-Between them they catch a stale pair whose ABI moved and a stale pair whose
-size moved. They do **not** catch two builds of the same ABI at the same size,
-and that is stated rather than implied — the same sentence SPEC.md §73.14
-writes about its own two words.
+> `WEAVE could not load its canvas core.`
 
-**The refusals, and they name the file.** A bundle that declares a canvas and
-cannot get its module refuses at open, the way a missing `WEAVE.OVL` refuses
-(§10.3/§10.4) — window up, the sentence in the content area, the status row
-keeps it, the toast fires too:
-
-> `WEAVE.WSM is not on this disk.`
-> `WEAVE.WSM does not match this program.`
-> `Not enough memory for WEAVE.WSM.`
-
-`make weavedisk` puts the package, the overlay, the module and the bundles in
-one `WEAVE/` folder for exactly this reason (§11.2; SPEC.md §19.10 is the
-same folder on the everything disk).
+and `op_fetch`'s own toast has already said why: `Not enough memory`, `Cannot
+read my parts`, or `No disk to read from` when the program's floppy is no
+longer where it was launched from.
 
 **What it costs, counted.** One more heap claim while a canvas app is open —
 §1.4's ladder counts it — and `ceil(WSM_SIZE/1024)` KB (5KB today) added to
-§10.1's `ask` when and only when `WABF_CANVAS` is set.
+§10.1's `ask` when and only when `WABF_CANVAS` is set. While the fetch runs
+the claim is briefly the read's window - the packed 3,205 bytes sitting above
+where they expand, cluster-rounded (SPEC.md §20.12.7.4) - and it is shrunk to
+the 5KB as soon as the part is in. The claim is not declared movable, as the
+file's never was: the worker runs inside it.
 
 #### 1.2.3 The editor transplant is `cword`'s, not `notepad.asm`'s
 
@@ -240,7 +242,7 @@ view, the ribbon, the ruler, and `cwtype.inc` — a monospaced pane has no
 proportional face, so there is no per-character loop left for SPEC.md §73.11
 to force into assembly (fit is width/8, pen is cell×8, hit is px/8).
 
-#### 1.2.4 `LOOM.WPV` — the preview module, resident and beside the package
+#### 1.2.4 The preview module — resident, and part 0 of LOOM
 
 **Why an overlay is the wrong instrument here, which is not the same as its
 being full.** SPEC.md §73.14 moves **code** into a module beside the package
@@ -267,12 +269,15 @@ unchanged, and the three places it differs are stated:
   trampolines) and a module has none of those. What it does share with a
   package is the same `smlrcc`, the same `tools/cc8086.py` gate (SS ≠ DS, no
   `&local`, no `movs`/`stos`, 96-byte frames), and `apps/cc/os88thunk.asm`.
-- **Read ONCE, on the UI task, the first time Preview is opened** — from
+- **Fetched ONCE, on the UI task, the first time Preview is opened** — from
   `lm_prev_on()` and deliberately **not** from inside the paint, because a
   claim and a floppy read under the gfx lock is seconds of held lock on the
   target machine. By the time `W_PAINT` far-calls the module, the module is
   either resident or known to be absent. A LOOM instance whose user never
-  opens the pane pays nothing.
+  opens the pane pays nothing. The fetch is the canvas core's door,
+  `w_partfetch` (§1.2.2), shared as source: `File > Open Project` walks the
+  instance into the project's folder, and `LOOM.O88` is in the one it was
+  launched from.
 - **Resident from that moment until the instance closes.** No unload, no
   re-read, no refusal after the first success — which is what makes it safe
   to far-call from a paint.
@@ -293,16 +298,20 @@ unchanged, and the three places it differs are stated:
 | +6 | 2 | **bytes of `.bss` past the image** |
 | +8 | — | **the entry**: `WPV_ENTRY` = 8, far-called, `AL` = verb |
 
-**The bss word is where this differs from `WEAVE.WSM`, and the difference is
-the whole difference between an assembly module and a C one.**
+**The bss word is where this differs from the canvas core, and the
+difference is the whole difference between an assembly module and a C one.**
 `apps/weave/wcanvas.asm`'s state is initialised bytes inside its own image, so
 its claim is exactly the file. This module is compiled C with a `.bss` the
-file does not carry, so **LOOM claims image + bss** and **the module zeroes
+file does not carry, so **the claim is image + bss** and **the module zeroes
 the tail itself on its first entry** — a flag in its `.data`, which is the
 only place such a flag can live, because a flag inside the region being
-cleared cannot say whether the region has been cleared. Claim the file's size
-alone and the walk's layout table lands outside the claim: a module that draws
-one correct picture and then writes over the heap.
+cleared cannot say whether the region has been cleared. Claim the image's
+size alone and the walk's layout table lands outside the claim: a module that
+draws one correct picture and then writes over the heap. **As a part, that
+is the Makefile's to get right**: `op_fetch` shrinks its claim to the row's
+`len`, so the part `os88pkg.py` is handed is `build/lmpvpart.bin` - the module
+followed by its bss as zeros, read out of its own header (`+4`, `+6`) - and
+LZ4 makes those 5,234 zeros a few dozen bytes of the file.
 
 **The verbs.** Entered by `call far`, `AL` = the verb; `BX`/`CX`/`DX` its
 arguments; `AX` the answer; `BP`, `DS`, `ES`, `SI`, `DI`, `SS:SP` and `DF` as
@@ -327,29 +336,24 @@ about a module: a string literal in here is a byte of a file LOOM has to read
 off a floppy, and LOOM already owns every sentence it prints. `WPVE_MAGIC` 1,
 `WPVE_SECT` 2, `WPVE_CARD` 3, `WPVE_PANE` 4.
 
-**The stamp, and what it catches.** Four words rather than §1.2.2's three —
-magic, ABI, image size and bss size — checked before the module is entered.
-The fourth is not decoration: a module whose bss grew and whose image did not
-would be claimed too small, and that is the one staleness a C module can have
-that an assembly one cannot. They do **not** catch two builds of the same ABI
-at the same two sizes, which is stated rather than implied — the same sentence
-SPEC.md §73.14 writes about its own two words.
+**The stamp is RETIRED with the file**, for §1.2.2's reason: it was four
+words (magic, ABI, image size, bss size) against a stale pair of files, and a
+part has no pair. The header keeps all four words; the Makefile reads the
+last two of them to build the part.
 
-**The refusals name the file** (§10.3):
+**The refusal** is one sentence in the status row, and `op_fetch`'s toast is
+the reason (§10.3):
 
-> `LOOM.WPV is not on this disk.`
-> `LOOM.WPV does not match this program.`
-> `Not enough memory for LOOM.WPV.`
+> `LOOM could not load its preview module.`
 
-`make weavedisk` and `make loomdisk` put LOOM, `LOOM.OVL` and `LOOM.WPV` in
-one folder for exactly this reason, and SPEC.md §19.10's `LOOM/` folder is the
-same rule on the everything disk.
+`make weavedisk` and `make loomdisk` carry it inside `LOOM.O88`, and SPEC.md
+§19.10's `LOOM/` folder is one file of program for the same reason.
 
-**What it costs, counted.** **11,856 bytes of image + 5,234 of bss =
-17,090, one 17KB claim** (measured at the first apps size pass; it was 21KB
-when the module landed), taken the first time the pane is opened and held
-until the instance closes. LOOM's resident image pays only for the seam, the
-loader and the three sentences (~228 bytes).
+**What it costs, counted.** **11,348 bytes of image + 5,234 of bss =
+16,582, one 17KB claim** (21KB when the module landed), taken the first time
+the pane is opened and held until the instance closes. LOOM's resident image
+pays only for the seam and the one sentence; the fetch is the standard's
+(§1.2.5).
 
 **The bridge is GATED, as a package's is.** `apps/cc/os88thunk.asm` is
 included AFTER the compiled C with `CC_THUNK_GATED` defined (SPEC.md §73.9.1),
@@ -358,12 +362,71 @@ as it first was, every gate opened: the whole bridge plus thirty bytes of
 window, file and worker state the module can never reach - 2,060 bytes of
 image and the claim's two KB.
 
-**The disks carry it PACKED** - `$(CC_OVLZ)/LOOM.WPV`, a `'CZ'` file written
-by the overlay's own rule (SPEC.md §73.14.1), 7,996 bytes on disk. Nothing on
-the reading side knows: `lm_pv_need` reads it through `OSAPI_FILE_READ`,
-which is transparent (SPEC.md §20.14), into a claim sized from the unpacked
-header words the package was assembled against, and a hintless copy is
-sniffed and expanded anyway.
+**The disks carry it PACKED, inside `LOOM.O88`** - part 0 is `OP_COMP`,
+16,582 bytes expanded from 7,764 (the image's own 11,348 is most of that; the
+bss is free), expanded by `op_fetch` onto its own claim's base (SPEC.md
+§20.12.7.4). It was a `'CZ'` file beside the package, 7,745 bytes, until
+§1.2.5.
+
+#### 1.2.5 The modules are PARTS of the two packages, and the folder rule went with them
+
+**Both packages carry their second segments inside their own `.O88`**
+(SPEC.md §20.12, §73.14.2), so a Weave disk shows a user one file per
+program where it showed three:
+
+| package | part 0 | part 1 |
+|---|---|---|
+| `WEAVE.O88` | the canvas core, `OP_SEG \| OP_LAZY \| OP_COMP`, 5,087 from 3,205 | the overlay, `CC_OVL_ROW` lazy, 15,250 from 8,818 |
+| `LOOM.O88` | the preview module + its bss, `OP_SEG \| OP_LAZY \| OP_COMP`, 16,582 from 7,764 | the overlay, `CC_OVL_ROW` lazy, 34,573 from 17,007 |
+
+**Every row is LAZY, and that is decided by the table's own order as much as
+by the usage.** SPEC.md §73.14.2's guidance would make an overlay used by
+nearly every session EAGER, and both of these qualify - every bundle open
+runs WEAVE's load path, every project open runs LOOM's. But a lazy row must
+follow every eager one and `CC_OVL_ROW` must be the last, so an eager overlay
+would put the canvas core and the preview module in the CARVE: 5KB claimed by
+every FORM and SHEET that will never draw a sprite, and 17KB by every LOOM
+that never opens Preview. Lazy overlays are what these packages always had -
+WEAVE.OVL and LOOM.OVL were on-demand files - so the behaviour is unchanged,
+and a table with no eager row carries none of the carve's code (SPEC.md
+§20.12.9.3). `OP_NO_LAZYOK` is defined in both: neither package asks "would
+it fit" before a fetch.
+
+**Every fetch reads from HOME.** A lazy part is read out of the package's own
+file by NAME, and a name resolves in the folder the instance stands in
+(SPEC.md §19.2.1). The overlay's fetch is `cc_ovneed`'s home bracket
+(§73.14.2); the canvas core's and the preview module's is the same bracket
+in `apps/weave/wfetch.inc`, reading the same two words `cc_ovinit` banked at
+launch.
+
+**And that dissolves §11.2's folder rule.** The rule was that a document had
+to sit beside the WHOLE program that opened it, because the overlay and the
+sidecars were files resolved in the DOCUMENT's folder after a double-click -
+so `LOOM/` carried a second copy of `WEAVE.O88`, `WEAVE.OVL` and `WEAVE.WSM`
+for the bundles Pack writes there. Now nothing either package reads is
+resolved in the document's folder, and a `.WAB` double-clicked in `LOOM/`
+finds `WEAVE.O88` in `WEAVE/` through the volume's `ASSOC.DAT`, whose row
+names the folder (SPEC.md §54.7.1) and which §54.4.2's sweep reads on every
+volume it asks. The second copy is gone.
+
+**Measured** (this tree; disks off `make weavedisk loomdisk`):
+
+| | before | after |
+|---|---:|---:|
+| `WEAVE.O88` image + bss | 42,418 + 9,196 | 43,324 + 9,296 |
+| `LOOM.O88` image + bss | 42,172 + 4,934 | 42,960 + 5,034 |
+| the runtime on a disk | `WEAVE.O88` 28,868 + `WEAVE.OVL` 8,917 + `WEAVE.WSM` 5,087 = 42,872, three files | **42,098, one file** |
+| the IDE on a disk | `LOOM.O88` 26,838 + `LOOM.OVL` 17,018 + `LOOM.WPV` 7,745 = 51,601, three files | **52,847, one file** |
+| `weave360.img` / `weave720.img` | 160 clusters, 22 files | **116 clusters, 15 files** |
+| `weave.img` / `weave120.img` | 308 clusters, 22 files | **222 clusters, 15 files** |
+| `loom360.img` / `loom720.img` | 157 clusters, 21 files | **113 clusters, 14 files** |
+| `loom.img` / `loom120.img` | 303 clusters, 21 files | **217 clusters, 14 files** |
+
+Each package is a few hundred bytes bigger resident - the standard's lazy
+surface (`op_fetch`, `op_seg`, `op_read`, the toasts) and the bracket, less
+the two stamps and `cc_ovneed`'s file path - and about the same on the disk,
+part-padding and all. What the disks gain is the second runtime: 44 clusters
+at 360KB and 720KB, 86 at 1.2MB and 1.44MB, seven files fewer.
 
 ---
 
@@ -396,15 +459,15 @@ The accepted cost, priced. One typical instance:
 
 | piece | KB |
 |---|---|
-| WEAVE package region (image+bss, §1.2: 60,902 bytes) | ~60 |
+| WEAVE package region (image+bss, §1.2: 52,620 bytes) | ~52 |
 | bundle claim (§2.1; typical 1–24, cap 62) | 1–24 |
 | VM claim (§4.7; default 16, cap 32) | 16 |
 | grid claim (§5.6; only with a `<grid>`) | 0–26 |
 | canvas claim (§6.10.4; only with a `<canvas>`) | 0–8 |
-| `WEAVE.WSM` claim (§1.2.2; only with a `<canvas>`) | 0–5 |
+| the canvas core's claim (§1.2.2, part 0; only with a `<canvas>`) | 0–5 |
 | **typical instance total** | **~80–130** |
 
-`WEAVE.OVL`'s own claim (§1.2.1) is one more once anything has opened, and
+The overlay's own claim (§1.2.1, part 1) is one more once anything has opened, and
 a transient 8KB claim exists only during `saveState`/`loadState` staging
 (§8.3). **Seven claim records at peak against the 8-per-owner cap
 (SPEC.md §50.2) — one spare.** The peak needs a bundle that declares BOTH a
@@ -415,16 +478,16 @@ stage through the VM claim's own scratch at the cost of a bound on state
 size.
 
 **LOOM's own ladder is separate and shorter.** The IDE holds the sources
-claim, `LOOM.OVL`'s (SPEC.md §73.14) and — from the first time Preview is
-opened — `LOOM.WPV`'s 17KB (§1.2.4). Pack adds §11.4's two transients, the
+claim, its overlay's (SPEC.md §73.14.2, part 1) and — from the first time
+Preview is opened — the preview module's 17KB (§1.2.4, part 0). Pack adds §11.4's two transients, the
 62KB output claim and the 50KB scratch, and Preview keeps the first of those
 while the pane is up. Five claim records at peak against the eight:
 
 | piece | KB |
 |---|---|
-| LOOM package region (image+bss, §1.2: 47,746 bytes) | ~47 |
-| `LOOM.OVL` (on demand) | ~35 |
-| `LOOM.WPV` (§1.2.4; only once Preview has been opened) | 0–17 |
+| LOOM package region (image+bss, §1.2: 47,994 bytes) | ~47 |
+| its overlay (part 1, on demand) | ~34 |
+| the preview module (§1.2.4, part 0; only once Preview has been opened) | 0–17 |
 | the sources claim (`LM_CLAIMKB`, `apps/loom/loom.c`) | 29 |
 | Pack's two transients (§11.4), while Pack or Preview runs | 0–112 |
 
@@ -488,7 +551,7 @@ WEAVE started with no `ARG_FILE` (dock click, Finder click on the package)
 puts up a **placeholder card** (`w_paint_deck`, `apps/weave/weave.c`):
 
 > `WEAVE - no bundle open.`
-> `File > Open Bundle... opens a .WAB, and a double-click on one`
+> `Bundle > Open Bundle... opens a .WAB, and a double-click on one`
 > `opens it directly (the extension is declared in the header).`
 
 **The launcher this section was written for is NOT BUILT**: a window listing
@@ -496,7 +559,7 @@ the `.WAB` files in the instance's current directory plus the recents kept in
 `SYSTEM/APPDATA/` (SPEC.md §19.9's bank/GOTO/act/GOTO-back idiom), one row
 per bundle with its 16×16 icon (the ICON section, §2.12) and its header name,
 selecting a row loading it through §1.5's one load path. It is listed in
-§13.2. Until it lands, `File → Open Bundle...` and a double-click are the two
+§13.2. Until it lands, `Bundle → Open Bundle...` and a double-click are the two
 routes into a bundle, and the ICON section is validated (§10.4) and drawn by
 nothing.
 
@@ -523,7 +586,9 @@ field on the card.
 Loom additionally offers **Preview**: the compiled UI stream rendered in a
 child area by the SAME shared source WEAVE paints with (§1.7.1); no bytecode
 runs, and LOOM's status row says
-`Preview: layout and controls only - Run runs the app`. **The pane draws
+`Preview: layout and controls only - Weave runs the app` (LOOM has no Run
+command of its own: Pack writes the `.WAB` and WEAVE runs it, and the line
+once said `Run runs the app` and named a command that is not there). **The pane draws
 and does not arm**: arming a control needs `apps/weave/wact.c`'s
 press/release pair and the field pool underneath it, and firing it needs the
 event ring, which is the VM's — and a Preview is defined as the thing that
@@ -2318,11 +2383,11 @@ function set, and its output for a given source is the same bytes
 `weavesim --pack` would have written for it.
 
 It lives in the **overlay** (§1.2.1) with the rest of the commit. What that
-costs, stated: with `WEAVE.OVL` missing or stale **no bundle opens at all**
-(§1.2.1), so the case where a grid is on screen and its bar cannot compile is
-the case where the module went away between the open and the Enter — a disk
-pulled mid-session. It answers with the sentence naming the overlay, the bar
-keeps the text, and nothing is committed.
+costs, stated: with the overlay unfetchable **no bundle opens at all**
+(§1.2.1), and once fetched it stays until the instance closes, so a grid on
+screen has its compiler. The refusal arm stays anyway, in the shape every
+tenant keeps (§1.2.1): it answers with the sentence naming the overlay, the
+bar keeps the text, and nothing is committed.
 Its refusals are §10.5's, reduced to one line: the runtime has no file and no
 line number to name, so the toast reads `Formula: <message>` with §10.5's own
 message text, and the bar keeps the text the user typed so it can be fixed
@@ -3485,18 +3550,17 @@ The C64-SPEC §1.4 shape, copied: window up, content area names the file
 double-click that reaches a deleted file and an empty Deck directory both
 land here.
 
-**So does a missing sidecar**, and it names the sidecar rather than the
-bundle: `WEAVE.OVL is missing or stale; no bundle can open.` (§1.2.1), and —
-for a bundle that declares a `<canvas>` and only then — `WEAVE.WSM is not on
-this disk.` / `WEAVE.WSM does not match this program.` / `Not enough memory
-for WEAVE.WSM.` (§1.2.2). A disk somebody has taken the package off without
-its two modules is the case, it is paid once and visibly, and it is why
-`make weavedisk` puts all four in one folder.
+**So does a module that cannot be fetched**, and it names the module rather
+than the bundle: `WEAVE could not load its overlay; no bundle can open.`
+(§1.2.1), and — for a bundle that declares a `<canvas>` and only then —
+`WEAVE could not load its canvas core.` (§1.2.2). Both are parts of
+`WEAVE.O88` (§1.2.5), so the cause is never a missing file: it is memory,
+the read, or the program's floppy taken out of the drive it was launched
+from, and `op_fetch`'s toast has already said which.
 
-**LOOM's preview module refuses in the same three sentences** (§1.2.4), and
-they are LOOM's rather than the pane's: `LOOM.WPV is not on this disk.` /
-`LOOM.WPV does not match this program.` / `Not enough memory for LOOM.WPV.`
-The pane does **not** come up when one of them fires — there would be nothing
+**LOOM's preview module refuses the same way** (§1.2.4), and the sentence is
+LOOM's rather than the pane's: `LOOM could not load its preview module.`
+The pane does **not** come up when it fires — there would be nothing
 in it to look at — so the sentence goes to the status row and the editor
 stays. It is checked when Preview is opened and never inside the paint, which
 is §1.2.4's own rule and why a `W_PAINT` can far-call the module without
@@ -3540,12 +3604,12 @@ one case per rule, §12):
 
 | trigger | message |
 |---|---|
-| unknown element | `<zap>: not a Weave element; the inventory is closed (WEAVE-SPEC 3.2)` |
+| unknown element | `<zap>: not a Weave element; the inventory is closed` |
 | unknown attribute | `button: no such attribute "pad"; style is bold/invert/align only - two of three adapters are 1bpp` |
-| hover vocabulary | `onhover: no hover exists; pointer movement reaches a package only between press and release (SPEC.md 13.7)` |
-| color vocabulary | `color: no color here; a palette is a canvas's (WEAVE-SPEC 9.2.1) - grey rounds to black on 1bpp (SPEC.md 39.4)` |
-| palette name | `canvas: paper="beige" is not one of the sixteen colours (WEAVE-SPEC 6.10.7)` |
-| pen pair | `canvas: paper="blue" against ink="red": the two share no plane either way and GFX_BLIT1 refuses the pair (SPEC.md 5.4.2.2)` |
+| hover vocabulary | `onhover: no hover exists; pointer movement reaches a package only between press and release` |
+| color vocabulary | `color: no color here; a palette is a canvas's - grey rounds to black on 1bpp` |
+| palette name | `canvas: paper="beige" is not one of the sixteen colours` |
+| pen pair | `canvas: paper="blue" against ink="red": the two share no plane either way and GFX_BLIT1 refuses the pair` |
 | oversize bundle | `bundle is 68112 bytes; the cap is 63488 - the directory size must stand for the resident ask` |
 | ontick over budget | `ontick handler is 91 ops; the cap is 64 - per-frame JS does not fit 10-30k ops/s` |
 | too many atoms | `188 app atoms; the cap is 187 - atom ids are one byte` |
@@ -3555,6 +3619,15 @@ one case per rule, §12):
 Unknown events, bad arity, undeclared identifiers, frame/stack overdepth
 and every §3/§4/§5 limit refuse in the same voice: what was written, the
 bound, the fact.
+
+**A sentence carries no section number.** The reader of a refusal is the
+author of the app, on a machine with no copy of this document, so a
+`(WEAVE-SPEC 3.2)` or `(SPEC.md 13.7)` at the end of the line is noise to
+them - and on LOOM's sidebar it was the part cut off at the window's edge.
+The fact the citation pointed at is already in the sentence; the section is
+in the packer's source beside the check. The same holds for every other
+string either program shows (LOOM's empty screen once ended
+`(WEAVE-SPEC 1.5, 11.2)`).
 
 **The colour row says where colour LIVES** rather than denying it exists:
 a `<canvas>` takes one (§9.2.1), and a refusal that denies a feature the
@@ -3580,7 +3653,7 @@ the runtime is a few hundred bytes under (§1.2).
 The `.WFX` LINE FORMAT keeps its own wording: a cell's left-hand side and a
 plain numeric cell are §11.2's line grammar, not §5.1's formula grammar, so
 `"C9 is outside the 3x4 grid"` and `"1.23456: at most 4 fraction digits;
-16.16 resolves to 1/65536 (WEAVE-SPEC 5.1)"` are the sheet file's sentences.
+16.16 resolves to 1/65536"` are the sheet file's sentences.
 
 ### 10.6 Script errors — at run time
 
@@ -3695,43 +3768,39 @@ Nothing is miscompiled — a project with no `<grid>` never reads a `.WFX` at
 all, and both packers do the same thing for the same reason — but the file
 switcher shows a file the project does not use.
 
-**A folder per project is what §11.2 describes, and a DISTRIBUTION DISK
-cannot build one.** The fence is SPEC.md §73.14's, and it cuts both ways. A
-double-click on a source leaves the launched instance standing in the
-DOCUMENT's directory (SPEC.md §54.9, §19.2.1) and `LOOM.OVL` is resolved in
-*that* directory, so LOOM opened from `PROJECTS/FORM/` has not got the half
-of itself that compiles: `LOOM.OVL is missing; a project cannot be opened.`
-`File → Open Project…` is no different — the standard file dialog walks the
-volume by moving the instance's own current directory, so navigating into
-`PROJECTS/FORM` moves it there too and the very next command refuses. And a
-bundle Pack writes beside its sources is a bundle a double-click opens with
-WEAVE, whose own two modules have to be in that directory too (§10.3).
+**A folder per project is what §11.2 describes, and since §1.2.5 a
+distribution disk can hold one.** Until then the fence was SPEC.md §73.14's
+and it cut both ways: a double-click on a source left the launched instance
+standing in the DOCUMENT's directory (SPEC.md §54.9, §19.2.1) and `LOOM.OVL`
+was resolved in *that* directory, so LOOM opened from `PROJECTS/FORM/` had not
+got the half of itself that compiles; `File → Open Project…` was no different;
+and a bundle Pack wrote beside its sources needed WEAVE's own two modules in
+that directory too. So the family disks shipped two WHOLE folders, `LOOM/`
+carrying a second copy of the runtime (~42KB a disk), and wave 7 photographed
+the per-project layout refusing by both routes.
 
-So **every document on a distribution disk has to sit beside the WHOLE of the
-program that opens it**, and the family disks (`make weavedisk`, `make
-loomdisk`) are two such folders — the compiled programs apart from the
-source they were built from, which is the one separation the fence allows:
+Both packages now carry their modules as PARTS fetched from the folder each
+was launched from (§1.2.5), so nothing is resolved in a document's folder any
+more, and the family disks are two folders that each hold ONE program:
 
 | folder | carries | because |
 |---|---|---|
-| `WEAVE/` | `WEAVE.O88`, `WEAVE.OVL`, `WEAVE.WSM`, `FORM.WAB`, `SHEET.WAB`, `PONG.WAB`, and `BUNDLES=` | a `.WAB` opens only beside the runtime's three files (§10.3) |
-| `LOOM/` | `LOOM.O88`, `LOOM.OVL`, `LOOM.WPV`, the demo sources — **and a second copy of `WEAVE.O88`, `WEAVE.OVL`, `WEAVE.WSM`** | a `.WML` opens only beside LOOM's three; and Pack writes its bundle BESIDE the sources (§11.4), so the first run of a bundle built on the machine is a double-click on `LOOM/<X>.WAB`, which needs the runtime *there* — without it the IDE builds programs the disk cannot run |
+| `WEAVE/` | `WEAVE.O88`, `FORM.WAB`, `SHEET.WAB`, `PONG.WAB`, and `BUNDLES=` | the compiled programs beside the runtime - tidiness, no longer a fence |
+| `LOOM/` | `LOOM.O88` and the demo sources | the IDE beside what it edits; Pack writes its bundle BESIDE the sources (§11.4), and a double-click on `LOOM/<X>.WAB` opens `WEAVE.O88` out of `WEAVE/` - the volume's `ASSOC.DAT` names the folder (SPEC.md §54.7.1) |
 | root | `CATALOG.TXT`, `SYSTEM/APPDATA/` | the note that says the above in the reader's words; the state folder nothing is launched from (SPEC.md §19.9) |
 
-The runtime's second copy is ~78KB a disk and it is a copy and never a move
-(SPEC.md §24.3's rule for the core packages, applied here): the 360KB Weave
-disk is 289 of 354 clusters with the family whole (`make loomdisk`'s, the
-same two folders without `CATALOG.TXT`, 286). `LOOM/` ships with 32
+The 360KB Weave disk is 116 of 354 clusters with the family whole (`make
+loomdisk`'s, the same two folders without `CATALOG.TXT`, 113), where it was
+160 with the second runtime (§1.2.5 has the table). `LOOM/` ships with 32
 directory slots (`--dir-slots`) because the kernel does not grow a directory
-(SPEC.md §18.5) and Pack SAVES into that folder — on a 1.44MB disk a cluster
-is one sector, sixteen entries, and the folder ships with fourteen files.
-`weavesmoke` opens `WEAVE/` before the bundle and `weaveprev` opens `LOOM/`
-before the source, so both routes are driven on every soak run.
+(SPEC.md §18.5) and Pack SAVES into that folder. `weavesmoke` opens `WEAVE/`
+before the bundle and `weaveprev` opens `LOOM/` before the source, so both
+routes are driven on every soak run.
 
-**A folder per project remains the right shape for a project a person
-KEEPS** — sources edited from a LOOM launched beside its own files, on a
-data disk of their own — and it is what `weavesim --pack PROJECT/` takes on
-the host, where no overlay has to be found.
+**A folder per project is the right shape for a project a person KEEPS** —
+sources edited from a LOOM launched anywhere, on any disk the association
+can find LOOM from - and it is what `weavesim --pack PROJECT/` takes on the
+host, where no module has to be found.
 
 ### 11.3 What the packer validates
 

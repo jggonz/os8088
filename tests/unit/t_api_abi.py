@@ -33,6 +33,9 @@ can simply be decoded:
                                                dw <target>      (rare, 6)
     OSAPI_JCELL  E9 lo hi                      jmp near <stub>  (3)
     OSAPI_FCELL  9A tt tt ss ss CB             call COLD_SEG:<target>/retf (6)
+    (FJSLOT)     1E 0E 1F  EA tt tt ss ss      push ds/push cs/pop ds/
+                                               jmp COLD_SEG:<target> (8) - the
+                                               .cold body pops DS and retf's
     OSAPI_ICELL  2E <mov with one memory operand> [98] CB
                                                the INLINE cell: the routine
                                                itself, through CS (5 or 6)
@@ -252,7 +255,7 @@ def slots():
     return out
 
 
-SHAPES = "1E0E1F E8.. 1FCB | 55E8.. tttt | 55BD.. E9.. | E9.. | 9A.. ssss CB | 2E <mov> [98] CB"
+SHAPES = "1E0E1F E8.. 1FCB | 1E0E1F EA.. ssss | 55E8.. tttt | 55BD.. E9.. | E9.. | 9A.. ssss CB | 2E <mov> [98] CB"
 
 # The INLINE cells (SPEC.md 20.3): published name -> (direction, register,
 # operand, trailing ops). The operand is a kernel variable's label, or
@@ -344,6 +347,13 @@ def decode(blob, addr, bodies, cold_seg):
 
     if c[0:3] == b"\x1e\x0e\x1f" and c[3] == 0xE8 and c[6:8] == b"\x1f\xcb":
         return "SLOT", rel(addr + 6, 4), ".text"
+    if c[0:3] == b"\x1e\x0e\x1f" and c[3] == 0xEA:
+        # the SLOT's DS switch with a FAR JUMP for its call (SPEC.md 20.3):
+        # the .cold body pops the DS the cell pushed and returns for it
+        seg = imm(6)
+        if seg != cold_seg:
+            return None, "FJSLOT to segment 0x%04X, which is not COLD_SEG (0x%04X)" % (seg, cold_seg), None
+        return "FJSLOT", imm(4), ".cold"
     if c[0] == 0x55 and c[1] == 0xE8:
         # the 6-byte RARE cell (SPEC.md 20.3): push bp / call <kind> / dw target
         body = rel(addr + 4, 2)
@@ -418,7 +428,7 @@ def main():
     equ = os88sym.equates()
     bodies = {b: off[b] for b in ("api_x", "api_rs", "api_rx", "api_rxc", "api_rn", "api_rsc")}
     LEN = {"SLOT": 8, "RSLOT": 6, "RXCELL": 6, "RCXCELL": 6, "RNCELL": 6, "RCSLOT": 6,
-           "XCELL": 7, "FARCELL": 6, "JSLOT": 3}
+           "XCELL": 7, "FARCELL": 6, "JSLOT": 3, "FJSLOT": 8}
     tend = off["osapi_table_end"]
     starts = []
     a = TABLE_BASE

@@ -42,15 +42,14 @@ Two players alternate after a death, retaining separate scores, lives,
 weapons and stages; a returning player restarts their current stage.
 High scores last until the application closes. AdLib plays FM music and
 short percussive effects. Sound Blaster DSP 2+ adds recorded gunfire and
-explosions when 1942.SFX is alongside the game and card sound is enabled.
+explosions when card sound is enabled.
 Effects use 8kHz mono samples and DMA, with no software mixer or refill task;
 explosions take priority over shots. Missing samples or an unsupported card
 fall back to FM; speaker tones remain available. M mutes everything and P
 pauses music and cancels effects. Sound stops on returning to the desktop.
 Gameplay loops a lower, quicker variation of the Game Over melody.
 Music uses note data from 1942.nes in cartridge builds. Richer sound does not
-imply faster XT gameplay. The optional sample bank is omitted from the 360KB
-original-art disk for space, but included on the other game disks.
+imply faster XT gameplay. The sample bank rides inside 1942.O88 on every disk.
 Samples: kurt (Gunshots) and Spring Spring (Mechanical Explosion), CC0 1.0,
 from OpenGameArt.org. Source links and edits: apps/1942/sfx/CREDITS.md.
 
@@ -65,9 +64,10 @@ No cartridge or extracted graphics are downloaded or committed.
 This selects the committed original art, with cyclic scrolling scenery.
 
 The resulting build/1942-360.img and build/1942.img are game disks, not
-boot disks. Boot os8088 in A: and mount the game disk in B:. Keep 1942.O88
-and its .GFX, .V42 and .C42 companions together. The cartridge is only a
-build input; the XT runs the compiled native package and graphics files.
+boot disks. Boot os8088 in A: and mount the game disk in B:. 1942.O88 is
+the whole game: its graphics banks, scenery and samples are packed inside it,
+and only the ones for the display in use are read. The cartridge is only a
+build input; the XT runs the compiled native package.
 
 GRAPHICS
 The desktop splash uses a native-resolution green and white vector logo on
@@ -79,7 +79,8 @@ on a 4.77MHz XT, caching completed art. Selection redraws only the pointer.
 A loading message appears before graphics I/O. Terrain uses a circular
 cache, hardware scrolling and cached sprites to reduce drawing work.
 The HUD stays fixed. Pause freezes the route; resume retains its position.
-Three 64KB claims hold graphics/canvas storage; the XT target is 640KB RAM.
+The desktop holds a 61KB canvas; fullscreen adds the sprite banks for its
+display, about 18KB on VGA and 53KB on CGA. The XT target is 640KB RAM.
 
 ARTWORK
 Without a cartridge, apps/1942/art/ supplies the original project artwork.
@@ -93,6 +94,6 @@ TEST
   make 1942test
   make 1942soundtest
 Checks desktop artwork, VGA/CGA gameplay, cartridge pacing, combat,
-rewards, stage/player transitions, file validation and desktop restoration
+rewards, stage/player transitions, load refusals and desktop restoration
 on 4.77MHz MartyPC. Guest-cycle timing includes drawing and presentation;
 disk loading is separate.

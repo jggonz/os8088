@@ -926,9 +926,44 @@ zt_flag2:
     or bl, 1
 .put:
     mov ax, 0x10
-    call zm_pw16
-    pop bx
+    call zm_pw16                    ; ...whose Flags 2 hook (zt_f2sync) puts
+    pop bx                          ; Story > Transcript's label right
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; zt_f2sync - the story WROTE Flags 2: stream 2 follows its bit 0 (Standard 7.3)
+; in:  ES = the story claim (zm_pb16/zm_pw16, straight after the store)
+; out: nothing; preserves all registers
+;
+; A v1-3 story has no @output_stream: Infocom's SCRIPT and UNSCRIPT verbs set
+; and clear the bit with a store, and the interpreter is expected to notice -
+; real Frotz watches exactly this address. Without it SCRIPT printed its own
+; "Here begins a transcript" and nothing was ever buffered.
+; -----------------------------------------------------------------------------
+zt_f2sync:
+    push ax
+    mov al, [es:ZMH_FLAGS2 + 1]
+    and al, 1
+    mov [zt_s2on], al
+    call zf_menufix                 ; Story > Transcript says Start or Stop
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; zt_f2keep - re-stamp bit 0 after zm_setup re-read the header
+; in:  ES = the story claim; out: nothing; preserves all registers
+;
+; A restart or a restore brings Flags 2 back off disk with the bit as it was
+; THEN, and the Standard marks it as one that survives both (11.1, "Rst").
+; zi_load clears [zt_s2on] before the first zm_setup, so a new story still
+; starts with it off.
+; -----------------------------------------------------------------------------
+zt_f2keep:
+    cmp byte [zt_s2on], 0
+    je .out
+    or byte [es:ZMH_FLAGS2 + 1], 1
+.out:
     ret
 
 

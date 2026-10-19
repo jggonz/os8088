@@ -201,9 +201,21 @@ te_entry:
     OS88_ALTENTER_ARM               ; SPEC.md 11.2.1.1: nothing tracks a
                                     ; scancode until something asks, and both
                                     ; halves of the chord ride on that map
-    OS88_REGION_MOVABLE te_escape.stay  ; ...a bare `ret` of ours IS the proc
+    OS88_REGION_MOVABLE_NOKEEP te_escape.stay  ; ...a bare `ret` of ours IS
+                                    ; the proc, and the NOKEEP form because
+                                    ; nothing below reads AX, DX or the flags
+                                    ; it spends: DX was te_onclick already, AX
+                                    ; is re-loaded at every use, and the CF this
+                                    ; proc owes the loader is the `clc` at the
+                                    ; foot (apps size pass 2, -6)
     mov word [te_line + LN_BUF], te_hbuf    ; **THE BLOCK'S BUFFER WORDS, and
     mov word [te_line + LN_MAX], TE_HOSTMAX ; they are not optional**: bss
+    mov byte [te_line + LN_FOCUS], 1        ; ...and the BOX HAS THE KEYS at
+                                            ; open: a host is the one thing a
+                                            ; fresh window can be told, and
+                                            ; typing went nowhere until the
+                                            ; box was clicked. te_toggle hands
+                                            ; them to the session on connect
                                             ; arrives ZEROED (SPEC.md 21 step
                                             ; 5), so an unset LN_BUF points at
                                             ; offset 0 - the package's own
@@ -226,8 +238,8 @@ te_entry:
                                     ; content origin is what earns font_run's
                                     ; single-store path on the two mono
                                     ; adapters (SPEC.md 11.94)
-    push si
-    mov si, te_menus
+    mov si, te_menus                ; (no frame round SI: .out pops the
+                                    ; caller's, and nothing between reads it)
     call OSAPI_MENU_SET             ; ...and BX is [te_win] from here on: this
     mov al, 1                       ; and the three slots below preserve every
     call OSAPI_WM_SIZABLE           ; register. **RESIZABLE, AND NOTHING REFLOWS.**
@@ -246,9 +258,7 @@ te_entry:
                                     ; for OSAPI_ABOUT_SET's reason below
     mov si, te_about
     call OSAPI_ABOUT_SET            ; 'About Telnet' under our name in the bar
-    pop si                          ; (SPEC.md 12.2). It preserves the flags,
-                                    ; which matters here: wm_create's CF above
-                                    ; still has to ride out of this proc
+                                    ; (SPEC.md 12.2)
     clc
 .out:
     pop si
@@ -262,7 +272,13 @@ te_entry:
 ; resized, moved across an extended desktop's seam, or find itself on an
 ; adapter of a different size (SPEC.md 39.7/11.98) - and a control drawn from
 ; a remembered rect is a control the hit-test cannot find.
+; te_in - the same, for a CALLBACK: it records SI as [te_win] first and falls
+; into te_layout. Every callback starts with that pair, so it is one call at
+; each of four sites and the store executes exactly as it did (apps size pass
+; 2, -12 bytes, no instruction added to any path).
 ; -----------------------------------------------------------------------------
+te_in:
+    mov [te_win], si
 te_layout:
     push ax
     push bx
@@ -279,11 +295,9 @@ te_layout:
     ; question for the far display - there is no per-display depth to ask
     ; (SPEC.md 39.14 publishes none), so it is stated rather than hidden.
     call OSAPI_VIDEO                ; DH = bits per pixel, 4 or 1
-    cmp dh, 1
-    mov dh, 0
-    ja .colour
-    mov dh, 1
-.colour:
+    cmp dh, 2                       ; CF = 1bpp...
+    sbb dh, dh
+    neg dh                          ; ...as the 0/1 con_mono is, branch-free
     mov [con_mono], dh
     call te_ice_label               ; ...and the Session item follows the
     call tz_label                   ; adapter, and Receive File follows the
@@ -296,31 +310,20 @@ te_layout:
     mov [con_oy], dx
     mov bx, si
     call OSAPI_WM_GEOM              ; CX = content width, DX = height - and it
-    mov [te_cw], cx                 ; takes BX, which WM_CONTENT has spent
-    mov [te_chh], dx
+    mov [te_cw], cx                 ; takes BX, which WM_CONTENT has spent.
+    mov [te_chh], dx                ; AX is still the content's left: GEOM
+                                    ; preserves everything but CX and DX
     mov word [con_topy], TE_TOPY     ; ...and where OUR chrome ends, because the
                                     ; console does not know this window has a
                                     ; host field above its text (os88con.inc)
-    mov cx, [te_ox]
-    add cx, TE_PAD
-    mov [te_line + LN_X1], cx
-    add cx, [te_cw]
-    sub cx, TE_PAD*2 + 88           ; ...the Connect button's width beside it
-    mov [te_line + LN_X2], cx
-    mov cx, [con_oy]
-    add cx, TE_PAD
-    mov [te_line + LN_Y1], cx
-    add cx, TE_BAR - 1
-    mov [te_line + LN_Y2], cx
-    mov cx, [te_line + LN_X2]
-    add cx, 6
-    mov [te_btn + 0], cx
-    add cx, 78
-    mov [te_btn + 4], cx
-    mov cx, [te_line + LN_Y1]
-    mov [te_btn + 2], cx
-    mov cx, [te_line + LN_Y2]
-    mov [te_btn + 6], cx
+    ; --- every rect below off two registers, not off the words just stored --
+    ; (apps size pass 2: the same arithmetic, 41 bytes shorter, and faster on
+    ; the path every paint, click, key and worker draw runs.) CX becomes the
+    ; content box's FAR edge, so the host box's right end and the visible
+    ; column count are both one subtraction from it.
+    add cx, ax                      ; CX = te_ox + te_cw, the far edge
+    add ax, TE_PAD
+    mov [te_line + LN_X1], ax
 
     ; --- THE TEXT PEN, AND IT IS 8-ALIGNED (SPEC.md 6.1) --------------------
     ; font_run's fast path - the one that writes each cell old-to-final in a
@@ -331,38 +334,24 @@ te_layout:
     ; glyphs arrive. That is the flicker. os88line_pen is the same fix in the
     ; host box above it, and here it also earns the SCROLL, which refuses a
     ; rect whose x1 is not a byte column.
-    mov cx, [te_ox]
-    add cx, TE_PAD + 7
-    and cx, 0FFF8h
-    mov [con_px], cx
-
-    ; --- and how many rows the LIVE content box can show --------------------
-    ; CON_ROWS is 25 and the screen is fixed, but the WINDOW is not: wm_fit
-    ; clamps a 190-row template to the desktop band, which on CGA is 155. The
-    ; rows that did not fit were drawn anyway - the gfx primitives clip to the
-    ; SCREEN, not to the window (SPEC.md 39.7) - so the bottom of the terminal
-    ; was painted over the dock. The window shows the LAST con_vrows rows,
-    ; because a terminal's new output is at the bottom and showing the top of
-    ; the buffer on a short screen means never seeing what just arrived.
-    mov ax, [te_chh]
-    sub ax, TE_TOPY + TE_STATH
-    jns .rows
-    xor ax, ax
-.rows:
-    mov cl, 3
-    shr ax, cl
-    or ax, ax
-    jnz .rnz
-    inc ax                          ; ...never zero: one row is drawn even on
-.rnz:                               ; a window nothing can be read in
-    cmp ax, CON_ROWS
-    jbe .rset
-    mov ax, CON_ROWS
-.rset:
-    mov [con_vrows], ax
-    mov cx, CON_ROWS
-    sub cx, ax
-    mov [con_vtop], cx
+    add ax, 7                       ; (te_ox + TE_PAD + 7) & 0FFF8h: the mask
+    and al, 0F8h                    ; is AL's alone, AH passing through it
+    mov [con_px], ax
+    xchg ax, cx                     ; AX = far edge, CX = the pen
+    sub cx, ax                      ; CX = -(pixels from the pen to the edge)
+    sub ax, TE_PAD + 88             ; ...the Connect button's width beside it
+    mov [te_line + LN_X2], ax
+    add ax, 6
+    mov [te_btn + 0], ax
+    add ax, 78
+    mov [te_btn + 4], ax
+    mov ax, [con_oy]
+    add ax, TE_PAD
+    mov [te_line + LN_Y1], ax
+    mov [te_btn + 2], ax
+    add ax, TE_BAR - 1
+    mov [te_line + LN_Y2], ax
+    mov [te_btn + 6], ax
 
     ; --- and how many COLUMNS it can show -----------------------------------
     ; **THIS IS NOT REFLOW AND MUST NOT BECOME IT.** The screen is 80 columns
@@ -379,16 +368,14 @@ te_layout:
     ; it, because font_run clips to the SCREEN and not to the window
     ; (SPEC.md 39.7) - which is why this had to land with WM_SIZABLE and not
     ; after it.
-    mov ax, [te_ox]
-    add ax, [te_cw]
-    sub ax, [con_px]                 ; ...from the ALIGNED pen to the far edge
-    jns .cols
+    xchg ax, cx
+    neg ax                          ; AX = te_ox + te_cw - con_px, and SF its
+    jns .cols                       ; sign, which NEG sets as SUB would
     xor ax, ax
 .cols:
     mov cl, 3
-    shr ax, cl
-    or ax, ax
-    jnz .cnz
+    shr ax, cl                      ; ZF from the SHIFT: a count in CL is
+    jnz .cnz                        ; never zero, so it sets the flags
     inc ax
 .cnz:
     cmp ax, CON_COLS
@@ -396,6 +383,33 @@ te_layout:
     mov ax, CON_COLS
 .cset:
     mov [con_vcols], ax
+
+    ; --- and how many rows the LIVE content box can show --------------------
+    ; CON_ROWS is 25 and the screen is fixed, but the WINDOW is not: wm_fit
+    ; clamps a 190-row template to the desktop band, which on CGA is 155. The
+    ; rows that did not fit were drawn anyway - the gfx primitives clip to the
+    ; SCREEN, not to the window (SPEC.md 39.7) - so the bottom of the terminal
+    ; was painted over the dock. The window shows the LAST con_vrows rows,
+    ; because a terminal's new output is at the bottom and showing the top of
+    ; the buffer on a short screen means never seeing what just arrived.
+    xchg ax, dx                     ; AX = [te_chh], still in DX from GEOM
+    sub ax, TE_TOPY + TE_STATH
+    jns .rows
+    xor ax, ax
+.rows:
+    mov cl, 3
+    shr ax, cl
+    jnz .rnz
+    inc ax                          ; ...never zero: one row is drawn even on
+.rnz:                               ; a window nothing can be read in
+    cmp ax, CON_ROWS
+    jbe .rset
+    mov ax, CON_ROWS
+.rset:
+    mov [con_vrows], ax
+    mov cx, CON_ROWS
+    sub cx, ax
+    mov [con_vtop], cx
     pop dx
     pop cx
     pop bx
@@ -408,7 +422,9 @@ te_paint:
     push dx
     push si
     push di
-    mov [te_win], si
+    call te_in                      ; [te_win] = SI and the layout - which
+                                    ; reads neither tz_cancelck's flag nor
+                                    ; the worker, so it may come first
     call tz_cancelck                ; **A W_PAINT A SECOND AFTER THE DIALOG WENT
                                     ; UP IS THE CANCEL** (SPEC.md 70.11.4), and
                                     ; the grace period is the whole of the fix:
@@ -419,8 +435,28 @@ te_paint:
                                     ; paint reaches us. Unarmed, it skipped
                                     ; every transfer before the user could
                                     ; answer
-    call te_hire
-    call te_layout
+    ; --- te_hire, inline: the ONE worker, on the first paint ---------------
+    ; Not at launch: the window must exist and be drawn before anything can
+    ; fail into its status line. (Inline since apps size pass 2 - it had this
+    ; one caller, and the call, the ret and its AX/BX frame were 14 bytes.)
+    cmp byte [te_spawned], 1
+    je .hired
+    mov ax, te_worker
+    mov bx, si                      ; = [te_win], te_in having just stored it
+    call OSAPI_TASK_SPAWN
+    jc .hired
+    mov byte [te_spawned], 1
+    ; ...AND THE REGION CANNOT MOVE WITHOUT THIS (SPEC.md 66.6.2): the
+    ; kernel wrote our segment into this worker's frame before its
+    ; first instruction, so mem_frameless pins a region with an
+    ; undeclared worker however that region is declared. What a restart
+    ; costs is one pass of the loop - the park is inside
+    ; OSAPI_TASK_ALIVE and nowhere else (this package is not
+    ; OSAPI_MEM_PARKSAFE), which is the TOP of the loop, and every byte
+    ; that outlives a pass is a static and moves with us. NOKEEP: AX is
+    ; the frame's, and no flag is read before te_chrome sets its own.
+    OS88_WORKER_RESTARTABLE_NOKEEP te_worker
+.hired:
     call te_chrome
     call te_screen
     call te_promise                 ; a full paint settles every debt, so the
@@ -541,20 +577,32 @@ te_status:
 
 ; --- te_screen - every row of the terminal (a repaint owes all of them) -----
 te_screen:
-    call te_wscroll                 ; **A FULL PAINT MAY NOT SKIP A FRAME**: it
-                                    ; owes every row, and there is no next pass
-                                    ; that will come back for it. The hold is a
-                                    ; con_cmove of at most 2,000 cells, so the
-                                    ; wait is the gfx lock's own shape
+    ; --- te_wscroll, inline: wait out a half-done scroll (the w3 review's
+    ; MAJOR 1). **A FULL PAINT MAY NOT SKIP A FRAME**: it owes every row, and
+    ; there is no next pass that will come back for it. The hold is a
+    ; con_cmove of at most 2,000 cells, so the wait is the gfx lock's own
+    ; shape. OSAPI_TASK_YIELD and not a spin: the worker holds [con_scrbusy]
+    ; across one con_cmove and needs a slice to finish it, and this runs on
+    ; the UI task. BOUNDED, because a worker that died mid-scroll must not
+    ; take the UI task with it - 2,000 yields is far past any real hold.
+    push cx
+    mov cx, 2000
+.w:
+    cmp byte [con_scrbusy], 0
+    je .wout
+    call OSAPI_TASK_YIELD
+    loop .w
+.wout:
+    pop cx
     call con_markall
     cmp byte [tz_pan], 0
     je .rows                        ; a transfer is up: the panel has the
-    call tz_panel                   ; terminal's area and the marks just set are
-    ret                             ; what puts the text back afterwards
+    jmp tz_panel                    ; terminal's area and the marks just set are
+                                    ; what puts the text back afterwards
 .rows:
     call con_rows_owed
-    call con_takescroll              ; **AND THE SCROLL DEBT, WHICH IT DID NOT.**
-    ret                             ; Every row has just been drawn from the
+    jmp con_takescroll              ; **AND THE SCROLL DEBT, WHICH IT DID NOT.**
+                                    ; Every row has just been drawn from the
                                     ; buffer, so a pending "blit the pixels up
                                     ; by N" is not owed - and spending it is
                                     ; not harmless. con_scrollpaint moves the
@@ -570,24 +618,6 @@ te_screen:
                                     ; worker pass blits a screen that was
                                     ; already right
 
-; -----------------------------------------------------------------------------
-; te_wscroll - wait out a half-done scroll (the w3 review's MAJOR 1)
-; OSAPI_TASK_YIELD and not a spin: the worker holds [con_scrbusy] across one
-; con_cmove and needs a slice to finish it, and this runs on the UI task.
-; BOUNDED, because a worker that died mid-scroll must not take the UI task with
-; it - 2,000 yields is far past any real hold.
-; -----------------------------------------------------------------------------
-te_wscroll:
-    push cx
-    mov cx, 2000
-.w:
-    cmp byte [con_scrbusy], 0
-    je .out
-    call OSAPI_TASK_YIELD
-    loop .w
-.out:
-    pop cx
-    ret
 te_onup:                            ; ...and AX and BX are the only two
     push ax                         ; anything here writes: os88ui_btnup and
     push bx                         ; btndrag keep the rest, and so do
@@ -596,7 +626,8 @@ te_onup:                            ; ...and AX and BX are the only two
     or ax, ax
     jz .uout
     call te_toggle
-    call te_button                  ; the caption follows the state
+    call te_chrome                  ; the caption follows the state, and the
+                                    ; field's caret the focus te_toggle moved
 .uout:
     pop bx
     pop ax
@@ -616,8 +647,7 @@ te_onclick:
     push dx
     push si
     push di
-    mov [te_win], si
-    call te_layout
+    call te_in                      ; [te_win] = SI, then te_layout
     call te_abdismiss               ; ...and by the click that dismisses them
     jc .out
                                     ; **NO `or ax, ax` HERE.** It tested the
@@ -661,8 +691,7 @@ te_onkey:
     push dx
     push si
     push di
-    mov [te_win], si
-    call te_layout
+    call te_in                      ; [te_win] = SI, then te_layout
     call te_abdismiss               ; the credits are dismissed by the key
     jc .out                         ; that dismisses them, and that key does
                                     ; nothing else (SPEC.md 12.2's shape)
@@ -982,26 +1011,12 @@ te_reply:
 .out:
     ret
 
-; --- te_retry - the held reply, at the TOP of the next worker pass -----------
-te_retry:
-    push cx
-    push si
-    cmp byte [te_pndn], 0
-    je .out
-    mov cl, [te_pndn]
-    xor ch, ch
-    mov si, te_pnd
-    call te_enq
-    jc .out
-    mov byte [te_pndn], 0
-.out:
-    pop si
-    pop cx
-    ret
-
 ; -----------------------------------------------------------------------------
 ; te_toggle - the Connect / Close button, and Return in the host box
 ; -----------------------------------------------------------------------------
+%if TS_OPEN != 1 || TS_WAIT != TS_OPEN + 1
+  %error "te_toggle tests TS_OPEN..TS_WAIT as `dec`, then one unsigned compare"
+%endif
 te_toggle:
     push ax
     mov al, [te_state]
@@ -1020,11 +1035,14 @@ te_toggle:
                                     ; are in the browser (SPEC.md 71.8), and
                                     ; what follows a finished session is a new
                                     ; one
-    cmp al, TS_OPEN
-    je .out                         ; ...on its way: a second click is not a
-    cmp al, TS_WAIT                 ; second connection
-    je .out
+    dec ax                          ; TS_OPEN or TS_WAIT, one unsigned range
+    cmp al, TS_WAIT - TS_OPEN       ; (AH is the frame's, popped at .out)
+    jbe .out                        ; ...on its way: a second click is not a
+                                    ; second connection
     mov byte [te_state], TS_OPEN    ; TS_IDLE, TS_DOWN and TS_ERR all connect
+    mov byte [te_line + LN_FOCUS], 0 ; ...and the keys go to the SESSION, as
+                                    ; Return already gave them: a click on
+                                    ; Connect left them in the box
     mov byte [te_want], 0           ; ...and a close asked for on a session
     mov word [te_msg], 0            ; that has already ended is not owed
     call te_reset
@@ -1092,29 +1110,6 @@ te_zero:
     pop es
     pop di
     pop cx
-    pop ax
-    ret
-te_hire:
-    push ax
-    push bx
-    cmp byte [te_spawned], 1
-    je .out
-    mov ax, te_worker
-    mov bx, [te_win]
-    call OSAPI_TASK_SPAWN
-    jc .out
-    mov byte [te_spawned], 1
-    ; ...AND THE REGION CANNOT MOVE WITHOUT THIS (SPEC.md 66.6.2): the
-    ; kernel wrote our segment into this worker's frame before its
-    ; first instruction, so mem_frameless pins a region with an
-    ; undeclared worker however that region is declared. What a restart
-    ; costs is one pass of the loop - the park is inside
-    ; OSAPI_TASK_ALIVE and nowhere else (this package is not
-    ; OSAPI_MEM_PARKSAFE), which is the TOP of the loop, and every byte
-    ; that outlives a pass is a static and moves with us.
-    OS88_WORKER_RESTARTABLE te_worker
-.out:
-    pop bx
     pop ax
     ret
 
@@ -1199,8 +1194,17 @@ te_step:
     call te_close
     jmp .done
 .send:
-    call te_retry                   ; **THE HELD REPLY FIRST, before anything
-                                    ; else is enqueued** (SPEC.md 70.10.3)
+    ; --- the held reply, at the TOP of the pass: **THE HELD REPLY FIRST,
+    ; before anything else is enqueued** (SPEC.md 70.10.3). (It was
+    ; te_retry, with this one caller; the pass keeps every register itself.)
+    mov cl, [te_pndn]
+    xor ch, ch
+    jcxz .sent
+    mov si, te_pnd
+    call te_enq
+    jc .sent                        ; still no room: it stays held
+    mov byte [te_pndn], 0
+.sent:
     call te_flushtx
     jc .busyq
     cmp byte [te_pndn], 0
@@ -1678,8 +1682,8 @@ te_option:
     ; construction rather than by luck.
     mov si, te_will_naws            ; ...and the size, unasked: a client that
     mov cx, 12                      ; reported a NARROW window would have the
-    call te_reply                   ; host wrap its lines where the buffer is
-    jmp short .out                  ; not going to wrap them, and every line of
+    jmp short .reply                ; host wrap its lines where the buffer is
+                                    ; not going to wrap them, and every line of
 .willit:                            ; art after the first would be in the wrong
     mov al, T_WILL                  ; place. NAWS reports the BUFFER, always
     jmp short .say                  ; 80x25 (SPEC.md 70.8.10)
@@ -1691,27 +1695,19 @@ te_option:
     jmp short .say
 .mirror_dont:
     mov al, T_DONT
-.say:
-    call te_say3
+.say:                               ; IAC, AL, BL: one three-byte reply, whole
+    mov byte [te_say + 0], IAC      ; (it was te_say3, with this one caller)
+    mov ah, bl
+    mov [te_say + 1], ax
+    mov si, te_say
+    mov cx, 3
+.reply:
+    call te_reply
 .out:
     pop si
     pop cx
     pop bx
     pop ax
-    ret
-
-; --- te_say3 - IAC, AL, BL: one three-byte option reply, whole --------------
-te_say3:
-    push cx
-    push si
-    mov byte [te_say + 0], IAC
-    mov [te_say + 1], al
-    mov [te_say + 2], bl
-    mov si, te_say
-    mov cx, 3
-    call te_reply
-    pop si
-    pop cx
     ret
 
 ; --- te_say_ttype - `SB TTYPE IS "ANSI" SE`, ten bytes on the wire ----------
@@ -1798,8 +1794,7 @@ te_about:
     push dx
     push si
     push di
-    mov [te_win], si
-    call te_layout
+    call te_in                      ; [te_win] = SI, then te_layout
     mov byte [te_abon], 1
     call te_blank                   ; the terminal's own area, cleared - the
                                     ; host box and the button stay, because
@@ -2044,7 +2039,9 @@ te_tpl:
 
 %include "os88alt.inc"          ; SPEC.md 11.2.1.1's edge, for the bracket
 %define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)
+%define OS88UI_1BPP             ; OSAPI_SAVEU_1BPP: a greyed caption keeps its ink (SPEC.md 13.8.11)
 %include "os88ui.inc"
+%define OS88LINE_NOEDIT         ; nothing here calls os88line_edit (SPEC.md 83.1.2)
 %include "os88line.inc"
 %define OS88SOCK_STATE             ; ...every net_find here asks NETV_STATE too
 %include "os88sock.inc"         ; net_find (SPEC.md 72, SPEC.md 20.11.1)
@@ -2089,7 +2086,7 @@ te_tpl:
 ; with itself. Each line says which writer, and why that many.
 TZ_NAMEMAX  equ 13                  ; tz_dlgdone copies 12 and terminates
 TZ_MSGMAX   equ 44                  ; tz_text: 12 of name, 2, 13, 3, 13, NUL
-TZ_BMSGMAX  equ 23                  ; tz_bigmsg: `Cluster ` 8, [tz_clus] - a
+TZ_BMSGMAX  equ 23                  ; tz_dlgdone: `Cluster ` 8, [tz_clus] - a
                                     ; WORD, so `65,535` at most - 6, ` too big`
                                     ; 8 and the NUL. It was declared 32 against
                                     ; a guard of 30, which counted the number

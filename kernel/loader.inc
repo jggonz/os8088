@@ -240,6 +240,9 @@ ld_lname_cp:
 ld_unreserve:
     push bx
     mov di, [ld_rec]
+%ifdef KERN_BIG
+    COLDCALL desk_drop_x        ; ld_alloc's early IF_DESK off, and DESK.DRV
+%endif                          ; with it if nobody else is a widget (11.103.10)
     call KERNEL_SEG:cw_xm_release_rec   ; DI = the record
     call ld_slot
     call mem_free_owner_x
@@ -255,8 +258,15 @@ ld_unreserve:
 ; -----------------------------------------------------------------------------
 ; ld_hdr_ok - the .o88 FAMILY's header prologue (SPEC.md 20.1/20.2/51.1)
 ; in:  ES:SI -> the header, AL = the format version this loader accepts
-; out: CF = 0 well formed, CF = 1 malformed
-; clobbers: flags
+; out: CF = 0 well formed; CF = 1 malformed, with AL = LD_EVER when the
+;      magic is ours and the VERSION is not (SPEC.md 20.2.0) and LD_EBAD for
+;      anything else - ld_check_hdr's two answers, so it reads them as they
+;      come. The driver loader and the re-home arm ignore AL on the refusal
+; clobbers: AX, flags - and [ld_fsz], with a PACKAGE's non-zero link word
+;      (SPEC.md 20.13.8). AH is dead at all three callers: ld_check_hdr and
+;      drv_check document AX clobbered, and the re-home arm's next call,
+;      ld_hdr_size, writes it. Nothing reads [ld_fsz] after the re-home's
+;      check: steps 3 to 6a are its only readers, all behind it
 ;
 ; ONE BODY FOR TWO LOADERS. A package header and a driver header agree on
 ; every field this tests - magic 0, version 2, link 4, the three dispatcher
@@ -275,19 +285,41 @@ ld_unreserve:
 ; -----------------------------------------------------------------------------
 ld_hdr_ok:
     cmp word [es:si+LD_H_MAGIC], 0x384F      ; 'O','8'
-    jne .no
+    jne ld_hdr_size.bad
     cmp [es:si+LD_H_VER], al                 ; 6 = package, 7 = driver: the
-    jne .no                                  ; two gates SPEC.md 51.1 wants
-    cmp word [es:si+LD_H_LINK], 0            ; org 0 or it is not v3
-    jne .no
+    mov al, LD_EVER                          ; two gates SPEC.md 51.1 wants -
+    jne ld_hdr_size.stc                      ; and an 'O8' file of ANOTHER
+                                             ; format is the one refusal that
+                                             ; says why (LD_EVER, SPEC.md
+                                             ; 20.2.0). `mov` writes no flag,
+                                             ; so the compare still decides.
+                                             ; It was a second routine that
+                                             ; re-read both fields after this
+                                             ; one refused (kernel size pass 12)
+    mov ax, [es:si+LD_H_LINK]                ; org 0 or it is not v3 -
+    or ax, ax                                ; UNLESS it is a PACKAGE whose
+    jz .disp                                 ; flags carry BOTH bit 2 and bit
+    cmp byte [es:si+LD_H_VER], PKG_FMT       ; 3: then the word is the packed
+    jne ld_hdr_size.bad                      ; IMAGE's length, because with
+    mov [ld_fsz], ax                         ; parts the file is not it
+    mov word [ld_fsz+2], 0                   ; (SPEC.md 20.13.8) - and it
+    mov al, [es:si+LD_H_FLAGS]               ; BECOMES [ld_fsz] here, for
+    not al                                   ; ld_check_hdr's ladder. A driver,
+    test al, 0x0C                            ; or any other combination, is
+    jnz ld_hdr_size.bad                      ; refused as it always was
+.disp:                                       ; (the store before the flags
+                                             ; test is free: a refusal ends
+                                             ; the load, and nothing reads
+                                             ; [ld_fsz] after one). `mov`
+                                             ; and not the 5-byte `and`: the
+                                             ; byte keeps the FAT walk below
+                                             ; at an even shift (pass 13)
     cmp word [es:si+LD_H_DISP], 0D5FFh       ; call bp
-    jne .no
+    jne ld_hdr_size.bad
     cmp byte [es:si+LD_H_DISP+2], 0CBh       ; retf - and without the pair the
-    je .yes                                  ; kernel's first call in jumps
-.no:                                         ; into the image's data
-    stc
-.yes:                                        ; (equal is CF = 0, the answer)
-    ret
+    jne ld_hdr_size.bad                      ; kernel's first call in jumps
+    ret                                      ; into the image's data (equal
+                                             ; is CF = 0, the answer)
 
 ; -----------------------------------------------------------------------------
 ; ld_expand - turn the compressed file step 6 read HIGH into the image
@@ -351,14 +383,14 @@ ld_hdr_size:
     mov ax, [es:si+LD_H_ENTRY]  ; ...and the entry is INSIDE the image, which
     cmp ax, LD_HDR_SIZE         ; the re-home arm did not ask before this body
     jb .bad                     ; was shared and now does
-    cmp ax, [ld_img]
-    jae .bad
-    mov [ld_ent], ax
-    clc
-    ret
+    cmp [ld_img], ax            ; ...asked image-first, so the `jbe` not
+    jbe .bad                    ; taken leaves CF = 0 and is the answer: the
+    mov [ld_ent], ax            ; `clc` it needed the other way round is gone
+    ret                         ; (kernel size pass 12)
 .bad:                           ; ...and BOTH REFUSALS ARE ld_check_hdr's TOO:
     mov al, LD_EBAD             ; its own ladder above jumps here rather than
-    stc                         ; carrying a second pair four bytes long
+.stc:                           ; carrying a second pair four bytes long - and
+    stc                         ; so are ld_hdr_ok's, the body just above
     ret
 .toobig:
     mov al, LD_EBIG
@@ -369,7 +401,7 @@ ld_hdr_size:
 ; ld_check_hdr - validate a .o88 v3 header (module-internal)
 ; in:  ES:SI -> 32 readable header bytes; [ld_fsz] = the file's byte count
 ; out: CF = 0 and [ld_img]/[ld_bss]/[ld_ent] filled, or CF = 1 and
-;      AL = LD_EBAD / LD_EBIG
+;      AL = LD_EBAD / LD_EBIG / LD_EVER
 ; clobbers: AX, DX
 ;
 ; ES:SI AND NOT DS:SI, which is what drv_check and mod_check have always
@@ -391,9 +423,20 @@ ld_hdr_size:
 ld_check_hdr:
     mov al, PKG_FMT             ; magic, version, link and the dispatcher, in
     call ld_hdr_ok              ; the body the driver loader shares. v1/v2
-    jc ld_hdr_ver               ; files - and any built for another API
+    jc .out                     ; files - and any built for another API
                                 ; table (SPEC.md 20.2.0) - fail on the version,
-                                ; never a far call into cells that moved
+                                ; never a far call into cells that moved: AL
+                                ; is LD_EVER or LD_EBAD as ld_hdr_ok leaves it
+    ; A PARTED PACKAGE WITH A PACKED IMAGE (SPEC.md 20.13.8): ld_hdr_ok has
+    ; let a non-zero link word through only beside flags bits 2 AND 3, and it
+    ; is the packed image's length - the one figure everything below reads
+    ; [ld_fsz] for, the size ladder, step 6's R and read and step 6a's stream.
+    ; So it simply BECOMES [ld_fsz] - ld_hdr_ok stores it, the link word
+    ; being in AX there already (kernel size pass 13, -7) - and every test
+    ; after this is the plain compressed package's, unchanged: a length at or
+    ; past the image still takes the ladder's refusal, and zero (bits 2 and
+    ; 3, no length) does too, the file being longer than the image with the
+    ; compression bits set.
     mov ax, [es:si+LD_H_IMG]
     cmp ax, LD_HDR_SIZE
     jb ld_hdr_size.bad                                 ; image smaller than the header
@@ -418,18 +461,23 @@ ld_check_hdr:
     ; ONE BIT IS THE WHOLE OF WHAT THE KERNEL LEARNS about a package's parts.
     mov dx, [ld_fsz+2]
     or dx, dx
+    mov dl, [es:si+LD_H_FLAGS]              ; DL = the flags, for the four
+                                            ; tests below: `mov` writes no
+                                            ; flag, so the `or` decides the
+                                            ; jump, and the high word is spent
+                                            ; (kernel size pass 12)
     jz .lowword                             ; under 64KB: compare exactly
-    test byte [es:si+LD_H_FLAGS], 4
+    test dl, 4
     jz ld_hdr_size.toobig
     jmp short .notover
 .lowword:
     cmp ax, [ld_fsz]
     je .notover                             ; exact
     ja .over                                ; the image runs PAST the file
-    test byte [es:si+LD_H_FLAGS], 4         ; short of it: parts, or truncated
+    test dl, 4                              ; short of it: parts, or truncated
     jz ld_hdr_size.bad
 .notover:                                   ; ...AND THE COMPRESSION BITS ARE
-    test byte [es:si+LD_H_FLAGS], 0x18      ; A LIE ON EVERY ARM BUT .over
+    test dl, 0x18                           ; A LIE ON EVERY ARM BUT .over
     jnz ld_hdr_size.bad                                ; (SPEC.md 20.13.2). Step 6 reads a
     jmp short .imgok                        ; compressed file at R =
                                             ; roundup512(image - file), a plain
@@ -444,7 +492,7 @@ ld_check_hdr:
                                             ; it as LZB, which is non-zero and
                                             ; takes that same path
 .over:                                      ; ...which is COMPRESSION (SPEC.md
-    test byte [es:si+LD_H_FLAGS], 8         ; 20.13.2): `image` keeps meaning
+    test dl, 8                              ; 20.13.2): `image` keeps meaning
     jz ld_hdr_size.bad                                 ; the UNPACKED bytes, so the file
                                             ; is legitimately shorter. Without
                                             ; the bit it is a truncated file
@@ -470,22 +518,6 @@ ld_check_hdr:
                                             ; which is a refusal by the right
                                             ; route
 .out:
-    ret
-
-; --- ld_hdr_ver - ld_hdr_ok refused: is the FORMAT the reason? -------------
-; An os8088 package - the 'O8' magic - whose format byte is not ours is the
-; refusal a normal user actually meets: a program copied off an older disk, or
-; fetched for a newer system. It answers LD_EVER, which reads `Wrong os8088
-; version` on every build (SPEC.md 20.2.0), because the user can act on it.
-; Anything else ld_hdr_ok refuses stays LD_EBAD. AL is still PKG_FMT here -
-; ld_hdr_ok only reads it.
-ld_hdr_ver:
-    cmp word [es:si+LD_H_MAGIC], 0x384F
-    jne ld_hdr_size.bad
-    cmp [es:si+LD_H_VER], al
-    je ld_hdr_size.bad              ; the format is ours: something else is wrong
-    mov al, LD_EVER
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1070,9 +1102,10 @@ ld_alloc:
 %ifdef KERN_BIG
     test byte [ld_cfmt], LD_F_DESK >> 3
     jz .rec                     ; OS88_F_DESK (SPEC.md 11.103.9, 30): the LAST
-    call desk_need              ; (DESK.DRV first, ABOVE the region claimed
+    COLDCALL desk_need          ; (DESK.DRV first, ABOVE the region claimed
                                 ; below - SPEC.md 11.103.10; CF is not ours:
-                                ; a refusal is the entry proc's QUERY's)
+                                ; a refusal is the entry proc's QUERY's;
+                                ; FAR, being QUERY's own body)
     mov di, inst_tab + INST_MAX * I_RECSZ ; free record, scanning down, so
 .dscan:                         ; the widget's empty tile position is at the
     sub di, I_RECSZ             ; far end of the strip. None free: inst_alloc
@@ -1095,8 +1128,14 @@ ld_alloc:
                                 ; mem_claim's own granularity then guarantees
     call ld_slot                ; BX = the owner word: this record's slot
     call mem_claim_hi_x ; from the TOP down, away from the data claims
-    jc .nomem                   ; growing up from the bottom (SPEC.md 50.3)
+    jc .nodrv                   ; growing up from the bottom (SPEC.md 50.3)
     mov [ld_base], dx
+%ifdef KERN_BIG
+    test byte [ld_cfmt], LD_F_DESK >> 3
+    jz .nodesk                  ; a widget ON ITS WAY: desk_drop_x counts it
+    or byte [di+I_FLAGS], IF_DESK   ; from here, unpublished, so a widget's
+.nodesk:                        ; worker dying mid-launch keeps the image the
+%endif                          ; entry proc is about to call (11.103.10)
 %ifndef KERN_SMALL
     mov word [ld_rehome], 0     ; NO RE-HOME UNTIL ONE IS ASKED FOR, and it is
                                 ; cleared HERE rather than by the arm that
@@ -1131,7 +1170,11 @@ ld_alloc:
     ret                         ; routine's answer is CF - it was the caller's
                                 ; fall-through before the split, where the
                                 ; flag went nowhere
-.nomem:
+.nodrv:
+%ifdef KERN_BIG
+    COLDCALL desk_drop_x        ; the region refused AFTER desk_need: DI is
+%endif                          ; the unpublished record, IF_DESK clear, so
+.nomem:                         ; DESK.DRV goes unless a live widget holds it
     mov al, LD_ENOMEM
     stc
     ret
@@ -1293,10 +1336,13 @@ ld_start:
     pop es
 %ifdef KERN_BIG
     test byte [bx+W_FLAGS+1], WF_DESK >> 8
-    jz .ndesk                   ; the window it RETURNS is a widget: the
-    or byte [di+I_FLAGS], IF_DESK   ; instance is tile-less (SPEC.md 11.103.9).
-.ndesk:                         ; Here and not in MAKE, so a Sticky App returning an
-%endif                          ; ordinary window keeps the tile it needs
+    jnz .isdesk                 ; the window it RETURNS is a widget: the
+    COLDCALL desk_drop_x        ; instance is tile-less (SPEC.md 11.103.9).
+    jmp short .ndesk            ; Here and not in MAKE, so a Sticky App
+.isdesk:                        ; returning an ordinary window keeps the tile
+    or byte [di+I_FLAGS], IF_DESK   ; it needs - and an ordinary window is not
+.ndesk:                         ; a widget, so ld_alloc's early mark comes off
+%endif                          ; and DESK.DRV goes if nobody is one (11.103.10)
     mov bp, inst_bind_win
     call ct_cw_mem_disp         ; DI = record, BX = window (from the entry)
     mov byte [di+I_STATE], 1    ; publish - the LAST record write
@@ -1440,21 +1486,25 @@ ld_start:
     ; both the bound and where the carve's tail is cut - so a keep that would
     ; cut into the program's own image + bss is refused here, by the same
     ; compare, rather than trusted
-    mov ax, [ld_rehsz]
-    mov cx, 0xFFFF              ; CX = the keep: the carve WHOLE...
-    or ax, ax
-    jnz .rhbytes
-    mov ax, dx                  ; ...or the loader's, against the program in
-    add ax, 15                  ; PARAGRAPHS - image + bss is under
-    mov cl, 4                   ; APP_MAX_SIZE by ld_hdr_size, so the
-    shr ax, cl                  ; rounding cannot carry
+    ;
+    ; Both are asked of AX = image + bss - 1, which ld_hdr_size's entry bound
+    ; keeps above 0: `dx > bytes` is `dx - 1 >= bytes`, and the keep's
+    ; `ceil(dx / 16) > paragraphs` is `(dx - 1) >> 4 >= paragraphs`, so one
+    ; `jae` serves both and the round-up add is gone (kernel size pass 12)
+    mov cx, [ld_rehsz]
+    mov ax, dx
+    dec ax
+    jcxz .rhkeep                ; 0 = the KEEP form
+    cmp ax, cx                  ; ...or BYTES, and then CX = the keep: the
+    mov cx, 0xFFFF              ; carve WHOLE (`mov` writes no flag)
+    jmp short .rhbnd
+.rhkeep:
+    mov cl, 4                   ; ...or the loader's, against the program in
+    shr ax, cl                  ; PARAGRAPHS
     mov cx, [ld_rehkp]
     cmp ax, cx
-    jmp short .rhbnd
-.rhbytes:
-    cmp dx, ax
 .rhbnd:
-    ja .abort                   ; CX survives to mem_reown_x: ld_slot banks it
+    jae .abort                  ; CX survives to mem_reown_x: ld_slot banks it
     mov [ld_need], dx           ; **I_SIZE, AND IT IS NOT OPTIONAL.** Step 9
                                 ; publishes this word and ld_alloc left the
                                 ; LOADER's region size in it - so without this
@@ -1802,7 +1852,7 @@ ld_pkg_byname:
                                 ; caller stands, and the caller is the one who
                                 ; told us the document's own dir and volume
                                 ; anyway (both are banked above)
-    call COLD_SEG:assoc_run_x   ; **CALLED, NOT POSTED**: this slot already
+    COLDCALL assoc_run_x        ; **CALLED, NOT POSTED**: this slot already
                                 ; requires the UI task with the gfx lock FREE
                                 ; (21.5), which is the context assoc_run
                                 ; wants - so there is nothing to defer to.
@@ -1811,6 +1861,13 @@ ld_pkg_byname:
     xor al, al                  ; it reported its own verdict to the user
     ret                         ; (ld_say_status) - 21.5.3's thinner answer
 .nodoc:
+%ifdef OS88_SHORTCUTS
+    call lnk_is                 ; ...but a LINK is opened by nothing, being
+    jne .ebad                   ; followed (SPEC.md 26.10.3): on to
+    mov al, ASSOC_FIND          ; assoc_run, which knows - with the search
+    jmp short .have             ; for a program, should it not be ours. The
+.ebad:                          ; equal compare cleared CF for .have's `jc`
+%endif
     mov al, LD_EBAD             ; the one thing the caller could not know:
     ret                         ; nothing on this machine opens it
 %else

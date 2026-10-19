@@ -88,6 +88,8 @@
 %define CS_APPLY_ONLY
 %define CS_LOADER                   ; csapply.inc's load and apply: ours alone
 %define OD_BOOTVOL                  ; where REDLINE saved it (103.6.4)
+%define OD_READONLY                 ; ...which RLAPPLY only reads: no
+                                    ; od_write (apps size pass 2b)
 
 ; -----------------------------------------------------------------------------
 ; ra_entry - in: DS = our segment, ES = KERNEL_SEG; out: CF = 1, always - the
@@ -97,43 +99,39 @@ ra_entry:
     ; OUR REGION MAY MOVE (SPEC.md 66.6.1). It lives only as long as this
     ; call, inside which mem_in_nest pins it anyway - so the declaration buys
     ; nothing today and costs 16 bytes, and that is the trade the ratchet
-    ; (tests/movable.txt) asks for over an exemption with no mechanism in it
+    ; (tests/movable.txt) asks for over an exemption with no mechanism in it.
+    ; No register is banked: the loader promises an entry proc nothing back
+    ; but BX and CF (kernel/loader.inc's step 8 re-reads all it needs)
     OS88_REGION_MOVABLE ra_ret
-    push ax
-    push bx
-    push cx
-    push si
-    push es
     call OSAPI_CPU_INFO
     mov [cs_tier], al
     call cs_fingerprint
     call cs_cfg_load                ; AL = CSA_*, CF = 1 refused
     jc .say
-    call cs_cfg_apply
-    jc .say
-    mov al, CSA_OK
+    call cs_cfg_apply               ; AL = CSA_OK, or CSA_KNOB
 .say:
-    xor ah, ah
-    mov bx, ax
-    shl bx, 1
-    mov si, [ra_says + bx]
+    mov si, ra_s_ok                 ; toast AL is the AL'th string below:
+    cbw                             ; skip AL of them, NUL by NUL
+    xchg cx, ax
+    cld
+    jcxz .got
+.skip:
+    lodsb
+    or al, al
+    jnz .skip
+    loop .skip
+.got:
     push ds
     pop es
     xor cx, cx                      ; the standard ~3 seconds
     call OSAPI_TOAST
-    pop es
-    pop si
-    pop cx
-    pop bx
-    pop ax
     xor bx, bx                      ; no window
     stc                             ; ...so the loader frees us: done
 ra_ret:
     ret
 
-; One line per CSA_* (csapply.inc), 24 characters at most (SPEC.md 59.10)
-ra_says:    dw ra_s_ok, ra_s_nofile, ra_s_bad, ra_s_board, ra_s_row
-            dw ra_s_cpu, ra_s_knob
+; One line per CSA_* (csapply.inc), IN CSA_* ORDER - ra_entry counts its way
+; to one - and 24 characters at most (SPEC.md 59.10)
 ra_s_ok:     db 'Chipset setting applied', 0
 ra_s_nofile: db 'No REDLINE.CFG to apply', 0
 ra_s_bad:    db 'REDLINE.CFG is damaged', 0
@@ -148,5 +146,5 @@ ra_s_knob:   db 'REDLINE.CFG: bad setting', 0
 %include "redline/csknob.inc"
 %include "redline/csapply.inc"
 
-    OS88_BSS 0
+    OS88_BSS CS_APPLY_BSS            ; csapply.inc's REDLINE.CFG buffer
     OS88_IMAGE_END

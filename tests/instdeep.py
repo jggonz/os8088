@@ -12,12 +12,13 @@ missing with no error anywhere:
     stick on a hard-disk machine" in every application at once;
   * SYSTEM/DOS/OS88NET.COM (SPEC.md 62), which is not.
 
-A third arrived later and is the widest of them: SYSTEM/FONTS (SPEC.md 19.8.1)
-is eleven files on the SYSTEM disk rather than the apps one, so it is the first
-nested folder with real content on the volume the installer is copying FROM.
-Losing it is silent in the same way the other two are - every Font menu on the
-installed machine falls back to the kernel's own 8x8 cell and says nothing
-about why.
+A third is the deepest of them: SYSTEM/APPDATA/NOTES/WELCOME.TXT (SPEC.md
+110.13), the Sticky Note's welcome note, three folder levels down with real
+content in it on the volume the installer is copying FROM. Losing it is
+silent in the same way the other two are - the pad on the installed machine
+comes up with no notes and says nothing about why. (It was SYSTEM/FONTS until
+the 360 KB system disk gave its typefaces to office360.img, SPEC.md 24.3.1.5,
+and this row installs from that disk.)
 
 So this drives a real install on MartyPC's XT-IDE machine and then reads the
 partition back ON THE HOST, with a FAT reader that is not the one that wrote
@@ -71,9 +72,9 @@ FOOTER = 512                        # the VHD footer, past the data area
 # What must be on the installed volume, as PATHS - the point of the exercise
 # is the ones with two components in them.
 WANT_DIRS = ["SYSTEM", "APPS", "GAMES", "SYSTEM/APPDATA", "SYSTEM/DOS",
-             "SYSTEM/FONTS"]
+             "SYSTEM/APPDATA/NOTES"]
 WANT_FILES = ["KERNEL.SYS", "SYSTEM/DOS/OS88NET.COM", "SYSTEM/TASKMGR.O88",
-              "SYSTEM/FONTS/TALLX.F88"]
+              "SYSTEM/APPDATA/NOTES/WELCOME.TXT"]
 
 # ...and these must arrive BYTE FOR BYTE, hint and all. Any compressed file on
 # the source disk would do; README.TXT is the one the shipped system disk has
@@ -416,6 +417,16 @@ def main():
         print("    %-28s %s" % (p, "<dir>" if tree[p][0] else tree[p][1]))
 
     bad = []
+    # THE VOLUME BOOT RECORD'S SERIAL (SPEC.md 18.8.2.1, 52.10.2): the
+    # installer's fresh VBR is built over a zeroed sector, and hd_bpb_fill
+    # wrote BootSig 0x29 with nothing after it - so every installed volume
+    # carried serial 0, whatever the format before it had stamped.
+    vid = struct.unpack_from("<I", v.b, 39)[0]
+    print("  VBR: BootSig %02X, BS_VolID %08X" % (v.b[38], vid))
+    if v.b[38] != 0x29 or vid == 0:
+        bad.append("the installed VBR carries BootSig %02X and serial %08X - "
+                   "a fresh install must stamp one of its own (hd_bpb_fill, "
+                   "SPEC.md 18.8.2.1)" % (v.b[38], vid))
     if "IO.SYS" in tree or "COMMAND.COM" in tree:
         bad.append("the DOS files the fixture partition carries are still "
                    "there - the install KEPT the volume instead of erasing it "

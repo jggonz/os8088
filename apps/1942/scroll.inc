@@ -66,28 +66,36 @@ N_ROUTE equ N_WORLD+8
 N_MAPS equ N_ROUTE+256
 N_META equ N_MAPS+23*240
 N_TILES equ N_META+1024
-n_worldfile: db 'WORLD.V42',0
-n_worldcfile: db 'WORLD.C42',0
-; Keep the checksum table named for the damage-rejection regression fixture.
-n_scenesums: dw N_WORLD_V_SUM,N_WORLD_C_SUM
+; The world is a fetched part (N_P_SCENE, +1 for CGA), copied into the upper
+; half of the canvas where n_worldrow reads it and dropped at once.
 n_scenecheck:
     cmp word [n_scene],0ffffh
     jne .stage
     call n_loading
-    mov ax,[n_canvas]
-    add ax,N_WORLD/16
-    mov es,ax
-    mov si,n_worldfile
+    mov al,N_P_SCENE
     mov cx,N_WORLD_V_SIZE
-    mov bp,[n_scenesums]
     cmp byte [n_cga],0
     je .read
-    mov si,n_worldcfile
+    inc ax
     mov cx,N_WORLD_C_SIZE
-    mov bp,[n_scenesums+2]
 .read:
+    push cx
+    push ax
     call n_readbank
+    pop ax
+    pop cx
     jc .bad
+    push ds
+    push es
+    mov dx,[n_canvas]
+    add dx,N_WORLD/16
+    mov es,dx
+    pop ds
+    xor si,si
+    xor di,di
+    rep movsb
+    pop ds
+    call op_drop
     mov word [n_scene],0
     mov ax,[n_stage]
     cmp ax,[n_scrollstage]

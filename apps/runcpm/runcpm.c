@@ -45,7 +45,7 @@
  * WHAT WAVES 2 AND 3 ARE. The Z80 (rcz80.inc), the movers (rcmem.inc), the
  * slice driver in os88_onwake, the boot state machine - the banner, the
  * measured clock estimate, then main.c's loop: CCPHEAD, _PatchCPM, DRI's CCP
- * copied to 0xE400 out of the 2KB claim it was read into at launch,
+ * copied to 0xE400 out of the package's own part, in memory since launch,
  * AUTOEXEC.TXT poked into its command buffer, C = DSKByte, PC = CCPaddr, run;
  * a warm boot (BIOS WBOOT, BDOS 0, ^C at the prompt, a disk error) is that
  * lap again, and BIOS BOOT (EXIT.COM) or HALT is main.c's exit: "\r\n" and
@@ -285,16 +285,11 @@ static unsigned rc_zseg;                     /* the 64KB Z80 RAM claim */
                                               * while the task table is full) */
 #define RC_M_DEAD    5                       /* the worker is closing us */
 static int rc_mode = RC_M_CLOCK;
-static unsigned rc_ccpseg;                   /* the 2KB CCP claim (SPEC.md
-                                              * 74.3): CCP-DR.60K, read ONCE
-                                              * at launch from the launch
-                                              * folder, before any folder
-                                              * move, and copied to 0xE400 on
-                                              * every warm boot */
-static unsigned rc_ccplen;                   /* bytes to copy: 0 = no CCP
-                                              * (AUTOEXEC.TXT, when there is
-                                              * one, is already IN the claim
-                                              * - rc_ax_load) */
+/* THE CCP rides at the head of the module, the package's one part
+ * (RC_CCP_PART/RC_CCP_OFF, SPEC.md 74.3): op_load put it in the carve at
+ * launch and it is copied to 0xE400 on every warm boot. Its segment is ASKED
+ * each time (os88_part_seg) and never banked, because the carve MOVES (crt0's
+ * cc_ovcarve re-binds the module and knows of no word here). */
 static int rc_slice_n;                       /* control transfers a slice */
 static unsigned rc_sl_fast;                  /* slices in a row that took no
                                               * tick: the length adapts */
@@ -515,8 +510,8 @@ static int rc_clock_step(void)
 /* ==========================================================================
  * THE COMMAND PROCESSOR: main.c's `while (TRUE)` loop, 110-140, one lap per
  * boot. CCPHEAD; _PatchCPM; Status = 0; the CCP copied into place (main.c
- * _RamLoad(CCPname, CCPaddr) - here out of the claim it was read into at
- * launch, so a warm boot costs no disk); AUTOEXEC.TXT POKED on EVERY boot
+ * _RamLoad(CCPname, CCPaddr) - here out of the package's part, which
+ * op_load put in the carve at launch, so a warm boot costs no disk); AUTOEXEC.TXT POKED on EVERY boot
  * (BOOTONLY is FALSE upstream, globals.h 305) - its first 125 bytes at
  * CCPaddr+8, cut at the first control character, a NUL after it and its
  * length at CCPaddr+7, which is where the DRI CCP keeps its command buffer,
@@ -530,42 +525,26 @@ static int rc_clock_step(void)
  * nothing: the launch folder is outside CP/M's A\0..P\F, so no CP/M program
  * can change AUTOEXEC.TXT during the session, and 'read on every boot' and
  * 'read once, poke every boot' are the same observable behaviour here. A
- * warm boot is therefore a 2KB claim-to-claim copy and no disk at all, which
- * is what lets rc_slice run the CCP's prompt in the same slice.
- * 'Unable to load CP/M CCP.' is main.c 118's text for a missing CCP; upstream
- * breaks out of the loop and exits - here the machine goes idle instead
- * (SPEC.md 74: the window stays so the message can be read; the close box
- * ends it, and Alt+L still loads a .COM).
+ * warm boot is therefore a 2KB part-to-claim copy and no disk at all, which
+ * is what lets rc_slice run the CCP's prompt in the same slice. main.c 118's
+ * 'Unable to load CP/M CCP.' has no case here: the CCP is inside the
+ * package's part (SPEC.md 74.3), so a launch that has a window has the CCP.
  * ========================================================================*/
 static void rc_boot(void)
 {
     rc_puts(RC_CCPHEAD);
-    if (!ovl_patch_cpm()) {                  /* cold: IOBYTE and DSKByte too.
-                                              * THE MODULE'S GATE (SPEC.md
-                                              * 71): the disk layer's per-
-                                              * command half is RUNCPM.OVL,
-                                              * loaded by this first call
-                                              * from the launch folder; when
-                                              * it cannot be, no CP/M can run
-                                              * - the fact on the terminal
-                                              * (the reason is cc_ovneed's
-                                              * toast), the window kept up
-                                              * to show it, as for the CCP */
-        rc_puts("Unable to load RUNCPM.OVL.\r\nCPU halted.\r\n");
-        rc_mode = RC_M_IDLE;
-        return;
-    }
+    ovl_patch_cpm();                         /* cold: IOBYTE and DSKByte too.
+                                              * The module is an eager part
+                                              * (SPEC.md 73.14.2), in memory
+                                              * since launch: this is the UI
+                                              * task, so it cannot refuse */
     rc_status = RC_ST_RUNNING;
     rc_con_reset();                          /* no line half-edited, no error
                                               * waiting: a warm boot */
-    if (rc_ccplen == 0) {
-        rc_puts("Unable to load CP/M CCP.\r\nCPU halted.\r\n");
-        rc_mode = RC_M_IDLE;
-        return;
-    }
-    rc_zzcopy_in(RC_CCPADDR, rc_ccpseg, 0, rc_ccplen);   /* AUTOEXEC.TXT
-                                              * with it: rc_ax_load poked it
-                                              * into the claim, once */
+    rc_zzcopy_in(RC_CCPADDR, os88_part_seg(RC_CCP_PART), RC_CCP_OFF, RC_CCPSIZE);
+                                             /* AUTOEXEC.TXT with it:
+                                              * rc_ax_load poked it into the
+                                              * part, once */
     rc_z.pc = 0;                             /* Z80reset() */
     rc_z.iff = 0;
     rc_z.i = rc_z.r = 0;
@@ -737,7 +716,7 @@ static unsigned rc_zoff512(void)
  * WHERE IT GOES: main.c pokes it into the CCP's own command buffer - +7 the
  * length, +8 the text and a NUL - after every _RamLoad of the CCP; here the
  * CCP is copied out of its claim on every boot, so the poke is made ONCE,
- * INTO THE CLAIM, and every boot's copy carries it: the same bytes at
+ * INTO THE PART'S COPY, and every boot's copy carries it: the same bytes at
  * CCPaddr+7.. on every lap, with no buffer of its own and no poke a boot.
  * OSAPI_FILE_READ answers FERR_BIG and reads NOTHING when the file is larger
  * than the buffer (decided from the directory entry, os88api.inc 0x0128), so
@@ -747,7 +726,7 @@ static unsigned rc_zoff512(void)
  * TPA, at the loader's own landing (rc_zoff512) with the TPA up to the CCP
  * as the capacity (~57KB: a file over that is FERR_BIG and ignored, stated
  * in SPEC.md 74) - and the first 125 bytes, cut at
- * the first control character, go into the CCP claim. Called before the clock code, before any
+ * the first control character, go into the CCP's copy in the part. Called before the clock code, before any
  * folder move; the bytes left in the TPA are cleared. */
 static void rc_ax_load(void)
 {
@@ -755,14 +734,13 @@ static void rc_ax_load(void)
     n = os88_file_read_seg("AUTOEXEC.TXT", rc_zseg + (off >> 4), RC_CCPADDR - off);
     while (blen < n && blen < 125 && rc_rd(off + blen) > 31)
         blen++;
-    if (blen && rc_ccplen) {                 /* main.c: the poke, cut at the
+    if (blen) {                              /* main.c: the poke, cut at the
                                               * first control character */
-        rc_zzcopy_out(rc_ccpseg, 8, off, blen);
-        os88_poke(rc_ccpseg, 8 + blen, 0);
-        os88_poke(rc_ccpseg, 7, blen);
-        if (rc_ccplen < 9 + blen)
-            rc_ccplen = 9 + blen;            /* a CCP shorter than its own
-                                              * buffer still carries it */
+        unsigned ccp = os88_part_seg(RC_CCP_PART);   /* asked AFTER
+                                              * the read, never banked */
+        rc_zzcopy_out(ccp, RC_CCP_OFF + 8, off, blen);
+        os88_poke(ccp, RC_CCP_OFF + 8 + blen, 0);
+        os88_poke(ccp, RC_CCP_OFF + 7, blen);
     }
     rc_zfill(off, 0, n);
 }
@@ -870,9 +848,11 @@ void os88_onwake(void *win)
                                               * re-kicks (rcabout.c) */
     if (rc_ldmode == RC_LD_LOAD) {
         rc_ldmode = 0;
-        if (!ovl_load_go())                  /* the floppy, with no lock held */
-            rc_ld_back();                    /* the module refused: as typed
-                                              * nothing (the toast says why) */
+        ovl_load_go();                       /* the floppy, with no lock held.
+                                              * Its 0 was "the module
+                                              * refused", which an eager
+                                              * part cannot on the UI task
+                                              * (SPEC.md 74.3.1) */
     } else if (rc_mode == RC_M_CLOCK || rc_mode == RC_M_RUN) {
         /* THE SLICE LENGTH ADAPTS to the machine it runs on: os88_cpu() set
          * the first guess, and from there a slice that ends inside the tick
@@ -1183,21 +1163,9 @@ void os88_about(void *win)
 }
 
 /* os88_main - the entry (SPEC.md 20.2): claims first, then the window. The
- * launch requirement is CLAIMS, not KB: the 64KB Z80 RAM and the 2KB CCP
- * claim must be had, and a refusal quotes what was asked and what there is
- * (SPEC.md 74). */
-/* rc_refuse - a refused launch claim, toasted with what was asked and what
- * there is: a toast is 24 characters (SPEC.md 59, TOAST_MAX) and menu.inc
- * truncates silently - "RunCPM: 64KB? nnnnn KB" is 14 + up to 5 + 3 = 22 at
- * most. Answers 0, os88_main's refusal. */
-static void *rc_refuse(const char *ask)
-{
-    os88_strcpy(rc_tmsg, ask, sizeof(rc_tmsg));
-    rc_tcatu(os88_mem_largest_kb());
-    rc_tcat(" KB");
-    os88_toast(rc_tmsg, 0);
-    return 0;
-}
+ * launch requirement is CLAIMS, not KB: the 64KB Z80 RAM must be had, and a
+ * refusal quotes what was asked and what there is (SPEC.md 74). The CCP and
+ * the module were the parts standard's to claim, before this ran. */
 
 void *os88_main(void)
 {
@@ -1211,20 +1179,25 @@ void *os88_main(void)
      * which from a callback would erase a make os88_onkey has already seen. */
     os88_key_down(OS88_SCAN_ALT);
 
+
     rc_zseg = os88_mem_claim(64);
-    if (rc_zseg == 0)
-        return rc_refuse("RunCPM: 64KB? ");
+    if (rc_zseg == 0) {
+        /* the refusal, toasted with what was asked and what there is: a
+         * toast is 24 characters (SPEC.md 59, TOAST_MAX) and menu.inc
+         * truncates silently - "RunCPM: 64KB? nnnnn KB" is 14 + up to 5 + 3
+         * = 22 at most. Its one caller since the CCP's 2KB claim went
+         * (SPEC.md 74.3.1), so it is here and not a function */
+        os88_strcpy(rc_tmsg, "RunCPM: 64KB? ", sizeof(rc_tmsg));
+        rc_tcatu(os88_mem_largest_kb());
+        rc_tcat(" KB");
+        os88_toast(rc_tmsg, 0);
+        return 0;
+    }
     rc_z.seg = rc_zseg;
-    /* the CCP: a 2KB claim, and CCP-DR.60K read into it NOW - from the
-     * launch folder, before any folder move (SPEC.md 74.3), the way an .OVL
-     * would be. The claim's base is KB-aligned, so the _seg read is legal.
-     * A missing file is not a refused launch: main.c prints 'Unable to load
-     * CP/M CCP.' on the terminal (rc_boot), and this port keeps the window
-     * up to show it. */
-    rc_ccpseg = os88_mem_claim(2);
-    if (rc_ccpseg == 0)
-        return rc_refuse("RunCPM: 2KB? ");
-    rc_ccplen = os88_file_read_seg(RC_CCPNAME, rc_ccpseg, RC_CCPSIZE);
+    /* the CCP is already here: at the head of the module's part, read by
+     * op_load before os88_main ran (SPEC.md 74.3) - one carve, one read,
+     * and a launch without the RAM for it was refused there, in the
+     * standard's words */
     rc_ax_load();                           /* AUTOEXEC.TXT, once, from here */
     rc_term_init();
     rc_banner();

@@ -214,7 +214,7 @@ class App(object):
         self.state.pack(side="left", padx=12)
 
         addr = ttk.LabelFrame(self.root,
-                              text="On os8088: Browser > Open Location")
+                              text="On os8088: Browser, File > Open Location...")
         addr.pack(fill="x", **pad)
         self.addr = tk.Entry(addr, font=("TkFixedFont", 16), justify="center",
                              relief="flat", state="readonly",

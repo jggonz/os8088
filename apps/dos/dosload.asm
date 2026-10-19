@@ -61,6 +61,10 @@ bits 16
                                 ; .COM is ours at all
 
 %include "doscall.inc"              ; CORE_ORG - where the core has to land
+%define OP_NO_LAZYOK                ; ...and no op_lazyok: the core is fetched
+                                    ; ONCE, here, and op_fetch's own toast is
+                                    ; the answer - there is no menu item to
+                                    ; grey ahead of it (SPEC.md 20.12.9.2)
 %include "os88parts.inc"
 
 DOS_PART_BOX  equ 0             ; the box - a whole .o88 image (20.12.10)

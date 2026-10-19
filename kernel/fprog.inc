@@ -349,8 +349,18 @@ fpg_busy:
 fpg_arm:
     cmp byte [fpg_on], 0
     jne .yes
-    cmp byte [spl_live], 0      ; boot: the splash owns screen and mode
-    jne .no
+    cmp word [spl_live], 0      ; boot: the splash owns screen and mode -
+    jne .no                     ; and, the byte after it, [blk_on]:
+                                ; **THE DESKTOP IS NOT ON THE GLASS** (SPEC.md
+                                ; 79.6.2): a saver session is drawing there,
+                                ; or the signal is gated. A server's file call
+                                ; on the UI task - FTPD reading the next chunk
+                                ; of a RETR - armed this widget, and the
+                                ; menu bar and the bar drew over the
+                                ; animation. Both kernels: [blk_on] is the
+                                ; blanker's and is in each, and it is set
+                                ; BEFORE the saver's own load, so that read
+                                ; puts nothing up either
     cmp byte [fsx_task], 0xFF   ; **AN fsx BRACKET IS UP** (SPEC.md 12.8.5.2),
     jne .no                     ; same-mode or foreign: the app owns the
                                 ; pixels either way, and an In-window video

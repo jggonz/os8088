@@ -10,8 +10,12 @@ that is what this counts: a breakpoint on every DRAWING cell of the API table
 (OSAPI_FONT_RUN, OSAPI_GFX_FILL, OSAPI_GFX_BLIT1, OSAPI_GFX_DESK, ... - the
 set is read out of apps/os88api.inc by name), and at each stop the FAR
 RETURN ADDRESS read off the guest's stack, so a call is counted only when it
-came from the calendar's own segment (its include, os88stik.inc, is in that
-segment too: the tag and the gaps are the widget's). MartyPC is
+came from the calendar's own segment OR from the shared Sticky App library's
+(SPEC.md 110.15): on kern_big the include, os88stik.inc, is not in the
+calendar's segment but in DESK.DRV's, and the paint walk, the tag and the gaps
+are the widget's all the same. The library's segment is read off the
+package's own block - its entry table's far pointers, bound at load. Counting
+the calendar's segment alone read 0 calls for a first paint and a reveal. MartyPC is
 cycle-accurate on a 4.77 MHz 8088, so the cycles between the first and the
 last call of a gesture are 5150 time; a stopped guest does not count cycles.
 
@@ -21,9 +25,9 @@ and three tasks, the clock at Wed 14 Oct 2026 09:58, v2's budgets (SPEC.md
 110.3) ASSERTED:
 
   first paint   the launch, its W_PAINT whole: <= 20 calls TALL, <= 14 COMPACT
-  About down    the About card taken down by a key: stik_redrawr over the
-                card's rows alone - FEWER calls than the first paint (the
-                slabs those 62 rows reach, v4 review)
+  About         the About item: ONE TOAST and nothing drawn on the face -
+                0 calls (the About card on the face and its take-down are
+                gone, SPEC.md 110.3)
   day select    a press on the 15th, a day with nothing on it: <= 5 - today's
                 box and the 15th's, a sub-rect each, and card 2
   month         PgDn: <= 8 - card 1 from the nav down and card 2
@@ -107,6 +111,22 @@ def cells():
 CELLS = cells()
 
 
+# apps/os88api.inc STKL_LE: the library's entry table in the block
+STKL_LE = 110
+
+
+def segs_of(m, seg):
+    """The segments a Sticky App's calls come from: its own, and - on a
+    STIK_LIB build - the shared library's in DESK.DRV (SPEC.md 110.15), the
+    segment word of the block's first entry. Counting the package's alone
+    reads 0 for whatever the include draws."""
+    if not os88stik.DESKCAL_LIB:
+        return (seg,)
+    lib = struct.unpack_from("<H", bytes(m.readseg(
+        seg, os88stik.STIKLIB_AT + STKL_LE + 2, 2)))[0]
+    return (seg, lib)
+
+
 def caller(m, rec):
     r = rec.get("regs") or m.regs()
     ip, cs = struct.unpack("<HH", bytes(m.read((r["ss"] << 4) + r["sp"], 4)))
@@ -119,9 +139,11 @@ class Gesture(object):
     entry, so the composing before the first blit is in it) to the LAST
     call's start: the last call's own blit is not in it."""
 
-    def __init__(self, hits, seg, extra=(), start=None):
+    def __init__(self, hits, segs, extra=(), start=None):
+        if isinstance(segs, int):       # one segment, as callers wrote it
+            segs = (segs,)
         self.mine = [h for h in hits if h["addr"] in CELLS
-                     and h.get("hit") == seg]
+                     and h.get("hit") in segs]
         self.extra = dict((a, len([h for h in hits if h["addr"] == a]))
                           for a in extra)
         self.n = len(self.mine)
@@ -174,8 +196,7 @@ def ui_leg(tmp, machine, label, results):
             # UNCOVER the widget and repaint that part in the same count
             box["c"] = Cal(ui, tmp, check=check, bare=False)
             c = box["c"]
-            st_off = os88stik.stik_st_off(os88stik.DESKCAL_STIK_BSS,
-                                        os88stik.DESKCAL_PAYLEN)
+            st_off = c.woff["st"]
             ui._wait(lambda: c.bss(st_off)[0] & 3 == 3,
                      "the first tick's registration", 120)
             # 09:00 Standup was missed: its FIRED and DUE marks owe the one
@@ -188,12 +209,17 @@ def ui_leg(tmp, machine, label, results):
         hits, _ = measure(m, launch)
         c = box["c"]
         seg = c.wseg
+        # ...and the library's (SPEC.md 110.15): the segment word of the
+        # block's first entry, a far pointer the bind wrote at load
+        segs = segs_of(m, seg)
+        print("%s: the calendar at %04X, its calls from %s"
+              % (label, seg, " ".join("%04X" % x for x in segs)))
         for o in list(ui.windows()):
             if o.i != c.slot and o.visible:
                 ui.close(o)
         os88marty.guest_sleep(m, 1.0)
         r = {}
-        first = Gesture(hits, seg)
+        first = Gesture(hits, segs)
         print("%s: first paint      %s" % (label, first))
         r["first_paint"] = first.row()
         budget = 14 if compact else 20
@@ -224,23 +250,23 @@ def ui_leg(tmp, machine, label, results):
                 hits = [h for h in hits if not (
                     h["addr"] in CELLS and h.get("regs")
                     and h["regs"]["bx"] >= ty)]
-            return Gesture(hits, seg, extra=extra, start=comp_at)
+            return Gesture(hits, segs, extra=extra, start=comp_at)
 
-        print("%s: the About card, then a key takes it down" % label)
+        print("%s: About, a toast" % label)
         c.front()
         about = [(mm[0], it) for mm in ui.menus() for it, _ in mm[3]
                  if it.startswith("About Desk")]
         check(bool(about), "%s: an About item on the bar (%r)"
               % (label, [mm[0] for mm in ui.menus()]))
-        ui.menu_pick(*about[0])
-        os88marty.pace(m, 1.0)
-        c.front()
-        full = gesture(lambda: m.key("KeyX"), 3.0)
-        print("%s: About down       %s" % (label, full))
-        r["about_down"] = full.row()
-        check(0 < full.n < first.n, "%s: the About card's take-down repaints "
-              "the rows it covered, not the face (%d against the first "
-              "paint's %d calls)" % (label, full.n, first.n))
+        ab = gesture(lambda: ui.menu_pick(*about[0]), 3.0, tag=False)
+        print("%s: About            %s" % (label, ab))
+        r["about"] = ab.row()
+        txt = ui.wait_toast(says="Desk Calendar")
+        check(txt == "Desk Calendar for os8088", "%s: About says %r"
+              % (label, txt))
+        check(ab.n == 0, "%s: About draws nothing on the cards (%d calls: "
+              "%r) - the tag row's plate is the bar's focus edge, not About's"
+              % (label, ab.n, ab.by))
 
         print("%s: a press on the 15th" % label)
         c.front()
@@ -300,7 +326,7 @@ def ui_leg(tmp, machine, label, results):
         lnow0 = lnow()
         hits, _ = measure(m, lambda: os88marty.guest_sleep(m, 8.0),
                           extra=(tick_at,))
-        idle = Gesture(hits, seg, extra=(tick_at,))
+        idle = Gesture(hits, segs, extra=(tick_at,))
         lnow1 = lnow()
         print("%s: idle             %s, %d beats, minute %d -> %d"
               % (label, idle, idle.extra[tick_at], lnow0, lnow1))

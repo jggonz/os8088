@@ -130,7 +130,7 @@ PN_MAXN     equ 300                 ; sequence cap (policy: full-stop)
 PN_LIVEDUR  equ 5                   ; live note duration, ticks
 PN_PRIO     equ 0x40                ; tone priority (the package default)
 
-PN_BSS_TOTAL equ 655                ; see the bss layout after OS88_IMAGE_END
+PN_BSS_TOTAL equ 654                ; see the bss layout after OS88_IMAGE_END
 
 ; -----------------------------------------------------------------------------
 ; pn_entry - package entry point (SPEC.md 20.2)
@@ -154,8 +154,14 @@ pn_entry:
     ; NO worker is the case that moves most easily, and putting it at
     ; the spawn left exactly those runs declaring nothing - measured,
     ; by the row that reads MC_RLOC back out of the kernel's own table.
-    OS88_REGION_MOVABLE pn_ret      ; ...and holds no segment word, so the
-                                    ; proc is any `ret` (SPEC.md 20.5)
+    OS88_REGION_MOVABLE_NOKEEP pn_ret ; ...and holds no segment word, so the
+                                    ; proc is any `ret` (SPEC.md 20.5). The
+                                    ; NOKEEP form: AX is reloaded on the next
+                                    ; line, DX (the instance) is never read,
+                                    ; and the CF this proc owes the loader is
+                                    ; pn_metrics' below, whatever came before
+                                    ; it - so the plain form's pushf/push/pop
+                                    ; kept nothing anybody reads
     mov ax, pn_metrics              ; the keyboard's depth follows the box, and
     call OSAPI_WM_ONRESIZE          ; the box is the kernel's (SPEC.md 11.98).
                                     ; pn_metrics IS the handler: it reads DX and
@@ -241,8 +247,8 @@ pn_metrics:
     mov bl, PN_KB_Y2 - PN_KB_Y1
     div bl
     add al, PN_KB_Y1
-    mov ah, 0
-    mov [pn_bky2], ax
+    mov [pn_bky2], al               ; a WORD read as one: its high byte is the
+                                    ; loader's zero and nothing else writes it
     pop dx
     pop bx
     pop ax
@@ -524,26 +530,33 @@ pn_replay:
 .abort:
     xor ax, ax                      ; tone off (same priority: allowed)
     xor cx, cx
-    mov dl, PN_PRIO
-    call OSAPI_SND_TONE
+    call pn_tone_ax
     call pn_key_off
     mov ax, [pn_cnt]
-    mov [pn_vcnt], ax
-    call pn_vsync
-    mov ax, pn_s_stop
-    jmp short pn_say
+    mov si, pn_s_stop
+    jmp short pn_vsay
 
 ; -----------------------------------------------------------------------------
 ; pn_clear - the CLEAR button: empty the sequence and the viewer
 ; in:  [pn_ox]/[pn_oy] stashed; gfx lock held
-; out: nothing; clobbers AX
+; out: nothing; clobbers AX, SI
 ; -----------------------------------------------------------------------------
 pn_clear:
     xor ax, ax
     mov [pn_cnt], ax
+    mov si, pn_s_clear
+                                    ; ...and FALLS INTO pn_vsay
+
+; -----------------------------------------------------------------------------
+; pn_vsay - the viewer shows AX notes and the message area says SI: how a
+; clear, a load and a stopped replay all end (internal)
+; in:  AX = the count for [pn_vcnt], SI = the message; [pn_ox]/[pn_oy]
+; out: AX = the message, SI = the count; the rest preserved
+; -----------------------------------------------------------------------------
+pn_vsay:
     mov [pn_vcnt], ax
     call pn_vsync
-    mov ax, pn_s_clear
+    xchg ax, si
                                     ; ...and FALLS INTO pn_say
 
 ; -----------------------------------------------------------------------------
@@ -566,15 +579,13 @@ pn_draw_msg:
     push cx
     push dx
     push si
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
+    call pn_inkw
     mov ax, 110
     mov bx, PN_ROW1_Y
     mov cx, PN_CONT_W-3
     mov dx, PN_ROW1_Y+PN_BTN_H-1
     call pn_cfill
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
+    call pn_inkk
     mov si, [pn_msg]
     mov cx, PN_MSG_X
     mov dx, PN_ROW1_Y+4
@@ -623,11 +634,10 @@ pn_load:
     jmp short .pair
 .done:
     mov [pn_cnt], bx
-    mov [pn_vcnt], bx
     mov [pn_last], dx
-    call pn_vsync
-    pop ax
-    jmp short pn_say
+    xchg ax, bx
+    pop si
+    jmp short pn_vsay
 
 ; -----------------------------------------------------------------------------
 ; pn_note - play one note live: record it (full-stop at the cap), SOUND IT,
@@ -672,8 +682,8 @@ pn_note:
 .hi:
     mov [pn_seqd+bx], al
 .first:
-    inc word [pn_cnt]
-    mov ax, [pn_cnt]
+    lea ax, [bx+2]                  ; BX is the count less one: AX the new count
+    mov [pn_cnt], ax
     mov [pn_vcnt], ax
     jmp short .sound
 .full:
@@ -715,6 +725,7 @@ pn_tone:
     xor bh, bh
     add bx, bx
     mov ax, [pn_freq+bx]
+pn_tone_ax:                         ; ...or AX Hz for CX ticks (0 = silence)
     mov dl, PN_PRIO
     call OSAPI_SND_TONE
     ret
@@ -764,7 +775,8 @@ pn_wait:
 ;
 ; A natural's diatonic step IS its white key's index, and a sharp's IS the
 ; slot of the black key on it - the white key below it (SPEC.md 36) - so
-; [pn_step], which the viewer needs anyway, is the whole key lookup.
+; [pn_nstep], which the viewer needs anyway, is the whole key lookup: one
+; shift splits it into the step and, in CF, which of the two keys it is.
 ; -----------------------------------------------------------------------------
 pn_key_off:
     xor ah, ah
@@ -772,10 +784,10 @@ pn_key_hl:
     push bx
     mov bl, [pn_cur]
     xor bh, bh
-    cmp byte [pn_sharp+bx], 0
-    mov bl, [pn_step+bx]            ; (mov keeps the flags)
+    mov bl, [pn_nstep+bx]
+    shr bl, 1                       ; BL = the step, CF = a sharp
     mov bh, ah
-    jne .black
+    jc .black
     call pn_draw_wkey
     pop bx
     ret
@@ -819,34 +831,30 @@ pn_draw_wkey:
     push di
     push bp
     mov bp, bx                      ; BP = state:index (register use only)
+    mov al, CBLACK                  ; the outline's pen while AL is free
+    call OSAPI_SET_COLOR
     mov al, 18
     mul bl                          ; AX = index*18
     add ax, 2
-    mov di, ax                      ; DI = key left edge
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov ax, di
+    mov di, ax                      ; DI = key left edge, < 256: AH is 0
     mov bx, PN_KB_Y1
     lea cx, [di+18]
     mov dx, [pn_kby2]
-    call pn_cframe
-    mov ax, bp                      ; AH = highlight state
-    mov al, CWHITE
-    test ah, 1
+    call pn_cframe                  ; ...which keeps AX..DX: the face is this
+    mov al, CWHITE                  ; rect one pixel in
+    test bp, 1 << 8                 ; BH: lit
     jz .face
     mov al, CLBLUE                  ; the sounding fill
 .face:
     call OSAPI_SET_COLOR
-    mov ax, di
+    mov ax, di                      ; (AH was 0 all along)
     inc ax
-    mov bx, PN_KB_Y1+1
-    lea cx, [di+17]
-    mov dx, [pn_kby2]
+    inc bx
+    dec cx
     dec dx
-    call pn_cfill
-    mov ax, bp                      ; the map letter: CBLUE, CWHITE when lit
-    mov al, CBLUE
-    test ah, 1
+    call pn_cfill                   ; DX = the face's last row, kept
+    mov al, CBLUE                   ; the map letter: CBLUE, CWHITE when lit
+    test bp, 1 << 8
     jz .lcol
     mov al, CWHITE
 .lcol:
@@ -855,16 +863,14 @@ pn_draw_wkey:
     mov bh, 0
     mov al, [pn_wchar+bx]
     lea cx, [di+5]
-    mov dx, [pn_kby2]               ; the letter rides PN_WLBL_UP above the
-    sub dx, PN_WLBL_UP              ; key's foot, wherever that is
-    call pn_cchar
+    sub dx, PN_WLBL_UP - 1          ; the letter rides PN_WLBL_UP above the
+    call pn_cchar                   ; key's foot, wherever that is
     mov bx, bp                      ; re-draw the black keys overlapping
     xor bh, bh                      ; this white key: the ones on slots idx-1
     dec bx                          ; and idx, where there are any - and
     mov cx, 2                       ; neighbours re-draw un-highlighted (BH 0).
-    mov ax, bp                      ; ...or slot idx-1 alone, in a whole
-    test ah, PN_WK_LEFT             ; keyboard's walk
-    jz .nb
+    test bp, PN_WK_LEFT << 8        ; ...or slot idx-1 alone, in a whole
+    jz .nb                          ; keyboard's walk
     dec cx
 .nb:                                ; Slot -1 is the 0 byte before [pn_bchs],
     cmp byte [pn_bchs+bx], 0        ; there for this; slot 11 is [pn_bchs]'s
@@ -896,27 +902,24 @@ pn_draw_bkey:
     push di
     push bp
     mov bp, bx                      ; BP = state:slot (register use only)
+    mov al, CBLACK                  ; the body's pen while AL is free
+    call OSAPI_SET_COLOR
     mov al, 18
     mul bl
     add ax, 15                      ; AX = key left edge (18*slot + 15)
-    mov di, ax                      ; DI = x1
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov ax, di
+    mov di, ax                      ; DI = x1, < 256: AH is 0
     mov bx, PN_KB_Y1
     lea cx, [di+9]
     mov dx, [pn_bky2]
-    call pn_cfill
-    mov ax, bp
-    or ah, ah
+    call pn_cfill                   ; ...which keeps AX..DX
+    test bp, 0FF00h                 ; BH: lit
     jz .letter
-    mov al, CLRED                   ; the sounding core
+    mov al, CLRED                   ; the sounding core: the body one pixel in
     call OSAPI_SET_COLOR
     mov ax, di
     inc ax
-    mov bx, PN_KB_Y1+1
-    lea cx, [di+8]
-    mov dx, [pn_bky2]
+    inc bx
+    dec cx
     dec dx
     call pn_cfill
 .letter:
@@ -958,18 +961,18 @@ pn_draw_viewer:
     mov bx, PN_VW_Y1
     mov cx, PN_VW_X2
     mov dx, PN_VW_Y2
-    call pn_cframe
-    call pn_inkw
-    mov ax, PN_VW_X1+1
-    mov bx, PN_VW_Y1+1
-    mov cx, PN_VW_X2-1
-    mov dx, PN_VW_Y2-1
+    call pn_cframe                  ; (every pn_c* helper keeps its registers,
+    call pn_inkw                    ; so the field is the frame one pixel in)
+    inc ax
+    inc bx
+    dec cx
+    dec dx
     call pn_cfill
     call pn_inkk
+    mov al, PN_ST_X1                ; AH and BH are 0 from the field's corner
+    mov bl, PN_ST_X2
     mov dx, 16                      ; staff lines at y 16/22/28/34/40
 .staff:
-    mov ax, PN_ST_X1
-    mov bx, PN_ST_X2
     call pn_chline
     add dx, 6
     cmp dx, 46
@@ -1045,14 +1048,16 @@ pn_vsync:
     je .rub                         ; nothing to put up
     mov bl, dl
     xor bh, bh
-    mov cl, [pn_step+bx]
+    mov cl, [pn_nstep+bx]           ; the new note's step and sharp bit...
     mov bl, dh
-    cmp cl, [pn_step+bx]
-    jne .rub
-    mov byte [pn_vkeep], 1          ; SAME STEP: a natural and its sharp, so
-    mov al, dh                      ; the ledger and the dot stay and only
-    cmp byte [pn_sharp+bx], 0       ; the sharp glyph comes or goes
-    jne .unsharp
+    mov ch, [pn_nstep+bx]           ; ...and the old one's
+    xor cl, ch
+    shr cl, 1                       ; ZF: the two steps agree
+    jnz .rub
+    mov al, dh                      ; SAME STEP: a natural and its sharp, so
+                                    ; the ledger and the dot stay and only
+    shr ch, 1                       ; the sharp glyph comes or goes - CF: the
+    jc .unsharp                     ; old note was the sharp
     mov al, dl
     call pn_vputs
     jmp short .next
@@ -1060,7 +1065,6 @@ pn_vsync:
     call pn_vsrubn
     jmp short .next
 .rub:
-    mov byte [pn_vkeep], 0
     mov al, dh
     push dx
     call pn_vrub
@@ -1098,13 +1102,15 @@ pn_vwant:
 
 ; pn_vinfo - AL = a note: [pn_vyc] = its y, [pn_vrs] = the staff row inside
 ; its sharp's y-3..y+2 (0 for none - there is at most one, and it is y or
-; y-3), [pn_vstp] = its step, [pn_vsh] = sharp; AX, BX clobbered
+; y-3), [pn_vstp] = its step, [pn_vsh] = sharp; out AX = the step, BX
+; clobbered
 pn_vinfo:
     mov bl, al
     xor bh, bh
-    mov al, [pn_sharp+bx]
-    mov [pn_vsh], al
-    mov al, [pn_step+bx]
+    mov al, [pn_nstep+bx]
+    shr al, 1                       ; AL = the step, CF = a sharp
+    sbb ah, ah                      ; AH = 0FFh a sharp, 0 a natural
+    mov [pn_vsh], ah
     mov [pn_vstp], al
     cbw
     mov bx, 46
@@ -1135,23 +1141,21 @@ pn_vputs:
     call pn_vinfo
     jmp short pn_vput.s
 pn_vput:
-    call pn_vinfo
-    cmp byte [pn_vstp], 0
-    jne .d
+    call pn_vinfo                   ; AX = the step
+    or al, al
+    jnz .d
     call pn_inkk                    ; middle C: the ledger line, to colx+11 -
-    lea bx, [bp+11]                 ; or colx+10 when the next column will
-                                    ; show a C#4, whose vline owns that pixel
-    cmp di, PN_VCOLS-1
-    jae .lx
-    inc di
-    push bx
-    call pn_vwant
-    pop bx
+    cmp di, PN_VCOLS-1              ; or colx+10 when the next column will
+    jae .lx                         ; show a C#4, whose vline owns that pixel
+    inc di                          ; (the last column has no next: AL is
+    call pn_vwant                   ; this one's step, 0, which is no C#4)
     dec di
-    cmp al, 1
-    jne .lx
-    dec bx
 .lx:
+    lea bx, [bp+11]
+    cmp al, 1
+    jne .lxx
+    dec bx
+.lxx:
     lea ax, [bp+2]
     mov dx, 46
     call pn_chline
@@ -1191,13 +1195,14 @@ pn_vput:
 ; -----------------------------------------------------------------------------
 ; pn_vrub - draw over note AL's marks in column DI with what lies under them
 ; (the new note is a different step, or none); pn_vsrubn - its sharp glyph
-; alone, [pn_vkeep] = 1 (the same step's ledger and dot stay). AX..DX
-; clobbered
+; alone (the same step's ledger and dot stay). AX..DX clobbered. Both run
+; with [pn_vshow+di] already the NEW note, which is how the sharp's erase
+; knows whether a ledger stays under it
 ; -----------------------------------------------------------------------------
 pn_vrub:
-    call pn_vinfo
-    cmp byte [pn_vstp], 0
-    jne .d
+    call pn_vinfo                   ; AX = the step
+    or al, al
+    jnz .d
     call pn_inkw                    ; the ledger: white, but not the pixel a
     lea ax, [bp+2]                  ; C#4 in the next column owns - and at
                                     ; the last column its end is the FRAME
@@ -1249,8 +1254,8 @@ pn_vrub:
     call pn_chline
 .s:
     cmp byte [pn_vsh], 0
-    je pn_vsrub.r
-    jmp short pn_vsrub
+    jne pn_vsrub
+    ret
 pn_vsrubn:
     call pn_vinfo
 pn_vsrub:
@@ -1264,32 +1269,32 @@ pn_vsrub:
     call pn_chline
     add dx, 3
     call pn_chline
-    mov cx, [pn_vrs]                ; vline colx+1: the staff row it crosses,
-    cmp byte [pn_vstp], 0           ; or - for a C#4 - row 46, which is the
-    jne .v1                         ; ledger's of the column before if that
-    or di, di                       ; one is middle C
-    jz .v1
-    cmp byte [pn_vshow+di-1], 1
+    mov cx, [pn_vrs]                ; both vlines: the staff row they cross,
+    cmp byte [pn_vstp], 0           ; and pn_vcol keeps CX for the second -
+    jne .both                       ; or, for a C#4 (whose [pn_vrs] is 0, so
+    or di, di                       ; CH is), row 46 at colx+1 if it is the
+    jz .v1                          ; ledger of the column before, middle C
+    cmp byte [pn_vshow+di-1], 1     ; or C#4 there...
     ja .v1
-    mov cx, 46
+    mov cl, 46
 .v1:
     lea ax, [bp+1]
     call pn_vcol
-    mov cx, [pn_vrs]                ; vline colx+3: likewise, and row 46 is
-    cmp byte [pn_vstp], 0           ; this column's OWN ledger if it stays
-    jne .v3
-    cmp byte [pn_vkeep], 0
-    je .v3
-    mov cx, 46
+    xor cx, cx                      ; ...and row 46 at colx+3 if it is this
+    cmp byte [pn_vshow+di], cl      ; column's OWN ledger, which stays: the
+    jne .v3                         ; new note is C4, the C#4's one partner
+    mov cl, 46
+    jmp short .v3
+.both:
+    lea ax, [bp+1]
+    call pn_vcol
 .v3:
     lea ax, [bp+3]
-    call pn_vcol
-.r:
-    ret
+                                    ; ...and FALLS INTO pn_vcol
 
 ; pn_vcol - a sharp's vline at x AX, rows y-3..y+2, drawn over in white
 ; except row CX (0 = none), which is black: a staff line or a ledger. Each
-; pixel is written once. AX..DX clobbered
+; pixel is written once. AX, BX, DX clobbered, CX kept
 pn_vcol:
     call pn_inkw
     mov bx, [pn_vyc]
@@ -1315,8 +1320,21 @@ pn_vcol:
     call pn_inkk
     mov bx, cx
     mov dx, cx
-.all:
-    jmp pn_cvline
+.all:                               ; ...and FALLS INTO pn_cvline, which is
+                                    ; here rather than with the other pn_c*
+                                    ; helpers for that
+pn_cvline:                          ; AX=x BX=y1 DX=y2 (color set)
+    push ax
+    push bx
+    push dx
+    add ax, [pn_ox]
+    add bx, [pn_oy]
+    add dx, [pn_oy]
+    call OSAPI_GFX_VLINE
+    pop dx
+    pop bx
+    pop ax
+    ret
 
 ; pn_inkw / pn_inkk / pn_inkb - the pen white / black / blue, AX kept (the
 ; viewer's erases change pen a dozen times; this is 3 bytes a change)
@@ -1528,42 +1546,44 @@ pn_setdown:
     je .out
     xchg ax, [pn_down]
     call pn_btn1                    ; the old one, upright
-    mov ax, [pn_down]
-    call pn_btn1                    ; the new one, pressed
+    pop ax                          ; the new one, pressed - pn_btn1 reads
+    push ax                         ; AL alone
+    call pn_btn1
 .out:
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; pn_draw_btns - REPLAY/CLEAR (black), the message, "SONGS:" and the three
-; colored song buttons
+; pn_draw_btns - the message, "SONGS:", then all five buttons: REPLAY/CLEAR
+; (black) and the three colored song buttons
 ; in:  [pn_ox]/[pn_oy], [pn_msg]
 ; out: nothing; preserves all registers
+;
+; ONE walk over the five: the message area and the caption share no pixel
+; with any button (x 110.. and 2..49 against 2..107 and 52..), so drawing
+; them first changes no pixel of the result and lets the buttons be one loop
+; rather than two either side of them (apps size pass 2).
 ; -----------------------------------------------------------------------------
 pn_draw_btns:
     push ax
     push cx
     push dx
     push si
+    call pn_draw_msg
+    mov ax, CBLACK | (CWHITE << 8)  ; the caption OPAQUE (SPEC.md 6.1): its
+    mov si, pn_l_songs              ; cells' ground is the run's, which is
+    mov cx, [pn_ox]                 ; what lets an About card's dismissal
+    inc cx                          ; leave it to this rather than white it
+    inc cx                          ; first (pn_abdismiss)
+    mov dx, [pn_oy]
+    add dx, PN_ROW2_Y+4
+    call OSAPI_FONT_RUN
     mov al, 1
 .each:
     call pn_btn1
     inc ax
-    cmp al, 2
-    jbe .each
-    call pn_draw_msg
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov si, pn_l_songs
-    mov cx, 2
-    mov dx, PN_ROW2_Y+4
-    call pn_cstr
-    mov al, 3
-.each2:
-    call pn_btn1
-    inc ax
     cmp al, PN_NBTN
-    jbe .each2
+    jbe .each
     pop si
     pop dx
     pop cx
@@ -1619,19 +1639,6 @@ pn_chline:                          ; AX=x1 BX=x2 DX=y (color set)
     pop ax
     ret
 
-pn_cvline:                          ; AX=x BX=y1 DX=y2 (color set)
-    push ax
-    push bx
-    push dx
-    add ax, [pn_ox]
-    add bx, [pn_oy]
-    add dx, [pn_oy]
-    call OSAPI_GFX_VLINE
-    pop dx
-    pop bx
-    pop ax
-    ret
-
 pn_cchar:                           ; AL=char CX=x DX=y (color set)
     push cx
     push dx
@@ -1680,37 +1687,74 @@ pn_about:
 ; -----------------------------------------------------------------------------
 ; pn_abdismiss - take the card down if it is up
 ; in:  SI = our window ptr; gfx lock held
-; out: CF = 1 the click or key was spent doing it; preserves every register
+; out: CF = 0 no card, every register preserved; CF = 1 the click or key was
+;      spent doing it, AX, BX, CX, DX and DI clobbered (every caller has them
+;      saved, or - pn_oncmd - saved AX and reloads the rest)
 ;
 ; The way back is the whole content, which is what pn_paint draws: the card
-; covered the viewer, the buttons and the keyboard.
+; covered the viewer, the buttons and the keyboard - AND THE GROUND BETWEEN
+; THEM, which pn_paint never draws because a W_PAINT's content arrives white
+; and a dismissal's does not. So the gaps go first, white, from pn_gnd: each
+; is ground no part covers, so every pixel is written once (SPEC.md 36). It
+; drew the parts alone until apps size pass 2, and left the card's letters
+; and frame in the gaps between them.
 ; -----------------------------------------------------------------------------
 pn_abdismiss:
-    cmp byte [pn_abon], 0
-    je .none
-    push bx
-    mov byte [pn_abon], 0
+    shr byte [pn_abon], 1           ; CF = the card was up (the flag is 0 or
+    jnc .ret                        ; 1), and the shift has taken it down
     mov bx, si
     call OSAPI_WM_CLIP_SET          ; nothing armed a region for a click or a
     jc .gone                        ; key (SPEC.md 11.3)
-    call pn_paint                   ; ...and the card is down, so this is the
-.gone:                              ; three parts it covered, at the origin the
-    pop bx                          ; window has NOW - it may have been dragged
-    stc                             ; since the card went up
+    call pn_org                     ; the origin the window has NOW - it may
+    call pn_inkw                    ; have been dragged since the card went up
+    xor ax, ax
+    cwd
+    xor bx, bx
+    xor cx, cx
+    mov di, pn_gnd
+.g:
+    mov al, [di]                    ; one rect, four bytes: x1 y1 x2 y2
+    mov bl, [di+1]
+    mov cl, [di+2]
+    mov dl, [di+3]
+    call pn_cfill
+    add di, 4
+    cmp di, pn_gnd + PN_NGND * 4
+    jb .g
+    call pn_paint                   ; ...and then the three parts
+.gone:
+    stc
+.ret:
     ret
-.none:
-    clc
-    ret
+
+; --- the ground an About card can cover and pn_paint never draws ------------
+; The card is centred in the content and its widest line is 16 cells, so it
+; spans x 35..186 and, on every adapter's box, rows inside 37..109 - over the
+; viewer's foot, both button rows and the keyboard's head. Those parts draw
+; every pixel of their own rects; what is left there is this: the three
+; two-row gaps between the bands, the two-pixel gaps between buttons, and
+; round the "SONGS:" caption (whose cells, rows 74..81, are its own run).
+pn_gnd:
+    db   2, 50, 219, 51                 ; viewer / button row
+    db   2, 68, 219, 69                 ; button row / songs row
+    db   2, 86, 219, 87                 ; songs row / keyboard
+    db  58, 52,  59, 67                 ; REPLAY | CLEAR
+    db 108, 52, 109, 67                 ; CLEAR | the message
+    db   2, 70,  49, 73                 ; above the caption
+    db   2, 82,  49, 85                 ; ...below it
+    db  50, 70,  51, 85                 ; caption | TWINKLE
+    db 116, 70, 117, 85                 ; TWINKLE | ODE
+    db 158, 70, 159, 85                 ; ODE | MARY
+PN_NGND     equ ($ - pn_gnd) / 4
 
 ; --- the About card's lines (SPEC.md 20.5.1) ----------------------------------
 ; SHORT: the card is clamped to the content box and this window's is 222px on
 ; VGA and narrower on a CGA, so the credit is two lines rather than one.
+; OS88UI_ABPACK's form: end to end, a lone NUL the blank line, 0FFh
+; (OS88UI_ABEND, defined after this) where the next line would begin.
 pn_ablines:
-    dw pn_ab1, pn_ab2, pn_ab3, pn_ab4, 0
-pn_ab1:     db 'Piano for os8088', 0
-pn_ab2      equ $ - 1               ; the empty line: pn_ab1's own NUL
-pn_ab3:     db 'Contributed by', 0
-pn_ab4:     db 'Jorge Gonzalez', 0
+    db 'Piano for os8088', 0, 0, 'Contributed by', 0, 'Jorge Gonzalez', 0
+    db 0FFh                         ; OS88UI_ABEND
 
 pn_tpl:
     dw 250, 100, 224, 177           ; x, y, w, h -> content 222 x 158
@@ -1745,7 +1789,6 @@ pn_l_songs:  db 'SONGS:', 0
 pn_l_twk:    db 'TWINKLE', 0
 pn_l_ode:    db 'ODE', 0
 pn_l_mary:   db 'MARY', 0
-pn_s_ready:  db 'READY', 0
 pn_s_replay: db 'REPLAYING...', 0
 pn_s_done:   db 'REPLAY DONE', 0
 pn_s_stop:   db 'STOPPED', 0
@@ -1754,19 +1797,23 @@ pn_s_full:   db 'SEQ FULL', 0
 pn_s_empty:  db 'EMPTY', 0
 pn_s_twk:    db 'TWINKLE READY', 0
 pn_s_ode:    db 'ODE READY', 0
-pn_s_mary:   db 'MARY READY', 0
+pn_s_mary:   db 'MARY '
+pn_s_ready:  db 'READY', 0           ; ...whose tail is the plain READY
 
 ; --- note tables (note ids 0..19 = semitones from C4; SPEC.md 36) --------------
 pn_freq:                            ; equal temperament, Hz
     dw 262, 277, 294, 311, 330, 349, 370, 392, 415, 440
     dw 466, 494, 523, 554, 587, 622, 659, 698, 740, 784
-pn_step:                            ; diatonic degree from C4 (staff height)
-    db 0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6, 7, 7, 8, 8, 9, 10, 10, 11
-pn_sharp:                           ; 1 = sharp (gets the viewer glyph)
-    db 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0
+pn_nstep:                           ; diatonic degree from C4 (staff height)
+                                    ; TIMES TWO, plus 1 for a sharp (which gets
+                                    ; the viewer glyph): one table where there
+                                    ; were two, every reader splitting it with
+                                    ; a shift that is cheaper than the second
+                                    ; load was (apps size pass 2)
+    db 0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 20, 21, 22
 ; The keys are identified by POSITION, which is all the drawing and the hit
 ; test need: a white key by its index 0..11 (x = 2 + 18i), a black one by its
-; SLOT, the white key it sits on (x = 18*slot + 15). A note's [pn_step] is
+; SLOT, the white key it sits on (x = 18*slot + 15). A note's step ([pn_nstep] / 2) is
 ; both - a natural's diatonic step IS its white index and a sharp's IS its
 ; slot - and a black key's note is its slot's white note plus one. So two
 ; 12-byte letter tables replace five tables of key indices, and the QWERTY
@@ -1828,6 +1875,7 @@ pn_song_mary:                       ; Mary Had a Little Lamb (26 notes)
 
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
 %define OS88UI_ABOUT            ; ...and the standard About card beside the
+%define OS88UI_ABPACK           ; (its lines END TO END, no pointer table)
 %define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)
 %define OS88UI_NOGEST           ; presses routed by hand: no gesture install (SPEC.md 20.5.1.3.4)
 %define OS88UI_NOBFIND          ; hit-tests its own rects: no os88ui_bfind (SPEC.md 20.5.1.3.4)
@@ -1868,8 +1916,7 @@ pn_vstp  equ os88_image_end + 649   ; byte: the column's note's step
 pn_vyc   equ os88_image_end + 650   ; word: ...its dot's centre y
 pn_vrs   equ os88_image_end + 652   ; word: ...the staff row its sharp's
                                     ;       vlines cross, 0 for none
-pn_vkeep equ os88_image_end + 654   ; byte: the column keeps its ledger
-                                    ; total 655 = PN_BSS_TOTAL
-%if pn_vkeep + 1 - os88_image_end != PN_BSS_TOTAL
+                                    ; total 654 = PN_BSS_TOTAL
+%if pn_vrs + 2 - os88_image_end != PN_BSS_TOTAL
   %error "PN_BSS_TOTAL does not match the bss layout"
 %endif

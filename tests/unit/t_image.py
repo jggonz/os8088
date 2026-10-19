@@ -35,7 +35,7 @@ WHAT IT CHECKS THAT --verify CANNOT.
      hardest place for this project to notice.
 
   3. SPEC.md 19.6's ATTRIBUTES.  `KERNEL.SYS`, `BOOTHD.SYS` (SPEC.md
-     52.10.16) and every `.DRV` hidden +
+     52.10.16), `COLDHMA.SYS` (docs/plans/HMA-PLAN.md) and every `.DRV` hidden +
      system + read-only, `SYSTEM.CFG` hidden + system but WRITABLE (the
      kernel rewrites it - make it read-only and the first save locks out
      every save after it), everything else on a system disk visible and
@@ -64,15 +64,25 @@ from harness import check, eq, done                       # noqa: E402
 
 A_RDONLY, A_HIDDEN, A_SYSTEM, A_VOLID, A_DIR = 0x01, 0x02, 0x04, 0x08, 0x10
 
-# The IBM standard formats, by total sector count. SPEC.md 19.3: these are
-# not ours to choose - DOS reads a floppy's geometry out of its own table and
-# ignores the BPB, so anything else is a disk the host OS misreads.
+# The IBM standard formats, by total sector count. SPEC.md 19.3: DOS does not
+# honour a floppy's RsvdSecCnt - it looks for the FAT at LBA 1 whatever the
+# BPB says - so a layout that moves the FAT is a disk the host OS misreads.
+# It DOES take SecPerClus and FATSz16 from the boot sector (measured on IBM DOS
+# 3.30, docs/reports/CLUSTER-SIZE-2026-10-17.md), which is the one freedom
+# CLUSTERS below spends.
 # (bytes/sec, sec/clus, reserved, FATs, root entries, media, FAT sectors, spt, heads)
 STANDARD = {
     2880: (512, 1, 1, 2, 224, 0xF0, 9, 18, 2),   # 1.44MB
     2400: (512, 1, 1, 2, 224, 0xF9, 7, 15, 2),   # 1.2MB 5.25" HD
     1440: (512, 2, 1, 2, 112, 0xF9, 3, 9, 2),    # 720KB
     720:  (512, 2, 1, 2, 112, 0xFD, 2, 9, 2),    # 360KB
+}
+
+# The images that leave the IBM cluster size on purpose, as (sec/clus, FAT
+# sectors) - SPEC.md 19.3.2. An image named here MUST have exactly that, so a
+# recipe that loses its `--spc` fails here rather than shipping a fuller disk.
+CLUSTERS = {
+    "os8088-360.img": (1, 3),   # 512-byte clusters: 11KB free -> 22KB
 }
 
 SYSTEM_IMAGES = ["os8088.img", "os8088-120.img", "os8088-720.img",
@@ -162,13 +172,16 @@ def read(p):
 def check_geometry(v):
     want = STANDARD.get(v.tot16)
     if not check(want is not None, "%s: %d total sectors is not a standard format"
-                 % (v.name, v.tot16), "SPEC.md 19.3 - DOS reads a floppy's geometry "
-                 "from its own table, so a non-standard one is misread on the host"):
+                 % (v.name, v.tot16), "SPEC.md 19.3 - a floppy shape outside the IBM "
+                 "table is one a host OS has no reason to read"):
         return
+    if v.name in CLUSTERS:
+        spc, fatsz = CLUSTERS[v.name]
+        want = want[:1] + (spc,) + want[2:6] + (fatsz,) + want[7:]
     got = (v.byts, v.spc, v.rsvd, v.nfat, v.rootent, v.media, v.fatsz, v.spt, v.heads)
     eq(got, want, "%s: BPB is the standard %dKB format" % (v.name, v.tot16 * 512 // 1024),
-       "a drifted BPB builds, verifies and mounts in os8088 and is garbled by DOS "
-       "- 52,224 bytes free was the symptom last time (SPEC.md 19.3)")
+       "a drifted BPB builds, verifies and mounts in os8088 and can be garbled by "
+       "DOS - 52,224 bytes free was the symptom last time (SPEC.md 19.3)")
     eq(struct.unpack_from("<H", v.blob, 510)[0], 0xAA55,
        "%s: boot signature" % v.name)
     check(v.blob[0] in (0xEB, 0xE9), "%s: boot sector starts with a jump" % v.name,
@@ -269,9 +282,11 @@ def check_attrs(v, is_system):
             check(not (attr & hs), "%s: %s is not hidden on a DATA disk" % (v.name, nm),
                   "a data disk is the user's; a hidden+system file there cannot be "
                   "listed or deleted from inside os8088 (SPEC.md 19.6)")
-        elif name11 in (b"KERNEL  SYS", b"BOOTHD  SYS") or name11.endswith(b"DRV"):
+        elif name11 in (b"KERNEL  SYS", b"BOOTHD  SYS", b"COLDHMA SYS") \
+                or name11.endswith(b"DRV"):
             # BOOTHD.SYS is the hard-disk boot sector built with that kernel,
-            # which the installer reads off the source (SPEC.md 52.10.16)
+            # which the installer reads off the source (SPEC.md 52.10.16), and
+            # COLDHMA.SYS the HMA image cut from it (docs/plans/HMA-PLAN.md)
             eq(attr & (hs | A_RDONLY), hs | A_RDONLY,
                "%s: %s is hidden+system+read-only" % (v.name, nm))
         else:

@@ -3434,8 +3434,11 @@ function 0), never offers it, keeps it unmasked, and hooks the SB on the line
 it configured without probing (SPEC.md 34.10.1).
 
 **The network is confirmed working on the 286's PicoMEM 1.x** (the owner,
-2026-10-10). The Sound Blaster is still untested there - that card's firmware
-has to be updated first - and it stays behind `PICOMEM=1` until it is.
+2026-10-10). The Sound Blaster could not be tested there until the card's
+firmware was updated. **It has been since, and both it and the USB mouse
+WORK on the 1.x**. The sections below are the rounds it took, and *Where it
+was left* is the end state. The tier is in every `SOUND.DRV` now (SPEC.md
+34.10.3).
 
 **The 5150's PicoMEM 2.x, first run of the fix** (jumpers IRQ 3 and 5, DMA 1):
 the Ethernet page said `Ne2000` at address **`AAAAAAAAAAAA`**, tx counting, no
@@ -3504,10 +3507,15 @@ Drivers page off `os8088-360.img`, the driver loads and the pointer moves.
 That closes the 2.x: network, Sound Blaster, B:, Restart and mouse, all
 confirmed on the card.
 
-### What is left: the 1.x, after its firmware update
+### The 1.x checklist, before its firmware update (DONE)
 
-This is written for whoever picks the 286 up again, possibly much later, and
-is meant to need nothing else from this session.
+**This checklist is finished, and nothing in it is open.** The USB mouse
+worked on the first firmware update (2026-10-11). The Sound Blaster took
+two firmware rounds and several fixes on both sides. It plays clean on the
+1.x since 2026-10-12: see *Where it was left* at the end of this entry. The
+firmware with those fixes is in this tree as `firmware/picomem1/`. What
+follows is the checklist as it was written on 2026-10-10, kept as the
+record of what was checked.
 
 **The firmware.** The 1.x's Sound Blaster first exists in
 **`PM_x_11_16_25_x`** (FreddyVRetro/ISA-PicoMEM, `firmware/README.md`: *"Sound
@@ -4277,6 +4285,9 @@ program this machine ran.
 the sixteen IRQ vectors: **4 bytes of `.text`** on kern_big (kernsize +6),
 kern_small unchanged. `tests/drvmove.py` plants `int 33h` on the RAM disk's
 image before the forced move and reads it after; it is red with the row taken
-out and green with it. **Not yet confirmed on the card** - the first play on
-the fixed build is the check: the pointer should move as soon as the desktop
-is back.
+out and green with it.
+
+**On the card: not reproduced since the original report** (the owner,
+2026-10-15). Videos have played since without the pointer dying. Whether
+that is this fix, or whether the condition simply has not come up again, is
+unknown. If the pointer is ever dead after a play again, reopen this entry.

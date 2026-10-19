@@ -112,8 +112,9 @@ RELOC_ADJ    equ 0x07E0         ; int 12h answers KB; KB*64 is the paragraph
 ; KERNEL_SECTORS is not in this sum: it counts the blob twice, the blob being
 ; the front of the same file.
 ;
-; HEAP_PARA is injected by the Makefile out of tools/kernsize.py's `kend`, the
-; way boot/boothd.asm has taken BLOB_SEG since SPEC.md 2.9.9. It cannot be
+; HEAP_PARA is injected by the Makefile out of tools/kernsize.py's `blobseg`
+; (`kend` lifted by BLOB_LIFT, SPEC.md 2.10.3), the way boot/boothd.asm has
+; taken BLOB_SEG since SPEC.md 2.9.9. It cannot be
 ; derived here - LOW_PARA is a nobits size that is not in the file - and it
 ; cannot be a constant, because this sector is assembled before the kernel it
 ; boots is measured.

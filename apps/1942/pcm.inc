@@ -19,42 +19,36 @@ n_pcm_open:
     call OSAPI_MEM_CLAIM_DMA_HI
     jc .out
     mov [n_pcmseg],dx
-    mov es,dx
-    xor bx,bx
-    mov cx,8208
-    xor dx,dx
-    mov si,n_pcmfile
-    call OSAPI_FILE_READ
+    ; Optional, and fetched inside the bracket: ask first, so a busy heap is
+    ; FM effects as it always was and never op_fetch's toast (n_fsxroom).
+    call op_clbget
     jc .bad
-    cmp ax,8208
-    jne .bad
-    or dx,dx
-    jnz .bad
-    cmp word [es:0],0344eh
-    jne .bad
-    cmp word [es:2],05332h
-    jne .bad
-    cmp word [es:4],8208
-    jne .bad
-    cmp word [es:8],1024
-    jne .bad
-    cmp word [es:10],3072
-    jne .bad
-    cmp word [es:12],4096
-    jne .bad
-    cmp word [es:14],8000
-    jne .bad
-    xor dx,dx
-    mov si,16
-    mov cx,8192
-.sum:
-    xor ax,ax
-    mov al,[es:si]
-    add dx,ax
-    inc si
-    loop .sum
-    cmp dx,[es:6]
-    jne .bad
+    mov al,N_P_SFX
+    call op_row
+    call op_lazykb
+    jc .bad
+    xchg ax,bx
+    call OSAPI_MEM_AVAIL
+    cmp ax,bx
+    jb .bad
+    ; The bank is a part of 1942.O88 (N_P_SFX), built with the package, so the
+    ; header's lengths are the ones the expansion below is written for and
+    ; there is no stale pair to check for. A refused fetch has toasted why;
+    ; the game goes on with FM effects, as with no card.
+    mov al,N_P_SFX
+    call n_readbank
+    jc .bad
+    push ds
+    push es
+    mov es,[n_pcmseg]
+    pop ds
+    xor si,si
+    xor di,di
+    mov cx,8208/2
+    rep movsw
+    pop ds
+    mov al,N_P_SFX
+    call op_drop
     ; Expand in place without overwriting unread source bytes. Source bank:
     ; header, shot, explosion, loss. Move loss first, then explosion, then shot.
     push ds
@@ -167,4 +161,3 @@ n_pcm_tick:
 
 n_pcmoffset: dw 0,4112,8224
 n_pcmlength: dw 1024,3072,4096
-n_pcmfile: db '1942.SFX',0

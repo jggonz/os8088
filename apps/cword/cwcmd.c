@@ -48,6 +48,7 @@ static void ovl_cut(void *win)
     if (!cw_sel_on)
         return;
     ovl_copy(win);
+    cw_u_mark(CW_U_CMD);
     cw_sel_kill(win);
 }
 
@@ -68,6 +69,7 @@ static void ovl_paste(void *win)
     if (n <= 0)
         return;
 
+    cw_u_mark(CW_U_CMD);
     if (cw_sel_on)
         cw_sel_kill(win);
     lo = cw_cur;
@@ -128,6 +130,8 @@ static void ovl_newdoc(void *win)
     cw_top = 0;
     cw_attr = 0;
     cw_pap_now = 0;
+    cw_pap_n = 1;                       /* a new document, a new dictionary */
+    cw_u_ok = 0;                        /* ...and nothing to undo into */
     cw_sel_on = 0;
     cw_ext = 0;
     cw_mod = 0;
@@ -265,6 +269,45 @@ static void ovl_font_pick(void *win, int i)
     cw_redraw_all(win);
 }
 
+/* ovl_undo - Edit > Undo, Alt+BkSp and Ctrl+Z (SPEC.md 73.12.4). The
+ * snapshot and the document SWAP, so the next Undo puts back what this one
+ * took away. A full repaint follows: every line may have moved, and a full
+ * repaint is what an Open costs too. */
+static void ovl_undo(void *win)
+{
+    int n;
+    int t;
+
+    if (!cw_u_ok)
+        return;
+    n = (cw_len > cw_u_len) ? cw_len : cw_u_len;
+    cw_farswap(cw_buf, cw_u_seg, 0, (unsigned)n);
+    cw_farswap(cw_att, cw_u_seg, CW_U_ATT, (unsigned)n);
+    cw_farswap(cw_pap_al, cw_u_seg, CW_U_PAP, CW_PAP_MAX);
+    cw_farswap(cw_pap_sp, cw_u_seg, CW_U_PAP + CW_PAP_MAX, CW_PAP_MAX);
+    cw_farswap(cw_pap_op, cw_u_seg, CW_U_PAP + CW_PAP_MAX * 2, CW_PAP_MAX);
+    cw_farswap(cw_pap_li, cw_u_seg, CW_U_PAP + CW_PAP_MAX * 3, CW_PAP_MAX);
+    cw_farswap(cw_pap_fi, cw_u_seg, CW_U_PAP + CW_PAP_MAX * 4, CW_PAP_MAX);
+    cw_farswap(cw_pap_ri, cw_u_seg, CW_U_PAP + CW_PAP_MAX * 5, CW_PAP_MAX);
+    t = cw_len;     cw_len = cw_u_len;       cw_u_len = t;
+    t = cw_cur;     cw_cur = cw_u_cur;       cw_u_cur = t;
+    t = cw_pap_n;   cw_pap_n = cw_u_papn;    cw_u_papn = t;
+    t = cw_pap_now; cw_pap_now = cw_u_now;   cw_u_now = t;
+
+    cw_u_kind = 0;                      /* the next edit opens a new group */
+    cw_sel_on = 0;
+    cw_ext = 0;
+    if (cw_cur > cw_len)
+        cw_cur = cw_len;
+    if (cw_top > cw_len)
+        cw_top = cw_len;
+    cw_top = cw_para_start(cw_top);     /* a paragraph start is a row start
+                                         * in any layout, so the view is
+                                         * valid whatever the swap moved */
+    cw_mod = 1;
+    cw_redraw_all(win);
+}
+
 /* ==========================================================================
  * THE COMMAND DISPATCHER
  *
@@ -348,8 +391,9 @@ static void cw_do(void *win, int act)
     case CWA_VSTA:  cw_vsta = !cw_vsta; cw_redraw_all(win); break;
     case CWA_SHOWP: cw_showp = !cw_showp; cw_redraw_all(win); break;
 
+    case CWA_UNDO:     ovl_undo(win); break;
+
     case CWA_WIN1:
-    case CWA_UNDO:
     default:
         break;
     }
@@ -438,6 +482,75 @@ static int cw_track_menu(void)
     return cw_m_item;
 }
 
+/* ovl_rul_drag - an indent marker follows the pointer along the ruler until
+ * the button comes up, and the paragraph takes the indent where it is let go
+ * (SPEC.md 73.12.4). It is cw_track_menu()'s shape - a press-drag-release has
+ * no motion callback here, so it polls, yields every pass, and holds the gfx
+ * lock for as long as the user holds the button - and it repaints only the
+ * RULER, once per cell the marker crosses, never the text: the paragraph is
+ * laid out again once, on the release.
+ *
+ * The markers used to be pictures: the release did nothing, and the indents
+ * could be reached only from the Ctrl keys and Format Paragraph. */
+static void ovl_rul_drag(void *win, int k)
+{
+    int nc;
+    int c;
+    int p;
+    int last;
+    int start;
+    int guard;
+    int li;
+    int fi;
+
+    nc = cw_wpx / 8;
+    if (nc > CW_RULE_MAX)
+        nc = CW_RULE_MAX;
+    p = cw_pap_of(cw_cur);
+    cw_rul_cell(p, nc);
+    start = (k == 1) ? cw_rm_l : (k == 2) ? cw_rm_f : cw_rm_r;
+    last = start;
+    cw_rul_val = start;
+    cw_rul_drag = k;
+    guard = 0;
+    for (;;) {
+        os88_mouse(&cw_ms);
+        if ((cw_ms.btn & 1) == 0)
+            break;
+        c = (cw_ms.x - cw_tx + 4) / 8;
+        if (cw_ms.x < cw_tx - 4)
+            c = 0;
+        if (c < 0)
+            c = 0;
+        if (c > nc)
+            c = nc;
+        if (c != last) {
+            last = c;
+            cw_rul_val = c;
+            cw_ruler();
+        }
+        os88_task_yield();
+        if (++guard > 30000)
+            break;
+    }
+    cw_rul_drag = 0;
+    if (last == start)
+        return;                         /* let go where it was picked up */
+    li = cw_pap_li[p];
+    fi = cw_pap_fi[p];
+    if (k == 1) {
+        /* the left indent moves and the first line stays put on the page */
+        fi = li + fi - last;
+        if (fi < 0 - last)
+            fi = 0 - last;
+        ovl_pap_apply(win, -1, -1, -1, last, fi, -128);
+    } else if (k == 2) {
+        ovl_pap_apply(win, -1, -1, -1, -128, last - li, -128);
+    } else {
+        ovl_pap_apply(win, -1, -1, -1, -128, -128, nc - last);
+    }
+}
+
 /* ==========================================================================
  * THE CALLBACKS
  * ========================================================================*/
@@ -519,6 +632,12 @@ void os88_onclick(int x, int y, void *win)
             ovl_spacing(win, k - 5);
         else
             ovl_openspc(win, k == 8);
+        return;
+    }
+
+    k = cw_rul_mark(x, y);
+    if (k != 0) {
+        ovl_rul_drag(win, k);
         return;
     }
 
@@ -656,7 +775,7 @@ void os88_onfile(int mode, const char *name, unsigned size_lo,
  * the UI half hides the window and raises a flag, and the worker destroys the
  * record and dies inside its next os88_task_alive(), which is the kernel's own
  * teardown path and frees the task, the region and every claim including
- * CWORD.OVL's.
+ * the one the overlay part was read into.
  *
  * It sleeps four ticks a pass, so it costs a fifth of a second of latency on
  * a command the user has already committed to and nothing at all otherwise. It
@@ -682,7 +801,7 @@ void os88_worker(void *win)
              * liveness question of a window that no longer has an owner
              * (kernel/instance.inc, inst_pkg_alive), and the kernel's own
              * teardown frees the task, the instance, the region and every
-             * claim - including the one CWORD.OVL is in. */
+             * claim - including the one the overlay part is in. */
             os88_gfx_lock();
             os88_wm_destroy(win);
             os88_gfx_unlock();
@@ -792,6 +911,27 @@ void os88_onkey(int ascii, int scan, void *win)
         }
     }
 
+    /* --- the Ins/Del chords, keys.cmd's Cut, Copy and Paste ------------
+     * Shift+Del, Ctrl+Ins and Shift+Ins - the Edit menu's own captions. They
+     * arrive with the KEYPAD's scan codes and, on a period ROM, often with an
+     * ascii: Shift inverts NumLock on the keypad, so Shift+Del is '.' and
+     * Shift+Ins is '0', and the chords used to TYPE those characters over
+     * the selection. The scan code plus the BIOS shift flags tell them from
+     * the digits NumLock types, which is apps/word's decoding (SPEC.md 68.3).
+     * Ctrl+Ins is the same test with the Ctrl bit; an XT ROM drops that one
+     * before int 16h ever sees it, so Edit > Copy is its door there. */
+    if (scan == CW_K_DEL || scan == CW_K_INS) {
+        i = os88_peek(0x40, CW_BIOS_KFLAG);
+        if (i & 3) {                            /* a Shift */
+            cw_do(win, (scan == CW_K_DEL) ? CWA_CUT : CWA_PASTE);
+            return;
+        }
+        if ((i & 4) && scan == CW_K_INS) {      /* Ctrl */
+            cw_do(win, CWA_COPY);
+            return;
+        }
+    }
+
     was = cw_cur;
 
     /* --- the control characters, keys.cmd's map ------------------------- */
@@ -823,7 +963,8 @@ void os88_onkey(int ascii, int scan, void *win)
         case CW_C_INDENT: ovl_indent(win, 5);                return;
         case CW_C_HANG:   ovl_hang(win, 1);                  return;
         case CW_C_UNHANG: ovl_hang(win, 0);                  return;
-        case CW_C_FIND:   cw_do(win, CWA_CHAR);             return;
+        case CW_C_FIND:   cw_do(win, CWA_SEARCH);           return;
+        case CW_C_UNDO:   cw_do(win, CWA_UNDO);             return;
         case CW_C_GOTO:   cw_do(win, CWA_GOTO);             return;
         case CW_C_SAVE:   cw_do(win, CWA_SAVE);             return;
         default:
@@ -920,6 +1061,21 @@ void os88_onkey(int ascii, int scan, void *win)
         break;
     case CW_K_F12:
         cw_do(win, CWA_SAVEAS);
+        break;
+    case CW_K_SF12:                     /* keys.cmd's: Shift+F12 Save, */
+        cw_do(win, CWA_SAVE);           /* Ctrl+F12 Open, Alt+F4 Exit - */
+        break;                          /* the File menu's own captions */
+    case CW_K_CF12:
+        cw_do(win, CWA_OPEN);
+        break;
+    case CW_K_AF4:
+        cw_do(win, CWA_EXIT);
+        break;
+    case CW_K_ABKSP:                    /* Alt+BkSp, where a ROM sends one */
+        cw_do(win, CWA_UNDO);
+        break;
+    case CW_K_CINS:                     /* Ctrl+Ins, where a ROM sends one */
+        cw_do(win, CWA_COPY);
         break;
     default:
         break;

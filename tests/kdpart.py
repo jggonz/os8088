@@ -38,6 +38,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88fat                                                  # noqa: E402
 import os88lz                                                   # noqa: E402
+import os88pkg                                                  # noqa: E402
 
 IMG = os.path.join(ROOT, "build", "os8088-360.img")
 KD = os.path.join(ROOT, "build", "kerndos.bin")
@@ -121,22 +122,26 @@ def main():
              "kern_dos and the Memory page's third arm is greyed on every "
              "machine. $(SYSROOT) in the Makefile is the one variable that "
              "decides it (SPEC.md 96.40.3)" % flags)
-    at = blob.find(PARTS_MAGIC, 0, image)
+    # THE TABLE IS IN THE IMAGE AND THE IMAGE IS PACKED (SPEC.md 20.13.8),
+    # so it is read out of image_unwrap's bytes; the sectors it names are the
+    # FILE's, which is what every read below takes them from
+    tbl = os88pkg.image_unwrap(blob)
+    at = tbl.find(PARTS_MAGIC, 0, image)
     if at < 0:
         fail("flags bit 2 is set and there is no 'O88PARTS' table in the image")
     # **kern_dos IS PART 1 AND THE IMAGE IS A LOADER** (SPEC.md 96.44.4). It
     # was part 0 of a package whose image was the box itself until W9c, which
     # made the image `apps/dos/dosload.asm` and the box part 0 - because
-    # os88pkg.py refuses --compress beside parts, so whatever is the IMAGE
-    # ships raw and 96.40.3 measured that at +932 ms a launch.
-    n = blob[at + PARTS_HDR - 2]
+    # os88pkg.py refused --compress beside parts then, so whatever was the
+    # IMAGE shipped raw and 96.40.3 measured that at +932 ms a launch.
+    n = tbl[at + PARTS_HDR - 2]
     if n != 3:
         fail("the table declares %d part(s); the four-piece DOS.O88 is a "
              "loader image with THREE - the box, the INT 21h core and "
              "kern_dos (SPEC.md 96.44.5)" % n)
     def row(idx):
         _k, pflags, poff, plen, pzkb = struct.unpack_from(
-            "<BBHHH", blob, at + PARTS_HDR + PART_ROW * idx)
+            "<BBHHH", tbl, at + PARTS_HDR + PART_ROW * idx)
         if not pflags & 16:
             fail("part %d's flags are 0x%02X and OP_COMP (16) is clear: an "
                  "uncompressed part costs the 360KB system disk eight more "

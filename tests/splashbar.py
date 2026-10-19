@@ -28,7 +28,8 @@ than a restatement of the first:
     width of the trough is measured out of the card's own framebuffer and has
     to take many values too, and to grow.
 
-Both halves read state that lives in `.boot2`, and its segment is **HEAP_SEG**:
+Both halves read state that lives in `.boot2`, and its segment is **BLOB_SEG_AT**
+(HEAP_SEG, lifted by BLOB_LIFT where `.cold` is the top rung - SPEC.md 2.10.3):
 since SPEC.md 2.9.5 stage 2 copies itself to the heap's floor before it reads a
 sector, so the blob's address is a kernel constant for the whole boot.
 `[spl_fseg]` is NOT the way in here - stage 2 publishes that word only after the
@@ -88,7 +89,8 @@ def main():
     sect = os88sym.sections()
     for n in ("spl_done", "spl_total"):
         assert sect[n] == ".boot2", (n, sect[n])
-    blob = os88sym.equates()["HEAP_SEG"]
+    eq = os88sym.equates()       # HEAP_SEG lifted by BLOB_LIFT (SPEC.md 2.10.3)
+    blob = eq.get("BLOB_SEG_AT", eq["HEAP_SEG"])
     off_done = os88sym.syms()["spl_done"]
     off_total = os88sym.syms()["spl_total"]
     off_bar = os88sym.syms()["spl_l_bar"]

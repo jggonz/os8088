@@ -146,7 +146,10 @@ def scene(pixels,pal,cga):
                 for p in range(4):b=(b<<2)|pal['cga_map'][pixels[(y*6//5)*256+(x+p)*4//5]]
                 data.append(b)
     else:data=b''.join(pixels[p::4] for p in range(4))
-    return b'N42B'+word(len(data)+8)+bytes([int(cga),0])+data
+    # No header: a scene is a PART of 1942.O88 (SPEC.md 101.2), whose row
+    # carries its length, so the N42B tag and the length word it used to
+    # validate a file against were bytes the guest only stepped over.
+    return bytes(data)
 
 def vga_cache(sprites):
     unique={(s['w'],s['h'],s['pixels']):s for s in sprites if accelerated(s)}

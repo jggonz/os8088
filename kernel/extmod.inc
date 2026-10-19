@@ -93,7 +93,7 @@ section .modx
     call exk_go
     dw %1
 %endmacro
-EXT_NENT    equ 12
+EXT_NENT    equ 14
 modx_hdr:
     dw 0x384F                   ; MOD_H_MAGIC
     db MOD_VER, MOD_EXT         ; MOD_H_VER, MOD_H_ID
@@ -111,6 +111,29 @@ modx_hdr:
     dw ext_e_fsrect             ; EXT_FSRECT
     dw vid_disp_desk            ; EXT_DESK
     dw ext_e_ylow               ; EXT_YLOW
+%ifdef SEAMCUT                  ; ...and the two seam CUTS, whose bodies are
+    dw ext_fcut                 ; EXT_FCUT   this image's since kernel size
+%else                           ;            pass 13 (font.inc and vga12.inc
+    dw ext_refuse               ;            define the two numbers; a knob
+%endif                          ;            that compiles a cut out leaves
+%ifndef NOBLITCUT               ;            its slot refusing, so the
+    dw ext_bcut                 ; EXT_BCUT   numbering never moves)
+%else
+    dw ext_refuse
+%endif
+%if EXT_YLOW != 11 || EXT_NENT != 14
+  %error "extmod: EXT_FCUT and EXT_BCUT are entries 12 and 13, after EXT_YLOW"
+%endif
+%ifdef SEAMCUT
+ %if EXT_FCUT != 12
+  %error "extmod: font.inc's EXT_FCUT is not this header's entry 12"
+ %endif
+%endif
+%ifndef NOBLITCUT
+ %if EXT_BCUT != 13
+  %error "extmod: vga12.inc's EXT_BCUT is not this header's entry 13"
+ %endif
+%endif
 
 ; THE TWO KINDS OF CALL SITE (SPEC.md 39.19.6). Two entries are GATED - reached
 ; only behind a resident `cmp byte [vid_ndisp], 1 / jbe` - because their paths
@@ -282,8 +305,14 @@ ext_e_fsx:
     call KERNEL_SEG:apic_wm_top ; OSAPI_WM_TOP's own cell is the door: the
     or bx, bx                   ; same five bytes as an EXK and no exk_go
     jz .notop
-.win:                           ; (NOT ext_wctx: that needs DI banked
+.win:
+    mov al, bl                  ; BX = 1..15 IS A DISPLAY, BX-1 (SPEC.md
+    dec ax                      ; 53.1.2): fsx_caps has already refused one
+    cmp bx, 16                  ; past [vid_ndisp]
+    jb .kind
+                                ; (NOT ext_wctx: that needs DI banked
     EXK wm_disp_of              ; round it, and this is the one entry a
+.kind:
     call ext_kind_of            ; WORKER reaches - four bytes deeper on its
     mov dl, al                  ; slice for two bytes of image. The CENTRE,
                                 ; then the origin, then the primary (SPEC.md
@@ -583,8 +612,8 @@ ui_drag_size:
     push word [bx+W_Y]          ; because the snap below can move a window
     push word [bx+W_X]          ; that kept its size
     call wm_disp_now            ; **THE DISPLAY IS DECIDED ONCE, HERE** (SPEC.md
-    mov [wm_lf_disp], al        ; 39.16.4.2). Armed before the first question is
-    mov [wm_lf_win], bx         ; asked and spent at .fin, so the resize this
+    mov [cs:wm_lf_disp], al     ; 39.16.4.2). Armed before the first question is
+    mov [cs:wm_lf_win], bx      ; asked and spent at .fin, so the resize this
                                 ; routine applies cannot change the answer under
                                 ; the steps that follow it
     call ext_kind_of            ; the kind it stands on now (wm_kind_now's own
@@ -665,7 +694,7 @@ ui_drag_size:
                                 ; it for, not the one its new frame sits on
 .fin:
     xor ax, ax                  ; ...and 0 is no window, wm_wins starting well
-    mov [wm_lf_win], ax         ; above it
+    mov [cs:wm_lf_win], ax      ; above it
     push es                     ; ZF = 1 exactly when all four words are what
     push ss                     ; they were: the four on the stack (X lowest,
     pop es                      ; the record's own order) against the record
@@ -1006,6 +1035,27 @@ wm_fit_box:
 .out:
     retf
 
+; --- WHICH DISPLAY A LANDING DECIDED ON (SPEC.md 39.16.4.2) -------------------
+; wm_land_fit asks wm_disp_now ONCE and every step after it is answered from
+; here, because the RESIZE it applies can stop the straddle being true: a
+; 250x303 Arkanoid dropped over the seam takes the CGA's 208x156 and no longer
+; reaches the CGA at all, so wm_kind_bank recorded the HERCULES against a CGA
+; frame and the app's own OSAPI_WM_DISPLAY read the Hercules' 720x348 to lay
+; out a 208-wide window. Two answers to one question, exactly as SPEC.md
+; 39.16.4.1 already had to settle once - and this is the same defect one step
+; further in, where the geometry moves between the two asks rather than the
+; routine.
+;
+; The WINDOW is latched beside the answer so a handler that asks about some
+; OTHER window during the notification gets the truth. IN THE IMAGE, with a
+; real initialiser, and not resident (kernel size pass 13): every reader and
+; writer is in this image, and a fresh load is exactly when "nothing armed" is
+; right - wm_disp_now is asked from the first press after an Extend, long
+; before any landing, and 0 is "nothing armed" only because wm_wins is well
+; above it. CS: on every access, DS being the kernel's here.
+wm_lf_win:  dw 0
+wm_lf_disp: db 0
+
 ; -----------------------------------------------------------------------------
 ; wm_disp_now - WHICH DISPLAY IS THIS WINDOW'S? (SPEC.md 39.16.4.1)
 ; in:       BX = the window
@@ -1023,9 +1073,9 @@ wm_fit_box:
 ; only answer that cannot leave a window unreachable (39.17).
 ; -----------------------------------------------------------------------------
 wm_disp_now:
-    cmp [wm_lf_win], bx         ; **A LANDING DECIDES THIS ONCE** (SPEC.md
+    cmp [cs:wm_lf_win], bx      ; **A LANDING DECIDES THIS ONCE** (SPEC.md
     jne .ask                    ; 39.16.4.2): ui_drag_size arms the latch with
-    mov al, [wm_lf_disp]        ; the answer it acted on, because the RESIZE it
+    mov al, [cs:wm_lf_disp]     ; the answer it acted on, because the RESIZE it
     ret                         ; then applies can stop the straddle being
 .ask:                           ; true - and every step after it re-derived
     push dx                     ; the answer from the new geometry
@@ -1136,7 +1186,7 @@ ext_extend_b:
 ; The three sequences the Extend arm and the bracket's restore both make.
 ext_kapply_eq:
     call ext_kapply
-    EXK vid_equip
+    call ext_equip              ; (this image's own: VSW_EQUIP, below)
     ret
 ext_kapply:
     mov [vid_kind], al
@@ -1144,8 +1194,308 @@ ext_kapply:
     ret
 ext_two:
     mov word [vid_ndisp], 2     ; ndisp = 2, cur = 0: one word (vidsel.inc)
-    EXK vid_desk_union
+    call ext_desk_union         ; (this image's own: VSW_UNION, below)
     ret
+; ...and the two of vidsel.inc's this image needs WITHOUT the panel: the
+; bracket's restore (vid_fsx_leave, EXT_FSX's EXTF_LEAVE) runs with nothing but
+; this image mounted, and both bodies are CTRL.DRV's otherwise (kernel size
+; pass 13, KSW_SECT in kernel.asm)
+VSW_EQUIP ext
+VSW_UNION ext, EXK
+
+%ifdef SEAMCUT
+; -----------------------------------------------------------------------------
+; ext_fcut - SPEC.md 39.14.11: the one cell a display seam crosses, CUT
+;            instead of dropped (font.inc's font_ch_cut until kernel size
+;            pass 13; EXT_FCUT, behind font_ch_spill's [gfx_dnest] = 1 test)
+;
+; in:       CX = x, DX = y, LOCAL to the display font_char entered; AL = the
+;           character; one of the two edge tests has just failed
+; out:      CF = 0 - font_seam_a holds this display's part of the cell, and the
+;           spill has ALREADY been drawn on the display across the seam with
+;           this one put back current. The caller draws font_seam_a in place
+;           and must NOT re-test the edges: nothing is left outside them, and
+;           the coordinates that failed have not moved
+;           CF = 1 - refused, and 39.14.2's whole-cell drop stands
+; clobbers: nothing but the flags
+;
+; The seam is a multiple of 8 and the cell's top-left is left of it, so the
+; cell's two byte-columns fall one wholly each side: the cut lands exactly
+; where the renderers already split, and neither of them gains an instruction.
+; What is cut is the GLYPH, into the two scratch cells beside the table, and
+; each half is then drawn by an ORDINARY font_char at ordinary VIRTUAL
+; coordinates - which resolves its own display, runs its own clip region and
+; picks its own renderer, because 39.14.10's question is asked per display and
+; the two cards need not be alike.
+;
+; **The spill is drawn FIRST and this display's part built after it**, and that
+; order is not a preference: a spill can run off the far display's OTHER edge
+; and cut again, and that cut writes font_seam_a. Building ours last is what
+; makes the recursion harmless - and it is bounded at two, because a spill sits
+; at coordinate 0 in the axis it crossed and only one axis carries a seam.
+; -----------------------------------------------------------------------------
+ext_fcut:                       ; [gfx_dnest] = 1 was asked by the caller,
+    cmp cx, [vid_cw]            ; font_ch_spill, before the far call
+    jb .anchor                  ; ...is the ANCHOR even on this display? 39.2.1's
+.no:                            ; dead zone answers with the primary, and a
+    stc                         ; cell there fails the same edge test with
+    retf                        ; nothing across it - and would cut for ever.
+.anchor:                        ; (.no sits HERE, in short reach of every
+    cmp dx, [vid_ch]            ; refusal below, as it sat above .live)
+    jae .no
+    test byte [vid_cw], 7       ; a width that is not a multiple of 8 would
+    jnz .no                     ; leave our own half spilling into the next
+                                ; row. 39.14.7.2 refuses an odd cut rather
+                                ; than approximating it and so does this; every
+                                ; adapter here is 640 or 720 wide, so what the
+                                ; compare buys is the property, not the case
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    mov es, [font_seg]          ; ES:SI -> the source rows, wherever the table
+    sub al, FONT_FIRST          ; is (SPEC.md 6) - and this is the same
+    cbw                         ; arithmetic that will address the scratch
+    shl ax, 1                   ; cell on the way back in. `cbw` AFTER the
+    shl ax, 1                   ; subtract, and this is the ONE site with no
+    shl ax, 1                   ; range test above it: AL can also be
+    add ax, [font_base]         ; FONT_SEAM_A/_B (96/97), and 97-32 = 65, still
+    xchg ax, si                 ; (ES is font_char's to clobber: it banked it)
+                                ; positive. AX carries SI's old value out of
+                                ; the xchg and is spent below - `mov al,1`
+                                ; then vid_ctx_ptr, which takes its index in
+                                ; AL and does `mul dl`, so AH is that
+                                ; instruction's OUTPUT and not an input
+
+    mov bx, [vid_cw]            ; BX = k, this display's columns of the cell,
+    sub bx, cx                  ; and BP = n, its rows. Both are 1..8: the
+    cmp bx, 8                   ; anchor is on the display and the cell is 8
+    jbe .kok
+    mov bx, 8
+.kok:
+    mov bp, [vid_ch]
+    sub bp, dx
+    cmp bp, 8
+    jbe .nok
+    mov bp, 8
+.nok:
+
+    mov al, 1                   ; which axis carries the SEAM (39.19.2)? The
+    call ext_ctx_ptr            ; second display's VX names it and no mode byte
+    mov ax, [di+VID_CTX_VX]     ; has to be read - gfx_blit4's cut asks exactly
+    or ax, ax                   ; this. vid_ctx_ptr keeps AX, which is why the
+    jz .below                   ; index goes in through AL
+
+    cmp bx, 8                   ; --- RIGHT: the seam is a COLUMN
+    jae .part                   ; ...which this cell does not reach: its
+                                ; overhang is a screen edge with nothing beyond
+                                ; it, and .part clips it to what is here
+    mov di, font_seam_b         ; B[i] = src[i] << k - the columns past the
+    mov cx, bx                  ; seam, lifted to the far display's first. All
+    mov ch, 8                   ; eight ROWS go: it runs its own y test, and
+.bxr:                           ; its height is its own
+    es lodsb                    ; (DF = 0, SPEC.md 1: SI walks itself, and the
+    shl al, cl                  ; `sub si, 8` below puts it back either way)
+    mov [ss:di], al
+    inc di
+    dec ch
+    jnz .bxr
+    sub si, 8                   ; SI back to the source, for .part
+    add dx, [vid_oy]            ; ...and the spill goes AT the seam, at the
+    mov cx, [vid_ox]            ; cell's own y
+    add cx, [vid_cw]
+    jmp short .spill
+
+.below:                         ; --- BELOW: the seam is a ROW
+    cmp bp, 8
+    jae .part
+    add cx, [vid_ox]            ; the spill's x is the cell's own, banked here
+    push cx                     ; because the loop below wants CX
+    mov di, font_seam_b         ; B[i] = src[i+n] - the rows past the seam,
+    add si, bp                  ; lifted to the far display's first. All eight
+    mov cx, 8                   ; COLUMNS go: it runs its own x test
+    sub cx, bp
+.byr:
+    es lodsb
+    mov [ss:di], al
+    inc di
+    loop .byr                   ; CX = 8 - bp, 1..7 (`jae .part` above proved
+                                ; bp < 8). A CX of 0 would run 65,536 times -
+                                ; and so would the `dec cx / jnz` this
+                                ; replaces, to the iteration, so the hazard is
+                                ; unchanged rather than introduced
+    mov cx, bp                  ; ...and the rows the cell has not got there
+    xor al, al                  ; are blank, which draws nothing at all,
+.byz:                           ; text being transparent
+    mov [ss:di], al
+    inc di
+    loop .byz                   ; CX = bp, 1..8
+    sub si, 8
+    pop cx
+    mov dx, [vid_oy]
+    add dx, [vid_ch]
+
+.spill:
+    mov al, [vid_cur]           ; 39.14.3 leaves the LAST display drawn on
+    push ax                     ; current, so ours has to be named to come back
+    dec byte [gfx_dnest]        ; the spill takes its own enter
+    mov al, FONT_SEAM_B
+    EXK font_ch_seam            ; (the two codes are private to this routine)
+    inc byte [gfx_dnest]
+    pop ax
+    EXK vid_ctx_act             ; ...and this display is live again, which is
+                                ; what the caller's fall-through rests on
+
+.part:
+    mov di, font_seam_a         ; A[i] = src[i] masked to the k columns and n
+    mov cx, bx                  ; rows that are HERE, the rest zeroed. THE
+    mov al, 0xFF                ; ZEROING IS THE WHOLE MASK: a blank row writes
+    shr al, cl                  ; nothing, and a glyph with no ink past the
+    not al                      ; seam leaves AL zero after the renderers' own
+    mov ah, al                  ; shift - which their `or al, al / jz` skips
+    mov cx, 8                   ; already. k = 8 shifts the byte away and `not`
+.par:                           ; brings back FF, so no mask is no work
+    es lodsb
+    and al, ah
+    dec bp                      ; ONE loop over all eight rows: the first n
+    jns .pkeep                  ; (BP = n, 1..8, counted down to -1) keep
+    xor al, al                  ; their columns and the rest are zeroed - what
+.pkeep:                         ; two loops and a `jz` around the second did.
+    mov [ss:di], al             ; BP is spent; the ladder gives it back
+    inc di
+    loop .par
+    clc                         ; POP leaves the flags alone, so the answer
+    pop bp                      ; survives - and the pops are written out, the
+    pop di                      ; kernel's kret_bp ladder being no near call
+    pop si                      ; away from the image
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    retf
+%endif
+
+%ifndef NOBLITCUT
+; -----------------------------------------------------------------------------
+; ext_bcut - gfx_blit4's CUT (SPEC.md 39.14.7.2), EXTD.DRV's since kernel size
+; pass 13 (it was gfx_blit4.cut, vga12.inc), and out of line there because no
+; machine with one
+; card and no blit that fits one display ever reaches it.
+;
+; 39.14.7.1's gate is binary: a block that fits one display keeps 5.4.1's fast
+; path and a block that straddles gives it up ENTIRELY - every coalesced run
+; becomes a gfx_fill at its own arrival, which is the 4.17x Set 63 measured. A
+; straddle is not, though, a reason to give up the fast path on the pixels that
+; do NOT straddle: displays are placed edge to edge (39.19.2), so there is
+; exactly ONE seam, and either side of it is a block that fits one display.
+;
+; What the seam costs is a source pointer, and that is the whole feasibility
+; question. A run carries no source (39.14.7) and a SUB-RECT does, so the
+; second half has to start `n` pixels along - and the source is packed two
+; pixels to a byte, high nibble leftmost, so it can only do that when `n` is
+; EVEN. It is: the seam is the primary's own width, 640 or 720, and a window's
+; content origin is a multiple of 8 (11.94). An odd cut is refused rather than
+; approximated, and the refusal is 39.14.7's path, unchanged.
+;
+; The half that does not cross is the same case one axis along, and it is
+; taken too: vid_span_one refuses a block that fits one display in x and hangs
+; into the DEAD ZONE in y (39.2.1), and those rows are drawn by nobody. So a
+; block that does not reach the seam at all is one forced pass rather than
+; two, and the row loop's own `cmp bx, [vid_ch]` is what skips the rows that
+; are not there.
+;
+; in:  AX = x, BX = y, CX = w, DX = h (VIRTUAL), ES:SI = source, BP = stride,
+;      [gfx_blit_fd] = 0, no hook taken and no nest put up
+; -----------------------------------------------------------------------------
+ext_bcut:
+    push ax                     ; vid_ctx_ptr answers in DI and DI is the
+    mov al, 1                   ; caller's, banked at entry. Display 1 is at
+    call ext_ctx_ptr            ; (VX, MBAR_H) on the RIGHT layout and (0, VY)
+    pop ax                      ; on BELOW, so a NON-ZERO VX names the axis
+    cmp word [di+VID_CTX_VX], 0 ; (39.19.2) and no mode byte has to be read -
+    je .cutv                    ; asked in memory, so AX comes back at once
+    mov di, [di+VID_CTX_VX]     ; ...and in DI, where the arithmetic wants it
+
+    ; --- RIGHT: the seam is a COLUMN, and a column carries a nibble phase --
+    sub di, ax                  ; DI = pixels of this block left of the seam
+    jle .cutd1                  ; none: display 1 owns the whole of it
+    cmp di, cx
+    jge .cutd0                  ; all of them: display 0 does
+    test di, 1
+    jnz .odd                   ; AN ODD CUT (see above): the second half's
+                                ; source would start on a LOW nibble, which no
+                                ; path below can take. 39.14.7's mechanism is
+                                ; still correct and is what happens
+    push cx
+    mov cx, di                  ; --- the left half, on display 0
+    mov byte [gfx_blit_fd], 1
+    EXK gfx_blit4               ; ...which gives back EVERY register, DI and AX
+    pop cx                      ; included - so the cut needs no banked state:
+    sub cx, di                  ; --- the right half, on display 1, starts at
+    add ax, di                  ; x + n, which IS the seam, and its source is
+    shr di, 1                   ; n/2 BYTES along (size pass 9: this banked n
+                                ; and the seam in two words it never needed)
+    add si, di
+    jmp short .cutd1            ; ...which is the second half's whole story
+
+    ; --- BELOW: the seam is a ROW, and a row carries no parity at all ------
+    ; The source advance is a whole number of STRIDES, so there is no even-cut
+    ; test here and nothing to refuse. BP is SIGNED - Paint stores its canvas
+    ; bottom row first and hands over a negative stride (42.9) - and `mul`
+    ; leaves the same low sixteen bits as `imul` would, which is all that is
+    ; being added to SI.
+.cutv:
+    mov di, [di+VID_CTX_VY]
+    sub di, bx                  ; DI = rows of this block above the seam
+    jle .cutd1
+    cmp di, dx
+    jge .cutd0
+    push dx
+    mov dx, di                  ; --- the top half, on display 0
+    mov byte [gfx_blit_fd], 1
+    EXK gfx_blit4               ; (every register back, as above)
+    pop dx
+    sub dx, di                  ; --- and the bottom half, on display 1, at
+    add bx, di                  ; y + n = the seam, its source n STRIDES along
+    push ax
+    push dx
+    mov ax, di
+    mul bp
+    add si, ax
+    pop dx
+    pop ax
+    jmp short .cutd1
+.cutd0:
+    mov byte [gfx_blit_fd], 1   ; one pass, on display 0: it does not reach the
+    jmp short .cut1             ; seam and is in the dead zone in the other axis
+.cutd1:
+    mov byte [gfx_blit_fd], 2   ; ...or on display 1, for the same reason
+.cut1:                          ; ...and the two-pass cases arrive at .cutd1
+    EXK gfx_blit4               ; for their SECOND half, which is the same
+    mov byte [gfx_blit_fd], 0   ; three instructions with the same display
+    clc                         ; done: the caller's `jmp .pops` (CF = 0)
+    retf
+.odd:
+    stc                         ; ...or refused, and the caller takes
+    retf                        ; 39.14.7's path (CF = 1, which is mod_gone's)
+
+%endif
+
+%ifndef SEAMCUT
+ %define EXT_REFUSE_WANTED
+%endif
+%ifdef NOBLITCUT
+ %define EXT_REFUSE_WANTED
+%endif
+%ifdef EXT_REFUSE_WANTED
+ext_refuse:                     ; a knob-compiled-out cut: CF = 1, the drop
+    stc
+    retf
+%endif
 
 ; ==== the way back into the kernel ==========================================
 ; exk_go - the far call EXK names, built by hand (dockmod.inc's dkk_* device

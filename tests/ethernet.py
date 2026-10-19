@@ -81,7 +81,7 @@ PORT = 8090
 PATH = "/eth.htm"
 URL = "http://10.0.2.2:%d%s" % (PORT, PATH)
 
-SK_RXMAX, SK_TXMAX = 8192, 1024         # tcp.inc's top rung (SPEC.md 72.13)
+SK_RXMAX, SK_TXMAX = 8192, 4096         # tcp.inc's top rung (SPEC.md 72.13, 72.4.3)
 ETH_ROW, DRVR_SZ, DRVR_SEG = 2, 16, 2   # drv_tab row 2 since SPEC.md 31.1's
                                         # reorder (sound, hdd, ETHER, ram, net)
 DH_BOUND = 3

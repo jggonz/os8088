@@ -69,7 +69,9 @@ PXPART_WRITE equ 7                  ; SAVE AS's five writers, LINKED:
                                     ; pxwrite.asm (SPEC.md 106.24)
 PXPART_EXTRA equ 8                  ; TIFF, ICO, IFF and MacPaint, LINKED:
                                     ; pxextra.asm (SPEC.md 106.25)
-PX_NPARTS   equ 9                   ; (a decoder part is never 0: [px_kheld]
+PXPART_GFX  equ 9                   ; THE COLOUR FACE'S PICTURES, data and not
+                                    ; code: tools/pixart.py (SPEC.md 106.16)
+PX_NPARTS   equ 10                  ; (a decoder part is never 0: [px_kheld]
                                     ; 0 is "none held", SPEC.md 106.18)
 PXD_QUIET   equ 0xFE                ; a refusal already said (op_fetch's own
                                     ; toast): px_refusal says nothing more
@@ -3507,7 +3509,7 @@ px_lab_full:
 ; finds the picture and the caption by the button's index ----------------------
 px_lab_col: times PX_NB dw px_bpaint
 
-; --- the colour face's pictures, PIXEL.GFX (SPEC.md 106.16) -------------------
+; --- the colour face's pictures, part 9 (SPEC.md 106.16) ----------------------
 ; tools/pixart.py draws them, and compares these numbers with its own
 ; (--check-asm): the toolbar's faces are PXA_TBH rows of their own widths
 ; (PXA_TABLES, PX_B_* order then Stop), PXA_TBS states each - up, pressed,
@@ -3547,9 +3549,10 @@ PXA_TLOFF   equ PXA_O
     PXA_TABLES 40, 40, 40, 40, 56, 64, 40, 40, 48, 64, 40
 PXA_SIZE    equ PXA_TLOFF + PXA_TLN * PXA_TLS * PXA_TLFACE
 %if PXA_SIZE != 27648
-  %error "PIXEL.GFX is 27,648 bytes (tools/pixart.py)"
+  %error "the colour face's pictures are 27,648 bytes (tools/pixart.py)"
 %endif
-pxa_name:   db 'PIXEL.GFX', 0
+PXA_KB      equ (PXA_SIZE + 1023) / 1024    ; what part 9 holds once fetched
+PXA_ROW     equ op_table + OP_T_ROWS + PXPART_GFX * OP_ROW  ; ...and its row
 
 ; --- each button's kind: OS88UI_IMG for a picture, PX_BK_PIC when it needs a
 ; picture and is greyed without one (px_flags) ---------------------------------
@@ -3916,6 +3919,7 @@ px_s_r11:   db 'too big to unpack', 0
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 6 editing (106.24)
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 7 Save As's writers (106.24)
       OS88_PART OP_SEG, OP_COMP | OP_LAZY   ; 8 TIFF, ICO, IFF, MAC (106.25)
+      OS88_PART OP_ASSET, OP_COMP | OP_LAZY ; 9 the colour face (106.16)
     OS88_PARTS_END
 
 ; =============================================================================
@@ -4306,7 +4310,9 @@ px_fidx     equ px_cur + PXR_FIDX
     PXVAR px_bvpic, 2               ; ...its picture and caption...
     PXVAR px_bvcap, 2
     PXVAR px_bvy, 2                 ; ...and the next row
-    PXVAR pxa_seg, 2                ; PIXEL.GFX's claim, or 0
+    PXVAR pxa_seg, 2                ; part 9's segment (the pictures), or 0
+    PXVAR pxa_drop, 1               ; ...1: dropped by an open's pressure, so
+                                    ; the open's end asks for them again
     ; the decoder parts (SPEC.md 106.18)
     PXVAR px_k, PXK_SZ              ; THE CONTEXT, both vectors' DI
     PXVAR px_kheld, 1               ; the decoder part held, 0 none

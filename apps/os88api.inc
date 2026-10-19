@@ -399,8 +399,15 @@ ICON_SOLID  equ 0                ; the record's first byte for a picture whose
                                  ; BX = your window: if it owns the menu bar,
                                  ; the bar and the keys go back to the front
                                  ; application window (call it from a
-                                 ; callback, under the lock - Esc). CF=1 =
-                                 ; refused; every register preserved. NEVER
+                                 ; callback, under the lock - Esc). AL = 4
+                                 ; LIB: out DX = the paragraph of the STICKY
+                                 ; APP LIBRARY that rides in DESK.DRV (SPEC.md
+                                 ; 110.15), its version word at DX:2 - only
+                                 ; after a QUERY that loaded the layer.
+                                 ; apps/os88stik.inc's STIK_LIB arm asks it;
+                                 ; nothing else should. CF=1 =
+                                 ; refused; every register preserved but
+                                 ; LIB's DX. NEVER
                                  ; minimize or fullscreen a desk window: it
                                  ; has no tile to come back by
 %define OSAPI_GFX_DESK      KERNEL_SEG:0x0481   ; AX,BX = x1,y1  CX,DX = x2,y2
@@ -728,6 +735,21 @@ SPK_E_BUSY       equ 3           ; open already, or a clip plays
                                  ; after OSAPI_WM_CREATE. A resizable
                                  ; window's paint/click procs MUST lay out
                                  ; from the live W_W/W_H every call.
+%define OSAPI_WM_QUIET      KERNEL_SEG:0x048D   ; BX = win ptr, AL = 0 clear /
+                                 ; non-zero set; nothing answered, every
+                                 ; register and the flags kept. While this
+                                 ; window is up with it set, an idle
+                                 ; session BLANKS the signal instead of
+                                 ; animating (SPEC.md 79.10). For a program
+                                 ; that WORKS while nobody touches the
+                                 ; machine - a server mid-transfer - and
+                                 ; would otherwise share the UI task and
+                                 ; the CPU with the animation: FTPD sets it
+                                 ; at Start and clears it at Stop. Read when
+                                 ; a session STARTS, so a session already
+                                 ; running finishes as it began. The bit
+                                 ; goes with the window. kern_small has no
+                                 ; animation, takes the call and ignores it
 %define OSAPI_WM_NOANIM     KERNEL_SEG:0x03CD   ; BX = win ptr; NO other argument and
                                  ; no answer: this window does not zoom
                                  ; open (SPEC.md 11.99.2.1). Call it
@@ -1595,6 +1617,19 @@ MEMC_POST   equ 1                ; AH: post - BX = a window of YOURS, AL = the
                                  ; kern_small the what-if is the plain level
                                  ; door's answer and a post is refused
                                  ; (SPEC.md 66.0)
+%define OSAPI_MEM_HMA       KERNEL_SEG:0x0487   ; A DRIVER'S BUFFER IN THE HMA
+                                 ; (SPEC.md 2.10.8): AX = bytes, 1..8,192, out
+                                 ; CF=0 DX = its segment and AX = its first
+                                 ; OFFSET - never 0, so address it as DX:AX -
+                                 ; and DX*16+AX is its 24-bit physical address
+                                 ; for a DMA controller (one 64KB page: the
+                                 ; HMA crosses none). AX = 0, DX = a block's
+                                 ; segment: give it back. CF=1: no HMA here,
+                                 ; none left, or you are not a LOADED DRIVER -
+                                 ; the only callers it serves. Not movable,
+                                 ; not purgeable, not in a hibernate's image:
+                                 ; your unload gives back what you forget.
+                                 ; A REFUSAL IS ORDINARY: fall back to the heap
 %define OSAPI_MEM_AVAIL     KERNEL_SEG:0x01B0   ; out AX = largest free run in
                                  ; KB, BX = total free KB. Size yourself from
                                  ; THIS, not from int 12h: it is the only
@@ -1848,6 +1883,15 @@ MEMC_POST   equ 1                ; AH: post - BX = a window of YOURS, AL = the
 ; addressing needs unreal mode, which is tier 2 only and lives entirely inside
 ; the kernel. YOU are 8086 code: no 32-bit register, no FS, no GS, no
 ; `cpu 386` island of your own (SPEC.md 1 rule 1, no exception).
+;
+; THE TWO READERS THROUGH THE TOKEN are apps/os88la.inc (SPEC.md 41.13) and
+; apps/os88ub.inc (41.15): the token IS the block's linear base, and a hot
+; loop that owns its segment registers may read it IN PLACE - through a
+; LOADALL'd DS on tier 1, through a DS whose base a moment of protected mode
+; loaded on tier 2 - the Video Player's decode of a held file (98.3.18.11,
+; 98.3.18.14). Those two includes are the whole of the exception, each behind
+; a check against OSAPI_XMEM_COPY, and os88ub.inc's `cpu 386` island is the
+; one a package may assemble (SPEC.md 1 rule 1). Everything else still copies.
 ;
 ; BRANCH ON THE CAPS, NEVER ON THE TIER. OSAPI_XMEM_CAPS returning 0 KB is the
 ; only answer that means "do not try", and it is the answer on a 386 whose A20
@@ -2663,9 +2707,10 @@ DQ_MAXREC  equ 8                 ; the most records one call can write, so
                                  ;
                                  ; A DRIVER MUST OPT IN. One that publishes no
                                  ; DSV_PKGCALL cannot be reached this way at
-                                 ; all: HDD.DRV does not, so no .O88 on the
-                                 ; floppy can name DRVC_DISK here and arrive at
-                                 ; a raw sector write.
+                                 ; all. HDD.DRV's reaches HDV_ARM and
+                                 ; HDV_DISARM and nothing else, so no .O88 on
+                                 ; the floppy can name DRVC_DISK here and
+                                 ; arrive at a raw sector write.
                                  ;
                                  ; WORKER-SAFETY IS THE DRIVER'S TO STATE,
                                  ; per verb (SPEC.md 20.6 rule 7). The cell
@@ -2714,11 +2759,23 @@ PKGV_IDENT   equ 0              ; **VERB 0 OF EVERY PACKAGE DOOR IS IDENTIFY**
 ; the ANSWER here and derives nothing, which is what makes it different from
 ; the per-driver copy 51.12.1 refuses.
 DRVM_CEIL_DISK equ 4           ; DRVC_DISK's ceiling, in KB
-DRVM_CEIL_NET  equ 31          ; ...and DRVC_NET's
+DRVM_CEIL_NET  equ 34          ; ...and DRVC_NET's
 DRVC_SOUND   equ 1
 DRVC_DISK    equ 2              ; block volumes: hard disks (SPEC.md 51.8).
-                                ; Publishes no package entry point and is not
-                                ; going to - see OSAPI_DRV_CALL above
+                                ; Its package door reaches TWO verbs and no
+                                ; sector (SPEC.md 52.1.4) - a read of YOURS
+                                ; sent straight into XMS on a 386:
+HDV_ARM      equ 1              ; DX = a buffer's segment (offset 0), CX =
+                                ; its bytes (whole sectors, <= 32768), DI:SI
+                                ; = the XMS linear address its first byte
+                                ; stands for: until HDV_DISARM, a sector rung
+                                ; 1 reads INTO that buffer goes there instead.
+                                ; CF=1 AX = 1 below a 386, 2 A20 shut, 3 bad
+                                ; arguments. Arm, read, disarm - one callback
+HDV_DISARM   equ 2              ; ES:DI = 8 bytes: bit n set = sector n of the
+                                ; buffer is in XMS and NOT in the buffer. Copy
+                                ; up the rest: a sector the kernel's cache
+                                ; served, or a disk on rung 0, is clear
                                 ; 3 was the serial monitor's and is RETIRED,
                                 ; not free: a class number is ABI, and a driver
                                 ; built against the old header would attach as
@@ -3480,6 +3537,164 @@ OS88_HDR_FLAGS equ 0
 %endmacro
 
 ; -----------------------------------------------------------------------------
+; THE STICKY APP LIBRARY'S ABI (SPEC.md 110.15). apps/os88stik.inc's code is
+; ONE copy, inside DESK.DRV, for every Sticky App built `%define STIK_LIB`
+; (kern_big's STIK_DESKONLY arm): OSAPI_WM_DESK's LIB verb names its
+; paragraph, the library runs with DS = the CALLING package, and everything it
+; knows about that package is in a FIXED BLOCK at image offset
+; OS88_STIKLIB_AT - a descriptor the package's include fills at assembly
+; time, a few constants, the far pointers to the library's entries and the
+; Sticky App state. OS88_STIKCARD_END emits the block when STIK_LIB is
+; defined, so the package defines it BEFORE OS88_HEADER. The library begins
+; with STIKLIB_MAGIC and STIKLIB_VER, then STIKLIB_NENT entries of four bytes
+; (`call` / `retf`), in STKE_* order.
+; -----------------------------------------------------------------------------
+STIKLIB_MAGIC   equ 0x4C53       ; 'SL'
+STIKLIB_VER     equ 2            ; this block's layout and the entry table -
+                                 ; and the entries' contracts: 2 is
+                                 ; STKE_ENTER taking DX (a banked folder, or
+                                 ; 0 for SYSTEM\APPDATA) and answering AX
+                                 ; (SPEC.md 110.5.1), which a version-1
+                                 ; caller would not set
+OS88_STIKLIB_AT equ 288          ; header 32 + icon 64 + Sticky App card 192
+STKE_LOAD       equ 0            ; the entries, in the library's table order
+STKE_MADE       equ 1
+STKE_TOUCH      equ 2
+STKE_ORG        equ 3
+STKE_CTOP       equ 4
+STKE_SLABS      equ 5
+STKE_REDRAW     equ 6
+STKE_REDRAWR    equ 7
+STKE_RESIZE     equ 8
+STKE_QUIT       equ 9
+STKE_DESK       equ 10
+STKE_PAINT      equ 11
+STKE_CLICK      equ 12
+STKE_MUP        equ 13
+STKE_TICK       equ 14
+STKE_CLOSE      equ 15
+STKE_WAKE       equ 16
+STKE_TEXT       equ 17
+STKE_GLYPH      equ 18
+STKE_BFILL      equ 19
+STKE_BITS       equ 20
+STKE_BCLEAR     equ 21
+STKE_ENTER      equ 22           ; the state file's walk, for a package that
+STKE_LEAVE      equ 23           ; keeps files of its own beside it
+STKE_GOQM       equ 24           ; (STIK_WALK: Sticky Note's notes folder)
+STKE_SEEK       equ 25
+STIKLIB_NENT    equ 26
+STIKLIB_JT      equ 4            ; the table's offset in the library
+STKF_DMGREPLACE equ 1            ; STKL_D_FLAGS
+STKF_PACK       equ 2
+; the block, offsets from OS88_STIKLIB_AT. The DESCRIPTOR is assembled, word
+; by word, from STIKD_* equs the package's os88stik.inc defines:
+STKL_D_FILE     equ 0            ; the state file's buffer (header + payload)
+STKL_D_PAYLEN   equ 2            ; the payload's length in memory
+STKL_D_PAYVER   equ 4            ; ...its version (a byte, +1 zero)
+STKL_D_FLAGS    equ 6            ; STKF_*
+STKL_D_TAGW     equ 8            ; the name tag's width in pixels
+STKL_D_RIGHT    equ 10           ; STIK_RIGHT
+STKL_D_LAYS     equ 12           ; the three STIK_LAYOUTs
+STKL_D_BUF      equ 14           ; the band: its buffer,
+STKL_D_BST      equ 16           ; ...stride,
+STKL_D_BW       equ 18           ; ...width in pixels
+STKL_D_BROWS    equ 20           ; ...and rows
+STKL_D_DNAME    equ 22           ; the state file's 8.3 name, NUL
+STKL_D_CAP      equ 24           ; the row's caption, padded to 15
+STKL_D_ISOPEN   equ 26           ; the second launch's toast
+STKL_D_TAG      equ 28           ; the name tag
+STKL_D_PAINTCARD equ 30          ; the package's procs (0 = none)...
+STKL_D_COMPOSE  equ 32
+STKL_D_ONCARD   equ 34
+STKL_D_ONCARDUP equ 36
+STKL_D_ONFOCUS  equ 38
+STKL_D_ONTICK   equ 40
+STKL_D_ONCLOSE  equ 42
+STKL_D_SIZEUP   equ 44
+STKL_D_PACK     equ 46
+STKL_D_UNPACK   equ 48
+STKL_D_CLICK    equ 50           ; ...and its thunks the kernel calls
+STKL_D_MUP      equ 52
+STKL_D_TICK     equ 54
+STKL_D_CLOSE    equ 56
+STKL_D_WAKE     equ 58
+STKL_XCP        equ 60           ; dd the package's trampoline: offset, and
+                                 ; the segment the library writes from DS
+STKL_FW         equ 64           ; dw the face's width now (born the widest)
+STKL_DSYS       equ 66           ; 'SYSTEM', 0
+STKL_DAPP       equ 73           ; 'APPDATA', 0
+STKL_XBITS      equ 81           ; the handle's x, a GFXE_BITS record (13)
+STKL_GRIP       equ 94           ; ...and its grip (15)
+STKL_LE         equ 110          ; dd x STIKLIB_NENT: the library's entries
+STKL_XT         equ STKL_LE + 4 * STIKLIB_NENT  ; dw the trampoline's target
+STKL_HD         equ STKL_XT + 2  ; 16: the state file's header, as known
+STKL_REC        equ STKL_HD + 16 ; then os88stik.inc's state, in its order:
+STKL_NAME       equ STKL_REC + OSAPI_DI_SIZE    ; the row, our 8.3 name,
+STKL_HDX        equ STKL_NAME + 13               ; home, its drive,
+STKL_HBL        equ STKL_HDX + 2
+STKL_ST         equ STKL_HBL + 1                 ; stik_st...
+STKL_WIN        equ STKL_ST + 1
+STKL_PX         equ STKL_WIN + 2
+STKL_PY         equ STKL_PX + 2
+STKL_BK         equ STKL_PY + 2
+STKL_BN         equ STKL_BK + 1
+STKL_FND        equ STKL_BN + 1
+STKL_FL         equ STKL_FND + OSAPI_FIND_SZ
+STKL_WY         equ STKL_FL + 1
+STKL_NX         equ STKL_WY + 2
+STKL_WF         equ STKL_NX + 1                  ; ...the widget's...
+STKL_WEND       equ STKL_WF + 48                 ; (stik_wf .. stik_ty)
+STKL_NP         equ STKL_WEND                    ; ...stik_np
+STKL_GFXE       equ STKL_NP + 1                  ; os88gfx.inc's words:
+STKL_TSTY       equ STKL_GFXE                    ; gfxe_tsty
+STKL_TS         equ STKL_GFXE + 1                ; gfxe_ts
+STKL_TX         equ STKL_GFXE + 2                ; gfxe_tx
+STKL_TY         equ STKL_GFXE + 4                ; gfxe_ty
+STKL_TL         equ STKL_GFXE + 6                ; gfxe_tl
+STKL_FSEG       equ STKL_GFXE + 8                ; gfxe_fseg
+STKL_FOFF       equ STKL_GFXE + 10               ; gfxe_foff
+STKL_F0         equ STKL_GFXE + 12               ; gfxe_f0
+STKL_F1         equ STKL_GFXE + 13               ; gfxe_f1
+STKL_FMASK      equ STKL_GFXE + 14               ; gfxe_fmask
+STKL_BH         equ STKL_GFXE + 16               ; gfxe_bh
+STKL_SIZE       equ STKL_GFXE + 18
+
+; OS88_STIKLIB_BLOCK - the fixed block, emitted by OS88_STIKCARD_END under
+; STIK_LIB. Everything after STKL_XT is zero; the descriptor names STIKD_*
+; equs that only the package's os88stik.inc defines
+%macro OS88_STIKLIB_BLOCK 0
+    %if ($ - $$) != OS88_STIKLIB_AT
+        %error "STIK_LIB: the Sticky App block must follow the icon and the card (offset 288) - no association block, no glyph"
+    %endif
+os88_stiklib:                   ; the base: a label, so os88rdiff sees relocations
+    dw STIKD_FILE, STIKD_PAYLEN, STIKD_PAYVER, STIKD_FLAGS, STIKD_TAGW
+    dw STIKD_RIGHT, STIKD_LAYS, STIKD_BUF, STIKD_BST, STIKD_BW, STIKD_BROWS
+    dw STIKD_DNAME, STIKD_CAP, STIKD_ISOPEN, STIKD_TAG
+    dw STIKD_PAINTCARD, STIKD_COMPOSE, STIKD_ONCARD, STIKD_ONCARDUP
+    dw STIKD_ONFOCUS, STIKD_ONTICK, STIKD_ONCLOSE, STIKD_SIZEUP
+    dw STIKD_PACK, STIKD_UNPACK
+    dw STIKD_CLICK, STIKD_MUP, STIKD_TICK, STIKD_CLOSE, STIKD_WAKE
+    dw STIKD_XCB, 0
+    dw STIKD_FW
+    db 'SYSTEM', 0, 'APPDATA', 0
+    db 6
+    dw 08400h, 04800h, 03000h, 03000h, 04800h, 08400h
+    db 7
+    dw 0AAA8h, 0, 0, 0AAA8h, 0, 0, 0AAA8h
+    db 0
+    %if ($ - $$) != OS88_STIKLIB_AT + STKL_LE
+        %error "OS88_STIKLIB_BLOCK: the descriptor is not STKL_LE long"
+    %endif
+    %assign %%i 0
+    %rep STIKLIB_NENT
+    dw STIKLIB_JT + 4 * %%i, 0
+    %assign %%i %%i + 1
+    %endrep
+    times STKL_SIZE - STKL_XT db 0
+%endmacro
+
+; -----------------------------------------------------------------------------
 ; OS88_STIKCARD name, description / OS88_STIKROW x 32 / OS88_STIKCARD_END -
 ; the STICKY APP CARD (SPEC.md 110.12). Only valid with OS88_F_STIK in the
 ; header's flags, and it goes IMMEDIATELY after the last block of the clear
@@ -3548,6 +3763,9 @@ OS88_HDR_FLAGS equ 0
     %if ($ - $$) != OS88_STIK_BASE + 192
         %error "the Sticky App card is 64 bytes of text and exactly 32 OS88_STIKROW rows"
     %endif
+%ifdef STIK_LIB
+    OS88_STIKLIB_BLOCK          ; the library's block (SPEC.md 110.15)
+%endif
 %endmacro
 
 ; -----------------------------------------------------------------------------
@@ -4189,6 +4407,15 @@ OS88_BSS_SIZE equ 0
                                                 ; were LAUNCHED FROM, because
                                                 ; yours does not exist yet.
                                                 ; SPEC.md 39.18.2.
+                                                ;
+                                                ; BX = 1..15 ASKS ABOUT A
+                                                ; DISPLAY instead - BX-1 -
+                                                ; and CF=1 is "no such
+                                                ; display": walk BX = 1, 2,
+                                                ; ... to find the one that
+                                                ; can, then OSAPI_FSX_RUN
+                                                ; with CH = BX (SPEC.md
+                                                ; 53.1.2).
 
 %define OSAPI_FSX_RUN       KERNEL_SEG:0x0235   ; the bracket (SPEC.md 53.1).
                                                 ; In AX = a near proc in your
@@ -4198,8 +4425,13 @@ OS88_BSS_SIZE equ 0
                                                 ; FSXF_FASTTICK - SPEC.md
                                                 ; 53.2.1; bit 2 = FSXF_RATE,
                                                 ; with DX and DI - 53.2.2;
-                                                ; all others must be 0, or
-                                                ; it refuses). This
+                                                ; all others of CL must be
+                                                ; 0, or it refuses) and CH
+                                                ; = THE DISPLAY: 0 your
+                                                ; window's, n display n-1
+                                                ; (SPEC.md 53.1.2; kern_big,
+                                                ; a mode-setting bracket's
+                                                ; only). This
                                                 ; comment said "bit 0; all
                                                 ; others 0" for a cycle after
                                                 ; bit 1 was accepted; trust
@@ -4333,6 +4565,33 @@ OS88_BSS_SIZE equ 0
                                  ; READ-AND-CLEAR - the first proc to ask
                                  ; gets it, so a second instance launched
                                  ; later can never inherit a document
+%define OSAPI_ASSOC_FLUSH   KERNEL_SEG:0x0493   ; DL = a volume, AL = the
+                                 ; ASSOC_FL_* bits below (0 = incremental):
+                                 ; bring that volume's
+                                 ; ASSOC.DAT up to date with the packages on
+                                 ; it (SPEC.md 54.5, 54.7.6), so the next boot
+                                 ; knows their icons, their extensions and
+                                 ; where they are without reading them. For a
+                                 ; program that has just COPIED packages onto
+                                 ; a disk (an installer, or one installing
+                                 ; itself): call it after the copy with AL = 1,
+                                 ; which reads the header of every package the
+                                 ; old cache did not hold. Out CF=0 = done (or
+                                 ; already right); CF=1, AX = FERR_* = it could
+                                 ; not, and nothing was written - a full or
+                                 ; write-protected disk, or no system disk to
+                                 ; load the writer from. kern_small refuses
+                                 ; (CF=1). Synchronous; never from a worker
+ASSOC_FL_FULL    equ 1          ; read every package the old cache lacks
+ASSOC_FL_HOLD    equ 2          ; with NOFLUSH: ACQUIRE - load the writer now
+                                ; and keep it loaded until a release. For an
+                                ; installer that is about to REPLACE the
+                                ; system's own files: the copy it would load
+                                ; afterwards may belong to the new system, not
+                                ; the running one. Flushes in between keep it
+ASSOC_FL_NOFLUSH equ 4          ; flush nothing: ACQUIRE (with HOLD) or
+                                ; RELEASE (alone). A release loads nothing.
+                                ; Release on EVERY way out, failure included
 %define OSAPI_ASSOC_SET     KERNEL_SEG:0x024F   ; claim an extension for a
                                  ; program (SPEC.md 54.5). ES:SI -> 3
                                  ; extension bytes then 8 stem bytes, both

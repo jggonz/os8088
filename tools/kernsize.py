@@ -215,10 +215,13 @@ THEMES = (
     # this report tracks, and correctly - the whole file is `.modl`, part of
     # the cloner's image, which os88mod.py cuts out of kernel.bin into
     # DISKOPS.DRV, so the only thing it costs a machine is files.inc's thunk.
+    # ascw.inc (SPEC.md 54.7.6.4) is compress.inc's shape beside assoc.inc:
+    # the ASSOC.DAT flush is FORMAT.DRV's fifth entry, all of it image, and
+    # its resident half is the one `dw` on diskw.inc's row.
     ("the file system, end to end",
      ("disk.inc", "dskwin.inc", "diskw.inc", "files.inc", "filecp.inc",
-      "fdlg.inc", "loader.inc", "assoc.inc", "diskops.inc", "lz.inc",
-      "compress.inc")),
+      "fdlg.inc", "loader.inc", "assoc.inc", "ascw.inc", "diskops.inc",
+      "lz.inc", "compress.inc")),
     # deskmod.inc (SPEC.md 11.103.10) is the same shape: DESK.DRV's image is
     # cut out, and what stays is the 16-byte QUERY thunk in `.cold`.
     # extmod.inc (SPEC.md 39.19.6) goes beside dockmod.inc for dockmod's
@@ -226,8 +229,11 @@ THEMES = (
     # what it is to a reader is where a WINDOW lands on a second display. Its
     # row is not zero - exf_sync, the load/drop reconciler, is 35 bytes of
     # `.cold` - so it is not IMAGE_ONLY in tests/unit/t_kernmods.py either.
+    # stikmenu.inc (SPEC.md 110.12) is the Sticky Apps menu: STIKMENU.DRV's
+    # image is cut out, and its two `.cold` thunks are what stays - a MENU,
+    # so it goes beside menu.inc.
     ("the window system and its furniture",
-     ("wm.inc", "ui.inc", "menu.inc", "instance.inc", "desk.inc", "desksc.inc", "dock.inc", "dockmod.inc",
+     ("wm.inc", "ui.inc", "menu.inc", "stikmenu.inc", "instance.inc", "desk.inc", "desksc.inc", "dock.inc", "dockmod.inc",
       "extmod.inc", "winmod.inc", "deskmod.inc", "fsx.inc", "clip.inc",
       "fprog.inc", "toast.inc")),
     # moudiag.inc (SPEC.md 9.4.4) goes with the mouse and NOT with
@@ -490,6 +496,10 @@ def rung_accrued(size, used):
     return 0 if size <= 0 else 512 - (size - used)
 
 
+ROM_WINDOW = 40960              # U28-U32, F4000-FDFFF (ROM-PLAN 1.3)
+ROM_HEADER = 16                 # ...less tools/os88rom.py's header paragraph
+
+
 def kb(n):
     return f"{n:,}"
 
@@ -628,15 +638,35 @@ def report(cur, base, variant="big", out=sys.stdout):
     # the heap's start is the figure every RAM number in this project falls
     # out of (docs/KERNEL-MEMORY.md, "heap KB = int 12h - this").
     ks = cur["kseg"]
-    cold = ks + cur["imgpara"]
-    fat = cold + cur["coldpara"]
-    low = fat + cur["fatpara"]
-    vgabuf = low + cur["lowpara"]
-    p(f"{tag} ladder     KERNEL {ks:#06x}  COLD {cold:#06x}"
-      f"  FAT {fat:#06x}  LOW {low:#06x}  VGABUF {vgabuf:#06x}"
-      f"  HEAP {cur['kend']:#06x}"
+    # the bases as the kernel computed them, in ADDRESS order - ROM_COLD puts
+    # COLD under VGABUF rather than under FAT (docs/plans/ROM-PLAN.md 3.4.2);
+    # a kernel older than the four `%assign`s falls back to the old order
+    if "colds" in cur:
+        rungs = sorted((cur[k], n) for k, n in (("colds", "COLD"),
+                       ("fats", "FAT"), ("lows", "LOW"), ("vgas", "VGABUF")))
+    else:
+        cold = ks + cur["imgpara"]
+        fat = cold + cur["coldpara"]
+        low = fat + cur["fatpara"]
+        rungs = [(cold, "COLD"), (fat, "FAT"), (low, "LOW"),
+                 (low + cur["lowpara"], "VGABUF")]
+    p(f"{tag} ladder     KERNEL {ks:#06x}  "
+      + "  ".join(f"{n} {v:#06x}" for v, n in rungs)
+      + f"  HEAP {cur['kend']:#06x}"
       f" = {cur['kend'] * 16 / 1024:.1f} KB   (heap KB = int 12h"
       f" - {cur['kend'] * 16 / 1024:.1f})")
+
+    # THE ROM WINDOW (docs/plans/ROM-PLAN.md 3.6): every kernel finds a ROM
+    # in a 5150's U28-U32 and runs `.cold` from it, and `.cold` has been
+    # bigger than the window on 8 of 21 days. A REPORT, like everything
+    # here - a `.cold` that outgrows it means no ROM can be cut, and the disks
+    # still boot. 40,960 less the 16-byte header; boot/osrom.asm's tail
+    # (~1.2-1.3KB, two bytes a fixup) comes off what is left, and `make rom`
+    # prints that exact spare.
+    win = ROM_WINDOW - ROM_HEADER
+    p(f"{tag} rom        .cold {kb(cur['cold'])} of the {kb(win)} the 40KB"
+      f" window holds before its tail -> {kb(win - cur['cold'])} for the"
+      f" tail and spare (`make rom` says exactly)")
 
     if base is None:
         p(tag + " no baseline for this variant in docs/KERNEL-MEMORY.md"

@@ -54,6 +54,7 @@ os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, "tests"); sys.path.insert(0, "tools")
 import os88marty as M
 import os88ui, os88geom, heapmap, os88build
+from pxsyms import same_header
 
 u16 = lambda b, i=0: b[i] | (b[i + 1] << 8)
 FAIL = []
@@ -106,7 +107,10 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--machine", default="os8088_5150_cga_gla")
 a = ap.parse_args()
 syms, image = pkg_syms()
-o88 = open(os88build.at("build/pixel.o88"), "rb").read()
+import os88pkg                                          # noqa: E402
+# the IMAGE, not the file: a parted package's image ships packed when that
+# saves a sector (SPEC.md 20.13.8)
+o88 = os88pkg.image_unwrap(open(os88build.at("build/pixel.o88"), "rb").read())
 if o88[:syms["op_table"]] != image[:syms["op_table"]]:   # the table's rows
                                                           # are os88pkg.py's
     sys.exit("build/pixel.o88's image is not this tree's pixel.asm - run "
@@ -152,7 +156,7 @@ with os88ui.boot("build/os8088-360.img", apps=DISK, machine=a.machine) as ui:
         for i in range(12):
             r = m.read(S("inst_tab") + i * os88geom.I_RECSZ, os88geom.I_RECSZ)
             c = u16(r, os88geom.I_SPTR)
-            if c and m.read(c * 16, 32) == image[:32]:
+            if c and same_header(m.read(c * 16, 32), image):
                 return c
         return None
     M.until(m, lambda _: inst(), "PiXEL's instance", poll=0.3, limit=60)

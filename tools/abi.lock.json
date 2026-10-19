@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "be5ce5faeec75706cd33eac4de3838f259bcc56d073cc850fc1c2ad0883c7873",
+  "fingerprint": "a6a0ec291813bb95a2c126918561dc8c3f4cdccee2b4e217f48fe60fd2de450c",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "cb840b3e66b596fe66a7ad9b07f61f9c8f402799cfa71b8bdb83497b1a9b6f67",
+  "fingerprint": "a65f78ce5c1471a3a11b74d98c547a938277b34a47c22ed2e5654e9a0cd20722",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -133,6 +133,174 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "OS88_F_STIK (header flags bit 7) and OS88_STIKCARD/OS88_STIKROW/OS88_STIKCARD_END: the Sticky App card (SPEC.md 110.12), the last block of the clear prefix. ADDITIVE - no cell moved and no header field changed meaning; every package built before still runs (none sets bit 7), so no PKG_FMT bump. A new card-bearing package on an older kernel mis-places a compressed body and is refused as bad data",
+   "to": 11
+  },
+  {
+   "fingerprint": "e4d7b7c050e173a6df5cf805934083006e1432a2f8e38b46480a1f62974dbe28",
+   "from": 8,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_FSX_CAPS: BX = 1..15 asks about display BX-1, CF=1 none; OSAPI_FSX_RUN: CH = 0 the window's display, n display n-1 (SPEC.md 53.1.2). Extends two contracts; every package built before passes BX >= 16 or 0 and CH = 0, so it runs unchanged",
+   "to": 8
+  },
+  {
+   "fingerprint": "69714c1959082805e614cd58fe3911b239c962829fcd73ca9d09db7d793eaf3f",
+   "from": 9,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_FSX_CAPS: BX = 1..15 asks about display BX-1, CF=1 none; OSAPI_FSX_RUN: CH = 0 the window's display, n display n-1 (SPEC.md 53.1.2). Extends two contracts; every package built before passes BX >= 16 or 0 and CH = 0, so it runs unchanged",
+   "to": 9
+  },
+  {
+   "fingerprint": "e595047d716e5673c105a511f743e31a67e7687414ed4ddeded35fa411886084",
+   "from": 8,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_MEM_HMA (0x046D) added at the end of the table, and OS88_DRIVER takes an optional DRV_ORG whose default (0) emits the same bytes: everything built before still runs (SPEC.md 2.10.8)",
+   "to": 8
+  },
+  {
+   "fingerprint": "fa99c97e58493f3de95d3340ba49b8d52fe533291b66aa812d9f9e2a044fcb48",
+   "from": 9,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_MEM_HMA (0x046D) added at the end of the table, and OS88_DRIVER takes an optional DRV_ORG whose default (0) emits the same bytes: everything built before still runs (SPEC.md 2.10.8)",
+   "to": 9
+  },
+  {
+   "fingerprint": "0c02a54afb999e99029858472e042b224f0ed2eb02f91cffc4e3baad5dfff545",
+   "from": 8,
+   "guard": "PKG_FMT",
+   "reason": "DRVM_CEIL_NET 31 -> 34: ETHER.DRV's socket pool grew 3KB for the send window (SPEC.md 72.4.3). A caption's ceiling constant; every cell, record and header is unchanged, so everything built before still runs - no bump",
+   "to": 8
+  },
+  {
+   "fingerprint": "59d7afb7eaca9fb6d545fa1ffb39681361202252d1cbfd1aa3ed9e73cad020cf",
+   "from": 9,
+   "guard": "DRV_VER",
+   "reason": "DRVM_CEIL_NET 31 -> 34: ETHER.DRV's socket pool grew 3KB for the send window (SPEC.md 72.4.3). A caption's ceiling constant; every cell, record and header is unchanged, so everything built before still runs - no bump",
+   "to": 9
+  },
+  {
+   "fingerprint": "457c14f8e55dd284f686a5ccfe80414309b82415a864a24ce10f663f229f794d",
+   "from": 8,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_WM_QUIET appended at 0x0473 (SPEC.md 79.10): a cell added at the end, nothing moved, so everything built before still runs - no bump",
+   "to": 8
+  },
+  {
+   "fingerprint": "fd43a81fbbac6ad3eefe3da6034b3aea559edd6e4b78cf76b4b4f8295efc288d",
+   "from": 9,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_WM_QUIET appended at 0x0473 (SPEC.md 79.10): a cell added at the end, nothing moved, so everything built before still runs - no bump",
+   "to": 9
+  },
+  {
+   "fingerprint": "c74cf3c166c72ef7cc661b394114a30dcc8b772cd8730986cd9d66548bb9f4ac",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "elendilon -> main merge (base 13e58898): elendilon's SDK additions over main's PKG_FMT 10 / DRV_VER 11, no bump. OSAPI_MEM_HMA and OSAPI_WM_QUIET were appended at 0x046D/0x0473 on elendilon and collided with main's OSAPI_THM_SET/CLK_GET at the same tail; main's cells keep their addresses and elendilon's two move after them, to 0x0487 and 0x048D - cells added at the end of main's table, so everything built against main still runs",
+   "to": 10
+  },
+  {
+   "fingerprint": "545f89db17d8fc53d66abe2f3c1761a9bf003c4e7c31732019b71d4a6181991c",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "elendilon -> main merge (base 13e58898): elendilon's SDK additions over main's PKG_FMT 10 / DRV_VER 11, no bump. OSAPI_MEM_HMA and OSAPI_WM_QUIET were appended at 0x046D/0x0473 on elendilon and collided with main's OSAPI_THM_SET/CLK_GET at the same tail; main's cells keep their addresses and elendilon's two move after them, to 0x0487 and 0x048D - cells added at the end of main's table, so everything built against main still runs",
+   "to": 11
+  },
+  {
+   "fingerprint": "1b54119e966a2494d5b90e15a31d51708f5865657efcde14953e16ddaacc6243",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_ASSOC_FLUSH (0x0493) appended past the last cell (SPEC.md 54.5, 54.7.6): a new slot at the end, so every package built before still runs - no PKG_FMT bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "76db0c6485a05e20cc6aa5649c86ed0430710447cfb672128736b5dfeb5757e8",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_ASSOC_FLUSH (0x0493) appended past the last cell (SPEC.md 54.5, 54.7.6): a new slot at the end, so every package built before still runs - no PKG_FMT bump",
+   "to": 11
+  },
+  {
+   "fingerprint": "e2942a8830ad99578ef3f58eb9c05d283f0026e5680abde7ee520a1e7bc86de0",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_ASSOC_FLUSH grew hold modes: ASSOC_FL_HOLD and ASSOC_FL_NOFLUSH constants added to an existing cell's contract; every package built before still runs",
+   "to": 10
+  },
+  {
+   "fingerprint": "85ee2660ea6043fc88c5fd37287e0f1cca7b1d855ccb0090d5df50834b995efa",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_ASSOC_FLUSH grew hold modes: ASSOC_FL_HOLD and ASSOC_FL_NOFLUSH constants added to an existing cell's contract; every package built before still runs",
+   "to": 11
+  },
+  {
+   "fingerprint": "572a9f011fb308ce2e6775b294b8fb46b8285ea629a7aca0a66926238c86516e",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "Merge of main's OS88_F_STIK (header flags bit 7) and OS88_STIKCARD/OS88_STIKROW/OS88_STIKCARD_END: the Sticky App card (SPEC.md 110.12), the last block of the clear prefix. ADDITIVE - no cell moved and no header field changed meaning; every package built before still runs (none sets bit 7), so no PKG_FMT bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "ef925cb40537ed0d4070dacf97b71659b87e42e5f57dabe3e9f0b2c9c99720f9",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "Merge of main's OS88_F_STIK (header flags bit 7) and OS88_STIKCARD/OS88_STIKROW/OS88_STIKCARD_END: the Sticky App card (SPEC.md 110.12), the last block of the clear prefix. ADDITIVE - no cell moved and no header field changed meaning; every package built before still runs (none sets bit 7), so no PKG_FMT bump",
+   "to": 11
+  },
+  {
+   "fingerprint": "fbdc85c52f370a28591564d7006f8750e0f5b45dae366fa6aba77324305c7876",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "Merge of video-386+: HDV_ARM/HDV_DISARM on DRVC_DISK's door (SPEC.md 52.1.4) and os88ub.inc as the tier-2 reader through the XMEM token (41.15) - constants and contracts ADDED; nothing built before moves",
+   "to": 10
+  },
+  {
+   "fingerprint": "06c9101d35eed8566c182d69d33a2ff2ff56019b2f80180757785be43ca61e2b",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "Merge of video-386+: HDV_ARM/HDV_DISARM on DRVC_DISK's door (SPEC.md 52.1.4) and os88ub.inc as the tier-2 reader through the XMEM token (41.15) - constants and contracts ADDED; nothing built before moves",
+   "to": 11
+  },
+  {
+   "fingerprint": "c6198a0b3125633358b16e84207898f6fd0ab7c2acd5c294cae2a71b03279c3c",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_WM_DESK gains verb 4, LIB (DX = the Sticky App library's paragraph inside DESK.DRV), and the SDK gains the library's ABI: OS88_STIKLIB_AT, STIKLIB_MAGIC/VER/NENT, the STKE_* entry order, the STKL_* block layout and OS88_STIKLIB_BLOCK, which OS88_STIKCARD_END emits only under STIK_LIB (SPEC.md 110.15). A verb added to an existing cell and macros nothing built before uses: every package and driver built before still runs, so no bump; the library versions itself (STIKLIB_VER) against the packages that bind to it.",
+   "to": 10
+  },
+  {
+   "fingerprint": "cf56e915505f551c145a4f2173df97ab321929fa37b5ce1427b077984112a69f",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_WM_DESK gains verb 4, LIB (DX = the Sticky App library's paragraph inside DESK.DRV), and the SDK gains the library's ABI: OS88_STIKLIB_AT, STIKLIB_MAGIC/VER/NENT, the STKE_* entry order, the STKL_* block layout and OS88_STIKLIB_BLOCK, which OS88_STIKCARD_END emits only under STIK_LIB (SPEC.md 110.15). A verb added to an existing cell and macros nothing built before uses: every package and driver built before still runs, so no bump; the library versions itself (STIKLIB_VER) against the packages that bind to it.",
+   "to": 11
+  },
+  {
+   "fingerprint": "bc059aff97420c0570ef06fd54afdf6b20ded89ef9d996b9697f5292416ff7ff",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "The Sticky App library's ABI before any package shipped against it: four more entries (STKE_ENTER, LEAVE, GOQM, SEEK - the state file's walk, for Sticky Note's notes folder), STIKLIB_NENT 22 -> 26, and the block's base named by a label (os88_stiklib). STIKLIB_VER stays 1: nothing was ever built against 22. No package or driver built before changes, so no bump.",
+   "to": 10
+  },
+  {
+   "fingerprint": "8f1aafd27468883dbb2d1ddfecabdf1feb3554632ab5b61fc0ebc2c8e3abde05",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "The Sticky App library's ABI before any package shipped against it: four more entries (STKE_ENTER, LEAVE, GOQM, SEEK - the state file's walk, for Sticky Note's notes folder), STIKLIB_NENT 22 -> 26, and the block's base named by a label (os88_stiklib). STIKLIB_VER stays 1: nothing was ever built against 22. No package or driver built before changes, so no bump.",
+   "to": 11
+  },
+  {
+   "fingerprint": "a65f78ce5c1471a3a11b74d98c547a938277b34a47c22ed2e5654e9a0cd20722",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "STIKLIB_VER 1 -> 2 (SPEC.md 110.5.1, 110.15.2): the Sticky App library's STKE_ENTER now takes DX (a folder the caller banked, or 0 for SYSTEM\\APPDATA by a walk) and answers AX (the witness, our own file's first cluster), and its first stand is OSAPI_FILE_GOTO_QM rather than a full OSAPI_FILE_GOTO. The block's layout and the entry table are unchanged; a version-1 caller would not set DX, so the library's own version moves and a package and a DESK.DRV of different versions refuse to bind. No kernel cell, header or package format changes, so PKG_FMT and DRV_VER stay: a version-1 Sticky App meeting a version-2 DESK.DRV is refused at its own bind in words, which is the fence STIKLIB_VER exists to be, and none has shipped (the library has not reached main).",
+   "to": 10
+  },
+  {
+   "fingerprint": "a6a0ec291813bb95a2c126918561dc8c3f4cdccee2b4e217f48fe60fd2de450c",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "STIKLIB_VER 1 -> 2 (SPEC.md 110.5.1, 110.15.2): the Sticky App library's STKE_ENTER now takes DX (a folder the caller banked, or 0 for SYSTEM\\APPDATA by a walk) and answers AX (the witness, our own file's first cluster), and its first stand is OSAPI_FILE_GOTO_QM rather than a full OSAPI_FILE_GOTO. The block's layout and the entry table are unchanged; a version-1 caller would not set DX, so the library's own version moves and a package and a DESK.DRV of different versions refuse to bind. No kernel cell, header or package format changes, so PKG_FMT and DRV_VER stay: a version-1 Sticky App meeting a version-2 DESK.DRV is refused at its own bind in words, which is the fence STIKLIB_VER exists to be, and none has shipped (the library has not reached main).",
    "to": 11
   }
  ]

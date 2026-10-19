@@ -275,10 +275,13 @@ CAL_CUT       equ '~'               ; a history line too long for the field
 ; The loader shows the window, so nothing here may draw. Everything installed
 ; below preserves the FLAGS as well as the registers (SPEC.md 20.3), which is
 ; why the CF this proc owes the loader survives all six calls.
+;
+; NO REGISTER IS KEPT. The loader reloads everything it reads after the call
+; (kernel/loader.inc's step 9 takes BX and nothing else from us), so the
+; push/pop of AX and SI this proc used to carry kept nothing anybody read -
+; TameGram's entry clobbers four registers and always has (apps size pass 2).
 ; -----------------------------------------------------------------------------
 cal_entry:
-    push ax
-    push si
     mov si, cal_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     jc .out
@@ -288,9 +291,10 @@ cal_entry:
     ; NO worker is the case that moves most easily, and putting it at
     ; the spawn left exactly those runs declaring nothing - measured,
     ; by the row that reads MC_RLOC back out of the kernel's own table.
-    OS88_REGION_MOVABLE_NOKEEP      ; 6 bytes short: AX is ours to pop, DX
-                                    ; and the flags nobody reads (the CF the
-                                    ; loader is owed is the `clc` below)
+    OS88_REGION_MOVABLE_NOKEEP .out ; the proc is this proc's own `ret`: no
+                                    ; segment word here points inside us, and
+                                    ; AX, DX and the flags are nobody's (the
+                                    ; CF the loader is owed is the `clc`)
     mov si, cal_menus
     call OSAPI_MENU_SET             ; the bar already says 'Calc' on frame one
 %ifdef CALF_ABOUT
@@ -320,8 +324,9 @@ cal_entry:
     mov al, 1
     call OSAPI_WM_SNAP              ; every pen here is content + a multiple of
                                     ; 8, so this is what buys the single-store
-                                    ; font_run path (SPEC.md 6.1/11.94)
-    mov al, 1
+                                    ; font_run path (SPEC.md 6.1/11.94) - and
+                                    ; it preserves every register, so the 1 is
+                                    ; still in AL for the call below
     call OSAPI_WM_SAVEU             ; ...and our content genuinely does not
                                     ; change while we are not drawing (SPEC.md
                                     ; 11.96.1): no worker, no clock, nothing
@@ -335,8 +340,6 @@ cal_entry:
                                     ; back here as LD_EABORT, and the small
                                     ; build of Calculator never opened at all
 .out:
-    pop si
-    pop ax
     ret                             ; near: dispatched (SPEC.md 20.5)
 
 ; =============================================================================
@@ -470,14 +473,11 @@ cal_rect:
     add dx, [cal_oy]
     mov [bx+0], ax
     mov [bx+2], dx
-    push cx
-    mov ch, 0
-    add ax, cx
-    mov [bx+4], ax
-    pop cx
-    mov cl, ch
-    mov ch, 0
-    add dx, cx
+    add al, cl                      ; ...and each extent added a BYTE at a
+    adc ah, 0                       ; time, carry and all: no push, no pop and
+    mov [bx+4], ax                  ; no widening of CL and CH into a word
+    add dl, ch                      ; first (apps size pass 2)
+    adc dh, 0
     mov [bx+6], dx
     pop dx
     pop cx
@@ -538,11 +538,9 @@ cal_hit:
 %endif
 .try:
     mov ah, 0
-    push ax
-    call cal_rect                   ; BX = the candidate's rect
-    call os88ui_bhit                ; CF = 0: inside it
-    pop ax
-    jc .none
+    call cal_rect                   ; BX = the candidate's rect; AX kept
+    call os88ui_bhit                ; CF = 0: inside it (every register kept,
+    jc .none                        ; so nothing needs banking round the two)
     inc ax
     ret
 .none:
@@ -567,9 +565,10 @@ cal_onclick:
     call cal_sync                   ; the window may have moved since the last
                                     ; paint; CX/DX are already SCREEN coords,
                                     ; which is what cal_hit wants
+%ifdef CALF_ABOUT
     call cal_abdismiss              ; the credits are up: this press is spent
     jc .out                         ; taking them down and arms nothing, so
-                                    ; the release that follows fires nothing
+%endif                              ; the release that follows fires nothing
     call cal_hit                    ; AX = index + 1, 0 = none
     call os88ui_arm
     call cal_setdown                ; ...and the pressed look, through the one
@@ -681,8 +680,10 @@ cal_cbret:                          ; (cal_onup's way out too)
 cal_onkey:
     push ax
     call cal_sync
+%ifdef CALF_ABOUT
     call cal_abdismiss              ; any key takes the credits down, and is
     jc .out                         ; itself swallowed doing it
+%endif
     call cal_asckey                 ; AL = CK_*, or CK_NONE
     cmp al, CK_NONE
     je .out
@@ -842,7 +843,9 @@ cal_asckey:
 cal_oncmd:
     xchg cx, ax                     ; CL = the item, CH = the menu
     call cal_sync
+%ifdef CALF_ABOUT
     call cal_abdismiss              ; a menu pick takes the credits down first
+%endif
     or ch, ch                       ; and then does what it was asked - a
     jz .edit                        ; deliberate command is not a dismissal
     dec ch                          ; (from here CH = 0, so CX IS the item)
@@ -895,14 +898,10 @@ cal_oncmd:
 ; os88ui_about and not _d: nothing has armed a clip in an About handler, and
 ; the library arms one itself.
 ; -----------------------------------------------------------------------------
-%ifndef CALF_ABOUT
-; No About card (APP_SMALL). cal_abdismiss is called by the click, key and
-; menu paths before they do anything else and answers CF = 1 when it SPENT the
-; event taking the card down - so with no card it must answer "not spent".
-cal_abdismiss:
-    clc
-    ret
-%endif
+; No About card (APP_SMALL) means no cal_abdismiss either: its three call
+; sites - the click, key and menu paths - are behind the same flag, where they
+; used to call a `clc` / `ret` stub that answered "not spent" every time (apps
+; size pass 2).
 
 %ifdef CALF_ABOUT
 cal_about:
@@ -950,6 +949,7 @@ cal_abdismiss:
 ; -----------------------------------------------------------------------------
 cal_paint:
     call cal_sync
+    clc                             ; no ground owed: the kernel whitened it
     jmp short cal_drawall           ; ...which preserves everything itself
 
 ; -----------------------------------------------------------------------------
@@ -962,30 +962,18 @@ cal_paint:
 ; PERFORMANCE.md's double-draw flash with our own picture as the second
 ; layer. This entry is for the paths that repaint with no kernel fill in
 ; front of them - a menu command, and the About card coming down.
+;
+; It is cal_drawall entered with CF = 1, so the fill runs inside that
+; routine's own save rather than banking the same four registers a second
+; time in front of it (apps size pass 2).
 ; -----------------------------------------------------------------------------
 cal_repaint:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov ax, [cal_ox]
-    mov bx, [cal_oy]
-    mov cx, ax
-    add cx, CAL_CW - 1
-    mov dx, bx
-    add dx, [cal_ch]
-    dec dx
-    call OSAPI_GFX_FILL
-    pop dx
-    pop cx
-    pop bx
-    pop ax                          ; ...and on into the drawing
+    stc                             ; ...and on into the drawing, ground first
 
 ; -----------------------------------------------------------------------------
-; cal_drawall - every pixel of the content, over ground that is already white
-; in:  the layout is current; gfx lock held
+; cal_drawall - every pixel of the content
+; in:  CF = 1 to whiten the ground first (cal_repaint), CF = 0 when it is
+;      already white (cal_paint); the layout is current; gfx lock held
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
 cal_drawall:
@@ -997,6 +985,19 @@ cal_drawall:
 
     call cal_shadkill               ; the glass is about to disagree with both
                                     ; shadows, so the next emit must be whole
+                                    ; (and it leaves the flags alone)
+    jnc .ground
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    mov ax, [cal_ox]
+    mov bx, [cal_oy]
+    mov cx, ax
+    add cx, CAL_CW - 1
+    mov dx, bx
+    add dx, [cal_ch]
+    dec dx
+    call OSAPI_GFX_FILL
+.ground:
     mov al, CBLACK
     call OSAPI_SET_COLOR
     mov ax, [cal_ox]                ; the display well
@@ -1119,9 +1120,9 @@ cal_btn:
 cal_ctl:
     push ax
     dec ax
+%ifdef CALF_HIST                    ; (with no pane every control is a key)
     cmp ax, CAL_NKEY
     jb .key
-%ifdef CALF_HIST
     je .hdr
     sub ax, CAL_R_HIST              ; a history ROW: the same opaque pass over
     call cal_draw_row               ; the same cells either way up
@@ -1383,6 +1384,13 @@ cal_hslot:
 ; THE KEYSTROKE PATH: every key ends here. The save is this routine's and
 ; nothing under it keeps a register (cal_compose, cal_emit), which is both
 ; fewer bytes and fewer cycles than each of them banking the lot.
+;
+; ITS BODY IS cal_key's TAIL. The two banked the same six registers in the
+; same order, one inside the other, so a keystroke paid for the save twice
+; and a call and a return between them. The body now sits at the end of
+; cal_key and this entry banks and jumps into it - so the jump is paid by the
+; four entries that are not a keystroke (a repaint, a paste's last word, a
+; history row) and the keystroke pays nothing (apps size pass 2).
 ; -----------------------------------------------------------------------------
 cal_show:
     push ax
@@ -1391,6 +1399,32 @@ cal_show:
     push dx
     push si
     push di
+    jmp short cal_key.show
+
+; -----------------------------------------------------------------------------
+; cal_key - run one key code
+; in:  AL = CK_*; the layout is current; gfx lock held
+; out: nothing; preserves all registers
+;
+; Every path ends in cal_show's body, which draws the cells that changed and
+; no others - so a digit costs one OSAPI_FONT_RUN over two or three cells, and
+; nothing else on the window is touched.
+;
+; THIS IS THE ONE SAVE FOR THE WHOLE ENGINE. Every handler below cal_dispatch
+; - the arithmetic, the history line, the clears - is reached from here and
+; nowhere else, so none of them keeps a register of anybody's: each says what
+; it clobbers rather than banking and restoring the lot on the way through
+; (apps size pass 1, where that banking was ~200 bytes of push and pop).
+; -----------------------------------------------------------------------------
+cal_key:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call cal_dispatch
+.show:                              ; cal_show's body, under the same save
     call cal_compose                ; the two fields, as they SHOULD read, and
     mov ax, CAL_CTX_X               ; CX = their width
     mov si, cal_cbuf
@@ -1596,41 +1630,14 @@ cal_rpad:
 ; a TABLE rather than a compare ladder, because the ladder was 24 rungs and
 ; an 8086's conditional jumps are all short: a body added in the middle put
 ; the arms at the bottom out of reach, which NASM reports as a range error
-; nowhere near the change that caused it.
+; nowhere near the change that caused it. (cal_key itself sits beside
+; cal_show above, because its tail IS cal_show's body.)
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; cal_key - run one key code
-; in:  AL = CK_*; the layout is current; gfx lock held
-; out: nothing; preserves all registers
-;
-; Every path ends in cal_show, which draws the cells that changed and no
-; others - so a digit costs one OSAPI_FONT_RUN over two or three cells, and
-; nothing else on the window is touched.
-;
-; THIS IS THE ONE SAVE FOR THE WHOLE ENGINE. Every handler below cal_dispatch
-; - the arithmetic, the history line, the clears - is reached from here and
-; nowhere else, so none of them keeps a register of anybody's: each says what
-; it clobbers rather than banking and restoring the lot on the way through
-; (apps size pass 1, where that banking was ~200 bytes of push and pop).
+; cal_dispatch - run the handler for key code AL, under cal_key's save
+; out: nothing; clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
-cal_key:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call cal_dispatch
-    call cal_show
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
 cal_dispatch:
     mov [cal_kcode], al             ; the handlers that need it read it here
     ; ANY KEY THAT REACHES THE ENGINE UN-BLANKS THE FIELD, and cal_kop is the
@@ -1685,19 +1692,15 @@ cal_kdigit:
     cmp ax, (CAL_ENTMAX & 0xFFFF)
     ja .out
 .fits:
-    mov bx, 10                      ; m = m * 10 + digit, in 32 bits; the high
-    mov cx, dx                      ; half cannot carry out, m being at most
-    mul bx                          ; CAL_ENTMAX on the way in
-    mov si, dx                      ; SI = the carry into the high half
-    mov di, ax                      ; DI = the low half
-    mov ax, cx
-    mul bx
-    add ax, si
-    mov dx, ax
-    mov ax, di
-    mov bl, [cal_kcode]
-    xor bh, bh
-    add ax, bx
+    mov cx, 10                      ; m = m * 10 + digit, in 32 bits; the high
+    xchg ax, dx                     ; half cannot carry out, m being at most
+    mov si, dx                      ; CAL_ENTMAX on the way in. The HIGH half
+    mul cx                          ; first, so its product is set aside in SI
+    xchg ax, si                     ; and the low one lands in DX:AX where the
+    mul cx                          ; sum wants it: two moves where there were
+    add dx, si                      ; six (apps size pass 2), the same two
+    mov cl, [cal_kcode]             ; multiplies of the same operands, and CH
+    add ax, cx                      ; is already the 0 the digit needs
     adc dx, 0
     mov [cal_cur+CV_M+0], ax
     mov [cal_cur+CV_M+2], dx
@@ -1806,7 +1809,9 @@ cal_kop:
 cal_keq:
     cmp byte [cal_op], CAL_OP_NONE
     je .out                         ; nothing pending: '=' does not repeat here
+%ifdef CALF_HIST
     call cal_hist_prep
+%endif
     call cal_reduce
     mov byte [cal_op], CAL_OP_NONE
     jmp short cal_unary_end         ; a RESULT, and the row goes up with it
@@ -1821,16 +1826,20 @@ cal_keq:
 ; rather than extending the answer.
 ; -----------------------------------------------------------------------------
 cal_ksqrt:
+%ifdef CALF_HIST
     mov si, cal_s_sqrt              ; 'sqrt(' <operand> ')' - a root IS a
     mov di, cal_s_rparen            ; calculation, so it earns a history row
     call cal_hist_prep_un           ; exactly as '=' does
+%endif
     call cal_do_sqrt
     jmp short cal_unary_end
 
 cal_krecip:
+%ifdef CALF_HIST
     mov si, cal_s_recip             ; '1/' <operand>, and no suffix: the NUL
     mov di, cal_s_rparen + 1        ; that ends ')' is an empty string
     call cal_hist_prep_un
+%endif
     mov si, cal_one                 ; 1 / x is cal_calc's divide with a
     mov di, cal_cur                 ; constant left operand
     mov al, CK_DIV
@@ -1858,6 +1867,7 @@ cal_kpct:
 
 cal_unary_end:
     mov word [cal_new], 1           ; a RESULT, past no point
+%ifdef CALF_HIST
     cmp byte [cal_err], 0
     jne .out                        ; a refusal is not a calculation, and the
     cmp word [cal_linep], 0         ; line staged for it is dropped unspent
@@ -1865,6 +1875,7 @@ cal_unary_end:
     call cal_hist_push              ; PENDING entry rather than a sum of its
 .out:                               ; own, and a row saying '10 = 20' would be
     mov word [cal_linep], 0         ; a lie about what the user did)
+%endif
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1895,6 +1906,10 @@ cal_clearall:
 cal_clearent:
     mov di, cal_cur
     call cal_vzero
+cal_result:                         ; ...and the tail on its own, called by the
+                                    ; two entries that do not come through
+                                    ; cal_dispatch (a paste, a history row):
+                                    ; preserves every register
     mov word [cal_err], 0x0100      ; no error, and a RESULT (the 0) on show,
     mov byte [cal_dot], 0           ; past no point
     ret
@@ -1940,21 +1955,16 @@ cal_reduce:
 ;
 ; Both end in the same body - the operand, the suffix, ' = ' - so a binary
 ; line is a unary one whose prefix is '<acc> <op> ' and whose suffix is empty.
-; -----------------------------------------------------------------------------
-%ifndef CALF_HIST
-; No history (APP_SMALL). These three are called from the ARITHMETIC paths -
-; every `=`, every sqrt and every 1/x - so gating the call sites would have
-; meant six %ifdefs through code that is not the history's. Three entry points
-; on one `ret` instead, which is apps/notepad/notepad.asm's undo treatment.
 ;
-; [cal_linep] STAYS in both builds and simply reads 0 here, which is what
-; cal_unary_end's `cmp word [cal_linep], 0 / je .out` already tests for - so
-; that path needs no gate either.
-cal_hist_prep:
-cal_hist_prep_un:
-cal_hist_push:
-    ret
-%endif
+; WITH NO HISTORY (APP_SMALL) THE CALLS ARE GATED, NOT STUBBED. They were three
+; entry points on one shared `ret`, which was Note Pad's undo treatment and
+; meant no %ifdef through the arithmetic - but every call site still loaded
+; its prefix and suffix, called the `ret` and tested a [cal_linep] that could
+; only read 0, and the three strings rode along: ~50 bytes of the small build
+; that did nothing at all. Four short gates in cal_keq, cal_ksqrt, cal_krecip
+; and cal_unary_end take them out (apps size pass 2); the full build is
+; byte-identical for them.
+; -----------------------------------------------------------------------------
 
 %ifdef CALF_HIST
 cal_hist_prep:
@@ -2178,8 +2188,8 @@ cal_hist_load:
     lea si, [bx+cal_hval]
     mov di, cal_cur
     call cq_copy
-    mov word [cal_err], 0x0100      ; no error, and it is a RESULT, so a digit
-    mov word [cal_dot], 0           ; replaces it; no point - and it is a
+    call cal_result                 ; no error, and it is a RESULT, so a digit
+    mov byte [cal_wait], 0          ; replaces it; no point - and it is a
                                     ; number to LOOK at, so the field is not
                                     ; waiting any more: this one does not come
                                     ; through cal_dispatch
@@ -2198,33 +2208,31 @@ cal_hist_load:
 ; there is nothing to draw after it and nothing here needs to know what a CGA
 ; can spare: it asks for CAL_OPEN_H, and cal_sync - which the repaint runs -
 ; derives [cal_nvis] from whatever was actually granted.
+;
+; THE MENU ITEM'S FIRST WORD IS TOGGLED, NOT COPIED. It says what the click
+; WILL do, and it changes exactly when [cal_open] does - here, and nowhere
+; else - so 'Show' and 'Hide' are one XOR of each other applied in step with
+; the byte: two stores where there were two loads, two stores and the eight
+; bytes of the two words they were copied from (apps size pass 2).
 ; -----------------------------------------------------------------------------
 cal_hist_toggle:
-    push ax
     push bx
     push cx
     push dx
-    push si
     xor byte [cal_open], 1
-    mov si, cal_mi_hide             ; the menu item says what the click WILL do
-    mov dx, CAL_OPEN_H + TITLE_H + 1
-    jnz .word
-    mov si, cal_mi_show
     mov dx, CAL_BASE_H + TITLE_H + 1
+    jz .word
+    mov dx, CAL_OPEN_H + TITLE_H + 1
 .word:
-    mov ax, [si+0]
-    mov [cal_mi_hist+0], ax
-    mov ax, [si+2]
-    mov [cal_mi_hist+2], ax
+    xor word [cal_mi_hist+0], 'Sh' ^ 'Hi'
+    xor word [cal_mi_hist+2], 'ow' ^ 'de'
     mov cx, CAL_CW + 2
     mov bx, [cal_win]
     call OSAPI_WM_RESIZE
     call cal_sync                   ; ...and our own idea of the box follows
-    pop si                          ; whatever the clamp gave us
-    pop dx
+    pop dx                          ; whatever the clamp gave us
     pop cx
     pop bx
-    pop ax
     ret
 
 %endif   ; CALF_HIST
@@ -2240,6 +2248,7 @@ cal_copy:
     push ax
     push bx
     push cx
+    push dx                         ; cal_fmtv's, which does not keep it
     push si
     push di
     push es
@@ -2260,6 +2269,7 @@ cal_copy:
     pop es                          ; cannot leave our incremental drawing
     pop di                          ; disagreeing with our W_PAINT (SPEC.md 59)
     pop si
+    pop dx
     pop cx
     pop bx
     pop ax
@@ -2273,12 +2283,18 @@ cal_copy:
 ; the clipboard cannot express a number the keypad cannot: the same range
 ; refusals, the same decimal rule, and no second parser to disagree with the
 ; first. Anything it does not recognise simply ends the paste.
+;
+; THE LEADING SIGN IS READ TWICE AND REMEMBERED NOWHERE: once to step past
+; it, and once at the end, off the buffer itself - nothing a paste reaches
+; writes cal_pbuf (digits and a point stage no history line, and the
+; display's composition stops short of it). It was a flag in DX and a second
+; counter in BX, two more registers to bank (apps size pass 2). A '-' that is
+; not the first character is CK_SUB to cal_asckey, which is past CK_DOT, so
+; it ends the paste exactly as it always did.
 ; -----------------------------------------------------------------------------
 cal_paste:
     push ax
-    push bx
     push cx
-    push dx
     push si
     push di
     push es
@@ -2289,33 +2305,23 @@ cal_paste:
     call OSAPI_CLIP_GET             ; character, cal_key ends in cal_show, and
     jc .out                         ; cal_show composes the display through
     jcxz .out                       ; cal_scratch - so pasting INTO the bytes
-    mov word [cal_err], 0x0100      ; it composes had every keystroke
-    mov byte [cal_dot], 0           ; overwrite the characters not yet read.
-    mov si, cal_pbuf                ; '88' came back as '87' or '8': the second
-    mov bx, cx                      ; byte was whatever the first digit's own
-    xor dx, dx                      ; display text had just put there. DL =
-.ch:                                ; a leading '-' was seen
-    or bx, bx
-    jz .done
-    mov al, [si]
-    cmp al, '-'                     ; a leading sign, and only a leading one
-    jne .code
-    cmp cx, bx
-    jne .done
-    inc dx
-    jmp short .next
-.code:
+    call cal_result                 ; it composes had every keystroke
+    mov si, cal_pbuf                ; overwrite the characters not yet read.
+    cmp byte [si], '-'              ; '88' came back as '87' or '8': the
+    jne .ch                         ; second byte was whatever the first
+    inc si                          ; digit's own display text had just put
+    dec cx                          ; there. A leading sign, and only a
+    jz .done                        ; leading one, is stepped over here
+.ch:
+    lodsb
     call cal_asckey
     cmp al, CK_DOT
     ja .done                        ; digits and the point drive the entry;
     call cal_key                    ; nothing else may come off a clipboard
-.next:
-    inc si
-    dec bx
-    jmp short .ch
+    loop .ch
 .done:
-    or dx, dx
-    jz .show
+    cmp byte [cal_pbuf], '-'        ; ...and applied here, after the digits
+    jne .show
     mov al, CK_NEG
     call cal_key
 .show:
@@ -2324,9 +2330,7 @@ cal_paste:
     pop es
     pop di
     pop si
-    pop dx
     pop cx
-    pop bx
     pop ax
     ret
 
@@ -2352,13 +2356,18 @@ cq_set32:
 
 ; -----------------------------------------------------------------------------
 ; cq_mul10 - [DI] *= 10
-; out: CF = 1 if it carried out of 64 bits; preserves all registers
+; out: CF = 1 if it carried out of 64 bits; clobbers DX, preserves the rest
+;
+; WHAT IS KEPT IS WHAT A CALLER READS AFTER IT, and no more (apps size pass
+; 2, here and through the cq_* family): AX is cal_pack's digit and
+; cal_do_sqrt's exponent, CX is cq_scale's count, SI and BX are cal_addsub's
+; operand pointers across cq_scale. Nothing holds DX across one, so it is
+; not banked - a push and a pop off every multiply by ten.
 ; -----------------------------------------------------------------------------
 cq_mul10:
     push ax
     push bx
     push cx
-    push dx
     push si
     push di
     mov bx, di                      ; BX = the pointer: an 8086 index register
@@ -2378,7 +2387,6 @@ cq_mul10:
     neg cx                          ; CF = 1 exactly when a carry is left
     pop di                          ; pops do not touch the flags
     pop si
-    pop dx
     pop cx
     pop bx
     pop ax
@@ -2386,13 +2394,12 @@ cq_mul10:
 
 ; -----------------------------------------------------------------------------
 ; cq_div10 - [DI] /= 10
-; out: AX = the remainder 0..9; preserves all other registers
+; out: AX = the remainder 0..9; clobbers BX, DX, SI; preserves CX and DI
+;
+; cal_pack is the only caller (directly and through cq_div10r) and it holds
+; DI alone across one; CX is never touched here at all.
 ; -----------------------------------------------------------------------------
 cq_div10:
-    push bx
-    push cx
-    push dx
-    push si
     push di
     mov bx, di                      ; BX = the pointer, for cq_mul10's reason
     mov di, 10
@@ -2404,13 +2411,23 @@ cq_div10:
     mov [bx+si], ax
     sub si, 2
     jnc .w                          ; 6, 4, 2, 0, then the borrow ends it
-    mov ax, dx
+    xchg ax, dx
     pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     ret
+
+; -----------------------------------------------------------------------------
+; cq_div10r - [DI] = round([DI] / 10)
+; out: nothing; clobbers AX, BX, DX, SI (cq_div10's, and cal_pack - the one
+;      caller - holds none of them across it)
+;
+; It FALLS INTO cq_add16 to round up, and leaves through that routine's
+; `ret` when it does not - so neither arm has a jump or a return of its own.
+; -----------------------------------------------------------------------------
+cq_div10r:
+    call cq_div10
+    cmp ax, 5
+    jb cq_add16.out
+    mov ax, 1                       ; ...and on into the add
 
 ; -----------------------------------------------------------------------------
 ; cq_add16 - [DI] += AX (unsigned 16-bit)
@@ -2421,21 +2438,7 @@ cq_add16:
     adc word [di+2], 0
     adc word [di+4], 0
     adc word [di+6], 0
-    ret
-
-; -----------------------------------------------------------------------------
-; cq_div10r - [DI] = round([DI] / 10)
-; out: nothing; preserves all registers
-; -----------------------------------------------------------------------------
-cq_div10r:
-    push ax
-    call cq_div10
-    cmp ax, 5
-    jb .out
-    mov ax, 1
-    call cq_add16
 .out:
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2491,15 +2494,14 @@ cq_cmp:
 
 ; -----------------------------------------------------------------------------
 ; cq_zero - is [DI] zero?
-; out: ZF = 1 if it is; every register preserved
+; out: ZF = 1 if it is; clobbers AX (its two callers, cal_pack and
+;      cal_isqrt, branch on the answer and hold nothing in AX across it)
 ; -----------------------------------------------------------------------------
 cq_zero:
-    push ax
     mov ax, [di+0]
     or ax, [di+2]
     or ax, [di+4]
     or ax, [di+6]                   ; ...which is the ZF
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2521,19 +2523,27 @@ cq_copy:
 
 ; -----------------------------------------------------------------------------
 ; cq_mul32 - [DI] = the 64-bit product of the dwords at [SI] and [BX]
-; out: nothing; preserves all registers
+; out: nothing; clobbers AX and DX (cal_mul goes on to cal_pack, cal_div to
+;      its raise loop, and neither reads them)
 ;
 ; Four 16x16 partial products. DI may not alias either input.
+;
+; THE TWO THAT DO NOT OVERLAP ARE STORED, NOT ADDED: a0 * b0 is words 0..1
+; and a1 * b1 is words 2..3, which between them write all four - so the two
+; cross products are the only adds and the result needs no zeroing first. It
+; was two `mov word [di+n], 0` stores and an add where this has a move: ten
+; bytes fewer, and every instruction it lost was paid on every multiply and
+; on every divide's precision target (apps size pass 2).
 ; -----------------------------------------------------------------------------
 cq_mul32:
-    push ax
-    push dx
-    mov word [di+4], 0
-    mov word [di+6], 0
     mov ax, [si+0]                  ; a0 * b0, into words 0..1
     mul word [bx+0]
     mov [di+0], ax
     mov [di+2], dx
+    mov ax, [si+2]                  ; a1 * b1, into words 2..3
+    mul word [bx+2]
+    mov [di+4], ax
+    mov [di+6], dx
     mov ax, [si+0]                  ; a0 * b1, into words 1..2
     mul word [bx+2]
     add [di+2], ax
@@ -2544,18 +2554,13 @@ cq_mul32:
     add [di+2], ax
     adc word [di+4], dx
     adc word [di+6], 0
-    mov ax, [si+2]                  ; a1 * b1, into words 2..3
-    mul word [bx+2]
-    add [di+4], ax
-    adc word [di+6], dx
-    pop dx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; cq_divmod - [DI] = [DI] / [cal_dv], the remainder to [cal_rem]
 ; in:  DI = the dividend, [cal_dv] a NON-ZERO dword divisor
-; out: nothing; preserves all registers
+; out: nothing; clobbers AX and CX (cal_div goes on to cal_pack and
+;      cal_isqrt reloads both, so a pass of sixty-four is not bracketed)
 ;
 ; Restoring shift-subtract, one bit a pass, the quotient shifted in at the
 ; bottom as the dividend leaves the top - so there is one 96-bit shift and no
@@ -2564,8 +2569,6 @@ cq_mul32:
 ; compare: R < D always, so 2R+1 < 2D and 2R+1-D < D fits 32 bits again.
 ; -----------------------------------------------------------------------------
 cq_divmod:
-    push ax
-    push cx
     mov word [cal_rem+0], 0
     mov word [cal_rem+2], 0
     mov cx, 64
@@ -2593,16 +2596,13 @@ cq_divmod:
 .next:
     dec cx
     jnz .pass
-    pop cx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; cq_big - is [DI] more than nine digits?
-; out: CF = 1 if [DI] > CAL_MAXM; every register preserved
+; out: CF = 1 if [DI] > CAL_MAXM; clobbers AX (cal_pack, the one caller)
 ; -----------------------------------------------------------------------------
 cq_big:
-    push ax
     xor ax, ax                      ; each compare is the LIMIT against the
     cmp ax, [di+6]                  ; word, so its borrow IS the answer: CF = 1
     jb .out                         ; when the word is the larger - and a
@@ -2614,23 +2614,20 @@ cq_big:
     mov ax, CAL_MAXM & 0xFFFF
     cmp ax, [di+0]
 .out:
-    pop ax                          ; pops do not touch the flags
     ret
 
 ; -----------------------------------------------------------------------------
 ; cq_scale - [DI] *= 10^CL
-; out: nothing; preserves all registers
+; out: nothing; clobbers CX (cal_addsub's raise is the one caller, and it
+;      loads CL fresh for each operand)
 ; -----------------------------------------------------------------------------
 cq_scale:
-    push cx
-    or cl, cl
-    jz .out
-    xor ch, ch
+    mov ch, 0
+    jcxz .out
 .mul:
     call cq_mul10
     loop .mul
 .out:
-    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2638,7 +2635,8 @@ cq_scale:
 ; in:  cal_q the magnitude, [cal_wd] its decimal places (0..16), [cal_wsgn]
 ;      its sign
 ; out: CF = 1 and cal_cur untouched on overflow
-; clobbers: AX, DI
+; clobbers: AX, BX, DX, SI, DI (every caller is a key handler under
+;      cal_key's one save, or cal_calc, which clobbers the lot already)
 ;
 ; EVERY ANSWER LANDS IN cal_cur, so that is where this writes: the four
 ; callers each named it (or cal_res, which three callers then copied into
@@ -3008,7 +3006,14 @@ cal_isqrt:
 ; in:  BX = the value, DI = the destination, AL non-zero = show a trailing
 ;      point (the '12.' a half-typed entry is showing)
 ; out: DI = ONE PAST the text, which is NOT terminated, and CX = how many
-;      characters that is; preserves all other registers
+;      characters that is; clobbers AX and DX, preserves BX (which it only
+;      reads), SI and BP
+;
+; AX AND DX ARE NOT BANKED, because no caller holds anything in them across
+; a format: cal_compose and the history composers reload both, and cal_copy -
+; the one caller owing its own caller every register - banks DX itself. Six
+; bytes and three pushes and pops off every keystroke's two formats (apps size
+; pass 2); BX was banked round code that never writes it.
 ;
 ; DI comes back ADVANCED because every caller but one went on to write after
 ; the number - a NUL, an operator, ' = ' - and each spelled `add di, cx`
@@ -3027,9 +3032,6 @@ cal_isqrt:
 ; round each one, which is both shorter and faster than it was.
 ; -----------------------------------------------------------------------------
 cal_fmtv:
-    push ax
-    push bx
-    push dx
     push si
     push bp
     push di                         ; the start, for the count
@@ -3089,9 +3091,6 @@ cal_fmtv:
     sub cx, si
     pop bp
     pop si
-    pop dx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -3124,11 +3123,9 @@ cal_tpl:
 cal_m_name: db 'Calc', 0
 cal_m_edit: db 'Edit', 0
 cal_m_math: db 'Math', 0
-cal_m_view: db 'View', 0
 
 cal_i_edit: dw cal_mi_copy, cal_mi_paste
 cal_i_math: dw cal_mi_sqrt, cal_mi_recip, cal_mi_pct, cal_mi_neg
-cal_i_view: dw cal_mi_hist, cal_mi_clr
 
 cal_mi_copy:  db 'Copy   ^C', 0
 cal_mi_paste: db 'Paste  ^V', 0
@@ -3138,11 +3135,21 @@ cal_mi_pct:   db 'Percent      %', 0
 cal_mi_neg:   db 'Negate       N', 0
 ; The one mutable string in the set: a menu item's bytes are read when the
 ; menu DROPS, so saying what the click will do NEXT is four bytes rewritten
-; by cal_hist_toggle rather than two items with one of them greyed.
+; by cal_hist_toggle rather than two items with one of them greyed - an XOR
+; that turns 'Show' into 'Hide' and back, so the item starts as 'Show' and
+; the pane starts folded up.
+;
+; ALL OF IT IS THE PANE'S, and the small build has no pane: the View menu,
+; its two items and the strip's label are data nothing in that build reads,
+; and they rode in it as 46 bytes of image and of disk until apps size pass
+; 2 put them behind the same flag as the code that reads them.
+%ifdef CALF_HIST
+cal_m_view:   db 'View', 0
+cal_i_view:   dw cal_mi_hist, cal_mi_clr
 cal_mi_hist:  db 'Show History H', 0
 cal_mi_clr:   db 'Clear History', 0
-cal_mi_show:  db 'Show'
-cal_mi_hide:  db 'Hide'
+cal_s_hist:   db 'History', 0
+%endif
 
 cal_ttl:      db 'Calculator', 0
 
@@ -3161,12 +3168,13 @@ cal_ab3:      db 0                  ; a blank line is a line with no glyphs
 cal_ab4:      db 'Contributed by Elendilon', 0
 %endif
 
-cal_s_hist:   db 'History', 0
 cal_s_error:  db 'Error', 0
 cal_s_copied: db 'Copied', 0
+%ifdef CALF_HIST                    ; the unary keys' history lines
 cal_s_sqrt:   db 'sqrt(', 0
 cal_s_rparen: db ')', 0
 cal_s_recip:  db '1/', 0
+%endif
 cal_s_nocopy: db 'Clipboard full', 0
 
 ; Twenty-six spaces and a NUL: the blank a history row past the end of the
@@ -3248,8 +3256,10 @@ cal_asctab:
     db '%', CK_PCT
     db 'r', CK_RECIP
     db 'R', CK_RECIP
-    db 'h', CK_HIST
+%ifdef CALF_HIST                    ; the pane's key, which a build with
+    db 'h', CK_HIST                 ; no pane has nothing to send to
     db 'H', CK_HIST
+%endif
     db 3,   CK_COPY                 ; Ctrl-C and Ctrl-V, Note Pad's bindings
     db 22,  CK_PASTE                ; (SPEC.md 27.8) - and they cannot collide
     db 0, CK_NONE                   ; with 'c' or 'v', which are bytes of their
@@ -3330,7 +3340,9 @@ cal_e8:      dd 100000000
 %ifdef CALF_HIST
     CALVAR cal_nvis,    2    ; word: history rows that FIT
 %endif
+%ifdef CALF_HIST
     CALVAR cal_linep,   2    ; word: where the answer joins cal_line
+%endif
     ; WHICH CONTROL IS DRAWN DOWN (SPEC.md 13.8/13.8.2), as os88ui_bfind's
     ; index + 1 so that 0 can mean "none". It was DATA, for os88ui_armw's
     ; reason - the bss was hand-numbered then, and two bytes of image were

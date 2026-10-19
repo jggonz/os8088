@@ -1,0 +1,444 @@
+From 928763aded0d968938cada8983dc01ffd234eddd Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 16 Oct 2026 10:38:57 +0000
+Subject: [PATCH] video: a VD_YCK yield site is a 3-byte patched call (SPEC.md
+ 98.3.18.11)
+
+LOADALL-PLAN 9.2's option 1. A yield site was twelve bytes: a jump over
+itself (EB 0A) and an inline `cmp si, [cs:vd_ylim] / jb / call vd_yield`,
+with an in-place session patching the jump to two NOPs. Now a site is
+three bytes, `test ax, rel16` (A9), whose immediate is already a near
+call's displacement to vd_yield. vd_ypatch flips the one byte to E8, which
+makes the site `call vd_yield`, and vd_yield makes the compare itself
+(`cmp / jae .go / ret`). Flags are dead at every site.
+
+The C160 decoder's eight sites go too (VD_NOYCK). They were never in
+vd_ytab and so never patched, and C160 is decoded only through the
+shadow, which neither vp_xipq nor vp_xbipq takes.
+
+Bytes: -258 in every arm. Default 53,646 -> 53,388, VP_NOLIVESND
+53,417 -> 53,159, VPDIAG 55,006 -> 54,748, bss 4,144 unchanged.
+
+8088, measured on MartyPC's 5150 (VIDBENCH, synthetic XDC frames): every
+frame is faster, to the screen and to RAM. An empty frame is -54 cycles
+(8 sites, ~6.7 a site) and the others -35 to -90. The vidfskeys --cost
+hook means with the text down: herc -69, cga4 -46, vga8 -68,
+vga4m3 -810, modexflip -115. With the text up they are within noise.
+
+The site-visit counts are counted exactly on the host from the lists, and
+cross-checked on MartyPC: an armed vidbench (every site `call` to a `ret`)
+costs 40 +-1 cycles a visit on every row at the host's counts (8, 9 and
+10 a frame).
+
+286 in place: a call and a ret where there were two NOPs and a taken jb.
+That is +13 clocks a site visit, PREDICTED from Intel's table. It comes to
+9-38 visits a frame on the demo files (82 the most), so 7-31 us at
+16 MHz, 0.25-0.6% of the Victory's measured decode on a real synthetic
+frame (an empty frame +6.5 us). A 286 play that copies gets back ~9 clocks
+a site against the jump the Victory measured at ~12.
+
+Parity is kept: VD_GATE pins its own .seg in the dead byte after its jump
+on, VD_NSPAN pins its round's head, and pads restore the long spans'. No
+identical routine moved by an odd amount in any arm. The only flips are
+jump targets going odd -> even.
+
+tests/vidxip.py reads the first site's byte (A9 after a session). Broken
+on purpose, both ways: without the E8 store, 0 yields; without the A9
+restore, "left live (E8)".
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Sqyi2i8ponccwtbfobkf5t
+---
+ SPEC.md                    | 27 ++++++++----
+ apps/video/vdec.inc        | 84 ++++++++++++++++++++------------------
+ apps/video/video.asm       | 22 ++++++----
+ docs/plans/LOADALL-PLAN.md | 21 ++++++----
+ tests/vidxip.py            | 13 +++---
+ 5 files changed, 98 insertions(+), 69 deletions(-)
+
+diff --git a/SPEC.md b/SPEC.md
+index 3d645790..ae887907 100644
+--- a/SPEC.md
++++ b/SPEC.md
+@@ -175533,13 +175533,26 @@ ms on the Victory at its worst rate). The window's state rides on the stack
+ across the moment, because an interrupt there may run the hook, whose own
+ borrows reuse it.
+ 
+-**An 8088 pays a short jump a site.** The sites start as a jump over
+-themselves (`EB 0A`) and only an in-place session patches them to two NOPs
+-(`vd_ypatch`, from a table the macro builds, so a site added later is in
+-it); the session's end puts the jumps back. Measured on MartyPC's 5150, the
+-compare at every site would have been +410 cycles an empty frame and +0.9
+-to 2.4% a real one; as jumps it is **+146 an empty frame and +0.34 to 0.70%
+-a real one**. The fifteen borrow sites add a compare and a jump each.
++**An 8088 pays a `test` a site.** A site is three bytes, `test ax, rel16`
++(`A9`), whose immediate is a near call's displacement to `vd_yield`: only
++an in-place session patches the one byte to `E8` (`vd_ypatch`, from a table
++the macro builds, so a site added later is in it), making it `call
++vd_yield`, and `vd_yield` makes the compare; the session's end puts the
++`A9` back. Flags are dead at every site. Measured on MartyPC's 5150, the
++inline compare at every site would have been +410 cycles an empty frame and
+++0.9 to 2.4% a real one; the first build's jump over it (`EB 0A`, twelve
++bytes a site) +146 an empty frame and +0.34 to 0.70% a real one, and the
++`test` is **54 cycles an empty frame under the jumps and 35 to 90 under
++them on VIDBENCH's synthetic frames, ~6 a site** - for 258 bytes fewer.
++It is docs/plans/LOADALL-PLAN.md 9.2's option 1, and its price is the
++in-place play's: a site that is a `call` and a `ret` where it was two NOPs
++and a taken `jb` is **~13 clocks more on a 286, PREDICTED** from Intel's
++table (CALL 7+m, RET 11+m) - 9 to 38 sites a frame on the demo files (82
++the most), a few microseconds of a frame at 16 MHz - against **~9 clocks a
++site back on every 286 play that copies** (the Victory MEASURED the jump at
++6.2 us an empty frame, ~12 clocks a site). The C160 decoder has no sites:
++it is reached only through the shadow, which neither session in place
++takes. The fifteen borrow sites add a compare and a jump each.
+ 
+ **Taken** (`vp_xipq`, after `vp_einq` where the ring is sized) only on a
+ 286 (`[vp_tier]`), for a hold that is WHOLE (`[vp_xfull]`), once this
+diff --git a/apps/video/vdec.inc b/apps/video/vdec.inc
+index 930ee9d3..36e12669 100644
+--- a/apps/video/vdec.inc
++++ b/apps/video/vdec.inc
+@@ -114,7 +114,8 @@
+ %else
+     jmp %1
+ %endif
+-%endmacro
++    VD_PAR 0                        ; (.seg even, in the dead byte after the
++%endmacro                           ; jump on: VD_PAR, below)
+ 
+ ; VD_GATEN next[, byte] - VD_GATE for a list whose `next` is in a short
+ ; jump's reach (or 0, and .ret a `ret` in reach): not there is a `jnc` to
+@@ -153,27 +154,28 @@
+ %endmacro
+ 
+ ; VD_YCK - THE IN-PLACE DECODE'S YIELD (SPEC.md 98.3.18.11): SI past
+-; [vd_ylim] calls vd_yield, which on a 286 decoding a record held in XMS
++; [vd_ylim] yields (vd_yield), which on a 286 decoding a record held in XMS
+ ; through a LOADALL'd DS opens the interrupts for a moment and borrows again
+-; at the same SI. Everywhere else [vd_ylim] is FFFFh and it is never taken:
+-; a compare at each poke list's head, each span segment's and each long
+-; span's - never inside a poke segment, the hot loop an 8088 lives in
+-; EVERY SITE STARTS AS A JUMP OVER ITSELF, and only an in-place session
+-; patches it to two NOPs (vd_ypatch), so an 8088 - which can never decode in
+-; place - pays a taken short jump, ~15 cycles, where the compare it skips
+-; cost ~41: measured on MartyPC's 5150, the compare at every site was +410
+-; cycles an empty frame and +0.9-2.4% a real one. The macro numbers its
+-; sites and vd_ytab lists them, so a site added later is in the table
++; at the same SI. A site at each poke list's head, each span segment's and
++; each long span's - never inside a poke segment, the hot loop an 8088 lives
++; in. A SITE IS THREE BYTES: `test ax, rel16` (A9), whose immediate is a
++; call's displacement to vd_yield - so only an in-place session, patching
++; the one byte to E8 (vd_ypatch), makes it `call vd_yield`, and vd_yield
++; makes the compare. Flags are dead at every site. An 8088 - which can never
++; decode in place - pays 4 cycles a site and its fetch where the jump over
++; an inline compare (EB 0A, 12 bytes a site) paid 15 and a refill: ~6 a site
++; less, measured on MartyPC's 5150, and ~13 clocks MORE a site on a 286
++; decoding in place, predicted (a call and a ret for two NOPs). The macro
++; numbers its sites and vd_ytab lists them, so a site added later is in the
++; table; VD_NOYCK (the C160 decoder, never decoded in place: 98.3.18.11's
++; shadow) emits none
+ %assign vd_ny 0
+ %macro VD_YCK 0
++%ifndef VD_NOYCK
+ %assign vd_ny vd_ny + 1
+ ..@vd_y %+ vd_ny:
+-    jmp short %%ok                  ; 2 bytes: EB 0A, or 90 90 in place
+-%%live:                             ; (reached once vd_ypatch has run)
+-    cmp si, [cs:vd_ylim]            ; 5
+-    jb %%ok                         ; 2
+-    call vd_yield                   ; 3
+-%%ok:
++    test ax, vd_yield - ($ + 3)     ; A9 rel16, or E8: `call vd_yield`
++%endif
+ %endmacro
+ 
+ %macro VD_NPOKE 2-7 0, 0, 0, 0, 0
+@@ -288,15 +290,17 @@
+ ; each list's .seg and its round's head - the two jumps a segment takes -
+ ; are put on even addresses; an 8088 fetches a byte at a time and does not
+ ; care. Each use below is placed for the head length of the list after it
+-; (its .seg's offset from its label): an edit that moves one must move its
+-; VD_PAR with it (tools/os88rdiff.py's map shows them). The package is
++; (its .seg's offset from its label) - but a VD_GATE pins its own .seg in
++; the dead byte after its jump on, so a gated list needs none: an edit that
++; moves one must move its VD_PAR with it (tools/os88rdiff.py's map shows
++; them). The package is
+ ; loaded at a paragraph, so an offset's parity is the address's
+ %macro VD_PAR 1
+     times (($ - $$ + %1) & 1) db 0x90
+ %endmacro
+ 
+ ..@vd_beg:                          ; (the decoder's first byte, for its end)
+-    VD_PAR 0                        ; (vd_n_p1's .seg, 20 + 22 on)
++    VD_PAR 0                        ; (vd_nmap's entry: its gate pins .seg)
+ ; vd_nmap - vd_native for a SUB2 sub-record (SPEC.md 98.1.3.2.4): DS:SI is
+ ; its LIST MAP, a word whose bit k says list k is there, and then those
+ ; lists alone. Each list's head shifts the map once - `shr` and a jump, ~35
+@@ -318,15 +322,10 @@ vd_ngo1:
+                                     ; ret: ten calls were ~250 cycles a frame.
+                                     ; The entry falls into the first
+     VD_NPOKE vd_n_p1, VD_ST1, 0, vd_n_p2, 1
+-    VD_PAR 0
+     VD_NPOKE vd_n_p2, VD_ST2, 0, vd_n_p3, 1
+-    VD_PAR 0
+     VD_NPOKE vd_n_p3, VD_ST3, 0, vd_n_p4, 1
+-    VD_PAR 0
+     VD_NPOKE vd_n_p4, VD_ST4, 0, vd_n_p5, 1
+-    VD_PAR 0
+     VD_NPOKE vd_n_p5, VD_ST5, 0, vd_n_p6, 1
+-    VD_PAR 0
+     VD_NPOKE vd_n_p6, VD_ST6, 0, vd_n_slice, 1
+ 
+ ; VD_NSPAN name, entry, c160, next - a Duff-entered list of spans, four to a
+@@ -363,8 +362,9 @@ vd_ngo1:
+                                     ; entries zero it)
+     shl bx, 1
+     jmp [cs:bx + .tab]
+-.r4:
+-    %2
++    VD_PAR 0                        ; (the round's head: the site in front of
++.r4:                                ; it is three bytes, so .seg's pad is not
++    %2                              ; enough)
+ .r3:
+     %2
+ .r2:
+@@ -418,6 +418,7 @@ vd_ngo1:
+     VD_NSPAN vd_n_run, VD_RUN, 0, vd_n_slicel, 1
+ 
+ ; the long ones: a span of 256+ bytes, len16 - rare, so a plain loop
++    VD_PAR 1                        ; (a GATEN head is 7 bytes)
+ vd_n_slicel:
+     VD_GATEN vd_n_runl, vd_map + 1
+ .seg:
+@@ -444,6 +445,7 @@ vd_n_slicel:
+     jnz .e
+     jmp short .seg
+ 
++    VD_PAR 0                        ; (.seg odd, .e even)
+ vd_n_runl:
+     VD_GATEN 0, vd_map + 1
+ .seg:
+@@ -471,6 +473,7 @@ vd_n_runl:
+     dec dx
+     jnz .e
+     jmp short .seg
++    VD_PAR 0                        ; (the frame's last list's end, even)
+ .ret:
+     ret
+ 
+@@ -488,7 +491,7 @@ vd_n_runl:
+ ; vd_wmap - DS:SI = the sub-record's list map and its lists, ES the screen,
+ ; BP the origin: vd_nmap's contract. Clobbers AX, BX, CX, DX, DI
+ ; =============================================================================
+-    VD_PAR 0                        ; (vd_w_p1's .seg: 10 + 22 on)
++    VD_PAR 0                        ; (vd_wmap's entry: its gate pins .seg)
+ vd_wmap:
+     cld
+     lodsw
+@@ -527,15 +530,14 @@ vd_wmap:
+ ; is ~5% of a store that reads and writes the card - where a round of eight
+ ; was 1,702 bytes of a package at 55.8 KB of its 60)
+     VD_NPOKE vd_w_p1, VD_W1, 0, vd_w_p2, 1, 4
+-    VD_PAR 1                        ; (its gate's jump on is SHORT: 21)
+     VD_NPOKE vd_w_p2, VD_W2, 0, vd_w_p3, 1, 2
+-    VD_PAR 1                        ; (gate 2's head: 19)
++    VD_PAR 0                        ; (gate 2's head: 3 + 7)
+     VD_NPOKE vd_w_p3, VD_W3, 0, vd_w_p4, 2, 1     ; (a round of one is
+-    VD_PAR 1                                      ; short enough that the
++    VD_PAR 0                                      ; short enough that the
+     VD_NPOKE vd_w_p4, VD_W4, 0, vd_w_p5, 2, 1     ; next list is in a short
+-    VD_PAR 1                                      ; jump's reach: gate 2)
++    VD_PAR 0                                      ; jump's reach: gate 2)
+     VD_NPOKE vd_w_p5, VD_W5, 0, vd_w_p6, 2, 1
+-    VD_PAR 1
++    VD_PAR 0
+     VD_NPOKE vd_w_p6, VD_W6, 0, vd_w_slice, 2, 1
+ 
+ ; a SLICE of masks: skip, len8, the masks, a read and a write each
+@@ -614,6 +616,7 @@ vd_w_slicel:
+     jnz .e
+     jmp short .seg
+ 
++    VD_PAR 1                        ; (a GATEN head is 7 bytes)
+ vd_w_runl:
+     VD_GATEN 0, vd_map + 1
+ .seg:
+@@ -637,6 +640,7 @@ vd_w_runl:
+     dec dx
+     jnz .e
+     jmp short .seg
++    VD_PAR 0                        ; (the frame's last list's end, even)
+ .ret:
+     ret
+ 
+@@ -743,7 +747,7 @@ vd_ylim:      dw 0xFFFF             ; VD_YCK's limit: FFFFh but inside an
+                                     ; in-place decode (SPEC.md 98.3.18.11)
+ %ifndef VD_YIELD
+ vd_yield:                           ; (an includer with no in-place decode:
+-    ret                             ; never reached, its sites never patched)
++    ret                             ; never called, its sites never patched)
+ %else
+ ; vd_ytab - every VD_YCK site, for vd_ypatch
+ vd_ytab:
+@@ -754,9 +758,9 @@ vd_ytab:
+ %endrep
+ VD_NY       equ vd_ny
+ 
+-; vd_ypatch - AL = 1: every yield site live (an in-place session starting),
+-; 0: every one a jump over itself again. CS = DS = the package. Preserves
+-; all but flags
++; vd_ypatch - AL = 1: every yield site a `call vd_yield` (an in-place
++; session starting), 0: every one a `test ax` again. CS = DS = the package.
++; Preserves all but flags
+ vd_ypatch:
+     push bx
+     push cx
+@@ -765,10 +769,10 @@ vd_ypatch:
+     mov si, vd_ytab
+ .s:
+     mov bx, [si]
+-    mov word [bx], 0x0AEB           ; jmp short +10
++    mov byte [bx], 0xA9             ; test ax, imm16
+     or al, al
+     jz .n
+-    mov word [bx], 0x9090
++    mov byte [bx], 0xE8             ; call rel16
+ .n:
+     inc si
+     inc si
+@@ -784,6 +788,7 @@ vw_lst:       db 0                  ; ...the list it is in
+ vw_abs:       db 0                  ; ...and whether its addresses are absolute
+ 
+ %ifdef VD_C160
++%define VD_NOYCK                     ; (no yield sites: never in place)
+ ; =============================================================================
+ ; THE C160 DECODER (SPEC.md 98.3.12.1): the same ten lists, written STRAIGHT
+ ; to the text screen. A C160 file's addresses are the PACKED image's - a byte
+@@ -965,4 +970,5 @@ vd_c_runl:
+ ; on from the plain build's - and this evens that out, so what follows keeps
+ ; its parity in every arm
+     times ((($ - ..@vd_beg) - 4897) & 1) db 0x90
++%undef VD_NOYCK
+ %endif
+diff --git a/apps/video/video.asm b/apps/video/video.asm
+index ddbcc223..4fcf0f1e 100644
+--- a/apps/video/video.asm
++++ b/apps/video/video.asm
+@@ -6004,8 +6004,9 @@ vp_einq:
+ ;     decode inside a borrow runs with interrupts off and YIELDS (vd_yield,
+ ;     at vdec.inc's VD_YCK sites, every VP_XYB record bytes): the cells back,
+ ;     a moment with interrupts as the borrow found them, a fresh LOADALL at
+-;     the same SI. The sites are jumps over themselves outside a session in
+-;     place (vd_ypatch), which is what an 8088 pays for them.
++;     the same SI. The sites are a `test ax` outside a session in place
++;     and a `call vd_yield` in one (vd_ypatch): a `test` is what an 8088
++;     pays for them.
+ ;
+ ; Not taken - the copy plays as before - on anything but a 286 whose LOADALL
+ ; checked out (la_probe, and 16 bytes of the hold read in place against
+@@ -6084,7 +6085,7 @@ vp_xipq:
+     ret
+ %endif
+ 
+-; vp_xipend - a session's end: the sites jumps over themselves again
++; vp_xipend - a session's end: the sites a `test ax` again
+ vp_xipend:
+     cmp byte [vp_xip], 0
+     je .r
+@@ -6466,12 +6467,17 @@ vd_ylset:
+     pop ax
+     ret
+ 
+-; vd_yield - vdec.inc's VD_YCK, SI past [vd_ylim]: inside a borrow whose
+-; caller had interrupts on, the cells back, a moment with them on, and the
+-; same window borrowed again. THE REGION'S STATE IS KEPT ON THE STACK across
+-; the moment: an interrupt there may run the hook, whose own borrows reuse
+-; it. Every register preserved; DS the window again on the way out
++; vd_yield - vdec.inc's VD_YCK, patched live: SI past [vd_ylim] inside a
++; borrow whose caller had interrupts on, the cells back, a moment with them
++; on, and the same window borrowed again; short of it, nothing. THE REGION'S
++; STATE IS KEPT ON THE STACK across the moment: an interrupt there may run
++; the hook, whose own borrows reuse it. Every register preserved, flags not;
++; DS the window again on the way out
+ vd_yield:
++    cmp si, [cs:vd_ylim]
++    jae .go
++    ret
++.go:
+     cmp byte [cs:vp_xact], 0
+     je .lim
+     cmp byte [cs:vp_xif], 0
+diff --git a/docs/plans/LOADALL-PLAN.md b/docs/plans/LOADALL-PLAN.md
+index 2e4d5558..5044b99d 100644
+--- a/docs/plans/LOADALL-PLAN.md
++++ b/docs/plans/LOADALL-PLAN.md
+@@ -856,15 +856,18 @@ bus cannot move - against the same rows before L1):
+ Twice what MartyPC's 5150 measured (+0.34-0.70%): a taken jump empties the
+ 286's prefetch queue, and everything around it got cheaper. Small frames pay
+ the most because their cost is mostly fixed and every list head is a site.
+-The options, none taken yet:
+-
+-1. **Out of line.** A site becomes three bytes - three NOPs off, a `call
+-   vd_ychk` on - so a play that never yields falls through instead of
+-   jumping (9 clocks a site on a 286, against 7 + the next instruction's
+-   length for the jump, and ~3 fewer on an 8088's fetch) and the twenty
+-   sites shed ~140 bytes of inline check. The on-cost rises by a call/ret,
+-   paid only on an in-place play, where it is noise beside the copy it
+-   replaced.
++The options:
++
++1. **Out of line - BUILT (2026-10-16, SPEC.md 98.3.18.11).** A site is
++   three bytes, `test ax, rel16` off and `call vd_yield` on - the one byte
++   patched, the immediate already the call's displacement, and the compare
++   moved into `vd_yield` - so a play that never yields falls through
++   instead of jumping: 3 clocks a site on a 286 where three NOPs would have
++   been 9, and **~6 cycles a site fewer on MartyPC's 5150, MEASURED**
++   (VIDBENCH: 54 an empty frame, 35-90 a synthetic one). The C160
++   decoder's eight sites, which no session in place ever reaches, went
++   with them: **258 bytes** in every arm. The on-cost rises by a call/ret,
++   ~13 clocks a site PREDICTED, paid only on an in-place play.
+ 2. **Fewer sites.** The list heads are what an empty or sparse frame
+    meets; a site per span segment and per long span may be enough with
+    `VP_XYB` lowered to keep the window's bound.
+diff --git a/tests/vidxip.py b/tests/vidxip.py
+index c034c75c..e484de85 100644
+--- a/tests/vidxip.py
++++ b/tests/vidxip.py
+@@ -27,9 +27,10 @@ inside a borrow (vp_aput's VP_DSDX), every frame.
+ 
+ Broken on purpose (each measured): vp_xaddr returning the chunk's slot
+ offset without the hold's base draws garbage and the windows differ; with
+-vd_ypatch's `mov word [bx], 0x9090` taken out the play is still right but
++vd_ypatch's `mov byte [bx], 0xE8` taken out the play is still right but
+ no yield opens a window ([vp_simyc], a test build's counter) - the row also
+-asserts the yields ran.
++asserts the yields ran; and with its `mov byte [bx], 0xA9` taken out the
++first site is still a `call` (E8) after the session, which the row reads.
+ """
+ import argparse
+ import os
+@@ -254,7 +255,7 @@ def one(tmp, sim, snd, v88, bank=False, ekr=0, dry=0):
+                    ywin=rw("vp_simyc") if sim else 0, lbk=rb("vp_lbk"),
+                    ahead=rb("vp_ahead"), xbn=rw("vp_xbn"),
+                    kr=krm,
+-                   sites=u16(q.read(base + syms["..@vd_y1"], 2))
++                   sites=q.read(base + syms["..@vd_y1"], 1)[0]
+                    if "..@vd_y1" in syms else None)
+         os88qemu.pace(q, 1)
+         rec = q.read(S("wm_wins") + wi * geom.WIN_SIZE, geom.WIN_SIZE)
+@@ -382,9 +383,9 @@ def main():
+                        % sim["ywin"])
+         if snd and sim["snd"] != 1:
+             bad.append("the in-place play had no card (snd %d)" % sim["snd"])
+-        if sim["sites"] is not None and sim["sites"] != 0x0AEB:
+-            bad.append("a yield site left live after the session (%04X)"
+-                       % sim["sites"])
++        if sim["sites"] is not None and sim["sites"] != 0xA9:
++            bad.append("a yield site left live after the session (%02X, "
++                       "where a `test ax` is A9)" % sim["sites"])
+         if ship["pix"] != sim["pix"]:
+             n = sum(1 for x, y in zip(ship["pix"], sim["pix"]) if x != y)
+             bad.append("the window after the play differs in %d pixels" % n)
+-- 
+2.43.0
+

@@ -239,6 +239,9 @@ zm_pb16:
     mov es, [zf_sseg]
     mov di, ax
     mov [es:di], bl
+    cmp ax, ZMH_FLAGS2 + 1          ; the transcription bit's byte: stream 2
+    jne .out                        ; follows it (zt_f2sync)
+    call zt_f2sync
 .out:
     pop es
     pop di
@@ -259,6 +262,11 @@ zm_pw16:
     mov di, ax
     mov [es:di], bh                 ; big-endian
     mov [es:di+1], bl
+    cmp ax, ZMH_FLAGS2 + 1          ; a word over $11 - at $10 or at $11 -
+    ja .out                         ; carries the transcription bit: stream 2
+    cmp ax, ZMH_FLAGS2              ; follows it (zt_f2sync)
+    jb .out
+    call zt_f2sync
 .out:
     pop es
     pop di
@@ -689,9 +697,11 @@ zm_setup:
 
     ; --- Flags 2: the story asks, and the interpreter clears what it cannot -
     mov al, [es:ZMH_FLAGS2 + 1]
-    and al, 11111010b               ; bit 0: transcription starts off, and this
-                                    ;        is the "Rst" the Standard means by
-                                    ;        surviving a restart (11.1.2)
+    and al, 11111010b               ; bit 0: transcription - cleared here and
+                                    ;        put back below by zt_f2keep when
+                                    ;        stream 2 is on, which is the "Rst"
+                                    ;        of 11.1: it survives a restart or a
+                                    ;        restore, and a new story starts off
                                     ; bit 2: no screen redraw is pending yet
     cmp byte [zf_ver], 6
     je .f2w
@@ -702,6 +712,8 @@ zm_setup:
                                     ; to clear if no archive is beside the story
 .f2w:
     mov [es:ZMH_FLAGS2 + 1], al
+    call zt_f2keep                  ; ...unless stream 2 is on: a restart or a
+                                    ; restore keeps it (11.1's "Rst")
     mov al, [es:ZMH_FLAGS2]
     and al, 11111110b               ; bit 8: menus. There are none.
     mov [es:ZMH_FLAGS2], al

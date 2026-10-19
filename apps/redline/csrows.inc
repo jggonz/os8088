@@ -35,6 +35,14 @@
 ;     never written (103.6.1).
 ; =============================================================================
 
+%ifdef CS_APPLY_ONLY
+; RLAPPLY reads a row's code and its apply proc and nothing else, so its
+; table is those two words: the same rows in the same order, through the
+; same CSR_* names, 4 bytes a row instead of 10 and no names at all
+CSR_CODE    equ 0
+CSR_APPLY   equ 2
+CSR_SIZE    equ 4
+%else
 CSR_CODE    equ 0                   ; dw: two ASCII, REDLINE.CFG's row code
 CSR_NAME    equ 2                   ; dw: NUL name, as the drop-down shows it
 CSR_IDENT   equ 4                   ; dw: read-only probe, or 0 (pick only)
@@ -44,6 +52,22 @@ CSR_APPLY   equ 8                   ; dw: AL = knob, AH = value -> set it,
                                     ;     CF = 1 not this row's knob; 0 = the
                                     ;     row cannot write (csapply.inc)
 CSR_SIZE    equ 10
+%endif
+
+; CS_ROW code, name, probe, CSS_* | (CSP_* << 8), apply - one row, in the
+; layout above. A CS_APPLY_ONLY build never sees the name or the probe, and
+; leaves out a row that cannot write at all: cs_cfg_load refuses that row as
+; it refuses one it has never heard of (CSA_ROW), and finds a row by its CODE
+; between cs_rows and cs_rows_end, never by its number
+%macro CS_ROW 5
+%ifdef CS_APPLY_ONLY
+ %ifnidn %5, 0
+    dw %1, %5
+ %endif
+%else
+    dw %1, %2, %3, %4, %5
+%endif
+%endmacro
 
 CSS_IDENTIFY  equ 0                 ; identifies and reports, writes nothing
 CSS_DATASHEET equ 1                 ; the book's values, never run on iron
@@ -65,8 +89,8 @@ CSO_PICK    equ 5                   ; no probe exists: the drop-down names it
 CSO_ONPICK  equ 6                   ; probed only when picked (CSP_PICK22)
 
 CS_NONE     equ 0                   ; row 0 is "None / unknown"
-CS_F3       equ 1                   ; WD FE3600 - row numbers are stable,
-CS_CQ       equ 2                   ; RLAPPLY and the settings file use them
+CS_F3       equ 1                   ; WD FE3600 - row numbers are stable
+CS_CQ       equ 2                   ; (the settings file names a row by CODE)
 CS_SM       equ 3
 CS_HL       equ 4
 CS_SC       equ 5
@@ -78,18 +102,20 @@ CS_CA       equ 10                  ; (rows are appended, never renumbered)
 CS_NROWS    equ 11
 
 cs_rows:
-    dw 'NO', cs_n_none,     0,             CSS_IDENTIFY  | (CSP_NONE << 8),   0
-    dw 'F3', cs_n_fe3600,   cs_id_fe3600,  CSS_VERIFIED  | (CSP_NONE << 8),   cs_ap_fe
-    dw 'CQ', cs_n_compaq,   cs_id_compaq,  CSS_IDENTIFY  | (CSP_NONE << 8),   0
-    dw 'SM', cs_n_scamp,    cs_id_scamp,   CSS_DATASHEET | (CSP_ATPORT << 8), cs_ap_sm
-    dw 'HL', cs_n_headland, cs_id_headland, CSS_IDENTIFY | (CSP_ATPORT << 8), 0
-    dw 'SC', cs_n_scat,     cs_id_scat,    CSS_IDENTIFY  | (CSP_22H << 8),    0
-    dw 'SX', cs_n_scatsx,   cs_id_scatsx,  CSS_IDENTIFY  | (CSP_22H << 8),    0
-    dw 'NE', cs_n_neat,     cs_id_neat,    CSS_VERIFIED  | (CSP_22H << 8),    cs_ap_ne
-    dw 'W7', cs_n_wd76,     cs_id_w7,      CSS_DATASHEET | (CSP_ATPORT << 8), cs_ap_w7
-    dw 'O3', cs_n_opti283,  cs_id_o3,      CSS_DATASHEET | (CSP_PICK22 << 8), cs_ap_o3
-    dw 'CA', cs_n_cs8230,   cs_id_ca,      CSS_DATASHEET | (CSP_PICK22 << 8), cs_ap_ca
+    CS_ROW 'NO', cs_n_none,     0,             CSS_IDENTIFY  | (CSP_NONE << 8),   0
+    CS_ROW 'F3', cs_n_fe3600,   cs_id_fe3600,  CSS_VERIFIED  | (CSP_NONE << 8),   cs_ap_fe
+    CS_ROW 'CQ', cs_n_compaq,   cs_id_compaq,  CSS_IDENTIFY  | (CSP_NONE << 8),   0
+    CS_ROW 'SM', cs_n_scamp,    cs_id_scamp,   CSS_DATASHEET | (CSP_ATPORT << 8), cs_ap_sm
+    CS_ROW 'HL', cs_n_headland, cs_id_headland, CSS_IDENTIFY | (CSP_ATPORT << 8), 0
+    CS_ROW 'SC', cs_n_scat,     cs_id_scat,    CSS_IDENTIFY  | (CSP_22H << 8),    0
+    CS_ROW 'SX', cs_n_scatsx,   cs_id_scatsx,  CSS_IDENTIFY  | (CSP_22H << 8),    0
+    CS_ROW 'NE', cs_n_neat,     cs_id_neat,    CSS_VERIFIED  | (CSP_22H << 8),    cs_ap_ne
+    CS_ROW 'W7', cs_n_wd76,     cs_id_w7,      CSS_DATASHEET | (CSP_ATPORT << 8), cs_ap_w7
+    CS_ROW 'O3', cs_n_opti283,  cs_id_o3,      CSS_DATASHEET | (CSP_PICK22 << 8), cs_ap_o3
+    CS_ROW 'CA', cs_n_cs8230,   cs_id_ca,      CSS_DATASHEET | (CSP_PICK22 << 8), cs_ap_ca
+cs_rows_end:
 
+%ifndef CS_APPLY_ONLY
 cs_n_none:     db 'None / unknown', 0
 cs_n_fe3600:   db 'WD FE3600', 0
 cs_n_compaq:   db 'Compaq', 0
@@ -101,19 +127,26 @@ cs_n_neat:     db 'C&T NEAT', 0
 cs_n_wd76:     db 'WD76C10', 0
 cs_n_opti283:  db 'OPTi 82C283', 0
 cs_n_cs8230:   db 'C&T CS8230/8231', 0
+%endif
 
 ; --- the state every caller reads ---------------------------------------------
+; (what is %ifndef CS_APPLY_ONLY is the probes' answers: RLAPPLY runs none)
 cs_tier:    db 0                    ; OSAPI_CPU_INFO's AL
+%ifndef CS_APPLY_ONLY
 cs_found:   db CS_NONE              ; the first row a probe found
+%endif
 cs_crc:     dw 0                    ; the BIOS fingerprint (103.6.1)
 cs_date:    times 8 db 0            ; F000:FFF5
 cs_model:   db 0                    ; F000:FFFE
+%ifndef CS_APPLY_ONLY
 cs_compaqf: db 0                    ; 'COMPAQ' at F000:FFEA
 cs_aliased: db 0                    ; 22h/23h mirror 20h/21h
 cs_pres:    times CS_NROWS db 0     ; CSO_* per row
 cs_pval:    times CS_NROWS dw 0     ; the raw value each probe read
+%endif
 cs_wd_ul:   db 0                    ; 1: the BIOS left the WD76C10 unlocked,
                                     ; so an access leaves it so
+%ifndef CS_APPLY_ONLY
 
 ; --- FE3600 allowlist: BIOS CRC and the date bytes of boards known to carry it
 ; (103.6.2). A board joins by its own field run printing its fingerprint.
@@ -128,22 +161,12 @@ cs_fe_allow:
     db '01/15/88'                   ; ROM is NOT that dump: same date and model,
                                     ; another fingerprint (its field run's
                                     ; CHIPSET1.TXT, 2026-10-13)
+%endif                              ; !CS_APPLY_ONLY
 
-%ifdef CS_APPLY_ONLY
-; RLAPPLY: the fingerprint and the table, and no probe at all - an Apply's
-; safety is the fingerprint (csapply.inc), so it runs nothing that touches a
-; port before it knows the setting is this machine's
-cs_id_fe3600   equ 0
-cs_id_compaq   equ 0
-cs_id_scamp    equ 0
-cs_id_headland equ 0
-cs_id_scat     equ 0
-cs_id_scatsx   equ 0
-cs_id_neat     equ 0
-cs_id_w7       equ 0
-cs_id_o3       equ 0
-cs_id_ca       equ 0
-%else
+; RLAPPLY (CS_APPLY_ONLY) has the fingerprint and the table, and no probe at
+; all - an Apply's safety is the fingerprint (csapply.inc), so it runs nothing
+; that touches a port before it knows the setting is this machine's
+%ifndef CS_APPLY_ONLY
 ; =============================================================================
 ; cs_identify - the whole read-only pass. Fills every field above.
 ; clobbers: flags (every register preserved)
@@ -305,7 +328,8 @@ cs_fingerprint:
     loop .date
     mov al, [es:0xFFFE]
     mov [cs_model], al
-    mov byte [cs_compaqf], 0
+%ifndef CS_APPLY_ONLY               ; the Compaq row's probe reads this, and
+    mov byte [cs_compaqf], 0        ; RLAPPLY has no probe
     mov si, 0xFFEA
     mov di, cs_s_compaq
     mov cx, 6
@@ -318,6 +342,7 @@ cs_fingerprint:
     loop .cq
     mov byte [cs_compaqf], 1
 .cqno:
+%endif
     pop es
     pop di
     pop si
@@ -329,8 +354,8 @@ cs_fingerprint:
 
 cs_crctab:  dw 0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50A5, 0x60C6, 0x70E7
             dw 0x8108, 0x9129, 0xA14A, 0xB16B, 0xC18C, 0xD1AD, 0xE1CE, 0xF1EF
-cs_s_compaq: db 'COMPAQ'
 %ifndef CS_APPLY_ONLY
+cs_s_compaq: db 'COMPAQ'
 
 ; -----------------------------------------------------------------------------
 ; cs_alias - do 22h/23h read back as the master 8259's 20h/21h? Reads only.

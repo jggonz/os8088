@@ -26,7 +26,7 @@ Coordinates are the layout's (tools/os88stik.py's DESKCAL_GEO).
   E  THE GAPS ARE THE DESKTOP: every gap row between the cards is the
      desktop's dither, pixel for pixel the desktop 180 columns left.
   F  A GREYED ITEM IS LEGIBLE: the widget owns the bar, nothing selected -
-     Edit Item and Delete Item greyed `(no item)` - and every item's band
+     Edit Item and Delete Item greyed - and every item's band
      in the dropped Calendar menu carries ink, the greyed ones included.
 
 `--shots DIR` writes the screen of each leg, whole and with the menu down.
@@ -199,9 +199,9 @@ def leg(tmp, machine, kind, shots):
         if cal:
             title, x0, x1, items = cal[0]
             greyed = [t for t, on in items if not on]
-            check("Edit Item (no item)" in greyed
-                  and "Delete Item (no item)" in greyed,
-                  "%s: Edit and Delete Item are greyed with their reason (%r)"
+            check("Edit Item  Enter" in greyed
+                  and "Delete Item  Del" in greyed,
+                  "%s: Edit and Delete Item are greyed (%r)"
                   % (kind, greyed))
             before = frame()
             ui.mo.to((x0 + x1) // 2, 5)

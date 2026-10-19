@@ -60,10 +60,12 @@
                                    # Cancel while it is up, drawn by index
                                    # (SPEC.md 105.9, 105.9.2)
 1 apps/calc/calc.asm               # the keypad, staged one key at a time
-3 apps/timer/timer.asm             # Start/Stop/Reset through the record (SPEC.md
-                                   # 111.2): the painter, and tm_act's two after a
-                                   # Start or Stop traded pens. The kernel's Timer kind
-                                   # was the one kernel caller until SPEC.md 14.8
+1 apps/timer/timer.asm             # Start/Stop/Reset through the record (SPEC.md
+                                   # 111.2): ONE loop in tm_flags, which the painter
+                                   # (all three) and a Start or Stop that traded pens
+                                   # (the first two) both reach (SPEC.md 111.6).
+                                   # The kernel's Timer kind was the one kernel
+                                   # caller until SPEC.md 14.8
 1 apps/paint/paint.asm             # Apply
 1 apps/piano/piano.asm             # its two buttons. The KEYS keep the press
                                    # and must - a note is SPEC.md 13.6's safe

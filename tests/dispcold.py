@@ -102,6 +102,8 @@ TITLE_H = 18
 # alone reads as `.cold` being scribbled on before the first click, and this
 # row hit both. cold_span carries the reasoning and the assertions.
 COLD_SEG, COLD_OFF, COLD_LEN = os88layout.cold_span(ROOT)
+COLD_VST = os88sym.equates().get("COLD_VSTART", 0)   # .cold's offsets start here
+COLD_LIN = (COLD_SEG << 4) + COLD_VST                # ...so this is its first byte
 
 # The carpet: the span the file manager's own code occupies, padded, rather
 # than the 0x4000..0x5000 that span happened to fall in when this was written.
@@ -247,7 +249,7 @@ def main():
         print("disk window x %d..%d y %d..%d" % (bx, bx + bw - 1, by, by + bh - 1))
 
         img = coldimage()
-        now = m.read(COLD_SEG << 4, COLD_LEN)
+        now = m.read(COLD_LIN, COLD_LEN)
         if now != img:
             # NAME THE DAMAGE. A bare "already corrupt" was indistinguishable
             # from this script pointing at the wrong memory, which is exactly
@@ -256,7 +258,7 @@ def main():
             sys.exit(".cold is already corrupt before the click: %d of %d "
                      "bytes differ at COLD_SEG=%04X, first %s"
                      % (len(bad), COLD_LEN, COLD_SEG,
-                        ", ".join("%04X (%s)" % (b, coldname(b))
+                        ", ".join("%04X (%s)" % (b, coldname(b + COLD_VST))
                                   for b in bad[:8])))
         print(".cold at %04X:0000+%04X is byte-identical to the built image; "
               "carpeting COLD_SEG:%04X..%04X with %d memory breakpoints"
@@ -270,7 +272,7 @@ def main():
             print("click %d at (%d,%d)" % (n, px, py))
             r = pump(m, mo, px, py)
             if r is None:
-                now = m.read(COLD_SEG << 4, COLD_LEN)
+                now = m.read(COLD_LIN, COLD_LEN)
                 bad = [i for i in range(len(img)) if img[i] != now[i]]
                 print("   no write caught; .cold differs in %d byte(s)"
                       % len(bad))
@@ -306,10 +308,10 @@ def main():
         m.breakpoints([])
         m.mouse(0, 0, l=False)
         print("no write into COLD_SEG:%04X..%04X caught" % (LO, HI - 1))
-        now = m.read(COLD_SEG << 4, COLD_LEN)
+        now = m.read(COLD_LIN, COLD_LEN)
         bad = [i for i in range(len(img)) if img[i] != now[i]]
         print(".cold now differs in %d byte(s)%s" % (len(bad),
-              (": " + ", ".join("%04X (%s)" % (b, coldname(b))
+              (": " + ", ".join("%04X (%s)" % (b, coldname(b + COLD_VST))
                                 for b in bad[:12])) if bad else ""))
     return 0
 

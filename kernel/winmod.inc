@@ -51,37 +51,44 @@ THV_GRIP  equ 8                 ; wm_grow_paint's glyph: the grow box's face
 THV_STICK equ 12                ; menu_drop's release: may the menu stay up?
 THV_CRECT equ 16                ; wm_chrome_rect: a held button's interior
 THV_N     equ 5
-WN_NENT   equ 2                 ; WIN95.DRV's mod_fp entries: hook, unhook
+WN_NENT   equ 1                 ; WIN95.DRV's mod_fp entry: hook (CF = 0) or
+                                ; unhook (CF = 1), one slot for both
 
-; THE TABLE, at rest: every slot the kernel's own body. Four of the doors are
-; NEAR routines and land on a near body; the fifth, the held box's rect, is
-; reached by a FAR call from ui.inc and lands on a far body, which is why its
-; resting segment is COLD_SEG and the other four KERNEL_SEG.
+; THE TABLE, at rest: every slot the kernel's own body, and THREE SHAPES OF
+; DOOR, each the cheapest its callers allow (kernel size pass 12):
+;
+; - THV_TITLE has six callers, so it keeps a four-byte `jmp far [thv]` at
+;   wm_draw_title's old name and lands on a NEAR body;
+; - THV_HIT, THV_STICK and THV_CRECT have ONE caller each, which makes the
+;   `call far [thv + i]` there the whole door - four bytes where `call` and a
+;   door were seven - and lands on a FAR body (a `retf`; cw_kretf is
+;   menu_drop's "nothing to do");
+; - THV_GRIP is a TAIL: wm_grow_paint `jmp far`s, the resting body is the
+;   very next instruction, and every body leaves through wm_grow_paint's own
+;   epilogue - so the glyph pays neither a call nor a return.
 thv:
-    dw wm_draw_title_b, KERNEL_SEG      ; THV_TITLE
-    dw wm_hit_ttl_b,    KERNEL_SEG      ; THV_HIT
-    dw wm_grow_glyph_b, KERNEL_SEG      ; THV_GRIP
-    dw kret_ret,        KERNEL_SEG      ; THV_STICK - a release closes the menu
-    dw wmz_crect_b,     COLD_SEG        ; THV_CRECT
+    dw wm_draw_title_b,     KERNEL_SEG  ; THV_TITLE
+    dw wm_hit_ttl_b,        KERNEL_SEG  ; THV_HIT (far)
+    dw wm_grow_paint.glyph, KERNEL_SEG  ; THV_GRIP (a tail)
+    dw cw_kretf,            KERNEL_SEG  ; THV_STICK (far): the menu closes
+    dw wmz_crect_b,         COLD_SEG    ; THV_CRECT (far)
 %if ($ - thv) != THV_N * 4
   %error "thv and the THV_* offsets disagree"
 %endif
 
 wm_draw_title:  jmp far [thv + THV_TITLE]
-wm_hit_ttl:     jmp far [thv + THV_HIT]
-wm_grow_glyph:  jmp far [thv + THV_GRIP]
-menu_sticky:    jmp far [thv + THV_STICK]
 
 section .cold
-wmz_wm_chrome_rect:             ; ui_lit_go far-calls this name, as it always
-    jmp far [thv + THV_CRECT]   ; did; DS is KERNEL_SEG on every path here
-
 ; -----------------------------------------------------------------------------
 ; thf_apply - mount and hook WIN95.DRV, or unhook and drop it (SPEC.md 76.14.1)
 ; in:  AL = the THM_* kind thm_set is about to adopt
 ; out: CF = 0 done; CF = 1 THM_WIN was asked for and the module could not be
 ;      mounted - nothing is hooked, and thm_set adopts a fallback
-; clobbers: nothing else (flags)
+; clobbers: nothing else (flags). AL is BANKED, and not spent with thm_set
+;      storing [thm_kind] ahead of the call (-2): that would let anything
+;      that reads the byte - tests/thm95.py's leg C does - see Windows while
+;      mod_need is still reading the module, and the kind has always meant
+;      what is LIVE
 ;
 ; dkf_apply's shape. Idempotent both ways: mod_need is six compares when the
 ; image is already held and the hook rewrites the same five pointers, which
@@ -93,17 +100,16 @@ wmz_wm_chrome_rect:             ; ui_lit_go far-calls this name, as it always
 ; -----------------------------------------------------------------------------
 thf_apply:
     push ax
-    cmp al, THM_WIN
-    mov al, MOD_WIN             ; (writes no flag: the compare still stands)
-    jne .basic
+    cmp al, THM_WIN             ; CF = 1 for every other kind: they are 0..2,
+    mov al, MOD_WIN             ; thm_set's clamp (`mov` writes no flag, so
+    jne .set                    ; the compare stands for both branches)
     call mod_need
     jc .out                     ; no system disk, no heap, a bad image: CF = 1
-    call far [WNFP]             ; wnx_hook: the image takes thv over, CF = 0
-    jmp short .out
-.basic:
-    call far [WNFP+4]           ; wnx_unhook - or mod_gone, with nothing held
-    call mod_drop
-    clc
+.set:                           ; CF = 0: HOOK, the image takes thv over;
+    call far [WNFP]             ; CF = 1: UNHOOK, or mod_gone with nothing
+    jnc .out                    ; held - and wnx_set hands the carry BACK, so
+    call mod_drop               ; it is still the question asked: a hook is
+    clc                         ; done, an unhook drops the claim
 .out:
     pop ax
     retf
@@ -124,7 +130,7 @@ modw_hdr:
     db MOD_VER, MOD_WIN         ; MOD_H_VER, MOD_H_ID
     dw BUILD_NUM, MOD_STAMP     ; MOD_H_BUILD, MOD_H_STAMP (SPEC.md 2.8.2)
     dw modw_end, WN_NENT        ; MOD_H_IMG, MOD_H_NENT
-    dw wnx_hook, wnx_unhook
+    dw wnx_set
 
 ; WNK name - far-call the KERNEL routine `name` (a near proc in .text) from
 ; this image. extmod.inc's EXK, whose exk_go lives in EXTD.DRV's image and so
@@ -135,18 +141,24 @@ modw_hdr:
 %endmacro
 
 ; -----------------------------------------------------------------------------
-; wnx_hook / wnx_unhook - take thv over, and give it back (SPEC.md 76.14.2)
-; in:  nothing; the gfx lock is held by thf_apply's caller, or it is the boot
-; out: CF = 0; every register preserved
+; wnx_set - take thv over, or give it back (SPEC.md 76.14.2)
+; in:  CF = 0 hook, CF = 1 unhook; the gfx lock is held by thf_apply's caller,
+;      or it is the boot
+; out: CF as it came in (mod_gone, the empty slot, answers 1 too - which is
+;      what lets thf_apply branch on it after the call); every register
+;      preserved
+;
+; ONE entry where there were two (kernel size pass 12): the kernel's slot
+; block is four bytes of .bss an entry, and the one bit between hook and
+; unhook rides in the carry thf_apply already has in hand.
 ; -----------------------------------------------------------------------------
-wnx_hook:
-    push si
-    mov si, wnp_tab             ; this image's pads...
-    jmp short wnx_set
-wnx_unhook:
-    push si
-    mov si, wnr_tab             ; ...or the kernel's own bodies
 wnx_set:
+    pushf
+    push si
+    mov si, wnp_tab             ; this image's bodies...
+    jnc .go
+    mov si, wnr_tab             ; ...or the kernel's own
+.go:
     push ax
     push cx
     push di
@@ -167,51 +179,47 @@ wnx_set:
     pop cx
     pop ax
     pop si
-    clc
+    popf
     retf
 
 WN_SELF     equ 0xFFFF          ; a segment no claim can have: the IVT's top
 wnp_tab:
-    dw wnp_title, WN_SELF
-    dw wnp_hit,   WN_SELF
-    dw wnp_grip,  WN_SELF
-    dw wnp_stick, WN_SELF
+    dw wn_title,  WN_SELF
+    dw wn_hit,    WN_SELF
+    dw wn_grip,   WN_SELF
+    dw wn_stick,  WN_SELF
     dw wnx_crect, WN_SELF
 wnr_tab:
-    dw wm_draw_title_b, KERNEL_SEG
-    dw wm_hit_ttl_b,    KERNEL_SEG
-    dw wm_grow_glyph_b, KERNEL_SEG
-    dw kret_ret,        KERNEL_SEG
-    dw wmz_crect_b,     COLD_SEG
+    dw wm_draw_title_b,     KERNEL_SEG
+    dw wm_hit_ttl_b,        KERNEL_SEG
+    dw wm_grow_paint.glyph, KERNEL_SEG
+    dw cw_kretf,            KERNEL_SEG
+    dw wmz_crect_b,         COLD_SEG
 %if (wnr_tab - wnp_tab) != THV_N * 4 || ($ - wnr_tab) != THV_N * 4
   %error "WIN95.DRV's two tables and thv disagree"
 %endif
 
-; The landing pads. The kernel far-JUMPS here with its caller's near return
-; address still on top of the stack, so a pad near-calls the body and goes
-; home to a bare `ret` in the kernel - dockmod.inc's dkxf_home, one per pad.
-; Nothing in a pad touches a flag.
-wnp_title:
-    call wn_title
-    jmp KERNEL_SEG:kret_ret
-wnp_hit:
-    call wn_hit
-    jmp KERNEL_SEG:kret_ret
-wnp_grip:
-    call wn_grip
-    jmp KERNEL_SEG:kret_ret
-wnp_stick:
-    call wn_stick
-    jmp KERNEL_SEG:kret_ret
+; NO LANDING PADS (kernel size pass 12). Each body is entered the way its
+; door enters the kernel's - wn_title by thv's `jmp far` with its caller's
+; NEAR return on the stack, so it goes home to a bare `ret` in the kernel;
+; wn_hit, wn_stick and wnx_crect by a `call far`, so they `retf`; wn_grip by
+; wm_grow_paint's tail `jmp far`, so it leaves through that routine's own
+; epilogue. They were four `call body / jmp KERNEL_SEG:kret_ret` pads.
 
 ; --- the image's own state ---------------------------------------------------
-; A module may write its own image (MODULE-SELFCONTAIN-PLAN), and none of this
-; has to outlive a mod_drop: it is scratch for one title bar or one menu.
-wn_pair:    dw 0                ; AL = this bar's ground, AH = its ink
-wn_tmp:     times 3 * WNB_H db 0    ; one band, shifted to its screen phase
-wn_lastx:   dw 0                ; the sticky menu's last pointer position
-wn_lasty:   dw 0
-wn_cap:     times 81 db 0       ; the caption, truncated to fit (80 cells)
+; Its BSS (MODULE-SELFCONTAIN-PLAN 3): the tail of the module's heap claim,
+; reached through CS like the image, and none of it has to outlive a
+; mod_drop - it is scratch for one title bar or one menu. NOT zeroed, and it
+; need not be: every cell is written before it is read (wn_title's pens and
+; caption, wn_blit's band, wn_stick's .stick before the first wn_track). It
+; was 125 bytes of zeros in the image (kernel size pass 12).
+section .modwb
+wn_pair:    resw 1              ; AL = this bar's ground, AH = its ink
+wn_tmp:     resb 3 * WNB_H      ; one band, shifted to its screen phase
+wn_lastx:   resw 1              ; the sticky menu's last pointer position
+wn_lasty:   resw 1
+wn_cap:     resb 81             ; the caption, truncated to fit (80 cells)
+section .modw
 
 ; -----------------------------------------------------------------------------
 ; wn_title - one window's title bar, Windows-fashion (SPEC.md 76.14.3)
@@ -225,18 +233,19 @@ wn_cap:     times 81 db 0       ; the caption, truncated to fit (80 cells)
 ; buttons on every window, which is the owner's decision (SPEC.md 76.14.5).
 ; -----------------------------------------------------------------------------
 wn_title:
-    WM_CHROMELESS di
-    jnz .none                   ; a fullscreen window HAS no title bar, and
-                                ; nor has a DESK one (SPEC.md 11.103.5): this
-                                ; door stands in front of wm_draw_title_b's
-                                ; own test, so it asks the same question
-    push ax
-    push bx
+    push ax                     ; kret_es's order, so the one exit is the
+    push bx                     ; kernel's own ladder
     push cx
     push dx
     push si
+    push di
     push bp
     push es
+    WM_CHROMELESS di
+    jnz .out                    ; a fullscreen window HAS no title bar, and
+                                ; nor has a DESK one (SPEC.md 11.103.5): this
+                                ; door stands in front of wm_draw_title_b's
+                                ; own test, so it asks the same question
 
     ; --- the pens come from the selected Color preset -----------------------
     mov ax, [thm_tbgc]          ; AL = ground, AH = ink (adjacent, in order)
@@ -317,16 +326,9 @@ wn_title:
     call wn_crect
     call KERNEL_SEG:cw_gfx_xor_fill
 .out:
-    pop es
-    pop bp
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-.none:
-    ret
-
+    jmp KERNEL_SEG:kret_es      ; thv JUMPED here, so the near return under
+                                ; the eight pushes is wm_draw_title's
+                                ; caller's, and the ladder's `ret` takes it
 ; -----------------------------------------------------------------------------
 ; wn_buttons - minimize, maximize (or restore) and close, right to left
 ; in:  DI = window; gfx lock held
@@ -345,16 +347,20 @@ wn_buttons:
     push cs
     pop es
     push word [gfx_b1ink]       ; THE PEN, banked and put back: a package's
-    test byte [thm_cstrp], 2     ; Classic restores main's original Windows
-    jnz .classic                ; button colors, but keeps this theme's bar
-    mov ax, [cs:wn_pair]        ; current layout: buttons follow the selected
-    mov [gfx_b1ink], ax         ; preset's title pair
-    jmp short .draw
-.classic:
-    mov al, [thm_bgc]           ; original main layout used the UI chrome face
-    mov ah, CBLACK              ; and black glyphs, independent of title color
-    mov [gfx_b1ink], ax
-.draw:
+                                ; W_PAINT runs later in this same lock hold
+                                ; and expects the resting one
+    mov ax, [cs:wn_pair]        ; the new style: the buttons follow the
+    mov dl, ah                  ; selected preset's title pair, and the lit
+    test byte [thm_cstrp], 2    ; edges are the title's ink. CLASSIC (bit 1)
+    jz .pens                    ; restores main's original Windows buttons -
+    mov al, [thm_bgc]           ; the UI chrome face, black glyphs and the
+    mov ah, CBLACK              ; white bevel - but keeps this theme's bar.
+    mov dl, CWHITE              ; ONE test for both pens (kernel size pass 13)
+.pens:
+    mov [gfx_b1ink], ax         ; AL = ink = the face, AH = paper
+    mov [gfx_color], dl         ; the lit edges' pen: wn_band draws each
+                                ; button's left edge with its band, and no
+                                ; band is drawn with this pen
 
     mov ax, WN_MIN
     mov si, wnb_min
@@ -367,14 +373,7 @@ wn_buttons:
     call wn_band
     pop word [gfx_b1ink]
 
-    test byte [thm_cstrp], 2
-    jnz .classic_edges
-    mov al, [cs:wn_pair+1]      ; --- the new style uses the title's ink
-    jmp short .edges
-.classic_edges:
-    mov al, CWHITE              ; original main button bevel
-.edges:
-    mov [gfx_color], al
+    ; --- the lit TOP edges (the left ones went with the bands)
     mov ax, WN_MIN              ; ONE top line across minimize AND maximize,
     call wn_bx                  ; which touch: minimize's left to the last
     mov bx, ax                  ; column before maximize's dark one
@@ -385,12 +384,6 @@ wn_buttons:
     mov bx, ax
     add bx, WNB_W - 1
     call wn_hl
-    mov ax, WN_MIN              ; ...and the three left edges
-    call wn_vl
-    mov ax, WN_MAX
-    call wn_vl
-    mov ax, WN_CLOSE
-    call wn_vl
     pop es
     ret
 
@@ -411,6 +404,20 @@ wn_hl:
     add dx, WN_BTY
     call KERNEL_SEG:cw_gfx_hline    ; AX = x1, BX = x2, DX = y
     ret
+; wn_band - AX = a button's offset, SI = its art: the band, one gfx_blit1,
+; and then its lit LEFT edge in [gfx_color] - the column the band leaves out,
+; so no pixel is written twice whichever goes first (it was three more `mov
+; ax` / `call wn_vl` pairs in wn_buttons, kernel size pass 12)
+wn_band:
+    push ax
+    call wn_bx
+    inc ax                      ; the band starts one column in...
+    call wn_by
+    inc bx                      ; ...and one row down
+    mov dx, WNB_H
+    mov cx, WNB_W
+    call wn_blit
+    pop ax
 ; wn_vl - AX = a button's offset: its left edge, the rows under its top one
 wn_vl:
     call wn_bx
@@ -419,14 +426,6 @@ wn_vl:
     lea dx, [bx+WN_BTH-3]
     call KERNEL_SEG:apic_gfx_vline  ; AX = x, BX = y1, DX = y2
     ret
-; wn_band - AX = a button's offset, SI = its art: the band, one gfx_blit1
-wn_band:
-    call wn_bx
-    inc ax                      ; the band starts one column in...
-    call wn_by
-    inc bx                      ; ...and one row down
-    mov dx, WNB_H
-    mov cx, WNB_W
 ; wn_blit - AX = x, BX = y, CX = width, DX = rows, SI = art (two bytes a row,
 ; bit 7 of the first leftmost): ONE gfx_blit1 at any x
 ;
@@ -552,18 +551,18 @@ wn_hit:
     jbe .min
 .title:
     mov al, 1
-    ret
+    retf                        ; FAR: wm_hit `call far`s thv (THV_HIT)
 .close:
     mov al, 2
-    ret
+    retf
 .min:
     mov al, 3
-    ret
+    retf
 .max:
     test byte [bx+W_FLAGS], WF_SIZABLE
     jz .title
     mov al, 5
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; wnx_crect - a held button's interior (SPEC.md 13.8.1, 76.14.4); FAR
@@ -598,18 +597,14 @@ wn_crect:
 ; -----------------------------------------------------------------------------
 ; wn_grip - the grow box's face: Windows' size grip (SPEC.md 76.14.3)
 ; in:  DI = the frontmost resizable window (wm_grow_paint's gates passed)
-; out: nothing; every register preserved
+; out: AX..DX clobbered, which wm_grow_paint banked - this is its TAIL (thv's
+;      `jmp far`), and it leaves through that routine's own epilogue
 ; ONE band where the box was three fills and three frames: face with three
 ; diagonal ridges, in the same 13x13 the box stood in, so wm_hit's test and
 ; wm_grow_erase's rect are unchanged.
 ; -----------------------------------------------------------------------------
-wn_grip:
-    push ax
-    push bx
-    push cx
-    push dx
+wn_grip:  ; STKBALANCE-OK: wm_grow_paint's TAIL - entered by thv's jmp far with that routine's AX..DX and DI banked, and left through its own epilogue, which pops them
     push si
-    push bp
     push es
     push word [gfx_b1ink]       ; the pen, banked as wn_buttons banks it
     mov al, [thm_bgc]           ; AL = ink = the face, AH = paper = the ridges
@@ -624,13 +619,8 @@ wn_grip:
     call wn_blit
     pop word [gfx_b1ink]
     pop es
-    pop bp
     pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp KERNEL_SEG:wm_grow_paint.out
 
 ; -----------------------------------------------------------------------------
 ; wn_stick - may a released pull-down STAY UP? (SPEC.md 76.14.7)
@@ -773,14 +763,8 @@ wn_stick:
     pop di                      ; the dismissing click reaches nothing - each
                                 ; wake still OWED (SPEC.md 74.1.1)
 .done:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-.ret:
-    ret
+    jmp COLD_SEG:kretfc_di      ; FAR: menu_drop `call far`s thv (THV_STICK),
+                                ; and the cold ladder ends in a `retf`
 
 ; wn_take - remove the key int 16h peeked
 wn_take:

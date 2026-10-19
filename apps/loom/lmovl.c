@@ -78,7 +78,9 @@ static int ovl_about(void)
  * decision", said about creating instead of opening).
  *
  * THE SKELETON IS THE SMALLEST THING WEAVE-SPEC 3 CALLS A PROJECT: an <app>
- * with a name, one <card>, one <label>. It packs, it runs, and it is
+ * with a name, one <card> with the `id` WEAVE-SPEC 3.1 requires of every card
+ * (the skeleton once shipped without it, and both packers refused it at its
+ * own line 2), one <label>. It packs, it runs, and it is
  * something to type into rather than an empty file - which on a machine with
  * no other documentation of the language is most of what a template is for.
  * The three committed demo projects (apps/weave/demos/, and this program's
@@ -93,7 +95,7 @@ static int ovl_about(void)
  * ==========================================================================*/
 static const char lm_skel[] =
     "<app name=\"New App\" vm=\"16\">\n"
-    "  <card>\n"
+    "  <card id=\"main\">\n"
     "    <label>Hello from Weave.</label>\n"
     "  </card>\n"
     "</app>\n";

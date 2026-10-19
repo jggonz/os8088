@@ -465,7 +465,6 @@ at_subank:
     shr ax, cl                      ; AX = KB, rounded up
     or ax, ax
     jz .no
-    mov [at_sukb], ax
     call OSAPI_MEM_CLAIM            ; out CF=0, DX = base segment
     jc .no
     mov [at_suseg], dx
@@ -1128,32 +1127,17 @@ at_mdbuttons:
                                     ; refuses an index past the LIVE count, so
                                     ; a count written after the draws is a
                                     ; count of zero on the pass that matters
-    mov si, at_s_save
-    mov [at_btlbl], si
-    mov byte [at_bslot], 0
-    mov dx, 1
+    mov si, at_i_save
+    mov dx, 0001h                   ; DH = slot 0, DL = the default ring
     call at_button                  ; out: CX = width
-    mov [at_b1x], ax
-    mov [at_b1y], bx
-    mov [at_b1w], cx
     sub ax, 80                      ; Cancel (72 wide), 8 gap
     mov si, at_s_cancel
-    mov [at_btlbl+2], si
-    mov byte [at_bslot], 1
-    xor dx, dx
+    mov dx, 0100h                   ; DH = slot 1, DL = no ring
     call at_button
-    mov [at_b2x], ax
-    mov [at_b2y], bx
-    mov [at_b2w], cx
     sub ax, 112                     ; Don't Save (104 wide), 8 gap
     mov si, at_s_dontsave
-    mov [at_btlbl+4], si
-    mov byte [at_bslot], 2
-    xor dx, dx
+    mov dx, 0200h                   ; DH = slot 2, DL = no ring
     call at_button
-    mov [at_b3x], ax
-    mov [at_b3y], bx
-    mov [at_b3w], cx
     jmp short .out
 .single:
     mov ax, [at_msx1]
@@ -1162,15 +1146,8 @@ at_mdbuttons:
     sub ax, 20                      ; OK is 40 wide: centre it
     mov word [at_btrec+OS88UI_BT_N], 1   ; the count first, as above
     mov si, at_s_ok
-    mov [at_btlbl], si
-    mov byte [at_bslot], 0
-    mov dx, 1
+    mov dx, 0001h                   ; DH = slot 0, DL = the default ring
     call at_button
-    mov [at_b1x], ax
-    mov [at_b1y], bx
-    mov [at_b1w], cx
-    mov word [at_b2w], 0
-    mov word [at_b3w], 0
 .out:
     pop si
     pop dx
@@ -1198,61 +1175,50 @@ at_mdbuttons:
 ; It gains a greyed state it does not use yet - at_button has never had one -
 ; and that is the point of the shared control rather than an accident of it.
 ; -----------------------------------------------------------------------------
-; in: ...and [at_bslot] = which of the group's three rects this one IS,
-;     0-based, set by the caller immediately before (SPEC.md 20.5.1.3). A
-;     group's rects must be contiguous, so the three x/y/width triples this
-;     modal used to keep - and hit-test from, separately - are one array now.
+; in: ...and DH = which of the group's three slots this one IS, 0-based
+;     (SPEC.md 20.5.1.3), DL the default flag. A group's rects must be
+;     contiguous, so the three x/y/width triples this modal used to keep -
+;     and hit-test from, separately - are one array now, and this routine
+;     writes the slot's label word too rather than every caller doing it.
 at_button:
     push ax
     push bx
     push dx
     push si
     push di
-    mov di, dx                      ; DI = the default flag
-    mov [at_btx], ax
-    mov [at_bty], bx
+    push ax                         ; the x, for the rect below
     call OSAPI_FONT_WIDTH           ; AX = the label's width; SI intact
     add ax, 24
-    mov [at_xw], ax                 ; = the button's width, and the answer
-
-    mov ax, [at_btx]                ; ...as a rect, in screen coordinates
-    mov [at_brect+0], ax
-    add ax, [at_xw]
-    dec ax
-    mov [at_brect+4], ax
-    mov ax, [at_bty]
-    mov [at_brect+2], ax
-    add ax, 19
-    mov [at_brect+6], ax
-
-    or di, di                       ; ZF from the flag, and `mov` does not
-    mov di, OS88UI_FILL             ; touch flags - so the test survives the
+    xchg cx, ax                     ; CX = the button's width, and the answer
+    mov di, si                      ; DI = the label
+    or dl, dl                       ; ZF from the flag, and `mov` does not
+    mov ax, OS88UI_FILL             ; touch flags - so the test survives the
     jz .go                          ; register being reused for the answer
-    or di, OS88UI_DEF
+    or al, OS88UI_DEF
 .go:
-    mov bl, [at_bslot]              ; --- into the group's own slot ---
-    xor bh, bh
-    mov ax, bx
-    add ax, ax
-    mov si, ax                      ; SI = slot * 2, the flag array's stride
-    mov [at_btflg+si], di
-    add ax, ax
-    add ax, ax                      ; AX = slot * 8, the rect stride
-    mov si, at_brects
-    add si, ax
-    mov ax, [at_brect+0]            ; the rect this pass just computed
-    mov [si+0], ax
-    mov ax, [at_brect+2]
-    mov [si+2], ax
-    mov ax, [at_brect+4]
-    mov [si+4], ax
-    mov ax, [at_brect+6]
-    mov [si+6], ax
+    mov dl, dh                      ; --- into the group's own slot ---
+    xor dh, dh                      ; DX = the slot
+    mov si, dx
+    add si, si                      ; SI = slot * 2, the word arrays' stride
+    mov [at_btflg+si], ax
+    mov [at_btlbl+si], di
+    add si, si
+    add si, si                      ; SI = slot * 8, the rect stride - and
+    add si, at_brects               ; the rect is computed IN the slot: it was
+                                    ; staged in an at_brect of its own and
+                                    ; copied across (apps size pass 2)
+    pop ax
+    mov [si+0], ax                  ; x1, in screen coordinates
+    add ax, cx
+    dec ax
+    mov [si+4], ax                  ; x2
+    mov [si+2], bx                  ; y1
+    add bx, 19
+    mov [si+6], bx                  ; y2
     mov bx, at_btrec
-    mov al, [at_bslot]
-    inc al                          ; the record's indices are one-based
+    mov al, dl
+    inc ax                          ; the record's indices are one-based
     call os88ui_btn
-    mov cx, [at_xw]
     pop di
     pop si
     pop dx
@@ -1260,8 +1226,6 @@ at_button:
     pop ax
     ret
 
-at_brect:   dw 0, 0, 0, 0           ; the button being drawn, staged
-at_bslot:   db 0                    ; ...and which of the three it is
 at_brects:  dw 0,0,0,0, 0,0,0,0, 0,0,0,0   ; THE GROUP, contiguous
 at_btlbl:   dw 0, 0, 0                     ; its labels, written per pass
 at_btflg:   dw 0, 0, 0                     ; ...and its flags
@@ -1271,44 +1235,15 @@ at_btflg:   dw 0, 0, 0                     ; ...and its flags
                                        ; OS88UI_BT_N before they draw
 
 ; -----------------------------------------------------------------------------
-; at_btnhit - is the point (CX,DX) inside button (BX=x, AX=y, SI=width)?
-; out: CF=0 hit
+; at_modal_key - a key while an alert is up (AL = ascii)
+;
+; There is no at_modal_click and no at_splash_click: os88ui_btnclick takes the
+; press first and arms whichever button it landed on (SPEC.md 20.5.1.3.3), and
+; at_modal_up fires it on the release - so neither the alert nor the splash
+; has a press of its own to act on, and the empty bodies that stood here went
+; in the second apps size pass, with at_btnhit, the x/y/width ladder they had
+; already stopped calling.
 ; -----------------------------------------------------------------------------
-at_btnhit:
-    cmp cx, bx
-    jb .no
-    push bx
-    add bx, si
-    cmp cx, bx
-    pop bx
-    jae .no
-    cmp dx, ax
-    jb .no
-    push ax
-    add ax, 19
-    cmp dx, ax
-    pop ax
-    ja .no
-    clc
-    ret
-.no:
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; at_modal_click / at_modal_key - input while an alert is up
-; click in: CX = x, DX = y;  key in: AL = ascii
-; -----------------------------------------------------------------------------
-at_modal_click:
-    push ax
-    push bx
-    push si
-    pop si                          ; document's fate, so none may fire on a
-    pop bx                          ; press the user can still take back. The
-    pop ax                          ; ladder this replaces was at_btnhit
-    ret                             ; against three separate x/y/width
-                                    ; triples - a second description of the
-                                    ; geometry at_button already owned
 
 ; at_btn_up - the release, for WHICHEVER set of buttons is up
 ; The splash and the modal share ONE record and os88ui.inc keeps ONE arm word
@@ -1326,11 +1261,12 @@ at_modal_up:
     jne .md
     cmp al, 1                       ; --- the SPLASH: New, then Open ---
     jne .spopen
-    call at_cmd_newdoc              ; a fresh document...
-    call at_fs_enter                ; ...and the whole screen
-    jmp short .out
+    mov al, AT_CMD_NEW              ; a fresh document and the whole
+    call at_wreplace                ; screen - asking first when the one
+    jmp short .out                  ; we have is edited (SPEC.md 46.7.2)
 .spopen:
-    call at_dlg_open
+    mov al, AT_CMD_OPEN
+    call at_wreplace
     jmp short .out
 .md:
     cmp al, 1                       ; --- the MODAL: Save, Cancel, Don't ---
@@ -1547,99 +1483,6 @@ at_ctext:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; at_bigtext - scaled styled text, anywhere on screen
-; in:  AX = x, BX = y, SI = string, CX = scale (1..3), DL = AT_ST_* style
-; out: nothing; preserves all registers
-; Borrows the line pipeline: compose into a fresh strip, expand, one blit.
-; -----------------------------------------------------------------------------
-at_bigtext:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    push es
-    mov [at_btx], ax
-    mov [at_bty], bx
-    mov [at_psc], cx
-    mov ax, cx
-    mov cl, 3
-    shl ax, cl
-    mov [at_pcw], ax                ; cell width = 8*scale
-    mov [at_prh], ax                ; rows = the glyph box exactly
-    push ds
-    pop es
-    cld
-    mov di, at_strip1
-    mov cx, (AT_S1ST*24)/2          ; 24 rows covers scale 3
-    AT_PAPERAX                      ; SPEC.md 46.4.2 - the FIFTH writer into
-    rep stosw                       ; at_strip1, and the one in another file
-%ifdef NOATBLIT1
-    mov di, at_cellbg               ; at_expand reads at_cellbg; the band this
-    mov cx, AT_CBGCAP/2             ; arm's twin hands over does not, so the
-    rep stosw                       ; clear is the expander's alone (46.4.12)
-%endif
-    xor di, di                      ; DI = x within the strip
-.ch:
-    lodsb
-    or al, al
-    jz .composed
-    push dx
-    call at_glyph
-    pop dx
-    add di, [at_pcw]
-    jmp short .ch
-.composed:
-%ifdef NOATBLIT1
-    mov ax, di
-    cmp ax, AT_S4ST*2               ; the 4bpp strip's 608px, not the 1bpp
-    jbe .w                          ; 640: at_expand writes 4 bytes per
-    mov ax, AT_S4ST*2               ; 8px column against AT_S4ST rows
-.w:
-    mov [at_xw], ax
-    or ax, ax
-    jz .out
-    call at_expand
-    push ds
-    pop es
-    mov si, at_strip4
-    mov bp, AT_S4ST
-    mov ax, [at_btx]
-    mov bx, [at_bty]
-    mov cx, [at_xw]
-    mov dx, [at_prh]
-    call OSAPI_GFX_BLIT4
-%else
-    ; SPEC.md 46.4.12: the strip IS the band, so it goes down as it stands.
-    ; The cap is the one the 4bpp strip set (608px) - kept, so a title draws
-    ; exactly as wide as it did - and it leaves at_blit1ph its byte of room.
-    mov cx, di
-    cmp cx, AT_BIGW
-    jbe .w
-    mov cx, AT_BIGW
-.w:
-    jcxz .out
-    mov si, at_strip1
-    mov bp, AT_S1ST
-    mov ax, [at_btx]
-    mov bx, [at_bty]
-    mov dx, [at_prh]
-    call at_blit1ph
-%endif
-.out:
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
 %ifdef NOATBLIT1
 ; -----------------------------------------------------------------------------
 ; at_drawimg - blit the 128x100 splash artwork at (AX, BX)
@@ -1833,7 +1676,6 @@ at_splash:
     mov [at_spx], ax
     mov [at_spy], dx
     call OSAPI_WM_GEOM              ; CX = w, DX = h
-    mov [at_spw], cx
     mov [at_sph], dx
     mov ax, cx
     shr ax, 1
@@ -1852,25 +1694,14 @@ at_splash:
     mov ax, [at_spcx]
     sub ax, 76
     mov word [at_btrec+OS88UI_BT_N], 2   ; the splash's pair, count first
-    mov si, at_s_new
-    mov [at_btlbl], si
-    mov byte [at_bslot], 0
-    mov dx, 1
+    mov si, at_i_new
+    mov dx, 0001h                   ; DH = slot 0, DL = the default ring
     call at_button
-    mov [at_b1x], ax
-    mov [at_b1y], bx
-    mov [at_b1w], cx
     mov ax, [at_spcx]
     add ax, 12
-    mov si, at_s_open
-    mov [at_btlbl+2], si
-    mov byte [at_bslot], 1
-    xor dx, dx
+    mov si, at_i_open
+    mov dx, 0100h                   ; DH = slot 1, DL = no ring
     call at_button
-    mov [at_b2x], ax
-    mov [at_b2y], bx
-    mov [at_b2w], cx
-    mov word [at_b3w], 0
     pop si
     pop dx
     pop cx
@@ -1878,21 +1709,3 @@ at_splash:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; at_splash_click - a windowed click (absolute coords, like every click)
-; in:  CX = x, DX = y
-; -----------------------------------------------------------------------------
-at_splash_click:
-    push ax
-    push bx
-    push si
-    pop si                          ; takes the whole screen, so neither may
-    pop bx                          ; fire on a press the user can still take
-    pop ax                          ; back. at_btn_up has the action. The
-    ret                             ; at_btnhit ladder this replaces was a
-                                    ; second description of the geometry
-                                    ; at_button already owned - and it was
-                                    ; missed when the MODAL was converted,
-                                    ; which is why the splash went on acting
-                                    ; on the press with a record that could
-                                    ; draw it down

@@ -48,11 +48,21 @@
                                                * CCP-DR.60K's own JP/CALL
                                                * targets are 0xE4xx-0xEBxx */
 #define RC_CCPSIZE     2048                   /* CCP-DR.60K is 2,048 bytes */
+#define RC_CCP_PART    0                      /* ...and it rides IN the
+                                               * module, RUNCPM.O88's one
+                                               * part (runcpm.asm, SPEC.md
+                                               * 74.3): os88_part_seg() of
+                                               * it is the CCP's segment... */
+#define RC_CCP_OFF     0                      /* ...and it is at offset 0,
+                                               * which the shim asserts */
 #define RC_DPBADDR     (RC_BIOSPAGE + 128)    /* the fake DPB (cpm.h) */
 #define RC_DPHADDR     (RC_DPBADDR + 15)      /* ...and DPH */
 #define RC_SCBADDR     (RC_BDOSPAGE + 3)      /* CP/M 2: globals.h 265 */
 #define RC_TMPFCB      (RC_BDOSPAGE + 16)
-#define RC_CCPNAME     "CCP-DR.60K"           /* "CCP-DR." STR(TPASIZE) "K" */
+#define RC_CCPNAME     "CCP-DR.60K"           /* "CCP-DR." STR(TPASIZE) "K":
+                                               * the banner's name for the
+                                               * CCP, as upstream prints it -
+                                               * no file is read by it now */
 #define RC_VERSION     "6.9"                  /* globals.h VERSION */
 #define RC_VERSIONBCD  0x69
 #define RC_VERSIONCCP  0x00                   /* CCP_DR: DRI's, for INFO.COM */
@@ -137,10 +147,10 @@ static const unsigned char rc_dph[16] = {
  * (RST 08h; RET; NOP each), the DPB and DPH. IOBYTE and DSKByte are set on
  * a cold start only, as upstream (Status != STATUS_RESTART). MODULE CODE
  * (SPEC.md 73.14, 71): the first ovl_* calls of a session are ovl_banner2
- * and this one, both on the first wake before any folder move - the load
- * resolves RUNCPM.OVL in the launch folder - and it answers 1, so a 0 is
- * the module refused (no heap, no file, a stale one: cc_ovneed toasted why)
- * and rc_boot stops the machine on it. */
+ * and this one, both on the first wake. The module is an EAGER part of
+ * RUNCPM.O88 (SPEC.md 73.14.2): op_load read it at launch with the CCP, so
+ * cc_ovneed refuses only a worker, and the wake is the UI task - it answers
+ * 1 and rc_boot does not look. */
 /* the fixed bytes _PatchCPM writes, as they land: page zero's two jumps
  * (0000: JP BIOS+3, WBOOT; 0005: JP BDOSjmppage+6), the BDOS jump page's
  * first 9 bytes (the version word 0x1600 the CCP reads, two zero words, JP

@@ -54,7 +54,7 @@ B2_STACK    equ 0x7C00          ; stage 1's STACK_TOP, which is still ours
 BS_CYLASK   equ 509             ; boot/boot.asm's: the Floppy page's Cylinder
                                 ; byte in the boot sector, which stage 1's
                                 ; relocated copy still holds at SS:7C00 here
-KSIG_OFF    equ 5632 - BOOT2_KNOBSEC * 512 ; SPEC.md 18.93.1's probe, as a
+KSIG_OFF    equ 4608 - BOOT2_KNOBSEC * 512 + BOOT2_SMALLSEC * 512 ; SPEC.md 18.93.1's probe, as a
                                 ; MEMORY offset - one sector lower on a knob
                                 ; build, whose blob is a sector longer
                                 ; (kernel.asm's BOOT2_KNOBSEC), so the FILE
@@ -71,8 +71,12 @@ KSIG_OFF    equ 5632 - BOOT2_KNOBSEC * 512 ; SPEC.md 18.93.1's probe, as a
                                 ; twice; that row checks they agree.
                                 ;
                                 ; IT MOVES WITH BOOT2_SECS, and has had three
-                                ; values for that reason (6144 -> 5632 when
-                                ; SPEC.md 6.0.1 took the blob 9 -> 10): 11776 while the
+                                ; values for that reason (5120 -> 4608 when
+                                ; kernel size pass 13 took kern_big 11 -> 12,
+                                ; kern_small staying at 11 and 5120 through
+                                ; BOOT2_SMALLSEC - one FILE sector, 21; 5632 -> 5120 when
+                                ; SPEC.md 26.10.5 took it 10 -> 11, 6144 ->
+                                ; 5632 when SPEC.md 6.0.1 took it 9 -> 10): 11776 while the
                                 ; blob was 13 sectors, 8704 when SPEC.md 2.9.12
                                 ; grew it to 19, and 14336 when 2.5.3's split
                                 ; took it back to 8. The number that has to
@@ -520,6 +524,18 @@ boot2_entry:
 %endif
 
 %ifdef KZIP
+; THE PACKED TAIL'S READ MAY NOT REACH THE BLOB (docs/plans/ROM-PLAN.md 3.4).
+; The tail lands KZ_RPARA up from the head and is read in whole sectors, so it
+; ends past the image it expands to; the blob sits at BLOB_SEG_AT. Asked only
+; on the pass that has the packed file's numbers (KZ_SECS != 0). It held by a
+; margin on every kernel until ROM_COLD put `.cold` on the top rung, and the
+; first ROM_COLD build ran stage 2 over its own code; this is that, at `make`.
+%if KZ_SECS
+  %if KERNEL_SEG*16 + KZ_HEADSEC*512 + KZ_RPARA*16 + (KZ_SECS - KZ_HEADSEC)*512 > BLOB_SEG_AT*16
+    %error "the packed kernel's tail is read over stage 2's blob - raise BLOB_LIFT (kernel.asm)"
+  %endif
+%endif
+
 ; -----------------------------------------------------------------------------
 ; kz_all - expand every block of the tail, in place (SPEC.md 2.9.13)
 ; in:  the packed tail at KERNEL_SEG + KZ_HEADSEC*512/16 + KZ_RPARA, which is

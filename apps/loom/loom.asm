@@ -62,10 +62,7 @@
                                     ; is six bytes of bss and a body. Add it
                                     ; here, not beside the include.
 
-%define CC_PKG_NAME 'LOOM'          ; <= 15 chars, and the stem of LOOM.OVL:
-                                    ; crt0.asm builds the module's file name
-                                    ; out of this and '.OVL', so the disk and
-                                    ; the loader cannot disagree about it
+%define CC_PKG_NAME 'LOOM'          ; <= 15 chars: the name in the header
 
 %define CC_HAS_ONKEY                ; void os88_onkey(int, int, void *) - the
                                     ; editor, and WEAVE-SPEC 1.7's shortcuts
@@ -93,11 +90,24 @@
                                     ; every door out asks first (75.3's
                                     ; OS88UI_ASAVE) and os88_wm_close()
                                     ; finishes the job once it is answered
-%define CC_HAS_OVL                  ; ...and LOOM.OVL (SPEC.md 73.14), whose
+%define CC_HAS_OVL                  ; ...and an overlay (SPEC.md 73.14), whose
                                     ; tenants are the compilers and the bundle
                                     ; writer (WEAVE-SPEC 1.2). Pack is a menu
                                     ; command and menu commands may refuse,
                                     ; which is the canonical tenant
+%define CC_OVL_PART                 ; ...carried as a PART of LOOM.O88 and
+%define CC_OVL_LAZY                 ; fetched on the first call into it
+                                    ; (SPEC.md 73.14.2). LAZY for WEAVE's
+                                    ; reason (weave.asm): the preview module
+                                    ; below is a lazy row - 17KB nobody who
+                                    ; never opens Preview should pay - and a
+                                    ; lazy row must follow every eager one
+                                    ; while CC_OVL_ROW must be the last. All
+                                    ; lazy, the table has no carve and none
+                                    ; of its code (SPEC.md 20.12.9.3)
+%define OP_NO_LAZYOK                ; ...and nothing asks "would it fit" first
+                                    ; (SPEC.md 20.12.9.2): op_fetch's own
+                                    ; refusal is the answer
 
                                     ; NOT CC_HAS_ONMOUSEUP: nothing in this
                                     ; wave is a control that fires on the
@@ -136,6 +146,27 @@
                                     ; icon and association blocks, the entry
                                     ; and callback trampolines, the overlay
                                     ; runtime and the whole API bridge
+
+; --- THE PARTS TABLE (SPEC.md 20.12, WEAVE-SPEC 1.2.4) ------------------------
+; Two rows, BOTH lazy, and both what this IDE used to read off two files
+; beside it:
+;
+;   0  the PREVIEW MODULE (WEAVE-SPEC 1.2.4) - apps/loom/lmpvmod.c +
+;      lmpvmod.asm, which was LOOM.WPV. Fetched the first time Preview is
+;      opened, from the folder LOOM.O88 was launched from (w_partfetch,
+;      apps/weave/wfetch.inc), and held until the instance closes. Its part
+;      is the module's image WITH ITS .bss AS ZEROS (build/lmpvpart.bin), so
+;      that op_fetch's claim - which it shrinks to the row's `len` - covers
+;      the bss the module zeroes on its first entry; LZ4 makes the 5KB of
+;      zeros a few dozen bytes on the disk
+;   1  the overlay, last (SPEC.md 73.14.2)
+;
+; LM_WPVPART in loom.h names row 0, and the %if below holds it there.
+    CC_PARTS_BEGIN 2
+      %assign LM_WPVPART_ASM OS88_PART_N
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP   ; 0 the preview module
+      CC_OVL_ROW                            ; 1 the overlay
+    CC_PARTS_END
 
 %include "loom.gen.asm"             ; the compiled C, found through -I build/
 
@@ -202,10 +233,13 @@
                                     ; reason a separate `nasm -f bin` job can
                                     ; be trusted to agree with this one about
                                     ; anything at all
-%include "loom/lmpv.inc"            ; ...and the five-routine seam to it. The
-                                    ; module is NOT in this image: it is read
+%include "loom/lmpv.inc"            ; ...and the seam to it. The module is NOT
+                                    ; in this image: it is part 0, fetched
                                     ; once, the first time Preview is opened,
                                     ; into a claim of its own
+%include "weave/wfetch.inc"         ; ...through WEAVE's door for a lazy part
+                                    ; fetched from HOME (WEAVE-SPEC 1.2's
+                                    ; sharing rule: one text, two images)
 
 ; --- THE DRIFT GUARDS, and they are %if and not a comment --------------------
 ; loom.h carries C copies of two of os88ui.inc's own numbers, because a C file
@@ -244,6 +278,9 @@
 %endif
 %if WPVE_MAGIC != 1 || WPVE_SECT != 2 || WPVE_CARD != 3 || WPVE_PANE != 4
   %error "wpvabi.inc's refusal codes moved; apps/weave/wpvabi.h must follow"
+%endif
+%if LM_WPVPART_ASM != 0 || cc_ovidx != 1
+  %error "the parts table moved; loom.h's LM_WPVPART must follow"
 %endif
 
     CC_IMAGE_END                    ; cc_bss_end, cc_modc_end and cc_image_end

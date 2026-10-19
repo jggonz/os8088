@@ -388,6 +388,7 @@ def summary(e, fps, label):
     return dict(
         label=label, frames=n, exact=st["exact"], cut=st["cut"],
         cut_disk=st["disk"], cut_cpu=st["cpu"], cut_peak=st["peak"],
+        cut_flip=st.get("flip", 0),
         cut_cap=st["cap"], bytes_left=st["bytes_left"],
         owed=st.get("owed", 0), held=st.get("held", 0),
         cycles=cyc, peak_cycles=pk, head_cycles=head,

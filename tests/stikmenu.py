@@ -26,6 +26,14 @@ about what the module DECIDED, not about pixels:
      4), right of the drive zones' column;
   F  picking the RUNNING row closes it - through app_close_win, so its own
      negotiator removes its Sticky App row from the desktop table.
+  C  ...and the drop it releases off is taken with the hand moved DOWN onto
+     the panel while the module loads and scans - where the busy clock arms
+     (cur_busy_on refuses only on the bar's own rows): once the panel is up
+     the progress widget is OFF the bar and the pointer is NOT the clock
+     (SPEC.md 12.8.3.3, stm_thaw - the menu's hold is interactive, so the
+     freeze ends where the disk work does, not at the unlock);
+  H  a Disk window's bar carries no 'Sticky Apps' cell - that menu is the
+     desktop's (SPEC.md 22.28.1).
   G  a second boot with six more Sticky Apps - one-sector stubs, a header
      and a card - lists nine, PAGED (a page smaller than nine and a pager
      row); a release on the pager turns to page 2 and the panel STAYS UP;
@@ -35,7 +43,10 @@ about what the module DECIDED, not about pixels:
 OS88_F_STIK and A fails (no card, nothing listed); make stm_track_x drop the
 image whatever the track answered and B fails (the posted act finds
 mod_gone); call wm_close_req instead of app_close_win in stm_a_close and F's
-row check fails (the negotiator is cleared before the close).
+row check fails (the negotiator is cleared before the close); take stm_thaw
+out of stm_loadpics and C reads [fpg_on] 1 and the clock as the shape (both
+measured on the kernel before it); put menu_s_stik back in fm_menus and H
+fails.
 """
 import os
 import shutil
@@ -126,6 +137,16 @@ class Menu:
                      h=raw[i * SL_SIZE + SL_H],
                      y=struct.unpack_from("<H", raw, i * SL_SIZE + SL_Y)[0])
                 for i in range(n)]
+
+    def drop_moving(self):
+        """Press the cell and move the hand DOWN at once, button held, so it
+        is over the panel's rows while the module loads and scans - the case
+        the busy clock arms in. Waits for the panel."""
+        self.ui.mo.to(self.cell(), geom.MBAR_H // 2)
+        self.ui.mo._edge(True)
+        self.ui.mo.to(self.cell() + 40, 120, l=True)
+        self.ui._wait(lambda: self.base() and self.b("stm_live"),
+                      "the Sticky Apps panel to drop", T)
 
     def release_on(self, slabs, k):
         """Move onto slab k with the button held, see it highlighted, let go."""
@@ -296,8 +317,15 @@ def main():
             menu.gone()
             check(True, "...and STIKMENU.DRV was dropped after the act")
 
-            print("C: a release off the panel picks nothing")
-            menu.drop()
+            print("C: the freeze ends with the scan; a release off the "
+                  "panel picks nothing")
+            menu.drop_moving()
+            check(ui._byte("fpg_on") == 0, "the progress widget is off the "
+                  "bar while the panel is up ([fpg_on] %d)"
+                  % ui._byte("fpg_on"))
+            check(ui._byte("cur_shape") != EQ["CUR_BUSYSH"],
+                  "the pointer is not the busy clock (cur_shape %d)"
+                  % ui._byte("cur_shape"))
             menu.release_off()
             menu.gone()
             check(ui._word("ui_pcmd") == 0, "nothing posted")
@@ -346,6 +374,15 @@ def main():
             check(not is_open(ui, TITLE), "the Desk Calendar is closed")
             check(not stik_rows(m, ui),
                   "its own negotiator removed its Sticky App row")
+
+            print("H: a Disk window's bar is its own")
+            check(any(c[0] == "Sticky Apps" for c in ui.menus()),
+                  "the desktop's bar carries 'Sticky Apps'")
+            dw = ui.open_drive("A")
+            bar = [c[0] for c in ui.menus()]
+            check("Sticky Apps" not in bar and "Disk" in bar,
+                  "a Disk window's bar does not (%r)" % bar)
+            ui.close(dw)
         paging(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

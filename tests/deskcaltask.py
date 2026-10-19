@@ -13,7 +13,7 @@ the package's own dc_geos.
 
   A  `K` and three lines - `Buy milk`, `Call plumber`, `Post letter` - are
      three tasks in the state file, in the order typed, none done; Calendar
-     > Clear Done Tasks is GREYED `Clear Done (none done)` (SPEC.md 47).
+     > Clear Done Tasks is GREYED (SPEC.md 47).
   B  THE BOX: 9 x 9 at face x 8, its frame ink and its inside ground. A
      press on Buy milk's box checks it, and the gesture is EXACTLY ONE
      drawing call of the calendar's - an OSAPI_GFX_BLIT1 (a breakpoint on
@@ -28,7 +28,7 @@ the package's own dc_geos.
      checks it - one BLIT1 again - and DONE in the file.
   D  Calendar > Clear Done Tasks leaves `Post letter` alone in the file, the
      item greyed again.
-  E  Post letter selected, Del, and Yes: the file has no task.
+  E  Post letter selected and Del twice in a row: the file has no task.
   F  three tasks again: the list shows the page holding the last one typed,
      and its pager wraps back to the first page.
 
@@ -126,7 +126,7 @@ def rec_bad(img, x, y, rec, w):
 
 
 def main():
-    from deskcalperf import measure, Gesture
+    from deskcalperf import measure, Gesture, segs_of
     tmp = tempfile.mkdtemp(prefix="deskcaltask-")
     img = os.path.join(tmp, "os8088-360.img")
     shutil.copy(os.path.join(BDIR, "os8088-360.img"), img)
@@ -177,7 +177,7 @@ def main():
                 tag_y = w.y + w.h - g_tag()
                 hits = [h for h in hits
                         if not (h.get("regs") and h["regs"]["bx"] >= tag_y)]
-                gst = Gesture(hits, c.wseg)
+                gst = Gesture(hits, segs_of(c.m, c.wseg))
                 ui._wait(lambda: done(k), "task %d to be DONE in memory" % k,
                          30)
                 b = frame_now()
@@ -206,8 +206,8 @@ def main():
                           ("Post letter", False)],
                   "the file holds the three, in order, none done (%r)"
                   % (got,))
-            check(clear_item() == ("Clear Done (none done)", False),
-                  "Clear Done Tasks is greyed with its reason (%r)"
+            check(clear_item() == ("Clear Done Tasks", False),
+                  "Clear Done Tasks is greyed (%r)"
                   % (clear_item(),))
 
             print("B: Buy milk's box: the box, one BLIT1")
@@ -246,17 +246,14 @@ def main():
             got = tasks()
             check(got == [("Post letter", False)],
                   "Post letter is the one left (%r)" % (got,))
-            check(clear_item() == ("Clear Done (none done)", False),
+            check(clear_item() == ("Clear Done Tasks", False),
                   "...and the item is greyed again")
 
-            print("E: Post letter deleted, after asking")
+            print("E: Post letter deleted, Del twice")
             c.front()
             c.press(c.task_text(0))
-            c.key("Delete")
-            ui._wait(lambda: len([w for w in ui.windows()
-                                  if w.title == TITLE]) == 2,
-                     "the Delete question", 30)
-            c.answer_yes("the Delete question")
+            check(c.delete_once() == 2, "the first Del arms")
+            check(c.delete_once() == 0, "the second deletes")
             got = tasks()
             check(got == [], "no task is left in the file (%r)" % (got,))
 

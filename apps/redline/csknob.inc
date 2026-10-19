@@ -328,7 +328,7 @@ cs_kget:
     ret
 %endif
 
-; --- every knob as the sweep and RLAPPLY call it: AL = value, regs kept ----
+; --- every knob as the sweep calls it: AL = value, regs kept --------------
 %macro CS_KSET 3                    ; name, table, knob
 %1:
     push ax
@@ -351,7 +351,9 @@ cs_kget:
     ret
 %endmacro
 
-; the NEAT's, by the names csprobe and csweep know
+; the NEAT's, by the names csprobe and csweep know - and not RLAPPLY's,
+; whose cs_ap_ne reaches cs_kput itself (csapply.inc)
+%ifndef CS_APPLY_ONLY
 cs_ne_put:                          ; AL = knob, AH = value: CF = refused
     push si
     mov si, cs_kt_ne
@@ -359,7 +361,6 @@ cs_ne_put:                          ; AL = knob, AH = value: CF = refused
     pop si
     ret
     CS_KSET cs_ne_set, cs_kt_ne, CS_NE_W8
-%ifndef CS_APPLY_ONLY
     CS_KSET cs_ne_setc8, cs_kt_ne, CS_NE_C8
     CS_KSET cs_ne_setcio, cs_kt_ne, CS_NE_CIO
     CS_KSET cs_ne_setw16, cs_kt_ne, CS_NE_W16

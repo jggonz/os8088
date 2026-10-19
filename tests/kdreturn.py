@@ -76,8 +76,10 @@ after it.  The row stops at `hbf_perform` - the post made, nothing loaded -
 and shapes the heap so that exactly one of the two can only be met by moving
 the region a few KB:
 
-  module  holes of 3KB under and over the region and a 2KB one at the floor,
-          so the 6KB image needs the region to move and the list does not
+  module  holes that add up to the image under and over the region (3+3
+          for the 6KB image it was until kernel size pass 13, 4+3 for the
+          7KB one since) and a 2KB one at the floor, so the image needs the
+          region to move and the list does not
   extent  a hole the image fits exactly, and 1KB under and over the region,
           so the image needs nothing and the 2KB list needs the move
 
@@ -295,15 +297,22 @@ def shape(m, arm, seg):
     if any(c[0] < under and c[0] + c[1] > under for c in cl):
         fail("the heap under the box is not one free run")
     K = 0x40                                    # a KB, in paragraphs
-    if arm == "module":
-        h, floor = 3 * K, 2 * K                 # 3+3 for the image, 2 for
+    if arm == "module":                         # hu+ho for the image and
+        ho = mod_kb // 2 * K                    # NEITHER hole alone: 3+3
+        hu, floor = mod_kb * K - ho, 2 * K      # for the 6KB image, 4 under
+                                                # and 3 over for the 7KB one
+                                                # kernel size pass 13 made it
+                                                # (the ceiling leaves 4KB over
+                                                # the box, a paragraph short
+                                                # of 4+wall); 2 for the list
     else:                                       # the extent list
-        h, floor = K, mod_kb * K                # 1+1 for the list, the
-    if over - end < h + 1 or seg - under < h + floor + 1:   # image's own hole
+        hu = ho = K                             # 1+1 for the list, the
+        floor = mod_kb * K                      # image's own hole
+    if over - end < ho + 1 or seg - under < hu + floor + 1:
         fail("not enough heap round the box to shape: %04X..%04X under, "
              "%04X..%04X over" % (under, seg, end, over))
-    wall(m, under + floor, seg - h - (under + floor))
-    wall(m, end + h, over - (end + h))
+    wall(m, under + floor, seg - hu - (under + floor))
+    wall(m, end + ho, over - (end + ho))
     return mod_kb
 
 

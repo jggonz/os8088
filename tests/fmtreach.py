@@ -71,6 +71,7 @@ MACHINE = "os8088_5150_cga_720b_gla"
 SYS = "build/os8088-360.img"
 LAST = 1439                     # 720K: 2 x 80 x 9 sectors, the last LBA
 OK, BAD = "Formatted B:", "Made 360K, not 720K"
+TEMPLATE = 0x88000888            # dskw_fmt_t2's BS_VolID: the BASE only
 
 
 # THE ASSEMBLER'S VALUES, not a regex over the source: FS_SIZE is
@@ -177,8 +178,17 @@ def arm(wrong, tmp):
           "arm %s: B: on the host is an empty %s volume"
           % (tag, "360KB" if wrong else "720KB"), "",
           got=ls.strip()[-120:], want=want + " cluster(s) free")
+    img = open(out, "rb").read()
+    vid = int.from_bytes(img[39:43], "little") if len(img) >= 512 else None
+    print("  BS_VolID %s" % ("%08X" % vid if vid is not None else "(none)"))
+    check(len(img) >= 512 and img[38] == 0x29 and vid != TEMPLATE,
+          "arm %s: the format stamped a serial of this disk's own" % tag,
+          "SPEC.md 18.8.2.1: DSK_VOLID adds the moment to dskw_fmt_t2's "
+          "0x88000888. The template's value here is every disk this machine "
+          "formats signing alike, which a quiet mount cannot tell apart",
+          got="%08X" % vid if vid is not None else None,
+          want="not %08X" % TEMPLATE)
     if not wrong:
-        img = open(out, "rb").read()
         mark = img[LAST * 512:LAST * 512 + 6]
         got = mark.hex() if len(mark) == 6 else \
             "(the file is %d bytes, short of sector 1439)" % len(img)
@@ -186,12 +196,19 @@ def arm(wrong, tmp):
               "arm A: sector 1439 carries the marker - its own LBA, three "
               "times", "dskw_fmt_reach_x writes it and reads it back",
               got=got, want=(LAST.to_bytes(2, "little") * 3).hex())
+    return vid
 
 
 tmp = tempfile.mkdtemp(prefix="fmtreach-")
 try:
-    arm(False, tmp)
-    arm(True, tmp)
+    va = arm(False, tmp)
+    vb = arm(True, tmp)
+    check(va != vb, "two disks formatted here carry DIFFERENT serials",
+          "SPEC.md 18.8.2.1 - the regression this asserts is the one the "
+          "stamp exists for: two formats, two disks, two identities",
+          got=("%08X" % va if va is not None else None,
+               "%08X" % vb if vb is not None else None),
+          want="two different values")
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 

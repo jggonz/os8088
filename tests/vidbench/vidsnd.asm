@@ -38,6 +38,24 @@
 ; DSP, DMA channel 1 and the PIC itself, as the fallback of VIDEO-PLAN 4.4
 ; would, and resumes them on every path out. The IRQ line is found here with
 ; DSP F2h (SPEC.md 96.17.1: the driver defers discovery to first use).
+;
+; ON A PicoMEM IT DOES WHAT SOUND.DRV DOES (SPEC.md 34.10), and with the same
+; code: drivers/sound/picomem.inc is assembled here under PM_CORE. It used to
+; end a 1.x run in STACK OVERFLOW, twice over (LOADALL-PLAN's PicoMEM round):
+;   - F2h discovery hooked 7, 5, 3 and 2 in turn, and one of those is the
+;     card's OWN line, whose vector is its BIOS's multiplexer (34.10.1). So the
+;     card is switched off whatever the suspended driver left (pm_undo),
+;     configured afresh (pm_init: its line learned and kept open, the SB put on
+;     a line and a port the firmware accepts), the port found by a DSP reset
+;     at pm_sbports, and [pm_irq] taken as the line - no discovery at all;
+;   - the "50%, ints on" row `sti`s inside the ISR, and on a 1.x the SB's IRQ
+;     is a SOFTWARE int raised from INSIDE the multiplexer, so the next block
+;     re-entered the multiplexer under it, and that one again: a recursion one
+;     frame deep per block. That row is for a DMA controller's completion
+;     interrupt, which a PicoMEM has none of, so it is SKIPPED there (flags 64).
+; Channel 1 is checked for RACING after every start (pm_runaway, 34.10.5) and
+; kept masked if it does, and the card's DSP is switched off again before the
+; drivers resume, so SOUND.DRV's attach finds it as a reset leaves it.
 ; =============================================================================
 
 %include "os88api.inc"
@@ -365,7 +383,8 @@ vs_dma:
     mov al, ah
     out 0x03, al
     mov al, 1
-    out 0x0A, al                    ; unmask
+    or al, [sbl_drqmask]            ; 5: a channel that RACED stays masked
+    out 0x0A, al                    ; unmask (SPEC.md 34.10.5)
     popf
     pop dx
     pop bx
@@ -398,6 +417,19 @@ vs_play:
     pop ax
     ret
 
+; vs_race - a card WE configured: is channel 1 racing now the DSP plays?
+; pm_runaway masks it and sets [sbl_drqmask] if so (SPEC.md 34.10.5).
+; It asks only while [pm_rchk] has ticks left, which sb.inc loads at every
+; stream start; this bench asks ONCE a stream, so it loads one - without it
+; the counter sits at 0 and the question is never asked at all
+vs_race:
+    pushf
+    cli
+    mov byte [pm_rchk], 1
+    call pm_runaway
+    popf
+    ret
+
 vs_stop:
     call vs_reset
     push ax
@@ -413,6 +445,7 @@ vs_count:
     mov word [vs_irqs], 0
     call vs_hook
     call vs_play
+    call vs_race
     call OSAPI_GET_TICKS
     mov [vs_t0], ax
 .w:
@@ -442,6 +475,7 @@ vs_ceil:
     mov cx, 1470
     mov dl, 0x1C
     call vs_play
+    call vs_race
     call OSAPI_GET_TICKS
     mov [vs_t0], ax
 .rd:
@@ -554,10 +588,25 @@ vs_run:
     mov ax, [si + DQ_C]
     mov [vs_ver], ax
 .guess:
+    call vs_pmup                    ; a PicoMEM: configured here, line known
+    cmp al, 1
+    je .found
+    cmp al, 2
+    je .nodsp
     call vs_reset
     jc .nodsp
     call vs_discover
     jc .noirq
+.found:
+    mov si, vs_r_pm                 ; the card, its own line, and channel 1
+    mov ax, [pm_base]
+    mov bx, 1
+    call vs_put
+    mov si, vs_r_pmirq
+    mov al, [pm_pmirq]
+    xor ah, ah
+    mov bx, 3
+    call vs_put
     mov si, vs_r_port
     mov ax, [vs_port]
     mov bx, 11
@@ -638,6 +687,13 @@ vs_run:
     mov si, vs_r_c75
     mov bx, 9
     call vs_put
+    cmp byte [pm_up], 0             ; a PicoMEM's SB IRQ is a software int
+    je .ion                         ; from INSIDE its multiplexer: an ISR
+    or word [vs_flags], 64          ; that `sti`s re-enters it (header)
+    mov si, vs_s_noion
+    call bl_sline
+    jmp short .ioff
+.ion:
     mov word [vs_burn], VS_B50
     mov byte [vs_bsti], 1
     call vs_ceil
@@ -645,6 +701,7 @@ vs_run:
     mov si, vs_r_c50i
     mov bx, 15
     call vs_put
+.ioff:
     mov al, [vs_spt]
     xor ah, ah
     mov si, vs_r_spt
@@ -663,6 +720,16 @@ vs_run:
 .noirq:
     or word [vs_flags], 8
 .resume:
+    cmp byte [pm_up], 0
+    je .rs
+    mov si, vs_r_drq
+    mov al, [sbl_drqmask]
+    xor ah, ah
+    mov bx, 5
+    call vs_put
+    call pm_undo                    ; the DSP off again: SOUND.DRV's attach
+    mov byte [pm_up], 0             ; expects the card as a reset leaves it
+.rs:
     xor al, al
     push es
     push ds
@@ -693,6 +760,46 @@ vs_run:
     pop ax
     ret
 
+%define PM_CORE                     ; SOUND.DRV's PicoMEM tier, less its
+%include "picomem.inc"              ; driver-only half (picomem.inc)
+sbl_drqmask:  db 0                  ; pm_runaway's verdict: 4 = channel 1 RACED
+                                    ; and stays masked (vs_dma ORs it in)
+
+; vs_pmup - a PicoMEM SOUND.DRV configured, configured again HERE (header).
+; out: AL = 0 no card (the normal path), 1 configured: [vs_port] answered a
+; DSP reset and [vs_irq] = [pm_irq], 2 a card whose DSP answers nowhere
+vs_pmup:
+    push si
+    call pm_init                    ; the ramp: no card, nothing written
+    xor al, al
+    cmp word [pm_base], 0
+    je .out
+    mov byte [pm_up], 1             ; whatever the driver or that call left:
+    call pm_undo                    ; the DSP off, as a reset leaves it
+    mov byte [pm_up], 0
+    mov byte [pm_irq], 0
+    call pm_init                    ; ...and on afresh
+    mov al, 2
+    cmp byte [pm_up], 0
+    je .out
+    mov si, pm_sbports              ; the port the firmware took: the first of
+.port:                              ; its walk that answers a reset
+    lodsw
+    or ax, ax
+    jz .none
+    mov [vs_port], ax
+    call vs_reset
+    jc .port
+    mov al, [pm_irq]
+    mov [vs_irq], al
+    mov al, 1
+    jmp short .out
+.none:
+    mov al, 2
+.out:
+    pop si
+    ret
+
 %define BL_ARENA_BYTES 4000
 %define BL_NUMBERED                 ; a field run saves NAME1, NAME2... (benchlib)
 %include "benchlib.inc"
@@ -720,6 +827,10 @@ vs_r_c50i:    db 'tracks, 50% ints on', 0
 vs_f_txt:     db 'VIDSND.TXT', 0
 vs_r_spt:     db 'sectors per track', 0
 vs_r_flags:   db 'flags', 0
+vs_r_pm:      db 'PicoMEM base (0 none)', 0
+vs_r_pmirq:   db "...the card's own IRQ", 0
+vs_r_drq:     db 'DMA ch 1 masked (4)', 0
+vs_s_noion:   db 'tracks, 50% ints on: NOT RUN - a PicoMEM ISR may not sti', 0
 vs_cands:     db 7, 5, 3, 2, 0
 
 vs_win:       dw 0

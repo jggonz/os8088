@@ -26,215 +26,108 @@ DC_SNOOZE   equ 5               ; minutes (STICKY-APPS-LAYER-PLAN.md 7, decision
 ; Every other register kept
 dc_tpack:
     push ax
-    push cx
-    mov ax, [dc_ty]
-    sub ax, DC_Y0
-    mov cl, 4
-    shl ax, cl
-    or al, [dc_tm]
-    inc cx                      ; CL = 5
-    shl ax, cl
-    or al, [dc_td]
-    mov bx, ax
-    pop cx
-    pop ax
-    ret
-
-; dc_tomorrow - BX = the day after today, FAT-packed - the last day of the
-; range is its own tomorrow. Every other register kept
-dc_tomorrow:
-    push ax
-    push cx
     push dx
     mov ax, [dc_ty]
-    mov dh, [dc_tm]
-    mov dl, [dc_td]
-    push ax
-    mov bl, dh
-    call dc_dim_of              ; AL = today's month's length
-    mov cl, al
-    pop ax
-    inc dl
-    cmp dl, cl
-    jbe .p
-    mov dl, 1
-    inc dh
-    cmp dh, 12
-    jbe .p
-    mov dh, 1
-    inc ax
-    cmp ax, DC_Y1
-    jbe .p
-    call dc_tpack               ; past 2099: today again
-    jmp short .x
-.p:
-    sub ax, DC_Y0
-    mov cl, 4
-    shl ax, cl
-    or al, dh
-    inc cx
-    shl ax, cl
-    or al, dl
-    mov bx, ax
-.x:
+    mov dx, [dc_tm]             ; DL = the month, DH = the day
+    call dc_fpack
+    xchg ax, bx
     pop dx
-    pop cx
     pop ax
     ret
 
-; dc_moment - the appointment at SI: CX = its moment, max(0, time - lead), in
-; minutes of the day - clamped at midnight rather than reaching into
-; yesterday. CF = 1 it is not timed. Every other register kept
-dc_moment:
-    mov cx, [si + DCA_TIME]
-    cmp cx, 24 * 60
-    jae .no                     ; all day, or not a time at all
-    push ax
-    mov al, [si + DCA_LEAD]
-    xor ah, ah
-    sub cx, ax
-    jnc .ok
-    xor cx, cx
-.ok:
-    pop ax
-    clc
-    ret
-.no:
-    stc
-    ret
-
-; dc_due - from appointment AL on, the first that is TODAY's, ARMED (REMIND,
-; not FIRED), timed, with its moment at or before DX (a SIGNED minute: -1 is
-; "before midnight", which nothing is). out: CF = 0 AL = it, AH = 0; CF = 1
-; none. The table is in date order, so the scan stops at the first later day.
-; Every other register kept
-dc_due:
-    push bx
-    push cx
-    push si
-    push di
-    call dc_tpack               ; BX = today
-    mov di, [STIK_PAY + DCP_NAPPT]
-    and di, 0FFh                ; DI = how many
-.l:
-    xor ah, ah
-    cmp ax, di
-    jae .none
-    call dc_aptr
-    cmp [si + DCA_DATE], bx
-    ja .none                    ; a later day: none after it is today's
-    jb .n
+; dc_armm - the appointment at SI: CF = 0 it is ARMED (REMIND, not FIRED) and
+; timed, CX = its moment, max(0, time - lead), in minutes of the day -
+; clamped at midnight rather than reaching into yesterday. CF = 1 not. CX
+; clobbered; every other register kept
+dc_armm:
     mov cl, [si + DCA_FLAGS]
     and cl, DCA_REMIND | DCA_FIRED
-    cmp cl, DCA_REMIND
-    jne .n
-    call dc_moment              ; CX = its moment
+    dec cl                      ; ZF = 1: REMIND alone
+    stc
+    jnz .r
+    mov cx, [si + DCA_TIME]
+    cmp cx, 24 * 60
+    cmc
+    jc .r                       ; all day, or not a time at all
+    sub cl, [si + DCA_LEAD]
+    sbb ch, 0
+    jnc .r
+    xor cx, cx
+.r:
+    ret
+
+; dc_due - from appointment AL on, the first that is TODAY's, ARMED and
+; timed, with its moment BELOW DX (unsigned: 0 is "before midnight", which
+; nothing is). out: CF = 0 AL = it, SI = its record; CF = 1 none (AL and
+; SI moved on). BX = today; CX clobbered; every other register kept. The
+; table is in date order, so the scan stops at the first later day
+dc_due:
+    call dc_tpack               ; BX = today
+.l:
+    call dc_anext
+    jc .r
+    cmp bx, [si + DCA_DATE]
+    jb .r                       ; a later day: none after it is today's
+    ja .n
+    call dc_armm                ; CX = its moment
     jc .n
-    cmp cx, dx
-    jle .yes
+    cmp dx, cx
+    ja .r                       ; CF = 0
 .n:
     inc ax
     jmp short .l
-.none:
-    stc
-    jmp short .x
-.yes:
-    clc
-.x:
-    pop di
-    pop si
-    pop cx
-    pop bx
+.r:
     ret
 
 ; dc_flagged - the first appointment carrying flag bit(s) AH: CF = 0 AL = it,
 ; SI = its record; CF = 1 none. Every other register kept
 dc_flagged:
-    push cx
-    mov cl, [STIK_PAY + DCP_NAPPT]
-    xor ch, ch
     xor al, al
-    jcxz .no
 .l:
-    call dc_aptr
-    test [si + DCA_FLAGS], ah
-    jnz .yes
+    call dc_anext
+    jc .r
     inc ax
-    loop .l
-.no:
-    stc
-    pop cx
-    ret
-.yes:
-    clc
-    pop cx
+    test [si + DCA_FLAGS], ah   ; CF = 0
+    jz .l
+    dec ax
+.r:
     ret
 
 ; dc_rpass - the minute's work (dc_tick: the UI task, the lock held, no clip).
 ; Nothing unless the minute changed; then a snoozed appointment whose slot is
-; reached rings again, or else the first one due fires - one a minute - and
-; card 3 follows. Every register kept
-dc_rpass:
-    push ax
-    push dx
-    push si
-    mov ax, [dc_now]
-    cmp ax, [dc_lnow]
-    je .x                       ; the same minute: a compare, no draw
-    mov [dc_lnow], ax
-    mov ah, DCA_SNOOZED         ; THE SNOOZE: its slot reached - a date
-    call dc_flagged             ; before today, or today at or past its
-    jc .due                     ; minute - and it rings again
-    push bx
-    call dc_tpack
-    cmp [STIK_PAY + DCP_SNZD], bx
-    pop bx
-    jb .snz
-    ja .due
-    mov dx, [STIK_PAY + DCP_SNZT]
-    cmp dx, [dc_now]
-    ja .due
-.snz:
-    and byte [si + DCA_FLAGS], ~DCA_SNOOZED & 0FFh
-    or byte [si + DCA_FLAGS], DCA_DUE
-    call dc_touch
-    call dc_ring                ; the chirp and the toast again
-    jmp short .sync
-.due:
-    mov dx, [dc_now]
-    xor al, al
-    call dc_due
-    jc .x
-    call dc_fire
-.sync:
-    call dc_c3sync
-.x:
-    pop si
-    pop dx
-    pop ax
-    ret
-
-; dc_fire - appointment AL's reminder goes off (the lock held): FIRED and DUE
-; and a save owed, then dc_ring. Card 3 is the caller's (dc_c3sync). Every
+; reached rings again, or else the first one due fires - FIRED and DUE and a
+; save owed - one a minute. Either RINGS: the chirp, and the toast `HH:MM
+; text` - the user's text LAST (SPEC.md 59.10) - and card 3 follows. Every
 ; register kept
-dc_fire:
-    push si
-    call dc_aptr
-    or byte [si + DCA_FLAGS], DCA_FIRED | DCA_DUE
-    call dc_touch
-    pop si
-    ; fall through
-
-; dc_ring - appointment AL rings: the chirp, and the toast `HH:MM text` -
-; the user's text LAST (SPEC.md 59.10). Every register kept
-dc_ring:
+dc_rpass:
     push ax
     push bx
     push cx
     push dx
     push si
     push di
-    call dc_aptr                ; SI = its record
+    mov dx, [dc_now]
+    cmp dx, [dc_lnow]
+    je .x                       ; the same minute: a compare, no draw
+    mov [dc_lnow], dx
+    mov ah, DCA_SNOOZED         ; THE SNOOZE: its slot reached - a date
+    call dc_flagged             ; before today, or today at or past its
+    jc .due                     ; minute - and it rings again
+    call dc_tpack
+    cmp dx, [STIK_PAY + DCP_SNZT]   ; (today, now) less the slot, as one
+    sbb bx, [STIK_PAY + DCP_SNZD]   ; 32-bit subtraction: a borrow is a slot
+    jc .due                         ; still to come
+.snz:
+    call dc_unsnz
+    jmp short .ring
+.due:
+    inc dx                      ; a moment at or before this minute
+    xor al, al
+    call dc_due
+    jc .x
+    or byte [si + DCA_FLAGS], DCA_FIRED | DCA_DUE
+.ring:                          ; SI = it
+    call dc_touch
     mov di, dc_rmsg
     mov ax, [si + DCA_TIME]
     call dc_tfmt
@@ -245,18 +138,22 @@ dc_ring:
     call dc_copyz               ; record need not be
     mov ax, 880                 ; THE CHIRP: 880 Hz, then 660 on a beat four
     mov cx, 4                   ; ticks out (stik_nx) - one tone channel, so
-    test byte [stik_st], STIK_S_WORKER   ; the second note is a second ask.
-    jz .two                     ; kern_small's worker has begun its next
-    mov cl, 8                   ; 36-tick sleep before this beat ran: one
-    jmp short .tone             ; longer note there
+%ifndef STIK_DESKONLY           ; the second note is a second ask.
+    test byte [stik_st], STIK_S_WORKER   ; kern_small's worker has begun its
+    jz .two                     ; next 36-tick sleep before this beat ran:
+    mov cl, 8                   ; one longer note there
+    jmp short .tone
 .two:
-    mov byte [dc_chirp], 1
-    mov byte [stik_nx], 4
+%endif
+    mov [dc_chirp], cl          ; owed (non-zero)...
+    mov [stik_nx], cl           ; ...four ticks out
 .tone:
     mov dl, 40h
     call OSAPI_SND_TONE         ; refused (a louder owner): no matter
     mov si, dc_rmsg
     call dc_toast
+    call dc_c3sync
+.x:
     pop di
     pop si
     pop dx
@@ -265,63 +162,103 @@ dc_ring:
     pop ax
     ret
 
-; dc_snooze - S / Snooze: the RINGING appointment snoozed DC_SNOOZE minutes -
-; DUE off, SNOOZED on, the slot now + 5 (into tomorrow past midnight). ONE
-; snooze is held: a snoozed other goes back to DUE (SPEC.md 110.3). Every
-; register kept
-dc_snooze:
-    cmp byte [dc_c3k], DC3_RING
-    jne .r
+; dc_rng - CF = 0: card 3 RINGS and the field is shut, so it may be acted
+; on: SI = the ringing appointment's record, AL = its index. CF = 1 not.
+; AX and SI clobbered either way
+dc_rng:
     call dc_busy
     jc .r
+    mov ax, [dc_c3k]            ; AL = the kind, AH = the appointment
+    cmp al, DC3_RING
+    stc
+    jne .r
+    mov al, ah
+    jmp dc_aptr                 ; CF = 0
+.r:
+    ret
+
+; dc_unsnz - the snoozed appointment at SI rings again: SNOOZED off, DUE on.
+; Every register kept
+dc_unsnz:
+    and byte [si + DCA_FLAGS], ~DCA_SNOOZED & 0FFh
+    or byte [si + DCA_FLAGS], DCA_DUE
+    ret
+
+; dc_snooze - S / Snooze: the RINGING appointment snoozed DC_SNOOZE minutes -
+; DUE off, SNOOZED on, the slot now + 5 (into tomorrow past midnight, the
+; last day of the range being its own tomorrow). ONE snooze is held: a
+; snoozed other goes back to DUE (SPEC.md 110.3). Every register kept
+dc_snooze:
     push ax
     push bx
+    push cx
+    push dx
+    push si
+    call dc_rng                 ; SI = the ringing one
+    jc dc_pop5
     push si
     mov ah, DCA_SNOOZED         ; the one held already: back to ringing
     call dc_flagged
     jc .one
-    and byte [si + DCA_FLAGS], ~DCA_SNOOZED & 0FFh
-    or byte [si + DCA_FLAGS], DCA_DUE
+    call dc_unsnz
 .one:
-    mov al, [dc_c3a]
-    call dc_aptr
+    pop si
     and byte [si + DCA_FLAGS], ~DCA_DUE & 0FFh
     or byte [si + DCA_FLAGS], DCA_SNOOZED
-    call dc_tpack               ; BX = today
     mov ax, [dc_now]
     add ax, DC_SNOOZE
     cmp ax, 24 * 60
+    xchg ax, si                 ; SI = the slot's minute
+    mov ax, [dc_ty]             ; the slot's day: today...
+    mov dx, [dc_tm]             ; DL = the month, DH = the day
     jb .slot
-    sub ax, 24 * 60
-    call dc_tomorrow
-.slot:
-    mov [STIK_PAY + DCP_SNZT], ax
-    mov [STIK_PAY + DCP_SNZD], bx
-    call dc_touch
-    call dc_c3sync
-    pop si
-    pop bx
+    sub si, 24 * 60             ; ...or, past midnight, tomorrow
+    push ax
+    mov bl, dl
+    call dc_dim_of              ; AL = today's month's length
+    cmp dh, al                  ; CF = 1: not its last day
     pop ax
-.r:
-    ret
+    inc dh
+    jb .slot
+    mov dh, 1
+    inc dx                      ; the next month (DL <= 12: no carry)
+    cmp dl, 12
+    jbe .slot
+    mov dl, 1
+    inc ax
+    cmp ax, DC_Y1
+    jbe .slot
+    dec ax                      ; past 2099: 2099-12-31 again
+    mov dx, 0x1F0C
+.slot:
+    call dc_fpack
+    mov [STIK_PAY + DCP_SNZT], si
+    mov [STIK_PAY + DCP_SNZD], ax
+    jmp short dc_dismiss.tail
 
 ; dc_dismiss - D / Dismiss: the RINGING appointment is quiet - DUE and
-; SNOOZED off; card 3 shows the next one due, the next armed, or none
+; SNOOZED off; card 3 shows the next one due, the next armed, or none.
+; Every register kept
 dc_dismiss:
-    cmp byte [dc_c3k], DC3_RING
-    jne .r
-    call dc_busy
-    jc .r
     push ax
+    push bx
+    push cx
+    push dx
     push si
-    mov al, [dc_c3a]
-    call dc_aptr
+    call dc_rng
+    jc dc_pop5
     and byte [si + DCA_FLAGS], ~(DCA_DUE | DCA_SNOOZED) & 0FFh
+.tail:
     call dc_touch
     call dc_c3sync
-    pop si
+dc_pop5:                        ; THE SHARED EPILOGUES, reached by a jump:
+    pop si                      ; SI DX CX BX AX pushed in that order...
+dc_pop4:
+    pop dx                      ; ...or DX CX BX AX, or CX BX AX
+dc_pop3:
+    pop cx
+    pop bx
     pop ax
-.r:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -340,56 +277,37 @@ dc_c3calc:
     mov ah, DCA_DUE
     call dc_flagged
     jc .next
-    mov byte [dc_c3k], DC3_RING
-    mov [dc_c3a], al
-    mov ax, [si + DCA_TIME]
-    mov [dc_c3t], ax
-    jmp .x
+    mov dx, [si + DCA_TIME]
+    mov ah, DC3_RING
+    jmp short .ring
 .next:
     mov byte [dc_c3k], DC3_NONE
     mov dx, 0FFFFh              ; DX = the best minute so far
-    call dc_tpack               ; BX = today
-    mov cl, [STIK_PAY + DCP_NAPPT]
-    xor ch, ch
     xor al, al
-    jcxz .snz
-.l:
-    call dc_aptr
-    cmp [si + DCA_DATE], bx
-    ja .snz
-    jb .n
-    mov ah, [si + DCA_FLAGS]
-    and ah, DCA_REMIND | DCA_FIRED
-    cmp ah, DCA_REMIND
-    jne .n
-    cmp word [si + DCA_TIME], 24 * 60
-    jae .n
+    call dc_due                 ; BX = today
+    jc .snz
     mov dx, [si + DCA_TIME]     ; the first armed today is the earliest
-    mov byte [dc_c3k], DC3_NEXT
-    mov [dc_c3a], al
-    mov [dc_c3t], dx
-    jmp short .snz
-.n:
-    inc ax
-    loop .l
+    call .nx
 .snz:
     mov ah, DCA_SNOOZED
     call dc_flagged
     jc .x
     cmp [STIK_PAY + DCP_SNZD], bx
     jne .x                      ; another day's: it rings at the first minute
-    mov cx, [STIK_PAY + DCP_SNZT]
-    cmp cx, dx
+    cmp [STIK_PAY + DCP_SNZT], dx
     jae .x
-    mov byte [dc_c3k], DC3_NEXT
-    mov [dc_c3a], al
-    mov [dc_c3t], cx
+    mov dx, [STIK_PAY + DCP_SNZT]
+    mov ah, DC3_NEXT
+.ring:
+    call .put
 .x:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    jmp short dc_pop5
+.nx:
+    mov ah, DC3_NEXT
+.put:                           ; [dc_c3k] = AH, [dc_c3a] = AL, [dc_c3t] = DX
+    xchg al, ah
+    mov [dc_c3k], ax
+    mov [dc_c3t], dx
     ret
 
 ; dc_c3sync - card 3 recomposed when its state CHANGED - or [dc_c3f] says
@@ -402,70 +320,50 @@ dc_c3sync:
     push ax
     push bx
     push cx
-    mov al, [dc_c3k]
-    mov ah, [dc_c3a]
+    mov ax, [dc_c3k]            ; AL = the kind, AH = the appointment
     mov bx, [dc_c3t]
     call dc_c3calc
-    xor cl, cl
-    xchg cl, [dc_c3f]           ; forced, once
-    cmp al, [dc_c3k]
-    jne .chg
-    cmp ah, [dc_c3a]
-    jne .chg
-    cmp bx, [dc_c3t]
-    jne .chg
-    or cl, cl
+    sub ax, [dc_c3k]            ; 0 when the state stands...
+    sub bx, [dc_c3t]
+    or ax, bx
+    xor cx, cx
+    xchg cl, [dc_c3f]           ; ...and is not forced, once
+    or ax, cx
     jz .x
-.chg:
-    cmp byte [stik_li], 2
-    je .slot
-    cmp byte [dc_abon], 0
-    jne .x                      ; About up: its dismissal paints the face
     mov al, 2                   ; TALL / MID: card 3
-    call dc_rshow
-    jmp short .x
-.slot:
-    cmp byte [dc_ed], 0
+    cmp [stik_li], al
+    jne .show
+    cmp [dc_ed], ch             ; (CH = 0)
     je .open
-    mov byte [dc_c3f], 1        ; the field holds the slot's heading: the
+    mov [dc_c3f], al            ; the field holds the slot's heading: the
     jmp short .x                ; sync is OWED, and its shutting forces it
 .open:
-    cmp byte [dc_c3k], DC3_RING
+    cmp [dc_c3k], al            ; AL = 2 = DC3_RING
+    mov ax, [dc_pane]           ; AL = the page, AH = [dc_pane0]
     jne .quiet
-    cmp byte [dc_pane], 2
+    cmp al, 2
     je .draw
-    mov al, [dc_pane]           ; TAKEN: the page it was on, for later
-    mov [dc_pane0], al
-    mov byte [dc_pane], 2
-    call dc_menulive
-    jmp short .draw
+    mov ah, al                  ; TAKEN: the page it was on, for later
+    mov al, 2
+    jmp short .give
 .quiet:
-    cmp byte [dc_pane], 2
+    cmp al, 2
     jne .x                      ; not on show
-    mov al, [dc_pane0]
-    cmp al, 0FFh
+    cmp ah, 0FFh
     je .draw                    ; the user paged here: it stays
-    mov [dc_pane], al           ; given back
-    mov byte [dc_pane0], 0FFh
+    mov al, ah                  ; given back
+    mov ah, 0FFh
+.give:
+    mov [dc_pane], ax
     call dc_menulive
 .draw:
-    cmp byte [dc_abon], 0
-    jne .x                      ; the page turned under About: its
-    mov al, 1                   ; dismissal paints it
-    call dc_rshow
-.x:
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; dc_rshow - card AL whole, when the window is on the glass
-dc_rshow:
-    call dc_arm
-    jc .r
+    mov al, 1
+.show:
+    call dc_arm                 ; card AL whole, when the window is on the
+    jc .x                       ; glass
     call dc_rcardw
-.r:
-    ret
+.x:
+    jmp dc_pop3
 
 ; dc_stale - appointment AL was just ARMED (a new one, a moved time, a
 ; Remind pick). A moment already PAST - before this minute - is FIRED at
@@ -477,19 +375,15 @@ dc_stale:
     push cx
     push si
     call dc_aptr                ; SI = its record
-    mov cl, [si + DCA_FLAGS]
-    and cl, DCA_REMIND | DCA_FIRED
-    cmp cl, DCA_REMIND
-    jne .x                      ; not armed, or fired already
+    call dc_armm                ; CX = its moment
+    jc .x                       ; not armed, fired already, or all day
     call dc_tpack
     cmp [si + DCA_DATE], bx
     jne .x                      ; not today's: its day will come
-    call dc_moment              ; CX = its moment
-    jc .x                       ; all day
     cmp cx, [dc_now]
     ja .x                       ; still to come
     jb .past
-    mov word [dc_lnow], 0FFFFh  ; this minute: the next beat fires it
+    or word [dc_lnow], -1       ; this minute: the next beat fires it
     jmp short .x
 .past:
     or byte [si + DCA_FLAGS], DCA_FIRED
@@ -499,103 +393,63 @@ dc_stale:
     pop bx
     ret
 
-; dc_armed - CF = 0: an armed, unfired, timed reminder still to come, today
-; or later. Every register kept
-dc_armed:
-    push ax
-    push bx
-    push cx
-    push si
-    call dc_tpack
-    mov cl, [STIK_PAY + DCP_NAPPT]
-    xor ch, ch
-    mov si, STIK_PAY + DCP_APPT0
-    jcxz .no
-.l:
-    cmp [si + DCA_DATE], bx
-    jb .n
-    mov al, [si + DCA_FLAGS]
-    and al, DCA_REMIND | DCA_FIRED
-    cmp al, DCA_REMIND
-    jne .n
-    cmp word [si + DCA_TIME], 24 * 60
-    jb .yes
-.n:
-    add si, DCP_APPTSZ
-    loop .l
-.no:
-    stc
-    jmp short .x
-.yes:
-    clc
-.x:
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
 ; dc_missed - the entry proc's half (after dc_today): today's reminders whose
 ; moment came BEFORE this minute, while the widget was not running, are
 ; FIRED and DUE - card 3 rings the first - and summed up in one toast, `3
 ; missed reminders`. Earlier days are not replayed. Nothing missed and no
-; RTC, with a reminder still to come: `No RTC - check the time` (OSAPI_CLK_GET's
-; AL bit 0). The toast is STAGED in [dc_ltp] and said by the first beat
-; (dc_tick). Every register kept
+; RTC, with an armed, unfired, timed reminder still to come today or later:
+; `No RTC - check the time` (OSAPI_CLK_GET's AL bit 0). The toast is STAGED
+; in [dc_ltp] and said by the first beat (dc_tick). Every register kept
 dc_missed:
     push ax
+    push bx
     push cx
     push dx
     push si
     push di
-    xor cx, cx
-    mov dx, [dc_now]
-    dec dx                      ; BEFORE this minute: one due now is the
-    xor al, al                  ; first beat's to fire
+    mov dx, [dc_now]            ; BEFORE this minute: one due now is the
+    xor ax, ax                  ; first beat's to fire
+    xor di, di                  ; DI = how many
 .l:
     call dc_due
     jc .d
-    call dc_aptr
     or byte [si + DCA_FLAGS], DCA_FIRED | DCA_DUE
-    inc cx
-    inc al
+    inc di
+    inc ax
     jmp short .l
 .d:
+    mov cx, di
     jcxz .rtc
     call dc_touch               ; the marks are the file's
     mov di, dc_rmsg
     mov al, cl
-    call dc_dec2                ; AL = the tens, AH = the ones (<= 48)
-    cmp al, '0'
-    je .one
-    mov [di], al
-    inc di
-.one:
-    mov [di], ah
-    inc di
+    call dc_putn                ; one digit or two (<= 48)
     mov si, dc_s_miss
     call dc_puts
-    cmp cl, 1
-    je .z
-    mov byte [di], 's'
-    inc di
+    mov word [di], 's'          ; ...an `s` and the NUL...
+    loop .z
+    mov [di], ch                ; ...or, for one, the NUL alone
 .z:
-    mov byte [di], 0
-    mov word [dc_ltp], dc_rmsg  ; said by the FIRST BEAT, after the
-    jmp short .x                ; registration's own toast (dc_tick)
+    mov ax, dc_rmsg             ; said by the FIRST BEAT, after the
+    jmp short .st               ; registration's own toast (dc_tick)
 .rtc:
     test byte [dc_rtc], 1
     jnz .x
-    call dc_armed
+    call dc_tpack
+    xor al, al
+.a:
+    call dc_anext
     jc .x
-    mov word [dc_ltp], dc_s_nortc
+    inc ax
+    cmp [si + DCA_DATE], bx
+    jb .a
+    call dc_armm
+    jc .a
+    mov ax, dc_s_nortc
+.st:
+    mov [dc_ltp], ax
 .x:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
+    jmp dc_rpass.x
 
 dc_s_miss:  db ' missed reminder', 0    ; ...and an `s` past one (<= 24)
 dc_s_nortc: db 'No RTC - check the time', 0

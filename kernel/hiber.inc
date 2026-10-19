@@ -336,7 +336,8 @@ hb_probe_x:
     call COLD_SEG:dkf_dsk_chdir_q
     jc .back
     mov si, hb_s_ptr
-    call COLD_SEG:drvf_drv_find ; the directory sectors themselves
+    mov bp, drv_find            ; (wm_cbd: kmain_o holds nothing in BP)
+    call COLD_SEG:wm_cbd        ; the directory sectors themselves
     jc .back
     mov byte [ui_rebootq], UI_RBQ_ASK
 .back:
@@ -504,7 +505,7 @@ hb_ok_x:
     push bx
     push cx                     ; ...and these two, for the reason above
     push dx
-    call COLD_SEG:hb_pick_x     ; the volume a hibernate would go to
+    COLDCALL hb_pick_x          ; the volume a hibernate would go to
     mov bx, menu_s_hibernh      ; ...none: '(no disk)'. A `mov` writes no
     jc .set                     ; flag, so the string can be chosen first
     call KERNEL_SEG:HB_API_XCAPS    ; BL = free block-table entries; on a
@@ -1428,9 +1429,9 @@ hbm_perform:
 ; -----------------------------------------------------------------------------
 ; hbm_wrimg - THE IMAGE AND ITS POINTER, and nothing after them (87.4 steps 1-6)
 ; in:  AL = what HBP_DOS is to say: 0 the user is leaving, 1 a DOS handoff
-; out: CF = 0 written. CF = 1 not, and the caller owns the unwind - the lock,
-;      [sch_lock] and the detached drivers are STILL TAKEN either way, because
-;      both callers go on holding them
+; out: CF = 0 written. CF = 1 not, SI = the refusal, and the caller owns the
+;      unwind - the lock, [sch_lock] and the detached drivers are STILL TAKEN
+;      either way, because both callers go on holding them
 ;
 ; Factored because docs/plans/KERN-DOS-PLAN.md 8 has a second customer: the DOS
 ; handoff writes an image so that the machine has somewhere to come back to,
@@ -1444,6 +1445,9 @@ hbm_wrimg:
                                 ; rather than the machine
     mov byte [cs:hbm_dosheld], 1    ; ...both taken below, and given back by
                                     ; neither arm
+%ifdef HMA_DRV
+    mov word [cs:hbm_hseg], 0   ; no pool copy yet: .no frees only a real one
+%endif
     call hbm_vbn                    ; where the user stands, for a refusal
     mov si, hb_drvmask          ; 1. the hardware drivers go, and are noted:
     mov byte [cs:hbm_spm], 0    ; THE HIBERNATE'S OWN SWEEP IS TODAY'S SKIP
@@ -1465,6 +1469,11 @@ hbm_wrimg:
                                 ;    outlived its question would otherwise
                                 ;    name the NEW image with the old session's
                                 ;    wake address (SPEC.md 87.3)
+%ifdef HMA_DRV
+    call hbm_hsave              ; 3b. the HMA's pool, into a claim the image
+    mov si, hbm_s_nomem         ;    carries - last, so nothing but the write
+    jc .nos                     ;    runs between the copy and the picture
+%endif
                                 ; 4. (SPEC.md 87.4) - [hb_sp] was banked at
                                 ;    the top, and where the restored kernel
                                 ;    enters goes straight into the pointer at
@@ -1491,6 +1500,11 @@ hbm_wrimg:
     pop ax                      ; (CF = 0 from the `jc`)
     ret
 .no:
+    mov si, hbm_s_failed        ; SI = the refusal, which hbm_hib toasts
+.nos:
+%ifdef HMA_DRV
+    call hbm_hfree              ; ...and the pool's copy goes with it
+%endif
     pop ax
     stc
     ret
@@ -1523,13 +1537,14 @@ hbm_hib:
     jmp $                           ; int 19h is ours to issue
 %endif
 .fail:
+    push si                     ; hbm_wrimg's refusal
     mov byte [cs:hbm_dosheld], 0
     dec byte [sch_lock]
     call hbm_unlock              
     call hbm_reload             ; the drivers come back
     call hbm_vbk                   
     mov byte [hb_mode], HB_M_ASK
-    mov si, hbm_s_failed
+    pop si
     call hbm_toast
     call hbm_winback
     mov sp, [hb_sp]
@@ -1584,6 +1599,136 @@ hbm_tty:
     pop ax
     ret
 
+%ifdef HMA_DRV
+; -----------------------------------------------------------------------------
+; hbm_hsave - THE HMA'S POOL, INTO THE IMAGE (SPEC.md 87.4 step 3b)
+; in:  the sweep done, the lock and [sch_lock] held; [cs:hbm_hseg] = 0
+; out: CF = 0 and [cs:hbm_hseg] = the copy's MEM_K_HIB claim, or 0 when
+;      there is nothing to carry; CF = 1 no room for the copy. HBP_PAD is the
+;      table's bytes or 0. Clobbers AX, BX, CX, DX, SI, DI, BP, ES
+;
+; The image is conventional memory and nothing above 1MB is in it, so a
+; driver the HMA holds - a kept class, HDD.DRV or NET.DRV - would come back
+; as a row naming an empty segment. One claim, the table and then every
+; live block in record order, and the image carries it at no cost: it is
+; written with the rest of memory. hbm_wake's step 0b copies it back.
+; -----------------------------------------------------------------------------
+hbm_hsave:
+    mov byte [cs:hbm_ptrfix + HBP_PAD], 0
+    cmp word [api_coldseg], HMA_SEG
+    jne .none                   ; `.cold` is not in the HMA: there is no pool
+    mov al, ROMF_HTAB
+    call far [rom_mfp]          ; DX:AX = the table, CX = its bytes
+    jc .none
+    push dx
+    push ax
+    mov es, dx
+    mov si, ax
+    mov di, cx                  ; DI = the copy's bytes: the table...
+    push cx
+.sum:
+    cmp word [es:si], 0
+    je .snext
+    add di, [es:si+2]           ; ...and every live block (paragraphs, so
+.snext:                         ; even, and the pool is under 64KB)
+    add si, 6
+    sub cx, 6
+    ja .sum
+    pop cx
+    cmp di, cx
+    je .empty                   ; no live block: the wake resets the pool
+    lea ax, [di + 1023]
+    push cx
+    mov cl, 10
+    shr ax, cl                  ; AX = KB
+    pop cx
+    mov bx, MEM_K_HIB
+    mov bp, mem_claim_x
+    call hbm_cb                 ; DX = its segment
+    mov bx, dx
+    pop ax
+    pop dx
+    jc .out                     ; CF = 1: no room for the copy
+    mov [cs:hbm_hseg], bx
+    mov [cs:hbm_ptrfix + HBP_PAD], cl
+    xor bp, bp                  ; ...into the claim
+    call hbm_hcopy
+    jmp short .none
+.empty:
+    pop ax
+    pop dx
+.none:
+    clc
+.out:
+    ret
+
+; hbm_hcopy - the pool's table and its live blocks, between the tail and the
+;             claim at BX (SPEC.md 87.4 step 3b, 87.6 step 0b)
+; in:  DX:AX = the tail's table (ROMF_HTAB), CX = its bytes, BX = the claim;
+;      BP = 0 into the claim, 1 back out of it
+; out: nothing; clobbers AX, CX, DX, SI, DI, ES
+hbm_hcopy:
+    push ds
+    mov si, ax                  ; DX:SI = the table, BX:0 its copy - first,
+    xor di, di                  ; so the walk below reads the claim's records
+    push cx                     ; either way round
+    call hbm_hmove
+    pop cx                      ; CX = where the copy's records stop
+    mov dx, HMA_SEG             ; a block's bytes are FFFF:base
+    xor ax, ax
+.rec:
+    push cx
+    mov es, bx
+    mov si, ax
+    mov cx, [es:si+2]
+    mov si, [es:si]
+    or si, si                   ; base 0 = a free record
+    jz .skip
+    call hbm_hmove
+.skip:
+    pop cx
+    add ax, 6
+    cmp ax, cx
+    jb .rec
+    pop ds
+    ret
+
+; hbm_hmove - CX bytes (even) between DX:SI and BX:DI, BP saying which way;
+;             DI is past them after. One block whole between two interrupts.
+;             Clobbers CX, SI, DS, ES
+hbm_hmove:
+    pushf
+    cli
+    shr cx, 1
+    or bp, bp
+    jnz .back
+    mov ds, dx
+    mov es, bx
+    rep movsw
+    popf
+    ret
+.back:
+    mov ds, bx
+    mov es, dx
+    xchg si, di
+    rep movsw
+    xchg si, di
+    popf
+    ret
+
+; hbm_hfree - the copy's claim back, if there is one. Clobbers BX, DX, BP
+hbm_hfree:
+    xor dx, dx
+    xchg dx, [cs:hbm_hseg]
+    or dx, dx
+    jz .out
+    mov bx, MEM_K_HIB
+    mov bp, mem_free_x
+    call hbm_cb
+.out:
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; hbm_sweep / hbm_reload - the drivers that own hardware (SPEC.md 87.4 step 2)
 ; in:  nothing; UI task, NO lock held (an unload waits on its worker)
@@ -1636,7 +1781,10 @@ hbm_sweep:
                                 ; the quarters under them (SPEC.md 107.6)
     cmp al, dl
     jne .take                   ; ...and the caller's own
-.asked:                         ; ...unless this call named it (51.11.4)
+.asked:                         ; ...unless this call named it (51.11.4).
+                                ; A driver in the HMA follows its class like
+                                ; a heap one: hbm_hsave carries the pool in
+                                ; the image (SPEC.md 87.4 step 3b)
     push cx                     ; CL is the ROW and the shift wants the CLASS,
     mov cl, al                  ; so the index is banked for four instructions
     mov ch, 1
@@ -1691,18 +1839,21 @@ hbm_reload:
 ; in:  DX = the rows; out: nothing; clobbers DX
 hbm_reload_m:
     push ax
+    push bx
     push cx
     xor cx, cx
 .row:
     shr dx, 1
     jnc .next
     mov al, cl
-    call COLD_SEG:drvf_drv_load ; failures show on the Drivers page, as at boot
+    call COLD_SEG:drvf_drv_row  ; BX = the row hdl_load takes
+    call hdl_load               ; failures show on the Drivers page, as at boot
 .next:
     inc cx
     cmp cx, DRV_MAX
     jb .row
     pop cx
+    pop bx
     pop ax
     ret
 
@@ -1772,6 +1923,17 @@ hbm_ask:
     repe cmpsw
     pop ds                      ; ...and a pop does not touch cmpsw's ZF
     jne .stale
+%ifdef HMA_DRV
+    mov cl, [cs:hbm_ptrbuf + HBP_PAD]   ; THE HMA POOL THE IMAGE CARRIES
+    or cl, cl                   ; (SPEC.md 87.3): its table goes back over
+    jz .htab                    ; this boot's tail at the wake, where nothing
+    mov al, ROMF_HTAB           ; can refuse - so the tail is asked HERE,
+    call far [rom_mfp]          ; before the teardown. The fixed head has
+    jc .stale                   ; already said `.cold` is in the HMA (FF)
+    cmp cl, [cs:hbm_ptrbuf + HBP_PAD]
+    jne .stale
+.htab:
+%endif
     call hbm_findimg            ; ...which is mounted: the pointer came from it
     jc .lost                    ; DX:CX = the image's size on the disk
     mov bx, dx                  ; ...banked, because hbm_imgsize answers in
@@ -1871,6 +2033,21 @@ hbm_ptrfix_set:
     mov [cs:hbm_ptrfix + HBP_MEMTOP], ax
     mov al, [vid_kind]
     mov [cs:hbm_ptrfix + HBP_VID], al
+%ifdef ROM_COLD
+    ; ...and WHERE `.cold` RUNS, in the pad byte the head always compared as
+    ; 0 (docs/plans/ROM-PLAN.md 3.4.5): the HIGH BYTE of [api_coldseg], which
+    ; is the RAM rung's on a machine that kept it, F4 when a ROM adopted the
+    ; kernel and FF when XMEM.DRV put it in the HMA (docs/plans/HMA-PLAN.md).
+    ; An image hibernated with `.cold` in either has every far reference
+    ; pointing there and its cold rung is heap, so resumed where `.cold` is
+    ; anywhere else it would run into nothing; three places, so a byte that
+    ; only said "not in RAM" could not refuse the pair that matters. Same
+    ; build is already the head's BUILD_NUM, and a ROM or an HMA image this
+    ; boot installed is one that proved itself this kernel's - so an HMA
+    ; image resumes onto the HMA its own build filled, byte for byte the same.
+    mov al, [api_coldseg + 1]
+    mov [cs:hbm_ptrfix + HBP_VID + 1], al
+%endif
     ret
 
 ; hbm_imgsize - out: DX:AX = [mem_top] * 16, the bytes an image must have
@@ -2250,8 +2427,18 @@ hbm_dosrun:
     ; settled. They go
     ; into the RECORD's copy and not the stage's, for `KDLF_HIBER`'s own
     ; reason immediately below - step 5 copies the record over the stage.
+%ifdef HMA_DRV
+    cmp word [api_coldseg], HMA_SEG ; NOT WITH `.cold` IN THE HMA: nothing on
+    je .nowake                  ; the live route checks A20 or the HMA's bytes,
+%endif                          ; and a DOS program may close the one or write
+                                ; the other. KDL_WAKE + 2 stays the 0 DOS.O88
+                                ; posted, so kd_resume takes int 19h, where
+                                ; XMEM.DRV reinstalls `.cold` (SPEC.md 96.49)
     mov word [cs:bx+KDL_WAKE], hbm_wake ; ...exactly what hbm_wrimg put in
     mov [cs:bx+KDL_WAKE + 2], cs        ; the pointer, and from the same place
+%ifdef HMA_DRV
+.nowake:
+%endif
     mov [cs:bx+KDL_KSEG], ds    ; DS IS KERNEL_SEG in this module (SPEC.md 2.8)
     mov al, [hb_vol]
     mov [cs:bx+KDL_HBVOL], al
@@ -2756,6 +2943,31 @@ hbm_wake:
     HBMARKAT HM_WCOL, 'W'       ; black hole rather than a fault
 %endif
     cld
+%ifdef HMA_DRV
+    ; --- 0b. THE HMA'S POOL, BEFORE ANYTHING CAN RUN IN IT (SPEC.md 87.6) ---
+    ; The image names its HMA drivers' segments - their drv_tab rows, the
+    ; class pairs, a window's W_DISP - and the boot that resumed us has emptied
+    ; the pool (drv_shutdown_x at hbm_down). hbm_hsave copied the table and
+    ; every live block into [hbm_hseg], which the image carried, so they go
+    ; back to the bases they were at, with IF = 0 still: `.cold` and the tail
+    ; are this build's again (the fixed head's pad byte) and A20 is as the
+    ; fresh XMEM.DRV left it, open. No copy is the old HRESET.
+    cmp word [api_coldseg], HMA_SEG
+    jne .nohma
+    mov bx, [cs:hbm_hseg]
+    or bx, bx
+    jz .hreset
+    mov al, ROMF_HTAB
+    call far [rom_mfp]          ; DX:AX = the tail's table, CX = its bytes
+    jc .hreset                  ; (hbm_ask asked it already)
+    mov bp, 1                   ; ...out of the claim
+    call hbm_hcopy
+    jmp short .nohma
+.hreset:
+    mov al, ROMF_HRESET
+    call far [rom_mfp]
+.nohma:
+%endif
     ; --- 1. THE PIT, WHICH THE HANDOVER PUT BACK IN THE ROM'S MODE ----------
     ; SPEC.md 8.1: the kernel runs channel 0 in MODE 2 with divisor 0, so the
     ; IRQ rate stays 18.2065 Hz and the counter decrements by ONE per input
@@ -2927,6 +3139,9 @@ hbm_wake:
     call hbm_cb         
     mov word [hb_xseg], 0
 .noxs:
+%ifdef HMA_DRV
+    call hbm_hfree              ; ...and the HMA pool's copy, spent at 0b
+%endif
     call KERNEL_SEG:fpg_end     ; ...and the progress widget it had up
     ; 3c. THE MAILBOX, WHILE THERE STILL IS ONE (SPEC.md 96.41.3) -----------
     ; **THE STAGING AREA IS THE DESKTOP'S FRAMEBUFFER ON TWO ADAPTERS OF
@@ -3118,6 +3333,8 @@ hbm_wake:
     ; `hbm_hib`'s failure unwind calls `hbm_reload` to undo a detach that never
     ; became an image, and a suspender standing behind THAT one still holds its
     ; rows and is still going to ask for them.
+    ;
+    ; (The HMA's pool is already the image's: step 0b, before the `sti`.)
     mov dx, [hb_drvmask]
     or dx, [hb_susp]
     mov word [hb_susp], 0
@@ -3514,7 +3731,10 @@ hbm_ptrfix:     db 'HIB1'      ; THE POINTER FILE as hbm_wrimg writes it,
                 dw 0            ; [mem_top], filled by hbm_ptrfix_set
                 db 0, 0         ; ...[vid_kind], and the pad
                 dd 0            ; HBP_WAKE, hbm_wrimg's
-                db 0, 0         ; HBP_DOS, hbm_wrimg's; and HBP_PAD
+                db 0, 0         ; HBP_DOS, hbm_wrimg's; and HBP_PAD, the
+                                ; HMA pool's table bytes the image carries
+                                ; (hbm_hsave), 0 = none - which hbm_ask asks
+                                ; the tail about before the teardown
 %if $ - hbm_ptrfix != HBP_SIZE
   %error "hbm_ptrfix is the pointer file, HBP_SIZE bytes"
 %endif
@@ -3546,6 +3766,9 @@ hbm_s_bdis: db 'Discard', 0         ; than choosing between four (NULs pad)
 hbm_s_nobios: db 'Needs a BIOS hard disk', 0
 hbm_s_noroom: db 'Not enough room on disk', 0
 hbm_s_failed: db 'Hibernate failed', 0
+%ifdef HMA_DRV
+hbm_s_nomem:  db 'Not enough memory', 0  ; the HMA pool's copy (87.4 step 3b)
+%endif
 hbm_s_stale:  db 'Hibernation: other build', 0
 hbm_s_lost:   db 'Hibernation: unreadable', 0
 
@@ -3580,6 +3803,12 @@ hbm_swn:        resb 1          ; hbm_sweep's record count, across the ask
 hbm_spm:        resb 1          ; OSAPI_DRV_SUSPEND's class mask (SPEC.md
                                 ; 51.11.4), banked by hbm_drvsusp off the
                                 ; slot's own BL - the kernel keeps nothing
+%ifdef HMA_DRV
+hbm_hseg:       resw 1          ; the HMA pool's copy (hbm_hsave), 0 = none:
+                                ; written before the picture, so the restored
+                                ; hbm_wake reads what the hibernate wrote -
+                                ; hbm_ptrbuf's reasoning, one boot further
+%endif
 
 %endif                          ; --- kern_small has NO hibernate at all,
                                 ; and so no module and no mod_tab row

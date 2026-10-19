@@ -3007,7 +3007,7 @@ px_capsync:
 ; =============================================================================
 ; px_bpaint is every button's label on the colour face (OS88UI_OWN): AX =
 ; the index, BX = its rect (screen), DI = its flags with the pressed look
-; resolved. The toolbar's and the tool column's are PIXEL.GFX's pictures,
+; resolved. The toolbar's and the tool column's are part 9's pictures,
 ; ONE OSAPI_GFX_BLITP each - the toolbar's an icon over its caption, inside
 ; the button; every other button, and those when the file is not here or
 ; the card refuses the block (a straddle, an origin off the grid), is a
@@ -3476,62 +3476,136 @@ px_bvband:
     ret
 
 ; =============================================================================
-; PIXEL.GFX - the colour face's pictures (SPEC.md 106.16)
+; THE COLOUR FACE'S PICTURES - part 9 (SPEC.md 106.16)
 ; =============================================================================
-; tools/pixart.py draws them into a file that ships BESIDE the package, read
-; at entry only on a colour primary - a Hercules or a CGA machine never
-; spends a byte or a revolution on it - into a claim of its own, and freed
-; with the window. It is a sidecar and not a part for MIDIRack's reason
-; (SPEC.md 105.9.5), and one more: PiXEL's master is sized from the heap
+; tools/pixart.py draws them, and they ride inside PIXEL.O88 as a compressed
+; lazy part: fetched at entry only on a colour primary - a Hercules or a CGA
+; machine never spends a byte or a revolution on them - into a claim of
+; their own, MOVABLE (px_mreloc follows it), and freed with the window. They
+; were a file beside the package until the parts standard could compress a
+; parted image (SPEC.md 20.13.8). PiXEL's master is sized from the heap
 ; (SPEC.md 106.8), so a machine that cannot spare the pictures' 27 KB beside
-; a picture is left them: under PXA_MINFREE free after the claim, the claim
-; goes back and every button is the code-drawn bevel - a complete face.
+; a picture is left them: under PXA_MINFREE free after the claim, nothing is
+; read and every button is the code-drawn bevel - a complete face.
 
-; px_artload - the pictures, if the primary is colour, the file is here, the
-; heap can spare them and they are the length the numbers say. Preserves all
+; px_artload - the pictures, if the primary is colour and the heap can spare
+; them. Silent when it cannot: op_lazyok is asked first, so op_fetch's own
+; toast is only ever a read that failed. Preserves all
 px_artload:
+    cmp word [pxa_seg], 0           ; held already: nothing to read
+    jne .ret
     push ax
     push bx
     push cx
     push dx
     push si
+    push di
     push es
     call OSAPI_VIDEO                ; DH = the primary's bits per pixel
     cmp dh, 1
     jbe .out
-    mov ax, (PXA_SIZE + 1023) / 1024
-    call OSAPI_MEM_CLAIM            ; DX = the segment
+    mov al, PXPART_GFX
+    call op_lazyok                  ; the largest run holds the fetch...
     jc .out
-    push dx
-    call OSAPI_MEM_AVAIL            ; BX = the KB still free beside it
-    pop si
-    cmp bx, PXA_MINFREE
-    jb .free
-    mov es, si
-    xor bx, bx
-    mov cx, ((PXA_SIZE + 1023) / 1024) * 1024
-    xor dx, dx
-    push si
-    mov si, pxa_name
-    call OSAPI_FILE_READ            ; DX:AX = its size (unwrapped, 20.14)
-    pop si
-    jc .free
-    or dx, dx
-    jnz .free
-    cmp ax, PXA_SIZE
-    jne .free
-    mov [pxa_seg], si
-    jmp short .out
-.free:
-    mov dx, si
-    call OSAPI_MEM_FREE
+    call OSAPI_MEM_AVAIL            ; ...and BX = the KB free in all, which
+    cmp bx, PXA_MINFREE + PXA_KB    ; must leave PXA_MINFREE beside them
+    jb .out
+    call OSAPI_FILE_HERE            ; the part is read BY NAME, so at home
+    cmp dx, [px_homedir]            ; (px_pfetch's bracket): px_artback asks
+    jne .go                         ; from wherever an open left the instance
+    cmp bl, [px_homevol]
+    jne .go
+    call .get
+    jmp .out
+.go:
+    push dx                         ; the way back
+    push bx
+    mov dx, [px_homedir]
+    mov bl, [px_homevol]
+    call OSAPI_FILE_GOTO_QM
+    jc .gone                        ; PiXEL's disk is out: the bevel stays,
+    call .get                       ; and SILENTLY, where px_pfetch toasts
+    pop bx
+    pop dx
+    call OSAPI_FILE_GOTO_QM         ; CF unread, as px_pfetch's way back
+    jmp .out
+.gone:
+    pop bx                          ; QM moved nothing: no way back to take
+    pop dx
 .out:
     pop es
+    pop di
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
+.ret:
+    ret
+.get:
+    mov al, PXPART_GFX
+    call op_fetch                   ; claims, reads, expands (SPEC.md 20.12.4)
+    jc .none
+    mov al, PXPART_GFX
+    call op_seg
+    mov [pxa_seg], ax
+    xchg ax, dx
+    mov ax, px_mreloc               ; the pictures move with the heap: the
+    call OSAPI_MEM_MOVABLE          ; proc re-bases pxa_seg and the row
+.none:
+    ret
+
+; px_artroom - AX = the KB an open's master is about to claim: CF = 1 the
+; pictures were held and are DROPPED now, because that master would leave
+; less than PXA_MINFREE free beside them - px_artload's own rule, asked again
+; where it can change (SPEC.md 106.16). Held, their 27 KB sits mid-heap and
+; every claim the open makes compacts around it: BIG.BMP on the 640 KB VGA
+; XT compacted three times where it compacts once without them, ~0.9 s
+; before its first rows. The face draws its bevel from here (a picture
+; already on the glass stays until something repaints it), and px_artback
+; asks for them again when the open ends. Preserves all but the flags
+px_artroom:
+    cmp word [pxa_seg], 0
+    je .keep                        ; (CF = 0: equal)
+    push bx
+    mov bx, [px_avt]                ; the KB free in all, less this master
+    sub bx, ax
+    jb .drop
+    cmp bx, PXA_MINFREE
+    jae .kept
+.drop:
+    push ax
+    xor ax, ax
+    mov [pxa_seg], ax               ; the face's bevel FIRST, so nothing draws
+    mov byte [pxa_drop], 1          ; out of a claim being given back
+    mov al, PXPART_GFX
+    call op_drop
+    pop ax
+    pop bx
+    stc
+    ret
+.kept:
+    pop bx
+.keep:
+    clc
+    ret
+
+; px_artback - an open has ended: pictures an open's pressure dropped are
+; asked for again on px_artload's terms, and the face is drawn with them if
+; they came. A machine whose ENTRY refused them never asks (pxa_drop is set
+; by px_artroom alone). Preserves all
+px_artback:
+    cmp byte [pxa_drop], 0
+    je .ret
+    call px_artload
+    cmp word [pxa_seg], 0
+    je .ret                         ; still no room: the bevel stays
+    mov byte [pxa_drop], 0
+    push ax
+    mov al, PX_R_TB | PX_R_TOOLS
+    call px_regdraw
+    pop ax
+.ret:
     ret
 
 ; --- the window's ONE button record (SPEC.md 106.3): every control in it, in

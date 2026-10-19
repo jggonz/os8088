@@ -172,15 +172,16 @@ their own segments:
 | claim | size | contents |
 |---|---|---|
 | RAM | `os88_mem_claim(64)` — 65,536 bytes, `c64_m.ramseg` | the C64's RAM, `$0000-$FFFF`, flat, one segment |
-| ROM | `op_load`'s carve — 20,480 bytes, `c64_m.romseg` = `os88_part_seg(0)` | the ROM part, §1.4's layout, claimed and decoded by the parts standard before `os88_main` runs |
+| ROM | `op_load`'s carve — 20,480 bytes, `c64_m.romseg` = `os88_part_seg(0)` | the ROM part, §1.4's layout, claimed and decoded by the parts standard before `os88_main` runs. The same carve holds the overlay, part 1 (§13.3): 23.0K in all, measured, top-down and pinned |
 
 Launch is **defined by the claims succeeding**, not by a free-KB figure: the
 64KB claim must succeed (its refusal toasts `C64: 64KB? <n> KB`, with
-`os88_mem_largest_kb()`'s answer) and `op_load` must have had its 20KB. Three
-more claims appear later and are refused politely if they cannot be had: the
-package's own `C64.OVL` module (§13.3) at the first wake, a transient claim
-the size of the `.PRG` during Smart attach (§11.3), and the 2KB clipboard
-staging claims of Copy and Paste (§7.7).
+`os88_mem_largest_kb()`'s answer) and `op_load` must have had its carve - the
+ROM and the overlay. Two more claims appear later and are refused politely if
+they cannot be had: a transient claim the size of the `.PRG` during Smart
+attach (§11.3), and the 2KB clipboard staging claims of Copy and Paste (§7.7).
+The overlay was a third, `C64.OVL` read into a whole-KB claim of its own at the
+first wake, until it became a part (§13.3).
 
 Colour RAM (1,024 nibbles), the VIC/CIA/SID register files, the 1bpp frame
 shadow and the keyboard matrix are in the package's **bss** (§13.0). The
@@ -897,10 +898,10 @@ across the screen.
 clipboard actions (`src/arch/gtk3/actions-clipboard.c`), on os8088's system
 clipboard (SPEC.md §55). Every conversion is transcribed from `src/charset.c`.
 
-**Where the work runs, and why.** `ovl_cmd` (in `C64.OVL`) sets a latch —
+**Where the work runs, and why.** `ovl_cmd` (in the overlay) sets a latch —
 `c64_copy_req` / `c64_paste_req` — and returns; `os88_oncmd` is dispatched
 **under the gfx lock** (SPEC.md §12.8.3), and a thousand converted cells
-there is the whole desktop stopped. `ovl_clip_service(base)`, in `C64.OVL`
+there is the whole desktop stopped. `ovl_clip_service(base)`, in the overlay
 (`c64kbd.c`) runs the whole body from the **top of the next wake**, with no
 lock held. The 6510 advances only inside `os88_onwake`, so between the pick
 and the top of the next wake not one emulated cycle has run: it is the same
@@ -920,12 +921,13 @@ crosses it pays a far call per iteration (§9.7's `C64COST_OVLCALL`) — so:
 the mask, the index, the store into ANOTHER SEGMENT, the trim, an all-spaces
 row, a row whose last cell is not a space, and `n = 0`.
 
-**Both tables are built once, in the overlay, on the first wake** —
-`ovl_conv_init` (`c64cmd.c`), which is also §13.3's first `ovl_*` call. The
-arrays are bss and stay resident and DS-relative, which is what makes the
-move legal (SPEC.md §73.14: only code moves). A `c64_conv_ok` flag guards the
-Edit arm of `ovl_cmd`, so a load refused for a transient reason and granted
-later cannot reach the loops with 128 zero bytes of table.
+**Both tables are built once, in the overlay, from `os88_main`** —
+`ovl_conv_init` (`c64cmd.c`). The arrays are bss and stay resident and
+DS-relative, which is what makes the move legal (SPEC.md §73.14: only code
+moves). The overlay is an eager part bound before `os88_main` runs (§13.3),
+so the call cannot be refused and the tables are there before any menu can be
+picked; the `c64_conv_ok` guard the Edit arm carried while the module was a
+file that could be refused at the first wake and granted later is gone.
 
 **Copy is `clipboard_read_screen_output` (`src/clipboard.c`).** The 40×25
 matrix is read a row at a time and each screen code goes through, in this
@@ -1412,8 +1414,8 @@ neither can carry the latch here. `os88_onkey` tests
 `ascii == 0 && scan == C64_SCAN_ALT_D (0x20)` and calls the same resident
 `c64_fullscreen_toggle` the menu item calls. It is resident and not in the
 overlay: a `WF_FULL` window has no menu bar (SPEC.md §11.2), so the chord is
-the only door back, and a door that had to load `C64.OVL` would refuse on a
-disk without it with the refusal printed on a bar the user cannot see.
+the only door back, and it is a keystroke - a path SPEC.md §73.14 keeps
+resident by rule.
 
 **2× ships, on every tier that can pay for it.** The frame shadow stays
 320×200 and every compare, signature and span is in C64 pixels; **the
@@ -1554,7 +1556,7 @@ be read.`, `No memory for the copy.`, `No memory for the paste.` (§7.7);
 (§11.4); `Warp mode on.` / `Warp mode on - no change.` / `Warp mode off.`
 (§4.4); `Paused.` / `Running.` / `Advanced one frame.`; `Joysticks swapped.`
 / `Joysticks normal.` (§8); `ScrollLock for joystick` (§7.6);
-`No bands here - text only.` (§9.5); `Unable to load C64.OVL.` (§13.3);
+`No bands here - text only.` (§9.5);
 `A file dialog is already open.`, `PRG too short.`, `PRG over 65533 bytes.`,
 `PRG: no heap for it.`, `PRG: cannot read it.`, `PRG runs past $FFFF.`,
 `Loaded <name>` (§11.3). Edit > Copy on success says nothing.
@@ -1740,6 +1742,10 @@ gives). Four rules follow:
    turned off — `Show status bar`, `Allow keyset joysticks` — wears the `*`
    AND `MENU_DIS` together. The marker is two glyphs so both spellings are
    the same width; the longest, `* Pause emulation  Alt+P`, is exactly 24.
+   **Every other item on a menu that carries check items starts with the OFF
+   marker's two blanks as well**, so the labels form one column - Preferences'
+   `Restore display state`, `Advance frame`, `Emulation speed`, `Mouse grab`
+   and `Settings...` once started two cells left of the rest.
    The kernel reads the item strings through the set's `items` pointer at
    draw time, so swapping a pointer is enough and `os88_menu_set` is not
    called again.
@@ -1757,10 +1763,10 @@ Live items:
 
 | item | caption | note |
 |---|---|---|
-| File > Smart attach... | Alt+A | the Standard File dialog on `*.PRG` (§11.3) |
+| File > Smart attach... | Alt+A | the Standard File dialog, Open form (§11.3) |
 | File > Reset > Reset machine CPU | Alt+F9 | **and it CLEARS THE PAUSE, which is VICE's own order**: `machine_reset_action` calls `ui_pause_disable()` straight after `machine_trigger_reset()`. `c64_adv` is cleared with it and `c64_menu_state` re-runs. The body is a latch (`c64_reset_req` = 1) spent by `ovl_reset_service()` at the top of the next wake, out of the desktop's lock |
 | File > Reset > Power cycle machine | Alt+F12 | caption kept; the item is the route (§7.5). **RAM pattern fill: VICE's C64 factory pattern** (`src/ram.c`, `ram_init_with_pattern`) — the eight-byte period `00 00 FF FF FF FF 00 00` with every other 16K block inverted, **not zeros**; `Reset machine CPU` does not touch RAM. The latch is `c64_reset_req` = 2, because `c64_zfill` over 65,536 bytes is about a quarter of a second on the target and `os88_oncmd` runs under the gfx lock |
-| File > Exit emulator | Alt+Q | **`os88_wm_close`, the kernel's own close path** (§15.2). Answered in the RESIDENT `os88_oncmd`, because it is the one command that must work on a disk whose `C64.OVL` is missing; `c64_exit_req` is set there and the top of `os88_onwake` spends it — sets `C64_ST_DEAD`, calls `os88_wm_close`, and returns with nothing after the call |
+| File > Exit emulator | Alt+Q | **`os88_wm_close`, the kernel's own close path** (§15.2). Answered in the RESIDENT `os88_oncmd`, because it is a latch and nothing else; `c64_exit_req` is set there and the top of `os88_onwake` spends it — sets `C64_ST_DEAD`, calls `os88_wm_close`, and returns with nothing after the call |
 | Edit > Copy | Alt+Delete | §7.7. Where a BIOS passes the chord, `os88_onkey` dispatches scan `0xA3` — a code no unmodified key produces, so it cannot be confused with the C64's own Del (`0x53`) |
 | Edit > Paste | Alt+Insert | §7.7. The chord is scan `0xA2`, against the C64's own Ins (`0x52`) |
 | Preferences > Fullscreen | Alt+D | §9.8. CHECK: rule 4's `*` |
@@ -1813,7 +1819,11 @@ the item's own first byte for `OS88_MENU_DIS` before calling `os88_oncmd`.
 
 ### 11.3 Program loading
 
-**File > Smart attach... (Alt+A)** opens the Standard File dialog on `*.PRG`.
+**File > Smart attach... (Alt+A)** opens the Standard File dialog (Open
+form, no default name - SPEC.md 38.9: the dialog does not filter by
+extension, so the `*.PRG` this once passed was a NAME no file has, sitting in
+the box. The box starts on SPEC.md 38.10's last-picked name, and Open is
+greyed until a row is selected).
 `os88_file_dlg` answers −1 when another modal dialog already owns the screen,
 and that is said — `A file dialog is already open.` — rather than swallowed.
 
@@ -1975,30 +1985,33 @@ button clamped inside the panel.
 
 SPEC.md §73's cap is **61,440** for resident image + bss, and SPEC.md §73.9's
 split trigger is **55,000 resident**. Five figures are reported: resident
-image, bss, `C64.OVL`, resident shims, largest frame — the lines `make c64`
+image, bss, the overlay, resident shims, largest frame — the lines `make c64`
 prints.
 
 ### 13.0 The measured line
 
-From a clean `make c64` of the tree as it stands (after apps size pass 1):
+From a clean `make c64` of the tree as it stands (after the overlay became a
+part, §13.3):
 
 ```
-cc8086: build/c64.raw.asm: 90 function(s), 34 frame byte(s) max
+cc8086: build/c64.raw.asm: 88 function(s), 34 frame byte(s) max
 cc8086: overlay - 7 function(s) moved to .modc, 7 entry vector(s), 29 resident shim(s), 7 loading call site(s)
-os88ovl: build/c64.bin -> build/c64.trim.bin (36088 resident) + build/C64.OVL (2323 tail)
+os88ovl: build/c64.bin -> build/c64.trim.bin (29840 resident) + build/C64.OVL (1940 tail)
 os88pkg: part 0 compressed lz4: 20480 -> 17362 bytes (84.8%)
-os88pkg: 'C64' entry=+0x0060 image=36088 bss=12950 icon=yes assoc=0
+os88pkg: part 1 compressed lz4: 1940 -> 1489 bytes (76.8%)
+os88pkg: compressed lz4: image 29840 -> 21337 bytes (71.5%), 96 clear; parts 17 sector(s) earlier, file 49105 -> 40401
+os88pkg: 'C64' entry=+0x0060 image=29840 bss=12930 icon=yes assoc=0 glyph=reduced -> build/c64.o88
 ```
 
 | | measured | of |
 |---|---|---|
-| resident image | **36,088** | |
-| bss | **12,950** | |
-| **resident total** | **49,038** | **61,440** — 12,402 spare, and 5,962 under §73.9's 55,000 trigger |
-| `C64.OVL` | **2,323** | on demand, in a 3 KB claim (`cc_ovneed` rounds up): `ovl_conv_init`, `ovl_cmd`, `ovl_load_prg`, `ovl_about_show`, and the three once-per-pick bodies `ovl_clip_service`, `ovl_reset_service`, `ovl_advance_frame` - each reached only after an `ovl_cmd` pick, so the module is in memory whenever they run |
+| resident image | **29,840** | |
+| bss | **12,930** | |
+| **resident total** | **42,770** | **61,440** — 18,670 spare, and 12,230 under §73.9's 55,000 trigger |
+| the overlay | **1,940** | part 1 of `C64.O88`, EAGER, in the parts carve beside the ROM (§13.3): `ovl_conv_init`, `ovl_cmd`, `ovl_load_prg`, `ovl_about_show`, and the three once-per-pick bodies `ovl_clip_service`, `ovl_reset_service`, `ovl_advance_frame` |
 | resident overlay shims | **29** | counted inside the image |
 | largest C frame | **34 bytes** | of the 96 SPEC.md §73 allows |
-| the file | **53,714** | image + `C64.OVL`'s trim + the 17,362-byte compressed part (§1.4) |
+| the file | **40,401** | the image LZ4-packed (21,337), the ROM part (17,362 packed) and the overlay part (1,489 packed), each starting on a sector |
 
 **Apps size pass 1** took the resident total from 53,450 to 49,038 (-4,412,
 -8.3%) with no feature and no hot path touched except to make it shorter.
@@ -2011,7 +2024,8 @@ executes FEWER instructions on every path, which is why the alarm scheduler,
 the timer step and the flush were allowed to take it. The rest is data:
 one string per menu check item with its mark byte written in place, the
 greyed and live spellings of an item sharing one literal (live = `+ 1`),
-one `Unable to load C64.OVL.` literal, `c64_kbd_init` harness-only (it
+one `Unable to load C64.OVL.` literal (since gone with the file, §13.3),
+`c64_kbd_init` harness-only (it
 stored zero over loader-zeroed bss), and the RAM-pattern page built in the
 composer's band. `hosttest/c64uitest.c` prints a byte-identical report
 before and after.
@@ -2027,18 +2041,18 @@ figure somebody will quote.
 
 | file | holds | resident |
 |---|---|---|
-| `apps/c64/c64.c` | the translation unit's root: the GPL-2 + VICE header, prototypes, the `C64_*` constants, the key ring, `os88_main` (the RAM claim, `os88_part_seg(0)`, the sound capability, `c64_x2init`, the tier, the register files, the RAM pattern, the scratch, the keyboard map armed, the window, the five-menu set, `about_set`, `onwake` installed and the first wake kicked), `os88_paint`, `os88_onkey` (the chords), `os88_onclick`, `os88_onfile` (§11.3), `os88_oncmd` (Exit answered here, everything else through `c64_ovl_ready` to `ovl_cmd`), **`os88_onwake` — the slice driver** (§4.4) with the latches it spends before the slice — `c64_exit_req`, `c64_reset_req`, `c64_copy_req`/`c64_paste_req` — and the `#include`s in order. **There is no `os88_worker`** | yes |
+| `apps/c64/c64.c` | the translation unit's root: the GPL-2 + VICE header, prototypes, the `C64_*` constants, the key ring, `os88_main` (the RAM claim, `os88_part_seg(0)`, the sound capability, `c64_x2init`, the tier, the register files, the RAM pattern, the scratch, the keyboard map armed, the window, the five-menu set, `about_set`, `onwake` installed and the first wake kicked), `os88_paint`, `os88_onkey` (the chords), `os88_onclick`, `os88_onfile` (§11.3), `os88_oncmd` (Exit answered here, everything else straight to `ovl_cmd`), **`os88_onwake` — the slice driver** (§4.4) with the latches it spends before the slice — `c64_exit_req`, `c64_reset_req`, `c64_copy_req`/`c64_paste_req` — and the `#include`s in order. **There is no `os88_worker`** | yes |
 | `apps/c64/c64io.c` | the `$D000-$DFFF` register files and the cdecl dispatch the core calls (§3.4); the alarm scheduler `c64_alarm_next` and `c64_advance` (§4.4); VIC, SID, colour RAM, CIA1/CIA2 with their TOD, the IRQ and NMI lines, the `$00`/`$01` port and the bank-map index (§3.2) | yes |
 | `apps/c64/c64kbd.c` | the two `gtk3_sym.vkm` tables, the cached matrix and the 16-entry down-list, the once-per-wake rebuild, the scan-routed Ctrl+H/I/M, the Ctrl-held digit poll, RESTORE with the Esc read, the joystick keyset, the ScrollLock hint, both of Copy's and Paste's loops and the two conversion tables they index (filled by `ovl_conv_init`), `ovl_clip_service` and the `$0277` feeder (§7.7) | yes |
 | `apps/c64/c64scr.c` | the dirty-page → cell-row mapping, the 1bpp frame shadow, the flush, the `k`-row shift test, `c64_geom` and the tier table, the luminance and EGA-16 tables, the border fills, the status row, the cost constants of §9.7 | yes |
 | `apps/c64/c64menu.c` | the five menu tables with every string and caption, the `OS88_MENU_DIS` greying with its fact in a comment beside it, the menu-set struct, `c64_menu_state` | yes |
-| `apps/c64/c64cmd.c` | `ovl_conv_init` (§13.3's first-wake probe and the two PETSCII tables) and `ovl_cmd`, every menu command's SHELL: the file dialog, the reset latches, the clipboard latches, fullscreen, warp, pause, advance frame, swap joysticks. No per-byte loop lives here (§7.7) and File > Exit is not here at all | **no** |
+| `apps/c64/c64cmd.c` | `ovl_conv_init` (the two PETSCII tables, called once from `os88_main`) and `ovl_cmd`, every menu command's SHELL: the file dialog, the reset latches, the clipboard latches, fullscreen, warp, pause, advance frame, swap joysticks. No per-byte loop lives here (§7.7) and File > Exit is not here at all | **no** |
 | `apps/c64/c64load.c` | `ovl_load_prg` (§11.3) | **no** |
 | `apps/c64/c64about.c` | `ovl_about_show` (§12) | **no** |
 | `apps/c64/c64cpu.inc` | the 6510 core (§4) | yes |
 | `apps/c64/c64mem.inc` | the movers and the scratch accessors (§3.6) | yes |
 | `apps/c64/c64band.inc` | the composers (§9.5) | yes |
-| `apps/c64/c64.asm` | the shim: `CC_PKG_NAME 'C64'`, `CC_HAS_ONKEY`/`ONCLICK`/`ABOUT`/`ONWAKE`/`MENUS`/`FDLG`/`OVL`/`PARTS` (no `WORKER`, §15.2), `CC_ICON`, `%include cc/crt0.asm`, the one-row parts table (§1.4), `c64.gen.asm`, then the three `.inc`s, `CC_IMAGE_END` | yes |
+| `apps/c64/c64.asm` | the shim: `CC_PKG_NAME 'C64'`, `CC_HAS_ONKEY`/`ONCLICK`/`ABOUT`/`ONWAKE`/`MENUS`/`FDLG`/`OVL`/`PARTS` (no `WORKER`, §15.2), `CC_ICON`, `%include cc/crt0.asm`, the two-row parts table (§1.4, §13.3), `c64.gen.asm`, then the three `.inc`s, `CC_IMAGE_END` | yes |
 | `apps/c64/icon.inc` | the 16×16 1-bit breadbin, drawn for this port | yes |
 | `apps/c64/COPYING` | VICE's GPL-2 text (§1.2) | — |
 | `apps/c64/README.TXT` | the disk's README (§14.2) | — |
@@ -2069,29 +2083,58 @@ staging in transient claims instead (§7.7).
   `os88_onwake`, `os88_onfile`, `os88_oncmd`, `os88_about` — because the
   runtime reaches one by a near offset. A callback that needs overlay code
   calls an already-loaded `ovl_*` helper.
-- **A LOCKED callback never crosses into `C64.OVL` unless the module is
-  already resident.** Reaching an `ovl_*` makes the runtime RESOLVE the
-  module, and if it is not resident that is an `OSAPI_MEM_CLAIM` and an
-  `OSAPI_FILE_READ` — a floppy seek, ~400 ms — inside whatever context asked.
-  `os88_oncmd`, `os88_about` and `os88_onfile` are dispatched under the
-  desktop's gfx lock, so `c64_ovl_ready(win)` is the fence: it refuses, says
-  `Unable to load C64.OVL.`, clears `c64_ovl_asked` and kicks a wake — and the
-  WAKE, which holds no lock and may call the file slots by contract (SPEC.md
-  §74.1), is what retries the load.
-- **The `.OVL` cannot be loaded from `os88_main`** — there is no instance yet
-  to resolve a module against. The first `ovl_*` call is made **from the first
-  wake**, and it is `ovl_conv_init()`: the far call the runtime makes on the
-  way in is what loads the module, so the probe is asked at the first moment
-  there is an instance, rather than discovered when a user picks a menu item.
-  Its refusal prints `Unable to load C64.OVL.` on the status row *and*
-  toasts, because a toast under a fullscreen window is not where the user is
-  looking (§9.8). Every body in `c64cmd.c` returns 1, so a 0 from a wrapper
-  never came from one of them.
-- **The probe does the port's once-per-launch work while it is there**:
-  `c64_sctab` and `c64_pettab` (§7.7) — the one thing in this program that
-  runs exactly once. The tables are bss and stay resident; only code moves.
-- `C64.O88` and `C64.OVL` are **two files in one folder** on every disk they
-  share (SPEC.md §19.2.1, SPEC.md §19.9) — §14.2.
+- **The overlay is PART 1 of `C64.O88`, and it is EAGER** (SPEC.md
+  §73.14.2: `CC_OVL_PART` in the shim, `CC_OVL_ROW` as the table's last row,
+  `part` as `CC_PACKAGE`'s fifth argument). `op_load` reads it at launch in the
+  same carve read as the ROM, and `crt0`'s `cc_ovinit` binds its vectors before
+  `os88_main` runs - so every `ovl_*` call is a far call to memory that is
+  already there, and the runtime's one remaining refusal is a WORKER asking,
+  which this program never does (§15.2).
+- **Eager and not lazy because the program used it in EVERY session.** As a
+  file, `C64.OVL` was loaded at the FIRST WAKE of every launch: `ovl_conv_init`
+  builds Copy's and Paste's tables there, so the read was never deferred past
+  the first tick. A lazy part would have kept that shape - a second open and
+  read of `C64.O88` a tick after the first - and paid `op_fetch`, `op_drop`
+  and the home bracket in resident code for it. Both arms were built and
+  measured on the same tree, before the C below changed:
+
+  | | file (before) | eager | lazy |
+  |---|---:|---:|---:|
+  | resident image | 30,188 | 30,004 | 30,772 |
+  | bss | 12,936 | 12,936 | 12,938 |
+  | on the disk | `C64.O88` 39,378 + `C64.OVL` 1,538 | `C64.O88` 40,444 | `C64.O88` 41,467 |
+  | `c64.img` / `c64120.img` clusters | 127 | 125 | 127 |
+  | `c64720.img` / `c64360.img` clusters | 65 | 64 | 65 |
+
+  The eager arm is SMALLER than the file form because the carve's code was
+  already here for the ROM, and what it deletes - the stamp, `cc_ovneed`'s
+  claim and read, its three refusals - was not.
+- **The refusal machinery went with the file.** A first-wake probe
+  (`c64_ovl_asked`/`c64_ovl_res`), a fence on every locked callback
+  (`c64_ovl_ready`: a module that is not resident must not be READ from a
+  floppy under the gfx lock), the `Unable to load C64.OVL.` row and every
+  `ovl_*` answering a status whose 0 meant "the file was not there" - all of it
+  existed to survive a missing or late module, and an eager part is neither.
+  `ovl_cmd`, `ovl_conv_init` and `ovl_load_prg` are `void` now; `ovl_about_show`
+  still answers, its 0 being a window with no geometry (`c64_geom`). The
+  rework took the image a further 164 bytes and the overlay 78, and the file
+  to **40,401** - one file where there were two, 515 bytes smaller.
+- **The carve stays PINNED, as the ROM's always was.** `c64_m.romseg` banks
+  `os88_part_seg(0)`, and `crt0` declares an eager carve movable only when the
+  overlay is its only part (SPEC.md §73.14.2.1). It is claimed top-down, so
+  the ~2KB of module that used to be a movable claim of its own is now beside
+  the ROM at the ceiling: one claim fewer against `MEM_OWNER_MAX`, measured
+  23.0K for both parts.
+- **Split by FREQUENCY, never by size** (SPEC.md §73.14): a keystroke's path
+  stays resident, a menu command's goes out.
+- **Every callback is resident** — `os88_paint`, `os88_onkey`, `os88_onclick`,
+  `os88_onwake`, `os88_onfile`, `os88_oncmd`, `os88_about` — because the
+  runtime reaches one by a near offset. A callback that needs overlay code
+  calls an `ovl_*` helper.
+- **The port's once-per-launch work is in the overlay**: `c64_sctab` and
+  `c64_pettab` (§7.7), filled by `ovl_conv_init` from `os88_main` — the one
+  thing in this program that runs exactly once. The tables are bss and stay
+  resident; only code moves.
 
 ---
 
@@ -2103,7 +2146,7 @@ staging in transient claims instead (§7.7).
 |---|---|
 | package name | `C64` |
 | source | `apps/c64/` |
-| shipped files | `C64.O88` (with the ROM as part 0, §1.4), `C64.OVL`, `README.TXT`, `COPYING` |
+| shipped files | `C64.O88` (with the ROM as part 0, §1.4, and the overlay as part 1, §13.3), `README.TXT`, `COPYING` |
 | window title | `VICE (C64)` |
 | menu-set `AM_NAME` | `VICE` |
 | images | `build/c64.img` (1.44MB), `build/c64720.img` (720KB), `build/c64120.img` (1.2MB), `build/c64360.img` (360KB) |
@@ -2113,17 +2156,19 @@ staging in transient claims instead (§7.7).
 ### 14.2 Disks
 
 Four geometries, each `os88disk.py --verify`'d in the recipe, each carrying
-the same five files in one `C64/` folder: `C64.O88`, `C64.OVL`, `README.TXT`
-naming the licence and the ROM copyright, and **`COPYING`, the licence text
-itself** — the floppy is the distributed form of a GPL-2-or-later program and
-`README.TXT` says the text travels with it, so it has to. Measured:
+the same three files in one `C64/` folder: `C64.O88` (the ROM and the
+overlay are parts of it, §1.4 and §13.3), `README.TXT` naming the licence and
+the ROM copyright, and **`COPYING`, the licence text itself** — the floppy is
+the distributed form of a GPL-2-or-later program and `README.TXT` says the
+text travels with it, so it has to. Measured, with the overlay still a file
+and after it became a part (§13.3):
 
-| geometry | clusters used |
-|---|---|
-| 1.44MB | 166 of 2,847 |
-| 720KB | 85 of 713 |
-| 1.2MB | 166 of 2,371 |
-| 360KB | 85 of 354 |
+| geometry | clusters used, `C64.OVL` a file | as a part |
+|---|---|---|
+| 1.44MB | 127 of 2,847 | **125** |
+| 720KB | 65 of 713 | **64** |
+| 1.2MB | 127 of 2,371 | **125** |
+| 360KB | 65 of 354 | **64** |
 
 If a later change puts something else on the 360KB image and `COPYING` no
 longer fits, the rule is **the licence stays and the other thing goes**.
@@ -2133,8 +2178,8 @@ candidate needs its own licence check. A released C64 disk boots to `READY.`
 and the user types.
 
 On `apps-all.img` the package gets **a folder of its own, `C64\`, never a
-place in `APPS/`** (SPEC.md §19.9, SPEC.md §19.10) — the same five files, for
-the same reason.
+place in `APPS/`** (SPEC.md §19.9, SPEC.md §19.10) — the same three files,
+for the same reason.
 
 ### 14.3 The three 86Box machines
 

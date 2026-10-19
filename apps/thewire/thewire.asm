@@ -216,6 +216,16 @@ WR_LNH      equ 10              ; a description line's pitch: an 8-row face
                                 ; and two of air, which is what gets five of
                                 ; them under the buttons on a VGA
 WR_STATN    equ 48              ; the status cell: 48 cells of 8 = the 384
+WR_STATB    equ 58              ; ...and wr_sline's BYTES, which are more:
+                                ; wr_statbuild COMPOSES and only then pads or
+                                ; cuts to WR_STATN, and its longest
+                                ; composition is 57 and a NUL - `Adding `, an
+                                ; 18-cell title, `255 of 255 files`, then
+                                ; ` 1024K of 1024K` (SPEC.md 92.15.3). At 49 a
+                                ; long title on a big transfer ran into
+                                ; wr_omsg, the very string being shown, and
+                                ; the next repaint read its own tail back as
+                                ; the head of the message
 
 WR_PICMIN   equ 170             ; the pane height at which the picture fits
                                 ; beside a title, a tier line and a
@@ -277,7 +287,7 @@ WR_RAMSLACK equ 16              ; the KB asked for OVER the tree when a store
                                 ; tree alone rather than a refusal
 
 ; --- and what the UI task is in the middle of (the Add chain) ----------------
-WJ_NONE     equ 0
+WJ_NONE     equ 0                   ; ZERO, and stored from a zeroed AL
 WJ_LOAD     equ 1
 WJ_ADD      equ 2
 
@@ -321,12 +331,8 @@ wr_entry:
     call OSAPI_WM_CREATE                ; BX = window ptr, CF on table full
     jc .out
     mov [wr_win], bx
-    push ax                             ; **THE GESTURE'S TWO SLOTS** (SPEC.md
-    push bx                             ; 20.5.1.3): neither is a template word
-    push si
-    push di
-    push dx
-    mov ax, bx
+    mov ax, bx                          ; **THE GESTURE'S TWO SLOTS** (SPEC.md
+                                        ; 20.5.1.3): neither is a template word
     mov bx, wr_btrec
     mov si, wr_onup
     mov di, wr_ondrag
@@ -334,18 +340,18 @@ wr_entry:
                                     ; takes the press FIRST and chains
                                     ; here (SPEC.md 20.5.1.3.3)
     call os88ui_btninit
-    pop dx
-    pop di
-    pop si
-    pop bx
-    pop ax
+    mov bx, [wr_win]                    ; the window again, for every slot
+                                        ; below; nothing else is carried
     mov word [wr_sel], 0xFFFF
     ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
     ; exists, and not beside any worker's declaration: a package with
     ; NO worker is the case that moves most easily, and putting it at
     ; the spawn left exactly those runs declaring nothing - measured,
     ; by the row that reads MC_RLOC back out of the kernel's own table.
-    OS88_REGION_MOVABLE
+    ; NOKEEP, naming a lone `ret`: AX and DX are set again below before
+    ; anything reads them, and the CF the loader is owed is the `clc` at the
+    ; end (SPEC.md 66.6.1.1)
+    OS88_REGION_MOVABLE_NOKEEP wr_ret
     mov si, wr_sizes
     call OSAPI_WM_PREFER                ; ...registers AND applies, and
                                         ; preserves the flags (SPEC.md 11.100.1)
@@ -566,8 +572,7 @@ wr_clip:
 wr_lockarm:
     call OSAPI_GFX_LOCK
     call wr_clip
-    call wr_geom
-    ret
+    jmp wr_geom
 
 ; --- wr_dall - the whole content, from a state change ------------------------
 ; The menu follows the buttons, the list follows the catalog and the pane and
@@ -577,15 +582,13 @@ wr_dall:
     call wr_menufix
     call wr_dlist
     call wr_ddet
-    call wr_dstat
-    ret
+    jmp wr_dstat
 
 ; --- wr_dend - what every finished chain redraws -----------------------------
 wr_dend:
     call wr_menufix
     call wr_dstat
-    call wr_dbtns
-    ret
+    jmp wr_dbtns
 
 ; =============================================================================
 ; THE PAINTERS
@@ -671,8 +674,7 @@ wr_dglyph:
     xor ah, ah                          ; never disabled: an empty catalog
                                         ; still filters to nothing, which is a
                                         ; true answer and not a refusal
-    call os88ui_glyph
-    ret
+    jmp os88ui_glyph
 
 ; -----------------------------------------------------------------------------
 ; wr_dlist - the list pane: its frame, every visible row, and the scroll bar
@@ -779,8 +781,7 @@ wr_rowrect:
     add cx, [wr_ox]
     mov dx, [wr_rowy]
     add dx, WR_ROWH - 1
-    call wr_dy
-    ret
+    jmp wr_dy
 
 ; --- wr_icocopy - 64 bytes from the catalog claim into wr_icobuf + 2 ---------
 ; in:  ES:SI = the record's WC_ICON; DS = ours
@@ -800,12 +801,15 @@ wr_icocopy:
                                         ; a blank square (SPEC.md 25.6)
     mov di, wr_icobuf + 2
     mov cx, 32
-.l:
-    mov ax, [es:si]
-    mov [di], ax
-    add si, 2
-    add di, 2
-    loop .l
+    push es                             ; the catalog, kept for the caller
+    push ds
+    push es
+    pop ds                              ; DS = the catalog...
+    pop es                              ; ...and ES = ours, for one movsw run
+    rep movsw
+    push es
+    pop ds
+    pop es
     pop si
     pop di
     pop cx
@@ -842,11 +846,10 @@ wr_rowtext:
     add si, WC_TITLE
     mov di, wr_line
 .c:
-    mov al, [es:si]
+    es lodsb
     cmp al, ' '
     jb .pad                             ; NUL, or a control byte off the wire
     mov [di], al
-    inc si
     inc di
     loop .c
 .pad:
@@ -1385,16 +1388,18 @@ wr_statbuild:                           ; (no BX: nothing below touches it,
 ; =============================================================================
 
 ; --- wr_sput - the NUL string at DS:SI to DS:DI ------------------------------
+; DI is left ON the NUL, which is written: a caller that is done composing has
+; a terminated string, and one that goes on composing writes over it. Every
+; buffer here has room for the terminator after its longest composition.
 wr_sput:
     push ax
     push si
 .c:
-    mov al, [si]
+    lodsb
+    mov [di], al
     or al, al
     jz .out
-    mov [di], al
     inc di
-    inc si
     jmp short .c
 .out:
     pop si
@@ -1412,14 +1417,13 @@ wr_sputn:
     push si
     jcxz .out
 .c:
-    mov al, [es:si]
+    es lodsb
     cmp al, ' '
     jb .out
     cmp al, 0x7F
     jae .out
     mov [di], al
     inc di
-    inc si
     loop .c
 .out:
     pop si
@@ -1635,10 +1639,12 @@ wr_catck:
     jne .no
     cmp word [es:WC_MAGIC+2], 'RE'
     jne .no
-    cmp byte [es:WC_VER], WIRE_VER
-    jne .no
-    cmp byte [es:WC_RSZ], WIRE_REC / 16
-    jne .no
+    cmp word [es:WC_VER], ((WIRE_REC / 16) << 8) | WIRE_VER
+    jne .no                             ; the version AND the record size, one
+                                        ; word: WC_RSZ is the byte after it
+%if WC_RSZ != WC_VER + 1
+  %error "wr_catck reads WC_VER and WC_RSZ as one word"
+%endif
     cmp word [es:WC_HSZ], WIRE_HDR
     jne .no
     mov cx, [es:WC_N]
@@ -1646,11 +1652,11 @@ wr_catck:
     jz .no
     cmp cx, WIRE_NMAX
     ja .no
-    mov ax, cx                          ; the record array must END inside the
-    push cx                             ; file. N <= 255 and 255 * 256 is
-    mov cl, 8                           ; 0xFF00, so the shift cannot wrap and
-    shl ax, cl                          ; the add is what has to be checked
-    pop cx
+    xor ax, ax                          ; the record array must END inside the
+    mov ah, cl                          ; file: N * 256, and N <= 255 (so CH is
+                                        ; 0) makes it 0xFF00 at most - the
+                                        ; product cannot wrap and the add is
+                                        ; what has to be checked
     add ax, WIRE_HDR
     jc .no
     cmp ax, [wr_catlen]
@@ -1673,13 +1679,12 @@ wr_catck:
     mov di, wr_abdate + WR_ABDATEO      ; is on the glass rather than which
     mov cx, 8                           ; build is under it
 .date:
-    mov al, [es:si]
+    es lodsb
     cmp al, '0'                         ; hostile: anything but eight digits
     jb .nodate                          ; leaves the question marks standing
     cmp al, '9'
     ja .nodate
     mov [di], al
-    inc si
     inc di
     loop .date
 .nodate:
@@ -1687,9 +1692,7 @@ wr_catck:
     xor bx, bx                          ; --- every record's own fields
 .rec:
     mov ax, bx
-    push cx
-    call wr_recs
-    pop cx
+    call wr_recs                        ; (CX kept)
     test byte [es:si+WC_FLAGS], WF_ARC
     jnz .arcrec                         ; an ARCHIVE is bounded differently and
                                         ; by different fields (below)
@@ -1926,41 +1929,35 @@ wr_onclick:
     jb .out
     cmp dx, WR_FY + OS88UI_GW - 1
     ja .list
-    call wr_filhit
-    jmp short .out
+    jmp wr_filhit
 
 .list:
     cmp cx, WR_SBX1                     ; --- the scroll bar
     jb .rows
     cmp cx, WR_SBX2
-    ja .det
+    ja .out                             ; the detail pane: nothing to do on a
+                                        ; press - the buttons are the gesture
+                                        ; library's, which took the press
+                                        ; before this ran (20.5.1.3.3), and
+                                        ; Add to Disk WRITES a floppy, so
+                                        ; neither may fire on a press the user
+                                        ; can still take back. wr_onup has the
+                                        ; action
     add cx, [wr_ox]
     add dx, [wr_oy]
-    call wr_sbclick
-    jmp short .out
+    jmp wr_sbclick
 
 .rows:
     cmp cx, 1
     jb .out
-    cmp dx, WR_PY + 1
-    jb .out
     mov ax, dx
-    sub ax, WR_PY + 1
+    sub ax, WR_PY + 1                   ; ...which is the row band's own test:
+    jb .out                             ; above it borrows
     mov cl, 4
     shr ax, cl                          ; / WR_ROWH
     cmp ax, [wr_rows]
     jae .out
     call wr_rowclick
-    jmp short .out
-
-.det:
-    cmp cx, WR_DX1
-    jb .out
-    add cx, [wr_ox]                     ; the buttons want absolute again
-    add dx, [wr_oy]
-    jmp short .out                      ; Disk WRITES a floppy, so neither may
-                                        ; fire on a press the user can still
-                                        ; take back. wr_onup has the action
 .out:
     ret
 
@@ -1995,8 +1992,7 @@ wr_filhit:
     call wr_dglyph                      ; ...and ONLY THE TWO THAT CHANGED:
     mov di, dx                          ; os88ui_glyph is 35-50 ms on the field
     call wr_dglyph                      ; machine, so five of them is a quarter
-    call wr_refilter                    ; of a second for a change of one
-    jmp short .out
+    jmp wr_refilter                     ; of a second for a change of one
 .next:
     inc di
     cmp di, 5
@@ -2078,8 +2074,8 @@ wr_sbclick:
     mov bx, wr_sb
     mov ax, WR_SBRATE | (WR_SBRATE286 << 8)
     call os88ui_sbrate                  ; the view follows every 2 ticks: a
-    call os88ui_sbgrab                  ; 12-row repaint is 36 drawing calls
-    jmp short .out                      ; and the field machine cannot do that
+    jmp os88ui_sbgrab                   ; 12-row repaint is 36 drawing calls
+                                        ; and the field machine cannot do that
 .up:                                    ; per mouse report (SPEC.md 13.10.5.4)
     mov ax, -1
     jmp short .by
@@ -2180,8 +2176,7 @@ wr_onup:
     or ax, ax
     jz .nobtn
     dec ax                          ; wr_do takes 0 = Load, 1 = Add to Disk
-    call wr_do
-    jmp .out
+    jmp wr_do
 .nobtn:
     call wr_geom
     jc .out
@@ -2223,7 +2218,7 @@ wr_onkey:
     je .end
     cmp ah, KSC_ENTER
     je .run
-    jmp short .out
+    ret
 .up:
     mov ax, -1
     jmp short .move
@@ -2243,8 +2238,7 @@ wr_onkey:
 .end:
     mov ax, 32000
 .move:
-    call wr_selby
-    jmp short .out
+    jmp wr_selby
 .run:
     xor al, al
     call wr_do
@@ -2308,26 +2302,14 @@ wr_oncmd:
     call wr_abdismiss
     call wr_geom
     jc .out
-    cmp al, 0
-    je .refresh
-    cmp al, 1
-    je .run
-    cmp al, 2
-    je .add
-    cmp al, 3
-    je .close
-    jmp short .out
+    cmp al, 3                           ; File: Refresh, Load Program, Add to
+    je .close                           ; Disk..., Close - and the middle two
+    ja .out                             ; are wr_do's own 0 and 1, one lower
+    sub al, 1
+    jc .refresh
+    jmp wr_do
 .refresh:
-    call wr_refresh
-    jmp short .out
-.run:
-    xor al, al
-    call wr_do
-    jmp short .out
-.add:
-    mov al, 1
-    call wr_do
-    jmp short .out
+    jmp wr_refresh
 .close:
     mov bx, [wr_win]
     call OSAPI_WM_CLOSE
@@ -2423,8 +2405,7 @@ wr_do:
     jnc .go
 .say:
     mov [wr_msg], si
-    call wr_dstat
-    jmp .out
+    jmp wr_dstat
 .go:
     mov byte [wr_ramjob], 0
     or al, al
@@ -2436,8 +2417,7 @@ wr_do:
     jnz .arc
     mov byte [wr_job], WJ_LOAD          ; --- Load Program: one file, and the
     mov word [wr_chain], 0              ; wake runs it
-    call wr_fetchnext
-    jmp short .out
+    jmp wr_fetchnext
 .arc:
     mov al, 1                           ; --- Load Program on an ARCHIVE: the
     call wr_ramck                       ; SECOND ask, and the one that MOUNTS
@@ -2453,8 +2433,7 @@ wr_do:
                                         ; program's own files are beside it
     mov byte [wr_ramjob], 1
     mov byte [wr_job], WJ_LOAD
-    call wr_arcstart
-    jmp short .out
+    jmp wr_arcstart
 .nordo:
     mov si, wr_r_nord                   ; a store that is mounted and cannot be
     jmp short .say                      ; stood on is a driver that is not
@@ -2478,43 +2457,34 @@ wr_do:
     ret
 
 ; --- wr_stemput - '<STEM><ext>' into DS:DI, for the selected record ----------
-; in:  DI = the buffer, SI = a NUL extension (wr_x_o88, wr_x_wpk); DI advanced
+; in:  DI = the buffer, SI = a NUL extension (wr_x_o88, wr_x_wpk); preserves
+;      every register - no caller goes on composing after it
 ;
 ; Three call sites want the same eight-and-three: the chain's first file, the
 ; Save dialog's default name and an archive's own .WPK. They had it three
 ; times over and one of the three banked a register the other two did not.
 wr_stemput:
-    push ax
-    push cx
-    push si
-    push es
+    call wr_sv                          ; AX..DI and ES, given back by the ret
     push si                             ; the extension, banked past wr_recs
     call wr_selrec                  ; ES:SI = the record
     add si, WC_STEM
     mov cx, 8
     call wr_stemcopy
     pop si
-    call wr_sput
-    mov byte [di], 0
-    pop es
-    pop si
-    pop cx
-    pop ax
-    ret
+    jmp wr_sput                         ; ...whose ret is ours
 
 ; --- wr_stemcopy - CX bytes of the space-padded stem at ES:SI to DS:DI -------
 ; A stem is 8 bytes padded with SPACES, and a space is where the name ends.
 wr_stemcopy:
     push ax
 .c:
-    mov al, [es:si]
+    es lodsb
     cmp al, ' '
     jbe .out
     cmp al, 0x7F
     jae .out
     mov [di], al
     inc di
-    inc si
     loop .c
 .out:
     pop ax
@@ -2537,17 +2507,15 @@ wr_saved:
     mov di, wr_savename                 ; SEGMENT**, which is where ES still
     mov cx, 13                          ; points on the way in (SPEC.md 20.1),
 .c:                                     ; and the buffer is valid for THIS CALL
-    mov al, [es:si]                     ; only - so it is copied here, through
+    es lodsb                            ; only - so it is copied here, through
     mov [di], al                        ; an override, BEFORE ES is turned
-    inc si                              ; round below. Without the override
-    inc di                              ; this reads our own image at that
+    inc di                              ; round below. Without the override
+                                        ; this reads our own image at that
     or al, al                           ; offset: it assembles, it runs, and
     jz .named                           ; what reaches OSAPI_FILE_WRITE is four
     loop .c                             ; bytes of garbage under a status cell
     mov byte [di-1], 0                  ; reading `Could not write ?)33`
 .named:
-    push ds
-    pop es
     call wr_geom
     jc .out
     call wr_selrec
@@ -2588,16 +2556,15 @@ wr_saved:
     call wr_selrec
     test byte [es:si+WC_FLAGS], WF_ARC
     jz .chain
-    call wr_arcstart                    ; --- an ARCHIVE unpacks where the
-    jmp short .out                      ; dialog pointed, and THE TYPED NAME IS
+    jmp wr_arcstart                     ; --- an ARCHIVE unpacks where the
+                                        ; dialog pointed, and THE TYPED NAME IS
                                         ; IGNORED (92.8): the archive names its
                                         ; own files, so there is one name the
                                         ; user could have typed and fifty-nine
                                         ; the machine is about to write
 .chain:
     mov word [wr_chain], 0
-    call wr_fetchnext
-    jmp short .out
+    jmp wr_fetchnext
 .noroom:
     mov word [wr_msg], wr_r_space
     call wr_dstat
@@ -2671,11 +2638,9 @@ wr_fetchnext:
     mov [wr_pnum], ax                   ; counts from one
     call wr_addprog
 .said:                                  ; [wr_msg], and a line written after
-    call wr_dstat                       ; the last file is a line nothing draws
-    jmp short .out
+    jmp wr_dstat                        ; the last file is a line nothing draws
 .done:
-    call wr_chaindone
-    jmp short .out
+    jmp wr_chaindone
 .nomem:
     mov ax, wr_s_nomem
     jmp short .ab
@@ -2743,41 +2708,42 @@ wr_chaindone:
     mov byte [wr_job], WJ_NONE
     call wr_freefile
     mov di, wr_omsg
-    call wr_selrec
-    push si
-    add si, WC_TITLE
     mov cx, 23
-    call wr_sputn
-    pop si
-    push ds
-    pop es
+    call wr_otitle
     mov si, wr_s_added
     cmp byte [wr_ramjob], 0             ; ...and WHERE it landed, which for an
     je .say                             ; archive run from RAM is not a disk
     mov si, wr_s_addram                 ; the user can put in a drawer (92.8)
 .say:
     call wr_sput
-    mov byte [di], 0
-    mov si, wr_omsg
-    xor cx, cx
-    call OSAPI_TOAST                    ; ES:SI, and ES is ours (SPEC.md 59)
-    mov word [wr_msg], wr_omsg
-    call wr_dend
-    ret
+    call wr_otoast
+    jmp wr_dend                         ; ...whose ret is ours
 
 ; -----------------------------------------------------------------------------
 ; wr_refresh - re-fetch the catalog (File > Refresh)
 ; -----------------------------------------------------------------------------
 wr_refresh:
     call wr_sv                          ; AX..DI and ES, given back by the ret
-    mov byte [wr_job], WJ_NONE
-    call wr_freefile
-    mov word [wr_n], 0
-    mov word [wr_sel], 0xFFFF
-    mov word [wr_top], 0
-    mov byte [wr_picok], 0
-    call wr_netcheck
-    jc .say
+    xor ax, ax
+    mov [wr_job], al                    ; WJ_NONE
+    call wr_freefile                    ; (AX kept)
+    mov [wr_n], ax
+    mov [wr_top], ax
+    mov [wr_picok], al
+    dec ax
+    mov [wr_sel], ax                    ; 0xFFFF, nothing selected
+    call net_find                       ; --- IS THERE A STACK AT ALL? net_find
+    mov ax, wr_s_nodrv                  ; and NETV_STATE (OS88SOCK_STATE) are
+    mov bl, 1                           ; worker-safe AND UI-safe, so asking
+    jc .nonet                           ; here costs the worker nothing and
+    jz .nonet                           ; lets the window open already saying
+    xor ax, ax                          ; what is wrong (NSTF_SOCK clear is
+    xor bl, bl                          ; the jz)
+.nonet:
+    mov [wr_msg], ax
+    mov [wr_nodrv], bl
+    or bl, bl
+    jnz .say
     mov ax, WIRE_CATMAX / 1024          ; the transfer wants the whole ceiling
     mov dx, [wr_catseg]                 ; again: the first time a claim, and
     or dx, dx                           ; every time after a REGROW of the one
@@ -2806,32 +2772,7 @@ wr_refresh:
 .nomem:
     mov word [wr_msg], wr_s_nomem
 .say:
-    call wr_dall
-    ret
-
-; --- wr_netcheck - is there a stack at all? ----------------------------------
-; out: CF = 1 no, [wr_nodrv] set and [wr_msg] said
-; net_find is worker-safe AND UI-safe, so asking here costs the worker nothing
-; and lets the window open already saying what is wrong.
-wr_netcheck:
-    push ax
-    push bx
-    mov byte [wr_nodrv], 0
-    call net_find                       ; ...and NETV_STATE (OS88SOCK_STATE)
-    jc .no
-    jz .no                              ; NSTF_SOCK clear
-    mov word [wr_msg], 0
-    pop bx
-    pop ax
-    clc
-    ret
-.no:
-    mov byte [wr_nodrv], 1
-    mov word [wr_msg], wr_s_nodrv
-    pop bx
-    pop ax
-    stc
-    ret
+    jmp wr_dall
 
 ; --- wr_picwant - fetch the selected record's picture, if the worker is free -
 wr_picwant:
@@ -3078,6 +3019,31 @@ wr_wrfail:
     mov word [wr_msg], wr_omsg
     ret
 
+; --- wr_ohead / wr_otitle - '<head><title>' into wr_omsg --------------------
+; in:  SI = a NUL head (wr_ohead), DI = where the title goes (wr_otitle), CX =
+;      the title's most cells; out: DI on the end, ES = DS, SI spent
+; The three outcome sentences that name the program - Adding, Loaded and
+; added - each composed the selected record's title the same way.
+wr_ohead:
+    mov di, wr_omsg
+    call wr_sput
+wr_otitle:
+    call wr_selrec
+    add si, WC_TITLE
+    call wr_sputn
+    push ds
+    pop es
+    ret
+
+; --- wr_otoast - wr_omsg is the outcome: the status cell's AND a toast ------
+; Clobbers SI and CX.
+wr_otoast:
+    mov si, wr_omsg
+    mov [wr_msg], si
+    xor cx, cx
+    call OSAPI_TOAST                    ; ES:SI, and ES is ours (SPEC.md 59)
+    ret
+
 ; --- wr_addprog - 'Adding <title>... N of M files' ---------------------------
 ; **THE TWO NUMBERS ARE PASSED IN [wr_pnum] AND [wr_ptot]** rather than derived
 ; here, because there are two chains now and they count different things: the
@@ -3086,15 +3052,9 @@ wr_wrfail:
 ; and the sentence a person reads is the same either way.
 wr_addprog:
     call wr_sv                          ; AX..DI and ES, given back by the ret
-    mov di, wr_omsg
     mov si, wr_s_adding
-    call wr_sput
-    call wr_selrec
-    add si, WC_TITLE
     mov cx, 18
-    call wr_sputn
-    push ds
-    pop es
+    call wr_ohead
     mov byte [di], ' '
     inc di
     mov ax, [wr_pnum]
@@ -3109,7 +3069,6 @@ wr_addprog:
     mov si, wr_s_file
 .pl:
     call wr_sput
-    mov byte [di], 0
     mov word [wr_msg], wr_omsg
     ret
 
@@ -3157,41 +3116,22 @@ wr_pkgrun:
     call OSAPI_PKG_START                ; the canonical pairing, where the two
                                         ; used to be the other way round
     jc .bad
-    push ds
-    pop es
-    mov di, wr_omsg                     ; 'Loaded <title> from the Wire'
-    mov si, wr_s_loaded
-    call wr_sput
-    call wr_selrec
-    add si, WC_TITLE
+    mov si, wr_s_loaded                 ; 'Loaded <title> from the Wire'
     mov cx, 23
-    call wr_sputn
-    push ds
-    pop es
+    call wr_ohead
     mov si, wr_s_fromw
     call wr_sput
-    mov byte [di], 0
-    mov word [wr_msg], wr_omsg
-    mov si, wr_omsg
-    xor cx, cx
-    call OSAPI_TOAST
-    jmp short .out
+    jmp short wr_otoast                 ; ...whose ret is ours
 .bad:
     mov word [wr_msg], wr_s_fmt         ; the loader's LD_EVER (SPEC.md 20.2.0)
     cmp al, OSAPI_LD_EVER               ; in words: the one refusal here a user
     je .out                             ; can act on
-    push ds
-    pop es
     xor ah, ah
-    push ax
     mov di, wr_omsg                     ; the LD_* code in words, because
     mov si, wr_s_ldfail                 ; 'it did not start' with no number is
     call wr_sput                        ; a bug report nobody can act on
-    pop ax
-    call wr_snum
-    mov byte [di], ')'
-    inc di
-    mov byte [di], 0
+    call wr_snum                        ; (AX kept by wr_sput)
+    mov word [di], ')'                  ; the parenthesis and its NUL
     mov word [wr_msg], wr_omsg
 .out:
     ret
@@ -3215,16 +3155,14 @@ wr_cfgload:
     mov si, wr_def_host                 ; the defaults FIRST, so every exit
     mov di, wr_host                     ; below leaves a working configuration
     call wr_sput
-    mov byte [di], 0
     mov si, wr_def_pfx
     mov di, wr_pfx
     call wr_sput
-    mov byte [di], 0
     mov word [wr_port], 80
 
-    call OSAPI_FILE_HERE                ; DX = our cwd, BL = our drive
-    mov [wr_dbclus], dx
-    mov [wr_dbdrv], bl
+    call OSAPI_FILE_HERE                ; DX = our cwd, BL = our drive, and
+    push dx                             ; both banked on the stack across the
+    push bx                             ; walk and the parse
     xor dx, dx
     call OSAPI_FILE_GOTO_QM             ; the ROOT of that same volume
     jc .home
@@ -3242,13 +3180,12 @@ wr_cfgload:
     jc .home
     or dx, dx
     jnz .home                           ; longer than the buffer: not ours
-    or ax, ax
-    jz .home
-    mov [wr_cfgn], ax
+    mov cx, ax
+    jcxz .home
     call wr_cfgparse
 .home:
-    mov dx, [wr_dbclus]
-    mov bl, [wr_dbdrv]
+    pop bx
+    pop dx
     call OSAPI_FILE_GOTO_QM
     ret
 
@@ -3273,22 +3210,15 @@ wr_dive:
     jc .no
     cmp word [wr_fbuf+14], OSAPI_FT_DIR
     jne .l
-    push cx
     mov si, [wr_dvname]
     mov di, wr_fbuf
-    call wr_ieq
-    pop cx
+    call wr_ieq                         ; (CX kept)
     jc .l
     mov dx, [wr_fbuf+16]
     call OSAPI_FILE_HERE                ; BL = the drive; DX is spent by it...
     mov dx, [wr_fbuf+16]                ; ...so the cluster goes back
-    call OSAPI_FILE_GOTO_QM
-    jc .no
-    clc
-    jmp short .out
-.no:
-    stc
-.out:
+    call OSAPI_FILE_GOTO_QM             ; CF = its answer, which is ours
+.no:                                    ; ...and CF = 1 on the jump here
     ret
 
 ; --- wr_ieq - the NUL strings at DS:SI and DS:DI, case-blind. CF = 0 equal ---
@@ -3304,14 +3234,11 @@ wr_ieq:
     xchg al, bl
     cmp al, bl
     jne .no
-    or al, al
-    jz .yes
+    or al, al                           ; both NUL: equal, and `or` has
+    jz .out                             ; cleared CF
     inc si
     inc di
     jmp short .c
-.yes:
-    clc
-    jmp short .out
 .no:
     stc
 .out:
@@ -3321,12 +3248,12 @@ wr_ieq:
 
 wr_upper:
     cmp al, 'a'
-    jb .out
+    jb wr_ret
     cmp al, 'z'
-    ja .out
+    ja wr_ret
     sub al, 32
-.out:
-    ret
+wr_ret:                                 ; a lone `ret`, and so ALSO the
+    ret                                 ; region's relocation proc (wr_entry)
 
 ; --- wr_cfgparse - `host[:port][/prefix/]`, one line -------------------------
 ; The parse is deliberately forgiving about what follows the line - a CR, an
@@ -3334,10 +3261,10 @@ wr_upper:
 ; PREFIX, which is forced to start and end with a slash: a request path is
 ; composed by concatenation and a prefix without its slashes composes a URL
 ; that is wrong in a way the server answers 404 to rather than refusing.
+; in:  CX = the file's length, at wr_cfgb; clobbers AX..DI - its one caller,
+;      wr_cfgload, saves them all through wr_sv
 wr_cfgparse:
-    call wr_sv                          ; AX..DI and ES, given back by the ret
     mov si, wr_cfgb
-    mov cx, [wr_cfgn]
     mov di, wr_host                     ; --- the host
     mov bx, WR_HOSTMAX - 1
 .h:
@@ -3362,31 +3289,27 @@ wr_cfgparse:
     mov byte [di], 0
     inc si
     dec cx
-    mov word [wr_port], 0
+    xor bx, bx                          ; --- the port, accumulated in BX
 .p:
     jcxz .pend
     mov al, [si]
-    cmp al, '0'
-    jb .pend
-    cmp al, '9'
+    sub al, '0'                         ; a digit is 0..9 after this, and
+    cmp al, 9                           ; anything else is above 9 unsigned
     ja .pend
-    push cx
-    sub al, '0'
-    mov bl, al
-    xor bh, bh
-    mov ax, [wr_port]
-    mov cx, 10
-    mul cx
-    add ax, bx
-    mov [wr_port], ax
-    pop cx
+    cbw
+    xchg ax, bx                         ; AX = the port so far, BX = the digit
+    mov dx, 10
+    mul dx                              ; ...the low word, so a port that laps
+    add bx, ax                          ; 16 bits wraps as it always did
     inc si
     dec cx
     jmp short .p
 .pend:
-    cmp word [wr_port], 0
-    jne .path
-    mov word [wr_port], 80
+    or bx, bx                           ; `host:` with no digits is the
+    jnz .port                           ; default port, as no colon is
+    mov bl, 80
+.port:
+    mov [wr_port], bx
     jmp short .path
 .hend:
     mov byte [di], 0
@@ -3397,7 +3320,6 @@ wr_cfgparse:
     push si                             ; all: keep the default
     mov si, wr_def_host
     call wr_sput
-    mov byte [di], 0
     pop si
 .hok:
     jcxz .out
@@ -3478,7 +3400,8 @@ wr_state    equ os88_image_end + 14     ; byte: WS_*
 wr_kind     equ os88_image_end + 15     ; byte: WK_*
 wr_hnd      equ os88_image_end + 16     ; byte: the socket handle, 0 = none
 wr_hstate   equ os88_image_end + 17     ; byte: the header scan's line state
-wr_dbdrv    equ os88_image_end + 18     ; byte: the banked drive (19.9)
+                                        ; +18 is free (wr_cfgload banks the
+                                        ; cwd on the stack now)
 wr_grey     equ os88_image_end + 19     ; byte: bit 0 = Load Program is greyed,
                                         ; bit 1 = Add to Disk... is - written
                                         ; by the painter that greys them
@@ -3501,14 +3424,19 @@ wr_catlen   equ os88_image_end + 46
 wr_n        equ os88_image_end + 48     ; word: records, 0 = no catalog
 wr_sel      equ os88_image_end + 50     ; word: the selected RECORD, 0xFFFF
 wr_top      equ os88_image_end + 52     ; word: the first visible row
-wr_msg      equ os88_image_end + 54     ; word: what the status cell says
+wr_reqn     equ os88_image_end + 54
 wr_chain    equ os88_image_end + 56     ; word: which file of the set
 wr_fseg     equ os88_image_end + 58     ; word: the transfer claim
 wr_flen     equ os88_image_end + 60
 wr_dseg     equ os88_image_end + 62     ; word: where the body is going...
 wr_dbase    equ os88_image_end + 64
 wr_dmax     equ os88_image_end + 66
-wr_got      equ os88_image_end + 68     ; DWORD: ...and how much has
+WR_ZERO     equ 68                      ; **FROM wr_got TO wr_rxn IS ONE
+                                        ; BLOCK**: wr_start zeroes it in one
+                                        ; rep stosw, so a word that a new
+                                        ; transfer must start from zero goes
+                                        ; inside it
+wr_got      equ os88_image_end + WR_ZERO ; DWORD: ...and how much has
 wr_clen     equ os88_image_end + 72     ; DWORD: Content-Length
                                         ; **BOTH ARE DWORDS BECAUSE OF THE
                                         ; ARCHIVE** (92.13): a .WPK is the
@@ -3526,10 +3454,13 @@ wr_code     equ os88_image_end + 76     ; word: the status code
 wr_hline    equ os88_image_end + 78     ; word: which reply line
 wr_hlen     equ os88_image_end + 80     ; word: how much of it is buffered
 wr_sent     equ os88_image_end + 82     ; word: request bytes on the wire
-wr_reqn     equ os88_image_end + 84
-wr_port     equ os88_image_end + 86
-wr_cfgn     equ os88_image_end + 88
-wr_dbclus   equ os88_image_end + 90     ; word: the banked cwd (19.9)
+wr_msg      equ os88_image_end + 84     ; word: what the status cell says
+wr_rxp      equ os88_image_end + 86     ; word: the read position in wr_rxb,
+                                        ; so a pause keeps the rest of the
+                                        ; chunk...
+wr_rxn      equ os88_image_end + 88     ; word: ...and what is left
+WR_ZEROW    equ (90 - WR_ZERO) / 2      ; ...which is where the block ends
+wr_port     equ os88_image_end + 90     ; word: the server's port
 wr_shown    equ os88_image_end + 92     ; word: the K figure last drawn
 wr_wname    equ os88_image_end + 94     ; word: the name OSAPI_FILE_WRITE was
                                         ; given, banked because a DVK_FILE
@@ -3548,7 +3479,7 @@ wr_ra       equ os88_image_end + WR_B0 + 14         ; 4 words: Load Program
 wr_rb       equ os88_image_end + WR_B0 + 22         ; 4 words: Add to Disk...
 wr_line     equ os88_image_end + WR_B0 + 30         ; WR_LINEN, the PAINTERS'
 wr_sline    equ os88_image_end + WR_B0 + 30 + WR_LINEN
-WR_OMSGO    equ WR_B0 + 30 + WR_LINEN + WR_STATN + 1
+WR_OMSGO    equ WR_B0 + 30 + WR_LINEN + WR_STATB
 wr_omsg     equ os88_image_end + WR_OMSGO           ; 48: and the OUTCOME's,
                                                     ; which may NOT be wr_line.
                                                     ; [wr_msg] points at it and
@@ -3569,7 +3500,7 @@ wr_omsg     equ os88_image_end + WR_OMSGO           ; 48: and the OUTCOME's,
 ; painter, and the worker reaches wr_dstat only through wr_nshow's lock - so
 ; the worker's status repaint cannot land between a copy and its draw.
 wr_icobuf   equ wr_line
-%if WR_LINEN + WR_STATN + 1 < 66
+%if WR_LINEN + WR_STATB < 66
   %error "wr_icobuf's 66 bytes do not fit wr_line and wr_sline"
 %endif
 WR_B1       equ WR_OMSGO + 48
@@ -3672,18 +3603,14 @@ wr_asto     equ os88_image_end + WR_B7 + 20         ; word: ...and stored
 wr_aout     equ os88_image_end + WR_B7 + 22         ; word: bytes decoded
 wr_ain      equ os88_image_end + WR_B7 + 24         ; word: stored bytes fed
 wr_bclus    equ os88_image_end + WR_B7 + 26         ; word: the base folder
-wr_rxp      equ os88_image_end + WR_B7 + 28         ; word: the read position in
-                                                    ; wr_rxb, so a pause keeps
-                                                    ; the rest of the chunk
-wr_rxn      equ os88_image_end + WR_B7 + 30         ; word: ...and what is left
-wr_pnum     equ os88_image_end + WR_B7 + 32         ; word: 'N of M', the N...
-wr_ptot     equ os88_image_end + WR_B7 + 34         ; word: ...and the M
-wr_rlen     equ os88_image_end + WR_B7 + 36         ; word: the bytes handed to
+wr_pnum     equ os88_image_end + WR_B7 + 28         ; word: 'N of M', the N...
+wr_ptot     equ os88_image_end + WR_B7 + 30         ; word: ...and the M
+wr_rlen     equ os88_image_end + WR_B7 + 32         ; word: the bytes handed to
                                                     ; OSAPI_PKG_START
-wr_needkb   equ os88_image_end + WR_B7 + 38         ; word: WC_NEEDKB, banked
+wr_needkb   equ os88_image_end + WR_B7 + 34         ; word: WC_NEEDKB, banked
                                                     ; because OSAPI_DRV_CALL
                                                     ; owns every register
-wr_dvname   equ os88_image_end + WR_B7 + 40         ; word: the folder name
+wr_dvname   equ os88_image_end + WR_B7 + 36         ; word: the folder name
                                                     ; wr_dive is looking for,
                                                     ; banked past a file cell
                                                     ; that owns SI
@@ -3691,19 +3618,19 @@ wr_catkb    equ os88_image_end + WR_B7 + 11         ; byte: the KB the catalog
                                                     ; claim holds now (wr_onwake
                                                     ; shrinks it, wr_refresh
                                                     ; grows it back)
-wr_anb      equ os88_image_end + WR_B7 + 42         ; 13: one path slot, copied
+wr_anb      equ os88_image_end + WR_B7 + 38         ; 13: one path slot, copied
                                                     ; and TERMINATED. SPEC.md
                                                     ; 92.13's twelve-character
                                                     ; name fills its slot with
                                                     ; no NUL, and every kernel
                                                     ; cell reads to one
-wr_abig     equ os88_image_end + WR_B7 + 55         ; byte: this entry is
+wr_abig     equ os88_image_end + WR_B7 + 51         ; byte: this entry is
                                                     ; past the claim and comes
                                                     ; in PIECES (92.13.1)...
-wr_apiece   equ os88_image_end + WR_B7 + 56         ; byte: ...and how many of
+wr_apiece   equ os88_image_end + WR_B7 + 52         ; byte: ...and how many of
                                                     ; them are written. The two
                                                     ; ARE ADJACENT: wr_aentck
                                                     ; clears both with one word
-wr_abrem    equ os88_image_end + WR_B7 + 58         ; dword: the big entry's
+wr_abrem    equ os88_image_end + WR_B7 + 54         ; dword: the big entry's
                                                     ; bytes not yet stored
-WR_BSS      equ WR_B7 + 62
+WR_BSS      equ WR_B7 + 58

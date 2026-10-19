@@ -415,11 +415,14 @@ void wd_lcaroff(int *blk);
 #define WD_ACANCEL (-1)         /* ...and the answer for a DISMISSED alert */
 
 /* ============================================================================
- * WEAVE.WSM - THE CANVAS CORE (WEAVE-SPEC 1.2.2, 6.10), apps/weave/wcanvas.asm
+ * THE CANVAS CORE (WEAVE-SPEC 1.2.2, 6.10), apps/weave/wcanvas.asm
  *
  * A SECOND, RESIDENT SEGMENT and not an overlay, because every byte of it
  * runs on a WORKER task per frame and SPEC.md 73.14's cc_ovneed refuses a
  * worker at its first instruction. WEAVE-PLAN 2.9 prices the alternatives.
+ * It is PART 0 of WEAVE.O88 (it was the file WEAVE.WSM), a lazy row the
+ * canvas load path fetches with w_partfetch() - W_WSMPART names the row, and
+ * weave.asm's %if holds the number to its table.
  *
  * Everything below is a C COPY of apps/weave/wsmabi.inc, which is the file
  * both assemblies share, and IT IS NOT THE CONTRACT: docs/WEAVE-SPEC.md
@@ -469,19 +472,22 @@ void wd_lcaroff(int *blk);
 
 #define WSM_MAXSPR 16               /* 2.11's own cap */
 
+#define W_WSMPART  0               /* the canvas core's row in the parts
+                                     * table (apps/weave/weave.asm) */
+
 /* --- the seam (apps/weave/wcv.inc) ---------------------------------------
  * The magic, the ABI number and the module's size are NOT copied here: they
  * are nasm equs out of the two files the two assemblies share, and a C copy
- * would be a fourth place for the contract to drift - which is the exact
- * failure the ABI word exists to prevent. wcv_stamp() checks all three where
- * they live. */
+ * would be a fourth place for the contract to drift. They are not CHECKED
+ * any more either: the module is a part of the package's own file, so there
+ * is no stale pair for a stamp to catch (WEAVE-SPEC 1.2.2). */
 unsigned wcv_call(unsigned verb, unsigned a, unsigned b, unsigned c);
 void     wcv_bindmod(unsigned seg);
 void     wcv_run(void *win);        /* the worker's body; it does not return */
-int      wcv_kb(void);              /* the module's claim, in KB */
-unsigned wcv_bytes(void);           /* ...and in bytes, to check the read */
-int      wcv_stamp(unsigned seg);   /* 0 ok, 1 not ours/truncated, 2 stale */
+int      wcv_kb(void);              /* the module's claim, in KB (10.1) */
 unsigned wcv_stateoff(unsigned seg);
+int      w_partfetch(int part);     /* a lazy part, from HOME: 0 / -1
+                                     * (apps/weave/wfetch.inc) */
 void     wcv_ops(int spent);        /* 4.12's banner: one exhausted slice */
 unsigned wcv_opsps(void);           /* ...and the last window's answer */
 

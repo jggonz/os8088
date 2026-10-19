@@ -54,7 +54,10 @@ ap.add_argument("--second", default="apps/pixel/samples/MOUNTAIN.BMP")
 a = ap.parse_args()
 
 syms, image = pkg_syms()
-o88 = open(os88build.at("build/pixel.o88"), "rb").read()
+import os88pkg                                          # noqa: E402
+# the IMAGE, not the file: a parted package's image ships packed when that
+# saves a sector (SPEC.md 20.13.8)
+o88 = os88pkg.image_unwrap(open(os88build.at("build/pixel.o88"), "rb").read())
 if o88[:syms["op_table"]] != image[:syms["op_table"]]:
     sys.exit("build/pixel.o88 is not this tree's pixel.asm - run "
              "`make build/pixel.o88`")

@@ -600,8 +600,14 @@ class UI:
     # is over it. raise_window, close and move_window send a desk window
     # here, so a caller written for a titled window drives a widget too.
     # =========================================================================
-    _WIDGETS = {"Desk Calendar": ("DESKCAL_STIK_BSS", "DESKCAL_PAYLEN"),
-                "Desk Clock": ("DESKCLOK_STIK_BSS", "DESKCLOK_PAYLEN"),
+    # (STIK_BSS, STIK_PAYLEN[, lib]): lib names os88stik's flag for a build
+    # on the shared library, whose state is in its block (SPEC.md 110.15)
+    _WIDGETS = {"Desk Calendar": ("DESKCAL_STIK_BSS", "DESKCAL_PAYLEN",
+                                  "DESKCAL_LIB"),
+                "Desk Clock": ("DESKCLOK_STIK_BSS", "DESKCLOK_PAYLEN",
+                               "DESKCLOK_LIB"),
+                "Sticky Note": ("STIKNOTE_STIK_BSS", "STIKNOTE_PAYLEN",
+                                "STIKNOTE_LIB"),
                 "DeskProbe": (288, 0)}
 
     def _is_desk(self, w):
@@ -627,7 +633,8 @@ class UI:
         rec = self._S("wm_wins") + w.i * geom.WIN_SIZE
         seg = struct.unpack("<H", bytes(self.m.read(rec + geom.W_SEG, 2)))[0]
         img = struct.unpack("<H", bytes(self.m.readseg(seg, 8, 2)))[0]
-        off = os88stik.widget_off(stik[0], stik[1])[name]
+        lib = bool(stik[2]) if len(stik) > 2 else False
+        off = os88stik.state_off(lib, stik[0], stik[1], img)[name]
         return self.m.readseg(seg, img + off, 1)[0]
 
     def _above(self, w):

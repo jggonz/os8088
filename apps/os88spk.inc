@@ -232,27 +232,24 @@ os88spk_go:
                                     ; of nothing but the door itself
     pushf
     cli
-    push ax                         ; A DRY RING PLAYS A RUN OF SILENCE,
-    push cx                         ; OS88SPK_DRYN samples a grant: one
-    push di                         ; sample a grant made the grant's event
-    push es                         ; every pulse, ~400 cycles more each,
-    push cs                         ; and a producer the ring had outrun
-    pop es                          ; was then starved by the very pulses it
-    mov di, os88spk_silb            ; was behind - and never caught up
-    mov al, [cs:os88spk_sil]        ; (SPEC.md 34.11.2)
-    mov cx, OS88SPK_DRYN
-    cld
-    rep stosb
+    push cx                         ; A DRY RING PLAYS A RUN OF SILENCE,
+    push es                         ; OS88SPK_DRYN samples a grant: one
+    push cs                         ; sample a grant made the grant's event
+    pop es                          ; every pulse, ~400 cycles more each,
+    mov di, os88spk_silb            ; and a producer the ring had outrun
+    mov al, [cs:os88spk_sil]        ; was then starved by the very pulses it
+    mov cx, OS88SPK_DRYN            ; was behind - and never caught up
+    cld                             ; (SPEC.md 34.11.2). (AX is an output
+    rep stosb                       ; and DI was saved on the way in)
     pop es
-    pop di
     pop cx
-    pop ax
     mov word [cs:os88spk_rp], os88spk_silb  ; the first sample a silent one,
     mov [cs:os88spk_rp+2], cs       ; and its event the first grant
-    mov byte [cs:os88spk_dry], 1
-    mov word [cs:os88spk_g], 1
-    mov word [cs:os88spk_left], 1
-    mov word [cs:os88spk_kr], 1     ; ...which ends a period: K and the
+    mov ax, 1
+    mov [cs:os88spk_dry], al
+    mov [cs:os88spk_g], ax
+    mov [cs:os88spk_left], ax
+    mov [cs:os88spk_kr], ax         ; ...which ends a period: K and the
     popf                            ; chain are set by then, below
     mov dx, [cs:os88spk_n]
     mov si, os88spk_isr
@@ -334,6 +331,35 @@ os88spk_stop:
     pop ax
     clc
     ret
+
+; -----------------------------------------------------------------------------
+; os88spk_isrd - os88spk_isr for a COVOX (SPEC.md 34.14): the sample out of the
+; parallel port's data register instead of a count into channel 2. DX is the
+; one more register, and the port is the `mov`'s own immediate, written by
+; os88spk_go - so nothing is read per sample that os88spk_isr does not read.
+; The event paths are os88spk_isr's, entered with its three words pushed
+; -----------------------------------------------------------------------------
+os88spk_isrd:
+    push ax
+    push si
+    push ds
+    push dx
+    cld                             ; (os88spk_isr's reason)
+    lds si, [cs:os88spk_rp]
+    lodsb                           ; a sample, unsigned
+.port:
+    mov dx, 0x0378                  ; (the port, patched in)
+    out dx, al                      ; ...and the voltage
+    pop dx
+    mov [cs:os88spk_rp], si
+    dec word [cs:os88spk_left]
+    jz os88spk_isr.ev               ; (in front of os88spk_isr: in reach)
+    mov al, 0x20
+    out 0x20, al
+    pop ds
+    pop si
+    pop ax
+    iret
 
 ; -----------------------------------------------------------------------------
 ; os88spk_isr - IRQ0, once a sample: the vector is ours while the door is open,
@@ -428,46 +454,13 @@ os88spk_isrm:
     mov [cs:.hv+1], al
     mov [cs:os88spk_rp], si
     dec word [cs:os88spk_left]
-    jz .ev
+    jz os88spk_isr.ev               ; (in a short jump's reach)
     mov al, 0x20
     out 0x20, al
     pop ds
     pop si
     pop ax
     iret
-.ev:
-    jmp os88spk_isr.ev
-
-; -----------------------------------------------------------------------------
-; os88spk_isrd - os88spk_isr for a COVOX (SPEC.md 34.14): the sample out of the
-; parallel port's data register instead of a count into channel 2. DX is the
-; one more register, and the port is the `mov`'s own immediate, written by
-; os88spk_go - so nothing is read per sample that os88spk_isr does not read.
-; The event paths are os88spk_isr's, entered with its three words pushed
-; -----------------------------------------------------------------------------
-os88spk_isrd:
-    push ax
-    push si
-    push ds
-    push dx
-    cld                             ; (os88spk_isr's reason)
-    lds si, [cs:os88spk_rp]
-    lodsb                           ; a sample, unsigned
-.port:
-    mov dx, 0x0378                  ; (the port, patched in)
-    out dx, al                      ; ...and the voltage
-    pop dx
-    mov [cs:os88spk_rp], si
-    dec word [cs:os88spk_left]
-    jz .ev
-    mov al, 0x20
-    out 0x20, al
-    pop ds
-    pop si
-    pop ax
-    iret
-.ev:
-    jmp os88spk_isr.ev
 
 ; -----------------------------------------------------------------------------
 ; os88spk_grant - IF = 0: what the last grant played added to CONS, and the

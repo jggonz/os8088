@@ -54,6 +54,14 @@
 ; nothing. And it repaints nothing but its own rect.
 ;
 ; REGISTERS: every routine preserves everything except its documented output.
+;
+; --- OS88LINE_NOSET - the field WITHOUT os88line_set (apps size pass 2b) -----
+; An OPT-OUT in os88ui.inc's OS88UI_NO* shape: define it before the include
+; and os88line_set is not assembled. A package that fills its buffer itself
+; and calls os88line_resync, or never replaces a field's contents at all
+; (the DOS box, the Desk Calendar), carried 51 bytes it never reached. It
+; removes the SYMBOL, so a package that sets it and calls os88line_set does
+; not assemble; every package that does not set it is byte-identical.
 ; =============================================================================
 
 LN_X1     equ 0
@@ -460,6 +468,11 @@ os88line_caroff:
     pop ax
     ret
 
+%ifndef OS88LINE_NOEDIT
+; `%define OS88LINE_NOEDIT` before the %include leaves this routine out - for
+; a package that only ever repaints the whole field with os88line_draw, which
+; is every carrier but DOS and DeskCal (SPEC.md 83.1.2). It is ~160 image
+; bytes and ~125 packed, and nothing else in this file calls it.
 ; -----------------------------------------------------------------------------
 ; os88line_edit - repaint what ONE EDIT changed, and not the rest
 ; in:  SI = the block, AX = LN_VIEW as it was BEFORE the key,
@@ -601,6 +614,7 @@ os88line_edit:
     pop bx
     pop ax
     ret
+%endif ; OS88LINE_NOEDIT
 
 ; -----------------------------------------------------------------------------
 ; os88line_key - one keystroke
@@ -852,6 +866,7 @@ os88line_resync:
     pop ax
     ret
 
+%ifndef OS88LINE_NOSET
 ; -----------------------------------------------------------------------------
 ; os88line_set - replace the contents with the NUL string at DS:DI
 ; in:  SI = the block, DI = the string. The caret lands at the END.
@@ -893,3 +908,4 @@ os88line_set:
     pop bx
     pop ax
     ret
+%endif                          ; OS88LINE_NOSET

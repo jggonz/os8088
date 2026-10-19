@@ -304,19 +304,25 @@ ui_task:
     or ah, ah                   ; AH is the region still: gfx_lock preserves
     jz .mup_pkg                 ; every register
     mov bx, si
+%ifdef KERN_BIG
+    cmp ah, 3                   ; THE THREE CHROME REGIONS IN ONE COMPARE
+    je .mup_min                 ; (kernel size pass 12): 3 minimize, below it
+    jb .mup_close               ; 2 close, and above it 5 - Windows' MAXIMIZE
+    call wm_front               ; button (SPEC.md 76.14.4), the double-click's
+    call wm_zoom                ; zoom as a button. Only WIN95.DRV's wm_hit
+    jmp short .mup_done         ; answers 5, and only on a WF_SIZABLE window -
+                                ; and it RAISES, as Windows does: a window
+                                ; grown to the desktop under the others would
+                                ; show nothing of itself. No armed region is
+                                ; 1 or 4 (.chrome arms 2, 3 and 5 alone)
+.mup_close:
+%else
     cmp ah, 2
     jne .mup_min
+%endif
     call app_close_win          ; in: BX; quits the owning instance (or
     jmp short .mup_done         ; hides an ownerless window) - SPEC.md 29
 .mup_min:
-%ifdef KERN_BIG
-    cmp ah, 5                   ; Windows' MAXIMIZE button (SPEC.md 76.14.4):
-    jne .mup_mn                 ; the double-click's zoom, as a button. Only
-    call wm_front               ; WIN95.DRV's wm_hit answers 5, and only on a
-    call wm_zoom                ; WF_SIZABLE window - and it RAISES, as
-    jmp short .mup_done         ; Windows does: a window grown to the desktop
-.mup_mn:                        ; under the others would show nothing of itself
-%endif
     call inst_minimize          ; in: BX; flags the instance minimized and
     jmp short .mup_done         ; hides - its dock tile inverts (SPEC.md 30)
 
@@ -726,8 +732,11 @@ ui_task:
     call wm_close_pass          ; (SPEC.md 75.2)
 .clr_done:
     xor ax, ax                  ; deferred instance launch (posted by
-    xchg ax, [inst_launch]      ; lock-held handlers via inst_launch_post);
-    or ax, ax                   ; consumed before running, not after
+    xchg al, [inst_launch]      ; lock-held handlers via inst_launch_post);
+    or al, al                   ; consumed before running, not after. A BYTE
+                                ; since kernel size pass 13: 8 clocks less of
+                                ; every idle pass, the word's second bus cycle
+                                ; each way
     jz .chk_ld
     dec ax                      ; stored as kind + 1
     call app_launch             ; in: AL = kind; does its own locking
@@ -1215,7 +1224,7 @@ ui_arm_trk:                     ; ui_task tests [ui_armw] before calling
 ; glass and the byte cannot part and the XOR here is always the difference
 ; between two states that are both really on screen.
 ;
-; BP is spent (ui_lcall's). The lock is taken HERE rather than by the callers
+; BP is kept. The lock is taken HERE rather than by the callers
 ; because all four are in
 ; the UI task's lock-free stretches - the press before it dispatches, the
 ; deferred ladder, ui_arm_chk - and one of them (the release) runs a few
@@ -1236,6 +1245,7 @@ ui_lit_go:
     push cx
     push dx
     push si
+    push di                     ; ...for wm_chrome_clip's DI
     mov si, [ui_armw]
     or si, si
     jz .none
@@ -1247,35 +1257,31 @@ ui_lit_go:
     je .out                     ; already in that state
     mov [ui_armlit], al
     mov ah, [ui_armr]
-    call COLD_SEG:wmz_wm_chrome_rect ; AX,BX,CX,DX = the box interior
-    mov bp, ui_lit_xor
-    call ui_lcall
-    jmp short .out
+    call gfx_lock               ; ...the lock FIRST: the clip below is armed
+    call far [thv + THV_CRECT]  ; inside it. AX,BX,CX,DX = the box interior:
+                                ; winmod.inc's door, wmz_crect_b at rest
+                                ; (SPEC.md 76.14.4)
+    mov di, si                  ; THE INVERSION, CLIPPED to what of its window
+    call wm_chrome_clip         ; shows. A front window's box is never
+    jc .unl                     ; covered, and that was the only box there
+    call gfx_xor_fill           ; was; Windows' buttons are on EVERY window
+.unl:                           ; and act without a raise (SPEC.md 76.14.5),
+    call gfx_unlock             ; so a held one can be on a title bar another
+    jmp short .out              ; window half covers - and an unclipped XOR
+                                ; would invert the covering window's pixels.
+                                ; wm_chrome_clip arms this window's frame
+                                ; less everything above it; on the front one
+                                ; it arms nothing (wm_obscured says so
+                                ; first), so the Mac box pays a test. CF = 1
+                                ; is "wholly covered": nothing is drawn, and
+                                ; gfx_unlock disarms the region. It was
+                                ; ui_lit_xor through ui_lcall (kernel size
+                                ; pass 12, -1)
 .none:
     mov byte [ui_armlit], 0     ; nothing is lit and nothing can be, so the
 .out:                           ; byte must say so - it is what the next XOR
-    jmp kret_si
+    jmp kret_di
 
-; ui_lit_xor - the held box's inversion, CLIPPED to what of its window shows
-; in:  SI = the window, AX..DX = the box's interior; the gfx lock held
-;
-; A front window's box is never covered, and that was the only box there
-; was. Windows' buttons are on EVERY window and act without a raise (SPEC.md
-; 76.14.5), so a held one can be on a title bar another window half covers -
-; and an unclipped XOR would invert the covering window's pixels. wm_chrome_
-; clip arms this window's frame less everything above it; on the front one
-; it arms nothing (wm_obscured says so first), so the Mac box pays a test.
-; CF = 1 from it is "wholly covered": the press could not have landed there,
-; and nothing is drawn. gfx_unlock disarms the region.
-ui_lit_xor:
-    push di
-    mov di, si
-    call wm_chrome_clip
-    pop di
-    jc .out
-    jmp gfx_xor_fill
-.out:
-    ret
 %endif                          ; KERN_BIG - SPEC.md 13.8.1/13.8.2/13.9
 
 ; -----------------------------------------------------------------------------
@@ -2577,18 +2583,27 @@ ui_d_svc:
 %endif
 
 ; -----------------------------------------------------------------------------
-; ui_tm_open / ui_svc_open - front a system package, or load it off the
-;                            system disk (SPEC.md 28.3, 26.7)
+; ui_tm_open / cw_ui_svc_open - front a system package, or load it off the
+;                               system disk (SPEC.md 28.3, 26.7)
 ; in:  nothing; UI task, no lock held
 ; out: nothing (all registers preserved)
+;
+; cw_ui_svc_open is FAR: its one caller is desk.inc's service zone, which is
+; `.cold`, and it was a near entry behind a kernel.asm shim of its own that
+; did nothing but `call` it and `retf` (kernel size pass 13: one body, -2)
 ; -----------------------------------------------------------------------------
 %ifndef KERN_SMALL
-ui_svc_open:
+cw_ui_svc_open:
     mov word [ui_desc], ui_d_svc
-    jmp short ui_sys_open
+    call ui_sys_open
+    retf
 %endif
 ui_tm_open:
-    mov word [ui_desc], ui_d_tm ; ...and on into the body
+%ifndef KERN_SMALL
+    mov word [ui_desc], ui_d_tm ; ...and on into the body. kern_small has no
+%endif                          ; service zone, so ui_d_tm is the only value
+                                ; [ui_desc] ever holds there and its resting
+                                ; value already is it (kernel size pass 13, -6)
 
 ; -----------------------------------------------------------------------------
 ; ui_sys_open - the body both of them are
@@ -2613,9 +2628,33 @@ ui_sys_open:
     mov bp, inst_restore        ; un-minimize and show - the app_launch cap
     call ui_lcall               ; path's rule, and now literally its code (BP
                                 ; is on the stack above and comes back at .out)
-    jmp short .out
-
+    jmp .out                    ; (short wherever it reaches: ROM_PKG's arm
+                                ; below is what can push it past 127)
 .load:
+%ifdef ROM_PKG
+    ; THE ROM'S COPY FIRST (docs/plans/ROM-PLAN.md 4.3, SPEC.md 2.10.5): a
+    ; kern_small ROM carries the Task Manager's image, and OSAPI_PKG_START's
+    ; image arm launches a package from a far pointer by COPYING it - the
+    ; same checks, claim and entry call as the disk, with a `rep movsb` where
+    ; the read was. So the menu item works with the system disk out of the
+    ; only drive. Any refusal falls through to the disk, which says why -
+    ; and on a kernel whose `.cold` is in RAM rom_mfp is rom_none, which
+    ; refuses PKG, so no test of [api_coldseg] is needed first (kernel size
+    ; pass 12). SI and AL are dead on the disk arm (kent_bp has them)
+%if UO_FILE != 0
+  %error "boot/osrom.asm's rom_pkg reads [ui_desc]'s name as its FIRST word"
+%endif
+    mov al, ROMF_PKG            ; [ui_desc]'s package - the ROM reads the
+    call far [rom_mfp]          ; descriptor's 8.3 name itself, its key and the
+                                ; name the package is told it was launched as -
+                                ; and LAUNCHED: the ROM runs ldf_ld_pkg_start
+                                ; on its image, so CF is that far entry's
+                                ; (kernel size pass 12)
+    push ds
+    pop es                      ; (ldf_ld_pkg_start's own note: nothing below
+    jnc .out                    ; may inherit the ES a failure leaves)
+.disk:
+%endif
     call osapi_file_here        ; bank where the user was: DX = the directory
     mov [ui_tm_cwd], dx         ; cluster, BL = the drive. Two module words
     mov [ui_tm_drv], bl         ; rather than the stack, because this is
@@ -2880,11 +2919,8 @@ ui_cmd:
     ret                         ; it and writes SYSTEM.CFG
 %endif
 
-.about:
-    mov al, KIND_ABOUT
-    jmp .launch
 .ctrl:
-    call COLD_SEG:cpf_cp_open   ; NOT .launch: the panel's code is a file now
+    call COLD_SEG:cpf_cp_open   ; NOT app_launch: the panel's code is a file now
     ret                         ; (SPEC.md 2.8.4), so opening it can fail for
                                 ; a reason app_launch knows nothing about.
                                 ; NOT a far tail jump: cpf_cp_open ends in
@@ -2894,8 +2930,14 @@ ui_cmd:
 .tasks:
     jmp ui_tm_open              ; not a kind any more: it is a package on the
                                 ; system disk (SPEC.md 28)
-.launch:                        ; About's alone now: Timer and Bounce are
-                                ; packages on the apps disk (SPEC.md 14.8)
+.about:                         ; THE ONE KIND ui_cmd LAUNCHES - Timer and
+                                ; Bounce are packages on the apps disk (SPEC.md
+                                ; 14.8) - and AL is ALREADY it: CMD_ABOUT - 1,
+                                ; the `dec ax` above, is KIND_ABOUT (kernel
+                                ; size pass 13, -4)
+%if CMD_ABOUT - 1 != KIND_ABOUT
+  %error "ui_cmd's .about takes AL = CMD_ABOUT - 1 as KIND_ABOUT"
+%endif
     call app_launch             ; takes its own locks; out CF = tables full
     jnc .done
 .beep:

@@ -41,6 +41,15 @@ AT_CMD_ZOUT   equ 24
 AT_CMD_ZDEF   equ 25
 AT_CMD_ABOUT  equ 26
 AT_CMD_MAX    equ 26
+; at_docmd hands the command's own number to the routine at_cmdtab names, and
+; three routines read it as an ARGUMENT: at_heading (the level), at_setview
+; (the mode) and at_confirm (the pending action). These are what that needs.
+%if AT_CMD_H2 != AT_CMD_H1 + 1 || AT_CMD_H3 != AT_CMD_H1 + 2
+  %error "at_heading takes its level as AL - AT_CMD_H1 + 1"
+%endif
+%if AT_CMD_VIEWWR != AT_CMD_VIEWMD + 1
+  %error "at_setview takes Writer as AL - AT_CMD_VIEWMD = 1"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; at_docmd - run command AL
@@ -68,12 +77,12 @@ at_docmd:
     ret
 
 at_cmdtab:
-    dw at_cmd_new,    at_cmd_open,   at_cmd_save,   at_cmd_saveas
-    dw at_cmd_quit,   at_undo,       at_redo,       at_cut
+    dw at_confirm,    at_confirm,    at_cmd_save,   at_cmd_saveas
+    dw at_confirm,    at_undo,       at_redo,       at_cut
     dw at_copy,       at_paste,      at_selall,     at_cmd_bold
-    dw at_cmd_italic, at_cmd_code,   at_cmd_strike, at_cmd_h1
-    dw at_cmd_h2,     at_cmd_h3,     at_cmd_link,   at_cmd_none
-    dw at_cmd_viewmd, at_cmd_viewwr, at_cmd_zin,    at_cmd_zout
+    dw at_cmd_italic, at_cmd_code,   at_cmd_strike, at_heading
+    dw at_heading,    at_heading,    at_cmd_link,   at_cmd_none
+    dw at_setview,    at_setview,    at_cmd_zin,    at_cmd_zout
     dw at_cmd_zdef,   at_cmd_about
 
 ; =============================================================================
@@ -247,25 +256,10 @@ at_wrapsel:
 ; one; asking for the level it already has toggles it off (markdown.c's
 ; ToggleHeadingHidden semantics on canonical text).
 ; =============================================================================
-
-at_cmd_h1:
-    push cx
-    mov cx, 1
-    call at_heading
-    pop cx
-    ret
-at_cmd_h2:
-    push cx
-    mov cx, 2
-    call at_heading
-    pop cx
-    ret
-at_cmd_h3:
-    push cx
-    mov cx, 3
-    call at_heading
-    pop cx
-    ret
+; in:  AL = AT_CMD_H1, AT_CMD_H2 or AT_CMD_H3, which at_docmd hands every
+;      command - at_cmdtab names this for all three, and the level is the
+;      command's distance from AT_CMD_H1 (three stubs that loaded CX = 1 / 2 /
+;      3 went in apps size pass 2)
 
 at_heading:
     push ax
@@ -273,6 +267,9 @@ at_heading:
     push cx
     push dx
     push si
+    mov cl, al
+    sub cl, AT_CMD_H1 - 1
+    xor ch, ch                      ; CX = the asked-for level, 1..3
     call at_undo_push
     mov byte [at_typrun], 0
     mov [at_wplen], cx              ; the asked-for level
@@ -554,21 +551,10 @@ at_cmd_none:
     mov [at_caret], ax
     mov [at_sela], ax
     mov [at_selb], ax
-    ; scattered edits: relayout whole, repaint whole - None is rare
-    call at_layout
+    ; scattered edits: relayout whole, repaint whole - None is rare, and
+    ; that is exactly at_refit, which a zoom or a view change runs
     mov byte [at_dirty], 1
-    call at_maxtop
-    mov bx, ax
-    mov ax, [at_top]
-    cmp ax, bx
-    jbe .t
-    mov [at_top], bx
-.t:
-    call at_caret_off
-    call at_draw_text
-    call at_sbar
-    call at_seecaret
-    call at_caret_on
+    call at_refit
 .out:
     pop es
     pop di
@@ -583,24 +569,13 @@ at_cmd_none:
 ; The View menu
 ; =============================================================================
 
-at_cmd_viewmd:
-    push ax
-    xor al, al
-    call at_setview
-    pop ax
-    ret
-at_cmd_viewwr:
-    push ax
-    mov al, 1
-    call at_setview
-    pop ax
-    ret
-
-; at_setview - AL = 1 Writer / 0 Markdown (SetViewMode's port; no buffer
-; sync exists to do - the mode is a rendering property)
+; at_setview - AL = AT_CMD_VIEWWR Writer / AT_CMD_VIEWMD Markdown, as at_docmd
+; hands both (SetViewMode's port; no buffer sync exists to do - the mode is a
+; rendering property). The two stubs that loaded 1 / 0 went in apps size pass 2
 at_setview:
     push ax
     push bx
+    sub al, AT_CMD_VIEWMD           ; AL = 1 Writer / 0 Markdown
     cmp al, [at_writer]
     je .out
     mov [at_writer], al

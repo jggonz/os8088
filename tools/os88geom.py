@@ -433,7 +433,20 @@ _MIRROR = {
     # which a gate writes to [ui_rebootq] to reach the last instruction before
     # int 19h (tests/fddpark.py, tests/usbmouse.py's detach leg)
     "UI_RBQ_NOFLUSH": ("kernel/ui.inc", 2),
+    # kernel/kernel.asm - where a DRIVER's offsets start when it runs from the
+    # HMA (SPEC.md 2.10.8): a drv_tab row naming a segment at or above
+    # DRV_HMA_SEG has its header at SEG:DRV_HMA_ORG, never SEG:0. A harness
+    # that reads a driver's variables wants drv_base() below, not seg << 4
+    "DRV_HMA_ORG": ("kernel/kernel.asm", 0xE000),
+    "DRV_HMA_SEG": ("kernel/kernel.asm", 0xF000),
 }
+
+
+def drv_base(seg):
+    """The linear address a driver's org-0 offsets are relative to, for the
+    segment its drv_tab row names: SEG:0 in the heap, SEG:DRV_HMA_ORG in the
+    HMA (SPEC.md 2.10.8). Add a symbol's offset from the driver's map."""
+    return (seg << 4) + (DRV_HMA_ORG if seg >= DRV_HMA_SEG else 0)
 
 def _armval(name):
     """This arm's value for a mirrored constant, or None if it has none."""

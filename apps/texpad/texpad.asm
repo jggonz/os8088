@@ -154,6 +154,8 @@ tp_entry:                       ; (an entry proc answers BX = its window and
     ; The proc is a bare `ret` of ours: nothing here holds a segment of
     ; its own region.
     OS88_REGION_MOVABLE tp_seg_ok
+    mov ax, tp_onclose          ; SPEC.md 75.1: every way of closing us asks
+    call OSAPI_WM_ONCLOSE       ; first, so an edited document is never lost
     mov ax, tp_onup             ; SPEC.md 13.7/13.8.1: the bar's seven fire on
     call OSAPI_WM_ONMOUSEUP     ; the RELEASE and follow the pointer between
     mov ax, tp_ondrag           ; the edges. Not template words, so they are
@@ -217,10 +219,21 @@ tp_entry:                       ; (an entry proc answers BX = its window and
     jc .out
     ; RAM seed only when not opened on a .TEX. No floppy, no typeset
     ; under the loader lock (that froze the desktop). A .TEX's load is
-    ; tp_onwake's, into a document still empty.
-    call tp_note_arg
-    cmp byte [tp_needld], 0
-    jne .ready
+    ; tp_onwake's, into a document still empty - so the argument's NAME is
+    ; copied here and nothing is read. Nothing is banked around it either:
+    ; an entry proc owes the loader BX and CF and nothing else (SPEC.md
+    ; 20.2), and both are set below.
+    call OSAPI_ARG_FILE
+    jc .seed
+    mov [tp_dir], dx
+    mov [tp_drv], bl
+    mov di, tp_fname
+    call tp_kname
+    call tp_is_tex
+    jc .seed
+    mov byte [tp_needld], 1
+    jmp short .ready
+.seed:
     call tp_seed
 .ready:
     mov byte [tp_needttl], 1
@@ -233,35 +246,6 @@ tp_entry:                       ; (an entry proc answers BX = its window and
 .out:
     pop si
 tp_seg_ok:                      ; (and the region's relocation proc: a ret)
-    ret
-
-; Copy ARG_FILE name only. Do not READ or typeset here.
-tp_note_arg:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    call OSAPI_ARG_FILE
-    jc .o
-    mov [tp_dir], dx
-    mov [tp_drv], bl
-    mov di, tp_fname
-    call tp_kname
-    call tp_is_tex
-    jc .o
-    mov byte [tp_needld], 1
-.o:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
     ret
 
 ; tp_onwake - W_ONWAKE: typeset the launch document (SPEC.md 54.10/74.1)
@@ -290,12 +274,10 @@ tp_deferred_ld:
     cmp byte [tp_needld], 0
     je .o
     mov byte [tp_needld], 0
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    push ax                         ; what the callers hold across this: the
+    push cx                         ; key or the menu item in AX, a click's
+    push dx                         ; point in CX/DX and the window in SI.
+    push si                         ; BX and DI are theirs to set afterwards
     mov dx, [tp_dir]                ; the DOCUMENT's folder, stood in QUIETLY
     mov bl, [tp_drv]                ; and the instance with it, so tp_load's
     call OSAPI_FILE_GOTO_QM         ; by-name read resolves there. Nothing here
@@ -317,15 +299,11 @@ tp_deferred_ld:
 .there:
     call tp_load
 .moved:
-    pop di
     pop si
     pop dx
     pop cx
-    pop bx
     pop ax
-    jnc .set
-    jmp .ttl
-.set:
+    jc .ttl
     call tp_typeset
 .ttl:
     mov byte [tp_needttl], 1
@@ -361,7 +339,11 @@ tp_claim_src:
 ; heap says no, and the claim is untouched. Preserves every register.
 tp_srcfit:
     cmp [tp_srccap], ax
-    jae .o                      ; (CF=0)
+    jae tp_srcby.o              ; (CF=0)
+
+; AX = bytes, at least 1: the claim regrown to the KB they round up to, at
+; most TP_SRC_KB. CF as tp_srckb. Preserves every register.
+tp_srcby:
     push ax
     add ax, 1023
     mov al, ah
@@ -379,16 +361,11 @@ tp_srcfit:
 tp_srctrim:
     push ax
     mov ax, [tp_srclen]
-    add ax, 1023
-    mov al, ah
-    shr al, 1
-    shr al, 1
-    xor ah, ah
-    or al, al
+    or ax, ax                   ; an empty document still holds one KB
     jnz .k
     inc ax
 .k:
-    call tp_srckb
+    call tp_srcby
     pop ax
     ret
 
@@ -425,27 +402,26 @@ tp_is_tex:
     inc si
     jmp .l
 .dot:
+    push di
+    mov di, tp_s_tex            ; 'TeX', compared with the case folded out
+.c:
     inc si
     mov al, [si]
-    or al, 0x20
-    cmp al, 't'
-    jne .no
-    mov al, [si+1]
-    or al, 0x20
-    cmp al, 'e'
-    jne .no
-    mov al, [si+2]
-    or al, 0x20
-    cmp al, 'x'
-    jne .no
-    pop si
-    pop ax
-    clc
-    ret
+    mov ah, [di]
+    or ax, 0x2020
+    cmp al, ah
+    jne .nd
+    inc di
+    cmp di, tp_s_tex + 3
+    jb .c                       ; (CF=0 out of the last compare: equal)
+.nd:
+    pop di
+    je .o
 .no:
+    stc
+.o:
     pop si
     pop ax
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -776,47 +752,40 @@ tp_fit_sheet:
     div cx
     ret
 
-; AX = PDF x -> AX = screen x
+; AX = PDF x -> AX = screen x.
+;
+; [tp_pw] and [tp_ph] are never 0 here, so the two divides take them as they
+; are: tp_pagesz is their only writer and reads them out of tp_pgtab, whose
+; index [tp_psize] is 0..3 by every one of its writers (the Page menu's codes,
+; the bar's cycler, \documentclass's AND 3) - and every caller of the two
+; maps, and tp_draw_sheet's gutter, is behind a tp_fit_sheet or tp_ts_init,
+; both of which run tp_geom and so tp_pagesz first. A fallback of 612 and 792
+; for a zero sat in front of each divide and could not be reached.
 tp_mapx:
-    push bx
     push cx
     push dx
     mov cx, [tp_sx2]
     sub cx, [tp_sx1]
     mul cx
-    mov bx, [tp_pw]
-    or bx, bx
-    jnz .d
-    mov bx, 612
-.d:
-    div bx
+    div word [tp_pw]
     add ax, [tp_sx1]
     pop dx
     pop cx
-    pop bx
     ret
 
 ; AX = PDF y (from bottom) -> AX = screen y
 tp_mapy:
-    push bx
     push cx
     push dx
-    mov bx, [tp_ph]
-    sub bx, ax
-    mov ax, bx
+    neg ax
+    add ax, [tp_ph]             ; AX = the height less y: from the TOP
     mov cx, [tp_sy2]
     sub cx, [tp_sy1]
     mul cx
-    mov bx, [tp_ph]
-    or bx, bx
-    jnz .d
-    mov bx, 792
-.d:
-    div bx
+    div word [tp_ph]
     add ax, [tp_sy1]
     pop dx
     pop cx
-    pop bx
     ret
 
 ; Page, gutter band, text-area frame.
@@ -862,12 +831,7 @@ tp_draw_sheet:
     mov bx, [tp_sx2]
     sub bx, [tp_sx1]
     mul bx
-    mov bx, [tp_pw]
-    or bx, bx
-    jnz .gd
-    mov bx, 612
-.gd:
-    div bx
+    div word [tp_pw]            ; (never 0: tp_mapx has why)
     cmp ax, 4
     jae .gok
     mov ax, 4
@@ -1427,12 +1391,11 @@ tp_draw_about:
     mov dx, [tp_oy]
     add dx, 16
     mov si, tp_s_a1             ; thirteen lines, one string after another
-.l:
     mov ax, CBLACK | (CWHITE << 8)
-    push si
-    call OSAPI_FONT_RUN
-    pop si
-.z:
+.l:
+    call OSAPI_FONT_RUN         ; (keeps SI and AX - and the scan below
+.z:                             ; stops with AL at the NUL, 0, which is
+                                ; CBLACK, so the ink survives it too)
     lodsb
     or al, al
     jnz .z
@@ -1456,11 +1419,11 @@ tp_draw_about:
 ; that "window" is and paints the answer, which put a second set of chrome
 ; over the menu bar. Every caller was correct about its own registers; the
 ; contract was the thing that could not survive being called from two places.
+;
+; tp_paint keeps AX, CX, DX and DI itself; what it does NOT keep is BX, which
+; tp_retitle takes for the window, and SI is the one this loads.
 tp_redraw:
-    push ax
     push bx
-    push cx
-    push dx
     push si
     mov si, [tp_win]
     or si, si
@@ -1468,16 +1431,12 @@ tp_redraw:
     call tp_paint
 .o:
     pop si
-    pop dx
-    pop cx
     pop bx
-    pop ax
     ret
 
 tp_onabout:
     xor byte [tp_abouton], 1
-    call tp_redraw
-    ret
+    jmp tp_redraw
 
 ; ---- panes -----------------------------------------------------------------
 tp_edit_box:
@@ -2186,31 +2145,19 @@ tp_draw_srow:
     add ax, di
     call tp_row_at              ; SI = its start, CX = its length, and a row
     jc .o                       ; never needs clipping: it IS what fits
-    push dx
-    push di
-    push es
-    push si
-    push cx
+    push di                     ; the row's text to tp_cline: DS:SI the
+    mov di, tp_cline            ; source's, ES:DI ours (a length of 0 moves
+    mov bx, cx                  ; nothing and needs no test)
     push ds
     pop es
-    mov di, tp_cline
-    pop cx
-    pop si
-    push cx
-    push ds
     mov ax, [tp_srcseg]
     mov ds, ax
-    jcxz .nul
     cld
     rep movsb
-.nul:
+    push es
     pop ds
-    pop cx
-    pop es
-    mov bx, cx
     mov byte [tp_cline+bx], 0
     pop di
-    pop dx
     mov cx, [tp_ex1]
     add cx, 3
     mov si, tp_cline
@@ -2314,6 +2261,8 @@ tp_xor_span:
 .ord:
     mov [tp_tmp], ax            ; start
     mov [tp_tmp2], dx           ; end
+    mov al, CBLACK              ; the pen, ONCE: nothing in the walk moves it,
+    call OSAPI_SET_COLOR        ; and it was one far call a row
     xor di, di
 .row:
     cmp di, [tp_erows]
@@ -2382,10 +2331,6 @@ tp_xor_span:
     xchg ax, dx                 ; DX=y, AX=x1
     mov bx, dx
     add dx, 7
-    push ax
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    pop ax
     call OSAPI_GFX_XOR_FILL
     pop di
 .n:
@@ -2450,8 +2395,7 @@ tp_sel_del:
     mov bx, ax
     call tp_del_range2
     mov byte [tp_selon], 0
-    mov byte [tp_dirty], 1
-    mov byte [tp_needset], 1
+    mov word [tp_dirty], 0x0101     ; tp_dirty and tp_needset, both set
     mov byte [tp_edkind], 0
     pop bx
     pop ax
@@ -2490,8 +2434,7 @@ tp_marks_sync:
     call tp_caret_hide
     call tp_sel_hide
     call tp_sel_show
-    call tp_caret_show
-    ret
+    jmp tp_caret_show
 
 ; Focus rings only - selecting a pane does not redraw its contents.
 tp_draw_frames:
@@ -3148,30 +3091,6 @@ tp_clamp_ps:
     pop ax
     ret
 
-tp_redraw_prev:
-    push ax
-    push bx
-    push cx
-    push dx
-    call tp_prev_box
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov ax, [tp_px1]
-    inc ax
-    mov bx, [tp_py1]
-    inc bx
-    mov cx, [tp_px2]
-    dec cx
-    mov dx, [tp_py2]
-    dec dx
-    call OSAPI_GFX_FILL
-    call tp_draw_preview
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
 ; -----------------------------------------------------------------------------
 ; THE PREVIEW SCROLLS BY BLITTING TOO, and it is the pane where that matters
 ; most: a page of set text is forty-odd FONT_RUNs of fifty cells, which is
@@ -3269,8 +3188,12 @@ tp_prev_scroll:
     mov [tp_oldps], ax
     jmp short .out
 .full:
-    call tp_rgn_all
-    call tp_redraw_prev
+    ; THE WHOLE PANE, AND ONCE. This was a white fill of the interior and then
+    ; tp_draw_preview, whose desk (tp_draw_sheet's 50% dither, which writes
+    ; every pixel it covers) is that same interior to the pixel - so the white
+    ; was overdrawn in full a few calls later, PERFORMANCE.md's double draw on
+    ; every long preview jump. tp_draw_preview sets the region whole itself.
+    call tp_draw_preview
 .out:
     pop si
     pop dx
@@ -3475,6 +3398,8 @@ tp_paint_runs:
     mov bx, tp_runs
     mov si, tp_text
     mov di, [tp_nruns]
+    push ds                     ; ES = ours for every run's copy below: nothing
+    pop es                      ; in the loop moves it (the API keeps it)
 .lp:
     or di, di
     jz .o
@@ -3511,8 +3436,6 @@ tp_paint_runs:
     push si
     push di
     push cx
-    push ds
-    pop es
     mov di, tp_cline
     mov cl, [bx+6]
     xor ch, ch
@@ -3525,15 +3448,13 @@ tp_paint_runs:
     pop cx
     mov si, tp_cline
     mov ax, CBLACK | (CWHITE << 8)
-    call OSAPI_FONT_RUN
+    call OSAPI_FONT_RUN         ; (keeps SI and AX, as every API call does)
     test byte [bx], TP_RUN_BOLD
     jnz .bd
     cmp byte [bx+5], 14
     jb .un
 .bd:
     inc cx
-    mov si, tp_cline
-    mov ax, CBLACK | (CWHITE << 8)
     call OSAPI_FONT_STR_XPARENT
 .un:
     pop di
@@ -3626,6 +3547,17 @@ tp_paint_boxes:
 ; (SPEC.md 13.7) - and nothing else.
 tp_onkey:
     call tp_deferred_ld
+    ; THE WINDOW MAY HAVE MOVED SINCE ANYTHING HERE LAST LOOKED. A drag replays
+    ; the content and calls no paint (SPEC.md 11.96.12.0), and every
+    ; incremental path below draws from the origin, the panes and the bar's
+    ; rects as the last paint or click left them: typing after a drag lettered
+    ; the edited rows, the top bar's text and the byte count where the window
+    ; USED to be, over the desktop and the title bar. So a key asks the WM
+    ; first, as a click always has.
+    push si
+    mov si, [tp_win]
+    call tp_regeo
+    pop si
     mov bx, ax
     cmp byte [tp_abouton], 0
     je .k
@@ -3700,22 +3632,20 @@ tp_onkey:
     call tp_klook
     jnc .jmp
     jmp .out
+.kesc:
+    mov byte [tp_focus], 1      ; (the typesetter never reads the focus)
 .kset:
     call tp_typeset
-    jmp .draw
-.kesc:
-    call tp_typeset
-    mov byte [tp_focus], 1
     jmp .draw
 .ksave:
     call tp_save
     jmp .draw
 .kopen:
-    call tp_open_dlg
+    call tp_cmd_open            ; as File > Open, the question and all
     jmp .out
 .knew:
-    call tp_new                 ; as File > New
-    jmp .draw
+    call tp_cmd_new             ; as File > New, the question and all; it
+    jmp .out                    ; repaints itself when it does anything
 .kcopy:
     call tp_copy_all
     jmp .draw
@@ -3898,7 +3828,9 @@ tp_kpvs:    db 0x48
 ; -----------------------------------------------------------------------------
 ; tp_bact - do what bar button AL says (SPEC.md 13.8)
 ; in:  AL = 1..7; the gfx lock is held
-; out: CF = 1 if the caller owes a full redraw
+; out: nothing - and the caller owes a full redraw, ALWAYS: every one of the
+;      seven changes the page, the setup or the set, so the "CF = 1 if" this
+;      used to answer was CF = 1 on all four of its exits
 ;
 ; ONE body, lifted out of tp_onclick's ladder so the press and the release
 ; cannot come to hold different opinions about what a button means.
@@ -3924,20 +3856,13 @@ tp_bact:
 .ok:
     mov [tp_psize-2+bx], al
     mov byte [tp_needset], 1
-    stc
     ret
 .set:
-    call tp_typeset
-    stc
-    ret
+    jmp tp_typeset
 .prev:
-    call tp_prev_page
-    stc
-    ret
+    jmp tp_prev_page
 .next:
-    call tp_next_page
-    stc
-    ret
+    jmp tp_next_page
 ; -----------------------------------------------------------------------------
 ; tp_onup - W_ONMOUSEUP (SPEC.md 13.7): a bar button fires HERE
 ; in:  CX = x, DX = y (SCREEN), SI = the window; gfx lock held
@@ -3989,7 +3914,6 @@ tp_onup:
                                 ; and drawing it upright first is
                                 ; PERFORMANCE.md's double-draw
     call tp_bact
-    jnc .out
     mov byte [tp_ldfull], 0
     call tp_redraw
 .out:
@@ -4054,10 +3978,7 @@ tp_ondrag:
 tp_onclick:
     call tp_deferred_ld
     push si
-    call tp_wingeo
-    call tp_layout
-    call tp_edit_box
-    call tp_prev_box
+    call tp_regeo
 %ifdef OS88UI_SBDRAG
     call tp_sbd_which           ; A PRESS CANNOT ARRIVE DURING A LIVE DRAG, so
     jc .nostale                 ; one that does means the release never came
@@ -4157,6 +4078,15 @@ tp_onclick:
 .done:
     pop si
     ret
+
+; SI = the window: everything an event handler draws or hit-tests from, read
+; afresh - the content box (tp_wingeo), the bar's seven rects and both panes.
+; Preserves every register.
+tp_regeo:
+    call tp_wingeo
+    call tp_layout
+    call tp_edit_box
+    jmp tp_prev_box
 
 ; Focus to the source pane, or to the preview: a ring redrawn only when it
 ; MOVES, and the caret hidden when it leaves the source.
@@ -4269,11 +4199,14 @@ tp_oncmd:
     cmp ah, 4
     jne .o
     ; View
+    mov bx, tp_typeset
     or al, al
-    jz .set
+    jz .cr
+    mov bx, tp_prev_page
     cmp al, 2
-    jb .vp
-    je .vn
+    jb .cr
+    mov bx, tp_next_page
+    je .cr
     cmp al, 4
     ja .o
     mov ax, 24                  ; Wider Source / Wider Preview: the split
@@ -4283,54 +4216,41 @@ tp_oncmd:
 .wp:
     sub [tp_split], ax
 .ws:
-    call tp_clamp_split
-    jmp tp_redraw
-.set:
-    call tp_typeset
-    jmp tp_redraw
-.vp:
-    call tp_prev_page
-    jmp tp_redraw
-.vn:
-    call tp_next_page
+    mov bx, tp_clamp_split
+    ; EVERY ARM BUT THE CHOOSERS' IS ONE ROUTINE AND A REPAINT: BX names the
+    ; routine and this is the call and the repaint, once
+.cr:
+    call bx
     jmp tp_redraw
 .fe:
     or ah, ah
     jnz .edit
-    or al, al                   ; File
-    jz .new
+    or al, al                   ; a document that REPLACES this one is set on
+    jz tp_cmd_new               ; arrival - File > Open and a double-clicked
+                                ; .TEX already were, and a blank preview
+                                ; beside a fresh document was the odd one out
+                                ; (SPEC.md 69.1). Both ask first when the
+                                ; document is edited (SPEC.md 69.12)
     cmp al, 2
-    jb tp_open_dlg              ; 1 Open...
-    je .save
+    jb tp_cmd_open              ; 1 Open...
+    mov bx, tp_save
+    je .cr
     cmp al, 5
     ja .o
     sub al, 2                   ; 3 Save As..., 4 Export PDF..., 5 Export
     mov [tp_dlgmode], al        ; PS... are tp_ondlg's modes 1, 2 and 3
     mov al, FDLG_SAVE
     jmp tp_dlg
-.new:
-    call tp_new                 ; a document that REPLACES this one is set on
-    jmp tp_redraw               ; arrival - File > Open and a double-clicked
-                                ; .TEX already were, and a blank preview
-                                ; beside a fresh document was the odd one out
-                                ; (SPEC.md 69.1)
-.save:
-    call tp_save
-    jmp tp_redraw
 .edit:
+    mov bx, tp_copy_all
     or al, al
-    jz .copy
+    jz .cr
+    mov bx, tp_paste
     cmp al, 2
-    jb .paste
-    ja .o
-    call tp_cut_line
-    jmp tp_redraw
-.copy:
-    call tp_copy_all
-    jmp tp_redraw
-.paste:
-    call tp_paste
-    jmp tp_redraw
+    jb .cr
+    mov bx, tp_cut_line
+    je .cr
+    jmp short .o
 .lay:
     cmp al, 1                   ; Layout: Article, Book, then the codes
     jb .art
@@ -4380,23 +4300,133 @@ tp_mpage:   db 0x00, 0x01, 0x02, 0x03   ; Letter, Legal, A4, A5
 tp_open_dlg:
     mov byte [tp_dlgmode], 0
     mov al, FDLG_OPEN
-    jmp short tp_dlg
+    jmp tp_dlg
 
-; File > New and Ctrl+N: the seed document, set
+; File > New and Ctrl+N: the seed document, set - and the title told, which
+; it was not: the window went on saying 'TeXPad - PAPER.TEX' over a document
+; whose own row said UNTITLED.TEX
 tp_new:
     call tp_seed
+    push bx                     ; (tp_retitle spends BX on the window)
+    call tp_retitle
+    pop bx
     jmp tp_typeset
+
+; -----------------------------------------------------------------------------
+; THE SAVE-CHANGES QUESTION (SPEC.md 69.12). Three things throw the document
+; in the window away - closing it, File > New and File > Open - and an EDITED
+; one is asked about first, with SPEC.md 75.3's alert, the way Note Pad asks:
+; Save / Discard / Cancel. The question is a separate window and not modal, so
+; asking returns at once and tp_onask does the rest when it is answered.
+; -----------------------------------------------------------------------------
+TPQ_CLOSE equ 1
+TPQ_NEW   equ 2
+TPQ_OPEN  equ 3
+
+; File > New, Ctrl+N: ask, or replace the document now and repaint
+tp_cmd_new:
+    mov al, TPQ_NEW
+    call tp_askdirty
+    jc .o                       ; asked: the answer does the rest
+    call tp_new
+    jmp tp_redraw
+.o:
+    ret
+
+; File > Open, Ctrl+O: ask, or raise the dialog now
+tp_cmd_open:
+    mov al, TPQ_OPEN
+    call tp_askdirty
+    jc tp_cmd_new.o
+    jmp tp_open_dlg
+
+; tp_onclose - the CLOSE NEGOTIATOR (SPEC.md 75.1): SI = our window, UI task,
+; gfx lock held. CF = 0 close now, CF = 1 not yet (the question is up)
+tp_onclose:
+    mov al, TPQ_CLOSE           ; ...and tp_askdirty's CF is the answer
+
+; AL = TPQ_*: CF = 0 when the document is not edited and the caller may go
+; ahead; CF = 1 when it is - the question has been put up (or, refused because
+; it is already up, RAISED - SPEC.md 75.3.1), and tp_onask carries out AL when
+; it is answered. Preserves every register but the flags.
+tp_askdirty:
+    cmp byte [tp_dirty], 0
+    jne .ask
+    clc
+    ret
+.ask:
+    push ax
+    push bx
+    push si
+    push di
+    push es
+    push ax
+    mov di, tp_qbuf             ; 'Save changes to NAME?' - 29 characters at
+    mov si, tp_s_qsave          ; most, under OS88UI_AMAX
+    call tp_cpat                ; (ES = DS from here)
+    mov si, tp_fname
+    cmp byte [si], 0
+    jne .nm
+    mov si, tp_s_noload
+.nm:
+    call tp_cpat
+    mov word [di], '?'          ; '?' and the NUL in one store
+    mov ax, KERNEL_SEG          ; os88ui_ask reads our caption out of the
+    mov es, ax                  ; window record through ES (SPEC.md 20.1)
+    mov bx, [tp_win]
+    mov si, tp_qbuf
+    mov di, tp_onask
+    mov al, OS88UI_ASAVE
+    call os88ui_ask
+    pop ax
+    jc .o                       ; one is up already, and it has been raised:
+                                ; its action stands
+    mov [tp_qact], al
+.o:
+    pop es
+    pop di
+    pop si
+    pop bx
+    pop ax
+    stc
+    ret
+
+; tp_onask - the alert's completion: AL = 0 Save, 1 Discard, 2 Cancel or
+; OS88UI_ACANCEL (dismissed); SI = our window, UI task, gfx lock held, the
+; alert already gone and what it covered already repainted
+tp_onask:
+    mov ah, [tp_qact]
+    mov byte [tp_qact], 0
+    or al, al
+    jz .save
+    cmp al, 1
+    je .go                      ; Discard
+    ret                         ; Cancel / dismissed: nothing happens
+.save:
+    call tp_save                ; CF = 1: it failed and said so - and the
+    jc .out                     ; document is still here, still edited
+.go:
+    cmp ah, TPQ_NEW
+    je .new
+    cmp ah, TPQ_OPEN
+    je tp_open_dlg
+    cmp ah, TPQ_CLOSE
+    jne .out
+    mov bx, si
+    call OSAPI_WM_CLOSE         ; deferred (SPEC.md 75.2)
+    ret
+.new:
+    call tp_new
+    jmp tp_redraw
+.out:
+    ret
 
 tp_dlg:
     push bx
     push si
     push di
-    mov bx, [tp_win]
-    or bx, bx
-    jnz .w
-    mov bx, si
-.w:
-    mov di, tp_ondlg
+    mov bx, [tp_win]            ; (set by the entry proc: a menu or a key
+    mov di, tp_ondlg            ; cannot arrive before it)
     mov si, tp_fname
     cmp byte [si], 0
     jne .nm
@@ -4516,8 +4546,7 @@ tp_load:
     mov byte [tp_selon], 0      ; the selection is a pair of offsets into the
                                 ; document that just went (the same for the
                                 ; new document below, a cut and a paste)
-    mov byte [tp_dirty], 0
-    mov byte [tp_needset], 1
+    mov word [tp_dirty], 0x0100     ; tp_dirty clear, tp_needset set
     mov si, tp_s_loaded
     call tp_toast
     clc
@@ -4585,8 +4614,6 @@ tp_save:
     push dx
     push si
     push es
-    push ds
-    pop es
     cmp byte [tp_fname], 0
     jne .nm
     mov si, tp_s_paper
@@ -4609,10 +4636,12 @@ tp_save:
     call tp_retitle
     mov si, tp_s_saved
     call tp_toast
-    jmp .out
+    clc                         ; CF = 0 saved, CF = 1 not: the save-changes
+    jmp .out                    ; question's Save stays open on a failure
 .err:
     mov si, tp_s_werr
     call tp_toast
+    stc
 .out:
     pop es
     pop si
@@ -4648,8 +4677,7 @@ tp_seed:
     mov di, tp_fname
     call tp_cpat
     mov byte [di], 0
-    mov byte [tp_dirty], 0
-    mov byte [tp_needset], 1
+    mov word [tp_dirty], 0x0100     ; tp_dirty clear, tp_needset set
 .o:
     pop es
     pop di
@@ -4716,8 +4744,7 @@ tp_paste:
                                 ; rows from mid-pasted-text: wrong caret row,
                                 ; wrong vscroll, until the next edit healed it
     call tp_clamp_cur
-    mov byte [tp_dirty], 1
-    mov byte [tp_needset], 1
+    mov word [tp_dirty], 0x0101     ; tp_dirty and tp_needset, both set
     jmp short .o
 .say:
     call tp_toast
@@ -4826,8 +4853,7 @@ tp_cut_line:
     mov [tp_tmp3], cx
     call tp_del_range2
     mov [tp_cur], bx
-    mov byte [tp_dirty], 1
-    mov byte [tp_needset], 1
+    mov word [tp_dirty], 0x0101     ; tp_dirty and tp_needset, both set
 .o:
     pop es
     pop di
@@ -4914,8 +4940,7 @@ tp_ins:
     inc word [tp_cur]
     inc word [tp_srclen]
     call tp_row_inval
-    mov byte [tp_dirty], 1
-    mov byte [tp_needset], 1
+    mov word [tp_dirty], 0x0101     ; tp_dirty and tp_needset, both set
     jmp short .o
 .no:
     call tp_toast               ; SI = why
@@ -4964,8 +4989,7 @@ tp_delete:
     mov word [tp_tmp3], 2
 .one:
     call tp_del_range2
-    mov byte [tp_dirty], 1
-    mov byte [tp_needset], 1
+    mov word [tp_dirty], 0x0101     ; tp_dirty and tp_needset, both set
 .o:
     pop es
     pop si
@@ -5353,10 +5377,8 @@ tp_retitle:
     mov di, tp_ttlbuf
     mov si, tp_s_name
     call tp_cpat
-    mov al, ' '
-    stosb
-    mov al, '-'
-    stosb
+    mov ax, ' -'                ; ' - '
+    stosw
     mov al, ' '
     stosb
     mov si, tp_fname
@@ -5541,6 +5563,7 @@ tp_s_hello:     db 'HELLO.TEX', 0
 tp_s_paper:     db 'PAPER.TEX', 0
 tp_s_untitled:  db 'UNTITLED.TEX', 0
 tp_s_noload:    db '(new)', 0
+tp_s_qsave:     db 'Save changes to ', 0
 tp_s_lt:        db '<', 0           ; the page arrows, in button order
                 db '>', 0
 tp_s_stale:     db '(edit)', 0
@@ -5579,7 +5602,7 @@ tp_s_a1:        db 'TeXPad for os8088', 0       ; tp_draw_about walks these
                 db 0
                 db 'A paper-oriented SUBSET of the markup, set in', 0
                 db 'the kernel 8x8 monofont. No math engine, no', 0
-                db 'figures, no colour - see SPEC.md 69.2.', 0
+                db 'figures, no colour.', 0
                 db 0
                 db 'F5 typesets.  File exports PDF 1.4 and PostScript.', 0
                 db 0
@@ -5601,10 +5624,14 @@ tp_seed_s:
     db 0
 
 %define OS88UI_SCROLL           ; SPEC.md 13.10: the shared scroll bar
+%define OS88UI_ALERT            ; SPEC.md 75.3's alert: the save-changes
+                                ; question before a close, a New or an Open
+                                ; throws an edited document away (69.12)
 %define OS88UI_SBUPD            ; ...and its whole-or-thumb choice, for both bars (13.10.3.2)
     %define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)
     %define OS88UI_NOGEST           ; presses routed by hand: no gesture install (SPEC.md 20.5.1.3.4)
     %define OS88UI_NOBFIND          ; hit-tests its own rects: no os88ui_bfind (SPEC.md 20.5.1.3.4)
+    %define OS88UI_1BPP             ; OSAPI_SAVEU_1BPP: a greyed caption keeps its ink (SPEC.md 13.8.11)
     %include "os88ui.inc"
 
 ; ---- bss --------------------------------------------------------------------
@@ -5752,6 +5779,8 @@ tp_seed_s:
     TPB tp_ttlbuf,   32         ; the window's title: OSAPI_WM_TITLE keeps the
                                 ; pointer and reads it on every repaint
     TPB tp_nbuf,     48
+    TPB tp_qbuf,     32         ; the save-changes question (SPEC.md 69.12)
+    TPB tp_qact,     1          ; ...and what its answer goes on to do: TPQ_*
     TPB_UNION                   ; ...the typesetter's own scratch
     TPB tp_cmd,      32
     TPB tp_arg,      182
@@ -5847,5 +5876,6 @@ TP_BSS_TOTAL equ TPB_AT
     OS88_ADJACENT tp_margin, tp_units, 1
     OS88_ADJACENT tp_units, tp_pstyle, 1
     OS88_ADJACENT tp_pstyle, tp_fsize, 1
+    OS88_ADJACENT tp_dirty, tp_needset, 1   ; one word store sets both
     OS88_BSS TP_BSS_TOTAL
     OS88_IMAGE_END

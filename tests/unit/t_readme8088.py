@@ -20,10 +20,13 @@ bounded at do not move - `tools/checkreadme.py` still holds the 28-column
 formatted width and Note Pad's 16KB ceiling, so there is room in both
 directions.
 
-WHY IT IS `soak`.  It is about one file, it can only be broken by editing that
-file, and the person who edits it is the person the row is for
-(docs/WRITING-TESTS.md 2.1).  Charging every `make` for a joke would be the
-wrong tier twice over.
+WHY IT IS `fast`, WHICH THE RULE SAYS IT IS NOT.  It is about one file and
+only an edit to that file can break it, so docs/WRITING-TESTS.md 2.1 puts it in
+`soak` - and it sat there while two ordinary edits took the packed manual to
+8,721 bytes with every `make` green (incident 79).  The owner moved it to
+`fast`: it is 0.1 s and needs no build.  That is a decision about THIS row,
+recorded in 2.1 beside `kernbudget`, and not an argument another row can
+borrow.
 
 WHAT IT COMPUTES RATHER THAN READS.  The Makefile applies CRLF at build time
 and wraps the result (`$(SYSDOCRAW)` and `$(SYSDOC)`), so this does those two

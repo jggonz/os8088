@@ -29,6 +29,10 @@ The layer comes first only while the bank holds what the faster machine
 needs to carry the base (the header's H_LYNEED, this clip's a slot or two),
 which the bank is well past when the slots are marked.
 
+THE BANK COPIES ON BOTH ARMS: QEMU is a 386, which reads an XMS bank IN
+PLACE since 98.3.18.14 - its slots the ring's, [vp_xcnt] unused - so
+`[vp_noinp]` = 1, the gate's A/B, is written before Play.
+
 ARM bank: the NEGATIVE CONTROL and the threshold's own test - [vp_lyneed]
 poked past the bank's size before Play, so the bank is always short of it:
 the bank goes on filling first, as every file before was read, which is
@@ -172,7 +176,11 @@ def main():
         if a.arm == "bank":             # (the bank below what the base
             qpoke(q, [(base + syms["vp_lyneed"],    # needs: all of it)
                        struct.pack("<H", 0xFFE0))])
-        qpoke(q, [(base + syms["vp_stopat"], struct.pack("<H", HOLD))])
+        # THE COPYING BANK (98.3.18.14): a 386 reads an XMS bank in place,
+        # with no FIFO to refill and so no order to see - [vp_noinp], the
+        # gate's A/B, keeps the FIFO this row counts, as every 386 had it
+        qpoke(q, [(base + syms["vp_stopat"], struct.pack("<H", HOLD)),
+                  (base + syms["vp_noinp"], b"\1")])
         q.hmp("sendkey p")
         wait(lambda: rb("vp_held") == 1 and rw("vp_done") == HOLD,
              "the hold before frame %d" % HOLD, 120)

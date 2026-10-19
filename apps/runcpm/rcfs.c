@@ -95,14 +95,14 @@
  *
  * TWO SEGMENTS (SPEC.md 73.14, 71): the resident image + bss passed the
  * 55,000 trigger in wave 4, so the PER-COMMAND half of this file is module
- * code in RUNCPM.OVL - the ovl_* names: ERA/REN/MAKE, F_OPEN/F_CLOSE, the
+ * code, the module that is part 1 of RUNCPM.O88 - the ovl_* names: ERA/REN/MAKE, F_OPEN/F_CLOSE, the
  * search and _mockupDirEntry, F_SIZE/F_RANDREC, USER n's folder, BDOS 249,
  * _CheckSUB - and what a RECORD, a punched byte or a keystroke touches stays
  * resident: F_READ/F_WRITE and the random records, the capture files, the
  * open-file table (rc_oft_get loads a file for a record call after a close),
- * the directory cache, the names. The module is loaded by rc_boot's
- * ovl_patch_cpm on the first wake before any folder move and the machine
- * does not boot without it, so no ovl_* here can find the module absent and
+ * the directory cache, the names. The module is an EAGER part (SPEC.md
+ * 73.14.2): read at launch, so a launch without it never opens a window and
+ * no ovl_* here can find the module absent and
  * every one keeps its natural BDOS code (0 = success). Never take the
  * address of one (SPEC.md 73.14).
  * ==========================================================================*/

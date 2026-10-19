@@ -96,6 +96,19 @@ FSIF_BANKED equ 4
 ; -----------------------------------------------------------------------------
 fsx_caps:
     push bx
+%ifdef KERN_BIG
+    cmp bx, 16                  ; BX = 1..15 ASKS ABOUT DISPLAY BX-1 (SPEC.md
+    jae .ask                    ; 53.1.2) - no window pointer is that small -
+    cmp [vid_ndisp], bl         ; and CF = 1 is "BX-1 is past the last one":
+    jb .out                     ; the refusal's own carry, out through the one
+                                ; `pop bx`. BX = 0 (the frontmost) compares
+                                ; below nothing and asks
+%else
+    lea ax, [bx-2]              ; ONE display: BX = 1 is the primary, which
+    cmp ax, 14                  ; this answers whatever BX is, and 2..15 are
+    jb .out                     ; displays there are not (SPEC.md 53.1.2) -
+%endif                          ; CF = 1, the refusal, out through the `pop`
+.ask:
     mov dl, [vid_kind]
 %ifdef KERN_BIG                 ; ...of the display the ASKED-ABOUT window is
                                 ; on (SPEC.md 39.18.1)
@@ -114,8 +127,9 @@ fsx_caps:
     xor bh, bh
     shl bx, 1
     mov ax, [bx+fsx_capstab]
-    pop bx
     clc
+.out:
+    pop bx                      ; `pop` writes no flag: either answer's CF
     ret
 
 fsx_capstab:                    ; indexed by VID_* (VGA 0, HERC 1, CGA 2, EGA 3)
@@ -160,12 +174,16 @@ fsx_run:
                                 ; above would silently retarget another
                                 ; routine's `.fail`
 %ifdef KERN_BIG
-    cmp cx, FSXF_FASTTICK + FSXF_RATE ; 6: CX >= 8 is an undefined bit, and 6
-%else                           ; and 7 are FASTTICK WITH RATE, which refuses
-    cmp cx, FSXF_KEEPWORKER + FSXF_FASTTICK + 1 ; too - one channel 0 (53.2.2)
+    cmp cl, FSXF_FASTTICK + FSXF_RATE ; 6: CL >= 8 is an undefined bit, and 6
+    jae .fail                   ; and 7 are FASTTICK WITH RATE, which refuses
+    cmp [vid_ndisp], ch         ; too - one channel 0 (53.2.2). CH = 0 the
+    jb .fail                    ; window's display, n display n-1 (53.1.2)
+%else
+    cmp cx, FSXF_KEEPWORKER + FSXF_FASTTICK + 1 ; (CH: any display past the
+    jae .fail                   ; window's refuses, CX being past the flags)
 %endif
                                 ; undefined flag bits refuse, so the word
-    jae .fail                   ; stays extensible (SPEC.md 53.1). "any bit
+                                ; stays extensible (SPEC.md 53.1). "any bit
                                 ; above the defined ones is set" and "CX >=
                                 ; 2^n" are the same statement ONLY BECAUSE THE
                                 ; DEFINED BITS ARE THE LOW n: define bit 4
@@ -176,6 +194,10 @@ fsx_run:
                                 ; and one bracket at a time: [sch_cur] = 0 and
                                 ; [fsx_task] = 0xFF, ONE word (adjacent, the
                                 ; %if at fsx_mine)
+%ifdef KERN_BIG
+    mov [fsx_wdisp], ch         ; THE DISPLAY ASKED FOR, banked - no bracket is
+%endif                          ; up, so nothing reads it. CH may stay: only CL
+                                ; is read until the release loop loads all of CX
 %ifdef KERN_BIG
     test cl, FSXF_RATE          ; SPEC.md 53.2.2: DX a divisor, DI a hook
     jz .norate                  ; (never with FASTTICK: refused above)
@@ -291,10 +313,13 @@ fsx_run:
     ; thaw safe. The caller's own grants stay - it keeps running, which is
     ; what carries a FSXF_KEEPWORKER stream in.
     mov si, inst_tab
-    mov cl, INST_MAX            ; CL alone: CH is 0, because the flags test at
-                                ; the door refused every CX >= 8 and nothing
-                                ; since has written CX (the fence's clobbers
-                                ; are DX and DI)
+%ifdef KERN_BIG
+    mov cx, INST_MAX            ; ALL OF CX: CH is still the door's display,
+%else                           ; banked above (kern_big). CL alone on
+    mov cl, INST_MAX            ; kern_small: CH is 0, because the door refused
+%endif                          ; every CX past the flags, and nothing since
+                                ; has written CX (the fence's clobbers are DX
+                                ; and DI)
     xor al, al
 .rel:
     cmp byte [si+I_STATE], 0
@@ -308,9 +333,12 @@ fsx_run:
     loop .rel
 
 %ifdef KERN_BIG
+    dec byte [fsx_wdisp]        ; the door's CH: n is display n-1 (SPEC.md
+    jns .disp                   ; 53.1.2), and 0 - every caller before it -
+                                ; wraps to FFh: the WINDOW's display
     call wm_disp_of             ; WHICH DISPLAY this bracket is on - banked,
     mov [fsx_wdisp], al         ; not acted on (SPEC.md 39.18.3). BX is still
-                                ; the window
+.disp:                          ; the window
                                 ;
                                 ; THE SINGLE-DISPLAY COLLAPSE MOVED TO
                                 ; fsx_mode, because it is a consequence of
@@ -892,15 +920,12 @@ fsx_page:
     jae fsx_wait.fail
     mov bx, 0x030A                  ; graphics + video, both lone-Hercules pages
 %ifdef KERN_BIG
-    push ax
     call vid_dual_ok                ; **AND THE SECOND PAGE IS REFUSED ON A
-    pop ax
-    jc .single
+    jc .single                      ; (AX survives it, vid_dual_ok's contract)
     or al, al
     jnz fsx_wait.fail               ; MACHINE THAT HAS A COLOUR CARD TOO**
-    mov bh, 1                      ; dual-card page 0 must not decode B8000h
-    jmp .h0
-.single:
+    mov bh, 1                       ; dual-card page 0 must not decode B8000h,
+.single:                            ; and AL = 0 takes the `jz .h0` below
 %endif                              ; (SPEC.md 53.10). vid_setmode leaves 3BFh
                                     ; bit 1 clear for a reason it states at the
                                     ; write: that page is at B8000, where a CGA
@@ -915,9 +940,8 @@ fsx_page:
                                     ; call can reach here
     or al, al
     jz .h0
-    or bl, 0x80                     ; ...and page 1
-    mov bh, 3                       ; ...whose decode has to be allowed with it
-.h0:
+    or bl, 0x80                     ; ...and page 1, whose decode BH = 3
+.h0:                                ; already allows (kernel size pass 13, -6)
     mov dx, 0x3BF                   ; ALLOW the second page: bit 0 graphics,
     mov al, bh                      ; retain both pages on a lone Hercules
     out dx, al                      ; dual-card page 0 retains only its own RAM

@@ -4,7 +4,7 @@
 ; the clock, Enter, or Clock > Settings.
 ;
 ;   [x] Clock face only            (Hide date, alarms and desktop label.)
-;   [ ] Seconds   [x] 24-hour      Size: [Medium   v]
+;   [ ] Seconds   [x] 24-hour      Size: [ Medium ]
 ;   Choose a face                  three rows of three previews
 ;   Selected: Red LED              [Cancel] [Apply] [ OK ]
 ;
@@ -21,49 +21,68 @@
 ; preview shows.
 ; =============================================================================
 
-DKST_END    equ 0
-DKST_CHK    equ 1               ; param = the flag; ptr = the label
-DKST_CHKB   equ 2               ; ...its label bold
-DKST_TEXT   equ 3               ; ptr = the text
-DKST_RULE   equ 4
-DKST_DROP   equ 5               ; the size
-DKST_TILE   equ 6               ; param = the face
-DKST_STAT   equ 7               ; `Selected: ...`
-DKST_BTN    equ 8               ; param = DKB_*; ptr = the label
+; THE FORMS: this window and the alarm's (dkalm.inc) are one machine over
+; two kinds of LAYOUT - a table of entries, each a control at a rect - and
+; two bss records (deskclok.asm's DKW_*: the window, the layout, a button
+; pressed). [dk_fm] names the form the routines below work on: a form's own
+; callbacks set it, and a paint puts back the one it found (a paint can come
+; in the middle of the other form's gesture)
+DKST_END    equ 0               ; the entry types: the clickable ones...
+DKST_CHK    equ 1               ; param = the flag (DKF_*; DKF_ALARM is the
+                                ; alarm's edit, dk_aon); ptr = the label -
+                                ; bold for `Clock face only`
+DKST_SIZE   equ 2               ; the size: a button that cycles
+                                ; Small, Medium, Large on each press -
+                                ; param = DKB_SIZE, so it is never drawn
+                                ; pressed (dk_sbtnd), ptr = 0: its label is
+                                ; the size's name
+DKST_TILE   equ 3               ; param = the face (made by dk_tileent)
+DKST_BTN    equ 4               ; param = DKB_*; ptr = the label
+DKST_FLD    equ 5               ; the alarm's: param = DKAF_*
+DKST_TEXT   equ 6               ; ...then the ones a press passes through:
+DKST_RULE   equ 7               ; ptr = the text
+DKST_STAT   equ 8               ; `Selected: ...`
+DKST_TILES  equ 9               ; the gallery: the first tile's x, y, w, h,
+                                ; and the rows' pitch at ptr - its nine
+                                ; tiles are made from it (dk_tileent)
 DKS_ESZ     equ 12              ; an entry: db type, param; dw x, y, w, h, ptr
-DKB_CANCEL  equ 0
+DKB_CANCEL  equ 0               ; the buttons, both forms'
 DKB_APPLY   equ 1
-DKB_OK      equ 2
+DKB_OK      equ 2               ; the default: a ring
+DKB_MINUS   equ 3
+DKB_PLUS    equ 4
+DKB_SIZE    equ 5               ; (the size's: never a DKST_BTN)
 DKSG_CH     equ 0               ; a layout: dw the content's height,
-DKSG_PWA    equ 2               ; db an analog preview's width,
-DKSG_PWD    equ 3               ; db a digital one's,
-DKSG_E      equ 4               ; then its entries
+DKSG_PWA    equ 2               ; db an analog preview's width (0: no gallery
+DKSG_PWD    equ 3               ; - the alarm's), db a digital one's,
+DKSG_W      equ 4               ; dw the content's width,
+DKSG_E      equ 6               ; then its entries
+DKT_FORM    equ WT_SIZE         ; a form's window template, past WT_*: its
+DKT_GEOS    equ WT_SIZE + 2     ; record, its layouts by screen class, its
+DKT_CLOSE   equ WT_SIZE + 4     ; close and release callbacks, and the proc
+DKT_MUP     equ WT_SIZE + 6     ; that makes its state before it opens
+DKT_INIT    equ WT_SIZE + 8
 
 %macro DKSE 7
     db %1, %2
     dw %3, %4, %5, %6, %7
 %endmacro
-%macro DKS_TROW 3                ; y, a tile's height, the row
-    DKSE DKST_TILE, %3 * 3 + 0, 8, %1, 112, %2, 0
-    DKSE DKST_TILE, %3 * 3 + 1, 128, %1, 112, %2, 0
-    DKSE DKST_TILE, %3 * 3 + 2, 248, %1, 112, %2, 0
-%endmacro
 %macro DKS_TILES 3              ; y0, the row step, a tile's height
-    DKS_TROW %1, %3, 0
-    DKS_TROW %1 + %2, %3, 1
-    DKS_TROW %1 + 2 * %2, %3, 2
+    DKSE DKST_TILES, 0, 8, %1, 112, %3, %2
 %endmacro
+DKS_TPITCH  equ 120             ; the gallery's columns: 112 px and a gap
 
 dk_sgeos:   dw dks_tall, dks_mid, dks_comp
 dks_tall:
     dw 386
     db 64, 96
-    DKSE DKST_CHKB, DKF_ONLY, 8, 6, 200, 12, dkss_only
+    dw DK_SETW
+    DKSE DKST_CHK, DKF_ONLY, 8, 6, 200, 12, dkss_only
     DKSE DKST_TEXT, 0, 26, 22, 0, 0, dkss_sub
     DKSE DKST_CHK, DKF_SECS, 8, 40, 100, 12, dkss_secs
     DKSE DKST_CHK, DKF_H24, 120, 40, 100, 12, dkss_h24
     DKSE DKST_TEXT, 0, 228, 42, 0, 0, dkss_size
-    DKSE DKST_DROP, 0, 276, 38, 84, 16, 0
+    DKSE DKST_SIZE, DKB_SIZE, 276, 38, 84, 16, 0
     DKSE DKST_RULE, 0, 8, 60, 352, 1, 0
     DKSE DKST_TEXT, 0, 8, 66, 0, 0, dkss_choose
     DKS_TILES 80, 92, 88
@@ -76,12 +95,13 @@ dks_tall:
 dks_mid:
     dw 274
     db 56, 96
-    DKSE DKST_CHKB, DKF_ONLY, 8, 4, 200, 12, dkss_only
+    dw DK_SETW
+    DKSE DKST_CHK, DKF_ONLY, 8, 4, 200, 12, dkss_only
     DKSE DKST_TEXT, 0, 26, 18, 0, 0, dkss_sub
     DKSE DKST_CHK, DKF_SECS, 8, 32, 100, 12, dkss_secs
     DKSE DKST_CHK, DKF_H24, 120, 32, 100, 12, dkss_h24
     DKSE DKST_TEXT, 0, 228, 34, 0, 0, dkss_size
-    DKSE DKST_DROP, 0, 276, 30, 84, 14, 0
+    DKSE DKST_SIZE, DKB_SIZE, 276, 30, 84, 14, 0
     DKSE DKST_RULE, 0, 8, 48, 352, 1, 0
     DKSE DKST_TEXT, 0, 8, 52, 0, 0, dkss_choose
     DKS_TILES 64, 62, 60
@@ -94,11 +114,12 @@ dks_mid:
 dks_comp:
     dw 137
     db 36, 56
-    DKSE DKST_CHKB, DKF_ONLY, 8, 2, 140, 12, dkss_only
+    dw DK_SETW
+    DKSE DKST_CHK, DKF_ONLY, 8, 2, 140, 12, dkss_only
     DKSE DKST_CHK, DKF_SECS, 160, 2, 90, 12, dkss_secs
     DKSE DKST_CHK, DKF_H24, 264, 2, 90, 12, dkss_h24
     DKSE DKST_TEXT, 0, 8, 17, 0, 0, dkss_size
-    DKSE DKST_DROP, 0, 56, 14, 84, 12, 0
+    DKSE DKST_SIZE, DKB_SIZE, 56, 14, 84, 12, 0
     DKSE DKST_STAT, 0, 160, 17, 200, 8, 0
     DKS_TILES 29, 31, 30
     DKSE DKST_BTN, DKB_CANCEL, 152, 124, 64, 12, dkss_cancel
@@ -117,109 +138,76 @@ dkss_cancel: db 'Cancel', 0
 dkss_apply:  db 'Apply', 0
 dkss_ok:     db 'OK', 0
 dkss_title:  db 'Desk Clock Settings', 0
-dkss_sizes:  dw dkss_s0, dkss_s1, dkss_s2
-dkss_s0:     db 'Small', 0
-dkss_s1:     db 'Medium', 0
-dkss_s2:     db 'Large', 0
-DKS_LROW    equ 12              ; the size list's row
+dkss_sizes:  dw dk_t_s0 + 2, dk_t_s1 + 2, dk_t_s2 + 2   ; the Size menu's
 
 dk_tick12:  db 8                 ; inside a 12-px box, from its third row
             dw 00C0h, 01C0h, 0380h, 3700h, 3E00h, 1C00h, 0800h, 0000h
 
-dk_stpl:    dw 0, 0, DK_SETW + 2, 0
+dk_stpl:    dw 0, MBAR_H + 4, DK_SETW + 2, 0
             dw dkss_title, dk_spaint, dk_skey, dk_sclick
+            dw dk_fset, dk_sgeos, dk_sclose, dk_smup, dk_sapplied
 
 ; -----------------------------------------------------------------------------
-; dk_setopen - the settings window: in front if it is up, else made (the lock
-; held: a callback's). Keeps everything
+; dk_setopen / dk_almopen - a form's window: in front if it is up, else made
+; (the lock held: a callback's) beside the clock, so its preview shows - its
+; state made first by its DKT_INIT. Keep everything
 ; -----------------------------------------------------------------------------
 dk_setopen:
+    push si
+    mov si, dk_stpl
+    jmp short dk_fopen
+dk_almopen:
+    push si
+    mov si, dk_atpl
+dk_fopen:
     push ax
     push bx
     push cx
     push dx
-    push si
+    push di
     push es
-    mov bx, [dk_swin]
+    mov di, [si + DKT_FORM]
+    mov bx, [di + DKW_WIN]
     or bx, bx
     jz .make
     call OSAPI_WM_FRONT
     jmp .x
 .make:
-    call dk_sapplied            ; what Cancel goes back to
-    mov byte [dk_sdrop], 0
-    mov byte [dk_sbtn], 0
-    mov bl, [stik_li]
+    call [si + DKT_INIT]
+    mov byte [di + DKW_BTN], 0
+    mov bl, [stik_li]           ; the layout for the screen class
     xor bh, bh
     shl bx, 1
-    mov si, [dk_sgeos + bx]
-    mov [dk_sgeo], si
-    mov ax, [si + DKSG_CH]
+    add bx, [si + DKT_GEOS]
+    mov bx, [bx]
+    mov [di + DKW_GEO], bx
+    mov ax, [bx + DKSG_CH]
     add ax, TITLE_H + 1
-    mov [dk_stpl + WT_H], ax
-    mov cx, DK_SETW + 2         ; beside the clock, so its preview shows
-    call dk_beside
-    mov [dk_stpl + WT_X], ax
-    mov word [dk_stpl + WT_Y], MBAR_H + 4
-    mov si, dk_stpl
-    call OSAPI_WM_CREATE
-    jc .x                       ; the window table is full: nothing opens
-    mov [dk_swin], bx
-    mov al, 1
-    call OSAPI_WM_OWNBG         ; every pixel is ours
-    mov al, 1
-    call OSAPI_WM_KEEPH
-    call OSAPI_WM_NOANIM        ; no zoom: the paint is the opening
-    mov ax, dk_sclose
-    call OSAPI_WM_ONCLOSE
-    mov ax, dk_smup
-    call OSAPI_WM_ONMOUSEUP
-    mov si, dk_menus
-    call OSAPI_MENU_SET
-    call OSAPI_WM_FRONT
-    call OSAPI_WM_SHOW
-.x:
-    pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; dk_beside - CX = a window's width: AX = its x, the side of the clock with
-; the more room - wholly clear of it where the screen allows (W_X = 7 mod 8,
-; the content on the byte grid). Keeps the rest
-dk_beside:
-    push bx
-    push dx
-    push si
-    push es
-    push cx
+    mov [si + WT_H], ax
+    ; BESIDE THE CLOCK: the side with the more room - wholly clear of it
+    ; where the screen allows (W_X = 7 mod 8, the content on the byte grid)
     call OSAPI_VIDEO            ; AX = the screen's width
-    pop cx
     mov dx, ax
+    mov cx, [si + WT_W]
     mov ax, KERNEL_SEG
     mov es, ax
-    mov si, [stik_win]
-    mov bx, [es:si + W_X]       ; BX = the room left of the clock
+    mov bx, [stik_win]
     mov ax, dx
-    sub ax, bx
-    sub ax, [es:si + W_W]       ; AX = the room right of it
-    cmp ax, bx
+    sub ax, [es:bx + W_X]
+    sub ax, [es:bx + W_W]       ; AX = the room right of it
+    cmp ax, [es:bx + W_X]
     jg .right
-    mov ax, bx                  ; LEFT: its right edge at the clock's left,
+    mov ax, [es:bx + W_X]       ; LEFT: its right edge at the clock's left,
     sub ax, cx                  ; or the screen's edge
     jmp short .snap
 .right:
-    mov ax, [es:si + W_X]
-    add ax, [es:si + W_W]
+    mov ax, [es:bx + W_X]
+    add ax, [es:bx + W_W]
     add ax, 8                   ; clear of it once snapped down
-    mov bx, dx
-    sub bx, cx
-    cmp ax, bx
+    sub dx, cx
+    cmp ax, dx
     jle .snap
-    mov ax, bx                  ; ...no further than the screen's right
+    mov ax, dx                  ; ...no further than the screen's right
 .snap:
     or ax, ax
     jns .p
@@ -227,16 +215,38 @@ dk_beside:
 .p:
     and ax, 0FFF8h
     dec ax
-    jns .x
+    jns .px
     mov ax, 7
+.px:
+    mov [si + WT_X], ax
+    call OSAPI_WM_CREATE
+    jc .x                       ; the window table is full: nothing opens
+    mov [di + DKW_WIN], bx
+    mov al, 1
+    call OSAPI_WM_OWNBG         ; every pixel is ours
+    mov al, 1
+    call OSAPI_WM_KEEPH
+    call OSAPI_WM_NOANIM        ; no zoom: the paint is the opening
+    mov ax, [si + DKT_CLOSE]
+    call OSAPI_WM_ONCLOSE
+    mov ax, [si + DKT_MUP]
+    call OSAPI_WM_ONMOUSEUP
+    mov si, dk_menus
+    call OSAPI_MENU_SET
+    call OSAPI_WM_FRONT
+    call OSAPI_WM_SHOW
 .x:
     pop es
-    pop si
+    pop di
     pop dx
+    pop cx
     pop bx
+    pop ax
+    pop si
     ret
 
-; dk_sapplied / dk_srestore - the payload to dk_sav, and back. Keep all
+; dk_sapplied / dk_srestore - the payload to dk_sav, and back. Keep all.
+; dk_sapplied is the settings' DKT_INIT too: what Cancel goes back to
 dk_sapplied:
     push si
     push di
@@ -262,18 +272,26 @@ dk_scopy:
     pop si
     ret
 
-; dk_sshut - the window down; the menus. Keeps everything
+; dk_sshut / dk_ashut - a form's window down; the menus. Keep everything
 dk_sshut:
+    push si
+    mov si, dk_fset
+    jmp short dk_fshut
+dk_ashut:
+    push si
+    mov si, dk_falm
+dk_fshut:
     push bx
-    mov bx, [dk_swin]
+    mov bx, [si + DKW_WIN]
     or bx, bx
     jz .x
-    mov word [dk_swin], 0
+    mov word [si + DKW_WIN], 0
     call OSAPI_WM_DESTROY
     call dk_refocus
 .x:
     call dk_menulive
     pop bx
+    pop si
     ret
 
 ; dk_scancel - the preview withdrawn: what was applied, on the desk again
@@ -300,80 +318,67 @@ dk_spreview:
     jmp dk_menulive
 
 ; -----------------------------------------------------------------------------
-; the window's geometry: its content's origin, the rows and columns
+; PAINTING A FORM: its content composed (dkdraw.inc) and put down a slab at a
+; time - every control whose rows a slab reaches
 ; -----------------------------------------------------------------------------
-; dk_sorg - [dk_sox], [dk_soy] = the content's origin. ES not assumed
-dk_sorg:
+; dk_forg - [dk_wox], [dk_woy] = the form's content's origin. ES not assumed
+dk_forg:
     push ax
     push bx
     push dx
-    mov bx, [dk_swin]
+    mov bx, [dk_fm]
+    mov bx, [bx + DKW_WIN]
     call OSAPI_WM_CONTENT
-    mov [dk_sox], ax
-    mov [dk_soy], dx
+    mov [dk_wox], ax
+    mov [dk_woy], dx
     pop dx
     pop bx
     pop ax
     ret
 
-; dk_spaint - W_PAINT (SI = the window, the lock held, the clip armed)
+; dk_spaint / dk_apaint - W_PAINT (SI = the window, the lock held, the clip
+; armed): the damage, on that form - and [dk_fm] as it was, after
 dk_spaint:
     push ax
+    mov ax, dk_fset
+dk_fpaint:
+    push word [dk_fm]
+    mov [dk_fm], ax
     push bx
     push cx
     push dx
     mov bx, si
     call OSAPI_WM_DAMAGE        ; AX..DX, the whole of it on CF = 1
-    call dk_sbody
+    call dk_fbody
     pop dx
     pop cx
     pop bx
+    pop word [dk_fm]
     pop ax
     ret
 
-; dk_srect - content rect AX, BX .. CX, DX (inclusive) again, outside a paint
-; (the lock held). Keeps everything
-dk_srect:
-    push ax
-    push bx
-    push cx
-    push dx
-    cmp word [dk_swin], 0
-    je .x
-    call dk_sorg
-    add ax, [dk_sox]
-    add cx, [dk_sox]
-    add bx, [dk_soy]
-    add dx, [dk_soy]
-    push bx
-    mov bx, [dk_swin]
-    call OSAPI_WM_CLIP_SET
-    pop bx
-    jc .x                       ; none of it showing
-    call dk_sbody
-.x:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; dk_sredraw - the content whole, outside a paint. Keeps everything
-dk_sredraw:
+; dk_wrect - the form's content rect AX, BX .. CX, DX (inclusive) again,
+; outside a paint (the lock held). Keeps everything
+dk_wrect:
     push ax
     push bx
     push cx
     push dx
     push si
-    cmp word [dk_swin], 0
+    mov si, [dk_fm]
+    cmp word [si + DKW_WIN], 0
     je .x
-    xor ax, ax
-    xor bx, bx
-    mov cx, DK_SETW - 1
-    mov si, [dk_sgeo]
-    mov dx, [si + DKSG_CH]
-    dec dx
-    call dk_srect
+    call dk_forg
+    add ax, [dk_wox]
+    add cx, [dk_wox]
+    add bx, [dk_woy]
+    add dx, [dk_woy]
+    push bx
+    mov bx, [si + DKW_WIN]
+    call OSAPI_WM_CLIP_SET
+    pop bx
+    jc .x                       ; none of it showing
+    call dk_fbody
 .x:
     pop si
     pop dx
@@ -382,9 +387,41 @@ dk_sredraw:
     pop ax
     ret
 
-; dk_sbody - the damage AX, BX .. CX, DX (screen): its rows composed and put
+; dk_sredraw - the settings' content whole, outside a paint, from any of our
+; windows (the clock's keys and menus too). Keeps everything
+dk_sredraw:
+    push word [dk_fm]
+    mov word [dk_fm], dk_fset
+    call dk_fall
+    pop word [dk_fm]
+    ret
+
+; dk_fall - the form's content whole, outside a paint. Keeps everything
+dk_fall:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, [dk_fm]
+    mov si, [si + DKW_GEO]
+    xor ax, ax
+    xor bx, bx
+    mov cx, [si + DKSG_W]
+    dec cx
+    mov dx, [si + DKSG_CH]
+    dec dx
+    call dk_wrect
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; dk_fbody - the damage AX, BX .. CX, DX (screen): its rows composed and put
 ; down a slab at a time. Every register kept
-dk_sbody:
+dk_fbody:
     push ax
     push bx
     push cx
@@ -397,23 +434,24 @@ dk_sbody:
     mov ax, KERNEL_SEG
     mov es, ax
     pop ax
-    call dk_sorg
+    call dk_forg
+    mov si, [dk_fm]
+    mov si, [si + DKW_GEO]      ; SI = the layout, the paint through
     push bx
     push di
-    mov di, [dk_sox]                ; the content's columns
-    mov bx, DK_SETW
+    mov di, [dk_wox]            ; the content's columns
+    mov bx, [si + DKSG_W]
     call dk_cols
     pop di
     pop bx
-    sub bx, [dk_soy]
+    sub bx, [dk_woy]
     jge .r0
     xor bx, bx
 .r0:
     mov [dk_r0], bx
-    mov si, [dk_sgeo]
     mov ax, [si + DKSG_CH]
     dec ax
-    sub dx, [dk_soy]
+    sub dx, [dk_woy]
     cmp dx, ax
     jle .r1
     mov dx, ax
@@ -422,26 +460,33 @@ dk_sbody:
     mov ax, [ck_cx0]
     cmp ax, [ck_cx1]
     jg .x
-    ; the mode: four planes where BLITP takes the content
+    ; the mode: the settings take four planes where BLITP takes the content;
+    ; the alarm is black and white, and one plane is all of it
     mov byte [ck_np], 1
+    cmp byte [si + DKSG_PWA], 0
+    je .m
+    push si
     mov bx, [dk_swin]
-    call OSAPI_WM_DISPLAY
+    call OSAPI_WM_DISPLAY       ; (SI spent)
     mov [dk_dbpp], dh
     cmp dh, 1
-    jbe .m
-    mov ax, [dk_sox]
-    mov bx, [dk_soy]
-    mov cx, DK_SETW
-    mov si, [dk_sgeo]
+    jbe .m1
+    pop si
+    push si
+    mov ax, [dk_wox]
+    mov bx, [dk_woy]
+    mov cx, [si + DKSG_W]
     mov dx, [si + DKSG_CH]
     mov di, 0C000h
     call OSAPI_GFX_BLITP
-    jc .m
+    jc .m1
     mov byte [ck_np], 4
+.m1:
+    pop si
 .m:
     call ck_gwhite
     call ck_font
-    mov bx, DK_SETW
+    mov bx, [si + DKSG_W]
     call ck_setband
     call dk_stall               ; a band a tile row tall, if the heap has one
     mov ax, [dk_r0]
@@ -450,10 +495,10 @@ dk_sbody:
     jg .x
     mov [ck_y0], ax
     call dk_sslab               ; DX = its rows: to a tile row's edge at most
-    call dk_scomp
-    mov bx, [dk_soy]
+    call dk_fcomp
+    mov bx, [dk_woy]
     add bx, ax
-    mov ax, [dk_sox]
+    mov ax, [dk_wox]
     call dk_put
     mov ax, [ck_y0]
     add ax, dx
@@ -470,10 +515,11 @@ dk_sbody:
     pop ax
     ret
 
-; dk_stall - on four planes, a heap claim a TILE ROW tall for the paint's
-; band: each preview is then composed once, where the 25-row band composed
-; each one four times over (4.8 s a full paint on a 4.77 MHz 8088). Refused,
-; the paint keeps dk_band. Keeps everything
+; dk_stall - the settings on four planes: a heap claim a TILE ROW tall for
+; the paint's band, so each preview is composed once, where the 25-row band
+; composed each one four times over (4.8 s a full paint on a 4.77 MHz 8088).
+; Refused, the paint keeps dk_band. The alarm's slabs meet no tile row
+; (dk_st0 = 7FFFh). Keeps everything
 dk_stall:
     push ax
     push bx
@@ -481,6 +527,9 @@ dk_stall:
     push dx
     push di
     mov word [dk_sbseg], 0
+    mov word [dk_st0], 7FFFh
+    cmp word [dk_fm], dk_fset
+    jne .x
     call dk_stiles              ; AX = the first tile row's y, BX = the pitch
     mov [dk_st0], ax
     mov [dk_spit], bx
@@ -529,17 +578,12 @@ dk_sfree:
 ; dk_stiles - AX = the first tile row's y, BX = the rows from one to the
 ; next. Keeps the rest
 dk_stiles:
-    push si
     push di
-    mov si, 0
-    call dk_tileent             ; DI = face 0's tile: the first row
-    mov ax, [di+4]
-    mov si, 3
-    call dk_tileent             ; ...face 3's: the second
-    mov bx, [di+4]
-    sub bx, ax
+    mov ax, DKST_TILES
+    call dk_ffind
+    mov ax, [di + 4]
+    mov bx, [di + 10]
     pop di
-    pop si
     ret
 
 ; dk_sslab - AX = a slab's first row: DX = its rows - the band's, the
@@ -578,32 +622,129 @@ dk_sslab:
     ret
 
 ; -----------------------------------------------------------------------------
-; dk_scomp - slab [ck_y0] of the content: white, every control whose rows it
-; reaches, and the size list over them when it is open. Keeps everything
+; THE LAYOUT: its entries walked, found, made
 ; -----------------------------------------------------------------------------
-dk_scomp:
+; dk_fwalk - BP = a near proc, called with DI = each entry of the form's
+; layout in turn - the gallery's row as its nine tiles (dk_tileent's) - and
+; CF = 1 from it stops the walk there. CF out = stopped, DI = that entry.
+; Keeps the rest, BP too
+dk_fwalk:
+    push si
+    mov di, [dk_fm]
+    mov di, [di + DKW_GEO]
+    add di, DKSG_E
+.e:
+    cmp byte [di], DKST_TILES
+    je .t
+    cmp byte [di], DKST_END
+    je .x                       ; (CF = 0: equal)
+    push di
+    call bp
+    pop di
+    jc .x
+.n:
+    add di, DKS_ESZ
+    jmp short .e
+.t:
+    xor si, si
+.tl:
+    call dk_tileent             ; DI = tile SI
+    push si
+    call bp
+    pop si
+    jc .x
+    inc si
+    cmp si, DKF_N
+    jb .tl
+    push ax
+    mov ax, DKST_TILES
+    call dk_ffind               ; DI = the gallery's row again
+    pop ax
+    jmp short .n
+.x:
+    pop si
+    ret
+
+; dk_ffind - AL = a type, AH = its param: DI = the form's entry of them (one
+; that is there - not a tile). Keeps the rest
+dk_ffind:
+    mov di, [dk_fm]
+    mov di, [di + DKW_GEO]
+    add di, DKSG_E - DKS_ESZ
+.e:
+    add di, DKS_ESZ
+    cmp [di], ax
+    jne .e
+    ret
+
+; dk_ssizeent - DI = the settings' size button. AX spent
+dk_ssizeent:
+    mov ax, DKST_SIZE | (DKB_SIZE << 8)
+    jmp short dk_ffind
+
+; dk_tileent - SI = a face: DI = its tile's entry, made at dk_tent from the
+; gallery's row - column face mod 3, row face / 3. Keeps the rest
+dk_tileent:
+    push ax
+    push cx
+    mov ax, DKST_TILES
+    call dk_ffind
+    mov ax, si
+    mov cl, 3
+    div cl                      ; AL = the row, AH = the column
+    mov cx, ax
+    mov al, DKS_TPITCH
+    mul ch
+    add ax, [di + 2]
+    mov [dk_tent + 2], ax
+    mov al, [di + 10]
+    mul cl
+    add ax, [di + 4]
+    mov [dk_tent + 4], ax
+    mov ax, [di + 6]
+    mov [dk_tent + 6], ax
+    mov ax, [di + 8]
+    mov [dk_tent + 8], ax
+    mov ax, si
+    mov ah, al
+    mov al, DKST_TILE
+    mov [dk_tent], ax
+    mov di, dk_tent
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dk_fcomp - slab [ck_y0] of the form: white, and every control whose rows
+; it reaches. Keeps all
+; -----------------------------------------------------------------------------
+dk_fcomp:
     push ax
     push bx
     push cx
     push dx
     push si
     push di
+    push bp
     call ck_ground
     call ck_clear
     mov word [ck_ox], 0
     mov word [ck_oy], 0
-    mov di, [dk_sgeo]
-    add di, DKSG_E
-.e:
+    mov bp, .one
+    call dk_fwalk
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+; the entry at DI, when the slab reaches its rows (and a button's ring)
+.one:
     mov al, [di]
-    cmp al, DKST_END
-    je .list
     mov bx, [di+4]              ; its rows
     mov dx, [di+8]
-    cmp al, DKST_TEXT
-    jne .h
-    mov dx, 8
-.h:
     or dx, dx
     jnz .r
     mov dx, 8
@@ -617,22 +758,10 @@ dk_scomp:
     shl bx, 1
     call [dk_sdraw + bx - 2]
 .n:
-    add di, DKS_ESZ
-    jmp short .e
-.list:
-    cmp byte [dk_sdrop], 0
-    je .x
-    call dk_slist
-.x:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    clc
     ret
-dk_sdraw:   dw dk_schk, dk_schk, dk_stext, dk_srule, dk_sdropd, dk_stile
-            dw dk_sstat, dk_sbtnd
+dk_sdraw:   dw dk_schk, dk_sbtnd, dk_stile, dk_sbtnd, dk_afld, dk_stext
+            dw dk_srule, dk_sstat
 
 ; the entry at DI: AX, BX, CX, DX = its rect
 dk_sent:
@@ -640,6 +769,19 @@ dk_sent:
     mov bx, [di+4]
     mov cx, [di+6]
     mov dx, [di+8]
+    ret
+
+; dk_iblk / dk_iwht - the ink black, or white (ck_ink). Keep everything
+dk_iwht:
+    push ax
+    mov al, LC_WHT
+    jmp short dk_iset
+dk_iblk:
+    push ax
+    mov al, LC_BLK
+dk_iset:
+    call ck_ink
+    pop ax
     ret
 
 ; dk_frame - AX, BX, CX, DX a rect: its 1-px edge in the current ink
@@ -673,16 +815,21 @@ dk_frame:
     pop ax
     ret
 
-; a check box: a 12-px box, the tick when its flag is set, the label
+; a check box: a 12-px box, the tick when its flag is set, the label - the
+; settings' and the alarm's
 dk_schk:
-    mov al, LC_BLK
-    call ck_ink
+    call dk_iblk
     call dk_sent
     mov cx, 12
     mov dx, 12
     call dk_frame
     mov cl, [di+1]
-    test [DKP + DKP_FLAGS], cl
+    mov si, DKP + DKP_FLAGS
+    cmp cl, DKF_ALARM           ; the alarm's box: its edit's copy
+    jne .f
+    mov si, dk_aon
+.f:
+    test [si], cl
     jz .l
     push ax
     push bx
@@ -695,7 +842,7 @@ dk_schk:
     pop ax
 .l:
     call ck_sc1
-    cmp byte [di], DKST_CHKB
+    cmp byte [di+1], DKF_ONLY   ; `Clock face only`, bold
     jne .p
     mov byte [ck_gbold], 1
 .p:
@@ -709,8 +856,7 @@ dk_schk:
     ret
 
 dk_stext:
-    mov al, LC_BLK
-    call ck_ink
+    call dk_iblk
     call ck_sc1
     mov cx, [di+2]
     mov dx, [di+4]
@@ -718,138 +864,19 @@ dk_stext:
     jmp ck_text
 
 dk_srule:
-    mov al, LC_BLK
-    call ck_ink
+    call dk_iblk
     call dk_sent
     jmp ck_rect
-
-; the size: a box, the size's name, a cell with the arrow
-dk_sdropd:
-    mov al, LC_BLK
-    call ck_ink
-    call dk_sent
-    call dk_frame
-    push ax
-    push bx
-    add ax, cx                  ; the arrow's cell: its left edge...
-    sub ax, 14
-    mov cx, 1
-    call ck_rect
-    add ax, 4                   ; ...and the arrow, 7 wide, 4 deep
-    sub dx, 4
-    shr dx, 1
-    add bx, dx
-    mov cx, 7
-    mov dx, 1
-.ar:
-    call ck_rect
-    inc ax
-    inc bx
-    sub cx, 2
-    jg .ar
-    pop bx
-    pop ax
-    call ck_sc1
-    mov cx, ax
-    add cx, 5
-    mov dx, [di+8]
-    sub dx, 8
-    shr dx, 1
-    add dx, bx
-    mov bl, [DKP + DKP_SIZE]
-    xor bh, bh
-    shl bx, 1
-    mov si, [dkss_sizes + bx]
-    jmp ck_text
-
-; dk_slist - the size list, open under its box: three rows, the size
-; inverse. Over the gallery, in the same slab - nothing drawn twice
-dk_slist:
-    call dk_sdropent            ; DI = the drop's entry
-    call dk_sent
-    add bx, dx
-    dec bx                      ; under the box, sharing its bottom edge
-    mov dx, 3 * DKS_LROW + 2
-    push ax
-    mov al, LC_WHT
-    call ck_ink
-    pop ax
-    call ck_rect
-    push ax
-    mov al, LC_BLK
-    call ck_ink
-    pop ax
-    call dk_frame
-    inc bx
-    xor si, si
-.r:
-    cmp si, 3
-    jae .x
-    push ax
-    push bx
-    push cx
-    mov dx, si
-    cmp dl, [DKP + DKP_SIZE]
-    jne .t
-    push ax                     ; the current one inverse
-    mov al, LC_BLK
-    call ck_ink
-    pop ax
-    inc ax
-    sub cx, 2
-    mov dx, DKS_LROW
-    call ck_rect
-    push ax
-    mov al, LC_WHT
-    call ck_ink
-    pop ax
-    dec ax
-.t:
-    push si
-    call ck_sc1
-    mov cx, ax
-    add cx, 5
-    mov dx, bx
-    add dx, 2
-    shl si, 1
-    mov si, [dkss_sizes + si]
-    call ck_text
-    pop si
-    mov al, LC_BLK
-    call ck_ink
-    pop cx
-    pop bx
-    pop ax
-    add bx, DKS_LROW
-    inc si
-    jmp short .r
-.x:
-    ret
-
-; dk_sdropent - DI = the layout's drop entry
-dk_sdropent:
-    mov di, [dk_sgeo]
-    add di, DKSG_E
-.e:
-    cmp byte [di], DKST_DROP
-    je .r
-    add di, DKS_ESZ
-    jmp short .e
-.r:
-    ret
 
 ; a tile: the face's preview, its name; the selected one in a double border
 ; with its name on a black bar behind a ticked box
 dk_stile:
-    mov al, LC_BLK
-    call ck_ink
+    call dk_iblk
     call dk_sent
     call dk_frame
     mov si, [di+1]
     and si, 0FFh                ; SI = the face
-    mov cl, [DKP + DKP_FACE]
-    xor ch, ch
-    cmp si, cx
+    call dk_tsel
     jne .pv
     push ax
     push bx
@@ -859,82 +886,56 @@ dk_stile:
     add bx, 2
     sub cx, 4
     sub dx, 4
-    mov cx, [di+6]
-    sub cx, 4
     call dk_frame
     pop dx
     pop cx
     pop bx
     pop ax
 .pv:
-    push ax
-    push bx
-    push si
-    ; the preview: the face program at the layout's preview size
-    mov di, [dk_sgeo]
-    mov cl, [di + DKSG_PWA]
+    push ax                     ; the preview: the face program at the
+    push bx                     ; layout's preview size...
+    mov bx, [dk_sgeo]
+    mov al, [bx + DKSG_PWA]
     cmp si, DKF_ANALOG
     jb .w
-    mov cl, [di + DKSG_PWD]
+    mov al, [bx + DKSG_PWD]
 .w:
-    xor ch, ch
-    mov [dk_fw], cx
-    mov ax, cx
-    cmp si, DKF_ANALOG
-    jb .ah
-    mov dl, [dk_fhr + si]
-    xor dh, dh
-    mul dx
-    mov al, ah
-    mov ah, dl
-.ah:
-    call dk_sy
-    inc ax
-    and al, 0FEh
+    xor ah, ah
+    mov [dk_fw], ax
+    mov bx, si
+    call dk_fhgt                ; AX = its height
     mov [dk_fh], ax
-    pop si
     pop bx
-    pop ax
-    push ax
-    push bx
-    push si
-    mov di, 112                 ; centred across the tile...
-    sub di, [dk_fw]
-    sar di, 1
-    add ax, di
-    mov [ck_ox], ax
-    call dk_tileent             ; DI = the tile's entry again
-    mov cx, [di+8]              ; ...and in the rows over its name
+    mov cx, [di+8]              ; ...in the rows over its name...
     sub cx, 14
-    sub cx, [dk_fh]
+    sub cx, ax
     sar cx, 1
     add cx, 3
-    add bx, cx
-    mov [ck_oy], bx
+    add cx, bx
+    mov [ck_oy], cx
+    pop ax
+    mov cx, 112                 ; ...and centred across the tile
+    sub cx, [dk_fw]
+    sar cx, 1
+    add cx, ax
+    mov [ck_ox], cx
+    push si
     shl si, 1
     shl si, 1
     mov si, [dk_faces + si + 2]
     call dk_face
-    mov word [ck_ox], 0
-    mov word [ck_oy], 0
     pop si
-    pop bx
-    pop ax
+    xor cx, cx
+    mov [ck_ox], cx
+    mov [ck_oy], cx
     ; the name
-    call dk_tileent
     mov dx, bx
     add dx, [di+8]
     sub dx, 11                  ; DX = the name's row
-    mov cl, [DKP + DKP_FACE]
-    xor ch, ch
-    cmp si, cx
+    mov cx, ax
+    call dk_tsel
     jne .nm
-    push ax                     ; selected: a black bar and a ticked box
-    push dx
-    mov al, LC_BLK
-    call ck_ink
-    pop dx
-    pop ax
+    call dk_iblk                ; selected: a black bar and a ticked box
     push ax
     push bx
     push dx
@@ -947,47 +948,34 @@ dk_stile:
     pop dx
     pop bx
     pop ax
-    push ax
-    push dx
-    mov al, LC_WHT
-    call ck_ink
-    pop dx
-    pop ax
+    call dk_iwht
     push ax
     push bx
     push dx
+    push si
     add ax, 5                   ; the box, white, its tick black
     mov bx, dx
     mov cx, 8
     mov dx, 8
     call ck_rect
-    push ax
-    mov al, LC_BLK
-    call ck_ink
-    pop ax
+    call dk_iblk
     mov cx, ax
     mov dx, bx
     inc dx
     mov si, dk_tick8
     call ck_bits
-    mov al, LC_WHT
-    call ck_ink
+    call dk_iwht
+    pop si
     pop dx
     pop bx
     pop ax
-    mov si, [di+1]
-    and si, 0FFh
-    mov cx, ax                  ; right of the box
-    add cx, 60
+    mov cx, ax                  ; the name right of the box
+    add cx, 60 - 56
     jmp short .tx
 .nm:
-    push ax
-    mov al, LC_BLK
-    call ck_ink
-    pop ax
-    mov cx, ax
-    add cx, 56
+    call dk_iblk
 .tx:
+    add cx, 56
     call ck_sc1
     mov byte [ck_gbold], 1
     shl si, 1
@@ -996,31 +984,21 @@ dk_stile:
     call ck_textc
     mov byte [ck_gbold], 0
     ret
-dk_tick8:   db 5                  ; inside an 8-px box, from its second row
-            dw 0600h, 0C00h, 5800h, 7000h, 2000h
 
-; dk_tileent - SI = a face: DI = its tile's entry. Keeps the rest
-dk_tileent:
+; dk_tsel - ZF = 1: the tile at DI is the face the payload has. Keeps all
+dk_tsel:
     push ax
-    mov di, [dk_sgeo]
-    add di, DKSG_E
-    mov ax, si
-.e:
-    cmp byte [di], DKST_TILE
-    jne .n
-    cmp [di+1], al
-    je .r
-.n:
-    add di, DKS_ESZ
-    jmp short .e
-.r:
+    mov al, [di+1]
+    cmp al, [DKP + DKP_FACE]
     pop ax
     ret
 
+dk_tick8:   db 5                  ; inside an 8-px box, from its second row
+            dw 0600h, 0C00h, 5800h, 7000h, 2000h
+
 ; the status line: `Selected: Red LED`
 dk_sstat:
-    mov al, LC_BLK
-    call ck_ink
+    call dk_iblk
     call ck_sc1
     mov cx, [di+2]
     mov dx, [di+4]
@@ -1036,23 +1014,21 @@ dk_sstat:
     mov byte [ck_gbold], 0
     ret
 
-; a button: its edge, its label centred; OK the default (a second edge, two
-; px thick, a px out); a pressed one inverse
+; a button, either form's: its edge, its label centred; OK the default (a
+; second edge, two px thick, a px out); a pressed one inverse. The settings'
+; size is one too, its label the size's name
 dk_sbtnd:
-    mov al, LC_BLK
-    call ck_ink
+    call dk_iblk
     call dk_sent
     push ax
+    mov si, [dk_fm]
     mov al, [di+1]
     inc al
-    cmp al, [dk_sbtn]
+    cmp al, [si + DKW_BTN]
     pop ax
     jne .up
     call ck_rect                ; pressed: black, the label white
-    push ax
-    mov al, LC_WHT
-    call ck_ink
-    pop ax
+    call dk_iwht
     jmp short .lb
 .up:
     call dk_frame
@@ -1065,10 +1041,7 @@ dk_sbtnd:
     push dx
     mov si, [ck_pp]             ; the ring is black whatever the label is
     push word [si]
-    push ax
-    mov al, LC_BLK
-    call ck_ink
-    pop ax
+    call dk_iblk
     sub ax, 3
     sub bx, 3
     add cx, 6
@@ -1101,6 +1074,13 @@ dk_sbtnd:
     shr dx, 1
     add dx, bx
     mov si, [di+10]
+    or si, si
+    jnz .t
+    mov bl, [DKP + DKP_SIZE]    ; the size's button: its name
+    xor bh, bh
+    shl bx, 1
+    mov si, [dkss_sizes + bx]
+.t:
     call ck_textc
     mov byte [ck_gbold], 0
     ret
@@ -1108,22 +1088,20 @@ dk_sbtnd:
 ; -----------------------------------------------------------------------------
 ; THE GESTURES
 ; -----------------------------------------------------------------------------
-; dk_shit - CX, DX on the content: DI = the control there (a check box, the
-; drop, a tile, a button), CF = 1 none. Keeps the rest
-dk_shit:
+; dk_fhit - CX, DX on the form's content: DI = the control there (a check
+; box, the size, a tile, a button, a field), CF = 1 none. Keeps the rest
+dk_fhit:
     push ax
-    mov di, [dk_sgeo]
-    add di, DKSG_E
-.e:
-    mov al, [di]
-    cmp al, DKST_END
-    je .no
-    cmp al, DKST_TEXT
-    je .n
-    cmp al, DKST_RULE
-    je .n
-    cmp al, DKST_STAT
-    je .n
+    push bp
+    mov bp, .one
+    call dk_fwalk               ; CF = 1: stopped on it
+    cmc
+    pop bp
+    pop ax
+    ret
+.one:
+    cmp byte [di], DKST_TEXT    ; text, a rule, the status: passed through
+    jae .n
     cmp cx, [di+2]
     jl .n
     cmp dx, [di+4]
@@ -1136,116 +1114,122 @@ dk_shit:
     add ax, [di+8]
     cmp dx, ax
     jge .n
-    clc
-    jmp short .x
-.n:
-    add di, DKS_ESZ
-    jmp short .e
-.no:
     stc
-.x:
-    pop ax
+    ret
+.n:
+    clc
     ret
 
-; dk_sclick - W_ONCLICK (SI = the window, CX, DX the press; lock held)
+; dk_sclick / dk_aclick - W_ONCLICK (CX, DX the press; lock held): the
+; control under it, on either form
 dk_sclick:
+    push si
+    mov si, dk_fset
+    jmp short dk_fclick
+dk_aclick:
+    push si
+    mov si, dk_falm
+dk_fclick:
     push ax
     push bx
     push cx
     push dx
     push di
-    call dk_sorg
-    sub cx, [dk_sox]
-    sub dx, [dk_soy]
-    cmp byte [dk_sdrop], 0
-    je .hit
-    call dk_slisthit            ; the list is up: a pick, or it goes
-    jmp short .x
-.hit:
-    call dk_shit
+    mov [dk_fm], si
+    call dk_forg
+    sub cx, [dk_wox]
+    sub dx, [dk_woy]
+    call dk_fhit
     jc .x
-    mov al, [di]
-    cmp al, DKST_CHK
-    je .chk
-    cmp al, DKST_CHKB
-    je .chk
-    cmp al, DKST_DROP
-    je .drop
-    cmp al, DKST_TILE
-    je .tile
-    mov al, [di+1]              ; a button: down, until the release
-    inc al
-    mov [dk_sbtn], al
+    mov ax, [di]                ; AL = the type, AH = its param
+    cmp al, DKST_BTN
+    jne .c
+    inc ah                      ; a button: down, until the release
+    mov [si + DKW_BTN], ah
     call dk_sentredraw
     jmp short .x
-.chk:
-    mov al, [di+1]
+.c:
+    xchg al, ah                 ; AL = the param, AH = the type
+    cmp ah, DKST_CHK
+    jne .d
+    cmp al, DKF_ALARM
+    je .aon
     call dk_stoggle
     jmp short .x
-.drop:
-    mov byte [dk_sdrop], 1
-    call dk_slistrect
-    call dk_srect
+.aon:
+    call dk_kaon                ; the alarm's own box: its edit
     jmp short .x
-.tile:
-    mov al, [di+1]
+.d:
+    cmp ah, DKST_SIZE           ; the size: the next one, on the press
+    jne .t
+    call dk_kzsize
+    jmp short .x
+.t:
+    cmp ah, DKST_TILE
+    jne .f
     call dk_sface
+    jmp short .x
+.f:
+    cmp al, DKAF_AMPM           ; a field of the alarm's
+    jne .fo
+    call dk_aampm
+    jmp short .x
+.fo:
+    call dk_afocus
 .x:
     pop di
     pop dx
     pop cx
     pop bx
     pop ax
+    pop si
     ret
 
-; dk_smup - W_ONMOUSEUP: a pressed button fires if the release is on it
+; dk_smup / dk_amup - W_ONMOUSEUP: a pressed button fires if the release is
+; on it
 dk_smup:
+    push si
+    mov si, dk_fset
+    jmp short dk_fmup
+dk_amup:
+    push si
+    mov si, dk_falm
+dk_fmup:
     push ax
     push cx
     push dx
     push di
-    mov al, [dk_sbtn]
-    or al, al
+    mov [dk_fm], si
+    mov ah, [si + DKW_BTN]
+    or ah, ah
     jz .x
-    mov byte [dk_sbtn], 0
-    push ax
-    call dk_sorg
-    sub cx, [dk_sox]
-    sub dx, [dk_soy]
-    call dk_sbtnent             ; DI = that button (AL = its id + 1)
+    mov byte [si + DKW_BTN], 0
+    call dk_forg
+    sub cx, [dk_wox]
+    sub dx, [dk_woy]
+    dec ah
+    mov al, DKST_BTN
+    call dk_ffind               ; DI = that button
     call dk_sentredraw          ; up again
-    pop ax
     push di
-    call dk_shit
+    call dk_fhit
     pop ax                      ; AX = the pressed button's entry
     jc .x
     cmp di, ax
     jne .x
     mov al, [di+1]
+    cmp si, dk_fset
+    jne .a
     call dk_sfire
+    jmp short .x
+.a:
+    call dk_afire
 .x:
     pop di
     pop dx
     pop cx
     pop ax
-    ret
-
-; dk_sbtnent - AL = a button's id + 1: DI = its entry. Keeps the rest
-dk_sbtnent:
-    push ax
-    dec al
-    mov di, [dk_sgeo]
-    add di, DKSG_E
-.e:
-    cmp byte [di], DKST_BTN
-    jne .n
-    cmp [di+1], al
-    je .r
-.n:
-    add di, DKS_ESZ
-    jmp short .e
-.r:
-    pop ax
+    pop si
     ret
 
 ; dk_sfire - AL = DKB_*: Cancel, Apply, OK
@@ -1259,7 +1243,7 @@ dk_sfire:
     call dk_sapply
     jmp dk_sshut
 
-; dk_sentredraw - the entry at DI again, with its ring
+; dk_sentredraw - the entry at DI again, with its ring (the form's)
 dk_sentredraw:
     push ax
     push bx
@@ -1272,82 +1256,32 @@ dk_sentredraw:
     add cx, 5
     add dx, bx
     add dx, 5
-    call dk_srect
+    call dk_wrect
     pop dx
     pop cx
     pop bx
     pop ax
     ret
 
-; dk_slistrect - AX, BX .. CX, DX = the size list's rect, open
-dk_slistrect:
-    push di
-    call dk_sdropent
-    call dk_sent
-    add bx, dx
-    dec bx
-    add cx, ax
-    dec cx
-    mov dx, bx
-    add dx, 3 * DKS_LROW + 1
-    pop di
-    ret
-
-; dk_slisthit - CX, DX: a row of the open list picks its size; anywhere else
-; shuts the list. Either way it is drawn shut
-dk_slisthit:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    call dk_sdropent
-    sub cx, [di+2]
-    jl .shut
-    cmp cx, [di+6]
-    jge .shut
-    mov ax, dx
-    sub ax, [di+4]
-    sub ax, [di+8]
-    jl .shut
-    xor dx, dx
-    mov bx, DKS_LROW
-    div bx
-    cmp ax, 3
-    jae .shut
-    mov byte [dk_sdrop], 0
-    call dk_slistrect
-    call dk_srect
-    call dk_ssize
-    jmp short .x
-.shut:
-    mov byte [dk_sdrop], 0
-    call dk_slistrect
-    call dk_srect
-.x:
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; dk_ssize - AL = a size, previewed; the drop again
+; dk_ssize - AL = a size, previewed; its button again
 dk_ssize:
     cmp al, [DKP + DKP_SIZE]
     je .r
     mov [DKP + DKP_SIZE], al
     call dk_spreview
+    push ax
     push di
-    call dk_sdropent
+    call dk_ssizeent
     call dk_sentredraw
     pop di
+    pop ax
 .r:
     ret
 
 ; dk_stoggle - AL = a flag, the other way, previewed: its box again, and the
 ; gallery when the previews show it (the seconds, the hours)
 dk_stoggle:
+    push ax
     push di
     xor [DKP + DKP_FLAGS], al
     call dk_spreview
@@ -1356,28 +1290,13 @@ dk_stoggle:
     call dk_sredraw
     jmp short .x
 .box:
-    call dk_sflagent
+    mov ah, al
+    mov al, DKST_CHK
+    call dk_ffind
     call dk_sentredraw
 .x:
     pop di
-    ret
-
-; dk_sflagent - AL = a flag: DI = its check box's entry
-dk_sflagent:
-    mov di, [dk_sgeo]
-    add di, DKSG_E
-.e:
-    cmp byte [di], DKST_CHK
-    je .c
-    cmp byte [di], DKST_CHKB
-    jne .n
-.c:
-    cmp [di+1], al
-    je .r
-.n:
-    add di, DKS_ESZ
-    jmp short .e
-.r:
+    pop ax
     ret
 
 ; dk_sface - AL = a face, previewed: the old tile, the new one, the status
@@ -1400,115 +1319,52 @@ dk_sface:
     mov si, ax
     call dk_tileent
     call dk_sentredraw
-    mov di, [dk_sgeo]           ; the status
-    add di, DKSG_E
-.e:
-    cmp byte [di], DKST_STAT
-    je .s
-    add di, DKS_ESZ
-    jmp short .e
-.s:
+    mov ax, DKST_STAT           ; the status
+    call dk_ffind
     call dk_sentredraw
 .x:
     pop di
     pop si
     ret
 
-; dk_skey - W_ONKEY for the window: Enter OK, Esc Cancel (or the list shut),
-; the arrows walk the gallery, F S H the boxes, Z the size, A Apply
+; dk_skey - W_ONKEY for the window: Enter OK, Esc Cancel, the arrows walk
+; the gallery, F S H the boxes, Z the size, A Apply
 dk_skey:
     push ax
     push bx
-    cmp byte [dk_sdrop], 0
-    je .k
-    mov byte [dk_sdrop], 0      ; a key shuts the list first
-    push ax
-    call dk_slistrect
-    call dk_srect
-    pop ax
-    cmp al, 27
-    je .x
-.k:
-    mov bl, [DKP + DKP_FACE]
-    cmp ah, KSC_LEFT
-    je .l
-    cmp ah, KSC_RIGHT
-    je .r
-    cmp ah, KSC_UP
-    je .u
-    cmp ah, KSC_DOWN
-    je .d
-    cmp al, 13
-    je .ok
-    cmp al, 27
-    je .can
-    or al, 20h
-    cmp al, 'a'
-    je .app
-    cmp al, 'f'
-    je .only
-    cmp al, 's'
-    je .secs
-    cmp al, 'h'
-    je .h24
-    cmp al, 'z'
-    je .size
-    jmp short .x
-.l:
-    dec bl
-    jns .f
-    mov bl, DKF_N - 1
-    jmp short .f
-.r:
-    inc bl
-    cmp bl, DKF_N
-    jb .f
-    xor bl, bl
-    jmp short .f
-.u:
-    sub bl, 3
-    jns .f
-    add bl, DKF_N
-    jmp short .f
-.d:
-    add bl, 3
-    cmp bl, DKF_N
-    jb .f
-    sub bl, DKF_N
-.f:
-    mov al, bl
-    call dk_sface
-    jmp short .x
-.ok:
-    mov al, DKB_OK
-    call dk_sfire
-    jmp short .x
-.can:
-    call dk_scancel
-    jmp short .x
-.app:
-    call dk_sapply
-    jmp short .x
-.only:
-    mov al, DKF_ONLY
-    jmp short .tg
-.secs:
-    mov al, DKF_SECS
-    jmp short .tg
-.h24:
-    mov al, DKF_H24
-.tg:
-    call dk_stoggle
-    jmp short .x
-.size:
-    mov al, [DKP + DKP_SIZE]
-    inc al
-    cmp al, 3
-    jb .sz
-    xor al, al
-.sz:
-    call dk_ssize
-.x:
+    push si
+    mov word [dk_fm], dk_fset
+    mov si, dk_kset
+    call dk_keys
+    pop si
     pop bx
     pop ax
     ret
+dk_kset:    DKKEY 80h + KSC_LEFT, -1, dk_kgal     ; the gallery, round it
+            DKKEY 80h + KSC_RIGHT, 1, dk_kgal
+            DKKEY 80h + KSC_UP, -3, dk_kgal
+            DKKEY 80h + KSC_DOWN, 3, dk_kgal
+            DKKEY 13, DKB_OK, dk_sfire
+            DKKEY 27, 0, dk_scancel
+            DKKEY 'a', 0, dk_sapply
+            DKKEY 'f', DKF_ONLY, dk_stoggle
+            DKKEY 's', DKF_SECS, dk_stoggle
+            DKKEY 'h', DKF_H24, dk_stoggle
+            DKKEY 'z', 0, dk_kzsize
+            db 0
+
+; dk_kgal - AL = a step: the gallery's face that far on, previewed
+dk_kgal:
+    call dk_fstep
+    jmp dk_sface
+
+; dk_kzsize - Z, or a press on the size's button: the next size, round the
+; three
+dk_kzsize:
+    mov al, [DKP + DKP_SIZE]
+    inc ax
+    cmp al, 3
+    jb .s
+    xor al, al
+.s:
+    jmp dk_ssize

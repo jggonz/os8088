@@ -65,8 +65,9 @@ static int cw_item_dis(int it)
     if (act == CWA_PASTE)
         return os88_clip_size() <= 0;
     if (act == CWA_UNDO)
-        return 1;                       /* no undo yet: greyed as a FACT about
-                                         * this build, not as decoration */
+        return !cw_u_ok;                /* nothing to undo yet - or no 9KB of
+                                         * heap for the snapshot, which is the
+                                         * same fact to the user (73.12.4) */
     return 0;
 }
 
@@ -284,9 +285,13 @@ static void cw_menu_open(int m)
                       cw_by + CW_H_BAR - 2);
 }
 
-/* cw_menu_close - take the panel off the glass by repainting what it covered,
- * and nothing else. The rows are worked out from the panel's own rectangle. */
-static void cw_menu_close(void *win)
+/* cw_uncover - take a panel off the glass by repainting what it covered, and
+ * nothing else: the chrome it reached, the sheet's margins and the text rows
+ * its rectangle touched, then the selection and the caret back on. The
+ * dropdowns and Replace's Confirm Changes panel both go down through here
+ * (SPEC.md 73.12.4) - one implementation of "what was under it". The panel
+ * was put up with the caret and the selection already OFF. */
+static void cw_uncover(int x1, int y1, int x2, int y2)
 {
     int r;
     int r0;
@@ -295,20 +300,10 @@ static void cw_menu_close(void *win)
     int base;
     int y;
 
-    (void)win;
-    if (cw_m_open < 0)
-        return;
-
-    os88_gfx_xor_fill(cw_bx + cw_mn_cell[cw_m_open] * 8 - 4, cw_by + 1,
-                      cw_bx + (cw_mn_cell[cw_m_open] + cw_mn_cells[cw_m_open])
-                          * 8 + 3, cw_by + CW_H_BAR - 2);
-    cw_m_open = -1;
-    cw_m_item = -1;
-
     os88_set_color(OS88_WHITE);
-    os88_gfx_fill(cw_m_x1, cw_m_y1, cw_m_x2, cw_m_y2);
+    os88_gfx_fill(x1, y1, x2, y2);
 
-    if (cw_m_y1 < cw_chrome_top) {
+    if (y1 < cw_chrome_top) {
         cw_ribbon();
         cw_ruler();
     }
@@ -317,8 +312,8 @@ static void cw_menu_close(void *win)
                                          * fill above has just whitened them */
 
     /* the text rows the panel's rectangle touched */
-    r0 = (cw_m_y1 - cw_ty) / cw_pitch;
-    r1 = (cw_m_y2 - cw_ty) / cw_pitch;
+    r0 = (y1 - cw_ty) / cw_pitch;
+    r1 = (y2 - cw_ty) / cw_pitch;
     if (r0 < 0)
         r0 = 0;
     if (r1 >= cw_rows)
@@ -339,11 +334,27 @@ static void cw_menu_close(void *win)
 
     /* the status line, if the panel reached it */
     y = cw_vsta ? cw_sy - 4 : 0;
-    if (y != 0 && cw_m_y2 >= y) {
+    if (y != 0 && y2 >= y) {
         cw_st_left[0] = 0;
         cw_st_lamp[0] = 0;
         cw_status();
     }
     cw_sel_xor();
     cw_caret_on();
+}
+
+/* cw_menu_close - take the menu off the glass: its title's highlight, then
+ * what the panel covered. */
+static void cw_menu_close(void *win)
+{
+    (void)win;
+    if (cw_m_open < 0)
+        return;
+
+    os88_gfx_xor_fill(cw_bx + cw_mn_cell[cw_m_open] * 8 - 4, cw_by + 1,
+                      cw_bx + (cw_mn_cell[cw_m_open] + cw_mn_cells[cw_m_open])
+                          * 8 + 3, cw_by + CW_H_BAR - 2);
+    cw_m_open = -1;
+    cw_m_item = -1;
+    cw_uncover(cw_m_x1, cw_m_y1, cw_m_x2, cw_m_y2);
 }

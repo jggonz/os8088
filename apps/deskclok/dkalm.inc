@@ -14,57 +14,37 @@
 ; The keys: Tab and Left/Right move between the hour, the minute, the AM/PM
 ; and the label; Up/Down and - / + step the hour or the minute; digits type
 ; them; Space ticks the box (outside the label); Backspace edits the label;
-; Enter is OK and Esc Cancel. Composed and blitted as the settings are.
+; Enter is OK and Esc Cancel. It is a FORM of dkset.inc's: its layouts are
+; data here, and the painting, the presses and the window are the settings'.
 ; =============================================================================
 
 DKA_W       equ 232             ; the content's width
-DKAT_END    equ 0
-DKAT_CHK    equ 1
-DKAT_TEXT   equ 2
-DKAT_FLD    equ 3               ; param = DKAF_*
-DKAT_BTN    equ 4               ; param = DKAB_*
-DKAF_HOUR   equ 0
+DKAF_HOUR   equ 0               ; DKST_FLD's param: the fields
 DKAF_MIN    equ 1
 DKAF_AMPM   equ 2
 DKAF_LABEL  equ 3
-DKAB_CANCEL equ 0
-DKAB_OK     equ 1
-DKAB_MINUS  equ 2
-DKAB_PLUS   equ 3
 
-dk_ageos:   dw dka_tall, dka_tall, dka_comp
+; the alarm's ONE layout, on every screen class - dkset.inc's form machine
+; (DKSE, DKST_*, DKB_*): no gallery, so no preview widths. It is 92 rows, so
+; CGA's 200 hold it as well as VGA's 480 (SPEC.md 110.14.7)
+dk_ageos:   dw dka_tall, dka_tall, dka_tall
 dka_tall:
     dw 92
     db 0, 0
-    DKSE DKAT_CHK, 0, 8, 6, 120, 12, dkas_on
-    DKSE DKAT_TEXT, 0, 8, 28, 0, 0, dkas_time
-    DKSE DKAT_FLD, DKAF_HOUR, 64, 24, 26, 14, 0
-    DKSE DKAT_TEXT, 0, 94, 28, 0, 0, dkas_colon
-    DKSE DKAT_FLD, DKAF_MIN, 102, 24, 26, 14, 0
-    DKSE DKAT_FLD, DKAF_AMPM, 134, 24, 26, 14, 0
-    DKSE DKAT_BTN, DKAB_MINUS, 170, 24, 24, 14, dkas_minus
-    DKSE DKAT_BTN, DKAB_PLUS, 200, 24, 24, 14, dkas_plus
-    DKSE DKAT_TEXT, 0, 8, 50, 0, 0, dkas_label
-    DKSE DKAT_FLD, DKAF_LABEL, 64, 46, 160, 14, 0
-    DKSE DKAT_BTN, DKAB_CANCEL, 96, 70, 60, 16, dkss_cancel
-    DKSE DKAT_BTN, DKAB_OK, 164, 70, 60, 16, dkss_ok
-    db DKAT_END
-dka_comp:
-    dw 66
-    db 0, 0
-    DKSE DKAT_CHK, 0, 8, 2, 120, 12, dkas_on
-    DKSE DKAT_TEXT, 0, 8, 18, 0, 0, dkas_time
-    DKSE DKAT_FLD, DKAF_HOUR, 64, 16, 26, 12, 0
-    DKSE DKAT_TEXT, 0, 94, 18, 0, 0, dkas_colon
-    DKSE DKAT_FLD, DKAF_MIN, 102, 16, 26, 12, 0
-    DKSE DKAT_FLD, DKAF_AMPM, 134, 16, 26, 12, 0
-    DKSE DKAT_BTN, DKAB_MINUS, 170, 16, 24, 12, dkas_minus
-    DKSE DKAT_BTN, DKAB_PLUS, 200, 16, 24, 12, dkas_plus
-    DKSE DKAT_TEXT, 0, 8, 34, 0, 0, dkas_label
-    DKSE DKAT_FLD, DKAF_LABEL, 64, 32, 160, 12, 0
-    DKSE DKAT_BTN, DKAB_CANCEL, 96, 50, 60, 12, dkss_cancel
-    DKSE DKAT_BTN, DKAB_OK, 164, 50, 60, 12, dkss_ok
-    db DKAT_END
+    dw DKA_W
+    DKSE DKST_CHK, DKF_ALARM, 8, 6, 120, 12, dkas_on
+    DKSE DKST_TEXT, 0, 8, 28, 0, 0, dkas_time
+    DKSE DKST_FLD, DKAF_HOUR, 64, 24, 26, 14, 0
+    DKSE DKST_TEXT, 0, 94, 28, 0, 0, dkas_colon
+    DKSE DKST_FLD, DKAF_MIN, 102, 24, 26, 14, 0
+    DKSE DKST_FLD, DKAF_AMPM, 134, 24, 26, 14, 0
+    DKSE DKST_BTN, DKB_MINUS, 170, 24, 24, 14, dkas_minus
+    DKSE DKST_BTN, DKB_PLUS, 200, 24, 24, 14, dkas_plus
+    DKSE DKST_TEXT, 0, 8, 50, 0, 0, dkas_label
+    DKSE DKST_FLD, DKAF_LABEL, 64, 46, 160, 14, 0
+    DKSE DKST_BTN, DKB_CANCEL, 96, 70, 60, 16, dkss_cancel
+    DKSE DKST_BTN, DKB_OK, 164, 70, 60, 16, dkss_ok
+    db DKST_END
 dkas_on:    db 'Alarm on', 0
 dkas_time:  db 'Time:', 0
 dkas_colon: db ':', 0
@@ -73,94 +53,35 @@ dkas_minus: db '-', 0
 dkas_plus:  db '+', 0
 dkas_title: db 'Alarm', 0
 
-dk_atpl:    dw 0, 0, DKA_W + 2, 0
+dk_atpl:    dw 0, MBAR_H + 24, DKA_W + 2, 0
             dw dkas_title, dk_apaint, dk_akey, dk_aclick
+            dw dk_falm, dk_ageos, dk_aclose, dk_amup, dk_ainit
 
-; -----------------------------------------------------------------------------
-; dk_almopen - the alarm window: in front if it is up, else made with a copy
-; of the payload's alarm. Keeps everything
-; -----------------------------------------------------------------------------
-dk_almopen:
+; dk_ainit - DKT_INIT (dkset.inc's dk_almopen): the edit, a copy of the
+; payload's alarm, the hour with the keys. Keeps everything
+dk_ainit:
     push ax
-    push bx
     push cx
     push si
     push di
     push es
-    mov bx, [dk_awin]
-    or bx, bx
-    jz .make
-    call OSAPI_WM_FRONT
-    jmp .x
-.make:
     mov al, [DKP + DKP_FLAGS]   ; the copy
     and al, DKF_ALARM
     mov [dk_aon], al
-    mov al, [DKP + DKP_AH]
-    mov [dk_ah], al
-    mov al, [DKP + DKP_AM]
-    mov [dk_am], al
     push ds
     pop es
-    mov si, DKP + DKP_LABEL
-    mov di, dk_alab
-    mov cx, DK_LABMAX + 1
+    mov si, DKP + DKP_AH        ; the hour, the minute, the label
+    mov di, dk_ah
+    mov cx, DKA_EDIT
     cld
     rep movsb
     mov byte [dk_alab + DK_LABMAX], 0
     mov byte [dk_afoc], DKAF_HOUR
-    mov byte [dk_abtn], 0
-    mov bx, dk_ageos
-    mov al, [stik_li]
-    xor ah, ah
-    shl ax, 1
-    add bx, ax
-    mov si, [bx]
-    mov [dk_ageo], si
-    mov ax, [si]
-    add ax, TITLE_H + 1
-    mov [dk_atpl + WT_H], ax
-    mov cx, DKA_W + 2           ; beside the clock
-    call dk_beside
-    mov [dk_atpl + WT_X], ax
-    mov word [dk_atpl + WT_Y], MBAR_H + 24
-    mov si, dk_atpl
-    call OSAPI_WM_CREATE
-    jc .x
-    mov [dk_awin], bx
-    mov al, 1
-    call OSAPI_WM_OWNBG
-    mov al, 1
-    call OSAPI_WM_KEEPH
-    call OSAPI_WM_NOANIM
-    mov ax, dk_aclose
-    call OSAPI_WM_ONCLOSE
-    mov ax, dk_amup
-    call OSAPI_WM_ONMOUSEUP
-    mov si, dk_menus
-    call OSAPI_MENU_SET
-    call OSAPI_WM_FRONT
-    call OSAPI_WM_SHOW
-.x:
     pop es
     pop di
     pop si
     pop cx
-    pop bx
     pop ax
-    ret
-
-; dk_ashut - the window down. Keeps everything
-dk_ashut:
-    push bx
-    mov bx, [dk_awin]
-    or bx, bx
-    jz .x
-    mov word [dk_awin], 0
-    call OSAPI_WM_DESTROY
-    call dk_refocus
-.x:
-    pop bx
     ret
 
 ; dk_aclose - W_ONCLOSE: the close box is Cancel (CF = 1: gone by our hand)
@@ -170,282 +91,59 @@ dk_aclose:
     ret
 
 ; dk_aok - the copy into the payload: saved, a snooze dropped, the clock's
-; row again
+; row again - and into the settings' applied copy when they are up, so a
+; Cancel there does not undo it (the alarm's fields alone: what the settings
+; preview is theirs)
 dk_aok:
-    push ax
-    push cx
-    push si
-    push di
-    push es
-    and byte [DKP + DKP_FLAGS], ~DKF_ALARM & 0FFh
-    mov al, [dk_aon]
-    or [DKP + DKP_FLAGS], al
-    mov al, [dk_ah]
-    mov [DKP + DKP_AH], al
-    mov al, [dk_am]
-    mov [DKP + DKP_AM], al
-    push ds
-    pop es
-    mov si, dk_alab
-    mov di, DKP + DKP_LABEL
-    mov cx, DK_LABMAX + 1
-    cld
-    rep movsb
-    cmp word [dk_swin], 0       ; the settings' applied copy keeps it too:
-    je .s                       ; a Cancel there must not undo it
-    mov si, DKP + DKP_FLAGS
-    mov di, dk_sav + DKP_FLAGS
-    movsb
-    mov si, DKP + DKP_AH
-    mov di, dk_sav + DKP_AH
-    mov cx, DKP_LEN - DKP_AH
-    rep movsb
-    and byte [dk_sav + DKP_FLAGS], ~DKF_ALARM & 0FFh
-    mov al, [dk_aon]
-    or [dk_sav + DKP_FLAGS], al
+    push bx
+    mov bx, DKP
+    call dk_aput
+    cmp word [dk_swin], 0
+    je .s
+    mov bx, dk_sav
+    call dk_aput
 .s:
-    pop es
-    pop di
-    pop si
-    pop cx
-    pop ax
+    pop bx
     mov byte [dk_snz], 0
     call stik_touch
     call dk_relay
     call dk_menulive
     jmp dk_ashut
 
-; -----------------------------------------------------------------------------
-; painting: as the settings (dk_sbody's shape), over this window's entries
-; -----------------------------------------------------------------------------
-dk_aorg:
+; dk_aput - the edit into the payload at BX (DKP, or dk_sav). Keeps all
+dk_aput:
     push ax
-    push bx
-    push dx
-    mov bx, [dk_awin]
-    call OSAPI_WM_CONTENT
-    mov [dk_aox], ax
-    mov [dk_aoy], dx
-    pop dx
-    pop bx
+    push cx
+    push si
+    push di
+    push es
+    and byte [bx + DKP_FLAGS], ~DKF_ALARM & 0FFh
+    mov al, [dk_aon]
+    or [bx + DKP_FLAGS], al
+    push ds
+    pop es
+    mov si, dk_ah
+    lea di, [bx + DKP_AH]
+    mov cx, DKA_EDIT
+    cld
+    rep movsb
+    pop es
+    pop di
+    pop si
+    pop cx
     pop ax
     ret
 
+; dk_apaint - W_PAINT: dkset.inc's form paint, on this form
 dk_apaint:
     push ax
-    push bx
-    push cx
-    push dx
-    mov bx, si
-    call OSAPI_WM_DAMAGE
-    call dk_abody
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; dk_arect - content rect AX, BX .. CX, DX again (the lock held)
-dk_arect:
-    push ax
-    push bx
-    push cx
-    push dx
-    cmp word [dk_awin], 0
-    je .x
-    call dk_aorg
-    add ax, [dk_aox]
-    add cx, [dk_aox]
-    add bx, [dk_aoy]
-    add dx, [dk_aoy]
-    push bx
-    mov bx, [dk_awin]
-    call OSAPI_WM_CLIP_SET
-    pop bx
-    jc .x
-    call dk_abody
-.x:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; dk_aall - the content whole
-dk_aall:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    xor ax, ax
-    xor bx, bx
-    mov cx, DKA_W - 1
-    mov si, [dk_ageo]
-    mov dx, [si]
-    dec dx
-    call dk_arect
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-dk_abody:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    push es
-    push ax
-    mov ax, KERNEL_SEG
-    mov es, ax
-    pop ax
-    call dk_aorg
-    push bx
-    push di
-    mov di, [dk_aox]                ; the content's columns
-    mov bx, DKA_W
-    call dk_cols
-    pop di
-    pop bx
-    sub bx, [dk_aoy]
-    jge .r0
-    xor bx, bx
-.r0:
-    mov [dk_r0], bx
-    mov si, [dk_ageo]
-    mov ax, [si]
-    dec ax
-    sub dx, [dk_aoy]
-    cmp dx, ax
-    jle .r1
-    mov dx, ax
-.r1:
-    mov [dk_r1], dx
-    mov ax, [ck_cx0]
-    cmp ax, [ck_cx1]
-    jg .x
-    mov byte [ck_np], 1         ; black and white: one plane is all of it
-    call ck_gwhite
-    call ck_font
-    mov bx, DKA_W
-    call ck_setband
-    mov ax, [dk_r0]
-.slab:
-    cmp ax, [dk_r1]
-    jg .x
-    mov [ck_y0], ax
-    call dk_crows
-    call dk_acomp
-    mov dx, [dk_r1]
-    sub dx, ax
-    inc dx
-    cmp dx, [ck_sh]
-    jbe .n
-    mov dx, [ck_sh]
-.n:
-    mov bx, [dk_aoy]
-    add bx, ax
-    mov ax, [dk_aox]
-    call dk_put
-    mov ax, [ck_y0]
-    add ax, [dk_shf]
-    jmp short .slab
-.x:
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; dk_acomp - slab [ck_y0]: white, every entry it reaches
-dk_acomp:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call ck_ground
-    call ck_clear
-    mov word [ck_ox], 0
-    mov word [ck_oy], 0
-    mov di, [dk_ageo]
-    add di, DKSG_E
-.e:
-    mov al, [di]
-    cmp al, DKAT_END
-    je .x
-    mov bx, [di+4]
-    mov dx, [di+8]
-    or dx, dx
-    jnz .r
-    mov dx, 8
-.r:
-    sub bx, 3
-    add dx, 6
-    call ck_rows
-    jc .n
-    push di
-    xor ah, ah
-    mov bx, ax
-    shl bx, 1
-    call [dk_adraw + bx - 2]
-    pop di
-.n:
-    add di, DKS_ESZ
-    jmp short .e
-.x:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-dk_adraw:   dw dk_achk, dk_stext, dk_afld, dk_abtnd
-
-dk_achk:
-    mov al, LC_BLK
-    call ck_ink
-    call dk_sent
-    mov cx, 12
-    mov dx, 12
-    call dk_frame
-    cmp byte [dk_aon], 0
-    je .l
-    push ax
-    push bx
-    mov cx, ax
-    mov dx, bx
-    add dx, 2
-    mov si, dk_tick12
-    call ck_bits
-    pop bx
-    pop ax
-.l:
-    call ck_sc1
-    mov cx, ax
-    add cx, 18
-    mov dx, bx
-    add dx, 2
-    mov si, [di+10]
-    jmp ck_text
+    mov ax, dk_falm
+    jmp dk_fpaint
 
 ; a field: its edge; inverse when it has the keys - except the label, which
 ; shows a caret after its text
 dk_afld:
-    mov al, LC_BLK
-    call ck_ink
+    call dk_iblk
     call dk_sent
     call dk_frame
     call dk_afstr               ; dk_line = its text
@@ -462,8 +160,7 @@ dk_afld:
     sub cx, 2
     sub dx, 2
     call ck_rect
-    mov al, LC_WHT
-    call ck_ink
+    call dk_iwht
     pop ax
 .t:
     call ck_sc1
@@ -555,198 +252,20 @@ dk_ah12:
 .r:
     ret
 
-; a button, as the settings' are, OK the default
-dk_abtnd:
-    mov al, LC_BLK
-    call ck_ink
-    call dk_sent
-    push ax
-    mov al, [di+1]
-    inc al
-    cmp al, [dk_abtn]
-    pop ax
-    jne .up
-    call ck_rect
-    push ax
-    mov al, LC_WHT
-    call ck_ink
-    pop ax
-    jmp short .lb
-.up:
-    call dk_frame
-.lb:
-    cmp byte [di+1], DKAB_OK
-    jne .nd
-    push ax
-    push bx
-    push cx
-    push dx
-    sub ax, 3
-    sub bx, 3
-    add cx, 6
-    add dx, 6
-    call dk_frame
-    inc ax
-    inc bx
-    sub cx, 2
-    sub dx, 2
-    call dk_frame
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-.nd:
-    call ck_sc1
-    mov byte [ck_gbold], 1
-    mov cx, [di+6]
-    shr cx, 1
-    add cx, ax
-    mov dx, [di+8]
-    sub dx, 8
-    shr dx, 1
-    add dx, bx
-    mov si, [di+10]
-    call ck_textc
-    mov byte [ck_gbold], 0
-    ret
-
 ; -----------------------------------------------------------------------------
 ; the gestures and the keys
 ; -----------------------------------------------------------------------------
-; dk_ahit - CX, DX on the content: DI = the entry there, CF = 1 none
-dk_ahit:
-    push ax
-    mov di, [dk_ageo]
-    add di, DKSG_E
-.e:
-    mov al, [di]
-    cmp al, DKAT_END
-    je .no
-    cmp al, DKAT_TEXT
-    je .n
-    cmp cx, [di+2]
-    jl .n
-    cmp dx, [di+4]
-    jl .n
-    mov ax, [di+2]
-    add ax, [di+6]
-    cmp cx, ax
-    jge .n
-    mov ax, [di+4]
-    add ax, [di+8]
-    cmp dx, ax
-    jge .n
-    clc
-    jmp short .x
-.n:
-    add di, DKS_ESZ
-    jmp short .e
-.no:
-    stc
-.x:
-    pop ax
-    ret
-
-dk_aclick:
-    push ax
-    push cx
-    push dx
-    push di
-    call dk_aorg
-    sub cx, [dk_aox]
-    sub dx, [dk_aoy]
-    call dk_ahit
-    jc .x
-    mov al, [di]
-    cmp al, DKAT_CHK
-    je .chk
-    cmp al, DKAT_FLD
-    je .fld
-    mov al, [di+1]              ; a button: down until the release
-    inc al
-    mov [dk_abtn], al
-    call dk_sentredraw_a
-    jmp short .x
-.chk:
-    xor byte [dk_aon], DKF_ALARM
-    call dk_aall
-    jmp short .x
-.fld:
-    mov al, [di+1]
-    cmp al, DKAF_AMPM
-    jne .f
-    call dk_aampm
-    jmp short .x
-.f:
-    call dk_afocus
-.x:
-    pop di
-    pop dx
-    pop cx
-    pop ax
-    ret
-
-dk_amup:
-    push ax
-    push cx
-    push dx
-    push di
-    mov al, [dk_abtn]
-    or al, al
-    jz .x
-    mov byte [dk_abtn], 0
-    push ax
-    call dk_aorg
-    sub cx, [dk_aox]
-    sub dx, [dk_aoy]
-    call dk_aall                ; the button up again
-    call dk_ahit
-    pop ax
-    jc .x
-    cmp byte [di], DKAT_BTN
-    jne .x
-    dec al
-    cmp al, [di+1]
-    jne .x
-    call dk_afire
-.x:
-    pop di
-    pop dx
-    pop cx
-    pop ax
-    ret
-
-; dk_afire - AL = DKAB_*
+; dk_afire - AL = DKB_*: OK, Cancel, + and -
 dk_afire:
-    cmp al, DKAB_OK
+    cmp al, DKB_OK
     je dk_aok
-    cmp al, DKAB_CANCEL
+    cmp al, DKB_CANCEL
     je dk_ashut
-    cmp al, DKAB_PLUS
+    cmp al, DKB_PLUS
     mov al, 1
     je dk_astep
     mov al, -1
     jmp dk_astep
-
-; dk_sentredraw_a - the entry at DI again, with its ring
-dk_sentredraw_a:
-    push ax
-    push bx
-    push cx
-    push dx
-    call dk_sent
-    sub ax, 3
-    sub bx, 3
-    add cx, ax
-    add cx, 5
-    add dx, bx
-    add dx, 5
-    call dk_arect
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 ; dk_afocus - AL = the field with the keys now; the window again
 dk_afocus:
@@ -757,7 +276,7 @@ dk_afocus:
     mov al, DKAF_LABEL
 .s:
     mov [dk_afoc], al
-    jmp dk_aall
+    jmp dk_fall
 
 ; dk_aampm - the hour the other side of noon
 dk_aampm:
@@ -771,7 +290,7 @@ dk_aampm:
     sub al, 24
 .s:
     mov [dk_ah], al
-    call dk_aall
+    call dk_fall
 .x:
     pop ax
     ret
@@ -797,48 +316,32 @@ dk_astep:
     sub al, ah
 .k:
     mov [bx], al
-    call dk_aall
+    call dk_fall
     pop bx
     pop ax
     ret
 
-; dk_akey - W_ONKEY for the window
+; dk_akey - W_ONKEY for the window: the keys of dk_kalm1, then - outside
+; the label - dk_kalm2's, the AM/PM's A and P, and the digits; in the label,
+; Backspace and a character
 dk_akey:
     push ax
     push bx
-    mov bl, [dk_afoc]
-    cmp al, 13
-    je .ok
-    cmp al, 27
-    je .can
-    cmp al, 9
-    je .tab
-    cmp ah, KSC_RIGHT
-    je .tab
-    cmp ah, KSC_LEFT
-    je .btab
-    cmp ah, KSC_UP
-    je .up
-    cmp ah, KSC_DOWN
-    je .dn
-    cmp bl, DKAF_LABEL
+    push si
+    mov word [dk_fm], dk_falm
+    mov si, dk_kalm1
+    call dk_keys
+    jnc .x
+    cmp byte [dk_afoc], DKAF_LABEL
     je .lab
-    cmp al, '+'
-    je .up
-    cmp al, '='
-    je .up
-    cmp al, '-'
-    je .dn
-    cmp al, ' '
-    je .on
-    cmp bl, DKAF_AMPM
+    mov si, dk_kalm2
+    call dk_keys
+    jnc .x
+    cmp byte [dk_afoc], DKAF_AMPM
     jne .dig
-    or al, 20h
-    cmp al, 'a'
-    je .amp
-    cmp al, 'p'
-    je .amp
-    jmp .x
+    mov si, dk_kalm3
+    call dk_keys
+    jmp short .x
 .dig:
     cmp al, '0'
     jb .x
@@ -846,93 +349,83 @@ dk_akey:
     ja .x
     sub al, '0'
     call dk_adigit
-    jmp .x
-.amp:
-    call dk_aampm
-    jmp .x
-.on:
-    xor byte [dk_aon], DKF_ALARM
-    call dk_aall
-    jmp .x
-.ok:
-    call dk_aok
-    jmp .x
-.can:
-    call dk_ashut
-    jmp .x
-.tab:
-    mov al, bl
-    inc al
-    cmp al, DKAF_LABEL + 1
-    jb .t
-    xor al, al
-.t:
-    call dk_afocus
-    jmp .x
-.btab:
-    mov al, bl
-    dec al
-    jns .bt
-    mov al, DKAF_LABEL
-.bt:
-    cmp al, DKAF_AMPM           ; backwards past the AM/PM under 24 hours
-    jne .t
-    test byte [DKP + DKP_FLAGS], DKF_H24
-    jz .t
-    dec al
-    jmp short .t
-.up:
-    mov al, 1
-    call dk_astep
-    jmp short .x
-.dn:
-    mov al, -1
-    call dk_astep
     jmp short .x
 .lab:
-    cmp al, 8                   ; the label: Backspace, or a character
-    je .bs
-    cmp al, ' '
-    jb .x
-    cmp al, 126
-    ja .x
-    push di
-    mov di, dk_alab
-    xor bx, bx
+    xor bx, bx                  ; BX = the label's length
 .ln:
-    cmp byte [di+bx], 0
+    cmp byte [dk_alab + bx], 0
     je .le
     inc bx
     jmp short .ln
 .le:
-    cmp bx, DK_LABMAX
-    jae .full
-    mov [di+bx], al
-    mov byte [di+bx+1], 0
-.full:
-    pop di
-    call dk_aall
-    jmp short .x
-.bs:
-    push di
-    mov di, dk_alab
-    xor bx, bx
-.bn:
-    cmp byte [di+bx], 0
-    je .be
-    inc bx
-    jmp short .bn
-.be:
+    cmp al, 8                   ; Backspace...
+    jne .ch
     or bx, bx
-    jz .bx
-    mov byte [di+bx-1], 0
-.bx:
-    pop di
-    call dk_aall
+    jz .rd
+    dec bx
+    jmp short .z
+.ch:
+    cmp al, ' '                 ; ...or a character
+    jb .x
+    cmp al, 126
+    ja .x
+    cmp bx, DK_LABMAX
+    jae .rd
+    mov [dk_alab + bx], al
+    inc bx
+.z:
+    mov byte [dk_alab + bx], 0
+.rd:
+    call dk_fall
 .x:
+    pop si
     pop bx
     pop ax
     ret
+dk_kalm1:   DKKEY 13, 0, dk_aok             ; OK
+            DKKEY 27, 0, dk_ashut           ; Cancel
+            DKKEY 9, 1, dk_ktab             ; Tab, Right: the next field
+            DKKEY 80h + KSC_RIGHT, 1, dk_ktab
+            DKKEY 80h + KSC_LEFT, -1, dk_ktab
+            DKKEY 80h + KSC_UP, 1, dk_astep
+            DKKEY 80h + KSC_DOWN, -1, dk_astep
+            db 0
+dk_kalm2:   DKKEY '+', 1, dk_astep
+            DKKEY '=', 1, dk_astep
+            DKKEY '-', -1, dk_astep
+            DKKEY ' ', 0, dk_kaon           ; Space ticks the box
+            db 0
+dk_kalm3:   DKKEY 'a', 0, dk_aampm          ; on the AM/PM: A or P turns it
+            DKKEY 'p', 0, dk_aampm
+            db 0
+
+; dk_ktab - AL = +1 / -1: the next field, or the one before, round the four
+; - and backwards past the AM/PM under 24 hours (dk_afocus steps forwards
+; past it)
+dk_ktab:
+    mov ah, al
+    add al, [dk_afoc]
+    jns .p
+    mov al, DKAF_LABEL
+.p:
+    cmp al, DKAF_LABEL
+    jbe .b
+    xor al, al
+.b:
+    or ah, ah
+    jns .f
+    cmp al, DKAF_AMPM
+    jne .f
+    test byte [DKP + DKP_FLAGS], DKF_H24
+    jz .f
+    dec ax
+.f:
+    jmp dk_afocus
+
+; dk_kaon - the box: the alarm on or off, in the edit
+dk_kaon:
+    xor byte [dk_aon], DKF_ALARM
+    jmp dk_fall
 
 ; dk_adigit - AL = a digit typed into the hour or the minute: the field's
 ; last digit becomes its tens, the new one its units - and a value its dial
@@ -987,7 +480,7 @@ dk_adigit:
 .ms:
     mov [dk_am], al
 .d:
-    call dk_aall
+    call dk_fall
 .x:
     pop cx
     pop bx

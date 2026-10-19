@@ -105,7 +105,8 @@ MACHINE = "os8088_xt_hdd"
 
 # kernel/hiber.inc, kernel/instance.inc - the module's own constants
 HB_M_ASK, HB_M_BUSY, HB_M_RESUME, HB_M_GONE = 0, 1, 2, 3
-KIND_ABOUT, KIND_HIBER = 0, 5
+KIND_ABOUT, KIND_HIBER = 0, 3   # kernel/instance.inc - it was 5 until
+                                # Timer and Bounce left the kernel (#264)
 I_RECSZ, INST_MAX = 32, 12
 I_STATE, I_KIND, I_WIN = 0, 2, 4
 W_FLAGS = 0

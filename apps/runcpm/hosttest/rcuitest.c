@@ -324,13 +324,14 @@ int  os88_cpu(void) { return OS88_CPU_8086; }
 static unsigned ticks;
 static unsigned tick_step = 1;
 unsigned os88_ticks(void) { unsigned t = ticks; ticks += tick_step; return t; }
-/* two claims: the Z80's 64KB at 0x2000 and the CCP's 2KB at 0x3000 (wave 3) */
+/* ONE claim: the Z80's 64KB at 0x2000. The CCP is at the head of the
+ * package's one part (SPEC.md 74.3), in the parts carve at 0x3000 -
+ * os88_part_seg below */
 static int n_claims;
 unsigned os88_mem_claim(int kb)
 {
     n_claims++;
     if (kb == 64) return 0x2000;
-    if (kb == 2)  return 0x3000;
     printf("HARNESS: os88_mem_claim(%d): not a claim this program makes\n", kb);
     exit(1);
 }
@@ -400,8 +401,27 @@ unsigned os88_file_read(const char *name, void *buf, unsigned cap)
 static char last_read[16];
 static unsigned last_read_seg, n_reads;
 static unsigned char zram[65536];
-static unsigned char ccpram[2048];       /* the CCP claim, seg 0x3000 */
-static int ccp_missing;                  /* the disk without CCP-DR.60K */
+static unsigned char ccpram[2048];       /* the CCP's part, seg 0x3000 */
+static int n_partseg;                    /* os88_part_seg calls */
+/* ccp_load - what op_load does before os88_main runs: the DRI CCP, at offset
+ * 0 of the module's part, in the carve - a fake image whose command buffer is where the real one's
+ * is - +6 the max (0x7F), +7 the length (0), +8 the characters (spaces) - so
+ * the AUTOEXEC poke and the copy to 0xE400 can be checked */
+static void ccp_load(void)
+{
+    unsigned i;
+    for (i = 0; i < 2048; i++) ccpram[i] = (unsigned char)(0xC0 + (i & 7));   /* a pattern */
+    ccpram[6] = 0x7F; ccpram[7] = 0;
+    for (i = 8; i < 136; i++) ccpram[i] = ' ';
+}
+/* the part is ASKED for at each use and never banked (runcpm.c: the carve
+ * may move); the module's code behind the CCP is not modelled */
+unsigned os88_part_seg(int i)
+{
+    n_partseg++;
+    if (i != 0) { printf("HARNESS: os88_part_seg(%d): the package has one part\n", i); exit(1); }
+    return 0x3000;
+}
 static const char hello_bytes[40] = "\016\011\021\011\001\315\005\000\311Hello from the Z80 - 40 bytes.$";
 unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap)
 {
@@ -428,19 +448,8 @@ unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap)
         return n;
     }
     if (strcmp(name, "CCP-DR.60K") == 0) {
-        /* the DRI CCP, from the LAUNCH folder, into the 2KB claim: a fake
-         * image whose command buffer is where the real one's is - +6 the
-         * max (0x7F), +7 the length (0), +8 the characters (spaces) - so the
-         * AUTOEXEC poke and the copy to 0xE400 can be checked */
-        unsigned i;
-        if (std_clus != 0) { printf("HARNESS: the CCP read from clus %u, not the launch folder\n", std_clus); exit(1); }
-        if (seg != 0x3000 || cap != 2048) { printf("HARNESS: the CCP read into %04x cap %u\n", seg, cap); exit(1); }
-        if (ccp_missing) { ferr = OS88_FERR_NOENT; return 0; }
-        for (i = 0; i < 2048; i++) ccpram[i] = (unsigned char)(0xC0 + (i & 7));   /* a pattern */
-        ccpram[6] = 0x7F; ccpram[7] = 0;
-        for (i = 8; i < 136; i++) ccpram[i] = ' ';
-        ferr = 0;
-        return 2048;
+        printf("HARNESS: CCP-DR.60K read as a file - it is in the package's part (SPEC.md 74.3)\n");
+        exit(1);
     }
     if (std_clus == 9 && strcmp(name, "HELLO.COM") == 0) {
         if (seg < 0x2000 || ((seg - 0x2000) << 4) + 40 > 0x10000) { printf("HARNESS: read outside the claim\n"); exit(1); }
@@ -768,10 +777,10 @@ static void run_all(int cols_geom, int rows_geom, int table)
     ticks = 100; tick_step = 1; zscript_reset(); n_rc_run = 0;
     zclk_left = ZCLK_BURST; clk_restarts = clk_slices = clk_halts = 0;
     memset(zram, 0, sizeof(zram));
-    memset(ccpram, 0, sizeof(ccpram));
+    ccp_load();                             /* op_load, before os88_main */
     rc_khead = rc_ktail = 0;
     n_claims = 0; spawn_refuses = 0; spawned = 0; destroyed = 0;
-    ccp_missing = 0; n_axreads = 0;
+    n_axreads = 0; n_partseg = 0;
     /* AUTOEXEC.TXT: 'DIR' and a rest behind a CR - and on one geometry a
      * 200-byte line, longer than main.c's 125-byte poke AND than a 125-byte
      * read would carry: the file is read whole and the first 125 bytes are
@@ -787,14 +796,14 @@ static void run_all(int cols_geom, int rows_geom, int table)
     win = os88_main();
     if (!win) { printf("FAIL: os88_main returned 0 (%s)\n", last_toast); fails++; return; }
     if (rc_z.seg != 0x2000) { printf("FAIL: rc_z.seg not the claim\n"); fails++; }
-    /* the CCP: its 2KB claim and the read from the launch folder happen in
-     * os88_main, before anything moves the instance (SPEC.md 74.3) */
-    if (n_claims != 2 || rc_ccpseg != 0x3000 || rc_ccplen != 2048) { printf("FAIL: the CCP claim/read: %d claims, seg %04x, %u bytes\n", n_claims, rc_ccpseg, rc_ccplen); fails++; }
+    /* the CCP: no claim and no read of its own - it is part 0, in the carve
+     * before os88_main ran (SPEC.md 74.3); one claim is the Z80's */
+    if (n_claims != 1) { printf("FAIL: the launch made %d claims, wanted the Z80's alone\n", n_claims); fails++; }
     /* ...and AUTOEXEC.TXT, ONCE, whole, from the launch folder, into the
      * TPA (cleared behind it): its first 125 bytes cached, cut at the first
      * control character */
-    if (strcmp(last_read, "AUTOEXEC.TXT") != 0 || n_axreads != 1) { printf("FAIL: os88_main read '%s' (%u AUTOEXEC reads), wanted the CCP then AUTOEXEC.TXT once\n", last_read, n_axreads); fails++; }
-    if (ccpram[7] != ax_len || memcmp(ccpram + 8, autoexec_text, ax_len) != 0 || ccpram[8 + ax_len] != 0) { printf("FAIL: AUTOEXEC.TXT in the CCP claim: len %u, wanted %d\n", ccpram[7], ax_len); fails++; }
+    if (strcmp(last_read, "AUTOEXEC.TXT") != 0 || n_axreads != 1) { printf("FAIL: os88_main read '%s' (%u AUTOEXEC reads), wanted AUTOEXEC.TXT once\n", last_read, n_axreads); fails++; }
+    if (ccpram[7] != ax_len || memcmp(ccpram + 8, autoexec_text, ax_len) != 0 || ccpram[8 + ax_len] != 0) { printf("FAIL: AUTOEXEC.TXT in the CCP's part: len %u, wanted %d\n", ccpram[7], ax_len); fails++; }
     if (zram[0x200] != 0 || zram[0x200 + ax_len - 1] != 0) { printf("FAIL: AUTOEXEC.TXT's bytes left in the TPA\n"); fails++; }
     expose();
     audit("expose after launch");
@@ -1883,40 +1892,6 @@ static void run_all(int cols_geom, int rows_geom, int table)
     }
 }
 
-/* a disk without CCP-DR.60K: the launch is not refused (the claims were had);
- * main.c 118's text follows the banner and the machine idles, the window up
- * to show it (SPEC.md 74) - and Alt+L is still there */
-static void run_noccp(void)
-{
-    int i;
-    cont_w = 640; cont_h = 200;
-    gclear(); callreset(); wakes_posted = 0;
-    std_clus = 0; std_vol = 0; ferr = 0;
-    ticks = 100; tick_step = 1; zscript_reset(); n_rc_run = 0;
-    zclk_left = ZCLK_BURST; clk_restarts = clk_slices = clk_halts = 0;
-    memset(zram, 0, sizeof(zram)); memset(ccpram, 0, sizeof(ccpram));
-    rc_khead = rc_ktail = 0; n_claims = 0; ccp_missing = 1; autoexec_text = 0;
-    rc_mode = RC_M_CLOCK; rc_ldmode = 0; rc_status = 0;
-    win = os88_main();
-    if (!win) { printf("FAIL: no CCP: os88_main refused the launch (%s)\n", last_toast); fails++; return; }
-    if (rc_ccplen != 0) { printf("FAIL: no CCP: rc_ccplen %u\n", rc_ccplen); fails++; }
-    expose();
-    tick_step = 0;
-    for (i = 0; i < 200 && rc_mode == RC_M_CLOCK; i++) wake();
-    tick_step = 1;
-    audit("no ccp");
-    expect_row("no ccp head", 10, "RunCPM Version 6.9 (CCP-DR.60K) - CP/M 2.2");
-    expect_row("no ccp 1", 11, "Unable to load CP/M CCP.");
-    expect_row("no ccp 2", 12, "CPU halted.");
-    if (rc_mode != RC_M_IDLE) { printf("FAIL: no CCP: mode %d, wanted idle\n", rc_mode); fails++; }
-    {   int w = wakes_posted; wake();
-        if (wakes_posted != w) { printf("FAIL: no CCP: the idle machine re-posted\n"); fails++; } }
-    lock_depth = 1; os88_onkey(0, 0x26, win); lock_depth = 0;
-    if (rc_ldmode != RC_LD_PROMPT) { printf("FAIL: no CCP: Alt+L refused\n"); fails++; }
-    lock_depth = 1; os88_onkey(27, 0x01, win); lock_depth = 0;
-    ccp_missing = 0;
-}
-
 int main(void)
 {
     printf("rcuitest: RUNCPM terminal against a model of the glass\n");
@@ -1924,7 +1899,6 @@ int main(void)
     print_costs();
     run_all(79, 25, 0);                 /* VGA framed (632 px of content) */
     run_all(78, 17, 0);                 /* CGA framed */
-    run_noccp();
     if (fails) {
         printf("rcuitest: %d FAILURE(S)\n", fails);
         return 1;

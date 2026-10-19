@@ -76,7 +76,9 @@ KNOB_ONLY = ("band.inc", "bootprof.inc", "moudiag.inc", "stkdiag.inc",
 # row) and so measures somewhere; compress.inc is the first that is PURELY
 # the image, and its resident half lives on mod.inc's and files.inc's rows.
 # A file joining this list is saying "nothing of this is in KERNEL.SYS".
-IMAGE_ONLY = ("compress.inc", "dockmod.inc")
+# ascw.inc (SPEC.md 54.7.6.4) is the third: FORMAT.DRV's ASSOC.DAT flush,
+# whose resident half is the one `dw ascw_flush_x` on diskw.inc's row.
+IMAGE_ONLY = ("compress.inc", "dockmod.inc", "ascw.inc")
 
 # ...and a THIRD reason for a zero row, which is neither a knob nor an image:
 # a file whose whole contribution is a MACRO.  `mouproto.inc` (SPEC.md 9.5) is

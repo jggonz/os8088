@@ -95,11 +95,12 @@ def run(apps, want_root):
 # which is the disk being right and the expectation being old.
 #
 # ...AND MIDIRACK IS THERE ON PURPOSE TOO (SPEC.md 105.10): at 360KB the
-# player and its pictures ride the root of the disk whose subject is music
-# already, with its ten songs in MEDIA/MIDI/ - $(MEDIAARGS360) - and the row
-# failed as `root: [..., 'MIDIRACK.GFX', 'MIDIRACK.O88', ...]` for the same
-# reason as above, a disk that was right and an expectation that was old.
-run("build/media360.img", ["MEDIA", "MIDIRACK.GFX", "MIDIRACK.O88", "SYSTEM"])
+# player rides the root of the disk whose subject is music already, with its
+# ten songs in MEDIA/MIDI/ - $(MEDIAARGS360) - and the row failed as
+# `root: [..., 'MIDIRACK.O88', ...]` for the same reason as above, a disk
+# that was right and an expectation that was old. Its pictures were
+# MIDIRACK.GFX beside it and are a part of it now (SPEC.md 105.9.5).
+run("build/media360.img", ["MEDIA", "MIDIRACK.O88", "SYSTEM"])
 run("build/apps360.img", ["APPS", "GAMES", "MEDIA", "SYSTEM"])
 
 if fails:

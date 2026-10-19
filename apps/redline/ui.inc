@@ -1686,11 +1686,11 @@ ru_progress_update:
     add bx, 18
     mov cx, [ru_x]
     add cx, [ru_w]
-    sub cx, 8
-    mov dx, [ru_y]
-    add dx, 124
-    push ax
-    mov al, CWHITE
+    dec cx                          ; to the content's LAST column: the run's
+    mov dx, [ru_y]                  ; first label (rl_running, 57 cells at
+    add dx, 124                     ; x 316) runs to the window's edge, and a
+    push ax                         ; fill stopping 8px short left its last
+    mov al, CWHITE                  ; glyph standing beside every later label
     call OSAPI_SET_COLOR
     pop ax
     call OSAPI_GFX_FILL

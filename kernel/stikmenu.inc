@@ -1773,6 +1773,7 @@ stm_turn:
 ; A sector that no longer holds a card leaves the slot's picture blank.
 ; On a floppy the scan's own reads are still in the track cache (SPEC.md
 ; 18.95), so the first page costs nothing more; a turn reads its page.
+; Ends in stm_thaw: the freeze is over once the pictures are in.
 ; clobbers AX, BX, CX, DX, SI, DI, BP, ES
 ; -----------------------------------------------------------------------------
 stm_loadpics:
@@ -1843,6 +1844,30 @@ stm_loadpics:
     jmp .s
 .done:
     call COLD_SEG:drvf_drv_vol_back
+                                ; ...and FALLS INTO stm_thaw: the disk work is
+                                ; over and the panel is about to be the user's
+
+; -----------------------------------------------------------------------------
+; stm_thaw - THE FREEZE IS OVER, though the hold is not (SPEC.md 12.8.3.3):
+; the progress widget off the bar and the busy clock off the pointer, which
+; is gfx_unlock's two steps taken early. menu_track's hold does not end when
+; the disk work does - the panel is tracked inside it, for as long as the
+; user takes - so without this the widget sat on the bar and the clock
+; stayed the pointer's picture until the panel closed. Reached at the end of
+; every stm_loadpics, so after the drop's load and scan AND after a page
+; turn's reads, both of them with the pointer OFF the glass or owed a hide
+; (cur_shape_set's precondition): the drop's is gfx_lock's promise and the
+; turn's stm_loop's own cursor_hide. ZERO resident bytes: both kernel steps
+; are reached through SMK, and gfx_unlock's copy is untouched.
+; clobbers AX
+; -----------------------------------------------------------------------------
+stm_thaw:
+    SMK fpg_finish              ; the widget down and its cells given back
+    cmp byte [cur_shape], CUR_BUSYSH
+    jne .r                      ; no clock worn: nothing to take off
+    mov al, [cur_shprev]        ; the picture the clock replaced (SPEC.md
+    SMK cur_shape_set           ; 7.5.2), as gfx_unlock puts it back
+.r:
     ret
 
 ; stm_hit - AX = the selectable slab under the pointer, 0FFFFh none; the

@@ -29,7 +29,11 @@
 %define zf_hired      (os88_image_end + 3)    ; byte: the worker exists
 %define zf_req        (os88_image_end + 4)    ; byte: ZREQ_* the worker posted
 %define zf_reqres     (os88_image_end + 5)    ; byte: ZRES_* the UI task answered
-%define zf_script     (os88_image_end + 6)    ; byte: transcript is on
+%define zi_scrdirty   (os88_image_end + 6)    ; byte: the transcript has
+                                              ;   text SCRIPT.TXT does not
+                                              ;   (zio.inc). It was zf_script, a
+                                              ;   Transcript flag nothing read:
+                                              ;   stream 2 is [zt_s2on]
 %define zf_pendok     (os88_image_end + 7)    ; byte: zf_pend holds a name
 %define zf_pend       (os88_image_end + 8)    ; 13 bytes: OSAPI_ARG_FILE's name
 %define zf_dead       (os88_image_end + 21)   ; byte: @quit ran; the VM parks
@@ -218,4 +222,9 @@ ZEXEC_SLACK  equ 1684                         ; 84
                                     ; Only ever DIFFERENCED across one wait,
                                     ; so wrapping is not a case to handle
 
-ZF_BSS_TOTAL equ 1768
+; --- the tail: frotz.asm's, added after every block above was laid out -----
+%define zf_why     (os88_image_end + 1768)  ; word: the refusal the no-story
+                                            ;   screen shows under its lines,
+                                            ;   0 = none (zw_notice, zf_splash)
+
+ZF_BSS_TOTAL equ 1770

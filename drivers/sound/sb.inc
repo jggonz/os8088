@@ -2148,6 +2148,7 @@ sbl_fill_guard:
     jz .dsh                     ; verb 0 having committed it)
     mov di, [sbl_half]
 .dsh:
+    add di, [sbl_sbase]         ; ...from the buffer's first offset
     pushf
     cli
     cmp byte [sbl_str_act], 1   ; verify INSIDE the window, before any
@@ -2379,6 +2380,7 @@ sbl_drain_half:
     jz .src
     add si, SBL_RHALF
 .src:
+    add si, [sbl_sbase]         ; ...from the buffer's first offset
     mov di, [sbl_str_off]       ; DI = grant + progress: the destination
     add di, [sbl_consumed]
     mov cx, [sbl_total]
@@ -2673,17 +2675,27 @@ sbl_dma_get:
     push ax
     push cx
     push dx
+    mov ax, SBL_DMASZ           ; THE HMA FIRST (SPEC.md 2.10.8): on a 286 with
+    call OSAPI_MEM_HMA          ; `.cold` up there, 8KB the heap never sees -
+    jnc .got                    ; one 64KB physical page, as the chip needs
     mov ax, SBL_WANT
     mov cx, ax
     call OSAPI_MEM_CLAIM_DMA_HI ; out CF, DX = base segment
     jc .fail
+    xor ax, ax                  ; (a heap claim starts at its offset 0)
+.got:
     mov [sbl_seg], dx
+    mov [sbl_sbase], ax         ; ...and every CPU access is from AX on
+    push ax
     mov ax, dx                  ; ...and the two words the base decides: the
     mov cl, 4                   ; buffer's offset inside its 64KB physical
     shl ax, cl                  ; page (the low 16 bits of base x 16)...
-    mov [sbl_dmaoff], ax
     mov cl, 12                  ; ...and which page that is
     shr dx, cl
+    pop cx
+    add ax, cx                  ; ...from the block's first offset, which
+    adc dl, 0                   ; carries into the page above 1MB
+    mov [sbl_dmaoff], ax
     mov [sbl_page], dl
     clc
 .fail:                          ; (CF = 1 from the claim)
@@ -2702,7 +2714,13 @@ sbl_dma_put:
     mov dx, [sbl_seg]
     or dx, dx
     jz .out
-    call OSAPI_MEM_FREE
+    push ax
+    xor ax, ax                  ; an HMA block: AX = 0 gives DX back - and
+    call OSAPI_MEM_HMA          ; CF = 1 for anything that is not one, a heap
+    pop ax                      ; claim's segment being below F000 and no
+    jnc .gone                   ; block's ever (SPEC.md 2.10.8): the heap's
+    call OSAPI_MEM_FREE         ; free is then the answer
+.gone:
     mov word [sbl_seg], 0
 .out:
     pop dx
@@ -3417,6 +3435,9 @@ sbl_xcnt:     dw 0              ;   length - 1 (verb 0 sets all three)
 sbl_seg:      dw 0              ; the double buffer and record ring, page-
                                 ;   safe, held only while a stream that is
                                 ;   NOT direct is open (SPEC.md 34.5.2)
+sbl_sbase:    dw 0              ; ...and its first OFFSET there: 0 in the
+                                ;   heap, DRV_HMA_ORG in the HMA (SPEC.md
+                                ;   2.10.8), whose blocks have no offset 0
 sbl_poolseg:  dw 0              ; the STAGING POOL's own claim, 0 = not held.
                                 ;   Taken on the first grant, released with
                                 ;   the last (sbl_pool_get/put)

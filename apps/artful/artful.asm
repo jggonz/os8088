@@ -181,8 +181,12 @@ at_entry:
     push dx                         ; existed
     mov ax, bx
     mov bx, at_btrec
-    mov si, at_onup
-    mov di, at_ondrag
+    mov si, at_modal_up             ; the release and the drag go straight
+    mov di, at_modal_drag           ; to the one record both button sets
+                                    ; share: a callback may clobber CX, DX
+                                    ; and DI (SPEC.md 13.7, 13.8.2), and the
+                                    ; two pass-through frames that pushed and
+                                    ; popped all six went in apps size pass 2
     mov dx, at_onclick                ; OUR own click work; the library
                                     ; takes the press FIRST and chains
                                     ; here (SPEC.md 20.5.1.3.3)
@@ -562,11 +566,12 @@ at_onkey:
     call at_fs_enter
     jmp short .done
 .new:
-    call at_cmd_newdoc
-    call at_fs_enter
+    mov al, AT_CMD_NEW              ; asks first when the document is edited
+    call at_wreplace                ; (SPEC.md 46.7.2)
     jmp short .done
 .open:
-    call at_dlg_open
+    mov al, AT_CMD_OPEN
+    call at_wreplace
 .done:
     pop es
     pop bp
@@ -581,41 +586,6 @@ at_onkey:
 ; -----------------------------------------------------------------------------
 ; at_onclick - W_ONCLICK (CX = x, DX = y, absolute screen; lock held)
 ; -----------------------------------------------------------------------------
-; --- at_onup / at_ondrag - the modal's buttons fire and track (13.7/13.8.2) --
-; Only the modal draws standard buttons, so both edges go straight to it; a
-; release with no modal up finds nothing armed and does nothing.
-at_onup:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call at_modal_up
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-at_ondrag:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call at_modal_drag
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
 at_onclick:
     push ax
     push bx
@@ -629,9 +599,9 @@ at_onclick:
     pop es
     cmp byte [at_fs], 0
     je .win
-    cmp byte [at_modal], 0
-    jne .modal
-    cmp dx, 20
+    cmp byte [at_modal], 0          ; an alert is up: its buttons are the
+    jne .done                       ; library's, which took the press first
+    cmp dx, 20                      ; (SPEC.md 20.5.1.3.3) - nothing is ours
     jb .bar
     mov ax, [at_sbx]
     cmp cx, ax
@@ -647,14 +617,11 @@ at_onclick:
 .bar:
     call at_bar_click
     jmp short .done
-.modal:
-    call at_modal_click
-    jmp short .done
 .win:
     call at_abdismiss               ; the credits are up: this click is spent
-    jc .done                        ; taking them down
-    call at_splash_click
-.done:
+.done:                              ; taking them down - and the splash's own
+                                    ; New / Open are the library's, armed on
+                                    ; the press and fired by at_modal_up
     pop es
     pop bp
     pop di
@@ -683,11 +650,12 @@ at_koncmd:
     call at_fs_enter                ; Write: the current document, fullscreen
     jmp short .out
 .new:
-    call at_cmd_newdoc
-    call at_fs_enter
+    mov al, AT_CMD_NEW              ; asks first when the document is edited
+    call at_wreplace                ; (SPEC.md 46.7.2)
     jmp short .out
 .open:
-    call at_dlg_open
+    mov al, AT_CMD_OPEN
+    call at_wreplace
 .out:
     ret
 
@@ -931,12 +899,11 @@ at_abdismiss:
     ret
 
 ; --- the About card's lines (SPEC.md 20.5.1) ----------------------------------
+; ONE copy of each string the card shares with at_about_body (apps size pass
+; 2): the card's lines name the splash's own, so they cannot drift apart
 at_ablines:
-    dw at_ab1, at_ab2, at_ab3, at_ab4, 0
-at_ab1:     db 'The Artful Type', 0
-at_ab2:     db 'A Distraction-Free Writing Environment', 0
+    dw at_s_title, at_s_sub, at_ab3, at_s_credit, 0
 at_ab3:     db 0
-at_ab4:     db 'Ported by Jorge Gonzalez', 0
 
 at_tpl:
     dw 140, 60, 360, 300
@@ -946,14 +913,11 @@ at_ttl: db 'ArtfulType', 0
 
 ; --- the WINDOWED bar's menu set (SPEC.md 12.2) --------------------------------
     OS88_MENUSET at_kmenus, at_ttl, at_koncmd
-        OS88_MENU at_km_file, at_km_items, 3
+        OS88_MENU at_m_file, at_km_items, 3
     OS88_MENUSET_END at_kmenus
 
-at_km_file:  db 'File', 0
-at_km_items: dw at_ki_new, at_ki_open, at_ki_write
-at_ki_new:   db 'New', 0
-at_ki_open:  db 'Open...', 0
-at_ki_write: db 'Write', 0
+at_km_items: dw at_i_new, at_i_open, at_ki_write   ; the fullscreen bar's own
+at_ki_write: db 'Write', 0                         ; 'File', 'New', 'Open...'
 
 ; --- the FULLSCREEN menus (at_mtab: title, items, count - 6 bytes each) --------
 ; item records: dw label (0 = separator), dw shortcut label, db AT_CMD_*,
@@ -1090,15 +1054,13 @@ at_k_k:  db '^K', 0
 at_k_l:  db '^L', 0
 
 ; --- the alert/splash strings --------------------------------------------------
+; 'Save', 'New' and 'Open...' are the menu items' own (at_i_*): one copy each
 at_s_savechg:  db 'Save changes to ', 0
 at_s_qmark:    db '?', 0
 at_s_untitled: db 'Untitled', 0
-at_s_save:     db 'Save', 0
 at_s_cancel:   db 'Cancel', 0
 at_s_dontsave: db "Don't Save", 0
 at_s_ok:       db 'OK', 0
-at_s_new:      db 'New', 0
-at_s_open:     db 'Open...', 0
 at_s_title:    db 'The Artful Type', 0
 at_s_sub:      db 'A Distraction-Free Writing Environment', 0
 at_s_ver:      db 'v0.1 - the os8088 port', 0
@@ -1370,19 +1332,9 @@ at_ink      equ at_pair + 2                  ; byte: a pull-down item's ink,
                                              ;   kept because a package cannot
                                              ;   read the pen back
 at_pad64    equ at_ink + 1                   ; byte: keeps the words below even
-at_b1x      equ at_pad64 + 1                 ; the buttons: x, y, width
-at_b1y      equ at_b1x + 2
-at_b1w      equ at_b1y + 2
-at_b2x      equ at_b1w + 2
-at_b2y      equ at_b2x + 2
-at_b2w      equ at_b2y + 2
-at_b3x      equ at_b2w + 2
-at_b3y      equ at_b3x + 2
-at_b3w      equ at_b3y + 2
-at_spx      equ at_b3w + 2                   ; splash geometry
-at_spy      equ at_spx + 2
-at_spw      equ at_spy + 2
-at_sph      equ at_spw + 2
+at_spx      equ at_pad64 + 1                 ; splash geometry (the buttons'
+at_spy      equ at_spx + 2                   ; own rects are at_brects, the
+at_sph      equ at_spy + 2                   ; one copy os88ui_btn reads)
 at_spcx     equ at_sph + 2
 at_btx      equ at_spcx + 2                  ; bigtext/image cursor
 at_bty      equ at_btx + 2
@@ -1416,8 +1368,8 @@ at_apnd     equ at_tby + 2                    ; byte: SPEC.md 46.4.11 - at_type
                                               ; other caller of that proc can
                                               ; inherit it.
 at_suseg    equ at_apnd + 1                   ; word: SPEC.md 46.5.1 - the claim
-at_sukb     equ at_suseg + 2                  ; word: holding the pull-down's
-at_surx1    equ at_sukb + 2                   ; word: banked pixels, and the
+                                              ;   holding the pull-down's
+at_surx1    equ at_suseg + 2                  ; word: banked pixels, and the
 at_sury1    equ at_surx1 + 2                  ; word: rect they came from. 0
 at_surx2    equ at_sury1 + 2                  ; word: in at_suseg is the whole
 at_sury2    equ at_surx2 + 2                  ; word: of "nothing was banked"

@@ -55,6 +55,12 @@
 ; `%define OS88TY_NO<ROUTINE>` for each of HIT, WIDTH, WIDTHN, FIT, PUT,
 ; ADVOF, FAMN, GETASC and GETLEAD it never calls. Nothing in here calls them,
 ; so a wrong one fails the assembly rather than the machine.
+; `%define OS88TY_NOGRAY` (apps size pass 2b) takes out ty_gray and
+; ty_flush's greying arm, for an includer that never greys a band (Font
+; Viewer). Because the arm is INSIDE ty_flush, the switch also RENAMES it:
+; the entry is ty_flushlive, which takes no carry argument, and ty_flush is
+; not defined - so a call site still written to pass `stc` (or `clc`) fails
+; the assembly instead of drawing a greyed band live.
 ; =============================================================================
 
 TY_MAXFACE  equ 4               ; faces open at once, INCLUDING face 0
@@ -1813,7 +1819,11 @@ ty_put_fast:
 ; per build rather than a per-glyph one, and face 0 (SPEC.md 6.5) is what
 ; makes the measuring side of that fallback need no second code path at all.
 ; =============================================================================
+%ifndef OS88TY_NOGRAY
 ty_flush:
+%else
+ty_flushlive:                       ; OS88TY_NOGRAY: no carry in, never grey
+%endif
     push ax
     push bx
     push cx
@@ -1823,9 +1833,11 @@ ty_flush:
     push bp
     push es
 
+%ifndef OS88TY_NOGRAY
     jnc .live                       ; CF is the CALLER's greying flag, not a
     call ty_gray                    ; question to the kernel (SPEC.md 6.5.4)
 .live:
+%endif
     mov si, ty_bandbuf
     mov bp, TY_STRIDE
     push ds
@@ -1845,6 +1857,7 @@ ty_flush:
     pop ax
     ret
 
+%ifndef OS88TY_NOGRAY
 ; -----------------------------------------------------------------------------
 ; ty_gray - dither the band for a DISABLED control (SPEC.md 47 rule 3)
 ; in:  BX = the band's screen y, CX = its width in pixels, DX = its rows
@@ -1898,6 +1911,7 @@ ty_gray:
     pop bx
     pop ax
     ret
+%endif                              ; OS88TY_NOGRAY
 
 ; =============================================================================
 ; TY_BSS - the library's bss, placed by the including package

@@ -27,8 +27,8 @@
 ; module that names its own bss names it at an ABSOLUTE address, bss begins
 ; where the image ends, and two packages have different image sizes - so an
 ; include with private variables cannot serve a package that OVERLAYS it and
-; one that does not. SCRIBE reaches this through SCRIBE.OVL; PAINT would
-; reach it resident. For the same reason IMG_ERR is a NUMBER and not a string pointer:
+; one that does not. SCRIBE reached this through SCRIBE.OVL (part 1 of its
+; own segment now, SPEC.md 95.8.8); PAINT would reach it resident. For the same reason IMG_ERR is a NUMBER and not a string pointer:
 ; a string in an overlaid module is at a module-relative offset, and a
 ; resident caller reading it through DS gets whatever happens to sit there -
 ; the exact bug 93.2 records against an overlaid rasterizer. The caller words
@@ -510,8 +510,7 @@ img_palident:
 ; tools/os88pix.py matches on the host and apps/os88chart.inc writes into a
 ; BMP palette. R,G,B order because that is a PCX header's; a BMP's is
 ; byte-reversed where it is read.
-img_pal8088:
-    db 0x00,0x00,0x00,  0x00,0x00,0xAA,  0x00,0xAA,0x00,  0x00,0xAA,0xAA
+img_pal8088: db 0x00,0x00,0x00,  0x00,0x00,0xAA,  0x00,0xAA,0x00,  0x00,0xAA,0xAA
     db 0xAA,0x00,0x00,  0xAA,0x00,0xAA,  0xAA,0x55,0x00,  0xAA,0xAA,0xAA
     db 0x55,0x55,0x55,  0x55,0x55,0xFF,  0x55,0xFF,0x55,  0x55,0xFF,0xFF
     db 0xFF,0x55,0x55,  0xFF,0x55,0xFF,  0xFF,0xFF,0x55,  0xFF,0xFF,0xFF

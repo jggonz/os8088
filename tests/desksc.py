@@ -369,9 +369,13 @@ def main():
         if shots:
             ui.settle()
             shot(m, os.path.join(shots, "g_selected.png"))
-        media = ui.entry("MEDIA", root)
+        ui.entry("MEDIA", root)     # raises, naming the root, if it is not there
+        # \MEDIA's first cluster, read off the image rather than remembered:
+        # it was 4 until ASSOC.DAT grew past two clusters and moved it to 5
+        _, _, ment = os88fat.Fat12(appimg).find("MEDIA")
+        mclus = struct.unpack_from("<H", ment, 26)[0]
         m.key("Enter")
-        ui._wait(lambda: any((ui.fs_of(w) or (0, 0))[1] == 4
+        ui._wait(lambda: any((ui.fs_of(w) or (0, 0))[1] == mclus
                              for w in ui.windows() if w.visible),
                  "a Disk window on B:\\MEDIA", 30,
                  snapshot=lambda: [(w.title, ui.fs_of(w))
@@ -381,7 +385,7 @@ def main():
         # --- H: a DOCUMENT, opened through its association -----------------
         print("H: drag MEDIA\\GUIDE.TEX out, and double-click it")
         mw = [w for w in ui.windows()
-              if w.visible and (ui.fs_of(w) or (0, 0))[1] == 4][0]
+              if w.visible and (ui.fs_of(w) or (0, 0))[1] == mclus][0]
         ui.raise_window(mw)
         idx, _ty = ui.entry("GUIDE.TEX", mw)
         row = ui.scroll_to(idx, win=mw)

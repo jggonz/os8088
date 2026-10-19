@@ -1443,7 +1443,7 @@ sc_docparse:
     shr ax, cl
     pop cx
     inc ax
-    call far [sc_v_resize]
+    call sc_resize
     jc .no
     mov word [sc_papn], 1           ; a fresh dictionary: entry 0 is Normal
     push es                         ; and sc_papfind grows it from there
@@ -1456,7 +1456,7 @@ sc_docparse:
     call sc_dpapin                  ; the PAPX runs    -> the ¶ marks
     call sc_dtrim                   ; the file's last ¶ is our TAIL paragraph
     call sc_dcompact                ; drop what this port cannot render
-    call far [sc_v_pictfree]; THE OLD DOCUMENT'S PICTURES GO BACK
+    call sc_pictfree                ; THE OLD DOCUMENT'S PICTURES GO BACK
                                     ; HERE, not at sc_load's commit point,
                                     ; which is past the ones sc_dpicr is
                                     ; about to build (SPEC.md 95.7). Safe
@@ -1921,13 +1921,13 @@ sc_dpapin:
     jae .tail
     PKG_LDS sc_dseg
     mov al, [si]
-    mov ds, [cs:sc_pkgseg]          ; NOT `push cs / pop ds`: this routine is
-                                    ; in .modc, so CS is the MODULE and every
-                                    ; SCVAR below - and the far vector at
-                                    ; sc_v_papfind, which is itself a
-                                    ; DS-relative dword - would be read ~33KB
-                                    ; past the end of a 12,288-byte claim
-                                    ; (SPEC.md 95.8.3)
+    push cs                         ; DS back on the package for every SCVAR
+    pop ds                          ; below. CS IS the package: part 1 is in
+                                    ; this segment (SPEC.md 95.8.8). It was a
+                                    ; word stamped into SCRIBE.OVL while the
+                                    ; module had a CS of its own, and this
+                                    ; idiom then read ~33KB past its claim
+                                    ; (SPEC.md 95.8.2)
     cmp al, 13
     jne .next
     mov ax, si
@@ -1988,7 +1988,7 @@ sc_dpapat:
     add si, 2 + SC_CBPHE
     call sc_dprl
 .find:
-    call far [sc_v_papfind]; CF=1 = the dictionary is full
+    call sc_papfind0                ; CF=1 = the dictionary is full
     jmp short .out
 .no:
     stc
@@ -2827,6 +2827,6 @@ sc_ldpost:
     jz .n2
     mov byte [sc_hasfmt], 1
 .n2:
-    call far [sc_v_ldscan]; tabs -> [sc_hastab], hidden -> [sc_hashid]
+    call sc_ldscan                  ; tabs -> [sc_hastab], hidden -> [sc_hashid]
     pop ax
     ret

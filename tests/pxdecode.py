@@ -44,7 +44,7 @@ import os88ui, os88geom, heapmap, os88build
 import pxtmp
 import pixelsim as P
 import pixcorpus as C
-from pxsyms import pkg_syms, u16
+from pxsyms import pkg_syms, same_header, u16
 
 FAIL = []
 
@@ -62,7 +62,10 @@ ap.add_argument("-k", default=None, help="only fixtures whose name has this")
 a = ap.parse_args()
 
 syms, image = pkg_syms()
-o88 = open(os88build.at("build/pixel.o88"), "rb").read()
+import os88pkg                                          # noqa: E402
+# the IMAGE, not the file: a parted package's image ships packed when that
+# saves a sector (SPEC.md 20.13.8)
+o88 = os88pkg.image_unwrap(open(os88build.at("build/pixel.o88"), "rb").read())
 if o88[:syms["op_table"]] != image[:syms["op_table"]]:
     sys.exit("build/pixel.o88 is not this tree's pixel.asm - run "
              "`make build/pixel.o88`")
@@ -113,7 +116,7 @@ with os88ui.boot(SYSDISK, apps=DISK, machine=a.machine) as ui:
         for i in range(12):
             r = m.read(S("inst_tab") + i * os88geom.I_RECSZ, os88geom.I_RECSZ)
             c = u16(r, os88geom.I_SPTR)
-            if c and m.read(c * 16, 32) == image[:32]:
+            if c and same_header(m.read(c * 16, 32), image):
                 return c
         return None
     ui.path("B:/PA/" + first)

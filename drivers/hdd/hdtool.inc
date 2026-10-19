@@ -180,6 +180,13 @@ hd_tool_need:
 
     push cs                     ; HDT_INIT: WHO WE ARE - our own segment, not
     pop dx                      ; [hd_tseg], which is the segment we have just
+    mov cx, DRV_ORG + PKG_DISP  ; ...and where OUR dispatcher is in it, which
+                                ; is not PKG_DISP when this image runs from
+                                ; the HMA: assembled at DRV_ORG = E000h there
+                                ; (SPEC.md 2.10.8), so it is E00Ch. A tool
+                                ; that assumed 000Ch called into the pool's
+                                ; next block down on its first service call -
+                                ; the Hard Disk page's freeze on a 286
     mov bx, hd_svc              ; filled and is the tool's. Getting that wrong
     mov al, HDT_INIT            ; is silent: the tool builds a far pointer to
     call hd_tool_call           ; ITSELF, every service call lands on its own

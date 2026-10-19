@@ -50,10 +50,10 @@ their order, are the contract; the table's example is prose.
 
 | case | rule | the sentence weavesim prints |
 |---|---|---|
-| `unknown-element/` | unknown element - the inventory is closed (WEAVE-SPEC §3.2) | `<zap>: not a Weave element; the inventory is closed (WEAVE-SPEC 3.2)` |
+| `unknown-element/` | unknown element - the inventory is closed (WEAVE-SPEC §3.2) | `<zap>: not a Weave element; the inventory is closed` |
 | `unknown-attribute/` | unknown attribute (WEAVE-SPEC §3.3) | `button: no such attribute "pad"; style is bold/invert/align only - two of three adapters are 1bpp` |
-| `hover-vocabulary/` | hover vocabulary - `onhover` (WEAVE-SPEC §9.1) | `onhover: no hover exists; pointer movement reaches a package only between press and release (SPEC.md 13.7)` |
-| `color-vocabulary/` | colour vocabulary on a FLOW component - `color` (WEAVE-SPEC §9.2.1) | `color: no color here; a palette is a canvas's (WEAVE-SPEC 9.2.1) - grey rounds to black on 1bpp (SPEC.md 39.4)` |
+| `hover-vocabulary/` | hover vocabulary - `onhover` (WEAVE-SPEC §9.1) | `onhover: no hover exists; pointer movement reaches a package only between press and release` |
+| `color-vocabulary/` | colour vocabulary on a FLOW component - `color` (WEAVE-SPEC §9.2.1) | `color: no color here; a palette is a canvas's - grey rounds to black on 1bpp` |
 | `ontick-over-budget/` | `ontick` over the 64-op budget (WEAVE-SPEC §4.11.1) | `ontick handler is 66 ops; the cap is 64 - per-frame JS does not fit 10-30k ops/s` |
 | `too-many-atoms/` | more than 187 app atoms (WEAVE-SPEC §2.7) | `188 app atoms; the cap is 187 - atom ids are one byte` |
 | `grid-too-big/` | grid over 6,140 cells (WEAVE-SPEC §5.6) | `grid is 26x256 = 6656 cells; the cap is 6140 - the cell store plus its pool must fit a 26KB claim` |
@@ -64,11 +64,11 @@ their order, are the contract; the table's example is prose.
 
 | case | rule | the sentence weavesim prints |
 |---|---|---|
-| `unknown-event/` | unknown event - an event legal somewhere, not on this element (WEAVE-SPEC §3.4) | `label: no event "onclick" exists on it (WEAVE-SPEC 3.3)` |
+| `unknown-event/` | unknown event - an event legal somewhere, not on this element (WEAVE-SPEC §3.4) | `label: no event "onclick" exists on it` |
 | `event-unknown-function/` | an event naming a function the script does not define (WEAVE-SPEC §11.3) | `onclick="nope": no such function in the script` |
 | `call-argc/` | bad arity - a call with the wrong argument count (WEAVE-SPEC §4.2) | `one: takes 1 arguments; 2 written` |
-| `undeclared-identifier/` | an undeclared identifier (WEAVE-SPEC §4.2) | `x: not a local, global, component id or function (WEAVE-SPEC 4.2)` |
-| `wjs-locals-cap/` | frame overdepth - over 16 locals in one function (WEAVE-SPEC §4.2) | `f: 17 locals; the cap is 16, parameters included (WEAVE-SPEC 4.2)` |
+| `undeclared-identifier/` | an undeclared identifier (WEAVE-SPEC §4.2) | `x: not a local, global, component id or function` |
+| `wjs-locals-cap/` | frame overdepth - over 16 locals in one function (WEAVE-SPEC §4.2) | `f: 17 locals; the cap is 16, parameters included` |
 | `fx-stack-depth/` | stack overdepth - a formula over the 16-slot eval stack (WEAVE-SPEC §5.3) | `formula: too deep - the stack is 16 slots.` |
 
 
@@ -89,9 +89,9 @@ their order, are the contract; the table's example is prose.
 | `meter-max-range/` | `meter` `max` outside 1..32000 | `meter: max="40000" is outside 1..32000` |
 | `input-cols-range/` | `input` `cols` outside 2..60 | `input: cols="80" is outside 2..60` |
 | `list-rows-range/` | `list` `rows` outside 1..40 | `list: rows="50" is outside 1..40` |
-| `canvas-w-not-byte/` | `canvas` `w` not a multiple of 8 | `canvas: w="100" is not a multiple of 8 - bands are byte-aligned (WEAVE-SPEC 3.3)` |
-| `canvas-color-name/` | a palette name outside the sixteen (WEAVE-SPEC §6.10.7) | `canvas: paper="beige" is not one of the sixteen colours (WEAVE-SPEC 6.10.7)` |
-| `canvas-pen-pair/` | a pen pair `GFX_BLIT1` refuses (WEAVE-SPEC §6.10.7, SPEC.md §5.4.2.2's fourth refusal) | `canvas: paper="blue" against color="red": the two share no plane either way and GFX_BLIT1 refuses the pair (SPEC.md 5.4.2.2)` |
+| `canvas-w-not-byte/` | `canvas` `w` not a multiple of 8 | `canvas: w="100" is not a multiple of 8 - bands are byte-aligned` |
+| `canvas-color-name/` | a palette name outside the sixteen (WEAVE-SPEC §6.10.7) | `canvas: paper="beige" is not one of the sixteen colours` |
+| `canvas-pen-pair/` | a pen pair `GFX_BLIT1` refuses (WEAVE-SPEC §6.10.7, SPEC.md §5.4.2.2's fourth refusal) | `canvas: paper="blue" against color="red": the two share no plane either way and GFX_BLIT1 refuses the pair` |
 
 
 ## WML vocabulary and syntax (WEAVE-SPEC §3.1, WEAVE-SPEC §3.5)
@@ -99,10 +99,10 @@ their order, are the contract; the table's example is prose.
 | case | rule | the sentence weavesim prints |
 |---|---|---|
 | `bad-style/` | a `style` token outside bold/invert | `style: no such style "italic"; style is bold/invert/align only - two of three adapters are 1bpp` |
-| `bad-align/` | an `align` token outside left/center/right | `align: no such alignment "middle"; left/center/right (WEAVE-SPEC 3.3)` |
-| `bad-boolean/` | a boolean attribute that is neither bare nor "1"/"0" | `label: br="yes" is not a boolean - bare or "1"/"0" (WEAVE-SPEC 3.1)` |
-| `bad-entity/` | an entity outside the closed set of four | `&nbsp: not one of &lt; &gt; &amp; &quot; - the entity set is closed (WEAVE-SPEC 3.1)` |
-| `tag-mismatch/` | a close tag that does not nest | `</card> closes <label> - tags must nest (WEAVE-SPEC 3.1)` |
+| `bad-align/` | an `align` token outside left/center/right | `align: no such alignment "middle"; left/center/right` |
+| `bad-boolean/` | a boolean attribute that is neither bare nor "1"/"0" | `label: br="yes" is not a boolean - bare or "1"/"0"` |
+| `bad-entity/` | an entity outside the closed set of four | `&nbsp: not one of &lt; &gt; &amp; &quot; - the entity set is closed` |
+| `tag-mismatch/` | a close tag that does not nest | `</card> closes <label> - tags must nest` |
 | `tag-unclosed/` | an element never closed | `<card> is never closed` |
 | `radio-group-of-one/` | a radio group with one member (WEAVE-SPEC §11.3) | `radio: group "size" has one member; a group is 2 or more` |
 
@@ -113,8 +113,8 @@ their order, are the contract; the table's example is prose.
 |---|---|---|
 | `wjs-redeclaration/` | a name declared twice | `a: declared twice` |
 | `break-outside-loop/` | `break` outside a loop | `break outside a loop` |
-| `number-over-32767/` | a number literal over 32767 | `40000: numbers are 0..32767; 16-bit int is THE number type (WEAVE-SPEC 4.1)` |
-| `bad-string-escape/` | a string escape outside `\" \\ \n` | `\q: the escapes are \" \\ \n (WEAVE-SPEC 4.2)` |
+| `number-over-32767/` | a number literal over 32767 | `40000: numbers are 0..32767; 16-bit int is THE number type` |
+| `bad-string-escape/` | a string escape outside `\" \\ \n` | `\q: the escapes are \" \\ \n` |
 | `unterminated-string/` | an unterminated string | `unterminated string` |
 | `unterminated-comment/` | an unterminated `/*` comment | `unterminated /* comment` |
 
@@ -127,14 +127,14 @@ their order, are the contract; the table's example is prose.
 | `wfx-cell-outside-grid/` | a `.WFX` cell reference outside the grid | `C9 is outside the 3x4 grid` |
 | `fx-unknown-function/` | an FX formula naming a function outside the set of eight | `formula: SUM MIN MAX AVG COUNT IF ABS ROUND is the whole set.` |
 | `fx-range-outside-aggregate/` | an FX range outside an aggregate's argument | `formula: a range is legal only in an aggregate.` |
-| `fx-five-decimals/` | an FX fraction with five decimals | `1.23456: at most 4 fraction digits; 16.16 resolves to 1/65536 (WEAVE-SPEC 5.1)` |
+| `fx-five-decimals/` | an FX fraction with five decimals | `1.23456: at most 4 fraction digits; 16.16 resolves to 1/65536` |
 
 ## Two cases wave 6 added
 
 | case directory | the rule it exercises | the sentence |
 |---|---|---|
-| `atom-empty/` | WEAVE-SPEC §2.7's LOWER bound - `group=""` reaches the interner with nothing in the builder | `empty string: an atom is 1..255 bytes (WEAVE-SPEC 2.7)` |
-| `atom-too-long/` | ...and its upper one: an atom's length is ONE BYTE, and the sentence names the length that was WRITTEN rather than the length that fitted | `string is 300 bytes; the cap is 255 (WEAVE-SPEC 2.7)` |
+| `atom-empty/` | WEAVE-SPEC §2.7's LOWER bound - `group=""` reaches the interner with nothing in the builder | `empty string: an atom is 1..255 bytes` |
+| `atom-too-long/` | ...and its upper one: an atom's length is ONE BYTE, and the sentence names the length that was WRITTEN rather than the length that fitted | `string is 300 bytes; the cap is 255` |
 
 Both were found by writing the second implementation: the empty one because
 `ovl_intern()` had no lower-bound check at all and would have pooled a

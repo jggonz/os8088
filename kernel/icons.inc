@@ -429,11 +429,13 @@ ico_core:
 .noclip:                        ; foot was a relaxed five-byte jcc away
 
     mov ax, [ico_rb]            ; (the clip test spent AX)
+%ifdef GFX_VGA
     mov bx, [vid_stride]
     sub bx, ax
     mov [ico_rowadv], bx        ; DI advance after a row's words (the planar
-                                ; pass only - the banked one goes through
-                                ; gfx_nextrow instead)
+%endif                          ; pass only - the banked one goes through
+                                ; gfx_nextrow instead, and it is the only
+                                ; pass a kernel with no VGA has)
 
     mov [ico_maskp], si         ; mask rows first, data rows after
     mul word [ico_h]            ; AX = 2 * wwords still, so this is the
@@ -1242,12 +1244,15 @@ ico_ww      resw 1              ; current record: words per row
 ico_h       resw 1              ; current record: total rows
 ico_rows    resw 1              ; rows after vertical clip
 ico_rb      resw 1              ; bytes per icon row (2 * wwords)
+%ifdef GFX_VGA
 ico_rowadv  resw 1              ; DI advance after a row (80 - 2*wwords)
+%endif
 ico_maskp   resw 1              ; -> first (unclipped) mask row
 ico_datap   resw 1              ; -> first (unclipped) data row
 ico_col0    resw 1              ; base byte column (x / 8)
+%ifdef GFX_VGA                  ; (ico_pass is the VGA pass's alone)
 ico_col     resw 1              ; running byte column inside ico_pass.
-                                ; ico_pass_bb's is DL and its limit DH, so it
+%endif                          ; ico_pass_bb's is DL and its limit DH, so it
                                 ; has no cell here at all
 ico_wleft   resw 1              ; words left in the current row
 ico_x       resw 1              ; requested x

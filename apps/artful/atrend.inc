@@ -1464,21 +1464,102 @@ at_draw_text:
     pop ax
     ret
 
+; (at_bigtext lives HERE, between the line renderer and the caret group,
+; for a reason that is not about what it does: apps size pass 2 removed an
+; odd number of bytes just above this point, and a cold routine of odd size
+; moved in from atui.inc puts the caret and scroll group back at the parity
+; its cycles were measured at - a word fetch at an odd address is two bus
+; cycles on an 8086 or a 286 (PERFORMANCE.md Part 7) - for no pad byte.
+; tools/os88rdiff.py --hot is the check.)
 ; -----------------------------------------------------------------------------
-; at_draw_cline - repaint exactly the caret's line (the keystroke path)
+; at_bigtext - scaled styled text, anywhere on screen
+; in:  AX = x, BX = y, SI = string, CX = scale (1..3), DL = AT_ST_* style
 ; out: nothing; preserves all registers
+; Borrows the line pipeline: compose into a fresh strip, expand, one blit.
 ; -----------------------------------------------------------------------------
-at_draw_cline:
+at_bigtext:
     push ax
     push bx
-    call at_caret_off
-    mov ax, [at_caret]
-    call at_line_of
-    call at_line_y
-    jc .done
-    call at_draw_line
-.done:
-    call at_caret_on
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov [at_btx], ax
+    mov [at_bty], bx
+    mov [at_psc], cx
+    mov ax, cx
+    mov cl, 3
+    shl ax, cl
+    mov [at_pcw], ax                ; cell width = 8*scale
+    mov [at_prh], ax                ; rows = the glyph box exactly
+    push ds
+    pop es
+    cld
+    mov di, at_strip1
+    mov cx, (AT_S1ST*24)/2          ; 24 rows covers scale 3
+    AT_PAPERAX                      ; SPEC.md 46.4.2 - the FIFTH writer into
+    rep stosw                       ; at_strip1, and the one in another file
+%ifdef NOATBLIT1
+    mov di, at_cellbg               ; at_expand reads at_cellbg; the band this
+    mov cx, AT_CBGCAP/2             ; arm's twin hands over does not, so the
+    rep stosw                       ; clear is the expander's alone (46.4.12)
+%endif
+    xor di, di                      ; DI = x within the strip
+.ch:
+    lodsb
+    or al, al
+    jz .composed
+    push dx
+    call at_glyph
+    pop dx
+    add di, [at_pcw]
+    jmp short .ch
+.composed:
+%ifdef NOATBLIT1
+    mov ax, di
+    cmp ax, AT_S4ST*2               ; the 4bpp strip's 608px, not the 1bpp
+    jbe .w                          ; 640: at_expand writes 4 bytes per
+    mov ax, AT_S4ST*2               ; 8px column against AT_S4ST rows
+.w:
+    mov [at_xw], ax
+    or ax, ax
+    jz .out
+    call at_expand
+    push ds
+    pop es
+    mov si, at_strip4
+    mov bp, AT_S4ST
+    mov ax, [at_btx]
+    mov bx, [at_bty]
+    mov cx, [at_xw]
+    mov dx, [at_prh]
+    call OSAPI_GFX_BLIT4
+%else
+    ; SPEC.md 46.4.12: the strip IS the band, so it goes down as it stands.
+    ; The cap is the one the 4bpp strip set (608px) - kept, so a title draws
+    ; exactly as wide as it did - and it leaves at_blit1ph its byte of room.
+    mov cx, di
+    cmp cx, AT_BIGW
+    jbe .w
+    mov cx, AT_BIGW
+.w:
+    jcxz .out
+    mov si, at_strip1
+    mov bp, AT_S1ST
+    mov ax, [at_btx]
+    mov bx, [at_bty]
+    mov dx, [at_prh]
+    call at_blit1ph
+%endif
+.out:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret

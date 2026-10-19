@@ -539,6 +539,13 @@ WD_K_F1      equ 0x3B           ; F1 - Help: opens the About box (the only
 WD_K_F4      equ 0x3E           ; F4 - repeat search down (SPEC.md 68.7)
 WD_K_F5      equ 0x3F           ; F5 - Go To... (keys.cmd EditGoTo)
 WD_K_F8      equ 0x42           ; F8 - extend selection (status EXT)
+WD_K_AF4     equ 0x6B           ; Alt-F4 - File > Exit, the caption the menu
+                                ; has always printed beside it. int 16h hands
+                                ; Alt+F1..F10 over as AL = 0 + scans 0x68..0x71
+                                ; on every ROM back to the 5150's, and nothing
+                                ; between the BIOS and this handler claims it:
+                                ; the kernel has no window-close key, so the
+                                ; package that prints the caption keeps it
 WD_K_SF4     equ 0x57           ; Shift-F4 - repeat search up (Shift-F1..F10
                                 ; are scans 0x54..0x5D)
 WD_K_HOME    equ 0x47           ; the caret keys, int 16h scan codes
@@ -10092,6 +10099,8 @@ wd_onkey:
     jnz .typing
     cmp ah, WD_K_F1
     je .kf1                         ; F1 - the About box (the help there is)
+    cmp ah, WD_K_AF4
+    je .kaf4                        ; Alt-F4 - File > Exit, same door
     cmp ah, WD_K_F4
     je .kf4                         ; F4 / Shift-F4 - repeat the search down
     cmp ah, WD_K_SF4                ; / up (SPEC.md 68.7)
@@ -10376,6 +10385,10 @@ wd_onkey:
 .kf1:
     call wd_habout                  ; F1: the About box (bounds+settle inside)
     jmp .out
+.kaf4:
+    call wd_a_close                ; Alt-F4: File > Exit - the dirty prompt
+    jmp .out                        ; first, then the hide and the worker's
+                                    ; teardown; nothing left to repaint
 .kf4:
     call wd_donext                  ; F4: repeat search down (SPEC.md 68.7)
     jmp .redraw

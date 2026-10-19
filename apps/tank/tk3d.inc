@@ -71,7 +71,8 @@ tk_sin1:
     jz .pos
     neg bx                          ; quarters 2 and 3 are the negatives
 .pos:
-    ret
+tk_ret:                             ; a lone `ret`, which is also the region's
+    ret                             ; relocation proc (tank.asm, 85.10.6)
 
 ; -----------------------------------------------------------------------------
 ; tk_camsetup - the camera's sine and cosine, once a frame
@@ -537,19 +538,29 @@ tk_nclip:
 ; table lookup per frame.
 ; -----------------------------------------------------------------------------
 tk_ridgesetup:
+    push si
     xor bx, bx
-    mov cx, 25
+    mov cx, -12                     ; CX = the column's angle off the sights
 .p:
-    push cx
-    mov ax, [tk_tantab + bx]
+    mov ax, cx
+    cwd                             ; DX = its sign, 0 or -1
+    xor ax, dx
+    sub ax, dx
+    xchg ax, si                     ; SI = |angle|...
+    mov al, [tk_tantab + si]        ; ...whose tangent is the table's, and a
+    mov ah, 0                       ; tangent is odd, so it takes the angle's
+    xor ax, dx                      ; sign (tktan.inc)
+    sub ax, dx
     imul word [tk_sclx]             ; DX:AX = tan * 256 * sclx
     mov al, ah                      ; ...>> 8
     mov ah, dl
     add ax, [tk_vcx]
     mov [tk_ridgex + bx], ax
     add bx, 2
-    pop cx
-    loop .p
+    inc cx
+    cmp cx, 12
+    jle .p
+    pop si
     ret
 
 ; -----------------------------------------------------------------------------
@@ -755,56 +766,67 @@ tk_m_tank:  db TKV_TANK, 22
 tk_m_shell: db TKV_SHELL, 3
             dw tk_v_shell, tk_e_shell, tk_ypre + 2 * (TK_NYPRE - TKV_SHELL)
 
-tk_v_cube:
-    dw  -90,   0,  -90
-    dw   90,   0,  -90
-    dw   90,   0,   90
-    dw  -90,   0,   90
-    dw  -90, 180,  -90
-    dw   90, 180,  -90
-    dw   90, 180,   90
-    dw  -90, 180,   90
-
-tk_v_block:                         ; the low wide slabs the 1983 port stands
-    dw -150,   0,  -60              ; in threes
-    dw  150,   0,  -60
-    dw  150,   0,   60
-    dw -150,   0,   60
-    dw -150,  90,  -60
-    dw  150,  90,  -60
-    dw  150,  90,   60
-    dw -150,  90,   60
+; THE VERTICES ARE THE BSS'S (apps size pass 2, SPEC.md 85.5.2). Every
+; coordinate is a multiple of five, so the file ships each one as a signed
+; byte of fifths and tk_mktabs multiplies them back - TK_MODELS is that list,
+; emitted once, in the entry overlay (tank.asm), and tk_v_cube..tk_v_shell
+; are bss names laid out in the same order, TKV_* vertices apiece.
+%macro TK_MODELS 0
+    ; tk_v_cube
+    TKV  -90,    0,  -90
+    TKV   90,    0,  -90
+    TKV   90,    0,   90
+    TKV  -90,    0,   90
+    TKV  -90,  180,  -90
+    TKV   90,  180,  -90
+    TKV   90,  180,   90
+    TKV  -90,  180,   90
+    ; tk_v_block                    ; the low wide slabs the 1983 port stands
+    TKV -150,    0,  -60            ; in threes
+    TKV  150,    0,  -60
+    TKV  150,    0,   60
+    TKV -150,    0,   60
+    TKV -150,   90,  -60
+    TKV  150,   90,  -60
+    TKV  150,   90,   60
+    TKV -150,   90,   60
+    ; tk_v_pyr
+    TKV -110,    0, -110
+    TKV  110,    0, -110
+    TKV  110,    0,  110
+    TKV -110,    0,  110
+    TKV    0,  260,    0
+    ; tk_v_tank                     ; hull, turret, and a barrel that says
+    TKV -130,    0, -150            ; which way it is about to shoot
+    TKV  130,    0, -150
+    TKV  130,    0,  150
+    TKV -130,    0,  150
+    TKV -130,   70, -150
+    TKV  130,   70, -150
+    TKV  130,   70,  150
+    TKV -130,   70,  150
+    TKV  -60,  130,  -80
+    TKV   60,  130,  -80
+    TKV   60,  130,   60
+    TKV  -60,  130,   60
+    TKV    0,  105,  330
+    ; tk_v_shell                    ; a three-axis cross: small, bright, and
+    TKV  -40,   90,    0            ; unmistakably not scenery
+    TKV   40,   90,    0
+    TKV    0,   50,    0
+    TKV    0,  130,    0
+    TKV    0,   90,  -40
+    TKV    0,   90,   40
+%endmacro
 
 tk_e_box:
     db 0,1, 1,2, 2,3, 3,0
     db 4,5, 5,6, 6,7, 7,4
     db 0,4, 1,5, 2,6, 3,7
 
-tk_v_pyr:
-    dw -110,   0, -110
-    dw  110,   0, -110
-    dw  110,   0,  110
-    dw -110,   0,  110
-    dw    0, 260,    0
-
 tk_e_pyr:
     db 0,1, 1,2, 2,3, 3,0
     db 0,4, 1,4, 2,4, 3,4
-
-tk_v_tank:                          ; hull, turret, and a barrel that says
-    dw -130,   0, -150              ; which way it is about to shoot
-    dw  130,   0, -150
-    dw  130,   0,  150
-    dw -130,   0,  150
-    dw -130,  70, -150
-    dw  130,  70, -150
-    dw  130,  70,  150
-    dw -130,  70,  150
-    dw  -60, 130,  -80
-    dw   60, 130,  -80
-    dw   60, 130,   60
-    dw  -60, 130,   60
-    dw    0, 105,  330
 
 tk_e_tank:
     db 0,1, 1,2, 2,3, 3,0
@@ -814,35 +836,37 @@ tk_e_tank:
     db 4,8, 5,9, 6,10, 7,11
     db 10,12, 11,12
 
-tk_v_shell:                         ; a three-axis cross: small, bright, and
-    dw  -40,  90,    0              ; unmistakably not scenery
-    dw   40,  90,    0
-    dw    0,  50,    0
-    dw    0, 130,    0
-    dw    0,  90,  -40
-    dw    0,  90,   40
-
 tk_e_shell:
     db 0,1, 2,3, 4,5
 
-tk_sintab:
-%include "tksin.inc"
+; tk_sintab is the bss's: tksin.inc ships its second differences, and the
+; entry overlay adds them back up (tank.asm, SPEC.md 85.5)
 
-; TKRDG - a row of the ridge's heights, and TK_RIDGEPK the tallest of them, so
-; the band the ridge can reach is ASSEMBLED rather than scanned for at run time
-; (SPEC.md 85.3.9): tk_tmlayout's rectangle and the two span arrays sized to it
+; TKRDG0 / TKRDG - tkridge.inc's runs, read HERE for TK_RIDGEPK alone: the
+; tallest height, so the band the ridge can reach is ASSEMBLED rather than
+; scanned for at run time (SPEC.md 85.3.9) - tk_tmlayout's rectangle and the
+; two span arrays sized to it. A run's heights lie between its two ends, so
+; the tallest end is the tallest height. The bytes are emitted once more, by
+; the entry overlay (tank.asm), where tk_mktabs expands them into the bss's
+; tk_ridgetab.
 %assign TK_RIDGEPK 0
-%macro TKRDG 1-*
-  %rep %0
-    db %1
-    %if %1 > TK_RIDGEPK
-      %assign TK_RIDGEPK %1
+%assign TK_RIDGEN 0
+%macro TKRDG0 1
+  %assign TK_RIDGEPK %1
+%endmacro
+%macro TKRDG 2-*
+  %rep %0 / 2
+    %assign TK_RIDGEN TK_RIDGEN + %1
+    %if %2 > TK_RIDGEPK
+      %assign TK_RIDGEPK %2
     %endif
-    %rotate 1
+    %rotate 2
   %endrep
 %endmacro
-tk_ridgetab:
 %include "tkridge.inc"
+%if TK_RIDGEN != 255
+  %error "tkridge.inc's runs must cover angles 1..255 exactly"
+%endif
 ; ...and the most rows the ridge's BAND can be on a shadow backend - the peak
 ; at the larger of the two ridge scales (scly / 3, tk_r_setup), above the
 ; horizon and the two rows of slack tk_tmlayout gives it
@@ -853,3 +877,7 @@ TK_RBROWS equ ((TK_RIDGEPK * (TK_SCLYH / 3)) >> 8) + 3
 
 tk_tantab:
 %include "tktan.inc"
+    db 0                            ; THE PARITY PAD (SPEC.md 85.10.7): every
+                                    ; routine below keeps the address parity
+                                    ; it had before apps size pass 2 - free on
+                                    ; an 8088, a fetch on a 16-bit bus

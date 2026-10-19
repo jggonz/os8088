@@ -744,6 +744,18 @@ static void pmc_flush_laid(void *win, int brk)
             if (os88_wm_obscured(win) && os88_wm_clip_set(win) != 0)
                 return;
             pmc_pick_path(win);
+            /* ...AND THE ROW IS ASKED AGAIN. The yield is a window for the
+             * UI task's own paint - a Full Screen toggle mid-game is exactly
+             * that: wm_fullscreen repaints us whole, pmc_repaint composes all
+             * 36 bands and CLEANS them - so the span tested at the top of
+             * this pass may be clean by now, dmin = PMC_TILES_X and dmax = 0.
+             * Drawn anyway it was a band of -27 columns: x 432 and a width of
+             * -216 px, which gfx_blitp's wrap test does not catch, so one
+             * `rep movsb` of 65,509 bytes per plane per row ran across the
+             * whole framebuffer - the garbage that grew over the screen and
+             * never healed, because the bands it covered were clean. */
+            if (pmc_dmin[ty] > pmc_dmax[ty])
+                continue;
         }
 
         pmc_widen(ty);

@@ -52,6 +52,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import heapmap                                              # noqa: E402
 import os88fixture                                       # noqa: E402
 import os88qemu                                              # noqa: E402
+import os88sym                                               # noqa: E402
 
 PIDFILE = os.path.join(ROOT, "build", "qemu.pid")
 SOCK = os.path.join(ROOT, "build", "qmp.sock")
@@ -157,10 +158,26 @@ def sample(limit=40.0):
     # (tests/os88qemu.py): a loaded box gives the guest less of a host second.
     clk = os88qemu.Clock(q)
     seen, keys = [], set()
+    # NOTHING IS READ UNTIL THE KERNEL IS WHOLE. Under a packed kernel the
+    # `.bss` words below lie in the in-place LZ4 stream until stage 2 expands
+    # it (SPEC.md 2.9.13), and a packed byte can pass the plausibility test
+    # further down - it did once, at t=0.22, as 32 claims across the whole
+    # 1MB. Stage 2 publishes [spl_fseg] only after the expansion, so its first
+    # non-zero reading is the line; it is LATCHED because mem_unblob puts the
+    # word back to 0 when the blob is given back.
+    fseg = os88sym.linear("spl_fseg")
+    whole = False
     while True:
         t = clk.secs()
         if t >= limit or clk.stalled():
             break
+        if not whole:
+            try:
+                whole = q.read(fseg, 2) != b"\0\0"
+            except Exception:
+                pass
+            if not whole:
+                continue
         try:
             m = heapmap.Map(q, sym)
         except Exception:

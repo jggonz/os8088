@@ -1,8 +1,9 @@
 ; =============================================================================
-; os8088 - apps/loom/lmpv.inc          THE SEAM TO LOOM.WPV (WEAVE-SPEC 1.2.4)
+; os8088 - apps/loom/lmpv.inc          THE SEAM TO THE PREVIEW MODULE
+;                                      (WEAVE-SPEC 1.2.4) - part 0 of LOOM.O88
 ;
 ; %included by apps/loom/loom.asm - so this is the PACKAGE, and everything it
-; reaches is in a segment of its own. Five small routines and one dword, and
+; reaches is in a segment of its own. Two small routines and one dword, and
 ; that is deliberately the whole of the resident cost: the module is entered
 ; by a far call through the dword, and it has no state LOOM reads back.
 ;
@@ -14,69 +15,16 @@
 ; and DF preserved. The module preserves the same set, plus SI and DI.
 ; =============================================================================
 
-; THE MODULE'S SIZE AND ITS BSS, injected rather than assembled: LOOM.WPV is a
-; separate nasm job, so this assembly cannot see its last label. The Makefile
-; writes build/wpvsize.inc from the module it has just built, and the package
-; is built after it. That ordering is what makes the third stamp word (1.2.4)
-; a real staleness check rather than a tautology.
-;
-; THE BSS WORD IS THE ONE THING wcv.inc DOES NOT HAVE. WEAVE.WSM is hand
-; written assembly whose state is initialised bytes inside its own image, so
-; its claim is exactly the file; LOOM.WPV is compiled C with a .bss the file
-; does not carry, so the claim is image + bss and the module zeroes the tail
-; itself on its first entry (apps/loom/lmpvmod.asm). Claim the file's size
-; alone and the walk's layout table lands outside the claim - which is a
-; module that draws one correct picture and then writes over the heap.
-%include "wpvsize.inc"
+; THE MODULE IS PART 0 OF LOOM.O88 (WEAVE-SPEC 1.2.4), and that took three of
+; the five routines that used to stand here: lpv_kb (the claim is op_fetch's,
+; sized from the row's `len`, which the Makefile makes the image PLUS the bss
+; - see build/lmpvpart.bin), lpv_bytes and lpv_stamp. The four-word stamp
+; caught a stale PAIR of files; a part is bytes of the package's own file,
+; located by a table in the image it was built with, so there is no pair. The
+; module's header is unchanged, and its bss word is what the Makefile pads the
+; part with.
 
 section .text
-
-; -----------------------------------------------------------------------------
-; int lpv_kb(void) - the KB the module's claim needs, ceil((size + bss)/1024).
-; -----------------------------------------------------------------------------
-_lpv_kb:
-    mov ax, WPV_SIZE + WPV_BSS + 1023
-    mov cl, 10
-    shr ax, cl
-    ret
-
-; -----------------------------------------------------------------------------
-; unsigned lpv_bytes(void) - WPV_SIZE, so the caller can check the read.
-; -----------------------------------------------------------------------------
-_lpv_bytes:
-    mov ax, WPV_SIZE
-    ret
-
-; -----------------------------------------------------------------------------
-; int lpv_stamp(unsigned seg) - is this really OUR module?
-; out: 0 yes, 1 not a module or truncated, 2 stale.
-;
-; THREE WORDS, and 1.2.4 says what each catches and what the set does not.
-; The check is here rather than in C for wcv.inc's reason: WPV_MAGIC, WPV_ABI
-; and WPV_SIZE are nasm equs out of the two files this assembly shares with
-; the module, and the C copies in apps/weave/wpvabi.h are guarded against
-; these rather than trusted instead of them.
-; -----------------------------------------------------------------------------
-_lpv_stamp:
-    push bp
-    mov bp, sp
-    push es
-    mov es, [bp+4]
-    mov ax, 1
-    cmp word [es:WPV_H_MAGIC], WPV_MAGIC
-    jne .out
-    mov ax, 2
-    cmp word [es:WPV_H_ABI], WPV_ABI    ; a CONTRACT change need not change a
-    jne .out                            ; size, which is the half .OVL's two
-    cmp word [es:WPV_H_SIZE], WPV_SIZE  ; size words cannot express
-    jne .out
-    cmp word [es:WPV_H_BSS], WPV_BSS
-    jne .out
-    xor ax, ax
-.out:
-    pop es
-    pop bp
-    ret
 
 ; -----------------------------------------------------------------------------
 ; void lpv_bindmod(unsigned seg)
@@ -97,7 +45,7 @@ _lpv_bindmod:
 ; -----------------------------------------------------------------------------
 ; unsigned lpv_call(unsigned verb, unsigned a, unsigned b, unsigned c)
 ;
-; One far call into LOOM.WPV (WEAVE-SPEC 1.2.4). With no module bound the
+; One far call into the preview module (WEAVE-SPEC 1.2.4). With no module bound the
 ; answer is 0, which is the same "it did not happen" a refused overlay gives
 ; (apps/cc/crt0.asm) - so every caller can ask "did it run" separately from
 ; "what did it say", which for WPVV_PAINT is the difference between a pane
@@ -128,6 +76,5 @@ _lpv_call:
 
 section .data
 lpv_vec:    dw 0, 0                 ; (offset, segment) - the segment is 0
-                                    ; until the load path has read, stamped
-                                    ; and believed the module
+                                    ; until lm_pv_need has fetched part 0
 section .text

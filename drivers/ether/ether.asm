@@ -342,8 +342,11 @@ eth_dropall:
     jb  .kill
     mov al, TF_RST | TF_ACK
     push cx
-    xor cx, cx
-    call tcp_out
+    push dx                     ; DL is the slot: the RST carries SND.NXT,
+    mov dx, [bx+SKO_TXS]        ; SND.UNA past what is in flight, as tcp_ack
+    xor cx, cx                  ; does - a peer takes a reset at no other
+    call tcp_out                ; sequence number (RFC 5961)
+    pop dx
     pop cx
 .kill:
     mov byte [bx+SKO_TS], TS_CLOSED
@@ -565,6 +568,7 @@ eth_v_state:
 %define OS88UI_NOBFIND          ; hit-tests its own rects: no os88ui_bfind (SPEC.md 20.5.1.3.4)
 %define OS88UI_NOGCHECK       ; radios only: no check picture (SPEC.md 13.15.3)
 %include "os88ui.inc"           ; the standard control (SPEC.md 20.5.1)...
+%define OS88LINE_NOEDIT         ; nothing here calls os88line_edit (SPEC.md 83.1.2)
 %include "os88line.inc"         ; ...and the one-line field the Setup window is
 %include "etherui.inc"
 %include "ethcfg.inc"           ; ...and the Setup window behind it (72.7)

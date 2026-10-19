@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PiXEL's colour button faces (SPEC.md 106.16): draw them, pack them.
 
-    python3 tools/pixart.py -o build/PIXEL.GFX [--png preview.png]
+    python3 tools/pixart.py -o build/pixart.bin [--png preview.png]
     python3 tools/pixart.py --check-asm apps/pixel/pixel.asm
     python3 tools/pixart.py --selfcheck
 

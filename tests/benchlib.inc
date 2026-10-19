@@ -930,6 +930,13 @@ bl_lcommit:
     jmp short .tr
 .have:
     mov ax, [bl_nrow]
+    or ax, ax                   ; THE FIRST LINE OF A REPORT EMPTIES THE
+    jnz .room                   ; ARENA: a bench that runs again starts a
+    mov [bl_used], ax           ; report with `mov word [bl_nrow], 0` and
+    mov [bl_full], al           ; nothing else - ten of them do - so the
+.room:                          ; arena kept every earlier run's text and
+                                ; the fourth run in one window truncated
+                                ; (VIDDISK L on the Victory, 2026-10-15)
     cmp ax, BL_MAXROWS
     jae .full
     mov bx, [bl_used]

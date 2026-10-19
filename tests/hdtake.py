@@ -282,7 +282,8 @@ def main():
             bad.append("HDD.DRV is not loaded - SYSTEM.CFG's bit 1 was not "
                        "read, and this tests nothing")
             return report(bad)
-        base = seg << 4
+        base = geom.drv_base(seg)       # in the HMA, SPEC.md 2.10.8, its
+                                        # offsets start at DRV_HMA_ORG
         nd = q.read(base + syms["hd_ndev"], 1)[0]
         rows = [q.read(base + syms["hd_devs"] + i * HDD_SIZE, HDD_SIZE)
                 for i in range(nd)]

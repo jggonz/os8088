@@ -74,7 +74,7 @@ ap.add_argument("--machine", default="os8088_5150_herc_gla")
 a = ap.parse_args()
 syms, image = pkg_syms()
 DISK = "build/wddraggate.img"
-M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC")
+M.scratch_disk(DISK, "build/word.o88", "build/WELCOME.DOC", *M.faces())
 
 with M.launch("build/os8088-360.img", apps=DISK, machine=a.machine) as m:
     M.settle(m); mo = Mouse(marty=m); S = lambda n: m.sym(n)

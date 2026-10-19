@@ -111,6 +111,7 @@ eth_v_send:
     push ax
     push bx
     push dx
+    push si
     push di
     call eth_pump
     call sk_h2p
@@ -135,16 +136,26 @@ eth_v_send:
     mov cx, ax
 .room:
     jcxz .none
+    push cx                     ; the whole count, whichever arm runs
+    mov ax, [bx+SKO_TXN]        ; the byte after the last one queued, in a
+    call sk_txpos               ; CIRCULAR ring (SPEC.md 72.4.3): DI = it,
+    cmp cx, ax                  ; AX = the run to the ring's end
+    jbe .tail
+    xchg cx, ax                 ; the run to the end first...
+    call ring_in
+    add si, cx
+    sub ax, cx
+    mov cx, ax                  ; ...and the rest at the ring's start
     call sk_txbase
-    add di, [bx+SKO_TXN]
+.tail:
     call ring_in                ; ...INTO THE CLAIM, not the driver's bss:
                                 ; usr_read wrote through DS (SPEC.md 72.13)
-    add [bx+SKO_TXN], cx
-    push cx
-    call tcp_kick
     pop cx
+    add [bx+SKO_TXN], cx
+    call tcp_kick               ; (keeps CX - it banks its own)
 .none:
     pop di
+    pop si
     pop dx
     pop bx
     pop ax
@@ -152,6 +163,7 @@ eth_v_send:
     ret
 .no:
     pop di
+    pop si
     pop dx
     pop bx
     add sp, 2                   ; AX is the error and must survive the pops

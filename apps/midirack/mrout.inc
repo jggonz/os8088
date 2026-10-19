@@ -68,7 +68,10 @@ MRW_TAIL    equ 18                  ; ticks a finished song rings on (~1 s)
 ; session's start - the polled Covox's ring, the speaker's PWM table (read
 ; once, by mry_open, as it builds mry_otab), and the Sound Blaster grant
 ; ring's staging half (mrb_half, below)
-    MRBUF mrk_pring, OS88SPK_PRL    ; the polled ring, in our own segment
+mrk_pring   equ mr_ztail            ; the polled ring, in our own segment -
+                                    ; and a FOURTH tenant before any of
+                                    ; them: the image's tail, read once at
+                                    ; entry (midirack.asm, SPEC.md 105.6.1)
 mrk_map     equ mrk_pring           ; the PWM table, for the synth's
     MRW mr_pblo                     ; FM/tone: the PIT the song started at
     MRW mr_pbhi

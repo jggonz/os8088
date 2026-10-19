@@ -52,26 +52,62 @@ def words_after(text, label, n):
     return vals[:n]
 
 
-def tiles_of(text, label):
-    i = text.index("\n" + label + ":")
-    out, pend = [], None
+def xpairs_of(text):
+    """tw_xp: every tile's x span, `dw x1, x2`, 4 bytes a pair - the face's
+    and the editor's in ONE table, which is what lets one decoder serve both."""
+    i = text.index("\ntw_xp:")
+    out = []
     for line in text[i:].split("\n")[2:]:
-        m = re.match(r"\s+db\s+(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\s*$", line)
-        if m:                           # the face's 4-byte form: x1/4, (x2+1)/4
-            a, b, y1, y2 = (int(g) for g in m.groups())
-            out.append((a * 4, y1, b * 4 - 1, y2))
-            continue
-        m = re.match(r"\s+dw\s+(\d+),\s*(\d+)\s*$", line)
-        if m:
-            pend = (int(m.group(1)), int(m.group(2)))
-            continue
-        m = re.match(r"\s+db\s+(\d+),\s*(\d+)\s*$", line)
-        if m and pend:
-            out.append((pend[0], int(m.group(1)), pend[1], int(m.group(2))))
-            pend = None
-            continue
-        break
+        m = re.match(r"\s+dw\s+(\d+),\s*(\d+)\s*(;.*)?$", line)
+        if not m:
+            break
+        out.append((int(m.group(1)), int(m.group(2))))
     return out
+
+
+def grouped_tiles_of(text, label, xp):
+    """A grouped table: per group `db y1, y2, n, off...`, each off a byte
+    offset into tw_xp (4 a pair). Returns (tiles, groups) or (None, why)."""
+    i = text.index("\n" + label + ":")
+    out, groups = [], 0
+    for line in text[i:].split("\n")[2:]:
+        m = re.match(r"\s+db\s+(\d+(?:,\s*\d+)*)\s*(;.*)?$", line)
+        if not m:
+            break
+        v = [int(t) for t in m.group(1).split(",")]
+        y1, y2, n, offs = v[0], v[1], v[2], v[3:]
+        if n != len(offs) or n == 0 or any(o & 3 or o // 4 >= len(xp) or o > 127
+                                          for o in offs):
+            return None, "group %r is malformed" % (v,)
+        groups += 1
+        for o in offs:
+            a, b = xp[o // 4]
+            out.append((a, y1, b, y2))
+    return out, groups
+
+
+def emit_grouped(sets):
+    """tw_xp and the three grouped tables, from make_tiles' rectangles."""
+    xp, lines = [], []
+    for name, _src, els, W, H in sets:
+        groups = {}
+        for (a, y1, b, y2) in make_tiles(W, H, els):
+            pr = (a, b)
+            if pr not in xp:
+                xp.append(pr)
+            groups.setdefault((y1, y2), []).append(4 * xp.index(pr))
+        lines.append("%s:%s; %d groups" % (name, " " * max(1, 26 - len(name)),
+                                           len(groups)))
+        for (y1, y2), offs in groups.items():
+            lines.append("    db %d, %d, %d, %s" % (y1, y2, len(offs),
+                                                   ", ".join(map(str, offs))))
+    if 4 * (len(xp) - 1) > 127:
+        print("trkface: %d x spans: an offset no longer fits cbw's 0..127"
+              % len(xp), file=sys.stderr)
+        return None
+    out = ["tw_xp:                                  ; %d x spans" % len(xp)]
+    out += ["    dw %d, %d" % pr for pr in xp]
+    return out + lines
 
 
 def face_elements(text, label, c):
@@ -152,30 +188,26 @@ def main(argv):
     sets = [(t, win, face_elements(win, lay, c), W, H) for t, lay, W, H in faces]
     sets.append(("tpl_tiles", lst, list_elements(c), c["TPL_W"], c["TPL_H"]))
     if "--emit" in argv:
-        for name, _src, els, W, H in sets:
-            t = make_tiles(W, H, els)
-            print("%s:%s; %d tiles" % (name, " " * max(1, 26 - len(name)), len(t)))
-            for (a, y1, b, y2) in t:
-                if name.startswith("tw_"):
-                    if a % 4 or (b + 1) % 4:
-                        print("trkface: %s: tile %r is off the 4-pixel grid the "
-                              "face's 4-byte tiles need" % (name, (a, y1, b, y2)),
-                              file=sys.stderr)
-                        return 1
-                    print("    db %d, %d, %d, %d" % (a // 4, (b + 1) // 4, y1, y2))
-                else:
-                    print("    dw %d, %d\n    db %d, %d" % (a, b, y1, y2))
+        out = emit_grouped(sets)
+        if out is None:
+            return 1
+        print("\n".join(out))
         return 0
     bad = 0
+    xp = xpairs_of(win)
     for name, src, els, W, H in sets:
-        tiles = tiles_of(src, name)
-        declared = c.get({"tw_tiles_full": "TW_NT_FULL",
-                          "tw_tiles_comp": "TW_NT_COMP",
-                          "tpl_tiles": "TPL_NT"}[name])
+        tiles, n = grouped_tiles_of(src, name, xp)
+        if tiles is None:
+            print("trkface: %s: %s" % (name, n))
+            bad = 1
+            continue
+        declared = c.get({"tw_tiles_full": "TW_NG_FULL",
+                          "tw_tiles_comp": "TW_NG_COMP",
+                          "tpl_tiles": "TPL_NG"}[name])
         fault = cover_fault(W, H, els, tiles)
-        if fault is None and declared != len(tiles):
-            fault = "the table holds %d tiles and its count equ says %s" % (
-                len(tiles), declared)
+        if fault is None and declared != n:
+            fault = "the table holds %d groups and its count equ says %s" % (
+                n, declared)
         if fault:
             print("trkface: %s: %s (--emit prints what the layout needs)"
                   % (name, fault))
