@@ -180887,12 +180887,22 @@ nothing else in the player uses them.
   the card's ring first (`vp_afill`), so the stepped frames' sound waits in
   step for the resume. A card not yet started - a paused start, or a
   seek's landing - starts at the frame on the glass anyway, so there
-  `vp_frame` lets a frame through without its audio.
+  `vp_frame` lets a frame through without its audio. `vp_stfwd` REFUSES
+  a press that would ask for a frame past the last (`[vp_done]` plus
+  those queued at `[vp_frames]`, unless it repeats), which would end the
+  play, and with a started card one past the sound queued (`[vp_vseq]`
+  plus those queued at `[vp_aseq]`): the card is paused, so the ring
+  takes no more until the resume, and `vp_frame` would refuse the frame
+  after the press was spent. Paused on the last frame, the play drains
+  once Space plays on, not while it is paused.
 - **BACK (`,`)** is a SEEK, because the player decodes nothing without
   drawing it. It is Unmute's seek (`vp_skhere`, 98.3.17) to the key at or
   before the frame wanted, due at once. The landing, paused, steps on from
   the key to that frame (`[vp_sttgt]`), so the way there is seen briefly.
-  A file with no keys cannot step back.
+  A file with no keys cannot step back. A step back that comes to
+  nothing frees `.` again, and any seek's first press, or an arrow
+  pressed while a step back is on its way, drops the steps queued and the
+  step back's frame. So does Space's resume.
 - **Resume** after steps: the clock carries on from the frame stepped to.
   With a card, the picture waits on the card for the frames it stepped
   ahead, which were queued with it.

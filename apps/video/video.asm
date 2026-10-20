@@ -4779,14 +4779,38 @@ vp_v4pack:
     mov es, [vp_pseg]
     xor di, di
     mov [vp_v4y], di                ; the output row
+    dec di
+    mov [vp_v4kb], di               ; (no source byte cached yet)
+    mov [vp_v4kb+2], di
+    mov [vp_v4kb+4], di
+    mov [vp_v4kb+6], di
+    inc di
 .row:
     mov ax, [vp_v4y]
     cmp ax, [vp_prows]
     jae .done
     mov bx, [vp_ps]                 ; WHICH PIXEL OF THE CELL turns with the
     dec bx                          ; output's place (98.4.5): its column the
-    and ax, bx                      ; row's mod the scale...
-    mov [vp_v4cx], ax
+    and ax, bx                      ; row's mod the scale, on by the scale a
+    mov [vp_v4cx], ax               ; pixel...
+    mov ax, [vp_v4y]
+    mul word [vp_ps]                ; ...its row the column's mod the scale:
+    mov cx, [vp_ps]                 ; the row's ps source rows' offsets, once
+    xor bx, bx                      ; a row and not a MUL a pixel
+.ro:
+    push ax
+    cmp ax, [vp_h]                  ; (the last cell's rows past the canvas:
+    jb .sy                          ; its last)
+    mov ax, [vp_h]
+    dec ax
+.sy:
+    mul word [vp_lstr]              ; (80, or a NARROW screen's 40)
+    mov [vp_v4ro+bx], ax
+    pop ax
+    inc ax
+    inc bx
+    inc bx
+    loop .ro
     xor ax, ax
     mov [vp_v4x], ax
     mov [vp_v4n], al
@@ -4794,39 +4818,45 @@ vp_v4pack:
     mov ax, [vp_v4x]
     cmp ax, [vp_ppx]
     jae .eol
-    mov bx, [vp_ps]                 ; ...its row the column's, so a checker-
-    dec bx                          ; board stays one where the cell's corner
-    and bx, ax                      ; took a single colour of it every time
-    mov ax, [vp_v4y]
-    mul word [vp_ps]
-    add ax, bx
-    cmp ax, [vp_h]                  ; (the last cell's rows past the canvas:
-    jb .sy                          ; its last)
-    mov ax, [vp_h]
-    dec ax
-.sy:
-    mul word [vp_lstr]              ; (80, or a NARROW screen's 40)
-    mov bp, ax
-    mov ax, [vp_v4x]
-    mul word [vp_ps]
-    add ax, [vp_v4cx]
+    mov bx, [vp_ps]                 ; ...so a checkerboard stays one where
+    dec bx                          ; the cell's corner took a single colour
+    and bx, ax                      ; of it every time
+    shl bx, 1                       ; BX = the row's word in vp_v4ro/vp_v4kb
+    mov si, bx
+    shl si, 1                       ; SI = its four planes in vp_v4c
+    mov ax, [vp_v4cx]
     mov cl, al
     and cl, 7
     shr ax, 1
     shr ax, 1
     shr ax, 1
-    add bp, ax                      ; BP = its byte in each plane
-    xor ah, ah
-    mov bx, 6                       ; plane 3 first, so AH = b3 b2 b1 b0
-.bit:
+    add ax, [vp_v4ro+bx]            ; AX = its byte in each plane
+    cmp ax, [vp_v4kb+bx]            ; THE BYTE CACHED, one for each of the
+    je .have                        ; row's source rows
+    mov [vp_v4kb+bx], ax            ; a new source byte: its four planes
+    mov bp, ax
     push es
+    xor bx, bx
+.ld:
     mov es, [vp_mxseg+bx]
     mov al, [es:bp]
+    mov [vp_v4c+si], al
+    inc si
+    inc bx
+    inc bx
+    cmp bx, 8
+    jb .ld
     pop es
+    sub si, 4
+.have:
+    xor ah, ah
+    mov bx, 3                       ; plane 3 first, so AH = b3 b2 b1 b0
+.bit:
+    mov al, [vp_v4c+si+bx]
     shl al, cl
     shl al, 1                       ; CF = this pixel's bit
     rcl ah, 1
-    sub bx, 2
+    dec bx
     jns .bit
     mov bl, ah                      ; (a file of its own colours, drawn in
     xor bh, bh                      ; the desktop's nearest: vp_v4xlat)
@@ -4843,6 +4873,8 @@ vp_v4pack:
 .nx:
     xor byte [vp_v4n], 1
     inc word [vp_v4x]
+    mov ax, [vp_ps]
+    add [vp_v4cx], ax
     jmp .pix
 .eol:
     test byte [vp_v4n], 1           ; a row ending on its high nibble
@@ -13811,8 +13843,10 @@ vp_main:
     cmp byte [vp_rep], 0            ; asks the stream for one past it (the
     jne .rd                         ; silent play still ends on the chain's
     mov ax, [vp_done]               ; own 0, which a hold can sit in front of)
-    cmp ax, [vp_frames]             ; - unless it repeats (98.3.9)
-    jae .drain
+    cmp ax, [vp_frames]             ; - unless it repeats (98.3.9), or is
+    jb .rd                          ; PAUSED there, a frame step's last
+    cmp byte [vp_upause], 0         ; (98.3.14.1): it drains once Space
+    je .drain                       ; plays on
 .rd:
 %ifdef VP_DIAG
     cmp byte [vp_eof], 0            ; THE READER'S LEAST LEAD over the
@@ -14227,9 +14261,31 @@ vp_stfwd:
     jne .no
     cmp word [vp_sttgt], 0xFFFF     ; (a step back still on its way)
     jne .no
-    cmp word [vp_stepq], 99
-    jae .no
+    push ax
+    pushf                           ; (the queue and the hook's counts read
+    cli                             ; as one: it draws between two reads)
+    mov ax, [vp_stepq]
+    cmp ax, 99
+    jae .x
+    cmp byte [vp_rep], 0            ; AT THE END: the next drawn is [vp_done]
+    jne .a                          ; and those queued, and never one past
+    add ax, [vp_done]               ; the last - which ends the play
+    cmp ax, [vp_frames]
+    jae .x
+.a:
+    cmp byte [vp_snd], 0            ; ...nor past the sound queued, a started
+    je .ok                          ; card being paused: the ring takes no
+    cmp byte [vp_sdefer], 0         ; more, and vp_frame would refuse it
+    jne .ok
+    mov ax, [vp_vseq]
+    add ax, [vp_stepq]
+    cmp ax, [vp_aseq]
+    jae .x
+.ok:
     inc word [vp_stepq]
+.x:
+    popf
+    pop ax
 .no:
     ret
 
@@ -14273,6 +14329,7 @@ vp_skkey:
     jne .more
     call vp_skfirst                 ; THE FIRST PRESS
 .more:
+    mov word [vp_sttgt], 0xFFFF     ; (an arrow moves a step back's target)
     cbw
     add ax, [vp_skn]
     cmp ax, VP_SKMAXN
@@ -14297,6 +14354,8 @@ vp_skkey:
 ; paused - [vp_skwas] whether it was playing. Clobbers BX
 vp_skfirst:
     mov byte [vo_skp], 1
+    mov word [vp_stepq], 0          ; (no frame step through the seek, and no
+    mov word [vp_sttgt], 0xFFFF     ; step back's frame but the one it sets)
     xor bx, bx
     mov [vp_skn], bx
     mov [vp_skwas], bl
@@ -14504,6 +14563,7 @@ vp_skdue:
     call vo_toastk
 .bk:
     mov byte [vp_skhere], 0
+    mov word [vp_sttgt], 0xFFFF     ; (a step back come to nothing: . again)
     call vo_update                  ; the seek's text off
     cmp byte [vp_skwas], 0
     je .no
@@ -15728,6 +15788,7 @@ vp_upaus:
 .out:
     ret
 .resume:
+    mov word [vp_stepq], 0          ; (frame steps not drawn yet: none)
     call vp_ticks
     sub ax, [vp_ptk0]
     add [vp_ptk], ax
@@ -20997,7 +21058,7 @@ vp_rthr:      db 0, 0, 0, 0             ; vp_v8mono: this row's four
 vp_mxseg:     dw 0, 0, 0, 0             ; ...and a planar image's four planes
 vp_v4x:       dw 0                      ; vp_v4pack: the output's pixel and
 vp_v4y:       dw 0                      ; row, the canvas's width, the
-vp_v4w:       dw 0                      ; row's cell column, and which
+vp_v4w:       dw 0                      ; source column, and which
 vp_v4cx:      dw 0                      ; nibble
 vp_v4n:       db 0
 vp_planar:    db 0                      ; 1 Mode X's planes, 2 VGA4's bits
@@ -21856,9 +21917,10 @@ vp_lines      equ vo_sav + 768      ; the info panel's text
 ; move and a button turned over (vp_wmove, vp_winv: the window's play
 ; only), Live's band and repack (vp_blitb, vp_v4blit: the window's, under
 ; the gfx lock), the poster's draw (vp_pposter), the half-scaler's
-; arguments (vp_half, which only vp_mkpic calls), the layout's working
-; (vp_layfit), the open's (vp_open, vp_rwalk: vp_sstart runs it between
-; brackets) and the hold's check (vp_xok, the same). And the mode's record
+; arguments (vp_half, which only vp_mkpic calls) and the VGA4 packer's
+; (vp_v4pack, the same), the layout's working (vp_layfit), the open's
+; (vp_open, vp_rwalk: vp_sstart runs it between brackets) and the hold's
+; check (vp_xok, the same). And the mode's record
 ; (vp_fsi), filled and read at a bracket's door BEFORE the box can be up.
 ; A box up clobbers every one of them under the save's and the table's
 ; end, and none is read across a bracket
@@ -21898,7 +21960,10 @@ vh_h          equ vh_wb + 2
 vh_dseg       equ vh_h + 2
 vh_owb        equ vh_dseg + 2
 vh_y          equ vh_owb + 2
-vp_lops       equ vh_y + 2          ; vp_layfit's: the scale it started at,
+vp_v4ro       equ vh_y + 2          ; vp_v4pack's (vp_mkpic's too): a row's
+vp_v4kb       equ vp_v4ro + 8       ; source rows' offsets, the byte cached
+vp_v4c        equ vp_v4kb + 8       ; for each, and that byte's four planes
+vp_lops       equ vp_v4c + 16       ; vp_layfit's: the scale it started at,
 vp_lph        equ vp_lops + 2       ; the picture's rows at the one tried,
 vp_lslk       equ vp_lph + 2        ; the slack and gaps (vp_laynorm,
 vp_lgap       equ vp_lslk + 2       ; vp_laycomp), and the most the screen
