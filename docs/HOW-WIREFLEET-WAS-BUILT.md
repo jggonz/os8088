@@ -224,3 +224,25 @@ These are emulator results. A physical null modem, cable quality, real
 8250 interrupt margin and the sound of actual cards still need a field run.
 The two 86Box profiles were prepared and checked without starting an
 interactive session or changing the owner's existing VM settings.
+
+## 2026-10-20 — Part two: "they could not find each other"
+
+The owner tried the merged game on two 86Box XTs and the captains never
+met. The second brief asked for two things: link by itself, the way
+WireBall's Serial Match does, and look the part on a colour screen — a
+mock-up came with it, navy title bar and all.
+
+Reading the link code again before touching it found two ways to get
+stuck that a scripted test never meets, because a script always does the
+right thing in the right order. Nothing linked until Link → Connect was
+chosen, and the first port that menu offers, COM1, is the serial mouse on
+most machines. Worse, Game → New fleet after linking gives that captain a
+fresh identity: the other PC, still bound to the old one, refuses every
+new frame, and the new one refuses every frame addressed to the old one.
+Neither can recover until the other also presses N. Turn 0 has nothing to
+protect, so the contract (SPEC.md §114.9) now lets a peer rebind there.
+
+This host cannot drive an 86Box window (no accessibility grant), so the
+86Box pair is not reproduced here; the QEMU two-PC harness is the
+instrument, and the PR says which is which. The plan is
+docs/plans/WIREFLEET-FACE-PLAN.md.
