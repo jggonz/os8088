@@ -744,6 +744,15 @@ WF_VAR wf_footershown,2
 WF_VAR wf_chatshown,2
 WF_VAR wf_chatmodeshown,1
 WF_VAR wf_colour,1
+WF_VAR wf_cbx1,2
+WF_VAR wf_planar,1
+WF_VAR wf_pdest,2
+WF_VAR wf_cellbuf,12
+WF_VAR wf_spreadok,1
+WF_VAR wf_spreadt,1024
+WF_VAR wf_ptiles,WF_TILE_STORED*WF_TILE_COLOR
+WF_VAR wf_pand,WF_TILE_COLOR
+WF_VAR wf_por,WF_TILE_COLOR
 WF_VAR wf_hitx,1
 WF_VAR wf_hitand,2
 WF_VAR wf_hitor,2

@@ -7,7 +7,7 @@ WF_CMINH equ 276
 WF_CTOP equ 38                  ; the cards' top edge
 WF_CGRIDY equ 63                ; the boards' first row
 WF_CGX0 equ 40                  ; own board (and deployment's)
-WF_CGX1 equ 340                 ; enemy board
+WF_CGX1 equ 336                 ; enemy board (on the 8 grid, for BLITP)
 WF_CROWX equ 304                ; the "Your ships" rows, deployment
 WF_CROWY equ 55
 
@@ -285,6 +285,7 @@ wf_c_card:
 ; and the two closing grid lines the tiles do not carry.
 wf_c_boardcard:
     mov [wf_cbx], dx
+    mov [wf_cbx1], ax
     push ax
     mov al, CDGRAY
     call OSAPI_SET_COLOR
@@ -338,15 +339,15 @@ wf_c_boardcard:
     mov bx, dx
     call wf_fill
     ; the title and the ruled line, as flat_card draws them
-    mov cx, [wf_cbx]
-    sub cx, 34
+    mov cx, [wf_cbx1]
+    add cx, 4
     mov dx, WF_CTOP+4
     mov ax, (CWHITE << 8) | CBLUE
     call wf_text
     mov al, CLGRAY
     call OSAPI_SET_COLOR
-    mov ax, [wf_cbx]
-    sub ax, 34
+    mov ax, [wf_cbx1]
+    add ax, 4
     mov cx, ax
     add cx, 286
     mov bx, WF_CTOP+13
@@ -410,6 +411,14 @@ wf_c_boardcard:
 
 ; Each ship's picture on the "Your ships" card: full paint only.
 wf_c_pictures:
+    mov ax, WF_CROWX+8
+    mov bx, WF_CROWY+2
+    mov cx, 120
+    mov dx, [wf_roststep]
+    shl dx, 1
+    shl dx, 1
+    add dx, [wf_roststep]
+    call wf_planarprobe
     mov byte [wf_rosterindex], 0
 .ship:
     xor bx, bx
@@ -418,7 +427,7 @@ wf_c_pictures:
     mov [wf_rowlimit], al
     mov [wf_drawrow], bl
     mov byte [wf_drawboard], 2
-    mov word [wf_destx], WF_CROWX+5
+    mov word [wf_destx], WF_CROWX+8
     mov ax, bx
     mul word [wf_roststep]
     add ax, WF_CROWY+2
@@ -728,7 +737,7 @@ wf_c_roster:
     jmp .name
 .named:
     mov si, wf_linebuf
-    mov cx, WF_CROWX+128
+    mov cx, WF_CROWX+136
     mov dx, [wf_rowy]
     mov ax, [wf_cellh]
     sub ax, 4
