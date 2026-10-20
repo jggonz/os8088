@@ -3,6 +3,7 @@
 ; Built from apps/os88flat.inc. Coordinates here are content-relative and
 ; wf_fill / wf_text add the origin; os88flat.inc wants them absolute.
 WF_CMINW equ 560
+WF_MGX1 equ 328                 ; 114.2's enemy board: ON the 8 grid (see wf_ground)
 WF_CMINH equ 276
 WF_CTOP equ 38                  ; the cards' top edge
 WF_CGRIDY equ 63                ; the boards' first row
@@ -16,7 +17,7 @@ WF_CROWY equ 55
 wf_c_geometry:
     mov byte [wf_colour], 0
     mov word [wf_gx0], 24
-    mov word [wf_gx1], 326
+    mov word [wf_gx1], WF_MGX1
     mov word [wf_rostx1], 310
     mov word [wf_rostx2], 580
     mov ax, [wf_gridy]

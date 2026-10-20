@@ -197188,7 +197188,9 @@ persisted to disk. Saving is explicit, not a heartbeat side effect.
 ### 114.8 Fullscreen and cues
 
 F or Alt+Enter toggles fullscreen. VGA and Hercules use the native fullscreen
-window (§11.2). A 1bpp display offering `FSXM_CGA320` gets a §53 bracket in
+window (§11.2); `OSAPI_FULLSCREEN` is handed the window again after
+`OSAPI_WM_DISPLAY`, which answers the screen height in BX - until §114.10's
+delivery it was handed that height, and F hung those desktops. A 1bpp display offering `FSXM_CGA320` gets a §53 bracket in
 320×200 four-color mode, with 12×10 cells at x=20/176, y=40. The mode's
 `FSI_SEG`, stride and bank step define the framebuffer. Palette 1, bright,
 has black water, cyan grid, magenta hits and white ships/marks. Explicit
@@ -197283,6 +197285,60 @@ target, and the chat panel. Cells are 24 pixels high on VGA and 16 on EGA;
 the hit-test follows the same geometry. Everything that changes is drawn
 through the same per-field caches as §114.2's face, so an idle window does
 not repaint and a gesture redraws only what it changed.
+
+#### 114.10.1 The boards, planar
+
+On a 4bpp window whose board rect `OSAPI_GFX_BLITP`'s probe (DI bit 15,
+§5.4.3.2) accepts, each changed span of a board row goes up with one
+`BLITP`, the clip walked (DI bit 14); the boards sit at content x 40 and 336
+and the ship pictures at 312, all on the 8-pixel grid. The tiles stay
+PACKED on disk (planar ones compressed 1.8 KB worse, and `apps360.img` had
+no cluster to spare); the first planar paint spreads the 38 stored tiles and
+the stamp's two tables to planes once per instance, into 11.5 KB of bss, a
+tile row as plane 0's three bytes then planes 1-3. Composing a row is then
+four 3-byte moves a scanline, the hit X the same AND/OR stamp, the yellow
+cursor two masks. Whatever the probe refuses - `kern_small`, a display
+straddle, an x off the grid (114.2's own face at 326) - takes the packed
+`OSAPI_GFX_BLIT4` path unchanged.
+
+Measured on MartyPC's 4.77 MHz VGA XT (`os8088_xt_vga`), breakpoints at
+`wf_paint` and its end: a full battle repaint **3.9 s -> 1.39 s** and a
+deployment one **2.7 s -> 1.1 s**; the two boards **3.46 s -> 0.95 s**. The
+blit was never the cost: `BLITP` puts a 240x24 row up in 0.7 ms, and the
+packed compose was ~150 ms of each row's 171.
+
+#### 114.10.2 The art, stamped
+
+`tools/wirefleet_assets.py` finds each ship's rows in the atlas (it is not
+five equal strips: cutting at fifths gave every ship after the carrier the
+previous one's keel as a grey line), drops the mast's narrow rows and
+area-averages an 18-row hull. Tiles 38..71 - a ship segment, hit - are not
+stored: each is its segment with the X stamped, `(pixel AND a) OR o` per
+byte, one table pair per form (colour, mono, CGA), and the converter refuses
+to emit tables that do not reproduce all 34 in all three forms. The art went
+from 31,104 bytes to 17,280 raw and 9,348 to 8,597 packed, which is what the
+face, the planar path and the automatic link were paid for with:
+`WIREFLET.O88` ships at 26,338 bytes against 26,416 before them.
+
+#### 114.10.3 What a gesture costs
+
+`tests/wfdraw.py` (rows `wfdraw`, VGA, and `wfdrawherc`, Hercules) counts
+every far call into a drawing cell, as `tests/mrdraw.py` does. On the VGA
+face: five seconds of the automatic search draws **nothing**; a cursor move
+is one `BLITP`; selecting a ship 6 calls; rotating 6; placing 11; Auto-place
+34; the Ready repaint 121 (the row counts hits, and a walked-clip `BLITP`
+re-enters its own cell, so each of its calls is two hits). After a run of gestures the window is captured,
+About is raised and dismissed - a full repaint - and captured again: the two
+are identical to the pixel.
+
+**114.2's face changed in one place, to fix it.** `wfdrawherc` found every
+cursor move on the Hercules enemy board leaving 22 lit pixels (44 across a
+row) that a repaint does not draw - on `main` as well, 66 after the same
+gestures. That board sat at content x 326, off the byte grid, and its
+one-row `OSAPI_GFX_BLIT1` of two cells lit pixels ~219 columns past its own
+48-pixel width; at x 328 (`WF_MGX1`) the same moves leave none. The
+2-pixel move is the fix shipped here; why an unaligned `BLIT1` writes past
+its width is a kernel question left open (§5.4.2.5 says it must not).
 
 ## 115. Desktop serial lease (`kernel/serial.inc`, `SERIAL.DRV`)
 

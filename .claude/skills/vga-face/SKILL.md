@@ -1,6 +1,6 @@
 ---
 name: vga-face
-description: Give an os8088 package a COLOUR FACE on VGA/EGA - fewer redraws first, then a neater layout, styled panes and bevelled, picture-faced buttons with their captions inside - while the Hercules and CGA faces stay exactly as they were. The method MIDIRack's (SPEC.md 105.9.4, 105.9.5) was built with, step by step. Manual invocation only.
+description: Give an os8088 package a COLOUR FACE on VGA/EGA - fewer redraws first, then a neater layout, styled panes and buttons with their captions inside, in one of two looks (MIDIRack's bevelled one, or the FLAT one in apps/os88flat.inc that WireFleet's face is built from) - while the Hercules and CGA faces stay exactly as they were. The method MIDIRack's (SPEC.md 105.9.4, 105.9.5) and WireFleet's (114.10) were built with, step by step. Manual invocation only.
 argument-hint: "<package, e.g. apps/tracker>"
 disable-model-invocation: true
 ---
@@ -15,10 +15,18 @@ captions sit inside them. **And it starts with the redraws, not the paint**:
 a face that is twice as pretty and repaints twice as much is a regression on
 the machine this OS is for (CLAUDE.md, *Performance*).
 
-The worked example is MIDIRack: SPEC.md §105.9.4 (the caches), §105.9.5 (the
-colour face), §13.8.10 (the library hook it needed), `apps/midirack/mrui.inc`
-(all of it), `tests/mrdraw.py` (the instrument) and `tools/os88midart.py`
-(the button pictures). Read those before writing a line - this skill is the
+There are two worked examples, one per look:
+
+- **Bevelled** - MIDIRack: SPEC.md §105.9.4 (the caches), §105.9.5 (the
+  colour face), §13.8.10 (the library hook it needed),
+  `apps/midirack/mrui.inc` (all of it), `tests/mrdraw.py` (the instrument)
+  and `tools/os88midart.py` (the button pictures).
+- **Flat** - WireFleet: SPEC.md §114.10 (the face), §20.5.3
+  (`apps/os88flat.inc`, the vocabulary), `apps/wirefleet/wfcolor.inc` (all of
+  it), `tests/wfdraw.py` (the instrument, mrdraw's shape) and
+  `tools/wirefleet_assets.py` (the converter that proves its own output).
+
+Read the one nearer your package before writing a line - this skill is the
 order they were done in and why, and the code is the reference.
 
 **Read [LESSONS.md](LESSONS.md) first.** Every entry cost a rebuild or a
@@ -59,6 +67,15 @@ makes. So count them, per gesture:
 - **Write the numbers down.** MIDIRack's first table read Pause 197 calls, of
   which 152 were the button group drawn twice; Next 229; Stop-when-stopped
   178. The routine names point straight at the waste.
+- **Then TIME the full paint, in guest cycles** - a breakpoint at the paint's
+  entry and one at its end, `status()['cycles']` at each (WireFleet's
+  numbers came from exactly that). A call count cannot see a COMPOSE loop:
+  WireFleet's board was 20 calls and 3.46 s, because each row's tiles were
+  assembled pixel-row by pixel-row before its one blit. Bisect with more
+  breakpoints until the time has a name; the blit is often the cheap part.
+- **Measure an idle window too.** Anything that runs on a timer (a link
+  search, a clock) must draw NOTHING while nothing changed - a five-second
+  idle gesture at 0 calls is the assertion.
 
 ## Step 2 - draw what changed (the caches)
 
@@ -119,6 +136,14 @@ The pattern (§105.9.4), one cache per kind of thing on the glass:
 
 ## Step 5 - the vocabulary, and what each costs
 
+**Choose the look first.** Bevelled (MIDIRack) reads as hardware - a rack, a
+deck. Flat reads as a board, a game, a form: `apps/os88flat.inc` (§20.5.3)
+gives `flat_card`, `flat_lamp`, `flat_check`, the `flat_btn` painter and
+`flat_big`'s double-size caption, each one pixel once. Flat with
+`OSAPI_WM_OWNBG` owns every pixel: lay the ground in STRIPS round the
+things that draw themselves, never under them (§114.2: no erase before a
+board).
+
 Content is the application's (§76): white paper stays, because the kernel
 white-fills before W_PAINT (there is `OSAPI_WM_OWNBG` to opt out, but every
 pixel you then own is yours on every expose). Spend colour on meaning:
@@ -137,6 +162,23 @@ pixel you then own is yours on every expose). Spend colour on meaning:
 - Full-paint decoration may write a pixel twice (strip then title); an
   INCREMENTAL draw never may (CLAUDE.md, *Nothing writes a pixel twice*).
 
+The flat vocabulary's own dialect (WireFleet, §114.10):
+
+- **A title bar** in navy with a `flat_big` caption - the phase in a word
+  ("YOUR TURN", "VICTORY!") in an ink that carries it (yellow yours, light
+  cyan theirs, light red a defeat). One BLIT1; size the band for the longest.
+- **A notice strip** under it: a `flat_lamp` (green linked, yellow looking,
+  red stopped) and the newest line of news, one opaque field.
+- **Cards** with a blue title and a ruled line; a board's card is drawn ROUND
+  the board in fills, so the board is never under one.
+- **Buttons by role**: a white face for a plain command, green for the one
+  that moves the game on (Ready), red for the irreversible (Fire), blue for
+  send/confirm; greyed is a grey face with a dark-grey caption. A caption may
+  carry state ("Fire at J10", "Vert. [R]") - then the cache key is the
+  caption's state, not its pointer.
+- **A status bar** at the bottom: the left field what the machine is doing,
+  the right field what the other party is.
+
 ## Step 6 - the buttons
 
 - **Keep the library's gesture.** `%define OS88UI_BOWN` and set
@@ -145,6 +187,10 @@ pixel you then own is yours on every expose). Spend colour on meaning:
   resolved), so press, drag-off and release redraw your face, not the
   standard one. Point the record's labels array at the painter only on the
   colour face (`mru_recmain`); the mono face keeps its standard buttons.
+- **A flat button**: `flat_btn` in `apps/os88flat.inc` - point every label
+  at it, keep the captions in `FLAT_BCAP` and the face colours in
+  `FLAT_BSTY`, a 0 caption for a button this face does not show (and park
+  its rect off the glass, so it is never hit).
 - **A bevelled text button**: black frame; white top/left and grey
   bottom/right lines (pressed: one grey line top/left, caption +1,+1;
   greyed: grey caption); the caption opaque on `CLGRAY` with the face
@@ -165,6 +211,13 @@ pixel you then own is yours on every expose). Spend colour on meaning:
   BLITP refusing a straddle) is the bevelled caption - a complete face.
 - Check every disk the package rides for the extra clusters (§24.6.1); a
   disk left with one spare cluster is not a fit.
+
+- **Blit what the card wants.** A board, a canvas, any big 4bpp block goes
+  through `OSAPI_GFX_BLITP` when the window allows it (x on the 8 grid; its
+  probe, DI bit 15, says), with `BLIT4` as the fallback for whatever the
+  probe refuses. Convert to planes ONCE - a planar cache of the tiles - not
+  per scanline: WireFleet's per-scanline spread kept the board at 150 ms a
+  row while the blit took 0.7 ms.
 
 ## Step 7 - verify, on every face
 

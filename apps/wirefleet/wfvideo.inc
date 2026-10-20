@@ -105,16 +105,16 @@ wf_ground:
     dec dx
     call wf_fill
     mov ax, 264
-    mov cx, 325
+    mov cx, WF_MGX1-1
     call wf_fill
-    mov ax, 566
+    mov ax, WF_MGX1+240
     mov cx, [wf_w]
     dec cx
     call wf_fill
     cmp byte [wf_ready], 0
     jne .out
-    mov ax, 326
-    mov cx, 565
+    mov ax, WF_MGX1
+    mov cx, WF_MGX1+239
     call wf_fill
 .out:
     ret
@@ -886,7 +886,7 @@ wf_header:
 .labels:
     mov si, wf_yourfleet
     call wf_text
-    mov cx, 326
+    mov cx, WF_MGX1
     mov si, wf_yourships
     cmp byte [wf_ready], 0
     je .right
@@ -914,7 +914,7 @@ wf_header:
     call wf_text
     cmp byte [wf_ready], 0
     je .nextcol
-    add cx, 302
+    add cx, WF_MGX1-24
     call wf_text
 .nextcol:
     inc byte [wf_drawcol]
@@ -948,7 +948,7 @@ wf_header:
     call wf_text
     cmp byte [wf_ready], 0
     je .nextrow
-    add cx, 302
+    add cx, WF_MGX1-24
     call wf_text
 .nextrow:
     inc byte [wf_drawrow]
