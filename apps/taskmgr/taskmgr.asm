@@ -3175,7 +3175,7 @@ tm_pool_kb:
     push di
     xor bx, bx
     xor si, si
-    mov cl, 10
+    mov cl, 9                   ; 9: `rcr` below is the tenth bit
 .slot:
     cmp byte [tm_ist+si], 0
     je .next
@@ -3183,12 +3183,15 @@ tm_pool_kb:
     shl di, 1
     mov ax, [tm_isz+di]         ; per slot in KB, not bytes summed and
     add ax, 1023                ; divided once: three big resident packages
-    shr ax, cl                  ; overrun 65,535 BYTES and a word sum wraps
-    add bx, ax                  ; silently. (A region is whole KB - the
-                                ; loader claims ceil(file/1KB) - so the
-                                ; per-slot rounding loses nothing.) The old
-                                ; byte sum was safe only under the retired
-                                ; 60KB pool, which capped it by construction
+    rcr ax, 1                   ; overrun 65,535 BYTES and a word sum wraps
+    shr ax, cl                  ; silently. (A region is whole KB - the
+    add bx, ax                  ; loader claims ceil(file/1KB) - so the
+                                ; per-slot rounding loses nothing; a 64KB
+                                ; one reads 0xFFFF, SPEC.md 20.1.1, and the
+                                ; `rcr` keeps the carry that makes it 64.)
+                                ; The old byte sum was safe only under the
+                                ; retired 60KB pool, which capped it by
+                                ; construction
 .next:
     inc si
     cmp si, INST_MAX
@@ -3318,8 +3321,10 @@ tm_map_ram:
     or ax, ax                   ; a built-in owns no region
     jz .rnext
     push si                     ; the slot: .rnext still needs it
-    mov cl, 10
-    shr ax, cl                  ; AX = size KB (I_SIZE is a whole KB now)
+    add ax, 1023                ; AX = size KB, rounded with the carry kept:
+    rcr ax, 1                   ; a 64KB region's I_SIZE is 0xFFFF (SPEC.md
+    mov cl, 9                   ; 20.1.1), every other one a whole KB
+    shr ax, cl
     mov di, [tm_ispt+di]        ; DI = base SEGMENT
     mov cl, 6
     shr di, cl                  ; -> base KB
@@ -3599,8 +3604,9 @@ tm_inst_row:
     mov byte [di], ' '
     inc di
     xchg ax, dx
-    add ax, 1023
-    mov cl, 10
+    add ax, 1023                ; the carry kept: 0xFFFF is 64KB (SPEC.md
+    rcr ax, 1                   ; 20.1.1), not a wrap to 0K
+    mov cl, 9
     shr ax, cl
     call tm_kcol
     mov ax, bx                  ; legend square in the slot's pattern, which
@@ -6143,8 +6149,9 @@ tm_rows:
     xor bh, bh
     shl bx, 1
     mov ax, [tm_isz+bx]
-    add ax, 1023                ; ...as KB, rounded up; 0 stays 0
-    mov cl, 10
+    add ax, 1023                ; ...as KB, rounded up; 0 stays 0, and the
+    rcr ax, 1                   ; carry kept makes 0xFFFF 64 (SPEC.md 20.1.1)
+    mov cl, 9
     shr ax, cl
     add ax, [tm_ikb+bx]         ; ...plus everything it holds off the claim
                                 ; heap (SPEC.md 50.5). The MEM column is what

@@ -403,6 +403,10 @@ wc_entry:
     mov ax, wc_ontimer
     call OSAPI_WM_ONTIMER
     mov bx, [wc_win]
+    mov ax, wc_onwheel                  ; the mouse WHEEL scrolls the pane
+    call OSAPI_WM_ONWHEEL               ; (SPEC.md 13.18); a no-op on the
+                                        ; 128KB kernel, flags preserved
+    mov bx, [wc_win]
     mov ax, 18                          ; one second; re-armed in the handler
     call OSAPI_WM_TIMER
     mov ax, [wc_win]                    ; the buttons' gesture (SPEC.md

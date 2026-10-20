@@ -3342,11 +3342,36 @@ hbm_wake:
     ; three-byte stream is a pointer gone mad, not one that lost its wheel.
     ; The replies ARE collected here, unlike 0xF4's: IRQ12 is still masked at
     ; the slave and the keyboard is off, so 60h is ours, and the last one is
-    ; the ID. Not 3 any more: the decoder goes back to three bytes
+    ; the ID. Not 3 any more: the decoder goes back to three bytes. The device
+    ; is NOT silent here, as it is after the boot's reset: 0xF4 is still in
+    ; force (or the DOS driver's), so 0xF5 stops it first, its 0xFA is found
+    ; behind any packet already in flight, and 60h is drained before the
+    ; replies are read by position - each of which must be 0xFA, as
+    ; mou_p2dev insists at boot
     cmp byte [mou_p2wz], 0
     je .nowz
     push si
     push cx
+    mov al, 0xD4
+    mov bp, mou_p2cw
+    call hbm_kd
+    mov al, 0xF5                ; reporting off...
+    mov bp, mou_p2dw
+    call hbm_kd
+    mov cx, 8                   ; ...its ACK, BOUNDED: a packet's three or
+.f5:                            ; four bytes may come first
+    call hbm_p2rd
+    cmp al, 0xFA
+    loopne .f5                  ; `loop` writes no flag: ZF is the compare's
+    jne .wzno
+    mov cx, 16                  ; mou_p2flush's drain (that one is the
+.dr:                            ; overlay's): 60h empty before the knock
+    in  al, 0x64
+    test al, 0x01
+    jz .drx
+    in  al, 0x60
+    loop .dr
+.drx:
     mov si, hbm_knk
     mov cx, hbm_knk_n
 .knk:
@@ -3357,14 +3382,18 @@ hbm_wake:
     inc si                      ; went with the boot overlay
     mov bp, mou_p2dw
     call hbm_kd
-    call hbm_p2rd               ; its ACK
+    call hbm_p2rd               ; its ACK, and nothing else will do
+    cmp al, 0xFA
+    jne .wzno
     loop .knk
     call hbm_p2rd               ; ...and 0xF2's ID
+    cmp al, 3
+    je .wzok
+.wzno:
+    mov byte [mou_p2wz], 0
+.wzok:
     pop cx
     pop si
-    cmp al, 3
-    je .nowz
-    mov byte [mou_p2wz], 0
 .nowz:
     mov al, 0xD4                ; ...and 0xF4 to the DEVICE, because 0xA7 left
     mov bp, mou_p2cw            ; it unclocked and a device that is not

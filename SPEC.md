@@ -16033,7 +16033,13 @@ a three-byte stream is a pointer gone mad, not one that has lost its wheel. So
 `hbm_wake` sends the same seven bytes and reads every reply itself (the
 keyboard is still off and IRQ12 still masked there), using its own bounded
 `hbm_p2rd` and its own copy of the table, the kernel's having gone with the
-overlay. If the device no longer answers 3, `[mou_p2wz]` goes back to 0.
+overlay. The device is not silent there, as it is after the boot's reset:
+its 0xF4 (or a DOS driver's) is still in force. So `0xF5` goes first, its
+`0xFA` is looked for behind any packet already in flight (eight reads at
+most), and `60h` is drained in `mou_p2flush`'s shape before the seven are
+sent. Every reply must then be `0xFA`, as `mou_p2dev` insists at boot. If one
+is not, or the device no longer answers 3, `[mou_p2wz]` goes back to 0, and
+the trailing `0xF4` turns reporting back on either way.
 Those are module bytes and none of them is resident.
 
 **What it cost the boot overlay.** `.ovl` had two bytes left of its 5,120
@@ -30293,10 +30299,11 @@ resident.
 
 | program | what the wheel scrolls | the path it reuses | image |
 |---|---|---|---|
-| Note Pad | the note | `np_sbclick`'s `.set`, which carries the line count on past a LOWER BOUND (§27.7.4) | +39; none in the `APP_SMALL` build |
+| Note Pad | the note | `np_sbclick`'s `.set`, which carries the line count on past a LOWER BOUND (§27.7.4), behind `np_onclick`'s preamble: the About card down (which spends the turn), the visual break settled | +58; none in the `APP_SMALL` build |
 | Word, Scribe | the document, in rows | `xx_sbclick.set`, the same reason; ignored under a dialog, menu, combo list or live thumb drag | +91, +82 |
 | Browser | the page | `br_advance` + `br_flush`, `br_scroll_by`'s two halves without its coalesce, which would leave a summed turn undrawn | +29 |
 | The Wire | the catalog view, not the selection | `wr_scroll`, the bar arrows' | +33 |
+| WireChat | the message pane; the About card or a popup comes down first and spends the turn, as a key's does | `wc_scrollby` + `wc_cbflush`, the arrow keys' | +56 |
 | Frotz | the scrollback | `zw_scrollto`, the bar arrows' | +44 |
 | Sheet | the grid's rows; the Paste list | `sh_setscrollrow`; `sh_ldlg_paint` | +143 |
 | Task Manager | the heap list, on that page only | `tm_hscroll`'s `.set` and `tm_hclamp` | +41; none small |

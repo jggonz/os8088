@@ -427,6 +427,29 @@ wc_scrollby:
 .out:
     ret
 
+; --- wc_onwheel - W_ONWH (SPEC.md 13.18): AX = signed notches, SI = window;
+; W_ONKEY's environment. WHEEL_STEPS lines a notch through wc_scrollby, the
+; arrows' path, and one flush; the About card or a popup comes down first and
+; spends the turn, as it does a key's
+wc_onwheel:
+    push ax
+    call wc_activity
+    pop ax
+    cmp byte [wc_abon], 0
+    je .nab
+    mov byte [wc_abon], 0
+    jmp wc_repaint
+.nab:
+    cmp byte [wc_pop], PP_NONE
+    je .npop
+    call wc_popdown
+    jmp wc_repaint
+.npop:
+    mov dx, WHEEL_STEPS
+    imul dx                             ; AX = lines, signed
+    call wc_scrollby
+    jmp wc_cbflush
+
 ; =============================================================================
 ; THE FIELD AND ITS MODES (SPEC.md 113.6.1)
 ; =============================================================================

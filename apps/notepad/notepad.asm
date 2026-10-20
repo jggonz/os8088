@@ -6008,9 +6008,19 @@ np_append:
 ; -----------------------------------------------------------------------------
 %ifndef APP_SMALL
 np_onwheel:
+    call np_abdismiss               ; the card is up: this turn is spent taking
+    jc .ret                         ; it down, as a key's is
+%ifdef OS88UI_SBDRAG
+    call os88ui_sbdragging          ; CF = 0: a thumb drag is live
+    jnc .ret
+%endif
+    call np_settle                  ; np_onclick's preamble to np_sbclick: the
+    call np_bounds                  ; break comes down, the geometry is read,
+    call np_uclose                  ; and a scroll is not typing
     call .go
     cmp byte [np_sbmoved], 0
     jne np_redraw
+.ret:
     ret
 .go:
     push ax                         ; np_sbclick's own frame, which .set pops
