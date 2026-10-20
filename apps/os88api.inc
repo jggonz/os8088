@@ -135,9 +135,12 @@ VT_FILE      equ 2               ; AH: a REDIRECTED volume (SPEC.md 62.9) -
                             ; package built against a different value calls
                             ; into empty memory: rebuild EVERY .o88 (and the
                             ; apps floppies) whenever the kernel moves
-APP_MAX_SIZE equ 0xF000     ; image + bss budget: 60KB. The ceiling is the
-                            ; SEGMENT, not a pool: a package links at org 0
-                            ; and addresses itself with 16-bit offsets. Its
+APP_MAX_SIZE equ 0xFE00     ; image + bss budget: 63.5KB (SPEC.md 20.1.1).
+                            ; The ceiling is the SEGMENT, not a pool: a
+                            ; package links at org 0 and addresses itself
+                            ; with 16-bit offsets, and the region is that
+                            ; sum rounded up to 512 in a word. Note that
+                            ; over 63KB the claim is a whole 64KB. Its
                             ; region is an ordinary heap claim, so what it
                             ; can ACTUALLY get also depends on the heap
 ; The REFERENCE screen, not a promise. Since SPEC.md 39 the kernel drives
@@ -2181,6 +2184,7 @@ SSI_WIN    equ 4                ; word: OPAQUE - the kernel's own window record.
                                 ; address you may do anything else with
 SSI_SEG    equ 6                ; word: the region's base segment
 SSI_SIZE   equ 8                ; word: its region in BYTES, 0 for a built-in
+                                ; and 0xFFFF for a 64KB one (SPEC.md 20.1.1)
 SSI_KB     equ 10               ; word: KB it holds off the claim heap
 SSI_NAME   equ 12               ; 16 bytes: its name, NUL-terminated
 SSI_CYC    equ 28               ; dword: cycles billed to its callbacks
@@ -4865,7 +4869,12 @@ OSAPI_CUR_CROSS equ 1           ; the aiming crosshair, hot spot at its centre
 %define OSAPI_MOUSE_FEED    KERNEL_SEG:0x0449   ; AX = dx, BX = dy (signed;
                                                 ; POSITIVE dy IS DOWN), CL =
                                                 ; buttons in mouse_btn's bits
-                                                ; (1 left, 2 right). ONE
+                                                ; (1 left, 2 right) and, in
+                                                ; its top SIX bits, the WHEEL:
+                                                ; signed notches, positive
+                                                ; toward the user (SPEC.md
+                                                ; 9.12.8) - CL = buttons |
+                                                ; (notches << 2). ONE
                                                 ; RELATIVE REPORT from a
                                                 ; pointing device the kernel
                                                 ; does not drive itself
@@ -5460,6 +5469,32 @@ OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
                                  ; Do NOT also poll OSAPI_MOUSE in a tracking
                                  ; loop from the same W_ONCLICK: that loop
                                  ; consumes its own release. Pick one.
+%define OSAPI_WM_ONWHEEL    KERNEL_SEG:0x0499   ; BX = win ptr, AX = a near proc
+                                 ; in YOUR segment (0 clears it): the mouse
+                                 ; WHEEL (SPEC.md 13.18). Install it like
+                                 ; OSAPI_WM_ONRCLICK, after OSAPI_WM_CREATE.
+                                 ; FLAGS PRESERVED, so it may be the last call
+                                 ; of an entry proc; kern_small has no wheel and
+                                 ; the cell does nothing there, so no package
+                                 ; needs a branch for it.
+                                 ;
+                                 ; The kernel calls it with AX = SIGNED
+                                 ; NOTCHES, POSITIVE TOWARD THE USER - scroll
+                                 ; the view DOWN, the top row increasing - and
+                                 ; SI = your window, in W_ONKEY's environment
+                                 ; exactly: the UI task, under the gfx lock,
+                                 ; billed to your instance, and only on the
+                                 ; window a KEY would reach (the front one).
+                                 ; CX and DX carry nothing.
+                                 ;
+                                 ; ONE CALL, HOWEVER MANY NOTCHES: the turns
+                                 ; since the UI task last ran arrive summed, so
+                                 ; scroll by AX * the notch in ONE move and
+                                 ; repaint once. SCROLL WHEEL_STEPS LINES A
+                                 ; NOTCH - the system's notch, below - and
+                                 ; os88ui_sbwheel (SPEC.md 13.10.8) turns AX
+                                 ; into a clamped position for a shared bar
+WHEEL_STEPS equ 3                ; LINES of text one wheel notch scrolls
 %define OSAPI_WM_ONRCLICK   KERNEL_SEG:0x0380   ; BX = win ptr, AX = a near proc
                                  ; in YOUR segment (0 clears it): the RIGHT
                                  ; button, pressed in your content

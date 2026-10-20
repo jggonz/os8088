@@ -58,7 +58,7 @@
  *    A `static` declared inside a function reads correctly and is the idiom.
  *    Two things it costs you, because nothing will remind you: it is not
  *    re-entrant (your worker and your callbacks share it, and they pre-empt
- *    each other), and it is spent against the 60KB ceiling rather than
+ *    each other), and it is spent against the 63.5KB ceiling rather than
  *    against the stack.
  *
  * 2. ES BELONGS TO THE KERNEL. Every callback is entered with ES = KERNEL_SEG
@@ -339,6 +339,10 @@ typedef char os88__sz_find[sizeof(struct os88_find)    == 24 ? 1 : -1];
 #define OS88_CUR_ARROW 0                         /* os88_wm_cursor() */
 #define OS88_CUR_CROSS 1
 
+#define OS88_WHEEL_STEPS 3                       /* = WHEEL_STEPS: the LINES
+                                                  * one wheel notch scrolls
+                                                  * (SPEC.md 13.18.2) */
+
 /* os88_file_dlg()'s mode, and os88_onfile()'s first argument.
  *
  * These are two separate one-line comments and not one two-line comment: as a
@@ -400,11 +404,14 @@ typedef char os88__sz_find[sizeof(struct os88_find)    == 24 ? 1 : -1];
  *                                       unsigned size_lo, unsigned size_hi,
  *                                       void *win);
  *   CC_HAS_WORKER     void  os88_worker(void *win);
+ *   CC_HAS_ONTIMER    void  os88_ontimer(void *win);      (13.9 - see below)
  *   CC_HAS_ONWAKE     void  os88_onwake(void *win);       (74.1 - see below)
  *   CC_HAS_ONCLOSE    int   os88_onclose(void *win);      (75.1 - see below)
+ *   CC_HAS_ONWHEEL    void  os88_onwheel(int notches, void *win);
+ *                                                         (13.18 - see below)
  *
  * ...AND ONE OF THEM GATES THE OTHER DIRECTION, which is why it is listed
- * apart from the twelve above rather than among them:
+ * apart from the fourteen above rather than among them:
  *
  *   CC_HAS_FSX        no callback at all - it assembles the four
  *                     os88_fsx_*() THUNKS (SPEC.md 53, the exclusive
@@ -490,6 +497,23 @@ void os88_onwake(void *win);
  *
  * Needs CC_HAS_ONCLOSE, and os88_wm_onclose() to install it. */
 int os88_onclose(void *win);
+
+/* os88_onwheel - the mouse WHEEL (SPEC.md 13.18), installed by
+ * os88_wm_onwheel(). `notches` is SIGNED and POSITIVE TOWARD THE USER: scroll
+ * the view DOWN, the top row increasing. It is os88_onkey()'s environment
+ * exactly - the UI task, the gfx lock HELD, billed to you - and it reaches the
+ * window a KEY would reach (the front one), WHEREVER THE POINTER IS; ask
+ * os88_mouse() if your window has more than one thing that scrolls and you
+ * want the one under it.
+ *
+ * ONE CALL, HOWEVER MANY NOTCHES: the turns since the UI task last ran
+ * arrive SUMMED, so move the view by notches * OS88_WHEEL_STEPS lines in ONE
+ * move and repaint once (SPEC.md 10.4) - take the path your scroll bar's
+ * arrow already takes, with the count in hand, never a loop of single steps.
+ * A turn against an end must draw NOTHING: clamp first and return when the
+ * position did not change. kern_small has no wheel and never calls it, so a
+ * package needs no branch for that machine. Needs CC_HAS_ONWHEEL. */
+void os88_onwheel(int notches, void *win);
 
 /* os88_worker - your one background task (SPEC.md 20.6), started by
  * os88_task_spawn() from a callback. IT MUST NEVER RETURN: call
@@ -801,6 +825,11 @@ void os88_wm_onclose(void *win);
 void os88_wm_onwake(void *win);                  /* 74.1 - install
                                                   * os88_onwake(); needs
                                                   * CC_HAS_ONWAKE */
+void os88_wm_onwheel(void *win);                 /* 13.18 - install
+                                                  * os88_onwheel(); needs
+                                                  * CC_HAS_ONWHEEL. Does
+                                                  * nothing on kern_small,
+                                                  * which has no wheel */
 
 /* os88_wm_wake - post the kick (SPEC.md 74.1): os88_onwake() runs on the UI
  * task, lock free, a few event-loop passes later. Any context - a callback,
@@ -983,7 +1012,7 @@ int os88_snd_tone(int hz, int ticks, int prio);  /* hz 0 = off, ticks 0 = until
  * "where my Save As went" is just a Save.
  *
  * The 32-bit count the slots take is capped at 16 bits here, which costs
- * nothing a package can reach: your image and bss together cap at 60KB, and
+ * nothing a package can reach: your image and bss together cap at 63.5KB, and
  * anything bigger belongs in a claim, which the _seg forms read into.
  * A _seg base MUST BE 512-BYTE ALIGNED (SPEC.md 2.1.1: every disk-visible
  * base is): a claim's own base is (the kernel's guard 6b - KB-granular
@@ -1143,7 +1172,7 @@ void os88_batch_begin(void);
 void os88_batch_end(void);
 
 /* --- memory beyond your region (SPEC.md 50.3) ----------------------------
- * Your image and bss together cap at 60KB (APP_MAX_SIZE), and a C package
+ * Your image and bss together cap at 63.5KB (APP_MAX_SIZE), and a C package
  * meets that two to four times sooner than an assembly one. Anything bigger
  * is a claim: os88_mem_claim() answers a SEGMENT, which the _seg file calls
  * take and os88_peek()/os88_poke() reach a byte at a time. The kernel frees

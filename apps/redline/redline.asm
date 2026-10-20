@@ -88,6 +88,8 @@ rl_entry:
     mov bx, [rl_win]
     mov ax, ru_press
     call OSAPI_WM_ONCLICK           ; refresh geometry, then enter SDK dispatch
+    mov ax, ru_wheel                ; SPEC.md 13.18: the mouse wheel scrolls
+    call OSAPI_WM_ONWHEEL           ; the pane under the pointer
     mov si, rl_intro
     call bl_sline
     mov si, rl_hint

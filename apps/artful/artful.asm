@@ -233,6 +233,8 @@ at_entry:
                                     ; and not in the template, and it preserves
                                     ; the FLAGS, which is what lets it sit in
                                     ; front of the CF the loader is owed
+    mov ax, at_onwheel              ; SPEC.md 13.18: the mouse wheel scrolls
+    call OSAPI_WM_ONWHEEL           ; the page (flags preserved, as above)
     clc                             ; the CF the loader is owed
 .out:
     ret

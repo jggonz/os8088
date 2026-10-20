@@ -74,13 +74,16 @@ GLS_SY  equ 12
 GLS_SZ  equ 14
 
 ; loadable programs (SPEC.md 20) - a package's region is a HEAP CLAIM
-APP_MAX_SIZE equ 0xF000         ; the biggest single package: 60KB, and the
-                                ; ceiling is now the SEGMENT rather than a
+APP_MAX_SIZE equ 0xFE00         ; the biggest single package: 63.5KB, and
+                                ; the ceiling is the SEGMENT rather than a
                                 ; pool - a package links at org 0 and
                                 ; addresses itself with 16-bit offsets, so
                                 ; image + bss cannot reach 64KB whatever the
-                                ; heap has free. Mirrored in apps/os88api.inc
-                                ; and tools/os88pkg.py
+                                ; heap has free. 0xFE00 and not 0xFFFF
+                                ; because the region is roundup512(image +
+                                ; bss) in a word (SPEC.md 20.1.1); it was
+                                ; 0xF000, the retired pool's size. Mirrored
+                                ; in apps/os88api.inc and tools/os88pkg.py
 PKG_FILE_HI  equ 16             ; the HIGH word of the biggest FILE the mount
                                 ; will type as a package (SPEC.md 19.1): the
                                 ; file must be under 1MB. It is deliberately
@@ -1807,6 +1810,7 @@ apic_xm_copy:
                                   ;          held or not (11.1.2). Retires the last liberty
                                   ;          in docs/plans/completed/PAINT-NOTES.md - an app
                                   ;          writing W_W/W_H itself
+api_gfx_blit4:                    ; (named: SPEC.md 5.4.1.5's walk far-calls it)
     OSAPI_SLOT gfx_blit4          ; 0x0182 - packed 4bpp block (SPEC.md 5.4):
                                   ;          ES:SI = source, BP = stride,
                                   ;          AX/BX = dest, CX/DX = w/h. ES is
@@ -3263,7 +3267,31 @@ apic_thm_desk:                    ; (cw_thm_desk's door, size pass 13)
                                   ;          them now; CF=1, AX = FERR_* = it
                                   ;          could not. Synchronous; a worker
                                   ;          may not. kern_small refuses
-osapi_table_end:                  ; 0x0499 today (0x0493 before the ASSOC.DAT
+    OSAPI_ICELL 6                 ; 0x0499 - BX = window, AX = a near proc in
+                                  ;          YOUR segment (0 clears it): the
+                                  ;          WHEEL handler (SPEC.md 13.18),
+                                  ;          OSAPI_WM_ONRCLICK's shape. Called
+                                  ;          AX = signed notches, POSITIVE
+                                  ;          TOWARD THE USER (scroll DOWN), SI
+                                  ;          = your window, gfx lock HELD, on
+                                  ;          the FRONT window - where a key
+                                  ;          goes. FLAGS PRESERVED; on
+                                  ;          kern_small, which has no wheel,
+                                  ;          the cell does nothing at all.
+                                  ;          SIX bytes and not five, the
+                                  ;          word displacement deliberate:
+                                  ;          every .text byte after the table
+                                  ;          moves by the cell, and an odd
+                                  ;          shift puts the hot routines at
+                                  ;          the wrong parity (t_hotpar)
+%ifdef KERN_BIG
+    mov [word cs:bx+W_ONWH], ax
+%else
+    times 5 nop
+%endif
+    OSAPI_IEND
+osapi_table_end:                  ; 0x049F today (0x0499 before the wheel;
+                                  ; 0x0493 before the ASSOC.DAT
                                   ; flush; 0x0487 before the HMA and
                                   ; quiet cells, appended after main's at the
                                   ; elendilon -> main merge; 0x0475 before the
@@ -3288,8 +3316,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 105*6 + 6*3 + 6 + 12*5 + 3*6 + 8
-%error "os8088 API jump table must be exactly 0x0489 bytes: 43 SLOT (8), 11 XCELL (7), 105 rare (6), 6 JCELL (3), 1 FCELL (6), 16 ICELL (12 of 5, 3 of 6, 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14)"
+%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 105*6 + 6*3 + 6 + 12*5 + 4*6 + 8
+%error "os8088 API jump table must be exactly 0x048F bytes: 43 SLOT (8), 11 XCELL (7), 105 rare (6), 6 JCELL (3), 1 FCELL (6), 17 ICELL (12 of 5, 4 of 6 - OSAPI_WM_ONWHEEL's for parity, SPEC.md 13.18 - 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14)"
 %endif
 
 ; =============================================================================
@@ -4236,6 +4264,18 @@ api_sysfp:  dw dwf_dskw_write_sys  ; which verb the shared fenced cell runs:
 %endif
 %endmacro
 
+; OVSCALL - OVBCALL'S MIRROR: a body in `.ovl` on kern_small and in the blob
+; on kern_big. wm_init is the one (SPEC.md 9.9.8 bought its `.ovl` bytes on
+; kern_big for the PS/2 wheel's knock). tools/os88ovlchk.py holds it to `.ovl`,
+; the kern_small arm, by the same rule that holds OVBCALL to `.boot2`.
+%macro OVSCALL 1
+%ifdef KERN_SMALL
+    OVLCALL %1
+%else
+    BLOBCALL %1
+%endif
+%endmacro
+
 
 ; BLOBCALL / MARKW / BPMARKW - the entries, spelled for a caller that
 ; is itself IN THE BLOB (kmain_o). The blob is one segment, so a
@@ -4545,7 +4585,7 @@ kmain_o:
 %endif
     MARKW 14
     BPMARKW 3                    ; ...the typeface
-    OVLCALL  wm_init
+    OVSCALL  wm_init            ; the blob on kern_big, `.ovl` on kern_small
     MARKW 15
 %ifdef BANDCOMP
     call KERNEL_SEG:ovw_band_init              ; SPEC.md 5.9.2: the composer's 2KB, before the
@@ -5017,7 +5057,7 @@ osapi_file_goto:
 ; in:  DX = the folder's first cluster (0 = the root), BL = the volume
 ; out: CF=0 moved; CF=1 and AX = FERR_*
 ;
-; SPEC.md 19.2.2. The same two quiet paths fcp_goto has had since SPEC.md
+; SPEC.md 19.2.2. The same two quiet paths dsk_goto has had since SPEC.md
 ; 22.5, published because a COPY ENGINE OUTSIDE THE KERNEL needs them just as
 ; much as the one inside it - the hard-disk installer was paying a full
 ; dsk_chdir per file and per chunk, twice, and a full chdir is the BPB, the
@@ -5034,7 +5074,7 @@ osapi_file_goto:
 ;     not re-read at all.
 ;
 ; The cluster is range-checked HERE because the quiet path skips
-; disk_mount's own .cwd_lost validation - fcp_goto's reason, and the same
+; disk_mount's own .cwd_lost validation - dsk_goto's reason, and the same
 ; two compares.
 ;
 ; NOT a replacement for OSAPI_FILE_GOTO: this leaves the global listing empty
@@ -5042,26 +5082,26 @@ osapi_file_goto:
 ; the other one. The instance's folder is deliberately NOT moved either
 ; (no inst_vol_mark): this is where the caller is standing to do a job, not
 ; where the application now believes it lives.
-; **THIS WAS A SECOND TRANSCRIPTION OF `fcp_goto`**, and SPEC.md 19.2.2 says
-; so in as many words: the slot is "fcp_goto's two paths, which the kernel's
+; **THIS WAS A SECOND TRANSCRIPTION OF `dsk_goto`**, and SPEC.md 19.2.2 says
+; so in as many words: the slot is "dsk_goto's two paths, which the kernel's
 ; own copy engine has had since 22.5, published because a copy engine outside
 ; the kernel needs them just as much". Two bodies, in the scarce section, and
 ; they had DRIFTED APART in both directions - this one had the [dsk_mntok]
-; gate and fcp_goto did not; fcp_goto had the DVK_FILE / FSV_CHDIR arm and
+; gate and dsk_goto did not; dsk_goto had the DVK_FILE / FSV_CHDIR arm and
 ; this one did not. The second of those was a BUG here (SPEC.md 62.9.1): on a
 ; redirected volume this wrote [dsk_cwd] behind the driver's back, and every
 ; name the caller then asked about was looked up in the folder it came FROM.
-; Merging fixes it and gives fcp_goto the gate; the argument shuffle is four
-; instructions and `pop` does not disturb CF, so .out returns fcp_goto's flag.
+; Merging fixes it and gives dsk_goto the gate; the argument shuffle is four
+; instructions and `pop` does not disturb CF, so .out returns dsk_goto's flag.
 osapi_file_goto_q:
     push bx
     push dx
-    mov al, bl                  ; fcp_goto takes AL = drive, BX = cluster
+    mov al, bl                  ; dsk_goto takes AL = drive, BX = cluster
     mov bx, dx
-    call COLD_SEG:fcpf_fcp_goto ; ...already published for DISKOPS.DRV (18.99.8)
+    call COLD_SEG:dskf_dsk_goto ; ...already published for DISKOPS.DRV (18.99.8)
     jc .out
     xor ax, ax                  ; the documented AX = 0, and it clears CF with
-.out:                           ; it; on the CF=1 arm AX is fcp_goto's FERR_*
+.out:                           ; it; on the CF=1 arm AX is dsk_goto's FERR_*
     pop dx
     pop bx
     ret
@@ -6988,6 +7028,11 @@ OVL_SIZE equ ovl_end - $$     ; `$$` is 0 here: `.ovl` has a vstart of its
 ; grew it from nine for SPEC.md 6.0.1's timed font pick), so the window half
 ; binds kern_big again. A KNOB
 ; build has DSK_OVLPAD's 1,024 more here, and 2.5.3.3.1 is what spends it.
+%ifdef KERN_BIG
+%if (FAT_SEG - KERNEL_SEG) * 16 + OVL_SIZE > 0x10000
+  %error "mou_p2knock (mouse.inc) reads its table through DS = KERNEL_SEG as MOU_P2KNK_DS, so the boot overlay must lie inside KERNEL_SEG's 64K (SPEC.md 9.9.8)"
+%endif
+%endif
 %if ((OVL_SIZE + 511) / 512) * 512 > FAT_PARA * 16 + DSK_WIN_BYTES
 %error "the boot overlay's window half has outgrown the FAT window plus dsk_secbuf - see SPEC.md 2.1.2 and 2.5.3. Move a body to the blob (`.ovl`, SPEC.md 2.5.3.2) or out of the boot path"
 %endif

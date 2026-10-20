@@ -12,6 +12,11 @@ Commands:
     rdown [X Y]     RIGHT button press (context menus, SPEC.md 12.4)
     rup [X Y]       right button release
     rclick X Y      to X Y + right press + release
+    wheel N         N wheel NOTCHES, POSITIVE TOWARD THE USER (scroll down),
+                    one event a notch (SPEC.md 10.4). QEMU's SERIAL mouse
+                    (msmouse) has no wheel at all: this reaches the guest
+                    only on the PS/2 mouse (MOUSEPORT=ps2, an IntelliMouse
+                    once SPEC.md 9.9.8's knock has run) or VMware's pointer
     shot PATH       screendump (absolute path)
 
 --screen WxH names the guest's screen, default 640x480. It MUST match the
@@ -127,6 +132,13 @@ def main():
         goto(int(args[0]), int(args[1]))
         hmp(f"mouse_button {btn}", "gsleep 0.2", "mouse_button 0",
             "gsleep 0.2")
+    elif cmd == "wheel":
+        n = int(args[0])
+        dz = -1 if n > 0 else 1         # HMP: dz > 0 is WHEEL_UP, which the
+        cmds = []                       # PS/2 and vmmouse models send as a
+        for _ in range(abs(n)):         # NEGATIVE Z - away from the user
+            cmds += [f"mouse_move 0 0 {dz}", f"sleep {PACE}"]
+        hmp(*cmds, "gsleep 0.15")
     elif cmd == "shot":
         hmp(f"screendump {args[0]}")
     else:

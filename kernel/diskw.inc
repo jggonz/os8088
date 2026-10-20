@@ -2627,6 +2627,8 @@ dskw_read_at_x:
     call dskw_fsstat            ; SI = the name -> AX = the handle, DX:CX =
     jc .out                     ; size; a folder is refused FERR_PROT, as
                                 ; everywhere else
+    mov [dwr_sz], cx            ; the size, as the FAT arm stores it, so a
+    mov [dwr_sz+2], dx          ; READ_SEQ cursor carries it here too
     mov bx, [dwr_buf]           ; AX is still the handle
     mov dx, es                  ; DX:BX = the buffer, ES being the caller's
     mov cx, [dwr_cap]           ; and DX not carrying it into the driver
@@ -4958,6 +4960,12 @@ dskw_fmt_tab:
   %error "dskw_fmt_tab's rows are DFMT_SIZE bytes"
 %endif
 
+; int 13h AH=08h's BL - the CMOS drive type, 1..6 - to the row that drive
+; makes at its LARGEST (dskw_fmt_probe_x). 2.88MB drives make 1.44MB here:
+; the largest FAT §18.2 rule 10 will mount
+dskw_fmt_btab:
+    db 3, 1, 2, 0, 0, 0         ; 360K, 1.2M, 720K, 1.44M, 2.88M, 2.88M
+
 ; =============================================================================
 ; The formatter's own STRINGS and the composer that letters them (SPEC.md
 ; 2.8.6). None of this is in KERNEL.SYS.
@@ -4985,7 +4993,7 @@ dskf_s_q:    db 'K?', 0         ; status line itself - as one line it is 44
                                 ; ([fm_cw]-12)/8 = 38 on the 320px template,
                                 ; losing 'Esc=no'
 dskf_s_k2:   db 'Spc=size  '    ; ...when there IS another size to offer
-dskf_s_k:    db 'Enter=yes  Esc=no', 0  ; (rows 2 and 3 alone) - and the
+dskf_s_k:    db 'Enter=yes  Esc=no', 0  ; (the drive makes two) - and the
                                 ; plain key line is that one's TAIL, so it
                                 ; costs no bytes of its own
 dskf_s_swap: db 'Insert the disk to format, then Enter', 0   ; mode 6 step 1,
@@ -5074,20 +5082,12 @@ dskw_fmt_line_x:
     retf
 
     ; --- 1: the key line, which names Space only where it does something
-    ; (SPEC.md 18.96.2/47). files.inc's `fm_fmt_sizeable`, verbatim and in
-    ; line: the LINE that names the key and the KEY that acts on it must not
-    ; disagree, and only one of them is resident. It was a routine of its own
-    ; here with one caller, which is a call, a ret and a push/pop of a
-    ; register for nothing
+    ; (SPEC.md 18.96.4/47). The SAME byte files.inc's Space key tests: the
+    ; LINE that names the key and the KEY that acts on it must not disagree
 .keys:
     mov si, dskf_s_k
-    cmp byte [fm_fmtrow], 2     ; the 9-sector pair, and only it...
-    jb .tail
-    mov bl, [fm_ldrv]
-    call COLD_SEG:dskf_dsk_vol_row  ; (BX alone, and BX is banked)
-    jc .tail
-    cmp byte [bx+DV_UNIT], 2    ; ...on an EXTERNAL drive, and only there
-    jb .tail
+    cmp byte [fm_fmtalt], 0xFF  ; the probe found the drive no other row
+    je .tail
     mov si, dskf_s_k2
     jmp short .tail
 
@@ -5125,7 +5125,8 @@ dskw_fmt_line_x:
 ; -----------------------------------------------------------------------------
 ; dskw_fmt_probe_x - which of the four formats is this drive holding?
 ; in:  [disk_drive] = the volume; UI task, gfx lock held (it reads the disk)
-; out: CF=0 with AL = a dskw_fmt_tab row; CF=1 with AX = FERR_*
+; out: CF=0 with AL = a dskw_fmt_tab row, the default, and AH = the other row
+;      this drive makes or 0FFh (SPEC.md 18.96.4); CF=1 with AX = FERR_*
 ; clobbers: AX (the output), flags. Returns FAR: it is the module entry
 ;
 ; READS ONLY. That is what lets the Disk window call it before the user has
@@ -5209,8 +5210,29 @@ dskw_fmt_probe_x:
                                 ; only at .got2. (DX is not banked round the
                                 ; call: nothing reads the unit after it)
     mov ah, 0x08
-    int 0x13
-    jc .nogeom
+    xor bx, bx                  ; BL = 0: a ROM that reports no drive type
+    int 0x13                    ; leaves it so, and a stale BL cannot pass
+    jc .nogeom                  ; for one
+    ; **BL, the drive TYPE, is asked first, because CL is not always about
+    ; the drive.** An AT-class ROM may answer CL/CH for the media it last
+    ; ESTABLISHED rather than for the drive, and what it establishes on a
+    ; disk with nothing on it is whatever its retry ladder ended on - so an
+    ; erased disk in a 1.44MB drive can read as a 15-sector drive. BL is the
+    ; CMOS type and does not move with the medium: 1 = 360K, 2 = 1.2M,
+    ; 3 = 720K, 4 = 1.44M, 5/6 = 2.88M. Anything else - and the 0 a ROM that
+    ; reports no type leaves - falls to CL/CH as before
+    dec bx                      ; 1..6 -> 0..5; a 0 wraps out of range
+    cmp bl, 6
+    jae .bycl
+    mov bh, 0
+    mov al, [cs:bx+dskw_fmt_btab]   ; the row that drive makes at its largest
+    call dskw_fmt_row_x         ; SI = it
+    mov dx, [cs:si+DFMT_SPT]    ; DX = its sectors per track
+    mov al, [cs:si+DFMT_CYL]
+    cbw                         ; (80 and 40 are positive)
+    xchg di, ax                 ; DI = its cylinders
+    jmp short .geom
+.bycl:
     cmp ch, 0xFF                ; CH = 0FFh is not a geometry. (Tested on CH
     je .nogeom                  ; itself: the old widen-and-`inc ax` form made
                                 ; 0x0100 of it, which is not zero, so the
@@ -5273,58 +5295,61 @@ dskw_fmt_probe_x:
     ; drive, whose HD recording nothing here can read; a disk whose ID
     ; fields are damaged; a medium formatted for another machine. What it
     ; gets is what the DRIVE makes - the same answer DOS's FORMAT gives -
-    ; so the row is chosen from DX (its sectors per track) and, for the
-    ; 9-sector pair, DI (its cylinders) by the code below, exactly as a
-    ; readable 9-sector disk's is.
-    mov bp, 2                   ; the 9-sector pair, 720K or 360K below...
-    cmp dx, 15
-    jb .got
-    dec bp                      ; ...1.2MB on the 5.25" HD drive...
-    cmp dx, 18
-    jb .got
-    dec bp                      ; ...and 1.44MB on the 3.5" one
+    ; which is row 0 below: "the drive's largest"
+    xor bp, bp
 .got:
 
-    ; --- the row: how many CYLINDERS? ---------------------------------------
-    ; How many CYLINDERS a disk has is a property of the DRIVE and is not
-    ; readable at all: a 40-track disk in an 80-track drive answers a read of
-    ; cylinder 40 with whatever is on physical track 40 - logical track 20's
-    ; data, written at 48tpi and read at 96 - so the obvious probe returns a
-    ; confident WRONG answer and formats a 360KB disk as 720KB. Rows 0 and 1
-    ; are 80-cylinder by construction (there is no 15- or 18-sector
-    ; 40-cylinder format), so only the 9-sector pair is in question, and it
-    ; is decided by the DRIVE: 80 cylinders only when the drive has 80 AND is
-    ; not the 5.25" 1.2MB one, whose 9-sector media is undecidable and is
-    ; resolved downward to 360KB - a 360KB layout on 720KB media wastes half
-    ; a disk, where a 720KB layout on 360KB media is a volume whose second
-    ; half does not exist. AH=08h failing lands on the same safe default.
+    ; --- the DRIVE's pair: AL = the row it makes at its largest, AH = the
+    ;     other one it can make, or 0FFh (SPEC.md 18.96.4) -----------------
+    ; A read is EVIDENCE about the medium and not a verdict, and the field
+    ; is why: a bulk-erased 1.44MB disk in a 1.44MB drive was offered 1200K,
+    ; then 720K, then 1440K on three erasures, because a read of magnetic
+    ; noise can succeed and the descent takes the first success. So the
+    ; read only picks the DEFAULT out of the two formats this drive makes,
+    ; and the confirmation's Space offers the other. Nothing a read says can
+    ; put a row outside the drive's pair on the line.
     ;
-    ; **Reading cylinder 40 to settle it was tried and is WRONG** - the
-    ; negative result is worth a paragraph so it is not re-derived. It looks
-    ; like the honest test (a 40-cylinder drive cannot seek there, so the read
-    ; fails) and it fails two ways at once. The lesser one is the 360KB-in-a-
-    ; 1.2MB-drive case, where physical track 40 is inside the written area and
-    ; answers with logical track 20's data - a confident wrong answer, which
-    ; is what the veto above is for. The greater one is that **it rests on a
-    ; read FAILING**, and that is the least portable thing to depend on across
-    ; a BIOS, a controller and an emulator: measured, MartyPC's FDC happily
-    ; reads sector 18 of a 9-sector track, so a probe built this way reported
-    ; a 360KB disk in a 360KB drive as 1.44MB. Every test here is a read
-    ; SUCCEEDING for exactly that reason.
+    ; The 18- and 15-sector drives have two rows each - 1.44M/720K, the
+    ; 3.5" HD drive's, and 1.2M/360K, the 5.25" HD drive's (DOS's FORMAT
+    ; offers 720K in neither of the 5.25" one nor 1.2M in the 3.5" one).
     ;
-    ; The cost is up to two doomed reads before the answer, and a doomed
-    ; disk_read is three attempts and two controller resets. It is bounded and
-    ; it is once per format; the alternative is trusting AH=08h about the
-    ; MEDIUM, which is the thing this routine exists to not do.
-    mov ax, bp
-    cmp al, 2                   ; row 0 (1.44MB) or row 1 (1.2MB): done
-    jb .got2
-    mov al, 3                   ; the 9-sector pair: 360KB unless...
-    cmp di, 80                  ; ...the drive really has 80 cylinders...
-    jb .got2
-    cmp dx, 15                  ; ...and is not the 5.25" 1.2MB drive
-    je .got2
-    mov al, 2                   ; 720KB
+    ; HOW MANY CYLINDERS a 9-sector drive has is not readable at all: a
+    ; 40-track disk in an 80-track drive answers a read of cylinder 40 with
+    ; logical track 20's data, so the obvious probe formats a 360KB disk as
+    ; 720KB - and §18.96.1 is why reading it was tried and is WRONG. So it
+    ; is the DRIVE's (DI): 720K over 80 cylinders, 360K otherwise, AH=08h
+    ; refused landing on the safe one. Its other row is offered on the
+    ; EXTERNAL units alone (18.96.2): an 80-cylinder 3.5" drive on the 5.25"
+    ; adapter's 37-pin connector is a drive whose ROM answers nothing about
+    ; it, and units 0 and 1 are the machine's own
+    mov ax, 0x0200              ; 1.44M, else 720K
+    cmp dx, 18
+    jae .pair
+    mov ax, 0x0301              ; 1.2M, else 360K
+    cmp dx, 15
+    jae .pair
+    mov ax, 0x0203              ; 360K, else 720K...
+    cmp di, 80
+    jb .p9
+    mov ax, 0x0302              ; ...or 720K, else 360K
+.p9:
+    mov bl, [disk_drive]
+    call COLD_SEG:dskf_dsk_vol_row  ; (BX alone; it answered at the top)
+    cmp byte [bx+DV_UNIT], 2
+    jae .pair                   ; an external unit: the other is offered
+    mov ah, 0xFF                ; an internal one: no other
+.pair:
+    ; --- ...and the read picks between them. 9 sectors read (rows 2 and 3
+    ; read the same sector, so it is BP = 2) is the 9-sector one of the pair
+    ; - 720K in a 1.44MB drive, 360K in a 1.2MB one, which is what a
+    ; readable disk got before. 18 or 15 read, or nothing, is the drive's
+    ; largest: a 15 read in an 18-sector drive is the noise above
+    mov bx, bp
+    cmp bl, 2
+    jb .got2                    ; 18, 15 or nothing: AL as it stands
+    cmp al, 2
+    jae .got2                   ; a 9-sector drive: AL already is
+    xchg al, ah                 ; an HD drive: its 9-sector row, the HD alt
 .got2:
     pop bp
     pop word [dsk_totsec]       ; THE PROBE LEAVES NO GEOMETRY BEHIND:

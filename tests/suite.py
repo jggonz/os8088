@@ -2792,6 +2792,19 @@ SOAK = [
         "out of the guest, so it answers for all three adapters out of one "
         "run. Shares build/pkgbig.img with the pkgbig row - `make pkgbig`.",
         needs=("marty",), serial=True, wants=("build/pkgbig.img",)),
+    Row("pkgmax", "soak", py("tests/pkgmax.py"), 15.0,
+        "SPEC.md 20.1.1: a package of EXACTLY APP_MAX_SIZE (0xFE00) loads, "
+        "runs and closes. Over 63KB the region is a whole 64KB claim, the one "
+        "size two 16-bit words in the loader used to wrap on - "
+        "mem_bytes_kb_x's `add ax, 1023` answered 0 KB, and ld_alloc's "
+        "I_SIZE = KB << 10 read 0, which is how the instance table says "
+        "BUILT-IN. PKGMAX.O88 (tests/pkgbig/pkgmax.asm) is image + bss = "
+        "0xFE00 to the byte and marks the last byte of its bss. Asserts off "
+        "guest state: LD_OK and a window; a PACKAGE instance with I_SIZE "
+        "0xFFFF (saturated); one 4,096-paragraph claim owned by it; the mark "
+        "at segment:0xFDFF; and nothing left after the close box. Shares "
+        "build/pkgbig.img with pkgbig and pkgfence - `make pkgbig`.",
+        needs=("marty",), serial=True, wants=("build/pkgbig.img",)),
     Row("clipkeep", "soak", py("tests/clipkeep.py"), 40.0,
         "SPEC.md 11.96.18: a wholly covered window keeps its raise cache when"
         "it arms a clip, and a partly covered one still loses it.",
@@ -4252,6 +4265,19 @@ SOAK = [
         "a chance to take a byte from int 09h. QEMU by name on CLAUDE.md's "
         "closed list - MartyPC is an 8088 and has no 8042 to test",
         needs=("qemu", "nasm"), serial=True, timeout=420,
+        wants=("build/os8088.img", "build/apps.img")),
+    Row("wheelps2", "soak", py("tests/wheelps2.py"), 56.0,
+        "Does SPEC.md 9.9.8's knock put a PS/2 wheel mouse in four-byte mode, "
+        "and does its Z byte reach the wheel's level (10.4)? ps2mouse.py's "
+        "machine: mou_p2wz 3 with mou_p2id still the reset's 0, the pointer "
+        "EXACT on a pixel in four-byte framing, then - with a menu held so "
+        "nothing consumes it - [mou_whl] +4 for four notches toward the "
+        "user, -2 after six away (a level that sums), 0 once the menu "
+        "closes, and six keys intact through the knock's extra commands. "
+        "Seen red for real: a knock reading its table through the wrong "
+        "segment failed safe to three bytes and this row named it. QEMU on "
+        "the closed list (entry 4)",
+        needs=("qemu", "nasm"), serial=True, timeout=300,
         wants=("build/os8088.img", "build/apps.img")),
     Row("vmmouse", "soak", py("tests/vmmouse.py"), 45.0,
         "The VMware absolute pointer (SPEC.md 9.11), the browser's grabless "
@@ -9214,6 +9240,15 @@ SOAK = [
         "SPEC.md 27.7.6.1/27.7.2: scrolling a note whose height is still being"
         "counted neither freezes the machine nor blanks half the scroll bar.",
         needs=("marty",), serial=True),
+    Row("wheel", "soak", py("tests/wheel.py"), 30.0,
+        "SPEC.md 9.5.5/10.4/13.18: a serial IntelliMouse's wheel (MartyPC "
+        "patch 15 sends the MZ fourth byte) scrolls the FRONT window three "
+        "lines a notch - the Disk window (a kernel window: +2 notches = 6 "
+        "rows, -1 = back 3, the selection left alone) and Note Pad (+3 = 9 "
+        "rows, -5 clamped at 0, not read unsigned). Red with the nibble "
+        "decode removed; needs `make marty` built with patch 15",
+        needs=("marty",), serial=True,
+        wants=("build/os8088-360.img", "build/apps360.img")),
     Row("pkgthumb-np", "soak", py("tests/pkgthumb.py", "notepad"), 50.0,
         "SPEC.md 13.10.7: the thumb gesture inside a PACKAGE - Note Pad.",
         needs=("marty",), serial=True,
@@ -9947,6 +9982,16 @@ SOAK = [
         "and the VBR's BOOTHD_KOFS/KSECS naming it - then boots C:, upgrades "
         "the booted-from volume IN PLACE with the system disk in B:, and "
         "boots it again.",
+        needs=("marty", "mtools"), serial=True, timeout=1500),
+    Row("instimg", "soak", py("tests/instimg.py"), 145.0,
+        "SPEC.md 52.10.17: an install whose two disks are MOUNTED IMAGES on "
+        "the hard disk. mtools plants SYS.IMG and APPS.IMG, each with a "
+        "marker only it carries, in MartyPC's DOS partition; a floppy install "
+        "keeps them; then C: boots with a blank in A: and nothing in B:, both "
+        "images are double-clicked into drives and Install runs onto C: "
+        "keeping files. Both markers must arrive and C: must boot. `--from` "
+        "a system disk built before 52.10.17 is the break: no system disk "
+        "is found and the commit never comes. Measured 143s.",
         needs=("marty", "mtools"), serial=True, timeout=1500),
     Row("instcross", "soak", py("tests/instcross.py"), 240.0,
         "SPEC.md 52.10.16: an install ACROSS BUILDS from a machine booted off "
@@ -12398,6 +12443,16 @@ SOAK = [
         "35), the band not widened (37, 38), the copy not forced (37)",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
+    Row("vidmodexflo", "soak", py("tests/vidvga8.py", "--layout", "modex",
+                                  "--flip", "--own", "--held"), 32.0,
+        "SPEC.md 98.1.3.10, 98.3.8.7: vidmodexflh's clip AGAINST ITS OWN "
+        "PAGE (byte 37 7) - every record drawn on the back page as it "
+        "stands, none brought up, the held ones left unshown, and the "
+        "record after each key taking its rows off the glass (REC_UP). The "
+        "glass exact at every hold, keys among them; with REC_UP ignored it "
+        "FAILS before frame 38 by 480 pixels",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
     Row("vidmodexflc", "soak", py("tests/vidvga8.py", "--layout", "modex",
                                   "--flip", "--lcopy"), 35.0,
         "SPEC.md 98.3.8.1: vidmodexfl with every back page brought up by "
@@ -12524,8 +12579,10 @@ SOAK = [
         "file of three LIN80 renditions each for its screen: the screen's "
         "taken, Play a live session with no bracket, every held frame in "
         "the box across two laps, a drag followed, the rate within 10%, "
-        "Space, F to the full screen and back playing, Esc. Broken on "
-        "purpose (the blit skipped, or Live refused) it FAILS",
+        "Space, F to the full screen and back playing, Esc; then a play "
+        "that ends under a Disk window across the buttons keeps their "
+        "pictures (SPEC.md 13.8.9.1). Broken on purpose (the blit skipped, "
+        "or Live refused, or a cut picture its ground) it FAILS",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
     Row("vidlivecga", "soak", py("tests/vidlive.py", "--screen", "cga"),
@@ -12537,7 +12594,9 @@ SOAK = [
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
     Row("vidlivevga4", "soak", py("tests/vidlive.py", "--screen", "vga4"),
-        45.0, "SPEC.md 98.3.10.4: LIVE IN COLOUR on MartyPC's VGA XT - the "
+        60.0, "SPEC.md 98.3.10.4, 98.4.5.1: LIVE IN COLOUR on MartyPC's VGA "
+        "XT - the poster healed under a Disk window before any play through "
+        "BLITP and no BLIT4, its pixels the poster's; the "
         "VGA rendition a VGA4 canvas, every hold on the RENDERED glass the "
         "decode's sixteen colours; the pass's blits BLITP and no BLIT4, "
         "uncovered and under a Disk window, where BLITP walks the clip "
@@ -12877,6 +12936,23 @@ SOAK = [
         "BUILT page brought up anyway it FAILS at both flips",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
+    Row("vidpagefmx3o", "soak", py("tests/vidpage.py", "--layout", "modex",
+                                   "--pages", "3", "--fpage", "--own"), 70.0,
+        "SPEC.md 98.2.1.8.5, VIDEO-SEEN-PLAN 3b: vidpagefmx3's clip AGAINST "
+        "ITS OWN PAGES - every record BUILT, an ordinary frame drawn on the "
+        "back page as it stands, and every key carrying the back page. "
+        "Every hold exact from the start, from key 1 and with no keys; with "
+        "the back page left out of the keys the file is refused (a play "
+        "from keyframe 1 shows frame 31 wrong)",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidpagefmx4o", "soak", py("tests/vidpage.py", "--layout", "modex",
+                                   "--pages", "4", "--screen", "320x200",
+                                   "--fpage", "--own"), 70.0,
+        "VIDEO-SEEN-PLAN 3b: vidpagefmx4's four pages, the precopy in the "
+        "calm among them, against their own pages",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
     Row("vidpagefv4", "soak", py("tests/vidpage.py", "--pages", "4",
                                  "--screen", "320x200", "--fpage"), 145.0,
         "SPEC.md 98.3.8.5: vidpagefmx4's clip in sixteen colours on 320 x 200",
@@ -12993,6 +13069,27 @@ SOAK = [
         "640 x 480, unflipped, played WITHOUT forcing the full screen. "
         "Broken on purpose (the palette not loaded, vp_show's OUTs skipped, "
         "or vp_canwin taking the window) the holds FAIL",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidposter", "soak", py("tests/vidposter.py"), 135.0,
+        "SPEC.md 98.1.3.11, 98.4.5: DESKTOP POSTERS on MartyPC, ten files "
+        "on a VGA's desktop and a CGA's, each box held to the host byte "
+        "for byte with the set and scale it chose: VGA4 of its own greys "
+        "stored at half with a custom one (the custom at open, key 1's "
+        "after Right), stored at its own size and halved, none stored "
+        "(vga4_pack's turning cell); VGA8 and CGA4 in colour; TH_SIZE's "
+        "half on a file that fits; a resident custom one; CGA4's black and "
+        "white on a CGA; colour and black and white halved twice. Broken on "
+        "purpose - the posters ignored, the size or the desktop not asked, "
+        "a halving's turn or second pass taken out - those arms FAIL",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/video.o88",)),
+    Row("vidscreeno", "soak", py("tests/vidscreen.py", "--own"), 160.0,
+        "SPEC.md 98.1.3.10, 98.3.8.7: vidscreen's clips AGAINST THEIR OWN "
+        "PAGE on the four flipped screens (byte 37 7): drawn on the back "
+        "page as it stands, the record after a key bringing its page up off "
+        "the glass, and the 640 x 480 one unflipped as before. Every hold's "
+        "glass exact, odd and even frames apart",
         needs=("marty", "nasm"), serial=True,
         wants=("build/video.o88",)),
     Row("vidcard", "soak", py("tests/vidcard.py"), 26.0,
@@ -13261,6 +13358,17 @@ SOAK = [
         "what a super-packet in slot K-1 runs on into of slot 0 - is read "
         "every lap, thirteen of them. The mirror copied from the wrong bytes "
         "takes it red at 36 of 39 holds",
+        needs=("qemu", "nasm")),
+    Row("vidxipbankbig", "soak", py("tests/vidxip.py", "--arm", "bankbig"),
+        150.0,
+        "SPEC.md 98.3.18.13: the bank in place for a BIGSP file (98.1.4.1), "
+        "the owner's Last Exile at --frame-cap 48, which had to copy down "
+        "because the mirror in place was one slot. The wrap arm's 3-slot "
+        "ring with full-screen 38 KB records, two of which start late in "
+        "the ring's last slot and run into the MIRROR'S SECOND slot - "
+        "mirror_reach() names them and the row refuses a clip with none. "
+        "Slot 1 not mirrored takes it red at 2 of 19 holds, the two frames "
+        "it names",
         needs=("qemu", "nasm")),
     Row("vidxipbanksnd", "soak", py("tests/vidxip.py", "--arm", "banksnd"),
         110.0,
@@ -13894,6 +14002,19 @@ SOAK = [
         "the grid is four planes and repaints through gfx_blitp, so a window "
         "left where it opens does not reach this primitive at all.",
         needs=("marty", "nasm"), serial=True, timeout=900),
+    Row("b4walk", "soak", py("tests/b4walk.py"), 40.0,
+        "SPEC.md 5.4.1.5: a gfx_blit4 a window CUTS walks the region, every "
+        "fragment a piece at the fast path's price. A dithered 200x112 block "
+        "under a Disk window moved twice, on VGA and on a Hercules: each "
+        "heal under the uncovered blit's cycles (SPEC.md 5.4.1.6's narrow "
+        "rule is what holds the second one there), no gfx_fill but one "
+        "per row of an odd-nibble column, every piece and fill inside a "
+        "fragment and the pieces tiling the region exactly, the pixels "
+        "equal to the uncovered picture - and both nibble phases met. "
+        "VERIFIED TO FAIL on the kernel before the walk (every heal 23.6x "
+        "and 600+ fills) and with the odd column's draw removed (68 and 52 "
+        "pixels). 40s is 35 measured",
+        needs=("marty",), serial=True, wants=("build/b4walk.o88",)),
     Row("blitcut", "soak", py("tests/blitcut.py"), 330.0,
         "SPEC.md 39.14.7.2: does a STRADDLING gfx_blit4 draw the same pixels "
         "cut at the seam as it does whole-virtual, and is it several times "
@@ -13986,12 +14107,25 @@ SOAK = [
         "disk that it can then format (the docstring has the three ways). "
         "Measured at 60s",
         needs=("marty",), serial=True),
+    Row("fmtpair", "soak", py("tests/fmtpair.py"), 21.0,
+        "fmtpair - the formatter offers the DRIVE's two sizes whatever the "
+        "read said (SPEC.md 18.96.4): a bulk-erased 1.44MB disk was offered "
+        "1200K, 720K and 1440K on three erasures because a read of noise "
+        "can succeed. dskw_fmt_probe is called with B: holding a blank "
+        "1.44MB image, the 720KB, 1.2MB and 360KB apps disks in turn - "
+        "QEMU's auto drive type follows the image - and must answer AL = "
+        "the default and AH = the drive's other size: 0200, 0002, 0301, "
+        "0103. QEMU by docs/TESTING.md's closed list, entry 1: the pair is "
+        "an AT ROM's AH=08h answer and every MartyPC machine runs an XT ROM "
+        "that refuses it. VERIFIED RED: AH forced to 0, the old probe's, "
+        "fails 3 of 4. Measured at 21s",
+        needs=("qemu", "nasm"), serial=True),
     Row("fmtreach", "soak", py("tests/fmtreach.py"), 39.0,
         "fmtreach - a 720K format PROVES the drive reaches cylinder 79 "
         "(SPEC.md 18.96.2): dskw_fmt_reach_x writes a marker to LBA 1439, "
         "re-zeroes, reads it back and compares, and on a failure remakes the "
-        "disk 360K with 'Made 360K, not 720K'. No other row reaches it - "
-        "fmtlow formats 360K and only row 2 is checked. Arm A forces row 2 "
+        "disk 360K with 'Made 360K, not 720K'. Since 18.96.4 every format "
+        "runs the check, and row 2 is the one that falls back. Arm A forces row 2 "
         "at the confirmation on an 80-track B: and must see 160 tracks, "
         "'Formatted B:' and the marker on the host; arm B sends the reach "
         "test's read of cylinder 79 to cylinder 78 at the int 13h gate (a "

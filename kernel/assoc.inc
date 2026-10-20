@@ -894,12 +894,12 @@ assoc_post_x:
 ; out: CF=0 = standing there; CF=1 = not reachable
 ; clobbers: AX, CF
 ;
-; **fcp_goto AND NOT dsk_chdir_q**, which is the whole of the first half. A
+; **dsk_goto AND NOT dsk_chdir_q**, which is the whole of the first half. A
 ; locate walks FOLDERS of one volume - the document's, then that volume's root,
 ; then its APPS - and dsk_chdir_q answers every one of those moves with a
 ; remount, which on a floppy is the boot sector read again: one int 13h, ~400
 ; ms on the target machine, to learn that the disk the motor is still turning
-; is still the disk. fcp_goto is the package path's quiet stand (SPEC.md
+; is still the disk. dsk_goto is the package path's quiet stand (SPEC.md
 ; 18.9.1.1): inside a mounted volume whose medium cannot have changed it is a
 ; WORD, and anything else is the same dsk_chdir_q as before.
 ;
@@ -909,14 +909,11 @@ assoc_post_x:
 ; machine. assoc_tryvol asks each volume twice (its root, then APPS through
 ; the root again) and rung 1's hint can name a drive the sweep then visits, so
 ; one empty drive cost its retries two and three times over. [assoc_dead] is
-; one bit a volume, cleared by assoc_locate; FERR_NODISK is fcp_goto's answer
+; one bit a volume, cleared by assoc_locate; FERR_NODISK is dsk_goto's answer
 ; for a failed MOUNT only, so a hint's out-of-range cluster (FERR_IO) does not
 ; condemn the volume it names. DVOL_MAX is 8 on kern_big, which is exactly a
 ; byte; disk.inc asserts it, being where DVOL_MAX is defined.
 ; -----------------------------------------------------------------------------
-%ifdef FCP_MOD
-  %error "assoc_go near-calls fcp_goto, which is resident .cold only while FILECP is not a module"
-%endif
 assoc_go:
     push bx
     push cx
@@ -926,8 +923,8 @@ assoc_go:
     test [assoc_dead], ch
     jnz .stc
     mov bx, ax
-    mov al, dl                  ; fcp_goto takes AL = volume, BX = cluster
-    call fcp_goto
+    mov al, dl                  ; dsk_goto takes AL = volume, BX = cluster
+    call dsk_goto
     jnc .out
     cmp ax, FERR_NODISK
     jne .stc
@@ -1451,13 +1448,13 @@ assoc_run_x:
 ; nothing). After the second, `pop ax` kills AX before any read, and
 ; assoc_progname takes AL and preserves everything; BX is unread throughout.
 ;
-; fcp_goto and not dsk_chdir_q, for assoc_go's reason: when the program was
+; dsk_goto and not dsk_chdir_q, for assoc_go's reason: when the program was
 ; found on the document's own volume, coming back is a folder move inside a
 ; volume that is still spinning, and that is a word rather than a remount.
 assoc_back:
     mov bx, [assoc_dclus]
     mov al, [assoc_ddrv]
-    jmp fcp_goto                ; QUIET (SPEC.md 18.9/54.9): this restores the
+    jmp dsk_goto                ; QUIET (SPEC.md 18.9/54.9): this restores the
                                 ; volume so the app can READ ITS DOCUMENT, and
                                 ; a read resolves by NAME through dskw_find's
                                 ; directory walk - it never touches the global

@@ -8,8 +8,8 @@ CYLINDER 0, so on a 40-track drive it formats, mounts and then lies about its
 size. dskw_fmt_reach_x is the check: after a row-2 (720K) format it writes a
 marker to the volume's LAST sector (LBA 1439, cylinder 79), re-zeroes the
 buffer, reads the sector back and compares. A failure re-formats the disk as
-360K and says 'Made 360K, not 720K'. No other row reaches that code: fmtlow
-formats 360K, and only row 2 is checked.
+360K and says 'Made 360K, not 720K'. Since SPEC.md 18.96.4 every format runs the
+check (fmtlow's 360K reaches LBA 719), but row 2 is the one that FALLS BACK.
 
 TWO ARMS, one boot each, on os8088_5150_cga_720b_gla (an 80-track B:):
 

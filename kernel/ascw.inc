@@ -122,7 +122,7 @@ ascw_flush_x:
     mov [cs:bp+asw_seg-asw_v], dx
     mov al, [cs:bp+asw_vol-asw_v]
     xor bx, bx                  ; the root
-    ASWX fcp_goto
+    ASWX dsk_goto
     jc .ferr
 
     call asw_begin              ; counters, and the new file zeroed
@@ -203,7 +203,7 @@ ascw_flush_x:
     mov byte [ico_capn], 0      ; per ACTION, whatever happened (54.7.6.2)
     mov al, [cs:bp+asw_udrv-asw_v]
     mov bx, [cs:bp+asw_ucwd-asw_v]
-    ASWX fcp_goto               ; a failure leaves what assoc_back's would
+    ASWX dsk_goto               ; a failure leaves what assoc_back's would
     mov dx, [cs:bp+asw_seg-asw_v]
     or dx, dx
     jz .done

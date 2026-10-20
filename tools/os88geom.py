@@ -139,7 +139,7 @@ _MIRROR = {
     # kernel with the OTHER arm's %ifdef folded out rather than taking the
     # first `equ` in the file - which is what it did, and which made the guard
     # agree with itself while every kern_small script decoded garbage.
-    "WIN_SIZE": ("kernel/wm.inc", {"big": 72, "small": 65}),
+    "WIN_SIZE": ("kernel/wm.inc", {"big": 74, "small": 65}),
     "MAX_WIN": ("kernel/wm.inc", {"big": 12, "small": 6}),
     # kernel/driver.inc - a driver row (SPEC.md 51.2). DRVR_SEG is "is it
     # loaded", which is the only way a host-side script can SEE a driver
@@ -207,6 +207,7 @@ _MIRROR = {
     "I_WIN": ("kernel/instance.inc", 4),
     "I_SPTR": ("kernel/instance.inc", 6),
     "I_SIZE": ("kernel/instance.inc", 8),
+    "KIND_PKG": ("kernel/instance.inc", 0x80),
     "I_ICON": ("kernel/instance.inc", 10),
     "I_NAME": ("kernel/instance.inc", 12),
     "I_CYC": ("kernel/instance.inc", 28),
@@ -246,6 +247,7 @@ _MIRROR = {
     "DVK_BIOS": ("kernel/disk.inc", 0),
     "DVK_DRV": ("kernel/disk.inc", 1),
     "DVK_FREE": ("kernel/disk.inc", 0xFF),
+    "DRVC_IMG": ("kernel/disk.inc", {"big": 0x41}),  # a mounted image's row (18.101): OS88_IMG, big only
     # kernel/files.inc - a Disk window's list (SPEC.md 22)
     "FM_ROW_Y0": ("kernel/files.inc", 22),
     "FM_ROW_H": ("kernel/files.inc", 16),
@@ -394,7 +396,7 @@ _MIRROR = {
     # which is one of the five host tools that WRITE SHIPPED BYTES, so a drift
     # there does not fail a test - it stamps a package against the wrong
     # ceiling.
-    "APP_MAX_SIZE": ("kernel/kernel.asm", 61440),
+    "APP_MAX_SIZE": ("kernel/kernel.asm", 65024),
     "WCR_SZ": ("kernel/kernel.asm", 8),
     "CP_RX": ("kernel/ctrl.inc", 96),
     "CP_IDRV": ("kernel/ctrl.inc", {"big": 2}),   # no Drivers page on small

@@ -814,8 +814,11 @@ wd_entry:
     push ax                         ; SPEC.md 54.10: the kernel calls this once
     mov ax, wd_onwake               ; our window is on the glass, and the launch
     call OSAPI_WM_ONWAKE            ; document loads in front of it. BX is still
-    pop ax                          ; the window, and the slot preserves the
+                                    ; the window, and the slot preserves the
                                     ; flags the CF we owe the loader rides in
+    mov ax, wd_onwheel              ; SPEC.md 13.18: the mouse wheel scrolls
+    call OSAPI_WM_ONWHEEL           ; the document; flags preserved too, and
+    pop ax                          ; on kern_small the cell does nothing
 %ifdef OS88UI_SBDRAG
     pushf                           ; the entry still owes the loader
     push ax                         ; wm_create's CF (SPEC.md 13.10.7.1)
@@ -1470,6 +1473,13 @@ wd_sbclick:
     mov ax, [wd_top]
     add ax, [wd_vfit]
 .set:
+    ; A REQUEST ABOVE ROW 0 IS NOT A REQUEST PAST THE END (SPEC.md 27.7.6.1,
+    ; Note Pad's fix, carried here): the arms above are RELATIVE, so the up
+    ; arrow at [wd_top] < WD_SB_STEP asks for a negative row, and the test
+    ; below is UNSIGNED - it read that as row 65,532 and bought the whole
+    ; remaining count to scroll nothing. wd_scrollto clamps it to 0.
+    or ax, ax
+    js .doset
     ; [wd_drows] is a LOWER BOUND while the count is unfinished (SPEC.md
     ; 27.7.4), so wd_scrollmax would clamp this short of a row that really
     ; exists. Only a request that reaches past the counted extent needs the
@@ -1498,6 +1508,59 @@ wd_sbclick:
     stc
 .out:
     jmp wd_rdba
+
+; -----------------------------------------------------------------------------
+; wd_onwheel - W_ONWH (SPEC.md 13.18): AX = signed notches (+ = the view goes
+; DOWN), SI = window, gfx lock held, W_ONKEY's environment
+; out: nothing; clobbers what a callback may
+;
+; WHEEL_STEPS ROWS a notch. [wd_top] counts ROWS - a row is one line of the
+; note, however tall formats make it (SPEC.md 68.6) - so a row IS the line
+; 13.18.2 asks for, and the bar's own arrow step (WD_SB_STEP, 4) is not used.
+; Through wd_sbclick's .set, the arrows' path: it is the one that knows
+; [wd_drows] is only a LOWER BOUND while the count runs (SPEC.md 27.7.4), so
+; os88ui_sbwheel's clamp against the block would stop the wheel at the
+; counted rows. Repaints only when the view moved, and once however many
+; notches the pass summed.
+;
+; A MODAL IN THE WINDOW OWNS THE WHEEL as it owns every key (wd_mkey): the
+; scroll BLITS the content band, and a dialog, the About box, a dropdown or an
+; open combo list drawn over it would be carried with the text. So does a live
+; thumb drag, whose hand is what says where the view belongs (13.10.5.6).
+; -----------------------------------------------------------------------------
+wd_onwheel:
+    cmp word [wd_dlg], 0
+    jne .out
+    cmp byte [wd_about], 0
+    jne .out
+    cmp byte [wd_mopen], WD_M_NONE
+    jne .out
+    call wd_drany                   ; ZF=1: no combo's list is down
+    jnz .out
+%ifdef OS88UI_SBDRAG
+    call os88ui_sbdragging          ; CF = 0: a thumb drag is live
+    jnc .out
+%endif
+    clc                             ; the pen is this hold's (SPEC.md 68.2.5)
+    call OSAPI_GFX_PEN
+    call wd_settle                  ; wd_onclick's preamble to wd_sbclick: the
+    call wd_bounds                  ; break comes down, the geometry is read,
+    call wd_uclose                  ; and a scroll is not typing
+    call .go
+    cmp byte [wd_sbmoved], 0
+    je .out
+    jmp wd_redraw                   ; wd_scrollto moved [wd_top] off [wd_ptop]
+.out:
+    ret
+.go:
+    push ax                         ; wd_sbclick's own frame, which wd_rdba
+    push bx                         ; pops on the way out of .set
+    push dx
+    mov byte [wd_sbmoved], 0
+    mov dx, WHEEL_STEPS
+    imul dx
+    add ax, [wd_top]
+    jmp wd_sbclick.set
 
 ; =============================================================================
 ; Scrolling the PIXELS (SPEC.md 27.7.2)

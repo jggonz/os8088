@@ -1111,6 +1111,25 @@ class Marty:
                           "args": {"dx": dx, "dy": dy, "l": l, "r": r}})
         return rr
 
+    def wheel(self, notches, l=False, r=False, gap=0.12):
+        """Turn the WHEEL `notches`, positive TOWARD THE USER (SPEC.md 10.4).
+
+        Needs MartyPC with patch 15 (tools/martypc/patches): each request is
+        ONE Microsoft IntelliMouse packet, four bytes, its fourth byte's low
+        nibble the wheel - so a turn is split into packets of at most 7, each
+        followed by `gap` GUEST seconds, because a packet sent while the
+        last is still on the 1200-baud line is dropped (os88mouse.py's GAP).
+        l/r are the buttons HELD through it, so a turn is never a click.
+        """
+        left = int(notches)
+        while left:
+            n = max(-7, min(7, left))
+            rr = self.cmd(cmd="mouse", dx=0, dy=0, l=l, r=r, wz=n)
+            self._log.append({"cycles": rr.get("cycles", 0), "kind": "wheel",
+                              "args": {"wz": n, "l": l, "r": r}})
+            left -= n
+            pace(self, gap)
+
     def history(self):
         return self.cmd(cmd="history")["history"]
 

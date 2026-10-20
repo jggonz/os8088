@@ -50,7 +50,8 @@ I_KIND   equ 2                  ; byte: KIND_*; bit 7 = package
 I_TASK   equ 3                  ; byte: task slot (SPEC.md 8), 0xFF = none
 I_WIN    equ 4                  ; word: window record ptr
 I_SPTR   equ 6                  ; word: builtin state ptr / package base
-I_SIZE   equ 8                  ; word: package region bytes; 0 for builtins
+I_SIZE   equ 8                  ; word: package region bytes; 0 for builtins,
+                                ; 0xFFFF for a 64KB region (SPEC.md 20.1.1)
 I_ICO_PKG equ 1                 ; the I_ICON value meaning "in this
                                 ; instance's own region, at LD_HDR_SIZE": 1
                                 ; can never be a real .text body pointer, the
@@ -149,6 +150,7 @@ SSI_TASK   equ 3                ; byte: the task slot, 0xFF = none
 SSI_WIN    equ 4                ; word: OPAQUE - the kernel's own window record
 SSI_SEG    equ 6                ; word: the region's base segment
 SSI_SIZE   equ 8                ; word: region BYTES, 0 for a built-in
+                                ; and 0xFFFF for a 64KB one (SPEC.md 20.1.1)
 SSI_KB     equ 10               ; word: KB this instance holds off the heap -
                                 ; the ONE field filled outside the cli window,
                                 ; and the one that is not the record's own

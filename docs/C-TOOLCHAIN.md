@@ -159,6 +159,10 @@ The `%define`s: `CC_HAS_ONKEY`, `CC_HAS_ONCLICK`, `CC_HAS_ONMOUSEUP`,
 install it with `os88_wm_onwake()`, post it with `os88_wm_wake()` from any
 context, and it runs on the UI task where the file slots are legal, taking the
 lock itself for whatever it draws; `apps/runcpm` is the worked example),
+`CC_HAS_ONWHEEL` (§13.18: `os88_onwheel(notches, win)` - the mouse wheel,
+signed notches positive toward the user, summed since the last UI pass;
+install it with `os88_wm_onwheel()` and scroll `notches * OS88_WHEEL_STEPS`
+lines in one move. `apps/loom` and `apps/weave` are the worked examples),
 `CC_HAS_OVL` (the overlay, below), `CC_HAS_PARTS` (embedded parts, §20.12),
 `CC_STACK_CLASS` (the worker's stack class, an `OS88_STACK_*` from the SDK,
 §8.7), plus `CC_ICON` to name an embedded icon file and `CC_ASSOC` to name an
@@ -297,7 +301,7 @@ void draw(void) { static char tmp[80]; f(tmp); } /* the fix                 */
   that triggers a paint of your second window shares it, and so do your UI
   task and your worker, which pre-empt each other. Own the aliasing
   deliberately or do not share the buffer between the two contexts.
-- **It is spent against the 60KB ceiling** rather than against the stack.
+- **It is spent against the 63.5KB ceiling** rather than against the stack.
 
 ### Rule 2 — no string instructions; ES belongs to the kernel
 
@@ -503,13 +507,13 @@ push-immediate sites, so the first row is not something to expect.
 
 ## What it costs: size
 
-`APP_MAX_SIZE` is **0xF000 = 61,440 bytes** and it bounds the image, the bss
-**and their sum**. `ld_check_hdr` enforces all three on every load and
+`APP_MAX_SIZE` is **0xFE00 = 65,024 bytes** (SPEC.md 20.1.1; it was 61,440)
+and it bounds the image, the bss **and their sum**. `ld_check_hdr` enforces all three on every load and
 `os88pkg.py` on every build.
 
 **A C package meets that ceiling two to four times sooner than an assembly
 one.** Read it as a design input: **a C package is a small package**, and a
-feature that wants the whole 60KB is a feature to write in assembly.
+feature that wants the whole 63.5KB is a feature to write in assembly.
 
 What follows in practice:
 

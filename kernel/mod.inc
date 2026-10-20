@@ -629,8 +629,15 @@ mod_check:
 ; -----------------------------------------------------------------------------
 mod_disarm:
     call mod_fpr                ; DI = the block, CX = its count
-.slot:
-    mov word [di], mod_gone
+    pushf                       ; NO TORN SLOT: a drop can run on a WORKER
+    cli                         ; (inst_task_die -> desk_drop_x) while the UI
+    call .slot                  ; task far-calls a slot with no lock held
+    popf                        ; (cur_shape_pass's DKD_HOVER), and mod_gone's
+    ret                         ; offset in the IMAGE's segment is garbage
+    nop                         ; PARITY PAD, never executed: dsk_xfer,
+                                ; dsk_runcap, dsk_next_clus_x are hot below
+.slot:                          ; a CALLED loop, not a fall-through:
+    mov word [di], mod_gone     ; mod_init_x enters here with its own DI/CX
     COLDSEG_TO word [di+2]      ; mod_gone is .cold's own (ROM-PLAN 3.2)
     add di, 4
     loop .slot

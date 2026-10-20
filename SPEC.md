@@ -3723,6 +3723,17 @@ record is docs/plans/HMA-PLAN.md.
   magic and kind, then a far call with CS = the claim less `TAIL_AT`/16, so
   every label in it is right where it lies - then the claim is freed,
   whatever the answer. A missing file or a refusal leaves `.cold` in RAM.
+  **So the file must fit that claim, and the build refuses one that does
+  not**: at build 1000 the `.text` hash's comparison assembly (a second
+  kernel with another build number, whose differing words are left out of
+  the hash) still used `'999'`, one digit shorter than the About line's
+  real number, so every byte after that string moved and the hash covered
+  almost nothing. Its span list took the file 2,919 -> 8,322 bytes, the
+  read refused, and every 286 and up booted with `.cold` and its HMA
+  drivers in the heap and nothing to say so. `tools/os88rom.py` now gives
+  that assembly the real number's length with every digit changed, and
+  fails over 16 words owned by the build number or a file past
+  `XM_HMAF_KB`.
 - **The install refuses unless** the `.text` hash matches, every listed word
   says `COLD_SEG`, no module is held, and both copies - `.cold` to its own
   offsets, FFFF:`HMA_COLD_AT` up, and the tail behind it - read back. Only then does it write: the `.text`
@@ -3904,7 +3915,7 @@ CWHITE  equ 15
 CLGRAY  equ 7
 CDGRAY  equ 8
 ; loadable programs (§20)
-APP_MAX_SIZE equ 0xF000      ; image + bss budget: 60KB. The ceiling is the
+APP_MAX_SIZE equ 0xFE00      ; image + bss budget: 63.5KB (§20.1.1). The ceiling is the
                              ; SEGMENT - a package links at org 0 and
                              ; addresses itself with 16-bit offsets - and
                              ; what it can ACTUALLY get also depends on
@@ -4504,6 +4515,138 @@ question differently:
 
 One primitive can afford the stricter test because it loses only speed; the
 other cannot, because it loses the picture's format for the session.
+
+#### 5.4.1.5 …and a block the region CUTS walks it, every fragment at the fast path's price
+
+§5.4.1.4 kept the fast path only for a block inside ONE fragment. A block a
+fragment edge crosses still went to `.slow`, a whole `gfx_fill` per coalesced
+run — and that is every repaint of a picture another window partly covers: a
+window dragged across a Paint canvas, a poster, a windowed game's frame.
+Measured on `os8088_xt_vga` with a 200 x 112 dithered poster under a moving
+Disk window, **13,401 ms a heal against 558 uncovered**
+(docs/plans/completed/BLIT4-WALK-PLAN.md 1).
+
+**On `kern_big` a covered `gfx_blit4` walks the region** — §5.4.2.7's walk,
+`gfx_blit1_x.frags`, the third kind of piece in `[gfx_bpfn]` beside a band's
+and a plane's (§5.4.3.6). Each fragment the block meets is one piece, which
+re-enters `gfx_blit4` with the region DISARMED, so it takes the fast path and
+the display decision (§39.14.7.1, §39.14.7.2) exactly as an uncovered blit
+does. The contract does not move: every argument, every register preserved,
+no refusal, no request bit (`OSAPI_GFX_BLIT4` never refuses, so there is no
+caller behaviour a walk could change and nothing to ask for).
+
+- **It is asked ABOVE the display hook**, because `wm_clip_tab` is virtual and
+  so is the x at the door. A call nested in somebody else's whole-shape hook
+  has a display-local x, and keeps `.slow` (no caller nests one today, so the
+  containment test of §5.4.1.4 is `kern_small`'s alone now).
+- **A piece an ODD number of pixels into the block starts on a LOW nibble**,
+  which no source pointer can say — §39.14.7.2 refuses the same cut at a seam.
+  Rounding it outward would draw a column over the window that cut it, so that
+  one column is drawn ALONE, a `gfx_vline` per run of one colour down it, and
+  the rest from the next pixel, even again. That column is ~756 µs a run (§5.7)
+  and every other pixel of the piece is the fast path's. **Measured, every
+  fragment edge a window makes is an EVEN number of pixels off the content
+  grid** (§11.94 puts a frame at 8k − 1, and a frame is even-wide with its
+  shadow), so a block at an even x never meets the column; a block at an ODD
+  x - a game's sprite, Paint's canvas off the byte grid - meets it at every
+  window edge that cuts it.
+- **The walking call leaves past its own teardown** (§5.4.3.6's last defect,
+  one primitive along): the pieces leave `[gfx_blit_fst]` and `[gfx_blit_hk]`
+  as they left them, and a hook nobody here put up must not come down.
+
+**+86 resident bytes on `kern_big`**: `.cold` +90 (`gfx_b4walk` sharing
+`gfx_bpwalk`'s tail, `gfx_b4piece` and its odd column; `.frags` now leaves the
+piece's source row in DI, which it computed anyway and which made it a byte
+shorter), `.text` -4 (the walk's test at the door, less §5.4.1.4's containment
+test, which only a nested call could still reach). Four of those bytes are
+PARITY: the nested test lives in the cold walk so that `gfx_blit4`'s own run
+loop and all of `.text` after it move by an even 4 (PERFORMANCE.md Part 7).
+**`kern_small` is byte-identical** — `.frags` is `kern_big`'s, and the 128 KB
+machine's handful of `gfx_blit4` callers keep §5.4.1.4. `tests/b4walk.py` is
+the gate.
+
+**Measured on MartyPC**, a 200 x 112 block of eight random colours at an ODD
+x under a Disk window moved twice (two fragments, both phases), in guest
+cycles at 4.77 MHz:
+
+| | uncovered | heal 1 | heal 2 |
+|---|---|---|---|
+| `os8088_xt_vga`, before (`.slow`) | 3,539,168 = 742 ms | 83,713,512 = **17,550 ms** | 83,310,816 = 17,466 ms |
+| `os8088_xt_vga`, the walk | 3,533,434 = 741 ms | 2,637,297 = **553 ms** | 5,888,186 = 1,234 ms |
+| `os8088_xt_vga`, the walk and §5.4.1.6 | 3,533,348 = 741 ms | 2,637,589 = 553 ms | 2,771,768 = **581 ms** |
+| `os8088_5150_herc_gla`, the walk | 1,255,042 = 263 ms | 902,493 = 189 ms | 870,436 = 182 ms |
+
+**Heal 2 on VGA was the one number that was not the uncovered price**, and
+it was not the walk's: its second piece is 46 pixels wide, under the 64 below
+which §5.4.1.3 kept a block off the planar decoder, so on dithered art it paid
+the run writer's ~1,800 cycles a pixel. §5.4.1.6 is the answer - a lower floor
+ALONE was measured and refused (it made a flat 40-pixel block of two runs a
+row 2.65x worse), and density is what decides a narrow row now.
+
+**It is NOT `gfx_blitp`'s speed and was never going to be**: `gfx_blit4`
+takes PACKED nibbles and on VGA turns every pixel into four plane bits
+(~107 cycles a pixel), where §5.4.3 copies bytes that are planes already. A
+caller that wants that price hands planes (§5.4.3.6); this makes a covered
+blit cost what the uncovered one does.
+
+#### 5.4.1.6 A NARROW block asks how DENSE its runs are
+
+§5.4.1.3 kept every block under 64 pixels off the planar decoder (*"a narrow
+block is all edge"*), so on VGA a narrow block paid the run writer's ~1,800
+cycles a RUN however detailed it was - a dithered 40-pixel row ~65,000
+cycles, where the decoder takes ~11,000. §5.4.1.5 made that common: a window
+edge cutting a picture leaves narrow pieces, and the one heal there that read
+above the uncovered price (1.67x) was a 46-pixel piece paying it.
+
+**The floor is 16 now, and under 64 the question is density, not count.**
+A decoder row has a fixed cost of ~6,000 cycles whatever it covers, so at
+these widths its break-even is 4.5 to 10 pixels a run. A run COUNT cannot
+find that: a budget of 2 made a flat three-run row 1.84x slower, a budget of
+4 a five-run row 1.46x slower, and either one sent an OUTLINED flat row - a
+one-pixel border, then a long run - to the decoder on the first-run probe.
+What separates detail from flat in a short row is how many pixels its runs
+have spent: a narrow row hands the rest to the decoder when the runs before
+the current one have spent fewer than **4 x runs - 3** pixels - never on one
+run, so an outline pixel stays a run, and a dither at its third.
+
+- **It costs nothing to decide.** Under 64, `W / 32` is 0 or 1, so the probe
+  cannot fire and the budget is reached from the second run: the density
+  test sits behind the budget's own compare, and a wide block passes it with
+  one `cmp`/`jae` once a row and decides exactly as it did.
+- **Under 16 nothing changed**, and that is a measurement boundary rather
+  than a crossover: 16 is the narrowest width measured, where a dither is
+  still 2.2x faster on the decoder. Narrower blocks keep the run writer until
+  somebody measures them - and checks the decoder for a block whose two edges
+  share a byte column, which nothing narrower than 16 has ever asked of it.
+
+**+18 resident bytes** of `.text`, no rung, every hot routine identical at an
+even shift (PERFORMANCE.md Part 7); `kern_small` has no decoder and is
+byte-identical. Measured on `os8088_xt_vga`, cycles a row of a 64-row block
+at an odd x, before -> after:
+
+| block | before | after | |
+|---|---|---|---|
+| dithered, 16 / 24 / 40 / 56 px | 26,648 / 39,313 / 65,177 / 91,156 | 12,142 / 13,200 / 15,038 / 17,005 | **2.2x / 3.0x / 4.3x / 5.4x** |
+| dithered, 40 px, even x | 65,177 | 12,911 | **5.0x** |
+| a sprite (outline, fills, specks), 24 / 40 / 56 px | 15,575 / 28,034 / 38,553 | 14,157 / 16,120 / 15,330 | 1.1x / 1.7x / 2.5x |
+| flat, 2 / 3 / 4 / 5 runs, 40 px | 4,740 / 6,686 / 8,520 / 10,449 | 5,047 / 7,166 / 9,205 / 11,278 | +6% / +7% / +8% / +8% |
+| flat, 6 / 8 runs, 48 px | 12,391 / 16,079 | 13,399 / 17,383 | +8% / +8% |
+| outlined flat, 3 / 4 runs, 40 px | 6,449 / 8,287 | 6,896 / 9,008 | +7% / +9% |
+
+The flat rows' few percent is the hybrid's own per-run test (§5.4.1.3's
+4.2% on a wide block), now paid by narrow ones; every row in the table that
+has detail in it is faster, and none is slower by more than that. A first
+narrow blit of a session also builds `vga_p4build`'s table (~147,000 cycles,
+once), which used to wait for a wide one.
+
+**The decoder draws the same pixels the run writer did**: 44 narrow blocks -
+dithers 16, 17, 23, 33 and 63 wide at all eight x phases, a sprite, a flat
+and an outlined row - were compared on the rendered glass between the two
+kernels and every one is identical. The gate is `tests/b4walk.py`, whose
+second heal's 46-pixel piece went 5,888,186 -> 2,771,768 cycles (1,234 ->
+581 ms, 0.78x the uncovered blit) and whose bound is now the uncovered blit
+itself; `blitplane` holds the wide side. The narrow table above is a scratch
+bench, not a row.
 
 ### 5.4.2 `gfx_blit1` — a band of pixels the caller already composed
 
@@ -14280,6 +14423,33 @@ makes one packet enough — which is worth recording as a near miss: it would
 have hidden the defect rather than fixed it, and a one-port machine would have
 been left broken.
 
+### 9.5.5 …and its LOW NIBBLE is the wheel (`kern_big`)
+
+§9.5.4 made the fourth byte something the phase machine expects. On `kern_big`
+it is also READ: its low nibble is the wheel's movement since the last packet,
+a signed four-bit count, and phase 3 adds it to §10.4's level. Bit 4 is the
+middle button, which §10 still has no record for, so it is dropped as before.
+
+- **Sign extension is two instructions.** `(n xor 8) − 8` maps 0..7 to
+  0..7 and 8..15 to −8..−1. **Positive is the wheel turned toward the user**,
+  which scrolls the view down. That is the convention all four backends are
+  brought to (§10.4).
+- **An unsettled port's fourth byte is dropped,** exactly as `.pkt` drops an
+  unsettled packet. A modem's text has bit 6 clear too, and a byte that could
+  have been one scrolling a window is the same failure as a click it queued.
+  `AH` is still the 0 phase 3 stored, so the test is a register compare.
+- **A Logitech three-button's fourth byte cannot scroll.** It sends that byte
+  only to report the middle button, as `0x20` or `0x00`, so its nibble is
+  always 0.
+- **Nothing is asked of the mouse.** A serial IntelliMouse announces `MZ@` in
+  its identify string (§9.4.1) and sends four-byte packets with no command.
+  There is no knock on this side, and a three-byte mouse pays one compare
+  fewer than before, because its next header still arrives at phase 3 and
+  takes `.b0`.
+
+`kern_small` decodes nothing new. Phase 3 there consumes the byte and returns,
+byte for byte as it did.
+
 ### 9.6 The keyboard mouse — the arrows, when there is no mouse
 
 With no mouse on the machine there is no pointer, and with no pointer there
@@ -15639,10 +15809,11 @@ What is deliberately **not** done:
   reason exactly: the machine answers faster than the user can, and an answer
   stored in a settings file is one more thing to be wrong after the hardware
   moves.
-- **No wheel and no third button.** `0xF4` leaves the device in its 3-byte
-  boot mode; the Z axis needs the `200/100/80` sample-rate knock and a 4-byte
-  packet, and §10 has nowhere to put either. The device ID is banked so that a
-  field report can at least say what was plugged in.
+- **No third button.** The middle button is read and dropped; §10 has no
+  record for it. *(The wheel is §9.9.8's: the `200/100/80` knock and the
+  four-byte packet were "nowhere to put" until §10.4 gave them a level.)* The
+  device ID from the reset is banked so that a field report can at least say
+  what was plugged in.
 - **No hot-plug.** A PS/2 port is not hot-pluggable by design, a mouse pushed
   into a live one usually needs the machine reset before it speaks, and §9.4's
   cycle is a *power* cycle the aux port has no equivalent of. The probe runs
@@ -15810,6 +15981,51 @@ thought. 86Box's `386-ps2` has one too. The machine class this needed is *a
 non-XT whose 8042 has no aux port*, which is what `NOPS2=1`'s own entry in the
 knob table has said since the day it was written, and which nothing in the
 tree can host. It took a field machine, three A/B disks and `MOUDIAG=1`.
+
+#### 9.9.8 The wheel's KNOCK, and the fourth byte it buys
+
+A PS/2 wheel mouse powers up as the three-byte mouse §9.9 drives. It enters
+wheel mode only when it is told to, by the IntelliMouse sequence: sample rate
+200, then 100, then 80 (`0xF3` and the rate, each acknowledged), then `0xF2`.
+The ID that `0xF2` returns is **3** if the knock took, and from then on every
+packet has a FOURTH byte, the signed Z movement.
+
+- **`mou_p2knock` runs inside `mou_p2_init`'s probe window**, after the device
+  reset and before the vector is installed. The keyboard is off and IRQ12 is
+  masked, so 60h is the device's to read. It walks a seven-byte table through
+  `mou_p2dev`, which collects each ACK. On ID 3 it stores 3 in
+  **`[mou_p2wz]`**; every failure leaves that byte 0 and the mouse is the
+  three-byte one it was. `[mou_p2id]` keeps the RESET's answer, which is what
+  §9.4.4 publishes it as. The knock's result is read by symbol.
+- **It is a body of its own, below `mou_p2_init`'s `ret`,** and not inline.
+  Placed inline it would sit inside the span of every `jc .fail` above it, and
+  enough of those relaxed to cost seven bytes the knock itself did not.
+- **The phase after byte 2 is `[mou_p2wz]`,** 0 or 3. That store comes FIRST
+  in `.b2`, ahead of the overflow test, so a packet dropped for overflow
+  (§9.9.3) still consumes its fourth byte. Motion is acted on at byte 2 as
+  before, so the pointer is not a byte later than it was. Phase 3 is a real
+  phase and not a tolerance: byte 3's bit 3 can be set, and bit 3 is the only
+  sync this protocol has. A decoder expecting three bytes from a four-byte
+  device misframes on every packet.
+- **The rate is left at 80** reports a second, the knock's last value. That is
+  20% fewer IRQ12s than the default 100.
+
+**The wake re-arm knocks again** (§96.45.2.2), in `HIBER.DRV`. A power-off
+hibernate brings the device back from POST in three-byte mode, and a DOS
+program's mouse driver may have reset it. A decoder still counting to four on
+a three-byte stream is a pointer gone mad, not one that has lost its wheel. So
+`hbm_wake` sends the same seven bytes and reads every reply itself (the
+keyboard is still off and IRQ12 still masked there), using its own bounded
+`hbm_p2rd` and its own copy of the table, the kernel's having gone with the
+overlay. If the device no longer answers 3, `[mou_p2wz]` goes back to 0.
+Those are module bytes and none of them is resident.
+
+**What it cost the boot overlay.** `.ovl` had two bytes left of its 5,120
+(§2.5.3), and the knock is 39 with its call. `wm_init`, 34 bytes with one
+caller in `kmain_o` and no outbound calls, moved into the blob on `kern_big`
+(`OVSCALL`, `OVBCALL`'s mirror). Reordering its two `rep stosb` runs made the
+closing store `mov [wm_fs], ax` instead of a six-byte immediate. That reorder
+was the byte the blob was short. `kern_small` keeps `wm_init` in `.ovl`.
 
 ### 9.10 Both mouse ISRs run on a stack of THEIR OWN, not the interrupted task's
 
@@ -16144,8 +16360,10 @@ confirmed before it is called a bug rather than a hazard.
   spread across both monitors at ~2×. v86 presents one framebuffer and the
   extended desktop is 86Box's two-card XT, which has no backdoor of any kind,
   so the two cannot meet today. It is written down rather than guarded.
-- **No wheel.** The packet's fourth dword is dropped; os8088 has no scroll
-  event (§10).
+- **The wheel rides the report since §9.12.8.** The packet's fourth dword
+  (EDX, positive toward the user) goes into CL's top six bits in `vmm_rbody`,
+  and `mou_apply`'s tail spends it on both the absolute and the relative arm.
+  QEMU's vmmouse sends it, so `make vmmousetest` can drive it.
 - **The version word is not read back.** `READ_ID` queues one as a side
   effect and `vmm_flush` throws it away. Checking it means a `DATA` read whose
   size can only be guessed, and guessing wrong desyncs the framing and sticks
@@ -16478,8 +16696,10 @@ worker resets the chip itself.
 - **A configuration descriptor is read at most 64 bytes** — the CH375's
   buffer. A composite receiver whose mouse interface is past byte 64 (some
   wireless keyboard-and-mouse dongles) is not found.
-- **No wheel, no middle button, no report-protocol mice.** A mouse that STALLs
-  `SET_PROTOCOL` and sends a report ID first will read as garbage.
+- **No middle button, no report-protocol mice.** A mouse that STALLs
+  `SET_PROTOCOL` and sends a report ID first will read as garbage. The
+  wheel is read when the boot report has a fourth byte (§9.12.8), which is
+  unverified on a Book8088.
 - **A click shorter than one poll can be lost in poll mode**, where the chip
   holds only the last report.
 - **The port is not configurable.** `0x260` is the Book8088's and the lo-tech
@@ -16774,6 +16994,32 @@ and the setting still saved unwanted. The CH375 path never reaches
 `um_release` from detach, which is why the same untick under MartyPC was
 right. `tests/picomem.py`'s mouse leg now asserts BX across attach and
 detach, and goes red with the old order (docs/FIELD-NOTES.md 66).
+
+#### 9.12.8 A driver's WHEEL rides CL's top six bits
+
+`OSAPI_MOUSE_FEED`'s CL carries the buttons in bits 0 and 1. **Bits 2 to 7
+are the wheel**: signed notches since the last report, positive toward the
+user, so `CL = buttons | (notches << 2)`. No new cell was needed, because every
+driver built before this masked CL to its two buttons (`and cl, 3`). An old
+binary therefore reports *no* wheel rather than a wrong one, and the contract
+grows with no `DRV_VER` bump (§20.2.0.1). The kernel decodes it once, in
+`mou_apply`'s shared tail: two `sar`s, §10.4's add, and `and cl, 3`. That is
+also where VMware's absolute arm joins (§9.11), so both backends share the
+same twelve bytes.
+
+**The CH375 reads it from a fourth boot-report byte.** The HID boot protocol
+permits a mouse to send more than three bytes but does not require it. Many
+do send a fourth, and it is the wheel. `um_rdata` already reports the length,
+so a fourth byte is negated into `[um_whl]`: HID counts the wheel positive
+away from the user. `um_report` spends it into CL. A wheel-only report, with
+no motion and no button change, is fed rather than dropped. **This is
+unverified on a Book8088** (§9.12.4) and is for jggonz's machine.
+
+**The PicoMEM carries none.** Its BIOS's `int 33h AX=0060h` report is
+buttons, dx and dy and nothing more. The card firmware's shared IRQ block has
+no wheel field and `IRQCMD_USBMouse` zeroes DH, so `[um_whl]` stays 0 on that
+backend. A wheel there needs a firmware change on the card, and v2 is
+deliberately run on stock firmware.
 
 ### 9.13 A program may TAKE the mouse's IRQ, and a driver takes it back
 
@@ -17114,6 +17360,42 @@ fairness (§7), still open — but it changes what one pass is worth. A user
 hammering a close box under a drawing worker now has each click dispatched as a
 click, so the arm is spent by the release that belongs to it.
 
+### 10.4 The WHEEL is a level, not an event (`kern_big`)
+
+There is no `EVT_` record for the wheel. Every backend ADDS its notches to one
+signed word, **`[mou_whl]`**. The four are the serial `MZ` nibble (§9.5.5),
+the PS/2 Z byte (§9.9.8), and CL's top bits from a driver (§9.12.8), which is
+both the VMware pointer and the CH375. Each also wakes the UI task.
+`ui_task` takes the word with one `xchg` each pass, beside the Alt+Enter
+latch, and hands a non-zero sum to the window a key would reach (§13.18).
+
+**Positive is the wheel turned toward the user**, which scrolls the view down.
+All four wire formats agree on that once the HID one is negated (§9.12.8), and
+Linux brings each to `REL_WHEEL` by the same single negation.
+
+It is a level for three reasons, and the third is why it is not a nicety:
+
+1. **The ring cannot be flooded.** §10.1 drops the OLDEST record when the
+   ring is full, and a fast spin is twenty to forty notches a second at 1200
+   baud. As records, a flick during a slow repaint would evict the click
+   queued before it.
+2. **It costs nothing to read.** `xchg` with memory is one instruction, so no
+   interrupt can land between the read and the clear, and no `pushf`/`cli`
+   is needed. AX is already 0 at that point, so the exchange leaves the zero
+   behind.
+3. **A spin is ONE scroll.** On a 4.77 MHz 8088 a three-line text scroll is a
+   blit plus three 78-cell rows, about 215 ms (PERFORMANCE.md's 71 ms a row).
+   Delivered per notch, a twenty-notch flick is four seconds of scrolling after
+   the hand has stopped. Summed, the window gets one call carrying everything
+   that arrived since the UI task last ran. A sum at least a page tall becomes
+   one repaint, so the lag is capped at one repaint behind however fast the
+   wheel turns.
+
+What a level gives up is ORDER relative to clicks: a notch turned just before
+a click may be applied just after it. A wheel delta has no position, and no
+program can tell. A wheel turned while the UI task is not running (a modal
+drag, a fullscreen bracket) is applied when it next runs.
+
 ## 11. wm.inc — windows
 
 Window record, 26 bytes, fixed offsets:
@@ -17205,7 +17487,8 @@ W_SUEXT  equ W_SIDE+32 ; 4 bytes: the raise cache's band extents (§11.96.11)
 W_WKQ    equ W_SIDE+36 ; byte: WKQ_NONE / WKQ_RING / WKQ_EATEN (§74.1)
 W_PKIND  equ W_SIDE+37 ; byte, KERN_BIG only: adapter kind last sized for
                        ; (§11.100.4)
-WIN_SIZE equ 72  ; on kern_big, 65 on kern_small (which stops at W_WKQ).
+W_ONWH   equ W_SIDE+38 ; KERN_BIG only: the WHEEL handler, 0 = none (§13.18)
+WIN_SIZE equ 74  ; on kern_big, 65 on kern_small (which stops at W_WKQ).
                  ; `apps/os88api.inc` publishes no WIN_SIZE at all: the
                  ; stride differs between the two shipping kernels and no
                  ; package may stride this table. Asserted <= 127, so every
@@ -17219,7 +17502,7 @@ WMIN_H     equ 64
 ```
 
 (WIN_SIZE grew 16 → 18 → 20 → 24 → 26 → 28 → 30 → 34 → 72 (kernel size pass 4
-folded the side tables in; 28 → 65 on kern_small): never a shift idiom, always a true
+folded the side tables in; 28 → 65 on kern_small) → 74 (§13.18's `W_ONWH`, kern_big only): never a shift idiom, always a true
 multiply or `div cl`. The wm_create template stays **16 bytes**:
 {x,y,w,h,title,paint,onkey,onclick} words — everything added since is set by
 the kernel or by an explicit call, never by the template, so every shipped
@@ -27469,10 +27752,8 @@ include adds two things, and a package that does not define it assembles
   the field machine — on an event a human generates, which is why it is an
   opt-in and not `os88ui_bdraw`'s replacement.
 
-**A picture the clip cuts draws its ground and not its ink.** The sprite
-pass clips a shape whole (§25.6), so a half-covered picture would leave its
-rect holding whatever was there before; filling it in the ground colour keeps
-the button a button, and uncovering it is a `W_PAINT` that draws the picture.
+**A picture the clip cuts is drawn as a band** — §13.8.9.1. It drew its
+ground and not its ink until then.
 
 `OS88UI_NOGLYPH` is the matching opt-OUT: the check-box/radio glyph body and
 its two shape routines, ~300 bytes every button user carries, for a package
@@ -27491,6 +27772,44 @@ consumer. Those three are then ignored, and a caption would be read as a
 picture record, so it is a statement about the package and not a per-button
 flag. It refuses to assemble without `OS88UI_BIMG`; every other package is
 byte-identical.
+
+##### 13.8.9.1 A picture the clip cuts is a BAND, not its ground
+
+The sprite pass clips a shape whole (§25.6), so the first version of this body
+filled a cut picture's rect in the ground colour, on the argument that
+*"uncovering it is a `W_PAINT`, which draws the picture"*. That argument only
+covers the uncovering. A button half under another window is redrawn by
+everything ELSE that redraws it — a worker, a key that reaches a background
+window's state, a play that ends and repaints through its clip (`vp_repaint`,
+§98.3.6) — and each of those blanked every picture the window's edge crossed.
+The field saw it in the Video Player (§98.4): a Live play under a Disk window,
+the row drawn right and then flashed blank, over and over, because the wake
+that fed a Live stream repainted the whole window per chunk (§98.3.18.1.1).
+
+**Cut, the picture is put down by `gfx_blit1` instead** (§5.4.2), which walks
+every fragment of the region exactly (§5.4.2.7) — so the part that shows is
+drawn and the part under the window is not, and every pixel of the button is
+still written once. The record's data rows are staged into a 1bpp band in the
+body's own segment, three bytes a row because an x off the byte grid starts
+the band in the byte column holding it (§5.4.2.8), and the pair goes to
+`OSAPI_GFX_BLIT1_PEN`; the pen is put back to the default before returning,
+because it is the package's for the rest of the lock hold. On a 1bpp adapter
+the pen is not read and a lit pixel is WHITE — §25.6's mono rule — so the
+band's bits are the data where the ink is white and its complement where the
+ground is. The picture's full mask is what makes the band the picture: a
+record with a partial mask was always outside `OS88UI_IMG`'s contract.
+
+**Refused, it is still the ground**: `kern_small`'s `gfx_blit1` takes no x off
+the byte grid, and a record wider than a word or taller than 16 is drawn as
+nothing either way. Under the damage cull (§11.3.3) nothing changes, because
+`wm_clip_test` answers overlap there and the picture is drawn whole.
+
+**246 bytes** of image in each `OS88UI_BIMG` carrier (the Video Player, MIDIRack, PiXEL
+and Tracker), none resident. `tests/vidlive.py`'s step 7 is the gate: a Live
+play ends — Repeat off — under a Disk window across the lower half of the
+button row, and each button's visible rows must equal the same rows once the
+window is moved off. The body before this reads 20 of 56 rows wrong on the VGA
+XT; it reads 0.
 
 #### 13.8.10 A button the PACKAGE paints — `OS88UI_BOWN` and `OS88UI_OWN`
 
@@ -28765,6 +29084,30 @@ app and neither was in the count.
 together add ~1.8 KB, and the 360KB apps disk has 95 of its 354 clusters free.
 The kernel's `.cold` rung is the scarce thing, and none of this is in it.
 
+### 13.10.8 The WHEEL — `os88ui_sbwheel` (`%define OS88UI_WHEEL`)
+
+The bar is geometry, not policy (§13.10.1), so it cannot scroll a program on
+the wheel's behalf. A program scrolls itself on a notch the same way it does
+on an arrow click (§13.18). What the library offers is the one piece of
+arithmetic every carrier would otherwise write: **BX → the filled block, AX =
+the notches, CX = ONE LINE of the view** in the block's units (1 for a
+row-unit view, the line height for a pixel one), and
+back comes **AX = the new position**, clamped to `0 .. total − fit`, with
+**CF = 1 when that is the position already there**. A wheel turned against an
+end then draws nothing. It is `os88ui_sbtrack`'s job (§13.10.5) for a
+different gesture: turn a gesture into a `pos` and let the program move.
+
+- **`WHEEL_STEPS` LINES a notch**, three, published in `apps/os88api.inc` as
+  the system's notch. That is the owner's call, against the classic Mac's
+  one, which feels slow. It is lines and not arrow steps because the arrow
+  steps differ: Note Pad's is four rows, so three of them would be twelve.
+- **The position is UNSIGNED.** A pixel-unit view such as TeXpad's preview
+  can pass 32K.
+  The step times the notches is the one signed quantity, and a summed spin is
+  nowhere near 32K of it.
+- **Thirty-nine bytes, in the carriers that ask for it,** and nothing in any
+  package that does not define the knob.
+
 ### 13.13 One word answers "has anything been posted?"
 
 Thirteen of the UI ladder's deferred-work steps are the same shape: a
@@ -29839,6 +30182,122 @@ set before the epilogue survives it.
 `os88ui_radhit` guards its own division: a `PITCH` of zero is a caller's bug and
 `div` answers one with **INT 0**, so five bytes turn a crash into a press that
 does nothing.
+
+### 13.18 A window's WHEEL — `W_ONWH` (API 0x0499, `kern_big`)
+
+`OSAPI_WM_ONWHEEL` installs a near proc for a window, after
+`OSAPI_WM_CREATE`, exactly as `OSAPI_WM_ONRCLICK` does. When the wheel turns,
+`ui_task` calls it with **AX = the signed notches** (positive toward the
+user, which scrolls the view down) and **SI = the window**, in `W_ONKEY`'s
+environment exactly: the UI task, the gfx lock held, billed to the owning
+instance. CX and DX carry nothing. A window with no handler costs one word
+read, and the notches are spent either way.
+
+The record word is **`W_ONWH`, in the kernel-private tail** (§11, after
+`W_PKIND`). No template moved and no `.o88` was rebuilt for it, which is
+§13.11's reasoning to the letter. It cost `MAX_WIN` words, **24 bytes of
+`.bss`**. The cell is an INLINE one (§20.3): `mov [cs:bx+W_ONWH], ax / retf`,
+**flags preserved**. It is six bytes with a WORD displacement, where five
+would do. Every `.text` byte after the jump table moves by the cell's length,
+and an odd shift put `gfx_blit4`, `font_run` and `mou_p2_isr` at the wrong
+parity for the loops they were measured with (`tests/unit/t_hotpar.py`). The
+sixth byte is the pad. On `kern_small`, which has no wheel, the same six bytes
+do nothing, so no package needs a branch for it.
+
+#### 13.18.1 Whose wheel it is — the window a KEY reaches
+
+The wheel goes to **`wm_top`**, with `fdlg_top_x`'s overrides: a modal file
+dialog takes it, and on `kern_big` so does a desk widget that owns the bar.
+It goes there **whatever is under the pointer**. That is §13.11's
+*"frontmost only"* applied with more force. A scroll path BLITS:
+`fm_scrollpaint` and every program's `gfx_scroll` assume the window is
+uncovered, so a background window scrolled in place would smear over the one
+in front of it. This system raises a background window on a click rather than
+passing the click through (§13.11), and the wheel follows suit. If it ever
+passes clicks through, the wheel can follow that too; the window under the
+pointer is already tracked (`[cur_hovw]`, §7.2.1.1).
+
+**The dispatch IS the key's.** The wheel's arm loads `DI = W_ONWH` and joins
+the key path at `.kdisp`, where a key loads `DI = W_ONKEY`, and the shared
+tail reads `[bx + di]`. The lock, the target, the billing and the unlock are
+the same eleven instructions for both. That sharing is most of why the
+consumer is thirteen bytes.
+
+#### 13.18.2 What a program does with it
+
+**One call, however many notches.** Scroll by `AX × WHEEL_STEPS` LINES in
+ONE move and repaint once (§10.4's reason 3). A program with a
+shared bar fills its block and asks `os88ui_sbwheel` (§13.10.8) for the new
+position. With that position in AX it takes the path its arrow click already
+takes: move the view, redraw what moved, move the thumb.
+
+#### 13.18.3 The Disk window scrolls with no program involved
+
+Its `W_ONWH` is a kernel proc, `fm_onwheel_x`, stored by `fm_kinit_x` when the
+window opens. It is `fm_onkey_x`'s own `.scr_move` entered with its own count:
+**the view moves and the selection does not**, which is the arrow keys'
+`.selmove` (§22.26) and the one thing skipped. It moves **three rows a notch
+in the list and one in the icon grid**, where a row is an icon cell about three
+list rows tall. A window being NAMED swallows the wheel as it swallows every
+key, because the editor's box is drawn at its row. The Standard File chooser
+is a Disk window (§38.1), so it scrolls too.
+
+#### 13.18.4 What it cost
+
+| | `kern_big` |
+|---|---|
+| `.text` (both serial and PS/2 decodes, the driver decode, the level's add, the consumer, the cell) | **+70** |
+| `.bss` (`[mou_whl]`, and `W_ONWH` × 12) | **+26** |
+| `.cold` (`fm_onwheel_x` and its install) | **+37** |
+| `.boot2` (`wm_init`, moved, §9.9.8) | +33 |
+| `.ovl` (the knock, against `wm_init` leaving) | +0 |
+| `HIBER.DRV`, an on-demand module (the wake's knock) | module bytes only |
+
+That is **133 resident bytes** on `kern_big`, with no footprint rung crossed.
+`kern_small` pays the cell's six bytes of `.text`, because the jump table is
+one ABI on both kernels. The parity of every hot routine is where it was:
+the cell's sixth byte, a one-byte-shorter phase reset in `mou_p2_byte`, and
+`[mou_p2wz]` moved in front of `cur_move` together cost no byte.
+
+#### 13.18.5 Who carries one, and what it cost them
+
+Every program with the shared bar (§13.10.6), and three without it. Each
+handler moves the view through the path its own arrows or keys already take,
+and none is a second scroll routine. The bytes are package image, never
+resident.
+
+| program | what the wheel scrolls | the path it reuses | image |
+|---|---|---|---|
+| Note Pad | the note | `np_sbclick`'s `.set`, which carries the line count on past a LOWER BOUND (§27.7.4) | +39; none in the `APP_SMALL` build |
+| Word, Scribe | the document, in rows | `xx_sbclick.set`, the same reason; ignored under a dialog, menu, combo list or live thumb drag | +91, +82 |
+| Browser | the page | `br_advance` + `br_flush`, `br_scroll_by`'s two halves without its coalesce, which would leave a summed turn undrawn | +29 |
+| The Wire | the catalog view, not the selection | `wr_scroll`, the bar arrows' | +33 |
+| Frotz | the scrollback | `zw_scrollto`, the bar arrows' | +44 |
+| Sheet | the grid's rows; the Paste list | `sh_setscrollrow`; `sh_ldlg_paint` | +143 |
+| Task Manager | the heap list, on that page only | `tm_hscroll`'s `.set` and `tm_hclamp` | +41; none small |
+| MIDI Rack | the playlist | `mr_scroll`'s `.clamp` | +68 |
+| TeXpad | the pane UNDER THE POINTER (`OSAPI_MOUSE`), else the focused one | `tp_src_scroll` / `tp_prev_scroll` through `os88ui_sbwheel` | +198 |
+| Redline | the pane under the pointer on the Summary tab, else the view's own | `ru_spto`, `bl_top` | +176 |
+| Artful | the editor's text (a hand-rolled bar, §13.10) | `at_scroll_to` | +53 |
+| Loom (C) | the editor | `lm_view_to` + `lm_ed_paint` | +178 |
+| Weave (C) | the `<list>` under the pointer, else the first | `w_lscroll` | +312 |
+
+**The C SDK** carries it as `CC_HAS_ONWHEEL`: `os88_onwheel(notches, win)`
+(the window LAST, as every SDK callback has it), installed by
+`os88_wm_onwheel()`, with `OS88_WHEEL_STEPS` beside it (docs/C-TOOLCHAIN.md).
+A package that does not define it is byte-identical.
+
+**The gates** are `soak -k wheel` (MartyPC, the serial `MZ` byte through
+`tools/martypc/patches/15-serial-mouse-wheel.patch`: the Disk window and Note
+Pad) and `soak -k wheelps2` (QEMU, the PS/2 knock, the Z byte and the level).
+`tools/mouse.py wheel N` drives QEMU's and `tools/os88mouse.py ADDR wheel N`
+MartyPC's. Neither row is the per-program table above; those handlers are
+covered by assembling and by the rows of the programs themselves.
+
+**Not done.** The CH375's wheel (§9.12.8) is unverified on a Book8088. The
+PicoMEM carries none, by its firmware. `kern_small` has no wheel at all, by
+the owner's decision: it has no thumb drag either, and a 128KB machine is
+not where a wheel mouse lives. The middle button is still dropped (§10).
 
 ## 14. apps.inc
 
@@ -34568,7 +35027,7 @@ listing until I exited and re-entered DOS.O88."*
 
 §18.9.1's predicate is real and is correct. It is in `dsk_here_ok`, which
 `dsk_chdir_q` asks — the path the **Disk window** takes. `OSAPI_FILE_GOTO_QM`,
-which is the path every **package** takes, goes to `fcp_goto`, and its
+which is the path every **package** takes, goes to `dsk_goto`, and its
 same-volume arm was:
 
 ```
@@ -34588,7 +35047,7 @@ the program is one such thing, which is why that appeared to be the cure.
 It is measured rather than reasoned. With the same disk in B: and the box
 standing on it, three consecutive `DIR`s four seconds apart — longer than the
 2.03-second motor timeout — cost **`reads=0 read_sectors=0 seeks=0`** each,
-while listing thirty files. Breakpoints say why: `fcp_goto` is HIT, `dsk_xfer`
+while listing thirty files. Breakpoints say why: `dsk_goto` is HIT, `dsk_xfer`
 is HIT, and **`dsk_chdir_q`, `dsk_here_ok` and `dsk_bpb_sig` are never
 reached**. The transfer happens and the cache answers it.
 
@@ -34599,12 +35058,12 @@ re-signs LBA 0.
 **So the predicate is split rather than duplicated.** `dsk_media_ok` is
 §18.9.1's second half on its own — *can the medium under this mounted volume
 have changed?* — and `dsk_here_ok` is the identity compare plus a tail jump
-into it, which is what it always was with the two halves named. `fcp_goto`'s
+into it, which is what it always was with the two halves named. `dsk_goto`'s
 same-volume arm asks the media half and falls to `.full` when the answer is
 *maybe*.
 
 **It asks the media half ONLY, and that distinction is the whole design.**
-`dsk_here_ok` also requires the *directory* to be unchanged, and `fcp_goto`
+`dsk_here_ok` also requires the *directory* to be unchanged, and `dsk_goto`
 must not: moving between folders inside one mounted volume with no I/O is
 precisely what it is for, and what makes `OSAPI_FILE_PATH`'s walk cost one
 mount and then nothing. What it may not do is move between folders of a disk
@@ -35487,7 +35946,8 @@ every cluster, which is exactly the bug `fcp_clspan` exists to prevent and
 which only showed up when partitions stopped all having 512-byte clusters.
 
 **The read is STATELESS and the offset is the whole argument.** `fcp_rdnext`
-resumes through `[dsk_chain_end]` and three module words, which is right for
+resumed through `[dsk_chain_end]` and three module words (it still does on
+`kern_small`; on `kern_big` it is `READ_SEQ` now, §22.5.4), which is right for
 a caller that is the only thing running and wrong for a published slot: the
 loop this exists for is *read → write → read*, and the write walks
 directories and the FAT. A resume token living in the kernel would be
@@ -37752,13 +38212,13 @@ drive on the 5.25" adapter's external 37-pin connector is an
 **80-cylinder drive on a ROM that answers no questions about it**, so
 `AH=08h` refuses, the probe reads a 360KB machine, and the only 720KB disk
 the machine can make is one it will not offer. §22.12's confirmation
-therefore carries a **Space** key that offers the other row with the same
-media sectors-per-track. That pair exists for 9-sector media alone — rows 2
-and 3 — so "the other row with the same spt" *is* the 720KB/360KB toggle and
-nothing else: it can never offer 1.44MB on 720-sector media, which is
-§18.96.1's disaster case made unreachable by construction rather than
-guarded against. Rows 0 and 1 have no partner and the line does not name a
-key that would do nothing (§47).
+therefore carries a **Space** key that offers the other format the drive
+makes — on a 9-sector drive that is the 720KB/360KB toggle, offered on the
+external units alone (§18.96.2). §18.96.4 widened it to the HD drives, where
+the pair is 1.44MB/720KB or 1.2MB/360KB, and it is still a pair the DRIVE
+names: no read can put a row the drive does not make on the line. A drive
+with one format has no other and the line does not name a key that would do
+nothing (§47).
 
 This is an **assertion about hardware**, not a probe, and it is the same
 assertion DOS took at face value from `DRIVER.SYS /d:2 /t:80 /s:9`. The
@@ -37877,7 +38337,9 @@ written past cylinder 39 is not a thing to ship on the grounds that it can be
 reformatted afterwards.)
 
 So `dskw_fmt_reach` runs after a successful `dskw_format` of **row 2**, the
-only row the toggle can produce that a 40-cylinder drive cannot hold. It
+only row the toggle can produce that a 40-cylinder drive cannot hold (and
+since §18.96.4 after every format, with this fallback kept for row 2 where
+360KB is the drive's other format). It
 writes a marker to the volume's **last** sector, re-zeroes the buffer, reads
 that sector back and compares. Four things about it:
 
@@ -37909,15 +38371,16 @@ that sector back and compares. Four things about it:
   clock's 25-cell field; the OUTCOME is the half a user has to act on, since
   what they are now holding is a 360KB disk). Stopping would leave them with
   a disk that is neither.
-- **And the key is offered on units 2 and 3 ONLY** (`fm_fmt_sizeable`). The
+- **And on a 9-sector drive the key is offered on units 2 and 3 ONLY**
+  (the probe's `AH`, §18.96.4; it was `fm_fmt_sizeable`). The
   toggle exists because `AH=08h` is refused and the drive cannot be asked how
   many cylinders it has — but that ignorance is only *actionable* on a drive
   the operator may have changed. Units 0 and 1 are the machine's own internal
   drives, and offering a 720KB volume on the 5150's Tandon is offering
   something the reach test will only take away again; units 2 and 3 are
   §18.98's external pair, which is exactly where an 80-cylinder 3.5" drive
-  turns up. One predicate serves the line and the key, so what is named and
-  what is accepted cannot disagree — §47 rule 2's shape.
+  turns up. One byte, `[fm_fmtalt]`, serves the line and the key, so what is
+  named and what is accepted cannot disagree — §47 rule 2's shape.
 
 The cost on the honest path is **two `int 13h` calls**, once per 720KB
 format, against a format that is already 7 writes and a remount.
@@ -37972,6 +38435,61 @@ left for when a disk that formats and then fails turns up.
 lays those tracks over the last one it can reach; the reach test fails, and
 the fallback re-formats as 360KB — fully, so the track the stop overwrote is
 laid down again correctly.
+
+#### 18.96.4 A read is evidence, not a verdict — the drive names the sizes
+
+Field report, 2026-10-18: a **bulk-erased 1.44MB disk in a 1.44MB drive** was
+offered `1200K`, erased again and offered `720K`, erased a third time and
+offered `1440K`. The descent takes the FIRST read that succeeds, and a read of
+magnetic noise sometimes does — an erased surface has no address marks, but a
+controller that is hunting for one in noise can find one. Which rung of 18,
+15, 9 the noise answered on was the whole decision, so the size was a roll of
+the dice. §18.96.1's rule that a test must be a read *succeeding* still
+stands; what is wrong is letting a success be the only word.
+
+So **the drive names the sizes and the read picks the default.**
+`dskw_fmt_probe_x` returns AL = the default row and **AH = the other row this
+drive makes, or 0FFh**, and `[fm_fmtalt]` banks it beside `[fm_fmtrow]`.
+§22.12's Space swaps the two bytes, and the key line names `Spc=size` exactly
+when `[fm_fmtalt]` is not 0FFh:
+
+| the drive (BL, else CL/CH) | default | the other |
+|---|---|---|
+| 18 sectors or more — 1.44MB, 2.88MB | 1.44MB | 720KB |
+| 15 sectors — 1.2MB | 1.2MB | 360KB |
+| 9 sectors over 80 cylinders — 720KB | 720KB | 360KB on units 2, 3 |
+| 9 sectors over 40, or no answer — 360KB | 360KB | 720KB on units 2, 3 |
+
+A 9-sector read (rows 2 and 3 read the same sector, so it is always the walk's
+row 2) picks the pair's 9-sector row — 720KB in a 1.44MB drive, 360KB in a
+1.2MB one, what a readable disk got before. An 18- or 15-sector read, or
+nothing at all, picks the drive's largest; a 15-sector read in an 18-sector
+drive is the noise above and lands there too. So the field's three erasures
+now read **1440K, 720K, 1440K**, and every one of them is one Space away from
+the other.
+
+**BL is asked before CL.** An AT-class ROM may answer `AH=08h`'s CL/CH for
+the media it last *established* rather than for the drive, and what it
+establishes on a blank disk is wherever its data-rate retries stopped. BL is
+the CMOS drive type (1 = 360K, 2 = 1.2M, 3 = 720K, 4 = 1.44M, 5/6 = 2.88M),
+does not move with the medium, and maps straight to the row the drive makes
+at its largest (`dskw_fmt_btab`). BL is zeroed before the call, so a ROM that
+reports no type leaves 0 and the probe falls to CL/CH as before; §26.4.1's
+boot-time picture still reads CL, because at boot no medium is established.
+
+**Every format is now checked by §18.96.2's last-sector write-and-read**, not
+720KB alone: Space can pick a size the read argued against — 1.44MB over a
+9-sector read is a DD disk in an HD drive as often as it is noise — and a
+format that cannot write and read back its own last sector is reported
+(`FERR_IO`) rather than mounted. 720KB still falls back to 360KB where 360KB
+is the drive's other format; an HD drive's 720KB that fails is a bad disk.
+Two `int 13h` calls against a format that is ~80 seconds of tracks.
+
+What it costs, measured against the commit before it on both kernels:
+`.text` +0, `.cold` **−2**, `.bss` **+1** (`[fm_fmtalt]`) — `fm_fmt_sizeable`
+is gone, the key and the line both reading the byte now, and that pays for
+the reach test's wider gate — and **+43 bytes of `FORMAT.DRV`**, an
+on-demand module, so none of those are resident.
 
 ### 18.97 The equipment word is a CLAIM; the FDC is the fact
 
@@ -38935,7 +39453,7 @@ directory read each way.
 KEYSTROKE between the dialog that chose the file and the Enter that reads it —
 the UI mounts what it likes in between. The bank therefore records `CL_FCLUS`
 as well, `clo_fend` re-aims the word, and `clo_imgrun` re-establishes the whole
-thing once before the first chunk through **`fcp_goto`** — free when the volume
+thing once before the first chunk through **`dsk_goto`** — free when the volume
 has not moved (it sets `[dsk_cwd]` and returns), a real remount when it has,
 which is what makes the global listing snapshot describe the file's volume
 again. Without it the name is looked up in whatever directory the UI last
@@ -39291,7 +39809,9 @@ up), with a desktop zone of its own; **double-click it again and it is
 unmounted.** Every file feature works on the drive unchanged - the Disk
 window, the file dialog, copy, delete, New Folder, launching a package -
 because the image is a volume like any other and only the transfer knows
-otherwise. Several can be mounted at once, one per free row. `kern_big` only:
+otherwise. Several can be mounted at once, one per free row, and the
+installer takes a mounted system or apps disk image for the floppy it is
+(§52.10.17). `kern_big` only:
 `OS88_IMG`, which kern_small and kern_dos do not define, so both assemble
 byte-identical to the tree before it. docs/plans/completed/MOUNT-IMG-PLAN.md
 is the design record, including why this is a SECTOR feature and not a
@@ -39366,7 +39886,7 @@ walks the rows from 3 (an image is never C:) and sets byte 0 of every
 `DRVC_IMG` claim naming the freed index to `0xFF`, which no row is: the image's next transfer fails at the inner
 `dsk_vol_row_x`, *Disk error* and never a sector, and Unmount Image still
 takes the row and the claim through its *file not where it was* path
-(§18.101.2) - `fcp_goto` on `0xFF` fails the way a free row's does.
+(§18.101.2) - `dsk_goto` on `0xFF` fails the way a free row's does.
 
 **Coherence with §18.95.** Image reads skip the cache, because `[dsk_vkind]` is
 the image mount's `DVK_DRV`. Every piece calls `dsk_rah_wr` with the host
@@ -39395,7 +39915,7 @@ buffer an armed Write Img (§18.99.8) or a join reopens its file by on every
 chunk: a mount while the prompt is up would have written ANOTHER image onto
 the disk with the first one's geometry.
 
-`clo_mount` works in the CLICKED WINDOW's folder (`fcp_goto` on its `FS_DRV`
+`clo_mount` works in the CLICKED WINDOW's folder (`dsk_goto` on its `FS_DRV`
 and `FS_CWD`, since the listing that was clicked need not be the mounted one)
 and stats the file. Then:
 
@@ -39419,7 +39939,7 @@ and stats the file. Then:
 5. **The row.** `dsk_vol_add` with `[dsk_vcls]` = `DRVC_IMG`, the five-letter
    label and `DV_SECS` = the sector count, then the claim's segment into
    `IMG_DVSEG`. No row free is `No drive letter free`.
-6. **Proved by mounting it.** `fcp_goto` on the new volume's root runs
+6. **Proved by mounting it.** `dsk_goto` on the new volume's root runs
    `disk_mount` through the image arm; a refusal takes the row back and frees
    the claim, and the answer is `Not a disk image`. The host is then made
    current again and the file MARKED (§18.101.3), and the toast is
@@ -39546,7 +40066,7 @@ first built an image row answered every medium question as the `DVK_DRV` row
 it is - fixed - and on a floppy host that was a write to the wrong disk: its
 BPB was banked for good (§18.9.2), so no mount of it read its boot sector
 again and §18.8.1's signature never ran; `dsk_media_ok` called it not
-removable, so `fcp_goto` never re-mounted it; and the run table sent its
+removable, so `dsk_goto` never re-mounted it; and the run table sent its
 writes to the image's old host LBAs on whatever floppy was now in the drive,
 every call answering CF = 0. Swap B: under a mounted `B:\GAMES.IMG`, save to
 D:, and an unrelated disk was silently overwritten. Floppy hosts are kept -
@@ -40159,12 +40679,12 @@ for an app that is about to *show* a folder and wrong for every copy loop
 ever written, which stands somewhere only to read or write **by name**.
 
 `OSAPI_FILE_GOTO_Q` (slot 0x029E) is the same move with none of that. It is
-`fcp_goto`'s two paths, which the kernel's own copy engine has had since
+`dsk_goto`'s two paths, which the kernel's own copy engine has had since
 §22.5, published because a copy engine *outside* the kernel needs them just
-as much — **and it is now `fcp_goto`, not a second transcription of it.** The
+as much — **and it is now `dsk_goto`, not a second transcription of it.** The
 slot held a copy of that body in `.text`, and the two had drifted apart in
-both directions: this one had the `[dsk_mntok]` gate and `fcp_goto` did not;
-`fcp_goto` had the `DVK_FILE` arm and this one did not. Merging them is 42
+both directions: this one had the `[dsk_mntok]` gate and `dsk_goto` did not;
+`dsk_goto` had the `DVK_FILE` arm and this one did not. Merging them is 42
 bytes out of the scarce section for 7 back on the cold side, and it fixes
 each half against the other:
 
@@ -40178,7 +40698,7 @@ each half against the other:
   re-read either.
 
 The cluster is range-checked at the slot, because the quiet path skips
-`disk_mount`'s own `.cwd_lost` validation. That is `fcp_goto`'s reason and
+`disk_mount`'s own `.cwd_lost` validation. That is `dsk_goto`'s reason and
 the same two compares.
 
 **`[dsk_mntok]` is asked FIRST, and the word path is wrong without it.**
@@ -40200,7 +40720,7 @@ did not have. A `DRVC_FILE` driver keeps its own idea of where it stands — it
 has to, because `FSV_STAT` resolves a name in the *current* folder (§62.9.1) —
 so writing `[dsk_cwd]` behind its back left the two disagreeing, and every
 name the caller then asked about was looked up in the folder it came FROM. It
-presented as `FERR_NOENT` for a file that is plainly listed. `fcp_goto` has
+presented as `FERR_NOENT` for a file that is plainly listed. `dsk_goto` has
 had the `FSV_CHDIR` arm since the copy engine met the same bug from the other
 side; the slot inherits it with the merge. The range checks stay behind on
 that arm, because the word is an **opaque handle** and not a cluster: `>= 2`
@@ -40215,9 +40735,9 @@ and unchanged on every other. The three published users — FTPD (§77), the
 hard-disk installer (§52.10) and RunCPM's folder-as-drive (§74.3) — are told
 in `apps/os88api.inc`, beside the slot.
 
-**And `fcp_goto` gains the `[dsk_mntok]` gate**, which is the merge's other
-direction and reaches `DISKOPS.DRV`: `fcp_goto` is published to it as
-`fcpf_fcp_goto` (§18.99.8), so a shipped `.DRV` sees the gate without being
+**And `dsk_goto` gains the `[dsk_mntok]` gate**, which is the merge's other
+direction and reaches `DISKOPS.DRV`: `dsk_goto` is published to it as
+`dskf_dsk_goto` (§18.99.8), so a shipped `.DRV` sees the gate without being
 rebuilt. That is the right way round — the gate refuses a stand that would
 have answered CF = 0 having done nothing.
 
@@ -40781,11 +41301,23 @@ one DOS 2.x reads.
 recipe that loses the flag fails the fast tier rather than shipping a fuller
 disk. `autostart360.img` takes the flag too, being this disk plus four files.
 
-### 19.4 The listing is sorted by name, in the mount
+### 19.4 The listing is sorted folders first, then by name, in the mount
 
-`disk_dir` comes out of `disk_mount` in **ascending display-name order**,
-not the order the entries happen to sit in on the disk. `dsk_sortdir` is a
-selection sort over the accepted entries, run at the end of the scan.
+`disk_dir` comes out of `disk_mount` with **every folder (type 2) ahead of
+every file, each group in ascending display-name order** — not the order the
+entries happen to sit in on the disk. `dsk_sortdir` is a selection sort over
+the accepted entries, run at the end of the scan.
+
+**Folders first is one key in front of the name compare, and it is 12 bytes**
+on either kernel. Bit 1 of the type word (§19.1) is set for type 2 and clear
+for 0 and 1, and type 3 never enters the sort, so that bit IS the folder
+test: the two entries' bits are masked and compared before the name, with
+the operands reversed so a folder reads as the smaller. A package (type 1)
+deliberately shares the files' key — the user sorts *things to open* from
+*places to go*, and a `.O88` is the former. The compare is 15 bytes and three
+are paid back in the routine's own prologue (the stride as `mul`'s immediate,
+one `xchg` for a `mov`), which also keeps every hot routine behind it on an
+even shift (`tests/unit/t_hotpar.py`).
 
 **It is done here and not in the file manager**, and that is the whole
 point: the Disk window, the Standard File dialog (§38), every per-window
@@ -41166,6 +41698,18 @@ enumerate one folder and open its files from another.
 
 The answer is 24 bytes, and the **size is 32-bit** where the listing's is
 clamped to a word (§19) — a copy cannot work from a truncated length.
+
+**On `kern_big` the walk is `dsk_dscan`, shared with the copy engine's
+`fcp_scan` (§22.5).** One routine takes a starting slot and a count of live
+entries to step over, and answers the entry with `dsk_ent` staged and where
+to start next: `dsk_find` asks it for (slot 0, the ordinal) and `fcp_scan`
+for (its frame's slot, 0), so each keeps its own I/O shape - `dsk_find` still
+walks from the front, `fcp_scan` still reads the one sector holding its slot
+- and the `FSV_ENUM` arm for a redirected volume is in it once. It answers
+`FERR_NOENT` at the end, which is this cell's own word. `kern_small` and
+`kern_dos` keep `dsk_find`'s own walk: on `kern_small` the shared routine
+would be RESIDENT while the scan it replaces is in `FILECP.DRV`, and
+`kern_dos` has no copy engine to share with.
 
 ### 19.6.2 …and it stamped three bits while forgiving two
 
@@ -41619,14 +42163,49 @@ shared with every task, so `[bp+disp]` still addresses SS and a BP-held
 data pointer still needs a `ds:` override. §1's hard rules still apply
 (cpu 8086, register discipline, no bare `sti` in handlers).
 
-Budget: image + zeroed bss ≤ `APP_MAX_SIZE` (0xF000 = 60KB). The ceiling is
-the **segment** — 16-bit offsets from `org 0` — not a pool; what a package can
-actually get also depends on what the heap has contiguous, and a refusal
-there is `LD_ENOMEM` like any other. Multiple package instances
+Budget: image + zeroed bss ≤ `APP_MAX_SIZE` (0xFE00 = 65,024 = 63.5KB). The
+ceiling is the **segment** — 16-bit offsets from `org 0` — not a pool; what a
+package can actually get also depends on what the heap has contiguous, and a
+refusal there is `LD_ENOMEM` like any other. Multiple package instances
 can be resident at once, including two of the same package: each is its own
 copy in its own segment with its own bss, so package state (equ offsets from
 `os88_image_end`) is per-instance automatically. Closing an instance frees
 its region (§29.2 rule 7) and every heap claim it held (§50.2).
+
+#### 20.1.1 Why 65,024 and not 65,536 — and why it was 61,440
+
+**61,440 was the POOL, not the segment.** `APP_MAX_SIZE` was `0xF000` because
+`PKG_SEG` was 60KB; when the pool was deleted the constant stayed, and its
+comment was rewritten to say the ceiling was the segment — which explains a
+64KB limit and not a 60KB one. Nothing in the tree depended on the 4KB
+between them except two 16-bit roundings that `0xF000` happened to keep clear
+of, and those are what set the real number:
+
+1. **The region is `roundup512(image + bss)`** in sixteen bits (§21 step 4),
+   and the largest multiple of 512 a word holds is `0xFE00`. That is the
+   ceiling, and it is exact: `0xFE00 + 511` is `0xFFFF`, so neither of
+   `ld_alloc`'s adds nor `cmz_pkg`'s can carry. §20.12's `OP_PARTMAX` is the
+   same figure for the same reason, which is why Word's carve already ran to
+   65,024 (§68.10).
+2. **The heap's unit is the kilobyte**, so a region over 63KB is a **64KB
+   claim**, and two words that held a KB count as bytes wrapped there.
+   `mem_bytes_kb_x` was `add ax, 1023 / shr` and answered **0 KB** for every
+   input from 64,513 up; it is `dec ax / shr / inc ax` now — ceil for every
+   input ≥ 1, which its banner already required, and a byte shorter. And
+   `ld_alloc`'s `I_SIZE = KB << 10` is 65,536 for 64KB, which is **0** in a
+   word — and `I_SIZE = 0` is how `instance.inc` tells a BUILT-IN, so a
+   63.5KB package would have been swept as one. It **saturates** instead:
+   `sbb ax, 0` after the shift takes the bit that fell out, so a 64KB region
+   reads `0xFFFF`. Both readers of it as a bound (`inst_pkg_fence`, §53.1's
+   hook fence) compare `< I_SIZE`, so the only offset the saturation refuses
+   is `0xFFFF`, which `image + bss ≤ 0xFE00` already did.
+
+What the last 512 bytes cost a package is the KB granularity, and it is worth
+knowing before reaching for them: **63KB + 1 byte is a 64KB claim**, the same
+as 63.5KB. What they cost the kernel is **3 bytes of `.cold`, resident**:
+the `sbb`, with the byte `mem_bytes_kb_x` gave back spent on a parity pad
+behind it, because the hot disk routines that follow it in `.cold` must not
+move by an odd amount (`tests/unit/t_hotpar.py`).
 
 **What owning a segment costs, and what it retires.** It retires the whole
 v2 relocation machinery — the dual assembly, the diff scan, the byte-exact
@@ -41892,7 +42471,9 @@ appended after main's at the `elendilon -> main` merge that met them at the
 same tail: `OSAPI_MEM_HMA` (§2.10.8) at `0x0487`, a 103rd rare cell, and
 `OSAPI_WM_QUIET` (§79.10) at `0x048D`, a 104th - **1,155 bytes**,
 which is what `kernel.asm`'s length guard asserts from the counts.
-`osapi_table_end` is `0x0493`.
+`OSAPI_ASSOC_FLUSH` (§54.7.6, at `0x0493`) is a 105th rare cell, 1,161, and
+`OSAPI_WM_ONWHEEL` (§13.18, at `0x0499`) a seventeenth INLINE cell, of six
+for parity, **1,167 bytes**. `osapi_table_end` is `0x049F`.
 Those counts are the tree it landed on, not a contract; `t_api_abi` prints
 the span it walked.
 
@@ -44992,7 +45573,7 @@ arm's own.
 
 1. the `add`'s **carry** on `image + bss` — each operand is a 16-bit header
    field and the sum is 17 bits;
-2. **`APP_MAX_SIZE`**, the same 60KB ceiling every other package has. `ld_check_hdr`
+2. **`APP_MAX_SIZE`**, the same 63.5KB ceiling every other package has. `ld_check_hdr`
    applies it to a *file* and this path never goes near it, so without a shared
    body a re-homed program would be bounded by a 16-bit word and nothing else —
    a silent divergence between two ways of starting the same kind of program,
@@ -47122,8 +47703,8 @@ catches a swap is re-running this routine on what the *full read* delivered,
 not the staged copy. Checks: magic; **version = 10** (`PKG_FMT` - a file
 built for another API table, or a v1 or v2 file → "Bad package", §20.2.0); link base = 0; image ≥ 0x20; entry in [0x20, image) (the icon
 rule is enforced by os88pkg, not re-checked); **image+bss ≤ APP_MAX_SIZE,
-fenced on the CARRY**, because both operands are separately bounded at
-0xF000 and their sum reaches 0x1E000, which is seventeen bits (`add dx, ax /
+fenced on the CARRY**, because each operand is a 16-bit header field and
+their sum can pass 0xFFFF, which is seventeen bits (`add dx, ax /
 jc` — see §21's write bound, and `tests/pkgfence.py`); image = file size (guards truncated files and stale
 directories — sound because FAT directory sizes are byte-exact and
 os88disk.py never pads the size field, §24; cluster slack on disk is
@@ -47204,7 +47785,7 @@ on entry. Steps:
 3. `ld_check_hdr` on the peek → status 2/3.
 4. need = roundup512(image + bss). **No second bound test**: `ld_check_hdr`
    has already fenced `image + bss` at APP_MAX_SIZE *on the carry*, so this
-   value is at most 0xF000 by construction and the `> APP_MAX_SIZE → status
+   value is at most 0xFE00 by construction and the `> APP_MAX_SIZE → status
    3` that used to sit here was code that could not run. The `max` with the
    file size went when a package became allowed to be **bigger than its
    image** (§20.12): the region holds the primary segment and the parts are
@@ -48824,12 +49405,12 @@ Spc=size  Enter=yes  Esc=no
 
 which is the one place the user can catch §18.96's undecidable case before it
 costs them anything — and, with **Space**, the one place they can overrule
-it. Space offers the other row with the same media sectors-per-track, which
-is the 720KB/360KB pair and only ever that (§18.96); the size on the line is
-`[fm_fmtrow]`'s, so the toggle is `xor byte [fm_fmtrow], 1` and the redraw is
+it. Space offers the other format the drive makes (§18.96.4) — 1.44MB/720KB,
+1.2MB/360KB, or 720KB/360KB on an external unit; the size on the line is
+`[fm_fmtrow]`'s, so the toggle swaps it with `[fm_fmtalt]` and the redraw is
 `.lineonly` — the same one-status-line path a typed rename character already
-takes. Rows 0 and 1 have no partner, so Space keeps meaning *no* there and
-the second line drops `Spc=size` with it.
+takes. A drive with one format has `[fm_fmtalt]` = 0FFh, so Space keeps
+meaning *no* there and the second line drops `Spc=size` with it.
 
 **Escape has to repaint the WINDOW, not the status line.** `.cancel` ends in
 `.lineonly` — CF = 0, "the status line is all that moved" — and that is right
@@ -49422,7 +50003,7 @@ Four things hold the engine up:
   costs FAT lookups out of the RAM snapshot plus one sector read, because
   `dsk_dirw_next` only computes LBAs. Deeper than `FCP_MAXD` is reported,
   never walked.
-- **`fcp_goto` is quiet inside one volume.** `dsk_chdir` re-runs the whole
+- **`dsk_goto` is quiet inside one volume.** `dsk_chdir` re-runs the whole
   mount because the *listing* must follow it, but nothing here reads the
   listing — `dskw_*` resolve names by walking `[dsk_cwd]`'s raw directory,
   and the FAT snapshot belongs to the volume, not the folder. So a move
@@ -49580,7 +50161,8 @@ only I/O is the data.
 That walker already owns the run coalescer (§18) — contiguous clusters
 accumulate into a single (LBA, count) transfer — and a freshly written file
 is contiguous, so a 63KB chunk off a 1KB-cluster volume is one transfer
-instead of 63. It cost only making the walker **resumable**:
+instead of 63 (on `kern_small`; `kern_big` reads through `READ_SEQ`, whose
+walker is this one, §22.5.4). It cost only making the walker **resumable**:
 `[dsk_chain_end]` names the last cluster it touched and one `dsk_next_clus`
 steps past it. A variable rather than a register because the loader, the
 caller it was written for, reads a whole file at once and would only have to
@@ -49673,7 +50255,7 @@ which is a long way from the copy that caused it (docs/FIELD-NOTES.md 25).
 
 **`fcp_room` asks first.** `dskw_dfree` answers from the resident FAT snapshot
 with **no disk I/O**, and the check sits where the destination volume is already
-current — immediately after the `fcp_goto` that precedes the create — so it
+current — immediately after the `dsk_goto` that precedes the create — so it
 costs no volume switch either. A file that will not fit is `FERR_FULL` before a
 byte is written and before an entry exists.
 
@@ -49778,6 +50360,40 @@ for as long as it existed and reported 4 lost clusters on every `kern_big`
 run - never on `kern_small`, whose per-chunk appends commit as they go -
 and with the wait on `[fcp_busy]` the same volume walks clean, every copied
 byte identical to its source.
+
+#### 22.5.4 …and read through `READ_SEQ`, with one directory walk (`kern_big`)
+
+The read side is §18.4.8's body. On `kern_big` `fcp_rdnext` is one call to
+`dwf_dskw_read_seq` with a 16-byte cursor in the engine's `.bss`
+(`[fcp_rcur]`), and the walker above - `dsk_read_chain` resumed past
+`[dsk_chain_end]` - is `kern_small`'s alone, which has no `READ_SEQ`. That is
+the same machinery read once instead of twice: the run coalescer, the stop at
+the byte count, a short chain answered `FERR_IO` and a redirected volume's
+`FSV_READAT` are all `READ_AT`'s.
+
+**The cursor goes cold only when `[dsk_mgen]` moves**: a committed write, the
+START of a `WRITE_SEQ` hold and its commit, and a mount that re-reads a BPB
+(§18.4.8, §18.4.9). A held append that continues a hold moves nothing. So a
+copy inside one volume, or between two fixed disks (whose BPB is banked,
+§18.9.2), walks from the front for its first two or three chunks and then
+steps one FAT link a chunk; a copy whose OTHER side is a floppy re-reads that
+floppy at every switch and is cold every chunk - one stat by name and a walk
+to the offset, which `WRITE_SEQ`'s token already pays in exactly that case.
+
+**`fcp_xfer` no longer stats the source.** `READ_SEQ`'s first call does it
+(a missing file is its `FERR_NOENT`), and the cursor then holds the file's
+size: `fcp_room` reads its want there and the loop's end test is size less
+offset, so `[fcp_rsz]`, `[fcp_need]` and the second walk of the same name
+are all gone. `READ_AT` stores the size on its redirected arm too, which it
+did not before, so a cursor on a `DVK_FILE` volume carries it as well.
+
+Measured on `os8088_xt_hdd` against the commit before (MartyPC,
+docs/reports/FILECP-SIZE-IMPL-2026-10-18.md §6): a 22-file tree with a 200KB file
+copied B: to C: and then C: to C: makes **the same `int 13h` calls moving the
+same sectors**, call for call. The fixed-disk copy costs 39 ms more of CPU in
+5,061 (+0.77%: the cold first chunks and the cursor's copy in and out); the
+floppy one is inside its own run-to-run spread. The engine is 109 bytes
+smaller for the reader, 14 for `fcp_xfer` and 14 for `fcp_took`.
 
 ### 22.19 A move inside one volume is three sector writes
 
@@ -51627,7 +52243,7 @@ refusal - is that section's.
 
 1. **Two volumes.** The source is `(drive, folder)` as the verb found it and
    the target is what the dialog left current. Every read goes to the source
-   and every write to the target through `fcpf_fcp_goto`, the far door
+   and every write to the target through `dskf_dsk_goto`, the far door
    `DISKOPS.DRV` already uses between a floppy and an image file (§18.99.8). What
    keeps a hop free is §18.9.3's batch bracket, opened once per run: inside
    it a floppy's banked boot sector is trusted and its FAT window reused, so
@@ -51714,7 +52330,7 @@ reached at that moment sent the join back into its own error path, with
 `[cmz_jwrote]` still set, to try the same hop again, for ever. It ran on the
 UI task, so the arrow stopped, a posted Ctrl-Alt-Del was never serviced, and
 no Disk window ever answered again. The hop in `cmz_jrmtmp` is now a plain
-`fcpf_fcp_goto` whose failure only skips the delete. The target keeps its
+`dskf_dsk_goto` whose failure only skips the delete. The target keeps its
 `CMPRESS~.TMP`, as it does after a failed rename (§22.22.5). A later join into
 that folder then says `Name exists` until the file is deleted.
 
@@ -51798,7 +52414,7 @@ between the two, and must reach `Uncompressed`. Without this section it reads
 
 **The residual is wider than the join**, and this does not close it. Any
 QUIET mount of a floppy that was written elsewhere and put back trusts the
-signature the same way: a package's `fcp_goto` (§18.9.1.1), a copy's hop. A
+signature the same way: a package's `dsk_goto` (§18.9.1.1), a copy's hop. A
 loud mount, which is every navigation and every Refresh, does not.
 
 ##### 22.23.6.3 Abandoning the prompt keeps `clo_free`'s contract
@@ -52252,7 +52868,7 @@ and non-zero exit + stderr message on any validation failure.
   `OS88_HEADER` macro is what emits them, so a failure here means the image
   was built against an older SDK; image field == file size; entry in
   [0x20, image) (≥ 0x60 with the icon flag); image + bss ≤ `APP_MAX_SIZE`
-  (0xF000); with the icon flag, image ≥ 96; name printable, ≤ 15, NUL-padded
+  (0xFE00); with the icon flag, image ≥ 96; name printable, ≤ 15, NUL-padded
   with nothing after the terminator.
 - `tools/os88disk.py -o OUT.img --size {1440,1200,720,360} [PKG.o88 ...]` —
   builds a FAT12 data floppy per §19. CLI shape unchanged from the os88fs
@@ -52348,7 +52964,7 @@ and non-zero exit + stderr message on any validation failure.
   (`APPS_DATA_360`, `APPSARGS360`) and rides `build/media360.img` instead,
   which is §24.4.
   **Order within a list means nothing and nothing may be built on it**: the
-  mount sorts by name (§19.4), so a folder lists alphabetically whoever
+  mount sorts it (§19.4) — folders first, then by name — whoever
   wrote it. It used to be pinned, because the listing was directory order
   and the scripted tests clicked by row index; that did not survive the disk
   becoming writable by a host OS. What is left in the Makefile is which
@@ -55087,7 +55703,7 @@ then dispatch.
 - **A shortcut opens by name, through the doors the Disk window's double-click
   already has.** `sc_open` banks the user's volume, goes to the shortcut's
   volume root, and walks the path a component at a time (`dskw_stat`, then
-  `fcp_goto`). Then, on the entry:
+  `dsk_goto`). Then, on the entry:
 
   | the entry is | `sc_open` does |
   |---|---|
@@ -62784,7 +63400,7 @@ name, all inside the `cli` window the call exists to keep short.
 | `SSI_TASK` 3 | `I_TASK` | task slot, 0xFF = none |
 | `SSI_WIN` 4 | `I_WIN` | **OPAQUE** — the kernel's own window record. Read it as *has a window* or not at all |
 | `SSI_SEG` 6 | `I_SPTR` | the region's base segment (§20.9's "a SAMPLE, not a handle" still binds) |
-| `SSI_SIZE` 8 | `I_SIZE` | region bytes, 0 for a built-in |
+| `SSI_SIZE` 8 | `I_SIZE` | region bytes, 0 for a built-in; a 64KB region reads `0xFFFF` (§20.1.1) |
 | `SSI_KB` 10 | *(over `I_ICON`)* | KB held off the claim heap |
 | `SSI_NAME` 12 | `I_NAME` | 16 bytes, NUL-terminated |
 | `SSI_CYC` 28 | `I_CYC` | dword, cycles billed |
@@ -97082,6 +97698,64 @@ purpose** (`--break`: the knob disk carries the STOCK sector, which is byte
 for byte what the old installer wrote) it names the stock sector on the disk
 and C: never reaches a desktop - the field freeze, reproduced on MartyPC.
 
+### 52.10.17 A mounted image is an install disk
+
+**Mount the system disk's `.IMG` and the apps disk's `.IMG` (§18.101), open
+Install, and both phases find them by themselves** - one confirm, as with two
+floppies already in the machine (§52.10.5), and no floppy written to get
+there. The upgrade this is for is the ordinary one: a machine booted from its
+hard disk, a new release's two images copied onto C:, mounted as D: and E:,
+and installed onto C: keeping its files (§52.10.15).
+
+**It did not, because both searches asked for a FLOPPY.** `hd_iapps_cand` is
+the one filter behind the apps probe (§52.10.5) and the system disk's
+fallback (§52.10.15), and it passed `VK_REMOVABLE` and nothing else. An image
+on a floppy answers that already (§18.101.7, its medium is its host's), but
+an image on a hard disk answers its host's `VK_FIXED` - so it was skipped by
+both, the system phase found its disk only if the user happened to be
+standing in the image's window when they clicked Install, and the apps phase
+then asked for a disk swap nobody could perform.
+
+**An image is told from a partition by its TRANSPORT and by this driver's own
+table.** `VT_DRIVER` is a `DVK_DRV` row, and the kinds of those are two: a
+partition `HDD.DRV` mounted, which is in `hd_vols`, and an image (§18.101.1),
+which is not - the RAM disk and the cable are `VT_FILE`, the boot partition
+`VT_BIOS`. `hd_iown` asks the resident one (device, slot) at a time through
+`HSV_VOLOF` (§52.10.4.2's verb), four slots on at most `HD_MAXDEV` devices
+and no I/O; a `VT_DRIVER` volume it does not find is a candidate. A resident
+too old for the verb calls nothing its own, and then the content tests are
+what keep a partition out, as they always were for a floppy.
+
+**Nothing else about the searches changed**, and that is what makes it safe
+to widen them: a candidate is still only a candidate. The system disk is
+still `KERNEL.SYS` in the root (and its `BOOTHD.SYS`, §52.10.16), the apps
+disk still an `APPS` folder holding a `*.O88` and no `KERNEL.SYS`, and the
+order is still lowest index first - so a floppy in A: or B: is asked before
+any image, which are D: and up.
+
+**Where the images may live** follows from §52.10.8.1, which unmounts every
+`HDD.DRV` volume on the drive being installed to before anything is read:
+
+| the image is on | it works |
+|---|---|
+| the volume the machine booted from, installed to keeping files | **yes** - the kernel's own row, never unmounted; the image files are read-only while mounted (§18.101.3), so the install's writes go round them |
+| a floppy, or another hard disk | yes |
+| a partition `HDD.DRV` mounted on the drive being installed to | **no** - the unmount ORPHANS the image (§18.101.1) before the source is looked for, so the answer is `No system disk found - nothing done` and nothing has been erased |
+
+An erasing install onto the volume holding the images could never have
+worked - the format takes the files - and the booted-from volume refuses
+erasing anyway (§52.10.4.1).
+
+**What it cost**: **no kernel byte**. `HDDTOOL.DRV`'s code +46 bytes
+(`hd_iown` 36, the filter's arm 10), which fell into the `align 512` in front
+of `hd_mbr`: the image is 16,499 bytes either side and `HDTOOL_KB` does not
+move. `tests/instimg.py` (**soak**) is the gate: it installs from floppies,
+boots C:, mounts the two images it planted there, installs from them with
+a blank floppy in A: and nothing in B:, and asserts on the host that a marker only
+the system image carries and one only the apps image carries both arrived -
+then boots the result. **Broken on purpose** (the filter's image arm taken
+out) the system phase refuses and the commit never comes.
+
 ## 52.11 Two images: the transport, and the tool
 
 `HDD.DRV` was two programs in one file. One knows how to find a hard disk,
@@ -98546,8 +99220,8 @@ like entries are not:
 
 - **`fcp_ncopy` is `equ dsk_ncopy`** — `disk.inc`'s routine under a second
   name. It is resident on both builds and a caller of it reads no disk.
-- **`fcp_goto` and its four doors stay RESIDENT**, and that is binding rather
-  than an optimisation: `DISKOPS.DRV` far-calls it through `fcpf_fcp_goto`
+- **`dsk_goto` and its four doors stay RESIDENT**, and that is binding rather
+  than an optimisation: `DISKOPS.DRV` far-calls it through `dskf_dsk_goto`
   between two raw transfers of a same-drive clone (§18.99.8), which is exactly
   when the system disk is *not* in the drive. A `mod_need` there fails
   `drv_mounted` and hands the cloner a CF=1 it can only stop on. **No module
@@ -99314,7 +99988,7 @@ with `dsk_chdir_q`, which answers a move to a different folder with a REMOUNT
 - the boot sector read again, one `int 13h`, to learn that the disk whose
 motor is still turning is still the disk. A locate is mostly such moves (the
 document's folder, that volume's root, its `APPS`, and back), so rungs now
-move with `fcp_goto`, the package path's quiet stand (§18.9.1.1): the media
+move with `dsk_goto`, the package path's quiet stand (§18.9.1.1): the media
 half of §18.9.1's predicate and a word when it holds, and the same
 `dsk_chdir_q` as before when it does not. `assoc_back` takes it too.
 
@@ -100150,7 +100824,7 @@ The entry, `ascw_flush_x`:
 1. **Refuses what cannot hold a cache**: a free row or a redirected volume
    (`DVK_FILE`: the cable, the RAM disk).
 2. **Banks where the user is** (`[disk_drive]`, `[dsk_cwd]`) and stands in
-   the volume's root with `fcp_goto`.
+   the volume's root with `dsk_goto`.
 3. **Claims its work buffer** (`ASW_KB`, transient, freed before return).
 4. **Walks the root**, collecting its packages, its folders and `ASSOC.DAT`'s
    own entry, and **reads the old file** under `asc_use_x`'s tests (§54.7.1's
@@ -100185,7 +100859,7 @@ The entry, `ascw_flush_x`:
    `_DIRFULL`, `_PROT`, `_IO`) it sets **`[asc_wno]`** to the volume, and
    `asc_post` posts nothing more for it this session. A write-protected
    floppy then pays one attempt, not one per folder.
-10. **Empties the capture**, puts the volume back with `fcp_goto`, frees the
+10. **Empties the capture**, puts the volume back with `dsk_goto`, frees the
     buffer and returns.
 
 **What a flush costs does not grow with what it found.** In incremental mode
@@ -104363,14 +105037,14 @@ far side never sent.
 mistake in different modules.** The kernel range-checks a "first cluster"
 against `[dsk_maxclus]` in four places; on a redirected volume that word is
 an opaque handle and `[dsk_maxclus]` **belongs to the last FAT volume
-mounted**. §62.9.5 fixed the loader's. `fcp_goto`'s is worse, because it also
+mounted**. §62.9.5 fixed the loader's. `dsk_goto`'s is worse, because it also
 rejects anything below 2 — and the first folder a `DRVC_FILE` driver hands
 out is handle 1, so the copy engine refused the very first subfolder with
 `FERR_IO`. `fcp_rdnext`'s is the third, and it walks a chain besides; a
 redirected read there is one `FSV_READAT` at a running offset, which is also
 what makes it resumable without `[dsk_chain_end]`.
 
-**`fcp_goto` had a second and more interesting fault: it desynchronises the
+**`dsk_goto` had a second and more interesting fault: it desynchronises the
 driver.** Its quiet path exists *precisely* to avoid a mount for a move
 inside one volume — "a move inside one volume is a word" — and a mount is the
 only thing that would have called `FSV_CHDIR`. A `DRVC_FILE` driver keeps its
@@ -104431,7 +105105,7 @@ into `dsk_ent`, which is exactly where `dsk_synth` puts one — so the two
 paths converge on the instruction after it and the whole tail (the copy into
 `fcp_cname`, the type, the handle, the size) is shared rather than mirrored.
 Everything else a folder copy needs was already built: `FSV_MKDIR` makes the
-subdirectory, `fcp_goto`'s quiet-mount branch descends into it, and
+subdirectory, `dsk_goto`'s quiet-mount branch descends into it, and
 `FSV_READAT` + `FSV_WRITE`/`APPEND` move each file.
 
 **A DRIVER THAT PUBLISHES NO `FSV_ENUM` IS REFUSED, NOT WALKED.** An absent
@@ -104535,7 +105209,7 @@ behaves exactly as it did before. Nothing else in the engine changes: the
 replace question, the free-space check and the Cut's source delete all happen
 around it as they always did.
 
-Two things about the test are load-bearing. It sits **after** `fcp_goto(source)`,
+Two things about the test are load-bearing. It sits **after** `dsk_goto(source)`,
 because `[dsk_vkind]` describes the volume being stood on and standing on the
 source is what that call just arranged. And it requires
 `[fcp_drv] == [fcp_ddrv]`: a copy between *two different* redirected
@@ -106393,7 +107067,7 @@ Every symptom follows from that one deadline, which is what says it is the
 whole story rather than one of several faults:
 
 - the **freeze** is the full volume switch a cross-drive copy makes
-  (`fcp_goto` alternates drives, so each hop is a mount = an `FSV_LIST` over a
+  (`dsk_goto` alternates drives, so each hop is a mount = an `FSV_LIST` over a
   3,741 B/s wire);
 - the far machine's **disk spinning** is `wr_open`'s create;
 - the **zero-byte file** is that create, with a body that never arrived;
@@ -114175,11 +114849,12 @@ and inserts nothing.
 
 ### 68.10 Part 1 — the top of Word's own segment, inside WORD.O88
 
-A package's image + bss is capped at `APP_MAX_SIZE` = 61,440, and that is
-the **region** (§20.6), not the segment. Word stood at 61,425 of it. **The
-segment runs to 65,536, and a parted package's carve may run to 65,024**
-(§20.12: `op_size` refuses an unpacked run of 128 sectors), so Word ships as
-a parted package and puts code in the difference.
+A package's image + bss was capped at `APP_MAX_SIZE` = 61,440 when this was
+written, and that was the **region** (§20.6), not the segment. Word stood at
+61,425 of it. **The segment runs to 65,536, and a parted package's carve may
+run to 65,024** (§20.12: `op_size` refuses an unpacked run of 128 sectors), so
+Word ships as a parted package and puts code in the difference. (§20.1.1 has
+since raised `APP_MAX_SIZE` to that same 65,024, for the same reason.)
 
 **`WORD.O88` is three pieces in one file.** Its image is
 `apps/word/wdload.asm`, a 1,357-byte loader that reads two parts and hands
@@ -120211,7 +120886,7 @@ the C's `.data` and before `cc_image_end` is defined.
 
 There is deliberately **no assembly-time `APP_MAX_SIZE` assertion** in the
 runtime: `%if` cannot compare a section-relative label to a constant (`nasm`
-answers `operands differ by a non-scalar`). The 60KB ceiling (§73.9) is
+answers `operands differ by a non-scalar`). The 63.5KB ceiling (§73.9) is
 enforced twice downstream instead — `os88pkg.py` on every build and
 `ld_check_hdr` on every load (§21) — and the build rule prints the sizes.
 
@@ -120465,7 +121140,7 @@ author owns, because the compiler will not mention them:
   pre-empted against each other. Where an assembly package would have used a
   stack buffer and been safe by construction, a C package must either own the
   aliasing deliberately or not share the buffer between the two contexts.
-- **It costs image or bss against the 60KB ceiling** (§73.9) rather than
+- **It costs image or bss against the 63.5KB ceiling** (§73.9) rather than
   costing stack.
 
 And note what the rule buys, because it is not only a prohibition: **§73.5 and
@@ -120772,16 +121447,17 @@ author notices growing, instead of a paragraph in a spec. This is §15.1's
 size-guard idea applied to the stack: the guard that works is the one that
 prints on every build, not the one you remember to run.
 
-### 73.9 The 60KB ceiling, in a language that spends it faster
+### 73.9 The 63.5KB ceiling, in a language that spends it faster
 
-`APP_MAX_SIZE` (0xF000 = **61,440**) bounds the image, the bss and their sum
+`APP_MAX_SIZE` (0xFE00 = **65,024**, §20.1.1; it was 61,440 when this section
+was written) bounds the image, the bss and their sum
 (§20.1, and `ld_check_hdr` enforces all three, §21). An assembly package meets
 that ceiling as an occasional design pressure. **A C package meets it two to
 four times sooner** — the same feature in C is 2–4× the bytes — and that is
 not a fact to discover halfway through a program.
 
 Read as a design input rather than a limit: **a C package is a small
-package**, and a feature that wants the whole 60KB is a feature to write in
+package**, and a feature that wants the whole 63.5KB is a feature to write in
 assembly. What follows from the ceiling in practice:
 
 - One translation unit, `-tiny`, no soft-float (§73.7), and **no `printf`
@@ -157482,11 +158158,14 @@ ours.** Everything a program can observe - `int 21h`'s answers, the version
 program is the thing that can tell. The order names appear in for a person to
 read is not something a program observes at all.
 
-It also makes the box agree with the Disk window (§19.5) rather than disagree
-with it, which is what made this look like a defect from inside the system in
-the first place. **Plain name order, folders MIXED IN**, because that is what
-`dsk_sortdir` does and two sorted listings that disagree would be worse than
-one sorted and one not.
+**Plain name order, folders MIXED IN — and that is DOS's order, not our
+interface's.** `DIR` follows the command line it imitates, and that command
+line still mixes them: DOS 5's `DIR /ON` does unless `G` is added, and so
+does the Windows 10/11 command prompt today. The Disk window and the Standard
+File dialog list folders first (§19.4), because that is what a person picking
+an icon out of a grid expects. So the two listings differ in exactly that one
+respect, ON PURPOSE: each matches its own tradition, and `dsh_dsort` is not to
+be "fixed" to agree with `dsk_sortdir`.
 
 **The mechanism is an INDEX, and it makes `DIR` cheaper rather than dearer.**
 `OSAPI_FILE_FIND` is stateless by ordinal and re-walks the directory per call
@@ -166137,6 +166816,55 @@ resume, this half rests on being the exact inverse of `mou_p2_off` and on
 `mou_p2_init` still arming a PS/2 mouse correctly after the change — which is
 measured, and is not the same claim.
 
+##### 96.45.2.3 …and the KEYBOARD is the 8042's other half, and nothing put it back
+
+The re-arm above writes `mou_p2_init`'s **probe-window** command byte, bit 4
+(`MOU_P2KOFF`, the keyboard interface disabled) set, and its first version
+stopped there without `mou_p2_init`'s own last step, `0xAE` — so a PS/2 mouse
+came home working and the keyboard dead. That `0xAE` now ends the block. It
+was found on a 286 after a DOS run and reproduced in Bochs.
+
+That fix only reaches a machine whose **live pointer** was the PS/2 mouse, and
+the report kept coming from PS/2 KEYBOARDS. A DOS program owns the whole 8042
+while it runs, and any of three ordinary exits kills the keyboard on the way
+home: the interface left off (`0xAD`, or bit 4 of the command byte), IRQ1 left
+off in the command byte (bit 0), or the KEYBOARD told to stop scanning
+(`0xF5`). `0xAE` undoes only the first of them. And on the live route the
+8259's mask is the one `kd_resume` sampled **as the program left it**
+(§96.45.2.1), so a program that masked IRQ1 kills the keyboard on any machine.
+
+So `hbm_wake` restores the keyboard first, on every AT-class kern_big machine
+(`[cpu_tier]` above `CPU_8086`), PS/2 mouse or none:
+
+| step | what | why |
+|---|---|---|
+| 1 | IRQ1 masked at the master | the `0xFA` below is ours, not `int 09h`'s |
+| 2 | `0xA7`, then the command byte the BOOT left — `[mou_p2cmdr]`, or `[mou_p2cmd0]` when `[mou_p2st]` reached 9 | skipped where a PS/2 mouse is live (the block above writes its own) and where `[mou_p2st]` < 2 (the boot never read one) |
+| 3 | `0xAE`, then `0xF4` to the keyboard | interface on, scanning on |
+| 4 | the keyboard's `0xFA` collected, an aux byte dropped | `hbm_kbak`, bounded |
+| 5 | IRQ1 unmasked at the master — **on an XT too** | the desktop never runs with its keyboard masked |
+
+**No new bank is needed** — kern_mega takes the command byte at its snapshot,
+and kern_big already has two from `mou_p2_init`: `[mou_p2cmdr]` is exactly what
+that probe's failure roads write back, and `[mou_p2cmd0]` what `mou_p2_off`
+writes when a mouse that went live loses the contest, each behind the same
+`0xA7`. So this puts back what the boot left the controller holding, with no
+read at a moment a keystroke could be taken for the answer. On the reboot
+route POST and `mou_p2_init` left exactly this state, and every write is
+idempotent.
+
+It is HIBER.DRV's own code: **+104 bytes of the module image and no resident
+byte**.
+
+**No emulator here can drive it, and that is a finding rather than a gap in the
+effort.** MartyPC has no 8042 (entry 4 of docs/TESTING.md's list). QEMU 8.2.2
+and Bochs 2.7 both have one, and both refuse the handoff before the program
+runs, for the same reason: the stub lives in the text framebuffer (§96.40), and
+QEMU asserts (`qemu_mutex_lock_iothread_impl`) taking IRQ6 on a stack in VGA
+memory while Bochs panics fetching an instruction from `0xB8000`. A real card
+does neither. So the AT half rests on the field machine, and on the XT half
+(step 5) passing `kdreturn` and `mouresume`.
+
 #### 96.45.3 The pointer STARTS in the middle, and ours started at the origin
 
 `AX=0` centres the pointer — every driver does it, and a program that resets
@@ -171528,7 +172256,7 @@ and a player reads only the stream it plays (VIDEO-PLAN 13, answer A).
 | 37 | 1 | MODEX, and VGA4 on a screen of its own: **2 = page flipped** (98.3.8), **3 = page-ahead** (98.1.3.7, with flag PAGE and only with it), **4 = page-ahead on N pages** (98.1.3.7.1, with flag PAGE too), **5 = flipped AND built ahead on N pages** (98.1.3.7.2, flag PAGE too), 0 or 1 not; 0 in every other file |
 | 38 | 1 | VGA4: **the screen** (98.1.3.2.1) - 0 mode 12h's 640 x 480, 1 320 x 200, 2 320 x 240, 3 640 x 350, 4 640 x 400, **5 320 x 200 and 6 320 x 240 with rows 40 bytes apart** (98.1.3.2.5); MODEX: 0 320 x 240, **1 320 x 200** (98.1.3.1.1); 0 in every other file, and in a RESIDENT or LIVE one |
 | 39 | 1 | with byte 37 = 4 or 5: **N, the pages the file uses**, 3 to 8 (98.1.3.7.1); else 0 |
-| 40 | 24 | 0 (but for the words the sections above name at 40, 53, 54, 56 and 60, and 62: THE BENCH, the player's own bench record's decode modelled on the machine the file was made for, 10 us, 0 none - 98.1.9.13) |
+| 40 | 24 | 0 (but for the words the sections above name at 40, 53, 54, 56 and 60, and 62 - 40..45 being a stream's DESKTOP POSTERS and 56..61 a resident file's, 98.1.3.11 -: THE BENCH, the player's own bench record's decode modelled on the machine the file was made for, 10 us, 0 none - 98.1.9.13) |
 
 #### 98.1.1.2 Repeat: the flags, and the seam
 
@@ -172000,6 +172728,20 @@ only at a whole-scene cut, and as that cut is drawn.
   sixteen of an entry at f into `vp_pal` and the DAC - no wait for a
   retrace. For the moment the draw takes the last scene's picture is under
   the new colours; that moment is the cut.
+- **An entry's frame is the first that DRAWS the scene on the page
+  shown**, which is not always the scene's first frame (the owner's
+  GasGasQ, 2026-10-18: "flipping the palette one frame too early"). In
+  page-ahead's real passes (98.2.1.8) a HELD frame writes nothing on the
+  page shown - the hidden page builds the frame after it - so a scene
+  whose first frame is held there kept the last scene's picture up for a
+  whole frame under its own sixteen: 14 of that file's 34 scene changes,
+  the picture in colours from nowhere. The encoder now holds the entry
+  back to the first frame after it that writes or flips the page shown,
+  and every record is the one it was; a plain encode's hold draws toward
+  the next frame ON the page shown, so there the entry stays where it was.
+  `tests/videnc.py` 5h'' is the gate: no entry on a frame that leaves the
+  page shown as it was, and one moved past a held frame, or the clip held
+  none.
 - **A seek** finds the palette the key's screen is in - the last entry at
   or before its frame (`vp_palat`, in `vp_spos`) - and loads it while the
   screen is black: a session's first bracket before the key is decoded, a
@@ -172122,6 +172864,41 @@ themselves cut, since only a frame being chosen weighs what comes next.
   is SEEDED for it: unseeded, ffmpeg starts Life from a random board, so
   each run encoded a different third shot, and whether its frames before a
   cut had been weighed ahead came and went with it.
+
+###### 98.1.3.2.3.3 A scene change the budget cannot draw, named and joined (2026-10-19)
+
+**A scene change neither built ahead (98.2.1.8) nor drawn whole shows the
+last scene's picture in the new sixteen** until it is drawn - the owner's
+Gas Gas Gas at frames 561 and 963: red specks over a grey car, for two to
+four frames. Page-ahead takes the first change that comes, and at both a
+burst of shot cuts in ONE palette flipped one and two frames before the
+change of palette, which had nothing left to be built ahead with.
+
+- **The report names them**: each change that left 2% of the picture or
+  more (`PEV_RESIDUE`) of the last scene standing, at the time and the
+  frame the encoder window's slider shows - *"scene changes leaving the
+  last scene up in the new colours: 2.00 s 24% (frame 41), 4.00 s 9%
+  (frame 81)"* on 5n's clip below, twelve at most. The share is the encoder's own count at the change's frame,
+  the one 98.1.3.2.3's line already averaged.
+- **`--scene-join TIMES`** takes those changes out before a colour is
+  chosen: the scene and the one before it are one scene, their pixels
+  sampled together and their sixteen chosen over both - colour accuracy
+  given up for no flash. The time is the report's; the scene pass counts
+  its frames without the pre-roll's few, so the NEAREST change within half
+  a second is joined (scenes are `--scene-min` frames apart, 15 by
+  default), and any other time is refused before a frame is encoded,
+  naming the nearest change. In the encoder window it is a field beside
+  the scene options on Colour.
+- **What is not built**: an automatic join over a set share, and page-ahead
+  giving a change of palette the hidden page before a change within one.
+  The first is a REWIND - the scene before re-encoded in the joined
+  colours from its own start, the encoder's state saved there - not a
+  second pass of the clip; the second is the plan's choice of targets.
+  Both are docs/plans/VIDEO-PALETTE-PLAN.md's to take up.
+
+`tests/videnc.py` 5n: three stills, page-ahead off: both changes named,
+the first past 2%; joining at its time leaves one change; a time a second
+from any change refused.
 
 ##### 98.1.3.2.4 SUB2: a list map, and write mode 3 (2026-10-13)
 
@@ -172505,7 +173282,8 @@ copy          = len(16)=6 y0(16) y1(16)
 
 - **Every frame record has `REC_FLIP`** and names its page p in y0 bits
   12-14, never the page shown before it: it is drawn on p, and p is then
-  shown.
+  shown. (A file whose every record is BUILT and whose keys carry every
+  page is `--flip-own`'s, 98.2.1.8.5: nothing in it is ever brought up.)
 - **Unless y1 bit 12 (`REC_BUILT`) is set, p is first BROUGHT UP** to the
   frame shown: the last frame record's own lists decoded onto it again, or
   that record's band of rows (its y0..y1) copied onto it off the page shown
@@ -172690,6 +173468,183 @@ It is `--min-fps`'s hold on a flipped file (98.2.1.2, VIDEO-SEEN-PLAN 3a,
   the union of all of them.
 - A reader takes a held record's frame as the frame before it on the glass
   (`decode_at`): what the file shows, and what its holds are judged by.
+
+#### 98.1.3.10 FLIPPED AGAINST ITS OWN PAGE (2026-10-18)
+
+**A flipped file whose every frame record is a change against the page it
+is drawn on**, docs/plans/VIDEO-SEEN-PLAN.md 3b. Rendition byte 37 = **7**:
+byte 37 6's file (98.1.3.9, held records and all), except that no page is
+ever brought up. In byte 37 2 and 6 a record is a change against the frame
+BEFORE it, so its page - which holds the frame two back - is first brought
+up by the last record again or its rows off the glass, and that costs about
+as much as the frame's own decode (VIDEO-SEEN-PLAN 3b: 126% of a 4.77 MHz
+period for the restore against 127% for the frame on Last Exile, Mode X).
+
+- **A frame record is drawn on the page the glass is not showing, as it
+  stands**, then shown: its lists are a change against that page, which
+  holds the frame two back, or after a HELD record the held one.
+- **A HELD record** (y0 bit 15, `REC_HELD`) is drawn so and NOT shown; the
+  next record is drawn on the same page, against what it left.
+- **The record after a KEY** carries **`REC_UP`, y1 bit 12**: before its
+  lists, its page takes the record's rows y0..y1 off the glass, every plane
+  through the latches (98.3.8.1's copy). A seek puts the key on both pages;
+  a play through the key has the frame before it on the page drawn next -
+  so the writer widens that record's band to every row where the two pages
+  differ, and after the copy the page IS the glass, byte for byte, either
+  way. Such a record may write nothing else: its band is the copy's.
+- **No loop** (the seam would join two laps' pages, which differ), no layer,
+  never Live, resident or page-ahead (98.1.3.7.2's built pages are drawn on
+  as they stand already). A reader refuses a loop, and a record after a key
+  whose copy does not make its page the glass (`v88_frames`, so
+  `verify_v88`).
+- What it costs is BYTES: a change against two frames back is the union of
+  two frames' changes where the picture moves on. A player before this one
+  refuses byte 37 7 at open.
+
+#### 98.1.3.11 DESKTOP POSTERS: a key's picture made for the Preview (2026-10-18)
+
+**Any file may carry, per key, the picture the Preview's box shows for it**,
+made on the host and blitted as it stands, and a CUSTOM picture besides.
+The owner's report started it: T69, a 640-wide file in its own colours,
+showed a black box with one white dot, because 98.4.5's poster took one
+pixel of every cell and so picked one colour of each 50% checkerboard.
+Colour files at half lost most or all of their colour, since a picture in
+its own sixteen drawn in the desktop's NEAREST sixteen keeps only the
+colours the two sets share. Then the owner asked for the same for every
+format: VGA8's Preview is its luma at one bit (98.4.4) and CGA's colours
+are four shades (98.4.6). A stored picture is each cell AVERAGED in the
+file's own colours and then error-diffused (Floyd-Steinberg), and reading
+it is cheaper than the decode it replaces.
+
+- **The fields are six bytes of the rendition slot**: a u32 offset of the
+  **table**, the **scale** (u8: 1, 2 or 4) and **flags** (u8). A stream's
+  are at bytes 40..45, a RESIDENT file's block fields (98.1.7) and so free
+  in a stream, with 46..51 zero. A resident file's are at 56..61, a
+  stream's scene palettes (98.1.3.2.3) and so free in a resident file. All
+  0 for none.
+- **The flags**: bit 0 `TH_CUSTOM`, a custom picture after the keys'; bit
+  1 `TH_KEYS`, a picture per key; bit 2 `TH_COLOUR`, each picture in the
+  desktop's sixteen; bit 3 `TH_MONO`, each in black and white; bit 4
+  `TH_SIZE`, the scale is the Preview's own (see below). The other bits
+  are 0. A table with pictures has at least one set, and one with neither
+  pictures nor `TH_SIZE` is not there at all.
+- **The pictures are the Preview's own size over the scale**: the
+  player's `vp_pwb` x 8 by `vp_ph` (98.4) - a CGA4 or C160 pixel is two
+  wide, a C512 or TEXT cell four pixels, VGA8's rows its row scale's and
+  TEXT's four a cell - divided by the scale, the rows rounding up
+  (`thumb_dims`). A COLOUR picture is packed as `vga4_pack` packs, two
+  pixels a byte with the left one high, rows (width + 1) / 2 bytes apart;
+  a MONO one is `OSAPI_GFX_BLIT1`'s rows, eight pixels a byte with the
+  left one in bit 7, 1 white, rows (width + 7) / 8 bytes apart. **Each
+  picture is at most 65,535 bytes unpacked**, one segment of the poster's
+  claim, so the encoder takes the next scale where a colour picture would
+  be more (a 600 x 400 file in its own colours is 120,000 at its own
+  size); a reader refuses a table that breaks it, and the player decodes
+  the key instead.
+- **The table is an entry per picture and set**, picture by picture (the
+  keys', in key order, then the custom one), each picture's colour entry
+  before its mono one: 8 bytes each, a u32 offset, u16 packed bytes, u8
+  packing (0 stored, 1 LZ4 as `OSAPI_DECOMP` AL = 0 takes it) and a 0.
+  The count is the flags' and the key count's, so it is not stored. A
+  stream's table sits after the options record and before the stream, a
+  resident file's after its audio block.
+- **The custom picture** is shown when the file opens and at the end of a
+  play, in place of the poster key's (98.4); a play still starts at a key.
+  `tools/os88vid.py`'s `set_poster` drops it, since choosing a poster key
+  replaces the custom one.
+- **`TH_SIZE`**: the Preview is never laid out larger than the stored
+  scale (`vp_layfit` starts its tries there), so a file can ask for a
+  half or a quarter whatever the room. A smaller Preview means a play in
+  the window, which is at the video's own size (98.3.7), is not taken:
+  Play goes full screen. Never with LIVE, which plays on the desktop at
+  its own size.
+- **What the encoder stores** is `--desktop-posters` and `--desktop-size`
+  (98.2). By default the set is what the format is seen in: colour for
+  VGA4 and VGA8, black and white for one bit's formats, and both for
+  CGA4, C160, C512 and colour TEXT, which a VGA shows in colour and a
+  CGA's desktop cannot. Key pictures are stored by default where the
+  player's own picture is poor: VGA8, CGA's colours, and VGA4 in colours
+  of its own or shown smaller. They are stored at the size the window
+  shows (own size where it fits a 640 x 480 desktop's window, else half)
+  unless `--desktop-size` says otherwise. `--poster-image FILE|@SECS`
+  adds the custom one, in the same sets. **`--desktop-clip`** is
+  `--clip`'s rule for them (default 16 levels): a cell within that of
+  its nearest colour on every channel, or of black or white for the
+  black and white set, is that colour SOLID and passes on no error. The
+  owner's Mechwarrior 2 has a ground a few levels off black, and its
+  poster lit 1,769 pixels of it before and none after.
+- **The player** reads the set the desktop shows best: colour on a VGA's
+  or an EGA's, else the other; black and white on a CGA's or a
+  Hercules', else colour, which `OSAPI_GFX_BLIT4` then reduces (§39.4).
+  It reads the entry and its bytes through its key read buffer and
+  unpacks them into the poster's claim, which `vp_psize` makes big enough
+  for either. It takes them at the stored scale, twice it or four times
+  it, halving once or twice: colour by `vp_dphalf`, one pixel of each 2 x
+  2 cell with 98.4.5's turning pick; black and white by `vp_half`, 98.4's
+  ordered dither. The first of two halvings is in place where the picture
+  was read, since the poster's claim is the box's size. A key without a picture, a
+  scale it cannot serve, a failed read, or fields that do not describe
+  this file (`vp_thparse`) fall back to decoding the key. A stored
+  picture is never taken for the key's canvas: 98.3.19.3's poster that
+  stands in for the keeper, and `vp_kheld`'s key held in the poster, ask
+  `[vp_pthm]`. A one-bit poster is drawn through `vp_blit1`, never
+  `vp_blitb`, which takes a VGA4 file's picture for its Live shadow's four
+  planes: the owner's T69 Collapse, a VGA4 file with black and white
+  posters, showed noise from the three planes past the claim. A player before this one ignores the fields, and this one
+  ignores a stream whose 46..51 are not zero (the twelve-byte layout of
+  this section's first morning, which carried VGA4 streams only).
+- **The cost** is about 1.3% of a 16-colour file's bytes at half (432 KB
+  over 37 keys on T69, LZ4). `--desktop-posters off` drops the key
+  pictures for a file that should not pay it; a custom one is still
+  stored.
+
+`tests/vidposter.py` holds the player to the host byte for byte, on a
+VGA's desktop and a CGA's: VGA4 stored at half, stored at its own size and
+halved, and none stored; VGA8 and CGA4 in colour; a `TH_SIZE` file that
+fits; a resident file's custom picture; CGA4's black and white on a CGA;
+and a colour and a black and white picture halved twice. `videnc` checks
+the encoder's choices.
+
+##### 98.1.3.11.1 The posters made again: `--posters-only` (2026-10-19)
+
+**An existing file's desktop posters can be made again without encoding
+it**: `os88venc --posters-only IN.V88 OUT.V88` (the same path rewrites it)
+with `--desktop-posters`, `--desktop-size`, `--desktop-clip` and
+`--poster-image`, and the encoder window's **Redo posters** beside Set
+title, which takes those four from the form for the file in the preview.
+The owner's GasGas is why: an hour and a half of page-ahead encode, made
+from an older encode's options with `--desktop-posters` left at the old
+file's setting. It takes seconds.
+
+- **A key's poster is made from the file alone**: the key decoded
+  (`decode_at`, which shows a page-ahead key's shown page) and the palette
+  in effect at its frame (`palette_at`, a palette a scene's), through the
+  encoder's own `desk_choice` and `desk_picture`, so the pictures are
+  BYTE FOR BYTE what an encode asking for them writes. A CUSTOM picture
+  is kept as it is when its sets and scale still serve, else it wants
+  `--poster-image` again, and here that is a PICTURE FILE: a moment of the
+  source is placed by the encode's fit and crop, which the file does not
+  keep.
+- **Where the table goes**: back in the old table's sectors when it fits
+  them, else after everything in the file, sector-aligned, the old bytes
+  then named by nothing (`set_poster`'s rule). The slot's offset is a u32
+  and the player reads the table with `vp_rdat`, so it may be anywhere;
+  nothing reads past the stream's chain but a LAYER WITH NO KEYS, which
+  runs to the file's end, and that file is refused unless the new table
+  fits in place.
+- **The stored options** (98.1.1.4) learn the four settings, so a
+  re-encode from the file keeps them; every picture is read back and every
+  rendition's stream walked before the file replaces the old.
+- **And a defect it found**: `_reshape_options` - `spk_reshape`'s
+  (98.2.15.1) - took the room from the options to the STREAM as its own and
+  zeroed it, and the poster table is in that gap, so a speaker file
+  reshaped after the fact kept a table naming zeros. Its room now ends at
+  the first table after it.
+
+`tests/videnc.py`'s 5m is the gate: mono to colour must give the colour
+encode's pictures (after the end), colour to mono the mono encode's (in
+place), `off` no table, the stream untouched, the options saying each; and
+a speaker file's posters must survive `spk_reshape`, which they did not.
 
 #### 98.1.4 The stream: chained super-packets
 
@@ -174617,7 +175572,24 @@ too heavy for the rest.
   length - since all three go on at once. THE PASS BEFORE THE FRAMES - the
   levels', or the palette's - reads the clip beside the frames' own decode,
   read ahead the same way. `--aim quality`'s trials run at once
-  (98.2.1.4). What stays on
+  (98.2.1.4). THREE MORE that read nothing back into the frames (the
+  owner, 2026-10-17: "16 threads, and it is using 6%"): **the ladder's
+  trials** - every prefix at a stretch (98.2.1.9's `--ladder`) is a trial
+  on a copy of the encoder and none reads another's, so they run at once,
+  one a process, today's draw here meanwhile, and the same rule reads them
+  in order (`TrialPool`: the encoder pickled with its read-only tables left
+  out, given once a pool, and its pure caches emptied); **page-ahead's pass
+  without the holds** beside the one with them, in a process of its own
+  (`PassBg`, 98.2.1.8.3) - not for a caller filling `keep` (the gate),
+  which the passes fill one after another; and **the picture as played**
+  (`Meter`) - `measure()` feeds only the report and the pass comparisons,
+  so each frame's screen and target go to one of up to three workers, eight
+  frames a task with the two before them that its flicker and its view are
+  against, and the sums are made in order, to the bit. A copy of the
+  encoder shares its meter and a pickle leaves it out. `--jobs 1`, or a
+  pool's own worker, runs all three here as before. `videnc` leg 3e holds
+  the file AND the report to the serial encode's with each counted as
+  having run. What stays on
   one core is THE ENCODER ITSELF - each frame's budgets are what the last
   left, so frames cannot be encoded side by side - ffmpeg's `palettegen`,
   whose time grows with the colours the clip holds, and `cgacomp`'s
@@ -174710,6 +175682,43 @@ counts with the cut ones wherever passes are compared (`cutf`). Not on a
 layered or Live file; `OS88_VENC_VFRLOG=FILE` logs every decision. No
 format change: a held frame is an ordinary record.
 
+**`--flip-own`** (options version 42, off; VIDEO-SEEN-PLAN 3b): a flipped
+file whose frames are each a change against the page they are drawn on
+(98.1.3.10), so the encoder keeps both pages and charges no bring-up - only
+the record after a key pays the copy of the rows where the pages differ.
+The flip's decode roughly halves for about half again the bytes, so it
+pays where the CPU is what cuts and costs where the disk is. Last Exile
+0:10-0:25, Mode X flipped on `286-speeddemon`, no ladder: 173 frames cut
+-> **93**, the view 23.9% broken -> **12.1%**, 6.6 s visibly broken ->
+**3.5**, 4.5 MB -> 6.5 MB. Bad Carrot 3:05-3:20, the owner's options
+on `286-picomem1` with `--flip`: 68 frames cut -> **56**, 3.71% -> **2.47%**,
+4.3 MB -> 5.5 MB - where the owner's own page-ahead file, drawn on the
+page shown and decoding nothing twice, is 33 and 1.13% (it may tear; the
+view as seen does not count a tear). It is a TRADE, and the clip decides:
+`videnc` leg 5g' is a plain pan that goes 16 frames cut -> 3, but on
+`testsrc2`'s pattern, which the disk cuts, it goes 2 -> 4, and on a pan of
+noise 71 -> 72. Not with a loop, a layer, Live or resident, and a player
+before 98.3.8.7 refuses the two-page file. With `--page-ahead on --pages 3`
+or more it is 98.2.1.8.5's file against its own pages instead - byte 37 5,
+which plays on any player since 98.3.8.5 - and the best of them: Last
+Exile's 77 frames cut and 9.6%.
+
+**`--desktop-posters auto|colour|mono|both|off`**, **`--desktop-size
+fit|half|quarter`** and **`--poster-image FILE|@SECS`** (options versions
+43 and 44; `auto`, `fit` and none): the DESKTOP POSTERS (98.1.3.11).
+`auto` stores key pictures where the player's own Preview is poor (VGA8,
+CGA's colours, VGA4 in its own colours or shown smaller), in the set the
+format is seen in: colour, black and white, or both for CGA's colours.
+`colour`, `mono` and `both` store that set for any file, and `off` stores
+no key pictures. `--desktop-size half` or `quarter` makes that the
+Preview's size whatever the room (then Play goes full screen; refused
+with `--live`). `--desktop-clip N` (options version 45, default 16; 0
+before it) is `--clip` for the posters. A custom poster is a picture FILE scaled and cropped as
+the clip is, or `@SECS`, the clip's own frame that many seconds after
+`--start`, on a key or not. It is stored even with `off`, and for any
+file. The encoder's info names what it stored. A version-43 record's `on`
+reads as `colour`.
+
 **`--ladder RUNGS`: THE DEGRADE LADDER** (options version 40, blank - off
 - by default; docs/plans/VIDEO-SEEN-PLAN.md 3a). The ways a frame the
 budgets cannot draw may give, as RUNGS in the order they are tried:
@@ -174763,9 +175772,15 @@ on a ladder is the next thing the owner's eye decides. The ladder before
 that, with the half rate, took Last Exile 0:10-0:40 from 24.3% to 3.2%;
 `slow:5/6` first instead of `lag:100` made the same files. A cut rung is in no default: it
 is the choice a video makes that takes a cut better than a slower rate. The
-window carries it as Size vs quality's second inner tab, Degrade ladder: a
-checkbox, a rung a row offering only the rungs the form can use, and under
-them Lag, Min fps, Slow cost, Flip hold and Coarse cut (Instead of cutting).
+window carries it on a tab of its own, Degrade to Fit, laid
+out as the choice it is (the owner, 2026-10-18: "ladder OR these other
+settings"): the ladder in a box whose title is its checkbox, a rung a row
+offering only the rungs the form can use; beside it below, **Or, without the
+ladder: for the whole clip** - Lag, Min fps, Coarse cut, Step down and Step
+min, which a ladder REPLACES (greyed while it is on, each OFF where no rung
+names it, which is how a ladder leaves one out); and **Held frames, either
+way** - Slow cost and Flip hold, which price and draw a held frame under a
+`slow:` rung and under Min fps alike.
 
 ##### 98.2.1.2 What a cut frame spends on: the look-ahead and the error as seen
 
@@ -174815,6 +175830,29 @@ cuts (Sonic 2 at the default profile, the others at a lower `--disk`):
 
 It costs the encoder about twice its time (Sonic 2's 10 s: 5.3 s -> 9.8 s).
 `--lookahead 0 --error bits` is the ranking before it, for the A/B.
+
+**`--lookahead-floor F`** (options version 41, 2026-10-18; default 0.5) is
+how far the frames after may take a change's worth down: never below F of
+what writing it is worth NOW. Without it a bright thing about to MOVE lost
+nearly all of its worth to them. The owner's GasGas headlights, frame 1277:
+4.07 a pixel now, 0.53 after the two frames ahead, against dark road's 0.09.
+The road stores as cheap runs, so per BYTE it won, and the cut frame showed
+the near car as black ground. The floor keeps the look-ahead's ranking
+among the changes worth something and stops it from turning a bright pixel
+into the cheapest one to leave. Measured as the view as seen broken (frames
+cut), at the owner's settings:
+
+| clip | `--lookahead 2`, no floor | `--lookahead 0` | floor 0.5 |
+|---|---|---|---|
+| Last Exile (286, banked) | 1.7% (8) | 1.3% (23) | 1.5% (13) |
+| GasGas 1:35-1:50.7 | 3.7% | 4.8% (plain) | 3.3% |
+| Bad Carrot | 1.9% | 2.0% | 1.8% |
+| GasGas, the whole clip | 2.6% (owner's) | | 2.2% (115) |
+
+On the whole GasGas clip frame 1277 draws both headlights and the fog
+lights, and page-ahead is kept (plain 3.5%). `--lookahead 0` cuts the
+fewest frames on Last Exile and is the worst seen on GasGas. A record made
+before the option reads 0, as it was made.
 
 **THE MEAN HID WHAT A VIEWER SEES** (2026-10-09). The owner's Last Exile on
 the 286, banked, measured 0.15% error as seen and plays with scenes torn
@@ -175243,7 +176281,23 @@ owner's "do it all", whose bursts nothing caps - and on a budgeted profile
 encodes as On while asking, frame by frame (`Encoder.lean`, in each
 encoder's `charge`), whether the frame spent what the in-step floor would
 have held back; when NO frame did, the stream is one the in-step budget
-allows and is written in step, the space unspent. A keyframe that fitted
+allows and is written in step, the space unspent - **if it would still be
+allowed on a reader `AHEAD_SLACK` (10%) under the profile's disk**
+(2026-10-19): the same in-step budget is run beside the encode on a shadow
+bucket refilled that much slower (`Encoder.refilled`), and a frame that
+would have spent the shadow's sound lead keeps the file's sound ahead too.
+A stream that fits in step only at the profile's own rate has no room for
+a reader that dips under it, and the lead is that room. The owner's T69 is
+why - it leaned on no frame, was written in step, and on the 286 its card
+ran dry a tick at a time three times in one stretch (`Dry 3/3 stream`,
+98.3.22) where its stream read ~460 KB/s against 286-picomem1's 519,000
+bytes a second, 9% under. A first version asked for *A* frames' refill to
+spare instead, and that is the wrong unit: the reserve is bytes, so on a
+fast disk every frame is "within four frames" of it and an easy clip kept
+its lead for nothing. The summary line gives the shadow's closest frame,
+in KB to spare or short; `tests/videnc.py`'s 5l is the A/B (a busy 4 s
+clip at 540,000 bytes a second, carried with the slack and written in step
+with it at 0). A keyframe that fitted
 the player's one read (`KEY_PLAYER`) and does not with its lead - a later
 one left out, or the first taking the file's seeking with it (98.2.3) - is
 worth more than the lead: Auto writes in step, On says so, and a key left
@@ -175418,8 +176472,8 @@ that player does, where it does it:
   on the disk (`dslow = 1 + xup x rate`), on every chunk: in place the
   ring is the bank's slots.
 - **`copy`** - the 486, and a 286 play the in-place paths refuse (the
-  speaker, Repeat or a loop, Live, RESIDENT, BIGSP, C160 and TEXT through
-  the shadow): the copy UP on the disk while the bank holds anything, as
+  speaker, Repeat or a loop, Live, RESIDENT, C160 and TEXT through the
+  shadow; BIGSP until 2026-10-19, 98.3.18.13): the copy UP on the disk while the bank holds anything, as
   before, and the copy DOWN a frame - `xdown` ms a KB of the record on the
   CPU, inside the frame's period, which nothing charged before and `--peak`
   paid for out of slack.
@@ -175663,13 +176717,23 @@ Options version 26 takes a version-25 record's flag as `on` or `off`.
   Everywhere else `auto` is one plain pass, as before.
 - **Where it applies, the plan pass IS the plain encode, and its file is
   kept.** Both passes' reports are held (`_Held`), the encoder window's
-  PROGRESS lines going straight through. The page-ahead file is shipped
-  only if `page_compare` finds its picture better somewhere and worse
-  nowhere: the mean error as seen, the worst second, the seconds visibly
-  broken, the view as seen and its seconds a tenth broken (98.2.1.2's
-  `seen_share`, since 2026-10-16) and the frames cut. Otherwise the plain file and its report are
-  shipped, with one line saying why: *page-ahead: DROPPED - it made the
-  worst second worse (...)*, or *no flip*, or *it bettered nothing*. A plan
+  PROGRESS lines going straight through. **The view as seen decides**
+  (`page_verdict`, since 2026-10-17): the page-ahead file is shipped when
+  its view as seen (98.2.1.2's `seen_share`) is less broken than the plain
+  encode's, and neither the seconds a tenth of the view is broken nor the
+  seconds visibly broken is worse by more than one frame's time - what the
+  view gains by breaking for longer is not kept. The whole screen's mean
+  error as seen, its worst second and the frames cut are said beside it and
+  do not decide. Until then the file had to be better somewhere and worse
+  NOWHERE of all six, which the owner found dropped page-ahead on every
+  GasGas ladder encode - one of them a third less broken by the view
+  (3.9% against 2.6%), ten fewer frames cut, dropped because the mean came
+  out a hair worse - and on a picture busy enough to cut, one of six nearly
+  always does: the mean is VIDEO-SEEN-PLAN 1's own example of a measure
+  that hides a band torn off a car. Otherwise the plain file and its report are
+  shipped, with one line saying why: *page-ahead: DROPPED - the view as
+  seen worse (...)*, or *the seconds a tenth of the view broken worse by
+  more than a frame (...)*, or *no flip*. A plan
   pass with no cut frame never runs the second pass at all.
 - **What it costs is the second pass's time**: a Mode X or own-screen
   16-colour encode takes about twice as long as it did.
@@ -175678,7 +176742,8 @@ Options version 26 takes a version-25 record's flag as `on` or `off`.
 - `tests/videnc.py` 5h is the gate. A Mode X clip of five stills with hard
   cuts must come out page-ahead and flipping with the option left at its
   default, plain with `off`, and plain when the page pass is made to look
-  worse: `page_compare` is forced, so the drop is tested and not hoped for.
+  worse: `page_verdict` is forced, so the drop is tested and not hoped
+  for; 5h' holds the verdict itself to its rule on four made-up pairs.
 
 **What it did is always said** (the owner, 2026-10-14): every encode of a
 screen page-ahead is about - Mode X, Hercules, 16 colours - ends with one
@@ -175715,11 +176780,12 @@ whole. This judges each build:
   build. That was the first version, and on Gas Gas Gas the pass without
   the 8 builds that hurt came out no better than the pass with them.
 - **Which file ships**: the third pass replaces the second if its PICTURE
-  is better than the second's somewhere and worse nowhere (the error as
-  seen, the worst second, the seconds visibly broken, the view as seen and
-  its seconds a tenth broken: `PAGE_PICTURE`), or if 98.2.1.8.1
-  would drop the second and the third passes 98.2.1.8.1's test against the
-  plain encode. The frames cut are not asked between the two page passes: a
+  passes 98.2.1.8.1's verdict against the second's (`page_verdict`: the
+  view as seen decides, the seconds it and the picture are broken may be no
+  worse by more than a frame - until 2026-10-17 better somewhere and worse
+  nowhere of `PAGE_PICTURE`), or if 98.2.1.8.1
+  would drop the second and the third passes 98.2.1.8.1's verdict against
+  the plain encode. The frames cut are not asked between the two page passes: a
   pruned build's scene change is cut again by design, so they nearly always
   rise. On Gas Gas Gas they rose 11.8% to 12.0%, and that alone refused a
   prune when they were asked. Auto's test against the plain encode then applies as before. The
@@ -175892,6 +176958,24 @@ runs it - a flipped file asks for it.
   flip's record), byte-37-5 files that verify and cut fewer frames than
   flipped alone. With the calm's copy turned off the 5150 leg flips nothing
   and FAILS.
+- **With `--flip-own`, AGAINST ITS OWN PAGES** (2026-10-18, VIDEO-SEEN-PLAN
+  3b): every frame record is BUILT - an ordinary frame drawn on the back
+  page as it stands, the frame two back, and the encoder's model made that
+  page first (`PageAheadF.own`) - so nothing is ever brought up and the
+  flipped encoder charges no `prev_c` (`nobring`); a flip to a builder
+  keeps its copy, which no longer keeps the file right but makes the next
+  page the new scene for the bytes of a copy. Every key carries the back
+  page too, so a seek has every page exactly and nothing after a key owes
+  a copy. It is byte 37 5 as it was - BUILT on every record is a file the
+  player since 98.3.8.5 plays unchanged (`vidpagefmx3o`, `vidpagefmx4o`;
+  with the back page left out of the keys the file is refused, *a play
+  from keyframe 1 shows frame 31 wrong*). Last Exile 0:10-0:25 flipped on
+  `286-speeddemon` with three pages: 166 frames cut -> **77**, the view
+  23.6% broken -> **9.6%**, 6.4 s visibly broken -> **2.75**, 4.7 MB ->
+  6.9 MB - against 93 and 12.1% for `--flip-own` on two pages. On 5k's
+  pairs (scene changes and little else) 1 -> 0 on the 486, and the same
+  cuts on the 5150 and the slow 286, where the disk binds. 5k's own leg is
+  the 486's.
 
 ##### 98.2.1.9 `--step-down`: the rate ladder, a scene at a time (2026-10-13)
 
@@ -175952,6 +177036,42 @@ Gas Gas Gas 104-114 s, `286-fast`, own 16 a shot, `--scene-min 15`: off,
 stepped (two to 8, two kept at 16 by the guard), 283.8 KB/s, 126 cut,
 2.0 s. The motion there is more than the machine draws (VIDEO-PALETTE-PLAN
 10.10); the scenes stepped to 8 went from 15 and 8 frames broken to 10 and 6.
+
+##### 98.2.1.10 `--ladder-at`: the ladder by time (2026-10-19)
+
+**One ladder for the whole clip is wrong somewhere**: the owner's Gas Gas
+Gas cuts to a new shot on nearly every frame for a third of a second at
+0:07.3 - a whole new 640 x 300 picture a frame, more than the 286's
+per-frame ceiling even all in coarse cells, so every rung tried and the
+stretch cut - and a ladder with `slow` in it to save that stretch jerks
+the rest of the clip, whose dark scenes hide a cut better than a held
+frame. `--ladder-at START-END=RUNGS[;...]` gives a stretch of the clip a
+ladder of its own: a stretch the budgets would cut that STARTS in a range
+climbs that range's rungs instead of `--ladder`'s, everywhere else
+`--ladder` is the clip's.
+
+- **Times are the encoder window's**: seconds of the file's frames, the
+  pre-roll's included, as the slider shows them. Ranges are in order and
+  do not overlap.
+- **Every rung but `colours`**, which is a scene's count chosen before the
+  encode by `--step-down`'s pass and not a stretch's - refused there, with
+  that said. A rung this file cannot use is left out in a range as in
+  `--ladder`.
+- **It needs a `--ladder`** for the rest of the clip; `cut:100` is the one
+  that only cuts.
+- **The floor of the frame rate** (`--min-fps`, which the ladder sets) is
+  the slowest `slow` rung of all the ladders, so a range's `slow:1/2`
+  slows only where it is taken.
+- **The report** gives each range a line of its own - its stretches and the
+  rung each took - and page-ahead's plan pass decides them and its real
+  passes replay them, as `--ladder`'s are.
+- **The encoder window**: *By time*, under the rungs on Degrade to Fit, a
+  field in `--ladder`'s words. The scene editor this stands in for - the
+  owner's, "a per-scene video editor" - is the larger project and not
+  built.
+
+`tests/videnc.py` 5n: a ladder that only cuts, with `slow:1/2` over one
+scene change, slows a stretch there and nowhere else.
 
 #### 98.2.2 Composite colour from a video (`--pixfmt cgacomp`)
 
@@ -176039,7 +177159,12 @@ built by `EncoderX`: the candidates are the five sub-records' spans
 pixel is the palette and the dither; the budgets, the ranking and the
 measured retry are the same code (VIDEO-PLAN W11a).
 - **One palette for the clip**: ffmpeg's `palettegen` over every frame at
-  the canvas size, reduced to the DAC's six bits and sorted darkest first,
+  the canvas size - the CLIP's frames, `--start` to `--end`, its `-t` an
+  INPUT option: palettegen writes its one frame at the end of its input, so
+  the output `-t` the frame reads use never fired here, and until
+  2026-10-17 a trimmed clip's palette was its start to the end of the FILE
+  (28 s and the closing credits' colours for 4 s of Last Exile) - reduced
+  to the DAC's six bits and sorted darkest first,
   with **true black at index 0** whatever the clip holds (the two nearest
   colours are merged to make room). Index 0 is what the screen round the
   canvas shows and what a keyframe is written onto, so the bars are black
@@ -176754,8 +177879,8 @@ The report adds the blit's own share.
 **The same encoder with a window on it** (VIDEO-PLAN 14.2, E1-E4), on
 `tools/os88proxygui.py`'s rule: it imports `os88venc` and reimplements none
 of it. The form is DERIVED from `os88venc.parser()` - every option on a
-tab (Basic, Picture, Colour, Sound, Budget, Size vs quality, Loop and
-keys, Advanced) with
+tab (Basic, Picture, Colour, Sound, Budget, Trade-offs, Degrade to
+Fit) with
 its own help as the tooltip - so an option added to the encoder is in the
 window with no work, and one without help fails the gate. A value left at
 its default is left off the command line, so the encoder's own defaulting
@@ -176794,7 +177919,7 @@ The Picture tab's 21 in one column were taller than the window, and the log
 by the disk list (the owner's report; both seen on the glass under Xvfb).
 The gate has no display, so this is looked at, not asserted.
 
-**Size vs quality** is the tab of what gives up some of the picture for a
+**Trade-offs** is the tab of what gives up some of the picture for a
 smaller file, fewer bytes a second or less of the player's time - or spends
 them on it: every format's HOLD (`--stable`, `--text-stable`,
 `--comp-stable`, `--vga4-stable`, `--vga4-hold` and its score,
@@ -176810,7 +177935,12 @@ An option that left its format's group took the group's rule with it as
 its own (FIELD_WHEN), so it greys and stays off the command line exactly
 where it did. Measured after, at 1080 x 840 and every target: no tab's
 groups or panel cross the pane's bottom or right-hand edge, the Colour
-tab's tallest panel with 20 pixels to spare.
+tab's tallest panel with 20 pixels to spare. **The tabs were reordered on
+2026-10-19** (the owner: Basic was almost empty): Loop and keys and
+Advanced became groups on Basic, which takes two columns and keeps 149
+pixels; Size vs quality's first inner tab became Trade-offs, and its
+second, the degrade ladder, a tab of its own, Degrade to Fit (41 to
+spare). An empty tab is one `ladder_page` lays out, not the columns.
 
 ##### 98.2.8.1 The palette, seen while it is picked
 
@@ -176848,6 +177978,11 @@ pixels wide (620 ran its outline past the tab's right-hand edge).
   palette uses (`PLANE_CODES`, so a 4-grey file shows its 4, not 16). It
   is kept short so the file's box is never taller than the column: a 256
   is four rows of 64 swatches, 24 pixels, and C512's 512 eight rows of 64.
+  **A file with a palette a scene (98.1.3.2.3) shows the scene the slider
+  is in** (the owner, 2026-10-19), with a heading naming it - *scene 3 of
+  7, at frame 412* - the same `palette_at` the preview's picture is drawn
+  in. It is redrawn only when the palette changes, so a drag through a
+  scene costs one draw.
 
 The panel is DERIVED from the encoder and not from a second table: a row is
 `os88vid.cga4_colours` of the byte the panel builds (`cga4_sel`), and
@@ -176870,7 +178005,7 @@ options that go together - *Made for* and *The clip* on Basic; *Canvas*,
 speaker: the sound shaped* on Sound; and so on. `GROUPS` in the window is
 the table, and the tab an option is on is its group's (`TAB_OF` is derived
 from it). An option no group names - one added to the encoder tomorrow -
-still appears, in an *Other* group on Advanced, so the form stays complete
+still appears, in an *Other* group on Basic, so the form stays complete
 with no work.
 
 **A group that cannot apply to the file the form makes is GREYED**, its
@@ -177118,13 +178253,44 @@ comparison taken out, the composite target comes out MONO1.
 **Four things asked for together, each for the workflow the owner named:
 encode, preview, then choose a keyframe for the poster.**
 
-**A progress bar.** `os88venc.encode` takes `progress(step, done, total)`
-and calls it as it goes. The steps are `STEPS`: prepare, read (read and
-dither, frame by frame against the clip's length at the file's rate),
-sound, encode (frame by frame), and write. Each has a share of one bar, and
-the window keeps the last tenth for the floppy and for reading the file back
-to preview. The encode's thread only RECORDS the latest report, and the
-window's pump draws it, so a fast encode cannot flood the Tk queue.
+**A progress bar that says what the encoder is doing** (the owner,
+2026-10-17: *"if it's doing 5 things at once, say that, rather than having
+it try to smooth it into some exact frame count that the textbox below
+contradicts"*). `os88venc.encode` takes `progress(step, done, total,
+note)` and calls it as it goes. `done` of `total` is the REAL count of what
+the step works through - frames read, scenes coloured, trials finished -
+and `total` is 0 where a step has none to give (ffmpeg's palettegen, the
+sound), which the window shows as an INDETERMINATE bar rather than a share
+of nothing. `note` says what goes on beside the count. The steps are the
+encode's own stages, named in `os88vencgui.STEP_TEXT`: prepare, the clip's
+palette, the levels, the SCENE PASS and each scene's colours (which until
+then said nothing at all: a long `--scene-palettes` clip sat on one silent
+step for a minute and more), the planes' order, the cells' scene changes,
+the ladder's colour step-down (a scene each), `--aim quality`'s trials,
+read, sound, encode, a wait, write, and check - the file played back
+against its stream, where it is held whole or its sound ahead
+(`verify_v88`). That one ran under "Writing the file" until 2026-10-18,
+and on the owner's Bad Carrot (6,480 frames of two-page VGA4) it sat
+there 15 minutes: a pixel-at-a-time VGA4 canvas was taken for both pages
+of every frame, 0.11 s each. The canvas, its inverse and the plane split
+take numpy now, the same bytes about 200 times as fast, and a verify of
+that size is about a minute. A STREAMED pass reads, dithers and
+encodes at once: its count is the frames ENCODED, and its note the frames
+read and dithered so far and anything a frame is doing that takes longer
+than a frame - the ladder's trials (how many, and whether at once), the
+lag search, a slower rate's trial. Until then that pass spread one count
+over three made-up steps, so the bar said "Reading" with a frame number
+nothing had read. A PASS says which it is as it begins - `step` "pass",
+its note the reason ("page-ahead's pass, with the plan's holds") - and the
+window numbers them; a pass run ALONGSIDE in another process (`PassBg`,
+98.2.1) reports on a lane of its own and is shown on a line of its own
+until the encode's next pass. The bar is the current step's own count, and
+the window adds how long the step has run and, at its rate so far, about
+how long it has left. On the command line `--progress` writes each report
+as `@@progress` and a JSON object (lane, step, done, total, note), a new
+step at once and a step's count at most every quarter second. The encode's
+thread only RECORDS the latest report, and the window's pump draws it, so a
+fast encode cannot flood the Tk queue.
 
 **Cancel.** The callback raises `Cancelled` once the button has been
 pressed, and it is called often enough to stop within a frame. The palette
@@ -178971,6 +180137,23 @@ The pictures cannot be read then: the key's own read is where they land.
   the reader, a play from that key shows the flip wrong - and three
   references it must refuse.
 
+#### 98.3.8.7 Against its own page (2026-10-18)
+
+**A byte 37 7 file (98.1.3.10) plays as byte 37 6's does, with nothing
+brought up**: `vp_owndec` in place of `vp_flipdec`'s front half. A record is
+decoded onto the back page as it stands and shown, or for a HELD one left
+unshown so the next goes on the same page; `REC_UP` first copies the
+record's own rows off the glass (`vp_lcopy`, then `vo_lfix` for the text on
+the glass, as 98.3.8.1's copy does). No record is kept, so `vp_prevseg`'s
+31 KB claim is not made and no record is copied after its decode, and a
+record is not held to `VP_PREVKB`. Open refuses byte 37 7 with a loop.
+
+- **The gates**: `tests/vidvga8.py --layout modex --flip --own` (and
+  `--held`), and `tests/vidscreen.py --own` on the four flipped VGA4
+  screens: the glass exact at every hold, odd and even frames apart, keys
+  among them. With `REC_UP` ignored the Mode X arm FAILS before frame 38
+  (480 pixels): its page was the frame before the key, not the key.
+
 #### 98.3.9 Repeat
 
 **The Repeat button** stands down while Repeat is on (`OS88UI_LATCH`, like
@@ -179650,6 +180833,39 @@ that was only late would count twice and fail the next step, so a pass
 means each one was really lost. The player reads keys through the BIOS
 buffer, so it drops none itself.
 
+#### 98.3.14.1 A frame on or back: . and ,
+
+The owner (2026-10-18): one key for the next frame and one for the frame
+before, for looking at a file frame by frame. Both work in the full screen
+while it is PAUSED, and are ignored while it plays, with a seek on its
+way, or in the window. `.` and `,` are the unshifted `>` and `<`, and
+nothing else in the player uses them.
+
+- **ON (`.`)** asks the HOOK for a frame: `[vp_stepq]` frames that
+  `vp_hook` draws while paused, one a call, through the same `vp_frame` a
+  played frame takes. So a flip, a held frame or a layer is exactly what
+  the play would show there. With a card already started, the step tops up
+  the card's ring first (`vp_afill`), so the stepped frames' sound waits in
+  step for the resume. A card not yet started - a paused start, or a
+  seek's landing - starts at the frame on the glass anyway, so there
+  `vp_frame` lets a frame through without its audio.
+- **BACK (`,`)** is a SEEK, because the player decodes nothing without
+  drawing it. It is Unmute's seek (`vp_skhere`, 98.3.17) to the key at or
+  before the frame wanted, due at once. The landing, paused, steps on from
+  the key to that frame (`[vp_sttgt]`), so the way there is seen briefly.
+  A file with no keys cannot step back.
+- **Resume** after steps: the clock carries on from the frame stepped to.
+  With a card, the picture waits on the card for the frames it stepped
+  ahead, which were queued with it.
+
+`tests/vidfskeys.py` question 8 is the gate: paused on a key, `.` three
+times, each the next frame byte for byte with "Paused" over it, then `,`
+once, the frame before. Broken on purpose - `.` queuing two frames - it
+FAILS at the first step.
+
+The encoder's preview has the same two keys, and `<` and `>` buttons
+beside the frame number (98.2.11).
+
 #### 98.3.15 No card: the speaker, or performant silence
 
 With no Sound Blaster (`OSAPI_SND_CAPS` lacks `SND_CAP_PCM_BG`), a clip's
@@ -180063,6 +181279,20 @@ loading the file to its end, the card's line drawn from the timer.
 disk, and after the same swap the same key REFUSED. Broken on purpose -
 `vp_xput` out of `vp_fill`, the hold short at the play's end (163,840 of
 973,312); `vp_xrdat` out of `vp_rdat`, the key refused - `vidxms` FAILS.
+
+###### 98.3.18.1.1 A wake that only fed the ring paints nothing
+
+`vp_onwake` serves every wake the player posts, and after the ring's chunks
+(`[vp_lwant]`) it FELL THROUGH to the rest: the end of a play, a posted
+compaction, a document, a layout - and, with none of them pending, to
+`vp_repaint`, the whole window. So a Live stream repainted the poster, the
+bar, the card and all seven buttons once a refill: measured on the 1.2 MB
+`vidxmslive` clip, **34 full repaints in a 450-frame play against 5** with a
+feed wake that paints nothing. Uncovered it was a visible redraw of the
+window; covered, the buttons under the edge went blank each time
+(§13.8.9.1). A wake that fed the ring now returns at once unless `[vp_lend]`,
+`[vp_cpgo]`, `[vp_argpend]` or `[vp_relay]` asks for the rest, and a wake for
+any of those posted while a feed was pending still finds its flag set.
 
 ##### 98.3.18.2 The bank: a file bigger than the pool
 
@@ -180730,6 +181960,8 @@ fast path.
 
 **A VGA8 poster is its luma, dithered to one bit** (98.4.4), because the
 Preview is drawn on the desktop. **A VGA4 poster is in colour** (98.4.5).
+**A file with DESKTOP POSTERS** (98.1.3.11) has its box's picture read
+rather than decoded, in colour or black and white whatever its format.
 
 **The poster** is the header's poster keyframe (98.1.3) when the file
 opens, and the picked key's picture after:
@@ -180926,13 +182158,49 @@ reference, and `tests/vidvga8.py` holds the player to them bit for bit.
 
 #### 98.4.5 A sixteen-colour poster
 
+A file that carries DESKTOP POSTERS (98.1.3.11) has the box's picture
+read, not decoded: the key's own, or at open and at the end the custom one,
+unpacked into the poster's claim and halved there when the layout shows
+twice or four times the stored scale. The rest of this section is every
+other VGA4 file, and any key whose stored poster cannot be used.
+
 A VGA4 keyframe is decoded into its RAM planes and `vp_v4pack` packs it
-for `OSAPI_GFX_BLIT4` - two pixels a byte, the left one high - taking every
-`vp_ps`-th pixel of every `vp_ps`-th row, so a half or a quarter is a
-decimation rather than 98.4's dithered halving. The box is then drawn in
-the desktop's own sixteen colours, and on a one-bit desktop `gfx_blit4`
-renders them as it renders any picture. `tools/os88vid.py`'s `vga4_pack` is
-the reference and `vidvga4` holds the player to it byte for byte.
+for `OSAPI_GFX_BLIT4` - two pixels a byte, the left one high - taking ONE
+pixel of each `vp_ps` x `vp_ps` cell, so a half or a quarter is a
+decimation rather than 98.4's dithered halving. **Which pixel turns with the
+output's place** (2026-10-18): at output (ox, oy) it is the cell's row
+oy x s + ox mod s and column ox x s + oy mod s. A fixed corner turned a 50%
+checkerboard, the commonest dither there is, into one of its two colours
+(T69's black box). The turning pick keeps it a checkerboard. The box is
+then drawn in the desktop's own sixteen colours, and on a one-bit desktop
+`gfx_blit4` renders them as it renders any picture. `tools/os88vid.py`'s
+`vga4_pack` is the reference, and `vidvga4` and `vidposter` hold the player
+to it byte for byte.
+
+##### 98.4.5.1 A sixteen-colour poster drawn as planes (2026-10-19)
+
+**The poster goes to a VGA's screen through `OSAPI_GFX_BLITP` and its clip
+walk (5.4.3.6), not through `OSAPI_GFX_BLIT4`.** The owner's report: a
+window dragged over a Live colour file's Preview, before any play, took a
+second or two to heal each step, where during a play and after one it was
+instant. During a play the box is the Live shadow's four planes, which
+BLITP draws under a region fragment by fragment (98.3.10.4). Before one it
+is the packed poster, and BLIT4 keeps its fast path under a region only
+when the box lies inside ONE fragment (5.4.1.4): a window still over part
+of the box leaves it in pieces, and every run then costs a clipped
+`gfx_fill`. A dithered picture is about one run a pixel.
+
+`vp_p4planes` turns the packed poster into four planes a few rows at a
+time, in `vp_v4buf` (the repack buffer Live already has), and draws each
+chunk with DI bit 14. A probe first (DI bit 15) asks BLITP whether it takes
+this rect at all; a one-bit desktop, a straddle and `kern_small` refuse,
+and the poster is drawn by BLIT4 as before. Measured on MartyPC's VGA XT,
+a 200 x 112 Live colour file of dithered pixels with a Disk window moved
+from one place over the box to another: **13.4 s a heal before, 0.59 s
+after** (on a 4.77 MHz 8088; 2.7 s and 0.12 s on a 286 at about five
+times). Uncovered, the two are the same (558 ms for BLIT4's VGA decoder,
+588 for the conversion and BLITP): the conversion, ~120 cycles a pixel,
+is what is left. `vidlivevga4`'s leg 1b is the gate.
 
 #### 98.4.6 A CGA-colour poster
 
@@ -181055,8 +182323,8 @@ Hercules row caught it.
 **A hard disk that shows the player off**: a whole os8088 install with a set
 of demo videos in `MEDIA/` beside a `00-VIDS.TXT` that says what each is.
 `make viddemo` makes one disk for each directory of `apps/video/demo/`
-that holds a `00-VIDS.TXT` - `herc/` and `cga/` today, the owner's (`vga/`
-to come, the same shape) - as `build/VIDDEMO-<ADAPTER>-ST11R.VHD`.
+that holds a `00-VIDS.TXT` - `herc/`, `cga/` and `vga/`, the owner's - as
+`build/VIDDEMO-<ADAPTER>-ST11R.VHD`, or `-IDE.VHD` for VGA's (below).
 
 - **The videos are COMMITTED**, one directory an adapter: they are the
   owner's encodes from their own sources and cannot be remade by `make`,
@@ -181085,6 +182353,23 @@ to come, the same shape) - as `build/VIDDEMO-<ADAPTER>-ST11R.VHD`.
   (360 x 84 at 23 fps, the speaker at 8 kHz), still the whole of Bad
   Carrot: that disk has less room to trade. Its text had named 02 and
   03 "Bad Apple"; 02 is Bad Carrot and 03, by its frames, Trackmania.
+- **The VGA set is a 286's, on a 504 MB IDE disk** (2026-10-19): eleven
+  videos, 290 MB, encoded to push the owner's 16 MHz 286 with 3 MB of XMS
+  (`286-picomem1`, the bank 2,944 KB) - and two, `10-LX486` and `11-GS486`,
+  for a 486DX2-66 on purpose (`486-dx2-66`, a 7,040 KB bank), as their
+  names say. Each is there to show one thing off - page flipping,
+  page-ahead on two and three pages, a layer, sound ahead, big records,
+  every pixel in mode 13h's straight line, pixels doubled sideways, a
+  palette a scene and the degrade ladder, Live
+  in black and white and in colour - and `00-VIDS.TXT` says which. The disk is `1024/16/63`, the most a BIOS's CHS reaches without
+  LBA (`VIDDEMO_IDE` in the Makefile picks the adapters that take it):
+  `os88disk.py --hdd --geometry` lays ONE BIG VOLUME, 1,032,129 sectors
+  from LBA 63, FAT16 in 8 KB clusters with TotSec32 and partition type
+  06h - which `kern_big` mounts and boots (18.7.5, 52.3) - where it capped
+  a partition at 65,535 sectors before, which the 31 MB disks still are;
+  `os88hdd.py --wrap` without `--st11` adds the VHD footer and nothing
+  else. Booted on QEMU's IDE: C: is the boot volume and `MEDIA` lists the
+  eleven, with about 227 MB of the volume free.
 - **`00-VIDS.TXT` is written for Note Pad** and held to `checkreadme.py`'s
   rules as `README.TXT` is: prose one line a paragraph, the per-video
   blocks indented and 28 columns at most, plain ASCII, CRLF on the disk.
@@ -181246,13 +182531,25 @@ the copying bank emptied (`vp_eend`) - and three of its own:
   pointer: the bank's LAST slot holds what a super-packet starting in slot
   K-1 runs on into of slot 0 (`vp_mneed`), copied up from the same bounce,
   as the conventional ring's mirror is. So `[vp_kr]` is the bank's slots
-  less one.
+  less one - **or less two for BIGSP** (98.1.4.1, 2026-10-19), whose record
+  can pass 32 KB and so run from late in slot K-1 through slot 0 into slot
+  1: the mirror is then the bank's last TWO slots, slot 1's copied up as
+  slot 0's is, and neither of the two is read straight into the bank
+  (98.3.18.15) - they come through the bounce, which the mirror's copy
+  needs. `[vp_msl]` is the mirror's slots either way, so one body serves
+  both.
 
 **Taken** (`vp_xbipq`, beside `vp_einq` where the ring is sized) on a 286
-whose LOADALL checked out (`vp_xok`, 98.3.18.11's), for an XMS bank of three
-slots or more. **Not taken** for the speaker's clock (98.3.18.5), BIGSP (a
-mirror of two slots, 98.1.4.1), Live, Repeat, the shadow, or a gate's
-`[vp_noinp]`. The card's line reads `XMS bank in place (LOADALL), N KB`
+whose LOADALL checked out (`vp_xok`, 98.3.18.11's), for an XMS bank of
+three slots or more - five for BIGSP, the three a super-packet can touch and
+its mirror of two - and a gate's `[vp_ekr]` cap of more than the mirror.
+**Not taken** for the speaker's clock (98.3.18.5), Live, Repeat, the shadow,
+or a gate's `[vp_noinp]`. BIGSP was on that list until 2026-10-19, and it was
+the owner's Last Exile (Mode X at `--frame-cap 48`) that took it off: a file
+with super-packets past 32 KB played out of the copying bank, a 32 KB copy
+down a chunk on the CPU of a PIO disk whose rate falls as the CPU is used,
+and it ran out of stream from about frame 1,500 - the copy down was the
+difference between the encoder's model and the play. The card's line reads `XMS bank in place (LOADALL), N KB`
 (`[vp_lbk]` 8). The conventional ring keeps two slots and its mirror for a
 key's read, as 98.3.18.7's does - a bank's ring of up to 15 slots, its
 mirror and its bounce come back to the heap.
@@ -181268,6 +182565,16 @@ the mirror is read on every one of thirteen laps, and a mirror copied from
 the wrong bytes takes it red at 36 of 39 holds (where the final window
 still matched); `banksnd` adds the SB16, the card's audio copied out of the
 bank through a borrow every frame. VIDEO.O88 +350 bytes, no kernel byte.
+`bankbig` is BIGSP's: the wrap arm's 3-slot ring on a 200-frame clip whose
+every tenth frame is a whole new 480-row screen, a 38 KB record, two of
+which start late enough in slot 2 to run into the mirror's second slot -
+`mirror_reach()` names them off the file and the row refuses a clip with
+none, because only a RECORD crossing two chunk edges reads that slot (each
+is addressed by its own chunk, vp_dec's `.ra`), and a super-packet doing so
+is not enough: the first version of the arm had three such super-packets
+and no such record, and passed with slot 1's mirror never written. Slot 1
+not mirrored takes it red at 2 of 19 holds, the two frames it names. The
+two-slot mirror cost VIDEO.O88 +17 bytes.
 
 
 ##### 98.3.18.14 A 386 decodes in place too (2026-10-16)
@@ -181498,6 +182805,25 @@ reached **85-89% on the two 16-colour files, which played perfectly**, and
 **113% on Bad Carrot**, whose picture fell 186 ms behind and caught up
 unseen (98.2.1.1.2); single frames reached 123-126% on all three with no
 harm. That is what `--lag` and `--peak` are set from.
+
+#### 98.4.9 A Live play redraws what moved
+
+Two redraws of a Live play on the desktop were bigger than their change:
+
+- **The thumb.** `vp_lblit` drew the whole bar (`vp_pbar`: a frame and three
+  fills) each time the thumb moved a pixel. `vp_pthumb` fills the columns it
+  LEFT white and the columns it TOOK black - two calls, no column written
+  twice - from `[vp_wtx]`, the offset it was drawn at, against `[vp_tx1]`,
+  which `vp_track` keeps where the window is now. A bar with no keyframes is
+  still `vp_pbar`'s.
+- **The row at a start.** A Live play turns Play into Pause and nothing else
+  on the row, but `vp_lsetup` and `vp_lback` (back from the full screen, after
+  a repaint that drew the row whole) redrew all seven buttons. `vp_lbtn3`
+  draws button 3 alone, as Space's pause and resume already did (`[vp_bone]`).
+
+With §98.3.18.1.1's wake that is 178 bytes of `video.o88` (beside the 246 of
+§13.8.9.1's band in the library), none resident; the play's own routines are
+`os88rdiff`-identical bar `vp_lblit`'s call target, at an even shift.
 
 ## 99. Gorillas (`apps/gorillas/gorillas.asm`)
 
@@ -192132,7 +193458,7 @@ GOTO_QM    home
 ```
 
 - **The home stand is the question of WHICH DISK, and the kernel answers
-  it** - `OSAPI_FILE_GOTO_QM` to home, which is `fcp_goto`. While a floppy's
+  it** - `OSAPI_FILE_GOTO_QM` to home, which is `dsk_goto`. While a floppy's
   motor is still turning no hand can have swapped the medium, and it is a
   word (§18.9.1's `dsk_media_ok`); otherwise it is a QUIET mount
   (§18.9.1.1), which reads this disk's boot sector, signs it (`dsk_bpb_sig`)
@@ -194026,7 +195352,7 @@ one a Sticky App row names, §110.4), then every other volume that is a FIXED
 disk - `hb_pick1`'s test (`dsk_vol_fixed_x` AL = 1, and not a redirected
 `DVK_FILE` volume, so not the RAM disk or the cable) less a mounted disk
 IMAGE (`DRVC_IMG`), which is a floppy's contents. On each: its root quietly
-(`fcp_goto`), `STIKAPPS` by name (`dskw_stat`), into it, then
+(`dsk_goto`), `STIKAPPS` by name (`dskw_stat`), into it, then
 `dsk_find_x` by ordinal - stateless, so the header peeks between the calls
 cannot disturb it - and for each `.O88` its first sector (`dsk_peek_x`, 512
 bytes). It is LISTED when its magic is `'O8'`, bit 7 is set, the file holds

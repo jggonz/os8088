@@ -149,8 +149,8 @@ dm_frontband:
     mov bx, [dm_win]
     call OSAPI_WM_CLIP_SET   ; real ownership clip, including during W_PAINT
     jc .ret
-    ; Native planar copying refuses a region clip. Only disarm it after
-    ; proving this entire band belongs to us; covered bands keep clipping.
+    ; A band wholly ours disarms the clip, so BLITP copies it in one piece;
+    ; a covered band keeps it, and BLITP walks it (DI bit 14 below).
     mov dx, ax
     add dx, [dm_fronty]
     dec dx
@@ -215,10 +215,10 @@ dm_frontband:
     mov bp, [dm_frontstride]
     cmp byte [dm_frontcolor], 0
     je .mono
-    mov di, 54
+    mov di, 54 | 0x4000         ; the plane step, walking a clip (5.4.3.6)
     call OSAPI_GFX_BLITP
     jnc .row
-    ; Region clipping/display seams: convert and draw one row at a time.
+    ; Refused (a display seam, kern_small): convert and draw a row at a time.
     mov word [dm_frontptr], dm_fontvga
 .fallback:
     mov si, [dm_frontptr]

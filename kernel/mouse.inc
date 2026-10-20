@@ -1954,6 +1954,10 @@ mou_p2_init:
     mov [mou_p2id], al          ; boot mode is exactly the mouse this decoder
                                 ; wants, and refusing it would buy nothing
 
+    call mou_p2knock            ; THE WHEEL'S KNOCK (SPEC.md 9.9.8) - a body
+                                ; below this routine's ret, out of the span of
+                                ; every jump to .fail
+
     ; --- a mouse answered: from here it is commitment, not probing -----------
     ; THE VECTOR FIRST, and that ordering is not tidiness - it is the defect
     ; this was found with. Arming IRQ12 in the command byte while int 74h still
@@ -2058,6 +2062,39 @@ mou_p2_init:
     pop ax
 .none:
     ret
+
+; -----------------------------------------------------------------------------
+; mou_p2knock - put a wheel mouse in WHEEL mode (SPEC.md 9.9.8)
+;
+; Sample rate 200, 100, 80, then the ID again: an IntelliMouse answers 3 and
+; sends FOUR bytes a packet from here on, and anything else is still the
+; three-byte mouse mou_p2_init just reset, so every failure leaves [mou_p2wz]
+; 0. Inside mou_p2_init's 0xAD window, so 60h is the device's. Overlay bytes:
+; none of it is resident.
+; in: nothing; out: AL spent, SI spent (mou_p2_init banks it), the rest kept
+; -----------------------------------------------------------------------------
+mou_p2knock:
+    mov si, MOU_P2KNK_DS        ; THE TABLE THROUGH DS, which is KERNEL_SEG:
+.knock:                         ; this body runs at CS = FAT_SEG, and lodsb
+    lodsb                       ; with the overlay's own offset read the
+    call mou_p2dev              ; kernel's bytes there instead - garbage
+    jc .out                     ; commands, the knock failing safe to three
+    cmp si, MOU_P2KNK_DS + mou_p2knk_n  ; bytes, found by tests/wheelps2.py.
+    jb .knock                   ; (`cs lodsb` was the byte .ovl did not have)
+    call mou_p2rd               ; the ID, after 0xF2's ACK - and NO jc: a read
+    cmp al, 3                   ; that timed out leaves 64h's status in AL,
+    jne .out                    ; whose bit 0 is clear, so it is never 3.
+    mov [mou_p2wz], al          ; [mou_p2id] keeps the RESET's answer, which is
+.out:                           ; what SPEC.md 9.4.4 publishes it as
+    ret
+
+mou_p2knk   db 0xF3, 200, 0xF3, 100, 0xF3, 80, 0xF2
+mou_p2knk_n equ $ - mou_p2knk
+MOU_P2KNK_DS equ mou_p2knk + (FAT_SEG - KERNEL_SEG) * 16 ; the same bytes, as
+                                ; KERNEL_SEG names them: the overlay lands on
+                                ; FAT_SEG (SPEC.md 2.5.3), inside DS's 64K
+                                ; (asserted beside the `.ovl` guard in
+                                ; kernel.asm, where OVL_SIZE is known)
 
 section .text                   ; ...and back: mou_p2_off is mou_lockon's and
                                 ; mouse_unhook's, both of which run all session
@@ -2168,9 +2205,10 @@ mou_p2_byte:
                                 ; The same instruction mou_byte uses, asked of
                                 ; the other socket
 .take:
-    cmp byte [mou_p2ph], 1
-    je .b1
-    ja .b2
+    mov ah, [mou_p2ph]          ; the phase COUNTED DOWN in AH, mou_byte's own
+    dec ah                      ; idiom: 0 goes negative, 1 is zero, and 2 and
+    jz .b1                      ; 3 - the wheel's Z byte, SPEC.md 9.9.8 - are
+    jns .b23                    ; told apart below
     test al, 0x08               ; byte 0's bit 3 is ALWAYS set, and it is the
     jz .out                     ; only sync this protocol offers
     mov [mou_p2b0], al
@@ -2184,8 +2222,18 @@ mou_p2_byte:
     mov byte [mou_p2ph], 2
     ret
 
+.b23:
+    dec ah
+    jz .b2
+    mov byte [mou_p2ph], 0      ; PHASE 3, and the next byte is a header
+    jmp mou_whl_add             ; again. The Z byte is a whole signed byte,
+                                ; positive TOWARD THE USER
+
 .b2:
-    mov byte [mou_p2ph], 0
+    mov ah, [mou_p2wz]          ; 0 for a three-byte mouse, 3 for one the knock
+    mov [mou_p2ph], ah          ; put in wheel mode (SPEC.md 9.9.8): a Z byte
+                                ; is owed. STORED FIRST, so the overflow drop
+                                ; below still consumes the packet's fourth byte
     mov bl, al                  ; BL = the Y magnitude
     mov dh, [mou_p2b0]          ; DH = byte 0, and it stays there to the end
     test dh, 0xC0               ; either overflow bit: the deltas are a LIE, so
@@ -3469,12 +3517,29 @@ mou_byte:
     dec ah                      ; byte with bit 6 clear arriving between packets
     jnz .stray                  ; is a thing the protocol cannot produce...
     mov [bx+mou_phase], ah      ; ...UNLESS it is the FOURTH byte of a wheel
-    ret                         ; mouse's packet, which is exactly a bit-6-clear
+                                ; mouse's packet, which is exactly a bit-6-clear
                                 ; byte in exactly this position (SPEC.md 9.5.4).
                                 ; AH IS 0 here, so the store is phase 0 a byte
                                 ; shorter than the immediate. Consumed, and the run is NOT broken - that
                                 ; break is what made a wheel mouse unable to
                                 ; win the contest at all (docs/FIELD-NOTES.md 44)
+%ifdef KERN_BIG
+    ; ...AND ITS LOW NIBBLE IS THE WHEEL (SPEC.md 9.5.5), -8..+7 and POSITIVE
+    ; TOWARD THE USER. Bit 4 is the middle button, which SPEC.md 10 has no
+    ; record for. A Logitech M3's fourth byte is only ever 0x20 or 0x00, so
+    ; its nibble is 0 and it can never scroll. An UNSETTLED port's bytes must
+    ; not scroll for .pkt's reason - a modem's text has bit 6 clear too - and
+    ; AH is still the 0 the store above wrote, which makes that test a
+    ; register compare
+    cmp [mou_seen], ah
+    je .jbout
+    and al, 0x0F
+    xor al, 8                   ; sign-extend a NIBBLE: (n ^ 8) - 8 maps 0..7
+    sub al, 8                   ; to 0..7 and 8..15 to -8..-1
+    jmp mou_whl_add
+%else
+    ret
+%endif
 .stray:
     mov byte [bx+mou_run], 0
     ret
@@ -3655,6 +3720,26 @@ mou_apply_abs:
 ; outs: none
 ; -----------------------------------------------------------------------------
 
+%ifdef KERN_BIG
+; -----------------------------------------------------------------------------
+; mou_whl_add - AL = signed notches, added to the wheel's level (SPEC.md 10.4)
+; ISR or cli context; out: AX spent, everything else preserved
+; -----------------------------------------------------------------------------
+mou_whl_add:
+    cbw
+    add [mou_whl], ax
+    jmp sch_wake_ui             ; ...and the UI task has work
+
+mou_p2wz    db 0                ; 3 when the knock put the PS/2 device in WHEEL
+                                ; mode (SPEC.md 9.9.8) - the phase .b2 hands on,
+                                ; so a fourth byte is owed - and 0 for a
+                                ; three-byte mouse. hbm_wake knocks again and
+                                ; clears it if the device stopped answering 3.
+                                ; HERE, among the code, for PARITY: in the PS/2
+                                ; block below cur_move it was one odd byte in
+                                ; front of sch_isr (t_hotpar)
+%endif
+
 mou_apply:
     mov byte [blk_act], 1       ; a packet on a SETTLED port IS user input
                                 ; (SPEC.md 64.1), and only a settled one: both
@@ -3697,6 +3782,13 @@ mou_apply:
                                 ; is not an A/B
 %endif
 
+%ifdef KERN_BIG
+    mov al, cl                  ; A DRIVER'S WHEEL rides CL's top six bits,
+    sar al, 1                   ; signed (SPEC.md 9.12.8): every driver built
+    sar al, 1                   ; before it masked CL to the two buttons, so
+    call mou_whl_add            ; an old binary reports no wheel rather than a
+    and cl, 0x03                ; wrong one - and the decoders above leave them
+%endif                          ; clear. AX is dead here (CURFIX's own note)
     mov bl, cl                  ; the buttons, in mouse_btn's own two bits
     mov bh, [mouse_btn]
     mov [mouse_btn], bl
@@ -6014,6 +6106,13 @@ mou_pstack  resb MOU_PSTK       ; the mouse ISR's own stack (MOUPRIV_ENTER).
 section .bss
 mou_psave   resw 1              ; the task's SP across it, reached through CS at
                                 ; entry because DS is not ours yet
+%endif
+%ifdef KERN_BIG
+mou_whl     resw 1              ; the WHEEL, notches owed, signed, positive
+                                ; toward the user (SPEC.md 10.4): a LEVEL that
+                                ; every backend ADDS to and ui_task takes with
+                                ; one xchg, so a spin is one scroll however fast
+                                ; it comes and can never flood the event ring
 %endif
 cur_lazy    resb 1              ; gfx_lock deferred the hide (SPEC.md 7.1.4):
                                 ; the arrow is still on screen this hold

@@ -274,6 +274,7 @@ INLINE = {
     "OSAPI_VOL_SYS":       ("load",  "bl", "dsk_bootvol", ()),
     "OSAPI_WM_ONWAKE":     ("store", "ax", "[bx+W_ONWK]", ()),
     "OSAPI_WM_ONRCLICK":   ("store", "ax", "[bx+W_ONRC]", ()),
+    "OSAPI_WM_ONWHEEL":    ("store", "ax", "[bx+W_ONWH]", ()),   # kern_big; nops on kern_small
     "OSAPI_GFX_BLIT1_PEN": ("store", "ax", "gfx_b1ink", ()),  # AH -> gfx_b1pap, adjacent
     "OSAPI_ICON_PEN":      ("store", "ax", "ico_c1", ()),     # AH -> ico_c2, adjacent
     "OSAPI_WM_ONCLICK":    ("store", "ax", "[bx+W_ONCLICK]", ()),
@@ -305,6 +306,8 @@ def inline(c):
             opd, n = ("abs", struct.unpack_from("<H", c, 3)[0]), 5
         elif mod == 1 and rm == 7:
             opd, n = ("bx", c[3]), 4
+        elif mod == 2 and rm == 7:          # [bx+disp16]: OSAPI_WM_ONWHEEL's
+            opd, n = ("bx", struct.unpack_from("<H", c, 3)[0]), 5  # parity
         else:
             return None
     else:

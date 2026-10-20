@@ -272,6 +272,10 @@ zf_entry:
     mov ax, zf_onwake               ; SPEC.md 54.10: the kernel calls this once
     call OSAPI_WM_ONWAKE            ; our window is on the glass, and the story
                                     ; a double-click named loads in front of it
+    mov ax, zf_onwheel              ; SPEC.md 13.18: the mouse wheel scrolls
+    call OSAPI_WM_ONWHEEL           ; the scrollback. Flags preserved, so
+                                    ; wm_create's CF rides on; a no-op on
+                                    ; kern_small
 
     ; A story named by a double-click (SPEC.md 54.7). SI comes back pointing
     ; into KERNEL_SEG, so it is read through ES and copied before anything
@@ -571,6 +575,40 @@ zf_onkey:
     call zw_scrollpage
 .out:
     pop di
+    jmp zf_pop4
+
+; =============================================================================
+; zf_onwheel - W_ONWH (SPEC.md 13.18)
+; in:  AX = signed notches (positive = toward the user = later lines), SI =
+;      window ptr; gfx lock HELD, UI task
+; out: nothing; preserves every register
+;
+; The SCROLLBACK, the one view this window has a bar for: the lower window's
+; ring, [zw_sbtop] its top line. WHEEL_STEPS LINES A NOTCH - a line here is one
+; row of the lower window, ZF_LEAD pixels - added to [zw_sbtop] and handed to
+; zw_scrollto, which is the bar's arrow cells' own path (zw_click's .set): it
+; clamps, and moves the low window and the thumb only if the top moved, with a
+; blit while the move is under a windowful (SPEC.md 61.15). All notches since
+; the last UI pass arrive summed, so this is one move and one paint. The same
+; gates as PgUp: the About card comes down first and spends the turn, and with
+; no story running there is no scrollback to move.
+; =============================================================================
+zf_onwheel:
+    push ax
+    push bx
+    push cx
+    push dx
+    call zf_unabout
+    jc .out
+    cmp byte [zf_state], ZFS_RUN
+    jne .out
+    call zw_bounds                  ; zw_click's own first step: the window is
+    jc .out                         ; sizable, so the rows are derived per call
+    mov dx, WHEEL_STEPS
+    imul dx                         ; AX = lines, signed
+    add ax, [zw_sbtop]
+    call zw_scrollto
+.out:
     jmp zf_pop4
 
 ; =============================================================================

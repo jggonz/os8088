@@ -335,14 +335,17 @@ def mclip(tmp, layout, pages, screen, loop=None, name="PAGE.V88",
 
 
 def fclip(tmp, layout, pages, screen, loop=None, name="PAGE.V88",
-          kpart=vid.KEY_PART):
+          kpart=vid.KEY_PART, own=False):
     """98.1.3.7.2's file, FLIPPED AND BUILT AHEAD on `pages` pages: every
     frame drawn on the page not shown, FLIPS' two scene changes each built
     ahead - the first on page 2, half of it preloaded by key 0, and on four
     pages COPIED onto page 3 in the calm after it is whole, so the frame
     after its flip draws on a page already brought up; the second on a page
     the first flip freed, with a COPY in its flip's record bringing the
-    next page up. (path, the canvases, W, H, pal)"""
+    next page up. `own` (--flip-own, VIDEO-SEEN-PLAN 3b): every record
+    BUILT - an ordinary frame drawn on the back page as it stands, the
+    frame two back, and nothing brought up - and every key carrying the
+    back page too. (path, the canvases, W, H, pal)"""
     rnd = random.Random(1311)
     if layout == vid.LAY_MODEX:
         W, H, ncol, pf = 160, 96, 256, vid.PF_VGA8
@@ -411,6 +414,12 @@ def fclip(tmp, layout, pages, screen, loop=None, name="PAGE.V88",
                 h2 = free[0]            # from the frame after)
                 builds[h2] = (F2, F1 + 2, F2 - 4)
             shown, back = p, nb
+        elif own:
+            p, built = back, True       # AS IT STANDS: the frame two back
+            ops = delta(pcv[p], cvs[f])
+            g.put(P[p], cvs[f])
+            pcv[p] = cvs[f]
+            shown, back = p, shown
         else:
             p = back                    # BROUGHT UP: the page shown, and
             g.put(P[p], pcv[shown])     # this frame drawn on it
@@ -438,7 +447,7 @@ def fclip(tmp, layout, pages, screen, loop=None, name="PAGE.V88",
             pcv[pre] = bytes(new)
         wr.frame(ops, P[p], hidden=hid, flip=p, shown=p, built=built,
                  copies=cps, hsurfs={n: P[n] for n in range(pages)
-                                     if n != back})
+                                     if own or n != back})
     out = os.path.join(tmp, name)
     wr.write(out, 1)
     if loop is None:
@@ -493,6 +502,10 @@ def main():
                     help="--pages: FLIPPED AND BUILT AHEAD (98.1.3.7.2) - "
                     "every frame flipped, the scene changes built ahead, "
                     "COPYs bringing the next page up")
+    ap.add_argument("--own", action="store_true",
+                    help="with --fpage: every record BUILT, drawn against its "
+                    "own page as it stands, and every key carrying the back "
+                    "page (--flip-own, VIDEO-SEEN-PLAN 3b)")
     ap.add_argument("--refused", action="store_true",
                     help="herc: on a machine with a colour card beside the "
                     "Hercules, the play must REFUSE (98.3.8.3)")
@@ -531,7 +544,8 @@ def main():
                            % (big, mx))
         if a.fpage:
             def mk(**k):
-                return fclip(tmp, lay, a.pages, scr, kpart=a.kpart, **k)
+                return fclip(tmp, lay, a.pages, scr, kpart=a.kpart,
+                             own=a.own, **k)
             v88, cvs, W, H, pal = mk()
         elif a.pages > 2:
             def mk(**k):
@@ -588,8 +602,8 @@ def main():
                         if isinstance(y, tuple))
             print("   flipped and built ahead: %d of %d records flip, %d "
                   "built, %d copies" % (nflip, NF, nbuilt, ncopy))
-            if nflip != NF or nbuilt != len(FLIPS) or not ncopy or \
-                    not r.fpage:
+            if nflip != NF or nbuilt != (NF if a.own else len(FLIPS)) or \
+                    not ncopy or not r.fpage:
                 bad.append("the flipped built-ahead clip does not test what "
                            "it is for")
             nflip = len(FLIPS)

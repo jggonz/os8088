@@ -717,7 +717,8 @@ def main():
     # build), and an OVLCALL aimed at one that DID fails the other way.
     MACHALF = {'SPLCALL': '.blob', 'SPLCALLC': '.blob',
                'SPLGATE': '.blob', 'SPLGATE1': '.blob', 'SPLSTUB': '.blob',
-               'OVLCALL': '.ovl', 'OVBCALL': '.blob', 'BLOBCALL': '.blob'}
+               'OVLCALL': '.ovl', 'OVBCALL': '.blob', 'BLOBCALL': '.blob',
+               'OVSCALL': '.ovl'}   # OVBCALL's mirror: `.ovl` on kern_small
     MACPAT = re.compile(r'\b(' + '|'.join(MACHALF) + r')\s+(\w+)')
     REACH = {'.blob': 'the blob (.boot2), through [spl_fseg]',
              '.ovl': 'the FAT window, by `call FAT_SEG:`'}

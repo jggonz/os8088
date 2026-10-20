@@ -123,8 +123,9 @@ W_SUEXT  equ W_SIDE+32          ; 4: the raise cache's band extents (11.96.11)
 W_WKQ    equ W_SIDE+36          ; byte: WKQ_NONE / WKQ_RING / WKQ_EATEN
 %ifdef KERN_BIG
 W_PKIND  equ W_SIDE+37          ; byte: adapter kind last sized for (11.100.4)
-WIN_SIZE equ 72                 ; NOT a power of two: never shift, multiply.
-%if WIN_SIZE != W_PKIND + 1     ; A LITERAL, because tools/os88geom.py
+W_ONWH   equ W_SIDE+38          ; WHEEL handler, 0 = none (SPEC.md 13.18)
+WIN_SIZE equ 74                 ; NOT a power of two: never shift, multiply.
+%if WIN_SIZE != W_ONWH + 2      ; A LITERAL, because tools/os88geom.py
   %error "WIN_SIZE must end the record" ; mirrors it and t_mirror reads it
 %endif
 %else
@@ -483,9 +484,17 @@ wm_pkgcall:
 ; IN THE BOOT OVERLAY (SPEC.md 2.5.2, docs/plans/LAST-DROP-BYTES.md row 14). One
 ; caller, kmain:4291, and zero outbound: it is four `rep stos` runs over `.bss`
 ; through ES = DS = KERNEL_SEG, which `.boot2` supplies unchanged.
+; ...AND BACK IN THE BLOB ON kern_big (SPEC.md 9.9.8): the window half had two
+; bytes left and the PS/2 wheel's knock needed thirty-seven, which is this body
+; to the byte. The blob had 248. kern_small keeps it in `.ovl`, where its blob
+; is the tighter of the two; tools/os88ovlchk.py models kern_small, so that
+; arm is written LAST
+%ifndef KERN_SMALL
+section .boot2
+%else
 section .ovl                   ; BOTH kernels (SPEC.md 2.5.3.3): it was the
                                 ; blob on kern_small, and kmain_o needed that
-                                ; room - its one call is before the mount
+%endif                          ; room - its one call is before the mount
 wm_init:
     push ax
     push cx
@@ -493,6 +502,10 @@ wm_init:
     push es
     push ds
     pop es
+    mov al, 0xFF                ; wm_owner is NOT part of the zero run: its
+    mov di, wm_owner            ; empty value is 0xFF (unowned, SPEC.md 11).
+    mov cx, MAX_WIN             ; FIRST, so the zero the run below leaves in
+    rep stosb                   ; AX is the store at the end: 3 bytes, not 6
     xor ax, ax
     mov di, wm_pkgd             ; pkgd + pkgs + wins + zord + zn are contiguous
     mov cx, wm_clask + 2 - wm_pkgd  ; ...through wm_clreq/wm_clask
@@ -502,11 +515,7 @@ wm_init:
                                 ; a stale [wm_pkgd] past WM_PKGD_MAX pins every
                                 ; region and image for the rest of the session
                                 ; and one below it walks garbage segments
-    mov al, 0xFF                ; wm_owner is NOT part of the zero run: its
-    mov di, wm_owner            ; empty value is 0xFF (unowned, SPEC.md 11)
-    mov cx, MAX_WIN
-    rep stosb
-    mov word [wm_fs], 0         ; no fullscreen window (SPEC.md 11.2); .bss
+    mov [wm_fs], ax             ; no fullscreen window (SPEC.md 11.2); .bss
                                 ; is never zeroed at boot, so this is not
                                 ; redundant
                                 ; (the close negotiators, the right-click

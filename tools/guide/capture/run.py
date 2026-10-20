@@ -78,10 +78,14 @@ def main(argv):
                 x0, y0 = max(0, x - pad), max(0, y - pad)
                 x1, y1 = min(w, x + ww + pad + 2), min(h, y + hh + pad + 2)
             cw = x1 - x0
-            crop = b"".join(data[(yy * w + x0) * 3:(yy * w + x1) * 3] for yy in range(y0, y1))
+            # A 200-line screen (CGA, and EGA's 640x200) has pixels twice as
+            # tall as wide: every row is written twice, so the shot has the
+            # shape the monitor shows.
+            rep = 2 if h <= 200 else 1
+            crop = b"".join(data[(yy * w + x0) * 3:(yy * w + x1) * 3] * rep for yy in range(y0, y1))
             out = os.path.join(OUT, sid + ".png")
-            png(out, cw, y1 - y0, crop)
-            print("shot %s %dx%d" % (sid, cw, y1 - y0))
+            png(out, cw, (y1 - y0) * rep, crop)
+            print("shot %s %dx%d" % (sid, cw, (y1 - y0) * rep))
         mod.capture(ui, shot)
     return 0
 

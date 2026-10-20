@@ -1092,3 +1092,50 @@ three reads (21,115, 20,908 and 31,428 bytes), preloading 100% of the first
 flip where one read of 63,386 bytes had held 70% and was past the player's
 read - so 11.3's fix shipped the plain file - and page-ahead KEPT with one
 frame cut against the plain encode's four.
+
+## 12. A change the budget cannot draw (the owner's Gas Gas Gas, 2026-10-19)
+
+The owner's 20 fps Gas Gas Gas (286-picomem1, page-ahead on, 34 scenes)
+showed red specks over a grey car for two to four frames at the window's
+frames 561 and 963. Decoded frame by frame against the source, the two are
+the only changes of palette of 34 that were neither flipped to nor drawn
+whole: at 561 two shot cuts in ONE palette flipped at 558 and 560, at 963
+one flipped at 961, and the change of palette that followed had nothing
+left to build ahead with - so its first frame was drawn over the last
+scene's picture in the new sixteen, 98.1.3.2.3's standing cost. (The
+flash at 1332 is the source's, one frame of lit road; 148-155's cuts are
+a new shot every frame or two past the 286's per-frame ceiling even all in
+coarse cells - every rung was tried.)
+
+**Built** (SPEC.md 98.1.3.2.3.3): the report names each change that left
+2% or more, at the window's time and frame, and `--scene-join TIMES` makes
+the scenes either side one scene before a colour is chosen.
+
+**Open, the owner's, not built:**
+
+1. **Page-ahead gives a change of PALETTE the hidden page first.** A cut in
+   one palette not built ahead draws in over a few frames in the right
+   colours; a change of palette not built ahead shows colours from
+   nowhere. Today the plan's targets are the first cut runs that come
+   (98.2.1.8's `plog["T"]`), so a burst of shot cuts takes the page from
+   the change behind it. The plan pass knows both: where a change of
+   palette is within the frames a build needs of an earlier target in one
+   palette, drop the earlier target. Gate: 5h''-shaped - a shot cut one
+   frame before a palette change, built ahead today, must be the change
+   that flips.
+2. **An automatic join, by REWIND, not a second pass** (the owner's
+   shape): on reaching a change that leaves more than a set share, throw
+   away what the scene before it encoded, choose the sixteen over both
+   scenes, and encode that scene again from its start in them - one
+   scene's frames again, not the clip's. What a rewind must put back,
+   found reading the encoder: the encoder's state at the scene's first
+   frame (`enc_clone`, the ladder's own copy, already deep), the writer's
+   records, keys, sound and palette table since then, the ditherer
+   (`SceneDitherer` - the scene's frames dithered again in the joined
+   colours, so the source frames from the scene's start must be KEPT or
+   read again: the encode streams them today), the plane order
+   (`--vga4-order planes` orders each scene's sixteen from a pass of its
+   own, so a joined scene is ordered again), and page-ahead's plan, whose
+   real passes replay targets the plan pass found with the old colours.
+   The last is the hard part: a rewind inside a real pass changes what
+   the plan saw.

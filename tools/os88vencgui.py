@@ -47,6 +47,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 import traceback
 
 try:
@@ -113,13 +114,13 @@ TARGETS = [t + ({},) if len(t) == 4 else t for t in TARGETS]
 # round the options that go together, and the whole group greyed out when
 # the file the form makes cannot use it - the CGA 4-colour group on
 # anything but CGA 4 colours, the PC speaker's on any other sound. An
-# option named in no group still appears, on Advanced, in "Other"
+# option named in no group still appears, on Basic, in "Other"
 TAB_ROWS = 10    # more options than this and a tab takes two columns
 PAL_W = 600      # the Palette panel's width: the Colour tab's (620 ran
                  # its outline 7 pixels past the tab's edge)
 FPAL_W = 390     # ...and the open file's, in its box
-TABS = ("Basic", "Picture", "Colour", "Sound", "Budget", "Size vs quality",
-        "Loop and keys", "Advanced")
+TABS = ("Basic", "Picture", "Colour", "Sound", "Budget", "Trade-offs",
+        "Degrade to Fit")
 # what the form makes, in the words a reason uses
 PF_WORDS = {"mono": "one bit, black and white",
             "cgacomp": "CGA composite colour",
@@ -242,6 +243,15 @@ def _tearing(c):
                PF_WORDS[c["pixfmt"]]))
 
 
+def _desk(c):
+    """DESKTOP POSTERS (98.1.3.11): the Preview's size is any file's but a
+    Live one's, which plays in its window at its own size"""
+    if c["live"]:
+        return ("A Live file plays in its window at its own size, so its "
+                "Preview is that size.")
+    return None
+
+
 def _held(c, what):
     """None unless the file is held WHOLE - Live or resident - which then
     `what`: the read-ahead's options have nothing to act on"""
@@ -313,6 +323,9 @@ _FOUR16 = _for(("cga4", "c160", "c512", "vga4"), _FOUR16_WHAT)
 _FOUR16_ONE = _for(("cga4", "c160", "c512", "vga4"), _FOUR16_WHAT, "This is")
 
 
+# THE OPTIONS THE DEGRADE LADDER REPLACES, whole: on with no ladder, and
+# with one only what its rungs name (VIDEO-SEEN-PLAN 3a)
+LADDER_SETS = ("lag", "min_fps", "coarse_cut", "step_down", "step_min")
 GROUPS = [
     ("Basic", "Made for", ("preset", "pixfmt", "profile", "aim"), ALWAYS),
     ("Basic", "The clip", ("title", "credits", "start", "end", "fps"),
@@ -349,7 +362,7 @@ GROUPS = [
      _for(("vga8",), PF_WORDS["vga8"])),
     ("Colour", "VGA: palette and screen", ("palette", "scene_palettes",
                                            "scene_cover", "scene_min",
-                                           "screen"),
+                                           "scene_join", "screen"),
      _for(("vga8", "vga4"), "256 or 16 colours on a VGA")),
     ("Sound", "Sound", ("audio", "rate", "volume"), ALWAYS),
     ("Sound", "Buffer sound ahead", ("buffer_sound_ahead", "ahead_frames"),
@@ -375,49 +388,57 @@ GROUPS = [
     # file or a lower rate, gathered off the tabs of the formats they act
     # on - which overran the Colour tab's height twice (the owner). Each
     # option keeps its format's rule, as its own (FIELD_WHEN)
-    ("Size vs quality", "Hold the picture still", ("stable", "text_stable",
+    ("Trade-offs", "Hold the picture still", ("stable", "text_stable",
                                                    "comp_stable",
                                                    "vga4_stable", "vga4_hold",
                                                    "vga4_hold_score",
                                                    "c512_stable",
                                                    "vga8_stable"), ALWAYS),
-    ("Size vs quality", "VGA, 256 colours: fewer pixels", ("detail",),
+    ("Trade-offs", "VGA, 256 colours: fewer pixels", ("detail",),
      _for(("vga8",), PF_WORDS["vga8"])),
-    ("Size vs quality", "16 colours: the player's time to draw",
+    ("Trade-offs", "16 colours: the player's time to draw",
      ("vga4_order", "vga4_wm3"), _for(("vga4",), PF_WORDS["vga4"])),
-    ("Size vs quality", "Scenes: fewer bytes at a cut",
-     ("step_down", "step_min", "scene_hold"),
-     _for(("vga4",), PF_WORDS["vga4"])),
+    ("Trade-offs", "Scenes: fewer bytes at a cut",
+     ("scene_hold",), _for(("vga4",), PF_WORDS["vga4"])),
     # (a Hercules has a second page too, so page-ahead is not VGA's alone:
     # under the VGA group it was greyed on the one screen that needs it
     # asked for by name - the options audit, 2026-10-14. Bands are the
     # same question - what a frame caught half drawn looks like, for a few
     # bytes or twice the decode - and each keeps its own rule)
-    ("Size vs quality", "Tearing: bands and a second page",
-     ("bands", "flip", "page_ahead", "pages", "page_keys", "key_pool",
-      "page_prune"),
+    ("Trade-offs", "Tearing: bands and a second page",
+     ("bands", "flip", "flip_own", "page_ahead", "pages", "page_keys",
+      "key_pool", "page_prune"),
      _tearing),
-    # (the DEGRADE LADDER's inner tab carries the ladder, and under it the
-    # time-side choices it stands in for: the lag and the frame-rate floor
-    # it sets itself, and the charge and the held frames it uses - which
-    # also took Choices back inside the default window, VIDEO-SEEN-PLAN 3a)
-    ("Size vs quality", "Degrade ladder", ("ladder",), ALWAYS),
-    ("Size vs quality", "Instead of cutting", ("lag", "min_fps",
-                                               "slow_cost", "flip_hold",
-                                               "coarse_cut"), ALWAYS),
-    ("Size vs quality", "When a frame is cut", ("lookahead", "error", "cut",
+    # (the DEGRADE LADDER's tab is a CHOICE, and laid out as one
+    # (the owner, 2026-10-18: "ladder OR these other settings"): the
+    # ladder, OR the whole-clip settings it replaces - each of which it
+    # leaves OFF where no rung names it, which is how a ladder says so -
+    # and then what prices and draws a held frame under either)
+    ("Degrade to Fit", "Degrade ladder", ("ladder", "ladder_at"),
+     ALWAYS),
+    ("Degrade to Fit", "Or, without the ladder: for the whole clip",
+     LADDER_SETS, ALWAYS),
+    ("Degrade to Fit", "Held frames, either way", ("slow_cost",
+                                                    "flip_hold"), ALWAYS),
+    ("Trade-offs", "When a frame is cut", ("lookahead", "lookahead_floor",
+                                                "error", "cut",
                                                 "frame_cap", "edges",
                                                 "attend"), ALWAYS),
-    ("Size vs quality", "Aim: size", ("worth",),
+    ("Trade-offs", "Aim: size", ("worth",),
      lambda c: None if c["aim"] == "size" else
      "This is --aim size's floor, and the aim is %s. Choose size as the Aim "
      "on Basic to use it." % c["aim"]),
-    ("Loop and keys", "Loop", ("loop_from", "repeat"), ALWAYS),
-    ("Loop and keys", "Held in memory", ("resident", "live", "xms"),
+    ("Basic", "Loop", ("loop_from", "repeat"), ALWAYS),
+    ("Basic", "Held in memory", ("resident", "live", "xms"),
      ALWAYS),
-    ("Loop and keys", "Keyframes and the poster", ("keysecs", "poster",
-                                                   "poster_at"), ALWAYS),
-    ("Advanced", "This computer", ("jobs",), ALWAYS),
+    ("Basic", "Keyframes and the poster", ("keysecs", "poster",
+                                                   "poster_at",
+                                                   "poster_image",
+                                                   "desktop_posters",
+                                                   "desktop_clip",
+                                                   "desktop_size"),
+     ALWAYS),
+    ("Basic", "This computer", ("jobs",), ALWAYS),
 ]
 # ...and inside a group that applies, the few options narrower than it
 FIELD_WHEN = {
@@ -451,6 +472,17 @@ FIELD_WHEN = {
     % ("mode 12h's 640 x 480" if c["pixfmt"] == "vga4" else
        "mode 13h" if c["pixfmt"] == "vga8" else
        "this %s file" % c["pixfmt"]),
+    # (98.1.3.11: the desktop's posters are a sixteen-colour stream's)
+    "desktop_size": lambda c: _desk(c),
+    # (VIDEO-SEEN-PLAN 3b: each record against its own page - the flip's,
+    # in a stream with no loop or layer; with page-ahead on 3 pages or more
+    # too, built ahead as well)
+    "flip_own": lambda c: FIELD_WHEN["flip"](c) or (
+        "Each frame against its own page is Flip's: turn Flip on."
+        if not c.get("flip") else
+        "A looped file or a layer is drawn against the frame before."
+        if c.get("loop_from") or c.get("layer_disk") or
+        c.get("layer_profile") else None),
     "lag": lambda c: "A Live file is drawn on the desktop: it keeps time "
     "frame by frame." if c.get("live") else None
     if c["audio"] not in ("none", "speaker") else
@@ -495,11 +527,14 @@ FIELD_WHEN = {
     "A palette a scene is a full-screen 16-colour file's, with a Palette "
     "colour8, colour12 or colour16.",
     "scene_cover": _scene_cuts,
+    "scene_join": _scenes,
+    "ladder_at": lambda c: None if c.get("ladder") else
+    "The ladder by time is the ladder's: turn on Use the degrade ladder.",
     "scene_min": _scene_cuts,
     "step_down": _scenes,
     "step_min": lambda c: _scenes(c) or (
         None if c["step_down"] == "on" else
-        "The fewest colours the ladder steps to: it needs the ladder on."),
+        "The fewest colours a scene steps down to: it needs Step down on."),
     "coarse_cut": _coarse,
     "scene_hold": _scenes,
     # (the options audit, 2026-10-14: what each of the group's knobs
@@ -508,7 +543,7 @@ FIELD_WHEN = {
     # clip's own colours')
     "vga4_hold": lambda c: _FOUR16_ONE(c) or _knoll_hold(c),
     "vga4_hold_score": lambda c: _FOUR16_ONE(c) or _knoll_hold(c),
-    # (the holds left their formats' groups for Size vs quality, and took
+    # (the holds left their formats' groups for Trade-offs, and took
     # each format's rule with them)
     "stable": _pixel_kept,
     "text_stable": _for(("text",), PF_WORDS["text"], "This is"),
@@ -555,12 +590,12 @@ FIELD_WHEN = {
     "ahead_frames": lambda c: None if c["ahead"] != "off" else
     "Buffer sound ahead is off.",
 }
-# THE DEGRADE LADDER (Size vs quality, its second inner tab): the options
+# THE DEGRADE LADDER (its own tab, Degrade to Fit): the options
 # a ladder sets itself, greyed while one is on - and the rungs this file
 # can use, each (label, --ladder's token)
-LADDER_SETS = ("lag", "min_fps", "coarse_cut", "step_down", "step_min")
-LADDER_WHY = ("The degrade ladder sets this (Size vs quality, Degrade "
-              "ladder).")
+LADDER_WHY = ("The degrade ladder is on, and replaces this: only what its "
+              "rungs name is done, so with no rung for it, it is off "
+              "(Degrade to Fit).")
 LADDER_RUNGS = 8
 
 
@@ -711,8 +746,9 @@ def ladder_label(tok):
 
 assert len({g[1] for g in GROUPS}) == len(GROUPS), "a header names a group"
 GROUP_OF = {d: g for g in GROUPS for d in g[2]}
-# the groups on Size vs quality's second inner tab rather than its first
-LADDER_PAGE = ("Degrade ladder", "Instead of cutting")
+# the groups on Degrade to Fit, laid out by ladder_page
+LADDER_PAGE = ("Degrade ladder", "Or, without the ladder: for the whole clip",
+               "Held frames, either way")
 TAB_OF = {d: g[0] for d, g in GROUP_OF.items()}
 # the fields a group's rule reads: a change to one re-judges every group
 CONTEXT_FIELDS = ("preset", "pixfmt", "profile", "live", "layout", "audio",
@@ -766,6 +802,7 @@ SUGGEST = {"rate": ["", "22050", "11025", "8000", "5512"],
            "loop_from": ["", "0"],
            "volume": ["", "0.5", "1.5", "2", "3dB", "6dB"],
            "clip": ["", "0", "16"],
+           "desktop_clip": ["0", "16", "32"],
            "text_busy": ["", "12", "2"],
            "layer_disk": [""],
            "layer_prefill": ["", "16", "32", "64", "all"],
@@ -844,10 +881,10 @@ SAVE_FILE = {"spk_preview": ("The speaker preview", ".wav",
                              [("WAV sound", "*.wav")])}
 # ...under the right-hand column rather than across the tab, where the
 # left-hand one already reaches the window's bottom
-NOTE_IN_COLUMN = ("Size vs quality",)
+NOTE_IN_COLUMN = ("Trade-offs",)
 # a line under a tab's fields: what no one field says
 TAB_NOTES = {
-    "Size vs quality": "Each trades picture for bytes or the player's "
+    "Trade-offs": "Each trades picture for bytes or the player's "
                        "time; greyed where the file cannot use it.",
     "Budget": "XT-IDE and other disk controllers the CPU copies for "
               "cost CPU the picture would have had: every byte read is "
@@ -862,7 +899,7 @@ STYLE_FIELDS = (("spk_highpass", "hp"), ("spk_ratio", "ratio"),
                 ("spk_range", "rng"))
 # what the window runs itself, and so does not offer
 HIDDEN = {"help", "src", "out", "preview_png", "quiet", "profiles",
-          "progress"}
+          "progress", "posters_only"}   # (Redo posters is a button)
 
 
 def fields():
@@ -887,7 +924,7 @@ def fields():
             if kind == "choice" else SUGGEST.get(act.dest),
             tip=(act.help or "").strip(),
             help=V.CHOICE_HELP.get(act.dest) if kind == "choice" else None,
-            tab=TAB_OF.get(act.dest, "Advanced")))
+            tab=TAB_OF.get(act.dest, "Basic")))
     return out
 
 
@@ -1409,11 +1446,12 @@ def palette_view(values):
     return out
 
 
-def file_palette(r):
+def file_palette(r, f=None):
     """The palette a .V88 was ENCODED with, where it was chosen from its
     clip - CGA4's four, VGA8's 256, a VGA4 file's own 16 - as
-    palette_view's rows: what "the nearest" turned out to be. [] for a
-    file whose colours are fixed"""
+    palette_view's rows: what "the nearest" turned out to be. A file with
+    a palette a scene (98.1.3.2.3) shows the scene frame `f` is in, as the
+    preview's picture is drawn in. [] for a file whose colours are fixed"""
     if r is None:
         return []
     if r.pixfmt == vid.PF_CGA4:
@@ -1425,13 +1463,18 @@ def file_palette(r):
         return [("its 256", [(_hex(c * 255 // 63 for c in p[i * 3:i * 3 + 3]),
                               "%d" % i) for i in range(len(p) // 3)])]
     if r.pixfmt == vid.PF_VGA4 and r.palette:   # a screen's own, 98.1.3.2.1
-        p = r.palette               # ...the values its colours take: the
+        p, scene = r.palette, ""    # ...the values its colours take: the
+        if f is not None and r.pev:     # (the scene's, 98.1.3.2.3)
+            p = vid.palette_at(r, f)
+            k = sum(1 for fr, _ in r.pev if fr <= f)
+            scene = "Palette: scene %d of %d, at frame %d" % (
+                max(k, 1), len(r.pev), f + 1)
         lit = {i for i in range(16) if any(p[3 * i:3 * i + 3])} | {0}
         n = min(k for k in sorted(vid.PLANE_CODES)  # fewest PLANE_CODES
                 if lit <= set(vid.PLANE_CODES[k]))  # that hold them
-        return [("its %d" % n, [(_hex(c * 255 // 63 for c in
-                                      p[i * 3:i * 3 + 3]), "value %X" % i)
-                                for i in vid.PLANE_CODES[n]])]
+        return [("its %d" % n,
+                 [(_hex(c * 255 // 63 for c in p[i * 3:i * 3 + 3]),
+                   "value %X" % i) for i in vid.PLANE_CODES[n]], scene)]
     return []
 
 
@@ -1482,52 +1525,102 @@ def preview_frames(path, most=2000, tick=None):
     return r, out
 
 
-# THE PROGRESS (98.2.11): os88venc's steps, each a share of one bar, and
-# then the window's own - the floppy and reading the file back to preview
-STEP_TEXT = {"first": "First pass",
-             "again": "Once more",
-             "prepare": "Getting ready", "read": "Reading and dithering",
-             "sound": "Encoding the sound", "encode": "Encoding",
-             "write": "Writing the file", "disk": "Making the disk",
-             "preview": "Loading the preview"}
-ENCODE_SHARE = 0.9                  # the rest is the disk and the preview
+# THE PROGRESS (98.2.11): what os88venc SAYS it is doing, as it does it -
+# the pass it is in and why, the step, a count of what the step works
+# through, and a note of what goes on beside it - and then the window's
+# own steps, the floppy and the preview. The bar is the step's own count,
+# and goes INDETERMINATE where a step has none to give (ffmpeg's palette,
+# the sound): until 2026-10-17 one bar spread made-up shares of the whole
+# over the steps, and a streamed encode, which reads, dithers and encodes
+# at once, showed a "Reading" frame number nothing had read
+STEP_TEXT = {"prepare": ("Getting ready", None),
+             "palette": ("Choosing the clip's colours", "frame"),
+             "levels": ("Measuring the picture's levels", None),
+             "scenes": ("Finding the scenes", "frame"),
+             "colours": ("Choosing each scene's colours", "scene"),
+             "order": ("Ordering the colours by the planes they write",
+                       "frame"),
+             "cuts": ("Finding the scene changes, for the coarse cells",
+                      "frame"),
+             "stepdown": ("Trying fewer colours where scenes broke",
+                          "scene"),
+             "trials": ("Trying the quality choices", "trial"),
+             "read": ("Reading and dithering", "frame"),
+             "sound": ("Encoding the sound", None),
+             "encode": ("Encoding", "frame"),
+             "wait": ("Waiting", None),
+             "write": ("Writing the file", None),
+             "check": ("Checking the file", None),
+             "disk": ("Making the disk", None),
+             "preview": ("Loading the preview", "frame")}
 
 
-FIRST_SHARE = 0.4                   # TWO PASSES (98.2.1.3.3): the first's share
+def bar_of(step, done, total):
+    """The bar for a step: its own count's share, 0.0 to 1.0 - or None,
+    a step with no count, shown as working rather than as a share"""
+    if not total or step == "pass":
+        return None
+    return min(done, total) / float(total)
 
 
-def overall(step, done, total, two=False):
-    """How far along the whole job is, 0.0 to 1.0 - `two` once a first
-    pass has been seen, which then has FIRST_SHARE of the encode's part"""
-    if step == "first":
-        return FIRST_SHARE * ENCODE_SHARE * (min(done, total) / total
-                                             if total else 0.0)
-    if step == "again":                 # (the real pass begins again)
-        return FIRST_SHARE * ENCODE_SHARE
-    if two and step in dict(V.STEPS):
-        return FIRST_SHARE * ENCODE_SHARE + (1 - FIRST_SHARE) * \
-            overall(step, done, total)
-    if step == "disk":
-        return ENCODE_SHARE
-    if step == "preview":
-        return ENCODE_SHARE + (1 - ENCODE_SHARE) * (
-            min(done, total) / total if total else 0)
-    at = 0.0
-    for name, share in V.STEPS:
-        if name == step:
-            part = min(done, total) / total if total else 0.0
-            return (at + share * part) * ENCODE_SHARE
-        at += share
-    return 0.0
+def clock(secs):
+    secs = int(secs)
+    return "%d:%02d" % (secs // 60, secs % 60) if secs < 3600 else \
+        "%d:%02d:%02d" % (secs // 3600, secs // 60 % 60, secs % 60)
 
 
-def step_text(step, done, total):
-    t = STEP_TEXT.get(step, step)
-    if step == "first" and total:       # (thousandths of the first pass)
-        t += ": %d%%" % (100 * min(done, total) // total)
-    elif total:
-        t += ": frame %d of %d" % (min(done, total), total)
-    return t + "..."
+def step_text(step, done, total, note="", secs=None):
+    """A step as it is said under the bar: what it is, its count, how long
+    it has run and - with a count and long enough to tell - about how long
+    it has left at its own rate so far, then what goes on beside it"""
+    t, unit = STEP_TEXT.get(step, (step, None))
+    if total:
+        t += ": %s %d of %d" % (unit or "", min(done, total), total) \
+            if unit else ": %d of %d" % (min(done, total), total)
+    out = t
+    if secs is not None and secs >= 1:
+        out += " - %s" % clock(secs)
+        if total and 0 < done < total and secs >= 5:
+            out += ", about %s left" % clock(secs * (total - done) / done)
+    if note:
+        out += "\n" + note[0].upper() + note[1:]
+    return out
+
+
+def lanes_text(lanes, now):
+    """Every lane's state as the lines under the bar: the encode's own pass
+    and step, and then any pass running ALONGSIDE it in another process"""
+    out = []
+    for name in sorted(lanes, key=lambda n: (n != "main", n)):
+        st = lanes[name]
+        head = ("Pass %d: %s" % (st["n"], st["label"])) if st.get("label") \
+            else ""
+        if name != "main":
+            head = "Alongside" + (" - " + head if head else "")
+        body = step_text(st["step"], st["done"], st["total"], st["note"],
+                         now - st["since"]) if st.get("step") else ""
+        out.append("\n".join(x for x in (head, body) if x))
+    return "\n".join(x for x in out if x)
+
+
+def lane_put(lanes, ev, now):
+    """One progress report into `lanes`: a "pass" names the lane's next
+    pass (and ends any lane alongside the encode's own, which finished
+    before the encode went on); a new step starts its clock"""
+    name = ev.get("lane", "main")
+    st = lanes.setdefault(name, {"n": 0, "label": "", "step": "",
+                                 "done": 0, "total": 0, "note": "",
+                                 "since": now})
+    if ev["step"] == "pass":
+        st.update(n=st["n"] + 1, label=ev.get("note", ""), step="")
+        if name == "main":
+            for k in [k for k in lanes if k != "main"]:
+                del lanes[k]
+        return
+    if ev["step"] != st["step"]:
+        st["since"] = now
+    st.update(step=ev["step"], done=ev["done"], total=ev["total"],
+              note=ev.get("note", ""))
 
 
 def file_facts(r, path=None):
@@ -1542,7 +1635,9 @@ def file_facts(r, path=None):
         vid.PF_NAMES[r.pixfmt], g.name, w, g.h,
         ", each row shown twice" if r.rowscale > 1 else "",
         " on %s" % vid.SCREENS[r.screen][0] if getattr(r, "screen", 0)
-        else "", ", flipped" if getattr(r, "flip", False) else ""))
+        else "", ", flipped, each frame against its own page"
+        if getattr(r, "own", False) else
+        ", flipped" if getattr(r, "flip", False) else ""))
     out.append("%d frames at %.2f fps = %.1f s; sound %s" % (
         r.frames, r.fps, secs,
         "none" if not r.audio else "%s at %d Hz" % (
@@ -1914,15 +2009,18 @@ class EncodeJob(object):
         return self
 
     def events(self):
-        """("prog", (step, done, total)) and ("log", line) as the encode
-        goes, then ("exit", returncode)"""
+        """("prog", {lane, step, done, total, note}) and ("log", line) as
+        the encode goes, then ("exit", returncode)"""
+        import json
         for line in self.p.stdout:
             if line.startswith(V.PROGRESS + " "):
                 try:
-                    st, d, t = line.split()[1:4]
-                    yield "prog", (st, int(d), int(t))
+                    ev = json.loads(line[len(V.PROGRESS) + 1:])
+                    ev["done"], ev["total"] = int(ev["done"]), \
+                        int(ev["total"])
+                    yield "prog", ev
                     continue
-                except ValueError:
+                except (ValueError, KeyError, TypeError):
                     pass
             yield "log", line
         yield "exit", self.p.wait()
@@ -2015,6 +2113,7 @@ class App(object):
         self.busy = False
         self.cancel = threading.Event()
         self.prog = None                # (step, done, total), from the thread
+        self.lanes = {}                 # (the encoder's lanes: lane_put)
         self.job = 0                    # the job the window is showing: a
         self.ejob = None                # message from any other is stale
         root.title(APPNAME)
@@ -2104,16 +2203,9 @@ class App(object):
         for t in TABS:
             pages[t] = ttk.Frame(nb, padding=6)
             nb.add(pages[t], text=t)
-        # SIZE VS QUALITY's two inner tabs: its choices, and the degrade
-        # ladder (VIDEO-SEEN-PLAN 3a) - the owner's "a second inner tab"
-        inner = ttk.Notebook(pages["Size vs quality"])
-        inner.pack(fill="both", expand=True)
-        pages["Size vs quality"].configure(padding=(6, 2, 6, 0))
-        sq = ttk.Frame(inner, padding=(4, 2, 4, 0))
-        self.ladpage = ttk.Frame(inner, padding=6)
-        inner.add(sq, text="Choices")
-        inner.add(self.ladpage, text="Degrade ladder")
-        pages["Size vs quality"] = sq
+        # DEGRADE TO FIT, the ladder's own tab (VIDEO-SEEN-PLAN 3a): laid
+        # out by ladder_page below rather than as a column of groups
+        self.ladpage = pages["Degrade to Fit"]
         # --- the GROUPS (98.2.8.2): an outline with a header round the
         # options that go together, down one column - or, on a tab of more
         # than TAB_ROWS options, two, split in the table's order where the
@@ -2122,12 +2214,12 @@ class App(object):
         fl = {f["dest"]: f for f in fields()}
         tabgroups = {t: [] for t in TABS}
         for tab, name, dests, _ in GROUPS:
-            if name in LADDER_PAGE:         # (its own inner tab, below)
+            if name in LADDER_PAGE:         # (its own tab, below)
                 continue
             tabgroups[tab].append((name, [fl[d] for d in dests if d in fl]))
         other = [f for d, f in fl.items() if d not in GROUP_OF]
         if other:                       # an option no group names yet
-            tabgroups["Advanced"].append(("Other", other))
+            tabgroups["Basic"].append(("Other", other))
         st = ttk.Style(self.root)
         bold = tkfont.nametofont("TkDefaultFont").copy()
         bold.configure(weight="bold")
@@ -2141,9 +2233,11 @@ class App(object):
         self.fwidgets = {}              # option -> its label and widgets
         self.gwhy, self.why = {}, {}    # why a group, an option, is off
         self.grppend = False
-        lastcol = {}
+        lastcol = {}                    # (the tab's shortest column: its note)
         for t in TABS:
             gs = [g for g in tabgroups[t] if g[1]]
+            if not gs:                  # (Degrade to Fit: ladder_page's)
+                continue
             cols = [gs]
             if sum(len(g[1]) for g in gs) > TAB_ROWS and len(gs) > 1:
                 hs = [len(g[1]) + 1.5 for g in gs]
@@ -2153,9 +2247,12 @@ class App(object):
             # a TWO-COLUMN tab's fields are narrower, or the right-hand
             # column's "?" and Browse... fall off the pane's edge
             fw = 22 if len(cols) == 1 else 11
+            tall = None
             for ci, col in enumerate(cols):
                 cf = ttk.Frame(pages[t])
-                lastcol[t] = cf
+                h = sum(len(g[1]) + 1.5 for g in col)
+                if tall is None or h < tall:
+                    lastcol[t], tall = cf, h
                 cf.grid(row=0, column=ci, sticky="nwe",
                         padx=(0 if ci == 0 else 10, 0))
                 # every group in a column lines its fields up, by the
@@ -2164,15 +2261,20 @@ class App(object):
                          for f in g[1]) + 6
                 for name, fs in col:
                     self.group_box(cf, name, fs, fw, lw, start)
+        st.configure("GroupCheck.TCheckbutton", font=bold)
         self.ladder_page(self.ladpage, start)
         lf = ttk.Frame(self.ladpage)
-        lf.grid(row=2 + LADDER_RUNGS, column=0, columnspan=2, sticky="nwe",
-                pady=(10, 0))
-        for tab, name, dests, _ in GROUPS:
+        lf.grid(row=2, column=0, columnspan=2, sticky="nwe", pady=(6, 0))
+        ci = 0                          # (B and what serves both, side by
+        for tab, name, dests, _ in GROUPS:      # side)
             if name in LADDER_PAGE and name != "Degrade ladder":
                 fs = [fl[d] for d in dests if d in fl]
-                self.group_box(lf, name, fs, 22, max(
+                cf = ttk.Frame(lf)
+                cf.grid(row=0, column=ci, sticky="nw",
+                        padx=(0 if ci == 0 else 10, 0))
+                self.group_box(cf, name, fs, 11, max(
                     norm.measure(f["label"]) for f in fs) + 6, start)
+                ci += 1
         for t, text in TAB_NOTES.items():   # a word the fields cannot say
             if t in NOTE_IN_COLUMN:
                 ttk.Label(lastcol[t], text=text, foreground="#555",
@@ -2253,8 +2355,8 @@ class App(object):
         self.bar = ttk.Progressbar(pr, maximum=1000, mode="determinate")
         self.bar.pack(fill="x")
         self.status = tk.StringVar(value="")
-        ttk.Label(pr, textvariable=self.status, foreground="#555").pack(
-            anchor="w")
+        ttk.Label(pr, textvariable=self.status, foreground="#555",
+                  justify="left", wraplength=560).pack(anchor="w")
         # --- the preview
         hd = ttk.Frame(right)
         hd.pack(fill="x")
@@ -2266,8 +2368,22 @@ class App(object):
                               length=400, command=self.show_frame,
                               showvalue=False)
         self.scrub.pack(fill="x")
+        # ONE FRAME BACK OR ON (the owner, 2026-10-18): a button each side
+        # of the frame's line, and , and . on the preview and the slider -
+        # the player's keys for it (98.3.14)
+        sr = ttk.Frame(right)
+        sr.pack(fill="x")
+        ttk.Button(sr, text="<", width=3,
+                   command=lambda: self.step_frame(-1)).pack(side="left")
         self.fr = tk.StringVar(value="")
-        ttk.Label(right, textvariable=self.fr).pack(anchor="w")
+        ttk.Label(sr, textvariable=self.fr).pack(side="left", padx=6)
+        ttk.Button(sr, text=">", width=3,
+                   command=lambda: self.step_frame(1)).pack(side="left")
+        for w in (self.canvas, self.scrub):
+            w.bind("<comma>", lambda e: self.step_frame(-1))
+            w.bind("<period>", lambda e: self.step_frame(1))
+        self.canvas.bind("<Button-1>", lambda e: self.canvas.focus_set(),
+                         add="+")
         # --- the file, and the keyframe a play from here starts at
         fi = ttk.LabelFrame(right, text="The file", padding=6)
         fi.pack(fill="x", pady=(6, 0))
@@ -2303,6 +2419,16 @@ class App(object):
                    "changes: the file is not encoded again. Up to %d "
                    "characters; the player's panel shows the first 35."
                 % (vid.TITLE_LEN - 1))
+        self.thumbbtn = ttk.Button(tf, text="Redo posters",
+                                   command=self.redo_posters,
+                                   state="disabled")
+        self.thumbbtn.pack(side="left", padx=(4, 0))
+        Tip(self.thumbbtn, "Make this file's desktop posters again with the "
+                           "Desktop posters, size, clip and poster picture "
+                           "set now - from its own keyframes, so only the "
+                           "posters change: the file is not encoded again. "
+                           "A poster picture must be a picture file here, "
+                           "not a moment of the video.")
         # THE POSTER, and the keyframe a play from the scrubbed frame starts
         # at, side by side: what the player shows now, and what Set as
         # poster would make it
@@ -2362,11 +2488,23 @@ class App(object):
         swatch_draw(self.palcanvas, [(None,) + secs[0][1:]] + secs[1:],
                     self.paltips,
                     width=max(self.palcanvas.winfo_width(), PAL_W))
-        rows = file_palette(self.reader)
-        if rows:
-            swatch_draw(self.fpal, [(None, [("Palette: " + ln, sw)
-                                            for ln, sw in rows], None)],
-                        self.paltips, width=FPAL_W)
+        self.fpalnow = None
+        self.draw_fpal(getattr(self, "ffrm", None))
+
+    def draw_fpal(self, f):
+        """The open file's palette under its facts - at frame `f`, the one
+        the scrubber shows, for a file with a palette a scene - redrawn only
+        when it changes: a drag through a scene is one draw"""
+        self.ffrm = f
+        rows = file_palette(self.reader, f)
+        if rows == getattr(self, "fpalnow", None):
+            return
+        self.fpalnow = rows
+        if rows:                    # (a palette a scene's: its scene as
+            head = rows[0][2] if len(rows[0]) > 2 else None   # a heading)
+            swatch_draw(self.fpal, [(head or None, [
+                ("Palette: " + ln if not head else ln, sw)
+                for ln, sw, *_ in rows], None)], self.paltips, width=FPAL_W)
             if not self.fpal.winfo_ismapped():
                 self.fpal.pack(anchor="w", fill="x", pady=(6, 0),
                                before=self.titlef)
@@ -2661,7 +2799,7 @@ class App(object):
             self.fwidgets[f["dest"]] = ws
 
     def ladder_page(self, page, start):
-        """THE DEGRADE LADDER's inner tab: a checkbox that turns it on, and
+        """THE DEGRADE LADDER's tab: a checkbox that turns it on, and
         a rung a row - each a list of the rungs this file can use - which
         compose --ladder. Its variable is the option's, so a file loaded
         sets the rungs, and the rungs set it"""
@@ -2669,32 +2807,54 @@ class App(object):
         self.vars["ladder"] = v
         self.ladon = tk.StringVar(value="1" if v.get() else "")
         self.ladsync = False
+        # (A, in a box of its own whose title is the switch - the
+        # settings it replaces are B, beside it below: the owner's "ladder
+        # OR these other settings")
         top = ttk.Checkbutton(page, text="Use the degrade ladder",
                               variable=self.ladon, onvalue="1", offvalue="",
-                              command=self.ladder_toggle)
-        top.grid(row=0, column=0, columnspan=2, sticky="w")
+                              command=self.ladder_toggle,
+                              style="GroupCheck.TCheckbutton")
+        box = ttk.LabelFrame(page, labelwidget=top, padding=(6, 0, 6, 4))
+        box.grid(row=0, column=0, columnspan=2, sticky="we")
         Tip(top, "Where the budgets would cut a stretch of frames, try "
                  "these in order, each on top of the ones before - the "
                  "first that draws the stretch whole is taken, else the "
                  "least broken - and only then cut. A Cut rung stops there "
                  "instead, where no frame is more broken than it says: for "
                  "a video that takes a cut better than a slower rate. It "
-                 "sets Lag, Min fps, Coarse cut, Step down and Step min "
-                 "itself.")
+                 "REPLACES Lag, Min fps, Coarse cut, Step down and Step min: "
+                 "only what a rung names is done.")
         self.ladrows = []
         for i in range(LADDER_RUNGS):
-            lab = ttk.Label(page, text="Rung %d" % (i + 1))
-            lab.grid(row=1 + i, column=0, sticky="w", pady=(2, 0))
-            cb = ttk.Combobox(page, state="readonly", width=56)
-            cb.grid(row=1 + i, column=1, sticky="w", padx=4, pady=(2, 0))
+            lab = ttk.Label(box, text="Rung %d" % (i + 1))
+            lab.grid(row=i, column=0, sticky="w", pady=(2, 0))
+            cb = ttk.Combobox(box, state="readonly", width=56)
+            cb.grid(row=i, column=1, sticky="w", padx=4, pady=(2, 0))
             cb.bind("<<ComboboxSelected>>", lambda e: self.ladder_compose())
             self.ladrows.append((lab, cb))
-        ttk.Label(page, text="...then the frames are cut (When a frame is "
-                  "cut, on Choices). With the ladder on, it sets Lag, "
-                  "Min fps and Coarse cut below itself.", foreground="#555",
+        # THE LADDER BY TIME (--ladder-at, 98.2.1.10): other rungs for a
+        # stretch of the clip, typed in --ladder's words - the window's
+        # slider gives the times
+        i = LADDER_RUNGS
+        lab = ttk.Label(box, text="By time")
+        lab.grid(row=i, column=0, sticky="w", pady=(6, 0))
+        av = WordVar("ladder_at", start.get("ladder_at", ""))
+        ent = ttk.Entry(box, textvariable=av, width=58)
+        ent.grid(row=i, column=1, sticky="w", padx=4, pady=(6, 0))
+        tip = [f["tip"] for f in fields() if f["dest"] == "ladder_at"]
+        for w in (lab, ent):
+            Tip(w, (tip[0] if tip else "") + " The times are the slider's, "
+                "as the preview shows them.")
+        self.vars["ladder_at"] = av
+        self.fwidgets["ladder_at"] = [lab, ent]
+        ttk.Label(page, text="The ladder OR the settings for the whole clip, "
+                  "not both: with the ladder on, only what a rung names is "
+                  "done, and a setting with no rung for it is off - which "
+                  "is how a ladder leaves one out. After the last rung the "
+                  "frames are cut (When a frame is cut, on Trade-offs).",
+                  foreground="#555",
                   wraplength=560, justify="left").grid(
-            row=1 + LADDER_RUNGS, column=0, columnspan=2, sticky="w",
-            pady=(6, 0))
+            row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
         v.trace_add("write", lambda *a: self.ladder_show())
         self.ladder_show()
 
@@ -2864,6 +3024,7 @@ class App(object):
         try:
             vid.set_poster(self.cur, self.reader.keys[self.key][0])
             self.reader = vid.Reader(self.cur)
+            self.ffrm = None
         except Exception as e:
             messagebox.showerror(APPNAME, "The poster was not changed: %s"
                                  % e)
@@ -2879,6 +3040,7 @@ class App(object):
         try:
             t = vid.set_title(self.cur, self.titlev.get())
             self.reader = vid.Reader(self.cur)
+            self.ffrm = None
         except Exception as e:
             messagebox.showerror(APPNAME, "The title was not changed: %s"
                                  % e)
@@ -2889,10 +3051,50 @@ class App(object):
 
     def title_state(self):
         """The title field follows the file in the preview: filled from its
-        header when one is loaded, and closed while a job runs"""
+        header when one is loaded, and closed while a job runs - and Redo
+        posters with it"""
         st = "normal" if self.cur and not self.busy else "disabled"
         self.titlee.config(state=st)
         self.titlebtn.config(state=st)
+        self.thumbbtn.config(state=st)
+
+    def redo_posters(self):
+        """--posters-only on the file in the preview (98.1.3.11.1), on a
+        thread: the posters the form's four fields say, nothing encoded"""
+        if self.busy or not self.cur:
+            return
+        import argparse
+        g = {k: self.vars[k].get() if k in self.vars else None
+             for k in ("desktop_posters", "desktop_size", "desktop_clip",
+                       "poster_image")}
+        try:
+            clip = float(g["desktop_clip"] or 0)
+        except ValueError:
+            messagebox.showerror(APPNAME, "The desktop clip is not a number: "
+                                 "%s" % g["desktop_clip"])
+            return
+        a = argparse.Namespace(src=self.cur, out=self.cur,
+                               desktop_posters=g["desktop_posters"] or "auto",
+                               desktop_size=g["desktop_size"] or "fit",
+                               desktop_clip=clip,
+                               poster_image=(g["poster_image"] or "").strip()
+                               or None)
+        self.write("\nos88venc --posters-only %s %s --desktop-posters %s "
+                   "--desktop-size %s --desktop-clip %g%s\n" % (
+                       self.cur, self.cur, a.desktop_posters, a.desktop_size,
+                       clip, " --poster-image %s" % a.poster_image
+                       if a.poster_image else ""))
+        job = self.begin()
+
+        def run():
+            try:
+                n = V.reposter(a, say=lambda t: self.put(job, "log",
+                                                         t + "\n"))
+                self.put(job, "posters", n)
+            except Exception as e:
+                self.put(job, "fail", "The desktop posters were not changed: "
+                         "%s" % e)
+        threading.Thread(target=run, daemon=True).start()
 
     def argv(self):
         return argv_from(self.src.get(), self.out.get(),
@@ -2932,7 +3134,7 @@ class App(object):
         self.busy = True
         self.cancel = threading.Event()
         self.prog = ("prepare", 0, 0)
-        self.two = self.again = False
+        self.lanes = {}
         self.gobtn.config(state="disabled")
         self.posterbtn.config(state="disabled")
         self.title_state()
@@ -2959,7 +3161,11 @@ class App(object):
             for kind, val in ej.events():
                 if kind == "prog":
                     if job == self.job:
-                        self.prog = val
+                        lane_put(self.lanes, val, time.time())
+                        if val.get("lane", "main") == "main" and \
+                                val["step"] != "pass":
+                            self.prog = (val["step"], val["done"],
+                                         val["total"])
                 elif kind == "log":
                     self.put(job, "log", val)
                     tail = (tail + [val])[-6:]
@@ -2995,6 +3201,15 @@ class App(object):
         except Exception as e:
             self.put(job, "fail", "%s\n%s" % (e, traceback.format_exc()))
 
+    def step_frame(self, d):
+        """The preview a frame back (d -1) or on (+1): the slider moved, which
+        shows it - a preview of a long file holds every n-th frame
+        (preview_frames), so a step is one of those"""
+        if not getattr(self, "frames", None):
+            return
+        n = max(0, min(len(self.frames) - 1, int(self.scrub.get()) + d))
+        self.scrub.set(n)               # (its command shows it)
+
     def write(self, text):
         self.log.insert("end", text)
         self.log.see("end")
@@ -3005,20 +3220,29 @@ class App(object):
         self.ejob = None
         self.gobtn.config(state="normal")
         self.stopbtn.config(state="disabled")
-        self.bar.config(value=1000 * frac)
+        self.bar.stop()
+        self.bar.config(mode="determinate", value=1000 * frac)
         self.status.set(text)
         self.title_state()
 
     def _pump(self):
         prog = self.prog
         if self.busy and prog:
-            self.two = getattr(self, "two", False) or prog[0] == "first"
-            self.again = getattr(self, "again", False) or \
-                prog[0] == "again"
-            self.bar.config(value=1000 * overall(*prog, two=self.two))
-            self.status.set(("Once more - "
-                             if self.again and prog[0] != "again" else "") +
-                            step_text(*prog))
+            if prog[0] in ("disk", "preview"):  # (the window's own steps)
+                lane_put(self.lanes, dict(lane="main", step=prog[0],
+                                          done=prog[1], total=prog[2]),
+                         time.time())
+            frac = bar_of(*prog)
+            if frac is None:            # (a step with no count: working)
+                if str(self.bar.cget("mode")) != "indeterminate":
+                    self.bar.config(mode="indeterminate")
+                    self.bar.start(40)
+            else:
+                if str(self.bar.cget("mode")) != "determinate":
+                    self.bar.stop()
+                    self.bar.config(mode="determinate")
+                self.bar.config(value=1000 * frac)
+            self.status.set(lanes_text(self.lanes, time.time()))
         try:
             while True:
                 kind, val, job = self.q.get_nowait()
@@ -3035,6 +3259,14 @@ class App(object):
                                "speaker (SPEC.md 86.21.1). Copy it to the "
                                "machine and open it; on a Sound Blaster it "
                                "plays too.\n" % os.path.basename(val))
+                elif kind == "posters":
+                    self.reader = vid.Reader(self.cur)
+                    self.ffrm = None
+                    self.kshown = self.pshown = None
+                    self.finish("Done.", 1)
+                    self.write("%d desktop poster(s) written into %s.\n"
+                               % (val, os.path.basename(self.cur)))
+                    self.show_frame(self.scrub.get())
                 elif kind == "fail":
                     cancelled = val.startswith("Cancelled")
                     self.write("\n%s\n" % (val if cancelled else
@@ -3073,6 +3305,7 @@ class App(object):
         self.fr.set("frame %d of %d (%.2f s)" % (
             f + 1, self.reader.frames, f / self.reader.fps))
         self.show_key(f)
+        self.draw_fpal(f)           # (a palette a scene: this frame's)
 
     def show_key(self, f):
         """The panel: the file's facts, and the keyframe a play from frame
@@ -3097,13 +3330,16 @@ class App(object):
             self.kshown = (self.cur, i)
         self.key = i
         self.show_poster()
-        n = len(r.key(i)[1])
+        # (a key in PARTS, 98.1.3.8, is a read a part: only a part past
+        # the player's one read leaves it no poster - the whole key's
+        # bytes said so of every big key in parts, which shows fine)
+        n = max(vid.key_reads(r.key(i)[1]))
         self.ktext.set(
             "Keyframe %d (of 0 to %d)\nframe %d (%.2f s)%s%s" % (
                 i, r.nkeys - 1, k, k / r.fps,
                 "\n= the poster" if i == r.poster else "",
-                "\n%d bytes: past the %d the player reads, so it would "
-                "show no poster" % (n, V.KEY_PLAYER)
+                "\n%d bytes in one read: past the %d the player reads, so "
+                "it would show no poster" % (n, V.KEY_PLAYER)
                 if n > V.KEY_PLAYER else ""))
         self.posterbtn.config(state="disabled" if self.busy or
                               i == r.poster else "normal")

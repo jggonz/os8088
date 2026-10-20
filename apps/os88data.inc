@@ -19,7 +19,7 @@
 ;    and not the instance's, so the very next file cell undid it. The slot
 ;    that answers that refusal is **OSAPI_FILE_GOTO_QM** (SPEC.md 74.1): the
 ;    same quiet stand, and the instance moves with it. Inside the volume we
-;    are on it is a WORD - fcp_goto's own path - once dsk_media_ok has
+;    are on it is a WORD - dsk_goto's own path - once dsk_media_ok has
 ;    agreed the floppy cannot have been swapped (the motor is still turning);
 ;    otherwise it is a QUIET mount, which reads the boot sector, keeps the
 ;    BPB and the FAT window when the signature matches, and keeps the

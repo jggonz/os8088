@@ -75,6 +75,11 @@
 %define CC_HAS_ONTIMER              ; void os88_ontimer(void *) - 6.7's caret
                                     ; and 8.2's timer(), multiplexed over the
                                     ; one one-shot a window gets (SPEC.md 13.9)
+%define CC_HAS_ONWHEEL              ; void os88_onwheel(int, void *) - the
+                                    ; mouse wheel (SPEC.md 13.18) scrolls the
+                                    ; <list> under the pointer through its own
+                                    ; bar's path, w_lscroll. Not OS88UI_WHEEL:
+                                    ; w_lscroll clamps already
 %define CC_HAS_ONRESIZE             ; void os88_onresize(int, int, void *) -
                                     ; SPEC.md 11.98, and NOT the same thing as
                                     ; WM_ONSIZE: that one is asked BEFORE a

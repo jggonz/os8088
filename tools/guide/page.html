@@ -208,6 +208,14 @@ main.panes { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; ma
 .shot.right { float: right; margin-left: 18px; }
 .shot.left img, .shot.right img { width: auto; max-width: 100%; max-height: 22rem; }
 .shot.full { clear: both; }
+.vid { margin: 10px 0 14px; }
+.vid video { display: block; width: 100%; max-height: 26rem; background: #000; border: 1px solid var(--rule-strong); image-rendering: pixelated; }
+.vid figcaption { font-size: 0.8rem; color: var(--ink-2); margin-top: 4px; }
+.vid { clear: both; }
+.vgrid { clear: both; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px 14px; margin: 10px 0 14px; align-items: start; }
+.vgrid .vid, .vgrid .shot { margin: 0; float: none; max-width: none; min-width: 0; }
+.vgrid .shot img { width: 100%; height: auto; max-height: none; }
+.vgrid .vid video { max-height: 14rem; }
 .manual h2, .manual h3, .manual .tbl { clear: both; }
 .manual::after { content: ""; display: block; clear: both; }
 @media (max-width: 560px) { .shot.left, .shot.right { float: none; max-width: 100%; margin: 10px 0 14px; } }
@@ -469,11 +477,20 @@ function drawItemInfo(d, path) {
   if (others.length && st.alsoOpen) h += `<div class="alsolist">${geos.map(g => `<div class="arow"><span class="glabel">${esc(g.label)}</span><div class="chips">${byGeo[g.key].filter(x => x.id !== d.id).map(x => diskChip(x, x.role)).join("")}</div></div>`).join("")}</div>`;
   if (i.summary) h += `<p class="lede">${esc(i.summary)}</p>`;
   if (i.needs) h += `<p class="needs-line"><span>Needs</span>${esc(i.needs)}</p>`;
+  const pv = d.previews && d.previews[path] != null ? D.previews[d.previews[path]] : null;
+  if (pv) h += videoBlock(pv, i.title);
   const ti = d.texts && d.texts[path];
   if (man) h += `<div class="manual">${man.html}</div>`;
-  else if (!n.endsWith("/") && ti == null) h += `<div class="nomanual">${i.kind === "program" ? "The manual for this program has not been written yet." : "No further guide for this file."}</div>`;
+  else if (!n.endsWith("/") && ti == null && !pv) h += `<div class="nomanual">${i.kind === "program" ? "The manual for this program has not been written yet." : "No further guide for this file."}</div>`;
   if (ti != null) h += `<div class="eyebrow">What this file says${d.texts && seen.length > 1 ? " (on " + esc(d.file) + ")" : ""}</div><pre class="filetext">${esc(D.texts[ti])}</pre>`;
   return h;
+}
+// A demo video's preview: an H.264 copy of the .V88, made by
+// tools/guide/vidpreview.py. Shown at a whole multiple of its height so its
+// pixels stay square-edged; the MP4 carries the screen's proportions.
+function videoBlock(pv, title) {
+  return `<figure class="vid"><video controls preload="none" playsinline style="aspect-ratio:${pv.w} / ${pv.h}" src="${esc(pv.src)}" poster="${esc(pv.poster)}" aria-label="${esc(title)}"></video>
+    <figcaption>A copy of this video for your browser, to show what it looks like and how it sounds. On os8088 it plays in the Video Player.</figcaption></figure>`;
 }
 function drawThingInfo(th) {
   const man = D.manuals[th.id.toUpperCase().replace(/-/g, "_")];

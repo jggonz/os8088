@@ -631,8 +631,9 @@ emits the header, `OSAPI_*` constants name the kernel's jump-table entries
 once: a package is assembled once at `org 0` and loaded into a
 paragraph-aligned claim off the heap, which becomes its own CS = DS. Nothing
 in the image depends on where it landed, so `os88pkg.py` is a validator
-rather than a generator. The ceiling on one package is 60KB — that is the
-*segment*, not a pool; the pool it used to be allocated from was retired, and
+rather than a generator. The ceiling on one package is 63.5KB — that is the
+*segment* less what a 512-rounded size can hold in a word, not a pool; the
+60KB pool it used to be allocated from was retired, and
 deleting it is what returned 60KB to every machine and made a 128KB machine
 viable at all.
 
@@ -703,7 +704,7 @@ and its **Font box lists the typefaces on the system disk** and sets the
 document in the one you pick, proportional metrics and all.
 
 It does not fit in one segment, and that is the interesting part. A package's
-image and bss share 60KB and that ceiling IS the segment; C costs two to three
+image and bss share 63.5KB and that ceiling IS the segment; C costs two to three
 times the image of hand assembly for the same work. So a good deal of it lives
 in its overlay, a second segment carried INSIDE `CWORD.O88` as a part and
 read into a heap claim at launch, right behind the program (SPEC.md 73.14.2) —
@@ -812,9 +813,9 @@ unsupported:
 - **stack frames over 96 bytes.** The UI task's whole stack is 1,024 bytes and
   a background task's is 256.
 
-The 60KB per-package ceiling is unchanged and C reaches it two to four times
+The 63.5KB per-package ceiling is unchanged and C reaches it two to four times
 sooner, so a C package is a small package. Everything else — the header, the
-loader, the disk format, the 60KB check — cannot tell a C package from an
+loader, the disk format, the 63.5KB check — cannot tell a C package from an
 assembly one, which is the test of whether it was done right.
 **[docs/C-TOOLCHAIN.md](docs/C-TOOLCHAIN.md)** is the guide;
 [SPEC.md](SPEC.md) §73 is the contract.

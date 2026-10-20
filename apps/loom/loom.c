@@ -648,6 +648,20 @@ void os88_onkey(int ascii, int scan, void *win)
     lm_ed_key(ascii, scan);
 }
 
+/* W_ONWHEEL (SPEC.md 13.18) - os88_onkey()'s environment, and the editor is
+ * the one thing in this window that scrolls. The sidebar is a fixed list, and
+ * the Preview pane draws and does not arm (1.7): its lists live inside
+ * LOOM.WPV, whose verbs have no scroll, so a turn there is swallowed exactly
+ * as a click there is. */
+void os88_onwheel(int notches, void *win)
+{
+    if (lm_state != LM_ST_EDIT)
+        return;
+    if (!lm_layout(win))
+        return;
+    lm_ed_wheel(notches);
+}
+
 void os88_oncmd(int item, int menu, void *win)
 {
     if (menu == 0) {
@@ -882,6 +896,10 @@ void *os88_main(void)
      * and the kernel simply never asks it. The symptom is a close box that
      * throws away the user's work in silence. */
     os88_wm_onclose(win);
+
+    /* ...and the mouse WHEEL (SPEC.md 13.18), the same kind of side table.
+     * kern_small has no wheel and the cell does nothing there. */
+    os88_wm_onwheel(win);
 
     /* THE LAUNCH DOCUMENT (SPEC.md 54.5). Read-and-clear, so it is banked
      * here and spent in the first paint. os88_arg_file() cannot hand back the

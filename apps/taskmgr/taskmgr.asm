@@ -1093,6 +1093,10 @@ tm_entry:
                                 ; more (verified aligned there - content
                                 ; origin 248). It PRESERVES FLAGS, so the CF
                                 ; our ret owes the loader is the one above
+%ifdef TMF_HEAP
+    mov ax, tm_onwheel          ; the WHEEL scrolls the heap page's list
+    call OSAPI_WM_ONWHEEL       ; (SPEC.md 13.18); flags preserved too, and
+%endif                          ; kern_small's cell does nothing
     ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
     ; exists, and not beside any worker's declaration: a package with
     ; NO worker is the case that moves most easily, and putting it at
@@ -2982,6 +2986,35 @@ tm_hscroll:
     stc
 .out:
     jmp tm_pop_dcba
+
+; -----------------------------------------------------------------------------
+; tm_onwheel - W_ONWH (SPEC.md 13.18): AX = signed notches, SI = window, gfx
+; lock held. ONLY the heap page has a list to scroll, so every other page
+; ignores the turn - the About card included. WHEEL_STEPS ROWS a notch, a
+; heap row being this list's line (an arrow is one), entered at tm_hscroll's
+; own .set with its frame: tm_hclamp is the one place that knows how far
+; down the LAST walk says there is (SPEC.md 28.4.4), and the moved-or-not
+; test there is what makes a turn against an end stop draw nothing.
+; -----------------------------------------------------------------------------
+tm_onwheel:
+    cmp byte [tm_view], 2
+    jne .ret
+    call tm_abdismiss           ; the credits are up: the turn takes them
+    jc .ret                     ; down, as a click does
+    push ax                     ; tm_hscroll's frame, which .set pops
+    push bx
+    push cx
+    push dx
+    mov dx, WHEEL_STEPS
+    imul dx
+    add ax, [tm_htop]           ; signed, and [tm_htop] is a row count: only
+    jns .set                    ; the TOP can wrap, and it is an end stop
+    xor ax, ax
+.set:
+    xchg dx, ax                 ; DX = where the view would go
+    jmp tm_hscroll.set
+.ret:
+    ret
 %endif
 
 %ifdef TMF_MEM

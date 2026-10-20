@@ -34,10 +34,14 @@ so it is checked here with no Tk at all:
    off, and the composite and 16-colour files came out one-bit.
 7. THE 256-COLOUR PRESETS ARE 25 FPS AT 2x1: --preset modex on a 30 fps
    source makes a 25 fps file whose every pixel pair is one colour.
-8. PROGRESS AND CANCEL (SPEC.md 98.2.11): an encode reports its steps in
-   order and the window's bar only ever moves forward, to the end; a
-   Cancel mid-read and mid-encode stops it with nothing written, an older
-   file of that name byte for byte as it was, and no ffmpeg left running.
+8. PROGRESS AND CANCEL (SPEC.md 98.2.11): an encode reports what it is
+   doing as it does it - each step's count only rising, the frames
+   dithered never fewer than the frames encoded beside them, and a scene
+   pass counting its frames and then each scene's colours, where it sat
+   on one silent step; the window's lanes name a pass and show one run
+   alongside it; a Cancel mid-scene-pass and mid-encode stops it with
+   nothing written, an older file of that name byte for byte as it was,
+   and no ffmpeg left running.
 9. THE POSTER, IN PLACE: set_poster changes the poster word of every
    rendition and not one other byte, the file still verifies, the panel's
    keyframe for a frame is the one a play from it starts at, drawn exactly
@@ -205,7 +209,7 @@ def groups_leg():
             wrong.append("%s as a WAV: %s apply" % (t[0], on))
         if "--audio" in G.argv_from("in.mp4", "o.WAV", v, 30.0):
             offs.append("--audio on a WAV from %s" % t[0])
-    print("   14: %d groups, %d options in none (on Advanced), %d targets: "
+    print("   14: %d groups, %d options in none (on Basic), %d targets: "
           "%d wrong, %d command lines wrong"
           % (len(G.GROUPS), len(loose), len(G.TARGETS), len(wrong),
              len(offs)))
@@ -315,7 +319,8 @@ def options_leg():
     # as the blank it stands for, no dropdown offers an empty entry, and a
     # field emptied by hand is put back to what the encode will use
     # (a blank ladder is NO ladder - the checkbox on its tab is off)
-    free = {"title", "credits", "poster_at", "spk_preview", "ladder"}
+    free = {"title", "credits", "poster_at", "poster_image", "spk_preview",
+            "ladder"}
     for d, w in G.BLANK_WORD.items():
         f = [x for x in G.fields() if x["dest"] == d]
         if not f:
@@ -365,12 +370,29 @@ def options_leg():
     lyg = [g for g in G.GROUPS if g[1].startswith("Layer")][0]
     if lyg[3](c):
         bad.append("a bank greys the layer's group: %r" % lyg[3](c))
-    seq = [("first", 0, 1000), ("first", 500, 1000), ("first", 1000, 1000),
-           ("prepare", 0, 0), ("read", 5, 10), ("encode", 10, 10),
-           ("write", 0, 0), ("disk", 0, 0)]
-    fr = [G.overall(*x, two=True) for x in seq]
-    if fr != sorted(fr) or fr[-1] != G.ENCODE_SHARE:
-        bad.append("two passes' bar goes back: %r" % fr)
+    # THE LANES (98.2.11): a pass names itself, a step its own count, a
+    # step with none an indeterminate bar, and a pass run alongside the
+    # encode's own is shown beside it until the encode's next pass
+    ln, t0 = {}, 100.0
+    for ev in (dict(step="pass", done=0, total=0, note="the first pass"),
+               dict(step="scenes", done=40, total=80, note=""),
+               dict(step="pass", done=0, total=0, note="page-ahead's pass"),
+               dict(lane="alongside", step="pass", done=0, total=0,
+                    note="the one without the holds"),
+               dict(lane="alongside", step="encode", done=7, total=80,
+                    note=""),
+               dict(step="encode", done=9, total=80,
+                    note="read and dithered 12 of 80")):
+        G.lane_put(ln, ev, t0)
+    txt = G.lanes_text(ln, t0 + 10)
+    G.lane_put(ln, dict(step="pass", done=0, total=0, note="again"), t0)
+    want = ("Pass 2: page-ahead's pass", "Encoding: frame 9 of 80",
+            "Read and dithered 12 of 80", "Alongside - Pass 1: the one "
+            "without the holds", "Encoding: frame 7 of 80")
+    if any(w not in txt for w in want) or set(ln) != {"main"} or \
+            G.bar_of("palette", 0, 0) is not None or \
+            G.bar_of("encode", 20, 80) != 0.25:
+        bad.append("the progress lanes read %r, then %r" % (txt, sorted(ln)))
     # A LAYER PROFILE FILLS LAYER DISK (98.1.9): with the field empty the
     # encode budgets the layer for that profile's own disk, and the window
     # shows that number when the profile is chosen - the base's Disk for the
@@ -514,6 +536,26 @@ def legpev(tmp, bad):
     if wrong:
         bad.append("the preview showed frames %s in another scene's colours "
                    "(%s, wanted %s)" % (wrong, got[wrong[0]], want[wrong[0]]))
+    # ...and THE FILE'S PALETTE PANEL with it (the owner, 2026-10-19): the
+    # swatch of value 5 at each frame is that scene's, and the label names
+    # the scene. Broken on purpose (file_palette without the frame) every
+    # frame shows scene 1 and this FAILS
+    pw = []
+    for f in sorted(got):
+        rows = G.file_palette(r, f)
+        sw = dict((t, c) for c, t in rows[0][1])
+        hx = "#%02x%02x%02x" % want[f]
+        scene = "scene %d of 3" % (1 if f < 4 else 2 if f < 8 else 3)
+        if sw.get("value 5") != hx or len(rows[0]) < 3 or \
+                scene not in rows[0][2]:
+            pw.append(f)
+    print("   the file's palette panel: %d of %d frames show another "
+          "scene's sixteen (at the last: %r)" % (len(pw), len(got),
+                                                 G.file_palette(
+                                                     r, max(got))[0][2:]))
+    if pw:
+        bad.append("the file's palette panel showed frames %s in another "
+                   "scene's palette" % pw)
 
 
 def legpgkey(tmp, bad):
@@ -827,7 +869,7 @@ def fit_leg(bad):
 
 
 def ladder_leg(bad):
-    """18: THE DEGRADE LADDER (Size vs quality's second inner tab): with a
+    """18: THE DEGRADE LADDER (its own tab, Degrade to Fit): with a
     ladder set, the options it sets greyed and the rest not; the rungs a
     form can use following its sound and its scene palettes; and --ladder
     round-tripping through the options record"""
@@ -1155,32 +1197,55 @@ def leg8(tmp, bad):
     argv = [src, out, "--preset", "cga", "--quiet"]
     seen = []
     V.encode(V.parser().parse_args(argv),
-             progress=lambda st, d, t: seen.append((st, d, t)))
-    order = [st for st, d, t in seen]
-    steps = [n for n, _ in V.STEPS]
+             progress=lambda *x: seen.append(x))
+    order = [x[0] for x in seen]
     firsts = sorted(set(order), key=order.index)
-    fr = [G.overall(*x) for x in seen]
-    back = sum(1 for a, b in zip(fr, fr[1:]) if b < a - 1e-9)
-    enc = [d for st, d, t in seen if st == "encode"]
-    print("   8: %d reports, steps %s, the bar %.3f -> %.3f, %d step(s) "
-          "back; encode frames %d..%d of %d"
-          % (len(seen), " ".join(firsts), fr[0], fr[-1], back,
-             min(enc), max(enc), seen[-2][2] if len(seen) > 1 else 0))
-    if firsts != [n for n in steps if n in firsts] or \
-            set(firsts) != set(steps) or back or \
-            fr[-1] < G.ENCODE_SHARE * 0.97:
-        bad.append("8: the progress went %s, %d steps back, ending at %.3f"
-                   % (" ".join(firsts), back, fr[-1]))
+    enc = [(x[1], x[2], x[3]) for x in seen if x[0] == "encode"]
+    # (HONEST: each step's count only goes up, and the frames dithered,
+    # said beside the frames encoded, are never fewer than them)
+    back = sum(1 for a, b in zip(seen, seen[1:])
+               if a[0] == b[0] and b[1] < a[1])
+    lied = sum(1 for d, t, note in enc if "dithered " in note and
+               int(note.split("dithered ")[1].split()[0]) < d)
+    print("   8: %d reports, steps %s, %d count(s) back, %d dithered count "
+          "under the encoded; encode frames %d..%d of %d"
+          % (len(seen), " ".join(firsts), back, lied, enc[0][0], enc[-1][0],
+             enc[-1][1]))
+    if firsts[0] != "prepare" or firsts[-1] not in ("write", "check") or \
+            "encode" not in firsts or back or lied or \
+            enc[-1][0] != enc[-1][1] - 1:
+        bad.append("8: the progress went %s, %d counts back, %d dithered "
+                   "counts under the encoded, ending at %r"
+                   % (" ".join(firsts), back, lied, enc[-1]))
+    # ...and a scene pass says how far it has got (the owner, 2026-10-17:
+    # "with --scene-palettes the bar sits there forever doing nothing")
+    sargv = [src, out, "--preset", "vga4", "--palette", "colour16",
+             "--scene-palettes", "--quiet"]
+    seen = []
+    V.encode(V.parser().parse_args(sargv),
+             progress=lambda *x: seen.append(x))
+    sc = [x for x in seen if x[0] == "scenes"]
+    co = [x for x in seen if x[0] == "colours"]
+    print("   8: --scene-palettes: the scene pass %d reports, %d..%d of %d; "
+          "the scenes' colours %d reports, to %d of %d"
+          % (len(sc), sc[0][1] if sc else -1, sc[-1][1] if sc else -1,
+             sc[-1][2] if sc else 0, len(co), co[-1][1] if co else -1,
+             co[-1][2] if co else 0))
+    if len(sc) < 10 or sc[-1][1] < sc[-1][2] - 2 or not co or \
+            co[-1][1] != co[-1][2]:
+        bad.append("8: --scene-palettes reported its scene pass %r and its "
+                   "colours %r" % (sc[-1:], co[-1:]))
     old = b"an older file, left alone"
-    for when in ("read", "encode"):
+    for when in ("scenes", "encode"):
         with open(out, "wb") as f:
             f.write(old)
 
-        def stop(st, d, t, when=when):
+        def stop(st, d, t, note="", when=when):
             if st == when and d >= 10:
                 raise V.Cancelled()
         try:
-            V.encode(V.parser().parse_args(argv), progress=stop)
+            V.encode(V.parser().parse_args(
+                sargv if when == "scenes" else argv), progress=stop)
             got = "finished"
         except V.Cancelled:
             got = "cancelled"
@@ -1314,7 +1379,7 @@ def leg12(tmp, bad):
     src = os.path.join(tmp, "src4.mp4")
     out = os.path.join(tmp, "J.V88")
     ev = list(G.EncodeJob([src, out, "--preset", "cga"]).start().events())
-    steps = [v[0] for k, v in ev if k == "prog"]
+    steps = [v["step"] for k, v in ev if k == "prog"]
     firsts = sorted(set(steps), key=steps.index)
     rc = ev[-1][1]
     ok = rc == 0 and os.path.exists(out)
@@ -1323,7 +1388,8 @@ def leg12(tmp, bad):
     print("  12: a job run whole: exit %d, %d progress lines, steps %s, "
           "%d log lines" % (rc, len(steps), " ".join(firsts),
                             sum(1 for k, v in ev if k == "log")))
-    if not ok or firsts != [n for n, _ in V.STEPS]:
+    if not ok or firsts[0] != "prepare" or \
+            firsts[-1] not in ("write", "check") or "encode" not in firsts:
         bad.append("12: a whole job exited %d with steps %s" % (rc, firsts))
     long_src = os.path.join(tmp, "long.mp4")
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi",
@@ -1336,7 +1402,7 @@ def leg12(tmp, bad):
                      "286-speeddemon"]).start()
     seen = None
     for kind, val in j.events():
-        if kind == "prog" and val[0] in ("read", "encode") and val[1] > 5:
+        if kind == "prog" and val["step"] == "encode" and val["done"] > 5:
             seen = val
             break
     t0 = time.time()

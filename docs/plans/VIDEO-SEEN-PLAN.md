@@ -1,6 +1,6 @@
 # VIDEO-SEEN-PLAN - "error as seen" as a person sees it, and an encoder that spends by it
 
-**Status: section 2's score BUILT as a report line (2a, 2026-10-16), in three sets - colour, grey and 1-bit dither - and judging `--aim quality`'s trials and page-ahead's keep beside today's figure; section 3 BUILT as two options, `--edges 1` the default and `--attend` off; 3a's wave 1 BUILT as `--min-fps`, off until watched; the rest is PLAN.** Recorded from the owner's
+**Status (2026-10-18): sections 2, 3 and 3a BUILT; 3b BUILT as an option, `--flip-own`, its automatic choice open; section 4 lists what else is.** Section 2's score is a report line in three sets (colour, grey, 1-bit dither) and is what `--aim quality`'s trials, page-ahead's keep and the degrade ladder decide by. Section 3 is two options - `--edges 1` the default, `--attend` 0 and to stay so - and the look-ahead's floor (`--lookahead-floor 0.5`). 3a is the degrade ladder, `--min-fps`, held records, coarse cells at a scene or at any cut, and two rounds of encoder speed. Recorded from the owner's
 review of the GasGas and Bad Carrot comparison encodes, and parked while
 the encoder's choice in one scene is fixed first: the opening car shot of
 GasGas (0:40), which the owner's own tune plays clean on the Victory 286
@@ -240,7 +240,32 @@ read 31 32 22 20 / 20 13 20 against 22 14 8 4 / 10 6 6: the worst repaired
 sooner, a milder residue left longer. The owner's eye on the strip and in
 play: 44-52 "much better", a slight outline at 55-57, and it tears "very
 slightly less" in play - so **`--edges 1` is the default** (2026-10-16).
-`--attend` moved nothing a strip of frames shows and stays off.
+`--attend` moved nothing a strip of frames shows and stays off. A second
+A/B on the encoder as it stood on 2026-10-17 (GasGas, Bad Carrot, Last
+Exile) read within 0.3 points either way, and the owner, 2026-10-18:
+"Leave it 0, I can hardly tell. We may rework it to be smarter someday."
+
+**THE LOOK-AHEAD'S FLOOR, `--lookahead-floor 0.5`** (2026-10-18, SPEC.md
+98.2.1.2; the owner's GasGas headlights). Frame 1277, the near car head
+on, came out as black ground in every encode. The look-ahead had taken
+its headlights' worth from 4.07 a pixel to 0.53 - the next two frames
+move them on - while the dark road beside them, worth 0.09, stores as
+cheap runs and won per byte. The floor keeps a change worth at least half
+of what it is worth NOW. On the whole GasGas clip at the owner's options:
+the view 2.2% broken against 2.6%, 115 frames cut, page-ahead kept (plain
+3.5%), and the headlights drawn. Last Exile 1.5% against 1.7% without it
+(and 1.3% with no look-ahead, which is worst on GasGas at 4.8%), Bad
+Carrot 1.8% against 1.9%. So the look-ahead stays at 2, with the floor;
+a record made before it reads 0.
+
+**A scene's palette goes on WITH its picture** (2026-10-18, SPEC.md
+98.1.3.2.3; the owner's GasGasQ, "flipping the palette one frame too
+early"). A page-ahead replay hold writes nothing on the page shown, so a
+palette entry at a scene's first frame changed the colours of the OLD
+picture for a frame: 14 of 34 palettes in GasGasQ, 16 in GasGasO. The
+entry now moves to the first frame that writes or flips that page; the
+GasGas slice keeps identical records with its palettes one frame later,
+and `videnc` leg 5h'' counts none on an untouched page.
 
 What NOT to do first: change allocation and the metric in the same step.
 The metric is the instrument the allocation is judged by; build the score
@@ -319,7 +344,10 @@ The tab carries the checkbox and six rungs, each a list of the rungs this
 form can use (a card's sound offers `lag`, the speaker does not; `coarse`
 on a planar screen, `colours` only for 16 colours a scene) - and under
 them **Instead of cutting**: Lag, Min fps, Slow cost and Flip hold, moved
-there off **When a frame is cut**, and Coarse cut off **Scenes**. Those are
+there off **When a frame is cut**, and Coarse cut off **Scenes** (since
+2026-10-18 two boxes beside the ladder's own: **Or, without the ladder: for
+the whole clip** - those it replaces, Step down and Step min with them -
+and **Held frames, either way**, SPEC.md 98.2.1.2). Those are
 the global settings the ladder stands in for (Lag, Min fps and Coarse cut
 grey while it is on; the charge and the held frames it uses), and taking
 them off Choices is what brought that tab back inside the default window
@@ -443,6 +471,13 @@ frame" in the window, beside "mixed: only the tiles it must" - and a
 ladder that says `auto` still reads as it. A name only: every file above
 is the same.
 
+**The owner on `coarseany`, 2026-10-18**: "I feel like its been working
+well, but I have not directly compared many 'partially blocked out'
+screens. Fully blocked out ones always work well; that has made the suns
+scene in bad carrot MUCH better." So the whole-frame cells are judged and
+kept; the MIXED frame (a tile edge between full detail and cells, in
+motion) has not been compared side by side and is still an open look.
+
 **THE ENCODER SPEED PASS, first round (2026-10-17)** (the owner: "encode
 times aside; add an item to do an encoder optimization pass"). Measured
 first: Last Exile 0:10-0:15, Mode X flipped on `286-speeddemon`, the
@@ -473,6 +508,58 @@ profile and not taken: the record writer (`record`/`to_lists`, 12.6 s), a
 tight serializer already; 16-colour VGA's model stores, whose write-mode-3
 read-modify-write is order-dependent and so not a whole-array write; and
 the mix's eight probes a frame, which are its search.
+
+**THE ENCODER SPEED PASS, second round (2026-10-17)** (the owner: "I have
+a 9800X3D, 8 cores, 16 threads... its using 6% of the total processor").
+WHY, measured with py-spy on the owner's command (Last Exile 6.5-14.5,
+Mode X, `286-picomem1`, `--ladder coarseany:mix,lag:50`, `--pages max`):
+the main process was busy the whole run and nothing else was - the dither
+pool, the only other worker, waits on it. Of its time 35% was the
+ladder's trials, ALL in the plan pass, one after another; 20% the
+picture's measure, again in every pass; the rest the frames. And before
+the plan pass read a frame, **28 s of ffmpeg's `palettegen` on one core,
+whatever the clip's length** - the `-t` it was given was an OUTPUT option,
+which never fires for a filter that writes at the end of its input, so
+the palette was the clip's start to the end of the FILE (SPEC.md 98.2.3).
+
+| change | the file |
+|---|---|
+| the palette's `-t` on the input: 28 s -> 0.5 s for a 4 s clip | CHANGES - the clip's own colours; Last Exile 6.5-14.5 came out 0 frames cut against 4, page-ahead kept where it was dropped |
+| the ladder's trials at once (`TrialPool`) | byte-identical |
+| page-ahead's pass without the holds alongside (`PassBg`) | byte-identical |
+| the picture's measure in workers (`Meter`) | byte-identical |
+
+The three byte-identical rows were checked by `cmp` of the file and the
+report against the tree before, and `videnc` leg 3e holds them so (red
+when a meter task is sent without its two frames before). On a 4-core
+box: the 4 s slice **104 s -> 38 s**, of which the palette was 28; the
+8 s slice **189 s -> 80.5 s**. A ladder stretch costs its slowest trial
+and not their sum (5.8 s against 13.7 s at one of them). Two defects found
+on the way: `set_xplay`'s cost closures priced a deep copy's frames by the
+ORIGINAL encoder's bank (objects now: `PlayCost`, `XmsCost`), and
+`_encode`'s ladder block rebound `keep` - the gate's target list - to its
+rung list, so every target went into `enc.vkeep`. Measured and NOT taken:
+a faster `to_lists` body (the same on real frames' spans), and caching the
+dither across passes (streamed, the encoder waits on it 3% of the time).
+What is still on one core is the frames of each pass, which is the
+encoder's nature (SPEC.md 98.2.1, *Every core*).
+
+**The progress bar says what it is doing** (2026-10-17, SPEC.md 98.2.11;
+the owner: "if its doing 5 things at once, say that"). Every report is a
+lane, a step, its own count and a note - `@@progress` and a JSON object
+on the command line - and the window shows a line per lane, a step's bar
+going indeterminate where it has no count, rather than one bar spreading
+made-up shares over the whole encode.
+
+**A third round, 2026-10-18: the check after the write** (the owner's
+Bad Carrot, both page-ahead passes on "Writing the file" for 15+
+minutes). Not the write: `verify_v88`, run where the sound is ahead, took
+a VGA4 canvas of BOTH pages every frame, a pixel at a time at 0.11 s
+each, and `upgrade_keys` three a key. `Geom.canvas`, `Geom.put` and
+`vga4_planes` take numpy now - the same bytes, ~200x as fast (a key's
+upgrade 1.2 s -> 0.03 s; a 1,801-frame two-page verify 14.8 s, from an
+estimated ~400) - and the check is a step of its own, "Checking the
+file".
 
 What it was sketched as:
 
@@ -662,7 +749,55 @@ drawn over the base's, so a base drawn toward the next frame would have
 the layer drawing it back - paid for twice), and LIVE (a pass a tick on
 the desktop).
 
-## 3b. OPEN: a flipped file whose every record is against its own page
+## 3b. BUILT AS AN OPTION: a flipped file whose every record is against its own page
+
+**BUILT 2026-10-18 as `--flip-own`** (SPEC.md 98.1.3.10, 98.2.1.2, 98.3.8.7;
+the owner: "speed gains are very valuable to video player, each one means
+less things we need to cut or degrade"). Rendition byte 37 = 7; the record
+after a key carries `REC_UP` and takes the rows where the two pages differ
+off the glass, which is the one thing this section's sketch below did not
+see - a seek puts the key on both pages, a play through it does not.
+
+**The measurement this section asked for** (each frame of a file as made
+today, priced both ways with the profile's own table, the records rebuilt
+from the frames shown and priced within 1% of the file's own): on Last
+Exile 0:10-0:25, Mode X flipped on `286-speeddemon`, a frame is 34.3% of
+its budget for its own record and **34.2% to bring its page up**, and
+50.4% against the frame two back - every one of 344 frames cheaper, at
++46% bytes (10.7 KB a frame -> 15.6). The encode then says what the CPU
+buys:
+
+| | frames cut | the view broken | s broken | bytes |
+|---|---:|---:|---:|---:|
+| Last Exile 0:10-0:25, `--flip` | 173 | 23.9% | 6.6 | 4.5 MB |
+| ...`--flip-own` | **93** | **12.1%** | **3.5** | 6.5 MB |
+| Bad Carrot 3:05-3:20, the owner's options, `--flip` | 68 | 3.71% | 1.13 | 4.3 MB |
+| ...`--flip-own` | **56** | **2.47%** | **0.83** | 5.5 MB |
+| ...the owner's own (page-ahead, not flipped) | 33 | 1.13% | 0.53 | 5.2 MB |
+
+It is the TRADE the sketch predicted, and the clip decides it: a plain pan
+16 cut -> 3, `testsrc2`'s pattern 2 -> 4 (the disk cuts it), a pan of
+noise 71 -> 72 (every pixel every frame: nothing to save).
+
+**And on three pages or more, BUILT AHEAD as well** (2026-10-18, SPEC.md
+98.2.1.8.5; the owner: "page ahead and flip when there are 3+ pages"):
+`--flip --flip-own --page-ahead on --pages N` is 98.1.3.7.2's file with
+every record BUILT and the back page carried by every key - byte 37 5 as
+it was, so every player since 98.3.8.5 plays it. Building ahead bought the
+flipped file almost nothing while it paid the bring-up (Last Exile 173 ->
+166 cut); without it the two add up: **77 cut, the view 9.6% broken, 2.75
+s** against two pages' 93, 12.1% and 3.5 s. Two pages cannot have both -
+page-ahead's second page is for building, the flip's for hiding the draw -
+so a 640 x 350 file like Bad Carrot (two pages in a plane) stays a choice
+between page-ahead, which may tear, and the flip.
+
+**OPEN**: an automatic choice - the page-ahead keep's shape (98.2.1.8.1),
+both passes and the better by the view as seen, at twice the encode; and
+the player still keeps a copy of every record and its 31 KB claim for a
+file that never needs it (a byte 37 5 player cannot be told without a new
+byte).
+
+What follows is the design as recorded, 2026-10-16.
 
 **Recorded, not started** (the owner, 2026-10-16: "record the option for
 changing the format and let's move on for now"). The held record's bring-up
@@ -705,14 +840,28 @@ cheaper is the clip's, and may be the frame's.
 - **Not combined** with page-ahead's flipped files (98.1.3.7.2), which
   already build a page as it stands where they flip to one.
 
-## 4. The order
+## 4. The order, and what is open
 
-1. (FIRST, not this plan) Fix why the opening GasGas shot breaks at all
-   on this encoder when the owner's tune of the same frames does not -
-   it is the encoder's budget/choice, not the metric. Two-second clip
-   (0:40-0:42), against the owner's original file and its profile.
-2. Error maps for that shot: where the wrong pixels are, and which spans
-   each cut frame chose - does the budget go on the shake or the car.
-3. The attention-weighted score as a REPORT line beside today's, fitted
-   to the owner's scores.
-4. Then the score into `value` (section 3), A/B'd on the same clips.
+What it was, all four DONE: (1) the opening GasGas shot was a frame-rate
+question and not an allocation one - the owner's tune was 20 fps and the
+copy against it 24 (3a); (2) its error maps showed no order of spans
+draws what a 24 fps car frame needs (section 3); (3) the score is a report
+line, fitted to the owner's scores (2a); (4) it steers `value` as
+`--edges 1`, `--attend` left at 0 (section 3).
+
+OPEN, 2026-10-18:
+1. **3b's automatic choice**: `--flip-own` is BUILT as an option, on two
+   pages and on three or more built ahead (3b); a file that decides it for
+   itself is the open part.
+2. **A degrade ladder that loses to no ladder** - on `videnc`'s synthetic
+   Mode X clip a ladder that drew every stretch as it was came out 12.2-
+   12.5% of the view broken against 9.4% with none. Being looked at.
+3. **The mixed frame in motion**, compared side by side (`coarseany:mix`
+   against whole-frame cells and against a cut) - the owner's look.
+4. **The palette step-down for the other formats**: `colours:` is 16
+   colours' rung alone (3a, "Also owed").
+5. **A fourth weight set**: a colour clip of flat cartoon colour (2a).
+6. **Speed, measured and not taken**: the record writer (`to_lists`,
+   12.6 s of a profile and already tight), VGA4's model stores (write mode
+   3 is order-dependent, so no whole-array write), and the mix's eight
+   probes a frame.

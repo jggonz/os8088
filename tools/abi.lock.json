@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "a6a0ec291813bb95a2c126918561dc8c3f4cdccee2b4e217f48fe60fd2de450c",
+  "fingerprint": "1d904d1424376c8384befbd97dfe0a521813948282fc89b2bed2fb7ab96b002a",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "a65f78ce5c1471a3a11b74d98c547a938277b34a47c22ed2e5654e9a0cd20722",
+  "fingerprint": "2b15ba62995727879529b0464161a14746dc4fb573ed6e7f19a7c825b3133761",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -301,6 +301,48 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "STIKLIB_VER 1 -> 2 (SPEC.md 110.5.1, 110.15.2): the Sticky App library's STKE_ENTER now takes DX (a folder the caller banked, or 0 for SYSTEM\\APPDATA by a walk) and answers AX (the witness, our own file's first cluster), and its first stand is OSAPI_FILE_GOTO_QM rather than a full OSAPI_FILE_GOTO. The block's layout and the entry table are unchanged; a version-1 caller would not set DX, so the library's own version moves and a package and a DESK.DRV of different versions refuse to bind. No kernel cell, header or package format changes, so PKG_FMT and DRV_VER stay: a version-1 Sticky App meeting a version-2 DESK.DRV is refused at its own bind in words, which is the fence STIKLIB_VER exists to be, and none has shipped (the library has not reached main).",
+   "to": 11
+  },
+  {
+   "fingerprint": "cc07115fb178ce1041a9216c3830578b9ac30ac6108d33769e1e4c89a5c797be",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "APP_MAX_SIZE 0xF000 -> 0xFE00 (SPEC.md 20.1.1) and SSI_SIZE may read 0xFFFF for a 64KB region. A contract widened, not moved: every package built against the old ceiling still fits the new one, so PKG_FMT does not bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "e405eb672770a02ebda03ab4a4f61900b8ee5bfea4339fdcfc1d805b3a2f6aed",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "APP_MAX_SIZE 0xF000 -> 0xFE00 (SPEC.md 20.1.1) and SSI_SIZE may read 0xFFFF for a 64KB region. A contract widened, not moved: every package built against the old ceiling still fits the new one, so PKG_FMT does not bump",
+   "to": 11
+  },
+  {
+   "fingerprint": "05706db1b0e4ac53bf110e3e1bdaceb123f8884ed2a52524f7602856e1abb925",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "SPEC.md 13.18: OSAPI_WM_ONWHEEL appended at 0x0499 (inline cell, a no-op on kern_small), WHEEL_STEPS, and OSAPI_MOUSE_FEED's CL top six bits carry a driver's wheel (9.12.8) - every driver built before masked CL to its buttons, so old binaries report no wheel; nothing built before stops running",
+   "to": 10
+  },
+  {
+   "fingerprint": "4c7403107cbd6f709c84d90ac26978bd0f2e1a023c93299f176889fa0d02234f",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "SPEC.md 13.18: OSAPI_WM_ONWHEEL appended at 0x0499 (inline cell, a no-op on kern_small), WHEEL_STEPS, and OSAPI_MOUSE_FEED's CL top six bits carry a driver's wheel (9.12.8) - every driver built before masked CL to its buttons, so old binaries report no wheel; nothing built before stops running",
+   "to": 11
+  },
+  {
+   "fingerprint": "2b15ba62995727879529b0464161a14746dc4fb573ed6e7f19a7c825b3133761",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "SPEC.md 13.18: WHEEL_STEPS is LINES a notch (the owner's three), and OSAPI_WM_ONWHEEL's comment says so - wording only, nothing built before stops running",
+   "to": 10
+  },
+  {
+   "fingerprint": "1d904d1424376c8384befbd97dfe0a521813948282fc89b2bed2fb7ab96b002a",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "SPEC.md 13.18: WHEEL_STEPS is LINES a notch (the owner's three), and OSAPI_WM_ONWHEEL's comment says so - wording only, nothing built before stops running",
    "to": 11
   }
  ]

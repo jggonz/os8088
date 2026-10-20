@@ -7,6 +7,8 @@
     python3 tools/os88mouse.py 127.0.0.1:9001 dblclick 150 90
     python3 tools/os88mouse.py 127.0.0.1:9001 menu 12 8 40 45
     python3 tools/os88mouse.py 127.0.0.1:9001 drag 200 78 200 120
+    python3 tools/os88mouse.py 127.0.0.1:9001 wheel 3     # notches, + toward
+                                      # the user; MartyPC patch 15 (SPEC.md 10.4)
 
 THIS IS THE DEFAULT. Reach for it whenever a script wants something on the
 screen clicked. The RELATIVE driver is tools/os88mouserel.py and it is for a
@@ -701,7 +703,7 @@ def main():
     sub = ap.add_subparsers(dest="op", required=True)
     sub.add_parser("where")
     for name, n in (("to", 2), ("click", 2), ("dblclick", 2),
-                    ("drag", 4), ("menu", 4)):
+                    ("drag", 4), ("menu", 4), ("wheel", 1)):
         p = sub.add_parser(name)
         p.add_argument("coords", type=int, nargs=n)
     a = ap.parse_args()
@@ -721,6 +723,8 @@ def main():
             mo.drag(*a.coords)
         elif a.op == "menu":
             mo.menu(*a.coords)
+        elif a.op == "wheel":             # notches, + toward the user; needs
+            mo.m.wheel(a.coords[0])       # MartyPC's patch 15 (SPEC.md 10.4)
         if a.op != "where" and not a.quiet:
             x, y, _ = mo.where()
             print("%s -> cursor (%d,%d)" % (a.op, x, y))

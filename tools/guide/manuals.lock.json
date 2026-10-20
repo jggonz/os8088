@@ -1072,9 +1072,9 @@
    "tools/os88venc.py",
    "tools/os88vencgui.py"
   ],
-  "stamped": "87212abf",
-  "strings": "b4bc3fa128e8c3f7",
-  "why": "lists restricted to what the file takes, Mode X's 320x240 screen, --pages max, the pre-roll's dry run: all below the page's level of detail; checked, unchanged"
+  "stamped": "2622ee65",
+  "strings": "3a72b4164e7def7a",
+  "why": "--ladder-at (By time) and --scene-join (Scene join): the page names both"
  },
  "TRACKER_O88": {
   "sources": [

@@ -166,6 +166,9 @@ tp_entry:                       ; (an entry proc answers BX = its window and
     mov ax, tp_ontimer          ; read off OSAPI_WM_ONDRAG's own CF, so nothing
     call OSAPI_WM_ONTIMER       ; goes between. Then 13.10.5.4.2's PAUSE commit
 %endif
+    mov ax, tp_onwheel          ; SPEC.md 13.18: the mouse wheel scrolls the
+    call OSAPI_WM_ONWHEEL       ; pane under the pointer (does nothing on
+                                ; kern_small, which has no wheel)
     mov al, 1
     call OSAPI_WM_SIZABLE
     mov al, 1
@@ -5330,6 +5333,76 @@ tp_ssb_click:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; tp_onwheel - W_ONWH (SPEC.md 13.18): AX = signed notches, SI = window, gfx
+; lock held. THE PANE UNDER THE POINTER scrolls - its text or its bar, split at
+; the preview's left edge, as tp_onclick splits them - and anywhere else (the
+; button bar, the status line, off the window) the FOCUSED one does. The focus
+; does not move: a wheel is not a click.
+;
+; WHEEL_STEPS lines a notch, through os88ui_sbwheel (SPEC.md 13.10.8). A source
+; line is a ROW; a preview line is the 8px a body line occupies there, which is
+; the unit TP_SB_STEP's arrow is counted in too (so 24px a notch, the preview's
+; own Up/Down key). Then the arrows' own tail: the marks come off at the scroll
+; they were drawn at, the clamp, and tp_src_scroll / tp_prev_scroll, which blit
+; and letter only the vacated band. A wheel against an end draws nothing.
+; About up, or a load landed under us: the same full repaint a key or a click
+; owes then, and the notch is spent on it.
+; -----------------------------------------------------------------------------
+tp_onwheel:
+    call tp_deferred_ld
+    cmp byte [tp_abouton], 0
+    jne .about
+    cmp byte [tp_ldfull], 0
+    jne .draw
+    push ax
+    call tp_regeo               ; the window may have moved (tp_onkey's reason)
+    call OSAPI_MOUSE            ; CX, DX = the pointer (AL = buttons)
+    pop ax
+    mov bl, [tp_focus]          ; off the panes: the focused one
+    cmp dx, [tp_ey1]
+    jb .pane
+    cmp dx, [tp_ey2]
+    ja .pane
+    cmp cx, [tp_ex1]
+    jb .pane
+    cmp cx, [tp_r_psb+4]
+    ja .pane
+    mov bl, 0                   ; the source, its bar and the splitter...
+    cmp cx, [tp_px1]
+    jb .pane
+    inc bx                      ; ...and the preview and its bar (BL = 1)
+.pane:
+    or bl, bl
+    jnz .prv
+    call tp_src_metrics
+    jc .o                       ; no rows to scroll
+    call tp_ssb_sync
+    mov bx, tp_r_ssb
+    mov cx, 1                   ; a line is a row
+    call os88ui_sbwheel
+    jc .o
+    call tp_caret_hide          ; at the scroll they were DRAWN at (.ssb's
+    call tp_sel_hide            ; order in tp_onclick)
+    mov [tp_vscroll], ax
+    call tp_clamp_vs
+    jmp tp_src_scroll
+.prv:
+    call tp_psb_sync
+    mov bx, tp_r_psb
+    mov cx, 8                   ; a line is a body line's 8px
+    call os88ui_sbwheel
+    jc .o
+    mov [tp_pscroll], ax
+    jmp tp_prev_scroll          ; (which clamps it EVEN itself)
+.about:
+    mov byte [tp_abouton], 0    ; dismissed, as a key dismisses it
+.draw:
+    mov byte [tp_ldfull], 0
+    jmp tp_redraw
+.o:
+    ret
+
 ; The caret is on screen or the view moves to put it there. It is only ever
 ; VERTICAL now: a row is the whole width of the pane by construction, so
 ; there is nothing to scroll sideways and [tp_hscroll] is gone with the
@@ -5628,6 +5701,9 @@ tp_seed_s:
                                 ; question before a close, a New or an Open
                                 ; throws an edited document away (69.12)
 %define OS88UI_SBUPD            ; ...and its whole-or-thumb choice, for both bars (13.10.3.2)
+%define OS88UI_WHEEL            ; ...and where a wheel notch takes either (13.10.8).
+                                ; Beside the include and not at the top: nothing
+                                ; in this file tests it, tp_onwheel is unconditional
     %define OS88UI_NOGLYPH          ; no check box or radio drawn here (SPEC.md 13.8.9)
     %define OS88UI_NOGEST           ; presses routed by hand: no gesture install (SPEC.md 20.5.1.3.4)
     %define OS88UI_NOBFIND          ; hit-tests its own rects: no os88ui_bfind (SPEC.md 20.5.1.3.4)

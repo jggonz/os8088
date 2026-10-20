@@ -57,9 +57,11 @@ OP_SECMAX = 1920          # apps/os88parts.inc's: the carve's ceiling in
                           # sectors, packed and unpacked (SPEC.md 20.12.11)
 OP_PARTMAX = 0xFE00       # ...and ONE part's: op_size rounds a row's length
                           # up to a sector in a word and refuses the carry
-APP_MAX_SIZE = 0xF000     # image + bss budget: 60KB (one segment's worth -
-                          # the region is a heap claim, so the real limit is
-                          # also whatever the heap has contiguous)
+APP_MAX_SIZE = 0xFE00     # image + bss budget: 63.5KB (SPEC.md 20.1.1 -
+                          # one segment, less what roundup512 in a word
+                          # cannot hold; the region is a heap claim, so the
+                          # real limit is also whatever the heap has
+                          # contiguous)
 DISPATCH = bytes((0xFF, 0xD5, 0xCB))         # call bp / retf, at +12..+14
 STK_CLASS_MAX = 4                            # ...and +15 is the STACK CLASS
                                              # (SPEC.md 8.7), an index into the

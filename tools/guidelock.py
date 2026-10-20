@@ -272,6 +272,7 @@ def check():
                             rec.get("stamped", "HEAD"), " ".join(rec["sources"]), key)))
 
     # 2. files with no line or no page
+    os88guide.HASH_EXT = ()             # (previews are matched below, by source)
     data = os88guide.collect()
     entries = data["entries"]
     names, built_all = {}, True
@@ -293,6 +294,14 @@ def check():
         elif e.get("kind") in NEEDS_PAGE and key_of(n) not in pages:
             owed.append(("no-page", "%s (%s) is on %s and has no page: write tools/guide/manuals/%s.md"
                          % (n, e.get("kind"), where, key_of(n))))
+
+    # 2b. a demo video with no preview, or one made from other bytes
+    sys.path.insert(0, os.path.join(ROOT, "tools", "guide"))
+    import vidpreview
+    for src in vidpreview.owed():
+        owed.append(("no-preview", "%s has no video preview made from its current bytes: "
+                     "python3 tools/guide/vidpreview.py (needs ffmpeg), then commit "
+                     "tools/guide/videos/" % src))
 
     # 3. pages and lines for files no disk carries (only when all are built)
     if built_all:

@@ -1049,6 +1049,21 @@ _os88_wm_wake:
 %endif
 %endif
 
+%ifdef CC_HAS_ONWHEEL
+; void os88_wm_onwheel(void *win) - BX = win, AX = the near proc (SPEC.md
+; 13.18). Call it AFTER os88_wm_create, once. An inline cell that preserves
+; FLAGS and does nothing on kern_small, which has no wheel - so no answer.
+CC_GATE _os88_wm_onwheel
+%ifdef CC_U__os88_wm_onwheel
+_os88_wm_onwheel:
+    mov bx, sp                      ; no frame: one argument
+    mov bx, [ss:bx+2]
+    mov ax, cc_onwheel
+    call OSAPI_WM_ONWHEEL
+    ret
+%endif
+%endif
+
 ; int os88_fullscreen(void *win, int enter) - BX = win, AL = 1 enter / 0 exit
 ; (SPEC.md 11.2 - the WF_FULL latch, NOT the 53 exclusive bracket). The caller
 ; holds the gfx lock, which a window callback does. 0 = done, -1 = enter
@@ -1339,7 +1354,7 @@ _os88_snd_tone:
 ; section writes [cc_ferr], which os88_ferr() reads back.
 ;
 ; The count is DX:CX, 32 bits. These pass DX = 0 and cap the count at 16, and
-; that costs a package nothing it can reach: image plus bss cap at 60KB, and
+; that costs a package nothing it can reach: image plus bss cap at 63.5KB, and
 ; anything larger lives in a claim, which the _seg forms read straight into.
 ; =============================================================================
 
@@ -1379,7 +1394,7 @@ _os88_file_read:
 ; unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap)
 ; The same call with ES = a heap claim's base segment and BX = 0 (SPEC.md
 ; 18.4.1: the transfer walks the SEGMENT, so this is how a package reads
-; something its own 60KB region could never hold).
+; something its own 63.5KB region could never hold).
 CC_GATE _os88_file_read_seg
 %ifdef CC_U__os88_file_read_seg
 _os88_file_read_seg:

@@ -51,7 +51,7 @@ V_APP, V_DRV, V_MOD = os88pkg.PKG_FMT, os88drv.DRV_VER, 5  # package / driver / 
 DISPATCH = bytes((0xFF, 0xD5, 0xCB))  # call bp / retf, at +12
 HEADER = 32
 ICON_END = 96
-APP_MAX_SIZE = 0xF000                # kernel/kernel.asm, apps/os88api.inc
+APP_MAX_SIZE = 0xFE00                # kernel/kernel.asm, apps/os88api.inc
 DRV_MAX = 40 * 1024                  # DRV_MAX_KB in kernel/driver.inc
 # tools/os88drv.py's own list. 0x40 is NOT a kernel driver class: it is a
 # driver's own loadable half (OS88_OVERLAY, SPEC.md 52.11), which the kernel

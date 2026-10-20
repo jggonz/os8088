@@ -4916,7 +4916,8 @@ section .cold                   ; COLD_SEG (SPEC.md 2.6)
 ;   * NO CX BANK. All four callers destroy CL themselves today, so the bank
 ;     bought nothing - and dropping it is what SATISFIES loader.inc's
 ;     documented "CL IS STILL 10" dependency rather than breaking it.
-;   * NO ZERO CLAMP, because no caller can reach zero: driver and mod have
+;   * NO ZERO CLAMP, because no caller can reach zero (n = 0 would answer
+;     64, not 0, since the body is `dec`/`shr`/`inc`): driver and mod have
 ;     already refused anything under their *_HDR_SZ, filecp's input is a
 ;     cluster size (>= 512 by the BPB rules), and loader's is
 ;     `(img + bss + 511) & 0FE00h` with `img >= LD_HDR_SIZE` enforced by
@@ -4924,9 +4925,14 @@ section .cold                   ; COLD_SEG (SPEC.md 2.6)
 ;     OR USE mem_bytes_kb**: 0 KB is a claim with nowhere to put anything.
 ; -----------------------------------------------------------------------------
 mem_bytes_kb_x:
-    add ax, 1023
-    mov cl, 10
-    shr ax, cl
-    ret
+    dec ax                      ; ceil(n / 1024) = (n - 1) / 1024 + 1 for any
+    mov cl, 10                  ; n >= 1, and NEVER CARRIES: `add ax, 1023`
+    shr ax, cl                  ; did, and answered 0 KB for every n from
+    inc ax                      ; 64,513 up - a 63.5KB package's region
+    ret                         ; (SPEC.md 20.1.1). A byte shorter, too...
+    nop                         ; ...so a PARITY PAD, never executed: the
+                                ; byte saved moved dsk_xfer, dsk_runcap and
+                                ; dsk_next_clus_x by an odd amount
+                                ; (tests/unit/t_hotpar.py)
 
 section .text                   ; ...and the file ends in .text (CLAUDE.md 1)

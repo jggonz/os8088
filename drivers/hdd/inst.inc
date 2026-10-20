@@ -2176,11 +2176,18 @@ hd_ifdd2:
 ; clobbers: flags. No I/O of any kind: this is what keeps a scan of eight
 ;           volumes down to the two or three drives a machine really has.
 ;
-; A REMOVABLE volume and nothing else (SPEC.md 18.7.2): the apps disk is a
-; floppy, so a hard-disk partition - the destination included - and a
-; redirected network volume (SPEC.md 62.9) are out by their KIND rather than
-; by their index, which is what makes this right on a machine whose floppies
-; are lettered A:, B:, D: and E: (SPEC.md 18.98).
+; A REMOVABLE volume, or a MOUNTED IMAGE (SPEC.md 18.7.2, 52.10.17): the
+; install set is two floppies, and a floppy's bytes in a `.IMG` on a hard disk
+; are the same disk. So a hard-disk partition - the destination included -
+; and a redirected network volume (SPEC.md 62.9) are out by their KIND rather
+; than by their index, which is what makes this right on a machine whose
+; floppies are lettered A:, B:, D: and E: (SPEC.md 18.98).
+;
+; AN IMAGE ON A FLOPPY already answered VK_REMOVABLE (SPEC.md 18.101.7). One
+; on a hard disk answers its host's VK_FIXED, and the transport is what tells
+; it from a partition: VT_DRIVER is a DRVC_DISK row, and the only two kinds of
+; those are this driver's own partitions and images. So a VT_DRIVER volume
+; that hd_iown does not find in hd_vols is an image.
 ; -----------------------------------------------------------------------------
 hd_iapps_cand:
     push ax
@@ -2195,13 +2202,55 @@ hd_iapps_cand:
     call OSAPI_VOL_KIND
     jc .no                      ; no such volume
     cmp al, VK_REMOVABLE
-    jne .no                     ; a hard disk is not where the apps disk is
+    je .yes                     ; a floppy, or an image on one
+    cmp ah, VT_DRIVER           ; a boot partition (VT_BIOS) and a cable
+    jne .no                     ; (VT_FILE) are not where the disk is...
+    call hd_iown                ; ...and nor is a partition we mounted, but
+    jnc .no                     ; an image of a floppy on a hard disk is
+.yes:
     pop ax
     clc
     ret
 .no:
     pop ax
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_iown - did THIS DRIVER mount that volume? (module internal)
+; in:  BL = a volume index
+; out: CF = 0 = it is one of hd_vols' partitions; CF = 1 = it is not
+; clobbers: flags
+;
+; hd_vols is the resident's, so this asks it one (device, slot) at a time
+; through HSV_VOLOF, the verb the State column's letters already use - four
+; slots on at most HD_MAXDEV devices, and no I/O. A resident too old for the
+; verb answers 0FFh to every question and so calls nothing ours; the content
+; tests that follow a candidate are what stop a partition being taken for a
+; disk then, as they always were for a floppy.
+; -----------------------------------------------------------------------------
+hd_iown:
+    push ax
+    push cx
+    xor cx, cx                  ; CL = the device, CH = the slot
+.ask:
+    cmp cl, [hd_ndev]
+    jae .no
+    mov ax, cx
+    call hd_vol_ask             ; AL = the volume on it, 0FFh = none
+    cmp al, bl
+    je .yes                     ; (CF = 0: equal)
+    inc ch
+    cmp ch, 4
+    jb .ask
+    mov ch, 0
+    inc cl
+    jmp short .ask
+.no:
+    stc
+.yes:
+    pop cx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2925,7 +2974,8 @@ hd_iwrite_chunk:
 ; alone, on the reasoning that the machine booted off a floppy - which stopped
 ; being true when a kept install made the booted-from volume a target: that
 ; machine has a blank or nothing in A: and the new system disk wherever the
-; user put it. Falling back is silent because the user asked to install os8088
+; user put it. **And a mounted IMAGE of one is a floppy here** (§52.10.17):
+; hd_iapps_cand passes it, so an upgrade needs no disk written at all. Falling back is silent because the user asked to install os8088
 ; and not to install whatever they were last looking at - the volume they were
 ; on is put back afterwards either way ([hd_ivdrv] is untouched here). And the
 ; DESTINATION is never the source: on the booted-from volume the bank names a
@@ -2956,8 +3006,8 @@ hd_isrc_ck:
     jc .step                    ; with the new system disk in whichever drive
     mov [hd_isrcdrv], bl        ; is not the one the BIOS wanted a blank in.
     call hd_isrc_ck_one         ; hd_iapps_cand is the apps probe's own filter
-    jnc .found                  ; - removable, present, B: only on a two-drive
-.step:                          ; machine - so the two searches cannot
+    jnc .found                  ; - removable or an image, B: only on a two-
+.step:                          ; drive machine - so the two searches cannot
     inc bl                      ; disagree about what a floppy is
     cmp bl, HIA_VMAX
     jb .next

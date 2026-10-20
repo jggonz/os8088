@@ -621,17 +621,17 @@ br_nstep:
     je .redirbad                    ; the way br_finish decides .page: a
     cmp byte [br_redirs], 3         ; navigation that waited on it has dropped
     jae .redirmany                  ; this fetch and owns the bar now, so the
-    inc byte [br_redirs]            ; generation is asked again before
-    cmp ax, 307                     ; br_resolve writes it. 301/302/303 after
-    jae .redirsame                  ; a POST become a GET (SPEC.md 71.17); 307
-    mov byte [br_reqpost], 0        ; and 308 keep the method, which is what
-.redirsame:                         ; they are for
-    mov si, br_redirurl
-    push ds
-    pop es                          ; br_resolve reads ES:SI...
-    call OSAPI_GFX_LOCK             ; ...and may paint its refusal (br_errst)
-    call br_gchk
-    jc .redirunlock
+    mov si, br_redirurl             ; generation is asked again before
+    push ds                         ; br_resolve writes it - and before the
+    pop es                          ; hop count and the method are, which a
+    call OSAPI_GFX_LOCK             ; new fetch owns once it has started
+    call br_gchk                    ; (br_resolve reads ES:SI and may paint
+    jc .redirunlock                 ; its refusal, br_errst)
+    inc byte [br_redirs]
+    cmp ax, 307                     ; 301/302/303 after a POST become a GET
+    jae .redirsame                  ; (SPEC.md 71.17); 307 and 308 keep the
+    mov byte [br_reqpost], 0        ; method, which is what they are for
+.redirsame:
     call br_resolve
     jc .redirrefused
     mov si, br_loc                  ; br_ubuf IS the bar's LN_BUF, so its
